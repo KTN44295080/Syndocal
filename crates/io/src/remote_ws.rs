@@ -3013,6 +3013,11 @@ struct DjLinkSession {
     snapshot_ready: bool,
     outbound: SyncSender<DjLinkOutboundState>,
     last_outbound_state: Option<DjLinkTimelineState>,
+    /// The exact completed Follow receipt whose source correlation was
+    /// rebased onto the target. This is local observer state, never a DJ v3
+    /// field. A later Follow to the same target cannot reuse it unless all
+    /// three identity components match.
+    observed_follow_rebase_receipt: Option<DjLinkObservedFollowRebase>,
 }
 
 #[derive(Debug, Clone)]
@@ -3030,6 +3035,30 @@ const DJ_LINK_OUTBOUND_QUEUE_LIMIT: usize = 8;
 const DJ_LINK_OBSERVATION_INTERVAL: Duration = Duration::from_millis(100);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DjLinkObservedFollowRebase {
+    generation: u64,
+    source_timeline_id: u64,
+    target_timeline_id: u64,
+}
+
+/// The observer must never infer a source → target ownership handoff from a
+/// paused Timeline alone.  This captures the only engine-published receipt
+/// that authorizes retaining the previous DJ correlation across a completed
+/// Follow whose target waits for Pedal 1.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DjLinkObservedWait {
+    NotWaiting,
+    WaitingWithoutExactRebase,
+    CompletedFollow(DjLinkObservedFollowRebase),
+}
+
+impl DjLinkObservedWait {
+    fn is_waiting(self) -> bool {
+        !matches!(self, Self::NotWaiting)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct DjLinkEngineObservation {
     timeline_id: u64,
     playing: bool,
@@ -3037,6 +3066,8 @@ struct DjLinkEngineObservation {
     duration_ms: u64,
     loop_active: bool,
     transition_hold_active: bool,
+    observed_wait: DjLinkObservedWait,
+    completed_follow_rebase: Option<DjLinkObservedFollowRebase>,
     bpm_millis: u32,
 }
 
@@ -3047,6 +3078,42 @@ impl DjLinkEngineObservation {
             protocol::TimelineLoopRuntimeStatus::Disabled
         );
         let transition_hold_active = snapshot.timeline.follow_runtime.transition_hold_active;
+        let follow_runtime = &snapshot.timeline.follow_runtime;
+        let completed_follow_rebase = if follow_runtime.generation > 0
+            && follow_runtime.status == protocol::TimelineFollowRuntimeStatus::Idle
+            && matches!(
+                follow_runtime.outcome,
+                Some(protocol::TimelineFollowOutcome::Completed)
+            )
+            && follow_runtime.source_timeline_id.is_some()
+            && follow_runtime.target_timeline_id == Some(snapshot.timeline.id)
+            && follow_runtime.source_timeline_id != follow_runtime.target_timeline_id
+        {
+            Some(DjLinkObservedFollowRebase {
+                generation: follow_runtime.generation,
+                source_timeline_id: follow_runtime
+                    .source_timeline_id
+                    .expect("checked completed Follow source")
+                    .0,
+                target_timeline_id: snapshot.timeline.id.0,
+            })
+        } else {
+            None
+        };
+        let observed_wait = if !follow_runtime.waiting_for_pedal_start {
+            DjLinkObservedWait::NotWaiting
+        } else if !snapshot.timeline.playing
+            && snapshot.timeline.position_ms == 0
+            && !loop_active
+            && !transition_hold_active
+            && completed_follow_rebase.is_some()
+        {
+            DjLinkObservedWait::CompletedFollow(
+                completed_follow_rebase.expect("checked completed wait receipt"),
+            )
+        } else {
+            DjLinkObservedWait::WaitingWithoutExactRebase
+        };
         let bpm_millis = if snapshot.clock.bpm.is_finite() && snapshot.clock.bpm > 0.0 {
             (snapshot.clock.bpm * 1_000.0)
                 .round()
@@ -3061,6 +3128,8 @@ impl DjLinkEngineObservation {
             duration_ms: snapshot.timeline.duration_ms,
             loop_active,
             transition_hold_active,
+            observed_wait,
+            completed_follow_rebase,
             bpm_millis,
         }
     }
@@ -3079,7 +3148,7 @@ impl DjLinkEngineObservation {
     }
 
     fn state(self, previous: Option<Self>) -> protocol::DjLinkTimelineStateValue {
-        if self.playing {
+        if self.playing || self.observed_wait.is_waiting() {
             return protocol::DjLinkTimelineStateValue::Running;
         }
         if previous.is_some_and(|before| {
@@ -3105,12 +3174,21 @@ impl DjLinkEngineObservation {
     fn semantic_key(
         self,
         previous: Option<Self>,
-    ) -> (u64, protocol::DjLinkTimelineStateValue, bool, bool) {
+    ) -> (
+        u64,
+        protocol::DjLinkTimelineStateValue,
+        bool,
+        bool,
+        DjLinkObservedWait,
+        Option<DjLinkObservedFollowRebase>,
+    ) {
         (
             self.timeline_id,
             self.state(previous),
             self.loop_active,
             self.transition_hold_active,
+            self.observed_wait,
+            self.completed_follow_rebase,
         )
     }
 }
@@ -3124,6 +3202,21 @@ fn dj_link_state_truth_equal(left: &DjLinkTimelineState, right: &DjLinkTimelineS
         && left.play_session_id == right.play_session_id
         && left.pedal_owner == right.pedal_owner
         && left.release_event_id == right.release_event_id
+}
+
+/// Physical observer snapshots do not own DJ correlation IDs. This comparison
+/// intentionally excludes those IDs so a wait -> playing transition that is
+/// externally still the same Running state cannot erase a retained exact
+/// owner/session/release correlation with synthetic nulls.
+fn dj_link_observed_engine_truth_equal(
+    previous: &DjLinkTimelineState,
+    observed: &DjLinkTimelineState,
+) -> bool {
+    previous.state == observed.state
+        && previous.loop_active == observed.loop_active
+        && previous.transition_hold_active == observed.transition_hold_active
+        && previous.timeline_id == observed.timeline_id
+        && previous.position_bars == observed.position_bars
 }
 
 /// Process-lifetime physical-event fence shared by every listener instance
@@ -3486,6 +3579,7 @@ impl DjLinkRegistry {
                 snapshot_ready: false,
                 outbound,
                 last_outbound_state: None,
+                observed_follow_rebase_receipt: None,
             },
         );
         self.status = DjLinkRuntimeStatus {
@@ -3609,6 +3703,171 @@ impl DjLinkRegistry {
     fn queue_outbound_state(&mut self, mut state: DjLinkTimelineState) -> Result<bool, String> {
         self.queue_outbound_state_with_correlation(&mut state, false)
             .map(|queued| queued.is_some())
+    }
+
+    /// Snapshot polling normally has no DJ ownership context. A completed
+    /// wait-for-Pedal Follow is the narrow exception: retain only the exact
+    /// current peer correlation from its last acknowledged Timeline state.
+    /// Never synthesize or borrow an operator-return request.
+    fn queue_observed_state(
+        &mut self,
+        mut state: DjLinkTimelineState,
+        observed_wait: DjLinkObservedWait,
+        completed_follow_rebase: Option<DjLinkObservedFollowRebase>,
+    ) -> Result<bool, String> {
+        let (previous, retained_receipt) = self
+            .sessions
+            .iter()
+            .next()
+            .filter(|(_, session)| session.snapshot_ready)
+            .map(|(_, session)| {
+                (
+                    session.last_outbound_state.clone(),
+                    session.observed_follow_rebase_receipt,
+                )
+            })
+            .unwrap_or((None, None));
+        let preserve_existing_correlation = retained_receipt.is_some();
+        let result = match observed_wait {
+            DjLinkObservedWait::WaitingWithoutExactRebase => Err(
+                "DJ Link observed Pedal wait lacks an exact completed Follow rebase receipt"
+                    .to_string(),
+            ),
+            DjLinkObservedWait::CompletedFollow(rebase) => match previous {
+                None => Err(
+                    "DJ Link observed Pedal wait has no snapshot-ready authoritative state"
+                        .to_string(),
+                ),
+                Some(previous) => {
+                    if let Some(retained) = retained_receipt.filter(|retained| *retained != rebase) {
+                        Err(format!(
+                            "DJ Link observed Pedal wait rejects completed Follow receipt change {}→{}#{} to {}→{}#{}",
+                            retained.source_timeline_id,
+                            retained.target_timeline_id,
+                            retained.generation,
+                            rebase.source_timeline_id,
+                            rebase.target_timeline_id,
+                            rebase.generation,
+                        ))
+                    } else {
+                        let source_timeline_id = rebase.source_timeline_id.to_string();
+                        let target_timeline_id = rebase.target_timeline_id.to_string();
+                        let exact_same_target_replay = previous.timeline_id == target_timeline_id
+                            && state.timeline_id == target_timeline_id;
+                        let exact_completed_rebase = previous.timeline_id == source_timeline_id
+                            && state.timeline_id == target_timeline_id;
+                        if state.state != protocol::DjLinkTimelineStateValue::Running
+                            || state.loop_active
+                            || state.transition_hold_active
+                            || rebase.generation == 0
+                            || rebase.source_timeline_id == rebase.target_timeline_id
+                            || (!exact_same_target_replay && !exact_completed_rebase)
+                            || (exact_same_target_replay && retained_receipt != Some(rebase))
+                            || previous.state != protocol::DjLinkTimelineStateValue::Running
+                            || previous.pedal_owner.as_deref() != Some("timeline")
+                            || previous
+                                .play_session_id
+                                .as_deref()
+                                .is_none_or(str::is_empty)
+                            || previous
+                                .release_event_id
+                                .as_deref()
+                                .is_none_or(str::is_empty)
+                        {
+                            Err(
+                                "DJ Link observed Pedal wait lacks the exact completed Follow Timeline owner/session/release correlation"
+                                    .to_string(),
+                            )
+                        } else {
+                            state.play_session_id = previous.play_session_id.clone();
+                            state.pedal_owner = previous.pedal_owner.clone();
+                            state.release_event_id = previous.release_event_id.clone();
+                            state.operator_return_request_id = None;
+                            self.queue_outbound_state(state)
+                        }
+                    }
+                }
+            },
+            DjLinkObservedWait::NotWaiting => match retained_receipt {
+                Some(receipt) => match (completed_follow_rebase, previous) {
+                    (Some(current_receipt), Some(previous))
+                        if current_receipt == receipt
+                            && previous.timeline_id == receipt.target_timeline_id.to_string()
+                            && previous.pedal_owner.as_deref() == Some("timeline")
+                            && previous
+                                .play_session_id
+                                .as_deref()
+                                .is_some_and(|value| !value.is_empty())
+                            && previous
+                                .release_event_id
+                                .as_deref()
+                                .is_some_and(|value| !value.is_empty()) =>
+                    {
+                        state.play_session_id = previous.play_session_id.clone();
+                        state.pedal_owner = previous.pedal_owner.clone();
+                        state.release_event_id = previous.release_event_id.clone();
+                        state.operator_return_request_id = None;
+                        if dj_link_state_truth_equal(&previous, &state) {
+                            Ok(false)
+                        } else {
+                            self.queue_outbound_state(state)
+                        }
+                    }
+                    _ => Err(
+                        "DJ Link observed Follow-owned state lacks the exact retained receipt/correlation; refusing to synthesize null correlation"
+                            .to_string(),
+                    ),
+                },
+                None if previous
+                    .as_ref()
+                    .is_some_and(|previous| dj_link_observed_engine_truth_equal(previous, &state)) =>
+                {
+                    Ok(false)
+                }
+                None => self.queue_outbound_state(state),
+            },
+        };
+        if observed_wait.is_waiting() || preserve_existing_correlation {
+            if result.is_ok() {
+                if let DjLinkObservedWait::CompletedFollow(rebase) = observed_wait {
+                    if let Some(session) = self.sessions.values_mut().find(|session| {
+                        session.snapshot_ready && session.generation == self.status.generation
+                    }) {
+                        session.observed_follow_rebase_receipt = Some(rebase);
+                    }
+                }
+            }
+            return self.finish_observed_wait_result(result);
+        }
+        result
+    }
+
+    /// `last_outbound_delivery` is the established local diagnostic surface
+    /// for the observer.  Keep a wait-specific fingerprint so an accepted
+    /// rebase clears only its own prior failure, never an unrelated delivery
+    /// diagnostic.
+    fn finish_observed_wait_result(
+        &mut self,
+        result: Result<bool, String>,
+    ) -> Result<bool, String> {
+        const WAIT_OBSERVER_FAILURE: &str = "wait-observer-rejected: ";
+        match &result {
+            Ok(_) => {
+                if self
+                    .status
+                    .last_outbound_delivery
+                    .as_deref()
+                    .is_some_and(|delivery| delivery.starts_with(WAIT_OBSERVER_FAILURE))
+                {
+                    self.status.last_outbound_delivery = None;
+                }
+            }
+            Err(error) => {
+                self.status.last_outbound_delivery =
+                    Some(format!("{WAIT_OBSERVER_FAILURE}{error}"));
+            }
+        }
+        result
     }
 
     fn queue_operator_return_state(
@@ -4610,7 +4869,22 @@ impl RemoteWsServer {
                                     operator_return_request_id: None,
                                 };
                                 if let Ok(mut registry) = thread_dj_link_registry.lock() {
-                                    let _ = registry.queue_outbound_state(state);
+                                    // A rejected completed-Follow wait is
+                                    // fail-closed and recorded under the
+                                    // registry's existing local delivery
+                                    // diagnostic; never discard it.
+                                    if let Err(error) =
+                                        registry.queue_observed_state(
+                                            state,
+                                            current.observed_wait,
+                                            current.completed_follow_rebase,
+                                        )
+                                    {
+                                        // `queue_observed_state` has already
+                                        // retained the exact diagnostic for
+                                        // status/UI observation.
+                                        eprintln!("DJ Link observed Pedal wait was rejected: {error}");
+                                    }
                                 }
                             }
                             last_dj_semantic_key = Some(semantic_key);
@@ -10432,6 +10706,114 @@ mod tests {
     }
 
     #[test]
+    fn dj_link_observed_wait_socket_inherits_exact_prior_correlation() {
+        let probe = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = probe.local_addr().unwrap().port();
+        drop(probe);
+        let snapshot = Arc::new(Mutex::new(EngineSnapshot::default()));
+        let snapshot_provider = {
+            let snapshot = Arc::clone(&snapshot);
+            move || snapshot.lock().unwrap().clone()
+        };
+        let handler: DjLinkDispatchHandler = Arc::new(|envelope| {
+            if envelope.message_type == DjLinkMessageType::TimelineStateRequest {
+                return DjLinkDispatchOutcome::TimelineState {
+                    state_generation: 1,
+                    state: DjLinkTimelineState {
+                        message_type: "DJ_TIMELINE_STATE".to_string(),
+                        event_id: envelope.event_id,
+                        sequence: envelope.sequence,
+                        state: protocol::DjLinkTimelineStateValue::Running,
+                        loop_active: false,
+                        transition_hold_active: false,
+                        timeline_id: "7".to_string(),
+                        position_bars: 0,
+                        play_session_id: Some("wait-play".to_string()),
+                        pedal_owner: Some("timeline".to_string()),
+                        release_event_id: Some("wait-release".to_string()),
+                        operator_return_request_id: None,
+                    },
+                };
+            }
+            DjLinkDispatchOutcome::Accepted {
+                state_generation: 1,
+            }
+        });
+        let server = RemoteWsServer::start_with_snapshot_and_video_status_providers_and_dj_link(
+            RemoteControlConfig {
+                bind_ip: "127.0.0.1".to_string(),
+                port,
+                pairing_pin: "123456".to_string(),
+                max_connections: 1,
+                dj_link_enabled: true,
+                dj_link_bind_ip: Some("127.0.0.1".to_string()),
+                dj_link_token: Some(DJ_V3_TOKEN.to_string()),
+                ..RemoteControlConfig::default()
+            },
+            |_| {},
+            snapshot_provider,
+            (
+                VideoRuntimeStatus::default,
+                default_video_output_render_plans,
+                default_external_video_io_plans,
+                default_external_video_transport_status,
+                default_external_video_transport_sync,
+            ),
+            Some(handler),
+        )
+        .unwrap();
+        let url = format!("ws://127.0.0.1:{port}/dj-link");
+        let (mut client, _) = (0..100)
+            .find_map(|_| tungstenite::connect(url.as_str()).ok())
+            .expect("DJ Link listener did not accept the wait socket");
+        complete_dj_v3_snapshot_gate(&mut client, port, "wait-socket-session", &server);
+        let delivered_deadline = Instant::now() + Duration::from_secs(1);
+        while server.dj_link_status().timeline_id.as_deref() != Some("7") {
+            assert!(
+                Instant::now() < delivered_deadline,
+                "the correlated snapshot state was not retained before the wait"
+            );
+            thread::sleep(Duration::from_millis(5));
+        }
+
+        {
+            let mut waiting = snapshot.lock().unwrap();
+            waiting.timeline.id = protocol::TimelineId(8);
+            waiting.timeline.playing = false;
+            waiting.timeline.position_ms = 0;
+            waiting.timeline.follow_runtime = protocol::TimelineFollowRuntimeSummary {
+                generation: 19,
+                status: protocol::TimelineFollowRuntimeStatus::Idle,
+                outcome: Some(protocol::TimelineFollowOutcome::Completed),
+                source_timeline_id: Some(protocol::TimelineId(7)),
+                target_timeline_id: Some(protocol::TimelineId(8)),
+                waiting_for_pedal_start: true,
+                ..protocol::TimelineFollowRuntimeSummary::default()
+            };
+        }
+        let observed = match client.read().unwrap() {
+            Message::Text(text) => serde_json::from_str::<Value>(&text).unwrap(),
+            other => panic!("unexpected observed wait frame: {other:?}"),
+        };
+        assert_eq!(observed["type"], "DJ_TIMELINE_STATE");
+        assert_eq!(observed["payload"]["state"], "running");
+        assert_eq!(observed["payload"]["timelineId"], "8");
+        assert_eq!(observed["payload"]["playSessionId"], "wait-play");
+        assert_eq!(observed["payload"]["pedalOwner"], "timeline");
+        assert_eq!(observed["payload"]["releaseEventId"], "wait-release");
+        assert_eq!(
+            observed["payload"]["operatorReturnRequestId"],
+            serde_json::json!(null)
+        );
+        assert!(
+            observed["payload"].get("waitingForPedalStart").is_none(),
+            "v3 payload shape must remain exact"
+        );
+        let _ = client.close(None);
+        drop(server);
+    }
+
+    #[test]
     fn dj_link_observer_generation_barrier_sends_no_stale_bytes() {
         let probe = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = probe.local_addr().unwrap().port();
@@ -10971,6 +11353,8 @@ mod tests {
             duration_ms: 20_000,
             loop_active: false,
             transition_hold_active: false,
+            observed_wait: DjLinkObservedWait::NotWaiting,
+            completed_follow_rebase: None,
             bpm_millis: 128_000,
         };
         let running = DjLinkEngineObservation {
@@ -11010,7 +11394,14 @@ mod tests {
         // ordinary engine ticks do not flood the bounded outbound queue.
         assert_eq!(
             running.semantic_key(Some(idle)),
-            (7, protocol::DjLinkTimelineStateValue::Running, false, false)
+            (
+                7,
+                protocol::DjLinkTimelineStateValue::Running,
+                false,
+                false,
+                DjLinkObservedWait::NotWaiting,
+                None,
+            )
         );
         assert_eq!(
             running.semantic_key(Some(idle)),
@@ -11094,7 +11485,7 @@ mod tests {
     }
 
     #[test]
-    fn dj_link_observation_forwards_authoritative_transition_hold() {
+    fn dj_link_observation_forwards_authoritative_follow_runtime_flags() {
         let mut snapshot = protocol::EngineSnapshot::default();
         snapshot.timeline.id = protocol::TimelineId(77);
         snapshot.timeline.playing = true;
@@ -11104,7 +11495,52 @@ mod tests {
         assert!(observation.transition_hold_active);
         assert_eq!(
             observation.semantic_key(None),
-            (77, protocol::DjLinkTimelineStateValue::Running, false, true)
+            (
+                77,
+                protocol::DjLinkTimelineStateValue::Running,
+                false,
+                true,
+                DjLinkObservedWait::NotWaiting,
+                None,
+            )
+        );
+
+        snapshot.timeline.playing = false;
+        snapshot.timeline.follow_runtime.transition_hold_active = false;
+        let ordinary_pause = DjLinkEngineObservation::from_snapshot(&snapshot);
+        snapshot.timeline.follow_runtime.waiting_for_pedal_start = true;
+        let invalid_wait = DjLinkEngineObservation::from_snapshot(&snapshot);
+        assert!(matches!(
+            invalid_wait.observed_wait,
+            DjLinkObservedWait::WaitingWithoutExactRebase
+        ));
+        snapshot.timeline.follow_runtime = protocol::TimelineFollowRuntimeSummary {
+            generation: 1,
+            status: protocol::TimelineFollowRuntimeStatus::Idle,
+            outcome: Some(protocol::TimelineFollowOutcome::Completed),
+            source_timeline_id: Some(protocol::TimelineId(76)),
+            target_timeline_id: Some(protocol::TimelineId(77)),
+            waiting_for_pedal_start: true,
+            ..protocol::TimelineFollowRuntimeSummary::default()
+        };
+        let waiting = DjLinkEngineObservation::from_snapshot(&snapshot);
+        assert!(matches!(
+            waiting.observed_wait,
+            DjLinkObservedWait::CompletedFollow(DjLinkObservedFollowRebase {
+                generation: 1,
+                source_timeline_id: 76,
+                target_timeline_id: 77,
+            })
+        ));
+        assert_eq!(
+            waiting.state(Some(observation)),
+            protocol::DjLinkTimelineStateValue::Running,
+            "the exact paused Follow wait must retain Timeline-control state"
+        );
+        assert_ne!(
+            invalid_wait.semantic_key(Some(ordinary_pause)),
+            waiting.semantic_key(Some(ordinary_pause)),
+            "an invalid bare wait must not dedupe a later exact completed Follow receipt"
         );
     }
 
@@ -11217,6 +11653,17 @@ mod tests {
         }
     }
 
+    fn completed_wait_for_pedal_rebase(
+        source_timeline_id: u64,
+        target_timeline_id: u64,
+    ) -> DjLinkObservedFollowRebase {
+        DjLinkObservedFollowRebase {
+            generation: 1,
+            source_timeline_id,
+            target_timeline_id,
+        }
+    }
+
     fn dj_truth_registry(
         agent_id: &str,
         session_id: &str,
@@ -11318,6 +11765,279 @@ mod tests {
         };
         assert!(dj_link_state_truth_equal(&baseline, &fresh_transport));
         assert!(dj_link_state_truth_equal(&fresh_transport, &baseline));
+    }
+
+    #[test]
+    fn dj_link_observed_wait_inherits_only_exact_completed_follow_rebase() {
+        let observed_wait = || DjLinkTimelineState {
+            message_type: "DJ_TIMELINE_STATE".to_string(),
+            event_id: "observed-wait".to_string(),
+            sequence: 1,
+            state: protocol::DjLinkTimelineStateValue::Running,
+            loop_active: false,
+            transition_hold_active: false,
+            timeline_id: "8".to_string(),
+            position_bars: 0,
+            play_session_id: None,
+            pedal_owner: None,
+            release_event_id: None,
+            operator_return_request_id: None,
+        };
+        let (mut registry, _generation, receiver) = dj_truth_registry("wait-agent", "wait-session");
+        let mut prior = dj_truth_state(Some("wait-play"), Some("timeline"), Some("wait-release"));
+        prior.loop_active = false;
+        prior.operator_return_request_id =
+            Some("syndocal-dj-operator-return-0123456789abcdef0123456789abcdef-1".to_string());
+        registry.note_outbound_state(&prior, "prior", 1);
+
+        let rebase = completed_wait_for_pedal_rebase(7, 8);
+        assert!(
+            registry
+                .queue_observed_state(
+                    observed_wait(),
+                    DjLinkObservedWait::CompletedFollow(rebase),
+                    Some(rebase),
+                )
+                .unwrap(),
+            "the exact completed source→target Follow wait must queue once"
+        );
+        let delivered = drain_dj_truth_queue(&receiver);
+        assert_eq!(delivered.len(), 1);
+        assert_eq!(
+            delivered[0].state,
+            protocol::DjLinkTimelineStateValue::Running
+        );
+        assert_eq!(delivered[0].timeline_id, "8");
+        assert!(!delivered[0].loop_active);
+        assert_eq!(delivered[0].play_session_id.as_deref(), Some("wait-play"));
+        assert_eq!(delivered[0].pedal_owner.as_deref(), Some("timeline"));
+        assert_eq!(
+            delivered[0].release_event_id.as_deref(),
+            Some("wait-release")
+        );
+        assert_eq!(delivered[0].operator_return_request_id, None);
+        registry.note_outbound_state(&delivered[0], &delivered[0].event_id, delivered[0].sequence);
+
+        assert!(
+            !registry
+                .queue_observed_state(
+                    observed_wait(),
+                    DjLinkObservedWait::NotWaiting,
+                    Some(rebase),
+                )
+                .unwrap(),
+            "the subsequent Playing=Running observation must not duplicate unchanged truth"
+        );
+        assert!(drain_dj_truth_queue(&receiver).is_empty());
+
+        // After Pedal 1 starts the target, ordinary observer deltas must keep
+        // the exact completed-Follow correlation rather than emit null IDs.
+        let mut post_f13_loop = observed_wait();
+        post_f13_loop.loop_active = true;
+        post_f13_loop.position_bars = 1;
+        assert!(registry
+            .queue_observed_state(post_f13_loop, DjLinkObservedWait::NotWaiting, Some(rebase),)
+            .unwrap());
+        let post_f13_loop_delivery = drain_dj_truth_queue(&receiver);
+        assert_eq!(post_f13_loop_delivery.len(), 1);
+        assert_eq!(
+            post_f13_loop_delivery[0].play_session_id.as_deref(),
+            Some("wait-play")
+        );
+        assert_eq!(
+            post_f13_loop_delivery[0].pedal_owner.as_deref(),
+            Some("timeline")
+        );
+        assert_eq!(
+            post_f13_loop_delivery[0].release_event_id.as_deref(),
+            Some("wait-release")
+        );
+        registry.note_outbound_state(
+            &post_f13_loop_delivery[0],
+            &post_f13_loop_delivery[0].event_id,
+            post_f13_loop_delivery[0].sequence,
+        );
+
+        let mut post_f13_hold = observed_wait();
+        post_f13_hold.loop_active = true;
+        post_f13_hold.transition_hold_active = true;
+        post_f13_hold.position_bars = 2;
+        assert!(registry
+            .queue_observed_state(post_f13_hold, DjLinkObservedWait::NotWaiting, Some(rebase),)
+            .unwrap());
+        let post_f13_hold_delivery = drain_dj_truth_queue(&receiver);
+        assert_eq!(post_f13_hold_delivery.len(), 1);
+        assert_eq!(
+            post_f13_hold_delivery[0].play_session_id.as_deref(),
+            Some("wait-play")
+        );
+        assert_eq!(
+            post_f13_hold_delivery[0].pedal_owner.as_deref(),
+            Some("timeline")
+        );
+        assert_eq!(
+            post_f13_hold_delivery[0].release_event_id.as_deref(),
+            Some("wait-release")
+        );
+
+        let (mut missing, _generation, missing_receiver) =
+            dj_truth_registry("missing-agent", "missing-session");
+        assert!(missing
+            .queue_observed_state(
+                observed_wait(),
+                DjLinkObservedWait::CompletedFollow(rebase),
+                Some(rebase),
+            )
+            .is_err());
+        assert!(drain_dj_truth_queue(&missing_receiver).is_empty());
+        assert!(missing
+            .status
+            .last_outbound_delivery
+            .as_deref()
+            .is_some_and(|delivery| delivery.starts_with("wait-observer-rejected: ")));
+
+        // A valid later source receipt may clear only this wait-specific
+        // diagnostic. It must not invent a session or relax the rebase gate.
+        let mut missing_prior = dj_truth_state(
+            Some("missing-play"),
+            Some("timeline"),
+            Some("missing-release"),
+        );
+        missing_prior.loop_active = false;
+        missing
+            .sessions
+            .values_mut()
+            .next()
+            .expect("registered missing test session")
+            .last_outbound_state = Some(missing_prior);
+        assert!(missing
+            .queue_observed_state(
+                observed_wait(),
+                DjLinkObservedWait::CompletedFollow(rebase),
+                Some(rebase),
+            )
+            .unwrap());
+        assert!(missing.status.last_outbound_delivery.is_none());
+
+        let (mut foreign, _generation, foreign_receiver) =
+            dj_truth_registry("foreign-agent", "foreign-session");
+        let mut foreign_prior = dj_truth_state(
+            Some("foreign-play"),
+            Some("timeline"),
+            Some("foreign-release"),
+        );
+        foreign_prior.loop_active = false;
+        foreign_prior.timeline_id = "9".to_string();
+        foreign.note_outbound_state(&foreign_prior, "foreign-prior", 1);
+        assert!(foreign
+            .queue_observed_state(
+                observed_wait(),
+                DjLinkObservedWait::CompletedFollow(rebase),
+                Some(rebase),
+            )
+            .is_err());
+        assert!(drain_dj_truth_queue(&foreign_receiver).is_empty());
+        assert!(foreign
+            .status
+            .last_outbound_delivery
+            .as_deref()
+            .is_some_and(|delivery| delivery.contains("wait-observer-rejected")));
+
+        let (mut incomplete, _generation, incomplete_receiver) =
+            dj_truth_registry("incomplete-agent", "incomplete-session");
+        incomplete.note_outbound_state(&prior, "incomplete-prior", 1);
+        assert!(incomplete
+            .queue_observed_state(
+                observed_wait(),
+                DjLinkObservedWait::WaitingWithoutExactRebase,
+                None,
+            )
+            .is_err());
+        assert!(drain_dj_truth_queue(&incomplete_receiver).is_empty());
+
+        let mut stopped = observed_wait();
+        stopped.state = protocol::DjLinkTimelineStateValue::Stopped;
+        stopped.position_bars = 1;
+        assert!(
+            registry
+                .queue_observed_state(stopped, DjLinkObservedWait::NotWaiting, Some(rebase))
+                .unwrap(),
+            "an ordinary stop remains observable while retaining the exact completed-Follow correlation"
+        );
+        let stopped_delivery = drain_dj_truth_queue(&receiver);
+        assert_eq!(stopped_delivery.len(), 1);
+        assert_eq!(
+            stopped_delivery[0].state,
+            protocol::DjLinkTimelineStateValue::Stopped
+        );
+
+        // A later Follow to the same target cannot borrow this receipt merely
+        // because its target ID happens to match.
+        let changed_receipt = DjLinkObservedFollowRebase {
+            generation: 2,
+            source_timeline_id: 6,
+            target_timeline_id: 8,
+        };
+        assert!(registry
+            .queue_observed_state(
+                observed_wait(),
+                DjLinkObservedWait::CompletedFollow(changed_receipt),
+                Some(changed_receipt),
+            )
+            .is_err());
+        assert!(drain_dj_truth_queue(&receiver).is_empty());
+        assert!(registry
+            .status
+            .last_outbound_delivery
+            .as_deref()
+            .is_some_and(|delivery| delivery.contains("receipt change 7→8#1 to 6→8#2")));
+    }
+
+    #[test]
+    fn dj_link_observed_wait_rejects_receiptless_same_target_replay() {
+        let observed_wait = || DjLinkTimelineState {
+            message_type: "DJ_TIMELINE_STATE".to_string(),
+            event_id: "receiptless-observed-wait".to_string(),
+            sequence: 1,
+            state: protocol::DjLinkTimelineStateValue::Running,
+            loop_active: false,
+            transition_hold_active: false,
+            timeline_id: "8".to_string(),
+            position_bars: 0,
+            play_session_id: None,
+            pedal_owner: None,
+            release_event_id: None,
+            operator_return_request_id: None,
+        };
+        let (mut registry, _generation, receiver) =
+            dj_truth_registry("receiptless-agent", "receiptless-session");
+        let mut old_target = dj_truth_state(
+            Some("old-target-play"),
+            Some("timeline"),
+            Some("old-target-release"),
+        );
+        old_target.timeline_id = "8".to_string();
+        old_target.loop_active = false;
+        registry.note_outbound_state(&old_target, "old-target", 1);
+
+        let different_follow = DjLinkObservedFollowRebase {
+            generation: 2,
+            source_timeline_id: 6,
+            target_timeline_id: 8,
+        };
+        assert!(registry
+            .queue_observed_state(
+                observed_wait(),
+                DjLinkObservedWait::CompletedFollow(different_follow),
+                Some(different_follow),
+            )
+            .is_err());
+        assert!(drain_dj_truth_queue(&receiver).is_empty());
+        assert!(registry
+            .status
+            .last_outbound_delivery
+            .as_deref()
+            .is_some_and(|delivery| delivery.contains("wait-observer-rejected")));
     }
 
     #[test]

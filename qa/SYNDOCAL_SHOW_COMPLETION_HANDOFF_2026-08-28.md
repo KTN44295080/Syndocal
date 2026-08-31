@@ -4,6 +4,52 @@ Status date: 2026-09-01 JST
 
 This is the concise authoritative resume note for the final show-critical tranche. It supersedes chat-only status, but it does not supersede the detailed acceptance documents named below.
 
+## 2026-09-01 alpha.51 Timeline authority / pedal-wait native and S0 checkpoint
+
+Current source is dirty `codex/syndocal-v1.2` based on pushed/upstream-equal
+HEAD `f0247c1e5d7988e1b4b628e575c6d4443c0a243d`; product metadata is
+`1.2.0-alpha.51`. The exact Community MSVC `14.44.35207` no-bundle build passed
+in `3m39s` with the pinned Community linker first in `where.exe` and
+first-party Rust warnings `0`. The resulting artifact is
+`C:\Users\kouty\Documents\KDMX\target\release\syndocal.exe`,
+Product/FileVersion `1.2.0-alpha.51`, `62,419,456` bytes, SHA-256
+`A8D6A397FF9D6838D16C1F796FC9681BFD64A475FEE71A49CB3AABB413EA998B`.
+Exactly one responsive maximized `Syndocal` window was verified at PID `62920`.
+
+The current tranche prevents runtime-free Timeline mutation ACKs from
+overwriting live transport truth. Only an atomic authority-bound full bundle
+matching exact epoch/revision/hash, active Timeline, bank membership, and
+post-receipt read generation may converge the result. Pending/blocked state
+fences root and child Timeline transport/edit paths; stale or unverifiable
+state stays fail-closed without an implicit retry.
+
+Natural completion of `人生オーバー` targets paused-at-zero `惑う星` pedal
+wait. The DJ peer wire remains exact v3: existing Running + loop/hold off and
+the exact inherited play-session/timeline-owner/release correlation; the
+internal wait flag and Follow source/target/generation receipt are not new wire
+fields. `rb-output` remains clean and upstream-equal at
+`59df968d91bca71a327ef2a57ee5ab15de9f9947`.
+
+Focused/broad exact-MSVC 14.44 evidence currently passes with first-party
+warnings `0`: I/O DJ-Link `43/1 ignored`, Syndocal DJ-Link `120/1 ignored`,
+Engine Timeline bank `5/5`, TypeScript, authority/follow checkers, release
+metadata, format, and diff checks. Independent Terra xHigh final reviews of
+both the Timeline-authority and wait-for-pedal boundaries returned GO.
+
+USB-DMX is the show-blocking output route. The alpha.51 project was reopened,
+the exact persisted `COM3` FTDI identity was reconfirmed for this machine, and
+the Open-DMX worker was armed successfully under S0. The authoritative native
+surface reported output enabled, S0 safety blackout, Open-DMX worker active,
+and the latest all-zero frame queued. Art-Net/Spout are operator-waived as
+non-blocking for this checkpoint. F3200A remains all-zero-only until a reviewed
+safe nonzero acceptance; this checkpoint proves the bounded software worker
+and initial zero-write receipt, not electrical waveform or fixture response.
+From the first successful observation before `04:35:10 JST` through the final
+`04:40:07 JST` recheck, PID `62920` stayed responsive, the worker remained
+active with the latest zero frame queued, and stderr added no serial/output
+fault (only unrelated DJ-Link `trust_network_absent`). This is a bounded
+greater-than-`4m57s` alpha.51 S0 continuity observation.
+
 ## 2026-09-01 alpha.50 USB-DMX continuous S0 checkpoint
 
 The current artifact is

@@ -4,6 +4,34 @@ Date: 2026-08-19
 Branch at creation: `codex/syndocal-v1.0`
 Baseline before this document: `848d759846985cc3acf588356cfa3c996b4e2ef2`
 
+## 2026-09-01 alpha.51 show-critical native and S0 checkpoint
+
+Alpha.51 is the active show-critical tranche. It binds Timeline mutation
+convergence to an atomic authority-bearing full snapshot, fences root and child
+Timeline transport/edit paths while pending or blocked, and keeps authored
+ACK data separate from live runtime truth. Natural Follow completion from
+`人生オーバー` targets paused-at-zero `惑う星` and is represented to the DJ
+peer using the existing exact-v3 Running/loop-off/hold-off state plus exact
+source receipt correlations; there is no new wait wire field.
+
+Exact MSVC 14.44 broad source gates pass with first-party warnings `0` (I/O
+DJ-Link `43/1 ignored`, Syndocal DJ-Link `120/1 ignored`, Engine Timeline bank
+`5/5`), as do TypeScript, focused Timeline checkers, release metadata, format,
+and diff checks. Independent Terra xHigh final reviews are GO. The exact
+Community MSVC `14.44.35207` no-bundle build passed in `3m39s`; artifact
+`target/release/syndocal.exe` is `62,419,456` bytes with SHA-256
+`A8D6A397FF9D6838D16C1F796FC9681BFD64A475FEE71A49CB3AABB413EA998B`.
+Exactly one responsive maximized alpha.51 window was verified at PID `62920`.
+The saved show project was reopened and the exact persisted FTDI `COM3`
+machine binding was reconfirmed; Open-DMX armed successfully under S0 and the
+native surface reported the latest zero frame queued. USB-DMX is the blocking
+show route; Art-Net and Spout are explicitly non-blocking. Electrical waveform,
+fixture response, and any nonzero F3200A acceptance remain open and prohibited
+without a separately reviewed safe test. The exact process stayed responsive
+and the latest zero frame remained queued from the first successful observation
+before `04:35:10 JST` through `04:40:07 JST` (greater than `4m57s`), with no
+serial/output fault added to stderr.
+
 ## 2026-08-31 Timeline UX/Undo bounded pause checkpoint
 
 This tranche closes a bounded part of L-TL7/H4; it does not mark either broad

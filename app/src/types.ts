@@ -3157,6 +3157,8 @@ export interface TimelineFollowRuntimeSummary {
   duration_ms: number;
   progress_millis: number;
   fault?: string | null;
+  /** Target is paused at zero after Follow and will start only on Pedal 1. */
+  waiting_for_pedal_start?: boolean;
   settlement?: TimelineFollowSettlementSummary | null;
 }
 

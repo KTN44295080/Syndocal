@@ -97,6 +97,7 @@ export function TimelineBankPanel(props: TimelineBankPanelProps) {
   };
   const runtimeLabel = createMemo(() => {
     const runtime = props.followRuntime;
+    if (runtime.waiting_for_pedal_start) return "Pedal 1待機中";
     const status = runtime.status === "pending" ? "armed" : runtime.status;
     if (status === "transitioning" || status === "settling") {
       return `${status} ${Math.round(runtime.progress_millis / 10)}%`;

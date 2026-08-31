@@ -557,6 +557,7 @@ export function RemoteControlPanel(props: RemoteControlPanelProps) {
                     <span>Loop / released <strong data-no-localize>{status().loopDivision ?? "—"} / {status().released ? "Yes" : "No"}</strong></span>
                     <span>Timeline authority <strong data-no-localize>{status().authoritativeState ?? "—"} / {status().pedalOwner ?? "unowned"}</strong></span>
                     <span>Play session <strong data-no-localize>{status().playSessionId ?? "—"}</strong></span>
+                    <span>Last timeline sync <strong data-no-localize>{status().lastOutboundDelivery ?? "—"}</strong></span>
                     <span>Last operator return <strong data-no-localize>{status().lastOperatorReturnRequestId
                       ? `${status().lastOperatorReturnRequestId} · ${status().lastOperatorReturnDelivery ?? "pending"}`
                       : "—"}</strong></span>

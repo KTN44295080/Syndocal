@@ -116937,6 +116937,54 @@ mod tests {
     }
 
     #[test]
+    fn timeline_bank_enabled_loop_projects_armed_looping_then_disabled_runtime() {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        let mut target = runtime.authored_timeline_snapshot();
+        target.id = TimelineId(10_201);
+        target.label = "Jinsei Over".to_string();
+        target.duration_ms = 200_000;
+        // Runtime duration is derived from authored content rather than the
+        // snapshot's informational duration field.  Keep the loop test's
+        // target seekable without introducing a media dependency.
+        target.phases = vec![TimelinePhaseSummary {
+            id: TimelinePhaseId(10_202),
+            label: "Loop test span".to_string(),
+            role: protocol::TimelinePhaseRole::Custom,
+            start_ms: 0,
+            end_ms: 200_000,
+        }];
+        target.loop_region = Some(TimelineLoopRegionSummary {
+            a_ms: 136_941,
+            b_ms: 138_353,
+            enabled: true,
+            musical_length_beats: Some(4.0),
+        });
+
+        runtime
+            .apply_timeline_bank_state(vec![target], TimelineId(10_201), false)
+            .unwrap();
+        assert_eq!(runtime.timeline_loop_region.as_ref().unwrap().a_ms, 136_941);
+        assert_eq!(runtime.timeline_loop_region.as_ref().unwrap().b_ms, 138_353);
+        assert!(matches!(
+            runtime.timeline_loop_runtime.status,
+            TimelineLoopRuntimeStatus::Armed
+        ));
+
+        runtime.apply_command(EngineCommand::SeekTimeline(137_500));
+        assert!(matches!(
+            runtime.timeline_loop_runtime.status,
+            TimelineLoopRuntimeStatus::Looping
+        ));
+
+        runtime.apply_command(EngineCommand::SetTimelineLoopEnabled(false));
+        assert!(matches!(
+            runtime.timeline_loop_runtime.status,
+            TimelineLoopRuntimeStatus::Disabled
+        ));
+        assert!(runtime.timeline_loop_region.as_ref().unwrap().enabled);
+    }
+
+    #[test]
     fn timeline_bank_allocator_and_published_rollback_preserve_exact_authored_a() {
         let engine = EngineHandle::start_for_tests(DmxOutputConfig {
             enabled: false,

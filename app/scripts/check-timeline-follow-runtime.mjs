@@ -254,7 +254,7 @@ assert.equal(
 scheduledFocus.shift()();
 assert.deepEqual(mountFocusCount, { old: 0, current: 1 }, "only the new current invoking element receives focus exactly once");
 
-const [app, bank, operator, performance, cuePanel, localization, backend] = await Promise.all([
+const [app, bank, operator, performance, cuePanel, localization, backend, remoteWs, remotePanel] = await Promise.all([
   read("src/App.tsx"),
   read("src/components/TimelineBankPanel.tsx"),
   read("src/components/TimelineOperatorBar.tsx"),
@@ -262,6 +262,8 @@ const [app, bank, operator, performance, cuePanel, localization, backend] = awai
   read("src/components/TimelineCueEventsPanel.tsx"),
   read("src/uiLocalization.ts"),
   read("src-tauri/src/main.rs"),
+  read("../crates/io/src/remote_ws.rs"),
+  read("src/components/RemoteControlPanel.tsx"),
 ]);
 
 for (const command of [
@@ -285,14 +287,97 @@ assert.match(app, /timelineFollowAbortLease\.reportFailure\(abortLease,[\s\S]*se
 assert.match(app, /timelineFollowAbortLease\.release\(abortLease\)[\s\S]*setTimelineFollowAbortBusy\(false\)/, "only the current Abort completion clears shared busy");
 assert.match(app, /window\.setInterval\(\(\) => void refresh\(\), 100\)/, "visible Timeline Follow runtime polling is bounded at 100ms");
 assert.match(app, /isTauriRuntime\(\)\s*\? timelineFollowRuntime\(\)/, "native UI binds Follow truth to runtime-only state rather than authored Follow settings");
+const djTimelineStateBuilder = backend.match(
+  /fn dj_link_timeline_state_from_snapshot\([\s\S]*?\n}\n\nfn dj_link_accepted/,
+)?.[0];
+assert.ok(djTimelineStateBuilder, "DJ Timeline state builder is present");
+assert.match(
+  djTimelineStateBuilder,
+  /let waiting_for_pedal_start = dj_link_completed_wait_for_pedal\(snapshot\);[\s\S]*?snapshot\.timeline\.playing \|\| waiting_for_pedal_start[\s\S]*?DjLinkTimelineStateValue::Running/,
+  "the exact engine Pedal wait retains the existing v3 Running state",
+);
+assert.match(
+  backend,
+  /fn dj_link_completed_wait_for_pedal\([\s\S]*?waiting_for_pedal_start[\s\S]*?TimelineLoopRuntimeStatus::Disabled[\s\S]*?TimelineFollowRuntimeStatus::Idle[\s\S]*?TimelineFollowOutcome::Completed[\s\S]*?source_timeline_id[\s\S]*?target_timeline_id/,
+  "the app-side Running exception requires the full completed Follow receipt, not a bare wait flag",
+);
+assert.doesNotMatch(
+  djTimelineStateBuilder,
+  /waiting_for_pedal_start,\s*timeline_id,/,
+  "the internal wait is not serialized as a new DJ v3 payload field",
+);
+const djTimelineStateWire = remoteWs.match(
+  /fn dj_link_state_wire\([\s\S]*?\n}\n\nfn send_pending_dj_link_states/,
+)?.[0];
+assert.ok(djTimelineStateWire, "DJ Timeline wire serializer is present");
+assert.doesNotMatch(
+  djTimelineStateWire,
+  /waitingForPedalStart/,
+  "the exact DJ v3 wire shape has no new wait key",
+);
+assert.match(
+  remoteWs,
+  /follow_runtime\.status == protocol::TimelineFollowRuntimeStatus::Idle[\s\S]*?TimelineFollowOutcome::Completed[\s\S]*?source_timeline_id[\s\S]*?target_timeline_id[\s\S]*?DjLinkObservedWait::CompletedFollow/,
+  "the observer captures an exact completed source-to-target Follow receipt before it treats a paused target as a Pedal wait",
+);
+assert.match(
+  remoteWs,
+  /exact_completed_rebase[\s\S]*?previous\.timeline_id == source_timeline_id[\s\S]*?state\.timeline_id == target_timeline_id[\s\S]*?previous\.pedal_owner\.as_deref\(\) != Some\("timeline"\)[\s\S]*?play_session_id[\s\S]*?release_event_id/,
+  "the observer inherits only exact source-to-target Follow owner/session/release truth",
+);
+assert.match(
+  remoteWs,
+  /exact_same_target_replay && retained_receipt != Some\(rebase\)/,
+  "a same-target replay may reuse correlation only when the exact completed-Follow receipt was retained",
+);
+assert.match(
+  remoteWs,
+  /fn semantic_key\([\s\S]*?DjLinkObservedWait,[\s\S]*?Option<DjLinkObservedFollowRebase>/,
+  "observer dedupe includes the exact wait classification and rebase receipt, so an invalid wait cannot hide a later valid Follow completion",
+);
+assert.match(
+  remoteWs,
+  /fn finish_observed_wait_result[\s\S]*?wait-observer-rejected:[\s\S]*?starts_with\(WAIT_OBSERVER_FAILURE\)/,
+  "wait correlation failures are retained locally and only their own fingerprint is cleared after success",
+);
+assert.match(
+  remoteWs,
+  /queue_observed_state\(\s*state,\s*current\.observed_wait,\s*current\.completed_follow_rebase,\s*\)/,
+  "the periodic observer passes the engine-derived rebase receipt through the fail-closed correlation gate",
+);
+assert.match(
+  remoteWs,
+  /observed_follow_rebase_receipt[\s\S]*?receipt change[\s\S]*?refusing to synthesize null correlation/,
+  "the observer binds reuse to source/target/generation and retains correlation for only that receipt",
+);
+assert.match(
+  remotePanel,
+  /Last timeline sync[\s\S]*?lastOutboundDelivery/,
+  "the existing local delivery diagnostic, including wait rejection, is visible in DJ Link status",
+);
+assert.match(
+  typesSource,
+  /export interface TimelineFollowRuntimeSummary \{[\s\S]*?waiting_for_pedal_start\?: boolean;/,
+  "the runtime DTO carries the additive exact post-Follow Pedal 1 wait truth",
+);
 
 assert.match(bank, /data-timeline-follow-runtime-badge/, "Bank surface renders a runtime truth badge");
+assert.match(
+  bank,
+  /if \(runtime\.waiting_for_pedal_start\) return "Pedal 1待機中";/,
+  "Bank exposes the exact paused target state as a Pedal 1 wait rather than idle",
+);
 assert.match(bank, /data-timeline-follow-domains/, "Bank surface renders the authoritative domain quorum");
 assert.match(bank, /data-timeline-follow-abort/, "Bank surface exposes Abort Follow");
 assert.match(bank, /"min-height": "44px"/, "Bank abort has an explicit 44px target");
 assert.match(bank, /followAbortFocusFence\.schedule\(applied, \(\) => invokingButton\.focus\(\), requestAnimationFrame\)/, "Bank schedules the captured invoking element through the resettable focus fence");
 assert.doesNotMatch(bank, /abortTrigger/, "Bank callbacks never dereference a mutable post-reset button ref");
 assert.match(operator, /data-timeline-follow-operator-badge/, "Operator surface exposes runtime truth directly");
+assert.match(
+  operator,
+  /props\.followRuntime\.waiting_for_pedal_start\s*\?\s*"Pedal 1待機中"/,
+  "Operator exposes the exact paused target state as a Pedal 1 wait rather than stopped",
+);
 assert.match(operator, /onAbortFollow=\{props\.onAbortFollow\}/, "Operator passes the runtime abort capability to Performance");
 assert.match(performance, /onAbortFollow=\{props\.onAbortFollow\}/, "Performance passes the runtime abort capability to Bank");
 assert.match(cuePanel, /onAbortFollow=\{props\.onAbortFollow\}/, "Cue surface passes the runtime abort capability to Bank");

@@ -110,7 +110,9 @@ export function TimelineOperatorBar(props: TimelineOperatorBarProps) {
       : { a_ms: Math.min(current?.a_ms ?? 0, Math.max(0, position - 1)), b_ms: Math.max(position, (current?.a_ms ?? 0) + 1), enabled: current?.enabled ?? false, musical_length_beats: current?.musical_length_beats ?? null };
     void props.onSetLoopRegion(next);
   };
-  const followStatus = () => props.followRuntime.status === "pending" ? "armed" : props.followRuntime.status;
+  const followStatus = () => props.followRuntime.waiting_for_pedal_start
+    ? "Pedal 1待機中"
+    : props.followRuntime.status === "pending" ? "armed" : props.followRuntime.status;
   const abortFollowFromOperator = async (button: HTMLButtonElement) => {
     props.followAbortFocusFence.schedule(await props.onAbortFollow(), () => button.focus(), requestAnimationFrame);
   };

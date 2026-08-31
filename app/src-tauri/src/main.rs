@@ -1614,6 +1614,30 @@ fn dj_link_engine_position_bars(snapshot: &EngineSnapshot) -> u64 {
     snapshot.timeline.position_ms / (bar_ms as u64)
 }
 
+/// A bare runtime boolean is never enough to keep DJ Link in Timeline
+/// control. Only the engine's exact terminal Follow receipt may describe the
+/// paused target as `Running` to the v3 peer while it waits for Pedal 1.
+fn dj_link_completed_wait_for_pedal(snapshot: &EngineSnapshot) -> bool {
+    let follow = &snapshot.timeline.follow_runtime;
+    follow.waiting_for_pedal_start
+        && !snapshot.timeline.playing
+        && snapshot.timeline.position_ms == 0
+        && matches!(
+            snapshot.timeline.loop_runtime.status,
+            protocol::TimelineLoopRuntimeStatus::Disabled
+        )
+        && !follow.transition_hold_active
+        && follow.generation > 0
+        && follow.status == protocol::TimelineFollowRuntimeStatus::Idle
+        && matches!(
+            follow.outcome,
+            Some(protocol::TimelineFollowOutcome::Completed)
+        )
+        && follow.source_timeline_id.is_some()
+        && follow.target_timeline_id == Some(snapshot.timeline.id)
+        && follow.source_timeline_id != follow.target_timeline_id
+}
+
 fn dj_link_timeline_state_from_snapshot(
     runtime: &DjLinkRuntime,
     snapshot: &EngineSnapshot,
@@ -1630,12 +1654,17 @@ fn dj_link_timeline_state_from_snapshot(
             protocol::TimelineLoopRuntimeStatus::Disabled
         );
     let transition_hold_active = snapshot.timeline.follow_runtime.transition_hold_active;
+    let waiting_for_pedal_start = dj_link_completed_wait_for_pedal(snapshot);
     // The engine's acknowledged clock is the only grid authority. The
     // Rekordbox track BPM is diagnostic metadata and may be stale or absent.
     let position_bars = dj_link_engine_position_bars(snapshot);
     let state = if runtime.timeline_id.is_none() {
         protocol::DjLinkTimelineStateValue::Idle
-    } else if snapshot.timeline.playing {
+    } else if snapshot.timeline.playing || waiting_for_pedal_start {
+        // A completed WaitForPedal Follow deliberately pauses the target at
+        // zero. Keep the existing v3 Timeline-control state Running so the
+        // peer retains its already-correlated session/owner/release context
+        // for the next Pedal 1 loop-on edge.
         protocol::DjLinkTimelineStateValue::Running
     } else if runtime.authoritative_state == protocol::DjLinkTimelineStateValue::Running {
         // A stale runtime latch must never make a stopped Timeline look

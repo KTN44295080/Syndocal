@@ -1,5 +1,52 @@
 # DSF2026 same-PC output acceptance — current 2026-09-01
 
+## 2026-09-01 alpha.51 Timeline authority / pedal-wait native and S0 checkpoint
+
+Product metadata is synchronized at `1.2.0-alpha.51` on
+`codex/syndocal-v1.2`, based on pushed HEAD
+`f0247c1e5d7988e1b4b628e575c6d4443c0a243d`. The exact Community MSVC
+`14.44.35207` no-bundle build passed in `3m39s`; the pinned Community linker
+was first in `where.exe` and first-party Rust warnings were `0`. The artifact
+is `C:\Users\kouty\Documents\KDMX\target\release\syndocal.exe`,
+Product/FileVersion `1.2.0-alpha.51`, `62,419,456` bytes, SHA-256
+`A8D6A397FF9D6838D16C1F796FC9681BFD64A475FEE71A49CB3AABB413EA998B`.
+Exactly one responsive maximized window was verified at PID `62920`.
+
+Timeline mutation ACK data is now treated as runtime-free authored data. Live
+state is accepted only from an atomic `get_project_authority_bundle` matching
+the ACK's exact epoch/revision/checkpoint hash, active Timeline identity, bank
+membership, and post-receipt read generation. Missing, stale, superseded, or
+mismatched convergence remains visibly blocked; generic snapshots cannot
+unlock it and no non-idempotent retry is inferred.
+
+The `人生オーバー` Follow destination remains `惑う星` with
+`destination_start_mode: wait_for_pedal`. DJ-Link v3 is unchanged: the wait is
+encoded with the existing Running/loop-off/hold-off truth plus exact Timeline,
+play-session, timeline-owner, and release correlation. No
+`waitingForPedalStart` wire key was added. The companion `rb-output` checkout
+remains clean/upstream-equal at
+`59df968d91bca71a327ef2a57ee5ab15de9f9947`.
+
+Exact MSVC 14.44 focused/broad source gates currently pass: I/O DJ-Link
+`43 passed / 1 ignored`, Syndocal DJ-Link `120 passed / 1 ignored`, Engine
+Timeline-bank `5/5`, plus TypeScript, Timeline authority/follow checkers,
+release metadata, format, and diff checks. First-party warning count is `0`.
+Independent Terra xHigh final reviews of both corrected boundaries returned
+GO.
+
+The alpha.51 project was reopened, the exact persisted `COM3` FTDI device was
+reconfirmed as this machine's Open-DMX binding, and the worker was armed under
+S0. The native surface reported output enabled, S0 safety blackout,
+Open-DMX worker active, and latest all-zero frame queued. The attached F3200A
+remains all-512-zero-only until a separately reviewed safe nonzero test. This
+closes only the bounded software-worker/initial-zero receipt; electrical
+waveform and fixture response remain unverified. Per operator priority,
+USB-DMX is blocking; Art-Net and Spout are non-blocking and remain explicitly
+unverified. From the first successful observation before `04:35:10 JST`
+through `04:40:07 JST`, exact PID `62920` stayed responsive, the latest zero
+frame remained queued, and stderr contained no serial/output fault; this is a
+bounded greater-than-`4m57s` alpha.51 S0 continuity observation.
+
 ## 2026-09-01 alpha.50 USB-DMX continuous S0 checkpoint
 
 The exact Community MSVC `14.44.35207` no-bundle build passed with the

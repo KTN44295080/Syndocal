@@ -96,20 +96,171 @@ assert.deepEqual(splitCalls, [{
 assert.deepEqual(splitResult, rightSelection, "Split action returns the fresh right-side logical selection");
 assert.deepEqual(restoredSelections, [rightSelection], "Split action restores the authoritative returned selection exactly once");
 assert.deepEqual(restoredFocus, [rightSelection[0]], "Split action restores focus to the first fresh right-side item exactly once");
-const unrelatedSnapshotState = { active_cue_id: 77, timeline: { id: 1 }, timeline_bank: [{ id: 1 }] };
-const appliedTimelineResult = engineSnapshotWithTimelineAdvancedResult(unrelatedSnapshotState, {
-  timeline_bank: [{ id: 2, video_clips: [{ id: 111 }], audio_clips: [{ id: 121 }] }],
+const loopRegion = { a_ms: 136_941, b_ms: 138_353, enabled: true, musical_length_beats: 4 };
+const runtimeFreeAcknowledgedTimeline = {
+  id: 2,
+  video_clips: [{ id: 111 }],
+  audio_clips: [{ id: 121 }],
+  loop_region: loopRegion,
+  loop_runtime: { generation: 0, status: "disabled", wrap_count: 0 },
+  playing: false,
+  position_ms: 0,
+  duration_ms: 200_000,
+};
+const canonicalLoopingTimeline = {
+  ...runtimeFreeAcknowledgedTimeline,
+  playing: true,
+  position_ms: 137_500,
+  loop_runtime: {
+    generation: 9,
+    status: "looping",
+    a_ms: loopRegion.a_ms,
+    b_ms: loopRegion.b_ms,
+    musical_length_millibeats: 4_000,
+    wrap_count: 3,
+  },
+};
+const timelineResult = {
+  timeline_bank: [runtimeFreeAcknowledgedTimeline],
   active_timeline_id: 2,
   selected_items: rightSelection,
   authoring,
   mutation: {},
-});
+};
+const appliedTimelineResult = engineSnapshotWithTimelineAdvancedResult({
+  active_cue_id: 77,
+  timeline: canonicalLoopingTimeline,
+  timeline_bank: [{ id: 1 }],
+}, timelineResult);
 assert.equal(appliedTimelineResult.active_cue_id, 77, "post-ACK Timeline fallback preserves unrelated live engine state");
-assert.equal(appliedTimelineResult.timeline.id, 2, "post-ACK Timeline fallback mounts the acknowledged active Timeline");
+assert.equal(appliedTimelineResult.timeline.id, 2, "same-identity fallback keeps the acknowledged active Timeline mounted");
 assert.deepEqual(
   [appliedTimelineResult.timeline.video_clips[0].id, appliedTimelineResult.timeline.audio_clips[0].id],
   [111, 121],
-  "post-ACK Timeline fallback retains fresh split IDs",
+  "same-identity fallback retains fresh split IDs",
+);
+assert.equal(appliedTimelineResult.timeline.loop_region.enabled, true, "same-identity fallback retains an authored enabled loop region");
+assert.equal(appliedTimelineResult.timeline.loop_runtime.status, "looping", "same-identity fallback never replaces live loop runtime with disabled bank state");
+assert.equal(appliedTimelineResult.timeline.playing, true, "same-identity fallback retains canonical playback state");
+const mismatchedTimelineResult = engineSnapshotWithTimelineAdvancedResult({
+  active_cue_id: 77,
+  timeline: { ...canonicalLoopingTimeline, id: 1 },
+  timeline_bank: [{ id: 1 }],
+}, timelineResult);
+assert.equal(mismatchedTimelineResult.timeline.id, 1, "different-identity fallback keeps the prior active Timeline pending canonical refresh");
+assert.equal(mismatchedTimelineResult.timeline.loop_runtime.status, "looping", "different-identity fallback never exposes the target bank's runtime-free OFF state");
+assert.equal(mismatchedTimelineResult.timeline_bank[0].id, 2, "different-identity fallback still exposes the committed bank for later canonical hydration");
+const appSource = await readFile(new URL("../src/App.tsx", import.meta.url), "utf8");
+const commitStart = appSource.indexOf("const commitTimelineAdvanced = async");
+const commitEnd = appSource.indexOf("const currentTimelineAdvancedAuthoring", commitStart);
+assert.ok(commitStart >= 0 && commitEnd > commitStart, "Timeline commit source boundary is present");
+const commitSource = appSource.slice(commitStart, commitEnd);
+assert.match(commitSource, /timelineAuthorityReady\("Timeline edit"\)/, "Timeline edits are fenced while the canonical snapshot is pending or blocked");
+assert.match(commitSource, /setTimelineAdvancedSnapshotResolution\("pending"\)/, "Timeline edits enter an explicit pending resolution state");
+assert.match(commitSource, /let terminalTimelineAcknowledgementEstablished = false/, "Timeline ACK lifecycle starts with no terminal acknowledgement expectation");
+assert.match(commitSource, /applyProjectHistoryMutationResult\(result\.mutation\)/, "Timeline ACK applies only its authority-bound mutation receipt");
+assert.match(commitSource, /acknowledgedAuthority/, "Timeline ACK captures its authority token before the canonical read");
+assert.match(commitSource, /timelineAdvancedSnapshotExpectation = \{[\s\S]*?authority: acknowledgedAuthority,[\s\S]*?activeTimelineId: result\.active_timeline_id/, "blocked Timeline state retains its exact ACK authority and active Timeline identity");
+assert.match(commitSource, /timelineAdvancedSnapshotExpectation = \{[\s\S]*?\};[\s\S]*?terminalTimelineAcknowledgementEstablished = true/, "only a terminal Timeline acknowledgement establishes a reconciliation expectation");
+assert.match(commitSource, /applyProjectHistoryMutationResult\(result\.mutation\)[\s\S]*?timelineAdvancedSnapshotExpectation = \{[\s\S]*?projectReadGeneration,[\s\S]*?expectedCanonical\.projectReadGeneration !== projectReadGeneration/, "the post-receipt project-read generation is retained and rechecked before ACK convergence");
+assert.match(commitSource, /tauriInvoke<ProjectAuthorityBundle>\("get_project_authority_bundle", \{[\s\S]*?expectedEpoch: expectedCanonical\.authority\.project_epoch,[\s\S]*?expectedRevision: expectedCanonical\.authority\.project_revision,[\s\S]*?expectedCheckpointHash: expectedCanonical\.authority\.checkpoint_hash/, "Timeline ACK reads a snapshot only through the exact expected authority bundle");
+assert.match(commitSource, /timelineAdvancedCanonicalBundleMatchesExpectation\(canonical, expectedCanonical\)/, "Timeline ACK requires both exact authority and the acknowledged active Timeline");
+assert.doesNotMatch(commitSource, /await refreshSnapshot\(\)/, "Timeline ACK never accepts a standalone snapshot after the ACK");
+assert.match(commitSource, /blockTimelineAdvancedSnapshotResolution/, "Timeline convergence failure remains blocked");
+assert.doesNotMatch(commitSource, /engineSnapshotWithTimelineAdvancedResult/, "Timeline ACK does not apply a runtime-free bank entry as active runtime");
+assert.match(commitSource, /unverified result was not applied/, "Timeline refresh failure is explicit and fail-closed");
+assert.doesNotMatch(commitSource, /Refresh and retry/, "Timeline convergence failure does not invite a non-idempotent retry");
+assert.match(commitSource, /if \(terminalTimelineAcknowledgementEstablished\) \{[\s\S]*?blockTimelineAdvancedSnapshotResolution[\s\S]*?\} else \{[\s\S]*?timelineAdvancedSnapshotExpectation = null;[\s\S]*?setTimelineAdvancedSnapshotResolution\("idle"\)[\s\S]*?no terminal acknowledgement was established/, "pre-ACK failure returns Timeline controls to idle while an ACK-established failure remains blocked");
+const resolutionAfterTimelineFailure = (terminalAcknowledgementEstablished) =>
+  terminalAcknowledgementEstablished ? "blocked" : "idle";
+assert.equal(resolutionAfterTimelineFailure(false), "idle", "a preflight or IPC failure with no terminal ACK does not permanently block Timeline controls");
+assert.equal(resolutionAfterTimelineFailure(true), "blocked", "a terminal ACK that cannot converge remains fail-closed");
+const expectationStart = appSource.indexOf("type TimelineAdvancedSnapshotExpectation");
+const reconcileStart = appSource.indexOf("const reconcileBlockedTimelineAdvancedSnapshotResolution");
+const reconcileEnd = appSource.indexOf("// This signal is populated exclusively", reconcileStart);
+assert.ok(expectationStart >= 0 && reconcileStart > expectationStart && reconcileEnd > reconcileStart, "blocked Timeline reconciliation source boundary is present");
+const reconciliationSource = appSource.slice(expectationStart, reconcileEnd);
+assert.match(reconciliationSource, /timelineAdvancedSnapshotExpectation: TimelineAdvancedSnapshotExpectation \| null/, "blocked state retains a typed acknowledgement expectation");
+assert.match(reconciliationSource, /candidate\.snapshot\.timeline\.id === expected\.activeTimelineId/, "blocked state rejects a canonical snapshot with a mismatched active Timeline ID");
+assert.match(reconciliationSource, /projectAuthorityTokenIsCurrent\(expected\.authority, authorityToken\(candidate\)\)/, "blocked state requires exact ACK authority equality, not just a stable local signal");
+assert.match(reconciliationSource, /get_project_authority_bundle", \{[\s\S]*?expectedEpoch: expected\.authority\.project_epoch,[\s\S]*?expectedRevision: expected\.authority\.project_revision,[\s\S]*?expectedCheckpointHash: expected\.authority\.checkpoint_hash/, "blocked reconciliation reads an atomic E/R/H-bound authority plus snapshot bundle");
+assert.doesNotMatch(reconciliationSource, /clearTimelineAdvancedSnapshotResolutionAfterCanonical/, "a generic snapshot cannot directly clear blocked Timeline state");
+const fullSnapshotStart = appSource.indexOf("const runFullSnapshotRefreshes = async");
+const fullSnapshotEnd = appSource.indexOf("const refreshSnapshot =", fullSnapshotStart);
+assert.ok(fullSnapshotStart >= 0 && fullSnapshotEnd > fullSnapshotStart, "generic full snapshot source boundary is present");
+const fullSnapshotSource = appSource.slice(fullSnapshotStart, fullSnapshotEnd);
+assert.match(fullSnapshotSource, /applyEngineSnapshot\([\s\S]*?reconcileBlockedTimelineAdvancedSnapshotResolution\(\)/, "generic snapshot refresh may request reconciliation only after applying its untrusted image");
+assert.doesNotMatch(fullSnapshotSource, /setTimelineAdvancedSnapshotResolution\("idle"\)/, "generic snapshot refresh cannot unlock Timeline controls directly");
+const canonicalBundleMatchesExpected = (expected, bundle) =>
+  expected.project_epoch === bundle.project_epoch
+  && expected.project_revision === bundle.project_revision
+  && expected.checkpoint_hash === bundle.checkpoint_hash
+  && bundle.snapshot.timeline.id === expected.activeTimelineId
+  && bundle.snapshot.timeline_bank.some((timeline) => timeline.id === expected.activeTimelineId);
+const acknowledgedB = {
+  project_epoch: 4,
+  project_revision: 12,
+  checkpoint_hash: "b-ack",
+  activeTimelineId: 2,
+};
+const exactB = {
+  project_epoch: 4,
+  project_revision: 12,
+  checkpoint_hash: "b-ack",
+  snapshot: { timeline: { id: 2 }, timeline_bank: [{ id: 2 }] },
+};
+assert.equal(canonicalBundleMatchesExpected(acknowledgedB, exactB), true, "the exact ACK bundle may unlock blocked Timeline controls");
+assert.equal(
+  canonicalBundleMatchesExpected(acknowledgedB, { ...exactB, snapshot: { timeline: { id: 7 }, timeline_bank: [{ id: 2 }] } }),
+  false,
+  "a blocked Timeline does not unlock on a snapshot whose active Timeline mismatches the ACK",
+);
+assert.equal(
+  canonicalBundleMatchesExpected(acknowledgedB, { ...exactB, project_revision: 13, checkpoint_hash: "c-same-active-id" }),
+  false,
+  "a B ACK never accepts same-active-ID C authority state",
+);
+const loopTransportStart = appSource.indexOf("const setTimelineLoopEnabled = async");
+const loopTransportEnd = appSource.indexOf("const setTimelineLoopAAtPlayhead", loopTransportStart);
+assert.ok(loopTransportStart >= 0 && loopTransportEnd > loopTransportStart, "Timeline loop transport source boundary is present");
+const loopTransportSource = appSource.slice(loopTransportStart, loopTransportEnd);
+assert.equal(
+  (loopTransportSource.match(/timelineAuthorityReady\(/g) ?? []).length,
+  2,
+  "Loop toggle and resize reject stale operations while Timeline authority is pending or blocked",
+);
+const sourceBetween = (startMarker, endMarker) => {
+  const start = appSource.indexOf(startMarker);
+  const end = appSource.indexOf(endMarker, start);
+  assert.ok(start >= 0 && end > start, `${startMarker} source boundary is present`);
+  return appSource.slice(start, end);
+};
+const assertGuardPrecedes = (source, guard, protectedOperation, label) => {
+  const guardAt = source.indexOf(guard);
+  const operationAt = source.indexOf(protectedOperation);
+  assert.ok(guardAt >= 0 && operationAt > guardAt, `${label} is rejected before its direct-child mutation can run`);
+};
+const childPersistSource = sourceBetween("const persistChildTimeline = async", "const childTimelineNextAutomationId");
+assertGuardPrecedes(childPersistSource, 'timelineAuthorityReady("Timeline child edit")', 'invoke("set_cue_child_timeline"', "direct-child persistence");
+const childEditingSource = sourceBetween("const invokeTimelineEditingCommand", "const invokeTimelineSceneBlockCommand");
+assertGuardPrecedes(childEditingSource, "timelineAuthorityReady(command)", 'invoke<T>("seek_direct_child_timeline"', "direct-child seek");
+assertGuardPrecedes(childEditingSource, "timelineAuthorityReady(command)", "persistChildTimeline(childCueId", "direct-child metronome and automation persistence");
+const childSceneSource = sourceBetween("const invokeTimelineSceneBlockCommand", "const zoomTimelineOverviewAt");
+assertGuardPrecedes(childSceneSource, "timelineAuthorityReady(command)", "if (childCueId !== null)", "direct-child Scene block persistence");
+const childLayerSource = sourceBetween("const invokeTimelineLayerCommand", "const timelineLayerController");
+assertGuardPrecedes(childLayerSource, "timelineAuthorityReady(command)", "if (childCueId !== null)", "direct-child layer persistence");
+const childTransportSource = sourceBetween("const setCanonicalTimelinePlaying", "const {\n    moveTimelineAutomationRangeToTime");
+assertGuardPrecedes(childTransportSource, 'timelineAuthorityReady("Timeline transport change")', 'invoke("set_direct_child_timeline_playing"', "direct-child play and pause");
+const superSceneSource = sourceBetween("const openOrCreateSuperScene", "const effectChooserCueId");
+assertGuardPrecedes(superSceneSource, 'timelineAuthorityReady("Timeline child creation")', 'invoke("set_cue_child_timeline"', "direct-child Timeline creation from Super Scene");
+const cuePanelSource = await readFile(new URL("../src/components/TimelineCueEventsPanel.tsx", import.meta.url), "utf8");
+assert.ok(
+  cuePanelSource.includes('const loopRuntimeEnabled = () => props.loopRuntime.status !== "disabled";'),
+  "Timeline loop control treats both armed and looping runtime states as enabled",
+);
+assert.ok(
+  cuePanelSource.includes("onClick={() => void props.onSetLoopEnabled(!loopRuntimeEnabled())}"),
+  "Loop click sends false while the authored loop is armed or looping",
 );
 assert.deepEqual(specializedTimelineSelectionFromItems([
   { kind: "lighting_event", event_id: 141 },
@@ -223,4 +374,4 @@ assert.deepEqual(planTimelineItemLaneMove({
   layers: laneLayers, groups: fiveDomainGroup, placements: fiveDomainPlacements,
 }), { ok: false, reason: "kind" }, "cross-section targets reject before dispatch");
 
-console.log("Timeline advanced selection and lane planner: five-domain groups, Alt isolate, ordinal projection, and rejection are exact.");
+console.log("Timeline advanced authoring: canonical snapshot fencing, runtime-free loop protection, armed/looping/off control semantics, and five-domain lane planning are exact.");

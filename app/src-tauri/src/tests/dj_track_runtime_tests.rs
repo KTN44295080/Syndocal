@@ -767,6 +767,36 @@ fn waiting_follow_pedal_start_requires_exact_rebased_paused_target() {
         },
         ..EngineSnapshot::default()
     };
+    let waiting_state = dj_link_timeline_state_from_snapshot(&runtime, &snapshot, "wait-state", 1);
+    assert_eq!(
+        waiting_state.state,
+        protocol::DjLinkTimelineStateValue::Running,
+        "the paused target must retain Timeline control rather than masquerading as stopped"
+    );
+    assert!(!waiting_state.loop_active);
+    assert!(!waiting_state.transition_hold_active);
+    assert_eq!(waiting_state.timeline_id, "802");
+    assert_eq!(waiting_state.play_session_id.as_deref(), Some("session-1"));
+    assert_eq!(waiting_state.pedal_owner.as_deref(), Some("timeline"));
+    assert_eq!(waiting_state.release_event_id.as_deref(), Some("release-1"));
+
+    let mut ordinary_pause = snapshot.clone();
+    ordinary_pause
+        .timeline
+        .follow_runtime
+        .waiting_for_pedal_start = false;
+    assert_eq!(
+        dj_link_timeline_state_from_snapshot(&runtime, &ordinary_pause, "ordinary-pause", 2).state,
+        protocol::DjLinkTimelineStateValue::Stopped,
+        "only the exact runtime wait is allowed to retain Timeline control"
+    );
+    let mut bare_wait = snapshot.clone();
+    bare_wait.timeline.follow_runtime.outcome = None;
+    assert_eq!(
+        dj_link_timeline_state_from_snapshot(&runtime, &bare_wait, "bare-wait", 3).state,
+        protocol::DjLinkTimelineStateValue::Stopped,
+        "a bare waiting flag without the exact completed Follow receipt is never Running"
+    );
     assert_eq!(
         dj_track_runtime::waiting_follow_pedal_start_authority_rejection(
             &runtime,
@@ -979,11 +1009,33 @@ fn dj_link_waiting_follow_loop_set_starts_once_then_returns_to_normal_stage2_loo
         }
     };
 
+    let waiting_state = dispatch(
+        protocol::DjLinkMessageType::TimelineStateRequest,
+        3,
+        "wait-follow-state-request",
+        json!({}),
+    );
+    match waiting_state {
+        DjLinkDispatchOutcome::TimelineState { state, .. } => {
+            assert_eq!(state.state, protocol::DjLinkTimelineStateValue::Running);
+            assert!(!state.loop_active);
+            assert!(!state.transition_hold_active);
+            assert_eq!(state.timeline_id, target_timeline_id_string);
+            assert_eq!(state.play_session_id.as_deref(), Some(play_session_id));
+            assert_eq!(state.pedal_owner.as_deref(), Some("timeline"));
+            assert_eq!(
+                state.release_event_id.as_deref(),
+                Some("wait-follow-release")
+            );
+        }
+        outcome => panic!("wait state request should remain in Timeline control: {outcome:?}"),
+    }
+
     let before_wrong_session = runtime.lock().unwrap().clone();
     assert!(matches!(
         dispatch(
             protocol::DjLinkMessageType::TimelineLoopSet,
-            3,
+            4,
             "wait-follow-wrong-session",
             json!({
                 "timelineId": target_timeline_id_string,
@@ -1000,7 +1052,7 @@ fn dj_link_waiting_follow_loop_set_starts_once_then_returns_to_normal_stage2_loo
     assert!(matches!(
         dispatch(
             protocol::DjLinkMessageType::TimelineLoopSet,
-            4,
+            5,
             "wait-follow-inactive-edge",
             json!({
                 "timelineId": target_timeline_id_string,
@@ -1015,7 +1067,7 @@ fn dj_link_waiting_follow_loop_set_starts_once_then_returns_to_normal_stage2_loo
 
     let start = dispatch(
         protocol::DjLinkMessageType::TimelineLoopSet,
-        5,
+        6,
         "wait-follow-start",
         json!({
             "timelineId": target_timeline_id_string,
@@ -1051,7 +1103,7 @@ fn dj_link_waiting_follow_loop_set_starts_once_then_returns_to_normal_stage2_loo
 
     let replay = dispatch(
         protocol::DjLinkMessageType::TimelineLoopSet,
-        5,
+        6,
         "wait-follow-start",
         json!({
             "timelineId": target_timeline_id_string,
@@ -1070,7 +1122,7 @@ fn dj_link_waiting_follow_loop_set_starts_once_then_returns_to_normal_stage2_loo
     assert!(matches!(
         dispatch(
             protocol::DjLinkMessageType::TimelineLoopSet,
-            6,
+            7,
             "wait-follow-normal-loop-on",
             json!({
                 "timelineId": target_timeline_id_string,
@@ -1088,7 +1140,7 @@ fn dj_link_waiting_follow_loop_set_starts_once_then_returns_to_normal_stage2_loo
     assert!(matches!(
         dispatch(
             protocol::DjLinkMessageType::TimelineLoopSet,
-            7,
+            8,
             "wait-follow-normal-loop-off",
             json!({
                 "timelineId": target_timeline_id_string,

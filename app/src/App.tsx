@@ -2916,6 +2916,80 @@ export default function App() {
   const [timelineCueAudioLocalError, setTimelineCueAudioLocalError] = createSignal<string | null>(null);
   const timelineCueAudioStatusRequests = createTimelineCueAudioStatusRequestGate();
   let timelineCueAudioSettingsQueue: ReturnType<typeof createTimelineCueAudioSettingsQueue<MachineTimelineCueAudioSettingsV1, TimelineCueAudioStatus>> | null = null;
+  type TimelineAdvancedSnapshotResolution = "idle" | "pending" | "blocked";
+  type TimelineAdvancedSnapshotExpectation = Readonly<{
+    authority: ProjectAuthorityToken;
+    activeTimelineId: number;
+    projectReadGeneration: number;
+  }>;
+  const timelineAdvancedSnapshotResolutionKey = "timeline-authoritative-snapshot";
+  const [timelineAdvancedSnapshotResolution, setTimelineAdvancedSnapshotResolution] =
+    createSignal<TimelineAdvancedSnapshotResolution>("idle");
+  // A blocked Timeline acknowledgement is only allowed to converge to the
+  // exact authority token and active Timeline identity returned by that ACK.
+  // Do not infer convergence from a later, unrelated snapshot: C can retain
+  // B's active Timeline ID while changing the project authority underneath it.
+  let timelineAdvancedSnapshotExpectation: TimelineAdvancedSnapshotExpectation | null = null;
+  let timelineAdvancedCanonicalReconciliation: Promise<void> | null = null;
+  const timelineAuthorityReady = (operation: string): boolean => {
+    const resolution = timelineAdvancedSnapshotResolution();
+    if (resolution === "idle") return true;
+    setMessage(
+      resolution === "pending"
+        ? `Timeline state is still synchronizing; ${operation} is temporarily blocked.`
+        : `Timeline state is blocked until a canonical snapshot converges; ${operation} was not sent.`,
+      timelineAdvancedSnapshotResolutionKey,
+    );
+    return false;
+  };
+  const blockTimelineAdvancedSnapshotResolution = (reason: string) => {
+    setTimelineAdvancedSnapshotResolution("blocked");
+    setMessage(
+      `Timeline state is blocked pending canonical reconciliation: ${reason}. The unverified result was not applied; no Timeline retry was sent.`,
+      timelineAdvancedSnapshotResolutionKey,
+    );
+  };
+  const timelineAdvancedCanonicalBundleMatchesExpectation = (
+    candidate: ProjectAuthorityBundle,
+    expected: TimelineAdvancedSnapshotExpectation,
+  ) => projectAuthorityTokenIsCurrent(expected.authority, authorityToken(candidate))
+    && candidate.snapshot.timeline.id === expected.activeTimelineId
+    && (candidate.snapshot.timeline_bank ?? []).some((timeline) => timeline.id === expected.activeTimelineId);
+  const reconcileBlockedTimelineAdvancedSnapshotResolution = () => {
+    const expected = timelineAdvancedSnapshotExpectation;
+    if (timelineAdvancedSnapshotResolution() !== "blocked"
+      || !expected
+      || timelineAdvancedCanonicalReconciliation) return;
+    const reconciliation = (async () => {
+      try {
+        // This bundle capture is atomic: its E/R/H authority and snapshot
+        // cannot be stitched from B and a same-ID C project state.
+        const canonical = await tauriInvoke<ProjectAuthorityBundle>("get_project_authority_bundle", {
+          expectedEpoch: expected.authority.project_epoch,
+          expectedRevision: expected.authority.project_revision,
+          expectedCheckpointHash: expected.authority.checkpoint_hash,
+        });
+        if (timelineAdvancedSnapshotResolution() !== "blocked"
+          || timelineAdvancedSnapshotExpectation !== expected
+          || expected.projectReadGeneration !== projectReadGeneration
+          || !isProjectAuthorityIdentityCurrent(expected.authority)
+          || !timelineAdvancedCanonicalBundleMatchesExpectation(canonical, expected)) return;
+        applyEngineSnapshot(canonical.snapshot);
+        setSnapshotRevision(null);
+        timelineAdvancedSnapshotExpectation = null;
+        setTimelineAdvancedSnapshotResolution("idle");
+      } catch {
+        // An ACK that C has superseded remains blocked. The existing message
+        // stays visible; no implicit mutation or retry is allowed here.
+      }
+    })();
+    timelineAdvancedCanonicalReconciliation = reconciliation;
+    void reconciliation.finally(() => {
+      if (timelineAdvancedCanonicalReconciliation === reconciliation) {
+        timelineAdvancedCanonicalReconciliation = null;
+      }
+    });
+  };
   // This signal is populated exclusively by the E/R/H-authoritative runtime
   // read below. Keep it separate from TimelineSnapshot.follow: the latter is
   // authored configuration, while this is live transport truth.
@@ -10792,12 +10866,15 @@ export default function App() {
     cueId: number,
     update: (child: ChildTimelineSummary) => ChildTimelineSummary,
   ) => {
-    const cue = requireAuthoritativeCue(cueId);
-    if (!cue?.child_timeline) throw new Error(`Timeline Cue ${cueId} was not found`);
-    const childTimeline = normalizedChildTimeline(update(normalizedChildTimeline(cue.child_timeline)));
     const localFixture = viewportFixture === "timeline-layered"
       || viewportFixture === "scene-block-large"
       || viewportFixture === "scene-block-hour";
+    if (!localFixture && !timelineAuthorityReady("Timeline child edit")) {
+      throw new Error("Timeline authority is not ready; child edit was not sent.");
+    }
+    const cue = requireAuthoritativeCue(cueId);
+    if (!cue?.child_timeline) throw new Error(`Timeline Cue ${cueId} was not found`);
+    const childTimeline = normalizedChildTimeline(update(normalizedChildTimeline(cue.child_timeline)));
     if (!localFixture) {
       await invoke("set_cue_child_timeline", { cueId, childTimeline });
       await refreshSnapshot();
@@ -10828,6 +10905,13 @@ export default function App() {
     command: FrontendTauriInvokeCommand,
     args?: Record<string, unknown>,
   ): Promise<T> => {
+    const localFixture = viewportFixture === "timeline-layered"
+      || viewportFixture === "scene-block-large"
+      || viewportFixture === "scene-block-hour"
+      || viewportFixture === "scene-matrix";
+    if (!localFixture && !timelineAuthorityReady(command)) {
+      throw new Error("Timeline authority is not ready; command was not sent.");
+    }
     const childCueId = timelineChildCueId();
     if (childCueId === null) {
       return invoke<T>(command, args);
@@ -10978,6 +11062,13 @@ export default function App() {
     command: FrontendTauriInvokeCommand,
     args?: Record<string, unknown>,
   ): Promise<T> => {
+    const localFixture = viewportFixture === "timeline-layered"
+      || viewportFixture === "scene-block-large"
+      || viewportFixture === "scene-block-hour"
+      || viewportFixture === "scene-matrix";
+    if (!localFixture && !timelineAuthorityReady(command)) {
+      throw new Error("Timeline authority is not ready; command was not sent.");
+    }
     const authority = requireBankAuthority();
     if (!authority) {
       const issue = bankAuthority().issue;
@@ -11089,10 +11180,6 @@ export default function App() {
         return undefined as T;
       }
     }
-    const localFixture = viewportFixture === "timeline-layered"
-      || viewportFixture === "scene-block-large"
-      || viewportFixture === "scene-block-hour"
-      || viewportFixture === "scene-matrix";
     if (localFixture && command === "add_timeline_scene_block") {
       const eventId = Math.max(
         0,
@@ -11339,6 +11426,10 @@ export default function App() {
     command: FrontendTauriInvokeCommand,
     args?: Record<string, unknown>,
   ): Promise<T> => {
+    const localFixture = viewportFixture === "timeline-layered";
+    if (!localFixture && !timelineAuthorityReady(command)) {
+      throw new Error("Timeline authority is not ready; command was not sent.");
+    }
     const childCueId = timelineChildCueId();
     if (childCueId !== null) {
       if (command === "add_timeline_layer") {
@@ -11438,7 +11529,9 @@ export default function App() {
         return undefined as T;
       }
     }
-    if (viewportFixture !== "timeline-layered") return invoke<T>(command, args);
+    if (!localFixture) {
+      return invoke<T>(command, args);
+    }
     if (command === "add_timeline_layer") {
       const layerId = Math.max(1, ...timelineLayers().map((layer) => layer.id)) + 1;
       const kind = String(args?.kind ?? "Lighting") as TimelineLayerSummary["kind"];
@@ -12309,6 +12402,10 @@ export default function App() {
                 batch.some((waiter) => waiter.syncProjectState),
                 batch.some((waiter) => waiter.resetEditorDrafts),
               );
+              // A generic snapshot can be a same-active-ID C image. It may
+              // refresh the blocked UI, but only the authority-bound bundle
+              // reconciliation above is allowed to unlock Timeline controls.
+              reconcileBlockedTimelineAdvancedSnapshotResolution();
             }
           }
         } catch (error) {
@@ -15087,59 +15184,129 @@ export default function App() {
   const commitTimelineAdvanced = async (
     request: TimelineAdvancedMutationRequest,
   ): Promise<TimelineAdvancedAuthoritativeResult | null> => {
-    const beforePreflight = captureProjectAuthorityIdentity();
-    const { authority } = await prepareMediaAssetOperationStart(beforePreflight);
-    const requestId = ++timelineAdvancedRequestId;
-    const args = {
-      request,
-      requestId,
-      expectedRevision: authority.project_revision,
-      expectedCheckpointHash: authority.checkpoint_hash,
-      __expectedProjectEpoch: authority.project_epoch,
-    };
-    let result: TimelineAdvancedAuthoritativeResult;
-    let applicationCurrent = false;
+    if (!timelineAuthorityReady("Timeline edit")) return null;
+    // The authoritative result contains the durable Timeline bank, whose
+    // entries intentionally omit live transport state. Keep the whole
+    // operation fenced until a canonical engine snapshot has been applied;
+    // otherwise an enabled loop briefly (or permanently, after a stale read)
+    // appears as runtime OFF and can be acted on as if it were disabled.
+    timelineAdvancedSnapshotExpectation = null;
+    setTimelineAdvancedSnapshotResolution("pending");
+    let terminalTimelineAcknowledgementEstablished = false;
     try {
-      result = await invoke<TimelineAdvancedAuthoritativeResult>(
-        "apply_timeline_advanced_authoritative",
-        args,
+      const beforePreflight = captureProjectAuthorityIdentity();
+      const { authority } = await prepareMediaAssetOperationStart(beforePreflight);
+      const requestId = ++timelineAdvancedRequestId;
+      const args = {
+        request,
+        requestId,
+        expectedRevision: authority.project_revision,
+        expectedCheckpointHash: authority.checkpoint_hash,
+        __expectedProjectEpoch: authority.project_epoch,
+      };
+      let result: TimelineAdvancedAuthoritativeResult;
+      let applicationCurrent = false;
+      try {
+        result = await invoke<TimelineAdvancedAuthoritativeResult>(
+          "apply_timeline_advanced_authoritative",
+          args,
+        );
+        applicationCurrent = authoritativeApplicationIsCurrent(result);
+      } catch (error) {
+        const terminal = await invoke<VideoEffectCatalogTerminalEnvelope | null>(
+          "get_timeline_advanced_operation_terminal_result",
+          {
+            requestId,
+            expectedEpoch: authority.project_epoch,
+            expectedRevision: authority.project_revision,
+            expectedCheckpointHash: authority.checkpoint_hash,
+            ownerId: projectTransactionOwnerId,
+          },
+        ).catch(() => null);
+        if (!terminal) throw error;
+        if (typeof terminal.shape_fingerprint !== "string" || terminal.shape_fingerprint.length === 0) {
+          throw new Error("Timeline receipt omitted its request-shape fingerprint.");
+        }
+        if (terminal.terminal.kind === "failure") throw new Error(terminal.terminal.result.message);
+        if (terminal.terminal.kind !== "timeline") {
+          throw new Error("Timeline receipt returned a different command-family outcome.");
+        }
+        applicationCurrent = authoritativeApplicationIsCurrent(terminal);
+        result = terminal.terminal.result;
+      }
+      const acknowledgedAuthority = authorityToken(result.mutation.authority);
+      timelineAdvancedSnapshotExpectation = {
+        authority: acknowledgedAuthority,
+        activeTimelineId: result.active_timeline_id,
+        projectReadGeneration,
+      };
+      terminalTimelineAcknowledgementEstablished = true;
+      if (!applicationCurrent) {
+        // The unverified result was not applied; remain blocked until a
+        // read-only canonical refresh converges.
+        blockTimelineAdvancedSnapshotResolution("Timeline acknowledgement was stale");
+        return null;
+      }
+      if (!applyProjectHistoryMutationResult(result.mutation)) {
+        blockTimelineAdvancedSnapshotResolution("ACK authority was already superseded");
+        return null;
+      }
+      // Applying the mutation receipt may advance the ordinary project-read
+      // generation. Keep the exact same ACK token/Timeline identity, but
+      // bind its canonical read to that post-receipt generation.
+      timelineAdvancedSnapshotExpectation = {
+        authority: acknowledgedAuthority,
+        activeTimelineId: result.active_timeline_id,
+        projectReadGeneration,
+      };
+      const expectedCanonical = timelineAdvancedSnapshotExpectation;
+      if (!expectedCanonical
+        || !isProjectAuthorityIdentityCurrent(acknowledgedAuthority)) {
+        blockTimelineAdvancedSnapshotResolution("ACK authority did not match the current project");
+        return null;
+      }
+      setMessage(
+        "Timeline committed; waiting for the canonical engine snapshot…",
+        timelineAdvancedSnapshotResolutionKey,
       );
-      applicationCurrent = authoritativeApplicationIsCurrent(result);
+      // Read the snapshot and authority as one backend bundle. A standalone
+      // get_snapshot can observe C after B's ACK while retaining B's active
+      // Timeline ID, which must never unlock this operation.
+      const canonical = await tauriInvoke<ProjectAuthorityBundle>("get_project_authority_bundle", {
+        expectedEpoch: expectedCanonical.authority.project_epoch,
+        expectedRevision: expectedCanonical.authority.project_revision,
+        expectedCheckpointHash: expectedCanonical.authority.checkpoint_hash,
+      });
+      if (expectedCanonical !== timelineAdvancedSnapshotExpectation
+        || expectedCanonical.projectReadGeneration !== projectReadGeneration
+        || !isProjectAuthorityIdentityCurrent(expectedCanonical.authority)
+        || !timelineAdvancedCanonicalBundleMatchesExpectation(canonical, expectedCanonical)) {
+        blockTimelineAdvancedSnapshotResolution(
+          "canonical authority bundle did not converge to the acknowledged Timeline",
+        );
+        return null;
+      }
+      applyEngineSnapshot(canonical.snapshot);
+      setSnapshotRevision(null);
+      timelineAdvancedSnapshotExpectation = null;
+      setTimelineAdvancedSnapshotResolution("idle");
+      return result;
     } catch (error) {
-      const terminal = await invoke<VideoEffectCatalogTerminalEnvelope | null>(
-        "get_timeline_advanced_operation_terminal_result",
-        {
-          requestId,
-          expectedEpoch: authority.project_epoch,
-          expectedRevision: authority.project_revision,
-          expectedCheckpointHash: authority.checkpoint_hash,
-          ownerId: projectTransactionOwnerId,
-        },
-      ).catch(() => null);
-      if (!terminal) throw error;
-      if (typeof terminal.shape_fingerprint !== "string" || terminal.shape_fingerprint.length === 0) {
-        throw new Error("Timeline receipt omitted its request-shape fingerprint.");
+      if (terminalTimelineAcknowledgementEstablished) {
+        blockTimelineAdvancedSnapshotResolution("Timeline acknowledgement could not be canonically verified");
+      } else {
+        // A preflight/registration/IPC failure has no terminal ACK to
+        // reconcile. Keep the prior Timeline untouched and allow a new
+        // operator action instead of creating an unresolvable blocked state.
+        timelineAdvancedSnapshotExpectation = null;
+        setTimelineAdvancedSnapshotResolution("idle");
+        setMessage(
+          `Timeline edit was not sent because no terminal acknowledgement was established: ${String(error)}`,
+          timelineAdvancedSnapshotResolutionKey,
+        );
       }
-      if (terminal.terminal.kind === "failure") throw new Error(terminal.terminal.result.message);
-      if (terminal.terminal.kind !== "timeline") {
-        throw new Error("Timeline receipt returned a different command-family outcome.");
-      }
-      applicationCurrent = authoritativeApplicationIsCurrent(terminal);
-      result = terminal.terminal.result;
+      throw error;
     }
-    if (!applicationCurrent) return null;
-    // The ACK includes the complete committed Timeline bank. Apply it before
-    // the best-effort full refresh so fresh split/duplicate IDs remain mounted
-    // and selectable if that follow-up read is temporarily unavailable.
-    applyEngineSnapshot(engineSnapshotWithTimelineAdvancedResult(latestEngineSnapshot, result), false);
-    await refreshSnapshot();
-    if (!projectAuthorityTokenIsCurrent(
-      result.mutation.authority,
-      captureProjectAuthorityIdentity(),
-    )) {
-      return null;
-    }
-    return result;
   };
 
   const currentTimelineAdvancedAuthoring = (): TimelineAdvancedAuthoringSummary => ({
@@ -15557,6 +15724,7 @@ export default function App() {
     }
   };
   const setTimelineLoopEnabled = async (enabled: boolean) => {
+    if (!timelineAuthorityReady("Timeline loop change")) return;
     try {
       await invoke<void>("set_timeline_loop_enabled", { enabled });
     } catch (error) {
@@ -15564,6 +15732,7 @@ export default function App() {
     }
   };
   const scaleTimelineLoop = async (scale: "half" | "double") => {
+    if (!timelineAuthorityReady("Timeline loop resize")) return;
     try {
       await invoke<void>("scale_timeline_loop", { scale });
     } catch (error) {
@@ -19998,6 +20167,7 @@ export default function App() {
             : candidate),
         }));
       } else {
+        if (!timelineAuthorityReady("Timeline child creation")) return false;
         await invoke("set_cue_child_timeline", { cueId, childTimeline });
         await refreshSnapshot();
       }
@@ -20419,6 +20589,10 @@ export default function App() {
       throw new Error("Timeline transport dispatcher rejected an unknown command.");
     }
     if (!isTauriRuntime()) throw new Error(tauriBackendUnavailableMessage);
+    if (command === "set_timeline_transport_playing_runtime_v1"
+      && !timelineAuthorityReady("Timeline transport change")) {
+      throw new Error("Timeline authority is not ready; command was not sent.");
+    }
     return tauriInvoke<T>(command, args);
   };
   // The rendered root Timeline controls and AppShortcut executor both receive
@@ -20428,6 +20602,7 @@ export default function App() {
     invoke: invokeTimelineTransportRuntime,
   });
   const setCanonicalTimelinePlaying = async (playing: boolean) => {
+    if (!timelineAuthorityReady("Timeline transport change")) return;
     const childCueId = timelineChildCueId();
     if (childCueId !== null) {
       await invoke("set_direct_child_timeline_playing", { cueId: childCueId, playing });
