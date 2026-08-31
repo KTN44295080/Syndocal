@@ -62,10 +62,13 @@ assert.equal(localization.translateUiText("Install v1.2.0", "ja"), "v1.2.0をイ
 assert.equal(localization.translateUiText("Jump", "ja"), "ジャンプ");
 assert.equal(localization.translateUiText("Live audio input stopped.", "ja"), "ライブ音声入力は停止中です。");
 assert.equal(localization.translateUiText("Cue Audio", "ja"), "キュー音声");
-assert.equal(localization.translateUiText("Follow Program", "ja"), "プログラムに追従");
-assert.equal(localization.translateUiText("Explicit Device", "ja"), "出力デバイスを指定");
+assert.equal(localization.translateUiText("Follow PROGRAM output", "ja"), "PROGRAM出力に追従");
+assert.equal(localization.translateUiText("Explicit WDM output", "ja"), "WDM出力を指定");
 assert.equal(localization.translateUiText("Click gain", "ja"), "クリック音量");
-assert.equal(localization.translateUiText("Refresh outputs", "ja"), "出力を更新");
+assert.equal(localization.translateUiText("Refresh Windows outputs", "ja"), "Windows出力を更新");
+assert.equal(localization.translateUiText("Music (missing; reselect)", "ja"), "Music（見つかりません。再選択してください）");
+assert.equal(localization.translateUiText("Music (2 matching outputs; ambiguous)", "ja"), "Music（一致する出力 2 件・曖昧）");
+assert.equal(localization.translateUiText("Music (not currently selectable)", "ja"), "Music（現在選択できません）");
 assert.equal(localization.translateUiText("Staged same-PC Art-Net loopback show route enabled.", "ja"), "準備済みの同一PC Art-Netループバック公演ルートを有効化しました。");
 assert.equal(localization.translateUiText("Send fixed red DSF2026 Art-Net probe once", "ja"), "固定赤色DSF2026 Art-Netプローブを1回送信");
 assert.equal(

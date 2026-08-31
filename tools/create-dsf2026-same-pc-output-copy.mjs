@@ -20,11 +20,11 @@ import {
   writeExclusive,
 } from "./dsf2026/io.mjs";
 
-export const SAME_PC_SOURCE_FILENAME = "DSF2026-show-alpha9-reference-audio.sdc";
-export const SAME_PC_SOURCE_PATH = resolve(fileURLToPath(new URL(`../target/qa/dsf2026-show-authored-20260828/${SAME_PC_SOURCE_FILENAME}`, import.meta.url)));
-export const SAME_PC_SOURCE_BYTE_SIZE = 1_095_864;
-export const SAME_PC_SOURCE_SHA256 = "93e71d8ac3889968c2aad5b0a8ca194b88cb1c7b51bf897c7741c969d9a05094";
-export const SAME_PC_OUTPUT_FILENAME = "DSF2026-show-alpha10-same-pc-output.sdc";
+export const SAME_PC_SOURCE_FILENAME = "DSF2026-show-alpha10-reference-audio.sdc";
+export const SAME_PC_SOURCE_PATH = resolve(fileURLToPath(new URL(`../target/qa/dsf2026-show-authored-20260901-canonical/${SAME_PC_SOURCE_FILENAME}`, import.meta.url)));
+export const SAME_PC_SOURCE_BYTE_SIZE = 1_092_638;
+export const SAME_PC_SOURCE_SHA256 = "fba13d2234d493fe9cbbdfb17b479ca79336f00b4ab0cb7cb21eb229e9ef4cf7";
+export const SAME_PC_OUTPUT_FILENAME = "DSF2026-show-alpha11-same-pc-output.sdc";
 export const SAME_PC_OUTPUT_PATH = resolve(dirname(SAME_PC_SOURCE_PATH), SAME_PC_OUTPUT_FILENAME);
 
 export const SAME_PC_ALLOWED_CHANGED_PATHS = Object.freeze([
@@ -214,7 +214,7 @@ function assertSourceDmxContract(snapshot) {
   assertDmxRouteShape(routes[0], "source snapshot.dmx_outputs[0]");
   const expected = expectedDisabledSerialRoute();
   if (!equalJson(snapshot.output, expected) || !equalJson(routes[0], expected) || !equalJson(snapshot.output, routes[0])) {
-    fail("source DMX routes must be the exact disabled alpha9 EnttecOpenDmx/127.0.0.1:6454/U0 route");
+    fail("source DMX routes must be the exact disabled alpha10 EnttecOpenDmx/127.0.0.1:6454/U0 route");
   }
 }
 
@@ -384,13 +384,13 @@ export function validateSamePcOutputProject(outputInput, sourceInput) {
 
 export function assertApprovedSamePcSource(sourcePath, sourceBytes, sourceProject) {
   if (normalizeIdentityPath(sourcePath) !== normalizeIdentityPath(SAME_PC_SOURCE_PATH)) {
-    fail(`source must be the exact approved alpha9 path ${SAME_PC_SOURCE_PATH}`);
+    fail(`source must be the exact approved alpha10 path ${SAME_PC_SOURCE_PATH}`);
   }
   if (!(sourceBytes instanceof Uint8Array)) fail("source bytes must be a Uint8Array");
   if (sourceBytes.byteLength !== SAME_PC_SOURCE_BYTE_SIZE) fail(`source byte length must be exactly ${SAME_PC_SOURCE_BYTE_SIZE}`);
   const actualHash = sha256(sourceBytes);
-  if (actualHash !== SAME_PC_SOURCE_SHA256) fail(`source SHA-256 ${actualHash} does not match the approved alpha9 identity`);
-  const parsed = parseJsonText(decodeUtf8Strict(sourceBytes, "approved alpha9 source"), "approved alpha9 source");
+  if (actualHash !== SAME_PC_SOURCE_SHA256) fail(`source SHA-256 ${actualHash} does not match the approved alpha10 identity`);
+  const parsed = parseJsonText(decodeUtf8Strict(sourceBytes, "approved alpha10 source"), "approved alpha10 source");
   assertSourceProjectContract(parsed);
   if (sourceProject !== undefined && !equalJson(sourceProject, parsed)) fail("parsed source project differs from the approved source bytes");
   return { byteSize: sourceBytes.byteLength, sha256: actualHash };
@@ -465,8 +465,8 @@ async function cleanupCreatedTarget(path, guard, expectedBytes, createdIdentity,
 
 export async function createSamePcOutputCopy({ sourcePath = SAME_PC_SOURCE_PATH, outputPath = SAME_PC_OUTPUT_PATH, testHooks = null } = {}) {
   if (extname(outputPath).toLowerCase() !== ".sdc") fail("same-PC output must use the .sdc extension");
-  if (normalizeIdentityPath(sourcePath) === normalizeIdentityPath(outputPath)) fail("same-PC output must not overwrite alpha9 source");
-  const sourceFile = await readStrictJsonFile(sourcePath, "approved alpha9 source", MAX_BASE_BYTES);
+  if (normalizeIdentityPath(sourcePath) === normalizeIdentityPath(outputPath)) fail("same-PC output must not overwrite alpha10 source");
+  const sourceFile = await readStrictJsonFile(sourcePath, "approved alpha10 source", MAX_BASE_BYTES);
   const output = authorSamePcOutputProject(sourceFile.value, { sourcePath: sourceFile.absolute, sourceBytes: sourceFile.bytes });
   const outputText = `${JSON.stringify(output, null, 2)}\n`;
   const outputGuard = {};
@@ -506,7 +506,7 @@ export async function createSamePcOutputCopy({ sourcePath = SAME_PC_SOURCE_PATH,
 }
 
 export function parseCliArgs(argv = process.argv.slice(2)) {
-  const usage = "usage: node tools/create-dsf2026-same-pc-output-copy.mjs --output <new .sdc> [--source <approved alpha9 .sdc>]";
+  const usage = "usage: node tools/create-dsf2026-same-pc-output-copy.mjs --output <new .sdc> [--source <approved alpha10 .sdc>]";
   if (argv.length < 2 || argv.length % 2 !== 0) fail(usage);
   const options = {};
   for (let index = 0; index < argv.length; index += 2) {

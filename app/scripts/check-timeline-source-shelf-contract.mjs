@@ -46,6 +46,17 @@ const touchCueSource = await readFile(new URL("../src/components/TouchCuePanel.t
 const bankAuthoritySource = await readFile(new URL("../src/bankAuthority.ts", import.meta.url), "utf8");
 const initialSnapshotSource = await readFile(new URL("../src/initialEngineSnapshot.ts", import.meta.url), "utf8");
 
+assert.match(
+  shelfSource,
+  /resolution\.mode === "stale"[\s\S]*Selected \$\{payload\.lane_kind\} Timeline lane is no longer available/,
+  "a stale explicit Shelf lane remains visible and fail-closed instead of auto-retargeting",
+);
+assert.match(
+  shelfSource,
+  /resolution\.candidates\.length > 1 \|\| resolution\.mode === "stale"/,
+  "the lane chooser reappears when an explicit selection becomes stale, even if one candidate remains",
+);
+
 const exactMainAuthority = bankAuthority.inspectBankAuthority(
   [{ id: 1, label: "Main", active_cue_id: null }],
   [{ id: 10, cue_list_id: 1 }],
@@ -624,6 +635,22 @@ assert.doesNotMatch(shelfSource, /cueLists\??:/);
 assert.match(shelfSource, /uiLocale: UiLocale;/);
 assert.doesNotMatch(shelfSource, /loadUiLocale/);
 assert.match(shelfSource, /data-timeline-source-shelf-scene-placeable="true"/);
+assert.match(shelfSource, /resolveTimelineExternalLayer/);
+assert.match(
+  shelfSource,
+  /const sourceShelfLayerResolution = \(kind: TimelineLayerKind\) =>[\s\S]*?resolveTimelineExternalLayer\(/,
+  "the source shelf derives click targets from the current unlocked lane set",
+);
+assert.match(
+  shelfSource,
+  /const renderTargetSelect = \(kind: TimelineLayerKind, label: string\) => \([\s\S]*?candidates\.length > 1/,
+  "the source shelf exposes a selector only for ambiguous multi-lane clicks",
+);
+assert.match(
+  shelfSource,
+  /data-timeline-source-no-target-kind=\{kind\}/,
+  "the source shelf visibly reports zero unlocked lanes",
+);
 assert.doesNotMatch(shelfSource, /bank_unavailable|BankUnavailableReason|unavailableBank/);
 assert.doesNotMatch(timelineSource, /bank_unavailable|BankUnavailableReason|bank-unavailable:/);
 assert.doesNotMatch(
@@ -854,5 +881,55 @@ assert.match(
   /<TimelineSourceShelf\s+bankAuthority=\{bankAuthority\(\)\}\s+cueOptions=\{timelineCueOptions\(\)\}\s+timelineChildCueId=\{timelineChildCueId\(\)\}/,
   "the Timeline Shelf receives the explicit root-or-child context used to validate its complete expected Scene set",
 );
+
+// Cross-surface selection contract: the lower Timeline Inspector must consume
+// one App-owned tagged primary item, not a stale Lighting-only local signal.
+assert.match(
+  appSource,
+  /const \[timelineSelection, setTimelineSelection\] = createSignal<TimelineItemRef \| null>\(null\)/,
+  "the App owns a nullable tagged Timeline selection",
+);
+for (const kind of ["lighting_event", "audio_clip", "video_clip", "lighting_automation", "video_automation"]) {
+  assert.match(appSource, new RegExp(`case "${kind}":`), `the Inspector handles the ${kind} selection kind`);
+}
+assert.match(
+  appSource,
+  /const timelineSelectionIsCurrent = \(selection: TimelineItemRef\) => \{[\s\S]*?const selectTimelineItem = \(selection: TimelineItemRef \| null\) => \{[\s\S]*?if \(selection !== null && !timelineSelectionIsCurrent\(selection\)\)/,
+  "selection is checked against the current authoritative Timeline before it reaches the Inspector",
+);
+assert.match(
+  appSource,
+  /<TimelineSourceShelf[\s\S]*?onOpenInspector=\{\(\) => setTimelineLowerContextMode\("inspector"\)\}[\s\S]*?inspectorContent=\{renderTimelineInspector\(\)\}/,
+  "the mounted source shelf opens the App-owned Inspector rather than a no-op callback",
+);
+assert.doesNotMatch(appSource, /onOpenInspector=\{\(\) => undefined\}/);
+assert.match(appSource, /data-timeline-selection-kind=\{selection\.kind\}/);
+assert.match(appSource, /Selected Timeline item is no longer available\./);
+assert.match(timelinePanelSource, /timelineSelection: TimelineItemRef \| null;/);
+assert.match(timelinePanelSource, /onTimelineSelectionChange: \(selection: TimelineItemRef \| null\) => void;/);
+assert.match(timelinePanelSource, /let previousTimelineSelection: TimelineItemRef \| null \| undefined;/);
+assert.match(
+  timelinePanelSource,
+  /const timelineSelection = props\.timelineSelection;[\s\S]*?const primarySelectionCleared = previousTimelineSelection !== undefined[\s\S]*?previousTimelineSelection = timelineSelection;[\s\S]*?if \(primarySelectionCleared &&/,
+  "local Timeline selection is cleared only after the App-owned primary transitions from non-null to null",
+);
+assert.match(
+  timelinePanelSource,
+  /const notifyTimelineSelection = \(selection: TimelineItemRef \| null\) => \{\s*props\.onTimelineSelectionChange\(selection\);\s*\}/,
+  "the Timeline panel publishes its primary item to the App selection owner",
+);
+assert.match(timelinePanelSource, /onSelectAutomationRange=\{selectAutomationRange\}/);
+assert.match(
+  timelinePanelSource,
+  /onSelectEvent=\{\(eventId, openProperties = false\) => \{\s*selectTimelineEvent\(eventId, false\);/,
+  "Lighting event selection also updates the shared tagged selection",
+);
+assert.match(
+  shelfSource,
+  /const selectSourceShelfTab = \(tab: "Scenes" \| "Media Library"\) => \{[\s\S]*?if \(sourceContextMode\(\) !== "sources"\) selectSourceContextMode\("sources"\);/,
+  "choosing Scenes or Media Library from the compact header returns to Sources",
+);
+assert.match(shelfSource, /onClick=\{\(\) => selectSourceShelfTab\("Scenes"\)\}/);
+assert.match(shelfSource, /onClick=\{\(\) => selectSourceShelfTab\("Media Library"\)\}/);
 
 console.log("timeline source shelf Bank/Scene contract ok");

@@ -4513,6 +4513,19 @@ h3 {
   color: #ff8c7b;
 }
 
+.timelineCueAudioStatusSummary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  padding: 8px;
+  color: #b7c2cb;
+}
+
+.timelineCueAudioStatusSummary > span,
+.timelineCueAudioStatusSummary > output {
+  min-width: 0;
+}
+
 .timelineCueAudioEditor {
   min-width: 0;
   border: 1px solid #24282b;
@@ -4847,6 +4860,37 @@ h3 {
 .timelineRuler line.major {
   stroke: rgba(151, 160, 169, 0.24);
   stroke-width: 0.7;
+}
+
+/* Authored A-B loops are time ranges, not point markers. Keep the band behind
+ * Scene Blocks so block labels/fades remain readable while the orange extent
+ * stays visible through zoom and horizontal scrolling. */
+.timelineLoopRegion {
+  pointer-events: none;
+}
+
+.timelineLoopRegionBand {
+  fill: rgba(246, 143, 54, 0.16);
+  stroke: rgba(246, 143, 54, 0.72);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.timelineLoopRegion.disabled .timelineLoopRegionBand {
+  fill: rgba(246, 143, 54, 0.07);
+  stroke: rgba(246, 143, 54, 0.42);
+  stroke-dasharray: 4 3;
+}
+
+.timelineLoopRegionEdge {
+  stroke: rgba(255, 184, 93, 0.9);
+  stroke-width: 1.4;
+  stroke-dasharray: 3 2;
+  vector-effect: non-scaling-stroke;
+}
+
+.timelineLoopRegion.disabled .timelineLoopRegionEdge {
+  stroke: rgba(255, 184, 93, 0.5);
 }
 
 .timelineLaneDivider {
@@ -15277,51 +15321,15 @@ input[type="color"] {
   touch-action: none;
 }
 
-.timelinePointStem {
-  stroke-width: 1.8;
-}
-
-.timelinePointFlag {
-  stroke: rgba(13, 20, 28, 0.55);
-  stroke-width: 0.5;
-}
-
-.timelineMarker.lighting .timelinePointStem,
-.timelineMarker.lighting .timelinePointFlag {
-  fill: var(--identity, #58a7f6);
-  stroke: var(--identity, #58a7f6);
-}
-
-.timelineMarker.video .timelinePointStem,
-.timelineMarker.video .timelinePointFlag {
-  fill: var(--identity, #61d64c);
-  stroke: var(--identity, #61d64c);
-}
-
-.timelinePointStem {
-  stroke: var(--identity, #cbd6e2);
-}
-
-.timelineOverview.executingLive .timelineMarker.underPlayhead .timelinePointFlag {
-  stroke: rgba(255, 210, 125, 0.85);
-  stroke-width: 1;
-}
-
 .timelineMarker.dragging {
   cursor: grabbing;
-}
-
-.timelineMarker.dragging .timelinePointFlag {
-  stroke: #ffffff;
-  stroke-width: 1;
 }
 
 .timelineMarker:focus-visible {
   outline: none;
 }
 
-.timelineMarker:focus-visible .timelineSceneBlockBody,
-.timelineMarker:focus-visible .timelinePointFlag {
+.timelineMarker:focus-visible .timelineSceneBlockBody {
   stroke: #ffffff;
   stroke-width: 1.4;
 }

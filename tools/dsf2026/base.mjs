@@ -191,7 +191,7 @@ export function validateLightingBoundary(project) {
     const sourceBank = bank.find((timeline) => timeline?.id === 1);
     const destination = bank.find((timeline) => timeline?.id === 2);
     if (!sourceBank || !destination) return { error: "authored source/destination Timeline entries are missing" };
-    if (!Array.isArray(source.events) || source.events.length !== 2) return { error: "source Timeline must contain exactly the two post-loop lighting Cue events" };
+    if (!Array.isArray(source.events) || source.events.length !== 2) return { error: "source Timeline must contain exactly the two post-loop lighting Scene Blocks" };
     if (!Array.isArray(destination.events) || destination.events.length !== 0) return { error: "destination Timeline must retain empty events" };
     if (!isObject(source.loop_region) || !Number.isSafeInteger(source.loop_region.b_ms)) return { error: "source loop boundary is missing" };
     const expectedIds = [cues.all_white.id, cues.all_max.id];
@@ -199,12 +199,18 @@ export function validateLightingBoundary(project) {
     for (const [index, event] of source.events.entries()) {
       if (!isObject(event) || event.id !== index + 1 || seenIds.has(event.id)) return { error: "source lighting boundary event IDs must be stable and unique" };
       seenIds.add(event.id);
-      if (event.cue_id !== expectedIds[index] || event.track !== "Lighting" || event.time_ms !== source.loop_region.b_ms || event.time_ms < source.loop_region.b_ms || event.duration_ms !== 0) {
-        return { error: "source lighting boundary Cues must be all_white/all_max at the exact first point outside the loop" };
+      if (event.cue_id !== expectedIds[index]
+          || event.track !== "Lighting"
+          || event.time_ms !== source.loop_region.b_ms
+          || event.time_ms < source.loop_region.b_ms
+          || !Number.isSafeInteger(source.duration_ms)
+          || source.duration_ms <= event.time_ms
+          || event.duration_ms !== source.duration_ms - event.time_ms) {
+        return { error: "source lighting boundary Cues must be all_white/all_max Scene Blocks spanning from the loop exit to the source Timeline end" };
       }
     }
     if (!equalJson(source.events, sourceBank.events)) return { error: "active source Timeline and bank source lighting boundary events differ" };
-    return { detail: `all_white Cue ${cues.all_white.id} and all_max Cue ${cues.all_max.id} coexist at m99 downbeat ${source.loop_region.b_ms} ms outside the indefinite m98 loop` };
+    return { detail: `all_white Cue ${cues.all_white.id} and all_max Cue ${cues.all_max.id} coexist as Scene Blocks from m99 downbeat ${source.loop_region.b_ms} ms through source Timeline end ${source.duration_ms} ms` };
   } catch (error) {
     return { error: String(error?.message ?? error) };
   }

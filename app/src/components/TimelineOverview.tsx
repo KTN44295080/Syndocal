@@ -39,6 +39,7 @@ import type {
   TimelineItemRef,
   TimelineLayerKind,
   TimelineLayerSummary,
+  TimelineLoopRegionSummary,
   TimelineTrackKind,
   TimelineVideoClipSummary,
 } from "../types";
@@ -148,6 +149,8 @@ interface TimelineOverviewProps {
   selectedVideoClipIds: number[];
   playheadX: number;
   visibleWindow: TimelineVisibleWindow;
+  /** Authored A-B range. The overview renders this as an orange time span. */
+  loopRegion?: TimelineLoopRegionSummary | null;
   bpm: number;
   snapMode: "Off" | "Beat" | "Bar" | "Grid";
   gridMs: number;
@@ -2266,6 +2269,33 @@ export function TimelineOverview(props: TimelineOverviewProps) {
   // 14px section separator with compact 30px lanes (54px when details are expanded)
   // inside the scrollport; content height stays out of the frame's intrinsic size.
   const viewBoxX = (percent: number) => (percent / 100) * overviewW();
+  const loopRegionGeometry = createMemo(() => {
+    const region = props.loopRegion;
+    if (!region) return null;
+    const authoredA = Number(region.a_ms);
+    const authoredB = Number(region.b_ms);
+    if (!Number.isFinite(authoredA) || !Number.isFinite(authoredB)) return null;
+    const aMs = Math.min(authoredA, authoredB);
+    const bMs = Math.max(authoredA, authoredB);
+    if (bMs <= aMs) return null;
+    const visibleStartMs = props.visibleWindow.start_ms;
+    const visibleEndMs = props.visibleWindow.end_ms;
+    const clippedStartMs = Math.max(aMs, visibleStartMs);
+    const clippedEndMs = Math.min(bMs, visibleEndMs);
+    if (clippedEndMs <= clippedStartMs) return null;
+    const visibleSpanMs = Math.max(1, visibleEndMs - visibleStartMs);
+    return {
+      aMs,
+      bMs,
+      clippedStartMs,
+      clippedEndMs,
+      x: ((clippedStartMs - visibleStartMs) / visibleSpanMs) * overviewW(),
+      width: ((clippedEndMs - clippedStartMs) / visibleSpanMs) * overviewW(),
+      enabled: Boolean(region.enabled),
+      clippedStart: clippedStartMs > aMs,
+      clippedEnd: clippedEndMs < bMs,
+    };
+  });
   const legacyLaneHeightPx = () => overviewH() / 2;
   const legacyLaneTopPx = (track: TimelineTrackKind) => track === "Lighting" ? 0 : legacyLaneHeightPx();
   const layerRow = (layerId: number, track: TimelineTrackKind) => props.legacyMode
@@ -2341,9 +2371,15 @@ export function TimelineOverview(props: TimelineOverviewProps) {
     const move = markerDrag();
     return move?.eventId === event.id ? move.layerId : event.layer_id;
   };
+  const sceneBlockDisplaySpanMs = (event: TimelineOverviewEvent) =>
+    Number.isFinite(event.total_duration_ms) && event.total_duration_ms > 0
+      ? event.total_duration_ms
+      : 0;
   const eventPreviewEndMs = (event: TimelineOverviewEvent) => {
     const resize = eventResizeDrag();
-    return resize?.eventId === event.id ? resize.endMs : eventPreviewStartMs(event) + event.total_duration_ms;
+    return resize?.eventId === event.id
+      ? resize.endMs
+      : eventPreviewStartMs(event) + sceneBlockDisplaySpanMs(event);
   };
   const eventPreviewSpanMs = (event: TimelineOverviewEvent) => Math.max(0, eventPreviewEndMs(event) - eventPreviewStartMs(event));
   const eventStretchProjection = (event: TimelineOverviewEvent) => {
@@ -2371,7 +2407,7 @@ export function TimelineOverview(props: TimelineOverviewProps) {
   const sceneBlockPixelWidth = (event: TimelineOverviewEvent) => Math.max(
     eventResizeDrag()?.eventId === event.id
       ? (eventPreviewSpanMs(event) / timelineVisibleWindowSpanMs(props.visibleWindow)) * overviewW()
-      : viewBoxX(event.width),
+      : (sceneBlockDisplaySpanMs(event) / timelineVisibleWindowSpanMs(props.visibleWindow)) * overviewW(),
     0.8,
   );
   const sceneBlockHasReadableBody = (event: TimelineOverviewEvent) => sceneBlockPixelWidth(event) >= 16;
@@ -2979,6 +3015,45 @@ export function TimelineOverview(props: TimelineOverviewProps) {
           )}
         </For>
       </Show>
+      <Show when={loopRegionGeometry()}>
+        {(region) => (
+          <g
+            class={`timelineLoopRegion ${region().enabled ? "enabled" : "disabled"}`}
+            data-timeline-loop-region
+            data-timeline-loop-a-ms={region().aMs}
+            data-timeline-loop-b-ms={region().bMs}
+            data-timeline-loop-enabled={region().enabled ? "true" : "false"}
+            data-timeline-loop-clipped-start={region().clippedStart ? "true" : "false"}
+            data-timeline-loop-clipped-end={region().clippedEnd ? "true" : "false"}
+            aria-label={`Loop region ${region().aMs} to ${region().bMs} milliseconds`}
+          >
+            <rect
+              class="timelineLoopRegionBand"
+              x={region().x}
+              y="0"
+              width={Math.max(0.8, region().width)}
+              height={canvasH()}
+            />
+            <line
+              class="timelineLoopRegionEdge start"
+              x1={region().x}
+              x2={region().x}
+              y1={rulerLineTopPx()}
+              y2={canvasH()}
+            />
+            <line
+              class="timelineLoopRegionEdge end"
+              x1={region().x + region().width}
+              x2={region().x + region().width}
+              y1={rulerLineTopPx()}
+              y2={canvasH()}
+            />
+            <title>
+              {`Loop region ${region().aMs}–${region().bMs} ms${region().enabled ? " enabled" : " disabled"}`}
+            </title>
+          </g>
+        )}
+      </Show>
       <g
         class="timelineRuler"
         aria-hidden="true"
@@ -3516,7 +3591,7 @@ export function TimelineOverview(props: TimelineOverviewProps) {
           <g
             class={[
               "timelineMarker",
-              event.duration_ms > 0 ? "sceneBlock" : "pointEvent",
+              "sceneBlock",
               event.track === "Lighting" ? "lighting" : "video",
               underPlayheadEventIds().has(event.id) ? "underPlayhead" : "",
               props.selectedEventId === event.id ? "selected" : "",
@@ -3533,10 +3608,13 @@ export function TimelineOverview(props: TimelineOverviewProps) {
             data-timeline-layer-kind={layerById().get(eventPreviewLayerId(event))?.kind ?? event.track}
             data-timeline-layer-muted={layerById().get(event.layer_id)?.muted ? "true" : "false"}
             data-timeline-start-ms={event.time_ms}
+            data-timeline-event-kind={event.duration_ms > 0 ? "scene-block" : "legacy-point-unsupported"}
+            data-timeline-authored-duration-ms={event.duration_ms}
+            data-timeline-display-duration-ms={sceneBlockDisplaySpanMs(event)}
             data-timeline-loop-count={event.loop_count}
             data-timeline-conform={event.conform_to_tempo ? "true" : "false"}
             data-timeline-rate={event.rate ?? undefined}
-            data-timeline-block-layout={event.duration_ms > 0 ? "solid-two-line" : undefined}
+            data-timeline-block-layout="solid-two-line"
             data-timeline-fade-in-ms={eventPreviewFadeMs(event, "in")}
             data-timeline-fade-out-ms={eventPreviewFadeMs(event, "out")}
             data-timeline-preview-rate={eventPreviewRate(event) ?? undefined}
@@ -3643,24 +3721,6 @@ export function TimelineOverview(props: TimelineOverviewProps) {
               props.onSeekTime(event.time_ms);
             }}
           >
-            <Show
-              when={event.duration_ms > 0}
-              fallback={
-                <>
-                  <line
-                    class="timelinePointStem"
-                    x1="0"
-                    y1={-blockHeightPx() / 2}
-                    x2="0"
-                    y2={blockHeightPx() / 2}
-                  />
-                  <polygon
-                    class="timelinePointFlag"
-                    points={`0,${-blockHeightPx() / 2} ${Math.max(5, blockHeightPx() * 0.5)},${-blockHeightPx() / 2 + blockHeightPx() * 0.22} 0,${-blockHeightPx() / 2 + blockHeightPx() * 0.44}`}
-                  />
-                </>
-              }
-            >
               <Show when={sceneBlockIsCompressedOverlapMember(event)}>
                 <rect
                   class="timelineSceneBlockHit"
@@ -3678,7 +3738,7 @@ export function TimelineOverview(props: TimelineOverviewProps) {
                   data-timeline-drag-ghost
                   x={(event.time_ms - eventPreviewStartMs(event)) / timelineVisibleWindowSpanMs(props.visibleWindow) * overviewW()}
                   y={-blockHeightPx() / 2}
-                  width={Math.max(0.8, event.total_duration_ms / timelineVisibleWindowSpanMs(props.visibleWindow) * overviewW())}
+                  width={Math.max(0.8, sceneBlockDisplaySpanMs(event) / timelineVisibleWindowSpanMs(props.visibleWindow) * overviewW())}
                   height={blockHeightPx()}
                   rx="1.6"
                 />
@@ -3841,7 +3901,11 @@ export function TimelineOverview(props: TimelineOverviewProps) {
                   </text>
                 )}
               </Show>
-              <Show when={props.selectedEventId === event.id || eventResizeDrag()?.eventId === event.id || eventFadeDrag()?.eventId === event.id}>
+              <Show when={event.duration_ms > 0 && (
+                props.selectedEventId === event.id
+                || eventResizeDrag()?.eventId === event.id
+                || eventFadeDrag()?.eventId === event.id
+              )}>
                 <rect
                   class="timelineSceneBlockResizeHandle start"
                   data-timeline-scene-block-resize="start"
@@ -3904,14 +3968,13 @@ export function TimelineOverview(props: TimelineOverviewProps) {
                 />
               </Show>
               </Show>
-            </Show>
             <Show when={!sceneBlockIsCompressedOverlapMember(event)}>
               <title>
-                {event.duration_ms > 0
-                  ? event.conform_to_tempo
-                    ? `${event.cue_label}${sceneBlockRateBadge(event) ? ` ${sceneBlockRateBadge(event)}` : ""} / ${event.track} / ${event.time_ms} ms / ${event.duration_ms} ms window / ${event.loop_count} ${event.loop_fill ? "fill loops" : "tempo iterations"}`
-                    : `${event.cue_label} / ${event.track} / ${event.time_ms} ms / ${event.duration_ms} ms x ${event.loop_count}`
-                  : `${event.cue_label} / ${event.track} / ${event.time_ms} ms / legacy point`}
+                {event.duration_ms === 0
+                  ? `${event.cue_label} / ${event.track} / ${event.time_ms} ms / unsupported legacy point; migrate to a Scene Block`
+                  : event.conform_to_tempo
+                  ? `${event.cue_label}${sceneBlockRateBadge(event) ? ` ${sceneBlockRateBadge(event)}` : ""} / ${event.track} / ${event.time_ms} ms / ${event.duration_ms} ms window / ${event.loop_count} ${event.loop_fill ? "fill loops" : "tempo iterations"}`
+                  : `${event.cue_label} / ${event.track} / ${event.time_ms} ms / ${sceneBlockDisplaySpanMs(event)} ms block / ${event.loop_count} iterations`}
               </title>
             </Show>
           </g>

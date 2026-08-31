@@ -21,6 +21,7 @@ import {
   timelineSourceShelfCueOptionsMatchAuthority,
   type TimelineSourceShelfBankView,
 } from "../timelineSceneBlocks";
+import { resolveTimelineExternalLayer } from "../timelineExternalDropRuntime";
 import { translateUiText, type UiLocale } from "../uiLocalization";
 import type { TimelineSceneBlockCueOption } from "./TimelineSceneBlocksEditor";
 
@@ -85,13 +86,21 @@ export function TimelineSourceShelf(props: TimelineSourceShelfProps) {
   const localizedSourceText = (source: string) => translateUiText(source, props.uiLocale);
   const [sourceShelfTab, setSourceShelfTab] = createSignal<"Scenes" | "Media Library">("Scenes");
   const [mediaShelfFilter, setMediaShelfFilter] = createSignal<"All" | "Video" | "Audio">("All");
-  // A placement is authorized only by an explicitly selected, exact layer ID.
-  // Do not silently route a linked companion to the first unlocked lane.
+  // A click has no canvas target, so retain an explicit choice only for the
+  // ambiguous case. A single unlocked lane is the safe deterministic target;
+  // DnD uses the lane actually hit in TimelineOverview as its primary target.
   const [sourceShelfTargetLayerIds, setSourceShelfTargetLayerIds] = createSignal<Partial<Record<TimelineLayerKind, number>>>({});
   const sourceContextMode = () => props.contextMode ?? "sources";
   const selectSourceContextMode = (mode: "sources" | "inspector") => {
     props.onContextModeChange?.(mode);
     if (mode === "inspector") props.onOpenInspector();
+  };
+  const selectSourceShelfTab = (tab: "Scenes" | "Media Library") => {
+    setSourceShelfTab(tab);
+    // The category buttons remain in the compact header while the Inspector
+    // is open. Make their intent explicit: choosing a source category always
+    // returns to the source browser instead of silently changing hidden state.
+    if (sourceContextMode() !== "sources") selectSourceContextMode("sources");
   };
   const focusSourceContextMode = (current: "sources" | "inspector", direction: -1 | 1 | "first" | "last") => {
     const modes = ["sources", "inspector"] as const;
@@ -105,6 +114,10 @@ export function TimelineSourceShelf(props: TimelineSourceShelfProps) {
     const filter = mediaShelfFilter();
     return filter === "All" || (filter === "Video" ? mediaAssetHasVideo(asset) : mediaAssetHasAudio(asset));
   }));
+  const mediaShelfHasSourceForKind = (kind: "Video" | "Audio") =>
+    mediaShelfAssets().some((asset) => kind === "Video" ? mediaAssetHasVideo(asset) : mediaAssetHasAudio(asset));
+  const mediaShelfRelevantKinds = () =>
+    (["Video", "Audio"] as const).filter((kind) => mediaShelfHasSourceForKind(kind));
   const bankAuthority = () => props.bankAuthority;
   const sceneAuthorityUnavailable = createMemo(() => {
     const issue = bankAuthority().issue;
@@ -173,9 +186,10 @@ export function TimelineSourceShelf(props: TimelineSourceShelfProps) {
   };
   const sourceShelfLayers = (kind: TimelineLayerKind) =>
     props.timelineLayers.filter((layer) => layer.kind === kind && !layer.locked);
+  const sourceShelfLayerResolution = (kind: TimelineLayerKind) =>
+    resolveTimelineExternalLayer(sourceShelfLayers(kind), kind, sourceShelfTargetLayerIds()[kind] ?? null);
   const sourceShelfTargetLayer = (kind: TimelineLayerKind) => {
-    const selectedId = sourceShelfTargetLayerIds()[kind];
-    return sourceShelfLayers(kind).find((layer) => layer.id === selectedId) ?? null;
+    return sourceShelfLayerResolution(kind).selected;
   };
   const revealTimelineLayer = (layerId: number | undefined) => {
     if (typeof layerId !== "number" || !Number.isSafeInteger(layerId) || layerId <= 0) return;
@@ -226,9 +240,18 @@ export function TimelineSourceShelf(props: TimelineSourceShelfProps) {
         return;
       }
     }
-    const target = sourceShelfTargetLayer(payload.lane_kind);
+    const resolution = sourceShelfLayerResolution(payload.lane_kind);
+    const target = resolution.selected;
     if (!target) {
-      props.onStatus(localizedSourceText(`An unlocked ${payload.lane_kind} Timeline lane is required.`));
+      props.onStatus(localizedSourceText(
+        resolution.mode === "stale"
+          ? `Selected ${payload.lane_kind} Timeline lane is no longer available.`
+          : resolution.mode === "ambiguous"
+          ? payload.kind === "media_asset"
+            ? `Select an unlocked ${payload.lane_kind} Timeline lane before placing media.`
+            : `An unlocked ${payload.lane_kind} Timeline lane is required.`
+          : `An unlocked ${payload.lane_kind} Timeline lane is required.`,
+      ));
       return;
     }
     void props.onPlace(payload, target, props.snapTimeMs(props.positionMs));
@@ -241,19 +264,57 @@ export function TimelineSourceShelf(props: TimelineSourceShelfProps) {
     setTimelineExternalDragPayload(event, payload);
   };
   const renderTargetSelect = (kind: TimelineLayerKind, label: string) => (
-    <label class="timelineExternalSourceTarget">
-      <span>{label}</span>
-      <select
-        data-timeline-source-target-kind={kind}
-        value={sourceShelfTargetLayer(kind)?.id ?? ""}
-        onChange={(event) => setSourceShelfTargetLayer(kind, event.currentTarget.value)}
+    <Show when={
+      sourceShelfLayerResolution(kind).candidates.length > 1
+      || sourceShelfLayerResolution(kind).mode === "stale"
+    }>
+      <label class="timelineExternalSourceTarget">
+        <span>{label}</span>
+        <select
+          data-timeline-source-target-kind={kind}
+          value={sourceShelfTargetLayer(kind)?.id ?? ""}
+          onChange={(event) => setSourceShelfTargetLayer(kind, event.currentTarget.value)}
+        >
+          <option value="">{localizedSourceText("Select a lane")}</option>
+          <For each={sourceShelfLayerResolution(kind).candidates}>
+            {(layer) => <option value={layer.id} data-no-localize>{layer.label}</option>}
+          </For>
+        </select>
+      </label>
+    </Show>
+  );
+  const renderNoLaneStatus = (kind: TimelineLayerKind) => (
+    <Show when={sourceShelfLayerResolution(kind).mode === "none"}>
+      <p
+        class="emptyState timelineExternalSourceLaneUnavailable"
+        role="alert"
+        data-timeline-source-no-target-kind={kind}
       >
-        <option value="">{sourceShelfLayers(kind).length === 0 ? "Unavailable" : "Select a lane"}</option>
-        <For each={sourceShelfLayers(kind)}>
-          {(layer) => <option value={layer.id} data-no-localize>{layer.label}</option>}
-        </For>
-      </select>
-    </label>
+        {localizedSourceText(`An unlocked ${kind} Timeline lane is required.`)}
+      </p>
+    </Show>
+  );
+  const renderMediaNoLaneStatus = (kind: "Video" | "Audio") => (
+    <Show when={mediaShelfHasSourceForKind(kind) && sourceShelfLayerResolution(kind).mode === "none"}>
+      {renderNoLaneStatus(kind)}
+    </Show>
+  );
+  const renderLaneChoiceDisclosure = (...kinds: TimelineLayerKind[]) => (
+    <Show when={kinds.some((kind) => {
+      const resolution = sourceShelfLayerResolution(kind);
+      return resolution.candidates.length > 1 || resolution.mode === "stale";
+    })}>
+      <details
+        class="timelineExternalSourcePlacementDisclosure"
+        data-timeline-source-click-placement={kinds.join(",")}
+        aria-label={localizedSourceText("Timeline click controls")}
+      >
+        <summary>{localizedSourceText("Timeline click controls")}</summary>
+        <div class="timelineExternalSourceTargets" role="group" aria-label={localizedSourceText("Timeline click controls")}>
+          <For each={kinds}>{(kind) => renderTargetSelect(kind, localizedSourceText(`${kind} lane`))}</For>
+        </div>
+      </details>
+    </Show>
   );
 
   return (
@@ -283,14 +344,14 @@ export function TimelineSourceShelf(props: TimelineSourceShelfProps) {
             data-timeline-source-shelf-category="scenes"
             aria-pressed={sourceShelfTab() === "Scenes"}
             classList={{ active: sourceShelfTab() === "Scenes" }}
-            onClick={() => setSourceShelfTab("Scenes")}
+            onClick={() => selectSourceShelfTab("Scenes")}
           >Scenes</button>
           <button
             type="button"
             data-timeline-source-shelf-category="media"
             aria-pressed={sourceShelfTab() === "Media Library"}
             classList={{ active: sourceShelfTab() === "Media Library" }}
-            onClick={() => setSourceShelfTab("Media Library")}
+            onClick={() => selectSourceShelfTab("Media Library")}
           >Media Library</button>
         </div>
       </header>
@@ -308,16 +369,8 @@ export function TimelineSourceShelf(props: TimelineSourceShelfProps) {
               </p>
             }
           >
-          <details
-            class="timelineExternalSourcePlacementDisclosure"
-            data-timeline-source-click-placement="Lighting"
-            aria-label={localizedSourceText("Timeline click controls")}
-          >
-            <summary>{localizedSourceText("Timeline click controls")}</summary>
-            <div class="timelineExternalSourceTargets">
-              {renderTargetSelect("Lighting", "Lighting lane")}
-            </div>
-          </details>
+          {renderNoLaneStatus("Lighting")}
+          {renderLaneChoiceDisclosure("Lighting")}
           <Show when={shelfBanks().length > 0} fallback={<p class="emptyState">No Scenes are available yet.</p>}>
             <div class="timelineExternalSourceShelfBanks" data-timeline-source-shelf-banks>
               <For each={shelfBanks()}>
@@ -375,17 +428,9 @@ export function TimelineSourceShelf(props: TimelineSourceShelfProps) {
               )}
             </For>
           </div>
-          <details
-            class="timelineExternalSourcePlacementDisclosure"
-            data-timeline-source-click-placement="Media"
-            aria-label={localizedSourceText("Timeline click controls")}
-          >
-            <summary>{localizedSourceText("Timeline click controls")}</summary>
-            <div class="timelineExternalSourceTargets" role="group" aria-label="Media Timeline target lanes">
-              {renderTargetSelect("Video", "Video lane")}
-              {renderTargetSelect("Audio", "Audio lane")}
-            </div>
-          </details>
+          {renderMediaNoLaneStatus("Video")}
+          {renderMediaNoLaneStatus("Audio")}
+          {renderLaneChoiceDisclosure(...mediaShelfRelevantKinds())}
           <Show when={mediaShelfAssets().length > 0} fallback={<p class="emptyState">No matching Media Library sources.</p>}>
             <div class="timelineExternalSourceShelfItems">
               <For each={mediaShelfAssets()}>

@@ -4,7 +4,6 @@ import type {
   TimelineFollowRuntimeSummary,
   TimelineFollowAbortFocusFence,
   TimelineFollowSummary,
-  MachineTimelineCueAudioSettingsV1,
   TimelineCueAudioStatus,
   TimelineLoopRegionSummary,
   TimelineLoopRuntimeSummary,
@@ -31,8 +30,6 @@ interface TimelineOperatorBarProps {
   phases: TimelinePhaseSummary[];
   guideEnabled: boolean;
   cueAudioStatus: TimelineCueAudioStatus;
-  cueAudioMutationBusy: boolean;
-  cueAudioLocalError: string | null;
   loopRegion: TimelineLoopRegionSummary | null;
   loopRuntime: TimelineLoopRuntimeSummary;
   timelines: TimelineSnapshot[];
@@ -59,8 +56,6 @@ interface TimelineOperatorBarProps {
   onPlay: () => void | Promise<void>;
   onSetMetronome: (enabled: boolean, countInBeats: number) => void | Promise<void>;
   onSetGuideEnabled: (enabled: boolean) => void | Promise<void>;
-  onConfigureCueAudio: (settings: MachineTimelineCueAudioSettingsV1) => void;
-  onRefreshCueAudio: () => void | Promise<void>;
   onSetPhases: (phases: TimelinePhaseSummary[]) => void | Promise<void>;
   onSetLoopRegion: (region: TimelineLoopRegionSummary | null) => void | Promise<void>;
   onSetLoopEnabled: (enabled: boolean) => void | Promise<void>;
@@ -341,8 +336,6 @@ export function TimelineOperatorBar(props: TimelineOperatorBarProps) {
             followAbortFocusFence={props.followAbortFocusFence}
             loopRegion={props.loopRegion}
             cueAudioStatus={props.cueAudioStatus}
-            cueAudioMutationBusy={props.cueAudioMutationBusy}
-            cueAudioLocalError={props.cueAudioLocalError}
             onCreateTimeline={props.onCreateTimeline}
             onDuplicateTimeline={props.onDuplicateTimeline}
             onRemoveTimeline={props.onRemoveTimeline}
@@ -352,8 +345,6 @@ export function TimelineOperatorBar(props: TimelineOperatorBarProps) {
             onAbortFollow={props.onAbortFollow}
             onSetPhases={props.onSetPhases}
             onSetLoopRegion={props.onSetLoopRegion}
-            onConfigureCueAudio={props.onConfigureCueAudio}
-            onRefreshCueAudio={props.onRefreshCueAudio}
             onSeek={props.onSeek}
           />
         </div>

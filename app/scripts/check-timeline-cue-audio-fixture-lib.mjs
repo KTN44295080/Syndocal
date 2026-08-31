@@ -7,6 +7,7 @@ export const cueAudioEventTargets = {
   "syndocal://application-update-progress": { kind: "Any" },
   "syndocal://project-authority-replaced": { kind: "Any" },
   "syndocal://project-control-inputs-retired": { kind: "Any" },
+  "syndocal://show-serial-dmx-route-status-v1": { kind: "Any" },
   "syndocal://open-project": { kind: "Any" },
   "tauri://drag-enter": { kind: "Webview", label: "main" },
   "tauri://drag-over": { kind: "Webview", label: "main" },
@@ -381,6 +382,9 @@ export const installCueAudioMock = (eventTargets) => {
       "take_open_project_paths",
       "get_timeline_cue_audio_status",
       "get_external_video_transport_status",
+      "query_dsf2026_artnet_acceptance_probe_status_v1",
+      "get_serial_dmx_machine_binding_status_v1",
+      "get_show_serial_dmx_safety_blackout_route_status_v1",
       "get_timeline_follow_runtime",
       "get_snapshot_delta",
       "poll_project_authority_bundle",
@@ -614,6 +618,37 @@ export const installCueAudioMock = (eventTargets) => {
           ownership_state: "Failed",
           ownership_reason: "StartupDenied",
           ownership_error: "Machine output ownership has not been initialized",
+        };
+      }
+      if (command === "query_dsf2026_artnet_acceptance_probe_status_v1") {
+        if (!exactKeys(args, [])) throw new Error("Cue Audio DSF2026 Art-Net probe status payload must be empty");
+        return {
+          operationId: "syndocal.query.output.dsf2026_artnet_acceptance_probe.status.v1",
+          status: "consumed",
+        };
+      }
+      if (command === "get_serial_dmx_machine_binding_status_v1") {
+        if (!exactKeys(args, [])) throw new Error("Cue Audio USB-DMX binding status payload must be empty");
+        return {
+          state: "missing_selection",
+          selected: null,
+          detail: "No machine-local USB-DMX binding is selected",
+          routeStatusRevision: "1",
+        };
+      }
+      if (command === "get_show_serial_dmx_safety_blackout_route_status_v1") {
+        if (!exactKeys(args, [])) throw new Error("Cue Audio USB-DMX route status payload must be empty");
+        return {
+          routeStatusRevision: "1",
+          active: false,
+          zeroFrameQueued: false,
+          zeroFramePhysicalWriteCompleted: false,
+          liveFrameQueued: false,
+          workerShutdownCompleted: true,
+          faulted: false,
+          artnetMirrorLive: false,
+          artnetMirrorDetail: "Art-Net mirror is stopped",
+          detail: "USB-DMX route is stopped",
         };
       }
       if (command === "list_audio_output_devices") {

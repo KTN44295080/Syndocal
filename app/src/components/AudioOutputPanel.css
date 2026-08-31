@@ -118,6 +118,83 @@
   text-wrap: pretty;
 }
 
+.audioOutputTimelineCueAudio {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  border: 1px solid #343d49;
+  border-radius: 6px;
+  background: #171d24;
+  padding: 10px;
+}
+
+.audioOutputTimelineCueAudioHeader {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.audioOutputTimelineCueAudioHeader h4,
+.audioOutputTimelineCueAudioHeader p {
+  margin: 0;
+}
+
+.audioOutputTimelineCueAudioHeader p,
+.audioOutputTimelineCueAudioPolicy {
+  color: #aeb8c5;
+  text-wrap: pretty;
+}
+
+.audioOutputTimelineCueAudioHeader p {
+  margin-top: 3px;
+}
+
+.audioOutputTimelineCueAudioHeader output {
+  flex: 0 0 auto;
+  color: #72d8b4;
+  font-weight: 700;
+}
+
+.audioOutputTimelineCueAudioHeader output.fault {
+  color: #ef8989;
+}
+
+.audioOutputTimelineCueAudioBody {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  min-width: 0;
+  border-top: 1px solid #343d49;
+  padding-top: 10px;
+}
+
+.audioOutputTimelineCueAudioBody > p,
+.audioOutputTimelineCueAudioBody > output {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+
+.audioOutputTimelineCueAudioBody select,
+.audioOutputTimelineCueAudioBody input,
+.audioOutputTimelineCueAudioBody > button {
+  min-height: 44px;
+}
+
+.audioOutputTimelineCueAudioRuntime {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  color: #c5d0dd;
+}
+
+@media (max-width: 600px) {
+  .audioOutputTimelineCueAudioBody {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 .audioOutputField {
   display: grid;
   min-width: 0;

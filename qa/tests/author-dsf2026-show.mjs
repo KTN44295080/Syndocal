@@ -34,19 +34,27 @@ const ioPath = fileURLToPath(new URL("../../tools/dsf2026/io.mjs", import.meta.u
 const safeWriteHelperPath = fileURLToPath(new URL("../../tools/dsf2026/safe-write-win32.ps1", import.meta.url));
 const TEST_POWERSHELL_PATH = "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe";
 const REPO_ROOT = fileURLToPath(new URL("../../", import.meta.url));
-const CONTENT_ARTIFACT_PATH = join(REPO_ROOT, "target", "qa", "dsf2026-show-authored-20260828", "DSF2026-show-alpha9-reference-audio.sdc");
-const CONTENT_ARTIFACT_BYTES = 1_095_864;
-const CONTENT_ARTIFACT_SHA256 = "93E71D8AC3889968C2AAD5B0A8CA194B88CB1C7B51BF897C7741C969D9A05094";
-const REQUIRE_CONTENT_ARTIFACT_FLAG = "--require-content-artifact";
-const TEST_ONLY_MISSING_CONTENT_ARTIFACT = "--test-only-missing-content-artifact";
-const RETIRED_ARTIFACT_FLAGS = ["--require-final-artifact", "--test-only-missing-final-artifact"];
+// This tracked SDC is a semantic/structural golden only. It deliberately does
+// not make the operational bundle or sidecar-portability claim. The sole local
+// playable identity is pinned separately by the rehearsal-copy tools.
+const STRUCTURAL_FIXTURE_PATH = join(REPO_ROOT, "qa", "specimens", "DSF2026-show-alpha10-reference-audio.sdc");
+const STRUCTURAL_FIXTURE_BYTES = 1_092_632;
+const STRUCTURAL_FIXTURE_SHA256 = "5B6C6C5CDB62502A24CA6196BAE9F394D5360584AFC5567FFF32BA2311F20496";
+const REQUIRE_STRUCTURAL_FIXTURE_FLAG = "--require-structural-fixture";
+const TEST_ONLY_MISSING_STRUCTURAL_FIXTURE = "--test-only-missing-structural-fixture";
+const RETIRED_ARTIFACT_FLAGS = [
+  "--require-final-artifact",
+  "--test-only-missing-final-artifact",
+  "--require-content-artifact",
+  "--test-only-missing-content-artifact",
+];
 const TEST_ARGS = process.argv.slice(2);
-const UNKNOWN_TEST_ARGS = TEST_ARGS.filter((arg) => ![REQUIRE_CONTENT_ARTIFACT_FLAG, TEST_ONLY_MISSING_CONTENT_ARTIFACT].includes(arg));
+const UNKNOWN_TEST_ARGS = TEST_ARGS.filter((arg) => ![REQUIRE_STRUCTURAL_FIXTURE_FLAG, TEST_ONLY_MISSING_STRUCTURAL_FIXTURE].includes(arg));
 assert.deepEqual(UNKNOWN_TEST_ARGS, [], "unknown author-dsf2026-show test arguments must fail closed");
-const RUN_TEST_ONLY_MISSING_CONTENT_ARTIFACT = TEST_ARGS.includes(TEST_ONLY_MISSING_CONTENT_ARTIFACT);
-const EXPLICIT_REQUIRE_CONTENT_ARTIFACT = TEST_ARGS.includes(REQUIRE_CONTENT_ARTIFACT_FLAG);
-assert.ok(!(RUN_TEST_ONLY_MISSING_CONTENT_ARTIFACT && EXPLICIT_REQUIRE_CONTENT_ARTIFACT), "test-only missing-artifact behavior cannot be combined with the pinned authored content gate");
-const REQUIRE_CONTENT_ARTIFACT = EXPLICIT_REQUIRE_CONTENT_ARTIFACT || !RUN_TEST_ONLY_MISSING_CONTENT_ARTIFACT;
+const RUN_TEST_ONLY_MISSING_STRUCTURAL_FIXTURE = TEST_ARGS.includes(TEST_ONLY_MISSING_STRUCTURAL_FIXTURE);
+const EXPLICIT_REQUIRE_STRUCTURAL_FIXTURE = TEST_ARGS.includes(REQUIRE_STRUCTURAL_FIXTURE_FLAG);
+assert.ok(!(RUN_TEST_ONLY_MISSING_STRUCTURAL_FIXTURE && EXPLICIT_REQUIRE_STRUCTURAL_FIXTURE), "test-only missing-fixture behavior cannot be combined with the pinned structural fixture gate");
+const REQUIRE_STRUCTURAL_FIXTURE = EXPLICIT_REQUIRE_STRUCTURAL_FIXTURE || !RUN_TEST_ONLY_MISSING_STRUCTURAL_FIXTURE;
 
 function emptyTimeline() {
   return {
@@ -340,14 +348,11 @@ function assertApprovedFixtureStageLayouts(project, label) {
   );
 }
 
-function assertContentArtifactInvariants(project, label) {
+function assertStructuralFixtureInvariants(project, label) {
   assert.deepEqual(project.dj_track_triggers, [{
     id: "jinsei-over-production",
     selector: {
-      artist: null,
-      contentId: null,
       fallbackDeck: 1,
-      title: null,
       titleContains: "人生オーバー",
     },
     timelineId: 1,
@@ -385,13 +390,14 @@ function assertContentArtifactInvariants(project, label) {
     preroll_ms: 0,
     trans_cadence_bars: 2,
     trans_target_measures: [149, 151, 153, 155],
-    hold_first_destination_measure: true,
+    destination_start_mode: "wait_for_pedal",
+    hold_first_destination_measure: false,
     fault_policy: "hold",
-  }, `${label} Follow must be one bar with first destination-measure hold`);
+  }, `${label} Follow must wait for Pedal 1 without a legacy destination hold`);
   assert.deepEqual(source.events.map(({ id, cue_id, time_ms, track, layer_id, duration_ms }) => ({ id, cue_id, time_ms, track, layer_id, duration_ms })), [
-    { id: 1, cue_id: 1, time_ms: 138_353, track: "Lighting", layer_id: 1, duration_ms: 0 },
-    { id: 2, cue_id: 2, time_ms: 138_353, track: "Lighting", layer_id: 1, duration_ms: 0 },
-  ], `${label} all_white/all_max lighting events must both be at 138353 ms`);
+    { id: 1, cue_id: 1, time_ms: 138_353, track: "Lighting", layer_id: 1, duration_ms: 81_153 },
+    { id: 2, cue_id: 2, time_ms: 138_353, track: "Lighting", layer_id: 1, duration_ms: 81_153 },
+  ], `${label} all_white/all_max lighting Scene Blocks must span from 138353 ms through the source Timeline end`);
   const cueLabels = new Map((snapshot.cues ?? []).map(({ id, label: cueLabel }) => [id, cueLabel]));
   assert.deepEqual(source.events.map(({ cue_id }) => cueLabels.get(cue_id)), ["all_white", "all_max"], `${label} lighting events must target all_white then all_max`);
   assert.ok(destination && typeof destination === "object", `${label} must contain destination Timeline 2`);
@@ -454,41 +460,41 @@ function assertContentArtifactInvariants(project, label) {
   assertApprovedFixtureStageLayouts(project, label);
 }
 
-async function checkOptionalContentArtifactForTest(path, required) {
+async function checkOptionalStructuralFixtureForTest(path, required) {
   let bytes;
   try {
     bytes = await readFile(path);
   } catch (error) {
     if (error?.code !== "ENOENT") throw error;
-    if (required) assert.fail(`required pinned authored content artifact is missing: ${path}`);
-    console.log(`test-only missing-artifact behavior: optional pinned authored content artifact is intentionally absent: ${path}`);
+    if (required) assert.fail(`required pinned structural fixture is missing: ${path}`);
+    console.log(`test-only missing-fixture behavior: optional pinned structural fixture is intentionally absent: ${path}`);
     return false;
   }
-  assert.equal(bytes.length, CONTENT_ARTIFACT_BYTES, "pinned authored content artifact must retain its exact byte length");
-  assert.equal(sha256(bytes), CONTENT_ARTIFACT_SHA256, "pinned authored content artifact must retain its exact SHA-256");
+  assert.equal(bytes.length, STRUCTURAL_FIXTURE_BYTES, "pinned structural fixture must retain its exact byte length");
+  assert.equal(sha256(bytes), STRUCTURAL_FIXTURE_SHA256, "pinned structural fixture must retain its exact SHA-256");
   const project = parseUtf8Json(bytes);
-  checkPass(preflightShowContract(project), "pinned authored content artifact");
-  assertContentArtifactInvariants(project, "pinned authored content artifact");
+  checkPass(preflightShowContract(project), "pinned structural fixture");
+  assertStructuralFixtureInvariants(project, "pinned structural fixture");
   return true;
 }
 
-async function runPinnedContentArtifactGate(path) {
-  await checkOptionalContentArtifactForTest(path, true);
-  console.log(`PINNED AUTHORED CONTENT-ARTIFACT GATE passed: ${path} (${CONTENT_ARTIFACT_BYTES} bytes, SHA-256 ${CONTENT_ARTIFACT_SHA256})`);
+async function runPinnedStructuralFixtureGate(path) {
+  await checkOptionalStructuralFixtureForTest(path, true);
+  console.log(`PINNED STRUCTURAL-FIXTURE GATE passed: ${path} (${STRUCTURAL_FIXTURE_BYTES} bytes, SHA-256 ${STRUCTURAL_FIXTURE_SHA256})`);
 }
 
-async function runTestOnlyMissingContentArtifactBehavior() {
+async function runTestOnlyMissingStructuralFixtureBehavior() {
   const work = await mkdtemp(join(tmpdir(), "syndocal-author-dsf2026-missing-artifact-test-"));
   try {
     assert.equal(
-      await checkOptionalContentArtifactForTest(join(work, "missing-content.sdc"), false),
+      await checkOptionalStructuralFixtureForTest(join(work, "missing-structural-fixture.sdc"), false),
       false,
-      "an absent optional pinned authored content artifact must be an intentional test-only skip",
+      "an absent optional pinned structural fixture must be an intentional test-only skip",
     );
     await assert.rejects(
-      () => runPinnedContentArtifactGate(join(work, "missing-required-content.sdc")),
-      /required pinned authored content artifact is missing/i,
-      "the pinned authored content-artifact gate must fail clearly when its artifact is absent",
+      () => runPinnedStructuralFixtureGate(join(work, "missing-required-structural-fixture.sdc")),
+      /required pinned structural fixture is missing/i,
+      "the pinned structural-fixture gate must fail clearly when its fixture is absent",
     );
   } finally {
     await rm(work, { recursive: true, force: true });
@@ -750,9 +756,9 @@ assert.deepEqual(source.loop_region, {
   musical_length_beats: 4,
 }, "source loop must use exact rounded m98/m99 first-click positions");
 assert.deepEqual(source.events.map(({ id, cue_id, time_ms, track, layer_id, duration_ms }) => ({ id, cue_id, time_ms, track, layer_id, duration_ms })), [
-  { id: 1, cue_id: 1, time_ms: 138_353, track: "Lighting", layer_id: 1, duration_ms: 0 },
-  { id: 2, cue_id: 2, time_ms: 138_353, track: "Lighting", layer_id: 1, duration_ms: 0 },
-], "existing all_white/all_max Cues must coexist exactly at m99 outside the loop");
+  { id: 1, cue_id: 1, time_ms: 138_353, track: "Lighting", layer_id: 1, duration_ms: 81_153 },
+  { id: 2, cue_id: 2, time_ms: 138_353, track: "Lighting", layer_id: 1, duration_ms: 81_153 },
+], "existing all_white/all_max Cues must coexist as real Scene Blocks from m99 to the source Timeline end");
 assert.deepEqual(originalBase.snapshot.cues.filter(({ label }) => ["all_white", "all_max"].includes(label)).map(({ id, label, cue_list_id, group_id, recall_mode }) => ({ id, label, cue_list_id, group_id, recall_mode })), [
   { id: 1, label: "all_white", cue_list_id: 1, group_id: "color", recall_mode: "Coexist" },
   { id: 2, label: "all_max", cue_list_id: 2, group_id: "dimmer", recall_mode: "Coexist" },
@@ -770,7 +776,8 @@ assert.deepEqual(source.follow, {
   preroll_ms: 0,
   trans_cadence_bars: 2,
   trans_target_measures: [149, 151, 153, 155],
-  hold_first_destination_measure: true,
+  destination_start_mode: "wait_for_pedal",
+  hold_first_destination_measure: false,
   fault_policy: "hold",
 });
 assert.deepEqual(source.phases.map(({ id, label, role, start_ms, end_ms }) => ({ id, label, role, start_ms, end_ms })), [
@@ -802,11 +809,11 @@ assert.deepEqual(authoredReport.checks.filter(({ id }) => ["lighting_boundary", 
   { id: "lighting_boundary", status: "PASS" },
   { id: "dmx_staging", status: "PASS" },
 ], "show-specific boundary and disabled DMX staging checks must PASS");
-if (RUN_TEST_ONLY_MISSING_CONTENT_ARTIFACT) {
-  await runTestOnlyMissingContentArtifactBehavior();
-  console.log(`PINNED AUTHORED CONTENT-ARTIFACT GATE intentionally isolated by ${TEST_ONLY_MISSING_CONTENT_ARTIFACT}; generated-contract tests continue without the pinned authored content artifact`);
-} else if (REQUIRE_CONTENT_ARTIFACT) {
-  await runPinnedContentArtifactGate(CONTENT_ARTIFACT_PATH);
+if (RUN_TEST_ONLY_MISSING_STRUCTURAL_FIXTURE) {
+  await runTestOnlyMissingStructuralFixtureBehavior();
+  console.log(`PINNED STRUCTURAL-FIXTURE GATE intentionally isolated by ${TEST_ONLY_MISSING_STRUCTURAL_FIXTURE}; generated-contract tests continue without the pinned structural fixture`);
+} else if (REQUIRE_STRUCTURAL_FIXTURE) {
+  await runPinnedStructuralFixtureGate(STRUCTURAL_FIXTURE_PATH);
 }
 assertRetiredArtifactFlagsFailClosed();
 

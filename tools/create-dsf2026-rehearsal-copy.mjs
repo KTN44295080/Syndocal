@@ -17,21 +17,21 @@ const REPO_ROOT = resolve(fileURLToPath(new URL("../", import.meta.url)));
 const SOURCE_RELATIVE_PATH = join(
   "target",
   "qa",
-  "dsf2026-show-authored-20260828",
-  "DSF2026-show-alpha9-reference-audio.sdc",
+  "dsf2026-show-authored-20260901-canonical",
+  "DSF2026-show-alpha10-reference-audio.sdc",
 );
 
 export const PRODUCTION_SOURCE_PATH = resolve(REPO_ROOT, SOURCE_RELATIVE_PATH);
 export const DEFAULT_OUTPUT_PATH = join(
   dirname(PRODUCTION_SOURCE_PATH),
-  "DSF2026-show-alpha9-rehearsal-reference-audio.sdc",
+  "DSF2026-show-alpha10-rehearsal-reference-audio.sdc",
 );
 export const MAX_PROJECT_BYTES = 64 * 1024 * 1024;
 export const MAX_MANIFEST_BYTES = 1024 * 1024;
 export const APPROVED_PRODUCTION_IDENTITIES = Object.freeze({
   source: Object.freeze({
-    byteSize: 1_095_864,
-    sha256: "93e71d8ac3889968c2aad5b0a8ca194b88cb1c7b51bf897c7741c969d9a05094",
+    byteSize: 1_092_638,
+    sha256: "fba13d2234d493fe9cbbdfb17b479ca79336f00b4ab0cb7cb21eb229e9ef4cf7",
   }),
   sidecars: Object.freeze({
     "dsf2026-reference-jinsei-over.mp3": Object.freeze({

@@ -1404,7 +1404,11 @@ try {
     assert.equal(await openTimelineVideoContextMenu(client), true, "Timeline item menu reopens for action execution");
     await sleep(30);
     assert.equal(state.phaseEditorOpen, true);
-    assert.deepEqual([state.cueAudioOpen, state.cueAudioControls, state.cueAudioState, state.cueAudioCheckboxes], [true, 4, 'Loading settings', 0]);
+    assert.deepEqual(
+      [state.cueAudioOpen, state.cueAudioControls, state.cueAudioState, state.cueAudioCheckboxes],
+      [true, 0, 'Loading settings', 0],
+      "Timeline keeps a read-only Cue Audio status surface; editable routing controls live only in Setup I/O Audio",
+    );
     assert.deepEqual(state.phaseLabels, ["Intro", "Verse", "Chorus"]);
     assert.deepEqual([state.guidePressed, state.loopPressed, state.loopState, state.loopScaleControls], ["true", "true", "LOOP ×2", 2]);
     assert.deepEqual([state.videoClips, state.audioClips], [1, 3], "isolated Split mounts one fresh Audio right-side block");

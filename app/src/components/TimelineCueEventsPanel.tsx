@@ -133,6 +133,8 @@ interface TimelineCueEventsPanelProps {
   overviewShowDurationMs: number;
   overviewEditExtentMs: number;
   selectedEventId: number | null;
+  /** App-owned tagged selection shared with the lower Timeline Inspector. */
+  timelineSelection: TimelineItemRef | null;
   selectionRevision: number;
   audioAnalysis: AudioAnalysisSummary | null;
   audioClips: TimelineAudioClipSummary[];
@@ -201,6 +203,7 @@ interface TimelineCueEventsPanelProps {
   ) => void | Promise<void>;
   onSetEventFade: (eventId: number, edge: "in" | "out", fadeMs: number, snapEnabled: boolean) => void | Promise<void>;
   onSelectAutomationRange: (range: TimelineOverviewAutomationRange) => void;
+  onTimelineSelectionChange: (selection: TimelineItemRef | null) => void;
   onMoveAutomationRangeTime: (range: TimelineOverviewAutomationRange, timeMs: number) => void | Promise<void>;
   onResizeAutomationRangeTime: (
     range: TimelineOverviewAutomationRange,
@@ -304,6 +307,7 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
   const [copiedTimelineItems, setCopiedTimelineItems] = createSignal<TimelineItemRef[]>([]);
   let copiedProjectEpoch = props.projectEpoch;
   let copiedTimelineId = props.activeTimelineId;
+  let previousTimelineSelection: TimelineItemRef | null | undefined;
   let itemMenuReturnFocus: (Element & { focus: () => void }) | null = null;
   let itemMenuWasOpen = false;
   const [itemContextMenu, setItemContextMenu] = createSignal<{
@@ -397,6 +401,9 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
   const itemGroupForSelection = createMemo(() => props.itemGroups.find((group) =>
     selectedTimelineItemRefs().some((selected) => group.members.some((member) =>
       JSON.stringify(member) === JSON.stringify(selected)))) ?? null);
+  const notifyTimelineSelection = (selection: TimelineItemRef | null) => {
+    props.onTimelineSelectionChange(selection);
+  };
   const expandLinkedSelection = (
     item: TimelineItemRef,
     additive = false,
@@ -424,6 +431,10 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
     }
     if (item.kind === "audio_clip") setSelectedAudioClipId(item.clip_id);
     if (item.kind === "video_clip") setSelectedVideoClipId(item.clip_id);
+    // The local multi-selection remains the edit surface, while the App owns
+    // one tagged primary item for the shared Inspector. This also clears any
+    // previously selected Lighting item when a media item becomes primary.
+    notifyTimelineSelection(item);
   };
   const selectAudioClip = (clipId: number, additive = false, singleMember = false) =>
     expandLinkedSelection({ kind: "audio_clip", clip_id: clipId }, additive, singleMember);
@@ -440,8 +451,23 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
       const kind = item.kind === "lighting_automation" ? "lighting" : "video";
       const range = props.overviewAutomationRanges.find((candidate) =>
         candidate.kind === kind && candidate.automation_id === item.automation_id);
+      // The context-menu caller has already applied its Alt/single-member
+      // selection above. Notify the App-owned automation selection without
+      // expanding the linked group a second time.
       if (range) props.onSelectAutomationRange(range);
     }
+  };
+  const selectAutomationRange = (range: TimelineOverviewAutomationRange) => {
+    const item: TimelineItemRef = {
+      kind: range.kind === "lighting" ? "lighting_automation" : "video_automation",
+      automation_id: range.automation_id,
+    };
+    expandLinkedSelection(item);
+    props.onSelectAutomationRange(range);
+  };
+  const selectTimelineEvent = (eventId: number, openProperties = false) => {
+    expandLinkedSelection({ kind: "lighting_event", event_id: eventId });
+    props.onSelectEvent(eventId, openProperties);
   };
   const selectReturnedTimelineItems = (items: TimelineItemRef[]) => {
     setSelectedTimelineItems(items);
@@ -605,6 +631,28 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
     itemMenuWasOpen = open;
   });
   createEffect(() => {
+    // App owns the primary tagged selection. When it retires a stale item (or
+    // the active Timeline changes), drop the panel's local highlight/property
+    // state as well so the old Lighting item cannot remain visible here.
+    const timelineSelection = props.timelineSelection;
+    const primarySelectionCleared = previousTimelineSelection !== undefined
+      && previousTimelineSelection !== null
+      && timelineSelection === null;
+    previousTimelineSelection = timelineSelection;
+    // A legacy/fixture mount can intentionally omit the App-owned prop, and a
+    // locally selected item must remain usable until the owner actually
+    // transitions from a real selection to null. This prevents Alt-isolated
+    // linked selection from being erased on the first local update.
+    if (primarySelectionCleared && (
+      selectedAudioClipId() !== null ||
+      selectedVideoClipId() !== null ||
+      selectedTimelineItems().length > 0
+    )) {
+      setSelectedAudioClipId(null);
+      setSelectedVideoClipId(null);
+      setSelectedTimelineItems([]);
+      setSingleMemberEditKey(null);
+    }
     if (selectedAudioClipId() !== null && !selectedAudioClip()) setSelectedAudioClipId(null);
     if (selectedVideoClipId() !== null && !selectedVideoClip()) setSelectedVideoClipId(null);
     const retained = selectedTimelineItemRefs();
@@ -914,7 +962,7 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
       cluster.member_ids.length > 0 &&
       (props.selectedEventId === null || !cluster.member_ids.includes(props.selectedEventId))
     ) {
-      props.onSelectEvent(cluster.member_ids[0], false);
+      selectTimelineEvent(cluster.member_ids[0], false);
     }
   };
   const clearOverlapFilter = () => {
@@ -1386,6 +1434,7 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
         selectedVideoClipIds={selectedVideoClipIds()}
         playheadX={props.overviewPlayheadX}
         visibleWindow={props.visibleWindow}
+        loopRegion={props.loopRegion}
         bpm={props.bpm}
         snapMode={props.snapMode}
         gridMs={props.gridMs}
@@ -1395,9 +1444,9 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
         armedCue={armedCue()}
         snapTimeMs={props.snapTimeMs}
         onSeekTime={props.onSeekOverviewTime}
-        onSelectAutomationRange={props.onSelectAutomationRange}
+        onSelectAutomationRange={selectAutomationRange}
         onSelectEvent={(eventId, openProperties = false) => {
-          props.onSelectEvent(eventId, false);
+          selectTimelineEvent(eventId, false);
           if (openProperties) {
             props.onContextDrawer("block");
             setBlockDrawerBrowserMode(false);
@@ -2165,7 +2214,7 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
         onUpdateEventDraft={props.onUpdateEventDraft}
         onSaveEvent={props.onSaveEvent}
         onRemoveEvent={props.onRemoveEvent}
-        onSelectEvent={(eventId) => props.onSelectEvent(eventId, true)}
+        onSelectEvent={(eventId) => selectTimelineEvent(eventId, true)}
         onClearEventFilter={clearOverlapFilter}
         onOpenSourceCue={props.onOpenSourceCue}
         armedCueId={armedCueId()}
@@ -2207,6 +2256,8 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
                 setSelectedAudioClipId(null);
                 setSelectedVideoClipId(null);
                 setSelectedTimelineItems([]);
+                setSingleMemberEditKey(null);
+                notifyTimelineSelection(null);
               }}
             >
               Delete selected
@@ -2249,6 +2300,7 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
                 setSelectedAudioClipId(null);
                 setSelectedTimelineItems((items) => items.filter((item) =>
                   !(item.kind === "audio_clip" && item.clip_id === clipId)));
+                notifyTimelineSelection(null);
               }}
             >
               Remove Audio Clip

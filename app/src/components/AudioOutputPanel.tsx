@@ -1,4 +1,9 @@
 import { For, Show } from "solid-js";
+import type {
+  MachineTimelineCueAudioSettingsV1,
+  TimelineCueAudioStatus,
+} from "../types";
+import { TimelineCueAudioRoutingPanel } from "./TimelineCueAudioRoutingPanel";
 import "./AudioOutputPanel.css";
 
 export type AudioOutputBackend = "normal-wasapi" | "show-asio";
@@ -117,6 +122,12 @@ export interface AudioOutputPanelProps {
   onReturnToNormal: AudioOutputAction;
   onTest: (test: AudioOutputTest | null) => void | Promise<void>;
   onSoloModeChange: (mode: AudioOutputSoloMode) => void;
+  /** Shared Normal-WASAPI Timeline media/Guide/Click route. */
+  timelineCueAudioStatus?: TimelineCueAudioStatus;
+  timelineCueAudioMutationBusy?: boolean;
+  timelineCueAudioLocalError?: string | null;
+  onConfigureTimelineCueAudio?: (settings: MachineTimelineCueAudioSettingsV1) => void;
+  onRefreshTimelineCueAudio?: () => void | Promise<void>;
 }
 
 export const AUDIO_OUTPUT_BACKEND_OPTIONS: readonly AudioOutputBackendOption[] = [
@@ -472,8 +483,23 @@ export function AudioOutputPanel(props: AudioOutputPanelProps) {
 
           <Show when={props.view.backend === "normal-wasapi"}>
             <p class="audioOutputNormalNotice" role="note" data-audio-output-normal-notice>
-              Normal WASAPI uses the Windows default PROGRAM output. To send Timeline media clips, Guide, and Click to a specific WDM device, open Timeline tools, then Timeline authoring monitor, and select Explicit Device.
+              Normal WASAPI uses the Windows default PROGRAM output. Timeline media clips, Guide, and Click can use the exact Windows output selected below.
             </p>
+            <Show
+              when={
+                props.timelineCueAudioStatus
+                && props.onConfigureTimelineCueAudio
+                && props.onRefreshTimelineCueAudio
+              }
+            >
+              <TimelineCueAudioRoutingPanel
+                status={props.timelineCueAudioStatus!}
+                mutationBusy={props.timelineCueAudioMutationBusy ?? false}
+                localError={props.timelineCueAudioLocalError ?? null}
+                onConfigure={props.onConfigureTimelineCueAudio!}
+                onRefresh={props.onRefreshTimelineCueAudio!}
+              />
+            </Show>
           </Show>
 
           <Show when={props.view.backend === "show-asio"}>

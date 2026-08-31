@@ -4,6 +4,153 @@ Status date: 2026-09-01 JST
 
 This is the concise authoritative resume note for the final show-critical tranche. It supersedes chat-only status, but it does not supersede the detailed acceptance documents named below.
 
+## 2026-09-01 alpha.52 show-critical UI/audio checkpoint
+
+Alpha.52 closes the operator-path defects recorded below and is the current
+source/native checkpoint on `codex/syndocal-v1.2` (source parent
+`78669f51ef38e2cb1a7a131066cf259940021e46`). The clean boundaries are:
+
+- Machine audio routing is edited only in `SETUP > I/O > Audio`. It enumerates
+  the current Windows output endpoints, permits arbitrary exact PROGRAM and CUE
+  selection, preserves a missing saved endpoint as a disabled warning, and
+  rejects ambiguous duplicate exact names. Timeline exposes status and a Setup
+  navigation action only. Mount refresh and settings mutations share one FIFO
+  gate, including rejection recovery and disposal barriers.
+- Timeline primary selection is an App-owned tagged reference covering lighting,
+  audio, video, lighting automation, and video automation. Inspector renders all
+  five kinds and clears only a genuinely stale selection. An initial/constant
+  null selection no longer erases local or Alt-isolated selections, and an
+  automation context-menu selection no longer expands linked items twice.
+- An exact drop lane is authoritative. The lane picker appears only for multiple
+  valid candidates or stale state; sole-candidate click placement resolves
+  automatically and ambiguity fails visibly.
+- Lighting scenes, audio, and video use duration blocks. The A-B loop is a clipped
+  orange interval with start/end edges. A zero-duration legacy lighting item stays
+  explicitly unsupported rather than receiving an invented duration.
+- `人生オーバー` natural completion holds `惑う星` at zero with
+  `destination_start_mode=wait_for_pedal` and
+  `hold_first_destination_measure=false`; it does not auto-play the destination.
+- `qa/specimens/DSF2026-show-alpha10-reference-audio.sdc` is a tracked structural
+  test fixture only. The retired `--require-content-artifact` flags now fail
+  closed. The sole local operational bundle is the canonical SDC plus its two
+  sidecars and approved-identity manifest under
+  `target/qa/dsf2026-show-authored-20260901-canonical`; moving it to another PC
+  still requires explicit relink and re-verification because media paths are
+  absolute.
+
+Focused evidence passes: TypeScript, localization `3684/3684`, Timeline cue-audio
+runtime/browser/panel tests, project-transaction recovery, Timeline source-shelf
+static/browser and external DnD contracts, Timeline performance and slim viewport
+matrices, block/loop checker, show authoring/structural preflight, rehearsal/same-PC
+copy tests, release metadata, JavaScript syntax, and diff checks. Independent
+implementation reviews report no P0/P1 finding. Focused first-party warning count
+is `0`.
+
+The exact Community MSVC `14.44.35207` gate ran
+`pnpm --dir app tauri build --no-bundle` with the absolute linker pinned and first
+in `where.exe link.exe`. The resulting
+`target/release/syndocal.exe` is product/file version `1.2.0-alpha.52`,
+`62,419,968` bytes, SHA-256
+`FE29DD658EE3D02661DEFCBF62027F9E99F9014D27A42202FCA7253F25FEF966`.
+The native build added no Rust warning; Vite emitted one existing chunk-size
+advisory for the `509.43 kB` App chunk. Exactly one responsive maximized Syndocal
+window was verified from that exact path at PID `21900`.
+
+No fresh physical USB-DMX, Art-Net, Spout, three-display, ASIO-device, or audio
+endpoint listening acceptance was performed for alpha.52. Earlier operator
+confirmation that the USB-DMX `all_white` scene held continuously remains bounded
+historical evidence only. The current `target` inventory is `129,949,179,997`
+bytes; cleanup was not run because no tracked cleanup harness with the required
+focused safety proof and independent exact-target review is eligible. The
+untracked user project `DSF2026-show-alpha51-usb-final.sdc` is protected and was
+not staged, modified, or deleted.
+
+## 2026-09-01 immediate P0 UI and authored-Timeline completion contract
+
+The operator rejected the temporary zero-duration flag representation as a
+finished Timeline UI. The required clean boundary is now explicit:
+
+- Lighting scenes, video, and audio are authored and presented as duration
+  blocks. A zero-duration legacy lighting cue may remain readable for migration,
+  but it must not be the normal authoring result or the completed visual model.
+- An enabled Timeline loop is shown as its exact start/end interval with a
+  distinct orange region/overlay. It is not represented by a point flag.
+- Move, resize, fade, snap, Undo/Redo, accessibility labels, and runtime timing
+  must continue to use the authoritative block interval. A cosmetic-only flag
+  replacement that diverges from persisted or runtime duration is not accepted.
+- `C:\Users\kouty\Downloads\dance.dvc` remains the evidence source for a real
+  imported multi-lane block Timeline. The raw DVC and the previously rejected
+  intermediate SDC must not be overwritten.
+
+The operator also reproduced a show-blocking project replacement defect in the
+current alpha.51 native process: Project > New displayed the unsaved-change
+warning, but selecting `Discard and Continue` did not create a new project. The
+same session displayed `Retrying pending project transaction commit
+acknowledgement recovery before the next mutation.` This is not an intentional
+operator lock. Treat it as P0: the exact pending terminal/acknowledgement must
+settle before the one requested replacement is dispatched; cancellation must
+remain non-mutating; failure must stay visible and must not double-dispatch or
+silently discard state. New/load/import/recovery replacement paths must use one
+consistent project-replacement barrier.
+
+The same alpha.51 session exposed a second P0 operator-path defect in Timeline
+audio routing. `SETUP > I/O > Audio` showed only the Normal WASAPI backend and
+sent the operator to a hidden Timeline tool. That Timeline selector then showed
+only the persisted `Music (Elgato Virtual Audio) (missing)` row and no current
+Windows output devices. The required boundary is one authoritative machine
+audio-routing surface in `SETUP > I/O > Audio`: enumerate the current WDM
+outputs on entry/refresh, allow arbitrary exact PROGRAM/authoring and CUE
+selection, keep a missing persisted endpoint as a disabled warning without
+hiding live candidates, and reject duplicate display names as ambiguous. The
+Timeline may show the active route/fault status, but it must not own a second
+editable device configuration. No default-device or name-only fallback is
+permitted when an explicit endpoint becomes stale.
+
+This requirement is part of the broader UI cleanup rule for the final tranche:
+configuration belongs in Setup, current context should resolve an unambiguous
+Timeline/lane automatically, and the UI should ask for an explicit selection
+only when more than one valid target remains. In particular, drag/drop onto an
+exact Timeline lane must not first require the separate `Select a lane`
+control; accessible click placement may auto-use the sole unlocked matching
+lane and must fail visibly when several matching lanes remain ambiguous.
+
+The authoritative Follow values for the show are:
+
+```json
+"destination_start_mode": "wait_for_pedal",
+"hold_first_destination_measure": false
+```
+
+Current alpha.51 runtime/project data already uses these values, but the
+DSF2026 generator, its authoring test, the structural preflight, and its test
+still encode the retired auto-start/first-measure-hold model. They must be
+corrected in this tranche so regeneration cannot reintroduce automatic playback
+of `惑う星`.
+
+Physical USB-DMX evidence from the current session is bounded but positive: the
+operator played the existing `all_white` scene and observed the attached F3200A
+remain continuously lit, then reported that the signal was stable. This closes
+continuous visible delivery for that exact live scene/device session. It does
+not establish exact F3200A channel semantics, the full production patch, Art-Net,
+Spout, three-display pixels, or a fresh DVC-imported Timeline run. The hardware
+may leave this checkout before the remaining software tranche, so do not relabel
+source/native tests as a second physical acceptance.
+
+Current three-display audit boundary: alpha.51 project structure routes distinct
+foreground/background compositions to two native Display outputs, but the
+foreground media file is absent and alpha.51 pixel acceptance is not complete.
+The earlier alpha.42 observation is historical evidence only.
+
+Before any alpha.51 process replacement for the next native build, preserve and
+recheck the latest valid project auto-backup. The latest inspected backup at
+this checkpoint was
+`C:\Users\kouty\AppData\Local\jp.seraf.ktn.syndocal\project-backups\backup-1788213670697.json`,
+`1,188,944` bytes, SHA-256
+`355BF852512FEA57E516DD609FC3CB61E8269222FE9DD6B466E9CB85DDD6D37C`.
+It contains the project envelope and points back to the current alpha.51 SDC;
+its identity must be refreshed immediately before terminating the checkout-owned
+native process.
+
 ## 2026-09-01 alpha.51 USB-first final priority and Display diagnostic checkpoint
 
 The operator fixed the remaining completion priority to the physical show path:

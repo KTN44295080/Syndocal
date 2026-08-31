@@ -38,7 +38,8 @@
         "destination_bpm": null,
         "preroll_ms": 0,
         "trans_cadence_bars": 4,
-        "hold_first_destination_measure": true,
+        "destination_start_mode": "wait_for_pedal",
+        "hold_first_destination_measure": false,
         "fault_policy": "hold"
       },
       "tempo_meter_map_version": 1,
@@ -82,7 +83,8 @@
           "destination_bpm": null,
           "preroll_ms": 0,
           "trans_cadence_bars": 4,
-          "hold_first_destination_measure": true,
+          "destination_start_mode": "wait_for_pedal",
+          "hold_first_destination_measure": false,
           "fault_policy": "hold"
         },
         "tempo_meter_map_version": 1,

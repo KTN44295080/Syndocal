@@ -24,8 +24,8 @@ const productionSidecars = [
 ];
 
 assert.deepEqual(APPROVED_PRODUCTION_IDENTITIES.source, {
-  byteSize: 1_095_864,
-  sha256: "93e71d8ac3889968c2aad5b0a8ca194b88cb1c7b51bf897c7741c969d9a05094",
+  byteSize: 1_092_638,
+  sha256: "fba13d2234d493fe9cbbdfb17b479ca79336f00b4ab0cb7cb21eb229e9ef4cf7",
 });
 
 function sha256(bytes) {

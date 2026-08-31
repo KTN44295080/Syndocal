@@ -105,6 +105,56 @@ const layers = [
   { id: 12, label: "Audio A", order: 0, muted: false, locked: false, solo: false, kind: "Audio" },
   { id: 13, label: "Lighting A", order: 0, muted: false, locked: false, solo: false, kind: "Lighting" },
 ];
+
+// Clicks resolve a sole unlocked lane, require an explicit choice when the
+// target is ambiguous, and expose a visible no-candidate state to the Shelf.
+assert.equal(dropRuntime.resolveTimelineExternalLayer(layers, "Video", null).mode, "unique");
+assert.equal(dropRuntime.resolveTimelineExternalLayer(layers, "Lighting", null).mode, "unique");
+assert.equal(
+  dropRuntime.resolveTimelineExternalLayer(
+    [
+      { id: 11, label: "Video A", order: 0, muted: false, locked: false, solo: false, kind: "Video" },
+      { id: 14, label: "Video B", order: 1, muted: false, locked: false, solo: false, kind: "Video" },
+    ],
+    "Video",
+    null,
+  ).mode,
+  "ambiguous",
+);
+assert.equal(
+  dropRuntime.resolveTimelineExternalLayer(
+    [
+      { id: 11, label: "Video A", order: 0, muted: false, locked: false, solo: false, kind: "Video" },
+      { id: 14, label: "Video B", order: 1, muted: false, locked: false, solo: false, kind: "Video" },
+    ],
+    "Video",
+    14,
+  ).selected?.id,
+  14,
+);
+assert.equal(
+  dropRuntime.resolveTimelineExternalLayer(
+    [{ id: 11, label: "Video A", order: 0, muted: false, locked: true, solo: false, kind: "Video" }],
+    "Video",
+    null,
+  ).mode,
+  "none",
+);
+for (const staleLayers of [
+  [{ id: 11, label: "Video A", order: 0, muted: false, locked: false, solo: false, kind: "Video" }],
+  [
+    { id: 11, label: "Video A", order: 0, muted: false, locked: false, solo: false, kind: "Video" },
+    { id: 14, label: "Video B", order: 1, muted: false, locked: true, solo: false, kind: "Video" },
+  ],
+  [
+    { id: 11, label: "Video A", order: 0, muted: false, locked: false, solo: false, kind: "Video" },
+    { id: 14, label: "Former Video B", order: 1, muted: false, locked: false, solo: false, kind: "Audio" },
+  ],
+]) {
+  const resolution = dropRuntime.resolveTimelineExternalLayer(staleLayers, "Video", 14);
+  assert.equal(resolution.mode, "stale", "a stale explicit click target must not auto-retarget to the sole remaining lane");
+  assert.equal(resolution.selected, null);
+}
 const avAsset = {
   id: 7,
   label: "Show MP4",
@@ -143,6 +193,87 @@ assert.deepEqual(insertRequest, {
     linkedVideo: true,
   },
 });
+
+// The exact lane hit by a drag is authoritative for its primary media kind;
+// a stale or omitted Shelf primary selection cannot redirect or block it.
+let dropPrimaryRequest = null;
+assert.equal(await dropRuntime.executeTimelineExternalDrop(
+  { ...mediaVideo, video_layer_id: 999, audio_layer_id: null },
+  { ...layers[0], id: 14, label: "Video B" },
+  [...layers, { id: 14, label: "Video B", order: 1, muted: false, locked: false, solo: false, kind: "Video" }],
+  [avAsset],
+  sceneIds,
+  2.2,
+  {
+    insertMedia: (assetId, placement) => { dropPrimaryRequest = { assetId, placement }; return true; },
+    placeScene: () => { throw new Error("scene callback must not run for media"); },
+    reject: (message) => { throw new Error(`primary drop unexpectedly rejected: ${message}`); },
+  },
+  availableVerified,
+), true, "a drag uses the exact unlocked drop lane as its primary target");
+assert.equal(dropPrimaryRequest?.placement.videoLayerId, 14);
+assert.equal(dropPrimaryRequest?.placement.audioLayerId, 12, "a sole linked companion lane is auto-resolved");
+
+// A linked companion still requires explicit selection when more than one
+// unlocked lane exists; it must never silently select the first match.
+const twoAudioLayers = [
+  ...layers,
+  { id: 15, label: "Audio B", order: 1, muted: false, locked: false, solo: false, kind: "Audio" },
+];
+let ambiguousCompanionCalls = 0;
+let ambiguousCompanionStatus = null;
+assert.equal(await dropRuntime.executeTimelineExternalDrop(
+  { ...mediaVideo, video_layer_id: null, audio_layer_id: null },
+  twoAudioLayers[0],
+  twoAudioLayers,
+  [avAsset],
+  sceneIds,
+  0,
+  {
+    insertMedia: () => { ambiguousCompanionCalls += 1; return true; },
+    placeScene: () => {},
+    reject: (message) => { ambiguousCompanionStatus = message; },
+  },
+  availableVerified,
+), false, "ambiguous linked companion placement must fail closed");
+assert.equal(ambiguousCompanionCalls, 0);
+assert.equal(ambiguousCompanionStatus, "Select an unlocked Audio Timeline lane before placing media.");
+
+let staleCompanionStatus = null;
+assert.equal(await dropRuntime.executeTimelineExternalDrop(
+  { ...mediaVideo, video_layer_id: null, audio_layer_id: 999 },
+  twoAudioLayers[0],
+  twoAudioLayers,
+  [avAsset],
+  sceneIds,
+  0,
+  {
+    insertMedia: () => { throw new Error("stale companion must not invoke insert"); },
+    placeScene: () => {},
+    reject: (message) => { staleCompanionStatus = message; },
+  },
+  availableVerified,
+), false, "a stale explicit linked companion must fail closed");
+assert.equal(staleCompanionStatus, "Selected Audio Timeline lane is no longer available.");
+
+// An explicit companion selection is accepted even when the primary drag
+// selection is absent; the selected companion remains exact and revalidated.
+let explicitCompanionRequest = null;
+assert.equal(await dropRuntime.executeTimelineExternalDrop(
+  { ...mediaVideo, video_layer_id: null, audio_layer_id: 15 },
+  twoAudioLayers[0],
+  twoAudioLayers,
+  [avAsset],
+  sceneIds,
+  0,
+  {
+    insertMedia: (assetId, placement) => { explicitCompanionRequest = { assetId, placement }; return true; },
+    placeScene: () => {},
+  },
+  availableVerified,
+), true);
+assert.equal(explicitCompanionRequest?.placement.videoLayerId, 11);
+assert.equal(explicitCompanionRequest?.placement.audioLayerId, 15);
 
 let audioOriginInsert = null;
 assert.equal(await dropRuntime.executeTimelineExternalDrop(
@@ -431,6 +562,13 @@ const assertLocalized = (source, expectedEn, expectedJa) => {
 for (const source of overviewRejects) {
   assertLocalized(source, source, localization.translateUiText(source, "ja"));
 }
+for (const source of [
+  "Select an unlocked Audio Timeline lane before placing media.",
+  "An unlocked Audio Timeline lane is required.",
+  "Selected Audio Timeline lane is no longer available.",
+]) {
+  assertLocalized(source, source, localization.translateUiText(source, "ja"));
+}
 
 // Exercise all runtime rejection families through the production orchestrator.
 // Callback and mutation counts remain zero for every rejected source.
@@ -444,9 +582,7 @@ const runtimeCases = [
   { source: mediaVideo, target: layers[0], layers, assets: [avAsset], scenes: sceneIds, availability: { 7: { kind: "unreadable", asset_id: 7, error: "unreadable" } }, expected: "Media Asset Show MP4 is unavailable for Timeline placement (unreadable)." },
   { source: mediaVideo, target: layers[0], layers, assets: [avAsset], scenes: sceneIds, availability: { 7: { kind: "live_source", asset_id: 7 } }, expected: "Media Asset Show MP4 is unavailable for Timeline placement (live_source)." },
   { source: mediaVideo, target: layers[0], layers, assets: [{ ...avAsset, source: { ...avAsset.source, metadata: { duration_ms: 1000, has_audio: true } } }], scenes: sceneIds, availability: undefined, expected: "Video source is unavailable for Show MP4." },
-  { source: { ...mediaVideo, video_layer_id: null }, target: layers[0], layers, assets: [avAsset], scenes: sceneIds, availability: undefined, expected: "Select an unlocked Video Timeline lane before placing media." },
-  { source: { ...mediaVideo, video_layer_id: 999 }, target: layers[0], layers, assets: [avAsset], scenes: sceneIds, availability: undefined, expected: "Selected Video Timeline lane is no longer available." },
-  { source: mediaVideo, target: { id: 14, label: "Video B", order: 1, muted: false, locked: false, solo: false, kind: "Video" }, layers: [...layers, { id: 14, label: "Video B", order: 1, muted: false, locked: false, solo: false, kind: "Video" }], assets: [avAsset], scenes: sceneIds, availability: undefined, expected: "Drop target no longer matches the selected Timeline lane." },
+  { source: mediaVideo, target: { id: 14, label: "Video B", order: 1, muted: false, locked: false, solo: false, kind: "Video" }, layers, assets: [avAsset], scenes: sceneIds, availability: undefined, expected: "Selected Video Timeline lane is no longer available." },
 ];
 const expectedJapanese = new Map([
   ["This Timeline drop is not a recognized source.", "このタイムラインドロップは認識されたソースではありません。"],
@@ -460,9 +596,7 @@ const expectedJapanese = new Map([
   ["Media Asset Show MP4 is unavailable for Timeline placement (unreadable).", "メディア素材 Show MP4 はタイムラインに配置できません（読み取れません）。"],
   ["Media Asset Show MP4 is unavailable for Timeline placement (live_source).", "メディア素材 Show MP4 はタイムラインに配置できません（ライブソースです）。"],
   ["Video source is unavailable for Show MP4.", "映像ソースは Show MP4 では利用できません。"],
-  ["Select an unlocked Video Timeline lane before placing media.", "メディアを配置する前にロックされていない映像タイムラインレーンを選択してください。"],
   ["Selected Video Timeline lane is no longer available.", "選択した映像タイムラインレーンは利用できなくなりました。"],
-  ["Drop target no longer matches the selected Timeline lane.", "ドロップ先が選択したタイムラインレーンと一致しなくなりました。"],
 ]);
 for (const source of overviewRejects) assertLocalized(source, source, expectedJapanese.get(source));
 
@@ -510,8 +644,23 @@ assert.match(
 );
 assert.match(
   sourceShelf,
-  /const placeSourceShelfPayload = \(payload:[\s\S]*?const target = sourceShelfTargetLayer\(payload\.lane_kind\);[\s\S]*?void props\.onPlace\(payload, target, props\.snapTimeMs\(props\.positionMs\)\);/,
-  "the accessible source action must require the selected exact lane and call the shared placement edge",
+  /const placeSourceShelfPayload = \(payload:[\s\S]*?const resolution = sourceShelfLayerResolution\(payload\.lane_kind\);[\s\S]*?const target = resolution\.selected;[\s\S]*?void props\.onPlace\(payload, target, props\.snapTimeMs\(props\.positionMs\)\);/,
+  "the accessible source action must auto-resolve a sole lane and call the shared placement edge",
+);
+assert.match(
+  sourceShelf,
+  /const renderTargetSelect = \(kind: TimelineLayerKind, label: string\) => \([\s\S]*?candidates\.length > 1[\s\S]*?mode === "stale"/,
+  "the lane selector is rendered only for ambiguity or to repair a stale explicit click target",
+);
+assert.match(
+  sourceShelf,
+  /data-timeline-source-no-target-kind=\{kind\}/,
+  "zero unlocked lanes have a visible fail-closed state",
+);
+assert.match(
+  (await readFile(new URL("../src/timelineExternalDropRuntime.ts", import.meta.url), "utf8")),
+  /const currentTargetLayer = layers\.find\(\(layer\) => layer\.id === targetLayer\.id\);[\s\S]*?source\.lane_kind === "Video"[\s\S]*?currentTargetLayer[\s\S]*?source\.lane_kind === "Audio"[\s\S]*?currentTargetLayer/,
+  "the exact Timeline drop lane is the media primary target",
 );
 assert.match(
   appSource,
@@ -544,4 +693,4 @@ assert.match(
   "the shared controller must send cue, snapped time, track, and exact layer through add_timeline_scene_block",
 );
 
-console.log("timeline external DnD contract: PASS (strict MIME parser, mounted Sources/Inspector, shared drag/click payload, exact lanes, Audio-origin AV, locked callback-0, registered production mutation chain)");
+console.log("timeline external DnD contract: PASS (strict MIME parser, exact drop-lane primary, sole-click auto-resolution, explicit linked companions, zero-candidate fail-closed, mounted Sources/Inspector, registered production mutation chain)");

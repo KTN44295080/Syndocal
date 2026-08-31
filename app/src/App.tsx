@@ -66,6 +66,7 @@ import { DvcImportReportPanel } from "./components/DvcImportReportPanel";
 import { ControlFaderWriteHeader } from "./components/ControlFaderWriteHeader";
 import { createAudioOutputController } from "./audioOutputControl";
 import { AudioOutputPanel } from "./components/AudioOutputPanel";
+import { timelineCueAudioOpenSetupEvent } from "./components/TimelineCueAudioRoutingPanel";
 import { FaderAttributeEditorPanel } from "./components/FaderAttributeEditorPanel";
 import { FaderAuxiliaryAttributePanels } from "./components/FaderAuxiliaryAttributePanels";
 import { FaderFixtureControlPanel } from "./components/FaderFixtureControlPanel";
@@ -316,9 +317,11 @@ import {
   type ProjectTransactionTerminalRecoveryResult,
 } from "./projectTransactionRecovery";
 import {
+  createTimelineCueAudioRefreshQueue,
   createTimelineCueAudioSettingsQueue,
   createTimelineCueAudioStatusRequestGate,
   type TimelineCueAudioStatusFence,
+  type TimelineCueAudioRefreshQueue,
 } from "./timelineCueAudioStatusSync";
 import type {
   ApplicationUpdateCheck,
@@ -2735,6 +2738,11 @@ export default function App() {
   const [timelineCueDrag, setTimelineCueDrag] = createSignal<TimelineCueDragState | null>(null);
   const [timelineEventDrafts, setTimelineEventDrafts] = createSignal<Record<number, TimelineEventDraft>>({});
   const [selectedTimelineSceneBlockEventId, setSelectedTimelineSceneBlockEventId] = createSignal<number | null>(null);
+  // One tagged primary selection is shared by TimelineOverview, the source
+  // shelf Inspector, and all media/automation item kinds. The panel may keep
+  // a multi-selection for edit commands, but this App-owned value is the
+  // single authoritative item shown in the lower Inspector.
+  const [timelineSelection, setTimelineSelection] = createSignal<TimelineItemRef | null>(null);
   const [timelineSceneBlockSelectionRevision, setTimelineSceneBlockSelectionRevision] = createSignal(0);
   const [timelineSnapMode, setTimelineSnapMode] = createSignal<TimelineSnapMode>("Grid");
   const [timelineGridMs, setTimelineGridMs] = createSignal(500);
@@ -2915,6 +2923,7 @@ export default function App() {
   const [timelineCueAudioMutationBusy, setTimelineCueAudioMutationBusy] = createSignal(false);
   const [timelineCueAudioLocalError, setTimelineCueAudioLocalError] = createSignal<string | null>(null);
   const timelineCueAudioStatusRequests = createTimelineCueAudioStatusRequestGate();
+  let timelineCueAudioTopologyRefreshQueue: TimelineCueAudioRefreshQueue<TimelineCueAudioStatus> | null = null;
   let timelineCueAudioSettingsQueue: ReturnType<typeof createTimelineCueAudioSettingsQueue<MachineTimelineCueAudioSettingsV1, TimelineCueAudioStatus>> | null = null;
   type TimelineAdvancedSnapshotResolution = "idle" | "pending" | "blocked";
   type TimelineAdvancedSnapshotExpectation = Readonly<{
@@ -5610,6 +5619,13 @@ export default function App() {
   };
   window.addEventListener(projectHistoryChangedEvent, handleProjectHistoryChanged);
   onCleanup(() => window.removeEventListener(projectHistoryChangedEvent, handleProjectHistoryChanged));
+  const openTimelineCueAudioSetup = () => {
+    setWorkspaceTab("setup");
+    setSetupSubTab("io");
+    setActiveIoConnection("audio");
+  };
+  window.addEventListener(timelineCueAudioOpenSetupEvent, openTimelineCueAudioSetup);
+  onCleanup(() => window.removeEventListener(timelineCueAudioOpenSetupEvent, openTimelineCueAudioSetup));
   createEffect(() => {
     const scale = uiScale();
     document.documentElement.style.setProperty("--ui-scale", String(scale / 100));
@@ -8354,6 +8370,10 @@ export default function App() {
     const selectedEventId = selectedTimelineSceneBlockEventId();
     if (selectedEventId !== null && !timelineEventRowById().has(selectedEventId)) {
       setSelectedTimelineSceneBlockEventId(null);
+      const selected = timelineSelection();
+      if (selected?.kind === "lighting_event" && selected.event_id === selectedEventId) {
+        setTimelineSelection(null);
+      }
     }
   });
   const timelineAutomationFixtureOptions = createMemo(
@@ -8470,9 +8490,44 @@ export default function App() {
       ),
     }));
   };
+  const timelineSelectionIsCurrent = (selection: TimelineItemRef) => {
+    switch (selection.kind) {
+      case "lighting_event":
+        return timelineEventRowById().has(selection.event_id);
+      case "audio_clip":
+        return (activeTimeline().audio_clips ?? []).some((clip) => clip.id === selection.clip_id);
+      case "video_clip":
+        return (activeTimeline().video_clips ?? []).some((clip) => clip.id === selection.clip_id);
+      case "lighting_automation":
+        return activeTimeline().automations.some((automation) => automation.id === selection.automation_id);
+      case "video_automation":
+        return activeTimeline().video_automations.some((automation) => automation.id === selection.automation_id);
+    }
+  };
+  const selectTimelineItem = (selection: TimelineItemRef | null) => {
+    if (selection !== null && !timelineSelectionIsCurrent(selection)) {
+      // A selection received from a stale rendered surface must not leak into
+      // the Inspector or trigger a property action against another item.
+      setTimelineSelection(null);
+      setSelectedTimelineSceneBlockEventId(null);
+      setSelectedTimelineAutomation(null);
+      return;
+    }
+    setTimelineSelection(selection);
+    const eventId = selection?.kind === "lighting_event" ? selection.event_id : null;
+    if (selectedTimelineSceneBlockEventId() !== eventId) {
+      setSelectedTimelineSceneBlockEventId(eventId);
+      setTimelineSceneBlockSelectionRevision((revision) => revision + 1);
+    }
+    const automation = selection?.kind === "lighting_automation"
+      ? { kind: "lighting" as const, automationId: selection.automation_id }
+      : selection?.kind === "video_automation"
+        ? { kind: "video" as const, automationId: selection.automation_id }
+        : null;
+    setSelectedTimelineAutomation(automation);
+  };
   const selectTimelineSceneBlockEvent = (eventId: number, reveal: boolean) => {
-    setSelectedTimelineSceneBlockEventId(eventId);
-    setTimelineSceneBlockSelectionRevision((revision) => revision + 1);
+    selectTimelineItem({ kind: "lighting_event", event_id: eventId });
     if (reveal) revealTimelineSceneBlock(eventId);
   };
   const timelineExecutionLive = createMemo(() => {
@@ -9717,6 +9772,18 @@ export default function App() {
     return layerId === null ? rows : rows.filter((automation) => automation.layer_id === layerId);
   });
   createEffect(() => {
+    const selectedItem = timelineSelection();
+    if (selectedItem === null || timelineSelectionIsCurrent(selectedItem)) return;
+    // Never retain an item whose authoritative Timeline row disappeared. The
+    // lower Inspector and the edit surface must fail closed together.
+    setTimelineSelection(null);
+    if (selectedItem.kind === "lighting_event") {
+      setSelectedTimelineSceneBlockEventId(null);
+    } else if (selectedItem.kind === "lighting_automation" || selectedItem.kind === "video_automation") {
+      setSelectedTimelineAutomation(null);
+    }
+  });
+  createEffect(() => {
     const selected = selectedTimelineAutomation();
     if (!selected) {
       return;
@@ -9726,6 +9793,13 @@ export default function App() {
       : activeTimeline().video_automations.some((automation) => automation.id === selected.automationId);
     if (!exists) {
       setSelectedTimelineAutomation(null);
+      const selectedItem = timelineSelection();
+      if ((selected.kind === "lighting" && selectedItem?.kind === "lighting_automation"
+        && selectedItem.automation_id === selected.automationId)
+        || (selected.kind === "video" && selectedItem?.kind === "video_automation"
+          && selectedItem.automation_id === selected.automationId)) {
+        setTimelineSelection(null);
+      }
     }
   });
   const activeCue = createMemo(() => {
@@ -12286,6 +12360,7 @@ export default function App() {
     setLiveFixtures(snapshotLiveFixtures(next));
     if (resetEditorDrafts) {
       setSelectedTimelineSceneBlockEventId(null);
+      setTimelineSelection(null);
       setVideoOutputConfigDrafts({});
       setCueMetadataDrafts({});
       setTimelineEventDrafts({});
@@ -15627,7 +15702,7 @@ export default function App() {
     setTimelineCueAudioLocalError(null);
     return true;
   };
-  const refreshTimelineCueAudioStatus = async (announce = false, refreshOutputs = false) => {
+  const performTimelineCueAudioStatusRefresh = async (announce = false, refreshOutputs = false) => {
     if (!isTauriRuntime()) return null;
     const requestEpoch = timelineCueAudioStatusRequests.beginPoll();
     if (requestEpoch === null) return null;
@@ -15644,7 +15719,18 @@ export default function App() {
       return null;
     } finally {
       timelineCueAudioStatusRequests.endPoll();
+      timelineCueAudioTopologyRefreshQueue?.notifyAvailable();
     }
+  };
+  const refreshTimelineCueAudioStatus = async (announce = false, refreshOutputs = false) => {
+    if (!refreshOutputs) return performTimelineCueAudioStatusRefresh(announce, false);
+    if (!timelineCueAudioTopologyRefreshQueue) {
+      timelineCueAudioTopologyRefreshQueue = createTimelineCueAudioRefreshQueue({
+        canRun: () => timelineCueAudioStatusRequests.canBeginPoll(),
+        run: () => performTimelineCueAudioStatusRefresh(announce, true),
+      });
+    }
+    return timelineCueAudioTopologyRefreshQueue.request();
   };
   const configureTimelineCueAudio = (settings: MachineTimelineCueAudioSettingsV1) => {
     if (!isTauriRuntime()) {
@@ -15658,7 +15744,10 @@ export default function App() {
         fenceOf: timelineCueAudioStatusFence,
         onStatus: (status) => setTimelineCueAudioStatus(status),
         onError: (error) => setTimelineCueAudioLocalError(String(error)),
-        onBusy: setTimelineCueAudioMutationBusy,
+        onBusy: (busy) => {
+          setTimelineCueAudioMutationBusy(busy);
+          if (!busy) timelineCueAudioTopologyRefreshQueue?.notifyAvailable();
+        },
       });
     }
     setTimelineCueAudioLocalError(null);
@@ -15942,26 +16031,46 @@ export default function App() {
     void setFixtureLimits(fixture);
   };
 
+  let newProjectInFlight = false;
   const newProject = async () => {
-    const authority = captureProjectAuthorityIdentity();
-    if (!await confirmDiscardProjectChanges("create a new project")) {
-      setMessage("New project canceled.");
-      return;
-    }
+    if (newProjectInFlight) return;
+    newProjectInFlight = true;
     try {
-      const result = await invoke<ProjectLoadResult>("new_project", {
-        ownerId: projectTransactionOwnerId,
-        expectedEpoch: authority.project_epoch,
-        expectedRevision: authority.project_revision,
-        expectedCheckpointHash: authority.checkpoint_hash,
-      });
-      const applied = await applyLoadedProjectResult(result, null);
-      if (!projectAuthorityApplicationResultIsCurrent(applied)) return;
-      setWorkspaceTab("setup");
-      setSetupSubTab("patch");
-      setMessage("Created new untitled project.");
-    } catch (error) {
-      setMessage(String(error));
+      if (!await confirmDiscardProjectChanges("create a new project")) {
+        setMessage("New project canceled.");
+        return;
+      }
+      // Project replacement commands intentionally bypass the generic
+      // renderer transaction ticket: the native replacement fence owns the
+      // whole operation. After the operator confirms the destructive action,
+      // drain a previously retained terminal recovery before capturing the
+      // authority used by the replacement. Confirmation must remain a true
+      // no-mutation path, while both the dialog wait and recovery may advance
+      // authority before this exact replacement fence is captured.
+      try {
+        await resumeForegroundProjectTransactionTerminalRecoveryBeforeMutation();
+      } catch (error) {
+        setMessage(`New project blocked while recovering the previous project transaction: ${String(error)}`);
+        return;
+      }
+      const authority = captureProjectAuthorityIdentity();
+      try {
+        const result = await invoke<ProjectLoadResult>("new_project", {
+          ownerId: projectTransactionOwnerId,
+          expectedEpoch: authority.project_epoch,
+          expectedRevision: authority.project_revision,
+          expectedCheckpointHash: authority.checkpoint_hash,
+        });
+        const applied = await applyLoadedProjectResult(result, null);
+        if (!projectAuthorityApplicationResultIsCurrent(applied)) return;
+        setWorkspaceTab("setup");
+        setSetupSubTab("patch");
+        setMessage("Created new untitled project.");
+      } catch (error) {
+        setMessage(String(error));
+      }
+    } finally {
+      newProjectInFlight = false;
     }
   };
 
@@ -20174,6 +20283,7 @@ export default function App() {
     }
     setTimelineChildCueId(cueId);
     setSelectedTimelineSceneBlockEventId(null);
+    setTimelineSelection(null);
     setTimelineEventDrafts({});
     setTimelineAutomationDrafts({});
     setTimelineVideoAutomationDrafts({});
@@ -20246,6 +20356,7 @@ export default function App() {
     }
     setTimelineChildCueId(null);
     setSelectedTimelineSceneBlockEventId(null);
+    setTimelineSelection(null);
     setTimelineEventDrafts({});
     setTimelineAutomationDrafts({});
     setTimelineVideoAutomationDrafts({});
@@ -20566,9 +20677,9 @@ export default function App() {
   };
 
   const selectTimelineAutomationRange = (range: TimelineOverviewAutomationRange) => {
-    setSelectedTimelineAutomation({
-      kind: range.kind,
-      automationId: range.automation_id,
+    selectTimelineItem({
+      kind: range.kind === "lighting" ? "lighting_automation" : "video_automation",
+      automation_id: range.automation_id,
     });
   };
 
@@ -25417,8 +25528,6 @@ export default function App() {
           phases={activeTimeline().phases ?? []}
           guideEnabled={activeTimeline().guide_enabled ?? false}
           cueAudioStatus={timelineCueAudioStatus()}
-          cueAudioMutationBusy={timelineCueAudioMutationBusy()}
-          cueAudioLocalError={timelineCueAudioLocalError()}
           loopRegion={activeTimeline().loop_region ?? null}
           loopRuntime={activeTimeline().loop_runtime ?? { generation: 0, status: "disabled", wrap_count: 0 }}
           timelines={timelineBank()}
@@ -25445,8 +25554,6 @@ export default function App() {
           onPlay={playTimeline}
           onSetMetronome={setTimelineMetronome}
           onSetGuideEnabled={setTimelineGuideEnabled}
-          onConfigureCueAudio={configureTimelineCueAudio}
-          onRefreshCueAudio={async () => { await refreshTimelineCueAudioStatus(true, true); }}
           onSetPhases={setTimelinePhases}
           onSetLoopRegion={setTimelineLoopRegion}
           onSetLoopEnabled={setTimelineLoopEnabled}
@@ -26349,6 +26456,131 @@ export default function App() {
     window.removeEventListener("contextmenu", handleAppContextMenu, true);
     window.removeEventListener("beforeunload", handleBeforeUnload);
   });
+
+  const renderTimelineInspector = () => {
+    const selection = timelineSelection();
+    const empty = (message = "Select a Timeline item to inspect it.") => (
+      <section
+        class="timelineExternalSourceShelfInspector"
+        data-timeline-source-shelf-inspector
+        aria-label="Timeline inspector"
+      >
+        <h3>Inspector</h3>
+        <p class="emptyState">{translateUiText(message, uiLocale())}</p>
+      </section>
+    );
+    if (selection === null) return empty();
+    if (!timelineSelectionIsCurrent(selection)) {
+      return empty("Selected Timeline item is no longer available.");
+    }
+    switch (selection.kind) {
+      case "lighting_event": {
+        const event = timelineEventRowById().get(selection.event_id);
+        if (!event) return empty("Selected Timeline item is no longer available.");
+        return (
+          <section
+            class="timelineExternalSourceShelfInspector"
+            data-timeline-source-shelf-inspector
+            data-timeline-selection-kind={selection.kind}
+            aria-label="Timeline inspector"
+          >
+            <h3>Inspector</h3>
+            <div class="timelineLowerInspectorSelection">
+              <strong>{translateUiText("Selected block", uiLocale())}</strong>
+              <span class="tabularNums" data-no-localize>#{event.id}</span>
+              <strong data-no-localize>{event.cue_label}</strong>
+              <span>{event.track}</span>
+              <button type="button" onClick={() => setTimelineContextDrawer("block")}>
+                {translateUiText("Open Block Properties", uiLocale())}
+              </button>
+            </div>
+          </section>
+        );
+      }
+      case "audio_clip": {
+        const clip = (activeTimeline().audio_clips ?? []).find((candidate) => candidate.id === selection.clip_id);
+        if (!clip) return empty("Selected Timeline item is no longer available.");
+        return (
+          <section
+            class="timelineExternalSourceShelfInspector"
+            data-timeline-source-shelf-inspector
+            data-timeline-selection-kind={selection.kind}
+            aria-label="Timeline inspector"
+          >
+            <h3>Inspector</h3>
+            <div class="timelineLowerInspectorSelection">
+              <strong>{translateUiText("Audio Clip", uiLocale())}</strong>
+              <span class="tabularNums" data-no-localize>#{clip.id}</span>
+              <strong data-no-localize>{clip.path.replaceAll("\\", "/").split("/").pop()}</strong>
+              <span class="tabularNums" data-no-localize>{clip.start_ms}–{clip.duration_ms} ms</span>
+              <span data-no-localize>{clip.output_bus ?? "PROGRAM"}</span>
+            </div>
+          </section>
+        );
+      }
+      case "video_clip": {
+        const clip = (activeTimeline().video_clips ?? []).find((candidate) => candidate.id === selection.clip_id);
+        const asset = clip ? snapshot().video.media_assets.find((candidate) => candidate.id === clip.media_asset_id) : null;
+        if (!clip) return empty("Selected Timeline item is no longer available.");
+        return (
+          <section
+            class="timelineExternalSourceShelfInspector"
+            data-timeline-source-shelf-inspector
+            data-timeline-selection-kind={selection.kind}
+            aria-label="Timeline inspector"
+          >
+            <h3>Inspector</h3>
+            <div class="timelineLowerInspectorSelection">
+              <strong>{translateUiText("Video Clip", uiLocale())}</strong>
+              <span class="tabularNums" data-no-localize>#{clip.id}</span>
+              <strong data-no-localize>{asset?.label ?? `Media ${clip.media_asset_id}`}</strong>
+              <span class="tabularNums" data-no-localize>{clip.start_ms}–{clip.duration_ms} ms</span>
+            </div>
+          </section>
+        );
+      }
+      case "lighting_automation": {
+        const automation = allTimelineAutomationRows().find((candidate) => candidate.id === selection.automation_id);
+        if (!automation) return empty("Selected Timeline item is no longer available.");
+        return (
+          <section
+            class="timelineExternalSourceShelfInspector"
+            data-timeline-source-shelf-inspector
+            data-timeline-selection-kind={selection.kind}
+            aria-label="Timeline inspector"
+          >
+            <h3>Inspector</h3>
+            <div class="timelineLowerInspectorSelection">
+              <strong>{translateUiText("Lighting automation", uiLocale())}</strong>
+              <span class="tabularNums" data-no-localize>#{automation.id}</span>
+              <strong data-no-localize>{automation.fixture_label}</strong>
+              <span data-no-localize>{automation.attribute}</span>
+            </div>
+          </section>
+        );
+      }
+      case "video_automation": {
+        const automation = allTimelineVideoAutomationRows().find((candidate) => candidate.id === selection.automation_id);
+        if (!automation) return empty("Selected Timeline item is no longer available.");
+        return (
+          <section
+            class="timelineExternalSourceShelfInspector"
+            data-timeline-source-shelf-inspector
+            data-timeline-selection-kind={selection.kind}
+            aria-label="Timeline inspector"
+          >
+            <h3>Inspector</h3>
+            <div class="timelineLowerInspectorSelection">
+              <strong>{translateUiText("Video automation", uiLocale())}</strong>
+              <span class="tabularNums" data-no-localize>#{automation.id}</span>
+              <strong data-no-localize>{automation.layer_label}</strong>
+              <span data-no-localize>{automation.param}</span>
+            </div>
+          </section>
+        );
+      }
+    }
+  };
 
   return (
     <main
@@ -28065,22 +28297,8 @@ export default function App() {
                 onStatus={setMessage}
                 contextMode={timelineLowerContextMode()}
                 onContextModeChange={setTimelineLowerContextMode}
-                onOpenInspector={() => undefined}
-                inspectorContent={
-                  <section class="timelineExternalSourceShelfInspector" data-timeline-source-shelf-inspector aria-label="Timeline inspector">
-                    <h3>Inspector</h3>
-                    <Show
-                      when={selectedTimelineSceneBlockEventId() !== null}
-                      fallback={<p class="emptyState">Select a Timeline block to inspect it.</p>}
-                    >
-                      <div class="timelineLowerInspectorSelection">
-                        <strong>Selected block</strong>
-                        <span class="tabularNums" data-no-localize>#{selectedTimelineSceneBlockEventId()}</span>
-                        <button type="button" onClick={() => setTimelineContextDrawer("block")}>Open Block Properties</button>
-                      </div>
-                    </Show>
-                  </section>
-                }
+                onOpenInspector={() => setTimelineLowerContextMode("inspector")}
+                inspectorContent={renderTimelineInspector()}
               />
             ) : undefined
           }
@@ -28664,6 +28882,7 @@ export default function App() {
               overviewShowDurationMs={timelineOverviewShowDurationMs()}
               overviewEditExtentMs={timelineOverviewEditExtentMs()}
               selectedEventId={selectedTimelineSceneBlockEventId()}
+              timelineSelection={timelineSelection()}
               selectionRevision={timelineSceneBlockSelectionRevision()}
               audioAnalysis={audioAnalysis()}
               audioClips={activeTimeline().audio_clips ?? []}
@@ -28717,6 +28936,7 @@ export default function App() {
               onResizeEventTime={resizeTimelineCueEventToTime}
               onSetEventFade={setTimelineCueEventFade}
               onSelectAutomationRange={selectTimelineAutomationRange}
+              onTimelineSelectionChange={selectTimelineItem}
               onMoveAutomationRangeTime={moveTimelineAutomationRangeToTime}
               onResizeAutomationRangeTime={resizeTimelineAutomationRangeToTime}
               onMoveAutomationKeyframeTime={moveTimelineAutomationKeyframeToTime}
@@ -28750,9 +28970,20 @@ export default function App() {
               onMoveItemsToLanes={moveTimelineItemsToLanes}
               onRestoreReturnedItemSelection={(items) => {
                 const specialized = specializedTimelineSelectionFromItems(items);
+                const selected = specialized.event_id !== null
+                  ? { kind: "lighting_event" as const, event_id: specialized.event_id }
+                  : specialized.automation?.kind === "lighting"
+                    ? { kind: "lighting_automation" as const, automation_id: specialized.automation.automationId }
+                    : specialized.automation?.kind === "video"
+                      ? { kind: "video_automation" as const, automation_id: specialized.automation.automationId }
+                      : items[0] ?? null;
+                selectTimelineItem(selected);
+                // A linked result can legitimately keep one Lighting block
+                // and one automation range visibly selected at the same time.
+                // The tagged primary above owns the Inspector; these legacy
+                // specialized states retain the multi-domain canvas highlight.
                 setSelectedTimelineSceneBlockEventId(specialized.event_id);
                 setSelectedTimelineAutomation(specialized.automation);
-                setTimelineSceneBlockSelectionRevision((revision) => revision + 1);
               }}
               onRemoveItems={removeTimelineItems}
               onRemoveAudioClip={removeTimelineAudioClip}
@@ -29034,6 +29265,11 @@ export default function App() {
              onReturnToNormal={audioOutputController.returnToNormal}
              onTest={audioOutputController.setTest}
              onSoloModeChange={audioOutputController.setSoloMode}
+             timelineCueAudioStatus={timelineCueAudioStatus()}
+             timelineCueAudioMutationBusy={timelineCueAudioMutationBusy()}
+             timelineCueAudioLocalError={timelineCueAudioLocalError()}
+             onConfigureTimelineCueAudio={configureTimelineCueAudio}
+             onRefreshTimelineCueAudio={async () => { await refreshTimelineCueAudioStatus(true, true); }}
            />
            </section>
              ) : connection === "midi" ? (

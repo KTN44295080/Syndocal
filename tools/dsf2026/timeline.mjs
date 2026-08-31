@@ -295,7 +295,12 @@ export function applyReferenceAudioToTimelines(source, destination, references, 
   return { source, destination, mediaAssets };
 }
 
-export function buildBoundaryLightingEvents(lightingCues, boundaryMs, lightingLayerId = AUTHORED_LIGHTING_LAYER_ID) {
+export function buildBoundaryLightingEvents(
+  lightingCues,
+  boundaryMs,
+  timelineEndMs,
+  lightingLayerId = AUTHORED_LIGHTING_LAYER_ID,
+) {
   if (!Number.isSafeInteger(boundaryMs) || boundaryMs < 0) fail("lighting cue boundary must be a safe non-negative millisecond position");
   validatePositiveLayerId(lightingLayerId, "authored lighting boundary");
   const required = ["all_white", "all_max"];
@@ -306,6 +311,12 @@ export function buildBoundaryLightingEvents(lightingCues, boundaryMs, lightingLa
   if (ids.some((id) => !Number.isSafeInteger(id) || id <= 0) || new Set(ids).size !== ids.length) {
     fail("authored lighting boundary requires unique existing positive Cue IDs");
   }
+  if (!Number.isSafeInteger(boundaryMs)
+      || !Number.isSafeInteger(timelineEndMs)
+      || boundaryMs < 0
+      || timelineEndMs <= boundaryMs) {
+    fail("authored lighting boundary requires a finite Scene Block interval ending with the source Timeline");
+  }
   return required.map((label, index) => ({
     id: index + 1,
     cue_id: lightingCues[label].id,
@@ -313,7 +324,7 @@ export function buildBoundaryLightingEvents(lightingCues, boundaryMs, lightingLa
     time_beats: null,
     track: "Lighting",
     layer_id: lightingLayerId,
-    duration_ms: 0,
+    duration_ms: timelineEndMs - boundaryMs,
     duration_beats: null,
     conform_to_tempo: false,
     loop_fill: false,
@@ -340,7 +351,12 @@ export function buildAuthoredTimelines(manifest, lightingCues) {
     enabled: true,
     musical_length_beats: 4,
   };
-  source.events = buildBoundaryLightingEvents(lightingCues, source.loop_region.b_ms, AUTHORED_LIGHTING_LAYER_ID);
+  source.events = buildBoundaryLightingEvents(
+    lightingCues,
+    source.loop_region.b_ms,
+    source.duration_ms,
+    AUTHORED_LIGHTING_LAYER_ID,
+  );
   source.phases = buildPhases(clicks, "jinsei-over", SOURCE_PHASES, 1, SOURCE_DURATION_MS);
   source.follow = {
     enabled: true,
@@ -353,11 +369,14 @@ export function buildAuthoredTimelines(manifest, lightingCues) {
     preroll_ms: 0,
     trans_cadence_bars: 2,
     trans_target_measures: [149, 151, 153, 155],
-    hold_first_destination_measure: true,
+    destination_start_mode: "wait_for_pedal",
+    hold_first_destination_measure: false,
     fault_policy: "hold",
   };
 
   const destination = emptyTimelineBase(2, "惑う星", DESTINATION_DURATION_MS);
+  delete destination.loop_region;
+  delete destination.follow;
   destination.layers = [buildReferenceAudioLayer(AUTHORED_DESTINATION_AUDIO_LAYER_ID, 0)];
   destination.tempo_meter_map = buildTempoMapTwo();
   destination.phases = buildPhases(clicks, "madow-hoshi", DESTINATION_PHASES, 2, DESTINATION_DURATION_MS);

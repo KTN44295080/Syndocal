@@ -107,7 +107,7 @@ export function preflightShowContract(input, options = {}) {
         "follow",
         "source_measure_transition",
         "destination_first_measure",
-        "destination_hold",
+        "destination_pedal_wait",
         "source_loop",
       ]) {
         checks.push(blocked(id, bankResult.error));
@@ -151,13 +151,13 @@ export function preflightShowContract(input, options = {}) {
       }
 
       if (follow.error) {
-        checks.push(blocked("destination_hold", follow.error));
+        checks.push(blocked("destination_pedal_wait", follow.error));
       } else if (destinationMeasure.error) {
-        checks.push(blocked("destination_hold", destinationMeasure.error));
+        checks.push(blocked("destination_pedal_wait", destinationMeasure.error));
       } else if (!isSafePositiveInteger(destination?.duration_ms) || destinationMeasure.durationMs > destination.duration_ms) {
-        checks.push(blocked("destination_hold", "destination first-measure hold cannot be established without a finite valid destination measure"));
+        checks.push(blocked("destination_pedal_wait", "destination pedal wait cannot be established without a finite valid destination measure"));
       } else {
-        checks.push(passed("destination_hold", "hold_first_destination_measure=true persists destination first-measure hold intent; runtime release control is outside this persisted project evidence", "authored-intent"));
+        checks.push(passed("destination_pedal_wait", "wait_for_pedal persists paused destination-start intent; runtime pedal release control is outside this persisted project evidence", "authored-intent"));
       }
 
       const loop = validateLoopIntent(source);
@@ -182,7 +182,7 @@ export function preflightShowContract(input, options = {}) {
 export function limitations() {
   return [
     "READ-ONLY structural/authored evidence only; no media availability, decoder, hardware, MIDI, DJ Link, network, or runtime-state claim is made.",
-    "The destination hold and non-finite loop are persisted authored intent only; F13 runtime release/settlement is not represented or verified.",
+    "The wait_for_pedal destination start and non-finite loop are persisted authored intent only; F13 runtime release/settlement is not represented or verified.",
     "Missing or ambiguous measure/tempo evidence is BLOCKED; this preflight never falls back to snapshot.clock or assumes 4/4.",
   ];
 }

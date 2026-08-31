@@ -12,6 +12,11 @@ import {
 const fixturePath = new URL("../specimens/show-structural-preflight.sdc", import.meta.url);
 const fixtureText = await readFile(fixturePath, "utf8");
 const fixture = JSON.parse(fixtureText);
+const legacyFixture = structuredClone(fixture);
+for (const timeline of [legacyFixture.snapshot.timeline, legacyFixture.snapshot.timeline_bank[0]]) {
+  delete timeline.follow.destination_start_mode;
+  timeline.follow.hold_first_destination_measure = true;
+}
 const legacyText = await readFile(new URL("../../samples/phase1-mini-show.sdc", import.meta.url), "utf8");
 const cliPath = fileURLToPath(new URL("../../tools/show-structural-preflight.mjs", import.meta.url));
 
@@ -25,7 +30,7 @@ const runCli = (...args) => spawnSync(process.execPath, [cliPath, ...args], {
   encoding: "utf8",
 });
 
-const valid = preflightShowContract(fixtureText);
+const valid = preflightShowContract(fixture);
 assert.equal(valid.status, "PASS", "the deterministic current-format fixture passes authored checks");
 assert.equal(check(valid, "dj_mapping")?.status, "PASS");
 assert.equal(check(valid, "explicit_ids")?.status, "PASS");
@@ -34,15 +39,19 @@ assert.equal(check(valid, "adjacent_bank_entries")?.status, "PASS");
 assert.equal(check(valid, "follow")?.status, "PASS");
 assert.equal(check(valid, "source_measure_transition")?.status, "PASS");
 assert.equal(check(valid, "destination_first_measure")?.status, "PASS");
-assert.equal(check(valid, "destination_hold")?.status, "PASS");
+assert.equal(check(valid, "destination_pedal_wait")?.status, "PASS");
 assert.equal(check(valid, "source_loop")?.status, "PASS");
-assert.match(check(valid, "destination_hold")?.detail ?? "", /persists .*intent/);
-assert.doesNotMatch(check(valid, "destination_hold")?.detail ?? "", /until explicit F13 release/);
+assert.match(check(valid, "destination_pedal_wait")?.detail ?? "", /wait_for_pedal persists .*intent/);
+assert.doesNotMatch(check(valid, "destination_pedal_wait")?.detail ?? "", /until explicit F13 release/);
 assert.match(valid.limitations.join("\n"), /no media availability.*hardware.*network.*runtime-state claim/i);
 assert.match(valid.limitations.join("\n"), /never falls back to snapshot\.clock or assumes 4\/4/i);
 
 const fromFixture = await preflightShowFile(fileURLToPath(fixturePath));
-assert.equal(fromFixture.status, "PASS", "file preflight reads the fixture without changing it");
+assert.equal(fromFixture.status, "PASS", "the checked-in canonical fixture must pass the current Follow contract");
+assert.equal(check(fromFixture, "follow")?.status, "PASS");
+const legacyFixtureReport = preflightShowContract(legacyFixture);
+assert.equal(legacyFixtureReport.status, "BLOCKED", "the independently constructed legacy fixture must not pass the current Follow contract");
+assertBlocked(legacyFixtureReport, "follow", /destination_start_mode|hold_first_destination_measure/);
 
 const legacy = preflightShowContract(legacyText);
 assert.equal(legacy.status, "BLOCKED", "a real current-format legacy .sdc blocks missing show evidence");
@@ -59,7 +68,7 @@ assertBlocked(legacy, "adjacent_bank_entries", /timeline_bank/);
   const missingDestinationTempo = structuredClone(fixture);
   delete missingDestinationTempo.snapshot.timeline_bank[1].tempo_meter_map;
   assertBlocked(preflightShowContract(missingDestinationTempo), "destination_first_measure", /measure\/tempo evidence is BLOCKED/);
-  assertBlocked(preflightShowContract(missingDestinationTempo), "destination_hold", /measure\/tempo evidence is BLOCKED/);
+  assertBlocked(preflightShowContract(missingDestinationTempo), "destination_pedal_wait", /measure\/tempo evidence is BLOCKED/);
 }
 
 {
@@ -142,6 +151,10 @@ assertBlocked(legacy, "adjacent_bank_entries", /timeline_bank/);
   const unknownFaultPolicy = structuredClone(fixture);
   unknownFaultPolicy.snapshot.timeline_bank[0].follow.fault_policy = "retry";
   assertBlocked(preflightShowContract(unknownFaultPolicy), "follow", /fault_policy/);
+
+  const unknownDestinationStartMode = structuredClone(fixture);
+  unknownDestinationStartMode.snapshot.timeline_bank[0].follow.destination_start_mode = "auto_start";
+  assertBlocked(preflightShowContract(unknownDestinationStartMode), "follow", /destination_start_mode.*exact Rust serde value/);
 
   const invalidActiveTimelineEnum = structuredClone(fixture);
   invalidActiveTimelineEnum.snapshot.timeline.follow.lighting_policy = "HoldThenCut";
@@ -233,17 +246,32 @@ assertBlocked(legacy, "adjacent_bank_entries", /timeline_bank/);
 }
 
 {
-  const noHold = structuredClone(fixture);
-  noHold.snapshot.timeline_bank[0].follow.hold_first_destination_measure = false;
-  assertBlocked(preflightShowContract(noHold), "follow", /hold_first_destination_measure/);
-  assertBlocked(preflightShowContract(noHold), "destination_hold", /hold_first_destination_measure/);
+  const legacyHold = structuredClone(fixture);
+  legacyHold.snapshot.timeline_bank[0].follow.hold_first_destination_measure = true;
+  assertBlocked(preflightShowContract(legacyHold), "follow", /hold_first_destination_measure/);
+  assertBlocked(preflightShowContract(legacyHold), "destination_pedal_wait", /hold_first_destination_measure/);
+
+  const autoStart = structuredClone(fixture);
+  autoStart.snapshot.timeline_bank[0].follow.destination_start_mode = "play";
+  assertBlocked(preflightShowContract(autoStart), "follow", /destination_start_mode.*auto-start/);
+  assertBlocked(preflightShowContract(autoStart), "destination_pedal_wait", /destination_start_mode.*auto-start/);
+
+  const omittedDestinationStartMode = structuredClone(fixture);
+  delete omittedDestinationStartMode.snapshot.timeline.follow.destination_start_mode;
+  delete omittedDestinationStartMode.snapshot.timeline_bank[0].follow.destination_start_mode;
+  assertBlocked(preflightShowContract(omittedDestinationStartMode), "follow", /destination_start_mode.*wait_for_pedal/);
+
+  const omittedDestinationHold = structuredClone(fixture);
+  delete omittedDestinationHold.snapshot.timeline.follow.hold_first_destination_measure;
+  delete omittedDestinationHold.snapshot.timeline_bank[0].follow.hold_first_destination_measure;
+  assertBlocked(preflightShowContract(omittedDestinationHold), "follow", /hold_first_destination_measure.*false/);
 }
 
 {
   const shortDestination = structuredClone(fixture);
   shortDestination.snapshot.timeline_bank[1].duration_ms = 1000;
   assertBlocked(preflightShowContract(shortDestination), "destination_first_measure", /finite and cover|complete destination/);
-  assertBlocked(preflightShowContract(shortDestination), "destination_hold", /finite valid destination measure/);
+  assertBlocked(preflightShowContract(shortDestination), "destination_pedal_wait", /finite valid destination measure/);
 }
 
 {

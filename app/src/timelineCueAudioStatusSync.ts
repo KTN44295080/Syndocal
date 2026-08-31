@@ -7,6 +7,7 @@ export interface TimelineCueAudioStatusRequestGate {
   beginMutation: () => number;
   endMutation: (requestEpoch: number) => void;
   beginPoll: () => number | null;
+  canBeginPoll: () => boolean;
   endPoll: () => void;
   acceptsRequest: (requestEpoch: number) => boolean;
   acceptsStatus: (status: TimelineCueAudioStatusFence) => boolean;
@@ -60,6 +61,7 @@ export const createTimelineCueAudioStatusRequestGate = (): TimelineCueAudioStatu
       pollInFlight = true;
       return requestEpoch;
     },
+    canBeginPoll: () => !pollInFlight && !mutationInFlight,
     endPoll: () => {
       pollInFlight = false;
     },
@@ -88,6 +90,123 @@ export const createTimelineCueAudioStatusRequestGate = (): TimelineCueAudioStatu
       mutationInFlight = false;
       applied = null;
       retiredRuntimeIncarnations.clear();
+    },
+  };
+};
+
+export interface TimelineCueAudioRefreshQueue<T> {
+  request: () => Promise<T | null>;
+  notifyAvailable: () => void;
+}
+
+export interface TimelineCueAudioRefreshQueueOptions<T> {
+  canRun: () => boolean;
+  run: () => Promise<T | null>;
+}
+
+/**
+ * Coalesces explicit topology refreshes and waits for an in-flight status
+ * poll or settings mutation to settle.  The queue never starts two list/status
+ * transactions at once; callers receive the same eventual result.
+ */
+export const createTimelineCueAudioRefreshQueue = <T>(
+  options: TimelineCueAudioRefreshQueueOptions<T>,
+): TimelineCueAudioRefreshQueue<T> => {
+  let pending: Array<{ resolve: (value: T | null) => void; reject: (reason: unknown) => void }> = [];
+  let running = false;
+
+  const drain = async () => {
+    if (running || pending.length === 0 || !options.canRun()) return;
+    running = true;
+    const waiters = pending;
+    pending = [];
+    try {
+      const result = await options.run();
+      waiters.forEach(({ resolve }) => resolve(result));
+    } catch (error) {
+      waiters.forEach(({ reject }) => reject(error));
+    } finally {
+      running = false;
+      if (pending.length > 0) queueMicrotask(() => void drain());
+    }
+  };
+
+  return {
+    request: () => new Promise<T | null>((resolve, reject) => {
+      pending.push({ resolve, reject });
+      void drain();
+    }),
+    notifyAvailable: () => void drain(),
+  };
+};
+
+/**
+ * Serializes the Setup Audio mount refresh with the operator's route/device
+ * write. The native list/status operation and settings mutation use separate
+ * commands, so the UI owns one small transaction boundary around both. A
+ * queued operation re-checks mutation settlement immediately before entering
+ * the other direction; it never starts a refresh midway through a selection,
+ * nor publishes a selection over an incomplete topology receipt.
+ */
+export interface TimelineCueAudioSetupOperationGate {
+  refresh: () => Promise<boolean>;
+  configure: (write: () => void | Promise<void>) => Promise<boolean>;
+  dispose: () => void;
+}
+
+export interface TimelineCueAudioSetupOperationGateOptions {
+  waitForMutationIdle: () => Promise<void>;
+  waitForMutationTerminal: () => Promise<void>;
+  refresh: () => void | Promise<void>;
+  onBusy: (busy: boolean) => void;
+}
+
+export const createTimelineCueAudioSetupOperationGate = (
+  options: TimelineCueAudioSetupOperationGateOptions,
+): TimelineCueAudioSetupOperationGate => {
+  let tail: Promise<void> = Promise.resolve();
+  let queued = 0;
+  let busy = false;
+  let disposed = false;
+
+  const setBusy = (next: boolean) => {
+    if (busy === next) return;
+    busy = next;
+    options.onBusy(next);
+  };
+
+  const enqueue = (operation: () => Promise<void>): Promise<boolean> => {
+    if (disposed) return Promise.resolve(false);
+    queued += 1;
+    setBusy(true);
+    const completion = tail.then(async () => {
+      if (disposed) return false;
+      await operation();
+      return !disposed;
+    });
+    tail = completion.then(() => undefined, () => undefined);
+    return completion.finally(() => {
+      queued -= 1;
+      if (!disposed && queued === 0) setBusy(false);
+    });
+  };
+
+  return {
+    refresh: () => enqueue(async () => {
+      await options.waitForMutationIdle();
+      if (disposed) return;
+      await options.refresh();
+    }),
+    configure: (write) => enqueue(async () => {
+      await options.waitForMutationIdle();
+      if (disposed) return;
+      await write();
+      if (disposed) return;
+      await options.waitForMutationTerminal();
+    }),
+    dispose: () => {
+      disposed = true;
+      setBusy(false);
     },
   };
 };

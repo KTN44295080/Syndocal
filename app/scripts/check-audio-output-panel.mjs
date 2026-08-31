@@ -49,7 +49,7 @@ const assertions = [
   [/props\.view\.backend === "normal-wasapi"[\s\S]*?"Windows default PROGRAM output"[\s\S]*?: "PROGRAM stereo and CUE output control"/u, panel, "header subtitle must describe the active backend instead of advertising hidden ASIO controls"],
   [/<Show when=\{props\.view\.backend === "show-asio"\}>\s*<div class="audioOutputActions"/u, panel, "ASIO lifecycle actions must stay hidden in Normal WASAPI mode"],
   [/classList=\{\{ "audioOutputFieldGrid--normal": props\.view\.backend === "normal-wasapi" \}\}/u, panel, "Normal WASAPI configuration must collapse to one useful field"],
-  [/<Show when=\{props\.view\.backend === "normal-wasapi"\}>[\s\S]*?data-audio-output-normal-notice[\s\S]*?Timeline tools, then Timeline authoring monitor[\s\S]*?Explicit Device/u, panel, "Normal WASAPI must direct arbitrary WDM routing to the Timeline authoring monitor"],
+  [/<Show when=\{props\.view\.backend === "normal-wasapi"\}>[\s\S]*?data-audio-output-normal-notice[\s\S]*?<TimelineCueAudioRoutingPanel/u, panel, "Normal WASAPI must expose authoritative Timeline WDM routing in Setup Audio"],
   [/<Show when=\{props\.view\.backend === "show-asio"\}>\s*<details class="audioOutputDisclosure" data-audio-output-disclosure="preflight"/u, panel, "ASIO preflight controls must stay hidden in Normal WASAPI mode"],
   [/Show ASIO/u, panel, "Show ASIO label must be visible"],
   [/aria-label="Audio output backend"/u, panel, "backend selector needs an accessible name"],

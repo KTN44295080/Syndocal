@@ -2,7 +2,7 @@
 
 Syndocal は、DMX照明とVJ映像を同じタイムライン、キュー、BPMクロック、エフェクトソースで駆動するデスクトップ制御ソフトウェアです。
 
-- 製品名: **Syndocal 1.2.0-alpha.51**
+- 製品名: **Syndocal 1.2.0-alpha.52**
 - 開発: **Seraf()のKTN**
 - プロジェクト: **`.sdc`** (可読JSON)
 - Tier 1: Windows 10+ / macOS 12+
@@ -25,7 +25,7 @@ See the [current output acceptance record](qa/DSF2026_SAME_PC_OUTPUT_ACCEPTANCE_
 for execution steps and unverified physical/lease evidence; this boundary is
 not a hardware acceptance claim.
 
-Current product metadata is `1.2.0-alpha.51` on branch
+Current product metadata is `1.2.0-alpha.52` on branch
 `codex/syndocal-v1.2`; the alpha.46 native build/window and physical-hardware
 checkpoint are pending. The historical
 alpha.39 native checkpoint used source/docs `HEAD`
@@ -367,7 +367,7 @@ unaccepted.
 
 CI/Release成果物は次の形式です。
 
-- Windows: `Syndocal_1.2.0-alpha.51_x64-setup.exe` (NSIS)、`Syndocal_1.2.0-alpha.51_x64_ja-JP.msi`
+- Windows: `Syndocal_1.2.0-alpha.52_x64-setup.exe` (NSIS)、`Syndocal_1.2.0-alpha.52_x64_ja-JP.msi`
 - macOS: `.app`、DMG
 - Linux: `.deb`、AppImage
 

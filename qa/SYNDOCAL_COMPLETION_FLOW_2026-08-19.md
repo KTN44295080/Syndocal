@@ -4,6 +4,47 @@ Date: 2026-08-19
 Branch at creation: `codex/syndocal-v1.0`
 Baseline before this document: `848d759846985cc3acf588356cfa3c996b4e2ef2`
 
+## 2026-09-01 alpha.52 operator-path and native checkpoint
+
+Alpha.52 is the current show-critical checkpoint. It moves arbitrary Windows
+PROGRAM/CUE endpoint selection into the sole authoritative
+`SETUP > I/O > Audio` surface and retires editable Timeline device routing. A
+single FIFO gate serializes topology refresh and settings mutation; stale saved
+endpoints remain visible but disabled, duplicate exact names fail closed, and
+failure/disposal cannot leak a later mutation.
+
+Timeline now uses App-owned tagged primary selection for lighting, audio, video,
+and both automation domains. Inspector covers every kind, real non-null-to-null
+transitions clear local state, and initial null/Alt-isolated state is preserved.
+Exact-lane drops and sole-candidate accessible placement require no redundant
+lane picker; ambiguous targets remain explicit. Duration blocks, adaptive grid,
+snap/Undo, and the clipped orange A-B loop interval replace the rejected point
+flag model. The show Follow boundary is persisted as `wait_for_pedal` with no
+destination auto-play.
+
+The tracked alpha10 SDC is a structural fixture, not a release artifact. The
+single local operational identity is the canonical SDC, both verified reference
+audio sidecars, and approved-identity manifest under
+`target/qa/dsf2026-show-authored-20260901-canonical`. Exact identities are
+recorded in the show handoff; cross-PC portability remains an explicit relink and
+verification boundary.
+
+Source gates pass with first-party warnings `0`: TypeScript, localization
+`3684/3684`, cue-audio runtime/browser/panel, project transaction, source-shelf
+static/browser, external DnD, Timeline performance/slim matrices, block/loop,
+show authoring/structural preflight, rehearsal/same-PC copy, release metadata,
+syntax, and diff checks. Independent review found no P0/P1 issue.
+
+The exact Community MSVC `14.44.35207` no-bundle build produced
+`target/release/syndocal.exe` version `1.2.0-alpha.52`, `62,419,968` bytes,
+SHA-256 `FE29DD658EE3D02661DEFCBF62027F9E99F9014D27A42202FCA7253F25FEF966`.
+Rust warnings were `0`; Vite emitted one existing `509.43 kB` chunk-size
+advisory. Exactly one responsive maximized native window was verified at PID
+`21900`. No fresh physical USB-DMX, Art-Net, Spout, display, ASIO-device, or
+listening acceptance was performed in this checkpoint. Target cleanup remains
+blocked on the required tracked, tested, independently reviewed exact-target
+harness; `129,949,179,997` bytes were inventoried and nothing was deleted.
+
 ## 2026-09-01 alpha.51 show-critical native and S0 checkpoint
 
 Alpha.51 is the active show-critical tranche. It binds Timeline mutation

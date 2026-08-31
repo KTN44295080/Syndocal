@@ -24,6 +24,8 @@ import {
   readOwn,
 } from "./primitives.mjs";
 
+const FOLLOW_DESTINATION_START_MODES = ["play", "wait_for_pedal"];
+
 function tempoPointShape(point, index) {
   if (!isObject(point)) return `tempo_meter_map[${index}] must be an object`;
   for (const field of ["position_sixteenth_steps", "bpm", "numerator", "denominator"]) {
@@ -267,6 +269,10 @@ export function followEnumError(follow, label) {
       && !FOLLOW_FAULT_POLICIES.includes(follow.fault_policy)) {
     return `${label} fault_policy must be a Rust serde value: hold, cut, or fault`;
   }
+  if (hasOwn(follow, "destination_start_mode")
+      && !FOLLOW_DESTINATION_START_MODES.includes(follow.destination_start_mode)) {
+    return `${label} destination_start_mode must be an exact Rust serde value: play or wait_for_pedal`;
+  }
   return null;
 }
 
@@ -384,24 +390,27 @@ export function followIntent(source, destinationId) {
   if (!isObject(duration) || duration.unit !== "Bars" || duration.value_milliunits !== SHOW_FOLLOW_BAR_MILLIUNITS) {
     return { error: "source Follow must declare exactly one meter-aware bar (duration unit Bars, value_milliunits 1000)" };
   }
-  if (follow.hold_first_destination_measure !== true) {
-    return { error: "source Follow hold_first_destination_measure must be true" };
+  if (follow.destination_start_mode !== "wait_for_pedal") {
+    return { error: "source Follow destination_start_mode must be wait_for_pedal; auto-start play is not allowed" };
+  }
+  if (follow.hold_first_destination_measure !== false) {
+    return { error: "source Follow hold_first_destination_measure must be false when destination_start_mode is wait_for_pedal" };
   }
   const finiteKeys = forbiddenFiniteLoopFields(follow);
   if (finiteKeys.length > 0) {
-    return { error: `destination hold Follow contains finite repeat-count field(s): ${finiteKeys.join(", ")}` };
+    return { error: `destination pedal-wait Follow contains finite repeat-count field(s): ${finiteKeys.join(", ")}` };
   }
   const repeatMode = readOwn(follow, "repeatMode", "repeat_mode");
   if (repeatMode !== undefined && repeatMode !== "indefinite") {
-    return { error: "destination first-measure hold repeatMode must be indefinite" };
+    return { error: "destination pedal-wait repeatMode must be indefinite" };
   }
   const releaseTrigger = readOwn(follow, "releaseTrigger", "release_trigger");
   if (releaseTrigger !== undefined && releaseTrigger !== SHOW_RELEASE_TRIGGER) {
-    return { error: "destination first-measure hold releaseTrigger must be F13" };
+    return { error: "destination pedal-wait releaseTrigger must be F13" };
   }
   const automaticRelease = readOwn(follow, "automaticRelease", "automatic_release");
   if (automaticRelease !== undefined && automaticRelease !== false) {
-    return { error: "destination first-measure hold automaticRelease must be false" };
+    return { error: "destination pedal-wait automaticRelease must be false" };
   }
-  return { follow, detail: "enabled non-Cut Follow declares one source meter-aware bar and the destination hold flag" };
+  return { follow, detail: "enabled non-Cut Follow declares one source meter-aware bar and wait_for_pedal destination start" };
 }

@@ -184,6 +184,159 @@ const sliceAppHandler = (start, end) => {
   assert(from >= 0 && to > from, `could not isolate ${start}`);
   return app.slice(from, to);
 };
+
+const newProjectHandler = sliceAppHandler(
+  "let newProjectInFlight = false;",
+  "const ensureProjectPublicationMutationAllowed = (",
+);
+assert.match(
+  newProjectHandler,
+  /let newProjectInFlight = false;[\s\S]*?if \(newProjectInFlight\) return;[\s\S]*?newProjectInFlight = true;/s,
+  "New Project must use a single-flight guard before any recovery or dialog work",
+);
+const newProjectRecoveryIndex = newProjectHandler.indexOf(
+  "await resumeForegroundProjectTransactionTerminalRecoveryBeforeMutation();",
+);
+const newProjectAuthorityIndex = newProjectHandler.indexOf(
+  "const authority = captureProjectAuthorityIdentity();",
+);
+const newProjectConfirmIndex = newProjectHandler.indexOf(
+  "confirmDiscardProjectChanges(\"create a new project\")",
+);
+const newProjectDispatchIndex = newProjectHandler.indexOf(
+  "invoke<ProjectLoadResult>(\"new_project\"",
+);
+assert(newProjectRecoveryIndex >= 0, "New Project must drain retained terminal recovery");
+assert(
+  newProjectConfirmIndex < newProjectRecoveryIndex
+    && newProjectRecoveryIndex < newProjectAuthorityIndex
+    && newProjectAuthorityIndex < newProjectDispatchIndex,
+  "New Project must confirm before recovery, then capture the post-recovery replacement fence immediately before dispatch",
+);
+assert.match(
+  newProjectHandler,
+  /catch \(error\) \{\s*setMessage\(`New project blocked while recovering the previous project transaction: \$\{String\(error\)\}`\);\s*return;\s*\}/s,
+  "New Project recovery failure must be visible and must stop before replacement dispatch",
+);
+assert.equal(
+  [...newProjectHandler.matchAll(/invoke<ProjectLoadResult>\(\"new_project\"/g)].length,
+  1,
+  "New Project must have one replacement dispatch site",
+);
+assert.match(
+  newProjectHandler,
+  /if \(!await confirmDiscardProjectChanges\(\"create a new project\"\)\) \{[\s\S]*?setMessage\(\"New project canceled\.\"\);[\s\S]*?return;/s,
+  "New Project cancellation must remain a no-dispatch path",
+);
+
+// App.tsx is a JSX/Tauri entrypoint and cannot be imported into this Node
+// checker.  This tiny executable probe binds the source-order assertions
+// above to the safety outcomes at the boundary: cancellation is mutation-free,
+// recovery failure is visible and dispatch-free, authority is captured only
+// after both awaits, and a confirmed request dispatches exactly once.
+const exerciseNewProjectMutationGate = async ({ recover, confirm, capture, dispatch }) => {
+  const events = [];
+  events.push("confirm");
+  if (!await confirm()) return { kind: "cancelled", events };
+  try {
+    await recover(() => events.push("recover"));
+  } catch (error) {
+    events.push("recovery-error");
+    return { kind: "blocked", error, events };
+  }
+  events.push("capture");
+  const authority = capture();
+  events.push("dispatch");
+  await dispatch(authority);
+  return { kind: "dispatched", events };
+};
+
+{
+  let authorityEpoch = 10;
+  let dispatchCount = 0;
+  const result = await exerciseNewProjectMutationGate({
+    confirm: async () => {
+      authorityEpoch = 11;
+      return true;
+    },
+    recover: async (mark) => {
+      mark();
+      authorityEpoch = 12;
+    },
+    capture: () => ({ project_epoch: authorityEpoch }),
+    dispatch: async (authority) => {
+      assert.equal(authority.project_epoch, 12, "replacement uses authority captured after both confirmation and recovery");
+      dispatchCount += 1;
+    },
+  });
+  assert.deepEqual(result.events, ["confirm", "recover", "capture", "dispatch"], "confirmed New Project ordering");
+  assert.equal(result.kind, "dispatched", "confirmed New Project dispatches");
+  assert.equal(dispatchCount, 1, "confirmed New Project dispatches exactly once");
+}
+
+{
+  let recoveryCount = 0;
+  let captureCount = 0;
+  let dispatchCount = 0;
+  const result = await exerciseNewProjectMutationGate({
+    confirm: async () => false,
+    recover: async () => { recoveryCount += 1; },
+    capture: () => {
+      captureCount += 1;
+      return { project_epoch: 12 };
+    },
+    dispatch: async () => { dispatchCount += 1; },
+  });
+  assert.deepEqual(result.events, ["confirm"], "cancelled New Project stops at confirmation");
+  assert.equal(result.kind, "cancelled", "cancelled New Project reports cancellation");
+  assert.equal(recoveryCount, 0, "cancelled New Project never settles retained recovery");
+  assert.equal(captureCount, 0, "cancelled New Project never captures replacement authority");
+  assert.equal(dispatchCount, 0, "cancelled New Project never dispatches native replacement");
+}
+
+{
+  let captureCount = 0;
+  let dispatchCount = 0;
+  const recoveryError = new Error("terminal recovery remains held");
+  const result = await exerciseNewProjectMutationGate({
+    confirm: async () => true,
+    recover: async () => { throw recoveryError; },
+    capture: () => {
+      captureCount += 1;
+      return { project_epoch: 12 };
+    },
+    dispatch: async () => { dispatchCount += 1; },
+  });
+  assert.deepEqual(result.events, ["confirm", "recovery-error"], "confirmed request reports recovery failure before capture and dispatch");
+  assert.equal(result.kind, "blocked", "failed recovery blocks New Project");
+  assert.strictEqual(result.error, recoveryError, "failed recovery remains visible as the original error");
+  assert.equal(captureCount, 0, "failed recovery never captures replacement authority");
+  assert.equal(dispatchCount, 0, "failed recovery never dispatches native replacement");
+}
+
+{
+  let inFlight = false;
+  let dispatchCount = 0;
+  let releaseConfirmation;
+  const confirmationGate = new Promise((resolve) => { releaseConfirmation = resolve; });
+  const guardedNewProject = async () => {
+    if (inFlight) return "ignored";
+    inFlight = true;
+    try {
+      await confirmationGate;
+      dispatchCount += 1;
+      return "dispatched";
+    } finally {
+      inFlight = false;
+    }
+  };
+  const first = guardedNewProject();
+  const second = guardedNewProject();
+  releaseConfirmation();
+  const results = await Promise.all([first, second]);
+  assert.deepEqual(results.sort(), ["dispatched", "ignored"], "concurrent New Project requests are single-flight");
+  assert.equal(dispatchCount, 1, "concurrent New Project requests issue one native replacement");
+}
 const createCueListHandler = sliceAppHandler(
   "const createCueList = async",
   "const createSceneInCueList = createSceneBankSceneCreationController(",

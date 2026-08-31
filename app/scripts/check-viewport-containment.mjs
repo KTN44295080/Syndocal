@@ -28430,7 +28430,7 @@ async function measureTimelineSlimVisual(client) {
         height: bodyRect.height,
         width: bodyRect.width,
         identityFill: sameRgb(bodyFill, identity),
-        solidIdentityBand: sameRgb(bodyFill, bandFill),
+        contrastingIdentityBand: Boolean(band && isRendered(band) && !sameRgb(bodyFill, bandFill)),
         fillOpacity: Number.parseFloat(bodyStyle.fillOpacity) || 1,
         opaqueBlackBorder: Boolean(
           stroke && stroke.r <= 36 && stroke.g <= 36 && stroke.b <= 36 && stroke.a >= 0.85 &&
@@ -28488,7 +28488,7 @@ async function measureTimelineSlimVisual(client) {
       minBlockHeight,
       thickBlockCount: blockRows.filter((row) => row.height >= 26).length,
       identityFillCount: blockRows.filter((row) => row.identityFill && row.fillOpacity >= 0.9).length,
-      solidIdentityBandCount: blockRows.filter((row) => row.solidIdentityBand).length,
+      contrastingIdentityBandCount: blockRows.filter((row) => row.contrastingIdentityBand).length,
       opaqueBlackBorderCount: blockRows.filter((row) => row.opaqueBlackBorder).length,
       twoLineEligibleCount: eligibleTwoLineRows.length,
       twoLineBlockCount: eligibleTwoLineRows.filter((row) => row.twoLine).length,
@@ -29294,15 +29294,16 @@ async function exerciseTimelineSourceShelfContextSwitch(client) {
 }
 
 async function showTimelineSourceShelfMedia(client) {
-  await client.evaluate(`(() => {
+  const categoryShown = await client.evaluate(`(() => {
     const target = document.querySelector('[data-timeline-source-shelf-category="media"]');
     if (!(target instanceof HTMLButtonElement)) return false;
     target.click();
     return true;
   })()`);
+  if (!categoryShown) return false;
   await sleep(80);
-  await client.evaluate(`(async () => {
-    const placement = document.querySelector('[data-timeline-source-shelf] [data-timeline-source-click-placement="Media"]');
+  const prepared = await client.evaluate(`(async () => {
+    const placement = document.querySelector('[data-timeline-source-shelf] [data-timeline-source-click-placement*="Video"]');
     const summary = placement?.querySelector(':scope > summary');
     const targets = placement ? [...placement.querySelectorAll('.timelineExternalSourceTarget select')] : [];
     if (!(placement instanceof HTMLDetailsElement) || !(summary instanceof HTMLElement) ||
@@ -29329,6 +29330,7 @@ async function showTimelineSourceShelfMedia(client) {
     return !placement.open && targets.every((target) => /^\\d+$/.test(target.value));
   })()`);
   await sleep(80);
+  return prepared;
 }
 
 async function readTimelineInitialShelfState(client) {
@@ -29355,7 +29357,7 @@ async function prepareTimelineSourceShelfMediaPlacement(client) {
     }
     category.click();
     await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
-    const placement = shelf?.querySelector('[data-timeline-source-click-placement="Media"]');
+    const placement = shelf?.querySelector('[data-timeline-source-click-placement*="Video"]');
     const summary = placement?.querySelector(':scope > summary');
     const targets = placement
       ? [...placement.querySelectorAll('.timelineExternalSourceTarget select')]
@@ -29395,7 +29397,10 @@ async function prepareTimelineSourceShelfMediaPlacement(client) {
     };
     const videoOption = chooseDifferent(videoTarget);
     const audioOption = chooseDifferent(audioTarget);
-    if (!closedBeforeOpen || !summaryVisible || !opened || !targetsVisible || !videoOption || !audioOption) {
+    const videoDropOption = videoOption
+      ? numericOptions(videoTarget).find((option) => option.value !== videoOption.value) ?? null
+      : null;
+    if (!closedBeforeOpen || !summaryVisible || !opened || !targetsVisible || !videoOption || !videoDropOption || !audioOption) {
       return { prepared: false, reason: 'media-disclosure-did-not-open-with-two-lanes' };
     }
     const selectVisibleOption = (target, option) => {
@@ -29436,7 +29441,7 @@ async function prepareTimelineSourceShelfMediaPlacement(client) {
     source.scrollIntoView({ block: 'nearest', inline: 'nearest' });
     await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
     const sourceRect = source.getBoundingClientRect();
-    const targetLayerId = selectedAfterReopen.video;
+    const targetLayerId = videoDropOption.value;
     const targetLane = document.querySelector(
       '.timelineOverview .timelineLayerRowBackground[data-timeline-layer-id="'
         + CSS.escape(targetLayerId) + '"]',
@@ -29464,6 +29469,7 @@ async function prepareTimelineSourceShelfMediaPlacement(client) {
       selectedWhileClosed,
       selectedAfterReopen,
       videoLayerId: Number(selectedAfterReopen.video),
+      dragVideoLayerId: Number(videoDropOption.value),
       audioLayerId: Number(selectedAfterReopen.audio),
       mediaAssetId: Number(card.getAttribute('data-timeline-source-media-id')),
       mediaAssetLabel: (card.querySelector('.timelineExternalSourceCardTitle strong')?.textContent ?? '').trim(),
@@ -29506,11 +29512,11 @@ async function readTimelineSourceShelfMediaDragProbe(client) {
 
 const timelineSourceShelfMediaRequest = (capture) => capture?.mediaArgs?.request ?? null;
 
-const timelineSourceShelfMediaRequestMatches = (request, prepared) => Boolean(
+const timelineSourceShelfMediaRequestMatches = (request, prepared, expectedVideoLayerId = prepared.videoLayerId) => Boolean(
   request &&
   request.kind === 'insert_media' &&
   request.media_asset_id === prepared.mediaAssetId &&
-  request.video_layer_id === prepared.videoLayerId &&
+  request.video_layer_id === expectedVideoLayerId &&
   request.audio_layer_id === prepared.audioLayerId &&
   Number.isFinite(request.start_ms),
 );
@@ -29610,7 +29616,7 @@ async function exerciseTimelineSourceShelfMediaDragPlacement(client) {
       payload?.media_asset_id === prepared.mediaAssetId &&
       payload?.video_layer_id === prepared.videoLayerId &&
       payload?.audio_layer_id === prepared.audioLayerId &&
-      timelineSourceShelfMediaRequestMatches(request, prepared),
+      timelineSourceShelfMediaRequestMatches(request, prepared, prepared.dragVideoLayerId),
     ),
     prepared,
     dragProbe,
@@ -30656,7 +30662,7 @@ async function runTimelineSlimViewport(client, viewport, recycleClient = null) {
   const initialShelfState = await readTimelineInitialShelfState(client);
   const sourceShelfSceneCards = await measureTimelineSourceShelfSceneCards(client);
   const visual = await measureTimelineSlimVisual(client);
-  await showTimelineSourceShelfMedia(client);
+  const sourceShelfMediaDisclosurePrepared = await showTimelineSourceShelfMedia(client);
   const sourceShelf = await measureTimelineSourceShelf(client);
   const sourceShelfFocus = await focusTimelineSourceShelf(client);
   const sourceShelfContextSwitch = await exerciseTimelineSourceShelfContextSwitch(client);
@@ -30759,10 +30765,10 @@ async function runTimelineSlimViewport(client, viewport, recycleClient = null) {
       implicitVisual.gutterKindCount === 2],
     ['timelineSlimBlocksAreThick', () =>
       visual.blockCount > 0 && visual.thickBlockCount === visual.blockCount && visual.minBlockHeight >= 26],
-    ['timelineSlimBlocksUseSolidIdentityFill', () =>
+    ['timelineSlimBlocksUseIdentityBodyAndContrastingBand', () =>
       visual.blockCount > 0 &&
       visual.identityFillCount === visual.blockCount &&
-      visual.solidIdentityBandCount === visual.blockCount],
+      visual.contrastingIdentityBandCount === visual.blockCount],
     ['timelineSlimBlocksUseOpaqueBlackBorder', () =>
       visual.blockCount > 0 && visual.opaqueBlackBorderCount === visual.blockCount],
     ['timelineSlimBlocksShowNameAndDurationOnTwoLines', () =>
@@ -30773,15 +30779,17 @@ async function runTimelineSlimViewport(client, viewport, recycleClient = null) {
       implicitVisual.blockCount > 0 &&
       implicitVisual.thickBlockCount === implicitVisual.blockCount &&
       implicitVisual.identityFillCount === implicitVisual.blockCount &&
+      implicitVisual.contrastingIdentityBandCount === implicitVisual.blockCount &&
       implicitVisual.opaqueBlackBorderCount === implicitVisual.blockCount &&
       implicitVisual.twoLineBlockCount === implicitVisual.twoLineEligibleCount],
-    ['timelineSlimGridLinesStayDimmed', () =>
+    ['timelineSlimGridUsesReadableMinorMajorHierarchy', () =>
       visual.minorGridLineCount > 0 &&
       visual.majorGridLineCount > 0 &&
       visual.dividerLineCount > 0 &&
-      visual.maxMinorGridInk <= 0.085 &&
-      visual.maxMajorGridInk <= 0.14 &&
-      visual.maxDividerInk <= 0.09],
+      visual.maxMinorGridInk >= 0.09 && visual.maxMinorGridInk <= 0.13 &&
+      visual.maxMajorGridInk > visual.maxMinorGridInk * 2.5 &&
+      visual.maxMajorGridInk <= 0.46 &&
+      visual.maxDividerInk < visual.maxMinorGridInk],
     ['timelineSlimKeepsLightingMatrixOutOfTimelineDomain', () =>
       visual.gutterCount > 0 && sourceShelf.present],
     ['timelineSlimUsesShelfInsteadOfCrossDomainMatrixDrag', () =>
@@ -30808,6 +30816,7 @@ async function runTimelineSlimViewport(client, viewport, recycleClient = null) {
       sourceShelfSceneCards.kinds.every((kind) => ['STATIC', 'FX', 'TIMELINE'].includes(kind)) &&
       (!sourceShelfSceneCards.fxFixtureSupplied || sourceShelfSceneCards.equalHeights)],
     ['timelineSourceShelfExposesExactSourceAndTargetControls', () =>
+      sourceShelfMediaDisclosurePrepared === true &&
       sourceShelf.categoryButtonCount === 2 && sourceShelf.filterCount === 3 &&
       initialShelfState?.sourceKinds.includes('Lighting') &&
       sourceShelf.sourceKinds.includes('Video') && sourceShelf.sourceKinds.includes('Audio') &&
@@ -30842,6 +30851,7 @@ async function runTimelineSlimViewport(client, viewport, recycleClient = null) {
     visual,
     implicitVisual,
     sourceShelf,
+    sourceShelfMediaDisclosurePrepared,
     sourceShelfSceneCards,
     sourceShelfScenePlacement,
     sourceShelfSceneDragPlacement,

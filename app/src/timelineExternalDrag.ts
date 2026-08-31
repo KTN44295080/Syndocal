@@ -16,9 +16,10 @@ export type TimelineExternalDragPayload =
       media_asset_id: number;
       lane_kind: "Video" | "Audio";
       /**
-       * Shelf-selected targets are part of a media placement's intent.  They
-       * are carried through browser DnD but revalidated from the current
-       * authored Timeline immediately before the backend command.
+       * A click may carry an explicit target for an ambiguous lane. During
+       * DnD the primary ID is advisory: the exact Timeline lane under the
+       * pointer is authoritative, while any linked companion is revalidated
+       * from the current authored Timeline before the backend command.
        */
       video_layer_id: number | null;
       audio_layer_id: number | null;

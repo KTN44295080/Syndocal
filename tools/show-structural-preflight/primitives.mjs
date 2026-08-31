@@ -45,7 +45,7 @@ const REQUIRED_CHECK_IDS = Object.freeze([
   "follow",
   "source_measure_transition",
   "destination_first_measure",
-  "destination_hold",
+  "destination_pedal_wait",
   "source_loop",
 ]);
 

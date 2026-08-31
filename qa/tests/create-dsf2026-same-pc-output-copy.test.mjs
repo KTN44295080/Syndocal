@@ -26,7 +26,7 @@ const sourceHash = createHash("sha256").update(sourceBytes).digest("hex");
 assert.equal(basename(SAME_PC_SOURCE_PATH), SAME_PC_SOURCE_FILENAME);
 assert.equal(sourceBytes.byteLength, SAME_PC_SOURCE_BYTE_SIZE);
 assert.equal(sourceHash, SAME_PC_SOURCE_SHA256);
-assert.equal(SAME_PC_OUTPUT_PATH.endsWith("DSF2026-show-alpha10-same-pc-output.sdc"), true);
+assert.equal(SAME_PC_OUTPUT_PATH.endsWith("DSF2026-show-alpha11-same-pc-output.sdc"), true);
 
 function assertRejected(action, pattern) {
   return assert.rejects(action, (error) => {
@@ -91,7 +91,7 @@ assert.deepEqual(assertApprovedSamePcSource(SAME_PC_SOURCE_PATH, sourceBytes, so
 
 // Source identity is path-, byte-size-, hash-, and schema-bound.
 {
-  assertThrows(() => authorSamePcOutputProject(sourceProject, { sourcePath: "C:\\elsewhere\\alpha9.sdc", sourceBytes }), /exact approved alpha9 path/u);
+  assertThrows(() => authorSamePcOutputProject(sourceProject, { sourcePath: "C:\\elsewhere\\alpha9.sdc", sourceBytes }), /exact approved alpha10 path/u);
   const alteredBytes = Buffer.from(sourceBytes);
   alteredBytes[alteredBytes.length - 2] ^= 1;
   assertThrows(() => authorSamePcOutputProject(sourceProject, { sourcePath: SAME_PC_SOURCE_PATH, sourceBytes: alteredBytes }), /SHA-256|byte length/u);
@@ -276,4 +276,4 @@ assert.deepEqual(assertApprovedSamePcSource(SAME_PC_SOURCE_PATH, sourceBytes, so
   }
 }
 
-console.log("DSF2026 same-PC output copy: strict alpha9 identity, ArtNet route, exact Spout pair, allowlist, preservation, and exclusive-write tests passed");
+console.log("DSF2026 same-PC output copy: strict alpha10 identity, ArtNet route, exact Spout pair, allowlist, preservation, and exclusive-write tests passed");
