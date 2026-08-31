@@ -37,8 +37,25 @@ natural transport completion at `04:47`-`04:49 JST` with S0 held. After the
 transport returned to stopped/play-enabled, PID `62920` remained responsive
 and the I/O surface still showed the Open-DMX worker running with the latest
 S0 zero frame queued; stderr added no serial/output fault. This closes bounded
-native Timeline/USB-worker coexistence only. Live DJ-peer acceptance of the
-separate `人生オーバー` -> `惑う星` Follow/pedal boundary remains external.
+native Timeline/USB-worker coexistence.
+
+The same alpha.51 native process then selected the authored `人生オーバー`
+Timeline (`219,506 ms`). Its authored `136,941`-`138,353 ms` loop produced an
+observed wrap from approximately `138,318 ms` back to `137,662 ms`. After a
+direct seek beyond the loop, natural completion stopped at exact
+`219,506 / 219,506 ms` and remained stable for more than five seconds with
+Follow `保持`, exact route `人生オーバー -> 惑う星`, start reason
+`自然再生境界`, and no automatic `惑う星` playback. This closes native source
+loop plus natural completion-to-pedal-hold behavior. Real Pedal 1 start remains
+external because the DJ peer is absent under `trust_network_absent`.
+
+Post-Follow Setup > I/O still reported local Open-DMX under S0 at `250000`
+baud, worker running, and latest zero frame queued. At `05:09:48 JST`, exact
+PID `62920` was responsive, Windows reported the bound FTDI `COM3` PnP device
+`OK`, and stderr had no new serial/output fault. This extends bounded alpha.51
+S0 worker/Timeline coexistence from before `04:35:10 JST` to greater than
+`34m38s`. Electrical waveform and fixture receipt remain unclaimed; F3200A
+stays all-zero-only.
 
 ## 2026-08-31 Timeline UX/Undo bounded pause checkpoint
 

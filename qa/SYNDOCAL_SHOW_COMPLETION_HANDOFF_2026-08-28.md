@@ -6,8 +6,9 @@ This is the concise authoritative resume note for the final show-critical tranch
 
 ## 2026-09-01 alpha.51 Timeline authority / pedal-wait native and S0 checkpoint
 
-Current source is dirty `codex/syndocal-v1.2` based on pushed/upstream-equal
-HEAD `f0247c1e5d7988e1b4b628e575c6d4443c0a243d`; product metadata is
+The source was clean and pushed/upstream-equal on `codex/syndocal-v1.2` at
+HEAD `4f67dbf108dc17825979731435f844a5cb57311c` before this evidence-only
+checkpoint update; product metadata is
 `1.2.0-alpha.51`. The exact Community MSVC `14.44.35207` no-bundle build passed
 in `3m39s` with the pinned Community linker first in `where.exe` and
 first-party Rust warnings `0`. The resulting artifact is
@@ -56,8 +57,30 @@ transport completion while S0 remained latched. The transport returned to a
 play-enabled/stopped state; PID `62920` remained responsive; the post-run I/O
 surface still reported the Open-DMX worker running with the latest S0 zero
 frame queued; stderr added no serial/output fault. This proves bounded native
-Timeline execution does not interrupt the S0 USB worker. It is not a live
-DJ-peer proof of the separate `人生オーバー` -> `惑う星` Follow/pedal boundary.
+Timeline execution does not interrupt the S0 USB worker.
+
+At approximately `05:00`-`05:09 JST`, the same alpha.51 native process selected
+the authored `人生オーバー` Timeline (`219,506 ms`), armed its authored
+`136,941`-`138,353 ms` loop, and observed a real wrap from approximately
+`138,318 ms` back into the `137,662 ms` loop interval. The playhead was then
+seeked beyond that loop for the separate natural-boundary proof. Natural
+completion stopped at exact `219,506 / 219,506 ms`; for more than five seconds
+the active Timeline remained `人生オーバー`, Follow remained `保持`, the
+correlated route remained `人生オーバー -> 惑う星`, and the start reason was
+`自然再生境界`. `惑う星` did not auto-start. This closes the native source
+loop and natural completion-to-pedal-hold behavior. A real Pedal 1 receipt that
+starts `惑う星` remains external because the DJ peer is absent under
+`trust_network_absent`.
+
+Immediately after that proof, Setup > I/O still reported exact
+`Enttec Open DMX · このPC`, `S0アーム済み`, `250000 baud`, the alpha.51
+Open-DMX worker running, and the latest S0 zero frame queued. At
+`05:09:48 JST`, Windows still reported exact `USB Serial Port (COM3)` / FTDI /
+PnP status `OK`, PID `62920` was responsive, and stderr contained no new
+serial/output fault. Measured from the first successful observation before
+`04:35:10 JST`, this extends the bounded alpha.51 worker/Timeline coexistence
+observation to greater than `34m38s`. It remains queue/worker evidence, not an
+electrical waveform or fixture-response claim; F3200A remains all-zero-only.
 
 ## 2026-09-01 alpha.50 USB-DMX continuous S0 checkpoint
 

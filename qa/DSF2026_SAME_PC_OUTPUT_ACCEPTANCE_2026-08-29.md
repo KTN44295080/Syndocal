@@ -3,8 +3,9 @@
 ## 2026-09-01 alpha.51 Timeline authority / pedal-wait native and S0 checkpoint
 
 Product metadata is synchronized at `1.2.0-alpha.51` on
-`codex/syndocal-v1.2`, based on pushed HEAD
-`f0247c1e5d7988e1b4b628e575c6d4443c0a243d`. The exact Community MSVC
+`codex/syndocal-v1.2`, which was clean and pushed/upstream-equal at
+`4f67dbf108dc17825979731435f844a5cb57311c` before this evidence-only update.
+The exact Community MSVC
 `14.44.35207` no-bundle build passed in `3m39s`; the pinned Community linker
 was first in `where.exe` and first-party Rust warnings were `0`. The artifact
 is `C:\Users\kouty\Documents\KDMX\target\release\syndocal.exe`,
@@ -53,8 +54,27 @@ while S0 remained latched. The transport returned to stopped/play-enabled,
 PID `62920` remained responsive, the post-run I/O surface still reported the
 Open-DMX worker running with the latest S0 zero frame queued, and stderr added
 no serial/output fault. This is bounded native Timeline/USB-worker coexistence
-evidence, not live DJ-peer acceptance of the `人生オーバー` -> `惑う星`
-Follow/pedal boundary.
+evidence.
+
+The authored `人生オーバー` Timeline (`219,506 ms`) was then selected in the
+same native alpha.51 process. Its authored `136,941`-`138,353 ms` loop wrapped
+the running playhead from approximately `138,318 ms` back into the loop at
+`137,662 ms`. After a direct seek beyond the loop, natural completion stopped
+at exact `219,506 / 219,506 ms`. The state then remained stable for more than
+five seconds with active Timeline `人生オーバー`, Follow `保持`, correlated
+route `人生オーバー -> 惑う星`, and start reason `自然再生境界`; `惑う星`
+did not auto-start. This closes the native loop and natural
+completion-to-pedal-hold boundary. Actual Pedal 1 start remains externally
+blocked by the absent DJ peer (`trust_network_absent`).
+
+The post-Follow Setup > I/O surface still reported the exact local Open-DMX
+route, S0 armed, `250000 baud`, the worker running, and the latest S0 zero frame
+queued. At `05:09:48 JST`, exact PID `62920` remained responsive, Windows
+reported `USB Serial Port (COM3)` / FTDI / PnP status `OK`, and stderr had no
+new serial/output fault. This extends the bounded alpha.51 S0 coexistence
+observation from before `04:35:10 JST` to greater than `34m38s`. It does not
+claim electrical waveform or fixture receipt, and the attached F3200A remains
+all-512-zero-only.
 
 ## 2026-09-01 alpha.50 USB-DMX continuous S0 checkpoint
 
