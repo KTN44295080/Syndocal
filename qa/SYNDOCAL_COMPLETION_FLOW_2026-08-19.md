@@ -32,6 +32,14 @@ and the latest zero frame remained queued from the first successful observation
 before `04:35:10 JST` through `04:40:07 JST` (greater than `4m57s`), with no
 serial/output fault added to stderr.
 
+The native Reference Audio + two Video Switch Timeline also ran from start to
+natural transport completion at `04:47`-`04:49 JST` with S0 held. After the
+transport returned to stopped/play-enabled, PID `62920` remained responsive
+and the I/O surface still showed the Open-DMX worker running with the latest
+S0 zero frame queued; stderr added no serial/output fault. This closes bounded
+native Timeline/USB-worker coexistence only. Live DJ-peer acceptance of the
+separate `人生オーバー` -> `惑う星` Follow/pedal boundary remains external.
+
 ## 2026-08-31 Timeline UX/Undo bounded pause checkpoint
 
 This tranche closes a bounded part of L-TL7/H4; it does not mark either broad

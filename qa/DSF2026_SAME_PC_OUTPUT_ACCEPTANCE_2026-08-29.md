@@ -47,6 +47,15 @@ through `04:40:07 JST`, exact PID `62920` stayed responsive, the latest zero
 frame remained queued, and stderr contained no serial/output fault; this is a
 bounded greater-than-`4m57s` alpha.51 S0 continuity observation.
 
+The current native Reference Audio + two Video Switch Timeline was then run
+from the start through natural transport completion at `04:47`-`04:49 JST`
+while S0 remained latched. The transport returned to stopped/play-enabled,
+PID `62920` remained responsive, the post-run I/O surface still reported the
+Open-DMX worker running with the latest S0 zero frame queued, and stderr added
+no serial/output fault. This is bounded native Timeline/USB-worker coexistence
+evidence, not live DJ-peer acceptance of the `人生オーバー` -> `惑う星`
+Follow/pedal boundary.
+
 ## 2026-09-01 alpha.50 USB-DMX continuous S0 checkpoint
 
 The exact Community MSVC `14.44.35207` no-bundle build passed with the

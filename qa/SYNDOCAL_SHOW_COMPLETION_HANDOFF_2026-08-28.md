@@ -50,6 +50,15 @@ active with the latest zero frame queued, and stderr added no serial/output
 fault (only unrelated DJ-Link `trust_network_absent`). This is a bounded
 greater-than-`4m57s` alpha.51 S0 continuity observation.
 
+At `04:47`-`04:49 JST`, the reopened native project also ran its current
+Reference Audio + two Video Switch Timeline from the start through natural
+transport completion while S0 remained latched. The transport returned to a
+play-enabled/stopped state; PID `62920` remained responsive; the post-run I/O
+surface still reported the Open-DMX worker running with the latest S0 zero
+frame queued; stderr added no serial/output fault. This proves bounded native
+Timeline execution does not interrupt the S0 USB worker. It is not a live
+DJ-peer proof of the separate `人生オーバー` -> `惑う星` Follow/pedal boundary.
+
 ## 2026-09-01 alpha.50 USB-DMX continuous S0 checkpoint
 
 The current artifact is
