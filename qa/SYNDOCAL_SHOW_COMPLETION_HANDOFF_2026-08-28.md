@@ -41,7 +41,11 @@ receipt remain pending and must be captured separately from source tests.
 Focused evidence: serial code `23/23`, protocol `205/205`, TypeScript, fmt,
 diff, and `check:release` pass. The only reported frontend notice is the
 standard Vite chunk-size warning (`>500k`); no first-party warning was added.
-No commit or push has been made for this checkpoint.
+The alpha.49 implementation and QA checkpoint was committed as
+`f7e412c284e6222f85c57f81c7ebf52d7e8995a9` and pushed to
+`origin/codex/syndocal-v1.2`. This handoff update is the documentation-only
+successor at the current branch tip; verify `HEAD == origin/codex/syndocal-v1.2`
+before resuming.
 
 Workspace cleanup was intentionally not run at this checkpoint. The bounded
 size inventory of the large shared `target` tree did not complete within the
