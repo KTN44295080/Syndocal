@@ -1,6 +1,50 @@
 # DSF2026 same-PC output acceptance — current 2026-09-01
 
-## 2026-09-01 alpha.49 native one-button checkpoint
+## 2026-09-01 alpha.50 USB-DMX continuous S0 checkpoint
+
+The exact Community MSVC `14.44.35207` no-bundle build passed with the
+Community linker first in `where.exe`, the same absolute linker pinned for
+Cargo, and first-party Rust warnings `0`. The artifact is
+`C:\Users\kouty\Documents\KDMX\target\release\syndocal.exe`,
+Product/FileVersion `1.2.0-alpha.50`, `62,416,384` bytes, SHA-256
+`C73065B089D7AE7672213FB2334882A033AA5B5936EF23A15D4B40F4AF8BEE84`.
+Exactly one responsive maximized Syndocal window was verified (PID `22100`).
+
+Alpha.49 later faulted after its approximately-five-minute observation with
+`Open DMX worker stopped: failed to write whole buffer`; its earlier healthy
+statement is historical only and is not current continuous-health evidence.
+The root cause was the Open-DMX `2 ms` Windows COM write timeout: shorter than
+one `513`-byte, `250000` baud, `8N2` frame (`22.764 ms`) and therefore able to
+return a zero or partial write under FTDI backpressure. Alpha.50 centralizes a
+`100 ms` Open-DMX write timeout for both normal and verified-direct opens;
+Enttec USB Pro retains its separate `2 ms` timeout. A zero-byte write remains a
+terminal `WriteZero`: S0 stays latched, the worker is not retained or retried,
+and later live bytes are rejected.
+
+The same authored project (`1,114,510` bytes, SHA-256
+`5926A36FDD8E0251A2B67904A93490D3E3B3F54E323E24D3FAC26B31E7546F46`)
+was recovered in alpha.50. The one-button `Prepare show DMX` flow completed
+`Both`, exact machine-local `COM3` binding, Art-Net loopback, S0, and Open-DMX
+arm. The selected and confirmed PnP instance was
+`FTDIBUS\VID_0403+PID_6001+A&A5D719&0&8\0000`. Backend activation was retained
+only after the initial all-zero BREAK/MAB/`write_all`/`flush` receipt.
+
+From the `2026-09-01 02:45:22 JST` observation through
+`2026-09-01 02:55:36 JST` (`10 min 14 s`), the exact alpha.50 process remained
+responsive and the UI continuously ended at `S0 armed`, Open-DMX worker
+active, latest zero frame queued, and no worker fault. Stderr contained only
+the unrelated DJ-Link `trust_network_absent` line. This passes the bounded
+software-worker continuity checkpoint under S0. It does not prove an
+electrical waveform, fixture receipt, a nonzero frame, or the F3200A visual
+result; all 512 physical channels remained in the all-zero-only boundary.
+
+Focused evidence passed: IO serial `25/25`, Engine show-serial `23/23`,
+Syndocal show-serial `5/5`, release metadata, formatting, diff, and the native
+no-bundle build. The standard Vite `>500 kB` chunk notice is the only frontend
+build notice; first-party Rust warnings are `0`. Independent read-only review
+reported GO with no P0/P1 finding.
+
+## Historical 2026-09-01 alpha.49 native one-button checkpoint
 
 The exact Community MSVC `14.44.35207` no-bundle build passed with
 first-party Rust warnings `0`; the Community linker was first in `where.exe`
@@ -18,9 +62,10 @@ The project is
 The one-button flow completed all four stages: `Both` role, exact `COM3` PnP
 binding, Art-Net `127.0.0.1:6454` / wire Universe `0` enable, and S0 plus
 Open-DMX arm. Backend activation acknowledged only after the initial physical
-all-zero BREAK/MAB/`write_all`/`flush` transaction. The worker remained active
-with S0 for approximately five minutes without a fault; the only unrelated
-stderr was DJ-Link `trust_network_absent`. This proves the guarded runtime
+all-zero BREAK/MAB/`write_all`/`flush` transaction. Alpha.49 recorded an
+approximately-five-minute healthy observation before the later terminal
+WriteZero. That interval is historical only and was superseded by alpha.50;
+it is not current continuous-health evidence. It proved the initial guarded
 transaction, not an electrical waveform or fixture visual result.
 
 | Surface | Alpha.49 observation | Acceptance boundary |
@@ -112,12 +157,15 @@ are intermediate observations, not electrical wire or fixture proof:
 
 - [x] Explicitly select and confirm the venue USB-DMX device/protocol on the
       show PC: `COM3`, PnP instance
-      `FTDIBUS\VID_0403+PID_6001+A&A5D719&0&8\0000`, alpha.49 artifact above.
+      `FTDIBUS\VID_0403+PID_6001+A&A5D719&0&8\0000`, alpha.50 artifact above.
 - [x] Engage S0 and record the initial all-zero USB-DMX frame queue plus the
       enabled Art-Net U0 route. This is not electrical or datagram delivery proof.
 - [x] For the selected Open-DMX worker, observe completion of BREAK, MAB,
       `write_all`, and `flush`; backend activation acknowledged only after this
       transaction. Worker completion is not electrical-wire proof.
+- [x] Keep the alpha.50 worker active under S0 for `10 min 14 s` with no
+      worker fault or repeat of the alpha.49 WriteZero. This is bounded
+      software-worker continuity, not electrical or fixture proof.
 - [ ] Release S0 and observe the same completed internal U0 frame sent to the
       Art-Net mirror and retained by the USB latest-frame worker; retain the
       live-frame receipt separately. This is not a per-engine-tick USB-wire

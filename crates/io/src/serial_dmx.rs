@@ -35,6 +35,14 @@ pub const ENTTEC_OPEN_DMX_FRAME_WIRE_US: u64 = ENTTEC_OPEN_DMX_BREAK_US
 pub const ENTTEC_OPEN_DMX_FRAME_GUARD_US: u64 = 8_000;
 pub const ENTTEC_OPEN_DMX_EXACT_FT232R_DEFAULT_FRAME_PERIOD_US: u64 =
     ENTTEC_OPEN_DMX_FRAME_WIRE_US + ENTTEC_OPEN_DMX_FRAME_GUARD_US;
+// `serialport` maps this timeout to Windows' WriteTotalTimeoutConstant.  A
+// 2ms value is shorter than one 513-byte 250kbaud/8N2 frame (22.764ms) and may
+// therefore complete WriteFile successfully with zero/partial bytes under
+// transient FTDI backpressure. `Write::write_all` then fails with WriteZero.
+// Keep the transaction bounded for shutdown/fault handling, while allowing a
+// complete frame plus the accepted rig's drain guard and driver scheduling
+// margin.
+pub const ENTTEC_OPEN_DMX_WRITE_TIMEOUT_MS: u64 = 100;
 pub const ENTTEC_PRO_START_DELIMITER: u8 = 0x7e;
 pub const ENTTEC_PRO_END_DELIMITER: u8 = 0xe7;
 pub const ENTTEC_PRO_SEND_DMX_LABEL: u8 = 0x06;
@@ -523,11 +531,7 @@ impl EnttecOpenDmxSender {
         if path.trim().is_empty() {
             return Err(SerialDmxError::MissingPort);
         }
-        let port = serialport::new(path, ENTTEC_OPEN_DMX_BAUD_RATE)
-            .data_bits(DataBits::Eight)
-            .parity(Parity::None)
-            .stop_bits(StopBits::Two)
-            .timeout(Duration::from_millis(2))
+        let port = enttec_open_dmx_serial_builder(path)
             .open()
             .map_err(|source| SerialDmxError::Open {
                 path: path.to_string(),
@@ -559,11 +563,7 @@ impl EnttecOpenDmxSender {
             let pre_open = resolve_windows_com_port_binding(identity)?;
             require_windows_binding_matches_identity(identity, &pre_open)?;
             let direct_interface_path = pre_open.device_interface_path.as_str();
-            let port = serialport::new(direct_interface_path, ENTTEC_OPEN_DMX_BAUD_RATE)
-                .data_bits(DataBits::Eight)
-                .parity(Parity::None)
-                .stop_bits(StopBits::Two)
-                .timeout(Duration::from_millis(2))
+            let port = enttec_open_dmx_serial_builder(direct_interface_path)
                 .open_native()
                 .map_err(|source| SerialDmxError::Open {
                     path: identity.port_name.clone(),
@@ -761,6 +761,14 @@ impl EnttecOpenDmxSender {
     }
 }
 
+fn enttec_open_dmx_serial_builder(path: &str) -> serialport::SerialPortBuilder {
+    serialport::new(path, ENTTEC_OPEN_DMX_BAUD_RATE)
+        .data_bits(DataBits::Eight)
+        .parity(Parity::None)
+        .stop_bits(StopBits::Two)
+        .timeout(Duration::from_millis(ENTTEC_OPEN_DMX_WRITE_TIMEOUT_MS))
+}
+
 impl Drop for EnttecOpenDmxSender {
     fn drop(&mut self) {
         self.running.store(false, Ordering::Release);
@@ -793,6 +801,7 @@ pub enum OpenDmxTestSerialOperation {
 struct OpenDmxTestSerialState {
     operations: Vec<OpenDmxTestSerialOperation>,
     fail_next_write: bool,
+    zero_next_write: bool,
 }
 
 /// Debug/test-only `SerialPort` implementation used to exercise the actual
@@ -831,7 +840,7 @@ impl OpenDmxTestSerialPort {
             Self {
                 state: Arc::clone(&state),
                 baud_rate: ENTTEC_OPEN_DMX_BAUD_RATE,
-                timeout: Duration::from_millis(2),
+                timeout: Duration::from_millis(ENTTEC_OPEN_DMX_WRITE_TIMEOUT_MS),
                 before_write_all: Some(Arc::new(before_write_all)),
             },
             OpenDmxTestSerialObservation { state },
@@ -855,6 +864,16 @@ impl OpenDmxTestSerialObservation {
         self.state
             .lock()
             .map(|mut state| state.fail_next_write = true)
+            .map_err(|_| "Open DMX test serial observation was poisoned".to_string())
+    }
+
+    /// Cause the next worker write to report `Ok(0)`, which is the exact
+    /// timeout/backpressure shape that `Write::write_all` promotes to
+    /// `ErrorKind::WriteZero`.
+    pub fn zero_next_write(&self) -> Result<(), String> {
+        self.state
+            .lock()
+            .map(|mut state| state.zero_next_write = true)
             .map_err(|_| "Open DMX test serial observation was poisoned".to_string())
     }
 }
@@ -882,6 +901,10 @@ impl Write for OpenDmxTestSerialPort {
                 io::ErrorKind::BrokenPipe,
                 "injected Open DMX test write failure",
             ));
+        }
+        if state.zero_next_write {
+            state.zero_next_write = false;
+            return Ok(0);
         }
         state
             .operations
@@ -1493,8 +1516,27 @@ pub fn write_enttec_open_dmx_frame(
     precise_wait(Duration::from_micros(ENTTEC_OPEN_DMX_MAB_US));
 
     let payload = build_enttec_open_dmx_payload(frame);
-    port.write_all(&payload)?;
-    port.flush()?;
+    port.write_all(&payload).map_err(|error| {
+        io::Error::new(
+            error.kind(),
+            format!(
+                "Open DMX 513-byte write_all failed with a {} ms COM write timeout (kind={:?}, raw_os_error={:?}): {error}",
+                ENTTEC_OPEN_DMX_WRITE_TIMEOUT_MS,
+                error.kind(),
+                error.raw_os_error()
+            ),
+        )
+    })?;
+    port.flush().map_err(|error| {
+        io::Error::new(
+            error.kind(),
+            format!(
+                "Open DMX transmit-buffer flush failed (kind={:?}, raw_os_error={:?}): {error}",
+                error.kind(),
+                error.raw_os_error()
+            ),
+        )
+    })?;
     Ok(payload.len())
 }
 
@@ -1713,6 +1755,58 @@ mod tests {
         sender
             .shutdown_bounded(Duration::from_secs(1))
             .expect("the fake worker must stop within the bounded interval");
+    }
+
+    #[test]
+    fn open_dmx_write_zero_is_terminal_under_s0_and_never_retries_live_bytes() {
+        let safety_gate = OpenDmxSafetyWriteGate::new();
+        safety_gate
+            .engage_blackout()
+            .expect("the test must establish S0 before the physical write");
+        let (port, observation) = OpenDmxTestSerialPort::new();
+        let mut sender =
+            EnttecOpenDmxSender::from_test_serial_port(port, safety_gate.clone(), || {})
+                .expect("the fake serial port must start the real Open DMX worker");
+        observation
+            .zero_next_write()
+            .expect("the fake must inject one Windows-style zero-byte write");
+        let receipt = sender
+            .zero_write_receipt()
+            .expect("the healthy worker must expose the pre-write generation");
+        sender
+            .send_dmx_frame(&[0u8; 512])
+            .expect("the all-zero frame must enter the worker mailbox");
+
+        let failure = sender
+            .wait_for_zero_frame_physical_write(receipt, Duration::from_secs(1))
+            .expect_err("Ok(0) must stop the worker without claiming physical zero completion");
+        let failure_text = failure.to_string();
+        assert!(failure_text.contains("Open DMX 513-byte write_all failed"));
+        assert!(failure_text.contains("WriteZero"));
+        assert!(safety_gate
+            .blackout_engaged()
+            .expect("the terminal fault must leave S0 observable"));
+
+        let mut live = [0u8; 512];
+        live[0] = 255;
+        let retry = sender
+            .send_dmx_frame(&live)
+            .expect_err("a terminal worker failure must reject every later live frame");
+        assert_eq!(retry.to_string(), failure_text);
+        thread::sleep(Duration::from_millis(25));
+        let operations = observation
+            .operations()
+            .expect("the failed fake serial observation must remain readable");
+        assert!(
+            !operations.iter().any(|operation| matches!(
+                operation,
+                OpenDmxTestSerialOperation::WriteAll(_) | OpenDmxTestSerialOperation::Flush
+            )),
+            "a zero-byte write may not be retried or promoted to a flushed frame"
+        );
+        sender
+            .shutdown_bounded(Duration::from_secs(1))
+            .expect("the terminal worker must join without an unbounded shutdown");
     }
 
     #[test]
@@ -2076,6 +2170,18 @@ mod tests {
         // 176us break + 16us MAB + 513 bytes x 44us (1 start + 8 data + 2 stop).
         assert_eq!(ENTTEC_OPEN_DMX_FRAME_WIRE_US, 176 + 16 + 513 * 44);
         assert_eq!(ENTTEC_OPEN_DMX_FRAME_WIRE_US, 22_764);
+    }
+
+    #[test]
+    fn open_dmx_write_timeout_covers_the_full_frame_and_rig_guard() {
+        let timeout = Duration::from_millis(ENTTEC_OPEN_DMX_WRITE_TIMEOUT_MS);
+        let required = Duration::from_micros(ENTTEC_OPEN_DMX_EXACT_FT232R_DEFAULT_FRAME_PERIOD_US);
+
+        assert!(
+            timeout > required,
+            "the COM write timeout must exceed one complete frame plus the accepted FT232R drain guard"
+        );
+        assert_eq!(timeout, Duration::from_millis(100));
     }
 
     #[test]

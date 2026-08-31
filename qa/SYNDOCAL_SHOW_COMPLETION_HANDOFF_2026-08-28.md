@@ -4,7 +4,47 @@ Status date: 2026-09-01 JST
 
 This is the concise authoritative resume note for the final show-critical tranche. It supersedes chat-only status, but it does not supersede the detailed acceptance documents named below.
 
-## 2026-09-01 alpha.49 native one-button / output checkpoint
+## 2026-09-01 alpha.50 USB-DMX continuous S0 checkpoint
+
+The current artifact is
+`C:\Users\kouty\Documents\KDMX\target\release\syndocal.exe`,
+Product/FileVersion `1.2.0-alpha.50`, `62,416,384` bytes, SHA-256
+`C73065B089D7AE7672213FB2334882A033AA5B5936EF23A15D4B40F4AF8BEE84`.
+The exact Community MSVC `14.44.35207` no-bundle build passed with the pinned
+Community linker first in `where.exe` and first-party Rust warnings `0`.
+Exactly one responsive maximized window was verified (PID `22100`).
+
+Alpha.49 later stopped with `failed to write whole buffer`, so its earlier
+approximately-five-minute healthy statement is historical only. Alpha.50
+replaces the too-short Open-DMX `2 ms` Windows COM write timeout with one
+centralized `100 ms` builder used by both the normal and verified-direct
+Open-DMX opens. The separate Enttec USB Pro timeout remains `2 ms`. A zero or
+partial write is still terminal and fail-closed: no retry, S0 remains latched,
+and later live frames are rejected.
+
+The saved show project remained `1,114,510` bytes / SHA-256
+`5926A36FDD8E0251A2B67904A93490D3E3B3F54E323E24D3FAC26B31E7546F46`.
+The one-button `Prepare show DMX` flow completed `Both`, exact `COM3` machine
+binding, Art-Net loopback, S0, and Open-DMX arm against PnP instance
+`FTDIBUS\VID_0403+PID_6001+A&A5D719&0&8\0000`. Backend activation was retained
+only after its initial all-zero BREAK/MAB/`write_all`/`flush` receipt.
+
+From `2026-09-01 02:45:22 JST` through `02:55:36 JST` (`10 min 14 s`), the
+exact process remained responsive; the final authoritative UI surface showed
+S0 armed, the Open-DMX worker active, its latest zero frame queued, and no
+worker fault. Stderr contained only unrelated DJ-Link
+`trust_network_absent`. This closes the bounded software-worker continuity
+checkpoint under S0. It does not close USB electrical waveform, F3200A
+receipt/visual response, nonzero output, Art-Net datagram, Unity/Spout pixels,
+MiraBox, production DJ-Link peer, Timeline Follow/Pedal 1, or three-display
+pixel-content acceptance. The attached F3200A remains all-512-zero-only.
+
+Focused gates passed: IO serial `25/25`, Engine show-serial `23/23`, Syndocal
+show-serial `5/5`, release metadata, formatting, diff, and native no-bundle
+build. First-party Rust warnings are `0`; the standard Vite `>500 kB` chunk
+notice remains. Independent read-only review reported GO with no P0/P1.
+
+## Historical 2026-09-01 alpha.49 native one-button / output checkpoint
 
 The exact Community MSVC `14.44.35207` no-bundle build completed with
 first-party Rust warnings `0`. The release artifact is
@@ -23,10 +63,10 @@ The one-button `Prepare show DMX` flow completed all four UI stages: `Both`
 role, exact `COM3` machine-local PnP binding, Art-Net
 `127.0.0.1:6454` / wire Universe `0` enable, and S0 engagement with Open-DMX
 arm. Backend activation acknowledged only after the initial physical all-zero
-BREAK/MAB/`write_all`/`flush` transaction. The worker remained active with S0
-for approximately five minutes without a fault; the only unrelated stderr was
-DJ-Link `trust_network_absent`. This is not an electrical waveform or fixture
-visual proof.
+BREAK/MAB/`write_all`/`flush` transaction. Alpha.49 recorded an
+approximately-five-minute healthy observation before its later terminal
+WriteZero. That observation is historical only and is superseded by alpha.50;
+it is not current continuous-health evidence or electrical/fixture proof.
 
 The identified live display arrangement was Display 1 `1920x1080`, Display 5
 `3840x2160`, plus the editor window (three screens). This records live windows,
@@ -149,9 +189,9 @@ to USB-DMX and to Unity via Art-Net ArtDmx (`127.0.0.1:6454`, wire U0, 512
 channels). USB frame channel 500 / `payload[499]` and Art-Net `payload[499]`
 must both remain `0`; keep the two local Spout senders for video.
 
-Current alpha.49 evidence closes the exact artifact/device identity, initial
+Current alpha.50 evidence closes the exact artifact/device identity, initial
 S0 queue, initial Open-DMX BREAK/MAB/`write_all`/`flush` completion, and a
-fault-free worker run beyond 60 seconds. Still pending: release S0 only after
+fault-free `10 min 14 s` worker run under S0. Still pending: release S0 only after
 an exact reviewed fixture-safe test, observe the completed-U0 live mirror,
 capture USB electrical wire and Art-Net datagrams independently, and verify
 the operator-visible fixture result. The currently attached F3200A laser (34ch, DMX
