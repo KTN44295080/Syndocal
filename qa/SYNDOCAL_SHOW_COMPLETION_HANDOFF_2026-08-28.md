@@ -13,10 +13,10 @@ Product metadata is `1.2.0-alpha.44`. The tranche contains the documented alpha.
 DVC persistence work plus Timeline Source Shelf density, Scene Block
 readability, wheel navigation, adaptive ruler/fixed Grid snap, edge guides, and
 authoritative root Scene Block history. It also moves the 409-KB
-`live_audio_input_tests` module out of the 5.36-MB `main.rs` source. The
-5,363,529-byte backup and 3,783-byte one-off split script are excluded from the
-checkpoint and are the first verified post-push cleanup targets; neither is a
-product artifact.
+`live_audio_input_tests` module out of the 5.36-MB `main.rs` source. Source
+commit `07622a5` was pushed; immediately afterward the excluded 5,363,529-byte
+backup and 3,783-byte one-off split script were deleted, reclaiming 5,367,312
+bytes. No build cache or user-authored project was removed.
 
 Independent Terra xHigh review is GO for snap/grid, the repaired Audio/Video
 Grid-versus-Edges boundary, Undo production timing, and control-gate cleanup.

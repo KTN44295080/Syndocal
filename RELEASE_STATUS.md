@@ -24,9 +24,9 @@ the canonical result remains free of the transient `snap_request`. Cue, track,
 or layer identity mismatch fails before live/history/revision mutation. The
 large inline `live_audio_input_tests` module was mechanically split from
 `main.rs` into `app/src-tauri/src/tests/live_audio_input_tests.rs`; its include
-is test-only. The original 5,363,529-byte backup and 3,783-byte one-off split
-script are not product/checkpoint files and are reserved for verified cleanup
-immediately after this source checkpoint is committed and pushed.
+is test-only. After source commit `07622a5` was pushed, the exact
+5,363,529-byte backup and 3,783-byte one-off split script were deleted, reclaiming
+5,367,312 bytes. No build cache or user-authored project was removed.
 
 Independent Terra xHigh review is GO for snap/grid, Audio/Video snap separation,
 the Undo/publication path, and bounded control-gate cleanup. Exact Community
