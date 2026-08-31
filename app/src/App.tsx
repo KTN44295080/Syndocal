@@ -459,6 +459,7 @@ import type {
   StageObjectSummary,
   ChildTimelineSummary,
   TimelineCueEventSummary,
+  TimelineEventPlacementUpdate,
   TimelineAudioClipSummary,
   TimelineAudioOutputBus,
   TimelineAdvancedAuthoringSummary,
@@ -2735,7 +2736,7 @@ export default function App() {
   const [timelineEventDrafts, setTimelineEventDrafts] = createSignal<Record<number, TimelineEventDraft>>({});
   const [selectedTimelineSceneBlockEventId, setSelectedTimelineSceneBlockEventId] = createSignal<number | null>(null);
   const [timelineSceneBlockSelectionRevision, setTimelineSceneBlockSelectionRevision] = createSignal(0);
-  const [timelineSnapMode, setTimelineSnapMode] = createSignal<TimelineSnapMode>("Off");
+  const [timelineSnapMode, setTimelineSnapMode] = createSignal<TimelineSnapMode>("Grid");
   const [timelineGridMs, setTimelineGridMs] = createSignal(500);
   const [timelineStretchMode, setTimelineStretchMode] = createSignal<TimelineStretchMode>("RATE");
   const [timelineMagnetEnabled, setTimelineMagnetEnabled] = createSignal(true);
@@ -11226,6 +11227,65 @@ export default function App() {
 
   const timelineSceneBlocks = createTimelineSceneBlockController({
     invoke: invokeTimelineSceneBlockCommand,
+    commitRootSceneBlockTiming: async (event, next) => {
+      // The authoritative Apply DTO intentionally has no source_offset_ms and
+      // only preserves (rather than replaces) the event Cue. Do not turn a
+      // timing gesture into a lossy source/lane mutation. Child Timelines and
+      // browser fixtures retain their explicitly separate direct paths.
+      const rootFixture = viewportFixture === "timeline-layered"
+        || viewportFixture === "scene-block-large"
+        || viewportFixture === "scene-block-hour"
+        || viewportFixture === "scene-matrix";
+      const sourceOffsetMs = event.source_offset_ms ?? 0;
+      const sameLane = next.track === event.track
+        && next.layer_id === (event.layer_id ?? null);
+      const sameSource = next.cue_id === event.cue_id
+        && next.source_offset_ms === sourceOffsetMs;
+      const linked = (activeTimeline().item_groups ?? []).some((group) => group.members.some((member) =>
+        member.kind === "lighting_event" && member.event_id === event.id));
+      if (
+        timelineChildCueId() !== null
+        || rootFixture
+        || event.duration_ms <= 0
+        || !sameLane
+        || !sameSource
+        || linked
+      ) return false;
+
+      const timing: TimelineEventPlacementUpdate = {
+        event_id: event.id,
+        // Keep the current Cue explicitly in the request. The backend Apply
+        // projection must not be used as a Cue-replacement endpoint.
+        cue_id: event.cue_id,
+        time_ms: next.time_ms,
+        time_beats: next.time_beats,
+        track: event.track,
+        layer_id: event.layer_id ?? null,
+        duration_ms: next.duration_ms,
+        duration_beats: next.duration_beats,
+        conform_to_tempo: next.conform_to_tempo,
+        loop_fill: next.loop_fill,
+        fade_in_ms: next.fade_in_ms,
+        fade_out_ms: next.fade_out_ms,
+        loop_count: next.loop_count,
+        jump_to_event_id: next.jump_to_event_id,
+      };
+      const result = await commitTimelineAdvanced({
+        kind: "apply",
+        authoring: {
+          ...currentTimelineAdvancedAuthoring(),
+          snap_request: {
+            event_placements: [timing],
+            lighting_automations: [],
+            video_automations: [],
+          },
+        },
+      });
+      if (!result) {
+        throw new Error("Timeline timing commit became stale; no Scene Block change was applied.");
+      }
+      return true;
+    },
     snapTimeMs,
     snappedTimeBeats,
     timeBeatsAtCurrentBpm,
@@ -20037,8 +20097,27 @@ export default function App() {
           })),
         }));
       } else {
-        await invoke("snap_timeline_items", {
-          request: {
+        // `TimelineEventPlacementUpdate` has no source_offset_ms and Apply
+        // deliberately preserves its Cue. A bulk snap may only enter the
+        // authoritative history lane when every event remains a timing-only,
+        // same-lane operation. This closes the unsafe mixed-draft case rather
+        // than silently losing a source edit.
+        const unsafeEvent = cueEventUpdates.find(({ event, draft }) =>
+          draft.cue_id !== event.cue_id
+          || draft.source_offset_ms !== (event.source_offset_ms ?? 0)
+          || draft.track !== event.track
+          || draft.layer_id !== (event.layer_id ?? null));
+        if (unsafeEvent) {
+          setMessage(
+            `Snap Items is timing-only for root Timelines. Save Cue/source/lane changes for Scene Block ${unsafeEvent.event.id} separately, then snap.`,
+          );
+          return;
+        }
+        const result = await commitTimelineAdvanced({
+          kind: "apply",
+          authoring: {
+            ...currentTimelineAdvancedAuthoring(),
+            snap_request: {
             event_placements: cueEventUpdates.map(({ request }) => request),
             lighting_automations: lightingAutomationUpdates.map(({ automation, keyframes }) => ({
               automation_id: automation.id,
@@ -20049,7 +20128,12 @@ export default function App() {
               keyframes,
             })),
           },
+          },
         });
+        if (!result) {
+          setMessage("Snap Items became stale; no Timeline items were changed.");
+          return;
+        }
       }
       setTimelineEventDrafts((current) => {
         const next = { ...current };
@@ -20079,7 +20163,7 @@ export default function App() {
         return next;
       });
       setMessage(`Snapped ${itemCount} timeline item(s) to ${timelineSnapMode().toLowerCase()}.`);
-      if (childCueId === null) await refreshSnapshot();
+      if (childCueId !== null) await refreshSnapshot();
     } catch (error) {
       setMessage(String(error));
     }

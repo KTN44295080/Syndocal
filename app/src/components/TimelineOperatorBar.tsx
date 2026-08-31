@@ -294,9 +294,16 @@ export function TimelineOperatorBar(props: TimelineOperatorBarProps) {
                 <span class="timelineToolIcon" aria-hidden="true" data-no-localize>↔</span>
               </button>
             </div>
-            <button type="button" classList={{ active: props.magnetEnabled }} aria-pressed={props.magnetEnabled} aria-label={props.magnetEnabled ? "Disable magnet snap" : "Enable magnet snap"} title={props.magnetEnabled ? "Disable magnet snap" : "Enable magnet snap"} data-timeline-magnet-toggle data-timeline-tool="magnet" onClick={() => props.onMagnetEnabled(!props.magnetEnabled)}>
-              <span class="timelineToolIcon" aria-hidden="true" data-no-localize>∩</span>
-            </button>
+        <button type="button" classList={{ active: props.magnetEnabled }} aria-pressed={props.magnetEnabled} aria-label={props.magnetEnabled ? "Disable edge magnet" : "Enable edge magnet"} title={props.magnetEnabled ? "Disable edge magnet" : "Enable edge magnet"} data-timeline-magnet-toggle data-timeline-tool="magnet" onClick={() => props.onMagnetEnabled(!props.magnetEnabled)}>
+          <span class="timelineToolIcon" aria-hidden="true" data-no-localize>∩</span>
+        </button>
+        <output
+          class="timelineEdgeMagnetState tabularNums"
+          aria-label="Timeline edge magnet state"
+          data-timeline-edge-magnet-state={props.magnetEnabled ? "on" : "off"}
+        >
+          Edge: {props.magnetEnabled ? "ON" : "OFF"}
+        </output>
             <button type="button" classList={{ active: selectedCueArmed() }} aria-pressed={selectedCueArmed()} aria-label={selectedCueArmed() ? "Disarm Cue" : "Arm Cue"} title={selectedCueArmed() ? "Disarm Cue" : "Arm Cue"} data-timeline-arm-cue={props.selectedCueId ?? undefined} data-timeline-tool="arm-cue" disabled={props.selectedCueId === null} onClick={() => props.onArmCue(props.selectedCueId)}>
               <span class="timelineToolIcon" aria-hidden="true" data-no-localize>{selectedCueArmed() ? "●" : "○"}</span>
             </button>

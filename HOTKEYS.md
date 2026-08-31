@@ -10,6 +10,8 @@
 | `Ctrl/Cmd+O` | Load project |
 | `Ctrl/Cmd+S` | Save project |
 | `Ctrl/Cmd+Shift+S` | Save As |
+| `Ctrl/Cmd+Z` | Undo the latest authoritative project edit |
+| `Ctrl+Y` / `Ctrl/Cmd+Shift+Z` | Redo the latest authoritative project edit |
 | `F1` / `F2` / `F3` | Setup / Control / Touch |
 
 Setupでは`Alt+1`〜`Alt+9`でLibrary、Profiles、Patch、Outputs、Stage Map、DMX、MIDI、OSC、Remoteへ移動します。
@@ -27,6 +29,21 @@ Setupでは`Alt+1`〜`Alt+9`でLibrary、Profiles、Patch、Outputs、Stage Map�
 | `B` | Lighting blackout |
 | `V` | Video blackout |
 | `K` | Tap BPM |
+
+## Control / Timeline
+
+| Input | Action |
+| --- | --- |
+| Mouse wheel | Scroll Timeline lanes vertically |
+| `Shift` + mouse wheel | Pan the visible Timeline time range horizontally |
+| Horizontal trackpad wheel | Pan the visible Timeline time range horizontally |
+| `Ctrl/Cmd` + mouse wheel | Zoom around the pointer position |
+
+New Timeline sessions start with a logical `Grid 500 ms` snap and Scene-edge
+magnet enabled. The ruler subdivisions adapt visually as the Timeline is zoomed;
+they are display guides and do not silently change the configured logical Grid
+interval. `Alt` remains reserved for isolated linked-item editing and is not a
+Timeline wheel modifier.
 
 ## Setup / Stage Map
 

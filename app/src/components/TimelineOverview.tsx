@@ -1,18 +1,25 @@
 import { createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import {
   shouldCommitTimelineMarkerDrag,
-  timelineConformRateBadge,
   timelineSceneBlockCueAllowedByAuthority,
 } from "../timelineSceneBlocks";
 import {
   beginTimelineAbsoluteDragProjection,
-  buildTimelineRulerTicks,
+  buildTimelineGridModel,
   timelineTimeToVisibleRawRatio,
   timelineVisibleRatioToTimeMs,
   timelineVisibleWindowSpanMs,
   updateTimelineAbsoluteDragProjection,
   type TimelineVisibleWindow,
 } from "../timelineViewport";
+import {
+  resolveTimelineFadeBoundarySnap,
+  resolveTimelineSnap,
+  type TimelineSnapKind,
+  type TimelineSnapQuantizers,
+  type TimelineSnapResolution,
+  type TimelineSnapSceneBlock,
+} from "../timelineSnap";
 import {
   packTimelineOverlapClusterBadges,
   TIMELINE_OVERLAP_BADGE_WIDTH_PX,
@@ -28,12 +35,14 @@ import type {
   AudioAnalysisSummary,
   MediaAssetSummary,
   TimelineAudioClipSummary,
+  TimelineItemGroupSummary,
   TimelineItemRef,
   TimelineLayerKind,
   TimelineLayerSummary,
   TimelineTrackKind,
   TimelineVideoClipSummary,
 } from "../types";
+import { timelineItemKey } from "../timelineAdvancedAuthoring";
 import type { TimelineCueDragState } from "../timelineCueDrag";
 import {
   createTimelineExternalDropGate,
@@ -122,6 +131,7 @@ interface TimelineOverviewProps {
   layerItemCounts: ReadonlyMap<number, number>;
   audioClips: TimelineAudioClipSummary[];
   videoClips: TimelineVideoClipSummary[];
+  itemGroups: TimelineItemGroupSummary[];
   mediaAssets: MediaAssetSummary[];
   audioAnalysis: AudioAnalysisSummary | null;
   executionLive: boolean;
@@ -139,6 +149,9 @@ interface TimelineOverviewProps {
   playheadX: number;
   visibleWindow: TimelineVisibleWindow;
   bpm: number;
+  snapMode: "Off" | "Beat" | "Bar" | "Grid";
+  gridMs: number;
+  audioBeatMarkers: { time_ms: number; x: number }[];
   stretchMode: TimelineStretchMode;
   magnetEnabled: boolean;
   armedCue: {
@@ -317,7 +330,7 @@ interface TimelineVideoClipDrag {
 
 const timelineSectionKinds: TimelineLayerKind[] = ["Audio", "Lighting", "Video"];
 const timelineSectionHeaderHeightPx = 14;
-const timelineUserLaneHeightPx = 36;
+const timelineUserLaneHeightPx = 30;
 const timelineExpandedLaneHeightPx = 54;
 const legacyTimelineLayers: TimelineLayerSummary[] = [
   { id: 0, label: "Lighting", order: 0, muted: false, locked: false, solo: false, expanded: false, kind: "Lighting" },
@@ -452,6 +465,12 @@ export function TimelineOverview(props: TimelineOverviewProps) {
   const [suppressClickRangeId, setSuppressClickRangeId] = createSignal<string | null>(null);
   const [keyboardMarkerEventId, setKeyboardMarkerEventId] = createSignal<number | null>(null);
   const [suppressCanvasClick, setSuppressCanvasClick] = createSignal(false);
+  const [snapGuide, setSnapGuide] = createSignal<{
+    timeMs: number;
+    kind: TimelineSnapKind;
+    targetId: string | number | null;
+    edge: "start" | "end" | null;
+  } | null>(null);
   // True pixel-space canvas: the SVG viewBox mirrors the measured client box
   // (0 0 width height), so every user unit equals one rendered pixel and text
   // renders undistorted at any aspect ratio (mirrors ValueEffectEditorPanel).
@@ -474,12 +493,73 @@ export function TimelineOverview(props: TimelineOverviewProps) {
     updateViewBox();
     const observer = new ResizeObserver(updateViewBox);
     if (overviewElement) observer.observe(overviewElement);
+    const wheelDeltaInPixels = (delta: number, deltaMode: number, pageSize: number) => {
+      if (!Number.isFinite(delta)) return 0;
+      if (deltaMode === WheelEvent.DOM_DELTA_LINE) return delta * 16;
+      if (deltaMode === WheelEvent.DOM_DELTA_PAGE) return delta * Math.max(1, pageSize);
+      return delta;
+    };
     const handleWheel = (event: WheelEvent) => {
-      if (!overviewElement) return;
+      if (!overviewElement || event.altKey) return;
+      const scrollport = overviewElement.closest<HTMLElement>('.timelineLayerScrollport');
+      const overviewRect = overviewElement.getBoundingClientRect();
+      const horizontalPixels = wheelDeltaInPixels(event.deltaX, event.deltaMode, overviewRect.width);
+      const verticalPixels = wheelDeltaInPixels(
+        event.deltaY,
+        event.deltaMode,
+        scrollport?.clientHeight ?? overviewRect.height,
+      );
+      const hasHorizontalDelta = Number.isFinite(horizontalPixels) && Math.abs(horizontalPixels) >= 0.01;
+      const hasVerticalDelta = Number.isFinite(verticalPixels) && Math.abs(verticalPixels) >= 0.01;
+
+      // Ctrl is the explicit zoom gesture. Prefer the vertical wheel axis, but
+      // keep horizontal-only precision input useful on compact trackpads.
+      if (event.ctrlKey) {
+        const zoomDelta = hasVerticalDelta ? verticalPixels : horizontalPixels;
+        if (!Number.isFinite(zoomDelta) || Math.abs(zoomDelta) < 0.01) return;
+        const ratio = ratioFromPointer(event, overviewElement);
+        const anchorMs = timelineVisibleRatioToTimeMs(ratio, props.visibleWindow);
+        props.onZoomAt(anchorMs, zoomDelta > 0 ? 1.2 : 0.8);
+        event.preventDefault();
+        return;
+      }
+
+      // Shift maps the wheel to the time axis. Browsers commonly expose a
+      // shifted wheel as deltaY, while precision trackpads provide deltaX;
+      // prefer the latter whenever it is present.
+      if (event.shiftKey) {
+        const panPixels = hasHorizontalDelta ? horizontalPixels : verticalPixels;
+        if (!Number.isFinite(panPixels) || Math.abs(panPixels) < 0.01) return;
+        const visibleSpanMs = timelineVisibleWindowSpanMs(props.visibleWindow);
+        const deltaMs = (panPixels / Math.max(1, overviewRect.width)) * visibleSpanMs;
+        props.onSetVisibleWindow({
+          start_ms: props.visibleWindow.start_ms + deltaMs,
+          end_ms: props.visibleWindow.end_ms + deltaMs,
+        });
+        event.preventDefault();
+        return;
+      }
+
+      const verticalDominant = Math.abs(verticalPixels) >= Math.abs(horizontalPixels);
+      if (verticalDominant) {
+        if (!scrollport || !hasVerticalDelta) return;
+        // Keep lane scrolling on its owning scrollport, including at a
+        // boundary, so the page never steals the gesture.
+        scrollport.scrollTop += verticalPixels;
+        event.preventDefault();
+        return;
+      }
+
+      // Unmodified deltaX-dominant precision input pans the time axis. It is
+      // intentionally separate from the lane scroll branch above.
+      if (!hasHorizontalDelta) return;
+      const visibleSpanMs = timelineVisibleWindowSpanMs(props.visibleWindow);
+      const deltaMs = (horizontalPixels / Math.max(1, overviewRect.width)) * visibleSpanMs;
+      props.onSetVisibleWindow({
+        start_ms: props.visibleWindow.start_ms + deltaMs,
+        end_ms: props.visibleWindow.end_ms + deltaMs,
+      });
       event.preventDefault();
-      const ratio = ratioFromPointer(event, overviewElement);
-      const anchorMs = timelineVisibleRatioToTimeMs(ratio, props.visibleWindow);
-      props.onZoomAt(anchorMs, event.deltaY > 0 ? 1.2 : 0.8);
     };
     const handleEscape = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
@@ -510,14 +590,20 @@ export function TimelineOverview(props: TimelineOverviewProps) {
       setRangeDrag(null);
       setKeyframeDrag(null);
       setCanvasPanDrag(null);
+      setSnapGuide(null);
       setSuppressCanvasClick(true);
       props.onStatus("Timeline drag canceled; the original geometry was restored.");
     };
-    overviewElement?.addEventListener("wheel", handleWheel, { passive: false });
+    // Layered Timelines have a shared scrollport for both the lane gutter and
+    // the SVG canvas. Listening once on that owner keeps wheel behavior
+    // consistent when the pointer is over either surface. Legacy Timelines do
+    // not have the scrollport, so retain the SVG listener as the fallback.
+    const wheelTarget = overviewElement?.closest<HTMLElement>(".timelineLayerScrollport") ?? overviewElement;
+    wheelTarget?.addEventListener("wheel", handleWheel as EventListener, { passive: false });
     window.addEventListener("keydown", handleEscape, { capture: true });
     onCleanup(() => {
       observer.disconnect();
-      overviewElement?.removeEventListener("wheel", handleWheel);
+      wheelTarget?.removeEventListener("wheel", handleWheel as EventListener);
       window.removeEventListener("keydown", handleEscape, { capture: true });
     });
   });
@@ -531,13 +617,19 @@ export function TimelineOverview(props: TimelineOverviewProps) {
   ));
   const effectiveLayers = createMemo(() => props.legacyMode ? legacyTimelineLayers : orderedLayers());
   const layerById = createMemo(() => new Map(effectiveLayers().map((layer) => [layer.id, layer])));
+  // Automation bars/keyframes need the same expanded interaction lane as the
+  // other detail surfaces. Derive this directly from props so section layout
+  // does not depend on the row map it creates.
+  const automationLayerIds = createMemo(() => new Set(
+    props.automationRanges.map((range) => range.layer_id),
+  ));
   const overlapLayerIds = createMemo(
     () => new Set(props.overlapLayerIds),
     new Set<number>(),
     { equals: sameNumberSet },
   );
   const timelineLayerIsExpanded = (layer: TimelineLayerSummary) =>
-    Boolean(layer.expanded) || overlapLayerIds().has(layer.id);
+    Boolean(layer.expanded) || overlapLayerIds().has(layer.id) || automationLayerIds().has(layer.id);
   const timelineLayerHeightPx = (layer: TimelineLayerSummary) =>
     timelineLayerIsExpanded(layer)
       ? timelineExpandedLaneHeightPx
@@ -699,6 +791,133 @@ export function TimelineOverview(props: TimelineOverviewProps) {
     cachedEventsById = nextCache;
     return events;
   });
+  const timelineSnapQuantizers = (rawTimeMs: number): TimelineSnapQuantizers => {
+    // Older browser fixtures construct TimelineOverview directly and omit the
+    // optional editor-only snap props. Treat that shape as the historical
+    // snap-off contract instead of inventing a one-millisecond grid.
+    const snapMode = props.snapMode ?? "Off";
+    if (snapMode === "Off") return {};
+    const pointsAroundStep = (stepMs: number) => {
+      const safeStepMs = Math.max(1, Number.isFinite(stepMs) ? stepMs : 1);
+      const center = Math.round(rawTimeMs / safeStepMs);
+      return Array.from({ length: 5 }, (_, index) => ({
+        time_ms: Math.max(0, (center + index - 2) * safeStepMs),
+      }));
+    };
+    if (snapMode === "Beat") {
+      const markers = (props.audioBeatMarkers ?? [])
+        .filter((marker) => Number.isFinite(marker.time_ms))
+        .map((marker) => ({ time_ms: Math.max(0, marker.time_ms) }));
+      return markers.length > 0
+        ? { beat: markers }
+        : { beat: pointsAroundStep(60_000 / Math.max(1, props.bpm)) };
+    }
+    if (snapMode === "Bar") {
+      return { bar: pointsAroundStep((60_000 / Math.max(1, props.bpm)) * 4) };
+    }
+    return { grid: pointsAroundStep(props.gridMs) };
+  };
+  const sceneSnapBlocks = createMemo<TimelineSnapSceneBlock[]>(() => stableEvents()
+    .filter((event) => Number.isFinite(event.time_ms) && Number.isFinite(event.total_duration_ms))
+    .map((event) => ({
+      id: event.id,
+      lane_id: event.layer_id,
+      kind: event.track,
+      start_ms: Math.max(0, event.time_ms),
+      end_ms: Math.max(Math.max(0, event.time_ms), event.time_ms + Math.max(0, event.total_duration_ms)),
+      valid: true,
+    })));
+  const movingSceneBlockIds = (eventId: number | null) => {
+    if (eventId === null) return [] as number[];
+    const primary: TimelineItemRef = { kind: "lighting_event", event_id: eventId };
+    const group = (props.itemGroups ?? []).find((candidate) => candidate.members.some((member) =>
+      timelineItemKey(member) === timelineItemKey(primary)));
+    return [
+      eventId,
+      ...(group?.members ?? [])
+        .filter((member): member is Extract<TimelineItemRef, { kind: "lighting_event" }> => member.kind === "lighting_event")
+        .map((member) => member.event_id),
+    ];
+  };
+  const resolveSceneBlockEdge = (
+    rawTimeMs: number,
+    eventId: number | null,
+    targetLayerId: number,
+    targetKind: TimelineTrackKind,
+  ): TimelineSnapResolution => resolveTimelineSnap({
+    raw_time_ms: Math.max(0, Number.isFinite(rawTimeMs) ? rawTimeMs : 0),
+    moving_item_id: eventId,
+    moving_item_ids: movingSceneBlockIds(eventId),
+    target_lane_id: targetLayerId,
+    target_kind: targetKind,
+    visible_window: props.visibleWindow,
+    canvas_width_px: overviewW(),
+    quantizers: timelineSnapQuantizers(rawTimeMs),
+    visible_scene_blocks: props.magnetEnabled ? sceneSnapBlocks() : [],
+    threshold_px: 8,
+  });
+  const resolveSceneBlockMoveSnap = (
+    rawStartMs: number,
+    durationMs: number,
+    eventId: number | null,
+    targetLayerId: number,
+    targetKind: TimelineTrackKind,
+  ): { timeMs: number; edge: "start" | "end"; resolution: TimelineSnapResolution } => {
+    const safeRawStartMs = Math.max(0, Number.isFinite(rawStartMs) ? rawStartMs : 0);
+    const safeDurationMs = Math.max(0, Number.isFinite(durationMs) ? durationMs : 0);
+    const startResolution = resolveSceneBlockEdge(
+      safeRawStartMs,
+      eventId,
+      targetLayerId,
+      targetKind,
+    );
+    const endResolution = resolveSceneBlockEdge(
+      safeRawStartMs + safeDurationMs,
+      eventId,
+      targetLayerId,
+      targetKind,
+    );
+    const candidates = [
+      { edge: "start" as const, resolution: startResolution },
+      { edge: "end" as const, resolution: endResolution },
+    ].filter((candidate) => candidate.resolution.kind !== "none" && (
+      candidate.edge === "start" || candidate.resolution.time_ms >= safeDurationMs
+    ));
+    candidates.sort((left, right) => {
+      const distanceDelta = left.resolution.distance_px - right.resolution.distance_px;
+      if (Math.abs(distanceDelta) > 1e-7) return distanceDelta;
+      const leftIsItemEdge = left.resolution.kind === "item-start" || left.resolution.kind === "item-end";
+      const rightIsItemEdge = right.resolution.kind === "item-start" || right.resolution.kind === "item-end";
+      if (leftIsItemEdge !== rightIsItemEdge) return leftIsItemEdge ? -1 : 1;
+      return left.edge === right.edge ? 0 : left.edge === "start" ? -1 : 1;
+    });
+    const selected = candidates[0];
+    if (!selected) {
+      return { timeMs: safeRawStartMs, edge: "start", resolution: startResolution };
+    }
+    return {
+      timeMs: Math.max(0, selected.edge === "end"
+        ? selected.resolution.time_ms - safeDurationMs
+        : selected.resolution.time_ms),
+      edge: selected.edge,
+      resolution: selected.resolution,
+    };
+  };
+  const showSnapGuide = (
+    resolution: TimelineSnapResolution | { boundary_ms: number; kind: TimelineSnapKind; target_id: null },
+    edge: "start" | "end" | null = null,
+  ) => {
+    if (resolution.kind === "none") {
+      setSnapGuide(null);
+      return;
+    }
+    setSnapGuide({
+      timeMs: "time_ms" in resolution ? resolution.time_ms : resolution.boundary_ms,
+      kind: resolution.kind,
+      targetId: resolution.target_id,
+      edge,
+    });
+  };
   let cachedAutomationRangesById = new Map<string, TimelineOverviewAutomationRange>();
   const stableAutomationRanges = createMemo(() => {
     const nextCache = new Map<string, TimelineOverviewAutomationRange>();
@@ -858,9 +1077,18 @@ export function TimelineOverview(props: TimelineOverviewProps) {
           ? "locked" as const
           : null;
     const nextLayerId = targetLayer && rejection === null ? targetLayer.id : drag.originalLayerId;
+    const movingEvent = stableEvents().find((candidate) => candidate.id === drag.eventId);
+    const moveSnap = resolveSceneBlockMoveSnap(
+      projection.time_ms,
+      movingEvent?.total_duration_ms ?? 0,
+      drag.eventId,
+      nextLayerId,
+      movingEvent?.track ?? "Lighting",
+    );
+    showSnapGuide(moveSnap.resolution, moveSnap.edge);
     setMarkerDrag({
       ...drag,
-      timeMs: props.magnetEnabled ? props.snapTimeMs(projection.time_ms) : projection.time_ms,
+      timeMs: moveSnap.timeMs,
       layerId: nextLayerId,
       hoverLayerId,
       rejection,
@@ -882,6 +1110,7 @@ export function TimelineOverview(props: TimelineOverviewProps) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
     setMarkerDrag(null);
+    setSnapGuide(null);
     if (!shouldCommitTimelineMarkerDrag(drag, canceled)) {
       return;
     }
@@ -916,7 +1145,7 @@ export function TimelineOverview(props: TimelineOverviewProps) {
       );
       return;
     }
-    props.onMoveEventPlacement(drag.eventId, drag.timeMs, drag.layerId, props.magnetEnabled);
+    props.onMoveEventPlacement(drag.eventId, drag.timeMs, drag.layerId, false);
   };
   const endMarkerDrag = (event: PointerEvent & { currentTarget: SVGGElement }) =>
     finishMarkerDrag(event, false);
@@ -973,8 +1202,19 @@ export function TimelineOverview(props: TimelineOverviewProps) {
       drag.edge === "end" ? drag.originalStartMs + 1 : 0,
       drag.edge === "start" ? drag.originalEndMs - 1 : Number.POSITIVE_INFINITY,
     );
-    if (!projection.moved) return;
-    const projectedTimeMs = props.magnetEnabled ? props.snapTimeMs(projection.time_ms) : projection.time_ms;
+    if (!projection.moved) {
+      setSnapGuide(null);
+      return;
+    }
+    const overviewEvent = stableEvents().find((candidate) => candidate.id === drag.eventId);
+    const resolution = resolveSceneBlockEdge(
+      projection.time_ms,
+      drag.eventId,
+      overviewEvent?.layer_id ?? 0,
+      overviewEvent?.track ?? "Lighting",
+    );
+    showSnapGuide(resolution);
+    const projectedTimeMs = resolution.time_ms;
     setEventResizeDrag(drag.edge === "start"
       ? { ...drag, moved: true, startMs: Math.min(projectedTimeMs, drag.originalEndMs - 1) }
       : { ...drag, moved: true, endMs: Math.max(projectedTimeMs, drag.originalStartMs + 1) });
@@ -992,6 +1232,7 @@ export function TimelineOverview(props: TimelineOverviewProps) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
     setEventResizeDrag(null);
+    setSnapGuide(null);
     if (!shouldCommitTimelineMarkerDrag(drag, canceled)) return;
     setSuppressClickEventId(drag.eventId);
     const item: TimelineItemRef = { kind: "lighting_event", event_id: drag.eventId };
@@ -1016,7 +1257,7 @@ export function TimelineOverview(props: TimelineOverviewProps) {
       drag.edge,
       drag.edge === "start" ? drag.startMs : drag.endMs,
       props.stretchMode,
-      props.magnetEnabled,
+      false,
     );
   };
   const endEventResize = (event: PointerEvent & { currentTarget: SVGGraphicsElement }) =>
@@ -1071,9 +1312,21 @@ export function TimelineOverview(props: TimelineOverviewProps) {
       overviewEvent.duration_ms,
       projectTimelineBlockFadeMs(drag.edge, blockStartMs, blockEndMs, pointerTimeMs),
     );
-    const fadeMs = props.magnetEnabled
-      ? Math.min(overviewEvent.duration_ms, Math.max(0, props.snapTimeMs(bounded)))
-      : bounded;
+    const rawBoundaryMs = drag.edge === "in"
+      ? blockStartMs + bounded
+      : blockEndMs - bounded;
+    const resolution = resolveTimelineFadeBoundarySnap({
+      item_start_ms: blockStartMs,
+      item_end_ms: blockEndMs,
+      edge: drag.edge,
+      raw_fade_ms: bounded,
+      visible_window: props.visibleWindow,
+      canvas_width_px: overviewW(),
+      quantizers: timelineSnapQuantizers(rawBoundaryMs),
+      threshold_px: 8,
+    });
+    showSnapGuide(resolution);
+    const fadeMs = Math.min(overviewEvent.duration_ms, Math.max(0, resolution.fade_ms));
     setEventFadeDrag({
       ...drag,
       fadeMs,
@@ -1093,9 +1346,10 @@ export function TimelineOverview(props: TimelineOverviewProps) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
     setEventFadeDrag(null);
+    setSnapGuide(null);
     if (canceled || !drag.moved) return;
     setSuppressClickEventId(drag.eventId);
-    props.onSetEventFade(drag.eventId, drag.edge, drag.fadeMs, props.magnetEnabled);
+    props.onSetEventFade(drag.eventId, drag.edge, drag.fadeMs, false);
   };
   const endEventFade = (event: PointerEvent & { currentTarget: SVGGraphicsElement }) =>
     finishEventFade(event, false);
@@ -1216,7 +1470,9 @@ export function TimelineOverview(props: TimelineOverviewProps) {
     let rejection = drag.rejection;
     if (drag.mode === "move") {
       const rawStartMs = Math.max(0, Math.round(drag.original.start_ms + deltaMs));
-      preview.start_ms = props.magnetEnabled ? props.snapTimeMs(rawStartMs) : rawStartMs;
+      // Grid/Beat/Bar quantization is independent from item-edge magnetism.
+      // snapTimeMs already returns the raw value for Snap: Off.
+      preview.start_ms = props.snapTimeMs(rawStartMs);
       hoverLayerId = layerIdFromPoint(event.clientX, event.clientY);
       const target = hoverLayerId === null ? undefined : layerById().get(hoverLayerId);
       rejection = !target
@@ -1233,7 +1489,7 @@ export function TimelineOverview(props: TimelineOverviewProps) {
         originalEndMs - 1,
         Math.max(earliestStartMs, Math.round(drag.original.start_ms + deltaMs)),
       );
-      const startMs = props.magnetEnabled ? props.snapTimeMs(rawStartMs) : rawStartMs;
+      const startMs = props.snapTimeMs(rawStartMs);
       const boundedStartMs = Math.min(originalEndMs - 1, Math.max(earliestStartMs, startMs));
       const trimDeltaMs = boundedStartMs - drag.original.start_ms;
       preview.start_ms = boundedStartMs;
@@ -1243,7 +1499,7 @@ export function TimelineOverview(props: TimelineOverviewProps) {
       preview.fade_in_ms = Math.min(preview.fade_in_ms, preview.duration_ms - preview.fade_out_ms);
     } else if (drag.mode === "resize-end") {
       const rawEndMs = Math.max(drag.original.start_ms + 1, Math.round(originalEndMs + deltaMs));
-      const endMs = props.magnetEnabled ? props.snapTimeMs(rawEndMs) : rawEndMs;
+      const endMs = props.snapTimeMs(rawEndMs);
       preview.duration_ms = Math.max(1, endMs - drag.original.start_ms);
       preview.fade_in_ms = Math.min(preview.fade_in_ms, preview.duration_ms);
       preview.fade_out_ms = Math.min(preview.fade_out_ms, preview.duration_ms - preview.fade_in_ms);
@@ -1258,7 +1514,7 @@ export function TimelineOverview(props: TimelineOverviewProps) {
         originalEndMs,
         pointerTimeMs,
       );
-      const fadeMs = props.magnetEnabled ? props.snapTimeMs(projected) : projected;
+      const fadeMs = props.snapTimeMs(projected);
       if (edge === "in") {
         preview.fade_in_ms = Math.min(
           drag.original.duration_ms - drag.original.fade_out_ms,
@@ -1401,7 +1657,7 @@ export function TimelineOverview(props: TimelineOverviewProps) {
     let rejection = drag.rejection;
     if (drag.mode === "move") {
       const rawStartMs = Math.max(0, Math.round(drag.original.start_ms + deltaMs));
-      preview.start_ms = props.magnetEnabled ? props.snapTimeMs(rawStartMs) : rawStartMs;
+      preview.start_ms = props.snapTimeMs(rawStartMs);
       hoverLayerId = layerIdFromPoint(event.clientX, event.clientY);
       const target = hoverLayerId === null ? undefined : layerById().get(hoverLayerId);
       rejection = !target
@@ -1418,7 +1674,7 @@ export function TimelineOverview(props: TimelineOverviewProps) {
         originalEndMs - 1,
         Math.max(earliestStartMs, Math.round(drag.original.start_ms + deltaMs)),
       );
-      const startMs = props.magnetEnabled ? props.snapTimeMs(rawStartMs) : rawStartMs;
+      const startMs = props.snapTimeMs(rawStartMs);
       const boundedStartMs = Math.min(originalEndMs - 1, Math.max(earliestStartMs, startMs));
       const trimDeltaMs = boundedStartMs - drag.original.start_ms;
       preview.start_ms = boundedStartMs;
@@ -1428,7 +1684,7 @@ export function TimelineOverview(props: TimelineOverviewProps) {
       preview.fade_in_ms = Math.min(preview.fade_in_ms, preview.duration_ms - preview.fade_out_ms);
     } else {
       const rawEndMs = Math.max(drag.original.start_ms + 1, Math.round(originalEndMs + deltaMs));
-      const endMs = props.magnetEnabled ? props.snapTimeMs(rawEndMs) : rawEndMs;
+      const endMs = props.snapTimeMs(rawEndMs);
       preview.duration_ms = Math.max(1, endMs - drag.original.start_ms);
       preview.fade_in_ms = Math.min(preview.fade_in_ms, preview.duration_ms);
       preview.fade_out_ms = Math.min(preview.fade_out_ms, preview.duration_ms - preview.fade_in_ms);
@@ -1540,7 +1796,9 @@ export function TimelineOverview(props: TimelineOverviewProps) {
       event.preventDefault();
       event.currentTarget.setPointerCapture(event.pointerId);
       const rawTimeMs = timelineVisibleRatioToTimeMs(ratioFromPointer(event, event.currentTarget), props.visibleWindow);
-      const timeMs = props.magnetEnabled ? props.snapTimeMs(rawTimeMs) : Math.round(rawTimeMs);
+      const resolution = resolveSceneBlockEdge(rawTimeMs, null, layer.id, "Lighting");
+      showSnapGuide(resolution);
+      const timeMs = resolution.time_ms;
       setPlacementDrag({
         pointerId: event.pointerId,
         cueId: armedCue.id,
@@ -1566,7 +1824,9 @@ export function TimelineOverview(props: TimelineOverviewProps) {
     if (placement?.pointerId === event.pointerId) {
       event.preventDefault();
       const rawTimeMs = timelineVisibleRatioToTimeMs(ratioFromPointer(event, event.currentTarget), props.visibleWindow);
-      const endMs = props.magnetEnabled ? props.snapTimeMs(rawTimeMs) : Math.round(rawTimeMs);
+      const resolution = resolveSceneBlockEdge(rawTimeMs, null, placement.layerId, "Lighting");
+      showSnapGuide(resolution);
+      const endMs = resolution.time_ms;
       setPlacementDrag({
         ...placement,
         endMs,
@@ -1595,6 +1855,7 @@ export function TimelineOverview(props: TimelineOverviewProps) {
     if (placement?.pointerId === event.pointerId) {
       if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
       setPlacementDrag(null);
+      setSnapGuide(null);
       if (!canceled && placement.moved) {
         if (!timelineSceneBlockCueAllowedByAuthority(
           placement.cueId,
@@ -1613,7 +1874,7 @@ export function TimelineOverview(props: TimelineOverviewProps) {
           placement.layerId,
           durationMs,
           props.stretchMode,
-          props.magnetEnabled,
+          false,
         );
       }
       setSuppressCanvasClick(true);
@@ -1642,14 +1903,15 @@ export function TimelineOverview(props: TimelineOverviewProps) {
     const layer = validatePlacementLayer(layerIdFromPoint(event.clientX, event.clientY));
     if (!layer) return;
     const rawTimeMs = timelineVisibleRatioToTimeMs(ratioFromPointer(event, event.currentTarget), props.visibleWindow);
-    const timeMs = props.magnetEnabled ? props.snapTimeMs(rawTimeMs) : Math.round(rawTimeMs);
+    const resolution = resolveSceneBlockEdge(rawTimeMs, null, layer.id, "Lighting");
+    const timeMs = resolution.time_ms;
     props.onPlaceArmedCue(
       armedCue.id,
       timeMs,
       layer.id,
       armedCue.natural_duration_ms,
       props.stretchMode,
-      props.magnetEnabled,
+      false,
     );
     setSuppressCanvasClick(true);
   };
@@ -1987,7 +2249,7 @@ export function TimelineOverview(props: TimelineOverviewProps) {
   };
   // ---- Pixel-space layout ------------------------------------------------
   // Legacy keeps the measured two-lane geometry. Authored layers use a compact
-  // 14px section separator with 36px lanes (54px when details are expanded)
+  // 14px section separator with compact 30px lanes (54px when details are expanded)
   // inside the scrollport; content height stays out of the frame's intrinsic size.
   const viewBoxX = (percent: number) => (percent / 100) * overviewW();
   const legacyLaneHeightPx = () => overviewH() / 2;
@@ -2001,7 +2263,7 @@ export function TimelineOverview(props: TimelineOverviewProps) {
     const row = layerRow(event.layer_id, event.track);
     return props.legacyMode
       ? row.top + row.height * (event.track === "Lighting" ? 0.30 : 0.18)
-      : row.top + 4;
+      : row.top + 1;
   };
   const blockCenterYPx = (event: Pick<TimelineOverviewEvent, "layer_id" | "track">) =>
     blockTopPx(event) + blockHeightPx() / 2;
@@ -2044,8 +2306,8 @@ export function TimelineOverview(props: TimelineOverviewProps) {
   const rulerLineTopPx = () => rulerLabelBaselineY() + 2;
   const rulerLineBottomPx = () => canvasH() - 1;
   const clusterBadgeWidthPx = TIMELINE_OVERLAP_BADGE_WIDTH_PX;
-  // Overlap lanes reserve a compact rail below the 28px block. Keeping the ×N
-  // badge in that rail preserves both the upper move band and lower fade band.
+  // Overlap lanes reserve a compact rail below the 28px block. Keeping the
+  // overlap icon/count badge in that rail preserves both move and fade bands.
   const clusterBadgeTopPx = (cluster: TimelineOverviewOverlapCluster) => {
     const row = layerRow(cluster.layer_id, cluster.track);
     return props.legacyMode ? row.top + 2 : row.top + row.height - 18;
@@ -2053,6 +2315,7 @@ export function TimelineOverview(props: TimelineOverviewProps) {
   const clusterBadgeHeightPx = () => 15;
 
   const nameInsetPx = 4;
+  const sceneBlockSuperSceneReservePx = 22;
   const nameCharWidthPx = 6.6;
   const eventPreviewStartMs = (event: TimelineOverviewEvent) => {
     const resize = eventResizeDrag();
@@ -2099,28 +2362,67 @@ export function TimelineOverview(props: TimelineOverviewProps) {
   );
   const sceneBlockHasReadableBody = (event: TimelineOverviewEvent) => sceneBlockPixelWidth(event) >= 16;
   const sceneBlockShowsDuration = (event: TimelineOverviewEvent) => sceneBlockPixelWidth(event) >= 48;
-  const sceneBlockName = (event: TimelineOverviewEvent) => {
-    // Identity name only; loop/× semantics stay in the marker title and the
-    // aggregate overlap badge so the two counts never read ambiguously.
-    const label = event.cue_label;
-    const previewRate = eventPreviewRate(event);
-    const rateBadge = eventStretchProjection(event)?.fallback_to_window
-      ? null
-      : previewRate !== null && previewRate !== undefined && previewRate > 0
-        ? `[${previewRate.toFixed(2)}x]`
-        : null;
-    const available = Math.max(0, sceneBlockPixelWidth(event) - nameInsetPx * 2);
-    const maxCharacters = Math.floor(available / nameCharWidthPx);
-    if (maxCharacters < 1) return "";
-    if (rateBadge && maxCharacters >= rateBadge.length) {
-      const labelCharacters = maxCharacters - rateBadge.length - 1;
-      if (labelCharacters <= 0) return rateBadge;
-      const visibleLabel = label.length <= labelCharacters
-        ? label
-        : `${label.slice(0, Math.max(1, labelCharacters - 1))}…`;
-      return `${visibleLabel} ${rateBadge}`;
+  type SceneBlockBadgeKind = "loop" | "rate";
+  const sceneBlockBadgeEntries = (event: TimelineOverviewEvent) => {
+    const entries: { kind: SceneBlockBadgeKind; label: string }[] = [];
+    const loopCount = Math.max(1, Math.round(event.loop_count));
+    if (loopCount > 1) entries.push({ kind: "loop", label: `×${loopCount}` });
+    const projection = eventStretchProjection(event);
+    const rate = eventPreviewRate(event);
+    if (
+      !projection?.fallback_to_window &&
+      rate !== null &&
+      rate !== undefined &&
+      Number.isFinite(rate) &&
+      rate > 0 &&
+      Math.abs(rate - 1) > 0.001
+    ) {
+      entries.push({ kind: "rate", label: `${rate.toFixed(2)}×` });
     }
-    return label.length <= maxCharacters ? label : `${label.slice(0, Math.max(1, maxCharacters - 1))}…`;
+    return entries;
+  };
+  const sceneBlockBadgeWidthPx = (label: string) => Math.max(18, label.length * 6 + 6);
+  const sceneBlockBadgeLayout = (event: TimelineOverviewEvent) => {
+    if (blockHeightPx() < 16) return [];
+    // Keep the super-scene source-link arrow clear of the metadata pills.
+    const rightInset = nameInsetPx + (event.is_super_scene ? sceneBlockSuperSceneReservePx : 0);
+    const availableWidth = Math.max(0, sceneBlockPixelWidth(event) - nameInsetPx - rightInset);
+    const entries: { kind: SceneBlockBadgeKind; label: string; width: number; x: number }[] = [];
+    let occupiedWidth = 0;
+    for (const entry of sceneBlockBadgeEntries(event)) {
+      const width = sceneBlockBadgeWidthPx(entry.label);
+      const nextWidth = occupiedWidth + (entries.length > 0 ? 3 : 0) + width;
+      if (nextWidth > availableWidth) break;
+      occupiedWidth = nextWidth;
+      entries.push({ ...entry, width, x: 0 });
+    }
+    let cursor = sceneBlockPixelWidth(event) - rightInset;
+    for (let index = entries.length - 1; index >= 0; index -= 1) {
+      const entry = entries[index];
+      cursor -= entry.width;
+      entry.x = cursor;
+      cursor -= 3;
+    }
+    return entries;
+  };
+  const sceneBlockBadgeReservePx = (event: TimelineOverviewEvent) =>
+    sceneBlockBadgeLayout(event).reduce((total, badge, index) => total + badge.width + (index > 0 ? 3 : 0), 0);
+  const sceneBlockRateBadge = (event: TimelineOverviewEvent) =>
+    sceneBlockBadgeEntries(event).find((badge) => badge.kind === "rate")?.label ?? null;
+  const sceneBlockName = (event: TimelineOverviewEvent) => {
+    // Keep the authored identity separate from loop/rate metadata. The latter
+    // has its own compact badges so ×N can never be mistaken for overlap.
+    const label = event.cue_label;
+    const available = Math.max(
+      0,
+      sceneBlockPixelWidth(event) - nameInsetPx * 2 - sceneBlockBadgeReservePx(event) - (event.is_super_scene ? sceneBlockSuperSceneReservePx : 0),
+    );
+    const maxCharacters = Math.floor(available / nameCharWidthPx);
+    if (maxCharacters < 2) return "";
+    const labelCharacters = Array.from(label);
+    return labelCharacters.length <= maxCharacters
+      ? label
+      : `${labelCharacters.slice(0, maxCharacters - 1).join("")}…`;
   };
   const sceneBlockDurationStamp = (event: TimelineOverviewEvent) =>
     formatCompactClock(eventPreviewSpanMs(event));
@@ -2132,9 +2434,11 @@ export function TimelineOverview(props: TimelineOverviewProps) {
     if (fadePx < 1) return null;
     const halfHeight = blockHeightPx() / 2;
     return edge === "in"
-      ? `0,${halfHeight} 0,0 ${fadePx},0`
-      : `${widthPx},${halfHeight} ${widthPx},0 ${widthPx - fadePx},0`;
+      ? `0,0 0,${halfHeight} ${fadePx},${halfHeight}`
+      : `${widthPx},0 ${widthPx},${halfHeight} ${widthPx - fadePx},${halfHeight}`;
   };
+  const sceneBlockFadeHandleWidthPx = (event: TimelineOverviewEvent) =>
+    Math.min(TIMELINE_BLOCK_FADE_EDGE_PX, sceneBlockPixelWidth(event) / 2);
   const audioClipPreview = (clip: TimelineAudioClipSummary) =>
     audioClipDrag()?.clipId === clip.id ? audioClipDrag()!.preview : clip;
   const audioClipPixelWidth = (clip: TimelineAudioClipSummary) => Math.max(
@@ -2145,7 +2449,7 @@ export function TimelineOverview(props: TimelineOverviewProps) {
   );
   const audioClipCenterYPx = (clip: TimelineAudioClipSummary) => {
     const row = layerRowById().get(audioClipPreview(clip).layer_id);
-    return (row?.top ?? 0) + 4 + blockHeightPx() / 2;
+    return (row?.top ?? 0) + 1 + blockHeightPx() / 2;
   };
   const audioClipVisibleName = (clip: TimelineAudioClipSummary) => {
     const outputBus = clip.output_bus ?? "PROGRAM";
@@ -2209,7 +2513,7 @@ export function TimelineOverview(props: TimelineOverviewProps) {
   );
   const videoClipCenterYPx = (clip: TimelineVideoClipSummary) => {
     const row = layerRowById().get(videoClipPreview(clip).layer_id);
-    return (row?.top ?? 0) + 4 + blockHeightPx() / 2;
+    return (row?.top ?? 0) + 1 + blockHeightPx() / 2;
   };
   const videoClipLabel = (clip: TimelineVideoClipSummary) =>
     props.mediaAssets.find((asset) => asset.id === clip.media_asset_id)?.label
@@ -2261,7 +2565,7 @@ export function TimelineOverview(props: TimelineOverviewProps) {
       overviewW(),
     ).map((cluster) => ({ ...cluster, layer_id: layerId })));
   });
-  const rulerTicks = createMemo(() => buildTimelineRulerTicks(props.visibleWindow, overviewPixelWidth()));
+  const gridModel = createMemo(() => buildTimelineGridModel(props.visibleWindow, overviewPixelWidth()));
   const rulerLabelInsetPx = () => Math.max(2, overviewW() * 0.004);
   const rulerLabelX = (ratio: number) => Math.min(
     Math.max(rulerLabelInsetPx(), ratio * overviewW()),
@@ -2654,28 +2958,72 @@ export function TimelineOverview(props: TimelineOverviewProps) {
           )}
         </For>
       </Show>
-      <g class="timelineRuler" aria-hidden="true">
-        <For each={rulerTicks()}>
-          {(tick) => (
-            <g data-timeline-ruler-ms={tick.time_ms}>
+      <g
+        class="timelineRuler"
+        aria-hidden="true"
+        data-timeline-grid-major-step-ms={gridModel().major_step_ms}
+        data-timeline-grid-minor-step-ms={gridModel().minor_step_ms}
+        data-timeline-grid-subdivision-count={gridModel().subdivision_count}
+        data-timeline-grid-line-count={gridModel().lines.length}
+      >
+        <For each={gridModel().lines}>
+          {(line) => (
+            <g
+              class={`timelineGridLineGroup ${line.kind}`}
+              data-timeline-grid-ms={line.time_ms}
+              data-timeline-grid-kind={line.kind}
+              data-timeline-ruler-ms={line.major ? line.time_ms : undefined}
+            >
               <line
-                class={tick.major ? "major" : ""}
-                x1={tick.ratio * overviewW()}
-                x2={tick.ratio * overviewW()}
+                class={line.kind}
+                x1={line.x_px}
+                x2={line.x_px}
                 y1={rulerLineTopPx()}
                 y2={rulerLineBottomPx()}
               />
-              <text
-                x={rulerLabelX(tick.ratio)}
-                y={rulerLabelBaselineY()}
-                text-anchor={rulerLabelAnchor(tick.ratio)}
-              >
-                {tick.label}
-              </text>
+              <Show when={line.major && line.label !== null}>
+                <text
+                  x={rulerLabelX(line.ratio)}
+                  y={rulerLabelBaselineY()}
+                  text-anchor={rulerLabelAnchor(line.ratio)}
+                >
+                  {line.label}
+                </text>
+              </Show>
             </g>
           )}
         </For>
       </g>
+      <Show when={snapGuide()}>
+        {(guide) => {
+          const ratio = clampRatio(timelineTimeToVisibleRawRatio(guide().timeMs, props.visibleWindow));
+          return (
+            <g
+              class={`timelineSnapGuide ${guide().kind}`}
+              data-timeline-snap-guide
+              data-timeline-snap-kind={guide().kind}
+              data-timeline-snap-target-id={guide().targetId ?? undefined}
+              data-timeline-snap-edge={guide().edge ?? undefined}
+              data-timeline-snap-time-ms={guide().timeMs}
+              aria-hidden="true"
+            >
+              <line
+                x1={ratio * overviewW()}
+                x2={ratio * overviewW()}
+                y1={rulerLineTopPx()}
+                y2={canvasH()}
+              />
+              <text
+                x={rulerLabelX(ratio)}
+                y={rulerLabelBaselineY() + 10}
+                text-anchor={rulerLabelAnchor(ratio)}
+              >
+                {guide().kind === "item-start" || guide().kind === "item-end" ? "EDGE" : guide().kind.toUpperCase()}
+              </text>
+            </g>
+          );
+        }}
+      </Show>
       <For each={stableAutomationRanges().filter((range) => props.legacyMode || Boolean(automationLayerRow(range)))}>
         {(range) => (
           <g
@@ -3323,6 +3671,24 @@ export function TimelineOverview(props: TimelineOverviewProps) {
                       height={blockHeightPx()}
                       rx="1"
                     />
+                    <rect
+                      class="timelineSceneBlockIdentityBand"
+                      data-timeline-block-band="upper"
+                      x="0"
+                      y={-blockHeightPx() / 2}
+                      width={sceneBlockPixelWidth(event)}
+                      height={blockUpperBandHeightPx()}
+                      rx="1"
+                    />
+                    <rect
+                      class="timelineSceneBlockFrame"
+                      data-timeline-block-frame
+                      x="0"
+                      y={-blockHeightPx() / 2}
+                      width={sceneBlockPixelWidth(event)}
+                      height={blockHeightPx()}
+                      rx="1"
+                    />
                   </>
                 }
               >
@@ -3332,6 +3698,15 @@ export function TimelineOverview(props: TimelineOverviewProps) {
                   y={-blockHeightPx() / 2}
                   width={sceneBlockPixelWidth(event)}
                   height={blockHeightPx()}
+                  rx="1"
+                />
+                <rect
+                  class="timelineSceneBlockIdentityBand"
+                  data-timeline-block-band="upper"
+                  x="0"
+                  y={-blockHeightPx() / 2}
+                  width={sceneBlockPixelWidth(event)}
+                  height={blockUpperBandHeightPx()}
                   rx="1"
                 />
                 <Show when={sceneBlockFadeRampPoints(event, "in")}>
@@ -3352,6 +3727,15 @@ export function TimelineOverview(props: TimelineOverviewProps) {
                     />
                   )}
                 </Show>
+                <rect
+                  class="timelineSceneBlockFrame"
+                  data-timeline-block-frame
+                  x="0"
+                  y={-blockHeightPx() / 2}
+                  width={sceneBlockPixelWidth(event)}
+                  height={blockHeightPx()}
+                  rx="1"
+                />
                 <text
                   class="timelineSceneBlockLabel"
                   data-no-localize
@@ -3385,6 +3769,32 @@ export function TimelineOverview(props: TimelineOverviewProps) {
                     {sceneBlockDurationStamp(event)}
                   </text>
                 </Show>
+                <For each={sceneBlockBadgeLayout(event)}>
+                  {(badge) => (
+                    <g
+                      class={`timelineSceneBlockBadge ${badge.kind}`}
+                      data-timeline-scene-block-badge={badge.kind}
+                      transform={`translate(${badge.x} ${-blockHeightPx() / 2 + 1})`}
+                    >
+                      <rect
+                        x="0"
+                        y="0"
+                        width={badge.width}
+                        height={Math.max(8, blockUpperBandHeightPx() - 2)}
+                        rx="1.5"
+                      />
+                      <text
+                        data-no-localize
+                        x={badge.width / 2}
+                        y={Math.max(4, (blockUpperBandHeightPx() - 2) / 2)}
+                        text-anchor="middle"
+                        dominant-baseline="central"
+                      >
+                        {badge.label}
+                      </text>
+                    </g>
+                  )}
+                </For>
               </Show>
               <Show when={activeDragStamp(event)}>
                 {(stamp) => (
@@ -3437,7 +3847,7 @@ export function TimelineOverview(props: TimelineOverviewProps) {
                   data-timeline-zone-edge-px={TIMELINE_BLOCK_FADE_EDGE_PX}
                   x="0"
                   y="0"
-                  width={TIMELINE_BLOCK_FADE_EDGE_PX}
+                  width={sceneBlockFadeHandleWidthPx(event)}
                   height={TIMELINE_BLOCK_UPPER_BAND_PX}
                   aria-label="Adjust Scene Block Fade In"
                   onPointerDown={(pointerEvent) => beginEventFade(pointerEvent, event, "in")}
@@ -3450,9 +3860,9 @@ export function TimelineOverview(props: TimelineOverviewProps) {
                   data-timeline-scene-block-fade="out"
                   data-timeline-zone-band-px={TIMELINE_BLOCK_UPPER_BAND_PX}
                   data-timeline-zone-edge-px={TIMELINE_BLOCK_FADE_EDGE_PX}
-                  x={Math.max(0, sceneBlockPixelWidth(event) - TIMELINE_BLOCK_FADE_EDGE_PX)}
+                  x={Math.max(0, sceneBlockPixelWidth(event) - sceneBlockFadeHandleWidthPx(event))}
                   y="0"
-                  width={TIMELINE_BLOCK_FADE_EDGE_PX}
+                  width={sceneBlockFadeHandleWidthPx(event)}
                   height={TIMELINE_BLOCK_UPPER_BAND_PX}
                   aria-label="Adjust Scene Block Fade Out"
                   onPointerDown={(pointerEvent) => beginEventFade(pointerEvent, event, "out")}
@@ -3465,7 +3875,7 @@ export function TimelineOverview(props: TimelineOverviewProps) {
             <title>
               {event.duration_ms > 0
                 ? event.conform_to_tempo
-                  ? `${event.cue_label}${timelineConformRateBadge(event) ? ` ${timelineConformRateBadge(event)}` : ""} / ${event.track} / ${event.time_ms} ms / ${event.duration_ms} ms window / ${event.loop_count} ${event.loop_fill ? "fill loops" : "tempo iterations"}`
+                  ? `${event.cue_label}${sceneBlockRateBadge(event) ? ` ${sceneBlockRateBadge(event)}` : ""} / ${event.track} / ${event.time_ms} ms / ${event.duration_ms} ms window / ${event.loop_count} ${event.loop_fill ? "fill loops" : "tempo iterations"}`
                   : `${event.cue_label} / ${event.track} / ${event.time_ms} ms / ${event.duration_ms} ms x ${event.loop_count}`
                 : `${event.cue_label} / ${event.track} / ${event.time_ms} ms / legacy point`}
             </title>
@@ -3509,6 +3919,7 @@ export function TimelineOverview(props: TimelineOverviewProps) {
               data-overlap-cluster-ids={cluster.source_cluster_ids.join(",")}
               data-overlap-group-count={cluster.group_count}
               data-overlap-aggregated={cluster.aggregated ? "true" : "false"}
+              data-overlap-badge-kind="overlap"
               data-timeline-layer-id={cluster.layer_id}
               transform={`translate(${cluster.x} ${clusterBadgeTopPx(cluster)})`}
               onClick={(event) => {
@@ -3523,7 +3934,13 @@ export function TimelineOverview(props: TimelineOverviewProps) {
               }}
             >
               <rect width={clusterBadgeWidthPx} height={clusterBadgeHeightPx()} rx="2" />
-              <text x={clusterBadgeWidthPx / 2} y={clusterBadgeHeightPx() / 2} text-anchor="middle" dominant-baseline="central">×{cluster.count}</text>
+              <text
+                x={clusterBadgeWidthPx / 2}
+                y={clusterBadgeHeightPx() / 2}
+                text-anchor="middle"
+                dominant-baseline="central"
+                data-no-localize
+              >≋ {cluster.count}</text>
               <title>{accessibleLabel}</title>
             </g>
           );

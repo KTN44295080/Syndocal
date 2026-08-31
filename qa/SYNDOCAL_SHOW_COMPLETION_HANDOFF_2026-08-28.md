@@ -4,12 +4,109 @@ Status date: 2026-08-31 JST
 
 This is the concise authoritative resume note for the final show-critical tranche. It supersedes chat-only status, but it does not supersede the detailed acceptance documents named below.
 
+## 2026-08-31 Timeline UX/Undo bounded pause checkpoint
+
+Authority is branch `codex/syndocal-v1.2`; the pre-checkpoint local/upstream
+base was `eaef0508df944dafdee08552acb6be28a74c9c46`, and the authoritative source
+checkpoint is the commit containing this note after its upstream-equal push.
+Product metadata is `1.2.0-alpha.44`. The tranche contains the documented alpha.44
+DVC persistence work plus Timeline Source Shelf density, Scene Block
+readability, wheel navigation, adaptive ruler/fixed Grid snap, edge guides, and
+authoritative root Scene Block history. It also moves the 409-KB
+`live_audio_input_tests` module out of the 5.36-MB `main.rs` source. The
+5,363,529-byte backup and 3,783-byte one-off split script are excluded from the
+checkpoint and are the first verified post-push cleanup targets; neither is a
+product artifact.
+
+Independent Terra xHigh review is GO for snap/grid, the repaired Audio/Video
+Grid-versus-Edges boundary, Undo production timing, and control-gate cleanup.
+Supervisor evidence passes exact-MSVC Engine `3/3`, Syndocal root Scene Block
+history `2/2`, first-party warnings `0`, snap, Scene Block helpers, TypeScript,
+release metadata/package contracts, and Timeline performance at
+1920/1366/860/1280 widths. Source Shelf placement/parity passes at 1920x1080,
+1920x1032, and 2048x1152. Compact 1366/1280 reruns and the repaired control
+gate's four-viewport aggregate were deliberately not started/finished after the
+operator requested this bounded pause.
+
+The first safe source action is to run Source Shelf at 1366x768 and 1280x720,
+then the repaired control four-viewport aggregate. Do not add implementation
+before those gates are recorded. The first safe native action still requires
+operator confirmation that alpha.43 PID `80968` no longer owns needed in-memory
+work; path-verify and stop only that executable, run the mandatory MSVC 14.44
+no-bundle build, launch exactly one maximized alpha.44 window, and manually
+exercise move, RATE/WINDOW resize, Fade In/Out, guide, Undo, and Redo. Physical
+DMX/Art-Net/Spout/audio/capture/DJ acceptance remains open.
+
+Cleanup note: a command-line-verified orphan headless Chrome tree rooted at PID
+`18032`, profile `C:\TEMP\syndocal-control-upper-workspaces-oDGZYD`, was stopped
+without touching interactive Chrome or Syndocal. Recursive removal of that
+already-inactive temporary profile was blocked by the execution safety layer,
+so the directory may remain and must not be confused with a live gate. No active
+process still referenced it at this checkpoint.
+
+## 2026-08-31 alpha.44 DVC save/reopen source authority
+
+Current product metadata is synchronized at `1.2.0-alpha.44`. The old
+current-schema validator required a global lighting-effect summary even when a
+Cue carried the complete owned effect request. The new path accepts that
+single-authority form and still rejects zero IDs, duplicate per-Cue IDs,
+missing global definitions for parameterless targets, and malformed
+fixture/group/attribute/video references.
+
+With the exact Community MSVC `14.44.35207` linker pinned and first,
+`cargo test -p protocol --locked` passed `214/214`; the default-feature exact
+`dance.dvc` import -> Engine normalization -> Save JSON -> fresh Engine reopen
+test passed `1/1`; and the DVC suite passed `109/0/3 ignored`. First-party
+warnings were `0`. `check:release` passed. Independent Terra xHigh reviews are
+GO with no P0/P1. The external regression retains the exact 18 lanes, 194
+Lighting events, one audio clip, `201090 ms`, 29 cue-owned targets, empty global
+effect registry, and nonempty Timeline bank across save/reopen.
+
+Native alpha.44 is still pending because the exact alpha.43 Syndocal window has
+an unsaved `Untitled.sdc*` raw import open and the operator is actively viewing
+its child Timeline. Do not stop that process until the work is saved or the
+operator explicitly releases it. The first safe resume action is then the
+path-verified exact-process stop, mandatory alpha.44 no-bundle build, one-window
+launch, and native reopen of a separately saved candidate. Preserve the failed
+alpha.43 evidence file; do not overwrite it. Physical DMX/Art-Net/Spout/audio,
+capture, and production DJ acceptance remain open.
+
+## 2026-08-31 alpha.43 native/DVC resume authority
+
+Native build source/docs were clean and upstream-equal at
+`eaef0508df944dafdee08552acb6be28a74c9c46`. Only the exact checkout-owned
+alpha.42 Syndocal PID `115592` was stopped after path verification; Rekordbox,
+the local DJ Agent, and Unity were preserved. The pinned Community MSVC
+`14.44.35207` linker was first in `where.exe`; the no-bundle build completed in
+`3m50s`, first-party warnings `0`. The alpha.43 executable is 61,696,512 bytes,
+File/ProductVersion `1.2.0-alpha.43`, SHA-256
+`3B96560DEFB2E66E03A4D09DAA63825EACE5842674F0CB50FEB62E457228A3DC`.
+`check:release` passed. Exactly one checkout-owned PID `80968` was responsive,
+and the verified Syndocal window was maximized before UI actions.
+
+The raw `C:\Users\kouty\Downloads\dance.dvc` was imported in that native
+window. The report showed fixtures 46, profiles 12, groups 15, cues 56, scene
+blocks 194, audio clips 1, and missing audio files 1. In EDIT / LIGHTING,
+`TIMELINE / New Scene` `#8.1` visibly showed `TIMELINE` plus `TL`; the same-name
+`ber / New Scene` `#15.2` remained `STATIC`. The raw importer classification is
+accepted. The intermediate
+`target/qa/dance-dvc-import-20260831.sdc` (1,442,222 bytes, SHA-256
+`A56DBA4FE15A60B47D6CD6AEE495587980C6ECE46D703D07BF3E5C51D654500F`)
+is not accepted: alpha.43 reopen failed closed with `Cue 4 references missing
+lighting effect 1`. Do not use or overwrite it as a show project. First safe
+code action is a focused importer-save/project-open reference trace; first safe
+operator action remains relinking the one missing audio only after a corrected
+save/reopen artifact exists. Physical DMX/Art-Net/Spout/audio and production DJ
+acceptance remain open.
+
 ## 2026-08-31 alpha.43 source-integration handoff
 
 The pushed alpha.43 implementation/QA checkpoint is branch
 `codex/syndocal-v1.2` at
-`8d8c5461f314d85e0be64f4ab7bd4f1a857de619`, recorded with local
-`HEAD`/upstream equality. That committed source checkpoint
+`eaef0508df944dafdee08552acb6be28a74c9c46`, recorded with local
+`HEAD`/upstream equality. The implementation was introduced at
+`8d8c5461f314d85e0be64f4ab7bd4f1a857de619`; the current authority includes
+its pushed documentation follow-up. That committed source checkpoint
 advances the product consistently to `1.2.0-alpha.43` across workspace
 Cargo/lock, frontend package, Tauri
 configuration, release-check metadata, README, macOS bundle artifact naming,
@@ -29,12 +126,9 @@ warnings, or harness errors. Timeline performance, context-menu, DJ Link,
 localization (`3644/3644`, zero unprotected labels), TypeScript, Cargo format,
 and diff checks passed. Independent Terra xHigh adversarial review returned GO
 after Vite/CDP endpoint identity, fail-closed input, and cleanup proof were
-closed. The current native authority remains `1.2.0-alpha.42`. No alpha.43
-native build, executable or artifact identity, window
-launch/maximize verification, release, or physical acceptance is claimed. No
-process-control action was taken for this source checkpoint; preserve the show
-processes and rediscover/verify the exact checkout-owned executable before
-native QA.
+closed. This paragraph records the historical source-only gate; native identity
+is now governed by the alpha.43 native/DVC authority above, and no physical
+acceptance is implied.
 
 The bounded show artifacts are the alpha9 reference-audio/content artifact
 (`1,095,864` bytes, SHA-256
@@ -69,17 +163,15 @@ resolved Lighting blocks, one audio block, `201090 ms`); `ber / New Scene`
 passed `1/1`, first-party warnings `0`, under the pinned MSVC 14.44 gate. The
 audio path is unavailable and must be relinked; the Lighting blocks are intact.
 
-Next safe action: obtain explicit confirmation that the currently open, unsaved
-Syndocal project is saved. Afterwards, under the exact pinned and `where.exe`-first MSVC
-`14.44` linker, terminate only the exact checkout-owned alpha.42 Syndocal
-executable, build alpha.43, launch, and maximize the verified Syndocal window
-before separately controlled QA. Do not supply an alpha.43 artifact identity
-or native result until those actions have actually completed.
+Next safe action: keep the current raw DVC import unsaved, preserve the rejected
+intermediate SDC as evidence, and diagnose the missing Lighting-effect
+reference through the import -> save -> project-open path. Do not continue to
+physical output from that rejected intermediate artifact.
 
 ## 2026-08-30 current source, process, and external-boundary checkpoint
 
 The current pushed implementation/QA checkpoint is branch `codex/syndocal-v1.2` at
-`8d8c5461f314d85e0be64f4ab7bd4f1a857de619`, exactly equal to
+`eaef0508df944dafdee08552acb6be28a74c9c46`, exactly equal to
 `origin/codex/syndocal-v1.2`. The fixed alpha.42 Art-Net derivative generator
 and tests were introduced at `42cb17ce3ae0272a43f7671da70361d3f2520e98`.
 The DJ production-authority documentation checkpoint was introduced at
@@ -99,8 +191,9 @@ acceptance also remains pending. These local checks do not replace production
 strict-v3 provisioning, LAN, token, HELLO/ACK/STATE_SYNC, reconnect, or
 Timeline acceptance; HW-4 remains exactly `0/12`.
 
-The exact checkout-owned alpha.42 Syndocal executable remains responsive as
-PID `115592`; its immutable native identity is recorded in the next section.
+The exact checkout-owned alpha.42 PID `115592` was path-verified and stopped
+for the alpha.43 build. The current exact checkout-owned alpha.43 PID `80968`
+is responsive; its identity is recorded in the native/DVC authority above.
 Unity remains responsive as PID `112488` and is the sole observed UDP `6454`
 owner. The Art-Net derivative one-shot is unsent, physical receiver/fixture
 observation is open, MiraBox HDMI-content proof is open, audible rehearsal
@@ -115,7 +208,7 @@ remain `0`.
 
 ## 2026-08-30 alpha.42 final native three-display checkpoint
 
-This is the current alpha.42 native authority and supersedes the older
+This is a historical alpha.42 native authority and supersedes the older
 source-only/current claims below. Branch `codex/syndocal-v1.2` is at `HEAD
 b1f6d760c75b430a4255ead71e5f4bb964501cf4`. The exact MSVC `14.44` native
 build passed with first-party warnings `0`; the exact

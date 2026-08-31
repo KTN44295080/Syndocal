@@ -162,13 +162,13 @@ export function TimelineSourceShelf(props: TimelineSourceShelfProps) {
         <Show when={cue.replace_group}>
           <span class="sceneMatrixReplaceBadge">Replace group</span>
         </Show>
+        <Show when={cue.super_scene}>
+          <span class="sceneMatrixKindBadge superScene timelineExternalSuperSceneMark" data-timeline-source-super-scene={cue.id} data-no-localize>
+            TL
+          </span>
+        </Show>
         <small>{displayNumber(cue.fade_ms, 0)}ms</small>
       </span>
-      <Show when={cue.super_scene}>
-        <span class="sceneMatrixKindBadge superScene timelineExternalSuperSceneMark" data-timeline-source-super-scene={cue.id} data-no-localize>
-          TL
-        </span>
-      </Show>
     </button>;
   };
   const sourceShelfLayers = (kind: TimelineLayerKind) =>
@@ -292,7 +292,16 @@ export function TimelineSourceShelf(props: TimelineSourceShelfProps) {
               </p>
             }
           >
-          {renderTargetSelect("Lighting", "Lighting lane")}
+          <details
+            class="timelineExternalSourcePlacementDisclosure"
+            data-timeline-source-click-placement="Lighting"
+            aria-label={localizedSourceText("Timeline click controls")}
+          >
+            <summary>{localizedSourceText("Timeline click controls")}</summary>
+            <div class="timelineExternalSourceTargets">
+              {renderTargetSelect("Lighting", "Lighting lane")}
+            </div>
+          </details>
           <Show when={shelfBanks().length > 0} fallback={<p class="emptyState">No Scenes are available yet.</p>}>
             <div class="timelineExternalSourceShelfBanks" data-timeline-source-shelf-banks>
               <For each={shelfBanks()}>
@@ -350,10 +359,17 @@ export function TimelineSourceShelf(props: TimelineSourceShelfProps) {
               )}
             </For>
           </div>
-          <div class="timelineExternalSourceTargets" role="group" aria-label="Media Timeline target lanes">
-            {renderTargetSelect("Video", "Video lane")}
-            {renderTargetSelect("Audio", "Audio lane")}
-          </div>
+          <details
+            class="timelineExternalSourcePlacementDisclosure"
+            data-timeline-source-click-placement="Media"
+            aria-label={localizedSourceText("Timeline click controls")}
+          >
+            <summary>{localizedSourceText("Timeline click controls")}</summary>
+            <div class="timelineExternalSourceTargets" role="group" aria-label="Media Timeline target lanes">
+              {renderTargetSelect("Video", "Video lane")}
+              {renderTargetSelect("Audio", "Audio lane")}
+            </div>
+          </details>
           <Show when={mediaShelfAssets().length > 0} fallback={<p class="emptyState">No matching Media Library sources.</p>}>
             <div class="timelineExternalSourceShelfItems">
               <For each={mediaShelfAssets()}>

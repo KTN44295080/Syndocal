@@ -41,6 +41,16 @@ export interface TimelineSceneBlockPlacementUpdate {
 
 interface TimelineSceneBlockControllerOptions {
   invoke: FrontendTauriInvoke;
+  /**
+   * Root-Timeline-only authoritative timing commit. The existing Apply DTO
+   * cannot carry source_offset_ms, so this callback returns false whenever an
+   * edit is outside the proven timing-only boundary. Callers then retain the
+   * legacy direct command instead of silently dropping source semantics.
+   */
+  commitRootSceneBlockTiming?: (
+    event: TimelineCueEventSummary,
+    next: TimelineEventDraft,
+  ) => Promise<boolean>;
   snapTimeMs: (timeMs: number) => number;
   /** Returns beat intent for Beat/Bar snap, or undefined when the current snap mode is not musical. */
   snappedTimeBeats: (timeMs: number) => number | null | undefined;
@@ -970,6 +980,20 @@ export const createTimelineSceneBlockController = (options: TimelineSceneBlockCo
     return isSceneBlock;
   };
 
+  /**
+   * A gesture previews locally and reaches this helper once at pointer-up.
+   * Root Timeline timing-only edits can use the authoritative Apply/history
+   * lane; every non-provable edit remains on the existing direct route.
+   */
+  const commitTimingOnly = async (
+    event: TimelineCueEventSummary,
+    next: TimelineEventDraft,
+    snapEnabled: boolean,
+  ) => {
+    if (await options.commitRootSceneBlockTiming?.(event, next) === true) return next;
+    return set(event, next, snapEnabled);
+  };
+
   const moveToPlacement = async (
     eventId: number,
     requestedTimeMs: number,
@@ -984,11 +1008,18 @@ export const createTimelineSceneBlockController = (options: TimelineSceneBlockCo
     const requested = Math.max(0, Math.round(finiteOr(requestedTimeMs, event.time_ms)));
     const timeMs = snapEnabled ? options.snapTimeMs(requested) : requested;
     try {
-      const next = await set(event, {
+      const next = await commitTimingOnly(event, normalizeTimelineEventDraft(
+        event,
+        {
         ...options.getEventDraft(event),
         time_ms: timeMs,
         layer_id: layerId,
-      }, snapEnabled);
+        },
+        snapEnabled ? options.snapTimeMs : (value) => Math.max(0, Math.round(value)),
+        options.hasEventId,
+        snapEnabled ? options.snappedTimeBeats : () => undefined,
+        options.timeBeatsAtCurrentBpm,
+      ), snapEnabled);
       options.setEventDraft(event.id, next);
       options.setMessage(`Moved Cue ${event.cue_id} to ${timeMs} ms on layer ${layerId ?? "legacy"}`);
       await options.refreshSnapshot();
@@ -1070,7 +1101,14 @@ export const createTimelineSceneBlockController = (options: TimelineSceneBlockCo
       const currentDraft = options.getEventDraft(event);
       const timeMs = options.snapTimeMs(Math.max(0, currentDraft.time_ms + deltaMs));
       try {
-        const next = await set(event, { ...currentDraft, time_ms: timeMs });
+        const next = await commitTimingOnly(event, normalizeTimelineEventDraft(
+          event,
+          { ...currentDraft, time_ms: timeMs },
+          options.snapTimeMs,
+          options.hasEventId,
+          options.snappedTimeBeats,
+          options.timeBeatsAtCurrentBpm,
+        ), true);
         options.setEventDraft(event.id, next);
         options.setMessage(`Moved ${event.duration_ms > 0 ? "Scene Block" : "timeline point"} ${event.id} to ${timeMs} ms`);
         await options.refreshSnapshot();
@@ -1113,7 +1151,9 @@ export const createTimelineSceneBlockController = (options: TimelineSceneBlockCo
         bpm: options.getBpm(),
       });
       try {
-        const next = await set(event, {
+        const next = await commitTimingOnly(event, normalizeTimelineEventDraft(
+          event,
+          {
           ...currentDraft,
           time_ms: projection.start_ms,
           duration_ms: projection.duration_ms,
@@ -1121,7 +1161,12 @@ export const createTimelineSceneBlockController = (options: TimelineSceneBlockCo
           conform_to_tempo: projection.conform_to_tempo,
           loop_fill: projection.loop_fill,
           loop_count: projection.loop_count,
-        }, snapEnabled);
+          },
+          snapEnabled ? options.snapTimeMs : (value) => Math.max(0, Math.round(value)),
+          options.hasEventId,
+          snapEnabled ? options.snappedTimeBeats : () => undefined,
+          options.timeBeatsAtCurrentBpm,
+        ), snapEnabled);
         options.setEventDraft(event.id, next);
         options.setMessage(projection.fallback_to_window
           ? `Scene Block ${event.id} has no Authored beats; RATE stretch used WINDOW behavior (${projection.duration_ms} ms).`
@@ -1145,10 +1190,17 @@ export const createTimelineSceneBlockController = (options: TimelineSceneBlockCo
         ? Math.round(clamp(options.snapTimeMs(requested), 0, windowMs))
         : requested;
       try {
-        const next = await set(event, {
+        const next = await commitTimingOnly(event, normalizeTimelineEventDraft(
+          event,
+          {
           ...currentDraft,
           [edge === "in" ? "fade_in_ms" : "fade_out_ms"]: fadeMs,
-        }, snapEnabled);
+          },
+          snapEnabled ? options.snapTimeMs : (value) => Math.max(0, Math.round(value)),
+          options.hasEventId,
+          snapEnabled ? options.snappedTimeBeats : () => undefined,
+          options.timeBeatsAtCurrentBpm,
+        ), snapEnabled);
         options.setEventDraft(event.id, next);
         options.setMessage(`Set Scene Block ${event.id} Fade ${edge === "in" ? "In" : "Out"} to ${fadeMs} ms`);
         await options.refreshSnapshot();

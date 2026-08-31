@@ -10310,11 +10310,11 @@ pub fn validate_project_file_reference_integrity(
 /// 1. `fixture_groups` registry entries are unique and well-formed.
 /// 2. Every fixture's own `group_ids` membership strings are well-formed;
 ///    they remain the authoritative membership truth.
-/// 3. Every lighting-effect `target_group_ids` reference (summary plus each
-///    embedded request payload, including Chaser steps) is well-formed and
-///    resolves to at least one fixture membership under the engine's
-///    hierarchical prefix rule, so an effect can never persistently target a
-///    group no fixture belongs to.
+/// 3. Every lighting-effect `target_group_ids` reference (summary, each
+///    embedded request payload, and cue-owned embedded requests, including
+///    Chaser steps) is well-formed and resolves to at least one fixture
+///    membership under the engine's hierarchical prefix rule, so an effect can
+///    never persistently target a group no fixture belongs to.
 ///
 /// Malformed input is rejected, never normalized or repaired.
 pub fn validate_project_file_fixture_group_registry(
@@ -10391,6 +10391,56 @@ pub fn validate_project_file_fixture_group_registry(
                 format!("lighting effect {} ColorMapping request", effect.id),
                 request.target_group_ids.as_slice(),
             ));
+        }
+    }
+    for cue in &project.snapshot.cues {
+        for target in &cue.effect_targets {
+            let Some(params) = &target.params else {
+                continue;
+            };
+            let owner = format!("Cue {} owned effect {}", cue.id, target.effect_id);
+            match params {
+                EffectParamsSnapshot::Lfo(request) => references.push((
+                    format!("{owner} LFO request"),
+                    request.target_group_ids.as_slice(),
+                )),
+                EffectParamsSnapshot::PositionWave(request) => references.push((
+                    format!("{owner} PositionWave request"),
+                    request.target_group_ids.as_slice(),
+                )),
+                EffectParamsSnapshot::Color(request) => references.push((
+                    format!("{owner} Color request"),
+                    request.target_group_ids.as_slice(),
+                )),
+                EffectParamsSnapshot::Chaser(request) => {
+                    for (step_index, step) in request.steps.iter().enumerate() {
+                        references.push((
+                            format!("{owner} Chaser step {step_index}"),
+                            step.target_group_ids.as_slice(),
+                        ));
+                    }
+                }
+                EffectParamsSnapshot::Move(request) => references.push((
+                    format!("{owner} Move request"),
+                    request.target_group_ids.as_slice(),
+                )),
+                EffectParamsSnapshot::Value(request) => references.push((
+                    format!("{owner} Value request"),
+                    request.target_group_ids.as_slice(),
+                )),
+                EffectParamsSnapshot::Curve(request) => references.push((
+                    format!("{owner} Curve request"),
+                    request.target_group_ids.as_slice(),
+                )),
+                EffectParamsSnapshot::Mapping(request) => references.push((
+                    format!("{owner} Mapping request"),
+                    request.target_group_ids.as_slice(),
+                )),
+                EffectParamsSnapshot::ColorMapping(request) => references.push((
+                    format!("{owner} ColorMapping request"),
+                    request.target_group_ids.as_slice(),
+                )),
+            }
         }
     }
     for (owner, group_ids) in references {
@@ -11706,8 +11756,29 @@ fn validate_cue_project_references<'maps, 'snapshot>(
                 ));
             }
         }
+        let mut effect_target_ids = BTreeSet::new();
         for target in &cue.effect_targets {
-            if !effects.contains_key(&target.effect_id) {
+            if target.effect_id == 0 {
+                return Err(project_missing_reference(
+                    &cue_owner,
+                    "lighting effect",
+                    target.effect_id,
+                ));
+            }
+            if !effect_target_ids.insert(target.effect_id) {
+                return Err(project_reference_mismatch(
+                    &cue_owner,
+                    format!(
+                        "lighting effect {} is targeted more than once",
+                        target.effect_id
+                    ),
+                ));
+            }
+        }
+        for target in &cue.effect_targets {
+            // Cue-owned params are self-contained, so they may outlive the
+            // global effect definition.
+            if target.params.is_none() && !effects.contains_key(&target.effect_id) {
                 return Err(project_missing_reference(
                     &cue_owner,
                     "lighting effect",
@@ -11720,6 +11791,7 @@ fn validate_cue_project_references<'maps, 'snapshot>(
                     params,
                     fixtures,
                     fixture_attributes,
+                    video,
                 )?;
             }
         }
@@ -11771,7 +11843,7 @@ fn validate_effect_and_node_graph_references(
                 )?;
             }
         }
-        validate_effect_summary_payload_references(effect, fixtures, fixture_attributes)?;
+        validate_effect_summary_payload_references(effect, fixtures, fixture_attributes, video)?;
         for target in &effect.video_targets {
             for layer_id in &target.layer_ids {
                 if !video.layers.contains_key(layer_id) {
@@ -11843,14 +11915,12 @@ fn validate_effect_summary_payload_references(
     effect: &EffectSummary,
     fixtures: &BTreeMap<u64, &PatchedFixtureSummary>,
     fixture_attributes: &BTreeMap<FixtureId, BTreeSet<String>>,
+    video: &ProjectVideoCatalog<'_>,
 ) -> Result<(), ProjectReferenceIntegrityError> {
     if let Some(request) = &effect.lfo {
-        validate_lfo_request_payload(
-            &format!("lighting effect {} LFO request", effect.id),
-            request,
-            fixtures,
-            fixture_attributes,
-        )?;
+        let owner = format!("lighting effect {} LFO request", effect.id);
+        validate_lfo_request_payload(&owner, request, fixtures, fixture_attributes)?;
+        validate_effect_video_target_references(&owner, &request.video_targets, video)?;
     }
     if let Some(request) = &effect.color {
         validate_color_request_payload(
@@ -11916,13 +11986,16 @@ fn validate_effect_params_snapshot_references(
     params: &EffectParamsSnapshot,
     fixtures: &BTreeMap<u64, &PatchedFixtureSummary>,
     fixture_attributes: &BTreeMap<FixtureId, BTreeSet<String>>,
+    video: &ProjectVideoCatalog<'_>,
 ) -> Result<(), ProjectReferenceIntegrityError> {
     match params {
         EffectParamsSnapshot::Lfo(request) => {
-            validate_lfo_request_payload(&owner, request, fixtures, fixture_attributes)
+            validate_lfo_request_payload(&owner, request, fixtures, fixture_attributes)?;
+            validate_effect_video_target_references(&owner, &request.video_targets, video)
         }
         EffectParamsSnapshot::PositionWave(request) => {
-            validate_position_wave_request_payload(&owner, request, fixtures, fixture_attributes)
+            validate_position_wave_request_payload(&owner, request, fixtures, fixture_attributes)?;
+            validate_effect_video_target_references(&owner, &request.video_targets, video)
         }
         EffectParamsSnapshot::Color(request) => {
             validate_color_request_payload(&owner, request, fixtures, fixture_attributes)
@@ -11946,6 +12019,25 @@ fn validate_effect_params_snapshot_references(
             validate_color_mapping_request_payload(&owner, request, fixtures, fixture_attributes)
         }
     }
+}
+
+fn validate_effect_video_target_references(
+    owner: &str,
+    targets: &[VideoEffectTarget],
+    video: &ProjectVideoCatalog<'_>,
+) -> Result<(), ProjectReferenceIntegrityError> {
+    for target in targets {
+        for layer_id in &target.layer_ids {
+            if !video.layers.contains_key(layer_id) {
+                return Err(project_missing_reference(
+                    format!("{owner} video target"),
+                    "video layer",
+                    *layer_id,
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Every listed fixture must exist and support `attribute` exactly.
@@ -20210,6 +20302,173 @@ mod tests {
         let mut snapshot = payload_test_snapshot();
         snapshot.effects.push(payload_effect(500));
         assert!(super::validate_current_engine_snapshot_reference_integrity(&snapshot).is_ok());
+    }
+
+    #[test]
+    fn cue_owned_effect_params_allow_missing_global_but_preserve_fail_closed_checks() {
+        // DVC imports persist the effect request on the cue target and do not
+        // need a duplicate global EffectSummary entry.
+        let mut owned = payload_test_snapshot();
+        owned.cues[0].effect_targets.push(super::CueEffectTarget {
+            effect_id: 4,
+            enabled: true,
+            params: Some(super::EffectParamsSnapshot::PositionWave(
+                payload_position_wave_request(),
+            )),
+            transition_ms: None,
+        });
+        assert!(super::validate_current_engine_snapshot_reference_integrity(&owned).is_ok());
+
+        let mut legacy_with_global = payload_test_snapshot();
+        legacy_with_global.effects.push(payload_effect(4));
+        legacy_with_global.cues[0]
+            .effect_targets
+            .push(super::CueEffectTarget {
+                effect_id: 4,
+                enabled: true,
+                params: None,
+                transition_ms: None,
+            });
+        assert!(
+            super::validate_current_engine_snapshot_reference_integrity(&legacy_with_global)
+                .is_ok()
+        );
+
+        let mut legacy = payload_test_snapshot();
+        legacy.cues[0].effect_targets.push(super::CueEffectTarget {
+            effect_id: 4,
+            enabled: true,
+            params: None,
+            transition_ms: None,
+        });
+        assert_eq!(
+            super::validate_current_engine_snapshot_reference_integrity(&legacy),
+            Err(super::ProjectReferenceIntegrityError::MissingReference {
+                owner: "Cue 1".to_string(),
+                target_domain: "lighting effect",
+                target_id: 4,
+            })
+        );
+
+        let mut zero = owned.clone();
+        zero.cues[0].effect_targets[0].effect_id = 0;
+        assert_eq!(
+            super::validate_current_engine_snapshot_reference_integrity(&zero),
+            Err(super::ProjectReferenceIntegrityError::MissingReference {
+                owner: "Cue 1".to_string(),
+                target_domain: "lighting effect",
+                target_id: 0,
+            })
+        );
+
+        let mut invalid = owned;
+        let super::EffectParamsSnapshot::PositionWave(request) =
+            invalid.cues[0].effect_targets[0].params.as_mut().unwrap()
+        else {
+            panic!("params must remain PositionWave");
+        };
+        request.attribute = "Zoom".to_string();
+        assert!(matches!(
+            super::validate_current_engine_snapshot_reference_integrity(&invalid),
+            Err(super::ProjectReferenceIntegrityError::ReferenceMismatch { ref owner, .. })
+                if owner == "Cue 1 owned effect 4 request"
+        ));
+    }
+
+    #[test]
+    fn cue_owned_effect_group_video_and_duplicate_refs_fail_at_both_boundaries() {
+        fn cue_owned_target(params: super::EffectParamsSnapshot) -> super::CueEffectTarget {
+            super::CueEffectTarget {
+                effect_id: 4,
+                enabled: true,
+                params: Some(params),
+                transition_ms: None,
+            }
+        }
+
+        let mut group_snapshot = payload_test_snapshot();
+        let mut group_request = payload_position_wave_request();
+        group_request.target_group_ids = vec!["ghost".to_string()];
+        group_snapshot.cues[0].effect_targets = vec![cue_owned_target(
+            super::EffectParamsSnapshot::PositionWave(group_request),
+        )];
+        // The snapshot-level validator cannot see ProjectFile.fixture_groups;
+        // it reports that external boundary instead of guessing group truth.
+        assert!(
+            super::validate_current_engine_snapshot_reference_integrity(&group_snapshot).is_ok()
+        );
+        let mut group_project = registry_test_project();
+        group_project.snapshot.cues[0].effect_targets =
+            group_snapshot.cues[0].effect_targets.clone();
+        assert!(matches!(
+            super::validate_project_file_reference_integrity(&group_project),
+            Err(super::ProjectReferenceIntegrityError::MissingGroupReference { ref group_id, .. })
+                if group_id == "ghost"
+        ));
+
+        let mut video_snapshot = payload_test_snapshot();
+        let mut video_request = payload_position_wave_request();
+        video_request.video_targets = vec![super::VideoEffectTarget {
+            layer_ids: vec![999],
+            param: super::VideoParam::Opacity,
+            low: 0.0,
+            high: 1.0,
+            position: None,
+        }];
+        video_snapshot.cues[0].effect_targets = vec![cue_owned_target(
+            super::EffectParamsSnapshot::PositionWave(video_request),
+        )];
+        assert!(matches!(
+            super::validate_current_engine_snapshot_reference_integrity(&video_snapshot),
+            Err(super::ProjectReferenceIntegrityError::MissingReference {
+                ref owner,
+                target_domain: "video layer",
+                target_id: 999,
+            }) if owner == "Cue 1 owned effect 4 request video target"
+        ));
+        let mut video_project = registry_test_project();
+        video_project.snapshot.cues[0].effect_targets =
+            video_snapshot.cues[0].effect_targets.clone();
+        assert!(matches!(
+            super::validate_project_file_reference_integrity(&video_project),
+            Err(super::ProjectReferenceIntegrityError::MissingReference {
+                ref owner,
+                target_domain: "video layer",
+                target_id: 999,
+            }) if owner == "Cue 1 owned effect 4 request video target"
+        ));
+
+        let mut duplicate_snapshot = payload_test_snapshot();
+        duplicate_snapshot.cues[0].effect_targets = vec![
+            cue_owned_target(super::EffectParamsSnapshot::PositionWave(
+                payload_position_wave_request(),
+            )),
+            super::CueEffectTarget {
+                effect_id: 4,
+                enabled: false,
+                params: None,
+                transition_ms: None,
+            },
+        ];
+        assert!(matches!(
+            super::validate_current_engine_snapshot_reference_integrity(&duplicate_snapshot),
+            Err(super::ProjectReferenceIntegrityError::ReferenceMismatch {
+                ref owner,
+                ref detail,
+            }) if owner == "Cue 1"
+                && detail == "lighting effect 4 is targeted more than once"
+        ));
+        let mut duplicate_project = registry_test_project();
+        duplicate_project.snapshot.cues[0].effect_targets =
+            duplicate_snapshot.cues[0].effect_targets.clone();
+        assert!(matches!(
+            super::validate_project_file_reference_integrity(&duplicate_project),
+            Err(super::ProjectReferenceIntegrityError::ReferenceMismatch {
+                ref owner,
+                ref detail,
+            }) if owner == "Cue 1"
+                && detail == "lighting effect 4 is targeted more than once"
+        ));
     }
 
     #[test]

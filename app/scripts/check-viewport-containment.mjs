@@ -8774,6 +8774,7 @@ async function runLayeredTimelineDeskCheck(client, viewport) {
       y: wheelBefore.y,
       deltaX: 0,
       deltaY: -120,
+      modifiers: 2,
     });
     await sleep(96);
   }
@@ -29124,10 +29125,12 @@ async function measureTimelineSourceShelf(client) {
       return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
     };
     const rect = shelf.getBoundingClientRect();
+    const context = shelf.closest('[data-workspace-pane="lower-right"]');
     const categoryButtons = [...shelf.querySelectorAll('[data-timeline-source-shelf-category]')];
     const filters = [...shelf.querySelectorAll('[data-timeline-source-shelf-filter]')];
     const placementButtons = [...shelf.querySelectorAll('[data-timeline-external-source]')];
     const targetSelects = [...shelf.querySelectorAll('.timelineExternalSourceTarget select')];
+    const clickPlacementDetails = [...shelf.querySelectorAll('[data-timeline-source-click-placement]')];
     const scrollSurfaces = [shelf, ...shelf.querySelectorAll('.timelineExternalSourceShelfBody')]
       .filter((element) => element instanceof HTMLElement)
       .map((element) => {
@@ -29148,12 +29151,20 @@ async function measureTimelineSourceShelf(client) {
     return {
       present: true,
       contained: rect.left >= -0.5 && rect.right <= innerWidth + 0.5 && rect.top >= -0.5 && rect.bottom <= innerHeight + 0.5,
+      compactTopAligned: context instanceof HTMLElement && rect.top >= context.getBoundingClientRect().top - 1 && rect.bottom <= context.getBoundingClientRect().bottom + 1 && rect.height < context.getBoundingClientRect().height - 4,
       categoryButtonCount: categoryButtons.length,
       filterCount: filters.length,
       placementButtonCount: placementButtons.length,
       sourceKinds,
       targetValues: targetSelects.map((select) => select.value),
       targetOptions: targetSelects.map((select) => select.options.length),
+      clickPlacement: clickPlacementDetails.map((details) => ({
+        kind: details.getAttribute('data-timeline-source-click-placement'),
+        isDetails: details instanceof HTMLDetailsElement,
+        closed: details instanceof HTMLDetailsElement && !details.open,
+        summaryHeight: details.querySelector(':scope > summary')?.getBoundingClientRect().height ?? 0,
+        selectorCount: details.querySelectorAll('.timelineExternalSourceTarget select').length,
+      })),
       scrollSurfaces,
       minHitTarget: Math.min(...targetRects.map((target) => Math.min(target.width, target.height)), Infinity),
       documentAndAppScrollZero: document.documentElement.scrollHeight <= innerHeight + 1 && (!app || app.scrollHeight <= app.clientHeight + 1),
@@ -29167,6 +29178,64 @@ async function focusTimelineSourceShelf(client) {
     if (!(target instanceof HTMLButtonElement)) return false;
     target.focus();
     return document.activeElement === target;
+  })()`);
+}
+
+async function measureTimelineSourceShelfSceneCards(client) {
+  return client.evaluate(`(() => {
+    const shelf = document.querySelector('[data-timeline-source-shelf]');
+    if (!(shelf instanceof HTMLElement)) return { present: false };
+    const visible = (element) => {
+      if (!(element instanceof HTMLElement)) return false;
+      const box = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return box.width > 0 && box.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+    };
+    const cards = [...shelf.querySelectorAll('.timelineExternalSourceShelfBankScenes .timelineExternalSourceCard')].filter(visible);
+    const cardRows = cards.map((card) => {
+      const cardBox = card.getBoundingClientRect();
+      const children = [...card.children].map((child) => {
+        const box = child.getBoundingClientRect();
+        return { top: box.top, bottom: box.bottom, left: box.left, right: box.right };
+      });
+      const contained = children.every((box) =>
+        box.top >= cardBox.top - 1 && box.bottom <= cardBox.bottom + 1 &&
+        box.left >= cardBox.left - 1 && box.right <= cardBox.right + 1,
+      );
+      const nonOverlapping = children.every((left, leftIndex) =>
+        children.slice(leftIndex + 1).every((right) =>
+          left.right <= right.left + 1 || right.right <= left.left + 1 ||
+          left.bottom <= right.top + 1 || right.bottom <= left.top + 1,
+        ),
+      );
+      return {
+        kind: card.querySelector('[data-timeline-source-cue-kind]')?.getAttribute('data-timeline-source-cue-kind') ?? '',
+        height: cardBox.height,
+        contained,
+        nonOverlapping,
+        scrollHeight: card.scrollHeight,
+        clientHeight: card.clientHeight,
+      };
+    });
+    const heights = cardRows.map(({ height }) => height);
+    const minHeight = heights.length ? Math.min(...heights) : 0;
+    const maxHeight = heights.length ? Math.max(...heights) : 0;
+    const clickPlacement = shelf.querySelector('[data-timeline-source-click-placement="Lighting"]');
+    return {
+      present: true,
+      cardCount: cardRows.length,
+      kinds: cardRows.map(({ kind }) => kind),
+      fxCount: cardRows.filter(({ kind }) => kind === 'FX').length,
+      fxFixtureSupplied: cardRows.some(({ kind }) => kind === 'FX'),
+      staticCount: cardRows.filter(({ kind }) => kind === 'STATIC').length,
+      timelineCount: cardRows.filter(({ kind }) => kind === 'TIMELINE').length,
+      equalHeights: cardRows.length > 0 && maxHeight - minHeight <= 1,
+      childrenContained: cardRows.every(({ contained }) => contained),
+      childrenNonOverlapping: cardRows.every(({ nonOverlapping }) => nonOverlapping),
+      cardRows,
+      clickPlacementClosed: clickPlacement instanceof HTMLDetailsElement && !clickPlacement.open,
+      clickPlacementSummaryHeight: clickPlacement?.querySelector(':scope > summary')?.getBoundingClientRect().height ?? 0,
+    };
   })()`);
 }
 
@@ -29232,16 +29301,32 @@ async function showTimelineSourceShelfMedia(client) {
     return true;
   })()`);
   await sleep(80);
-  await client.evaluate(`(() => {
-    const targets = [...document.querySelectorAll('[data-timeline-source-shelf] .timelineExternalSourceTarget select')];
+  await client.evaluate(`(async () => {
+    const placement = document.querySelector('[data-timeline-source-shelf] [data-timeline-source-click-placement="Media"]');
+    const summary = placement?.querySelector(':scope > summary');
+    const targets = placement ? [...placement.querySelectorAll('.timelineExternalSourceTarget select')] : [];
+    if (!(placement instanceof HTMLDetailsElement) || !(summary instanceof HTMLElement) ||
+      targets.length !== 2 || !targets.every((target) => target instanceof HTMLSelectElement)) return false;
+    if (placement.open) {
+      summary.click();
+      await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    }
+    summary.click();
+    await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
     for (const target of targets) {
-      if (!(target instanceof HTMLSelectElement)) return false;
+      const rect = target.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return false;
       const option = [...target.options].find((candidate) => /^\\d+$/.test(candidate.value));
       if (!option) return false;
+      target.focus();
       target.value = option.value;
+      target.dispatchEvent(new Event('input', { bubbles: true }));
       target.dispatchEvent(new Event('change', { bubbles: true }));
     }
-    return true;
+    await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    summary.click();
+    await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    return !placement.open && targets.every((target) => /^\\d+$/.test(target.value));
   })()`);
   await sleep(80);
 }
@@ -29261,28 +29346,100 @@ async function readTimelineInitialShelfState(client) {
   })()`);
 }
 
-async function exerciseTimelineSourceShelfScenePlacement(client) {
-  const prepared = await client.evaluate(`(async () => {
+async function prepareTimelineSourceShelfMediaPlacement(client) {
+  return client.evaluate(`(async () => {
     const shelf = document.querySelector('[data-timeline-source-shelf]');
-    const target = shelf?.querySelector('.timelineExternalSourceTarget select');
-    const source = shelf?.querySelector('[data-timeline-external-source="scene"]');
-    if (!(target instanceof HTMLSelectElement) || !(source instanceof HTMLButtonElement)) {
-      return { prepared: false, reason: 'missing-source-or-target' };
+    const category = shelf?.querySelector('[data-timeline-source-shelf-category="media"]');
+    if (!(category instanceof HTMLButtonElement)) {
+      return { prepared: false, reason: 'missing-media-disclosure-or-targets' };
     }
-    const option = [...target.options].find((candidate) => /^\\d+$/.test(candidate.value));
-    if (!option) return { prepared: false, reason: 'missing-lighting-layer' };
-    target.value = option.value;
-    target.dispatchEvent(new Event('change', { bubbles: true }));
+    category.click();
     await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    const placement = shelf?.querySelector('[data-timeline-source-click-placement="Media"]');
+    const summary = placement?.querySelector(':scope > summary');
+    const targets = placement
+      ? [...placement.querySelectorAll('.timelineExternalSourceTarget select')]
+      : [];
+    const videoTarget = targets.find((target) => target instanceof HTMLSelectElement &&
+      target.closest('.timelineExternalSourceTarget')?.textContent?.includes('Video'));
+    const audioTarget = targets.find((target) => target instanceof HTMLSelectElement &&
+      target.closest('.timelineExternalSourceTarget')?.textContent?.includes('Audio'));
+    if (!(placement instanceof HTMLDetailsElement) || !(summary instanceof HTMLElement) ||
+      !(videoTarget instanceof HTMLSelectElement) || !(audioTarget instanceof HTMLSelectElement)) {
+      return { prepared: false, reason: 'missing-media-disclosure-or-targets' };
+    }
+    if (placement.open) {
+      summary.click();
+      await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    }
+    const closedBeforeOpen = !placement.open;
+    const summaryRect = summary.getBoundingClientRect();
+    const summaryVisible = summaryRect.width > 0 && summaryRect.height > 0 &&
+      getComputedStyle(summary).visibility !== 'hidden';
+    summary.click();
+    await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    const opened = placement.open;
+    const visible = (element) => {
+      if (!(element instanceof HTMLElement)) return false;
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+    };
+    const targetsVisible = visible(videoTarget) && visible(audioTarget);
+    const numericOptions = (target) => [...target.options].filter((option) => /^\\d+$/.test(option.value));
+    const chooseDifferent = (target) => {
+      const options = numericOptions(target);
+      const initial = target.value;
+      return options.find((option, index) => index > 0 && option.value !== initial) ??
+        options.find((option) => option.value !== initial) ?? null;
+    };
+    const videoOption = chooseDifferent(videoTarget);
+    const audioOption = chooseDifferent(audioTarget);
+    if (!closedBeforeOpen || !summaryVisible || !opened || !targetsVisible || !videoOption || !audioOption) {
+      return { prepared: false, reason: 'media-disclosure-did-not-open-with-two-lanes' };
+    }
+    const selectVisibleOption = (target, option) => {
+      target.focus();
+      target.value = option.value;
+      target.dispatchEvent(new Event('input', { bubbles: true }));
+      target.dispatchEvent(new Event('change', { bubbles: true }));
+    };
+    selectVisibleOption(videoTarget, videoOption);
+    selectVisibleOption(audioTarget, audioOption);
+    await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    const selectedBeforeClose = { video: videoTarget.value, audio: audioTarget.value };
+    summary.click();
+    await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    const closedAfterSelection = !placement.open;
+    const selectedWhileClosed = { video: videoTarget.value, audio: audioTarget.value };
+    summary.click();
+    await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    const reopened = placement.open;
+    const selectedAfterReopen = { video: videoTarget.value, audio: audioTarget.value };
+    const selectionPersisted =
+      selectedBeforeClose.video === videoOption.value &&
+      selectedBeforeClose.audio === audioOption.value &&
+      selectedWhileClosed.video === videoOption.value &&
+      selectedWhileClosed.audio === audioOption.value &&
+      selectedAfterReopen.video === videoOption.value &&
+      selectedAfterReopen.audio === audioOption.value;
+    if (!reopened || !selectionPersisted) {
+      return { prepared: false, reason: 'media-lane-selection-did-not-persist', selectedBeforeClose, selectedWhileClosed, selectedAfterReopen };
+    }
+    const card = [...shelf.querySelectorAll('article[data-timeline-source-media-id]')].find((candidate) =>
+      candidate.querySelector('[data-timeline-external-source-kind="Video"]:not(:disabled)') &&
+      candidate.querySelector('[data-timeline-external-source-kind="Audio"]:not(:disabled)'));
+    const source = card?.querySelector('[data-timeline-external-source-kind="Video"]');
+    if (!(card instanceof HTMLElement) || !(source instanceof HTMLButtonElement) || !visible(source)) {
+      return { prepared: false, reason: 'missing-linked-av-media-source' };
+    }
     source.scrollIntoView({ block: 'nearest', inline: 'nearest' });
     await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
-    const rect = source.getBoundingClientRect();
-    const x = rect.left + rect.width / 2;
-    const y = rect.top + rect.height / 2;
-    const hit = document.elementFromPoint(x, y)?.closest('[data-timeline-external-source="scene"]');
+    const sourceRect = source.getBoundingClientRect();
+    const targetLayerId = selectedAfterReopen.video;
     const targetLane = document.querySelector(
       '.timelineOverview .timelineLayerRowBackground[data-timeline-layer-id="'
-        + CSS.escape(option.value) + '"]',
+        + CSS.escape(targetLayerId) + '"]',
     );
     const targetRect = targetLane?.getBoundingClientRect();
     const targetCandidates = targetRect
@@ -29295,7 +29452,251 @@ async function exerciseTimelineSourceShelfScenePlacement(client) {
     const targetPoint = targetCandidates.find((point) =>
       document.elementFromPoint(point.x, point.y)
         ?.closest('[data-timeline-layer-id]')
-        ?.getAttribute('data-timeline-layer-id') === option.value,
+        ?.getAttribute('data-timeline-layer-id') === targetLayerId,
+    ) ?? null;
+    return {
+      prepared:
+        sourceRect.width > 0 && sourceRect.height > 0 && !source.disabled &&
+        Boolean(targetLane && targetRect && targetRect.width > 0 && targetRect.height > 0 && targetPoint),
+      disclosureProofPassed: closedBeforeOpen && summaryVisible && opened && targetsVisible &&
+        closedAfterSelection && reopened && selectionPersisted,
+      selectedBeforeClose,
+      selectedWhileClosed,
+      selectedAfterReopen,
+      videoLayerId: Number(selectedAfterReopen.video),
+      audioLayerId: Number(selectedAfterReopen.audio),
+      mediaAssetId: Number(card.getAttribute('data-timeline-source-media-id')),
+      mediaAssetLabel: (card.querySelector('.timelineExternalSourceCardTitle strong')?.textContent ?? '').trim(),
+      x: sourceRect.left + sourceRect.width / 2,
+      y: sourceRect.top + sourceRect.height / 2,
+      width: sourceRect.width,
+      height: sourceRect.height,
+      targetX: targetPoint?.x ?? 0,
+      targetY: targetPoint?.y ?? 0,
+      targetWidth: targetRect?.width ?? 0,
+      targetHeight: targetRect?.height ?? 0,
+      targetCenterOwnsLayer: Boolean(targetPoint),
+    };
+  })()`);
+}
+
+async function armTimelineSourceShelfMediaDragProbe(client) {
+  return client.evaluate(`(() => {
+    const source = document.querySelector(
+      '[data-timeline-source-shelf] [data-timeline-external-source-kind="Video"]',
+    );
+    if (!(source instanceof HTMLButtonElement)) return false;
+    window.__syndocalTimelineMediaDragProbe = { dragstart: 0, dragend: 0, payload: '' };
+    source.addEventListener('dragstart', (event) => {
+      window.__syndocalTimelineMediaDragProbe.dragstart += 1;
+      window.__syndocalTimelineMediaDragProbe.payload = event.dataTransfer?.getData('application/x-syndocal-timeline-source') ?? '';
+    }, { once: true });
+    source.addEventListener('dragend', () => {
+      window.__syndocalTimelineMediaDragProbe.dragend += 1;
+    }, { once: true });
+    return true;
+  })()`);
+}
+
+async function readTimelineSourceShelfMediaDragProbe(client) {
+  return client.evaluate(`(() => ({
+    ...(window.__syndocalTimelineMediaDragProbe ?? {}),
+  }))()`);
+}
+
+const timelineSourceShelfMediaRequest = (capture) => capture?.mediaArgs?.request ?? null;
+
+const timelineSourceShelfMediaRequestMatches = (request, prepared) => Boolean(
+  request &&
+  request.kind === 'insert_media' &&
+  request.media_asset_id === prepared.mediaAssetId &&
+  request.video_layer_id === prepared.videoLayerId &&
+  request.audio_layer_id === prepared.audioLayerId &&
+  Number.isFinite(request.start_ms),
+);
+
+async function exerciseTimelineSourceShelfMediaClickPlacement(client) {
+  const captureInstalled = await installTimelineSourceShelfProductionCapture(client);
+  const prepared = await prepareTimelineSourceShelfMediaPlacement(client);
+  if (!prepared?.prepared) {
+    return { passed: false, captureInstalled, prepared, capture: null };
+  }
+  await client.send('Input.dispatchMouseEvent', {
+    type: 'mousePressed', x: prepared.x, y: prepared.y,
+    button: 'left', buttons: 1, clickCount: 1,
+  });
+  await client.send('Input.dispatchMouseEvent', {
+    type: 'mouseReleased', x: prepared.x, y: prepared.y,
+    button: 'left', buttons: 0, clickCount: 1,
+  });
+  await sleep(120);
+  const capture = await finishTimelineSourceShelfProductionCapture(client);
+  const request = timelineSourceShelfMediaRequest(capture);
+  return {
+    passed: Boolean(
+      captureInstalled &&
+      prepared.disclosureProofPassed === true &&
+      timelineSourceShelfMediaRequestMatches(request, prepared),
+    ),
+    prepared,
+    capture,
+    request,
+  };
+}
+
+async function exerciseTimelineSourceShelfMediaDragPlacement(client) {
+  const captureInstalled = await installTimelineSourceShelfProductionCapture(client);
+  const prepared = await prepareTimelineSourceShelfMediaPlacement(client);
+  if (!prepared?.prepared) {
+    return { passed: false, captureInstalled, prepared, capture: null, dragProbe: null };
+  }
+  await armTimelineSourceShelfMediaDragProbe(client);
+  const points = [
+    { x: prepared.x + Math.min(10, prepared.width / 4), y: prepared.y },
+    { x: prepared.x + (prepared.targetX - prepared.x) * 0.35, y: prepared.y + (prepared.targetY - prepared.y) * 0.35 },
+    { x: prepared.x + (prepared.targetX - prepared.x) * 0.7, y: prepared.y + (prepared.targetY - prepared.y) * 0.7 },
+    { x: prepared.targetX, y: prepared.targetY },
+  ];
+  await client.send('Input.setInterceptDrags', { enabled: true });
+  const interceptedDrag = client.waitForEvent('Input.dragIntercepted');
+  await client.send('Input.dispatchMouseEvent', {
+    type: 'mousePressed', x: prepared.x, y: prepared.y,
+    button: 'left', buttons: 1, clickCount: 1,
+  });
+  await sleep(40);
+  const dragStartMove = client.send('Input.dispatchMouseEvent', {
+    type: 'mouseMoved', x: points[0].x, y: points[0].y,
+    button: 'left', buttons: 1,
+  }).then(
+    (value) => ({ ok: true, value }),
+    (error) => ({ ok: false, error }),
+  );
+  const dragData = (await interceptedDrag)?.data;
+  if (!dragData) {
+    await client.send('Input.setInterceptDrags', { enabled: false });
+    return { passed: false, captureInstalled, prepared, capture: null, dragProbe: null, reason: 'missing-intercepted-media-drag-data' };
+  }
+  for (const [index, point] of points.slice(1).entries()) {
+    await client.send('Input.dispatchDragEvent', {
+      type: index === 0 ? 'dragEnter' : 'dragOver',
+      x: point.x, y: point.y, data: dragData,
+    });
+    await sleep(45);
+  }
+  await client.send('Input.dispatchDragEvent', {
+    type: 'drop', x: prepared.targetX, y: prepared.targetY, data: dragData,
+  });
+  await client.send('Input.dispatchMouseEvent', {
+    type: 'mouseReleased', x: prepared.targetX, y: prepared.targetY,
+    button: 'left', buttons: 0, clickCount: 1,
+  });
+  await client.send('Input.setInterceptDrags', { enabled: false });
+  const dragStartMoveResult = await dragStartMove;
+  if (!dragStartMoveResult.ok) throw dragStartMoveResult.error;
+  await sleep(120);
+  const dragProbe = await readTimelineSourceShelfMediaDragProbe(client);
+  const capture = await finishTimelineSourceShelfProductionCapture(client);
+  let payload = null;
+  try { payload = JSON.parse(dragProbe.payload); } catch { /* assert exact payload below */ }
+  const request = timelineSourceShelfMediaRequest(capture);
+  return {
+    passed: Boolean(
+      captureInstalled &&
+      prepared.disclosureProofPassed === true &&
+      dragProbe.dragstart === 1 &&
+      dragProbe.dragend === 1 &&
+      payload?.kind === 'media_asset' &&
+      payload?.lane_kind === 'Video' &&
+      payload?.media_asset_id === prepared.mediaAssetId &&
+      payload?.video_layer_id === prepared.videoLayerId &&
+      payload?.audio_layer_id === prepared.audioLayerId &&
+      timelineSourceShelfMediaRequestMatches(request, prepared),
+    ),
+    prepared,
+    dragProbe,
+    payload,
+    capture,
+    request,
+  };
+}
+
+async function exerciseTimelineSourceShelfScenePlacement(client) {
+  const prepared = await client.evaluate(`(async () => {
+    const shelf = document.querySelector('[data-timeline-source-shelf]');
+    const placement = shelf?.querySelector('[data-timeline-source-click-placement="Lighting"]');
+    const summary = placement?.querySelector(':scope > summary');
+    const target = placement?.querySelector('.timelineExternalSourceTarget select');
+    const source = shelf?.querySelector('[data-timeline-external-source="scene"]');
+    if (!(placement instanceof HTMLDetailsElement) || !(summary instanceof HTMLElement) ||
+      !(target instanceof HTMLSelectElement) || !(source instanceof HTMLButtonElement)) {
+      return { prepared: false, reason: 'missing-source-or-target' };
+    }
+    // Exercise the same visible disclosure an operator uses.  Do not mutate a
+    // closed select: opening, selecting, closing, and reopening proves that
+    // the lane choice survives the compact click-placement disclosure.
+    if (placement.open) {
+      summary.click();
+      await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    }
+    const closedBeforeOpen = !placement.open;
+    summary.click();
+    await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    const opened = placement.open;
+    const targetVisible = (() => {
+      const targetRect = target.getBoundingClientRect();
+      const style = getComputedStyle(target);
+      return targetRect.width > 0 && targetRect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+    })();
+    const initialValue = target.value;
+    const numericOptions = [...target.options].filter((candidate) => /^\\d+$/.test(candidate.value));
+    const option = numericOptions.find((candidate) => candidate.value !== initialValue);
+    if (!closedBeforeOpen || !opened || !targetVisible) {
+      return { prepared: false, reason: 'lighting-placement-disclosure-did-not-open-visibly' };
+    }
+    if (!option) return { prepared: false, reason: 'missing-different-lighting-layer' };
+    target.focus();
+    target.value = option.value;
+    target.dispatchEvent(new Event('input', { bubbles: true }));
+    target.dispatchEvent(new Event('change', { bubbles: true }));
+    await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    const selectedValueBeforeClose = target.value;
+    summary.click();
+    await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    const closedAfterSelection = !placement.open;
+    const selectedValueWhileClosed = target.value;
+    summary.click();
+    await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    const reopened = placement.open;
+    const selectedValueAfterReopen = target.value;
+    const selectionPersisted =
+      selectedValueBeforeClose === option.value &&
+      selectedValueWhileClosed === option.value &&
+      selectedValueAfterReopen === option.value;
+    if (!reopened || !selectionPersisted) {
+      return { prepared: false, reason: 'lighting-lane-selection-did-not-persist', selectedValueBeforeClose, selectedValueWhileClosed, selectedValueAfterReopen };
+    }
+    source.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    const rect = source.getBoundingClientRect();
+    const x = rect.left + rect.width / 2;
+    const y = rect.top + rect.height / 2;
+    const hit = document.elementFromPoint(x, y)?.closest('[data-timeline-external-source="scene"]');
+    const targetLane = document.querySelector(
+      '.timelineOverview .timelineLayerRowBackground[data-timeline-layer-id="'
+        + CSS.escape(selectedValueAfterReopen) + '"]',
+    );
+    const targetRect = targetLane?.getBoundingClientRect();
+    const targetCandidates = targetRect
+      ? [0.82, 0.68, 0.5, 0.32, 0.18].flatMap((xRatio) =>
+          [0.5, 0.28, 0.72].map((yRatio) => ({
+            x: targetRect.left + targetRect.width * xRatio,
+            y: targetRect.top + targetRect.height * yRatio,
+          })))
+      : [];
+    const targetPoint = targetCandidates.find((point) =>
+      document.elementFromPoint(point.x, point.y)
+        ?.closest('[data-timeline-layer-id]')
+        ?.getAttribute('data-timeline-layer-id') === selectedValueAfterReopen,
     ) ?? null;
     const beforeEventIds = [...document.querySelectorAll('.timelineMarker.sceneBlock[data-timeline-event-id]')]
       .map((marker) => marker.getAttribute('data-timeline-event-id'))
@@ -29306,6 +29707,10 @@ async function exerciseTimelineSourceShelfScenePlacement(client) {
         hit === source && !source.disabled &&
         Boolean(targetLane && targetRect && targetRect.width > 0 && targetRect.height > 0 && targetPoint),
       reason: '',
+      disclosureProofPassed: closedBeforeOpen && opened && targetVisible && closedAfterSelection && reopened && selectionPersisted,
+      selectedValueBeforeClose,
+      selectedValueWhileClosed,
+      selectedValueAfterReopen,
       x,
       y,
       width: rect.width,
@@ -29315,7 +29720,7 @@ async function exerciseTimelineSourceShelfScenePlacement(client) {
       targetWidth: targetRect?.width ?? 0,
       targetHeight: targetRect?.height ?? 0,
       targetCenterOwnsLayer: Boolean(targetPoint),
-      targetLayerId: Number(option.value),
+      targetLayerId: Number(selectedValueAfterReopen),
       selectedTargetLayerId: Number(target.value),
       sourceCueId: Number(source.getAttribute('data-timeline-source-cue-id')),
       sourceLabel: (source.querySelector('strong')?.textContent ?? '').trim(),
@@ -29347,10 +29752,11 @@ async function exerciseTimelineSourceShelfScenePlacement(client) {
     client,
     prepared,
     'Timeline Sources shelf Scene click placement',
+    true,
   );
 }
 
-async function measureTimelineSourceShelfScenePlacement(client, prepared, conditionLabel) {
+async function measureTimelineSourceShelfScenePlacement(client, prepared, conditionLabel, requireDisclosureProof = false) {
   try {
     await waitForClientCondition(
       client,
@@ -29397,6 +29803,9 @@ async function measureTimelineSourceShelfScenePlacement(client, prepared, condit
       prepared.sourceCueId > 0 &&
       prepared.sourceLabel.length > 0 &&
       prepared.sourceAriaLabel.includes(prepared.sourceLabel) &&
+      (requireDisclosureProof
+        ? prepared.disclosureProofPassed === true
+        : prepared.disclosureProofPassed !== false) &&
       prepared.selectedTargetLayerId === prepared.targetLayerId &&
       prepared.targetCenterOwnsLayer &&
       after.eventCount === prepared.beforeEventCount + 1 &&
@@ -29573,6 +29982,7 @@ async function installTimelineSourceShelfProductionCapture(client) {
       installedWithoutExistingInternals,
       commands: [],
       startupCommands: [],
+      backgroundCommands: [],
       transactionCommands: [],
       phase: 'await-owner-registration',
       ownerRegistrationArgs: null,
@@ -29580,6 +29990,7 @@ async function installTimelineSourceShelfProductionCapture(client) {
       programAudioHandoffArgs: null,
       beginArgs: null,
       addArgs: null,
+      mediaArgs: null,
       commitArgs: null,
       acknowledgeArgs: null,
       eventId: null,
@@ -29589,6 +30000,40 @@ async function installTimelineSourceShelfProductionCapture(client) {
     window.__TAURI_INTERNALS__ = {
       invoke: async (command, args = {}) => {
         capture.commands.push(command);
+        // Periodic status reads and candidate enumeration can race any pointer gesture. They are not
+        // part of the authoritative placement transaction and must not make
+        // its exact mutation sequence timing-dependent. Keep the allowlist
+        // closed and record every admitted background read separately.
+        if (command === 'remote_control_status') {
+          capture.backgroundCommands.push(command);
+          return {
+            running: false,
+            active_connections: 0,
+            rejected_connections: 0,
+            clients: [],
+            web_remote_enabled: false,
+            dj_link_enabled: false,
+          };
+        }
+        if (command === 'get_dj_link_machine_status') {
+          capture.backgroundCommands.push(command);
+          return {
+            configured: false,
+            credentialReady: false,
+            autoStartArmed: false,
+            bindIp: null,
+            bindPort: null,
+            adapterGuid: null,
+            networkGuid: null,
+            credentialGeneration: null,
+            credentialCleanupPending: false,
+            blockReason: null,
+          };
+        }
+        if (command === 'list_dj_link_wired_candidates') {
+          capture.backgroundCommands.push(command);
+          return [];
+        }
         if (capture.phase === 'await-owner-registration') {
           if (command !== 'register_project_transaction_owner') {
             throw new Error(`Timeline Sources strict capture expected owner registration before ${command}.`);
@@ -29683,6 +30128,14 @@ async function installTimelineSourceShelfProductionCapture(client) {
               candidate.id === timeline.id ? clone(timeline) : candidate),
           };
           return eventId;
+        }
+        if (command === 'apply_timeline_advanced_authoritative') {
+          capture.mediaArgs = clone(args);
+          // Media placement proof is concerned with the exact request emitted
+          // from the visible shelf controls.  Returning null keeps this
+          // browser-only capture read-only; the production command is still
+          // reached with the complete authoritative request.
+          return null;
         }
         if (command === 'commit_project_transaction') {
           capture.commitArgs = clone(args);
@@ -29786,6 +30239,10 @@ async function exerciseTimelineSourceShelfProductionClickPlacement(client) {
       capture?.ownerRegistrationResult === null &&
       typeof capture?.ownerRegistrationArgs?.ownerId === 'string' &&
       capture?.programAudioHandoffArgs !== null &&
+      capture.backgroundCommands.every((command) =>
+        command === 'remote_control_status' ||
+        command === 'get_dj_link_machine_status' ||
+        command === 'list_dj_link_wired_candidates') &&
       placement.passed &&
       JSON.stringify(capture?.transactionCommands) === JSON.stringify(exactCommands) &&
       capture.ownerRegistrationArgs.ownerId === capture.beginArgs?.ownerId &&
@@ -29829,6 +30286,10 @@ async function exerciseTimelineSourceShelfProductionDragPlacement(client) {
       capture?.ownerRegistrationResult === null &&
       typeof capture?.ownerRegistrationArgs?.ownerId === 'string' &&
       capture?.programAudioHandoffArgs !== null &&
+      capture.backgroundCommands.every((command) =>
+        command === 'remote_control_status' ||
+        command === 'get_dj_link_machine_status' ||
+        command === 'list_dj_link_wired_candidates') &&
       placement.passed &&
       JSON.stringify(capture?.transactionCommands) === JSON.stringify(exactCommands) &&
       capture.ownerRegistrationArgs.ownerId === capture.beginArgs?.ownerId &&
@@ -29879,6 +30340,32 @@ async function exerciseTimelineSourceShelfProductionPair(client, viewport, recyc
       mobile: false,
     });
   }
+  await openCaptureFixture('media-click');
+  traceViewport('timeline-source-pair media-click-start');
+  const mediaClick = await exerciseTimelineSourceShelfMediaClickPlacement(client);
+  traceViewport(`timeline-source-pair media-click-${mediaClick.passed ? 'pass' : 'fail'}`);
+  if (recycleClient) {
+    client = await recycleClient();
+    await client.send('Emulation.setDeviceMetricsOverride', {
+      width: viewport.width,
+      height: viewport.height,
+      deviceScaleFactor: deviceScaleFactorForViewport(viewport),
+      mobile: false,
+    });
+  }
+  await openCaptureFixture('media-drag');
+  traceViewport('timeline-source-pair media-drag-start');
+  const mediaDrag = await exerciseTimelineSourceShelfMediaDragPlacement(client);
+  traceViewport(`timeline-source-pair media-drag-${mediaDrag.passed ? 'pass' : 'fail'}`);
+  if (recycleClient) {
+    client = await recycleClient();
+    await client.send('Emulation.setDeviceMetricsOverride', {
+      width: viewport.width,
+      height: viewport.height,
+      deviceScaleFactor: deviceScaleFactorForViewport(viewport),
+      mobile: false,
+    });
+  }
   await openCaptureFixture('drag');
   traceViewport('timeline-source-pair drag-start');
   const drag = await exerciseTimelineSourceShelfProductionDragPlacement(client);
@@ -29886,6 +30373,8 @@ async function exerciseTimelineSourceShelfProductionPair(client, viewport, recyc
   const parity = Boolean(
     click.passed &&
     drag.passed &&
+    mediaClick.passed &&
+    mediaDrag.passed &&
     click.capture?.transactionCommands?.[1] === 'add_timeline_scene_block' &&
     drag.capture?.transactionCommands?.[1] === 'add_timeline_scene_block' &&
     click.capture?.addArgs?.cueId === drag.capture?.addArgs?.cueId &&
@@ -29897,8 +30386,10 @@ async function exerciseTimelineSourceShelfProductionPair(client, viewport, recyc
     label: `timeline-source-placement-${viewport.width}x${viewport.height}`,
     click,
     drag,
+    mediaClick,
+    mediaDrag,
     parity,
-    passed: click.passed && drag.passed && parity,
+    passed: click.passed && drag.passed && mediaClick.passed && mediaDrag.passed && parity,
   }, client];
 }
 
@@ -30163,6 +30654,7 @@ async function runTimelineSlimViewport(client, viewport, recycleClient = null) {
   await ensureTimelineShowSurface(client);
   await sleep(120);
   const initialShelfState = await readTimelineInitialShelfState(client);
+  const sourceShelfSceneCards = await measureTimelineSourceShelfSceneCards(client);
   const visual = await measureTimelineSlimVisual(client);
   await showTimelineSourceShelfMedia(client);
   const sourceShelf = await measureTimelineSourceShelf(client);
@@ -30304,7 +30796,17 @@ async function runTimelineSlimViewport(client, viewport, recycleClient = null) {
       visual.documentAndAppScrollZero &&
       implicitVisual.documentAndAppScrollZero],
     ['timelineSourceShelfIsContainedAndUsesLocalScroll', () =>
-      sourceShelf.present && sourceShelf.contained && sourceShelf.scrollSurfaces.every((surface) => surface.permitsInternalScroll)],
+      sourceShelf.present && sourceShelf.contained && sourceShelf.compactTopAligned && sourceShelf.scrollSurfaces.every((surface) => surface.permitsInternalScroll)],
+    ['timelineSourceShelfSceneCardsKeepEqualNonShrinkingHeights', () =>
+      sourceShelfSceneCards.present && sourceShelfSceneCards.cardCount > 0 &&
+      sourceShelfSceneCards.equalHeights &&
+      sourceShelfSceneCards.childrenContained &&
+      sourceShelfSceneCards.childrenNonOverlapping &&
+      sourceShelfSceneCards.cardRows.every((row) => row.scrollHeight <= row.clientHeight + 1)],
+    ['timelineSourceShelfValidatesFXWhenFixtureSuppliesIt', () =>
+      sourceShelfSceneCards.present &&
+      sourceShelfSceneCards.kinds.every((kind) => ['STATIC', 'FX', 'TIMELINE'].includes(kind)) &&
+      (!sourceShelfSceneCards.fxFixtureSupplied || sourceShelfSceneCards.equalHeights)],
     ['timelineSourceShelfExposesExactSourceAndTargetControls', () =>
       sourceShelf.categoryButtonCount === 2 && sourceShelf.filterCount === 3 &&
       initialShelfState?.sourceKinds.includes('Lighting') &&
@@ -30312,6 +30814,11 @@ async function runTimelineSlimViewport(client, viewport, recycleClient = null) {
       sourceShelf.placementButtonCount >= 2 &&
       sourceShelf.targetOptions.every((count) => count > 0) &&
       sourceShelf.targetValues.every((value) => /^\d+$/.test(value)) &&
+      sourceShelf.clickPlacement.length === 1 &&
+      sourceShelf.clickPlacement[0].isDetails &&
+      sourceShelf.clickPlacement[0].closed &&
+      sourceShelf.clickPlacement[0].selectorCount === 2 &&
+      sourceShelf.clickPlacement[0].summaryHeight >= 24 &&
       sourceShelf.sourceKinds.every((kind) => ["Lighting", "Video", "Audio"].includes(kind))],
     ['timelineSourceShelfControlsAreFocusableAndHitSized', () => sourceShelfFocus && sourceShelf.minHitTarget >= 24],
     ['timelineSourceShelfSwitchesSourcesAndInspectorWithPressedState', () => sourceShelfContextSwitch.passed],
@@ -30335,6 +30842,7 @@ async function runTimelineSlimViewport(client, viewport, recycleClient = null) {
     visual,
     implicitVisual,
     sourceShelf,
+    sourceShelfSceneCards,
     sourceShelfScenePlacement,
     sourceShelfSceneDragPlacement,
     sourceShelfPlacementParity,
@@ -38272,6 +38780,11 @@ async function main() {
           `${result.passed ? "pass" : "fail"} ${result.label} ` +
             `click=${result.click.passed ? "pass" : "fail"} ` +
             `drag=${result.drag.passed ? "pass" : "fail"} ` +
+            `mediaClick=${result.mediaClick.passed ? "pass" : "fail"} ` +
+            `mediaDrag=${result.mediaDrag.passed ? "pass" : "fail"} ` +
+            `mediaIds=${result.mediaClick.prepared?.mediaAssetId ?? "?"}:` +
+              `${result.mediaClick.prepared?.videoLayerId ?? "?"}/` +
+              `${result.mediaClick.prepared?.audioLayerId ?? "?"} ` +
             `parity=${result.parity ? "pass" : "fail"} ` +
             `events=${JSON.stringify(result.drag.placement?.dragProbe ?? null)} ` +
             `commands=${JSON.stringify({

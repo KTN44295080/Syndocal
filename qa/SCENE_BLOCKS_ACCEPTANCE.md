@@ -1,6 +1,44 @@
 # Source-Linked Scene Blocks Acceptance
 
-Updated: 2026-07-14
+Updated: 2026-08-31
+
+## 2026-08-31 Timeline authoring source delta
+
+Root-Timeline, same-lane, non-group, non-child Scene Block timing edits now
+enter the authoritative project history exactly once. This includes block move,
+RATE and WINDOW resize, Fade In, Fade Out, and the matching placements emitted
+by Snap Items. Values already resolved by the Timeline snap/edge model are sent
+to that history lane with controller re-snapping disabled. `Ctrl/Cmd+Z` and
+Redo therefore restore the exact authored geometry instead of reporting
+`Unavailable` after a successful edit.
+
+This is a deliberately bounded extension, not a claim that every Timeline
+gesture was migrated. Cue/source/lane reassignment, child-Timeline placements,
+and legacy point-event edits retain their existing paths. Group gestures retain
+the existing `MoveGroup` mutation; this checkpoint fixes its publication so the
+candidate-produced Scene Block/automation delta reaches the live Engine as well
+as project history. Invalid Cue, track, or layer identity fails before live
+publication or history/revision mutation. The canonical returned/persisted
+Timeline image does not retain the transient `snap_request` transport delta.
+
+The Timeline surface now starts new sessions with logical `Grid 500 ms` snap
+and Scene-edge magnet enabled. Its visual ruler adapts major/minor subdivisions
+to zoom without silently changing that logical interval. Scene Block move
+evaluates both block edges, uses the nearest eligible same-lane/same-kind item
+edge or logical quantizer, preserves duration when the end edge wins, and
+renders a start/end snap guide. Fade handles use logical quantizers only and do
+not magnetize to unrelated item edges.
+
+Focused source/browser review is GO. Exact-MSVC Engine timing tests pass `3/3`
+and Syndocal authoritative root timing/history tests pass `2/2`, with
+first-party warnings `0`. Timeline performance passes its four viewports;
+Source Shelf production placement passes 1920x1080, 1920x1032, and 2048x1152,
+while the operator-requested pause leaves 1366x768 and 1280x720 open. Native
+alpha.44 acceptance also remains open: after the protected alpha.43 process is
+explicitly released, verify a move, both resize modes, Fade In/Out, Snap Items,
+guide display, and Undo/Redo in one maximized checkout-owned Syndocal window.
+This source delta adds no physical DMX, Art-Net, media-output, or show-playback
+claim.
 
 ## Implemented boundary
 

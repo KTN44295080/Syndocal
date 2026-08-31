@@ -438,6 +438,8 @@ const controller = helpers.createTimelineSceneBlockController({
     return command === "add_timeline_scene_block" ? 99 : undefined;
   },
   snapTimeMs: snap,
+  snappedTimeBeats: () => undefined,
+  timeBeatsAtCurrentBpm: () => null,
   hasEventId,
   getEventById: (eventId) => eventId === block.id ? block : eventId === point.id ? point : undefined,
   getEventDraft: () => ({ ...block, time_ms: 1200, duration_ms: 0 }),
@@ -445,6 +447,8 @@ const controller = helpers.createTimelineSceneBlockController({
   getAddDurationMs: () => 1000,
   getAddLoopCount: () => 1,
   getAddJumpToEventId: () => null,
+  getBpm: () => 120,
+  getCueAuthoredBeats: () => null,
   setNextStartMs: () => {},
   setMessage: (message) => messages.push(message),
   refreshSnapshot: async () => {},
@@ -467,5 +471,83 @@ await controller.moveBy(block, 500);
 assert.equal(commands.at(-1).command, "set_timeline_scene_block");
 assert.equal(commands.at(-1).args.durationMs, 1, "move merges the unsaved draft before changing start time");
 assert.equal(commands.at(-1).args.timeMs, 1700, "nudge uses the unsaved Start draft as its base");
+
+// Root Timeline Scene Block gestures may opt into the existing authoritative
+// Timeline Apply/history transaction. They must call it once at gesture
+// completion and must not also issue a legacy direct placement mutation.
+const timingCommits = [];
+const authoritativeDirectCommands = [];
+let authoritativeEvent = { ...block };
+let authoritativeDraft = { ...block };
+const authoritativeController = helpers.createTimelineSceneBlockController({
+  invoke: async (command) => {
+    authoritativeDirectCommands.push(command);
+    throw new Error(`authoritative timing gesture unexpectedly used ${command}`);
+  },
+  commitRootSceneBlockTiming: async (event, next) => {
+    timingCommits.push({ event: { ...event }, next: { ...next } });
+    authoritativeEvent = { ...authoritativeEvent, ...next };
+    authoritativeDraft = { ...next };
+    return true;
+  },
+  snapTimeMs: snap,
+  snappedTimeBeats: () => undefined,
+  timeBeatsAtCurrentBpm: () => null,
+  hasEventId,
+  getEventById: (eventId) => eventId === authoritativeEvent.id ? authoritativeEvent : undefined,
+  getEventDraft: () => ({ ...authoritativeDraft }),
+  setEventDraft: (_eventId, next) => { authoritativeDraft = { ...next }; },
+  getAddDurationMs: () => 1000,
+  getAddLoopCount: () => 1,
+  getAddJumpToEventId: () => null,
+  getBpm: () => 120,
+  getCueAuthoredBeats: () => 4,
+  setNextStartMs: () => {},
+  setMessage: (message) => messages.push(message),
+  refreshSnapshot: async () => {},
+});
+
+await authoritativeController.moveToPlacement(block.id, 1_600, block.layer_id);
+assert.equal(timingCommits.length, 1, "one pointer-up move creates one authoritative history candidate");
+assert.equal(authoritativeDirectCommands.length, 0, "move never double-commits through the legacy command");
+assert.equal(authoritativeDraft.time_ms, 1_600);
+
+await authoritativeController.resizeToTime(block.id, "end", 3_200, "RATE");
+assert.equal(timingCommits.length, 2, "RATE resize produces exactly one additional authoritative candidate");
+assert.equal(authoritativeDirectCommands.length, 0);
+
+await authoritativeController.resizeToTime(block.id, "end", 3_600, "WINDOW");
+assert.equal(timingCommits.length, 3, "WINDOW resize produces exactly one additional authoritative candidate");
+assert.equal(authoritativeDirectCommands.length, 0);
+
+await authoritativeController.setFade(block.id, "in", 400);
+await authoritativeController.setFade(block.id, "out", 800);
+assert.equal(timingCommits.length, 5, "each Fade edge is one authoritative candidate at pointer-up");
+assert.equal(authoritativeDirectCommands.length, 0);
+assert.equal(authoritativeDraft.fade_in_ms, 400);
+assert.equal(authoritativeDraft.fade_out_ms, 800);
+assert.equal(
+  timingCommits.every(({ event, next }) =>
+    event.cue_id === next.cue_id
+    && event.source_offset_ms === next.source_offset_ms
+    && event.track === next.track
+    && event.layer_id === next.layer_id),
+  true,
+  "the timing-only hook receives no Cue/source/lane replacement",
+);
+
+// The viewport resolves item/grid magnets before it calls this controller and
+// passes snapEnabled=false. Keep those final values intact: resnapping here
+// would move a completed drag to a second, different target.
+await authoritativeController.moveToPlacement(block.id, 1_650, block.layer_id, false);
+assert.equal(authoritativeDraft.time_ms, 1_650, "a resolved move is not snapped a second time");
+await authoritativeController.resizeToTime(block.id, "end", 3_333, "WINDOW", false);
+assert.notEqual(
+  authoritativeDraft.duration_ms % 100,
+  0,
+  "a resolved resize keeps its non-grid final window instead of resnapping",
+);
+await authoritativeController.setFade(block.id, "in", 333, false);
+assert.equal(authoritativeDraft.fade_in_ms, 333, "a resolved fade is not snapped a second time");
 
 console.log("scene block helpers ok");

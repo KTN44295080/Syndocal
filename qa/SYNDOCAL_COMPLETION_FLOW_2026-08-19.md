@@ -4,12 +4,77 @@ Date: 2026-08-19
 Branch at creation: `codex/syndocal-v1.0`
 Baseline before this document: `848d759846985cc3acf588356cfa3c996b4e2ef2`
 
+## 2026-08-31 Timeline UX/Undo bounded pause checkpoint
+
+This tranche closes a bounded part of L-TL7/H4; it does not mark either broad
+roadmap item complete. The newly authoritative history boundary is root,
+same-lane, non-group, non-child Scene Block move, RATE/WINDOW resize, Fade
+In/Out, and the corresponding Snap Items placement update. Cue/source/lane
+changes, child-Timeline placements, and legacy point events keep their existing
+paths. Existing `MoveGroup` remains separate but now publishes its
+candidate-generated Scene Block/automation delta to both live Engine and
+history, preventing history B/live A divergence.
+
+The operator surface now has compact Source Shelf geometry, readable framed
+Scene Blocks, vertical/horizontal wheel navigation, pointer-anchored zoom, an
+adaptive visual ruler, and separately truthful `Grid 500 ms` plus edge-magnet
+state. Logical Grid snap never follows visual ruler subdivision silently.
+Independent Terra xHigh review is GO for timing, UI snap, and control cleanup.
+Focused snap/helper/TypeScript/release gates, four-viewport Timeline performance,
+exact-MSVC Engine `3/3`, and Syndocal root Scene Block history `2/2` pass with
+first-party Rust warnings `0`. Source Shelf production placement passes at
+1920x1080, 1920x1032, and 2048x1152. The operator-requested pause leaves its
+1366/1280 runs and the repaired control four-viewport aggregate open. Native
+alpha.44 remains blocked until PID 80968 is explicitly released. Therefore
+L-TL7/H4, native verification, and all physical-output boundaries remain open.
+
+## 2026-08-31 alpha.44 DVC persistence source checkpoint
+
+Alpha.44 fixes the saved-DVC current-schema gate without creating a duplicate
+effect registry: cue-owned embedded `params` are authoritative, while zero or
+duplicate Cue effect IDs, absent legacy/global definitions, and malformed
+fixture/group/attribute/video references remain rejected. Exact MSVC 14.44
+evidence is protocol `214/214`, external `dance.dvc` save/reopen `1/1`, and DVC
+suite `109 passed / 0 failed / 3 ignored`, all with first-party warnings `0`.
+`check:release` passes with synchronized `1.2.0-alpha.44` metadata. Independent
+Terra xHigh reviews are GO with no P0/P1.
+
+The mandatory alpha.44 native build and actual reopen are deliberately pending
+because the current alpha.43 window contains an unsaved, actively inspected
+`Untitled.sdc*` import. Do not terminate it until the operator saves or releases
+that work. Alpha.43 below remains the current native authority; physical output
+and production DJ boundaries remain open.
+
+## 2026-08-31 alpha.43 native/DVC checkpoint
+
+The clean upstream-equal build source/docs were
+`eaef0508df944dafdee08552acb6be28a74c9c46`. The exact MSVC
+`14.44.35207` linker gate passed, the no-bundle build completed in `3m50s` with
+first-party warnings `0`, and `check:release` passed. The resulting alpha.43
+executable is 61,696,512 bytes with SHA-256
+`3B96560DEFB2E66E03A4D09DAA63825EACE5842674F0CB50FEB62E457228A3DC`.
+Exactly one checkout-owned PID `80968` was responsive and its verified window
+was maximized.
+
+Native raw-DVC import proved `TIMELINE / New Scene` `#8.1` remains a Timeline
+(18 lanes, 194 Lighting blocks, one audio block, `201090 ms`) and exposes the
+`TL` action; `ber / New Scene` `#15.2` remains a distinct Static cue. The native
+report showed 46 fixtures, 12 profiles, 15 groups, 56 cues, 194 scene blocks,
+one audio clip, and one missing audio file. The intermediate saved SDC is not
+accepted because alpha.43 project-open bootstrap failed closed on `Cue 4
+references missing lighting effect 1`. Preserve it as evidence and diagnose
+the import/save/open reference path before producing another show artifact.
+The missing source audio remains a separate relink task. Physical DMX, Art-Net,
+Spout, audio, capture, and production DJ acceptance remain open.
+
 ## 2026-08-31 alpha.43 source-integration checkpoint
 
 The pushed alpha.43 implementation/QA checkpoint is branch
 `codex/syndocal-v1.2` at
-`8d8c5461f314d85e0be64f4ab7bd4f1a857de619`, recorded with local
-`HEAD`/upstream equality. That committed source checkpoint
+`eaef0508df944dafdee08552acb6be28a74c9c46`, recorded with local
+`HEAD`/upstream equality. The implementation was introduced at
+`8d8c5461f314d85e0be64f4ab7bd4f1a857de619`; the current authority includes
+its pushed documentation follow-up. That committed source checkpoint
 advances all distributed product-version surfaces from `1.2.0-alpha.42` to
 `1.2.0-alpha.43`: workspace Cargo and lock,
 frontend package, Tauri configuration, release metadata checker, README,
@@ -28,11 +93,9 @@ exceptions, errors, warnings, or harness errors. Timeline performance,
 context-menu, DJ Link, localization (`3644/3644`, zero unprotected labels),
 TypeScript, Cargo format, and diff checks also passed. Independent Terra xHigh
 adversarial review returned GO after the Vite/CDP endpoint ownership and
-cleanup proof was made fail-closed. The current native authority remains
-`1.2.0-alpha.42`. No native build, released alpha.43
-executable/artifact, Syndocal window launch, or alpha.43 physical acceptance
-is claimed. Existing show processes were preserved; rediscover and verify them
-immediately before any native action.
+cleanup proof was made fail-closed. This paragraph records the historical
+source-only gate; native identity is now governed by the alpha.43 native/DVC
+checkpoint above. No physical acceptance is implied.
 
 The bounded show artifacts are the alpha9 reference-audio/content artifact
 (`1,095,864` bytes, SHA-256
@@ -66,17 +129,15 @@ scene. The exact external acceptance passed `1/1` with first-party warnings `0`
 under the pinned MSVC 14.44 gate; the one unavailable audio source remains an
 explicit relink task.
 
-Next safe action: obtain explicit confirmation that the currently open, unsaved
-Syndocal project is saved. Only then initialize and verify the exact MSVC `14.44`
-linker, stop only the exact checkout-owned alpha.42 Syndocal executable, build
-alpha.43, launch and maximize the verified Syndocal window, and run the
-separately controlled QA. Do not invent an alpha.43 artifact identity or
-native/physical result before those steps complete.
+Next safe action: leave the current raw DVC import unsaved, preserve the rejected
+intermediate SDC, and trace Cue 4's missing Lighting-effect reference across
+import, save, and project-open before any new DVC-derived show artifact is
+accepted.
 
 ## 2026-08-30 current show-critical checkpoint
 
 Current pushed KDMX implementation/QA authority is
-`8d8c5461f314d85e0be64f4ab7bd4f1a857de619` on
+`eaef0508df944dafdee08552acb6be28a74c9c46` on
 `codex/syndocal-v1.2`, equal to `origin/codex/syndocal-v1.2`. The fixed alpha.42
 Art-Net derivative generator/tests were introduced at
 `42cb17ce3ae0272a43f7671da70361d3f2520e98`; DJ production-authority
@@ -104,7 +165,7 @@ is protected, and reclaimed bytes remain `0`.
 
 ## 2026-08-30 alpha.42 final native three-display checkpoint
 
-This is the current alpha.42 native authority and supersedes older current
+This is a historical alpha.42 native authority and supersedes older
 claims below. Branch `codex/syndocal-v1.2` is at `HEAD
 b1f6d760c75b430a4255ead71e5f4bb964501cf4`. The exact MSVC `14.44` native
 build passed with first-party warnings `0`; the exact
@@ -520,11 +581,13 @@ evidence. No unavailable physical device is a passing hardware result.
 
 The active train advanced from the long-lived `1.1.0` metadata through accepted
 alpha checkpoints; the superseded alpha.39 checkpoint is recorded below. Current
-source metadata is `1.2.0-alpha.43` at pushed implementation/QA checkpoint
-`8d8c5461f314d85e0be64f4ab7bd4f1a857de619`, where local `HEAD` and upstream
-were recorded equal, on
-`codex/syndocal-v1.2`, while the current native authority remains alpha.42 and
-alpha.43 native build/launch verification is pending. The alpha.39 native
+source metadata at the latest pushed authority is `1.2.0-alpha.43` at
+`eaef0508df944dafdee08552acb6be28a74c9c46`, where local `HEAD` and upstream
+were recorded equal; implementation was introduced at
+`8d8c5461f314d85e0be64f4ab7bd4f1a857de619`, on
+`codex/syndocal-v1.2`; the active worktree metadata is alpha.44 as recorded at
+the top. The current native build/window authority is alpha.43 as
+recorded above; physical acceptance remains pending. The alpha.39 native
 checkpoint used source/docs `HEAD`
 and upstream `ec93e9160da853ad181de70aee4db7b4a75fafbb`, which were equal at
 the build checkpoint. It

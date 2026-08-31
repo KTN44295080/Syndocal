@@ -1207,8 +1207,8 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
           type="button"
           classList={{ active: props.magnetEnabled }}
           aria-pressed={props.magnetEnabled}
-          aria-label={props.magnetEnabled ? "Disable magnet snap" : "Enable magnet snap"}
-          title={props.magnetEnabled ? "Disable magnet snap" : "Enable magnet snap"}
+          aria-label={props.magnetEnabled ? "Disable edge magnet" : "Enable edge magnet"}
+          title={props.magnetEnabled ? "Disable edge magnet" : "Enable edge magnet"}
           data-timeline-magnet-toggle
           data-timeline-tool="magnet"
           onClick={() => props.onMagnetEnabled(!props.magnetEnabled)}
@@ -1366,6 +1366,7 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
         cueIdentities={props.cueIdentities}
         audioClips={props.audioClips}
         videoClips={props.videoClips}
+        itemGroups={props.itemGroups}
         mediaAssets={props.mediaAssets}
         audioAnalysis={props.audioAnalysis}
         layers={props.timelineLayers}
@@ -1386,6 +1387,9 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
         playheadX={props.overviewPlayheadX}
         visibleWindow={props.visibleWindow}
         bpm={props.bpm}
+        snapMode={props.snapMode}
+        gridMs={props.gridMs}
+        audioBeatMarkers={props.audioBeatMarkers}
         stretchMode={props.stretchMode}
         magnetEnabled={props.magnetEnabled}
         armedCue={armedCue()}
@@ -2052,6 +2056,16 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
         </Show>
       </div>
       <div class="timelineSnapControls">
+        <output
+          class="timelineSnapState tabularNums"
+          aria-label="Timeline snap state"
+          data-timeline-snap-state
+          data-timeline-grid-quantize-state={props.snapMode}
+          data-timeline-edge-magnet-state={props.magnetEnabled ? "on" : "off"}
+        >
+          Snap: {props.snapMode === "Grid" ? `Grid ${Math.max(1, Math.round(props.gridMs))} ms` : props.snapMode}
+          {" · "}Edges: {props.magnetEnabled ? "ON" : "OFF"}
+        </output>
         <label>
           Snap
           <select value={props.snapMode} onInput={(event) => props.onSnapMode(event.currentTarget.value as TimelineSnapMode)}>

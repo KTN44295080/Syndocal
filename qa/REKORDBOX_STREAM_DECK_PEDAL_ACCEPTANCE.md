@@ -2,12 +2,13 @@
 
 Date: 2026-08-21
 Updated: 2026-08-31
-Status: Required; the pushed KDMX alpha.43 implementation/QA checkpoint is on
-`codex/syndocal-v1.2` at commit
-`8d8c5461f314d85e0be64f4ab7bd4f1a857de619`, recorded with local
-`HEAD`/upstream equality. The current native authority is
-still `1.2.0-alpha.42`; no alpha.43 native build, executable identity, launch,
-or native UI acceptance is claimed. The current rb-output source authority is
+Status: Required; the current KDMX source worktree has synchronized
+`1.2.0-alpha.44` metadata above pushed `HEAD`/upstream
+`eaef0508df944dafdee08552acb6be28a74c9c46`. Alpha.44 source tests repair the
+DVC save/reopen validator; they do not change the DJ wire contract. The current
+native authority is `1.2.0-alpha.43`; alpha.44 native build/launch is pending
+until the operator releases the actively used unsaved import. The current
+rb-output source authority is
 branch `beta-v1.1.2`, clean and upstream-equal at exact peer commit
 `59df968d91bca71a327ef2a57ee5ab15de9f9947`, with product source version
 `1.1.12`. No v1.1.12 installer, tag, public release, or hardware acceptance is
@@ -18,11 +19,11 @@ config/token are absent. The standalone local acceptance is separate and does
 not replace production. The physical matrix remains exactly 0/12.
 Source authority: replacement user specifications received 2026-08-20 and 2026-08-21
 
-## Current alpha.43 source, show-artifact, and peer authority — 2026-08-31
+## Current alpha.44 source, alpha.43 native, show-artifact, and peer authority — 2026-08-31
 
-The active KDMX source metadata is `1.2.0-alpha.43` at implementation/QA
-checkpoint `8d8c5461f314d85e0be64f4ab7bd4f1a857de619`; the built and running native
-authority remains alpha.42. Three separate, immutable artifacts have bounded
+The active KDMX source metadata is `1.2.0-alpha.44` above pushed authority
+`eaef0508df944dafdee08552acb6be28a74c9c46`; the built and running native
+authority is alpha.43. Three separate, immutable artifacts have bounded
 roles:
 
 - the alpha9 reference-audio/content artifact
@@ -45,10 +46,10 @@ Until exact route and hardware acceptance is complete, the production operator
 artifact remains unapproved and every performance/deployment use must fail
 closed.
 
-Immediate KDMX next action is to obtain explicit confirmation that the currently
-open, unsaved Syndocal project is saved, then perform the exact-linker alpha.43
-native build/launch/maximized-window QA. Do not stop the running alpha.42 process
-before that save confirmation.
+Immediate KDMX next action is to preserve or explicitly release the currently
+open, unsaved Syndocal import, then perform the exact-linker alpha.44 native
+build/launch/maximized-window and saved-DVC reopen QA. Do not stop the running
+alpha.43 process before that boundary is clear.
 
 The current controlled source authority for this checkpoint is branch
 `beta-v1.1.2`, product source version `1.1.12`, clean and upstream-equal at
@@ -241,16 +242,16 @@ positive parent PID `49864`), `Candidates=[]`, `PlannedLogicalBytes=0`,
 The exact 12-path hardlink remediation was content-preserving with no content
 diff.
 
-## Current v3 execution authority — alpha.43 source / alpha.42 native / rb-output 1.1.12 / production v1.1.11 — 2026-08-31
+## Current v3 wire authority — alpha.44 source / alpha.43 native / rb-output 1.1.12 / production v1.1.11 — 2026-08-31
 
 The only current wire adapter is `syndocal-envelope-v3`, using the exact frame
 `{v:3,type,agentId,sessionId,sequence,eventId,payload}`. Flat, v1, and v2 frames
 and adapter names are retired and rejected without a shim. The Agent HELLO
 advertises the complete ten-capability set headed by `DJ_TRACK_ACTIVE` and
-`DJ_TRACK_SYNC` and including `DJ_LOOP_FALLBACK`. Current KDMX source authority
-is `1.2.0-alpha.43` at implementation/QA checkpoint
-`8d8c5461f314d85e0be64f4ab7bd4f1a857de619`; the current native authority
-remains alpha.42, and alpha.43 native build/launch/UI acceptance is pending. The
+`DJ_TRACK_SYNC` and including `DJ_LOOP_FALLBACK`. Current KDMX worktree source
+metadata is `1.2.0-alpha.44` above pushed alpha.43 authority
+`eaef0508df944dafdee08552acb6be28a74c9c46`; the current native authority is
+alpha.43, and alpha.44 native build/launch/UI acceptance is pending. The
 bounded alpha9 content, alpha.42 three-display, and alpha.42 Art-Net probe
 artifact identities are recorded above. None is an approved production operator
 artifact, and the retired alpha4 artifact must not be loaded as current.
@@ -1059,7 +1060,7 @@ no hardware row.
 
 These dated pre-alpha.17 gaps are retained as historical context only; the
 then-current alpha.17 source checkpoint superseded them. The later alpha.18
-authority below is also historical; current alpha.43 source / alpha.42 native
+authority below is also historical; current alpha.44 source / alpha.43 native
 authority is at the top. **P1:** Web Remote/DJ Link enabled state, bind
 selection, and listener start are not restored on application launch, while the
 machine-local token is regenerated for each Syndocal process. A previously
@@ -1158,7 +1159,7 @@ claimed.
 This append-only section records the source checkpoint that superseded the two
 historical implementation gaps above. The alpha.17 checkpoint was current at
 that historical point; the later alpha.18 authority below is historical and the
-current alpha.43 source / alpha.42 native authority is at the top. This section
+current alpha.44 source / alpha.43 native authority is at the top. This section
 does not rewrite the dated hardware observations above and
 checks no HW-4 row.
 
@@ -1415,7 +1416,7 @@ the running alpha.18 binary does not contain it, and HW-4 stays **0/12**.
 ## SUPERSEDED / HISTORICAL — alpha.19 Follow-hold / Stage 2 authority — 2026-08-27
 
 This dated alpha.19 record is retained as historical provenance only and is not
-current execution guidance. The current alpha.43 source / alpha.42 native /
+current execution guidance. The current alpha.44 source / alpha.43 native /
 product-source 1.1.12 / production v1.1.11 truth is in the sections
 above: Stage 1 F14 is Rekordbox LoopHalf MIDI, Stage 2 F13 owns
 `DJ_TIMELINE_LOOP_SET`, and Stage 2 F14 sends active-Timeline-only

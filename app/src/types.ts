@@ -3316,7 +3316,12 @@ export interface TimelineCueAudioStatus {
 }
 
 export interface TimelineAdvancedAuthoringSummary {
-  snap_request?: unknown | null;
+  /**
+   * Complete timing/keyframe mutation payload used by the authoritative
+   * Timeline Apply transaction. Scene Block source replacement is deliberately
+   * not represented here: this wire shape has no source_offset_ms field.
+   */
+  snap_request?: TimelineSnapRequest | null;
   video_clips: TimelineVideoClipSummary[];
   audio_clips: TimelineAudioClipSummary[];
   phases: TimelinePhaseSummary[];
@@ -3324,6 +3329,40 @@ export interface TimelineAdvancedAuthoringSummary {
   loop_region?: TimelineLoopRegionSummary | null;
   follow?: TimelineFollowSummary | null;
   guide_enabled: boolean;
+}
+
+/**
+ * Exact Timeline event timing payload accepted by the existing authoritative
+ * Apply transaction. It intentionally has no source_offset_ms: callers must
+ * use it only when the event source is provably unchanged.
+ */
+export interface TimelineEventPlacementUpdate {
+  event_id: number;
+  cue_id: number;
+  time_ms: number;
+  time_beats: number | null;
+  track: TimelineTrackKind;
+  layer_id: number | null;
+  duration_ms: number;
+  duration_beats: number | null;
+  conform_to_tempo: boolean;
+  loop_fill: boolean;
+  fade_in_ms: number;
+  fade_out_ms: number;
+  loop_count: number;
+  jump_to_event_id: number | null;
+}
+
+export interface TimelineSnapRequest {
+  event_placements: TimelineEventPlacementUpdate[];
+  lighting_automations: Array<{
+    automation_id: number;
+    keyframes: AutomationKeyframeSummary[];
+  }>;
+  video_automations: Array<{
+    automation_id: number;
+    keyframes: VideoAutomationKeyframeSummary[];
+  }>;
 }
 
 export type TimelineAdvancedMutationRequest =

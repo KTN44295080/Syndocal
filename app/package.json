@@ -1,7 +1,7 @@
 {
   "name": "syndocal",
   "private": true,
-  "version": "1.2.0-alpha.43",
+  "version": "1.2.0-alpha.44",
   "author": "Seraf()のKTN",
   "type": "module",
   "scripts": {
@@ -131,6 +131,7 @@
     "check:timeline-authority": "node scripts/check-timeline-authority-browser.mjs",
     "check:control-upper-workspaces": "node scripts/run-control-upper-workspaces-browser.mjs",
     "check:timeline-advanced": "node scripts/check-timeline-advanced-authoring.mjs",
+    "check:timeline-snap": "node scripts/check-timeline-snap.mjs",
     "check:timeline-viewport": "node scripts/check-timeline-viewport.mjs && node scripts/check-timeline-overlap-clusters.mjs && node scripts/check-viewport-containment.mjs --scene-block-hour-only && node scripts/check-viewport-containment.mjs --scene-block-overlap-only",
     "check:vj-first-run": "node scripts/check-vj-first-run.mjs",
     "check:virtualization": "node scripts/check-virtualization.mjs",

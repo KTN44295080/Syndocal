@@ -2505,11 +2505,12 @@ h3 {
   grid-column: 1;
   grid-row: 1 / -1;
   grid-template-rows: auto minmax(0, 1fr);
-  align-content: stretch;
+  align-self: start;
+  align-content: start;
   width: 100%;
   min-height: 0;
-  height: 100%;
-  max-height: none;
+  height: auto;
+  max-height: 100%;
   overflow: hidden;
 }
 
@@ -15052,10 +15053,34 @@ input[type="color"] {
   touch-action: none;
 }
 
+.timelineSceneBlockFadeHandle.in {
+  fill: rgba(91, 191, 235, 0.62);
+  stroke: rgba(164, 226, 255, 0.9);
+  stroke-width: 0.8;
+}
+
+.timelineSceneBlockFadeHandle.out {
+  fill: rgba(244, 159, 83, 0.64);
+  stroke: rgba(255, 211, 149, 0.92);
+  stroke-width: 0.8;
+}
+
 .timelineMarker:hover .timelineSceneBlockFadeHandle,
 .timelineMarker.selected .timelineSceneBlockFadeHandle,
 .timelineMarker.fading .timelineSceneBlockFadeHandle {
   opacity: 1;
+}
+
+.timelineMarker:hover .timelineSceneBlockFadeHandle.in,
+.timelineMarker.selected .timelineSceneBlockFadeHandle.in,
+.timelineMarker.fading .timelineSceneBlockFadeHandle.in {
+  fill: rgba(91, 191, 235, 0.9);
+}
+
+.timelineMarker:hover .timelineSceneBlockFadeHandle.out,
+.timelineMarker.selected .timelineSceneBlockFadeHandle.out,
+.timelineMarker.fading .timelineSceneBlockFadeHandle.out {
+  fill: rgba(244, 159, 83, 0.92);
 }
 
 .timelineSceneBlockGhost {
@@ -33282,33 +33307,77 @@ h3 {
 .timelineMarker.sceneBlock.video.hasBands .timelineSceneBlockBody {
   fill: var(--identity, #4d91cd);
   fill-opacity: 0.98;
-  stroke: #050505;
+  stroke: #0a1117;
   stroke-opacity: 1;
-  stroke-width: 2;
+  stroke-width: 1.25;
 }
 
 .timelineSceneBlockIdentityBand {
-  display: none;
+  display: block;
+  fill: var(--identity-band, #22303c);
+  fill-opacity: 0.98;
+  pointer-events: none;
+}
+
+.timelineSceneBlockFrame {
+  fill: none;
+  stroke: rgba(225, 239, 248, 0.62);
+  stroke-width: 0.85;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
 }
 
 .timelineSceneBlockLabel,
 .timelineSceneBlockDuration {
   fill: var(--identity-text, #ffffff);
   font-size: 11px;
-  font-weight: 800;
-  paint-order: stroke;
-  stroke: rgba(0, 0, 0, 0.66);
-  stroke-width: 1.4px;
-  stroke-linejoin: round;
+  font-weight: 700;
+  pointer-events: none;
 }
 
 .timelineSceneBlockDuration {
   font-size: 10px;
   font-weight: 700;
+  font-variant-numeric: tabular-nums;
 }
 
 .timelineSceneBlockFade {
-  fill: rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+}
+
+.timelineSceneBlockFade.in {
+  fill: rgba(91, 191, 235, 0.66);
+}
+
+.timelineSceneBlockFade.out {
+  fill: rgba(244, 159, 83, 0.68);
+}
+
+.timelineSceneBlockBadge {
+  pointer-events: none;
+}
+
+.timelineSceneBlockBadge rect {
+  stroke-width: 0.8;
+  vector-effect: non-scaling-stroke;
+}
+
+.timelineSceneBlockBadge.loop rect {
+  fill: #1b3d54;
+  stroke: #b8e8ff;
+}
+
+.timelineSceneBlockBadge.rate rect {
+  fill: #563c26;
+  stroke: #ffe0ac;
+}
+
+.timelineSceneBlockBadge text {
+  fill: #f7fcff;
+  font-size: 9px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
 }
 
 .sceneMatrixCard {
@@ -37305,6 +37374,87 @@ a[href]:focus-visible,
   }
 }
 
+/* Timeline grid and snap feedback. Keep the ruler in measured pixel space so
+ * zooming changes subdivision density without changing line weight or label
+ * legibility. Minor lines are deliberately quieter than labelled majors. */
+.timelineOverview .timelineRuler line {
+  pointer-events: none;
+  vector-effect: non-scaling-stroke;
+}
+
+.timelineOverview .timelineRuler line.minor {
+  stroke: rgba(139, 164, 188, 0.30);
+  stroke-width: 0.65;
+}
+
+.timelineOverview .timelineRuler line.major {
+  stroke: rgba(205, 220, 234, 0.62);
+  stroke-width: 1.05;
+}
+
+.timelineOverview .timelineRuler text {
+  fill: #c5d2df;
+  font-size: 10px;
+  font-weight: 600;
+  paint-order: stroke;
+  stroke: #0d141c;
+  stroke-width: 2px;
+  stroke-linejoin: round;
+}
+
+.timelineSnapGuide {
+  pointer-events: none;
+}
+
+.timelineSnapGuide line {
+  stroke: #ffd27d;
+  stroke-width: 1.25;
+  stroke-dasharray: 4 2;
+  vector-effect: non-scaling-stroke;
+}
+
+.timelineSnapGuide text {
+  fill: #ffe3a9;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  paint-order: stroke;
+  stroke: #111820;
+  stroke-width: 2px;
+  stroke-linejoin: round;
+}
+
+.timelineSnapControls {
+  align-items: center;
+}
+
+.timelineSnapState,
+.timelineEdgeMagnetState {
+  color: var(--text-dim, #aebdcb);
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.timelineSnapState {
+  border: 1px solid rgba(145, 168, 190, 0.36);
+  border-radius: 3px;
+  padding: 5px 8px;
+}
+
+.timelineSnapState[data-timeline-edge-magnet-state="on"] {
+  color: #ffe0a3;
+  border-color: rgba(255, 210, 125, 0.60);
+}
+
+.timelineEdgeMagnetState {
+  margin-inline: 2px 6px;
+}
+
+.timelineEdgeMagnetState[data-timeline-edge-magnet-state="on"] {
+  color: #ffe0a3;
+}
+
 /* Audio output routing stays in the existing Setup I/O flow. */
 .audioOutputCueRouting,
 .audioOutputProgramCueGrid {
@@ -38176,6 +38326,33 @@ a[href]:focus-visible,
   min-width: 0;
 }
 
+.timelineExternalSourcePlacementDisclosure {
+  display: grid;
+  gap: 0.45rem;
+  min-width: 0;
+  align-content: start;
+}
+
+.timelineExternalSourcePlacementDisclosure > summary {
+  display: flex;
+  align-items: center;
+  min-height: 2.4rem;
+  padding: 0 0.55rem;
+  border: 1px solid rgba(148, 176, 196, 0.28);
+  border-radius: 0.35rem;
+  color: #b9c9d4;
+  cursor: pointer;
+}
+
+.timelineExternalSourcePlacementDisclosure > summary:hover {
+  border-color: rgba(125, 211, 252, 0.62);
+  color: #e5f7ff;
+}
+
+.timelineExternalSourcePlacementDisclosure > .timelineExternalSourceTargets {
+  padding: 0.05rem 0.1rem 0;
+}
+
 .layoutSharedWorkspace.layoutControl.controlModeLive
   .controlContextPane
   > .timelineExternalSourceShelf
@@ -38375,6 +38552,8 @@ button.timelineExternalSourceCard:active,
   gap: 0.45rem;
   min-width: 0;
   max-height: 8.5rem;
+  align-content: start;
+  grid-auto-rows: minmax(3.75rem, max-content);
   overflow-y: auto;
   padding: 0 0.05rem 0.15rem;
 }
@@ -38383,6 +38562,9 @@ button.timelineExternalSourceCard:active,
   grid-template-columns: minmax(0, 1fr);
   min-width: 0;
   width: 100%;
+  min-height: 3.75rem;
+  box-sizing: border-box;
+  align-content: start;
   gap: 0.3rem;
 }
 
@@ -38416,6 +38598,8 @@ button.timelineExternalSourceCard:active,
   align-items: center;
   gap: 0.35rem;
   min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
 }
 
 .timelineExternalSourceCardMetaRow small {

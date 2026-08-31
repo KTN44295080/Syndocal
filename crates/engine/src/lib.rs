@@ -141,21 +141,21 @@ use protocol::{
     StageObjectId, StageObjectSummary, SubmasterSummary, TimelineAdvancedAuthoringSummary,
     TimelineAudioClipId, TimelineAudioClipSummary, TimelineAudioOutputBus,
     TimelineAutomationSummary, TimelineClickEventSummary, TimelineCueEventSummary, TimelineEventId,
-    TimelineFollowRuntimeStatusSnapshot, TimelineFollowRuntimeSummary, TimelineFollowSettlementAck,
-    TimelineFollowSettlementAckResult, TimelineFollowSettlementConsumerId,
-    TimelineFollowSettlementConsumerSummary, TimelineFollowSettlementDomain,
-    TimelineFollowSettlementDomainSummary, TimelineFollowSettlementState,
-    TimelineFollowSettlementSummary, TimelineFollowSummary, TimelineGuideAssetKey,
-    TimelineGuideCueKind, TimelineGuideCueSummary, TimelineId, TimelineItemGroupId,
-    TimelineItemGroupSummary, TimelineItemRef, TimelineLayerKind, TimelineLayerSummary,
-    TimelineLoopRegionSummary, TimelineLoopRuntimeStatus, TimelineLoopRuntimeSummary,
-    TimelineLoopScale, TimelinePhaseId, TimelinePhaseSummary, TimelineScheduleSource,
-    TimelineSnapRequest, TimelineSnapshot, TimelineTempoInterpolation, TimelineTempoMeterPoint,
-    TimelineTrackKind, TimelineVideoAutomationSummary, TimelineVideoClipId,
-    TimelineVideoClipSummary, TimelineVideoLayerRef, TouchFeaturePresetTarget, TouchSurfaceSummary,
-    Transform2D, ValueEffectDirection, ValueEffectInterpolation, ValueEffectMode, ValueEffectPoint,
-    ValueEffectRequest, Vec3, VideoAutomationKeyframeSummary, VideoBlendMode,
-    VideoClipLaunchQuantization, VideoClipLayerRuntimeSummary, VideoClipLoopMode,
+    TimelineEventPlacementUpdate, TimelineFollowRuntimeStatusSnapshot,
+    TimelineFollowRuntimeSummary, TimelineFollowSettlementAck, TimelineFollowSettlementAckResult,
+    TimelineFollowSettlementConsumerId, TimelineFollowSettlementConsumerSummary,
+    TimelineFollowSettlementDomain, TimelineFollowSettlementDomainSummary,
+    TimelineFollowSettlementState, TimelineFollowSettlementSummary, TimelineFollowSummary,
+    TimelineGuideAssetKey, TimelineGuideCueKind, TimelineGuideCueSummary, TimelineId,
+    TimelineItemGroupId, TimelineItemGroupSummary, TimelineItemRef, TimelineLayerKind,
+    TimelineLayerSummary, TimelineLoopRegionSummary, TimelineLoopRuntimeStatus,
+    TimelineLoopRuntimeSummary, TimelineLoopScale, TimelinePhaseId, TimelinePhaseSummary,
+    TimelineScheduleSource, TimelineSnapRequest, TimelineSnapshot, TimelineTempoInterpolation,
+    TimelineTempoMeterPoint, TimelineTrackKind, TimelineVideoAutomationSummary,
+    TimelineVideoClipId, TimelineVideoClipSummary, TimelineVideoLayerRef, TouchFeaturePresetTarget,
+    TouchSurfaceSummary, Transform2D, ValueEffectDirection, ValueEffectInterpolation,
+    ValueEffectMode, ValueEffectPoint, ValueEffectRequest, Vec3, VideoAutomationKeyframeSummary,
+    VideoBlendMode, VideoClipLaunchQuantization, VideoClipLayerRuntimeSummary, VideoClipLoopMode,
     VideoClipPendingLaunchSummary, VideoClipRuntimeSnapshot, VideoClipSlotId, VideoClipSlotSummary,
     VideoClipTakeDuration, VideoClipTakeDurationUnit, VideoClipTakeKind,
     VideoClipTakeTransitionSummary, VideoColorAdjust, VideoCuePointSummary, VideoEffectChainId,
@@ -18510,6 +18510,103 @@ enum CueFreeRunPeriodResolution {
     NoCandidate,
     Unique(f64),
     Ambiguous,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct TimelineEventTimingValues {
+    time_ms: u64,
+    time_beats: Option<f64>,
+    duration_ms: u64,
+    duration_beats: Option<f64>,
+    conform_to_tempo: bool,
+    loop_fill: bool,
+    rate: Option<f32>,
+    fade_in_ms: u64,
+    fade_out_ms: u64,
+    loop_count: u16,
+    jump_to_event_id: Option<TimelineEventId>,
+    iteration_period_ms: u64,
+}
+
+fn resolve_timeline_event_timing_values(
+    event_id: TimelineEventId,
+    cue_id: CueId,
+    mut values: TimelineEventTimingValues,
+    authored_beats: Option<f32>,
+    bpm: f32,
+    free_run_period: CueFreeRunPeriodResolution,
+) -> Result<TimelineEventTimingValues, String> {
+    if !values.conform_to_tempo {
+        values.iteration_period_ms = values.duration_ms;
+        values.fade_in_ms = values.fade_in_ms.min(values.duration_ms);
+        values.fade_out_ms = values.fade_out_ms.min(values.duration_ms);
+        return Ok(values);
+    }
+    if values.duration_ms == 0 {
+        return Err(format!(
+            "Timeline point {} cannot conform to tempo",
+            event_id
+        ));
+    }
+    let authored_beats = validate_cue_authored_beats(authored_beats)?.ok_or_else(|| {
+        format!(
+            "Cue {} requires authored beats before its Scene Block can conform to tempo",
+            cue_id
+        )
+    })?;
+    let bpm = f64::from(clamp_bpm(bpm));
+    let conformed_iteration_ms = f64::from(authored_beats) * 60_000.0 / bpm;
+    values.iteration_period_ms = rounded_timeline_milliseconds(
+        conformed_iteration_ms,
+        "Conformed Scene Block iteration period",
+    )?;
+    if let Some(time_beats) = values.time_beats {
+        if !time_beats.is_finite() || time_beats < 0.0 {
+            return Err("Scene Block beat placement must be finite and non-negative".to_string());
+        }
+        values.time_ms = if time_beats == 0.0 {
+            0
+        } else {
+            rounded_timeline_milliseconds(
+                time_beats * 60_000.0 / bpm,
+                "Scene Block beat placement",
+            )?
+        };
+    }
+    if values.loop_fill {
+        let numerator = values
+            .duration_ms
+            .saturating_add(values.iteration_period_ms.saturating_sub(1));
+        values.loop_count = (numerator / values.iteration_period_ms)
+            .clamp(1, u64::from(MAX_TIMELINE_SCENE_BLOCK_LOOPS)) as u16;
+        values.rate = match free_run_period {
+            CueFreeRunPeriodResolution::Unique(period_ms) => {
+                timeline_conform_rate(period_ms, conformed_iteration_ms)
+            }
+            CueFreeRunPeriodResolution::NoCandidate => Some(1.0),
+            CueFreeRunPeriodResolution::Ambiguous => None,
+        };
+    } else {
+        let duration_beats = values.duration_beats.ok_or_else(|| {
+            format!(
+                "Conformed Scene Block {} requires a beat-domain duration",
+                event_id
+            )
+        })?;
+        if !duration_beats.is_finite() || duration_beats <= 0.0 {
+            return Err(
+                "Scene Block beat duration must be finite and greater than zero".to_string(),
+            );
+        }
+        values.duration_ms = rounded_timeline_milliseconds(
+            duration_beats * 60_000.0 / bpm,
+            "Scene Block beat duration",
+        )?;
+        values.rate = timeline_conform_rate(conformed_iteration_ms, values.duration_ms as f64);
+    }
+    values.fade_in_ms = values.fade_in_ms.min(values.duration_ms);
+    values.fade_out_ms = values.fade_out_ms.min(values.duration_ms);
+    Ok(values)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -37147,33 +37244,17 @@ impl EngineRuntime {
     }
 
     fn cue_free_run_period_ms(&self, cue_id: CueId) -> CueFreeRunPeriodResolution {
-        let Some(cue) = self.cues.iter().find(|cue| cue.id == cue_id) else {
-            return CueFreeRunPeriodResolution::NoCandidate;
-        };
-        let mut resolved = None;
-        for target in cue.effect_targets.iter().filter(|target| target.enabled) {
-            let period_ms = if let Some(params) = &target.params {
-                effect_params_snapshot_free_run_period_ms(params)
-            } else {
+        cue_free_run_period_ms_from_effects(
+            self.cues
+                .iter()
+                .find(|cue| cue.id == cue_id)
+                .map(|cue| cue.effect_targets.as_slice()),
+            |effect_id| {
                 self.effects
                     .iter()
-                    .find(|effect| effect.id == target.effect_id)
+                    .find(|effect| effect.id == effect_id)
                     .and_then(|effect| runtime_effect_free_run_period_ms(&effect.kind))
-            };
-            let Some(period_ms) = period_ms else {
-                continue;
-            };
-            if resolved.is_some_and(|current: f64| {
-                let tolerance_ms = current.abs().max(period_ms.abs()) * 1.0e-6 + 0.001;
-                (current - period_ms).abs() > tolerance_ms
-            }) {
-                return CueFreeRunPeriodResolution::Ambiguous;
-            }
-            resolved = Some(period_ms);
-        }
-        resolved.map_or(
-            CueFreeRunPeriodResolution::NoCandidate,
-            CueFreeRunPeriodResolution::Unique,
+            },
         )
     }
 
@@ -37182,92 +37263,57 @@ impl EngineRuntime {
         mut event: RuntimeTimelineEvent,
         bpm: f32,
     ) -> Result<RuntimeTimelineEvent, String> {
-        if !event.conform_to_tempo {
-            event.iteration_period_ms = event.duration_ms;
-            // Fixed-time Scene Blocks may carry an explicit source playback rate
-            // (notably Daslight DVC SPEED). Preserve that authored rate instead of
-            // treating every serialized value as derived conform state.
-            event.fade_in_ms = event.fade_in_ms.min(event.duration_ms);
-            event.fade_out_ms = event.fade_out_ms.min(event.duration_ms);
-            return Ok(event);
-        }
-        if event.duration_ms == 0 {
-            return Err(format!(
-                "Timeline point {} cannot conform to tempo",
-                event.id
-            ));
-        }
-        let cue = self
-            .cues
-            .iter()
-            .find(|cue| cue.id == event.cue_id)
-            .ok_or_else(|| format!("Cue {} was not found", event.cue_id))?;
-        let authored_beats = validate_cue_authored_beats(cue.authored_beats)?.ok_or_else(|| {
-            format!(
-                "Cue {} requires authored beats before its Scene Block can conform to tempo",
-                event.cue_id
-            )
-        })?;
-        let bpm = f64::from(clamp_bpm(bpm));
-        let conformed_iteration_ms = f64::from(authored_beats) * 60_000.0 / bpm;
-        event.iteration_period_ms = rounded_timeline_milliseconds(
-            conformed_iteration_ms,
-            "Conformed Scene Block iteration period",
-        )?;
-        if let Some(time_beats) = event.time_beats {
-            if !time_beats.is_finite() || time_beats < 0.0 {
-                return Err(
-                    "Scene Block beat placement must be finite and non-negative".to_string()
-                );
-            }
-            event.time_ms = if time_beats == 0.0 {
-                0
+        let (authored_beats, free_run_period) = if event.conform_to_tempo {
+            let cue = self
+                .cues
+                .iter()
+                .find(|cue| cue.id == event.cue_id)
+                .ok_or_else(|| format!("Cue {} was not found", event.cue_id))?;
+            let free_run_period = if event.loop_fill {
+                self.cue_free_run_period_ms(event.cue_id)
             } else {
-                rounded_timeline_milliseconds(
-                    time_beats * 60_000.0 / bpm,
-                    "Scene Block beat placement",
-                )?
+                CueFreeRunPeriodResolution::NoCandidate
             };
-        }
-        if event.loop_fill {
-            let numerator = event
-                .duration_ms
-                .saturating_add(event.iteration_period_ms.saturating_sub(1));
-            event.loop_count = (numerator / event.iteration_period_ms)
-                .clamp(1, u64::from(MAX_TIMELINE_SCENE_BLOCK_LOOPS))
-                as u16;
+            (cue.authored_beats, free_run_period)
         } else {
-            let duration_beats = event.duration_beats.ok_or_else(|| {
-                format!(
-                    "Conformed Scene Block {} requires a beat-domain duration",
-                    event.id
-                )
-            })?;
-            if !duration_beats.is_finite() || duration_beats <= 0.0 {
-                return Err(
-                    "Scene Block beat duration must be finite and greater than zero".to_string(),
-                );
-            }
-            event.duration_ms = rounded_timeline_milliseconds(
-                duration_beats * 60_000.0 / bpm,
-                "Scene Block beat duration",
-            )?;
-        }
-        event.rate = if event.loop_fill {
-            match self.cue_free_run_period_ms(event.cue_id) {
-                CueFreeRunPeriodResolution::Unique(period_ms) => {
-                    timeline_conform_rate(period_ms, conformed_iteration_ms)
-                }
-                CueFreeRunPeriodResolution::NoCandidate => Some(1.0),
-                CueFreeRunPeriodResolution::Ambiguous => None,
-            }
-        } else {
-            // RATE stretch keeps the Cue's authored beat period as content truth and maps the
-            // user-authored block window onto the existing activation playback-rate field.
-            timeline_conform_rate(conformed_iteration_ms, event.duration_ms as f64)
+            // Fixed-time events historically preserve their explicit source
+            // rate without consulting Cue/effect authority. Keep that early
+            // boundary exact even for a stale missing-Cue image.
+            (None, CueFreeRunPeriodResolution::NoCandidate)
         };
-        event.fade_in_ms = event.fade_in_ms.min(event.duration_ms);
-        event.fade_out_ms = event.fade_out_ms.min(event.duration_ms);
+        let values = resolve_timeline_event_timing_values(
+            event.id,
+            event.cue_id,
+            TimelineEventTimingValues {
+                time_ms: event.time_ms,
+                time_beats: event.time_beats,
+                duration_ms: event.duration_ms,
+                duration_beats: event.duration_beats,
+                conform_to_tempo: event.conform_to_tempo,
+                loop_fill: event.loop_fill,
+                rate: event.rate,
+                fade_in_ms: event.fade_in_ms,
+                fade_out_ms: event.fade_out_ms,
+                loop_count: event.loop_count,
+                jump_to_event_id: event.jump_to_event_id,
+                iteration_period_ms: event.iteration_period_ms,
+            },
+            authored_beats,
+            bpm,
+            free_run_period,
+        )?;
+        event.time_ms = values.time_ms;
+        event.time_beats = values.time_beats;
+        event.duration_ms = values.duration_ms;
+        event.duration_beats = values.duration_beats;
+        event.conform_to_tempo = values.conform_to_tempo;
+        event.loop_fill = values.loop_fill;
+        event.rate = values.rate;
+        event.fade_in_ms = values.fade_in_ms;
+        event.fade_out_ms = values.fade_out_ms;
+        event.loop_count = values.loop_count;
+        event.jump_to_event_id = values.jump_to_event_id;
+        event.iteration_period_ms = values.iteration_period_ms;
         Ok(event)
     }
 
@@ -49558,6 +49604,195 @@ fn validate_auto_vj_config_shape(config: &AutoVjConfig) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+fn cue_free_run_period_ms_from_effects<F>(
+    effect_targets: Option<&[CueEffectTarget]>,
+    mut effect_period_ms: F,
+) -> CueFreeRunPeriodResolution
+where
+    F: FnMut(EffectId) -> Option<f64>,
+{
+    let Some(effect_targets) = effect_targets else {
+        return CueFreeRunPeriodResolution::NoCandidate;
+    };
+    let mut resolved = None;
+    for target in effect_targets.iter().filter(|target| target.enabled) {
+        // Cue-owned parameters are authoritative. An invalid or unsupported
+        // owned parameter must not silently fall back to the global effect,
+        // otherwise persisted and live timing can select different rates.
+        let period_ms = if let Some(params) = target.params.as_ref() {
+            effect_params_snapshot_free_run_period_ms(params)
+        } else {
+            effect_period_ms(target.effect_id)
+        };
+        let Some(period_ms) = period_ms else {
+            continue;
+        };
+        if resolved.is_some_and(|current: f64| {
+            let tolerance_ms = current.abs().max(period_ms.abs()) * 1.0e-6 + 0.001;
+            (current - period_ms).abs() > tolerance_ms
+        }) {
+            return CueFreeRunPeriodResolution::Ambiguous;
+        }
+        resolved = Some(period_ms);
+    }
+    resolved.map_or(
+        CueFreeRunPeriodResolution::NoCandidate,
+        CueFreeRunPeriodResolution::Unique,
+    )
+}
+
+fn effect_summary_free_run_period_ms(effect: &EffectSummary) -> Option<f64> {
+    let period_ms = match effect.effect_type {
+        EffectKind::PositionWave => {
+            let speed = f64::from(effect.speed?.abs());
+            let wavelength = f64::from(effect.wavelength?.abs());
+            if speed <= f64::EPSILON {
+                return None;
+            }
+            wavelength / speed * 1_000.0
+        }
+        EffectKind::Chaser => effect.chaser.as_ref().map(|request| {
+            let path_len = chaser_step_order_with_cycles(
+                request.direction,
+                request.steps.len(),
+                request.random_seed,
+                request.random_cycle_count,
+            )
+            .len()
+            .max(1);
+            request.step_duration_ms as f64 * path_len as f64
+        })?,
+        EffectKind::Lfo => effect
+            .lfo
+            .as_ref()
+            .map(|request| request.period_ms as f64)
+            .or_else(|| effect.period_ms.map(|period| period as f64))?,
+        EffectKind::Color => effect
+            .color
+            .as_ref()
+            .map(|request| request.period_ms as f64)
+            .or_else(|| effect.period_ms.map(|period| period as f64))?,
+        EffectKind::Move => effect
+            .move_effect
+            .as_ref()
+            .map(|request| request.period_ms as f64)
+            .or_else(|| effect.period_ms.map(|period| period as f64))?,
+        EffectKind::Value => effect
+            .value
+            .as_ref()
+            .map(|request| request.period_ms as f64)
+            .or_else(|| effect.period_ms.map(|period| period as f64))?,
+        EffectKind::Curve => effect
+            .curve
+            .as_ref()
+            .map(|request| request.period_ms as f64)
+            .or_else(|| effect.period_ms.map(|period| period as f64))?,
+        EffectKind::Mapping => effect
+            .mapping
+            .as_ref()
+            .map(|request| request.period_ms as f64)
+            .or_else(|| effect.period_ms.map(|period| period as f64))?,
+        EffectKind::ColorMapping => effect
+            .color_mapping
+            .as_ref()
+            .map(|request| request.period_ms as f64)
+            .or_else(|| effect.period_ms.map(|period| period as f64))?,
+    };
+    (period_ms.is_finite() && period_ms > 0.0).then_some(period_ms)
+}
+
+/// Resolve a Timeline Scene Block placement exactly as the live Engine does.
+///
+/// The app uses this before it builds a durable history checkpoint. Keeping
+/// identity validation, beat-domain rounding, loop-fill counting, and effect
+/// free-run resolution here prevents the history image from diverging from
+/// the Engine's acknowledged persistence image.
+pub fn canonical_timeline_event_after_placement_update(
+    snapshot: &EngineSnapshot,
+    current: &TimelineCueEventSummary,
+    update: &TimelineEventPlacementUpdate,
+) -> Result<TimelineCueEventSummary, String> {
+    if update.event_id != current.id {
+        return Err(format!(
+            "Timeline event {} does not match the current event",
+            update.event_id
+        ));
+    }
+    if update.cue_id != current.cue_id {
+        return Err(format!(
+            "Timeline event {} Cue identity does not match the current event",
+            update.event_id
+        ));
+    }
+    if update.track != current.track {
+        return Err(format!(
+            "Timeline event {} track identity does not match the current event",
+            update.event_id
+        ));
+    }
+    if update.layer_id != current.layer_id {
+        return Err(format!(
+            "Timeline event {} layer identity does not match the current event",
+            update.event_id
+        ));
+    }
+    let (authored_beats, free_run_period) = if update.conform_to_tempo {
+        let cue = snapshot
+            .cues
+            .iter()
+            .find(|cue| cue.id == current.cue_id)
+            .ok_or_else(|| format!("Cue {} was not found", current.cue_id))?;
+        let free_run_period = if update.loop_fill {
+            cue_free_run_period_ms_from_effects(Some(cue.effect_targets.as_slice()), |effect_id| {
+                snapshot
+                    .effects
+                    .iter()
+                    .find(|effect| effect.id == effect_id)
+                    .and_then(effect_summary_free_run_period_ms)
+            })
+        } else {
+            CueFreeRunPeriodResolution::NoCandidate
+        };
+        (cue.authored_beats, free_run_period)
+    } else {
+        (None, CueFreeRunPeriodResolution::NoCandidate)
+    };
+    let values = resolve_timeline_event_timing_values(
+        current.id,
+        current.cue_id,
+        TimelineEventTimingValues {
+            time_ms: update.time_ms,
+            time_beats: update.time_beats,
+            duration_ms: update.duration_ms,
+            duration_beats: update.duration_beats,
+            conform_to_tempo: update.conform_to_tempo,
+            loop_fill: update.loop_fill,
+            rate: current.rate,
+            fade_in_ms: update.fade_in_ms,
+            fade_out_ms: update.fade_out_ms,
+            loop_count: update.loop_count,
+            jump_to_event_id: update.jump_to_event_id,
+            iteration_period_ms: current.duration_ms,
+        },
+        authored_beats,
+        snapshot.clock.bpm,
+        free_run_period,
+    )?;
+    let mut event = current.clone();
+    event.time_ms = values.time_ms;
+    event.time_beats = values.time_beats;
+    event.duration_ms = values.duration_ms;
+    event.duration_beats = values.duration_beats;
+    event.conform_to_tempo = values.conform_to_tempo;
+    event.loop_fill = values.loop_fill;
+    event.rate = values.rate;
+    event.fade_in_ms = values.fade_in_ms;
+    event.fade_out_ms = values.fade_out_ms;
+    event.loop_count = values.loop_count;
+    event.jump_to_event_id = values.jump_to_event_id;
+    Ok(event)
 }
 
 fn auto_vj_selection_token(seed: u64, show_revision: u64, boundary_index: u64) -> u64 {
@@ -120565,6 +120800,211 @@ mod tests {
                 jump_to_event_id: None,
             })
             .unwrap();
+    }
+
+    fn assert_window_candidate_matches_runtime(
+        mut runtime: EngineRuntime,
+        targets: Vec<CueEffectTarget>,
+        expected_rate: Option<f32>,
+        label: &str,
+    ) {
+        create_effect_only_cue(&mut runtime, 1, targets);
+        runtime.cues[0].authored_beats = Some(4.0);
+        runtime
+            .add_timeline_scene_block_state(RuntimeTimelineEvent {
+                id: 10,
+                cue_id: 1,
+                time_ms: 0,
+                time_beats: Some(0.0),
+                track: TimelineTrackKind::Lighting,
+                layer_id: None,
+                resolved_layer_id: 0,
+                layer_order: 0,
+                layer_muted_effective: false,
+                duration_ms: 1_000,
+                duration_beats: Some(2.0),
+                conform_to_tempo: true,
+                loop_fill: false,
+                source_offset_ms: 0,
+                fade_in_ms: 0,
+                fade_out_ms: 0,
+                iteration_period_ms: 1_000,
+                rate: None,
+                loop_count: 1,
+                jump_to_event_id: None,
+            })
+            .expect("seed conformed RATE Scene Block");
+
+        let before = runtime.build_persistence_snapshot();
+        let current = before.timeline.events[0].clone();
+        assert_eq!(
+            current.rate,
+            Some(2.0),
+            "{label}: RATE baseline must differ from the WINDOW authority"
+        );
+        let update = TimelineEventPlacementUpdate {
+            event_id: current.id,
+            cue_id: current.cue_id,
+            time_ms: current.time_ms,
+            time_beats: current.time_beats,
+            track: current.track.clone(),
+            layer_id: current.layer_id,
+            duration_ms: 3_000,
+            duration_beats: None,
+            conform_to_tempo: true,
+            loop_fill: true,
+            fade_in_ms: current.fade_in_ms,
+            fade_out_ms: current.fade_out_ms,
+            loop_count: current.loop_count,
+            jump_to_event_id: current.jump_to_event_id,
+        };
+        let candidate = canonical_timeline_event_after_placement_update(&before, &current, &update)
+            .unwrap_or_else(|error| panic!("{label}: canonical candidate failed: {error}"));
+        assert_eq!(candidate.rate, expected_rate, "{label}: candidate rate");
+        assert_eq!(candidate.loop_count, 2, "{label}: canonical loop count");
+
+        runtime
+            .snap_timeline_items_state(TimelineSnapRequest {
+                event_placements: vec![update],
+                lighting_automations: Vec::new(),
+                video_automations: Vec::new(),
+            })
+            .unwrap_or_else(|error| panic!("{label}: runtime placement failed: {error}"));
+        let actual = runtime.build_persistence_snapshot().timeline.events[0].clone();
+        assert_eq!(
+            actual, candidate,
+            "{label}: history candidate and live Engine persistence must be byte-equivalent"
+        );
+    }
+
+    #[test]
+    fn timeline_window_candidate_uses_exact_engine_free_run_authority() {
+        assert_window_candidate_matches_runtime(
+            runtime_with_lfo_effects(&[(1, true)]),
+            vec![CueEffectTarget {
+                effect_id: 1,
+                enabled: true,
+                params: None,
+                transition_ms: None,
+            }],
+            Some(0.5),
+            "unique free-run",
+        );
+        assert_window_candidate_matches_runtime(
+            runtime_with_lfo_effects(&[]),
+            Vec::new(),
+            Some(1.0),
+            "no free-run candidate",
+        );
+        assert_window_candidate_matches_runtime(
+            runtime_with_lfo_effects(&[]),
+            vec![
+                owned_lfo_target(
+                    901,
+                    test_lfo_request(
+                        "Ambiguous one-second period",
+                        LfoShape::Sine,
+                        1_000,
+                        0.0,
+                        EffectBlendMode::Override,
+                        0,
+                        u16::MAX,
+                    ),
+                ),
+                owned_lfo_target(
+                    902,
+                    test_lfo_request(
+                        "Ambiguous two-second period",
+                        LfoShape::Sine,
+                        2_000,
+                        0.0,
+                        EffectBlendMode::Override,
+                        0,
+                        u16::MAX,
+                    ),
+                ),
+            ],
+            None,
+            "ambiguous free-run",
+        );
+    }
+
+    #[test]
+    fn cue_owned_period_never_falls_back_to_global_effect_authority() {
+        let targets = vec![CueEffectTarget {
+            effect_id: 1,
+            enabled: true,
+            params: Some(EffectParamsSnapshot::PositionWave(
+                PositionWaveEffectRequest {
+                    label: "Invalid owned position wave".to_string(),
+                    fixture_ids: Vec::new(),
+                    target_group_ids: Vec::new(),
+                    attribute: "Dimmer".to_string(),
+                    video_targets: Vec::new(),
+                    shape: LfoShape::Sine,
+                    origin: Vec3::default(),
+                    direction: Vec3::default(),
+                    speed: 0.0,
+                    wavelength: 1.0,
+                    clock_sync: None,
+                    low: 0,
+                    high: u16::MAX,
+                    phase: 0.0,
+                    blend_mode: EffectBlendMode::Override,
+                },
+            )),
+            transition_ms: None,
+        }];
+        assert_eq!(
+            cue_free_run_period_ms_from_effects(Some(&targets), |_| Some(1_000.0)),
+            CueFreeRunPeriodResolution::NoCandidate,
+            "invalid Cue-owned params remain sole authority and cannot reveal a global fallback"
+        );
+    }
+
+    #[test]
+    fn fixed_time_event_preserves_explicit_rate_when_cue_is_missing() {
+        let runtime = runtime_with_lfo_effects(&[]);
+        let event = RuntimeTimelineEvent {
+            id: 77,
+            cue_id: 999,
+            time_ms: 1_250,
+            time_beats: None,
+            track: TimelineTrackKind::Lighting,
+            layer_id: None,
+            resolved_layer_id: 0,
+            layer_order: 0,
+            layer_muted_effective: false,
+            duration_ms: 3_000,
+            duration_beats: None,
+            conform_to_tempo: false,
+            loop_fill: false,
+            source_offset_ms: 0,
+            fade_in_ms: 100,
+            fade_out_ms: 200,
+            iteration_period_ms: 3_000,
+            rate: Some(1.75),
+            loop_count: 1,
+            jump_to_event_id: None,
+        };
+
+        let resolved = runtime
+            .resolve_timeline_event_timing(event.clone(), 120.0)
+            .expect("fixed-time events do not require live Cue authority");
+        assert_eq!(resolved.id, event.id);
+        assert_eq!(resolved.cue_id, event.cue_id);
+        assert_eq!(resolved.time_ms, event.time_ms);
+        assert_eq!(resolved.time_beats, event.time_beats);
+        assert_eq!(resolved.duration_ms, event.duration_ms);
+        assert_eq!(resolved.duration_beats, event.duration_beats);
+        assert_eq!(resolved.conform_to_tempo, event.conform_to_tempo);
+        assert_eq!(resolved.loop_fill, event.loop_fill);
+        assert_eq!(resolved.fade_in_ms, event.fade_in_ms);
+        assert_eq!(resolved.fade_out_ms, event.fade_out_ms);
+        assert_eq!(resolved.iteration_period_ms, event.iteration_period_ms);
+        assert_eq!(resolved.rate, event.rate);
+        assert_eq!(resolved.loop_count, event.loop_count);
+        assert_eq!(resolved.jump_to_event_id, event.jump_to_event_id);
     }
 
     #[test]

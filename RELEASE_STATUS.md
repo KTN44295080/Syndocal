@@ -1,19 +1,128 @@
 # Syndocal historical v1.0 / current v1.2 alpha Release Status
 
 Updated: 2026-08-31
-Branch: `codex/syndocal-v1.2`; current product metadata is `1.2.0-alpha.43`.
+Branch: `codex/syndocal-v1.2`; current product metadata is `1.2.0-alpha.44`.
 
-## 2026-08-31 current alpha.43 source checkpoint
+## 2026-08-31 current alpha.44 Timeline UX/Undo bounded pause checkpoint
 
-Alpha.43 is the current implementation/QA checkpoint on branch
+The Timeline source shelf is compact and top-aligned, FX cards retain the same
+usable height as Static cards, and its legacy lane-click controls remain behind
+a closed disclosure while drag/drop stays primary. Scene Blocks use denser
+lanes, high-contrast text, explicit frame/identity edges, in-block rate/loop
+badges, and distinct Fade In/Out treatment. Plain wheel scrolls lanes,
+Shift-wheel and a horizontal trackpad pan time, and Ctrl/Cmd-wheel performs
+pointer-anchored zoom. New sessions start with logical `Grid 500 ms` snap plus
+Scene-edge magnet; the visual ruler changes major/minor subdivisions with zoom
+without changing that logical interval. Moving a block evaluates both edges,
+preserves duration when its end wins, and exposes an exact start/end guide.
+
+Root, same-lane, non-group, non-child Scene Block move, RATE/WINDOW resize,
+Fade In/Out, and matching Snap Items placements now commit exactly one
+authoritative project-history mutation. Candidate-generated timing/keyframe
+deltas are retained only for Engine publication, including `MoveGroup`, while
+the canonical result remains free of the transient `snap_request`. Cue, track,
+or layer identity mismatch fails before live/history/revision mutation. The
+large inline `live_audio_input_tests` module was mechanically split from
+`main.rs` into `app/src-tauri/src/tests/live_audio_input_tests.rs`; its include
+is test-only. The original 5,363,529-byte backup and 3,783-byte one-off split
+script are not product/checkpoint files and are reserved for verified cleanup
+immediately after this source checkpoint is committed and pushed.
+
+Independent Terra xHigh review is GO for snap/grid, Audio/Video snap separation,
+the Undo/publication path, and bounded control-gate cleanup. Exact Community
+MSVC `14.44.35207` focused evidence is Engine `3/3` and Syndocal root Scene Block
+history `2/2`, with first-party warnings `0`. `check-timeline-snap`, Scene Block
+helpers, TypeScript, `check:release`, and the four-viewport Timeline performance
+browser pass; the latter proves wheel contracts, exact
+`Snap: Grid 500 ms · Edges: ON`, bounded adaptive grid DOM, Ctrl-zoom ruler
+change, and the direct linked/unlinked resize fixture.
+
+Source Shelf click/drag/media parity passes at `1920x1080`, `1920x1032`, and
+`2048x1152`. The operator requested a bounded pause before the explicit
+`1366x768` and `1280x720` reruns, so those two remain open. The repaired control
+gate has a passing `1280x720` focused run and independent P0/P1/P2-clean review;
+its four-viewport aggregate remains unrun. This is a stable source checkpoint,
+not native or full-browser completion.
+
+Native alpha.44 remains blocked by the responsive checkout-owned alpha.43 PID
+`80968`; the operator has not explicitly released its current in-memory work.
+Do not stop it until that release is confirmed. Native move/resize/
+fade/guide/Undo/Redo, physical output, media, capture, and production DJ gates
+remain unverified.
+
+## 2026-08-31 current alpha.44 DVC save/reopen source checkpoint
+
+Alpha.44 repairs the current-schema reference validator that rejected Daslight
+imports after their first save. The old path unconditionally required every
+`CueEffectTarget.effect_id` to exist in the global effect registry, even when
+the target already carried its complete cue-owned `params`. The new path keeps
+zero IDs, missing legacy/global definitions, malformed fixture/group/video
+references, and duplicate per-Cue effect IDs fail-closed, while accepting a
+self-contained cue-owned request without synthesizing a second authority.
+
+The exact MSVC `14.44.35207` Community linker was pinned and first in
+`where.exe`. `cargo test -p protocol --locked` passed 203 unit, 7 integration,
+and 4 doctests (`214/214`) with first-party warnings `0`. The default-feature
+focused `dance.dvc` save/reopen test passed `1/1`: hash-pinned raw import,
+Engine legacy normalization, canonical persistence snapshot, Save JSON
+roundtrip, and a fresh current-schema Engine reopen retained 18 lanes, 194
+Lighting events, one audio clip, `201090 ms`, all 29 cue-owned effect targets,
+an empty global effect registry, and a nonempty Timeline bank. The wider DVC
+suite passed `109`, failed `0`, ignored `3`, with first-party warnings `0`.
+`pnpm --dir app run check:release` passed for synchronized
+`1.2.0-alpha.44` metadata. Independent Terra xHigh reviews are GO with no
+P0/P1 on both the validator and exact external regression test.
+
+This is not yet a native alpha.44 acceptance: the maximized alpha.43 window
+still has the imported Timeline open in an unsaved `Untitled.sdc*`, so it was
+not terminated for the mandatory native build. The alpha.43 executable and raw
+import observation below remain the current native authority until that user
+work is saved or otherwise released. No physical DMX, Art-Net, audio, Spout,
+capture, or production DJ acceptance is added here.
+
+## 2026-08-31 current alpha.43 native and DVC checkpoint
+
+The exact clean, upstream-equal source used for this native build was
+`eaef0508df944dafdee08552acb6be28a74c9c46`. Immediately before the build,
+only the exact checkout-owned alpha.42 `target/release/syndocal.exe` PID
+`115592` was path-verified and stopped; Rekordbox, the local DJ Agent, Unity,
+and their ports were preserved. The mandatory Community MSVC
+`14.44.35207` linker was pinned by absolute path and was first in
+`where.exe link.exe`. `pnpm --dir app tauri build --no-bundle` completed in
+`3m50s` with first-party warnings `0`. The resulting
+`target/release/syndocal.exe` is 61,696,512 bytes, reports File/ProductVersion
+`1.2.0-alpha.43`, and has SHA-256
+`3B96560DEFB2E66E03A4D09DAA63825EACE5842674F0CB50FEB62E457228A3DC`.
+`pnpm --dir app run check:release` also passed. Exactly one checkout-owned
+alpha.43 process, PID `80968`, was responsive, and its verified Syndocal window
+was maximized before UI actions.
+
+The exact `dance.dvc` was then re-imported natively. The report showed 46
+fixtures, 12 profiles, 15 groups, 56 cues, 194 scene blocks, one audio clip,
+and one missing audio file. `TIMELINE / New Scene` `#8.1` was visibly
+`TIMELINE` with the `TL` action; `ber / New Scene` `#15.2` was separately
+`STATIC`. The raw DVC therefore does not collapse its Super Scene to Static.
+The pre-build intermediate
+`target/qa/dance-dvc-import-20260831.sdc` is deliberately not accepted: its
+alpha.43 reopen failed closed with `Cue 4 references missing lighting effect
+1`. Diagnose the imported save/reopen reference defect before using an SDC
+derived from this DVC; relink the single missing audio separately. No physical
+DMX, Art-Net receiver, fixture, audio playback, or production DJ claim is added
+by this checkpoint.
+
+## 2026-08-31 pushed alpha.43 source checkpoint (historical)
+
+Alpha.43 is the latest pushed implementation/QA checkpoint on branch
 `codex/syndocal-v1.2`, with pushed `HEAD`/upstream equal at
-`8d8c5461f314d85e0be64f4ab7bd4f1a857de619`. It includes the synchronized
+`eaef0508df944dafdee08552acb6be28a74c9c46`. The implementation was introduced
+at `8d8c5461f314d85e0be64f4ab7bd4f1a857de619`; that pushed authority also includes
+its pushed documentation follow-up. It includes the synchronized
 version metadata and Timeline follow-hint/fail-closed 4-viewport harness
 source. `check:release`, `check:release:self-test`, the four viewport checks,
 Timeline performance, context-menu, DJ Link, localization `3644/3644`,
 TypeScript, and format/diff checks pass; independent Terra review is `GO`.
-The native alpha.43 build/window/physical gates remain pending because the
-current exact Syndocal UI showed unsaved `Untitled.sdc*`. The local Rekordbox
+The alpha.43 native build/window gate is now closed by the newer checkpoint
+above; physical gates remain pending. The local Rekordbox
 Hook is healthy, but Decks are unloaded and no F13/F14 edge was observed.
 Production DJ configuration, LAN, and hardware acceptance remain pending.
 

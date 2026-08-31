@@ -94,6 +94,215 @@ const click = (client, selector) => evaluate(client, `(() => {
   element.click();
   return true;
 })()`);
+const dispatchTimelineWheel = (client, {
+  deltaX = 0,
+  deltaY = 0,
+  deltaMode = 0,
+  shiftKey = false,
+  ctrlKey = false,
+  altKey = false,
+  clientXRatio = 0.25,
+  targetSelector = '.timelineOverview',
+} = {}) => evaluate(client, `(function() {
+  const overview = document.querySelector('.timelineOverview');
+  const scrollport = document.querySelector('.timelineLayerScrollport');
+  const app = document.querySelector('.app');
+  const target = document.querySelector(${JSON.stringify(targetSelector)});
+  if (!(overview instanceof SVGSVGElement) || !(scrollport instanceof HTMLElement) || !(target instanceof Element)) return null;
+  const rect = overview.getBoundingClientRect();
+  const before = {
+    start: Number(overview.getAttribute('data-visible-start-ms')),
+    end: Number(overview.getAttribute('data-visible-end-ms')),
+    overviewWidth: rect.width,
+    overviewHeight: rect.height,
+    scrollTop: scrollport.scrollTop,
+    documentTop: document.documentElement.scrollTop,
+    documentLeft: document.documentElement.scrollLeft,
+    bodyTop: document.body.scrollTop,
+    bodyLeft: document.body.scrollLeft,
+    appTop: app instanceof HTMLElement ? app.scrollTop : 0,
+    appLeft: app instanceof HTMLElement ? app.scrollLeft : 0,
+  };
+  const event = new WheelEvent('wheel', {
+    bubbles: true,
+    cancelable: true,
+    clientX: rect.left + rect.width * ${JSON.stringify(clientXRatio)},
+    clientY: rect.top + rect.height / 2,
+    deltaX: ${JSON.stringify(deltaX)},
+    deltaY: ${JSON.stringify(deltaY)},
+    deltaMode: ${JSON.stringify(deltaMode)},
+    shiftKey: ${JSON.stringify(shiftKey)},
+    ctrlKey: ${JSON.stringify(ctrlKey)},
+    altKey: ${JSON.stringify(altKey)},
+  });
+  const dispatchResult = target.dispatchEvent(event);
+  const after = {
+    start: Number(overview.getAttribute('data-visible-start-ms')),
+    end: Number(overview.getAttribute('data-visible-end-ms')),
+    overviewWidth: rect.width,
+    overviewHeight: rect.height,
+    scrollTop: scrollport.scrollTop,
+    documentTop: document.documentElement.scrollTop,
+    documentLeft: document.documentElement.scrollLeft,
+    bodyTop: document.body.scrollTop,
+    bodyLeft: document.body.scrollLeft,
+    appTop: app instanceof HTMLElement ? app.scrollTop : 0,
+    appLeft: app instanceof HTMLElement ? app.scrollLeft : 0,
+  };
+  return { dispatchResult, defaultPrevented: event.defaultPrevented, before, after };
+})()`);
+const readTimelineVisibleWindow = (client) => evaluate(client, `(() => {
+  const overview = document.querySelector('.timelineOverview');
+  if (!(overview instanceof SVGSVGElement)) return null;
+  const start = Number(overview.getAttribute('data-visible-start-ms'));
+  const end = Number(overview.getAttribute('data-visible-end-ms'));
+  return { start, end, span: end - start };
+})()`);
+const exerciseTimelineWheel = async (client, viewport) => {
+  const reset = async () => {
+    assert.equal(await click(client, '[data-timeline-tool="fit-all"]'), true, "Timeline wheel fixture restores Fit All");
+    await sleep(30);
+    assert.equal(await evaluate(client, `(() => {
+      const scrollport = document.querySelector('.timelineLayerScrollport');
+      if (!(scrollport instanceof HTMLElement)) return false;
+      scrollport.scrollTop = 0;
+      return true;
+    })()`), true);
+  };
+  await reset();
+  const initial = await readTimelineVisibleWindow(client);
+  assert.ok(initial && initial.span > 0, `Timeline wheel fixture exposes a visible window at ${viewport.width}x${viewport.height}`);
+
+  const deltaXOnly = await dispatchTimelineWheel(client, { deltaX: 40 });
+  assert.ok(deltaXOnly, `Timeline wheel deltaX-only event dispatched at ${viewport.width}x${viewport.height}`);
+  assert.equal(deltaXOnly.defaultPrevented, true, "unmodified deltaX-dominant wheel is consumed by the Timeline");
+  assert.equal(deltaXOnly.after.scrollTop, deltaXOnly.before.scrollTop, "deltaX-only wheel does not scroll Timeline lanes");
+  assert.equal(deltaXOnly.after.end - deltaXOnly.after.start, initial.span, "deltaX-only pan preserves visible span");
+  assert.ok(deltaXOnly.after.start > initial.start, "deltaX-only wheel advances the visible time window");
+
+  await reset();
+  const shifted = await dispatchTimelineWheel(client, { deltaX: 40, deltaY: 240, shiftKey: true });
+  assert.ok(shifted, `Timeline Shift wheel event dispatched at ${viewport.width}x${viewport.height}`);
+  assert.equal(shifted.defaultPrevented, true, "Shift wheel is consumed by the Timeline");
+  assert.equal(shifted.after.scrollTop, shifted.before.scrollTop, "Shift wheel does not scroll Timeline lanes");
+  assert.equal(shifted.after.end - shifted.after.start, initial.span, "Shift pan preserves visible span");
+  assert.ok(shifted.after.start > initial.start, "Shift wheel pans along the time axis");
+  assert.ok(
+    Math.abs((shifted.after.start - initial.start) - (40 / Math.max(1, shifted.before.overviewWidth)) * initial.span) < 1,
+    "Shift wheel prefers deltaX over its larger deltaY fallback",
+  );
+
+  await reset();
+  const shiftedLineFallback = await dispatchTimelineWheel(client, { deltaY: 1, deltaMode: 1, shiftKey: true });
+  assert.ok(shiftedLineFallback && shiftedLineFallback.defaultPrevented, "Shift wheel falls back to a line-mode deltaY");
+  assert.ok(shiftedLineFallback.after.start > initial.start, "Shift line-mode deltaY pans the time axis");
+
+  await reset();
+  const shiftedPageFallback = await dispatchTimelineWheel(client, { deltaY: 1, deltaMode: 2, shiftKey: true });
+  assert.ok(shiftedPageFallback && shiftedPageFallback.defaultPrevented, "Shift wheel converts a page-mode deltaY");
+  assert.ok(shiftedPageFallback.after.start > initial.start, "Shift page-mode deltaY pans the time axis");
+
+  await reset();
+  const ctrlBefore = await readTimelineVisibleWindow(client);
+  const ctrlBeforeGrid = await evaluate(client, `(() => {
+    const ruler = document.querySelector('.timelineRuler');
+    if (!(ruler instanceof Element)) return null;
+    return {
+      majorStepMs: Number(ruler.getAttribute('data-timeline-grid-major-step-ms')),
+      minorStepMs: Number(ruler.getAttribute('data-timeline-grid-minor-step-ms')),
+      subdivision: Number(ruler.getAttribute('data-timeline-grid-subdivision-count')),
+      lineCount: Number(ruler.getAttribute('data-timeline-grid-line-count')),
+    };
+  })()`);
+  const ctrl = await dispatchTimelineWheel(client, { deltaY: -40, ctrlKey: true, clientXRatio: 0.25 });
+  assert.ok(ctrl, `Ctrl wheel event dispatched at ${viewport.width}x${viewport.height}`);
+  assert.equal(ctrl.defaultPrevented, true, "Ctrl wheel is consumed by the Timeline");
+  assert.equal(ctrl.after.scrollTop, ctrl.before.scrollTop, "Ctrl wheel does not scroll Timeline lanes");
+  assert.ok(ctrl.after.end - ctrl.after.start < ctrlBefore.span, "Ctrl wheel zooms the visible time window");
+  const anchorMs = ctrlBefore.start + ctrlBefore.span * 0.25;
+  const beforeRatio = (anchorMs - ctrlBefore.start) / ctrlBefore.span;
+  const afterRatio = (anchorMs - ctrl.after.start) / (ctrl.after.end - ctrl.after.start);
+  assert.ok(Math.abs(afterRatio - beforeRatio) < 0.001, `Ctrl zoom keeps its pointer anchor: before=${beforeRatio} after=${afterRatio}`);
+  const ctrlAfterGrid = await evaluate(client, `(() => {
+    const ruler = document.querySelector('.timelineRuler');
+    if (!(ruler instanceof Element)) return null;
+    return {
+      majorStepMs: Number(ruler.getAttribute('data-timeline-grid-major-step-ms')),
+      minorStepMs: Number(ruler.getAttribute('data-timeline-grid-minor-step-ms')),
+      subdivision: Number(ruler.getAttribute('data-timeline-grid-subdivision-count')),
+      lineCount: Number(ruler.getAttribute('data-timeline-grid-line-count')),
+    };
+  })()`);
+  assert.ok(
+    ctrlBeforeGrid && ctrlAfterGrid && (
+      ctrlAfterGrid.majorStepMs !== ctrlBeforeGrid.majorStepMs ||
+      ctrlAfterGrid.minorStepMs !== ctrlBeforeGrid.minorStepMs ||
+      ctrlAfterGrid.subdivision !== ctrlBeforeGrid.subdivision ||
+      ctrlAfterGrid.lineCount !== ctrlBeforeGrid.lineCount
+    ),
+    `Ctrl zoom updates the visible adaptive ruler grid model: before=${JSON.stringify(ctrlBeforeGrid)} after=${JSON.stringify(ctrlAfterGrid)}`,
+  );
+
+  await reset();
+  const ctrlShiftBefore = await readTimelineVisibleWindow(client);
+  const ctrlShift = await dispatchTimelineWheel(client, { deltaX: 120, deltaY: -40, ctrlKey: true, shiftKey: true });
+  assert.ok(ctrlShift && ctrlShift.defaultPrevented, "Ctrl+Shift wheel is consumed by the Timeline");
+  assert.ok(ctrlShift.after.end - ctrlShift.after.start < ctrlShiftBefore.span, "Ctrl has priority over Shift and zooms instead of panning");
+  assert.equal(ctrlShift.after.scrollTop, ctrlShift.before.scrollTop, "Ctrl+Shift wheel does not scroll Timeline lanes");
+
+  await reset();
+  const alt = await dispatchTimelineWheel(client, { deltaX: 40, deltaY: 40, shiftKey: true, ctrlKey: true, altKey: true });
+  assert.ok(alt, `Alt wheel event dispatched at ${viewport.width}x${viewport.height}`);
+  assert.equal(alt.defaultPrevented, false, "Alt-containing wheel remains unhandled");
+  assert.equal(alt.dispatchResult, true, "Alt-containing wheel does not cancel browser dispatch");
+  assert.deepEqual(alt.after, alt.before, "Alt-containing wheel performs no custom mutation");
+
+  if (viewport.width === 860) {
+    await reset();
+    const scrollRange = await createDeterministicScrollRange(client, {
+      scrollportSelector: '.timelineLayerScrollport',
+      contentSelector: '.timelineLayerScrollContent',
+      axis: 'top',
+    });
+    assert.ok((scrollRange?.range ?? 0) > 0, "Timeline wheel fixture has a deterministic vertical lane-scroll range");
+    const gutterSelector = '[data-timeline-layer-gutter]';
+    assert.ok(await evaluate(client, `document.querySelector(${JSON.stringify(gutterSelector)}) instanceof Element`), "Timeline layered gutter is available as a wheel target");
+    const gutterCtrlBefore = await readTimelineVisibleWindow(client);
+    const gutterCtrl = await dispatchTimelineWheel(client, { deltaY: -40, ctrlKey: true, clientXRatio: 0.25, targetSelector: gutterSelector });
+    assert.ok(gutterCtrl && gutterCtrl.defaultPrevented, "Ctrl wheel from the layered gutter is consumed");
+    assert.ok(gutterCtrl.after.end - gutterCtrl.after.start < gutterCtrlBefore.span, "Ctrl wheel from the layered gutter zooms the visible time window");
+    await reset();
+    const gutterShiftBefore = await readTimelineVisibleWindow(client);
+    const gutterShift = await dispatchTimelineWheel(client, { deltaX: 40, shiftKey: true, targetSelector: gutterSelector });
+    assert.ok(gutterShift && gutterShift.defaultPrevented, "Shift wheel from the layered gutter is consumed");
+    assert.equal(gutterShift.after.end - gutterShift.after.start, gutterShiftBefore.span, "Shift wheel from the layered gutter preserves visible span");
+    assert.ok(gutterShift.after.start > gutterShiftBefore.start, "Shift wheel from the layered gutter pans time");
+    await reset();
+    const vertical = await dispatchTimelineWheel(client, { deltaY: 32, targetSelector: gutterSelector });
+    assert.ok(vertical && vertical.defaultPrevented, "plain vertical wheel is consumed by the Timeline");
+    assert.ok(vertical.after.scrollTop > vertical.before.scrollTop, "plain vertical wheel from the layered gutter scrolls the owning lane scrollport");
+    assert.deepEqual(
+      [vertical.after.start, vertical.after.end, vertical.after.documentTop, vertical.after.documentLeft, vertical.after.appTop, vertical.after.appLeft],
+      [vertical.before.start, vertical.before.end, 0, 0, 0, 0],
+      "plain vertical wheel leaves the time window and outer document/app scroll unchanged",
+    );
+    await evaluate(client, `(() => {
+      const scrollport = document.querySelector('.timelineLayerScrollport');
+      if (scrollport instanceof HTMLElement) scrollport.scrollTop = 0;
+      return true;
+    })()`);
+    const verticalBoundary = await dispatchTimelineWheel(client, { deltaY: -32, targetSelector: gutterSelector });
+    assert.ok(verticalBoundary && verticalBoundary.defaultPrevented, "plain vertical wheel from the layered gutter remains consumed at the lane-scroll boundary");
+    assert.equal(verticalBoundary.after.scrollTop, 0, "plain vertical boundary wheel does not produce negative scroll");
+    await restoreDeterministicScrollRange(client, {
+      contentSelector: '.timelineLayerScrollContent',
+      axis: 'top',
+      previousInlineSize: scrollRange.previousInlineSize,
+    });
+  }
+  await reset();
+  console.log(`${viewport.width}x${viewport.height}: Timeline wheel contract (plain lane scroll, Shift/deltaX time pan, Ctrl anchored zoom, Alt no-op) passed`);
+};
 const openTimelineContextMenuGroup = (client, groupId) => evaluate(client, `(() => {
   const group = document.querySelector('.timelineItemContextMenu details[data-timeline-context-menu-group="${groupId}"]');
   if (!(group instanceof HTMLDetailsElement)) return false;
@@ -408,6 +617,22 @@ const measure = (client) => evaluate(client, `(() => {
     loopPressed: document.querySelector('.timelineOperatorBar [data-timeline-loop-toggle]')?.getAttribute('aria-pressed') ?? '',
     loopState: document.querySelector('.timelineOperatorBar .timelineLoopState')?.textContent?.trim() ?? '',
     loopScaleControls: buttons.filter((button) => ['Halve loop length', 'Double loop length'].includes(button.title)).length,
+    snapState: document.querySelector('[data-timeline-snap-state]')?.textContent?.trim() ?? '',
+    edgeMagnetState: document.querySelector('[data-timeline-edge-magnet-state]')?.getAttribute('data-timeline-edge-magnet-state') ?? '',
+    timelineGrid: (() => {
+      const ruler = root.querySelector('.timelineRuler');
+      if (!(ruler instanceof Element)) return null;
+      return {
+        major: ruler.querySelectorAll('line.major').length,
+        minor: ruler.querySelectorAll('line.minor').length,
+        labels: ruler.querySelectorAll('text').length,
+        lineCount: Number(ruler.getAttribute('data-timeline-grid-line-count')),
+        subdivision: Number(ruler.getAttribute('data-timeline-grid-subdivision-count')),
+        majorStepMs: Number(ruler.getAttribute('data-timeline-grid-major-step-ms')),
+        minorStepMs: Number(ruler.getAttribute('data-timeline-grid-minor-step-ms')),
+        labelsOnMinor: [...ruler.querySelectorAll('.minor text')].length,
+      };
+    })(),
     videoClips: root.querySelectorAll('.timelineVideoClip').length,
     audioClips: root.querySelectorAll('.timelineAudioClip').length,
     selectedVideo: selectedVideo.length,
@@ -548,7 +773,7 @@ const assertArrangerGeometry = (geometry, viewport) => {
   assert.ok(surfaceLeft >= hostLeft - 1 && surfaceRight <= hostRight + 1 && surfaceTop >= hostTop - 1 && surfaceBottom <= hostBottom + 1, `Timeline surface stays inside its portal host at ${viewport.width}x${viewport.height}: ${JSON.stringify(geometry)}`);
   assert.ok(frameLeft >= surfaceLeft - 1 && frameRight <= surfaceRight + 1 && frameTop >= surfaceTop - 1 && frameBottom <= surfaceBottom + 1 && frameHeight >= hostHeight - 3, `Timeline ruler/lane frame fills the arranger instead of collapsing to its bottom edge at ${viewport.width}x${viewport.height}: ${JSON.stringify(geometry)}`);
   assert.ok(scrollLeft >= frameLeft - 1 && scrollRight <= frameRight + 1 && scrollTop >= frameTop - 1 && scrollBottom <= frameBottom + 1, `Timeline layer scroll stays internal at ${viewport.width}x${viewport.height}: ${JSON.stringify(geometry)}`);
-  assert.ok(shelfLeft >= contextLeft - 1 && shelfRight <= contextRight + 1 && shelfTop >= contextTop - 1 && shelfBottom <= contextBottom + 1 && shelfHeight >= contextHeight - 2, `Timeline Sources shelf fills the lower-right pane instead of occupying the stale header row at ${viewport.width}x${viewport.height}: ${JSON.stringify(geometry)}`);
+  assert.ok(shelfLeft >= contextLeft - 1 && shelfRight <= contextRight + 1 && Math.abs(shelfTop - contextTop) <= 1 && shelfBottom <= contextBottom + 1 && shelfHeight > 0 && shelfHeight <= contextHeight + 1, `Timeline Sources shelf is contained and top-aligned in the lower-right pane without owning its unused lower whitespace at ${viewport.width}x${viewport.height}: ${JSON.stringify(geometry)}`);
   assert.ok(sourceHeaderHeight >= 36 && sourceHeaderTop >= shelfTop && sourceBodyTop >= sourceHeaderBottom && sourceBodyBottom <= shelfBottom + 1 && sourceBodyHeight >= 120, `Timeline Sources header remains readable and its body owns the remaining height at ${viewport.width}x${viewport.height}: ${JSON.stringify(geometry)}`);
   assert.ok(geometry.sourceShelfOverflowY === 'hidden' && geometry.sourceShelfOuterScroll?.[0] <= geometry.sourceShelfOuterScroll?.[1] + 1 && geometry.sourceShelfHeaderScroll?.[0] <= geometry.sourceShelfHeaderScroll?.[1] + 1 && ['auto', 'scroll'].includes(geometry.sourceShelfBodyOverflowY), `Timeline Sources removes the clipped outer scrollbar and confines overflow to the body at ${viewport.width}x${viewport.height}: ${JSON.stringify(geometry)}`);
   assert.deepEqual([geometry.headerShortTargets, geometry.duplicateSurfaces, geometry.legacyHeaders, geometry.legacyTools], [0, 1, 0, 0], `Timeline keeps one arranger, no duplicate legacy chrome, and full-size header controls at ${viewport.width}x${viewport.height}`);
@@ -727,6 +952,7 @@ try {
     assert.equal(await click(client, '[data-edit-domain-navigation] [data-control-mode-option="live"]'), true);
     assert.equal(await waitFor(() => click(client, '[data-timeline-desk-surface="show"]'), "Timeline Show tab"), true);
     await waitFor(() => evaluate(client, "document.querySelectorAll('.timelineVideoClip').length === 1 && document.querySelectorAll('.timelineAudioClip').length === 2"), "authored Timeline media clips");
+    await exerciseTimelineWheel(client, viewport);
     const arrangerGeometry = await measureArrangerGeometry(client);
     assertArrangerGeometry(arrangerGeometry, viewport);
     await saveScreenshot(client, `control-timeline-${viewport.width}x${viewport.height}.png`);
@@ -1004,6 +1230,17 @@ try {
     }
     const state = await measure(client);
     assert.ok(state.rect[0] > 0 && state.rect[1] > 0, "Timeline surface has visible nonzero geometry");
+    assert.ok(
+      state.timelineGrid && state.timelineGrid.major > 0 && state.timelineGrid.minor > 0
+        && state.timelineGrid.lineCount === state.timelineGrid.major + state.timelineGrid.minor
+        && state.timelineGrid.labels === state.timelineGrid.major
+        && state.timelineGrid.labelsOnMinor === 0
+        && state.timelineGrid.subdivision >= 1
+        && state.timelineGrid.majorStepMs > state.timelineGrid.minorStepMs,
+      `Timeline renders bounded major/minor grid lines with major-only labels: ${JSON.stringify(state.timelineGrid)}`,
+    );
+    assert.equal(state.snapState, "Snap: Grid 500 ms · Edges: ON", "new Timeline sessions expose the Grid 500 ms + edge magnet defaults");
+    assert.equal(state.edgeMagnetState, "on", "new Timeline sessions expose edge magnet enabled separately from grid quantization");
     assert.deepEqual([state.bankOpen, state.bankItems, state.bankActive, state.followLegend], [true, 2, 1, true]);
     assert.match(state.followState, /transitioning 50%/);
     assert.deepEqual(

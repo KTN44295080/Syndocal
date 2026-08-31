@@ -23,6 +23,41 @@ export interface TimelineRulerTick {
   major: boolean;
 }
 
+export type TimelineGridLineKind = "major" | "minor";
+
+export interface TimelineGridLine {
+  time_ms: number;
+  ratio: number;
+  /** Pixel position in the measured timeline canvas. */
+  x_px: number;
+  kind: TimelineGridLineKind;
+  major: boolean;
+  /** Major lines carry labels; minor lines intentionally do not. */
+  label: string | null;
+}
+
+export interface TimelineGridModel {
+  visible_window: TimelineVisibleWindow;
+  pixel_width: number;
+  major_step_ms: number;
+  minor_step_ms: number;
+  subdivision_count: number;
+  lines: TimelineGridLine[];
+}
+
+export interface TimelineGridModelOptions {
+  /** Approximate minimum distance between adjacent labelled major lines. */
+  minimum_major_spacing_px?: number;
+  /** Approximate minimum distance between minor lines. */
+  minimum_minor_spacing_px?: number;
+  /** Hard upper bound for generated SVG/CSS grid lines. */
+  maximum_lines?: number;
+}
+
+export const TIMELINE_GRID_MIN_MAJOR_SPACING_PX = 72;
+export const TIMELINE_GRID_MIN_MINOR_SPACING_PX = 14;
+export const TIMELINE_GRID_MAX_LINES = 256;
+
 export interface TimelineAbsoluteDragProjection {
   original_time_ms: number;
   time_ms: number;
@@ -372,3 +407,125 @@ export const buildTimelineRulerTicks = (
 
   return ticks;
 };
+
+const timelineGridSubdivisionCount = (
+  majorStepMs: number,
+  spanMs: number,
+  pixelWidth: number,
+  minimumMinorSpacingPx: number,
+  maximumLines: number,
+) => {
+  const majorSpacingPx = pixelWidth * majorStepMs / spanMs;
+  // Prefer the finest 1/2/5/10 subdivision that remains legible. When an
+  // unusually wide canvas would otherwise exceed the line budget, step down
+  // the subdivisions before coarsening the major unit.
+  for (const subdivision of [10, 5, 2, 1]) {
+    if (majorSpacingPx / subdivision + 1e-7 < minimumMinorSpacingPx) continue;
+    if (spanMs / (majorStepMs / subdivision) + 2 <= maximumLines) return subdivision;
+  }
+  return 1;
+};
+
+/**
+ * Build a bounded, zoom-stable timeline grid. Major units use the existing
+ * 1-2-5 duration policy; minor lines are unlabelled and are only subdivided
+ * while the measured canvas can keep them around the requested 14px apart.
+ */
+export const buildAdaptiveTimelineGrid = (
+  window: TimelineVisibleWindow,
+  pixelWidth: number,
+  options: TimelineGridModelOptions = {},
+): TimelineGridModel => {
+  const startMs = Math.min(finiteOr(window.start_ms, 0), finiteOr(window.end_ms, 0));
+  const endMs = Math.max(finiteOr(window.start_ms, 0), finiteOr(window.end_ms, 0));
+  const spanMs = Math.max(1, endMs - startMs);
+  const safePixelWidth = Math.max(1, finiteOr(pixelWidth, 1));
+  const minimumMajorSpacingPx = Math.max(
+    1,
+    finiteOr(options.minimum_major_spacing_px ?? TIMELINE_GRID_MIN_MAJOR_SPACING_PX, TIMELINE_GRID_MIN_MAJOR_SPACING_PX),
+  );
+  const minimumMinorSpacingPx = Math.max(
+    1,
+    finiteOr(options.minimum_minor_spacing_px ?? TIMELINE_GRID_MIN_MINOR_SPACING_PX, TIMELINE_GRID_MIN_MINOR_SPACING_PX),
+  );
+  const maximumLines = Math.max(
+    2,
+    Math.floor(finiteOr(options.maximum_lines ?? TIMELINE_GRID_MAX_LINES, TIMELINE_GRID_MAX_LINES)),
+  );
+  const desiredMajorCount = Math.max(1, Math.floor(safePixelWidth / minimumMajorSpacingPx));
+  let majorStepMs = niceTimelineRulerStepMs(spanMs / desiredMajorCount);
+  let subdivisionCount = timelineGridSubdivisionCount(
+    majorStepMs,
+    spanMs,
+    safePixelWidth,
+    minimumMinorSpacingPx,
+    maximumLines,
+  );
+  // The normal path is below the cap. For very large canvases, coarsen the
+  // major unit deterministically until even one line per major is bounded.
+  let guard = 0;
+  while (spanMs / (majorStepMs / subdivisionCount) + 2 > maximumLines && guard < 32) {
+    majorStepMs = niceTimelineRulerStepMs(majorStepMs * 2);
+    subdivisionCount = timelineGridSubdivisionCount(
+      majorStepMs,
+      spanMs,
+      safePixelWidth,
+      minimumMinorSpacingPx,
+      maximumLines,
+    );
+    guard += 1;
+  }
+  const minorStepMs = majorStepMs / subdivisionCount;
+  // Only absorb floating-point representation error at a real endpoint. A
+  // fixed percentage epsilon would incorrectly emit a visible line just
+  // outside a fractional window (for example time 0 for a window starting at
+  // 1e-9). The tolerance is deliberately many ulps, not a fraction of the
+  // display unit.
+  const endpointTolerance = Number.EPSILON * Math.max(
+    1,
+    Math.abs(startMs),
+    Math.abs(endMs),
+    Math.abs(minorStepMs),
+  ) * 64;
+  const firstIndex = Math.ceil(startMs / minorStepMs - endpointTolerance / minorStepMs);
+  const lines: TimelineGridLine[] = [];
+  for (
+    let index = firstIndex;
+    index * minorStepMs <= endMs + endpointTolerance && lines.length < maximumLines;
+    index += 1
+  ) {
+    const rawTimeMs = index * minorStepMs;
+    if (rawTimeMs < startMs - endpointTolerance) continue;
+    if (rawTimeMs > endMs + endpointTolerance) break;
+    // Rounding keeps ordinary 1-2-5 values stable in serialized snapshots;
+    // clamping prevents that presentation rounding from violating the strict
+    // visible-window contract at either edge.
+    const roundedTimeMs = Math.round(rawTimeMs * 1e6) / 1e6;
+    const timeMs = Math.abs(rawTimeMs - startMs) <= endpointTolerance
+      ? startMs
+      : Math.abs(rawTimeMs - endMs) <= endpointTolerance
+        ? endMs
+        : Math.min(endMs, Math.max(startMs, roundedTimeMs));
+    const isMajor = Math.abs(index % subdivisionCount) === 0;
+    const ratio = Math.min(1, Math.max(0, (timeMs - startMs) / spanMs));
+    lines.push({
+      time_ms: timeMs,
+      ratio,
+      x_px: Math.min(safePixelWidth, Math.max(0, ratio * safePixelWidth)),
+      kind: isMajor ? "major" : "minor",
+      major: isMajor,
+      label: isMajor ? formatTimelineRulerLabel(timeMs, majorStepMs) : null,
+    });
+  }
+  return {
+    visible_window: { start_ms: startMs, end_ms: endMs },
+    pixel_width: safePixelWidth,
+    major_step_ms: majorStepMs,
+    minor_step_ms: minorStepMs,
+    subdivision_count: subdivisionCount,
+    lines,
+  };
+};
+
+/** Descriptive alias for call sites that refer to the model rather than grid. */
+export const buildTimelineGridModel = buildAdaptiveTimelineGrid;

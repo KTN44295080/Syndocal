@@ -42,23 +42,196 @@ const browserCandidates = [
   "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
 ].filter(Boolean);
 
+// Cleanup is deliberately bounded independently from the browser assertions.
+// The browser is spawned detached, so a hung teardown must fail closed with an
+// attributable diagnostic instead of leaving the parent waiting forever.
+const cleanupTimeoutsMs = Object.freeze({
+  cdpClose: 2_000,
+  // taskkill /T /F can take tens of seconds while Chromium drains its
+  // renderer tree. Keep the deadline finite, but long enough to complete the
+  // exact tree termination observed on the supported Windows runner.
+  taskkill: 30_000,
+  childExit: 10_000,
+  browserTree: 90_000,
+  viteClose: 5_000,
+  endpointRelease: 10_000,
+  processQuery: 15_000,
+  profileAttempt: 2_000,
+  profile: 15_000,
+});
+const monotonicDeadlineExceededCode = "ERR_CONTROL_UPPER_WORKSPACES_MONOTONIC_DEADLINE";
+const cleanupSelfTestOnly = process.env.SYNDOCAL_CONTROL_UPPER_WORKSPACES_CLEANUP_SELF_TEST === "1";
+const cleanupSelfTestComplete = Symbol("cleanup-self-test-complete");
+const runToken = process.env.SYNDOCAL_CONTROL_UPPER_WORKSPACES_RUN_TOKEN;
+if (runToken !== undefined && !/^[A-Za-z0-9_-]{1,128}$/.test(runToken)) {
+  throw new Error(`SYNDOCAL_CONTROL_UPPER_WORKSPACES_RUN_TOKEN is invalid: ${JSON.stringify(runToken)}`);
+}
+const browserProfilePrefix = runToken === undefined
+  ? "syndocal-control-upper-workspaces-"
+  : `syndocal-control-upper-workspaces-${runToken}-`;
+const maxOwnedBrowserProcesses = 64;
+const cdpTimeoutsMs = Object.freeze({
+  request: 15_000,
+  ready: 15_000,
+  navigate: 30_000,
+  evaluate: 15_000,
+  screenshot: 15_000,
+});
+
+const monotonicNowMs = () => Number(process.hrtime.bigint()) / 1_000_000;
+const cleanupStartedAtMs = monotonicNowMs();
+let lastCleanupCheckpointMs = cleanupStartedAtMs;
+let cleanupCheckpointOrdinal = 0;
+const cleanupCheckpoint = (label) => {
+  const observedNowMs = monotonicNowMs();
+  // process.hrtime.bigint() is monotonic, but clamping keeps the diagnostic
+  // sequence monotonic even if a test double supplies a regressing clock.
+  const nowMs = Math.max(lastCleanupCheckpointMs, observedNowMs);
+  lastCleanupCheckpointMs = nowMs;
+  cleanupCheckpointOrdinal += 1;
+  console.error(
+    `[control-upper cleanup checkpoint ${cleanupCheckpointOrdinal}] ${label} `
+    + `(elapsed=${Math.round(nowMs - cleanupStartedAtMs)}ms)`,
+  );
+};
+
+// Promise.race alone leaves the losing operation alive. That is intentional:
+// the operation still owns its resource, while the caller records a bounded
+// failure and decides whether to continue its exact cleanup sequence.
+// Optional onDeadline work is synchronous and must itself never wait.
+const runWithMonotonicDeadline = async (label, operation, timeoutMs, onDeadline) => {
+  assert.ok(Number.isFinite(timeoutMs) && timeoutMs > 0, `${label} timeout must be positive`);
+  const deadlineMs = monotonicNowMs() + timeoutMs;
+  let timer;
+  let timedOut = false;
+  const operationPromise = Promise.resolve().then(operation);
+  // A timed-out operation may settle later; consume that settlement so a
+  // late rejection cannot become an unhandled process failure.
+  operationPromise.catch(() => {});
+  const deadlinePromise = new Promise((_, rejectDeadline) => {
+    const delayMs = Math.max(1, deadlineMs - monotonicNowMs());
+    timer = setTimeout(() => {
+      timedOut = true;
+      try {
+        onDeadline?.();
+      } catch {
+        // The bounded failure below is the authoritative diagnostic.
+      }
+      rejectDeadline(new Error(`${label} exceeded monotonic cleanup deadline of ${timeoutMs} ms`));
+    }, delayMs);
+  });
+  try {
+    return await Promise.race([operationPromise, deadlinePromise]);
+  } catch (error) {
+    if (timedOut) {
+      const deadlineError = new Error(`${label} exceeded monotonic cleanup deadline of ${timeoutMs} ms`, { cause: error });
+      deadlineError.code = monotonicDeadlineExceededCode;
+      throw deadlineError;
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+};
+
+const runBoundedCleanup = async (label, operation, timeoutMs, onDeadline) => {
+  assert.ok(Number.isFinite(timeoutMs) && timeoutMs > 0, `${label} cleanup timeout must be positive`);
+  cleanupCheckpoint(`${label}: start`);
+  let timedOut = false;
+  try {
+    return await runWithMonotonicDeadline(label, operation, timeoutMs, () => {
+      timedOut = true;
+      onDeadline?.();
+    });
+  } finally {
+    cleanupCheckpoint(`${label}: ${timedOut ? "deadline exceeded" : "settled"}`);
+  }
+};
+
 const sleep = (milliseconds) => new Promise((resolveSleep) => setTimeout(resolveSleep, milliseconds));
-const waitFor = async (check, label, timeoutMs = 30_000) => {
-  const deadline = Date.now() + timeoutMs;
+const waitFor = async (check, label, timeoutMs = 30_000, checkTimeoutMs = Math.min(timeoutMs, cdpTimeoutsMs.request)) => {
+  const deadline = monotonicNowMs() + timeoutMs;
   let lastError;
-  while (Date.now() < deadline) {
+  while (monotonicNowMs() < deadline) {
     try {
-      const value = await check();
+      const remainingMs = deadline - monotonicNowMs();
+      if (remainingMs <= 0) break;
+      const value = await runWithMonotonicDeadline(
+        `${label} check`,
+        check,
+        Math.max(1, Math.min(checkTimeoutMs, remainingMs)),
+      );
       if (value) return value;
     } catch (error) {
       lastError = error;
     }
-    await sleep(100);
+    const remainingAfterCheckMs = deadline - monotonicNowMs();
+    if (remainingAfterCheckMs <= 0) break;
+    await sleep(Math.min(100, remainingAfterCheckMs));
   }
   throw new Error(`Timed out waiting for ${label}${lastError ? `: ${lastError}` : ""}`);
 };
 
+const runCaptured = (file, args, label, timeoutMs) => {
+  let child;
+  let onError;
+  let onExit;
+  return runWithMonotonicDeadline(label, () => new Promise((resolveCaptured, rejectCaptured) => {
+    child = spawn(file, args, {
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => { stdout += chunk; });
+    child.stderr.on("data", (chunk) => { stderr += chunk; });
+    onError = (error) => {
+      child.removeListener("exit", onExit);
+      rejectCaptured(error);
+    };
+    onExit = (status, signal) => {
+      child.removeListener("error", onError);
+      if (status === 0 && signal === null) {
+        resolveCaptured(stdout);
+        return;
+      }
+      rejectCaptured(new Error(`${label} exited with status ${status ?? "null"} signal ${signal ?? "none"}: ${stderr.trim()}`));
+    };
+    child.once("error", onError);
+    child.once("exit", onExit);
+  }), timeoutMs, () => {
+    if (child) {
+      if (onError) child.removeListener("error", onError);
+      if (onExit) child.removeListener("exit", onExit);
+    }
+    if (child && !childHasExited(child)) {
+      try {
+        child.kill();
+      } catch {
+        // The helper may have exited between the check and kill.
+      }
+    }
+  });
+};
+
+const fetchWithDeadline = (url, init = {}, timeoutMs = cdpTimeoutsMs.request) => {
+  const controller = new AbortController();
+  return runWithMonotonicDeadline(
+    `fetch ${url}`,
+    () => fetch(url, { ...init, signal: controller.signal }),
+    timeoutMs,
+    () => controller.abort(),
+  );
+};
+
 const childHasExited = (child) => !child || child.exitCode !== null || child.signalCode !== null;
+const remainingCleanupTimeout = (label, deadlineMs, maximumMs) => {
+  const remainingMs = deadlineMs - monotonicNowMs();
+  if (remainingMs <= 0) throw new Error(`${label} cleanup deadline exhausted before the next operation`);
+  return Math.max(1, Math.min(maximumMs, remainingMs));
+};
 const assertChildAlive = (child, label) => {
   if (!child) throw new Error(`${label} was not spawned`);
   if (child.spawnError) throw new Error(`${label} failed to spawn: ${child.spawnError.message}`);
@@ -69,53 +242,186 @@ const assertChildAlive = (child, label) => {
 
 const waitForChildExit = async (child, label, timeoutMs = 5_000) => {
   if (!child || childHasExited(child)) return;
-  await new Promise((resolveExit, rejectExit) => {
-    let timer;
-    let settled = false;
-    const finish = (callback) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
+  let onExit;
+  await runBoundedCleanup(`${label} child exit`, () => new Promise((resolveExit) => {
+    onExit = () => {
       child.removeListener("exit", onExit);
-      callback();
-    };
-    const onExit = () => {
-      finish(resolveExit);
+      resolveExit();
     };
     child.once("exit", onExit);
-    timer = setTimeout(() => {
-      finish(() => rejectExit(new Error(`${label} did not exit after termination`)));
-    }, timeoutMs);
-    if (childHasExited(child)) finish(resolveExit);
+    if (childHasExited(child)) {
+      child.removeListener("exit", onExit);
+      resolveExit();
+    }
+  }), timeoutMs, () => {
+    if (onExit) child.removeListener("exit", onExit);
   });
   if (!childHasExited(child)) throw new Error(`${label} exit could not be verified`);
 };
 
-const runTaskkillTree = (pid) => new Promise((resolveKill, rejectKill) => {
-  const killer = spawn("taskkill", ["/PID", String(pid), "/T", "/F"], {
-    stdio: "ignore",
-    windowsHide: true,
+const runTaskkillTree = (pid, timeoutMs = cleanupTimeoutsMs.taskkill) => {
+  let killer;
+  let onError;
+  let onExit;
+  return runBoundedCleanup(`taskkill tree PID ${pid}`, () => new Promise((resolveKill, rejectKill) => {
+    killer = spawn("taskkill.exe", ["/PID", String(pid), "/T", "/F"], {
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    onError = rejectKill;
+    onExit = (status, signal) => resolveKill({ status, signal });
+    killer.once("error", onError);
+    killer.once("exit", onExit);
+  }), timeoutMs, () => {
+    if (killer) {
+      if (onError) killer.removeListener("error", onError);
+      if (onExit) killer.removeListener("exit", onExit);
+    }
+    if (killer && !childHasExited(killer)) {
+      try {
+        killer.kill();
+      } catch {
+        // The taskkill helper may have exited between the check and kill.
+      }
+    }
   });
-  killer.once("error", rejectKill);
-  killer.once("exit", (status, signal) => resolveKill({ status, signal }));
-});
+};
 
-const stopChild = async (child, label) => {
-  if (!child || childHasExited(child)) return;
-  if (!child.pid) throw new Error(`${label} has no spawned PID`);
-  if (process.platform === "win32") {
-    const result = await runTaskkillTree(child.pid);
+const getOwnedBrowserProcesses = async (timeoutMs = cleanupTimeoutsMs.processQuery) => {
+  if (process.platform !== "win32" || !profileDir) return [];
+  const script = "$ErrorActionPreference='Stop';"
+    + `$needle=${JSON.stringify(profileDir)};`
+    + "Get-CimInstance Win32_Process -Filter \"Name='chrome.exe' OR Name='msedge.exe'\" -ErrorAction Stop | "
+    + "Where-Object { $_.CommandLine "
+    + "-and $_.CommandLine.ToLowerInvariant().Contains($needle.ToLowerInvariant()) } | "
+    + "Select-Object ProcessId,ParentProcessId,Name,CommandLine | ConvertTo-Json -Compress";
+  const output = (await runCaptured(
+    "powershell.exe",
+    ["-NoProfile", "-NonInteractive", "-Command", script],
+    "owned browser process query",
+    timeoutMs,
+  )).trim();
+  if (!output) return [];
+  const records = JSON.parse(output);
+  return (Array.isArray(records) ? records : [records])
+    .filter((record) => Number.isSafeInteger(Number(record?.ProcessId)) && Number(record.ProcessId) > 0)
+    .map((record) => ({
+      pid: Number(record.ProcessId),
+      parentPid: Number(record.ParentProcessId),
+      name: String(record.Name ?? ""),
+      commandLine: String(record.CommandLine ?? ""),
+    }));
+};
+
+const terminateOwnedBrowserProcesses = async (label, deadlineMs = monotonicNowMs() + cleanupTimeoutsMs.browserTree) => {
+  if (process.platform !== "win32" || !profileDir) return;
+  let records = await getOwnedBrowserProcesses(
+    remainingCleanupTimeout(`${label} owned browser process query`, deadlineMs, cleanupTimeoutsMs.processQuery),
+  );
+  if (records.length > maxOwnedBrowserProcesses) {
+    throw new Error(`${label} owned browser process query returned ${records.length} processes; refusing an unbounded cleanup sweep`);
+  }
+  const attemptedPids = new Set();
+  while (records.length > 0) {
+    if (attemptedPids.size >= maxOwnedBrowserProcesses) {
+      throw new Error(`${label} owned browser process cleanup reached its ${maxOwnedBrowserProcesses}-PID bound: ${records.map(({ pid }) => pid).join(",")}`);
+    }
+    // The parent browser owns the renderer tree. Prefer it so one exact
+    // taskkill /T /F removes all descendants; if the parent already exited,
+    // fall through to the remaining profile-matched processes.
+    records.sort((left, right) => {
+      const leftWorker = left.commandLine.includes("--type=") ? 1 : 0;
+      const rightWorker = right.commandLine.includes("--type=") ? 1 : 0;
+      return leftWorker - rightWorker || left.pid - right.pid;
+    });
+    const candidate = records.find((record) => !attemptedPids.has(record.pid));
+    if (!candidate) {
+      throw new Error(`${label} owned browser processes could not be drained: ${records.map(({ pid }) => pid).join(",")}`);
+    }
+    const result = await runTaskkillTree(
+      candidate.pid,
+      remainingCleanupTimeout(`${label} taskkill tree PID ${candidate.pid}`, deadlineMs, cleanupTimeoutsMs.taskkill),
+    );
+    attemptedPids.add(candidate.pid);
     if (result.status !== 0 || result.signal !== null) {
-      throw new Error(`${label} tree termination failed (status=${result.status}, signal=${result.signal})`);
+      const stillOwned = await getOwnedBrowserProcesses(
+        remainingCleanupTimeout(`${label} owned browser post-kill query`, deadlineMs, cleanupTimeoutsMs.processQuery),
+      );
+      if (stillOwned.some(({ pid }) => pid === candidate.pid)) {
+        throw new Error(`${label} owned PID ${candidate.pid} termination failed (status=${result.status}, signal=${result.signal})`);
+      }
+    }
+    records = await getOwnedBrowserProcesses(
+      remainingCleanupTimeout(`${label} owned browser drain query`, deadlineMs, cleanupTimeoutsMs.processQuery),
+    );
+  }
+};
+
+const stopChild = async (child, label, { inspectOwnedBrowser = false, timeoutMs = cleanupTimeoutsMs.browserTree } = {}) => {
+  if (!child) return;
+  const deadlineMs = monotonicNowMs() + timeoutMs;
+  const childExited = childHasExited(child);
+  if (!child.pid) {
+    if (childExited && !inspectOwnedBrowser) return;
+    throw new Error(`${label} has no spawned PID`);
+  }
+  const failures = [];
+  if (process.platform === "win32") {
+    // A detached Chromium parent may have exited while its profile-matched
+    // descendants remain. The exact spawned PID is always safe while alive;
+    // when it has exited, profile ownership is verified before taskkill /T.
+    let shouldTaskkillSpawnedPid = !childExited;
+    if (childExited && inspectOwnedBrowser) {
+      shouldTaskkillSpawnedPid = (await getOwnedBrowserProcesses(
+        remainingCleanupTimeout(`${label} owned browser identity query`, deadlineMs, cleanupTimeoutsMs.processQuery),
+      )).some(({ pid }) => pid === child.pid);
+    }
+    if (shouldTaskkillSpawnedPid) {
+      try {
+        const result = await runTaskkillTree(
+          child.pid,
+          remainingCleanupTimeout(`${label} taskkill tree PID ${child.pid}`, deadlineMs, cleanupTimeoutsMs.taskkill),
+        );
+        if ((result.status !== 0 || result.signal !== null) && !childHasExited(child) && !inspectOwnedBrowser) {
+          failures.push(`${label} tree termination failed (status=${result.status}, signal=${result.signal})`);
+        }
+      } catch (error) {
+        failures.push(error instanceof Error ? error.message : String(error));
+      }
     }
   } else {
+    if (childExited) return;
     try {
-      process.kill(-child.pid, "SIGTERM");
+      await runBoundedCleanup(`${label} process-group termination`, () => {
+        try {
+          process.kill(-child.pid, "SIGTERM");
+        } catch (error) {
+          if (error?.code !== "ESRCH") throw error;
+        }
+      }, cleanupTimeoutsMs.taskkill);
     } catch (error) {
-      if (error?.code !== "ESRCH") throw error;
+      failures.push(error instanceof Error ? error.message : String(error));
     }
   }
-  await waitForChildExit(child, label);
+  if (!childExited) {
+    try {
+      await waitForChildExit(
+        child,
+        label,
+        remainingCleanupTimeout(`${label} child exit`, deadlineMs, cleanupTimeoutsMs.childExit),
+      );
+    } catch (error) {
+      failures.push(error instanceof Error ? error.message : String(error));
+    }
+  }
+  if (inspectOwnedBrowser) {
+    try {
+      await terminateOwnedBrowserProcesses(label, deadlineMs);
+    } catch (error) {
+      failures.push(error instanceof Error ? error.message : String(error));
+    }
+  }
+  if (failures.length > 0) throw new Error(`${label} cleanup failed: ${failures.join("; ")}`);
 };
 
 const tcpPortIsHeld = (port) => new Promise((resolveHeld) => {
@@ -150,6 +456,7 @@ class CdpClient {
   constructor(url) {
     this.socket = new WebSocket(url);
     this.nextId = 0;
+    this.closePromise = null;
     this.pending = new Map();
     this.runtimeExceptions = [];
     this.runtimeConsoleErrors = [];
@@ -157,6 +464,9 @@ class CdpClient {
     this.logErrors = [];
     this.logWarnings = [];
     this.harnessErrors = [];
+    this.socket.addEventListener("close", () => {
+      this.rejectPending(new Error("CDP socket closed before a response was received"));
+    });
     this.socket.onmessage = (event) => {
       const message = JSON.parse(event.data);
       if (!message.id) {
@@ -262,33 +572,100 @@ class CdpClient {
     };
   }
 
-  async ready() {
+  async ready(timeoutMs = cdpTimeoutsMs.ready) {
     if (this.socket.readyState === WebSocket.OPEN) return;
-    await new Promise((resolveReady, reject) => {
-      this.socket.onopen = resolveReady;
-      this.socket.onerror = reject;
-    });
+    let cancelReady = () => {};
+    await runWithMonotonicDeadline("CDP socket ready", () => new Promise((resolveReady, rejectReady) => {
+      let settled = false;
+      const finish = (error) => {
+        if (settled) return;
+        settled = true;
+        this.socket.removeEventListener("open", onOpen);
+        this.socket.removeEventListener("error", onError);
+        this.socket.removeEventListener("close", onClose);
+        if (error) rejectReady(error);
+        else resolveReady();
+      };
+      const onOpen = () => finish();
+      const onError = () => finish(new Error("CDP socket failed while connecting"));
+      const onClose = () => finish(new Error("CDP socket closed while connecting"));
+      cancelReady = () => finish(new Error("CDP socket readiness wait canceled at its deadline"));
+      this.socket.addEventListener("open", onOpen, { once: true });
+      this.socket.addEventListener("error", onError, { once: true });
+      this.socket.addEventListener("close", onClose, { once: true });
+      if (this.socket.readyState === WebSocket.OPEN) finish();
+      else if (this.socket.readyState === WebSocket.CLOSED) finish(new Error("CDP socket is already closed"));
+    }), timeoutMs, () => cancelReady());
   }
 
-  send(method, params = {}) {
+  rejectPending(error) {
+    for (const [id, pending] of this.pending) {
+      this.pending.delete(id);
+      pending.reject(error);
+    }
+  }
+
+  send(method, params = {}, timeoutMs = cdpTimeoutsMs.request) {
+    assert.ok(Number.isFinite(timeoutMs) && timeoutMs > 0, `CDP ${method} request timeout must be positive`);
     const id = ++this.nextId;
-    return new Promise((resolveSend, reject) => {
-      this.pending.set(id, { resolve: resolveSend, reject });
-      this.socket.send(JSON.stringify({ id, method, params }));
+    let rejectTimedOutRequest = () => {};
+    const requestPromise = new Promise((resolveSend, rejectSend) => {
+      rejectTimedOutRequest = (error) => {
+        const pending = this.pending.get(id);
+        if (!pending) return;
+        this.pending.delete(id);
+        pending.reject(error);
+      };
+      if (this.socket.readyState !== WebSocket.OPEN) {
+        rejectSend(new Error(`CDP ${method} request ${id} cannot send while socket state is ${this.socket.readyState}`));
+        return;
+      }
+      this.pending.set(id, { resolve: resolveSend, reject: rejectSend });
+      try {
+        this.socket.send(JSON.stringify({ id, method, params }));
+      } catch (error) {
+        rejectTimedOutRequest(error);
+      }
     });
+    return runWithMonotonicDeadline(
+      `CDP ${method} request ${id}`,
+      () => requestPromise,
+      timeoutMs,
+      () => rejectTimedOutRequest(new Error(`CDP ${method} request ${id} timed out`)),
+    );
   }
 
   close() {
-    this.socket.close();
+    if (this.closePromise) return this.closePromise;
+    if (this.socket.readyState === WebSocket.CLOSED) return Promise.resolve();
+    this.closePromise = new Promise((resolveClose, rejectClose) => {
+      let settled = false;
+      const finish = (error) => {
+        if (settled) return;
+        settled = true;
+        this.socket.removeEventListener("close", onClose);
+        if (error) rejectClose(error);
+        else resolveClose();
+      };
+      const onClose = () => finish();
+      this.socket.addEventListener("close", onClose, { once: true });
+      try {
+        if (this.socket.readyState !== WebSocket.CLOSING) this.socket.close();
+        if (this.socket.readyState === WebSocket.CLOSED) finish();
+      } catch (error) {
+        finish(error);
+      }
+    });
+    return this.closePromise;
   }
 }
 
-const evaluate = async (client, expression) => {
+const evaluate = async (client, expression, timeoutMs = cdpTimeoutsMs.evaluate) => {
   const result = await client.send("Runtime.evaluate", {
     expression,
     awaitPromise: true,
     returnByValue: true,
-  });
+  }, timeoutMs);
   if (result.exceptionDetails) throw new Error(result.exceptionDetails.text);
   return result.result.value;
 };
@@ -315,13 +692,13 @@ const isVisibleExpression = (elementExpression) => `(() => {
 })()`;
 
 const pressEscape = async (client) => {
-  await client.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape" });
-  await client.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Escape", code: "Escape" });
+  await client.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape" }, cdpTimeoutsMs.request);
+  await client.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Escape", code: "Escape" }, cdpTimeoutsMs.request);
 };
 
 const pressTab = async (client) => {
-  await client.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Tab", code: "Tab" });
-  await client.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Tab", code: "Tab" });
+  await client.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Tab", code: "Tab" }, cdpTimeoutsMs.request);
+  await client.send("Input.dispatchKeyEvent", { type: "keyUp", key: "Tab", code: "Tab" }, cdpTimeoutsMs.request);
 };
 
 const exerciseExpandedTabOrder = async (client) => {
@@ -529,7 +906,7 @@ const capture = async (client, name) => {
   const result = await client.send("Page.captureScreenshot", {
     format: "png",
     captureBeyondViewport: false,
-  });
+  }, cdpTimeoutsMs.screenshot);
   const path = join(screenshotDir, name);
   await writeFile(path, Buffer.from(result.data, "base64"));
   return path;
@@ -685,6 +1062,7 @@ const measureTimeline = (client) => evaluate(client, `(() => {
   const mixerStyle = mixerPanel instanceof HTMLElement ? getComputedStyle(mixerPanel) : null;
   const shelfStyle = shelf instanceof HTMLElement ? getComputedStyle(shelf) : null;
   const bodyStyle = shelfBody instanceof HTMLElement ? getComputedStyle(shelfBody) : null;
+  const clickPlacementDetails = shelf?.querySelector('[data-timeline-source-click-placement]');
   const toolsToolbarGroups = [
     '.timelineToolsScrubGroup',
     '.timelineViewportToolbar',
@@ -733,6 +1111,17 @@ const measureTimeline = (client) => evaluate(client, `(() => {
     shelfOuterScroll: (shelf?.scrollHeight ?? 0) - (shelf?.clientHeight ?? 0),
     shelfBodyOverflowY: bodyStyle?.overflowY ?? '',
     shelfBodyScroll: (shelfBody?.scrollHeight ?? 0) - (shelfBody?.clientHeight ?? 0),
+    shelfCompactTopAligned: Boolean(
+      shelf && context &&
+      shelf.getBoundingClientRect().top >= context.getBoundingClientRect().top - 1 &&
+      shelf.getBoundingClientRect().bottom <= context.getBoundingClientRect().bottom + 1 &&
+      shelf.getBoundingClientRect().height < context.getBoundingClientRect().height - 4,
+    ),
+    clickPlacementDisclosure: {
+      present: clickPlacementDetails instanceof HTMLDetailsElement,
+      closed: clickPlacementDetails instanceof HTMLDetailsElement && !clickPlacementDetails.open,
+      summaryHeight: rect(clickPlacementDetails?.querySelector(':scope > summary'))?.[3] ?? 0,
+    },
     toolsOpen: tools instanceof HTMLDetailsElement && tools.open,
     toolsPanel: toolsPanelRect,
     toolsPanelClientWidth: toolsPanel instanceof HTMLElement ? toolsPanel.clientWidth : 0,
@@ -816,6 +1205,27 @@ let profileDir;
 let gateFailure;
 let browserSpawned = false;
 try {
+  // Keep the deadline contract itself deterministic and exercised before any
+  // browser or Vite resource is acquired. This catches regressions in the
+  // teardown guard without requiring a viewport or external process.
+  const cleanupSelfTestResult = await runBoundedCleanup(
+    "cleanup helper resolve self-test",
+    () => Promise.resolve("resolved"),
+    100,
+  );
+  assert.equal(cleanupSelfTestResult, "resolved", "bounded cleanup resolves a completed operation");
+  await assert.rejects(
+    runBoundedCleanup("cleanup helper timeout self-test", () => new Promise(() => {}), 25),
+    /exceeded monotonic cleanup deadline of 25 ms/,
+    "bounded cleanup rejects an operation that exceeds its deadline",
+  );
+  await assert.rejects(
+    waitFor(() => new Promise(() => {}), "waitFor check timeout self-test", 25, 10),
+    /Timed out waiting for waitFor check timeout self-test/,
+    "waitFor bounds an unresponsive check as well as its polling window",
+  );
+  if (cleanupSelfTestOnly) throw cleanupSelfTestComplete;
+
   const browserPath = browserCandidates.find((candidate) => existsSync(candidate));
   assert.ok(browserPath, "Chrome or Edge is required for the Control upper workspace browser gate");
   await assertMainWindowMinimum();
@@ -827,7 +1237,9 @@ try {
     server: {
       host,
       port: 0,
-      strictPort: true,
+      // Port 0 requests an ephemeral fixture port. Keep fallback enabled if
+      // the app config's default 5173 is occupied by an unrelated dev server.
+      strictPort: false,
     },
   });
   await vite.listen();
@@ -839,12 +1251,12 @@ try {
   faviconUrl = `http://${host}:${vitePort}/favicon.ico`;
   await waitFor(async () => {
     try {
-      return (await fetch(baseUrl)).ok;
+      return (await fetchWithDeadline(baseUrl)).ok;
     } catch {
       return false;
     }
   }, "Vite fixture server");
-  profileDir = await mkdtemp(join(tmpdir(), "syndocal-control-upper-workspaces-"));
+  profileDir = await mkdtemp(join(tmpdir(), browserProfilePrefix));
   browser = spawn(browserPath, [
     "--headless=new",
     "--disable-gpu",
@@ -874,7 +1286,7 @@ try {
   const browserVersion = await waitFor(async () => {
     assertChildAlive(browser, "headless browser");
     try {
-      const response = await fetch(`http://${host}:${cdpPort}/json/version`);
+      const response = await fetchWithDeadline(`http://${host}:${cdpPort}/json/version`);
       return response.ok ? response.json() : null;
     } catch {
       return null;
@@ -892,7 +1304,10 @@ try {
   const target = await waitFor(async () => {
     assertChildAlive(browser, "headless browser");
     try {
-      const response = await fetch(`http://${host}:${cdpPort}/json/new?${encodeURIComponent("about:blank")}`, { method: "PUT" });
+      const response = await fetchWithDeadline(
+        `http://${host}:${cdpPort}/json/new?${encodeURIComponent("about:blank")}`,
+        { method: "PUT" },
+      );
       return response.ok ? response.json() : null;
     } catch {
       return null;
@@ -909,17 +1324,17 @@ try {
   assert.equal(targetWebSocketUrl.hash, "", "CDP page endpoint must not contain a fragment");
   const pinnedTargetWebSocketUrl = `ws://${host}:${cdpPort}${targetWebSocketUrl.pathname}`;
   client = new CdpClient(pinnedTargetWebSocketUrl);
-  await client.ready();
+  await client.ready(cdpTimeoutsMs.ready);
   const diagnosticsOrigin = client.diagnosticCursor();
-  await client.send("Page.enable");
-  await client.send("Runtime.enable");
-  await client.send("Log.enable");
-  await client.send("Fetch.enable", { patterns: [{ urlPattern: faviconUrl, requestStage: "Request" }] });
+  await client.send("Page.enable", {}, cdpTimeoutsMs.request);
+  await client.send("Runtime.enable", {}, cdpTimeoutsMs.request);
+  await client.send("Log.enable", {}, cdpTimeoutsMs.request);
+  await client.send("Fetch.enable", { patterns: [{ urlPattern: faviconUrl, requestStage: "Request" }] }, cdpTimeoutsMs.request);
 
   for (const viewport of viewports) {
     const viewportDiagnosticsCursor = client.diagnosticCursor();
-    await client.send("Emulation.setDeviceMetricsOverride", { ...viewport, deviceScaleFactor: 1, mobile: false });
-    await client.send("Page.navigate", { url: baseUrl });
+    await client.send("Emulation.setDeviceMetricsOverride", { ...viewport, deviceScaleFactor: 1, mobile: false }, cdpTimeoutsMs.request);
+    await client.send("Page.navigate", { url: baseUrl }, cdpTimeoutsMs.navigate);
     await waitFor(() => evaluate(client, "document.querySelector('.app') && document.readyState === 'complete'"), "app mount");
     await sleep(80);
     const topbarIdentity = await measureTopbarIdentity(client);
@@ -1000,11 +1415,14 @@ try {
     assert.ok(rectHeight(timeline.upper) >= 140 && rectHeight(timeline.timelineSurface) > 0, "Timeline lane surface has useful geometry");
     assert.ok(timeline.laneCount > 0 && timeline.laneRect?.[3] > 0, "Timeline mounts visible lanes");
     assert.ok(timeline.shelf && rectHeight(timeline.shelf) > 0 && rectHeight(timeline.context) > 0, "Timeline Sources shelf is rendered in the lower context pane");
-    assert.ok(Math.abs((timeline.shelf?.[3] ?? 0) - (timeline.context?.[3] ?? 0)) <= 2, "Sources shelf fills the lower context pane");
+    assert.equal(timeline.shelfCompactTopAligned, true, "Sources shelf is compact and top-aligned in the lower context pane");
     assert.ok(rectHeight(timeline.shelfHeader) >= 32 && timeline.shelfHeading?.[3] > 0, "Sources header is readable and not clipped");
     assert.ok(timeline.sourceCardCount > 0 && (timeline.shelfBodyOverflowY === "auto" || timeline.shelfBodyOverflowY === "scroll"), "Sources body owns internal scrolling and mounts source cards");
     assert.equal(timeline.shelfOverflowY, "hidden", "Sources shelf has no outer scrollport");
     assert.equal(timeline.shelfOuterScroll, 0, "Sources shelf outer scroll is zero");
+    assert.equal(timeline.clickPlacementDisclosure.present, true, "Sources keep click-placement lane selectors in an accessible disclosure");
+    assert.equal(timeline.clickPlacementDisclosure.closed, true, "Click-placement lane selectors are collapsed by default so DnD stays primary");
+    assert.ok(timeline.clickPlacementDisclosure.summaryHeight >= 24, "Click-placement disclosure keeps a usable summary target");
     assertOuterScrollFixed(timeline, "Timeline");
 
     assert.equal(await clickVisible(client, '.timelineToolsDisclosure > summary'), true, "open Timeline Tools/Performance");
@@ -1191,54 +1609,64 @@ try {
   console.log(`Final CDP diagnostics: ${JSON.stringify(diagnosticCounts(finalDiagnostics))}`);
   assertNoCdpErrors(finalDiagnostics, "Final cumulative gate");
 } catch (error) {
-  gateFailure = error;
+  if (error !== cleanupSelfTestComplete) gateFailure = error;
 } finally {
   const cleanupFailures = [];
   const recordCleanupFailure = (label, error) => {
     cleanupFailures.push(`${label}: ${error instanceof Error ? error.message : String(error)}`);
   };
-  try {
-    client?.close();
-  } catch (error) {
-    recordCleanupFailure("CDP client close", error);
-  }
-  try {
-    await stopChild(browser, "headless browser");
-  } catch (error) {
-    recordCleanupFailure("headless browser tree cleanup", error);
-  }
-  try {
-    await vite?.close();
-  } catch (error) {
-    recordCleanupFailure("Vite fixture server handle cleanup", error);
-  }
-  try {
-    await waitForEndpointRelease(cdpPort, "headless browser", browserSpawned);
-  } catch (error) {
-    recordCleanupFailure("headless browser endpoint cleanup", error);
-  }
-  try {
-    await waitForEndpointRelease(vitePort, "Vite fixture server", Boolean(vite));
-  } catch (error) {
-    recordCleanupFailure("Vite fixture server endpoint cleanup", error);
-  }
-  if (profileDir) {
+
+  // Each step owns an exact resource and is attempted even when an earlier
+  // step failed. runBoundedCleanup supplies a monotonic per-step deadline and
+  // a checkpoint pair, preventing a failed close from hiding later teardown.
+  const runCleanupStep = async (label, operation, timeoutMs) => {
     try {
+      await runBoundedCleanup(label, operation, timeoutMs);
+    } catch (error) {
+      recordCleanupFailure(label, error);
+    }
+  };
+
+  await runCleanupStep("CDP client close", () => client?.close(), cleanupTimeoutsMs.cdpClose);
+  await runCleanupStep(
+    "headless browser tree cleanup",
+    () => stopChild(browser, "headless browser", { inspectOwnedBrowser: true }),
+    cleanupTimeoutsMs.browserTree,
+  );
+  await runCleanupStep("Vite fixture server handle cleanup", () => vite?.close(), cleanupTimeoutsMs.viteClose);
+  await runCleanupStep(
+    "headless browser endpoint cleanup",
+    () => waitForEndpointRelease(cdpPort, "headless browser", browserSpawned),
+    cleanupTimeoutsMs.endpointRelease,
+  );
+  await runCleanupStep(
+    "Vite fixture server endpoint cleanup",
+    () => waitForEndpointRelease(vitePort, "Vite fixture server", Boolean(vite)),
+    cleanupTimeoutsMs.endpointRelease,
+  );
+  if (profileDir) {
+    await runCleanupStep("browser profile cleanup", async () => {
       let removed = false;
       for (let attempt = 0; attempt < 5; attempt += 1) {
         try {
-          await rm(profileDir, { recursive: true, force: true });
+          await runBoundedCleanup(
+            `browser profile removal attempt ${attempt + 1}`,
+            () => rm(profileDir, { recursive: true, force: true }),
+            cleanupTimeoutsMs.profileAttempt,
+          );
           removed = !existsSync(profileDir);
           if (removed) break;
         } catch (error) {
+          // rm() has no cancellation primitive. A deadline means the original
+          // promise may still own the profile, so never issue a second rm while
+          // that first operation could still be running.
+          if (error?.code === monotonicDeadlineExceededCode) throw error;
           if (attempt === 4) throw error;
           await sleep(250);
         }
       }
       if (!removed) throw new Error(`profile directory still exists: ${profileDir}`);
-    } catch (error) {
-      recordCleanupFailure("browser profile cleanup", error);
-    }
+    }, cleanupTimeoutsMs.profile);
   }
   if (cleanupFailures.length > 0) {
     const cleanupError = new Error(`Test cleanup failed: ${cleanupFailures.join("; ")}`);
@@ -1251,4 +1679,8 @@ try {
 }
 
 if (gateFailure) throw gateFailure;
-console.log(`Control upper workspace browser gate passed; screenshots=${screenshotDir}`);
+if (cleanupSelfTestOnly) {
+  console.log("Control upper workspace cleanup deadline self-test passed");
+} else {
+  console.log(`Control upper workspace browser gate passed; screenshots=${screenshotDir}`);
+}

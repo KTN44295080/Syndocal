@@ -2,13 +2,13 @@
 
 Syndocal は、DMX照明とVJ映像を同じタイムライン、キュー、BPMクロック、エフェクトソースで駆動するデスクトップ制御ソフトウェアです。
 
-- 製品名: **Syndocal 1.2.0-alpha.43**
+- 製品名: **Syndocal 1.2.0-alpha.44**
 - 開発: **Seraf()のKTN**
 - プロジェクト: **`.sdc`** (可読JSON)
 - Tier 1: Windows 10+ / macOS 12+
 - Tier 2: Ubuntu 22.04+ / Arch Linux
 
-Current product metadata is `1.2.0-alpha.43` on branch
+Current product metadata is `1.2.0-alpha.44` on branch
 `codex/syndocal-v1.2`; its native checkpoint is pending. The historical
 alpha.39 native checkpoint used source/docs `HEAD`
 and upstream `ec93e9160da853ad181de70aee4db7b4a75fafbb`, which were equal at
@@ -349,7 +349,7 @@ unaccepted.
 
 CI/Release成果物は次の形式です。
 
-- Windows: `Syndocal_1.2.0-alpha.43_x64-setup.exe` (NSIS)、`Syndocal_1.2.0-alpha.43_x64_ja-JP.msi`
+- Windows: `Syndocal_1.2.0-alpha.44_x64-setup.exe` (NSIS)、`Syndocal_1.2.0-alpha.44_x64_ja-JP.msi`
 - macOS: `.app`、DMG
 - Linux: `.deb`、AppImage
 
@@ -372,6 +372,8 @@ CI/Release成果物は次の形式です。
 6. Project menuから`.sdc`として保存します。
 
 Project menuの`UI language`からEnglish／Japaneseを切り替えられます。選択は端末設定として保存され、`.sdc`には混在しません。
+
+Timelineの論理スナップ間隔とズーム適応ルーラーは別の設定です。新規セッションは`Grid 500 ms`とScene端磁着を有効にして開始し、ルーラーだけが表示倍率に応じて細分化されます。ホイール、Undo/Redoを含む操作一覧は [HOTKEYS.md](HOTKEYS.md) を参照してください。
 
 同梱サンプルの詳細は [samples/README.md](samples/README.md)、キー操作は [HOTKEYS.md](HOTKEYS.md) を参照してください。
 

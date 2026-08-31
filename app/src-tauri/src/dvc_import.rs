@@ -9289,6 +9289,185 @@ mod tests {
         assert_eq!(&wire[18..], rendered.as_slice());
     }
 
+    #[test]
+    #[ignore = "requires KDMX_DVC_ACCEPTANCE_PATH=C:\\Users\\kouty\\Downloads\\dance.dvc and a hash-pinned external specimen"]
+    fn dvc_external_dance_saved_snapshot_reopens_current_schema_without_losing_owned_content() {
+        let path = std::env::var_os("KDMX_DVC_ACCEPTANCE_PATH")
+            .map(PathBuf::from)
+            .expect("set KDMX_DVC_ACCEPTANCE_PATH to the hash-pinned dance.dvc specimen");
+        assert_eq!(
+            path.extension().and_then(|extension| extension.to_str()),
+            Some("dvc"),
+            "external acceptance rejects a non-.dvc path before parsing"
+        );
+        let bytes = fs::read(&path).expect("read hash-pinned dance.dvc specimen");
+        assert_eq!(
+            format!("{:x}", Sha256::digest(&bytes)),
+            DANCE_DVC_ACCEPTANCE_SHA256,
+            "KDMX_DVC_ACCEPTANCE_PATH did not name the reviewed dance.dvc bytes"
+        );
+
+        let outcome = import_bytes(&bytes, &path.to_string_lossy())
+            .expect("hash-pinned dance.dvc must import in memory");
+        crate::validate_project_file(&outcome.project)
+            .expect("the imported dance.dvc project must be valid before loading");
+
+        let assert_authored_content = |project: &ProjectFile, boundary: &str| {
+            let super_scenes = project
+                .snapshot
+                .cues
+                .iter()
+                .filter(|cue| cue.child_timeline.is_some())
+                .collect::<Vec<_>>();
+            assert_eq!(
+                super_scenes.len(),
+                1,
+                "{boundary}: dance.dvc must retain one authored Super Scene"
+            );
+            let child = super_scenes[0]
+                .child_timeline
+                .as_ref()
+                .expect("the authored Super Scene must retain its child timeline");
+            assert_eq!(
+                child.layers.len(),
+                18,
+                "{boundary}: child timeline must retain all 18 lanes"
+            );
+            assert_eq!(
+                child
+                    .layers
+                    .iter()
+                    .filter(|layer| layer.kind == TimelineLayerKind::Lighting)
+                    .count(),
+                17,
+                "{boundary}: child timeline must retain 17 lighting lanes"
+            );
+            assert_eq!(
+                child
+                    .layers
+                    .iter()
+                    .filter(|layer| layer.kind == TimelineLayerKind::Audio)
+                    .count(),
+                1,
+                "{boundary}: child timeline must retain one audio lane"
+            );
+            assert_eq!(
+                child.events.len(),
+                194,
+                "{boundary}: child timeline must retain 194 lighting blocks"
+            );
+            assert_eq!(
+                child
+                    .events
+                    .iter()
+                    .filter(|event| event.track == TimelineTrackKind::Lighting)
+                    .count(),
+                194,
+                "{boundary}: all child events must remain lighting blocks"
+            );
+            assert_eq!(
+                child.audio_clips.len(),
+                1,
+                "{boundary}: child timeline must retain one audio clip"
+            );
+            assert_eq!(
+                child.duration_ms, 201_090,
+                "{boundary}: dance.dvc child duration is an authored contract"
+            );
+
+            let cue_owned_effect_targets = project
+                .snapshot
+                .cues
+                .iter()
+                .map(|cue| cue.effect_targets.len())
+                .sum::<usize>();
+            assert_eq!(
+                cue_owned_effect_targets, 29,
+                "{boundary}: cue-owned embedded effect_targets must remain complete"
+            );
+            assert!(
+                project.snapshot.cues.iter().all(|cue| cue
+                    .effect_targets
+                    .iter()
+                    .all(|target| target.params.is_some())),
+                "{boundary}: every imported effect target must retain embedded params"
+            );
+            assert!(
+                project.snapshot.effects.is_empty(),
+                "{boundary}: imported cue-owned effects must not be duplicated globally"
+            );
+        };
+
+        assert_authored_content(&outcome.project, "import");
+        assert!(
+            outcome.project.snapshot.timeline_bank.is_empty(),
+            "raw DVC import starts from the legacy single-Timeline shape"
+        );
+
+        // The first engine load performs the normal legacy->current Timeline
+        // normalization. Capture the same persistence image consumed by the
+        // app's Save path; do not introduce a DVC-specific runtime route.
+        let first_engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        first_engine
+            .load_project_snapshot_and_wait(outcome.project.snapshot.clone())
+            .expect("load and normalize imported dance.dvc into the Engine");
+        let persisted = first_engine
+            .persistence_snapshot()
+            .expect("capture the canonical Engine persistence snapshot");
+        assert!(
+            !persisted.timeline_bank.is_empty(),
+            "Engine persistence must materialize a nonempty timeline_bank"
+        );
+
+        let mut saved_project = outcome.project.clone();
+        saved_project.snapshot = crate::project_snapshot_for_save(persisted);
+        crate::validate_project_file(&saved_project)
+            .expect("the Engine persistence image must satisfy the save validator");
+        assert_authored_content(&saved_project, "saved snapshot");
+        assert!(!saved_project.snapshot.timeline_bank.is_empty());
+
+        // This is the app's project Save writer plus its JSON parser, kept
+        // entirely in memory so the regression never writes a .sdc or .dvc.
+        let json = crate::project_json_for_write(&saved_project)
+            .expect("serialize the canonical project through the Save helper");
+        let roundtrip: ProjectFile =
+            serde_json::from_str(&json).expect("parse the saved project JSON");
+        crate::validate_project_file(&roundtrip)
+            .expect("the current-schema JSON roundtrip must remain valid");
+        assert_authored_content(&roundtrip, "JSON roundtrip");
+        assert!(
+            !roundtrip.snapshot.timeline_bank.is_empty(),
+            "saved JSON must retain the normalized timeline_bank"
+        );
+
+        // A fresh Engine load now takes the current-schema path because the
+        // normalized timeline_bank is present. Verify the persistence surface
+        // again after that path, including the embedded effects and child
+        // timeline data that previously regressed during reopen.
+        let reopened_engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        reopened_engine
+            .load_project_snapshot_and_wait(roundtrip.snapshot.clone())
+            .expect("reopen the saved current-schema snapshot in a new Engine");
+        let reopened = reopened_engine
+            .persistence_snapshot()
+            .expect("capture the reopened Engine persistence snapshot");
+        assert!(
+            !reopened.timeline_bank.is_empty(),
+            "reopened current-schema persistence must retain timeline_bank"
+        );
+        let mut reopened_project = roundtrip;
+        reopened_project.snapshot = crate::project_snapshot_for_save(reopened);
+        crate::validate_project_file(&reopened_project)
+            .expect("the reopened persistence image must remain valid");
+        assert_authored_content(&reopened_project, "reopen");
+    }
+
     fn synthetic_dvc() -> String {
         synthetic_dvc_with(255, 0x3C00)
     }
