@@ -44,6 +44,24 @@ already-inactive temporary profile was blocked by the execution safety layer,
 so the directory may remain and must not be confused with a live gate. No active
 process still referenced it at this checkpoint.
 
+Operational pause state: source commit `07622a5` and cleanup-note commit
+`0268bb5` were pushed; immediately before this final note the branch and
+upstream were equal at `0268bb51dc754fb6e89a07a921fbdafda11bf14d`, with a
+clean Git status. The final authority is the pushed commit containing this
+paragraph. Existing stashes are preserved unchanged:
+`stash@{0}: WIP on codex/syndocal-v1.2: e9209d6 checkpoint: validate Syndocal
+1.2.0-alpha.9` and `stash@{1}: On fable/open-dmx-pacing: orphaned open-dmx
+pacing WIP (preserved by Fable 2026-08-10 before preset lane)`. No delegated or
+browser-gate process remains. Exact checkout release PID `80968` is still
+responsive at `target/release/syndocal.exe` and was not stopped.
+
+The pause inventory is `138,356` workspace files totaling `176,049,291,948`
+bytes (`163.96 GiB`); `target` is `122,738` files totaling `173,320,737,881`
+bytes (`161.42 GiB`). Only the verified 5,367,312-byte split backup/script set
+was removed. No build/cache tree had a reviewed recurring deletion target at
+this checkpoint, so no cache deletion was attempted; current release, debug,
+ASIO, QA, and user-authored evidence remain preserved.
+
 ## 2026-08-31 alpha.44 DVC save/reopen source authority
 
 Current product metadata is synchronized at `1.2.0-alpha.44`. The old
