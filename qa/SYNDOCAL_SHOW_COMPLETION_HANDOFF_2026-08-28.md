@@ -4,6 +4,36 @@ Status date: 2026-09-01 JST
 
 This is the concise authoritative resume note for the final show-critical tranche. It supersedes chat-only status, but it does not supersede the detailed acceptance documents named below.
 
+## 2026-09-01 alpha.51 USB-first final priority and Display diagnostic checkpoint
+
+The operator fixed the remaining completion priority to the physical show path:
+USB-DMX first; Art-Net, Spout, Unity, and the two native Display windows are
+non-blocking for this checkpoint. Before this documentation-only delta, branch
+`codex/syndocal-v1.2` was clean and upstream-equal at
+`87f37a90c13ca9575f3838daebcde1cf2cd87fa1`; no product source was changed for
+the Display diagnostic. The exact alpha.51 process remained the
+single responsive checkout-owned `syndocal.exe` at PID `62920`. At
+`05:19:43 JST` it had run for `55m15s`; Windows still reported the persisted
+`COM3` FTDI device `FTDIBUS\VID_0403+PID_6001+A&A5D719&0&8\0000` as `OK`, and
+stderr contained no serial/output fault. Together with the authoritative UI
+readback below, this extends the bounded S0/Open-DMX software-worker
+observation while preserving all 512 channels at zero. Electrical-waveform and
+F3200A DMX-receipt indication remain external and are not inferred from the
+fixture staying dark.
+
+The attempted reopen of native `Display 1` failed before publication with
+`Native Display output 3 presentation rejected: NotFresh { freshness: Error }`.
+Independent static review found that the live auto-backup still references the
+test-only foreground source
+`C:\Users\kouty\Downloads\06.flash back背景途中経過02.mp4`, while that exact file
+is currently absent. The last recorded content hash was
+`70C2B6C9D9F7F0F687E309C3207E9EEB78FDADCD738D1980165A643F15A45012`.
+No retry or permissive fallback was added: a persistent missing-media fault
+must remain zero-present and should eventually report the exact missing path
+and a restore/relink action. The native window closed, the USB-DMX worker and
+S0 authority were unaffected, and this three-display test remains non-blocking
+under the operator's USB-first boundary.
+
 ## 2026-09-01 alpha.51 Timeline authority / pedal-wait native and S0 checkpoint
 
 The source was clean and pushed/upstream-equal on `codex/syndocal-v1.2` at

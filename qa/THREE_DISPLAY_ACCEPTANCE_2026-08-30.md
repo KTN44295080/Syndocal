@@ -1,5 +1,29 @@
 # Syndocal native three-display acceptance — 2026-08-31
 
+## 2026-09-01 alpha.51 missing test-media diagnostic — non-blocking for USB-DMX
+
+The alpha.51 saved/live state still assigns `Display 1` / output `3` to the
+foreground test source
+`C:\Users\kouty\Downloads\06.flash back背景途中経過02.mp4`. That exact file is
+now absent (`Test-Path=false`), although the later background test file
+`EtaMDr-gpyCYahbz.mp4` remains present. One canonical Display 1 reopen attempt
+therefore returned, before publication,
+`Native Display output 3 presentation rejected: NotFresh { freshness: Error }`
+and the just-created window closed. No repeated attempt was made after the
+physical state became unknown.
+
+Static tracing confirms that the renderer's detailed media error is currently
+flattened by the native presentation admission boundary to `NotFresh { Error }`.
+Retrying that result would conceal a persistent missing-file fault; no retry or
+fallback was implemented. Restoration of the exact hashed test file or an
+explicit operator relink to an available test source is required before the
+distinct-content physical row can be re-run. A future UX repair may preflight
+only the active resolved source before `WindowBuilder` and return the exact
+path plus a restore/relink action, while preserving zero presents, exact
+authority fences, and the existing strict Add first-frame gate. This does not
+affect the separately verified USB-DMX/S0 worker and is non-blocking under the
+operator's current USB-first completion boundary.
+
 ## 2026-08-31 alpha.45 source/test checkpoint — native and physical acceptance pending
 
 The current product metadata is `1.2.0-alpha.45` on branch
