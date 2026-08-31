@@ -2,14 +2,32 @@
 
 Syndocal は、DMX照明とVJ映像を同じタイムライン、キュー、BPMクロック、エフェクトソースで駆動するデスクトップ制御ソフトウェアです。
 
-- 製品名: **Syndocal 1.2.0-alpha.44**
+- 製品名: **Syndocal 1.2.0-alpha.49**
 - 開発: **Seraf()のKTN**
 - プロジェクト: **`.sdc`** (可読JSON)
 - Tier 1: Windows 10+ / macOS 12+
 - Tier 2: Ubuntu 22.04+ / Arch Linux
 
-Current product metadata is `1.2.0-alpha.44` on branch
-`codex/syndocal-v1.2`; its native checkpoint is pending. The historical
+## Current show output boundary (2026-08-31 source tranche)
+
+Physical show lighting uses an explicitly selected, machine-local USB-DMX
+device; COM/PnP identity is not stored in `.sdc` and stale or ambiguous devices
+fail closed. The latest completed internal U0 frame is mirrored to USB-DMX and
+to Unity via Art-Net ArtDmx (`127.0.0.1:6454`, wire U0, 512 channels, 40–44
+fps, `payload[499]=0`). The current FT232R/COM3 USB worker default is its
+empirically stable `22,764us + 8ms` period (about `32.5fps`), so it retains the
+latest completed U0 frame rather than claiming a physical USB delivery on every
+44Hz engine tick. That USB cadence is not an Open DMX universal limit; any
+increase needs fresh waveform and fixture evidence. Video remains local and
+may use the strict Spout pair or explicit native Display outputs. This supersedes the
+historical Art-Net-only show wording because the venue fixtures use USB-DMX.
+See the [current output acceptance record](qa/DSF2026_SAME_PC_OUTPUT_ACCEPTANCE_2026-08-29.md)
+for execution steps and unverified physical/lease evidence; this boundary is
+not a hardware acceptance claim.
+
+Current product metadata is `1.2.0-alpha.49` on branch
+`codex/syndocal-v1.2`; the alpha.46 native build/window and physical-hardware
+checkpoint are pending. The historical
 alpha.39 native checkpoint used source/docs `HEAD`
 and upstream `ec93e9160da853ad181de70aee4db7b4a75fafbb`, which were equal at
 the build checkpoint. The exact MSVC `14.44.35207` Community linker was pinned
@@ -349,7 +367,7 @@ unaccepted.
 
 CI/Release成果物は次の形式です。
 
-- Windows: `Syndocal_1.2.0-alpha.44_x64-setup.exe` (NSIS)、`Syndocal_1.2.0-alpha.44_x64_ja-JP.msi`
+- Windows: `Syndocal_1.2.0-alpha.49_x64-setup.exe` (NSIS)、`Syndocal_1.2.0-alpha.49_x64_ja-JP.msi`
 - macOS: `.app`、DMG
 - Linux: `.deb`、AppImage
 

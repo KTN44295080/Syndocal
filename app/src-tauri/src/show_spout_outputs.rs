@@ -8,7 +8,8 @@
 use std::fmt;
 
 use protocol::{
-    CompositionId, VideoOutputId, VideoOutputKind, VideoOutputMapping, VideoOutputSummary,
+    CompositionId, CompositionSummary, VideoOutputId, VideoOutputKind, VideoOutputMapping,
+    VideoOutputSummary,
 };
 
 pub(crate) const SHOW_SPOUT_BACKGROUND_NAME: &str = "Syndocal Background";
@@ -16,9 +17,13 @@ pub(crate) const SHOW_SPOUT_FOREGROUND_NAME: &str = "Syndocal Foreground";
 pub(crate) const SHOW_SPOUT_WIDTH: u32 = 1920;
 pub(crate) const SHOW_SPOUT_HEIGHT: u32 = 1080;
 pub(crate) const SHOW_SPOUT_OPACITY: f32 = 1.0;
-/// The show pair is a projection of Main only, not an arbitrary nonzero
-/// composition.  This is repeated by the engine immediately before mutation.
+/// `Main` is deliberately not a publication target.  V1 pointed both fixed
+/// senders here; V2 is a clean break with one separately authored composition
+/// per sender.
 pub(crate) const SHOW_SPOUT_MAIN_COMPOSITION_ID: CompositionId = 1;
+pub(crate) const SHOW_SPOUT_MAIN_COMPOSITION_LABEL: &str = "Main";
+pub(crate) const SHOW_SPOUT_BACKGROUND_COMPOSITION_LABEL: &str = "Background Video2 Camera";
+pub(crate) const SHOW_SPOUT_FOREGROUND_COMPOSITION_LABEL: &str = "Foreground Video 1";
 pub(crate) const SHOW_SPOUT_FRAME_PIXEL_LEN: usize =
     (SHOW_SPOUT_WIDTH as usize) * (SHOW_SPOUT_HEIGHT as usize);
 
@@ -33,6 +38,19 @@ pub(crate) struct ShowSpoutOutputs {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ShowSpoutCompositionTargets {
+    pub(crate) background: CompositionId,
+    pub(crate) foreground: CompositionId,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum ShowSpoutResetCandidate {
+    Absent,
+    LegacyV1(ShowSpoutOutputs),
+    CurrentV2(ShowSpoutOutputs),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ShowSpoutValidationError {
     MissingPair,
     PartialPair,
@@ -41,6 +59,9 @@ pub(crate) enum ShowSpoutValidationError {
     InvalidOutputId,
     InvalidCompositionId,
     CompositionMismatch,
+    InvalidCompositionTarget,
+    LegacyPairRejected,
+    InvalidOutputBackreference,
     DuplicateBackground,
     DuplicateForeground,
     UnexpectedSpoutOutput,
@@ -65,8 +86,17 @@ impl fmt::Display for ShowSpoutValidationError {
                 return write!(formatter, "duplicate video output id {id}")
             }
             Self::InvalidOutputId => "show Spout output id must be non-zero",
-            Self::InvalidCompositionId => "show Spout pair must use Main composition id 1",
-            Self::CompositionMismatch => "show Spout outputs must share one composition id",
+            Self::InvalidCompositionId => "show Spout composition id must be non-zero",
+            Self::CompositionMismatch => "show Spout outputs must use distinct target compositions",
+            Self::InvalidCompositionTarget => {
+                "show Spout targets must be unique exact-name non-Main compositions"
+            }
+            Self::LegacyPairRejected => {
+                "legacy same-Main show Spout pair is retired; reset it before enabling V2"
+            }
+            Self::InvalidOutputBackreference => {
+                "show Spout composition output backreferences are inconsistent"
+            }
             Self::DuplicateBackground => "duplicate Syndocal Background Spout output",
             Self::DuplicateForeground => "duplicate Syndocal Foreground Spout output",
             Self::UnexpectedSpoutOutput => "unexpected Spout sender in show output set",
@@ -94,7 +124,8 @@ impl std::error::Error for ShowSpoutValidationError {}
 pub(crate) fn build_show_spout_outputs(
     background_id: VideoOutputId,
     foreground_id: VideoOutputId,
-    composition_id: CompositionId,
+    background_composition_id: CompositionId,
+    foreground_composition_id: CompositionId,
 ) -> Result<ShowSpoutOutputs, ShowSpoutValidationError> {
     if background_id == 0 || foreground_id == 0 {
         return Err(ShowSpoutValidationError::InvalidOutputId);
@@ -102,13 +133,66 @@ pub(crate) fn build_show_spout_outputs(
     if background_id == foreground_id {
         return Err(ShowSpoutValidationError::DuplicateOutputId(background_id));
     }
-    if composition_id != SHOW_SPOUT_MAIN_COMPOSITION_ID {
+    if background_composition_id == 0 || foreground_composition_id == 0 {
         return Err(ShowSpoutValidationError::InvalidCompositionId);
     }
+    if background_composition_id == foreground_composition_id
+        || background_composition_id == SHOW_SPOUT_MAIN_COMPOSITION_ID
+        || foreground_composition_id == SHOW_SPOUT_MAIN_COMPOSITION_ID
+    {
+        return Err(ShowSpoutValidationError::InvalidCompositionTarget);
+    }
     Ok(ShowSpoutOutputs {
-        background: fixed_output(background_id, SHOW_SPOUT_BACKGROUND_NAME, composition_id),
-        foreground: fixed_output(foreground_id, SHOW_SPOUT_FOREGROUND_NAME, composition_id),
+        background: fixed_output(
+            background_id,
+            SHOW_SPOUT_BACKGROUND_NAME,
+            background_composition_id,
+        ),
+        foreground: fixed_output(
+            foreground_id,
+            SHOW_SPOUT_FOREGROUND_NAME,
+            foreground_composition_id,
+        ),
     })
+}
+
+pub(crate) fn derive_show_spout_composition_targets(
+    compositions: &[CompositionSummary],
+) -> Result<ShowSpoutCompositionTargets, ShowSpoutValidationError> {
+    let main = unique_composition_id(compositions, SHOW_SPOUT_MAIN_COMPOSITION_LABEL)?;
+    if main != SHOW_SPOUT_MAIN_COMPOSITION_ID {
+        return Err(ShowSpoutValidationError::InvalidCompositionTarget);
+    }
+    let background = unique_composition_id(compositions, SHOW_SPOUT_BACKGROUND_COMPOSITION_LABEL)?;
+    let foreground = unique_composition_id(compositions, SHOW_SPOUT_FOREGROUND_COMPOSITION_LABEL)?;
+    if background == 0
+        || foreground == 0
+        || background == foreground
+        || background == main
+        || foreground == main
+    {
+        return Err(ShowSpoutValidationError::InvalidCompositionTarget);
+    }
+    Ok(ShowSpoutCompositionTargets {
+        background,
+        foreground,
+    })
+}
+
+fn unique_composition_id(
+    compositions: &[CompositionSummary],
+    label: &str,
+) -> Result<CompositionId, ShowSpoutValidationError> {
+    let mut matches = compositions
+        .iter()
+        .filter(|composition| composition.label == label);
+    let Some(composition) = matches.next() else {
+        return Err(ShowSpoutValidationError::InvalidCompositionTarget);
+    };
+    if matches.next().is_some() || composition.id == 0 {
+        return Err(ShowSpoutValidationError::InvalidCompositionTarget);
+    }
+    Ok(composition.id)
 }
 
 fn fixed_output(
@@ -271,13 +355,161 @@ fn validate_output_contract(output: &VideoOutputSummary) -> Result<(), ShowSpout
 fn validate_pair_contract(pair: &ShowSpoutOutputs) -> Result<(), ShowSpoutValidationError> {
     validate_output_contract(&pair.background)?;
     validate_output_contract(&pair.foreground)?;
+    if pair.background.composition_id == 0 || pair.foreground.composition_id == 0 {
+        return Err(ShowSpoutValidationError::InvalidCompositionId);
+    }
+    if pair.background.composition_id == pair.foreground.composition_id
+        || pair.background.composition_id == SHOW_SPOUT_MAIN_COMPOSITION_ID
+        || pair.foreground.composition_id == SHOW_SPOUT_MAIN_COMPOSITION_ID
+    {
+        return Err(ShowSpoutValidationError::CompositionMismatch);
+    }
+    Ok(())
+}
+
+fn validate_legacy_pair_contract(pair: &ShowSpoutOutputs) -> Result<(), ShowSpoutValidationError> {
+    validate_output_contract(&pair.background)?;
+    validate_output_contract(&pair.foreground)?;
     if pair.background.composition_id != SHOW_SPOUT_MAIN_COMPOSITION_ID
         || pair.foreground.composition_id != SHOW_SPOUT_MAIN_COMPOSITION_ID
     {
         return Err(ShowSpoutValidationError::InvalidCompositionId);
     }
-    if pair.background.composition_id != pair.foreground.composition_id {
-        return Err(ShowSpoutValidationError::CompositionMismatch);
+    Ok(())
+}
+
+/// Validate the V2 pair against the authoritative composed snapshot.  Output
+/// IDs are derived fields, so both forward assignment and every composition
+/// backreference are checked before a physical sender is admitted.
+pub(crate) fn validate_show_spout_outputs_with_compositions(
+    outputs: &[VideoOutputSummary],
+    compositions: &[CompositionSummary],
+) -> Result<ShowSpoutOutputs, ShowSpoutValidationError> {
+    let pair = match validate_show_spout_outputs(outputs) {
+        Err(ShowSpoutValidationError::CompositionMismatch)
+            if outputs
+                .iter()
+                .filter(|output| output.kind == VideoOutputKind::SpoutSender)
+                .count()
+                == 2
+                && outputs
+                    .iter()
+                    .filter(|output| output.kind == VideoOutputKind::SpoutSender)
+                    .all(|output| output.composition_id == SHOW_SPOUT_MAIN_COMPOSITION_ID) =>
+        {
+            return Err(ShowSpoutValidationError::LegacyPairRejected)
+        }
+        result => result?,
+    };
+    let targets = derive_show_spout_composition_targets(compositions)?;
+    if pair.background.composition_id != targets.background
+        || pair.foreground.composition_id != targets.foreground
+    {
+        return Err(ShowSpoutValidationError::InvalidCompositionTarget);
+    }
+    validate_output_backreferences(&pair, compositions, &targets)?;
+    Ok(pair)
+}
+
+fn validate_output_backreferences(
+    pair: &ShowSpoutOutputs,
+    compositions: &[CompositionSummary],
+    targets: &ShowSpoutCompositionTargets,
+) -> Result<(), ShowSpoutValidationError> {
+    for composition in compositions {
+        let wants_background = composition.id == targets.background;
+        let wants_foreground = composition.id == targets.foreground;
+        let has_background = composition
+            .output_ids
+            .iter()
+            .filter(|id| **id == pair.background.id)
+            .count();
+        let has_foreground = composition
+            .output_ids
+            .iter()
+            .filter(|id| **id == pair.foreground.id)
+            .count();
+        if has_background > 1
+            || has_foreground > 1
+            || (wants_background && has_background != 1)
+            || (!wants_background && has_background != 0)
+            || (wants_foreground && has_foreground != 1)
+            || (!wants_foreground && has_foreground != 0)
+        {
+            return Err(ShowSpoutValidationError::InvalidOutputBackreference);
+        }
+    }
+    Ok(())
+}
+
+/// Reset accepts only absence, the exact retired V1 same-Main pair, or the
+/// exact current V2 pair.  It deliberately does not classify a partial or a
+/// generic Spout sender as safe to delete.
+pub(crate) fn classify_show_spout_reset_candidate(
+    outputs: &[VideoOutputSummary],
+    compositions: &[CompositionSummary],
+) -> Result<ShowSpoutResetCandidate, ShowSpoutValidationError> {
+    validate_unique_output_ids(outputs)?;
+    reject_reserved_non_spout_outputs(outputs)?;
+    let spout: Vec<&VideoOutputSummary> = outputs
+        .iter()
+        .filter(|output| output.kind == VideoOutputKind::SpoutSender)
+        .collect();
+    if spout.is_empty() {
+        return Ok(ShowSpoutResetCandidate::Absent);
+    }
+    if spout.len() != 2 {
+        return Err(if spout.len() == 1 {
+            ShowSpoutValidationError::PartialPair
+        } else {
+            ShowSpoutValidationError::ExtraSpoutOutputs
+        });
+    }
+    let pair = collect_pair(spout)?;
+    if pair.background.composition_id == SHOW_SPOUT_MAIN_COMPOSITION_ID
+        && pair.foreground.composition_id == SHOW_SPOUT_MAIN_COMPOSITION_ID
+    {
+        validate_legacy_pair_contract(&pair)?;
+        validate_legacy_output_backreferences(&pair, compositions)?;
+        return Ok(ShowSpoutResetCandidate::LegacyV1(pair));
+    }
+    let pair = validate_show_spout_outputs_with_compositions(outputs, compositions)?;
+    Ok(ShowSpoutResetCandidate::CurrentV2(pair))
+}
+
+fn validate_legacy_output_backreferences(
+    pair: &ShowSpoutOutputs,
+    compositions: &[CompositionSummary],
+) -> Result<(), ShowSpoutValidationError> {
+    let main = compositions
+        .iter()
+        .filter(|composition| {
+            composition.id == SHOW_SPOUT_MAIN_COMPOSITION_ID
+                && composition.label == SHOW_SPOUT_MAIN_COMPOSITION_LABEL
+        })
+        .collect::<Vec<_>>();
+    if main.len() != 1 {
+        return Err(ShowSpoutValidationError::InvalidCompositionTarget);
+    }
+    for composition in compositions {
+        let is_main = composition.id == SHOW_SPOUT_MAIN_COMPOSITION_ID;
+        let has_background = composition
+            .output_ids
+            .iter()
+            .filter(|id| **id == pair.background.id)
+            .count();
+        let has_foreground = composition
+            .output_ids
+            .iter()
+            .filter(|id| **id == pair.foreground.id)
+            .count();
+        if has_background > 1
+            || has_foreground > 1
+            || (is_main && (has_background != 1 || has_foreground != 1))
+            || (!is_main && (has_background != 0 || has_foreground != 0))
+        {
+            return Err(ShowSpoutValidationError::InvalidOutputBackreference);
+        }
     }
     Ok(())
 }
@@ -458,7 +690,7 @@ mod tests {
     use super::*;
 
     fn pair() -> ShowSpoutOutputs {
-        build_show_spout_outputs(11, 12, 1).expect("valid fixed pair")
+        build_show_spout_outputs(11, 12, 3, 2).expect("valid V2 pair")
     }
 
     fn unrelated_display(id: VideoOutputId) -> VideoOutputSummary {
@@ -468,6 +700,51 @@ mod tests {
         output.kind = VideoOutputKind::Display;
         output.endpoint_name = None;
         output
+    }
+
+    fn composition(
+        id: CompositionId,
+        label: &str,
+        output_ids: Vec<VideoOutputId>,
+    ) -> CompositionSummary {
+        CompositionSummary {
+            id,
+            label: label.to_string(),
+            layer_ids: Vec::new(),
+            timeline_layer_ids: Vec::new(),
+            output_ids,
+        }
+    }
+
+    fn v2_compositions(expected: &ShowSpoutOutputs) -> Vec<CompositionSummary> {
+        vec![
+            composition(1, SHOW_SPOUT_MAIN_COMPOSITION_LABEL, Vec::new()),
+            composition(
+                2,
+                SHOW_SPOUT_FOREGROUND_COMPOSITION_LABEL,
+                vec![expected.foreground.id],
+            ),
+            composition(
+                3,
+                SHOW_SPOUT_BACKGROUND_COMPOSITION_LABEL,
+                vec![expected.background.id],
+            ),
+        ]
+    }
+
+    fn legacy_pair() -> ShowSpoutOutputs {
+        let mut legacy = pair();
+        legacy.background.composition_id = SHOW_SPOUT_MAIN_COMPOSITION_ID;
+        legacy.foreground.composition_id = SHOW_SPOUT_MAIN_COMPOSITION_ID;
+        legacy
+    }
+
+    fn legacy_compositions(expected: &ShowSpoutOutputs) -> Vec<CompositionSummary> {
+        vec![composition(
+            SHOW_SPOUT_MAIN_COMPOSITION_ID,
+            SHOW_SPOUT_MAIN_COMPOSITION_LABEL,
+            vec![expected.background.id, expected.foreground.id],
+        )]
     }
 
     #[test]
@@ -568,10 +845,10 @@ mod tests {
             Err(ShowSpoutValidationError::InvalidMapping)
         );
         let mut composition = expected.foreground.clone();
-        composition.composition_id = 2;
+        composition.composition_id = expected.background.composition_id;
         assert_eq!(
             validate_show_spout_outputs(&[expected.background.clone(), composition]),
-            Err(ShowSpoutValidationError::InvalidCompositionId)
+            Err(ShowSpoutValidationError::CompositionMismatch)
         );
         let mut zero_background = expected.background.clone();
         let mut zero_foreground = expected.foreground.clone();
@@ -582,12 +859,12 @@ mod tests {
             Err(ShowSpoutValidationError::InvalidCompositionId)
         );
         assert_eq!(
-            build_show_spout_outputs(11, 12, 0),
+            build_show_spout_outputs(11, 12, 0, 2),
             Err(ShowSpoutValidationError::InvalidCompositionId)
         );
         assert_eq!(
-            build_show_spout_outputs(11, 12, 2),
-            Err(ShowSpoutValidationError::InvalidCompositionId)
+            build_show_spout_outputs(11, 12, 2, 2),
+            Err(ShowSpoutValidationError::InvalidCompositionTarget)
         );
     }
 
@@ -605,6 +882,87 @@ mod tests {
         assert_eq!(
             validate_show_spout_outputs(&[expected.background, duplicate_id]),
             Err(ShowSpoutValidationError::DuplicateOutputId(11))
+        );
+    }
+
+    #[test]
+    fn v2_targets_are_derived_exactly_and_legacy_enable_is_rejected() {
+        let expected = pair();
+        let compositions = v2_compositions(&expected);
+        assert_eq!(
+            derive_show_spout_composition_targets(&compositions),
+            Ok(ShowSpoutCompositionTargets {
+                background: 3,
+                foreground: 2,
+            })
+        );
+        assert_eq!(
+            validate_show_spout_outputs_with_compositions(
+                &[expected.background.clone(), expected.foreground.clone()],
+                &compositions,
+            ),
+            Ok(expected.clone())
+        );
+
+        let legacy = legacy_pair();
+        assert_eq!(
+            validate_show_spout_outputs_with_compositions(
+                &[legacy.background.clone(), legacy.foreground.clone()],
+                &legacy_compositions(&legacy),
+            ),
+            Err(ShowSpoutValidationError::LegacyPairRejected)
+        );
+    }
+
+    #[test]
+    fn reset_recognizes_only_absent_or_exact_v1_v2_pairs() {
+        let expected = pair();
+        assert_eq!(
+            classify_show_spout_reset_candidate(&[], &v2_compositions(&expected)),
+            Ok(ShowSpoutResetCandidate::Absent)
+        );
+        assert_eq!(
+            classify_show_spout_reset_candidate(
+                &[expected.background.clone(), expected.foreground.clone()],
+                &v2_compositions(&expected),
+            ),
+            Ok(ShowSpoutResetCandidate::CurrentV2(expected.clone()))
+        );
+        let legacy = legacy_pair();
+        assert_eq!(
+            classify_show_spout_reset_candidate(
+                &[legacy.background.clone(), legacy.foreground.clone()],
+                &legacy_compositions(&legacy),
+            ),
+            Ok(ShowSpoutResetCandidate::LegacyV1(legacy))
+        );
+    }
+
+    #[test]
+    fn ambiguous_targets_and_inconsistent_backreferences_fail_closed() {
+        let expected = pair();
+        let mut ambiguous = v2_compositions(&expected);
+        ambiguous.push(composition(
+            4,
+            SHOW_SPOUT_BACKGROUND_COMPOSITION_LABEL,
+            Vec::new(),
+        ));
+        assert_eq!(
+            validate_show_spout_outputs_with_compositions(
+                &[expected.background.clone(), expected.foreground.clone()],
+                &ambiguous,
+            ),
+            Err(ShowSpoutValidationError::InvalidCompositionTarget)
+        );
+
+        let mut inconsistent = v2_compositions(&expected);
+        inconsistent[2].output_ids.clear();
+        assert_eq!(
+            classify_show_spout_reset_candidate(
+                &[expected.background.clone(), expected.foreground.clone()],
+                &inconsistent,
+            ),
+            Err(ShowSpoutValidationError::InvalidOutputBackreference)
         );
     }
 
@@ -638,7 +996,7 @@ mod tests {
         other_composition.composition_id = 2;
         assert_eq!(
             decide_show_spout_ensure(&[different_composition, other_composition], &expected),
-            Err(ShowSpoutValidationError::InvalidCompositionId)
+            Err(ShowSpoutValidationError::CompositionMismatch)
         );
         assert_eq!(
             decide_show_spout_ensure(&[expected.background.clone()], &expected),

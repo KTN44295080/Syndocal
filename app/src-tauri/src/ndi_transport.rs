@@ -2317,6 +2317,7 @@ mod capture_decoder_tests {
             trans_cadence_bars: 4,
             trans_target_measures: Vec::new(),
             hold_first_destination_measure: false,
+            destination_start_mode: protocol::TimelineFollowDestinationStartMode::Play,
             fault_policy: protocol::TimelineFollowFaultPolicy::Hold,
         });
         let target = protocol::TimelineSnapshot {
@@ -2964,6 +2965,7 @@ mod capture_decoder_tests {
             trans_cadence_bars: 4,
             trans_target_measures: Vec::new(),
             hold_first_destination_measure: false,
+            destination_start_mode: protocol::TimelineFollowDestinationStartMode::Play,
             fault_policy: protocol::TimelineFollowFaultPolicy::Hold,
         });
         let target = protocol::TimelineSnapshot {
@@ -3130,6 +3132,7 @@ mod capture_decoder_tests {
             trans_cadence_bars: 4,
             trans_target_measures: Vec::new(),
             hold_first_destination_measure: false,
+            destination_start_mode: protocol::TimelineFollowDestinationStartMode::Play,
             fault_policy: protocol::TimelineFollowFaultPolicy::Hold,
         });
         let target = protocol::TimelineSnapshot {

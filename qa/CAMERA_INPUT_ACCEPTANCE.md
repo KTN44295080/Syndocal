@@ -1,12 +1,30 @@
 # Syndocal camera input acceptance
 
-Status date: 2026-08-30
+Status date: 2026-08-31
 
 Branch: `codex/syndocal-v1.2`
 
-## 2026-08-30 alpha.39 native checkpoint
+## 2026-08-31 alpha.45 source/test checkpoint — camera native and hardware gates pending
 
-The current product checkpoint is `1.2.0-alpha.39` on branch
+The current product metadata is `1.2.0-alpha.45` on branch
+`codex/syndocal-v1.2`. This is a source/test checkpoint only: no alpha.45
+native build, launch/window verification, camera UI/profile listing, opaque
+endpoint probe, sustained capture, HDMI/content observation, or other physical
+hardware acceptance is claimed. The alpha.39 and earlier native/camera records
+below remain immutable historical evidence and must not be relabeled as
+alpha.45.
+
+The recorded full-workspace Cargo result passed, including Syndocal
+`1389 pass / 0 fail / 14 ignored` and Video `163 pass / 0 fail / 1 ignored`.
+The focused output-lease keepalive gate passed `69/69`. These deterministic
+source results do not prove an alpha.45 camera device, native window, capture
+profile, sustained performance, or hardware result. All camera-native and
+physical rows remain pending until observed against an identified alpha.45
+executable and device.
+
+## 2026-08-30 historical alpha.39 native checkpoint
+
+The historical product checkpoint was `1.2.0-alpha.39` on branch
 `codex/syndocal-v1.2`; the native build used source/docs `HEAD` and upstream
 `ec93e9160da853ad181de70aee4db7b4a75fafbb`, which were equal at the build
 checkpoint. This tranche repairs the Timeline
@@ -39,17 +57,17 @@ is operator audible confirmation. The alpha.38 artifact/PID/window and
 observed `PX160` drift remain immutable historical evidence and must not be
 relabeled as alpha.39.
 
-Product tranche: current `1.2.0-alpha.39` native checkpoint at build source/docs
+Product tranche: historical `1.2.0-alpha.39` native checkpoint at build source/docs
 `HEAD` and upstream `ec93e9160da853ad181de70aee4db7b4a75fafbb`; the historical
 alpha.38 source/build authority remains
 `e4ec22384675aace5ed3912ddffdcfecca190919`. The latest accepted
 camera-specific native evidence remains historical alpha.37. No alpha.39 camera
 UI/profile, capture, sustained-performance, or hardware evidence is claimed.
 
-## Current product boundary
+## Historical product boundary (alpha.39 and earlier)
 
 Historical alpha.38 changes Timeline CUE transport authority and does not alter
-the camera catalog, capture, or probe implementation. The current alpha.39
+the camera catalog, capture, or probe implementation. The historical alpha.39
 normal native build/window likewise changes no camera path; no alpha.39
 camera-specific UI, profile, capture, or hardware acceptance has run. The
 alpha.37 camera artifact below remains historical camera evidence and must not
@@ -175,13 +193,13 @@ The final independent read-only rereview is GO for this source checkpoint with
 no P0/P1/P2. Windows Job Object containment is not installed, so Syndocal
 process exit while a deferred reaper is pending remains an explicit unverified
 OS boundary. Camera UI/profile and sustained-4K acceptance remain NO-GO until
-the unchecked gates below are observed on a versioned alpha.39 executable; no
-alpha.39 native build/window gate exists. The historical alpha.38 native
-build/window gate is recorded above.
+the unchecked gates below are observed on an identified alpha.45 executable.
+The alpha.45 native build/window gate remains pending; the historical alpha.39
+and alpha.38 native build/window gates are recorded above.
 
-The 2026-08-29 post-FFmpeg-7 repair gate additionally pins exact MSVC
+The historical 2026-08-29 post-FFmpeg-7 repair gate additionally pins exact MSVC
 `14.44.35207` with the Community linker first in `where.exe` and passes the
-current `capture_catalog` set `21 passed / 0 failed / 0 ignored`, first-party
+historical `capture_catalog` set `21 passed / 0 failed / 0 ignored`, first-party
 warnings `0`. The parser now accepts only complete adjacent DirectShow
 video/alternative-identity pairs from one strict dshow source and requires the
 terminal `Error opening input file dummy.` marker for the modern heading-free
@@ -204,7 +222,7 @@ probe after native evidence, but must not claim arbitrary sustained 4K stage
 output or 4K60. A future shared/pooled frame handoff with generation-based
 render pacing is required before broadening that claim.
 
-## Native and hardware gates still required
+## Current alpha.45 native and hardware gates still required
 
 - [x] Historical alpha.34 release build with MSVC 14.44, first-party warnings 0.
 - [x] Historical alpha.35 release rebuild with MSVC 14.44, first-party
@@ -223,8 +241,8 @@ render pacing is required before broadening that claim.
   with SHA-256
   `9E5CA0DB826D9998F7CDC76214E5CDC17597A6D4FC1CC27FEB5EF72D6E28FA37`.
   Exactly one responsive, maximized Syndocal window is PID `55624`.
-- [x] Alpha.39 exact-MSVC normal native build, launch/maximize, and alpha9 Music
-  Play/Pause/status-only selector/UI reverify are recorded above.
+- [x] Historical alpha.39 exact-MSVC normal native build, launch/maximize, and
+  alpha9 Music Play/Pause/status-only selector/UI reverify are recorded above.
 - [ ] Operator audible confirmation remains open and is not camera acceptance.
 - [ ] Native UI lists `Insta360 Link` without accepting a raw/default name.
 - [ ] Exact `3840x2160` / `30 fps` profile probe succeeds.

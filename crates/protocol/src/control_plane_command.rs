@@ -1643,11 +1643,13 @@ pub const OUTPUT_CONTROL_AUTHORITY_QUERY_OPERATION_ID: &str =
 /// OutputControl v2 changed the command shape and confirmation boundary. Its
 /// request/response schema identity is therefore distinct from the v1
 /// inventory schema and the Rust mutation DTO names now match that boundary.
-// v6 appends the fixed DSF2026 in-doubt reconciliation acknowledgement. Its
+// v7 appends the host-local Open DMX S0-only activation/stop actions. Their
+// only payload is the held lease; COM/PnP identity remains machine-local and
+// never crosses the wire. v6 appends the fixed DSF2026 in-doubt reconciliation acknowledgement. Its
 // only payload is the existing lease authority; it can clear only the
-// probe-scoped durable Pending hold and can never send a packet. v5's fixed
-// probe, v4's Spout, and v3's Art-Net action shapes stay frozen.
-pub const OUTPUT_CONTROL_COMMAND_SCHEMA_VERSION: u16 = 6;
+// probe-scoped durable Pending hold and can never send a packet. v8 cleanly
+// replaces the same-Main Spout enable action and appends its local reset.
+pub const OUTPUT_CONTROL_COMMAND_SCHEMA_VERSION: u16 = 8;
 pub const OUTPUT_OWNERSHIP_ARM_OPERATION_ID: &str = "syndocal.output.ownership.arm.v2";
 pub const OUTPUT_BLACKOUT_RELEASE_OPERATION_ID: &str = "syndocal.output.blackout.release.v2";
 pub const OUTPUT_STANDBY_TAKEOVER_OPERATION_ID: &str = "syndocal.output.standby.takeover.v2";
@@ -1677,11 +1679,22 @@ pub const OUTPUT_ENABLE_OPERATION_ID: &str = "syndocal.output.enable.v2";
 /// Art-Net loopback route after revalidating its fixed network contract.
 pub const OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID: &str =
     "syndocal.output.show_artnet_loopback_route.enable.v1";
+/// Host-local Open DMX activation. This can only start the fixed zero-only
+/// U0/250000 worker while the exact S0 authority is engaged.
+pub const OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_ENABLE_OPERATION_ID: &str =
+    "syndocal.output.show_serial_dmx_s0_route.enable.v1";
+/// Retires only the host-local fixed Open DMX worker.
+pub const OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_STOP_OPERATION_ID: &str =
+    "syndocal.output.show_serial_dmx_s0_route.stop.v1";
 /// The only show-specific same-machine video mutation.  Its action carries
 /// only an active lease; sender names, dimensions and routing are fixed by
 /// native code and are never caller-controlled.
 pub const OUTPUT_SHOW_SPOUT_OUTPUTS_ENABLE_OPERATION_ID: &str =
-    "syndocal.output.show_spout_outputs.enable.v1";
+    "syndocal.output.show_spout_outputs.enable.v2";
+/// Local R4 cleanup only. This accepts no lease or target: native code may
+/// retire only the recognized V1 same-Main pair or exact V2 pair.
+pub const OUTPUT_SHOW_SPOUT_OUTPUTS_RESET_OPERATION_ID: &str =
+    "syndocal.output.show_spout_outputs.reset.v1";
 /// Fixed DSF2026 same-PC acceptance proof. This is not output activation and
 /// has no caller-supplied endpoint, universe, channel, payload, or retry.
 pub const OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_OPERATION_ID: &str =
@@ -2307,9 +2320,16 @@ pub enum OutputControlActionV2 {
     EnableShowArtNetLoopbackRoute {
         lease: OutputLeaseAuthorityV1,
     },
+    EnableShowSerialDmxSafetyBlackoutRoute {
+        lease: OutputLeaseAuthorityV1,
+    },
+    StopShowSerialDmxSafetyBlackoutRoute {
+        lease: OutputLeaseAuthorityV1,
+    },
     EnableShowSpoutOutputs {
         lease: OutputLeaseAuthorityV1,
     },
+    ResetShowSpoutOutputs {},
     SendDsf2026ArtNetAcceptanceProbe {
         lease: OutputLeaseAuthorityV1,
     },
@@ -2367,9 +2387,16 @@ enum OutputControlActionV2Wire {
     EnableShowArtNetLoopbackRoute {
         lease: OutputLeaseAuthorityV1,
     },
+    EnableShowSerialDmxSafetyBlackoutRoute {
+        lease: OutputLeaseAuthorityV1,
+    },
+    StopShowSerialDmxSafetyBlackoutRoute {
+        lease: OutputLeaseAuthorityV1,
+    },
     EnableShowSpoutOutputs {
         lease: OutputLeaseAuthorityV1,
     },
+    ResetShowSpoutOutputs {},
     #[serde(rename = "send_dsf2026_artnet_acceptance_probe")]
     SendDsf2026ArtNetAcceptanceProbe {
         lease: OutputLeaseAuthorityV1,
@@ -2429,7 +2456,14 @@ impl OutputControlActionV2 {
             Self::EnableShowArtNetLoopbackRoute { .. } => {
                 OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID
             }
+            Self::EnableShowSerialDmxSafetyBlackoutRoute { .. } => {
+                OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_ENABLE_OPERATION_ID
+            }
+            Self::StopShowSerialDmxSafetyBlackoutRoute { .. } => {
+                OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_STOP_OPERATION_ID
+            }
             Self::EnableShowSpoutOutputs { .. } => OUTPUT_SHOW_SPOUT_OUTPUTS_ENABLE_OPERATION_ID,
+            Self::ResetShowSpoutOutputs {} => OUTPUT_SHOW_SPOUT_OUTPUTS_RESET_OPERATION_ID,
             Self::SendDsf2026ArtNetAcceptanceProbe { .. } => {
                 OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_OPERATION_ID
             }
@@ -2474,8 +2508,10 @@ impl OutputControlActionV2 {
             lease.validate()?;
         }
         match self {
-            Self::EnableOutput => {}
+            Self::EnableOutput | Self::ResetShowSpoutOutputs {} => {}
             Self::EnableShowArtNetLoopbackRoute { lease }
+            | Self::EnableShowSerialDmxSafetyBlackoutRoute { lease }
+            | Self::StopShowSerialDmxSafetyBlackoutRoute { lease }
             | Self::EnableShowSpoutOutputs { lease }
             | Self::SendDsf2026ArtNetAcceptanceProbe { lease }
             | Self::AcknowledgeDsf2026ArtNetAcceptanceProbeInDoubt { lease }
@@ -2524,11 +2560,22 @@ impl OutputControlActionV2 {
                     lease: lease.clone(),
                 }
             }
+            Self::EnableShowSerialDmxSafetyBlackoutRoute { lease } => {
+                OutputControlActionV2Wire::EnableShowSerialDmxSafetyBlackoutRoute {
+                    lease: lease.clone(),
+                }
+            }
+            Self::StopShowSerialDmxSafetyBlackoutRoute { lease } => {
+                OutputControlActionV2Wire::StopShowSerialDmxSafetyBlackoutRoute {
+                    lease: lease.clone(),
+                }
+            }
             Self::EnableShowSpoutOutputs { lease } => {
                 OutputControlActionV2Wire::EnableShowSpoutOutputs {
                     lease: lease.clone(),
                 }
             }
+            Self::ResetShowSpoutOutputs {} => OutputControlActionV2Wire::ResetShowSpoutOutputs {},
             Self::SendDsf2026ArtNetAcceptanceProbe { lease } => {
                 OutputControlActionV2Wire::SendDsf2026ArtNetAcceptanceProbe {
                     lease: lease.clone(),
@@ -2613,12 +2660,29 @@ impl OutputControlActionV2 {
                 output.extend_from_slice(lease.lease_id.as_bytes());
                 append_u64(output, lease.generation);
             }
-            Self::EnableShowSpoutOutputs { lease } => {
-                // 0..=12 are frozen.  The new show video action is
-                // deliberately payloadless and cannot impersonate Art-Net.
-                output.push(13);
+            Self::EnableShowSerialDmxSafetyBlackoutRoute { lease } => {
+                // 0..=15 are frozen; this payload contains only lease authority.
+                output.push(16);
                 output.extend_from_slice(lease.lease_id.as_bytes());
                 append_u64(output, lease.generation);
+            }
+            Self::StopShowSerialDmxSafetyBlackoutRoute { lease } => {
+                // 0..=16 are frozen; stop cannot carry an arbitrary route.
+                output.push(17);
+                output.extend_from_slice(lease.lease_id.as_bytes());
+                append_u64(output, lease.generation);
+            }
+            Self::EnableShowSpoutOutputs { lease } => {
+                // 0..=17 are frozen. V2 keeps the payload to the exact held
+                // lease; sender names and composition targets stay native.
+                output.push(18);
+                output.extend_from_slice(lease.lease_id.as_bytes());
+                append_u64(output, lease.generation);
+            }
+            Self::ResetShowSpoutOutputs {} => {
+                // 0..=18 are frozen. The reset carries no caller-selected
+                // route, target, sender, or lease authority.
+                output.push(19);
             }
             Self::SendDsf2026ArtNetAcceptanceProbe { lease } => {
                 // 0..=13 are frozen. The acceptance probe carries only the
@@ -2749,9 +2813,16 @@ impl<'de> Deserialize<'de> for OutputControlActionV2 {
             OutputControlActionV2Wire::EnableShowArtNetLoopbackRoute { lease } => {
                 Self::EnableShowArtNetLoopbackRoute { lease }
             }
+            OutputControlActionV2Wire::EnableShowSerialDmxSafetyBlackoutRoute { lease } => {
+                Self::EnableShowSerialDmxSafetyBlackoutRoute { lease }
+            }
+            OutputControlActionV2Wire::StopShowSerialDmxSafetyBlackoutRoute { lease } => {
+                Self::StopShowSerialDmxSafetyBlackoutRoute { lease }
+            }
             OutputControlActionV2Wire::EnableShowSpoutOutputs { lease } => {
                 Self::EnableShowSpoutOutputs { lease }
             }
+            OutputControlActionV2Wire::ResetShowSpoutOutputs {} => Self::ResetShowSpoutOutputs {},
             OutputControlActionV2Wire::SendDsf2026ArtNetAcceptanceProbe { lease } => {
                 Self::SendDsf2026ArtNetAcceptanceProbe { lease }
             }
@@ -3211,6 +3282,10 @@ impl OutputControlLeaseResultV2 {
             OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID => {
                 OutputLeaseReceiptOutcomeV2::Authorized
             }
+            OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_ENABLE_OPERATION_ID
+            | OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_STOP_OPERATION_ID => {
+                OutputLeaseReceiptOutcomeV2::Authorized
+            }
             OUTPUT_SHOW_SPOUT_OUTPUTS_ENABLE_OPERATION_ID => {
                 OutputLeaseReceiptOutcomeV2::Authorized
             }
@@ -3412,7 +3487,10 @@ impl OutputControlReceiptV2 {
                 | OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID
                 | OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID
                 | OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID
+                | OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_ENABLE_OPERATION_ID
+                | OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_STOP_OPERATION_ID
                 | OUTPUT_SHOW_SPOUT_OUTPUTS_ENABLE_OPERATION_ID
+                | OUTPUT_SHOW_SPOUT_OUTPUTS_RESET_OPERATION_ID
                 | OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_OPERATION_ID
                 | OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_RECONCILE_OPERATION_ID
                 | OUTPUT_ENABLE_OPERATION_ID
@@ -3429,7 +3507,7 @@ impl OutputControlReceiptV2 {
         self.fence_after.validate()?;
         if let Some(lease_result) = &self.lease_result {
             lease_result.validate_for_operation(&self.operation_id)?;
-        } else {
+        } else if self.operation_id != OUTPUT_SHOW_SPOUT_OUTPUTS_RESET_OPERATION_ID {
             return Err(OutputControlValidationErrorV1::InvalidReceiptOutcome);
         }
         match self.outcome {
@@ -3437,11 +3515,39 @@ impl OutputControlReceiptV2 {
                 Err(OutputControlValidationErrorV1::InvalidReceiptOutcome)
             }
             OutputControlReceiptOutcomeV2::Applied
+                if self.operation_id == OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID
+                    && (self.fence_after.process_incarnation
+                        != self.fence_before.process_incarnation
+                        || self.fence_after.session_incarnation
+                            != self.fence_before.session_incarnation
+                        || self.fence_after.project_epoch != self.fence_before.project_epoch
+                        || self.fence_after.project_revision
+                            != self
+                                .fence_before
+                                .project_revision
+                                .checked_add(1)
+                                .unwrap_or(0)
+                        || self.fence_after.project_checkpoint_hash
+                            == self.fence_before.project_checkpoint_hash
+                        || self.fence_after.project_publication_generation
+                            != self
+                                .fence_before
+                                .project_publication_generation
+                                .checked_add(1)
+                                .unwrap_or(0)
+                        || self.fence_after.output_epoch != self.fence_before.output_epoch
+                        || self.fence_after.output_generation
+                            != self.fence_before.output_generation) =>
+            {
+                Err(OutputControlValidationErrorV1::InvalidReceiptOutcome)
+            }
+            OutputControlReceiptOutcomeV2::Applied
                 if self.fence_before != self.fence_after
                     && matches!(
                         self.operation_id.as_str(),
                         OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID
-                            | OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID
+                            | OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_ENABLE_OPERATION_ID
+                            | OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_STOP_OPERATION_ID
                             | OUTPUT_SHOW_SPOUT_OUTPUTS_ENABLE_OPERATION_ID
                             | OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_OPERATION_ID
                             | OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_RECONCILE_OPERATION_ID
@@ -3449,16 +3555,17 @@ impl OutputControlReceiptV2 {
             {
                 Err(OutputControlValidationErrorV1::InvalidReceiptOutcome)
             }
-            // Physical display-shell and pre-authored show-route activation
-            // intentionally leave the persisted/project/output-ownership
-            // fence unchanged. Their durable receipt/audit identity is still
-            // authoritative.
+            // Runtime-only physical display-shell, serial-DMX, and Spout
+            // activation intentionally leave the persisted project fence
+            // unchanged. Enabling the show Art-Net route is different: it
+            // persists DmxOutputConfig and must advance the project checkpoint.
             OutputControlReceiptOutcomeV2::Applied
                 if self.fence_before == self.fence_after
                     && !matches!(
                         self.operation_id.as_str(),
                         OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID
-                            | OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID
+                            | OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_ENABLE_OPERATION_ID
+                            | OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_STOP_OPERATION_ID
                             | OUTPUT_SHOW_SPOUT_OUTPUTS_ENABLE_OPERATION_ID
                             | OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_OPERATION_ID
                             | OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_RECONCILE_OPERATION_ID
@@ -3545,7 +3652,10 @@ impl OutputControlRejectionV2 {
                 | OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID
                 | OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID
                 | OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID
+                | OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_ENABLE_OPERATION_ID
+                | OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_STOP_OPERATION_ID
                 | OUTPUT_SHOW_SPOUT_OUTPUTS_ENABLE_OPERATION_ID
+                | OUTPUT_SHOW_SPOUT_OUTPUTS_RESET_OPERATION_ID
                 | OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_OPERATION_ID
                 | OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_RECONCILE_OPERATION_ID
                 | OUTPUT_ENABLE_OPERATION_ID
@@ -4653,11 +4763,91 @@ mod tests {
             rejection
         );
         let invalid_rejection = OutputControlRejectionV2 {
-            operation_id: "syndocal.output.show_spout_outputs.enable.v2".to_string(),
+            operation_id: "syndocal.output.show_spout_outputs.enable.v1".to_string(),
             request_id: 62,
             error: OutputControlErrorCodeV2::PublicationFailed,
         };
         assert!(invalid_rejection.validate().is_err());
+    }
+
+    #[test]
+    fn show_spout_reset_is_payloadless_lease_free_and_fence_advancing() {
+        let request = OutputControlCommandRequestV2 {
+            operation_id: OUTPUT_SHOW_SPOUT_OUTPUTS_RESET_OPERATION_ID.to_string(),
+            request_id: 63,
+            expected_fence: output_fence(),
+            action: OutputControlActionV2::ResetShowSpoutOutputs {},
+        };
+        assert_eq!(request.validate(), Ok(()));
+        let mut retired_v1_request = request.clone();
+        retired_v1_request.operation_id =
+            "syndocal.output.show_spout_outputs.enable.v1".to_string();
+        assert!(retired_v1_request.validate().is_err());
+
+        let mut fence_after = request.expected_fence.clone();
+        fence_after.project_revision += 1;
+        fence_after.project_checkpoint_hash = hash('f');
+        fence_after.project_publication_generation += 1;
+        let receipt = OutputControlReceiptV2 {
+            operation_id: request.operation_id.clone(),
+            request_id: request.request_id,
+            shape_sha256: hash('d'),
+            argument_fingerprint: hash('e'),
+            audit_sequence: 1,
+            fence_before: request.expected_fence.clone(),
+            fence_after,
+            outcome: OutputControlReceiptOutcomeV2::Applied,
+            lease_result: None,
+        };
+        assert_eq!(receipt.validate(), Ok(()));
+
+        let mut unchanged = receipt.clone();
+        unchanged.fence_after = unchanged.fence_before.clone();
+        assert!(unchanged.validate().is_err());
+        let mut forged_lease = receipt;
+        forged_lease.lease_result = Some(authorized_both_lease_result());
+        assert!(forged_lease.validate().is_err());
+    }
+
+    #[test]
+    fn show_serial_dmx_route_receipts_and_rejections_round_trip() {
+        for operation_id in [
+            OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_ENABLE_OPERATION_ID,
+            OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_STOP_OPERATION_ID,
+        ] {
+            let receipt = OutputControlReceiptV2 {
+                operation_id: operation_id.to_string(),
+                request_id: 64,
+                shape_sha256: hash('a'),
+                argument_fingerprint: hash('b'),
+                audit_sequence: 1,
+                fence_before: output_fence(),
+                fence_after: output_fence(),
+                outcome: OutputControlReceiptOutcomeV2::Applied,
+                lease_result: Some(authorized_both_lease_result()),
+            };
+            assert_eq!(receipt.validate(), Ok(()));
+            let encoded = serde_json::to_value(&receipt).expect("serial route receipt serializes");
+            assert_eq!(
+                serde_json::from_value::<OutputControlReceiptV2>(encoded)
+                    .expect("serial route receipt deserializes"),
+                receipt
+            );
+
+            let rejection = OutputControlRejectionV2 {
+                operation_id: operation_id.to_string(),
+                request_id: 65,
+                error: OutputControlErrorCodeV2::PublicationFailed,
+            };
+            assert_eq!(rejection.validate(), Ok(()));
+            let encoded =
+                serde_json::to_value(&rejection).expect("serial route rejection serializes");
+            assert_eq!(
+                serde_json::from_value::<OutputControlRejectionV2>(encoded)
+                    .expect("serial route rejection deserializes"),
+                rejection
+            );
+        }
     }
 
     #[test]
@@ -4733,14 +4923,18 @@ mod tests {
             serde_json::from_value::<OutputControlResponseV2>(response_json.clone()).unwrap(),
             response
         );
-        let physical_route_receipt = OutputControlReceiptV2 {
+        let mut artnet_fence_after = output_fence();
+        artnet_fence_after.project_revision += 1;
+        artnet_fence_after.project_checkpoint_hash = hash('f');
+        artnet_fence_after.project_publication_generation += 1;
+        let persisted_artnet_route_receipt = OutputControlReceiptV2 {
             operation_id: OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID.to_string(),
             request_id: 26,
-            shape_sha256: hash('f'),
+            shape_sha256: hash('c'),
             argument_fingerprint: hash('a'),
             audit_sequence: 2,
             fence_before: output_fence(),
-            fence_after: output_fence(),
+            fence_after: artnet_fence_after,
             outcome: OutputControlReceiptOutcomeV2::Applied,
             lease_result: match response.clone() {
                 OutputControlResponseV2::Receipt(receipt) => receipt.lease_result,
@@ -4748,13 +4942,36 @@ mod tests {
             },
         };
         assert_eq!(
-            physical_route_receipt.validate(),
+            persisted_artnet_route_receipt.validate(),
             Ok(()),
-            "the physical route receipt keeps the already-authorized lease and exact fence"
+            "the persisted Art-Net route advances only the project checkpoint"
         );
-        let mut forged_physical_route_fence = physical_route_receipt.clone();
-        forged_physical_route_fence.fence_after.output_generation += 1;
-        assert!(forged_physical_route_fence.validate().is_err());
+        let mut concurrent_safety_advance = persisted_artnet_route_receipt.clone();
+        concurrent_safety_advance
+            .fence_after
+            .safety_blackout_generation += 1;
+        assert_eq!(
+            concurrent_safety_advance.validate(),
+            Ok(()),
+            "the receipt may report a newer independently-owned S0 authority"
+        );
+        let mut unchanged_artnet_route = persisted_artnet_route_receipt.clone();
+        unchanged_artnet_route.fence_after = unchanged_artnet_route.fence_before.clone();
+        assert!(unchanged_artnet_route.validate().is_err());
+        let mut forged_artnet_output_fence = persisted_artnet_route_receipt.clone();
+        forged_artnet_output_fence.fence_after.output_generation += 1;
+        assert!(forged_artnet_output_fence.validate().is_err());
+        let mut forged_artnet_project_jump = persisted_artnet_route_receipt.clone();
+        forged_artnet_project_jump.fence_after.project_revision += 1;
+        assert!(forged_artnet_project_jump.validate().is_err());
+        let mut forged_artnet_unchanged_hash = persisted_artnet_route_receipt;
+        forged_artnet_unchanged_hash
+            .fence_after
+            .project_checkpoint_hash = forged_artnet_unchanged_hash
+            .fence_before
+            .project_checkpoint_hash
+            .clone();
+        assert!(forged_artnet_unchanged_hash.validate().is_err());
         let mut takeover_orphan = match response.clone() {
             OutputControlResponseV2::Receipt(receipt) => receipt,
             OutputControlResponseV2::Rejected(_) => unreachable!(),
@@ -4909,7 +5126,63 @@ mod tests {
             serde_json::from_value::<OutputControlActionV2>(show_route_json).unwrap(),
             show_route_enable
         );
-        // Schema v4 appends a second, independent show-only activation.  It
+        // v7 appends the machine-local Open DMX worker controls. Their wire
+        // shapes carry only the already-authorized lease: COM/PnP identity,
+        // protocol selection, and DMX bytes are never caller-controlled.
+        let serial_enable = OutputControlActionV2::EnableShowSerialDmxSafetyBlackoutRoute {
+            lease: authority.clone(),
+        };
+        let mut serial_enable_shape = Vec::new();
+        serial_enable
+            .append_canonical_bytes(&mut serial_enable_shape)
+            .unwrap();
+        assert_eq!(
+            serial_enable.operation_id(),
+            OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_ENABLE_OPERATION_ID
+        );
+        assert_eq!(serial_enable_shape.first(), Some(&16));
+        let serial_enable_json = serde_json::to_value(&serial_enable).unwrap();
+        assert_eq!(
+            serial_enable_json,
+            serde_json::json!({
+                "kind": "enable_show_serial_dmx_safety_blackout_route",
+                "lease": serde_json::to_value(lease_authority()).unwrap(),
+            })
+        );
+        for forged_key in [
+            "port_name",
+            "windows_device_instance_id",
+            "protocol",
+            "frame",
+        ] {
+            let mut forged = serial_enable_json.clone();
+            forged[forged_key] = serde_json::json!("caller_controlled");
+            assert!(serde_json::from_value::<OutputControlActionV2>(forged).is_err());
+        }
+        assert_eq!(
+            serde_json::from_value::<OutputControlActionV2>(serial_enable_json).unwrap(),
+            serial_enable
+        );
+        let serial_stop = OutputControlActionV2::StopShowSerialDmxSafetyBlackoutRoute {
+            lease: authority.clone(),
+        };
+        let mut serial_stop_shape = Vec::new();
+        serial_stop
+            .append_canonical_bytes(&mut serial_stop_shape)
+            .unwrap();
+        assert_eq!(
+            serial_stop.operation_id(),
+            OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_STOP_OPERATION_ID
+        );
+        assert_eq!(serial_stop_shape.first(), Some(&17));
+        assert_eq!(
+            serde_json::from_value::<OutputControlActionV2>(
+                serde_json::to_value(&serial_stop).unwrap()
+            )
+            .unwrap(),
+            serial_stop
+        );
+        // Schema v8 appends the clean-break V2 show-only activation. It
         // remains payloadless: callers cannot substitute generic sender
         // names, dimensions, or an arbitrary Spout target for the fixed
         // same-machine pair.
@@ -4924,7 +5197,7 @@ mod tests {
             show_spout_enable.operation_id(),
             OUTPUT_SHOW_SPOUT_OUTPUTS_ENABLE_OPERATION_ID
         );
-        assert_eq!(show_spout_shape.first(), Some(&13));
+        assert_eq!(show_spout_shape.first(), Some(&18));
         let show_spout_json = serde_json::to_value(&show_spout_enable).unwrap();
         assert_eq!(
             show_spout_json,
@@ -4944,6 +5217,27 @@ mod tests {
             serde_json::from_value::<OutputControlActionV2>(show_spout_json).unwrap(),
             show_spout_enable
         );
+        let show_spout_reset = OutputControlActionV2::ResetShowSpoutOutputs {};
+        let mut show_spout_reset_shape = Vec::new();
+        show_spout_reset
+            .append_canonical_bytes(&mut show_spout_reset_shape)
+            .unwrap();
+        assert_eq!(
+            show_spout_reset.operation_id(),
+            OUTPUT_SHOW_SPOUT_OUTPUTS_RESET_OPERATION_ID
+        );
+        assert_eq!(show_spout_reset_shape, vec![19]);
+        assert_eq!(
+            serde_json::to_value(&show_spout_reset).unwrap(),
+            serde_json::json!({ "kind": "reset_show_spout_outputs" })
+        );
+        for forged_key in ["lease", "composition_id", "sender_name"] {
+            let mut forged_show_spout_reset = serde_json::to_value(&show_spout_reset).unwrap();
+            forged_show_spout_reset[forged_key] = serde_json::json!("caller_controlled");
+            assert!(
+                serde_json::from_value::<OutputControlActionV2>(forged_show_spout_reset).is_err()
+            );
+        }
         // v5 appends the DSF2026 acceptance probe. It is fixed native data:
         // the wire action carries only the existing lease authority.
         let dsf2026_probe = OutputControlActionV2::SendDsf2026ArtNetAcceptanceProbe {

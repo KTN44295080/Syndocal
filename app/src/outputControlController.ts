@@ -17,6 +17,10 @@ export const OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID =
 export const OUTPUT_ENABLE_OPERATION_ID = "syndocal.output.enable.v2";
 export const OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID =
   "syndocal.output.show_artnet_loopback_route.enable.v1";
+export const OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_ENABLE_OPERATION_ID =
+  "syndocal.output.show_serial_dmx_s0_route.enable.v1";
+export const OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_STOP_OPERATION_ID =
+  "syndocal.output.show_serial_dmx_s0_route.stop.v1";
 export const OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_OPERATION_ID =
   "syndocal.output.dsf2026_artnet_acceptance_probe.send.v1";
 export const OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_RECONCILE_OPERATION_ID =
@@ -24,7 +28,9 @@ export const OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_RECONCILE_OPERATION_ID =
 export const OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_STATUS_QUERY_OPERATION_ID =
   "syndocal.query.output.dsf2026_artnet_acceptance_probe.status.v1";
 export const OUTPUT_SHOW_SPOUT_OUTPUTS_ENABLE_OPERATION_ID =
-  "syndocal.output.show_spout_outputs.enable.v1";
+  "syndocal.output.show_spout_outputs.enable.v2";
+export const OUTPUT_SHOW_SPOUT_OUTPUTS_RESET_OPERATION_ID =
+  "syndocal.output.show_spout_outputs.reset.v1";
 export const OUTPUT_LEASE_ACQUIRE_OPERATION_ID = "syndocal.output.lease.acquire.v2";
 export const OUTPUT_LEASE_RENEW_OPERATION_ID = "syndocal.output.lease.renew.v2";
 export const OUTPUT_LEASE_RECOVER_OPERATION_ID = "syndocal.output.lease.recover.v2";
@@ -130,7 +136,17 @@ export type OutputVideoCompositionAssignmentAction = {
 export type OutputEnableAction = { kind: "enable_output" };
 /** The sole staged show route activation. It has no mutable route fields. */
 export type OutputShowArtNetLoopbackRouteEnableAction = {
-  kind: "enable_show_artnet_loopback_route";
+  kind: "enable_show_art_net_loopback_route";
+  lease: OutputLeaseAuthority;
+};
+/** Fixed Open DMX U0 worker start; device identity remains machine-local. */
+export type OutputShowSerialDmxSafetyBlackoutRouteEnableAction = {
+  kind: "enable_show_serial_dmx_safety_blackout_route";
+  lease: OutputLeaseAuthority;
+};
+/** Fixed Open DMX U0 worker stop; no generic route is accepted. */
+export type OutputShowSerialDmxSafetyBlackoutRouteStopAction = {
+  kind: "stop_show_serial_dmx_safety_blackout_route";
   lease: OutputLeaseAuthority;
 };
 /** A fixed, one-shot local ArtDmx proof frame; it accepts no mutable payload. */
@@ -148,13 +164,20 @@ export type OutputShowSpoutOutputsEnableAction = {
   kind: "enable_show_spout_outputs";
   lease: OutputLeaseAuthority;
 };
+/** Local R4 cleanup is intentionally payloadless and lease-free. */
+export type OutputShowSpoutOutputsResetAction = {
+  kind: "reset_show_spout_outputs";
+};
 
 export type OutputControlAction =
   | OutputEnableAction
   | OutputShowArtNetLoopbackRouteEnableAction
+  | OutputShowSerialDmxSafetyBlackoutRouteEnableAction
+  | OutputShowSerialDmxSafetyBlackoutRouteStopAction
   | OutputDsf2026ArtNetAcceptanceProbeAction
   | OutputDsf2026ArtNetAcceptanceProbeReconcileAction
   | OutputShowSpoutOutputsEnableAction
+  | OutputShowSpoutOutputsResetAction
   | { kind: "arm"; role: OutputControlTargetRole; lease: OutputLeaseAuthority }
   | { kind: "release_blackout"; lease: OutputLeaseAuthority }
   | {
@@ -217,7 +240,7 @@ export interface OutputControlReceipt {
   fence_before: OutputControlFence;
   fence_after: OutputControlFence;
   outcome: "applied" | "no_op";
-  lease_result: OutputControlLeaseResult;
+  lease_result: OutputControlLeaseResult | null;
 }
 
 export const VIDEO_OUTPUT_WINDOW_STATE_EVENT = "syndocal://video-output-window-state";
@@ -398,10 +421,13 @@ const allocateRequestId = (): number => {
 const operationIdForAction = (action: OutputControlOperationAction): string => {
   switch (action.kind) {
     case "enable_output": return OUTPUT_ENABLE_OPERATION_ID;
-    case "enable_show_artnet_loopback_route": return OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID;
+    case "enable_show_art_net_loopback_route": return OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID;
+    case "enable_show_serial_dmx_safety_blackout_route": return OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_ENABLE_OPERATION_ID;
+    case "stop_show_serial_dmx_safety_blackout_route": return OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_STOP_OPERATION_ID;
     case "send_dsf2026_artnet_acceptance_probe": return OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_OPERATION_ID;
     case "acknowledge_dsf2026_artnet_acceptance_probe_in_doubt": return OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_RECONCILE_OPERATION_ID;
     case "enable_show_spout_outputs": return OUTPUT_SHOW_SPOUT_OUTPUTS_ENABLE_OPERATION_ID;
+    case "reset_show_spout_outputs": return OUTPUT_SHOW_SPOUT_OUTPUTS_RESET_OPERATION_ID;
     case "arm": return OUTPUT_OWNERSHIP_ARM_OPERATION_ID;
     case "release_blackout": return OUTPUT_BLACKOUT_RELEASE_OPERATION_ID;
     case "take_over_standby": return OUTPUT_STANDBY_TAKEOVER_OPERATION_ID;
@@ -419,9 +445,12 @@ const operationIdForAction = (action: OutputControlOperationAction): string => {
 type OutputControlInvokeCommand =
   | "enable_output_control_v2"
   | "enable_show_art_net_loopback_route_v1"
+  | "enable_show_serial_dmx_safety_blackout_route_v1"
+  | "stop_show_serial_dmx_safety_blackout_route_v1"
   | "send_dsf2026_artnet_acceptance_probe_v1"
   | "acknowledge_dsf2026_artnet_acceptance_probe_in_doubt_v1"
-  | "enable_show_spout_outputs_v1"
+  | "enable_show_spout_outputs_v2"
+  | "reset_show_spout_outputs_v1"
   | "arm_output_control_v2"
   | "release_blackout_output_control_v2"
   | "take_over_output_control_v2"
@@ -437,10 +466,13 @@ type OutputControlInvokeCommand =
 const commandForAction = (action: OutputControlOperationAction): OutputControlInvokeCommand => {
   switch (action.kind) {
     case "enable_output": return "enable_output_control_v2";
-    case "enable_show_artnet_loopback_route": return "enable_show_art_net_loopback_route_v1";
+    case "enable_show_art_net_loopback_route": return "enable_show_art_net_loopback_route_v1";
+    case "enable_show_serial_dmx_safety_blackout_route": return "enable_show_serial_dmx_safety_blackout_route_v1";
+    case "stop_show_serial_dmx_safety_blackout_route": return "stop_show_serial_dmx_safety_blackout_route_v1";
     case "send_dsf2026_artnet_acceptance_probe": return "send_dsf2026_artnet_acceptance_probe_v1";
     case "acknowledge_dsf2026_artnet_acceptance_probe_in_doubt": return "acknowledge_dsf2026_artnet_acceptance_probe_in_doubt_v1";
-    case "enable_show_spout_outputs": return "enable_show_spout_outputs_v1";
+    case "enable_show_spout_outputs": return "enable_show_spout_outputs_v2";
+    case "reset_show_spout_outputs": return "reset_show_spout_outputs_v1";
     case "arm": return "arm_output_control_v2";
     case "release_blackout": return "release_blackout_output_control_v2";
     case "take_over_standby": return "take_over_output_control_v2";
@@ -689,11 +721,19 @@ const assertAction = (action: OutputControlOperationAction): void => {
     if (!hasExactKeys(record, ["kind"])) throw new Error("Output enable action was invalid; nothing was applied.");
     return;
   }
-  if (action.kind === "enable_show_artnet_loopback_route") {
+  if (action.kind === "enable_show_art_net_loopback_route") {
     if (!hasExactKeys(record, ["kind", "lease"])) {
       throw new Error("Show Art-Net loopback route action was invalid; nothing was applied.");
     }
-    assertLeaseAuthority(action.lease, "Show serial DMX route lease was invalid; nothing was applied.");
+    assertLeaseAuthority(action.lease, "Show Art-Net loopback route lease was invalid; nothing was applied.");
+    return;
+  }
+  if (action.kind === "enable_show_serial_dmx_safety_blackout_route"
+    || action.kind === "stop_show_serial_dmx_safety_blackout_route") {
+    if (!hasExactKeys(record, ["kind", "lease"])) {
+      throw new Error("Show serial DMX safety worker action was invalid; nothing was applied.");
+    }
+    assertLeaseAuthority(action.lease, "Show serial DMX safety worker lease was invalid; nothing was applied.");
     return;
   }
   if (action.kind === "send_dsf2026_artnet_acceptance_probe") {
@@ -715,6 +755,12 @@ const assertAction = (action: OutputControlOperationAction): void => {
       throw new Error("Show Spout output action was invalid; nothing was applied.");
     }
     assertLeaseAuthority(action.lease, "Show Spout output lease was invalid; nothing was applied.");
+    return;
+  }
+  if (action.kind === "reset_show_spout_outputs") {
+    if (!hasExactKeys(record, ["kind"])) {
+      throw new Error("Show Spout reset action was invalid; nothing was applied.");
+    }
     return;
   }
   if (action.kind === "acquire_lease") {
@@ -783,6 +829,9 @@ const assertOutcome = (value: unknown, errorMessage: string): OutputLeaseReceipt
 };
 
 const assertLeaseResult = (value: unknown, action: OutputControlOperationAction): OutputControlLeaseResult => {
+  if (action.kind === "reset_show_spout_outputs") {
+    throw new Error("Show Spout reset must not carry output-lease state.");
+  }
   const errorMessage = "OutputControl lease result was invalid; physical output state is unknown.";
   if (!isObject(value) || !hasExactKeys(value, ["authority", "resources", "phase", "outcome", "audit_sequence", "changes"])
     || !Array.isArray(value.changes) || value.changes.length !== 1 || !isPositiveSafeInteger(value.audit_sequence)) throw new Error(errorMessage);
@@ -827,7 +876,9 @@ const assertLeaseResult = (value: unknown, action: OutputControlOperationAction)
         && (beforeGeneration === null || afterGeneration === null || afterGeneration <= beforeGeneration
           || beforePhase !== "held_orphaned" || !sameResources(beforeResources, ["lighting", "video"]))) throw new Error(errorMessage);
       break;
-    case "enable_show_artnet_loopback_route":
+    case "enable_show_art_net_loopback_route":
+    case "enable_show_serial_dmx_safety_blackout_route":
+    case "stop_show_serial_dmx_safety_blackout_route":
     case "send_dsf2026_artnet_acceptance_probe":
     case "acknowledge_dsf2026_artnet_acceptance_probe_in_doubt":
     case "enable_show_spout_outputs":
@@ -923,18 +974,33 @@ const assertResponse = (
   const fenceAfter = assertFence(result.fence_after, "OutputControl receipt was invalid; physical output state is unknown.");
   const fenceUnchanged = fencesEqual(fenceBefore, fenceAfter);
   const fenceUnchangedPhysicalAction = action.kind === "set_display_window_open"
-    || action.kind === "enable_show_artnet_loopback_route"
+    || action.kind === "enable_show_serial_dmx_safety_blackout_route"
+    || action.kind === "stop_show_serial_dmx_safety_blackout_route"
     || action.kind === "send_dsf2026_artnet_acceptance_probe"
     || action.kind === "acknowledge_dsf2026_artnet_acceptance_probe_in_doubt"
     || action.kind === "enable_show_spout_outputs";
+  const persistedArtNetFenceIsExact = action.kind !== "enable_show_art_net_loopback_route"
+    || result.outcome !== "applied"
+    || fenceAfter.process_incarnation === fenceBefore.process_incarnation
+      && fenceAfter.session_incarnation === fenceBefore.session_incarnation
+      && fenceAfter.project_epoch === fenceBefore.project_epoch
+      && fenceAfter.project_revision === fenceBefore.project_revision + 1
+      && fenceAfter.project_checkpoint_hash !== fenceBefore.project_checkpoint_hash
+      && fenceAfter.project_publication_generation === fenceBefore.project_publication_generation + 1
+      && fenceAfter.output_epoch === fenceBefore.output_epoch
+      && fenceAfter.output_generation === fenceBefore.output_generation;
+  const resetWithoutLease = action.kind === "reset_show_spout_outputs" && result.lease_result === null;
   if (!fencesEqual(fenceBefore, expectedFence)
     || result.outcome === "no_op" && !fenceUnchanged
     // Ordinary project/output-control mutations must advance their fence on
     // Applied. The physical Display shell and the already-authored Art-Net
-    // loopback route activation are deliberately outside that persisted fence, so
-    // both Applied and NoOp retain the same fence.
+    // runtime-only serial/Spout/window actions are deliberately outside that
+    // persisted fence, so both Applied and NoOp retain the same fence. Enabling
+    // the authored Art-Net route changes persisted project truth and therefore
+    // must advance its project fence.
     || result.outcome === "applied" && !fenceUnchangedPhysicalAction && fenceUnchanged
-    || fenceUnchangedPhysicalAction && !fenceUnchanged) throw new Error("OutputControl receipt was inconsistent; physical output state is unknown.");
+    || fenceUnchangedPhysicalAction && !fenceUnchanged
+    || !persistedArtNetFenceIsExact) throw new Error("OutputControl receipt was inconsistent; physical output state is unknown.");
   return {
     operation_id: operationId,
     request_id: requestId,
@@ -944,18 +1010,20 @@ const assertResponse = (
     fence_before: fenceBefore,
     fence_after: fenceAfter,
     outcome: result.outcome,
-    lease_result: assertLeaseResult(result.lease_result, action),
+    lease_result: resetWithoutLease ? null : assertLeaseResult(result.lease_result, action),
   };
 };
 
 const assertSelectedLeaseIsUsable = (query: OutputLeaseAuthorityQuery, action: OutputControlOperationAction): void => {
-  if (action.kind === "acquire_lease" || action.kind === "enable_output") return;
+  if (action.kind === "acquire_lease" || action.kind === "enable_output" || action.kind === "reset_show_spout_outputs") return;
   const selected = query.statuses.filter((status): status is OutputLeaseAuthorityQueryHeld =>
     status.status !== "unavailable" && status.authority.lease_id === action.lease.lease_id);
   if (selected.length !== 1 || selected[0].authority.generation !== action.lease.generation
     || action.kind === "arm" && selected[0].status !== "held_active"
     || action.kind === "release_blackout" && selected[0].status !== "held_active"
-    || action.kind === "enable_show_artnet_loopback_route" && selected[0].status !== "held_active"
+    || action.kind === "enable_show_art_net_loopback_route" && selected[0].status !== "held_active"
+    || action.kind === "enable_show_serial_dmx_safety_blackout_route" && selected[0].status !== "held_active"
+    || action.kind === "stop_show_serial_dmx_safety_blackout_route" && selected[0].status !== "held_active"
     || action.kind === "send_dsf2026_artnet_acceptance_probe" && selected[0].status !== "held_active"
     || action.kind === "acknowledge_dsf2026_artnet_acceptance_probe_in_doubt" && selected[0].status !== "held_active"
     || action.kind === "enable_show_spout_outputs" && selected[0].status !== "held_active"
@@ -975,7 +1043,9 @@ const assertSelectedLeaseIsUsable = (query: OutputLeaseAuthorityQuery, action: O
       : ["lighting", "video"] as const;
     if (!sameResources(selected[0].resources, expectedResources)) throw new Error("Selected output lease is unavailable, orphaned, stale, or has the wrong resources; nothing was applied.");
   } else if (action.kind === "add_display" || action.kind === "set_display_window_open"
-    || action.kind === "enable_show_artnet_loopback_route"
+    || action.kind === "enable_show_art_net_loopback_route"
+    || action.kind === "enable_show_serial_dmx_safety_blackout_route"
+    || action.kind === "stop_show_serial_dmx_safety_blackout_route"
     || action.kind === "send_dsf2026_artnet_acceptance_probe"
     || action.kind === "acknowledge_dsf2026_artnet_acceptance_probe_in_doubt"
     || action.kind === "enable_show_spout_outputs"
@@ -1002,7 +1072,7 @@ const executeOutputControlOperation = async (
     if (action.kind !== "add_display" && action.kind !== "set_display_window_open") {
       throw new Error("Only canonical Display actions may bypass the public lease query; nothing was applied.");
     }
-  } else {
+  } else if (action.kind !== "reset_show_spout_outputs") {
     const leaseQuery = await queryOutputLeaseAuthority(invoke);
     assertSelectedLeaseIsUsable(leaseQuery, action);
   }

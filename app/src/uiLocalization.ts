@@ -1219,9 +1219,15 @@ const japaneseText: Record<string, string> = {
   "Video Outputs": "映像出力",
   "Video Output Config": "映像出力設定",
   "Same-PC show video uses exactly": "同一PCの公演映像では",
-  "Spout senders at 1920×1080. Stopped content keeps both senders alive with opaque RGB-black frames.":
-    "の2つのSpout送信元だけを1920×1080で使用します。停止中も両方の送信元を不透明なRGB黒フレームで維持します。",
-  "Confirm and enable show Spout outputs": "公演用Spout出力を確定して有効化",
+  "Spout senders at 1920×1080. Background uses":
+    "という2つのSpout送信元だけを1920×1080で使用します。Backgroundは",
+  "; Foreground uses": "、Foregroundは",
+  ". Stopped content keeps both senders alive with opaque RGB-black frames.":
+    "を使用します。停止中も両方の送信元を不透明なRGB黒フレームで維持します。",
+  "Same-PC show video uses exactly Syndocal Background and Syndocal Foreground Spout senders at 1920×1080. Background uses Background Video2 Camera; Foreground uses Foreground Video 1. Stopped content keeps both senders alive with opaque RGB-black frames.":
+    "同一PCの公演映像ではSyndocal BackgroundとSyndocal ForegroundのSpout送信元だけを1920×1080で使用します。BackgroundはBackground Video2 Camera、ForegroundはForeground Video 1を使用します。停止中も両方の送信元を不透明なRGB黒フレームで維持します。",
+  "Confirm and enable V2 show Spout outputs": "V2公演用Spout出力を確定して有効化",
+  "Reset recognized show Spout outputs": "認識済みの公演用Spout出力をリセット",
   "Staged same-PC Art-Net loopback show route enabled.": "準備済みの同一PC Art-Netループバック公演ルートを有効化しました。",
   "Send fixed red DSF2026 Art-Net probe once": "固定赤色DSF2026 Art-Netプローブを1回送信",
   "One-shot fixed red 530-byte ArtDmx U0 proof only to 127.0.0.1:6454: payload[0] and payload[4] are 255; payload[499] remains 0. The authored route stays staged disabled. OS UDP acceptance only; receiver and physical output remain unverified.":
@@ -1236,8 +1242,9 @@ const japaneseText: Record<string, string> = {
   "Reconcile is a separate no-send action after independent receiver and physical-output verification; it records the unobservable result as permanently consumed and never re-enables retry or another fixed probe.": "照合は、受信側と物理出力を独立して確認した後に行う送信なしの別操作です。不観測の結果を恒久的に消費済みとして記録し、再試行や別の固定プローブを再び許可しません。",
   "DSF2026 probe InDoubt hold reconciled without sending Art-Net. Receiver and physical output were independently verified by the operator.": "Art-Netを送信せずにDSF2026プローブのInDoubt保留を照合しました。受信側と物理出力はオペレーターが独立して確認済みです。",
   "DSF2026 probe InDoubt hold reconciled without sending Art-Net. Receiver and physical output were independently verified by the operator. A fresh probe remains permanently prohibited.": "Art-Netを送信せずにDSF2026プローブのInDoubt保留を照合しました。受信側と物理出力はオペレーターが独立して確認済みです。新しいプローブは恒久的に禁止されたままです。",
-  "Same-PC Syndocal Background/Foreground Spout outputs enabled.":
-    "同一PCのSyndocal Background と Syndocal Foreground Spout出力を有効化しました。",
+  "Same-PC V2 Syndocal Background/Foreground Spout outputs enabled.":
+    "同一PCのV2 Syndocal Background / Syndocal Foreground Spout出力を有効化しました。",
+  "Recognized show Spout outputs were reset.": "認識済みの公演用Spout出力をリセットしました。",
   "Video Output Enable": "映像出力を有効化",
   "Video Output Blackout": "映像出力ブラックアウト",
   "Video Output Opacity": "映像出力の不透明度",
@@ -1569,6 +1576,11 @@ const japaneseText: Record<string, string> = {
   "Authored logical route": "プロジェクトの論理ルート",
   "Machine-local USB binding": "このPCのUSB接続",
   "Selected identity:": "選択中の識別情報:",
+  "Edge:": "エッジ:",
+  "Edges:": "エッジ:",
+  "Snap:": "スナップ:",
+  "Timeline edge magnet state": "タイムラインエッジマグネット状態",
+  "Timeline snap state": "タイムラインスナップ状態",
   "The portable project route is fixed at Enttec Open DMX / U0 / 250000. Select the exact USB-DMX device for this PC; missing, stale, renumbered, or ambiguous hardware is never substituted.":
     "持ち運べるプロジェクトのルートは Enttec Open DMX / U0 / 250000 に固定されています。このPCで使用するUSB-DMX機器を正確に選択してください。未接続、古い情報、COM番号変更、曖昧な機器を代用しません。",
   "Confirming enables only this staged logical route after native lease, safety-blackout, and exact opened-handle checks. Selecting a USB interface writes only machine-local settings and never changes the project.":
@@ -2115,8 +2127,12 @@ const japaneseText: Record<string, string> = {
   "Move Timeline later": "タイムラインを後へ",
   "Follow to next Timeline": "次のタイムラインへFollow",
   "Auto-play next": "次を自動再生",
+  "Destination start": "到達先の開始",
+  "Play immediately": "すぐに再生",
+  "Wait for Pedal 1": "ペダル1で開始待機",
   "Hold destination first measure until pedal release": "到達先の先頭1小節をペダル解除までループ",
   "Transition uses one source measure, then the destination first measure loops until F13.": "転換は移行元の1小節で完了し、その後は到達先の先頭1小節をF13までループします。",
+  "Transition uses one source measure, then the destination waits at its start until Pedal 1.": "転換は移行元の1小節で完了し、その後は到達先の先頭でペダル1まで待機します。",
   "Video transition": "映像トランジション",
   "Ease in/out": "イーズイン／アウト",
   "Fade (ms)": "フェード（ms）",
@@ -3340,6 +3356,21 @@ const japaneseText: Record<string, string> = {
   "I/O connection selectors": "I/O接続セレクター",
   "DMX Connections": "DMX接続",
   "Same-PC production show route": "同一PCの本番公演ルート",
+  "Machine-local USB-DMX device": "このPCのUSB-DMXデバイス",
+  "Select the exact current PnP device": "現在のPnPデバイスを正確に選択",
+  "Confirm this machine-local Open DMX binding": "このPCのOpen DMXバインディングを確定",
+  "Arm Open DMX worker under S0": "S0セーフティブラックアウト下でOpen DMXワーカーをアーム",
+  "Stop Open DMX worker": "Open DMXワーカーを停止",
+  "Logical routes": "論理ルート",
+  "Enttec Open DMX · machine local": "Enttec Open DMX · このPC",
+  "Logical U0 · 250000 baud · S0-first live mirror": "論理U0 · 250000 baud · S0先行ライブミラー（キュー状態）",
+  "Logical U0 · 250000 baud · ≈32.5fps exact-rig USB cadence · S0-first latest-frame mirror":
+    "論理U0 · 250000 baud · 実機既定≈32.5fps USB周期 · S0先行最新フレームミラー",
+  "COM": "COMポート",
+  "Manufacturer / product": "メーカー／製品",
+  "USB VID / PID": "USB VID／PID",
+  Serial: "シリアル番号",
+  "Windows PnP instance": "Windows PnPインスタンス",
   "Confirm and enable Art-Net loopback": "Art-Netループバックを確定して有効化",
   "Art-Net · ArtDmx": "Art-Net · ArtDmx方式",
   "Wire U0 · 512ch · 40–44fps": "ワイヤーU0 · 512ch · 40–44fps",
@@ -3347,6 +3378,35 @@ const japaneseText: Record<string, string> = {
     "同一PC限定: 完成済みDMXユニバース1をArtDmxワイヤーユニバース0として変更せず送信します。DMX ch1はpayload[0]に対応し、未使用のch500は0に固定します。",
   "The show route must remain Art-Net / 127.0.0.1:6454 / wire U0 with no serial interface. It is intentionally not configurable from this control.":
     "公演ルートはArt-Net / 127.0.0.1:6454 / ワイヤーU0（シリアルインターフェースなし）を維持します。この操作からは意図的に設定変更できません。",
+  "Confirmation retains the native lease, safety-blackout, exact binding, sender-open, acknowledgement, and rollback fences. It opens only while S0 is engaged and queues zero first; after the separately confirmed Release Blackout, the same worker mirrors the completed U0 frame alongside Art-Net. Re-engaging S0 preempts later live bytes with zero. USB serial DMX is not a fallback route.":
+    "確定後もネイティブリース、セーフティブラックアウト、正確なバインディング、送信元オープン、確認応答、ロールバックの各フェンスを保持します。S0が有効な間だけ開き、最初にゼロをキューします。別途確定したブラックアウト解除後、同じワーカーが完成済みU0フレームをArt-Netと並行してキュー済みミラーします。S0を再度有効にすると、その後のライブバイトをゼロで先取りします。キュー済みであり、灯体や物理配線への到達は未確認です。USBシリアルDMXは代替ルートではありません。",
+  "Confirmation retains the native lease, safety-blackout, exact binding, sender-open, acknowledgement, and rollback fences. Binding cannot change while a worker or physical S0 transaction remains in flight. A faulted, joined worker may only accept an explicit replacement while S0 stays latched; selecting it sends nothing and does not clear the fault. It opens only while S0 is engaged and queues zero first; after the separately confirmed Release Blackout, the same worker mirrors the latest completed U0 frame alongside Art-Net. Re-engaging S0 preempts later live bytes with zero. The ≈32.5fps USB cadence is the current FT232R/COM3 rig default, not an Open DMX universal limit; USB does not promise physical delivery on every 44Hz engine tick. USB serial DMX is not a fallback route.":
+    "確定後もネイティブリース、セーフティブラックアウト、正確なバインディング、送信元オープン、確認応答、ロールバックの各フェンスを保持します。ワーカーまたは物理S0トランザクションが進行中はバインディングを変更できません。異常で停止済みのワーカーは、S0ラッチを維持した明示的な置換だけを受け付けます。選択は送信せず異常も解除しません。S0が有効な間だけ開き、最初にゼロをキューします。別途確定したブラックアウト解除後、同じワーカーが最新の完成済みU0フレームをArt-Netと並行してミラーします。S0を再度有効にすると、その後のライブバイトをゼロで先取りします。≈32.5fps USB周期は現行FT232R/COM3実機の既定であり、Open DMX共通の上限ではありません。USBは44Hz engine tickごとの物理送達を保証しません。USBシリアルDMXは代替ルートではありません。",
+  "USB-DMX machine-local selection is loading; no worker can start.": "USB-DMXのこのPC用選択を読み込み中です。ワーカーは開始できません。",
+  "USB-DMX worker status is loading; no worker can start.": "USB-DMXワーカー状態を読み込み中です。ワーカーは開始できません。",
+  "A generic FTDI VID/PID is not auto-selected and does not imply a protocol. This explicit operator selection is Open DMX only. Worker status distinguishes queue acceptance from the bounded physical zero transaction; neither is fixture or wire delivery. No one-shot USB probe is implemented in this tranche.":
+    "汎用FTDI VID/PIDは自動選択されず、プロトコルを示すものでもありません。この明示的なオペレーター選択はOpen DMX専用です。ワーカー状態ではキュー受理と限定的な物理ゼロトランザクションを区別します。いずれも灯体や物理配線への送達を示しません。このトランシェではワンショットUSBプローブを実装していません。",
+  "Worker status unavailable — S0 required": "ワーカー状態を取得できません — S0が必要",
+  "Faulted — S0 latched": "異常 — S0ラッチ中",
+  "S0 armed": "S0アーム済み",
+  "Live U0 mirror queued": "ライブU0ミラー（キュー済み）",
+  "Worker active": "ワーカー稼働中（キュー状態）",
+  "Confirmed, stopped": "バインディング確定・停止中",
+  "Binding required": "バインディングが必要",
+  "Logical route mismatch": "論理ルート不一致",
+  "Staged disabled": "準備済み・無効",
+  "USB-DMX confirmation requires the current Windows PnP instance; no binding was written.":
+    "USB-DMX確認には現在のWindows PnPインスタンスが必要です。バインディングは書き込まれませんでした。",
+  "USB-DMX machine-local identity confirmed. Project files were not changed.":
+    "USB-DMXのこのPC用識別情報を確定しました。プロジェクトファイルは変更していません。",
+  "Engage S0 safety blackout first; the USB-DMX worker is intentionally zero-first and will not start while S0 is clear.":
+    "最初にS0セーフティブラックアウトを有効にしてください。USB-DMXワーカーはゼロ先行のため、S0が解除された状態では開始しません。",
+  "USB-DMX worker is unavailable until exactly one confirmed machine-local identity is present.":
+    "USB-DMXワーカーは、このPC用の正確に1件の確定済み識別情報があるまで利用できません。",
+  "USB-DMX Open DMX worker activated with S0 queued. This is not a fixture or physical-wire acceptance result.":
+    "USB-DMX Open DMXワーカーをS0キュー済みで有効化しました。これは灯体または物理配線の受入結果ではありません。",
+  "USB-DMX Open DMX worker stopped. No project route was changed.":
+    "USB-DMX Open DMXワーカーを停止しました。プロジェクトルートは変更していません。",
   "Confirmation retains the native lease, safety-blackout, exact route, sender-open, acknowledgement, and rollback fences. USB serial DMX is not a show-route fallback.":
     "確定後もネイティブリース、セーフティブラックアウト、正確なルート、送信元オープン、確認応答、ロールバックの各フェンスを保持します。USBシリアルDMXは公演ルートの代替ではありません。",
   "Production show route": "本番公演ルート",
@@ -3530,6 +3590,238 @@ const japaneseText: Record<string, string> = {
 };
 
 const japanesePatterns: Array<[RegExp, (...matches: string[]) => string]> = [
+  [
+    /^No machine-local USB-DMX interface is selected\. Select and confirm an enumerated interface on this PC\.$/,
+    () => "このPC用のUSB-DMXインターフェースが選択されていません。検出済みインターフェースを選択して確定してください。",
+  ],
+  [
+    /^The selected machine-local USB-DMX identity is present\. Opening revalidates the real Windows handle again\.$/,
+    () => "選択したこのPC用USB-DMX識別情報は存在します。開始時に実際のWindowsハンドルを再検証します。",
+  ],
+  [
+    /^Selected USB-DMX identity is not present exactly \((.+)\)\. COM renumber, restart, replacement, or unplug requires explicit reselection; no interface was substituted\.$/,
+    (identity) => `選択したUSB-DMX識別情報が正確には存在しません（${identity}）。COM番号変更、再起動、交換、抜去の後は明示的に再選択してください。インターフェースは代用していません。`,
+  ],
+  [
+    /^Selected USB-DMX identity is ambiguous \((.+)\); output remains disabled until one exact interface can be selected\.$/,
+    (identity) => `選択したUSB-DMX識別情報が曖昧です（${identity}）。正確なインターフェースを1件選択するまで出力は無効です。`,
+  ],
+  [
+    /^USB-DMX selection must include an enumerated COM alias and Windows PnP instance$/,
+    () => "USB-DMXの選択には、検出済みCOMエイリアスとWindows PnPインスタンスが必要です。",
+  ],
+  [
+    /^Selected USB-DMX interface is no longer enumerated; refresh and select again$/,
+    () => "選択したUSB-DMXインターフェースが検出一覧から消えました。更新して再選択してください。",
+  ],
+  [
+    /^Selected USB-DMX COM alias and PnP instance are ambiguous; no binding was written$/,
+    () => "選択したUSB-DMXのCOMエイリアスとPnPインスタンスが曖昧です。バインディングは書き込まれませんでした。",
+  ],
+  [
+    /^USB-DMX selection was lost during validation$/,
+    () => "検証中にUSB-DMXの選択が失われました。",
+  ],
+  [
+    /^Machine-local USB-DMX selection is not usable: (.+)$/,
+    (detail) => `このPC用USB-DMXの選択は使用できません: ${detail}`,
+  ],
+  [
+    /^Machine-local USB-DMX selection exceeds the (\d+) byte safety limit$/,
+    (limit) => `このPC用USB-DMXの選択が安全上限（${limit}バイト）を超えています。`,
+  ],
+  [
+    /^Machine-local USB-DMX selection exceeds its safety limit$/,
+    () => "このPC用USB-DMXの選択が安全上限を超えています。",
+  ],
+  [
+    /^Machine-local USB-DMX selection (?:is )?invalid: (.+)$/,
+    (detail) => `このPC用USB-DMXの選択が不正です: ${detail}`,
+  ],
+  [
+    /^Machine-local USB-DMX selection version (.+) is unsupported$/,
+    (version) => `このPC用USB-DMX選択のバージョン ${version} はサポートされていません。`,
+  ],
+  [
+    /^Machine-local USB-DMX selection grew during read$/,
+    () => "読み取り中にこのPC用USB-DMXの選択ファイルが増大しました。",
+  ],
+  [
+    /^Machine-local USB-DMX selection has no parent: (.+)$/,
+    (path) => `このPC用USB-DMXの選択に親ディレクトリがありません: ${path}`,
+  ],
+  [
+    /^Selected USB-DMX interface is missing (.+)$/,
+    (field) => `選択したUSB-DMXインターフェースに ${field} がありません。`,
+  ],
+  [
+    /^Selected USB-DMX interface must expose nonzero USB VID and PID$/,
+    () => "選択したUSB-DMXインターフェースは、0以外のUSB VIDとPIDを公開する必要があります。",
+  ],
+  [
+    /^Unable to (read|inspect) machine-local USB-DMX selection (.+): (.+)$/,
+    (operation, path, detail) => `このPC用USB-DMXの選択を${operation === "read" ? "読み取れ" : "確認でき"}ません（${path}）: ${detail}`,
+  ],
+  [
+    /^Unable to encode machine-local USB-DMX selection: (.+)$/,
+    (detail) => `このPC用USB-DMXの選択をエンコードできません: ${detail}`,
+  ],
+  [
+    /^Unable to create machine-local USB-DMX directory (.+): (.+)$/,
+    (path, detail) => `このPC用USB-DMXディレクトリを作成できません（${path}）: ${detail}`,
+  ],
+  [
+    /^Unable to (create|write|flush) temporary machine-local USB-DMX selection (.+): (.+)$/,
+    (operation, path, detail) => `一時的なこのPC用USB-DMX選択を${operation === "create" ? "作成" : operation === "write" ? "書き込み" : "フラッシュ"}できません（${path}）: ${detail}`,
+  ],
+  [
+    /^Unable to resolve machine-local USB-DMX selection path: (.+)$/,
+    (detail) => `このPC用USB-DMX選択のパスを解決できません: ${detail}`,
+  ],
+  [
+    /^USB-DMX device enumeration failed: (.+)$/,
+    (detail) => `USB-DMXデバイスの列挙に失敗しました: ${detail}`,
+  ],
+  [
+    /^Show serial DMX device enumeration failed: (.+)$/,
+    (detail) => `シリアルDMXデバイスの列挙に失敗しました: ${detail}`,
+  ],
+  [
+    /^Show serial DMX device identity is incomplete: (.+)$/,
+    (detail) => `シリアルDMXデバイスの識別情報が不完全です: ${detail}`,
+  ],
+  [
+    /^Selected machine-local USB-DMX interface is absent or stale; refresh and explicitly reselect it\. No interface was substituted\.$/,
+    () => "選択したこのPC用USB-DMXインターフェースがないか古くなっています。更新して明示的に再選択してください。インターフェースは代用していません。",
+  ],
+  [
+    /^Selected machine-local USB-DMX interface is ambiguous; output remains disabled until explicit reselect\.$/,
+    () => "選択したこのPC用USB-DMXインターフェースが曖昧です。明示的に再選択するまで出力は無効です。",
+  ],
+  [
+    /^Show serial DMX hardware identity changed after selection; expected (.+), observed (.+)\. Output remains disabled\.$/,
+    (expected, observed) => `選択後にシリアルDMXハードウェア識別情報が変わりました。期待値 ${expected}、検出値 ${observed}。出力は無効のままです。`,
+  ],
+  [
+    /^Show serial DMX machine-local device changed before final activation$/,
+    () => "最終有効化前に、このPC用シリアルDMXデバイスが変わりました。出力は無効です。",
+  ],
+  [
+    /^Standby synchronization lifecycle lock was poisoned before show serial DMX (activation|stop)$/,
+    (operation) => `シリアルDMXの${operation === "activation" ? "有効化" : "停止"}前にStandby同期ライフサイクルのロックが壊れました。`,
+  ],
+  [
+    /^Output control fence changed before show serial DMX (activation|publication|stop)$/,
+    (operation) => `シリアルDMXの${operation === "activation" ? "有効化" : operation === "publication" ? "公開" : "停止"}前に出力制御フェンスが変わりました。`,
+  ],
+  [
+    /^Output lease registry lock was poisoned before show serial DMX (activation|stop)$/,
+    (operation) => `シリアルDMXの${operation === "activation" ? "有効化" : "停止"}前に出力リースレジストリのロックが壊れました。`,
+  ],
+  [
+    /^Show serial DMX activation requires the exact currently-engaged S0 safety blackout authority$/,
+    () => "シリアルDMXの有効化には、現在有効なS0セーフティブラックアウト権限が必要です。",
+  ],
+  [
+    /^Show serial DMX activation lost its local Both output authority$/,
+    () => "シリアルDMXの有効化中に、このPCのBoth出力権限を失いました。",
+  ],
+  [
+    /^Show serial DMX activation was superseded by an S0 safety blackout authority change$/,
+    () => "シリアルDMXの有効化はS0セーフティブラックアウト権限の変更によって置き換えられました。",
+  ],
+  [
+    /^Show serial DMX stop requires the exact currently-engaged S0 safety blackout authority$/,
+    () => "シリアルDMXの停止には、現在有効なS0セーフティブラックアウト権限が必要です。",
+  ],
+  [
+    /^Show serial DMX stop was superseded by an S0 safety blackout authority change$/,
+    () => "シリアルDMXの停止はS0セーフティブラックアウト権限の変更によって置き換えられました。",
+  ],
+  [
+    /^Show serial DMX worker activation failed: (.+)$/,
+    (detail) => `シリアルDMXワーカーの有効化に失敗しました: ${detail}`,
+  ],
+  [
+    /^Show serial DMX worker stop failed: (.+)$/,
+    (detail) => `シリアルDMXワーカーの停止に失敗しました: ${detail}`,
+  ],
+  [
+    /^USB-DMX worker is stopped\.$/,
+    () => "USB-DMXワーカーは停止中です。",
+  ],
+  [
+    /^USB-DMX worker status lock is unavailable; output remains fail-closed\.$/,
+    () => "USB-DMXワーカー状態のロックを利用できません。出力はフェイルクローズのままです。",
+  ],
+  [
+    /^Open DMX worker is active with the latest S0 zero frame queued\. Queue acceptance is not fixture or wire-delivery verification\.$/,
+    () => "Open DMXワーカーは稼働中で、最新のS0ゼロフレームをキュー済みです。キュー受理は灯体や物理配線への送達確認ではありません。",
+  ],
+  [
+    /^Open DMX worker is active; the completed U0 mirror frame is queued at show cadence\. Queue acceptance is not fixture or wire-delivery verification\.$/,
+    () => "Open DMXワーカーは稼働中で、完成済みU0ミラーフレームを公演周期でキュー済みです。キュー受理は灯体や物理配線への送達確認ではありません。",
+  ],
+  [
+    /^Show serial DMX worker is already active; stop it before another activation$/,
+    () => "シリアルDMXワーカーはすでに稼働中です。別の有効化の前に停止してください。",
+  ],
+  [
+    /^Show serial DMX logical route invariant is invalid$/,
+    () => "シリアルDMXの論理ルート不変条件が不正です。",
+  ],
+  [
+    /^Show serial DMX worker requires one exact machine-local USB\/PnP identity$/,
+    () => "シリアルDMXワーカーには、このPC用の正確なUSB/PnP識別情報が1件必要です。",
+  ],
+  [
+    /^Show serial DMX worker requires the exact currently-engaged S0 safety blackout authority$/,
+    () => "シリアルDMXワーカーには、現在有効なS0セーフティブラックアウト権限が必要です。",
+  ],
+  [
+    /^Show serial DMX worker requires the active local Both lighting authority$/,
+    () => "シリアルDMXワーカーには、このPCのBoth照明出力権限が有効である必要があります。",
+  ],
+  [
+    /^Show serial DMX worker did not complete its initial physical S0 zero write: (.+)$/,
+    (detail) => `シリアルDMXワーカーは初回の物理S0ゼロ書き込みを完了できませんでした: ${detail}。これは灯体や物理配線への送達確認ではありません。`,
+  ],
+  [
+    /^Open DMX worker is armed only after an initial physical S0 zero transaction completed\. Release Blackout admits the completed U0 mirror; this is not fixture or wire-delivery verification\.$/,
+    () => "Open DMXワーカーは初回の物理S0ゼロトランザクション完了後にのみアーム済みになります。ブラックアウト解除で完成済みU0ミラーを許可します。これは灯体や物理配線への送達確認ではありません。",
+  ],
+  [
+    /^Open DMX worker stopped after an S0 zero BREAK\/MAB\/write_all\/flush transaction completed\. This is not fixture or wire-delivery verification\.$/,
+    () => "Open DMXワーカーはS0ゼロのBREAK/MAB/write_all/flushトランザクション完了後に停止しました。これは灯体や物理配線への送達確認ではありません。",
+  ],
+  [
+    /^Open DMX worker stop faulted without a confirmed physical S0 zero completion; S0 remains engaged\. zero receipt: (.+); bounded shutdown: (.+)$/,
+    (zeroReceipt, shutdown) => `Open DMXワーカーの停止で異常が発生し、物理S0ゼロ完了を確認できませんでした。S0は有効のままです。ゼロ受領: ${zeroReceipt}、限定停止: ${shutdown}。`,
+  ],
+  [
+    /^Show serial DMX bounded stop fault: (.+)$/,
+    (detail) => `シリアルDMXの限定停止で異常が発生しました: ${detail}`,
+  ],
+  [
+    /^Show serial DMX bounded stop failed safely: (.+)$/,
+    (detail) => `シリアルDMXの限定停止は安全に失敗しました: ${detail}`,
+  ],
+  [
+    /^USB-DMX worker faulted: (.+)$/,
+    (detail) => `USB-DMXワーカーが異常になりました: ${detail}`,
+  ],
+  [
+    /^S0 is engaged$/,
+    () => "S0は有効です。",
+  ],
+  [
+    /^S0 was not confirmed$/,
+    () => "S0は確認されていません。",
+  ],
+  [
+    /^S0 authority lock failed; the local output latch remains fail-closed$/,
+    () => "S0権限ロックに失敗しました。ローカル出力ラッチはフェイルクローズのままです。",
+  ],
   [
     /^active (\d+), not synced(?:, capture faults (\d+))?(?:, Blocked — (.+))?$/,
     (active, faults, blocked) =>

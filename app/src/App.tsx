@@ -5934,13 +5934,26 @@ export default function App() {
     dmxTestValue,
     setDmxTestValue,
     dsf2026ArtNetAcceptanceProbeStatus,
+    serialDmxMachineBindingStatus,
+    showSerialDmxSafetyBlackoutRouteStatus,
+    showDmxPreparationBusy,
+    showDmxPreparationStage,
     refreshEngineTelemetryReport,
+    refreshSerialDmxRuntimeStatuses,
+    handleSerialDmxRouteStatusEvent,
+    setSerialDmxRouteStatusEventFenceAvailable,
+    disposeSerialDmxRuntimeStatuses,
     resetEngineTelemetry,
     saveEngineTelemetryReport,
     enableStagedShowArtNetLoopbackRoute,
+    confirmSerialDmxMachineBinding,
+    enableShowSerialDmxSafetyBlackoutRoute,
+    prepareShowDmx,
+    stopShowSerialDmxSafetyBlackoutRoute,
     sendDsf2026ArtNetAcceptanceProbe,
     acknowledgeDsf2026ArtNetAcceptanceProbeInDoubt,
     enableShowSpoutOutputs,
+    resetShowSpoutOutputs,
     sendDmxTestFrame,
     sendDmxRoutesTestFrame,
     refreshSerialPorts,
@@ -5950,6 +5963,7 @@ export default function App() {
     refreshSnapshot: () => refreshSnapshot(),
     serialPorts,
     setSerialPorts,
+    safetyBlackout: () => snapshot().blackout,
   });
   const audioOutputController = createAudioOutputController({
     invoke,
@@ -12479,6 +12493,9 @@ export default function App() {
   };
   scheduleProjectAuthorityPoll();
   const telemetryReportTimer = isTauriRuntime() ? window.setInterval(refreshEngineTelemetryReport, 1000) : null;
+  const serialDmxRuntimeStatusTimer = isTauriRuntime()
+    ? window.setInterval(() => void refreshSerialDmxRuntimeStatuses(), 1000)
+    : null;
   const dmxInputStatusTimer = isTauriRuntime() ? window.setInterval(refreshDmxInputStatus, 1000) : null;
   const recoveryTimer = isTauriRuntime() ? window.setInterval(() => void saveProjectRecovery(), 10_000) : null;
   onCleanup(() => {
@@ -12501,6 +12518,10 @@ export default function App() {
     if (telemetryReportTimer !== null) {
       window.clearInterval(telemetryReportTimer);
     }
+    if (serialDmxRuntimeStatusTimer !== null) {
+      window.clearInterval(serialDmxRuntimeStatusTimer);
+    }
+    disposeSerialDmxRuntimeStatuses();
     if (dmxInputStatusTimer !== null) {
       window.clearInterval(dmxInputStatusTimer);
     }
@@ -12586,6 +12607,43 @@ export default function App() {
       disposed = true;
       unlistenProjectAuthority?.();
       unlistenProjectInputsRetired?.();
+    });
+  });
+  createEffect(() => {
+    if (!isTauriRuntime()) {
+      return;
+    }
+    let disposed = false;
+    let unlistenSerialDmxRouteStatus: (() => void) | null = null;
+    void listen<unknown>("syndocal://show-serial-dmx-route-status-v1", (event) => {
+      // The controller invalidates immediately before issuing its independent
+      // authoritative refresh. A late pre-fault Active invoke cannot commit
+      // across this native revision fence.
+      handleSerialDmxRouteStatusEvent(event.payload);
+    })
+      .then((unlisten) => {
+        if (disposed) {
+          unlisten();
+        } else {
+          unlistenSerialDmxRouteStatus = unlisten;
+          setSerialDmxRouteStatusEventFenceAvailable(true);
+        }
+      })
+      .catch((error) => {
+        // Do not retain an apparently live worker if the event fence itself
+        // failed to install. Unlike an ordinary query error, this remains
+        // persistently Unknown until a listener is successfully established.
+        setSerialDmxRouteStatusEventFenceAvailable(false);
+        // Keep the operator-visible text in the existing localization table;
+        // the error itself stays out of the status line because it is neither
+        // a stable UX contract nor safe hardware identity diagnostics.
+        console.warn("USB-DMX status event listener unavailable", error);
+        setMessage(translateUiText("Worker status unavailable — S0 required", uiLocale()));
+      });
+    onCleanup(() => {
+      disposed = true;
+      unlistenSerialDmxRouteStatus?.();
+      setSerialDmxRouteStatusEventFenceAvailable(false);
     });
   });
   createEffect(() => {
@@ -27384,6 +27442,7 @@ export default function App() {
           invokeCommand={invoke}
           onAddDisplayOutput={addDisplayVideoOutput}
           onEnableShowSpoutOutputs={enableShowSpoutOutputs}
+          onResetShowSpoutOutputs={resetShowSpoutOutputs}
           onSelectOutput={setSelectedVideoOutputId}
           onMappingPresetLabel={setVideoOutputMappingPresetLabel}
           onSelectedMappingPresetLabel={setSelectedVideoOutputMappingPresetLabel}
@@ -28647,8 +28706,18 @@ export default function App() {
           <div class="ioOperatorSurface dmxOperatorSurface">
           <DmxOutputConfigPanel
             output={output()}
+            serialPorts={serialPorts()}
+            serialDmxMachineBindingStatus={serialDmxMachineBindingStatus()}
+            showSerialDmxSafetyBlackoutRouteStatus={showSerialDmxSafetyBlackoutRouteStatus()}
+            safetyBlackoutEngaged={snapshot().blackout}
+            showDmxPreparationBusy={showDmxPreparationBusy()}
+            showDmxPreparationStage={showDmxPreparationStage()}
             dsf2026ArtNetAcceptanceProbeStatus={dsf2026ArtNetAcceptanceProbeStatus}
+            onPrepareShowDmx={prepareShowDmx}
             onEnableStagedShowArtNetLoopbackRoute={enableStagedShowArtNetLoopbackRoute}
+            onConfirmSerialDmxMachineBinding={confirmSerialDmxMachineBinding}
+            onEnableShowSerialDmxSafetyBlackoutRoute={enableShowSerialDmxSafetyBlackoutRoute}
+            onStopShowSerialDmxSafetyBlackoutRoute={stopShowSerialDmxSafetyBlackoutRoute}
             onSendDsf2026ArtNetAcceptanceProbe={sendDsf2026ArtNetAcceptanceProbe}
             onAcknowledgeDsf2026ArtNetAcceptanceProbeInDoubt={acknowledgeDsf2026ArtNetAcceptanceProbeInDoubt}
           />

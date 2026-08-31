@@ -73,7 +73,10 @@ use protocol::{
         OUTPUT_LEASE_RECOVER_OPERATION_ID, OUTPUT_LEASE_RELINQUISH_OPERATION_ID,
         OUTPUT_LEASE_RENEW_OPERATION_ID, OUTPUT_OWNERSHIP_ARM_OPERATION_ID,
         OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID,
-        OUTPUT_SHOW_SPOUT_OUTPUTS_ENABLE_OPERATION_ID, OUTPUT_STANDBY_TAKEOVER_OPERATION_ID,
+        OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_ENABLE_OPERATION_ID,
+        OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_STOP_OPERATION_ID,
+        OUTPUT_SHOW_SPOUT_OUTPUTS_ENABLE_OPERATION_ID,
+        OUTPUT_SHOW_SPOUT_OUTPUTS_RESET_OPERATION_ID, OUTPUT_STANDBY_TAKEOVER_OPERATION_ID,
         OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID,
     },
     normalize_legacy_video_clip_slots, normalize_legacy_video_media_assets,
@@ -172,7 +175,13 @@ mod ndi_transport;
 #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
 mod normal_audio_output;
 mod output_lease;
+mod output_lease_keepalive_integration;
+mod output_lease_keepalive_runtime;
 mod scene_creation;
+mod serial_dmx_machine;
+#[cfg(test)]
+mod serial_show_dmx_route_tests;
+mod show_serial_dmx_route;
 #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
 mod show_spout_transport;
 #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
@@ -2161,6 +2170,74 @@ fn dispatch_dj_link_event(
                 Some(&payload.play_session_id),
             );
             let current_generation = runtime.state_generation;
+            // A completed WaitForPedal Follow is neither normal Stage 2
+            // playback nor an authored loop. Its only admitted Pedal 1 edge
+            // is loop-on: consume that exact correlation to start the
+            // already-installed target at zero. A retransmitted envelope is
+            // an ACK no-op, never a later loop toggle.
+            if runtime.last_event_id.as_deref() == Some(event_id.as_str()) {
+                return DjLinkDispatchOutcome::TimelineState {
+                    state_generation: current_generation,
+                    state: dj_link_timeline_state_from_snapshot(
+                        &runtime, &snapshot, &event_id, sequence,
+                    ),
+                };
+            }
+            if snapshot.timeline.follow_runtime.waiting_for_pedal_start {
+                if !payload.active {
+                    return dj_link_rejected(
+                        "timeline_waiting_pedal_start_requires_active",
+                        current_generation,
+                    );
+                }
+                if let Some(code) = dj_track_runtime::waiting_follow_pedal_start_authority_rejection(
+                    &runtime,
+                    &snapshot,
+                    &payload.timeline_id,
+                    &payload.play_session_id,
+                ) {
+                    return dj_link_rejected(code, current_generation);
+                }
+                let Ok(target_timeline_id) = payload.timeline_id.parse::<u64>() else {
+                    return dj_link_rejected("invalid_timeline_id", current_generation);
+                };
+                if target_timeline_id == 0 {
+                    return dj_link_rejected("invalid_timeline_id", current_generation);
+                }
+                let Some(source_timeline_id) = snapshot.timeline.follow_runtime.source_timeline_id
+                else {
+                    return dj_link_rejected("timeline_waiting_pedal_stale", current_generation);
+                };
+                let next_generation = match dj_link_next_generation(&runtime) {
+                    Ok(next) => next,
+                    Err(_) => {
+                        return dj_link_rejected("state_generation_exhausted", current_generation)
+                    }
+                };
+                let snapshot = match engine
+                    .dj_link_start_waiting_follow_target_with_canonical_snapshot(
+                        source_timeline_id,
+                        TimelineId(target_timeline_id),
+                        snapshot.timeline.follow_runtime.generation,
+                    ) {
+                    Ok(snapshot) => snapshot,
+                    Err(_) => {
+                        return dj_link_rejected("engine_publication_rejected", current_generation)
+                    }
+                };
+                // The canonical engine ACK is the one-shot mutation boundary.
+                // Do not advance app state or receipt before it.
+                runtime.loop_active = false;
+                runtime.position_bars = dj_link_engine_position_bars(&snapshot);
+                runtime.last_event_id = Some(event_id.clone());
+                runtime.state_generation = next_generation;
+                return DjLinkDispatchOutcome::TimelineState {
+                    state_generation: next_generation,
+                    state: dj_link_timeline_state_from_snapshot(
+                        &runtime, &snapshot, &event_id, sequence,
+                    ),
+                };
+            }
             if let Some(code) = dj_track_runtime::stage2_authority_rejection(
                 &runtime,
                 &payload.timeline_id,
@@ -2354,6 +2431,11 @@ struct AppState {
     /// reconstructed from project/query state; every production mutation
     /// enters through `submit_request`.
     output_lease_registry: Mutex<OutputLeaseRegistry>,
+    /// Process-local exact-`Both` lease renewal and fail-stop authority. It is
+    /// deliberately independent from the persisted registry and starts Idle
+    /// on every process launch; only a newly verified durable Enable receipt
+    /// can arm it.
+    output_lease_keepalive: Arc<output_lease_keepalive_runtime::OutputLeaseKeepaliveRuntime>,
     /// Durable terminal evidence for output-lease requests.  This is not
     /// authority and is never used to reconstruct a lease after restart.
     output_lease_durable_receipts: Mutex<OutputLeaseDurableReceiptJournal>,
@@ -24317,7 +24399,6 @@ const OUTER_FENCED_SYNC_PROJECT_RUNTIME_ROUTES: &[&str] = &[
 /// dialogs, hardware I/O, joins, or async work and would invert lifecycle
 /// ordering without strengthening project identity.
 const PREFLIGHT_ONLY_NONPROJECT_OR_INNER_RUNTIME_ROUTES: &[&str] = &[
-    "acknowledge_dsf2026_artnet_acceptance_probe_in_doubt_v1",
     "acquire_output_lease_v2",
     "add_display_output_v2",
     "add_local_media_layers",
@@ -24347,7 +24428,6 @@ const PREFLIGHT_ONLY_NONPROJECT_OR_INNER_RUNTIME_ROUTES: &[&str] = &[
     "discover_usb_rdm_devices",
     "enable_output_control_v2",
     "enable_show_art_net_loopback_route_v1",
-    "send_dsf2026_artnet_acceptance_probe_v1",
     "end_media_asset_preview",
     "finalize_prepared_media_asset_relink",
     "finalize_prepared_media_assets",
@@ -24388,6 +24468,7 @@ const PREFLIGHT_ONLY_NONPROJECT_OR_INNER_RUNTIME_ROUTES: &[&str] = &[
     "rotate_dj_link_token",
     "seek_video_clip_slot_authoritative",
     "select_normal_audio_output",
+    "select_serial_dmx_machine_binding_v1",
     "send_art_rdm_request",
     "send_dmx_routes_test_frame",
     "send_dmx_test_frame",
@@ -24900,9 +24981,13 @@ fn external_output_command_requires_local_r4(command: &EngineCommand) -> Option<
         EngineCommand::SetOutput(..)
         | EngineCommand::SetDmxOutputs(..)
         | EngineCommand::EnableShowArtNetLoopbackRoutePublished { .. }
+        | EngineCommand::EnableShowSerialDmxSafetyBlackoutRoute { .. }
+        | EngineCommand::StopShowSerialDmxSafetyBlackoutRoute { .. }
+        | EngineCommand::RetireManagedShowDmxAfterSafetyBlackout { .. }
         | EngineCommand::SendDsf2026ArtNetAcceptanceProbe { .. }
         | EngineCommand::EnableShowSpoutOutputsPublished { .. }
-        | EngineCommand::RetireShowSpoutOutputsPublished { .. }
+        | EngineCommand::RetireShowSpoutOutputsAfterAuthorityLossPublished { .. }
+        | EngineCommand::ResetShowSpoutOutputsExactPublished { .. }
         | EngineCommand::SetOutputOwnershipRole { .. }
         | EngineCommand::FenceOutputOwnership { .. }
         | EngineCommand::PrepareOutputOwnershipRole { .. }
@@ -25097,6 +25182,7 @@ fn external_output_command_requires_local_r4(command: &EngineCommand) -> Option<
         | EngineCommand::SetTimelinePlaying(..)
         | EngineCommand::StartTimeline { .. }
         | EngineCommand::DjLinkStartTimeline { .. }
+        | EngineCommand::DjLinkStartWaitingFollowTarget { .. }
         | EngineCommand::DjLinkSyncTimelinePosition { .. }
         | EngineCommand::SetTimelinePlayingPublished { .. }
         | EngineCommand::SeekTimeline(..)
@@ -28991,6 +29077,30 @@ fn list_midi_outputs() -> Result<Vec<MidiOutputSummary>, String> {
 #[tauri::command]
 fn list_serial_ports() -> Result<Vec<SerialPortSummary>, String> {
     io::serial_dmx::list_serial_ports().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn get_serial_dmx_machine_binding_status_v1(
+    state: State<'_, AppState>,
+    app: tauri::AppHandle,
+) -> Result<show_serial_dmx_route::SerialDmxMachineBindingStatusWithRouteRevisionV1, String> {
+    show_serial_dmx_route::get_machine_binding_status(&state, &app)
+}
+
+#[tauri::command]
+fn select_serial_dmx_machine_binding_v1(
+    state: State<'_, AppState>,
+    app: tauri::AppHandle,
+    request: serial_dmx_machine::SelectSerialDmxMachineBindingRequestV1,
+) -> Result<show_serial_dmx_route::SerialDmxMachineBindingStatusWithRouteRevisionV1, String> {
+    show_serial_dmx_route::select_machine_binding(&state, &app, request)
+}
+
+#[tauri::command]
+fn get_show_serial_dmx_safety_blackout_route_status_v1(
+    state: State<'_, AppState>,
+) -> Result<show_serial_dmx_route::ShowSerialDmxSafetyBlackoutRouteStatusV1, String> {
+    show_serial_dmx_route::route_status(&state)
 }
 
 #[tauri::command]
@@ -48393,6 +48503,7 @@ async fn execute_output_lease_lifecycle_off_event_loop(
         let state = app.state::<AppState>();
         let query_state = app.state::<ControlPlaneQueryState>();
         control_plane_runtime::execute_output_lease_lifecycle_for_operation(
+            &app,
             &window,
             &state,
             &query_state,
@@ -48677,6 +48788,28 @@ async fn enable_show_art_net_loopback_route_v1(
     .await
 }
 
+/// R4-only host-local Open DMX activation. Its request contains no device,
+/// endpoint, channel, or frame data; native code revalidates the confirmed
+/// machine binding and queues only S0 before keeping the worker alive.
+#[tauri::command]
+async fn enable_show_serial_dmx_safety_blackout_route_v1(
+    app: tauri::AppHandle,
+    window: WebviewWindow,
+    request: OutputControlCommandRequestV2,
+) -> OutputControlResponseV2 {
+    show_serial_dmx_route::enable_command(app, window, request).await
+}
+
+/// R4-only retirement of the fixed host-local Open DMX worker.
+#[tauri::command]
+async fn stop_show_serial_dmx_safety_blackout_route_v1(
+    app: tauri::AppHandle,
+    window: WebviewWindow,
+    request: OutputControlCommandRequestV2,
+) -> OutputControlResponseV2 {
+    show_serial_dmx_route::stop_command(app, window, request).await
+}
+
 /// R4-only local-confirmed DSF2026 proof. The command accepts no test-frame
 /// data: native code can emit only one fixed ArtDmx U0 datagram to loopback.
 #[tauri::command]
@@ -48716,7 +48849,7 @@ async fn acknowledge_dsf2026_artnet_acceptance_probe_in_doubt_v1(
 /// pair. This ingress is payloadless: neither sender names nor dimensions can
 /// be changed from IPC.
 #[tauri::command]
-async fn enable_show_spout_outputs_v1(
+async fn enable_show_spout_outputs_v2(
     app: tauri::AppHandle,
     window: WebviewWindow,
     request: OutputControlCommandRequestV2,
@@ -48725,6 +48858,23 @@ async fn enable_show_spout_outputs_v1(
         app,
         window,
         OUTPUT_SHOW_SPOUT_OUTPUTS_ENABLE_OPERATION_ID,
+        request,
+    )
+    .await
+}
+
+/// R4-only local reset for the exact recognized retired V1 pair or current
+/// V2 pair. The IPC action is payloadless and intentionally has no lease.
+#[tauri::command]
+async fn reset_show_spout_outputs_v1(
+    app: tauri::AppHandle,
+    window: WebviewWindow,
+    request: OutputControlCommandRequestV2,
+) -> OutputControlResponseV2 {
+    execute_output_control_off_event_loop(
+        app,
+        window,
+        OUTPUT_SHOW_SPOUT_OUTPUTS_RESET_OPERATION_ID,
         request,
     )
     .await
@@ -55011,6 +55161,69 @@ fn ensure_output_lease_receipt_succeeded_or_commit_expiry(
     ensure_output_lease_receipt_succeeded(receipt, context)
 }
 
+/// `AuthorizeManagedExactBoth` is not a generic registry capability.  Only
+/// the keepalive runtime can mint its opaque guard, and the guard is bound to
+/// the exact Armed lease.  All ordinary candidate seams call this with None,
+/// so an internal action cannot be replayed through an unrelated route.
+fn validate_managed_exact_both_candidate_bridge(
+    request: &OutputLeaseRequest,
+    authorization: Option<
+        &output_lease_keepalive_runtime::OutputLeaseKeepaliveManagedExactBothAuthorizationGuard<'_>,
+    >,
+) -> Result<(), String> {
+    let managed_lease_id = request
+        .action
+        .as_ref()
+        .and_then(OutputLeaseRequestAction::managed_exact_both_lease_id);
+    match (managed_lease_id, authorization) {
+        (None, None) => Ok(()),
+        (None, Some(_)) => Err(
+            "Managed exact-Both authorization guard was supplied for an ordinary lease request"
+                .to_string(),
+        ),
+        (Some(_), None) => Err(
+            "Managed exact-Both lease authorization requires the runtime serialized guard"
+                .to_string(),
+        ),
+        (Some(lease_id), Some(authorization))
+            if authorization.authorizes_lease_id(&lease_id.encode()) =>
+        {
+            Ok(())
+        }
+        (Some(_), Some(_)) => Err(
+            "Managed exact-Both authorization guard does not match the requested lease".to_string(),
+        ),
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn generic_output_lease_candidate_bridge_rejects_managed_exact_both_without_runtime_guard() {
+    let request = OutputLeaseRequest::from_action(
+        "local-ui",
+        "output-control",
+        71,
+        OutputLeaseRequestAction::AuthorizeManagedExactBoth {
+            lease_id: output_lease::OutputLeaseId::decode("lease-0000000000000001").unwrap(),
+            owner: OutputLeaseOwner::new("local-ui", "main", 71, 1).unwrap(),
+            exact_resources: OutputLeaseResources::new(&[
+                OutputLeaseResource::Lighting,
+                OutputLeaseResource::Video,
+            ])
+            .unwrap(),
+            project_identity: "project_epoch:71".to_string(),
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        validate_managed_exact_both_candidate_bridge(&request, None),
+        Err(
+            "Managed exact-Both lease authorization requires the runtime serialized guard"
+                .to_string()
+        )
+    );
+}
+
 /// Submit one candidate authority transition at the physical commit boundary.
 /// A successful callback publishes the candidate; an ordinary callback error
 /// leaves live lease truth untouched. Deadline expiry is the sole intentional
@@ -55132,10 +55345,57 @@ where
         &output_lease::OutputLeaseRequestReceipt,
     ) -> Result<(), String>,
 {
+    validate_managed_exact_both_candidate_bridge(request, None)?;
+    submit_output_lease_candidate_with_classified_commit_and_durable_record_for_pending_window_inner(
+        state,
+        live_registry,
+        request,
+        None,
+        now_ms,
+        context,
+        pending_window_label,
+        commit,
+        durable_record,
+    )
+}
+
+/// Private implementation reached only after the generic or managed bridge
+/// wrapper has validated its capability boundary.
+fn submit_output_lease_candidate_with_classified_commit_and_durable_record_for_pending_window_inner<
+    T,
+    Commit,
+    Record,
+>(
+    state: &AppState,
+    live_registry: &mut OutputLeaseRegistry,
+    request: &OutputLeaseRequest,
+    managed_authorization: Option<
+        &output_lease_keepalive_runtime::OutputLeaseKeepaliveManagedExactBothAuthorizationGuard<'_>,
+    >,
+    now_ms: u64,
+    context: &str,
+    pending_window_label: Option<&str>,
+    commit: Commit,
+    durable_record: Record,
+) -> Result<(T, output_lease::OutputLeaseRequestReceipt), String>
+where
+    Commit: FnOnce() -> Result<T, OutputLeaseCandidateCommitFailure>,
+    Record: FnOnce(
+        &mut OutputLeaseDurableReceiptJournal,
+        &output_lease::OutputLeaseRequestReceipt,
+    ) -> Result<(), String>,
+{
     let mut candidate = live_registry.clone();
-    let receipt = candidate
-        .submit_request(request, now_ms)
-        .map_err(|error| format!("Output lease {context} admission failed: {error:?}"))?;
+    let receipt = match managed_authorization {
+        Some(authorization) => candidate.submit_managed_exact_both_request_with_commit(
+            request,
+            authorization,
+            now_ms,
+            |_| Ok(()),
+        ),
+        None => candidate.submit_request(request, now_ms),
+    }
+    .map_err(|error| format!("Output lease {context} admission failed: {error:?}"))?;
     match &receipt.outcome {
         Ok(_) => {
             {
@@ -55469,6 +55729,79 @@ where
     )
 }
 
+/// The only physical-output candidate seam allowed to consume the private
+/// managed exact-Both action.  Its guard remains borrowed for the complete
+/// candidate/physical callback, so a keepalive renewal cannot advance that
+/// lease between authorization and publication.
+fn submit_managed_exact_both_candidate_with_commit<T, Commit>(
+    state: &AppState,
+    live_registry: &mut OutputLeaseRegistry,
+    request: &OutputLeaseRequest,
+    authorization: &output_lease_keepalive_runtime::OutputLeaseKeepaliveManagedExactBothAuthorizationGuard<'_>,
+    now_ms: u64,
+    context: &str,
+    commit: Commit,
+) -> Result<(T, output_lease::OutputLeaseRequestReceipt), String>
+where
+    Commit: FnOnce() -> Result<T, String>,
+{
+    validate_managed_exact_both_candidate_bridge(request, Some(authorization))?;
+    submit_output_lease_candidate_with_classified_commit_and_durable_record_for_pending_window_inner(
+        state,
+        live_registry,
+        request,
+        Some(authorization),
+        now_ms,
+        context,
+        None,
+        || commit().map_err(OutputLeaseCandidateCommitFailure::safe),
+        |durable, receipt| {
+            durable
+                .record(receipt)
+                .map_err(|error| format!("{error:?}"))
+        },
+    )
+}
+
+/// Route-local dispatch for the three fixed show lighting paths.  An absent
+/// guard remains safe because the ordinary seam rejects a managed action;
+/// a present guard is mandatory for the private managed seam and is itself
+/// checked against the request lease there.
+fn submit_show_output_candidate_with_commit<T, Commit>(
+    state: &AppState,
+    live_registry: &mut OutputLeaseRegistry,
+    request: &OutputLeaseRequest,
+    authorization: Option<
+        &output_lease_keepalive_runtime::OutputLeaseKeepaliveManagedExactBothAuthorizationGuard<'_>,
+    >,
+    now_ms: u64,
+    context: &str,
+    commit: Commit,
+) -> Result<(T, output_lease::OutputLeaseRequestReceipt), String>
+where
+    Commit: FnOnce() -> Result<T, String>,
+{
+    match authorization {
+        Some(authorization) => submit_managed_exact_both_candidate_with_commit(
+            state,
+            live_registry,
+            request,
+            authorization,
+            now_ms,
+            context,
+            commit,
+        ),
+        None => submit_output_lease_candidate_with_commit(
+            state,
+            live_registry,
+            request,
+            now_ms,
+            context,
+            commit,
+        ),
+    }
+}
+
 fn output_lease_resources_for_control_action(
     action: &protocol::control_plane_command::OutputControlActionV2,
 ) -> Result<OutputLeaseResources, String> {
@@ -55486,6 +55819,12 @@ fn output_lease_resources_for_control_action(
         },
         protocol::control_plane_command::OutputControlActionV2::ReleaseBlackout { .. }
         | protocol::control_plane_command::OutputControlActionV2::EnableShowArtNetLoopbackRoute {
+            ..
+        }
+        | protocol::control_plane_command::OutputControlActionV2::EnableShowSerialDmxSafetyBlackoutRoute {
+            ..
+        }
+        | protocol::control_plane_command::OutputControlActionV2::StopShowSerialDmxSafetyBlackoutRoute {
             ..
         }
         | protocol::control_plane_command::OutputControlActionV2::SendDsf2026ArtNetAcceptanceProbe {
@@ -55532,17 +55871,22 @@ pub(crate) fn build_output_lease_authorization_request(
 ) -> Result<(OutputLeaseRequest, u64), String> {
     use protocol::control_plane_command::OutputControlActionV2;
     let resources = output_lease_resources_for_control_action(action)?;
-    let registry = state
-        .output_lease_registry
-        .lock()
-        .map_err(|_| "Output lease registry lock was poisoned".to_string())?;
-    let owner = OutputLeaseOwner::new(
-        binding.to_string(),
-        window_label.to_string(),
-        registry.process_session_incarnation(),
-        owner_incarnation,
-    )
-    .map_err(|error| format!("Output lease owner is invalid: {error:?}"))?;
+    // Do not retain the registry guard while asking the managed keepalive
+    // whether this is its exact-Both lease: runtime operations take the
+    // serial lane before the registry, so the opposite order would deadlock.
+    let owner = {
+        let registry = state
+            .output_lease_registry
+            .lock()
+            .map_err(|_| "Output lease registry lock was poisoned".to_string())?;
+        OutputLeaseOwner::new(
+            binding.to_string(),
+            window_label.to_string(),
+            registry.process_session_incarnation(),
+            owner_incarnation,
+        )
+        .map_err(|error| format!("Output lease owner is invalid: {error:?}"))?
+    };
     let lease_action = match action {
         OutputControlActionV2::EnableOutput => OutputLeaseRequestAction::EnableAcquireOrRecover {
             owner,
@@ -55582,9 +55926,36 @@ pub(crate) fn build_output_lease_authorization_request(
                 ttl_ms: output_lease::MAX_OUTPUT_LEASE_TTL_MS,
             }
         }
+        OutputControlActionV2::EnableShowArtNetLoopbackRoute { lease }
+        | OutputControlActionV2::EnableShowSerialDmxSafetyBlackoutRoute { lease }
+        | OutputControlActionV2::StopShowSerialDmxSafetyBlackoutRoute { lease } => {
+            let lease_id = output_lease::OutputLeaseId::decode(&lease.lease_id)
+                .map_err(|error| format!("Output lease authority is invalid: {error:?}"))?;
+            // Once an exact-Both lease is managed, only the runtime's narrow
+            // serialized bridge may authorize physical Art-Net/serial work.
+            // A faulted managed lease also stays on that fail-closed route;
+            // it must not fall back to ordinary caller-generation authority.
+            if state
+                .output_lease_keepalive
+                .manages_lease_id(&lease.lease_id)?
+            {
+                OutputLeaseRequestAction::AuthorizeManagedExactBoth {
+                    lease_id,
+                    owner,
+                    exact_resources: resources,
+                    project_identity: output_lease_project_identity(project_epoch),
+                }
+            } else {
+                OutputLeaseRequestAction::AuthorizeOrdinary {
+                    lease_id,
+                    owner,
+                    expected_generation: lease.generation,
+                    exact_resources: resources,
+                }
+            }
+        }
         OutputControlActionV2::Arm { lease, .. }
         | OutputControlActionV2::ReleaseBlackout { lease }
-        | OutputControlActionV2::EnableShowArtNetLoopbackRoute { lease }
         | OutputControlActionV2::SendDsf2026ArtNetAcceptanceProbe { lease }
         | OutputControlActionV2::AcknowledgeDsf2026ArtNetAcceptanceProbeInDoubt { lease }
         | OutputControlActionV2::EnableShowSpoutOutputs { lease }
@@ -57182,6 +57553,10 @@ fn navigate_project_history(
     expected_checkpoint_hash: Option<String>,
 ) -> Result<ProjectHistoryNavigationResult, String> {
     project_transaction_owner_binding_for_window(state, window_label, owner_id)?;
+    execute_managed_project_replacement_boundary(
+        state,
+        "Managed output lease project history replacement",
+    )?;
     // Match all external replacement paths: lifecycle -> stop/join ->
     // coordinator.  The polling worker never takes lifecycle.
     let _lifecycle_guard = lock_standby_sync_lifecycle_for_project_swap(state)?;
@@ -60770,6 +61145,16 @@ fn start_standby_sync(
     role: StandbySyncRole,
 ) -> Result<StandbySyncStatus, String> {
     let directory = validate_standby_sync_directory(&directory)?;
+    if role == StandbySyncRole::Standby {
+        // Capture the managed run before taking the standby lifecycle lock;
+        // fail-stop may join its worker and perform DMX/native I/O.
+        output_lease_keepalive_integration::execute_current_boundary(
+            &app,
+            &state,
+            output_lease::output_lease_keepalive::OutputLeaseKeepaliveBoundary::Standby,
+            "Managed output lease entering Standby",
+        )?;
+    }
     let _lifecycle_guard = state.standby_sync_lifecycle.lock().map_err(|_| {
         let error = "Standby synchronization lifecycle lock was poisoned".to_string();
         state
@@ -61248,6 +61633,7 @@ fn take_over_standby_core_with_optional_lease(
     ),
     String,
 > {
+    execute_managed_project_replacement_boundary(state, "Managed output lease Standby Take Over")?;
     let _lifecycle_guard = state.standby_sync_lifecycle.lock().map_err(|_| {
         let error = "Standby synchronization lifecycle lock was poisoned".to_string();
         state
@@ -62766,6 +63152,10 @@ fn load_project_from_file_with_control_mappings_in_scope_and_disposition(
 fn sanitize_current_project_runtime_under_authority(
     state: &State<'_, AppState>,
 ) -> Result<ProjectLoadResult, String> {
+    execute_managed_project_replacement_boundary(
+        state,
+        "Managed output lease standby sanitization",
+    )?;
     let _external_admission = lock_project_external_command_admission(state)?;
     let mut coordinator = lock_project_coordinator(state)?;
     ensure_no_pending_project_transaction(&coordinator)?;
@@ -62914,6 +63304,28 @@ fn project_swap_app_handle(state: &AppState) -> Result<tauri::AppHandle, String>
         .ok_or_else(|| "Application handle is not initialized for project replacement".to_string())
 }
 
+/// Project/history/takeover replacement cannot inherit a managed Both output
+/// authority from the prior project. Detect Idle without requiring an app
+/// handle so pure headless seams remain valid; a non-idle run must complete
+/// the physical all-deny boundary before any project/lifecycle lock is taken.
+fn execute_managed_project_replacement_boundary(
+    state: &AppState,
+    detail: &str,
+) -> Result<(), String> {
+    if state.output_lease_keepalive.snapshot_state()?
+        == output_lease::output_lease_keepalive::OutputLeaseKeepaliveState::Idle
+    {
+        return Ok(());
+    }
+    let app = project_swap_app_handle(state)?;
+    output_lease_keepalive_integration::execute_current_boundary(
+        &app,
+        state,
+        output_lease::output_lease_keepalive::OutputLeaseKeepaliveBoundary::ProjectIdentityChanged,
+        detail,
+    )
+}
+
 /// Acquire every legacy mirror before an engine publication.  The coordinator
 /// is authoritative, but these mirrors are still read by older command
 /// handlers; preflighting makes the post-ack mirror update infallible.
@@ -63019,6 +63431,10 @@ fn replace_prepared_project_snapshot(
     abort_before_publication: Option<&AtomicBool>,
 ) -> Result<ProjectLoadResult, String> {
     if scope == ProjectSnapshotReplacementScope::ExternalCaller {
+        execute_managed_project_replacement_boundary(
+            state,
+            "Managed output lease external project replacement",
+        )?;
         let _lifecycle_guard = lock_standby_sync_lifecycle_for_project_swap(state)?;
         preflight_project_replacement_invocation(state)?;
         return run_project_snapshot_replacement_scope(
@@ -63059,6 +63475,10 @@ fn replace_prepared_project_snapshot_with_platform<Platform: ProjectReplacementP
     platform: &Platform,
 ) -> Result<ProjectLoadResult, String> {
     if scope == ProjectSnapshotReplacementScope::ExternalCaller {
+        execute_managed_project_replacement_boundary(
+            state,
+            "Managed output lease external project replacement",
+        )?;
         let _lifecycle_guard = lock_standby_sync_lifecycle_for_project_swap(state)?;
         preflight_project_replacement_invocation(state)?;
         return run_project_snapshot_replacement_scope(
@@ -70165,7 +70585,10 @@ fn sync_external_video_transports_from_snapshot(
                 output.endpoint_name.as_deref().unwrap_or_default(),
             )
         });
-        match show_spout_outputs::validate_show_spout_outputs(&snapshot.video.outputs) {
+        match show_spout_outputs::validate_show_spout_outputs_with_compositions(
+            &snapshot.video.outputs,
+            &snapshot.video.compositions,
+        ) {
             Ok(_) => {
                 if plans.outputs.iter().any(|plan| {
                     plan.kind == VideoOutputKind::SpoutSender
@@ -70277,10 +70700,7 @@ fn finish_external_video_transport_maintenance_transition(
     result: Result<ExternalVideoTransportSyncResponse, String>,
 ) -> Result<ExternalVideoTransportSyncResponse, String> {
     match result {
-        Ok(response)
-            if response.report.stop_failed.is_empty()
-                && response.report.start_failed.is_empty() =>
-        {
+        Ok(response) if !external_video_transport_has_output_failure(&response.report) => {
             transition.complete().map(|_| response)
         }
         Ok(response) => {
@@ -70296,6 +70716,118 @@ fn finish_external_video_transport_maintenance_transition(
             transition.fail(error.clone());
             Err(error)
         }
+    }
+}
+
+/// Input routes (for example a camera or capture board) are diagnostics owned
+/// by the video graph, not physical output authority. Their start/stop errors
+/// must stay visible in the synchronization report without preventing a
+/// Lighting+Video ownership transition. Output-route failures remain fatal:
+/// publishing Both while an NDI/Spout output is unstarted or unrested would
+/// claim authority over a route whose physical state is unknown.
+fn external_video_transport_has_output_failure(
+    report: &video::ExternalVideoTransportSyncReport,
+) -> bool {
+    report
+        .start_failed
+        .iter()
+        .chain(report.stop_failed.iter())
+        .any(|failure| failure.route.direction == video::ExternalVideoTransportDirection::Output)
+}
+
+fn external_video_transport_output_stop_failure_endpoints(
+    report: &video::ExternalVideoTransportSyncReport,
+) -> Vec<&str> {
+    report
+        .stop_failed
+        .iter()
+        .filter(|failure| failure.route.direction == video::ExternalVideoTransportDirection::Output)
+        .map(|failure| failure.route.endpoint_name.as_str())
+        .collect()
+}
+
+#[cfg(test)]
+mod external_video_transport_output_ownership_tests {
+    use super::*;
+
+    fn failed_route(
+        direction: video::ExternalVideoTransportDirection,
+        backend_id: &str,
+        endpoint_name: &str,
+    ) -> video::ExternalVideoTransportFailedRoute {
+        video::ExternalVideoTransportFailedRoute {
+            route: video::ExternalVideoTransportRoute {
+                direction,
+                route_id: 1,
+                label: endpoint_name.to_string(),
+                backend_id: backend_id.to_string(),
+                endpoint_name: endpoint_name.to_string(),
+            },
+            issue: format!("{backend_id} failed"),
+        }
+    }
+
+    fn report(
+        start_failed: Vec<video::ExternalVideoTransportFailedRoute>,
+        stop_failed: Vec<video::ExternalVideoTransportFailedRoute>,
+    ) -> video::ExternalVideoTransportSyncReport {
+        video::ExternalVideoTransportSyncReport {
+            start_failed,
+            stop_failed,
+            ..video::ExternalVideoTransportSyncReport::default()
+        }
+    }
+
+    #[test]
+    fn camera_input_failure_remains_in_report_but_allows_both_enable() {
+        let camera = failed_route(
+            video::ExternalVideoTransportDirection::Input,
+            "camera",
+            "MiraBox Camera",
+        );
+        let start_report = report(vec![camera.clone()], Vec::new());
+        let stop_report = report(Vec::new(), vec![camera.clone()]);
+
+        assert_eq!(start_report.start_failed, vec![camera.clone()]);
+        assert_eq!(stop_report.stop_failed, vec![camera]);
+        assert!(!external_video_transport_has_output_failure(&start_report));
+        assert!(!external_video_transport_has_output_failure(&stop_report));
+        assert!(external_video_transport_output_stop_failure_endpoints(&stop_report).is_empty());
+    }
+
+    #[test]
+    fn spout_output_failure_remains_fatal_for_both_enable() {
+        let spout = failed_route(
+            video::ExternalVideoTransportDirection::Output,
+            "spout",
+            "Syndocal Foreground",
+        );
+        let start_report = report(vec![spout.clone()], Vec::new());
+        let stop_report = report(Vec::new(), vec![spout]);
+
+        assert!(external_video_transport_has_output_failure(&start_report));
+        assert!(external_video_transport_has_output_failure(&stop_report));
+        assert_eq!(
+            external_video_transport_output_stop_failure_endpoints(&stop_report),
+            vec!["Syndocal Foreground"]
+        );
+    }
+
+    #[test]
+    fn mixed_input_and_output_failures_are_fatal_but_input_only_is_not() {
+        let camera = failed_route(
+            video::ExternalVideoTransportDirection::Input,
+            "camera",
+            "MiraBox Camera",
+        );
+        let spout = failed_route(
+            video::ExternalVideoTransportDirection::Output,
+            "spout",
+            "Syndocal Background",
+        );
+        let mixed_report = report(vec![camera], vec![spout]);
+
+        assert!(external_video_transport_has_output_failure(&mixed_report));
     }
 }
 
@@ -72985,15 +73517,18 @@ const SHOW_ARTNET_LOOPBACK_PORT: u16 =
 const SHOW_ARTNET_LOOPBACK_UNIVERSE: u16 =
     show_artnet_acceptance_probe::DSF2026_ARTNET_ACCEPTANCE_PROBE_UNIVERSE;
 
-/// The show Spout action is deliberately payloadless.  It always targets the
-/// authoritative Main composition; accepting a UI-selected composition here
+/// The show Spout action is deliberately payloadless. V2 derives each sender
+/// from its unique exact-name composition; accepting a UI-selected target here
 /// would turn the reviewed show route into a generic Spout creation API.
 #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
 fn derive_current_show_spout_outputs(
     state: &AppState,
 ) -> Result<show_spout_outputs::ShowSpoutOutputs, String> {
     let snapshot = state.engine.snapshot();
-    let existing = show_spout_outputs::validate_show_spout_outputs(&snapshot.video.outputs);
+    let existing = show_spout_outputs::validate_show_spout_outputs_with_compositions(
+        &snapshot.video.outputs,
+        &snapshot.video.compositions,
+    );
     match existing {
         Ok(pair) => return Ok(pair),
         Err(show_spout_outputs::ShowSpoutValidationError::MissingPair) => {}
@@ -73003,22 +73538,18 @@ fn derive_current_show_spout_outputs(
             ))
         }
     }
-    if !snapshot
-        .video
-        .compositions
-        .iter()
-        .any(|composition| composition.id == show_spout_outputs::SHOW_SPOUT_MAIN_COMPOSITION_ID)
-    {
-        return Err(
-            "Show Spout activation requires the authoritative Main composition".to_string(),
-        );
-    }
+    let targets =
+        show_spout_outputs::derive_show_spout_composition_targets(&snapshot.video.compositions)
+            .map_err(|error| {
+                format!("Show Spout activation requires exact V2 composition targets: {error}")
+            })?;
     let background_id = state.engine.allocate_video_output_id();
     let foreground_id = state.engine.allocate_video_output_id();
     show_spout_outputs::build_show_spout_outputs(
         background_id,
         foreground_id,
-        show_spout_outputs::SHOW_SPOUT_MAIN_COMPOSITION_ID,
+        targets.background,
+        targets.foreground,
     )
     .map_err(|error| format!("Show Spout output allocation was invalid: {error}"))
 }
@@ -73027,7 +73558,10 @@ fn validate_current_show_spout_outputs_action(state: &AppState) -> Result<(), St
     #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
     {
         let snapshot = state.engine.snapshot();
-        match show_spout_outputs::validate_show_spout_outputs(&snapshot.video.outputs) {
+        match show_spout_outputs::validate_show_spout_outputs_with_compositions(
+            &snapshot.video.outputs,
+            &snapshot.video.compositions,
+        ) {
             Ok(_) => return Ok(()),
             Err(show_spout_outputs::ShowSpoutValidationError::MissingPair) => {}
             Err(error) => {
@@ -73036,15 +73570,13 @@ fn validate_current_show_spout_outputs_action(state: &AppState) -> Result<(), St
                 ))
             }
         }
-        return snapshot
-            .video
-            .compositions
-            .iter()
-            .any(|composition| composition.id == show_spout_outputs::SHOW_SPOUT_MAIN_COMPOSITION_ID)
-            .then_some(())
-            .ok_or_else(|| {
-                "Show Spout activation requires the authoritative Main composition".to_string()
-            });
+        return show_spout_outputs::derive_show_spout_composition_targets(
+            &snapshot.video.compositions,
+        )
+        .map(|_| ())
+        .map_err(|error| {
+            format!("Show Spout activation requires exact V2 composition targets: {error}")
+        });
     }
     #[cfg(not(all(feature = "spout", target_os = "windows", target_arch = "x86_64")))]
     {
@@ -73056,13 +73588,189 @@ fn validate_current_show_spout_outputs_action(state: &AppState) -> Result<(), St
     }
 }
 
+fn validate_current_show_spout_outputs_reset_action(state: &AppState) -> Result<(), String> {
+    #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+    {
+        let snapshot = state.engine.snapshot();
+        return show_spout_outputs::classify_show_spout_reset_candidate(
+            &snapshot.video.outputs,
+            &snapshot.video.compositions,
+        )
+        .map(|_| ())
+        .map_err(|error| format!("Show Spout reset requires an exact recognized pair: {error}"));
+    }
+    #[cfg(not(all(feature = "spout", target_os = "windows", target_arch = "x86_64")))]
+    {
+        let _ = state;
+        Err("Show Spout reset requires the Windows x64 Spout-enabled Syndocal build".to_string())
+    }
+}
+
+/// Local R4 reset has no output lease. It remains serialized by the same
+/// project admission/owner/fence boundary, validates the entire exact pair
+/// before mutation, retires physical senders first when present, then
+/// reconciles the authored checkpoint so a changed output graph advances B.
+fn reset_show_spout_outputs_without_output_lease(
+    state: &AppState,
+    expected_fence: &OutputControlFenceV1,
+    expected_owner_principal: &str,
+    expected_owner_window_label: &str,
+    expected_owner_incarnation: u64,
+) -> Result<(bool, OutputControlFenceV1), String> {
+    #[cfg(not(all(feature = "spout", target_os = "windows", target_arch = "x86_64")))]
+    {
+        let _ = (
+            state,
+            expected_fence,
+            expected_owner_principal,
+            expected_owner_window_label,
+            expected_owner_incarnation,
+        );
+        return Err(
+            "Show Spout reset requires the Windows x64 Spout-enabled Syndocal build".to_string(),
+        );
+    }
+    #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+    {
+        reset_show_spout_outputs_without_output_lease_with_physical_retirement(
+            state,
+            expected_fence,
+            expected_owner_principal,
+            expected_owner_window_label,
+            expected_owner_incarnation,
+            retire_show_spout_outputs_for_authority_change,
+        )
+    }
+}
+
+/// Exact Reset core after the public local-owner/fence admission has entered
+/// the Windows x64 Spout route. `retire_physical` is production's detached
+/// sender stop/join boundary; keeping it explicit makes the physical-before-
+/// engine ordering testable without constructing an SDK sender in unit tests.
+#[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+fn reset_show_spout_outputs_without_output_lease_with_physical_retirement<F>(
+    state: &AppState,
+    expected_fence: &OutputControlFenceV1,
+    expected_owner_principal: &str,
+    expected_owner_window_label: &str,
+    expected_owner_incarnation: u64,
+    retire_physical: F,
+) -> Result<(bool, OutputControlFenceV1), String>
+where
+    F: FnOnce(&AppState) -> Result<(), String>,
+{
+    let _lifecycle_guard = state.standby_sync_lifecycle.lock().map_err(|_| {
+        "Standby synchronization lifecycle lock was poisoned before show Spout reset".to_string()
+    })?;
+    let _external_admission = lock_project_external_command_admission(state)?;
+    let _owner_rotation = state
+        .project_transaction_owner_rotation
+        .lock()
+        .map_err(|_| {
+            "Project transaction owner rotation lock was poisoned before show Spout reset"
+                .to_string()
+        })?;
+    let mut coordinator = lock_project_coordinator(state)?;
+    if reconcile_project_checkpoint_for_coordinator(state, &mut coordinator).is_err()
+        || !control_plane_runtime::exact_output_control_owner_matches(
+            state,
+            expected_owner_principal,
+            expected_owner_window_label,
+            expected_owner_incarnation,
+        )
+        || !control_plane_runtime::exact_output_control_fence_matches(
+            state,
+            &coordinator,
+            expected_fence,
+        )
+        || ensure_no_pending_project_transaction(&coordinator).is_err()
+    {
+        return Err("Output control fence changed before show Spout reset".to_string());
+    }
+    ensure_project_operator_video_clip_slot_runtime_allowed(
+        state,
+        &coordinator,
+        expected_owner_principal,
+    )?;
+    let before = state.engine.snapshot();
+    let candidate = show_spout_outputs::classify_show_spout_reset_candidate(
+        &before.video.outputs,
+        &before.video.compositions,
+    )
+    .map_err(|error| format!("Show Spout reset requires an exact recognized pair: {error}"))?;
+    let expected = match candidate {
+        show_spout_outputs::ShowSpoutResetCandidate::Absent => {
+            return Ok((false, expected_fence.clone()));
+        }
+        show_spout_outputs::ShowSpoutResetCandidate::LegacyV1(pair)
+        | show_spout_outputs::ShowSpoutResetCandidate::CurrentV2(pair) => pair,
+    };
+
+    // Production takes ownership of both physical senders here. The callback
+    // may perform its authority-loss exact engine acknowledgement after both
+    // joins; if it leaves the authored pair intact, this Reset-only command
+    // performs the separately prevalidated atomic removal below.
+    retire_physical(state)?;
+    let after_physical = state.engine.snapshot();
+    match show_spout_outputs::classify_show_spout_reset_candidate(
+        &after_physical.video.outputs,
+        &after_physical.video.compositions,
+    )
+    .map_err(|error| {
+        format!("Show Spout reset became ambiguous after native retirement: {error}")
+    })? {
+        show_spout_outputs::ShowSpoutResetCandidate::Absent => {}
+        show_spout_outputs::ShowSpoutResetCandidate::LegacyV1(current)
+        | show_spout_outputs::ShowSpoutResetCandidate::CurrentV2(current) => {
+            if current != expected {
+                return Err(
+                    "Show Spout reset pair changed during serialized retirement".to_string()
+                );
+            }
+            state
+                .engine
+                .reset_show_spout_outputs_exact_published(
+                    current.background,
+                    current.foreground,
+                    Instant::now() + Duration::from_secs(2),
+                )
+                .map_err(|error| format!("Show Spout exact engine retirement failed: {error}"))?;
+        }
+    }
+    let checkpoint = reconcile_project_checkpoint_for_coordinator(state, &mut coordinator)?;
+    let safety = state.engine.safety_blackout_authority();
+    let fence_after = control_plane_runtime::committed_output_control_fence(
+        expected_fence,
+        control_plane_runtime::CommittedOutputControlFenceValues {
+            project_epoch: coordinator.epoch,
+            project_revision: checkpoint.revision,
+            project_checkpoint_hash: &checkpoint.hash,
+            project_publication_generation: coordinator.publication_generation,
+            output_epoch: expected_fence.output_epoch,
+            output_generation: expected_fence.output_generation,
+            safety_blackout_epoch: safety.epoch,
+            safety_blackout_generation: safety.generation,
+        },
+    );
+    Ok((true, fence_after))
+}
+
 #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
 fn confirm_current_show_spout_outputs(
     state: &AppState,
     expected: &show_spout_outputs::ShowSpoutOutputs,
 ) -> Result<show_spout_outputs::ShowSpoutEnsureDecision, String> {
-    show_spout_outputs::decide_show_spout_ensure(&state.engine.snapshot().video.outputs, expected)
-        .map_err(|error| format!("Show Spout outputs changed before final publication: {error}"))
+    let snapshot = state.engine.snapshot();
+    show_spout_outputs::validate_show_spout_outputs_with_compositions(
+        &snapshot.video.outputs,
+        &snapshot.video.compositions,
+    )
+    .and_then(|current| {
+        (current == *expected)
+            .then_some(show_spout_outputs::ShowSpoutEnsureDecision::NoOp)
+            .ok_or(show_spout_outputs::ShowSpoutValidationError::ConflictingPair)
+    })
+    .map_err(|error| format!("Show Spout outputs changed before final publication: {error}"))
 }
 
 /// Worker frame admission is bound to the exact local video-ownership
@@ -73167,6 +73875,30 @@ fn validate_current_staged_show_artnet_loopback_route(
     Ok(route)
 }
 
+fn committed_show_artnet_loopback_route_fence(
+    expected_fence: &OutputControlFenceV1,
+    project_epoch: u64,
+    project_revision: u64,
+    project_checkpoint_hash: &str,
+    project_publication_generation: u64,
+    safety_blackout_epoch: u64,
+    safety_blackout_generation: u64,
+) -> OutputControlFenceV1 {
+    control_plane_runtime::committed_output_control_fence(
+        expected_fence,
+        control_plane_runtime::CommittedOutputControlFenceValues {
+            project_epoch,
+            project_revision,
+            project_checkpoint_hash,
+            project_publication_generation,
+            output_epoch: expected_fence.output_epoch,
+            output_generation: expected_fence.output_generation,
+            safety_blackout_epoch,
+            safety_blackout_generation,
+        },
+    )
+}
+
 /// The single local R4 path that can enable the pre-authored show DMX route.
 /// It accepts no route data, mutates only `enabled`, and holds the same output
 /// transition/project fence through final Art-Net socket creation and engine
@@ -73238,84 +73970,205 @@ fn enable_show_artnet_loopback_route_with_output_control_fence(
             Ok(route)
         },
         |_transition_guard, route| {
+            // A managed exact-Both request holds the keepalive serial lane
+            // through the complete candidate and bounded physical callback.
+            // This keeps generic candidate entrypoints unable to consume its
+            // internal action and prevents renewal from crossing publication.
+            let managed_authorization = lease_request
+                .action
+                .as_ref()
+                .and_then(OutputLeaseRequestAction::managed_exact_both_lease_id)
+                .map(|lease_id| {
+                    state
+                        .output_lease_keepalive
+                        .begin_managed_exact_both_ordinary_authorization(&lease_id.encode())
+                })
+                .transpose()?;
             let mut lease_registry = state.output_lease_registry.lock().map_err(|_| {
                 "Output lease registry lock was poisoned before show Art-Net loopback activation"
                     .to_string()
             })?;
             let final_lease_now_ms = state.output_lease_now_ms()?;
-            let (applied, lease_receipt) = submit_output_lease_candidate_with_commit(
-                state,
-                &mut lease_registry,
-                lease_request,
-                final_lease_now_ms,
-                "show Art-Net loopback route activation",
-                || {
-                    // Recheck all mutable truth immediately before the engine
-                    // opens its fixed loopback socket. A stale project leaves
-                    // the engine and lease registry at A.
-                    {
-                        let mut coordinator = coordinator.borrow_mut();
-                        if reconcile_project_checkpoint_for_coordinator(state, &mut *coordinator)
-                            .is_err()
-                            || !control_plane_runtime::exact_output_control_fence_matches(
+            let candidate = if let Some(authorization) = managed_authorization.as_ref() {
+                submit_managed_exact_both_candidate_with_commit(
+                    state,
+                    &mut lease_registry,
+                    lease_request,
+                    authorization,
+                    final_lease_now_ms,
+                    "show Art-Net loopback route activation",
+                    || {
+                        // Recheck all mutable truth immediately before the engine
+                        // opens its fixed loopback socket. A stale project leaves
+                        // the engine and lease registry at A.
+                        {
+                            let mut coordinator = coordinator.borrow_mut();
+                            if reconcile_project_checkpoint_for_coordinator(
                                 state,
-                                &*coordinator,
-                                expected_fence,
+                                &mut *coordinator,
                             )
-                            || ensure_no_pending_project_transaction(&*coordinator).is_err()
+                            .is_err()
+                                || !control_plane_runtime::exact_output_control_fence_matches(
+                                    state,
+                                    &*coordinator,
+                                    expected_fence,
+                                )
+                                || ensure_no_pending_project_transaction(&*coordinator).is_err()
+                            {
+                                return Err(
+                                    "Output control fence changed before show Art-Net loopback publication"
+                                        .to_string(),
+                                );
+                            }
+                        }
+                        let ownership = state.engine.output_ownership_status();
+                        if ownership.state != protocol::OutputOwnershipState::Ready
+                            || ownership.effective_role != MachineOutputRole::Both
+                            || ownership.desired_role != MachineOutputRole::Both
+                            || !ownership.lighting_allowed
                         {
                             return Err(
-                                "Output control fence changed before show Art-Net loopback publication"
+                                "Show Art-Net loopback activation lost its local Both output authority"
                                     .to_string(),
                             );
                         }
-                    }
-                    let ownership = state.engine.output_ownership_status();
-                    if ownership.state != protocol::OutputOwnershipState::Ready
-                        || ownership.effective_role != MachineOutputRole::Both
-                        || ownership.desired_role != MachineOutputRole::Both
-                        || !ownership.lighting_allowed
-                    {
-                        return Err(
+                        let safety = state.engine.safety_blackout_authority();
+                        if safety.engaged
+                            || safety.epoch != expected_fence.safety_blackout_epoch
+                            || safety.generation != expected_fence.safety_blackout_generation
+                        {
+                            return Err(
+                                "Show Art-Net loopback activation was superseded by an emergency blackout authority change"
+                                    .to_string(),
+                            );
+                        }
+                        let current = validate_current_staged_show_artnet_loopback_route(state)?;
+                        if current != route {
+                            return Err(
+                                "Show Art-Net loopback route changed before final publication"
+                                    .to_string(),
+                            );
+                        }
+                        state
+                            .engine
+                            .enable_show_artnet_loopback_route_published(
+                                current,
+                                expected_fence.safety_blackout_epoch,
+                                expected_fence.safety_blackout_generation,
+                                Instant::now() + Duration::from_secs(2),
+                            )
+                            .map_err(|error| {
+                                format!("Show Art-Net loopback route activation failed: {error}")
+                            })?;
+                        Ok(true)
+                    },
+                )
+            } else {
+                submit_output_lease_candidate_with_commit(
+                    state,
+                    &mut lease_registry,
+                    lease_request,
+                    final_lease_now_ms,
+                    "show Art-Net loopback route activation",
+                    || {
+                        // Recheck all mutable truth immediately before the engine
+                        // opens its fixed loopback socket. A stale project leaves
+                        // the engine and lease registry at A.
+                        {
+                            let mut coordinator = coordinator.borrow_mut();
+                            if reconcile_project_checkpoint_for_coordinator(
+                                state,
+                                &mut *coordinator,
+                            )
+                            .is_err()
+                                || !control_plane_runtime::exact_output_control_fence_matches(
+                                    state,
+                                    &*coordinator,
+                                    expected_fence,
+                                )
+                                || ensure_no_pending_project_transaction(&*coordinator).is_err()
+                            {
+                                return Err(
+                                "Output control fence changed before show Art-Net loopback publication"
+                                    .to_string(),
+                            );
+                            }
+                        }
+                        let ownership = state.engine.output_ownership_status();
+                        if ownership.state != protocol::OutputOwnershipState::Ready
+                            || ownership.effective_role != MachineOutputRole::Both
+                            || ownership.desired_role != MachineOutputRole::Both
+                            || !ownership.lighting_allowed
+                        {
+                            return Err(
                             "Show Art-Net loopback activation lost its local Both output authority"
                                 .to_string(),
                         );
-                    }
-                    let safety = state.engine.safety_blackout_authority();
-                    if safety.engaged
-                        || safety.epoch != expected_fence.safety_blackout_epoch
-                        || safety.generation != expected_fence.safety_blackout_generation
-                    {
-                        return Err(
+                        }
+                        let safety = state.engine.safety_blackout_authority();
+                        if safety.engaged
+                            || safety.epoch != expected_fence.safety_blackout_epoch
+                            || safety.generation != expected_fence.safety_blackout_generation
+                        {
+                            return Err(
                             "Show Art-Net loopback activation was superseded by an emergency blackout authority change"
                                 .to_string(),
                         );
-                    }
-                    let current = validate_current_staged_show_artnet_loopback_route(state)?;
-                    if current != route {
-                        return Err(
-                            "Show Art-Net loopback route changed before final publication"
-                                .to_string(),
-                        );
-                    }
-                    state
-                        .engine
-                        .enable_show_artnet_loopback_route_published(
-                            current,
-                            expected_fence.safety_blackout_epoch,
-                            expected_fence.safety_blackout_generation,
-                            Instant::now() + Duration::from_secs(2),
-                        )
-                        .map_err(|error| {
-                            format!("Show Art-Net loopback route activation failed: {error}")
-                        })?;
-                    Ok(true)
-                },
-            )?;
-            // This route is a physical activation only: no project or output
-            // ownership authority changed, so its terminal fence is exactly
-            // the admitted fence. The immutable R4 receipt identifies it.
-            Ok((applied, expected_fence.clone(), lease_receipt))
+                        }
+                        let current = validate_current_staged_show_artnet_loopback_route(state)?;
+                        if current != route {
+                            return Err(
+                                "Show Art-Net loopback route changed before final publication"
+                                    .to_string(),
+                            );
+                        }
+                        state
+                            .engine
+                            .enable_show_artnet_loopback_route_published(
+                                current,
+                                expected_fence.safety_blackout_epoch,
+                                expected_fence.safety_blackout_generation,
+                                Instant::now() + Duration::from_secs(2),
+                            )
+                            .map_err(|error| {
+                                format!("Show Art-Net loopback route activation failed: {error}")
+                            })?;
+                        Ok(true)
+                    },
+                )
+            };
+            let (applied, lease_receipt) = candidate?;
+            let fence_after = if applied {
+                // Enabling the pre-authored route changes persisted project
+                // truth. Reconcile it while the external/coordinator/output
+                // transition boundaries are still held, then return that exact
+                // committed project authority to the next one-button stage.
+                // The machine ownership and S0 authorities are not mutated by
+                // this route publication and are projected independently.
+                let mut coordinator = coordinator.borrow_mut();
+                let checkpoint = reconcile_project_checkpoint_for_coordinator(
+                    state,
+                    &mut *coordinator,
+                )
+                .map_err(|error| {
+                    format!(
+                        "Show Art-Net loopback route was published but its committed project checkpoint could not be reconciled: {error}"
+                    )
+                })?;
+                let safety = state.engine.safety_blackout_authority();
+                committed_show_artnet_loopback_route_fence(
+                    expected_fence,
+                    coordinator.epoch,
+                    checkpoint.revision,
+                    &checkpoint.hash,
+                    coordinator.publication_generation,
+                    safety.epoch,
+                    safety.generation,
+                )
+            } else {
+                expected_fence.clone()
+            };
+            Ok((applied, fence_after, lease_receipt))
         },
     )
 }
@@ -73401,7 +74254,27 @@ fn show_spout_r4_retry_ack_releases_both_transport_mutexes_before_engine_wait() 
         enabled: false,
         ..DmxOutputConfig::default()
     });
-    let expected = show_spout_outputs::build_show_spout_outputs(61, 62, 1).unwrap();
+    for composition in [
+        CompositionSummary {
+            id: 2,
+            label: show_spout_outputs::SHOW_SPOUT_FOREGROUND_COMPOSITION_LABEL.to_string(),
+            layer_ids: Vec::new(),
+            timeline_layer_ids: Vec::new(),
+            output_ids: Vec::new(),
+        },
+        CompositionSummary {
+            id: 3,
+            label: show_spout_outputs::SHOW_SPOUT_BACKGROUND_COMPOSITION_LABEL.to_string(),
+            layer_ids: Vec::new(),
+            timeline_layer_ids: Vec::new(),
+            output_ids: Vec::new(),
+        },
+    ] {
+        engine
+            .send(EngineCommand::AddVideoComposition(composition))
+            .expect("test must enqueue the exact V2 composition target");
+    }
+    let expected = show_spout_outputs::build_show_spout_outputs(61, 62, 3, 2).unwrap();
     let safety = engine.safety_blackout_authority();
     engine
         .enable_show_spout_outputs_published(
@@ -73456,7 +74329,7 @@ fn show_spout_r4_retry_ack_releases_both_transport_mutexes_before_engine_wait() 
                 await_release_ack
                     .recv()
                     .expect("test must release the actual main R4 engine ACK");
-                first_engine.retire_show_spout_outputs_published(
+                first_engine.retire_show_spout_outputs_after_authority_loss_published(
                     retry.expected().background.clone(),
                     retry.expected().foreground.clone(),
                     Instant::now() + Duration::from_secs(1),
@@ -73734,11 +74607,13 @@ fn enable_show_spout_outputs_with_output_control_fence(
                                 activation,
                                 validator,
                                 |retry| {
-                                    state.engine.retire_show_spout_outputs_published(
-                                        retry.expected().background.clone(),
-                                        retry.expected().foreground.clone(),
-                                        Instant::now() + Duration::from_secs(2),
-                                    )
+                                    state
+                                        .engine
+                                        .retire_show_spout_outputs_after_authority_loss_published(
+                                            retry.expected().background.clone(),
+                                            retry.expected().foreground.clone(),
+                                            Instant::now() + Duration::from_secs(2),
+                                        )
                                 },
                             )?;
                             match prepared {
@@ -73786,7 +74661,9 @@ fn enable_show_spout_outputs_with_output_control_fence(
                                         // R4; an error remains a persisted fresh-R4
                                         // barrier rather than a new constructor.
                                         let engine_cleanup =
-                                            state.engine.retire_show_spout_outputs_published(
+                                            state
+                                                .engine
+                                                .retire_show_spout_outputs_after_authority_loss_published(
                                                 expected.background.clone(),
                                                 expected.foreground.clone(),
                                                 Instant::now() + Duration::from_secs(2),
@@ -73848,7 +74725,9 @@ fn enable_show_spout_outputs_with_output_control_fence(
                                         Ok(token) => token,
                                         Err(error) => {
                                             let retire =
-                                                state.engine.retire_show_spout_outputs_published(
+                                                state
+                                                    .engine
+                                                    .retire_show_spout_outputs_after_authority_loss_published(
                                                     expected.background.clone(),
                                                     expected.foreground.clone(),
                                                     Instant::now() + Duration::from_secs(2),
@@ -74095,16 +74974,12 @@ fn apply_output_ownership_transition_after_reservation(
             ))]
             None,
         )?;
-        if !stopped.report.stop_failed.is_empty() {
+        let output_stop_failed =
+            external_video_transport_output_stop_failure_endpoints(&stopped.report);
+        if !output_stop_failed.is_empty() {
             return Err(format!(
                 "External video output stop failed during ownership transition: {}",
-                stopped
-                    .report
-                    .stop_failed
-                    .iter()
-                    .map(|route| route.route.endpoint_name.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
+                output_stop_failed.join(", ")
             ));
         }
         retire_native_video_output_windows(app, &state.native_video_output_workers)?;
@@ -74148,7 +75023,7 @@ fn apply_output_ownership_transition_after_reservation(
                 ))]
                 activation,
             )?;
-            if !started.report.start_failed.is_empty() || !started.report.stop_failed.is_empty() {
+            if external_video_transport_has_output_failure(&started.report) {
                 return Err(format!(
                     "External video output route synchronization failed while preparing {:?}",
                     role
@@ -87082,6 +87957,9 @@ pub(crate) mod tests {
                 ),
                 runtime_control_plane: control_plane_runtime::RuntimeControlPlaneState::default(),
                 output_lease_registry: Mutex::new(output_lease_registry),
+                output_lease_keepalive: Arc::new(
+                    output_lease_keepalive_runtime::OutputLeaseKeepaliveRuntime::default(),
+                ),
                 output_lease_durable_receipts: Mutex::new(
                     OutputLeaseDurableReceiptJournal::in_memory(),
                 ),
@@ -87543,6 +88421,435 @@ pub(crate) mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.directory);
         }
+    }
+
+    #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+    #[derive(Clone, Copy)]
+    enum ShowSpoutResetFixtureKind {
+        LegacyV1,
+        CurrentV2,
+        Absent,
+        Partial,
+        ThirdSender,
+        Malformed,
+    }
+
+    #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+    fn show_spout_reset_fixture_output(
+        id: VideoOutputId,
+        label: &str,
+        composition_id: CompositionId,
+    ) -> VideoOutputSummary {
+        VideoOutputSummary {
+            id,
+            label: label.to_string(),
+            kind: VideoOutputKind::SpoutSender,
+            enabled: true,
+            composition_id,
+            fullscreen: false,
+            monitor_id: None,
+            monitor_identity: None,
+            width: show_spout_outputs::SHOW_SPOUT_WIDTH,
+            height: show_spout_outputs::SHOW_SPOUT_HEIGHT,
+            endpoint_name: Some(label.to_string()),
+            opacity: show_spout_outputs::SHOW_SPOUT_OPACITY,
+            blackout: false,
+            mapping: VideoOutputMapping::default(),
+        }
+    }
+
+    #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+    fn install_show_spout_reset_fixture(state: &AppState, kind: ShowSpoutResetFixtureKind) {
+        let v2 = show_spout_outputs::build_show_spout_outputs(41, 42, 3, 2)
+            .expect("test fixture must use the exact V2 pair");
+        let outputs = match kind {
+            ShowSpoutResetFixtureKind::CurrentV2 => {
+                vec![v2.background.clone(), v2.foreground.clone()]
+            }
+            ShowSpoutResetFixtureKind::LegacyV1 => {
+                let mut background = v2.background.clone();
+                let mut foreground = v2.foreground.clone();
+                background.composition_id = show_spout_outputs::SHOW_SPOUT_MAIN_COMPOSITION_ID;
+                foreground.composition_id = show_spout_outputs::SHOW_SPOUT_MAIN_COMPOSITION_ID;
+                vec![background, foreground]
+            }
+            ShowSpoutResetFixtureKind::Absent => Vec::new(),
+            ShowSpoutResetFixtureKind::Partial => vec![v2.background.clone()],
+            ShowSpoutResetFixtureKind::ThirdSender => vec![
+                v2.background.clone(),
+                v2.foreground.clone(),
+                show_spout_reset_fixture_output(99, "Unrelated Spout Sender", 1),
+            ],
+            ShowSpoutResetFixtureKind::Malformed => {
+                let mut malformed = v2.background.clone();
+                malformed.width = 1280;
+                vec![malformed, v2.foreground.clone()]
+            }
+        };
+        let mut snapshot = state.engine.snapshot();
+        snapshot.authored_video = None;
+        let main_output_ids = outputs
+            .iter()
+            .filter(|output| {
+                output.composition_id == show_spout_outputs::SHOW_SPOUT_MAIN_COMPOSITION_ID
+            })
+            .map(|output| output.id)
+            .collect::<Vec<_>>();
+        let foreground_output_ids = outputs
+            .iter()
+            .filter(|output| output.composition_id == 2)
+            .map(|output| output.id)
+            .collect::<Vec<_>>();
+        let background_output_ids = outputs
+            .iter()
+            .filter(|output| output.composition_id == 3)
+            .map(|output| output.id)
+            .collect::<Vec<_>>();
+        snapshot.video.compositions = vec![
+            CompositionSummary {
+                id: show_spout_outputs::SHOW_SPOUT_MAIN_COMPOSITION_ID,
+                label: show_spout_outputs::SHOW_SPOUT_MAIN_COMPOSITION_LABEL.to_string(),
+                layer_ids: Vec::new(),
+                timeline_layer_ids: Vec::new(),
+                output_ids: main_output_ids,
+            },
+            CompositionSummary {
+                id: 2,
+                label: show_spout_outputs::SHOW_SPOUT_FOREGROUND_COMPOSITION_LABEL.to_string(),
+                layer_ids: Vec::new(),
+                timeline_layer_ids: Vec::new(),
+                output_ids: foreground_output_ids,
+            },
+            CompositionSummary {
+                id: 3,
+                label: show_spout_outputs::SHOW_SPOUT_BACKGROUND_COMPOSITION_LABEL.to_string(),
+                layer_ids: Vec::new(),
+                timeline_layer_ids: Vec::new(),
+                output_ids: background_output_ids,
+            },
+        ];
+        snapshot.video.outputs = outputs;
+        state
+            .engine
+            .load_project_snapshot_and_wait(snapshot)
+            .expect("show Spout reset fixture must publish before its fence");
+        let mut coordinator =
+            lock_project_coordinator(state).expect("show Spout reset fixture coordinator lock");
+        reconcile_project_checkpoint_for_coordinator(state, &mut coordinator)
+            .expect("show Spout reset fixture checkpoint reconcile");
+    }
+
+    #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+    fn show_spout_reset_authority(
+        state: &AppState,
+    ) -> (ControlPlaneQueryState, OutputControlFenceV1, String, u64) {
+        let process_incarnation = state
+            .output_lease_registry
+            .lock()
+            .expect("show Spout reset output-lease registry")
+            .process_session_incarnation();
+        let query_state = ControlPlaneQueryState::for_process_incarnation(process_incarnation)
+            .expect("show Spout reset query state");
+        let fence = query_state
+            .issue_output_control_fence_for_window("media-asset-a6", state)
+            .expect("show Spout reset fence");
+        let owner = state
+            .project_transaction_owners
+            .lock()
+            .expect("show Spout reset owner registry")
+            .get("media-asset-a6")
+            .cloned()
+            .expect("show Spout reset fixture owner");
+        let incarnation = state
+            .project_transaction_owner_incarnations
+            .lock()
+            .expect("show Spout reset owner-incarnation registry")
+            .get("media-asset-a6")
+            .copied()
+            .expect("show Spout reset fixture owner incarnation");
+        (query_state, fence, owner, incarnation)
+    }
+
+    #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+    fn show_spout_reset_signature(state: &AppState) -> (EngineSnapshot, u64, String, u64) {
+        let snapshot = project_snapshot_for_save(
+            state
+                .engine
+                .persistence_snapshot()
+                .expect("show Spout reset persistence signature"),
+        );
+        let coordinator =
+            lock_project_coordinator(state).expect("show Spout reset signature coordinator lock");
+        (
+            snapshot,
+            coordinator.revision,
+            coordinator.checkpoint_hash.clone(),
+            coordinator.publication_generation,
+        )
+    }
+
+    #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+    fn show_spout_reset_request(
+        fence: OutputControlFenceV1,
+        request_id: u64,
+    ) -> OutputControlCommandRequestV2 {
+        let request = OutputControlCommandRequestV2 {
+            operation_id:
+                protocol::control_plane_command::OUTPUT_SHOW_SPOUT_OUTPUTS_RESET_OPERATION_ID
+                    .to_string(),
+            request_id,
+            expected_fence: fence,
+            action: protocol::control_plane_command::OutputControlActionV2::ResetShowSpoutOutputs {},
+        };
+        request
+            .validate()
+            .expect("payloadless show Spout Reset request must validate");
+        request
+    }
+
+    #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+    #[test]
+    fn production_show_spout_reset_inactive_legacy_removes_only_the_exact_pair_and_advances_checkpoint(
+    ) {
+        let harness = MediaAssetA6CommandHarness::new();
+        install_show_spout_reset_fixture(&harness.state, ShowSpoutResetFixtureKind::LegacyV1);
+        assert!(harness
+            .state
+            .show_spout_transport
+            .lock()
+            .expect("inactive show Spout transport")
+            .take_active_for_authority_change()
+            .expect("inactive transport must not report a physical failure")
+            .is_none());
+        let (query_state, fence, owner, incarnation) = show_spout_reset_authority(&harness.state);
+        let before = show_spout_reset_signature(&harness.state);
+
+        let (applied, fence_after) = reset_show_spout_outputs_without_output_lease(
+            &harness.state,
+            &fence,
+            &owner,
+            "media-asset-a6",
+            incarnation,
+        )
+        .expect("exact inactive legacy reset succeeds without a physical pair");
+
+        assert!(applied);
+        let after = show_spout_reset_signature(&harness.state);
+        assert!(
+            after.0.video.outputs.is_empty(),
+            "only the recognized legacy pair is removed"
+        );
+        assert!(after.0.video.compositions.iter().any(|composition| {
+            composition.label == show_spout_outputs::SHOW_SPOUT_BACKGROUND_COMPOSITION_LABEL
+        }));
+        assert!(after.0.video.compositions.iter().any(|composition| {
+            composition.label == show_spout_outputs::SHOW_SPOUT_FOREGROUND_COMPOSITION_LABEL
+        }));
+        assert_eq!(after.1, before.1.saturating_add(1));
+        assert_eq!(after.3, before.3.saturating_add(1));
+        assert_ne!(fence_after, fence);
+        assert_eq!(fence_after.project_revision, after.1);
+        assert_eq!(fence_after.project_checkpoint_hash, after.2);
+        assert!(query_state
+            .validate_output_control_fence_window("media-asset-a6", &fence, incarnation)
+            .is_ok());
+    }
+
+    #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+    #[test]
+    fn production_show_spout_reset_active_sequence_stops_both_before_exact_engine_retirement() {
+        let harness = MediaAssetA6CommandHarness::new();
+        install_show_spout_reset_fixture(&harness.state, ShowSpoutResetFixtureKind::CurrentV2);
+        let (_, fence, owner, incarnation) = show_spout_reset_authority(&harness.state);
+        let events = Arc::new(Mutex::new(Vec::<&'static str>::new()));
+        let events_for_retirement = Arc::clone(&events);
+
+        let (applied, _) = reset_show_spout_outputs_without_output_lease_with_physical_retirement(
+            &harness.state,
+            &fence,
+            &owner,
+            "media-asset-a6",
+            incarnation,
+            move |state| {
+                events_for_retirement
+                    .lock()
+                    .unwrap()
+                    .push("background.stop_join");
+                events_for_retirement
+                    .lock()
+                    .unwrap()
+                    .push("foreground.stop_join");
+                let snapshot = state.engine.snapshot();
+                let show_spout_outputs::ShowSpoutResetCandidate::CurrentV2(pair) =
+                    show_spout_outputs::classify_show_spout_reset_candidate(
+                        &snapshot.video.outputs,
+                        &snapshot.video.compositions,
+                    )
+                    .expect("active fixture remains exact until both senders stop")
+                else {
+                    panic!("active sequence must begin from the exact V2 pair");
+                };
+                state
+                    .engine
+                    .retire_show_spout_outputs_after_authority_loss_published(
+                        pair.background,
+                        pair.foreground,
+                        Instant::now() + Duration::from_secs(2),
+                    )
+                    .expect("the production authority-loss exact engine retirement follows both simulated joins");
+                events_for_retirement.lock().unwrap().push("engine.retire");
+                Ok(())
+            },
+        )
+        .expect("active Reset succeeds only after physical retirement and exact engine acknowledgement");
+
+        assert!(applied);
+        assert_eq!(
+            *events.lock().unwrap(),
+            vec![
+                "background.stop_join",
+                "foreground.stop_join",
+                "engine.retire"
+            ]
+        );
+        assert!(harness
+            .state
+            .engine
+            .snapshot()
+            .video
+            .outputs
+            .iter()
+            .all(|output| output.kind != VideoOutputKind::SpoutSender));
+    }
+
+    #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+    #[test]
+    fn production_show_spout_reset_absent_is_noop_and_invalid_graphs_never_reach_physical_or_engine_mutation(
+    ) {
+        let absent = MediaAssetA6CommandHarness::new();
+        install_show_spout_reset_fixture(&absent.state, ShowSpoutResetFixtureKind::Absent);
+        let (_, absent_fence, absent_owner, absent_incarnation) =
+            show_spout_reset_authority(&absent.state);
+        let absent_before = show_spout_reset_signature(&absent.state);
+        let (applied, fence_after) = reset_show_spout_outputs_without_output_lease(
+            &absent.state,
+            &absent_fence,
+            &absent_owner,
+            "media-asset-a6",
+            absent_incarnation,
+        )
+        .expect("absent pair is an explicit no-op");
+        assert!(!applied);
+        assert_eq!(fence_after, absent_fence);
+        assert_eq!(show_spout_reset_signature(&absent.state), absent_before);
+
+        for kind in [
+            ShowSpoutResetFixtureKind::Partial,
+            ShowSpoutResetFixtureKind::ThirdSender,
+            ShowSpoutResetFixtureKind::Malformed,
+        ] {
+            let harness = MediaAssetA6CommandHarness::new();
+            install_show_spout_reset_fixture(&harness.state, kind);
+            let (_, fence, owner, incarnation) = show_spout_reset_authority(&harness.state);
+            let before = show_spout_reset_signature(&harness.state);
+            let physical_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let calls_for_retirement = Arc::clone(&physical_calls);
+            let error = reset_show_spout_outputs_without_output_lease_with_physical_retirement(
+                &harness.state,
+                &fence,
+                &owner,
+                "media-asset-a6",
+                incarnation,
+                move |_| {
+                    calls_for_retirement.fetch_add(1, Ordering::SeqCst);
+                    Ok(())
+                },
+            )
+            .expect_err("partial, third, and malformed pairs must fail before physical retirement");
+            assert!(error.contains("exact recognized pair"), "{error}");
+            assert_eq!(physical_calls.load(Ordering::SeqCst), 0);
+            assert_eq!(show_spout_reset_signature(&harness.state), before);
+        }
+    }
+
+    #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+    #[test]
+    fn production_show_spout_reset_physical_retirement_failure_leaves_authored_pair_unchanged() {
+        let harness = MediaAssetA6CommandHarness::new();
+        install_show_spout_reset_fixture(&harness.state, ShowSpoutResetFixtureKind::CurrentV2);
+        let (_, fence, owner, incarnation) = show_spout_reset_authority(&harness.state);
+        let before = show_spout_reset_signature(&harness.state);
+        let error = reset_show_spout_outputs_without_output_lease_with_physical_retirement(
+            &harness.state,
+            &fence,
+            &owner,
+            "media-asset-a6",
+            incarnation,
+            |_| Err("injected physical teardown remains unresolved".to_string()),
+        )
+        .expect_err("failed physical teardown may not retire authored outputs");
+        assert!(error.contains("unresolved"));
+        assert_eq!(show_spout_reset_signature(&harness.state), before);
+    }
+
+    #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+    #[test]
+    fn production_reset_runtime_confirmation_no_and_owner_change_are_terminal_before_authored_reset(
+    ) {
+        let denied = MediaAssetA6CommandHarness::new();
+        install_show_spout_reset_fixture(&denied.state, ShowSpoutResetFixtureKind::CurrentV2);
+        let (denied_query, denied_fence, _, _) = show_spout_reset_authority(&denied.state);
+        let denied_before = show_spout_reset_signature(&denied.state);
+        let denied_response =
+            control_plane_runtime::execute_show_spout_reset_without_lease_control_for_test(
+                &denied.state,
+                &denied_query,
+                "media-asset-a6",
+                show_spout_reset_request(denied_fence, 990_001),
+                |_| false,
+            );
+        assert!(matches!(
+            denied_response,
+            OutputControlResponseV2::Rejected(
+                protocol::control_plane_command::OutputControlRejectionV2 {
+                    error: protocol::control_plane_command::OutputControlErrorCodeV2::Forbidden,
+                    ..
+                }
+            )
+        ));
+        assert_eq!(show_spout_reset_signature(&denied.state), denied_before);
+
+        let owner_race = MediaAssetA6CommandHarness::new();
+        install_show_spout_reset_fixture(&owner_race.state, ShowSpoutResetFixtureKind::CurrentV2);
+        let (race_query, race_fence, _, _) = show_spout_reset_authority(&owner_race.state);
+        let race_before = show_spout_reset_signature(&owner_race.state);
+        let state_for_confirmation = Arc::clone(&owner_race.state);
+        let race_response =
+            control_plane_runtime::execute_show_spout_reset_without_lease_control_for_test(
+                &owner_race.state,
+                &race_query,
+                "media-asset-a6",
+                show_spout_reset_request(race_fence, 990_002),
+                move |_| {
+                    register_project_transaction_owner_for_window_label(
+                        &state_for_confirmation,
+                        "media-asset-a6",
+                        "show-spout-reset-race-owner".to_string(),
+                    )
+                    .expect("owner change during native confirmation");
+                    true
+                },
+            );
+        assert!(matches!(
+            race_response,
+            OutputControlResponseV2::Rejected(
+                protocol::control_plane_command::OutputControlRejectionV2 {
+                    error: protocol::control_plane_command::OutputControlErrorCodeV2::Forbidden,
+                    ..
+                }
+            )
+        ));
+        assert_eq!(show_spout_reset_signature(&owner_race.state), race_before);
     }
 
     fn durable_output_lease_acquire_request_in_domain(
@@ -91310,7 +92617,7 @@ pub(crate) mod tests {
                     == Some(control_plane::TauriRouteAdmissionClass::RuntimeMutation)
             })
             .collect::<Vec<_>>();
-        assert_eq!(runtime_routes.len(), 157);
+        assert_eq!(runtime_routes.len(), 158);
         assert_eq!(
             OUTER_FENCED_SYNC_PROJECT_RUNTIME_ROUTES.len()
                 + PREFLIGHT_ONLY_NONPROJECT_OR_INNER_RUNTIME_ROUTES.len(),
@@ -126840,6 +128147,24 @@ fn main() {
                 *configured_directory = Some(directory);
             }
             let state = app.state::<AppState>();
+            // The serial worker can fault without an IPC request. Forward its
+            // monotonic engine revision to the frontend immediately; the UI
+            // treats the event as an invalidate-to-Unknown fence and rereads
+            // both native status endpoints before enabling any action.
+            let serial_dmx_status_event_app = app.handle().clone();
+            state
+                .engine
+                .set_show_serial_dmx_safety_blackout_route_status_observer(Some(Arc::new(
+                    move |snapshot| {
+                        let _ = serial_dmx_status_event_app.emit(
+                            show_serial_dmx_route::SHOW_SERIAL_DMX_ROUTE_STATUS_EVENT,
+                            show_serial_dmx_route::route_status_event(snapshot),
+                        );
+                    },
+                )))
+                .map_err(|error| {
+                    format!("Unable to install USB-DMX route status event observer: {error}")
+                })?;
             // DJ Link machine authority is intentionally separate from every
             // project.  Startup restores only the non-secret binding and its
             // Credential Manager token; it never opens a project or changes
@@ -126979,6 +128304,9 @@ fn main() {
             authored_control_plane: authored_control_plane::AuthoredControlPlaneState::default(),
             runtime_control_plane: control_plane_runtime::RuntimeControlPlaneState::default(),
             output_lease_registry: Mutex::new(output_lease_registry),
+            output_lease_keepalive: Arc::new(
+                output_lease_keepalive_runtime::OutputLeaseKeepaliveRuntime::default(),
+            ),
             output_lease_durable_receipts: Mutex::new(OutputLeaseDurableReceiptJournal::in_memory()),
             application_update_publication_claim: Mutex::new(None),
             project_publication_reconcile_claim: Mutex::new(None),
@@ -127092,6 +128420,18 @@ fn main() {
         .on_window_event(|window, event| {
             if matches!(event, tauri::WindowEvent::Destroyed) {
                 let state = window.state::<AppState>();
+                if let Err(error) = output_lease_keepalive_integration::execute_window_destroyed_boundary(
+                    &window.app_handle(),
+                    &state,
+                    window.label(),
+                ) {
+                    eprintln!("Destroyed window managed output boundary was fail-closed: {error}");
+                    // Do not let generic owner retirement orphan/rewrite the
+                    // exact managed lease after a physical all-deny or exact
+                    // release failure. The retained Faulted manager state is
+                    // the sole visible recovery authority.
+                    return;
+                }
                 if let Err(error) = handle_destroyed_window_authority_retirement(
                     &state,
                     &window.state::<ControlPlaneQueryState>(),
@@ -127227,6 +128567,9 @@ fn main() {
             list_midi_inputs,
             list_midi_outputs,
             list_serial_ports,
+            get_serial_dmx_machine_binding_status_v1,
+            select_serial_dmx_machine_binding_v1,
+            get_show_serial_dmx_safety_blackout_route_status_v1,
             connect_midi_clock,
             disconnect_midi_clock,
             connect_midi_control,
@@ -127512,9 +128855,12 @@ fn main() {
             release_blackout_output_control_v2,
             arm_output_control_v2,
             enable_show_art_net_loopback_route_v1,
+            enable_show_serial_dmx_safety_blackout_route_v1,
+            stop_show_serial_dmx_safety_blackout_route_v1,
             send_dsf2026_artnet_acceptance_probe_v1,
             acknowledge_dsf2026_artnet_acceptance_probe_in_doubt_v1,
-            enable_show_spout_outputs_v1,
+            enable_show_spout_outputs_v2,
+            reset_show_spout_outputs_v1,
             enable_output_control_v2,
             take_over_output_control_v2,
             add_display_output_v2,
@@ -127646,6 +128992,21 @@ fn main() {
         .build(tauri::generate_context!())
         .expect("error while building Syndocal")
         .run(|app_handle, event| {
+            if let tauri::RunEvent::ExitRequested { api, .. } = &event {
+                // Exit is an authority boundary, not a best-effort process
+                // cleanup.  Keep the process alive if the canonical all-deny
+                // sequence could not reach its exact release/supersession.
+                let state = app_handle.state::<AppState>();
+                if let Err(error) = output_lease_keepalive_integration::execute_current_boundary(
+                    app_handle,
+                    &state,
+                    output_lease::output_lease_keepalive::OutputLeaseKeepaliveBoundary::SessionIdentityChanged,
+                    "Managed output lease process exit",
+                ) {
+                    eprintln!("Process exit was blocked by managed output boundary: {error}");
+                    api.prevent_exit();
+                }
+            }
             #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "android")))]
             {
                 let _ = app_handle;

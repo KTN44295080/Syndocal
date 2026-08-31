@@ -19,7 +19,17 @@ const fence = {
 };
 
 const controllerSource = await read("src/outputControlController.ts");
+const canonicalShowArtNetActionKind = "enable_show_art_net_loopback_route";
+const canonicalShowSerialDmxEnableActionKind = "enable_show_serial_dmx_safety_blackout_route";
+const canonicalShowSerialDmxStopActionKind = "stop_show_serial_dmx_safety_blackout_route";
+const retiredShowArtNetActionKind = "enable_show_art" + "net_loopback_route";
 const protocolCommandSource = await read("../crates/protocol/src/control_plane_command.rs");
+const protocolCommandTestModuleOffset = protocolCommandSource.indexOf("#[cfg(test)]");
+assert.notEqual(protocolCommandTestModuleOffset, -1, "protocol test boundary must remain explicit");
+const protocolCommandProductionSource = protocolCommandSource.slice(
+  0,
+  protocolCommandTestModuleOffset,
+);
 const runtime = await import(`data:text/javascript;base64,${Buffer.from(ts.transpileModule(
   controllerSource,
   {
@@ -32,19 +42,45 @@ const runtime = await import(`data:text/javascript;base64,${Buffer.from(ts.trans
   },
 ).outputText).toString("base64")}`);
 
+assert.match(
+  controllerSource,
+  /kind: "enable_show_art_net_loopback_route"/,
+  "the Art-Net show route action must use the canonical serde discriminant",
+);
+assert.doesNotMatch(
+  controllerSource,
+  new RegExp(`kind:\\s*[\"']${retiredShowArtNetActionKind}[\"']`),
+  "the retired Art-Net show route action discriminant must be absent from the controller",
+);
+assert.match(
+  controllerSource,
+  /kind: "enable_show_serial_dmx_safety_blackout_route"/,
+  "the USB-DMX start action must use its canonical serde discriminant",
+);
+assert.match(
+  controllerSource,
+  /kind: "stop_show_serial_dmx_safety_blackout_route"/,
+  "the USB-DMX stop action must use its canonical serde discriminant",
+);
+
 const resourcesFor = (action) => action.kind === "enable_output" || action.role === "both"
   || action.kind === "add_display" || action.kind === "assign_video_output_composition"
-  || action.kind === "enable_show_artnet_loopback_route" || action.kind === "send_dsf2026_artnet_acceptance_probe"
+  || action.kind === canonicalShowArtNetActionKind || action.kind === "send_dsf2026_artnet_acceptance_probe"
+  || action.kind === canonicalShowSerialDmxEnableActionKind
+  || action.kind === canonicalShowSerialDmxStopActionKind
   || action.kind === "acknowledge_dsf2026_artnet_acceptance_probe_in_doubt"
   || action.kind === "enable_show_spout_outputs"
   ? ["lighting", "video"] : action.role === "lighting" ? ["lighting"] : ["video"];
 const operationFor = (action) => ({
   enable_output: runtime.OUTPUT_ENABLE_OPERATION_ID,
-  enable_show_artnet_loopback_route: runtime.OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID,
+  [canonicalShowArtNetActionKind]: runtime.OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID,
+  [canonicalShowSerialDmxEnableActionKind]: runtime.OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_ENABLE_OPERATION_ID,
+  [canonicalShowSerialDmxStopActionKind]: runtime.OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_STOP_OPERATION_ID,
   send_dsf2026_artnet_acceptance_probe: runtime.OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_OPERATION_ID,
   acknowledge_dsf2026_artnet_acceptance_probe_in_doubt:
     runtime.OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_RECONCILE_OPERATION_ID,
   enable_show_spout_outputs: runtime.OUTPUT_SHOW_SPOUT_OUTPUTS_ENABLE_OPERATION_ID,
+  reset_show_spout_outputs: runtime.OUTPUT_SHOW_SPOUT_OUTPUTS_RESET_OPERATION_ID,
   arm: runtime.OUTPUT_OWNERSHIP_ARM_OPERATION_ID,
   release_blackout: runtime.OUTPUT_BLACKOUT_RELEASE_OPERATION_ID,
   take_over_standby: runtime.OUTPUT_STANDBY_TAKEOVER_OPERATION_ID,
@@ -58,11 +94,14 @@ const operationFor = (action) => ({
 })[action.kind];
 const commandFor = (action) => ({
   enable_output: "enable_output_control_v2",
-  enable_show_artnet_loopback_route: "enable_show_art_net_loopback_route_v1",
+  [canonicalShowArtNetActionKind]: "enable_show_art_net_loopback_route_v1",
+  [canonicalShowSerialDmxEnableActionKind]: "enable_show_serial_dmx_safety_blackout_route_v1",
+  [canonicalShowSerialDmxStopActionKind]: "stop_show_serial_dmx_safety_blackout_route_v1",
   send_dsf2026_artnet_acceptance_probe: "send_dsf2026_artnet_acceptance_probe_v1",
   acknowledge_dsf2026_artnet_acceptance_probe_in_doubt:
     "acknowledge_dsf2026_artnet_acceptance_probe_in_doubt_v1",
-  enable_show_spout_outputs: "enable_show_spout_outputs_v1",
+  enable_show_spout_outputs: "enable_show_spout_outputs_v2",
+  reset_show_spout_outputs: "reset_show_spout_outputs_v1",
   arm: "arm_output_control_v2",
   release_blackout: "release_blackout_output_control_v2",
   take_over_standby: "take_over_output_control_v2",
@@ -76,7 +115,9 @@ const commandFor = (action) => ({
 })[action.kind];
 
 const enableAction = { kind: "enable_output" };
-const showArtNetLoopbackRouteAction = { kind: "enable_show_artnet_loopback_route", lease: lease() };
+const showArtNetLoopbackRouteAction = { kind: canonicalShowArtNetActionKind, lease: lease() };
+const showSerialDmxEnableAction = { kind: canonicalShowSerialDmxEnableActionKind, lease: lease() };
+const showSerialDmxStopAction = { kind: canonicalShowSerialDmxStopActionKind, lease: lease() };
 const dsf2026ArtNetAcceptanceProbeAction = { kind: "send_dsf2026_artnet_acceptance_probe", lease: lease() };
 const dsf2026ArtNetAcceptanceProbeWireFixture = Object.freeze({
   kind: "send_dsf2026_artnet_acceptance_probe",
@@ -129,6 +170,7 @@ await assert.rejects(
   "unknown durable probe status fields must fail closed",
 );
 const showSpoutOutputsAction = { kind: "enable_show_spout_outputs", lease: lease() };
+const showSpoutResetAction = Object.freeze({ kind: "reset_show_spout_outputs" });
 const ordinaryActions = [
   { kind: "arm", role: "lighting", lease: lease() },
   { kind: "release_blackout", lease: lease() },
@@ -158,6 +200,8 @@ const ordinaryActions = [
     lease: lease(),
   },
   showArtNetLoopbackRouteAction,
+  showSerialDmxEnableAction,
+  showSerialDmxStopAction,
   dsf2026ArtNetAcceptanceProbeAction,
   dsf2026ArtNetAcceptanceProbeReconcileAction,
   showSpoutOutputsAction,
@@ -191,6 +235,27 @@ const queryFor = (action, state = "active") => {
 };
 
 const receiptFor = (request, action, enableRecovery = false, enableRecoveryGenerationDelta = 1) => {
+  if (action.kind === "reset_show_spout_outputs") {
+    return {
+      type: "receipt",
+      receipt: {
+        operation_id: request.operation_id,
+        request_id: request.request_id,
+        shape_sha256: hash("a"),
+        argument_fingerprint: hash("b"),
+        audit_sequence: 1,
+        fence_before: structuredClone(request.expected_fence),
+        fence_after: {
+          ...structuredClone(request.expected_fence),
+          project_revision: request.expected_fence.project_revision + 1,
+          project_checkpoint_hash: hash("d"),
+          project_publication_generation: request.expected_fence.project_publication_generation + 1,
+        },
+        outcome: "applied",
+        lease_result: null,
+      },
+    };
+  }
   const recoveringEnable = action.kind === "enable_output" && enableRecovery;
   const resources = action.kind === "acquire_lease" || action.kind === "enable_output"
     ? resourcesFor(action)
@@ -208,7 +273,9 @@ const receiptFor = (request, action, enableRecovery = false, enableRecoveryGener
   const outcome = ({
     arm: "authorized", release_blackout: "authorized", take_over_standby: "authorized",
     add_display: "authorized", assign_video_output_composition: "authorized",
-    enable_show_artnet_loopback_route: "authorized",
+    [canonicalShowArtNetActionKind]: "authorized",
+    [canonicalShowSerialDmxEnableActionKind]: "authorized",
+    [canonicalShowSerialDmxStopActionKind]: "authorized",
     send_dsf2026_artnet_acceptance_probe: "authorized",
     acknowledge_dsf2026_artnet_acceptance_probe_in_doubt: "authorized",
     enable_show_spout_outputs: "authorized",
@@ -216,6 +283,7 @@ const receiptFor = (request, action, enableRecovery = false, enableRecoveryGener
     renew_lease: "renewed", recover_lease: "recovered", relinquish_output_lease: "relinquished",
     force_transfer_lease: "transferred",
   })[action.kind];
+  const persistedArtNetMutation = action.kind === canonicalShowArtNetActionKind;
   return {
     type: "receipt",
     receipt: {
@@ -225,8 +293,15 @@ const receiptFor = (request, action, enableRecovery = false, enableRecoveryGener
       argument_fingerprint: hash("b"),
       audit_sequence: 1,
       fence_before: structuredClone(request.expected_fence),
-      fence_after: structuredClone(request.expected_fence),
-      outcome: action.kind === "send_dsf2026_artnet_acceptance_probe"
+      fence_after: persistedArtNetMutation ? {
+        ...structuredClone(request.expected_fence),
+        project_revision: request.expected_fence.project_revision + 1,
+        project_checkpoint_hash: hash("e"),
+        project_publication_generation: request.expected_fence.project_publication_generation + 1,
+      } : structuredClone(request.expected_fence),
+      outcome: persistedArtNetMutation || action.kind === canonicalShowSerialDmxEnableActionKind
+        || action.kind === canonicalShowSerialDmxStopActionKind
+        || action.kind === "send_dsf2026_artnet_acceptance_probe"
         || action.kind === "acknowledge_dsf2026_artnet_acceptance_probe_in_doubt"
         ? "applied" : "no_op",
       lease_result: {
@@ -250,7 +325,7 @@ const receiptFor = (request, action, enableRecovery = false, enableRecoveryGener
   };
 };
 
-const createHarness = ({ action, queryState, authorityFence = fence, loseFirstReply = false, typedRejection = false, enableRecovery = false, enableRecoveryGenerationDelta = 1 } = {}) => {
+const createHarness = ({ action, queryState, authorityFence = fence, loseFirstReply = false, typedRejection = false, enableRecovery = false, enableRecoveryGenerationDelta = 1, receiptTransform } = {}) => {
   const operationId = operationFor(action);
   const command = commandFor(action);
   const calls = [];
@@ -282,7 +357,8 @@ const createHarness = ({ action, queryState, authorityFence = fence, loseFirstRe
       type: "rejected",
       rejection: { operation_id: operationId, request_id: args.request.request_id, error: "forbidden" },
     };
-    return receiptFor(args.request, action, enableRecovery, enableRecoveryGenerationDelta);
+    const receipt = receiptFor(args.request, action, enableRecovery, enableRecoveryGenerationDelta);
+    return receiptTransform ? receiptTransform(receipt) : receipt;
   };
   return { invoke, calls, executeArgs, get executeCalls() { return executeCalls; } };
 };
@@ -294,7 +370,9 @@ for (const action of [enableAction, ...ordinaryActions, ...lifecycleActions]) {
     : action.kind === "enable_output" || action.kind === "arm" || action.kind === "release_blackout"
       || action.kind === "take_over_standby" || action.kind === "add_display"
       || action.kind === "assign_video_output_composition"
-      || action.kind === "enable_show_artnet_loopback_route"
+      || action.kind === canonicalShowArtNetActionKind
+      || action.kind === canonicalShowSerialDmxEnableActionKind
+      || action.kind === canonicalShowSerialDmxStopActionKind
       || action.kind === "send_dsf2026_artnet_acceptance_probe"
       || action.kind === "acknowledge_dsf2026_artnet_acceptance_probe_in_doubt"
       || action.kind === "enable_show_spout_outputs"
@@ -307,11 +385,104 @@ for (const action of [enableAction, ...ordinaryActions, ...lifecycleActions]) {
 const showArtNetLoopbackHarness = createHarness({ action: showArtNetLoopbackRouteAction, queryState: "active" });
 const showArtNetLoopbackReceipt = await runtime.executeOutputControl(showArtNetLoopbackHarness.invoke, showArtNetLoopbackRouteAction);
 assert.equal(showArtNetLoopbackReceipt.operation_id, runtime.OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID);
+assert.equal(
+  showArtNetLoopbackHarness.executeArgs[0].request.action.kind,
+  canonicalShowArtNetActionKind,
+  "the emitted Art-Net show route request must carry the canonical action kind",
+);
+assert.equal(
+  showArtNetLoopbackHarness.calls.find((call) => call.command === "enable_show_art_net_loopback_route_v1")?.command,
+  "enable_show_art_net_loopback_route_v1",
+  "the emitted Art-Net show route request must invoke the canonical Tauri command",
+);
 assert.deepEqual(
   Object.keys(showArtNetLoopbackHarness.executeArgs[0].request.action).sort(),
   ["kind", "lease"],
   "the show route action must not carry route/protocol/port fields",
 );
+assert.equal(showArtNetLoopbackReceipt.outcome, "applied");
+assert.equal(
+  showArtNetLoopbackReceipt.fence_after.project_revision,
+  showArtNetLoopbackReceipt.fence_before.project_revision + 1,
+  "enabling the authored Art-Net route must return its committed project revision",
+);
+assert.notEqual(
+  showArtNetLoopbackReceipt.fence_after.project_checkpoint_hash,
+  showArtNetLoopbackReceipt.fence_before.project_checkpoint_hash,
+  "enabling the authored Art-Net route must return its committed project hash",
+);
+assert.equal(
+  showArtNetLoopbackReceipt.fence_after.project_publication_generation,
+  showArtNetLoopbackReceipt.fence_before.project_publication_generation + 1,
+  "enabling the authored Art-Net route must return its committed publication generation",
+);
+assert.equal(showArtNetLoopbackReceipt.fence_after.output_epoch, showArtNetLoopbackReceipt.fence_before.output_epoch);
+assert.equal(showArtNetLoopbackReceipt.fence_after.output_generation, showArtNetLoopbackReceipt.fence_before.output_generation);
+assert.equal(showArtNetLoopbackReceipt.fence_after.safety_blackout_epoch, showArtNetLoopbackReceipt.fence_before.safety_blackout_epoch);
+assert.equal(showArtNetLoopbackReceipt.fence_after.safety_blackout_generation, showArtNetLoopbackReceipt.fence_before.safety_blackout_generation);
+
+for (const [name, mutate] of [
+  ["unchanged project fence", (receipt) => { receipt.receipt.fence_after = structuredClone(receipt.receipt.fence_before); }],
+  ["skipped project revision", (receipt) => { receipt.receipt.fence_after.project_revision += 1; }],
+  ["unchanged project hash", (receipt) => { receipt.receipt.fence_after.project_checkpoint_hash = receipt.receipt.fence_before.project_checkpoint_hash; }],
+  ["mutated output generation", (receipt) => { receipt.receipt.fence_after.output_generation += 1; }],
+]) {
+  const harness = createHarness({
+    action: showArtNetLoopbackRouteAction,
+    queryState: "active",
+    receiptTransform: (receipt) => {
+      mutate(receipt);
+      return receipt;
+    },
+  });
+  await assert.rejects(
+    runtime.executeOutputControl(harness.invoke, showArtNetLoopbackRouteAction),
+    /receipt was inconsistent; physical output state is unknown/,
+    `Art-Net receipt must reject ${name}`,
+  );
+}
+
+const concurrentS0Harness = createHarness({
+  action: showArtNetLoopbackRouteAction,
+  queryState: "active",
+  receiptTransform: (receipt) => {
+    receipt.receipt.fence_after.safety_blackout_generation += 1;
+    return receipt;
+  },
+});
+const concurrentS0Receipt = await runtime.executeOutputControl(
+  concurrentS0Harness.invoke,
+  showArtNetLoopbackRouteAction,
+);
+assert.equal(
+  concurrentS0Receipt.fence_after.safety_blackout_generation,
+  concurrentS0Receipt.fence_before.safety_blackout_generation + 1,
+  "an independently advanced priority S0 authority must remain reportable",
+);
+
+for (const [action, operationId, command] of [
+  [showSerialDmxEnableAction, runtime.OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_ENABLE_OPERATION_ID, "enable_show_serial_dmx_safety_blackout_route_v1"],
+  [showSerialDmxStopAction, runtime.OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_STOP_OPERATION_ID, "stop_show_serial_dmx_safety_blackout_route_v1"],
+]) {
+  const harness = createHarness({ action, queryState: "active" });
+  const receipt = await runtime.executeOutputControl(harness.invoke, action);
+  assert.equal(receipt.operation_id, operationId);
+  assert.equal(
+    harness.calls.find((call) => call.command === command)?.command,
+    command,
+    "the USB-DMX action must invoke only its fixed Tauri command",
+  );
+  assert.deepEqual(
+    Object.keys(harness.executeArgs[0].request.action).sort(),
+    ["kind", "lease"],
+    "USB-DMX actions must never carry COM/PnP/protocol/channel/frame data",
+  );
+  assert.deepEqual(
+    receipt.fence_before,
+    receipt.fence_after,
+    "USB-DMX route start/stop must not mutate project or output-control fences",
+  );
+}
 
 const showSpoutOutputsHarness = createHarness({ action: showSpoutOutputsAction, queryState: "active" });
 const showSpoutOutputsReceipt = await runtime.executeOutputControl(showSpoutOutputsHarness.invoke, showSpoutOutputsAction);
@@ -320,6 +491,29 @@ assert.deepEqual(
   Object.keys(showSpoutOutputsHarness.executeArgs[0].request.action).sort(),
   ["kind", "lease"],
   "the strict show Spout action must not carry names, dimensions, or generic route fields",
+);
+
+const showSpoutResetHarness = createHarness({ action: showSpoutResetAction });
+const showSpoutResetReceipt = await runtime.executeOutputControl(
+  showSpoutResetHarness.invoke,
+  showSpoutResetAction,
+);
+assert.equal(showSpoutResetReceipt.operation_id, runtime.OUTPUT_SHOW_SPOUT_OUTPUTS_RESET_OPERATION_ID);
+assert.equal(showSpoutResetReceipt.lease_result, null);
+assert.notDeepEqual(
+  showSpoutResetReceipt.fence_before,
+  showSpoutResetReceipt.fence_after,
+  "a reset that retires authored outputs must advance its project/output fence",
+);
+assert.deepEqual(
+  Object.keys(showSpoutResetHarness.executeArgs[0].request.action),
+  ["kind"],
+  "the reset action must be payloadless and may not carry a lease or a target",
+);
+assert.equal(
+  showSpoutResetHarness.calls.some((call) => call.command === "query_output_lease_authority_v1"),
+  false,
+  "reset must remain usable from Standby without an active output lease",
 );
 
 const dsf2026ArtNetAcceptanceProbeHarness = createHarness({ action: dsf2026ArtNetAcceptanceProbeAction, queryState: "active" });
@@ -547,6 +741,7 @@ const rejectionHarness = createHarness({ action: ordinaryActions[0], typedReject
 await assert.rejects(runtime.executeOutputControl(rejectionHarness.invoke, ordinaryActions[0]), /refresh lease state/);
 assert.equal(rejectionHarness.executeCalls, 1);
 
+
 const exhaustedSource = controllerSource.replace(
   "let nextOutputControlRequestId = 1;",
   "let nextOutputControlRequestId = Number.MAX_SAFE_INTEGER + 1;",
@@ -571,6 +766,12 @@ const [
   runtimeSource,
   querySource,
   controlPlaneSource,
+  showSerialDmxRouteSource,
+  serialDmxStatusPollerSource,
+  serialDmxStatusValidationSource,
+  engineShowSerialDmxStatusSource,
+  engineSource,
+  engineShowSerialDmxTestsSource,
   registrySource,
 ] = await Promise.all([
   read("src/tauriInvokeCommands.ts"),
@@ -584,8 +785,46 @@ const [
   read("src-tauri/src/control_plane_runtime.rs"),
   read("src-tauri/src/control_plane_query.rs"),
   read("src-tauri/src/control_plane.rs"),
+  read("src-tauri/src/show_serial_dmx_route.rs"),
+  read("src/serialDmxStatusPoller.ts"),
+  read("src/serialDmxStatusValidation.ts"),
+  read("../crates/engine/src/show_serial_dmx_status.rs"),
+  read("../crates/engine/src/lib.rs"),
+  read("../crates/engine/src/show_serial_dmx_tests.rs"),
   read("../crates/protocol/src/control_plane_registry_v2.rs"),
 ]);
+const serialDmxStatusPollerRuntime = await import(`data:text/javascript;base64,${Buffer.from(ts.transpileModule(
+  serialDmxStatusPollerSource,
+  {
+    compilerOptions: {
+      module: ts.ModuleKind.ESNext,
+      target: ts.ScriptTarget.ES2022,
+      importsNotUsedAsValues: ts.ImportsNotUsedAsValues.Remove,
+    },
+    fileName: "serialDmxStatusPoller.ts",
+  },
+).outputText).toString("base64")}`);
+const serialDmxStatusValidationRuntime = await import(`data:text/javascript;base64,${Buffer.from(ts.transpileModule(
+  serialDmxStatusValidationSource,
+  {
+    compilerOptions: {
+      module: ts.ModuleKind.ESNext,
+      target: ts.ScriptTarget.ES2022,
+      importsNotUsedAsValues: ts.ImportsNotUsedAsValues.Remove,
+    },
+    fileName: "serialDmxStatusValidation.ts",
+  },
+).outputText).toString("base64")}`);
+assert.match(
+  outputDiagnosticsSource,
+  /kind: "enable_show_art_net_loopback_route"/,
+  "the diagnostics controller must emit the canonical Art-Net show route action",
+);
+assert.doesNotMatch(
+  outputDiagnosticsSource,
+  new RegExp(`kind:\\s*[\"']${retiredShowArtNetActionKind}[\"']`),
+  "the retired Art-Net show route action discriminant must be absent from diagnostics",
+);
 const commandBody = (source, commandName) => {
   const functionMarker = `fn ${commandName}(`;
   const functionStart = source.indexOf(functionMarker);
@@ -601,6 +840,11 @@ const requiredCommands = [
   "acknowledge_dsf2026_artnet_acceptance_probe_in_doubt_v1",
   "query_dsf2026_artnet_acceptance_probe_status_v1",
   "enable_show_art_net_loopback_route_v1",
+  "enable_show_serial_dmx_safety_blackout_route_v1",
+  "stop_show_serial_dmx_safety_blackout_route_v1",
+  "get_serial_dmx_machine_binding_status_v1",
+  "get_show_serial_dmx_safety_blackout_route_status_v1",
+  "select_serial_dmx_machine_binding_v1",
   "send_dsf2026_artnet_acceptance_probe_v1",
   "release_blackout_output_control_v2", "take_over_output_control_v2",
   "acquire_output_lease_v2", "force_transfer_output_lease_v2", "query_output_lease_authority_v1",
@@ -620,12 +864,14 @@ const canonicalOutputMutationWrappers = [
   "assign_video_output_composition_v2",
   "enable_output_control_v2",
   "enable_show_art_net_loopback_route_v1",
+  "enable_show_serial_dmx_safety_blackout_route_v1",
   "force_transfer_output_lease_v2",
   "recover_output_lease_v2",
   "release_blackout_output_control_v2",
   "relinquish_output_lease_v2",
   "renew_output_lease_v2",
   "send_dsf2026_artnet_acceptance_probe_v1",
+  "stop_show_serial_dmx_safety_blackout_route_v1",
   "take_over_output_control_v2",
 ];
 const outputControlWrappers = new Set([
@@ -635,7 +881,9 @@ const outputControlWrappers = new Set([
   "arm_output_control_v2",
   "enable_output_control_v2",
   "enable_show_art_net_loopback_route_v1",
+  "enable_show_serial_dmx_safety_blackout_route_v1",
   "send_dsf2026_artnet_acceptance_probe_v1",
+  "stop_show_serial_dmx_safety_blackout_route_v1",
   "release_blackout_output_control_v2",
   "take_over_output_control_v2",
 ]);
@@ -655,7 +903,7 @@ for (const command of legacyCommands) {
 }
 const detectedAsyncOutputMutationWrappers = [
   ...mainSource.matchAll(
-    /#\[tauri::command\]\r?\nasync fn ((?:[a-z0-9_]+_v2|enable_show_art_net_loopback_route_v1|send_dsf2026_artnet_acceptance_probe_v1|acknowledge_dsf2026_artnet_acceptance_probe_in_doubt_v1))\(/g,
+    /#\[tauri::command\]\r?\nasync fn ((?:[a-z0-9_]+_v2|enable_show_art_net_loopback_route_v1|enable_show_serial_dmx_safety_blackout_route_v1|stop_show_serial_dmx_safety_blackout_route_v1|send_dsf2026_artnet_acceptance_probe_v1|acknowledge_dsf2026_artnet_acceptance_probe_in_doubt_v1))\(/g,
   ),
 ].map((match) => match[1])
   .filter((command) => canonicalOutputMutationWrappers.includes(command))
@@ -670,7 +918,11 @@ for (const command of canonicalOutputMutationWrappers) {
   assert.notEqual(start, -1, `${command} must remain async`);
   const nextCommand = mainSource.indexOf("\n#[tauri::command]", start + 1);
   const body = mainSource.slice(start, nextCommand === -1 ? undefined : nextCommand);
-  const requiredHelper = outputControlWrappers.has(command)
+  const requiredHelper = command === "enable_show_serial_dmx_safety_blackout_route_v1"
+    ? "show_serial_dmx_route::enable_command"
+    : command === "stop_show_serial_dmx_safety_blackout_route_v1"
+      ? "show_serial_dmx_route::stop_command"
+      : outputControlWrappers.has(command)
     ? "execute_output_control_off_event_loop"
     : "execute_output_lease_lifecycle_off_event_loop";
   assert.match(
@@ -829,6 +1081,8 @@ for (const operationId of [
   "syndocal.output.display.add.v2",
   "syndocal.output.video.composition.assign.v2",
   "syndocal.output.show_artnet_loopback_route.enable.v1",
+  "syndocal.output.show_serial_dmx_s0_route.enable.v1",
+  "syndocal.output.show_serial_dmx_s0_route.stop.v1",
   "syndocal.output.dsf2026_artnet_acceptance_probe.send.v1",
   "syndocal.output.lease.acquire.v2",
   "syndocal.output.lease.renew.v2",
@@ -857,7 +1111,7 @@ assert.match(
   /MessageDialog::new\(\)[\s\S]*MessageButtons::YesNo[\s\S]*set_parent\(window\)[\s\S]*MessageDialogResult::Yes/,
   "advanced output mutations require a parented native Yes-only dialog",
 );
-for (const action of ["ReleaseBlackout", "Arm", "TakeOverStandby", "AddDisplay", "AssignVideoOutputComposition", "EnableShowArtNetLoopbackRoute", "SendDsf2026ArtNetAcceptanceProbe", "EnableShowSpoutOutputs", "ForceTransferLease"]) {
+for (const action of ["ReleaseBlackout", "Arm", "TakeOverStandby", "AddDisplay", "AssignVideoOutputComposition", "EnableShowArtNetLoopbackRoute", "EnableShowSerialDmxSafetyBlackoutRoute", "StopShowSerialDmxSafetyBlackoutRoute", "SendDsf2026ArtNetAcceptanceProbe", "AcknowledgeDsf2026ArtNetAcceptanceProbeInDoubt", "EnableShowSpoutOutputs", "ResetShowSpoutOutputs", "ForceTransferLease"]) {
   assert.match(nativeDangerConfirmation, new RegExp(`OutputControlActionV2::${action}`));
 }
 const outputExecution = runtimeSource.slice(
@@ -936,20 +1190,66 @@ assert.match(setupIoFixtureSource, /serial_port: ""/);
 assert.doesNotMatch(setupIoFixtureSource, /EnttecOpenDmx|serial_baud_rate: 250_000/,
   "the Setup I/O fixture must stage the exact Art-Net show route, not a retired serial route");
 assert.match(runtimeSource, /OutputControlActionV2::EnableOutput[\s\S]*enable_output_with_output_control_fence/);
-assert.match(runtimeSource, /OutputControlActionV2::EnableShowArtNetLoopbackRoute[\s\S]*enable_show_artnet_loopback_route_with_output_control_fence/);
+assert.match(
+  runtimeSource,
+  new RegExp(`OutputControlActionV2::EnableShowArtNetLoopbackRoute[\\s\\S]*${retiredShowArtNetActionKind}_with_output_control_fence`),
+);
+for (const [variant, routeHelper] of [
+  ["EnableShowSerialDmxSafetyBlackoutRoute", "show_serial_dmx_route::enable_with_output_control_fence"],
+  ["StopShowSerialDmxSafetyBlackoutRoute", "show_serial_dmx_route::stop_with_output_control_fence"],
+]) {
+  assert.match(
+    runtimeSource,
+    new RegExp(`OutputControlActionV2::${variant}[\\s\\S]*${routeHelper.replaceAll(".", "\\\\.")}`),
+    `the USB-DMX ${variant} action must reach its exact fenced route helper`,
+  );
+}
 assert.match(runtimeSource, /OutputControlActionV2::SendDsf2026ArtNetAcceptanceProbe[\s\S]*send_dsf2026_artnet_acceptance_probe_with_output_control_fence/);
 assert.match(runtimeSource, /OutputControlActionV2::AcknowledgeDsf2026ArtNetAcceptanceProbeInDoubt[\s\S]*acknowledge_dsf2026_artnet_acceptance_probe_in_doubt_with_output_control_fence/);
 assert.match(runtimeSource, /OutputControlActionV2::EnableShowSpoutOutputs[\s\S]*enable_show_spout_outputs_with_output_control_fence/);
+assert.match(runtimeSource, /OutputControlActionV2::ResetShowSpoutOutputs[\s\S]*reset_show_spout_outputs_without_output_lease/);
 assert.match(controlPlaneSource, /enable_output_control_v2/);
 assert.match(controlPlaneSource, /enable_show_art_net_loopback_route_v1/);
+assert.match(controlPlaneSource, /enable_show_serial_dmx_safety_blackout_route_v1/);
+assert.match(controlPlaneSource, /stop_show_serial_dmx_safety_blackout_route_v1/);
+assert.match(controlPlaneSource, /get_serial_dmx_machine_binding_status_v1/);
+assert.match(controlPlaneSource, /get_show_serial_dmx_safety_blackout_route_status_v1/);
+assert.match(controlPlaneSource, /select_serial_dmx_machine_binding_v1/);
 assert.match(controlPlaneSource, /send_dsf2026_artnet_acceptance_probe_v1/);
 assert.match(controlPlaneSource, /acknowledge_dsf2026_artnet_acceptance_probe_in_doubt_v1/);
 assert.match(controlPlaneSource, /query_dsf2026_artnet_acceptance_probe_status_v1/);
-assert.match(controlPlaneSource, /enable_show_spout_outputs_v1/);
+assert.match(controlPlaneSource, /enable_show_spout_outputs_v2/);
+assert.match(controlPlaneSource, /reset_show_spout_outputs_v1/);
+assert.doesNotMatch(controlPlaneSource, /enable_show_spout_outputs_v1/);
+assert.doesNotMatch(
+  protocolCommandProductionSource,
+  /show_spout_outputs\.enable\.v1/,
+  "the retired V1 Spout enable route may appear only in negative tests",
+);
 assert.match(
   appSource,
   /<DmxOutputConfigPanel[\s\S]*output=\{output\(\)\}[\s\S]*onEnableStagedShowArtNetLoopbackRoute=\{enableStagedShowArtNetLoopbackRoute\}/,
   "the DMX workbench must pass its actual route to the fixed Art-Net show-route surface",
+);
+assert.match(
+  appSource,
+  /<DmxOutputConfigPanel[\s\S]*showSerialDmxSafetyBlackoutRouteStatus=\{showSerialDmxSafetyBlackoutRouteStatus\(\)\}[\s\S]*onEnableShowSerialDmxSafetyBlackoutRoute=\{enableShowSerialDmxSafetyBlackoutRoute\}[\s\S]*onStopShowSerialDmxSafetyBlackoutRoute=\{stopShowSerialDmxSafetyBlackoutRoute\}/,
+  "the DMX workbench must render the live USB-DMX worker status and fixed actions",
+);
+assert.match(
+  appSource,
+  /const telemetryReportTimer = isTauriRuntime\(\) \? window\.setInterval\(refreshEngineTelemetryReport, 1000\) : null/,
+  "the independent telemetry diagnostics cadence must remain available",
+);
+assert.match(
+  appSource,
+  /const serialDmxRuntimeStatusTimer = isTauriRuntime\(\)\s*\? window\.setInterval\(\(\) => void refreshSerialDmxRuntimeStatuses\(\), 1000\)\s*:\s*null/,
+  "USB-DMX worker truth must have its own one-second poll rather than wait for telemetry",
+);
+assert.match(
+  appSource,
+  /window\.clearInterval\(serialDmxRuntimeStatusTimer\);[\s\S]*disposeSerialDmxRuntimeStatuses\(\);/,
+  "unmount must stop the dedicated USB-DMX poll and invalidate late results",
 );
 assert.match(dmxOutputPanelSource, /output\.protocol === "ArtNet"/);
 assert.match(dmxOutputPanelSource, /output\.target_ip === "127\.0\.0\.1"/);
@@ -957,6 +1257,49 @@ assert.match(dmxOutputPanelSource, /output\.port === 6454/);
 assert.match(dmxOutputPanelSource, /output\.serial_port === ""/);
 assert.match(dmxOutputPanelSource, /output\.universe === 0/);
 assert.match(dmxOutputPanelSource, /data-io-control="dmx-enable-staged-show-artnet-loopback-route"/);
+assert.match(dmxOutputPanelSource, /data-io-usb-dmx-route/);
+assert.match(dmxOutputPanelSource, /Enttec Open DMX · machine local/);
+assert.match(dmxOutputPanelSource, /Worker status unavailable — S0 required/);
+assert.match(
+  dmxOutputPanelSource,
+  /const hasExactMachineLocalOpenDmxIdentity[\s\S]*port\.usb_vid > 0[\s\S]*port\.usb_pid > 0[\s\S]*serial_number[\s\S]*windows_device_instance_id/,
+  "a USB-DMX Confirm candidate must require a complete nonzero USB/PnP identity",
+);
+assert.match(
+  dmxOutputPanelSource,
+  /disabled=\{!hasExactMachineLocalOpenDmxIdentity\(port\)\}/,
+  "enumerated rows with missing or zero VID/PID must remain diagnostic-only and disabled",
+);
+assert.match(
+  dmxOutputPanelSource,
+  /disabled=\{!hasExactMachineLocalOpenDmxIdentity\(selectedSerialPort\(\)\) \|\| !serialBindingMutationAdmissible\(\)\}/,
+  "Confirm must use the same complete nonzero identity predicate and conservative route-admission gate as its option",
+);
+assert.match(
+  dmxOutputPanelSource,
+  /disabled=\{!serialWorkerArmAdmissible\(\) \|\| !serialWorkerStatusKnown\(\) \|\| !bindingReady\(\) \|\| !props\.safetyBlackoutEngaged \|\| !artNetUnityMirrorEnabled\(\)\}/,
+  "USB-DMX start must fail closed while worker truth, bounded shutdown, or the exact enabled Art-Net mirror is unavailable",
+);
+assert.match(
+  dmxOutputPanelSource,
+  /disabled=\{!serialWorkerActive\(\) \|\| !serialWorkerStatusKnown\(\) \|\| !props\.safetyBlackoutEngaged\}/,
+  "USB-DMX stop must not claim a stale worker can be controlled after status loss",
+);
+assert.match(
+  dmxOutputPanelSource,
+  /generic FTDI VID\/PID is not auto-selected and does not imply a protocol/,
+  "generic FTDI identities must require an explicit Open DMX confirmation",
+);
+assert.match(
+  dmxOutputPanelSource,
+  /queue acceptance from the bounded physical zero transaction/,
+  "the USB-DMX UI must distinguish accepted work from the physical zero receipt",
+);
+assert.match(
+  dmxOutputPanelSource,
+  /≈32\.5fps exact-rig USB cadence[\s\S]*latest-frame mirror[\s\S]*not an Open DMX universal limit[\s\S]*does not promise physical delivery on every 44Hz engine tick/,
+  "the USB-DMX UI must keep the exact-rig cadence distinct from Art-Net's 40-44Hz route",
+);
 assert.match(dmxOutputPanelSource, /data-io-control="dmx-send-dsf2026-artnet-acceptance-probe"/);
 assert.match(dmxOutputPanelSource, /probeStatus\(\)\?\.status !== "available"/,
   "a successful or unknown durable one-shot status must keep the probe disabled");
@@ -981,7 +1324,162 @@ assert.doesNotMatch(
   /dmx-enable-staged-show-artnet-loopback-route/,
   "the route mutation stays in the DMX workbench, not the compact connection selector",
 );
-assert.match(outputDiagnosticsSource, /enableStagedShowArtNetLoopbackRoute[\s\S]*enable_show_artnet_loopback_route/);
+assert.match(outputDiagnosticsSource, /enableStagedShowArtNetLoopbackRoute[\s\S]*enable_show_art_net_loopback_route/);
+assert.match(outputDiagnosticsSource, /enableShowSerialDmxSafetyBlackoutRoute[\s\S]*enable_show_serial_dmx_safety_blackout_route/);
+assert.match(outputDiagnosticsSource, /stopShowSerialDmxSafetyBlackoutRoute[\s\S]*stop_show_serial_dmx_safety_blackout_route/);
+const telemetryRefreshSource = outputDiagnosticsSource.slice(
+  outputDiagnosticsSource.indexOf("const refreshEngineTelemetryReport = async () =>"),
+  outputDiagnosticsSource.indexOf("const resetEngineTelemetry = async () =>"),
+);
+assert.doesNotMatch(
+  telemetryRefreshSource,
+  /refreshSerialDmxRuntimeStatuses|serialDmxStatusPoller/,
+  "a hung telemetry invoke must not block USB-DMX status refreshes",
+);
+assert.match(
+  outputDiagnosticsSource,
+  /const serialDmxStatusPoller = createSerialDmxStatusPoller\(\{[\s\S]*queryBinding:[\s\S]*get_serial_dmx_machine_binding_status_v1[\s\S]*queryRoute:[\s\S]*get_show_serial_dmx_safety_blackout_route_status_v1[\s\S]*commit:/,
+  "the dedicated USB-DMX poll must retrieve binding and worker truth together",
+);
+assert.match(
+  outputDiagnosticsSource,
+  /const refreshAuthoritativeSerialDmxRuntimeStatuses = async \(\) => \{[\s\S]*serialDmxStatusPoller\.invalidate\(\);[\s\S]*await refreshSerialDmxRuntimeStatuses\(\);/,
+  "USB-DMX mutations must invalidate stale reads before their authoritative refresh",
+);
+assert.match(
+  outputDiagnosticsSource,
+  /const enableShowSerialDmxSafetyBlackoutRoute = async \(\) => \{[\s\S]*serialDmxStatusPoller\.invalidate\(\);[\s\S]*finally \{[\s\S]*await refreshAuthoritativeSerialDmxRuntimeStatuses\(\);/,
+  "USB-DMX enable must not use a direct stale status refresh",
+);
+assert.match(
+  outputDiagnosticsSource,
+  /const stopShowSerialDmxSafetyBlackoutRoute = async \(\) => \{[\s\S]*serialDmxStatusPoller\.invalidate\(\);[\s\S]*finally \{[\s\S]*await refreshAuthoritativeSerialDmxRuntimeStatuses\(\);/,
+  "USB-DMX stop must not use a direct stale status refresh",
+);
+assert.match(
+  serialDmxStatusPollerSource,
+  /SERIAL_DMX_STATUS_QUERY_TIMEOUT_MS = 1_500[\s\S]*awaitBounded[\s\S]*rawFlight[\s\S]*generation[\s\S]*disposed/,
+  "the USB-DMX status poller must have a bounded, generation-fenced lifecycle",
+);
+assert.match(
+  serialDmxStatusPollerSource,
+  /Promise\.allSettled\(\[binding, route\]\)[\s\S]*if \(rawFlight\) return Promise\.resolve\(\)/,
+  "a timed-out or invalidated USB-DMX UI waiter must retain one raw native invoke pair until both endpoints settle",
+);
+assert.match(
+  serialDmxStatusPollerSource,
+  /generation \+= 1;[\s\S]*commitUnknown\(\);/,
+  "a status query failure must become Unknown before a late result can commit",
+);
+assert.match(
+  serialDmxStatusPollerSource,
+  /dispose: \(\) => \{[\s\S]*disposed = true;[\s\S]*generation \+= 1;[\s\S]*refreshFlight = null;/,
+  "dispose must invalidate every late USB-DMX status response",
+);
+assert.match(
+  serialDmxStatusPollerSource,
+  /validateSnapshot[\s\S]*generation \+= 1;[\s\S]*commitUnknown\(\);/,
+  "a malformed successful USB-DMX status response must become Unknown before it can commit",
+);
+assert.match(
+  serialDmxStatusPollerSource,
+  /minimumRouteStatusRevision[\s\S]*lastCommittedRouteStatusRevision[\s\S]*invalidateAtOrAfterRouteStatusRevision[\s\S]*setRouteStatusEventFenceAvailable/,
+  "the USB-DMX poller must fence spontaneous native transitions with monotonic route revisions",
+);
+assert.match(
+  serialDmxStatusPollerSource,
+  /if \(!routeStatusEventFenceAvailable\)[\s\S]*commitUnknown\(\);[\s\S]*return Promise\.resolve\(\);/,
+  "a missing native event fence must keep USB-DMX status persistently Unknown without issuing a fresh query",
+);
+assert.match(
+  outputDiagnosticsSource,
+  /validateSnapshot: validateSerialDmxStatusSnapshot[\s\S]*onInvalidSnapshot:[\s\S]*console\.warn\(`USB-DMX status payload rejected: \$\{reason\}`\)/,
+  "the strict USB-DMX status validator must be wired with a redacted diagnostic reason",
+);
+assert.match(
+  outputDiagnosticsSource,
+  /coherentRouteStatusRevision:[\s\S]*binding\.routeStatusRevision === route\.routeStatusRevision[\s\S]*requireRouteStatusEventFence: true/,
+  "USB-DMX binding and route reads must share a native revision fence before a status commit",
+);
+assert.match(
+  outputDiagnosticsSource,
+  /handleSerialDmxRouteStatusEvent[\s\S]*parseSerialDmxRouteStatusEventRevision[\s\S]*invalidateAtOrAfterRouteStatusRevision[\s\S]*void refreshSerialDmxRuntimeStatuses\(\)/,
+  "a native USB-DMX fault event must invalidate before its independent authoritative refresh",
+);
+assert.match(
+  serialDmxStatusValidationSource,
+  /binding USB VID[\s\S]*binding USB PID[\s\S]*hasExactKeys\(route,[\s\S]*routeStatusRevision[\s\S]*workerShutdownCompleted[\s\S]*zeroFramePhysicalWriteCompleted[\s\S]*faulted USB-DMX route cannot be active/,
+  "the USB-DMX status parser must reject extra fields, zero identity, and incoherent route state",
+);
+assert.match(
+  appSource,
+  /listen<unknown>\("syndocal:\/\/show-serial-dmx-route-status-v1"[\s\S]*setSerialDmxRouteStatusEventFenceAvailable\(true\)[\s\S]*\.catch\([\s\S]*setSerialDmxRouteStatusEventFenceAvailable\(false\)[\s\S]*translateUiText\("Worker status unavailable — S0 required", uiLocale\(\)\)/,
+  "listener installation failure must leave USB-DMX controls in localized persistent Unknown state",
+);
+assert.match(
+  mainSource,
+  /set_show_serial_dmx_safety_blackout_route_status_observer[\s\S]*SHOW_SERIAL_DMX_ROUTE_STATUS_EVENT[\s\S]*route_status_event/,
+  "the native engine revision observer must emit the exact USB-DMX route status event",
+);
+assert.match(
+  showSerialDmxRouteSource,
+  /route_status_revision: String,[\s\S]*worker_shutdown_completed: bool[\s\S]*try_show_serial_dmx_safety_blackout_route_status_snapshot/,
+  "both strict USB-DMX IPC status endpoints must carry the same revisioned worker shutdown truth",
+);
+assert.match(
+  dmxOutputPanelSource,
+  /serialBindingMutationAdmissible[\s\S]*workerShutdownCompleted[\s\S]*zeroFrameQueued[\s\S]*status\.faulted && !props\.safetyBlackoutEngaged/,
+  "the UI must conservatively disable machine-local replacement during live, incomplete-zero, detached, or unlatchable states",
+);
+assert.match(
+  dmxOutputPanelSource,
+  /serialWorkerArmAdmissible[\s\S]*status\.active \|\| status\.liveFrameQueued[\s\S]*workerShutdownCompleted[\s\S]*status\.faulted && !props\.safetyBlackoutEngaged[\s\S]*disabled=\{!serialWorkerArmAdmissible\(\)/,
+  "the UI must prevent Arm from creating a replacement worker while shutdown is detached, while retaining only S0-latched joined-fault recovery",
+);
+assert.match(
+  engineShowSerialDmxStatusSource,
+  /fn require_show_serial_dmx_enable_admission[\s\S]*status\.active \|\| status\.live_frame_queued[\s\S]*!status\.worker_shutdown_completed[\s\S]*status\.zero_frame_queued[\s\S]*!status\.faulted[\s\S]*status\.faulted && \(!safety_authority_engaged \|\| !physical_s0_latched\)/,
+  "native USB-DMX replacement admission must fence active/live, detached shutdown, nonfaulted incomplete S0, and unlatchable fault recovery",
+);
+const engineSerialEnableBody = engineSource.slice(
+  engineSource.indexOf("fn apply_show_serial_dmx_safety_blackout_route_enable_with_sender_factory"),
+  engineSource.indexOf("/// An Open-DMX worker exists at this point"),
+);
+assert.match(
+  engineSerialEnableBody,
+  /try_show_serial_dmx_route_status_snapshot[\s\S]*require_show_serial_dmx_enable_admission[\s\S]*let mut sender = create_sender/,
+  "native USB-DMX admission must read authoritative status and reject before opening a replacement sender",
+);
+assert.match(
+  engineShowSerialDmxTestsSource,
+  /show_serial_dmx_stop_wedged_gate_stays_s0_faulted_and_refuses_a_replacement_worker[\s\S]*replacement_factory_called[\s\S]*did not complete bounded shutdown/,
+  "the deterministic engine proof must reject a replacement while an old bounded shutdown was detached",
+);
+assert.match(
+  engineShowSerialDmxTestsSource,
+  /show_serial_dmx_joined_fault_recovery_requires_s0_then_clears_only_after_a_fresh_zero[\s\S]*fail_next_write[\s\S]*fresh B initial S0 failure[\s\S]*failed_b_status\.faulted[\s\S]*only the fresh B initial physical S0 zero may clear the joined fault/,
+  "the deterministic engine proof must retain a joined fault through B initial-zero failure and clear it only after a fresh zero receipt",
+);
+assert.match(mainSource, /mod show_serial_dmx_route;/,
+  "USB-DMX orchestration must stay separated from the oversized main runtime module");
+for (const marker of [
+  "fn get_machine_binding_status(",
+  "fn select_machine_binding(",
+  "fn route_status(",
+  "async fn enable_command(",
+  "async fn stop_command(",
+  "fn enable_with_output_control_fence(",
+  "fn stop_with_output_control_fence(",
+  "never infers a protocol from",
+]) {
+  assert.match(showSerialDmxRouteSource, new RegExp(marker.replaceAll("(", "\\(").replaceAll(".", "\\.")),
+    `the extracted USB-DMX route module must retain ${marker}`);
+}
+assert.match(
+  protocolCommandSource,
+  /#\[serde\(tag = "kind", rename_all = "snake_case", deny_unknown_fields\)\]\s*enum OutputControlActionV2Wire \{[\s\S]*EnableShowSerialDmxSafetyBlackoutRoute[\s\S]*StopShowSerialDmxSafetyBlackoutRoute/,
+  "USB-DMX start/stop must use the exact deny-unknown-fields snake-case tagged union",
+);
 assert.match(outputDiagnosticsSource, /sendDsf2026ArtNetAcceptanceProbe[\s\S]*send_dsf2026_artnet_acceptance_probe/);
 assert.match(outputDiagnosticsSource, /acknowledgeDsf2026ArtNetAcceptanceProbeInDoubt[\s\S]*acknowledge_dsf2026_artnet_acceptance_probe_in_doubt/);
 assert.match(outputDiagnosticsSource, /refreshDsf2026ArtNetAcceptanceProbeStatus[\s\S]*queryDsf2026ArtNetAcceptanceProbeStatus/);
@@ -990,6 +1488,7 @@ assert.match(outputDiagnosticsSource, /sendDsf2026ArtNetAcceptanceProbe[\s\S]*st
 assert.match(outputDiagnosticsSource, /sendDsf2026ArtNetAcceptanceProbe[\s\S]*status: "consumed"/,
   "a successful native receipt must leave the frontend probe control permanently disabled");
 assert.match(outputDiagnosticsSource, /enableShowSpoutOutputs[\s\S]*enable_show_spout_outputs/);
+assert.match(outputDiagnosticsSource, /resetShowSpoutOutputs[\s\S]*reset_show_spout_outputs/);
 assert.doesNotMatch(
   outputDiagnosticsSource,
   /invoke(?:<[^>]*>)?\(\s*["']set_dmx_outputs["']/,
@@ -1009,127 +1508,473 @@ const deferred = () => {
   });
   return { promise, resolve, reject };
 };
-const createPollContractHarness = (timeoutMs = 20, invokeTimeoutMs = 40) => {
-  let rawFlight = null;
-  let waiter = null;
-  let rawSettled = Promise.resolve();
-  let generation = 0;
-  let authority = "ready";
-  const invokeCounts = [0, 0, 0];
-  const bounded = (factory) => new Promise((resolve, reject) => {
-    let settled = false;
-    const timer = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      reject(new Error("status refresh timed out"));
-    }, timeoutMs);
-    Promise.resolve().then(factory).then((value) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolve(value);
-    }, (error) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      reject(error);
-      });
+
+// USB-DMX status lifecycle proof. The Tauri transport has no cancellation
+// primitive, so the test deliberately resolves an old Active answer after a
+// newer stop/fault answer and after disposal.
+const serialBindingPresent = { state: "selected_and_present" };
+const serialRouteActive = { active: true, faulted: false, liveFrameQueued: true };
+const serialRouteStopped = { active: false, faulted: false, liveFrameQueued: false };
+const serialRouteFaulted = { active: false, faulted: true, liveFrameQueued: false };
+const exactSerialBindingPayload = {
+  state: "selected_and_present",
+  selected: {
+    port_name: "COM3",
+    port_type: "USB 0403:6001 USB Serial Port",
+    usb_vid: 0x0403,
+    usb_pid: 0x6001,
+    serial_number: "SHOW-A",
+    manufacturer: "FTDI",
+    product: "USB Serial Port",
+    windows_device_instance_id: "FTDIBUS\\A\\0000",
+  },
+  detail: "Exact machine-local identity is present.",
+  routeStatusRevision: "41",
+};
+const exactSerialRoutePayload = {
+  routeStatusRevision: "41",
+  active: true,
+  zeroFrameQueued: true,
+  zeroFramePhysicalWriteCompleted: true,
+  liveFrameQueued: true,
+  workerShutdownCompleted: false,
+  faulted: false,
+  artnetMirrorLive: true,
+  artnetMirrorDetail: "Exact Art-Net sender is present.",
+  detail: "Open DMX worker is active.",
+};
+const exactSerialBindingAt = (routeStatusRevision) => ({
+  ...exactSerialBindingPayload,
+  routeStatusRevision,
+});
+const exactSerialRouteAt = (routeStatusRevision, patch = {}) => ({
+  ...exactSerialRoutePayload,
+  routeStatusRevision,
+  ...patch,
+});
+const validateSerialDmxStatusSnapshot = serialDmxStatusValidationRuntime.validateSerialDmxStatusSnapshot;
+assert.equal(validateSerialDmxStatusSnapshot(exactSerialBindingPayload, exactSerialRoutePayload), null,
+  "the exact native USB-DMX status shape must remain admissible");
+assert.match(
+  validateSerialDmxStatusSnapshot(
+    { ...exactSerialBindingPayload, injected: true },
+    exactSerialRoutePayload,
+  ),
+  /missing or unexpected fields/,
+  "an extra binding status field must fail closed",
+);
+assert.match(
+  validateSerialDmxStatusSnapshot(
+    {
+      ...exactSerialBindingPayload,
+      selected: { ...exactSerialBindingPayload.selected, usb_vid: 0 },
+    },
+    exactSerialRoutePayload,
+  ),
+  /nonzero u16/,
+  "zero USB VID must not be promoted through a successful-looking status response",
+);
+assert.match(
+  validateSerialDmxStatusSnapshot(
+    {
+      ...exactSerialBindingPayload,
+      selected: { ...exactSerialBindingPayload.selected, usb_pid: 0 },
+    },
+    exactSerialRoutePayload,
+  ),
+  /nonzero u16/,
+  "zero USB PID must not be promoted through a successful-looking status response",
+);
+assert.match(
+  validateSerialDmxStatusSnapshot(
+    exactSerialBindingPayload,
+    { ...exactSerialRoutePayload, active: "true" },
+  ),
+  /active must be boolean/,
+  "a non-boolean Active field must fail closed",
+);
+assert.match(
+  validateSerialDmxStatusSnapshot(
+    exactSerialBindingPayload,
+    { ...exactSerialRoutePayload, detail: "" },
+  ),
+  /detail must be a nonempty string/,
+  "an empty route detail must not be treated as an authoritative live status",
+);
+for (const malformedWorkerShutdownCompleted of ["false", 0, null]) {
+  assert.match(
+    validateSerialDmxStatusSnapshot(
+      exactSerialBindingPayload,
+      { ...exactSerialRoutePayload, workerShutdownCompleted: malformedWorkerShutdownCompleted },
+    ),
+    /workerShutdownCompleted must be boolean/,
+    "workerShutdownCompleted must remain a strict boolean rather than a truthy IPC value",
+  );
+}
+const { workerShutdownCompleted: omittedWorkerShutdownCompleted, ...missingWorkerShutdownCompleted } = exactSerialRoutePayload;
+assert.match(
+  validateSerialDmxStatusSnapshot(exactSerialBindingPayload, missingWorkerShutdownCompleted),
+  /missing or unexpected fields/,
+  "an omitted workerShutdownCompleted field must fail closed",
+);
+assert.match(
+  validateSerialDmxStatusSnapshot(
+    exactSerialBindingAt("42"),
+    exactSerialRouteAt("41"),
+  ),
+  /coherent fence/,
+  "binding and route status answers from different native revisions must not form a live snapshot",
+);
+const parseSerialDmxRouteStatusEventRevision =
+  serialDmxStatusValidationRuntime.parseSerialDmxRouteStatusEventRevision;
+assert.equal(parseSerialDmxRouteStatusEventRevision({ routeStatusRevision: "42" }), "42",
+  "the exact native route-event schema must carry one canonical revision");
+for (const malformedEvent of [
+  {},
+  { routeStatusRevision: "0" },
+  { routeStatusRevision: 42 },
+  { routeStatusRevision: "42", unexpected: true },
+]) {
+  assert.equal(parseSerialDmxRouteStatusEventRevision(malformedEvent), null,
+    "malformed or extra native route-event payloads must not authorize a status commit");
+}
+const createSerialStatusPollHarness = (routeAnswers) => {
+  let snapshot = { binding: null, route: null };
+  const commits = [];
+  let bindingInvokes = 0;
+  let routeInvokes = 0;
+  const poller = serialDmxStatusPollerRuntime.createSerialDmxStatusPoller({
+    queryBinding: () => {
+      bindingInvokes += 1;
+      return Promise.resolve(serialBindingPresent);
+    },
+    queryRoute: () => {
+      routeInvokes += 1;
+      const answer = routeAnswers.shift();
+      assert.notEqual(answer, undefined, "each status refresh must use an explicit fake backend answer");
+      return answer;
+    },
+    commit: (next) => {
+      snapshot = next;
+      commits.push(next);
+    },
+    timeoutMs: 15,
   });
-  const poll = (factories) => {
-    if (rawFlight) return waiter;
-    const token = ++generation;
-    const current = () => token === generation;
-    const rawEndpoints = factories.map((factory, index) => {
-      invokeCounts[index] += 1;
-      return Promise.resolve().then(factory);
-    });
-    const rawCompletion = Promise.allSettled(rawEndpoints).then((results) => {
-      const failure = results.find((result) => result.status === "rejected");
-      if (failure?.status === "rejected") {
-        if (current()) authority = "unavailable";
-        return;
-      }
-      if (current()) authority = "ready";
-    });
-    let retained;
-    retained = rawCompletion.finally(() => {
-      if (rawFlight === retained) {
-        rawFlight = null;
-        waiter = null;
-      }
-    });
-    rawFlight = retained;
-    rawSettled = retained;
-    const boundedEndpoints = rawEndpoints.map((endpoint) =>
-      bounded(() => endpoint, invokeTimeoutMs));
-    const uiCompletion = Promise.allSettled(boundedEndpoints).then((results) => {
-      const failure = results.find((result) => result.status === "rejected");
-      if (failure?.status === "rejected") throw failure.reason;
-    });
-    waiter = bounded(() => uiCompletion, timeoutMs).catch((error) => {
-      if (current()) {
-        generation += 1;
-        authority = "unavailable";
-      }
-      return error;
-    });
-    return waiter;
-  };
   return {
-    poll,
-    get authority() { return authority; },
-    get invokeCounts() { return [...invokeCounts]; },
-    waitForRaw: () => rawSettled,
+    poller,
+    commits,
+    get bindingInvokes() { return bindingInvokes; },
+    get routeInvokes() { return routeInvokes; },
+    get snapshot() { return snapshot; },
   };
 };
+const lateActiveAfterStop = deferred();
+const stopHarness = createSerialStatusPollHarness([
+  lateActiveAfterStop.promise,
+  Promise.resolve(serialRouteStopped),
+]);
+await stopHarness.poller.refresh();
+assert.deepEqual(stopHarness.snapshot, { binding: null, route: null },
+  "a bounded status timeout must make the USB-DMX UI Unknown");
+stopHarness.poller.invalidate();
+await stopHarness.poller.refresh();
+assert.equal(stopHarness.bindingInvokes, 1,
+  "a timeout/invalidation must retain the real binding invoke until it settles");
+assert.equal(stopHarness.routeInvokes, 1,
+  "a timeout/invalidation must retain the real route invoke until it settles");
+lateActiveAfterStop.resolve(serialRouteActive);
+await sleep(0);
+assert.deepEqual(stopHarness.snapshot, { binding: null, route: null },
+  "late Active from before Stop must not overwrite Unknown after invalidation");
+await stopHarness.poller.refresh();
+assert.equal(stopHarness.bindingInvokes, 2);
+assert.equal(stopHarness.routeInvokes, 2);
+assert.equal(stopHarness.snapshot.route.active, false,
+  "only a fresh post-Stop raw flight may show stopped worker truth");
 
-const hungRecoveredHarness = createPollContractHarness();
-const hungStatus = deferred();
-const hungWaiter = hungRecoveredHarness.poll([
-  () => Promise.resolve("ready"),
-  () => hungStatus.promise,
-  () => Promise.resolve("ready"),
+const lateActiveAfterFault = deferred();
+const faultHarness = createSerialStatusPollHarness([
+  lateActiveAfterFault.promise,
+  Promise.resolve(serialRouteFaulted),
 ]);
-await hungWaiter;
-assert.equal(hungRecoveredHarness.authority, "unavailable",
-  "a hung post-Recovered refresh must fail closed within the bound");
-assert.deepEqual(hungRecoveredHarness.invokeCounts, [1, 1, 1]);
-const hungOverlap = hungRecoveredHarness.poll([
-  () => Promise.resolve("duplicate"),
-  () => Promise.resolve("duplicate"),
-  () => Promise.resolve("duplicate"),
+await faultHarness.poller.refresh();
+faultHarness.poller.invalidate();
+await faultHarness.poller.refresh();
+assert.equal(faultHarness.bindingInvokes, 1,
+  "a Fault invalidation must not overlap a pending native binding invoke");
+assert.equal(faultHarness.routeInvokes, 1,
+  "a Fault invalidation must not overlap a pending native route invoke");
+lateActiveAfterFault.resolve(serialRouteActive);
+await sleep(0);
+assert.deepEqual(faultHarness.snapshot, { binding: null, route: null },
+  "late Active from before Fault must not erase fail-closed Unknown");
+await faultHarness.poller.refresh();
+assert.equal(faultHarness.snapshot.route.faulted, true,
+  "only a fresh post-Fault raw flight may show fault/S0-visible truth");
+
+const lateBindingAfterUnmount = deferred();
+const lateRouteAfterUnmount = deferred();
+let unmountSnapshot = { binding: null, route: null };
+const unmountPoller = serialDmxStatusPollerRuntime.createSerialDmxStatusPoller({
+  queryBinding: () => lateBindingAfterUnmount.promise,
+  queryRoute: () => lateRouteAfterUnmount.promise,
+  commit: (next) => { unmountSnapshot = next; },
+  timeoutMs: 100,
+});
+const unmountFlight = unmountPoller.refresh();
+await sleep(0);
+unmountPoller.dispose();
+lateBindingAfterUnmount.resolve(serialBindingPresent);
+lateRouteAfterUnmount.resolve(serialRouteActive);
+await unmountFlight;
+assert.deepEqual(unmountSnapshot, { binding: null, route: null },
+  "late Active must not commit after App cleanup invalidates the USB-DMX poll");
+
+const telemetryHang = deferred();
+let telemetrySettled = false;
+void telemetryHang.promise.finally(() => { telemetrySettled = true; });
+const telemetryIndependentHarness = createSerialStatusPollHarness([
+  Promise.resolve(serialRouteFaulted),
 ]);
-assert.strictEqual(hungOverlap, hungWaiter, "a timed-out UI waiter must remain attached to the raw flight");
-assert.deepEqual(hungRecoveredHarness.invokeCounts, [1, 1, 1],
-  "a pending raw refresh must block every duplicate endpoint invoke");
-hungStatus.resolve("late-ready");
-await hungRecoveredHarness.waitForRaw();
-const overlapHarness = createPollContractHarness();
-const overlapEndpoints = [deferred(), deferred(), deferred()];
-const overlapPromise = overlapHarness.poll(overlapEndpoints.map((endpoint) => () => endpoint.promise));
-const overlappingPoll = overlapHarness.poll([
-  () => Promise.resolve("duplicate"),
-  () => Promise.resolve("duplicate"),
-  () => Promise.resolve("duplicate"),
-]);
-assert.strictEqual(overlapPromise, overlappingPoll, "interval refreshes must share one raw flight");
-overlapEndpoints.forEach((endpoint) => endpoint.resolve("ready"));
-await overlapPromise;
-assert.deepEqual(overlapHarness.invokeCounts, [1, 1, 1], "overlapping interval must invoke one endpoint set");
-const staleHarness = createPollContractHarness();
-const staleEndpoints = [deferred(), deferred(), deferred()];
-const stalePoll = staleHarness.poll(staleEndpoints.map((endpoint) => () => endpoint.promise));
-await sleep(25);
-assert.equal(staleHarness.authority, "unavailable");
-staleEndpoints.forEach((endpoint) => endpoint.resolve("late-ready"));
-await staleHarness.waitForRaw();
-await staleHarness.poll([
-  () => Promise.reject(new Error("new refresh failed")),
-  () => Promise.resolve("new"),
-  () => Promise.resolve("new"),
-]);
-assert.equal(staleHarness.authority, "unavailable",
-  "an old slow success must not restore authority after a newer failure");
+await telemetryIndependentHarness.poller.refresh();
+assert.equal(telemetryIndependentHarness.snapshot.route.faulted, true,
+  "the dedicated USB-DMX status poll must complete while unrelated telemetry is hung");
+assert.equal(telemetrySettled, false,
+  "the telemetry promise remains hung; the serial status result did not await it");
+telemetryHang.resolve();
+
+// Exercise the real poller rather than the broader lifecycle harness below:
+// two same-turn callers must share one binding invoke and one route invoke.
+const overlapBinding = deferred();
+const overlapRoute = deferred();
+let overlapBindingInvokes = 0;
+let overlapRouteInvokes = 0;
+let overlapSnapshot = { binding: null, route: null };
+const overlapPoller = serialDmxStatusPollerRuntime.createSerialDmxStatusPoller({
+  queryBinding: () => {
+    overlapBindingInvokes += 1;
+    return overlapBinding.promise;
+  },
+  queryRoute: () => {
+    overlapRouteInvokes += 1;
+    return overlapRoute.promise;
+  },
+  commit: (next) => { overlapSnapshot = next; },
+  timeoutMs: 100,
+});
+const overlapFirstRefresh = overlapPoller.refresh();
+const overlapSecondRefresh = overlapPoller.refresh();
+assert.strictEqual(overlapSecondRefresh, overlapFirstRefresh,
+  "same-generation USB-DMX refresh callers must share the real poller flight");
+await sleep(0);
+assert.equal(overlapBindingInvokes, 1,
+  "same-generation USB-DMX refresh must invoke binding status exactly once");
+assert.equal(overlapRouteInvokes, 1,
+  "same-generation USB-DMX refresh must invoke route status exactly once");
+overlapBinding.resolve(serialBindingPresent);
+overlapRoute.resolve(serialRouteActive);
+await overlapFirstRefresh;
+assert.equal(overlapSnapshot.route.active, true,
+  "the shared real-poller flight must still commit its current status exactly once");
+
+// Exercise the actual raw-flight lifetime across the UI timeout boundary.
+// Tauri cannot cancel either invoke, so neither an interval tick nor an
+// authoritative action refresh may dispatch a second pair until *both* old
+// endpoint promises settle.
+const pendingBinding = deferred();
+const pendingRoute = deferred();
+let rawFlightBindingInvokes = 0;
+let rawFlightRouteInvokes = 0;
+let rawFlightSnapshot = { binding: null, route: null };
+const rawFlightPoller = serialDmxStatusPollerRuntime.createSerialDmxStatusPoller({
+  queryBinding: () => {
+    rawFlightBindingInvokes += 1;
+    return rawFlightBindingInvokes === 1 ? pendingBinding.promise : Promise.resolve(serialBindingPresent);
+  },
+  queryRoute: () => {
+    rawFlightRouteInvokes += 1;
+    return rawFlightRouteInvokes === 1 ? pendingRoute.promise : Promise.resolve(serialRouteStopped);
+  },
+  commit: (next) => { rawFlightSnapshot = next; },
+  timeoutMs: 15,
+});
+const timedOutRawFlight = rawFlightPoller.refresh();
+await sleep(0);
+assert.equal(rawFlightBindingInvokes, 1);
+assert.equal(rawFlightRouteInvokes, 1);
+await timedOutRawFlight;
+rawFlightPoller.invalidate();
+await rawFlightPoller.refresh();
+assert.equal(rawFlightBindingInvokes, 1,
+  "an invalidated poll must not overlap either still-pending native binding invoke");
+assert.equal(rawFlightRouteInvokes, 1,
+  "an invalidated poll must not overlap either still-pending native route invoke");
+pendingBinding.resolve(serialBindingPresent);
+await sleep(0);
+await rawFlightPoller.refresh();
+assert.equal(rawFlightBindingInvokes, 1,
+  "one settled endpoint is insufficient to admit a new raw binding invoke");
+assert.equal(rawFlightRouteInvokes, 1,
+  "one settled endpoint is insufficient to admit a new raw route invoke");
+pendingRoute.resolve(serialRouteActive);
+await sleep(0);
+await sleep(0);
+await rawFlightPoller.refresh();
+assert.equal(rawFlightBindingInvokes, 2,
+  "only after both old native endpoints settle may a new binding flight start");
+assert.equal(rawFlightRouteInvokes, 2,
+  "only after both old native endpoints settle may a new route flight start");
+assert.equal(rawFlightSnapshot.route.active, false,
+  "the fresh post-invalidation flight, not a late Active response, owns the UI truth");
+
+// The actual event-fenced poller starts Unknown until the App installs its
+// native listener. A spontaneous-fault revision then invalidates an older
+// in-flight Active pair before either endpoint can commit it.
+const preFaultBinding = deferred();
+const preFaultRoute = deferred();
+let revisionBindingInvokes = 0;
+let revisionRouteInvokes = 0;
+let revisionSnapshot = { binding: null, route: null };
+const revisionCommits = [];
+const revisionPoller = serialDmxStatusPollerRuntime.createSerialDmxStatusPoller({
+  queryBinding: () => {
+    revisionBindingInvokes += 1;
+    return revisionBindingInvokes === 1
+      ? preFaultBinding.promise
+      : Promise.resolve(exactSerialBindingAt("42"));
+  },
+  queryRoute: () => {
+    revisionRouteInvokes += 1;
+    return revisionRouteInvokes === 1
+      ? preFaultRoute.promise
+      : Promise.resolve(exactSerialRouteAt("42", {
+        active: false,
+        zeroFrameQueued: false,
+        zeroFramePhysicalWriteCompleted: false,
+        liveFrameQueued: false,
+        workerShutdownCompleted: true,
+        faulted: true,
+        detail: "USB-DMX worker fault is latched under S0.",
+      }));
+  },
+  commit: (next) => {
+    revisionSnapshot = next;
+    revisionCommits.push(next);
+  },
+  validateSnapshot: validateSerialDmxStatusSnapshot,
+  coherentRouteStatusRevision: (binding, route) =>
+    binding.routeStatusRevision === route.routeStatusRevision ? route.routeStatusRevision : null,
+  requireRouteStatusEventFence: true,
+  timeoutMs: 100,
+});
+await revisionPoller.refresh();
+assert.equal(revisionBindingInvokes, 0,
+  "initially unavailable native event listener must prevent any plausible Active query");
+assert.equal(revisionRouteInvokes, 0);
+assert.deepEqual(revisionSnapshot, { binding: null, route: null });
+revisionPoller.setRouteStatusEventFenceAvailable(true);
+const preFaultFlight = revisionPoller.refresh();
+await sleep(0);
+assert.equal(revisionBindingInvokes, 1);
+assert.equal(revisionRouteInvokes, 1);
+assert.equal(revisionPoller.invalidateAtOrAfterRouteStatusRevision("42"), true,
+  "a valid native status event must advance the authoritative revision floor");
+assert.deepEqual(revisionSnapshot, { binding: null, route: null },
+  "the native fault event must visibly invalidate before the fresh status query finishes");
+preFaultBinding.resolve(exactSerialBindingAt("41"));
+preFaultRoute.resolve(exactSerialRouteAt("41"));
+await preFaultFlight;
+await sleep(0);
+assert.deepEqual(revisionSnapshot, { binding: null, route: null },
+  "late pre-fault Active at an older revision must not overwrite event-invalidated Unknown");
+await revisionPoller.refresh();
+assert.equal(revisionBindingInvokes, 2);
+assert.equal(revisionRouteInvokes, 2);
+assert.equal(revisionSnapshot.route.faulted, true,
+  "only a fresh coherent fault/S0 status at or beyond the event fence may commit");
+assert.equal(revisionSnapshot.route.routeStatusRevision, "42");
+assert.equal(
+  revisionCommits.some((snapshot) => snapshot.route?.active === true),
+  false,
+  "no stale Active status can cross the event revision fence",
+);
+assert.equal(revisionPoller.invalidateAtOrAfterRouteStatusRevision("not-a-revision"), false,
+  "a malformed native event must retain fail-closed Unknown rather than lower the revision floor");
+assert.deepEqual(revisionSnapshot, { binding: null, route: null });
+
+// A listener that fails while an uncancellable Active pair is pending must
+// remain Unknown across the late completion and must not dispatch another
+// status pair until a successful listener re-establishes the event fence.
+const listenerFailureBinding = deferred();
+const listenerFailureRoute = deferred();
+let listenerFailureBindingInvokes = 0;
+let listenerFailureRouteInvokes = 0;
+let listenerFailureSnapshot = { binding: null, route: null };
+const listenerFailurePoller = serialDmxStatusPollerRuntime.createSerialDmxStatusPoller({
+  queryBinding: () => {
+    listenerFailureBindingInvokes += 1;
+    return listenerFailureBindingInvokes === 1
+      ? listenerFailureBinding.promise
+      : Promise.resolve(exactSerialBindingAt("44"));
+  },
+  queryRoute: () => {
+    listenerFailureRouteInvokes += 1;
+    return listenerFailureRouteInvokes === 1
+      ? listenerFailureRoute.promise
+      : Promise.resolve(exactSerialRouteAt("44"));
+  },
+  commit: (next) => { listenerFailureSnapshot = next; },
+  validateSnapshot: validateSerialDmxStatusSnapshot,
+  coherentRouteStatusRevision: (binding, route) =>
+    binding.routeStatusRevision === route.routeStatusRevision ? route.routeStatusRevision : null,
+  requireRouteStatusEventFence: true,
+  timeoutMs: 100,
+});
+listenerFailurePoller.setRouteStatusEventFenceAvailable(true);
+const listenerFailureFlight = listenerFailurePoller.refresh();
+await sleep(0);
+assert.equal(listenerFailureBindingInvokes, 1);
+assert.equal(listenerFailureRouteInvokes, 1);
+listenerFailurePoller.setRouteStatusEventFenceAvailable(false);
+await listenerFailurePoller.refresh();
+assert.equal(listenerFailureBindingInvokes, 1,
+  "listener failure must not create a second binding query while the old native promise is retained");
+assert.equal(listenerFailureRouteInvokes, 1);
+listenerFailureBinding.resolve(exactSerialBindingAt("43"));
+listenerFailureRoute.resolve(exactSerialRouteAt("43"));
+await listenerFailureFlight;
+await sleep(0);
+await listenerFailurePoller.refresh();
+assert.deepEqual(listenerFailureSnapshot, { binding: null, route: null },
+  "late Active after listener failure must remain persistent Unknown");
+assert.equal(listenerFailureBindingInvokes, 1,
+  "listener failure keeps polling disabled even after both old native promises settle");
+assert.equal(listenerFailureRouteInvokes, 1);
+listenerFailurePoller.setRouteStatusEventFenceAvailable(true);
+await listenerFailurePoller.refresh();
+assert.equal(listenerFailureBindingInvokes, 2,
+  "only a successfully re-established listener may admit a fresh status pair");
+assert.equal(listenerFailureRouteInvokes, 2);
+assert.equal(listenerFailureSnapshot.route.routeStatusRevision, "44");
+
+let malformedSnapshot = { binding: null, route: null };
+const malformedReasons = [];
+const malformedPoller = serialDmxStatusPollerRuntime.createSerialDmxStatusPoller({
+  queryBinding: () => Promise.resolve({
+    ...exactSerialBindingPayload,
+    selected: { ...exactSerialBindingPayload.selected, usb_pid: 0 },
+  }),
+  queryRoute: () => Promise.resolve(exactSerialRoutePayload),
+  validateSnapshot: validateSerialDmxStatusSnapshot,
+  onInvalidSnapshot: (reason) => malformedReasons.push(reason),
+  commit: (next) => { malformedSnapshot = next; },
+  timeoutMs: 100,
+});
+await malformedPoller.refresh();
+assert.deepEqual(malformedSnapshot, { binding: null, route: null },
+  "a malformed successful USB-DMX status payload must commit Unknown, not Active");
+assert.deepEqual(malformedReasons, ["binding USB PID must be a nonzero u16"],
+  "the invalid payload diagnostic must expose only the redacted failing field");
 
 const createEnableMutationHarness = (timeoutMs = 20) => {
   let rawMutation = null;
@@ -1210,4 +2055,4 @@ assert.equal(enableMutationHarness.rawPending, false);
 assert.equal(enableMutationHarness.authority, "unavailable",
   "a late terminal response must not directly restore enabled UI state");
 
-console.log("output control runtime contract: PASS (v6 output commands, fixed same-PC Art-Net loopback/DSF2026 probe plus no-send reconciliation/Spout pair, strict receipts, fail-closed query)");
+console.log("output control runtime contract: PASS (v8 output commands, fixed same-PC Art-Net loopback/DSF2026 probe plus no-send reconciliation/strict Spout V2 reset, revision-fenced USB-DMX status, strict receipts, fail-closed query)");

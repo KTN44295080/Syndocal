@@ -31133,6 +31133,180 @@ async function runCueRecallLargeViewport(client, viewport) {
   return { label: `cue-recall-large-${viewport.width}x${viewport.height}`, passed, containment, before, after };
 }
 
+async function activateBeforeUnloadWithTrustedTopbarClick(client) {
+  await waitForApp(client);
+  const topbarActivationPoint = await client.evaluate(`(() => {
+    const target = document.querySelector('.topbarProject > strong[data-tauri-drag-region]');
+    if (!(target instanceof HTMLElement)) return null;
+    const userActivation = navigator.userActivation;
+    const witness = {
+      baseline: {
+        isActive: userActivation?.isActive === true,
+        hasBeenActive: userActivation?.hasBeenActive === true,
+      },
+      observed: null,
+    };
+    const record = (event) => {
+      if (witness.observed !== null) return;
+      const eventTarget = event.target;
+      witness.observed = {
+        type: event.type,
+        targetIsExact: eventTarget === target,
+        targetTag: eventTarget instanceof Element ? eventTarget.tagName : '',
+        targetClass: eventTarget instanceof Element ? eventTarget.getAttribute('class') ?? '' : '',
+        isTrusted: event.isTrusted === true,
+        userActivationIsActive: navigator.userActivation?.isActive === true,
+        userActivationHasBeenActive: navigator.userActivation?.hasBeenActive === true,
+      };
+      target.removeEventListener('click', record, true);
+      document.removeEventListener('click', record, true);
+    };
+    // Keep the witness in the page so it can be read only after the trusted
+    // CDP input sequence. A capture listener on both the exact inert target
+    // and its document records the event before any bubbling handler can
+    // alter the selection; the exact target check rejects a nearby hit.
+    window.__syndocalBeforeUnloadActivationWitness = witness;
+    target.addEventListener('click', record, { capture: true, once: true });
+    document.addEventListener('click', record, { capture: true, once: true });
+    const rect = target.getBoundingClientRect();
+    const style = getComputedStyle(target);
+    const point = {
+      x: rect.left + rect.width / 2,
+      y: rect.top + rect.height / 2,
+    };
+    const hit = document.elementFromPoint(point.x, point.y);
+    const geometryValid = Number.isFinite(point.x)
+      && Number.isFinite(point.y)
+      && rect.width > 0
+      && rect.height > 0
+      && rect.left >= 0
+      && rect.top >= 0
+      && rect.right <= window.innerWidth
+      && rect.bottom <= window.innerHeight;
+    const visible = style.display !== 'none'
+      && style.visibility !== 'hidden'
+      && style.opacity !== '0'
+      && style.pointerEvents !== 'none';
+    return {
+      point,
+      geometryValid,
+      visible,
+      hitTarget: hit === target || target.contains(hit),
+      userActivationBaseline: witness.baseline,
+    };
+  })()`);
+  if (!topbarActivationPoint?.geometryValid || !topbarActivationPoint.visible || !topbarActivationPoint.hitTarget) {
+    throw new Error(`Trusted beforeunload activation target was not safely hittable: ${JSON.stringify(topbarActivationPoint)}`);
+  }
+  const { x, y } = topbarActivationPoint.point;
+  await client.send("Input.dispatchMouseEvent", {
+    type: "mouseMoved",
+    x,
+    y,
+    button: "none",
+    buttons: 0,
+    pointerType: "mouse",
+  });
+  await client.send("Input.dispatchMouseEvent", {
+    type: "mousePressed",
+    x,
+    y,
+    button: "left",
+    buttons: 1,
+    clickCount: 1,
+    pointerType: "mouse",
+  });
+  await client.send("Input.dispatchMouseEvent", {
+    type: "mouseReleased",
+    x,
+    y,
+    button: "left",
+    buttons: 0,
+    clickCount: 1,
+    pointerType: "mouse",
+  });
+  const activationWitness = await client.evaluate(`(() => {
+    const witness = window.__syndocalBeforeUnloadActivationWitness ?? null;
+    delete window.__syndocalBeforeUnloadActivationWitness;
+    return witness;
+  })()`);
+  if (
+    activationWitness?.observed?.type !== "click" ||
+    activationWitness.observed.targetIsExact !== true ||
+    activationWitness.observed.isTrusted !== true ||
+    activationWitness.observed.userActivationIsActive !== true ||
+    activationWitness.observed.userActivationHasBeenActive !== true
+  ) {
+    throw new Error(`Trusted beforeunload activation witness failed: ${JSON.stringify({
+      point: topbarActivationPoint,
+      witness: activationWitness,
+    })}`);
+  }
+  return { point: topbarActivationPoint, witness: activationWitness };
+}
+
+async function createSceneBlockOverlapBeforeUnloadReceipt(client) {
+  await waitForApp(client);
+  await clickWorkspaceOption(client, "control");
+  await selectControlSurface(client, "live");
+  await setTimelineToolsDisclosureOpen(client, true);
+  await ensureTimelineShowSurface(client);
+  await openSceneBlockBrowser(client);
+  const baseline = await beginAuthoritativeMutationReceipt(
+    client,
+    "scene-block-overlap-beforeunload-dirty-route",
+  );
+  const mutationProof = await evaluatePageFunction(client, async () => {
+    const settle = () => new Promise((resolveFrame) =>
+      requestAnimationFrame(() => requestAnimationFrame(resolveFrame)),
+    );
+    const listView = document.querySelector('[data-scene-block-view-toggle="list"]');
+    if (listView instanceof HTMLButtonElement && listView.getAttribute("aria-pressed") !== "true") {
+      listView.click();
+      await settle();
+    }
+    const row = document.querySelector(".sceneBlockList .sceneBlockRow, .sceneBlockRow");
+    const input = row?.querySelector('.sceneBlockRowFields input[type="number"]');
+    if (!(row instanceof HTMLElement) || !(input instanceof HTMLInputElement)) {
+      return { changed: false, reason: "fixture-does-not-expose-reversible-scene-block-input" };
+    }
+    const original = input.value;
+    const originalNumber = Number(original);
+    if (!Number.isFinite(originalNumber)) {
+      return { changed: false, reason: "scene-block-input-is-not-numeric", original };
+    }
+    const next = String(originalNumber + 1);
+    input.focus();
+    input.value = next;
+    input.dispatchEvent(new InputEvent("input", {
+      bubbles: true,
+      inputType: "insertText",
+      data: next,
+    }));
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+    await settle();
+    const eventId = row.getAttribute("data-scene-block-id") ?? "";
+    const rowStillPresent = document.querySelector(
+      '.sceneBlockRow[data-scene-block-id="' + eventId + '"]',
+    ) === row;
+    const topbarDirty = document.querySelector(".topbarProject")?.classList.contains("dirty") === true;
+    const projectDirtyLabel = (document.querySelector(".topbarProject span")?.textContent || "")
+      .trim()
+      .endsWith("*");
+    return {
+      changed: rowStillPresent && input.value === next && row.classList.contains("dirty"),
+      eventId,
+      original,
+      next,
+      rowDirty: row.classList.contains("dirty"),
+      unsavedBadge: Boolean(row.querySelector(".sceneBlockUnsavedBadge")),
+      topbarDirty,
+      projectDirtyLabel,
+    };
+  });
+  return await finishAuthoritativeMutationReceipt(client, baseline, mutationProof);
+}
+
 async function openTimelineShowFixture(client, viewport, fixture) {
   await client.send("Emulation.setDeviceMetricsOverride", {
     width: viewport.width,
@@ -31140,8 +31314,11 @@ async function openTimelineShowFixture(client, viewport, fixture) {
     deviceScaleFactor: 1,
     mobile: false,
   });
-  await client.send("Page.navigate", { url: fixtureUrl(fixture) });
-  await waitForApp(client);
+  const mutationReceipt = await createSceneBlockOverlapBeforeUnloadReceipt(client);
+  await activateBeforeUnloadWithTrustedTopbarClick(client);
+  await navigateToReadyAppThroughExpectedBeforeUnload(client, fixtureUrl(fixture), {
+    receipt: mutationReceipt,
+  });
   await clickWorkspaceOption(client, "control");
   await selectControlSurface(client, "live");
   await setTimelineToolsDisclosureOpen(client, true);
@@ -31547,6 +31724,163 @@ async function runSceneBlockHourViewport(client, viewport) {
   };
 }
 
+async function exerciseCompactSceneBlockMarker(client, track, expectedIds) {
+  const candidate = await evaluatePageFunction(client, (wantedTrack, wantedIds) => {
+    const trackClass = wantedTrack.toLowerCase();
+    const markers = wantedIds
+      .slice()
+      .reverse()
+      .map((eventId) => document.querySelector(
+        '.timelineMarker.sceneBlock[data-timeline-event-id="' + eventId + '"]',
+      ));
+    const marker = markers.find((candidateMarker) => {
+      if (!candidateMarker || !candidateMarker.classList.contains(trackClass)) return false;
+      if (candidateMarker.classList.contains("selected")) return false;
+      if (candidateMarker.querySelector(".timelineSceneBlockBody")) return false;
+      const hit = candidateMarker.querySelector(".timelineSceneBlockHit");
+      const rect = hit?.getBoundingClientRect();
+      if (!hit || !rect || rect.width <= 0 || rect.height <= 0) return false;
+      const point = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+      const pointTarget = document.elementFromPoint(point.x, point.y);
+      return pointTarget === hit || hit.contains(pointTarget);
+    });
+    if (!marker) return null;
+    const hit = marker.querySelector(".timelineSceneBlockHit");
+    const rect = hit?.getBoundingClientRect();
+    const point = rect ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 } : null;
+    const pointTarget = point ? document.elementFromPoint(point.x, point.y) : null;
+    const eventId = Number(marker.getAttribute("data-timeline-event-id"));
+    return {
+      eventId,
+      track: wantedTrack,
+      selected: marker.classList.contains("selected"),
+      markerClass: marker.getAttribute("class") ?? "",
+      hitCount: marker.querySelectorAll(".timelineSceneBlockHit").length,
+      bodyCount: marker.querySelectorAll(".timelineSceneBlockBody").length,
+      childCount: marker.children.length,
+      hitRect: rect ? { left: rect.left, top: rect.top, width: rect.width, height: rect.height } : null,
+      point,
+      pointTargetMarkerId: pointTarget?.closest(".timelineMarker")?.getAttribute("data-timeline-event-id") ?? "",
+      pointTargetClass: pointTarget?.getAttribute("class") ?? "",
+      pointTargetIsHit: pointTarget === hit || hit?.contains(pointTarget) === true,
+      role: marker.getAttribute("role") ?? "",
+      ariaLabel: marker.getAttribute("aria-label") ?? "",
+      tabIndex: marker.getAttribute("tabindex") ?? "",
+    };
+  }, track, expectedIds);
+
+  const readMarker = () => evaluatePageFunction(client, (wantedEventId) => {
+    const marker = document.querySelector(
+      '.timelineMarker.sceneBlock[data-timeline-event-id="' + wantedEventId + '"]',
+    );
+    if (!marker) return null;
+    const body = marker.querySelector(".timelineSceneBlockBody");
+    const bodyRect = body?.getBoundingClientRect();
+    const resizeHandles = [...marker.querySelectorAll("[data-timeline-scene-block-resize]")];
+    const fadeHandles = [...marker.querySelectorAll("[data-timeline-scene-block-fade]")];
+    return {
+      eventId: Number(marker.getAttribute("data-timeline-event-id")),
+      selected: marker.classList.contains("selected"),
+      markerClass: marker.getAttribute("class") ?? "",
+      hitCount: marker.querySelectorAll(".timelineSceneBlockHit").length,
+      bodyCount: marker.querySelectorAll(".timelineSceneBlockBody").length,
+      bodyWidth: bodyRect?.width ?? 0,
+      bodyHeight: bodyRect?.height ?? 0,
+      childCount: marker.children.length,
+      resizeEdges: resizeHandles.map((handle) => handle.getAttribute("data-timeline-scene-block-resize") ?? ""),
+      resizeAriaLabels: resizeHandles.map((handle) => handle.getAttribute("aria-label") ?? ""),
+      fadeEdges: fadeHandles.map((handle) => handle.getAttribute("data-timeline-scene-block-fade") ?? ""),
+      fadeAriaLabels: fadeHandles.map((handle) => handle.getAttribute("aria-label") ?? ""),
+      role: marker.getAttribute("role") ?? "",
+      ariaLabel: marker.getAttribute("aria-label") ?? "",
+      tabIndex: marker.getAttribute("tabindex") ?? "",
+      activeElementId: document.activeElement?.getAttribute("data-timeline-event-id") ?? "",
+      activeElementIsMarker: document.activeElement === marker,
+    };
+  }, candidate?.eventId ?? -1);
+
+  if (!candidate?.point || candidate.pointTargetMarkerId !== String(candidate.eventId)) {
+    return {
+      candidate,
+      pointerSelection: null,
+      arrowFocus: null,
+      afterArrow: null,
+      keyboardBefore: null,
+      keyboardActivation: null,
+    };
+  }
+  if (candidate.point) {
+    await client.send("Input.dispatchMouseEvent", {
+      type: "mouseMoved",
+      x: candidate.point.x,
+      y: candidate.point.y,
+      button: "none",
+      buttons: 0,
+      pointerType: "mouse",
+    });
+    await client.send("Input.dispatchMouseEvent", {
+      type: "mousePressed",
+      x: candidate.point.x,
+      y: candidate.point.y,
+      button: "left",
+      buttons: 1,
+      clickCount: 1,
+      pointerType: "mouse",
+    });
+    await client.send("Input.dispatchMouseEvent", {
+      type: "mouseReleased",
+      x: candidate.point.x,
+      y: candidate.point.y,
+      button: "left",
+      buttons: 0,
+      clickCount: 1,
+      pointerType: "mouse",
+    });
+  }
+  await evaluatePageFunction(client, async () => {
+    await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+  });
+  const pointerSelection = await readMarker();
+
+  const arrowFocus = await evaluatePageFunction(client, (wantedEventId) => {
+    const marker = document.querySelector(
+      '.timelineMarker.sceneBlock[data-timeline-event-id="' + wantedEventId + '"]',
+    );
+    marker?.focus();
+    return {
+      focusedEventId: document.activeElement?.getAttribute("data-timeline-event-id") ?? "",
+      focusedRole: document.activeElement?.getAttribute("role") ?? "",
+    };
+  }, candidate?.eventId ?? -1);
+  await pressKey(client, "ArrowLeft", "ArrowLeft");
+  await evaluatePageFunction(client, async () => {
+    await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+  });
+  const afterArrow = await readMarker();
+  const keyboardBefore = await evaluatePageFunction(client, (wantedEventId) => {
+    const marker = document.querySelector(
+      '.timelineMarker.sceneBlock[data-timeline-event-id="' + wantedEventId + '"]',
+    );
+    marker?.focus();
+    return {
+      focusedEventId: document.activeElement?.getAttribute("data-timeline-event-id") ?? "",
+      focusedRole: document.activeElement?.getAttribute("role") ?? "",
+      selected: marker?.classList.contains("selected") === true,
+      hitCount: marker?.querySelectorAll(".timelineSceneBlockHit").length ?? 0,
+      bodyCount: marker?.querySelectorAll(".timelineSceneBlockBody").length ?? 0,
+      role: marker?.getAttribute("role") ?? "",
+      ariaLabel: marker?.getAttribute("aria-label") ?? "",
+      tabIndex: marker?.getAttribute("tabindex") ?? "",
+    };
+  }, candidate?.eventId ?? -1);
+  await pressKey(client, "Enter");
+  await evaluatePageFunction(client, async () => {
+    await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+  });
+  const keyboardActivation = await readMarker();
+  return { candidate, pointerSelection, arrowFocus, afterArrow, keyboardBefore, keyboardActivation };
+}
+
 async function runSceneBlockOverlapTrack(client, viewport, track, expectedIds, activationKind) {
   await openTimelineShowFixture(client, viewport, "scene-block-large");
   const initialStats = await evaluatePageFunction(client, (wantedTrack, wantedIds) => {
@@ -31567,7 +31901,8 @@ async function runSceneBlockOverlapTrack(client, viewport, track, expectedIds, a
     const marker = document.querySelector(
       '.timelineMarker.sceneBlock[data-timeline-event-id="' + wantedIds.at(-1) + '"]',
     );
-    const markerBodyRect = marker?.querySelector(".timelineSceneBlockBody")?.getBoundingClientRect();
+    const markerHitElement = marker?.querySelector(".timelineSceneBlockHit, .timelineSceneBlockBody");
+    const markerHitRect = markerHitElement?.getBoundingClientRect();
     const markerTitle = (marker?.querySelector("title")?.textContent || "").trim();
     const markerLoopCount = Number(marker?.getAttribute("data-timeline-loop-count"));
     const badgeStartMs = Number(badge?.getAttribute("data-overlap-start-ms"));
@@ -31575,10 +31910,10 @@ async function runSceneBlockOverlapTrack(client, viewport, track, expectedIds, a
     const badgeTimeSpan = `${badgeStartMs} to ${badgeEndMs} ms`;
     const badgeAriaLabel = badge?.getAttribute("aria-label") ?? "";
     const badgeTitle = (badge?.querySelector("title")?.textContent || "").trim();
-    const markerHit = markerBodyRect
+    const markerHit = markerHitRect
       ? document.elementFromPoint(
-          markerBodyRect.left + markerBodyRect.width / 2,
-          markerBodyRect.top + markerBodyRect.height / 2,
+          markerHitRect.left + markerHitRect.width / 2,
+          markerHitRect.top + markerHitRect.height / 2,
         )?.closest(".timelineMarker")
       : null;
     return {
@@ -31607,6 +31942,8 @@ async function runSceneBlockOverlapTrack(client, viewport, track, expectedIds, a
       badgeWidth: rect?.width ?? 0,
       badgeHeight: rect?.height ?? 0,
       markerHitId: markerHit?.getAttribute("data-timeline-event-id") ?? "",
+      markerHitClass: markerHitElement?.getAttribute("class") ?? "",
+      markerChildCount: marker?.children.length ?? 0,
       markerLoopCount,
       markerTitle,
       visibleBlockLabelsHaveIterationSuffix: [...document.querySelectorAll(".timelineSceneBlockLabel")]
@@ -31623,6 +31960,7 @@ async function runSceneBlockOverlapTrack(client, viewport, track, expectedIds, a
     }
     await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
   });
+  const compactMarkerStats = await exerciseCompactSceneBlockMarker(client, track, expectedIds);
   const keyboardAccessStats = await focusTimelineOverlapClusterWithTab(client, track);
   await evaluatePageFunction(client, () => {
     const overview = document.querySelector(".timelineOverview");
@@ -31877,15 +32215,60 @@ async function runSceneBlockOverlapTrack(client, viewport, track, expectedIds, a
     initialStats.badgeWidth >= 20 &&
     initialStats.badgeHeight >= 10 &&
     initialStats.markerHitId === String(expectedIds.at(-1)) &&
+    initialStats.markerHitClass === "timelineSceneBlockHit" &&
+    initialStats.markerChildCount === 1 &&
     initialStats.markerLoopCount > 1 &&
-    initialStats.markerTitle.includes(` x ${initialStats.markerLoopCount}`) &&
+    initialStats.markerTitle === "" &&
     !initialStats.visibleBlockLabelsHaveIterationSuffix &&
     initialStats.markerCount === 500 &&
     initialStats.overviewNodeCount < 3_500 &&
     initialStats.rulerTickCount > 1 &&
-    initialStats.rulerTickCount <= 64
-    )],
-    ["activation-timing", Boolean(
+     initialStats.rulerTickCount <= 64
+     )],
+    ["compact-member-pointer-rehydrates", Boolean(
+      compactMarkerStats?.candidate?.track === track &&
+      Number.isInteger(compactMarkerStats.candidate.eventId) &&
+      expectedIds.includes(compactMarkerStats.candidate.eventId) &&
+      compactMarkerStats.candidate.selected === false &&
+      compactMarkerStats.candidate.hitCount === 1 &&
+      compactMarkerStats.candidate.bodyCount === 0 &&
+      compactMarkerStats.candidate.childCount === 1 &&
+      compactMarkerStats.candidate.pointTargetMarkerId === String(compactMarkerStats.candidate.eventId) &&
+      compactMarkerStats.candidate.pointTargetIsHit &&
+      compactMarkerStats.pointerSelection?.selected === true &&
+      compactMarkerStats.pointerSelection.eventId === compactMarkerStats.candidate.eventId &&
+      compactMarkerStats.pointerSelection.bodyCount === 1 &&
+      compactMarkerStats.pointerSelection.bodyWidth >= 16 &&
+      compactMarkerStats.pointerSelection.bodyHeight > 0 &&
+      compactMarkerStats.pointerSelection.resizeEdges.length === 2 &&
+      compactMarkerStats.pointerSelection.resizeEdges.includes("start") &&
+      compactMarkerStats.pointerSelection.resizeEdges.includes("end") &&
+      compactMarkerStats.pointerSelection.fadeEdges.length === 2 &&
+      compactMarkerStats.pointerSelection.fadeEdges.includes("in") &&
+      compactMarkerStats.pointerSelection.fadeEdges.includes("out")
+      )],
+    ["marker-accessible-name-keyboard-activation", Boolean(
+      compactMarkerStats?.candidate?.role === "button" &&
+      compactMarkerStats.candidate.ariaLabel.length > 0 &&
+      compactMarkerStats.candidate.ariaLabel.includes(String(compactMarkerStats.candidate.eventId)) &&
+      compactMarkerStats.candidate.ariaLabel.includes(track) &&
+      compactMarkerStats.pointerSelection?.role === "button" &&
+      compactMarkerStats.pointerSelection.ariaLabel === compactMarkerStats.candidate.ariaLabel &&
+      compactMarkerStats.arrowFocus?.focusedEventId === String(compactMarkerStats.candidate.eventId) &&
+      compactMarkerStats.afterArrow?.selected === false &&
+      compactMarkerStats.keyboardBefore?.focusedEventId === String(compactMarkerStats.candidate.eventId) &&
+      compactMarkerStats.keyboardBefore.selected === false &&
+      compactMarkerStats.keyboardBefore.hitCount === 1 &&
+      compactMarkerStats.keyboardBefore.bodyCount === 0 &&
+      compactMarkerStats.keyboardBefore.role === "button" &&
+      compactMarkerStats.keyboardBefore.ariaLabel === compactMarkerStats.candidate.ariaLabel &&
+      compactMarkerStats.keyboardActivation?.selected === true &&
+      compactMarkerStats.keyboardActivation.eventId === compactMarkerStats.candidate.eventId &&
+      compactMarkerStats.keyboardActivation.bodyCount === 1 &&
+      compactMarkerStats.keyboardActivation.resizeEdges.length === 2 &&
+      compactMarkerStats.keyboardActivation.fadeEdges.length === 2
+      )],
+     ["activation-timing", Boolean(
     activationStats !== null &&
     activationStats.stateHandlerElapsedMs < 100 &&
     activationStats.stateMicrotaskElapsedMs < 100 &&
@@ -31951,6 +32334,7 @@ async function runSceneBlockOverlapTrack(client, viewport, track, expectedIds, a
     passed,
     initialStats,
     activationStats,
+    compactMarkerStats,
     searchStats,
     containment,
     failedChecks,
@@ -31970,6 +32354,8 @@ async function runPartiallyClippedMarkerDrag(client, eventId) {
     const bodyRect = body?.getBoundingClientRect();
     const svgRect = marker?.ownerSVGElement?.getBoundingClientRect();
     const range = document.querySelector(".timelineVisibleRange");
+    const snapState = document.querySelector("[data-timeline-snap-state]");
+    const gridInput = document.querySelector(".timelineSnapControls input[type=\"number\"]");
     if (!marker || !bodyRect || !svgRect) return null;
     const x = bodyRect.left + bodyRect.width / 2;
     const y = bodyRect.top + 5;
@@ -31981,8 +32367,11 @@ async function runPartiallyClippedMarkerDrag(client, eventId) {
       svgWidth: svgRect.width,
       originalStartMs: Number(marker.getAttribute("data-timeline-start-ms")),
       originalPreviewStartMs: Number(marker.getAttribute("data-timeline-preview-start-ms")),
+      originalPreviewEndMs: Number(marker.getAttribute("data-timeline-preview-end-ms")),
       visibleStartMs: Number(range?.getAttribute("data-visible-start-ms")),
       visibleEndMs: Number(range?.getAttribute("data-visible-end-ms")),
+      gridQuantizeState: snapState?.getAttribute("data-timeline-grid-quantize-state") ?? "",
+      gridMs: Number(gridInput?.value),
       bodyLeft: bodyRect.left,
       bodyRight: bodyRect.right,
       svgLeft: svgRect.left,
@@ -32025,6 +32414,16 @@ async function runPartiallyClippedMarkerDrag(client, eventId) {
     buttons: 1,
   });
   const moved = await markerSnapshot();
+  const snapGuide = await evaluatePageFunction(client, () => {
+    const guide = document.querySelector("[data-timeline-snap-guide]");
+    if (!guide) return null;
+    return {
+      kind: guide.getAttribute("data-timeline-snap-kind") ?? "",
+      targetId: guide.getAttribute("data-timeline-snap-target-id") ?? "",
+      edge: guide.getAttribute("data-timeline-snap-edge") ?? "",
+      timeMs: Number(guide.getAttribute("data-timeline-snap-time-ms")),
+    };
+  });
   await client.send("Input.dispatchMouseEvent", {
     type: "mouseReleased",
     x: geometry.x + 6,
@@ -32039,13 +32438,23 @@ async function runPartiallyClippedMarkerDrag(client, eventId) {
   );
   const settled = await markerSnapshot();
   const visibleSpanMs = geometry.visibleEndMs - geometry.visibleStartMs;
+  const expectedDeltaMs = (6 / geometry.svgWidth) * visibleSpanMs;
+  const snappedExpectedStartMs = Math.round(
+    (geometry.originalStartMs + expectedDeltaMs) / geometry.gridMs,
+  ) * geometry.gridMs;
+  const snapGuideTargetStartMs = snapGuide?.edge === "end"
+    ? snapGuide.timeMs - (geometry.originalPreviewEndMs - geometry.originalPreviewStartMs)
+    : snapGuide?.timeMs;
   return {
     ...geometry,
     tiny,
     moved,
     settled,
-    expectedDeltaMs: (6 / geometry.svgWidth) * visibleSpanMs,
+    snapGuide,
+    snapGuideTargetStartMs,
+    expectedDeltaMs,
     actualPreviewDeltaMs: moved.previewStartMs - geometry.originalPreviewStartMs,
+    snappedExpectedStartMs,
   };
 }
 
@@ -32160,10 +32569,17 @@ async function runSceneBlockOverlapViewport(client, viewport) {
     clippedDragStats.bodyLeft < clippedDragStats.svgLeft &&
     clippedDragStats.bodyRight > clippedDragStats.svgLeft &&
     clippedDragStats.tiny.previewStartMs === clippedDragStats.originalPreviewStartMs &&
-    Math.abs(clippedDragStats.actualPreviewDeltaMs - clippedDragStats.expectedDeltaMs) <= 2 &&
+    Number.isFinite(clippedDragStats.expectedDeltaMs) &&
+    Number.isFinite(clippedDragStats.actualPreviewDeltaMs) &&
+    clippedDragStats.gridQuantizeState === "Grid" &&
+    clippedDragStats.gridMs === 500 &&
+    clippedDragStats.snapGuide?.kind === "grid" &&
+    clippedDragStats.snapGuideTargetStartMs === 1000 &&
+    clippedDragStats.snapGuideTargetStartMs === clippedDragStats.snappedExpectedStartMs &&
+    Number.isFinite(clippedDragStats.snappedExpectedStartMs) &&
+    Math.abs(clippedDragStats.moved.previewStartMs - clippedDragStats.snappedExpectedStartMs) <= 2 &&
     Math.abs(
-      clippedDragStats.settled.startMs -
-      (clippedDragStats.originalStartMs + clippedDragStats.expectedDeltaMs)
+      clippedDragStats.settled.startMs - clippedDragStats.snappedExpectedStartMs
     ) <= 2 &&
     clippedDragStats.settled.startMs < clippedDragStats.visibleStartMs &&
     finalStats.videoFilterVisible &&

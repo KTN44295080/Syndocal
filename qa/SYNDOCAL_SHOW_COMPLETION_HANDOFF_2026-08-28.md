@@ -1,15 +1,183 @@
-# Syndocal 2026-08-31 show completion handoff
+# Syndocal 2026-09-01 show completion handoff
 
-Status date: 2026-08-31 JST
+Status date: 2026-09-01 JST
 
 This is the concise authoritative resume note for the final show-critical tranche. It supersedes chat-only status, but it does not supersede the detailed acceptance documents named below.
 
-## 2026-08-31 Timeline UX/Undo bounded pause checkpoint
+## 2026-09-01 alpha.49 native one-button / output checkpoint
+
+The exact Community MSVC `14.44.35207` no-bundle build completed with
+first-party Rust warnings `0`. The release artifact is
+`C:\Users\kouty\Documents\KDMX\target\release\syndocal.exe`,
+Product/FileVersion `1.2.0-alpha.49`, `62,397,440` bytes, SHA-256
+`2152272B75A59D3342DE4AD64D33638564FC9D2038ED38D56F7C65B64F42177C`.
+The pinned Community linker was first in `where.exe` (Git linker second). One
+responsive maximized Syndocal window was verified (PID `71980`).
+
+The authored project is
+`C:\Users\kouty\Documents\KDMX\target\qa\dsf2026-show-authored-20260828\DSF2026-show-alpha42-artnet-probe-acceptance.sdc`,
+`1,114,510` bytes, SHA-256
+`5926A36FDD8E0251A2B67904A93490D3E3B3F54E323E24D3FAC26B31E7546F46`.
+
+The one-button `Prepare show DMX` flow completed all four UI stages: `Both`
+role, exact `COM3` machine-local PnP binding, Art-Net
+`127.0.0.1:6454` / wire Universe `0` enable, and S0 engagement with Open-DMX
+arm. Backend activation acknowledged only after the initial physical all-zero
+BREAK/MAB/`write_all`/`flush` transaction. The worker remained active with S0
+for approximately five minutes without a fault; the only unrelated stderr was
+DJ-Link `trust_network_absent`. This is not an electrical waveform or fixture
+visual proof.
+
+The identified live display arrangement was Display 1 `1920x1080`, Display 5
+`3840x2160`, plus the editor window (three screens). This records live windows,
+not current pixel/Spout acceptance. Unity listener and Art-Net route status are
+local readiness evidence only; no current Art-Net datagram capture is claimed.
+MiraBox was absent, and Unity pixel/Spout acceptance remains open.
+
+The project contains the wait-for-pedal destination configuration from
+`人生オーバー` to `惑う星`; natural-boundary transition and Pedal 1 live start
+receipt remain pending and must be captured separately from source tests.
+
+Focused evidence: serial code `23/23`, protocol `205/205`, TypeScript, fmt,
+diff, and `check:release` pass. The only reported frontend notice is the
+standard Vite chunk-size warning (`>500k`); no first-party warning was added.
+No commit or push has been made for this checkpoint.
+
+Workspace cleanup was intentionally not run at this checkpoint. The bounded
+size inventory of the large shared `target` tree did not complete within the
+show-critical time box, and no independently reviewed exact recurring-delete
+target set was available. Current release/QA evidence, user-authored project
+files, dependency stores, and build trees were preserved; no reclaimed-byte
+claim is made.
+
+## Historical 2026-09-01 alpha.48 stage-4 stale-fence checkpoint
+
+Alpha.48 artifact was `62,375,424` bytes, SHA-256
+`749AF5590D2694937F9CAE62471AFF87446E87C455137270D98C38582A82B6DD`.
+The previous stage-3 stale-fence fix crossed to stage 4, then the serial arm
+failed before publication because `GetFinalPathNameByHandleW` received an
+invalid COM handle (`0x80070057`). No USB worker or physical write occurred.
+This is a pre-physical-apply fail-closed rejection, not external delivery
+evidence; alpha.49 supersedes it.
+
+## Historical 2026-08-31 alpha.46 native / managed-lease race checkpoint
+
+The exact MSVC `14.44.35207` no-bundle build completed with first-party Rust
+warnings `0`. The exact release artifact is
+`C:\Users\kouty\Documents\KDMX\target\release\syndocal.exe`, Product/FileVersion
+`1.2.0-alpha.46`, `62,290,432` bytes, SHA-256
+`04A36C709BEF41E8BE4A561C37835EE6FDAAD8F3EC25586666DFB4D6C2B8F768`.
+One responsive maximized Syndocal window opened the identified alpha.42
+Art-Net-probe acceptance project. Its current byte identity is `1,114,470`
+bytes / SHA-256
+`35EE42976B97C9570139A37AF09F82E1B1D97B0F1BD1CC5F6D9DB83F53EA2F0A`.
+
+`Prepare show DMX` completed the `Both` and machine-local binding stages with
+MiraBox unplugged; input-only capture absence no longer blocks `Both`. After
+the operator accepted the native stage-3 confirmation, the exact stderr record
+showed `Err(StaleGeneration)`: the managed keepalive renewed the same exact
+`Both` lease while confirmation was open. This rejection occurred before the
+Art-Net socket, S0 transition, USB worker, or physical write. The generic UI
+`publication_failed / physical output state is unknown` text overstates this
+particular pre-publication safe rejection.
+
+At that historical checkpoint, implementation work was narrowly closing that
+TOCTOU by serializing an exact managed-`Both` authorization against keepalive
+renewal without rebasing public/unmanaged stale requests. Alpha.49 supersedes
+that stage-3 boundary; physical USB-DMX and Art-Net delivery still require the
+explicit evidence rows below, and the F3200A remains all-zero-only.
+
+## Historical 2026-08-31 alpha.45 source/test checkpoint — native and external gates pending
+
+The KDMX product metadata at that checkpoint was `1.2.0-alpha.45` on branch
+`codex/syndocal-v1.2`. This is a source/test checkpoint only. No alpha.45
+native build, launch/window verification, saved/reopened show artifact,
+physical USB-DMX or Art-Net/Spout output, camera/audio observation, production
+DJ-Link peer exchange, or other external/hardware acceptance is claimed. The
+alpha.44 source, alpha.43 native, and alpha.42 display records below remain
+immutable historical evidence and are not rebound to alpha.45.
+
+The recorded full-workspace Cargo result passed, including Syndocal
+`1389 pass / 0 fail / 14 ignored` and Video `163 pass / 0 fail / 1 ignored`.
+The focused output-lease keepalive gate passed `69/69`. These deterministic
+source results do not close native, external, physical, audible, or hardware
+gates. The alpha.45 native build/window, real-device, production peer, and
+show-output rows remain pending until observed against identified artifacts,
+devices, and configuration.
+
+The current DJ-Link wire is exclusively `syndocal-envelope-v3` with the exact
+`{v:3,type,agentId,sessionId,sequence,eventId,payload}` envelope. Flat, v1, and
+v2 adapters are retired and rejected without fallback; any older v2 wording in
+the historical rows below is not current executable guidance.
+
+## Historical 2026-08-31 alpha.45 operator-run output-control checkpoint — failure boundary
+
+The operator-run artifact was identified as
+`C:\Users\kouty\Documents\KDMX\target\release\syndocal.exe`, Product/FileVersion
+`1.2.0-alpha.45`, `62,272,000` bytes, SHA-256
+`34EAC7C71E8EC392A3C51A429A313C573D096AC86DE3499EB6EA0A454641E89B`. The
+repository readback was branch `codex/syndocal-v1.2`, `HEAD
+85787a87aa95ded22f80f11386a6603ef0c675bb`, upstream
+`85787a87aa95ded22f80f11386a6603ef0c675bb` (equal; worktree dirty). This is
+artifact/repository identity for the operator observation, not a clean-source
+binding or a completed alpha.45 native build/launch gate.
+
+| Surface | Recorded observation | Boundary |
+| --- | --- | --- |
+| Legacy Spout reset | Reset succeeded at runtime: output count `4 -> 2`; `Display 1` and `Display 5` were preserved. | Runtime inventory only; no Spout receiver or external-display acceptance. |
+| Art-Net / Unity | Art-Net enabled; Unity listener observed at `127.0.0.1:6454`. | Local listener only; physical Art-Net node IP remains unresolved and physical-node acceptance is open. |
+| `Both` enable | Rejected with `External video output route synchronization failed while preparing Both`; OutputControl returned `publication_failed` / physical output state unknown. | Camera-input-start failure is only a suspicion, not a confirmed cause. |
+| USB `COM3` arm | Returned `publication_failed`; worker stopped; no physical zero receipt. | USB physical acceptance was not performed. `S0` stayed engaged and DMX was observed `0/0` (logical/runtime only). |
+| F3200A | 34-channel laser remained dark. | Nonzero output is prohibited; retain all-zero only and do not infer a physical zero receipt from darkness. |
+| One-button fix | Frontend + backend fix is still in progress. | No native verification or acceptance yet. |
+
+This is a failed/unknown publication boundary, not a completed output
+checkpoint. Keep S0 engaged and the F3200A all-zero prohibition in force. The
+first safe resume action is to complete the one-button source fix, then run the
+required native verification and independently capture the identified USB and
+Art-Net paths; do not retry the in-doubt publication before that.
+
+## 2026-09-01 current show output execution / physical boundaries pending
+
+Current transport decision: explicitly select and confirm the machine-local
+USB-DMX device/protocol on the show PC; mirror each completed internal U0 frame
+to USB-DMX and to Unity via Art-Net ArtDmx (`127.0.0.1:6454`, wire U0, 512
+channels). USB frame channel 500 / `payload[499]` and Art-Net `payload[499]`
+must both remain `0`; keep the two local Spout senders for video.
+
+Current alpha.49 evidence closes the exact artifact/device identity, initial
+S0 queue, initial Open-DMX BREAK/MAB/`write_all`/`flush` completion, and a
+fault-free worker run beyond 60 seconds. Still pending: release S0 only after
+an exact reviewed fixture-safe test, observe the completed-U0 live mirror,
+capture USB electrical wire and Art-Net datagrams independently, and verify
+the operator-visible fixture result. The currently attached F3200A laser (34ch, DMX
+address 1) is all-512-zero-only: do not release S0 or send the historical Mega
+PAR red `ch1=255` / `ch5=255` frame until the operator confirms beam-path
+safety and an exact reviewed F3200A channel test. Mega PAR red/blackout is
+deferred to a later Mega PAR rig. Queue acceptance or worker completion is not
+wire or fixture proof. A fault in this strict USB mirror is show-wide: engage
+global S0 and Art-Net zero/blackout. Generic independent serial-route failures
+remain isolated from unrelated network routes.
+
+Known nonblocking P2 telemetry boundary: `crates/engine/src/lib.rs:31772-31781`
+samples `effective_safety_blackout` before the route send, then
+`:31965-31980` publishes `live_frame_queued` and its detail from that sample. If
+S0 engages between those points, the same tick can report a queued live mirror
+although `send_dmx_frame_at_safety_boundary` at `:64828-64856` rechecks the
+logical authority and physical latch and queues zero. The physical/action gate
+therefore remains fail-closed; this is a status-truth refinement, not a wire or
+fixture claim. Do not widen the sender API in this freeze; resolve it in a
+dedicated telemetry tranche with a deterministic interleave proof.
+
+The historical alpha.34–alpha.42 Art-Net-only wording is superseded because
+the venue fixtures use USB-DMX; Art-Net remains the simultaneous Unity path.
+
+## Historical 2026-08-31 alpha.44 Timeline UX/Undo bounded pause checkpoint
 
 Authority is branch `codex/syndocal-v1.2`; the pre-checkpoint local/upstream
 base was `eaef0508df944dafdee08552acb6be28a74c9c46`, and the authoritative source
 checkpoint is the commit containing this note after its upstream-equal push.
-Product metadata is `1.2.0-alpha.44`. The tranche contains the documented alpha.44
+At that historical checkpoint, product metadata was `1.2.0-alpha.44`. The tranche contains the documented alpha.44
 DVC persistence work plus Timeline Source Shelf density, Scene Block
 readability, wheel navigation, adaptive ruler/fixed Grid snap, edge guides, and
 authoritative root Scene Block history. It also moves the 409-KB
@@ -31,7 +199,7 @@ operator requested this bounded pause.
 The first safe source action is to run Source Shelf at 1366x768 and 1280x720,
 then the repaired control four-viewport aggregate. Do not add implementation
 before those gates are recorded. The first safe native action still requires
-operator confirmation that alpha.43 PID `80968` no longer owns needed in-memory
+operator confirmation that alpha.43 PID `80968` no longer owned needed in-memory
 work; path-verify and stop only that executable, run the mandatory MSVC 14.44
 no-bundle build, launch exactly one maximized alpha.44 window, and manually
 exercise move, RATE/WINDOW resize, Fade In/Out, guide, Undo, and Redo. Physical
@@ -62,9 +230,9 @@ was removed. No build/cache tree had a reviewed recurring deletion target at
 this checkpoint, so no cache deletion was attempted; current release, debug,
 ASIO, QA, and user-authored evidence remain preserved.
 
-## 2026-08-31 alpha.44 DVC save/reopen source authority
+## Historical 2026-08-31 alpha.44 DVC save/reopen source authority
 
-Current product metadata is synchronized at `1.2.0-alpha.44`. The old
+At that historical checkpoint, product metadata was synchronized at `1.2.0-alpha.44`. The old
 current-schema validator required a global lighting-effect summary even when a
 Cue carried the complete owned effect request. The new path accepts that
 single-authority form and still rejects zero IDs, duplicate per-Cue IDs,
@@ -89,7 +257,7 @@ launch, and native reopen of a separately saved candidate. Preserve the failed
 alpha.43 evidence file; do not overwrite it. Physical DMX/Art-Net/Spout/audio,
 capture, and production DJ acceptance remain open.
 
-## 2026-08-31 alpha.43 native/DVC resume authority
+## Historical 2026-08-31 alpha.43 native/DVC resume authority
 
 Native build source/docs were clean and upstream-equal at
 `eaef0508df944dafdee08552acb6be28a74c9c46`. Only the exact checkout-owned
@@ -117,13 +285,13 @@ operator action remains relinking the one missing audio only after a corrected
 save/reopen artifact exists. Physical DMX/Art-Net/Spout/audio and production DJ
 acceptance remain open.
 
-## 2026-08-31 alpha.43 source-integration handoff
+## Historical 2026-08-31 alpha.43 source-integration handoff
 
 The pushed alpha.43 implementation/QA checkpoint is branch
 `codex/syndocal-v1.2` at
 `eaef0508df944dafdee08552acb6be28a74c9c46`, recorded with local
 `HEAD`/upstream equality. The implementation was introduced at
-`8d8c5461f314d85e0be64f4ab7bd4f1a857de619`; the current authority includes
+`8d8c5461f314d85e0be64f4ab7bd4f1a857de619`; that historical checkpoint includes
 its pushed documentation follow-up. That committed source checkpoint
 advances the product consistently to `1.2.0-alpha.43` across workspace
 Cargo/lock, frontend package, Tauri
@@ -186,9 +354,9 @@ intermediate SDC as evidence, and diagnose the missing Lighting-effect
 reference through the import -> save -> project-open path. Do not continue to
 physical output from that rejected intermediate artifact.
 
-## 2026-08-30 current source, process, and external-boundary checkpoint
+## Historical 2026-08-30 alpha.43 source, process, and external-boundary checkpoint
 
-The current pushed implementation/QA checkpoint is branch `codex/syndocal-v1.2` at
+The pushed implementation/QA checkpoint at that historical time was branch `codex/syndocal-v1.2` at
 `eaef0508df944dafdee08552acb6be28a74c9c46`, exactly equal to
 `origin/codex/syndocal-v1.2`. The fixed alpha.42 Art-Net derivative generator
 and tests were introduced at `42cb17ce3ae0272a43f7671da70361d3f2520e98`.
@@ -210,8 +378,9 @@ strict-v3 provisioning, LAN, token, HELLO/ACK/STATE_SYNC, reconnect, or
 Timeline acceptance; HW-4 remains exactly `0/12`.
 
 The exact checkout-owned alpha.42 PID `115592` was path-verified and stopped
-for the alpha.43 build. The current exact checkout-owned alpha.43 PID `80968`
-is responsive; its identity is recorded in the native/DVC authority above.
+for the alpha.43 build. The historical exact checkout-owned alpha.43 PID
+`80968` was responsive; its identity is recorded in the native/DVC authority
+above.
 Unity remains responsive as PID `112488` and is the sole observed UDP `6454`
 owner. The Art-Net derivative one-shot is unsent, physical receiver/fixture
 observation is open, MiraBox HDMI-content proof is open, audible rehearsal
@@ -226,8 +395,8 @@ remain `0`.
 
 ## 2026-08-30 alpha.42 final native three-display checkpoint
 
-This is a historical alpha.42 native authority and supersedes the older
-source-only/current claims below. Branch `codex/syndocal-v1.2` is at `HEAD
+This is immutable historical alpha.42 native evidence and does not override the
+current alpha.45 source/test checkpoint above. Branch `codex/syndocal-v1.2` was at `HEAD
 b1f6d760c75b430a4255ead71e5f4bb964501cf4`. The exact MSVC `14.44` native
 build passed with first-party warnings `0`; the exact
 `C:\Users\kouty\Documents\KDMX\target\release\syndocal.exe` is
@@ -460,14 +629,15 @@ epoch/flight token prevents kind ABA and stale monitor selection/discovery from
 committing an old result. No storage, console, network, or telemetry path was
 added.
 
-Supervisor evidence: exact MSVC 14.44 Cargo control-plane `28/28` and Engine
+Supervisor evidence at that historical alpha.41 checkpoint: exact MSVC 14.44 Cargo control-plane `28/28` and Engine
 inventory `1/1`, backend operator contract 503/131, Display checker PASS,
 frontend routing 443/131/31, frontend invoke inventory 443, localization
 `3644/3644`, TypeScript/Vite PASS, release gate PASS, fmt/diff PASS,
 first-party warnings 0. The routing checker names the three new Art-Net probe
 routes as non-project mutations and the new Timeline-composition route as the
 only renderer-ticketed addition. Independent admission, Engine, and final
-diagnostic reviews are GO with no P0/P1. Product metadata is advanced to
+diagnostic reviews are GO with no P0/P1. Product metadata was advanced at that
+historical checkpoint to
 `1.2.0-alpha.41`; no alpha.41 native artifact or hardware claim exists yet.
 The next safe action is commit/push this source checkpoint, terminate only the
 exact checkout-owned alpha.40 process immediately before build, perform the
@@ -481,7 +651,7 @@ The checkpoint's read-only storage inventory is `target`
 `app/dist` `5,221,332` bytes. The reviewed recurring-cleanup eligibility is not
 satisfied, so no deletion ran and reclaimed bytes are `0`.
 
-  A subsequent bounded native show-UI pass used the same exact responsive,
+  A subsequent bounded historical native show-UI pass used the same exact responsive,
   maximized alpha.39 PID `87640` / window id `2033716740` and left the opened
   project paused and unsaved. Right-clicking its Timeline Audio Clip opened the
   compact `操作` disclosure; expanding it exposed the four nested groups
@@ -516,7 +686,8 @@ not change the completion claims above.
   `93E71D8AC3889968C2AAD5B0A8CA194B88CB1C7B51BF897C7741C969D9A05094`);
   the rehearsal sibling is unmuted for listening (SHA-256
   `AC9133AFD2C9AAD022674B45222447115F624175B2C5E20DE1E803ABAA9778CE`).
-  No current alpha.39 ASIO artifact/profile exists; TOPPING/CUE physical
+  No alpha.39 ASIO artifact/profile existed at that historical checkpoint;
+  TOPPING/CUE physical
   output remains unverified.
 - The last UI-verified loaded unsaved project was alpha9; this read-only audit
   did not re-observe the current in-memory project identity. The alpha9 file
@@ -695,8 +866,9 @@ node tools/show-structural-preflight.mjs target/qa/dsf2026-show-authored-2026082
   `e4ec22384675aace5ed3912ddffdcfecca190919`. The normal native artifact and
   responsive/maximized window identity are recorded above. Alpha.37 and earlier
   processes are historical execution evidence; the exact alpha.38 PID `55624`
-  is historical native authority only. The current authority is the alpha.39
-  native checkpoint at build source/docs `HEAD` and upstream
+  is historical native authority only. At that historical checkpoint, alpha.39
+  was the then-current native checkpoint, not current source authority. Its
+  native checkpoint used build source/docs `HEAD` and upstream
   `ec93e9160da853ad181de70aee4db7b4a75fafbb`. The reviewed native-evidence
   record is pushed at `94b362bd2d733e447feabf0a0a6158699da6a2bf`; the exact
   alpha.39 artifact and responsive maximized window are recorded at the top of
@@ -728,19 +900,22 @@ node tools/show-structural-preflight.mjs target/qa/dsf2026-show-authored-2026082
   item. No deletion target is currently accepted for this checkpoint
   (`Candidates=[]`); no deletion ran and reclaimed logical bytes remain `0`.
 
-- The complete same-PC Art-Net/camera/fixed-Spout source checkpoint is clean and
-  pushed at `138f6c3e7bd536c10a589bc644bb9bc6df269f7a` on
-  `codex/syndocal-v1.2`. The same-PC show-output clean break replaces the
-  retired show-only USB/Enttec activation with a payloadless, locally
-  confirmed Art-Net route fixed at `127.0.0.1:6454`, wire U0, 512 bytes, and
-  no serial field. Generic serial DMX remains available outside this exact
-  show path. The strict sender masks DMX channel 500 to zero immediately
-  before packet encoding.
+- The complete same-PC Art-Net/camera/fixed-Spout source checkpoint is a
+  **historical** checkpoint, clean and pushed at
+  `138f6c3e7bd536c10a589bc644bb9bc6df269f7a` on `codex/syndocal-v1.2`. At that
+  time its show-output clean break replaced the retired show-only USB/Enttec
+  activation with a payloadless, locally confirmed Art-Net route fixed at
+  `127.0.0.1:6454`, wire U0, 512 bytes, and no serial field. That old transport
+  decision is superseded by the current boundary above: USB-DMX is the physical
+  show-lighting primary and Art-Net is the simultaneous Unity mirror. The
+  historical sender still masks DMX channel 500 to zero immediately before
+  packet encoding.
 - Exact MSVC `14.44.35207` focused evidence after the final rollback/UI repair:
   camera catalog `21/21`, engine Art-Net `7/7`, Syndocal Art-Net `3/3`, and
   protocol control-plane `1/1`; failures and ignored tests are zero and
-  first-party warnings are zero. The wire proof observes ch1/ch5 at payload
-  bytes 0/4 and ch500 zero at payload byte 499. Independent Terra xHigh review
+  first-party warnings are zero. The historical proof observes ch1/ch5 at
+  payload bytes 0/4 and ch500 zero at payload byte 499 in a local loopback
+  packet, not an electrical venue-wire capture. Independent Terra xHigh review
   is GO after closing the stale Setup I/O fixture and publication-failure
   rollback proof. Ox was unavailable for this narrow review exception.
 - The historical alpha.34 tranche established the fixed two-Sender Spout
@@ -769,7 +944,16 @@ node tools/show-structural-preflight.mjs target/qa/dsf2026-show-authored-2026082
 - Branch: `codex/syndocal-v1.2`
 - Last pushed alpha.30 source checkpoint: `9c9a96da6955f1ee0098468f30e16221ccaf779e` (`feat: add hybrid ASIO program and WDM cue routing`). It was pushed to `origin/codex/syndocal-v1.2` with exact upstream equality. No alpha.30 native artifact is accepted yet.
 - Historical alpha.31 source authority: `602b96a8fcb0de3fd3a3e281324550fe1d7b5630` on `origin/codex/syndocal-v1.2`. It contains the Timeline authoring monitor plus the reviewed normal-build cfg correction.
-- Pushed pre-alpha.32 Timeline-audio component checkpoint, included by the current alpha.32 integration: `fedf6c48fbab59b3f0c643da402fcc026ee74fbe` on `origin/codex/syndocal-v1.2` (`Synchronize Timeline audio varispeed clocks`). Its own product metadata was still alpha.31; the synchronized alpha.32 product identity begins with the subsequent version checkpoint. Child Timeline PROGRAM/CUE now uses one canonical 250..=4000 millirate for position, Rodio speed, drift, and inverse Sink seek; nested fractional rates are rounded once, ambiguous/invalid rates refuse audio attachment, and a negative `source_offset_ms` remains silent until its exact root-output boundary. Lighting keeps its established position path.
+- Pushed pre-alpha.32 Timeline-audio component checkpoint, included by the
+  historical alpha.32 integration: `fedf6c48fbab59b3f0c643da402fcc026ee74fbe`
+  on `origin/codex/syndocal-v1.2` (`Synchronize Timeline audio varispeed clocks`).
+  Its own product metadata was still alpha.31; the synchronized alpha.32
+  product identity begins with the subsequent version checkpoint. Child
+  Timeline PROGRAM/CUE now uses one canonical 250..=4000 millirate for
+  position, Rodio speed, drift, and inverse Sink seek; nested fractional rates
+  are rounded once, ambiguous/invalid rates refuse audio attachment, and a
+  negative `source_offset_ms` remains silent until its exact root-output
+  boundary. Lighting keeps its established position path.
 - The checkpoint's independent Terra xHigh rereview is `GO` with no P0/P1/P2. Supervisor evidence is exact MSVC 14.44 with the Community linker first and absolutely pinned, engine Timeline audio `31 passed / 0 failed / 0 ignored`, frontend Timeline-audio contract PASS, `cargo fmt --all -- --check` PASS, `git diff --check` PASS, and first-party warnings 0. The implementer also recorded ASIO media playback `80/80` and protocol nonserialization `1/1`, both warnings 0.
 - The Timeline-audio component checkpoint itself had no new native or hardware acceptance. Its preserved pre-checkpoint process PID `73380` was later path-verified and terminated immediately before the alpha.32 native build; it was never relabelled as current evidence.
 - The Windows candidate-gate source checkpoint is pushed at `53d70baacbc2c9ed3f719eaf2e67aab1766cf487`. Metadata completes all hash and updater-signature checks before any EXE inspector; candidate and manual three-root inspectors receive only verified-byte `wx` copies; NSIS/MSI/outer/nested archive tools likewise receive only pre/post-hashed copies. Independent review is implementation `GO`, while actual RC acceptance remains `NO-GO` until real signed bundles and Windows runtime identity evidence exist. Supervisor self-tests passed `125/43/4/140` plus `check:release`; Node's non-handle-atomic pathname and unprovable owner/DACL boundary is explicitly limited to fresh single-writer staging.
@@ -795,11 +979,12 @@ node tools/show-structural-preflight.mjs target/qa/dsf2026-show-authored-2026082
 - Branch: `beta-v1.1.2`
 - DJ Agent committed HEAD and upstream: `a13d7bff59db5e7c00e19655f87c69db7cb52005` on `beta-v1.1.2`; its worktree was clean at the recorded checkpoint.
 - The DJ Agent operator-return path received independent source-review `GO` with no P0/P1/P2. The external full regression passed `506 tests / 504 passed / 0 failed / 2 skipped` with first-party warnings 0. DJ-PC pull/restart, strict preflight, active runtime version, real ACK, and physical pedal acceptance remain external gates.
-- KDMX product metadata is now `1.2.0-alpha.37`. Alpha.32 source integration
+- At that historical checkpoint, KDMX product metadata was `1.2.0-alpha.37`.
+  Alpha.32 source integration
   and its native build, launch, and maximized-window gate remain historical.
   The alpha.34 same-PC output/camera native build, alpha.35 U0/Spout-hardening
   native build, and alpha.36 source/native/window authority are also
-  historical checkpoints after the current source bump. The alpha.37 native
+  historical checkpoints after that source bump. The alpha.37 native
   authority is exact checkout PID `50864`, built from clean pushed HEAD
   `5626a9636003462a23daf0f3de67af3cc5060e29` and verified responsive and
   maximized. Real-device audition, physical output routing,
@@ -1067,8 +1252,10 @@ promoted from these deterministic results.
   resolved path before the final tests. This does not claim normal installer/
   updater inspection or the separate show-ASIO artifact.
 - No MOTU M4 stream, M32/DL16 route, or USB-DMX physical output is claimed yet.
-  This machine currently exposes no MOTU M4 device and no serial port, so those
-  physical rows must be run on the equipped show system. The integrated source
+  In the **2026-08-28 alpha.30 machine snapshot**, this machine exposed no MOTU
+  M4 device and no serial port; that observation is historical and does not
+  describe the current show PC. Those physical rows must be run on the equipped
+  show system. The integrated source
   checkpoint is committed and pushed at
   `32a092267f55d32185b2cf9cc123f92067614ec1`.
 
@@ -1116,7 +1303,7 @@ Focused source evidence preserved in the committed alpha.28 source checkpoint:
 - Fresh native import/save evidence uses the exact operator-owned source `C:\Users\kouty\Desktop\INMDAISUKI\DSF2026.dvc`. The report is exact at `fixtures=46`, `profiles=12`, `fixture_groups=15`, `cues=2`, `Converted=93`, `Approximate=4`, `Skipped=0`, and `Unsupported=1` for one Daslight hardware binding. The saved base has exact stage layouts: six Mega Bar layouts with 8 cells and 8 logical segments each, plus three Strongpoint layouts with 4 cells and 4 logical segments each.
 - Historical alpha.27 Native Save As output artifact: `target/qa/dsf2026-native-alpha27/DSF2026-imported-alpha27.sdc`, `1,079,564` bytes, SHA-256 `B21165A70A41A4036153359E579E1433C2739EC1C3EDCC0C46B94F513238DFB1`.
 - Alpha.15 is retired as a current authoring base. Its artifacts remain historical evidence only and must not be supplied to the pinned authoring CLI.
-- At that historical checkpoint, the former alpha3-alpha8 candidates were superseded by the reviewed alpha9 reference-audio candidate documented below. The current authority at the top bounds alpha9 to reference-audio/content evidence and grants no production deployment approval.
+- At that historical checkpoint, the former alpha3-alpha8 candidates were superseded by the reviewed alpha9 reference-audio candidate documented below. The authority at the top of that historical note bounded alpha9 to reference-audio/content evidence and granted no production deployment approval.
 - The current supervisor rerun passed the authored-show test, DJ Link frontend/runtime contract, localization `3556/3556` with 0 unprotected labels, stage-label contract, fixture-limit degree contract, Timeline context-menu browser contract, I/O disclosure scroll contract, Strongpoint segment browser contract, Stage Settings viewport contract at five sizes, TypeScript/Vite production build, release metadata, Tauri wrapper self-test, and the `frontend-typescript-vite-windows` warning ratchet. First-party warnings were zero.
 - Historical alpha.27 native release evidence: the exact MSVC 14.44 linker gate produced `target/release/syndocal.exe` at `60,314,624` bytes with SHA-256 `CEBB44C713043CCE885D87E3651464F3756A5CEE2D1700728D412AC7B18C48EC`.
 - Historical alpha.27 process evidence: exactly one checkout-owned process was responsive after that build, PID `87732`, HWND `124064278`, and the verified Syndocal window was maximized. This is not alpha.28 native acceptance.
@@ -1129,14 +1316,14 @@ Focused source evidence preserved in the committed alpha.28 source checkpoint:
 - The two operator-supplied MP3 files are now accepted only as rehearsal/reference material through the ordinary Media Library -> Timeline Audio Clip path. They are not click/guide assets and are not armed for show playback.
 - The authoring helper preserves both originals, copies byte-identical files beside the generated candidate under ASCII names, records SHA-256/byte size/duration, and refuses overwrite or divergent existing bytes.
 - Each authored song Timeline receives one ordinary Audio layer with one `media_asset_id` clip. The layer is muted by default and requires an explicit operator unmute before rehearsal playback.
-- At that historical checkpoint, the operator-saved alpha9 candidate `target/qa/dsf2026-show-authored-20260828/DSF2026-show-alpha9-reference-audio.sdc` superseded the earlier alpha9 byte identity. It is `1,095,864` bytes with SHA-256 `93E71D8AC3889968C2AAD5B0A8CA194B88CB1C7B51BF897C7741C969D9A05094` and passes the structural preflight. Measured media durations remain `214032 ms` for 人生オーバー and `273432 ms` for 惑う星; source and managed sidecar SHA-256 values match. The current authority at the top does not approve it as the production operator artifact.
+- At that historical checkpoint, the operator-saved alpha9 candidate `target/qa/dsf2026-show-authored-20260828/DSF2026-show-alpha9-reference-audio.sdc` superseded the earlier alpha9 byte identity. It is `1,095,864` bytes with SHA-256 `93E71D8AC3889968C2AAD5B0A8CA194B88CB1C7B51BF897C7741C969D9A05094` and passes the structural preflight. Measured media durations remain `214032 ms` for 人生オーバー and `273432 ms` for 惑う星; source and managed sidecar SHA-256 values match. The authority at the top of that historical note did not approve it as the production operator artifact.
 - Rehearsal playback now uses a distinct sibling `DSF2026-show-alpha9-rehearsal-reference-audio.sdc`, `1,092,410` bytes with SHA-256 `AC9133AFD2C9AAD022674B45222447115F624175B2C5E20DE1E803ABAA9778CE`. Its `956`-byte approval manifest has SHA-256 `ADA244FE095B48BC67DE6181F1D9EFE55131EF720A4D2B5EEB91714A7DA85AED`. The reviewed fail-closed creator pins the production source and both MP3 identities, requires that exact manifest, creates exclusively, and permits only the three synchronized `Reference Audio` layer changes from `muted=true` to `muted=false`. Independent post-publication audit confirmed no other semantic JSON differences, both source and copy passed all ten structural checks, and the source candidate and sidecars remained byte-identical. The rehearsal copy has not been loaded into the running native app or audibly accepted.
 - Windows publication holds verified non-reparse parent/leaf handles across source and sidecar revalidation through candidate flush. Parent/leaf substitution, same-hash reparse substitution, partial write, and flush failure fail closed without candidate or temporary-directory residue.
 - Focused authoring regression passed with first-party warnings 0, including explicit no-reference assertions for zero Timeline Audio Clips and zero added Media Library assets. The final independent Terra xHigh review is `GO` with no P0/P1.
 - Alpha9 loaded successfully into the exact native process through the single-instance project-forwarding path and reported 46 fixtures plus the expected 12 embedded profiles and mappings. Timeline Audio Clip playback remains unverified.
 - A cold command-line launch with alpha9 exposed an open startup race: `Project authority changed before mutation (expected epoch 0 revision 0)`. Starting Syndocal first and forwarding the project path then loaded successfully. This race is not accepted or hidden; fix it in the next narrow tranche before cold-start deployment is claimed.
 
-### 2026-08-28 machine-local USB-DMX delta
+### 2026-08-28 machine-local USB-DMX delta (historical source evidence)
 
 - The project retains only the logical serial DMX route. COM/PnP identity is stored in machine-local state and is selected from a current-device dropdown, then persisted only by an explicit Confirm action.
 - Missing, stale, ambiguous, renumbered, and A->B->A physical identity changes fail closed. The exact opened Windows handle identity is revalidated rather than trusting a selected port label.
@@ -1149,19 +1336,24 @@ Focused source evidence preserved in the committed alpha.28 source checkpoint:
 ### ASIO PROGRAM/CUE output gate added 2026-08-28
 
 - `qa/ASIO_PROGRAM_CUE_OUTPUT_ACCEPTANCE.md` is now the authoritative output gate. ASIO output is a show-critical requirement, not optional polish.
-- Adopted architecture C: retain the exact input/Reactive Capture ABI/schema v2 surface, and add an exact v3 output/full-duplex surface to the same canonical bridge DLL. ASIO playback uses one v3 session; a parallel v2 session on the same driver is forbidden and must fail busy.
+- Adopted architecture C: retain the exact input/Reactive Capture ABI/schema v2
+  surface only, and use the exact v3 output/full-duplex surface as the sole
+  current ASIO playback path in the same canonical bridge DLL. ASIO playback
+  uses one v3 session; a parallel v2 session on the same driver is forbidden
+  and must fail busy.
 - PROGRAM stereo and CUE mono are project-level logical buses. Physical PROGRAM L/R, CUE, optional Spare, driver identity, sample rate, format, and buffer remain machine-local. Missing bus data migrates one way to PROGRAM; CUE never falls back to PROGRAM.
 - Two logical Rodio mixers feed a non-realtime renderer and bounded preallocated interleaved SPSC. The ASIO callback only copies a complete block or outputs a complete silent block and latches terminal Fault. PROGRAM/CUE share one device and clock only in `SameAsio`; `ExplicitWdm` intentionally uses independent ASIO and WDM clock domains.
 - DSF2026 acceptance mapping is MOTU M4 Output 1/2 = PROGRAM L/R and Output 3 = CUE at exact 48 kHz, with Output 4 optional Spare. This is a selectable profile, not MOTU-specific code.
 - Device/rate/mapping conflict, disconnect, XRUN, reset/resync, buffer/rate change, callback gap, or underflow must stop output without WASAPI/default-device/rate fallback. Explicit revalidation and Start are required.
-- Independent Terra xHigh review added three implementation-blocking P0 boundaries: quiesce and join the legacy `FollowProgram` CUE/normal Rodio output before v3 Start and stay silent on Start failure/Fault; freeze exact v3 callback/queue/lifetime semantics before code; and prove arbitrary non-contiguous/reordered physical mappings with all unselected channels zero. It also requires exact queue/race injection tests and updates every show-ASIO v2-only export checker to the exact v2-nine plus v3-nine set.
+- Independent Terra xHigh review added three implementation-blocking P0 boundaries: quiesce and join the legacy `FollowProgram` CUE/normal Rodio output before v3 Start and stay silent on Start failure/Fault; freeze exact v3 callback/queue/lifetime semantics before code; and prove arbitrary non-contiguous/reordered physical mappings with all unselected channels zero. It also requires exact queue/race injection tests and updates every show-ASIO export checker from the retained v2-input-only set to the retained v2-input-nine plus current v3-output-nine set.
 - The acceptance contract was committed and pushed at `e583141cc60decff7c062db21a39f69241f894c8`. At that historical contract checkpoint, the `1.2.0-alpha.28` implementation was still uncommitted; the authoritative 2026-08-29 integrated checkpoint above supersedes that state.
 - Integrated source and independent review are complete. A historical pre-alpha.30 normal no-bundle build completed, but its user-facing window gate did not; alpha.30 has no native build/window evidence. Dedicated show-ASIO artifact/loader proof, normal installer/updater inspection, authoritative non-default Timeline speed synchronization, physical output proof, and M32/DL16 routing proof remain open.
 
 ### 2026-08-28 alpha.28 ASIO implementation checkpoint (superseded source snapshot)
 
 This subsection preserves the earlier partial snapshot. The 2026-08-29
-integrated source checkpoint above is authoritative for current source status.
+integrated source checkpoint above was authoritative for that historical
+source status; the current alpha.45 source/test status is at the top.
 
 - Source authority remains branch `codex/syndocal-v1.2` at committed/pushed parent
   `8153ebb37a9517aad91c0da6ad06de9a80db2a1a`. The `1.2.0-alpha.28` source below
@@ -1231,19 +1423,27 @@ integrated source checkpoint above is authoritative for current source status.
   satisfied, so no cleanup Apply or ad-hoc deletion ran and reclaimed bytes
   remain `0`.
 
-## Required remaining acceptance (superseded by alpha.42 final native checkpoint above)
+## Current alpha.45 required acceptance (2026-08-31; historical rows retained)
 
-1. The alpha.39 native checkpoint is recorded from source/docs `HEAD` and
+The alpha.45 source/test checkpoint above is current. The recorded
+full-workspace Cargo result passed, including Syndocal `1389 pass / 0 fail /
+14 ignored` and Video `163 pass / 0 fail / 1 ignored`; the focused output-lease
+keepalive gate passed `69/69`. These deterministic source results do not close
+native, external, physical, audible, or hardware gates. Completed alpha39/alpha42
+build facts in the rows below remain historical evidence; the current open
+execution and physical rows are not closed by those facts.
+
+1. The historical alpha.39 native checkpoint is recorded from source/docs `HEAD` and
    upstream `ec93e9160da853ad181de70aee4db7b4a75fafbb`: exact MSVC `14.44.35207`
    pinned/where-first, build exit `0` in `2m57s`, warnings `0`, artifact
    `61,108,736` bytes with SHA-256
    `7923728D6D4D8F4D51DE5BEF337006ADD7851DC5EF0C2F384BA1664F3213D0C2`.
-2. The exact launch checkpoint is complete: one responsive/maximized
+2. The historical exact launch checkpoint is complete: one responsive/maximized
    `Syndocal` window (PID `87640`, id `2033716740`) was verified and Daslight
    was preserved. The reviewed native-evidence record was committed/pushed at
    `94b362bd2d733e447feabf0a0a6158699da6a2bf`, followed by verified
    `HEAD`/upstream equality.
-3. Alpha9 native UI reverification is complete without clicking the output
+3. Historical alpha9 native UI reverification is complete without clicking the output
    selector or Refresh. The exact sequence was Play -> Pause -> status-only wait
    -> Play -> Pause -> status-only wait; throughout it, explicit-device and
    resolved output stayed at `Music (Elgato Virtual Audio)`, lifecycle `実行中`,
@@ -1261,11 +1461,11 @@ integrated source checkpoint above is authoritative for current source status.
    Syndocal window.
 7. Verify the now-implemented canonical non-default Timeline speed synchronization on the selected real PROGRAM/CUE devices; source and deterministic gates are closed, but physical playback remains open.
 8. The DJ-Link PC may remain stopped during local audio work. Before final acceptance, pull the committed DJ Agent checkpoint without exposing the token and confirm strict preflight, active runtime version, real ACK, reconnect snapshot recovery, and physical Pedal 1/2/3 behavior.
-9. For this show, verify the strict same-PC Art-Net route at `127.0.0.1:6454`, wire U0, 512 bytes, including the ch1/ch5 red-frame proof and ch500 zero. Generic serial DMX remains a product capability but is not part of this show route. Close Daslight/Easy View manually before Unity because the receiver port cannot be shared.
+9. For the current show boundary, explicitly select and confirm the machine-local USB-DMX device/protocol, then verify the all-512-zero S0 frame reaches both USB-DMX and the strict same-PC Art-Net mirror at `127.0.0.1:6454`, wire U0, 512 bytes, including ch500 zero. The attached F3200A laser remains zero-only until beam-path safety and an exact reviewed F3200A channel test are confirmed; do not use the historical Mega PAR ch1/ch5 red frame here. That nonzero Mega PAR proof is deferred to its later rig. The older alpha.42 statement that generic serial DMX was outside this route is historical and superseded above. Close Daslight/Easy View manually before Unity because the receiver port cannot be shared.
 10. For the immediate split-device target, verify TOPPING E2x2 ASIO PROGRAM on Outputs 1/2 and the explicitly selected WDM headphone endpoint for CUE. If the venue instead supplies the preferred multichannel route, perform MOTU M4 at exact 48 kHz and M32/DL16 physical acceptance as recorded in the detailed gate.
-11. Update this handoff with physical evidence and exact artifact identities. Hardware, real ACK, serial DMX, ASIO device, M32 routing, reconnect, installer/updater inspection, and dedicated show-ASIO acceptance remain explicitly unverified until observed.
+11. Update this handoff with physical evidence and exact artifact/device identities. USB-DMX, Art-Net/Unity, real ACK, ASIO device, M32 routing, reconnect, installer/updater inspection, lease keepalive, and dedicated show-ASIO acceptance remain explicitly unverified until observed; queue acceptance alone is not wire/fixture proof.
 
-## First safe resume actions (superseded by alpha.42 final native checkpoint above)
+## Historical first safe resume actions (superseded; use the current USB-DMX checklist above)
 
 - Do not regenerate the final show from alpha3 or deploy superseded alpha4-alpha8 reference candidates; alpha9 is the reviewed reference-audio candidate.
 - The exact alpha.38 PID `55624` and its maximized window are historical
@@ -1299,7 +1499,7 @@ integrated source checkpoint above is authoritative for current source status.
   After Pause, the authoring-output `<select>` drifted to `3 - PX160 WAV...`
   while settings JSON and resolved output remained Music. Keep this only as the
   historical alpha.38 fail-closed record; do not treat the alpha.38 process or
-  this mismatch as current alpha.39 acceptance. Alpha.39 selector/UI
+  this mismatch as historical alpha.39 acceptance. Alpha.39 selector/UI
   reverification is recorded above; the next safe action is operator audible
   confirmation. Do not reuse or relabel historical alpha.31/
   alpha.32/alpha.35/alpha.36/alpha.37/alpha.38 artifacts.

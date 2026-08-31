@@ -729,6 +729,383 @@ fn completed_follow_rebases_only_the_exact_released_stage2_receipt() {
 }
 
 #[test]
+fn waiting_follow_pedal_start_requires_exact_rebased_paused_target() {
+    let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+        enabled: false,
+        ..DmxOutputConfig::default()
+    });
+    let coordinator = project_coordinator_for_initial_snapshot(engine.snapshot());
+    let mut runtime = DjLinkRuntime::from_coordinator(&coordinator);
+    runtime.track_active = true;
+    runtime.released = true;
+    runtime.authoritative_state = protocol::DjLinkTimelineStateValue::Running;
+    runtime.pedal_owner = Some("timeline".to_string());
+    runtime.release_event_id = Some("release-1".to_string());
+    runtime.play_session_id = Some("session-1".to_string());
+    runtime.timeline_id = Some("802".to_string());
+    runtime.last_follow_rebase = Some((19, "801".to_string(), "802".to_string()));
+    let snapshot = EngineSnapshot {
+        timeline: TimelineSnapshot {
+            id: TimelineId(802),
+            playing: false,
+            position_ms: 0,
+            follow_runtime: protocol::TimelineFollowRuntimeSummary {
+                generation: 19,
+                status: protocol::TimelineFollowRuntimeStatus::Idle,
+                outcome: Some(protocol::TimelineFollowOutcome::Completed),
+                source_timeline_id: Some(TimelineId(801)),
+                target_timeline_id: Some(TimelineId(802)),
+                waiting_for_pedal_start: true,
+                ..protocol::TimelineFollowRuntimeSummary::default()
+            },
+            loop_runtime: protocol::TimelineLoopRuntimeSummary {
+                generation: 20,
+                status: protocol::TimelineLoopRuntimeStatus::Disabled,
+                ..protocol::TimelineLoopRuntimeSummary::default()
+            },
+            ..TimelineSnapshot::default()
+        },
+        ..EngineSnapshot::default()
+    };
+    assert_eq!(
+        dj_track_runtime::waiting_follow_pedal_start_authority_rejection(
+            &runtime,
+            &snapshot,
+            "802",
+            "session-1",
+        ),
+        None
+    );
+
+    fn playing(candidate: &mut EngineSnapshot) {
+        candidate.timeline.playing = true;
+    }
+    fn moved(candidate: &mut EngineSnapshot) {
+        candidate.timeline.position_ms = 1;
+    }
+    fn loop_armed(candidate: &mut EngineSnapshot) {
+        candidate.timeline.loop_runtime.status = protocol::TimelineLoopRuntimeStatus::Armed;
+    }
+    fn wait_consumed(candidate: &mut EngineSnapshot) {
+        candidate.timeline.follow_runtime.waiting_for_pedal_start = false;
+    }
+    for mutate in [
+        playing as fn(&mut EngineSnapshot),
+        moved,
+        loop_armed,
+        wait_consumed,
+    ] {
+        let mut stale = snapshot.clone();
+        mutate(&mut stale);
+        let before = runtime.clone();
+        assert!(
+            dj_track_runtime::waiting_follow_pedal_start_authority_rejection(
+                &runtime,
+                &stale,
+                "802",
+                "session-1",
+            )
+            .is_some()
+        );
+        assert_eq!(
+            runtime, before,
+            "rejected wait state must not mutate DJ runtime"
+        );
+    }
+    assert_eq!(
+        dj_track_runtime::waiting_follow_pedal_start_authority_rejection(
+            &runtime,
+            &snapshot,
+            "802",
+            "wrong-session",
+        ),
+        Some("timeline_waiting_pedal_context_mismatch")
+    );
+}
+
+#[test]
+fn dj_link_waiting_follow_loop_set_starts_once_then_returns_to_normal_stage2_loop_control() {
+    let source_timeline_id = TimelineId(9_201);
+    let target_timeline_id = TimelineId(9_202);
+    let play_session_id = "wait-follow-play-session";
+    let source_timeline_id_string = source_timeline_id.0.to_string();
+    let target_timeline_id_string = target_timeline_id.0.to_string();
+    let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+        enabled: false,
+        ..DmxOutputConfig::default()
+    });
+    let mut source = TimelineSnapshot {
+        id: source_timeline_id,
+        label: "Wait Follow source".to_string(),
+        phases: vec![TimelinePhaseSummary {
+            id: protocol::TimelinePhaseId(9_203),
+            label: "Wait Follow source body".to_string(),
+            role: protocol::TimelinePhaseRole::Verse,
+            start_ms: 0,
+            end_ms: 50,
+        }],
+        duration_ms: 50,
+        tempo_meter_map: vec![protocol::TimelineTempoMeterPoint {
+            position_sixteenth_steps: 0,
+            bpm: 300.0,
+            numerator: 4,
+            denominator: 4,
+            interpolation: protocol::TimelineTempoInterpolation::Step,
+            measure_number: None,
+        }],
+        ..TimelineSnapshot::default()
+    };
+    source.follow = Some(TimelineFollowSummary {
+        enabled: true,
+        next_timeline_id: target_timeline_id,
+        duration: VideoClipTakeDuration::milliseconds(1),
+        curve: VideoLayerTransitionCurve::Linear,
+        video_kind: VideoClipTakeKind::Crossfade,
+        lighting_policy: protocol::TimelineFollowLightingPolicy::LinearMerge,
+        destination_bpm: Some(300.0),
+        preroll_ms: 0,
+        trans_cadence_bars: 4,
+        trans_target_measures: Vec::new(),
+        hold_first_destination_measure: false,
+        destination_start_mode: protocol::TimelineFollowDestinationStartMode::WaitForPedal,
+        fault_policy: protocol::TimelineFollowFaultPolicy::Hold,
+    });
+    let target = TimelineSnapshot {
+        id: target_timeline_id,
+        label: "Wait Follow target".to_string(),
+        phases: vec![TimelinePhaseSummary {
+            id: protocol::TimelinePhaseId(9_204),
+            label: "Wait Follow target body".to_string(),
+            role: protocol::TimelinePhaseRole::Verse,
+            start_ms: 0,
+            end_ms: 10_000,
+        }],
+        duration_ms: 10_000,
+        loop_region: Some(TimelineLoopRegionSummary {
+            a_ms: 0,
+            b_ms: 1_000,
+            enabled: true,
+            musical_length_beats: Some(5.0),
+        }),
+        ..TimelineSnapshot::default()
+    };
+    engine
+        .apply_timeline_bank_published(vec![source, target], source_timeline_id, true)
+        .unwrap();
+
+    let mut coordinator = project_coordinator_for_initial_snapshot(engine.snapshot());
+    let mut mapping = dj_link_test_mapping(
+        "wait-follow-mapping",
+        protocol::DjTrackSelector {
+            content_id: Some("wait-follow-content".to_string()),
+            title: None,
+            artist: None,
+            title_contains: None,
+            fallback_deck: None,
+        },
+    );
+    mapping.timeline_id = source_timeline_id;
+    coordinator.mappings.dj_track_triggers = vec![mapping];
+    let runtime = Mutex::new(DjLinkRuntime::from_coordinator(&coordinator));
+    let coordinator = Mutex::new(coordinator);
+    let admission = ProjectExternalCommandAdmission::default();
+    let transaction_active = AtomicBool::new(false);
+    let dispatch = |message_type, sequence, event_id, payload| {
+        dispatch_dj_link_event(
+            dj_link_test_envelope(message_type, sequence, event_id, payload),
+            &engine,
+            &coordinator,
+            &runtime,
+            &admission,
+            &transaction_active,
+        )
+    };
+
+    assert!(matches!(
+        dispatch(
+            protocol::DjLinkMessageType::TrackActive,
+            1,
+            "wait-follow-active",
+            json!({
+                "deck": 1,
+                "deckId": "rekordbox-deck-1",
+                "contentId": "wait-follow-content",
+                "positionAtSendSec": 0.0,
+                "effectiveBpm": 300.0,
+                "positionRevision": 1,
+                "sampleAgeMs": 0,
+                "isPlaying": true,
+                "startedAt": "2026-08-27T00:00:00Z",
+                "playSessionId": play_session_id,
+                "loop": null
+            }),
+        ),
+        DjLinkDispatchOutcome::TimelineState { .. }
+    ));
+    assert!(matches!(
+        dispatch(
+            protocol::DjLinkMessageType::Release,
+            2,
+            "wait-follow-release",
+            json!({
+                "state": "released",
+                "timelineId": source_timeline_id_string,
+                "playSessionId": play_session_id
+            }),
+        ),
+        DjLinkDispatchOutcome::TimelineState { .. }
+    ));
+
+    let waiting_snapshot = {
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            let snapshot = engine.snapshot();
+            if snapshot.timeline.id == target_timeline_id
+                && !snapshot.timeline.playing
+                && snapshot.timeline.position_ms == 0
+                && snapshot.timeline.follow_runtime.waiting_for_pedal_start
+                && matches!(
+                    snapshot.timeline.loop_runtime.status,
+                    protocol::TimelineLoopRuntimeStatus::Disabled
+                )
+            {
+                break snapshot;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "Follow did not settle into the exact pedal wait: {snapshot:?}"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    };
+
+    let before_wrong_session = runtime.lock().unwrap().clone();
+    assert!(matches!(
+        dispatch(
+            protocol::DjLinkMessageType::TimelineLoopSet,
+            3,
+            "wait-follow-wrong-session",
+            json!({
+                "timelineId": target_timeline_id_string,
+                "playSessionId": "wrong-session",
+                "active": true
+            }),
+        ),
+        DjLinkDispatchOutcome::Rejected { ref code, .. }
+            if code == "timeline_waiting_pedal_context_mismatch"
+    ));
+    assert_eq!(engine.snapshot(), waiting_snapshot);
+    assert_eq!(*runtime.lock().unwrap(), before_wrong_session);
+
+    assert!(matches!(
+        dispatch(
+            protocol::DjLinkMessageType::TimelineLoopSet,
+            4,
+            "wait-follow-inactive-edge",
+            json!({
+                "timelineId": target_timeline_id_string,
+                "playSessionId": play_session_id,
+                "active": false
+            }),
+        ),
+        DjLinkDispatchOutcome::Rejected { ref code, .. }
+            if code == "timeline_waiting_pedal_start_requires_active"
+    ));
+    assert_eq!(engine.snapshot(), waiting_snapshot);
+
+    let start = dispatch(
+        protocol::DjLinkMessageType::TimelineLoopSet,
+        5,
+        "wait-follow-start",
+        json!({
+            "timelineId": target_timeline_id_string,
+            "playSessionId": play_session_id,
+            "active": true
+        }),
+    );
+    let start_generation = match start {
+        DjLinkDispatchOutcome::TimelineState {
+            state_generation,
+            state,
+        } => {
+            assert_eq!(state.timeline_id, target_timeline_id_string);
+            assert!(!state.loop_active);
+            state_generation
+        }
+        outcome => panic!("wait pedal start should be accepted: {outcome:?}"),
+    };
+    let started_snapshot = engine.snapshot();
+    let started_runtime = runtime.lock().unwrap().clone();
+    assert!(started_snapshot.timeline.playing);
+    assert_eq!(started_snapshot.timeline.position_ms, 0);
+    assert!(
+        !started_snapshot
+            .timeline
+            .follow_runtime
+            .waiting_for_pedal_start
+    );
+    assert!(matches!(
+        started_snapshot.timeline.loop_runtime.status,
+        protocol::TimelineLoopRuntimeStatus::Disabled
+    ));
+
+    let replay = dispatch(
+        protocol::DjLinkMessageType::TimelineLoopSet,
+        5,
+        "wait-follow-start",
+        json!({
+            "timelineId": target_timeline_id_string,
+            "playSessionId": play_session_id,
+            "active": true
+        }),
+    );
+    assert!(matches!(
+        replay,
+        DjLinkDispatchOutcome::TimelineState { state_generation, .. }
+            if state_generation == start_generation
+    ));
+    assert_eq!(engine.snapshot(), started_snapshot);
+    assert_eq!(*runtime.lock().unwrap(), started_runtime);
+
+    assert!(matches!(
+        dispatch(
+            protocol::DjLinkMessageType::TimelineLoopSet,
+            6,
+            "wait-follow-normal-loop-on",
+            json!({
+                "timelineId": target_timeline_id_string,
+                "playSessionId": play_session_id,
+                "active": true
+            }),
+        ),
+        DjLinkDispatchOutcome::TimelineState { .. }
+    ));
+    assert!(runtime.lock().unwrap().loop_active);
+    assert!(matches!(
+        engine.snapshot().timeline.loop_runtime.status,
+        protocol::TimelineLoopRuntimeStatus::Armed | protocol::TimelineLoopRuntimeStatus::Looping
+    ));
+    assert!(matches!(
+        dispatch(
+            protocol::DjLinkMessageType::TimelineLoopSet,
+            7,
+            "wait-follow-normal-loop-off",
+            json!({
+                "timelineId": target_timeline_id_string,
+                "playSessionId": play_session_id,
+                "active": false
+            }),
+        ),
+        DjLinkDispatchOutcome::TimelineState { .. }
+    ));
+    assert!(!runtime.lock().unwrap().loop_active);
+    assert!(matches!(
+        engine.snapshot().timeline.loop_runtime.status,
+        protocol::TimelineLoopRuntimeStatus::Disabled
+    ));
+}
+
+#[test]
 fn completed_follow_hold_rebases_before_canonical_loop_off_and_resumes_target() {
     let source_timeline_id = TimelineId(9_101);
     let target_timeline_id = TimelineId(9_102);
@@ -774,6 +1151,7 @@ fn completed_follow_hold_rebases_before_canonical_loop_off_and_resumes_target() 
         trans_cadence_bars: 4,
         trans_target_measures: Vec::new(),
         hold_first_destination_measure: true,
+        destination_start_mode: protocol::TimelineFollowDestinationStartMode::Play,
         fault_policy: protocol::TimelineFollowFaultPolicy::Hold,
     });
     let target = TimelineSnapshot {

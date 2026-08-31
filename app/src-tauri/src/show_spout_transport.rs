@@ -504,11 +504,13 @@ impl ShowSpoutWorkerControl {
         if !should_retire {
             return;
         }
-        let result = self.engine.retire_show_spout_outputs_published(
-            self.expected.background.clone(),
-            self.expected.foreground.clone(),
-            Instant::now() + Duration::from_secs(2),
-        );
+        let result = self
+            .engine
+            .retire_show_spout_outputs_after_authority_loss_published(
+                self.expected.background.clone(),
+                self.expected.foreground.clone(),
+                Instant::now() + Duration::from_secs(2),
+            );
         match self.teardown.lock() {
             Ok(mut state) => state.automatic_engine_retirement = Some(result),
             Err(poisoned) => poisoned.into_inner().automatic_engine_retirement = Some(result),
@@ -769,7 +771,7 @@ impl ShowSpoutTransportState {
         // `CreatePair` is deliberately not an acknowledgement. A lost old
         // engine reply may leave an empty snapshot, but only the matching
         // exact retry receipt below may clear this state-owned barrier. The
-        // caller will still submit `RetireShowSpoutOutputsPublished`, whose
+        // caller will still submit the authority-loss retirement command, whose
         // acknowledgement either proves the exact outcome or keeps the
         // barrier installed.
         let reservation_id = self.next_blocked_retirement_retry_id;
@@ -1305,9 +1307,34 @@ mod tests {
                 enabled: false,
                 ..protocol::DmxOutputConfig::default()
             }),
-            crate::show_spout_outputs::build_show_spout_outputs(11, 12, 1).unwrap(),
+            crate::show_spout_outputs::build_show_spout_outputs(11, 12, 3, 2).unwrap(),
             authority_validator,
         )
+    }
+
+    fn seed_show_spout_v2_compositions(engine: &EngineHandle) {
+        for composition in [
+            protocol::CompositionSummary {
+                id: 2,
+                label: crate::show_spout_outputs::SHOW_SPOUT_FOREGROUND_COMPOSITION_LABEL
+                    .to_string(),
+                layer_ids: Vec::new(),
+                timeline_layer_ids: Vec::new(),
+                output_ids: Vec::new(),
+            },
+            protocol::CompositionSummary {
+                id: 3,
+                label: crate::show_spout_outputs::SHOW_SPOUT_BACKGROUND_COMPOSITION_LABEL
+                    .to_string(),
+                layer_ids: Vec::new(),
+                timeline_layer_ids: Vec::new(),
+                output_ids: Vec::new(),
+            },
+        ] {
+            engine
+                .send(engine::EngineCommand::AddVideoComposition(composition))
+                .expect("test must enqueue the exact V2 composition target");
+        }
     }
 
     #[derive(Default)]
@@ -1521,7 +1548,8 @@ mod tests {
             enabled: false,
             ..protocol::DmxOutputConfig::default()
         });
-        let expected = crate::show_spout_outputs::build_show_spout_outputs(11, 12, 1).unwrap();
+        let expected = crate::show_spout_outputs::build_show_spout_outputs(11, 12, 3, 2).unwrap();
+        seed_show_spout_v2_compositions(&engine);
         let safety = engine.safety_blackout_authority();
         engine
             .enable_show_spout_outputs_published(
@@ -1532,7 +1560,16 @@ mod tests {
                 Instant::now() + Duration::from_secs(1),
             )
             .expect("test engine must publish the exact active show pair");
-        assert_eq!(engine.snapshot().video.outputs.len(), 2);
+        let published = engine.snapshot();
+        assert_eq!(published.video.outputs.len(), 2);
+        assert_eq!(published.video.outputs[0].composition_id, 3);
+        assert_eq!(published.video.outputs[1].composition_id, 2);
+        assert!(published.video.compositions.iter().any(|composition| {
+            composition.id == 3 && composition.output_ids == vec![expected.background.id]
+        }));
+        assert!(published.video.compositions.iter().any(|composition| {
+            composition.id == 2 && composition.output_ids == vec![expected.foreground.id]
+        }));
 
         let control = ShowSpoutWorkerControl::new(engine.clone(), expected, || Ok(()));
         control.arm_automatic_engine_retirement().unwrap();
@@ -1562,7 +1599,7 @@ mod tests {
             enabled: false,
             ..protocol::DmxOutputConfig::default()
         });
-        let expected = crate::show_spout_outputs::build_show_spout_outputs(11, 12, 1).unwrap();
+        let expected = crate::show_spout_outputs::build_show_spout_outputs(11, 12, 3, 2).unwrap();
         let mut transport = ShowSpoutTransportState::default();
         transport
             .record_unresolved_engine_retirement(
@@ -1586,7 +1623,7 @@ mod tests {
             .reserve_blocked_engine_retirement_retry(&engine)
             .unwrap()
             .expect("an empty snapshot must still reserve the exact old retirement");
-        let missing_ack = engine.retire_show_spout_outputs_published(
+        let missing_ack = engine.retire_show_spout_outputs_after_authority_loss_published(
             missing_retry.expected().background.clone(),
             missing_retry.expected().foreground.clone(),
             Instant::now() + Duration::from_secs(1),
@@ -1609,6 +1646,7 @@ mod tests {
             )
             .unwrap();
 
+        seed_show_spout_v2_compositions(&engine);
         let safety = engine.safety_blackout_authority();
         engine
             .enable_show_spout_outputs_published(
@@ -1623,7 +1661,7 @@ mod tests {
             .reserve_blocked_engine_retirement_retry(&engine)
             .unwrap()
             .expect("the exact old engine pair must reserve a serialized retry");
-        let engine_retirement = engine.retire_show_spout_outputs_published(
+        let engine_retirement = engine.retire_show_spout_outputs_after_authority_loss_published(
             retry.expected().background.clone(),
             retry.expected().foreground.clone(),
             Instant::now() + Duration::from_secs(1),
@@ -1644,7 +1682,8 @@ mod tests {
             enabled: false,
             ..protocol::DmxOutputConfig::default()
         });
-        let expected = crate::show_spout_outputs::build_show_spout_outputs(21, 22, 1).unwrap();
+        let expected = crate::show_spout_outputs::build_show_spout_outputs(21, 22, 3, 2).unwrap();
+        seed_show_spout_v2_compositions(&engine);
         let safety = engine.safety_blackout_authority();
         engine
             .enable_show_spout_outputs_published(
@@ -1703,7 +1742,7 @@ mod tests {
             await_release_ack
                 .recv()
                 .expect("test must release the exact engine retirement ACK");
-            engine_for_ack.retire_show_spout_outputs_published(
+            engine_for_ack.retire_show_spout_outputs_after_authority_loss_published(
                 retry_for_ack.expected().background.clone(),
                 retry_for_ack.expected().foreground.clone(),
                 Instant::now() + Duration::from_secs(1),
@@ -1765,7 +1804,7 @@ mod tests {
         // checked independently and the original exact barrier stays live.
         let mut wrong_expected = retry.clone();
         wrong_expected.expected =
-            crate::show_spout_outputs::build_show_spout_outputs(23, 24, 1).unwrap();
+            crate::show_spout_outputs::build_show_spout_outputs(23, 24, 3, 2).unwrap();
         let wrong = show
             .finish_blocked_engine_retirement_retry(wrong_expected, Ok(()))
             .expect_err("a wrong expected pair must not reopen fixed sender names");
@@ -1818,7 +1857,7 @@ mod tests {
             enabled: false,
             ..protocol::DmxOutputConfig::default()
         });
-        let expected = crate::show_spout_outputs::build_show_spout_outputs(31, 32, 1).unwrap();
+        let expected = crate::show_spout_outputs::build_show_spout_outputs(31, 32, 3, 2).unwrap();
         let reaping = ShowSpoutReaping {
             expected: expected.clone(),
             kind: ShowSpoutReapingKind::AuthorityChange,
@@ -1887,7 +1926,8 @@ mod tests {
         };
         assert!(retry_error.contains("reaping"));
 
-        let substituted = crate::show_spout_outputs::build_show_spout_outputs(41, 42, 1).unwrap();
+        let substituted =
+            crate::show_spout_outputs::build_show_spout_outputs(41, 42, 3, 2).unwrap();
         let mismatch = show
             .finish_active_for_authority_change(ShowSpoutPhysicalRetirement {
                 expected: substituted,
@@ -1919,7 +1959,7 @@ mod tests {
 
     #[test]
     fn joined_cleanup_error_is_visible_without_retaining_an_active_sender_receipt() {
-        let expected = crate::show_spout_outputs::build_show_spout_outputs(51, 52, 1).unwrap();
+        let expected = crate::show_spout_outputs::build_show_spout_outputs(51, 52, 3, 2).unwrap();
         let reaping = ShowSpoutReaping {
             expected: expected.clone(),
             kind: ShowSpoutReapingKind::AuthorityChange,
@@ -1970,7 +2010,7 @@ mod tests {
             enabled: false,
             ..protocol::DmxOutputConfig::default()
         });
-        let expected = crate::show_spout_outputs::build_show_spout_outputs(71, 72, 1).unwrap();
+        let expected = crate::show_spout_outputs::build_show_spout_outputs(71, 72, 3, 2).unwrap();
         let mut show = ShowSpoutTransportState::default();
         let mut generic = transport_for_blocked_retry();
 
@@ -1992,7 +2032,7 @@ mod tests {
             ShowSpoutPrepareOutcome::RetryBlockedRetirement(retry) => retry,
             _ => panic!("reconciliation R4 must not reach SDK construction"),
         };
-        let engine_retirement = engine.retire_show_spout_outputs_published(
+        let engine_retirement = engine.retire_show_spout_outputs_after_authority_loss_published(
             retry.expected().background.clone(),
             retry.expected().foreground.clone(),
             Instant::now() + Duration::from_secs(1),
@@ -2016,7 +2056,8 @@ mod tests {
             enabled: false,
             ..protocol::DmxOutputConfig::default()
         });
-        let expected = crate::show_spout_outputs::build_show_spout_outputs(81, 82, 1).unwrap();
+        let expected = crate::show_spout_outputs::build_show_spout_outputs(81, 82, 3, 2).unwrap();
+        seed_show_spout_v2_compositions(&engine);
         let safety = engine.safety_blackout_authority();
         engine
             .enable_show_spout_outputs_published(
@@ -2047,7 +2088,7 @@ mod tests {
             ShowSpoutPrepareOutcome::RetryBlockedRetirement(retry) => retry,
             _ => panic!("repair R4 must not construct a replacement pair"),
         };
-        let engine_retirement = engine.retire_show_spout_outputs_published(
+        let engine_retirement = engine.retire_show_spout_outputs_after_authority_loss_published(
             retry.expected().background.clone(),
             retry.expected().foreground.clone(),
             Instant::now() + Duration::from_secs(1),

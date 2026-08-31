@@ -86,7 +86,10 @@ mod tests {
 
     #[test]
     fn exact_engine_command_inventory_is_generated_once_and_conservative() {
-        const EXPECTED_ENGINE_COMMAND_COUNT: usize = 273;
+        // 276 prior commands plus `RetireManagedShowDmxAfterSafetyBlackout`.
+        // The renamed authority-loss command remains one descriptor; Reset
+        // adds the separate atomic authored-mutation boundary.
+        const EXPECTED_ENGINE_COMMAND_COUNT: usize = 277;
         let descriptors = control_plane_engine_command_descriptors();
         let variant_names = EngineCommand::CONTROL_PLANE_VARIANT_NAMES
             .iter()
@@ -103,7 +106,11 @@ mod tests {
             "the Rust enum itself rejects duplicate variant names; retain this proof against accidental inventory transformations"
         );
         assert!(variant_names.contains("EnableShowSpoutOutputsPublished"));
-        assert!(variant_names.contains("RetireShowSpoutOutputsPublished"));
+        assert!(variant_names.contains("RetireShowSpoutOutputsAfterAuthorityLossPublished"));
+        assert!(variant_names.contains("ResetShowSpoutOutputsExactPublished"));
+        assert!(variant_names.contains("EnableShowSerialDmxSafetyBlackoutRoute"));
+        assert!(variant_names.contains("StopShowSerialDmxSafetyBlackoutRoute"));
+        assert!(variant_names.contains("RetireManagedShowDmxAfterSafetyBlackout"));
         assert!(variant_names.contains("SendDsf2026ArtNetAcceptanceProbe"));
         assert!(variant_names.contains("SetVideoCompositionTimelineLayers"));
         assert_eq!(

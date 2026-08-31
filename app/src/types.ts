@@ -186,6 +186,49 @@ export interface SerialPortSummary {
   recommended_protocol?: DmxOutputProtocol | null;
 }
 
+export type SerialDmxMachineBindingState =
+  | "missing_selection"
+  | "selected_and_present"
+  | "stale_or_missing"
+  | "ambiguous"
+  | "blocked_persistence";
+
+export interface SerialDmxMachineBindingIdentity {
+  port_name: string;
+  port_type: string;
+  usb_vid: number;
+  usb_pid: number;
+  serial_number: string;
+  manufacturer: string;
+  product: string;
+  windows_device_instance_id: string;
+}
+
+export interface SerialDmxMachineBindingStatus {
+  state: SerialDmxMachineBindingState;
+  selected: SerialDmxMachineBindingIdentity | null;
+  detail: string;
+  /** Decimal process-local route revision; avoids JS number precision loss. */
+  routeStatusRevision: string;
+}
+
+/** Runtime-only Open DMX worker truth; queue state is never a fixture/wire proof. */
+export interface ShowSerialDmxSafetyBlackoutRouteStatus {
+  /** Decimal process-local route revision; must match the paired binding read. */
+  routeStatusRevision: string;
+  active: boolean;
+  zeroFrameQueued: boolean;
+  zeroFramePhysicalWriteCompleted: boolean;
+  liveFrameQueued: boolean;
+  /** False after a bounded shutdown detach; no binding mutation is safe then. */
+  workerShutdownCompleted: boolean;
+  faulted: boolean;
+  /** Config/sender truth only; it is not an Art-Net receiver or wire receipt. */
+  artnetMirrorLive: boolean;
+  artnetMirrorDetail: string;
+  detail: string;
+}
+
 export interface OscInputConfig {
   bind_ip: string;
   port: number;
@@ -3024,6 +3067,7 @@ export interface TimelineLoopRegionSummary {
 
 export type TimelineFollowLightingPolicy = "hold_then_cut" | "linear_merge";
 export type TimelineFollowFaultPolicy = "hold" | "cut" | "fault";
+export type TimelineFollowDestinationStartMode = "play" | "wait_for_pedal";
 
 export interface TimelineFollowSummary {
   enabled: boolean;
@@ -3038,6 +3082,8 @@ export interface TimelineFollowSummary {
   fault_policy: TimelineFollowFaultPolicy;
   /** Hold the destination's first measure until the operator releases the pedal. */
   hold_first_destination_measure?: boolean;
+  /** Start immediately, or install the destination paused until Pedal 1. */
+  destination_start_mode?: TimelineFollowDestinationStartMode;
 }
 
 export type TimelineLoopRuntimeStatus = "disabled" | "armed" | "looping";

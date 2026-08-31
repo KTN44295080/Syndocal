@@ -177,12 +177,27 @@ export function TimelineSourceShelf(props: TimelineSourceShelfProps) {
     const selectedId = sourceShelfTargetLayerIds()[kind];
     return sourceShelfLayers(kind).find((layer) => layer.id === selectedId) ?? null;
   };
+  const revealTimelineLayer = (layerId: number | undefined) => {
+    if (typeof layerId !== "number" || !Number.isSafeInteger(layerId) || layerId <= 0) return;
+    const resolvedLayerId = layerId;
+    queueMicrotask(() => {
+      const scrollport = document.querySelector<HTMLElement>("[data-timeline-layer-scrollport]");
+      const layer = scrollport?.querySelector<HTMLElement>(
+        `[data-timeline-layer-gutter][data-timeline-layer-id="${resolvedLayerId}"]`,
+      );
+      layer?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    });
+  };
   const setSourceShelfTargetLayer = (kind: TimelineLayerKind, value: string) => {
     const id = Number(value);
     setSourceShelfTargetLayerIds((current) => ({
       ...current,
       [kind]: Number.isSafeInteger(id) && id > 0 ? id : undefined,
     }));
+    // The compact upper arranger can contain more fixed-height lanes than its
+    // viewport. Reveal the exact lane the operator selected without scrolling
+    // the page or stealing focus from this selector.
+    revealTimelineLayer(id);
   };
   const mediaPayload = (asset: MediaAssetSummary, laneKind: "Video" | "Audio") =>
     timelineExternalDragPayloadForMedia(
@@ -229,6 +244,7 @@ export function TimelineSourceShelf(props: TimelineSourceShelfProps) {
     <label class="timelineExternalSourceTarget">
       <span>{label}</span>
       <select
+        data-timeline-source-target-kind={kind}
         value={sourceShelfTargetLayer(kind)?.id ?? ""}
         onChange={(event) => setSourceShelfTargetLayer(kind, event.currentTarget.value)}
       >

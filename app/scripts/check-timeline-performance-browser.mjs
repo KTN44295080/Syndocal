@@ -5,6 +5,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { assertTimelineSourceTargetReveal } from "./timeline-source-target-reveal-proof.mjs";
 
 // PROOF BOUNDARY: this gate drives the timeline-layered browser fixture. Its
 // split/lane-move fixture callbacks intercept requests before
@@ -955,6 +956,9 @@ try {
     await exerciseTimelineWheel(client, viewport);
     const arrangerGeometry = await measureArrangerGeometry(client);
     assertArrangerGeometry(arrangerGeometry, viewport);
+    if (viewport.width === 1280) {
+      await assertTimelineSourceTargetReveal({ client, click, evaluate, waitFor });
+    }
     await saveScreenshot(client, `control-timeline-${viewport.width}x${viewport.height}.png`);
     assert.equal(await click(client, '.timelineToolsDisclosure > summary'), true);
     await waitFor(() => evaluate(client, "document.querySelector('.timelineToolsDisclosure[open] .timelinePerformanceEditor')?.getBoundingClientRect().height > 0"), "Timeline performance disclosure");

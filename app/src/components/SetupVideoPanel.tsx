@@ -69,6 +69,7 @@ type SetupVideoPanelProps = {
   invokeCommand: FrontendTauriInvoke;
   onAddDisplayOutput: (monitor: VideoDisplayMonitorDescriptor) => Promise<void>;
   onEnableShowSpoutOutputs: () => MaybePromise;
+  onResetShowSpoutOutputs: () => MaybePromise;
   onSelectOutput: (outputId: number) => void;
   onMappingPresetLabel: (value: string) => void;
   onSelectedMappingPresetLabel: (value: string) => void;
@@ -142,6 +143,7 @@ export function SetupVideoPanel(props: SetupVideoPanelProps) {
                   invokeCommand={props.invokeCommand}
                   onAddDisplayOutput={props.onAddDisplayOutput}
                   onEnableShowSpoutOutputs={props.onEnableShowSpoutOutputs}
+                  onResetShowSpoutOutputs={props.onResetShowSpoutOutputs}
                 />
                 <div
                   id="setup-output-audio-input"

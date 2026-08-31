@@ -50,11 +50,16 @@ export function TimelineBankPanel(props: TimelineBankPanelProps) {
       trans_cadence_bars: 4,
       fault_policy: "hold",
       hold_first_destination_measure: false,
+      destination_start_mode: "play",
     };
   };
   const followIsCut = () => (currentFollow()?.video_kind ?? "Crossfade") === "Cut";
   const followDestinationHoldEnabled = () =>
     !followIsCut() && (currentFollow()?.hold_first_destination_measure ?? false);
+  const followDestinationWaitsForPedal = () =>
+    !followIsCut() && (currentFollow()?.destination_start_mode ?? "play") === "wait_for_pedal";
+  const followDurationLocked = () =>
+    followDestinationHoldEnabled() || followDestinationWaitsForPedal();
   const updateFollow = (patch: Partial<TimelineFollowSummary>) => {
     const base = currentFollow() ?? defaultFollow();
     if (!base) return;
@@ -64,6 +69,9 @@ export function TimelineBankPanel(props: TimelineBankPanelProps) {
       next_timeline_id: timelineId(nextTimeline()!),
     };
     if (nextFollow.video_kind === "Cut") {
+      nextFollow.hold_first_destination_measure = false;
+      nextFollow.destination_start_mode = "play";
+    } else if (nextFollow.destination_start_mode === "wait_for_pedal") {
       nextFollow.hold_first_destination_measure = false;
     }
     void props.onSetFollow(nextFollow);
@@ -163,7 +171,7 @@ export function TimelineBankPanel(props: TimelineBankPanelProps) {
               checked={currentFollow()?.enabled ?? false}
               onChange={(event) => void props.onSetFollow(event.currentTarget.checked ? defaultFollow() : null)}
             />
-            Auto-play next
+            Follow to next Timeline
           </label>
           <label>
             Video transition
@@ -182,18 +190,34 @@ export function TimelineBankPanel(props: TimelineBankPanelProps) {
               <option value="Dip">Dip</option>
             </select>
           </label>
+          <label>
+            Destination start
+            <select
+              data-timeline-follow-destination-start
+              value={currentFollow()?.destination_start_mode ?? "play"}
+              disabled={followIsCut()}
+              onChange={(event) => updateFollow({
+                destination_start_mode: event.currentTarget.value as TimelineFollowSummary["destination_start_mode"],
+              })}
+            >
+              <option value="play">Play immediately</option>
+              <option value="wait_for_pedal">Wait for Pedal 1</option>
+            </select>
+          </label>
           <label class="toggleRow">
             <input
               type="checkbox"
               data-timeline-follow-hold
               checked={followDestinationHoldEnabled()}
-              disabled={followIsCut()}
+              disabled={followIsCut() || followDestinationWaitsForPedal()}
               onChange={(event) => updateFollow({ hold_first_destination_measure: event.currentTarget.checked })}
             />
             Hold destination first measure until pedal release
           </label>
           <small class="timelineFollowHoldHint" data-timeline-follow-hold-hint>
-            Transition uses one source measure, then the destination first measure loops until F13.
+            {followDestinationWaitsForPedal()
+              ? "Transition uses one source measure, then the destination waits at its start until Pedal 1."
+              : "Transition uses one source measure, then the destination first measure loops until F13."}
           </small>
           <label>
             Curve
@@ -204,7 +228,7 @@ export function TimelineBankPanel(props: TimelineBankPanelProps) {
           </label>
           <label>
             Fade (ms)
-            <input type="number" min="0" step="50" value={currentFollow()?.duration.value_milliunits ?? 1_000} disabled={followIsCut() || followDestinationHoldEnabled()} onChange={(event) => updateFollow({ duration: { unit: "Milliseconds", value_milliunits: Math.max(1, Math.round(Number(event.currentTarget.value) || 1)) } })} />
+            <input type="number" min="0" step="50" value={currentFollow()?.duration.value_milliunits ?? 1_000} disabled={followIsCut() || followDurationLocked()} onChange={(event) => updateFollow({ duration: { unit: "Milliseconds", value_milliunits: Math.max(1, Math.round(Number(event.currentTarget.value) || 1)) } })} />
           </label>
           <label>
             Preroll (ms)

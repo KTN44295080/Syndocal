@@ -382,7 +382,29 @@ for (const command of [
 ]) {
   assert(!rendererMutationSet.has(command), `${command} must remain outside renderer-ticketed project mutations`);
 }
-assert.equal(manifest.length, 443, "frontend Tauri manifest count drifted");
+const frozenUsbSerialManifestCommands = [
+  "enable_show_serial_dmx_safety_blackout_route_v1",
+  "get_serial_dmx_machine_binding_status_v1",
+  "get_show_serial_dmx_safety_blackout_route_status_v1",
+  "select_serial_dmx_machine_binding_v1",
+  "stop_show_serial_dmx_safety_blackout_route_v1",
+];
+const showSpoutV2ManifestCommands = [
+  "enable_show_spout_outputs_v2",
+  "reset_show_spout_outputs_v1",
+];
+assert.deepEqual(
+  manifest.filter((command) => frozenUsbSerialManifestCommands.includes(command)).sort(),
+  frozenUsbSerialManifestCommands.slice().sort(),
+  "the frozen USB-DMX routes must remain present exactly once",
+);
+assert.deepEqual(
+  manifest.filter((command) => showSpoutV2ManifestCommands.includes(command)).sort(),
+  showSpoutV2ManifestCommands,
+  "the exact Spout V2 enable and local reset routes must remain present exactly once",
+);
+assert(!manifest.includes("enable_show_spout_outputs_v1"), "the retired Spout V1 route must remain unreachable");
+assert.equal(manifest.length, 449, "frontend Tauri manifest count drifted");
 assert.equal(backendRendererMutations.length, 131, "backend renderer-ticketed classification count drifted");
 assert.equal(backendServerMutations.length, 31, "backend authoritative classification count drifted");
 assert.deepEqual(

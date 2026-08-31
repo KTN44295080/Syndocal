@@ -665,6 +665,20 @@ export function TimelineOverview(props: TimelineOverviewProps) {
   const layerRowById = createMemo(() => new Map(
     sectionLayout().laneRows.map((row) => [row.layer.id, row]),
   ));
+  const visibleOverlapMemberEventIds = createMemo(
+    () => {
+      const ids = new Set<number>();
+      for (const cluster of props.overlapClusters) {
+        if (!laneVisible(cluster.track) || (!props.legacyMode && !layerRowById().has(cluster.layer_id))) {
+          continue;
+        }
+        for (const memberId of cluster.member_ids) ids.add(memberId);
+      }
+      return ids;
+    },
+    new Set<number>(),
+    { equals: sameNumberSet },
+  );
   const canvasH = () => props.legacyMode ? overviewH() : sectionLayout().contentHeight;
   const toggleSection = (kind: TimelineLayerKind) => {
     setCollapsedSections((current) => {
@@ -2530,6 +2544,13 @@ export function TimelineOverview(props: TimelineOverviewProps) {
     const move = markerDrag();
     return move?.eventId === event.id ? `${Math.round(move.timeMs)} ms` : null;
   };
+  const sceneBlockIsCompressedOverlapMember = (event: TimelineOverviewEvent) =>
+    event.duration_ms > 0 &&
+    visibleOverlapMemberEventIds().has(event.id) &&
+    props.selectedEventId !== event.id &&
+    markerDrag()?.eventId !== event.id &&
+    eventResizeDrag()?.eventId !== event.id &&
+    eventFadeDrag()?.eventId !== event.id;
   const placementPreview = createMemo(() => {
     const placement = placementDrag();
     if (!placement) return null;
@@ -3640,6 +3661,17 @@ export function TimelineOverview(props: TimelineOverviewProps) {
                 </>
               }
             >
+              <Show when={sceneBlockIsCompressedOverlapMember(event)}>
+                <rect
+                  class="timelineSceneBlockHit"
+                  x="0"
+                  y={-blockHeightPx() / 2}
+                  width={Math.max(sceneBlockPixelWidth(event), 6)}
+                  height={blockHeightPx()}
+                  rx="1"
+                />
+              </Show>
+              <Show when={!sceneBlockIsCompressedOverlapMember(event)}>
               <Show when={activeDragStamp(event)}>
                 <rect
                   class="timelineSceneBlockGhost"
@@ -3871,14 +3903,17 @@ export function TimelineOverview(props: TimelineOverviewProps) {
                   onPointerCancel={cancelEventFade}
                 />
               </Show>
+              </Show>
             </Show>
-            <title>
-              {event.duration_ms > 0
-                ? event.conform_to_tempo
-                  ? `${event.cue_label}${sceneBlockRateBadge(event) ? ` ${sceneBlockRateBadge(event)}` : ""} / ${event.track} / ${event.time_ms} ms / ${event.duration_ms} ms window / ${event.loop_count} ${event.loop_fill ? "fill loops" : "tempo iterations"}`
-                  : `${event.cue_label} / ${event.track} / ${event.time_ms} ms / ${event.duration_ms} ms x ${event.loop_count}`
-                : `${event.cue_label} / ${event.track} / ${event.time_ms} ms / legacy point`}
-            </title>
+            <Show when={!sceneBlockIsCompressedOverlapMember(event)}>
+              <title>
+                {event.duration_ms > 0
+                  ? event.conform_to_tempo
+                    ? `${event.cue_label}${sceneBlockRateBadge(event) ? ` ${sceneBlockRateBadge(event)}` : ""} / ${event.track} / ${event.time_ms} ms / ${event.duration_ms} ms window / ${event.loop_count} ${event.loop_fill ? "fill loops" : "tempo iterations"}`
+                    : `${event.cue_label} / ${event.track} / ${event.time_ms} ms / ${event.duration_ms} ms x ${event.loop_count}`
+                  : `${event.cue_label} / ${event.track} / ${event.time_ms} ms / legacy point`}
+              </title>
+            </Show>
           </g>
         )}
       </For>

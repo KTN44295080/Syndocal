@@ -644,7 +644,7 @@ assert(
 const spoutPublishPath = sliceBetween(
   spoutTransport,
   "    fn publish(&mut self)",
-  "    fn failure_snapshot",
+  "    pub(crate) fn failure_snapshot",
   "Spout output publication path",
 );
 assert.match(spoutPublishPath, /lease\.publish\(\)/);
@@ -713,7 +713,7 @@ assert(
 );
 const spoutStopPath = sliceBetween(
   spoutTransport,
-  "    fn stop(mut self)",
+  "    pub(crate) fn stop(mut self)",
   "    fn signal_retirement",
   "Spout output worker stop path",
 );

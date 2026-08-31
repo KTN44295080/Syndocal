@@ -2,8 +2,8 @@ use std::{
     hint::spin_loop,
     io::{self, Write},
     sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc, Mutex,
+        atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
+        mpsc, Arc, Mutex, TryLockError,
     },
     thread::{self, JoinHandle},
     time::{Duration, Instant},
@@ -26,7 +26,15 @@ pub const ENTTEC_OPEN_DMX_FRAME_WIRE_US: u64 = ENTTEC_OPEN_DMX_BREAK_US
     + ENTTEC_OPEN_DMX_PAYLOAD_LEN as u64 * ENTTEC_OPEN_DMX_BYTE_WIRE_US;
 // FTDI VCP write/flush returns before the chip's internal TX buffer has drained
 // onto the wire; asserting the next break early slices the in-flight frame.
+//
+// This 8ms guard is the accepted default for the exact FT232R/COM3 rig in
+// qa/M4_IO_VALIDATION.md: its 2ms guard showed periodic dropouts, while the
+// 22,764us wire time plus 8ms was stable. It yields about 32.5fps. This is not
+// a DMX512 or Open DMX universal maximum; a faster setting needs fresh
+// waveform and fixture evidence for the target adapter.
 pub const ENTTEC_OPEN_DMX_FRAME_GUARD_US: u64 = 8_000;
+pub const ENTTEC_OPEN_DMX_EXACT_FT232R_DEFAULT_FRAME_PERIOD_US: u64 =
+    ENTTEC_OPEN_DMX_FRAME_WIRE_US + ENTTEC_OPEN_DMX_FRAME_GUARD_US;
 pub const ENTTEC_PRO_START_DELIMITER: u8 = 0x7e;
 pub const ENTTEC_PRO_END_DELIMITER: u8 = 0xe7;
 pub const ENTTEC_PRO_SEND_DMX_LABEL: u8 = 0x06;
@@ -95,6 +103,11 @@ impl VerifiedUsbSerialPortIdentity {
         let usb_pid = summary.usb_pid.ok_or_else(|| {
             SerialDmxError::Identity("the serial device did not expose a USB PID".to_string())
         })?;
+        if usb_vid == 0 || usb_pid == 0 {
+            return Err(SerialDmxError::Identity(
+                "the serial device did not expose nonzero USB VID and PID".to_string(),
+            ));
+        }
         let manufacturer = summary
             .manufacturer
             .as_deref()
@@ -140,7 +153,24 @@ impl VerifiedUsbSerialPortIdentity {
     ) -> Result<Self, SerialDmxError> {
         let mut identity = Self::from_summary(summary)?;
         let binding = resolve_windows_com_port_binding(&identity)?;
+        let enumerated_instance = summary
+            .windows_device_instance_id
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| {
+                SerialDmxError::Identity(
+                    "the serial enumerator did not expose the current Windows PnP device instance"
+                        .to_string(),
+                )
+            })?;
+        if binding.device_instance_id != enumerated_instance {
+            return Err(SerialDmxError::Identity(format!(
+                "the serial enumerator and Windows COM binding disagree on the current PnP instance (enumerated {enumerated_instance}, observed {})",
+                binding.device_instance_id,
+            )));
+        }
         identity.windows_device_instance_id = Some(binding.device_instance_id);
+        identity.validate_for_verified_open()?;
         Ok(identity)
     }
 
@@ -154,13 +184,49 @@ impl VerifiedUsbSerialPortIdentity {
     }
 
     pub fn matches_summary(&self, summary: &SerialPortSummary) -> bool {
-        summary.name == self.port_name
+        self.validate_for_verified_open().is_ok()
+            && summary.name == self.port_name
             && summary.port_type == self.port_type
             && summary.usb_vid == Some(self.usb_vid)
             && summary.usb_pid == Some(self.usb_pid)
             && summary.serial_number.as_deref() == Some(self.serial_number.as_str())
             && summary.manufacturer.as_deref() == Some(self.manufacturer.as_str())
             && summary.product.as_deref() == Some(self.product.as_str())
+            && summary.windows_device_instance_id.as_deref()
+                == self.windows_device_instance_id.as_deref()
+    }
+
+    fn validate_for_verified_open(&self) -> Result<(), SerialDmxError> {
+        let required = [
+            ("COM path", self.port_name.as_str()),
+            ("serial port type", self.port_type.as_str()),
+            ("hardware serial number", self.serial_number.as_str()),
+            ("manufacturer", self.manufacturer.as_str()),
+            ("product", self.product.as_str()),
+        ];
+        for (label, value) in required {
+            if value.trim().is_empty() {
+                return Err(SerialDmxError::Identity(format!(
+                    "the verified show serial identity is missing its {label}"
+                )));
+            }
+        }
+        if self.usb_vid == 0 || self.usb_pid == 0 {
+            return Err(SerialDmxError::Identity(
+                "the verified show serial identity requires nonzero USB VID and PID".to_string(),
+            ));
+        }
+        if self
+            .windows_device_instance_id
+            .as_deref()
+            .is_none_or(|value| value.trim().is_empty())
+        {
+            return Err(SerialDmxError::Identity(
+                "the verified show serial identity did not capture a Windows PnP device instance"
+                    .to_string(),
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -184,26 +250,41 @@ pub struct EnttecOpenDmxSender {
     running: Arc<AtomicBool>,
     worker_failed: Arc<AtomicBool>,
     worker_error: Arc<Mutex<Option<String>>>,
+    zero_write_generation: Arc<AtomicU64>,
     worker: Option<JoinHandle<()>>,
+    worker_done: Option<mpsc::Receiver<()>>,
+}
+
+/// Evidence that is strictly narrower than fixture verification: the caller
+/// observed the physical Open-DMX worker complete a later all-zero
+/// BREAK/MAB/write_all/flush transaction. It contains no device-level or
+/// fixture-level acknowledgement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OpenDmxZeroWriteReceipt {
+    completed_generation_before_queue: u64,
 }
 
 /// The physical linearization boundary for Open DMX output.
 ///
 /// The worker holds this short mutex from deciding whether a queued frame is
-/// live or zero through BREAK, MAB, `write_all`, and `flush`.  An S0 enqueue
-/// uses the same mutex before marking the shared blackout bit.  Therefore a
-/// write and an S0 reservation have one deterministic order: a worker that
-/// wins may finish one live wire write, while a reservation that wins forces
-/// this and every later worker write to an all-zero frame.  This is runtime
+/// live or zero through BREAK, MAB, `write_all`, and `flush`. The atomic S0
+/// latch is the single frame-selection truth: it is set before a caller ever
+/// waits on this mutex, so a wedged driver cannot stall the engine's safer
+/// direction. A worker that wins immediately before the latch may finish one
+/// live wire write; every later selection is all-zero. This is runtime
 /// authority only; callers must never persist it in an `.sdc` project.
 #[derive(Clone, Debug)]
 pub struct OpenDmxSafetyWriteGate {
-    state: Arc<Mutex<OpenDmxSafetyWriteState>>,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct OpenDmxSafetyWriteState {
-    blackout_engaged: bool,
+    state: Arc<Mutex<()>>,
+    /// A nonblocking S0 latch set before any potentially wedged physical
+    /// transaction lock. Once true, every future worker selection is zero
+    /// even if the mutex holder cannot be joined or interrupted.
+    blackout_latched: Arc<AtomicBool>,
+    /// A reservation must be releasable after a worker wedges while it owns
+    /// the physical mutex. Keep the count independent of that mutex so Drop
+    /// can always decrement it without making a later successful re-arm
+    /// silently permanent-zero.
+    zero_write_holds: Arc<AtomicU32>,
 }
 
 impl Default for OpenDmxSafetyWriteGate {
@@ -215,9 +296,9 @@ impl Default for OpenDmxSafetyWriteGate {
 impl OpenDmxSafetyWriteGate {
     pub fn new() -> Self {
         Self {
-            state: Arc::new(Mutex::new(OpenDmxSafetyWriteState {
-                blackout_engaged: false,
-            })),
+            state: Arc::new(Mutex::new(())),
+            blackout_latched: Arc::new(AtomicBool::new(false)),
+            zero_write_holds: Arc::new(AtomicU32::new(0)),
         }
     }
 
@@ -225,7 +306,27 @@ impl OpenDmxSafetyWriteGate {
     /// command becomes observable.  The caller may hold other engine gates;
     /// this method itself contains no serial I/O.
     pub fn engage_blackout(&self) -> Result<(), String> {
+        self.latch_blackout();
         self.set_blackout_engaged(true)
+    }
+
+    /// Latch S0 before attempting a bounded physical-gate confirmation. A
+    /// timeout means the holder may still be in a driver call: it is never a
+    /// zero-write receipt, but future frame selection remains zero-only.
+    pub fn engage_blackout_bounded(&self, timeout: Duration) -> Result<(), String> {
+        self.latch_blackout();
+        // This is a bounded observation that no physical transaction owns
+        // the gate. It is deliberately not required for the S0 latch itself:
+        // a timeout is not a zero receipt, but the latch remains effective.
+        let _state = self.lock_bounded(timeout)?;
+        Ok(())
+    }
+
+    /// Immediate fail-closed direction latch for a fault path. This makes no
+    /// claim that an in-progress physical write was interrupted or that a
+    /// zero frame reached the fixture.
+    pub fn latch_blackout(&self) {
+        self.blackout_latched.store(true, Ordering::Release);
     }
 
     /// Acquire the physical-write authority.  The returned guard is kept
@@ -235,40 +336,110 @@ impl OpenDmxSafetyWriteGate {
     pub fn lock(&self) -> Result<OpenDmxSafetyWriteGateGuard<'_>, String> {
         self.state
             .lock()
-            .map(|state| OpenDmxSafetyWriteGateGuard { state })
+            .map(|state| OpenDmxSafetyWriteGateGuard {
+                _state: state,
+                blackout_latched: &self.blackout_latched,
+            })
             .map_err(|_| "Open DMX physical-write gate was poisoned".to_string())
+    }
+
+    /// Wait only until `timeout` for a physical writer to leave its
+    /// BREAK/MAB/write_all/flush linearization section. It does not interrupt
+    /// a wedged driver. Callers must keep the S0 latch set and report an
+    /// unconfirmed physical zero on timeout.
+    pub fn lock_bounded(
+        &self,
+        timeout: Duration,
+    ) -> Result<OpenDmxSafetyWriteGateGuard<'_>, String> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            match self.state.try_lock() {
+                Ok(state) => {
+                    return Ok(OpenDmxSafetyWriteGateGuard {
+                        _state: state,
+                        blackout_latched: &self.blackout_latched,
+                    });
+                }
+                Err(TryLockError::Poisoned(_)) => {
+                    return Err("Open DMX physical-write gate was poisoned".to_string());
+                }
+                Err(TryLockError::WouldBlock) if Instant::now() >= deadline => {
+                    return Err(format!(
+                        "Open DMX physical-write gate did not become available within {}ms",
+                        timeout.as_millis()
+                    ));
+                }
+                Err(TryLockError::WouldBlock) => thread::sleep(Duration::from_millis(1)),
+            }
+        }
     }
 
     /// Synchronize a successful authority transition (or a failed enqueue
     /// rollback) with the physical writer.  The only less-safe transition is
     /// the engine's separately authorized release path.
     pub fn set_blackout_engaged(&self, blackout_engaged: bool) -> Result<(), String> {
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| "Open DMX physical-write gate was poisoned".to_string())?;
-        state.blackout_engaged = blackout_engaged;
+        // S0 selection must never wait for a driver-held physical mutex.
+        // Callers authorize a clear through the engine's exact release fence;
+        // a USB fault re-latches before it can wait on any physical work.
+        self.blackout_latched
+            .store(blackout_engaged, Ordering::Release);
         Ok(())
     }
 
     pub fn blackout_engaged(&self) -> Result<bool, String> {
-        self.lock().map(|state| state.blackout_engaged())
+        Ok(self.blackout_latched.load(Ordering::Acquire))
+    }
+
+    /// Preserve the physical zero-only direction even if a concurrent normal
+    /// release clears its authority while a stop/fault path waits for the
+    /// worker to complete one real zero transaction. The reservation carries
+    /// no serial I/O and is released automatically.
+    pub fn reserve_zero_write(&self) -> Result<OpenDmxZeroWriteReservation, String> {
+        let state = self.lock()?;
+        self.reserve_zero_write_after_lock(state)
+    }
+
+    /// Bounded variant used for USB worker stop/fault. A timeout retains the
+    /// nonblocking S0 latch but establishes no reservation and no physical
+    /// zero completion claim.
+    pub fn reserve_zero_write_bounded(
+        &self,
+        timeout: Duration,
+    ) -> Result<OpenDmxZeroWriteReservation, String> {
+        let state = self.lock_bounded(timeout)?;
+        self.reserve_zero_write_after_lock(state)
+    }
+
+    fn reserve_zero_write_after_lock(
+        &self,
+        _state: OpenDmxSafetyWriteGateGuard<'_>,
+    ) -> Result<OpenDmxZeroWriteReservation, String> {
+        if !self.blackout_latched.load(Ordering::Acquire) {
+            return Err("Open DMX zero-write reservation requires engaged S0".to_string());
+        }
+        self.zero_write_holds
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |holds| {
+                holds.checked_add(1)
+            })
+            .map_err(|_| "Open DMX zero-write reservation overflowed".to_string())?;
+        Ok(OpenDmxZeroWriteReservation {
+            gate: self.clone(),
+            active: true,
+        })
     }
 
     fn write_selected_frame<T>(
         &self,
         requested: &[u8; 512],
         write: impl FnOnce(&[u8; 512]) -> io::Result<T>,
-    ) -> io::Result<T> {
-        let state = self.lock().map_err(io::Error::other)?;
+    ) -> io::Result<(T, bool)> {
+        let _physical_gate = self.lock().map_err(io::Error::other)?;
         let blackout = [0u8; 512];
-        let selected = if state.blackout_engaged() {
-            &blackout
-        } else {
-            requested
-        };
-        // Keep `state` alive until the complete physical transaction returns.
-        write(selected)
+        let selected_zero = self.blackout_latched.load(Ordering::Acquire)
+            || self.zero_write_holds.load(Ordering::Acquire) > 0;
+        let selected = if selected_zero { &blackout } else { requested };
+        // Keep `_physical_gate` alive until the complete physical transaction returns.
+        write(selected).map(|result| (result, selected_zero))
     }
 }
 
@@ -276,16 +447,44 @@ impl OpenDmxSafetyWriteGate {
 /// The state is intentionally private so callers cannot observe an unlocked
 /// decision and reuse it for a later physical write.
 pub struct OpenDmxSafetyWriteGateGuard<'a> {
-    state: std::sync::MutexGuard<'a, OpenDmxSafetyWriteState>,
+    _state: std::sync::MutexGuard<'a, ()>,
+    blackout_latched: &'a AtomicBool,
 }
 
 impl OpenDmxSafetyWriteGateGuard<'_> {
     pub fn blackout_engaged(&self) -> bool {
-        self.state.blackout_engaged
+        self.blackout_latched.load(Ordering::Acquire)
     }
 
     pub fn set_blackout_engaged(&mut self, blackout_engaged: bool) {
-        self.state.blackout_engaged = blackout_engaged;
+        self.blackout_latched
+            .store(blackout_engaged, Ordering::Release);
+    }
+}
+
+pub struct OpenDmxZeroWriteReservation {
+    gate: OpenDmxSafetyWriteGate,
+    active: bool,
+}
+
+impl Drop for OpenDmxZeroWriteReservation {
+    fn drop(&mut self) {
+        if !self.active {
+            return;
+        }
+        if self
+            .gate
+            .zero_write_holds
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |holds| {
+                holds.checked_sub(1)
+            })
+            .is_err()
+        {
+            // Count corruption must never restore live selection. The
+            // authoritative S0 latch remains set until an explicit recovery.
+            self.gate.blackout_latched.store(true, Ordering::Release);
+        }
+        self.active = false;
     }
 }
 
@@ -351,6 +550,7 @@ impl EnttecOpenDmxSender {
         identity: &VerifiedUsbSerialPortIdentity,
         safety_write_gate: OpenDmxSafetyWriteGate,
     ) -> Result<Self, SerialDmxError> {
+        identity.validate_for_verified_open()?;
         require_exact_verified_usb_port(&list_serial_ports()?, identity)?;
         #[cfg(target_os = "windows")]
         {
@@ -358,7 +558,8 @@ impl EnttecOpenDmxSender {
 
             let pre_open = resolve_windows_com_port_binding(identity)?;
             require_windows_binding_matches_identity(identity, &pre_open)?;
-            let port = serialport::new(&pre_open.device_interface_path, ENTTEC_OPEN_DMX_BAUD_RATE)
+            let direct_interface_path = pre_open.device_interface_path.as_str();
+            let port = serialport::new(direct_interface_path, ENTTEC_OPEN_DMX_BAUD_RATE)
                 .data_bits(DataBits::Eight)
                 .parity(Parity::None)
                 .stop_bits(StopBits::Two)
@@ -368,19 +569,19 @@ impl EnttecOpenDmxSender {
                     path: identity.port_name.clone(),
                     source,
                 })?;
-            // Resolve the actual opened HANDLE through Win32, not through
-            // serialport's self-reported name. Re-resolve the live PnP
-            // binding before the worker can own it; a removed/replaced
-            // devnode cannot be promoted merely because COM3 returns to A.
-            let opened_handle =
-                windows_com_binding::binding_for_opened_handle(port.as_raw_handle())
-                    .map_err(SerialDmxError::Identity)?;
+            // `GetCommState` is the supported, handle-local proof that the
+            // actual returned HANDLE is a communications device. Its PnP
+            // identity is established by the exact device-interface path
+            // passed to CreateFile, not by trying to reverse a COM HANDLE to
+            // a filesystem path (which Win32 does not support).
+            windows_com_binding::verify_opened_communications_handle(port.as_raw_handle())
+                .map_err(SerialDmxError::Identity)?;
             let post_open = resolve_windows_com_port_binding(identity)?;
             require_exact_verified_usb_port(&list_serial_ports()?, identity)?;
-            verify_opened_windows_com_handle_binding(
+            verify_opened_windows_com_direct_binding(
                 identity,
                 &pre_open,
-                &opened_handle,
+                direct_interface_path,
                 &post_open,
             )?;
             return Self::from_open_port(Box::new(port), safety_write_gate);
@@ -414,6 +615,8 @@ impl EnttecOpenDmxSender {
         let running = Arc::new(AtomicBool::new(true));
         let worker_failed = Arc::new(AtomicBool::new(false));
         let worker_error = Arc::new(Mutex::new(None));
+        let zero_write_generation = Arc::new(AtomicU64::new(0));
+        let (worker_done_tx, worker_done_rx) = mpsc::sync_channel(1);
         let worker = thread::Builder::new()
             .name("syndocal-open-dmx".to_string())
             .spawn({
@@ -421,6 +624,7 @@ impl EnttecOpenDmxSender {
                 let running = Arc::clone(&running);
                 let worker_failed = Arc::clone(&worker_failed);
                 let worker_error = Arc::clone(&worker_error);
+                let zero_write_generation = Arc::clone(&zero_write_generation);
                 let safety_write_gate = safety_write_gate.clone();
                 move || {
                     run_enttec_open_dmx_worker(
@@ -429,9 +633,11 @@ impl EnttecOpenDmxSender {
                         running,
                         worker_failed,
                         worker_error,
+                        zero_write_generation,
                         safety_write_gate,
                         before_physical_write,
-                    )
+                    );
+                    let _ = worker_done_tx.send(());
                 }
             })
             .map_err(SerialDmxError::WorkerStart)?;
@@ -440,7 +646,9 @@ impl EnttecOpenDmxSender {
             running,
             worker_failed,
             worker_error,
+            zero_write_generation,
             worker: Some(worker),
+            worker_done: Some(worker_done_rx),
         })
     }
 
@@ -466,26 +674,104 @@ impl EnttecOpenDmxSender {
     }
 
     pub fn send_dmx_frame(&mut self, frame: &[u8; 512]) -> Result<usize, SerialDmxError> {
-        if self.worker_failed.load(Ordering::Acquire) {
-            let error = self
-                .worker_error
-                .lock()
-                .map_err(|_| SerialDmxError::Worker("worker error lock was poisoned".to_string()))?
-                .clone()
-                .unwrap_or_else(|| "worker stopped without an error message".to_string());
-            return Err(SerialDmxError::Worker(error));
-        }
+        self.worker_failure_if_any()?;
         enqueue_latest_open_dmx_frame(&self.frames, *frame);
         Ok(ENTTEC_OPEN_DMX_PAYLOAD_LEN)
+    }
+
+    /// Snapshot the physical-zero completion generation before queueing an
+    /// all-zero frame. Pair with [`wait_for_zero_frame_physical_write`] while
+    /// holding an [`OpenDmxZeroWriteReservation`] to prove one later zero
+    /// wire transaction completed without promoting it to fixture proof.
+    pub fn zero_write_receipt(&self) -> Result<OpenDmxZeroWriteReceipt, SerialDmxError> {
+        self.worker_failure_if_any()?;
+        Ok(OpenDmxZeroWriteReceipt {
+            completed_generation_before_queue: self.zero_write_generation.load(Ordering::Acquire),
+        })
+    }
+
+    pub fn wait_for_zero_frame_physical_write(
+        &self,
+        receipt: OpenDmxZeroWriteReceipt,
+        timeout: Duration,
+    ) -> Result<(), SerialDmxError> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            self.worker_failure_if_any()?;
+            if self.zero_write_generation.load(Ordering::Acquire)
+                > receipt.completed_generation_before_queue
+            {
+                return Ok(());
+            }
+            if Instant::now() >= deadline {
+                return Err(SerialDmxError::Worker(format!(
+                    "no physical zero-frame completion within {} ms",
+                    timeout.as_millis()
+                )));
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    fn worker_failure_if_any(&self) -> Result<(), SerialDmxError> {
+        if !self.worker_failed.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        let error = self
+            .worker_error
+            .lock()
+            .map_err(|_| SerialDmxError::Worker("worker error lock was poisoned".to_string()))?
+            .clone()
+            .unwrap_or_else(|| "worker stopped without an error message".to_string());
+        Err(SerialDmxError::Worker(error))
+    }
+
+    /// Stop the Open DMX worker without allowing a caller to block forever on
+    /// a broken serial driver. A timeout takes and drops the `JoinHandle`, so
+    /// the later sender `Drop` cannot re-enter an unbounded join. Callers must
+    /// have latched S0 first. That latch makes every *later* worker selection
+    /// zero-only, but does not interrupt an in-progress driver call and is
+    /// never a physical-zero or fixture-delivery acknowledgement.
+    pub fn shutdown_bounded(&mut self, timeout: Duration) -> Result<(), SerialDmxError> {
+        self.running.store(false, Ordering::Release);
+        let Some(worker) = self.worker.take() else {
+            return Ok(());
+        };
+        let Some(done) = self.worker_done.take() else {
+            drop(worker);
+            return Err(SerialDmxError::Worker(
+                "worker completion channel was unavailable during shutdown".to_string(),
+            ));
+        };
+        match done.recv_timeout(timeout) {
+            Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => worker
+                .join()
+                .map_err(|_| SerialDmxError::Worker("worker panicked during shutdown".to_string())),
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                // Dropping JoinHandle detaches only after the caller has
+                // reserved the zero-only physical direction.  Joining here
+                // would make a stop operation unbounded on a wedged driver.
+                drop(worker);
+                Err(SerialDmxError::Worker(format!(
+                    "worker did not stop within {} ms; S0 remains reserved",
+                    timeout.as_millis()
+                )))
+            }
+        }
     }
 }
 
 impl Drop for EnttecOpenDmxSender {
     fn drop(&mut self) {
         self.running.store(false, Ordering::Release);
-        if let Some(worker) = self.worker.take() {
-            let _ = worker.join();
-        }
+        // Destruction is never the physical-zero acknowledgement path. The
+        // route stop/fault code must use `shutdown_bounded` after it has
+        // latched S0 and, where possible, obtained a zero receipt. Dropping a
+        // still-owned JoinHandle detaches it; this prevents an ownership
+        // transition or error unwind from blocking forever in a wedged serial
+        // driver.
+        let _detached_worker = self.worker.take();
+        self.worker_done = None;
     }
 }
 
@@ -506,6 +792,7 @@ pub enum OpenDmxTestSerialOperation {
 #[derive(Default)]
 struct OpenDmxTestSerialState {
     operations: Vec<OpenDmxTestSerialOperation>,
+    fail_next_write: bool,
 }
 
 /// Debug/test-only `SerialPort` implementation used to exercise the actual
@@ -560,6 +847,16 @@ impl OpenDmxTestSerialObservation {
             .map(|state| state.operations.clone())
             .map_err(|_| "Open DMX test serial observation was poisoned".to_string())
     }
+
+    /// Cause the next real worker `write_all` to fail. This stays behind the
+    /// debug-only fake-port seam so the engine can prove its disconnect/fault
+    /// path without opening a real COM interface.
+    pub fn fail_next_write(&self) -> Result<(), String> {
+        self.state
+            .lock()
+            .map(|mut state| state.fail_next_write = true)
+            .map_err(|_| "Open DMX test serial observation was poisoned".to_string())
+    }
 }
 
 #[cfg(debug_assertions)]
@@ -575,9 +872,18 @@ impl Write for OpenDmxTestSerialPort {
         if let Some(before_write_all) = &self.before_write_all {
             before_write_all();
         }
-        self.state
+        let mut state = self
+            .state
             .lock()
-            .map_err(|_| io::Error::other("Open DMX test serial state was poisoned"))?
+            .map_err(|_| io::Error::other("Open DMX test serial state was poisoned"))?;
+        if state.fail_next_write {
+            state.fail_next_write = false;
+            return Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "injected Open DMX test write failure",
+            ));
+        }
+        state
             .operations
             .push(OpenDmxTestSerialOperation::WriteAll(buffer.to_vec()));
         Ok(buffer.len())
@@ -761,6 +1067,7 @@ fn require_exact_verified_usb_port(
     ports: &[SerialPortSummary],
     identity: &VerifiedUsbSerialPortIdentity,
 ) -> Result<(), SerialDmxError> {
+    identity.validate_for_verified_open()?;
     let same_name = ports
         .iter()
         .filter(|port| port.name == identity.port_name)
@@ -822,24 +1129,22 @@ fn require_windows_binding_matches_identity(
 
 /// A direct device-interface open is the kernel-level handle binding: the
 /// interface path names one present PnP devnode, while COM3 is only an alias.
-/// Verify all three observations to reject a swap even when A returns to COM3
-/// after B occupied it during the enumerate/open interval.
+/// `serialport` receives that exact SetupAPI path, and the current PnP
+/// observation must still match it after the successful communications-handle
+/// check. A replacement cannot be admitted through a mutable COM alias.
 #[cfg(target_os = "windows")]
-fn verify_opened_windows_com_handle_binding(
+fn verify_opened_windows_com_direct_binding(
     identity: &VerifiedUsbSerialPortIdentity,
     pre_open: &WindowsComPortBinding,
-    opened_handle: &WindowsComPortBinding,
+    direct_interface_path: &str,
     post_open: &WindowsComPortBinding,
 ) -> Result<(), SerialDmxError> {
     require_windows_binding_matches_identity(identity, pre_open)?;
-    if opened_handle != pre_open {
-        return Err(SerialDmxError::Identity(format!(
-            "the opened Windows COM handle bound to {} / {}, not approved {} / {}",
-            opened_handle.port_name,
-            opened_handle.device_instance_id,
-            pre_open.port_name,
-            pre_open.device_instance_id,
-        )));
+    if direct_interface_path != pre_open.device_interface_path {
+        return Err(SerialDmxError::Identity(
+            "the Windows COM open did not use the approved direct device-interface path"
+                .to_string(),
+        ));
     }
     if post_open != pre_open {
         return Err(SerialDmxError::Identity(format!(
@@ -860,6 +1165,7 @@ mod windows_com_binding {
     use windows::{
         core::{HRESULT, PCWSTR},
         Win32::{
+            Devices::Communication::{GetCommState, DCB},
             Devices::DeviceAndDriverInstallation::{
                 SetupDiDestroyDeviceInfoList, SetupDiEnumDeviceInterfaces, SetupDiGetClassDevsW,
                 SetupDiGetDeviceInstanceIdW, SetupDiGetDeviceInterfaceDetailW,
@@ -868,7 +1174,6 @@ mod windows_com_binding {
                 SP_DEVINFO_DATA,
             },
             Foundation::{ERROR_NO_MORE_ITEMS, HANDLE},
-            Storage::FileSystem::{GetFinalPathNameByHandleW, FILE_NAME_OPENED},
             System::Ioctl::GUID_DEVINTERFACE_COMPORT,
         },
     };
@@ -908,29 +1213,18 @@ mod windows_com_binding {
         }
     }
 
-    /// Resolve the real kernel handle's *opened* path through Win32, then
-    /// join it back to exactly one current SetupAPI PnP interface. The caller
-    /// never supplies a claimed handle identity and this intentionally has no
-    /// dependency on `SerialPort::name()`.
-    pub(super) fn binding_for_opened_handle(
-        raw_handle: RawHandle,
-    ) -> Result<WindowsComPortBinding, String> {
-        let opened_path = opened_handle_device_interface_path(raw_handle)?;
-        let matches = present_bindings()?
-            .into_iter()
-            .filter(|binding| {
-                windows_device_path_matches(&binding.device_interface_path, &opened_path)
-            })
-            .collect::<Vec<_>>();
-        match matches.as_slice() {
-            [binding] => Ok(binding.clone()),
-            [] => Err(format!(
-                "the opened Windows COM handle path {opened_path} did not resolve to one present PnP COM interface"
-            )),
-            _ => Err(format!(
-                "the opened Windows COM handle path {opened_path} resolved to multiple present PnP COM interfaces"
-            )),
-        }
+    /// `GetCommState` is defined for a communications-device handle returned
+    /// by `CreateFile`. It does not identify a PnP instance; that identity is
+    /// the exact SetupAPI device-interface path used for the open and checked
+    /// again by the caller before the worker receives the handle.
+    pub(super) fn verify_opened_communications_handle(raw_handle: RawHandle) -> Result<(), String> {
+        let mut dcb = DCB {
+            DCBlength: size_of::<DCB>() as u32,
+            ..Default::default()
+        };
+        unsafe { GetCommState(HANDLE(raw_handle.cast()), &mut dcb) }.map_err(|error| {
+            format!("GetCommState could not verify the opened communications handle: {error}")
+        })
     }
 
     fn present_bindings() -> Result<Vec<WindowsComPortBinding>, String> {
@@ -981,35 +1275,6 @@ mod windows_com_binding {
             });
         }
         Ok(bindings)
-    }
-
-    fn opened_handle_device_interface_path(raw_handle: RawHandle) -> Result<String, String> {
-        let handle = HANDLE(raw_handle.cast());
-        let mut capacity = 512usize;
-        for _ in 0..4 {
-            let mut units = vec![0u16; capacity];
-            let written = unsafe {
-                GetFinalPathNameByHandleW(handle, units.as_mut_slice(), FILE_NAME_OPENED)
-            } as usize;
-            if written == 0 {
-                return Err(format!(
-                    "GetFinalPathNameByHandleW could not resolve the opened COM handle: {}",
-                    windows::core::Error::from_win32(),
-                ));
-            }
-            if written < units.len() {
-                return String::from_utf16(&units[..written]).map_err(|_| {
-                    "GetFinalPathNameByHandleW returned invalid UTF-16 for the opened COM handle"
-                        .to_string()
-                });
-            }
-            capacity = written.saturating_add(1);
-        }
-        Err("GetFinalPathNameByHandleW exceeded the bounded opened-COM path buffer".to_string())
-    }
-
-    fn windows_device_path_matches(expected: &str, observed: &str) -> bool {
-        expected.eq_ignore_ascii_case(observed)
     }
 
     fn com_alias_from_friendly_name(friendly_name: &str) -> Option<String> {
@@ -1260,6 +1525,7 @@ fn run_enttec_open_dmx_worker<W, F>(
     running: Arc<AtomicBool>,
     worker_failed: Arc<AtomicBool>,
     worker_error: Arc<Mutex<Option<String>>>,
+    zero_write_generation: Arc<AtomicU64>,
     safety_write_gate: OpenDmxSafetyWriteGate,
     before_physical_write: F,
 ) where
@@ -1279,28 +1545,34 @@ fn run_enttec_open_dmx_worker<W, F>(
         // The deterministic test hook deliberately runs immediately before
         // entering the physical gate. Production supplies an empty hook.
         before_physical_write();
-        if let Err(error) = safety_write_gate
+        match safety_write_gate
             .write_selected_frame(frame, |selected| writer.write_open_dmx_frame(selected))
         {
-            if let Ok(mut slot) = worker_error.lock() {
-                *slot = Some(error.to_string());
+            Err(error) => {
+                if let Ok(mut slot) = worker_error.lock() {
+                    *slot = Some(error.to_string());
+                }
+                worker_failed.store(true, Ordering::Release);
+                running.store(false, Ordering::Release);
             }
-            worker_failed.store(true, Ordering::Release);
-            running.store(false, Ordering::Release);
-        } else {
-            // Pace to the wire rate: without this the loop re-sends far faster
-            // than 250 kbaud can transmit, and each frame's break lands inside
-            // the previous frame still draining from the FTDI buffer.
-            let wait = open_dmx_frame_pacing_wait(frame_started.elapsed());
-            if !wait.is_zero() {
-                precise_wait(wait);
+            Ok((_, wrote_zero)) => {
+                if wrote_zero {
+                    zero_write_generation.fetch_add(1, Ordering::AcqRel);
+                }
+                // Pace to the wire rate: without this the loop re-sends far faster
+                // than 250 kbaud can transmit, and each frame's break lands inside
+                // the previous frame still draining from the FTDI buffer.
+                let wait = open_dmx_frame_pacing_wait(frame_started.elapsed());
+                if !wait.is_zero() {
+                    precise_wait(wait);
+                }
             }
         }
     }
 }
 
 pub fn open_dmx_frame_pacing_wait(elapsed: Duration) -> Duration {
-    Duration::from_micros(ENTTEC_OPEN_DMX_FRAME_WIRE_US + ENTTEC_OPEN_DMX_FRAME_GUARD_US)
+    Duration::from_micros(ENTTEC_OPEN_DMX_EXACT_FT232R_DEFAULT_FRAME_PERIOD_US)
         .saturating_sub(elapsed)
 }
 
@@ -1359,7 +1631,7 @@ fn serial_port_type_label(port_type: &SerialPortType) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::mpsc;
+    use std::sync::{mpsc, Barrier};
 
     struct FakeOpenDmxWriter {
         writes: Arc<Mutex<Vec<[u8; 512]>>>,
@@ -1402,6 +1674,172 @@ mod tests {
         panic!("Open DMX fake worker did not complete {minimum} writes within the bounded test");
     }
 
+    #[test]
+    fn open_dmx_zero_receipt_requires_a_later_real_zero_transaction() {
+        let safety_gate = OpenDmxSafetyWriteGate::new();
+        safety_gate
+            .engage_blackout()
+            .expect("the test must establish S0 before reserving physical zero output");
+        let (port, observation) = OpenDmxTestSerialPort::new();
+        let mut sender =
+            EnttecOpenDmxSender::from_test_serial_port(port, safety_gate.clone(), || {})
+                .expect("the fake serial port must start the real Open DMX worker");
+        let _zero_hold = safety_gate.reserve_zero_write().expect(
+            "the S0 reservation must prevent a concurrent release from selecting live bytes",
+        );
+        let receipt = sender
+            .zero_write_receipt()
+            .expect("a healthy worker must expose a receipt before its zero frame is queued");
+        sender
+            .send_dmx_frame(&[0u8; 512])
+            .expect("the initial zero frame must enter the bounded worker queue");
+        sender
+            .wait_for_zero_frame_physical_write(receipt, Duration::from_secs(1))
+            .expect("the receipt must advance only after BREAK/MAB/write_all/flush completed");
+
+        let operations = observation
+            .operations()
+            .expect("the fake serial observation must remain readable");
+        let write_index = operations
+            .iter()
+            .position(|operation| matches!(operation, OpenDmxTestSerialOperation::WriteAll(payload) if payload[1..].iter().all(|value| *value == 0)))
+            .expect("the acknowledged transaction must have a zero DMX payload");
+        assert!(
+            operations[write_index + 1..]
+                .iter()
+                .any(|operation| matches!(operation, OpenDmxTestSerialOperation::Flush)),
+            "the receipt is invalid if the zero payload was not flushed"
+        );
+        sender
+            .shutdown_bounded(Duration::from_secs(1))
+            .expect("the fake worker must stop within the bounded interval");
+    }
+
+    #[test]
+    fn open_dmx_s0_latch_preempts_a_wedged_physical_gate_without_claiming_a_zero_write() {
+        let safety_gate = OpenDmxSafetyWriteGate::new();
+        let held_physical_gate = safety_gate
+            .lock()
+            .expect("the test must hold the physical gate without serial I/O");
+
+        let started = Instant::now();
+        safety_gate
+            .engage_blackout()
+            .expect("the atomic S0 latch must not wait for a wedged physical gate");
+        assert!(
+            started.elapsed() < Duration::from_millis(25),
+            "S0 latch unexpectedly waited for the physical mutex"
+        );
+        assert!(
+            safety_gate
+                .blackout_engaged()
+                .expect("the lock-free S0 latch must remain observable"),
+            "a physical-gate holder cannot hide the safer selection direction"
+        );
+
+        drop(held_physical_gate);
+        let mut requested = [0u8; 512];
+        requested[17] = 99;
+        let mut selected = [0u8; 512];
+        let (_, selected_zero) = safety_gate
+            .write_selected_frame(&requested, |frame| {
+                selected.copy_from_slice(frame);
+                Ok(())
+            })
+            .expect("the recovered writer must be selectable");
+        assert!(selected_zero);
+        assert!(
+            selected.iter().all(|value| *value == 0),
+            "the latch proves only future selection is zero-only; it does not claim a prior zero transaction"
+        );
+    }
+
+    #[test]
+    fn open_dmx_zero_reservation_drop_is_nonblocking_and_allows_explicit_rearm_release() {
+        let safety_gate = OpenDmxSafetyWriteGate::new();
+        safety_gate
+            .engage_blackout()
+            .expect("the test must establish S0 before reserving zero output");
+        let reservation = safety_gate
+            .reserve_zero_write()
+            .expect("the zero reservation must increment while the physical gate is owned");
+        let held_physical_gate = safety_gate
+            .lock()
+            .expect("the test must emulate a wedged physical writer");
+
+        let started = Instant::now();
+        drop(reservation);
+        assert!(
+            started.elapsed() < Duration::from_millis(25),
+            "reservation Drop must not wait for the driver-owned physical mutex"
+        );
+        drop(held_physical_gate);
+
+        // This models a later, explicit successful recovery/re-arm/release
+        // in the same process. The reservation count must not remain silently
+        // leaked and force zero while the logical status says live.
+        safety_gate
+            .set_blackout_engaged(false)
+            .expect("the explicit release must clear only the atomic S0 latch");
+        let mut requested = [0u8; 512];
+        requested[31] = 123;
+        let mut selected = [0u8; 512];
+        let (_, selected_zero) = safety_gate
+            .write_selected_frame(&requested, |frame| {
+                selected.copy_from_slice(frame);
+                Ok(())
+            })
+            .expect("the recovered physical writer must be selectable");
+        assert!(!selected_zero);
+        assert_eq!(selected, requested);
+    }
+
+    #[test]
+    fn open_dmx_shutdown_timeout_detaches_before_sender_drop_can_join_a_wedged_worker() {
+        let safety_gate = OpenDmxSafetyWriteGate::new();
+        let physical_entered = Arc::new(Barrier::new(2));
+        let physical_release = Arc::new(Barrier::new(2));
+        let first_write = Arc::new(AtomicBool::new(true));
+        let (port, _observation) = OpenDmxTestSerialPort::new_with_before_write_all({
+            let physical_entered = Arc::clone(&physical_entered);
+            let physical_release = Arc::clone(&physical_release);
+            let first_write = Arc::clone(&first_write);
+            move || {
+                if first_write.swap(false, Ordering::AcqRel) {
+                    physical_entered.wait();
+                    physical_release.wait();
+                }
+            }
+        });
+        let mut sender =
+            EnttecOpenDmxSender::from_test_serial_port(port, safety_gate.clone(), || {})
+                .expect("the fake serial port must start the real worker");
+        let mut live = [0u8; 512];
+        live[9] = 77;
+        sender
+            .send_dmx_frame(&live)
+            .expect("the fake worker must accept the queued live frame");
+        physical_entered.wait();
+        safety_gate.latch_blackout();
+
+        let shutdown_started = Instant::now();
+        assert!(
+            sender.shutdown_bounded(Duration::from_millis(25)).is_err(),
+            "the deliberately wedged worker must exceed the bounded shutdown receipt"
+        );
+        assert!(
+            shutdown_started.elapsed() < Duration::from_millis(250),
+            "bounded shutdown unexpectedly waited for the wedged driver"
+        );
+        let drop_started = Instant::now();
+        drop(sender);
+        assert!(
+            drop_started.elapsed() < Duration::from_millis(25),
+            "sender Drop must not re-enter an unbounded worker join after timeout"
+        );
+        physical_release.wait();
+    }
+
     fn verified_usb_port(serial_number: &str) -> SerialPortSummary {
         SerialPortSummary {
             name: "COM3".to_string(),
@@ -1411,7 +1849,9 @@ mod tests {
             serial_number: Some(serial_number.to_string()),
             manufacturer: Some("FTDI".to_string()),
             product: Some("USB Serial Port".to_string()),
-            windows_device_instance_id: None,
+            windows_device_instance_id: Some(format!(
+                r"FTDIBUS\VID_0403+PID_6001+{serial_number}\0000"
+            )),
             recommended_protocol: None,
         }
     }
@@ -1426,6 +1866,7 @@ mod tests {
         let running = Arc::new(AtomicBool::new(true));
         let failed = Arc::new(AtomicBool::new(false));
         let error = Arc::new(Mutex::new(None));
+        let zero_write_generation = Arc::new(AtomicU64::new(0));
         let writes = Arc::new(Mutex::new(Vec::new()));
         let (before_gate_entered_tx, before_gate_entered_rx) = mpsc::channel();
         let (release_before_gate_tx, release_before_gate_rx) = mpsc::channel();
@@ -1436,6 +1877,7 @@ mod tests {
             let running = Arc::clone(&running);
             let failed = Arc::clone(&failed);
             let error = Arc::clone(&error);
+            let zero_write_generation = Arc::clone(&zero_write_generation);
             let writes = Arc::clone(&writes);
             let safety_gate = safety_gate.clone();
             let block_once = Arc::clone(&block_once);
@@ -1451,6 +1893,7 @@ mod tests {
                     running,
                     failed,
                     error,
+                    zero_write_generation,
                     safety_gate,
                     move || {
                         if block_once.swap(false, Ordering::AcqRel) {
@@ -1499,6 +1942,7 @@ mod tests {
         let running = Arc::new(AtomicBool::new(true));
         let failed = Arc::new(AtomicBool::new(false));
         let error = Arc::new(Mutex::new(None));
+        let zero_write_generation = Arc::new(AtomicU64::new(0));
         let writes = Arc::new(Mutex::new(Vec::new()));
         let (physical_entered_tx, physical_entered_rx) = mpsc::channel();
         let (physical_release_tx, physical_release_rx) = mpsc::channel();
@@ -1508,6 +1952,7 @@ mod tests {
             let running = Arc::clone(&running);
             let failed = Arc::clone(&failed);
             let error = Arc::clone(&error);
+            let zero_write_generation = Arc::clone(&zero_write_generation);
             let writes = Arc::clone(&writes);
             let safety_gate = safety_gate.clone();
             move || {
@@ -1522,6 +1967,7 @@ mod tests {
                     running,
                     failed,
                     error,
+                    zero_write_generation,
                     safety_gate,
                     || {},
                 );
@@ -1537,15 +1983,15 @@ mod tests {
             let result = s0_gate.engage_blackout();
             let _ = s0_done_tx.send(result);
         });
-        assert!(s0_done_rx.recv_timeout(Duration::from_millis(25)).is_err());
+        s0_done_rx
+            .recv_timeout(Duration::from_millis(25))
+            .expect("the atomic S0 latch must not wait for the worker-owned physical write")
+            .expect("the S0 latch must not be poisoned");
+        s0.join()
+            .expect("S0 latch thread must terminate before the wedged write releases");
         physical_release_tx
             .send(())
             .expect("worker must still be in its first physical write");
-        s0_done_rx
-            .recv_timeout(Duration::from_secs(1))
-            .expect("S0 must complete after the single winning write")
-            .expect("S0 gate must not be poisoned");
-        s0.join().expect("S0 reservation thread must terminate");
         wait_for_fake_writes(&writes, 2);
         running.store(false, Ordering::Release);
         worker
@@ -1633,11 +2079,22 @@ mod tests {
     }
 
     #[test]
+    fn exact_ft232r_default_pacing_is_about_32_point_5_fps_not_a_44hz_usb_guarantee() {
+        // The exact-rig default includes the accepted 8ms drain guard, so a
+        // latest-frame worker cannot promise a distinct physical USB frame
+        // for every 44Hz engine tick. Keep the integral bounds deterministic
+        // and leave any 36-40fps promotion to new physical evidence.
+        assert_eq!(ENTTEC_OPEN_DMX_EXACT_FT232R_DEFAULT_FRAME_PERIOD_US, 30_764);
+        assert!(32 * ENTTEC_OPEN_DMX_EXACT_FT232R_DEFAULT_FRAME_PERIOD_US < 1_000_000);
+        assert!(33 * ENTTEC_OPEN_DMX_EXACT_FT232R_DEFAULT_FRAME_PERIOD_US > 1_000_000);
+    }
+
+    #[test]
     fn open_dmx_pacing_waits_the_full_frame_budget_from_a_fast_write() {
         let wait = open_dmx_frame_pacing_wait(Duration::ZERO);
         assert_eq!(
             wait,
-            Duration::from_micros(ENTTEC_OPEN_DMX_FRAME_WIRE_US + ENTTEC_OPEN_DMX_FRAME_GUARD_US)
+            Duration::from_micros(ENTTEC_OPEN_DMX_EXACT_FT232R_DEFAULT_FRAME_PERIOD_US)
         );
     }
 
@@ -1700,43 +2157,51 @@ mod tests {
 
     #[cfg(target_os = "windows")]
     #[test]
-    fn verified_windows_com_handle_rejects_an_a_to_b_to_a_swap_without_port_name_trust() {
+    fn verified_windows_direct_com_open_rejects_identity_or_path_drift_without_port_name_trust() {
         let before_open = verified_usb_port("FTDI-INSTANCE-A");
         let mut identity = VerifiedUsbSerialPortIdentity::from_summary(&before_open)
             .expect("a complete enumerated USB identity must be capturable");
         let device_a = r"FTDIBUS\VID_0403+PID_6001+FTDI-INSTANCE-A\0000";
         identity.windows_device_instance_id = Some(device_a.to_string());
         let pre_open_a = windows_binding(device_a, "FTDI-INSTANCE-A");
-        let opened_a = pre_open_a.clone();
         let post_open_a = pre_open_a.clone();
 
-        assert!(verify_opened_windows_com_handle_binding(
+        assert!(verify_opened_windows_com_direct_binding(
             &identity,
             &pre_open_a,
-            &opened_a,
+            &pre_open_a.device_interface_path,
             &post_open_a,
         )
         .is_ok());
 
-        // A→B→A: the normal COM alias is back on A by the post-open check,
-        // but the captured handle was opened on B. The comparison is between
-        // PnP instance/interface identities, not `SerialPort::name()`.
+        // The direct SetupAPI path is not a mutable COM alias. A→B→A must not
+        // become permissive merely because the post-open alias again shows A:
+        // the actual CreateFile target must remain A's exact interface path.
         let device_b = r"FTDIBUS\VID_0403+PID_6001+FTDI-INSTANCE-B\0000";
-        let opened_b = windows_binding(device_b, "FTDI-INSTANCE-B");
-        assert!(verify_opened_windows_com_handle_binding(
+        let binding_b = windows_binding(device_b, "FTDI-INSTANCE-B");
+        assert!(verify_opened_windows_com_direct_binding(
             &identity,
             &pre_open_a,
-            &opened_b,
+            &binding_b.device_interface_path,
             &post_open_a,
         )
         .is_err());
 
-        let post_open_b = windows_binding(device_b, "FTDI-INSTANCE-B");
-        assert!(verify_opened_windows_com_handle_binding(
+        assert!(verify_opened_windows_com_direct_binding(
             &identity,
             &pre_open_a,
-            &opened_a,
-            &post_open_b,
+            &pre_open_a.device_interface_path,
+            &binding_b,
+        )
+        .is_err());
+
+        let mut wrong_identity = identity.clone();
+        wrong_identity.windows_device_instance_id = Some(device_b.to_string());
+        assert!(verify_opened_windows_com_direct_binding(
+            &wrong_identity,
+            &pre_open_a,
+            &pre_open_a.device_interface_path,
+            &post_open_a,
         )
         .is_err());
 
@@ -1746,6 +2211,104 @@ mod tests {
             VerifiedUsbSerialPortIdentity::from_summary(&missing_instance),
             Err(SerialDmxError::Identity(_))
         ));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn verified_windows_com_handle_rejects_a_non_communications_handle() {
+        use std::os::windows::io::AsRawHandle;
+
+        let executable =
+            std::env::current_exe().expect("the test process executable path must be available");
+        let file = std::fs::File::open(executable)
+            .expect("the test process executable must be openable as an ordinary file");
+        let error = windows_com_binding::verify_opened_communications_handle(file.as_raw_handle())
+            .expect_err("GetCommState must reject an ordinary file handle");
+        assert!(error.contains("GetCommState"));
+    }
+
+    #[test]
+    fn verified_usb_identity_rejects_zero_vid_or_pid() {
+        let complete = verified_usb_port("FTDI-INSTANCE-A");
+        for zero_vid in [true, false] {
+            let mut invalid = complete.clone();
+            if zero_vid {
+                invalid.usb_vid = Some(0);
+            } else {
+                invalid.usb_pid = Some(0);
+            }
+            let error = VerifiedUsbSerialPortIdentity::from_summary(&invalid)
+                .expect_err("zero USB identity components must fail closed");
+            assert!(error.to_string().contains("nonzero USB VID and PID"));
+        }
+    }
+
+    #[test]
+    fn verified_open_rejects_manual_incomplete_or_zero_identity_before_enumeration() {
+        let enumerated = verified_usb_port("FTDI-INSTANCE-A");
+        let mut complete = VerifiedUsbSerialPortIdentity::from_summary(&enumerated)
+            .expect("the complete summary must establish the non-PnP identity fields");
+        complete.windows_device_instance_id = enumerated.windows_device_instance_id.clone();
+
+        for missing_field in [
+            "port_name",
+            "port_type",
+            "serial_number",
+            "manufacturer",
+            "product",
+            "windows_device_instance_id",
+        ] {
+            let mut invalid = complete.clone();
+            match missing_field {
+                "port_name" => invalid.port_name = " ".to_string(),
+                "port_type" => invalid.port_type = " ".to_string(),
+                "serial_number" => invalid.serial_number = " ".to_string(),
+                "manufacturer" => invalid.manufacturer = " ".to_string(),
+                "product" => invalid.product = " ".to_string(),
+                "windows_device_instance_id" => {
+                    invalid.windows_device_instance_id = Some(" ".to_string())
+                }
+                _ => unreachable!("the test owns every incomplete identity case"),
+            }
+            assert!(
+                require_exact_verified_usb_port(std::slice::from_ref(&enumerated), &invalid)
+                    .is_err(),
+                "manual {missing_field} identity must fail before any open"
+            );
+        }
+
+        let mut zero_vid = complete.clone();
+        zero_vid.usb_vid = 0;
+        let exact_error =
+            require_exact_verified_usb_port(std::slice::from_ref(&enumerated), &zero_vid)
+                .expect_err("manual zero VID must fail the exact enumeration boundary");
+        assert!(exact_error.to_string().contains("nonzero USB VID and PID"));
+        let open_error = match EnttecOpenDmxSender::new_verified_with_safety_write_gate(
+            &zero_vid,
+            OpenDmxSafetyWriteGate::new(),
+        ) {
+            Ok(_) => {
+                panic!("manual zero VID must fail before serial enumeration or a physical open")
+            }
+            Err(error) => error,
+        };
+        assert!(open_error.to_string().contains("nonzero USB VID and PID"));
+    }
+
+    #[test]
+    fn verified_enumeration_requires_the_exact_windows_pnp_instance() {
+        let enumerated = verified_usb_port("FTDI-INSTANCE-A");
+        let mut identity = VerifiedUsbSerialPortIdentity::from_summary(&enumerated)
+            .expect("the complete summary must establish the non-PnP identity fields");
+        identity.windows_device_instance_id = enumerated.windows_device_instance_id.clone();
+        assert!(
+            require_exact_verified_usb_port(std::slice::from_ref(&enumerated), &identity).is_ok()
+        );
+
+        let mut replacement = enumerated;
+        replacement.windows_device_instance_id =
+            Some(r"FTDIBUS\VID_0403+PID_6001+FTDI-INSTANCE-B\0000".to_string());
+        assert!(require_exact_verified_usb_port(&[replacement], &identity).is_err());
     }
 
     #[test]

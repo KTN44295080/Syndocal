@@ -1,6 +1,6 @@
 # ASIO PROGRAM / CUE Output Acceptance
 
-Updated: 2026-08-30
+Updated: 2026-08-31
 
 ## Show boundary
 
@@ -14,9 +14,31 @@ licensed, non-default show-ASIO artifact described by
 `qa/ASIO_INPUT_ACCEPTANCE.md`. No ASIO SDK-linked DLL or feature may enter the
 normal installer, updater, repair path, or default build graph.
 
-## 2026-08-30 alpha.39 native checkpoint
+## 2026-08-31 alpha.45 source/test checkpoint — native and hardware gates pending
 
-The current product checkpoint is `1.2.0-alpha.39` on branch
+The current product metadata is `1.2.0-alpha.45` on branch
+`codex/syndocal-v1.2`. This is a source/test checkpoint only. No alpha.45
+normal native build/window, dedicated show-ASIO artifact, real ASIO loader
+session, audible PROGRAM/CUE result, MOTU M4 or split-device observation,
+M32/DL16 routing, or other physical/external acceptance is claimed. The older
+native artifacts and observations below remain immutable historical evidence.
+
+The recorded full-workspace Cargo result passed, including Syndocal
+`1389 pass / 0 fail / 14 ignored` and Video `163 pass / 0 fail / 1 ignored`.
+The focused output-lease keepalive gate passed `69/69`. These deterministic
+source results do not close the native, audible, real-device, or physical rows;
+all such alpha.45 gates remain pending until observed against identified
+artifacts and devices.
+
+For the current show-ASIO output boundary, v3 is the sole current
+output/full-duplex ABI and runtime path. ABI/schema v2 is retained only for
+the input/Reactive Capture contract and historical compatibility; no v2
+output path is current. Any v2 output wording below is historical or refers to
+the retained input surface, never a second current output route.
+
+## 2026-08-30 historical alpha.39 native checkpoint
+
+The historical product checkpoint was `1.2.0-alpha.39` on branch
 `codex/syndocal-v1.2`; the build source/docs `HEAD` and upstream were both
 `ec93e9160da853ad181de70aee4db7b4a75fafbb`. The Timeline authoring-output selector now admits only one exact
 selectable occurrence; duplicate, missing, and ambiguous identities remain
@@ -42,7 +64,7 @@ unsaved and final Timeline state was paused. The reviewed native-evidence record
 was committed and pushed at `94b362bd2d733e447feabf0a0a6158699da6a2bf`, and
 `HEAD`/upstream equality was verified immediately after that push.
 
-The alpha.39 native build/window and selector/UI regression gates are complete
+The historical alpha.39 native build/window and selector/UI regression gates are complete
 only. Audible/device selection and dedicated Show-ASIO verification remain
 pending. The latest alpha.38 native authority is historical: exact executable
 Product/FileVersion `1.2.0-alpha.38`, `61,114,368` bytes, SHA-256
@@ -58,15 +80,17 @@ remain open. The next safe action is operator audible confirmation.
 ## Architecture decision
 
 The existing ASIO bridge ABI/schema v2 is an input and Reactive Capture
-contract. Its request contains input-channel selection and its callback sends
-captured mono samples to the application. Playback output must not be hidden in
-that request or callback.
+contract only. Its request contains input-channel selection and its callback
+sends captured mono samples to the application. The current show-ASIO playback
+output is v3; playback output must not be hidden in the retained v2 request or
+callback.
 
 Adopt a versioned output-capable boundary rather than adding optional output
 fields to ABI v2:
 
-- Keep ABI v2 input entry points and schema behavior unchanged.
-- Add ABI/schema v3 output/full-duplex entry points to the same canonical DLL,
+- Keep the retained ABI v2 input entry points and schema behavior unchanged;
+  v2 has no current output entry point.
+- Add the current ABI/schema v3 output/full-duplex entry points to the same canonical DLL,
   while preserving the exact nine v2 input exports and their signatures. The
   v3 block is the exact corresponding nine-operation surface
   (`abi_version`, `build_flags`, `drivers_json`, `capabilities_json`,
@@ -99,20 +123,21 @@ fields to ABI v2:
   leaves an input-v2 session active in parallel. An already-active v2 session
   makes v3 Start fail with a visible busy fault; there is no implicit stop or
   migration of the live session.
-- V2 and v3 load the canonical bridge DLL once and share one process-wide ASIO
-  host/session lease with explicit
-  `Stopped | Starting(v2|v3) | Active(v2|v3) | Stopping | Fault` states. The
-  existing v2 callback-generation fence alone is not a lease. Concurrent
+- The retained v2 input path and current v3 output path load the canonical
+  bridge DLL once and share one process-wide ASIO host/session lease with
+  explicit `Stopped | Starting(v2|v3) | Active(v2|v3) | Stopping | Fault` states.
+  The existing v2 callback-generation fence alone is not a lease. Concurrent
   Starts and every cross-version Start while another version owns the driver
-  reject as Busy without stopping or migrating the owner.
+  reject as Busy without stopping or migrating the owner; only v3 is admitted
+  for current show-ASIO output.
 - The shared lease also fences driver enumeration and capability discovery,
   because those operations may instantiate or interrogate the real ASIO
   driver. Live enumeration and capability probing are allowed only in
   `Stopped`. While v2 or v3 owns Starting, Active, Stopping, or Fault, the
   bridge either returns the immutable catalog captured for that owner or
   rejects the request as Busy; it never touches the driver concurrently.
-  Deterministic tests cover v2/v3 enumerate, capabilities, Start, Stop, and
-  Close races against every owning state.
+  Deterministic tests cover retained-v2/current-v3 enumerate, capabilities,
+  Start, Stop, and Close races against every owning state.
 - Fault recovery is an explicit drained transition:
   `Fault --operator Stop/Close; dispatch unpublished and callback readers drained--> Stopped`.
   Only then may a fresh driver enumeration and capability revalidation occur,
@@ -210,7 +235,7 @@ Rodio `OutputStream`/default-device/explicit-device construction is unreachable
 for both PROGRAM and CUE. A test or preview action cannot bypass this owner.
 
 The implementation is split at explicit boundaries rather than growing the
-existing oversized v2 and application files:
+existing oversized retained-v2 and application files:
 
 - `tools/asio-bridge/src/v3_abi.rs`: strict v3 wire/FFI types and validation;
 - `tools/asio-bridge/src/v3_rt_backend.rs`: SDK session, callback, and shared
@@ -223,9 +248,9 @@ existing oversized v2 and application files:
   PROGRAM stream lease, bounded mixer projection, and explicit retirement.
 
 The show-ASIO header, build wrapper, export checker, local artifact manifest,
-and local-only documentation move together from an exact v2-nine contract to an
-exact v2-nine plus v3-nine contract. The ordinary MIT packaging checker remains
-v2/v3-ASIO-artifact-free.
+and local-only documentation move together from the retained input v2-nine
+contract to the current output v3-nine contract. The ordinary MIT packaging
+checker remains v2/v3-ASIO-artifact-free.
 
 The local artifact source identity covers every executable boundary that can
 change show output: the application owner and cue runtime, v2/v3 loaders,
@@ -559,10 +584,12 @@ the device schema or silently reroute CUE.
 - [x] Simultaneous PROGRAM+CUE uses one frame clock and one ASIO output stream.
 - [x] The v3 callback backend contains no CPAL/`asio-sys` callback mutex or
       callback-time allocation/resize path.
-- [x] V2/v3 mutual exclusion and concurrent Starts are linearized by one shared
-      lease; Busy never stops or migrates the current owner.
-- [x] V2/v3 driver enumeration and capability discovery obey the same lease;
-      active-owner races never interrogate or reconfigure the live driver.
+- [x] Retained-v2/current-v3 mutual exclusion and concurrent Starts are
+      linearized by one shared lease; Busy never stops or migrates the current
+      owner, and only v3 is current for show-ASIO output.
+- [x] Retained-v2/current-v3 driver enumeration and capability discovery obey
+      the same lease; active-owner races never interrogate or reconfigure the
+      live driver.
 - [x] Device-loss recovery performs no driver query before an operator
       Stop/Close fully drains Fault to Stopped; only Stopped permits fresh
       enumeration/revalidation, and playback remains stopped until explicit
@@ -636,11 +663,11 @@ the device schema or silently reroute CUE.
 - [x] A CUE-unused operating day is represented only by unarmed or muted CUE
       content; no date-specific mode or physical mapping is written to project
       data.
-- [x] ABI/header/schema tests prove v2 input behavior is unchanged and the new
-      output ABI rejects unknown/future fields and revisions.
+- [x] ABI/header/schema tests prove retained v2 input behavior is unchanged and
+      the current v3 output ABI rejects unknown/future fields and revisions.
 - [x] Header, loader, bridge build, export checker, local manifest schema, and
-      local-only documentation require exactly the nine v2 plus nine v3 exports;
-      no gate remains pinned to a v2-only symbol set.
+      local-only documentation require the retained nine v2 input exports plus
+      the nine current v3 output exports; no gate admits a v2 output symbol set.
 - [x] The exact show-ASIO source identity includes every app, bridge, lease,
       native SDK/FFI/C++ callback, build, test, and trusted-helper source that
       can affect the artifact; a missing or mutated member rejects before
@@ -660,10 +687,11 @@ the device schema or silently reroute CUE.
 - [ ] Inspect the normal executable, installer, and updater outputs to prove
       that none contains an ASIO SDK-linked artifact. Source packaging tests
       and the successful no-bundle build do not close this artifact row.
-- [ ] A separate dedicated show-ASIO native build passes with the exact v2-nine
-      plus v3-nine bridge exports, reviewed manifest/source hashes, real app
-      loader Start/Stop/Fault smoke, and exactly one responsive maximized
-      Syndocal window. The normal native build is not evidence for this gate.
+- [ ] A separate dedicated show-ASIO native build passes with the exact
+      retained v2-input-nine plus current v3-output-nine bridge exports,
+      reviewed manifest/source hashes, real app loader Start/Stop/Fault smoke,
+      and exactly one responsive maximized Syndocal window. The normal native
+      build is not evidence for this gate.
 
 Alpha.31 software evidence on 2026-08-29 used the exact pinned MSVC 14.44
 Community linker with `where.exe link.exe` resolving that linker first. The
@@ -688,10 +716,11 @@ That exact selection was persisted while Syndocal was stopped, and the app was
 relaunched successfully. Audible endpoint acceptance is not promoted.
 
 The alpha.38 native build/window gate is historical normal-native evidence: PID
-`55624` was responsive and maximized. The current authority is the alpha.39
-native checkpoint above; its build artifact and responsive maximized window are
-recorded there. Neither native gate promotes audible PROGRAM/CUE behavior, dedicated
-Show-ASIO, or any physical MOTU M4, split-device, or M32/DL16 row.
+`55624` was responsive and maximized. The alpha.39 native checkpoint above is
+also historical; the current alpha.45 source/test checkpoint has no native
+artifact or responsive-window evidence. Neither historical native gate
+promotes audible PROGRAM/CUE behavior, dedicated Show-ASIO, or any physical
+MOTU M4, split-device, or M32/DL16 row.
 
 ## Normal Timeline authoring monitor acceptance
 
@@ -723,12 +752,12 @@ hard-coded choice.
       exact desired option without list/configuration/routing mutation. Browser
       Phase A/B proves the path after the strict external-video status-poll
       fixture was added.
-- [x] Alpha.39 exact-MSVC native build and launch/maximize checkpoint is recorded
+- [x] Historical alpha.39 exact-MSVC native build and launch/maximize checkpoint is recorded
       above: source/docs `HEAD` and upstream `ec93e9160da853ad181de70aee4db7b4a75fafbb`,
       `2m57s`, first-party warnings `0`, artifact SHA-256
       `7923728D6D4D8F4D51DE5BEF337006ADD7851DC5EF0C2F384BA1664F3213D0C2`, and
       one responsive maximized PID `87640` / window id `2033716740`.
-- [x] Alpha.39 native alpha9 UI selector/status-only reverify passed without
+- [x] Historical alpha.39 native alpha9 UI selector/status-only reverify passed without
       clicking the output selector or Refresh: explicit-device and resolved
       output stayed `Music (Elgato Virtual Audio)`, lifecycle `実行中`, `rev1`,
       with advancing output frames and no visible Backend, Local IPC, or CUE

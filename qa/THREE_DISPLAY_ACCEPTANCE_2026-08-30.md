@@ -1,9 +1,27 @@
-# Syndocal native three-display acceptance — 2026-08-30
+# Syndocal native three-display acceptance — 2026-08-31
 
-## 2026-08-30 alpha.42 final native checkpoint
+## 2026-08-31 alpha.45 source/test checkpoint — native and physical acceptance pending
 
-This is the current alpha.42 native authority and supersedes the older
-source-only/current wording below. Branch `codex/syndocal-v1.2` is at `HEAD
+The current product metadata is `1.2.0-alpha.45` on branch
+`codex/syndocal-v1.2`. This is a source/test checkpoint only: no alpha.45
+native build, launch/window verification, saved/reopened three-display project,
+HDMI/MiraBox content observation, Unity/GPU/Art-Net/Spout observation, or other
+physical hardware acceptance is claimed. The alpha.42 executable and display
+observations below remain immutable historical evidence and must not be
+relabeled as alpha.45.
+
+The recorded full-workspace Cargo result passed, including Syndocal
+`1389 pass / 0 fail / 14 ignored` and Video `163 pass / 0 fail / 1 ignored`.
+The focused output-lease keepalive gate passed `69/69`. These deterministic
+source results do not prove an alpha.45 native artifact, responsive window,
+physical display signal, HDMI input, or hardware route. Native, external, and
+physical three-display rows remain pending until observed against an identified
+alpha.45 executable.
+
+## 2026-08-30 historical alpha.42 final native checkpoint
+
+This is immutable historical alpha.42 native evidence; it does not override the
+alpha.45 source/test status above. Branch `codex/syndocal-v1.2` was at `HEAD
 b1f6d760c75b430a4255ead71e5f4bb964501cf4`. The exact MSVC `14.44` native
 build passed with first-party warnings `0`; the exact
 `C:\Users\kouty\Documents\KDMX\target\release\syndocal.exe` is
@@ -50,7 +68,7 @@ editor. Spout remains a separate same-PC transport and does not satisfy this
 native-window acceptance row. Mirroring the Main composition to both Display
 windows also does not satisfy it.
 
-## Alpha.42 route-transaction source checkpoint (superseded source snapshot)
+## Historical alpha.42 route-transaction source checkpoint (superseded source snapshot)
 
 The alpha.42 source checkpoint is based on branch `codex/syndocal-v1.2` at
 parent `6456412f3569e5c47aa6b18b870e996d9ddd9b0a`; the checkpoint commit is the
@@ -246,7 +264,7 @@ project. Its old schema-key list remains an explicit nonblocking P2 until that
 tool is retired or updated; it is not evidence for the alpha12 composition
 route.
 
-## Pre-alpha42 remaining live sequence (superseded by final native checkpoint above)
+## Historical pre-alpha42 remaining live sequence (superseded by the alpha.42 native checkpoint above)
 
 - Load the updated video-switch acceptance project. The current alpha11 file
   has the fixed Spout pair, only Main composition, one MP4 plus MiraBox, and no
@@ -268,8 +286,8 @@ route.
 - Run the rebound harness with `-Apply`; retain its new, immutable evidence
   directory and record the verdict in the release and show handoff documents.
 
-Until that sequence passes, ordinary native three-display output remains
-implemented and physically eligible but not accepted for the current build.
+Until that sequence passed, ordinary native three-display output remained
+implemented and physically eligible but not accepted for the alpha.42 build.
 The exact native build and the 2 s / 5 s / 9 s distinct-content captures remain
 pending. Source P0 and Setup Video viewport review are `GO`; they do not by
 themselves make a native or physical output claim.

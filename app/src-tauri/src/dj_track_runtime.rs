@@ -401,6 +401,66 @@ pub(super) fn rebase_released_follow_completion(
     true
 }
 
+/// Return the fail-closed reason for the Pedal 1 `DJ_TIMELINE_LOOP_SET`
+/// edge which may consume a completed `WaitForPedal` Follow.  This is
+/// deliberately separate from Stage 2 loop authority: the target is paused
+/// and has no loop, so only the waiting-state dispatcher may interpret its
+/// requested loop-on edge as the one-shot start.
+pub(super) fn waiting_follow_pedal_start_authority_rejection(
+    runtime: &DjLinkRuntime,
+    snapshot: &EngineSnapshot,
+    timeline_id: &str,
+    play_session_id: &str,
+) -> Option<&'static str> {
+    if runtime.unmapped_active_blocked {
+        return Some("dj_link_unmapped_active");
+    }
+    if !runtime.released
+        || !runtime.track_active
+        || runtime.authoritative_state != protocol::DjLinkTimelineStateValue::Running
+        || runtime.pedal_owner.as_deref() != Some("timeline")
+        || runtime
+            .release_event_id
+            .as_deref()
+            .is_none_or(str::is_empty)
+    {
+        return Some("timeline_waiting_pedal_not_authorized");
+    }
+    if runtime.timeline_id.as_deref() != Some(timeline_id)
+        || runtime.play_session_id.as_deref() != Some(play_session_id)
+    {
+        return Some("timeline_waiting_pedal_context_mismatch");
+    }
+    let follow = &snapshot.timeline.follow_runtime;
+    if !follow.waiting_for_pedal_start
+        || follow.status != protocol::TimelineFollowRuntimeStatus::Idle
+        || follow.outcome != Some(protocol::TimelineFollowOutcome::Completed)
+        || follow.generation == 0
+        || follow.target_timeline_id != Some(snapshot.timeline.id)
+        || snapshot.timeline.id.0.to_string() != timeline_id
+        || snapshot.timeline.playing
+        || snapshot.timeline.position_ms != 0
+        || !matches!(
+            snapshot.timeline.loop_runtime.status,
+            protocol::TimelineLoopRuntimeStatus::Disabled
+        )
+    {
+        return Some("timeline_waiting_pedal_stale");
+    }
+    let Some((generation, source, target)) = runtime.last_follow_rebase.as_ref() else {
+        return Some("timeline_waiting_pedal_rebase_missing");
+    };
+    if *generation != follow.generation
+        || *target != timeline_id
+        || follow
+            .source_timeline_id
+            .is_none_or(|source_id| source_id.0.to_string() != *source)
+    {
+        return Some("timeline_waiting_pedal_rebase_mismatch");
+    }
+    None
+}
+
 /// Return the fail-closed reason for a post-release Timeline command, if the
 /// runtime has not established the exact Stage 2 authority fence yet.
 ///

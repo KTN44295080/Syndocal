@@ -2,12 +2,10 @@
 
 Date: 2026-08-21
 Updated: 2026-08-31
-Status: Required; the current KDMX source worktree has synchronized
-`1.2.0-alpha.44` metadata above pushed `HEAD`/upstream
-`eaef0508df944dafdee08552acb6be28a74c9c46`. Alpha.44 source tests repair the
-DVC save/reopen validator; they do not change the DJ wire contract. The current
-native authority is `1.2.0-alpha.43`; alpha.44 native build/launch is pending
-until the operator releases the actively used unsaved import. The current
+Status: Required; the current KDMX source worktree declares
+`1.2.0-alpha.45` metadata. Alpha.45 source tests include the current
+show-critical changes; they do not by themselves establish native, peer, or
+hardware acceptance. The alpha.45 native build/launch remains pending. The
 rb-output source authority is
 branch `beta-v1.1.2`, clean and upstream-equal at exact peer commit
 `59df968d91bca71a327ef2a57ee5ab15de9f9947`, with product source version
@@ -19,9 +17,32 @@ config/token are absent. The standalone local acceptance is separate and does
 not replace production. The physical matrix remains exactly 0/12.
 Source authority: replacement user specifications received 2026-08-20 and 2026-08-21
 
-## Current alpha.44 source, alpha.43 native, show-artifact, and peer authority — 2026-08-31
+## 2026-08-31 alpha.45 source/test checkpoint — v3 wire and hardware pending
 
-The active KDMX source metadata is `1.2.0-alpha.44` above pushed authority
+The current KDMX product metadata is `1.2.0-alpha.45` on branch
+`codex/syndocal-v1.2`. This is a source/test checkpoint only: no alpha.45
+native build, launch/window verification, production peer provisioning,
+v3 HELLO/ACK/STATE_SYNC exchange, Rekordbox/MIDI/pedal observation, USB-DMX
+or Art-Net/Spout fixture observation, camera/audio/Unity/GPU result, or other
+physical/external acceptance is claimed. The alpha.44 source and alpha.43
+native records below remain immutable historical evidence. HW-4 remains exactly
+`0/12` checked.
+
+The recorded full-workspace Cargo result passed, including Syndocal
+`1389 pass / 0 fail / 14 ignored` and Video `163 pass / 0 fail / 1 ignored`.
+The focused output-lease keepalive gate passed `69/69`. These deterministic
+source results do not close the native, external peer, MIDI, pedal, network,
+or fixture rows; every such alpha.45 gate remains pending until observed with
+identified artifacts, devices, and the real production configuration.
+
+The current show wire is exclusively `syndocal-envelope-v3` with the exact
+`{v:3,type,agentId,sessionId,sequence,eventId,payload}` envelope. v1/v2 and
+flat adapters are retired and rejected without fallback; any v2 wire wording
+below is historical evidence only and is not current executable guidance.
+
+## Historical alpha.44 source, alpha.43 native, show-artifact, and peer authority — 2026-08-31
+
+At that historical checkpoint, KDMX source metadata was `1.2.0-alpha.44` at pushed authority
 `eaef0508df944dafdee08552acb6be28a74c9c46`; the built and running native
 authority is alpha.43. Three separate, immutable artifacts have bounded
 roles:
@@ -51,7 +72,7 @@ open, unsaved Syndocal import, then perform the exact-linker alpha.44 native
 build/launch/maximized-window and saved-DVC reopen QA. Do not stop the running
 alpha.43 process before that boundary is clear.
 
-The current controlled source authority for this checkpoint is branch
+The controlled source authority at that historical checkpoint was branch
 `beta-v1.1.2`, product source version `1.1.12`, clean and upstream-equal at
 exact peer commit `59df968d91bca71a327ef2a57ee5ab15de9f9947`, pushed to
 `origin/beta-v1.1.2`. This is a controlled source route, not a claim of a
@@ -242,16 +263,16 @@ positive parent PID `49864`), `Candidates=[]`, `PlannedLogicalBytes=0`,
 The exact 12-path hardlink remediation was content-preserving with no content
 diff.
 
-## Current v3 wire authority — alpha.44 source / alpha.43 native / rb-output 1.1.12 / production v1.1.11 — 2026-08-31
+## Current v3 wire authority — alpha.45 source / native pending / rb-output 1.1.12 / production v1.1.11 — 2026-08-31
 
 The only current wire adapter is `syndocal-envelope-v3`, using the exact frame
 `{v:3,type,agentId,sessionId,sequence,eventId,payload}`. Flat, v1, and v2 frames
 and adapter names are retired and rejected without a shim. The Agent HELLO
 advertises the complete ten-capability set headed by `DJ_TRACK_ACTIVE` and
 `DJ_TRACK_SYNC` and including `DJ_LOOP_FALLBACK`. Current KDMX worktree source
-metadata is `1.2.0-alpha.44` above pushed alpha.43 authority
-`eaef0508df944dafdee08552acb6be28a74c9c46`; the current native authority is
-alpha.43, and alpha.44 native build/launch/UI acceptance is pending. The
+metadata is `1.2.0-alpha.45`; the alpha.44 source and alpha.43 native
+authority are historical and are not rebound to alpha.45. No alpha.45
+native build/launch/UI acceptance is claimed. The
 bounded alpha9 content, alpha.42 three-display, and alpha.42 Art-Net probe
 artifact identities are recorded above. None is an approved production operator
 artifact, and the retired alpha4 artifact must not be loaded as current.
@@ -332,7 +353,8 @@ identity. This record used a show JSON outside the checkout through
 exact lowercase `--preflight-only` as its non-launch alternate. It required a
 real Syndocal token; placeholder-token preflight evidence could not be promoted.
 Its recorded topology was FOH `192.168.50.1` and DJ PC `192.168.50.2`. None of
-these v1.1.8 instructions are current executable guidance.
+these v1.1.8 instructions were executable guidance only at that historical
+checkpoint and are not current guidance.
 
 This document supersedes the earlier design in which a Pedal entered Syndocal first
 and Syndocal sent MIDI to rekordbox. That design must not be restored.
@@ -972,11 +994,12 @@ existing source service on port `8787` (PID `97208`) was not stopped. First-part
 compile warnings were `0`; PyInstaller platform/optional diagnostics were `256`,
 and the Node `ExperimentalWarning` count was `1`.
 
-Production must explicitly select `syndocal-envelope-v1`; the peer's default
-`generic-json` adapter is not the accepted production wire policy until that
-policy is deliberately changed and re-accepted. This checkpoint is software and
-packaging evidence only: no real hardware acceptance or Syndocal two-process
-acceptance is claimed, and all physical/wired-LAN gates above remain unchecked.
+At that historical checkpoint, production was instructed to explicitly select
+`syndocal-envelope-v1`; the peer's default `generic-json` adapter was not the
+accepted production wire policy. This checkpoint is software and packaging
+evidence only: no real hardware acceptance or Syndocal two-process acceptance
+is claimed, and all physical/wired-LAN gates above remain unchecked. The current
+wire is exclusively v3 as stated at the top.
 The reported version/commit fields came from a mutable adjacent/runtime identity
 path and were not cryptographically or structurally bound into that executable;
 the later audit below is authoritative for provenance acceptance.
@@ -984,9 +1007,10 @@ the later audit below is authoritative for provenance acceptance.
 ## SUPERSEDED / DO NOT EXECUTE — 2026-08-25 updated DJ-Link peer audit (v1.1.1 historical evidence)
 
 This section is retained as historical evidence only. Its v1.1.1 identity and
-generic-json/v1 interop statements are superseded by the intended corrected v1.1.4
-strict-v2 contract above; the immutable v1.1.3 package is blocked and is not current
-acceptance evidence.
+generic-json/v1 interop statements were superseded at that time by the intended
+corrected v1.1.4 strict-v2 contract; both are superseded for current acceptance
+by the exclusive v3 wire authority above. The immutable v1.1.3 package is blocked
+and is not current acceptance evidence.
 
 Read-only re-audit of the separately developed DJ-Link peer at
 `C:\Users\kouty\Desktop\rb-output`: the checkout is clean on `main`, matching
@@ -995,9 +1019,10 @@ previously audited `616c89792016a1c17c94ebd20e8cf8de3aea5ece` contains only
 package/package-lock/installer/README/Hook DLL source display-version changes; there
 are no server/dj-agent/`syndocalClient.js`/config/wire changes.
 
-Static interop is unchanged: the current flat `/dj-link` generic-json contract
-and the optional `syndocal-envelope-v1` contract remain statically compatible
-with Syndocal's dedicated `/dj-link` role/path and envelope semantics.
+At that historical checkpoint, static interop was unchanged: the flat
+`/dj-link` generic-json contract and optional `syndocal-envelope-v1` contract
+were statically compatible with Syndocal's dedicated `/dj-link` role/path and
+envelope semantics. Neither is current executable guidance.
 
 Peer-side gates rerun green: `npm test` passes 69/69, the envelope-focused
 tests pass 9/9, and `git diff --check` passes; the only observed warning is
@@ -1060,7 +1085,7 @@ no hardware row.
 
 These dated pre-alpha.17 gaps are retained as historical context only; the
 then-current alpha.17 source checkpoint superseded them. The later alpha.18
-authority below is also historical; current alpha.44 source / alpha.43 native
+authority below is also historical; current alpha.45 source / native-pending
 authority is at the top. **P1:** Web Remote/DJ Link enabled state, bind
 selection, and listener start are not restored on application launch, while the
 machine-local token is regenerated for each Syndocal process. A previously
@@ -1135,10 +1160,12 @@ denominator remains exactly **19/71 (26.8%)**.
 Historical record only. The current, executable restatement of this authority
 is "Current show wire authority — exclusive `syndocal-envelope-v3`" above.
 
-The shipped/current/production wire is exclusively `syndocal-envelope-v2`.
-`generic-json` and `syndocal-envelope-v1` are retired and must be rejected
-explicitly; they are not compatibility or diagnostic selections. The exact v2
-frame is `{v:2,type,agentId,sessionId,sequence,eventId,payload}`. An authenticated
+At that historical checkpoint, the then-shipped/then-production wire was
+`syndocal-envelope-v2`; this paragraph is historical evidence only and is not
+the current production wire. `generic-json` and `syndocal-envelope-v1` were
+retired and must be rejected explicitly; they were not compatibility or
+diagnostic selections. The exact historical v2 frame was
+`{v:2,type,agentId,sessionId,sequence,eventId,payload}`. An authenticated
 session becomes ready only after `DJ_AGENT_HELLO`, an authoritative
 `DJ_STATE_SYNC`, `DJ_TIMELINE_STATE_REQUEST`, and the corresponding canonical
 timeline-state response. Missing, unknown, stale, reordered, or legacy-shaped
@@ -1159,7 +1186,7 @@ claimed.
 This append-only section records the source checkpoint that superseded the two
 historical implementation gaps above. The alpha.17 checkpoint was current at
 that historical point; the later alpha.18 authority below is historical and the
-current alpha.44 source / alpha.43 native authority is at the top. This section
+current alpha.45 source / native-pending authority is at the top. This section
 does not rewrite the dated hardware observations above and
 checks no HW-4 row.
 
@@ -1416,7 +1443,7 @@ the running alpha.18 binary does not contain it, and HW-4 stays **0/12**.
 ## SUPERSEDED / HISTORICAL — alpha.19 Follow-hold / Stage 2 authority — 2026-08-27
 
 This dated alpha.19 record is retained as historical provenance only and is not
-current execution guidance. The current alpha.44 source / alpha.43 native /
+current execution guidance. The current alpha.45 source / native-pending /
 product-source 1.1.12 / production v1.1.11 truth is in the sections
 above: Stage 1 F14 is Rekordbox LoopHalf MIDI, Stage 2 F13 owns
 `DJ_TIMELINE_LOOP_SET`, and Stage 2 F14 sends active-Timeline-only

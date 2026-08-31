@@ -9729,6 +9729,7 @@ mod tests {
                 id: 7,
                 label: "Program".to_string(),
                 layer_ids: vec![31, 32, 33],
+                timeline_layer_ids: Vec::new(),
                 output_ids: vec![9],
             }],
             outputs: vec![VideoOutputSummary {
@@ -11251,6 +11252,7 @@ mod tests {
                 id: 5,
                 label: "Output A".to_string(),
                 layer_ids: vec![2, 1],
+                timeline_layer_ids: Vec::new(),
                 output_ids: vec![7],
             }],
             outputs: Vec::new(),
@@ -11507,6 +11509,7 @@ mod tests {
                 id: 1,
                 label: "Main".to_string(),
                 layer_ids: vec![1],
+                timeline_layer_ids: Vec::new(),
                 output_ids: vec![7],
             }],
             outputs: vec![VideoOutputSummary {
@@ -11577,12 +11580,14 @@ mod tests {
                     id: 1,
                     label: "Main".to_string(),
                     layer_ids: vec![1, 2, 3],
+                    timeline_layer_ids: Vec::new(),
                     output_ids: Vec::new(),
                 },
                 CompositionSummary {
                     id: 9,
                     label: "Screen B".to_string(),
                     layer_ids: vec![3, 1],
+                    timeline_layer_ids: Vec::new(),
                     output_ids: vec![12],
                 },
             ],
@@ -11679,6 +11684,7 @@ mod tests {
                 id: 1,
                 label: "Main".to_string(),
                 layer_ids: vec![1],
+                timeline_layer_ids: Vec::new(),
                 output_ids: vec![9],
             }],
             outputs: vec![VideoOutputSummary {
@@ -11857,6 +11863,7 @@ mod tests {
                 id: 8,
                 label: "Screen".to_string(),
                 layer_ids: vec![2],
+                timeline_layer_ids: Vec::new(),
                 output_ids: vec![9],
             }],
             outputs: vec![VideoOutputSummary {
@@ -11974,6 +11981,7 @@ mod tests {
                 id: 1,
                 label: "Main".to_string(),
                 layer_ids: vec![1],
+                timeline_layer_ids: Vec::new(),
                 output_ids: vec![9],
             }],
             outputs: vec![VideoOutputSummary {
@@ -13022,6 +13030,7 @@ mod tests {
                 id: 70,
                 label: "C1 Composition".to_string(),
                 layer_ids,
+                timeline_layer_ids: Vec::new(),
                 output_ids: vec![80],
             }],
             outputs: vec![VideoOutputSummary {
@@ -13294,6 +13303,7 @@ mod tests {
             id: 71,
             label: "Replacement Composition".to_string(),
             layer_ids: vec![1],
+            timeline_layer_ids: Vec::new(),
             output_ids: vec![80],
         });
         recomposed.outputs[0].composition_id = 71;
@@ -15132,6 +15142,7 @@ mod tests {
                 id: 1,
                 label: "Main".to_string(),
                 layer_ids: vec![1, 2, 3],
+                timeline_layer_ids: Vec::new(),
                 output_ids: Vec::new(),
             }],
             ..VideoSnapshot::default()

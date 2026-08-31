@@ -16,21 +16,21 @@ use protocol::control_plane_command::{
     OutputControlActionV2, OutputControlAuthorityBundleV1, OutputControlCommandRequestV2,
     OutputControlErrorCodeV2, OutputControlFenceV1, OutputControlLeaseResultV2,
     OutputControlReceiptOutcomeV2, OutputControlReceiptV2, OutputControlRejectionV2,
-    OutputControlResponseV2, OutputLeaseReceiptChangeV2, OutputLeaseReceiptOutcomeV2,
-    OutputLeaseReceiptPhaseV2, RuntimeCommandAuthorityBundleV1, RuntimeCommandErrorCodeV1,
-    RuntimeCommandErrorV1, RuntimeCommandReceiptOutcomeV1, RuntimeCommandReceiptV1,
-    RuntimeCommandRejectionV1, RuntimeCommandRequestV1, RuntimeCommandResponseV1,
-    SafetyBlackoutEngageOutcomeV1, SafetyBlackoutEngageReceiptV1, SafetyBlackoutEngageRejectionV1,
-    SafetyBlackoutEngageRequestV1, SafetyBlackoutEngageResponseV1,
-    TimelineFollowAbortAuthorityBundleV1, TimelineFollowAbortRuntimeFenceV1,
-    TimelineFollowAbortRuntimeReceiptV1, TimelineFollowAbortRuntimeRejectionV1,
-    TimelineFollowAbortRuntimeRequestV1, TimelineFollowAbortRuntimeResponseV1,
-    TimelineTransportRuntimeFenceV1, MAX_SAFE_JAVASCRIPT_INTEGER,
-    OUTPUT_CONTROL_AUTHORITY_QUERY_OPERATION_ID, SAFETY_BLACKOUT_ENGAGE_OPERATION_ID,
-    SAFETY_BLACKOUT_ENGAGE_SHAPE_DOMAIN_V1, TIMELINE_FOLLOW_ABORT_OPERATION_ID,
-    TIMELINE_FOLLOW_ABORT_RUNTIME_DOMAIN_V1, TIMELINE_FOLLOW_ABORT_SHAPE_DOMAIN_V1,
-    TIMELINE_TRANSPORT_RUNTIME_DOMAIN_V1, TIMELINE_TRANSPORT_SET_PLAYING_OPERATION_ID,
-    TIMELINE_TRANSPORT_SET_PLAYING_SHAPE_DOMAIN_V1,
+    OutputControlResponseV2, OutputControlTargetRoleV1, OutputLeaseAuthorityV1,
+    OutputLeaseReceiptChangeV2, OutputLeaseReceiptOutcomeV2, OutputLeaseReceiptPhaseV2,
+    RuntimeCommandAuthorityBundleV1, RuntimeCommandErrorCodeV1, RuntimeCommandErrorV1,
+    RuntimeCommandReceiptOutcomeV1, RuntimeCommandReceiptV1, RuntimeCommandRejectionV1,
+    RuntimeCommandRequestV1, RuntimeCommandResponseV1, SafetyBlackoutEngageOutcomeV1,
+    SafetyBlackoutEngageReceiptV1, SafetyBlackoutEngageRejectionV1, SafetyBlackoutEngageRequestV1,
+    SafetyBlackoutEngageResponseV1, TimelineFollowAbortAuthorityBundleV1,
+    TimelineFollowAbortRuntimeFenceV1, TimelineFollowAbortRuntimeReceiptV1,
+    TimelineFollowAbortRuntimeRejectionV1, TimelineFollowAbortRuntimeRequestV1,
+    TimelineFollowAbortRuntimeResponseV1, TimelineTransportRuntimeFenceV1,
+    MAX_SAFE_JAVASCRIPT_INTEGER, OUTPUT_CONTROL_AUTHORITY_QUERY_OPERATION_ID,
+    SAFETY_BLACKOUT_ENGAGE_OPERATION_ID, SAFETY_BLACKOUT_ENGAGE_SHAPE_DOMAIN_V1,
+    TIMELINE_FOLLOW_ABORT_OPERATION_ID, TIMELINE_FOLLOW_ABORT_RUNTIME_DOMAIN_V1,
+    TIMELINE_FOLLOW_ABORT_SHAPE_DOMAIN_V1, TIMELINE_TRANSPORT_RUNTIME_DOMAIN_V1,
+    TIMELINE_TRANSPORT_SET_PLAYING_OPERATION_ID, TIMELINE_TRANSPORT_SET_PLAYING_SHAPE_DOMAIN_V1,
 };
 use rfd::{MessageButtons, MessageDialog, MessageDialogResult, MessageLevel};
 use sha2::{Digest, Sha256};
@@ -77,9 +77,12 @@ pub(crate) fn output_action_requires_native_danger_confirmation(
         action,
         OutputControlActionV2::ReleaseBlackout { .. }
             | OutputControlActionV2::EnableShowArtNetLoopbackRoute { .. }
+            | OutputControlActionV2::EnableShowSerialDmxSafetyBlackoutRoute { .. }
+            | OutputControlActionV2::StopShowSerialDmxSafetyBlackoutRoute { .. }
             | OutputControlActionV2::SendDsf2026ArtNetAcceptanceProbe { .. }
             | OutputControlActionV2::AcknowledgeDsf2026ArtNetAcceptanceProbeInDoubt { .. }
             | OutputControlActionV2::EnableShowSpoutOutputs { .. }
+            | OutputControlActionV2::ResetShowSpoutOutputs {}
             | OutputControlActionV2::Arm { .. }
             | OutputControlActionV2::TakeOverStandby { .. }
             | OutputControlActionV2::AddDisplay { .. }
@@ -320,9 +323,261 @@ pub(crate) fn execute_output_control(
     query_state: &ControlPlaneQueryState,
     request: OutputControlCommandRequestV2,
 ) -> OutputControlResponseV2 {
+    if matches!(
+        request.action,
+        OutputControlActionV2::ResetShowSpoutOutputs {}
+    ) {
+        return execute_show_spout_reset_without_lease_control(
+            app,
+            window,
+            state,
+            query_state,
+            request,
+        );
+    }
     execute_output_control_with_confirmation(app, window, state, query_state, request, |action| {
         confirm_native_dangerous_output_action(window, action)
     })
+}
+
+/// Reset is intentionally outside the output-lease lifecycle. It still uses
+/// the same local-window identity, project/output fence, immutable audit,
+/// replay key, and serialized project admission as an R4 mutation.
+fn execute_show_spout_reset_without_lease_control(
+    _app: &tauri::AppHandle,
+    window: &WebviewWindow,
+    state: &AppState,
+    query_state: &ControlPlaneQueryState,
+    request: OutputControlCommandRequestV2,
+) -> OutputControlResponseV2 {
+    execute_show_spout_reset_without_lease_control_with_confirmation(
+        state,
+        query_state,
+        window.label(),
+        request,
+        |action| confirm_native_dangerous_output_action(window, action),
+    )
+}
+
+/// Production body for the payloadless local Reset. Keeping the native dialog
+/// as an injected closure lets tests exercise the real receipt/fence/audit
+/// path deterministically without fabricating a WebviewWindow. The public
+/// Tauri seam above is the only non-test caller and always supplies the
+/// parented OS Yes/No confirmation.
+fn execute_show_spout_reset_without_lease_control_with_confirmation<F>(
+    state: &AppState,
+    query_state: &ControlPlaneQueryState,
+    window_label: &str,
+    request: OutputControlCommandRequestV2,
+    confirmation: F,
+) -> OutputControlResponseV2
+where
+    F: Fn(&OutputControlActionV2) -> bool,
+{
+    if request.validate().is_err()
+        || !matches!(
+            request.action,
+            OutputControlActionV2::ResetShowSpoutOutputs {}
+        )
+    {
+        return output_control_rejection(&request, OutputControlErrorCodeV2::InvalidRequest);
+    }
+    let shape_sha256 = match request.canonical_shape_bytes() {
+        Ok(bytes) => hex_sha256(&bytes),
+        Err(_) => {
+            return output_control_rejection(&request, OutputControlErrorCodeV2::InvalidRequest)
+        }
+    };
+    let argument_fingerprint = match request.argument_fingerprint_bytes() {
+        Ok(bytes) => hex_sha256(&bytes),
+        Err(_) => {
+            return output_control_rejection(&request, OutputControlErrorCodeV2::InvalidRequest)
+        }
+    };
+    let binding = match capture_binding(state, window_label) {
+        Ok(binding) => binding,
+        Err(_) => return output_control_rejection(&request, OutputControlErrorCodeV2::Forbidden),
+    };
+    if let Err(code) = state
+        .runtime_control_plane
+        .reserve_output_control_request_identity(
+            &binding,
+            request.action.operation_id(),
+            request.request_id,
+            &shape_sha256,
+            Instant::now(),
+        )
+    {
+        return output_control_rejection(&request, code);
+    }
+    let key = output_control_receipt_key(&request, &binding);
+    let lane = match state.runtime_control_plane.reserve_output_control_lane(
+        &key,
+        &shape_sha256,
+        Instant::now(),
+    ) {
+        OutputControlLaneReservation::Terminal(response) => return response,
+        OutputControlLaneReservation::Rejected(code) => {
+            return output_control_rejection(&request, code)
+        }
+        OutputControlLaneReservation::Lane(lane) => lane,
+    };
+    let _lane = match lane.lock() {
+        Ok(guard) => guard,
+        Err(_) => {
+            state
+                .runtime_control_plane
+                .release_output_control_lane(&key);
+            return output_control_rejection(&request, OutputControlErrorCodeV2::Internal);
+        }
+    };
+    // A malformed/currently unsupported Show Spout topology is an operator
+    // input problem, not a fence race.  Keep this check separate from the
+    // dynamic window/fence check below so a retry cannot be mistaken for a
+    // useful recovery path.
+    if validate_output_action_current(state, &request.action).is_err() {
+        return retain_output_control_rejection(
+            state,
+            key,
+            shape_sha256,
+            output_control_rejection(
+                &request,
+                output_action_current_rejection_code(&request.action),
+            ),
+        );
+    }
+    if query_state
+        .validate_output_control_fence_window(
+            window_label,
+            &request.expected_fence,
+            binding.owner_incarnation,
+        )
+        .is_err()
+    {
+        return retain_output_control_rejection(
+            state,
+            key,
+            shape_sha256,
+            output_control_rejection(&request, OutputControlErrorCodeV2::StaleFence),
+        );
+    }
+    if output_confirmation_gate(&request.action, &confirmation).is_err() {
+        return retain_output_control_rejection(
+            state,
+            key,
+            shape_sha256,
+            output_control_rejection(&request, OutputControlErrorCodeV2::Forbidden),
+        );
+    }
+    if capture_binding(state, window_label).ok().as_ref() != Some(&binding) {
+        return retain_output_control_rejection(
+            state,
+            key,
+            shape_sha256,
+            output_control_rejection(&request, OutputControlErrorCodeV2::Forbidden),
+        );
+    }
+    if validate_output_action_current(state, &request.action).is_err() {
+        return retain_output_control_rejection(
+            state,
+            key,
+            shape_sha256,
+            output_control_rejection(
+                &request,
+                output_action_current_rejection_code(&request.action),
+            ),
+        );
+    }
+    if query_state
+        .validate_output_control_fence_window(
+            window_label,
+            &request.expected_fence,
+            binding.owner_incarnation,
+        )
+        .is_err()
+    {
+        return retain_output_control_rejection(
+            state,
+            key,
+            shape_sha256,
+            output_control_rejection(&request, OutputControlErrorCodeV2::StaleFence),
+        );
+    }
+    let (inflight, audit_sequence) =
+        match state.runtime_control_plane.admit_and_audit_output_control(
+            &binding,
+            &key,
+            &shape_sha256,
+            &argument_fingerprint,
+            Instant::now(),
+        ) {
+            Ok(admission) => admission,
+            Err(code) => {
+                return retain_output_control_rejection(
+                    state,
+                    key,
+                    shape_sha256,
+                    output_control_rejection(&request, code),
+                )
+            }
+        };
+    let result = super::reset_show_spout_outputs_without_output_lease(
+        state,
+        &request.expected_fence,
+        &binding.principal,
+        &binding.window_label,
+        binding.owner_incarnation,
+    );
+    let response = match result {
+        Ok((applied, fence_after)) => {
+            OutputControlResponseV2::Receipt(Box::new(OutputControlReceiptV2 {
+                operation_id: request.operation_id.clone(),
+                request_id: request.request_id,
+                shape_sha256: shape_sha256.clone(),
+                argument_fingerprint,
+                audit_sequence,
+                fence_before: request.expected_fence.clone(),
+                fence_after,
+                outcome: if applied {
+                    OutputControlReceiptOutcomeV2::Applied
+                } else {
+                    OutputControlReceiptOutcomeV2::NoOp
+                },
+                lease_result: None,
+            }))
+        }
+        Err(_) => output_control_rejection(&request, OutputControlErrorCodeV2::PublicationFailed),
+    };
+    state
+        .runtime_control_plane
+        .finish_output_control_inflight(&inflight);
+    state.runtime_control_plane.store_output_control_terminal(
+        key,
+        shape_sha256,
+        response.clone(),
+        Instant::now(),
+    );
+    response
+}
+
+#[cfg(test)]
+pub(crate) fn execute_show_spout_reset_without_lease_control_for_test<F>(
+    state: &AppState,
+    query_state: &ControlPlaneQueryState,
+    window_label: &str,
+    request: OutputControlCommandRequestV2,
+    confirmation: F,
+) -> OutputControlResponseV2
+where
+    F: Fn(&OutputControlActionV2) -> bool,
+{
+    execute_show_spout_reset_without_lease_control_with_confirmation(
+        state,
+        query_state,
+        window_label,
+        request,
+        confirmation,
+    )
 }
 
 fn execute_output_control_with_confirmation<F>(
@@ -426,6 +681,21 @@ where
     // expired lease authority before showing a native danger dialog. These
     // checks are repeated after the dialog because the owner, project, target,
     // and lease can still change while the blocking OS prompt is open.
+    // Validate the static/current action admission before dynamic fences.  In
+    // particular, an absent V2 Show Spout composition pair must be reported
+    // as InvalidRequest; it cannot be recovered by retrying an unchanged
+    // fence while a managed lease keepalive is active.
+    if validate_output_action_current(state, &request.action).is_err() {
+        return retain_output_control_rejection(
+            state,
+            key,
+            shape_sha256,
+            output_control_rejection(
+                &request,
+                output_action_current_rejection_code(&request.action),
+            ),
+        );
+    }
     if query_state
         .validate_output_control_fence_window(
             window.label(),
@@ -433,7 +703,6 @@ where
             binding.owner_incarnation,
         )
         .is_err()
-        || validate_output_action_current(state, &request.action).is_err()
         || validate_display_output_monitor(window, &request.action).is_err()
     {
         return retain_output_control_rejection(
@@ -636,7 +905,10 @@ where
             state,
             key,
             shape_sha256,
-            output_control_rejection(&request, OutputControlErrorCodeV2::StaleFence),
+            output_control_rejection(
+                &request,
+                output_action_current_rejection_code(&request.action),
+            ),
         );
     }
 
@@ -680,6 +952,35 @@ where
             );
         }
     };
+    // A lost-reply retry for normal Enable must never re-enter the engine
+    // candidate callback.  Keep the exact durable receipt private until the
+    // usual public admission succeeds, then use it solely to prove/install
+    // the matching managed worker.
+    let durable_enable_replay = if matches!(&request.action, OutputControlActionV2::EnableOutput) {
+        match state.output_lease_durable_receipts.lock() {
+            Ok(durable) => match durable.lookup(&lease_request) {
+                Ok(receipt) => receipt,
+                Err(_) => {
+                    return retain_output_control_rejection(
+                        state,
+                        key,
+                        shape_sha256,
+                        output_control_rejection(&request, OutputControlErrorCodeV2::Internal),
+                    );
+                }
+            },
+            Err(_) => {
+                return retain_output_control_rejection(
+                    state,
+                    key,
+                    shape_sha256,
+                    output_control_rejection(&request, OutputControlErrorCodeV2::Internal),
+                );
+            }
+        }
+    } else {
+        None
+    };
 
     let (inflight, audit_sequence) =
         match state.runtime_control_plane.admit_and_audit_output_control(
@@ -707,15 +1008,69 @@ where
     drop(external_admission);
 
     let operation_result = match &request.action {
+        OutputControlActionV2::EnableOutput if durable_enable_replay.is_some() => {
+            let receipt = durable_enable_replay
+                .as_ref()
+                .expect("Enable durable replay was checked before dispatch");
+            super::output_lease_keepalive_integration::complete_durable_enable_replay(
+                app,
+                state,
+                super::output_lease_keepalive_integration::DurableEnableIdentityInput {
+                    principal: &binding.principal,
+                    window_label: &binding.window_label,
+                    owner_incarnation: binding.owner_incarnation,
+                    project_epoch: request.expected_fence.project_epoch,
+                },
+                &lease_request,
+                receipt,
+            )
+            .map(|()| (false, request.expected_fence.clone(), receipt.clone()))
+        }
         OutputControlActionV2::EnableOutput => super::enable_output_with_output_control_fence(
             app,
             state,
             &request.expected_fence,
             &lease_request,
             lease_now_ms,
-        ),
+        )
+        .and_then(|result| {
+            // The engine candidate has now committed and its terminal receipt
+            // is durable.  Public success is still withheld until that exact
+            // receipt plus current Both authority installs (or proves) the
+            // matching managed keepalive worker.
+            super::output_lease_keepalive_integration::complete_newly_committed_durable_enable(
+                app,
+                state,
+                super::output_lease_keepalive_integration::DurableEnableIdentityInput {
+                    principal: &binding.principal,
+                    window_label: &binding.window_label,
+                    owner_incarnation: binding.owner_incarnation,
+                    project_epoch: request.expected_fence.project_epoch,
+                },
+                &lease_request,
+                &result.2,
+            )?;
+            Ok(result)
+        }),
         OutputControlActionV2::EnableShowArtNetLoopbackRoute { .. } => {
             super::enable_show_artnet_loopback_route_with_output_control_fence(
+                state,
+                &request.expected_fence,
+                &lease_request,
+                lease_now_ms,
+            )
+        }
+        OutputControlActionV2::EnableShowSerialDmxSafetyBlackoutRoute { .. } => {
+            super::show_serial_dmx_route::enable_with_output_control_fence(
+                &app,
+                state,
+                &request.expected_fence,
+                &lease_request,
+                lease_now_ms,
+            )
+        }
+        OutputControlActionV2::StopShowSerialDmxSafetyBlackoutRoute { .. } => {
+            super::show_serial_dmx_route::stop_with_output_control_fence(
                 state,
                 &request.expected_fence,
                 &lease_request,
@@ -763,6 +1118,9 @@ where
                 &lease_request,
                 lease_now_ms,
             )
+        }
+        OutputControlActionV2::ResetShowSpoutOutputs {} => {
+            Err("Show Spout reset bypassed its no-lease executor".to_string())
         }
         OutputControlActionV2::ReleaseBlackout { .. } => {
             super::release_safety_blackout_with_output_control_fence(
@@ -880,18 +1238,14 @@ where
                 request.action.operation_id(),
                 error
             );
-            state
-                .runtime_control_plane
-                .finish_output_control_inflight(&inflight);
-            let response =
-                output_control_rejection(&request, OutputControlErrorCodeV2::PublicationFailed);
-            state.runtime_control_plane.store_output_control_terminal(
+            return finalize_output_control_operation_error(
+                &state.runtime_control_plane,
+                &inflight,
                 key,
                 shape_sha256,
-                response.clone(),
-                Instant::now(),
+                &request,
+                &error,
             );
-            return response;
         }
     };
     let response = if matches!(
@@ -1079,6 +1433,22 @@ pub(crate) fn committed_output_control_fence(
     fence
 }
 
+/// Map a failed action-state validation to the wire error that tells the
+/// operator whether a retry can help.  The V2 Show Spout actions validate
+/// named composition topology and current recognized output shape; neither is
+/// a fence and neither may be silently retried as one.
+fn output_action_current_rejection_code(
+    action: &OutputControlActionV2,
+) -> OutputControlErrorCodeV2 {
+    match action {
+        OutputControlActionV2::EnableShowSpoutOutputs { .. }
+        | OutputControlActionV2::ResetShowSpoutOutputs {} => {
+            OutputControlErrorCodeV2::InvalidRequest
+        }
+        _ => OutputControlErrorCodeV2::StaleFence,
+    }
+}
+
 fn validate_output_action_current(
     state: &AppState,
     action: &OutputControlActionV2,
@@ -1088,6 +1458,8 @@ fn validate_output_action_current(
         OutputControlActionV2::EnableShowArtNetLoopbackRoute { .. } => {
             super::validate_current_staged_show_artnet_loopback_route(state).map(|_| ())
         }
+        OutputControlActionV2::EnableShowSerialDmxSafetyBlackoutRoute { .. }
+        | OutputControlActionV2::StopShowSerialDmxSafetyBlackoutRoute { .. } => Ok(()),
         OutputControlActionV2::SendDsf2026ArtNetAcceptanceProbe { .. } => {
             super::show_artnet_acceptance_probe::validate_current_dsf2026_artnet_acceptance_probe(
                 state,
@@ -1102,6 +1474,9 @@ fn validate_output_action_current(
         }
         OutputControlActionV2::EnableShowSpoutOutputs { .. } => {
             super::validate_current_show_spout_outputs_action(state).map(|_| ())
+        }
+        OutputControlActionV2::ResetShowSpoutOutputs {} => {
+            super::validate_current_show_spout_outputs_reset_action(state)
         }
         OutputControlActionV2::Arm { .. } | OutputControlActionV2::ReleaseBlackout { .. } => Ok(()),
         OutputControlActionV2::AddDisplay { spec, .. } => {
@@ -1285,6 +1660,121 @@ fn output_lease_error_code(
     }
 }
 
+/// Classify only failures which the route/candidate proves occurred before an
+/// engine/native publication could begin.  Anything not carrying one of
+/// these exact safe-boundary sentinels remains `PublicationFailed`: callers
+/// must not infer a physical state from a callback/in-doubt failure.
+fn classify_output_control_operation_error(error: &str) -> OutputControlErrorCodeV2 {
+    if let Some(code) = output_lease_safe_candidate_error_code(error) {
+        return code;
+    }
+    if error.contains("Output control fence changed before")
+        || error.contains("route changed before final publication")
+        || error.contains("superseded by an emergency blackout authority change")
+        || error.contains("superseded by an S0 safety blackout authority change")
+        || error.contains("machine-local device changed before final activation")
+    {
+        return OutputControlErrorCodeV2::StaleFence;
+    }
+    if error.contains("requires the active local Both output authority")
+        || error.contains("requires the exact currently-")
+        || error.contains("lost its local Both output authority")
+        || error.contains("Managed exact-Both output lease is no longer armed")
+    {
+        return OutputControlErrorCodeV2::Forbidden;
+    }
+    if error.contains("terminal receipt already exists; physical replay refused") {
+        return OutputControlErrorCodeV2::InvalidRequest;
+    }
+    if error.contains("durable prepare failed") {
+        return OutputControlErrorCodeV2::Internal;
+    }
+    OutputControlErrorCodeV2::PublicationFailed
+}
+
+/// Finalize a rejected operation after its route/candidate returned.  Known
+/// pre-publication errors are terminal, clear their in-flight admission, and
+/// retain a retry-safe typed response; unknown callback/in-doubt errors keep
+/// the existing `PublicationFailed`/physical-unknown contract.
+fn finalize_output_control_operation_error(
+    runtime_control_plane: &RuntimeControlPlaneState,
+    inflight: &PrincipalDomainKey,
+    key: OutputControlReceiptKey,
+    shape_sha256: String,
+    request: &OutputControlCommandRequestV2,
+    error: &str,
+) -> OutputControlResponseV2 {
+    runtime_control_plane.finish_output_control_inflight(inflight);
+    let response =
+        output_control_rejection(request, classify_output_control_operation_error(error));
+    runtime_control_plane.store_output_control_terminal(
+        key,
+        shape_sha256,
+        response.clone(),
+        Instant::now(),
+    );
+    response
+}
+
+/// The candidate seam emits `OutputLeaseError` via debug text because its
+/// public route contract predates the V2 rejection envelope.  Keep this
+/// narrow parser tied to that exact safe-before-callback prefix; do not
+/// classify generic callback strings which may represent physical ambiguity.
+fn output_lease_safe_candidate_error_code(error: &str) -> Option<OutputControlErrorCodeV2> {
+    if !(error.starts_with("AI3 output lease ")
+        || (error.starts_with("Output lease ") && error.contains("admission failed:")))
+    {
+        return None;
+    }
+    let lease_error = if error.contains("Busy") {
+        super::output_lease::OutputLeaseError::Busy
+    } else if error.contains("RateLimited")
+        || error.contains("RequestCapacity")
+        || error.contains("LeaseCapacity")
+        || error.contains("LaneCapacity")
+        || error.contains("AuditCapacity")
+    {
+        super::output_lease::OutputLeaseError::RateLimited
+    } else if error.contains("Conflict") || error.contains("ReceiptNotRetained") {
+        super::output_lease::OutputLeaseError::Conflict
+    } else if error.contains("InvalidRequest") {
+        super::output_lease::OutputLeaseError::InvalidRequest
+    } else if error.contains("InvalidOwner") {
+        super::output_lease::OutputLeaseError::InvalidOwner
+    } else if error.contains("InvalidResources") {
+        super::output_lease::OutputLeaseError::InvalidResources
+    } else if error.contains("InvalidProject") {
+        super::output_lease::OutputLeaseError::InvalidProject
+    } else if error.contains("Expired") {
+        super::output_lease::OutputLeaseError::Expired
+    } else if error.contains("UnknownLease") {
+        super::output_lease::OutputLeaseError::UnknownLease
+    } else if error.contains("ResourceConflict") {
+        super::output_lease::OutputLeaseError::ResourceConflict
+    } else if error.contains("InvalidTransition") {
+        super::output_lease::OutputLeaseError::InvalidTransition
+    } else if error.contains("StaleOwner") {
+        super::output_lease::OutputLeaseError::StaleOwner
+    } else if error.contains("StaleGeneration") {
+        super::output_lease::OutputLeaseError::StaleGeneration
+    } else if error.contains("InvalidTtl") {
+        super::output_lease::OutputLeaseError::InvalidTtl
+    } else if error.contains("LeaseIdExhausted") {
+        super::output_lease::OutputLeaseError::LeaseIdExhausted
+    } else if error.contains("RequestNotInFlight") {
+        super::output_lease::OutputLeaseError::RequestNotInFlight
+    } else if error.contains("ClockRollback") {
+        super::output_lease::OutputLeaseError::ClockRollback
+    } else if error.contains("GenerationExhausted") {
+        super::output_lease::OutputLeaseError::GenerationExhausted
+    } else if error.contains("ClockExhausted") {
+        super::output_lease::OutputLeaseError::ClockExhausted
+    } else {
+        return None;
+    };
+    Some(output_lease_error_code(lease_error))
+}
+
 fn build_output_lease_lifecycle_request(
     state: &AppState,
     binding: &CallerBinding,
@@ -1370,7 +1860,19 @@ fn build_output_lease_lifecycle_request(
     Ok((lease_request, now_ms))
 }
 
+fn lifecycle_lease_id(action: &OutputControlActionV2) -> Option<&str> {
+    match action {
+        OutputControlActionV2::RenewLease { lease }
+        | OutputControlActionV2::RecoverLease { lease }
+        | OutputControlActionV2::RelinquishOutputLease { lease }
+        | OutputControlActionV2::ForceTransferLease { lease, .. } => Some(&lease.lease_id),
+        OutputControlActionV2::AcquireLease { .. } => None,
+        _ => None,
+    }
+}
+
 pub(crate) fn execute_output_lease_lifecycle_for_operation(
+    app: &tauri::AppHandle,
     window: &WebviewWindow,
     state: &AppState,
     query_state: &ControlPlaneQueryState,
@@ -1378,6 +1880,7 @@ pub(crate) fn execute_output_lease_lifecycle_for_operation(
     request: OutputControlCommandRequestV2,
 ) -> OutputControlResponseV2 {
     execute_output_lease_lifecycle_with_confirmation(
+        app,
         window,
         state,
         query_state,
@@ -1388,6 +1891,7 @@ pub(crate) fn execute_output_lease_lifecycle_for_operation(
 }
 
 fn execute_output_lease_lifecycle_with_confirmation<F>(
+    app: &tauri::AppHandle,
     window: &WebviewWindow,
     state: &AppState,
     query_state: &ControlPlaneQueryState,
@@ -1502,9 +2006,40 @@ where
             output_control_rejection(&request, OutputControlErrorCodeV2::StaleFence),
         );
     }
-    let (confirmation_lease_request, confirmation_lease_now_ms) =
+    // This read is intentionally pure: a managed Relinquish must be routed
+    // into the serialized manager bridge *before* any generic registry
+    // request/preflight can mutate or consume a lifecycle capability.
+    let managed_lifecycle_lease_id = match lifecycle_lease_id(&request.action) {
+        Some(lease_id) => match state.output_lease_keepalive.manages_lease_id(lease_id) {
+            Ok(true) => Some(lease_id.to_string()),
+            Ok(false) => None,
+            Err(_) => {
+                return retain_output_control_rejection(
+                    state,
+                    key,
+                    shape_sha256,
+                    output_control_rejection(&request, OutputControlErrorCodeV2::Internal),
+                );
+            }
+        },
+        None => None,
+    };
+    if managed_lifecycle_lease_id.is_some()
+        && !matches!(
+            &request.action,
+            OutputControlActionV2::RelinquishOutputLease { .. }
+        )
+    {
+        return retain_output_control_rejection(
+            state,
+            key,
+            shape_sha256,
+            output_control_rejection(&request, OutputControlErrorCodeV2::Forbidden),
+        );
+    }
+    let confirmation_lease = if managed_lifecycle_lease_id.is_none() {
         match build_output_lease_lifecycle_request(state, &binding, &request) {
-            Ok(request) => request,
+            Ok(request) => Some(request),
             Err(_) => {
                 return retain_output_control_rejection(
                     state,
@@ -1513,7 +2048,12 @@ where
                     output_control_rejection(&request, OutputControlErrorCodeV2::InvalidRequest),
                 );
             }
-        };
+        }
+    } else {
+        None
+    };
+    if let Some((confirmation_lease_request, confirmation_lease_now_ms)) =
+        confirmation_lease.as_ref()
     {
         let registry = match state.output_lease_registry.lock() {
             Ok(registry) => registry,
@@ -1527,7 +2067,7 @@ where
             }
         };
         if let Err(error) =
-            registry.preflight_request(&confirmation_lease_request, confirmation_lease_now_ms)
+            registry.preflight_request(confirmation_lease_request, *confirmation_lease_now_ms)
         {
             return retain_output_control_rejection(
                 state,
@@ -1672,6 +2212,133 @@ where
             shape_sha256,
             output_control_rejection(&request, OutputControlErrorCodeV2::StaleFence),
         );
+    }
+    if let Some(managed_lease_id) = managed_lifecycle_lease_id.as_deref() {
+        let (inflight, audit_sequence) =
+            match state.runtime_control_plane.admit_and_audit_output_control(
+                &binding,
+                &key,
+                &shape_sha256,
+                &argument_fingerprint,
+                Instant::now(),
+            ) {
+                Ok(admission) => admission,
+                Err(code) => {
+                    return retain_output_control_rejection(
+                        state,
+                        key,
+                        shape_sha256,
+                        output_control_rejection(&request, code),
+                    );
+                }
+            };
+        // The public fence has linearized.  A managed Relinquish now cancels
+        // and joins its worker, drives the seven physical all-deny ports, and
+        // performs the exact CAS.  Never retain app/coordinator/owner locks
+        // across any of that work.
+        drop(coordinator);
+        drop(external_admission);
+        drop(_lifecycle_guard);
+        drop(_owner_rotation);
+        let evidence = match super::output_lease_keepalive_integration::relinquish_managed_after_public_admission(
+            app,
+            state,
+            managed_lease_id,
+        ) {
+            Ok(evidence) => evidence,
+            Err(error) => {
+                eprintln!("Managed output lease Relinquish failed before public response: {error}");
+                state.runtime_control_plane.finish_output_control_inflight(&inflight);
+                let response = output_control_rejection(
+                    &request,
+                    OutputControlErrorCodeV2::PublicationFailed,
+                );
+                state.runtime_control_plane.store_output_control_terminal(
+                    key,
+                    shape_sha256,
+                    response.clone(),
+                    Instant::now(),
+                );
+                return response;
+            }
+        };
+        let lease_result =
+            match output_control_lease_result_from_managed_exact_relinquish(&evidence) {
+                Ok(result) => result,
+                Err(error) => {
+                    eprintln!(
+                        "Managed output lease Relinquish response evidence was invalid: {error}"
+                    );
+                    state
+                        .runtime_control_plane
+                        .finish_output_control_inflight(&inflight);
+                    let response =
+                        output_control_rejection(&request, OutputControlErrorCodeV2::Internal);
+                    state.runtime_control_plane.store_output_control_terminal(
+                        key,
+                        shape_sha256,
+                        response.clone(),
+                        Instant::now(),
+                    );
+                    return response;
+                }
+            };
+        let fence_after = match query_state
+            .issue_output_control_fence_for_window(window.label(), state)
+        {
+            Ok(fence) => fence,
+            Err(error) => {
+                eprintln!(
+                    "Managed output lease Relinquish could not issue its terminal fence: {error:?}"
+                );
+                state
+                    .runtime_control_plane
+                    .finish_output_control_inflight(&inflight);
+                let response =
+                    output_control_rejection(&request, OutputControlErrorCodeV2::PublicationFailed);
+                state.runtime_control_plane.store_output_control_terminal(
+                    key,
+                    shape_sha256,
+                    response.clone(),
+                    Instant::now(),
+                );
+                return response;
+            }
+        };
+        let response = OutputControlResponseV2::Receipt(Box::new(OutputControlReceiptV2 {
+            operation_id: request.operation_id.clone(),
+            request_id: request.request_id,
+            shape_sha256: shape_sha256.clone(),
+            argument_fingerprint,
+            audit_sequence,
+            fence_before: request.expected_fence.clone(),
+            fence_after,
+            outcome: OutputControlReceiptOutcomeV2::Applied,
+            lease_result: Some(lease_result),
+        }));
+        if response.validate().is_err() {
+            state
+                .runtime_control_plane
+                .finish_output_control_inflight(&inflight);
+            let response = output_control_rejection(&request, OutputControlErrorCodeV2::Internal);
+            state.runtime_control_plane.store_output_control_terminal(
+                key,
+                shape_sha256,
+                response.clone(),
+                Instant::now(),
+            );
+            return response;
+        }
+        state
+            .runtime_control_plane
+            .finish_output_control_inflight(&inflight);
+        state.runtime_control_plane.store_output_control_terminal(
+            key,
+            shape_sha256,
+            response.clone(),
+            Instant::now(),
+        );
+        return response;
     }
     let (lease_request, lease_now_ms) =
         match build_output_lease_lifecycle_request(state, &binding, &request) {
@@ -1889,6 +2556,9 @@ pub(crate) fn output_control_lease_result_from_registry_receipt(
     action: &OutputControlActionV2,
     receipt: &OutputLeaseRequestReceipt,
 ) -> Result<OutputControlLeaseResultV2, String> {
+    if matches!(action, OutputControlActionV2::ResetShowSpoutOutputs {}) {
+        return Err("Show Spout reset must not carry an output-lease receipt".to_string());
+    }
     let outcome = receipt
         .outcome
         .as_ref()
@@ -1911,8 +2581,13 @@ pub(crate) fn output_control_lease_result_from_registry_receipt(
         .map_err(|error| format!("output lease operation did not succeed: {error:?}"))?;
     let expected_outcome = match action {
         OutputControlActionV2::EnableOutput => OutputLeaseReceiptOutcomeV2::Acquired,
+        OutputControlActionV2::ResetShowSpoutOutputs {} => {
+            return Err("Show Spout reset must not carry an output-lease receipt".to_string())
+        }
         OutputControlActionV2::Arm { .. }
         | OutputControlActionV2::EnableShowArtNetLoopbackRoute { .. }
+        | OutputControlActionV2::EnableShowSerialDmxSafetyBlackoutRoute { .. }
+        | OutputControlActionV2::StopShowSerialDmxSafetyBlackoutRoute { .. }
         | OutputControlActionV2::SendDsf2026ArtNetAcceptanceProbe { .. }
         | OutputControlActionV2::AcknowledgeDsf2026ArtNetAcceptanceProbeInDoubt { .. }
         | OutputControlActionV2::EnableShowSpoutOutputs { .. }
@@ -2039,6 +2714,44 @@ pub(crate) fn output_control_lease_result_from_registry_receipt(
     result
         .validate()
         .map_err(|error| format!("output lease receipt failed protocol validation: {error}"))?;
+    Ok(result)
+}
+
+/// The managed keepalive release is deliberately not a generic registry
+/// request: the receipt is a wire-safe projection of an exact CAS completion
+/// and retains its causal durable-Enable audit sequence.  It still obeys the
+/// existing one-change lifecycle DTO contract.
+pub(crate) fn output_control_lease_result_from_managed_exact_relinquish(
+    evidence: &super::output_lease::output_lease_keepalive::OutputLeaseKeepaliveExactRelinquishResponseEvidence,
+) -> Result<OutputControlLeaseResultV2, String> {
+    let result = OutputControlLeaseResultV2 {
+        authority: OutputLeaseAuthorityV1 {
+            lease_id: evidence.lease_id().to_string(),
+            generation: evidence.released_generation(),
+        },
+        resources: vec![
+            OutputControlTargetRoleV1::Lighting,
+            OutputControlTargetRoleV1::Video,
+        ],
+        phase: OutputLeaseReceiptPhaseV2::Unclaimed,
+        outcome: OutputLeaseReceiptOutcomeV2::Relinquished,
+        audit_sequence: evidence.durable_enable_audit_sequence(),
+        changes: vec![OutputLeaseReceiptChangeV2 {
+            lease_id: evidence.lease_id().to_string(),
+            before_generation: Some(evidence.prior_generation()),
+            after_generation: Some(evidence.released_generation()),
+            before_resources: vec![
+                OutputControlTargetRoleV1::Lighting,
+                OutputControlTargetRoleV1::Video,
+            ],
+            after_resources: Vec::new(),
+            before_phase: Some(OutputLeaseReceiptPhaseV2::HeldActive),
+            after_phase: Some(OutputLeaseReceiptPhaseV2::Unclaimed),
+        }],
+    };
+    result
+        .validate()
+        .map_err(|error| format!("Managed exact relinquish lease result is invalid: {error}"))?;
     Ok(result)
 }
 
@@ -4580,6 +5293,34 @@ mod tests {
             .encode([seed; protocol::control_plane_command::TIMELINE_TRANSPORT_AUTHORITY_ID_BYTES])
     }
 
+    #[test]
+    fn show_spout_current_topology_rejection_is_not_misreported_as_stale_fence() {
+        let exact_both = OutputLeaseAuthorityV1 {
+            lease_id: "lease-0000000000000001".to_string(),
+            generation: 1,
+        };
+        let enable = OutputControlActionV2::EnableShowSpoutOutputs {
+            lease: exact_both.clone(),
+        };
+        assert_eq!(
+            output_action_current_rejection_code(&enable),
+            OutputControlErrorCodeV2::InvalidRequest,
+            "missing/ambiguous V2 named compositions are static admission failures, not retryable fence changes"
+        );
+        assert_eq!(
+            output_action_current_rejection_code(&OutputControlActionV2::ResetShowSpoutOutputs {}),
+            OutputControlErrorCodeV2::InvalidRequest,
+            "an unrecognized reset shape is likewise not a stale fence"
+        );
+        assert_eq!(
+            output_action_current_rejection_code(
+                &OutputControlActionV2::EnableShowArtNetLoopbackRoute { lease: exact_both },
+            ),
+            OutputControlErrorCodeV2::StaleFence,
+            "unrelated dynamic route validation retains its existing stale-fence classification"
+        );
+    }
+
     fn test_request(
         request_id: u64,
         fence: TimelineTransportRuntimeFenceV1,
@@ -4697,6 +5438,114 @@ mod tests {
             safety_blackout_epoch: 8,
             safety_blackout_generation: 9,
         }
+    }
+
+    fn assert_one_button_artnet_safe_prepublication_rejection(
+        request_id: u64,
+        error: &str,
+        expected: OutputControlErrorCodeV2,
+    ) {
+        let state = RuntimeControlPlaneState::default();
+        let binding = test_binding("one-button-artnet", "main", 1);
+        let action = OutputControlActionV2::EnableShowArtNetLoopbackRoute {
+            lease: OutputLeaseAuthorityV1 {
+                lease_id: "lease-0000000000000001".to_string(),
+                generation: 1,
+            },
+        };
+        let request = OutputControlCommandRequestV2 {
+            operation_id: action.operation_id().to_string(),
+            request_id,
+            expected_fence: test_output_fence(),
+            action,
+        };
+        let key = output_control_receipt_key(&request, &binding);
+        let shape = "b".repeat(64);
+        let fingerprint = "c".repeat(64);
+        let now = Instant::now();
+        state
+            .reserve_output_control_request_identity(
+                &binding,
+                &key.operation_id,
+                key.request_id,
+                &shape,
+                now,
+            )
+            .unwrap();
+        assert!(matches!(
+            state.reserve_output_control_lane(&key, &shape, now),
+            OutputControlLaneReservation::Lane(_)
+        ));
+        let (inflight, _) = state
+            .admit_and_audit_output_control(&binding, &key, &shape, &fingerprint, now)
+            .unwrap();
+        let callback_count = std::sync::atomic::AtomicUsize::new(0);
+        // Model the one-button route seam exactly: a classified route or
+        // candidate error finalizes before its physical callback is reached.
+        let operation_result: Result<(), String> = Err(error.to_string());
+        let response = match operation_result {
+            Ok(()) => {
+                callback_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                panic!("safe pre-publication route error must not enter callback")
+            }
+            Err(error) => finalize_output_control_operation_error(
+                &state,
+                &inflight,
+                key.clone(),
+                shape.clone(),
+                &request,
+                &error,
+            ),
+        };
+        assert_eq!(callback_count.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert!(matches!(
+            &response,
+            OutputControlResponseV2::Rejected(rejection)
+                if rejection.error == expected
+                    && rejection.error != OutputControlErrorCodeV2::PublicationFailed
+        ));
+        let inner = state.output_control.lock().unwrap();
+        assert!(
+            !inner.inflight.contains(&inflight),
+            "safe rejection must clear pending operation admission"
+        );
+        assert!(
+            !inner.lanes.contains_key(&key),
+            "safe rejection must clear the pending operation lane"
+        );
+        assert!(matches!(
+            inner.receipts.get(&key),
+            Some(terminal) if terminal.response == response
+        ));
+    }
+
+    #[test]
+    fn one_button_artnet_safe_stale_fault_and_fence_rejections_are_not_physical_unknown() {
+        assert_one_button_artnet_safe_prepublication_rejection(
+            701,
+            "AI3 output lease show Art-Net loopback route activation transition failed: OutputLeaseRequestReceipt { outcome: Err(StaleGeneration) }",
+            OutputControlErrorCodeV2::Forbidden,
+        );
+        assert_one_button_artnet_safe_prepublication_rejection(
+            702,
+            "Managed exact-Both output lease is no longer armed for this authorization",
+            OutputControlErrorCodeV2::Forbidden,
+        );
+        assert_one_button_artnet_safe_prepublication_rejection(
+            703,
+            "Output control fence changed before show Art-Net loopback publication",
+            OutputControlErrorCodeV2::StaleFence,
+        );
+    }
+
+    #[test]
+    fn post_publication_artnet_checkpoint_failure_remains_physical_unknown() {
+        let error = "Show Art-Net loopback route was published but its committed project checkpoint could not be reconciled: synthetic coordinator failure";
+        assert_eq!(
+            classify_output_control_operation_error(error),
+            OutputControlErrorCodeV2::PublicationFailed,
+            "a failure after route publication must never be widened to a retry-safe rejection"
+        );
     }
 
     #[test]
@@ -4821,6 +5670,19 @@ mod tests {
         );
         assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
 
+        let show_serial_stop = OutputControlActionV2::StopShowSerialDmxSafetyBlackoutRoute {
+            lease: OutputLeaseAuthorityV1 {
+                lease_id: "lease-0000000000000001".to_string(),
+                generation: 1,
+            },
+        };
+        assert_eq!(
+            output_confirmation_gate(&show_serial_stop, &deny),
+            Err(OutputControlErrorCodeV2::Forbidden),
+            "the USB-DMX stop action is canonical dangerous output control and cannot bypass the local native confirmation"
+        );
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 3);
+
         let dsf2026_probe = OutputControlActionV2::SendDsf2026ArtNetAcceptanceProbe {
             lease: OutputLeaseAuthorityV1 {
                 lease_id: "lease-0000000000000001".to_string(),
@@ -4832,7 +5694,7 @@ mod tests {
             Err(OutputControlErrorCodeV2::Forbidden),
             "the fixed DSF2026 one-shot probe can never bypass local native R4 confirmation"
         );
-        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 3);
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 4);
 
         let dsf2026_reconcile =
             OutputControlActionV2::AcknowledgeDsf2026ArtNetAcceptanceProbeInDoubt {
@@ -4846,7 +5708,15 @@ mod tests {
             Err(OutputControlErrorCodeV2::Forbidden),
             "the no-send DSF2026 reconciliation still requires local native R4 confirmation"
         );
-        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 4);
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 5);
+
+        let show_spout_reset = OutputControlActionV2::ResetShowSpoutOutputs {};
+        assert_eq!(
+            output_confirmation_gate(&show_spout_reset, &deny),
+            Err(OutputControlErrorCodeV2::Forbidden),
+            "payloadless show Spout Reset still requires the parented native Yes confirmation"
+        );
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 6);
 
         let accept_calls = std::sync::atomic::AtomicUsize::new(0);
         let accept = |_: &OutputControlActionV2| {

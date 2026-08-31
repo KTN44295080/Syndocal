@@ -1,9 +1,172 @@
-# DSF2026 same-PC output acceptance — current 2026-08-30
+# DSF2026 same-PC output acceptance — current 2026-09-01
 
-## 2026-08-30 alpha.42 final native checkpoint
+## 2026-09-01 alpha.49 native one-button checkpoint
 
-This is the current alpha.42 native authority and supersedes the older
-alpha39/alpha10 current claims below. Branch `codex/syndocal-v1.2` is at `HEAD
+The exact Community MSVC `14.44.35207` no-bundle build passed with
+first-party Rust warnings `0`; the Community linker was first in `where.exe`
+and Git was second. The artifact is
+`C:\Users\kouty\Documents\KDMX\target\release\syndocal.exe`,
+Product/FileVersion `1.2.0-alpha.49`, `62,397,440` bytes, SHA-256
+`2152272B75A59D3342DE4AD64D33638564FC9D2038ED38D56F7C65B64F42177C`.
+Exactly one responsive maximized Syndocal window was verified (PID `71980`).
+
+The project is
+`C:\Users\kouty\Documents\KDMX\target\qa\dsf2026-show-authored-20260828\DSF2026-show-alpha42-artnet-probe-acceptance.sdc`,
+`1,114,510` bytes, SHA-256
+`5926A36FDD8E0251A2B67904A93490D3E3B3F54E323E24D3FAC26B31E7546F46`.
+
+The one-button flow completed all four stages: `Both` role, exact `COM3` PnP
+binding, Art-Net `127.0.0.1:6454` / wire Universe `0` enable, and S0 plus
+Open-DMX arm. Backend activation acknowledged only after the initial physical
+all-zero BREAK/MAB/`write_all`/`flush` transaction. The worker remained active
+with S0 for approximately five minutes without a fault; the only unrelated
+stderr was DJ-Link `trust_network_absent`. This proves the guarded runtime
+transaction, not an electrical waveform or fixture visual result.
+
+| Surface | Alpha.49 observation | Acceptance boundary |
+| --- | --- | --- |
+| USB-DMX | Exact `COM3` binding, S0, and guarded initial all-zero transaction acknowledged; worker stayed active. | Electrical waveform and fixture receipt are not in scope/are pending user confirmation. |
+| Art-Net / Unity | Route enabled at `127.0.0.1:6454`, wire U0. | Listener/route readiness only; no current Art-Net datagram capture or external node proof. |
+| Displays | Display 1 `1920x1080`, Display 5 `3840x2160`, plus editor live. | Window presence only; current content/pixel acceptance remains pending. |
+| Spout / camera | MiraBox absent; Spout pixel route unresolved. | No camera or Spout pixel acceptance claimed. |
+| Timeline | `人生オーバー` -> `惑う星` wait-for-Pedal-1 configuration present. | Natural-boundary transition and live Pedal 1 start receipt pending. |
+
+Focused evidence: serial code `23/23`, protocol `205/205`, TypeScript, fmt,
+diff, and `check:release` pass. The only reported frontend notice is the
+standard Vite chunk-size warning (`>500k`); first-party warning count is `0`.
+No commit or push has been made for this checkpoint.
+
+## Historical 2026-09-01 alpha.48 stage-4 stale-fence checkpoint
+
+Alpha.48 was `62,375,424` bytes, SHA-256
+`749AF5590D2694937F9CAE62471AFF87446E87C455137270D98C38582A82B6DD`.
+The stage-3 stale-fence fix crossed to stage 4, then serial arm failed before
+publication because `GetFinalPathNameByHandleW` received an invalid COM handle
+(`0x80070057`). No USB worker or physical write occurred. This was a
+pre-physical-apply fail-closed rejection; alpha.49 supersedes it.
+
+## Historical 2026-08-31 alpha.46 native one-button pre-publication checkpoint
+
+The required exact MSVC `14.44.35207` native no-bundle build completed with
+first-party Rust warnings `0`. The resulting
+`C:\Users\kouty\Documents\KDMX\target\release\syndocal.exe` reports
+Product/FileVersion `1.2.0-alpha.46`, is `62,290,432` bytes, and has SHA-256
+`04A36C709BEF41E8BE4A561C37835EE6FDAAD8F3EC25586666DFB4D6C2B8F768`.
+Exactly one responsive maximized window was launched with
+`DSF2026-show-alpha42-artnet-probe-acceptance.sdc`; that project is
+`1,114,470` bytes with SHA-256
+`35EE42976B97C9570139A37AF09F82E1B1D97B0F1BD1CC5F6D9DB83F53EA2F0A`.
+
+The one-button `Prepare show DMX` run completed output role `Both` and the exact
+machine-local binding stages. MiraBox was unplugged, and its input-only absence
+did not block `Both`. The operator accepted the native Art-Net confirmation,
+but stage 3 then failed before publication. Exact stderr identifies the cause
+as managed output-lease renewal advancing the lease while the confirmation was
+open: the submitted candidate ended `Err(StaleGeneration)`. No Art-Net socket,
+USB-DMX worker, S0 transition, or physical frame was created by that rejected
+stage. The UI's generic `publication_failed / physical output state is unknown`
+wording is therefore not a physical in-doubt result for this observation.
+
+At that historical checkpoint, the source fix still needed to serialize managed
+exact-`Both` ordinary authorization with the keepalive renewal lane while
+preserving stale rejection for unmanaged or mismatched leases. Alpha.49
+supersedes that stage-3 boundary. The F3200A remains all-zero-only.
+
+## 2026-09-01 current show transport boundary (acceptance pending)
+
+The venue's physical lighting primary is an explicitly selected,
+machine-local USB-DMX route. The `.sdc` carries logical output settings only;
+the show PC must enumerate and confirm the exact current USB device/protocol
+from Setup > DMX. COM/PnP identity is machine-local, and missing, stale,
+ambiguous, or changed identity fails closed. The completed internal Universe 0
+frame is mirrored to USB-DMX for the fixtures and simultaneously to Unity as
+Art-Net ArtDmx at `127.0.0.1:6454`, wire Universe `0`, exactly `512` channels,
+approximately `40–44 fps`, with channel 500 forced to zero. The exact
+FT232R/COM3 USB worker uses its empirically stable `22,764us + 8ms` period
+(about `32.5 fps`) and retains the latest completed U0 frame; it does not claim
+one physical USB delivery per 44Hz engine tick. This is not an Open-DMX
+universal maximum, and any faster USB rate needs fresh waveform and fixture
+evidence. Video remains the two local Spout senders `Syndocal Background` and
+`Syndocal Foreground`.
+
+| Boundary | Historical wording | Current wording | Reason |
+| --- | --- | --- | --- |
+| Physical lighting | Art-Net was the only show route; serial DMX was outside it | Explicit machine-local USB-DMX is primary; Art-Net is the simultaneous Unity mirror | Matches venue wiring while retaining the Unity visualizer |
+| Video | Local fixed Spout pair | Same fixed Spout pair | Spout is still the local video transport |
+
+An independently configured generic serial route may fail without stopping an
+unrelated Art-Net/sACN route. The selected USB-DMX route in this strict show is
+different: a USB identity, write, or flush fault is show-wide and must engage
+global S0 plus an Art-Net zero/blackout; live Art-Net must not continue from a
+stale frame. This fault response is a source contract whose physical result is
+still pending acceptance.
+
+The following rows are still **pending**. Queue acceptance and worker completion
+are intermediate observations, not electrical wire or fixture proof:
+
+### Current acceptance checklist
+
+- [x] Explicitly select and confirm the venue USB-DMX device/protocol on the
+      show PC: `COM3`, PnP instance
+      `FTDIBUS\VID_0403+PID_6001+A&A5D719&0&8\0000`, alpha.49 artifact above.
+- [x] Engage S0 and record the initial all-zero USB-DMX frame queue plus the
+      enabled Art-Net U0 route. This is not electrical or datagram delivery proof.
+- [x] For the selected Open-DMX worker, observe completion of BREAK, MAB,
+      `write_all`, and `flush`; backend activation acknowledged only after this
+      transaction. Worker completion is not electrical-wire proof.
+- [ ] Release S0 and observe the same completed internal U0 frame sent to the
+      Art-Net mirror and retained by the USB latest-frame worker; retain the
+      live-frame receipt separately. This is not a per-engine-tick USB-wire
+      delivery claim.
+- [ ] Capture the USB-DMX electrical wire and the Art-Net datagram independently;
+      confirm USB frame channel 500 / `payload[499]` is `0`.
+- [ ] Confirm the Art-Net packet is ArtDmx `0x5000`, wire U0, 512 channels, and
+      `payload[499]=0`; a local loopback capture is not venue-wire proof.
+- [ ] **Current attached fixture boundary:** the F3200A laser (34ch, DMX
+      address 1) is all-512-zero-only. Do not release S0 or send the historical
+      Mega PAR `ch1=255` / `ch5=255` frame until the operator has confirmed a
+      safe beam path and an exact reviewed F3200A channel test. The Mega PAR
+      red/blackout check is deferred to that later Mega PAR rig.
+- [ ] Keep the exact output lease healthy for more than its 60-second TTL while
+      navigating away from the output panel; backend keepalive is not yet
+      accepted.
+
+## Historical 2026-08-31 alpha.45 operator-run output-control checkpoint (observed; physical acceptance pending)
+
+The operator-run artifact was identified as
+`C:\Users\kouty\Documents\KDMX\target\release\syndocal.exe`, Product/FileVersion
+`1.2.0-alpha.45`, `62,272,000` bytes, SHA-256
+`34EAC7C71E8EC392A3C51A429A313C573D096AC86DE3499EB6EA0A454641E89B`. At the
+same readback, the source checkout was branch `codex/syndocal-v1.2`,
+`HEAD 85787a87aa95ded22f80f11386a6603ef0c675bb`, and upstream
+`85787a87aa95ded22f80f11386a6603ef0c675bb` (equal; the worktree is dirty).
+This records the artifact and repository identity used for the observation; it
+is not a clean-tree/source-binding attestation or a fresh native build gate.
+
+The following observations are recorded exactly as runtime/operator evidence.
+They do not promote queue status, a local listener, or a dark fixture to
+physical delivery proof:
+
+| Surface | alpha.45 observation | Acceptance boundary |
+| --- | --- | --- |
+| Legacy Spout reset | The legacy pair reset was observed successful: runtime output count changed `4 -> 2`, while `Display 1` and `Display 5` remained present. | Runtime inventory only; Spout receiver/pixel and external display acceptance remain unverified. |
+| Art-Net / Unity | Art-Net was enabled and a Unity listener at `127.0.0.1:6454` was observed. | This is local loopback/listener evidence only; the physical Art-Net node target IP is still unresolved and no physical-node acceptance is claimed. |
+| `Both` enable | Enable was rejected while preparing the combined route with `External video output route synchronization failed while preparing Both`; OutputControl returned `publication_failed` / `physical output state is unknown`. | A camera-input-start failure is suspected, not proven; do not call it the root cause or retry an in-doubt publication blindly. |
+| USB-DMX `COM3` arm | The arm ended `publication_failed`; the worker stopped and no physical zero receipt was captured. | USB electrical/fixture acceptance was not performed. `S0` remained engaged and the observed DMX status was `0/0`, which is logical/runtime state only. |
+| Attached fixture | The F3200A remained dark in the observation. It is the reviewed boundary of a 34-channel laser, and nonzero output remains prohibited. | Keep all 512 payload bytes zero; darkness is not a physical zero-wire receipt and no nonzero probe is released. |
+| One-button fix | The frontend + backend one-button fix remains in progress. | No native build, launch/re-run, or acceptance of that fix exists yet. |
+
+Current status is therefore `publication_failed` with the physical output state
+unknown. Preserve S0 and the all-zero F3200A boundary. The next safe action is
+to finish the one-button source fix, then perform the required native run and
+independently identified USB/Art-Net observations; until then, every physical
+output row below remains pending.
+
+## 2026-08-30 alpha.42 final native checkpoint (historical; superseded by the boundary above)
+
+This is the historical alpha.42 native authority and superseded the older
+alpha39/alpha10 claims below at that time. It is not the current source or
+physical-show authority. Branch `codex/syndocal-v1.2` was at `HEAD
 b1f6d760c75b430a4255ead71e5f4bb964501cf4`. The exact MSVC `14.44` native
 build passed with first-party warnings `0`; the exact
 `C:\Users\kouty\Documents\KDMX\target\release\syndocal.exe` is
@@ -75,17 +238,19 @@ are `cargo test -p syndocal show_artnet_acceptance_probe::tests -- --nocapture
 dsf2026_probe_engine_boundary_sends_one_exact_u0_packet_without_route_mutation
 -- --nocapture --test-threads=1` under that exact linker gate.
 
-## Scope
+## Historical alpha.42 scope (superseded)
 
 This is the show-critical output contract for the 2026-08-30 DSF performance.
 Syndocal and the Unity receiver run on the same Windows PC. Remote Art-Net and
 NDI transport are deliberately outside this acceptance boundary.
 
-The previous strict show path required a USB serial/Enttec Open DMX route. That
-path is superseded for this show because the receiver consumes Art-Net and two
-local Spout senders. The replacement must retain the existing output-control
-lease, safety, publication, acknowledgement, and rollback boundaries; it must
-not fall back to a generic unreviewed output mutation.
+At that historical alpha.42 checkpoint, the strict path required Art-Net for
+lighting and two local Spout senders; USB serial was explicitly outside the
+show boundary. The 2026-08-31 source boundary above supersedes that transport
+role decision only: USB-DMX is now the physical fixture primary and Art-Net is
+the simultaneous Unity mirror. The existing output-control lease, safety,
+publication, acknowledgement, and rollback boundaries remain required; no
+generic unreviewed output mutation is admitted.
 
 ## 2026-08-30 alpha.39 native checkpoint (historical; superseded by alpha.42 above)
 
@@ -160,7 +325,7 @@ approved one-shot result without retrying an in-doubt operation.
 
 ## 2026-08-30 live readiness audit (pre-alpha42; superseded)
 
-The current same-PC candidate remains
+The candidate recorded in that historical audit was
 `target/qa/dsf2026-show-authored-20260828/DSF2026-show-alpha10-same-pc-output.sdc`,
 `1,098,035` bytes, SHA-256
 `DB1C18DCEFC79F5DC8C68589BCCAA492AF2509E932542D4A5036927B5E0814BA`.
@@ -198,24 +363,34 @@ in this audit.
 The exact two-byte red acceptance frame is covered by a deterministic local UDP
 test, while physical packet capture remains unobserved. The reviewed
 lease-bound one-shot probe is now the approved source path; it is not a route
-activation and cannot by itself prove a packet reached Unity. Until the exact
-native build/launch and physical capture are performed, the red Mega PAR row
-and Unity physical row remain open. There is no serial-DMX fallback for this
-show route.
+activation and cannot by itself prove a packet reached Unity or a USB fixture.
+The alpha.42 probe had no serial-DMX fallback; that is historical only. Until
+the current native build/launch and physical capture are performed, the USB
+fixture, Art-Net/Unity, and red Mega PAR rows remain open.
 
-## Lighting contract
+## Current lighting contract
 
-- Transport: Art-Net ArtDmx (`OpCode 0x5000`).
-- Destination: `127.0.0.1:6454`.
+- Physical primary: explicitly selected machine-local USB-DMX device/protocol;
+  its COM/PnP identity is not persisted in `.sdc`.
+- Unity mirror transport: Art-Net ArtDmx (`OpCode 0x5000`) to
+  `127.0.0.1:6454`.
 - Daslight project universe: Universe 1.
 - Art-Net wire universe and Syndocal internal universe: `0`.
-- Payload: the completed 512-channel Syndocal DMX frame, byte values `0..255`.
+- Payload on both routes: the same completed 512-channel Syndocal DMX frame,
+  byte values `0..255`.
 - Address relation: DMX channel 1 is payload byte 0.
-- Cadence: approximately 44 Hz (`22,727 us` engine tick), within the requested
-  40–44 fps range.
-- Channel 500 is unused and must remain zero on the wire. The strict show
-  sender applies this fixed venue mask immediately before packet encoding, so
-  an upstream non-zero byte cannot escape as payload byte 499.
+- Art-Net cadence: approximately 44 Hz (`22,727 us` engine tick), within the
+  requested 40–44 fps range.
+- USB-DMX cadence: the exact FT232R/COM3 Open-DMX default is `30,764 us`
+  (`22,764 us` frame wire time plus an empirically required `8 ms` guard), or
+  about 32.5 fps. It retains the latest completed U0 frame and does not promise
+  a physical USB delivery on every Art-Net/engine tick. This is exact-rig
+  evidence, not an adapter-family maximum; a 36–40 fps trial is acceptance-only
+  and may not become the default without new waveform and fixture evidence.
+- Channel 500 is unused and must remain zero on both routes: USB-DMX frame
+  `payload[499]` and Art-Net wire payload `payload[499]` are forced to `0` at
+  their respective output boundaries, so an upstream non-zero byte cannot
+  escape either route.
 - The strict show route must not admit an external DMX input/merge that can
   mutate Universe 0 after the completed show frame is established.
 
@@ -225,19 +400,23 @@ addresses 46/46 after normalization to internal Universe 0. Strongpoint is a
 13-channel fixture with one dimmer and four RGB segments; the Daslight display
 of twelve physical cells is not authoritative.
 
-### Minimal lighting acceptance frame
+### Current F3200A laser acceptance boundary
 
-All 512 bytes are zero except:
+The currently attached fixture is an F3200A laser in 34-channel mode at DMX
+address 1. Until the operator confirms beam-path safety and an exact reviewed
+F3200A channel test, the only permitted physical acceptance frame is all 512
+payload bytes zero. Do not reuse the historical Mega PAR red/dimmer mapping:
+`payload[0]=255` / `payload[4]=255` is neither reviewed nor safe for this
+laser.
 
-```text
-payload[0] = 255  # DMX channel 1, first Mega PAR red
-payload[4] = 255  # DMX channel 5, first Mega PAR dimmer
-```
-
-Acceptance requires one 530-byte ArtDmx packet at wire Universe 0 and visible
-red output from the first Mega PAR in Unity. Daslight/Easy View must be closed
-before Unity starts because the current receiver cannot share UDP port 6454.
-Syndocal is a UDP sender and does not bind the receiver port.
+The deferred Mega PAR rig may later use its separately reviewed red frame, but
+that is a different fixture-specific acceptance record. For either future
+nonzero test, acceptance requires separately recorded USB worker write/flush
+completion, USB electrical-wire observation, and one 530-byte ArtDmx packet at
+wire Universe 0; queue acknowledgement or worker completion alone is not
+electrical-wire or fixture-delivery proof. Daslight/Easy View must be closed
+before Unity starts because the current receiver cannot share UDP port 6454;
+Syndocal is a UDP sender and does not bind it.
 
 ## Video contract
 
@@ -295,9 +474,10 @@ at 60 Hz and can render byte-exact RGB black.
 Source checkpoint evidence now includes exact MSVC `14.44.35207` focused tests
 with the Community linker pinned and first in `where.exe`: engine Art-Net
 `7 passed / 0 failed`, Syndocal route `3 passed / 0 failed`, and protocol
-control-plane `1 passed / 0 failed`; first-party warnings were `0`. The UDP
-proof observes a 530-byte ArtDmx packet at wire U0 with 512 payload bytes,
-`payload[0]=255`, `payload[4]=255`, and masked `payload[499]=0`. Independent
+control-plane `1 passed / 0 failed`; first-party warnings were `0`. The local
+loopback UDP proof observes a 530-byte ArtDmx packet at wire U0 with 512
+payload bytes, `payload[0]=255`, `payload[4]=255`, and masked `payload[499]=0`;
+it is not an electrical venue-wire capture. Independent
 Terra xHigh review found one stale Setup I/O fixture and a missing publication
 rollback proof; both were repaired before the focused rerun. Ox was not
 callable, so this is the documented narrow review exception.
@@ -416,8 +596,9 @@ the two managed MP3 sidecars also retained their pinned hashes. The new copy
 contains disabled exact Art-Net routes in both persisted route fields, exactly
 two fixed Spout summaries, and Main composition output IDs `1,2`.
 
-The following checklist records the accepted source/Spout/native gates and
-keeps the final Unity/GPU physical row explicitly open:
+The following **historical alpha.42 checklist** records the accepted
+source/Spout/native gates and keeps its final Unity/GPU physical row explicitly
+open. It does not supersede the current USB-DMX checklist above:
 
 - [x] Strict USB-serial show activation is completely replaced by exact
       `127.0.0.1:6454 / Art-Net / U0 / 512` activation.
@@ -425,8 +606,9 @@ keeps the final Unity/GPU physical row explicitly open:
       show-only machine binding are unreachable or fail closed.
 - [x] Universe 0 input/merge cannot alter the strict completed show frame in
       deterministic source tests; physical Unity output remains unchecked.
-- [x] Channel 500 is deterministically forced to zero at the strict sender
-      boundary and observed as zero on the wire.
+- [x] Channel 500 is deterministically forced to zero at the historical strict
+      sender boundary; `payload[499]=0` was observed in a local loopback UDP
+      packet test. This is not an electrical venue-wire capture.
 - [x] The fixed channel 1 + channel 5 test frame is available and verified by
       a local UDP receiver test.
 - [x] Exactly two fixed 1920×1080 Spout outputs can be created or validated by

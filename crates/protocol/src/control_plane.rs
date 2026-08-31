@@ -17,8 +17,10 @@ use crate::control_plane_command::{
     OUTPUT_LEASE_RECOVER_OPERATION_ID, OUTPUT_LEASE_RELINQUISH_OPERATION_ID,
     OUTPUT_LEASE_RENEW_OPERATION_ID, OUTPUT_OWNERSHIP_ARM_OPERATION_ID,
     OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID,
-    OUTPUT_SHOW_SPOUT_OUTPUTS_ENABLE_OPERATION_ID, OUTPUT_STANDBY_TAKEOVER_OPERATION_ID,
-    OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID,
+    OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_ENABLE_OPERATION_ID,
+    OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_STOP_OPERATION_ID,
+    OUTPUT_SHOW_SPOUT_OUTPUTS_ENABLE_OPERATION_ID, OUTPUT_SHOW_SPOUT_OUTPUTS_RESET_OPERATION_ID,
+    OUTPUT_STANDBY_TAKEOVER_OPERATION_ID, OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID,
 };
 
 /// Wire format version for the control-plane inventory.
@@ -499,7 +501,10 @@ fn validate_operation_schema_identity(
         | OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID
         | OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID
         | OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID
+        | OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_ENABLE_OPERATION_ID
+        | OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_STOP_OPERATION_ID
         | OUTPUT_SHOW_SPOUT_OUTPUTS_ENABLE_OPERATION_ID
+        | OUTPUT_SHOW_SPOUT_OUTPUTS_RESET_OPERATION_ID
         | OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_OPERATION_ID
         | OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_RECONCILE_OPERATION_ID
         | OUTPUT_ENABLE_OPERATION_ID
@@ -790,9 +795,9 @@ mod tests {
     }
 
     #[test]
-    fn dsf2026_probe_operation_accepts_only_schema_v6() {
-        assert_eq!(OUTPUT_CONTROL_COMMAND_SCHEMA_VERSION, 6);
-        let operation_id = OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_OPERATION_ID;
+    fn show_spout_reset_operation_accepts_only_schema_v8() {
+        assert_eq!(OUTPUT_CONTROL_COMMAND_SCHEMA_VERSION, 8);
+        let operation_id = OUTPUT_SHOW_SPOUT_OUTPUTS_RESET_OPERATION_ID;
         let exact_schema = SchemaIdentity {
             name: format!("{operation_id}.request"),
             version: OUTPUT_CONTROL_COMMAND_SCHEMA_VERSION,
@@ -802,9 +807,9 @@ mod tests {
             Ok(())
         );
 
-        // v4 and v5 are retired output-control wire boundaries. A
+        // v4 through v6 are retired output-control wire boundaries. A
         // speculative future schema must not be silently accepted either.
-        for version in [4, 5, OUTPUT_CONTROL_COMMAND_SCHEMA_VERSION + 1] {
+        for version in [4, 5, 6, 7, OUTPUT_CONTROL_COMMAND_SCHEMA_VERSION + 1] {
             let rejected = SchemaIdentity {
                 name: format!("{operation_id}.request"),
                 version,

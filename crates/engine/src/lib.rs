@@ -16,11 +16,16 @@ use std::sync::atomic::AtomicBool;
 
 mod control_plane;
 mod move_path;
+mod show_serial_dmx_status;
 mod timeline_audio_live_fence;
 mod timeline_follow_hold;
 
 pub use control_plane::{control_plane_engine_command_descriptors, engine_command_variant_count};
 use move_path::{move_rotation, transform_move_delta, CompiledMovePath};
+use show_serial_dmx_status::{
+    require_show_serial_dmx_enable_admission, ShowSerialDmxRouteStatusStore,
+};
+pub use show_serial_dmx_status::{ShowSerialDmxRouteStatus, ShowSerialDmxRouteStatusSnapshot};
 pub use timeline_audio_live_fence::TimelineAudioLiveFence;
 use timeline_follow_hold::{
     destination_first_measure_hold_plan, resolve_follow_duration_ms,
@@ -141,21 +146,22 @@ use protocol::{
     StageObjectId, StageObjectSummary, SubmasterSummary, TimelineAdvancedAuthoringSummary,
     TimelineAudioClipId, TimelineAudioClipSummary, TimelineAudioOutputBus,
     TimelineAutomationSummary, TimelineClickEventSummary, TimelineCueEventSummary, TimelineEventId,
-    TimelineEventPlacementUpdate, TimelineFollowRuntimeStatusSnapshot,
-    TimelineFollowRuntimeSummary, TimelineFollowSettlementAck, TimelineFollowSettlementAckResult,
-    TimelineFollowSettlementConsumerId, TimelineFollowSettlementConsumerSummary,
-    TimelineFollowSettlementDomain, TimelineFollowSettlementDomainSummary,
-    TimelineFollowSettlementState, TimelineFollowSettlementSummary, TimelineFollowSummary,
-    TimelineGuideAssetKey, TimelineGuideCueKind, TimelineGuideCueSummary, TimelineId,
-    TimelineItemGroupId, TimelineItemGroupSummary, TimelineItemRef, TimelineLayerKind,
-    TimelineLayerSummary, TimelineLoopRegionSummary, TimelineLoopRuntimeStatus,
-    TimelineLoopRuntimeSummary, TimelineLoopScale, TimelinePhaseId, TimelinePhaseSummary,
-    TimelineScheduleSource, TimelineSnapRequest, TimelineSnapshot, TimelineTempoInterpolation,
-    TimelineTempoMeterPoint, TimelineTrackKind, TimelineVideoAutomationSummary,
-    TimelineVideoClipId, TimelineVideoClipSummary, TimelineVideoLayerRef, TouchFeaturePresetTarget,
-    TouchSurfaceSummary, Transform2D, ValueEffectDirection, ValueEffectInterpolation,
-    ValueEffectMode, ValueEffectPoint, ValueEffectRequest, Vec3, VideoAutomationKeyframeSummary,
-    VideoBlendMode, VideoClipLaunchQuantization, VideoClipLayerRuntimeSummary, VideoClipLoopMode,
+    TimelineEventPlacementUpdate, TimelineFollowDestinationStartMode,
+    TimelineFollowRuntimeStatusSnapshot, TimelineFollowRuntimeSummary, TimelineFollowSettlementAck,
+    TimelineFollowSettlementAckResult, TimelineFollowSettlementConsumerId,
+    TimelineFollowSettlementConsumerSummary, TimelineFollowSettlementDomain,
+    TimelineFollowSettlementDomainSummary, TimelineFollowSettlementState,
+    TimelineFollowSettlementSummary, TimelineFollowSummary, TimelineGuideAssetKey,
+    TimelineGuideCueKind, TimelineGuideCueSummary, TimelineId, TimelineItemGroupId,
+    TimelineItemGroupSummary, TimelineItemRef, TimelineLayerKind, TimelineLayerSummary,
+    TimelineLoopRegionSummary, TimelineLoopRuntimeStatus, TimelineLoopRuntimeSummary,
+    TimelineLoopScale, TimelinePhaseId, TimelinePhaseSummary, TimelineScheduleSource,
+    TimelineSnapRequest, TimelineSnapshot, TimelineTempoInterpolation, TimelineTempoMeterPoint,
+    TimelineTrackKind, TimelineVideoAutomationSummary, TimelineVideoClipId,
+    TimelineVideoClipSummary, TimelineVideoLayerRef, TouchFeaturePresetTarget, TouchSurfaceSummary,
+    Transform2D, ValueEffectDirection, ValueEffectInterpolation, ValueEffectMode, ValueEffectPoint,
+    ValueEffectRequest, Vec3, VideoAutomationKeyframeSummary, VideoBlendMode,
+    VideoClipLaunchQuantization, VideoClipLayerRuntimeSummary, VideoClipLoopMode,
     VideoClipPendingLaunchSummary, VideoClipRuntimeSnapshot, VideoClipSlotId, VideoClipSlotSummary,
     VideoClipTakeDuration, VideoClipTakeDurationUnit, VideoClipTakeKind,
     VideoClipTakeTransitionSummary, VideoColorAdjust, VideoCuePointSummary, VideoEffectChainId,
@@ -3992,6 +3998,36 @@ define_engine_command! {
         expires_at: Instant,
         ack: mpsc::SyncSender<Result<(), String>>,
     },
+    /// Runtime-only USB-DMX worker activation. The logical route is fixed in
+    /// this crate; the caller supplies only a previously exact-captured local
+    /// device identity. This command never changes the project snapshot.
+    EnableShowSerialDmxSafetyBlackoutRoute {
+        expected_device: io::serial_dmx::VerifiedUsbSerialPortIdentity,
+        expected_safety_epoch: u64,
+        expected_safety_generation: u64,
+        expires_at: Instant,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
+    /// Retire only the runtime-only USB-DMX worker. No generic route can be
+    /// disabled through this command and no project state is changed.
+    StopShowSerialDmxSafetyBlackoutRoute {
+        expected_safety_epoch: u64,
+        expected_safety_generation: u64,
+        expires_at: Instant,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
+    /// One irreversible, fail-stop-only retirement of the managed live-show
+    /// DMX path.  It has no endpoint, route, or device payload: the engine
+    /// verifies its one exact local Art-Net/USB topology again immediately
+    /// before the physical boundary.  A caller must retain the consumed
+    /// operation result; this command never has a retry or a compensating CAS.
+    RetireManagedShowDmxAfterSafetyBlackout {
+        expected_safety_epoch: u64,
+        expected_safety_generation: u64,
+        expected_failure_epoch: u64,
+        expires_at: Instant,
+        operation: Arc<ManagedShowDmxFailStopOperationInner>,
+    },
     /// The fixed DSF2026 local acceptance probe. This never enables a route
     /// or creates a normal DMX sender: the engine verifies the disabled
     /// staged route and sends exactly one immutable ArtDmx datagram itself.
@@ -4013,9 +4049,22 @@ define_engine_command! {
         expires_at: Instant,
         ack: mpsc::SyncSender<Result<(), String>>,
     },
-    /// Internal compensation/authority-loss cleanup for the fixed show
-    /// Spout pair. It cannot remove an arbitrary generic Spout output.
-    RetireShowSpoutOutputsPublished {
+    /// Internal best-effort compensation after both physical fixed show
+    /// Spout senders have stopped during an authority loss. This is not the
+    /// user-initiated Reset path: it intentionally leaves a conflicting
+    /// generic sender visible after retiring the known physical pair.
+    RetireShowSpoutOutputsAfterAuthorityLossPublished {
+        expected_background: VideoOutputSummary,
+        expected_foreground: VideoOutputSummary,
+        expires_at: Instant,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
+    /// Exact user-initiated show Spout Reset. The runtime validates the
+    /// complete authored pair, including the absence of every third Spout
+    /// sender, before it mutates either output. It is deliberately separate
+    /// from authority-loss compensation so a Reset can never partially
+    /// retire an invalid persisted graph.
+    ResetShowSpoutOutputsExactPublished {
         expected_background: VideoOutputSummary,
         expected_foreground: VideoOutputSummary,
         expires_at: Instant,
@@ -4732,6 +4781,17 @@ define_engine_command! {
         admission: ProjectSnapshotLoadAdmission,
         ack: mpsc::SyncSender<Result<(), String>>,
     },
+    /// Consume an exact, runtime-only Follow destination wait.  Unlike a
+    /// normal DJ start this cannot select or seek: it starts only the target
+    /// already installed at zero by the captured Follow generation.
+    DjLinkStartWaitingFollowTarget {
+        expected_source_timeline_id: TimelineId,
+        expected_target_timeline_id: TimelineId,
+        expected_follow_generation: u64,
+        expires_at: Instant,
+        admission: ProjectSnapshotLoadAdmission,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
     /// Acknowledgement-bearing absolute DJ playhead convergence. The active
     /// authored Timeline identity is revalidated in the worker and the
     /// canonical snapshot is returned only after the position is published.
@@ -5368,6 +5428,7 @@ macro_rules! engine_command_video_presentation_relevance {
             // rendered frame: start/play/seek/jump/loop/release/follow abort.
             EngineCommand::StartTimeline { .. }
             | EngineCommand::DjLinkStartTimeline { .. }
+            | EngineCommand::DjLinkStartWaitingFollowTarget { .. }
             | EngineCommand::DjLinkSyncTimelinePosition { .. }
             | EngineCommand::SetTimelinePlaying(_)
             | EngineCommand::SetTimelinePlayingPublished { .. }
@@ -5439,7 +5500,8 @@ macro_rules! engine_command_video_presentation_relevance {
             | EngineCommand::EnableShowArtNetLoopbackRoutePublished { .. }
             | EngineCommand::SendDsf2026ArtNetAcceptanceProbe { .. }
             | EngineCommand::EnableShowSpoutOutputsPublished { .. }
-            | EngineCommand::RetireShowSpoutOutputsPublished { .. }
+            | EngineCommand::RetireShowSpoutOutputsAfterAuthorityLossPublished { .. }
+            | EngineCommand::ResetShowSpoutOutputsExactPublished { .. }
             | EngineCommand::SetDmxInputFrame { .. }
             | EngineCommand::ClearDmxInput(_) => false,
             // Output ownership is fenced by its own epoch in every transport;
@@ -5580,7 +5642,10 @@ macro_rules! engine_command_video_presentation_relevance {
             | EngineCommand::SetTimelineMetronome { .. } => false,
             // Follow settlement bookkeeping does not change presentation
             // identity; the follow-abort transport operation above does.
-            EngineCommand::AcknowledgeTimelineFollowSettlement { .. } => false,
+            EngineCommand::AcknowledgeTimelineFollowSettlement { .. }
+            | EngineCommand::EnableShowSerialDmxSafetyBlackoutRoute { .. }
+            | EngineCommand::StopShowSerialDmxSafetyBlackoutRoute { .. }
+            | EngineCommand::RetireManagedShowDmxAfterSafetyBlackout { .. } => false,
         }
     };
 }
@@ -5632,6 +5697,7 @@ impl EngineCommand {
                 | EngineCommand::SetMediaAssetAvailability { .. }
                 | EngineCommand::SetTimelinePlayingPublished { .. }
                 | EngineCommand::DjLinkStartTimeline { .. }
+                | EngineCommand::DjLinkStartWaitingFollowTarget { .. }
                 | EngineCommand::DjLinkSyncTimelinePosition { .. }
                 | EngineCommand::DjLinkSetTimelineLoopAbsolute { .. }
                 | EngineCommand::DjLinkSetCurrentTimelineLoopEnabled { .. }
@@ -5723,7 +5789,8 @@ impl EngineCommand {
                 | EngineCommand::EnableShowArtNetLoopbackRoutePublished { .. }
                 | EngineCommand::SendDsf2026ArtNetAcceptanceProbe { .. }
                 | EngineCommand::EnableShowSpoutOutputsPublished { .. }
-                | EngineCommand::RetireShowSpoutOutputsPublished { .. }
+                | EngineCommand::RetireShowSpoutOutputsAfterAuthorityLossPublished { .. }
+                | EngineCommand::ResetShowSpoutOutputsExactPublished { .. }
                 | EngineCommand::SetOutputOwnershipRole { .. }
                 | EngineCommand::FenceOutputOwnership { .. }
                 | EngineCommand::PrepareOutputOwnershipRole { .. }
@@ -5967,6 +6034,224 @@ impl Dsf2026ArtNetAcceptanceProbeError {
     }
 }
 
+/// Immutable evidence that the managed show DMX path reached its only safe
+/// terminal state.  This receipt deliberately has no `Clone` implementation:
+/// one caller consumes the one acknowledgement for one physical retirement.
+#[derive(Debug)]
+pub struct ManagedShowDmxFailStopReceipt {
+    safety: SafetyBlackoutAuthority,
+    failure_epoch: u64,
+    artnet_zero_accepted: bool,
+    serial_status_revision: u64,
+}
+
+impl ManagedShowDmxFailStopReceipt {
+    pub fn safety_authority(&self) -> SafetyBlackoutAuthority {
+        self.safety
+    }
+
+    pub fn failure_epoch(&self) -> u64 {
+        self.failure_epoch
+    }
+
+    /// `true` means exactly one local 530-byte zero ArtDmx datagram was
+    /// accepted by `send_to`; it is not a receiver or wire-delivery claim.
+    pub fn artnet_zero_accepted(&self) -> bool {
+        self.artnet_zero_accepted
+    }
+
+    pub fn serial_status_revision(&self) -> u64 {
+        self.serial_status_revision
+    }
+}
+
+/// Test-only evidence emitted by the managed fail-stop worker.  It proves the
+/// public priority-queue path commits one local Art-Net zero before the
+/// existing Open DMX physical-zero acknowledgement and bounded worker
+/// shutdown, without transmitting to a real loopback receiver.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ManagedShowDmxFailStopTestEvent {
+    ArtNetZeroAccepted,
+    UsbZeroPhysicalCompleted,
+    WorkerShutdownCompleted,
+}
+
+/// Fail-stop is either rejected before any physical boundary, explicitly
+/// cancelled before commit, or physically ambiguous.  InDoubt never carries a
+/// success receipt and must never be retried automatically.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ManagedShowDmxFailStopError {
+    RejectedBeforeCommit(String),
+    CancelledBeforeCommit(String),
+    InDoubt(String),
+}
+
+impl ManagedShowDmxFailStopError {
+    fn rejected(message: impl Into<String>) -> Self {
+        Self::RejectedBeforeCommit(message.into())
+    }
+
+    fn cancelled(message: impl Into<String>) -> Self {
+        Self::CancelledBeforeCommit(message.into())
+    }
+
+    fn in_doubt(message: impl Into<String>) -> Self {
+        Self::InDoubt(message.into())
+    }
+}
+
+/// The only fail-stop pre-commit outcome that may leave runtime state
+/// untouched is a proven stale authority observation.  Every other inability
+/// to prove the managed topology must cross the consumed operation boundary
+/// and end in the all-deny retirement path.
+enum ManagedShowDmxFailStopAuthorityCheck {
+    Exact,
+    RejectedBeforeCommit(String),
+    InDoubtAfterCommit(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ManagedShowDmxFailStopOperationState {
+    Queued,
+    Admitted,
+    Committing,
+    Finished,
+}
+
+#[derive(Debug)]
+struct ManagedShowDmxFailStopOperationStateInner {
+    state: ManagedShowDmxFailStopOperationState,
+    result: Option<Result<ManagedShowDmxFailStopReceipt, ManagedShowDmxFailStopError>>,
+}
+
+#[derive(Debug)]
+#[doc(hidden)]
+pub struct ManagedShowDmxFailStopOperationInner {
+    state: Mutex<ManagedShowDmxFailStopOperationStateInner>,
+    changed: Condvar,
+}
+
+impl ManagedShowDmxFailStopOperationInner {
+    fn new() -> Self {
+        Self {
+            state: Mutex::new(ManagedShowDmxFailStopOperationStateInner {
+                state: ManagedShowDmxFailStopOperationState::Queued,
+                result: None,
+            }),
+            changed: Condvar::new(),
+        }
+    }
+
+    fn admit(&self) -> bool {
+        let mut state = match self.state.lock() {
+            Ok(state) => state,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if state.state != ManagedShowDmxFailStopOperationState::Queued {
+            return false;
+        }
+        state.state = ManagedShowDmxFailStopOperationState::Admitted;
+        self.changed.notify_all();
+        true
+    }
+
+    fn begin_commit(&self) -> bool {
+        let mut state = match self.state.lock() {
+            Ok(state) => state,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if state.state != ManagedShowDmxFailStopOperationState::Admitted {
+            return false;
+        }
+        state.state = ManagedShowDmxFailStopOperationState::Committing;
+        self.changed.notify_all();
+        true
+    }
+
+    fn is_committing(&self) -> bool {
+        match self.state.lock() {
+            Ok(state) => state.state == ManagedShowDmxFailStopOperationState::Committing,
+            Err(poisoned) => {
+                poisoned.into_inner().state == ManagedShowDmxFailStopOperationState::Committing
+            }
+        }
+    }
+
+    fn finish(&self, result: Result<ManagedShowDmxFailStopReceipt, ManagedShowDmxFailStopError>) {
+        let mut state = match self.state.lock() {
+            Ok(state) => state,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if state.state == ManagedShowDmxFailStopOperationState::Finished {
+            return;
+        }
+        state.result = Some(result);
+        state.state = ManagedShowDmxFailStopOperationState::Finished;
+        self.changed.notify_all();
+    }
+}
+
+/// A linearized, one-consumer acknowledgement for managed show DMX fail-stop.
+/// It intentionally exposes no clone, retry, or result polling operation.
+#[derive(Debug)]
+pub struct ManagedShowDmxFailStopOperation {
+    inner: Arc<ManagedShowDmxFailStopOperationInner>,
+}
+
+impl ManagedShowDmxFailStopOperation {
+    /// Wait once for the terminal receipt.  Before the physical boundary this
+    /// timeout cancels atomically; after `Committing` it is necessarily
+    /// ambiguous, so the caller receives `InDoubt` and the worker continues
+    /// its one bounded retirement attempt without a retry.
+    pub fn wait(
+        self,
+        timeout: Duration,
+    ) -> Result<ManagedShowDmxFailStopReceipt, ManagedShowDmxFailStopError> {
+        let deadline = Instant::now() + timeout;
+        let mut state = match self.inner.state.lock() {
+            Ok(state) => state,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        loop {
+            if state.state == ManagedShowDmxFailStopOperationState::Finished {
+                return state.result.take().unwrap_or_else(|| {
+                    Err(ManagedShowDmxFailStopError::in_doubt(
+                        "Managed show DMX fail-stop finished without a terminal result",
+                    ))
+                });
+            }
+            let now = Instant::now();
+            if now >= deadline {
+                return match state.state {
+                    ManagedShowDmxFailStopOperationState::Queued
+                    | ManagedShowDmxFailStopOperationState::Admitted => {
+                        state.state = ManagedShowDmxFailStopOperationState::Finished;
+                        state.result = Some(Err(ManagedShowDmxFailStopError::cancelled(
+                            "Managed show DMX fail-stop was cancelled before the physical commit boundary",
+                        )));
+                        self.inner.changed.notify_all();
+                        state.result.take().expect("terminal cancellation result")
+                    }
+                    ManagedShowDmxFailStopOperationState::Committing => Err(
+                        ManagedShowDmxFailStopError::in_doubt(
+                            "Managed show DMX fail-stop acknowledgement timed out after physical commit; no automatic retry was performed",
+                        ),
+                    ),
+                    ManagedShowDmxFailStopOperationState::Finished => unreachable!(),
+                };
+            }
+            let remaining = deadline.saturating_duration_since(now);
+            let (next, _) = self
+                .inner
+                .changed
+                .wait_timeout(state, remaining)
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            state = next;
+        }
+    }
+}
+
 /// A priority S0 request reserves the safety authority before it is made
 /// visible to the engine worker.  The reservation is intentionally runtime
 /// only: its only purpose is to prevent an ordinary route activation from
@@ -6151,6 +6436,7 @@ struct EngineSharedTelemetry {
     open_dmx_safety_write_gate: OpenDmxSafetyWriteGate,
     safety_blackout: Mutex<SafetyBlackoutAuthority>,
     safety_blackout_enqueue_reservations: Mutex<VecDeque<SafetyBlackoutEnqueueReservation>>,
+    show_serial_dmx_route_status: ShowSerialDmxRouteStatusStore,
 }
 
 impl EngineSharedTelemetry {
@@ -6168,7 +6454,24 @@ impl EngineSharedTelemetry {
                 generation: 1,
             }),
             safety_blackout_enqueue_reservations: Mutex::new(VecDeque::new()),
+            show_serial_dmx_route_status: ShowSerialDmxRouteStatusStore::new(),
         }
+    }
+
+    fn show_serial_dmx_route_status(&self) -> ShowSerialDmxRouteStatus {
+        self.show_serial_dmx_route_status
+            .fail_closed_snapshot()
+            .status
+    }
+
+    fn try_show_serial_dmx_route_status_snapshot(
+        &self,
+    ) -> Result<ShowSerialDmxRouteStatusSnapshot, String> {
+        self.show_serial_dmx_route_status.try_snapshot()
+    }
+
+    fn set_show_serial_dmx_route_status(&self, status: ShowSerialDmxRouteStatus) {
+        self.show_serial_dmx_route_status.set(status);
     }
 
     fn record_queue_push_failure(&self) {
@@ -6205,16 +6508,26 @@ impl EngineSharedTelemetry {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
+    fn try_safety_blackout_authority(&self) -> Result<SafetyBlackoutAuthority, String> {
+        self.safety_blackout
+            .lock()
+            .map(|authority| *authority)
+            .map_err(|_| "Safety blackout authority lock was poisoned".to_string())
+    }
+
     fn engage_safety_blackout(
         &self,
     ) -> Result<(SafetyBlackoutEngageDisposition, SafetyBlackoutAuthority), String> {
-        let mut physical = self.open_dmx_safety_write_gate.lock()?;
+        // Set the nonblocking physical direction latch before taking shared
+        // authority. A USB driver may be wedged in BREAK/MAB/write_all/flush;
+        // S0 must still preempt the engine and network routes without waiting
+        // for that physical mutex.
+        self.open_dmx_safety_write_gate.latch_blackout();
         let mut authority = self
             .safety_blackout
             .lock()
             .map_err(|_| "Safety blackout authority lock was poisoned".to_string())?;
         if authority.engaged {
-            physical.set_blackout_engaged(true);
             return Ok((SafetyBlackoutEngageDisposition::NoOp, *authority));
         }
         let (epoch, generation) =
@@ -6228,28 +6541,36 @@ impl EngineSharedTelemetry {
             epoch,
             generation,
         };
-        physical.set_blackout_engaged(true);
         Ok((SafetyBlackoutEngageDisposition::Applied, *authority))
     }
 
-    /// Reserve the authoritative S0 epoch before its priority command is
-    /// queued.  The caller owns `safety_blackout_enqueue_gate`, so a route
-    /// publication cannot observe a clear authority after this returns.
-    fn reserve_safety_blackout_engage(&self) -> Result<SafetyBlackoutEnqueueReservation, String> {
-        let mut physical = self.open_dmx_safety_write_gate.lock()?;
+    /// Fault-only S0 transition for a USB worker that may be stuck holding
+    /// the physical write mutex. The logical authority and nonblocking gate
+    /// latch become engaged first; `physical_gate` says only whether the
+    /// mutex itself was subsequently observed within the bounded interval.
+    /// It is never a physical-zero or fixture-delivery acknowledgement.
+    fn engage_safety_blackout_for_usb_fault(
+        &self,
+        timeout: Duration,
+    ) -> Result<
+        (
+            SafetyBlackoutEngageDisposition,
+            SafetyBlackoutAuthority,
+            Result<(), String>,
+        ),
+        String,
+    > {
+        self.open_dmx_safety_write_gate.latch_blackout();
         let mut authority = self
             .safety_blackout
             .lock()
             .map_err(|_| "Safety blackout authority lock was poisoned".to_string())?;
-        let before = *authority;
-        if authority.engaged {
-            physical.set_blackout_engaged(true);
-            return Ok(SafetyBlackoutEnqueueReservation {
-                before,
-                disposition: SafetyBlackoutEngageDisposition::NoOp,
-                authority: before,
-            });
-        }
+        // Hold logical authority while refreshing the latch so a concurrent
+        // release cannot clear it between the fault decision and this commit.
+        // Even if S0 was already engaged, mint a new authority generation:
+        // that fences any release which was authorized before this USB fault.
+        // A later explicit release must observe this fault generation first.
+        self.open_dmx_safety_write_gate.latch_blackout();
         let (epoch, generation) =
             protocol::control_plane_command::next_timeline_transport_authority(
                 authority.epoch,
@@ -6261,11 +6582,45 @@ impl EngineSharedTelemetry {
             epoch,
             generation,
         };
-        physical.set_blackout_engaged(true);
+        let disposition = SafetyBlackoutEngageDisposition::Applied;
+        let committed = *authority;
+        drop(authority);
+        let physical_gate = self
+            .open_dmx_safety_write_gate
+            .engage_blackout_bounded(timeout);
+        Ok((disposition, committed, physical_gate))
+    }
+
+    /// Reserve the authoritative S0 epoch before its priority command is
+    /// queued.  The caller owns `safety_blackout_enqueue_gate`, so a route
+    /// publication cannot observe a clear authority after this returns.
+    fn reserve_safety_blackout_engage(&self) -> Result<SafetyBlackoutEnqueueReservation, String> {
+        self.open_dmx_safety_write_gate.latch_blackout();
+        let mut authority = self
+            .safety_blackout
+            .lock()
+            .map_err(|_| "Safety blackout authority lock was poisoned".to_string())?;
+        let before = *authority;
+        let (disposition, committed) = if authority.engaged {
+            (SafetyBlackoutEngageDisposition::NoOp, before)
+        } else {
+            let (epoch, generation) =
+                protocol::control_plane_command::next_timeline_transport_authority(
+                    authority.epoch,
+                    authority.generation,
+                )
+                .ok_or_else(|| "Safety blackout authority is exhausted".to_string())?;
+            *authority = SafetyBlackoutAuthority {
+                engaged: true,
+                epoch,
+                generation,
+            };
+            (SafetyBlackoutEngageDisposition::Applied, *authority)
+        };
         Ok(SafetyBlackoutEnqueueReservation {
             before,
-            disposition: SafetyBlackoutEngageDisposition::Applied,
-            authority: *authority,
+            disposition,
+            authority: committed,
         })
     }
 
@@ -6322,7 +6677,6 @@ impl EngineSharedTelemetry {
         if reservation.disposition != SafetyBlackoutEngageDisposition::Applied {
             return Ok(());
         }
-        let mut physical = self.open_dmx_safety_write_gate.lock()?;
         let mut current = self
             .safety_blackout
             .lock()
@@ -6334,7 +6688,8 @@ impl EngineSharedTelemetry {
             );
         }
         *current = reservation.before;
-        physical.set_blackout_engaged(reservation.before.engaged);
+        self.open_dmx_safety_write_gate
+            .set_blackout_engaged(reservation.before.engaged)?;
         Ok(())
     }
 
@@ -6350,7 +6705,12 @@ impl EngineSharedTelemetry {
         ),
         String,
     > {
-        let mut physical = self.open_dmx_safety_write_gate.lock()?;
+        if self.show_serial_dmx_route_status().faulted {
+            return Err(
+                "Safety blackout release is rejected while the USB-DMX route fault remains latched; re-arm and verify the exact machine-local route before releasing S0"
+                    .to_string(),
+            );
+        }
         let mut authority = self
             .safety_blackout
             .lock()
@@ -6360,7 +6720,8 @@ impl EngineSharedTelemetry {
         }
         let before = *authority;
         if !authority.engaged {
-            physical.set_blackout_engaged(false);
+            self.open_dmx_safety_write_gate
+                .set_blackout_engaged(false)?;
             return Ok((SafetyBlackoutReleaseDisposition::NoOp, before, before));
         }
         let (epoch, generation) =
@@ -6374,7 +6735,8 @@ impl EngineSharedTelemetry {
             epoch,
             generation,
         };
-        physical.set_blackout_engaged(false);
+        self.open_dmx_safety_write_gate
+            .set_blackout_engaged(false)?;
         Ok((
             SafetyBlackoutReleaseDisposition::Applied,
             before,
@@ -6386,13 +6748,13 @@ impl EngineSharedTelemetry {
         &self,
         authority: SafetyBlackoutAuthority,
     ) -> Result<(), String> {
-        let mut physical = self.open_dmx_safety_write_gate.lock()?;
         let mut current = self
             .safety_blackout
             .lock()
             .map_err(|_| "Safety blackout authority lock was poisoned".to_string())?;
         *current = authority;
-        physical.set_blackout_engaged(authority.engaged);
+        self.open_dmx_safety_write_gate
+            .set_blackout_engaged(authority.engaged)?;
         Ok(())
     }
 }
@@ -6459,6 +6821,23 @@ impl EngineHandle {
 
     pub fn safety_blackout_authority(&self) -> SafetyBlackoutAuthority {
         self.shared_telemetry.safety_blackout_authority()
+    }
+
+    /// Strict S0 query for a native mutation admission boundary. A poisoned
+    /// authority lock cannot be interpreted as permission to replace a
+    /// machine-local physical interface.
+    pub fn try_safety_blackout_authority(&self) -> Result<SafetyBlackoutAuthority, String> {
+        self.shared_telemetry.try_safety_blackout_authority()
+    }
+
+    /// Read the lock-free physical Open DMX direction latch. This is separate
+    /// from logical S0 authority because a serial fault latches it before any
+    /// potentially contended status/authority publish.
+    pub fn open_dmx_safety_blackout_latched(&self) -> Result<bool, String> {
+        self.shared_telemetry
+            .open_dmx_safety_write_gate
+            .blackout_engaged()
+            .map_err(|error| format!("Open DMX S0 latch is unavailable: {error}"))
     }
 
     /// Return the central Timeline audio liveness authority shared with the
@@ -6993,6 +7372,117 @@ impl EngineHandle {
         }
     }
 
+    /// Start the fixed logical Open DMX U0 worker only while the supplied S0
+    /// authority is engaged. The acknowledgement means the exact device was
+    /// opened and its initial all-zero BREAK/MAB/write_all/flush transaction
+    /// completed; it is deliberately not a fixture acceptance result.
+    pub fn enable_show_serial_dmx_safety_blackout_route(
+        &self,
+        expected_device: io::serial_dmx::VerifiedUsbSerialPortIdentity,
+        expected_safety_epoch: u64,
+        expected_safety_generation: u64,
+        expires_at: Instant,
+    ) -> Result<(), String> {
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::EnableShowSerialDmxSafetyBlackoutRoute {
+            expected_device,
+            expected_safety_epoch,
+            expected_safety_generation,
+            expires_at,
+            ack,
+        })
+        .map_err(|error| format!("Show serial DMX worker activation could not enqueue: {error}"))?;
+        receiver
+            .recv_timeout(Duration::from_secs(3))
+            .map_err(|error| {
+                format!("Show serial DMX worker activation acknowledgement failed: {error}")
+            })?
+    }
+
+    /// Stop only the fixed runtime-only Open DMX worker.
+    pub fn stop_show_serial_dmx_safety_blackout_route(
+        &self,
+        expected_safety_epoch: u64,
+        expected_safety_generation: u64,
+        expires_at: Instant,
+    ) -> Result<(), String> {
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::StopShowSerialDmxSafetyBlackoutRoute {
+            expected_safety_epoch,
+            expected_safety_generation,
+            expires_at,
+            ack,
+        })
+        .map_err(|error| format!("Show serial DMX worker stop could not enqueue: {error}"))?;
+        receiver
+            .recv_timeout(Duration::from_secs(3))
+            .map_err(|error| {
+                format!("Show serial DMX worker stop acknowledgement failed: {error}")
+            })?
+    }
+
+    /// Begin the one managed show-DMX fail-stop transaction.  The caller
+    /// provides only authority observations captured from this engine; route,
+    /// Art-Net endpoint, payload, USB identity, retry, and recovery are never
+    /// externally configurable.
+    pub fn begin_retire_managed_show_dmx_after_safety_blackout(
+        &self,
+        expected_safety: SafetyBlackoutAuthority,
+        expected_failure_epoch: u64,
+        expires_at: Instant,
+    ) -> Result<ManagedShowDmxFailStopOperation, ManagedShowDmxFailStopError> {
+        let inner = Arc::new(ManagedShowDmxFailStopOperationInner::new());
+        let operation = ManagedShowDmxFailStopOperation {
+            inner: Arc::clone(&inner),
+        };
+        if let Err(error) =
+            self.send_safety(EngineCommand::RetireManagedShowDmxAfterSafetyBlackout {
+                expected_safety_epoch: expected_safety.epoch,
+                expected_safety_generation: expected_safety.generation,
+                expected_failure_epoch,
+                expires_at,
+                operation: inner,
+            })
+        {
+            let error = ManagedShowDmxFailStopError::rejected(format!(
+                "Managed show DMX fail-stop could not enqueue: {error}"
+            ));
+            operation.inner.finish(Err(error.clone()));
+            return Err(error);
+        }
+        Ok(operation)
+    }
+
+    /// Read-only runtime-only worker state. It intentionally does not appear
+    /// in `EngineSnapshot`, project save, or `.sdc` serialization.
+    pub fn show_serial_dmx_safety_blackout_route_status(&self) -> ShowSerialDmxRouteStatus {
+        self.shared_telemetry.show_serial_dmx_route_status()
+    }
+
+    /// Read one coherent USB-DMX worker status/revision pair for an IPC
+    /// fence. Unlike the internal fault-handling accessor, an unavailable
+    /// status mutex is an explicit error so callers cannot serialize a
+    /// synthetic Active state after a poisoned query boundary.
+    pub fn try_show_serial_dmx_safety_blackout_route_status_snapshot(
+        &self,
+    ) -> Result<ShowSerialDmxRouteStatusSnapshot, String> {
+        self.shared_telemetry
+            .try_show_serial_dmx_route_status_snapshot()
+    }
+
+    /// Register the process-local observer used by the desktop shell to emit
+    /// a revisioned status event. The observer runs after the status lock is
+    /// released and only after an actual status transition, never on each
+    /// 44Hz engine tick.
+    pub fn set_show_serial_dmx_safety_blackout_route_status_observer(
+        &self,
+        observer: Option<Arc<dyn Fn(ShowSerialDmxRouteStatusSnapshot) + Send + Sync>>,
+    ) -> Result<(), String> {
+        self.shared_telemetry
+            .show_serial_dmx_route_status
+            .set_observer(observer)
+    }
+
     /// Send the single fixed DSF2026 ArtDmx acceptance probe through the
     /// engine worker. The caller supplies only already-captured internal
     /// fences; endpoint, universe, payload, retries, and route activation
@@ -7067,32 +7557,66 @@ impl EngineHandle {
         }
     }
 
-    /// Retire only the exact fixed show pair after a native sender failure or
-    /// a failed two-phase activation. Generic Spout outputs remain outside
-    /// this show-specific cleanup surface.
-    pub fn retire_show_spout_outputs_published(
+    /// Best-effort compensation after a native sender failure or an
+    /// authority-loss teardown. This deliberately retires the known pair
+    /// even if a generic conflicting sender must remain visible afterwards.
+    /// User-initiated Reset must use `reset_show_spout_outputs_exact_published`.
+    pub fn retire_show_spout_outputs_after_authority_loss_published(
         &self,
         expected_background: VideoOutputSummary,
         expected_foreground: VideoOutputSummary,
         expires_at: Instant,
     ) -> Result<(), String> {
         let (ack, receiver) = mpsc::sync_channel(1);
-        self.send(EngineCommand::RetireShowSpoutOutputsPublished {
+        self.send(
+            EngineCommand::RetireShowSpoutOutputsAfterAuthorityLossPublished {
+                expected_background,
+                expected_foreground,
+                expires_at,
+                ack,
+            },
+        )
+        .map_err(|error| {
+            format!("Show Spout authority-loss retirement could not enqueue: {error}")
+        })?;
+        match receiver.recv_timeout(Duration::from_secs(3)) {
+            Ok(result) => result,
+            Err(mpsc::RecvTimeoutError::Timeout) => Err(
+                "Show Spout authority-loss retirement did not receive an acknowledged snapshot"
+                    .to_string(),
+            ),
+            Err(mpsc::RecvTimeoutError::Disconnected) => Err(
+                "Show Spout authority-loss retirement worker disconnected before acknowledgement"
+                    .to_string(),
+            ),
+        }
+    }
+
+    /// Atomically reset only a complete exact fixed show pair. The runtime
+    /// rejects a missing, duplicate, or third Spout sender before either
+    /// sender is removed, so this cannot be used as a generic cleanup path.
+    pub fn reset_show_spout_outputs_exact_published(
+        &self,
+        expected_background: VideoOutputSummary,
+        expected_foreground: VideoOutputSummary,
+        expires_at: Instant,
+    ) -> Result<(), String> {
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::ResetShowSpoutOutputsExactPublished {
             expected_background,
             expected_foreground,
             expires_at,
             ack,
         })
-        .map_err(|error| format!("Show Spout output retirement could not enqueue: {error}"))?;
+        .map_err(|error| format!("Show Spout exact reset could not enqueue: {error}"))?;
         match receiver.recv_timeout(Duration::from_secs(3)) {
             Ok(result) => result,
-            Err(mpsc::RecvTimeoutError::Timeout) => Err(
-                "Show Spout output retirement did not receive an acknowledged snapshot".to_string(),
-            ),
-            Err(mpsc::RecvTimeoutError::Disconnected) => Err(
-                "Show Spout output retirement worker disconnected before acknowledgement"
-                    .to_string(),
-            ),
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                Err("Show Spout exact reset did not receive an acknowledged snapshot".to_string())
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                Err("Show Spout exact reset worker disconnected before acknowledgement".to_string())
+            }
         }
     }
 
@@ -7162,6 +7686,31 @@ impl EngineHandle {
             timeline_id,
             position_ms,
             DJ_LINK_ENGINE_ACK_TIMEOUT,
+        )
+    }
+
+    /// Consume the exact one-shot destination wait created by a successful
+    /// `WaitForPedal` Follow.  The worker repeats every identity/runtime
+    /// guard immediately before Play, so a stale source/target/generation or
+    /// replay cannot start another Timeline.
+    #[doc(hidden)]
+    pub fn dj_link_start_waiting_follow_target_with_canonical_snapshot(
+        &self,
+        expected_source_timeline_id: TimelineId,
+        expected_target_timeline_id: TimelineId,
+        expected_follow_generation: u64,
+    ) -> Result<Arc<EngineSnapshot>, String> {
+        self.submit_dj_link_command(
+            DJ_LINK_ENGINE_ACK_TIMEOUT,
+            "DJ Link waiting Follow target start",
+            |expires_at, admission, ack| EngineCommand::DjLinkStartWaitingFollowTarget {
+                expected_source_timeline_id,
+                expected_target_timeline_id,
+                expected_follow_generation,
+                expires_at,
+                admission,
+                ack,
+            },
         )
     }
 
@@ -11294,7 +11843,8 @@ impl EngineHandle {
             | EngineCommand::EnableShowArtNetLoopbackRoutePublished { .. }
             | EngineCommand::SendDsf2026ArtNetAcceptanceProbe { .. }
             | EngineCommand::EnableShowSpoutOutputsPublished { .. }
-            | EngineCommand::RetireShowSpoutOutputsPublished { .. }
+            | EngineCommand::RetireShowSpoutOutputsAfterAuthorityLossPublished { .. }
+            | EngineCommand::ResetShowSpoutOutputsExactPublished { .. }
             | EngineCommand::SetOutputOwnershipRole { .. }
             | EngineCommand::FenceOutputOwnership { .. }
             | EngineCommand::PrepareOutputOwnershipRole { .. }
@@ -11371,6 +11921,7 @@ impl EngineHandle {
             | EngineCommand::SetTimelinePlaying(_)
             | EngineCommand::StartTimeline { .. }
             | EngineCommand::DjLinkStartTimeline { .. }
+            | EngineCommand::DjLinkStartWaitingFollowTarget { .. }
             | EngineCommand::DjLinkSyncTimelinePosition { .. }
             | EngineCommand::SetTimelinePlayingPublished { .. }
             | EngineCommand::SeekTimeline(_)
@@ -11438,6 +11989,9 @@ impl EngineHandle {
             | EngineCommand::ApplyVideoOutputMappingPreset { .. }
             | EngineCommand::RemoveVideoOutputMappingPreset { .. }
             | EngineCommand::SetMediaAssetAvailability { .. } => {}
+            EngineCommand::EnableShowSerialDmxSafetyBlackoutRoute { .. }
+            | EngineCommand::StopShowSerialDmxSafetyBlackoutRoute { .. }
+            | EngineCommand::RetireManagedShowDmxAfterSafetyBlackout { .. } => {}
             #[cfg(test)]
             EngineCommand::InspectMediaAssetRollbackTestState { .. } => {}
         }
@@ -18725,6 +19279,9 @@ struct RuntimeTimelineFollowTransition {
     /// Captured at admission from the destination Timeline's own musical
     /// authority. It is applied only after a successful settlement.
     destination_hold: Option<TimelineFollowHoldPlan>,
+    /// Captured authored target-start contract.  This must not be read from
+    /// mutable project authoring while the Follow is settling.
+    destination_start_mode: TimelineFollowDestinationStartMode,
     started_at: Instant,
     duration: Duration,
     source_bpm: f32,
@@ -19617,6 +20174,27 @@ struct RuntimeDmxOutput {
     recovery: DmxRouteRecovery,
 }
 
+/// Deliberately separate from `RuntimeDmxOutput`: this worker is host-local
+/// and must never leak into `dmx_output_snapshot()` or project persistence.
+struct RuntimeShowSerialDmxRoute {
+    sender: Option<DmxSender>,
+}
+
+/// Runtime-only proof that this engine process has already completed one
+/// managed fail-stop for one exact failure/S0/route incarnation. It exists
+/// solely to distinguish an idempotency replay from an underdetermined missing
+/// USB worker: callers still receive a non-success rejection and never a
+/// second receipt. Any changed failure fence, S0 pair, DMX-route generation,
+/// or USB status revision invalidates this evidence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ManagedShowDmxFailStopCompletionEvidence {
+    completion_generation: u64,
+    safety: SafetyBlackoutAuthority,
+    failure_epoch: u64,
+    dmx_route_configuration_generation: u64,
+    serial_status_revision: u64,
+}
+
 #[derive(Debug, Clone, Default)]
 struct DmxRouteRecovery {
     consecutive_failures: u32,
@@ -19849,6 +20427,15 @@ struct EngineRuntime {
     pending_cues: VecDeque<PendingCueTrigger>,
     output: DmxOutputConfig,
     additional_dmx_outputs: Vec<RuntimeDmxOutput>,
+    show_serial_dmx_route: Option<RuntimeShowSerialDmxRoute>,
+    /// Set only after the complete one-shot Art-Net / Open DMX terminal proof
+    /// succeeds. It prevents a duplicate priority-queue command from
+    /// faulting a safely completed terminal state merely because the USB
+    /// worker is intentionally absent.
+    managed_show_dmx_fail_stop_completion: Option<ManagedShowDmxFailStopCompletionEvidence>,
+    /// Process-lifetime nonzero generation for the completion evidence. A
+    /// wrap is treated as an InDoubt terminal boundary, never reused.
+    managed_show_dmx_fail_stop_completion_generation: u64,
     output_ownership_role: MachineOutputRole,
     output_ownership_gate: OutputOwnershipGate,
     dmx_input_frames: HashMap<u16, RuntimeDmxInputFrame>,
@@ -19916,6 +20503,40 @@ struct EngineRuntime {
     last_frames_by_universe: HashMap<u16, [u8; 512]>,
     dmx_sender: Option<DmxSender>,
     dmx_sender_recovery: DmxRouteRecovery,
+    /// Test-only replacement for the fixed one-shot loopback transport.  It
+    /// is deliberately absent from production so tests can exercise the
+    /// public safety queue without writing a real ArtDmx packet to a live
+    /// Unity listener on 127.0.0.1:6454.
+    #[cfg(test)]
+    managed_show_dmx_fail_stop_test_artnet_packets: Option<Arc<Mutex<Vec<[u8; 530]>>>>,
+    /// Optional one-shot test transport result. `None` means the recorded
+    /// packet was accepted in full; a configured error or short length proves
+    /// the public post-commit fail-stop cleanup without a real UDP write.
+    #[cfg(test)]
+    managed_show_dmx_fail_stop_test_artnet_result: Option<Result<usize, String>>,
+    /// Optional test-only transport barrier invoked after the queue handler
+    /// has entered its irreversible send boundary but before the send result
+    /// is returned. This proves post-commit wait semantics without a real
+    /// UDP operation.
+    #[cfg(test)]
+    managed_show_dmx_fail_stop_test_artnet_before_result:
+        Option<Arc<dyn Fn(&[u8; 530]) + Send + Sync>>,
+    /// Test-only stand-in for the production `UdpSocket::bind` boundary. It
+    /// is consumed inside the post-commit send closure, never during queue
+    /// admission or topology inspection.
+    #[cfg(test)]
+    managed_show_dmx_fail_stop_test_socket_bind_error: Option<String>,
+    /// Test-only admission/commit interlock. It lets the deterministic suite
+    /// cancel a command after the worker has admitted it but before any
+    /// topology read or fail-stop cleanup can mutate runtime state.
+    #[cfg(test)]
+    managed_show_dmx_fail_stop_test_after_admit_before_commit: Option<Arc<dyn Fn() + Send + Sync>>,
+    /// Test-only execution log.  This records the three irreversible
+    /// boundaries through the same worker/queue path that production uses;
+    /// it has no production representation or route-control effect.
+    #[cfg(test)]
+    managed_show_dmx_fail_stop_test_event_log:
+        Option<Arc<Mutex<Vec<ManagedShowDmxFailStopTestEvent>>>>,
 }
 
 enum DmxSender {
@@ -19923,6 +20544,15 @@ enum DmxSender {
     Sacn(SacnSender),
     EnttecUsbPro(EnttecUsbProSender),
     EnttecOpenDmx(EnttecOpenDmxSender),
+    #[cfg(test)]
+    /// A no-wire stand-in for the already-verified Art-Net sender. It exists
+    /// only so USB-DMX engine tests cannot emit to the operator's live
+    /// 127.0.0.1:6454 Unity listener.
+    TestExactArtNetRoute,
+    #[cfg(test)]
+    /// A deterministic stand-in for an Art-Net sender which failed during
+    /// this tick after having been exact at tick entry.
+    TestFailingArtNetSend,
 }
 
 impl RuntimeDmxOutput {
@@ -20237,6 +20867,9 @@ impl EngineRuntime {
             pending_cues: VecDeque::with_capacity(64),
             output,
             additional_dmx_outputs: Vec::new(),
+            show_serial_dmx_route: None,
+            managed_show_dmx_fail_stop_completion: None,
+            managed_show_dmx_fail_stop_completion_generation: 0,
             output_ownership_role,
             output_ownership_gate,
             dmx_input_frames: HashMap::new(),
@@ -20302,6 +20935,18 @@ impl EngineRuntime {
                 }
                 recovery
             },
+            #[cfg(test)]
+            managed_show_dmx_fail_stop_test_artnet_packets: None,
+            #[cfg(test)]
+            managed_show_dmx_fail_stop_test_artnet_result: None,
+            #[cfg(test)]
+            managed_show_dmx_fail_stop_test_artnet_before_result: None,
+            #[cfg(test)]
+            managed_show_dmx_fail_stop_test_socket_bind_error: None,
+            #[cfg(test)]
+            managed_show_dmx_fail_stop_test_after_admit_before_commit: None,
+            #[cfg(test)]
+            managed_show_dmx_fail_stop_test_event_log: None,
         }
     }
 
@@ -20311,11 +20956,52 @@ impl EngineRuntime {
     }
 
     fn drop_all_dmx_senders(&mut self) {
+        self.clear_managed_show_dmx_fail_stop_completion();
+        // Never bypass the USB route's bounded S0/fault exit. An ownership
+        // transition can happen while the serial driver is wedged; direct
+        // `Option = None` would lose the visible fault and rely on sender
+        // Drop, which deliberately never joins an unbounded worker.
+        if self.show_serial_dmx_route.is_some() {
+            self.fault_show_serial_dmx_route(
+                "output ownership transition retired the USB-DMX route before a normal stop",
+            );
+        }
         self.dmx_sender = None;
         self.dmx_sender_recovery = DmxRouteRecovery::default();
         for output in &mut self.additional_dmx_outputs {
             output.sender = None;
             output.recovery = DmxRouteRecovery::default();
+        }
+    }
+
+    /// The USB worker is a primary physical mirror only while the one exact
+    /// Unity Art-Net route is both configured and still live. Re-evaluate this
+    /// after the Art-Net send on every tick: a send failure clears its sender,
+    /// and a reconnect must never silently re-arm USB output after that fault.
+    fn has_exact_live_show_serial_dmx_artnet_mirror(&self) -> bool {
+        show_artnet_loopback_route_is_exact_enabled(&self.output)
+            && match self.dmx_sender.as_ref() {
+                Some(DmxSender::ArtNet(_)) => true,
+                #[cfg(test)]
+                Some(DmxSender::TestExactArtNetRoute | DmxSender::TestFailingArtNetSend) => true,
+                _ => false,
+            }
+            && self.additional_dmx_outputs.is_empty()
+    }
+
+    fn show_serial_dmx_artnet_mirror_status(&self) -> (bool, String) {
+        if self.has_exact_live_show_serial_dmx_artnet_mirror() {
+            (
+                true,
+                "Exact enabled Art-Net 127.0.0.1:6454/U0 route and sender are present. This is route state only, not UDP receiver, wire, or Unity delivery verification."
+                    .to_string(),
+            )
+        } else {
+            (
+                false,
+                "Exact enabled Art-Net 127.0.0.1:6454/U0 route and sender are unavailable or changed. No Art-Net delivery continuation is claimed."
+                    .to_string(),
+            )
         }
     }
 
@@ -21950,6 +22636,7 @@ impl EngineRuntime {
                     | EngineCommand::SetEffectEnabledPublished { .. }
                     | EngineCommand::SetTimelinePlayingPublished { .. }
                     | EngineCommand::DjLinkStartTimeline { .. }
+                    | EngineCommand::DjLinkStartWaitingFollowTarget { .. }
                     | EngineCommand::DjLinkSyncTimelinePosition { .. }
                     | EngineCommand::DjLinkSetTimelineLoopAbsolute { .. }
                     | EngineCommand::DjLinkSetCurrentTimelineLoopEnabled { .. }
@@ -23150,6 +23837,79 @@ impl EngineRuntime {
                         "Show Art-Net loopback route activation could not publish an acknowledged snapshot",
                 });
             }
+            EngineCommand::EnableShowSerialDmxSafetyBlackoutRoute {
+                expected_device,
+                expected_safety_epoch,
+                expected_safety_generation,
+                expires_at,
+                ack,
+            } => {
+                let result = if Instant::now() > expires_at {
+                    Err(
+                        "Show serial DMX worker activation expired before engine execution"
+                            .to_string(),
+                    )
+                } else {
+                    self.apply_show_serial_dmx_safety_blackout_route_enable(
+                        &expected_device,
+                        expected_safety_epoch,
+                        expected_safety_generation,
+                    )
+                };
+                // This is host-local runtime state only. Waiting for an
+                // unrelated project snapshot would incorrectly persist or
+                // certify it, so the engine is the terminal acknowledgement.
+                let _ = ack.send(result);
+            }
+            EngineCommand::StopShowSerialDmxSafetyBlackoutRoute {
+                expected_safety_epoch,
+                expected_safety_generation,
+                expires_at,
+                ack,
+            } => {
+                let result = if Instant::now() > expires_at {
+                    Err("Show serial DMX worker stop expired before engine execution".to_string())
+                } else {
+                    self.apply_show_serial_dmx_safety_blackout_route_stop(
+                        expected_safety_epoch,
+                        expected_safety_generation,
+                    )
+                };
+                let _ = ack.send(result);
+            }
+            EngineCommand::RetireManagedShowDmxAfterSafetyBlackout {
+                expected_safety_epoch,
+                expected_safety_generation,
+                expected_failure_epoch,
+                expires_at,
+                operation,
+            } => {
+                if Instant::now() > expires_at {
+                    operation.finish(Err(ManagedShowDmxFailStopError::rejected(
+                        "Managed show DMX fail-stop expired before engine admission",
+                    )));
+                } else if operation.admit() {
+                    #[cfg(test)]
+                    if let Some(after_admit_before_commit) = self
+                        .managed_show_dmx_fail_stop_test_after_admit_before_commit
+                        .clone()
+                    {
+                        after_admit_before_commit();
+                    }
+                    let result = self.apply_managed_show_dmx_fail_stop(
+                        expected_safety_epoch,
+                        expected_safety_generation,
+                        expected_failure_epoch,
+                        &operation,
+                    );
+                    if result.is_err() && operation.is_committing() {
+                        self.best_effort_retire_managed_show_dmx_after_fail_stop_error(
+                            "managed show DMX fail-stop did not prove its terminal receipt",
+                        );
+                    }
+                    operation.finish(result);
+                }
+            }
             EngineCommand::SendDsf2026ArtNetAcceptanceProbe {
                 expected_disabled_output,
                 expected_safety_epoch,
@@ -23205,16 +23965,22 @@ impl EngineRuntime {
                         "Show Spout outputs could not publish an acknowledged engine snapshot",
                 });
             }
-            EngineCommand::RetireShowSpoutOutputsPublished {
+            EngineCommand::RetireShowSpoutOutputsAfterAuthorityLossPublished {
                 expected_background,
                 expected_foreground,
                 expires_at,
                 ack,
             } => {
                 let result = if Instant::now() > expires_at {
-                    Err("Show Spout output retirement expired before engine execution".to_string())
+                    Err(
+                        "Show Spout authority-loss retirement expired before engine execution"
+                            .to_string(),
+                    )
                 } else {
-                    self.apply_show_spout_outputs_retire(&expected_background, &expected_foreground)
+                    self.apply_show_spout_outputs_retire_after_authority_loss(
+                        &expected_background,
+                        &expected_foreground,
+                    )
                 };
                 self.pending_command_acks.push(PendingCommandAck {
                     ack: PendingCommandAckSender::Plain(ack),
@@ -23224,7 +23990,36 @@ impl EngineRuntime {
                     // publication fails.
                     rollback: PendingCommandRollback::KeepApplied,
                     publication_error:
-                        "Show Spout output retirement could not publish an acknowledged engine snapshot",
+                        "Show Spout authority-loss retirement could not publish an acknowledged engine snapshot",
+                });
+            }
+            EngineCommand::ResetShowSpoutOutputsExactPublished {
+                expected_background,
+                expected_foreground,
+                expires_at,
+                ack,
+            } => {
+                let rollback = PendingCommandRollback::RestoreShowSpoutOutputsEnable {
+                    video_outputs: self.video_outputs.clone(),
+                    video_output_fades: self.video_output_fades.clone(),
+                    last_error: self.last_error.clone(),
+                };
+                let result = if Instant::now() > expires_at {
+                    Err("Show Spout exact reset expired before engine execution".to_string())
+                } else {
+                    self.apply_show_spout_outputs_reset_exact(
+                        &expected_background,
+                        &expected_foreground,
+                    )
+                };
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack: PendingCommandAckSender::Plain(ack),
+                    result,
+                    // Reset is an authored output mutation. A failed
+                    // publication must restore the exact complete B image.
+                    rollback,
+                    publication_error:
+                        "Show Spout exact reset could not publish an acknowledged engine snapshot",
                 });
             }
             EngineCommand::SetDmxInputFrame {
@@ -27171,6 +27966,53 @@ impl EngineRuntime {
                     rollback,
                     publication_error:
                         "Engine snapshot was busy; DJ Link timeline start was rolled back",
+                });
+            }
+            EngineCommand::DjLinkStartWaitingFollowTarget {
+                expected_source_timeline_id,
+                expected_target_timeline_id,
+                expected_follow_generation,
+                expires_at,
+                admission,
+                ack,
+            } => {
+                let previous_last_error = self.last_error.clone();
+                let receipt = admission.dj_link_receipt();
+                let rollback = PendingCommandRollback::RestoreDjLinkTimelineTransport {
+                    transport: Box::new(self.timeline_transport_rollback()),
+                    receipt,
+                };
+                let admitted = admission.try_admit_dj_link_before(expires_at);
+                if admitted {
+                    admission.run_dj_link_pre_commit_hook();
+                }
+                let planning = admitted && admission.begin_dj_link_planning();
+                let result = if planning {
+                    self.start_waiting_follow_target_runtime(
+                        expected_source_timeline_id,
+                        expected_target_timeline_id,
+                        expected_follow_generation,
+                    )
+                } else {
+                    Err("DJ Link waiting Follow target start expired or was cancelled before commit".to_string())
+                };
+                if planning && result.is_err() {
+                    self.rollback_pending_command(rollback.clone());
+                }
+                if planning && result.is_ok() {
+                    admission.run_dj_link_planning_hook();
+                }
+                self.last_error = if result.is_ok() {
+                    None
+                } else {
+                    previous_last_error
+                };
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack: PendingCommandAckSender::Plain(ack),
+                    result,
+                    rollback,
+                    publication_error:
+                        "Engine snapshot was busy; DJ Link waiting Follow target start was rolled back",
                 });
             }
             EngineCommand::DjLinkSyncTimelinePosition {
@@ -31466,9 +32308,10 @@ impl EngineRuntime {
         self.advance_video_output_fades(now);
         self.expire_effect_transitions(now);
 
-        // S0 safety is sampled fail-closed for preview telemetry.  Actual
-        // sender boundaries take the short shared physical gate below; do not
-        // hold that gate while a sender is created/reconnected.
+        // S0 safety is sampled fail-closed for preview telemetry. Sender
+        // boundaries use the shared logical authority and atomic latch; they
+        // never wait on the USB physical mutex while a serial driver may be
+        // stuck in BREAK/MAB/write_all/flush.
         let shared_telemetry = Arc::clone(&self.shared_telemetry);
         let shared_safety_blackout_engaged = shared_telemetry
             .safety_blackout
@@ -31521,6 +32364,20 @@ impl EngineRuntime {
                     self.render_dmx_frame_for_universe(self.output.universe, now)
                 }
             });
+        // Capture the completed U0 buffer before any independent route drains
+        // its local map. The USB route mirrors the same completed show U0 as
+        // the fixed Art-Net route; it never rerenders fixture values.
+        let mut show_serial_u0_frame = frames_by_universe
+            .get(&SHOW_SERIAL_DMX_UNIVERSE)
+            .copied()
+            .unwrap_or_else(|| {
+                if effective_safety_blackout {
+                    [0u8; 512]
+                } else {
+                    self.render_dmx_frame_for_universe(SHOW_SERIAL_DMX_UNIVERSE, now)
+                }
+            });
+        enforce_show_serial_dmx_u0_invariants(&mut show_serial_u0_frame);
         self.last_frame = frame;
         self.last_frames_by_universe = frames_by_universe.clone();
 
@@ -31538,6 +32395,12 @@ impl EngineRuntime {
             .acquire(OutputCapability::Lighting)
             .ok();
         let lighting_allowed = lighting_permit.is_some();
+        // Sample the simultaneous-mirror precondition before the Art-Net
+        // route can attempt an automatic reconnect. If it was already absent
+        // at tick entry, a newly-created sender must not silently keep the
+        // existing USB worker live.
+        let show_serial_artnet_mirror_was_live =
+            self.has_exact_live_show_serial_dmx_artnet_mirror();
         let main_output = self.output.clone();
         if main_output.enabled && lighting_allowed {
             let outcome = send_output_frame_with_recovery(
@@ -31604,6 +32467,66 @@ impl EngineRuntime {
                 &recovery,
                 now,
             );
+        }
+        if self.show_serial_dmx_route.is_some() {
+            if !lighting_allowed {
+                self.fault_show_serial_dmx_route(
+                    "lighting output authority was lost while the USB-DMX mirror was active",
+                );
+            } else if !show_serial_artnet_mirror_was_live
+                || !self.has_exact_live_show_serial_dmx_artnet_mirror()
+            {
+                // This runs after the Art-Net route attempted this tick. A
+                // failed send clears `dmx_sender`, and any route mutation or
+                // extra output similarly breaks the simultaneous-mirror
+                // contract. Never enqueue another USB live frame after that
+                // point; fault keeps engine S0 while USB stays zero-only
+                // until an explicit fresh arm. Art-Net route/delivery truth
+                // is independent and must be observed separately.
+                self.fault_show_serial_dmx_route(
+                    "the exact enabled Art-Net 127.0.0.1:6454/U0 Unity mirror was absent, changed, or failed during the current tick",
+                );
+            } else {
+                let send_result = {
+                    let route = self
+                        .show_serial_dmx_route
+                        .as_mut()
+                        .expect("presence was checked");
+                    send_dmx_frame_at_safety_boundary(
+                        &mut route.sender,
+                        SHOW_SERIAL_DMX_UNIVERSE,
+                        &show_serial_u0_frame,
+                        &shared_telemetry,
+                    )
+                };
+                if let Err(error) = send_result {
+                    self.fault_show_serial_dmx_route(&format!(
+                        "Open DMX worker rejected a completed U0 frame: {error}"
+                    ));
+                } else {
+                    let (artnet_mirror_live, artnet_mirror_detail) =
+                        self.show_serial_dmx_artnet_mirror_status();
+                    self.shared_telemetry
+                        .set_show_serial_dmx_route_status(ShowSerialDmxRouteStatus {
+                            active: true,
+                            zero_frame_queued: effective_safety_blackout,
+                            zero_frame_physical_write_completed: self
+                                .shared_telemetry
+                                .show_serial_dmx_route_status()
+                                .zero_frame_physical_write_completed,
+                            live_frame_queued: !effective_safety_blackout,
+                            worker_shutdown_completed: false,
+                            faulted: false,
+                            artnet_mirror_live,
+                            artnet_mirror_detail,
+                            detail: if effective_safety_blackout {
+                                "Open DMX worker is active with the latest S0 zero frame queued. Queue acceptance is not fixture or wire-delivery verification.".to_string()
+                            } else {
+                                "Open DMX worker is active; the completed U0 mirror frame is queued at show cadence. Queue acceptance is not fixture or wire-delivery verification.".to_string()
+                            },
+                        });
+                }
+            }
         }
         if self.last_dmx_output_count > 0 {
             if intentional_early_tick {
@@ -40774,13 +41697,19 @@ impl EngineRuntime {
         let (target, _runtime_events) = self.prepare_timeline_bank_entry(target)?;
         let next_audio_transport_revision = self.reserve_timeline_audio_transport_revision()?;
         let source_tempo_meter_authority = self.timeline_click_authority()?;
-        // An enabled destination hold has one unambiguous settling contract:
-        // one source measure captured at Follow admission.  The authored
-        // duration remains authoritative only for ordinary Follow, while Cut
-        // never creates a post-Follow hold.
+        // A one-source-measure Follow has an unambiguous transition duration.
+        // `WaitForPedal` deliberately reuses that authored duration contract
+        // but never installs a destination loop: the target is paused at zero
+        // after settlement.  Cut remains terminal and cannot create either
+        // a hold or a waiting target.
+        let destination_wait_for_pedal = matches!(
+            follow.destination_start_mode,
+            TimelineFollowDestinationStartMode::WaitForPedal
+        ) && !matches!(follow.video_kind, VideoClipTakeKind::Cut);
         let hold_first_destination_measure = follow.hold_first_destination_measure
+            && !destination_wait_for_pedal
             && !matches!(follow.video_kind, VideoClipTakeKind::Cut);
-        let resolved_duration_ms = if hold_first_destination_measure {
+        let resolved_duration_ms = if hold_first_destination_measure || destination_wait_for_pedal {
             source_admission_measure_duration_ms(
                 &source_tempo_meter_authority,
                 self.timeline_position_ms,
@@ -40900,6 +41829,14 @@ impl EngineRuntime {
             target_timeline_id: target.id,
             target: target.clone(),
             destination_hold,
+            // Cut has no runtime transition/wait phase. Store the effective
+            // runtime mode so settlement cannot accidentally pause a Cut
+            // merely because its authored Follow requested WaitForPedal.
+            destination_start_mode: if destination_wait_for_pedal {
+                TimelineFollowDestinationStartMode::WaitForPedal
+            } else {
+                TimelineFollowDestinationStartMode::Play
+            },
             started_at: now,
             duration: Duration::from_millis(resolved_duration_ms),
             source_bpm,
@@ -40937,6 +41874,7 @@ impl EngineRuntime {
             progress_millis: 0,
             fault: None,
             transition_hold_active: false,
+            waiting_for_pedal_start: false,
             settlement: None,
         };
         self.timeline_follow_natural_boundary_armed = false;
@@ -40953,7 +41891,12 @@ impl EngineRuntime {
         transition: &RuntimeTimelineFollowTransition,
         now: Instant,
     ) -> u64 {
-        if transition.destination_hold.is_some() {
+        if transition.destination_hold.is_some()
+            || matches!(
+                transition.destination_start_mode,
+                TimelineFollowDestinationStartMode::WaitForPedal
+            )
+        {
             return 0;
         }
         now.saturating_duration_since(transition.started_at)
@@ -42240,6 +43183,7 @@ impl EngineRuntime {
             progress_millis: 1_000,
             fault: None,
             transition_hold_active: false,
+            waiting_for_pedal_start: false,
             settlement: Some(settlement),
         };
         self.refresh_timeline_follow_video_render_snapshot();
@@ -42288,12 +43232,22 @@ impl EngineRuntime {
         self.commit_reserved_timeline_transport_authority(reserved);
         self.retire_timeline_follow_transport(now, None)?;
         self.timeline_follow_runtime.status = protocol::TimelineFollowRuntimeStatus::Idle;
+        let waiting_for_pedal_start = matches!(
+            transition.destination_start_mode,
+            TimelineFollowDestinationStartMode::WaitForPedal
+        );
         self.install_timeline_bank_entry(
             transition.target.clone(),
             runtime_events,
-            true,
+            !waiting_for_pedal_start,
             target_position_ms,
         )?;
+        if waiting_for_pedal_start {
+            // The waiting contract is not an authored loop.  In particular,
+            // a destination whose saved A/B region is enabled must remain
+            // visibly/runtime disabled until the later one-shot pedal start.
+            self.set_timeline_loop_enabled_state(false);
+        }
         if let Some(hold) = transition.destination_hold {
             self.install_timeline_follow_destination_hold(hold);
         }
@@ -42325,6 +43279,7 @@ impl EngineRuntime {
             progress_millis: 1_000,
             fault: None,
             transition_hold_active: transition.destination_hold.is_some(),
+            waiting_for_pedal_start,
             settlement: None,
         };
         self.timeline_last_announced_phase_id = None;
@@ -43664,6 +44619,43 @@ impl EngineRuntime {
             position_ms: self.timeline_position_ms,
             observed_at: now,
         });
+        Ok(())
+    }
+
+    fn start_waiting_follow_target_runtime(
+        &mut self,
+        expected_source_timeline_id: TimelineId,
+        expected_target_timeline_id: TimelineId,
+        expected_follow_generation: u64,
+    ) -> Result<(), String> {
+        let runtime = &self.timeline_follow_runtime;
+        if !runtime.waiting_for_pedal_start
+            || runtime.status != protocol::TimelineFollowRuntimeStatus::Idle
+            || runtime.outcome != Some(protocol::TimelineFollowOutcome::Completed)
+            || runtime.generation != expected_follow_generation
+            || runtime.source_timeline_id != Some(expected_source_timeline_id)
+            || runtime.target_timeline_id != Some(expected_target_timeline_id)
+        {
+            return Err("DJ Link waiting Follow target admission is stale".to_string());
+        }
+        if self.timeline_id != expected_target_timeline_id
+            || self.timeline_playing
+            || self.timeline_position_ms != 0
+            || !matches!(
+                self.timeline_loop_runtime.status,
+                TimelineLoopRuntimeStatus::Disabled
+            )
+        {
+            return Err(
+                "DJ Link waiting Follow target runtime is no longer admissible".to_string(),
+            );
+        }
+
+        self.apply_timeline_playing_command(true, true)?;
+        // The engine worker is the single start boundary.  A later replay
+        // sees `false` above and returns before changing the transport.
+        self.timeline_follow_runtime.waiting_for_pedal_start = false;
+        self.timeline_follow_runtime.transition_hold_active = false;
         Ok(())
     }
 
@@ -45866,7 +46858,11 @@ impl EngineRuntime {
         transition: &RuntimeTimelineFollowTransition,
     ) -> VideoSnapshot {
         let mut snapshot = self.video_snapshot_unweighted();
-        let position_ms = if transition.destination_hold.is_some() {
+        let position_ms = if transition.destination_hold.is_some()
+            || matches!(
+                transition.destination_start_mode,
+                TimelineFollowDestinationStartMode::WaitForPedal
+            ) {
             0
         } else {
             transition
@@ -48945,6 +49941,7 @@ impl EngineRuntime {
         self.dmx_sender = sender;
         self.dmx_sender_recovery = DmxRouteRecovery::default();
         self.bump_dmx_route_configuration_generation();
+        self.clear_managed_show_dmx_fail_stop_completion();
         self.last_error = None;
         Ok(())
     }
@@ -48961,6 +49958,1176 @@ impl EngineRuntime {
             expected_safety_generation,
             create_verified_show_artnet_loopback_sender,
         )
+    }
+
+    fn apply_show_serial_dmx_safety_blackout_route_enable(
+        &mut self,
+        expected_device: &io::serial_dmx::VerifiedUsbSerialPortIdentity,
+        expected_safety_epoch: u64,
+        expected_safety_generation: u64,
+    ) -> Result<(), String> {
+        self.apply_show_serial_dmx_safety_blackout_route_enable_with_sender_factory(
+            expected_device,
+            expected_safety_epoch,
+            expected_safety_generation,
+            create_verified_show_serial_dmx_sender,
+        )
+    }
+
+    fn apply_show_serial_dmx_safety_blackout_route_enable_with_sender_factory<F>(
+        &mut self,
+        expected_device: &io::serial_dmx::VerifiedUsbSerialPortIdentity,
+        expected_safety_epoch: u64,
+        expected_safety_generation: u64,
+        create_sender: F,
+    ) -> Result<(), String>
+    where
+        F: FnOnce(
+            &io::serial_dmx::VerifiedUsbSerialPortIdentity,
+            &OpenDmxSafetyWriteGate,
+        ) -> Result<DmxSender, String>,
+    {
+        if self.show_serial_dmx_route.is_some() {
+            return Err(
+                "Show serial DMX worker is already active; stop it before another activation"
+                    .to_string(),
+            );
+        }
+        if !show_serial_dmx_route_is_exact_logical(&staged_show_serial_dmx_logical_route()) {
+            return Err("Show serial DMX logical route invariant is invalid".to_string());
+        }
+        if !show_serial_dmx_device_identity_is_exact(expected_device) {
+            return Err(
+                "Show serial DMX worker requires one exact machine-local USB/PnP identity"
+                    .to_string(),
+            );
+        }
+        // A timed-out shutdown drops its JoinHandle to keep Stop bounded, but
+        // the detached driver call may still resume later. Do not create a
+        // second worker from `route = None`; authoritative status must prove
+        // the prior worker joined first. A completed fault may re-arm only
+        // under both already-latched S0 authorities, and only its fresh
+        // initial physical zero receipt clears the sticky fault below.
+        let prior_status = self
+            .shared_telemetry
+            .try_show_serial_dmx_route_status_snapshot()
+            .map_err(|error| {
+                format!(
+                    "Show serial DMX worker activation was rejected because prior route status is unavailable: {error}"
+                )
+            })?;
+        let (safety_authority_engaged, physical_s0_latched) = if prior_status.status.faulted {
+            let safety = self
+                .shared_telemetry
+                .try_safety_blackout_authority()
+                .map_err(|error| {
+                    format!(
+                        "Show serial DMX fault recovery was rejected because logical S0 authority is unavailable: {error}"
+                    )
+                })?;
+            let physical_s0_latched = self
+                .shared_telemetry
+                .open_dmx_safety_write_gate
+                .blackout_engaged()
+                .map_err(|error| {
+                    format!(
+                        "Show serial DMX fault recovery was rejected because physical S0 latch is unavailable: {error}"
+                    )
+                })?;
+            (safety.engaged, physical_s0_latched)
+        } else {
+            (false, false)
+        };
+        require_show_serial_dmx_enable_admission(
+            &prior_status.status,
+            safety_authority_engaged,
+            physical_s0_latched,
+        )
+        .map_err(|error| format!("Show serial DMX worker activation was rejected: {error}"))?;
+        // USB-DMX is the physical primary only while the fixed Unity Art-Net
+        // mirror is live alongside it. Do not promote the USB worker to a
+        // stand-alone show route if the exact local ArtDmx U0 sender is
+        // staged, absent, replaced, or failed to initialize.
+        if !self.has_exact_live_show_serial_dmx_artnet_mirror() {
+            return Err(
+                "Show serial DMX worker requires the exact enabled Art-Net 127.0.0.1:6454/U0 Unity mirror"
+                    .to_string(),
+            );
+        }
+        let (artnet_mirror_live, artnet_mirror_detail) =
+            self.show_serial_dmx_artnet_mirror_status();
+        let ownership = self.output_ownership_gate.status();
+        if ownership.state != OutputOwnershipState::Ready
+            || ownership.effective_role != MachineOutputRole::Both
+            || ownership.desired_role != MachineOutputRole::Both
+            || !ownership.lighting_allowed
+        {
+            return Err(
+                "Show serial DMX worker requires the active local Both lighting authority"
+                    .to_string(),
+            );
+        }
+
+        // The exact device-interface/PnP/HANDLE revalidation happens inside
+        // this constructor. A missing, changed, or busy port leaves runtime A
+        // untouched because no state changes precede successful construction.
+        let mut sender = create_sender(
+            expected_device,
+            &self.shared_telemetry.open_dmx_safety_write_gate,
+        )?;
+        let shared_telemetry = Arc::clone(&self.shared_telemetry);
+        let _safety_enqueue_gate = shared_telemetry
+            .safety_blackout_enqueue_gate
+            .lock()
+            .map_err(|_| {
+                "Safety blackout enqueue gate was poisoned before show serial DMX activation"
+                    .to_string()
+            })?;
+        let safety = shared_telemetry.safety_blackout.lock().map_err(|_| {
+            "Safety blackout authority lock was poisoned before show serial DMX activation"
+                .to_string()
+        })?;
+        if !safety.engaged
+            || safety.epoch != expected_safety_epoch
+            || safety.generation != expected_safety_generation
+        {
+            return Err("Show serial DMX worker requires the exact currently-engaged S0 safety blackout authority".to_string());
+        }
+        drop(safety);
+        // Keep the physical direction zero-only even if a concurrent release
+        // reaches the shared authority while this bounded receipt waits. The
+        // sender is not retained until the real worker completes one zero
+        // BREAK/MAB/write_all/flush transaction.
+        let _zero_write_hold = match shared_telemetry
+            .open_dmx_safety_write_gate
+            .reserve_zero_write_bounded(SHOW_SERIAL_DMX_ZERO_WRITE_TIMEOUT)
+        {
+            Ok(reservation) => reservation,
+            Err(error) => {
+                let shutdown_error = sender
+                    .shutdown_open_dmx_bounded(SHOW_SERIAL_DMX_ZERO_WRITE_TIMEOUT)
+                    .err();
+                let detail = format!(
+                    "Show serial DMX worker could not reserve the physical S0 zero write within the bounded interval: {error}. No physical zero transaction was queued or confirmed; a fixture may retain its last look. Engine S0 remains engaged; inspect the separate Art-Net mirror state before claiming Art-Net delivery. USB electrical safety is unverified. bounded shutdown fault={}",
+                    shutdown_error.as_deref().unwrap_or("none"),
+                );
+                shared_telemetry.set_show_serial_dmx_route_status(ShowSerialDmxRouteStatus {
+                    active: false,
+                    zero_frame_queued: false,
+                    zero_frame_physical_write_completed: false,
+                    live_frame_queued: false,
+                    worker_shutdown_completed: shutdown_error.is_none(),
+                    faulted: true,
+                    artnet_mirror_live,
+                    artnet_mirror_detail: artnet_mirror_detail.clone(),
+                    detail: detail.clone(),
+                });
+                self.safety_blackout_engaged = true;
+                self.last_error = Some(detail.clone());
+                return Err(detail);
+            }
+        };
+        let zero = [0u8; 512];
+        let zero_receipt = match sender.open_dmx_zero_write_receipt() {
+            Ok(receipt) => receipt,
+            Err(error) => {
+                let detail = self.fail_show_serial_dmx_activation_after_worker_creation(
+                    &shared_telemetry,
+                    &mut sender,
+                    false,
+                    "could not prepare its initial S0 blackout receipt",
+                    error,
+                );
+                return Err(detail);
+            }
+        };
+        let zero_queued = match sender.send_dmx_frame(SHOW_SERIAL_DMX_UNIVERSE, &zero) {
+            Ok(_) => true,
+            Err(error) => {
+                let detail = self.fail_show_serial_dmx_activation_after_worker_creation(
+                    &shared_telemetry,
+                    &mut sender,
+                    false,
+                    "could not queue its initial S0 blackout",
+                    error,
+                );
+                return Err(detail);
+            }
+        };
+        if let Err(error) =
+            sender.wait_for_open_dmx_zero_write(zero_receipt, SHOW_SERIAL_DMX_ZERO_WRITE_TIMEOUT)
+        {
+            let detail = self.fail_show_serial_dmx_activation_after_worker_creation(
+                &shared_telemetry,
+                &mut sender,
+                zero_queued,
+                "did not complete its initial physical S0 zero write",
+                error,
+            );
+            return Err(detail);
+        }
+        self.show_serial_dmx_route = Some(RuntimeShowSerialDmxRoute {
+            sender: Some(sender),
+        });
+        self.clear_managed_show_dmx_fail_stop_completion();
+        shared_telemetry.set_show_serial_dmx_route_status(ShowSerialDmxRouteStatus {
+            active: true,
+            zero_frame_queued: true,
+            zero_frame_physical_write_completed: true,
+            live_frame_queued: false,
+            worker_shutdown_completed: false,
+            faulted: false,
+            artnet_mirror_live,
+            artnet_mirror_detail,
+            detail: "Open DMX worker is armed only after an initial physical S0 zero transaction completed. Release Blackout admits the completed U0 mirror; this is not fixture or wire-delivery verification.".to_string(),
+        });
+        Ok(())
+    }
+
+    /// An Open-DMX worker exists at this point, so every activation failure
+    /// must consume it through the bounded shutdown path and leave an
+    /// observable sticky S0 fault.  In particular, receipt preparation and
+    /// queue admission are not allowed to fall through `?` into a default
+    /// "stopped" status while a failed worker is still owned by this call.
+    fn fail_show_serial_dmx_activation_after_worker_creation(
+        &mut self,
+        shared_telemetry: &EngineSharedTelemetry,
+        sender: &mut DmxSender,
+        zero_frame_queued: bool,
+        stage: &str,
+        error: String,
+    ) -> String {
+        let shutdown_error = sender
+            .shutdown_open_dmx_bounded(SHOW_SERIAL_DMX_ZERO_WRITE_TIMEOUT)
+            .err();
+        self.safety_blackout_engaged = true;
+        let detail = format!(
+            "Show serial DMX worker {stage}: {error}. Initial S0 queue acceptance={zero_frame_queued}; physical zero completion=false; bounded shutdown fault={}. S0 remains engaged; a fixture may retain its last look, and USB electrical safety is unverified.",
+            shutdown_error.as_deref().unwrap_or("none"),
+        );
+        let (artnet_mirror_live, artnet_mirror_detail) =
+            self.show_serial_dmx_artnet_mirror_status();
+        shared_telemetry.set_show_serial_dmx_route_status(ShowSerialDmxRouteStatus {
+            active: false,
+            zero_frame_queued,
+            zero_frame_physical_write_completed: false,
+            live_frame_queued: false,
+            worker_shutdown_completed: shutdown_error.is_none(),
+            faulted: true,
+            artnet_mirror_live,
+            artnet_mirror_detail,
+            detail: detail.clone(),
+        });
+        self.last_error = Some(detail.clone());
+        detail
+    }
+
+    /// Prove only the caller's observed authority tuple. A value that is
+    /// stale is safe to reject before commit. A lock/read failure is not a
+    /// stale observation: it is an unprovable boundary and must be retired
+    /// after the consumed operation crosses commit.
+    fn managed_show_dmx_fail_stop_authority_preflight(
+        &self,
+        expected_safety_epoch: u64,
+        expected_safety_generation: u64,
+        expected_failure_epoch: u64,
+    ) -> ManagedShowDmxFailStopAuthorityCheck {
+        let ownership = self.output_ownership_gate.status();
+        if ownership.state != OutputOwnershipState::Failed
+            || ownership.role != MachineOutputRole::Standby
+            || ownership.effective_role != MachineOutputRole::Standby
+            || ownership.desired_role != MachineOutputRole::Both
+            || ownership.lighting_allowed
+            || ownership.epoch != expected_failure_epoch
+        {
+            return ManagedShowDmxFailStopAuthorityCheck::RejectedBeforeCommit(
+                "Managed show DMX fail-stop requires the exact Failed/Standby local Both failure fence epoch"
+                    .to_string(),
+            );
+        }
+        let safety = match self.shared_telemetry.try_safety_blackout_authority() {
+            Ok(safety) => safety,
+            Err(error) => {
+                return ManagedShowDmxFailStopAuthorityCheck::InDoubtAfterCommit(format!(
+                    "Managed show DMX fail-stop cannot prove current S0 authority: {error}"
+                ));
+            }
+        };
+        if !safety.engaged
+            || safety.epoch != expected_safety_epoch
+            || safety.generation != expected_safety_generation
+        {
+            return ManagedShowDmxFailStopAuthorityCheck::RejectedBeforeCommit(
+                "Managed show DMX fail-stop requires its exact already-engaged S0 authority"
+                    .to_string(),
+            );
+        }
+        ManagedShowDmxFailStopAuthorityCheck::Exact
+    }
+
+    /// Verify the only topology that this one managed fail-stop understands.
+    /// This routine is deliberately pure. Its caller has already crossed the
+    /// consumed commit boundary, so an ambiguous route cannot be mistaken for
+    /// a harmless retry/cancellation and must subsequently be all-deny
+    /// retired by the command handler.
+    fn managed_show_dmx_fail_stop_topology_preflight(&self) -> Result<(), String> {
+        if !self
+            .shared_telemetry
+            .open_dmx_safety_write_gate
+            .blackout_engaged()
+            .map_err(|error| {
+                format!("Managed show DMX fail-stop cannot read physical S0 latch: {error}")
+            })?
+        {
+            return Err(
+                "Managed show DMX fail-stop requires the physical Open DMX S0 latch".to_string(),
+            );
+        }
+        if !self.additional_dmx_outputs.is_empty()
+            || self
+                .dmx_input_frames
+                .contains_key(&SHOW_ARTNET_LOOPBACK_UNIVERSE)
+        {
+            return Err(
+                "Managed show DMX fail-stop rejects additional DMX routes and Universe 0 input/merge state"
+                    .to_string(),
+            );
+        }
+        if self.show_serial_dmx_route.is_none() {
+            return Err(
+                "Managed show DMX fail-stop found no retained USB-DMX route for its exact worker proof"
+                    .to_string(),
+            );
+        }
+        if self
+            .show_serial_dmx_route
+            .as_ref()
+            .is_none_or(|route| route.sender.is_none())
+        {
+            return Err(
+                "Managed show DMX fail-stop found a USB-DMX route without its retained exact Open DMX sender"
+                    .to_string(),
+            );
+        }
+
+        if self.has_exact_live_show_serial_dmx_artnet_mirror() {
+            Ok(())
+        } else if show_artnet_loopback_route_is_exact_staged(&self.output)
+            && self.dmx_sender.is_none()
+        {
+            // The primary route was already removed by the same exact failure
+            // fence.  The fail-stop still sends its one fixed local zero
+            // datagram; it never recreates a persistent sender.
+            Ok(())
+        } else {
+            Err(
+                "Managed show DMX fail-stop requires either the exact live Art-Net 127.0.0.1:6454/U0 sender or the exact disabled-and-absent route"
+                    .to_string(),
+            )
+        }
+    }
+
+    fn managed_show_dmx_terminal_absent(&self) -> bool {
+        self.dmx_sender.is_none()
+            && self.show_serial_dmx_route.is_none()
+            && self
+                .additional_dmx_outputs
+                .iter()
+                .all(|output| output.sender.is_none())
+            && self.dmx_sender_recovery.consecutive_failures == 0
+            && self.dmx_sender_recovery.reconnect_attempts == 0
+            && self.dmx_sender_recovery.next_retry_at.is_none()
+            && self.dmx_sender_recovery.last_error.is_none()
+            && self.additional_dmx_outputs.iter().all(|output| {
+                output.recovery.consecutive_failures == 0
+                    && output.recovery.reconnect_attempts == 0
+                    && output.recovery.next_retry_at.is_none()
+                    && output.recovery.last_error.is_none()
+            })
+    }
+
+    fn clear_managed_show_dmx_fail_stop_completion(&mut self) {
+        self.managed_show_dmx_fail_stop_completion = None;
+    }
+
+    fn exact_managed_show_dmx_fail_stop_completion(
+        &self,
+        expected_safety_epoch: u64,
+        expected_safety_generation: u64,
+        expected_failure_epoch: u64,
+    ) -> Option<ManagedShowDmxFailStopCompletionEvidence> {
+        let evidence = self.managed_show_dmx_fail_stop_completion?;
+        if evidence.completion_generation == 0
+            || !evidence.safety.engaged
+            || evidence.safety.epoch != expected_safety_epoch
+            || evidence.safety.generation != expected_safety_generation
+            || evidence.failure_epoch != expected_failure_epoch
+            || evidence.dmx_route_configuration_generation
+                != self.dmx_route_configuration_generation
+            || !self.managed_show_dmx_terminal_absent()
+        {
+            return None;
+        }
+        let serial = self
+            .shared_telemetry
+            .try_show_serial_dmx_route_status_snapshot()
+            .ok()?;
+        if serial.revision != evidence.serial_status_revision
+            || serial.status.active
+            || serial.status.live_frame_queued
+            || !serial.status.zero_frame_physical_write_completed
+            || !serial.status.worker_shutdown_completed
+            || serial.status.faulted
+            || serial.status.artnet_mirror_live
+        {
+            return None;
+        }
+        Some(evidence)
+    }
+
+    #[cfg(test)]
+    fn install_managed_show_dmx_fail_stop_test_transport(
+        &mut self,
+        packets: Arc<Mutex<Vec<[u8; 530]>>>,
+        event_log: Arc<Mutex<Vec<ManagedShowDmxFailStopTestEvent>>>,
+    ) {
+        self.managed_show_dmx_fail_stop_test_artnet_packets = Some(packets);
+        self.managed_show_dmx_fail_stop_test_artnet_result = None;
+        self.managed_show_dmx_fail_stop_test_artnet_before_result = None;
+        self.managed_show_dmx_fail_stop_test_socket_bind_error = None;
+        self.managed_show_dmx_fail_stop_test_after_admit_before_commit = None;
+        self.managed_show_dmx_fail_stop_test_event_log = Some(event_log);
+    }
+
+    #[cfg(test)]
+    fn install_managed_show_dmx_fail_stop_test_transport_result(
+        &mut self,
+        packets: Arc<Mutex<Vec<[u8; 530]>>>,
+        result: Result<usize, String>,
+    ) {
+        self.managed_show_dmx_fail_stop_test_artnet_packets = Some(packets);
+        self.managed_show_dmx_fail_stop_test_artnet_result = Some(result);
+        self.managed_show_dmx_fail_stop_test_artnet_before_result = None;
+        self.managed_show_dmx_fail_stop_test_socket_bind_error = None;
+        self.managed_show_dmx_fail_stop_test_after_admit_before_commit = None;
+        self.managed_show_dmx_fail_stop_test_event_log = None;
+    }
+
+    #[cfg(test)]
+    fn install_managed_show_dmx_fail_stop_test_transport_barrier(
+        &mut self,
+        packets: Arc<Mutex<Vec<[u8; 530]>>>,
+        before_result: Arc<dyn Fn(&[u8; 530]) + Send + Sync>,
+    ) {
+        self.managed_show_dmx_fail_stop_test_artnet_packets = Some(packets);
+        self.managed_show_dmx_fail_stop_test_artnet_result = None;
+        self.managed_show_dmx_fail_stop_test_artnet_before_result = Some(before_result);
+        self.managed_show_dmx_fail_stop_test_socket_bind_error = None;
+        self.managed_show_dmx_fail_stop_test_after_admit_before_commit = None;
+        self.managed_show_dmx_fail_stop_test_event_log = None;
+    }
+
+    #[cfg(test)]
+    fn install_managed_show_dmx_fail_stop_test_socket_bind_error(
+        &mut self,
+        error: impl Into<String>,
+    ) {
+        self.managed_show_dmx_fail_stop_test_artnet_packets = None;
+        self.managed_show_dmx_fail_stop_test_artnet_result = None;
+        self.managed_show_dmx_fail_stop_test_artnet_before_result = None;
+        self.managed_show_dmx_fail_stop_test_socket_bind_error = Some(error.into());
+        self.managed_show_dmx_fail_stop_test_after_admit_before_commit = None;
+        self.managed_show_dmx_fail_stop_test_event_log = None;
+    }
+
+    #[cfg(test)]
+    fn install_managed_show_dmx_fail_stop_test_after_admit_before_commit(
+        &mut self,
+        callback: Arc<dyn Fn() + Send + Sync>,
+    ) {
+        self.managed_show_dmx_fail_stop_test_after_admit_before_commit = Some(callback);
+    }
+
+    #[cfg(test)]
+    fn record_managed_show_dmx_fail_stop_test_event(&self, event: ManagedShowDmxFailStopTestEvent) {
+        if let Some(event_log) = &self.managed_show_dmx_fail_stop_test_event_log {
+            event_log
+                .lock()
+                .expect("managed fail-stop test event log must not be poisoned")
+                .push(event);
+        }
+    }
+
+    /// Retire any remaining runtime senders after an admitted transaction did
+    /// not prove completion.  This is deliberately not a success path: it
+    /// preserves S0, records a fault if USB is still present, leaves the
+    /// ownership gate Failed, and never recreates a route or returns a receipt.
+    fn best_effort_retire_managed_show_dmx_after_fail_stop_error(&mut self, cause: &str) {
+        self.clear_managed_show_dmx_fail_stop_completion();
+        // This path runs only after the consumed operation crossed commit.
+        // Call the bounded USB fault path even when the route is already
+        // absent: a missing worker is not evidence that its last frame was
+        // safe, and the fault path latches S0 plus publishes the sticky
+        // non-active status that blocks a later release.
+        self.fault_show_serial_dmx_route(cause);
+        // `fault_show_serial_dmx_route` snapshots Art-Net truth before this
+        // cleanup clears the primary sender. Re-publish the same USB fault
+        // facts after sender retirement so an observer cannot retain a stale
+        // `artnet_mirror_live=true` while every DMX sender is absent.
+        let prior_serial_status = self.shared_telemetry.show_serial_dmx_route_status();
+        self.dmx_sender = None;
+        self.dmx_sender_recovery = DmxRouteRecovery::default();
+        self.dmx_input_frames.remove(&SHOW_ARTNET_LOOPBACK_UNIVERSE);
+        for output in &mut self.additional_dmx_outputs {
+            output.sender = None;
+            output.recovery = DmxRouteRecovery::default();
+        }
+        self.output_ownership_role = MachineOutputRole::Standby;
+        self.shared_telemetry
+            .set_show_serial_dmx_route_status(ShowSerialDmxRouteStatus {
+                active: false,
+                zero_frame_queued: prior_serial_status.zero_frame_queued,
+                zero_frame_physical_write_completed: prior_serial_status
+                    .zero_frame_physical_write_completed,
+                live_frame_queued: false,
+                worker_shutdown_completed: prior_serial_status.worker_shutdown_completed,
+                faulted: true,
+                artnet_mirror_live: false,
+                artnet_mirror_detail: "Managed fail-stop cleanup retired every runtime DMX sender after an ambiguous transaction; Art-Net mirror is absent. This remains route state only, not receiver or wire delivery proof.".to_string(),
+                // Preserve the USB-side fault description rather than
+                // replacing it with a generic cleanup message. Operators
+                // need the bounded physical-zero/shutdown error that caused
+                // this all-deny terminal state.
+                detail: prior_serial_status.detail,
+            });
+        self.last_error = Some(format!(
+            "Managed show DMX fail-stop is InDoubt: {cause}. S0 remains engaged; all runtime DMX senders were retired without a success receipt."
+        ));
+    }
+
+    fn apply_managed_show_dmx_fail_stop_with_transport(
+        &mut self,
+        expected_safety_epoch: u64,
+        expected_safety_generation: u64,
+        expected_failure_epoch: u64,
+        operation: &ManagedShowDmxFailStopOperationInner,
+        send: &mut dyn FnMut(&[u8; 530]) -> Result<usize, String>,
+    ) -> Result<ManagedShowDmxFailStopReceipt, ManagedShowDmxFailStopError> {
+        match self.managed_show_dmx_fail_stop_authority_preflight(
+            expected_safety_epoch,
+            expected_safety_generation,
+            expected_failure_epoch,
+        ) {
+            ManagedShowDmxFailStopAuthorityCheck::Exact => {}
+            ManagedShowDmxFailStopAuthorityCheck::RejectedBeforeCommit(error) => {
+                return Err(ManagedShowDmxFailStopError::rejected(error));
+            }
+            ManagedShowDmxFailStopAuthorityCheck::InDoubtAfterCommit(error) => {
+                if !operation.begin_commit() {
+                    return Err(ManagedShowDmxFailStopError::cancelled(
+                        "Managed show DMX fail-stop was cancelled before the physical commit boundary",
+                    ));
+                }
+                return Err(ManagedShowDmxFailStopError::in_doubt(error));
+            }
+        }
+        // The S0 enqueue gate serializes the exact recheck and the one local
+        // ArtDmx acceptance boundary with a concurrent safety reservation.
+        let shared_telemetry = Arc::clone(&self.shared_telemetry);
+        let _safety_enqueue_gate = match shared_telemetry.safety_blackout_enqueue_gate.lock() {
+            Ok(gate) => gate,
+            Err(_) => {
+                if !operation.begin_commit() {
+                    return Err(ManagedShowDmxFailStopError::cancelled(
+                        "Managed show DMX fail-stop was cancelled before the physical commit boundary",
+                    ));
+                }
+                return Err(ManagedShowDmxFailStopError::in_doubt(
+                    "Managed show DMX fail-stop safety enqueue gate was poisoned before exact topology proof",
+                ));
+            }
+        };
+        let pending_safety_change = match shared_telemetry.has_pending_safety_blackout_enqueue() {
+            Ok(pending) => pending,
+            Err(error) => {
+                if !operation.begin_commit() {
+                    return Err(ManagedShowDmxFailStopError::cancelled(
+                        "Managed show DMX fail-stop was cancelled before the physical commit boundary",
+                    ));
+                }
+                return Err(ManagedShowDmxFailStopError::in_doubt(format!(
+                    "Managed show DMX fail-stop cannot prove queued S0 authority ordering: {error}"
+                )));
+            }
+        };
+        if pending_safety_change {
+            return Err(ManagedShowDmxFailStopError::rejected(
+                "Managed show DMX fail-stop was superseded by a queued safety authority change",
+            ));
+        }
+        match self.managed_show_dmx_fail_stop_authority_preflight(
+            expected_safety_epoch,
+            expected_safety_generation,
+            expected_failure_epoch,
+        ) {
+            ManagedShowDmxFailStopAuthorityCheck::Exact => {}
+            ManagedShowDmxFailStopAuthorityCheck::RejectedBeforeCommit(error) => {
+                return Err(ManagedShowDmxFailStopError::rejected(error));
+            }
+            ManagedShowDmxFailStopAuthorityCheck::InDoubtAfterCommit(error) => {
+                if !operation.begin_commit() {
+                    return Err(ManagedShowDmxFailStopError::cancelled(
+                        "Managed show DMX fail-stop was cancelled before the physical commit boundary",
+                    ));
+                }
+                return Err(ManagedShowDmxFailStopError::in_doubt(error));
+            }
+        }
+        if let Some(completed) = self.exact_managed_show_dmx_fail_stop_completion(
+            expected_safety_epoch,
+            expected_safety_generation,
+            expected_failure_epoch,
+        ) {
+            // This is a duplicate of an already-completed terminal
+            // transaction, not a missing-worker topology. Do not mint a new
+            // S0 generation or overwrite the non-faulted terminal status; the
+            // operation receives no second receipt or physical action.
+            return Err(ManagedShowDmxFailStopError::rejected(format!(
+                "Managed show DMX fail-stop was already completed for exact terminal generation {}; replay is rejected without a second physical action",
+                completed.completion_generation,
+            )));
+        }
+        if !operation.begin_commit() {
+            return Err(ManagedShowDmxFailStopError::cancelled(
+                "Managed show DMX fail-stop was cancelled before the physical commit boundary",
+            ));
+        }
+        // A prior completed marker can never certify this fresh physical
+        // transaction. It is replaced only after every terminal proof below
+        // succeeds; an error after this point stays InDoubt/faulted.
+        self.clear_managed_show_dmx_fail_stop_completion();
+
+        self.managed_show_dmx_fail_stop_topology_preflight()
+            .map_err(ManagedShowDmxFailStopError::in_doubt)?;
+
+        let packet = build_art_dmx_packet(SHOW_ARTNET_LOOPBACK_UNIVERSE, &[0u8; 512]);
+        let sent = send(&packet)
+            .map_err(|error| {
+                ManagedShowDmxFailStopError::in_doubt(format!(
+                    "Managed show DMX fail-stop local Art-Net zero send is physically ambiguous: {error}",
+                ))
+            })?;
+        if sent != packet.len() {
+            return Err(ManagedShowDmxFailStopError::in_doubt(format!(
+                "Managed show DMX fail-stop local Art-Net zero wrote {sent} of {} bytes",
+                packet.len(),
+            )));
+        }
+        #[cfg(test)]
+        self.record_managed_show_dmx_fail_stop_test_event(
+            ManagedShowDmxFailStopTestEvent::ArtNetZeroAccepted,
+        );
+
+        // The normal USB stop owns the same gate while it revalidates S0 and
+        // reserves the bounded physical-zero write.  Release our Art-Net
+        // linearization guard first: the serial routine performs the final
+        // exact S0 check itself, so a concurrent release fails closed rather
+        // than deadlocking this one irreversible transaction.
+        drop(_safety_enqueue_gate);
+
+        self.apply_show_serial_dmx_safety_blackout_route_stop(
+            expected_safety_epoch,
+            expected_safety_generation,
+        )
+        .map_err(|error| {
+            ManagedShowDmxFailStopError::in_doubt(format!(
+                "Managed show DMX fail-stop USB physical-zero retirement did not complete: {error}",
+            ))
+        })?;
+        let serial = self
+            .shared_telemetry
+            .try_show_serial_dmx_route_status_snapshot()
+            .map_err(|error| {
+                ManagedShowDmxFailStopError::in_doubt(format!(
+                    "Managed show DMX fail-stop cannot prove USB terminal status: {error}",
+                ))
+            })?;
+        #[cfg(test)]
+        if serial.status.zero_frame_physical_write_completed {
+            self.record_managed_show_dmx_fail_stop_test_event(
+                ManagedShowDmxFailStopTestEvent::UsbZeroPhysicalCompleted,
+            );
+        }
+        #[cfg(test)]
+        if serial.status.worker_shutdown_completed {
+            self.record_managed_show_dmx_fail_stop_test_event(
+                ManagedShowDmxFailStopTestEvent::WorkerShutdownCompleted,
+            );
+        }
+        if serial.status.active
+            || serial.status.live_frame_queued
+            || !serial.status.zero_frame_physical_write_completed
+            || !serial.status.worker_shutdown_completed
+            || serial.status.faulted
+        {
+            return Err(ManagedShowDmxFailStopError::in_doubt(
+                "Managed show DMX fail-stop USB terminal status was not exact inactive/zero-physical/shutdown-complete/non-faulted",
+            ));
+        }
+
+        // Only now retire the Art-Net sender and recovery metadata.  Do not
+        // publish a new ownership status: the expected failure fence remains
+        // the durable all-deny authority while runtime role becomes Standby.
+        self.dmx_sender = None;
+        self.dmx_sender_recovery = DmxRouteRecovery::default();
+        for output in &mut self.additional_dmx_outputs {
+            output.sender = None;
+            output.recovery = DmxRouteRecovery::default();
+        }
+        self.output_ownership_role = MachineOutputRole::Standby;
+        self.shared_telemetry
+            .set_show_serial_dmx_route_status(ShowSerialDmxRouteStatus {
+                active: false,
+                zero_frame_queued: serial.status.zero_frame_queued,
+                zero_frame_physical_write_completed: true,
+                live_frame_queued: false,
+                worker_shutdown_completed: true,
+                faulted: false,
+                artnet_mirror_live: false,
+                artnet_mirror_detail: "Managed fail-stop retired the exact local Art-Net sender after one accepted zero datagram. This remains route state only, not receiver or wire delivery proof.".to_string(),
+                detail: "Managed show DMX fail-stop completed: local Art-Net zero acceptance preceded USB physical-zero completion and bounded worker shutdown; all runtime DMX senders are absent.".to_string(),
+            });
+        let serial = self
+            .shared_telemetry
+            .try_show_serial_dmx_route_status_snapshot()
+            .map_err(|error| {
+                ManagedShowDmxFailStopError::in_doubt(format!(
+                    "Managed show DMX fail-stop cannot prove final sender-absent status: {error}",
+                ))
+            })?;
+        let ownership = self.output_ownership_gate.status();
+        if ownership.state != OutputOwnershipState::Failed
+            || ownership.effective_role != MachineOutputRole::Standby
+            || ownership.desired_role != MachineOutputRole::Both
+            || ownership.lighting_allowed
+            || ownership.epoch != expected_failure_epoch
+            || serial.status.active
+            || serial.status.live_frame_queued
+            || !serial.status.zero_frame_physical_write_completed
+            || !serial.status.worker_shutdown_completed
+            || serial.status.faulted
+            || serial.status.artnet_mirror_live
+            || !self.managed_show_dmx_terminal_absent()
+        {
+            return Err(ManagedShowDmxFailStopError::in_doubt(
+                "Managed show DMX fail-stop terminal sender, recovery, or failure-fence proof was lost",
+            ));
+        }
+        let completion_generation = self
+            .managed_show_dmx_fail_stop_completion_generation
+            .checked_add(1)
+            .ok_or_else(|| {
+                ManagedShowDmxFailStopError::in_doubt(
+                    "Managed show DMX fail-stop completion generation was exhausted; terminal proof cannot be reused",
+                )
+            })?;
+        let safety = SafetyBlackoutAuthority {
+            engaged: true,
+            epoch: expected_safety_epoch,
+            generation: expected_safety_generation,
+        };
+        self.managed_show_dmx_fail_stop_completion_generation = completion_generation;
+        self.managed_show_dmx_fail_stop_completion =
+            Some(ManagedShowDmxFailStopCompletionEvidence {
+                completion_generation,
+                safety,
+                failure_epoch: expected_failure_epoch,
+                dmx_route_configuration_generation: self.dmx_route_configuration_generation,
+                serial_status_revision: serial.revision,
+            });
+        Ok(ManagedShowDmxFailStopReceipt {
+            safety,
+            failure_epoch: expected_failure_epoch,
+            artnet_zero_accepted: true,
+            serial_status_revision: serial.revision,
+        })
+    }
+
+    fn apply_managed_show_dmx_fail_stop(
+        &mut self,
+        expected_safety_epoch: u64,
+        expected_safety_generation: u64,
+        expected_failure_epoch: u64,
+        operation: &ManagedShowDmxFailStopOperationInner,
+    ) -> Result<ManagedShowDmxFailStopReceipt, ManagedShowDmxFailStopError> {
+        #[cfg(test)]
+        if let Some(packets) = self.managed_show_dmx_fail_stop_test_artnet_packets.clone() {
+            // The public worker handler intentionally reaches the same core
+            // transaction under this deterministic test-only transport. It
+            // cannot exist outside `cfg(test)`, where the production path is
+            // always the fixed local UDP one-shot below.
+            let result = self.managed_show_dmx_fail_stop_test_artnet_result.clone();
+            let before_result = self
+                .managed_show_dmx_fail_stop_test_artnet_before_result
+                .clone();
+            let mut send = move |packet: &[u8; 530]| {
+                packets
+                    .lock()
+                    .map_err(|_| {
+                        "Managed show DMX fail-stop test Art-Net packet log was poisoned"
+                            .to_string()
+                    })?
+                    .push(*packet);
+                if let Some(before_result) = &before_result {
+                    before_result(packet);
+                }
+                result.clone().unwrap_or_else(|| Ok(packet.len()))
+            };
+            return self.apply_managed_show_dmx_fail_stop_with_transport(
+                expected_safety_epoch,
+                expected_safety_generation,
+                expected_failure_epoch,
+                operation,
+                &mut send,
+            );
+        }
+        // Socket creation is intentionally inside the first send closure.
+        // `apply_*_with_transport` invokes that closure only after the
+        // operation has crossed its consumed commit boundary and the exact
+        // topology was inspected. A bind failure is therefore physically
+        // unprovable/InDoubt and must run the same all-deny cleanup as an
+        // accepted-but-ambiguous send; it is never a retryable pre-commit
+        // rejection.
+        let mut socket = None;
+        #[cfg(test)]
+        let test_socket_bind_error = self
+            .managed_show_dmx_fail_stop_test_socket_bind_error
+            .take();
+        let mut send = |packet: &[u8; 530]| {
+            #[cfg(test)]
+            if let Some(error) = test_socket_bind_error.as_ref() {
+                return Err(format!(
+                    "Managed show DMX fail-stop local Art-Net socket bind failed: {error}"
+                ));
+            }
+            if socket.is_none() {
+                let bound =
+                    UdpSocket::bind((SHOW_ARTNET_LOOPBACK_TARGET_IP, 0)).map_err(|error| {
+                        format!(
+                            "Managed show DMX fail-stop local Art-Net socket bind failed: {error}"
+                        )
+                    })?;
+                let _ = bound.set_write_timeout(Some(Duration::from_millis(2)));
+                socket = Some(bound);
+            }
+            socket
+                .as_ref()
+                .expect("managed fail-stop socket is initialized before send")
+                .send_to(
+                    packet,
+                    (SHOW_ARTNET_LOOPBACK_TARGET_IP, SHOW_ARTNET_LOOPBACK_PORT),
+                )
+                .map_err(|error| error.to_string())
+        };
+        self.apply_managed_show_dmx_fail_stop_with_transport(
+            expected_safety_epoch,
+            expected_safety_generation,
+            expected_failure_epoch,
+            operation,
+            &mut send,
+        )
+    }
+
+    #[cfg(test)]
+    fn apply_managed_show_dmx_fail_stop_with_test_artnet_transport(
+        &mut self,
+        expected_safety_epoch: u64,
+        expected_safety_generation: u64,
+        expected_failure_epoch: u64,
+        operation: &ManagedShowDmxFailStopOperationInner,
+        send: &mut dyn FnMut(&[u8; 530]) -> Result<usize, String>,
+    ) -> Result<ManagedShowDmxFailStopReceipt, ManagedShowDmxFailStopError> {
+        self.apply_managed_show_dmx_fail_stop_with_transport(
+            expected_safety_epoch,
+            expected_safety_generation,
+            expected_failure_epoch,
+            operation,
+            send,
+        )
+    }
+
+    fn apply_show_serial_dmx_safety_blackout_route_stop(
+        &mut self,
+        expected_safety_epoch: u64,
+        expected_safety_generation: u64,
+    ) -> Result<(), String> {
+        if self.show_serial_dmx_route.is_none() {
+            return Err("Show serial DMX worker is not active".to_string());
+        }
+        let safety = self.shared_telemetry.safety_blackout_authority();
+        if !safety.engaged
+            || safety.epoch != expected_safety_epoch
+            || safety.generation != expected_safety_generation
+        {
+            return Err("Show serial DMX worker stop requires the exact currently-engaged S0 safety blackout authority".to_string());
+        }
+        let (artnet_mirror_live, artnet_mirror_detail) =
+            self.show_serial_dmx_artnet_mirror_status();
+        // Latch the safer direction before any bounded physical-gate wait.
+        // A wedged driver may still finish its in-progress frame, but no
+        // later worker selection may become live while stop is resolving.
+        self.shared_telemetry
+            .open_dmx_safety_write_gate
+            .latch_blackout();
+        // Block concurrent live enqueueing, then reserve the physical
+        // zero-only direction independently of a concurrent normal release.
+        // The worker must complete a real zero transaction before shutdown;
+        // it is not enough merely to replace its bounded queue entry.
+        let _enqueue_gate = self
+            .shared_telemetry
+            .safety_blackout_enqueue_gate
+            .lock()
+            .map_err(|_| {
+                "Safety blackout enqueue gate was poisoned before show serial DMX stop".to_string()
+            })?;
+        // Take the sender before waiting for the physical gate. If the driver
+        // is wedged, every exit below first calls shutdown_bounded so Drop can
+        // never fall back to an unbounded JoinHandle::join.
+        let mut route = self
+            .show_serial_dmx_route
+            .take()
+            .expect("presence was checked");
+        let mut sender = route
+            .sender
+            .take()
+            .ok_or_else(|| "Show serial DMX worker sender was unexpectedly absent".to_string())?;
+        let _zero_write_hold = match self
+            .shared_telemetry
+            .open_dmx_safety_write_gate
+            .reserve_zero_write_bounded(SHOW_SERIAL_DMX_ZERO_WRITE_TIMEOUT)
+        {
+            Ok(reservation) => reservation,
+            Err(gate_error) => {
+                let shutdown_error = sender
+                    .shutdown_open_dmx_bounded(SHOW_SERIAL_DMX_ZERO_WRITE_TIMEOUT)
+                    .err();
+                self.safety_blackout_engaged = true;
+                let detail = format!(
+                    "Open DMX worker stop could not acquire the physical S0 gate within the bounded interval: {gate_error}. No physical zero transaction was queued or confirmed; a fixture may retain its last look. Engine S0 remains engaged; inspect the separate Art-Net mirror state before claiming Art-Net delivery. USB electrical safety is unverified. bounded shutdown fault={}",
+                    shutdown_error.as_deref().unwrap_or("none"),
+                );
+                self.shared_telemetry
+                    .set_show_serial_dmx_route_status(ShowSerialDmxRouteStatus {
+                        active: false,
+                        zero_frame_queued: false,
+                        zero_frame_physical_write_completed: false,
+                        live_frame_queued: false,
+                        worker_shutdown_completed: shutdown_error.is_none(),
+                        faulted: true,
+                        artnet_mirror_live,
+                        artnet_mirror_detail: artnet_mirror_detail.clone(),
+                        detail: detail.clone(),
+                    });
+                self.last_error = Some(detail.clone());
+                return Err(detail);
+            }
+        };
+        let zero = [0u8; 512];
+        let zero_receipt = sender.open_dmx_zero_write_receipt();
+        let zero_queued = sender
+            .send_dmx_frame(SHOW_SERIAL_DMX_UNIVERSE, &zero)
+            .is_ok();
+        let zero_completion = match (zero_receipt, zero_queued) {
+            (Ok(receipt), true) => {
+                sender.wait_for_open_dmx_zero_write(receipt, SHOW_SERIAL_DMX_ZERO_WRITE_TIMEOUT)
+            }
+            (Err(error), _) => Err(error),
+            (_, false) => Err("Show serial DMX worker rejected its stop zero frame".to_string()),
+        };
+        let stop_result = sender.shutdown_open_dmx_bounded(SHOW_SERIAL_DMX_ZERO_WRITE_TIMEOUT);
+        let worker_shutdown_completed = stop_result.is_ok();
+        match (zero_completion, stop_result) {
+            (Ok(()), Ok(())) => {
+                self.shared_telemetry
+                    .set_show_serial_dmx_route_status(ShowSerialDmxRouteStatus {
+                        active: false,
+                        zero_frame_queued: zero_queued,
+                        zero_frame_physical_write_completed: true,
+                        live_frame_queued: false,
+                        worker_shutdown_completed: true,
+                        faulted: false,
+                        artnet_mirror_live,
+                        artnet_mirror_detail: artnet_mirror_detail.clone(),
+                        detail: "Open DMX worker stopped after an S0 zero BREAK/MAB/write_all/flush transaction completed. This is not fixture or wire-delivery verification.".to_string(),
+                    });
+                Ok(())
+            }
+            (zero_completion, stop_result) => {
+                self.safety_blackout_engaged = true;
+                let zero_detail = zero_completion.err().unwrap_or_default();
+                let stop_detail = stop_result.err().unwrap_or_default();
+                self.shared_telemetry
+                    .set_show_serial_dmx_route_status(ShowSerialDmxRouteStatus {
+                        active: false,
+                        zero_frame_queued: zero_queued,
+                        zero_frame_physical_write_completed: false,
+                        live_frame_queued: false,
+                        worker_shutdown_completed,
+                        faulted: true,
+                        artnet_mirror_live,
+                        artnet_mirror_detail,
+                        detail: format!("Open DMX worker stop faulted without a confirmed physical S0 zero completion; a fixture may retain its last look. Engine S0 remains engaged; inspect the separate Art-Net mirror state before claiming Art-Net delivery. USB electrical safety is unverified. zero receipt: {zero_detail}; bounded shutdown: {stop_detail}"),
+                    });
+                self.last_error = Some(format!("Show serial DMX bounded stop fault: zero receipt: {zero_detail}; bounded shutdown: {stop_detail}"));
+                Err(format!("Show serial DMX bounded stop failed safely: zero receipt: {zero_detail}; bounded shutdown: {stop_detail}"))
+            }
+        }
+    }
+
+    /// Any USB worker fault is an S0-only transition. A missing/replaced or
+    /// disconnected interface cannot leave the completed show frame live on
+    /// another output route while the machine-local mirror is ambiguous.
+    fn fault_show_serial_dmx_route(&mut self, cause: &str) {
+        self.clear_managed_show_dmx_fail_stop_completion();
+        // This is intentionally before every status/authority mutex. A
+        // status observer may be slow or contended while the worker is
+        // selecting its next frame, so the lock-free physical direction must
+        // become S0-only at fault entry rather than after diagnostics publish.
+        self.shared_telemetry
+            .open_dmx_safety_write_gate
+            .latch_blackout();
+        // Make the fault sticky before releasing the authority mutex inside
+        // the bounded physical-gate attempt. A concurrent explicit Release
+        // Blackout must not clear the atomic S0 latch between fault detection
+        // and the final status below.
+        let (artnet_mirror_live, artnet_mirror_detail) =
+            self.show_serial_dmx_artnet_mirror_status();
+        self.shared_telemetry
+            .set_show_serial_dmx_route_status(ShowSerialDmxRouteStatus {
+                active: false,
+                zero_frame_queued: false,
+                zero_frame_physical_write_completed: false,
+                live_frame_queued: false,
+                worker_shutdown_completed: false,
+                faulted: true,
+                artnet_mirror_live,
+                artnet_mirror_detail: artnet_mirror_detail.clone(),
+                detail: format!(
+                    "USB-DMX worker fault is engaging S0: {cause}. Physical zero delivery is not yet confirmed."
+                ),
+            });
+        let safety_result = self
+            .shared_telemetry
+            .engage_safety_blackout_for_usb_fault(SHOW_SERIAL_DMX_ZERO_WRITE_TIMEOUT);
+        self.safety_blackout_engaged = true;
+        let mut zero_queued = false;
+        let mut zero_physical_write_completed = false;
+        let mut zero_write_error = None;
+        let mut shutdown_error = None;
+        let (authority_detail, physical_gate_confirmed) = match safety_result {
+            Ok((_, authority, Ok(()))) if authority.engaged => {
+                ("S0 logical authority and physical gate are engaged", true)
+            }
+            Ok((_, authority, Err(error))) if authority.engaged => {
+                zero_write_error = Some(format!(
+                    "physical S0 gate did not become available: {error}; no physical zero transaction was attempted"
+                ));
+                (
+                    "S0 logical authority is latched; physical gate is unconfirmed",
+                    false,
+                )
+            }
+            Ok((_, _, Err(error))) => {
+                zero_write_error = Some(format!(
+                    "physical S0 gate did not become available: {error}; no physical zero transaction was attempted"
+                ));
+                (
+                    "S0 authority was not confirmed; the local output latch remains fail-closed",
+                    false,
+                )
+            }
+            Ok((_, _, Ok(()))) => {
+                zero_write_error = Some(
+                    "S0 authority was not engaged; no physical zero transaction was attempted"
+                        .to_string(),
+                );
+                (
+                    "S0 authority was not confirmed; the local output latch remains fail-closed",
+                    false,
+                )
+            }
+            Err(error) => {
+                zero_write_error = Some(format!(
+                    "S0 authority transition failed: {error}; no physical zero transaction was attempted"
+                ));
+                (
+                    "S0 authority lock failed; the local output latch remains fail-closed",
+                    false,
+                )
+            }
+        };
+        if let Some(mut route) = self.show_serial_dmx_route.take() {
+            if let Some(mut sender) = route.sender.take() {
+                if physical_gate_confirmed {
+                    let zero_result = (|| -> Result<(), String> {
+                        let _enqueue_gate = self
+                            .shared_telemetry
+                            .safety_blackout_enqueue_gate
+                            .lock()
+                            .map_err(|_| {
+                                "Safety blackout enqueue gate was poisoned during USB-DMX fault"
+                                    .to_string()
+                            })?;
+                        let _zero_write_hold = self
+                            .shared_telemetry
+                            .open_dmx_safety_write_gate
+                            .reserve_zero_write_bounded(SHOW_SERIAL_DMX_ZERO_WRITE_TIMEOUT)
+                            .map_err(|error| {
+                                format!("USB-DMX fault could not reserve bounded S0 zero write: {error}")
+                            })?;
+                        let receipt = sender.open_dmx_zero_write_receipt()?;
+                        sender.send_dmx_frame(SHOW_SERIAL_DMX_UNIVERSE, &[0u8; 512])?;
+                        zero_queued = true;
+                        sender.wait_for_open_dmx_zero_write(
+                            receipt,
+                            SHOW_SERIAL_DMX_ZERO_WRITE_TIMEOUT,
+                        )?;
+                        zero_physical_write_completed = true;
+                        Ok(())
+                    })();
+                    if let Err(error) = zero_result {
+                        zero_write_error = Some(error);
+                    }
+                }
+                // Always consume the worker handle through the bounded path
+                // before `sender` drops. A wedge must detach, never reach the
+                // sender Drop implementation's unbounded join fallback.
+                if let Err(error) =
+                    sender.shutdown_open_dmx_bounded(SHOW_SERIAL_DMX_ZERO_WRITE_TIMEOUT)
+                {
+                    shutdown_error = Some(error);
+                }
+            }
+        }
+        let worker_shutdown_completed = shutdown_error.is_none();
+        let detail = format!(
+            "USB-DMX worker faulted: {cause}. {authority_detail}; zero queued={zero_queued}; physical zero completion={zero_physical_write_completed}; zero receipt fault={}; bounded shutdown fault={}. A fixture may retain its last look when physical zero completion is false; engine S0 remains engaged. Inspect the separate Art-Net mirror state before claiming Art-Net delivery. USB electrical safety is unverified. No fixture or wire delivery was verified.",
+            zero_write_error.unwrap_or_else(|| "none".to_string()),
+            shutdown_error.as_deref().unwrap_or("none"),
+        );
+        self.last_error = Some(detail.clone());
+        self.shared_telemetry
+            .set_show_serial_dmx_route_status(ShowSerialDmxRouteStatus {
+                active: false,
+                zero_frame_queued: zero_queued,
+                zero_frame_physical_write_completed: zero_physical_write_completed,
+                live_frame_queued: false,
+                worker_shutdown_completed,
+                faulted: true,
+                artnet_mirror_live,
+                artnet_mirror_detail,
+                detail,
+            });
     }
 
     /// Engine-owned final physical boundary for the DSF2026 one-shot probe.
@@ -49145,6 +51312,12 @@ impl EngineRuntime {
                     .to_string(),
             );
         }
+        if !self.show_spout_v2_targets_are_exact(expected_background, expected_foreground) {
+            return Err(
+                "Show Spout output activation requires unique Background Video2 Camera and Foreground Video 1 targets, distinct from Main"
+                    .to_string(),
+            );
+        }
         if !self.video_composition_exists(expected_background.composition_id) {
             return Err("Show Spout output composition no longer exists".to_string());
         }
@@ -49230,6 +51403,40 @@ impl EngineRuntime {
         )
     }
 
+    fn show_spout_v2_targets_are_exact(
+        &self,
+        background: &VideoOutputSummary,
+        foreground: &VideoOutputSummary,
+    ) -> bool {
+        if background.composition_id == SHOW_SPOUT_MAIN_COMPOSITION_ID
+            || foreground.composition_id == SHOW_SPOUT_MAIN_COMPOSITION_ID
+            || background.composition_id == foreground.composition_id
+        {
+            return false;
+        }
+        let mut background_matches = 0usize;
+        let mut foreground_matches = 0usize;
+        let mut main_label_collisions = 0usize;
+        for composition in &self.video_compositions {
+            if composition.summary.label == SHOW_SPOUT_MAIN_COMPOSITION_LABEL {
+                main_label_collisions += 1;
+            }
+            if composition.summary.label == SHOW_SPOUT_BACKGROUND_COMPOSITION_LABEL {
+                background_matches += 1;
+                if composition.summary.id != background.composition_id {
+                    return false;
+                }
+            }
+            if composition.summary.label == SHOW_SPOUT_FOREGROUND_COMPOSITION_LABEL {
+                foreground_matches += 1;
+                if composition.summary.id != foreground.composition_id {
+                    return false;
+                }
+            }
+        }
+        main_label_collisions == 0 && background_matches == 1 && foreground_matches == 1
+    }
+
     /// The strict show pair owns the entire Spout sender set for this show
     /// route. Generic Spout creation/configuration must not be allowed to
     /// introduce a third sender after the exact pair was admitted.
@@ -49241,20 +51448,35 @@ impl EngineRuntime {
             .map(|output| &output.summary)
             .collect::<Vec<_>>();
         spout.len() == 2
-            && spout
-                .iter()
-                .any(|output| show_spout_output_is_exact(output, SHOW_SPOUT_BACKGROUND_NAME))
-            && spout
-                .iter()
-                .any(|output| show_spout_output_is_exact(output, SHOW_SPOUT_FOREGROUND_NAME))
+            && spout.iter().any(|output| {
+                show_spout_output_is_exact(
+                    output,
+                    SHOW_SPOUT_BACKGROUND_NAME,
+                    output.composition_id,
+                )
+            })
+            && spout.iter().any(|output| {
+                show_spout_output_is_exact(
+                    output,
+                    SHOW_SPOUT_FOREGROUND_NAME,
+                    output.composition_id,
+                )
+            })
     }
 
     fn strict_show_spout_pair_owns_output(&self, output_id: VideoOutputId) -> bool {
         self.strict_show_spout_pair_is_active()
             && self.video_outputs.iter().any(|output| {
                 output.summary.id == output_id
-                    && (show_spout_output_is_exact(&output.summary, SHOW_SPOUT_BACKGROUND_NAME)
-                        || show_spout_output_is_exact(&output.summary, SHOW_SPOUT_FOREGROUND_NAME))
+                    && (show_spout_output_is_exact(
+                        &output.summary,
+                        SHOW_SPOUT_BACKGROUND_NAME,
+                        output.summary.composition_id,
+                    ) || show_spout_output_is_exact(
+                        &output.summary,
+                        SHOW_SPOUT_FOREGROUND_NAME,
+                        output.summary.composition_id,
+                    ))
             })
     }
 
@@ -49313,12 +51535,16 @@ impl EngineRuntime {
         Ok(())
     }
 
-    fn apply_show_spout_outputs_retire(
+    /// Compensation after a physical authority-loss teardown. This preserves
+    /// the historical best-effort contract: the known pair is removed even
+    /// when a third persisted Spout sender must remain as a visible fault.
+    /// It must never be used for an operator-requested Reset.
+    fn apply_show_spout_outputs_retire_after_authority_loss(
         &mut self,
         expected_background: &VideoOutputSummary,
         expected_foreground: &VideoOutputSummary,
     ) -> Result<(), String> {
-        if !show_spout_pair_is_exact(expected_background, expected_foreground) {
+        if !show_spout_pair_is_resettable(expected_background, expected_foreground) {
             return Err(
                 "Show Spout output retirement did not name the exact fixed pair".to_string(),
             );
@@ -49355,6 +51581,51 @@ impl EngineRuntime {
             self.last_error = Some(message.clone());
             return Err(message);
         }
+        self.last_error = None;
+        Ok(())
+    }
+
+    /// Exact operator Reset boundary. Validate the complete fixed pair and
+    /// reject every missing, duplicate, or third Spout sender *before*
+    /// mutating `video_outputs` or its fade backrefs. The higher control
+    /// plane also validates composition backrefs; this engine boundary keeps
+    /// its own low-level graph mutation atomic if a caller is ever wrong.
+    fn apply_show_spout_outputs_reset_exact(
+        &mut self,
+        expected_background: &VideoOutputSummary,
+        expected_foreground: &VideoOutputSummary,
+    ) -> Result<(), String> {
+        if !show_spout_pair_is_resettable(expected_background, expected_foreground) {
+            return Err("Show Spout exact reset did not name the fixed pair".to_string());
+        }
+        let mut matching_background = 0usize;
+        let mut matching_foreground = 0usize;
+        let mut conflicting_spout = 0usize;
+        for output in &self.video_outputs {
+            if output.summary.kind != VideoOutputKind::SpoutSender {
+                continue;
+            }
+            if show_spout_output_equal(&output.summary, expected_background) {
+                matching_background = matching_background.saturating_add(1);
+            } else if show_spout_output_equal(&output.summary, expected_foreground) {
+                matching_foreground = matching_foreground.saturating_add(1);
+            } else {
+                conflicting_spout = conflicting_spout.saturating_add(1);
+            }
+        }
+        if matching_background != 1 || matching_foreground != 1 || conflicting_spout != 0 {
+            return Err(
+                "Show Spout exact reset requires exactly the two fixed senders and no third Spout sender"
+                    .to_string(),
+            );
+        }
+        self.video_outputs.retain(|output| {
+            output.summary.id != expected_background.id
+                && output.summary.id != expected_foreground.id
+        });
+        self.video_output_fades.retain(|fade| {
+            fade.output_id != expected_background.id && fade.output_id != expected_foreground.id
+        });
         self.last_error = None;
         Ok(())
     }
@@ -63909,9 +66180,10 @@ fn send_output_frame_with_recovery(
 }
 
 /// Linearize synchronous Art-Net/sACN/USB-Pro sends and Open-DMX enqueueing
-/// with the same S0 physical-write authority.  The Open-DMX worker rechecks
-/// this gate around its later BREAK/write_all transaction, so its queue hop
-/// cannot reopen a live-output race.
+/// with the S0 authority, without ever waiting on the USB physical-write
+/// mutex. The Open-DMX worker rechecks the atomic S0 latch around its later
+/// BREAK/write_all transaction. Keeping network sends off the USB mutex lets
+/// Art-Net and the engine's S0 state continue if a serial driver wedges.
 fn send_dmx_frame_at_safety_boundary(
     sender: &mut Option<DmxSender>,
     universe: u16,
@@ -63922,13 +66194,17 @@ fn send_dmx_frame_at_safety_boundary(
         .safety_blackout_enqueue_gate
         .lock()
         .map_err(|_| "Safety blackout enqueue gate was poisoned".to_string())?;
-    let physical = shared_telemetry.open_dmx_safety_write_gate.lock()?;
     let authority = shared_telemetry
         .safety_blackout
         .lock()
         .map_err(|_| "Safety blackout authority lock was poisoned".to_string())?;
     let zero = [0u8; 512];
-    let frame = if authority.engaged || physical.blackout_engaged() {
+    let frame = if authority.engaged
+        || shared_telemetry
+            .open_dmx_safety_write_gate
+            .blackout_engaged()
+            .unwrap_or(true)
+    {
         &zero
     } else {
         requested
@@ -63962,6 +66238,76 @@ const SHOW_ARTNET_LOOPBACK_U0_INPUT_MUTATION_ERROR: &str =
 /// hard-zeroed on the bounded show route so a malformed project cannot drive
 /// an otherwise-unused physical address.
 const SHOW_ARTNET_LOOPBACK_UNUSED_CHANNEL_INDEX: usize = 499;
+
+const SHOW_SERIAL_DMX_UNIVERSE: u16 = 0;
+const SHOW_SERIAL_DMX_BAUD_RATE: u32 = 250_000;
+const SHOW_SERIAL_DMX_ZERO_WRITE_TIMEOUT: Duration = Duration::from_millis(250);
+
+/// The project-independent Open DMX logical route. It is intentionally not
+/// placed in `DmxOutputConfig`/the snapshot: COM and PnP identity belong to
+/// the selected machine, while the route is a zero-only activation boundary.
+fn show_serial_dmx_route_is_exact_logical(route: &DmxOutputConfig) -> bool {
+    !route.enabled
+        && route.protocol == DmxOutputProtocol::EnttecOpenDmx
+        && route.target_ip.is_empty()
+        && route.port == 0
+        && route.universe == SHOW_SERIAL_DMX_UNIVERSE
+        && route.serial_port.is_empty()
+        && route.serial_baud_rate == SHOW_SERIAL_DMX_BAUD_RATE
+}
+
+fn staged_show_serial_dmx_logical_route() -> DmxOutputConfig {
+    DmxOutputConfig {
+        enabled: false,
+        protocol: DmxOutputProtocol::EnttecOpenDmx,
+        target_ip: String::new(),
+        port: 0,
+        universe: SHOW_SERIAL_DMX_UNIVERSE,
+        serial_port: String::new(),
+        serial_baud_rate: SHOW_SERIAL_DMX_BAUD_RATE,
+    }
+}
+
+/// Channel 500 remains unpatched on the fixed show U0 contract. The USB-DMX
+/// mirror is the physical show path, so do not couple this safety invariant to
+/// whether the concurrent Unity Art-Net route is enabled.
+fn enforce_show_serial_dmx_u0_invariants(frame: &mut [u8; 512]) {
+    frame[SHOW_ARTNET_LOOPBACK_UNUSED_CHANNEL_INDEX] = 0;
+}
+
+fn show_serial_dmx_device_identity_is_exact(
+    identity: &io::serial_dmx::VerifiedUsbSerialPortIdentity,
+) -> bool {
+    !identity.port_name.trim().is_empty()
+        && !identity.port_type.trim().is_empty()
+        && identity.usb_vid != 0
+        && identity.usb_pid != 0
+        && !identity.serial_number.trim().is_empty()
+        && !identity.manufacturer.trim().is_empty()
+        && !identity.product.trim().is_empty()
+        && identity
+            .windows_device_instance_id
+            .as_deref()
+            .is_some_and(|instance| !instance.trim().is_empty())
+}
+
+fn create_verified_show_serial_dmx_sender(
+    identity: &io::serial_dmx::VerifiedUsbSerialPortIdentity,
+    open_dmx_safety_write_gate: &OpenDmxSafetyWriteGate,
+) -> Result<DmxSender, String> {
+    if !show_serial_dmx_device_identity_is_exact(identity) {
+        return Err(
+            "Show serial DMX sender identity is not an exact machine-local USB-DMX binding"
+                .to_string(),
+        );
+    }
+    EnttecOpenDmxSender::new_verified_with_safety_write_gate(
+        identity,
+        open_dmx_safety_write_gate.clone(),
+    )
+    .map(DmxSender::EnttecOpenDmx)
+    .map_err(|error| error.to_string())
+}
 
 /// This is deliberately narrower than normal DMX validation. It identifies
 /// the one disabled authored route that the R4 local-confirmed control may
@@ -64011,15 +66357,22 @@ fn create_verified_show_artnet_loopback_sender(
 const SHOW_SPOUT_BACKGROUND_NAME: &str = "Syndocal Background";
 const SHOW_SPOUT_FOREGROUND_NAME: &str = "Syndocal Foreground";
 const SHOW_SPOUT_MAIN_COMPOSITION_ID: CompositionId = 1;
+const SHOW_SPOUT_MAIN_COMPOSITION_LABEL: &str = "Main";
+const SHOW_SPOUT_BACKGROUND_COMPOSITION_LABEL: &str = "Background Video2 Camera";
+const SHOW_SPOUT_FOREGROUND_COMPOSITION_LABEL: &str = "Foreground Video 1";
 const SHOW_SPOUT_WIDTH: u32 = 1920;
 const SHOW_SPOUT_HEIGHT: u32 = 1080;
 
-fn show_spout_output_is_exact(output: &VideoOutputSummary, name: &str) -> bool {
+fn show_spout_output_is_exact(
+    output: &VideoOutputSummary,
+    name: &str,
+    composition_id: CompositionId,
+) -> bool {
     output.id != 0
         && output.label == name
         && output.kind == VideoOutputKind::SpoutSender
         && output.enabled
-        && output.composition_id == SHOW_SPOUT_MAIN_COMPOSITION_ID
+        && output.composition_id == composition_id
         && !output.fullscreen
         && output.monitor_id.is_none()
         && output.monitor_identity.is_none()
@@ -64036,9 +66389,43 @@ fn show_spout_pair_is_exact(
     foreground: &VideoOutputSummary,
 ) -> bool {
     background.id != foreground.id
-        && background.composition_id == foreground.composition_id
-        && show_spout_output_is_exact(background, SHOW_SPOUT_BACKGROUND_NAME)
-        && show_spout_output_is_exact(foreground, SHOW_SPOUT_FOREGROUND_NAME)
+        && background.composition_id != 0
+        && foreground.composition_id != 0
+        && background.composition_id != foreground.composition_id
+        && background.composition_id != SHOW_SPOUT_MAIN_COMPOSITION_ID
+        && foreground.composition_id != SHOW_SPOUT_MAIN_COMPOSITION_ID
+        && show_spout_output_is_exact(
+            background,
+            SHOW_SPOUT_BACKGROUND_NAME,
+            background.composition_id,
+        )
+        && show_spout_output_is_exact(
+            foreground,
+            SHOW_SPOUT_FOREGROUND_NAME,
+            foreground.composition_id,
+        )
+}
+
+/// Reset is the sole clean-break cleanup boundary for the accepted V1 shape.
+/// It remains exact-name/spec-only and never becomes a generic output delete.
+fn show_spout_pair_is_resettable(
+    background: &VideoOutputSummary,
+    foreground: &VideoOutputSummary,
+) -> bool {
+    show_spout_pair_is_exact(background, foreground)
+        || background.id != foreground.id
+            && background.composition_id == SHOW_SPOUT_MAIN_COMPOSITION_ID
+            && foreground.composition_id == SHOW_SPOUT_MAIN_COMPOSITION_ID
+            && show_spout_output_is_exact(
+                background,
+                SHOW_SPOUT_BACKGROUND_NAME,
+                SHOW_SPOUT_MAIN_COMPOSITION_ID,
+            )
+            && show_spout_output_is_exact(
+                foreground,
+                SHOW_SPOUT_FOREGROUND_NAME,
+                SHOW_SPOUT_MAIN_COMPOSITION_ID,
+            )
 }
 
 fn show_spout_output_equal(current: &VideoOutputSummary, expected: &VideoOutputSummary) -> bool {
@@ -64050,6 +66437,90 @@ fn show_spout_reserved_name_collision(output: &VideoOutputSummary) -> bool {
         || output.label == SHOW_SPOUT_FOREGROUND_NAME
         || output.endpoint_name.as_deref() == Some(SHOW_SPOUT_BACKGROUND_NAME)
         || output.endpoint_name.as_deref() == Some(SHOW_SPOUT_FOREGROUND_NAME)
+}
+
+#[cfg(test)]
+mod show_serial_dmx_invariant_tests {
+    use super::*;
+
+    #[test]
+    fn logical_route_is_exact_and_project_identity_free() {
+        let staged = staged_show_serial_dmx_logical_route();
+        assert!(show_serial_dmx_route_is_exact_logical(&staged));
+        for invalid in [
+            DmxOutputConfig {
+                enabled: true,
+                ..staged.clone()
+            },
+            DmxOutputConfig {
+                protocol: DmxOutputProtocol::ArtNet,
+                ..staged.clone()
+            },
+            DmxOutputConfig {
+                target_ip: "127.0.0.1".to_string(),
+                ..staged.clone()
+            },
+            DmxOutputConfig {
+                port: 6454,
+                ..staged.clone()
+            },
+            DmxOutputConfig {
+                universe: 1,
+                ..staged.clone()
+            },
+            DmxOutputConfig {
+                serial_port: "COM3".to_string(),
+                ..staged.clone()
+            },
+            DmxOutputConfig {
+                serial_baud_rate: 57_600,
+                ..staged.clone()
+            },
+        ] {
+            assert!(!show_serial_dmx_route_is_exact_logical(&invalid));
+        }
+        assert!(
+            staged.serial_port.is_empty(),
+            "no COM alias can enter a project route"
+        );
+    }
+
+    #[test]
+    fn identity_rejects_empty_pnp_and_identity_fields() {
+        let exact = io::serial_dmx::VerifiedUsbSerialPortIdentity {
+            port_name: "COM3".to_string(),
+            port_type: "USB 0403:6001 USB Serial Port".to_string(),
+            usb_vid: 0x0403,
+            usb_pid: 0x6001,
+            serial_number: "A".to_string(),
+            manufacturer: "FTDI".to_string(),
+            product: "USB Serial Port".to_string(),
+            windows_device_instance_id: Some(r"FTDIBUS\A\0000".to_string()),
+        };
+        assert!(show_serial_dmx_device_identity_is_exact(&exact));
+        let mut missing_pnp = exact.clone();
+        missing_pnp.windows_device_instance_id = Some(" ".to_string());
+        assert!(!show_serial_dmx_device_identity_is_exact(&missing_pnp));
+        let mut missing_serial = exact;
+        missing_serial.serial_number.clear();
+        assert!(!show_serial_dmx_device_identity_is_exact(&missing_serial));
+        let mut zero_vid = missing_pnp.clone();
+        zero_vid.windows_device_instance_id = Some(r"FTDIBUS\A\0000".to_string());
+        zero_vid.usb_vid = 0;
+        assert!(!show_serial_dmx_device_identity_is_exact(&zero_vid));
+        let mut zero_pid = zero_vid;
+        zero_pid.usb_vid = 0x0403;
+        zero_pid.usb_pid = 0;
+        assert!(!show_serial_dmx_device_identity_is_exact(&zero_pid));
+    }
+
+    #[test]
+    fn u0_mirror_hard_zeros_channel_500_without_artnet_route_state() {
+        let mut frame = [0u8; 512];
+        frame[SHOW_ARTNET_LOOPBACK_UNUSED_CHANNEL_INDEX] = 255;
+        enforce_show_serial_dmx_u0_invariants(&mut frame);
+        assert_eq!(frame[SHOW_ARTNET_LOOPBACK_UNUSED_CHANNEL_INDEX], 0);
+    }
 }
 
 impl DmxSender {
@@ -64067,6 +66538,60 @@ impl DmxSender {
             DmxSender::EnttecOpenDmx(sender) => sender
                 .send_dmx_frame(frame)
                 .map_err(|error| error.to_string()),
+            #[cfg(test)]
+            DmxSender::TestExactArtNetRoute => Ok(0),
+            #[cfg(test)]
+            DmxSender::TestFailingArtNetSend => {
+                Err("deterministic Art-Net send failure for USB mirror proof".to_string())
+            }
+        }
+    }
+
+    /// The fixed host-local show route is Open DMX only. Keeping this narrow
+    /// prevents a future generic sender variant from being silently accepted
+    /// as a bounded USB-DMX shutdown path.
+    fn shutdown_open_dmx_bounded(&mut self, timeout: Duration) -> Result<(), String> {
+        match self {
+            DmxSender::EnttecOpenDmx(sender) => sender
+                .shutdown_bounded(timeout)
+                .map_err(|error| error.to_string()),
+            #[cfg(test)]
+            DmxSender::TestExactArtNetRoute | DmxSender::TestFailingArtNetSend => {
+                Err("Show serial DMX worker lost its exact Open DMX sender type".to_string())
+            }
+            _ => Err("Show serial DMX worker lost its exact Open DMX sender type".to_string()),
+        }
+    }
+
+    fn open_dmx_zero_write_receipt(
+        &self,
+    ) -> Result<io::serial_dmx::OpenDmxZeroWriteReceipt, String> {
+        match self {
+            DmxSender::EnttecOpenDmx(sender) => sender
+                .zero_write_receipt()
+                .map_err(|error| error.to_string()),
+            #[cfg(test)]
+            DmxSender::TestExactArtNetRoute | DmxSender::TestFailingArtNetSend => {
+                Err("Show serial DMX worker lost its exact Open DMX sender type".to_string())
+            }
+            _ => Err("Show serial DMX worker lost its exact Open DMX sender type".to_string()),
+        }
+    }
+
+    fn wait_for_open_dmx_zero_write(
+        &self,
+        receipt: io::serial_dmx::OpenDmxZeroWriteReceipt,
+        timeout: Duration,
+    ) -> Result<(), String> {
+        match self {
+            DmxSender::EnttecOpenDmx(sender) => sender
+                .wait_for_zero_frame_physical_write(receipt, timeout)
+                .map_err(|error| error.to_string()),
+            #[cfg(test)]
+            DmxSender::TestExactArtNetRoute | DmxSender::TestFailingArtNetSend => {
+                Err("Show serial DMX worker lost its exact Open DMX sender type".to_string())
+            }
+            _ => Err("Show serial DMX worker lost its exact Open DMX sender type".to_string()),
         }
     }
 }
@@ -114357,6 +116882,7 @@ mod tests {
             trans_cadence_bars: 4,
             trans_target_measures: Vec::new(),
             hold_first_destination_measure: false,
+            destination_start_mode: TimelineFollowDestinationStartMode::Play,
             fault_policy: protocol::TimelineFollowFaultPolicy::Hold,
         });
         let mut second = TimelineSnapshot {
@@ -115481,6 +118007,7 @@ mod tests {
             trans_cadence_bars: 4,
             trans_target_measures: Vec::new(),
             hold_first_destination_measure: false,
+            destination_start_mode: TimelineFollowDestinationStartMode::Play,
             fault_policy: protocol::TimelineFollowFaultPolicy::Fault,
         });
         let incoming = TimelineSnapshot {
@@ -115636,6 +118163,7 @@ mod tests {
             trans_cadence_bars: 4,
             trans_target_measures: Vec::new(),
             hold_first_destination_measure: false,
+            destination_start_mode: TimelineFollowDestinationStartMode::Play,
             fault_policy,
         });
         let mut target = TimelineSnapshot {
@@ -115678,6 +118206,7 @@ mod tests {
             trans_cadence_bars: 4,
             trans_target_measures: Vec::new(),
             hold_first_destination_measure: false,
+            destination_start_mode: TimelineFollowDestinationStartMode::Play,
             fault_policy,
         });
         runtime
@@ -115915,6 +118444,140 @@ mod tests {
                 "destination must use its own meter, not the source meter"
             );
         }
+    }
+
+    #[test]
+    fn follow_wait_for_pedal_keeps_one_source_measure_then_installs_paused_target_without_loop() {
+        let mut runtime = timeline_follow_ltl5_runtime(protocol::TimelineFollowFaultPolicy::Hold);
+        runtime.clock.bpm = 120.0;
+        let mut source = runtime.timeline_bank[0].clone();
+        source.duration_ms = 10_000;
+        source.tempo_meter_map = vec![TimelineTempoMeterPoint {
+            position_sixteenth_steps: 0,
+            bpm: 120.0,
+            numerator: 4,
+            denominator: 4,
+            interpolation: TimelineTempoInterpolation::Step,
+            ..TimelineTempoMeterPoint::default()
+        }];
+        let follow = source.follow.as_mut().unwrap();
+        follow.duration = VideoClipTakeDuration::milliseconds(100);
+        follow.hold_first_destination_measure = true;
+        follow.destination_start_mode = TimelineFollowDestinationStartMode::WaitForPedal;
+
+        let mut target = runtime.timeline_bank[1].clone();
+        target.duration_ms = 5_000;
+        target.phases[0].end_ms = 5_000;
+        target.loop_region = Some(TimelineLoopRegionSummary {
+            a_ms: 0,
+            b_ms: 2_000,
+            enabled: true,
+            musical_length_beats: Some(4.0),
+        });
+        let authored_target = target.clone();
+        runtime
+            .apply_timeline_bank_state(vec![source, target], TimelineId(8_101), true)
+            .unwrap();
+        let admitted_at = Instant::now();
+        runtime
+            .begin_timeline_follow(
+                protocol::TimelineFollowAdmissionReason::NaturalPlaybackBoundary,
+                admitted_at,
+            )
+            .unwrap();
+        assert_eq!(
+            runtime
+                .timeline_follow_transition
+                .as_ref()
+                .unwrap()
+                .duration,
+            Duration::from_millis(2_000),
+            "waiting mode keeps the existing one-source-measure transition"
+        );
+        assert!(runtime
+            .timeline_follow_transition
+            .as_ref()
+            .unwrap()
+            .destination_hold
+            .is_none());
+
+        runtime.advance_timeline_follow(admitted_at + Duration::from_millis(2_000));
+        assert_eq!(runtime.timeline_id, TimelineId(8_102));
+        assert!(!runtime.timeline_playing);
+        assert_eq!(runtime.timeline_position_ms, 0);
+        assert!(runtime.timeline_follow_runtime.waiting_for_pedal_start);
+        assert!(!runtime.timeline_follow_runtime.transition_hold_active);
+        assert!(matches!(
+            runtime.timeline_loop_runtime.status,
+            TimelineLoopRuntimeStatus::Disabled
+        ));
+        assert_eq!(runtime.timeline_bank[1], authored_target);
+        let persisted = runtime.build_persistence_snapshot();
+        assert!(matches!(
+            persisted.timeline_bank[1].loop_region,
+            Some(TimelineLoopRegionSummary { enabled: true, .. })
+        ));
+        assert!(matches!(
+            persisted.timeline_bank[0]
+                .follow
+                .as_ref()
+                .map(|follow| follow.destination_start_mode),
+            Some(TimelineFollowDestinationStartMode::WaitForPedal)
+        ));
+
+        let before_stale = (
+            runtime.timeline_id,
+            runtime.timeline_playing,
+            runtime.timeline_position_ms,
+            runtime.timeline_loop_runtime.clone(),
+            runtime.timeline_follow_runtime.clone(),
+        );
+        assert!(runtime
+            .start_waiting_follow_target_runtime(TimelineId(8_101), TimelineId(8_102), 999)
+            .is_err());
+        assert_eq!(
+            (
+                runtime.timeline_id,
+                runtime.timeline_playing,
+                runtime.timeline_position_ms,
+                runtime.timeline_loop_runtime.clone(),
+                runtime.timeline_follow_runtime.clone(),
+            ),
+            before_stale,
+            "stale generation must not change the waiting target"
+        );
+
+        let generation = runtime.timeline_follow_runtime.generation;
+        runtime
+            .start_waiting_follow_target_runtime(TimelineId(8_101), TimelineId(8_102), generation)
+            .unwrap();
+        assert!(runtime.timeline_playing);
+        assert!(!runtime.timeline_follow_runtime.waiting_for_pedal_start);
+        assert!(matches!(
+            runtime.timeline_loop_runtime.status,
+            TimelineLoopRuntimeStatus::Disabled
+        ));
+        let after_start = (
+            runtime.timeline_id,
+            runtime.timeline_playing,
+            runtime.timeline_position_ms,
+            runtime.timeline_loop_runtime.clone(),
+            runtime.timeline_follow_runtime.clone(),
+        );
+        assert!(runtime
+            .start_waiting_follow_target_runtime(TimelineId(8_101), TimelineId(8_102), generation)
+            .is_err());
+        assert_eq!(
+            (
+                runtime.timeline_id,
+                runtime.timeline_playing,
+                runtime.timeline_position_ms,
+                runtime.timeline_loop_runtime.clone(),
+                runtime.timeline_follow_runtime.clone(),
+            ),
+            after_start,
+            "a replay must not start the destination twice"
+        );
     }
 
     #[test]
@@ -116667,6 +119330,7 @@ mod tests {
             trans_cadence_bars: 4,
             trans_target_measures: Vec::new(),
             hold_first_destination_measure: false,
+            destination_start_mode: TimelineFollowDestinationStartMode::Play,
             fault_policy: protocol::TimelineFollowFaultPolicy::Hold,
         });
         let target = TimelineSnapshot {
@@ -117678,6 +120342,7 @@ mod tests {
             trans_cadence_bars: 4,
             trans_target_measures: Vec::new(),
             hold_first_destination_measure: false,
+            destination_start_mode: TimelineFollowDestinationStartMode::Play,
             fault_policy: protocol::TimelineFollowFaultPolicy::Hold,
         });
         let mut target = TimelineSnapshot {
@@ -118250,6 +120915,7 @@ mod tests {
             trans_cadence_bars: 4,
             trans_target_measures: Vec::new(),
             hold_first_destination_measure: false,
+            destination_start_mode: TimelineFollowDestinationStartMode::Play,
             fault_policy: protocol::TimelineFollowFaultPolicy::Hold,
         });
         let target = TimelineSnapshot {
@@ -118460,6 +121126,7 @@ mod tests {
             trans_cadence_bars: 4,
             trans_target_measures: Vec::new(),
             hold_first_destination_measure: false,
+            destination_start_mode: TimelineFollowDestinationStartMode::Play,
             fault_policy: protocol::TimelineFollowFaultPolicy::Hold,
         });
         snapshot.timeline.follow_runtime = TimelineFollowRuntimeSummary {
@@ -118474,6 +121141,7 @@ mod tests {
             progress_millis: 500,
             fault: None,
             transition_hold_active: false,
+            waiting_for_pedal_start: false,
             settlement: None,
         };
         snapshot.timeline_bank = vec![snapshot.timeline.clone(), target];
@@ -132564,228 +135232,10 @@ mod tests {
         assert!(!has_complete(&stale));
     }
 
-    fn disabled_open_dmx_output() -> DmxOutputConfig {
-        DmxOutputConfig {
-            enabled: false,
-            protocol: DmxOutputProtocol::EnttecOpenDmx,
-            target_ip: String::new(),
-            port: 0,
-            universe: 0,
-            serial_port: String::new(),
-            serial_baud_rate: 250_000,
-        }
-    }
-
-    fn live_open_dmx_runtime_with_test_sender(
-        shared_telemetry: Arc<EngineSharedTelemetry>,
-        sender: EnttecOpenDmxSender,
-    ) -> EngineRuntime {
-        let mut runtime =
-            EngineRuntime::new_with_shared_telemetry(disabled_open_dmx_output(), shared_telemetry);
-        runtime.output.enabled = true;
-        runtime.dmx_sender = Some(DmxSender::EnttecOpenDmx(sender));
-        runtime.apply_command(EngineCommand::PatchFixture {
-            fixture_id: 1,
-            request: PatchFixtureRequest {
-                profile_path: "memory://open-dmx-s0-physical-proof.gdtf".to_string(),
-                mode_name: Some("Standard".to_string()),
-                label: "Open DMX S0 physical-proof fixture".to_string(),
-                universe: 0,
-                address: 1,
-                group_ids: Vec::new(),
-                position: Vec3::default(),
-                rotation: Default::default(),
-            },
-            profile: sample_profile(),
-        });
-        runtime.apply_command(EngineCommand::SetAttribute {
-            fixture_id: 1,
-            attribute: "Dimmer".to_string(),
-            value: u16::MAX,
-        });
-        runtime
-    }
-
-    fn wait_for_open_dmx_test_write_count(
-        observation: &io::serial_dmx::OpenDmxTestSerialObservation,
-        minimum: usize,
-    ) -> Vec<io::serial_dmx::OpenDmxTestSerialOperation> {
-        let deadline = Instant::now() + Duration::from_secs(1);
-        while Instant::now() < deadline {
-            let operations = observation
-                .operations()
-                .expect("test serial observation must remain available");
-            if operations
-                .iter()
-                .filter(|operation| {
-                    matches!(
-                        operation,
-                        io::serial_dmx::OpenDmxTestSerialOperation::WriteAll(_)
-                    )
-                })
-                .count()
-                >= minimum
-            {
-                return operations;
-            }
-            thread::sleep(Duration::from_millis(1));
-        }
-        panic!("Open DMX fake serial port did not complete {minimum} write_all operations");
-    }
-
-    fn assert_open_dmx_physical_operation_order(
-        operations: &[io::serial_dmx::OpenDmxTestSerialOperation],
-    ) {
-        assert!(!operations.is_empty());
-        assert_eq!(operations.len() % 4, 0);
-        for transaction in operations.chunks_exact(4) {
-            assert!(matches!(
-                transaction,
-                [
-                    io::serial_dmx::OpenDmxTestSerialOperation::SetBreak,
-                    io::serial_dmx::OpenDmxTestSerialOperation::ClearBreak,
-                    io::serial_dmx::OpenDmxTestSerialOperation::WriteAll(_),
-                    io::serial_dmx::OpenDmxTestSerialOperation::Flush,
-                ]
-            ));
-        }
-    }
-
-    #[test]
-    fn published_s0_linearizes_with_the_actual_open_dmx_serial_worker_transaction() {
-        // S0-first: the public priority API reserves the shared physical gate
-        // before its queue item is consumed. A subsequently queued live frame
-        // must reach the real worker as BREAK/MAB/write_all/flush zero-only.
-        let s0_first_shared = Arc::new(EngineSharedTelemetry::new());
-        let (s0_first_port, s0_first_observation) = io::serial_dmx::OpenDmxTestSerialPort::new();
-        let s0_first_sender = EnttecOpenDmxSender::from_test_serial_port(
-            s0_first_port,
-            s0_first_shared.open_dmx_safety_write_gate.clone(),
-            || {},
-        )
-        .expect("the fake serial port must start the real Open DMX worker");
-        let mut s0_first_runtime =
-            live_open_dmx_runtime_with_test_sender(Arc::clone(&s0_first_shared), s0_first_sender);
-        let s0_first_snapshot = Arc::new(RwLock::new(s0_first_runtime.build_snapshot(0)));
-        let mut s0_first_handle = allocator_test_handle(Arc::clone(&s0_first_snapshot));
-        s0_first_handle.shared_telemetry = Arc::clone(&s0_first_shared);
-        let s0_first_public_handle = s0_first_handle.clone();
-        let s0_first = thread::spawn(move || {
-            s0_first_public_handle
-                .safety_blackout_engage_published(Instant::now() + Duration::from_secs(1))
-        });
-        let deadline = Instant::now() + Duration::from_secs(1);
-        while s0_first_handle.safety_queue.is_empty() && Instant::now() < deadline {
-            thread::yield_now();
-        }
-        assert_eq!(s0_first_handle.safety_queue.len(), 1);
-        assert!(s0_first_shared
-            .open_dmx_safety_write_gate
-            .blackout_engaged()
-            .expect("public S0 must reserve the physical worker gate"));
-        s0_first_runtime.tick(1, &s0_first_snapshot);
-        let s0_first_operations = wait_for_open_dmx_test_write_count(&s0_first_observation, 1);
-        s0_first_runtime.consume_commands(&s0_first_handle.safety_queue);
-        s0_first_runtime.publish_pending_command_acks(0, &s0_first_snapshot);
-        assert_eq!(
-            s0_first.join().expect("public S0 caller must not deadlock"),
-            Ok(SafetyBlackoutEngageDisposition::Applied)
-        );
-        s0_first_runtime.dmx_sender = None;
-        assert_open_dmx_physical_operation_order(&s0_first_operations);
-        assert!(s0_first_operations.iter().all(|operation| {
-            match operation {
-                io::serial_dmx::OpenDmxTestSerialOperation::WriteAll(payload) => {
-                    payload.len() == io::serial_dmx::ENTTEC_OPEN_DMX_PAYLOAD_LEN
-                        && payload[0] == io::serial_dmx::ENTTEC_OPEN_DMX_START_CODE
-                        && payload[1..].iter().all(|value| *value == 0)
-                }
-                _ => true,
-            }
-        }));
-
-        // Worker-first: block the fake serial port immediately before the
-        // actual write_all, while the worker owns the physical gate. Public
-        // S0 cannot enqueue until this one live transaction finishes; once it
-        // returns, every later physical transaction is zero-only.
-        let worker_first_shared = Arc::new(EngineSharedTelemetry::new());
-        let physical_entered = Arc::new(Barrier::new(2));
-        let physical_release = Arc::new(Barrier::new(2));
-        let physical_once = Arc::new(AtomicBool::new(true));
-        let (worker_first_port, worker_first_observation) =
-            io::serial_dmx::OpenDmxTestSerialPort::new_with_before_write_all({
-                let physical_entered = Arc::clone(&physical_entered);
-                let physical_release = Arc::clone(&physical_release);
-                let physical_once = Arc::clone(&physical_once);
-                move || {
-                    if physical_once.swap(false, Ordering::AcqRel) {
-                        physical_entered.wait();
-                        physical_release.wait();
-                    }
-                }
-            });
-        let worker_first_sender = EnttecOpenDmxSender::from_test_serial_port(
-            worker_first_port,
-            worker_first_shared.open_dmx_safety_write_gate.clone(),
-            || {},
-        )
-        .expect("the fake serial port must start the real Open DMX worker");
-        let mut worker_first_runtime = live_open_dmx_runtime_with_test_sender(
-            Arc::clone(&worker_first_shared),
-            worker_first_sender,
-        );
-        let worker_first_snapshot = Arc::new(RwLock::new(worker_first_runtime.build_snapshot(0)));
-        let mut worker_first_handle = allocator_test_handle(Arc::clone(&worker_first_snapshot));
-        worker_first_handle.shared_telemetry = Arc::clone(&worker_first_shared);
-        worker_first_runtime.tick(0, &worker_first_snapshot);
-        physical_entered.wait();
-        let (public_s0_started_tx, public_s0_started_rx) = mpsc::sync_channel(1);
-        let worker_first_public_handle = worker_first_handle.clone();
-        let worker_first_s0 = thread::spawn(move || {
-            public_s0_started_tx
-                .send(())
-                .expect("test must observe the public S0 call");
-            worker_first_public_handle
-                .safety_blackout_engage_published(Instant::now() + Duration::from_secs(1))
-        });
-        public_s0_started_rx
-            .recv_timeout(Duration::from_secs(1))
-            .expect("public S0 thread must begin while write_all is held");
-        assert!(
-            worker_first_handle.safety_queue.is_empty(),
-            "the public S0 must wait for the worker-owned physical transaction"
-        );
-        physical_release.wait();
-        let deadline = Instant::now() + Duration::from_secs(1);
-        while worker_first_handle.safety_queue.is_empty() && Instant::now() < deadline {
-            thread::yield_now();
-        }
-        assert_eq!(worker_first_handle.safety_queue.len(), 1);
-        let worker_first_operations =
-            wait_for_open_dmx_test_write_count(&worker_first_observation, 2);
-        worker_first_runtime.consume_commands(&worker_first_handle.safety_queue);
-        worker_first_runtime.publish_pending_command_acks(0, &worker_first_snapshot);
-        assert_eq!(
-            worker_first_s0
-                .join()
-                .expect("public S0 caller must not deadlock"),
-            Ok(SafetyBlackoutEngageDisposition::Applied)
-        );
-        worker_first_runtime.dmx_sender = None;
-        assert_open_dmx_physical_operation_order(&worker_first_operations);
-        let writes = worker_first_operations
-            .iter()
-            .filter_map(|operation| match operation {
-                io::serial_dmx::OpenDmxTestSerialOperation::WriteAll(payload) => Some(payload),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        assert!(writes[0][1..].iter().any(|value| *value != 0));
-        assert!(writes[1..]
-            .iter()
-            .all(|payload| payload[1..].iter().all(|value| *value == 0)));
-    }
-
+    #[path = "../show_managed_dmx_fail_stop_tests.rs"]
+    mod show_managed_dmx_fail_stop_tests;
+    #[path = "../show_serial_dmx_tests.rs"]
+    mod show_serial_dmx_tests;
     fn staged_show_artnet_loopback_output() -> DmxOutputConfig {
         DmxOutputConfig {
             enabled: false,
@@ -132821,11 +135271,39 @@ mod tests {
         }
     }
 
+    fn seed_show_spout_v2_compositions(runtime: &mut EngineRuntime) {
+        for composition in [
+            CompositionSummary {
+                id: 2,
+                label: SHOW_SPOUT_FOREGROUND_COMPOSITION_LABEL.to_string(),
+                layer_ids: Vec::new(),
+                timeline_layer_ids: Vec::new(),
+                output_ids: Vec::new(),
+            },
+            CompositionSummary {
+                id: 3,
+                label: SHOW_SPOUT_BACKGROUND_COMPOSITION_LABEL.to_string(),
+                layer_ids: Vec::new(),
+                timeline_layer_ids: Vec::new(),
+                output_ids: Vec::new(),
+            },
+        ] {
+            runtime.apply_command(EngineCommand::AddVideoComposition(composition));
+        }
+    }
+
+    fn show_spout_v2_pair() -> (VideoOutputSummary, VideoOutputSummary) {
+        (
+            show_spout_output(11, SHOW_SPOUT_BACKGROUND_NAME, 3),
+            show_spout_output(12, SHOW_SPOUT_FOREGROUND_NAME, 2),
+        )
+    }
+
     #[test]
     fn show_spout_pair_is_exact_atomic_noop_or_fail_closed() {
         let mut runtime = EngineRuntime::new(staged_show_artnet_loopback_output());
-        let background = show_spout_output(11, SHOW_SPOUT_BACKGROUND_NAME, 1);
-        let foreground = show_spout_output(12, SHOW_SPOUT_FOREGROUND_NAME, 1);
+        seed_show_spout_v2_compositions(&mut runtime);
+        let (background, foreground) = show_spout_v2_pair();
         let safety = runtime.shared_telemetry.safety_blackout_authority();
 
         runtime
@@ -132885,9 +135363,9 @@ mod tests {
         );
 
         let mut wrong_main_background = background.clone();
-        wrong_main_background.composition_id = 2;
+        wrong_main_background.composition_id = SHOW_SPOUT_MAIN_COMPOSITION_ID;
         let mut wrong_main_foreground = foreground.clone();
-        wrong_main_foreground.composition_id = 2;
+        wrong_main_foreground.composition_id = SHOW_SPOUT_MAIN_COMPOSITION_ID;
         assert!(runtime
             .apply_show_spout_outputs_enable(
                 &wrong_main_background,
@@ -132899,10 +135377,11 @@ mod tests {
         assert_eq!(
             runtime.build_snapshot(0).video.outputs,
             before.video.outputs,
-            "a non-Main pair is rejected before any engine mutation"
+            "a retired same-Main pair is rejected before any engine mutation"
         );
 
         let mut generic = EngineRuntime::new(staged_show_artnet_loopback_output());
+        seed_show_spout_v2_compositions(&mut generic);
         generic.video_outputs.push(RuntimeVideoOutput {
             summary: show_spout_output(99, "Generic Spout", 1),
         });
@@ -132921,8 +135400,8 @@ mod tests {
     #[test]
     fn active_show_spout_pair_rejects_generic_identity_mutations_without_state_change() {
         let mut runtime = EngineRuntime::new(staged_show_artnet_loopback_output());
-        let background = show_spout_output(11, SHOW_SPOUT_BACKGROUND_NAME, 1);
-        let foreground = show_spout_output(12, SHOW_SPOUT_FOREGROUND_NAME, 1);
+        seed_show_spout_v2_compositions(&mut runtime);
+        let (background, foreground) = show_spout_v2_pair();
         let safety = runtime.shared_telemetry.safety_blackout_authority();
         runtime
             .apply_show_spout_outputs_enable(
@@ -132945,8 +135424,8 @@ mod tests {
 
         // Every direct per-output mutator is rejected before it can turn the
         // exact two-sender pair partial, re-route it, or alter its fixed
-        // identity. Dedicated `RetireShowSpoutOutputsPublished` is the sole
-        // deliberately separate retirement path.
+        // identity. Dedicated authority-loss retirement and exact Reset
+        // commands are the only deliberately separate retirement paths.
         assert_unchanged(
             &mut runtime,
             EngineCommand::SetVideoOutputConfig {
@@ -133056,8 +135535,8 @@ mod tests {
     #[test]
     fn active_show_spout_pair_rejects_generic_published_remove_route_add_and_bootstrap() {
         let mut runtime = EngineRuntime::new(staged_show_artnet_loopback_output());
-        let background = show_spout_output(11, SHOW_SPOUT_BACKGROUND_NAME, 1);
-        let foreground = show_spout_output(12, SHOW_SPOUT_FOREGROUND_NAME, 1);
+        seed_show_spout_v2_compositions(&mut runtime);
+        let (background, foreground) = show_spout_v2_pair();
         let safety = runtime.shared_telemetry.safety_blackout_authority();
         runtime
             .apply_show_spout_outputs_enable(
@@ -133117,11 +135596,11 @@ mod tests {
     }
 
     #[test]
-    fn show_spout_retirement_removes_the_exact_pair_before_reporting_a_persisted_generic_conflict()
-    {
+    fn show_spout_authority_loss_retirement_removes_the_exact_pair_before_reporting_a_persisted_generic_conflict(
+    ) {
         let mut runtime = EngineRuntime::new(staged_show_artnet_loopback_output());
-        let background = show_spout_output(11, SHOW_SPOUT_BACKGROUND_NAME, 1);
-        let foreground = show_spout_output(12, SHOW_SPOUT_FOREGROUND_NAME, 1);
+        seed_show_spout_v2_compositions(&mut runtime);
+        let (background, foreground) = show_spout_v2_pair();
         let safety = runtime.shared_telemetry.safety_blackout_authority();
         runtime
             .apply_show_spout_outputs_enable(
@@ -133136,7 +135615,7 @@ mod tests {
         });
 
         let error = runtime
-            .apply_show_spout_outputs_retire(&background, &foreground)
+            .apply_show_spout_outputs_retire_after_authority_loss(&background, &foreground)
             .expect_err("a persisted third sender must remain a visible conflict");
         assert!(error.contains("exact pair was retired"));
         assert_eq!(runtime.video_outputs.len(), 1);
@@ -133148,10 +135627,41 @@ mod tests {
     }
 
     #[test]
+    fn show_spout_exact_reset_rejects_a_third_sender_without_mutating_the_pair() {
+        let mut runtime = EngineRuntime::new(staged_show_artnet_loopback_output());
+        seed_show_spout_v2_compositions(&mut runtime);
+        let (background, foreground) = show_spout_v2_pair();
+        let safety = runtime.shared_telemetry.safety_blackout_authority();
+        runtime
+            .apply_show_spout_outputs_enable(
+                &background,
+                &foreground,
+                safety.epoch,
+                safety.generation,
+            )
+            .unwrap();
+        runtime.video_outputs.push(RuntimeVideoOutput {
+            summary: show_spout_output(99, "Persisted Generic Spout", 1),
+        });
+        let before = runtime.build_snapshot(0);
+        let before_error = runtime.last_error.clone();
+
+        let error = runtime
+            .apply_show_spout_outputs_reset_exact(&background, &foreground)
+            .expect_err(
+                "an exact Reset must not remove a recognized pair before rejecting a third sender",
+            );
+
+        assert!(error.contains("exactly the two fixed senders"));
+        assert_eq!(runtime.build_snapshot(0).video, before.video);
+        assert_eq!(runtime.last_error, before_error);
+    }
+
+    #[test]
     fn show_spout_pair_publication_failure_restores_the_complete_a_image() {
         let mut runtime = EngineRuntime::new(staged_show_artnet_loopback_output());
-        let background = show_spout_output(11, SHOW_SPOUT_BACKGROUND_NAME, 1);
-        let foreground = show_spout_output(12, SHOW_SPOUT_FOREGROUND_NAME, 1);
+        seed_show_spout_v2_compositions(&mut runtime);
+        let (background, foreground) = show_spout_v2_pair();
         let safety = runtime.shared_telemetry.safety_blackout_authority();
         let before = runtime.build_snapshot(0);
         let (ack, receiver) = mpsc::sync_channel(1);

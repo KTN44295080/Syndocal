@@ -4078,6 +4078,21 @@ pub enum TimelineFollowFaultPolicy {
     Fault,
 }
 
+/// What happens after a successfully settled Follow installs its destination.
+///
+/// This is authored intent and is therefore persisted with the source
+/// Timeline.  The default preserves every existing Follow: its destination
+/// starts immediately.  `WaitForPedal` is a distinct show transition: the
+/// incoming Timeline is installed at position zero but remains paused until
+/// the already-correlated DJ pedal receipt admits its one-shot start.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum TimelineFollowDestinationStartMode {
+    #[default]
+    Play,
+    WaitForPedal,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TimelineFollowSummary {
     #[serde(default)]
@@ -4105,6 +4120,11 @@ pub struct TimelineFollowSummary {
     /// measure loop. Legacy authored Follow data remains false.
     #[serde(default)]
     pub hold_first_destination_measure: bool,
+    /// The destination starts immediately unless the authored show requires
+    /// a deliberate correlated pedal edge.  This is additive so legacy
+    /// Follow snapshots keep their normal automatic playback behavior.
+    #[serde(default)]
+    pub destination_start_mode: TimelineFollowDestinationStartMode,
     #[serde(default)]
     pub fault_policy: TimelineFollowFaultPolicy,
 }
@@ -5190,6 +5210,12 @@ pub struct TimelineFollowRuntimeSummary {
     /// Runtime-only; this is not written into authored Timeline data.
     #[serde(default)]
     pub transition_hold_active: bool,
+    /// Runtime-only exact post-Follow admission state.  It is true only after
+    /// the target has been installed at position zero, is paused, and has no
+    /// active Timeline loop.  It is consumed by the one correlated pedal
+    /// start and never reconstructed from authored Follow data.
+    #[serde(default)]
+    pub waiting_for_pedal_start: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub settlement: Option<TimelineFollowSettlementSummary>,
 }
@@ -5224,6 +5250,8 @@ pub struct TimelineFollowRuntimeStatusSnapshot {
     pub fault: Option<String>,
     #[serde(default)]
     pub transition_hold_active: bool,
+    #[serde(default)]
+    pub waiting_for_pedal_start: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub settlement: Option<TimelineFollowSettlementSummary>,
 }
@@ -5243,6 +5271,7 @@ impl TimelineFollowRuntimeStatusSnapshot {
             progress_millis: runtime.progress_millis,
             fault: runtime.fault.clone(),
             transition_hold_active: runtime.transition_hold_active,
+            waiting_for_pedal_start: runtime.waiting_for_pedal_start,
             settlement: runtime.settlement.clone(),
         }
     }
@@ -13392,6 +13421,7 @@ mod tests {
                 trans_cadence_bars: 4,
                 trans_target_measures: Vec::new(),
                 hold_first_destination_measure: false,
+                destination_start_mode: super::TimelineFollowDestinationStartMode::Play,
                 fault_policy: super::TimelineFollowFaultPolicy::Hold,
             }),
             guide_enabled: true,
@@ -13472,6 +13502,7 @@ mod tests {
             trans_cadence_bars: 4,
             trans_target_measures: Vec::new(),
             hold_first_destination_measure: false,
+            destination_start_mode: super::TimelineFollowDestinationStartMode::Play,
             fault_policy: super::TimelineFollowFaultPolicy::Hold,
         });
         super::validate_timeline_bank(&snapshot, &[]).unwrap();
@@ -13519,6 +13550,7 @@ mod tests {
                 progress_millis: 250,
                 fault: None,
                 transition_hold_active: false,
+                waiting_for_pedal_start: false,
                 settlement: Some(super::TimelineFollowSettlementSummary {
                     started_at_ms: 9_000,
                     deadline_ms: 11_000,
@@ -14122,6 +14154,7 @@ mod tests {
             trans_cadence_bars: 4,
             trans_target_measures: Vec::new(),
             hold_first_destination_measure: false,
+            destination_start_mode: super::TimelineFollowDestinationStartMode::Play,
             fault_policy: super::TimelineFollowFaultPolicy::Hold,
         });
         assert!(super::validate_timeline_bank(&snapshot, &[])
@@ -14155,6 +14188,7 @@ mod tests {
                 trans_cadence_bars: super::TIMELINE_FOLLOW_MAX_TRANS_CADENCE_BARS,
                 trans_target_measures: Vec::new(),
                 hold_first_destination_measure: false,
+                destination_start_mode: super::TimelineFollowDestinationStartMode::Play,
                 fault_policy: super::TimelineFollowFaultPolicy::Cut,
             }),
             ..Default::default()
@@ -14242,6 +14276,7 @@ mod tests {
                 trans_cadence_bars: 4,
                 trans_target_measures: vec![149, 151, 153, 155],
                 hold_first_destination_measure: false,
+                destination_start_mode: super::TimelineFollowDestinationStartMode::Play,
                 fault_policy: super::TimelineFollowFaultPolicy::Hold,
             }),
             ..Default::default()
@@ -19572,6 +19607,7 @@ mod tests {
             trans_cadence_bars: 4,
             trans_target_measures: Vec::new(),
             hold_first_destination_measure: false,
+            destination_start_mode: super::TimelineFollowDestinationStartMode::Play,
             fault_policy: super::TimelineFollowFaultPolicy::Hold,
         }
     }
