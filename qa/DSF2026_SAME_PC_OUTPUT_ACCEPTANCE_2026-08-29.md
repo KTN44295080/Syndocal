@@ -1,13 +1,18 @@
 # DSF2026 same-PC output acceptance — current 2026-09-01
 
-## 2026-09-01 alpha.57 source-only current boundary
+## 2026-09-01 alpha.57 native current boundary
 
-The current product metadata is `1.2.0-alpha.57` on branch
-`codex/syndocal-v1.2`. This is a source-only checkpoint: no alpha.57 native
-build, launch/window verification, or physical/external acceptance has been
-performed. The older versioned artifacts, processes, device observations, and
-source checkpoints below are immutable historical evidence and must not be
-relabeled as alpha.57 or used as current-source/native acceptance.
+The current source checkpoint is `1545bedd189c1f14b9656551ca5046cb1d02023c`
+on branch `codex/syndocal-v1.2`. Exact Community MSVC `14.44.35207`
+`pnpm --dir app tauri build --no-bundle` passed in `5m29s`, with first-party
+warnings `0`. The resulting `target/release/syndocal.exe` is ProductVersion
+and FileVersion `1.2.0-alpha.57`, `62,310,912` bytes, SHA-256
+`ACB6A29A90F5D9CE5D57A406AC15488F870515B917B4654720F92332C86E3F2B`.
+Exactly one checkout-owned process, PID `82632`, exposes one responsive,
+visible, maximized `Syndocal` window. This accepts native build/start only;
+USB-DMX, camera/MiraBox, audible PROGRAM/CUE, external DJ/pedal, Unity/Spout,
+and three-display pixels remain physical/external gates. Older evidence below
+is immutable and must not be relabeled as alpha.57 acceptance.
 
 ## Historical 2026-09-01 alpha.51 Timeline authority / pedal-wait native and S0 checkpoint
 

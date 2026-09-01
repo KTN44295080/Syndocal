@@ -153,12 +153,12 @@ $script:ThreeDisplayRequiredSamples = 3
 $script:ThreeDisplayMinimumSampleIntervalMs = 200
 $script:ThreeDisplaySchemaVersion = 1
 $script:ThreeDisplayStandardReleaseArtifactAuthority = [ordered]@{
-  product_version = "1.2.0-alpha.56"
-  byte_size = [uint64]62292480
-  sha256 = "4BCC1B33A73586C3CED2FB66217732FD1CF1BBF957529559E0DD7ED67435ABAE"
+  product_version = "1.2.0-alpha.57"
+  byte_size = [uint64]62310912
+  sha256 = "ACB6A29A90F5D9CE5D57A406AC15488F870515B917B4654720F92332C86E3F2B"
   source_branch = "codex/syndocal-v1.2"
-  source_head = "3185fe52a631b0b5855b9e5996ad131db74e8e81"
-  source_provenance = "post-build StandardRelease artifact identity, source 3185fe52a631b0b5855b9e5996ad131db74e8e81"
+  source_head = "1545bedd189c1f14b9656551ca5046cb1d02023c"
+  source_provenance = "post-build StandardRelease artifact identity, source 1545bedd189c1f14b9656551ca5046cb1d02023c"
 }
 $script:ThreeDisplayRequiredProductVersion = [string]$script:ThreeDisplayStandardReleaseArtifactAuthority.product_version
 $script:ThreeDisplaySwMaximize = 3

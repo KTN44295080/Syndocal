@@ -2,7 +2,7 @@
 
 Syndocal は、DMX照明とVJ映像を同じタイムライン、キュー、BPMクロック、エフェクトソースで駆動するデスクトップ制御ソフトウェアです。
 
-- 製品名: **Syndocal 1.2.0-alpha.57**
+- 製品名: **Syndocal 1.2.0-alpha.58**
 - 開発: **Seraf()のKTN**
 - プロジェクト: **`.sdc`** (可読JSON)
 - Tier 1: Windows 10+ / macOS 12+
@@ -25,10 +25,11 @@ See the [current output acceptance record](qa/DSF2026_SAME_PC_OUTPUT_ACCEPTANCE_
 for execution steps and unverified physical/lease evidence; this boundary is
 not a hardware acceptance claim.
 
-Current product metadata is `1.2.0-alpha.57` on branch
-`codex/syndocal-v1.2`. Alpha.57 adds hash-verified machine-local media
-availability bootstrap at project load, keeps unknown media fail-closed until
-explicit verification, and makes the approved fixed foreground video play in
+Current product metadata is `1.2.0-alpha.58` on branch
+`codex/syndocal-v1.2`. Alpha.58 preserves alpha.57's hash-verified machine-local
+media admission and removes a false native Display authority rejection caused
+by ordinary playhead/transition progress, while keeping semantic output changes
+fail-closed. The approved fixed foreground video plays in
 a full-duration loop. The immediately preceding alpha.56 closed the strict
 root-loop release race at a
 natural Timeline terminal: loop release, terminal transport authority, and
@@ -402,7 +403,7 @@ unaccepted.
 
 CI/Release成果物は次の形式です。
 
-- Windows: `Syndocal_1.2.0-alpha.57_x64-setup.exe` (NSIS)、`Syndocal_1.2.0-alpha.57_x64_ja-JP.msi`
+- Windows: `Syndocal_1.2.0-alpha.58_x64-setup.exe` (NSIS)、`Syndocal_1.2.0-alpha.58_x64_ja-JP.msi`
 - macOS: `.app`、DMG
 - Linux: `.deb`、AppImage
 

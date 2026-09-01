@@ -1,9 +1,34 @@
 # Syndocal historical v1.0 / current v1.2 alpha Release Status
 
 Updated: 2026-09-01
-Branch: `codex/syndocal-v1.2`; current product metadata is `1.2.0-alpha.57`.
+Branch: `codex/syndocal-v1.2`; current product metadata is `1.2.0-alpha.58`.
 
-## 2026-09-01 current alpha.57 media admission source checkpoint
+## 2026-09-01 current alpha.58 display-authority source checkpoint
+
+Alpha.58 is the current source candidate, advanced because alpha.57's first
+Display-present attempt failed even though the persisted output and monitor
+identities were exact. The root cause was the first-present guard comparing the
+full `VideoSnapshot` and therefore treating ordinary playhead/transition
+progress as an authority change. Alpha.58 removes only that volatile
+full-snapshot equality. It retains exact output identity, ownership/lease,
+project and safety blackout, paired configuration-token, and final pre-present
+token fences.
+
+Source focused acceptance is GO. The exact Community MSVC `14.44.35207`
+`cargo test -p syndocal native_display_ -- --nocapture --test-threads=1`
+gate passes `8/8`, first-party warnings `0`; the output-control runtime checker,
+Node syntax, formatter, and scoped diff check pass. The new regression uses the
+production first-frame prepare seam, proves a real same-token playhead snapshot
+change, and admits exactly one present. Existing semantic output mutation tests
+still prove zero stale presents. Independent Terra xHigh rereview is GO with
+P0/P1 `0`; its two P2 notes are a narrower explicit `position_ms` assertion and
+the pre-existing final-token-load-to-GPU-call TOCTOU that requires a separate
+engine-side presentation-permit design.
+No alpha.58 native build, Display 1/5 runtime acceptance, artifact/hash, or new
+physical/external acceptance is claimed yet. The source checkpoint is the
+commit containing this section and must be pushed upstream-equal before build.
+
+## 2026-09-01 historical alpha.57 media admission native checkpoint
 
 Alpha.57 makes machine-local media availability explicit at both project load
 and Timeline placement. Project replacement hashes file-backed media before
@@ -29,10 +54,32 @@ failure rollback, and one `snapshot -> availability` cross-lock order. The
 review caught and closed an early-B publication defect and an ABBA deadlock
 before this checkpoint was accepted.
 
-This remains source authority only until the committed and pushed changes are
-built with exact Community MSVC 14.44 and exercised in one responsive maximized
-native window. It makes no new USB-DMX, audible audio, camera, Unity, Spout, or
-external DJ/pedal claim.
+The source checkpoint is pushed at
+`1545bedd189c1f14b9656551ca5046cb1d02023c`. Immediately before the native
+build, exact checkout-owned alpha.56 PID `54360` was resolved and only that
+process was terminated. The first build attempt failed before native output
+because `FFMPEG_DIR` was unset and `ffmpeg-sys-next` rejected its unavailable
+pkg-config fallback; it is invalid as acceptance evidence. With the existing
+FFmpeg 8.1.2 shared SDK, LLVM, and ASIO SDK paths explicitly supplied, exact
+Community MSVC `14.44.35207` remained first and absolutely pinned, and
+`pnpm --dir app tauri build --no-bundle` passed in `5m29s`, first-party warnings
+`0`. Exact artifact: ProductVersion/FileVersion `1.2.0-alpha.57`, `62,310,912`
+bytes, SHA-256
+`ACB6A29A90F5D9CE5D57A406AC15488F870515B917B4654720F92332C86E3F2B`.
+PID `2440` is the only checkout-owned process; its one `Syndocal` main window
+is responsive, visible, and maximized, and the output-owner enable was
+confirmed. The process command line carries the exact alpha53 local QA
+project. The current distinct persisted targets are output 3 (`PX160 WAVE`,
+identity `1ca92e95cf40014697261a29800d02f50dd5777f092470d3973d25949ee0fa92`)
+and output 4 (`MPG321UX OLED`, identity
+`7353124ed8458eadca4625722d80fe4f6ac7206861f040de0294130e3d1fdb06`). Strict
+post-restart window observation reported both targets closed. One deliberate
+Display 1 open briefly created `Syndocal Output - Display 1`, then failed and
+closed with raw native error `Native Display output 3 project/video authority
+changed before present`. Display 1/5 runtime acceptance remains blocked
+pending that fix; no retry was performed. USB-DMX, audible audio, exact
+MiraBox/camera, Unity/Spout, external DJ/pedal, and three-display pixels remain
+open physical/external gates.
 
 ## 2026-09-01 historical alpha.56 terminal loop/Follow source/native checkpoint
 

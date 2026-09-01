@@ -79055,7 +79055,10 @@ enum NativeDisplayAuthoritySource {
 struct NativeDisplayPresentationAuthority {
     source: NativeDisplayAuthoritySource,
     ownership: OutputOwnershipStatus,
-    video: protocol::VideoSnapshot,
+    // `VideoSnapshot` intentionally is not captured as an equality fence:
+    // it contains ordinary render-time playhead and transition progress. The
+    // engine-issued configuration token below is the semantic presentation
+    // authority and advances for every output/video configuration mutation.
     project_blackout: bool,
     blackout_authority: engine::SafetyBlackoutAuthority,
     output: VideoOutputSummary,
@@ -79128,7 +79131,6 @@ fn capture_native_display_presentation_authority(
     Ok(NativeDisplayPresentationAuthority {
         source: NativeDisplayAuthoritySource::Published,
         ownership,
-        video: snapshot.video.clone(),
         project_blackout: snapshot.blackout,
         blackout_authority,
         output,
@@ -79156,7 +79158,6 @@ fn capture_unpublished_native_display_presentation_authority(
     Ok(NativeDisplayPresentationAuthority {
         source: NativeDisplayAuthoritySource::UnpublishedCandidate,
         ownership: ownership.clone(),
-        video: unpublished.video.clone(),
         project_blackout: unpublished.blackout,
         blackout_authority,
         output,
@@ -79214,11 +79215,11 @@ fn revalidate_native_display_presentation_authority(
                     "Native Display output {output_id} route, mapping, or enablement changed before present"
                 ));
             }
-            if current.video != authority.video {
-                return Err(format!(
-                    "Native Display output {output_id} project/video authority changed before present"
-                ));
-            }
+            // Do not compare the complete VideoSnapshot here. It carries
+            // ordinary playhead/transition progress which changes between
+            // render and present without changing configuration authority.
+            // The exact output identity above and the configuration token
+            // below still revoke every semantic presentation mutation.
         }
         NativeDisplayAuthoritySource::UnpublishedCandidate => {
             // The candidate output must still be invisible in the published
@@ -95263,6 +95264,105 @@ pub(crate) mod tests {
             presents.load(Ordering::Acquire),
             3,
             "each admitted capture owns exactly one physical present"
+        );
+    }
+
+    #[test]
+    fn native_display_playhead_progress_does_not_revoke_unchanged_presentation_authority() {
+        let output_id = 87_406;
+        let engine = native_display_test_engine();
+        install_injected_display_output_extent(&engine, output_id, 8, 4);
+
+        let layer_id = engine.allocate_video_layer_id();
+        let still_image = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("icons")
+            .join("32x32.png");
+        assert!(
+            still_image.is_file(),
+            "the checked-in still image must remain available for the first-frame seam"
+        );
+        engine
+            .send(EngineCommand::AddVideoLayer {
+                layer_id,
+                label: "Native Display progress fence".to_string(),
+                source: VideoSourceSummary {
+                    kind: VideoSourceKind::StillImage,
+                    path: Some(still_image.to_string_lossy().into_owned()),
+                    name: None,
+                    codec: None,
+                    metadata: None,
+                },
+            })
+            .expect("progress video layer command must be accepted");
+        engine
+            .send(EngineCommand::SetVideoLayerState {
+                layer_id,
+                state: VideoLayerState {
+                    playing: true,
+                    ..VideoLayerState::default()
+                },
+            })
+            .expect("progress video layer must start");
+        wait_until_native_display_test_condition(
+            || {
+                engine
+                    .snapshot()
+                    .video
+                    .layers
+                    .iter()
+                    .find(|layer| layer.id == layer_id)
+                    .is_some_and(|layer| layer.state.playing)
+            },
+            "progress video layer did not publish as playing",
+        );
+
+        let sample = engine.video_presentation_sample();
+        let captured_video = sample.snapshot.video.clone();
+        let captured_token = sample.config_token;
+        let authority = capture_native_display_presentation_authority(
+            &sample,
+            engine.output_ownership_status(),
+            engine.safety_blackout_authority(),
+            output_id,
+            &video_output_window_label(output_id, false),
+        )
+        .expect("stable progress authority must capture");
+        let mut renderer = test_app_video_renderer();
+        let prepared = prepare_native_display_artistic_output(
+            &mut renderer,
+            &sample.snapshot,
+            &authority,
+            output_id,
+            8,
+            4,
+        )
+        .expect("first-frame production preparation must succeed before ordinary progress");
+        let NativeVideoOutputFrame::Presentable(prepared) = prepared else {
+            panic!("first-frame production preparation must remain presentable");
+        };
+
+        wait_until_native_display_test_condition(
+            || {
+                let current = engine.video_presentation_sample();
+                current.config_token == captured_token && current.snapshot.video != captured_video
+            },
+            "ordinary video playhead progress did not update the render snapshot",
+        );
+        assert_eq!(
+            engine.video_presentation_config_token(),
+            captured_token,
+            "ordinary playhead progress must not advance presentation configuration authority"
+        );
+
+        let (presents, present) = counted_present_slot();
+        present_native_display_frame_if_authorized(&engine, &prepared.authority, None, present)
+            .expect(
+                "ordinary playhead progress with unchanged configuration must admit one present",
+            );
+        assert_eq!(
+            presents.load(Ordering::Acquire),
+            1,
+            "ordinary playhead progress must not suppress the physical present"
         );
     }
 

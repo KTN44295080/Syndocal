@@ -4,9 +4,32 @@ Date: 2026-08-19
 Branch at creation: `codex/syndocal-v1.0`
 Baseline before this document: `848d759846985cc3acf588356cfa3c996b4e2ef2`
 
-## 2026-09-01 alpha.57 media-admission source authority
+## 2026-09-01 alpha.58 display-authority source candidate
 
-Alpha.57 is the current source candidate on `codex/syndocal-v1.2`, based on
+Alpha.58 is the current source candidate on `codex/syndocal-v1.2`, advanced because
+alpha.57's first Display-present attempt failed despite exact persisted output
+and monitor identities. The root cause was the first-present guard comparing
+the full `VideoSnapshot`, treating ordinary playhead/transition progress as an
+authority change. Alpha.58 removes only that volatile equality while retaining
+exact output identity, ownership/lease, project and safety blackout, paired
+configuration-token, and final pre-present token fences.
+
+Exact Community MSVC `14.44.35207` focused proof passes `8/8` for
+`native_display_`, warnings `0`; the output-control runtime checker, Node syntax,
+formatter, and scoped diff check pass. The regression uses the production
+first-frame prepare seam, waits for an actual same-token playhead snapshot
+change, then admits exactly one present. Existing semantic output mutation
+coverage still proves zero stale presents. Independent Terra xHigh rereview is
+GO with P0/P1 `0`; its P2-only notes are a narrower explicit `position_ms`
+assertion and the pre-existing final-token-load-to-GPU-call TOCTOU that needs a
+separate engine-side presentation permit. No alpha.58 native build/start, Display 1/5 runtime acceptance,
+artifact/hash, or new physical/external acceptance is claimed. The source
+checkpoint is the commit containing this section and must be pushed
+upstream-equal before build. The alpha.57 native evidence remains historical.
+
+## 2026-09-01 historical alpha.57 media-admission native authority
+
+Alpha.57 was the preceding source candidate on `codex/syndocal-v1.2`, based on
 upstream-equal parent `73df6c9db759ada763ab36a17fb55576fabf7fed`.
 Timeline Media Library placement now requires explicit machine-local media
 verification: localized individual and batch Verify actions feed the same exact
@@ -37,10 +60,28 @@ SHA-256
 generation tests, verify-only, and structural preflight pass. The old
 black-first-frame output is recoverably retained and is not accepted.
 
-No alpha.57 native build or physical acceptance has been performed. The
-historical alpha.56 process remains running until immediately before the next
-required no-bundle build. USB-DMX, exact MiraBox, audible PROGRAM/CUE, and
-post-build three-display pixel acceptance remain open external gates.
+Source checkpoint `1545bedd189c1f14b9656551ca5046cb1d02023c` is pushed and
+upstream-equal. Immediately before build, only exact checkout alpha.56 PID
+`54360` was terminated. The first attempt failed before output because
+`FFMPEG_DIR` was unset; after explicitly supplying the existing FFmpeg 8.1.2,
+LLVM, and ASIO SDK paths, the exact Community MSVC 14.44 no-bundle build passed
+in `5m29s`, warnings `0`. Artifact ProductVersion/FileVersion is
+`1.2.0-alpha.57`, size `62,310,912`, SHA-256
+`ACB6A29A90F5D9CE5D57A406AC15488F870515B917B4654720F92332C86E3F2B`.
+Exactly one checkout-owned PID `2440` exposes one responsive, visible,
+maximized `Syndocal` window launched with the exact alpha53 local QA project;
+the output-owner enable was confirmed. The current distinct persisted targets
+are output 3 (`PX160 WAVE`, identity
+`1ca92e95cf40014697261a29800d02f50dd5777f092470d3973d25949ee0fa92`) and
+output 4 (`MPG321UX OLED`, identity
+`7353124ed8458eadca4625722d80fe4f6ac7206861f040de0294130e3d1fdb06`). Strict
+post-restart window observation reported both targets closed. One deliberate
+Display 1 open briefly created `Syndocal Output - Display 1`, then failed and
+closed with raw native error `Native Display output 3 project/video authority
+changed before present`; Display 1/5 runtime acceptance remains blocked pending
+that fix, and no retry was performed. USB-DMX, exact MiraBox, audible
+PROGRAM/CUE, Unity/Spout, external DJ/pedal, and three-display pixel acceptance
+remain open external gates.
 
 ## 2026-09-01 alpha.56 terminal loop/Follow source authority
 

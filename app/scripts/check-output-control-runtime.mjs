@@ -1036,6 +1036,53 @@ assert.match(
   /start_native_video_live_output\([\s\S]*Some\(\(output\.width, output\.height\)\)/,
   "candidate output worker must not call inner_size before publication",
 );
+const nativeDisplayPresentationRevalidation = mainSource.slice(
+  mainSource.indexOf("fn revalidate_native_display_presentation_authority("),
+  mainSource.indexOf("#[derive(Debug)]\nenum NativeDisplayPresentError"),
+);
+assert.doesNotMatch(
+  nativeDisplayPresentationRevalidation,
+  /current\.video\s*!=\s*authority\.video/,
+  "ordinary render-time video progress must not be treated as a presentation-authority mutation",
+);
+assert.match(
+  nativeDisplayPresentationRevalidation,
+  /output\s*!=\s*&authority\.output\s*\|\|\s*!output\.enabled/,
+  "native Display presentation must retain the exact enabled output identity fence",
+);
+assert.match(
+  nativeDisplayPresentationRevalidation,
+  /sample\.config_token\s*!=\s*authority\.presentation_config_token/,
+  "native Display presentation must retain its semantic configuration-token fence",
+);
+const nativeDisplayPresentBoundary = mainSource.slice(
+  mainSource.indexOf("fn present_native_display_frame_if_authorized("),
+  mainSource.indexOf("fn native_display_presentation_contract("),
+);
+assert(
+  nativeDisplayPresentBoundary.indexOf("revalidate_native_display_presentation_authority")
+    < nativeDisplayPresentBoundary.indexOf("engine.video_presentation_config_token()"),
+  "native Display must revalidate its semantic authority before the final bare token load",
+);
+assert.match(
+  nativeDisplayPresentBoundary,
+  /engine\.video_presentation_config_token\(\)\s*!=\s*authority\.presentation_config_token[\s\S]*present\(\)/,
+  "a semantic mutation after preparation must reach the final token fence before any physical present",
+);
+const nativeDisplayLiveOutputStart = mainSource.slice(
+  mainSource.indexOf("fn start_native_video_live_output("),
+  mainSource.indexOf("fn native_video_output_performance("),
+);
+assert.match(
+  nativeDisplayLiveOutputStart,
+  /let first_result[\s\S]*prepare_native_video_output[\s\S]*NativeVideoOutputFrame::Presentable\(first_frame\)[\s\S]*present_native_display_frame_if_authorized/,
+  "the production first-frame path must use the same fenced native Display present boundary",
+);
+assert.match(
+  mainSource,
+  /native_display_playhead_progress_does_not_revoke_unchanged_presentation_authority/,
+  "a deterministic native Display regression must prove ordinary progress can present",
+);
 assert.match(
   mainSource,
   /native_output_qa_driver_uses_canonical_v2_add_path_for_four_sub_displays/,

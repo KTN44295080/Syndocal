@@ -32,7 +32,7 @@ import { withMaterializedVerifiedExecutable } from "./verified-materialization.m
 
 export { withMaterializedVerifiedExecutable } from "./verified-materialization.mjs";
 
-export const expectedVersion = "1.2.0-alpha.57";
+export const expectedVersion = "1.2.0-alpha.58";
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const appRoot = resolve(scriptDir, "..");
 const workspaceRoot = resolve(appRoot, "..");
@@ -506,28 +506,28 @@ const currentReleaseBoundaryMarkers = Object.freeze([
   {
     path: "RELEASE_STATUS.md",
     markers: [
-      "## 2026-09-01 current alpha.57 media admission source checkpoint",
-      "Source acceptance is GO.",
-      "This remains source authority only until",
-      "It makes no new USB-DMX, audible audio, camera, Unity,",
+      "## 2026-09-01 current alpha.58 display-authority source checkpoint",
+      "Source focused acceptance is GO.",
+      "passes `8/8`",
+      "No alpha.58 native build",
     ],
   },
   {
     path: "qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md",
     markers: [
-      "## 2026-09-01 alpha.57 media-admission source authority",
-      "Alpha.57 is the current source candidate on `codex/syndocal-v1.2`",
-      "full `1002 passed / 0 failed /",
-      "No alpha.57 native build or physical acceptance has been performed.",
+      "## 2026-09-01 alpha.58 display-authority source candidate",
+      "Alpha.58 is the current source candidate on `codex/syndocal-v1.2`",
+      "passes `8/8`",
+      "No alpha.58 native build/start",
     ],
   },
   {
     path: "qa/SYNDOCAL_SHOW_COMPLETION_HANDOFF_2026-08-28.md",
     markers: [
-      "## 2026-09-01 alpha.57 media-admission source checkpoint",
-      "Current product metadata is `1.2.0-alpha.57` on `codex/syndocal-v1.2`",
-      "full `1002 passed / 0 failed / 2 ignored`",
-      "No alpha.57 native build or hardware acceptance has occurred.",
+      "## 2026-09-01 alpha.58 display-authority source candidate",
+      "Alpha.58 is the current source candidate on `codex/syndocal-v1.2`",
+      "passes `8/8`",
+      "No alpha.58 native build/start",
     ],
   },
 ]);
@@ -614,9 +614,9 @@ function assertCurrentReleaseDocumentation(readManifest, productVersion) {
   for (const { path, markers } of currentReleaseBoundaryMarkers) {
     const top = String(readManifest(path)).split(/\r?\n/u).slice(0, 45).join("\n");
     for (const marker of markers) {
-      const resolvedMarker = marker.replace("1.2.0-alpha.57", productVersion);
+      const resolvedMarker = marker.replace("1.2.0-alpha.58", productVersion);
       if (!top.includes(resolvedMarker)) {
-        throw new Error(`${path} lacks its top alpha.57 source-only marker: '${resolvedMarker}'.`);
+        throw new Error(`${path} lacks its top ${productVersion} source-only marker: '${resolvedMarker}'.`);
       }
     }
   }
