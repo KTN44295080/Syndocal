@@ -4,7 +4,37 @@ Status date: 2026-09-01 JST
 
 This is the concise authoritative resume note for the final show-critical tranche. It supersedes chat-only status, but it does not supersede the detailed acceptance documents named below.
 
-## 2026-09-01 alpha.55 runtime snapshot/native checkpoint
+## 2026-09-01 alpha.56 terminal loop/Follow source checkpoint
+
+Current metadata is `1.2.0-alpha.56` on `codex/syndocal-v1.2`. The source commit
+is the commit containing this section; verify exact upstream equality after push
+before beginning the native build. The old strict root-loop release could expose
+loop OFF before natural-terminal transport and Follow admission converged, with
+late capacity, preparation, audio, acknowledgement, or publication failure able
+to separate worker-local state from the published receipt. Alpha.56 preflights
+all transport and click-schedule successors, converges terminal and Follow inside
+one receipt-bearing worker turn, and restores exact A plus the Follow presenter
+on every fallible post-mutation boundary. Invalid, stale, expired, exhausted, or
+poisoned state remains visibly fail-closed; no compatibility path or persistence
+schema was added.
+
+Exact MSVC 14.44 source evidence: strict release `16/16`, `dj_link_` `40/40`,
+`timeline_follow_` `27/27`, and full engine `997 passed / 0 failed / 2 ignored`
+in `225.50s`; first-party warnings `0`. Timeline transport, loop,
+runtime-watermark, TypeScript, release, formatter, and diff gates pass.
+Independent Terra xHigh rereview is GO with P0/P1 `0`; Ox was unavailable and
+this is the narrow documented exception. P2 proof strengthening remains for an
+explicit stale shared-A assertion and terminal-fixture poison coverage.
+
+No alpha.56 native or hardware acceptance exists at this source checkpoint.
+The first safe continuation is: push this checkpoint, terminate only the exact
+checkout-owned alpha.55 process after resolving its path, run the required exact
+MSVC no-bundle build, launch and maximize exactly one responsive alpha.56 window,
+capture version/size/hash/source identity, then retarget and re-run the
+three-display observer. Physical USB-DMX, Art-Net/Unity, Spout, display pixels,
+MiraBox, audible PROGRAM/CUE, and real DJ/pedal gates remain unverified.
+
+## 2026-09-01 historical alpha.55 runtime snapshot/native checkpoint
 
 Current metadata is `1.2.0-alpha.55` on `codex/syndocal-v1.2`, based on clean
 upstream-equal parent `c0885cf8b8d4c6bc54207b4f3dfbd1676f79a413`. The exact

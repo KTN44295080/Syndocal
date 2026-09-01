@@ -28232,7 +28232,22 @@ impl EngineRuntime {
                                     Ok(())
                                 }
                                 Err(_) => {
-                                    self.rollback_pending_command(rollback.clone());
+                                    // A typed Applied outcome means the
+                                    // strict loop command has already
+                                    // committed B in this worker. The
+                                    // completion slot is its only remaining
+                                    // publication receipt, so poisoning it
+                                    // must restore exact A before the error
+                                    // ACK is queued. NoOp did not mutate and
+                                    // deliberately keeps the mutation-free
+                                    // stale/expiry behavior unchanged.
+                                    if matches!(
+                                        outcome.disposition,
+                                        TimelineLoopRuntimeDisposition::Applied
+                                    ) {
+                                        self.rollback_pending_command(rollback.clone());
+                                        self.refresh_timeline_follow_video_render_snapshot();
+                                    }
                                     Err("Timeline loop acknowledgement state was poisoned"
                                         .to_string())
                                 }
@@ -42570,6 +42585,16 @@ impl EngineRuntime {
         if count > available {
             return Err("Timeline transport authority is exhausted".to_string());
         }
+        // `invalidate_timeline_transport_authority` rotates the click
+        // scheduler at the same commit boundary.  Transport capacity alone
+        // is insufficient: a terminal root-loop release can need two
+        // successors, and a schedule MAX/MAX-1 failure after the first
+        // rotation would otherwise leave a loop-off partial image.
+        let schedule_generation = self.timeline_click_scheduler.identity().schedule_generation;
+        let schedule_available = u64::MAX as u128 - schedule_generation as u128;
+        if count > schedule_available {
+            return Err("Timeline click schedule generation is exhausted".to_string());
+        }
         Ok(())
     }
 
@@ -45095,12 +45120,19 @@ impl EngineRuntime {
                     self.timeline_loop_runtime.status,
                     TimelineLoopRuntimeStatus::Disabled
                 );
-                let announce_break_after_transport_commit = !enabled
-                    && currently_enabled
-                    && !self.timeline_follow_runtime.transition_hold_active;
-                if currently_enabled == enabled
-                    && !(!enabled && self.timeline_follow_runtime.transition_hold_active)
-                {
+                let clears_destination_hold =
+                    !enabled && self.timeline_follow_runtime.transition_hold_active;
+                let reaches_natural_terminal_after_release = !enabled
+                    && (currently_enabled || clears_destination_hold)
+                    && self.timeline_playing
+                    && self.timeline_position_ms >= self.timeline_duration_ms();
+                // Both a normal A-B release and a runtime-only destination
+                // hold release produce the same visible Break.  In both
+                // cases, the pre-commit cue is retired with its predecessor
+                // authority, so only the post-commit emission below is
+                // authoritative.
+                let announce_break_after_transport_commit = !enabled && currently_enabled;
+                if currently_enabled == enabled && !clears_destination_hold {
                     return Ok(TimelineLoopRuntimeDisposition::NoOp);
                 }
                 if enabled {
@@ -45114,13 +45146,52 @@ impl EngineRuntime {
                         return Err("Timeline loop enable requires valid A-B bounds".to_string());
                     }
                 }
-                self.preflight_timeline_transport_authority_invalidation()?;
+                // A release which lands on the source terminal needs one
+                // successor for the loop state and one for the terminal
+                // Follow admission. Reserve both capacities before the first
+                // mutation: an exhausted second successor must fail closed
+                // without leaving an unpublished loop-off partial image.
+                self.preflight_timeline_transport_authority_invalidations(
+                    1 + u128::from(reaches_natural_terminal_after_release),
+                )?;
+                // Keep A only after every validation/preflight has passed.
+                // A stale/expired/invalid command must remain a true no-op;
+                // rolling those rejections back would unnecessarily clear
+                // the private DJ observation baseline.
+                let rollback = self.timeline_transport_rollback();
                 self.set_timeline_loop_enabled_state(enabled);
-                self.invalidate_timeline_transport_authority()?;
+                if let Err(error) = self.invalidate_timeline_transport_authority() {
+                    self.rollback_pending_command(rollback);
+                    self.refresh_timeline_follow_video_render_snapshot();
+                    return Err(error);
+                }
+                // A strict root-loop release can expose an already-reached
+                // natural terminal point.  Resolve that terminal/Follow path
+                // inside this worker turn before we form the published ACK:
+                // no intermediate loop-off image may race a later tick, and
+                // a predecessor loop command can never become authority for
+                // the successor Timeline.
+                if reaches_natural_terminal_after_release {
+                    if let Err(error) = self.settle_timeline_natural_terminal(Instant::now(), true)
+                    {
+                        // This strict command can cross root-loop and natural
+                        // terminal/Follow boundaries in one worker turn. An
+                        // admission failure after the first successor is a
+                        // command failure, never a partially-applied loop-off.
+                        // Restore the exact pre-command runtime A image and
+                        // regenerate the Handle-only Follow presenter from A
+                        // before the rejected receipt is queued.
+                        self.rollback_pending_command(rollback);
+                        self.refresh_timeline_follow_video_render_snapshot();
+                        return Err(error);
+                    }
+                }
                 // Transport invalidation deliberately retires every Guide cue
                 // carrying the predecessor authority. Re-issue the visible
-                // loop-release cue only after the successor is committed so
-                // it cannot be paired with the old transport watermark.
+                // loop-release cue only after every successor required by the
+                // same command (including a natural terminal Follow entry)
+                // is committed so it cannot be paired with an old transport
+                // watermark.
                 if announce_break_after_transport_commit {
                     self.push_timeline_guide_cue(
                         self.timeline_position_ms,
@@ -45511,6 +45582,49 @@ impl EngineRuntime {
         }
     }
 
+    /// Settle a locally-owned Timeline at its natural terminal point.  The
+    /// helper is deliberately idempotent: the worker can call it while
+    /// applying a strict loop release and the next ordinary tick then sees a
+    /// completed terminal image instead of creating a second Follow.
+    ///
+    /// The authority commit precedes Follow admission just like the historic
+    /// terminal path, but callers do not publish their receipt until this
+    /// helper returns.  This keeps loop, transport, and Follow generations in
+    /// one externally observable successor image.
+    fn settle_timeline_natural_terminal(
+        &mut self,
+        now: Instant,
+        reject_on_follow_admission_failure: bool,
+    ) -> Result<bool, String> {
+        if !self.timeline_playing || self.timeline_position_ms < self.timeline_duration_ms() {
+            return Ok(false);
+        }
+        self.preflight_timeline_transport_authority_invalidation()?;
+        self.timeline_playing = false;
+        self.invalidate_timeline_transport_authority()?;
+        self.timeline_paused_at = Some(now);
+        self.timeline_playhead_boundary_armed = false;
+        // A natural Follow is only admitted from a released root loop. An
+        // armed/looping predecessor remains authoritative until an explicit
+        // strict release commits; this prevents a terminal tick from racing
+        // an old root-loop request into a successor Timeline.
+        if self.timeline_follow_natural_boundary_armed
+            && matches!(
+                self.timeline_loop_runtime.status,
+                TimelineLoopRuntimeStatus::Disabled
+            )
+        {
+            let admission_reason = protocol::TimelineFollowAdmissionReason::NaturalPlaybackBoundary;
+            if let Err(error) = self.begin_timeline_follow(admission_reason, now) {
+                if reject_on_follow_admission_failure {
+                    return Err(error);
+                }
+                self.handle_timeline_follow_admission_failure(error, admission_reason, now);
+            }
+        }
+        Ok(true)
+    }
+
     fn advance_timeline(&mut self, now: Instant) {
         // At terminal authority exhaustion freeze runtime advancement before
         // any child, playhead, Follow, or loop state can move without an
@@ -45593,15 +45707,8 @@ impl EngineRuntime {
                     now,
                 );
             }
-            self.timeline_playing = false;
-            self.invalidate_timeline_transport_authority()
-                .expect("terminal playback preflight must reserve a transport authority successor");
-            if self.timeline_follow_natural_boundary_armed {
-                let admission_reason =
-                    protocol::TimelineFollowAdmissionReason::NaturalPlaybackBoundary;
-                if let Err(error) = self.begin_timeline_follow(admission_reason, now) {
-                    self.handle_timeline_follow_admission_failure(error, admission_reason, now);
-                }
+            if let Err(error) = self.settle_timeline_natural_terminal(now, false) {
+                self.last_error = Some(error);
             }
             return;
         }
@@ -45782,17 +45889,8 @@ impl EngineRuntime {
         self.advance_child_transports(now);
 
         if !jumped && self.timeline_position_ms >= duration {
-            self.timeline_playing = false;
-            self.invalidate_timeline_transport_authority()
-                .expect("playback-end preflight must reserve a transport authority successor");
-            self.timeline_paused_at = Some(now);
-            self.timeline_playhead_boundary_armed = false;
-            if self.timeline_follow_natural_boundary_armed {
-                let admission_reason =
-                    protocol::TimelineFollowAdmissionReason::NaturalPlaybackBoundary;
-                if let Err(error) = self.begin_timeline_follow(admission_reason, now) {
-                    self.handle_timeline_follow_admission_failure(error, admission_reason, now);
-                }
+            if let Err(error) = self.settle_timeline_natural_terminal(now, false) {
+                self.last_error = Some(error);
             }
         }
     }

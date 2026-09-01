@@ -1,9 +1,41 @@
 # Syndocal historical v1.0 / current v1.2 alpha Release Status
 
 Updated: 2026-09-01
-Branch: `codex/syndocal-v1.2`; current product metadata is `1.2.0-alpha.55`.
+Branch: `codex/syndocal-v1.2`; current product metadata is `1.2.0-alpha.56`.
 
-## 2026-09-01 current alpha.55 runtime-snapshot/native checkpoint
+## 2026-09-01 current alpha.56 terminal loop/Follow source checkpoint
+
+Alpha.56 closes the recorded strict root-loop release race at an already-reached
+natural Timeline terminal. The old path could publish loop OFF before terminal
+transport and Follow admission had converged, and late authority, click-schedule,
+audio, Follow preparation, snapshot publication, or acknowledgement failures could
+leave an unpublished partial runtime image. The new path preflights every required
+transport and click-schedule successor before mutation, performs terminal and
+Follow convergence inside the receipt-bearing worker transaction, and restores
+the exact pre-command runtime plus Handle-only Follow presenter on any fallible
+post-mutation boundary. No compatibility fallback or persisted schema change was
+added; stale, expired, exhausted, poisoned, or otherwise unverifiable state fails
+closed.
+
+Exact Community MSVC `14.44.35207` focused tests pass: strict DJ Link release
+`16/16`, all `dj_link_` `40/40`, and `timeline_follow_` `27/27`. The final full
+engine gate is `997 passed / 0 failed / 2 ignored` in `225.50s`, with first-party
+warnings `0`. Timeline transport, loop, runtime-watermark, TypeScript, release,
+formatter, and diff gates pass. Independent Terra xHigh adversarial rereview is
+GO with P0/P1 `0`; Ox was unavailable, so this is the documented narrow review
+exception. Two P2 proof-only additions remain optional: duplicate the stale shared-A
+assertion explicitly and exercise acknowledgement poison with a terminal rather
+than non-terminal fixture.
+
+This source checkpoint deliberately makes no alpha.56 native or hardware claim.
+The exact alpha.55 executable and its physical observer remain historical until a
+fresh alpha.56 no-bundle build is produced from the pushed commit containing this
+section, launched as exactly one responsive maximized window, and given a new
+version/size/hash/source identity. Physical USB-DMX, Art-Net/Unity, Spout,
+three-display pixels, MiraBox, audible PROGRAM/CUE, and real DJ/pedal acceptance
+remain external gates.
+
+## 2026-09-01 historical alpha.55 runtime-snapshot/native checkpoint
 
 The reviewed alpha.55 implementation/source/native checkpoint is commit
 `2c4fe33b06eba339ec246c7ba02dd3e01ffcc1f6`, based on upstream-equal parent

@@ -4,7 +4,33 @@ Date: 2026-08-19
 Branch at creation: `codex/syndocal-v1.0`
 Baseline before this document: `848d759846985cc3acf588356cfa3c996b4e2ef2`
 
-## 2026-09-01 alpha.55 runtime snapshot authority and native checkpoint
+## 2026-09-01 alpha.56 terminal loop/Follow source authority
+
+Alpha.56 is the current source candidate on `codex/syndocal-v1.2`. It replaces
+the terminal root-loop release path that could expose loop OFF before natural
+terminal transport and Follow admission had converged. The strict command now
+preflights the complete transport and click-schedule successor count, completes
+terminal/Follow work before forming its receipt, and rolls runtime plus the
+Handle-only Follow presenter back to exact A when Follow preparation, audio
+revision, acknowledgement, or snapshot publication cannot be proven. Stale,
+expired, NoOp, and exhausted cases remain mutation-free; no legacy route or
+permissive retry was added and `.sdc` persistence is unchanged.
+
+Final source evidence is exact MSVC 14.44 strict release `16/16`, `dj_link_`
+`40/40`, `timeline_follow_` `27/27`, and full engine `997 passed / 0 failed /
+2 ignored` in `225.50s`, all with first-party warnings `0`. Timeline transport,
+loop, runtime-watermark, TypeScript, release, formatter, and diff checks pass.
+Independent Terra xHigh rereview is GO with P0/P1 `0`; Ox was unavailable under
+the documented narrow exception. The remaining P2 items are proof strengthening,
+not observed defects.
+
+Native and physical acceptance are intentionally not inferred from this source
+checkpoint. Build the pushed source with the exact required no-bundle gate, launch
+one responsive maximized checkout-owned window, then bind the three-display
+observer to the resulting alpha.56 ProductVersion, byte length, SHA-256, and
+source commit. Until then the alpha.55 executable/observer remain historical.
+
+## 2026-09-01 historical alpha.55 runtime snapshot authority and native checkpoint
 
 Alpha.55 is the current source/native candidate on
 `codex/syndocal-v1.2`, based on upstream-equal parent

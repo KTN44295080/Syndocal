@@ -2,7 +2,7 @@
 
 Syndocal は、DMX照明とVJ映像を同じタイムライン、キュー、BPMクロック、エフェクトソースで駆動するデスクトップ制御ソフトウェアです。
 
-- 製品名: **Syndocal 1.2.0-alpha.55**
+- 製品名: **Syndocal 1.2.0-alpha.56**
 - 開発: **Seraf()のKTN**
 - プロジェクト: **`.sdc`** (可読JSON)
 - Tier 1: Windows 10+ / macOS 12+
@@ -25,9 +25,15 @@ See the [current output acceptance record](qa/DSF2026_SAME_PC_OUTPUT_ACCEPTANCE_
 for execution steps and unverified physical/lease evidence; this boundary is
 not a hardware acceptance claim.
 
-Current product metadata is `1.2.0-alpha.55` on branch
-`codex/syndocal-v1.2`. Alpha.55 separates the mandatory live Timeline runtime
-projection from persisted `.sdc` data and validates the same projection across
+Current product metadata is `1.2.0-alpha.56` on branch
+`codex/syndocal-v1.2`. Alpha.56 closes the strict root-loop release race at a
+natural Timeline terminal: loop release, terminal transport authority, and
+Follow admission now converge in one receipt-bearing worker transaction, while
+invalid or exhausted successor state restores the exact pre-command runtime
+image. A fresh alpha.56 native artifact is still pending the required build and
+window gate. The immediately preceding alpha.55 checkpoint separated the
+mandatory live Timeline runtime projection from persisted `.sdc` data and
+validated the same projection across
 full, delta, authority, poll, and canonical reads. The reviewed implementation,
 source, and native checkpoint is
 `2c4fe33b06eba339ec246c7ba02dd3e01ffcc1f6`. Its warning-free no-bundle
@@ -383,7 +389,7 @@ unaccepted.
 
 CI/Release成果物は次の形式です。
 
-- Windows: `Syndocal_1.2.0-alpha.55_x64-setup.exe` (NSIS)、`Syndocal_1.2.0-alpha.55_x64_ja-JP.msi`
+- Windows: `Syndocal_1.2.0-alpha.56_x64-setup.exe` (NSIS)、`Syndocal_1.2.0-alpha.56_x64_ja-JP.msi`
 - macOS: `.app`、DMG
 - Linux: `.deb`、AppImage
 

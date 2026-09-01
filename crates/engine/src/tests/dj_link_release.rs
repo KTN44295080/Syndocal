@@ -1,5 +1,909 @@
 use super::*;
 
+fn apply_strict_root_loop_command(
+    runtime: &mut EngineRuntime,
+    expected_epoch: u64,
+    expected_generation: u64,
+    expected_loop_generation: u64,
+    expected_follow_generation: u64,
+    fail_publication: bool,
+) -> (
+    Result<TimelineLoopRuntimeAck, String>,
+    Option<TimelineLoopRuntimeAck>,
+    EngineSnapshot,
+    EngineSnapshot,
+) {
+    apply_strict_root_loop_command_with_options(
+        runtime,
+        expected_epoch,
+        expected_generation,
+        expected_loop_generation,
+        expected_follow_generation,
+        fail_publication,
+        false,
+        Instant::now() + Duration::from_secs(1),
+    )
+}
+
+fn apply_strict_root_loop_command_with_options(
+    runtime: &mut EngineRuntime,
+    expected_epoch: u64,
+    expected_generation: u64,
+    expected_loop_generation: u64,
+    expected_follow_generation: u64,
+    fail_publication: bool,
+    poison_outcome: bool,
+    expires_at: Instant,
+) -> (
+    Result<TimelineLoopRuntimeAck, String>,
+    Option<TimelineLoopRuntimeAck>,
+    EngineSnapshot,
+    EngineSnapshot,
+) {
+    let (ack, receiver) = mpsc::sync_channel(1);
+    let outcome = Arc::new(Mutex::new(None));
+    // The shared image must begin at the exact pre-command A state. Building
+    // it after `apply_command` would hide a worker-local partial mutation
+    // from a forced-publication rollback assertion.
+    let published_a = runtime.build_snapshot(0);
+    let published = RwLock::new(published_a.clone());
+    if poison_outcome {
+        let poison_target = Arc::clone(&outcome);
+        let _ = std::panic::catch_unwind(move || {
+            let _guard = poison_target
+                .lock()
+                .expect("fresh strict root-loop outcome mutex must lock");
+            panic!("deterministic strict root-loop acknowledgement poison");
+        });
+    }
+    runtime.apply_command(EngineCommand::ApplyTimelineLoopRuntimePublished {
+        expected_epoch,
+        expected_generation,
+        expected_loop_generation,
+        expected_follow_generation,
+        action: protocol::control_plane_command::TimelineLoopRuntimeActionV1::SetEnabled {
+            enabled: false,
+        },
+        expires_at,
+        completion: TimelineLoopRuntimePublicationCompletion {
+            ack,
+            outcome: Arc::clone(&outcome),
+        },
+    });
+    if fail_publication {
+        runtime.fail_next_pending_publication = true;
+    }
+    runtime.publish_pending_command_acks(0, &published);
+    let result = receiver
+        .recv()
+        .expect("strict root-loop command must resolve");
+    let outcome = outcome.lock().ok().and_then(|mut slot| slot.take());
+    let result = result.and_then(|()| {
+        outcome.ok_or_else(|| {
+            "strict root-loop command published without an acknowledgement image".to_string()
+        })
+    });
+    let published_after = published
+        .into_inner()
+        .expect("strict root-loop published snapshot must not poison");
+    (result, outcome, published_a, published_after)
+}
+
+fn terminal_wait_for_pedal_follow_runtime() -> EngineRuntime {
+    let mut runtime = timeline_follow_ltl5_runtime(protocol::TimelineFollowFaultPolicy::Hold);
+    let mut source = runtime.timeline_bank[0].clone();
+    let follow = source.follow.as_mut().expect("test source has Follow");
+    follow.preroll_ms = 0;
+    follow.destination_start_mode = TimelineFollowDestinationStartMode::WaitForPedal;
+    follow.hold_first_destination_measure = false;
+    let target = runtime.timeline_bank[1].clone();
+    runtime
+        .apply_timeline_bank_state(vec![source, target], TimelineId(8_101), true)
+        .expect("test Follow bank must apply");
+    runtime.timeline_playing = true;
+    runtime.timeline_count_in_until = None;
+    runtime.timeline_follow_natural_boundary_armed = true;
+    runtime
+}
+
+#[test]
+fn strict_root_loop_release_at_terminal_converges_once_then_waits_for_pedal() {
+    let mut runtime = terminal_wait_for_pedal_follow_runtime();
+    runtime.timeline_position_ms = runtime.timeline_duration_ms();
+    runtime.timeline_loop_runtime = TimelineLoopRuntimeSummary {
+        generation: 71,
+        status: TimelineLoopRuntimeStatus::Looping,
+        a_ms: Some(0),
+        b_ms: Some(runtime.timeline_duration_ms()),
+        musical_length_millibeats: Some(4_000),
+        wrap_count: 3,
+    };
+    runtime.timeline_follow_runtime.generation = 29;
+    let expected = (
+        runtime.timeline_transport_epoch,
+        runtime.timeline_transport_generation,
+        runtime.timeline_loop_runtime.generation,
+        runtime.timeline_follow_runtime.generation,
+    );
+    let rollback_a = (
+        runtime.timeline_id,
+        runtime.timeline_playing,
+        runtime.timeline_position_ms,
+        runtime.timeline_transport_epoch,
+        runtime.timeline_transport_generation,
+        runtime.timeline_loop_runtime.clone(),
+        runtime.timeline_follow_runtime.clone(),
+        runtime.timeline_follow_natural_boundary_armed,
+        runtime.timeline_follow_transition.is_some(),
+        runtime.timeline_guide_cues.clone(),
+        runtime.timeline_click_scheduler.identity(),
+        runtime.timeline_audio_transport_revision,
+    );
+
+    let (failed, _failed_outcome, published_a, published_after) = apply_strict_root_loop_command(
+        &mut runtime,
+        expected.0,
+        expected.1,
+        expected.2,
+        expected.3,
+        true,
+    );
+    assert!(failed
+        .expect_err("forced publication failure must reject")
+        .contains("rolled back"));
+    assert_eq!(
+        (
+            runtime.timeline_id,
+            runtime.timeline_playing,
+            runtime.timeline_position_ms,
+            runtime.timeline_transport_epoch,
+            runtime.timeline_transport_generation,
+            runtime.timeline_loop_runtime.clone(),
+            runtime.timeline_follow_runtime.clone(),
+            runtime.timeline_follow_natural_boundary_armed,
+            runtime.timeline_follow_transition.is_some(),
+            runtime.timeline_guide_cues.clone(),
+            runtime.timeline_click_scheduler.identity(),
+            runtime.timeline_audio_transport_revision,
+        ),
+        rollback_a,
+        "publication rollback must restore the exact pre-release source image"
+    );
+    assert_eq!(
+        published_after, published_a,
+        "forced publication failure must leave the shared snapshot at exact A"
+    );
+
+    let (applied, outcome, _published_a, published_after) = apply_strict_root_loop_command(
+        &mut runtime,
+        expected.0,
+        expected.1,
+        expected.2,
+        expected.3,
+        false,
+    );
+    let acknowledged = applied.expect("terminal root-loop release must publish");
+    assert_eq!(
+        outcome,
+        Some(acknowledged),
+        "the receipt must carry the final, not intermediate, authority image"
+    );
+    assert_eq!(
+        acknowledged.disposition,
+        TimelineLoopRuntimeDisposition::Applied
+    );
+    assert_eq!(acknowledged.epoch_after, runtime.timeline_transport_epoch);
+    assert_eq!(
+        acknowledged.generation_after,
+        runtime.timeline_transport_generation
+    );
+    assert_eq!(
+        acknowledged.loop_generation_after,
+        runtime.timeline_loop_runtime.generation
+    );
+    assert_eq!(
+        acknowledged.follow_generation_after,
+        runtime.timeline_follow_runtime.generation
+    );
+    assert!(!runtime.timeline_playing);
+    assert!(matches!(
+        runtime.timeline_loop_runtime.status,
+        TimelineLoopRuntimeStatus::Disabled
+    ));
+    assert!(matches!(
+        runtime.timeline_follow_runtime.status,
+        protocol::TimelineFollowRuntimeStatus::Transitioning
+    ));
+    assert_eq!(
+        runtime.timeline_follow_runtime.admission_reason,
+        Some(protocol::TimelineFollowAdmissionReason::NaturalPlaybackBoundary)
+    );
+    assert_eq!(
+        published_after,
+        runtime.build_snapshot(0),
+        "the success receipt must publish the final terminal/Follow image, not loop-off B"
+    );
+    assert_eq!(
+        published_after.timeline.transport_epoch,
+        acknowledged.epoch_after
+    );
+    assert_eq!(
+        published_after.timeline.transport_generation,
+        acknowledged.generation_after
+    );
+    assert_eq!(
+        published_after.timeline.loop_runtime.generation,
+        acknowledged.loop_generation_after
+    );
+    assert_eq!(
+        published_after.timeline.follow_runtime.generation,
+        acknowledged.follow_generation_after
+    );
+    let identity = runtime.timeline_click_scheduler.identity();
+    let breaks = runtime
+        .timeline_guide_cues
+        .iter()
+        .filter(|cue| matches!(cue.cue, TimelineGuideCueKind::Break))
+        .collect::<Vec<_>>();
+    assert_eq!(breaks.len(), 1, "the root release emits one Break only");
+    assert_eq!(breaks[0].epoch, identity.epoch);
+    assert_eq!(
+        breaks[0].transport_generation,
+        identity.transport_generation
+    );
+    assert_eq!(breaks[0].schedule_generation, identity.schedule_generation);
+
+    let terminal_at = runtime
+        .timeline_follow_transition
+        .as_ref()
+        .map(|transition| transition.started_at + transition.duration)
+        .expect("terminal release must admit one Follow transition");
+    runtime.advance_timeline_follow(terminal_at);
+    assert_eq!(runtime.timeline_id, TimelineId(8_102));
+    assert!(!runtime.timeline_playing);
+    assert_eq!(runtime.timeline_position_ms, 0);
+    assert!(matches!(
+        runtime.timeline_loop_runtime.status,
+        TimelineLoopRuntimeStatus::Disabled
+    ));
+    assert!(runtime.timeline_follow_runtime.waiting_for_pedal_start);
+    assert_eq!(
+        runtime.timeline_follow_runtime.outcome,
+        Some(protocol::TimelineFollowOutcome::Completed)
+    );
+    assert_eq!(
+        runtime
+            .timeline_guide_cues
+            .iter()
+            .filter(|cue| matches!(cue.cue, TimelineGuideCueKind::Complete))
+            .count(),
+        1,
+        "the terminal Follow completion is unique"
+    );
+    let successor_image = (
+        runtime.timeline_id,
+        runtime.timeline_playing,
+        runtime.timeline_position_ms,
+        runtime.timeline_transport_epoch,
+        runtime.timeline_transport_generation,
+        runtime.timeline_loop_runtime.clone(),
+        runtime.timeline_follow_runtime.clone(),
+        runtime.timeline_guide_cues.clone(),
+    );
+    let (stale, stale_outcome, _published_a, _published_after) = apply_strict_root_loop_command(
+        &mut runtime,
+        expected.0,
+        expected.1,
+        expected.2,
+        expected.3,
+        false,
+    );
+    assert_eq!(
+        stale.expect_err("the predecessor root-loop release must be stale"),
+        "Timeline transport authority is stale"
+    );
+    assert!(stale_outcome.is_none());
+    assert_eq!(
+        (
+            runtime.timeline_id,
+            runtime.timeline_playing,
+            runtime.timeline_position_ms,
+            runtime.timeline_transport_epoch,
+            runtime.timeline_transport_generation,
+            runtime.timeline_loop_runtime.clone(),
+            runtime.timeline_follow_runtime.clone(),
+            runtime.timeline_guide_cues.clone(),
+        ),
+        successor_image,
+        "a stale source command must not mutate the installed wait target"
+    );
+
+    let follow_generation = runtime.timeline_follow_runtime.generation;
+    runtime
+        .start_waiting_follow_target_runtime(
+            TimelineId(8_101),
+            TimelineId(8_102),
+            follow_generation,
+        )
+        .expect("only the explicit pedal path may start the waiting target");
+    assert!(runtime.timeline_playing);
+    assert_eq!(runtime.timeline_position_ms, 0);
+    assert!(!runtime.timeline_follow_runtime.waiting_for_pedal_start);
+    assert_eq!(
+        runtime
+            .start_waiting_follow_target_runtime(
+                TimelineId(8_101),
+                TimelineId(8_102),
+                follow_generation
+            )
+            .expect_err("the one-shot pedal start must reject replay"),
+        "DJ Link waiting Follow target admission is stale"
+    );
+}
+
+#[test]
+fn natural_terminal_before_root_loop_release_rejects_old_authority_without_mutation() {
+    let mut runtime = terminal_wait_for_pedal_follow_runtime();
+    runtime.timeline_position_ms = 900;
+    runtime.timeline_loop_runtime = TimelineLoopRuntimeSummary {
+        generation: 17,
+        status: TimelineLoopRuntimeStatus::Armed,
+        a_ms: Some(100),
+        b_ms: Some(900),
+        musical_length_millibeats: Some(4_000),
+        wrap_count: 0,
+    };
+    runtime.timeline_follow_runtime.generation = 31;
+    let predecessor = (
+        runtime.timeline_transport_epoch,
+        runtime.timeline_transport_generation,
+        runtime.timeline_loop_runtime.generation,
+        runtime.timeline_follow_runtime.generation,
+    );
+
+    runtime.last_tick_interval = Duration::from_millis(100);
+    runtime.advance_timeline(Instant::now());
+    assert!(!runtime.timeline_playing);
+    assert!(runtime.timeline_follow_transition.is_none());
+    assert_eq!(
+        runtime.timeline_follow_runtime.generation, predecessor.3,
+        "an armed predecessor loop cannot admit Follow before strict release"
+    );
+    let terminal_image = (
+        runtime.timeline_id,
+        runtime.timeline_position_ms,
+        runtime.timeline_transport_epoch,
+        runtime.timeline_transport_generation,
+        runtime.timeline_loop_runtime.clone(),
+        runtime.timeline_follow_runtime.clone(),
+        runtime.timeline_guide_cues.clone(),
+    );
+
+    let (stale, outcome, _published_a, _published_after) = apply_strict_root_loop_command(
+        &mut runtime,
+        predecessor.0,
+        predecessor.1,
+        predecessor.2,
+        predecessor.3,
+        false,
+    );
+    assert_eq!(
+        stale.expect_err("terminal successor must fence the old loop release"),
+        "Timeline transport authority is stale"
+    );
+    assert!(outcome.is_none());
+    assert_eq!(
+        (
+            runtime.timeline_id,
+            runtime.timeline_position_ms,
+            runtime.timeline_transport_epoch,
+            runtime.timeline_transport_generation,
+            runtime.timeline_loop_runtime.clone(),
+            runtime.timeline_follow_runtime.clone(),
+            runtime.timeline_guide_cues.clone(),
+        ),
+        terminal_image,
+        "reverse ordering cannot create a second terminal or mutate Follow"
+    );
+}
+
+#[test]
+fn strict_root_loop_release_from_destination_hold_reissues_break_after_successor_commit() {
+    let mut runtime = terminal_wait_for_pedal_follow_runtime();
+    runtime.timeline_position_ms = 0;
+    runtime.timeline_follow_runtime.generation = 41;
+    runtime.timeline_follow_runtime.transition_hold_active = true;
+    runtime.timeline_loop_runtime = TimelineLoopRuntimeSummary {
+        generation: 43,
+        status: TimelineLoopRuntimeStatus::Looping,
+        a_ms: Some(0),
+        b_ms: Some(1_000),
+        musical_length_millibeats: Some(4_000),
+        wrap_count: 2,
+    };
+    let expected = (
+        runtime.timeline_transport_epoch,
+        runtime.timeline_transport_generation,
+        runtime.timeline_loop_runtime.generation,
+        runtime.timeline_follow_runtime.generation,
+    );
+
+    let rollback_a = (
+        runtime.timeline_transport_epoch,
+        runtime.timeline_transport_generation,
+        runtime.timeline_loop_runtime.clone(),
+        runtime.timeline_follow_runtime.clone(),
+        runtime.timeline_guide_cues.clone(),
+        runtime.timeline_click_scheduler.identity(),
+    );
+    let (failed, _failed_outcome, published_a, published_after) = apply_strict_root_loop_command(
+        &mut runtime,
+        expected.0,
+        expected.1,
+        expected.2,
+        expected.3,
+        true,
+    );
+    assert!(failed
+        .expect_err("hold release publication failure must reject")
+        .contains("rolled back"));
+    assert_eq!(
+        (
+            runtime.timeline_transport_epoch,
+            runtime.timeline_transport_generation,
+            runtime.timeline_loop_runtime.clone(),
+            runtime.timeline_follow_runtime.clone(),
+            runtime.timeline_guide_cues.clone(),
+            runtime.timeline_click_scheduler.identity(),
+        ),
+        rollback_a,
+        "hold release rollback must restore bounds, Guide, and authority exactly"
+    );
+    assert_eq!(
+        published_after, published_a,
+        "hold publication failure must keep the shared snapshot at exact A"
+    );
+
+    let (applied, outcome, _published_a, _published_after) = apply_strict_root_loop_command(
+        &mut runtime,
+        expected.0,
+        expected.1,
+        expected.2,
+        expected.3,
+        false,
+    );
+    let acknowledged = applied.expect("destination hold release must publish");
+    assert_eq!(outcome, Some(acknowledged));
+    assert_eq!(
+        acknowledged.disposition,
+        TimelineLoopRuntimeDisposition::Applied
+    );
+    assert!(!runtime.timeline_follow_runtime.transition_hold_active);
+    assert!(matches!(
+        runtime.timeline_loop_runtime.status,
+        TimelineLoopRuntimeStatus::Disabled
+    ));
+    assert_eq!(runtime.timeline_loop_runtime.a_ms, None);
+    assert_eq!(runtime.timeline_loop_runtime.b_ms, None);
+    let identity = runtime.timeline_click_scheduler.identity();
+    let breaks = runtime
+        .timeline_guide_cues
+        .iter()
+        .filter(|cue| matches!(cue.cue, TimelineGuideCueKind::Break))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        breaks.len(),
+        1,
+        "hold release must not lose Break at commit"
+    );
+    assert_eq!(breaks[0].epoch, identity.epoch);
+    assert_eq!(
+        breaks[0].transport_generation,
+        identity.transport_generation
+    );
+    assert_eq!(breaks[0].schedule_generation, identity.schedule_generation);
+}
+
+#[test]
+fn terminal_root_loop_release_preflights_both_successors_before_any_mutation() {
+    let mut runtime = terminal_wait_for_pedal_follow_runtime();
+    runtime.timeline_position_ms = runtime.timeline_duration_ms();
+    runtime.timeline_loop_runtime = TimelineLoopRuntimeSummary {
+        generation: 53,
+        status: TimelineLoopRuntimeStatus::Looping,
+        a_ms: Some(0),
+        b_ms: Some(runtime.timeline_duration_ms()),
+        musical_length_millibeats: Some(4_000),
+        wrap_count: 0,
+    };
+    runtime.timeline_follow_runtime.generation = 59;
+    let max = protocol::control_plane_command::MAX_SAFE_JAVASCRIPT_INTEGER;
+    runtime.timeline_transport_epoch = max;
+    runtime.timeline_transport_generation = max - 1;
+    let expected = (
+        runtime.timeline_transport_epoch,
+        runtime.timeline_transport_generation,
+        runtime.timeline_loop_runtime.generation,
+        runtime.timeline_follow_runtime.generation,
+    );
+    let image_before = (
+        runtime.timeline_playing,
+        runtime.timeline_position_ms,
+        runtime.timeline_transport_epoch,
+        runtime.timeline_transport_generation,
+        runtime.timeline_loop_runtime.clone(),
+        runtime.timeline_follow_runtime.clone(),
+        runtime.timeline_follow_transition.is_some(),
+        runtime.timeline_guide_cues.clone(),
+        runtime.timeline_click_scheduler.identity(),
+    );
+
+    let (rejected, outcome, published_a, published_after) = apply_strict_root_loop_command(
+        &mut runtime,
+        expected.0,
+        expected.1,
+        expected.2,
+        expected.3,
+        false,
+    );
+    assert_eq!(
+        rejected.expect_err("terminal release needs two authority successors"),
+        "Timeline transport authority is exhausted"
+    );
+    assert!(outcome.is_none());
+    assert_eq!(
+        (
+            runtime.timeline_playing,
+            runtime.timeline_position_ms,
+            runtime.timeline_transport_epoch,
+            runtime.timeline_transport_generation,
+            runtime.timeline_loop_runtime.clone(),
+            runtime.timeline_follow_runtime.clone(),
+            runtime.timeline_follow_transition.is_some(),
+            runtime.timeline_guide_cues.clone(),
+            runtime.timeline_click_scheduler.identity(),
+        ),
+        image_before,
+        "an unavailable terminal successor must not leave a loop-off partial mutation"
+    );
+    assert_eq!(
+        published_after, published_a,
+        "rejected preflight must leave the shared snapshot at exact A"
+    );
+}
+
+#[test]
+fn terminal_root_loop_release_preflights_every_click_schedule_successor_before_mutation() {
+    for schedule_generation in [u64::MAX, u64::MAX - 1] {
+        let mut runtime = terminal_wait_for_pedal_follow_runtime();
+        runtime.timeline_position_ms = runtime.timeline_duration_ms();
+        runtime.timeline_loop_runtime = TimelineLoopRuntimeSummary {
+            generation: 61,
+            status: TimelineLoopRuntimeStatus::Looping,
+            a_ms: Some(0),
+            b_ms: Some(runtime.timeline_duration_ms()),
+            musical_length_millibeats: Some(4_000),
+            wrap_count: 0,
+        };
+        runtime.timeline_follow_runtime.generation = 67;
+        runtime
+            .timeline_click_scheduler
+            .identity
+            .schedule_generation = schedule_generation;
+        let expected = (
+            runtime.timeline_transport_epoch,
+            runtime.timeline_transport_generation,
+            runtime.timeline_loop_runtime.generation,
+            runtime.timeline_follow_runtime.generation,
+        );
+        let runtime_a = runtime.build_snapshot(0);
+
+        let (rejected, outcome, published_a, published_after) = apply_strict_root_loop_command(
+            &mut runtime,
+            expected.0,
+            expected.1,
+            expected.2,
+            expected.3,
+            false,
+        );
+        assert_eq!(
+            rejected.expect_err("terminal release needs two click schedule successors"),
+            "Timeline click schedule generation is exhausted"
+        );
+        assert!(outcome.is_none());
+        assert_eq!(
+            runtime.build_snapshot(0),
+            runtime_a,
+            "schedule generation {schedule_generation} must reject before loop-off mutates A"
+        );
+        assert_eq!(
+            published_after, published_a,
+            "schedule generation {schedule_generation} must leave shared A published"
+        );
+    }
+}
+
+#[test]
+fn terminal_root_loop_release_rejects_follow_target_incompatibility_without_partial_loop_off() {
+    let mut runtime = terminal_wait_for_pedal_follow_runtime();
+    runtime.timeline_position_ms = runtime.timeline_duration_ms();
+    runtime.timeline_loop_runtime = TimelineLoopRuntimeSummary {
+        generation: 71,
+        status: TimelineLoopRuntimeStatus::Looping,
+        a_ms: Some(0),
+        b_ms: Some(runtime.timeline_duration_ms()),
+        musical_length_millibeats: Some(4_000),
+        wrap_count: 0,
+    };
+    runtime.timeline_follow_runtime.generation = 73;
+    // Exactly two transport successors are available: loop-off and terminal
+    // settlement. The invalid target must reject the whole command instead
+    // of falling into a third failure-settlement successor after B begins.
+    let max = protocol::control_plane_command::MAX_SAFE_JAVASCRIPT_INTEGER;
+    runtime.timeline_transport_epoch = max;
+    runtime.timeline_transport_generation = max - 2;
+    runtime.timeline_bank[1].id = TimelineId(8_199);
+    let expected = (
+        runtime.timeline_transport_epoch,
+        runtime.timeline_transport_generation,
+        runtime.timeline_loop_runtime.generation,
+        runtime.timeline_follow_runtime.generation,
+    );
+    let runtime_a = runtime.build_snapshot(0);
+
+    let (rejected, outcome, published_a, published_after) = apply_strict_root_loop_command(
+        &mut runtime,
+        expected.0,
+        expected.1,
+        expected.2,
+        expected.3,
+        false,
+    );
+    assert_eq!(
+        rejected.expect_err("incompatible Follow target must reject the strict command"),
+        "Timeline Follow target is no longer the next Timeline in bank order"
+    );
+    assert!(outcome.is_none());
+    assert_eq!(runtime.build_snapshot(0), runtime_a);
+    assert_eq!(published_after, published_a);
+    assert!(runtime.timeline_follow_transition.is_none());
+}
+
+#[test]
+fn terminal_root_loop_release_rejects_follow_prepare_or_audio_failure_at_exact_a() {
+    for exhaust_audio_revision in [false, true] {
+        let mut runtime = terminal_wait_for_pedal_follow_runtime();
+        runtime.timeline_position_ms = runtime.timeline_duration_ms();
+        runtime.timeline_loop_runtime = TimelineLoopRuntimeSummary {
+            generation: 79,
+            status: TimelineLoopRuntimeStatus::Looping,
+            a_ms: Some(0),
+            b_ms: Some(runtime.timeline_duration_ms()),
+            musical_length_millibeats: Some(4_000),
+            wrap_count: 0,
+        };
+        runtime.timeline_follow_runtime.generation = 83;
+        if exhaust_audio_revision {
+            runtime.timeline_audio_transport_revision = u64::MAX;
+        } else {
+            runtime.timeline_bank[1]
+                .audio_clips
+                .push(TimelineAudioClipSummary {
+                    id: 8_201,
+                    path: "invalid-follow-target.wav".to_string(),
+                    duration_ms: 0,
+                    ..TimelineAudioClipSummary::default()
+                });
+        }
+        let presenter = Arc::new(RwLock::new(None));
+        runtime.timeline_follow_video_render_snapshot = Some(Arc::clone(&presenter));
+        let expected = (
+            runtime.timeline_transport_epoch,
+            runtime.timeline_transport_generation,
+            runtime.timeline_loop_runtime.generation,
+            runtime.timeline_follow_runtime.generation,
+        );
+        let runtime_a = runtime.build_snapshot(0);
+        let presenter_a = presenter
+            .read()
+            .expect("Follow presenter A must not poison")
+            .clone();
+        assert!(
+            presenter_a.is_none(),
+            "this rejection fixture starts with no active Follow presenter"
+        );
+
+        let (rejected, outcome, published_a, published_after) = apply_strict_root_loop_command(
+            &mut runtime,
+            expected.0,
+            expected.1,
+            expected.2,
+            expected.3,
+            false,
+        );
+        let error = rejected.expect_err("Follow admission failure must reject strict loop-off");
+        if exhaust_audio_revision {
+            assert_eq!(error, "Timeline audio transport revision is exhausted");
+        } else {
+            assert!(
+                error.contains("Timeline audio clip 8201 duration must be greater than zero"),
+                "unexpected prepare failure: {error}"
+            );
+        }
+        assert!(outcome.is_none());
+        assert_eq!(runtime.build_snapshot(0), runtime_a);
+        assert_eq!(published_after, published_a);
+        assert!(
+            presenter
+                .read()
+                .expect("Follow presenter after reject must not poison")
+                .is_none(),
+            "strict reject must restore the Handle-only Follow presenter to its exact None A"
+        );
+        assert!(runtime.timeline_follow_transition.is_none());
+    }
+}
+
+#[test]
+fn strict_root_loop_noop_does_not_consume_terminal_authority_or_click_schedule() {
+    let mut runtime = terminal_wait_for_pedal_follow_runtime();
+    runtime.timeline_position_ms = runtime.timeline_duration_ms();
+    runtime.timeline_loop_runtime.status = TimelineLoopRuntimeStatus::Disabled;
+    runtime.timeline_loop_runtime.generation = 89;
+    runtime.timeline_follow_runtime.generation = 97;
+    runtime
+        .timeline_click_scheduler
+        .identity
+        .schedule_generation = u64::MAX;
+    let expected = (
+        runtime.timeline_transport_epoch,
+        runtime.timeline_transport_generation,
+        runtime.timeline_loop_runtime.generation,
+        runtime.timeline_follow_runtime.generation,
+    );
+    let runtime_a = runtime.build_snapshot(0);
+
+    let (result, outcome, published_a, published_after) = apply_strict_root_loop_command(
+        &mut runtime,
+        expected.0,
+        expected.1,
+        expected.2,
+        expected.3,
+        false,
+    );
+    let acknowledgement = result.expect("unchanged strict loop-off is a typed NoOp");
+    assert_eq!(
+        acknowledgement.disposition,
+        TimelineLoopRuntimeDisposition::NoOp
+    );
+    assert_eq!(outcome, Some(acknowledgement));
+    assert_eq!(runtime.build_snapshot(0), runtime_a);
+    assert_eq!(published_after, published_a);
+}
+
+#[test]
+fn strict_root_loop_completion_poison_after_applied_b_restores_exact_a_without_late_publication() {
+    let mut runtime = terminal_wait_for_pedal_follow_runtime();
+    runtime.timeline_position_ms = 500;
+    runtime.timeline_loop_runtime = TimelineLoopRuntimeSummary {
+        generation: 101,
+        status: TimelineLoopRuntimeStatus::Looping,
+        a_ms: Some(100),
+        b_ms: Some(900),
+        musical_length_millibeats: Some(4_000),
+        wrap_count: 2,
+    };
+    runtime.timeline_follow_runtime.generation = 103;
+    let presenter = Arc::new(RwLock::new(None));
+    runtime.timeline_follow_video_render_snapshot = Some(Arc::clone(&presenter));
+    let expected = (
+        runtime.timeline_transport_epoch,
+        runtime.timeline_transport_generation,
+        runtime.timeline_loop_runtime.generation,
+        runtime.timeline_follow_runtime.generation,
+    );
+    let runtime_a = runtime.build_snapshot(0);
+
+    let (rejected, outcome, published_a, published_after) =
+        apply_strict_root_loop_command_with_options(
+            &mut runtime,
+            expected.0,
+            expected.1,
+            expected.2,
+            expected.3,
+            false,
+            true,
+            Instant::now() + Duration::from_secs(1),
+        );
+    assert_eq!(
+        rejected.expect_err("poisoned completion must reject after B mutation"),
+        "Timeline loop acknowledgement state was poisoned"
+    );
+    assert!(
+        outcome.is_none(),
+        "poisoned completion cannot expose an ACK image"
+    );
+    assert_eq!(runtime.build_snapshot(0), runtime_a);
+    assert_eq!(published_after, published_a);
+    assert!(
+        presenter
+            .read()
+            .expect("Follow presenter after poison must not poison")
+            .is_none(),
+        "poison rollback must regenerate the Handle-only Follow presenter at exact None A"
+    );
+    assert!(
+        runtime.pending_command_acks.is_empty(),
+        "a poisoned completion must not leave an Applied B acknowledgement for a later tick"
+    );
+
+    // A zero-delta next tick is intentionally non-terminal. It proves there
+    // is no delayed command receipt which can publish the rejected loop-off
+    // B after the error ACK already resolved.
+    runtime.timeline_playhead_boundary_armed = false;
+    runtime.last_tick_interval = Duration::ZERO;
+    runtime.advance_timeline(Instant::now());
+    let shared_after_tick = RwLock::new(published_after.clone());
+    runtime.publish_pending_command_acks(0, &shared_after_tick);
+    assert_eq!(
+        shared_after_tick
+            .into_inner()
+            .expect("shared snapshot after tick must not poison"),
+        published_after,
+        "the following tick must not publish delayed B"
+    );
+}
+
+#[test]
+fn expired_strict_root_loop_command_preserves_runtime_presenter_and_shared_a() {
+    let mut runtime = terminal_wait_for_pedal_follow_runtime();
+    runtime.timeline_position_ms = 500;
+    runtime.timeline_loop_runtime = TimelineLoopRuntimeSummary {
+        generation: 107,
+        status: TimelineLoopRuntimeStatus::Looping,
+        a_ms: Some(100),
+        b_ms: Some(900),
+        musical_length_millibeats: Some(4_000),
+        wrap_count: 0,
+    };
+    runtime.timeline_follow_runtime.generation = 109;
+    let presenter = Arc::new(RwLock::new(None));
+    runtime.timeline_follow_video_render_snapshot = Some(Arc::clone(&presenter));
+    let expected = (
+        runtime.timeline_transport_epoch,
+        runtime.timeline_transport_generation,
+        runtime.timeline_loop_runtime.generation,
+        runtime.timeline_follow_runtime.generation,
+    );
+    let runtime_a = runtime.build_snapshot(0);
+
+    let (rejected, outcome, published_a, published_after) =
+        apply_strict_root_loop_command_with_options(
+            &mut runtime,
+            expected.0,
+            expected.1,
+            expected.2,
+            expected.3,
+            false,
+            false,
+            Instant::now() - Duration::from_millis(1),
+        );
+    assert_eq!(
+        rejected.expect_err("expired strict command must reject before mutation"),
+        "Timeline loop command expired before engine execution"
+    );
+    assert!(outcome.is_none());
+    assert_eq!(runtime.build_snapshot(0), runtime_a);
+    assert_eq!(published_after, published_a);
+    assert!(
+        presenter
+            .read()
+            .expect("Follow presenter after expiry must not poison")
+            .is_none(),
+        "expiry must not touch the Handle-only Follow presenter"
+    );
+}
+
 #[test]
 fn dj_link_release_clock_handoff_preserves_position_and_fails_closed_off_contract() {
     let mut runtime =
