@@ -29,10 +29,13 @@ active Timeline ID, revalidates both before every DOM query, and stops on
 unmount. This replaces a transient stale-selection/focus loss without allowing
 an old operation to focus a same-ID element in a replacement project/Timeline.
 
-The same-PC three-display derivative harness preserves exactly two ordinary
-Display outputs and three compositions and changes only 14 allowlisted media
-fields. Its verified output is `1,112,316` bytes with SHA-256
-`27484E18DE3FFBB19829D19A90459AB4D847209BF272E629CAE37AF3DD38EA11`.
+The alpha.53 same-PC three-display derivative preserves exactly two ordinary
+Display outputs and three compositions. Relative to alpha.52 it changes only
+the four mirrored duration fields for the two authored show Scene Blocks, each
+to `81153 ms`. Its verified output
+`target/qa/DSF2026-show-alpha53-complete-show.sdc` is `1,112,332` bytes with
+SHA-256
+`72B5120740580A16907B1C1C3A2CD14F995829C6CB837F332F2473501A789C53`.
 It is local QA evidence, not a portable or release artifact; absolute paths
 require explicit relink and re-verification on another PC.
 
@@ -48,12 +51,56 @@ during the bounded retry window. The isolated full performance rerun passes
 after the scope-fenced focus fix. Vite retains one existing App chunk
 size advisory; no first-party warning was added.
 
-No alpha.53 native artifact or hardware claim exists yet. The existing alpha.52
-executable remains historical until the source checkpoint is pushed, exact
-`HEAD=origin` is confirmed, and `pnpm --dir app tauri build --no-bundle` succeeds
-with the absolute Community MSVC `14.44.35207` linker pinned and first in
-`where.exe`. USB-DMX is absent; fresh physical USB-DMX, Art-Net, Spout,
-three-display, ASIO-device, and listening acceptance remain open.
+The final alpha.53 transport correction is pushed and exact `HEAD=origin` was
+confirmed at `27f45d1689f415a9423e431d1bf9bf285c0bd634`. The observed native
+Play/Pause failure was not an engine receipt failure: the nested
+`TimelineSnapshot.transport_epoch/transport_generation` fields are deliberately
+`serde(skip)` for project persistence, so they were absent from the authority
+bundle wire value and the renderer compared `undefined` with the numeric ACK.
+The corrected wire projects both fields at the top level from the same captured
+engine snapshot, keeps the nested persistence schema unchanged, and rejects a
+top-level mismatch. The focused transport checker, TypeScript, formatter, and a
+real Rust serialization test all pass; the Rust test reports `1 passed`,
+`0 failed`, `1416 filtered`, with first-party warnings `0`. Independent Terra
+xHigh review found P0/P1 `0`. A distinct terminal/loop/follow end-boundary race
+remains a recorded P1 for future receipt-attached snapshot work; no convergence
+check was weakened to hide it. The App delayed-full/canonical proof remains the
+P2 source-contract-only limitation described above.
+
+A native no-bundle build then passed in `3m12s`:
+`pnpm --dir app tauri build --no-bundle`, after
+`vcvars64.bat -vcvars_ver=14.44` and the absolute Community linker
+`C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.44.35207\\bin\\Hostx64\\x64\\link.exe`
+were pinned in `CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER` and verified first
+by `where.exe link.exe`. The build environment explicitly supplied
+`FFMPEG_DIR=C:\\Users\\kouty\\AppData\\Local\\Microsoft\\WinGet\\Packages\\Gyan.FFmpeg.Shared_Microsoft.Winget.Source_8wekyb3d8bbwe\\ffmpeg-8.1.2-full_build-shared`,
+`LIBCLANG_PATH=C:\\Program Files\\LLVM\\bin`,
+`CPAL_ASIO_DIR=C:\\Users\\kouty\\Documents\\KDMX\\target\\asio-sdk-2.3.4\\ASIOSDK`,
+and `SYNDOCAL_ASIO_SDK_ARCHIVE_PATH=C:\\Users\\kouty\\Documents\\KDMX\\target\\ASIO-SDK_2.3.4_2025-10-15.zip`.
+It produced `target/release/syndocal.exe`, ProductVersion/FileVersion
+`1.2.0-alpha.53`, `62,424,576` bytes, SHA-256
+`69E89678FFF38CD50F631BCA2E36D1FAFDB38FC0CB49F6C98254E715CC187178`.
+Rust first-party warnings were `0`; the frontend retains the existing
+`511.02 kB` App-chunk advisory. The exact executable launched as responsive PID
+`45336`. In the maximized native Timeline, Play converged to epoch `1`,
+generation `3`, playing `true`, position `18699`; Pause converged to generation
+`4`, playing `false`, position `47058`, which remained unchanged after `2.2 s`.
+The former convergence error did not recur. Reference Audio was unmuted and its
+explicit CUE route resolved to `Music (Elgato Virtual Audio)` with lifecycle
+`running`, `callbackLive=true`, fault count `0`, and no last error. This proves
+native routing/callback/source state, not physical audibility.
+
+The lighting/video lease was re-armed through the normal UI and internally
+reported `held_active` for both resources. Existing Display output IDs `3`
+(`Display 1`, `1920x1080`, Foreground composition) and `4` (`Display 5`,
+`3840x2160`, Background composition) were reopened without adding or rerouting
+an output; both report `live_open=true`, exact machine-role ownership, and no
+last error. The identity-bound StandardRelease acceptance is the remaining
+three-display checkpoint. Fresh USB-DMX, Art-Net, Spout, ASIO-device, and
+physical listening acceptance remain open. USB-DMX is absent; the protected
+alpha.51 project remains `1,116,223` bytes, SHA-256
+`7031196A6527431FB8D625F420FE5D3E442DD2AA35D2ED86D57AF9EDF69890A7`, and must
+not be staged, moved, modified, or deleted.
 
 ## 2026-09-01 alpha.52 operator-path and native checkpoint
 

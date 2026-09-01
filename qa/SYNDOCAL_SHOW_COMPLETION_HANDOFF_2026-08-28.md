@@ -4,13 +4,13 @@ Status date: 2026-09-01 JST
 
 This is the concise authoritative resume note for the final show-critical tranche. It supersedes chat-only status, but it does not supersede the detailed acceptance documents named below.
 
-## 2026-09-01 alpha.53 source checkpoint (native evidence pending)
+## 2026-09-01 alpha.53 source/native checkpoint (three-display acceptance pending)
 
-Alpha.53 is the current source candidate on `codex/syndocal-v1.2`, based on
+Alpha.53 is the current source checkpoint on `codex/syndocal-v1.2`, based on
 upstream-equal parent `9be5479b23b417049c078e24a7e6c3b172fc720e`. The exact
-source commit produced by this checkpoint is recorded in the post-build evidence
-section before any artifact is accepted; this source document does not relabel the
-existing alpha.52 executable as alpha.53.
+source commit and alpha.53 executable identity are recorded below. That build
+evidence does not itself accept Timeline UI, three-display, or physical output
+behaviour.
 
 The old Timeline transport path settled Play/Pause from the command receipt while
 an older generic snapshot could still be in flight, and a queued action could
@@ -45,12 +45,13 @@ Independent Terra xHigh review is GO with P0/P1 `0`; P2 is limited to the lack o
 an explicit test for a user intentionally focusing another control during that
 short same-Timeline retry window. No authority or mutation is affected.
 
-The exact local three-display QA derivative is generated and verified by
-`qa/harnesses/derive-dsf2026-alpha52-three-display-current-media.mjs`. It preserves
-two ordinary Display outputs and three compositions while changing only 14
-allowlisted media paths/metadata fields. Its current output identity is
-`1,112,316` bytes, SHA-256
-`27484E18DE3FFBB19829D19A90459AB4D847209BF272E629CAE37AF3DD38EA11`.
+The exact alpha.53 local three-display QA derivative is generated and verified
+by `qa/harnesses/derive-dsf2026-alpha53-complete-show.mjs`. It preserves two
+ordinary Display outputs and three compositions and changes only the four
+mirrored Scene Block duration fields to `81153 ms`. Its output
+`target/qa/DSF2026-show-alpha53-complete-show.sdc` is `1,112,332` bytes,
+SHA-256
+`72B5120740580A16907B1C1C3A2CD14F995829C6CB837F332F2473501A789C53`.
 It is a same-PC exact QA specimen only: fixed `C:\Users\kouty` and absolute SDC
 media paths make portable/release use fail closed until explicit relink and
 re-verification.
@@ -67,14 +68,54 @@ orphan copies of the same browser fixture were terminated by exact command/PID
 before that acceptance run. The Vite build retains one existing chunk-size
 advisory (`511.01 kB` App chunk); no first-party source warning was added.
 
-Native build, artifact identity, launch, physical USB-DMX, Art-Net, Spout,
-three-display, ASIO-device, and listening acceptance remain unverified for
-alpha.53 at this source checkpoint. USB-DMX is absent on this PC; alpha.51
-`all_white`/COM3 behavior remains historical evidence only. The protected user
-project `DSF2026-show-alpha51-usb-final.sdc` is not part of this checkpoint and
-must not be staged, modified, or deleted. The next safe action is to push the
-source checkpoint, verify exact `HEAD=origin`, and build only that exact source
-under the pinned Community MSVC `14.44.35207` gate.
+The final transport correction was pushed and verified upstream-equal at
+`27f45d1689f415a9423e431d1bf9bf285c0bd634`. The observed native convergence
+error came from a wire projection mismatch: nested runtime transport fields are
+intentionally `serde(skip)` for persistence and therefore reached the renderer
+as absent values. The corrected authority bundle exposes numeric top-level
+epoch/generation from the same captured engine snapshot while leaving nested
+project serialization unchanged. Focused checker, TypeScript, formatter, and
+the Rust serializer test (`1 passed`, `0 failed`, `1416 filtered`) pass with
+first-party warnings `0`; independent Terra xHigh review reports P0/P1 `0`.
+The separate terminal/loop/follow end-boundary race remains P1 future work; the
+App delayed-full/canonical dynamic-harness gap remains P2.
+
+Its final native no-bundle build passed in `3m12s` under
+`vcvars64.bat -vcvars_ver=14.44`, with
+`CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER` pinned to
+`C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.44.35207\\bin\\Hostx64\\x64\\link.exe`
+and that same linker first in `where.exe link.exe`. The successful build set
+`FFMPEG_DIR=C:\\Users\\kouty\\AppData\\Local\\Microsoft\\WinGet\\Packages\\Gyan.FFmpeg.Shared_Microsoft.Winget.Source_8wekyb3d8bbwe\\ffmpeg-8.1.2-full_build-shared`,
+`LIBCLANG_PATH=C:\\Program Files\\LLVM\\bin`,
+`CPAL_ASIO_DIR=C:\\Users\\kouty\\Documents\\KDMX\\target\\asio-sdk-2.3.4\\ASIOSDK`,
+and `SYNDOCAL_ASIO_SDK_ARCHIVE_PATH=C:\\Users\\kouty\\Documents\\KDMX\\target\\ASIO-SDK_2.3.4_2025-10-15.zip`.
+The resulting exact `target/release/syndocal.exe` is ProductVersion/FileVersion
+`1.2.0-alpha.53`, `62,424,576` bytes, SHA-256
+`69E89678FFF38CD50F631BCA2E36D1FAFDB38FC0CB49F6C98254E715CC187178`.
+Rust first-party warnings were `0`; the existing Vite `511.02 kB` App-chunk
+advisory remains. The exact executable launched as responsive PID `45336`.
+
+Maximized native Timeline Play converged to epoch `1`, generation `3`, playing
+`true`, position `18699`; Pause converged to generation `4`, playing `false`,
+position `47058`, stable after `2.2 s`. The previous error did not recur.
+Reference Audio was unmuted; explicit CUE resolved to
+`Music (Elgato Virtual Audio)` with lifecycle `running`, live callback, fault
+count `0`, and no last error. This is runtime proof, not a listening claim.
+
+The normal UI re-armed the lighting/video lease (`held_active`) and reopened
+only existing output ID `3` / `Display 1` / `1920x1080` / Foreground and output
+ID `4` / `Display 5` / `3840x2160` / Background. Both currently report
+`live_open=true`, `OwnedByMachineRole`, and no last error. Exact
+StandardRelease identity/placement sampling remains the next action; this
+paragraph is not that acceptance.
+
+Fresh USB-DMX, Art-Net, Spout, ASIO-device, and physical listening acceptance
+remain open. USB-DMX is absent on this PC; alpha.51 `all_white`/COM3 behavior is
+historical evidence only. The protected user project
+`DSF2026-show-alpha51-usb-final.sdc` remains untracked and unchanged at
+`1,116,223` bytes, SHA-256
+`7031196A6527431FB8D625F420FE5D3E442DD2AA35D2ED86D57AF9EDF69890A7`; it must
+not be staged, moved, modified, or deleted.
 
 ## 2026-09-01 alpha.52 show-critical UI/audio checkpoint
 
