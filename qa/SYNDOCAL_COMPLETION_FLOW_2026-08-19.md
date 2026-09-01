@@ -8,7 +8,11 @@ Baseline before this document: `848d759846985cc3acf588356cfa3c996b4e2ef2`
 
 Alpha.55 is the current source/native candidate on
 `codex/syndocal-v1.2`, based on upstream-equal parent
-`c0885cf8b8d4c6bc54207b4f3dfbd1676f79a413`. The previous renderer path
+`c0885cf8b8d4c6bc54207b4f3dfbd1676f79a413`. Its reviewed implementation,
+source, and native checkpoint is commit
+`2c4fe33b06eba339ec246c7ba02dd3e01ffcc1f6`; this documentation follow-up
+records the post-commit identity, and final upstream equality is checked only
+after both commits are pushed. The previous renderer path
 required live Timeline transport/loop/Follow watermarks inside the persisted
 project snapshot even though Rust marks those runtime fields `serde(skip)`.
 That representation mismatch caused otherwise valid existing `.sdc` projects

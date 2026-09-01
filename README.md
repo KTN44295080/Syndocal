@@ -28,7 +28,9 @@ not a hardware acceptance claim.
 Current product metadata is `1.2.0-alpha.55` on branch
 `codex/syndocal-v1.2`. Alpha.55 separates the mandatory live Timeline runtime
 projection from persisted `.sdc` data and validates the same projection across
-full, delta, authority, poll, and canonical reads. Its warning-free no-bundle
+full, delta, authority, poll, and canonical reads. The reviewed implementation,
+source, and native checkpoint is
+`2c4fe33b06eba339ec246c7ba02dd3e01ffcc1f6`. Its warning-free no-bundle
 build produced an exact `62,292,480`-byte executable with SHA-256
 `8CBD6A5875CFAD8BFABC1838BE7E4C32FA367017E9267F97453B756706B63CA1`.
 Exactly one responsive checkout-owned Syndocal window was verified with status

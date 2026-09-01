@@ -7,7 +7,11 @@ This is the concise authoritative resume note for the final show-critical tranch
 ## 2026-09-01 alpha.55 runtime snapshot/native checkpoint
 
 Current metadata is `1.2.0-alpha.55` on `codex/syndocal-v1.2`, based on clean
-upstream-equal parent `c0885cf8b8d4c6bc54207b4f3dfbd1676f79a413`. The show
+upstream-equal parent `c0885cf8b8d4c6bc54207b4f3dfbd1676f79a413`. The exact
+reviewed implementation/source/native checkpoint is commit
+`2c4fe33b06eba339ec246c7ba02dd3e01ffcc1f6`. This follow-up records that
+post-commit identity; verify the documentation commit itself equals upstream
+after the shared push. The show
 project failure was a representation bug: native runtime Timeline watermarks
 were intentionally excluded from `.sdc`, while renderer ingress incorrectly
 required them inside that persisted snapshot. Alpha.55 carries a mandatory

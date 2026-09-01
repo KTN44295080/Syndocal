@@ -5,6 +5,12 @@ Branch: `codex/syndocal-v1.2`; current product metadata is `1.2.0-alpha.55`.
 
 ## 2026-09-01 current alpha.55 runtime-snapshot/native checkpoint
 
+The reviewed alpha.55 implementation/source/native checkpoint is commit
+`2c4fe33b06eba339ec246c7ba02dd3e01ffcc1f6`, based on upstream-equal parent
+`c0885cf8b8d4c6bc54207b4f3dfbd1676f79a413`. This documentation follow-up
+records that exact source identity; push/upstream equality is verified after
+the follow-up commit rather than inferred from the parent.
+
 Alpha.55 fixes the renderer/native contract that made a valid persisted `.sdc`
 look as if its Timeline runtime watermark were missing. The retired path expected
 transport, loop, and Follow runtime state inside the authored project snapshot,
@@ -185,7 +191,7 @@ import observation below remain the current native authority until that user
 work is saved or otherwise released. No physical DMX, Art-Net, audio, Spout,
 capture, or production DJ acceptance is added here.
 
-## 2026-08-31 current alpha.43 native and DVC checkpoint
+## 2026-08-31 historical alpha.43 native and DVC checkpoint
 
 The exact clean, upstream-equal source used for this native build was
 `eaef0508df944dafdee08552acb6be28a74c9c46`. Immediately before the build,
