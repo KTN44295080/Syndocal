@@ -24,11 +24,23 @@ Independent Terra xHigh rereview is GO with P0/P1 `0`; Ox was unavailable under
 the documented narrow exception. The remaining P2 items are proof strengthening,
 not observed defects.
 
-Native and physical acceptance are intentionally not inferred from this source
-checkpoint. Build the pushed source with the exact required no-bundle gate, launch
-one responsive maximized checkout-owned window, then bind the three-display
-observer to the resulting alpha.56 ProductVersion, byte length, SHA-256, and
-source commit. Until then the alpha.55 executable/observer remain historical.
+The pushed source identity is
+`3185fe52a631b0b5855b9e5996ad131db74e8e81`. The required exact MSVC
+14.44 no-bundle build completed in `4m30s`, warnings `0`. Its executable is
+ProductVersion/FileVersion `1.2.0-alpha.56`, `62,292,480` bytes, SHA-256
+`4BCC1B33A73586C3CED2FB66217732FD1CF1BBF957529559E0DD7ED67435ABAE`.
+Exactly one checkout-owned PID `54360` exposes one responsive maximized
+`Syndocal` window. The three-display observer is retargeted to that exact
+artifact/source pair; PowerShell 7 and 5.1 each pass `96/96`, and both parsers
+accept its scripts. This closes native build/start and observer eligibility,
+not physical output, audible audio, camera, Unity, or DJ/pedal acceptance.
+Independent Terra xHigh observer rereview is GO with P0/P1 `0`; its P2-only
+proof note is future explicit negative inventory for retired alpha.55 authority
+tokens, which are absent from the current runner and self-test.
+Post-build inventory is `target` `158,092,212,050` logical bytes / `112,200`
+files and `app/node_modules` `545,338,492` bytes / `3,704` files. No eligible
+exact-target cleanup harness exists, so deletion was not attempted and reclaimed
+bytes are `0`.
 
 ## 2026-09-01 historical alpha.55 runtime snapshot authority and native checkpoint
 

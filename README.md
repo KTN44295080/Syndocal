@@ -30,8 +30,17 @@ Current product metadata is `1.2.0-alpha.56` on branch
 natural Timeline terminal: loop release, terminal transport authority, and
 Follow admission now converge in one receipt-bearing worker transaction, while
 invalid or exhausted successor state restores the exact pre-command runtime
-image. A fresh alpha.56 native artifact is still pending the required build and
-window gate. The immediately preceding alpha.55 checkpoint separated the
+image. From pushed source commit
+`3185fe52a631b0b5855b9e5996ad131db74e8e81`, the exact MSVC 14.44
+no-bundle build completed in `4m30s` with first-party warnings `0`. The exact
+`62,292,480`-byte executable reports ProductVersion/FileVersion
+`1.2.0-alpha.56` and SHA-256
+`4BCC1B33A73586C3CED2FB66217732FD1CF1BBF957529559E0DD7ED67435ABAE`.
+Exactly one checkout-owned PID `54360` exposes one responsive maximized
+`Syndocal` window. The StandardRelease three-display observer is bound to this
+artifact/source identity; PowerShell 7 and Windows PowerShell 5.1 both pass its
+`96/96` self-test. This is native startup and observer eligibility, not physical
+pixel or hardware acceptance. The immediately preceding alpha.55 checkpoint separated the
 mandatory live Timeline runtime projection from persisted `.sdc` data and
 validated the same projection across
 full, delta, authority, poll, and canonical reads. The reviewed implementation,

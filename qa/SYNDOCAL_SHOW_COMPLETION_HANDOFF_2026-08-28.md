@@ -26,13 +26,30 @@ Independent Terra xHigh rereview is GO with P0/P1 `0`; Ox was unavailable and
 this is the narrow documented exception. P2 proof strengthening remains for an
 explicit stale shared-A assertion and terminal-fixture poison coverage.
 
-No alpha.56 native or hardware acceptance exists at this source checkpoint.
-The first safe continuation is: push this checkpoint, terminate only the exact
-checkout-owned alpha.55 process after resolving its path, run the required exact
-MSVC no-bundle build, launch and maximize exactly one responsive alpha.56 window,
-capture version/size/hash/source identity, then retarget and re-run the
-three-display observer. Physical USB-DMX, Art-Net/Unity, Spout, display pixels,
-MiraBox, audible PROGRAM/CUE, and real DJ/pedal gates remain unverified.
+The source checkpoint is pushed at
+`3185fe52a631b0b5855b9e5996ad131db74e8e81`. Immediately before the native
+build, PID `56892` was resolved to this checkout's exact alpha.55 executable and
+only that process was terminated. Exact MSVC 14.44 remained first and absolutely
+pinned; `pnpm --dir app tauri build --no-bundle` completed in `4m30s`, warnings
+`0`. Exact alpha.56 artifact: `target/release/syndocal.exe`, ProductVersion and
+FileVersion `1.2.0-alpha.56`, `62,292,480` bytes, SHA-256
+`4BCC1B33A73586C3CED2FB66217732FD1CF1BBF957529559E0DD7ED67435ABAE`.
+PID `54360` is the only checkout-owned Syndocal process; its single window is
+responsive and maximized. The retargeted StandardRelease observer passes `96/96`
+under PowerShell 7 and Windows PowerShell 5.1, with both scripts accepted by both
+parsers. No output window was created, re-armed, or moved.
+Independent Terra xHigh observer rereview is GO with P0/P1 `0`; its sole P2 is
+future explicit negative inventory for retired alpha.55 authority tokens. Those
+tokens are absent from the current runner/test files.
+
+Physical USB-DMX, Art-Net/Unity, Spout, display pixels, MiraBox, audible
+PROGRAM/CUE, and real DJ/pedal gates remain unverified. First safe physical action
+is to reconnect the exact device under test, confirm its machine-local identity,
+and execute only its bounded acceptance checklist against this alpha.56 process.
+Post-build inventory: `target` `158,092,212,050` logical bytes / `112,200`
+files; `app/node_modules` `545,338,492` bytes / `3,704` files. No eligible
+exact-target cleanup harness exists; no deletion was attempted and reclaimed
+bytes are `0`.
 
 ## 2026-09-01 historical alpha.55 runtime snapshot/native checkpoint
 

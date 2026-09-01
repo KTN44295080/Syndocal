@@ -3,7 +3,7 @@
 Updated: 2026-09-01
 Branch: `codex/syndocal-v1.2`; current product metadata is `1.2.0-alpha.56`.
 
-## 2026-09-01 current alpha.56 terminal loop/Follow source checkpoint
+## 2026-09-01 current alpha.56 terminal loop/Follow source/native checkpoint
 
 Alpha.56 closes the recorded strict root-loop release race at an already-reached
 natural Timeline terminal. The old path could publish loop OFF before terminal
@@ -27,13 +27,27 @@ exception. Two P2 proof-only additions remain optional: duplicate the stale shar
 assertion explicitly and exercise acknowledgement poison with a terminal rather
 than non-terminal fixture.
 
-This source checkpoint deliberately makes no alpha.56 native or hardware claim.
-The exact alpha.55 executable and its physical observer remain historical until a
-fresh alpha.56 no-bundle build is produced from the pushed commit containing this
-section, launched as exactly one responsive maximized window, and given a new
-version/size/hash/source identity. Physical USB-DMX, Art-Net/Unity, Spout,
-three-display pixels, MiraBox, audible PROGRAM/CUE, and real DJ/pedal acceptance
-remain external gates.
+The pushed source checkpoint is
+`3185fe52a631b0b5855b9e5996ad131db74e8e81`. Its exact MSVC 14.44
+`pnpm --dir app tauri build --no-bundle` completed in `4m30s`, with first-party
+warnings `0`. Exact artifact: `target/release/syndocal.exe`, ProductVersion and
+FileVersion `1.2.0-alpha.56`, `62,292,480` bytes, SHA-256
+`4BCC1B33A73586C3CED2FB66217732FD1CF1BBF957529559E0DD7ED67435ABAE`.
+The only checkout-owned process is PID `54360`; its single `Syndocal` window is
+responsive and maximized. The StandardRelease three-display observer now binds
+that exact version/size/hash/source identity. PowerShell 7 and Windows PowerShell
+5.1 each pass `96/96`, and both parsers accept the runner and self-test scripts.
+Independent Terra xHigh observer rereview is GO with P0/P1 `0`; its P2-only
+note is to add explicit negative inventory for future alpha.55 authority-token
+reintroduction. Current runner/test files contain none of those retired tokens.
+This accepts native build/start and observer eligibility only. Physical USB-DMX,
+Art-Net/Unity, Spout, three-display pixels, MiraBox, audible PROGRAM/CUE, and real
+DJ/pedal acceptance remain external gates.
+
+Checkpoint inventory after the build is `target` `158,092,212,050` logical bytes
+/ `112,200` files and `app/node_modules` `545,338,492` bytes / `3,704` files.
+No eligible tracked, focused-tested, independently reviewed cleanup harness covers
+this exact target set; nothing was deleted and reclaimed bytes are `0`.
 
 ## 2026-09-01 historical alpha.55 runtime-snapshot/native checkpoint
 
