@@ -642,10 +642,36 @@ assert.equal(recoveryIntentSideEffects, 1, "one accepted B application consumes 
 // App.tsx. Effects are observable callbacks around the real staged-batch,
 // runtime-status, replacement, and poll entry points; no verdict helper is
 // reimplemented in this harness.
-const makeProductionBundle = (token, input, overrides = {}) => ({
+const makeProductionBundle = (token, input, overrides = {}) => {
+  const timelineTransportEpoch = overrides.timeline_transport_epoch ?? 1;
+  const timelineTransportGeneration = overrides.timeline_transport_generation ?? 1;
+  const timelineRuntime = overrides.timeline_runtime ?? {
+    transport_epoch: timelineTransportEpoch,
+    transport_generation: timelineTransportGeneration,
+    loop_runtime: { generation: 0, status: "disabled", a_ms: null, b_ms: null, wrap_count: 0 },
+    follow_runtime: {
+      epoch: timelineTransportEpoch,
+      generation: 0,
+      status: "idle",
+      admission_reason: null,
+      outcome: null,
+      source_timeline_id: null,
+      target_timeline_id: null,
+      elapsed_ms: 0,
+      duration_ms: 0,
+      progress_millis: 0,
+      fault: null,
+      transition_hold_active: false,
+      waiting_for_pedal_start: false,
+    },
+  };
+  return {
   project_epoch: token.project_epoch,
   project_revision: token.project_revision,
   checkpoint_hash: token.checkpoint_hash,
+  timeline_transport_epoch: timelineTransportEpoch,
+  timeline_transport_generation: timelineTransportGeneration,
+  timeline_runtime: timelineRuntime,
   publication_generation: overrides.publication_generation ?? token.project_revision + 1,
   publication_kind: overrides.publication_kind ?? "mutation",
   mapping_replacement_generation: overrides.mapping_replacement_generation ?? 0,
@@ -666,7 +692,8 @@ const makeProductionBundle = (token, input, overrides = {}) => ({
   dj_track_triggers: overrides.dj_track_triggers ?? [],
   history: overrides.history ?? { history_generation: overrides.history_generation ?? 1 },
   input_runtime: input,
-});
+  };
+};
 
 const makeProductionState = (authority) => ({
   authority,
@@ -761,6 +788,33 @@ assert.equal(
   false,
   "an exhausted publication generation fails closed before any batch or recovery side effect",
 );
+const missingRuntimeBundle = makeProductionBundle(productionTokenB, productionInputB);
+delete missingRuntimeBundle.timeline_runtime;
+assert.equal(
+  projectAuthorityBundleGenerationsAreValid(missingRuntimeBundle),
+  false,
+  "a same-token authority bundle without its Timeline runtime projection must fail closed",
+);
+const mismatchedRuntimeBundle = makeProductionBundle(productionTokenB, productionInputB, {
+  timeline_runtime: {
+    ...makeProductionBundle(productionTokenB, productionInputB).timeline_runtime,
+    transport_generation: 2,
+  },
+});
+assert.equal(
+  projectAuthorityBundleGenerationsAreValid(mismatchedRuntimeBundle),
+  false,
+  "a same-token authority bundle whose outer and projected Timeline fences disagree must fail closed",
+);
+const malformedSameTokenHarness = makeProductionEffects();
+const malformedSameTokenStatus = applyProjectAuthorityRuntimeStatusProduction(
+  makeProductionState(productionTokenB),
+  missingRuntimeBundle,
+  true,
+  malformedSameTokenHarness.effects,
+);
+assert.equal(malformedSameTokenStatus.disposition, "stale", "malformed same-token runtime status must not apply path/history/input state");
+assert.equal(malformedSameTokenHarness.trace.runtimeCommits.length, 0, "malformed same-token runtime status has no runtime callback");
 const boundedHarness = makeProductionEffects();
 const boundedStarted = beginProjectAuthorityRuntimeApplication(makeProductionState(productionTokenA));
 const boundedResult = applyProjectAuthorityBundleProduction(

@@ -3,6 +3,7 @@ import type {
   ProjectAuthorityPublicationKind,
   ProjectInputRuntimeStatus,
 } from "./types.ts";
+import { projectAuthorityBundleTimelineRuntimeFromUnknown } from "./timelineRuntimeSnapshotWire.ts";
 import type {
   ProjectRecoveryCheckpoint,
   ProjectRecoveryIntent,
@@ -206,6 +207,7 @@ const projectInputRuntimeFlagsAreBoolean = (input: ProjectInputRuntimeStatus): b
 
 export const projectAuthorityBundleGenerationsAreValid = (bundle: ProjectAuthorityBundle): boolean => {
   if (bundle === null || typeof bundle !== "object") return false;
+  if (projectAuthorityBundleTimelineRuntimeFromUnknown(bundle) === null) return false;
   const inputRuntime = bundle.input_runtime;
   const recoveryTransition = bundle.recovery_authority_last_transition;
   if (inputRuntime === null || typeof inputRuntime !== "object"

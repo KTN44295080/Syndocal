@@ -2,7 +2,7 @@
 
 Syndocal は、DMX照明とVJ映像を同じタイムライン、キュー、BPMクロック、エフェクトソースで駆動するデスクトップ制御ソフトウェアです。
 
-- 製品名: **Syndocal 1.2.0-alpha.54**
+- 製品名: **Syndocal 1.2.0-alpha.55**
 - 開発: **Seraf()のKTN**
 - プロジェクト: **`.sdc`** (可読JSON)
 - Tier 1: Windows 10+ / macOS 12+
@@ -25,16 +25,17 @@ See the [current output acceptance record](qa/DSF2026_SAME_PC_OUTPUT_ACCEPTANCE_
 for execution steps and unverified physical/lease evidence; this boundary is
 not a hardware acceptance claim.
 
-Current product metadata is `1.2.0-alpha.54` on branch
-`codex/syndocal-v1.2`. The alpha.54 no-bundle build is warning-free and its
-reviewed implementation/source/native checkpoint is pushed as
-`c742af8c778f41ddc0c8dd7d99d44b5d5d5f9a12`. Its
-exact `62,271,488`-byte executable has SHA-256
-`9C5D9350D8CF0B615507C1CF02256B540C192294B8D5EA382DC89824996F0693`.
-Exactly one responsive maximized checkout-owned Syndocal window was verified at
-`1920x1032` with status `準備完了`. Physical USB-DMX, Art-Net, Spout, Display
-content, and audible audio remain separate acceptance gates. The strict loop
-and snapshot-watermark checkers are registered in `check:release`, so the
+Current product metadata is `1.2.0-alpha.55` on branch
+`codex/syndocal-v1.2`. Alpha.55 separates the mandatory live Timeline runtime
+projection from persisted `.sdc` data and validates the same projection across
+full, delta, authority, poll, and canonical reads. Its warning-free no-bundle
+build produced an exact `62,292,480`-byte executable with SHA-256
+`8CBD6A5875CFAD8BFABC1838BE7E4C32FA367017E9267F97453B756706B63CA1`.
+Exactly one responsive checkout-owned Syndocal window was verified with status
+`準備完了`; automated project-open input was unavailable, so alpha52 open/reopen
+remains a manual gate. Physical USB-DMX, Art-Net, Spout, Display content, and
+audible audio remain separate acceptance gates. The strict loop and
+snapshot-watermark checkers are registered in `check:release`, so the
 cross-platform CI release step runs both. The historical
 alpha.39 native checkpoint used source/docs `HEAD`
 and upstream `ec93e9160da853ad181de70aee4db7b4a75fafbb`, which were equal at
@@ -375,7 +376,7 @@ unaccepted.
 
 CI/Release成果物は次の形式です。
 
-- Windows: `Syndocal_1.2.0-alpha.54_x64-setup.exe` (NSIS)、`Syndocal_1.2.0-alpha.54_x64_ja-JP.msi`
+- Windows: `Syndocal_1.2.0-alpha.55_x64-setup.exe` (NSIS)、`Syndocal_1.2.0-alpha.55_x64_ja-JP.msi`
 - macOS: `.app`、DMG
 - Linux: `.deb`、AppImage
 

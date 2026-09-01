@@ -153,6 +153,11 @@ assert.match(
 );
 assert.match(
   app,
+  /const applyProjectHistoryMutationResult = \(result: ProjectHistoryMutationResult\): boolean => \{\s*if \(!projectAuthorityBundleGenerationsAreValid\(result\.authority\)\) return false;[\s\S]*?projectAuthorityTokenIsCurrent\(candidate, current\)/s,
+  "history receipts must reject malformed authority bundles even when their E/R/H token is otherwise current",
+);
+assert.match(
+  app,
   /projectTransactionOperationId = \(\) =>[\s\S]*project-op:\$\{/s,
   "frontend operation IDs must carry a sequence and nonce",
 );

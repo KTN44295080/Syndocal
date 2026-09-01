@@ -3,11 +3,14 @@ import {
   createTimelineRuntimeSnapshotWatermark,
   timelineRuntimeSnapshotWatermarkFromEngineSnapshot,
 } from "./timelineRuntimeSnapshotWatermark";
+import { hydrateTimelineRuntimeSnapshot } from "./timelineRuntimeSnapshotWire";
 import type { TimelineSnapshotProjectReadGuard } from "./timelineSnapshotRefreshController";
 
 export type TimelineRuntimeSnapshotIngress = {
   projectReadGuard?: TimelineSnapshotProjectReadGuard;
   resetForProjectScope?: boolean;
+  /** Required for every native snapshot ingress; never inferred from authored data. */
+  timelineRuntime?: unknown;
 };
 
 export type TimelineRuntimeSnapshotIngressOptions = {
@@ -40,7 +43,11 @@ export const createTimelineRuntimeSnapshotIngress = (
   ): EngineSnapshot | null => {
     const readGuard = ingress.projectReadGuard ?? options.captureProjectReadGuard();
     if (!options.projectReadGuardIsCurrent(readGuard)) return null;
-    const next = options.normalizeEngineSnapshot(incoming);
+    const hydrated = options.isTauriRuntime()
+      ? hydrateTimelineRuntimeSnapshot(incoming, ingress.timelineRuntime)
+      : incoming;
+    if (hydrated === null) return null;
+    const next = options.normalizeEngineSnapshot(hydrated);
     // Browser viewport fixtures intentionally model renderer-only state and
     // do not expose the native runtime fence. Every desktop ingress must
     // instead carry a complete backend-owned watermark or remain unapplied.

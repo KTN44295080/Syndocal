@@ -22893,6 +22893,30 @@ struct ProjectInputRuntimeStatus {
     dmx_active: bool,
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq)]
+struct TimelineRuntimeSnapshotWire {
+    transport_epoch: u64,
+    transport_generation: u64,
+    loop_runtime: protocol::TimelineLoopRuntimeSummary,
+    follow_runtime: TimelineFollowRuntimeStatusSnapshot,
+}
+
+/// The only IPC projection of Timeline transport state. `TimelineSnapshot`
+/// deliberately skips these values so authored project JSON cannot carry
+/// runtime state; every renderer ingress must instead hydrate this exact
+/// engine-owned image.
+fn timeline_runtime_snapshot_wire(snapshot: &EngineSnapshot) -> TimelineRuntimeSnapshotWire {
+    TimelineRuntimeSnapshotWire {
+        transport_epoch: snapshot.timeline.transport_epoch,
+        transport_generation: snapshot.timeline.transport_generation,
+        loop_runtime: snapshot.timeline.loop_runtime.clone(),
+        follow_runtime: TimelineFollowRuntimeStatusSnapshot::from_runtime(
+            snapshot.timeline.transport_epoch,
+            &snapshot.timeline.follow_runtime,
+        ),
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 struct ProjectAuthorityBundle {
     project_epoch: u64,
@@ -22903,6 +22927,7 @@ struct ProjectAuthorityBundle {
     /// the wire because project JSON must never persist runtime transport.
     timeline_transport_epoch: u64,
     timeline_transport_generation: u64,
+    timeline_runtime: TimelineRuntimeSnapshotWire,
     /// Distinguishes an ordinary external mutation (which a dirty local
     /// mapping draft may rebase onto) from a fenced identity/history
     /// publication (which must hydrate mappings before any retry).
@@ -26022,6 +26047,7 @@ fn project_authority_bundle_from_captured_snapshot(
         checkpoint_hash: coordinator.checkpoint_hash.clone(),
         timeline_transport_epoch,
         timeline_transport_generation,
+        timeline_runtime: timeline_runtime_snapshot_wire(&snapshot),
         publication_generation: coordinator.publication_generation,
         publication_kind: coordinator.last_publication_kind,
         mapping_replacement_generation: coordinator.mapping_replacement_generation,
@@ -26323,10 +26349,17 @@ struct EngineSnapshotDelta {
 #[derive(Debug, Clone, Serialize, PartialEq)]
 struct EngineSnapshotSyncResponse {
     revision: u64,
+    timeline_runtime: TimelineRuntimeSnapshotWire,
     #[serde(skip_serializing_if = "Option::is_none")]
     full: Option<EngineSnapshot>,
     #[serde(skip_serializing_if = "Option::is_none")]
     delta: Option<EngineSnapshotDelta>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct EngineSnapshotRuntimeWireResponse {
+    snapshot: EngineSnapshot,
+    timeline_runtime: TimelineRuntimeSnapshotWire,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -68992,8 +69025,12 @@ fn compatible_fixture_preset_targets(
 }
 
 #[tauri::command]
-fn get_snapshot(state: State<'_, AppState>) -> EngineSnapshot {
-    state.engine.snapshot()
+fn get_snapshot(state: State<'_, AppState>) -> EngineSnapshotRuntimeWireResponse {
+    let snapshot = state.engine.snapshot();
+    EngineSnapshotRuntimeWireResponse {
+        timeline_runtime: timeline_runtime_snapshot_wire(&snapshot),
+        snapshot,
+    }
 }
 
 fn engine_snapshot_delta(before: &EngineSnapshot, after: &EngineSnapshot) -> EngineSnapshotDelta {
@@ -69055,6 +69092,7 @@ async fn get_snapshot_delta(
         let response = if can_send_delta {
             EngineSnapshotSyncResponse {
                 revision,
+                timeline_runtime: timeline_runtime_snapshot_wire(&current),
                 full: None,
                 delta: sync
                     .last_snapshot
@@ -69064,6 +69102,7 @@ async fn get_snapshot_delta(
         } else {
             EngineSnapshotSyncResponse {
                 revision,
+                timeline_runtime: timeline_runtime_snapshot_wire(&current),
                 full: Some(current.clone()),
                 delta: None,
             }
@@ -97090,6 +97129,7 @@ pub(crate) mod tests {
                 checkpoint_hash: coordinator.checkpoint_hash.clone(),
                 timeline_transport_epoch,
                 timeline_transport_generation,
+                timeline_runtime: timeline_runtime_snapshot_wire(&snapshot),
                 publication_generation: coordinator.publication_generation,
                 publication_kind: coordinator.last_publication_kind,
                 mapping_replacement_generation: coordinator.mapping_replacement_generation,
@@ -97140,6 +97180,20 @@ pub(crate) mod tests {
 
         assert_eq!(wire["timeline_transport_epoch"], json!(41));
         assert_eq!(wire["timeline_transport_generation"], json!(73));
+        assert_eq!(wire["timeline_runtime"]["transport_epoch"], json!(41));
+        assert_eq!(wire["timeline_runtime"]["transport_generation"], json!(73));
+        assert_eq!(
+            wire["timeline_runtime"]["loop_runtime"]["generation"],
+            json!(0)
+        );
+        assert_eq!(
+            wire["timeline_runtime"]["follow_runtime"]["epoch"],
+            json!(41)
+        );
+        assert_eq!(
+            wire["timeline_runtime"]["follow_runtime"]["generation"],
+            json!(0)
+        );
         assert_eq!(wire["snapshot"]["timeline"]["playing"], json!(true));
         assert!(wire["snapshot"]["timeline"]
             .get("transport_epoch")
@@ -97147,6 +97201,89 @@ pub(crate) mod tests {
         assert!(wire["snapshot"]["timeline"]
             .get("transport_generation")
             .is_none());
+    }
+
+    #[test]
+    fn timeline_runtime_wire_keeps_fresh_zero_generations_outside_persisted_snapshot() {
+        let mut snapshot = EngineSnapshot::default();
+        snapshot.timeline.transport_epoch = 1;
+        snapshot.timeline.transport_generation = 1;
+
+        let wire = serde_json::to_value(EngineSnapshotRuntimeWireResponse {
+            timeline_runtime: timeline_runtime_snapshot_wire(&snapshot),
+            snapshot,
+        })
+        .expect("runtime wire must serialize");
+
+        assert_eq!(wire["timeline_runtime"]["transport_epoch"], json!(1));
+        assert_eq!(wire["timeline_runtime"]["transport_generation"], json!(1));
+        assert_eq!(
+            wire["timeline_runtime"]["loop_runtime"]["generation"],
+            json!(0)
+        );
+        assert_eq!(
+            wire["timeline_runtime"]["follow_runtime"]["generation"],
+            json!(0)
+        );
+        assert!(wire["snapshot"]["timeline"]
+            .get("transport_epoch")
+            .is_none());
+        assert!(wire["snapshot"]["timeline"]
+            .get("transport_generation")
+            .is_none());
+        assert!(wire["snapshot"]["timeline"].get("loop_runtime").is_none());
+        assert!(wire["snapshot"]["timeline"].get("follow_runtime").is_none());
+    }
+
+    #[test]
+    fn timeline_runtime_sync_wire_keeps_full_and_delta_runtime_outside_persisted_timeline() {
+        let mut captured = EngineSnapshot::default();
+        captured.timeline.transport_epoch = 1;
+        captured.timeline.transport_generation = 1;
+
+        let full = EngineSnapshotSyncResponse {
+            revision: 9,
+            timeline_runtime: timeline_runtime_snapshot_wire(&captured),
+            full: Some(captured.clone()),
+            delta: None,
+        };
+        let delta = EngineSnapshotSyncResponse {
+            revision: 10,
+            timeline_runtime: timeline_runtime_snapshot_wire(&captured),
+            full: None,
+            delta: Some(engine_snapshot_delta(&EngineSnapshot::default(), &captured)),
+        };
+
+        for response in [&full, &delta] {
+            let wire =
+                serde_json::to_value(response).expect("snapshot sync runtime wire must serialize");
+            assert_eq!(wire["timeline_runtime"]["transport_epoch"], json!(1));
+            assert_eq!(wire["timeline_runtime"]["transport_generation"], json!(1));
+            assert_eq!(
+                wire["timeline_runtime"]["loop_runtime"]["generation"],
+                json!(0)
+            );
+            assert_eq!(
+                wire["timeline_runtime"]["follow_runtime"]["epoch"],
+                json!(1)
+            );
+            assert_eq!(
+                wire["timeline_runtime"]["follow_runtime"]["generation"],
+                json!(0)
+            );
+        }
+
+        let full_wire = serde_json::to_value(full).expect("full response must serialize");
+        let delta_wire = serde_json::to_value(delta).expect("delta response must serialize");
+        for timeline in [
+            &full_wire["full"]["timeline"],
+            &delta_wire["delta"]["timeline"],
+        ] {
+            assert!(timeline.get("transport_epoch").is_none());
+            assert!(timeline.get("transport_generation").is_none());
+            assert!(timeline.get("loop_runtime").is_none());
+            assert!(timeline.get("follow_runtime").is_none());
+        }
     }
 
     #[test]

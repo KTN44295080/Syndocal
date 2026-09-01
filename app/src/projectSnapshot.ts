@@ -50,8 +50,16 @@ export const normalizeProjectSnapshotForStorage = (snapshot: EngineSnapshot): En
     direct_child_timeline_transports: _directChildTimelineTransports,
     ...snapshotWithoutTransport
   } = snapshot;
+  const {
+    transport_epoch: _transportEpoch,
+    transport_generation: _transportGeneration,
+    loop_runtime: _loopRuntime,
+    follow_runtime: _followRuntime,
+    ...authoredTimeline
+  } = snapshotWithoutTransport.timeline;
   const authoredSnapshot: EngineSnapshot = {
     ...snapshotWithoutTransport,
+    timeline: authoredTimeline,
     programmer: { enabled: false, blind: false, values: [], dmx_previews: [] },
     video: authoredVideo ?? snapshot.video,
     node_graphs: (snapshot.node_graphs ?? []).map(({ audio_runtime: _audioRuntime, ...graph }) => graph),

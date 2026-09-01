@@ -162,6 +162,59 @@ assert.deepEqual(
   "Auto VJ persistence normalization is idempotent",
 );
 
+const timelineRuntimeProjectSnapshot = JSON.parse(JSON.stringify(autoVjProjectSnapshot));
+timelineRuntimeProjectSnapshot.timeline = {
+  ...timelineRuntimeProjectSnapshot.timeline,
+  guide_enabled: true,
+  transport_epoch: 7,
+  transport_generation: 11,
+  loop_runtime: { generation: 3, status: "looping", a_ms: 100, b_ms: 200, wrap_count: 9 },
+  follow_runtime: {
+    epoch: 7,
+    generation: 5,
+    status: "transitioning",
+    admission_reason: "natural_playback_boundary",
+    outcome: null,
+    source_timeline_id: 1,
+    target_timeline_id: 2,
+    elapsed_ms: 100,
+    duration_ms: 500,
+    progress_millis: 200,
+    fault: null,
+    transition_hold_active: false,
+    waiting_for_pedal_start: false,
+  },
+};
+const changedTimelineRuntimeProjectSnapshot = JSON.parse(JSON.stringify(timelineRuntimeProjectSnapshot));
+changedTimelineRuntimeProjectSnapshot.timeline.transport_epoch = 8;
+changedTimelineRuntimeProjectSnapshot.timeline.transport_generation = 1;
+changedTimelineRuntimeProjectSnapshot.timeline.loop_runtime = {
+  ...changedTimelineRuntimeProjectSnapshot.timeline.loop_runtime,
+  generation: 4,
+  wrap_count: 10,
+};
+changedTimelineRuntimeProjectSnapshot.timeline.follow_runtime = {
+  ...changedTimelineRuntimeProjectSnapshot.timeline.follow_runtime,
+  epoch: 8,
+  generation: 6,
+  status: "settling",
+};
+const storedTimelineRuntimeSnapshot = projectSnapshot.normalizeProjectSnapshotForStorage(timelineRuntimeProjectSnapshot);
+for (const runtimeKey of ["transport_epoch", "transport_generation", "loop_runtime", "follow_runtime"]) {
+  assert.equal(runtimeKey in storedTimelineRuntimeSnapshot.timeline, false, `${runtimeKey} must be stripped before project/recovery storage`);
+}
+assert.equal(
+  projectSnapshot.projectSnapshotSignature(timelineRuntimeProjectSnapshot),
+  projectSnapshot.projectSnapshotSignature(changedTimelineRuntimeProjectSnapshot),
+  "Timeline transport/loop/Follow runtime changes must not dirty the project or rotate recovery signatures",
+);
+changedTimelineRuntimeProjectSnapshot.timeline.guide_enabled = false;
+assert.notEqual(
+  projectSnapshot.projectSnapshotSignature(timelineRuntimeProjectSnapshot),
+  projectSnapshot.projectSnapshotSignature(changedTimelineRuntimeProjectSnapshot),
+  "authored Timeline fields remain part of the project/recovery signature",
+);
+
 const audioRuntimeSnapshot = JSON.parse(JSON.stringify(autoVjProjectSnapshot));
 audioRuntimeSnapshot.video.layers = [{ id: 1, opacity: 0.92 }];
 audioRuntimeSnapshot.authored_video = {

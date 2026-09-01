@@ -1074,6 +1074,8 @@ export interface ProjectAuthorityBundle {
   /** Runtime-only Timeline transport fence projected outside the persisted snapshot. */
   timeline_transport_epoch: number;
   timeline_transport_generation: number;
+  /** Mandatory current runtime projection paired with `snapshot`. */
+  timeline_runtime: TimelineRuntimeSnapshotWire;
   publication_generation: number;
   publication_kind: ProjectAuthorityPublicationKind;
   /** Advances only for identity/Undo/Redo mapping replacement publications. */
@@ -1367,6 +1369,8 @@ export interface ProjectHistoryStatus {
 
 export interface EngineSnapshotSyncResponse {
   revision: number;
+  /** Mandatory engine-owned runtime projection; never reconstructed from `.sdc`. */
+  timeline_runtime: TimelineRuntimeSnapshotWire;
   full?: EngineSnapshot | null;
   delta?: Partial<EngineSnapshot> | null;
 }
@@ -3160,6 +3164,7 @@ export interface TimelineFollowRuntimeSummary {
   duration_ms: number;
   progress_millis: number;
   fault?: string | null;
+  transition_hold_active?: boolean;
   /** Target is paused at zero after Follow and will start only on Pedal 1. */
   waiting_for_pedal_start?: boolean;
   settlement?: TimelineFollowSettlementSummary | null;
@@ -3471,6 +3476,31 @@ export interface TimelineSnapshot {
   playing: boolean;
   position_ms: number;
   duration_ms: number;
+}
+
+/**
+ * Runtime-only Timeline transport state sent beside the persisted snapshot.
+ * The nested TimelineSnapshot intentionally omits this data on every serde
+ * project path, so renderer ingress must hydrate only this projection.
+ */
+export interface TimelineRuntimeSnapshotWire {
+  transport_epoch: number;
+  transport_generation: number;
+  loop_runtime: TimelineLoopRuntimeSummary;
+  follow_runtime: TimelineFollowRuntimeWire;
+}
+
+/** Exact full Follow runtime projection used only beside snapshot IPC. */
+export interface TimelineFollowRuntimeWire extends TimelineFollowRuntimeSummary {
+  epoch: number;
+  transition_hold_active: boolean;
+  waiting_for_pedal_start: boolean;
+}
+
+/** Exact response shape of the direct full `get_snapshot` read. */
+export interface EngineSnapshotRuntimeWireResponse {
+  snapshot: EngineSnapshot;
+  timeline_runtime: TimelineRuntimeSnapshotWire;
 }
 
 export interface DaslightCurveSource {

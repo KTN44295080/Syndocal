@@ -7,6 +7,7 @@ import type {
   ProjectPublicationSurfaceV1,
   ProjectPublicationTargetPolicyV1,
 } from "./types";
+import { projectAuthorityBundleTimelineRuntimeFromUnknown } from "./timelineRuntimeSnapshotWire";
 
 const projectPublicationStorageKey = "syndocal.projectPublication.v1";
 const projectPublicationStorageVersion = 1;
@@ -304,6 +305,9 @@ const projectAuthorityBundleFromUnknown = (candidate: unknown): ProjectAuthority
     "project_epoch",
     "project_revision",
     "checkpoint_hash",
+    "timeline_transport_epoch",
+    "timeline_transport_generation",
+    "timeline_runtime",
     "publication_generation",
     "publication_kind",
     "mapping_replacement_generation",
@@ -328,6 +332,8 @@ const projectAuthorityBundleFromUnknown = (candidate: unknown): ProjectAuthority
   const safeNumbers = [
     candidate.project_epoch,
     candidate.project_revision,
+    candidate.timeline_transport_epoch,
+    candidate.timeline_transport_generation,
     candidate.publication_generation,
     candidate.mapping_replacement_generation,
     candidate.authority_disposition_generation,
@@ -335,8 +341,10 @@ const projectAuthorityBundleFromUnknown = (candidate: unknown): ProjectAuthority
     candidate.path_generation,
     candidate.history_generation,
   ];
+  const timelineRuntime = projectAuthorityBundleTimelineRuntimeFromUnknown(candidate);
   if (!safeNumbers.every(isSafeNonNegativeInteger)
     || !isSha256(candidate.checkpoint_hash)
+    || timelineRuntime === null
     || !["runtime_status", "mutation", "identity_replacement", "history_navigation"].includes(String(candidate.publication_kind))
     || !["clean_at_path", "unsaved_replacement", "recovery_pending_ack", "history_navigation", "runtime_sanitize"].includes(String(candidate.authority_disposition))
     || !projectRecoveryTransitionIsValid(candidate.recovery_authority_last_transition)

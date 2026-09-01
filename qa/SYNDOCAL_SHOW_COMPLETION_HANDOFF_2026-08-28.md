@@ -4,9 +4,57 @@ Status date: 2026-09-01 JST
 
 This is the concise authoritative resume note for the final show-critical tranche. It supersedes chat-only status, but it does not supersede the detailed acceptance documents named below.
 
-## 2026-09-01 alpha.54 strict loop native checkpoint
+## 2026-09-01 alpha.55 runtime snapshot/native checkpoint
 
-Current candidate metadata is `1.2.0-alpha.54` on
+Current metadata is `1.2.0-alpha.55` on `codex/syndocal-v1.2`, based on clean
+upstream-equal parent `c0885cf8b8d4c6bc54207b4f3dfbd1676f79a413`. The show
+project failure was a representation bug: native runtime Timeline watermarks
+were intentionally excluded from `.sdc`, while renderer ingress incorrectly
+required them inside that persisted snapshot. Alpha.55 carries a mandatory
+runtime-only sidecar on every native full/delta/authority/poll/canonical read,
+validates exact transport/loop/Follow coherence, and applies it through one
+ingress path. Runtime state is stripped from storage, recovery, dirty-state,
+and publication signatures, so authored project persistence stays unchanged.
+
+The mapping stage also clears stale local hover when the pointer or click moves
+to empty stage space; this removes unsolicited fixture labels without changing
+selection or drag semantics. All five required mapping viewport checks pass.
+Runtime-watermark, loop, transport, authority, project transaction/storage,
+mapping-live-snapshot, TypeScript, Rust format, diff, and `check:release` gates
+pass. Focused exact-linker Rust proof is `2/2`, warnings `0`; independent Terra
+xHigh review is GO with P0/P1 `0`. Ox was unavailable and is recorded as the
+narrow exception.
+
+The exact Community MSVC `14.44.35207` linker was pinned and first. The required
+native no-bundle build completed in `5m16s`, warning-free. Exact executable:
+`target/release/syndocal.exe`, `62,292,480` bytes,
+ProductVersion/FileVersion `1.2.0-alpha.55`, SHA-256
+`8CBD6A5875CFAD8BFABC1838BE7E4C32FA367017E9267F97453B756706B63CA1`.
+PID `56892` is the only checkout-owned Syndocal process and exposes one
+responsive window with `準備完了`. Capture succeeded; input activation failed
+closed after one clean Computer Use reinitialization, so alpha52 project open
+and output actions were not attempted in this checkpoint.
+
+Next manual acceptance action: in that exact build, open
+`C:\Users\kouty\Documents\KDMX\target\qa\DSF2026-show-alpha52-three-display-current-media.sdc`
+and confirm the old missing-watermark error does not recur. Treat it as local
+QA only: its foreground media absolute path is currently missing. Then perform
+physical USB-DMX, Art-Net/Unity, Spout/display content, and audible PROGRAM/CUE
+acceptance only when the corresponding hardware/operator is present. USB-DMX
+is currently absent; Unity owns UDP 6454, so no unattended output probe was
+fired.
+
+Never stage or modify the untracked protected project
+`DSF2026-show-alpha51-usb-final.sdc` (`1,116,223` bytes; SHA-256
+`7031196A6527431FB8D625F420FE5D3E442DD2AA35D2ED86D57AF9EDF69890A7`).
+Generated inventory: `target` `147,037,274,593` bytes / `106,330` files;
+`app/node_modules` `545,338,492` bytes / `3,704` files. Cleanup reclaimed `0`
+bytes because no exact-target cleanup harness has the required tracked tests
+and independent review.
+
+## 2026-09-01 historical alpha.54 strict loop native checkpoint
+
+Historical candidate metadata was `1.2.0-alpha.54` on
 `codex/syndocal-v1.2`, based on upstream-equal parent
 `067d0bbb246ef87d0a6f13f73899d7d0eaba9e01`. The reviewed implementation,
 source, and native checkpoint is pushed as

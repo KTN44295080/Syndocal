@@ -1,4 +1,4 @@
-import { createMemo, createSignal, For, Show } from "solid-js";
+import { createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import type { FixtureLiveColorSegment } from "../fixtureLiveColor";
 import type {
   MappingFixtureSegmentOrder,
@@ -74,7 +74,27 @@ type MappingFixturesLayerProps = {
 };
 
 export function MappingFixturesLayer(props: MappingFixturesLayerProps) {
+  let stageMarker: SVGGElement | undefined;
   const [hoveredFixtureId, setHoveredFixtureId] = createSignal<number | null>(null);
+  onMount(() => {
+    const stage = stageMarker?.ownerSVGElement;
+    if (!stage) return;
+    const clearHoverOutsideFixture = (event: PointerEvent) => {
+      const target = event.target;
+      const fixture = target instanceof Element
+        ? target.closest("[data-stage-fixture-id]")
+        : null;
+      if (!fixture || !stage.contains(fixture)) {
+        setHoveredFixtureId(null);
+      }
+    };
+    stage.addEventListener("pointermove", clearHoverOutsideFixture, true);
+    stage.addEventListener("pointerdown", clearHoverOutsideFixture, true);
+    onCleanup(() => {
+      stage.removeEventListener("pointermove", clearHoverOutsideFixture, true);
+      stage.removeEventListener("pointerdown", clearHoverOutsideFixture, true);
+    });
+  });
   const labelLayout = createMemo(() =>
     planStageFixtureLabels({
       fixtures: props.labelFixtures ?? props.fixtures,
@@ -86,6 +106,7 @@ export function MappingFixturesLayer(props: MappingFixturesLayerProps) {
   );
   return (
     <>
+      <g ref={stageMarker} data-mapping-fixtures-layer-marker="true" pointer-events="none" />
       <For each={props.fixtures}>
         {(fixture) => {
           const selected = () => props.selectedFixtureIds.has(fixture.id);
@@ -116,6 +137,10 @@ export function MappingFixturesLayer(props: MappingFixturesLayerProps) {
                 data-stage-fixture-drag-threshold={MAPPING_FIXTURE_DRAG_THRESHOLD_PX}
                 transform={`translate(${fixture.x} ${fixture.z}) rotate(${fixture.yaw})`}
                 onPointerDown={(event) => props.onFixturePointerDown(event, fixture.id)}
+                onPointerEnter={() => setHoveredFixtureId(fixture.id)}
+                onPointerLeave={() =>
+                  setHoveredFixtureId((current) => current === fixture.id ? null : current)
+                }
                 onMouseOver={() => setHoveredFixtureId(fixture.id)}
                 onMouseOut={(event) => {
                   const nextTarget = event.relatedTarget;

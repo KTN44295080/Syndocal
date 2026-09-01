@@ -4,9 +4,65 @@ Date: 2026-08-19
 Branch at creation: `codex/syndocal-v1.0`
 Baseline before this document: `848d759846985cc3acf588356cfa3c996b4e2ef2`
 
-## 2026-09-01 alpha.54 strict Timeline loop native checkpoint
+## 2026-09-01 alpha.55 runtime snapshot authority and native checkpoint
 
-Alpha.54 is the current source candidate on `codex/syndocal-v1.2`, based on
+Alpha.55 is the current source/native candidate on
+`codex/syndocal-v1.2`, based on upstream-equal parent
+`c0885cf8b8d4c6bc54207b4f3dfbd1676f79a413`. The previous renderer path
+required live Timeline transport/loop/Follow watermarks inside the persisted
+project snapshot even though Rust marks those runtime fields `serde(skip)`.
+That representation mismatch caused otherwise valid existing `.sdc` projects
+to fail at ingress. The replacement is a mandatory top-level
+`TimelineRuntimeSnapshotWire` captured from the same engine snapshot and
+carried by full, delta, authority, poll, and canonical responses. Renderer
+application validates exact keys, finite numeric fields, the three unique
+Follow domains, consumer/domain coherence, derived aggregate state, and outer
+transport-pair equality before any mutation. Missing, malformed, future,
+duplicated, mixed-authority, or rewinding runtime state is rejected.
+
+Runtime state remains deliberately absent from authored persistence. Project
+storage, transaction, recovery, dirty-state, and publication signatures remove
+the runtime projection before comparison or serialization. This is a clean
+representation break: the invalid nested-runtime expectation is removed, not
+retained as a fallback. A browser-only fixture fallback exists only outside
+Tauri and cannot authorize native state.
+
+Mapping-stage hover ownership is also corrected. A fixture label that remained
+after moving or clicking into empty stage space came from stale component-local
+hover state, not selection state. The SVG capture listeners now clear that
+hover only outside fixture nodes, with exact cleanup and without suppressing
+selection or drag input. The five required viewport checks all pass.
+
+Final source evidence passes: runtime-watermark, loop, transport, project
+authority/publication/transaction/storage, mapping-live-snapshot, TypeScript,
+Rust format, and diff checks; `check:release` and all named subgates pass.
+Exact Community MSVC `14.44.35207` was pinned and first in `where.exe`; focused
+Rust serialization is `2 passed / 0 failed / 1419 filtered`, first-party
+warnings `0`. Independent Terra xHigh review is GO with P0/P1 `0`; Ox was
+unavailable, so this is the recorded narrow exception rather than a claimed Ox
+review.
+
+The required no-bundle native build passed in `5m16s`. The exact executable is
+ProductVersion/FileVersion `1.2.0-alpha.55`, `62,292,480` bytes, SHA-256
+`8CBD6A5875CFAD8BFABC1838BE7E4C32FA367017E9267F97453B756706B63CA1`.
+Exactly one checkout-owned PID `56892` exposes one responsive `Syndocal`
+window and reports `準備完了`. Window capture succeeded, but the automation
+helper could not activate the captured window after its one permitted clean
+reinitialization; therefore no UI mutation was attempted and opening alpha52
+in this exact build remains an explicit external/manual gate.
+
+Physical USB-DMX is unavailable because the serial device is absent. Art-Net
+was not probed while Unity owns UDP 6454; Spout pixels, exact three-display
+content, and audible PROGRAM/CUE are also unverified. No physical/output claim
+is inferred from structural project or native startup proof. Protected
+`DSF2026-show-alpha51-usb-final.sdc` remains untracked and unchanged. Generated
+inventory is `target` `147,037,274,593` bytes / `106,330` files and
+`app/node_modules` `545,338,492` bytes / `3,704` files; cleanup reclaimed `0`
+bytes because no eligible exact-target cleanup harness exists.
+
+## 2026-09-01 historical alpha.54 strict Timeline loop native checkpoint
+
+Alpha.54 was the preceding source/native candidate on `codex/syndocal-v1.2`, based on
 upstream-equal parent `067d0bbb246ef87d0a6f13f73899d7d0eaba9e01`. The retired
 reviewed implementation/source/native checkpoint is pushed as
 `c742af8c778f41ddc0c8dd7d99d44b5d5d5f9a12` on the same upstream branch. The

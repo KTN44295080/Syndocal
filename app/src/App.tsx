@@ -615,6 +615,7 @@ import {
   createTimelineRuntimeSnapshotIngress,
   type TimelineRuntimeSnapshotIngress,
 } from "./timelineRuntimeSnapshotIngress";
+import { projectAuthorityBundleTimelineRuntimeFromUnknown } from "./timelineRuntimeSnapshotWire";
 import { createMappingViewportModel, mappingViewportDimensions } from "./createMappingViewportModel";
 import { createDvcImportController } from "./dvcImportController";
 import { createMappingRenderModel } from "./createMappingRenderModel";
@@ -918,6 +919,7 @@ import {
   applyProjectRecoveryStartupProduction,
   beginProjectAuthorityRuntimeApplication,
   createProjectRecoveryIntentConsumerProduction,
+  projectAuthorityBundleGenerationsAreValid,
   projectAuthorityFallbackIsCurrent,
   projectAuthorityInlineReplacementIsCurrent,
   type ProjectAuthorityBundleApplicationDisposition,
@@ -3006,11 +3008,14 @@ export default function App() {
           || expected.projectReadGeneration !== projectReadGeneration
           || !isProjectAuthorityIdentityCurrent(expected.authority)
           || !timelineAdvancedCanonicalBundleMatchesExpectation(canonical, expected)) return;
+        const timelineRuntime = projectAuthorityBundleTimelineRuntimeFromUnknown(canonical);
+        if (timelineRuntime === null) return;
         if (!applyEngineSnapshot(canonical.snapshot, true, false, {
           projectReadGuard: {
             generation: expected.projectReadGeneration,
             authority: expected.authority,
           },
+          timelineRuntime,
         })) return;
         setSnapshotRevision(null);
         timelineAdvancedSnapshotExpectation = null;
@@ -5649,6 +5654,7 @@ export default function App() {
     return true;
   };
   const applyProjectHistoryMutationResult = (result: ProjectHistoryMutationResult): boolean => {
+    if (!projectAuthorityBundleGenerationsAreValid(result.authority)) return false;
     const candidate = authorityToken(result.authority);
     const current = projectMappingsAuthority();
     if (projectAuthorityTokenIsCurrent(candidate, current)) {
@@ -11951,6 +11957,7 @@ export default function App() {
     captureProjectReadGuard,
     projectReadGuardIsCurrent,
     invoke,
+    isTauriRuntime,
     snapshotRequestGuard,
     timelineTransportCanonicalSnapshotGeneration: () => timelineTransportCanonicalSnapshotGeneration,
     refreshOperatorPolicy,
@@ -11962,6 +11969,7 @@ export default function App() {
   const runFullSnapshotRefreshes = () => {
     const applySnapshot = (
       next: EngineSnapshot,
+      timelineRuntime: unknown,
       syncProjectState: boolean,
       resetEditorDrafts: boolean,
       requestedReadGuard: TimelineSnapshotProjectReadGuard,
@@ -11970,7 +11978,7 @@ export default function App() {
         next,
         syncProjectState,
         resetEditorDrafts,
-        { projectReadGuard: requestedReadGuard },
+        { projectReadGuard: requestedReadGuard, timelineRuntime },
       );
       if (applied) {
         setSnapshotRevision(null);
@@ -12000,7 +12008,10 @@ export default function App() {
     projectReadGuard = captureProjectReadGuard(),
   ): EngineSnapshot | null => {
     const merged = mergeEngineSnapshotSyncResponse(latestEngineSnapshot, response);
-    const next = prepareTimelineRuntimeSnapshotIngress(merged, { projectReadGuard });
+    const next = prepareTimelineRuntimeSnapshotIngress(merged, {
+      projectReadGuard,
+      timelineRuntime: response.timeline_runtime,
+    });
     if (next === null) return null;
     latestEngineSnapshot = next;
     setLiveDmxPreviews(engineDmxPreviews(next));
@@ -12036,10 +12047,36 @@ export default function App() {
         setSelectedFixtureGroupText("stale group");
       }
       latestEngineSnapshot = next;
+      const fixtureRuntime = {
+        transport_epoch: 1,
+        transport_generation: 1,
+        loop_runtime: {
+          generation: 0,
+          status: "disabled" as const,
+          a_ms: null,
+          b_ms: null,
+          wrap_count: 0,
+        },
+        follow_runtime: {
+          epoch: 1,
+          generation: 0,
+          status: "idle" as const,
+          admission_reason: null,
+          outcome: null,
+          source_timeline_id: null,
+          target_timeline_id: null,
+          elapsed_ms: 0,
+          duration_ms: 0,
+          progress_millis: 0,
+          fault: null,
+          transition_hold_active: false,
+          waiting_for_pedal_start: false,
+        },
+      };
       applyEngineSnapshotSyncResponse(
         kind === "full"
-          ? { revision: 41, full: next }
-          : { revision: 42, delta: { active_cue_id: next.active_cue_id } },
+          ? { revision: 41, full: next, timeline_runtime: fixtureRuntime }
+          : { revision: 42, delta: { active_cue_id: next.active_cue_id }, timeline_runtime: fixtureRuntime },
         true,
       );
       return {
@@ -12055,6 +12092,16 @@ export default function App() {
   if (viewportFixture === "mapping-live-snapshot") {
     applyEngineSnapshotSyncResponse({
       revision: 28,
+      timeline_runtime: {
+        transport_epoch: 1,
+        transport_generation: 1,
+        loop_runtime: { generation: 0, status: "disabled", a_ms: null, b_ms: null, wrap_count: 0 },
+        follow_runtime: {
+          epoch: 1, generation: 0, status: "idle", admission_reason: null, outcome: null,
+          source_timeline_id: null, target_timeline_id: null, elapsed_ms: 0, duration_ms: 0,
+          progress_millis: 0, fault: null, transition_hold_active: false, waiting_for_pedal_start: false,
+        },
+      },
       delta: {
         active_cue_id: viewportFixtureData.mappingLiveSnapshotAmberCue.id,
       },
@@ -14840,10 +14887,12 @@ export default function App() {
         expectedRevision: expectedCanonical.authority.project_revision,
         expectedCheckpointHash: expectedCanonical.authority.checkpoint_hash,
       });
+      const timelineRuntime = projectAuthorityBundleTimelineRuntimeFromUnknown(canonical);
       if (expectedCanonical !== timelineAdvancedSnapshotExpectation
         || expectedCanonical.projectReadGeneration !== projectReadGeneration
         || !isProjectAuthorityIdentityCurrent(expectedCanonical.authority)
-        || !timelineAdvancedCanonicalBundleMatchesExpectation(canonical, expectedCanonical)) {
+        || !timelineAdvancedCanonicalBundleMatchesExpectation(canonical, expectedCanonical)
+        || timelineRuntime === null) {
         blockTimelineAdvancedSnapshotResolution(
           "canonical authority bundle did not converge to the acknowledged Timeline",
         );
@@ -14854,6 +14903,7 @@ export default function App() {
           generation: expectedCanonical.projectReadGeneration,
           authority: expectedCanonical.authority,
         },
+        timelineRuntime,
       })) {
         blockTimelineAdvancedSnapshotResolution("canonical Timeline runtime watermark was stale or malformed");
         return null;
@@ -15805,6 +15855,10 @@ export default function App() {
     replacement: boolean,
     preserveDirtyMappings = false,
   ): ProjectAuthorityBundleApplicationDisposition => {
+    const timelineRuntime = projectAuthorityBundleTimelineRuntimeFromUnknown(bundle);
+    if (timelineRuntime === null) {
+      throw new Error("Authoritative project bundle had mismatched or malformed Timeline runtime fences.");
+    }
     const effects: ProjectAuthorityRuntimeEffects = {
       preflightRecoveryDisposition: preflightProjectAuthorityRecoveryDisposition,
       prepareBundle: (candidate) => prepareProjectControlMappings(
@@ -15815,6 +15869,10 @@ export default function App() {
       ),
       invalidateMappingIdentity: invalidateProjectControlMappingsForIdentity,
       commitBundle: (candidate, prepared, options) => {
+        const candidateTimelineRuntime = projectAuthorityBundleTimelineRuntimeFromUnknown(candidate);
+        if (candidateTimelineRuntime === null) {
+          throw new Error("Authoritative project bundle changed its Timeline runtime fence before application.");
+        }
         const preparedMappings = prepared as ReturnType<typeof prepareProjectControlMappings>;
         const candidateToken = authorityToken(candidate);
         const storedMode = matchingStoredOperatorLock(candidate.operator_policy);
@@ -15855,6 +15913,7 @@ export default function App() {
               // scope. Delayed A full/delta responses can therefore never
               // compare as if they belonged to this B project image.
               resetForProjectScope: true,
+              timelineRuntime: candidateTimelineRuntime,
             },
           );
           if (!appliedSnapshot) {
@@ -20228,11 +20287,11 @@ export default function App() {
     snapshotRequestGuard,
     projectAuthorityTokenIsCurrent,
     authorityToken,
-    applyEngineSnapshot: (snapshot, projectReadGuard) => applyEngineSnapshot(
+    applyEngineSnapshot: (snapshot, timelineRuntime, projectReadGuard) => applyEngineSnapshot(
       snapshot,
       true,
       false,
-      { projectReadGuard },
+      { projectReadGuard, timelineRuntime },
     ),
     setSnapshotRevision: (revision) => setSnapshotRevision(revision),
   });
@@ -20294,24 +20353,29 @@ export default function App() {
         expectedRevision: expectedAuthority.project_revision,
         expectedCheckpointHash: expectedAuthority.checkpoint_hash,
       });
+      const timelineRuntime = projectAuthorityBundleTimelineRuntimeFromUnknown(canonical);
       if (!projectReadGuardIsCurrent(readGuard)
         || convergenceGeneration !== timelineTransportCanonicalSnapshotGeneration
         || !timelineTransportRuntimeScopeIsCurrent(acknowledgement.scope)
         || !isProjectAuthorityIdentityCurrent(expectedAuthority)
         || !projectAuthorityTokenIsCurrent(expectedAuthority, authorityToken(canonical))
         || canonical.publication_generation
-          !== acknowledgement.fenceBefore.project.project_publication_generation) {
+          !== acknowledgement.fenceBefore.project.project_publication_generation
+        || timelineRuntime === null) {
         throw new Error("Timeline transport canonical snapshot was superseded before it could be applied.");
       }
       const timeline = canonical.snapshot.timeline;
       if (timeline.playing !== acknowledgement.requestedPlaying
-        || canonical.timeline_transport_epoch !== acknowledgement.epochAfter
-        || canonical.timeline_transport_generation !== acknowledgement.generationAfter) {
+        || timelineRuntime.transport_epoch !== acknowledgement.epochAfter
+        || timelineRuntime.transport_generation !== acknowledgement.generationAfter) {
         throw new Error(
           "Timeline transport canonical snapshot did not converge to the acknowledged runtime state.",
         );
       }
-      if (!applyEngineSnapshot(canonical.snapshot, true, false, { projectReadGuard: readGuard })) {
+      if (!applyEngineSnapshot(canonical.snapshot, true, false, {
+        projectReadGuard: readGuard,
+        timelineRuntime,
+      })) {
         throw new Error("Timeline transport canonical snapshot had a stale or malformed runtime watermark.");
       }
       // The authority-bound full image supersedes any delta base. The next

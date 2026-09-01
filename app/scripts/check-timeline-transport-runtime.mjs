@@ -2,8 +2,9 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import ts from "typescript";
 
-const [controllerSource, appSource, automationSource, keyboardSource, shortcutSource, operatorSource, cuePanelSource, rustSource] = await Promise.all([
+const [controllerSource, snapshotRefreshSource, appSource, automationSource, keyboardSource, shortcutSource, operatorSource, cuePanelSource, rustSource] = await Promise.all([
   readFile(new URL("../src/timelineTransportRuntimeController.ts", import.meta.url), "utf8"),
+  readFile(new URL("../src/timelineSnapshotRefreshController.ts", import.meta.url), "utf8"),
   readFile(new URL("../src/App.tsx", import.meta.url), "utf8"),
   readFile(new URL("../src/createTimelineAutomationController.ts", import.meta.url), "utf8"),
   readFile(new URL("../src/createAppKeyboardController.ts", import.meta.url), "utf8"),
@@ -475,8 +476,8 @@ assert.match(
 );
 assert.match(
   appSource,
-  /const refreshTimelineTransportCanonicalSnapshot = async \([\s\S]*?timelineTransportRuntimeScopeIsCurrent\(acknowledgement\.scope\)[\s\S]*?tauriInvoke<ProjectAuthorityBundle>\("get_project_authority_bundle", \{[\s\S]*?expectedEpoch: expectedAuthority\.project_epoch,[\s\S]*?expectedRevision: expectedAuthority\.project_revision,[\s\S]*?expectedCheckpointHash: expectedAuthority\.checkpoint_hash,[\s\S]*?timeline\.playing !== acknowledgement\.requestedPlaying[\s\S]*?canonical\.timeline_transport_epoch !== acknowledgement\.epochAfter[\s\S]*?canonical\.timeline_transport_generation !== acknowledgement\.generationAfter[\s\S]*?applyEngineSnapshot\(canonical\.snapshot\);[\s\S]*?setSnapshotRevision\(null\);/,
-  "root Timeline must apply only the exact authority-bound canonical transport snapshot and top-level runtime fence",
+  /const refreshTimelineTransportCanonicalSnapshot = async \([\s\S]*?timelineTransportRuntimeScopeIsCurrent\(acknowledgement\.scope\)[\s\S]*?tauriInvoke<ProjectAuthorityBundle>\("get_project_authority_bundle", \{[\s\S]*?expectedEpoch: expectedAuthority\.project_epoch,[\s\S]*?expectedRevision: expectedAuthority\.project_revision,[\s\S]*?expectedCheckpointHash: expectedAuthority\.checkpoint_hash,[\s\S]*?projectAuthorityBundleTimelineRuntimeFromUnknown\(canonical\)[\s\S]*?timeline\.playing !== acknowledgement\.requestedPlaying[\s\S]*?timelineRuntime\.transport_epoch !== acknowledgement\.epochAfter[\s\S]*?timelineRuntime\.transport_generation !== acknowledgement\.generationAfter[\s\S]*?applyEngineSnapshot\(canonical\.snapshot,[\s\S]*?timelineRuntime,[\s\S]*?setSnapshotRevision\(null\);/,
+  "root Timeline must cross-check and apply only the exact authority-bound canonical transport runtime projection",
 );
 
 // TimelineSummary intentionally skips its runtime transport fence for project
@@ -528,13 +529,13 @@ assert.equal(
   "nested legacy-looking values cannot replace the top-level transport identity",
 );
 assert.match(
-  appSource,
-  /const timelineTransportGenerationAtRequest = timelineTransportCanonicalSnapshotGeneration;[\s\S]*?requestedReadGeneration === projectReadGeneration[\s\S]*?timelineTransportGenerationAtRequest === timelineTransportCanonicalSnapshotGeneration/,
+  snapshotRefreshSource,
+  /const requestedReadGuard = pendingFullSnapshotRefreshes\[0\]\.projectReadGuard;[\s\S]*?const timelineTransportGenerationAtRequest =[\s\S]*?options\.timelineTransportCanonicalSnapshotGeneration\(\);[\s\S]*?options\.projectReadGuardIsCurrent\(requestedReadGuard\)[\s\S]*?timelineTransportGenerationAtRequest[\s\S]*?=== options\.timelineTransportCanonicalSnapshotGeneration\(\)/,
   "a pre-receipt full snapshot must not overwrite later canonical transport convergence",
 );
 assert.match(
-  appSource,
-  /await refreshOperatorPolicy\(true\);[\s\S]*?await refreshFixtureGroups\(\);[\s\S]*?timelineTransportGenerationAtRequest[\s\S]*?timelineTransportCanonicalSnapshotGeneration[\s\S]*?if \(next !== null[\s\S]*?timelineTransportGenerationAtRequest[\s\S]*?timelineTransportCanonicalSnapshotGeneration\) \{[\s\S]*?applyEngineSnapshot\(/,
+  snapshotRefreshSource,
+  /await options\.refreshOperatorPolicy\(true\);[\s\S]*?await options\.refreshFixtureGroups\(\);[\s\S]*?timelineTransportGenerationAtRequest[\s\S]*?options\.timelineTransportCanonicalSnapshotGeneration\(\)[\s\S]*?if \(next !== null[\s\S]*?timelineTransportGenerationAtRequest[\s\S]*?options\.timelineTransportCanonicalSnapshotGeneration\(\)\)[\s\S]*?applySnapshot\(/,
   "a delayed reset full read must recheck canonical transport generation immediately before applying",
 );
 assert.match(

@@ -3,7 +3,20 @@ import { readFile } from "node:fs/promises";
 import ts from "typescript";
 
 async function importTsModule(path) {
-  const source = await readFile(new URL(path, import.meta.url), "utf8");
+  let source = await readFile(new URL(path, import.meta.url), "utf8");
+  if (path.endsWith("projectPublicationStorage.ts")) {
+    const runtimeWireSource = await readFile(new URL("../src/timelineRuntimeSnapshotWire.ts", import.meta.url), "utf8");
+    const runtimeWireOutput = ts.transpileModule(runtimeWireSource, {
+      compilerOptions: {
+        module: ts.ModuleKind.ESNext,
+        target: ts.ScriptTarget.ES2022,
+        importsNotUsedAsValues: ts.ImportsNotUsedAsValues.Remove,
+      },
+      fileName: "timelineRuntimeSnapshotWire.ts",
+    }).outputText;
+    const runtimeWireUrl = `data:text/javascript;base64,${Buffer.from(runtimeWireOutput).toString("base64")}`;
+    source = source.replace("./timelineRuntimeSnapshotWire", runtimeWireUrl);
+  }
   const transpiled = ts.transpileModule(source, {
     compilerOptions: {
       module: ts.ModuleKind.ESNext,
@@ -98,6 +111,28 @@ const canonicalAuthority = (request, recoveryAuthoritySerial = 4) => ({
   project_epoch: request.expectedProjectEpoch,
   project_revision: request.expectedProjectRevision,
   checkpoint_hash: request.expectedCheckpointHash,
+  timeline_transport_epoch: 1,
+  timeline_transport_generation: 1,
+  timeline_runtime: {
+    transport_epoch: 1,
+    transport_generation: 1,
+    loop_runtime: { generation: 0, status: "disabled", a_ms: null, b_ms: null, wrap_count: 0 },
+    follow_runtime: {
+      epoch: 1,
+      generation: 0,
+      status: "idle",
+      admission_reason: null,
+      outcome: null,
+      source_timeline_id: null,
+      target_timeline_id: null,
+      elapsed_ms: 0,
+      duration_ms: 0,
+      progress_millis: 0,
+      fault: null,
+      transition_hold_active: false,
+      waiting_for_pedal_start: false,
+    },
+  },
   publication_generation: 9,
   publication_kind: "mutation",
   mapping_replacement_generation: 3,

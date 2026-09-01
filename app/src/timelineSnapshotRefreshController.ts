@@ -1,5 +1,6 @@
 import type { FrontendTauriInvoke } from "./tauriInvokeCommands";
-import type { EngineSnapshot } from "./types";
+import type { EngineSnapshot, EngineSnapshotRuntimeWireResponse } from "./types";
+import { engineSnapshotRuntimeWireResponseFromUnknown } from "./timelineRuntimeSnapshotWire";
 
 /** The E/R/H identity captured when a full snapshot request is queued. */
 export type TimelineSnapshotProjectReadGuard = Readonly<{
@@ -20,6 +21,7 @@ export type TimelineSnapshotRefreshControllerOptions = {
   captureProjectReadGuard: () => TimelineSnapshotProjectReadGuard;
   projectReadGuardIsCurrent: (guard: TimelineSnapshotProjectReadGuard) => boolean;
   invoke: FrontendTauriInvoke;
+  isTauriRuntime: () => boolean;
   snapshotRequestGuard: TimelineSnapshotRefreshRequestGuard;
   timelineTransportCanonicalSnapshotGeneration: () => number;
   refreshOperatorPolicy: (force: boolean) => Promise<unknown>;
@@ -31,6 +33,7 @@ export type TimelineSnapshotRefreshControllerOptions = {
 
 export type TimelineSnapshotApply = (
   incoming: EngineSnapshot,
+  timelineRuntime: unknown,
   syncProjectState: boolean,
   resetEditorDrafts: boolean,
   projectReadGuard: TimelineSnapshotProjectReadGuard,
@@ -73,11 +76,16 @@ export const createTimelineSnapshotRefreshController = (
         options.snapshotRequestGuard.beginFull();
         let next: EngineSnapshot | null = null;
         try {
-          const candidate = await options.invoke<EngineSnapshot>("get_snapshot");
+          const response = await options.invoke<unknown>("get_snapshot");
+          const candidate = engineSnapshotRuntimeWireResponseFromUnknown(response)
+            ?? (!options.isTauriRuntime() && response !== null && typeof response === "object"
+              ? { snapshot: response as EngineSnapshot, timeline_runtime: null as unknown as EngineSnapshotRuntimeWireResponse["timeline_runtime"] }
+              : null);
+          if (candidate === null) throw new Error("Full snapshot omitted or malformed its Timeline runtime projection.");
           if (options.projectReadGuardIsCurrent(requestedReadGuard)
             && timelineTransportGenerationAtRequest
               === options.timelineTransportCanonicalSnapshotGeneration()) {
-            next = candidate;
+            next = candidate.snapshot;
             if (batch.some((waiter) => waiter.resetEditorDrafts)) {
               await options.refreshOperatorPolicy(true);
               await options.refreshFixtureGroups();
@@ -99,6 +107,7 @@ export const createTimelineSnapshotRefreshController = (
                 === options.timelineTransportCanonicalSnapshotGeneration()) {
               if (!applySnapshot(
                 next,
+                candidate.timeline_runtime,
                 batch.some((waiter) => waiter.syncProjectState),
                 batch.some((waiter) => waiter.resetEditorDrafts),
                 requestedReadGuard,

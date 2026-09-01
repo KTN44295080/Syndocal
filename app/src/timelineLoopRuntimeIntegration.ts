@@ -7,6 +7,10 @@ import type {
   TimelineLoopRuntimeAcknowledgement,
   TimelineLoopRuntimeScope,
 } from "./timelineLoopRuntimeController";
+import {
+  hydrateTimelineRuntimeSnapshot,
+  projectAuthorityBundleTimelineRuntimeFromUnknown,
+} from "./timelineRuntimeSnapshotWire";
 
 export type TimelineLoopRuntimeProjectReadGuard = Readonly<{
   generation: number;
@@ -48,6 +52,7 @@ export type TimelineLoopRuntimeIntegrationOptions = {
   authorityToken: (bundle: ProjectAuthorityBundle) => TimelineLoopRuntimeAuthorityIdentity;
   applyEngineSnapshot: (
     snapshot: EngineSnapshot,
+    timelineRuntime: unknown,
     projectReadGuard: TimelineLoopRuntimeProjectReadGuard,
   ) => boolean;
   setSnapshotRevision: (revision: null) => void;
@@ -121,15 +126,22 @@ export const createTimelineLoopRuntimeIntegration = (
           !== acknowledgement.fenceBefore.project.project_publication_generation) {
         throw new Error("Timeline loop canonical snapshot was superseded before it could be applied.");
       }
-      const timeline = canonical.snapshot.timeline;
+      const timelineRuntime = projectAuthorityBundleTimelineRuntimeFromUnknown(canonical);
+      const hydrated = timelineRuntime === null
+        ? null
+        : hydrateTimelineRuntimeSnapshot(canonical.snapshot, timelineRuntime);
+      if (hydrated === null || timelineRuntime === null) {
+        throw new Error("Timeline loop canonical snapshot omitted or malformed its runtime projection.");
+      }
+      const timeline = hydrated.timeline;
       const loopGeneration = timeline.loop_runtime?.generation ?? 0;
       const followGeneration = timeline.follow_runtime?.generation ?? 0;
       if (!Number.isSafeInteger(loopGeneration)
         || loopGeneration < 0
         || !Number.isSafeInteger(followGeneration)
         || followGeneration < 0
-        || canonical.timeline_transport_epoch !== acknowledgement.epochAfter
-        || canonical.timeline_transport_generation !== acknowledgement.generationAfter
+        || timelineRuntime.transport_epoch !== acknowledgement.epochAfter
+        || timelineRuntime.transport_generation !== acknowledgement.generationAfter
         || loopGeneration !== acknowledgement.loopGenerationAfter
         || followGeneration !== acknowledgement.followGenerationAfter
         || (acknowledgement.requestedAction.kind === "set_enabled"
@@ -142,7 +154,7 @@ export const createTimelineLoopRuntimeIntegration = (
       // Capture the guard before the asynchronous read and carry that exact
       // identity across the accepted snapshot seam. Capturing again at apply
       // time would allow a newer project identity to bless this older read.
-      const applied = options.applyEngineSnapshot(canonical.snapshot, readGuard);
+      const applied = options.applyEngineSnapshot(canonical.snapshot, timelineRuntime, readGuard);
       if (!applied) {
         throw new Error("Timeline loop canonical snapshot had a stale or malformed runtime watermark.");
       }

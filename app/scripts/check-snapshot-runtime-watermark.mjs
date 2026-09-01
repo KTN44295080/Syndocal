@@ -2,8 +2,9 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import ts from "typescript";
 
-const [watermarkSource, ingressSource, refreshControllerSource, loopIntegrationSource, appSource] = await Promise.all([
+const [watermarkSource, runtimeWireSource, ingressSource, refreshControllerSource, loopIntegrationSource, appSource] = await Promise.all([
   readFile(new URL("../src/timelineRuntimeSnapshotWatermark.ts", import.meta.url), "utf8"),
+  readFile(new URL("../src/timelineRuntimeSnapshotWire.ts", import.meta.url), "utf8"),
   readFile(new URL("../src/timelineRuntimeSnapshotIngress.ts", import.meta.url), "utf8"),
   readFile(new URL("../src/timelineSnapshotRefreshController.ts", import.meta.url), "utf8"),
   readFile(new URL("../src/timelineLoopRuntimeIntegration.ts", import.meta.url), "utf8"),
@@ -19,6 +20,7 @@ const dataModule = (source, fileName) => `data:text/javascript;base64,${Buffer.f
   ts.transpileModule(source, { compilerOptions, fileName }).outputText,
 ).toString("base64")}`;
 const watermarkModuleUrl = dataModule(watermarkSource, "timelineRuntimeSnapshotWatermark.ts");
+const runtimeWireModuleUrl = dataModule(runtimeWireSource, "timelineRuntimeSnapshotWire.ts");
 const transpiled = ts.transpileModule(watermarkSource, {
   compilerOptions,
   fileName: "timelineRuntimeSnapshotWatermark.ts",
@@ -26,17 +28,20 @@ const transpiled = ts.transpileModule(watermarkSource, {
 const runtime = await import(
   `data:text/javascript;base64,${Buffer.from(transpiled.outputText).toString("base64")}`,
 );
+const runtimeWireParser = await import(runtimeWireModuleUrl);
 const ingressTranspiled = ts.transpileModule(ingressSource, {
   compilerOptions,
   fileName: "timelineRuntimeSnapshotIngress.ts",
 });
 const ingress = await import(
   `data:text/javascript;base64,${Buffer.from(
-    ingressTranspiled.outputText.replace("./timelineRuntimeSnapshotWatermark", watermarkModuleUrl),
+    ingressTranspiled.outputText
+      .replace("./timelineRuntimeSnapshotWatermark", watermarkModuleUrl)
+      .replace("./timelineRuntimeSnapshotWire", runtimeWireModuleUrl),
   ).toString("base64")}`,
 );
 const refreshController = await import(dataModule(
-  refreshControllerSource,
+  refreshControllerSource.replace("./timelineRuntimeSnapshotWire", runtimeWireModuleUrl),
   "timelineSnapshotRefreshController.ts",
 ));
 
@@ -61,17 +66,236 @@ const snapshot = (epoch, generation, loopGeneration, followGeneration) => ({
   timeline: {
     transport_epoch: epoch,
     transport_generation: generation,
-    loop_runtime: { generation: loopGeneration, status: "disabled", wrap_count: 0 },
+    loop_runtime: { generation: loopGeneration, status: "disabled", a_ms: null, b_ms: null, wrap_count: 0 },
     follow_runtime: {
       epoch,
       generation: followGeneration,
       status: "idle",
+      admission_reason: null,
+      outcome: null,
+      source_timeline_id: null,
+      target_timeline_id: null,
       elapsed_ms: 0,
       duration_ms: 0,
       progress_millis: 0,
+      fault: null,
+      transition_hold_active: false,
+      waiting_for_pedal_start: false,
     },
   },
 });
+
+const runtimeWire = (candidate) => ({
+  transport_epoch: candidate.timeline.transport_epoch,
+  transport_generation: candidate.timeline.transport_generation,
+  loop_runtime: candidate.timeline.loop_runtime,
+  follow_runtime: candidate.timeline.follow_runtime,
+});
+
+const fullWire = (candidate) => ({ snapshot: candidate, timeline_runtime: runtimeWire(candidate) });
+
+const freshRuntimeWire = fullWire(snapshot(1, 1, 0, 0));
+const parsedFreshRuntimeWire = runtimeWireParser.engineSnapshotRuntimeWireResponseFromUnknown(freshRuntimeWire);
+assert.notEqual(parsedFreshRuntimeWire, null, "fresh 1/1 transport with zero loop/follow generations must remain wire-present");
+assert.equal(parsedFreshRuntimeWire.snapshot.timeline.loop_runtime.generation, 0);
+assert.equal(parsedFreshRuntimeWire.snapshot.timeline.follow_runtime.generation, 0);
+assert.equal(
+  runtimeWireParser.engineSnapshotRuntimeWireResponseFromUnknown({ snapshot: freshRuntimeWire.snapshot }),
+  null,
+  "a direct full response without the engine-owned runtime projection must fail closed",
+);
+assert.equal(
+  runtimeWireParser.timelineRuntimeSnapshotWireFromUnknown({
+    ...freshRuntimeWire.timeline_runtime,
+    follow_runtime: { ...freshRuntimeWire.timeline_runtime.follow_runtime, epoch: 2 },
+  }),
+  null,
+  "a follow runtime epoch that disagrees with transport must fail closed",
+);
+const settledRuntimeWire = {
+  ...freshRuntimeWire.timeline_runtime,
+  follow_runtime: {
+    ...freshRuntimeWire.timeline_runtime.follow_runtime,
+    status: "aborting",
+    admission_reason: "natural_playback_boundary",
+    outcome: { kind: "aborted", reason: "manual_seek" },
+    source_timeline_id: 7,
+    target_timeline_id: 8,
+    fault: "operator seek",
+    settlement: {
+      started_at_ms: 100,
+      deadline_ms: 2100,
+      state: "fault",
+      progress_millis: 1000,
+      fault_policy: "hold",
+      fault: "video fault",
+      domains: [
+        {
+          domain: "audio",
+          state: "applied",
+          consumers: [{ consumer_id: { kind: "audio" }, state: "applied" }],
+        },
+        {
+          domain: "video",
+          state: "fault",
+          fault: "present failed",
+          consumers: [{
+            consumer_id: { kind: "video_output", output_id: 9 },
+            state: "fault",
+            fault: "present failed",
+          }],
+        },
+        { domain: "lighting", state: "not_applicable" },
+      ],
+    },
+  },
+};
+assert.notEqual(
+  runtimeWireParser.timelineRuntimeSnapshotWireFromUnknown(settledRuntimeWire),
+  null,
+  "the parser must accept the exact Rust Follow status/settlement projection",
+);
+for (const [name, malformed] of [
+  ["future admission", {
+    ...settledRuntimeWire,
+    follow_runtime: { ...settledRuntimeWire.follow_runtime, admission_reason: "future_admission" },
+  }],
+  ["future outcome", {
+    ...settledRuntimeWire,
+    follow_runtime: { ...settledRuntimeWire.follow_runtime, outcome: { kind: "future_outcome" } },
+  }],
+  ["wrong TimelineId", {
+    ...settledRuntimeWire,
+    follow_runtime: { ...settledRuntimeWire.follow_runtime, source_timeline_id: "7" },
+  }],
+  ["wrong Follow fault", {
+    ...settledRuntimeWire,
+    follow_runtime: { ...settledRuntimeWire.follow_runtime, fault: { message: "operator seek" } },
+  }],
+  ["null settlement", {
+    ...settledRuntimeWire,
+    follow_runtime: { ...settledRuntimeWire.follow_runtime, settlement: null },
+  }],
+  ["future settlement state", {
+    ...settledRuntimeWire,
+    follow_runtime: {
+      ...settledRuntimeWire.follow_runtime,
+      settlement: { ...settledRuntimeWire.follow_runtime.settlement, state: "future_state" },
+    },
+  }],
+  ["settlement deadline before start", {
+    ...settledRuntimeWire,
+    follow_runtime: {
+      ...settledRuntimeWire.follow_runtime,
+      settlement: { ...settledRuntimeWire.follow_runtime.settlement, deadline_ms: 99 },
+    },
+  }],
+  ["missing settlement domain", {
+    ...settledRuntimeWire,
+    follow_runtime: {
+      ...settledRuntimeWire.follow_runtime,
+      settlement: {
+        ...settledRuntimeWire.follow_runtime.settlement,
+        domains: settledRuntimeWire.follow_runtime.settlement.domains.slice(0, 2),
+      },
+    },
+  }],
+  ["duplicate settlement video domain with distinct output consumer", {
+    ...settledRuntimeWire,
+    follow_runtime: {
+      ...settledRuntimeWire.follow_runtime,
+      settlement: {
+        ...settledRuntimeWire.follow_runtime.settlement,
+        domains: [
+          ...settledRuntimeWire.follow_runtime.settlement.domains,
+          {
+            ...settledRuntimeWire.follow_runtime.settlement.domains[1],
+            consumers: [{ consumer_id: { kind: "video_output", output_id: 10 }, state: "fault", fault: "present failed" }],
+          },
+        ],
+      },
+    },
+  }],
+  ["consumer assigned to wrong domain", {
+    ...settledRuntimeWire,
+    follow_runtime: {
+      ...settledRuntimeWire.follow_runtime,
+      settlement: {
+        ...settledRuntimeWire.follow_runtime.settlement,
+        domains: [{
+          ...settledRuntimeWire.follow_runtime.settlement.domains[0],
+          consumers: [{ consumer_id: { kind: "video_output", output_id: 9 }, state: "applied" }],
+        }, ...settledRuntimeWire.follow_runtime.settlement.domains.slice(1)],
+      },
+    },
+  }],
+  ["non-fault settlement state carrying fault", {
+    ...settledRuntimeWire,
+    follow_runtime: {
+      ...settledRuntimeWire.follow_runtime,
+      settlement: {
+        ...settledRuntimeWire.follow_runtime.settlement,
+        domains: [{ ...settledRuntimeWire.follow_runtime.settlement.domains[0], fault: "unexpected" },
+          ...settledRuntimeWire.follow_runtime.settlement.domains.slice(1)],
+      },
+    },
+  }],
+  ["fault settlement state without fault", {
+    ...settledRuntimeWire,
+    follow_runtime: {
+      ...settledRuntimeWire.follow_runtime,
+      settlement: {
+        ...settledRuntimeWire.follow_runtime.settlement,
+        domains: [
+          ...settledRuntimeWire.follow_runtime.settlement.domains.slice(0, 1),
+          {
+            ...settledRuntimeWire.follow_runtime.settlement.domains[1],
+            fault: undefined,
+            consumers: [{
+              ...settledRuntimeWire.follow_runtime.settlement.domains[1].consumers[0],
+              fault: undefined,
+            }],
+          },
+          ...settledRuntimeWire.follow_runtime.settlement.domains.slice(2),
+        ],
+      },
+    },
+  }],
+  ["contradictory aggregate settlement state", {
+    ...settledRuntimeWire,
+    follow_runtime: {
+      ...settledRuntimeWire.follow_runtime,
+      settlement: { ...settledRuntimeWire.follow_runtime.settlement, state: "applied", fault: undefined },
+    },
+  }],
+  ["unknown settlement consumer field", {
+    ...settledRuntimeWire,
+    follow_runtime: {
+      ...settledRuntimeWire.follow_runtime,
+      settlement: {
+        ...settledRuntimeWire.follow_runtime.settlement,
+        domains: [{
+          ...settledRuntimeWire.follow_runtime.settlement.domains[0],
+          consumers: [{
+            ...settledRuntimeWire.follow_runtime.settlement.domains[0].consumers[0],
+            future_field: true,
+          }],
+        }],
+      },
+    },
+  }],
+]) {
+  assert.equal(runtimeWireParser.timelineRuntimeSnapshotWireFromUnknown(malformed), null, `${name} must fail closed`);
+}
+assert.equal(
+  runtimeWireParser.projectAuthorityBundleTimelineRuntimeFromUnknown({
+    timeline_transport_epoch: 2,
+    timeline_transport_generation: 1,
+    timeline_runtime: freshRuntimeWire.timeline_runtime,
+  }),
+  null,
+  "a ProjectAuthorityBundle outer transport pair may not disagree with its runtime projection",
+);
 
 const admit = (gate, scope, candidate) => {
   const watermark = runtime.timelineRuntimeSnapshotWatermarkFromEngineSnapshot(candidate);
@@ -103,22 +327,27 @@ const ingressRuntime = ingress.createTimelineRuntimeSnapshotIngress({
   isTauriRuntime: () => true,
 });
 const ingressA = snapshot(1, 1, 0, 0);
-assert.strictEqual(ingressRuntime.prepare(ingressA), ingressA, "current full ingress must be admitted");
+assert.deepEqual(ingressRuntime.prepare(ingressA, { timelineRuntime: runtimeWire(ingressA) }), ingressA, "current full ingress must be admitted");
 const staleIngressGuard = ingressCurrentGuard;
 ingressCurrentGuard = readGuard(2, 3, 4, "b".repeat(64));
 assert.equal(
-  ingressRuntime.prepare(ingressA, { projectReadGuard: staleIngressGuard }),
+  ingressRuntime.prepare(ingressA, { projectReadGuard: staleIngressGuard, timelineRuntime: runtimeWire(ingressA) }),
   null,
   "a full image from the superseded project-read guard must remain unapplied",
 );
 const ingressB = snapshot(1, 1, 0, 0);
-assert.strictEqual(
-  ingressRuntime.prepare(ingressB, { projectReadGuard: ingressCurrentGuard, resetForProjectScope: true }),
+assert.equal(
+  ingressRuntime.prepare(ingressB, { projectReadGuard: ingressCurrentGuard }),
+  null,
+  "a native ingress without its runtime projection must fail closed",
+);
+assert.deepEqual(
+  ingressRuntime.prepare(ingressB, { projectReadGuard: ingressCurrentGuard, resetForProjectScope: true, timelineRuntime: runtimeWire(ingressB) }),
   ingressB,
   "an authoritative replacement must reset the shared watermark for its new scope",
 );
 assert.equal(
-  ingressRuntime.prepare(ingressA, { projectReadGuard: staleIngressGuard }),
+  ingressRuntime.prepare(ingressA, { projectReadGuard: staleIngressGuard, timelineRuntime: runtimeWire(ingressA) }),
   null,
   "the old project scope may not re-enter after replacement reset",
 );
@@ -136,8 +365,9 @@ const canonicalController = refreshController.createTimelineSnapshotRefreshContr
   projectReadGuardIsCurrent: (candidate) => sameReadGuard(candidate, canonicalGuard),
   invoke: async (command) => {
     assert.equal(command, "get_snapshot");
-    return canonicalCandidate;
+    return fullWire(canonicalCandidate);
   },
+  isTauriRuntime: () => true,
   snapshotRequestGuard: {
     beginFull: () => { canonicalBeginCount += 1; },
     finishFull: () => { canonicalFinishCount += 1; },
@@ -150,14 +380,15 @@ const canonicalController = refreshController.createTimelineSnapshotRefreshContr
   setMessage: () => undefined,
 });
 const canonicalResultPromise = canonicalController.refresh(true, false, () => {
-  void canonicalController.run((candidate, syncProjectState, resetEditorDrafts, projectReadGuard) => {
-    canonicalApplies.push({ candidate, syncProjectState, resetEditorDrafts, projectReadGuard });
+  void canonicalController.run((candidate, timelineRuntime, syncProjectState, resetEditorDrafts, projectReadGuard) => {
+    canonicalApplies.push({ candidate, timelineRuntime, syncProjectState, resetEditorDrafts, projectReadGuard });
     return true;
   });
 });
-assert.strictEqual(await canonicalResultPromise, canonicalCandidate, "a current full read must resolve its canonical candidate");
+assert.deepEqual(await canonicalResultPromise, canonicalCandidate, "a current full read must resolve its canonical candidate");
 assert.equal(canonicalApplies.length, 1, "a current full read must cross the guarded apply seam once");
 assert.strictEqual(canonicalApplies[0].projectReadGuard, canonicalGuard, "full apply must receive the exact queued read guard");
+assert.deepEqual(canonicalApplies[0].timelineRuntime, runtimeWire(canonicalCandidate), "full apply must receive the backend runtime projection");
 assert.equal(canonicalApplies[0].syncProjectState, true);
 assert.equal(canonicalApplies[0].resetEditorDrafts, false);
 assert.equal(canonicalBeginCount, 1);
@@ -171,6 +402,7 @@ const staleController = refreshController.createTimelineSnapshotRefreshControlle
   captureProjectReadGuard: () => staleCurrentGuard,
   projectReadGuardIsCurrent: (candidate) => candidate === staleCurrentGuard,
   invoke: async () => staleSnapshotPromise,
+  isTauriRuntime: () => true,
   snapshotRequestGuard: { beginFull: () => undefined, finishFull: () => undefined },
   timelineTransportCanonicalSnapshotGeneration: () => 0,
   refreshOperatorPolicy: async () => undefined,
@@ -187,7 +419,7 @@ const staleFullResultPromise = staleController.refresh(false, false, () => {
 });
 const staleReadGuard = staleCurrentGuard;
 staleCurrentGuard = readGuard(11, 12, 13, "e".repeat(64));
-resolveStaleSnapshot(snapshot(4, 5, 2, 2));
+resolveStaleSnapshot(fullWire(snapshot(4, 5, 2, 2)));
 assert.equal(await staleFullResultPromise, null, "a full read superseded before apply must resolve stale");
 assert.equal(staleApplyCount, 0, "a stale full read must never call the apply seam");
 assert.notStrictEqual(staleReadGuard, staleCurrentGuard);
@@ -199,8 +431,8 @@ assert.match(
 );
 assert.match(
   refreshControllerSource,
-  /const requestedReadGuard = pendingFullSnapshotRefreshes\[0\]\.projectReadGuard;[\s\S]*?options\.invoke<EngineSnapshot>\("get_snapshot"\)[\s\S]*?options\.projectReadGuardIsCurrent\(requestedReadGuard\)[\s\S]*?applySnapshot\([\s\S]*?requestedReadGuard,/,
-  "the full-refresh controller must revalidate the queued read guard before passing it to apply",
+  /const requestedReadGuard = pendingFullSnapshotRefreshes\[0\]\.projectReadGuard;[\s\S]*?options\.invoke<unknown>\("get_snapshot"\)[\s\S]*?engineSnapshotRuntimeWireResponseFromUnknown\(response\)[\s\S]*?options\.projectReadGuardIsCurrent\(requestedReadGuard\)[\s\S]*?applySnapshot\([\s\S]*?candidate\.timeline_runtime[\s\S]*?requestedReadGuard,/,
+  "the full-refresh controller must require and carry the backend runtime projection with its queued read guard",
 );
 
 // A full A can be deferred while natural terminal / Follow publishes B through
@@ -292,7 +524,7 @@ assert.match(
 );
 assert.match(
   appSource,
-  /const applyEngineSnapshotSyncResponse[\s\S]*?prepareTimelineRuntimeSnapshotIngress\(merged, \{ projectReadGuard \}\)[\s\S]*?applyAcceptedEngineSnapshot\(next, false\)/,
+  /const applyEngineSnapshotSyncResponse[\s\S]*?prepareTimelineRuntimeSnapshotIngress\(merged, \{[\s\S]*?projectReadGuard,[\s\S]*?timelineRuntime: response\.timeline_runtime,[\s\S]*?\}\)[\s\S]*?applyAcceptedEngineSnapshot\(next, false\)/,
   "delta/poll ingress must validate before changing latest snapshot state",
 );
 assert.match(
@@ -307,8 +539,18 @@ assert.match(
 );
 assert.match(
   loopIntegrationSource,
-  /const readGuard = options\.captureProjectReadGuard\(\);[\s\S]*?options\.beginTimelineTransportCanonicalSnapshotConvergence\(\)[\s\S]*?options\.applyEngineSnapshot\(canonical\.snapshot, readGuard\)/,
-  "canonical loop convergence must carry its pre-read guard into the shared watermark apply seam",
+  /const readGuard = options\.captureProjectReadGuard\(\);[\s\S]*?options\.beginTimelineTransportCanonicalSnapshotConvergence\(\)[\s\S]*?projectAuthorityBundleTimelineRuntimeFromUnknown\(canonical\)[\s\S]*?hydrateTimelineRuntimeSnapshot\(canonical\.snapshot, timelineRuntime\)[\s\S]*?timelineRuntime\.transport_epoch !== acknowledgement\.epochAfter[\s\S]*?options\.applyEngineSnapshot\(canonical\.snapshot, timelineRuntime, readGuard\)/,
+  "canonical loop convergence must cross-check the bundle pair and compare the hydrated runtime projection to the receipt",
+);
+assert.match(
+  appSource,
+  /const refreshTimelineTransportCanonicalSnapshot[\s\S]*?projectAuthorityBundleTimelineRuntimeFromUnknown\(canonical\)[\s\S]*?timelineRuntime\.transport_epoch !== acknowledgement\.epochAfter[\s\S]*?timelineRuntime\.transport_generation !== acknowledgement\.generationAfter[\s\S]*?timelineRuntime,\s*\}\)/,
+  "transport canonical convergence must compare the validated runtime projection, not redundant outer fields, to its receipt",
+);
+assert.match(
+  appSource,
+  /const applyProjectAuthorityBundle = \([\s\S]*?projectAuthorityBundleTimelineRuntimeFromUnknown\(bundle\)[\s\S]*?commitBundle: \(candidate, prepared, options\) => \{[\s\S]*?projectAuthorityBundleTimelineRuntimeFromUnknown\(candidate\)[\s\S]*?timelineRuntime: candidateTimelineRuntime/,
+  "every authority-bundle application must reject a mismatched outer/runtime transport pair before ingress",
 );
 
 console.log("snapshot runtime watermark full/delta/poll/canonical monotonic ingress checks passed");

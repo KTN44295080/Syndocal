@@ -300,20 +300,20 @@ assert.match(
 );
 assert.match(
   integrationSource,
-  /const refreshCanonicalSnapshot = async \([\s\S]*?const readGuard = options\.captureProjectReadGuard\(\);[\s\S]*?options\.projectReadGuardIsCurrent\(readGuard\)[\s\S]*?options\.applyEngineSnapshot\(canonical\.snapshot, readGuard\)/,
-  "canonical loop reads must carry the captured project read guard through the apply seam",
+  /const refreshCanonicalSnapshot = async \([\s\S]*?const readGuard = options\.captureProjectReadGuard\(\);[\s\S]*?options\.projectReadGuardIsCurrent\(readGuard\)[\s\S]*?projectAuthorityBundleTimelineRuntimeFromUnknown\(canonical\)[\s\S]*?hydrateTimelineRuntimeSnapshot\(canonical\.snapshot, timelineRuntime\)[\s\S]*?timelineRuntime\.transport_epoch !== acknowledgement\.epochAfter[\s\S]*?options\.applyEngineSnapshot\(canonical\.snapshot, timelineRuntime, readGuard\)/,
+  "canonical loop reads must cross-check, hydrate, compare, and carry the runtime projection with the captured project read guard",
 );
 assert.match(
   integrationSource,
-  /const applied = options\.applyEngineSnapshot\(canonical\.snapshot, readGuard\);[\s\S]*?if \(!applied\) \{[\s\S]*?Timeline loop canonical snapshot had a stale or malformed runtime watermark\.[\s\S]*?options\.setSnapshotRevision\(null\);/,
+  /const applied = options\.applyEngineSnapshot\(canonical\.snapshot, timelineRuntime, readGuard\);[\s\S]*?if \(!applied\) \{[\s\S]*?Timeline loop canonical snapshot had a stale or malformed runtime watermark\.[\s\S]*?options\.setSnapshotRevision\(null\);/,
   "canonical loop apply must fail closed on a stale watermark before clearing snapshot revision",
 );
 assert.match(appSource,
   /import \{ createTimelineLoopRuntimeIntegration \} from "\.\/timelineLoopRuntimeIntegration";/,
   "App must statically import the reviewed loop integration module");
 assert.match(appSource,
-  /const timelineLoopRuntimeIntegration = createTimelineLoopRuntimeIntegration\(\{[\s\S]*?captureProjectReadGuard,[\s\S]*?projectReadGuardIsCurrent,[\s\S]*?tauriInvoke,[\s\S]*?beginTimelineTransportCanonicalSnapshotConvergence,[\s\S]*?applyEngineSnapshot: \(snapshot, projectReadGuard\) => applyEngineSnapshot\([\s\S]*?\{ projectReadGuard \},[\s\S]*?setSnapshotRevision: \(revision\) => setSnapshotRevision\(revision\),[\s\S]*?\}\);/,
-  "App must wire the authority, read guard, shared convergence barrier, and guarded apply seams into the reviewed integration");
+  /const timelineLoopRuntimeIntegration = createTimelineLoopRuntimeIntegration\(\{[\s\S]*?captureProjectReadGuard,[\s\S]*?projectReadGuardIsCurrent,[\s\S]*?tauriInvoke,[\s\S]*?beginTimelineTransportCanonicalSnapshotConvergence,[\s\S]*?applyEngineSnapshot: \(snapshot, timelineRuntime, projectReadGuard\) => applyEngineSnapshot\([\s\S]*?\{ projectReadGuard, timelineRuntime \},[\s\S]*?setSnapshotRevision: \(revision\) => setSnapshotRevision\(revision\),[\s\S]*?\}\);/,
+  "App must wire authority, read guard, runtime projection, convergence barrier, and guarded apply seams into the reviewed integration");
 assert.match(appSource,
   /const invokeTimelineLoopRuntime = async <T,>\([\s\S]*?return timelineLoopRuntimeIntegration\.invoke<T>\(command, args\);/,
   "App must delegate loop command dispatch to the reviewed integration module");

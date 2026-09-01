@@ -39572,7 +39572,7 @@ async function main() {
         directModelBridgeAbsent: result.setup.bridgeAvailable === false,
         realSnapshotDeltaMergeUsed:
           appSource.includes("mergeEngineSnapshotSyncResponse(latestEngineSnapshot, response)")
-          && appSource.includes("return applyEngineSnapshotSyncResponse(response, syncUiState)")
+          && appSource.includes("return applyEngineSnapshotSyncResponse(response, syncUiState, requestedReadGuard)")
           && liveStateSource.includes(
             "if (response.full) return normalizeEngineSnapshotVideoMediaAssets(response.full);",
           )

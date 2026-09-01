@@ -1,9 +1,67 @@
 # Syndocal historical v1.0 / current v1.2 alpha Release Status
 
 Updated: 2026-09-01
-Branch: `codex/syndocal-v1.2`; current product metadata is `1.2.0-alpha.54`.
+Branch: `codex/syndocal-v1.2`; current product metadata is `1.2.0-alpha.55`.
 
-## 2026-09-01 current alpha.54 strict Timeline loop native checkpoint
+## 2026-09-01 current alpha.55 runtime-snapshot/native checkpoint
+
+Alpha.55 fixes the renderer/native contract that made a valid persisted `.sdc`
+look as if its Timeline runtime watermark were missing. The retired path expected
+transport, loop, and Follow runtime state inside the authored project snapshot,
+although Rust deliberately omits those live fields from persistence. The new
+native wire contract publishes a mandatory `TimelineRuntimeSnapshotWire`
+sidecar beside the persisted snapshot for full, delta, authority, poll, and
+canonical reads. Exact transport/loop/Follow generations and semantic
+coherence are validated before renderer mutation; absent, malformed, duplicate,
+future, mixed, or generation-rewinding state fails closed. Storage, dirty-state,
+recovery, and project-publication signatures explicitly strip runtime-only
+fields, so the `.sdc` schema and authored bytes are not silently widened.
+
+The same checkpoint fixes a mapping-stage UI defect where local hover state
+could keep a fixture name visible after the pointer or click moved to empty
+stage space. Empty-stage capture-phase pointer movement/click now clears only
+that local hover state without preventing selection, drag, yaw, or pointer
+capture. All five mapping viewport contracts pass at `1920x1080`, `1920x1032`,
+`2048x1152`, `1366x768`, and `1280x720`.
+
+Focused runtime-watermark, loop, transport, authority, project-transaction,
+storage, mapping-live-snapshot, TypeScript, formatter, and diff gates pass.
+The exact MSVC Community `14.44.35207` linker was pinned and first in
+`where.exe`; focused Rust runtime serialization passed `2/2`, with first-party
+warnings `0`. `check:release` passes, including the release, ASIO packaging,
+audio, video-output, camera, Timeline loop, and runtime-watermark subgates. The
+ASIO packaging self-test intentionally exercised its SDK-independent fixture
+because `FFMPEG_DIR` is not inherited inside that self-test; it passed and did
+not emit a first-party warning.
+
+`pnpm --dir app tauri build --no-bundle` completed in `5m16s`, with first-party
+warnings `0`. The emitted App asset is `App-CnkVtOlJ.js`, `499,350` bytes
+(`153,710` gzip), with no Vite chunk advisory. The exact Windows executable is
+ProductVersion/FileVersion `1.2.0-alpha.55`, `62,292,480` bytes, SHA-256
+`8CBD6A5875CFAD8BFABC1838BE7E4C32FA367017E9267F97453B756706B63CA1`.
+Exactly one checkout-owned `Syndocal` process, PID `56892`, exposes one
+responsive window with status `準備完了`. Screenshot/accessibility capture
+succeeded. Computer Use input activation failed closed even after one clean
+session reinitialization, so no native project-open or output action was fired
+and the alpha52 `.sdc` open/reopen observation is not claimed.
+
+Independent Terra xHigh review reports GO with P0/P1 `0`; Ox was unavailable,
+which is the documented narrow review exception. Physical alpha.55 USB-DMX is
+still blocked by the absent serial device. Art-Net was not probed while Unity
+owns UDP 6454. Spout pixels, physical three-display content, alpha52 project
+open, and audible PROGRAM/CUE remain external acceptance gates. The protected
+untracked `DSF2026-show-alpha51-usb-final.sdc` remains exactly `1,116,223`
+bytes with SHA-256
+`7031196A6527431FB8D625F420FE5D3E442DD2AA35D2ED86D57AF9EDF69890A7` and
+must not be staged.
+
+Current generated-tree inventory is `target` at `147,037,274,593` logical
+bytes / `106,330` files and `app/node_modules` at `545,338,492` bytes / `3,704`
+files. No deletion was performed and reclaimed bytes are `0`: no tracked,
+focused-tested, independently reviewed cleanup harness covers this exact target
+set.
+
+## 2026-09-01 historical alpha.54 strict Timeline loop native checkpoint
 
 The reviewed implementation/source/native checkpoint is pushed as
 `c742af8c778f41ddc0c8dd7d99d44b5d5d5f9a12` on
