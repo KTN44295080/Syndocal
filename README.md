@@ -58,6 +58,11 @@ Display 1 changed foreground frames after 2.5s, proving animated presentation
 while Timeline ran. The background route-switch sequence above was observed on
 the physical Display 5 window. Timeline transport was then paused and restarted
 with the main window kept maximized at 1920x1032 for the exact sequence.
+The clean descendant checkpoint `72e8d99e116ecf35efd4768b4a7254b3937ba096`
+also passed three consecutive strict monitor/window identity samples; evidence
+is under `target/qa/alpha58-live-3display-61f07c8789fc4a0bb1d0a606b119e20d-2368fe4d7ccf437584362a82874c2e9a`.
+Its verdict is `accepted`, but `native_hardware_claim=false`; it does not
+override the performance and physical gates above.
 
 The immediately preceding alpha.56 closed the strict
 root-loop release race at a

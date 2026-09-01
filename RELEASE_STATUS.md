@@ -49,6 +49,11 @@ The Display 1 foreground logo changed frame after 2.5s, proving animated
 presentation while Timeline ran. Timeline transport was paused and restarted
 for the background sequence above while the main window remained maximized at
 1920x1032.
+The clean descendant checkpoint `72e8d99e116ecf35efd4768b4a7254b3937ba096`
+passed three consecutive strict monitor/window identity samples. Evidence is
+`target/qa/alpha58-live-3display-61f07c8789fc4a0bb1d0a606b119e20d-2368fe4d7ccf437584362a82874c2e9a`;
+the verdict is `accepted` with `native_hardware_claim=false`, so the open
+performance and physical gates remain open.
 
 ## 2026-09-01 historical alpha.57 media admission native checkpoint
 
