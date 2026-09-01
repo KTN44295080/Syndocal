@@ -3,6 +3,35 @@
 Updated: 2026-09-01
 Branch: `codex/syndocal-v1.2`; current product metadata is `1.2.0-alpha.59`.
 
+## 2026-09-01 alpha.59 native/local-hardware checkpoint
+
+The source checkpoint is committed, pushed, and upstream-equal at
+`9f1925cf98fd36dbdb8059a2b50143feb300f641`. The exact Community MSVC
+`14.44.35207` no-bundle build passed in `2m55s`, first-party warnings `0`.
+Artifact: `target/release/syndocal.exe`, Product/FileVersion
+`1.2.0-alpha.59`, `62,367,744` bytes, SHA-256
+`EF18B7A92913B9BA72A74CAA93864106DC834065135E8703542851C11ED7E2F7`.
+Exact PID `56736` is responsive and its main window is maximized.
+
+The current FTDI Open-DMX device on COM3 completed the one-click show setup.
+S0 proved an initial physical zero write, then explicit release produced
+`active=true`, `liveFrameQueued=true`, `faulted=false`, and exact live Art-Net
+mirror state. The all-white engine frame is nonzero on the expected preview
+channels; fixture illumination still requires the operator's visual answer.
+The `人生オーバー` Timeline looped inside `136941..138353ms`, then the normal
+loop-release control advanced to `153986ms` while USB-DMX stayed live and
+non-faulted. It is now stopped at `0ms` with S0 clear.
+
+Two distinct native Display windows are concurrently open and routed to
+different compositions. Display 5 / 3840x2160 / camera composition passed the
+current 600-frame gate (`11.357ms` average, `17.445ms` max, 1 miss). Display 1
+/ 1920x1080 / foreground logo is live with zero decode errors but remains a
+performance NO-GO (`12.982ms` average, `35.504ms` max, 180/600 misses).
+Therefore local two-screen routing is accepted, while full three-display
+60fps acceptance remains open. Audible audio, operator fixture confirmation,
+MiraBox live content, Unity Art-Net/Spout, DJ-Link, show-ASIO hardware, and
+installer/updater rows remain unverified.
+
 ## 2026-09-01 current alpha.59 show-output source candidate
 
 Alpha.59 is based on upstream-equal parent

@@ -4,6 +4,65 @@ Status date: 2026-09-01 JST
 
 This is the concise authoritative resume note for the final show-critical tranche. It supersedes chat-only status, but it does not supersede the detailed acceptance documents named below.
 
+## 2026-09-01 alpha.59 native and local hardware checkpoint
+
+Source checkpoint `9f1925cf98fd36dbdb8059a2b50143feb300f641` is
+committed, pushed, and upstream-equal on `codex/syndocal-v1.2`. The exact
+Community MSVC `14.44.35207` no-bundle build passed in `2m55s` with first-party
+warnings `0`. The artifact is
+`target/release/syndocal.exe`, Product/FileVersion `1.2.0-alpha.59`,
+`62,367,744` bytes, SHA-256
+`EF18B7A92913B9BA72A74CAA93864106DC834065135E8703542851C11ED7E2F7`.
+PID `56736` is the sole exact-checkout process. Its main `Syndocal` window is
+responsive and maximized (`showCmd=3`, native outer rect
+`-8,-8,1928,1040`).
+
+The one-click show-DMX flow completed against the current FTDI Open-DMX
+adapter on `COM3`. Authoritative machine binding is
+`selected_and_present`; initial S0 status proved `active=true`,
+`zeroFrameQueued=true`, `zeroFramePhysicalWriteCompleted=true`,
+`workerShutdownCompleted=false`, and `faulted=false`. After explicit native
+Yes confirmation for blackout release, the same worker reported
+`active=true`, `liveFrameQueued=true`, `faulted=false`, and
+`artnetMirrorLive=true`; the engine preview carried the completed all-white
+frame (including ch1-3 and ch5 at 255). This proves application-to-Windows
+Open-DMX physical-write completion and continuous live-frame queueing. Fixture
+illumination is still an operator visual acceptance row until the operator
+confirms the attached luminaire remained lit.
+
+The authored `人生オーバー` Timeline was exercised through its first pedal
+boundary. Starting at `137000ms` remained inside the configured
+`136941..138353ms` four-beat loop (observed `137255ms` after more than one loop
+duration). The normal Break/loop-release control then advanced beyond B to
+`153986ms`; USB-DMX remained active/live/non-faulted throughout. Playback was
+paused and returned to `0ms`; the current safe operator state is Timeline
+stopped at the start, S0 clear, and live USB-DMX active.
+
+Both persisted ordinary Display outputs were opened concurrently under exact
+Ready/Both ownership. Output 3 is Display 1 at `1920x1080`, composition 2
+`Foreground Video 1`, containing file-backed `logo-anim-dark`; output 4 is
+Display 5 at `3840x2160`, composition 3 `Background Video2 Camera`, containing
+the exact 1920x1080@60 camera source selection. Display 5 passed its current
+600-frame validation window (`11.357ms` average, `17.445ms` max, one deadline
+miss, decoder errors `0`). Display 1 is live and decodes without errors, but
+its current strict 60fps window remains NO-GO: `12.982ms` average,
+`35.504ms` max, `180/600` deadline misses, validation `failed`. Thus distinct
+two-screen routing and live window creation are accepted locally; full
+three-display 60fps acceptance is not.
+
+Cleanup remains fail-closed. Inventory was approximately
+`184,901,787,243` bytes under `target` and `545,338,492` bytes under
+`app/node_modules`. The tracked cleanup self-test passed `110` assertions, but
+the plan rejected with `WriterOwnershipTopologyUnverifiable` for a missing
+positive parent PID. No deletion ran and reclaimed bytes are `0`.
+
+Open external rows: operator visual confirmation of the lit USB-DMX fixture;
+Display 1 60fps budget repair/retest; audible PROGRAM/CUE confirmation on the
+selected real endpoints; MiraBox live-image acceptance; Unity Art-Net/Spout;
+DJ-Link real ACK/reconnect/pedals; show-ASIO physical routing; and installer/
+updater inspection. Do not promote route state, queue acceptance, or the local
+camera selection into those external claims.
+
 ## 2026-09-01 alpha.59 source candidate before native acceptance
 
 Alpha.59 is being prepared from upstream-equal parent
