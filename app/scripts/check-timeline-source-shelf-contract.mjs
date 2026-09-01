@@ -35,6 +35,7 @@ const shelfSource = await readFile(new URL("../src/components/TimelineSourceShel
 const matrixSource = await readFile(new URL("../src/components/SceneMatrixPanel.tsx", import.meta.url), "utf8");
 const cueManagementSource = await readFile(new URL("../src/components/CueManagementPanel.tsx", import.meta.url), "utf8");
 const appSource = await readFile(new URL("../src/App.tsx", import.meta.url), "utf8");
+const timelineCommandDispatchersSource = await readFile(new URL("../src/timelineCommandDispatchers.ts", import.meta.url), "utf8");
 const cssSource = await readFile(new URL("../src/styles.css", import.meta.url), "utf8");
 const packageSource = await readFile(new URL("../package.json", import.meta.url), "utf8");
 const playbackExecutorSource = await readFile(new URL("../src/components/PlaybackExecutorPanel.tsx", import.meta.url), "utf8");
@@ -809,8 +810,8 @@ assert.match(appSource, /const requireTimelineSceneBlockCue = \(cueId: number\):
 assert.match(appSource, /const placeArmedTimelineCue = async[\s\S]*?const cue = requireTimelineSceneBlockCue\(cueId\);/);
 assert.match(appSource, /const endTimelineCueDrag = async[\s\S]*?const cue = requireTimelineSceneBlockCue\(drag\.cue_id\);/);
 assert.match(
-  appSource,
-  /const invokeTimelineSceneBlockCommand = async[\s\S]*?command === "add_timeline_scene_block"[\s\S]*?command === "set_timeline_scene_block"[\s\S]*?command === "set_timeline_cue_event"[\s\S]*?timelineSceneBlockCueAllowedByAuthority\(cueId, authority, childCueId\)/,
+  timelineCommandDispatchersSource,
+  /export const invokeTimelineSceneBlockCommand = async[\s\S]*?command === "add_timeline_scene_block"[\s\S]*?command === "set_timeline_scene_block"[\s\S]*?command === "set_timeline_cue_event"[\s\S]*?timelineSceneBlockCueAllowed\(cueId, childCueId\)/,
   "all Scene add/set terminal commands reject unallowed child Timeline cues before persistence or Tauri IPC",
 );
 assert.match(
@@ -832,7 +833,7 @@ assert.doesNotMatch(
   "the retired partial unavailable grouping path and its affirmative representation are absent",
 );
 
-const assertAppAuthorityGuards = (source) => {
+const assertAppAuthorityGuards = (source, commandDispatchersSource) => {
   assert.match(source, /snapshot\(\)\.cue_lists,\s*snapshot\(\)\.cues,\s*snapshot\(\)\.playback_executors/);
   assert.match(source, /const requireBankAuthority = \(\) =>/);
   assert.match(source, /const createCueList = async[\s\S]*?if \(!requireBankAuthority\(\)\) return false;/);
@@ -841,19 +842,19 @@ const assertAppAuthorityGuards = (source) => {
   assert.match(source, /const createPlaybackExecutor = async[\s\S]*?if \(!requireAuthoritativeCueList\(cueListId\)\) return;/);
   assert.match(source, /const updatePlaybackExecutor = async[\s\S]*?const authority = requireBankAuthority\(\);/);
   assert.match(source, /const triggerPlaybackExecutor = async[\s\S]*?const authority = requireBankAuthority\(\);/);
-  assert.match(source, /const invokeTimelineSceneBlockCommand = async[\s\S]*?const authority = requireBankAuthority\(\);/);
+  assert.match(commandDispatchersSource, /export const invokeTimelineSceneBlockCommand = async[\s\S]*?if \(!options\.requireBankAuthority\(\)\) throw new Error\(options\.bankAuthorityIssueMessage\(\)\);/);
   assert.match(source, /selectedCueListId, setSelectedCueListId\] = createSignal<number \| null>\(null\)/);
   assert.doesNotMatch(source, /selectedCueListId=\{selectedCueList\(\)\?\.id \?\? [01]\}/);
   assert.match(source, /requestedId === null && authority\.issue === null/);
   assert.match(source, /createBankAuthorityDelayFence/);
   assert.match(source, /controlEditBankAuthorityFence\.isCurrent/);
 };
-assertAppAuthorityGuards(appSource);
+assertAppAuthorityGuards(appSource, timelineCommandDispatchersSource);
 assert.throws(
   () => assertAppAuthorityGuards(appSource.replace(
     "if (!requireAuthoritativeCueList(cueListId)) return;\n    try {\n      const executorId",
     "try {\n      const executorId",
-  )),
+  ), timelineCommandDispatchersSource),
   /createPlaybackExecutor/,
   "the App contract must reject a component-bypass create-executor regression",
 );

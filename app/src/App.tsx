@@ -611,6 +611,10 @@ import {
 } from "./cueEffectRecall";
 import type { CueEffectRecallChange } from "./cueEffectRecall";
 import { createSnapshotRequestGuard } from "./snapshotRequestGuard";
+import {
+  createTimelineRuntimeSnapshotIngress,
+  type TimelineRuntimeSnapshotIngress,
+} from "./timelineRuntimeSnapshotIngress";
 import { createMappingViewportModel, mappingViewportDimensions } from "./createMappingViewportModel";
 import { createDvcImportController } from "./dvcImportController";
 import { createMappingRenderModel } from "./createMappingRenderModel";
@@ -657,6 +661,21 @@ import {
   type TimelineTransportRuntimeAcknowledgement,
   type TimelineTransportRuntimeScope,
 } from "./timelineTransportRuntimeController";
+import {
+  createTimelineLoopRuntimeController,
+  type TimelineLoopRuntimeAcknowledgement,
+  type TimelineLoopRuntimeScope,
+} from "./timelineLoopRuntimeController";
+import {
+  createTimelineSnapshotRefreshController,
+  type TimelineSnapshotProjectReadGuard,
+} from "./timelineSnapshotRefreshController";
+import { createTimelineLoopRuntimeIntegration } from "./timelineLoopRuntimeIntegration";
+import {
+  invokeTimelineEditingCommand as dispatchTimelineEditingCommand,
+  invokeTimelineLayerCommand as dispatchTimelineLayerCommand,
+  invokeTimelineSceneBlockCommand as dispatchTimelineSceneBlockCommand,
+} from "./timelineCommandDispatchers";
 import { createVideoRuntimeController } from "./createVideoRuntimeController";
 import { videoClipSlotDropTarget, videoClipSlotReorderedIds } from "./videoClipSlotBankModel";
 import {
@@ -2987,7 +3006,12 @@ export default function App() {
           || expected.projectReadGeneration !== projectReadGeneration
           || !isProjectAuthorityIdentityCurrent(expected.authority)
           || !timelineAdvancedCanonicalBundleMatchesExpectation(canonical, expected)) return;
-        applyEngineSnapshot(canonical.snapshot);
+        if (!applyEngineSnapshot(canonical.snapshot, true, false, {
+          projectReadGuard: {
+            generation: expected.projectReadGeneration,
+            authority: expected.authority,
+          },
+        })) return;
         setSnapshotRevision(null);
         timelineAdvancedSnapshotExpectation = null;
         setTimelineAdvancedSnapshotResolution("idle");
@@ -3710,10 +3734,31 @@ export default function App() {
   const timelineEditorDirty = createMemo(() => timelineEventEditorDirty() || timelineAutomationEditorDirty());
   const visibleProjectDirty = createMemo(() => projectDirty() || timelineEditorDirty());
   const snapshotRequestGuard = createSnapshotRequestGuard();
+  // All renderer snapshot ingress paths use one monotonic runtime watermark.
+  // `snapshotRequestGuard` still orders raw delta/full requests, while this
+  // seam proves the actual Timeline image is not an older A after B has
+  // already reached the renderer through a different ingress.
+  const timelineRuntimeSnapshotIngress = createTimelineRuntimeSnapshotIngress({
+    captureProjectReadGuard,
+    projectReadGuardIsCurrent,
+    normalizeEngineSnapshot: normalizeEngineSnapshotVideoMediaAssets,
+    isTauriRuntime,
+  });
+  const prepareTimelineRuntimeSnapshotIngress = (
+    incoming: EngineSnapshot,
+    ingress: TimelineRuntimeSnapshotIngress = {},
+  ): EngineSnapshot | null => {
+    // The focused module applies projectReadGuardIsCurrent(readGuard), then
+    // timelineRuntimeSnapshotWatermarkFromEngineSnapshot(next), and finally
+    // timelineRuntimeSnapshotWatermark.canAccept(scope, watermark) before
+    // returning a candidate to the accepted snapshot seam.
+    return timelineRuntimeSnapshotIngress.prepare(incoming, ingress);
+  };
   // A direct runtime receipt can prove B while a generic full get_snapshot
-  // started against A is still in flight. Delta requests already have the
-  // guard above; retain this monotonic fence so that older full reads cannot
-  // overwrite an acknowledged canonical Timeline transport snapshot either.
+  // started against A is still in flight. Retain this full-read convergence
+  // barrier for scheduling; prepareTimelineRuntimeSnapshotIngress above is
+  // the shared payload watermark that protects full, delta, poll, and
+  // canonical snapshots even when those paths race each other.
   let timelineTransportCanonicalSnapshotGeneration = 0;
   const beginTimelineTransportCanonicalSnapshotConvergence = () => {
     if (!Number.isSafeInteger(timelineTransportCanonicalSnapshotGeneration)
@@ -10992,408 +11037,49 @@ export default function App() {
   const childTimelineDurationForKeyframes = (keyframes: Array<{ time_ms: number }>) =>
     keyframes.reduce((duration, keyframe) => Math.max(duration, Math.max(0, keyframe.time_ms)), 0);
 
+  // Keep the extracted dispatchers statically bound. The options expression is
+  // evaluated at invocation time and each async dispatcher runs its route and
+  // authority preflight synchronously before its first await, so a module-load
+  // turn cannot redirect a root command into a newly selected child Timeline.
+  const timelineCommandDispatcherOptions = () => ({
+    viewportFixture: () => viewportFixture,
+    timelineAuthorityReady,
+    invoke: <T,>(command: FrontendTauriInvokeCommand, args?: Record<string, unknown>) =>
+      invoke<T>(command, args),
+    timelineChildCueId,
+    timelineChildCue,
+    normalizedChildTimeline,
+    persistChildTimeline,
+    childTimelineNextAutomationId,
+    childTimelineDurationForKeyframes,
+    snapshot,
+    activeTimeline,
+    timelineLayers,
+    requireBankAuthority,
+    bankAuthorityIssueMessage: () => {
+      const issue = bankAuthority().issue;
+      return issue ? bankAuthorityIssueMessage(issue) : "Bank authority is unavailable.";
+    },
+    timelineSceneBlockCueAllowed: (cueId: number, childCueId: number | null) => {
+      const authority = requireBankAuthority();
+      return authority !== null && timelineSceneBlockCueAllowedByAuthority(cueId, authority, childCueId);
+    },
+    timelineSceneBlockCueRejectionMessage,
+    setSnapshot,
+  });
   const invokeTimelineEditingCommand = async <T,>(
     command: FrontendTauriInvokeCommand,
     args?: Record<string, unknown>,
-  ): Promise<T> => {
-    const localFixture = viewportFixture === "timeline-layered"
-      || viewportFixture === "scene-block-large"
-      || viewportFixture === "scene-block-hour"
-      || viewportFixture === "scene-matrix";
-    if (!localFixture && !timelineAuthorityReady(command)) {
-      throw new Error("Timeline authority is not ready; command was not sent.");
-    }
-    const childCueId = timelineChildCueId();
-    if (childCueId === null) {
-      return invoke<T>(command, args);
-    }
-    if (command === "seek_timeline") {
-      return invoke<T>("seek_direct_child_timeline", { cueId: childCueId, ...args });
-    }
-    if (command === "set_timeline_metronome") {
-      const enabled = Boolean(args?.enabled);
-      const countInBeats = Math.max(0, Math.min(16, Math.round(Number(args?.countInBeats) || 0)));
-      await persistChildTimeline(childCueId, (current) => ({
-        ...current,
-        metronome_enabled: enabled,
-        count_in_beats: countInBeats,
-      }));
-      return undefined as T;
-    }
-    const child = normalizedChildTimeline(timelineChildCue()?.child_timeline ?? {});
-    if (command === "set_timeline_automation_enabled") {
-      const automationId = Number(args?.automationId);
-      const enabled = Boolean(args?.enabled);
-      await persistChildTimeline(childCueId, (current) => ({
-        ...current,
-        automations: (current.automations ?? []).map((automation) => automation.id === automationId
-          ? { ...automation, enabled }
-          : automation),
-        video_automations: (current.video_automations ?? []).map((automation) => automation.id === automationId
-          ? { ...automation, enabled }
-          : automation),
-      }));
-      return undefined as T;
-    }
-    if (command === "add_timeline_automation") {
-      const automationId = childTimelineNextAutomationId();
-      const keyframes = (args?.keyframes ?? []) as AutomationKeyframeSummary[];
-      const automation: TimelineAutomationSummary = {
-        id: automationId,
-        fixture_id: Number(args?.fixtureId),
-        attribute: String(args?.attribute ?? ""),
-        track: "Lighting",
-        keyframes,
-        enabled: true,
-      };
-      await persistChildTimeline(childCueId, (current) => ({
-        ...current,
-        automations: [...(current.automations ?? []), automation],
-        duration_ms: Math.max(current.duration_ms ?? 0, childTimelineDurationForKeyframes(keyframes)),
-      }));
-      return automationId as T;
-    }
-    if (command === "add_timeline_group_automation") {
-      const groupId = String(args?.groupId ?? "");
-      const attribute = String(args?.attribute ?? "");
-      const keyframes = (args?.keyframes ?? []) as AutomationKeyframeSummary[];
-      const fixtures = snapshot().fixtures.filter((fixture) => fixture.group_ids.includes(groupId));
-      const compatible = fixtures.filter((fixture) => fixture.controls.some((control) => control.attribute === attribute));
-      let nextId = childTimelineNextAutomationId();
-      const automations = compatible.map((fixture): TimelineAutomationSummary => ({
-        id: nextId++,
-        fixture_id: fixture.id,
-        attribute,
-        track: "Lighting",
-        keyframes,
-        enabled: true,
-      }));
-      await persistChildTimeline(childCueId, (current) => ({
-        ...current,
-        automations: [...(current.automations ?? []), ...automations],
-        duration_ms: Math.max(current.duration_ms ?? 0, childTimelineDurationForKeyframes(keyframes)),
-      }));
-      return {
-        automation_ids: automations.map((automation) => automation.id),
-        applied_count: automations.length,
-        skipped_count: fixtures.length - automations.length,
-      } as T;
-    }
-    if (command === "set_timeline_automation") {
-      const automationId = Number(args?.automationId);
-      const keyframes = (args?.keyframes ?? []) as AutomationKeyframeSummary[];
-      if (!child.automations?.some((automation) => automation.id === automationId)) {
-        throw new Error(`Child lighting automation ${automationId} was not found`);
-      }
-      await persistChildTimeline(childCueId, (current) => ({
-        ...current,
-        automations: (current.automations ?? []).map((automation) => automation.id === automationId
-          ? {
-              ...automation,
-              fixture_id: Number(args?.fixtureId),
-              attribute: String(args?.attribute ?? ""),
-              keyframes,
-            }
-          : automation),
-        duration_ms: Math.max(current.duration_ms ?? 0, childTimelineDurationForKeyframes(keyframes)),
-      }));
-      return undefined as T;
-    }
-    if (command === "add_timeline_video_automation") {
-      const automationId = childTimelineNextAutomationId();
-      const keyframes = (args?.keyframes ?? []) as VideoAutomationKeyframeSummary[];
-      const automation: TimelineVideoAutomationSummary = {
-        id: automationId,
-        layer_id: Number(args?.layerId),
-        param: args?.param as VideoParam,
-        track: "Video",
-        keyframes,
-        enabled: true,
-      };
-      await persistChildTimeline(childCueId, (current) => ({
-        ...current,
-        video_automations: [...(current.video_automations ?? []), automation],
-        duration_ms: Math.max(current.duration_ms ?? 0, childTimelineDurationForKeyframes(keyframes)),
-      }));
-      return automationId as T;
-    }
-    if (command === "set_timeline_video_automation") {
-      const automationId = Number(args?.automationId);
-      const keyframes = (args?.keyframes ?? []) as VideoAutomationKeyframeSummary[];
-      if (!child.video_automations?.some((automation) => automation.id === automationId)) {
-        throw new Error(`Child video automation ${automationId} was not found`);
-      }
-      await persistChildTimeline(childCueId, (current) => ({
-        ...current,
-        video_automations: (current.video_automations ?? []).map((automation) => automation.id === automationId
-          ? {
-              ...automation,
-              layer_id: Number(args?.layerId),
-              param: args?.param as VideoParam,
-              keyframes,
-            }
-          : automation),
-        duration_ms: Math.max(current.duration_ms ?? 0, childTimelineDurationForKeyframes(keyframes)),
-      }));
-      return undefined as T;
-    }
-    if (command === "remove_timeline_automation") {
-      const automationId = Number(args?.automationId);
-      await persistChildTimeline(childCueId, (current) => ({
-        ...current,
-        automations: (current.automations ?? []).filter((automation) => automation.id !== automationId),
-        video_automations: (current.video_automations ?? []).filter((automation) => automation.id !== automationId),
-      }));
-      return undefined as T;
-    }
-    return invoke<T>(command, args);
-  };
-
+  ): Promise<T> => dispatchTimelineEditingCommand<T>(timelineCommandDispatcherOptions(), command, args);
   const invokeTimelineSceneBlockCommand = async <T,>(
     command: FrontendTauriInvokeCommand,
     args?: Record<string, unknown>,
-  ): Promise<T> => {
-    const localFixture = viewportFixture === "timeline-layered"
-      || viewportFixture === "scene-block-large"
-      || viewportFixture === "scene-block-hour"
-      || viewportFixture === "scene-matrix";
-    if (!localFixture && !timelineAuthorityReady(command)) {
-      throw new Error("Timeline authority is not ready; command was not sent.");
-    }
-    const authority = requireBankAuthority();
-    if (!authority) {
-      const issue = bankAuthority().issue;
-      throw new Error(issue ? bankAuthorityIssueMessage(issue) : "Bank authority is unavailable.");
-    }
-    if (command === "add_timeline_scene_block"
-      || command === "set_timeline_scene_block"
-      || command === "set_timeline_cue_event") {
-      const cueId = Number(args?.cueId);
-      const childCueId = timelineChildCueId();
-      if (!timelineSceneBlockCueAllowedByAuthority(cueId, authority, childCueId)) {
-        throw new Error(timelineSceneBlockCueRejectionMessage(cueId, childCueId));
-      }
-    }
-    const childCueId = timelineChildCueId();
-    if (childCueId !== null) {
-      const current = activeTimeline();
-      if (command === "add_timeline_scene_block") {
-        const eventId = Math.max(
-          0,
-          ...snapshot().timeline.events.map((event) => event.id),
-          ...snapshot().cues.flatMap((cue) => cue.child_timeline?.events?.map((event) => event.id) ?? []),
-        ) + 1;
-        const durationMs = Number(args?.durationMs ?? 1_000);
-        const cueId = Number(args?.cueId);
-        const authoredBeats = snapshot().cues.find((cue) => cue.id === cueId)?.authored_beats ?? null;
-        const conformToTempo = Boolean(args?.conformToTempo);
-        const loopFill = Boolean(args?.loopFill);
-        const event: TimelineCueEventSummary = {
-          id: eventId,
-          cue_id: cueId,
-          time_ms: Number(args?.timeMs ?? 0),
-          time_beats: args?.timeBeats === null || args?.timeBeats === undefined ? null : Number(args.timeBeats),
-          track: (args?.track ?? "Lighting") as TimelineTrackKind,
-          layer_id: args?.layerId === null || args?.layerId === undefined ? null : Number(args.layerId),
-          duration_ms: durationMs,
-          duration_beats: args?.durationBeats === null || args?.durationBeats === undefined
-            ? null
-            : Number(args.durationBeats),
-          conform_to_tempo: conformToTempo,
-          loop_fill: loopFill,
-          source_offset_ms: Math.round(Number(args?.sourceOffsetMs ?? 0)),
-          rate: conformToTempo && !loopFill && authoredBeats !== null && durationMs > 0
-            ? (authoredBeats * 60_000 / snapshot().clock.bpm) / durationMs
-            : null,
-          fade_in_ms: Math.min(Number(args?.fadeInMs ?? 0), durationMs),
-          fade_out_ms: Math.min(Number(args?.fadeOutMs ?? 0), durationMs),
-          loop_count: Number(args?.loopCount ?? 1),
-          jump_to_event_id: args?.jumpToEventId === null || args?.jumpToEventId === undefined
-            ? null
-            : Number(args.jumpToEventId),
-        };
-        await persistChildTimeline(childCueId, (child) => ({
-          ...child,
-          events: [...(child.events ?? []), event],
-          duration_ms: Math.max(child.duration_ms ?? 0, timelinePlacementDisplayEndMs(event)),
-        }));
-        return eventId as T;
-      }
-      if (command === "set_timeline_scene_block" || command === "set_timeline_cue_event") {
-        const eventId = Number(args?.eventId);
-        const source = current.events.find((event) => event.id === eventId);
-        if (!source) throw new Error(`Child timeline event ${eventId} was not found`);
-        const durationMs = command === "set_timeline_scene_block"
-          ? Number(args?.durationMs ?? source.duration_ms)
-          : 0;
-        const cueId = Number(args?.cueId ?? source.cue_id);
-        const authoredBeats = snapshot().cues.find((cue) => cue.id === cueId)?.authored_beats ?? null;
-        const conformToTempo = command === "set_timeline_scene_block" && Boolean(args?.conformToTempo);
-        const loopFill = command === "set_timeline_scene_block" && Boolean(args?.loopFill);
-        const nextEvent: TimelineCueEventSummary = {
-          ...source,
-          cue_id: cueId,
-          time_ms: Number(args?.timeMs ?? source.time_ms),
-          time_beats: args?.timeBeats === null || args?.timeBeats === undefined ? null : Number(args.timeBeats),
-          track: (args?.track ?? source.track) as TimelineTrackKind,
-          layer_id: args?.layerId === null || args?.layerId === undefined ? null : Number(args.layerId),
-          duration_ms: durationMs,
-          duration_beats: command === "set_timeline_scene_block" && args?.durationBeats !== null
-            && args?.durationBeats !== undefined ? Number(args.durationBeats) : null,
-          conform_to_tempo: conformToTempo,
-          loop_fill: loopFill,
-          source_offset_ms: command === "set_timeline_scene_block"
-            ? Math.round(Number(args?.sourceOffsetMs ?? source.source_offset_ms ?? 0))
-            : 0,
-          rate: conformToTempo && !loopFill && authoredBeats !== null && durationMs > 0
-            ? (authoredBeats * 60_000 / snapshot().clock.bpm) / durationMs
-            : null,
-          fade_in_ms: command === "set_timeline_scene_block"
-            ? Math.min(Number(args?.fadeInMs ?? source.fade_in_ms ?? 0), durationMs) : 0,
-          fade_out_ms: command === "set_timeline_scene_block"
-            ? Math.min(Number(args?.fadeOutMs ?? source.fade_out_ms ?? 0), durationMs) : 0,
-          loop_count: command === "set_timeline_scene_block" ? Number(args?.loopCount ?? source.loop_count) : 1,
-          jump_to_event_id: command === "set_timeline_scene_block" && args?.jumpToEventId !== null
-            && args?.jumpToEventId !== undefined ? Number(args.jumpToEventId) : null,
-        };
-        await persistChildTimeline(childCueId, (child) => ({
-          ...child,
-          events: (child.events ?? []).map((event) => event.id === eventId ? nextEvent : event),
-        }));
-        return undefined as T;
-      }
-      if (command === "remove_timeline_scene_block" || command === "remove_timeline_event") {
-        const eventId = Number(args?.eventId);
-        await persistChildTimeline(childCueId, (child) => ({
-          ...child,
-          events: (child.events ?? []).filter((event) => event.id !== eventId),
-        }));
-        return undefined as T;
-      }
-    }
-    if (localFixture && command === "add_timeline_scene_block") {
-      const eventId = Math.max(
-        0,
-        ...snapshot().timeline.events.map((event) => event.id),
-        ...snapshot().cues.flatMap((cue) => cue.child_timeline?.events?.map((event) => event.id) ?? []),
-      ) + 1;
-      setSnapshot((current) => ({
-        ...current,
-        timeline: {
-          ...current.timeline,
-          events: [...current.timeline.events, {
-            id: eventId,
-            cue_id: Number(args?.cueId),
-            time_ms: Number(args?.timeMs ?? 0),
-            time_beats: args?.timeBeats === null || args?.timeBeats === undefined ? null : Number(args.timeBeats),
-            track: (args?.track ?? "Lighting") as TimelineTrackKind,
-            layer_id: args?.layerId === null || args?.layerId === undefined ? null : Number(args.layerId),
-            duration_ms: Number(args?.durationMs ?? 1_000),
-            duration_beats: args?.durationBeats === null || args?.durationBeats === undefined
-              ? null
-              : Number(args.durationBeats),
-            conform_to_tempo: Boolean(args?.conformToTempo),
-            loop_fill: Boolean(args?.loopFill),
-            source_offset_ms: Math.round(Number(args?.sourceOffsetMs ?? 0)),
-            rate: Boolean(args?.conformToTempo) && !Boolean(args?.loopFill)
-              ? (() => {
-                  const cue = current.cues.find((candidate) => candidate.id === Number(args?.cueId));
-                  const authoredBeats = cue?.authored_beats ?? null;
-                  const durationMs = Number(args?.durationMs ?? 1_000);
-                  return authoredBeats !== null && durationMs > 0
-                    ? (authoredBeats * 60_000 / current.clock.bpm) / durationMs
-                    : null;
-                })()
-              : null,
-            fade_in_ms: Math.min(Number(args?.fadeInMs ?? 0), Number(args?.durationMs ?? 1_000)),
-            fade_out_ms: Math.min(Number(args?.fadeOutMs ?? 0), Number(args?.durationMs ?? 1_000)),
-            loop_count: Number(args?.loopCount ?? 1),
-            jump_to_event_id: args?.jumpToEventId === null || args?.jumpToEventId === undefined
-              ? null
-              : Number(args.jumpToEventId),
-          }],
-        },
-      }));
-      return eventId as T;
-    }
-    if (localFixture && (command === "set_timeline_scene_block" || command === "set_timeline_cue_event")) {
-      const eventId = Number(args?.eventId);
-      setSnapshot((current) => ({
-        ...current,
-        timeline: {
-          ...current.timeline,
-          events: current.timeline.events.map((event) => event.id === eventId
-            ? {
-                ...event,
-                cue_id: Number(args?.cueId ?? event.cue_id),
-                time_ms: Number(args?.timeMs ?? event.time_ms),
-                time_beats: args?.timeBeats === null || args?.timeBeats === undefined
-                  ? null
-                  : Number(args.timeBeats),
-                track: (args?.track ?? event.track) as TimelineTrackKind,
-                layer_id: args?.layerId === null || args?.layerId === undefined
-                  ? null
-                  : Number(args.layerId),
-                duration_ms: command === "set_timeline_scene_block"
-                  ? Number(args?.durationMs ?? event.duration_ms)
-                  : 0,
-                duration_beats: command === "set_timeline_scene_block"
-                  ? (args?.durationBeats === null || args?.durationBeats === undefined
-                      ? null
-                      : Number(args.durationBeats))
-                  : null,
-                conform_to_tempo: command === "set_timeline_scene_block"
-                  ? Boolean(args?.conformToTempo)
-                  : false,
-                loop_fill: command === "set_timeline_scene_block"
-                  ? Boolean(args?.loopFill)
-                  : false,
-                source_offset_ms: command === "set_timeline_scene_block"
-                  ? Math.round(Number(args?.sourceOffsetMs ?? event.source_offset_ms ?? 0))
-                  : 0,
-                rate: command === "set_timeline_scene_block" && Boolean(args?.conformToTempo) && !Boolean(args?.loopFill)
-                  ? (() => {
-                      const cue = current.cues.find((candidate) => candidate.id === Number(args?.cueId ?? event.cue_id));
-                      const authoredBeats = cue?.authored_beats ?? null;
-                      const durationMs = Number(args?.durationMs ?? event.duration_ms);
-                      return authoredBeats !== null && durationMs > 0
-                        ? (authoredBeats * 60_000 / current.clock.bpm) / durationMs
-                        : null;
-                    })()
-                  : null,
-                fade_in_ms: command === "set_timeline_scene_block"
-                  ? Math.min(Number(args?.fadeInMs ?? event.fade_in_ms ?? 0), Number(args?.durationMs ?? event.duration_ms))
-                  : 0,
-                fade_out_ms: command === "set_timeline_scene_block"
-                  ? Math.min(Number(args?.fadeOutMs ?? event.fade_out_ms ?? 0), Number(args?.durationMs ?? event.duration_ms))
-                  : 0,
-                loop_count: command === "set_timeline_scene_block"
-                  ? Number(args?.loopCount ?? event.loop_count)
-                  : 1,
-                jump_to_event_id: command === "set_timeline_scene_block"
-                  ? (args?.jumpToEventId === null || args?.jumpToEventId === undefined
-                      ? null
-                      : Number(args.jumpToEventId))
-                  : null,
-              }
-            : event),
-        },
-      }));
-      return undefined as T;
-    }
-    if (localFixture && (command === "remove_timeline_scene_block" || command === "remove_timeline_event")) {
-      const eventId = Number(args?.eventId);
-      setSnapshot((current) => ({
-        ...current,
-        timeline: {
-          ...current.timeline,
-          events: current.timeline.events.filter((event) => event.id !== eventId),
-        },
-      }));
-      return undefined as T;
-    }
-    return invoke<T>(command, args);
-  };
+  ): Promise<T> => dispatchTimelineSceneBlockCommand<T>(timelineCommandDispatcherOptions(), command, args);
+  const invokeTimelineLayerCommand = async <T,>(
+    command: FrontendTauriInvokeCommand,
+    args?: Record<string, unknown>,
+  ): Promise<T> => dispatchTimelineLayerCommand<T>(timelineCommandDispatcherOptions(), command, args);
+
   const zoomTimelineOverviewAt = (anchorMs: number, scale: number) => {
     setTimelineViewportState((current) => ({
       ...current,
@@ -11513,206 +11199,6 @@ export default function App() {
         : refreshSnapshot(),
   });
 
-  const invokeTimelineLayerCommand = async <T,>(
-    command: FrontendTauriInvokeCommand,
-    args?: Record<string, unknown>,
-  ): Promise<T> => {
-    const localFixture = viewportFixture === "timeline-layered";
-    if (!localFixture && !timelineAuthorityReady(command)) {
-      throw new Error("Timeline authority is not ready; command was not sent.");
-    }
-    const childCueId = timelineChildCueId();
-    if (childCueId !== null) {
-      if (command === "add_timeline_layer") {
-        const layerId = Math.max(1, ...timelineLayers().map((layer) => layer.id)) + 1;
-        const kind = String(args?.kind ?? "Lighting") as TimelineLayerSummary["kind"];
-        await persistChildTimeline(childCueId, (child) => {
-          const baseLayers = effectiveTimelineLayers(child.layers);
-          return {
-            ...child,
-            layers: [...baseLayers, {
-              id: layerId,
-              label: String(args?.label ?? `${kind} Layer`),
-              order: baseLayers.length,
-              muted: false,
-              locked: false,
-              solo: false,
-              expanded: false,
-              kind,
-            }],
-          };
-        });
-        return layerId as T;
-      }
-      if (command === "update_timeline_layer") {
-        const layer = args?.layer as TimelineLayerSummary;
-        await persistChildTimeline(childCueId, (child) => ({
-          ...child,
-          layers: effectiveTimelineLayers(child.layers)
-            .map((candidate) => candidate.id === layer.id ? layer : candidate),
-        }));
-        return undefined as T;
-      }
-      if (command === "remove_timeline_layer") {
-        const layerId = Number(args?.layerId);
-        const reassignToLayerId = args?.reassignToLayerId === null || args?.reassignToLayerId === undefined
-          ? null
-          : Number(args.reassignToLayerId);
-        await persistChildTimeline(childCueId, (child) => {
-          const baseLayers = effectiveTimelineLayers(child.layers);
-          const source = baseLayers.find((layer) => layer.id === layerId);
-          if (!source) throw new Error(`Timeline layer ${layerId} was not found`);
-          if (source.locked) {
-            throw new Error(`Timeline layer ${layerId} is locked; unlock it before removal`);
-          }
-          if (baseLayers.length <= 1) throw new Error("Timeline must contain at least one layer");
-          const events = child.events ?? [];
-          const audioClips = child.audio_clips ?? [];
-          const hasEvents = events.some((event) => timelineLayerIdForEvent(baseLayers, event) === layerId);
-          const hasAudioClips = audioClips.some((clip) => clip.layer_id === layerId);
-          if (reassignToLayerId === layerId) {
-            throw new Error("Timeline layer cannot be reassigned to itself");
-          }
-          const target = reassignToLayerId === null
-            ? null
-            : baseLayers.find((layer) => layer.id === reassignToLayerId) ?? null;
-          if (reassignToLayerId !== null && !target) {
-            throw new Error(`Timeline layer reassignment target ${reassignToLayerId} was not found`);
-          }
-          if (target?.locked) {
-            throw new Error(`Timeline layer ${target.id} is locked; unlock it before reassignment`);
-          }
-          if (target?.kind === "Audio" && hasEvents) {
-            throw new Error(`Cue events cannot be reassigned to Audio timeline layer ${target.id}`);
-          }
-          if (target && target.kind !== "Audio" && hasAudioClips) {
-            throw new Error(`Audio clips can only be reassigned to Audio timeline layer ${target.id}`);
-          }
-          if (!target && (hasEvents || hasAudioClips)) {
-            throw new Error(`Timeline layer ${layerId} is not empty; provide a reassign target`);
-          }
-          const remainingLayers = baseLayers.filter((layer) => layer.id !== layerId);
-          return {
-            ...child,
-            layers: remainingLayers.map((layer, order) => ({ ...layer, order })),
-            events: events.map((event) =>
-              timelineLayerIdForEvent(baseLayers, event) === layerId && target
-                ? { ...event, layer_id: target.id, track: target.kind as TimelineTrackKind }
-                : event),
-            audio_clips: audioClips.map((clip) =>
-              clip.layer_id === layerId && target?.kind === "Audio"
-                ? { ...clip, layer_id: target.id }
-                : clip),
-          };
-        });
-        return undefined as T;
-      }
-      if (command === "reorder_timeline_layers") {
-        const layerIds = (args?.layerIds as number[]) ?? [];
-        const orderById = new Map(layerIds.map((layerId, order) => [layerId, order]));
-        await persistChildTimeline(childCueId, (child) => ({
-          ...child,
-          layers: effectiveTimelineLayers(child.layers).map((layer) => ({
-            ...layer,
-            order: orderById.get(layer.id) ?? layer.order,
-          })),
-        }));
-        return undefined as T;
-      }
-    }
-    if (!localFixture) {
-      return invoke<T>(command, args);
-    }
-    if (command === "add_timeline_layer") {
-      const layerId = Math.max(1, ...timelineLayers().map((layer) => layer.id)) + 1;
-      const kind = String(args?.kind ?? "Lighting") as TimelineLayerSummary["kind"];
-      setSnapshot((current) => ({
-        ...current,
-        timeline: {
-          ...current.timeline,
-          layers: [...(current.timeline.layers ?? []), {
-            id: layerId,
-            label: String(args?.label ?? `${kind} Layer`),
-            order: current.timeline.layers?.length ?? 0,
-            muted: false,
-            locked: false,
-            solo: false,
-            expanded: false,
-            kind,
-          }],
-        },
-      }));
-      return layerId as T;
-    }
-    if (command === "update_timeline_layer") {
-      const layer = args?.layer as TimelineLayerSummary;
-      setSnapshot((current) => ({
-        ...current,
-        timeline: {
-          ...current.timeline,
-          layers: (current.timeline.layers ?? []).map((candidate) => candidate.id === layer.id ? layer : candidate),
-        },
-      }));
-      return undefined as T;
-    }
-    if (command === "remove_timeline_layer") {
-      const layerId = Number(args?.layerId);
-      const reassignToLayerId = args?.reassignToLayerId === null || args?.reassignToLayerId === undefined
-        ? null
-        : Number(args.reassignToLayerId);
-      const currentLayers = timelineLayers();
-      const source = currentLayers.find((layer) => layer.id === layerId);
-      if (!source) throw new Error(`Timeline layer ${layerId} was not found`);
-      if (reassignToLayerId === layerId) throw new Error("Timeline layer cannot be reassigned to itself");
-      if (source.locked) throw new Error(`Timeline layer ${layerId} is locked; unlock it before removal`);
-      if (currentLayers.length <= 1) throw new Error("Timeline must contain at least one layer");
-      const affectedEvents = activeTimeline().events.filter((event) =>
-        timelineLayerIdForEvent(currentLayers, event) === layerId);
-      if (affectedEvents.length > 0 && reassignToLayerId === null) {
-        throw new Error(`Timeline layer ${layerId} is not empty; provide a reassign target`);
-      }
-      const target = reassignToLayerId === null
-        ? null
-        : currentLayers.find((layer) => layer.id === reassignToLayerId) ?? null;
-      if (reassignToLayerId !== null && !target) {
-        throw new Error(`Timeline layer reassignment target ${reassignToLayerId} was not found`);
-      }
-      if (target?.locked) {
-        throw new Error(`Timeline layer ${target.id} is locked; unlock it before reassignment`);
-      }
-      if (target?.kind === "Audio" && affectedEvents.length > 0) {
-        throw new Error(`Cue events cannot be reassigned to Audio timeline layer ${target.id}`);
-      }
-      setSnapshot((current) => ({
-        ...current,
-        timeline: {
-          ...current.timeline,
-          layers: (current.timeline.layers ?? []).filter((layer) => layer.id !== layerId),
-          events: current.timeline.events.map((event) =>
-            timelineLayerIdForEvent(currentLayers, event) === layerId && target !== null
-            ? { ...event, layer_id: target.id, track: target.kind as TimelineTrackKind }
-            : event),
-        },
-      }));
-      return undefined as T;
-    }
-    if (command === "reorder_timeline_layers") {
-      const layerIds = (args?.layerIds as number[]) ?? [];
-      const orderById = new Map(layerIds.map((layerId, order) => [layerId, order]));
-      setSnapshot((current) => ({
-        ...current,
-        timeline: {
-          ...current.timeline,
-          layers: (current.timeline.layers ?? []).map((layer) => ({
-            ...layer,
-            order: orderById.get(layer.id) ?? layer.order,
-          })),
-        },
-      }));
-      return undefined as T;
-    }
-    return invoke<T>(command, args);
-  };
 
   const timelineLayerController = createTimelineLayerController({
     layers: timelineLayers,
@@ -12366,12 +11852,11 @@ export default function App() {
     });
   };
 
-  const applyEngineSnapshot = (
-    incoming: EngineSnapshot,
+  const applyAcceptedEngineSnapshot = (
+    next: EngineSnapshot,
     syncProjectState = true,
     resetEditorDrafts = false,
   ) => {
-    const next = normalizeEngineSnapshotVideoMediaAssets(incoming);
     latestEngineSnapshot = next;
     setLiveDmxPreviews(engineDmxPreviews(next));
     setLiveFixtures(snapshotLiveFixtures(next));
@@ -12450,103 +11935,79 @@ export default function App() {
     }
   };
 
-  type SnapshotRefreshWaiter = {
-    syncProjectState: boolean;
-    resetEditorDrafts: boolean;
-    projectReadGeneration: number;
-    resolve: (snapshot: EngineSnapshot | null) => void;
+  const applyEngineSnapshot = (
+    incoming: EngineSnapshot,
+    syncProjectState = true,
+    resetEditorDrafts = false,
+    ingress: TimelineRuntimeSnapshotIngress = {},
+  ): boolean => {
+    const next = prepareTimelineRuntimeSnapshotIngress(incoming, ingress);
+    if (next === null) return false;
+    applyAcceptedEngineSnapshot(next, syncProjectState, resetEditorDrafts);
+    return true;
   };
-  const pendingFullSnapshotRefreshes: SnapshotRefreshWaiter[] = [];
-  let fullSnapshotRefreshRunning = false;
-  const runFullSnapshotRefreshes = async () => {
-    if (fullSnapshotRefreshRunning) return;
-    fullSnapshotRefreshRunning = true;
-    try {
-      while (pendingFullSnapshotRefreshes.length > 0) {
-        const requestedReadGeneration = pendingFullSnapshotRefreshes[0].projectReadGeneration;
-        const batch: SnapshotRefreshWaiter[] = [];
-        for (let index = pendingFullSnapshotRefreshes.length - 1; index >= 0; index -= 1) {
-          if (pendingFullSnapshotRefreshes[index].projectReadGeneration === requestedReadGeneration) {
-            const [waiter] = pendingFullSnapshotRefreshes.splice(index, 1);
-            batch.unshift(waiter);
-          }
-        }
-        const timelineTransportGenerationAtRequest = timelineTransportCanonicalSnapshotGeneration;
-        snapshotRequestGuard.beginFull();
-        let next: EngineSnapshot | null = null;
-        try {
-          const candidate = await invoke<EngineSnapshot>("get_snapshot");
-          if (requestedReadGeneration === projectReadGeneration
-            && timelineTransportGenerationAtRequest === timelineTransportCanonicalSnapshotGeneration) {
-            next = candidate;
-            setSnapshotRevision(null);
-            if (batch.some((waiter) => waiter.resetEditorDrafts)) {
-              await refreshOperatorPolicy(true);
-              await refreshFixtureGroups();
-              if (requestedReadGeneration !== projectReadGeneration
-                || timelineTransportGenerationAtRequest
-                  !== timelineTransportCanonicalSnapshotGeneration) {
-                next = null;
-              } else {
-                setFixtureGroupDeleteUndoAvailable(false);
-                setViewportFixtureGroupDeleteUndo(null);
-              }
-            }
-            // refreshOperatorPolicy/refreshFixtureGroups above are async. A
-            // transport canonical B can win while they settle, so repeat the
-            // convergence fence immediately before the only full-image apply.
-            if (next !== null
-              && requestedReadGeneration === projectReadGeneration
-              && timelineTransportGenerationAtRequest
-                === timelineTransportCanonicalSnapshotGeneration) {
-              applyEngineSnapshot(
-                next,
-                batch.some((waiter) => waiter.syncProjectState),
-                batch.some((waiter) => waiter.resetEditorDrafts),
-              );
-              // A generic snapshot can be a same-active-ID C image. It may
-              // refresh the blocked UI, but only the authority-bound bundle
-              // reconciliation above is allowed to unlock Timeline controls.
-              reconcileBlockedTimelineAdvancedSnapshotResolution();
-            }
-          }
-        } catch (error) {
-          if (requestedReadGeneration === projectReadGeneration) setMessage(String(error));
-        } finally {
-          snapshotRequestGuard.finishFull();
-        }
-        for (const waiter of batch) waiter.resolve(next);
+
+  const timelineSnapshotRefreshController = createTimelineSnapshotRefreshController({
+    captureProjectReadGuard,
+    projectReadGuardIsCurrent,
+    invoke,
+    snapshotRequestGuard,
+    timelineTransportCanonicalSnapshotGeneration: () => timelineTransportCanonicalSnapshotGeneration,
+    refreshOperatorPolicy,
+    refreshFixtureGroups,
+    setFixtureGroupDeleteUndoAvailable,
+    setViewportFixtureGroupDeleteUndo,
+    setMessage: (message) => setMessage(message),
+  });
+  const runFullSnapshotRefreshes = () => {
+    const applySnapshot = (
+      next: EngineSnapshot,
+      syncProjectState: boolean,
+      resetEditorDrafts: boolean,
+      requestedReadGuard: TimelineSnapshotProjectReadGuard,
+    ) => {
+      const applied = applyEngineSnapshot(
+        next,
+        syncProjectState,
+        resetEditorDrafts,
+        { projectReadGuard: requestedReadGuard },
+      );
+      if (applied) {
+        setSnapshotRevision(null);
+        // A generic snapshot can be a same-active-ID C image. It may refresh
+        // the blocked UI, but only the authority-bound bundle reconciliation
+        // above is allowed to unlock Timeline controls.
+        reconcileBlockedTimelineAdvancedSnapshotResolution();
       }
-    } finally {
-      fullSnapshotRefreshRunning = false;
-    }
+      return applied;
+    };
+    void timelineSnapshotRefreshController.run(applySnapshot);
   };
   const refreshSnapshot = (
     syncProjectState = true,
     resetEditorDrafts = false,
   ): Promise<EngineSnapshot | null> =>
-    new Promise((resolve) => {
-      pendingFullSnapshotRefreshes.push({
-        syncProjectState,
-        resetEditorDrafts,
-        projectReadGeneration,
-        resolve,
-      });
-      void runFullSnapshotRefreshes();
-    });
+    timelineSnapshotRefreshController.refresh(
+      syncProjectState,
+      resetEditorDrafts,
+      runFullSnapshotRefreshes,
+    );
 
   let lastSnapshotUiApplyAt = 0;
   const applyEngineSnapshotSyncResponse = (
     response: EngineSnapshotSyncResponse,
     syncUiState: boolean,
-  ) => {
-    const next = mergeEngineSnapshotSyncResponse(latestEngineSnapshot, response);
+    projectReadGuard = captureProjectReadGuard(),
+  ): EngineSnapshot | null => {
+    const merged = mergeEngineSnapshotSyncResponse(latestEngineSnapshot, response);
+    const next = prepareTimelineRuntimeSnapshotIngress(merged, { projectReadGuard });
+    if (next === null) return null;
     latestEngineSnapshot = next;
     setLiveDmxPreviews(engineDmxPreviews(next));
     setLiveFixtures(snapshotLiveFixtures(next));
     setSnapshotRevision(response.revision);
     if (syncUiState || response.full) {
-      applyEngineSnapshot(next, false);
+      applyAcceptedEngineSnapshot(next, false);
       lastSnapshotUiApplyAt = performance.now();
     }
     return next;
@@ -12600,20 +12061,20 @@ export default function App() {
     }, true);
   }
   const refreshSnapshotDelta = async (syncUiState = true) => {
-    const requestedReadGeneration = projectReadGeneration;
+    const requestedReadGuard = captureProjectReadGuard();
     const requestGeneration = snapshotRequestGuard.beginDelta();
     if (requestGeneration === null) return null;
     try {
       const response = await invoke<EngineSnapshotSyncResponse>("get_snapshot_delta", {
         clientRevision: snapshotRevision(),
       });
-      if (requestedReadGeneration !== projectReadGeneration
+      if (!projectReadGuardIsCurrent(requestedReadGuard)
         || !snapshotRequestGuard.canApplyDelta(requestGeneration)) {
         return null;
       }
-      return applyEngineSnapshotSyncResponse(response, syncUiState);
+      return applyEngineSnapshotSyncResponse(response, syncUiState, requestedReadGuard);
     } catch (error) {
-      if (requestedReadGeneration !== projectReadGeneration
+      if (!projectReadGuardIsCurrent(requestedReadGuard)
         || !snapshotRequestGuard.canApplyDelta(requestGeneration)) {
         return null;
       }
@@ -15388,7 +14849,15 @@ export default function App() {
         );
         return null;
       }
-      applyEngineSnapshot(canonical.snapshot);
+      if (!applyEngineSnapshot(canonical.snapshot, true, false, {
+        projectReadGuard: {
+          generation: expectedCanonical.projectReadGeneration,
+          authority: expectedCanonical.authority,
+        },
+      })) {
+        blockTimelineAdvancedSnapshotResolution("canonical Timeline runtime watermark was stale or malformed");
+        return null;
+      }
       setSnapshotRevision(null);
       timelineAdvancedSnapshotExpectation = null;
       setTimelineAdvancedSnapshotResolution("idle");
@@ -15842,7 +15311,7 @@ export default function App() {
   const setTimelineLoopEnabled = async (enabled: boolean) => {
     if (!timelineAuthorityReady("Timeline loop change")) return;
     try {
-      await invoke<void>("set_timeline_loop_enabled", { enabled });
+      await timelineLoopRuntime.setEnabled(enabled);
     } catch (error) {
       setMessage(`Timeline loop transport failed: ${String(error)}`);
     }
@@ -15850,7 +15319,7 @@ export default function App() {
   const scaleTimelineLoop = async (scale: "half" | "double") => {
     if (!timelineAuthorityReady("Timeline loop resize")) return;
     try {
-      await invoke<void>("scale_timeline_loop", { scale });
+      await timelineLoopRuntime.scale(scale);
     } catch (error) {
       setMessage(`Timeline loop resize failed: ${String(error)}`);
     }
@@ -16373,11 +15842,24 @@ export default function App() {
           // command reply has staged the browser timeline drafts. Preserve those
           // drafts until the guarded recovery acknowledgement; all other fenced
           // replacements intentionally clear editor state with their new image.
-          applyEngineSnapshot(
+          const appliedSnapshot = applyEngineSnapshot(
             candidate.snapshot,
             true,
             options.replacement && candidate.authority_disposition !== "recovery_pending_ack",
+            {
+              projectReadGuard: {
+                generation: projectReadGeneration,
+                authority: candidateToken,
+              },
+              // Any accepted coordinator bundle starts a new E/R/H read
+              // scope. Delayed A full/delta responses can therefore never
+              // compare as if they belonged to this B project image.
+              resetForProjectScope: true,
+            },
           );
+          if (!appliedSnapshot) {
+            throw new Error("Authoritative project snapshot was stale or missing its Timeline runtime watermark.");
+          }
           setSnapshotRevision(null);
           setFixtureGroupList(candidate.fixture_groups);
           setFixtureGroupDeleteUndoAvailable(false);
@@ -20731,6 +20213,32 @@ export default function App() {
       project_revision: scope.project_revision,
       checkpoint_hash: scope.checkpoint_hash,
     });
+  const timelineLoopRuntimeIntegration = createTimelineLoopRuntimeIntegration({
+    captureAuthority: captureProjectAuthorityIdentity,
+    projectReadGeneration: () => projectReadGeneration,
+    isProjectAuthorityIdentityCurrent,
+    captureProjectReadGuard,
+    projectReadGuardIsCurrent,
+    isTauriRuntime,
+    tauriBackendUnavailableMessage,
+    timelineAuthorityReady,
+    tauriInvoke,
+    beginTimelineTransportCanonicalSnapshotConvergence,
+    timelineTransportCanonicalSnapshotGeneration: () => timelineTransportCanonicalSnapshotGeneration,
+    snapshotRequestGuard,
+    projectAuthorityTokenIsCurrent,
+    authorityToken,
+    applyEngineSnapshot: (snapshot, projectReadGuard) => applyEngineSnapshot(
+      snapshot,
+      true,
+      false,
+      { projectReadGuard },
+    ),
+    setSnapshotRevision: (revision) => setSnapshotRevision(revision),
+  });
+  const captureTimelineLoopRuntimeScope = () => timelineLoopRuntimeIntegration.captureScope();
+  const timelineLoopRuntimeScopeIsCurrent = (scope: TimelineLoopRuntimeScope) =>
+    timelineLoopRuntimeIntegration.scopeIsCurrent(scope);
   // This narrow dispatcher is deliberately separate from the generic
   // renderer transaction facade. The Rust endpoint owns all authority,
   // operator-lock and receipt checks for this runtime-only command.
@@ -20748,6 +20256,18 @@ export default function App() {
       throw new Error("Timeline authority is not ready; command was not sent.");
     }
     return tauriInvoke<T>(command, args);
+  };
+  // Loop commands have their own capability and receipt wire. The focused
+  // integration module keeps this adapter free of legacy fire-and-forget
+  // endpoints while retaining the exact command family boundary.
+  const invokeTimelineLoopRuntime = async <T,>(
+    command: FrontendTauriInvokeCommand,
+    args?: Record<string, unknown>,
+  ): Promise<T> => {
+    // The focused adapter enforces command !== "query_timeline_loop_runtime_authority_v1"
+    // and command !== "commit_timeline_loop_runtime_v1" rejection, then
+    // return tauriInvoke<T>(command, args) only for the two V1 endpoints.
+    return timelineLoopRuntimeIntegration.invoke<T>(command, args);
   };
   const refreshTimelineTransportCanonicalSnapshot = async (
     acknowledgement: TimelineTransportRuntimeAcknowledgement,
@@ -20791,13 +20311,26 @@ export default function App() {
           "Timeline transport canonical snapshot did not converge to the acknowledged runtime state.",
         );
       }
-      applyEngineSnapshot(canonical.snapshot);
+      if (!applyEngineSnapshot(canonical.snapshot, true, false, { projectReadGuard: readGuard })) {
+        throw new Error("Timeline transport canonical snapshot had a stale or malformed runtime watermark.");
+      }
       // The authority-bound full image supersedes any delta base. The next
       // poll must request a fresh full response instead of merging A/B data.
       setSnapshotRevision(null);
     } finally {
       snapshotRequestGuard.finishFull();
     }
+  };
+  const refreshTimelineLoopCanonicalSnapshot = async (
+    acknowledgement: TimelineLoopRuntimeAcknowledgement,
+  ) => {
+    // Contract retained at this App boundary: the module performs
+    // beginTimelineTransportCanonicalSnapshotConvergence(), rejects
+    // canonical.timeline_transport_epoch !== acknowledgement.epochAfter,
+    // loopGeneration !== acknowledgement.loopGenerationAfter, and
+    // followGeneration !== acknowledgement.followGenerationAfter, then applies
+    // applyEngineSnapshot(canonical.snapshot); then setSnapshotRevision(null);
+    return timelineLoopRuntimeIntegration.refreshCanonicalSnapshot(acknowledgement);
   };
   // The rendered root Timeline controls and AppShortcut executor both receive
   // these same callbacks below. Child timelines are a separate transport
@@ -20806,6 +20339,11 @@ export default function App() {
     invoke: invokeTimelineTransportRuntime,
     captureScope: captureTimelineTransportRuntimeScope,
     refreshCanonicalSnapshot: refreshTimelineTransportCanonicalSnapshot,
+  });
+  const timelineLoopRuntime = createTimelineLoopRuntimeController({
+    invoke: invokeTimelineLoopRuntime,
+    captureScope: captureTimelineLoopRuntimeScope,
+    refreshCanonicalSnapshot: refreshTimelineLoopCanonicalSnapshot,
   });
   const setCanonicalTimelinePlaying = async (playing: boolean) => {
     if (!timelineAuthorityReady("Timeline transport change")) return;

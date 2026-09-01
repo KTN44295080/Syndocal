@@ -4,9 +4,92 @@ Date: 2026-08-19
 Branch at creation: `codex/syndocal-v1.0`
 Baseline before this document: `848d759846985cc3acf588356cfa3c996b4e2ef2`
 
+## 2026-09-01 alpha.54 strict Timeline loop native checkpoint
+
+Alpha.54 is the current source candidate on `codex/syndocal-v1.2`, based on
+upstream-equal parent `067d0bbb246ef87d0a6f13f73899d7d0eaba9e01`. The retired
+root-loop path let UI, shortcuts, MIDI, and OSC enqueue fire-and-forget loop
+mutations without a project/runtime fence or definitive publication receipt.
+The replacement path uses a loop-only capability bound to exact project
+epoch/revision/checkpoint, renderer read generation, transport epoch/generation,
+and loop/follow generations. UI and shortcuts run through one FIFO controller;
+MIDI/OSC toggle resolution occurs atomically in the engine worker. Success is
+reported only after publication and an authority-bound canonical snapshot.
+Expired, replayed, conflicting, retired-owner, cross-project, malformed, and
+generation-rewinding work fails closed. The old Tauri loop endpoints and old
+engine loop command variants are removed rather than retained as fallbacks.
+
+All renderer snapshot ingress now shares one monotonic Timeline watermark for
+full, delta, authority-poll, and canonical images. A delayed A image cannot
+overwrite newer loop/follow B, including across project replacement. Loop OFF
+preserves the visible Guide `Break` by issuing it after the new transport
+authority commits; the first full engine run caught the predecessor-authority
+ordering regression, and the corrected full rerun passed.
+
+The renderer hot path was split into dedicated loop integration, snapshot
+ingress/refresh, and Timeline command-dispatch modules. The emitted minified
+App asset is `App-BytuNPGE.js`, `497,905` bytes; Vite reports no large-chunk
+advisory. This is an emitted-asset result, not a claim that the still-large
+`App.tsx` source is below 500 kB. Further source decomposition remains P2 debt.
+The extracted dispatchers are statically imported so command routing and
+preflight remain invocation-time; passing the raw Tauri callable across the new
+module boundary is rejected by the frontend invoke inventory.
+
+The first alpha.54 native launch correctly exposed a release-blocking admission
+failure. Replacing the two legacy loop routes with the two strict routes kept
+the handler count at `509` but changed its exact name-set fingerprint; the
+frozen SHA still named the predecessor set, so the fail-closed map rejected all
+commands, including owner registration. The reviewed fingerprint is now
+`d806e8380462507a590fdd795d5bb21fe9c1bd2bd16f65da725d103af2aa7486`.
+The strict commit route is explicitly `RuntimeMutation` with the
+`PreflightOnlyNonProjectOrInnerAuthority` dispatch policy, while its authority
+query is `ReadOnly`. The canonical registry now carries both strict loop
+operations with the same R0, fail-closed payload/consent, token-bucket,
+authoritative-runtime, and exact-terminal-receipt contract as Timeline
+transport. Tests require the two retired direct loop names to be absent.
+
+Final evidence: protocol full `217/217`; engine full `987 passed / 0 failed / 2
+ignored`; focused Syndocal loop lifecycle `2/2`; control-plane exact suite
+`28/28`; runtime dispatch-fence `1/1`; frontend invoke inventory `449` exact;
+frontend routing `131` renderer and `31` server-authoritative mutations; all
+five extracted-module checker migrations, strict loop, shared snapshot
+watermark, Timeline block/loop, TypeScript, Rust format, and diff checks pass.
+The strict loop and snapshot-watermark checkers are now registered package
+scripts and are chained into `check:release`; the existing cross-platform CI
+release step therefore cannot omit them. Their static checks inspect the actual
+integration/ingress implementations and App delegation rather than comments.
+Final independent Terra xHigh re-review is `GO`, with P0/P1/P2 `0`.
+The final Windows warning ratchet is baseline `0` / current `0`, with no
+first-party or third-party warnings. Every Rust/native gate used exact VS
+Community MSVC `14.44.35207` first in `where.exe`, with the same absolute linker
+pinned for Cargo.
+
+`pnpm --dir app tauri build --no-bundle` completed through the warning ratchet.
+The resulting exact `target/release/syndocal.exe` is ProductVersion/FileVersion
+`1.2.0-alpha.54`, `62,271,488` bytes, SHA-256
+`9C5D9350D8CF0B615507C1CF02256B540C192294B8D5EA382DC89824996F0693`.
+Exactly one checkout-owned process, PID `72444`, exposes one responsive
+`Syndocal` window. The verified window is maximized (`1920x1032` work area),
+reports `準備完了`, and no longer reports either the owner-registration inventory
+error or the loop dispatch-policy error.
+
+Ox was unavailable, so independent Terra xHigh implementation/review lanes are
+the recorded narrow exception; the final reviewer independently returned `GO`
+with P0/P1/P2 `0`. Physical USB-DMX, Art-Net, Spout pixels, exact
+three-display content, and audible PROGRAM/CUE were unavailable for this final
+alpha.54 run and remain external acceptance gates; no unattended output probe
+was fired.
+
+Checkpoint inventory is `148,970,288,441` logical bytes / `121,234` files;
+`target` accounts for `146,215,879,267` bytes / `105,061` files. No cleanup was
+performed and reclaimed bytes are `0`. The repository does not yet have a
+tracked, focused-tested, independently adversarial-reviewed cleanup harness for
+this exact target set, so build/cache deletion is blocked rather than inferred
+safe. The protected user SDC and all current release/QA evidence remain intact.
+
 ## 2026-09-01 alpha.53 transport convergence and overlap checkpoint
 
-Alpha.53 is the current source candidate, based on upstream-equal parent
+Alpha.53 was the preceding source candidate, based on upstream-equal parent
 `9be5479b23b417049c078e24a7e6c3b172fc720e`. Timeline transport now binds every
 queued mutation to exact project epoch/revision/checkpoint/read-generation scope,
 revalidates the scope at every authority, send, retry, receipt, canonical, and

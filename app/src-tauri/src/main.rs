@@ -39,8 +39,8 @@ use engine::{
     EngineHandle, EnginePersistenceMutationSubmission, FixtureFlagClearKind,
     FixturePatchPublicationFailure, MediaAssetImportCandidate, MediaAssetTransaction,
     OutputOwnershipActivation, SnapshotPublicationFailure, StageProjectMutation,
-    StageProjectMutationOutcome, VideoClipSlotImportAndAssignCandidate,
-    VideoClipSlotImportAssignment, VideoIsfStackMutation,
+    StageProjectMutationOutcome, TrustedTimelineLoopRuntimeAction,
+    VideoClipSlotImportAndAssignCandidate, VideoClipSlotImportAssignment, VideoIsfStackMutation,
 };
 use io::midi::{
     MidiClockEvent, MidiClockInput, MidiControlEvent, MidiControlInput, MidiFeedbackOutput,
@@ -107,14 +107,14 @@ use protocol::{
     TimelineFollowSettlementConsumerId, TimelineFollowSettlementDomain,
     TimelineFollowSettlementState, TimelineFollowSummary, TimelineGuideAssetKey, TimelineId,
     TimelineItemGroupId, TimelineItemGroupSummary, TimelineItemRef, TimelineLayerKind,
-    TimelineLoopRegionSummary, TimelineLoopScale, TimelinePhaseSummary, TimelineScheduleSource,
-    TimelineSnapRequest, TimelineSnapshot, TimelineTrackKind, TimelineVideoClipSummary,
-    TimelineVideoLayerRef, TouchControlBinding, TouchFeaturePresetTarget, TouchSurfaceSummary,
-    ValueEffectRequest, Vec3, VideoAutomationKeyframeSummary, VideoBackendState, VideoBlendMode,
-    VideoClipRuntimeSnapshot, VideoClipSlotId, VideoClipSlotSummary, VideoClipTakeDuration,
-    VideoClipTakeKind, VideoEffectChainSummary, VideoEffectKind, VideoEffectPresetSummary,
-    VideoEffectScope, VideoEffectTarget, VideoIsfControlKind, VideoIsfEffectStageSummary,
-    VideoIsfEffectSummary, VideoLayerGroupSummary, VideoLayerId, VideoLayerState, VideoLayerTarget,
+    TimelineLoopRegionSummary, TimelinePhaseSummary, TimelineScheduleSource, TimelineSnapRequest,
+    TimelineSnapshot, TimelineTrackKind, TimelineVideoClipSummary, TimelineVideoLayerRef,
+    TouchControlBinding, TouchFeaturePresetTarget, TouchSurfaceSummary, ValueEffectRequest, Vec3,
+    VideoAutomationKeyframeSummary, VideoBackendState, VideoBlendMode, VideoClipRuntimeSnapshot,
+    VideoClipSlotId, VideoClipSlotSummary, VideoClipTakeDuration, VideoClipTakeKind,
+    VideoEffectChainSummary, VideoEffectKind, VideoEffectPresetSummary, VideoEffectScope,
+    VideoEffectTarget, VideoIsfControlKind, VideoIsfEffectStageSummary, VideoIsfEffectSummary,
+    VideoLayerGroupSummary, VideoLayerId, VideoLayerState, VideoLayerTarget,
     VideoLayerTransitionBusSummary, VideoLayerTransitionCurve, VideoLayerTransitionRuntimeSnapshot,
     VideoLayerTransitionTarget, VideoOutputId, VideoOutputKind, VideoOutputMapping,
     VideoOutputMappingPresetFile, VideoOutputMappingPresetSummary, VideoOutputSummary,
@@ -24381,7 +24381,6 @@ const OUTER_FENCED_SYNC_PROJECT_RUNTIME_ROUTES: &[&str] = &[
     "jump_video_cue_point_relative",
     "release_cue",
     "reset_engine_telemetry",
-    "scale_timeline_loop",
     "seek_direct_child_timeline",
     "seek_timeline",
     "seek_timeline_beat",
@@ -24410,7 +24409,6 @@ const OUTER_FENCED_SYNC_PROJECT_RUNTIME_ROUTES: &[&str] = &[
     "set_programmer_fixture_attribute_batch",
     "set_programmer_group_attribute",
     "set_programmer_mode",
-    "set_timeline_loop_enabled",
     "set_timeline_playing",
     "set_video_layer_audio_monitor_volume",
     "set_video_master_opacity",
@@ -24449,6 +24447,7 @@ const PREFLIGHT_ONLY_NONPROJECT_OR_INNER_RUNTIME_ROUTES: &[&str] = &[
     "close_open_video_output_windows",
     "close_pane_window",
     "close_video_output_window",
+    "commit_timeline_loop_runtime_v1",
     "connect_midi_clock",
     "connect_midi_control",
     "connect_midi_feedback",
@@ -25220,15 +25219,14 @@ fn external_output_command_requires_local_r4(command: &EngineCommand) -> Option<
         | EngineCommand::DjLinkSyncTimelinePosition { .. }
         | EngineCommand::SetTimelinePlayingPublished { .. }
         | EngineCommand::SeekTimeline(..)
-        | EngineCommand::SetTimelineLoopEnabled(..)
+        | EngineCommand::ApplyTimelineLoopRuntimePublished { .. }
+        | EngineCommand::ApplyTrustedTimelineLoopRuntime { .. }
         | EngineCommand::SetTimelineLoopAbsolute { .. }
         | EngineCommand::DjLinkSetTimelineLoopAbsolute { .. }
         | EngineCommand::DjLinkSetCurrentTimelineLoopEnabled { .. }
         | EngineCommand::DjLinkHalfCurrentTimelineLoop { .. }
         | EngineCommand::DjLinkTimelineBeatJump { .. }
         | EngineCommand::DjLinkRelease { .. }
-        | EngineCommand::ToggleTimelineLoop
-        | EngineCommand::ScaleTimelineLoop(..)
         | EngineCommand::SetDirectChildTimelinePlaying { .. }
         | EngineCommand::SeekDirectChildTimeline { .. }
         | EngineCommand::SeekTimelineBeat { .. }
@@ -29098,22 +29096,6 @@ fn clear_timeline_audio(state: State<'_, AppState>) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn set_timeline_loop_enabled(state: State<'_, AppState>, enabled: bool) -> Result<(), String> {
-    state
-        .engine
-        .send(EngineCommand::SetTimelineLoopEnabled(enabled))
-        .map_err(|error| error.to_string())
-}
-
-#[tauri::command]
-fn scale_timeline_loop(state: State<'_, AppState>, scale: TimelineLoopScale) -> Result<(), String> {
-    state
-        .engine
-        .send(EngineCommand::ScaleTimelineLoop(scale))
-        .map_err(|error| error.to_string())
-}
-
-#[tauri::command]
 fn list_midi_inputs() -> Result<Vec<MidiInputSummary>, String> {
     io::midi::list_midi_inputs().map_err(|error| error.to_string())
 }
@@ -29528,8 +29510,16 @@ fn connect_midi_control(
             MidiControlEvent::SeekTimelineBeat { direction } => {
                 EngineCommand::SeekTimelineBeat { direction }
             }
-            MidiControlEvent::ToggleTimelineLoop => EngineCommand::ToggleTimelineLoop,
-            MidiControlEvent::ScaleTimelineLoop(scale) => EngineCommand::ScaleTimelineLoop(scale),
+            MidiControlEvent::ToggleTimelineLoop => {
+                EngineCommand::ApplyTrustedTimelineLoopRuntime {
+                    action: TrustedTimelineLoopRuntimeAction::Toggle,
+                }
+            }
+            MidiControlEvent::ScaleTimelineLoop(scale) => {
+                EngineCommand::ApplyTrustedTimelineLoopRuntime {
+                    action: TrustedTimelineLoopRuntimeAction::Scale(scale),
+                }
+            }
             MidiControlEvent::SetBpm(bpm) => EngineCommand::SetBpm(bpm),
             MidiControlEvent::TapBpm => EngineCommand::TapBpm,
             MidiControlEvent::LightingMaster(master) => EngineCommand::SetLightingMaster(master),
@@ -30514,8 +30504,12 @@ fn dispatch_external_control_event(
         OscInputEvent::SeekTimelineBeat { direction } => {
             EngineCommand::SeekTimelineBeat { direction }
         }
-        OscInputEvent::ToggleTimelineLoop => EngineCommand::ToggleTimelineLoop,
-        OscInputEvent::ScaleTimelineLoop(scale) => EngineCommand::ScaleTimelineLoop(scale),
+        OscInputEvent::ToggleTimelineLoop => EngineCommand::ApplyTrustedTimelineLoopRuntime {
+            action: TrustedTimelineLoopRuntimeAction::Toggle,
+        },
+        OscInputEvent::ScaleTimelineLoop(scale) => EngineCommand::ApplyTrustedTimelineLoopRuntime {
+            action: TrustedTimelineLoopRuntimeAction::Scale(scale),
+        },
         OscInputEvent::SyncTimelineTimecode {
             position_ms,
             source,
@@ -30782,8 +30776,14 @@ fn start_osc_input(
             OscInputEvent::SeekTimelineBeat { direction } => {
                 EngineCommand::SeekTimelineBeat { direction }
             }
-            OscInputEvent::ToggleTimelineLoop => EngineCommand::ToggleTimelineLoop,
-            OscInputEvent::ScaleTimelineLoop(scale) => EngineCommand::ScaleTimelineLoop(scale),
+            OscInputEvent::ToggleTimelineLoop => EngineCommand::ApplyTrustedTimelineLoopRuntime {
+                action: TrustedTimelineLoopRuntimeAction::Toggle,
+            },
+            OscInputEvent::ScaleTimelineLoop(scale) => {
+                EngineCommand::ApplyTrustedTimelineLoopRuntime {
+                    action: TrustedTimelineLoopRuntimeAction::Scale(scale),
+                }
+            }
             OscInputEvent::SyncTimelineTimecode {
                 position_ms,
                 source,
@@ -48355,6 +48355,30 @@ fn query_timeline_transport_authority_v1(
     query_state: State<'_, ControlPlaneQueryState>,
 ) -> Result<RuntimeCommandAuthorityBundleV1, RuntimeCommandErrorV1> {
     control_plane_runtime::issue_timeline_transport_authority(&window, &state, &query_state)
+}
+
+/// Issue one distinct owner-bound root-loop runtime capability.  It is not a
+/// Play/Pause alias and cannot be replayed through that V1 operation.
+#[tauri::command]
+fn query_timeline_loop_runtime_authority_v1(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    query_state: State<'_, ControlPlaneQueryState>,
+) -> Result<
+    protocol::control_plane_command::TimelineLoopRuntimeAuthorityBundleV1,
+    RuntimeCommandErrorV1,
+> {
+    control_plane_runtime::issue_timeline_loop_runtime_authority(&window, &state, &query_state)
+}
+
+#[tauri::command]
+fn commit_timeline_loop_runtime_v1(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    query_state: State<'_, ControlPlaneQueryState>,
+    request: protocol::control_plane_command::TimelineLoopRuntimeRequestV1,
+) -> protocol::control_plane_command::TimelineLoopRuntimeResponseV1 {
+    control_plane_runtime::commit_timeline_loop_runtime(&window, &state, &query_state, request)
 }
 
 #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
@@ -92643,6 +92667,10 @@ pub(crate) mod tests {
             runtime_route_dispatch_policy("cancel_pane_window_close"),
             Some(RuntimeInvokeDispatchPolicy::PreflightOnlyNonProjectOrInnerAuthority)
         );
+        assert_eq!(
+            runtime_route_dispatch_policy("commit_timeline_loop_runtime_v1"),
+            Some(RuntimeInvokeDispatchPolicy::PreflightOnlyNonProjectOrInnerAuthority)
+        );
         assert!(FULL_LOCK_CORRELATED_TERMINAL_RECOVERY_RUNTIME_ROUTES
             .windows(2)
             .all(|pair| pair[0] < pair[1]));
@@ -92666,7 +92694,7 @@ pub(crate) mod tests {
                     == Some(control_plane::TauriRouteAdmissionClass::RuntimeMutation)
             })
             .collect::<Vec<_>>();
-        assert_eq!(runtime_routes.len(), 158);
+        assert_eq!(runtime_routes.len(), 157);
         assert_eq!(
             OUTER_FENCED_SYNC_PROJECT_RUNTIME_ROUTES.len()
                 + PREFLIGHT_ONLY_NONPROJECT_OR_INNER_RUNTIME_ROUTES.len(),
@@ -128646,8 +128674,6 @@ fn main() {
             remove_timeline_audio_clip,
             set_timeline_audio_master,
             clear_timeline_audio,
-            set_timeline_loop_enabled,
-            scale_timeline_loop,
             list_midi_inputs,
             list_midi_outputs,
             list_serial_ports,
@@ -128932,6 +128958,8 @@ fn main() {
             set_effect_enabled,
             query_timeline_transport_authority_v1,
             set_timeline_transport_playing_runtime_v1,
+            query_timeline_loop_runtime_authority_v1,
+            commit_timeline_loop_runtime_v1,
             query_timeline_follow_abort_authority_v1,
             abort_timeline_follow_runtime_v1,
             query_output_control_authority_v1,

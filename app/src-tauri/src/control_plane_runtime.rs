@@ -11,7 +11,10 @@ use std::{
 };
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-use engine::{SafetyBlackoutEngageDisposition, TimelineTransportSetPlayingDisposition};
+use engine::{
+    SafetyBlackoutEngageDisposition, TimelineLoopRuntimeDisposition,
+    TimelineTransportSetPlayingDisposition,
+};
 use protocol::control_plane_command::{
     OutputControlActionV2, OutputControlAuthorityBundleV1, OutputControlCommandRequestV2,
     OutputControlErrorCodeV2, OutputControlFenceV1, OutputControlLeaseResultV2,
@@ -25,11 +28,15 @@ use protocol::control_plane_command::{
     SafetyBlackoutEngageResponseV1, TimelineFollowAbortAuthorityBundleV1,
     TimelineFollowAbortRuntimeFenceV1, TimelineFollowAbortRuntimeReceiptV1,
     TimelineFollowAbortRuntimeRejectionV1, TimelineFollowAbortRuntimeRequestV1,
-    TimelineFollowAbortRuntimeResponseV1, TimelineTransportRuntimeFenceV1,
-    MAX_SAFE_JAVASCRIPT_INTEGER, OUTPUT_CONTROL_AUTHORITY_QUERY_OPERATION_ID,
-    SAFETY_BLACKOUT_ENGAGE_OPERATION_ID, SAFETY_BLACKOUT_ENGAGE_SHAPE_DOMAIN_V1,
-    TIMELINE_FOLLOW_ABORT_OPERATION_ID, TIMELINE_FOLLOW_ABORT_RUNTIME_DOMAIN_V1,
-    TIMELINE_FOLLOW_ABORT_SHAPE_DOMAIN_V1, TIMELINE_TRANSPORT_RUNTIME_DOMAIN_V1,
+    TimelineFollowAbortRuntimeResponseV1, TimelineLoopRuntimeAuthorityBundleV1,
+    TimelineLoopRuntimeFenceV1, TimelineLoopRuntimeReceiptOutcomeV1, TimelineLoopRuntimeReceiptV1,
+    TimelineLoopRuntimeRejectionV1, TimelineLoopRuntimeRequestV1, TimelineLoopRuntimeResponseV1,
+    TimelineTransportRuntimeFenceV1, MAX_SAFE_JAVASCRIPT_INTEGER,
+    OUTPUT_CONTROL_AUTHORITY_QUERY_OPERATION_ID, SAFETY_BLACKOUT_ENGAGE_OPERATION_ID,
+    SAFETY_BLACKOUT_ENGAGE_SHAPE_DOMAIN_V1, TIMELINE_FOLLOW_ABORT_OPERATION_ID,
+    TIMELINE_FOLLOW_ABORT_RUNTIME_DOMAIN_V1, TIMELINE_FOLLOW_ABORT_SHAPE_DOMAIN_V1,
+    TIMELINE_LOOP_RUNTIME_DOMAIN_V1, TIMELINE_LOOP_RUNTIME_OPERATION_ID,
+    TIMELINE_LOOP_RUNTIME_SHAPE_DOMAIN_V1, TIMELINE_TRANSPORT_RUNTIME_DOMAIN_V1,
     TIMELINE_TRANSPORT_SET_PLAYING_OPERATION_ID, TIMELINE_TRANSPORT_SET_PLAYING_SHAPE_DOMAIN_V1,
 };
 use rfd::{MessageButtons, MessageDialog, MessageDialogResult, MessageLevel};
@@ -2939,6 +2946,36 @@ struct AuthorityRecord {
     last_used: u64,
 }
 
+/// A deliberately separate terminal lane for root-loop commands.  The
+/// Play/Pause response wire must remain byte-for-byte independent, so this
+/// storage does not downcast or share its receipt enum with transport.
+#[derive(Debug, Clone)]
+struct TimelineLoopTerminalRecord {
+    shape_sha256: String,
+    response: TimelineLoopRuntimeResponseV1,
+    expires_at: Instant,
+    last_used: u64,
+}
+
+#[derive(Debug, Clone)]
+struct TimelineLoopAuthorityRecord {
+    binding: CallerBinding,
+    fence: TimelineLoopRuntimeFenceV1,
+    expires_at: Instant,
+    last_used: u64,
+}
+
+#[derive(Debug, Default)]
+struct TimelineLoopControlPlaneInner {
+    receipts: HashMap<ReceiptKey, TimelineLoopTerminalRecord>,
+    tombstones: HashMap<ReceiptKey, TombstoneRecord>,
+    lanes: HashMap<ReceiptKey, Arc<Mutex<()>>>,
+    authorities: HashMap<String, TimelineLoopAuthorityRecord>,
+    token_buckets: HashMap<PrincipalDomainKey, TokenBucket>,
+    inflight: HashSet<PrincipalDomainKey>,
+    sequence: u64,
+}
+
 #[derive(Debug, Clone)]
 struct TokenBucket {
     tokens: f64,
@@ -3009,6 +3046,7 @@ struct FollowAbortControlPlaneInner {
 /// no project bytes, engine state, output role, or caller-supplied identity.
 pub(crate) struct RuntimeControlPlaneState {
     inner: Mutex<RuntimeControlPlaneInner>,
+    timeline_loop: Mutex<TimelineLoopControlPlaneInner>,
     follow_abort: Mutex<FollowAbortControlPlaneInner>,
     safety_blackout: Mutex<SafetyBlackoutControlPlaneInner>,
     output_control: Mutex<OutputControlPlaneInner>,
@@ -3018,6 +3056,7 @@ impl Default for RuntimeControlPlaneState {
     fn default() -> Self {
         Self {
             inner: Mutex::new(RuntimeControlPlaneInner::default()),
+            timeline_loop: Mutex::new(TimelineLoopControlPlaneInner::default()),
             follow_abort: Mutex::new(FollowAbortControlPlaneInner::default()),
             safety_blackout: Mutex::new(SafetyBlackoutControlPlaneInner::default()),
             output_control: Mutex::new(OutputControlPlaneInner::default()),
@@ -3027,6 +3066,12 @@ impl Default for RuntimeControlPlaneState {
 
 enum LaneReservation {
     Terminal(RuntimeCommandResponseV1),
+    Rejected(RuntimeCommandErrorCodeV1),
+    Lane(Arc<Mutex<()>>),
+}
+
+enum TimelineLoopLaneReservation {
+    Terminal(TimelineLoopRuntimeResponseV1),
     Rejected(RuntimeCommandErrorCodeV1),
     Lane(Arc<Mutex<()>>),
 }
@@ -3344,6 +3389,188 @@ impl RuntimeControlPlaneState {
 
     fn release_lane(&self, key: &ReceiptKey) {
         if let Ok(mut inner) = self.inner.lock() {
+            inner.lanes.remove(key);
+        }
+    }
+
+    fn issue_timeline_loop_authority(
+        &self,
+        binding: CallerBinding,
+        fence: TimelineLoopRuntimeFenceV1,
+        authority_id: String,
+        now: Instant,
+    ) -> Result<(), RuntimeCommandErrorCodeV1> {
+        let mut inner = self
+            .timeline_loop
+            .lock()
+            .map_err(|_| RuntimeCommandErrorCodeV1::Internal)?;
+        purge_timeline_loop_expired(&mut inner, now);
+        if inner.authorities.contains_key(&authority_id) {
+            return Err(RuntimeCommandErrorCodeV1::Conflict);
+        }
+        while inner.authorities.len() >= MAX_TOTAL_AUTHORITIES {
+            let oldest = inner
+                .authorities
+                .iter()
+                .min_by_key(|(_, record)| record.last_used)
+                .map(|(key, _)| key.clone());
+            let Some(oldest) = oldest else {
+                return Err(RuntimeCommandErrorCodeV1::Overloaded);
+            };
+            inner.authorities.remove(&oldest);
+        }
+        let last_used = next_timeline_loop_sequence(&mut inner);
+        inner.authorities.insert(
+            authority_id,
+            TimelineLoopAuthorityRecord {
+                binding,
+                fence,
+                expires_at: now + AUTHORITY_TTL,
+                last_used,
+            },
+        );
+        Ok(())
+    }
+
+    fn reserve_timeline_loop_lane(
+        &self,
+        key: &ReceiptKey,
+        shape_sha256: &str,
+        now: Instant,
+    ) -> TimelineLoopLaneReservation {
+        let mut inner = match self.timeline_loop.lock() {
+            Ok(inner) => inner,
+            Err(_) => {
+                return TimelineLoopLaneReservation::Rejected(RuntimeCommandErrorCodeV1::Internal)
+            }
+        };
+        purge_timeline_loop_expired(&mut inner, now);
+        let last_used = next_timeline_loop_sequence(&mut inner);
+        if let Some(record) = inner.receipts.get_mut(key) {
+            record.last_used = last_used;
+            return if record.shape_sha256 == shape_sha256 {
+                TimelineLoopLaneReservation::Terminal(record.response.clone())
+            } else {
+                TimelineLoopLaneReservation::Rejected(RuntimeCommandErrorCodeV1::Conflict)
+            };
+        }
+        if let Some(tombstone) = inner.tombstones.get_mut(key) {
+            tombstone.last_used = last_used;
+            return TimelineLoopLaneReservation::Rejected(RuntimeCommandErrorCodeV1::Conflict);
+        }
+        if let Some(lane) = inner.lanes.get(key) {
+            return TimelineLoopLaneReservation::Lane(Arc::clone(lane));
+        }
+        if inner.lanes.len() >= MAX_LANES {
+            return TimelineLoopLaneReservation::Rejected(RuntimeCommandErrorCodeV1::Overloaded);
+        }
+        let lane = Arc::new(Mutex::new(()));
+        inner.lanes.insert(key.clone(), Arc::clone(&lane));
+        TimelineLoopLaneReservation::Lane(lane)
+    }
+
+    fn recheck_timeline_loop_terminal(
+        &self,
+        key: &ReceiptKey,
+        shape_sha256: &str,
+        now: Instant,
+    ) -> Option<TimelineLoopLaneReservation> {
+        let mut inner = self.timeline_loop.lock().ok()?;
+        purge_timeline_loop_expired(&mut inner, now);
+        let last_used = next_timeline_loop_sequence(&mut inner);
+        if let Some(record) = inner.receipts.get_mut(key) {
+            record.last_used = last_used;
+            return Some(if record.shape_sha256 == shape_sha256 {
+                TimelineLoopLaneReservation::Terminal(record.response.clone())
+            } else {
+                TimelineLoopLaneReservation::Rejected(RuntimeCommandErrorCodeV1::Conflict)
+            });
+        }
+        if let Some(tombstone) = inner.tombstones.get_mut(key) {
+            tombstone.last_used = last_used;
+            return Some(TimelineLoopLaneReservation::Rejected(
+                RuntimeCommandErrorCodeV1::Conflict,
+            ));
+        }
+        None
+    }
+
+    fn admit_timeline_loop_new(
+        &self,
+        binding: &CallerBinding,
+        fence: &TimelineLoopRuntimeFenceV1,
+        authority_id: &str,
+        key: &ReceiptKey,
+        now: Instant,
+    ) -> Result<PrincipalDomainKey, RuntimeCommandErrorCodeV1> {
+        let mut inner = self
+            .timeline_loop
+            .lock()
+            .map_err(|_| RuntimeCommandErrorCodeV1::Internal)?;
+        purge_timeline_loop_expired(&mut inner, now);
+        let Some(authority) = inner.authorities.get(authority_id) else {
+            return Err(RuntimeCommandErrorCodeV1::Forbidden);
+        };
+        if authority.binding != *binding || authority.fence != *fence {
+            return Err(RuntimeCommandErrorCodeV1::Forbidden);
+        }
+        if authority.expires_at <= now {
+            inner.authorities.remove(authority_id);
+            return Err(RuntimeCommandErrorCodeV1::StaleFence);
+        }
+        let domain_key = PrincipalDomainKey {
+            principal: binding.principal.clone(),
+            domain: fence.domain.clone(),
+        };
+        if inner.inflight.contains(&domain_key) {
+            return Err(RuntimeCommandErrorCodeV1::Busy);
+        }
+        let bucket = inner
+            .token_buckets
+            .entry(domain_key.clone())
+            .or_insert_with(|| TokenBucket::fresh(now));
+        if !bucket.try_take(now) {
+            return Err(RuntimeCommandErrorCodeV1::Overloaded);
+        }
+        inner.authorities.remove(authority_id);
+        inner.inflight.insert(domain_key.clone());
+        debug_assert!(inner.lanes.contains_key(key));
+        Ok(domain_key)
+    }
+
+    fn finish_timeline_loop_inflight(&self, key: &PrincipalDomainKey) {
+        if let Ok(mut inner) = self.timeline_loop.lock() {
+            inner.inflight.remove(key);
+        }
+    }
+
+    fn store_timeline_loop_terminal(
+        &self,
+        key: ReceiptKey,
+        shape_sha256: String,
+        response: TimelineLoopRuntimeResponseV1,
+        now: Instant,
+    ) {
+        let Ok(mut inner) = self.timeline_loop.lock() else {
+            return;
+        };
+        purge_timeline_loop_expired(&mut inner, now);
+        enforce_timeline_loop_receipt_capacity(&mut inner, &key, now);
+        let last_used = next_timeline_loop_sequence(&mut inner);
+        inner.receipts.insert(
+            key.clone(),
+            TimelineLoopTerminalRecord {
+                shape_sha256,
+                response,
+                expires_at: now + RECEIPT_TTL,
+                last_used,
+            },
+        );
+        inner.lanes.remove(&key);
+    }
+
+    fn release_timeline_loop_lane(&self, key: &ReceiptKey) {
+        if let Ok(mut inner) = self.timeline_loop.lock() {
             inner.lanes.remove(key);
         }
     }
@@ -3894,6 +4121,33 @@ impl RuntimeControlPlaneState {
             .retain(|key, _| key.principal != principal);
 
         drop(inner);
+        let Ok(mut timeline_loop) = self.timeline_loop.lock() else {
+            return;
+        };
+        purge_timeline_loop_expired(&mut timeline_loop, now);
+        let keys = timeline_loop
+            .receipts
+            .keys()
+            .chain(timeline_loop.lanes.keys())
+            .filter(|key| key.principal == principal)
+            .cloned()
+            .collect::<HashSet<_>>();
+        for key in keys {
+            timeline_loop.receipts.remove(&key);
+            timeline_loop.lanes.remove(&key);
+            insert_timeline_loop_tombstone(&mut timeline_loop, key, now);
+        }
+        timeline_loop
+            .authorities
+            .retain(|_, record| record.binding.principal != principal);
+        timeline_loop
+            .inflight
+            .retain(|key| key.principal != principal);
+        timeline_loop
+            .token_buckets
+            .retain(|key, _| key.principal != principal);
+
+        drop(timeline_loop);
         let Ok(mut follow_abort) = self.follow_abort.lock() else {
             return;
         };
@@ -3993,6 +4247,104 @@ fn purge_expired(inner: &mut RuntimeControlPlaneInner, now: Instant) {
         insert_tombstone(inner, key, now);
     }
     inner.tombstones.retain(|_, record| record.expires_at > now);
+}
+
+fn next_timeline_loop_sequence(inner: &mut TimelineLoopControlPlaneInner) -> u64 {
+    inner.sequence = inner.sequence.wrapping_add(1);
+    inner.sequence
+}
+
+fn purge_timeline_loop_expired(inner: &mut TimelineLoopControlPlaneInner, now: Instant) {
+    let expired_receipts = inner
+        .receipts
+        .iter()
+        .filter_map(|(key, record)| (record.expires_at <= now).then_some(key.clone()))
+        .collect::<Vec<_>>();
+    for key in expired_receipts {
+        inner.receipts.remove(&key);
+        inner.lanes.remove(&key);
+        insert_timeline_loop_tombstone(inner, key, now);
+    }
+    inner.tombstones.retain(|_, record| record.expires_at > now);
+}
+
+fn enforce_timeline_loop_receipt_capacity(
+    inner: &mut TimelineLoopControlPlaneInner,
+    key: &ReceiptKey,
+    now: Instant,
+) {
+    while inner.receipts.len() >= MAX_TOTAL_RECEIPTS && !inner.receipts.contains_key(key) {
+        if !evict_oldest_timeline_loop_receipt(inner, |_| true, now) {
+            break;
+        }
+    }
+    while inner
+        .receipts
+        .keys()
+        .filter(|candidate| {
+            candidate.principal == key.principal && candidate.operation_id == key.operation_id
+        })
+        .count()
+        >= MAX_RECEIPTS_PER_PRINCIPAL_OPERATION
+        && !inner.receipts.contains_key(key)
+    {
+        if !evict_oldest_timeline_loop_receipt(
+            inner,
+            |candidate| {
+                candidate.principal == key.principal && candidate.operation_id == key.operation_id
+            },
+            now,
+        ) {
+            break;
+        }
+    }
+}
+
+fn evict_oldest_timeline_loop_receipt(
+    inner: &mut TimelineLoopControlPlaneInner,
+    predicate: impl Fn(&ReceiptKey) -> bool,
+    now: Instant,
+) -> bool {
+    let oldest = inner
+        .receipts
+        .iter()
+        .filter(|(key, _)| predicate(key))
+        .min_by_key(|(_, record)| record.last_used)
+        .map(|(key, _)| key.clone());
+    let Some(oldest) = oldest else {
+        return false;
+    };
+    inner.receipts.remove(&oldest);
+    inner.lanes.remove(&oldest);
+    insert_timeline_loop_tombstone(inner, oldest, now);
+    true
+}
+
+fn insert_timeline_loop_tombstone(
+    inner: &mut TimelineLoopControlPlaneInner,
+    key: ReceiptKey,
+    now: Instant,
+) {
+    while inner.tombstones.len() >= MAX_TOTAL_TOMBSTONES && !inner.tombstones.contains_key(&key) {
+        let oldest = inner
+            .tombstones
+            .iter()
+            .min_by_key(|(_, record)| record.last_used)
+            .map(|(key, _)| key.clone());
+        if let Some(oldest) = oldest {
+            inner.tombstones.remove(&oldest);
+        } else {
+            break;
+        }
+    }
+    let last_used = next_timeline_loop_sequence(inner);
+    inner.tombstones.insert(
+        key,
+        TombstoneRecord {
+            expires_at: now + TOMBSTONE_TTL,
+            last_used,
+        },
+    );
 }
 
 fn enforce_receipt_capacity(inner: &mut RuntimeControlPlaneInner, key: &ReceiptKey, now: Instant) {
@@ -4642,6 +4994,237 @@ pub(crate) fn set_timeline_transport_playing(
     response
 }
 
+/// Issue exactly one owner-bound, one-use root-loop capability.  This is a
+/// distinct `timeline.loop` vertical: Play/Pause's established wire is never
+/// accepted as a loop command.
+pub(crate) fn issue_timeline_loop_runtime_authority(
+    window: &WebviewWindow,
+    state: &AppState,
+    query_state: &ControlPlaneQueryState,
+) -> Result<TimelineLoopRuntimeAuthorityBundleV1, RuntimeCommandErrorV1> {
+    let now = Instant::now();
+    let _owner_rotation = state
+        .project_transaction_owner_rotation
+        .lock()
+        .map_err(|_| RuntimeCommandErrorV1::new(RuntimeCommandErrorCodeV1::Internal))?;
+    let binding = capture_binding(state, window.label()).map_err(RuntimeCommandErrorV1::new)?;
+    let project = query_state
+        .issue_project_mutation_fence_for_window(window.label(), state)
+        .map_err(|_| RuntimeCommandErrorV1::new(RuntimeCommandErrorCodeV1::Forbidden))?;
+    let source = state.engine.snapshot();
+    let fence = TimelineLoopRuntimeFenceV1 {
+        project,
+        domain: TIMELINE_LOOP_RUNTIME_DOMAIN_V1.to_string(),
+        source_runtime_epoch: source.timeline.transport_epoch,
+        source_runtime_generation: source.timeline.transport_generation,
+        source_loop_generation: source.timeline.loop_runtime.generation,
+        source_follow_generation: source.timeline.follow_runtime.generation,
+    };
+    fence
+        .validate()
+        .map_err(|_| RuntimeCommandErrorV1::new(RuntimeCommandErrorCodeV1::Internal))?;
+    let mut authority_id = None;
+    for _ in 0..8 {
+        let candidate = random_authority_id()
+            .map_err(|_| RuntimeCommandErrorV1::new(RuntimeCommandErrorCodeV1::Internal))?;
+        match state.runtime_control_plane.issue_timeline_loop_authority(
+            binding.clone(),
+            fence.clone(),
+            candidate.clone(),
+            now,
+        ) {
+            Ok(()) => {
+                authority_id = Some(candidate);
+                break;
+            }
+            Err(RuntimeCommandErrorCodeV1::Conflict) => continue,
+            Err(code) => return Err(RuntimeCommandErrorV1::new(code)),
+        }
+    }
+    Ok(TimelineLoopRuntimeAuthorityBundleV1 {
+        operation_id: TIMELINE_LOOP_RUNTIME_OPERATION_ID.to_string(),
+        authority_id: authority_id
+            .ok_or_else(|| RuntimeCommandErrorV1::new(RuntimeCommandErrorCodeV1::Internal))?,
+        fence,
+    })
+}
+
+pub(crate) fn commit_timeline_loop_runtime(
+    window: &WebviewWindow,
+    state: &AppState,
+    query_state: &ControlPlaneQueryState,
+    request: TimelineLoopRuntimeRequestV1,
+) -> TimelineLoopRuntimeResponseV1 {
+    if request.validate().is_err() {
+        return timeline_loop_rejection(&request, RuntimeCommandErrorCodeV1::InvalidRequest);
+    }
+    let shape_sha256 = match timeline_loop_shape_sha256(&request) {
+        Ok(shape) => shape,
+        Err(()) => {
+            return timeline_loop_rejection(&request, RuntimeCommandErrorCodeV1::InvalidRequest)
+        }
+    };
+    let now = Instant::now();
+    let _owner_rotation = match state.project_transaction_owner_rotation.lock() {
+        Ok(guard) => guard,
+        Err(_) => return timeline_loop_rejection(&request, RuntimeCommandErrorCodeV1::Internal),
+    };
+    let binding = match capture_binding(state, window.label()) {
+        Ok(binding) => binding,
+        Err(code) => return timeline_loop_rejection(&request, code),
+    };
+    let key = timeline_loop_receipt_key(&request, &binding);
+    let lane =
+        match state
+            .runtime_control_plane
+            .reserve_timeline_loop_lane(&key, &shape_sha256, now)
+        {
+            TimelineLoopLaneReservation::Terminal(response) => return response,
+            TimelineLoopLaneReservation::Rejected(code) => {
+                return timeline_loop_rejection(&request, code)
+            }
+            TimelineLoopLaneReservation::Lane(lane) => lane,
+        };
+    let _lane_guard = match lane.lock() {
+        Ok(guard) => guard,
+        Err(_) => {
+            state.runtime_control_plane.release_timeline_loop_lane(&key);
+            return timeline_loop_rejection(&request, RuntimeCommandErrorCodeV1::Internal);
+        }
+    };
+    if let Some(result) =
+        state
+            .runtime_control_plane
+            .recheck_timeline_loop_terminal(&key, &shape_sha256, now)
+    {
+        return match result {
+            TimelineLoopLaneReservation::Terminal(response) => response,
+            TimelineLoopLaneReservation::Rejected(code) => timeline_loop_rejection(&request, code),
+            TimelineLoopLaneReservation::Lane(_) => {
+                timeline_loop_rejection(&request, RuntimeCommandErrorCodeV1::Internal)
+            }
+        };
+    }
+    if query_state
+        .validate_project_mutation_fence_window(
+            window.label(),
+            &request.expected_fence.project,
+            binding.owner_incarnation,
+        )
+        .is_err()
+    {
+        state.runtime_control_plane.release_timeline_loop_lane(&key);
+        return timeline_loop_rejection(&request, RuntimeCommandErrorCodeV1::Forbidden);
+    }
+    let response =
+        execute_timeline_loop_new_request(state, &binding, &request, &shape_sha256, &key, now);
+    let should_retain = match &response {
+        TimelineLoopRuntimeResponseV1::Receipt(_) => true,
+        TimelineLoopRuntimeResponseV1::Rejected(rejection) => !matches!(
+            rejection.error.code,
+            RuntimeCommandErrorCodeV1::Busy | RuntimeCommandErrorCodeV1::Overloaded
+        ),
+    };
+    if should_retain {
+        state.runtime_control_plane.store_timeline_loop_terminal(
+            key,
+            shape_sha256,
+            response.clone(),
+            Instant::now(),
+        );
+    } else {
+        state.runtime_control_plane.release_timeline_loop_lane(&key);
+    }
+    response
+}
+
+fn execute_timeline_loop_new_request(
+    state: &AppState,
+    binding: &CallerBinding,
+    request: &TimelineLoopRuntimeRequestV1,
+    shape_sha256: &str,
+    key: &ReceiptKey,
+    now: Instant,
+) -> TimelineLoopRuntimeResponseV1 {
+    let _external_admission = match lock_project_external_command_admission(state) {
+        Ok(guard) => guard,
+        Err(_) => return timeline_loop_rejection(request, RuntimeCommandErrorCodeV1::Internal),
+    };
+    let mut coordinator = match lock_project_coordinator(state) {
+        Ok(coordinator) => coordinator,
+        Err(_) => return timeline_loop_rejection(request, RuntimeCommandErrorCodeV1::Internal),
+    };
+    if reconcile_project_checkpoint_for_coordinator(state, &mut coordinator).is_err()
+        || !exact_loop_project_fence_matches(&coordinator, &request.expected_fence)
+    {
+        return timeline_loop_rejection(request, RuntimeCommandErrorCodeV1::StaleFence);
+    }
+    if ensure_no_pending_project_transaction(&coordinator).is_err()
+        || state
+            .project_transaction_active
+            .load(std::sync::atomic::Ordering::Acquire)
+    {
+        return timeline_loop_rejection(request, RuntimeCommandErrorCodeV1::Busy);
+    }
+    if ensure_project_operator_video_clip_slot_runtime_allowed(
+        state,
+        &coordinator,
+        &binding.principal,
+    )
+    .is_err()
+    {
+        return timeline_loop_rejection(request, RuntimeCommandErrorCodeV1::Forbidden);
+    }
+    let inflight = match state.runtime_control_plane.admit_timeline_loop_new(
+        binding,
+        &request.expected_fence,
+        &request.authority_id,
+        key,
+        now,
+    ) {
+        Ok(inflight) => inflight,
+        Err(code) => return timeline_loop_rejection(request, code),
+    };
+    let engine_result = state.engine.apply_timeline_loop_runtime_published(
+        request.expected_fence.source_runtime_epoch,
+        request.expected_fence.source_runtime_generation,
+        request.expected_fence.source_loop_generation,
+        request.expected_fence.source_follow_generation,
+        request.action.clone(),
+        Instant::now() + Duration::from_secs(2),
+    );
+    state
+        .runtime_control_plane
+        .finish_timeline_loop_inflight(&inflight);
+    match engine_result {
+        Ok(ack) => TimelineLoopRuntimeResponseV1::Receipt(TimelineLoopRuntimeReceiptV1 {
+            operation_id: TIMELINE_LOOP_RUNTIME_OPERATION_ID.to_string(),
+            request_id: request.request_id,
+            fence_before: request.expected_fence.clone(),
+            requested_action: request.action.clone(),
+            epoch_after: ack.epoch_after,
+            generation_after: ack.generation_after,
+            loop_generation_after: ack.loop_generation_after,
+            follow_generation_after: ack.follow_generation_after,
+            shape_sha256: shape_sha256.to_string(),
+            outcome: match ack.disposition {
+                TimelineLoopRuntimeDisposition::Applied => {
+                    TimelineLoopRuntimeReceiptOutcomeV1::Applied
+                }
+                TimelineLoopRuntimeDisposition::NoOp => TimelineLoopRuntimeReceiptOutcomeV1::NoOp,
+            },
+        }),
+        Err(error) => timeline_loop_rejection(
+            request,
+            if error.contains("stale") || error.contains("expired") {
+                RuntimeCommandErrorCodeV1::StaleFence
+            } else {
+                RuntimeCommandErrorCodeV1::PublicationFailed
+            },
+        ),
+    }
+}
+
 fn execute_new_request(
     state: &AppState,
     binding: &CallerBinding,
@@ -5102,6 +5685,10 @@ pub(crate) fn test_state_signature(state: &RuntimeControlPlaneState) -> String {
         .inner
         .lock()
         .expect("runtime control-plane state lock");
+    let timeline_loop = state
+        .timeline_loop
+        .lock()
+        .expect("runtime Timeline loop state lock");
     let follow_abort = state
         .follow_abort
         .lock()
@@ -5114,10 +5701,34 @@ pub(crate) fn test_state_signature(state: &RuntimeControlPlaneState) -> String {
         .output_control
         .lock()
         .expect("runtime output-control state lock");
-    format!("{inner:?}|{follow_abort:?}|{safety_blackout:?}|{output_control:?}")
+    format!("{inner:?}|{timeline_loop:?}|{follow_abort:?}|{safety_blackout:?}|{output_control:?}")
 }
 
 fn receipt_key(request: &RuntimeCommandRequestV1, binding: &CallerBinding) -> ReceiptKey {
+    let project = &request.expected_fence.project;
+    ReceiptKey {
+        process_incarnation: project.process_incarnation,
+        session_incarnation: project.session_incarnation,
+        principal: binding.principal.clone(),
+        window_label: binding.window_label.clone(),
+        owner_incarnation: binding.owner_incarnation,
+        operation_id: request.operation_id.clone(),
+        request_id: request.request_id,
+        project_epoch: project.project_epoch,
+        project_revision: project.project_revision,
+        project_checkpoint_hash: project.project_checkpoint_hash.clone(),
+        project_publication_generation: project.project_publication_generation,
+        domain: request.expected_fence.domain.clone(),
+        source_runtime_epoch: request.expected_fence.source_runtime_epoch,
+        source_runtime_generation: request.expected_fence.source_runtime_generation,
+        authority_id: request.authority_id.clone(),
+    }
+}
+
+fn timeline_loop_receipt_key(
+    request: &TimelineLoopRuntimeRequestV1,
+    binding: &CallerBinding,
+) -> ReceiptKey {
     let project = &request.expected_fence.project;
     ReceiptKey {
         process_incarnation: project.process_incarnation,
@@ -5184,6 +5795,15 @@ fn shape_sha256(request: &RuntimeCommandRequestV1) -> Result<String, ()> {
     Ok(format!("{:x}", hasher.finalize()))
 }
 
+fn timeline_loop_shape_sha256(request: &TimelineLoopRuntimeRequestV1) -> Result<String, ()> {
+    let typed = request.canonical_shape_bytes().map_err(|_| ())?;
+    let mut hasher = Sha256::new();
+    hasher.update(TIMELINE_LOOP_RUNTIME_SHAPE_DOMAIN_V1);
+    hasher.update((typed.len() as u64).to_be_bytes());
+    hasher.update(typed);
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
 fn follow_abort_shape_sha256(request: &TimelineFollowAbortRuntimeRequestV1) -> Result<String, ()> {
     let typed = request.canonical_shape_bytes().map_err(|_| ())?;
     let mut hasher = Sha256::new();
@@ -5218,12 +5838,34 @@ fn exact_project_fence_matches(
         && coordinator.publication_generation == fence.project.project_publication_generation
 }
 
+fn exact_loop_project_fence_matches(
+    coordinator: &ProjectCoordinator,
+    fence: &TimelineLoopRuntimeFenceV1,
+) -> bool {
+    coordinator.epoch == fence.project.project_epoch
+        && coordinator.revision == fence.project.project_revision
+        && coordinator.checkpoint_hash == fence.project.project_checkpoint_hash
+        && coordinator.publication_generation == fence.project.project_publication_generation
+}
+
 fn rejection(
     request: &RuntimeCommandRequestV1,
     code: RuntimeCommandErrorCodeV1,
 ) -> RuntimeCommandResponseV1 {
     RuntimeCommandResponseV1::Rejected(RuntimeCommandRejectionV1 {
         operation_id: TIMELINE_TRANSPORT_SET_PLAYING_OPERATION_ID.to_string(),
+        request_id: request.request_id,
+        fence_before: request.expected_fence.clone(),
+        error: RuntimeCommandErrorV1::new(code),
+    })
+}
+
+fn timeline_loop_rejection(
+    request: &TimelineLoopRuntimeRequestV1,
+    code: RuntimeCommandErrorCodeV1,
+) -> TimelineLoopRuntimeResponseV1 {
+    TimelineLoopRuntimeResponseV1::Rejected(TimelineLoopRuntimeRejectionV1 {
+        operation_id: TIMELINE_LOOP_RUNTIME_OPERATION_ID.to_string(),
         request_id: request.request_id,
         fence_before: request.expected_fence.clone(),
         error: RuntimeCommandErrorV1::new(code),
@@ -5286,6 +5928,50 @@ mod tests {
             source_runtime_epoch: 1,
             source_runtime_generation,
         }
+    }
+
+    fn test_timeline_loop_fence(source_runtime_generation: u64) -> TimelineLoopRuntimeFenceV1 {
+        TimelineLoopRuntimeFenceV1 {
+            project: test_fence(source_runtime_generation).project,
+            domain: TIMELINE_LOOP_RUNTIME_DOMAIN_V1.to_string(),
+            source_runtime_epoch: 1,
+            source_runtime_generation,
+            source_loop_generation: 7,
+            source_follow_generation: 9,
+        }
+    }
+
+    fn test_timeline_loop_request(
+        request_id: u64,
+        source_runtime_generation: u64,
+    ) -> TimelineLoopRuntimeRequestV1 {
+        TimelineLoopRuntimeRequestV1 {
+            operation_id: TIMELINE_LOOP_RUNTIME_OPERATION_ID.to_string(),
+            authority_id: test_authority_id(request_id as u8),
+            request_id,
+            expected_fence: test_timeline_loop_fence(source_runtime_generation),
+            action: protocol::control_plane_command::TimelineLoopRuntimeActionV1::SetEnabled {
+                enabled: true,
+            },
+        }
+    }
+
+    fn test_timeline_loop_receipt(
+        request: &TimelineLoopRuntimeRequestV1,
+        shape_sha256: &str,
+    ) -> TimelineLoopRuntimeResponseV1 {
+        TimelineLoopRuntimeResponseV1::Receipt(TimelineLoopRuntimeReceiptV1 {
+            operation_id: TIMELINE_LOOP_RUNTIME_OPERATION_ID.to_string(),
+            request_id: request.request_id,
+            fence_before: request.expected_fence.clone(),
+            requested_action: request.action.clone(),
+            epoch_after: request.expected_fence.source_runtime_epoch,
+            generation_after: request.expected_fence.source_runtime_generation + 1,
+            loop_generation_after: request.expected_fence.source_loop_generation + 1,
+            follow_generation_after: request.expected_fence.source_follow_generation,
+            shape_sha256: shape_sha256.to_string(),
+            outcome: TimelineLoopRuntimeReceiptOutcomeV1::Applied,
+        })
     }
 
     fn test_authority_id(seed: u8) -> String {
@@ -6499,6 +7185,137 @@ mod tests {
         assert_eq!(accepted, 8);
         assert!(bucket.try_take(now + Duration::from_millis(250)));
         assert!(!bucket.try_take(now + Duration::from_millis(250)));
+    }
+
+    #[test]
+    fn timeline_loop_terminal_replay_conflict_expiry_and_owner_retirement_are_fail_closed() {
+        let state = RuntimeControlPlaneState::default();
+        let binding = test_binding("loop-owner", "main", 3);
+        let request = test_timeline_loop_request(41, 5);
+        let key = timeline_loop_receipt_key(&request, &binding);
+        let shape = "b".repeat(64);
+        let now = Instant::now();
+
+        state
+            .issue_timeline_loop_authority(
+                binding.clone(),
+                request.expected_fence.clone(),
+                request.authority_id.clone(),
+                now,
+            )
+            .unwrap();
+        assert!(matches!(
+            state.reserve_timeline_loop_lane(&key, &shape, now),
+            TimelineLoopLaneReservation::Lane(_)
+        ));
+        let inflight = state
+            .admit_timeline_loop_new(
+                &binding,
+                &request.expected_fence,
+                &request.authority_id,
+                &key,
+                now,
+            )
+            .unwrap();
+        state.finish_timeline_loop_inflight(&inflight);
+        state.store_timeline_loop_terminal(
+            key.clone(),
+            shape.clone(),
+            test_timeline_loop_receipt(&request, &shape),
+            now,
+        );
+        assert!(matches!(
+            state.reserve_timeline_loop_lane(&key, &shape, now),
+            TimelineLoopLaneReservation::Terminal(_)
+        ));
+        assert!(matches!(
+            state.reserve_timeline_loop_lane(&key, &"c".repeat(64), now),
+            TimelineLoopLaneReservation::Rejected(RuntimeCommandErrorCodeV1::Conflict)
+        ));
+
+        let expired = now + RECEIPT_TTL + Duration::from_millis(1);
+        assert!(matches!(
+            state.reserve_timeline_loop_lane(&key, &shape, expired),
+            TimelineLoopLaneReservation::Rejected(RuntimeCommandErrorCodeV1::Conflict)
+        ));
+
+        let second = test_timeline_loop_request(42, 6);
+        let second_key = timeline_loop_receipt_key(&second, &binding);
+        state
+            .issue_timeline_loop_authority(
+                binding.clone(),
+                second.expected_fence.clone(),
+                second.authority_id.clone(),
+                expired,
+            )
+            .unwrap();
+        assert!(matches!(
+            state.reserve_timeline_loop_lane(&second_key, &shape, expired),
+            TimelineLoopLaneReservation::Lane(_)
+        ));
+        state.retire_principal(&binding.principal);
+        let retired_now = Instant::now();
+        assert!(matches!(
+            state.reserve_timeline_loop_lane(&second_key, &shape, retired_now),
+            TimelineLoopLaneReservation::Rejected(RuntimeCommandErrorCodeV1::Conflict)
+        ));
+        assert_eq!(
+            state
+                .admit_timeline_loop_new(
+                    &binding,
+                    &second.expected_fence,
+                    &second.authority_id,
+                    &second_key,
+                    retired_now,
+                )
+                .unwrap_err(),
+            RuntimeCommandErrorCodeV1::Forbidden
+        );
+    }
+
+    #[test]
+    fn timeline_loop_expired_authority_is_stale_and_single_use() {
+        let state = RuntimeControlPlaneState::default();
+        let binding = test_binding("loop-expiry", "main", 4);
+        let request = test_timeline_loop_request(43, 8);
+        let key = timeline_loop_receipt_key(&request, &binding);
+        let now = Instant::now();
+        state
+            .issue_timeline_loop_authority(
+                binding.clone(),
+                request.expected_fence.clone(),
+                request.authority_id.clone(),
+                now,
+            )
+            .unwrap();
+        assert!(matches!(
+            state.reserve_timeline_loop_lane(&key, &"d".repeat(64), now),
+            TimelineLoopLaneReservation::Lane(_)
+        ));
+        assert_eq!(
+            state
+                .admit_timeline_loop_new(
+                    &binding,
+                    &request.expected_fence,
+                    &request.authority_id,
+                    &key,
+                    now + AUTHORITY_TTL + Duration::from_millis(1),
+                )
+                .unwrap_err(),
+            RuntimeCommandErrorCodeV1::StaleFence
+        );
+        assert_eq!(
+            state
+                .admit_timeline_loop_new(
+                    &binding,
+                    &request.expected_fence,
+                    &request.authority_id,
+                    &key,
+                    now + AUTHORITY_TTL + Duration::from_millis(2),
+                )
+                .unwrap_err(),
+            RuntimeCommandErrorCodeV1::Forbidden
+        );
     }
 
     #[test]

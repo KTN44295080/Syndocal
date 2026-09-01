@@ -1,9 +1,52 @@
 # Syndocal historical v1.0 / current v1.2 alpha Release Status
 
-Updated: 2026-08-31
-Branch: `codex/syndocal-v1.2`; current product metadata is `1.2.0-alpha.44`.
+Updated: 2026-09-01
+Branch: `codex/syndocal-v1.2`; current product metadata is `1.2.0-alpha.54`.
 
-## 2026-08-31 current alpha.44 Timeline UX/Undo bounded pause checkpoint
+## 2026-09-01 current alpha.54 strict Timeline loop native checkpoint
+
+Alpha.54 replaces the retired fire-and-forget root Timeline loop routes with a
+loop-only project/runtime capability, exact terminal receipt, FIFO renderer
+controller, atomic trusted MIDI/OSC engine actions, and authority-bound canonical
+snapshot convergence. Full/delta/poll/canonical snapshot ingress shares one
+monotonic transport/loop/follow watermark. The two legacy Tauri and engine loop
+entry points are removed and tested absent.
+
+The first native launch caught a stale admission-inventory fingerprint and the
+independent review caught a missing strict-loop dispatch policy. The corrected
+509-route fingerprint is
+`d806e8380462507a590fdd795d5bb21fe9c1bd2bd16f65da725d103af2aa7486`;
+the loop query is ReadOnly and the inner-authority commit is a preflight-only
+RuntimeMutation. Canonical metadata applies the same R0, token-bucket,
+fail-closed payload/consent, authoritative-runtime, exact-terminal-receipt
+contract as Timeline transport.
+
+The emitted App asset is `App-BytuNPGE.js`, `497,905` bytes, with no Vite chunk
+advisory. The Windows warning ratchet remains `0 -> 0`. Control-plane tests are
+`28/28`, dispatch-fence `1/1`, protocol `217/217`, engine `987 passed / 0 failed
+/ 2 ignored`, and focused frontend/Timeline/type/format/diff gates pass. The
+strict loop and shared snapshot-watermark checkers are named package scripts,
+run inside `check:release`, and therefore execute in the persistent
+cross-platform CI release-metadata step. Their static proofs follow the actual
+integration-module delegation rather than App comments. Final independent
+Terra xHigh review reports `GO`, with P0/P1/P2 `0`. The
+final exact executable is `62,271,488` bytes, ProductVersion/FileVersion
+`1.2.0-alpha.54`, SHA-256
+`9C5D9350D8CF0B615507C1CF02256B540C192294B8D5EA382DC89824996F0693`.
+Exactly one responsive maximized checkout-owned `Syndocal` window is verified
+at `1920x1032` with status `準備完了` and no admission/dispatch-policy error.
+
+This closes the alpha.54 source/native gate, not physical show acceptance.
+USB-DMX, Art-Net, Spout pixels, physical three-display content, and audible
+PROGRAM/CUE remain external gates. App.tsx source decomposition also remains a
+P2 maintainability task even though the emitted App asset is below 500 kB.
+Checkpoint inventory is `148,970,288,441` logical bytes / `121,234` files,
+including `target` at `146,215,879,267` bytes / `105,061` files. No cleanup was
+performed (`0` bytes reclaimed): no tracked cleanup harness with focused safety
+tests and independent adversarial acceptance covers this exact recurring target
+set, so deletion remains fail-closed.
+
+## 2026-08-31 historical alpha.44 Timeline UX/Undo bounded pause checkpoint
 
 The Timeline source shelf is compact and top-aligned, FX cards retain the same
 usable height as Static cards, and its legacy lane-click controls remain behind
@@ -50,7 +93,7 @@ Do not stop it until that release is confirmed. Native move/resize/
 fade/guide/Undo/Redo, physical output, media, capture, and production DJ gates
 remain unverified.
 
-## 2026-08-31 current alpha.44 DVC save/reopen source checkpoint
+## 2026-08-31 historical alpha.44 DVC save/reopen source checkpoint
 
 Alpha.44 repairs the current-schema reference validator that rejected Daslight
 imports after their first save. The old path unconditionally required every

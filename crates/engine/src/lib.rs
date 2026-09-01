@@ -3684,6 +3684,33 @@ pub struct TimelineTransportSetPlayingAck {
     pub generation_after: u64,
 }
 
+/// Definitive result for the strict root-loop runtime lane. Like Play/Pause,
+/// this is returned only after the worker has published the exact successor
+/// snapshot (or the exact no-op image).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TimelineLoopRuntimeDisposition {
+    Applied,
+    NoOp,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TimelineLoopRuntimeAck {
+    pub disposition: TimelineLoopRuntimeDisposition,
+    pub epoch_after: u64,
+    pub generation_after: u64,
+    pub loop_generation_after: u64,
+    pub follow_generation_after: u64,
+}
+
+/// Machine-local loop actions used by MIDI/OSC adapters. `Toggle` stays an
+/// engine-worker operation so two queued pedal edges cannot both resolve from
+/// the same previously published snapshot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrustedTimelineLoopRuntimeAction {
+    Toggle,
+    Scale(TimelineLoopScale),
+}
+
 /// Exact non-persistent fence for the canonical local Timeline transport
 /// command. Both values are non-zero and JavaScript-safe in published state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3731,6 +3758,12 @@ fn timeline_audio_is_live_in_snapshot(snapshot: &EngineSnapshot) -> bool {
 pub struct TimelineTransportPublicationCompletion {
     ack: mpsc::SyncSender<Result<(), String>>,
     outcome: Arc<Mutex<Option<TimelineTransportSetPlayingAck>>>,
+}
+
+#[derive(Debug)]
+pub struct TimelineLoopRuntimePublicationCompletion {
+    ack: mpsc::SyncSender<Result<(), String>>,
+    outcome: Arc<Mutex<Option<TimelineLoopRuntimeAck>>>,
 }
 
 /// Definitive result of the emergency lighting blackout latch. The operation
@@ -4812,8 +4845,26 @@ define_engine_command! {
         expires_at: Instant,
         completion: TimelineTransportPublicationCompletion,
     },
+    /// Canonical root-loop action. The worker rechecks the exact transport
+    /// pair before deciding whether this is an Applied successor or a NoOp;
+    /// malformed/unsupported loop state is rejected before any mutation.
+    ApplyTimelineLoopRuntimePublished {
+        expected_epoch: u64,
+        expected_generation: u64,
+        expected_loop_generation: u64,
+        expected_follow_generation: u64,
+        action: protocol::control_plane_command::TimelineLoopRuntimeActionV1,
+        expires_at: Instant,
+        completion: TimelineLoopRuntimePublicationCompletion,
+    },
+    /// Trusted native MIDI/OSC ingress. It deliberately traverses the same
+    /// root-loop mutation primitive as the receipt-bearing UI command, but it
+    /// does not mint a renderer authority because the device adapter is native
+    /// and owner-bound before it reaches this worker.
+    ApplyTrustedTimelineLoopRuntime {
+        action: TrustedTimelineLoopRuntimeAction,
+    },
     SeekTimeline(u64),
-    SetTimelineLoopEnabled(bool),
     /// Resolve an absolute loop division from the authored A-B region. The
     /// command is deliberately not ScaleTimelineLoop: repeated sync events
     /// therefore converge without cumulative drift.
@@ -4870,8 +4921,6 @@ define_engine_command! {
         admission: ProjectSnapshotLoadAdmission,
         ack: mpsc::SyncSender<Result<(), String>>,
     },
-    ToggleTimelineLoop,
-    ScaleTimelineLoop(TimelineLoopScale),
     SetDirectChildTimelinePlaying {
         cue_id: CueId,
         playing: bool,
@@ -5432,18 +5481,17 @@ macro_rules! engine_command_video_presentation_relevance {
             | EngineCommand::DjLinkSyncTimelinePosition { .. }
             | EngineCommand::SetTimelinePlaying(_)
             | EngineCommand::SetTimelinePlayingPublished { .. }
+            | EngineCommand::ApplyTimelineLoopRuntimePublished { .. }
+            | EngineCommand::ApplyTrustedTimelineLoopRuntime { .. }
             | EngineCommand::SeekTimeline(_)
             | EngineCommand::SeekDirectChildTimeline { .. }
             | EngineCommand::SeekTimelineBeat { .. }
             | EngineCommand::DjLinkTimelineBeatJump { .. }
             | EngineCommand::DjLinkRelease { .. }
-            | EngineCommand::SetTimelineLoopEnabled(_)
             | EngineCommand::SetTimelineLoopAbsolute { .. }
             | EngineCommand::DjLinkSetTimelineLoopAbsolute { .. }
             | EngineCommand::DjLinkSetCurrentTimelineLoopEnabled { .. }
             | EngineCommand::DjLinkHalfCurrentTimelineLoop { .. }
-            | EngineCommand::ToggleTimelineLoop
-            | EngineCommand::ScaleTimelineLoop(_)
             | EngineCommand::SetDirectChildTimelinePlaying { .. }
             | EngineCommand::AbortTimelineFollow { .. }
             | EngineCommand::ReconformTimelineToBpm { .. } => true,
@@ -5696,6 +5744,7 @@ impl EngineCommand {
                 | EngineCommand::SetTimelinePlaying(_)
                 | EngineCommand::SetMediaAssetAvailability { .. }
                 | EngineCommand::SetTimelinePlayingPublished { .. }
+                | EngineCommand::ApplyTimelineLoopRuntimePublished { .. }
                 | EngineCommand::DjLinkStartTimeline { .. }
                 | EngineCommand::DjLinkStartWaitingFollowTarget { .. }
                 | EngineCommand::DjLinkSyncTimelinePosition { .. }
@@ -5705,9 +5754,7 @@ impl EngineCommand {
                 | EngineCommand::DjLinkTimelineBeatJump { .. }
                 | EngineCommand::DjLinkRelease { .. }
                 | EngineCommand::SeekTimeline(_)
-                | EngineCommand::SetTimelineLoopEnabled(_)
-                | EngineCommand::ToggleTimelineLoop
-                | EngineCommand::ScaleTimelineLoop(_)
+                | EngineCommand::ApplyTrustedTimelineLoopRuntime { .. }
                 | EngineCommand::SetDirectChildTimelinePlaying { .. }
                 | EngineCommand::SeekDirectChildTimeline { .. }
                 | EngineCommand::SeekTimelineBeat { .. }
@@ -5870,9 +5917,8 @@ impl EngineCommand {
                 | EngineCommand::RemoveCuePublished { .. }
                 | EngineCommand::SetTimelinePlaying(_)
                 | EngineCommand::SetTimelinePlayingPublished { .. }
-                | EngineCommand::SetTimelineLoopEnabled(_)
-                | EngineCommand::ToggleTimelineLoop
-                | EngineCommand::ScaleTimelineLoop(_)
+                | EngineCommand::ApplyTimelineLoopRuntimePublished { .. }
+                | EngineCommand::ApplyTrustedTimelineLoopRuntime { .. }
                 | EngineCommand::SetTimelineMetronome { .. }
                 | EngineCommand::SetDirectChildTimelinePlaying { .. }
                 | EngineCommand::SetLiveAudioSpectrum(_)
@@ -10041,6 +10087,44 @@ impl EngineHandle {
         acknowledged
     }
 
+    /// Publish one exact root-loop action after rechecking the engine-owned
+    /// transport pair. The acknowledgement is emitted only after the shared
+    /// snapshot carries either the applied successor or the exact no-op image.
+    pub fn apply_timeline_loop_runtime_published(
+        &self,
+        expected_epoch: u64,
+        expected_generation: u64,
+        expected_loop_generation: u64,
+        expected_follow_generation: u64,
+        action: protocol::control_plane_command::TimelineLoopRuntimeActionV1,
+        expires_at: Instant,
+    ) -> Result<TimelineLoopRuntimeAck, String> {
+        let (ack, receiver) = mpsc::sync_channel(1);
+        let outcome = Arc::new(Mutex::new(None));
+        self.send(EngineCommand::ApplyTimelineLoopRuntimePublished {
+            expected_epoch,
+            expected_generation,
+            expected_loop_generation,
+            expected_follow_generation,
+            action,
+            expires_at,
+            completion: TimelineLoopRuntimePublicationCompletion {
+                ack,
+                outcome: Arc::clone(&outcome),
+            },
+        })
+        .map_err(|error| error.to_string())?;
+        receiver
+            .recv_timeout(Duration::from_secs(3))
+            .map_err(|error| format!("Timeline loop acknowledgement failed: {error}"))??;
+        let acknowledged = outcome
+            .lock()
+            .map_err(|_| "Timeline loop acknowledgement state was poisoned".to_string())?
+            .take()
+            .ok_or_else(|| "Timeline loop acknowledgement omitted its result".to_string());
+        acknowledged
+    }
+
     /// Publish the latest machine-local Media Asset availability without
     /// touching authored project/history state.  The acknowledgement is
     /// emitted only after the shared runtime snapshot has accepted the new
@@ -11924,16 +12008,15 @@ impl EngineHandle {
             | EngineCommand::DjLinkStartWaitingFollowTarget { .. }
             | EngineCommand::DjLinkSyncTimelinePosition { .. }
             | EngineCommand::SetTimelinePlayingPublished { .. }
+            | EngineCommand::ApplyTimelineLoopRuntimePublished { .. }
+            | EngineCommand::ApplyTrustedTimelineLoopRuntime { .. }
             | EngineCommand::SeekTimeline(_)
-            | EngineCommand::SetTimelineLoopEnabled(_)
             | EngineCommand::SetTimelineLoopAbsolute { .. }
             | EngineCommand::DjLinkSetTimelineLoopAbsolute { .. }
             | EngineCommand::DjLinkSetCurrentTimelineLoopEnabled { .. }
             | EngineCommand::DjLinkHalfCurrentTimelineLoop { .. }
             | EngineCommand::DjLinkTimelineBeatJump { .. }
             | EngineCommand::DjLinkRelease { .. }
-            | EngineCommand::ToggleTimelineLoop
-            | EngineCommand::ScaleTimelineLoop(_)
             | EngineCommand::SetDirectChildTimelinePlaying { .. }
             | EngineCommand::SeekDirectChildTimeline { .. }
             | EngineCommand::SeekTimelineBeat { .. }
@@ -22635,6 +22718,7 @@ impl EngineRuntime {
                     | EngineCommand::UpdateColorMappingEffect { .. }
                     | EngineCommand::SetEffectEnabledPublished { .. }
                     | EngineCommand::SetTimelinePlayingPublished { .. }
+                    | EngineCommand::ApplyTimelineLoopRuntimePublished { .. }
                     | EngineCommand::DjLinkStartTimeline { .. }
                     | EngineCommand::DjLinkStartWaitingFollowTarget { .. }
                     | EngineCommand::DjLinkSyncTimelinePosition { .. }
@@ -28111,8 +28195,82 @@ impl EngineRuntime {
                         "Engine snapshot was busy; Timeline transport change was rolled back",
                 });
             }
-            EngineCommand::SetTimelineLoopEnabled(enabled) => {
-                self.set_timeline_loop_enabled_state(enabled);
+            EngineCommand::ApplyTimelineLoopRuntimePublished {
+                expected_epoch,
+                expected_generation,
+                expected_loop_generation,
+                expected_follow_generation,
+                action,
+                expires_at,
+                completion,
+            } => {
+                let previous_last_error = self.last_error.clone();
+                let rollback = self.timeline_transport_rollback();
+                let result = if Instant::now() > expires_at {
+                    Err("Timeline loop command expired before engine execution".to_string())
+                } else if expected_epoch == 0
+                    || expected_generation == 0
+                    || expected_epoch != self.timeline_transport_epoch
+                    || expected_generation != self.timeline_transport_generation
+                    || expected_loop_generation != self.timeline_loop_runtime.generation
+                    || expected_follow_generation != self.timeline_follow_runtime.generation
+                {
+                    Err("Timeline transport authority is stale".to_string())
+                } else {
+                    self.apply_timeline_loop_runtime_command(action)
+                        .and_then(|disposition| {
+                            let outcome = TimelineLoopRuntimeAck {
+                                disposition,
+                                epoch_after: self.timeline_transport_epoch,
+                                generation_after: self.timeline_transport_generation,
+                                loop_generation_after: self.timeline_loop_runtime.generation,
+                                follow_generation_after: self.timeline_follow_runtime.generation,
+                            };
+                            match completion.outcome.lock() {
+                                Ok(mut slot) => {
+                                    *slot = Some(outcome);
+                                    Ok(())
+                                }
+                                Err(_) => {
+                                    self.rollback_pending_command(rollback.clone());
+                                    Err("Timeline loop acknowledgement state was poisoned"
+                                        .to_string())
+                                }
+                            }
+                        })
+                };
+                self.last_error = if result.is_ok() {
+                    None
+                } else {
+                    previous_last_error
+                };
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack: PendingCommandAckSender::Plain(completion.ack),
+                    result,
+                    rollback,
+                    publication_error:
+                        "Engine snapshot was busy; Timeline loop change was rolled back",
+                });
+            }
+            EngineCommand::ApplyTrustedTimelineLoopRuntime { action } => {
+                let published_action = match action {
+                    TrustedTimelineLoopRuntimeAction::Toggle => {
+                        protocol::control_plane_command::TimelineLoopRuntimeActionV1::SetEnabled {
+                            enabled: matches!(
+                                self.timeline_loop_runtime.status,
+                                TimelineLoopRuntimeStatus::Disabled
+                            ),
+                        }
+                    }
+                    TrustedTimelineLoopRuntimeAction::Scale(scale) => {
+                        protocol::control_plane_command::TimelineLoopRuntimeActionV1::Scale {
+                            scale,
+                        }
+                    }
+                };
+                self.last_error = self
+                    .apply_timeline_loop_runtime_command(published_action)
+                    .err();
             }
             EngineCommand::SetTimelineLoopAbsolute { division, enabled } => {
                 self.last_error = self
@@ -28351,16 +28509,6 @@ impl EngineRuntime {
                     rollback,
                     publication_error: "Engine snapshot was busy; DJ Link release was rolled back",
                 });
-            }
-            EngineCommand::ToggleTimelineLoop => {
-                let enabled = matches!(
-                    self.timeline_loop_runtime.status,
-                    TimelineLoopRuntimeStatus::Disabled
-                );
-                self.set_timeline_loop_enabled_state(enabled);
-            }
-            EngineCommand::ScaleTimelineLoop(scale) => {
-                let _ = self.scale_current_timeline_loop_state(scale);
             }
             EngineCommand::SeekTimeline(position_ms) => {
                 let now = Instant::now();
@@ -44931,6 +45079,76 @@ impl EngineRuntime {
         Ok(())
     }
 
+    /// Apply the strict, receipt-bearing root-loop command. Unlike the
+    /// legacy input ingress, invalid bounds and disabled scaling are explicit
+    /// failures; a valid unchanged target is a typed NoOp and never mints a
+    /// transport successor.
+    fn apply_timeline_loop_runtime_command(
+        &mut self,
+        action: protocol::control_plane_command::TimelineLoopRuntimeActionV1,
+    ) -> Result<TimelineLoopRuntimeDisposition, String> {
+        match action {
+            protocol::control_plane_command::TimelineLoopRuntimeActionV1::SetEnabled {
+                enabled,
+            } => {
+                let currently_enabled = !matches!(
+                    self.timeline_loop_runtime.status,
+                    TimelineLoopRuntimeStatus::Disabled
+                );
+                let announce_break_after_transport_commit = !enabled
+                    && currently_enabled
+                    && !self.timeline_follow_runtime.transition_hold_active;
+                if currently_enabled == enabled
+                    && !(!enabled && self.timeline_follow_runtime.transition_hold_active)
+                {
+                    return Ok(TimelineLoopRuntimeDisposition::NoOp);
+                }
+                if enabled {
+                    let (Some(a_ms), Some(b_ms)) = (
+                        self.timeline_loop_runtime.a_ms,
+                        self.timeline_loop_runtime.b_ms,
+                    ) else {
+                        return Err("Timeline loop enable requires A-B bounds".to_string());
+                    };
+                    if b_ms <= a_ms || b_ms > self.timeline_duration_ms() {
+                        return Err("Timeline loop enable requires valid A-B bounds".to_string());
+                    }
+                }
+                self.preflight_timeline_transport_authority_invalidation()?;
+                self.set_timeline_loop_enabled_state(enabled);
+                self.invalidate_timeline_transport_authority()?;
+                // Transport invalidation deliberately retires every Guide cue
+                // carrying the predecessor authority. Re-issue the visible
+                // loop-release cue only after the successor is committed so
+                // it cannot be paired with the old transport watermark.
+                if announce_break_after_transport_commit {
+                    self.push_timeline_guide_cue(
+                        self.timeline_position_ms,
+                        "Break".to_string(),
+                        TimelineGuideCueKind::Break,
+                    );
+                }
+                Ok(TimelineLoopRuntimeDisposition::Applied)
+            }
+            protocol::control_plane_command::TimelineLoopRuntimeActionV1::Scale { scale } => {
+                let (next_b_ms, next_millibeats) = self.timeline_loop_scale_target(scale)?;
+                if self.timeline_loop_runtime.b_ms == Some(next_b_ms)
+                    && self.timeline_loop_runtime.musical_length_millibeats == next_millibeats
+                {
+                    return Ok(TimelineLoopRuntimeDisposition::NoOp);
+                }
+                self.preflight_timeline_transport_authority_invalidation()?;
+                self.timeline_loop_runtime.b_ms = Some(next_b_ms);
+                self.timeline_loop_runtime.musical_length_millibeats = next_millibeats;
+                self.timeline_loop_runtime.generation =
+                    next_timeline_runtime_generation(self.timeline_loop_runtime.generation);
+                self.refresh_timeline_loop_runtime_status();
+                self.invalidate_timeline_transport_authority()?;
+                Ok(TimelineLoopRuntimeDisposition::Applied)
+            }
+        }
+    }
+
     fn set_timeline_loop_enabled_state(&mut self, enabled: bool) {
         if !enabled && self.timeline_follow_runtime.transition_hold_active {
             self.clear_timeline_follow_destination_hold();
@@ -45017,10 +45235,10 @@ impl EngineRuntime {
     /// Shared checked scaling primitive. Legacy generic commands retain their
     /// no-op-on-invalid behavior by discarding this error; strict DJ commands
     /// surface it and therefore cannot halve a disabled or malformed loop.
-    fn scale_current_timeline_loop_state(
-        &mut self,
+    fn timeline_loop_scale_target(
+        &self,
         scale: TimelineLoopScale,
-    ) -> Result<(), String> {
+    ) -> Result<(u64, Option<u64>), String> {
         if matches!(
             self.timeline_loop_runtime.status,
             TimelineLoopRuntimeStatus::Disabled
@@ -45060,16 +45278,27 @@ impl EngineRuntime {
         if next_b_ms <= a_ms {
             return Err("Timeline loop scale produced invalid A-B bounds".to_string());
         }
-        self.timeline_loop_runtime.b_ms = Some(next_b_ms);
-        if next_millibeats.is_some() {
+        let next_millibeats = if next_millibeats.is_some() {
             let actual_length_ms = next_b_ms - a_ms;
-            self.timeline_loop_runtime.musical_length_millibeats = Some(
+            Some(
                 ((actual_length_ms as f64 * f64::from(self.clock.bpm.max(1.0)) / 60_000.0)
                     * 1_000.0)
                     .round()
                     .max(1.0) as u64,
-            );
-        }
+            )
+        } else {
+            None
+        };
+        Ok((next_b_ms, next_millibeats))
+    }
+
+    fn scale_current_timeline_loop_state(
+        &mut self,
+        scale: TimelineLoopScale,
+    ) -> Result<(), String> {
+        let (next_b_ms, next_millibeats) = self.timeline_loop_scale_target(scale)?;
+        self.timeline_loop_runtime.b_ms = Some(next_b_ms);
+        self.timeline_loop_runtime.musical_length_millibeats = next_millibeats;
         self.timeline_loop_runtime.generation =
             next_timeline_runtime_generation(self.timeline_loop_runtime.generation);
         self.refresh_timeline_loop_runtime_status();
@@ -115231,11 +115460,17 @@ mod tests {
             "loop wrap cancels old Guide and never catches up an already-started Phase"
         );
 
-        runtime.apply_command(EngineCommand::ScaleTimelineLoop(TimelineLoopScale::Half));
+        runtime.apply_command(EngineCommand::ApplyTrustedTimelineLoopRuntime {
+            action: TrustedTimelineLoopRuntimeAction::Scale(TimelineLoopScale::Half),
+        });
         assert_eq!(runtime.timeline_loop_runtime.b_ms, Some(150));
-        runtime.apply_command(EngineCommand::ScaleTimelineLoop(TimelineLoopScale::Double));
+        runtime.apply_command(EngineCommand::ApplyTrustedTimelineLoopRuntime {
+            action: TrustedTimelineLoopRuntimeAction::Scale(TimelineLoopScale::Double),
+        });
         assert_eq!(runtime.timeline_loop_runtime.b_ms, Some(200));
-        runtime.apply_command(EngineCommand::SetTimelineLoopEnabled(false));
+        runtime.apply_command(EngineCommand::ApplyTrustedTimelineLoopRuntime {
+            action: TrustedTimelineLoopRuntimeAction::Toggle,
+        });
         assert!(matches!(
             runtime.timeline_loop_runtime.status,
             TimelineLoopRuntimeStatus::Disabled
@@ -115245,12 +115480,95 @@ mod tests {
             TimelineGuideCueKind::Break
         ));
 
+        runtime.apply_command(EngineCommand::ApplyTrustedTimelineLoopRuntime {
+            action: TrustedTimelineLoopRuntimeAction::Toggle,
+        });
+        runtime.apply_command(EngineCommand::ApplyTrustedTimelineLoopRuntime {
+            action: TrustedTimelineLoopRuntimeAction::Toggle,
+        });
+        assert!(matches!(
+            runtime.timeline_loop_runtime.status,
+            TimelineLoopRuntimeStatus::Disabled
+        ));
+
         let persisted = runtime.build_persistence_snapshot();
         assert!(persisted
             .timeline
             .loop_runtime
             .eq(&TimelineLoopRuntimeSummary::default()));
         assert!(persisted.timeline.guide_cues.is_empty());
+    }
+
+    #[test]
+    fn timeline_loop_runtime_ack_waits_for_publication_and_failure_rolls_back_exact_a() {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        runtime.timeline_loop_runtime = TimelineLoopRuntimeSummary {
+            generation: 7,
+            status: TimelineLoopRuntimeStatus::Armed,
+            a_ms: Some(100),
+            b_ms: Some(200),
+            musical_length_millibeats: Some(4_000),
+            wrap_count: 3,
+        };
+        runtime.timeline_follow_runtime.generation = 9;
+        let before_loop = runtime.timeline_loop_runtime.clone();
+        let before_follow = runtime.timeline_follow_runtime.clone();
+        let before_epoch = runtime.timeline_transport_epoch;
+        let before_generation = runtime.timeline_transport_generation;
+        let published = RwLock::new(runtime.build_snapshot(0));
+
+        let enqueue = |runtime: &mut EngineRuntime| {
+            let (ack, receiver) = mpsc::sync_channel(1);
+            let outcome = Arc::new(Mutex::new(None));
+            runtime.apply_command(EngineCommand::ApplyTimelineLoopRuntimePublished {
+                expected_epoch: before_epoch,
+                expected_generation: before_generation,
+                expected_loop_generation: before_loop.generation,
+                expected_follow_generation: before_follow.generation,
+                action: protocol::control_plane_command::TimelineLoopRuntimeActionV1::SetEnabled {
+                    enabled: false,
+                },
+                expires_at: Instant::now() + Duration::from_secs(1),
+                completion: TimelineLoopRuntimePublicationCompletion {
+                    ack,
+                    outcome: Arc::clone(&outcome),
+                },
+            });
+            (receiver, outcome)
+        };
+
+        let (failed_receiver, _) = enqueue(&mut runtime);
+        assert!(matches!(
+            failed_receiver.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        runtime.fail_next_pending_publication = true;
+        runtime.publish_pending_command_acks(0, &published);
+        assert!(failed_receiver
+            .recv()
+            .unwrap()
+            .unwrap_err()
+            .contains("rolled back"));
+        assert_eq!(runtime.timeline_loop_runtime, before_loop);
+        assert_eq!(runtime.timeline_follow_runtime, before_follow);
+        assert_eq!(runtime.timeline_transport_epoch, before_epoch);
+        assert_eq!(runtime.timeline_transport_generation, before_generation);
+        let (success_receiver, outcome) = enqueue(&mut runtime);
+        assert!(matches!(
+            success_receiver.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        runtime.publish_pending_command_acks(0, &published);
+        success_receiver.recv().unwrap().unwrap();
+        let acknowledged = outcome.lock().unwrap().take().unwrap();
+        assert_eq!(
+            acknowledged.disposition,
+            TimelineLoopRuntimeDisposition::Applied
+        );
+        assert!(matches!(
+            published.read().unwrap().timeline.loop_runtime.status,
+            TimelineLoopRuntimeStatus::Disabled
+        ));
     }
 
     #[test]
@@ -116848,7 +117166,9 @@ mod tests {
             wrap_count: 0,
         };
         runtime.apply_command(EngineCommand::SeekTimeline(250));
-        runtime.apply_command(EngineCommand::SetTimelineLoopEnabled(true));
+        runtime.apply_command(EngineCommand::ApplyTrustedTimelineLoopRuntime {
+            action: TrustedTimelineLoopRuntimeAction::Toggle,
+        });
         assert!(matches!(
             runtime.timeline_loop_runtime.status,
             TimelineLoopRuntimeStatus::Armed
@@ -116976,7 +117296,9 @@ mod tests {
             TimelineLoopRuntimeStatus::Looping
         ));
 
-        runtime.apply_command(EngineCommand::SetTimelineLoopEnabled(false));
+        runtime.apply_command(EngineCommand::ApplyTrustedTimelineLoopRuntime {
+            action: TrustedTimelineLoopRuntimeAction::Toggle,
+        });
         assert!(matches!(
             runtime.timeline_loop_runtime.status,
             TimelineLoopRuntimeStatus::Disabled

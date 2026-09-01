@@ -151,6 +151,38 @@ assert.equal(mismatchedTimelineResult.timeline.id, 1, "different-identity fallba
 assert.equal(mismatchedTimelineResult.timeline.loop_runtime.status, "looping", "different-identity fallback never exposes the target bank's runtime-free OFF state");
 assert.equal(mismatchedTimelineResult.timeline_bank[0].id, 2, "different-identity fallback still exposes the committed bank for later canonical hydration");
 const appSource = await readFile(new URL("../src/App.tsx", import.meta.url), "utf8");
+const timelineCommandDispatchersSource = await readFile(new URL("../src/timelineCommandDispatchers.ts", import.meta.url), "utf8");
+const timelineSnapshotRefreshSource = await readFile(new URL("../src/timelineSnapshotRefreshController.ts", import.meta.url), "utf8");
+assert.match(
+  appSource,
+  /import \{\s*invokeTimelineEditingCommand as dispatchTimelineEditingCommand,\s*invokeTimelineLayerCommand as dispatchTimelineLayerCommand,\s*invokeTimelineSceneBlockCommand as dispatchTimelineSceneBlockCommand,\s*\} from "\.\/timelineCommandDispatchers";/,
+  "App must bind all extracted Timeline dispatchers through static aliases",
+);
+assert.doesNotMatch(
+  appSource,
+  /import\("\.\/timelineCommandDispatchers"\)/,
+  "App must not defer Timeline dispatcher binding through a dynamic module import",
+);
+assert.match(
+  appSource,
+  /const timelineCommandDispatcherOptions = \(\) => \(\{[\s\S]*?viewportFixture: \(\) => viewportFixture,[\s\S]*?timelineAuthorityReady,[\s\S]*?timelineChildCueId,[\s\S]*?requireBankAuthority,/,
+  "extracted Timeline dispatchers must receive state-bearing options from an invocation-time factory",
+);
+assert.match(
+  appSource,
+  /dispatchTimelineEditingCommand<T>\(timelineCommandDispatcherOptions\(\), command, args\)/,
+  "Timeline editing must evaluate dispatcher options at invocation time",
+);
+assert.match(
+  appSource,
+  /dispatchTimelineSceneBlockCommand<T>\(timelineCommandDispatcherOptions\(\), command, args\)/,
+  "Timeline Scene Block dispatch must evaluate dispatcher options at invocation time",
+);
+assert.match(
+  appSource,
+  /dispatchTimelineLayerCommand<T>\(timelineCommandDispatcherOptions\(\), command, args\)/,
+  "Timeline layer dispatch must evaluate dispatcher options at invocation time",
+);
 const commitStart = appSource.indexOf("const commitTimelineAdvanced = async");
 const commitEnd = appSource.indexOf("const currentTimelineAdvancedAuthoring", commitStart);
 assert.ok(commitStart >= 0 && commitEnd > commitStart, "Timeline commit source boundary is present");
@@ -185,12 +217,18 @@ assert.match(reconciliationSource, /candidate\.snapshot\.timeline\.id === expect
 assert.match(reconciliationSource, /projectAuthorityTokenIsCurrent\(expected\.authority, authorityToken\(candidate\)\)/, "blocked state requires exact ACK authority equality, not just a stable local signal");
 assert.match(reconciliationSource, /get_project_authority_bundle", \{[\s\S]*?expectedEpoch: expected\.authority\.project_epoch,[\s\S]*?expectedRevision: expected\.authority\.project_revision,[\s\S]*?expectedCheckpointHash: expected\.authority\.checkpoint_hash/, "blocked reconciliation reads an atomic E/R/H-bound authority plus snapshot bundle");
 assert.doesNotMatch(reconciliationSource, /clearTimelineAdvancedSnapshotResolutionAfterCanonical/, "a generic snapshot cannot directly clear blocked Timeline state");
-const fullSnapshotStart = appSource.indexOf("const runFullSnapshotRefreshes = async");
-const fullSnapshotEnd = appSource.indexOf("const refreshSnapshot =", fullSnapshotStart);
+const fullSnapshotStart = timelineSnapshotRefreshSource.indexOf("const run = async (applySnapshot");
+const fullSnapshotEnd = timelineSnapshotRefreshSource.indexOf("const refresh = (", fullSnapshotStart);
 assert.ok(fullSnapshotStart >= 0 && fullSnapshotEnd > fullSnapshotStart, "generic full snapshot source boundary is present");
-const fullSnapshotSource = appSource.slice(fullSnapshotStart, fullSnapshotEnd);
-assert.match(fullSnapshotSource, /applyEngineSnapshot\([\s\S]*?reconcileBlockedTimelineAdvancedSnapshotResolution\(\)/, "generic snapshot refresh may request reconciliation only after applying its untrusted image");
+const fullSnapshotSource = timelineSnapshotRefreshSource.slice(fullSnapshotStart, fullSnapshotEnd);
+assert.match(fullSnapshotSource, /if \(next !== null[\s\S]*?applySnapshot\([\s\S]*?requestedReadGuard,[\s\S]*?\)[\s\S]*?\)/, "generic snapshot refresh applies only after its current-read and transport fences");
 assert.doesNotMatch(fullSnapshotSource, /setTimelineAdvancedSnapshotResolution\("idle"\)/, "generic snapshot refresh cannot unlock Timeline controls directly");
+const fullSnapshotApplyStart = appSource.indexOf("const runFullSnapshotRefreshes = () =>");
+const fullSnapshotApplyEnd = appSource.indexOf("const refreshSnapshot =", fullSnapshotApplyStart);
+assert.ok(fullSnapshotApplyStart >= 0 && fullSnapshotApplyEnd > fullSnapshotApplyStart, "generic full snapshot apply source boundary is present");
+const fullSnapshotApplySource = appSource.slice(fullSnapshotApplyStart, fullSnapshotApplyEnd);
+assert.match(fullSnapshotApplySource, /applyEngineSnapshot\([\s\S]*?reconcileBlockedTimelineAdvancedSnapshotResolution\(\)/, "generic snapshot refresh may request reconciliation only after applying its untrusted image");
+assert.doesNotMatch(fullSnapshotApplySource, /setTimelineAdvancedSnapshotResolution\("idle"\)/, "generic snapshot refresh cannot unlock Timeline controls directly");
 const canonicalBundleMatchesExpected = (expected, bundle) =>
   expected.project_epoch === bundle.project_epoch
   && expected.project_revision === bundle.project_revision
@@ -229,29 +267,34 @@ assert.equal(
   2,
   "Loop toggle and resize reject stale operations while Timeline authority is pending or blocked",
 );
-const sourceBetween = (startMarker, endMarker) => {
-  const start = appSource.indexOf(startMarker);
-  const end = appSource.indexOf(endMarker, start);
+const sourceBetween = (source, startMarker, endMarker) => {
+  const start = source.indexOf(startMarker);
+  const end = source.indexOf(endMarker, start);
   assert.ok(start >= 0 && end > start, `${startMarker} source boundary is present`);
-  return appSource.slice(start, end);
+  return source.slice(start, end);
+};
+const sourceFrom = (source, startMarker) => {
+  const start = source.indexOf(startMarker);
+  assert.ok(start >= 0, `${startMarker} source boundary is present`);
+  return source.slice(start);
 };
 const assertGuardPrecedes = (source, guard, protectedOperation, label) => {
   const guardAt = source.indexOf(guard);
   const operationAt = source.indexOf(protectedOperation);
   assert.ok(guardAt >= 0 && operationAt > guardAt, `${label} is rejected before its direct-child mutation can run`);
 };
-const childPersistSource = sourceBetween("const persistChildTimeline = async", "const childTimelineNextAutomationId");
+const childPersistSource = sourceBetween(appSource, "const persistChildTimeline = async", "const childTimelineNextAutomationId");
 assertGuardPrecedes(childPersistSource, 'timelineAuthorityReady("Timeline child edit")', 'invoke("set_cue_child_timeline"', "direct-child persistence");
-const childEditingSource = sourceBetween("const invokeTimelineEditingCommand", "const invokeTimelineSceneBlockCommand");
-assertGuardPrecedes(childEditingSource, "timelineAuthorityReady(command)", 'invoke<T>("seek_direct_child_timeline"', "direct-child seek");
-assertGuardPrecedes(childEditingSource, "timelineAuthorityReady(command)", "persistChildTimeline(childCueId", "direct-child metronome and automation persistence");
-const childSceneSource = sourceBetween("const invokeTimelineSceneBlockCommand", "const zoomTimelineOverviewAt");
-assertGuardPrecedes(childSceneSource, "timelineAuthorityReady(command)", "if (childCueId !== null)", "direct-child Scene block persistence");
-const childLayerSource = sourceBetween("const invokeTimelineLayerCommand", "const timelineLayerController");
-assertGuardPrecedes(childLayerSource, "timelineAuthorityReady(command)", "if (childCueId !== null)", "direct-child layer persistence");
-const childTransportSource = sourceBetween("const setCanonicalTimelinePlaying", "const {\n    moveTimelineAutomationRangeToTime");
+const childEditingSource = sourceBetween(timelineCommandDispatchersSource, "export const invokeTimelineEditingCommand", "export const invokeTimelineSceneBlockCommand");
+assertGuardPrecedes(childEditingSource, "options.timelineAuthorityReady(command)", 'options.invoke<T>("seek_direct_child_timeline"', "direct-child seek");
+assertGuardPrecedes(childEditingSource, "options.timelineAuthorityReady(command)", "options.persistChildTimeline(childCueId", "direct-child metronome and automation persistence");
+const childSceneSource = sourceBetween(timelineCommandDispatchersSource, "export const invokeTimelineSceneBlockCommand", "export const invokeTimelineLayerCommand");
+assertGuardPrecedes(childSceneSource, "options.timelineAuthorityReady(command)", "if (childCueId !== null)", "direct-child Scene block persistence");
+const childLayerSource = sourceFrom(timelineCommandDispatchersSource, "export const invokeTimelineLayerCommand");
+assertGuardPrecedes(childLayerSource, "options.timelineAuthorityReady(command)", "if (childCueId !== null)", "direct-child layer persistence");
+const childTransportSource = sourceBetween(appSource, "const setCanonicalTimelinePlaying", "const {\n    moveTimelineAutomationRangeToTime");
 assertGuardPrecedes(childTransportSource, 'timelineAuthorityReady("Timeline transport change")', 'invoke("set_direct_child_timeline_playing"', "direct-child play and pause");
-const superSceneSource = sourceBetween("const openOrCreateSuperScene", "const effectChooserCueId");
+const superSceneSource = sourceBetween(appSource, "const openOrCreateSuperScene", "const effectChooserCueId");
 assertGuardPrecedes(superSceneSource, 'timelineAuthorityReady("Timeline child creation")', 'invoke("set_cue_child_timeline"', "direct-child Timeline creation from Super Scene");
 const cuePanelSource = await readFile(new URL("../src/components/TimelineCueEventsPanel.tsx", import.meta.url), "utf8");
 assert.ok(

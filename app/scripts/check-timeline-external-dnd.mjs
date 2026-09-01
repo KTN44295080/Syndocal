@@ -24,6 +24,7 @@ const bankAuthority = await loadModule("bankAuthority.ts");
 const gestureSource = await readFile(new URL("../src/timelineBlockGestures.ts", import.meta.url), "utf8");
 const canonicalKindSource = await readFile(new URL("../src/sceneCueKind.ts", import.meta.url), "utf8");
 const canonicalKindModuleUrl = dataModule(canonicalKindSource, "sceneCueKind.ts");
+const timelineCommandDispatchersSource = await readFile(new URL("../src/timelineCommandDispatchers.ts", import.meta.url), "utf8");
 const timelineSceneBlocksSource = await readFile(new URL("../src/timelineSceneBlocks.ts", import.meta.url), "utf8");
 const timelineSceneBlockHelpers = await import(dataModule(
   timelineSceneBlocksSource
@@ -683,8 +684,8 @@ assert.match(
   "Scene placement must use the shared production Timeline Scene Block controller",
 );
 assert.match(
-  appSource,
-  /const invokeTimelineSceneBlockCommand = async <T,>\([\s\S]*?return invoke<T>\(command, args\);/,
+  timelineCommandDispatchersSource,
+  /export const invokeTimelineSceneBlockCommand = async <T,>[\s\S]*?if \(!localFixture\) return options\.invoke<T>\(command, args\);/,
   "the non-fixture Timeline Scene Block controller must terminate at the registered Tauri invoke edge",
 );
 assert.match(

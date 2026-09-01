@@ -35,7 +35,8 @@ use protocol::control_plane_command::{
     OUTPUT_STANDBY_TAKEOVER_OPERATION_ID, OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID,
     SAFETY_BLACKOUT_ENGAGE_OPERATION_ID, SCENE_CREATE_AUTHORITATIVE_V1_OPERATION_ID,
     SET_EFFECT_ENABLED_OPERATION_ID, TIMELINE_FOLLOW_ABORT_AUTHORITY_QUERY_OPERATION_ID,
-    TIMELINE_FOLLOW_ABORT_OPERATION_ID, TIMELINE_TRANSPORT_AUTHORITY_QUERY_OPERATION_ID,
+    TIMELINE_FOLLOW_ABORT_OPERATION_ID, TIMELINE_LOOP_RUNTIME_AUTHORITY_QUERY_OPERATION_ID,
+    TIMELINE_LOOP_RUNTIME_OPERATION_ID, TIMELINE_TRANSPORT_AUTHORITY_QUERY_OPERATION_ID,
     TIMELINE_TRANSPORT_SET_PLAYING_OPERATION_ID,
 };
 use protocol::control_plane_registry_v2::{
@@ -62,7 +63,7 @@ const KEYBOARD_APP_SHORTCUT_SOURCE_COUNT: usize = 30;
 const KEYBOARD_PROJECT_FILE_SHORTCUT_SOURCE_COUNT: usize = 3;
 const FROZEN_TAURI_ROUTE_ADMISSION_COUNT: usize = 509;
 const FROZEN_TAURI_ROUTE_ADMISSION_SHA256: &str =
-    "81a680d49afb047142cdb5d9d66365739013bd796c0f928088250cc24db53273";
+    "d806e8380462507a590fdd795d5bb21fe9c1bd2bd16f65da725d103af2aa7486";
 /// The command source is parsed and validated exactly once.  Local discovery
 /// calls only clone this immutable, validated value; they never parse source
 /// text or make an external request on the invocation path.
@@ -349,6 +350,7 @@ fn is_tauri_read_only_route(command: &str) -> bool {
             | "query_output_control_authority_v1"
             | "query_output_lease_authority_v1"
             | "query_timeline_follow_abort_authority_v1"
+            | "query_timeline_loop_runtime_authority_v1"
             | "query_timeline_transport_authority_v1"
             | "remote_access_urls"
             | "remote_control_status"
@@ -445,7 +447,7 @@ fn is_tauri_runtime_mutation(command: &str) -> bool {
             | "reselect_asio_output_profile"
             | "revalidate_asio_program_cue_output"
             | "rotate_dj_link_token"
-            | "scale_timeline_loop"
+            | "commit_timeline_loop_runtime_v1"
             | "seek_direct_child_timeline"
             | "seek_timeline"
             | "seek_timeline_beat"
@@ -488,7 +490,6 @@ fn is_tauri_runtime_mutation(command: &str) -> bool {
             | "set_programmer_fixture_attribute_batch"
             | "set_programmer_group_attribute"
             | "set_programmer_mode"
-            | "set_timeline_loop_enabled"
             | "set_timeline_playing"
             | "set_timeline_transport_playing_runtime_v1"
             | "set_video_layer_audio_monitor_volume"
@@ -1180,6 +1181,7 @@ enum ReviewedCanonicalOperation {
     Query(ReviewedQueryOperation),
     SetEffectEnabled,
     SetTimelineTransportPlaying,
+    CommitTimelineLoopRuntime,
     AbortTimelineFollow,
     EngageSafetyBlackout,
     ReleaseBlackout,
@@ -1213,6 +1215,7 @@ impl ReviewedCanonicalOperation {
             Self::Query(query) => query.operation_id,
             Self::SetEffectEnabled => SET_EFFECT_ENABLED_OPERATION_ID,
             Self::SetTimelineTransportPlaying => TIMELINE_TRANSPORT_SET_PLAYING_OPERATION_ID,
+            Self::CommitTimelineLoopRuntime => TIMELINE_LOOP_RUNTIME_OPERATION_ID,
             Self::AbortTimelineFollow => TIMELINE_FOLLOW_ABORT_OPERATION_ID,
             Self::EngageSafetyBlackout => SAFETY_BLACKOUT_ENGAGE_OPERATION_ID,
             Self::ReleaseBlackout => OUTPUT_BLACKOUT_RELEASE_OPERATION_ID,
@@ -1260,6 +1263,9 @@ fn reviewed_canonical_operation(command: &str) -> Option<ReviewedCanonicalOperat
         "set_effect_enabled" => Some(ReviewedCanonicalOperation::SetEffectEnabled),
         "set_timeline_transport_playing_runtime_v1" => {
             Some(ReviewedCanonicalOperation::SetTimelineTransportPlaying)
+        }
+        "commit_timeline_loop_runtime_v1" => {
+            Some(ReviewedCanonicalOperation::CommitTimelineLoopRuntime)
         }
         "abort_timeline_follow_runtime_v1" => Some(ReviewedCanonicalOperation::AbortTimelineFollow),
         "safety_blackout_engage_v1" => Some(ReviewedCanonicalOperation::EngageSafetyBlackout),
@@ -1375,7 +1381,8 @@ fn canonical_descriptor_for_source(
             AdapterPolicy::LocalWindowAuthoritativeMutation,
             ReceiptPolicy::ExactTerminalReceipt,
         ),
-        ReviewedCanonicalOperation::SetTimelineTransportPlaying => (
+        ReviewedCanonicalOperation::SetTimelineTransportPlaying
+        | ReviewedCanonicalOperation::CommitTimelineLoopRuntime => (
             OperationClass::Mutation,
             vec![
                 OperationCapability::LocalWindowBound,
@@ -1522,6 +1529,7 @@ fn canonical_descriptor_for_source(
         rate_policy: if matches!(
             reviewed,
             ReviewedCanonicalOperation::SetTimelineTransportPlaying
+                | ReviewedCanonicalOperation::CommitTimelineLoopRuntime
                 | ReviewedCanonicalOperation::AbortTimelineFollow
                 | ReviewedCanonicalOperation::EngageSafetyBlackout
                 | ReviewedCanonicalOperation::ReleaseBlackout
@@ -1619,6 +1627,11 @@ fn reviewed_query_operation(command: &str) -> Option<ReviewedQueryOperation> {
         ),
         "query_timeline_transport_authority_v1" => (
             TIMELINE_TRANSPORT_AUTHORITY_QUERY_OPERATION_ID,
+            OperationClass::RuntimeObservation,
+            OperationCapability::RuntimeRead,
+        ),
+        "query_timeline_loop_runtime_authority_v1" => (
+            TIMELINE_LOOP_RUNTIME_AUTHORITY_QUERY_OPERATION_ID,
             OperationClass::RuntimeObservation,
             OperationCapability::RuntimeRead,
         ),
@@ -1749,6 +1762,12 @@ fn descriptor_for_command(operation_id: &str) -> OperationDescriptor {
         return unavailable_descriptor_for_semantic_operation(
             operation_id,
             TIMELINE_TRANSPORT_SET_PLAYING_OPERATION_ID,
+        );
+    }
+    if operation_id == "commit_timeline_loop_runtime_v1" {
+        return unavailable_descriptor_for_semantic_operation(
+            operation_id,
+            TIMELINE_LOOP_RUNTIME_OPERATION_ID,
         );
     }
     if operation_id == "abort_timeline_follow_runtime_v1" {
@@ -2049,6 +2068,14 @@ mod tests {
                 TauriRouteAdmissionClass::RecoveryMaintenance,
             ),
             (
+                "query_timeline_loop_runtime_authority_v1",
+                TauriRouteAdmissionClass::ReadOnly,
+            ),
+            (
+                "commit_timeline_loop_runtime_v1",
+                TauriRouteAdmissionClass::RuntimeMutation,
+            ),
+            (
                 "open_pane_window",
                 TauriRouteAdmissionClass::RuntimeMutation,
             ),
@@ -2197,6 +2224,13 @@ mod tests {
             tauri_route_admission_class("mark_asio_output_transport_revision"),
             None
         );
+        assert!(classes.get("set_timeline_loop_enabled").is_none());
+        assert_eq!(
+            tauri_route_admission_class("set_timeline_loop_enabled"),
+            None
+        );
+        assert!(classes.get("scale_timeline_loop").is_none());
+        assert_eq!(tauri_route_admission_class("scale_timeline_loop"), None);
         let mut counts = std::collections::BTreeMap::new();
         for name in &names {
             let class = tauri_route_admission_class(name)
@@ -2212,11 +2246,11 @@ mod tests {
             counts[&TauriRouteAdmissionClass::BackendAuthoritativeProjectMutation],
             31
         );
-        assert_eq!(counts[&TauriRouteAdmissionClass::ReadOnly], 96);
+        assert_eq!(counts[&TauriRouteAdmissionClass::ReadOnly], 97);
         assert_eq!(counts[&TauriRouteAdmissionClass::ProjectReplacement], 8);
         assert_eq!(counts[&TauriRouteAdmissionClass::ProjectHistory], 3);
         assert_eq!(counts[&TauriRouteAdmissionClass::LocalPhysicalMutation], 6);
-        assert_eq!(counts[&TauriRouteAdmissionClass::RuntimeMutation], 158);
+        assert_eq!(counts[&TauriRouteAdmissionClass::RuntimeMutation], 157);
         assert_eq!(counts[&TauriRouteAdmissionClass::FileExportMutation], 20);
         assert_eq!(counts[&TauriRouteAdmissionClass::SafetyMutation], 1);
         assert_eq!(counts[&TauriRouteAdmissionClass::RecoveryMaintenance], 26);
@@ -2232,7 +2266,7 @@ mod tests {
     fn compiled_handler_and_registry_have_the_exact_same_set() {
         let names = registered_tauri_command_names_from_source(MAIN_RS_SOURCE).unwrap();
         let registry = registry().unwrap();
-        const R0_ALLOWLIST: [&str; 17] = [
+        const R0_ALLOWLIST: [&str; 18] = [
             "syndocal.query.control_plane.registry.v1",
             "syndocal.query.control_plane.canonical_registry.v3",
             "syndocal.query.control_plane.capabilities.v1",
@@ -2249,6 +2283,7 @@ mod tests {
             OUTPUT_DISPLAY_ADD_AUTHORITY_QUERY_OPERATION_ID,
             OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_STATUS_QUERY_OPERATION_ID,
             TIMELINE_FOLLOW_ABORT_AUTHORITY_QUERY_OPERATION_ID,
+            TIMELINE_LOOP_RUNTIME_AUTHORITY_QUERY_OPERATION_ID,
             TIMELINE_TRANSPORT_AUTHORITY_QUERY_OPERATION_ID,
         ];
         assert_eq!(names.len(), FROZEN_TAURI_ROUTE_ADMISSION_COUNT);
@@ -2655,7 +2690,7 @@ mod tests {
         assert_eq!(LEGACY_SOURCE_TOTAL, 1557);
         assert_eq!(SOURCE_TOTAL, 1590);
         assert_eq!(canonical.source_inventory.len(), SOURCE_TOTAL);
-        assert_eq!(canonical.canonical_operations.len(), 44);
+        assert_eq!(canonical.canonical_operations.len(), 46);
 
         let output_control_operations = canonical
             .canonical_operations
@@ -2998,14 +3033,14 @@ mod tests {
                 )
             })
             .collect::<Vec<_>>();
-        assert_eq!(direct.len(), 44);
+        assert_eq!(direct.len(), 46);
         assert_eq!(aliases.len(), FRONTEND_COUNT);
         assert_eq!(internal_steps.len(), 4);
         assert_eq!(structural_routes.len(), 1);
         // The additional atomic Show Spout Reset engine source is deliberately
         // retained as an unclassified engine source; its local Tauri route is
         // the canonical Reset operation.
-        assert_eq!(unclassified.len(), 1092);
+        assert_eq!(unclassified.len(), 1090);
         assert_eq!(support_phases.len(), 0);
         assert_eq!(
             direct.len()
@@ -3197,6 +3232,41 @@ mod tests {
                 .map(|operation| operation.operation_id.as_str()),
             Some(TIMELINE_TRANSPORT_SET_PLAYING_OPERATION_ID)
         );
+        for (source_id, operation_id) in [
+            (
+                "query_timeline_loop_runtime_authority_v1",
+                TIMELINE_LOOP_RUNTIME_AUTHORITY_QUERY_OPERATION_ID,
+            ),
+            (
+                "commit_timeline_loop_runtime_v1",
+                TIMELINE_LOOP_RUNTIME_OPERATION_ID,
+            ),
+        ] {
+            let direct_source = direct
+                .iter()
+                .find(|source| source.source_key.source_id == source_id)
+                .unwrap_or_else(|| panic!("{source_id} must be a direct canonical source"));
+            assert_eq!(
+                canonical
+                    .canonical_operation_for_source(&direct_source.source_key)
+                    .unwrap()
+                    .map(|operation| operation.operation_id.as_str()),
+                Some(operation_id)
+            );
+            let alias_source = aliases
+                .iter()
+                .find(|source| source.source_key.source_id == source_id)
+                .unwrap_or_else(|| {
+                    panic!("frontend {source_id} must retain its canonical alias row")
+                });
+            assert_eq!(
+                canonical
+                    .canonical_operation_for_source(&alias_source.source_key)
+                    .unwrap()
+                    .map(|operation| operation.operation_id.as_str()),
+                Some(operation_id)
+            );
+        }
         let follow_abort_authority_direct = direct
             .iter()
             .find(|source| {
@@ -3363,7 +3433,10 @@ mod tests {
                         OperationCapability::AuthoritativeProjectMutation,
                     ]
                 );
-            } else if operation.operation_id == TIMELINE_TRANSPORT_SET_PLAYING_OPERATION_ID {
+            } else if matches!(
+                operation.operation_id.as_str(),
+                TIMELINE_TRANSPORT_SET_PLAYING_OPERATION_ID | TIMELINE_LOOP_RUNTIME_OPERATION_ID
+            ) {
                 assert_eq!(operation.class, OperationClass::Mutation);
                 assert_eq!(operation.idempotency, OperationIdempotency::Mutating);
                 assert_eq!(

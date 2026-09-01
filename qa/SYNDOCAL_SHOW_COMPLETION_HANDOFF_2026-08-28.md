@@ -4,9 +4,79 @@ Status date: 2026-09-01 JST
 
 This is the concise authoritative resume note for the final show-critical tranche. It supersedes chat-only status, but it does not supersede the detailed acceptance documents named below.
 
+## 2026-09-01 alpha.54 strict loop native checkpoint
+
+Current candidate metadata is `1.2.0-alpha.54` on
+`codex/syndocal-v1.2`, based on upstream-equal parent
+`067d0bbb246ef87d0a6f13f73899d7d0eaba9e01`. Root Timeline loop ON/OFF,
+half, and double now use a dedicated exact-authority request/receipt lane and
+canonical snapshot convergence. MIDI and OSC use the same checked engine
+primitive, with toggle decided inside the worker so two queued edges cannot be
+lost. All full/delta/poll/canonical renderer snapshots pass the same transport,
+loop, and follow generation watermark. Retired fire-and-forget Tauri/engine
+routes are unreachable.
+
+The first full engine run exposed one Guide regression: loop OFF created
+`Break` under the predecessor transport authority and the authority commit then
+retired it. Alpha.54 reissues `Break` only after the successor commits. The
+focused regression passed and the complete engine rerun is `987 passed / 0
+failed / 2 ignored`. Protocol full is `217/217`; focused Syndocal lifecycle is
+`2/2`.
+
+The renderer extraction produces `App-BytuNPGE.js` at `497,905` bytes with no
+Vite chunk advisory. Command dispatch remains statically bound and performs
+invocation-time route/authority capture. App.tsx itself is still oversized; a
+further source split is a P2 maintainability item, not an unreported completion
+claim.
+
+The first native launch exposed and blocked on a stale reviewed-admission
+fingerprint. The strict loop clean break removed two old routes and added two
+new routes, leaving count `509` unchanged but changing the exact name set. The
+frozen fingerprint is now the reviewed current value
+`d806e8380462507a590fdd795d5bb21fe9c1bd2bd16f65da725d103af2aa7486`.
+The new commit is an inner-authority RuntimeMutation with explicit preflight
+dispatch policy; its query is ReadOnly. Canonical registry metadata now proves
+both loop operations as R0 authoritative-runtime operations with exact terminal
+receipts and the same token-bucket/fail-closed contract as transport. The two
+retired direct loop names are asserted absent.
+
+Final gates: control-plane `28/28`, dispatch-fence `1/1`, frontend invoke
+inventory `449`, frontend routing `131` renderer / `31` server-authoritative,
+all five extracted-module checker migrations, strict loop, shared snapshot
+watermark, Timeline block/loop, TypeScript, Rust format, and diff checks pass.
+The strict-loop and snapshot-watermark checkers are first-class package scripts
+inside `check:release`, which the cross-platform CI workflow executes. Their
+source assertions now prove the actual integration-module and shared-ingress
+delegation instead of relying on explanatory App comments. Final independent
+Terra xHigh re-review is `GO`, with P0/P1/P2 `0`.
+The Windows release warning ratchet is baseline `0`, current `0`; no first-party
+or third-party warning remains. Exact Community MSVC `14.44.35207` was pinned
+and first for every Rust/native gate.
+
+The final no-bundle executable is ProductVersion/FileVersion
+`1.2.0-alpha.54`, `62,271,488` bytes, SHA-256
+`9C5D9350D8CF0B615507C1CF02256B540C192294B8D5EA382DC89824996F0693`.
+Exactly one checkout-owned process, PID `72444`, has one responsive maximized
+`Syndocal` window (`1920x1032`). Its status is `準備完了`; neither the owner
+registration inventory failure nor the missing loop dispatch-policy failure is
+present.
+
+Ox was unavailable, so independent Terra xHigh lanes are the documented narrow
+exception. The protected user project `DSF2026-show-alpha51-usb-final.sdc`
+remains untracked and must not be staged or changed. USB-DMX is absent; Art-Net
+was not probed because Unity owns UDP 6454; Spout pixels, physical three-display
+content, and audible PROGRAM/CUE remain unverified for alpha.54. Immutable
+alpha.53 artifacts/evidence remain historical and must not be retargeted.
+
+Workspace inventory at this checkpoint is `148,970,288,441` logical bytes /
+`121,234` files; `target` is `146,215,879,267` bytes / `105,061` files. No files
+were deleted and reclaimed bytes are `0`, because no tracked cleanup harness
+with focused safety tests and an independent exact-target review is eligible.
+Do not substitute manual broad deletion for that missing safety proof.
+
 ## 2026-09-01 alpha.53 source/native checkpoint (three-display placement accepted)
 
-Alpha.53 is the current source checkpoint on `codex/syndocal-v1.2`, based on
+Alpha.53 was the preceding source checkpoint on `codex/syndocal-v1.2`, based on
 upstream-equal parent `9be5479b23b417049c078e24a7e6c3b172fc720e`. The exact
 source commit and alpha.53 executable identity are recorded below. That build
 evidence does not itself accept Timeline UI, three-display, or physical output

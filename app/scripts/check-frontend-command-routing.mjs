@@ -751,6 +751,7 @@ const approvedRawDynamicDispatchers = new Map([
     "invokeTimelineFollowAbortRuntime",
     "invokeProjectPublicationCommand",
     "invokeSafetyBlackoutRuntime",
+    "invokeTimelineLoopRuntime",
     "invokeTimelineTransportRuntime",
   ])],
   [detachedVideoPath, new Set(["invoke"])],
@@ -772,6 +773,10 @@ sourceContract(appText, "const invokeSafetyBlackoutRuntime", "const safetyBlacko
 sourceContract(appText, "const invokeTimelineTransportRuntime", "const timelineTransportRuntime", [
   '"query_timeline_transport_authority_v1"',
   '"set_timeline_transport_playing_runtime_v1"',
+]);
+sourceContract(appText, "const invokeTimelineLoopRuntime", "const refreshTimelineTransportCanonicalSnapshot", [
+  '"query_timeline_loop_runtime_authority_v1"',
+  '"commit_timeline_loop_runtime_v1"',
 ]);
 const publicationDispatcher = sourceContract(
   appText,

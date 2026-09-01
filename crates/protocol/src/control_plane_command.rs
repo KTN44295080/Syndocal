@@ -11,7 +11,7 @@ use serde::{
     de::Error as _, ser::SerializeStruct, Deserialize, Deserializer, Serialize, Serializer,
 };
 
-use crate::EffectId;
+use crate::{EffectId, TimelineLoopScale};
 
 /// The largest integer which can make a round trip through JavaScript JSON
 /// without losing its identity.
@@ -689,6 +689,276 @@ pub const TIMELINE_TRANSPORT_SET_PLAYING_SHAPE_DOMAIN_V1: &[u8] =
 /// unpadded base64url. It deliberately is not an identity claim: the native
 /// adapter retains the owner/window binding server-side.
 pub const TIMELINE_TRANSPORT_AUTHORITY_ID_BYTES: usize = 16;
+
+// ---------------------------------------------------------------------------
+// Runtime-only Timeline loop vertical (AI3-P1).
+//
+// This is intentionally a separate strict wire family from Play/Pause. The
+// established transport V1 payload/receipt bytes remain immutable; a loop
+// capability cannot be replayed as Play/Pause (or the reverse) because it
+// carries the exact `timeline.loop` domain and a distinct opaque authority.
+
+pub const TIMELINE_LOOP_RUNTIME_OPERATION_ID: &str = "syndocal.runtime.timeline.loop.commit.v1";
+pub const TIMELINE_LOOP_RUNTIME_AUTHORITY_QUERY_OPERATION_ID: &str =
+    "syndocal.query.runtime.timeline.loop.authority.v1";
+pub const TIMELINE_LOOP_RUNTIME_DOMAIN_V1: &str = "timeline.loop";
+pub const TIMELINE_LOOP_RUNTIME_SHAPE_DOMAIN_V1: &[u8] =
+    b"syndocal.runtime-control-plane.timeline-loop.command.shape.v1\0";
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TimelineLoopRuntimeFenceV1 {
+    pub project: ProjectMutationFenceV1,
+    pub domain: String,
+    pub source_runtime_epoch: u64,
+    pub source_runtime_generation: u64,
+    pub source_loop_generation: u64,
+    pub source_follow_generation: u64,
+}
+
+impl TimelineLoopRuntimeFenceV1 {
+    pub fn validate(&self) -> Result<(), RuntimeCommandValidationErrorV1> {
+        self.project
+            .validate()
+            .map_err(RuntimeCommandValidationErrorV1::from_authored)?;
+        if self.domain != TIMELINE_LOOP_RUNTIME_DOMAIN_V1 {
+            return Err(RuntimeCommandValidationErrorV1::UnexpectedRuntimeDomain);
+        }
+        if self.source_runtime_epoch == 0
+            || self.source_runtime_epoch > MAX_SAFE_JAVASCRIPT_INTEGER
+            || self.source_runtime_generation == 0
+            || self.source_runtime_generation > MAX_SAFE_JAVASCRIPT_INTEGER
+        {
+            return Err(RuntimeCommandValidationErrorV1::InvalidJavaScriptSafeInteger);
+        }
+        if self.source_loop_generation > MAX_SAFE_JAVASCRIPT_INTEGER
+            || self.source_follow_generation > MAX_SAFE_JAVASCRIPT_INTEGER
+        {
+            return Err(RuntimeCommandValidationErrorV1::InvalidJavaScriptSafeInteger);
+        }
+        Ok(())
+    }
+
+    fn append_canonical_bytes(
+        &self,
+        output: &mut Vec<u8>,
+    ) -> Result<(), RuntimeCommandValidationErrorV1> {
+        self.validate()?;
+        self.project
+            .append_canonical_bytes(output)
+            .map_err(RuntimeCommandValidationErrorV1::from_authored)?;
+        append_ascii(output, &self.domain)
+            .map_err(RuntimeCommandValidationErrorV1::from_authored)?;
+        append_u64(output, self.source_runtime_epoch);
+        append_u64(output, self.source_runtime_generation);
+        append_u64(output, self.source_loop_generation);
+        append_u64(output, self.source_follow_generation);
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TimelineLoopRuntimeAuthorityBundleV1 {
+    pub operation_id: String,
+    pub authority_id: String,
+    pub fence: TimelineLoopRuntimeFenceV1,
+}
+
+impl TimelineLoopRuntimeAuthorityBundleV1 {
+    pub fn validate(&self) -> Result<(), RuntimeCommandValidationErrorV1> {
+        if self.operation_id != TIMELINE_LOOP_RUNTIME_OPERATION_ID {
+            return Err(RuntimeCommandValidationErrorV1::UnexpectedOperationId);
+        }
+        validate_runtime_authority_id(&self.authority_id)?;
+        self.fence.validate()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum TimelineLoopRuntimeActionV1 {
+    SetEnabled { enabled: bool },
+    Scale { scale: TimelineLoopScale },
+}
+
+impl TimelineLoopRuntimeActionV1 {
+    fn append_canonical_bytes(&self, output: &mut Vec<u8>) {
+        match self {
+            Self::SetEnabled { enabled } => {
+                output.push(0);
+                output.push(u8::from(*enabled));
+            }
+            Self::Scale { scale } => {
+                output.push(1);
+                output.push(match scale {
+                    TimelineLoopScale::Half => 0,
+                    TimelineLoopScale::Double => 1,
+                });
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TimelineLoopRuntimeRequestV1 {
+    pub operation_id: String,
+    pub authority_id: String,
+    pub request_id: u64,
+    pub expected_fence: TimelineLoopRuntimeFenceV1,
+    pub action: TimelineLoopRuntimeActionV1,
+}
+
+impl TimelineLoopRuntimeRequestV1 {
+    pub fn validate(&self) -> Result<(), RuntimeCommandValidationErrorV1> {
+        if self.operation_id != TIMELINE_LOOP_RUNTIME_OPERATION_ID {
+            return Err(RuntimeCommandValidationErrorV1::UnexpectedOperationId);
+        }
+        validate_runtime_authority_id(&self.authority_id)?;
+        if self.request_id == 0 || self.request_id > MAX_SAFE_JAVASCRIPT_INTEGER {
+            return Err(RuntimeCommandValidationErrorV1::InvalidRequestId);
+        }
+        self.expected_fence.validate()
+    }
+
+    pub fn canonical_shape_bytes(&self) -> Result<Vec<u8>, RuntimeCommandValidationErrorV1> {
+        self.validate()?;
+        let mut output = Vec::with_capacity(192);
+        append_ascii(&mut output, "timeline_loop_runtime_request_v1")
+            .map_err(RuntimeCommandValidationErrorV1::from_authored)?;
+        append_ascii(&mut output, &self.operation_id)
+            .map_err(RuntimeCommandValidationErrorV1::from_authored)?;
+        append_ascii(&mut output, &self.authority_id)
+            .map_err(RuntimeCommandValidationErrorV1::from_authored)?;
+        append_u64(&mut output, self.request_id);
+        self.expected_fence.append_canonical_bytes(&mut output)?;
+        self.action.append_canonical_bytes(&mut output);
+        Ok(output)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TimelineLoopRuntimeReceiptOutcomeV1 {
+    Applied,
+    NoOp,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TimelineLoopRuntimeReceiptV1 {
+    pub operation_id: String,
+    pub request_id: u64,
+    pub fence_before: TimelineLoopRuntimeFenceV1,
+    pub requested_action: TimelineLoopRuntimeActionV1,
+    pub epoch_after: u64,
+    pub generation_after: u64,
+    /// Snapshot watermark after this command. Unlike the transport pair these
+    /// can legitimately begin at zero before a loop/follow runtime is armed.
+    pub loop_generation_after: u64,
+    pub follow_generation_after: u64,
+    pub shape_sha256: String,
+    pub outcome: TimelineLoopRuntimeReceiptOutcomeV1,
+}
+
+impl TimelineLoopRuntimeReceiptV1 {
+    pub fn validate(&self) -> Result<(), RuntimeCommandValidationErrorV1> {
+        if self.operation_id != TIMELINE_LOOP_RUNTIME_OPERATION_ID {
+            return Err(RuntimeCommandValidationErrorV1::UnexpectedOperationId);
+        }
+        if self.request_id == 0 || self.request_id > MAX_SAFE_JAVASCRIPT_INTEGER {
+            return Err(RuntimeCommandValidationErrorV1::InvalidRequestId);
+        }
+        self.fence_before.validate()?;
+        if self.epoch_after == 0
+            || self.epoch_after > MAX_SAFE_JAVASCRIPT_INTEGER
+            || self.generation_after == 0
+            || self.generation_after > MAX_SAFE_JAVASCRIPT_INTEGER
+        {
+            return Err(RuntimeCommandValidationErrorV1::InvalidJavaScriptSafeInteger);
+        }
+        if self.loop_generation_after > MAX_SAFE_JAVASCRIPT_INTEGER
+            || self.follow_generation_after > MAX_SAFE_JAVASCRIPT_INTEGER
+        {
+            return Err(RuntimeCommandValidationErrorV1::InvalidJavaScriptSafeInteger);
+        }
+        validate_lower_hex_sha256(&self.shape_sha256)
+            .map_err(RuntimeCommandValidationErrorV1::from_authored)?;
+        match self.outcome {
+            TimelineLoopRuntimeReceiptOutcomeV1::NoOp
+                if self.epoch_after != self.fence_before.source_runtime_epoch
+                    || self.generation_after != self.fence_before.source_runtime_generation
+                    || self.loop_generation_after != self.fence_before.source_loop_generation
+                    || self.follow_generation_after
+                        != self.fence_before.source_follow_generation =>
+            {
+                Err(RuntimeCommandValidationErrorV1::InvalidNoOpAuthority)
+            }
+            TimelineLoopRuntimeReceiptOutcomeV1::Applied
+                if next_timeline_transport_authority(
+                    self.fence_before.source_runtime_epoch,
+                    self.fence_before.source_runtime_generation,
+                ) != Some((self.epoch_after, self.generation_after))
+                    || self.loop_generation_after < self.fence_before.source_loop_generation
+                    || self.follow_generation_after
+                        < self.fence_before.source_follow_generation =>
+            {
+                Err(RuntimeCommandValidationErrorV1::InvalidAppliedAuthority)
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TimelineLoopRuntimeRejectionV1 {
+    pub operation_id: String,
+    pub request_id: u64,
+    pub fence_before: TimelineLoopRuntimeFenceV1,
+    pub error: RuntimeCommandErrorV1,
+}
+
+impl TimelineLoopRuntimeRejectionV1 {
+    pub fn validate(&self) -> Result<(), RuntimeCommandValidationErrorV1> {
+        if self.operation_id != TIMELINE_LOOP_RUNTIME_OPERATION_ID {
+            return Err(RuntimeCommandValidationErrorV1::UnexpectedOperationId);
+        }
+        if self.request_id == 0 || self.request_id > MAX_SAFE_JAVASCRIPT_INTEGER {
+            return Err(RuntimeCommandValidationErrorV1::InvalidRequestId);
+        }
+        self.fence_before.validate()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    content = "result",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+pub enum TimelineLoopRuntimeResponseV1 {
+    Receipt(TimelineLoopRuntimeReceiptV1),
+    Rejected(TimelineLoopRuntimeRejectionV1),
+}
+
+impl TimelineLoopRuntimeResponseV1 {
+    pub fn receipt(&self) -> Option<&TimelineLoopRuntimeReceiptV1> {
+        match self {
+            Self::Receipt(receipt) => Some(receipt),
+            Self::Rejected(_) => None,
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), RuntimeCommandValidationErrorV1> {
+        match self {
+            Self::Receipt(receipt) => receipt.validate(),
+            Self::Rejected(rejection) => rejection.validate(),
+        }
+    }
+}
 
 /// The complete server-issued capability required by the local Timeline
 /// transport command.  It intentionally contains no renderer principal,
@@ -4227,6 +4497,80 @@ mod tests {
             json["result"]["error"],
             serde_json::json!({ "code": "conflict" })
         );
+    }
+
+    #[test]
+    fn timeline_loop_runtime_wire_binds_noop_to_all_runtime_watermarks() {
+        let transport = runtime_request();
+        let fence = TimelineLoopRuntimeFenceV1 {
+            project: transport.expected_fence.project,
+            domain: TIMELINE_LOOP_RUNTIME_DOMAIN_V1.to_string(),
+            source_runtime_epoch: 7,
+            source_runtime_generation: 11,
+            source_loop_generation: 13,
+            source_follow_generation: 17,
+        };
+        let request = TimelineLoopRuntimeRequestV1 {
+            operation_id: TIMELINE_LOOP_RUNTIME_OPERATION_ID.to_string(),
+            authority_id: "AAAAAAAAAAAAAAAAAAAAAA".to_string(),
+            request_id: 19,
+            expected_fence: fence.clone(),
+            action: TimelineLoopRuntimeActionV1::Scale {
+                scale: TimelineLoopScale::Half,
+            },
+        };
+        request.validate().unwrap();
+        let encoded = serde_json::to_value(&request).unwrap();
+        assert_eq!(
+            serde_json::from_value::<TimelineLoopRuntimeRequestV1>(encoded.clone()).unwrap(),
+            request
+        );
+        let mut unknown = encoded;
+        unknown
+            .as_object_mut()
+            .unwrap()
+            .insert("principal".to_string(), serde_json::json!("forged"));
+        assert!(serde_json::from_value::<TimelineLoopRuntimeRequestV1>(unknown).is_err());
+
+        let receipt = TimelineLoopRuntimeReceiptV1 {
+            operation_id: TIMELINE_LOOP_RUNTIME_OPERATION_ID.to_string(),
+            request_id: request.request_id,
+            fence_before: fence,
+            requested_action: request.action,
+            epoch_after: 7,
+            generation_after: 11,
+            loop_generation_after: 13,
+            follow_generation_after: 17,
+            shape_sha256: hash('f'),
+            outcome: TimelineLoopRuntimeReceiptOutcomeV1::NoOp,
+        };
+        receipt.validate().unwrap();
+        for drift in ["transport", "loop", "follow"] {
+            let mut invalid = receipt.clone();
+            match drift {
+                "transport" => invalid.generation_after += 1,
+                "loop" => invalid.loop_generation_after += 1,
+                "follow" => invalid.follow_generation_after += 1,
+                _ => unreachable!(),
+            }
+            assert!(invalid.validate().is_err(), "NoOp {drift} drift");
+        }
+
+        let applied = TimelineLoopRuntimeReceiptV1 {
+            epoch_after: 7,
+            generation_after: 12,
+            loop_generation_after: 14,
+            follow_generation_after: 17,
+            outcome: TimelineLoopRuntimeReceiptOutcomeV1::Applied,
+            ..receipt
+        };
+        applied.validate().unwrap();
+        let mut rewound_loop = applied.clone();
+        rewound_loop.loop_generation_after = 12;
+        assert!(rewound_loop.validate().is_err());
+        let mut rewound_follow = applied;
+        rewound_follow.follow_generation_after = 16;
+        assert!(rewound_follow.validate().is_err());
     }
 
     #[test]

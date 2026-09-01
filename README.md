@@ -2,7 +2,7 @@
 
 Syndocal は、DMX照明とVJ映像を同じタイムライン、キュー、BPMクロック、エフェクトソースで駆動するデスクトップ制御ソフトウェアです。
 
-- 製品名: **Syndocal 1.2.0-alpha.53**
+- 製品名: **Syndocal 1.2.0-alpha.54**
 - 開発: **Seraf()のKTN**
 - プロジェクト: **`.sdc`** (可読JSON)
 - Tier 1: Windows 10+ / macOS 12+
@@ -25,10 +25,15 @@ See the [current output acceptance record](qa/DSF2026_SAME_PC_OUTPUT_ACCEPTANCE_
 for execution steps and unverified physical/lease evidence; this boundary is
 not a hardware acceptance claim.
 
-Current product metadata is `1.2.0-alpha.53` on branch
-`codex/syndocal-v1.2`; the alpha.53 native build/window and physical-hardware
-checkpoint are pending at the current source checkpoint. The latest completed
-native evidence is alpha.52 and is bounded in the show handoff. The historical
+Current product metadata is `1.2.0-alpha.54` on branch
+`codex/syndocal-v1.2`. The alpha.54 no-bundle build is warning-free and its
+exact `62,271,488`-byte executable has SHA-256
+`9C5D9350D8CF0B615507C1CF02256B540C192294B8D5EA382DC89824996F0693`.
+Exactly one responsive maximized checkout-owned Syndocal window was verified at
+`1920x1032` with status `準備完了`. Physical USB-DMX, Art-Net, Spout, Display
+content, and audible audio remain separate acceptance gates. The strict loop
+and snapshot-watermark checkers are registered in `check:release`, so the
+cross-platform CI release step runs both. The historical
 alpha.39 native checkpoint used source/docs `HEAD`
 and upstream `ec93e9160da853ad181de70aee4db7b4a75fafbb`, which were equal at
 the build checkpoint. The exact MSVC `14.44.35207` Community linker was pinned
@@ -171,9 +176,9 @@ until after the show because changing ownership/lifecycle boundaries before
 native and venue acceptance is a pre-show risk.
 The earlier alpha.25 DJ session remains historical operational evidence only;
 it was replaced by the verified alpha.32 native process and is not alpha.32 DJ
-acceptance. The release metadata checker expects alpha.39 product and
-installer naming below; that naming does not assert an alpha.39 installer
-exists.
+acceptance. At that historical alpha.32 checkpoint, the then-current release
+metadata checker expected alpha.39 product and installer naming; that naming
+did not assert that an alpha.39 installer existed.
 
 The final alpha.33 source gate passed capture-filtered `71 passed / 0 failed /
 2 ignored`, full no-default-feature `1203 / 0 / 7`, full default-feature
@@ -368,7 +373,7 @@ unaccepted.
 
 CI/Release成果物は次の形式です。
 
-- Windows: `Syndocal_1.2.0-alpha.53_x64-setup.exe` (NSIS)、`Syndocal_1.2.0-alpha.53_x64_ja-JP.msi`
+- Windows: `Syndocal_1.2.0-alpha.54_x64-setup.exe` (NSIS)、`Syndocal_1.2.0-alpha.54_x64_ja-JP.msi`
 - macOS: `.app`、DMG
 - Linux: `.deb`、AppImage
 
