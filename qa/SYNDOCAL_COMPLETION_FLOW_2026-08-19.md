@@ -126,6 +126,24 @@ pre-existing PID-only identity race and the absence of a dedicated
 expected-listener-equals-checkout selftest. StandardRelease Apply remains
 pending until this harness checkpoint is committed and pushed cleanly.
 
+The first Apply on that clean ancestry checkpoint reached the live CDP reader
+and then rejected before sampling with `app-owned output observation must be one
+typed object`. The frontend reader result itself was valid and still reported
+exactly output IDs `3` and `4` as `live_open=true`. The failure came from the
+PowerShell WebSocket helper: successful `ConnectAsync` and `SendAsync`
+`GetResult()` calls each emitted a `VoidTaskResult` into the function output
+stream, combining with the valid observation into a three-element array. Both
+completion values are now explicitly cast to `[void]`; exceptions, response-ID
+filtering, CDP error handling, and disposal remain unchanged. A fake-WebSocket
+dynamic regression proves the evaluator returns exactly one typed observation,
+and a static guard requires both completion calls to stay suppressed. The suite
+now passes `96/96` in both PowerShell editions, both parsers pass, and scoped
+diff checking has only LF-to-CRLF notices. Independent Terra xHigh review is GO
+with P0/P1 `0`; its P2-only note is that stored tests do not separately assert
+Dispose and exception propagation for each Connect/Send/Receive failure, though
+the reviewer independently probed all three. A new clean harness checkpoint is
+required before the next single StandardRelease Apply.
+
 ## 2026-09-01 alpha.52 operator-path and native checkpoint
 
 Alpha.52 is the current show-critical checkpoint. It moves arbitrary Windows

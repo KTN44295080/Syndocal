@@ -1586,23 +1586,29 @@ function Get-ThreeDisplayCdpPageTargets {
   return @($pages)
 }
 
+function New-ThreeDisplayCdpClientWebSocket {
+  # SEAM: deterministic tests replace construction only; the production path
+  # always uses the .NET ClientWebSocket implementation below.
+  return [System.Net.WebSockets.ClientWebSocket]::new()
+}
+
 function Invoke-ThreeDisplayCdpRuntimeEvaluate {
   param(
     [Parameter(Mandatory = $true)][string]$WebSocketDebuggerUrl,
     [Parameter(Mandatory = $true)][string]$Expression
   )
-  $socket = [System.Net.WebSockets.ClientWebSocket]::new()
+  $socket = New-ThreeDisplayCdpClientWebSocket
   $cancellation = [Threading.CancellationTokenSource]::new()
   $cancellation.CancelAfter([TimeSpan]::FromSeconds(15))
   try {
-    $socket.ConnectAsync([Uri]$WebSocketDebuggerUrl, $cancellation.Token).GetAwaiter().GetResult()
+    [void]$socket.ConnectAsync([Uri]$WebSocketDebuggerUrl, $cancellation.Token).GetAwaiter().GetResult()
     $request = [ordered]@{
       id = 1
       method = "Runtime.evaluate"
       params = [ordered]@{ expression = $Expression; awaitPromise = $true; returnByValue = $true }
     } | ConvertTo-Json -Depth 8 -Compress
     $payload = [Text.Encoding]::UTF8.GetBytes($request)
-    $socket.SendAsync([ArraySegment[byte]]::new($payload), [System.Net.WebSockets.WebSocketMessageType]::Text, $true, $cancellation.Token).GetAwaiter().GetResult()
+    [void]$socket.SendAsync([ArraySegment[byte]]::new($payload), [System.Net.WebSockets.WebSocketMessageType]::Text, $true, $cancellation.Token).GetAwaiter().GetResult()
     $buffer = [byte[]]::new(65536)
     while ($true) {
       $stream = [IO.MemoryStream]::new()

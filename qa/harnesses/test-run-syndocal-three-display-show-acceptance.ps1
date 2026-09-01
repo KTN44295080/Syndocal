@@ -49,6 +49,7 @@ $script:SeamNames = @(
   "Get-ThreeDisplayMonitorInventory",
   "Get-ThreeDisplayTopLevelWindows",
   "Get-ThreeDisplayProcessRecord",
+  "New-ThreeDisplayCdpClientWebSocket",
   "Get-ThreeDisplayCdpTransportObservation",
   "Get-ThreeDisplayWindowMetrics",
   "Invoke-WithThreeDisplayPhysicalDpiContext",
@@ -670,6 +671,37 @@ function Invoke-FocusedChecks {
         Assert-Throws { Get-ThreeDisplayProcessAncestorIds -ProcessId ([uint32]5151) -ExpectedAncestorProcessId $script:GoodPid } "invalid or cyclic"
       } finally { Install-GoodWorldSeams -World $script:World }
     } })
+    $checks.Add([pscustomobject]@{ Name = "CDP WebSocket completion values do not leak into the observation result"; Run = {
+      $script:FakeCdpSocket = [pscustomobject]@{
+        response = ([ordered]@{
+          id = 1
+          result = [ordered]@{ result = [ordered]@{ value = [ordered]@{ hello = "world" } } }
+        } | ConvertTo-Json -Depth 8 -Compress)
+      }
+      $script:FakeCdpSocket | Add-Member ScriptMethod ConnectAsync { param($uri, $token) [Threading.Tasks.Task]::CompletedTask }
+      $script:FakeCdpSocket | Add-Member ScriptMethod SendAsync { param($segment, $messageType, $endOfMessage, $token) [Threading.Tasks.Task]::CompletedTask }
+      $script:FakeCdpSocket | Add-Member ScriptMethod ReceiveAsync {
+        param($segment, $token)
+        $bytes = [Text.Encoding]::UTF8.GetBytes([string]$this.response)
+        [Array]::Copy($bytes, 0, $segment.Array, $segment.Offset, $bytes.Length)
+        return [Threading.Tasks.Task[object]]::FromResult([pscustomobject]@{
+          MessageType = [System.Net.WebSockets.WebSocketMessageType]::Text
+          Count = $bytes.Length
+          EndOfMessage = $true
+        })
+      }
+      $script:FakeCdpSocket | Add-Member ScriptMethod Dispose { }
+      Set-TestSeam "New-ThreeDisplayCdpClientWebSocket" { return $script:FakeCdpSocket }
+      try {
+        $values = @(Invoke-ThreeDisplayCdpRuntimeEvaluate -WebSocketDebuggerUrl "ws://127.0.0.1:5189/devtools/page/fake" -Expression "1")
+        $taskValues = @($values | Where-Object { $_ -is [Threading.Tasks.Task] })
+        $passed = ($values.Count -eq 1) -and ($taskValues.Count -eq 0) -and ([string]$values[0].hello -ceq "world")
+        New-Check -Passed $passed -Detail "ConnectAsync and SendAsync completion values are suppressed while the real response remains one typed result"
+      } finally {
+        Remove-Variable FakeCdpSocket -Scope Script -ErrorAction SilentlyContinue
+        Install-GoodWorldSeams -World $script:World
+      }
+    } })
     $checks.Add([pscustomobject]@{ Name = "app-owned self-verified main frontend reader succeeds through the complete transport seam"; Run = {
       $observation = Get-ThreeDisplayExactOutputWindowObservation -Configuration $config
       New-Check -Passed ($observation.schema_version -eq 1 -and $observation.source -eq "app-owned-read-only" -and $observation.outputs[0].output_id -ceq "41" -and $observation.outputs[0].native_window_handle_decimal -ceq "22" -and $script:CdpExpectedAncestorCalls.Count -eq 1 -and $script:CdpExpectedAncestorCalls[0] -eq $script:GoodPid) -Detail "strict canonical string observation returned from one self-verified main reader with the exact checkout PID bound into transport"
@@ -1144,7 +1176,11 @@ function Invoke-FocusedChecks {
        foreach ($token in @("Assert-ThreeDisplayGitEnvironmentSafe", "--no-replace-objects", "ThreeDisplayShowAsioSourceIdentityCount = 70", 'app\src\uiLocalization.ts')) { if (-not $text.Contains($token)) { return New-Check $false "required source/Git authority token $token missing" } }
        if (([regex]::Matches($text, [regex]::Escape("--no-replace-objects")).Count) -ne 4) { return New-Check $false "all four harness Git authority calls must disable refs/replace object substitution" }
        $transport = (Get-Command Get-ThreeDisplayCdpTransportObservation).ScriptBlock.ToString()
-      if ($transport.Contains("api.invoke('get_video_output_window_observation_v1')")) { return New-Check $false "transport bypasses the strict frontend observation reader" }
+       $runtimeEvaluate = (Get-Command Invoke-ThreeDisplayCdpRuntimeEvaluate).ScriptBlock.ToString()
+       $completionLines = @($runtimeEvaluate -split "`r?`n" | Where-Object { $_ -match '\$socket\.(ConnectAsync|SendAsync).*GetResult\(\)' })
+       $suppressedCompletionLines = @($completionLines | Where-Object { $_ -match '^\s*\[void\]\$socket\.(ConnectAsync|SendAsync).*GetResult\(\)\s*$' })
+       if ($completionLines.Count -ne 2 -or $suppressedCompletionLines.Count -ne 2) { return New-Check $false "all CDP ConnectAsync/SendAsync completion values must be explicitly suppressed" }
+       if ($transport.Contains("api.invoke('get_video_output_window_observation_v1')")) { return New-Check $false "transport bypasses the strict frontend observation reader" }
       foreach ($retired in @("plugin:window|get_current_window", "__TAURI_INTERNALS__", "expected_gdi_device_name", "\\.\DISPLAY2", "\\.\DISPLAY3", "\\.\DISPLAY5")) { if ($text.Contains($retired)) { return New-Check $false "retired or hardcoded GDI role authority $retired remains" } }
       New-Check $true "static safety and identity contract present"
     } })

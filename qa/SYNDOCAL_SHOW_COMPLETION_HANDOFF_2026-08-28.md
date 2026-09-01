@@ -129,6 +129,21 @@ for the existing PID-reuse race plus no dedicated expected-listener-equals-root
 selftest. The next safe action is to commit/push this harness checkpoint, then
 perform exactly one new StandardRelease Apply with the new clean HEAD.
 
+That clean-head Apply reached CDP successfully, then rejected before sampling
+because the PowerShell WebSocket evaluator leaked successful ConnectAsync and
+SendAsync `VoidTaskResult` values into its output stream. They combined with the
+otherwise valid app-owned observation into an array; the live observation still
+reported only output IDs `3` and `4`, both open. The two completion values are
+now explicitly suppressed with `[void]`, while transport exceptions, response
+validation, and disposal remain fail-closed. A fake-WebSocket dynamic regression
+requires exactly one typed result and a static contract requires both completion
+calls to remain suppressed. Windows PowerShell and PowerShell 7 each pass
+`96/96`; both parsers and scoped diff checking pass. Independent Terra xHigh
+review is GO with P0/P1 `0`; P2 is limited to no committed per-operation
+Connect/Send/Receive failure-disposal test, which the reviewer nevertheless
+probed independently. Commit and push this checkpoint before the next and only
+StandardRelease Apply retry.
+
 Fresh USB-DMX, Art-Net, Spout, ASIO-device, and physical listening acceptance
 remain open. USB-DMX is absent on this PC; alpha.51 `all_white`/COM3 behavior is
 historical evidence only. The protected user project
