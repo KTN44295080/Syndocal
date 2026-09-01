@@ -1,12 +1,21 @@
-# Syndocal pause / resume authority — 2026-08-26
+# Historical Syndocal pause / resume authority — 2026-08-26
 
-Status: **ALPHA.26 SOURCE-ONLY CHECKPOINT; ALPHA.26 NATIVE BUILD UNBUILT; RUNNING ALPHA.25 DJ SESSION PRESERVED; ALPHA.25 NATIVE/STDRELEASE EVIDENCE HISTORICAL; PUBLIC RELEASE AND PHYSICAL SHOW GATES OPEN**
+Status: **HISTORICAL ALPHA.26 SOURCE-ONLY CHECKPOINT; ALPHA.26 NATIVE BUILD UNBUILT; RUNNING ALPHA.25 DJ SESSION PRESERVED; ALPHA.25 NATIVE/STDRELEASE EVIDENCE HISTORICAL; PUBLIC RELEASE AND PHYSICAL SHOW GATES OPEN**
 
-This is the current resumption contract for the 2026-08-30 performance. The
-current source-only product checkpoint is alpha.26; its native build, artifact
-identity, launch, and native UI acceptance are unbuilt/unverified. The running
-alpha.25 DJ session is preserved as an operational baseline only and is not
-alpha.26 evidence. The historical alpha.25 native and StandardRelease
+## 2026-09-01 alpha.57 source-only current boundary
+
+The current product metadata is `1.2.0-alpha.57` on branch
+`codex/syndocal-v1.2`. This is a source-only checkpoint: no alpha.57 native
+build, launch/window verification, or physical/external acceptance has been
+performed. The older versioned artifacts, processes, device observations, and
+source checkpoints below are immutable historical evidence and must not be
+relabeled as alpha.57 or used as current-source/native acceptance.
+
+This was the resumption contract for the 2026-08-30 performance and is now
+historical. Its source-only product checkpoint was alpha.26; its native build,
+artifact identity, launch, and native UI acceptance were unbuilt/unverified.
+The running alpha.25 DJ session is preserved as an operational baseline only
+and is not alpha.26 evidence. The historical alpha.25 native and StandardRelease
 runner rebind/self-test acceptance are recorded below. Section 34 preserves the historical alpha.24 rearm source/native checkpoint; section 33 preserves the
 historical alpha.23 source checkpoint and
 section 31 preserves the historical alpha.21 native-artifact authority. Section
@@ -64,8 +73,8 @@ commit as the source identity of an already-built binary.
 
 | Layer | Exact authority |
 | --- | --- |
-| Current alpha.26 source-only App structural split | Product metadata is synchronized to `1.2.0-alpha.26` on `codex/syndocal-v1.2`; this source checkpoint has no alpha.26 native build, artifact identity, launch, or native UI acceptance. The running alpha.25 DJ session is preserved only as an operational baseline: Deck 1 showed `More One Night × 動く、動く (Agate Trance&Makina bootleg)`, empty Artist, present Content ID, position revision `149152`, BPM `140`, and `isPlaying=true`; `DJ_TRACK_ACTIVE` event `22bfdf30-94e0-4264-9519-0ae4fba6bd2c` delivery was rejected, leaving FOH `owner— / playing No / track—`. The temporary track had no Timeline mapping; the Timeline Start dropdown remounted to its placeholder after Timeline 1 selection. This fail-closed diagnostic is not HW-4 acceptance; HW-4 remains `0/12`. Screenshot: `C:\TEMP\codex-clipboard-142f581b-eef4-41e9-80fa-a0a79b8c749e.png`, `218629` bytes, SHA-256 `A217E511BD3905DE81148202E2746686CF320665BDAF5931ECEC0C2A9064F653`, LastWrite `2026-08-28 07:10:32 JST`. |
-| Historical alpha.25 source/native and runner acceptance | Product metadata was `1.2.0-alpha.25` on `codex/syndocal-v1.2`; accepted source/native evidence was `566a7101b0d5c9307e8d0efa5ccf499aba3eb404`. Immutable alpha.25 evidence remains separate from the current alpha.26 source checkpoint. Exact MSVC 14.44 was first; `pnpm --dir app tauri build --no-bundle` passed in `3m06s`, first-party warnings `0`; Vite `297` modules, `App-CUUI4pgY.js` `498.21 kB`, `gdtfProfileActions-54y__lyr.js` `3.91 kB`. `target/release/syndocal.exe` was Product/FileVersion `1.2.0-alpha.25`, `59,807,744` bytes, SHA-256 `D42B0A1B245197A76E3D3B5CC45DEEB1C6C33EDE6261C7DA94C34147141239C1`, LastWrite `2026-08-28T06:20:27.6424691+09:00`; PID `83252`, handle `60826240`, title `Syndocal`, responsive. Computer Use at `1920x1032` found the restore button, proving maximized state; native I/O DMX full-width selector/workbench and Setup Lighting/Profile rendering were accepted. `qa/harnesses/run-syndocal-three-display-show-acceptance.ps1` remains the StandardRelease authority at that exact alpha.25 version, size, SHA-256, and source HEAD; PowerShell 7 and Windows PowerShell 5.1 self-tests both passed `88/88`, and syntax passed in both. No Apply or hardware acceptance was run. DJ TCP re-established `.50.2`, but `Untitled.sdc`/mapping was not authoritative; HW-4 remained `0/12`. |
+| Historical alpha.26 source-only App structural split | Product metadata was synchronized to `1.2.0-alpha.26` on `codex/syndocal-v1.2`; this historical source checkpoint had no alpha.26 native build, artifact identity, launch, or native UI acceptance. The running alpha.25 DJ session is preserved only as an operational baseline: Deck 1 showed `More One Night × 動く、動く (Agate Trance&Makina bootleg)`, empty Artist, present Content ID, position revision `149152`, BPM `140`, and `isPlaying=true`; `DJ_TRACK_ACTIVE` event `22bfdf30-94e0-4264-9519-0ae4fba6bd2c` delivery was rejected, leaving FOH `owner— / playing No / track—`. The temporary track had no Timeline mapping; the Timeline Start dropdown remounted to its placeholder after Timeline 1 selection. This fail-closed diagnostic is not HW-4 acceptance; HW-4 remains `0/12`. Screenshot: `C:\TEMP\codex-clipboard-142f581b-eef4-41e9-80fa-a0a79b8c749e.png`, `218629` bytes, SHA-256 `A217E511BD3905DE81148202E2746686CF320665BDAF5931ECEC0C2A9064F653`, LastWrite `2026-08-28 07:10:32 JST`. |
+| Historical alpha.25 source/native and runner acceptance | Product metadata was `1.2.0-alpha.25` on `codex/syndocal-v1.2`; accepted source/native evidence was `566a7101b0d5c9307e8d0efa5ccf499aba3eb404`. Immutable alpha.25 evidence remains separate from the historical alpha.26 source checkpoint. Exact MSVC 14.44 was first; `pnpm --dir app tauri build --no-bundle` passed in `3m06s`, first-party warnings `0`; Vite `297` modules, `App-CUUI4pgY.js` `498.21 kB`, `gdtfProfileActions-54y__lyr.js` `3.91 kB`. `target/release/syndocal.exe` was Product/FileVersion `1.2.0-alpha.25`, `59,807,744` bytes, SHA-256 `D42B0A1B245197A76E3D3B5CC45DEEB1C6C33EDE6261C7DA94C34147141239C1`, LastWrite `2026-08-28T06:20:27.6424691+09:00`; PID `83252`, handle `60826240`, title `Syndocal`, responsive. Computer Use at `1920x1032` found the restore button, proving maximized state; native I/O DMX full-width selector/workbench and Setup Lighting/Profile rendering were accepted. `qa/harnesses/run-syndocal-three-display-show-acceptance.ps1` remains the StandardRelease authority at that exact alpha.25 version, size, SHA-256, and source HEAD; PowerShell 7 and Windows PowerShell 5.1 self-tests both passed `88/88`, and syntax passed in both. No Apply or hardware acceptance was run. DJ TCP re-established `.50.2`, but `Untitled.sdc`/mapping was not authoritative; HW-4 remained `0/12`. |
 | Historical alpha.24 Timeline Follow source/native | Product metadata was `1.2.0-alpha.24`; committed/pushed, upstream-equal source was `5eb1888906613851c4c49e66717a270f13bbd7b5`; actual DjLink clock handoff only, enabled/unfenced eligible Follow, no seek/play/jump or authored mutation, exactly one Follow admission at the next natural boundary; authored non-Cut first-measure hold alone uses one source measure and installs a runtime-only destination first-measure hold (5/4 proof); `target/release/syndocal.exe` was `59,803,136` bytes, SHA-256 `8FF5CF6670F592DFFE53477E8E14BF95CD3FCF81916FC23CAD58E7354763874D`, PID `63016`, exactly one responsive maximized window; physical acceptance remained open |
 | Historical alpha.23 output-routing / Setup I/O / frontend source | Product metadata was `1.2.0-alpha.23`; committed/pushed, upstream-equal source is `5e7d27df7f5864449d4838782f6eca2f9b81d360`; no alpha.23 native artifact was built |
 | Historical alpha.22 Scene-authority source | Product metadata is `1.2.0-alpha.22`; committed/pushed source is `cc201ad40927f0631236680392025f81e51c6130`; no alpha.22 native artifact was built |
@@ -89,7 +98,7 @@ commit as the source identity of an already-built binary.
 | Cleanup directional ownership repair and final Plan | `0b8a992f9389e39fc07a53e9fb74b7fa1f20368b` (pushed; supersedes the prior `c40cfd8` cleanup authority) |
 | This final documentation publication | The pushed commit containing this file; resolve with `git log -1 --format=%H -- qa/SYNDOCAL_PAUSE_HANDOFF_2026-08-26.md`. A self-hash is intentionally not embedded. |
 
-Branch: `codex/syndocal-v1.2`. Current product metadata is `1.2.0-alpha.26`;
+Branch: `codex/syndocal-v1.2`. At that historical checkpoint, product metadata was `1.2.0-alpha.26`;
 this is a source-only checkpoint with no accepted alpha.26 native artifact or
 source/native identity. The running alpha.25 DJ session is preserved as an
 operational baseline only; its historical source/native and runner evidence is
@@ -399,7 +408,7 @@ Independent Ox results:
 - Current target inventory is `205,883,610,246` logical bytes, `135,967` files,
   `16,377` directories including root, and `0` reparse points.
 
-### Current post-alpha.25 cleanup Plan (2026-08-28)
+### Historical post-alpha.25 cleanup Plan (2026-08-28)
 
 - After alpha.25, branch `codex/syndocal-v1.2` was clean and upstream-equal at
   exact `HEAD`/upstream `aaccd77e445e027544bbf57e46280bc10bd30cdf`.
@@ -682,7 +691,7 @@ whole-file rewrite before the show. New work must extract one owned domain at a
 time behind existing contracts, beginning with the smallest show-critical seam
 that otherwise requires touching these files.
 
-## 10. Preserved Git state and resumption order
+## 10. Historical preserved Git state and resumption order
 
 - Companion worktree:
   `C:\Users\kouty\Documents\KDMX-asio-persistence`, branch
@@ -700,7 +709,7 @@ that otherwise requires touching these files.
 - Preserved stashes:
   `stash@{0}` alpha.9 validation checkpoint and `stash@{1}` orphaned Open-DMX
   pacing WIP. Do not drop or apply them without a separate adjudication.
-- Current alpha.17 source checkpoint
+- Historical alpha.17 source checkpoint
   `fb5d18fdf898a1435bed173ddd17934a04a97897`; alpha.16, alpha.15, DVC
   controller, and alpha.14 entries remain historical checkpoint-chain records.
   The rb-output v1.1.7/v1.1.6 entries are likewise historical. The DJ peer tip
@@ -709,7 +718,10 @@ that otherwise requires touching these files.
 - The historical exact standard alpha.14 process and window identities are in
   section 3. Re-resolve them on resume; do not assume PID/HWND stability.
 
-Resume in this order:
+The following resume order was historical and is superseded by the alpha.57
+source-only boundary above:
+
+Resume in that historical order:
 
 1. Read this file, `qa/ASIO_INPUT_ACCEPTANCE.md`, and the DJ acceptance table.
 2. Recheck main/companion/DJ branch, HEAD, upstream, dirty ownership, stashes,
@@ -1792,7 +1804,7 @@ reconnect, and three-display evidence remain unverified; this checkpoint does
 not claim final completion. The historical alpha.24 native build and
 maximized-window gate are complete; the historical alpha.25 source/native and
 StandardRelease runner rebind/self-test acceptance are complete, while the
-current alpha.26 native build and remaining Apply/hardware/show gates are open.
+historical alpha.26 native build and remaining Apply/hardware/show gates were open.
 
 ## 34. 2026-08-28 historical alpha.24 Timeline Follow rearm source/native checkpoint
 
@@ -1843,7 +1855,7 @@ Physical DJ/MIDI/pedal acceptance, HW-4, and real-output acceptance remain
 unverified. This is not a final-completion claim; the remaining physical/show
 gates are open.
 
-## 35. 2026-08-28 current alpha.26 source-only checkpoint — v1.1.9 owner-selection recovery
+## 35. 2026-08-28 historical alpha.26 source-only checkpoint — v1.1.9 owner-selection recovery
 
 This tranche carries the source-only `1.2.0-alpha.26` product checkpoint and
 current App structural split. Alpha.26 native build, artifact identity, launch,
@@ -1929,7 +1941,7 @@ four moved exports, PS5.1/PS7 parsing of all six migration blocks, the corrected
 non-causal `SYNDOCAL_TOKEN` wording, and the preserved HW-4 `0/12` boundary.
 Native and hardware acceptance remain explicitly unclaimed.
 
-## 36. 2026-08-28 alpha.26 DJ Link workbench draft-continuity checkpoint
+## 36. 2026-08-28 historical alpha.26 DJ Link workbench draft-continuity checkpoint
 
 The DJ Link Start Timeline selector reset was traced to the shared I/O deck
 remounting the selected workbench whenever live connection status rebuilt the
@@ -1971,7 +1983,7 @@ promote any HW-4 row. HW-4 remains exactly **0/12**. The next non-destructive
 hardware action is to load the existing mapped `Demo Track 2` on Deck 1 and
 observe Track Active/Timeline ownership before touching the pedal.
 
-## 37. 2026-08-28 current alpha.26 UI source-only fence checkpoint
+## 37. 2026-08-28 historical alpha.26 UI source-only fence checkpoint
 
 This source/UI tranche started from
 `fbeee4209d53c63b4cbd67527e49d8bf911acfaa` and is committed and pushed on

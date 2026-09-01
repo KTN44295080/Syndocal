@@ -4,6 +4,7 @@ import { groupIdentityCss, groupIdentityHue } from "../identityColor";
 import { displayNumber } from "../numberDisplay";
 import type {
   MediaAssetAvailability,
+  MediaAssetId,
   MediaAssetSummary,
   TimelineLayerKind,
   TimelineLayerSummary,
@@ -21,7 +22,10 @@ import {
   timelineSourceShelfCueOptionsMatchAuthority,
   type TimelineSourceShelfBankView,
 } from "../timelineSceneBlocks";
-import { resolveTimelineExternalLayer } from "../timelineExternalDropRuntime";
+import {
+  mediaAssetAvailabilityAllowsTimelinePlacement,
+  resolveTimelineExternalLayer,
+} from "../timelineExternalDropRuntime";
 import { translateUiText, type UiLocale } from "../uiLocalization";
 import type { TimelineSceneBlockCueOption } from "./TimelineSceneBlocksEditor";
 
@@ -34,6 +38,8 @@ export interface TimelineSourceShelfProps {
   uiLocale: UiLocale;
   mediaAssets: MediaAssetSummary[];
   mediaAssetAvailabilityById: Record<number, MediaAssetAvailability>;
+  /** The App-owned machine-local inspection authority; never a Shelf-local probe. */
+  onVerify: (assetIds: MediaAssetId[]) => void | Promise<void>;
   timelineLayers: TimelineLayerSummary[];
   positionMs: number;
   snapTimeMs: (timeMs: number) => number;
@@ -62,13 +68,10 @@ const mediaAssetAvailabilityLabel = (availability: MediaAssetAvailability | unde
     case "missing": return "Missing";
     case "hash_mismatch": return "Hash mismatch";
     case "unreadable": return "Unreadable";
-    case "live_source": return "Live source";
-    default: return "Not verified";
+    case "live_source": return "Live source · inspected";
+    default: return "Verify before placement";
   }
 };
-
-const mediaAssetPlacementAllowed = (availability: MediaAssetAvailability | undefined) =>
-  availability === undefined || availability.kind === "available_verified" || availability.kind === "available_unverified";
 
 const mediaTimelineSourceLabel = (asset: MediaAssetSummary, laneKind: "Video" | "Audio") =>
   mediaAssetHasVideo(asset) && mediaAssetHasAudio(asset)
@@ -235,7 +238,7 @@ export function TimelineSourceShelf(props: TimelineSourceShelfProps) {
     }
     if (payload.kind === "media_asset") {
       const asset = props.mediaAssets.find((candidate) => candidate.id === payload.media_asset_id);
-      if (asset && !mediaAssetPlacementAllowed(props.mediaAssetAvailabilityById[asset.id])) {
+      if (asset && !mediaAssetAvailabilityAllowsTimelinePlacement(props.mediaAssetAvailabilityById[asset.id])) {
         props.onStatus(localizedSourceText(`Media Asset ${asset.label} is unavailable for Timeline placement.`));
         return;
       }
@@ -260,6 +263,14 @@ export function TimelineSourceShelf(props: TimelineSourceShelfProps) {
     if (!payload || (payload.kind === "scene" && bankAuthority().issue !== null)) {
       event.preventDefault();
       return;
+    }
+    if (payload.kind === "media_asset") {
+      const asset = props.mediaAssets.find((candidate) => candidate.id === payload.media_asset_id);
+      if (asset && !mediaAssetAvailabilityAllowsTimelinePlacement(props.mediaAssetAvailabilityById[asset.id])) {
+        event.preventDefault();
+        props.onStatus(localizedSourceText(`Media Asset ${asset.label} is unavailable for Timeline placement.`));
+        return;
+      }
     }
     setTimelineExternalDragPayload(event, payload);
   };
@@ -415,7 +426,7 @@ export function TimelineSourceShelf(props: TimelineSourceShelfProps) {
       </Show>
       <Show when={sourceContextMode() === "sources" && sourceShelfTab() === "Media Library"}>
         <div id="timeline-source-context-panel-media" role="tabpanel" aria-labelledby="timeline-source-context-tab-sources" class="timelineExternalSourceShelfBody" aria-label="Media Library">
-          <div class="timelineExternalSourceShelfFilters" role="group" aria-label="Media source filter">
+          <div class="timelineExternalSourceShelfFilters" role="group" aria-label={localizedSourceText("Media source filters and verification")}>
             <For each={["All", "Video", "Audio"] as const}>
               {(filter) => (
                 <button
@@ -427,6 +438,13 @@ export function TimelineSourceShelf(props: TimelineSourceShelfProps) {
                 >{filter}</button>
               )}
             </For>
+            <button
+              type="button"
+              disabled={props.mediaAssets.length === 0}
+              data-timeline-source-media-verify-all
+              title={localizedSourceText("Verify machine-local Media Library availability before Timeline placement")}
+              onClick={() => void props.onVerify(props.mediaAssets.map((asset) => asset.id))}
+            >{localizedSourceText("Verify All")}</button>
           </div>
           {renderMediaNoLaneStatus("Video")}
           {renderMediaNoLaneStatus("Audio")}
@@ -434,23 +452,41 @@ export function TimelineSourceShelf(props: TimelineSourceShelfProps) {
           <Show when={mediaShelfAssets().length > 0} fallback={<p class="emptyState">No matching Media Library sources.</p>}>
             <div class="timelineExternalSourceShelfItems">
               <For each={mediaShelfAssets()}>
-                {(asset) => (
-                  <article class="timelineExternalSourceCard media" data-timeline-source-media-id={asset.id}>
+                {(asset) => {
+                  const availability = () => props.mediaAssetAvailabilityById[asset.id];
+                  const placementAllowed = () => mediaAssetAvailabilityAllowsTimelinePlacement(availability());
+                  const availabilityIsError = () => {
+                    const kind = availability()?.kind;
+                    return kind === "missing" || kind === "hash_mismatch" || kind === "unreadable";
+                  };
+                  const placementTitle = (laneKind: "Video" | "Audio") => placementAllowed()
+                    ? `Drag to a ${laneKind} Timeline lane${mediaTimelineSourceDescription(asset, laneKind)}; click to place at the playhead`
+                    : `Verify ${asset.label} before placing it on the Timeline`;
+                  return <article class="timelineExternalSourceCard media" data-timeline-source-media-id={asset.id}>
                     <div class="timelineExternalSourceCardTitle">
                       <strong data-no-localize>{asset.label}</strong>
-                      <small>{mediaAssetAvailabilityLabel(props.mediaAssetAvailabilityById[asset.id])}</small>
+                      <small
+                        data-timeline-source-media-availability={availability()?.kind ?? "unverified"}
+                        role={availabilityIsError() ? "alert" : "status"}
+                      >{localizedSourceText(mediaAssetAvailabilityLabel(availability()))}</small>
                     </div>
                     <div class="timelineExternalSourceCardActions">
+                      <button
+                        type="button"
+                        data-timeline-source-media-verify={asset.id}
+                        title={localizedSourceText(`Verify ${asset.label} on this machine`)}
+                        onClick={() => void props.onVerify([asset.id])}
+                      >{localizedSourceText("Verify")}</button>
                       <Show when={mediaAssetHasVideo(asset)}>
                         <button
                           type="button"
-                          draggable={true}
-                          disabled={!mediaAssetPlacementAllowed(props.mediaAssetAvailabilityById[asset.id])}
+                          draggable={placementAllowed()}
+                          disabled={!placementAllowed()}
                           data-timeline-external-source="media_asset"
                           data-timeline-external-source-kind="Video"
                           data-timeline-source-media-kind="Video"
                           aria-label={localizedSourceText(`Drag media ${asset.label} to a Video lane${mediaTimelineSourceDescription(asset, "Video")}`)}
-                          title={localizedSourceText(`Drag to a Video Timeline lane${mediaTimelineSourceDescription(asset, "Video")}; click to place at the playhead`)}
+                          title={localizedSourceText(placementTitle("Video"))}
                           onDragStart={(event) => startSourceShelfDrag(event, mediaPayload(asset, "Video"))}
                           onClick={() => placeSourceShelfPayload(mediaPayload(asset, "Video"))}
                         >{mediaTimelineSourceLabel(asset, "Video")}</button>
@@ -458,13 +494,13 @@ export function TimelineSourceShelf(props: TimelineSourceShelfProps) {
                       <Show when={mediaAssetHasAudio(asset)}>
                         <button
                           type="button"
-                          draggable={true}
-                          disabled={!mediaAssetPlacementAllowed(props.mediaAssetAvailabilityById[asset.id])}
+                          draggable={placementAllowed()}
+                          disabled={!placementAllowed()}
                           data-timeline-external-source="media_asset"
                           data-timeline-external-source-kind="Audio"
                           data-timeline-source-media-kind="Audio"
                           aria-label={localizedSourceText(`Drag media ${asset.label} to an Audio lane${mediaTimelineSourceDescription(asset, "Audio")}`)}
-                          title={localizedSourceText(`Drag to an Audio Timeline lane${mediaTimelineSourceDescription(asset, "Audio")}; click to place at the playhead`)}
+                          title={localizedSourceText(placementTitle("Audio"))}
                           onDragStart={(event) => startSourceShelfDrag(event, mediaPayload(asset, "Audio"))}
                           onClick={() => placeSourceShelfPayload(mediaPayload(asset, "Audio"))}
                         >{mediaTimelineSourceLabel(asset, "Audio")}</button>
@@ -474,7 +510,7 @@ export function TimelineSourceShelf(props: TimelineSourceShelfProps) {
                       </Show>
                     </div>
                   </article>
-                )}
+                }}
               </For>
             </div>
           </Show>

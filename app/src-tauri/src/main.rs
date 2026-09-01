@@ -7263,6 +7263,104 @@ fn inspect_media_asset_availability_batch(
     )
 }
 
+/// Hash every candidate-local source before the replacement locks are taken.
+/// Holding the project coordinator across filesystem I/O would deadlock the
+/// replacement contract. The resulting verdicts are therefore merely
+/// prepared here; `publish_project_media_asset_availability_bootstrap_after_ack`
+/// binds them to the exact engine presentation identity after publication.
+fn prepare_project_media_asset_availability_bootstrap(
+    snapshot: &EngineSnapshot,
+) -> Result<Vec<MediaAssetAvailability>, String> {
+    let assets = media_asset_catalog_for_snapshot(snapshot);
+    if assets.is_empty() {
+        return Ok(Vec::new());
+    }
+    let asset_ids = assets.iter().map(|asset| asset.id).collect::<Vec<_>>();
+    let cancel = AtomicBool::new(false);
+    inspect_media_asset_availability_batch(assets, &asset_ids, true, &cancel)
+}
+
+fn media_asset_availability_is_runtime_available(verdict: &MediaAssetAvailability) -> bool {
+    matches!(
+        verdict,
+        MediaAssetAvailability::AvailableVerified { .. }
+            | MediaAssetAvailability::LiveSource { .. }
+    )
+}
+
+fn media_asset_availability_asset_id(verdict: &MediaAssetAvailability) -> MediaAssetId {
+    match verdict {
+        MediaAssetAvailability::AvailableVerified { asset_id }
+        | MediaAssetAvailability::AvailableUnverified { asset_id }
+        | MediaAssetAvailability::Missing { asset_id }
+        | MediaAssetAvailability::HashMismatch { asset_id, .. }
+        | MediaAssetAvailability::Unreadable { asset_id, .. }
+        | MediaAssetAvailability::LiveSource { asset_id } => *asset_id,
+    }
+}
+
+/// Local filesystem verdicts are not project errors, but a negative verdict
+/// must be observable in the same authoritative load reply that installed the
+/// project. Do not collapse mismatch/unreadable into "missing": the operator
+/// needs the true fail-closed reason before choosing Verify/Relink.
+fn append_project_media_asset_availability_warnings(
+    warnings: &mut Vec<String>,
+    snapshot: &EngineSnapshot,
+    verdicts: &[MediaAssetAvailability],
+) {
+    let assets = media_asset_catalog_for_snapshot(snapshot);
+    for verdict in verdicts {
+        let asset_id = media_asset_availability_asset_id(verdict);
+        let label = assets
+            .iter()
+            .find(|asset| asset.id == asset_id)
+            .map(|asset| asset.label.as_str())
+            .unwrap_or("Unnamed media asset");
+        let detail = match verdict {
+            MediaAssetAvailability::AvailableVerified { .. }
+            | MediaAssetAvailability::LiveSource { .. } => continue,
+            MediaAssetAvailability::AvailableUnverified { .. } => "could not be hash-verified",
+            MediaAssetAvailability::Missing { .. } => "is missing on this machine",
+            MediaAssetAvailability::HashMismatch { .. } => {
+                "does not match this project's recorded content hash"
+            }
+            MediaAssetAvailability::Unreadable { error, .. } => error.as_str(),
+        };
+        warnings.push(format!(
+            "Local media asset '{label}' ({asset_id}) is unavailable: {detail}"
+        ));
+    }
+}
+
+/// After the engine ACK has made a new project authoritative, apply only the
+/// candidate's already hash-verified verdicts to that exact runtime identity.
+/// A later project/video publication changes the engine token and rejects this
+/// batch rather than allowing A's asset IDs to affect B.
+fn publish_project_media_asset_availability_bootstrap_after_ack(
+    state: &AppState,
+    verdicts: &[MediaAssetAvailability],
+) -> Result<(), String> {
+    if verdicts.is_empty() {
+        return Ok(());
+    }
+    let expected_video_presentation_config_token = state.engine.video_presentation_config_token();
+    let availability = verdicts
+        .iter()
+        .map(|verdict| {
+            (
+                media_asset_availability_asset_id(verdict),
+                media_asset_availability_is_runtime_available(verdict),
+            )
+        })
+        .collect();
+    state
+        .engine
+        .set_media_asset_availability_batch_for_video_presentation(
+            expected_video_presentation_config_token,
+            availability,
+        )
+}
+
 fn inspect_media_asset_availability_batch_with_entry_hook(
     assets: &[MediaAssetSummary],
     asset_ids: &[MediaAssetId],
@@ -23156,6 +23254,10 @@ struct ProjectSwapAncillaryState {
 #[derive(Debug, Clone)]
 struct PreparedProjectLoad {
     snapshot: EngineSnapshot,
+    /// Exact machine-local verdicts prepared from this candidate image. They
+    /// remain outside the project file and are admitted only after the engine
+    /// publishes this image under its runtime presentation identity.
+    media_asset_availability_bootstrap: Vec<MediaAssetAvailability>,
     ancillary: ProjectSwapAncillaryState,
     mappings: ProjectControlMappings,
     authority_disposition: ProjectAuthorityDisposition,
@@ -25317,7 +25419,8 @@ fn external_output_command_requires_local_r4(command: &EngineCommand) -> Option<
         | EngineCommand::BootstrapVjShowWithAllocatedAssets { .. }
         | EngineCommand::SaveVideoOutputMappingPreset { .. }
         | EngineCommand::RemoveVideoOutputMappingPreset { .. }
-        | EngineCommand::SetMediaAssetAvailability { .. } => None,
+        | EngineCommand::SetMediaAssetAvailability { .. }
+        | EngineCommand::SetMediaAssetAvailabilityBatch { .. } => None,
     }
 }
 
@@ -63329,6 +63432,13 @@ fn prepare_project_load(
     validate_dj_track_triggers_against_snapshot(&mappings.dj_track_triggers, &project.snapshot)?;
     validate_project_file(&project)?;
     let mut warnings = project_validation_warnings(&project);
+    let media_asset_availability_bootstrap =
+        prepare_project_media_asset_availability_bootstrap(&project.snapshot)?;
+    append_project_media_asset_availability_warnings(
+        &mut warnings,
+        &project.snapshot,
+        &media_asset_availability_bootstrap,
+    );
     if legacy_dj_transition_discarded {
         warnings.push(
             "Legacy dj_transition mapping was ignored; configure DJ Link track triggers instead"
@@ -63353,6 +63463,7 @@ fn prepare_project_load(
         .collect();
     Ok(PreparedProjectLoad {
         snapshot: project.snapshot,
+        media_asset_availability_bootstrap,
         ancillary: ProjectSwapAncillaryState {
             custom_profiles,
             fixture_groups: project.fixture_groups,
@@ -64283,6 +64394,19 @@ where
     // preflighted and is deliberately infallible; do not claim a rollback
     // after this point because the published snapshot is authoritative.
     reset_project_runtime_after_published_snapshot_infallible(state);
+    // The expensive byte proof ran against this prepared candidate before we
+    // entered the coordinator. Now bind only that exact verdict batch to the
+    // just-ACKed engine presentation identity. A post-ACK rejection or queue
+    // fault cannot undo the authoritative load; keep its local-file failure
+    // visible in the reply instead of manufacturing a false rollback.
+    if let Err(error) = publish_project_media_asset_availability_bootstrap_after_ack(
+        state,
+        &prepared.media_asset_availability_bootstrap,
+    ) {
+        prepared.result.warnings.push(format!(
+            "Project loaded, but local media availability remains fenced until Verify All succeeds: {error}"
+        ));
+    }
     if let Some(candidate) = output_lease_candidate {
         if let Some(registry) = lease_registry_guard.as_mut() {
             commit_project_replacement_output_lease_after_ack(registry, candidate);
@@ -100739,6 +100863,82 @@ pub(crate) mod tests {
             inspect_one_media_asset_availability(&asset, true, &cancel).unwrap(),
             MediaAssetAvailability::AvailableVerified { asset_id: 1 }
         );
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn project_media_availability_bootstrap_hashes_candidate_assets_and_keeps_negative_verdicts_visible(
+    ) {
+        let directory = unique_test_directory("project-media-availability-bootstrap");
+        fs::create_dir_all(&directory).unwrap();
+        let verified_path = directory.join("verified.bin");
+        let mismatch_path = directory.join("mismatch.bin");
+        fs::write(&verified_path, b"abc").unwrap();
+        fs::write(&mismatch_path, b"xyz").unwrap();
+        let sha256_abc = MediaContentHash {
+            algorithm: MediaHashAlgorithm::Sha256,
+            hex: format!("{:x}", Sha256::digest(b"abc")),
+        };
+        let mut snapshot = EngineSnapshot::default();
+        snapshot.video.media_assets = vec![
+            media_asset_availability_test_asset(
+                1,
+                VideoSourceKind::File,
+                Some(verified_path.to_string_lossy().to_string()),
+                Some(sha256_abc.clone()),
+                Some(3),
+            ),
+            media_asset_availability_test_asset(
+                2,
+                VideoSourceKind::File,
+                Some(directory.join("missing.bin").to_string_lossy().to_string()),
+                Some(sha256_abc.clone()),
+                Some(3),
+            ),
+            media_asset_availability_test_asset(
+                3,
+                VideoSourceKind::File,
+                Some(mismatch_path.to_string_lossy().to_string()),
+                Some(sha256_abc),
+                Some(3),
+            ),
+            media_asset_availability_test_asset(4, VideoSourceKind::Camera, None, None, None),
+        ];
+
+        let verdicts = prepare_project_media_asset_availability_bootstrap(&snapshot).unwrap();
+        assert!(matches!(
+            verdicts[0],
+            MediaAssetAvailability::AvailableVerified { asset_id: 1 }
+        ));
+        assert!(matches!(
+            verdicts[1],
+            MediaAssetAvailability::Missing { asset_id: 2 }
+        ));
+        assert!(matches!(
+            verdicts[2],
+            MediaAssetAvailability::HashMismatch { asset_id: 3, .. }
+        ));
+        assert!(matches!(
+            verdicts[3],
+            MediaAssetAvailability::LiveSource { asset_id: 4 }
+        ));
+        assert_eq!(
+            verdicts
+                .iter()
+                .map(media_asset_availability_is_runtime_available)
+                .collect::<Vec<_>>(),
+            vec![true, false, false, true],
+            "only verified bytes and live sources may be admitted to runtime projection"
+        );
+        let mut warnings = Vec::new();
+        append_project_media_asset_availability_warnings(&mut warnings, &snapshot, &verdicts);
+        assert_eq!(warnings.len(), 2);
+        assert!(warnings
+            .iter()
+            .any(|warning| warning.contains("missing on this machine")));
+        assert!(warnings
+            .iter()
+            .any(|warning| warning.contains("recorded content hash")));
         let _ = fs::remove_dir_all(&directory);
     }
 

@@ -57,6 +57,18 @@ const mediaAssetHasVideo = (asset: MediaAssetSummary) =>
 const mediaAssetHasAudio = (asset: MediaAssetSummary) => asset.source.metadata?.has_audio === true;
 
 /**
+ * Timeline placement is a machine-local admission decision. An omitted
+ * availability entry is not a permissive default: the current machine has not
+ * inspected that source yet. `live_source` is issued only by that inspection
+ * for a non-file source and is therefore an explicit admission too.
+ */
+export const mediaAssetAvailabilityAllowsTimelinePlacement = (
+  availability: MediaAssetAvailability | undefined,
+) => availability?.kind === "available_verified"
+  || availability?.kind === "available_unverified"
+  || availability?.kind === "live_source";
+
+/**
  * Shared production orchestration for external Timeline sources.  It owns
  * exact lane/companion resolution; callers only provide the authoritative
  * snapshot and the existing backend-backed insert/scene callbacks.
@@ -103,8 +115,10 @@ export const executeTimelineExternalDrop = async (
     return false;
   }
   const availability = availabilityById[asset.id];
-  if (availability && availability.kind !== "available_verified" && availability.kind !== "available_unverified") {
-    reject(`Media Asset ${asset.label} is unavailable for Timeline placement (${availability.kind}).`);
+  if (!mediaAssetAvailabilityAllowsTimelinePlacement(availability)) {
+    reject(availability
+      ? `Media Asset ${asset.label} is unavailable for Timeline placement (${availability.kind}).`
+      : `Media Asset ${asset.label} is unavailable for Timeline placement.`);
     return false;
   }
   const hasVideo = mediaAssetHasVideo(asset);

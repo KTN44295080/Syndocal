@@ -1,8 +1,17 @@
 # DSF2026 same-PC output acceptance — current 2026-09-01
 
-## 2026-09-01 alpha.51 Timeline authority / pedal-wait native and S0 checkpoint
+## 2026-09-01 alpha.57 source-only current boundary
 
-Product metadata is synchronized at `1.2.0-alpha.51` on
+The current product metadata is `1.2.0-alpha.57` on branch
+`codex/syndocal-v1.2`. This is a source-only checkpoint: no alpha.57 native
+build, launch/window verification, or physical/external acceptance has been
+performed. The older versioned artifacts, processes, device observations, and
+source checkpoints below are immutable historical evidence and must not be
+relabeled as alpha.57 or used as current-source/native acceptance.
+
+## Historical 2026-09-01 alpha.51 Timeline authority / pedal-wait native and S0 checkpoint
+
+At that historical checkpoint, product metadata was `1.2.0-alpha.51` on
 `codex/syndocal-v1.2`, which was clean and pushed/upstream-equal at
 `4f67dbf108dc17825979731435f844a5cb57311c` before this evidence-only update.
 The exact Community MSVC
@@ -76,7 +85,7 @@ observation from before `04:35:10 JST` to greater than `34m38s`. It does not
 claim electrical waveform or fixture receipt, and the attached F3200A remains
 all-512-zero-only.
 
-## 2026-09-01 alpha.50 USB-DMX continuous S0 checkpoint
+## Historical 2026-09-01 alpha.50 USB-DMX continuous S0 checkpoint
 
 The exact Community MSVC `14.44.35207` no-bundle build passed with the
 Community linker first in `where.exe`, the same absolute linker pinned for
@@ -233,7 +242,8 @@ are intermediate observations, not electrical wire or fixture proof:
 
 - [x] Explicitly select and confirm the venue USB-DMX device/protocol on the
       show PC: `COM3`, PnP instance
-      `FTDIBUS\VID_0403+PID_6001+A&A5D719&0&8\0000`, alpha.50 artifact above.
+      `FTDIBUS\VID_0403+PID_6001+A&A5D719&0&8\0000`, historical alpha.50
+      artifact above.
 - [x] Engage S0 and record the initial all-zero USB-DMX frame queue plus the
       enabled Art-Net U0 route. This is not electrical or datagram delivery proof.
 - [x] For the selected Open-DMX worker, observe completion of BREAK, MAB,
@@ -610,7 +620,7 @@ Terra xHigh review found one stale Setup I/O fixture and a missing publication
 rollback proof; both were repaired before the focused rerun. Ox was not
 callable, so this is the documented narrow review exception.
 
-The alpha.35 source, carried unchanged by the current alpha.39
+The alpha.35 source, carried unchanged by the historical alpha.39
 checkpoint, adds three independent
 Universe-0 isolation fences:
 activation rejects any pre-existing U0 input before creating a sender; active
@@ -667,7 +677,7 @@ native build/window gate is historical as recorded above; Unity/GPU physical
 checks remain open, while the alpha.39 native build/window and selector/UI
 evidence is recorded at the top.
 
-The alpha.35 hardening, carried unchanged by the current alpha.39
+The alpha.35 hardening, carried unchanged by the historical alpha.39
 checkpoint, closes the remaining
 first-physical-frame
 boundary. Each fixed worker must send cached 1920×1080 opaque-black RGBA,
@@ -707,7 +717,7 @@ Historical alpha.38 changes Timeline CUE transport/Guide authority only; it does
 the strict Art-Net route, fixed Spout pair, or their activation/retirement
 contracts. The latest direct Spout matrix therefore remains the historical
 alpha.37 evidence above. The alpha.38 normal native/window gate is historical,
-and the current alpha.39 native checkpoint does not change the strict
+and the historical alpha.39 native checkpoint does not change the strict
 Art-Net or fixed Spout path. The Art-Net, Spout, and Unity/GPU physical rows
 remain explicitly unaccepted.
 

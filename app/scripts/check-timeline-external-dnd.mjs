@@ -161,7 +161,26 @@ const avAsset = {
   label: "Show MP4",
   source: { kind: "File", metadata: { duration_ms: 1000, width: 1920, height: 1080, has_audio: true } },
 };
+const inspectedLiveAsset = {
+  ...avAsset,
+  source: { kind: "Camera", metadata: { duration_ms: 1000, width: 1920, height: 1080, has_audio: true } },
+};
 const availableVerified = { 7: { kind: "available_verified", asset_id: 7 } };
+for (const [availability, expected] of [
+  [undefined, false],
+  [{ kind: "available_verified", asset_id: 7 }, true],
+  [{ kind: "available_unverified", asset_id: 7 }, true],
+  [{ kind: "live_source", asset_id: 7 }, true],
+  [{ kind: "missing", asset_id: 7 }, false],
+  [{ kind: "hash_mismatch", asset_id: 7, expected: { algorithm: "Sha256", hex: "a" }, actual: { algorithm: "Sha256", hex: "b" } }, false],
+  [{ kind: "unreadable", asset_id: 7, error: "unreadable" }, false],
+]) {
+  assert.equal(
+    dropRuntime.mediaAssetAvailabilityAllowsTimelinePlacement(availability),
+    expected,
+    `Timeline media availability admission changed for ${availability?.kind ?? "undefined"}`,
+  );
+}
 const sceneIds = new Set([12]);
 let insertCalls = 0;
 let insertRequest = null;
@@ -347,7 +366,6 @@ for (const availability of [
   { kind: "missing", asset_id: 7 },
   { kind: "hash_mismatch", asset_id: 7, expected: { algorithm: "Sha256", hex: "a" }, actual: { algorithm: "Sha256", hex: "b" } },
   { kind: "unreadable", asset_id: 7, error: "unreadable" },
-  { kind: "live_source", asset_id: 7 },
 ]) {
   assert.equal(await dropRuntime.executeTimelineExternalDrop(
     mediaVideo,
@@ -365,7 +383,7 @@ for (const availability of [
   ), false);
 }
 assert.equal(unavailableInsertCalls, 0, "unavailable media must not reach the production insert adapter");
-assert.equal(rejected, 6);
+assert.equal(rejected, 5);
 
 let unverifiedInsertCalls = 0;
 assert.equal(await dropRuntime.executeTimelineExternalDrop(
@@ -380,7 +398,21 @@ assert.equal(await dropRuntime.executeTimelineExternalDrop(
 ), true);
 assert.equal(unverifiedInsertCalls, 1);
 
+let liveSourceInsertCalls = 0;
+assert.equal(await dropRuntime.executeTimelineExternalDrop(
+  mediaVideo,
+  layers[0],
+  layers,
+  [inspectedLiveAsset],
+  sceneIds,
+  0,
+  { insertMedia: () => { liveSourceInsertCalls += 1; return true; }, placeScene: () => {}, reject },
+  { 7: { kind: "live_source", asset_id: 7 } },
+), true);
+assert.equal(liveSourceInsertCalls, 1, "an inspected live source reaches the production insert adapter");
+
 let notCheckedInsertCalls = 0;
+let notCheckedStatus = null;
 assert.equal(await dropRuntime.executeTimelineExternalDrop(
   mediaVideo,
   layers[0],
@@ -388,9 +420,14 @@ assert.equal(await dropRuntime.executeTimelineExternalDrop(
   [avAsset],
   sceneIds,
   0,
-  { insertMedia: () => { notCheckedInsertCalls += 1; return true; }, placeScene: () => {}, reject },
-), true);
-assert.equal(notCheckedInsertCalls, 1, "not-yet-inspected media remains placeable but is labeled not verified in the shelf");
+  {
+    insertMedia: () => { notCheckedInsertCalls += 1; return true; },
+    placeScene: () => {},
+    reject: (message) => { notCheckedStatus = message; },
+  },
+), false, "not-yet-inspected media must fail closed before the production insert adapter");
+assert.equal(notCheckedInsertCalls, 0);
+assert.equal(notCheckedStatus, "Media Asset Show MP4 is unavailable for Timeline placement.");
 
 let noOpInsertCalls = 0;
 assert.equal(await dropRuntime.executeTimelineExternalDrop(
@@ -578,12 +615,12 @@ const runtimeCases = [
   { source: mediaVideo, target: { ...layers[0], locked: true }, layers, assets: [avAsset], scenes: sceneIds, availability: undefined, expected: "Timeline lane Video A is locked. No source was placed." },
   { source: scene, target: layers[2], layers, assets: [], scenes: new Set(), availability: undefined, expected: "Scene 12 is no longer available." },
   { source: { ...mediaVideo, media_asset_id: 99 }, target: layers[0], layers, assets: [avAsset], scenes: sceneIds, availability: undefined, expected: "Media Asset 99 is no longer available." },
+  { source: mediaVideo, target: layers[0], layers, assets: [avAsset], scenes: sceneIds, availability: undefined, expected: "Media Asset Show MP4 is unavailable for Timeline placement." },
   { source: mediaVideo, target: layers[0], layers, assets: [avAsset], scenes: sceneIds, availability: { 7: { kind: "missing", asset_id: 7 } }, expected: "Media Asset Show MP4 is unavailable for Timeline placement (missing)." },
   { source: mediaVideo, target: layers[0], layers, assets: [avAsset], scenes: sceneIds, availability: { 7: { kind: "hash_mismatch", asset_id: 7, expected: { algorithm: "Sha256", hex: "a" }, actual: { algorithm: "Sha256", hex: "b" } } }, expected: "Media Asset Show MP4 is unavailable for Timeline placement (hash_mismatch)." },
   { source: mediaVideo, target: layers[0], layers, assets: [avAsset], scenes: sceneIds, availability: { 7: { kind: "unreadable", asset_id: 7, error: "unreadable" } }, expected: "Media Asset Show MP4 is unavailable for Timeline placement (unreadable)." },
-  { source: mediaVideo, target: layers[0], layers, assets: [avAsset], scenes: sceneIds, availability: { 7: { kind: "live_source", asset_id: 7 } }, expected: "Media Asset Show MP4 is unavailable for Timeline placement (live_source)." },
-  { source: mediaVideo, target: layers[0], layers, assets: [{ ...avAsset, source: { ...avAsset.source, metadata: { duration_ms: 1000, has_audio: true } } }], scenes: sceneIds, availability: undefined, expected: "Video source is unavailable for Show MP4." },
-  { source: mediaVideo, target: { id: 14, label: "Video B", order: 1, muted: false, locked: false, solo: false, kind: "Video" }, layers, assets: [avAsset], scenes: sceneIds, availability: undefined, expected: "Selected Video Timeline lane is no longer available." },
+  { source: mediaVideo, target: layers[0], layers, assets: [{ ...avAsset, source: { ...avAsset.source, metadata: { duration_ms: 1000, has_audio: true } } }], scenes: sceneIds, availability: availableVerified, expected: "Video source is unavailable for Show MP4." },
+  { source: mediaVideo, target: { id: 14, label: "Video B", order: 1, muted: false, locked: false, solo: false, kind: "Video" }, layers, assets: [avAsset], scenes: sceneIds, availability: availableVerified, expected: "Selected Video Timeline lane is no longer available." },
 ];
 const expectedJapanese = new Map([
   ["This Timeline drop is not a recognized source.", "このタイムラインドロップは認識されたソースではありません。"],
@@ -592,10 +629,10 @@ const expectedJapanese = new Map([
   ["Timeline lane Video A is locked. No source was placed.", "タイムラインレーン Video A はロックされています。ソースは配置されませんでした。"],
   ["Scene 12 is no longer available.", "シーン 12 は利用できなくなりました。"],
   ["Media Asset 99 is no longer available.", "メディア素材 99 は利用できなくなりました。"],
+  ["Media Asset Show MP4 is unavailable for Timeline placement.", "メディア素材 Show MP4 はタイムラインに配置できません。"],
   ["Media Asset Show MP4 is unavailable for Timeline placement (missing).", "メディア素材 Show MP4 はタイムラインに配置できません（見つかりません）。"],
   ["Media Asset Show MP4 is unavailable for Timeline placement (hash_mismatch).", "メディア素材 Show MP4 はタイムラインに配置できません（コンテンツハッシュが一致しません）。"],
   ["Media Asset Show MP4 is unavailable for Timeline placement (unreadable).", "メディア素材 Show MP4 はタイムラインに配置できません（読み取れません）。"],
-  ["Media Asset Show MP4 is unavailable for Timeline placement (live_source).", "メディア素材 Show MP4 はタイムラインに配置できません（ライブソースです）。"],
   ["Video source is unavailable for Show MP4.", "映像ソースは Show MP4 では利用できません。"],
   ["Selected Video Timeline lane is no longer available.", "選択した映像タイムラインレーンは利用できなくなりました。"],
 ]);

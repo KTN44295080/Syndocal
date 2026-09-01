@@ -29521,11 +29521,105 @@ const timelineSourceShelfMediaRequestMatches = (request, prepared, expectedVideo
   Number.isFinite(request.start_ms),
 );
 
+const timelineSourceShelfAvailabilityCaptureMatches = (capture, assetId) => {
+  const start = capture?.availabilityStartArgs;
+  const inspect = capture?.availabilityInspectArgs;
+  return Array.isArray(capture?.availabilityCommands)
+    && capture.availabilityCommands.length === 2
+    && capture.availabilityCommands[0] === 'start_media_asset_availability_operation'
+    && capture.availabilityCommands[1] === 'inspect_reserved_media_asset_availability'
+    && Number.isSafeInteger(start?.requestId)
+    && start.requestId > 0
+    && start.expectedEpoch === 0
+    && typeof start.ownerId === 'string'
+    && start.ownerId === capture?.ownerRegistrationArgs?.ownerId
+    && inspect?.requestId === start.requestId
+    && inspect?.ownerId === start.ownerId
+    && inspect?.expectedEpoch === start.expectedEpoch
+    && inspect?.operationGeneration === 1
+    && inspect?.verifyHash === true
+    && Array.isArray(inspect?.assetIds)
+    && inspect.assetIds.length === 1
+    && inspect.assetIds[0] === assetId;
+};
+
+// The browser fixture starts with no machine-local file verdict just like a
+// freshly opened project.  This trusted gesture is the explicit test-only
+// equivalent of the Shelf's per-asset Verify action; it does not bypass the
+// App handler or write a synthetic availability record into the DOM.
+async function verifyTimelineSourceShelfMediaForPlacement(client) {
+  const target = await client.evaluate(`(async () => {
+    const shelf = document.querySelector('[data-timeline-source-shelf]');
+    const category = shelf?.querySelector('[data-timeline-source-shelf-category="media"]');
+    if (!(category instanceof HTMLButtonElement)) return { verified: false, reason: 'missing-media-category' };
+    category.click();
+    await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    const verify = shelf?.querySelector('[data-timeline-source-media-verify]');
+    if (!(verify instanceof HTMLButtonElement) || verify.disabled) {
+      return { verified: false, reason: 'missing-enabled-media-verify' };
+    }
+    verify.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+    const card = verify.closest('article[data-timeline-source-media-id]');
+    const assetId = Number(card?.getAttribute('data-timeline-source-media-id'));
+    const rect = verify.getBoundingClientRect();
+    const placementButtons = [...(card?.querySelectorAll('[data-timeline-external-source-kind]') ?? [])];
+    const unverified = card?.querySelector('[data-timeline-source-media-availability]')?.getAttribute('data-timeline-source-media-availability') === 'unverified';
+    const placementButtonsDisabled = placementButtons.length > 0 && placementButtons.every((button) => (
+      button instanceof HTMLButtonElement && button.disabled && button.draggable === false
+    ));
+    const preVerifyPlacementCommands = (window.__syndocalTimelineSourceProductionCapture?.commands ?? []).filter((command) => (
+      command === 'begin_project_transaction' || command === 'apply_timeline_advanced_authoritative'
+    ));
+    return Number.isSafeInteger(assetId) && assetId > 0 && rect.width > 0 && rect.height > 0
+      ? {
+        verified: false,
+        assetId,
+        x: rect.left + rect.width / 2,
+        y: rect.top + rect.height / 2,
+        unverified,
+        placementButtonsDisabled,
+        preVerifyPlacementCommands,
+      }
+      : { verified: false, reason: 'invalid-media-verify-target' };
+  })()`);
+  if (!Number.isSafeInteger(target?.assetId) || !Number.isFinite(target?.x) || !Number.isFinite(target?.y)) return target;
+  await client.send('Input.dispatchMouseEvent', {
+    type: 'mousePressed', x: target.x, y: target.y,
+    button: 'left', buttons: 1, clickCount: 1,
+  });
+  await client.send('Input.dispatchMouseEvent', {
+    type: 'mouseReleased', x: target.x, y: target.y,
+    button: 'left', buttons: 0, clickCount: 1,
+  });
+  try {
+    await waitForClientCondition(
+      client,
+      `document.querySelector('[data-timeline-source-media-id="${target.assetId}"] [data-timeline-source-media-availability="available_verified"]')`,
+      `Timeline Sources media ${target.assetId} verified availability`,
+    );
+  } catch (error) {
+    const diagnostic = await client.evaluate(`(() => ({
+      availability: document.querySelector('[data-timeline-source-media-id="${target.assetId}"] [data-timeline-source-media-availability]')?.getAttribute('data-timeline-source-media-availability') ?? null,
+      status: document.querySelector('.appStatusText')?.textContent ?? null,
+      capture: window.__syndocalTimelineSourceProductionCapture?.commands ?? [],
+    }))()`);
+    throw new Error(`${String(error)}; diagnostic=${JSON.stringify(diagnostic)}`);
+  }
+  return { ...target, verified: true };
+}
+
 async function exerciseTimelineSourceShelfMediaClickPlacement(client) {
   const captureInstalled = await installTimelineSourceShelfProductionCapture(client);
+  const availability = await verifyTimelineSourceShelfMediaForPlacement(client);
+  if (!availability?.verified) {
+    const capture = await finishTimelineSourceShelfProductionCapture(client);
+    return { passed: false, captureInstalled, availability, prepared: null, capture: null };
+  }
   const prepared = await prepareTimelineSourceShelfMediaPlacement(client);
   if (!prepared?.prepared) {
-    return { passed: false, captureInstalled, prepared, capture: null };
+    await finishTimelineSourceShelfProductionCapture(client);
+    return { passed: false, captureInstalled, availability, prepared, capture: null };
   }
   await client.send('Input.dispatchMouseEvent', {
     type: 'mousePressed', x: prepared.x, y: prepared.y,
@@ -29541,9 +29635,15 @@ async function exerciseTimelineSourceShelfMediaClickPlacement(client) {
   return {
     passed: Boolean(
       captureInstalled &&
+      availability.assetId === prepared.mediaAssetId &&
+      availability.unverified === true &&
+      availability.placementButtonsDisabled === true &&
+      availability.preVerifyPlacementCommands?.length === 0 &&
+      timelineSourceShelfAvailabilityCaptureMatches(capture, availability.assetId) &&
       prepared.disclosureProofPassed === true &&
       timelineSourceShelfMediaRequestMatches(request, prepared),
     ),
+    availability,
     prepared,
     capture,
     request,
@@ -29552,9 +29652,15 @@ async function exerciseTimelineSourceShelfMediaClickPlacement(client) {
 
 async function exerciseTimelineSourceShelfMediaDragPlacement(client) {
   const captureInstalled = await installTimelineSourceShelfProductionCapture(client);
+  const availability = await verifyTimelineSourceShelfMediaForPlacement(client);
+  if (!availability?.verified) {
+    await finishTimelineSourceShelfProductionCapture(client);
+    return { passed: false, captureInstalled, availability, prepared: null, capture: null, dragProbe: null };
+  }
   const prepared = await prepareTimelineSourceShelfMediaPlacement(client);
   if (!prepared?.prepared) {
-    return { passed: false, captureInstalled, prepared, capture: null, dragProbe: null };
+    await finishTimelineSourceShelfProductionCapture(client);
+    return { passed: false, captureInstalled, availability, prepared, capture: null, dragProbe: null };
   }
   await armTimelineSourceShelfMediaDragProbe(client);
   const points = [
@@ -29608,6 +29714,11 @@ async function exerciseTimelineSourceShelfMediaDragPlacement(client) {
   return {
     passed: Boolean(
       captureInstalled &&
+      availability.assetId === prepared.mediaAssetId &&
+      availability.unverified === true &&
+      availability.placementButtonsDisabled === true &&
+      availability.preVerifyPlacementCommands?.length === 0 &&
+      timelineSourceShelfAvailabilityCaptureMatches(capture, availability.assetId) &&
       prepared.disclosureProofPassed === true &&
       dragProbe.dragstart === 1 &&
       dragProbe.dragend === 1 &&
@@ -29618,6 +29729,7 @@ async function exerciseTimelineSourceShelfMediaDragPlacement(client) {
       payload?.audio_layer_id === prepared.audioLayerId &&
       timelineSourceShelfMediaRequestMatches(request, prepared, prepared.dragVideoLayerId),
     ),
+    availability,
     prepared,
     dragProbe,
     payload,
@@ -29990,6 +30102,7 @@ async function installTimelineSourceShelfProductionCapture(client) {
       startupCommands: [],
       backgroundCommands: [],
       transactionCommands: [],
+      availabilityCommands: [],
       phase: 'await-owner-registration',
       ownerRegistrationArgs: null,
       ownerRegistrationResult: 'unanswered',
@@ -29999,6 +30112,8 @@ async function installTimelineSourceShelfProductionCapture(client) {
       mediaArgs: null,
       commitArgs: null,
       acknowledgeArgs: null,
+      availabilityStartArgs: null,
+      availabilityInspectArgs: null,
       eventId: null,
       snapshot: null,
     };
@@ -30057,6 +30172,44 @@ async function installTimelineSourceShelfProductionCapture(client) {
           capture.ownerRegistrationResult = null;
           capture.phase = 'await-program-audio-handoff';
           return null;
+        }
+        // Availability inspection is read-only and may begin immediately
+        // after owner registration, before the independently scheduled
+        // Program Audio configuration settles. Keep it outside the placement
+        // transaction inventory while requiring the exact reservation wire.
+        if (command === 'start_media_asset_availability_operation') {
+          const requestId = Number(args?.requestId);
+          if (!Number.isSafeInteger(requestId) || requestId <= 0 || Number(args?.expectedEpoch) !== 0 || typeof args?.ownerId !== 'string') {
+            throw new Error('Timeline Sources availability start received an invalid read-only request.');
+          }
+          capture.availabilityCommands.push(command);
+          capture.availabilityStartArgs = clone(args);
+          return {
+            request_id: requestId,
+            operation_generation: 1,
+            project_epoch: 0,
+            project_revision: 0,
+            checkpoint_hash: '',
+          };
+        }
+        if (command === 'inspect_reserved_media_asset_availability') {
+          const requestId = Number(args?.requestId);
+          const assetIds = Array.isArray(args?.assetIds) ? args.assetIds : [];
+          if (!Number.isSafeInteger(requestId) || requestId <= 0 || Number(args?.operationGeneration) !== 1
+            || args?.verifyHash !== true || Number(args?.expectedEpoch) !== 0
+            || !assetIds.every((assetId) => Number.isSafeInteger(assetId) && assetId > 0)) {
+            throw new Error('Timeline Sources availability inspect received an invalid reserved request.');
+          }
+          capture.availabilityCommands.push(command);
+          capture.availabilityInspectArgs = clone(args);
+          return {
+            request_id: requestId,
+            operation_generation: 1,
+            project_epoch: 0,
+            project_revision: 0,
+            checkpoint_hash: '',
+            availability: assetIds.map((assetId) => ({ kind: 'available_verified', asset_id: assetId })),
+          };
         }
         if (capture.phase === 'await-program-audio-handoff') {
           if (command !== 'set_program_audio_handoff_config') {

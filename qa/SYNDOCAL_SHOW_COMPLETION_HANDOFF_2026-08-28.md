@@ -4,6 +4,48 @@ Status date: 2026-09-01 JST
 
 This is the concise authoritative resume note for the final show-critical tranche. It supersedes chat-only status, but it does not supersede the detailed acceptance documents named below.
 
+## 2026-09-01 alpha.57 media-admission source checkpoint
+
+Current product metadata is `1.2.0-alpha.57` on `codex/syndocal-v1.2`, based on
+upstream-equal parent `73df6c9db759ada763ab36a17fb55576fabf7fed`. The old
+Timeline Media Library could show a file-backed asset without proving that its
+current machine-local bytes matched the project identity. Alpha.57 adds
+localized per-asset and batch Verify actions and routes both click and drag
+through one fail-closed admission predicate. Missing, unreadable, hash-mismatched,
+unknown, or not-yet-inspected media cannot be placed; no filename or device-name
+fallback is accepted.
+
+The native project-load path now hashes file-backed candidate media before the
+project mutation locks are taken, then publishes the complete availability set
+only under the exact post-ACK video-presentation authority. It stages B
+privately, publishes the B snapshot, commits the B map under that snapshot
+guard, and only then acknowledges. Publication failure preserves exact A;
+duplicate, foreign, missing, or token-mismatched batches are zero-mutation.
+Cross-lock access uses one `snapshot -> availability` order. Independent Terra
+xHigh review is GO with P0/P1/P2 `0`; review first found and then verified the
+closure of early-B exposure and an ABBA deadlock. Final exact MSVC 14.44 engine
+proof is focused `7/7` and full `1002 passed / 0 failed / 2 ignored` in
+`236.48s`, warnings `0`. Frontend reruns pass Timeline external DnD, Timeline
+Source Shelf at all five supported viewports, and TypeScript, warnings `0`.
+The no-default app project-load bootstrap test is `1/1`; its sole warning is
+pre-existing in unchanged `control_plane_runtime.rs`, so modified files remain
+at warnings `0`.
+
+The local-only complete-show alpha53 derivative now starts the fixed foreground
+composition in an exact full-duration `[0, 3008)` loop. Its current identity is
+`target/qa/DSF2026-show-alpha53-complete-show.sdc`, `1,112,369` bytes, SHA-256
+`46D79EEA2A0562D4CB385F4BA9AA6E721FC741D081533D95DA073EB2099F016E`.
+Generation tests, strict verify-only, and the show structural preflight pass.
+The superseded black-first-frame artifact was retained recoverably under its
+identity-bearing `.old-black-first-frame.72B51207.sdc` name. This remains a
+same-PC QA specimen, not a portable release bundle.
+
+No alpha.57 native build or hardware acceptance has occurred. The current
+running process is the historical alpha.56 executable. USB-DMX is physically
+absent, exact MiraBox is absent, and audible PROGRAM/CUE still requires an
+operator. Three-display pixels must be re-armed and checked after the alpha.57
+native build. These boundaries must remain open in the next handoff.
+
 ## 2026-09-01 alpha.56 terminal loop/Follow source checkpoint
 
 Current metadata is `1.2.0-alpha.56` on `codex/syndocal-v1.2`. The source commit
@@ -259,11 +301,15 @@ short same-Timeline retry window. No authority or mutation is affected.
 
 The exact alpha.53 local three-display QA derivative is generated and verified
 by `qa/harnesses/derive-dsf2026-alpha53-complete-show.mjs`. It preserves two
-ordinary Display outputs and three compositions and changes only the four
-mirrored Scene Block duration fields to `81153 ms`. Its output
-`target/qa/DSF2026-show-alpha53-complete-show.sdc` is `1,112,332` bytes,
+ordinary Display outputs and three compositions, restores the four mirrored
+Scene Block duration fields to `81153 ms`, and starts the fixed foreground
+layer in an exact full-duration `[0, 3008)` loop. Its output
+`target/qa/DSF2026-show-alpha53-complete-show.sdc` is `1,112,369` bytes,
 SHA-256
-`72B5120740580A16907B1C1C3A2CD14F995829C6CB837F332F2473501A789C53`.
+`46D79EEA2A0562D4CB385F4BA9AA6E721FC741D081533D95DA073EB2099F016E`.
+The superseded black-first-frame artifact was moved recoverably to
+`target/qa/DSF2026-show-alpha53-complete-show.old-black-first-frame.72B51207.sdc`;
+it was not deleted and is not an accepted current specimen.
 It is a same-PC exact QA specimen only: fixed `C:\Users\kouty` and absolute SDC
 media paths make portable/release use fail closed until explicit relink and
 re-verification.

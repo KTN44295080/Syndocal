@@ -27987,6 +27987,7 @@ export default function App() {
                 uiLocale={uiLocale()}
                 mediaAssets={snapshot().video.media_assets}
                 mediaAssetAvailabilityById={mediaAssetAvailabilityById()}
+                onVerify={inspectMediaAssetIds}
                 timelineLayers={timelineLayers()}
                 positionMs={activeTimeline().position_ms}
                 snapTimeMs={snapTimeMs}

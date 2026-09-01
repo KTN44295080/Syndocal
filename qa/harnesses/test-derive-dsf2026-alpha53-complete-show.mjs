@@ -7,6 +7,7 @@ import {
   ALLOWED_CHANGED_PATHS,
   CANONICAL_AUTHORITY_PATH,
   CURRENT_MEDIA_SOURCE_PATH,
+  FIXED_FOREGROUND_DURATION_MS,
   EXPECTED_DURATION_MS,
   OUTPUT_PATH,
   deriveCompleteShowProject,
@@ -28,8 +29,62 @@ assert.equal(derived.output.snapshot.timeline_bank[0].events[1].duration_ms, EXP
 assert.deepEqual(derived.output.snapshot.video.outputs, currentProject.snapshot.video.outputs);
 assert.deepEqual(derived.output.snapshot.video.compositions, currentProject.snapshot.video.compositions);
 assert.deepEqual(derived.output.snapshot.video.media_assets, currentProject.snapshot.video.media_assets);
+const sourceForeground = currentProject.snapshot.video.layers[2];
+const derivedForeground = derived.output.snapshot.video.layers[2];
+assert.equal(derivedForeground.id, 3);
+assert.equal(derivedForeground.media_asset_id, 5);
+assert.equal(derivedForeground.state.playing, true);
+assert.equal(derivedForeground.state.loop_enabled, true);
+assert.equal(derivedForeground.state.loop_start_ms, 0);
+assert.equal(derivedForeground.state.loop_end_ms, FIXED_FOREGROUND_DURATION_MS);
+assert.equal(derivedForeground.state.position_ms, sourceForeground.state.position_ms);
+assert.equal(derivedForeground.clip_slots.length, 1);
+assert.equal(derivedForeground.default_clip_slot_id, 3);
+assert.equal(derivedForeground.clip_slots[0].loop_mode, "Loop");
+assert.equal(derivedForeground.clip_slots[0].in_point_ms, 0);
+assert.equal(derivedForeground.clip_slots[0].out_point_ms, FIXED_FOREGROUND_DURATION_MS);
+const expectedForeground = structuredClone(sourceForeground);
+expectedForeground.state.playing = true;
+expectedForeground.state.loop_enabled = true;
+expectedForeground.state.loop_start_ms = 0;
+expectedForeground.state.loop_end_ms = FIXED_FOREGROUND_DURATION_MS;
+expectedForeground.clip_slots[0].loop_mode = "Loop";
+expectedForeground.clip_slots[0].out_point_ms = FIXED_FOREGROUND_DURATION_MS;
+assert.deepEqual(derivedForeground, expectedForeground, "foreground derivation must preserve every non-loop field");
 assert.deepEqual(derived.output.snapshot.timeline_bank.slice(1), currentProject.snapshot.timeline_bank.slice(1));
 assert.equal(derived.output.snapshot.timeline.follow.destination_start_mode, "wait_for_pedal");
+
+const pausedStateMismatch = structuredClone(currentProject);
+pausedStateMismatch.snapshot.video.layers[2].state.playing = true;
+assert.throws(
+  () => deriveCompleteShowProject(pausedStateMismatch, authorityProject),
+  /must start paused at position 0/,
+  "a foreground source that is already playing must fail closed",
+);
+
+const loopModeMismatch = structuredClone(currentProject);
+loopModeMismatch.snapshot.video.layers[2].clip_slots[0].loop_mode = "Loop";
+assert.throws(
+  () => deriveCompleteShowProject(loopModeMismatch, authorityProject),
+  /must start as Once with no authored out point/,
+  "a foreground source with a pre-authored loop must fail closed",
+);
+
+const outPointMismatch = structuredClone(currentProject);
+outPointMismatch.snapshot.video.layers[2].clip_slots[0].out_point_ms = FIXED_FOREGROUND_DURATION_MS;
+assert.throws(
+  () => deriveCompleteShowProject(outPointMismatch, authorityProject),
+  /must start as Once with no authored out point/,
+  "a foreground source with a pre-authored out point must fail closed",
+);
+
+const sourceDurationMismatch = structuredClone(currentProject);
+sourceDurationMismatch.snapshot.video.layers[2].source.metadata.duration_ms = FIXED_FOREGROUND_DURATION_MS + 1;
+assert.throws(
+  () => deriveCompleteShowProject(sourceDurationMismatch, authorityProject),
+  /exact 3008 ms 1280x1080 asset/,
+  "a foreground source with ambiguous duration must fail closed",
+);
 
 const sourceMismatch = structuredClone(currentProject);
 sourceMismatch.snapshot.timeline.label = "future timeline";

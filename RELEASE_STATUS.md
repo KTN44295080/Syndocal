@@ -1,9 +1,40 @@
 # Syndocal historical v1.0 / current v1.2 alpha Release Status
 
 Updated: 2026-09-01
-Branch: `codex/syndocal-v1.2`; current product metadata is `1.2.0-alpha.56`.
+Branch: `codex/syndocal-v1.2`; current product metadata is `1.2.0-alpha.57`.
 
-## 2026-09-01 current alpha.56 terminal loop/Follow source/native checkpoint
+## 2026-09-01 current alpha.57 media admission source checkpoint
+
+Alpha.57 makes machine-local media availability explicit at both project load
+and Timeline placement. Project replacement hashes file-backed media before
+publication, publishes the complete verdict batch only under the exact
+post-ACK video presentation token, and keeps missing, mismatched, unreadable,
+or not-yet-inspected media fail-closed. The Timeline Media Library exposes
+localized per-asset and batch Verify actions; click and drag share the same
+runtime admission predicate. The approved alpha53 show derivation also starts
+the fixed foreground layer in an exact full-duration loop instead of freezing
+its black first frame.
+
+Source acceptance is GO. Exact Community MSVC `14.44.35207` focused engine
+proof is `7/7`, the final full engine gate is `1002 passed / 0 failed / 2
+ignored` in `236.48s`, and first-party compiler warnings are `0`. Timeline
+project-load bootstrap at the app boundary is `1/1`; that no-default app
+configuration reports one pre-existing warning in unchanged
+`control_plane_runtime.rs`, while modified files report `0` warnings. Timeline
+external DnD, the Source Shelf at all five supported viewports, TypeScript,
+release metadata, formatter, artifact generation/verification, and structural
+preflight pass. Independent Terra xHigh adversarial review is GO with
+P0/P1/P2 `0`; it verified staged A-to-B publication, exact-set zero mutation,
+failure rollback, and one `snapshot -> availability` cross-lock order. The
+review caught and closed an early-B publication defect and an ABBA deadlock
+before this checkpoint was accepted.
+
+This remains source authority only until the committed and pushed changes are
+built with exact Community MSVC 14.44 and exercised in one responsive maximized
+native window. It makes no new USB-DMX, audible audio, camera, Unity, Spout, or
+external DJ/pedal claim.
+
+## 2026-09-01 historical alpha.56 terminal loop/Follow source/native checkpoint
 
 Alpha.56 closes the recorded strict root-loop release race at an already-reached
 natural Timeline terminal. The old path could publish loop OFF before terminal

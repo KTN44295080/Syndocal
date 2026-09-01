@@ -14,10 +14,19 @@ licensed, non-default show-ASIO artifact described by
 `qa/ASIO_INPUT_ACCEPTANCE.md`. No ASIO SDK-linked DLL or feature may enter the
 normal installer, updater, repair path, or default build graph.
 
-## 2026-08-31 alpha.45 source/test checkpoint — native and hardware gates pending
+## 2026-09-01 alpha.57 source-only current boundary
 
-The current product metadata is `1.2.0-alpha.45` on branch
-`codex/syndocal-v1.2`. This is a source/test checkpoint only. No alpha.45
+The current product metadata is `1.2.0-alpha.57` on branch
+`codex/syndocal-v1.2`. This is a source-only checkpoint: no alpha.57 native
+build, launch/window verification, or physical/external acceptance has been
+performed. The older versioned artifacts, processes, device observations, and
+source checkpoints below are immutable historical evidence and must not be
+relabeled as alpha.57 or used as current-source/native acceptance.
+
+## Historical 2026-08-31 alpha.45 source/test checkpoint — native and hardware gates pending
+
+At that historical checkpoint, product metadata was `1.2.0-alpha.45` on
+`codex/syndocal-v1.2`. This was a source/test checkpoint only. No alpha.45
 normal native build/window, dedicated show-ASIO artifact, real ASIO loader
 session, audible PROGRAM/CUE result, MOTU M4 or split-device observation,
 M32/DL16 routing, or other physical/external acceptance is claimed. The older
@@ -717,7 +726,7 @@ relaunched successfully. Audible endpoint acceptance is not promoted.
 
 The alpha.38 native build/window gate is historical normal-native evidence: PID
 `55624` was responsive and maximized. The alpha.39 native checkpoint above is
-also historical; the current alpha.45 source/test checkpoint has no native
+also historical; the historical alpha.45 source/test checkpoint has no native
 artifact or responsive-window evidence. Neither historical native gate
 promotes audible PROGRAM/CUE behavior, dedicated Show-ASIO, or any physical
 MOTU M4, split-device, or M32/DL16 row.

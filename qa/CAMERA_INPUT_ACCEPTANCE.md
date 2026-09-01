@@ -4,10 +4,19 @@ Status date: 2026-08-31
 
 Branch: `codex/syndocal-v1.2`
 
-## 2026-08-31 alpha.45 source/test checkpoint — camera native and hardware gates pending
+## 2026-09-01 alpha.57 source-only current boundary
 
-The current product metadata is `1.2.0-alpha.45` on branch
-`codex/syndocal-v1.2`. This is a source/test checkpoint only: no alpha.45
+The current product metadata is `1.2.0-alpha.57` on branch
+`codex/syndocal-v1.2`. This is a source-only checkpoint: no alpha.57 native
+build, launch/window verification, or physical/external acceptance has been
+performed. The older versioned artifacts, processes, device observations, and
+source checkpoints below are immutable historical evidence and must not be
+relabeled as alpha.57 or used as current-source/native acceptance.
+
+## Historical 2026-08-31 alpha.45 source/test checkpoint — camera native and hardware gates pending
+
+At that historical checkpoint, product metadata was `1.2.0-alpha.45` on
+`codex/syndocal-v1.2`. This was a source/test checkpoint only: no alpha.45
 native build, launch/window verification, camera UI/profile listing, opaque
 endpoint probe, sustained capture, HDMI/content observation, or other physical
 hardware acceptance is claimed. The alpha.39 and earlier native/camera records
@@ -222,7 +231,7 @@ probe after native evidence, but must not claim arbitrary sustained 4K stage
 output or 4K60. A future shared/pooled frame handoff with generation-based
 render pacing is required before broadening that claim.
 
-## Current alpha.45 native and hardware gates still required
+## Historical alpha.45 native and hardware gates still required
 
 - [x] Historical alpha.34 release build with MSVC 14.44, first-party warnings 0.
 - [x] Historical alpha.35 release rebuild with MSVC 14.44, first-party

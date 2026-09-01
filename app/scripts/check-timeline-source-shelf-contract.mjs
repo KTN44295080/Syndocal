@@ -31,6 +31,7 @@ const canonicalKinds = await import(canonicalKindModuleUrl);
 const bankAuthority = await load("bankAuthority.ts");
 const drag = await load("timelineExternalDrag.ts");
 const identity = await load("identityColor.ts");
+const localization = await load("uiLocalization.ts");
 const shelfSource = await readFile(new URL("../src/components/TimelineSourceShelf.tsx", import.meta.url), "utf8");
 const matrixSource = await readFile(new URL("../src/components/SceneMatrixPanel.tsx", import.meta.url), "utf8");
 const cueManagementSource = await readFile(new URL("../src/components/CueManagementPanel.tsx", import.meta.url), "utf8");
@@ -635,6 +636,38 @@ assert.match(shelfSource, /timelineChildCueId: number \| null;/);
 assert.doesNotMatch(shelfSource, /cueLists\??:/);
 assert.match(shelfSource, /uiLocale: UiLocale;/);
 assert.doesNotMatch(shelfSource, /loadUiLocale/);
+assert.match(shelfSource, /onVerify: \(assetIds: MediaAssetId\[\]\) => void \| Promise<void>;/);
+assert.match(shelfSource, /mediaAssetAvailabilityAllowsTimelinePlacement/);
+assert.doesNotMatch(shelfSource, /availability === undefined \|\| availability\.kind === "available_verified"/);
+assert.match(shelfSource, /data-timeline-source-media-verify-all/);
+assert.match(shelfSource, /aria-label=\{localizedSourceText\("Media source filters and verification"\)\}/);
+assert.match(shelfSource, /onClick=\{\(\) => void props\.onVerify\(props\.mediaAssets\.map\(\(asset\) => asset\.id\)\)\}/);
+assert.match(shelfSource, /data-timeline-source-media-verify=\{asset\.id\}/);
+assert.match(shelfSource, /onClick=\{\(\) => void props\.onVerify\(\[asset\.id\]\)\}/);
+assert.match(shelfSource, /data-timeline-source-media-availability=\{availability\(\)\?\.kind \?\? "unverified"\}/);
+assert.match(shelfSource, /default: return "Verify before placement";/);
+assert.match(shelfSource, />\{localizedSourceText\(mediaAssetAvailabilityLabel\(availability\(\)\)\)\}<\/small>/);
+assert.match(shelfSource, />\{localizedSourceText\("Verify All"\)\}<\/button>/);
+assert.match(shelfSource, />\{localizedSourceText\("Verify"\)\}<\/button>/);
+for (const [source, expectedJapanese] of [
+  ["Verified", "検証済み"],
+  ["Available · not hash-verified", "利用可能・ハッシュ未検証"],
+  ["Missing", "欠損"],
+  ["Hash mismatch", "ハッシュ不一致"],
+  ["Unreadable", "読み取り不能"],
+  ["Live source · inspected", "ライブソース・検証済み"],
+  ["Verify before placement", "配置前に検証"],
+  ["Verify", "検証"],
+  ["Verify All", "すべて検証"],
+  ["Verify machine-local Media Library availability before Timeline placement", "タイムライン配置前に、このマシンのメディアライブラリ利用可否を検証"],
+  ["Media source filters and verification", "メディアソースの絞り込みと検証"],
+  ["Verify Timeline AV Source on this machine", "Timeline AV Sourceをこのマシンで検証"],
+  ["Verify Timeline AV Source before placing it on the Timeline", "Timeline AV Sourceをタイムラインへ配置する前に検証"],
+]) {
+  assert.equal(localization.translateUiText(source, "ja"), expectedJapanese, `Timeline Media Library localization mismatch: ${source}`);
+}
+assert.match(shelfSource, /draggable=\{placementAllowed\(\)\}[\s\S]*?disabled=\{!placementAllowed\(\)\}/);
+assert.match(shelfSource, /const startSourceShelfDrag = \(event: DragEvent, payload:[\s\S]*?payload\.kind === "media_asset"[\s\S]*?!mediaAssetAvailabilityAllowsTimelinePlacement/);
 assert.match(shelfSource, /data-timeline-source-shelf-scene-placeable="true"/);
 assert.match(shelfSource, /resolveTimelineExternalLayer/);
 assert.match(
@@ -882,6 +915,7 @@ assert.match(
   /<TimelineSourceShelf\s+bankAuthority=\{bankAuthority\(\)\}\s+cueOptions=\{timelineCueOptions\(\)\}\s+timelineChildCueId=\{timelineChildCueId\(\)\}/,
   "the Timeline Shelf receives the explicit root-or-child context used to validate its complete expected Scene set",
 );
+assert.match(appSource, /<TimelineSourceShelf[\s\S]*?mediaAssetAvailabilityById=\{mediaAssetAvailabilityById\(\)\}[\s\S]*?onVerify=\{inspectMediaAssetIds\}/);
 
 // Cross-surface selection contract: the lower Timeline Inspector must consume
 // one App-owned tagged primary item, not a stale Lighting-only local signal.

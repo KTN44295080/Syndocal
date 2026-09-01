@@ -32,7 +32,7 @@ import { withMaterializedVerifiedExecutable } from "./verified-materialization.m
 
 export { withMaterializedVerifiedExecutable } from "./verified-materialization.mjs";
 
-export const expectedVersion = "1.2.0-alpha.56";
+export const expectedVersion = "1.2.0-alpha.57";
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const appRoot = resolve(scriptDir, "..");
 const workspaceRoot = resolve(appRoot, "..");
@@ -502,6 +502,135 @@ function assertReadmeVersionLines(markdown, productVersion) {
   }
 }
 
+const currentReleaseBoundaryMarkers = Object.freeze([
+  {
+    path: "RELEASE_STATUS.md",
+    markers: [
+      "## 2026-09-01 current alpha.57 media admission source checkpoint",
+      "Source acceptance is GO.",
+      "This remains source authority only until",
+      "It makes no new USB-DMX, audible audio, camera, Unity,",
+    ],
+  },
+  {
+    path: "qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md",
+    markers: [
+      "## 2026-09-01 alpha.57 media-admission source authority",
+      "Alpha.57 is the current source candidate on `codex/syndocal-v1.2`",
+      "full `1002 passed / 0 failed /",
+      "No alpha.57 native build or physical acceptance has been performed.",
+    ],
+  },
+  {
+    path: "qa/SYNDOCAL_SHOW_COMPLETION_HANDOFF_2026-08-28.md",
+    markers: [
+      "## 2026-09-01 alpha.57 media-admission source checkpoint",
+      "Current product metadata is `1.2.0-alpha.57` on `codex/syndocal-v1.2`",
+      "full `1002 passed / 0 failed / 2 ignored`",
+      "No alpha.57 native build or hardware acceptance has occurred.",
+    ],
+  },
+]);
+
+const historicalReleaseAuthorityMarkers = Object.freeze([
+  [
+    "qa/ASIO_PROGRAM_CUE_OUTPUT_ACCEPTANCE.md",
+    "## 2026-08-31 alpha.45 source/test checkpoint",
+    "## Historical 2026-08-31 alpha.45 source/test checkpoint",
+  ],
+  [
+    "qa/CAMERA_INPUT_ACCEPTANCE.md",
+    "## 2026-08-31 alpha.45 source/test checkpoint",
+    "## Historical 2026-08-31 alpha.45 source/test checkpoint",
+  ],
+  [
+    "qa/THREE_DISPLAY_ACCEPTANCE_2026-08-30.md",
+    "## 2026-09-01 alpha.51 missing test-media diagnostic",
+    "## Historical 2026-09-01 alpha.51 missing test-media diagnostic",
+  ],
+  [
+    "qa/THREE_DISPLAY_ACCEPTANCE_2026-08-30.md",
+    "## 2026-08-31 alpha.45 source/test checkpoint",
+    "## Historical 2026-08-31 alpha.45 source/test checkpoint",
+  ],
+  [
+    "qa/THREE_DISPLAY_ACCEPTANCE_2026-08-30.md",
+    "## Current P0 composition boundary",
+    "## Historical P0 composition boundary",
+  ],
+  [
+    "qa/REKORDBOX_STREAM_DECK_PEDAL_ACCEPTANCE.md",
+    "## 2026-08-31 alpha.45 source/test checkpoint",
+    "## Historical 2026-08-31 alpha.45 source/test checkpoint",
+  ],
+  [
+    "qa/REKORDBOX_STREAM_DECK_PEDAL_ACCEPTANCE.md",
+    "## Current v3 wire authority",
+    "## Historical alpha.45 v3 wire authority",
+  ],
+  [
+    "qa/DSF2026_SAME_PC_OUTPUT_ACCEPTANCE_2026-08-29.md",
+    "## 2026-09-01 alpha.51 Timeline authority",
+    "## Historical 2026-09-01 alpha.51 Timeline authority",
+  ],
+  [
+    "qa/DSF2026_SAME_PC_OUTPUT_ACCEPTANCE_2026-08-29.md",
+    "## 2026-09-01 alpha.50 USB-DMX continuous S0 checkpoint",
+    "## Historical 2026-09-01 alpha.50 USB-DMX continuous S0 checkpoint",
+  ],
+  [
+    "qa/SYNDOCAL_NEAR_SHOW_READINESS_2026-08-25.md",
+    "## Current execution authority",
+    "## Historical 2026-08-28 alpha.27 execution authority",
+  ],
+  [
+    "qa/SYNDOCAL_PAUSE_HANDOFF_2026-08-26.md",
+    "# Syndocal pause / resume authority",
+    "# Historical Syndocal pause / resume authority",
+  ],
+  [
+    "qa/SYNDOCAL_PAUSE_HANDOFF_2026-08-26.md",
+    "### Current post-alpha.25 cleanup Plan",
+    "### Historical post-alpha.25 cleanup Plan",
+  ],
+  [
+    "qa/SYNDOCAL_PAUSE_HANDOFF_2026-08-26.md",
+    "## 10. Preserved Git state and resumption order",
+    "## 10. Historical preserved Git state and resumption order",
+  ],
+  [
+    "qa/SYNDOCAL_PAUSE_HANDOFF_2026-08-26.md",
+    "## 35. 2026-08-28 current alpha.26 source-only checkpoint",
+    "## 35. 2026-08-28 historical alpha.26 source-only checkpoint",
+  ],
+  [
+    "qa/SYNDOCAL_PAUSE_HANDOFF_2026-08-26.md",
+    "## 37. 2026-08-28 current alpha.26 UI source-only fence checkpoint",
+    "## 37. 2026-08-28 historical alpha.26 UI source-only fence checkpoint",
+  ],
+]);
+
+function assertCurrentReleaseDocumentation(readManifest, productVersion) {
+  for (const { path, markers } of currentReleaseBoundaryMarkers) {
+    const top = String(readManifest(path)).split(/\r?\n/u).slice(0, 45).join("\n");
+    for (const marker of markers) {
+      const resolvedMarker = marker.replace("1.2.0-alpha.57", productVersion);
+      if (!top.includes(resolvedMarker)) {
+        throw new Error(`${path} lacks its top alpha.57 source-only marker: '${resolvedMarker}'.`);
+      }
+    }
+  }
+  for (const [path, staleMarker, historicalMarker] of historicalReleaseAuthorityMarkers) {
+    const markdown = String(readManifest(path));
+    if (markdown.includes(staleMarker)) {
+      throw new Error(`${path} still contains stale current/resume authority heading '${staleMarker}'.`);
+    }
+    if (!markdown.includes(historicalMarker)) {
+      throw new Error(`${path} lacks the historical marker '${historicalMarker}'.`);
+    }
+  }
+}
+
 export function validateStaticReleaseMetadata(readManifest = read, productVersion = expectedVersion) {
   const appPackage = parseRequiredJson(readManifest("app/package.json"), "app/package.json");
   const tauri = parseRequiredJson(readManifest("app/src-tauri/tauri.conf.json"), "app/src-tauri/tauri.conf.json");
@@ -578,6 +707,7 @@ export function validateStaticReleaseMetadata(readManifest = read, productVersio
   }
   assertLockFirstPartyVersions(readManifest("Cargo.lock"), firstPartyPackageNames, productVersion);
   assertReadmeVersionLines(readManifest("README.md"), productVersion);
+  assertCurrentReleaseDocumentation(readManifest, productVersion);
 
   const macBundleScript = readManifest("app/scripts/bundle-macos-runtime.sh");
   if (!macBundleScript.includes(`Syndocal_${productVersion}_$(uname -m).dmg`)) {

@@ -1,6 +1,15 @@
 # Syndocal native three-display acceptance — 2026-08-31
 
-## 2026-09-01 alpha.51 missing test-media diagnostic — non-blocking for USB-DMX
+## 2026-09-01 alpha.57 source-only current boundary
+
+The current product metadata is `1.2.0-alpha.57` on branch
+`codex/syndocal-v1.2`. This is a source-only checkpoint: no alpha.57 native
+build, launch/window verification, or physical/external acceptance has been
+performed. The older versioned artifacts, processes, device observations, and
+source checkpoints below are immutable historical evidence and must not be
+relabeled as alpha.57 or used as current-source/native acceptance.
+
+## Historical 2026-09-01 alpha.51 missing test-media diagnostic — non-blocking for USB-DMX
 
 The alpha.51 saved/live state still assigns `Display 1` / output `3` to the
 foreground test source
@@ -24,10 +33,10 @@ authority fences, and the existing strict Add first-frame gate. This does not
 affect the separately verified USB-DMX/S0 worker and is non-blocking under the
 operator's current USB-first completion boundary.
 
-## 2026-08-31 alpha.45 source/test checkpoint — native and physical acceptance pending
+## Historical 2026-08-31 alpha.45 source/test checkpoint — native and physical acceptance pending
 
-The current product metadata is `1.2.0-alpha.45` on branch
-`codex/syndocal-v1.2`. This is a source/test checkpoint only: no alpha.45
+At that historical checkpoint, product metadata was `1.2.0-alpha.45` on
+`codex/syndocal-v1.2`. This was a source/test checkpoint only: no alpha.45
 native build, launch/window verification, saved/reopened three-display project,
 HDMI/MiraBox content observation, Unity/GPU/Art-Net/Spout observation, or other
 physical hardware acceptance is claimed. The alpha.42 executable and display
@@ -238,9 +247,9 @@ reviews are `GO` with P0/P1 `0`. This is source acceptance only: alpha.41 still
 requires a clean pushed native build, CDP-enabled QA launch, alpha12 authoring,
 two canonical Display Adds, and the 2 s / 5 s / 9 s physical proof.
 
-## Current P0 composition boundary (frozen source implementation)
+## Historical P0 composition boundary (frozen source implementation)
 
-The split route is now represented by the additive
+At that historical source checkpoint, the split route was represented by the additive
 `TimelineVideoLayerRef { timeline_id, layer_id }` membership. `timeline_id`
 selects the exact root/Follow timeline context and `layer_id` identifies the
 stable authored video layer; the runtime resolves the current ephemeral

@@ -40,9 +40,13 @@ export const OUTPUT_PATH = resolve(
 );
 
 // Fixed identity produced by the approved exclusive derivation.
-export const OUTPUT_BYTE_SIZE = 1_112_332;
+export const OUTPUT_BYTE_SIZE = 1_112_369;
 export const OUTPUT_SHA256 =
-  "72B5120740580A16907B1C1C3A2CD14F995829C6CB837F332F2473501A789C53";
+  "46D79EEA2A0562D4CB385F4BA9AA6E721FC741D081533D95DA073EB2099F016E";
+
+export const FIXED_FOREGROUND_LAYER_ID = 3;
+export const FIXED_FOREGROUND_MEDIA_ASSET_ID = 5;
+export const FIXED_FOREGROUND_DURATION_MS = 3_008;
 
 export const EXPECTED_DURATION_MS = 81_153;
 export const EXPECTED_TIMELINE_ID = 1;
@@ -54,6 +58,11 @@ export const EXPECTED_EVENT_IDENTITIES = Object.freeze([
 ]);
 
 export const ALLOWED_CHANGED_PATHS = Object.freeze([
+  "snapshot.video.layers[2].clip_slots[0].loop_mode",
+  "snapshot.video.layers[2].clip_slots[0].out_point_ms",
+  "snapshot.video.layers[2].state.loop_enabled",
+  "snapshot.video.layers[2].state.loop_end_ms",
+  "snapshot.video.layers[2].state.playing",
   "snapshot.timeline.events[0].duration_ms",
   "snapshot.timeline.events[1].duration_ms",
   "snapshot.timeline_bank[0].events[0].duration_ms",
@@ -77,6 +86,84 @@ function changedPaths(left, right, path = "") {
   if (!leftObject || !rightObject) return [path || "$"].filter(Boolean);
   const keys = [...new Set([...Object.keys(left), ...Object.keys(right)])].sort();
   return keys.flatMap((key) => changedPaths(left[key], right[key], path ? `${path}.${key}` : key));
+}
+
+function fixedForegroundParts(project, label) {
+  const video = project?.snapshot?.video;
+  if (!video || !Array.isArray(video.media_assets) || !Array.isArray(video.layers)) {
+    fail(`${label} must contain the expected video layers and media assets`);
+  }
+  if (video.media_assets.length !== 5 || video.layers.length !== 3) {
+    fail(`${label} must retain exactly five media assets and three video layers`);
+  }
+  if (
+    video.media_assets.filter((candidate) => candidate?.id === FIXED_FOREGROUND_MEDIA_ASSET_ID).length !== 1
+    || video.layers.filter((candidate) => candidate?.id === FIXED_FOREGROUND_LAYER_ID).length !== 1
+  ) {
+    fail(`${label} foreground asset/layer IDs must be unique and unambiguous`);
+  }
+  const asset = video.media_assets[FIXED_FOREGROUND_MEDIA_ASSET_ID - 1];
+  const layer = video.layers[FIXED_FOREGROUND_LAYER_ID - 1];
+  if (
+    asset?.id !== FIXED_FOREGROUND_MEDIA_ASSET_ID
+    || layer?.id !== FIXED_FOREGROUND_LAYER_ID
+    || layer?.media_asset_id !== FIXED_FOREGROUND_MEDIA_ASSET_ID
+  ) {
+    fail(`${label} foreground asset/layer identity must remain exactly asset 5 / layer 3`);
+  }
+  if (asset.label !== "logo-anim-dark" || layer.label !== "logo-anim-dark") {
+    fail(`${label} foreground asset/layer label must remain logo-anim-dark`);
+  }
+  if (asset.source?.kind !== "File" || layer.source?.kind !== "File") {
+    fail(`${label} foreground asset/layer source must remain file-backed`);
+  }
+  const expectedMetadata = {
+    duration_ms: FIXED_FOREGROUND_DURATION_MS,
+    frame_rate: 30,
+    has_audio: true,
+    height: 1080,
+    width: 1280,
+  };
+  if (!equalJson(asset.source?.metadata, expectedMetadata) || !equalJson(layer.source?.metadata, expectedMetadata)) {
+    fail(`${label} foreground source metadata must remain the exact 3008 ms 1280x1080 asset`);
+  }
+  if (!Array.isArray(layer.clip_slots) || layer.clip_slots.length !== 1) {
+    fail(`${label} foreground layer must retain exactly one authored clip slot`);
+  }
+  if (layer.default_clip_slot_id !== FIXED_FOREGROUND_LAYER_ID) {
+    fail(`${label} foreground default clip slot must remain slot 3`);
+  }
+  const slot = layer.clip_slots[0];
+  if (slot?.id !== FIXED_FOREGROUND_LAYER_ID || slot.media_asset_id !== FIXED_FOREGROUND_MEDIA_ASSET_ID) {
+    fail(`${label} foreground default clip slot must remain mapped to asset 5`);
+  }
+  return { asset, layer, slot, state: layer.state };
+}
+
+function assertCurrentForegroundShape(project) {
+  const { layer, slot, state } = fixedForegroundParts(project, "current alpha52 project");
+  if (!state || state.playing !== false || state.loop_enabled !== false || state.loop_start_ms !== 0 || state.loop_end_ms !== 0 || state.position_ms !== 0) {
+    fail("current alpha52 foreground layer must start paused at position 0 with looping disabled");
+  }
+  if (slot.in_point_ms !== 0 || slot.loop_mode !== "Once" || Object.hasOwn(slot, "out_point_ms")) {
+    fail("current alpha52 foreground default slot must start as Once with no authored out point");
+  }
+  if (layer.default_clip_slot_id !== slot.id) {
+    fail("current alpha52 foreground default slot identity is inconsistent");
+  }
+}
+
+function assertDerivedForegroundShape(project) {
+  const { layer, slot, state } = fixedForegroundParts(project, "derived alpha53 project");
+  if (!state || state.playing !== true || state.loop_enabled !== true || state.loop_start_ms !== 0 || state.loop_end_ms !== FIXED_FOREGROUND_DURATION_MS || state.position_ms !== 0) {
+    fail("derived alpha53 foreground layer must be playing with the exact full-duration loop 0..3008");
+  }
+  if (slot.in_point_ms !== 0 || slot.loop_mode !== "Loop" || slot.out_point_ms !== FIXED_FOREGROUND_DURATION_MS) {
+    fail("derived alpha53 foreground default slot must use Loop with out_point_ms 3008");
+  }
+  if (layer.default_clip_slot_id !== slot.id) {
+    fail("derived alpha53 foreground default slot identity is inconsistent");
+  }
 }
 
 function eventIdentity(event, label) {
@@ -157,6 +244,22 @@ function assertCurrentShowShape(project) {
   if (!equalJson(displayContract, expectedDisplays)) {
     fail("current Display output contract changed");
   }
+  const compositionContract = video.compositions.map((composition) => ({
+    id: composition.id,
+    label: composition.label,
+    layer_ids: composition.layer_ids,
+    output_ids: composition.output_ids,
+    timeline_layer_ids: composition.timeline_layer_ids,
+  }));
+  const expectedCompositions = [
+    { id: 1, label: "Main", layer_ids: [1, 2, 3], output_ids: [], timeline_layer_ids: [] },
+    { id: 2, label: "Foreground Video 1", layer_ids: [3], output_ids: [3], timeline_layer_ids: [] },
+    { id: 3, label: "Background Video2 Camera", layer_ids: [2], output_ids: [4], timeline_layer_ids: [{ layer_id: 3, timeline_id: 209 }] },
+  ];
+  if (!equalJson(compositionContract, expectedCompositions)) {
+    fail("current composition contract changed");
+  }
+  assertCurrentForegroundShape(project);
   if (!Array.isArray(snapshot.timeline_bank) || snapshot.timeline_bank.length < 2) {
     fail("current project must retain the complete timeline bank");
   }
@@ -218,6 +321,14 @@ export function deriveCompleteShowProject(currentProject, authorityProject) {
   assertCanonicalEventAgreement(currentProject, authorityProject);
 
   const output = structuredClone(currentProject);
+  const foreground = output.snapshot.video.layers[FIXED_FOREGROUND_LAYER_ID - 1];
+  const foregroundSlot = foreground.clip_slots[0];
+  foreground.state.playing = true;
+  foreground.state.loop_enabled = true;
+  foreground.state.loop_start_ms = 0;
+  foreground.state.loop_end_ms = FIXED_FOREGROUND_DURATION_MS;
+  foregroundSlot.loop_mode = "Loop";
+  foregroundSlot.out_point_ms = FIXED_FOREGROUND_DURATION_MS;
   const outputEvents = output.snapshot.timeline.events;
   const outputBankEvents = output.snapshot.timeline_bank[0].events;
   for (const [index, expected] of EXPECTED_EVENT_IDENTITIES.entries()) {
@@ -233,6 +344,7 @@ export function deriveCompleteShowProject(currentProject, authorityProject) {
   if (!equalJson(actualChangedPaths, expectedChangedPaths)) {
     fail(`complete-show derivation changed unexpected paths: ${actualChangedPaths.join(", ")}`);
   }
+  assertDerivedForegroundShape(output);
   assertExactEventIdentities(output.snapshot.timeline.events, "derived snapshot.timeline.events", EXPECTED_DURATION_MS);
   assertExactEventIdentities(output.snapshot.timeline_bank[0].events, "derived snapshot.timeline_bank[0].events", EXPECTED_DURATION_MS);
   return { output, changedPaths: actualChangedPaths };

@@ -4,6 +4,44 @@ Date: 2026-08-19
 Branch at creation: `codex/syndocal-v1.0`
 Baseline before this document: `848d759846985cc3acf588356cfa3c996b4e2ef2`
 
+## 2026-09-01 alpha.57 media-admission source authority
+
+Alpha.57 is the current source candidate on `codex/syndocal-v1.2`, based on
+upstream-equal parent `73df6c9db759ada763ab36a17fb55576fabf7fed`.
+Timeline Media Library placement now requires explicit machine-local media
+verification: localized individual and batch Verify actions feed the same exact
+admission predicate used by click and drag, while missing, unreadable,
+hash-mismatched, unknown, and uninspected assets fail closed. The project-load
+path hashes file-backed candidates outside the project mutation locks and binds
+availability publication to the exact post-ACK video-presentation authority.
+The complete availability set is staged privately, its B snapshot is published,
+then the B map is committed under the same snapshot guard before acknowledgement.
+Failure preserves exact A; duplicate, foreign, missing, and token-mismatched
+batches are zero-mutation. All cross-lock readers and publishers use the single
+`snapshot -> availability` order.
+
+Frontend focused proof passes external DnD, Source Shelf at the five supported
+viewports, and TypeScript with first-party warnings `0`. Exact Community MSVC
+`14.44.35207` engine proof is focused `7/7` and full `1002 passed / 0 failed /
+2 ignored` in `236.48s`, with first-party warnings `0`. The no-default app
+project-load bootstrap test is `1/1`; it reports one known
+warning in unchanged `control_plane_runtime.rs`, and modified files remain at
+warnings `0`. Independent Terra xHigh
+review is GO with P0/P1/P2 `0`; it independently verified rollback, exact-set
+admission, publication visibility, and lock order after catching and closing an
+early-B exposure and an ABBA deadlock during review. The complete-show alpha53 local QA
+derivative also starts its fixed foreground composition in the exact
+full-duration `[0, 3008)` loop. Its current identity is `1,112,369` bytes,
+SHA-256
+`46D79EEA2A0562D4CB385F4BA9AA6E721FC741D081533D95DA073EB2099F016E`;
+generation tests, verify-only, and structural preflight pass. The old
+black-first-frame output is recoverably retained and is not accepted.
+
+No alpha.57 native build or physical acceptance has been performed. The
+historical alpha.56 process remains running until immediately before the next
+required no-bundle build. USB-DMX, exact MiraBox, audible PROGRAM/CUE, and
+post-build three-display pixel acceptance remain open external gates.
+
 ## 2026-09-01 alpha.56 terminal loop/Follow source authority
 
 Alpha.56 is the current source candidate on `codex/syndocal-v1.2`. It replaces
@@ -237,12 +275,16 @@ unmount. This replaces a transient stale-selection/focus loss without allowing
 an old operation to focus a same-ID element in a replacement project/Timeline.
 
 The alpha.53 same-PC three-display derivative preserves exactly two ordinary
-Display outputs and three compositions. Relative to alpha.52 it changes only
-the four mirrored duration fields for the two authored show Scene Blocks, each
-to `81153 ms`. Its verified output
-`target/qa/DSF2026-show-alpha53-complete-show.sdc` is `1,112,332` bytes with
+Display outputs and three compositions. Relative to alpha.52 it restores the
+four mirrored duration fields for the two authored show Scene Blocks to
+`81153 ms` and starts the fixed foreground layer in an exact full-duration
+`[0, 3008)` loop. Its verified output
+`target/qa/DSF2026-show-alpha53-complete-show.sdc` is `1,112,369` bytes with
 SHA-256
-`72B5120740580A16907B1C1C3A2CD14F995829C6CB837F332F2473501A789C53`.
+`46D79EEA2A0562D4CB385F4BA9AA6E721FC741D081533D95DA073EB2099F016E`.
+The superseded black-first-frame artifact is retained recoverably at
+`target/qa/DSF2026-show-alpha53-complete-show.old-black-first-frame.72B51207.sdc`
+and is not a current accepted specimen.
 It is local QA evidence, not a portable or release artifact; absolute paths
 require explicit relink and re-verification on another PC.
 

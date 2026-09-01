@@ -2882,7 +2882,7 @@ impl DjLinkCommandReceipt {
 /// the mutex first owns the request's outcome.
 #[cfg(any(test, feature = "test-support"))]
 #[derive(Clone)]
-struct ProjectSnapshotLoadPublicationBarrier {
+pub struct ProjectSnapshotLoadPublicationBarrier {
     state: Arc<Mutex<ProjectSnapshotLoadPublicationBarrierState>>,
     wake: Arc<Condvar>,
 }
@@ -4799,6 +4799,19 @@ define_engine_command! {
         available: bool,
         ack: mpsc::SyncSender<Result<(), String>>,
     },
+    /// Install one complete verifier result only if the video presentation
+    /// identity which admitted the project is still current.  This prevents a
+    /// slow A bootstrap from making matching numeric asset IDs available in a
+    /// later B project.
+    SetMediaAssetAvailabilityBatch {
+        expected_video_presentation_config_token: u64,
+        availability: Vec<(MediaAssetId, bool)>,
+        ack: mpsc::SyncSender<Result<(), String>>,
+        #[cfg(test)]
+        publication_barrier: Option<Arc<ProjectSnapshotLoadPublicationBarrier>>,
+        #[cfg(test)]
+        commit_barrier: Option<Arc<ProjectSnapshotLoadPublicationBarrier>>,
+    },
     /// Runtime-only activation of an already-authored Timeline bank entry.
     /// This never selects or mutates the authored project/history image.
     StartTimeline {
@@ -5382,6 +5395,7 @@ macro_rules! engine_command_video_presentation_relevance {
             | EngineCommand::LoadProjectSnapshotPublished { .. }
             | EngineCommand::MediaAssetTransactionPublished { .. }
             | EngineCommand::SetMediaAssetAvailability { .. }
+            | EngineCommand::SetMediaAssetAvailabilityBatch { .. }
             | EngineCommand::BootstrapVjShow { .. }
             | EngineCommand::BootstrapVjShowWithAllocatedAssets { .. } => true,
             // Safety blackout where final video bytes or presentation
@@ -5743,6 +5757,7 @@ impl EngineCommand {
                 | EngineCommand::ReportLiveAudioOnset { .. }
                 | EngineCommand::SetTimelinePlaying(_)
                 | EngineCommand::SetMediaAssetAvailability { .. }
+                | EngineCommand::SetMediaAssetAvailabilityBatch { .. }
                 | EngineCommand::SetTimelinePlayingPublished { .. }
                 | EngineCommand::ApplyTimelineLoopRuntimePublished { .. }
                 | EngineCommand::DjLinkStartTimeline { .. }
@@ -6011,6 +6026,9 @@ pub struct EngineHandle {
     #[cfg(test)]
     test_fail_next_pending_publication: Arc<AtomicBool>,
     #[cfg(test)]
+    /// Set only after a media transaction has physically applied B and the
+    /// subsequent shared snapshot publication is forced to fail. A staged
+    /// availability batch deliberately never sets this: it has not applied B.
     test_media_asset_publication_failed_after_b: Arc<AtomicBool>,
 }
 
@@ -10147,6 +10165,33 @@ impl EngineHandle {
             .map_err(|error| format!("Media Asset availability acknowledgement failed: {error}"))?
     }
 
+    /// Publish an all-or-nothing machine-local verifier batch for one exact
+    /// already-published project identity.  The token is deliberately checked
+    /// by the engine thread, rather than trusted from the caller, so a stale
+    /// project bootstrap cannot cross a later replacement boundary.
+    pub fn set_media_asset_availability_batch_for_video_presentation(
+        &self,
+        expected_video_presentation_config_token: u64,
+        availability: Vec<(MediaAssetId, bool)>,
+    ) -> Result<(), String> {
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::SetMediaAssetAvailabilityBatch {
+            expected_video_presentation_config_token,
+            availability,
+            ack,
+            #[cfg(test)]
+            publication_barrier: None,
+            #[cfg(test)]
+            commit_barrier: None,
+        })
+        .map_err(|error| error.to_string())?;
+        receiver
+            .recv_timeout(Duration::from_secs(3))
+            .map_err(|error| {
+                format!("Media Asset availability batch acknowledgement failed: {error}")
+            })?
+    }
+
     /// The exact engine-owned fence used by the local runtime control plane.
     /// It is non-persistent and becomes visible atomically with the snapshot.
     pub fn timeline_transport_generation(&self) -> u64 {
@@ -10464,6 +10509,50 @@ impl EngineHandle {
             .store(false, Ordering::Release);
         self.test_fail_next_pending_publication
             .store(true, Ordering::Release);
+    }
+
+    #[cfg(test)]
+    fn submit_media_asset_availability_batch_with_publication_barrier_for_tests(
+        &self,
+        expected_video_presentation_config_token: u64,
+        availability: Vec<(MediaAssetId, bool)>,
+    ) -> (
+        mpsc::Receiver<Result<(), String>>,
+        Arc<ProjectSnapshotLoadPublicationBarrier>,
+    ) {
+        let publication_barrier = ProjectSnapshotLoadPublicationBarrier::new();
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::SetMediaAssetAvailabilityBatch {
+            expected_video_presentation_config_token,
+            availability,
+            ack,
+            publication_barrier: Some(Arc::clone(&publication_barrier)),
+            commit_barrier: None,
+        })
+        .expect("media availability batch test submission should enqueue");
+        (receiver, publication_barrier)
+    }
+
+    #[cfg(test)]
+    fn submit_media_asset_availability_batch_with_commit_barrier_for_tests(
+        &self,
+        expected_video_presentation_config_token: u64,
+        availability: Vec<(MediaAssetId, bool)>,
+    ) -> (
+        mpsc::Receiver<Result<(), String>>,
+        Arc<ProjectSnapshotLoadPublicationBarrier>,
+    ) {
+        let commit_barrier = ProjectSnapshotLoadPublicationBarrier::new();
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::SetMediaAssetAvailabilityBatch {
+            expected_video_presentation_config_token,
+            availability,
+            ack,
+            publication_barrier: None,
+            commit_barrier: Some(Arc::clone(&commit_barrier)),
+        })
+        .expect("media availability commit-barrier test submission should enqueue");
+        (receiver, commit_barrier)
     }
 
     #[cfg(test)]
@@ -11132,10 +11221,13 @@ impl EngineHandle {
     }
 
     pub fn video_audio_runtime_snapshot(&self) -> VideoAudioRuntimeSnapshot {
-        let media_asset_availability = self.media_asset_availability.read().ok();
         self.snapshot
             .read()
             .map(|snapshot| {
+                // Match the publisher's snapshot -> availability order. In
+                // particular, never hold availability A while waiting for a
+                // writer that already owns the snapshot and must commit B.
+                let media_asset_availability = self.media_asset_availability.read().ok();
                 let source_projection_authority = *self
                     .timeline_audio_projection_authority
                     .read()
@@ -12071,7 +12163,8 @@ impl EngineHandle {
             | EngineCommand::SaveVideoOutputMappingPreset { .. }
             | EngineCommand::ApplyVideoOutputMappingPreset { .. }
             | EngineCommand::RemoveVideoOutputMappingPreset { .. }
-            | EngineCommand::SetMediaAssetAvailability { .. } => {}
+            | EngineCommand::SetMediaAssetAvailability { .. }
+            | EngineCommand::SetMediaAssetAvailabilityBatch { .. } => {}
             EngineCommand::EnableShowSerialDmxSafetyBlackoutRoute { .. }
             | EngineCommand::StopShowSerialDmxSafetyBlackoutRoute { .. }
             | EngineCommand::RetireManagedShowDmxAfterSafetyBlackout { .. } => {}
@@ -19883,6 +19976,13 @@ enum PendingCommandRollback {
         video_output_fades: Vec<RuntimeVideoOutputFade>,
         last_error: Option<String>,
     },
+    /// A complete machine-local verifier batch is staged privately until its
+    /// B snapshot commits. On failure the shared map was never touched; only
+    /// the prior diagnostic is restored.
+    CommitMediaAssetAvailability {
+        availability: HashMap<MediaAssetId, bool>,
+        last_error: Option<String>,
+    },
     /// Covers both authored slot mutations and runtime queue/take/seek. The
     /// whole layer vector is the smallest complete A image: slot bank/default
     /// projection and active/queued/pending/playhead are inseparable at the
@@ -20145,6 +20245,13 @@ enum PendingCommandRollback {
 }
 
 impl PendingCommandRollback {
+    fn staged_media_asset_availability(&self) -> Option<&HashMap<MediaAssetId, bool>> {
+        match self {
+            Self::CommitMediaAssetAvailability { availability, .. } => Some(availability),
+            _ => None,
+        }
+    }
+
     fn restores_last_error(&self) -> bool {
         if let Self::RestoreDjLinkTimelineTransport { transport, .. } = self {
             return transport.restores_last_error();
@@ -20159,6 +20266,7 @@ impl PendingCommandRollback {
                 | Self::RestoreExclusiveVideoTake { .. }
                 | Self::RestoreVideoLayersAndCompositions { .. }
                 | Self::RestoreMediaAssetTransaction { .. }
+                | Self::CommitMediaAssetAvailability { .. }
                 | Self::RestoreVideoClipSlots { .. }
                 | Self::RestoreVideoEffectCatalog { .. }
                 | Self::RestoreAutoVj { .. }
@@ -20243,6 +20351,7 @@ pub struct MediaAssetRollbackOutputFadeTestState {
 #[derive(Debug, Clone, PartialEq)]
 pub struct MediaAssetRollbackTestState {
     media_assets: Vec<MediaAssetSummary>,
+    media_asset_availability: HashMap<MediaAssetId, bool>,
     video_layers: Vec<VideoLayerSummary>,
     video_compositions: Vec<CompositionSummary>,
     video_layer_fades: Vec<MediaAssetRollbackLayerFadeTestState>,
@@ -20322,8 +20431,17 @@ struct DjLinkTimelineObservation {
 struct EngineRuntime {
     shared_telemetry: Arc<EngineSharedTelemetry>,
     pending_command_acks: Vec<PendingCommandAck>,
+    /// B availability is private while its matching snapshot is prepared.
+    /// External readers retain shared A until publication has committed.
+    staged_media_asset_availability_for_publication: Option<HashMap<MediaAssetId, bool>>,
     #[cfg(any(test, feature = "test-support"))]
     test_project_snapshot_publication_barrier: Option<Arc<ProjectSnapshotLoadPublicationBarrier>>,
+    #[cfg(test)]
+    test_media_asset_availability_publication_barrier:
+        Option<Arc<ProjectSnapshotLoadPublicationBarrier>>,
+    #[cfg(test)]
+    test_media_asset_availability_commit_barrier:
+        Option<Arc<ProjectSnapshotLoadPublicationBarrier>>,
     /// A DJ Link command is held here when an earlier normal command still
     /// has a pending publication ACK. This keeps the bounded DJ publication
     /// cycle from sharing a rollback batch with a blocking authored command.
@@ -20803,8 +20921,13 @@ impl EngineRuntime {
         Self {
             shared_telemetry,
             pending_command_acks: Vec::new(),
+            staged_media_asset_availability_for_publication: None,
             #[cfg(any(test, feature = "test-support"))]
             test_project_snapshot_publication_barrier: None,
+            #[cfg(test)]
+            test_media_asset_availability_publication_barrier: None,
+            #[cfg(test)]
+            test_media_asset_availability_commit_barrier: None,
             deferred_normal_command: None,
             #[cfg(test)]
             fail_next_pending_publication: false,
@@ -22790,11 +22913,20 @@ impl EngineRuntime {
         let rebuild_effect_activations = engine_command_rebuilds_effect_activations(&command);
         let pending_ack_count = self.pending_command_acks.len();
         let presentation_config_mutation = command.mutates_video_presentation_configuration();
+        let is_media_asset_availability_batch = matches!(
+            &command,
+            EngineCommand::SetMediaAssetAvailabilityBatch { .. }
+        );
         self.apply_command_inner(command);
         // The token itself is only published after this turn's snapshot
         // publication succeeds; marking dirty here records that the runtime
         // image may have moved underneath the last published configuration.
-        if presentation_config_mutation {
+        let batch_was_admitted = !is_media_asset_availability_batch
+            || self
+                .pending_command_acks
+                .last()
+                .is_some_and(|pending| pending.result.is_ok());
+        if presentation_config_mutation && batch_was_admitted {
             self.video_presentation_config_dirty = true;
         }
         if rebuild_effect_activations && self.pending_command_acks.len() == pending_ack_count {
@@ -22805,6 +22937,13 @@ impl EngineRuntime {
     #[cfg(any(test, feature = "test-support"))]
     fn wait_for_test_project_snapshot_publication_barrier(&mut self) {
         if let Some(barrier) = self.test_project_snapshot_publication_barrier.take() {
+            barrier.enter_and_wait();
+        }
+        #[cfg(test)]
+        if let Some(barrier) = self
+            .test_media_asset_availability_publication_barrier
+            .take()
+        {
             barrier.enter_and_wait();
         }
     }
@@ -28007,6 +28146,84 @@ impl EngineRuntime {
                         "Media Asset availability could not publish its runtime verdict",
                 });
             }
+            EngineCommand::SetMediaAssetAvailabilityBatch {
+                expected_video_presentation_config_token,
+                availability,
+                ack,
+                #[cfg(test)]
+                publication_barrier,
+                #[cfg(test)]
+                commit_barrier,
+            } => {
+                let previous_last_error = self.last_error.clone();
+                let expected_asset_ids = self
+                    .media_assets
+                    .iter()
+                    .map(|asset| asset.id)
+                    .collect::<HashSet<_>>();
+                let mut provided_asset_ids = HashSet::with_capacity(availability.len());
+                let duplicate_asset_id = availability.iter().find_map(|(asset_id, _)| {
+                    (!provided_asset_ids.insert(*asset_id)).then_some(*asset_id)
+                });
+                let result = if self.video_presentation_config_token
+                    != expected_video_presentation_config_token
+                {
+                    Err(format!(
+                        "Media Asset availability bootstrap belongs to video presentation token {expected_video_presentation_config_token}, but current token is {}",
+                        self.video_presentation_config_token
+                    ))
+                } else if self
+                    .pending_command_acks
+                    .iter()
+                    .any(|pending| pending.rollback.staged_media_asset_availability().is_some())
+                {
+                    Err("Media Asset availability bootstrap already has an unpublished verifier batch".to_string())
+                } else if let Some(asset_id) = duplicate_asset_id {
+                    Err(format!(
+                        "Media Asset availability bootstrap contains duplicate asset ID {asset_id}"
+                    ))
+                } else if let Some(asset_id) = provided_asset_ids
+                    .iter()
+                    .find(|asset_id| !expected_asset_ids.contains(asset_id))
+                {
+                    Err(format!(
+                        "Media Asset availability bootstrap contains asset ID {asset_id} not in the current project catalog"
+                    ))
+                } else if let Some(asset_id) = expected_asset_ids
+                    .iter()
+                    .find(|asset_id| !provided_asset_ids.contains(asset_id))
+                {
+                    Err(format!(
+                        "Media Asset availability bootstrap omitted current project media asset {asset_id}"
+                    ))
+                } else {
+                    // Stage B privately. It becomes externally observable
+                    // only after the matching B snapshot has committed.
+                    Ok(availability.into_iter().collect::<HashMap<_, _>>())
+                };
+                let (result, rollback) = match result {
+                    Ok(next_availability) => (
+                        Ok(()),
+                        PendingCommandRollback::CommitMediaAssetAvailability {
+                            availability: next_availability,
+                            last_error: previous_last_error,
+                        },
+                    ),
+                    Err(error) => (Err(error), PendingCommandRollback::KeepApplied),
+                };
+                #[cfg(test)]
+                if result.is_ok() {
+                    self.test_media_asset_availability_publication_barrier = publication_barrier;
+                    self.test_media_asset_availability_commit_barrier = commit_barrier;
+                }
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack: PendingCommandAckSender::Plain(ack),
+                    result,
+                    rollback,
+                    publication_error:
+                        "Media Asset availability bootstrap could not publish its runtime verdict",
+                });
+            }
             EngineCommand::StartTimeline { timeline_id } => {
                 self.last_error = self.start_timeline_runtime(timeline_id).err();
             }
@@ -30174,6 +30391,25 @@ impl EngineRuntime {
         Ok(())
     }
 
+    /// Commit the staged verifier map while the matching EngineSnapshot write
+    /// guard is held. Readers therefore cannot combine shared B availability
+    /// with a still-published A snapshot.
+    fn commit_staged_media_asset_availability_after_snapshot_publication(&mut self) {
+        let Some(next) = self.staged_media_asset_availability_for_publication.take() else {
+            return;
+        };
+        #[cfg(test)]
+        if let Some(barrier) = self.test_media_asset_availability_commit_barrier.take() {
+            barrier.enter_and_wait();
+        }
+        let mut availability = self
+            .media_asset_availability
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *availability = next;
+        self.last_error = None;
+    }
+
     fn remove_node_graph_state(&mut self, graph_id: NodeGraphId) -> Result<(), String> {
         let before = self.node_graphs.len();
         self.node_graphs
@@ -30194,6 +30430,16 @@ impl EngineRuntime {
             return;
         }
         let pending = std::mem::take(&mut self.pending_command_acks);
+        let staged_media_asset_availability = pending
+            .iter()
+            .filter_map(|pending| pending.rollback.staged_media_asset_availability())
+            .collect::<Vec<_>>();
+        debug_assert!(
+            staged_media_asset_availability.len() <= 1,
+            "only one complete media verifier batch may await publication"
+        );
+        self.staged_media_asset_availability_for_publication =
+            staged_media_asset_availability.into_iter().next().cloned();
         let requires_publication = pending.iter().any(|pending| pending.result.is_ok());
         let contains_dj_link = pending
             .iter()
@@ -30221,6 +30467,7 @@ impl EngineRuntime {
                         | PendingCommandRollback::RestoreStageMapPresets { .. }
                         | PendingCommandRollback::RestoreStageProject { .. }
                         | PendingCommandRollback::RestoreMediaAssetTransaction { .. }
+                        | PendingCommandRollback::CommitMediaAssetAvailability { .. }
                         | PendingCommandRollback::RestoreVideoLayersAndCompositions { .. }
                         | PendingCommandRollback::RestoreVideoClipSlots { .. }
                         | PendingCommandRollback::RestoreVideoEffectCatalog { .. }
@@ -30354,6 +30601,7 @@ impl EngineRuntime {
                             .enter_before_publication();
                     }
                     *guard = next_snapshot;
+                    self.commit_staged_media_asset_availability_after_snapshot_publication();
                     self.commit_timeline_audio_commit_publication(prepared_audio_commit.take());
                     self.commit_timeline_audio_projection_publication(
                         prepared_audio_projection.take(),
@@ -30383,6 +30631,7 @@ impl EngineRuntime {
                                         .enter_before_publication();
                                 }
                                 *guard = next_snapshot;
+                                self.commit_staged_media_asset_availability_after_snapshot_publication();
                                 self.commit_timeline_audio_commit_publication(
                                     prepared_audio_commit.take(),
                                 );
@@ -30414,18 +30663,22 @@ impl EngineRuntime {
         } else {
             true
         };
-        if published {
+        if published && requires_publication {
             // Fence the presentation token strictly after the mutated
             // snapshot became visible. Publishing it earlier could certify a
             // token against the previous published image and admit a frame
             // rendered from superseded configuration.
             self.fence_video_presentation_config_after_publication();
-        } else {
+        } else if !published {
             // The turn rolled back to the last published image, so no new
             // configuration exists to fence; keep the token stable so frames
             // prepared against that image remain valid.
             self.video_presentation_config_dirty = false;
         }
+        // A failed publication must leave shared A untouched. The staged B
+        // image was used only to construct a candidate snapshot and can now
+        // be discarded before rollback/ack delivery.
+        self.staged_media_asset_availability_for_publication = None;
         if !published {
             #[cfg(test)]
             if force_publication_failure_from_handle
@@ -30816,6 +31069,13 @@ impl EngineRuntime {
                 self.video_layer_fades = video_layer_fades;
                 self.video_outputs = video_outputs;
                 self.video_output_fades = video_output_fades;
+                self.last_error = last_error;
+            }
+            PendingCommandRollback::CommitMediaAssetAvailability {
+                availability,
+                last_error,
+            } => {
+                let _ = availability;
                 self.last_error = last_error;
             }
             PendingCommandRollback::RestoreVideoClipSlots {
@@ -42075,6 +42335,17 @@ impl EngineRuntime {
             )
     }
 
+    fn media_asset_availability_for_current_publication(&self) -> HashMap<MediaAssetId, bool> {
+        self.staged_media_asset_availability_for_publication
+            .clone()
+            .unwrap_or_else(|| {
+                self.media_asset_availability
+                    .read()
+                    .map(|availability| availability.clone())
+                    .unwrap_or_default()
+            })
+    }
+
     fn timeline_audio_projection_signature(&self) -> TimelineAudioProjectionSignature {
         let audio_lanes = |layers: &[TimelineLayerSummary]| {
             let mut lanes = layers
@@ -42141,7 +42412,7 @@ impl EngineRuntime {
             .collect::<Vec<_>>();
         referenced_assets.sort_unstable();
         referenced_assets.dedup();
-        let availability = self.media_asset_availability.read().ok();
+        let availability = self.media_asset_availability_for_current_publication();
         let media_sources = referenced_assets
             .into_iter()
             .map(|asset_id| {
@@ -42156,11 +42427,7 @@ impl EngineRuntime {
                     .find(|asset| asset.id == asset_id)
                     .is_some_and(|asset| {
                         timeline_media_asset_source_is_uri(asset)
-                            || availability
-                                .as_ref()
-                                .and_then(|availability| availability.get(&asset_id))
-                                .copied()
-                                .unwrap_or(false)
+                            || availability.get(&asset_id).copied().unwrap_or(false)
                     });
                 (asset_id, path, available)
             })
@@ -42186,7 +42453,7 @@ impl EngineRuntime {
 
     fn timeline_audio_commit_signature(&self) -> TimelineAudioCommitSignature {
         let projection = self.timeline_audio_projection_signature();
-        let availability = self.media_asset_availability.read().ok();
+        let availability = self.media_asset_availability_for_current_publication();
         let clip_is_available = |clip: &TimelineAudioClipSummary| {
             let Some(asset_id) = clip.media_asset_id else {
                 return true;
@@ -42196,11 +42463,7 @@ impl EngineRuntime {
                 .find(|asset| asset.id == asset_id)
                 .is_some_and(|asset| {
                     timeline_media_asset_source_is_uri(asset)
-                        || availability
-                            .as_ref()
-                            .and_then(|availability| availability.get(&asset_id))
-                            .copied()
-                            .unwrap_or(false)
+                        || availability.get(&asset_id).copied().unwrap_or(false)
                 })
         };
         let follow_transitioning = matches!(
@@ -46990,7 +47253,7 @@ impl EngineRuntime {
         playing: bool,
         used_ids: &mut HashSet<VideoLayerId>,
     ) -> Vec<RuntimeTimelineVideoProjection> {
-        let media_asset_availability = self.media_asset_availability.read().ok();
+        let media_asset_availability = self.media_asset_availability_for_current_publication();
         let video_lanes = timeline_layers
             .iter()
             .filter(|layer| matches!(layer.kind, TimelineLayerKind::Video))
@@ -47038,8 +47301,7 @@ impl EngineRuntime {
                 // nevertheless never handed to the renderer or audio worker.
                 if !timeline_media_asset_source_is_uri(asset)
                     && !media_asset_availability
-                        .as_ref()
-                        .and_then(|availability| availability.get(&asset.id))
+                        .get(&asset.id)
                         .copied()
                         .unwrap_or(false)
                 {
@@ -47694,6 +47956,11 @@ impl EngineRuntime {
         let video = self.video_snapshot();
         MediaAssetRollbackTestState {
             media_assets: video.media_assets,
+            media_asset_availability: self
+                .media_asset_availability
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clone(),
             video_layers: video.layers,
             video_compositions: video.compositions,
             video_layer_fades: self
@@ -122656,7 +122923,7 @@ mod tests {
             "Missing source",
             VideoSourceSummary {
                 kind: VideoSourceKind::File,
-                path: None,
+                path: Some("C:/show/unverified.mp4".to_string()),
                 name: Some("missing.mp4".to_string()),
                 codec: None,
                 metadata: Some(VideoMediaMetadata {
@@ -122680,11 +122947,18 @@ mod tests {
         }];
         runtime.timeline_position_ms = 100;
         assert!(runtime.video_snapshot().layers.is_empty());
-        runtime
-            .media_asset_availability
-            .write()
-            .unwrap()
-            .insert(100, true);
+        let verified_token = runtime.video_presentation_config_token;
+        let published = RwLock::new(runtime.build_snapshot(0));
+        let (verified_ack, verified_receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::SetMediaAssetAvailabilityBatch {
+            expected_video_presentation_config_token: verified_token,
+            availability: vec![(100, true)],
+            ack: verified_ack,
+            publication_barrier: None,
+            commit_barrier: None,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        assert_eq!(verified_receiver.recv().unwrap(), Ok(()));
         assert_eq!(
             runtime
                 .video_snapshot()
@@ -122695,11 +122969,36 @@ mod tests {
             1,
             "a verified machine-local availability verdict admits the asset without per-frame filesystem I/O"
         );
-        runtime
-            .media_asset_availability
-            .write()
-            .unwrap()
-            .insert(100, false);
+        let (negative_ack, negative_receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::SetMediaAssetAvailabilityBatch {
+            expected_video_presentation_config_token: runtime.video_presentation_config_token,
+            availability: vec![(100, false)],
+            ack: negative_ack,
+            publication_barrier: None,
+            commit_barrier: None,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        assert_eq!(negative_receiver.recv().unwrap(), Ok(()));
+        assert!(runtime.video_snapshot().layers.is_empty());
+
+        // B has replaced A and cleared A's machine-local verdicts. The old A
+        // completion must be rejected even when both projects use asset ID
+        // 100; otherwise a slow bootstrap could reveal B's local File clip.
+        runtime.video_presentation_config_token = verified_token + 1;
+        runtime.media_asset_availability.write().unwrap().clear();
+        let (stale_ack, _stale_receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::SetMediaAssetAvailabilityBatch {
+            expected_video_presentation_config_token: verified_token,
+            availability: vec![(100, true)],
+            ack: stale_ack,
+            publication_barrier: None,
+            commit_barrier: None,
+        });
+        assert_eq!(
+            runtime.media_asset_availability.read().unwrap().get(&100),
+            None,
+            "an A verifier result must not apply to replacement B"
+        );
         assert!(runtime.video_snapshot().layers.is_empty());
 
         runtime.media_assets = vec![media_asset_test_summary(
@@ -122723,6 +123022,393 @@ mod tests {
 
         runtime.media_assets.clear();
         assert!(runtime.video_snapshot().layers.is_empty());
+    }
+
+    #[test]
+    fn media_asset_availability_batch_requires_the_complete_unique_catalog_set() {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        runtime.media_assets = vec![
+            media_asset_test_summary(100, "One", media_asset_test_source("availability-one")),
+            media_asset_test_summary(200, "Two", media_asset_test_source("availability-two")),
+        ];
+        *runtime.media_asset_availability.write().unwrap() =
+            HashMap::from([(100, false), (200, true), (999, true)]);
+        runtime.last_error = Some("A verifier diagnostic".to_string());
+        let before = runtime.media_asset_availability.read().unwrap().clone();
+        let before_error = runtime.last_error.clone();
+        let token = runtime.video_presentation_config_token;
+        let published = RwLock::new(runtime.build_snapshot(0));
+        let before_snapshot = published.read().unwrap().clone();
+
+        let mut reject = |availability: Vec<(MediaAssetId, bool)>, expected_error: &str| {
+            let (ack, receiver) = mpsc::sync_channel(1);
+            runtime.apply_command(EngineCommand::SetMediaAssetAvailabilityBatch {
+                expected_video_presentation_config_token: token,
+                availability,
+                ack,
+                publication_barrier: None,
+                commit_barrier: None,
+            });
+            runtime.publish_pending_command_acks(0, &published);
+            let error = receiver
+                .recv()
+                .expect("rejected verifier batch acknowledgement")
+                .expect_err("non-exact verifier batch must fail closed");
+            assert!(error.contains(expected_error), "unexpected error: {error}");
+            assert_eq!(
+                *runtime.media_asset_availability.read().unwrap(),
+                before,
+                "rejected verifier input must leave the complete prior map intact"
+            );
+            assert_eq!(runtime.last_error, before_error);
+            assert_eq!(runtime.video_presentation_config_token, token);
+            assert_eq!(*published.read().unwrap(), before_snapshot);
+        };
+        reject(
+            vec![(100, true), (100, false), (200, true)],
+            "duplicate asset ID 100",
+        );
+        reject(
+            vec![(100, true), (200, false), (999, true)],
+            "asset ID 999 not in the current project catalog",
+        );
+        reject(vec![(100, true)], "omitted current project media asset 200");
+        drop(reject);
+
+        let (ack, receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::SetMediaAssetAvailabilityBatch {
+            expected_video_presentation_config_token: token,
+            availability: vec![(100, true), (200, false)],
+            ack,
+            publication_barrier: None,
+            commit_barrier: None,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        assert_eq!(receiver.recv().unwrap(), Ok(()));
+        assert_eq!(
+            *runtime.media_asset_availability.read().unwrap(),
+            HashMap::from([(100, true), (200, false)]),
+            "an exact verifier result replaces, rather than patches, stale machine-local verdicts"
+        );
+        assert!(runtime.last_error.is_none());
+        assert!(runtime.video_presentation_config_token > token);
+
+        // The caller may intentionally submit an empty completion only for
+        // an empty catalog; that exact case clears every stale local verdict.
+        runtime.media_assets.clear();
+        let (empty_ack, empty_receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::SetMediaAssetAvailabilityBatch {
+            expected_video_presentation_config_token: runtime.video_presentation_config_token,
+            availability: Vec::new(),
+            ack: empty_ack,
+            publication_barrier: None,
+            commit_barrier: None,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        assert_eq!(empty_receiver.recv().unwrap(), Ok(()));
+        assert!(runtime.media_asset_availability.read().unwrap().is_empty());
+    }
+
+    #[test]
+    fn media_asset_availability_batch_publication_failure_restores_exact_a_and_fails_closed() {
+        let mut runtime = runtime_with_lfo_effects(&[]);
+        runtime.timeline_layers = vec![timeline_test_layer(
+            60,
+            0,
+            false,
+            false,
+            false,
+            TimelineLayerKind::Video,
+        )];
+        runtime.media_assets = vec![media_asset_test_summary(
+            100,
+            "Local File",
+            VideoSourceSummary {
+                kind: VideoSourceKind::File,
+                path: Some("C:/show/local-file.mp4".to_string()),
+                name: Some("local-file.mp4".to_string()),
+                codec: None,
+                metadata: None,
+            },
+        )];
+        runtime.timeline_video_clips = vec![TimelineVideoClipSummary {
+            id: TimelineVideoClipId(1_001),
+            layer_id: 60,
+            media_asset_id: 100,
+            start_ms: 0,
+            offset_ms: 0,
+            duration_ms: 1_000,
+            fade_in_ms: 0,
+            fade_out_ms: 0,
+        }];
+        runtime.timeline_position_ms = 100;
+        *runtime.media_asset_availability.write().unwrap() =
+            HashMap::from([(100, false), (777, true)]);
+        runtime.last_error = Some("A availability diagnostic".to_string());
+        let before_availability = runtime.media_asset_availability.read().unwrap().clone();
+        let before_error = runtime.last_error.clone();
+        let token = runtime.video_presentation_config_token;
+        let published = RwLock::new(runtime.build_snapshot(0));
+
+        runtime.fail_next_pending_publication = true;
+        let (failed_ack, failed_receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::SetMediaAssetAvailabilityBatch {
+            expected_video_presentation_config_token: token,
+            availability: vec![(100, true)],
+            ack: failed_ack,
+            publication_barrier: None,
+            commit_barrier: None,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        let error = failed_receiver
+            .recv()
+            .expect("failed verifier batch acknowledgement")
+            .expect_err("publication loss must be definitive");
+        assert!(
+            error.contains("could not publish"),
+            "unexpected error: {error}"
+        );
+        assert_eq!(
+            *runtime.media_asset_availability.read().unwrap(),
+            before_availability,
+            "publication failure must restore the entire previous availability map"
+        );
+        assert_eq!(runtime.last_error, before_error);
+        assert!(runtime.video_snapshot().layers.is_empty());
+        assert!(published.read().unwrap().video.layers.is_empty());
+
+        let (success_ack, success_receiver) = mpsc::sync_channel(1);
+        runtime.apply_command(EngineCommand::SetMediaAssetAvailabilityBatch {
+            expected_video_presentation_config_token: token,
+            availability: vec![(100, true)],
+            ack: success_ack,
+            publication_barrier: None,
+            commit_barrier: None,
+        });
+        runtime.publish_pending_command_acks(0, &published);
+        assert_eq!(success_receiver.recv().unwrap(), Ok(()));
+        assert_eq!(
+            *runtime.media_asset_availability.read().unwrap(),
+            HashMap::from([(100, true)])
+        );
+        assert!(runtime.last_error.is_none());
+        assert_eq!(
+            runtime
+                .video_snapshot()
+                .layers
+                .iter()
+                .filter(|layer| layer.media_asset_id == Some(100))
+                .count(),
+            1,
+            "only an acknowledged exact verifier batch may reveal the local File projection"
+        );
+    }
+
+    #[test]
+    fn media_asset_availability_batch_handle_ack_rolls_back_after_forced_publication_failure() {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let mut snapshot = EngineSnapshot::default();
+        snapshot.video.media_assets = vec![media_asset_test_summary(
+            100,
+            "Handle Local File",
+            media_asset_test_source("availability-handle"),
+        )];
+        engine.load_project_snapshot_and_wait(snapshot).unwrap();
+
+        engine
+            .set_media_asset_availability_batch_for_video_presentation(
+                engine.video_presentation_config_token(),
+                vec![(100, false)],
+            )
+            .unwrap();
+        let before = engine.media_asset_rollback_test_state_for_tests(false);
+        engine.force_next_pending_publication_failure_for_tests();
+        let error = engine
+            .set_media_asset_availability_batch_for_video_presentation(
+                engine.video_presentation_config_token(),
+                vec![(100, true)],
+            )
+            .expect_err("forced shared publication loss must reach the batch caller");
+        assert!(
+            error.contains("could not publish"),
+            "unexpected error: {error}"
+        );
+        assert!(
+            !engine.media_asset_publication_failed_after_b_for_tests(),
+            "availability B is staged, not applied, when its snapshot publication fails"
+        );
+        let after = engine.media_asset_rollback_test_state_for_tests(false);
+        assert_eq!(
+            after.media_asset_availability,
+            before.media_asset_availability
+        );
+        assert_eq!(after.last_error, before.last_error);
+    }
+
+    #[test]
+    fn media_asset_availability_batch_keeps_shared_a_visible_until_b_snapshot_publication() {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let mut snapshot = EngineSnapshot::default();
+        snapshot.timeline.layers = vec![timeline_test_layer(
+            61,
+            0,
+            false,
+            false,
+            false,
+            TimelineLayerKind::Audio,
+        )];
+        snapshot.timeline.audio_clips = vec![TimelineAudioClipSummary {
+            id: 6_101,
+            layer_id: 61,
+            media_asset_id: Some(100),
+            path: String::new(),
+            start_ms: 0,
+            offset_ms: 0,
+            duration_ms: 1_000,
+            gain: 1.0,
+            fade_in_ms: 0,
+            fade_out_ms: 0,
+            output_bus: TimelineAudioOutputBus::Program,
+        }];
+        snapshot.timeline.duration_ms = 1_000;
+        snapshot.timeline_bank = vec![snapshot.timeline.clone()];
+        snapshot.video.media_assets = vec![media_asset_test_summary(
+            100,
+            "Barrier Local File",
+            VideoSourceSummary {
+                kind: VideoSourceKind::File,
+                path: Some("C:/show/barrier-local-file.mp4".to_string()),
+                name: Some("barrier-local-file.mp4".to_string()),
+                codec: None,
+                metadata: Some(VideoMediaMetadata {
+                    duration_ms: Some(1_000),
+                    width: Some(1_920),
+                    height: Some(1_080),
+                    frame_rate: Some(30.0),
+                    has_audio: true,
+                }),
+            },
+        )];
+        engine.load_project_snapshot_and_wait(snapshot).unwrap();
+        engine
+            .set_media_asset_availability_batch_for_video_presentation(
+                engine.video_presentation_config_token(),
+                vec![(100, false)],
+            )
+            .unwrap();
+        assert!(engine
+            .video_audio_runtime_snapshot()
+            .timeline_audio
+            .clips
+            .is_empty());
+
+        let (receiver, barrier) = engine
+            .submit_media_asset_availability_batch_with_publication_barrier_for_tests(
+                engine.video_presentation_config_token(),
+                vec![(100, true)],
+            );
+        assert!(barrier.wait_until_entered(Duration::from_secs(1)));
+        // The worker has admitted and staged B but cannot publish. A reader
+        // must still see the shared A map and A snapshot, never an unacked B.
+        assert!(engine
+            .video_audio_runtime_snapshot()
+            .timeline_audio
+            .clips
+            .is_empty());
+        assert_eq!(
+            *engine.media_asset_availability.read().unwrap(),
+            HashMap::from([(100, false)])
+        );
+
+        barrier.release();
+        assert_eq!(
+            receiver.recv_timeout(Duration::from_secs(1)).unwrap(),
+            Ok(())
+        );
+        assert_eq!(
+            engine
+                .video_audio_runtime_snapshot()
+                .timeline_audio
+                .clips
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn media_asset_availability_batch_snapshot_then_availability_order_avoids_abba_deadlock() {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let mut snapshot = EngineSnapshot::default();
+        snapshot.video.media_assets = vec![media_asset_test_summary(
+            100,
+            "Lock Order Local File",
+            media_asset_test_source("lock-order"),
+        )];
+        engine.load_project_snapshot_and_wait(snapshot).unwrap();
+        engine
+            .set_media_asset_availability_batch_for_video_presentation(
+                engine.video_presentation_config_token(),
+                vec![(100, false)],
+            )
+            .unwrap();
+
+        let (ack, commit_barrier) = engine
+            .submit_media_asset_availability_batch_with_commit_barrier_for_tests(
+                engine.video_presentation_config_token(),
+                vec![(100, true)],
+            );
+        assert!(commit_barrier.wait_until_entered(Duration::from_secs(1)));
+
+        // This deterministically reproduces the old reverse acquisition
+        // attempt while the publisher holds snapshot and is about to take
+        // availability. A blocking second acquisition here was the ABBA
+        // deadlock; `try_read` records the collision and releases A instead.
+        let legacy_reader = engine.clone();
+        let (attempted_sender, attempted_receiver) = mpsc::sync_channel(1);
+        let legacy_attempt = thread::spawn(move || {
+            let availability = legacy_reader.media_asset_availability.read().unwrap();
+            attempted_sender.send(()).unwrap();
+            let blocked_by_publisher = matches!(
+                legacy_reader.snapshot.try_read(),
+                Err(std::sync::TryLockError::WouldBlock)
+            );
+            drop(availability);
+            blocked_by_publisher
+        });
+        assert_eq!(
+            attempted_receiver.recv_timeout(Duration::from_secs(1)),
+            Ok(())
+        );
+        assert!(legacy_attempt.join().unwrap());
+
+        // The public reader now takes snapshot first, so releasing the
+        // publisher cannot form the old map->snapshot/snapshot->map cycle.
+        let public_reader = engine.clone();
+        let (reader_sender, reader_receiver) = mpsc::sync_channel(1);
+        let reader = thread::spawn(move || {
+            let output = public_reader.video_audio_runtime_snapshot();
+            reader_sender.send(output).unwrap();
+        });
+        commit_barrier.release();
+        assert_eq!(ack.recv_timeout(Duration::from_secs(1)).unwrap(), Ok(()));
+        let output = reader_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("snapshot-first public reader must not deadlock");
+        reader.join().unwrap();
+        assert!(output.timeline_audio.clips.is_empty());
+        assert_eq!(
+            *engine.media_asset_availability.read().unwrap(),
+            HashMap::from([(100, true)])
+        );
     }
 
     #[test]

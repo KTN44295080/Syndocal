@@ -2,10 +2,10 @@
 
 Date: 2026-08-21
 Updated: 2026-08-31
-Status: Required; the current KDMX source worktree declares
-`1.2.0-alpha.45` metadata. Alpha.45 source tests include the current
-show-critical changes; they do not by themselves establish native, peer, or
-hardware acceptance. The alpha.45 native build/launch remains pending. The
+Status: Required; the historical KDMX source worktree declared
+`1.2.0-alpha.45` metadata. Alpha.45 source tests included the then-current
+show-critical changes; they did not by themselves establish native, peer, or
+hardware acceptance. The alpha.45 native build/launch remained pending. The
 rb-output source authority is
 branch `beta-v1.1.2`, clean and upstream-equal at exact peer commit
 `59df968d91bca71a327ef2a57ee5ab15de9f9947`, with product source version
@@ -17,10 +17,19 @@ config/token are absent. The standalone local acceptance is separate and does
 not replace production. The physical matrix remains exactly 0/12.
 Source authority: replacement user specifications received 2026-08-20 and 2026-08-21
 
-## 2026-08-31 alpha.45 source/test checkpoint — v3 wire and hardware pending
+## 2026-09-01 alpha.57 source-only current boundary
 
-The current KDMX product metadata is `1.2.0-alpha.45` on branch
-`codex/syndocal-v1.2`. This is a source/test checkpoint only: no alpha.45
+The current KDMX product metadata is `1.2.0-alpha.57` on branch
+`codex/syndocal-v1.2`. This is a source-only checkpoint: no alpha.57 native
+build, launch/window verification, or physical/external acceptance has been
+performed. The older versioned artifacts, processes, device observations, and
+source checkpoints below are immutable historical evidence and must not be
+relabeled as alpha.57 or used as current-source/native acceptance.
+
+## Historical 2026-08-31 alpha.45 source/test checkpoint — v3 wire and hardware pending
+
+At that historical checkpoint, KDMX product metadata was `1.2.0-alpha.45` on
+`codex/syndocal-v1.2`. This was a source/test checkpoint only: no alpha.45
 native build, launch/window verification, production peer provisioning,
 v3 HELLO/ACK/STATE_SYNC exchange, Rekordbox/MIDI/pedal observation, USB-DMX
 or Art-Net/Spout fixture observation, camera/audio/Unity/GPU result, or other
@@ -263,15 +272,16 @@ positive parent PID `49864`), `Candidates=[]`, `PlannedLogicalBytes=0`,
 The exact 12-path hardlink remediation was content-preserving with no content
 diff.
 
-## Current v3 wire authority — alpha.45 source / native pending / rb-output 1.1.12 / production v1.1.11 — 2026-08-31
+## Historical alpha.45 v3 wire authority — native pending / rb-output 1.1.12 / production v1.1.11 — 2026-08-31
 
-The only current wire adapter is `syndocal-envelope-v3`, using the exact frame
+At that historical checkpoint, the only accepted wire adapter was
+`syndocal-envelope-v3`, using the exact frame
 `{v:3,type,agentId,sessionId,sequence,eventId,payload}`. Flat, v1, and v2 frames
 and adapter names are retired and rejected without a shim. The Agent HELLO
 advertises the complete ten-capability set headed by `DJ_TRACK_ACTIVE` and
 `DJ_TRACK_SYNC` and including `DJ_LOOP_FALLBACK`. Current KDMX worktree source
-metadata is `1.2.0-alpha.45`; the alpha.44 source and alpha.43 native
-authority are historical and are not rebound to alpha.45. No alpha.45
+metadata at that checkpoint was `1.2.0-alpha.45`; the alpha.44 source and
+alpha.43 native authority are historical and were not rebound to alpha.45. No alpha.45
 native build/launch/UI acceptance is claimed. The
 bounded alpha9 content, alpha.42 three-display, and alpha.42 Art-Net probe
 artifact identities are recorded above. None is an approved production operator
@@ -1085,8 +1095,9 @@ no hardware row.
 
 These dated pre-alpha.17 gaps are retained as historical context only; the
 then-current alpha.17 source checkpoint superseded them. The later alpha.18
-authority below is also historical; current alpha.45 source / native-pending
-authority is at the top. **P1:** Web Remote/DJ Link enabled state, bind
+authority below is also historical; the historical alpha.45 source / native-
+pending checkpoint is superseded by the alpha.57 source-only boundary above.
+**P1:** Web Remote/DJ Link enabled state, bind
 selection, and listener start are not restored on application launch, while the
 machine-local token is regenerated for each Syndocal process. A previously
 configured peer therefore cannot satisfy HW-4.11 restart/next-show reuse without
@@ -1186,7 +1197,8 @@ claimed.
 This append-only section records the source checkpoint that superseded the two
 historical implementation gaps above. The alpha.17 checkpoint was current at
 that historical point; the later alpha.18 authority below is historical and the
-current alpha.45 source / native-pending authority is at the top. This section
+historical alpha.45 source / native-pending checkpoint is superseded by the
+alpha.57 source-only boundary above. This section
 does not rewrite the dated hardware observations above and
 checks no HW-4 row.
 
@@ -1443,7 +1455,7 @@ the running alpha.18 binary does not contain it, and HW-4 stays **0/12**.
 ## SUPERSEDED / HISTORICAL — alpha.19 Follow-hold / Stage 2 authority — 2026-08-27
 
 This dated alpha.19 record is retained as historical provenance only and is not
-current execution guidance. The current alpha.45 source / native-pending /
+current execution guidance. The historical alpha.45 source / native-pending /
 product-source 1.1.12 / production v1.1.11 truth is in the sections
 above: Stage 1 F14 is Rekordbox LoopHalf MIDI, Stage 2 F13 owns
 `DJ_TIMELINE_LOOP_SET`, and Stage 2 F14 sends active-Timeline-only
