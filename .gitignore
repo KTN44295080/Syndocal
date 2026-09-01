@@ -1,4 +1,7 @@
 /target/
+# Machine-local protected show project. Keep it out of source checkpoints while
+# retaining the exact file beside the checkout for USB-DMX rehearsal recovery.
+/DSF2026-show-alpha51-usb-final.sdc
 /.codex-remote-attachments/
 /app/target/
 /app/tmp/

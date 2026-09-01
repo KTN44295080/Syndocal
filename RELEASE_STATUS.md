@@ -48,18 +48,46 @@ ProductVersion/FileVersion `1.2.0-alpha.55`, `62,292,480` bytes, SHA-256
 Exactly one checkout-owned `Syndocal` process, PID `56892`, exposes one
 responsive window with status `準備完了`. Screenshot/accessibility capture
 succeeded. Computer Use input activation failed closed even after one clean
-session reinitialization, so no native project-open or output action was fired
-and the alpha52 `.sdc` open/reopen observation is not claimed.
+session reinitialization, so no synthetic pointer/keyboard action was used.
+The exact alpha.55 executable was then invoked with the alpha52 `.sdc` through
+the product's official single-instance command-line open path. The existing
+PID remained the sole process, the project loaded visibly, and the retired
+missing-Timeline-runtime-watermark error did not recur. The read-only alpha52
+derivation verifier and structural preflight pass; both reference MP3 files
+and both currently referenced MP4 files exist and were independently hashed.
+The two configured Display outputs and all three compositions are visible, but
+both output windows correctly remain `ProjectSwapDisarmed` after project
+replacement, so physical pixels are not claimed.
+The same official path then loaded the complete-show alpha53 derivative into
+the same PID; the visible status named the exact alpha53 path and no runtime
+watermark error recurred. Alpha53 restores the two mirrored Scene Block
+durations to `81,153 ms`; native Play remains an operator/physical gate.
 
 Independent Terra xHigh review reports GO with P0/P1 `0`; Ox was unavailable,
 which is the documented narrow review exception. Physical alpha.55 USB-DMX is
 still blocked by the absent serial device. Art-Net was not probed while Unity
-owns UDP 6454. Spout pixels, physical three-display content, alpha52 project
-open, and audible PROGRAM/CUE remain external acceptance gates. The protected
+owns UDP 6454. Spout pixels, re-armed physical three-display content, Timeline
+Play/Follow/Pedal observation, and audible PROGRAM/CUE remain external
+acceptance gates. Windows currently enumerates the full output catalogue,
+including `Music (Elgato Virtual Audio)`; the Setup-owned Cue Audio runtime,
+browser, and output-bus gates pass. The alpha52 reference-audio layer remains
+persisted muted so rehearsal audio cannot double with the live DJ path unless
+an operator deliberately unmutes it. The protected
 untracked `DSF2026-show-alpha51-usb-final.sdc` remains exactly `1,116,223`
 bytes with SHA-256
 `7031196A6527431FB8D625F420FE5D3E442DD2AA35D2ED86D57AF9EDF69890A7` and
 must not be staged.
+Its exact root-relative path is now ignored explicitly so the protected local
+recovery project remains outside source checkpoints without making the strict
+tracked-source acceptance gate permanently dirty; its bytes and hash are
+rechecked after that ignore-only change.
+
+The StandardRelease three-display observer is now pinned to the exact alpha.55
+version/size/hash and source commit above while retaining clean-descendant
+evidence HEAD handling. PowerShell 7 and Windows PowerShell 5.1 both pass its
+`96/96` focused checks; independent Terra xHigh review is GO with P0/P1/P2
+`0`. The observer remains read-only except for its narrowly revalidated editor
+maximize action and cannot re-arm or move an output window.
 
 Current generated-tree inventory is `target` at `147,037,274,593` logical
 bytes / `106,330` files and `app/node_modules` at `545,338,492` bytes / `3,704`

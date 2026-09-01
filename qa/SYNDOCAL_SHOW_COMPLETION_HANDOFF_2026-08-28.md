@@ -36,21 +36,56 @@ ProductVersion/FileVersion `1.2.0-alpha.55`, SHA-256
 `8CBD6A5875CFAD8BFABC1838BE7E4C32FA367017E9267F97453B756706B63CA1`.
 PID `56892` is the only checkout-owned Syndocal process and exposes one
 responsive window with `準備完了`. Capture succeeded; input activation failed
-closed after one clean Computer Use reinitialization, so alpha52 project open
-and output actions were not attempted in this checkpoint.
+closed after one clean Computer Use reinitialization, so no synthetic
+pointer/keyboard action was used. The exact executable was then invoked with
+alpha52 through the official single-instance command-line open path. PID
+`56892` remained the only process, the project loaded visibly, and the retired
+missing-runtime-watermark error did not recur. Read-only derivation,
+show-structural preflight, and Timeline block/loop gates pass. Both reference
+MP3 files and both current MP4 files exist and were independently hashed.
 
-Next manual acceptance action: in that exact build, open
+The exact local-only project opened in this checkpoint is
 `C:\Users\kouty\Documents\KDMX\target\qa\DSF2026-show-alpha52-three-display-current-media.sdc`
-and confirm the old missing-watermark error does not recur. Treat it as local
-QA only: its foreground media absolute path is currently missing. Then perform
-physical USB-DMX, Art-Net/Unity, Spout/display content, and audible PROGRAM/CUE
-acceptance only when the corresponding hardware/operator is present. USB-DMX
-is currently absent; Unity owns UDP 6454, so no unattended output probe was
-fired.
+(`1,112,316` bytes, SHA-256
+`27484E18DE3FFBB19829D19A90459AB4D847209BF272E629CAE37AF3DD38EA11`).
+Its foreground `logo-anim-dark.mp4` and background `EtaMDr-gpyCYahbz.mp4`
+paths both exist; the previous missing-foreground note is superseded. Two
+configured Display routes and three compositions are visible after load, but
+both output windows are `ProjectSwapDisarmed`, so they must be deliberately
+re-armed before physical pixel acceptance. USB-DMX is currently absent and
+Unity owns UDP 6454, so no unattended output probe was fired. MiraBox is also
+absent; do not substitute another camera for its persisted identity.
+
+The current native project was then changed through the same official
+single-instance path to
+`C:\Users\kouty\Documents\KDMX\target\qa\DSF2026-show-alpha53-complete-show.sdc`.
+The same PID remained sole owner, the native status displayed that exact path,
+and no runtime-watermark error appeared. This is the show candidate with the
+two mirrored Scene Block durations restored to `81,153 ms`; open is accepted,
+but Play/loop/Follow/pedal behavior is not yet physically observed.
+
+Windows currently enumerates the full WASAPI output catalogue, including
+`Music (Elgato Virtual Audio)`. The Setup-owned Cue Audio runtime/browser gate
+and output-bus UI gate pass. Alpha52 persists the Reference Audio layer muted
+to prevent the rehearsal MP3 from doubling the live DJ audio; unmute that lane
+only for rehearsal listening. Audible PROGRAM/CUE remains a physical gate.
+Next operator actions are therefore: connect and re-confirm the exact USB-DMX
+device, re-arm the two Display outputs and observe their physical content,
+reconnect exact MiraBox for the camera interval, then exercise Timeline
+Play/A-B loop/Follow/Pedal and audible PROGRAM/CUE.
+
+The StandardRelease three-display observer has been retargeted to the exact
+alpha.55 artifact/source identity. PowerShell 7 and Windows PowerShell 5.1 each
+pass `96/96`; independent Terra xHigh review is GO with P0/P1/P2 `0`. After
+this tracked checkpoint is committed, it can observe three stable samples of
+already-open outputs. It never creates, re-arms, or moves those outputs.
 
 Never stage or modify the untracked protected project
 `DSF2026-show-alpha51-usb-final.sdc` (`1,116,223` bytes; SHA-256
 `7031196A6527431FB8D625F420FE5D3E442DD2AA35D2ED86D57AF9EDF69890A7`).
+The exact root-relative filename is explicitly ignored; this prevents
+accidental staging and lets a committed tracked tree satisfy the strict
+three-display clean-check without moving or rewriting the protected file.
 Generated inventory: `target` `147,037,274,593` bytes / `106,330` files;
 `app/node_modules` `545,338,492` bytes / `3,704` files. Cleanup reclaimed `0`
 bytes because no exact-target cleanup harness has the required tracked tests

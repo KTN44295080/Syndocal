@@ -34,9 +34,14 @@ source, and native checkpoint is
 build produced an exact `62,292,480`-byte executable with SHA-256
 `8CBD6A5875CFAD8BFABC1838BE7E4C32FA367017E9267F97453B756706B63CA1`.
 Exactly one responsive checkout-owned Syndocal window was verified with status
-`準備完了`; automated project-open input was unavailable, so alpha52 open/reopen
-remains a manual gate. Physical USB-DMX, Art-Net, Spout, Display content, and
-audible audio remain separate acceptance gates. The strict loop and
+`準備完了`. Synthetic input activation was unavailable, but the official
+single-instance command-line open path loaded the alpha52 project in that exact
+process and the old missing-runtime-watermark error did not recur. The two
+Display routes remain safely disarmed after project replacement. Physical
+USB-DMX, Art-Net, Spout, re-armed Display content, Timeline Play/Follow/Pedal,
+and audible audio remain separate acceptance gates. The complete-show alpha53
+derivative also opens in the same exact alpha.55 process without the watermark
+error; this is an open/read proof, not a Play claim. The strict loop and
 snapshot-watermark checkers are registered in `check:release`, so the
 cross-platform CI release step runs both. The historical
 alpha.39 native checkpoint used source/docs `HEAD`

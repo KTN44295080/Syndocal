@@ -52,17 +52,41 @@ ProductVersion/FileVersion `1.2.0-alpha.55`, `62,292,480` bytes, SHA-256
 Exactly one checkout-owned PID `56892` exposes one responsive `Syndocal`
 window and reports `準備完了`. Window capture succeeded, but the automation
 helper could not activate the captured window after its one permitted clean
-reinitialization; therefore no UI mutation was attempted and opening alpha52
-in this exact build remains an explicit external/manual gate.
+reinitialization; therefore no synthetic pointer/keyboard action was attempted.
+The exact alpha.55 executable was instead invoked with the alpha52 project
+through Syndocal's official single-instance command-line open path. The process
+count stayed at one, the project loaded into PID `56892`, and the old missing
+runtime-watermark rejection did not recur. The alpha52 read-only derivation
+verifier, structural preflight, and Timeline block/loop presentation gate pass.
+Its two MP3 and two currently referenced MP4 assets all exist and have been
+hashed. This closes native project open, not Timeline playback or output.
+The complete-show alpha53 derivative was subsequently loaded through the same
+official path into the same PID. Its exact path appeared in the native status,
+the old watermark failure again did not recur, and its `81,153 ms` Scene Block
+durations remain structurally valid. No Play command was issued.
 
 Physical USB-DMX is unavailable because the serial device is absent. Art-Net
-was not probed while Unity owns UDP 6454; Spout pixels, exact three-display
-content, and audible PROGRAM/CUE are also unverified. No physical/output claim
-is inferred from structural project or native startup proof. Protected
+was not probed while Unity owns UDP 6454. Alpha52 exposes both configured
+Display routes and all three compositions, but project replacement leaves the
+two physical windows `ProjectSwapDisarmed`; Spout pixels, re-armed exact
+three-display content, Timeline Play/Follow/Pedal, and audible PROGRAM/CUE are
+therefore unverified. Windows currently enumerates `Music (Elgato Virtual
+Audio)` and the other current output endpoints; the Setup-owned Cue Audio
+runtime/browser and output-bus gates pass. The reference-audio lane is
+persisted muted by design for live-show safety and must be deliberately unmuted
+for rehearsal listening. No physical/output claim is inferred from structural
+project or native startup proof. Protected
 `DSF2026-show-alpha51-usb-final.sdc` remains untracked and unchanged. Generated
 inventory is `target` `147,037,274,593` bytes / `106,330` files and
 `app/node_modules` `545,338,492` bytes / `3,704` files; cleanup reclaimed `0`
 bytes because no eligible exact-target cleanup harness exists.
+
+The StandardRelease three-display observer now binds the exact alpha.55
+version, byte size, hash, branch, and source commit. Its PowerShell 7 and
+Windows PowerShell 5.1 focused self-tests both pass `96/96`; independent Terra
+xHigh review reports GO with P0/P1/P2 `0`. This only makes the observer eligible
+after the tracked checkpoint is clean. It does not create/re-arm/move output
+windows and is not physical acceptance by itself.
 
 ## 2026-09-01 historical alpha.54 strict Timeline loop native checkpoint
 
