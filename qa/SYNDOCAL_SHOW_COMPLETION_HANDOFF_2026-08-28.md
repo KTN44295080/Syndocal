@@ -141,8 +141,24 @@ calls to remain suppressed. Windows PowerShell and PowerShell 7 each pass
 `96/96`; both parsers and scoped diff checking pass. Independent Terra xHigh
 review is GO with P0/P1 `0`; P2 is limited to no committed per-operation
 Connect/Send/Receive failure-disposal test, which the reviewer nevertheless
-probed independently. Commit and push this checkpoint before the next and only
+probed independently. This checkpoint was committed and pushed before the next
 StandardRelease Apply retry.
+
+The final StandardRelease Apply is accepted at evidence HEAD
+`f3b4fc4a162262c718a45e736eb457f95506e819`. Exact evidence directory:
+`target/qa/alpha53-complete-show-final-f3b4fc4-2009889d5a224f21a20be0eb045d6ee0`.
+`SHA256SUMS.txt` independently re-hashes every evidence file. `final.json`
+contains three consecutive stable samples with `accepted=true` and
+`native_hardware_claim=false`; `operation.json` is `performed=false`,
+`kind=none`. Each sample binds exact responsive PID `45336`, alpha.53 exe
+identity, artifact source `27f45d1689f415a9423e431d1bf9bf285c0bd634`,
+and current harness HEAD. Editor HWND `252514478` is maximized on `DISPLAY2`;
+output ID `3` / Display 1 is HWND `81333538`, full `1920x1080` on `DISPLAY5`;
+output ID `4` / Display 5 is HWND `79695962`, full `3840x2160` on `DISPLAY3`.
+The app-owned reader reports both exact outputs `live_open=true`, with unchanged
+titles, owner PID, stable monitor identities, DPI, and full physical bounds in
+all three samples. This closes native three-display placement/ownership only,
+not physical content visibility or any external hardware claim.
 
 Fresh USB-DMX, Art-Net, Spout, ASIO-device, and physical listening acceptance
 remain open. USB-DMX is absent on this PC; alpha.51 `all_white`/COM3 behavior is

@@ -123,8 +123,8 @@ now passes `95/95` in both Windows PowerShell and PowerShell 7, both parsers pas
 and scoped diff checking reports only Git's existing LF-to-CRLF notices.
 Independent Terra xHigh review is GO with P0/P1 `0`; its P2 note is the
 pre-existing PID-only identity race and the absence of a dedicated
-expected-listener-equals-checkout selftest. StandardRelease Apply remains
-pending until this harness checkpoint is committed and pushed cleanly.
+expected-listener-equals-checkout selftest. StandardRelease Apply was held until
+this harness checkpoint was committed and pushed cleanly.
 
 The first Apply on that clean ancestry checkpoint reached the live CDP reader
 and then rejected before sampling with `app-owned output observation must be one
@@ -143,6 +143,24 @@ with P0/P1 `0`; its P2-only note is that stored tests do not separately assert
 Dispose and exception propagation for each Connect/Send/Receive failure, though
 the reviewer independently probed all three. A new clean harness checkpoint is
 required before the next single StandardRelease Apply.
+
+That clean checkpoint was committed and pushed, and the final StandardRelease
+Apply accepted under evidence HEAD
+`f3b4fc4a162262c718a45e736eb457f95506e819`. The immutable local evidence is
+`target/qa/alpha53-complete-show-final-f3b4fc4-2009889d5a224f21a20be0eb045d6ee0`;
+all entries in its `SHA256SUMS.txt` re-hash exactly. `final.json` records
+`accepted=true`, three consecutive stable samples, and
+`native_hardware_claim=false`; `operation.json` records `performed=false` and
+`kind=none`. All three samples bind responsive PID `45336` and exact alpha.53
+artifact/source/current-harness identities. The editor HWND `252514478` is
+maximized on `DISPLAY2` at `1920x1032` client size. Output ID `3` / Display 1
+maps to HWND `81333538` on `DISPLAY5` and exactly fills `1920x1080`; output ID
+`4` / Display 5 maps to HWND `79695962` on `DISPLAY3` and exactly fills
+`3840x2160`. Both app-owned outputs remained `live_open=true`, and every
+window/monitor/title/owner/DPI/physical-bound observation stayed identical over
+the three `300 ms` samples. This accepts exact native three-display placement
+and ownership only; it does not claim physical content visibility, USB-DMX,
+Art-Net, Spout, ASIO-device, or audible output.
 
 ## 2026-09-01 alpha.52 operator-path and native checkpoint
 
