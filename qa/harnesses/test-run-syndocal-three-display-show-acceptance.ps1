@@ -48,6 +48,7 @@ $script:SeamNames = @(
   "Test-ThreeDisplayCheckoutClean",
   "Get-ThreeDisplayMonitorInventory",
   "Get-ThreeDisplayTopLevelWindows",
+  "Get-ThreeDisplayProcessRecord",
   "Get-ThreeDisplayCdpTransportObservation",
   "Get-ThreeDisplayWindowMetrics",
   "Invoke-WithThreeDisplayPhysicalDpiContext",
@@ -190,6 +191,7 @@ function New-GoodWorld {
 function Install-GoodWorldSeams {
   param($World)
   $script:CandidateProcessNameCalls = [System.Collections.Generic.List[string]]::new()
+  $script:CdpExpectedAncestorCalls = [System.Collections.Generic.List[uint32]]::new()
   Set-TestSeam "Get-SyndocalCandidateProcesses" {
     param($ProcessName)
     [void]$script:CandidateProcessNameCalls.Add([string]$ProcessName)
@@ -211,7 +213,8 @@ function Install-GoodWorldSeams {
   Set-TestSeam "Get-ThreeDisplayMonitorInventory" { @($script:World.monitors) }
   Set-TestSeam "Get-ThreeDisplayTopLevelWindows" { param($OwnerPid) @($script:World.windows) }
   Set-TestSeam "Get-ThreeDisplayCdpTransportObservation" {
-    param($CdpPort)
+    param($CdpPort, $ExpectedAncestorProcessId)
+    [void]$script:CdpExpectedAncestorCalls.Add([uint32]$ExpectedAncestorProcessId)
     [pscustomobject]@{
       listener_process_id = [uint32]5151
       listener_ancestor_process_ids = @([uint32]5151, [uint32]$script:GoodPid, [uint32]1)
@@ -617,52 +620,102 @@ function Invoke-FocusedChecks {
     $checks.Add([pscustomobject]@{ Name = "live output client must exactly fill physical monitor bounds"; Run = {
       $prior = $script:World.metrics[22]; $changed = New-TestMetrics 22 "Syndocal Output - LED Program" $script:GoodPid $script:World.monitors[1] 1920 1080; $changed.client_physical_bounds.left++; $changed.client_physical_bounds.right++; $script:World.metrics[22] = $changed; try { Assert-Throws { Get-ThreeDisplayStrictSample -Configuration $config -RequireEditorMaximized $true } "do not exactly fill" } finally { $script:World.metrics[22] = $prior }
     } })
+    $checks.Add([pscustomobject]@{ Name = "CDP ancestry stops at the exact checkout PID before reading its parent"; Run = {
+      $script:AncestryReads = [System.Collections.Generic.List[uint32]]::new()
+      Set-TestSeam "Get-ThreeDisplayProcessRecord" {
+        param($ProcessId)
+        [void]$script:AncestryReads.Add([uint32]$ProcessId)
+        if ([uint32]$ProcessId -eq [uint32]5151) { return [pscustomobject]@{ ParentProcessId = [uint32]$script:GoodPid } }
+        throw "unexpected process-parent read for PID $ProcessId"
+      }
+      try {
+        $ancestors = @(Get-ThreeDisplayProcessAncestorIds -ProcessId ([uint32]5151) -ExpectedAncestorProcessId $script:GoodPid)
+        $passed =
+          ($ancestors.Count -eq 2) -and
+          ($ancestors[0] -eq [uint32]5151) -and
+          ($ancestors[1] -eq $script:GoodPid) -and
+          ($script:AncestryReads.Count -eq 1) -and
+          ($script:AncestryReads[0] -eq [uint32]5151)
+        New-Check -Passed $passed -Detail "expected checkout PID is included and returned before its stale parent can be queried"
+      } finally { Install-GoodWorldSeams -World $script:World }
+    } })
+    $checks.Add([pscustomobject]@{ Name = "CDP ancestry disappearance before the exact checkout PID fails closed"; Run = {
+      $script:AncestryReads = [System.Collections.Generic.List[uint32]]::new()
+      Set-TestSeam "Get-ThreeDisplayProcessRecord" {
+        param($ProcessId)
+        [void]$script:AncestryReads.Add([uint32]$ProcessId)
+        if ([uint32]$ProcessId -eq [uint32]5151) { return [pscustomobject]@{ ParentProcessId = [uint32]5152 } }
+        return $null
+      }
+      try {
+        Assert-Throws { Get-ThreeDisplayProcessAncestorIds -ProcessId ([uint32]5151) -ExpectedAncestorProcessId $script:GoodPid } "5152 disappeared"
+      } finally { Install-GoodWorldSeams -World $script:World }
+    } })
+    $checks.Add([pscustomobject]@{ Name = "CDP ancestry wrong expected PID and zero terminus fail closed"; Run = {
+      Set-TestSeam "Get-ThreeDisplayProcessRecord" {
+        param($ProcessId)
+        if ([uint32]$ProcessId -eq [uint32]5151) { return [pscustomobject]@{ ParentProcessId = [uint32]0 } }
+        throw "unexpected process-parent read for PID $ProcessId"
+      }
+      try {
+        Assert-Throws { Get-ThreeDisplayProcessAncestorIds -ProcessId ([uint32]5151) -ExpectedAncestorProcessId $script:GoodPid } "terminated before exact checkout PID"
+      } finally { Install-GoodWorldSeams -World $script:World }
+    } })
+    $checks.Add([pscustomobject]@{ Name = "CDP ancestry cycle before the exact checkout PID fails closed"; Run = {
+      Set-TestSeam "Get-ThreeDisplayProcessRecord" {
+        param($ProcessId)
+        [pscustomobject]@{ ParentProcessId = [uint32]5151 }
+      }
+      try {
+        Assert-Throws { Get-ThreeDisplayProcessAncestorIds -ProcessId ([uint32]5151) -ExpectedAncestorProcessId $script:GoodPid } "invalid or cyclic"
+      } finally { Install-GoodWorldSeams -World $script:World }
+    } })
     $checks.Add([pscustomobject]@{ Name = "app-owned self-verified main frontend reader succeeds through the complete transport seam"; Run = {
       $observation = Get-ThreeDisplayExactOutputWindowObservation -Configuration $config
-      New-Check -Passed ($observation.schema_version -eq 1 -and $observation.source -eq "app-owned-read-only" -and $observation.outputs[0].output_id -ceq "41" -and $observation.outputs[0].native_window_handle_decimal -ceq "22") -Detail "strict canonical string observation returned from one self-verified main reader"
+      New-Check -Passed ($observation.schema_version -eq 1 -and $observation.source -eq "app-owned-read-only" -and $observation.outputs[0].output_id -ceq "41" -and $observation.outputs[0].native_window_handle_decimal -ceq "22" -and $script:CdpExpectedAncestorCalls.Count -eq 1 -and $script:CdpExpectedAncestorCalls[0] -eq $script:GoodPid) -Detail "strict canonical string observation returned from one self-verified main reader with the exact checkout PID bound into transport"
     } })
     $checks.Add([pscustomobject]@{ Name = "ambiguous self-verified main frontend readers are rejected"; Run = {
-      Set-TestSeam "Get-ThreeDisplayCdpTransportObservation" { param($CdpPort) [pscustomobject]@{ listener_process_id = [uint32]5151; listener_ancestor_process_ids = @([uint32]5151, [uint32]$script:GoodPid, [uint32]1); pages = @([pscustomobject]@{ strict_reader_succeeded = $true; command_result = $script:World.output_observation; failure = $null }, [pscustomobject]@{ strict_reader_succeeded = $true; command_result = $script:World.output_observation; failure = $null }) } }
+      Set-TestSeam "Get-ThreeDisplayCdpTransportObservation" { param($CdpPort, $ExpectedAncestorProcessId) [pscustomobject]@{ listener_process_id = [uint32]5151; listener_ancestor_process_ids = @([uint32]5151, [uint32]$script:GoodPid, [uint32]1); pages = @([pscustomobject]@{ strict_reader_succeeded = $true; command_result = $script:World.output_observation; failure = $null }, [pscustomobject]@{ strict_reader_succeeded = $true; command_result = $script:World.output_observation; failure = $null }) } }
       try { Assert-Throws { Get-ThreeDisplayExactOutputWindowObservation -Configuration $config } "exactly one" } finally { Install-GoodWorldSeams -World $script:World }
     } })
     $checks.Add([pscustomobject]@{ Name = "only rejected non-main frontend readers fail closed"; Run = {
-      Set-TestSeam "Get-ThreeDisplayCdpTransportObservation" { param($CdpPort) [pscustomobject]@{ listener_process_id = [uint32]5151; listener_ancestor_process_ids = @([uint32]5151, [uint32]$script:GoodPid, [uint32]1); pages = @([pscustomobject]@{ strict_reader_succeeded = $false; command_result = $null; failure = "reader is restricted to the main Tauri window" }) } }
+      Set-TestSeam "Get-ThreeDisplayCdpTransportObservation" { param($CdpPort, $ExpectedAncestorProcessId) [pscustomobject]@{ listener_process_id = [uint32]5151; listener_ancestor_process_ids = @([uint32]5151, [uint32]$script:GoodPid, [uint32]1); pages = @([pscustomobject]@{ strict_reader_succeeded = $false; command_result = $null; failure = "reader is restricted to the main Tauri window" }) } }
       try { Assert-Throws { Get-ThreeDisplayExactOutputWindowObservation -Configuration $config } "exposed 0" } finally { Install-GoodWorldSeams -World $script:World }
     } })
     $checks.Add([pscustomobject]@{ Name = "missing WebView page is rejected"; Run = {
-      Set-TestSeam "Get-ThreeDisplayCdpTransportObservation" { param($CdpPort) [pscustomobject]@{ listener_process_id = [uint32]5151; listener_ancestor_process_ids = @([uint32]5151, [uint32]$script:GoodPid, [uint32]1); pages = @() } }
+      Set-TestSeam "Get-ThreeDisplayCdpTransportObservation" { param($CdpPort, $ExpectedAncestorProcessId) [pscustomobject]@{ listener_process_id = [uint32]5151; listener_ancestor_process_ids = @([uint32]5151, [uint32]$script:GoodPid, [uint32]1); pages = @() } }
       try { Assert-Throws { Get-ThreeDisplayExactOutputWindowObservation -Configuration $config } "exposed 0" } finally { Install-GoodWorldSeams -World $script:World }
     } })
     $checks.Add([pscustomobject]@{ Name = "missing strict frontend observation reader result is rejected"; Run = {
-      Set-TestSeam "Get-ThreeDisplayCdpTransportObservation" { param($CdpPort) [pscustomobject]@{ listener_process_id = [uint32]5151; listener_ancestor_process_ids = @([uint32]5151, [uint32]$script:GoodPid, [uint32]1); pages = @([pscustomobject]@{ strict_reader_succeeded = $true; command_result = $null; failure = $null }) } }
+      Set-TestSeam "Get-ThreeDisplayCdpTransportObservation" { param($CdpPort, $ExpectedAncestorProcessId) [pscustomobject]@{ listener_process_id = [uint32]5151; listener_ancestor_process_ids = @([uint32]5151, [uint32]$script:GoodPid, [uint32]1); pages = @([pscustomobject]@{ strict_reader_succeeded = $true; command_result = $null; failure = $null }) } }
       try { Assert-Throws { Get-ThreeDisplayExactOutputWindowObservation -Configuration $config } "returned no output observation result" } finally { Install-GoodWorldSeams -World $script:World }
     } })
     $checks.Add([pscustomobject]@{ Name = "non-Boolean strict reader success flag is rejected"; Run = {
-      Set-TestSeam "Get-ThreeDisplayCdpTransportObservation" { param($CdpPort) [pscustomobject]@{ listener_process_id = [uint32]5151; listener_ancestor_process_ids = @([uint32]5151, [uint32]$script:GoodPid, [uint32]1); pages = @([pscustomobject]@{ strict_reader_succeeded = 1; command_result = $script:World.output_observation; failure = $null }) } }
+      Set-TestSeam "Get-ThreeDisplayCdpTransportObservation" { param($CdpPort, $ExpectedAncestorProcessId) [pscustomobject]@{ listener_process_id = [uint32]5151; listener_ancestor_process_ids = @([uint32]5151, [uint32]$script:GoodPid, [uint32]1); pages = @([pscustomobject]@{ strict_reader_succeeded = 1; command_result = $script:World.output_observation; failure = $null }) } }
       try { Assert-Throws { Get-ThreeDisplayExactOutputWindowObservation -Configuration $config } "not Boolean" } finally { Install-GoodWorldSeams -World $script:World }
     } })
     $checks.Add([pscustomobject]@{ Name = "rejected strict reader carrying a result is rejected"; Run = {
-      Set-TestSeam "Get-ThreeDisplayCdpTransportObservation" { param($CdpPort) [pscustomobject]@{ listener_process_id = [uint32]5151; listener_ancestor_process_ids = @([uint32]5151, [uint32]$script:GoodPid, [uint32]1); pages = @([pscustomobject]@{ strict_reader_succeeded = $false; command_result = $script:World.output_observation; failure = "reader is restricted to the main Tauri window" }) } }
+      Set-TestSeam "Get-ThreeDisplayCdpTransportObservation" { param($CdpPort, $ExpectedAncestorProcessId) [pscustomobject]@{ listener_process_id = [uint32]5151; listener_ancestor_process_ids = @([uint32]5151, [uint32]$script:GoodPid, [uint32]1); pages = @([pscustomobject]@{ strict_reader_succeeded = $false; command_result = $script:World.output_observation; failure = "reader is restricted to the main Tauri window" }) } }
       try { Assert-Throws { Get-ThreeDisplayExactOutputWindowObservation -Configuration $config } "also contains a command result" } finally { Install-GoodWorldSeams -World $script:World }
     } })
     $checks.Add([pscustomobject]@{ Name = "wrong CDP listener ancestry PID is rejected"; Run = {
-      Set-TestSeam "Get-ThreeDisplayCdpTransportObservation" { param($CdpPort) [pscustomobject]@{ listener_process_id = [uint32]5151; listener_ancestor_process_ids = @([uint32]5151, [uint32]4244, [uint32]1); pages = @([pscustomobject]@{ strict_reader_succeeded = $true; command_result = $script:World.output_observation; failure = $null }) } }
+      Set-TestSeam "Get-ThreeDisplayCdpTransportObservation" { param($CdpPort, $ExpectedAncestorProcessId) [pscustomobject]@{ listener_process_id = [uint32]5151; listener_ancestor_process_ids = @([uint32]5151, [uint32]4244, [uint32]1); pages = @([pscustomobject]@{ strict_reader_succeeded = $true; command_result = $script:World.output_observation; failure = $null }) } }
       try { Assert-Throws { Get-ThreeDisplayExactOutputWindowObservation -Configuration $config } "not descended" } finally { Install-GoodWorldSeams -World $script:World }
     } })
     $checks.Add([pscustomobject]@{ Name = "CDP ancestry must begin with the exact listener PID"; Run = {
-      Set-TestSeam "Get-ThreeDisplayCdpTransportObservation" { param($CdpPort) [pscustomobject]@{ listener_process_id = [uint32]5151; listener_ancestor_process_ids = @([uint32]5152, [uint32]$script:GoodPid, [uint32]1); pages = @([pscustomobject]@{ strict_reader_succeeded = $true; command_result = $script:World.output_observation; failure = $null }) } }
+      Set-TestSeam "Get-ThreeDisplayCdpTransportObservation" { param($CdpPort, $ExpectedAncestorProcessId) [pscustomobject]@{ listener_process_id = [uint32]5151; listener_ancestor_process_ids = @([uint32]5152, [uint32]$script:GoodPid, [uint32]1); pages = @([pscustomobject]@{ strict_reader_succeeded = $true; command_result = $script:World.output_observation; failure = $null }) } }
       try { Assert-Throws { Get-ThreeDisplayExactOutputWindowObservation -Configuration $config } "does not begin with listener PID" } finally { Install-GoodWorldSeams -World $script:World }
     } })
     $checks.Add([pscustomobject]@{ Name = "repeated CDP ancestry PID is rejected"; Run = {
-      Set-TestSeam "Get-ThreeDisplayCdpTransportObservation" { param($CdpPort) [pscustomobject]@{ listener_process_id = [uint32]5151; listener_ancestor_process_ids = @([uint32]5151, [uint32]$script:GoodPid, [uint32]5151); pages = @([pscustomobject]@{ strict_reader_succeeded = $true; command_result = $script:World.output_observation; failure = $null }) } }
+      Set-TestSeam "Get-ThreeDisplayCdpTransportObservation" { param($CdpPort, $ExpectedAncestorProcessId) [pscustomobject]@{ listener_process_id = [uint32]5151; listener_ancestor_process_ids = @([uint32]5151, [uint32]$script:GoodPid, [uint32]5151); pages = @([pscustomobject]@{ strict_reader_succeeded = $true; command_result = $script:World.output_observation; failure = $null }) } }
       try { Assert-Throws { Get-ThreeDisplayExactOutputWindowObservation -Configuration $config } "contains a repeated PID" } finally { Install-GoodWorldSeams -World $script:World }
     } })
     $checks.Add([pscustomobject]@{ Name = "zero CDP listener PID is rejected"; Run = {
-      Set-TestSeam "Get-ThreeDisplayCdpTransportObservation" { param($CdpPort) [pscustomobject]@{ listener_process_id = [uint32]0; listener_ancestor_process_ids = @([uint32]0, [uint32]$script:GoodPid); pages = @([pscustomobject]@{ strict_reader_succeeded = $true; command_result = $script:World.output_observation; failure = $null }) } }
+      Set-TestSeam "Get-ThreeDisplayCdpTransportObservation" { param($CdpPort, $ExpectedAncestorProcessId) [pscustomobject]@{ listener_process_id = [uint32]0; listener_ancestor_process_ids = @([uint32]0, [uint32]$script:GoodPid); pages = @([pscustomobject]@{ strict_reader_succeeded = $true; command_result = $script:World.output_observation; failure = $null }) } }
       try { Assert-Throws { Get-ThreeDisplayExactOutputWindowObservation -Configuration $config } "must be one nonzero UInt32" } finally { Install-GoodWorldSeams -World $script:World }
     } })
     $checks.Add([pscustomobject]@{ Name = "missing CDP pages collection is rejected"; Run = {
-      Set-TestSeam "Get-ThreeDisplayCdpTransportObservation" { param($CdpPort) [pscustomobject]@{ listener_process_id = [uint32]5151; listener_ancestor_process_ids = @([uint32]5151, [uint32]$script:GoodPid, [uint32]1) } }
+      Set-TestSeam "Get-ThreeDisplayCdpTransportObservation" { param($CdpPort, $ExpectedAncestorProcessId) [pscustomobject]@{ listener_process_id = [uint32]5151; listener_ancestor_process_ids = @([uint32]5151, [uint32]$script:GoodPid, [uint32]1) } }
       try { Assert-Throws { Get-ThreeDisplayExactOutputWindowObservation -Configuration $config } "pages are missing or not an array" } finally { Install-GoodWorldSeams -World $script:World }
     } })
     $checks.Add([pscustomobject]@{ Name = "invalid app-owned observation schema is rejected"; Run = {
@@ -711,7 +764,7 @@ function Invoke-FocusedChecks {
     $checks.Add([pscustomobject]@{ Name = "configured rejected dry-run returns failure rather than success"; Run = {
       $dryConfig = New-GoodConfiguration -Apply $false
       $evidence = New-TestEvidenceDirectory
-      Set-TestSeam "Get-ThreeDisplayCdpTransportObservation" { param($CdpPort) throw "Fail closed: loopback CDP endpoint is unavailable." }
+      Set-TestSeam "Get-ThreeDisplayCdpTransportObservation" { param($CdpPort, $ExpectedAncestorProcessId) throw "Fail closed: loopback CDP endpoint is unavailable." }
       try {
         $result = Invoke-ThreeDisplayAcceptance -Configuration $dryConfig -EvidenceDirectory $evidence
         New-Check -Passed ((-not $result.succeeded) -and $result.verdict -eq "dry-run-rejected") -Detail "configured observation transport gap is a nonzero final-show route"

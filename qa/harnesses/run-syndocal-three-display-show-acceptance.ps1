@@ -1401,7 +1401,8 @@ function Get-ThreeDisplayExactOutputWindowObservation {
     throw "Fail closed: exact output ID-to-HWND observation requires one explicit loopback CDP port."
   }
   $process = Get-ThreeDisplayExactCheckoutProcess -Configuration $Configuration
-  $transport = Get-ThreeDisplayCdpTransportObservation -CdpPort ([int]$Configuration.cdp_port)
+  $expectedPid = ConvertTo-ThreeDisplayStrictProcessId -Value $process.process_id -Subject "exact checkout PID"
+  $transport = Get-ThreeDisplayCdpTransportObservation -CdpPort ([int]$Configuration.cdp_port) -ExpectedAncestorProcessId $expectedPid
   if ($null -eq $transport) {
     throw "Fail closed: exact output observation CDP transport returned no evidence."
   }
@@ -1419,7 +1420,6 @@ function Get-ThreeDisplayExactOutputWindowObservation {
   if ((@($ancestors | Select-Object -Unique)).Count -ne $ancestors.Count) {
     throw "Fail closed: CDP listener ancestry contains a repeated PID."
   }
-  $expectedPid = ConvertTo-ThreeDisplayStrictProcessId -Value $process.process_id -Subject "exact checkout PID"
   if ($ancestors -notcontains $expectedPid) {
     throw "Fail closed: CDP listener PID $listenerPid is not descended from exact checkout PID $expectedPid."
   }
@@ -1633,19 +1633,34 @@ function Invoke-ThreeDisplayCdpRuntimeEvaluate {
   }
 }
 
-function Get-ThreeDisplayProcessAncestorIds {
+function Get-ThreeDisplayProcessRecord {
+  # SEAM: the narrow process-parent record boundary used by the CDP ancestry
+  # proof.  The proof deliberately stops at the exact checkout process, so it
+  # never needs to inspect that process's parent or any stale launcher above it.
   param([Parameter(Mandatory = $true)][uint32]$ProcessId)
+  return Get-CimInstance Win32_Process -Filter "ProcessId = $ProcessId" -ErrorAction Stop
+}
+
+function Get-ThreeDisplayProcessAncestorIds {
+  param(
+    [Parameter(Mandatory = $true)][uint32]$ProcessId,
+    [Parameter(Mandatory = $true)][uint32]$ExpectedAncestorProcessId
+  )
+  if ($ExpectedAncestorProcessId -eq 0) {
+    throw "Fail closed: expected checkout ancestor PID must be one nonzero UInt32."
+  }
   $ancestors = [System.Collections.Generic.List[uint32]]::new()
   $seen = [System.Collections.Generic.HashSet[uint32]]::new()
   [uint32]$current = $ProcessId
   for ($depth = 0; $depth -lt 64; $depth++) {
     if ($current -eq 0 -or -not $seen.Add($current)) { throw "Fail closed: CDP listener process ancestry is invalid or cyclic." }
-    $record = Get-CimInstance Win32_Process -Filter "ProcessId = $current" -ErrorAction Stop
-    if ($null -eq $record) { throw "Fail closed: CDP listener process $current disappeared during ancestry proof." }
     $ancestors.Add($current)
+    if ($current -eq $ExpectedAncestorProcessId) { return @($ancestors) }
+    $record = Get-ThreeDisplayProcessRecord -ProcessId $current
+    if ($null -eq $record) { throw "Fail closed: CDP listener process $current disappeared during ancestry proof." }
     if ([uint64]$record.ParentProcessId -gt [uint64][uint32]::MaxValue) { throw "Fail closed: CDP listener process ancestry contains an invalid parent PID." }
     [uint32]$parent = [uint32]$record.ParentProcessId
-    if ($parent -eq 0) { return @($ancestors) }
+    if ($parent -eq 0) { throw "Fail closed: CDP listener process ancestry terminated before exact checkout PID $ExpectedAncestorProcessId." }
     $current = $parent
   }
   throw "Fail closed: CDP listener process ancestry exceeded 64 levels."
@@ -1655,13 +1670,19 @@ function Get-ThreeDisplayCdpTransportObservation {
   # SEAM: this is the complete live-process/CDP transport boundary. It only
   # observes an explicitly supplied loopback port and never changes a process,
   # window, Tauri state, focus, or Z-order.
-  param([Parameter(Mandatory = $true)][int]$CdpPort)
+  param(
+    [Parameter(Mandatory = $true)][int]$CdpPort,
+    [Parameter(Mandatory = $true)][uint32]$ExpectedAncestorProcessId
+  )
+  if ($ExpectedAncestorProcessId -eq 0) {
+    throw "Fail closed: expected checkout ancestor PID must be one nonzero UInt32."
+  }
   $listeners = @(Get-NetTCPConnection -LocalPort $CdpPort -State Listen -ErrorAction Stop)
   if ($listeners.Count -ne 1) { throw "Fail closed: loopback CDP port $CdpPort has $($listeners.Count) listening endpoints; exactly one is required." }
   $listener = $listeners[0]
   if ([string]$listener.LocalAddress -cne "127.0.0.1") { throw "Fail closed: CDP port $CdpPort is not bound exactly to 127.0.0.1." }
   $listenerPid = ConvertTo-ThreeDisplayStrictProcessId -Value ([uint32]$listener.OwningProcess) -Subject "CDP listener PID"
-  $ancestors = Get-ThreeDisplayProcessAncestorIds -ProcessId $listenerPid
+  $ancestors = Get-ThreeDisplayProcessAncestorIds -ProcessId $listenerPid -ExpectedAncestorProcessId $ExpectedAncestorProcessId
   $commandExpression = @'
 (async () => {
   const read = window.__syndocalReadVideoOutputWindowObservationV1;

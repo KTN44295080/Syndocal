@@ -108,6 +108,24 @@ alpha.51 project remains `1,116,223` bytes, SHA-256
 `7031196A6527431FB8D625F420FE5D3E442DD2AA35D2ED86D57AF9EDF69890A7`, and must
 not be staged, moved, modified, or deleted.
 
+The next two deliberate Apply attempts also rejected before display sampling.
+Their identical diagnostic named PID `74648`, but current live inspection proved
+that PID was not the CDP listener: listener PID `81660` was a stable direct child
+of exact Syndocal PID `45336`, while `74648` was the already-exited parent of
+Syndocal. The old ancestry proof continued above the already-proved exact
+Syndocal trust root and therefore mistook the stale launcher for a listener
+failure. The corrected proof binds the exact checkout PID into the transport,
+includes it in the ancestry evidence, and returns immediately without reading
+its parent. Disappearance, zero termination, cycles, or excessive depth before
+that exact PID still fail closed; the listener-first, unique-PID, exact-PID,
+loopback, and single strict-reader checks remain. The focused cross-shell suite
+now passes `95/95` in both Windows PowerShell and PowerShell 7, both parsers pass,
+and scoped diff checking reports only Git's existing LF-to-CRLF notices.
+Independent Terra xHigh review is GO with P0/P1 `0`; its P2 note is the
+pre-existing PID-only identity race and the absence of a dedicated
+expected-listener-equals-checkout selftest. StandardRelease Apply remains
+pending until this harness checkpoint is committed and pushed cleanly.
+
 ## 2026-09-01 alpha.52 operator-path and native checkpoint
 
 Alpha.52 is the current show-critical checkpoint. It moves arbitrary Windows

@@ -114,6 +114,21 @@ discard only the guard success output; guard exceptions still fail closed. The
 new scalar-output regression contract passes `91/91` in both Windows PowerShell
 and PowerShell 7, and independent Terra xHigh review reports P0/P1/P2 `0`.
 
+Two subsequent Apply attempts rejected before sampling with the same stale
+ancestry diagnostic. Live process evidence showed CDP listener PID `81660` as a
+stable direct child of exact Syndocal PID `45336`; the reported PID `74648` was
+instead Syndocal's already-exited parent. The old helper walked past the exact
+Syndocal trust root toward PID zero. It now receives the exact checkout PID,
+includes that PID and stops immediately, while failure before reaching it,
+zero termination, cycles, and excessive depth remain fail-closed. Existing
+listener-first, uniqueness, exact-PID containment, loopback-listener, and single
+strict-reader checks remain intact. Windows PowerShell and PowerShell 7 each
+pass `95/95`; both parsers pass; scoped diff checking has only LF-to-CRLF Git
+notices. Independent Terra xHigh review is GO with P0/P1 `0` and a P2-only note
+for the existing PID-reuse race plus no dedicated expected-listener-equals-root
+selftest. The next safe action is to commit/push this harness checkpoint, then
+perform exactly one new StandardRelease Apply with the new clean HEAD.
+
 Fresh USB-DMX, Art-Net, Spout, ASIO-device, and physical listening acceptance
 remain open. USB-DMX is absent on this PC; alpha.51 `all_white`/COM3 behavior is
 historical evidence only. The protected user project
