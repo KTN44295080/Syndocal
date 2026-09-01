@@ -80,6 +80,12 @@ pass `96/96`; independent Terra xHigh review is GO with P0/P1/P2 `0`. After
 this tracked checkpoint is committed, it can observe three stable samples of
 already-open outputs. It never creates, re-arms, or moves those outputs.
 
+The tracked alpha.55 observer/documentation checkpoint is pushed as
+`feb300674a417e8b35b52abb80b95e8aad0dde64` on `codex/syndocal-v1.2`. The
+authoritative resume state is the commit containing this note after its
+upstream-equal push; the exact post-push equality must be rechecked before any
+physical acceptance action.
+
 Never stage or modify the untracked protected project
 `DSF2026-show-alpha51-usb-final.sdc` (`1,116,223` bytes; SHA-256
 `7031196A6527431FB8D625F420FE5D3E442DD2AA35D2ED86D57AF9EDF69890A7`).
