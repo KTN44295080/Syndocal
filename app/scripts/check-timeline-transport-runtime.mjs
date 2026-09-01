@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import ts from "typescript";
 
-const [controllerSource, appSource, automationSource, keyboardSource, shortcutSource, operatorSource, cuePanelSource] = await Promise.all([
+const [controllerSource, appSource, automationSource, keyboardSource, shortcutSource, operatorSource, cuePanelSource, rustSource] = await Promise.all([
   readFile(new URL("../src/timelineTransportRuntimeController.ts", import.meta.url), "utf8"),
   readFile(new URL("../src/App.tsx", import.meta.url), "utf8"),
   readFile(new URL("../src/createTimelineAutomationController.ts", import.meta.url), "utf8"),
@@ -10,6 +10,7 @@ const [controllerSource, appSource, automationSource, keyboardSource, shortcutSo
   readFile(new URL("../src/appShortcutActions.ts", import.meta.url), "utf8"),
   readFile(new URL("../src/components/TimelineOperatorBar.tsx", import.meta.url), "utf8"),
   readFile(new URL("../src/components/TimelineCueEventsPanel.tsx", import.meta.url), "utf8"),
+  readFile(new URL("../../app/src-tauri/src/main.rs", import.meta.url), "utf8"),
 ]);
 
 const transpiled = ts.transpileModule(controllerSource, {
@@ -474,8 +475,57 @@ assert.match(
 );
 assert.match(
   appSource,
-  /const refreshTimelineTransportCanonicalSnapshot = async \([\s\S]*?timelineTransportRuntimeScopeIsCurrent\(acknowledgement\.scope\)[\s\S]*?tauriInvoke<ProjectAuthorityBundle>\("get_project_authority_bundle", \{[\s\S]*?expectedEpoch: expectedAuthority\.project_epoch,[\s\S]*?expectedRevision: expectedAuthority\.project_revision,[\s\S]*?expectedCheckpointHash: expectedAuthority\.checkpoint_hash,[\s\S]*?timeline\.playing !== acknowledgement\.requestedPlaying[\s\S]*?timeline\.transport_epoch !== acknowledgement\.epochAfter[\s\S]*?timeline\.transport_generation !== acknowledgement\.generationAfter[\s\S]*?applyEngineSnapshot\(canonical\.snapshot\);[\s\S]*?setSnapshotRevision\(null\);/,
-  "root Timeline must apply only the exact authority-bound canonical transport snapshot",
+  /const refreshTimelineTransportCanonicalSnapshot = async \([\s\S]*?timelineTransportRuntimeScopeIsCurrent\(acknowledgement\.scope\)[\s\S]*?tauriInvoke<ProjectAuthorityBundle>\("get_project_authority_bundle", \{[\s\S]*?expectedEpoch: expectedAuthority\.project_epoch,[\s\S]*?expectedRevision: expectedAuthority\.project_revision,[\s\S]*?expectedCheckpointHash: expectedAuthority\.checkpoint_hash,[\s\S]*?timeline\.playing !== acknowledgement\.requestedPlaying[\s\S]*?canonical\.timeline_transport_epoch !== acknowledgement\.epochAfter[\s\S]*?canonical\.timeline_transport_generation !== acknowledgement\.generationAfter[\s\S]*?applyEngineSnapshot\(canonical\.snapshot\);[\s\S]*?setSnapshotRevision\(null\);/,
+  "root Timeline must apply only the exact authority-bound canonical transport snapshot and top-level runtime fence",
+);
+
+// TimelineSummary intentionally skips its runtime transport fence for project
+// persistence. The authority bundle must therefore project the values at its
+// own top level, and the real Rust serializer test must prove both sides of
+// that boundary.
+assert.match(
+  rustSource,
+  /#\[derive\(Debug, Clone, Serialize\)\][\s\S]*?struct ProjectAuthorityBundle \{[\s\S]*?timeline_transport_epoch: u64,[\s\S]*?timeline_transport_generation: u64,/,
+  "Rust authority bundle must expose top-level runtime transport fence fields",
+);
+assert.match(
+  rustSource,
+  /fn project_authority_bundle_from_captured_snapshot\([\s\S]*?snapshot: EngineSnapshot,[\s\S]*?let \(timeline_transport_epoch, timeline_transport_generation\) =\s*project_authority_transport_fence\(&snapshot\);[\s\S]*?timeline_transport_epoch,[\s\S]*?timeline_transport_generation,[\s\S]*?snapshot,/,
+  "Rust bundle construction must capture the fence before moving the exact snapshot",
+);
+assert.match(
+  rustSource,
+  /fn project_authority_bundle_serializes_runtime_transport_fence_at_top_level\(\)[\s\S]*?serde_json::to_value\(&mutation\.authority\)[\s\S]*?wire\["timeline_transport_epoch"\][\s\S]*?wire\["timeline_transport_generation"\][\s\S]*?get\("transport_epoch"\)\s*\.is_none\(\)[\s\S]*?get\("transport_generation"\)\s*\.is_none\(\)/,
+  "Rust serialization proof must cover top-level fields and omitted nested persistence fields",
+);
+
+const canonicalBundleTransportMatches = (bundle, requestedPlaying, epochAfter, generationAfter) =>
+  bundle.snapshot.timeline.playing === requestedPlaying
+  && bundle.timeline_transport_epoch === epochAfter
+  && bundle.timeline_transport_generation === generationAfter;
+const canonicalBundle = {
+  snapshot: { timeline: { playing: false } },
+  timeline_transport_epoch: 7,
+  timeline_transport_generation: 31,
+};
+assert.equal(
+  canonicalBundleTransportMatches(canonicalBundle, false, 7, 31),
+  true,
+  "a serialized authority bundle with the exact top-level fence must converge",
+);
+assert.equal(
+  canonicalBundleTransportMatches({ ...canonicalBundle, timeline_transport_epoch: 6 }, false, 7, 31),
+  false,
+  "a top-level epoch mismatch must reject canonical convergence",
+);
+assert.equal(
+  canonicalBundleTransportMatches({
+    ...canonicalBundle,
+    timeline: { playing: false },
+    snapshot: { timeline: { playing: false, transport_epoch: 7, transport_generation: 31 } },
+  }, false, 7, 31),
+  true,
+  "nested legacy-looking values cannot replace the top-level transport identity",
 );
 assert.match(
   appSource,

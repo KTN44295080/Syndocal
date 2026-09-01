@@ -1071,6 +1071,9 @@ export interface ProjectAuthorityBundle {
   project_epoch: number;
   project_revision: number;
   checkpoint_hash: string;
+  /** Runtime-only Timeline transport fence projected outside the persisted snapshot. */
+  timeline_transport_epoch: number;
+  timeline_transport_generation: number;
   publication_generation: number;
   publication_kind: ProjectAuthorityPublicationKind;
   /** Advances only for identity/Undo/Redo mapping replacement publications. */

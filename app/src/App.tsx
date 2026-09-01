@@ -20785,8 +20785,8 @@ export default function App() {
       }
       const timeline = canonical.snapshot.timeline;
       if (timeline.playing !== acknowledgement.requestedPlaying
-        || timeline.transport_epoch !== acknowledgement.epochAfter
-        || timeline.transport_generation !== acknowledgement.generationAfter) {
+        || canonical.timeline_transport_epoch !== acknowledgement.epochAfter
+        || canonical.timeline_transport_generation !== acknowledgement.generationAfter) {
         throw new Error(
           "Timeline transport canonical snapshot did not converge to the acknowledged runtime state.",
         );

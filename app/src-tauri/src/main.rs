@@ -22898,6 +22898,11 @@ struct ProjectAuthorityBundle {
     project_epoch: u64,
     project_revision: u64,
     checkpoint_hash: String,
+    /// Runtime-only Timeline transport fence projected outside the persisted
+    /// TimelineSummary.  TimelineSummary deliberately skips these fields on
+    /// the wire because project JSON must never persist runtime transport.
+    timeline_transport_epoch: u64,
+    timeline_transport_generation: u64,
     /// Distinguishes an ordinary external mutation (which a dirty local
     /// mapping draft may rebase onto) from a fenced identity/history
     /// publication (which must hydrate mappings before any retry).
@@ -26004,6 +26009,8 @@ fn project_authority_bundle_from_captured_snapshot(
     coordinator: &ProjectCoordinator,
     snapshot: EngineSnapshot,
 ) -> ProjectAuthorityBundle {
+    let (timeline_transport_epoch, timeline_transport_generation) =
+        project_authority_transport_fence(&snapshot);
     let mut profiles = coordinator
         .ancillary
         .custom_profiles
@@ -26015,6 +26022,8 @@ fn project_authority_bundle_from_captured_snapshot(
         project_epoch: coordinator.epoch,
         project_revision: coordinator.revision,
         checkpoint_hash: coordinator.checkpoint_hash.clone(),
+        timeline_transport_epoch,
+        timeline_transport_generation,
         publication_generation: coordinator.publication_generation,
         publication_kind: coordinator.last_publication_kind,
         mapping_replacement_generation: coordinator.mapping_replacement_generation,
@@ -26041,6 +26050,17 @@ fn project_authority_bundle_from_captured_snapshot(
         input_runtime: project_input_runtime_status_from_state(state),
         authored_effect_fence: None,
     }
+}
+
+/// Project authority bundles are the runtime wire projection for the
+/// renderer.  Keep the transport fence at this top level because the nested
+/// `TimelineSnapshot` intentionally skips the same values for persistence and
+/// protocol compatibility.
+fn project_authority_transport_fence(snapshot: &EngineSnapshot) -> (u64, u64) {
+    (
+        snapshot.timeline.transport_epoch,
+        snapshot.timeline.transport_generation,
+    )
 }
 
 /// The normal (exclusive) paths retain this concise helper.  Read-only poll
@@ -97024,12 +97044,24 @@ pub(crate) mod tests {
     fn authoritative_test_mutation(
         coordinator: &ProjectCoordinator,
     ) -> ProjectHistoryMutationResult {
+        let snapshot = EngineSnapshot::default();
+        authoritative_test_mutation_with_snapshot(coordinator, snapshot)
+    }
+
+    fn authoritative_test_mutation_with_snapshot(
+        coordinator: &ProjectCoordinator,
+        snapshot: EngineSnapshot,
+    ) -> ProjectHistoryMutationResult {
+        let (timeline_transport_epoch, timeline_transport_generation) =
+            project_authority_transport_fence(&snapshot);
         ProjectHistoryMutationResult {
             history_status: project_history_status_for_coordinator(coordinator),
             authority: ProjectAuthorityBundle {
                 project_epoch: coordinator.epoch,
                 project_revision: coordinator.revision,
                 checkpoint_hash: coordinator.checkpoint_hash.clone(),
+                timeline_transport_epoch,
+                timeline_transport_generation,
                 publication_generation: coordinator.publication_generation,
                 publication_kind: coordinator.last_publication_kind,
                 mapping_replacement_generation: coordinator.mapping_replacement_generation,
@@ -97042,7 +97074,7 @@ pub(crate) mod tests {
                 path_generation: coordinator.path_generation,
                 history_generation: coordinator.history_generation,
                 current_project_path: None,
-                snapshot: EngineSnapshot::default(),
+                snapshot,
                 profiles: Vec::new(),
                 fixture_groups: coordinator.ancillary.fixture_groups.clone(),
                 operator_policy: coordinator.ancillary.operator_policy.clone(),
@@ -97064,6 +97096,29 @@ pub(crate) mod tests {
                 authored_effect_fence: None,
             },
         }
+    }
+
+    #[test]
+    fn project_authority_bundle_serializes_runtime_transport_fence_at_top_level() {
+        let coordinator = ProjectCoordinator::default();
+        let mut snapshot = EngineSnapshot::default();
+        snapshot.timeline.transport_epoch = 41;
+        snapshot.timeline.transport_generation = 73;
+        snapshot.timeline.playing = true;
+
+        let mutation = authoritative_test_mutation_with_snapshot(&coordinator, snapshot);
+        let wire = serde_json::to_value(&mutation.authority)
+            .expect("authority bundle must serialize for the renderer");
+
+        assert_eq!(wire["timeline_transport_epoch"], json!(41));
+        assert_eq!(wire["timeline_transport_generation"], json!(73));
+        assert_eq!(wire["snapshot"]["timeline"]["playing"], json!(true));
+        assert!(wire["snapshot"]["timeline"]
+            .get("transport_epoch")
+            .is_none());
+        assert!(wire["snapshot"]["timeline"]
+            .get("transport_generation")
+            .is_none());
     }
 
     #[test]
