@@ -23,9 +23,31 @@ coverage remains zero-present. Independent Terra xHigh rereview is GO with
 P0/P1 `0`; its P2-only notes are a narrower explicit `position_ms` assertion
 and the pre-existing final-token-load-to-GPU-call TOCTOU that requires a
 separate engine-side presentation permit.
-No alpha.58 native build/start, Display 1/5 runtime acceptance, artifact/hash,
-or new physical/external acceptance is claimed. The source checkpoint is the
-commit containing this section and must be pushed upstream-equal before build.
+Source checkpoint `a0b9b00e4871739ab3765849c58846d30aee2d9b` produced the exact
+alpha.58 artifact in a pinned native build: Product/FileVersion
+`1.2.0-alpha.58`, `62,313,472` bytes, SHA-256
+`11BB7116E75EDA3B264DD81D94C14DA4040BF027656D11115A8E228AE53DCC31`,
+`2m43s`, first-party warnings `0`. PID `8720` exposes one responsive,
+maximized main window. Pre-open observations for output 3 and output 4 were
+both `live_open=false`; one click opened Display 1/output 3 with stable HWND
+`189075418`, then one click opened Display 5/output 4 with stable HWND
+`377557514` while output 3 remained live. Three Syndocal windows were present
+(main, output 1, output 5). Display 1 visibly rendered the fixed foreground
+logo. The `Video Switch Acceptance` Timeline drove Display 5 through Video 2,
+the expected black/no-signal MiraBox interval while that device was
+disconnected, and Video 2 again at approximately 1s, 5s, and 9s. Background
+route switching is proven, but camera content is not. Latest UI status is
+Display 1 `Window open / 1920x1080 / 94.3ms / 60 FAIL` and Display 5
+`Window open / 3840x2160 / 12.8ms / 60 FAIL`; Display 5 initially reached
+`10.4ms / 60 PASS`, then recorded a `1854.23ms` maximum and accumulated late
+frames during route switching. Full three-display performance acceptance
+remains blocked. Stderr had no
+display error, only DJ Link `trust_network_absent`; USB-DMX, audible audio,
+MiraBox/camera, and Unity/Spout remain unverified external gates.
+Display 1 changed foreground frames after 2.5s, proving animated presentation
+while Timeline ran. Timeline transport was paused and restarted for the
+background sequence above while the main window remained maximized at
+1920x1032.
 
 ## 2026-09-01 historical alpha.57 media-admission native checkpoint
 

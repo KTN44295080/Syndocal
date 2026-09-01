@@ -509,7 +509,8 @@ const currentReleaseBoundaryMarkers = Object.freeze([
       "## 2026-09-01 current alpha.58 display-authority source checkpoint",
       "Source focused acceptance is GO.",
       "passes `8/8`",
-      "No alpha.58 native build",
+      "Source checkpoint `a0b9b00e4871739ab3765849c58846d30aee2d9b`",
+      "Display 1 visibly rendered",
     ],
   },
   {
@@ -518,7 +519,8 @@ const currentReleaseBoundaryMarkers = Object.freeze([
       "## 2026-09-01 alpha.58 display-authority source candidate",
       "Alpha.58 is the current source candidate on `codex/syndocal-v1.2`",
       "passes `8/8`",
-      "No alpha.58 native build/start",
+      "Source checkpoint `a0b9b00e4871739ab3765849c58846d30aee2d9b`",
+      "Display 1 visibly rendered",
     ],
   },
   {
@@ -527,7 +529,8 @@ const currentReleaseBoundaryMarkers = Object.freeze([
       "## 2026-09-01 alpha.58 display-authority source candidate",
       "Alpha.58 is the current source candidate on `codex/syndocal-v1.2`",
       "passes `8/8`",
-      "No alpha.58 native build/start",
+      "Source checkpoint `a0b9b00e4871739ab3765849c58846d30aee2d9b`",
+      "Display 1 visibly rendered",
     ],
   },
 ]);

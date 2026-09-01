@@ -30,7 +30,36 @@ Current product metadata is `1.2.0-alpha.58` on branch
 media admission and removes a false native Display authority rejection caused
 by ordinary playhead/transition progress, while keeping semantic output changes
 fail-closed. The approved fixed foreground video plays in
-a full-duration loop. The immediately preceding alpha.56 closed the strict
+a full-duration loop.
+
+The alpha.58 native artifact was built from source checkpoint
+`a0b9b00e4871739ab3765849c58846d30aee2d9b`: Product/FileVersion
+`1.2.0-alpha.58`, `62,313,472` bytes, SHA-256
+`11BB7116E75EDA3B264DD81D94C14DA4040BF027656D11115A8E228AE53DCC31`,
+in `2m43s` with first-party warnings `0`. PID `8720` exposed one
+responsive, maximized main window. Pre-open output 3 and output 4 observations
+were both `live_open=false`; one click opened Display 1/output 3 with stable
+HWND `189075418`, and one click opened Display 5/output 4 with stable HWND
+`377557514` while output 3 remained live. Three Syndocal windows were
+present (main, output 1, output 5). Display 1 visibly rendered the fixed
+foreground logo. The `Video Switch Acceptance` Timeline then drove Display 5
+through Video 2, the expected black/no-signal MiraBox interval while that
+device was disconnected, and Video 2 again at approximately 1s, 5s, and 9s.
+That closes the native background route-switch proof, but not camera-content
+acceptance. The latest UI samples report Display 1
+`Window open / 1920x1080 / 94.3ms / 60 FAIL` and Display 5
+`Window open / 3840x2160 / 12.8ms / 60 FAIL`; Display 5 had initially reached
+`10.4ms / 60 PASS`, then recorded a `1854.23ms` maximum and accumulated late
+frames during route switching. Full three-display performance acceptance
+therefore remains blocked. Stderr had no display error,
+only DJ Link `trust_network_absent`. USB-DMX, audible audio, MiraBox/camera,
+and Unity/Spout remain unverified external gates.
+Display 1 changed foreground frames after 2.5s, proving animated presentation
+while Timeline ran. The background route-switch sequence above was observed on
+the physical Display 5 window. Timeline transport was then paused and restarted
+with the main window kept maximized at 1920x1032 for the exact sequence.
+
+The immediately preceding alpha.56 closed the strict
 root-loop release race at a
 natural Timeline terminal: loop release, terminal transport authority, and
 Follow admission now converge in one receipt-bearing worker transaction, while
