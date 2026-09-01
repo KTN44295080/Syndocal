@@ -1,6 +1,7 @@
 export type TimelineOverlapEventId = number | string;
 
 export const TIMELINE_OVERLAP_BADGE_WIDTH_PX = 24;
+export const TIMELINE_MAX_VISIBLE_OVERLAP_RAILS = 8;
 
 export interface TimelineOverlapEvent<
   TId extends TimelineOverlapEventId = TimelineOverlapEventId,
@@ -55,6 +56,29 @@ export interface TimelinePackedOverlapBadge<
   aggregated: boolean;
 }
 
+export interface TimelineOverlapRailEvent extends TimelineOverlapEvent {
+  /** The authored lane identity; omitted when the caller already scopes track. */
+  layer_id?: number | string;
+}
+
+export interface TimelineOverlapRailCluster {
+  track: string;
+  layer_id?: number | string;
+  member_ids: readonly TimelineOverlapEventId[];
+}
+
+export interface TimelineOverlapRailPlacement {
+  id: TimelineOverlapEventId;
+  track: string;
+  layer_id?: number | string;
+  /** Zero-based internal rail, ordered from the top of the expanded lane. */
+  rail_index: number | null;
+  /** Number of visible rails reserved for this lane, capped at the exported maximum. */
+  rail_count: number;
+  /** No marker is rendered; the overlap inspector remains the discoverability path. */
+  overflowed: boolean;
+}
+
 const FNV64_OFFSET = 0xcbf29ce484222325n;
 const FNV64_PRIME = 0x100000001b3n;
 const FNV64_MASK = 0xffffffffffffffffn;
@@ -63,6 +87,17 @@ const compareText = (left: string, right: string) => left < right ? -1 : left > 
 
 const eventIdKey = (id: TimelineOverlapEventId) =>
   typeof id === "number" ? `n:${Object.is(id, -0) ? 0 : id}` : `s:${id}`;
+
+const layerIdKey = (layerId: number | string | undefined) =>
+  layerId === undefined
+    ? "u:"
+    : `${typeof layerId === "number" ? "n" : "s"}:${String(layerId)}`;
+
+const railMembershipKey = (
+  track: string,
+  layerId: number | string | undefined,
+  memberId: TimelineOverlapEventId,
+) => `${track}\u001f${layerIdKey(layerId)}\u001f${eventIdKey(memberId)}`;
 
 const compareEventIds = (left: TimelineOverlapEventId, right: TimelineOverlapEventId) => {
   if (typeof left === "number" && typeof right === "number") return left - right;
@@ -201,6 +236,70 @@ export const buildTimelineOverlapClusters = <TEvent extends TimelineOverlapEvent
   }
 
   return clusters;
+};
+
+/**
+ * Assigns each visible overlap member to a deterministic interval rail.
+ *
+ * Rails are colored greedily after stable start/end/id sorting, reusing a rail
+ * only when its previous interval has ended. Search is deliberately bounded to
+ * eight rails; an event that arrives while all eight are occupied is returned
+ * with `overflowed: true` and no render rail, leaving the overlap inspector as
+ * its discoverability path. Explicit zero-duration events are excluded so
+ * legacy point markers cannot acquire a fake span.
+ */
+export const buildTimelineOverlapRailLayout = (
+  events: readonly TimelineOverlapRailEvent[],
+  clusters: readonly TimelineOverlapRailCluster[],
+): TimelineOverlapRailPlacement[] => {
+  const memberKeys = new Set<string>();
+  for (const cluster of clusters) {
+    for (const memberId of cluster.member_ids) {
+      memberKeys.add(railMembershipKey(cluster.track, cluster.layer_id, memberId));
+    }
+  }
+
+  const eventsByLayer = new Map<string, {
+    event: TimelineOverlapRailEvent;
+    interval: TimelineOverlapInterval;
+  }[]>();
+  for (const event of events) {
+    if (!memberKeys.has(railMembershipKey(event.track, event.layer_id, event.id))) continue;
+    if (event.duration_ms !== undefined && !(Number.isFinite(event.duration_ms) && event.duration_ms > 0)) {
+      continue;
+    }
+    const interval = timelineOverlapIntervalForEvent(event);
+    if (!interval) continue;
+    const layerKey = `${event.track}\u001f${layerIdKey(event.layer_id)}`;
+    const layerEvents = eventsByLayer.get(layerKey);
+    if (layerEvents) layerEvents.push({ event, interval });
+    else eventsByLayer.set(layerKey, [{ event, interval }]);
+  }
+
+  const placements: TimelineOverlapRailPlacement[] = [];
+  for (const layerKey of [...eventsByLayer.keys()].sort(compareText)) {
+    const layerEvents = eventsByLayer.get(layerKey) ?? [];
+    layerEvents.sort((left, right) => compareIntervals(left.interval, right.interval));
+    const railEndMs: number[] = [];
+    const layerPlacements: TimelineOverlapRailPlacement[] = [];
+    for (const { event, interval } of layerEvents) {
+      const railIndex = railEndMs.findIndex((endMs) => interval.start_ms >= endMs);
+      const canOpenRail = railIndex < 0 && railEndMs.length < TIMELINE_MAX_VISIBLE_OVERLAP_RAILS;
+      const assignedRail = railIndex >= 0 ? railIndex : canOpenRail ? railEndMs.length : null;
+      if (assignedRail !== null) railEndMs[assignedRail] = interval.end_ms;
+      layerPlacements.push({
+        id: event.id,
+        track: event.track,
+        layer_id: event.layer_id,
+        rail_index: assignedRail,
+        rail_count: 0,
+        overflowed: assignedRail === null,
+      });
+    }
+    const railCount = railEndMs.length;
+    placements.push(...layerPlacements.map((placement) => ({ ...placement, rail_count: railCount })));
+  }
+  return placements;
 };
 
 export const packTimelineOverlapClusterBadges = <

@@ -22,10 +22,85 @@ assert.equal(
   24,
   "the overlap packer and rendered badge share the 24px visual width contract",
 );
+assert.equal(
+  overlap.TIMELINE_MAX_VISIBLE_OVERLAP_RAILS,
+  8,
+  "overlap rails expose an explicit eight-rail visibility budget",
+);
 assert.match(
   overviewSource,
   /const clusterBadgeWidthPx = TIMELINE_OVERLAP_BADGE_WIDTH_PX;/,
   "the overview renders badges with the helper's packing width",
+);
+assert.match(
+  overviewSource,
+  /buildTimelineOverlapRailLayout\(/,
+  "the overview uses the deterministic model rail layout for overlap members",
+);
+assert.match(
+  overviewSource,
+  /class="timelineSceneBlockBody"/,
+  "each visible overlap member uses the full Scene Block body",
+);
+assert.match(
+  overviewSource,
+  /data-timeline-block-fade-ramp="in"/,
+  "visible overlap members preserve Scene Block fade polygons",
+);
+assert.match(
+  overviewSource,
+  /data-timeline-scene-block-badge=\{badge\.kind\}/,
+  "visible overlap members preserve rate and loop badges",
+);
+assert.match(
+  overviewSource,
+  /data-timeline-overlap-rail=\{sceneBlockOverlapRail\(event\)\?\.rail_index\}/,
+  "each rendered overlap span exposes its stable internal rail",
+);
+assert.match(
+  overviewSource,
+  /blockCenterYPx\(\{\s*id: event\.id,/s,
+  "marker geometry applies the member rail to the SVG transform",
+);
+assert.doesNotMatch(
+  overviewSource,
+  /sceneBlockRendersCompactOverlapSpan|timelineSceneBlockOverlapSpan|timelineSceneBlockOverlapIdentityBand/,
+  "overlap members use the existing full Scene Block subtree",
+);
+assert.match(
+  overviewSource,
+  /visibleRenderedEvents = createMemo/,
+  "overflowed members do not create hidden stacked interaction surfaces",
+);
+assert.match(
+  overviewSource,
+  /renderedEvents\(\)\.filter\(\(event\) => !sceneBlockIsOverflowed\(event\)/,
+  "the visible marker set filters overflowed events before DOM creation",
+);
+assert.match(
+  overviewSource,
+  /const markerTabStopId = createMemo\(\(\) => \{\s*const events = visibleRenderedEvents\(\)/s,
+  "roving marker focus uses the same overflow-filtered visible event set",
+);
+assert.match(
+  overviewSource,
+  /<For each=\{visibleRenderedEvents\(\)\}>/,
+  "the SVG marker DOM uses the same overflow-filtered visible event set",
+);
+assert.match(
+  overviewSource,
+  /Math\.min\(\s*overlapRailCountByLayerId\(\)\.get\(layer\.id\) \?\? 0,\s*TIMELINE_MAX_VISIBLE_OVERLAP_RAILS,/s,
+  "lane height is bounded by the explicit rail budget",
+);
+assert.match(
+  overviewSource,
+  /overlapRailCount \* timelineUserLaneHeightPx \+ timelineOverlapBadgeRailHeightPx/,
+  "lane height reserves 30px per rail plus the 18px badge rail",
+);
+assert.match(
+  overviewSource,
+  /event\.duration_ms > 0 && Number\.isFinite\(event\.total_duration_ms\)/,
+  "display duration remains fail-closed for zero-duration legacy points",
 );
 assert.match(
   overviewSource,
@@ -51,6 +126,118 @@ assert.match(
   appSource,
   /overviewOverlapLayerIds=\{\[\s*\.\.\.new Set\(timelineOverlapClusters\(\)\.map\(\(cluster\) => cluster\.layer_id\)\),\s*\]\}/s,
   "the App derives reserved overlap rails from all timeline clusters before viewport filtering",
+);
+
+const canonicalOverlapEvents = [
+  {
+    id: 1,
+    track: "Lighting",
+    layer_id: 1,
+    time_ms: 138_353,
+    duration_ms: 81_153,
+    total_duration_ms: 81_153,
+  },
+  {
+    id: 2,
+    track: "Lighting",
+    layer_id: 1,
+    time_ms: 138_353,
+    duration_ms: 81_153,
+    total_duration_ms: 81_153,
+  },
+];
+const canonicalOverlapCluster = [{
+  track: "Lighting",
+  layer_id: 1,
+  member_ids: [1, 2],
+}];
+const canonicalRails = overlap.buildTimelineOverlapRailLayout(
+  canonicalOverlapEvents,
+  canonicalOverlapCluster,
+);
+assert.deepEqual(
+  canonicalRails,
+  [
+    { id: 1, track: "Lighting", layer_id: 1, rail_index: 0, rail_count: 2, overflowed: false },
+    { id: 2, track: "Lighting", layer_id: 1, rail_index: 1, rail_count: 2, overflowed: false },
+  ],
+  "alpha52 canonical all_white/all_max blocks share time/lane but retain two visible rails",
+);
+assert.deepEqual(
+  overlap.buildTimelineOverlapRailLayout(
+    [...canonicalOverlapEvents].reverse(),
+    [...canonicalOverlapCluster].map((cluster) => ({ ...cluster, member_ids: [...cluster.member_ids].reverse() })),
+  ),
+  canonicalRails,
+  "overlap rail assignment is independent of input order",
+);
+assert.deepEqual(
+  overlap.buildTimelineOverlapRailLayout(
+    [{ ...canonicalOverlapEvents[0], id: 3 }],
+    [{ track: "Lighting", layer_id: 2, member_ids: [3] }],
+  ),
+  [],
+  "stale cluster membership from another layer cannot promote a rail",
+);
+assert.deepEqual(
+  overlap.buildTimelineOverlapRailLayout(
+    [{ ...canonicalOverlapEvents[0], id: 3 }],
+    [{ track: "Video", layer_id: 1, member_ids: [3] }],
+  ),
+  [],
+  "stale cluster membership from another track cannot promote a rail",
+);
+assert.deepEqual(
+  overlap.buildTimelineOverlapRailLayout(
+    [{ ...canonicalOverlapEvents[0], id: 3, duration_ms: 0, total_duration_ms: 81_153 }],
+    [{ track: "Lighting", layer_id: 1, member_ids: [3] }],
+  ),
+  [],
+  "zero-duration legacy points never receive a fabricated overlap rail",
+);
+const fiveHundredRailEvents = Array.from({ length: 500 }, (_, index) => ({
+  id: index + 1,
+  track: "Lighting",
+  layer_id: 1,
+  time_ms: 0,
+  duration_ms: 1_000,
+  total_duration_ms: 1_000,
+}));
+const fiveHundredRails = overlap.buildTimelineOverlapRailLayout(
+  fiveHundredRailEvents,
+  [{ track: "Lighting", layer_id: 1, member_ids: fiveHundredRailEvents.map((event) => event.id) }],
+);
+assert.equal(fiveHundredRails.length, 500, "the 500-item overlap budget retains one rail placement per authored event");
+assert.equal(fiveHundredRails.filter((placement) => !placement.overflowed).length, 8);
+assert.equal(fiveHundredRails.filter((placement) => placement.overflowed).length, 492);
+assert.deepEqual(
+  fiveHundredRails.slice(0, 8).map((placement) => placement.rail_index),
+  [0, 1, 2, 3, 4, 5, 6, 7],
+  "the first eight stable interval members occupy the bounded visible rails",
+);
+assert.ok(fiveHundredRails.slice(8).every((placement) => placement.rail_index === null));
+assert.ok(fiveHundredRails.every((placement) => placement.rail_count === 8));
+const selectedOverflowEventId = fiveHundredRails[8].id;
+const visibleSceneBlockIds = fiveHundredRails
+  .filter((placement) => !placement.overflowed)
+  .map((placement) => placement.id);
+const selectedOverflowTabStopId = visibleSceneBlockIds.includes(selectedOverflowEventId)
+  ? selectedOverflowEventId
+  : visibleSceneBlockIds[0] ?? null;
+const selectedOverflowMarkerDom = visibleSceneBlockIds.map((id) => ({
+  id,
+  tabindex: id === selectedOverflowTabStopId ? 0 : -1,
+}));
+assert.equal(selectedOverflowMarkerDom.length, 8);
+assert.equal(
+  selectedOverflowMarkerDom.filter((marker) => marker.tabindex === 0).length,
+  1,
+  "a selected overflow event leaves exactly one visible Scene Block tabbable",
+);
+assert.equal(
+  selectedOverflowMarkerDom.some((marker) => marker.id === selectedOverflowEventId),
+  false,
+  "a selected overflow event creates no hidden interaction surface",
 );
 
 const mixedDurationEvents = [
@@ -206,6 +393,28 @@ assert.ok(
   benchmarkElapsedMs < 2_000,
   `10k interval sweep must remain bounded (elapsed ${benchmarkElapsedMs.toFixed(1)}ms)`,
 );
+const tenThousandRailEvents = Array.from({ length: 10_000 }, (_, index) => ({
+  id: index + 1,
+  track: "Lighting",
+  layer_id: 1,
+  time_ms: 0,
+  duration_ms: 10_000,
+  total_duration_ms: 10_000,
+}));
+const tenThousandRailStart = performance.now();
+const tenThousandRails = overlap.buildTimelineOverlapRailLayout(
+  tenThousandRailEvents,
+  [{ track: "Lighting", layer_id: 1, member_ids: tenThousandRailEvents.map((event) => event.id) }],
+);
+const tenThousandRailElapsedMs = performance.now() - tenThousandRailStart;
+assert.equal(tenThousandRails.length, 10_000);
+assert.equal(tenThousandRails.filter((placement) => placement.overflowed).length, 9_992);
+assert.ok(tenThousandRails.every((placement) => placement.rail_count === 8));
+assert.ok(tenThousandRails.slice(8).every((placement) => placement.rail_index === null));
+assert.ok(
+  tenThousandRailElapsedMs < 2_000,
+  `10k bounded rail assignment must remain bounded (elapsed ${tenThousandRailElapsedMs.toFixed(1)}ms)`,
+);
 
 assert.equal(
   overlap.timelineOverlapIntervalForEvent({ id: 1, track: "lighting", time_ms: 0, duration_ms: 0, loop_count: 99 }),
@@ -218,4 +427,4 @@ assert.equal(
   "invalid absolute times are ignored",
 );
 
-console.log(`timeline overlap cluster helpers ok (10k ${benchmarkElapsedMs.toFixed(1)}ms)`);
+console.log(`timeline overlap cluster helpers ok (10k ${benchmarkElapsedMs.toFixed(1)}ms; rails ${tenThousandRailElapsedMs.toFixed(1)}ms)`);

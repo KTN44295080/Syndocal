@@ -652,7 +652,11 @@ import {
 } from "./outputControlController";
 import { createVideoOutputRoutingController } from "./videoOutputRoutingController";
 import { createTimelineFollowAbortRuntimeController } from "./timelineFollowAbortRuntimeController";
-import { createTimelineTransportRuntimeController } from "./timelineTransportRuntimeController";
+import {
+  createTimelineTransportRuntimeController,
+  type TimelineTransportRuntimeAcknowledgement,
+  type TimelineTransportRuntimeScope,
+} from "./timelineTransportRuntimeController";
 import { createVideoRuntimeController } from "./createVideoRuntimeController";
 import { videoClipSlotDropTarget, videoClipSlotReorderedIds } from "./videoClipSlotBankModel";
 import {
@@ -3706,6 +3710,19 @@ export default function App() {
   const timelineEditorDirty = createMemo(() => timelineEventEditorDirty() || timelineAutomationEditorDirty());
   const visibleProjectDirty = createMemo(() => projectDirty() || timelineEditorDirty());
   const snapshotRequestGuard = createSnapshotRequestGuard();
+  // A direct runtime receipt can prove B while a generic full get_snapshot
+  // started against A is still in flight. Delta requests already have the
+  // guard above; retain this monotonic fence so that older full reads cannot
+  // overwrite an acknowledged canonical Timeline transport snapshot either.
+  let timelineTransportCanonicalSnapshotGeneration = 0;
+  const beginTimelineTransportCanonicalSnapshotConvergence = () => {
+    if (!Number.isSafeInteger(timelineTransportCanonicalSnapshotGeneration)
+      || timelineTransportCanonicalSnapshotGeneration >= Number.MAX_SAFE_INTEGER) {
+      throw new Error("Timeline transport snapshot convergence generation is exhausted; reload Syndocal before continuing.");
+    }
+    timelineTransportCanonicalSnapshotGeneration += 1;
+    return timelineTransportCanonicalSnapshotGeneration;
+  };
   const viewportFixture = browserViewportFixture(isTauriRuntime());
   const viewportMediaOperationFixture =
     viewportFixture === "vj-bank" &&
@@ -12454,24 +12471,34 @@ export default function App() {
             batch.unshift(waiter);
           }
         }
+        const timelineTransportGenerationAtRequest = timelineTransportCanonicalSnapshotGeneration;
         snapshotRequestGuard.beginFull();
         let next: EngineSnapshot | null = null;
         try {
           const candidate = await invoke<EngineSnapshot>("get_snapshot");
-          if (requestedReadGeneration === projectReadGeneration) {
+          if (requestedReadGeneration === projectReadGeneration
+            && timelineTransportGenerationAtRequest === timelineTransportCanonicalSnapshotGeneration) {
             next = candidate;
             setSnapshotRevision(null);
             if (batch.some((waiter) => waiter.resetEditorDrafts)) {
               await refreshOperatorPolicy(true);
               await refreshFixtureGroups();
-              if (requestedReadGeneration !== projectReadGeneration) {
+              if (requestedReadGeneration !== projectReadGeneration
+                || timelineTransportGenerationAtRequest
+                  !== timelineTransportCanonicalSnapshotGeneration) {
                 next = null;
               } else {
                 setFixtureGroupDeleteUndoAvailable(false);
                 setViewportFixtureGroupDeleteUndo(null);
               }
             }
-            if (next !== null && requestedReadGeneration === projectReadGeneration) {
+            // refreshOperatorPolicy/refreshFixtureGroups above are async. A
+            // transport canonical B can win while they settle, so repeat the
+            // convergence fence immediately before the only full-image apply.
+            if (next !== null
+              && requestedReadGeneration === projectReadGeneration
+              && timelineTransportGenerationAtRequest
+                === timelineTransportCanonicalSnapshotGeneration) {
               applyEngineSnapshot(
                 next,
                 batch.some((waiter) => waiter.syncProjectState),
@@ -20688,6 +20715,22 @@ export default function App() {
   const refreshTimelineEditingSnapshot = () => timelineChildCueId() === null
     ? refreshSnapshot()
     : Promise.resolve(snapshot());
+  const captureTimelineTransportRuntimeScope = (): TimelineTransportRuntimeScope => {
+    const authority = captureProjectAuthorityIdentity();
+    return {
+      project_epoch: authority.project_epoch,
+      project_revision: authority.project_revision,
+      checkpoint_hash: authority.checkpoint_hash,
+      project_read_generation: projectReadGeneration,
+    };
+  };
+  const timelineTransportRuntimeScopeIsCurrent = (scope: TimelineTransportRuntimeScope) =>
+    scope.project_read_generation === projectReadGeneration
+    && isProjectAuthorityIdentityCurrent({
+      project_epoch: scope.project_epoch,
+      project_revision: scope.project_revision,
+      checkpoint_hash: scope.checkpoint_hash,
+    });
   // This narrow dispatcher is deliberately separate from the generic
   // renderer transaction facade. The Rust endpoint owns all authority,
   // operator-lock and receipt checks for this runtime-only command.
@@ -20706,11 +20749,63 @@ export default function App() {
     }
     return tauriInvoke<T>(command, args);
   };
+  const refreshTimelineTransportCanonicalSnapshot = async (
+    acknowledgement: TimelineTransportRuntimeAcknowledgement,
+  ) => {
+    const expectedAuthority = {
+      project_epoch: acknowledgement.scope.project_epoch,
+      project_revision: acknowledgement.scope.project_revision,
+      checkpoint_hash: acknowledgement.scope.checkpoint_hash,
+    };
+    if (!timelineTransportRuntimeScopeIsCurrent(acknowledgement.scope)) {
+      throw new Error("Timeline transport canonical snapshot was superseded before it could be read.");
+    }
+    const readGuard = captureProjectReadGuard();
+    const convergenceGeneration = beginTimelineTransportCanonicalSnapshotConvergence();
+    snapshotRequestGuard.beginFull();
+    try {
+      // The runtime receipt proves native B has published, but it contains no
+      // renderer snapshot. Capture one E/R/H-bound bundle and prove both the
+      // project and exact transport successor before changing visible state.
+      // This is a read-only canonical convergence step, never a raw mutation
+      // fallback or an optimistic local `playing` write.
+      const canonical = await tauriInvoke<ProjectAuthorityBundle>("get_project_authority_bundle", {
+        expectedEpoch: expectedAuthority.project_epoch,
+        expectedRevision: expectedAuthority.project_revision,
+        expectedCheckpointHash: expectedAuthority.checkpoint_hash,
+      });
+      if (!projectReadGuardIsCurrent(readGuard)
+        || convergenceGeneration !== timelineTransportCanonicalSnapshotGeneration
+        || !timelineTransportRuntimeScopeIsCurrent(acknowledgement.scope)
+        || !isProjectAuthorityIdentityCurrent(expectedAuthority)
+        || !projectAuthorityTokenIsCurrent(expectedAuthority, authorityToken(canonical))
+        || canonical.publication_generation
+          !== acknowledgement.fenceBefore.project.project_publication_generation) {
+        throw new Error("Timeline transport canonical snapshot was superseded before it could be applied.");
+      }
+      const timeline = canonical.snapshot.timeline;
+      if (timeline.playing !== acknowledgement.requestedPlaying
+        || timeline.transport_epoch !== acknowledgement.epochAfter
+        || timeline.transport_generation !== acknowledgement.generationAfter) {
+        throw new Error(
+          "Timeline transport canonical snapshot did not converge to the acknowledged runtime state.",
+        );
+      }
+      applyEngineSnapshot(canonical.snapshot);
+      // The authority-bound full image supersedes any delta base. The next
+      // poll must request a fresh full response instead of merging A/B data.
+      setSnapshotRevision(null);
+    } finally {
+      snapshotRequestGuard.finishFull();
+    }
+  };
   // The rendered root Timeline controls and AppShortcut executor both receive
   // these same callbacks below. Child timelines are a separate transport
   // surface and use their own direct-child command until separately versioned.
   const timelineTransportRuntime = createTimelineTransportRuntimeController({
     invoke: invokeTimelineTransportRuntime,
+    captureScope: captureTimelineTransportRuntimeScope,
+    refreshCanonicalSnapshot: refreshTimelineTransportCanonicalSnapshot,
   });
   const setCanonicalTimelinePlaying = async (playing: boolean) => {
     if (!timelineAuthorityReady("Timeline transport change")) return;

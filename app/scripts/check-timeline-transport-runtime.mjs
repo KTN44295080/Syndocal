@@ -34,24 +34,37 @@ const authorityIds = [
   "BAQEBAQEBAQEBAQEBAQEBA",
   "BQUFBQUFBQUFBQUFBQUFBQ",
 ];
-const fence = (epoch, generation) => ({
+const project = (epoch = 3, revision = 4, checkpoint = hash("a")) => ({
+  project_epoch: epoch,
+  project_revision: revision,
+  project_checkpoint_hash: checkpoint,
+});
+const fence = (epoch, generation, projectIdentity = project()) => ({
   project: {
     process_incarnation: 1,
     session_incarnation: 2,
-    project_epoch: 3,
-    project_revision: 4,
-    project_checkpoint_hash: hash("a"),
+    project_epoch: projectIdentity.project_epoch,
+    project_revision: projectIdentity.project_revision,
+    project_checkpoint_hash: projectIdentity.project_checkpoint_hash,
     project_publication_generation: 5,
   },
   domain: "timeline.transport",
   source_runtime_epoch: epoch,
   source_runtime_generation: generation,
 });
-const authority = (epoch, generation, seed = 0) => ({
+const authority = (epoch, generation, seed = 0, projectIdentity = project()) => ({
   operation_id: runtime.timelineTransportSetPlayingOperationId,
   authority_id: authorityIds[seed % authorityIds.length],
-  fence: fence(epoch, generation),
+  fence: fence(epoch, generation, projectIdentity),
 });
+const scope = (projectIdentity = project(), readGeneration = 0) => ({
+  project_epoch: projectIdentity.project_epoch,
+  project_revision: projectIdentity.project_revision,
+  checkpoint_hash: projectIdentity.project_checkpoint_hash,
+  project_read_generation: readGeneration,
+});
+let activeScope = scope();
+const captureActiveScope = () => activeScope;
 const nextPair = (request) => request.expected_fence.source_runtime_generation < maxSafe
   ? {
     epoch: request.expected_fence.source_runtime_epoch,
@@ -111,6 +124,7 @@ const tickUntil = async (predicate, message) => {
   }
   assert.fail(message);
 };
+const acceptCanonicalSnapshot = async () => {};
 
 // A deferred Play followed by rapid Pause proves latest-intent serialisation:
 // the current Play settles once, then exactly one fresh-authority Pause wins.
@@ -119,6 +133,8 @@ let authorityCalls = 0;
 const commandCalls = [];
 const firstCommand = deferred();
 const rapid = runtime.createTimelineTransportRuntimeController({
+  captureScope: captureActiveScope,
+  refreshCanonicalSnapshot: acceptCanonicalSnapshot,
   invoke: async (command, args) => {
     if (command === "query_timeline_transport_authority_v1") {
       const issued = authority(1, generation, authorityCalls);
@@ -152,6 +168,8 @@ let replyLossApplied = false;
 const replyLossCalls = [];
 let replyLossAuthorityCalls = 0;
 const replyLoss = runtime.createTimelineTransportRuntimeController({
+  captureScope: captureActiveScope,
+  refreshCanonicalSnapshot: acceptCanonicalSnapshot,
   invoke: async (command, args) => {
     if (command === "query_timeline_transport_authority_v1") {
       replyLossAuthorityCalls += 1;
@@ -180,6 +198,8 @@ let staleGeneration = 10;
 let staleAuthorityCalls = 0;
 const staleCommandCalls = [];
 const staleRetry = runtime.createTimelineTransportRuntimeController({
+  captureScope: captureActiveScope,
+  refreshCanonicalSnapshot: acceptCanonicalSnapshot,
   invoke: async (command, args) => {
     if (command === "query_timeline_transport_authority_v1") {
       const issued = authority(1, staleGeneration++, staleAuthorityCalls + 3);
@@ -204,10 +224,161 @@ assert.notEqual(staleCommandCalls[0].expected_fence.source_runtime_generation,
   staleCommandCalls[1].expected_fence.source_runtime_generation,
   "stale retry must not reuse the stale fence");
 
+// A receipt alone is not renderer success. The originating Pause must remain
+// pending until its authority-bound canonical snapshot has accepted the exact
+// requested state and receipt successor pair.
+const canonicalRefresh = deferred();
+let canonicalAcknowledgement = null;
+let canonicalCommandCalls = 0;
+const canonicalConvergence = runtime.createTimelineTransportRuntimeController({
+  captureScope: captureActiveScope,
+  invoke: async (command, args) => {
+    if (command === "query_timeline_transport_authority_v1") return authority(7, 30, 4);
+    canonicalCommandCalls += 1;
+    return receipt(args?.request);
+  },
+  refreshCanonicalSnapshot: async (acknowledgement) => {
+    canonicalAcknowledgement = acknowledgement;
+    await canonicalRefresh.promise;
+  },
+});
+const canonicalPause = canonicalConvergence.setPlaying(false);
+await tickUntil(
+  () => canonicalAcknowledgement !== null,
+  "a valid receipt must enter canonical snapshot convergence",
+);
+let canonicalPauseSettled = false;
+void canonicalPause.then(() => { canonicalPauseSettled = true; });
+await Promise.resolve();
+assert.equal(canonicalPauseSettled, false,
+  "Pause must not report success before the canonical snapshot applies");
+assert.equal(canonicalCommandCalls, 1, "canonical convergence must not send a second mutation");
+assert.deepEqual(canonicalAcknowledgement, {
+  requestedPlaying: false,
+  fenceBefore: fence(7, 30),
+  scope: scope(),
+  epochAfter: 7,
+  generationAfter: 31,
+  outcome: "applied",
+});
+canonicalRefresh.resolve();
+await canonicalPause;
+assert.equal(canonicalPauseSettled, true, "Pause resolves after canonical snapshot convergence");
+
+// A failed canonical read is visible to the caller and cannot be hidden by a
+// success message or a retry under fresh authority after the native receipt.
+let canonicalFailureCommandCalls = 0;
+const canonicalFailure = runtime.createTimelineTransportRuntimeController({
+  captureScope: captureActiveScope,
+  invoke: async (command, args) => {
+    if (command === "query_timeline_transport_authority_v1") return authority(8, 40, 5);
+    canonicalFailureCommandCalls += 1;
+    return receipt(args?.request);
+  },
+  refreshCanonicalSnapshot: async () => {
+    throw new Error("synthetic canonical snapshot convergence failure");
+  },
+});
+await assert.rejects(
+  canonicalFailure.setPlaying(false),
+  /synthetic canonical snapshot convergence failure/,
+);
+assert.equal(canonicalFailureCommandCalls, 1,
+  "a failed canonical read must not trigger another transport mutation");
+
+// Scope changes partition the queue. A Play already waiting on A and its
+// queued A Pause both reject after B replaces the project, without emitting a
+// mutation to B. A subsequently queued B Pause proceeds exactly once.
+const projectA = project(31, 41, hash("d"));
+const projectB = project(32, 42, hash("e"));
+activeScope = scope(projectA, 100);
+const scopeFirstCommand = deferred();
+const scopeCommandCalls = [];
+const scoped = runtime.createTimelineTransportRuntimeController({
+  captureScope: captureActiveScope,
+  refreshCanonicalSnapshot: acceptCanonicalSnapshot,
+  invoke: async (command, args) => {
+    if (command === "query_timeline_transport_authority_v1") {
+      const current = captureActiveScope();
+      const identity = current.project_epoch === projectA.project_epoch ? projectA : projectB;
+      return authority(9, 70, 0, identity);
+    }
+    const request = args?.request;
+    scopeCommandCalls.push(request);
+    if (scopeCommandCalls.length === 1) return scopeFirstCommand.promise;
+    return receipt(request);
+  },
+});
+const aPlay = scoped.setPlaying(true);
+void aPlay.catch(() => {});
+await tickUntil(() => scopeCommandCalls.length === 1, "A Play must reach the native worker");
+const aPause = scoped.setPlaying(false);
+void aPause.catch(() => {});
+activeScope = scope(projectB, 101);
+const bPause = scoped.setPlaying(false);
+scopeFirstCommand.resolve(receipt(scopeCommandCalls[0]));
+await assert.rejects(aPlay, /project scope changed/);
+await assert.rejects(aPause, /project scope changed/);
+await bPause;
+assert.equal(scopeCommandCalls.length, 2,
+  "discarded A groups must send no replacement-project mutation");
+assert.equal(scopeCommandCalls[0].expected_fence.project.project_epoch, projectA.project_epoch);
+assert.equal(scopeCommandCalls[1].expected_fence.project.project_epoch, projectB.project_epoch);
+assert.equal(scopeCommandCalls[1].payload.playing, false,
+  "the subsequent B Pause sends exactly one B mutation");
+
+// A query reply from another E/R/H is not an authority for the captured
+// origin, even if it is well-formed. It fails before the mutation boundary.
+activeScope = scope(projectA, 150);
+let mismatchedAuthorityMutationCalls = 0;
+const mismatchedAuthority = runtime.createTimelineTransportRuntimeController({
+  captureScope: captureActiveScope,
+  refreshCanonicalSnapshot: acceptCanonicalSnapshot,
+  invoke: async (command) => command === "query_timeline_transport_authority_v1"
+    ? authority(9, 71, 2, projectB)
+    : (mismatchedAuthorityMutationCalls += 1, null),
+});
+await assert.rejects(mismatchedAuthority.setPlaying(true), /project scope changed/);
+assert.equal(mismatchedAuthorityMutationCalls, 0,
+  "a mismatched query authority must send zero mutations");
+
+// A canonical failure belongs only to the dispatched earlier group. It must
+// reject its own Play even if a later same-project Pause reaches canonical
+// success; the later group still resolves.
+activeScope = scope(projectA, 200);
+const firstCanonical = deferred();
+const settlementCalls = [];
+let settlementRefreshCalls = 0;
+const partitionedSettlement = runtime.createTimelineTransportRuntimeController({
+  captureScope: captureActiveScope,
+  invoke: async (command, args) => {
+    if (command === "query_timeline_transport_authority_v1") return authority(10, 80, 1, projectA);
+    const request = args?.request;
+    settlementCalls.push(request);
+    return receipt(request);
+  },
+  refreshCanonicalSnapshot: async () => {
+    settlementRefreshCalls += 1;
+    if (settlementRefreshCalls === 1) await firstCanonical.promise;
+  },
+});
+const failingPlay = partitionedSettlement.setPlaying(true);
+void failingPlay.catch(() => {});
+await tickUntil(() => settlementCalls.length === 1, "first settlement group must dispatch");
+const succeedingPause = partitionedSettlement.setPlaying(false);
+firstCanonical.reject(new Error("synthetic first canonical failure"));
+await assert.rejects(failingPlay, /synthetic first canonical failure/);
+await succeedingPause;
+assert.equal(settlementCalls.length, 2, "later same-project intent dispatches independently");
+
+activeScope = scope();
+
 // Typed permanent failures and malformed discriminators are fail-closed and
 // do not enter either retry layer.
 let permanentCalls = 0;
 const permanent = runtime.createTimelineTransportRuntimeController({
+  captureScope: captureActiveScope,
+  refreshCanonicalSnapshot: acceptCanonicalSnapshot,
   invoke: async (command, args) => command === "query_timeline_transport_authority_v1"
     ? authority(1, 20, 0)
     : (permanentCalls += 1, rejection(args?.request, "forbidden")),
@@ -217,6 +388,8 @@ assert.equal(permanentCalls, 1, "permanent typed failures must not retry");
 
 let unknownCalls = 0;
 const unknownDiscriminator = runtime.createTimelineTransportRuntimeController({
+  captureScope: captureActiveScope,
+  refreshCanonicalSnapshot: acceptCanonicalSnapshot,
   invoke: async (command) => command === "query_timeline_transport_authority_v1"
     ? authority(1, 21, 1)
     : (unknownCalls += 1, { kind: "future_terminal", result: {} }),
@@ -232,6 +405,8 @@ assert.equal(unknownCalls, 1, "unknown discriminator must not be replayed as IPC
 // no valid Applied successor at all.
 let invalidAppliedCalls = 0;
 const invalidApplied = runtime.createTimelineTransportRuntimeController({
+  captureScope: captureActiveScope,
+  refreshCanonicalSnapshot: acceptCanonicalSnapshot,
   invoke: async (command, args) => {
     if (command === "query_timeline_transport_authority_v1") return authority(maxSafe, maxSafe, 2);
     invalidAppliedCalls += 1;
@@ -264,6 +439,31 @@ assert.equal(
   1,
   "the strict lane must have one runtime mutation binding",
 );
+assert.match(
+  controllerSource,
+  /const acknowledgement = await sendExactRequest\(request, group\.scope\);[\s\S]*?requireCurrentScope\(group\.scope\);[\s\S]*?await options\.refreshCanonicalSnapshot\(acknowledgement\);/,
+  "a receipt must converge through the injected canonical snapshot before the lane resolves",
+);
+assert.match(
+  controllerSource,
+  /captureScope: \(\) => TimelineTransportRuntimeScope;/,
+  "each enqueue scope source must include E/R/H plus local read generation",
+);
+assert.match(
+  controllerSource,
+  /let scope: TimelineTransportRuntimeScope;[\s\S]*?scope = captureScope\(\);[\s\S]*?const tail = queued\.at\(-1\);[\s\S]*?tail && scopesEqual\(tail\.scope, scope\)/,
+  "each enqueue must capture E/R/H plus local read generation and coalesce only the same scope",
+);
+assert.match(
+  controllerSource,
+  /requireCurrentScope\(group\.scope\);[\s\S]*?query_timeline_transport_authority_v1[\s\S]*?fenceProjectMatchesScope\(authority\.fence, group\.scope\)[\s\S]*?requireCurrentScope\(group\.scope\);[\s\S]*?sendExactRequest\(request, group\.scope\)/,
+  "scope must fence query, authority identity, and every mutation send",
+);
+assert.match(
+  controllerSource,
+  /group\.deferreds\.forEach\(\(\{ resolve \}\) => resolve\(\)\);[\s\S]*?group\.deferreds\.forEach\(\(\{ reject \}\) => reject\(error\)\);/,
+  "each dispatched scope group must settle independently",
+);
 assert.doesNotMatch(controllerSource, /begin_project_transaction|commit_project_transaction|"set_timeline_playing"/,
   "the strict renderer lane must not reopen legacy or generic project transactions");
 
@@ -274,7 +474,22 @@ assert.match(
 );
 assert.match(
   appSource,
-  /const timelineTransportRuntime = createTimelineTransportRuntimeController\(\{[\s\S]*?invoke: invokeTimelineTransportRuntime,[\s\S]*?\}\);[\s\S]*?const setCanonicalTimelinePlaying = async \(playing: boolean\) => \{[\s\S]*?await timelineTransportRuntime\.setPlaying\(playing\);/,
+  /const refreshTimelineTransportCanonicalSnapshot = async \([\s\S]*?timelineTransportRuntimeScopeIsCurrent\(acknowledgement\.scope\)[\s\S]*?tauriInvoke<ProjectAuthorityBundle>\("get_project_authority_bundle", \{[\s\S]*?expectedEpoch: expectedAuthority\.project_epoch,[\s\S]*?expectedRevision: expectedAuthority\.project_revision,[\s\S]*?expectedCheckpointHash: expectedAuthority\.checkpoint_hash,[\s\S]*?timeline\.playing !== acknowledgement\.requestedPlaying[\s\S]*?timeline\.transport_epoch !== acknowledgement\.epochAfter[\s\S]*?timeline\.transport_generation !== acknowledgement\.generationAfter[\s\S]*?applyEngineSnapshot\(canonical\.snapshot\);[\s\S]*?setSnapshotRevision\(null\);/,
+  "root Timeline must apply only the exact authority-bound canonical transport snapshot",
+);
+assert.match(
+  appSource,
+  /const timelineTransportGenerationAtRequest = timelineTransportCanonicalSnapshotGeneration;[\s\S]*?requestedReadGeneration === projectReadGeneration[\s\S]*?timelineTransportGenerationAtRequest === timelineTransportCanonicalSnapshotGeneration/,
+  "a pre-receipt full snapshot must not overwrite later canonical transport convergence",
+);
+assert.match(
+  appSource,
+  /await refreshOperatorPolicy\(true\);[\s\S]*?await refreshFixtureGroups\(\);[\s\S]*?timelineTransportGenerationAtRequest[\s\S]*?timelineTransportCanonicalSnapshotGeneration[\s\S]*?if \(next !== null[\s\S]*?timelineTransportGenerationAtRequest[\s\S]*?timelineTransportCanonicalSnapshotGeneration\) \{[\s\S]*?applyEngineSnapshot\(/,
+  "a delayed reset full read must recheck canonical transport generation immediately before applying",
+);
+assert.match(
+  appSource,
+  /const timelineTransportRuntime = createTimelineTransportRuntimeController\(\{[\s\S]*?invoke: invokeTimelineTransportRuntime,[\s\S]*?captureScope: captureTimelineTransportRuntimeScope,[\s\S]*?refreshCanonicalSnapshot: refreshTimelineTransportCanonicalSnapshot,[\s\S]*?\}\);[\s\S]*?const setCanonicalTimelinePlaying = async \(playing: boolean\) => \{[\s\S]*?await timelineTransportRuntime\.setPlaying\(playing\);/,
   "root Timeline callback must enter the strict runtime lane",
 );
 assert.match(
@@ -319,4 +534,4 @@ const genericMutationBlock = appSource.slice(
 assert.doesNotMatch(genericMutationBlock, /set_timeline_transport_playing_runtime_v1/,
   "canonical runtime transport must not be enrolled in the renderer transaction wrapper");
 
-console.log("timeline transport runtime strict route, two-layer retry, latest intent, and fail-closed pair checks passed");
+console.log("timeline transport runtime strict route, canonical snapshot convergence, two-layer retry, latest intent, and fail-closed pair checks passed");

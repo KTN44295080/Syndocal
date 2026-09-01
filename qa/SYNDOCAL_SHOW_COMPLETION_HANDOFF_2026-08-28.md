@@ -4,6 +4,78 @@ Status date: 2026-09-01 JST
 
 This is the concise authoritative resume note for the final show-critical tranche. It supersedes chat-only status, but it does not supersede the detailed acceptance documents named below.
 
+## 2026-09-01 alpha.53 source checkpoint (native evidence pending)
+
+Alpha.53 is the current source candidate on `codex/syndocal-v1.2`, based on
+upstream-equal parent `9be5479b23b417049c078e24a7e6c3b172fc720e`. The exact
+source commit produced by this checkpoint is recorded in the post-build evidence
+section before any artifact is accepted; this source document does not relabel the
+existing alpha.52 executable as alpha.53.
+
+The old Timeline transport path settled Play/Pause from the command receipt while
+an older generic snapshot could still be in flight, and a queued action could
+query authority after a project replacement. The new path captures exact
+project epoch/revision/checkpoint/read-generation scope per enqueue, partitions
+queue groups by that scope, revalidates before query/send/retry/receipt/canonical
+apply/queue advance, and settles success only after authority-bound canonical
+snapshot convergence. Invalid, stale, replaced, or cross-scope work fails closed
+without mutating the newer project. Independent review reports P0/P1 `0`; the
+remaining P2 evidence limitation is that the App-level delayed-full-versus-
+canonical race is source-contract checked rather than exercised by a dedicated
+App async harness.
+
+The old overlapping-lighting representation could collapse simultaneous Scene
+Blocks into one marker and later prototypes could grow a lane without bound or
+leave a hidden selected marker in the roving focus model. The new representation
+uses at most eight deterministic rails (`258 px` maximum lane height), exact
+track/layer/member identity, and the complete Scene Block subtree on every visible
+rail. Overflow stays visible through the focusable count/Inspector badge but does
+not create hidden marker DOM. One overflow-filtered collection now owns rendering,
+the sole `tabindex=0`, and keyboard traversal. Independent review reports
+P0/P1/P2 `0`.
+
+An Alt-isolated Split could also return a fresh item before the parent-owned
+selection validator observed the newly applied snapshot, causing the new audio
+item to be transiently rejected and its focus to disappear. Local selection now
+settles first, App-owned validation runs in the next microtask, and focus waits a
+bounded maximum of seven animation frames for the new DOM. Every retry is fenced
+by the captured project epoch and active Timeline ID and stops after unmount, so
+an old action cannot focus a same-ID item in a replacement project/Timeline.
+Independent Terra xHigh review is GO with P0/P1 `0`; P2 is limited to the lack of
+an explicit test for a user intentionally focusing another control during that
+short same-Timeline retry window. No authority or mutation is affected.
+
+The exact local three-display QA derivative is generated and verified by
+`qa/harnesses/derive-dsf2026-alpha52-three-display-current-media.mjs`. It preserves
+two ordinary Display outputs and three compositions while changing only 14
+allowlisted media paths/metadata fields. Its current output identity is
+`1,112,316` bytes, SHA-256
+`27484E18DE3FFBB19829D19A90459AB4D847209BF272E629CAE37AF3DD38EA11`.
+It is a same-PC exact QA specimen only: fixed `C:\Users\kouty` and absolute SDC
+media paths make portable/release use fail closed until explicit relink and
+re-verification.
+
+Source gates pass with first-party warnings `0`: release metadata and its ASIO,
+audio, project bootstrap, video-output, and camera subgates; Timeline transport;
+Timeline overlap (`10k 22.0 ms`, rails `11.6 ms`); TypeScript; Vite frontend build;
+local derivative verification; syntax and diff checks. The Timeline performance
+browser gate passes all `1920x1080`, `1366x768`, `860x520`, and `1280x720`
+viewport contracts plus direct resize. One earlier run failed the Alt-isolated
+audio focus assertion and exposed the ordering issue above. After the bounded,
+scope-fenced focus fix, the isolated full rerun passed; concurrently running
+orphan copies of the same browser fixture were terminated by exact command/PID
+before that acceptance run. The Vite build retains one existing chunk-size
+advisory (`511.01 kB` App chunk); no first-party source warning was added.
+
+Native build, artifact identity, launch, physical USB-DMX, Art-Net, Spout,
+three-display, ASIO-device, and listening acceptance remain unverified for
+alpha.53 at this source checkpoint. USB-DMX is absent on this PC; alpha.51
+`all_white`/COM3 behavior remains historical evidence only. The protected user
+project `DSF2026-show-alpha51-usb-final.sdc` is not part of this checkpoint and
+must not be staged, modified, or deleted. The next safe action is to push the
+source checkpoint, verify exact `HEAD=origin`, and build only that exact source
+under the pinned Community MSVC `14.44.35207` gate.
+
 ## 2026-09-01 alpha.52 show-critical UI/audio checkpoint
 
 Alpha.52 closes the operator-path defects recorded below and is the current

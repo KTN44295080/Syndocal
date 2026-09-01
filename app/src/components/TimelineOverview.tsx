@@ -21,7 +21,9 @@ import {
   type TimelineSnapSceneBlock,
 } from "../timelineSnap";
 import {
+  buildTimelineOverlapRailLayout,
   packTimelineOverlapClusterBadges,
+  TIMELINE_MAX_VISIBLE_OVERLAP_RAILS,
   TIMELINE_OVERLAP_BADGE_WIDTH_PX,
 } from "../timelineOverlapClusters";
 import {
@@ -335,6 +337,7 @@ const timelineSectionKinds: TimelineLayerKind[] = ["Audio", "Lighting", "Video"]
 const timelineSectionHeaderHeightPx = 14;
 const timelineUserLaneHeightPx = 30;
 const timelineExpandedLaneHeightPx = 54;
+const timelineOverlapBadgeRailHeightPx = 18;
 const legacyTimelineLayers: TimelineLayerSummary[] = [
   { id: 0, label: "Lighting", order: 0, muted: false, locked: false, solo: false, expanded: false, kind: "Lighting" },
   { id: 1, label: "Video", order: 1, muted: false, locked: false, solo: false, expanded: false, kind: "Video" },
@@ -626,6 +629,35 @@ export function TimelineOverview(props: TimelineOverviewProps) {
   const automationLayerIds = createMemo(() => new Set(
     props.automationRanges.map((range) => range.layer_id),
   ));
+  const overlapRailLayout = createMemo(() => buildTimelineOverlapRailLayout(
+    props.events.map((event) => ({
+      id: event.id,
+      track: event.track,
+      layer_id: event.layer_id,
+      time_ms: event.time_ms,
+      duration_ms: event.duration_ms,
+      total_duration_ms: event.total_duration_ms,
+      loop_count: event.loop_count,
+    })),
+    props.overlapClusters,
+  ));
+  const overlapRailByEventKey = createMemo(() => new Map(
+    overlapRailLayout().map((placement) => [
+      `${placement.track}\u001f${String(placement.layer_id)}\u001f${String(placement.id)}`,
+      placement,
+    ]),
+  ));
+  const overlapRailCountByLayerId = createMemo(() => {
+    const counts = new Map<number, number>();
+    for (const placement of overlapRailLayout()) {
+      if (typeof placement.layer_id !== "number") continue;
+      counts.set(placement.layer_id, Math.max(
+        counts.get(placement.layer_id) ?? 0,
+        placement.rail_count,
+      ));
+    }
+    return counts;
+  });
   const overlapLayerIds = createMemo(
     () => new Set(props.overlapLayerIds),
     new Set<number>(),
@@ -633,10 +665,18 @@ export function TimelineOverview(props: TimelineOverviewProps) {
   );
   const timelineLayerIsExpanded = (layer: TimelineLayerSummary) =>
     Boolean(layer.expanded) || overlapLayerIds().has(layer.id) || automationLayerIds().has(layer.id);
-  const timelineLayerHeightPx = (layer: TimelineLayerSummary) =>
-    timelineLayerIsExpanded(layer)
-      ? timelineExpandedLaneHeightPx
+  const timelineLayerHeightPx = (layer: TimelineLayerSummary) => {
+    const overlapRailCount = Math.min(
+      overlapRailCountByLayerId().get(layer.id) ?? 0,
+      TIMELINE_MAX_VISIBLE_OVERLAP_RAILS,
+    );
+    const overlapHeight = overlapRailCount > 0
+      ? overlapRailCount * timelineUserLaneHeightPx + timelineOverlapBadgeRailHeightPx
+      : 0;
+    return timelineLayerIsExpanded(layer)
+      ? Math.max(timelineExpandedLaneHeightPx, overlapHeight)
       : timelineUserLaneHeightPx;
+  };
   const sectionLayout = createMemo(() => {
     const collapsed = collapsedSections();
     const sections: TimelineSectionRowLayout[] = [];
@@ -668,20 +708,6 @@ export function TimelineOverview(props: TimelineOverviewProps) {
   const layerRowById = createMemo(() => new Map(
     sectionLayout().laneRows.map((row) => [row.layer.id, row]),
   ));
-  const visibleOverlapMemberEventIds = createMemo(
-    () => {
-      const ids = new Set<number>();
-      for (const cluster of props.overlapClusters) {
-        if (!laneVisible(cluster.track) || (!props.legacyMode && !layerRowById().has(cluster.layer_id))) {
-          continue;
-        }
-        for (const memberId of cluster.member_ids) ids.add(memberId);
-      }
-      return ids;
-    },
-    new Set<number>(),
-    { equals: sameNumberSet },
-  );
   const canvasH = () => props.legacyMode ? overviewH() : sectionLayout().contentHeight;
   const toggleSection = (kind: TimelineLayerKind) => {
     setCollapsedSections((current) => {
@@ -964,6 +990,15 @@ export function TimelineOverview(props: TimelineOverviewProps) {
   const renderedEvents = createMemo(() => props.legacyMode
     ? orderedEvents()
     : orderedEvents().filter((event) => layerRowById().has(event.layer_id)));
+  const sceneBlockOverlapRail = (event: TimelineOverviewEvent) =>
+    event.duration_ms > 0
+      ? overlapRailByEventKey().get(`${event.track}\u001f${String(event.layer_id)}\u001f${String(event.id)}`) ?? null
+      : null;
+  const sceneBlockIsOverflowed = (event: TimelineOverviewEvent) =>
+    sceneBlockOverlapRail(event)?.overflowed === true;
+  const visibleRenderedEvents = createMemo(() =>
+    renderedEvents().filter((event) => !sceneBlockIsOverflowed(event)),
+  );
   const renderedAudioClips = createMemo(() => props.legacyMode
     ? []
     : props.audioClips.filter((clip) => layerRowById().get(clip.layer_id)?.layer.kind === "Audio"));
@@ -982,7 +1017,7 @@ export function TimelineOverview(props: TimelineOverviewProps) {
       : clips[0]?.id ?? null;
   });
   const markerTabStopId = createMemo(() => {
-    const events = renderedEvents();
+    const events = visibleRenderedEvents();
     if (events.some((event) => event.id === props.selectedEventId)) return props.selectedEventId;
     const keyboardId = keyboardMarkerEventId();
     return events.some((event) => event.id === keyboardId) ? keyboardId : (events[0]?.id ?? null);
@@ -996,7 +1031,7 @@ export function TimelineOverview(props: TimelineOverviewProps) {
     });
   };
   const moveMarkerKeyboardFocus = (eventId: number, direction: -1 | 1 | "first" | "last") => {
-    const events = renderedEvents();
+    const events = visibleRenderedEvents();
     if (events.length === 0) return;
     const currentIndex = Math.max(0, events.findIndex((event) => event.id === eventId));
     const nextIndex = direction === "first"
@@ -2266,8 +2301,9 @@ export function TimelineOverview(props: TimelineOverviewProps) {
   };
   // ---- Pixel-space layout ------------------------------------------------
   // Legacy keeps the measured two-lane geometry. Authored layers use a compact
-  // 14px section separator with compact 30px lanes (54px when details are expanded)
-  // inside the scrollport; content height stays out of the frame's intrinsic size.
+  // 14px section separator with compact 30px lanes. Overlap members add one
+  // 30px internal rail each plus an 18px badge rail inside the scrollport;
+  // content height stays out of the frame's intrinsic size.
   const viewBoxX = (percent: number) => (percent / 100) * overviewW();
   const loopRegionGeometry = createMemo(() => {
     const region = props.loopRegion;
@@ -2302,14 +2338,22 @@ export function TimelineOverview(props: TimelineOverviewProps) {
     ? { top: legacyLaneTopPx(track), height: legacyLaneHeightPx() }
     : layerRowById().get(layerId) ?? { top: 0, height: timelineUserLaneHeightPx };
   const blockHeightPx = () => props.legacyMode ? Math.max(9, legacyLaneHeightPx() * 0.52) : 28;
+  type TimelineBlockAnchor = Pick<TimelineOverviewEvent, "layer_id" | "track"> & { id?: number };
+  const sceneBlockRailIndex = (event: TimelineBlockAnchor) => {
+    if (props.legacyMode || event.id === undefined) return 0;
+    const placement = overlapRailByEventKey().get(
+      `${event.track}\u001f${String(event.layer_id)}\u001f${String(event.id)}`,
+    );
+    return placement?.layer_id === event.layer_id ? placement.rail_index ?? 0 : 0;
+  };
   // The Lighting lane clears the ruler labels at the very top of the canvas.
-  const blockTopPx = (event: Pick<TimelineOverviewEvent, "layer_id" | "track">) => {
+  const blockTopPx = (event: TimelineBlockAnchor) => {
     const row = layerRow(event.layer_id, event.track);
     return props.legacyMode
       ? row.top + row.height * (event.track === "Lighting" ? 0.30 : 0.18)
-      : row.top + 1;
+      : row.top + 1 + sceneBlockRailIndex(event) * timelineUserLaneHeightPx;
   };
-  const blockCenterYPx = (event: Pick<TimelineOverviewEvent, "layer_id" | "track">) =>
+  const blockCenterYPx = (event: TimelineBlockAnchor) =>
     blockTopPx(event) + blockHeightPx() / 2;
   const blockUpperBandHeightPx = () => blockHeightPx() / 2;
   const automationLayerRow = (
@@ -2354,7 +2398,7 @@ export function TimelineOverview(props: TimelineOverviewProps) {
   // overlap icon/count badge in that rail preserves both move and fade bands.
   const clusterBadgeTopPx = (cluster: TimelineOverviewOverlapCluster) => {
     const row = layerRow(cluster.layer_id, cluster.track);
-    return props.legacyMode ? row.top + 2 : row.top + row.height - 18;
+    return props.legacyMode ? row.top + 2 : row.top + row.height - timelineOverlapBadgeRailHeightPx;
   };
   const clusterBadgeHeightPx = () => 15;
 
@@ -2372,7 +2416,7 @@ export function TimelineOverview(props: TimelineOverviewProps) {
     return move?.eventId === event.id ? move.layerId : event.layer_id;
   };
   const sceneBlockDisplaySpanMs = (event: TimelineOverviewEvent) =>
-    Number.isFinite(event.total_duration_ms) && event.total_duration_ms > 0
+    event.duration_ms > 0 && Number.isFinite(event.total_duration_ms) && event.total_duration_ms > 0
       ? event.total_duration_ms
       : 0;
   const eventPreviewEndMs = (event: TimelineOverviewEvent) => {
@@ -2580,13 +2624,8 @@ export function TimelineOverview(props: TimelineOverviewProps) {
     const move = markerDrag();
     return move?.eventId === event.id ? `${Math.round(move.timeMs)} ms` : null;
   };
-  const sceneBlockIsCompressedOverlapMember = (event: TimelineOverviewEvent) =>
-    event.duration_ms > 0 &&
-    visibleOverlapMemberEventIds().has(event.id) &&
-    props.selectedEventId !== event.id &&
-    markerDrag()?.eventId !== event.id &&
-    eventResizeDrag()?.eventId !== event.id &&
-    eventFadeDrag()?.eventId !== event.id;
+  const sceneBlockIsOverlapMember = (event: TimelineOverviewEvent) =>
+    sceneBlockOverlapRail(event) !== null;
   const placementPreview = createMemo(() => {
     const placement = placementDrag();
     if (!placement) return null;
@@ -3586,12 +3625,13 @@ export function TimelineOverview(props: TimelineOverviewProps) {
           );
         }}
       </For>
-      <For each={renderedEvents()}>
+      <For each={visibleRenderedEvents()}>
         {(event) => (
           <g
             class={[
               "timelineMarker",
               "sceneBlock",
+              sceneBlockIsOverlapMember(event) ? "overlapRail" : "",
               event.track === "Lighting" ? "lighting" : "video",
               underPlayheadEventIds().has(event.id) ? "underPlayhead" : "",
               props.selectedEventId === event.id ? "selected" : "",
@@ -3618,6 +3658,8 @@ export function TimelineOverview(props: TimelineOverviewProps) {
             data-timeline-fade-in-ms={eventPreviewFadeMs(event, "in")}
             data-timeline-fade-out-ms={eventPreviewFadeMs(event, "out")}
             data-timeline-preview-rate={eventPreviewRate(event) ?? undefined}
+            data-timeline-overlap-rail={sceneBlockOverlapRail(event)?.rail_index}
+            data-timeline-overlap-rail-count={sceneBlockOverlapRail(event)?.rail_count}
             style={{
               "--identity": cueIdentityCss(
                 event.cue_id,
@@ -3648,6 +3690,7 @@ export function TimelineOverview(props: TimelineOverviewProps) {
             aria-keyshortcuts="Shift+ArrowUp Shift+ArrowDown Alt+Shift+ArrowUp Alt+Shift+ArrowDown"
             aria-label={props.markerAriaLabel(event)}
             transform={`translate(${viewBoxX(timelineTimeToVisibleRawRatio(eventPreviewStartMs(event), props.visibleWindow) * 100)} ${blockCenterYPx({
+              id: event.id,
               layer_id: eventPreviewLayerId(event),
               track: event.track,
             })})`}
@@ -3721,17 +3764,6 @@ export function TimelineOverview(props: TimelineOverviewProps) {
               props.onSeekTime(event.time_ms);
             }}
           >
-              <Show when={sceneBlockIsCompressedOverlapMember(event)}>
-                <rect
-                  class="timelineSceneBlockHit"
-                  x="0"
-                  y={-blockHeightPx() / 2}
-                  width={Math.max(sceneBlockPixelWidth(event), 6)}
-                  height={blockHeightPx()}
-                  rx="1"
-                />
-              </Show>
-              <Show when={!sceneBlockIsCompressedOverlapMember(event)}>
               <Show when={activeDragStamp(event)}>
                 <rect
                   class="timelineSceneBlockGhost"
@@ -3967,16 +3999,13 @@ export function TimelineOverview(props: TimelineOverviewProps) {
                   onPointerCancel={cancelEventFade}
                 />
               </Show>
-              </Show>
-            <Show when={!sceneBlockIsCompressedOverlapMember(event)}>
-              <title>
-                {event.duration_ms === 0
-                  ? `${event.cue_label} / ${event.track} / ${event.time_ms} ms / unsupported legacy point; migrate to a Scene Block`
-                  : event.conform_to_tempo
-                  ? `${event.cue_label}${sceneBlockRateBadge(event) ? ` ${sceneBlockRateBadge(event)}` : ""} / ${event.track} / ${event.time_ms} ms / ${event.duration_ms} ms window / ${event.loop_count} ${event.loop_fill ? "fill loops" : "tempo iterations"}`
-                  : `${event.cue_label} / ${event.track} / ${event.time_ms} ms / ${sceneBlockDisplaySpanMs(event)} ms block / ${event.loop_count} iterations`}
-              </title>
-            </Show>
+            <title>
+              {event.duration_ms === 0
+                ? `${event.cue_label} / ${event.track} / ${event.time_ms} ms / unsupported legacy point; migrate to a Scene Block`
+                : event.conform_to_tempo
+                ? `${event.cue_label}${sceneBlockRateBadge(event) ? ` ${sceneBlockRateBadge(event)}` : ""} / ${event.track} / ${event.time_ms} ms / ${event.duration_ms} ms window / ${event.loop_count} ${event.loop_fill ? "fill loops" : "tempo iterations"}`
+                : `${event.cue_label} / ${event.track} / ${event.time_ms} ms / ${sceneBlockDisplaySpanMs(event)} ms block / ${event.loop_count} iterations`}
+            </title>
           </g>
         )}
       </For>

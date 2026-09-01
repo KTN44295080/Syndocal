@@ -4,6 +4,57 @@ Date: 2026-08-19
 Branch at creation: `codex/syndocal-v1.0`
 Baseline before this document: `848d759846985cc3acf588356cfa3c996b4e2ef2`
 
+## 2026-09-01 alpha.53 transport convergence and overlap checkpoint
+
+Alpha.53 is the current source candidate, based on upstream-equal parent
+`9be5479b23b417049c078e24a7e6c3b172fc720e`. Timeline transport now binds every
+queued mutation to exact project epoch/revision/checkpoint/read-generation scope,
+revalidates the scope at every authority, send, retry, receipt, canonical, and
+queue boundary, and reports success only after canonical snapshot convergence.
+The retired behavior could settle from a receipt while a stale generic snapshot
+or a queued pre-replacement action remained live. Invalid or replaced scope now
+fails closed and cannot mutate the newer project.
+
+Simultaneous lighting events now render as complete Scene Blocks on deterministic
+bounded rails rather than collapsing into one marker. Eight rails and `258 px`
+are the hard display bound; exact track/layer/member identity prevents stale or
+cross-lane membership. Overflow is discoverable through the existing count/
+Inspector route but excluded from marker DOM, roving tab stop, and keyboard
+traversal. Visible rails retain fades, frames, rate/loop badges, resize handles,
+and keyboard behavior.
+
+Alt-isolated Split now restores a freshly returned item only after the parent
+snapshot publication turn. Its bounded focus retry captures project epoch and
+active Timeline ID, revalidates both before every DOM query, and stops on
+unmount. This replaces a transient stale-selection/focus loss without allowing
+an old operation to focus a same-ID element in a replacement project/Timeline.
+
+The same-PC three-display derivative harness preserves exactly two ordinary
+Display outputs and three compositions and changes only 14 allowlisted media
+fields. Its verified output is `1,112,316` bytes with SHA-256
+`27484E18DE3FFBB19829D19A90459AB4D847209BF272E629CAE37AF3DD38EA11`.
+It is local QA evidence, not a portable or release artifact; absolute paths
+require explicit relink and re-verification on another PC.
+
+Source gates pass with first-party warnings `0`: release metadata/subgates,
+Timeline transport and overlap, TypeScript, frontend build, the four-viewport
+Timeline performance matrix plus direct resize, local derivative verification,
+syntax, and diff checks. Independent transport review is GO with P0/P1 `0` and
+one P2 evidence limitation (the App-level delayed-full/canonical race has source
+contract proof rather than a dedicated async App harness). Independent overlap
+review is GO with P0/P1/P2 `0`. Independent audio-focus review is GO with P0/P1
+`0`; P2 is the absence of a dedicated same-Timeline user-focus-interruption test
+during the bounded retry window. The isolated full performance rerun passes
+after the scope-fenced focus fix. Vite retains one existing App chunk
+size advisory; no first-party warning was added.
+
+No alpha.53 native artifact or hardware claim exists yet. The existing alpha.52
+executable remains historical until the source checkpoint is pushed, exact
+`HEAD=origin` is confirmed, and `pnpm --dir app tauri build --no-bundle` succeeds
+with the absolute Community MSVC `14.44.35207` linker pinned and first in
+`where.exe`. USB-DMX is absent; fresh physical USB-DMX, Art-Net, Spout,
+three-display, ASIO-device, and listening acceptance remain open.
+
 ## 2026-09-01 alpha.52 operator-path and native checkpoint
 
 Alpha.52 is the current show-critical checkpoint. It moves arbitrary Windows

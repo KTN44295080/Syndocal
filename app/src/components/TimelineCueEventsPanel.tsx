@@ -300,6 +300,10 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
   let layerMenuElement: HTMLDivElement | undefined;
   let layerMenuReturnFocus: HTMLElement | null = null;
   let layerDialogReturnFocus: HTMLElement | null = null;
+  let timelinePanelMounted = true;
+  onCleanup(() => {
+    timelinePanelMounted = false;
+  });
   const [selectedAudioClipId, setSelectedAudioClipId] = createSignal<number | null>(null);
   const [selectedVideoClipId, setSelectedVideoClipId] = createSignal<number | null>(null);
   const [selectedTimelineItems, setSelectedTimelineItems] = createSignal<TimelineItemRef[]>([]);
@@ -471,12 +475,18 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
   };
   const selectReturnedTimelineItems = (items: TimelineItemRef[]) => {
     setSelectedTimelineItems(items);
-    props.onRestoreReturnedItemSelection(items);
     const audio = items.find((item) => item.kind === "audio_clip");
     const video = items.find((item) => item.kind === "video_clip");
     setSelectedAudioClipId(audio?.kind === "audio_clip" ? audio.clip_id : null);
     setSelectedVideoClipId(video?.kind === "video_clip" ? video.clip_id : null);
     setSingleMemberEditKey(null);
+    // An authoritative mutation can update the parent's snapshot and return
+    // the new item in the same turn. Defer the App-owned primary-selection
+    // validation until Solid has published that snapshot; otherwise the
+    // transiently old active Timeline rejects the fresh ID and the stale-clear
+    // effect removes the local selection before the new DOM item can receive
+    // focus.
+    queueMicrotask(() => props.onRestoreReturnedItemSelection(items));
   };
   const timelineItemFocusSelector = (item: TimelineItemRef) => {
     switch (item.kind) {
@@ -493,9 +503,26 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
     }
   };
   const focusReturnedTimelineItem = (item: TimelineItemRef) => {
-    requestAnimationFrame(() => requestAnimationFrame(() => {
-      document.querySelector<SVGElement>(timelineItemFocusSelector(item))?.focus();
-    }));
+    const focusProjectEpoch = props.projectEpoch;
+    const focusTimelineId = props.activeTimelineId;
+    let attempts = 0;
+    const focusWhenMounted = () => {
+      // A delayed retry must never focus a same-ID element from a replaced
+      // project/Timeline. Check the current identity before every RAF query.
+      if (!timelinePanelMounted
+        || props.projectEpoch !== focusProjectEpoch
+        || props.activeTimelineId !== focusTimelineId) return;
+      const target = document.querySelector<SVGElement>(timelineItemFocusSelector(item));
+      if (target?.isConnected) {
+        target.focus();
+        return;
+      }
+      if (attempts < 6) {
+        attempts += 1;
+        requestAnimationFrame(focusWhenMounted);
+      }
+    };
+    requestAnimationFrame(focusWhenMounted);
   };
   const isTimelineItemLinked = (item: TimelineItemRef) => props.itemGroups.some((group) =>
     group.members.some((member) => timelineItemKey(member) === timelineItemKey(item)));
