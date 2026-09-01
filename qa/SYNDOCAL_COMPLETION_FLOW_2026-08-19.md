@@ -96,7 +96,13 @@ reported `held_active` for both resources. Existing Display output IDs `3`
 `3840x2160`, Background composition) were reopened without adding or rerouting
 an output; both report `live_open=true`, exact machine-role ownership, and no
 last error. The identity-bound StandardRelease acceptance is the remaining
-three-display checkpoint. Fresh USB-DMX, Art-Net, Spout, ASIO-device, and
+three-display checkpoint. Its first Apply attempt failed closed before display
+sampling because the Git environment guard's successful Boolean output polluted
+the branch resolver as `True codex/syndocal-v1.2`. All four real Git authority
+helpers now discard only that guard success value while preserving exceptions.
+The cross-shell selftest proves scalar HEAD/branch/ancestor/clean results and
+passes `91/91` in Windows PowerShell and PowerShell 7; independent Terra xHigh
+review is GO with P0/P1/P2 `0`. Fresh USB-DMX, Art-Net, Spout, ASIO-device, and
 physical listening acceptance remain open. USB-DMX is absent; the protected
 alpha.51 project remains `1,116,223` bytes, SHA-256
 `7031196A6527431FB8D625F420FE5D3E442DD2AA35D2ED86D57AF9EDF69890A7`, and must

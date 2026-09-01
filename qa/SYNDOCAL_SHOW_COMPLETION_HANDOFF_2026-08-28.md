@@ -107,7 +107,12 @@ only existing output ID `3` / `Display 1` / `1920x1080` / Foreground and output
 ID `4` / `Display 5` / `3840x2160` / Background. Both currently report
 `live_open=true`, `OwnedByMachineRole`, and no last error. Exact
 StandardRelease identity/placement sampling remains the next action; this
-paragraph is not that acceptance.
+paragraph is not that acceptance. The first Apply attempt rejected before
+display sampling because a successful Git environment guard leaked Boolean
+`True` into the branch resolver. HEAD, branch, ancestor, and clean helpers now
+discard only the guard success output; guard exceptions still fail closed. The
+new scalar-output regression contract passes `91/91` in both Windows PowerShell
+and PowerShell 7, and independent Terra xHigh review reports P0/P1/P2 `0`.
 
 Fresh USB-DMX, Art-Net, Spout, ASIO-device, and physical listening acceptance
 remain open. USB-DMX is absent on this PC; alpha.51 `all_white`/COM3 behavior is

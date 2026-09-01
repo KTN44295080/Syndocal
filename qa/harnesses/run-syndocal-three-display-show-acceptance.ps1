@@ -508,7 +508,7 @@ function Get-ExecutableProductVersion {
 function Resolve-ThreeDisplayGitHead {
   # SEAM: read-only git query only.
   param([Parameter(Mandatory = $true)][string]$CheckoutRootPath)
-  Assert-ThreeDisplayGitEnvironmentSafe
+  [void](Assert-ThreeDisplayGitEnvironmentSafe)
   $answer = & git --no-replace-objects -C $CheckoutRootPath rev-parse HEAD 2>&1
   if ($LASTEXITCODE -ne 0) { throw "Fail closed: git rev-parse HEAD failed for '$CheckoutRootPath'." }
   $head = ([string]@($answer)[0]).Trim()
@@ -519,7 +519,7 @@ function Resolve-ThreeDisplayGitHead {
 function Resolve-ThreeDisplayGitBranch {
   # SEAM: read-only git query only.
   param([Parameter(Mandatory = $true)][string]$CheckoutRootPath)
-  Assert-ThreeDisplayGitEnvironmentSafe
+  [void](Assert-ThreeDisplayGitEnvironmentSafe)
   $answer = & git --no-replace-objects -C $CheckoutRootPath branch --show-current 2>&1
   if ($LASTEXITCODE -ne 0) { throw "Fail closed: git branch --show-current failed for '$CheckoutRootPath'." }
   $branch = ([string]@($answer)[0]).Trim()
@@ -539,7 +539,7 @@ function Test-ThreeDisplayGitAncestor {
   if (-not (Test-ThreeDisplayGitHeadFormat $AncestorHead) -or -not (Test-ThreeDisplayGitHeadFormat $DescendantHead)) {
     throw "Fail closed: source and harness Git HEADs must both be full 40-hex commits before ancestry is checked."
   }
-  Assert-ThreeDisplayGitEnvironmentSafe
+  [void](Assert-ThreeDisplayGitEnvironmentSafe)
   & git --no-replace-objects -C $CheckoutRootPath merge-base --is-ancestor $AncestorHead $DescendantHead 2>&1 | Out-Null
   if ($LASTEXITCODE -eq 0) { return $true }
   if ($LASTEXITCODE -eq 1) {
@@ -552,7 +552,7 @@ function Test-ThreeDisplayCheckoutClean {
   # SEAM: exact artifact acceptance cannot treat an uncommitted working tree
   # as the supplied Git HEAD.
   param([Parameter(Mandatory = $true)][string]$CheckoutRootPath)
-  Assert-ThreeDisplayGitEnvironmentSafe
+  [void](Assert-ThreeDisplayGitEnvironmentSafe)
   $answer = & git --no-replace-objects -C $CheckoutRootPath status --porcelain=v1 2>&1
   if ($LASTEXITCODE -ne 0) { throw "Fail closed: git status --porcelain=v1 failed for '$CheckoutRootPath'." }
   $entries = @($answer | ForEach-Object { ([string]$_).TrimEnd() } | Where-Object { $_ -ne "" })

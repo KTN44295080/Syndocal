@@ -370,6 +370,72 @@ function Invoke-FocusedChecks {
       New-Check -Passed $passed -Detail $(if ($details.Count -eq 0) { "all Git repo/index/object/config authority overrides rejected" } else { $details -join "; " })
     } })
 
+    $checks.Add([pscustomobject]@{ Name = "Git authority query helpers emit only their authoritative result"; Run = {
+      $runnerText = [IO.File]::ReadAllText($script:RunnerPath)
+      $runnerLines = [IO.File]::ReadAllLines($script:RunnerPath)
+      $gitHelperNames = @("Resolve-ThreeDisplayGitHead", "Resolve-ThreeDisplayGitBranch", "Test-ThreeDisplayGitAncestor", "Test-ThreeDisplayCheckoutClean")
+      $staticFailures = [System.Collections.Generic.List[string]]::new()
+      foreach ($name in $gitHelperNames) {
+        $start = -1
+        for ($index = 0; $index -lt $runnerLines.Count; $index++) {
+          if ($runnerLines[$index] -match "^function $([regex]::Escape($name)) ") { $start = $index; break }
+        }
+        if ($start -lt 0) {
+          [void]$staticFailures.Add("helper $name is missing")
+          continue
+        }
+        $end = $runnerLines.Count
+        for ($index = $start + 1; $index -lt $runnerLines.Count; $index++) {
+          if ($runnerLines[$index] -match "^function ") { $end = $index; break }
+        }
+        $body = ($runnerLines[$start..($end - 1)] -join "`n")
+        if (([regex]::Matches($body, [regex]::Escape("[void](Assert-ThreeDisplayGitEnvironmentSafe)")).Count) -ne 1) {
+          [void]$staticFailures.Add("helper $name does not suppress exactly one Git environment guard result")
+        }
+      }
+      if (([regex]::Matches($runnerText, [regex]::Escape("[void](Assert-ThreeDisplayGitEnvironmentSafe)")).Count) -ne 4) {
+        [void]$staticFailures.Add("runner does not have exactly four output-suppressed Git environment guard callsites")
+      }
+      if ($staticFailures.Count -ne 0) {
+        return New-Check $false ($staticFailures -join "; ")
+      }
+
+      $savedResolverFunctions = @{}
+      foreach ($name in $gitHelperNames) { $savedResolverFunctions[$name] = (Get-Item -LiteralPath "function:$name").ScriptBlock }
+      $savedGitFunction = Get-Item -LiteralPath "function:git" -ErrorAction SilentlyContinue
+      $savedLastExitCodeVariable = Get-Variable -Name LASTEXITCODE -Scope Global -ErrorAction SilentlyContinue
+      $script:GitAuthorityProbeCalls = [System.Collections.Generic.List[string]]::new()
+      try {
+        foreach ($name in $gitHelperNames) { Set-Item -LiteralPath "function:$name" -Value $script:SavedRunnerFunctions[$name] }
+        Set-Item -LiteralPath "function:git" -Value {
+          $gitArgs = @($args | ForEach-Object { [string]$_ })
+          [void]$script:GitAuthorityProbeCalls.Add(($gitArgs -join " "))
+          $global:LASTEXITCODE = 0
+          $command = if ($gitArgs.Count -gt 3) { [string]$gitArgs[3] } else { "" }
+          switch ($command) {
+            "rev-parse" { Write-Output $script:GoodHead }
+            "branch" { Write-Output $script:GoodBranch }
+            default { }
+          }
+        }
+        $headResult = @(Resolve-ThreeDisplayGitHead -CheckoutRootPath $script:CheckoutRoot)
+        $branchResult = @(Resolve-ThreeDisplayGitBranch -CheckoutRootPath $script:CheckoutRoot)
+        $ancestorResult = @(Test-ThreeDisplayGitAncestor -AncestorHead $script:GoodArtifactHead -DescendantHead $script:GoodHead -CheckoutRootPath $script:CheckoutRoot)
+        $cleanResult = @(Test-ThreeDisplayCheckoutClean -CheckoutRootPath $script:CheckoutRoot)
+        $passed =
+          ($headResult.Count -eq 1) -and ([string]$headResult[0] -ceq $script:GoodHead.ToLowerInvariant()) -and
+          ($branchResult.Count -eq 1) -and ([string]$branchResult[0] -ceq $script:GoodBranch) -and
+          ($ancestorResult.Count -eq 1) -and ([bool]$ancestorResult[0]) -and
+          ($cleanResult.Count -eq 1) -and ([bool]$cleanResult[0]) -and
+          ($script:GitAuthorityProbeCalls.Count -eq 4)
+        New-Check -Passed $passed -Detail "head, branch, ancestor, and clean Git queries return one uncontaminated authoritative result"
+      } finally {
+        if ($null -eq $savedLastExitCodeVariable) { Remove-Variable -Name LASTEXITCODE -Scope Global -ErrorAction SilentlyContinue } else { Set-Variable -Name LASTEXITCODE -Scope Global -Value $savedLastExitCodeVariable.Value }
+        foreach ($name in $gitHelperNames) { Set-Item -LiteralPath "function:$name" -Value $savedResolverFunctions[$name] }
+        if ($null -eq $savedGitFunction) { Remove-Item -LiteralPath "function:git" -ErrorAction SilentlyContinue } else { Set-Item -LiteralPath "function:git" -Value $savedGitFunction.ScriptBlock }
+      }
+    } })
+
     $checks.Add([pscustomobject]@{ Name = "alpha.53 authority binds exact artifact metadata"; Run = {
       $authority = $config.artifact_authority
       $passed =
