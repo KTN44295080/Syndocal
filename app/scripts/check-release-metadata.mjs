@@ -32,7 +32,7 @@ import { withMaterializedVerifiedExecutable } from "./verified-materialization.m
 
 export { withMaterializedVerifiedExecutable } from "./verified-materialization.mjs";
 
-export const expectedVersion = "1.2.0-alpha.58";
+export const expectedVersion = "1.2.0-alpha.59";
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const appRoot = resolve(scriptDir, "..");
 const workspaceRoot = resolve(appRoot, "..");
@@ -506,31 +506,31 @@ const currentReleaseBoundaryMarkers = Object.freeze([
   {
     path: "RELEASE_STATUS.md",
     markers: [
-      "## 2026-09-01 current alpha.58 display-authority source checkpoint",
+      "## 2026-09-01 current alpha.59 show-output source candidate",
       "Source focused acceptance is GO.",
-      "passes `8/8`",
-      "Source checkpoint `a0b9b00e4871739ab3765849c58846d30aee2d9b`",
-      "Display 1 visibly rendered",
+      "metrics focused `5/5`",
+      "951f377735b742f8353add01926f47aafe1521d9",
+      "USB-DMX",
     ],
   },
   {
     path: "qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md",
     markers: [
-      "## 2026-09-01 alpha.58 display-authority source candidate",
-      "Alpha.58 is the current source candidate on `codex/syndocal-v1.2`",
-      "passes `8/8`",
-      "Source checkpoint `a0b9b00e4871739ab3765849c58846d30aee2d9b`",
-      "Display 1 visibly rendered",
+      "## 2026-09-01 alpha.59 source candidate before native acceptance",
+      "Alpha.59 is being prepared from upstream-equal parent",
+      "metrics focused `5/0/0`",
+      "951f377735b742f8353add01926f47aafe1521d9",
+      "USB-DMX",
     ],
   },
   {
     path: "qa/SYNDOCAL_SHOW_COMPLETION_HANDOFF_2026-08-28.md",
     markers: [
-      "## 2026-09-01 alpha.58 display-authority source candidate",
-      "Alpha.58 is the current source candidate on `codex/syndocal-v1.2`",
-      "passes `8/8`",
-      "Source checkpoint `a0b9b00e4871739ab3765849c58846d30aee2d9b`",
-      "Display 1 visibly rendered",
+      "## 2026-09-01 alpha.59 source candidate before native acceptance",
+      "Alpha.59 is being prepared from upstream-equal parent",
+      "metrics focused `5/0/0`",
+      "951f377735b742f8353add01926f47aafe1521d9",
+      "USB-DMX",
     ],
   },
 ]);
@@ -617,7 +617,7 @@ function assertCurrentReleaseDocumentation(readManifest, productVersion) {
   for (const { path, markers } of currentReleaseBoundaryMarkers) {
     const top = String(readManifest(path)).split(/\r?\n/u).slice(0, 45).join("\n");
     for (const marker of markers) {
-      const resolvedMarker = marker.replace("1.2.0-alpha.58", productVersion);
+      const resolvedMarker = marker.replace("1.2.0-alpha.59", productVersion);
       if (!top.includes(resolvedMarker)) {
         throw new Error(`${path} lacks its top ${productVersion} source-only marker: '${resolvedMarker}'.`);
       }

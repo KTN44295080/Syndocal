@@ -4383,7 +4383,6 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         height: u32,
     ) -> Result<(VideoFrame, Vec<VideoEffectStageFault>), VideoRuntimeError> {
         let frames = self.runtime.select_frames_for_plan(plan);
-        let mut output = vec![0u8; width as usize * height as usize * 4];
         let mut faults = Vec::new();
         let active_buses = transition_runtime
             .into_iter()
@@ -4424,7 +4423,23 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
             }
         }
 
+        let fast_output = if !plan.blackout
+            && plan.layers.len() == 1
+            && active_buses.is_empty()
+            && active_groups.is_empty()
+        {
+            try_identity_composition_rgba8(&plan.layers[0], &frames, width, height)?
+        } else {
+            None
+        };
+        let fast_path_applied = fast_output.is_some();
+        let mut output =
+            fast_output.unwrap_or_else(|| vec![0u8; width as usize * height as usize * 4]);
+
         for layer in &plan.layers {
+            if fast_path_applied {
+                break;
+            }
             if let Some((active, member_ids)) = active_buses
                 .iter()
                 .find(|(_, member_ids)| member_ids.contains(&layer.layer_id))
@@ -5727,11 +5742,24 @@ pub fn composite_rgba8(
     if width == 0 || height == 0 {
         return Err(CpuCompositeError::InvalidOutputSize);
     }
-    let mut output = vec![0u8; width as usize * height as usize * 4];
-
-    for layer in &plan.layers {
-        blend_composition_layer_onto(&mut output, layer, frames, width, height)?;
-    }
+    let output = if plan.layers.len() == 1 {
+        match try_identity_composition_rgba8(&plan.layers[0], frames, width, height)? {
+            Some(output) => output,
+            None => {
+                let mut output = vec![0u8; width as usize * height as usize * 4];
+                for layer in &plan.layers {
+                    blend_composition_layer_onto(&mut output, layer, frames, width, height)?;
+                }
+                output
+            }
+        }
+    } else {
+        let mut output = vec![0u8; width as usize * height as usize * 4];
+        for layer in &plan.layers {
+            blend_composition_layer_onto(&mut output, layer, frames, width, height)?;
+        }
+        output
+    };
 
     Ok(VideoFrame {
         layer_id: 0,
@@ -5753,6 +5781,52 @@ pub fn composite_rgba8(
         format: VideoPixelFormat::Rgba8,
         data: output,
     })
+}
+
+/// Returns the exact result of blending one identity, opacity-one Normal layer onto
+/// the renderer's transparent-black destination, when that bounded fast path
+/// applies. `None` deliberately leaves malformed, converted, or transformed
+/// inputs on the established compositor path so its errors and sampling rules
+/// remain unchanged.
+fn try_identity_composition_rgba8(
+    layer: &CompositionLayerPlan,
+    frames: &[VideoFrame],
+    width: u32,
+    height: u32,
+) -> Result<Option<Vec<u8>>, CpuCompositeError> {
+    if layer.blend_mode != VideoBlendMode::Normal
+        || layer.opacity != 1.0
+        || layer.transform != Transform2D::default()
+        || layer.color != VideoColorAdjust::default()
+        || layer.fx != VideoFxAdjust::default()
+    {
+        return Ok(None);
+    }
+    let Some(frame) = frames
+        .iter()
+        .filter(|frame| frame.layer_id == layer.layer_id)
+        .max_by_key(|frame| frame.pts_ms)
+    else {
+        return Ok(None);
+    };
+    if frame.format != VideoPixelFormat::Rgba8
+        || frame.width != width
+        || frame.height != height
+        || rgba_frame_len(frame.width, frame.height) != Some(frame.data.len())
+    {
+        return Ok(None);
+    }
+
+    let mut output = frame.data.clone();
+    if output.chunks_exact(4).any(|pixel| pixel[3] != 255) {
+        for pixel in output.chunks_exact_mut(4) {
+            let alpha = u16::from(pixel[3]);
+            for channel in pixel.iter_mut().take(3) {
+                *channel = ((u16::from(*channel) * alpha + 127) / 255) as u8;
+            }
+        }
+    }
+    Ok(Some(output))
 }
 
 fn blend_composition_layer_onto(
@@ -12261,6 +12335,166 @@ mod tests {
         .unwrap();
 
         assert_eq!(output.data, vec![60, 120, 30, 255]);
+    }
+
+    #[test]
+    fn identity_compositor_fast_path_matches_source_over_reference() {
+        for data in [
+            vec![10, 20, 30, 255, 240, 180, 120, 255],
+            vec![10, 20, 30, 128, 240, 180, 120, 0],
+        ] {
+            let layer = layer_plan(1, VideoBlendMode::Normal, 1.0);
+            let frames = [rgba_frame_with_size(1, 2, 1, data)];
+            let fast = try_identity_composition_rgba8(&layer, &frames, 2, 1)
+                .unwrap()
+                .expect("identity RGBA layer should use the fast path");
+            let mut reference = vec![0; 2 * 4];
+            blend_composition_layer_onto(&mut reference, &layer, &frames, 2, 1).unwrap();
+
+            assert_eq!(fast, reference);
+            assert_eq!(
+                composite_rgba8(&plan(vec![layer]), &frames, 2, 1)
+                    .unwrap()
+                    .data,
+                reference
+            );
+        }
+    }
+
+    #[test]
+    fn identity_compositor_fast_path_is_bounded_to_exact_inputs() {
+        let frames = [rgba_frame_with_size(
+            1,
+            2,
+            1,
+            vec![10, 20, 30, 255, 240, 180, 120, 255],
+        )];
+        let layer = layer_plan(1, VideoBlendMode::Normal, 1.0);
+
+        assert!(try_identity_composition_rgba8(&layer, &frames, 2, 1)
+            .unwrap()
+            .is_some());
+        assert!(try_identity_composition_rgba8(&layer, &frames, 1, 2)
+            .unwrap()
+            .is_none());
+        assert!(try_identity_composition_rgba8(
+            &CompositionLayerPlan {
+                transform: Transform2D {
+                    x: 0.001,
+                    ..Transform2D::default()
+                },
+                ..layer.clone()
+            },
+            &frames,
+            2,
+            1
+        )
+        .unwrap()
+        .is_none());
+    }
+
+    fn assert_single_layer_fallback_parity(
+        label: &str,
+        layer: CompositionLayerPlan,
+        frames: &[VideoFrame],
+        width: u32,
+        height: u32,
+    ) {
+        assert!(
+            try_identity_composition_rgba8(&layer, frames, width, height)
+                .unwrap()
+                .is_none(),
+            "{label}: this input must stay on the generic compositor path"
+        );
+
+        let mut expected = vec![0u8; width as usize * height as usize * 4];
+        let expected = blend_composition_layer_onto(&mut expected, &layer, frames, width, height)
+            .map(|()| expected);
+        let actual =
+            composite_rgba8(&plan(vec![layer]), frames, width, height).map(|frame| frame.data);
+        assert_eq!(
+            actual, expected,
+            "{label}: fallback output must remain unchanged"
+        );
+    }
+
+    #[test]
+    fn identity_compositor_fast_path_falls_back_for_non_identity_matrix_with_parity() {
+        let frames = [rgba_frame_with_size(
+            1,
+            2,
+            1,
+            vec![10, 20, 30, 255, 240, 180, 120, 128],
+        )];
+
+        for (label, layer) in [
+            ("add", layer_plan(1, VideoBlendMode::Add, 1.0)),
+            ("multiply", layer_plan(1, VideoBlendMode::Multiply, 1.0)),
+            ("screen", layer_plan(1, VideoBlendMode::Screen, 1.0)),
+            ("opacity-zero", layer_plan(1, VideoBlendMode::Normal, 0.0)),
+            ("opacity-half", layer_plan(1, VideoBlendMode::Normal, 0.5)),
+            (
+                "opacity-over-one",
+                layer_plan(1, VideoBlendMode::Normal, 1.5),
+            ),
+            (
+                "opacity-nan",
+                layer_plan(1, VideoBlendMode::Normal, f32::NAN),
+            ),
+            (
+                "color-adjust",
+                CompositionLayerPlan {
+                    color: VideoColorAdjust {
+                        brightness: 0.1,
+                        ..VideoColorAdjust::default()
+                    },
+                    ..layer_plan(1, VideoBlendMode::Normal, 1.0)
+                },
+            ),
+            (
+                "fx-adjust",
+                CompositionLayerPlan {
+                    fx: VideoFxAdjust {
+                        blur: 1.0,
+                        ..VideoFxAdjust::default()
+                    },
+                    ..layer_plan(1, VideoBlendMode::Normal, 1.0)
+                },
+            ),
+            (
+                "transform",
+                CompositionLayerPlan {
+                    transform: Transform2D {
+                        x: 0.001,
+                        ..Transform2D::default()
+                    },
+                    ..layer_plan(1, VideoBlendMode::Normal, 1.0)
+                },
+            ),
+        ] {
+            assert_single_layer_fallback_parity(label, layer, &frames, 2, 1);
+        }
+    }
+
+    #[test]
+    fn identity_compositor_fast_path_rejects_converted_malformed_and_missing_inputs() {
+        let layer = layer_plan(1, VideoBlendMode::Normal, 1.0);
+        let bgra = [VideoFrame {
+            layer_id: 1,
+            width: 2,
+            height: 1,
+            pts_ms: 1,
+            duration_ms: 16,
+            format: VideoPixelFormat::Bgra8,
+            data: vec![30, 20, 10, 255, 120, 180, 240, 128],
+        }];
+        assert_single_layer_fallback_parity("bgra-conversion", layer.clone(), &bgra, 2, 1);
+
+        let malformed = [rgba_frame_with_size(1, 2, 1, vec![10, 20, 30, 255])];
+        assert_single_layer_fallback_parity("malformed-rgba", layer.clone(), &malformed, 2, 1);
+
+        let missing: [VideoFrame; 0] = [];
+        assert_single_layer_fallback_parity("missing-frame", layer, &missing, 2, 1);
     }
 
     #[test]

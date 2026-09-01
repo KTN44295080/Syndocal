@@ -11,10 +11,38 @@ use super::{
 #[cfg(feature = "libav")]
 use ffmpeg_next as ffmpeg;
 
+#[cfg(all(feature = "libav", test))]
+use std::cell::Cell;
+#[cfg(feature = "libav")]
+use std::cell::RefCell;
+
 #[cfg(feature = "libav")]
 const LIBAV_SEQUENTIAL_REQUEST_GAP_MS: u64 = 250;
 #[cfg(any(feature = "libav", test))]
 const LIBAV_WORKING_SET_CAPACITY: usize = 8;
+
+#[cfg(feature = "libav")]
+const LIBAV_SCALER_CACHE_CAPACITY: usize = 8;
+
+// `ffmpeg_next::software::scaling::context::Context` owns a native pointer and
+// intentionally is not `Send`. Decoders, however, are moved into the native
+// output worker, so the scaler cannot be stored in `LibavDecodeSession`
+// without weakening that ownership boundary. Keep a bounded cache on the
+// decoding thread instead. A scaler is keyed by the complete source/target
+// geometry and pixel formats; it is therefore safe to reuse for any render
+// input that has the same conversion contract while leaving the input/session
+// ownership in `LibavDecodeSession` unchanged.
+#[cfg(feature = "libav")]
+thread_local! {
+    static LIBAV_SCALER_CACHE: RefCell<Vec<LibavScalerCacheEntry>> = const {
+        RefCell::new(Vec::new())
+    };
+}
+
+#[cfg(all(feature = "libav", test))]
+thread_local! {
+    static LIBAV_SCALER_CREATION_COUNT: Cell<usize> = const { Cell::new(0) };
+}
 
 pub struct LibavFrameDecoder {
     entries: Vec<LibavFrameCacheEntry>,
@@ -90,6 +118,16 @@ struct LibavDecodeSession {
     last_request_ms: Option<u64>,
     eof_sent: bool,
     decoder_drained: bool,
+}
+
+#[cfg(feature = "libav")]
+struct LibavScalerCacheEntry {
+    source_format: ffmpeg::format::Pixel,
+    source_width: u32,
+    source_height: u32,
+    target_width: u32,
+    target_height: u32,
+    scaler: ffmpeg::software::scaling::context::Context,
 }
 
 #[cfg(feature = "libav")]
@@ -566,28 +604,132 @@ fn open_libav_session(
 }
 
 #[cfg(feature = "libav")]
+struct LibavScalerLease {
+    source_format: ffmpeg::format::Pixel,
+    source_width: u32,
+    source_height: u32,
+    target_width: u32,
+    target_height: u32,
+    scaler: Option<ffmpeg::software::scaling::context::Context>,
+}
+
+#[cfg(feature = "libav")]
+impl LibavScalerLease {
+    /// Run the conversion while retaining ownership of the cache lease.
+    ///
+    /// A failed native conversion can leave the underlying scaler in an
+    /// unusable state. Do not return that context to the thread-local cache;
+    /// the next request for this geometry must create a fresh conversion
+    /// context instead.
+    fn run(
+        &mut self,
+        input: &ffmpeg_next::util::frame::video::Video,
+        output: &mut ffmpeg_next::util::frame::video::Video,
+    ) -> Result<(), ffmpeg_next::Error> {
+        let result = self
+            .scaler
+            .as_mut()
+            .expect("scaler lease must own a scaler until drop")
+            .run(input, output);
+        if result.is_err() {
+            self.scaler = None;
+        }
+        result
+    }
+}
+
+#[cfg(feature = "libav")]
+impl Drop for LibavScalerLease {
+    fn drop(&mut self) {
+        let Some(scaler) = self.scaler.take() else {
+            return;
+        };
+        LIBAV_SCALER_CACHE.with(|cache| {
+            let mut cache = cache.borrow_mut();
+            cache.retain(|entry| {
+                entry.source_format != self.source_format
+                    || entry.source_width != self.source_width
+                    || entry.source_height != self.source_height
+                    || entry.target_width != self.target_width
+                    || entry.target_height != self.target_height
+            });
+            if cache.len() >= LIBAV_SCALER_CACHE_CAPACITY {
+                cache.remove(0);
+            }
+            cache.push(LibavScalerCacheEntry {
+                source_format: self.source_format,
+                source_width: self.source_width,
+                source_height: self.source_height,
+                target_width: self.target_width,
+                target_height: self.target_height,
+                scaler,
+            });
+        });
+    }
+}
+
+#[cfg(feature = "libav")]
+fn acquire_cached_libav_scaler(
+    request: &VideoFrameRequest,
+    source_format: ffmpeg::format::Pixel,
+    source_width: u32,
+    source_height: u32,
+) -> Result<LibavScalerLease, VideoDecodeError> {
+    use ffmpeg::{
+        format::Pixel,
+        software::scaling::{context::Context, flag::Flags},
+    };
+
+    LIBAV_SCALER_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        let target_width = request.width;
+        let target_height = request.height;
+        let scaler = if let Some(cache_index) = cache.iter().position(|entry| {
+            entry.source_format == source_format
+                && entry.source_width == source_width
+                && entry.source_height == source_height
+                && entry.target_width == target_width
+                && entry.target_height == target_height
+        }) {
+            cache.remove(cache_index).scaler
+        } else {
+            #[cfg(all(feature = "libav", test))]
+            LIBAV_SCALER_CREATION_COUNT.with(|count| count.set(count.get() + 1));
+            Context::get(
+                source_format,
+                source_width,
+                source_height,
+                Pixel::RGBA,
+                target_width,
+                target_height,
+                Flags::BILINEAR,
+            )
+            .map_err(|error| decode_error(request, error))?
+        };
+        Ok(LibavScalerLease {
+            source_format,
+            source_width,
+            source_height,
+            target_width,
+            target_height,
+            scaler: Some(scaler),
+        })
+    })
+}
+
+#[cfg(feature = "libav")]
 fn decode_libav_session_frame(
     request: &VideoFrameRequest,
     session: &mut LibavDecodeSession,
     seek_before_decode: bool,
     terminal_frame: Option<&VideoFrame>,
 ) -> Result<VideoFrame, VideoDecodeError> {
-    use ffmpeg::{
-        format::Pixel,
-        software::scaling::{context::Context, flag::Flags},
-    };
-
-    let mut scaler = Context::get(
+    let mut scaler = acquire_cached_libav_scaler(
+        request,
         session.decoder.format(),
         session.decoder.width(),
         session.decoder.height(),
-        Pixel::RGBA,
-        request.width,
-        request.height,
-        Flags::BILINEAR,
-    )
-    .map_err(|error| decode_error(request, error))?;
-
+    )?;
     let target_offset_us = request
         .position_ms
         .saturating_mul(1_000)
@@ -673,7 +815,7 @@ fn decode_libav_session_frame(
 fn receive_target_frame(
     request: &VideoFrameRequest,
     decoder: &mut ffmpeg_next::decoder::Video,
-    scaler: &mut ffmpeg_next::software::scaling::context::Context,
+    scaler: &mut LibavScalerLease,
     time_base: ffmpeg_next::Rational,
     timestamp_origin: i64,
     candidate: &mut Option<VideoFrame>,
@@ -1076,6 +1218,297 @@ mod tests {
     fn persistent_decoder_remains_send_without_storing_a_scaler() {
         fn assert_send<T: Send>() {}
         assert_send::<LibavFrameDecoder>();
+    }
+
+    #[cfg(feature = "libav")]
+    #[test]
+    fn fixed_video_decode_reuses_one_bounded_scaler_at_frame_cadence() {
+        use std::process::Command;
+
+        LIBAV_SCALER_CACHE.with(|cache| cache.borrow_mut().clear());
+        LIBAV_SCALER_CREATION_COUNT.with(|count| count.set(0));
+        let ffmpeg = std::env::var_os("SYNDOCAL_FFMPEG").unwrap_or_else(|| "ffmpeg".into());
+        let path = std::env::temp_dir().join(format!(
+            "syndocal-libav-scaler-reuse-{}.mp4",
+            std::process::id()
+        ));
+        let generated = Command::new(&ffmpeg)
+            .args([
+                "-v",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "color=c=red:s=32x18:rate=30:duration=1",
+                "-c:v",
+                "mpeg4",
+                "-pix_fmt",
+                "yuv420p",
+                "-y",
+            ])
+            .arg(&path)
+            .output()
+            .expect("FFmpeg fixed-video fixture generator must be available");
+        assert!(
+            generated.status.success(),
+            "fixed-video fixture generation failed: {}",
+            String::from_utf8_lossy(&generated.stderr)
+        );
+
+        let mut request = request();
+        request.source.path = Some(path.to_string_lossy().into_owned());
+        request.source.codec = Some("mpeg4".to_string());
+        request.source.metadata = Some(protocol::VideoMediaMetadata {
+            duration_ms: Some(1_000),
+            width: Some(32),
+            height: Some(18),
+            frame_rate: Some(30.0),
+            has_audio: false,
+        });
+        request.width = 64;
+        request.height = 36;
+
+        let mut decoder = LibavFrameDecoder::new();
+        for target_ms in [0, 33, 66, 99, 0, 33] {
+            request.position_ms = target_ms;
+            let frame = decoder
+                .decode_frame(&request)
+                .unwrap()
+                .expect("fixed-video fixture must decode");
+            assert_eq!((frame.width, frame.height), (64, 36));
+            assert_eq!(frame.format, VideoPixelFormat::Rgba8);
+            assert_eq!(
+                decoder.decode_frame(&request).unwrap().unwrap(),
+                frame,
+                "same request should reuse the cached frame at {target_ms}ms"
+            );
+        }
+
+        let scaler_entries = LIBAV_SCALER_CACHE.with(|cache| cache.borrow().len());
+        let scaler_creations = LIBAV_SCALER_CREATION_COUNT.with(Cell::get);
+        assert_eq!(
+            scaler_entries, 1,
+            "one source/target conversion should keep one reusable scaler"
+        );
+        assert_eq!(
+            scaler_creations, 1,
+            "repeated frame requests should create the scaler only once"
+        );
+        assert_eq!(decoder.sessions.len(), 1);
+        assert_eq!(decoder.session_counters.opens, 2);
+        assert_eq!(decoder.session_counters.resets, 1);
+        assert!(decoder.session_counters.sequential_continues > 0);
+        assert!(decoder.session_counters.frame_reuses >= 6);
+
+        LIBAV_SCALER_CACHE.with(|cache| cache.borrow_mut().clear());
+        LIBAV_SCALER_CREATION_COUNT.with(|count| count.set(0));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[cfg(feature = "libav")]
+    #[test]
+    fn failed_scaler_run_discards_context_before_recovery() {
+        use ffmpeg::format::Pixel;
+        use ffmpeg::util::frame::video::Video;
+
+        LIBAV_SCALER_CACHE.with(|cache| cache.borrow_mut().clear());
+        LIBAV_SCALER_CREATION_COUNT.with(|count| count.set(0));
+
+        let request = request();
+        let mut failed_lease =
+            acquire_cached_libav_scaler(&request, Pixel::YUV420P, 16, 16).unwrap();
+        let invalid_source = Video::new(Pixel::RGBA, 16, 16);
+        let mut invalid_target = Video::empty();
+        assert!(
+            failed_lease
+                .run(&invalid_source, &mut invalid_target)
+                .is_err(),
+            "a source-format change must fail the scaler run"
+        );
+        drop(failed_lease);
+        assert_eq!(
+            LIBAV_SCALER_CACHE.with(|cache| cache.borrow().len()),
+            0,
+            "a failed native run must not poison the reusable cache"
+        );
+        assert_eq!(LIBAV_SCALER_CREATION_COUNT.with(Cell::get), 1);
+
+        let mut recovered_lease =
+            acquire_cached_libav_scaler(&request, Pixel::YUV420P, 16, 16).unwrap();
+        assert_eq!(
+            LIBAV_SCALER_CREATION_COUNT.with(Cell::get),
+            2,
+            "recovery must create a fresh context rather than reuse the failed one"
+        );
+        let valid_source = Video::new(Pixel::YUV420P, 16, 16);
+        let mut valid_target = Video::empty();
+        assert!(recovered_lease
+            .run(&valid_source, &mut valid_target)
+            .is_ok());
+        drop(recovered_lease);
+        assert_eq!(
+            LIBAV_SCALER_CACHE.with(|cache| cache.borrow().len()),
+            1,
+            "a successful replacement context remains reusable"
+        );
+
+        LIBAV_SCALER_CACHE.with(|cache| cache.borrow_mut().clear());
+        LIBAV_SCALER_CREATION_COUNT.with(|count| count.set(0));
+    }
+
+    #[cfg(feature = "libav")]
+    #[test]
+    fn scaler_cache_evicts_old_geometry_with_bounded_capacity() {
+        use ffmpeg::format::Pixel;
+
+        LIBAV_SCALER_CACHE.with(|cache| cache.borrow_mut().clear());
+        LIBAV_SCALER_CREATION_COUNT.with(|count| count.set(0));
+
+        let base_request = request();
+        for width in 16..(16 + LIBAV_SCALER_CACHE_CAPACITY as u32 + 1) {
+            let mut request = base_request.clone();
+            request.width = width;
+            let lease = acquire_cached_libav_scaler(&request, Pixel::YUV420P, 16, 16).unwrap();
+            drop(lease);
+        }
+        assert_eq!(
+            LIBAV_SCALER_CACHE.with(|cache| cache.borrow().len()),
+            LIBAV_SCALER_CACHE_CAPACITY
+        );
+        assert_eq!(
+            LIBAV_SCALER_CREATION_COUNT.with(Cell::get),
+            LIBAV_SCALER_CACHE_CAPACITY + 1
+        );
+
+        let mut retained_request = base_request.clone();
+        retained_request.width = 16 + LIBAV_SCALER_CACHE_CAPACITY as u32;
+        let retained =
+            acquire_cached_libav_scaler(&retained_request, Pixel::YUV420P, 16, 16).unwrap();
+        drop(retained);
+        assert_eq!(
+            LIBAV_SCALER_CREATION_COUNT.with(Cell::get),
+            LIBAV_SCALER_CACHE_CAPACITY + 1,
+            "the newest geometry should remain cached"
+        );
+
+        let evicted = acquire_cached_libav_scaler(&base_request, Pixel::YUV420P, 16, 16).unwrap();
+        drop(evicted);
+        assert_eq!(
+            LIBAV_SCALER_CREATION_COUNT.with(Cell::get),
+            LIBAV_SCALER_CACHE_CAPACITY + 2,
+            "the oldest geometry should be recreated after eviction"
+        );
+
+        LIBAV_SCALER_CACHE.with(|cache| cache.borrow_mut().clear());
+        LIBAV_SCALER_CREATION_COUNT.with(|count| count.set(0));
+    }
+
+    #[cfg(feature = "libav")]
+    #[test]
+    fn ten_bit_yuv444_decode_reuses_scaler_across_seek_and_loop() {
+        use std::process::Command;
+
+        LIBAV_SCALER_CACHE.with(|cache| cache.borrow_mut().clear());
+        LIBAV_SCALER_CREATION_COUNT.with(|count| count.set(0));
+        let ffmpeg = std::env::var_os("SYNDOCAL_FFMPEG").unwrap_or_else(|| "ffmpeg".into());
+        let path = std::env::temp_dir().join(format!(
+            "syndocal-libav-yuv444p10-{}-{}.mkv",
+            std::process::id(),
+            request().layer_id
+        ));
+        let generated = Command::new(&ffmpeg)
+            .args([
+                "-v",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc2=size=32x18:rate=30:duration=1",
+                "-vf",
+                "format=yuv444p10le",
+                "-c:v",
+                "ffv1",
+                "-level",
+                "3",
+                "-g",
+                "1",
+                "-pix_fmt",
+                "yuv444p10le",
+                "-y",
+            ])
+            .arg(&path)
+            .output()
+            .expect("FFmpeg 10-bit yuv444 fixture generator must be available");
+        assert!(
+            generated.status.success(),
+            "10-bit yuv444 fixture generation failed: {}",
+            String::from_utf8_lossy(&generated.stderr)
+        );
+        let reference = Command::new(&ffmpeg)
+            .args(["-v", "error", "-i"])
+            .arg(&path)
+            .args([
+                "-vf",
+                "scale=64:36:flags=bilinear,format=rgba",
+                "-pix_fmt",
+                "rgba",
+                "-f",
+                "rawvideo",
+                "pipe:1",
+            ])
+            .output()
+            .expect("FFmpeg 10-bit yuv444 reference decoder must be available");
+        assert!(
+            reference.status.success(),
+            "10-bit yuv444 reference decode failed: {}",
+            String::from_utf8_lossy(&reference.stderr)
+        );
+        const FRAME_BYTES: usize = 64 * 36 * 4;
+        assert_eq!(reference.stdout.len(), 30 * FRAME_BYTES);
+
+        let mut request = request();
+        request.source.path = Some(path.to_string_lossy().into_owned());
+        request.source.codec = Some("ffv1".to_string());
+        request.source.metadata = Some(protocol::VideoMediaMetadata {
+            duration_ms: Some(1_000),
+            width: Some(32),
+            height: Some(18),
+            frame_rate: Some(30.0),
+            has_audio: false,
+        });
+        request.width = 64;
+        request.height = 36;
+
+        let mut decoder = LibavFrameDecoder::new();
+        for target_ms in [0, 0, 33, 33, 66, 500, 0, 33] {
+            request.position_ms = target_ms;
+            let frame = decoder
+                .decode_frame(&request)
+                .unwrap()
+                .expect("10-bit yuv444 fixture must decode");
+            let frame_index = ((frame.pts_ms * 30 + 500) / 1_000) as usize;
+            assert_rgba_reference_parity(
+                &frame,
+                &reference.stdout[frame_index * FRAME_BYTES..(frame_index + 1) * FRAME_BYTES],
+                &format!("10-bit yuv444 at {target_ms}ms / pts {}ms", frame.pts_ms),
+            );
+            assert_eq!((frame.width, frame.height), (64, 36));
+            assert_eq!(frame.format, VideoPixelFormat::Rgba8);
+        }
+
+        assert_eq!(
+            LIBAV_SCALER_CACHE.with(|cache| cache.borrow().len()),
+            1,
+            "one 10-bit source/target conversion should remain reusable"
+        );
+        assert_eq!(LIBAV_SCALER_CREATION_COUNT.with(Cell::get), 1);
+        assert_eq!(decoder.sessions.len(), 1);
+        assert!(decoder.session_counters.sequential_continues > 0);
+        assert!(decoder.session_counters.frame_reuses >= 2);
+
+        LIBAV_SCALER_CACHE.with(|cache| cache.borrow_mut().clear());
+        LIBAV_SCALER_CREATION_COUNT.with(|count| count.set(0));
+        let _ = std::fs::remove_file(path);
     }
 
     #[cfg(not(feature = "libav"))]

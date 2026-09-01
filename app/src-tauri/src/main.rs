@@ -1,6 +1,6 @@
 use std::{
     cell::RefCell,
-    collections::{hash_map::Entry, BTreeMap, BTreeSet, HashMap, HashSet},
+    collections::{hash_map::Entry, BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
     env,
     ffi::{OsStr, OsString},
     fs,
@@ -78355,13 +78355,86 @@ pub(crate) fn validate_display_monitor_dimensions(
     Ok(())
 }
 
+const NATIVE_VIDEO_OUTPUT_METRICS_WARMUP_FRAMES: u32 = 60;
+const NATIVE_VIDEO_OUTPUT_METRICS_VALIDATION_FRAMES: usize = 600;
+
+#[derive(Debug, Clone, Copy)]
+struct NativeVideoOutputFrameSample {
+    elapsed_us: u64,
+    deadline_miss: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NativeVideoOutputValidationState {
+    Pending,
+    Sampling,
+    Passed,
+    Failed,
+}
+
+impl NativeVideoOutputValidationState {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Sampling => "sampling",
+            Self::Passed => "passed",
+            Self::Failed => "failed",
+        }
+    }
+}
+
+/// Semantic identity of the output and Timeline state which admitted a
+/// physical frame.  `VideoOutputSummary` covers the monitor, route,
+/// composition, mapping, dimensions, and enablement.  The engine's
+/// `presentation_config_token` covers semantic video/media mutations without
+/// comparing ordinary playhead/transition progress.  Timeline transport and
+/// loop/Follow generations cover seek, loop, route, and Follow replacement
+/// boundaries.  Keeping this identity separate from lifetime counters means
+/// a route stall remains visible even when a fresh validation epoch starts.
+#[derive(Debug, Clone, PartialEq)]
+struct NativeVideoOutputValidationIdentity {
+    authority_source: NativeDisplayAuthoritySource,
+    ownership: OutputOwnershipStatus,
+    project_blackout: bool,
+    blackout_authority: engine::SafetyBlackoutAuthority,
+    output: VideoOutputSummary,
+    presentation_config_token: u64,
+    timeline_id: TimelineId,
+    timeline_transport_epoch: u64,
+    timeline_transport_generation: u64,
+    timeline_loop_generation: u64,
+    timeline_follow_generation: u64,
+    follow_identity: Option<NativeTimelineFollowActiveIdentity>,
+    width: u32,
+    height: u32,
+}
+
 #[derive(Debug)]
 struct NativeVideoOutputMetrics {
+    /// Lifetime counters are deliberately never reset by a route, geometry,
+    /// authority, or render-error boundary. They are diagnostic history, not
+    /// the current 60fps acceptance result.
+    lifetime_frame_count: u64,
+    lifetime_total_frame_us: u128,
+    lifetime_last_frame_us: u64,
+    lifetime_max_frame_us: u64,
+    lifetime_deadline_miss_count: u64,
+    lifetime_error_count: u64,
+
+    /// The bounded current validation window is independent from lifetime
+    /// history. A complete 600 successful-frame window is required before a
+    /// pass/fail result is published; identity changes and errors invalidate
+    /// it and require a fresh warmup plus window.
     frame_count: u64,
     total_frame_us: u128,
     last_frame_us: u64,
     max_frame_us: u64,
     deadline_miss_count: u64,
+    frame_samples: VecDeque<NativeVideoOutputFrameSample>,
+    validation_epoch: u64,
+    validation_state: NativeVideoOutputValidationState,
+    validation_identity: Option<NativeVideoOutputValidationIdentity>,
+    validation_reason: Option<String>,
     width: u32,
     height: u32,
     buffer_stats: video::GpuSurfaceBufferStats,
@@ -78373,17 +78446,28 @@ struct NativeVideoOutputMetrics {
 impl Default for NativeVideoOutputMetrics {
     fn default() -> Self {
         Self {
+            lifetime_frame_count: 0,
+            lifetime_total_frame_us: 0,
+            lifetime_last_frame_us: 0,
+            lifetime_max_frame_us: 0,
+            lifetime_deadline_miss_count: 0,
+            lifetime_error_count: 0,
             frame_count: 0,
             total_frame_us: 0,
             last_frame_us: 0,
             max_frame_us: 0,
             deadline_miss_count: 0,
+            frame_samples: VecDeque::with_capacity(NATIVE_VIDEO_OUTPUT_METRICS_VALIDATION_FRAMES),
+            validation_epoch: 0,
+            validation_state: NativeVideoOutputValidationState::Pending,
+            validation_identity: None,
+            validation_reason: None,
             width: 0,
             height: 0,
             buffer_stats: video::GpuSurfaceBufferStats::default(),
             decoder_diagnostics: video::VideoDecoderDiagnostics::default(),
             last_error: None,
-            warmup_remaining: 60,
+            warmup_remaining: NATIVE_VIDEO_OUTPUT_METRICS_WARMUP_FRAMES,
         }
     }
 }
@@ -78406,9 +78490,161 @@ struct NativeVideoOutputPerformance {
     decoder_diagnostics: video::VideoDecoderDiagnostics,
     last_error: Option<String>,
     warmup_remaining: u32,
+    validation_frame_target: u64,
+    validation_epoch: u64,
+    validation_state: String,
+    validation_reason: Option<String>,
+    lifetime_frame_count: u64,
+    lifetime_average_frame_us: u64,
+    lifetime_last_frame_us: u64,
+    lifetime_max_frame_us: u64,
+    lifetime_deadline_miss_count: u64,
+    lifetime_error_count: u64,
 }
 
 impl NativeVideoOutputMetrics {
+    fn reset_current_validation_window(&mut self) {
+        self.frame_count = 0;
+        self.total_frame_us = 0;
+        self.last_frame_us = 0;
+        self.max_frame_us = 0;
+        self.deadline_miss_count = 0;
+        self.frame_samples.clear();
+    }
+
+    fn invalidate_validation_epoch(
+        &mut self,
+        reason: impl Into<String>,
+        identity: Option<NativeVideoOutputValidationIdentity>,
+    ) {
+        self.validation_epoch = self.validation_epoch.saturating_add(1);
+        self.reset_current_validation_window();
+        self.validation_identity = identity;
+        self.validation_state = NativeVideoOutputValidationState::Pending;
+        self.validation_reason = Some(reason.into());
+        self.warmup_remaining = NATIVE_VIDEO_OUTPUT_METRICS_WARMUP_FRAMES;
+    }
+
+    fn append_observation_sample(&mut self, elapsed: Duration) {
+        self.frame_samples.push_back(NativeVideoOutputFrameSample {
+            elapsed_us: elapsed.as_micros().min(u128::from(u64::MAX)) as u64,
+            deadline_miss: elapsed > Duration::from_nanos(1_000_000_000 / 60),
+        });
+        if self.frame_samples.len() > NATIVE_VIDEO_OUTPUT_METRICS_VALIDATION_FRAMES {
+            self.frame_samples.pop_front();
+        }
+
+        // Recompute only the bounded current window. Lifetime counters are
+        // updated separately and are never affected by this eviction.
+        self.frame_count = self.frame_samples.len() as u64;
+        self.total_frame_us = self
+            .frame_samples
+            .iter()
+            .map(|sample| u128::from(sample.elapsed_us))
+            .sum();
+        self.last_frame_us = self
+            .frame_samples
+            .back()
+            .map(|sample| sample.elapsed_us)
+            .unwrap_or(0);
+        self.max_frame_us = self
+            .frame_samples
+            .iter()
+            .map(|sample| sample.elapsed_us)
+            .max()
+            .unwrap_or(0);
+        self.deadline_miss_count = self
+            .frame_samples
+            .iter()
+            .filter(|sample| sample.deadline_miss)
+            .count() as u64;
+        self.validation_state =
+            if self.frame_count < NATIVE_VIDEO_OUTPUT_METRICS_VALIDATION_FRAMES as u64 {
+                NativeVideoOutputValidationState::Sampling
+            } else {
+                let average_frame_us = self.total_frame_us / u128::from(self.frame_count);
+                let passed = average_frame_us <= u128::from(1_000_000_u64 / 60)
+                    && self.max_frame_us <= 1_000_000 / 30
+                    && self.deadline_miss_count.saturating_mul(100)
+                        <= self.frame_count.saturating_mul(5);
+                if passed {
+                    NativeVideoOutputValidationState::Passed
+                } else {
+                    NativeVideoOutputValidationState::Failed
+                }
+            };
+    }
+
+    fn record_with_validation(
+        &mut self,
+        width: u32,
+        height: u32,
+        elapsed: Duration,
+        buffer_stats: video::GpuSurfaceBufferStats,
+        decoder_diagnostics: video::VideoDecoderDiagnostics,
+        error: Option<String>,
+        validation_identity: Option<NativeVideoOutputValidationIdentity>,
+        validation_boundary: Option<String>,
+    ) {
+        self.width = width;
+        self.height = height;
+        self.buffer_stats = buffer_stats;
+        self.decoder_diagnostics = decoder_diagnostics;
+        if let Some(error) = error {
+            self.lifetime_error_count = self.lifetime_error_count.saturating_add(1);
+            self.last_error = Some(error.clone());
+            self.invalidate_validation_epoch(error, validation_identity);
+            return;
+        }
+        if let Some(reason) = validation_boundary {
+            self.invalidate_validation_epoch(reason.clone(), validation_identity);
+            self.last_error = Some(reason);
+            return;
+        }
+        let Some(validation_identity) = validation_identity else {
+            self.invalidate_validation_epoch(
+                "Native video output frame had no validation identity",
+                None,
+            );
+            return;
+        };
+        match self.validation_identity.as_ref() {
+            None => {
+                self.validation_epoch = self.validation_epoch.saturating_add(1);
+                self.reset_current_validation_window();
+                self.validation_identity = Some(validation_identity);
+                self.validation_state = NativeVideoOutputValidationState::Pending;
+                self.validation_reason =
+                    Some("Native video output validation identity initialized".to_string());
+                self.warmup_remaining = NATIVE_VIDEO_OUTPUT_METRICS_WARMUP_FRAMES;
+            }
+            Some(current) if current != &validation_identity => {
+                self.invalidate_validation_epoch(
+                    "Native video output validation identity changed",
+                    Some(validation_identity),
+                );
+            }
+            Some(_) => {}
+        }
+        if self.warmup_remaining > 0 {
+            self.warmup_remaining -= 1;
+            return;
+        }
+        self.last_error = None;
+        self.lifetime_frame_count = self.lifetime_frame_count.saturating_add(1);
+        let elapsed_us = elapsed.as_micros().min(u128::from(u64::MAX)) as u64;
+        self.lifetime_total_frame_us = self
+            .lifetime_total_frame_us
+            .saturating_add(u128::from(elapsed_us));
+        self.lifetime_last_frame_us = elapsed_us;
+        self.lifetime_max_frame_us = self.lifetime_max_frame_us.max(elapsed_us);
+        if elapsed > Duration::from_nanos(1_000_000_000 / 60) {
+            self.lifetime_deadline_miss_count = self.lifetime_deadline_miss_count.saturating_add(1);
+        }
+        self.append_observation_sample(elapsed);
+    }
+
+    #[cfg(test)]
     fn record(
         &mut self,
         width: u32,
@@ -78418,33 +78654,39 @@ impl NativeVideoOutputMetrics {
         decoder_diagnostics: video::VideoDecoderDiagnostics,
         error: Option<String>,
     ) {
-        let elapsed_us = elapsed.as_micros().min(u128::from(u64::MAX)) as u64;
+        // Existing unit tests exercise the arithmetic in isolation, without
+        // an engine snapshot. Production always calls `record_with_validation`
+        // with an identity; this test-only seam intentionally cannot admit a
+        // native presentation when the identity is absent.
         if self.width != 0 && (self.width != width || self.height != height) {
-            self.frame_count = 0;
-            self.total_frame_us = 0;
-            self.last_frame_us = 0;
-            self.max_frame_us = 0;
-            self.deadline_miss_count = 0;
-            self.warmup_remaining = 60;
+            self.invalidate_validation_epoch("Native video output test geometry changed", None);
         }
         self.width = width;
         self.height = height;
         self.buffer_stats = buffer_stats;
         self.decoder_diagnostics = decoder_diagnostics;
-        self.last_error = error;
-        if self.last_error.is_none() {
-            if self.warmup_remaining > 0 {
-                self.warmup_remaining -= 1;
-                return;
-            }
-            self.last_frame_us = elapsed_us;
-            self.max_frame_us = self.max_frame_us.max(elapsed_us);
-            self.frame_count = self.frame_count.saturating_add(1);
-            self.total_frame_us = self.total_frame_us.saturating_add(u128::from(elapsed_us));
-            if elapsed > Duration::from_nanos(1_000_000_000 / 60) {
-                self.deadline_miss_count = self.deadline_miss_count.saturating_add(1);
-            }
+        if let Some(error) = error {
+            self.lifetime_error_count = self.lifetime_error_count.saturating_add(1);
+            self.last_error = Some(error);
+            self.invalidate_validation_epoch("Native video output test error", None);
+            return;
         }
+        if self.warmup_remaining > 0 {
+            self.warmup_remaining -= 1;
+            return;
+        }
+        self.last_error = None;
+        self.lifetime_frame_count = self.lifetime_frame_count.saturating_add(1);
+        let elapsed_us = elapsed.as_micros().min(u128::from(u64::MAX)) as u64;
+        self.lifetime_total_frame_us = self
+            .lifetime_total_frame_us
+            .saturating_add(u128::from(elapsed_us));
+        self.lifetime_last_frame_us = elapsed_us;
+        self.lifetime_max_frame_us = self.lifetime_max_frame_us.max(elapsed_us);
+        if elapsed > Duration::from_nanos(1_000_000_000 / 60) {
+            self.lifetime_deadline_miss_count = self.lifetime_deadline_miss_count.saturating_add(1);
+        }
+        self.append_observation_sample(elapsed);
     }
 
     fn snapshot(&self) -> NativeVideoOutputPerformance {
@@ -78453,12 +78695,14 @@ impl NativeVideoOutputMetrics {
         } else {
             0
         };
-        let frame_budget_pass = (self.frame_count >= 120).then(|| {
-            average_frame_us <= 1_000_000 / 60
-                && self.max_frame_us <= 1_000_000 / 30
-                && self.deadline_miss_count.saturating_mul(100)
-                    <= self.frame_count.saturating_mul(5)
-        });
+        let frame_budget_pass = (self.frame_count
+            >= NATIVE_VIDEO_OUTPUT_METRICS_VALIDATION_FRAMES as u64)
+            .then(|| self.validation_state == NativeVideoOutputValidationState::Passed);
+        let lifetime_average_frame_us = if self.lifetime_frame_count > 0 {
+            (self.lifetime_total_frame_us / u128::from(self.lifetime_frame_count)) as u64
+        } else {
+            0
+        };
         NativeVideoOutputPerformance {
             frame_count: self.frame_count,
             average_frame_us,
@@ -78476,6 +78720,16 @@ impl NativeVideoOutputMetrics {
             decoder_diagnostics: self.decoder_diagnostics,
             last_error: self.last_error.clone(),
             warmup_remaining: self.warmup_remaining,
+            validation_frame_target: NATIVE_VIDEO_OUTPUT_METRICS_VALIDATION_FRAMES as u64,
+            validation_epoch: self.validation_epoch,
+            validation_state: self.validation_state.as_str().to_string(),
+            validation_reason: self.validation_reason.clone(),
+            lifetime_frame_count: self.lifetime_frame_count,
+            lifetime_average_frame_us,
+            lifetime_last_frame_us: self.lifetime_last_frame_us,
+            lifetime_max_frame_us: self.lifetime_max_frame_us,
+            lifetime_deadline_miss_count: self.lifetime_deadline_miss_count,
+            lifetime_error_count: self.lifetime_error_count,
         }
     }
 }
@@ -78977,6 +79231,7 @@ struct NativePresentableVideoOutputFrame {
     result: video::VideoOutputArtisticRenderResult,
     contract: video::VideoOutputPresentationContract,
     authority: NativeDisplayPresentationAuthority,
+    validation_identity: NativeVideoOutputValidationIdentity,
     follow_identity: Option<NativeTimelineFollowActiveIdentity>,
     settlement: Option<TimelineFollowSettlementAck>,
 }
@@ -79063,6 +79318,31 @@ struct NativeDisplayPresentationAuthority {
     blackout_authority: engine::SafetyBlackoutAuthority,
     output: VideoOutputSummary,
     presentation_config_token: u64,
+}
+
+fn native_video_output_validation_identity(
+    authority: &NativeDisplayPresentationAuthority,
+    snapshot: &EngineSnapshot,
+    follow_identity: Option<NativeTimelineFollowActiveIdentity>,
+    width: u32,
+    height: u32,
+) -> NativeVideoOutputValidationIdentity {
+    NativeVideoOutputValidationIdentity {
+        authority_source: authority.source.clone(),
+        ownership: authority.ownership.clone(),
+        project_blackout: authority.project_blackout,
+        blackout_authority: authority.blackout_authority,
+        output: authority.output.clone(),
+        presentation_config_token: authority.presentation_config_token,
+        timeline_id: snapshot.timeline.id,
+        timeline_transport_epoch: snapshot.timeline.transport_epoch,
+        timeline_transport_generation: snapshot.timeline.transport_generation,
+        timeline_loop_generation: snapshot.timeline.loop_runtime.generation,
+        timeline_follow_generation: snapshot.timeline.follow_runtime.generation,
+        follow_identity,
+        width: width.max(1),
+        height: height.max(1),
+    }
 }
 
 fn validate_native_display_output_route(output: &VideoOutputSummary) -> Result<(), String> {
@@ -79353,11 +79633,14 @@ fn prepare_native_display_artistic_output(
     contract.admit(&result).map_err(|error| {
         format!("Native Display output {output_id} presentation rejected: {error:?}")
     })?;
+    let validation_identity =
+        native_video_output_validation_identity(authority, snapshot, None, width, height);
     Ok(NativeVideoOutputFrame::Presentable(Box::new(
         NativePresentableVideoOutputFrame {
             result,
             contract,
             authority: authority.clone(),
+            validation_identity,
             follow_identity: None,
             settlement: None,
         },
@@ -79375,6 +79658,23 @@ fn acknowledge_native_timeline_follow_video_settlement(
         acknowledgement,
         Instant::now() + Duration::from_secs(2),
     );
+}
+
+fn native_video_output_settlement_validation_reason(
+    acknowledgement: &TimelineFollowSettlementAck,
+) -> String {
+    match &acknowledgement.result {
+        TimelineFollowSettlementAckResult::Applied => {
+            "Native video output produced a non-presenting Applied Timeline settlement".to_string()
+        }
+        TimelineFollowSettlementAckResult::NotApplicable => {
+            "Native video output produced a non-presenting NotApplicable Timeline settlement"
+                .to_string()
+        }
+        TimelineFollowSettlementAckResult::Fault { fault } => {
+            format!("Native video output Timeline settlement fault: {fault}")
+        }
+    }
 }
 
 fn native_timeline_follow_video_ack(
@@ -79673,12 +79973,21 @@ fn prepare_native_timeline_follow_video_output(
         key: output_key,
         frame: rendered.frame.clone(),
     });
+    let follow_identity = native_timeline_follow_active_identity(follow);
+    let validation_identity = native_video_output_validation_identity(
+        authority,
+        &context.snapshot,
+        Some(follow_identity),
+        width,
+        height,
+    );
     Ok(NativeVideoOutputFrame::Presentable(Box::new(
         NativePresentableVideoOutputFrame {
             result: artistic,
             contract,
             authority: authority.clone(),
-            follow_identity: Some(native_timeline_follow_active_identity(follow)),
+            validation_identity,
+            follow_identity: Some(follow_identity),
             settlement: Some(native_timeline_follow_video_ack(
                 follow,
                 output_id,
@@ -79773,15 +80082,19 @@ fn record_native_video_output_metrics(
     buffer_stats: video::GpuSurfaceBufferStats,
     decoder_diagnostics: video::VideoDecoderDiagnostics,
     error: Option<String>,
+    validation_identity: Option<NativeVideoOutputValidationIdentity>,
+    validation_boundary: Option<String>,
 ) {
     if let Ok(mut metrics) = metrics.lock() {
-        metrics.record(
+        metrics.record_with_validation(
             width,
             height,
             started.elapsed(),
             buffer_stats,
             decoder_diagnostics,
             error,
+            validation_identity,
+            validation_boundary,
         );
     }
 }
@@ -79881,6 +80194,8 @@ fn start_native_video_live_output(
         video::DecoderBackedFrameProvider::new(decoder).with_prefetch(0, 33),
     );
     let mut initial_follow_last_valid = None;
+    let mut first_validation_identity = None;
+    let mut first_validation_boundary = None;
     let first_started = Instant::now();
     let first_result = prepare_native_video_output(
         &mut renderer,
@@ -79893,6 +80208,15 @@ fn start_native_video_live_output(
         unpublished_snapshot.as_ref(),
     )
     .and_then(|first_output| {
+        first_validation_identity = match &first_output {
+            NativeVideoOutputFrame::Presentable(frame) => Some(frame.validation_identity.clone()),
+            NativeVideoOutputFrame::SettlementOnly(acknowledgement) => {
+                first_validation_boundary = Some(native_video_output_settlement_validation_reason(
+                    &acknowledgement,
+                ));
+                None
+            }
+        };
         if phase_cancelled
             .as_ref()
             .is_some_and(|cancelled| cancelled.load(Ordering::Acquire))
@@ -79982,6 +80306,8 @@ fn start_native_video_live_output(
             .unwrap_or_default(),
         renderer.frame_provider().decoder().diagnostics(),
         first_result.as_ref().err().cloned(),
+        first_validation_identity,
+        first_validation_boundary,
     );
     if let Err(error) = &first_result {
         report_native_timeline_follow_video_result(
@@ -80030,6 +80356,17 @@ fn start_native_video_live_output(
                     Ok(size) => (size.width, size.height),
                     Err(error) => {
                         let error = format!("Native video output window size failed: {error}");
+                        record_native_video_output_metrics(
+                            &metrics,
+                            0,
+                            0,
+                            frame_started,
+                            presenter.buffer_stats(),
+                            renderer.frame_provider().decoder().diagnostics(),
+                            Some(error.clone()),
+                            None,
+                            None,
+                        );
                         let result = native_video_output_worker_result(
                             &worker_stop,
                             engine.output_ownership_status().state,
@@ -80048,6 +80385,8 @@ fn start_native_video_live_output(
                     }
                 };
                 if let Some((width, height)) = native_video_output_render_extent(width, height) {
+                    let mut frame_validation_identity = None;
+                    let mut frame_validation_boundary = None;
                     let result = native_video_output_live_frame_with_permit(
                         &mut presenter,
                         || engine.acquire_video_output(),
@@ -80068,11 +80407,23 @@ fn start_native_video_live_output(
                                 None,
                             )
                         },
-                        |presenter, output| match output {
+                        |presenter, output| {
+                            frame_validation_identity = match &output {
+                                NativeVideoOutputFrame::Presentable(frame) => {
+                                    Some(frame.validation_identity.clone())
+                                }
+                                NativeVideoOutputFrame::SettlementOnly(_) => None,
+                            };
+                            match output {
                             NativeVideoOutputFrame::SettlementOnly(acknowledgement) => {
                                 // A definitive non-presenting settlement
                                 // (NotApplicable or a typed Fault) publishes
                                 // exactly zero presents.
+                                frame_validation_boundary = Some(
+                                    native_video_output_settlement_validation_reason(
+                                        &acknowledgement,
+                                    ),
+                                );
                                 acknowledge_native_timeline_follow_video_settlement(
                                     &engine,
                                     acknowledgement,
@@ -80111,13 +80462,17 @@ fn start_native_video_live_output(
                                     // prepared frame with ZERO presents and no
                                     // fault fence; the next iteration captures
                                     // a fresh authoritative sample.
-                                    Err(NativeDisplayPresentError::Revoked(_)) => Ok(()),
+                                    Err(NativeDisplayPresentError::Revoked(error)) => {
+                                        frame_validation_boundary = Some(error);
+                                        Ok(())
+                                    }
                                     Err(NativeDisplayPresentError::Physical(error)) => {
                                         Err(format!(
                                             "Native Display output present failed: {error}"
                                         ))
                                     }
                                 }
+                            }
                             }
                         },
                         |error| {
@@ -80156,6 +80511,8 @@ fn start_native_video_live_output(
                             NativeVideoOutputLiveFrameError::Permit(error)
                             | NativeVideoOutputLiveFrameError::Physical(error) => error.clone(),
                         }),
+                        frame_validation_identity,
+                        frame_validation_boundary,
                     );
                     match result {
                         Ok(()) => {}
@@ -80194,6 +80551,23 @@ fn start_native_video_live_output(
                             break;
                         }
                     }
+                } else {
+                    // A minimized or otherwise zero-sized native surface did
+                    // not present a frame. It must invalidate any previous
+                    // PASS instead of silently preserving stale evidence.
+                    record_native_video_output_metrics(
+                        &metrics,
+                        width,
+                        height,
+                        frame_started,
+                        presenter.buffer_stats(),
+                        renderer.frame_provider().decoder().diagnostics(),
+                        None,
+                        None,
+                        Some(format!(
+                            "Native video output physical extent is non-presentable ({width}x{height})"
+                        )),
+                    );
                 }
                 if let Some(remaining) = target_interval.checked_sub(frame_started.elapsed()) {
                     std::thread::sleep(remaining);
@@ -113622,6 +113996,41 @@ f 1 2 3
         );
     }
 
+    fn test_native_video_output_validation_identity(
+        width: u32,
+        height: u32,
+        presentation_config_token: u64,
+        timeline_transport_epoch: u64,
+        timeline_transport_generation: u64,
+        timeline_loop_generation: u64,
+        timeline_follow_generation: u64,
+    ) -> NativeVideoOutputValidationIdentity {
+        let mut output = project_video_output(9, 5);
+        output.width = width;
+        output.height = height;
+        output.monitor_identity = Some("test-monitor".to_string());
+        NativeVideoOutputValidationIdentity {
+            authority_source: NativeDisplayAuthoritySource::Published,
+            ownership: OutputOwnershipStatus::for_role(MachineOutputRole::Both),
+            project_blackout: false,
+            blackout_authority: engine::SafetyBlackoutAuthority {
+                engaged: false,
+                epoch: 0,
+                generation: 0,
+            },
+            output,
+            presentation_config_token,
+            timeline_id: TimelineId(1),
+            timeline_transport_epoch,
+            timeline_transport_generation,
+            timeline_loop_generation,
+            timeline_follow_generation,
+            follow_identity: None,
+            width,
+            height,
+        }
+    }
+
     #[test]
     fn native_video_output_metrics_report_frame_budget_and_buffer_reuse() {
         let buffer_stats = video::GpuSurfaceBufferStats {
@@ -113683,9 +114092,10 @@ f 1 2 3
             Some("surface lost".to_string()),
         );
         let failed = metrics.snapshot();
-        assert_eq!(failed.frame_count, 2);
-        assert_eq!(failed.average_frame_us, 15_000);
+        assert_eq!(failed.frame_count, 0);
+        assert_eq!(failed.average_frame_us, 0);
         assert_eq!(failed.last_error.as_deref(), Some("surface lost"));
+        assert_eq!(failed.frame_budget_pass, None);
 
         metrics.record(
             1280,
@@ -113697,19 +114107,33 @@ f 1 2 3
         );
         let resized = metrics.snapshot();
         assert_eq!(resized.frame_count, 0);
+        assert_eq!(resized.max_frame_us, 0);
+        assert_eq!(resized.deadline_miss_count, 0);
+        assert_eq!(resized.frame_budget_pass, None);
         assert_eq!(resized.warmup_remaining, 59);
-        assert!(resized.last_error.is_none());
+        assert_eq!(resized.last_error.as_deref(), Some("surface lost"));
     }
 
     #[test]
-    fn native_video_output_metrics_gate_1080p60_after_120_samples() {
+    fn native_video_output_metrics_gate_1080p60_after_warmup_and_600_samples() {
         let buffer_stats = video::GpuSurfaceBufferStats::default();
         let decoder_diagnostics = video::VideoDecoderDiagnostics::default();
         let mut passing = NativeVideoOutputMetrics {
             warmup_remaining: 0,
             ..NativeVideoOutputMetrics::default()
         };
-        for _ in 0..120 {
+        for _ in 0..NATIVE_VIDEO_OUTPUT_METRICS_WARMUP_FRAMES {
+            passing.record(
+                1920,
+                1080,
+                Duration::from_millis(10),
+                buffer_stats,
+                decoder_diagnostics,
+                None,
+            );
+        }
+        assert_eq!(passing.snapshot().frame_budget_pass, None);
+        for _ in 0..NATIVE_VIDEO_OUTPUT_METRICS_VALIDATION_FRAMES {
             passing.record(
                 1920,
                 1080,
@@ -113725,7 +114149,17 @@ f 1 2 3
             warmup_remaining: 0,
             ..NativeVideoOutputMetrics::default()
         };
-        for _ in 0..120 {
+        for _ in 0..NATIVE_VIDEO_OUTPUT_METRICS_WARMUP_FRAMES {
+            failing.record(
+                1920,
+                1080,
+                Duration::from_millis(20),
+                buffer_stats,
+                decoder_diagnostics,
+                None,
+            );
+        }
+        for _ in 0..NATIVE_VIDEO_OUTPUT_METRICS_VALIDATION_FRAMES {
             failing.record(
                 1920,
                 1080,
@@ -113736,6 +114170,344 @@ f 1 2 3
             );
         }
         assert_eq!(failing.snapshot().frame_budget_pass, Some(false));
+    }
+
+    #[test]
+    fn native_video_output_metrics_gate_uses_only_the_current_complete_window() {
+        let buffer_stats = video::GpuSurfaceBufferStats::default();
+        let decoder_diagnostics = video::VideoDecoderDiagnostics::default();
+        let mut metrics = NativeVideoOutputMetrics {
+            warmup_remaining: 0,
+            ..NativeVideoOutputMetrics::default()
+        };
+
+        for _ in 0..NATIVE_VIDEO_OUTPUT_METRICS_VALIDATION_FRAMES - 1 {
+            metrics.record(
+                1920,
+                1080,
+                Duration::from_millis(10),
+                buffer_stats,
+                decoder_diagnostics,
+                None,
+            );
+        }
+        assert_eq!(
+            metrics.snapshot().frame_budget_pass,
+            None,
+            "fewer than a complete window cannot pass"
+        );
+        metrics.record(
+            1920,
+            1080,
+            Duration::from_millis(10),
+            buffer_stats,
+            decoder_diagnostics,
+            None,
+        );
+        assert_eq!(metrics.snapshot().frame_budget_pass, Some(true));
+
+        // A route/capture transition that blocks one physical frame must fail
+        // the current observation window and remain visible until a complete
+        // fresh window of good frames has displaced it. The lifetime record
+        // remains intact while the current window recovers.
+        metrics.record(
+            1920,
+            1080,
+            Duration::from_millis(40),
+            buffer_stats,
+            decoder_diagnostics,
+            None,
+        );
+        let transition = metrics.snapshot();
+        assert_eq!(
+            transition.frame_count,
+            NATIVE_VIDEO_OUTPUT_METRICS_VALIDATION_FRAMES as u64
+        );
+        assert_eq!(transition.max_frame_us, 40_000);
+        assert_eq!(transition.deadline_miss_count, 1);
+        assert_eq!(transition.frame_budget_pass, Some(false));
+
+        for _ in 0..NATIVE_VIDEO_OUTPUT_METRICS_VALIDATION_FRAMES - 1 {
+            metrics.record(
+                1920,
+                1080,
+                Duration::from_millis(10),
+                buffer_stats,
+                decoder_diagnostics,
+                None,
+            );
+        }
+        assert_eq!(
+            metrics.snapshot().frame_budget_pass,
+            Some(false),
+            "the bad transition sample must remain until 600 fresh samples arrive"
+        );
+        metrics.record(
+            1920,
+            1080,
+            Duration::from_millis(10),
+            buffer_stats,
+            decoder_diagnostics,
+            None,
+        );
+        let recovered = metrics.snapshot();
+        assert_eq!(
+            recovered.frame_count,
+            NATIVE_VIDEO_OUTPUT_METRICS_VALIDATION_FRAMES as u64
+        );
+        assert_eq!(recovered.max_frame_us, 10_000);
+        assert_eq!(recovered.deadline_miss_count, 0);
+        assert_eq!(recovered.frame_budget_pass, Some(true));
+
+        // Errors are not converted into healthy timing samples and remain
+        // directly observable in the published performance snapshot.
+        metrics.record(
+            1920,
+            1080,
+            Duration::from_millis(1),
+            buffer_stats,
+            decoder_diagnostics,
+            Some("capture route unavailable".to_string()),
+        );
+        let errored = metrics.snapshot();
+        assert_eq!(errored.frame_count, 0);
+        assert_eq!(
+            errored.last_error.as_deref(),
+            Some("capture route unavailable")
+        );
+        assert_eq!(errored.frame_budget_pass, None);
+        assert_eq!(
+            errored.lifetime_frame_count,
+            (NATIVE_VIDEO_OUTPUT_METRICS_VALIDATION_FRAMES * 2 + 1) as u64
+        );
+        assert_eq!(errored.lifetime_error_count, 1);
+    }
+
+    #[test]
+    fn native_video_output_metrics_validation_epoch_preserves_lifetime_history() {
+        let buffer_stats = video::GpuSurfaceBufferStats::default();
+        let decoder_diagnostics = video::VideoDecoderDiagnostics::default();
+        let mut metrics = NativeVideoOutputMetrics::default();
+        let identity_a = test_native_video_output_validation_identity(1920, 1080, 1, 1, 1, 1, 1);
+
+        for _ in 0..NATIVE_VIDEO_OUTPUT_METRICS_WARMUP_FRAMES {
+            metrics.record_with_validation(
+                1920,
+                1080,
+                Duration::from_millis(10),
+                buffer_stats,
+                decoder_diagnostics,
+                None,
+                Some(identity_a.clone()),
+                None,
+            );
+        }
+        for _ in 0..NATIVE_VIDEO_OUTPUT_METRICS_VALIDATION_FRAMES {
+            metrics.record_with_validation(
+                1920,
+                1080,
+                Duration::from_millis(10),
+                buffer_stats,
+                decoder_diagnostics,
+                None,
+                Some(identity_a.clone()),
+                None,
+            );
+        }
+        let passed = metrics.snapshot();
+        assert_eq!(passed.frame_budget_pass, Some(true));
+        assert_eq!(passed.validation_state, "passed");
+        assert_eq!(passed.validation_epoch, 1);
+        assert_eq!(passed.lifetime_frame_count, 600);
+
+        // A new output/media/Timeline identity starts a new epoch. The old
+        // lifetime evidence stays available, but cannot satisfy the new gate.
+        let identity_b = test_native_video_output_validation_identity(1280, 720, 2, 2, 3, 4, 5);
+        metrics.record_with_validation(
+            1280,
+            720,
+            Duration::from_millis(10),
+            buffer_stats,
+            decoder_diagnostics,
+            None,
+            Some(identity_b.clone()),
+            None,
+        );
+        let changed = metrics.snapshot();
+        assert_eq!(changed.frame_count, 0);
+        assert_eq!(changed.frame_budget_pass, None);
+        assert_eq!(changed.validation_state, "pending");
+        assert_eq!(changed.validation_epoch, 2);
+        assert_eq!(changed.lifetime_frame_count, 600);
+        assert_eq!(changed.lifetime_max_frame_us, 10_000);
+
+        // Replaying the retired identity cannot reuse the passed window.
+        metrics.record_with_validation(
+            1920,
+            1080,
+            Duration::from_millis(10),
+            buffer_stats,
+            decoder_diagnostics,
+            None,
+            Some(identity_a),
+            None,
+        );
+        let stale = metrics.snapshot();
+        assert_eq!(stale.frame_count, 0);
+        assert_eq!(stale.frame_budget_pass, None);
+        assert_eq!(stale.validation_epoch, 3);
+        assert_eq!(stale.lifetime_frame_count, 600);
+
+        // The current identity needs its own warmup and complete 600-frame
+        // window before it can pass; lifetime history remains cumulative.
+        // The first successful frame with the new identity is warmup frame 1;
+        // exactly 60 warmup presents precede the 600-frame sample window.
+        for _ in 0..NATIVE_VIDEO_OUTPUT_METRICS_WARMUP_FRAMES {
+            metrics.record_with_validation(
+                1280,
+                720,
+                Duration::from_millis(10),
+                buffer_stats,
+                decoder_diagnostics,
+                None,
+                Some(identity_b.clone()),
+                None,
+            );
+        }
+        for _ in 0..NATIVE_VIDEO_OUTPUT_METRICS_VALIDATION_FRAMES {
+            metrics.record_with_validation(
+                1280,
+                720,
+                Duration::from_millis(10),
+                buffer_stats,
+                decoder_diagnostics,
+                None,
+                Some(identity_b.clone()),
+                None,
+            );
+        }
+        assert_eq!(metrics.snapshot().frame_budget_pass, Some(true));
+        assert_eq!(metrics.snapshot().validation_epoch, 4);
+        assert_eq!(metrics.snapshot().lifetime_frame_count, 1200);
+
+        // A render error is visible and invalidates the current result rather
+        // than turning an old passing window into a permanent pass.
+        metrics.record_with_validation(
+            1280,
+            720,
+            Duration::from_millis(1),
+            buffer_stats,
+            decoder_diagnostics,
+            Some("capture route unavailable".to_string()),
+            Some(identity_b.clone()),
+            None,
+        );
+        let errored = metrics.snapshot();
+        assert_eq!(errored.frame_count, 0);
+        assert_eq!(errored.frame_budget_pass, None);
+        assert_eq!(errored.validation_state, "pending");
+        assert_eq!(
+            errored.last_error.as_deref(),
+            Some("capture route unavailable")
+        );
+        assert_eq!(errored.validation_epoch, 5);
+        assert_eq!(errored.lifetime_frame_count, 1200);
+        assert_eq!(errored.lifetime_error_count, 1);
+
+        // A revoked/non-presenting boundary is also explicit and cannot be
+        // mistaken for a good frame.
+        metrics.record_with_validation(
+            1280,
+            720,
+            Duration::from_millis(1),
+            buffer_stats,
+            decoder_diagnostics,
+            None,
+            Some(identity_b),
+            Some("presentation authority revoked".to_string()),
+        );
+        let revoked = metrics.snapshot();
+        assert_eq!(revoked.frame_count, 0);
+        assert_eq!(revoked.frame_budget_pass, None);
+        assert_eq!(revoked.validation_epoch, 6);
+        assert_eq!(
+            revoked.last_error.as_deref(),
+            Some("presentation authority revoked")
+        );
+        assert_eq!(revoked.lifetime_frame_count, 1200);
+
+        // A zero-sized/minimized surface produces no physical present and
+        // therefore also retires the previous epoch rather than retaining a
+        // stale PASS while the render loop skips work.
+        metrics.record_with_validation(
+            0,
+            0,
+            Duration::from_millis(1),
+            buffer_stats,
+            decoder_diagnostics,
+            None,
+            None,
+            Some("Native video output physical extent is non-presentable (0x0)".to_string()),
+        );
+        let zero_extent = metrics.snapshot();
+        assert_eq!(zero_extent.frame_count, 0);
+        assert_eq!(zero_extent.frame_budget_pass, None);
+        assert_eq!(zero_extent.validation_state, "pending");
+        assert_eq!(zero_extent.validation_epoch, 7);
+        assert_eq!(
+            zero_extent.last_error.as_deref(),
+            Some("Native video output physical extent is non-presentable (0x0)")
+        );
+        assert_eq!(zero_extent.lifetime_frame_count, 1200);
+    }
+
+    #[test]
+    fn native_video_output_metrics_bad_current_window_recovers_only_after_600_good_frames() {
+        let buffer_stats = video::GpuSurfaceBufferStats::default();
+        let decoder_diagnostics = video::VideoDecoderDiagnostics::default();
+        let mut metrics = NativeVideoOutputMetrics::default();
+        let identity = test_native_video_output_validation_identity(1920, 1080, 11, 7, 8, 9, 10);
+        let record = |metrics: &mut NativeVideoOutputMetrics, elapsed: Duration| {
+            metrics.record_with_validation(
+                1920,
+                1080,
+                elapsed,
+                buffer_stats,
+                decoder_diagnostics,
+                None,
+                Some(identity.clone()),
+                None,
+            );
+        };
+
+        for _ in 0..NATIVE_VIDEO_OUTPUT_METRICS_WARMUP_FRAMES {
+            record(&mut metrics, Duration::from_millis(10));
+        }
+        for _ in 0..NATIVE_VIDEO_OUTPUT_METRICS_VALIDATION_FRAMES - 1 {
+            record(&mut metrics, Duration::from_millis(10));
+        }
+        assert_eq!(metrics.snapshot().frame_budget_pass, None);
+        record(&mut metrics, Duration::from_millis(40));
+        let bad = metrics.snapshot();
+        assert_eq!(bad.frame_budget_pass, Some(false));
+        assert_eq!(bad.frame_count, 600);
+        assert_eq!(bad.max_frame_us, 40_000);
+        assert_eq!(bad.deadline_miss_count, 1);
+
+        for _ in 0..NATIVE_VIDEO_OUTPUT_METRICS_VALIDATION_FRAMES - 1 {
+            record(&mut metrics, Duration::from_millis(10));
+        }
+        assert_eq!(
+            metrics.snapshot().frame_budget_pass,
+            Some(false),
+            "one bad sample remains in the current window until 600 good frames replace it"
+        );
+        record(&mut metrics, Duration::from_millis(10));
+        let recovered = metrics.snapshot();
+        assert_eq!(recovered.frame_budget_pass, Some(true));
+        assert_eq!(recovered.max_frame_us, 10_000);
+        assert_eq!(recovered.deadline_miss_count, 0);
+        assert_eq!(recovered.lifetime_frame_count, 1_200);
     }
 
     #[test]

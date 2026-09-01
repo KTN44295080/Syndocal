@@ -9287,24 +9287,64 @@ export default function App() {
       };
     }
     const performance = status?.performance;
+    const validationFrameTarget = performance
+      && typeof performance.validation_frame_target === "number"
+      && Number.isSafeInteger(performance.validation_frame_target)
+      && performance.validation_frame_target > 0
+      ? String(performance.validation_frame_target)
+      : "unknown";
+    const validationFrameCount = performance
+      && typeof performance.frame_count === "number"
+      && Number.isSafeInteger(performance.frame_count)
+      && performance.frame_count >= 0
+      ? String(performance.frame_count)
+      : "unknown";
+    const validationState = performance
+      && typeof performance.validation_state === "string"
+      && performance.validation_state.trim().length > 0
+      ? performance.validation_state.trim()
+      : "unknown";
+    const validationEpoch = performance
+      && typeof performance.validation_epoch === "number"
+      && Number.isSafeInteger(performance.validation_epoch)
+      && performance.validation_epoch >= 0
+      ? String(performance.validation_epoch)
+      : "unknown";
+    const validationReason = performance === undefined || performance === null
+      ? "unknown"
+      : performance.validation_reason === null
+        ? "none"
+        : typeof performance.validation_reason === "string"
+          && performance.validation_reason.trim().length > 0
+          ? performance.validation_reason.trim()
+          : "unknown";
+    const nonNegativeCounterLabel = (value: unknown) =>
+      typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? String(value) : "unknown";
+    const frameDurationLabel = (value: unknown) =>
+      typeof value === "number" && Number.isFinite(value) && value >= 0
+        ? `${(value / 1000).toFixed(2)} ms`
+        : "unknown";
+    const validationDetail = performance
+      ? ` / validation ${validationState} · epoch ${validationEpoch} · frames ${validationFrameCount}/${validationFrameTarget} · reason ${validationReason} / lifetime ${nonNegativeCounterLabel(performance.lifetime_frame_count)} frames · avg ${frameDurationLabel(performance.lifetime_average_frame_us)} · last ${frameDurationLabel(performance.lifetime_last_frame_us)} · max ${frameDurationLabel(performance.lifetime_max_frame_us)} · ${nonNegativeCounterLabel(performance.lifetime_deadline_miss_count)} late · ${nonNegativeCounterLabel(performance.lifetime_error_count)} errors`
+      : "";
     const budgetDetail = performance
       ? performance.frame_budget_pass === true
         ? " / 60fps budget pass"
         : performance.frame_budget_pass === false
           ? " / 60fps budget fail"
-          : ` / budget sampling ${performance.frame_count}/120`
+          : ` / budget sampling ${validationFrameCount}/${validationFrameTarget}`
       : "";
     const decoderDetail = performance
       ? ` / ${videoDecoderDiagnosticsLabel(performance.decoder_diagnostics)}`
       : "";
     const performanceDetail = performance
       ? performance.warmup_remaining > 0
-        ? ` / ${performance.width}x${performance.height} / warming ${performance.warmup_remaining} frame(s) / GPU alloc ${performance.output_reallocations}+${performance.layer_reallocations} / BC ${performance.compressed_layer_uploads}${budgetDetail}${decoderDetail}`
+        ? ` / ${performance.width}x${performance.height} / warming ${performance.warmup_remaining} frame(s) / GPU alloc ${performance.output_reallocations}+${performance.layer_reallocations} / BC ${performance.compressed_layer_uploads}${budgetDetail}${decoderDetail}${validationDetail}`
         : ` / ${performance.width}x${performance.height} / avg ${(performance.average_frame_us / 1000).toFixed(2)} ms / max ${(
             performance.max_frame_us / 1000
           ).toFixed(2)} ms / ${performance.deadline_miss_count} late / GPU alloc ${performance.output_reallocations}+${
             performance.layer_reallocations
-          } / BC ${performance.compressed_layer_uploads}${budgetDetail}${decoderDetail}`
+          } / BC ${performance.compressed_layer_uploads}${budgetDetail}${decoderDetail}${validationDetail}`
       : "";
     if (performance?.last_error) {
       return {
@@ -9324,8 +9364,8 @@ export default function App() {
             ? "60 PASS"
             : performance.frame_budget_pass === false
               ? "60 FAIL"
-              : `${performance.frame_count}/120`
-        }`
+              : "sampling"
+        } / ${validationFrameCount}/${validationFrameTarget}`
       : baseStateLabel;
     return {
       stateLabel,

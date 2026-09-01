@@ -2553,7 +2553,7 @@ export interface NativeVideoOutputPerformance {
   last_frame_us: number;
   max_frame_us: number;
   deadline_miss_count: number;
-  frame_budget_pass?: boolean | null;
+  frame_budget_pass: boolean | null;
   width: number;
   height: number;
   output_capacity_bytes: number;
@@ -2562,8 +2562,18 @@ export interface NativeVideoOutputPerformance {
   layer_reallocations: number;
   compressed_layer_uploads: number;
   decoder_diagnostics: VideoDecoderDiagnostics;
-  last_error?: string | null;
+  last_error: string | null;
   warmup_remaining: number;
+  validation_frame_target: number;
+  validation_epoch: number;
+  validation_state: string;
+  validation_reason: string | null;
+  lifetime_frame_count: number;
+  lifetime_average_frame_us: number;
+  lifetime_last_frame_us: number;
+  lifetime_max_frame_us: number;
+  lifetime_deadline_miss_count: number;
+  lifetime_error_count: number;
 }
 
 export interface VideoOutputWindowSyncSummary {

@@ -3,13 +3,17 @@ import {
   executeOutputControl,
   enableOutput,
   OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_STATUS_QUERY_OPERATION_ID,
-  hasOnlyActiveOutputLease,
   queryDsf2026ArtNetAcceptanceProbeStatus,
   queryOutputLeaseAuthority,
   selectOnlyActiveOutputLease,
 } from "./outputControlController";
 import type { Dsf2026ArtNetAcceptanceProbeStatusQuery } from "./outputControlController";
+import type {
+  OutputLeaseAuthority,
+  OutputLeaseAuthorityQuery,
+} from "./outputControlController";
 import type { FrontendTauriInvoke } from "./tauriInvokeCommands";
+import type { OutputOwnershipStatus } from "./types";
 import { createSerialDmxStatusPoller } from "./serialDmxStatusPoller";
 import { createSafetyBlackoutRuntimeController } from "./safetyBlackoutRuntimeController";
 import {
@@ -49,6 +53,49 @@ const enttecOpenDmxBaudRate = 250_000;
 
 export const isSerialDmxProtocol = (protocol: DmxOutputConfig["protocol"]) =>
   protocol === "EnttecUsbPro" || protocol === "DmxKingUltraDmx" || protocol === "EnttecOpenDmx";
+
+export type BothOutputLeasePreparationDecision =
+  | { action: "reuse"; lease: OutputLeaseAuthority }
+  | { action: "enable" };
+
+export const isBothOutputOwnershipReady = (status: OutputOwnershipStatus): boolean =>
+  status.state === "Ready"
+  && status.effective_role === "Both"
+  && status.desired_role === "Both"
+  && status.lighting_allowed
+  && status.video_allowed;
+
+/**
+ * Resolve stage-1 setup from the authoritative lease query. An exact active
+ * Both lease already satisfies the output-role stage; it must not be followed
+ * by a second Arm. Sole unavailable or exact orphaned authority takes the
+ * canonical atomic enable_output path; ambiguous or wrong-resource authority
+ * fails closed before any mutation.
+ */
+export const decideBothOutputLeasePreparation = (
+  query: OutputLeaseAuthorityQuery,
+): BothOutputLeasePreparationDecision => {
+  const held = query.statuses.filter((status) => status.status !== "unavailable");
+  if (
+    query.statuses.length === 1
+    && held.length === 1
+    && held[0].resources.length === 2
+    && held[0].resources[0] === "lighting"
+    && held[0].resources[1] === "video"
+  ) {
+    if (held[0].status === "held_orphaned") return { action: "enable" };
+    return {
+      action: "reuse",
+      lease: selectOnlyActiveOutputLease(query, ["lighting", "video"]),
+    };
+  }
+  if (query.statuses.length === 1 && query.statuses[0].status === "unavailable") {
+    return { action: "enable" };
+  }
+  throw new Error(
+    "Output lease authority is ambiguous or has the wrong resources; show DMX setup stopped before mutation.",
+  );
+};
 
 export const outputProtocolLabel = (protocol: DmxOutputConfig["protocol"]) => {
   switch (protocol) {
@@ -238,16 +285,26 @@ export function createOutputDiagnosticsController(options: OutputDiagnosticsCont
    */
   const ensureBothOutputLease = async () => {
     const query = await queryOutputLeaseAuthority(options.invoke);
-    if (hasOnlyActiveOutputLease(query, ["lighting", "video"])) {
-      return {
-        lease: selectOnlyActiveOutputLease(query, ["lighting", "video"]),
-        enabled: false,
-      };
+    const decision = decideBothOutputLeasePreparation(query);
+    if (decision.action === "reuse") {
+      const ownership = await options.invoke<OutputOwnershipStatus>("get_output_ownership_status");
+      if (!isBothOutputOwnershipReady(ownership)) {
+        throw new Error(
+          "An active Both lease exists, but output ownership is not Ready/Both; no Arm or later show-DMX stage was attempted.",
+        );
+      }
+      return decision;
     }
     await enableOutput(options.invoke);
+    const ownership = await options.invoke<OutputOwnershipStatus>("get_output_ownership_status");
+    if (!isBothOutputOwnershipReady(ownership)) {
+      throw new Error(
+        "Output enable returned without confirmed Ready/Both ownership; show DMX setup stopped before device or route mutation.",
+      );
+    }
     return {
       lease: await selectBothOutputLease(),
-      enabled: true,
+      action: "enabled" as const,
     };
   };
 
@@ -358,17 +415,7 @@ export function createOutputDiagnosticsController(options: OutputDiagnosticsCont
         }
 
         await runStage("1/4 output role Both", async () => {
-          const prepared = await ensureBothOutputLease();
-          // enable_output already atomically arms the engine's Both role. An
-          // additional arm would only add a redundant mutation and receipt.
-          if (!prepared.enabled) {
-            const lease = await selectFreshBothOutputLease();
-            await executeOutputControl(options.invoke, {
-              kind: "arm",
-              role: "both",
-              lease,
-            });
-          }
+          await ensureBothOutputLease();
         });
         await runStage("2/4 machine-local binding", () => confirmSerialDmxMachineBindingInternal(port));
         await runStage("3/4 Art-Net loopback", async () => {

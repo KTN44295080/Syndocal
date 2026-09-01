@@ -4,6 +4,43 @@ Date: 2026-08-19
 Branch at creation: `codex/syndocal-v1.0`
 Baseline before this document: `848d759846985cc3acf588356cfa3c996b4e2ef2`
 
+## 2026-09-01 alpha.59 source candidate before native acceptance
+
+Alpha.59 is being prepared from upstream-equal parent
+`951f377735b742f8353add01926f47aafe1521d9` on
+`codex/syndocal-v1.2`. It keeps alpha.58's exact Display authority boundary and
+addresses two observed show-critical failures. First, the restart quick-setup
+path no longer sends a redundant Arm mutation when exactly one current
+`held_active` Both lease already exists. It reuses that lease only when the
+authoritative output-ownership state is exact Ready/Both; unavailable or sole
+orphaned state takes the canonical enable path, while multiple, mixed, or
+wrong-resource leases fail before mutation. This closes the observed
+`StaleGeneration` failure without adding a permissive retry or fallback.
+
+Second, the video path adds an exact single-layer identity compositor fast path
+and a bounded per-thread libav scaler cache. Failed scaler contexts are never
+returned to the cache, and generic blend/effect/transform behavior remains the
+fallback for every non-exact case. The native performance evidence now keeps
+process-lifetime counters separately from a current validation epoch: after a
+60-frame warmup it requires a complete 600-successful-frame window, invalidated
+by output, route, composition/media, geometry, authority, Timeline transport,
+loop/Follow, settlement, revoked-present, or render-error boundaries. Old PASS
+state cannot be reused after a boundary.
+
+Current source proof: DMX quick-setup checker, Node syntax, and TypeScript pass;
+exact Community MSVC 14.44 video proof passes libav `171/0/1 ignored`, default
+`163/0/1 ignored`, and metrics focused `5/0/0`, with first-party warnings `0`.
+Independent Terra xHigh review of the decoder/compositor and the final metrics
+boundary reports P0/P1 `0`; review caught and closed stale PASS on zero extent,
+window-size error non-reporting, and an off-by-one warmup boundary. TypeScript,
+release metadata and the complete release checker also pass. The source
+commit/push, native build, and physical USB-DMX/audio/three-display performance
+revalidation are still open. Therefore alpha.59 is not yet a native or hardware
+acceptance claim.
+The first safe native action after the source checkpoint is to resolve and stop
+only this checkout's exact `target/release/syndocal.exe`, then run the pinned
+MSVC 14.44 no-bundle build.
+
 ## 2026-09-01 alpha.58 display-authority source candidate
 
 Alpha.58 is the current source candidate on `codex/syndocal-v1.2`, advanced because

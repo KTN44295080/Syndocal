@@ -4,6 +4,41 @@ Status date: 2026-09-01 JST
 
 This is the concise authoritative resume note for the final show-critical tranche. It supersedes chat-only status, but it does not supersede the detailed acceptance documents named below.
 
+## 2026-09-01 alpha.59 source candidate before native acceptance
+
+Alpha.59 is being prepared from upstream-equal parent
+`951f377735b742f8353add01926f47aafe1521d9` on
+`codex/syndocal-v1.2`. The observed restart failure was not a USB serial or
+fixture problem: quick setup sent Arm again while an exact active Both lease
+was already being kept alive, and the redundant mutation lost with
+`StaleGeneration`. The new path reuses exactly one `held_active` Both lease only
+after authoritative Ready/Both ownership verification. A sole unavailable or
+orphaned lease uses canonical enable; ambiguous, mixed, multiple, or
+wrong-resource state stops before any device or route mutation. There is no
+raw retry or permissive fallback.
+
+The foreground video path also gains an exact identity-layer compositor fast
+path and a bounded thread-local libav scaler cache; failed contexts are
+discarded. Performance reporting no longer lets an old lifetime history stand
+in for the current route. It preserves lifetime counters separately and starts
+a new validation epoch on output/monitor/route/composition/media/geometry,
+authority, seek/transport, loop/Follow, settlement, revoked-present, or render
+error. Each epoch requires 60 warmup frames and 600 successful measured frames
+before a 60fps result is published.
+
+Source evidence so far: DMX quick-setup checker, Node syntax, and TypeScript
+pass; exact Community MSVC 14.44 video proof passes libav `171/0/1 ignored`,
+default `163/0/1 ignored`, and metrics focused `5/0/0`; first-party warnings
+are `0`. Decoder/compositor and metrics independent Terra xHigh review is GO
+with P0/P1 `0`; review caught and closed stale PASS on zero extent,
+window-size error non-reporting, and the identity-change warmup off-by-one.
+TypeScript and the complete release checker pass. Commit/push, alpha.59 native
+build, and physical USB-DMX, audible audio, and three-display 60fps
+revalidation remain open. Do not treat this source candidate as native or
+hardware acceptance. The next native action must first terminate only the
+resolved exact-checkout `target/release/syndocal.exe`, then use the pinned
+MSVC 14.44 no-bundle build.
+
 ## 2026-09-01 alpha.58 display-authority source candidate
 
 Alpha.58 is the current source candidate on `codex/syndocal-v1.2`, advanced because

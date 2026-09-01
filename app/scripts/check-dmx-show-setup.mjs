@@ -11,6 +11,41 @@ const panel = read("src/components/DmxOutputConfigPanel.tsx");
 const controller = read("src/createOutputDiagnosticsController.ts");
 const app = read("src/App.tsx");
 const nativeMain = read("src-tauri/src/main.rs");
+const ownershipStart = controller.indexOf("export const isBothOutputOwnershipReady =");
+const decisionStart = controller.indexOf("export const decideBothOutputLeasePreparation =");
+assert.ok(ownershipStart >= 0 && decisionStart > ownershipStart,
+  "stage-1 ownership readiness helper must precede the lease decision");
+const ownershipSource = controller
+  .slice(ownershipStart, decisionStart)
+  .trim()
+  .replace(/^export const /, "const ")
+  .replace(/status: OutputOwnershipStatus/g, "status")
+  .replace(/: boolean =>/g, " =>");
+const isBothOutputOwnershipReady = new Function(
+  `${ownershipSource}; return isBothOutputOwnershipReady;`,
+)();
+const decisionEnd = controller.indexOf("\n\nexport const outputProtocolLabel", decisionStart);
+assert.ok(decisionStart >= 0 && decisionEnd > decisionStart,
+  "stage-1 lease decision helper must have a bounded source body");
+const decisionSource = controller
+  .slice(decisionStart, decisionEnd)
+  .replace(/^export const /, "const ")
+  .replace(/query: OutputLeaseAuthorityQuery/g, "query")
+  .replace(/: BothOutputLeasePreparationDecision =>/g, " =>");
+const decideBothOutputLeasePreparation = new Function(
+  "selectOnlyActiveOutputLease",
+  `${decisionSource}; return decideBothOutputLeasePreparation;`,
+)(
+  (query, expectedResources) => {
+    const match = query.statuses.find((status) =>
+      status.status === "held_active"
+      && status.resources.length === expectedResources.length
+      && status.resources.every((resource, index) => resource === expectedResources[index]),
+    );
+    assert.ok(match, "the deterministic lease fixture must contain the requested active lease");
+    return { ...match.authority };
+  },
+);
 const preparationStart = controller.indexOf("const prepareShowDmx =");
 const preparationEnd = controller.indexOf("const stopShowSerialDmxSafetyBlackoutRoute =", preparationStart);
 assert.ok(preparationStart >= 0 && preparationEnd > preparationStart, "quick setup controller must have a bounded preparation function");
@@ -41,7 +76,16 @@ assert.match(controller, /createSafetyBlackoutRuntimeController/);
 assert.match(controller, /import[\s\S]*enableOutput/,
   "quick setup must use the canonical normal output enable path");
 assert.match(controller, /const ensureBothOutputLease = async \(\) =>/);
-assert.match(controller, /hasOnlyActiveOutputLease\(query, \["lighting", "video"\]\)/);
+assert.match(controller, /export const decideBothOutputLeasePreparation =/,
+  "stage-1 lease handling must expose a deterministic active-vs-enable decision");
+assert.match(controller, /const decision = decideBothOutputLeasePreparation\(query\)/,
+  "stage-1 must use the authoritative active-vs-enable decision");
+assert.match(controller, /if \(decision\.action === "reuse"\) \{[\s\S]*?return decision;/,
+  "an active Both lease must be returned for reuse without another ownership action");
+assert.match(controller, /invoke<OutputOwnershipStatus>\("get_output_ownership_status"\)/,
+  "stage 1 must correlate the active Both lease with current output ownership");
+assert.match(controller, /if \(!isBothOutputOwnershipReady\(ownership\)\) \{[\s\S]*?throw new Error/,
+  "active-but-unarmed ownership must stop before device or route mutation");
 assert.match(controller, /await enableOutput\(options\.invoke\)/,
   "fresh no-lease setup must acquire Both through enable_output");
 assert.match(controller, /lease: await selectBothOutputLease\(\)/,
@@ -65,9 +109,18 @@ for (const marker of [
 ]) {
   assert.ok(preparation.includes(marker), `quick setup must retain ${marker}`);
 }
-assert.match(preparation, /const prepared = await ensureBothOutputLease\(\)/);
-assert.match(preparation, /if \(!prepared\.enabled\)[\s\S]*kind: "arm"/,
-  "an existing Both lease may be armed, but enable_output must not be redundantly re-armed");
+assert.match(preparation, /await ensureBothOutputLease\(\);/,
+  "stage 1 must complete through the lease preparation helper");
+const stage1Start = preparation.indexOf('runStage("1/4 output role Both"');
+const stage2Start = preparation.indexOf('runStage("2/4 machine-local binding"', stage1Start);
+assert.ok(stage1Start >= 0 && stage2Start > stage1Start, "stage 1 and stage 2 boundaries must remain ordered");
+const stage1Block = preparation.slice(stage1Start, stage2Start);
+assert.doesNotMatch(stage1Block, /kind:\s*"arm"/,
+  "an active Both lease must satisfy stage 1 without a redundant Arm mutation");
+assert.doesNotMatch(stage1Block, /selectFreshBothOutputLease\(\)/,
+  "stage 1 must not rotate/read a second lease merely to issue a redundant Arm");
+assert.doesNotMatch(preparation, /prepared\.enabled/,
+  "stage 1 must not interpret an existing lease as a request to issue Arm");
 
 const orderedStages = [
   'runStage("1/4 output role Both"',
@@ -118,5 +171,89 @@ assert.match(panel, /const eligible = props\.serialPorts\.filter\(\(port\) => ha
 assert.match(panel, /eligible\.length === 1 \? eligible\[0\] : undefined/);
 assert.match(panel, /data-io-usb-dmx-selection-state/);
 assert.match(panel, /value=\{selectedSerialPort\(\) \? serialPortKey\(selectedSerialPort\(\)!\) : ""\}/);
+
+const activeBothAuthority = { lease_id: "lease-0123456789abcdef", generation: 31 };
+assert.deepEqual(
+  decideBothOutputLeasePreparation({
+    operation_id: "syndocal.output.lease.authority.query.v1",
+    statuses: [{
+      status: "held_active",
+      authority: activeBothAuthority,
+      resources: ["lighting", "video"],
+    }],
+  }),
+  { action: "reuse", lease: activeBothAuthority },
+  "an exact active Both lease must be a deterministic no-Arm reuse decision",
+);
+assert.deepEqual(
+  decideBothOutputLeasePreparation({
+    operation_id: "syndocal.output.lease.authority.query.v1",
+    statuses: [{ status: "unavailable" }],
+  }),
+  { action: "enable" },
+  "no active lease must take the canonical atomic enable_output path",
+);
+assert.deepEqual(
+  decideBothOutputLeasePreparation({
+    operation_id: "syndocal.output.lease.authority.query.v1",
+    statuses: [{
+      status: "held_orphaned",
+      authority: activeBothAuthority,
+      resources: ["lighting", "video"],
+    }],
+  }),
+  { action: "enable" },
+  "an orphaned lease must not be treated as an active stage-1 completion",
+);
+assert.throws(
+  () => decideBothOutputLeasePreparation({
+    operation_id: "syndocal.output.lease.authority.query.v1",
+    statuses: [
+      { status: "held_active", authority: activeBothAuthority, resources: ["lighting", "video"] },
+      { status: "held_active", authority: { lease_id: "lease-fedcba9876543210", generation: 4 }, resources: ["lighting", "video"] },
+    ],
+  }),
+  /ambiguous or has the wrong resources/,
+  "multiple active Both leases must fail closed",
+);
+assert.throws(
+  () => decideBothOutputLeasePreparation({
+    operation_id: "syndocal.output.lease.authority.query.v1",
+    statuses: [
+      { status: "held_active", authority: activeBothAuthority, resources: ["lighting", "video"] },
+      { status: "held_orphaned", authority: { lease_id: "lease-fedcba9876543210", generation: 4 }, resources: ["lighting", "video"] },
+    ],
+  }),
+  /ambiguous or has the wrong resources/,
+  "an active-plus-orphaned query must fail closed",
+);
+assert.throws(
+  () => decideBothOutputLeasePreparation({
+    operation_id: "syndocal.output.lease.authority.query.v1",
+    statuses: [{ status: "held_active", authority: activeBothAuthority, resources: ["lighting"] }],
+  }),
+  /ambiguous or has the wrong resources/,
+  "wrong-resource authority must fail closed",
+);
+
+const readyBothOwnership = {
+  state: "Ready",
+  effective_role: "Both",
+  desired_role: "Both",
+  lighting_allowed: true,
+  video_allowed: true,
+};
+assert.equal(isBothOutputOwnershipReady(readyBothOwnership), true,
+  "only Ready/Both ownership may reuse an active Both lease");
+for (const ownership of [
+  { ...readyBothOwnership, state: "Failed", lighting_reason: "StartupDenied" },
+  { ...readyBothOwnership, effective_role: "Standby", lighting_reason: "ProjectSwapDisarmed" },
+  { ...readyBothOwnership, desired_role: "Standby" },
+  { ...readyBothOwnership, lighting_allowed: false },
+  { ...readyBothOwnership, video_allowed: false },
+]) {
+  assert.equal(isBothOutputOwnershipReady(ownership), false,
+    "non-Ready/non-Both/blocked ownership must stop before later show-DMX stages");
+}
 
 console.log("DMX show setup UI contract: PASS (loopback-before-S0 boundary, exact device selection, singleflight, individual diagnostics disclosure)");

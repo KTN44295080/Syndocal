@@ -1,7 +1,28 @@
 # Syndocal historical v1.0 / current v1.2 alpha Release Status
 
 Updated: 2026-09-01
-Branch: `codex/syndocal-v1.2`; current product metadata is `1.2.0-alpha.58`.
+Branch: `codex/syndocal-v1.2`; current product metadata is `1.2.0-alpha.59`.
+
+## 2026-09-01 current alpha.59 show-output source candidate
+
+Alpha.59 is based on upstream-equal parent
+`951f377735b742f8353add01926f47aafe1521d9`. Source focused acceptance is GO.
+The restart DMX quick-setup path reuses one exact active Both lease only after
+Ready/Both ownership verification instead of racing keepalive with a redundant
+Arm. Ambiguous or wrong-resource state remains fail-closed. Video decoding now
+uses an exact identity-layer compositor fast path and a bounded scaler cache
+that discards failed contexts. Native video performance keeps lifetime history
+separate from a current validation epoch; 60 warmup frames and 600 successful
+frames are required, and all non-present, route, media, geometry, authority,
+transport/loop/Follow, settlement, and render-error boundaries retire old PASS.
+
+Current source gates include DMX checker/Node/TypeScript, default and libav video
+tests, and exact Community MSVC 14.44 metrics focused `5/5`, with first-party
+warnings `0`. Independent decoder/compositor and metrics review reports P0/P1
+`0`; review caught and closed stale PASS on non-present/error boundaries and
+the identity-change warmup off-by-one. Alpha.59 has not yet been built or
+accepted on hardware. USB-DMX, audible audio, and three-display 60fps
+revalidation remain open and must not be inferred from source evidence.
 
 ## 2026-09-01 current alpha.58 display-authority source checkpoint
 
