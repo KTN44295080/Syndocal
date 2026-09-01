@@ -162,6 +162,13 @@ the three `300 ms` samples. This accepts exact native three-display placement
 and ownership only; it does not claim physical content visibility, USB-DMX,
 Art-Net, Spout, ASIO-device, or audible output.
 
+The final read-only capacity inventory is `138,877,050,747` logical bytes and
+`124,921` files for the complete workspace, of which `target` is
+`135,000,724,819` logical bytes and `98,490` files. No reviewed recurring
+cleanup target set is currently eligible, so no cleanup or ad-hoc deletion ran
+and reclaimed bytes are `0`; current evidence, dependencies, and user-authored
+files remain intact.
+
 ## 2026-09-01 alpha.52 operator-path and native checkpoint
 
 Alpha.52 is the current show-critical checkpoint. It moves arbitrary Windows

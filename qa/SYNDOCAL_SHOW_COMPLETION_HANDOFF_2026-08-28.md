@@ -4,7 +4,7 @@ Status date: 2026-09-01 JST
 
 This is the concise authoritative resume note for the final show-critical tranche. It supersedes chat-only status, but it does not supersede the detailed acceptance documents named below.
 
-## 2026-09-01 alpha.53 source/native checkpoint (three-display acceptance pending)
+## 2026-09-01 alpha.53 source/native checkpoint (three-display placement accepted)
 
 Alpha.53 is the current source checkpoint on `codex/syndocal-v1.2`, based on
 upstream-equal parent `9be5479b23b417049c078e24a7e6c3b172fc720e`. The exact
@@ -159,6 +159,13 @@ The app-owned reader reports both exact outputs `live_open=true`, with unchanged
 titles, owner PID, stable monitor identities, DPI, and full physical bounds in
 all three samples. This closes native three-display placement/ownership only,
 not physical content visibility or any external hardware claim.
+
+Final read-only inventory reports the whole workspace at `138,877,050,747`
+logical bytes across `124,921` files and the shared `target` tree at
+`135,000,724,819` logical bytes across `98,490` files. The reviewed recurring
+cleanup eligibility is not currently satisfied, so no cleanup Apply or ad-hoc
+deletion ran; reclaimed bytes remain `0`. Release/QA evidence, dependency trees,
+and user-authored files were preserved.
 
 Fresh USB-DMX, Art-Net, Spout, ASIO-device, and physical listening acceptance
 remain open. USB-DMX is absent on this PC; alpha.51 `all_white`/COM3 behavior is
