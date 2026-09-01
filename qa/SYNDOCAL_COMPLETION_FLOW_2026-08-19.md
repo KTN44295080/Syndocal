@@ -8,6 +8,8 @@ Baseline before this document: `848d759846985cc3acf588356cfa3c996b4e2ef2`
 
 Alpha.54 is the current source candidate on `codex/syndocal-v1.2`, based on
 upstream-equal parent `067d0bbb246ef87d0a6f13f73899d7d0eaba9e01`. The retired
+reviewed implementation/source/native checkpoint is pushed as
+`c742af8c778f41ddc0c8dd7d99d44b5d5d5f9a12` on the same upstream branch. The
 root-loop path let UI, shortcuts, MIDI, and OSC enqueue fire-and-forget loop
 mutations without a project/runtime fence or definitive publication receipt.
 The replacement path uses a loop-only capability bound to exact project

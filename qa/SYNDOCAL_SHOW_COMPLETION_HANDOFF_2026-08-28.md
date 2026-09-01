@@ -8,7 +8,9 @@ This is the concise authoritative resume note for the final show-critical tranch
 
 Current candidate metadata is `1.2.0-alpha.54` on
 `codex/syndocal-v1.2`, based on upstream-equal parent
-`067d0bbb246ef87d0a6f13f73899d7d0eaba9e01`. Root Timeline loop ON/OFF,
+`067d0bbb246ef87d0a6f13f73899d7d0eaba9e01`. The reviewed implementation,
+source, and native checkpoint is pushed as
+`c742af8c778f41ddc0c8dd7d99d44b5d5d5f9a12` on the same upstream branch. Root Timeline loop ON/OFF,
 half, and double now use a dedicated exact-authority request/receipt lane and
 canonical snapshot convergence. MIDI and OSC use the same checked engine
 primitive, with toggle decided inside the worker so two queued edges cannot be

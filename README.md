@@ -27,6 +27,8 @@ not a hardware acceptance claim.
 
 Current product metadata is `1.2.0-alpha.54` on branch
 `codex/syndocal-v1.2`. The alpha.54 no-bundle build is warning-free and its
+reviewed implementation/source/native checkpoint is pushed as
+`c742af8c778f41ddc0c8dd7d99d44b5d5d5f9a12`. Its
 exact `62,271,488`-byte executable has SHA-256
 `9C5D9350D8CF0B615507C1CF02256B540C192294B8D5EA382DC89824996F0693`.
 Exactly one responsive maximized checkout-owned Syndocal window was verified at

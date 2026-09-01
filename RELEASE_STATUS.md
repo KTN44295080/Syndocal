@@ -5,6 +5,10 @@ Branch: `codex/syndocal-v1.2`; current product metadata is `1.2.0-alpha.54`.
 
 ## 2026-09-01 current alpha.54 strict Timeline loop native checkpoint
 
+The reviewed implementation/source/native checkpoint is pushed as
+`c742af8c778f41ddc0c8dd7d99d44b5d5d5f9a12` on
+`origin/codex/syndocal-v1.2`.
+
 Alpha.54 replaces the retired fire-and-forget root Timeline loop routes with a
 loop-only project/runtime capability, exact terminal receipt, FIFO renderer
 controller, atomic trusted MIDI/OSC engine actions, and authority-bound canonical
