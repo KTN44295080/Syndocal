@@ -54,6 +54,13 @@ These are presence observations only: they do not prove a live DMX frame,
 audible PROGRAM/CUE playback, display pixel/60fps acceptance, or live MiraBox
 content.
 
+The current alpha.60 engine physical serial demo ran against COM3 with the
+pinned Community MSVC 14.44 linker (`SYNDOCAL_PHYSICAL_MASTER=10`,
+`SYNDOCAL_PHYSICAL_SECONDS=15`): `1 passed / 0 failed` in `15.02s`, no serial
+send failure, and at least `439` successful sends observed. This is current
+engine-to-COM write evidence only; fixture illumination still requires an
+operator visual check.
+
 Alpha.60 native UI actions, blackout release, physical USB-DMX continuity,
 two-Display performance windows, Timeline smoke, audible endpoint acceptance,
 MiraBox frames, Unity Art-Net/Spout, DJ-Link/pedal ACKs, show-ASIO routing,

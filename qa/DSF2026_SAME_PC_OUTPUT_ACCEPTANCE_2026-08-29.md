@@ -18,6 +18,15 @@ Read-only host enumeration found the persisted FTDI Open-DMX selection on
 only; they do not prove live USB-DMX frames, audible PROGRAM/CUE, display
 pixels/60fps, MiraBox content, or Unity Art-Net/Spout.
 
+The current alpha.60 engine also completed the explicit physical serial demo
+against `COM3` with the pinned Community MSVC 14.44 linker:
+`SYNDOCAL_PHYSICAL_MASTER=10`, `SYNDOCAL_PHYSICAL_SECONDS=15`, and
+`physical_serial_rainbow_demo_drives_master_dimmer_and_rgb_cells` returned
+`1 passed / 0 failed` in `15.02s`, with no serial send failure and at least
+`439` successful sends observed during the run. This proves the current engine
+serial write path reached the selected COM port; fixture illumination remains
+an operator visual check and is not inferred from the test.
+
 The deterministic three-display observation harness is pinned to this exact
 artifact and source identity; its seam suite passes `96/0`. It remains
 observation-only and cannot claim native display acceptance without app-owned

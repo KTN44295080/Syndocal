@@ -44,6 +44,12 @@ main window (`showCmd=3`). OS enumeration found FTDI Open-DMX `COM3`, the
 `Music (Elgato Virtual Audio)` endpoint, four monitor modes, and an
 `Unknown MiraBox Video Capture` entry. Enumeration is not runtime acceptance.
 
+The current alpha.60 engine physical serial demo ran against `COM3` with the
+pinned Community MSVC 14.44 linker (`master=10`, `seconds=15`):
+`1 passed / 0 failed` in `15.02s`, no serial send failure, and at least `439`
+successful sends observed. This is engine-to-COM write evidence only; fixture
+illumination still requires an operator visual check.
+
 Blackout release, continuous USB-DMX signal, both Display metric windows,
 Timeline smoke, audible endpoint acceptance, MiraBox live content, Unity
 Art-Net/Spout, DJ-Link/pedal ACKs, show-ASIO physical routing, and

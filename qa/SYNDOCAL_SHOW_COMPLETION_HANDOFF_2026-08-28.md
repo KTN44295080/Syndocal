@@ -49,6 +49,12 @@ main window maximized (`showCmd=3`). Read-only enumeration found FTDI
 Open-DMX `COM3`, `Music (Elgato Virtual Audio)`, four monitor modes, and an
 `Unknown MiraBox Video Capture` entry.
 
+The current alpha.60 engine physical serial demo then ran against `COM3` with
+the pinned Community MSVC 14.44 linker (`master=10`, `seconds=15`):
+`1 passed / 0 failed` in `15.02s`, no serial send failure, and at least `439`
+successful sends observed. This is engine-to-COM write evidence only; fixture
+illumination still requires an operator visual check.
+
 These process/window and device-presence observations are not signal or pixel
 acceptance. One bounded native/operator pass still must run the show-DMX
 action and S0 release, confirm continuous USB-DMX, open both Display outputs
