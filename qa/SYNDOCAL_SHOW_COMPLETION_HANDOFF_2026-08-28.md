@@ -1,10 +1,26 @@
 # Syndocal 2026-09-02 show completion handoff
 
-Status date: 2026-09-02 JST
+Status date: 2026-09-03 JST
 
 This is the concise authoritative resume note for the final show-critical tranche. It supersedes chat-only status, but it does not supersede the detailed acceptance documents named below.
 
-## 2026-09-02 alpha.66 DMX blackout release source checkpoint
+## 2026-09-03 alpha.67 ASIO setup race source checkpoint
+
+ASIO setup requests are invalidated before publishing Normal, preventing a
+late ASIO response from overwriting the operator's selected Normal view or
+returning it to Locked. Blackout clearing still recovers the canonical local
+Both output lease exactly once when the safety latch has no active lease. The
+audio-output controller checker, output-control checker, TypeScript, Node
+syntax, release metadata, and scoped diff checks pass with first-party
+warnings `0`. The exact pinned Community MSVC `14.44.35207` no-bundle native
+build passed in `3m21s`; `target/release/syndocal.exe` is Product/FileVersion
+`1.2.0-alpha.67`, SHA-256
+`3D7BDF45B25189FD9F61694F7523C00125AB71A02E0622D222A2A0D113454CDE`.
+PID `65324` supplied exactly one responsive, visible, maximized Syndocal
+window. Physical USB-DMX, Art-Net/Unity, fixture, camera/MiraBox, Spout, and
+audio acceptance remain explicitly unverified external rows.
+
+## Historical 2026-09-02 alpha.66 DMX blackout release source checkpoint
 
 Blackout clearing now recovers the canonical local Both output lease exactly
 once when the safety latch is engaged but no active lease remains after a

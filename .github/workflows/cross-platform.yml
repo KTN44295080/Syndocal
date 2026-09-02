@@ -419,7 +419,7 @@ jobs:
       - name: Upload installers
         uses: actions/upload-artifact@v4
         with:
-          name: syndocal-1.2.0-alpha.66-${{ matrix.os }}
+          name: syndocal-1.2.0-alpha.67-${{ matrix.os }}
           path: target/release/bundle/**
           if-no-files-found: error
           retention-days: 14

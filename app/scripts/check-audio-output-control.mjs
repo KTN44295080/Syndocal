@@ -180,6 +180,11 @@ const assertions = [
     "Normal WASAPI must be visibly Ready by default",
   ],
   [
+    /const resetToNormalView = \(\): void => \{[\s\S]*?requestGeneration \+= 1;[\s\S]*?setBusy\(false\);[\s\S]*?setView\(normalView\(\)\);/u,
+    control,
+    "Returning to Normal must invalidate in-flight ASIO work before publishing the local Normal view",
+  ],
+  [
     /ASIO bridge is not available in this build; choose Normal WASAPI\./u,
     control,
     "Unavailable ASIO bridge must remain visibly Locked",
@@ -614,6 +619,31 @@ check(controller.view().backend === "normal-wasapi"
   && controller.view().state === "Ready"
   && !calls.slice(setupOnlyReturnCallStart).includes("select_normal_audio_output"),
 "setup-only ASIO return resets the local view without a redundant native Normal-selection dispatch");
+
+// A setup-only switch can race the first ASIO status request.  The late
+// response must be discarded instead of rewriting the already-selected
+// Normal view with an ASIO error or Locked state.
+let resolveRaceStatus;
+const raceStatus = new Promise((resolve) => { resolveRaceStatus = resolve; });
+const raceController = createAudioOutputController({
+  invoke: async (command) => {
+    if (command === "get_asio_output_status") return raceStatus;
+    throw new Error("unexpected stale-race command " + command);
+  },
+  backendAvailable: true,
+  readLivePlaybackActive: () => false,
+});
+raceController.setBackend("show-asio");
+check(raceController.busy(), "ASIO setup starts an observable status request before the switch race");
+raceController.setBackend("normal-wasapi");
+resolveRaceStatus(status("locked", "Locked", "Closed", false));
+await settle();
+check(raceController.view().backend === "normal-wasapi"
+  && raceController.view().state === "Ready"
+  && !raceController.busy(),
+"a late ASIO status response cannot overwrite or re-lock the selected Normal view");
+raceController.dispose();
+
 controller.setBackend("show-asio");
 await settle();
 controller.setDriver("asio:mock");
@@ -927,6 +957,6 @@ const runtimeResult = await execFile(
   ["--no-warnings", "--conditions=browser", "--experimental-strip-types", "--input-type=module", "-e", runtimeRegression],
   { cwd: resolve(scriptDirectory, "..") },
 );
-assert.match(runtimeResult.stdout, /audio output controller runtime regression passed \(63 assertions\)/u);
+assert.match(runtimeResult.stdout, /audio output controller runtime regression passed \(65 assertions\)/u);
 
-console.log(`audio output control checks passed (${assertions.length + requiredCommands.length + 3} assertions; runtime regression 63 assertions)`);
+console.log(`audio output control checks passed (${assertions.length + requiredCommands.length + 3} assertions; runtime regression 65 assertions)`);

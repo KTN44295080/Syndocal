@@ -4,7 +4,21 @@ Date: 2026-08-19
 Branch at creation: `codex/syndocal-v1.0`
 Baseline before this document: `848d759846985cc3acf588356cfa3c996b4e2ef2`
 
-## 2026-09-02 alpha.66 DMX blackout release checkpoint
+## 2026-09-03 alpha.67 ASIO setup race checkpoint
+
+Alpha.67 advances the product prerelease ordinal for the setup-only ASIO race
+repair. Returning to Normal invalidates in-flight ASIO status/catalogue work
+before publishing the local Normal view, so a late response cannot re-lock the
+Normal screen. The alpha.66 bounded canonical Both blackout recovery remains
+unchanged. The exact pinned Community MSVC `14.44.35207` no-bundle native build
+passed in `3m21s`; `target/release/syndocal.exe` is Product/FileVersion
+`1.2.0-alpha.67`, SHA-256
+`3D7BDF45B25189FD9F61694F7523C00125AB71A02E0622D222A2A0D113454CDE`.
+PID `65324` supplied exactly one responsive, visible, maximized Syndocal
+window. First-party warnings are `0`; physical USB-DMX, Art-Net/Unity,
+fixture, camera, Spout, and audio acceptance remain external.
+
+## Historical 2026-09-02 alpha.66 DMX blackout release checkpoint
 
 Alpha.66 advances the product prerelease ordinal for the blackout release
 repair. The UI now uses bounded canonical Both recovery only when an engaged

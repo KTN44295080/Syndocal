@@ -849,6 +849,13 @@ export const createAudioOutputController = (
   };
 
   const resetToNormalView = (): void => {
+    // Returning to Normal is a hard local boundary.  Invalidate any ASIO
+    // catalogue/status request that may still be in flight before clearing
+    // the view; otherwise a late ASIO response can overwrite the Normal
+    // screen (and leave it Locked again) after the operator already switched
+    // back.
+    requestGeneration += 1;
+    setBusy(false);
     nativeStatus = null;
     cueAudioStatus = null;
     clearPreflightState();

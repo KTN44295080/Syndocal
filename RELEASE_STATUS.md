@@ -1,9 +1,30 @@
 # Syndocal historical v1.0 / current v1.2 alpha Release Status
 
-Updated: 2026-09-02
-Branch: `codex/syndocal-v1.2`; current product metadata is `1.2.0-alpha.66`.
+Updated: 2026-09-03
+Branch: `codex/syndocal-v1.2`; current product metadata is `1.2.0-alpha.67`.
 
-## 2026-09-02 current alpha.66 DMX blackout release checkpoint
+## 2026-09-03 current alpha.67 ASIO setup race checkpoint
+
+Alpha.67 advances the product prerelease ordinal for a setup-only ASIO race
+repair. Returning to Normal now invalidates any in-flight ASIO status/catalogue
+request and clears the busy state before publishing the local Normal view. A
+late ASIO response can no longer overwrite that view or put it back into
+Locked after the operator has switched away. The alpha.66 bounded blackout
+release recovery remains unchanged.
+
+The focused audio-output controller contract now includes a deterministic
+deferred-response race (65 runtime assertions). Audio/output-control checks,
+TypeScript, release metadata, Node syntax, and scoped diff checks pass with
+first-party warnings `0` (only the existing Vite large-chunk advisory). The
+exact pinned Community MSVC `14.44.35207` no-bundle native build passed in
+`3m21s`. The resulting `target/release/syndocal.exe` is Product/FileVersion
+`1.2.0-alpha.67`, SHA-256
+`3D7BDF45B25189FD9F61694F7523C00125AB71A02E0622D222A2A0D113454CDE`.
+Exactly one checkout-owned Syndocal process (PID `65324`) is responsive,
+visible, and maximized (`showCmd=3`). Physical USB-DMX, Art-Net, Unity/Spout,
+fixture, camera, and audio acceptance remain separate external gates.
+
+## Historical 2026-09-02 alpha.66 DMX blackout release checkpoint
 
 Alpha.66 advances the product prerelease ordinal for the DMX blackout release
 path. Clearing blackout now uses bounded local Both lease recovery when the
