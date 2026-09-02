@@ -1,9 +1,9 @@
 # Syndocal 2026-09-02 show completion handoff
 
 Status date: 2026-09-03 JST
-Source checkpoint: branch `codex/syndocal-v1.2`; native artifact source commit
+Source checkpoint: branch `codex/syndocal-v1.2`; blackout-release source commit
 `5ae65a37fc428760f2032ef30ea9b2ccd84bcd4a`; serial-smoke evidence commit
-`734a2c9`; final HEAD/upstream equality is recorded after this handoff update.
+`734a2c9`; current documentation checkpoint commit is `d4934ed4aa803648e855e2e8e64cc801354f40f3`, equal to upstream.
 
 This is the concise authoritative resume note for the final show-critical tranche. It supersedes chat-only status, but it does not supersede the detailed acceptance documents named below.
 
@@ -19,7 +19,7 @@ exact pinned Community MSVC `14.44.35207` no-bundle native build passed in
 checkpoint: `target/release/syndocal.exe`, Product/FileVersion
 `1.2.0-alpha.68`, `63,520,256` bytes, SHA-256
 `51F3A4AEF8E7E5EC992EEC6997929277FE6D12B40CF8FF2F8ABFC8A33E8AC97D`.
-PID `59636` supplied exactly one responsive, visible, maximized Syndocal
+The current exact artifact process is PID `9716`, supplying exactly one responsive, visible, maximized Syndocal
 window (`showCmd=3`). First-party warnings are `0` (only the existing Vite
 large-chunk advisory); physical USB-DMX, Art-Net/Unity, fixture, camera/MiraBox,
 Spout, and audio acceptance remain explicitly unverified external rows.
