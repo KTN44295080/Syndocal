@@ -4,6 +4,16 @@ Status date: 2026-09-02 JST
 
 This is the concise authoritative resume note for the final show-critical tranche. It supersedes chat-only status, but it does not supersede the detailed acceptance documents named below.
 
+## 2026-09-02 alpha.60 native/managed-output checkpoint
+
+Alpha.60 is the current native candidate, based on upstream-equal parent
+`9ae8276cc6fbf807b3517770f22ee788e050f85f` on `codex/syndocal-v1.2`.
+managed-output focused `28/0/0` passed with first-party warnings `0`; the
+USB-DMX route remains an explicitly separate runtime and hardware acceptance
+row. This top boundary is the release-authority marker; the newer native
+Timeline, three-display, and Open-DMX evidence below records the current
+operator/runtime state.
+
 ## 2026-09-02 normal ASIO availability checkpoint (native complete)
 
 The normal Windows application now includes the ASIO loader and command surface
@@ -54,16 +64,6 @@ enumeration, capabilities, and recoverable setup UI. It does not claim a
 bundled licensed bridge, audible output, long-soak/XRUN or unplug recovery,
 USB-DMX fixture illumination, Art-Net/Spout/Unity receiver pixels, MiraBox
 frames, or DJ-Link/pedal ACKs. Those remain open external acceptance rows.
-
-## 2026-09-02 alpha.60 native/managed-output checkpoint
-
-Alpha.60 is the current native candidate, based on upstream-equal parent
-`9ae8276cc6fbf807b3517770f22ee788e050f85f` on `codex/syndocal-v1.2`.
-managed-output focused `28/0/0` passed with first-party warnings `0`; the
-USB-DMX route remains an explicitly separate runtime and hardware acceptance
-row. This top boundary is the release-authority marker; the newer native
-Timeline, three-display, and Open-DMX evidence below records the current
-operator/runtime state.
 
 ## 2026-09-02 alpha.60 WDM audio device enumeration and selection
 

@@ -1,6 +1,6 @@
 # ASIO PROGRAM / CUE Output Acceptance
 
-Updated: 2026-08-31
+Updated: 2026-09-02
 
 ## Show boundary
 
@@ -13,6 +13,26 @@ The normal MIT/WASAPI build and installer remain separate from the locally
 licensed, non-default show-ASIO artifact described by
 `qa/ASIO_INPUT_ACCEPTANCE.md`. No ASIO SDK-linked DLL or feature may enter the
 normal installer, updater, repair path, or default build graph.
+
+## 2026-09-02 alpha.60 normal-ASIO availability boundary
+
+The normal Windows application source now carries the ASIO loader and command
+surface in its default feature set (`libav`, `spout`, `asio`). Setup → I/O →
+Audio exposes `ASIO` alongside Normal WASAPI and requires an explicit driver,
+sample rate, buffer, channel routing, and Revalidate/Start sequence; no driver
+is selected automatically. The setup-only Return-to-Normal action also works
+while the native router remains `Normal`, resetting only the local view and not
+dispatching a redundant native selection command.
+
+The pinned SDK-derived `syndocal_asio_bridge.dll` remains a same-host QA
+payload only. `qa/ASIO_SDK_PIN.json` keeps `distribution_approved: false`, so
+the bridge is not an approved installer/updater payload. The alpha.60 native
+selection smoke enumerated eight drivers and selected the explicit
+`TOPPING Pro USB Audio Device`; native status was `ready` / `Normal` with six
+output channels, supported rates `44.1/48/88.2/96/176.4/192 kHz`, and fixed
+buffers `8..2048` (preferred `128`). This proves availability and capability
+enumeration only; audible output, long-soak/XRUN/unplug recovery, and release
+licensing remain unchecked here.
 
 ## 2026-09-01 alpha.57 native current boundary
 
