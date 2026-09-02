@@ -38,6 +38,14 @@ the release contract chain, TypeScript, focused audio checker, and fixed-linker
 Cargo check/test are green. The final executable/runtime evidence is recorded
 below. This is an internal alpha.60 checkpoint, not a release tag.
 
+After the documentation repair, `pnpm --dir app run check:release` passed again
+with first-party warnings `0` (release metadata, ASIO packaging `169`, ASIO v3
+`22`, Timeline audio/loop/watermark/bootstrap, video routing/window observation,
+and camera contracts). The matching `check:release:self-test` also passed:
+release metadata `125`, Windows artifact self-test `140`, and strict JSON `130`;
+the unapproved bridge was staged outside `target/release` for the packaging
+checks and restored with its original SHA-256.
+
 ## 2026-09-02 normal ASIO native/runtime evidence
 
 The native artifact built from the source content of `c528aa2` is
