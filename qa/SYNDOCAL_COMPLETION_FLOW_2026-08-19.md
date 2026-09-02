@@ -12,8 +12,9 @@ and no second fail-fast lease query is required. The Release command still
 passes through backend owner/fence/lease CAS; split, foreign, and ambiguous
 ownership remain fail-closed. ASIO advanced configuration starts collapsed in
 Setup while the Normal WASAPI route remains visible. Focused output-control and
-safety-blackout checkers, TypeScript, Node syntax, and diff checks pass; the
-safety contract follows the extracted blackout-release controller boundary.
+safety-blackout checkers (both included in the `check:release` aggregate),
+TypeScript, Node syntax, and diff checks pass; the safety contract follows the
+extracted blackout-release controller boundary.
 The exact pinned
 Community MSVC `14.44.35207` no-bundle native build passed in `3m20s`; the resulting
 `target/release/syndocal.exe` is Product/FileVersion `1.2.0-alpha.68`,

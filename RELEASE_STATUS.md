@@ -16,7 +16,8 @@ fail-closed.
 
 The focused output-control and safety-blackout contracts now cover a stale
 post-Enable lease read and prove that no release is sent without the Enable
-receipt proof. The safety checker follows the extracted
+receipt proof. Both are now part of the `check:release` aggregate gate. The
+safety checker follows the extracted
 `executeBlackoutRelease` controller boundary, so the contract cannot drift
 when App wiring is refactored. ASIO advanced configuration starts closed
 while Normal WASAPI keeps its primary route visible. The exact pinned Community MSVC
