@@ -36,7 +36,7 @@ The exact pinned Community MSVC `14.44.35207` no-bundle build for alpha.62
 passed in `2m48s` with first-party warnings `0` (only the existing Vite
 large-chunk advisory). The resulting executable is
 `target/release/syndocal.exe`, `63,520,256` bytes, SHA-256
-`8CD2E0C8B950022EECAFC89E8830F9B6734FB876CB4D70EFC1191EE25011ED81`.
+`F5477B506E9867DACE350E717CA7759B3CE8883D04A1DF22E77485F4A96FFA04`.
 This is native build evidence only; physical USB-DMX, camera/MiraBox,
 Spout/Unity, and pixel-output acceptance remain separate gates.
 The exact executable was launched from this checkout as PID `82876`; one

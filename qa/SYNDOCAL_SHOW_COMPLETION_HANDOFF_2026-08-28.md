@@ -17,7 +17,7 @@ The exact pinned Community MSVC `14.44.35207` no-bundle build passed in
 `2m48s` with first-party warnings `0` (only the existing Vite large-chunk
 advisory). `target/release/syndocal.exe` is Product/FileVersion
 `1.2.0-alpha.62`, `63,520,256` bytes, SHA-256
-`8CD2E0C8B950022EECAFC89E8830F9B6734FB876CB4D70EFC1191EE25011ED81`.
+`F5477B506E9867DACE350E717CA7759B3CE8883D04A1DF22E77485F4A96FFA04`.
 The executable was then launched from this checkout as PID `82876`; exactly
 one matching `Syndocal` process was responsive and visible with a maximized
 main window (`showCmd=3`). USB-DMX, camera/MiraBox, Spout/Unity, and physical
