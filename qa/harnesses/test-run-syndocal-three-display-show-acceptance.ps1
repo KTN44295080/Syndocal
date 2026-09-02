@@ -15,15 +15,15 @@ $script:CheckoutRoot = Join-Path $script:SandboxRoot "checkout"
 $script:ExpectedPath = Join-Path $script:CheckoutRoot "target\release\syndocal.exe"
 $script:GoodPid = [uint32]4242
 $script:WrongPid = [uint32]4243
-$script:GoodHash = "29045BC40227F823E0A2259113E2BECC246B665AEC161E5A14111D9CB0E4EA1C"
+$script:GoodHash = "D31AB72AA54800BA93AA8305F467CD084979823885887F17535C65D5F842F0A3"
 $script:WrongHash = ("cd" * 32)
-$script:GoodSize = [uint64]62435840
+$script:GoodSize = [uint64]62486528
 $script:WrongSize = [uint64]61691905
 $script:GoodVersion = "1.2.0-alpha.60"
 $script:StaleVersion = "1.2.0-alpha.41"
 $script:WrongVersion = "9.9.9-wrong"
-$script:GoodArtifactHead = "dabbcaec8157b7c4f648af82516ee607394a7c90"
-$script:GoodHead = "dabbcaec8157b7c4f648af82516ee607394a7c90"
+$script:GoodArtifactHead = "d493142d2f922024ae8ed09f873ecce24c53b319"
+$script:GoodHead = "d493142d2f922024ae8ed09f873ecce24c53b319"
 $script:GoodDescendantHead = ("6" * 40)
 $script:GoodShowArtifactHead = ("a" * 40)
 $script:GoodShowEvidenceHead = ("b" * 40)
@@ -1171,7 +1171,7 @@ function Invoke-FocusedChecks {
       $text = [IO.File]::ReadAllText($script:RunnerPath)
       foreach ($token in @("Start-Process", "Stop-Process", "Remove-Item", "SetForegroundWindow", "SetWindowPos", "SendInput", "Invoke-WebRequest", "New-WebServiceProxy", 'hardware_or_network_access', 'qa\artifacts')) { if ($text.Contains($token)) { return New-Check $false "forbidden token $token" } }
       if ($text.Contains("1.2.0-alpha.41")) { return New-Check $false "historical alpha.41 authority remains in the runner" }
-      foreach ($token in @("video-output-", "Syndocal Output - ", "resolution-only", "SHA256SUMS.txt", "GetDisplayConfigBufferSizes", "QueryDisplayConfig", "DisplayConfigGetDeviceInfo", "GetDpiForWindow", "get_video_output_window_observation_v1", "app-owned-read-only", "native_window_handle_decimal", "__syndocalReadVideoOutputWindowObservationV1", "strict_reader_succeeded", "Get-NetTCPConnection", "ClientWebSocket", "CdpPort", "1.2.0-alpha.60", "29045BC40227F823E0A2259113E2BECC246B665AEC161E5A14111D9CB0E4EA1C", "62435840", "dabbcaec8157b7c4f648af82516ee607394a7c90", "source_provenance", "artifact_source_head", "artifact_source_branch", "ExpectedArtifactSourceHead", "ExpectedArtifactSourceBranch", "current_harness_head", "current_harness_branch", "Resolve-ThreeDisplayGitBranch", "Test-ThreeDisplayGitAncestor", "expected_byte_size", "dry-run-rejected", "native_hardware_claim", '--artifact-source', '--evidence-head', '--source-branch', 'ConvertTo-ThreeDisplayOneLineDiagnostic', 'non_loopback_network_access', 'loopback_cdp_observation_only', 'complete five-display identity acceptance', 'SW_MAXIMIZE', 'Join-Path $script:ThreeDisplayCheckoutRoot "target\qa"', 'stable_identity = [string]$target.MonitorDevicePath', 'Assert-ThreeDisplayNonblankCurrentGdiName', 'current GDI device name', 'expected_effective_dpi', 'physical_bounds',
+      foreach ($token in @("video-output-", "Syndocal Output - ", "resolution-only", "SHA256SUMS.txt", "GetDisplayConfigBufferSizes", "QueryDisplayConfig", "DisplayConfigGetDeviceInfo", "GetDpiForWindow", "get_video_output_window_observation_v1", "app-owned-read-only", "native_window_handle_decimal", "__syndocalReadVideoOutputWindowObservationV1", "strict_reader_succeeded", "Get-NetTCPConnection", "ClientWebSocket", "CdpPort", "1.2.0-alpha.60", "D31AB72AA54800BA93AA8305F467CD084979823885887F17535C65D5F842F0A3", "62486528", "d493142d2f922024ae8ed09f873ecce24c53b319", "source_provenance", "artifact_source_head", "artifact_source_branch", "ExpectedArtifactSourceHead", "ExpectedArtifactSourceBranch", "current_harness_head", "current_harness_branch", "Resolve-ThreeDisplayGitBranch", "Test-ThreeDisplayGitAncestor", "expected_byte_size", "dry-run-rejected", "native_hardware_claim", '--artifact-source', '--evidence-head', '--source-branch', 'ConvertTo-ThreeDisplayOneLineDiagnostic', 'non_loopback_network_access', 'loopback_cdp_observation_only', 'complete five-display identity acceptance', 'SW_MAXIMIZE', 'Join-Path $script:ThreeDisplayCheckoutRoot "target\qa"', 'stable_identity = [string]$target.MonitorDevicePath', 'Assert-ThreeDisplayNonblankCurrentGdiName', 'current GDI device name', 'expected_effective_dpi', 'physical_bounds',
         "StandardRelease", "ShowAsioLocal", "check-show-asio-artifact.mjs", "syndocal-show-asio.exe", "windows-show-asio-local-only", "target\show-asio-local", "Syndocal_Show_ASIO_", "Show-ASIO local artifact PASS: ", "distributionApproved=false", "show-asio-local-manifest.json", "NumberOfLinks", "pre-executable-use", "pre-mutation", "dry-run-pre-executable-use", "authority_verifications", "show_asio_authority_contract", "invoked_at_utc")) { if (-not $text.Contains($token)) { return New-Check $false "required token $token missing" } }
        foreach ($token in @("Assert-ThreeDisplayGitEnvironmentSafe", "--no-replace-objects", "ThreeDisplayShowAsioSourceIdentityCount = 70", 'app\src\uiLocalization.ts')) { if (-not $text.Contains($token)) { return New-Check $false "required source/Git authority token $token missing" } }
        if (([regex]::Matches($text, [regex]::Escape("--no-replace-objects")).Count) -ne 4) { return New-Check $false "all four harness Git authority calls must disable refs/replace object substitution" }
