@@ -143,10 +143,11 @@ MiraBox live content, Unity receiver delivery, audible PROGRAM/CUE endpoint,
 DJ-Link/pedal ACKs, and show-ASIO physical routing remain external acceptance
 rows; prior local display-routing evidence does not promote those claims.
 
-This checkpoint is not complete until this note and the two engine files are
-committed and pushed. Before commit, re-check that only the bounded sender
-implementation/test and this handoff note are owned changes, then record the
-new HEAD/upstream equality below.
+Checkpoint commit `32b8c78d4729c17c5fd570b6e7ef9e61b10f5509` is committed and
+pushed to `origin/codex/syndocal-v1.2`; HEAD and upstream are equal. The
+post-push tree contains no owned dirty files. The next safe action is ordinary
+operator Timeline work; do not infer the explicitly unverified external rows
+above from the native route evidence.
 
 ## 2026-09-01 alpha.59 native and local hardware checkpoint
 
