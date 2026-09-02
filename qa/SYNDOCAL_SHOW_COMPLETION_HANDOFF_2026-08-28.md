@@ -1,6 +1,9 @@
 # Syndocal 2026-09-02 show completion handoff
 
 Status date: 2026-09-03 JST
+Source checkpoint: branch `codex/syndocal-v1.2`; native artifact source commit
+`5ae65a37fc428760f2032ef30ea9b2ccd84bcd4a`; documentation is being finalized
+on the same branch before the final upstream-equality check.
 
 This is the concise authoritative resume note for the final show-critical tranche. It supersedes chat-only status, but it does not supersede the detailed acceptance documents named below.
 
