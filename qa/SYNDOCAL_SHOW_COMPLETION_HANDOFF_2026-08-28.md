@@ -1,4 +1,4 @@
-# Syndocal 2026-09-01 show completion handoff
+# Syndocal 2026-09-02 show completion handoff
 
 Status date: 2026-09-02 JST
 
@@ -33,15 +33,29 @@ compositions, and publishes `1,112,438` bytes / SHA-256
 `F57A98966CD58FE040D2AC3C2A5B41D7CA53F15BE2A6C5A9C117EC918A574459`.
 Its separate 3840x2160 media file is `43,807,726` bytes / SHA-256
 `D51DCD2B4F55CB7A6FAE3F34E9B4D93E6BAC24B0B29A6BE500AB4B848D323E29`.
-Absolute paths keep this a same-PC QA artifact, not a portable release bundle.
+Absolute paths keep this a same-PC QA artifact, not a portable release bundle;
+USB-DMX remains a runtime-only acceptance row.
 
-Source commit/push and all alpha.60 native/hardware rows remain open. The
-current alpha.59 process is intentionally left in S0 zero output until the new
-artifact is built. After build: launch alpha55, run one-click show DMX, release
-S0, confirm continuous USB-DMX, open both Display outputs, collect both current
-600-frame metric windows, then run Timeline loop/release/follow smoke and read
-the selected audio endpoint status. Do not infer any of those results from
-source proof alone.
+Source checkpoint `dabbcaec8157b7c4f648af82516ee607394a7c90` is committed,
+pushed, and upstream-equal. The exact Community MSVC `14.44.35207` pinned
+no-bundle build passed in `1m48s` with first-party warnings `0`; only the
+existing Vite large-chunk advisory was emitted. Artifact:
+`target/release/syndocal.exe`, Product/FileVersion `1.2.0-alpha.60`,
+`62,435,840` bytes, SHA-256
+`29045BC40227F823E0A2259113E2BECC246B665AEC161E5A14111D9CB0E4EA1C`.
+It is running with `target/qa/DSF2026-show-alpha55-dual-file-display.sdc` as
+PID `53420`; this is the sole exact-checkout process, responsive, with the
+main window maximized (`showCmd=3`). Read-only enumeration found FTDI
+Open-DMX `COM3`, `Music (Elgato Virtual Audio)`, four monitor modes, and an
+`Unknown MiraBox Video Capture` entry.
+
+These process/window and device-presence observations are not signal or pixel
+acceptance. One bounded native/operator pass still must run the show-DMX
+action and S0 release, confirm continuous USB-DMX, open both Display outputs
+and collect their current 600-frame windows, exercise Timeline loop/release/
+Follow, and read the selected PROGRAM/CUE endpoint. MiraBox live content,
+Unity Art-Net/Spout, DJ-Link/pedal ACKs, show-ASIO physical routing, and
+installer/updater inspection remain explicitly unverified.
 
 Source gates now recorded: full-feature managed `28/28`, no-default managed
 `28/28`, control-plane inventory `28/28`, TypeScript, release metadata, and

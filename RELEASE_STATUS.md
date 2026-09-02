@@ -31,9 +31,34 @@ its 4K background media is `43,807,726` bytes, SHA-256
 `D51DCD2B4F55CB7A6FAE3F34E9B4D93E6BAC24B0B29A6BE500AB4B848D323E29`.
 The specimen is not portable because its media paths are machine-local.
 Source focused acceptance is GO.
-Alpha.60 native build, blackout release, physical USB-DMX live output, two
-Display performance windows, Timeline smoke, and audible endpoint acceptance
-remain unverified until after the source checkpoint.
+USB-DMX/runtime rows remain separate from that source verdict.
+
+The source checkpoint is committed and pushed at
+`dabbcaec8157b7c4f648af82516ee607394a7c90` on `codex/syndocal-v1.2`.
+The exact Community MSVC `14.44.35207` pinned no-bundle native build passed
+in `1m48s` with first-party warnings `0`; the only build advisory was the
+existing Vite large-chunk notice. The resulting artifact is
+`target/release/syndocal.exe`, Product/FileVersion `1.2.0-alpha.60`,
+`62,435,840` bytes, SHA-256
+`29045BC40227F823E0A2259113E2BECC246B665AEC161E5A14111D9CB0E4EA1C`.
+
+That exact executable was launched with the alpha55 QA specimen
+`target/qa/DSF2026-show-alpha55-dual-file-display.sdc`. PID `53420` is the
+sole process whose resolved path is this checkout's
+`target/release/syndocal.exe`; it reports `Responding=True`, title `Syndocal`,
+and its main window is maximized (`showCmd=3`). Read-only host enumeration
+also found the FTDI Open-DMX adapter as `USB Serial Port (COM3)`, the
+`Music (Elgato Virtual Audio)` endpoint, four active monitor modes including
+1920x1080/3840x2160, and an `Unknown MiraBox Video Capture` device entry.
+These are presence observations only: they do not prove a live DMX frame,
+audible PROGRAM/CUE playback, display pixel/60fps acceptance, or live MiraBox
+content.
+
+Alpha.60 native UI actions, blackout release, physical USB-DMX continuity,
+two-Display performance windows, Timeline smoke, audible endpoint acceptance,
+MiraBox frames, Unity Art-Net/Spout, DJ-Link/pedal ACKs, show-ASIO routing,
+and installer/updater inspection remain open external/runtime rows. Do not
+promote the process/window or device-enumeration evidence into those claims.
 
 Verification after the managed-output fix: full-feature managed tests `28/28`,
 no-default managed tests `28/28`, control-plane inventory tests `28/28`,

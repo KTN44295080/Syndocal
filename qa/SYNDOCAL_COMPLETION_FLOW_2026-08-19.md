@@ -29,11 +29,27 @@ The alpha55 local QA derivation also passes syntax, focused, exact identity,
 exclusive-write, final-reread, and verify-only gates. It preserves two Display
 outputs and three compositions and changes exactly `16` paths so Display 1
 uses the optimized 1920x1080 foreground file and Display 5 uses a distinct
-3840x2160 file. Source commit/push, alpha.60 native build, blackout release,
-USB-DMX live output, both Display metric windows, Timeline smoke, and audible
-endpoint acceptance remain open. The first safe native action is therefore to
-commit and push this source checkpoint, stop only the exact checkout artifact,
-and run the pinned no-bundle build.
+3840x2160 file; USB-DMX remains a runtime-only acceptance row.
+
+Source checkpoint `dabbcaec8157b7c4f648af82516ee607394a7c90` is committed,
+pushed, and upstream-equal. The pinned Community MSVC `14.44.35207` no-bundle
+build passed in `1m48s` with first-party warnings `0` (only the existing Vite
+large-chunk advisory). The exact artifact is
+`target/release/syndocal.exe`, Product/FileVersion `1.2.0-alpha.60`,
+`62,435,840` bytes, SHA-256
+`29045BC40227F823E0A2259113E2BECC246B665AEC161E5A14111D9CB0E4EA1C`.
+It was launched with `target/qa/DSF2026-show-alpha55-dual-file-display.sdc`;
+PID `53420` is the sole exact-checkout process, responsive with a maximized
+main window (`showCmd=3`). OS enumeration found FTDI Open-DMX `COM3`, the
+`Music (Elgato Virtual Audio)` endpoint, four monitor modes, and an
+`Unknown MiraBox Video Capture` entry. Enumeration is not runtime acceptance.
+
+Blackout release, continuous USB-DMX signal, both Display metric windows,
+Timeline smoke, audible endpoint acceptance, MiraBox live content, Unity
+Art-Net/Spout, DJ-Link/pedal ACKs, show-ASIO physical routing, and
+installer/updater inspection remain open. The next safe action is one bounded
+operator/native acceptance pass; do not infer those rows from source, process,
+or device-presence evidence.
 
 The exact full-feature suite completed with `1415 passed / 1 failed / 14
 ignored`; the one failure is an operator-owned local `DSF2026.dvc` whose
