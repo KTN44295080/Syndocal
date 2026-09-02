@@ -524,7 +524,7 @@ const currentReleaseBoundaryMarkers = Object.freeze([
     markers: [
       "## 2026-09-02 alpha.65 DMX operator-copy source checkpoint",
       "DMX route facts replace the long protocol",
-      "native build",
+      "no-bundle build",
     ],
   },
 ]);

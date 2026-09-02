@@ -26,6 +26,13 @@ window (`showCmd=3`). Physical USB-DMX, Art-Net/Unity, fixture,
 camera/MiraBox, Spout, and audio acceptance remain explicitly unverified
 external rows.
 
+Current alpha.65 COM3 smoke: the pinned MSVC 14.44 Engine test with
+`SYNDOCAL_PHYSICAL_MASTER=10` and `SYNDOCAL_PHYSICAL_SECONDS=15` returned
+`1 passed / 0 failed` in `15.02s`, with no serial send failure, at least `439`
+successful sends, and non-zero cell preview RGB `(54,73,255)`. Keep this as
+Engine-to-COM evidence; do not promote it to fixture illumination or wire
+reception acceptance without an operator observation.
+
 ## 2026-09-02 alpha.64 fixture-count source checkpoint
 
 Alpha.64 advances the product prerelease ordinal for the fixture-pack count

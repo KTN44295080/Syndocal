@@ -24,6 +24,15 @@ window (`showCmd=3`). Physical USB-DMX, Art-Net receiver, fixture
 illumination, camera/MiraBox, Spout/Unity, and audible endpoint acceptance
 remain separate external gates.
 
+The current alpha.65 Engine physical serial smoke also completed against the
+enumerated FTDI `COM3` device with the pinned Community MSVC 14.44 linker:
+`SYNDOCAL_PHYSICAL_SERIAL=COM3`, `SYNDOCAL_PHYSICAL_MASTER=10`, and
+`SYNDOCAL_PHYSICAL_SECONDS=15` produced `1 passed / 0 failed` in `15.02s`.
+No serial send failure was reported; the run observed at least `439` successful
+sends and a non-zero RGB preview (`cell1=(54,73,255)`). This proves the
+alpha.65 Engine-to-COM write path only; fixture illumination and downstream
+DMX reception remain operator/physical checks.
+
 ## 2026-09-02 current alpha.64 fixture-count/UI checkpoint
 
 Alpha.64 advances the product prerelease ordinal for the fixture-pack count

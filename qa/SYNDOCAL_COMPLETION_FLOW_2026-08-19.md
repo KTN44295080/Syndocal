@@ -23,6 +23,15 @@ PID `90464` supplied exactly one responsive, visible, maximized Syndocal
 window (`showCmd=3`). Physical USB-DMX, Art-Net receiver, fixture,
 camera/MiraBox, Spout/Unity, and audio endpoint rows remain external gates.
 
+An alpha.65 Engine physical serial smoke then ran against the enumerated FTDI
+`COM3` device under the pinned Community MSVC 14.44 linker with
+`SYNDOCAL_PHYSICAL_MASTER=10` and `SYNDOCAL_PHYSICAL_SECONDS=15`:
+`physical_serial_rainbow_demo_drives_master_dimmer_and_rgb_cells` returned
+`1 passed / 0 failed` in `15.02s`, with no serial send failure, at least `439`
+successful sends, and non-zero cell preview RGB `(54,73,255)`. This is
+Engine-to-COM write evidence only; fixture illumination and downstream
+reception remain separate physical checks.
+
 ## 2026-09-02 alpha.64 fixture-count/UI checkpoint
 
 Alpha.64 advances the product prerelease ordinal for the fixture-pack count
