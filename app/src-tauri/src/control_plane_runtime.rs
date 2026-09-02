@@ -569,7 +569,7 @@ where
     response
 }
 
-#[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+#[cfg(all(test, feature = "spout", target_os = "windows", target_arch = "x86_64"))]
 pub(crate) fn execute_show_spout_reset_without_lease_control_for_test<F>(
     state: &AppState,
     query_state: &ControlPlaneQueryState,
