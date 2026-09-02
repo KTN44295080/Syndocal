@@ -4,6 +4,30 @@ Status date: 2026-09-02 JST
 
 This is the concise authoritative resume note for the final show-critical tranche. It supersedes chat-only status, but it does not supersede the detailed acceptance documents named below.
 
+## 2026-09-02 alpha.60 current native Timeline playback acceptance
+
+The already-running exact alpha.60 process was exercised through the native
+Edit → Timeline surface with the authored
+`target\\qa\\DSF2026-show-alpha55-dual-file-display.sdc` project. The surface
+reported two authored lanes (`Reference Audio` and `Lighting`), one
+`PROGRAM · Audio Clip` spanning `0–214032 ms`, and two lighting scene blocks
+(`all_white` and `all_max`, each `138353 ms` start / `81153 ms` block). The
+timeline also reported the enabled loop region `136941–138353 ms`.
+
+At the current process/PID `68032`, Play advanced the native scrubber from
+`66254 ms` to `67357 ms` in approximately one second while the live status
+reported `タイムライン再生中`, `照明 · 2 シーン`, `灯体46`, `DMX経路1 / 1`, and
+`映像出力2 / 2`. Pause then settled at `67445 ms` and the status changed to
+`タイムライン停止`. A bounded loop probe sought to `136700 ms`; samples
+`137330 → 138148 → 137818 ms` demonstrated wrap inside the enabled loop
+region, then Pause settled at `137862 ms`. A natural-completion probe sought
+to `218900 ms`; the scrubber reached the exact `219506 ms` duration and stayed
+there with `タイムライン停止` across subsequent samples, with no automatic
+next-track start observed. This is current native UI/runtime evidence for
+transport, loop wrap, authored scene presence, and natural stop; it does not
+claim audible endpoint delivery, physical fixture response, display pixels,
+MiraBox frames, Unity/Spout, or DJ-Link/pedal ACKs.
+
 ## 2026-09-02 alpha.60 native three-display window acceptance
 
 With the current clean checkout and the rebuilt alpha.60 executable, the
