@@ -152,16 +152,16 @@ export function DmxOutputConfigPanel(props: DmxOutputConfigPanelProps) {
     if (!selected) {
       const eligibleCount = props.serialPorts.filter((port) => hasExactMachineLocalOpenDmxIdentity(port)).length;
       return eligibleCount > 1
-        ? "No automatic selection: multiple eligible machine-local devices"
-        : "No eligible machine-local device selected";
+        ? "Select one device"
+        : "No eligible device";
     }
     if (selectedSerialPortKey() && serialPortKey(selected) === selectedSerialPortKey()) {
-      return "Explicit operator selection";
+      return "Selected";
     }
     if (persistedBindingKey() && serialPortKey(selected) === persistedBindingKey()) {
-      return "Restored from the exact persisted machine binding";
+      return "Restored";
     }
-    return "Auto-selected: exactly one eligible machine-local device";
+    return "One eligible device";
   };
   const observedSerialIdentity = () => {
     const port = selectedSerialPort();
@@ -201,16 +201,16 @@ export function DmxOutputConfigPanel(props: DmxOutputConfigPanelProps) {
     return true;
   };
   const serialState = () => !artNetUnityMirrorEnabled()
-    ? "Art-Net Unity mirror must be enabled"
+    ? "Art-Net mirror off"
     : !serialWorkerStatusKnown()
-    ? "Worker status unavailable — S0 required"
+    ? "Worker unavailable · S0 required"
     : serialWorkerFaulted()
-    ? "Faulted — S0 latched"
+    ? "Fault · S0 latched"
     : serialWorkerActive() && props.safetyBlackoutEngaged
-      ? "S0 armed"
-      : serialWorkerActive() && props.showSerialDmxSafetyBlackoutRouteStatus?.liveFrameQueued
-        ? "Live U0 mirror queued"
-        : serialWorkerActive() ? "Worker active" : bindingReady() ? "Confirmed, stopped" : "Binding required";
+    ? "S0 armed"
+    : serialWorkerActive() && props.showSerialDmxSafetyBlackoutRouteStatus?.liveFrameQueued
+        ? "Live mirror queued"
+        : serialWorkerActive() ? "Worker active" : bindingReady() ? "Confirmed" : "Binding required";
   const serialStateTone = () => !artNetUnityMirrorEnabled() || !serialWorkerStatusKnown() || serialWorkerFaulted()
     ? "error"
     : serialWorkerActive() ? "ready" : bindingReady() ? "idle" : "error";
@@ -230,13 +230,13 @@ export function DmxOutputConfigPanel(props: DmxOutputConfigPanelProps) {
   const probeStatusReason = () => {
     switch (probeStatus()?.status) {
       case "available":
-        return "DSF2026 fixed probe is available once, only while the exact route remains staged disabled.";
+        return "Available · one send";
       case "in_doubt":
-        return "DSF2026 probe outcome is InDoubt. Reconcile without sending after independent receiver and physical-output verification; it records the unobservable result as permanently consumed and never re-enables retry or a new probe.";
+        return "In doubt · reconcile only";
       case "consumed":
-        return "DSF2026 fixed red probe is permanently consumed. A second probe is prohibited, including after restart or reconciliation.";
+        return "Consumed · no repeat";
       default:
-        return "DSF2026 probe status is loading; no probe can be sent.";
+        return "Loading";
     }
   };
   const probeSendDisabled = () =>
@@ -278,7 +278,7 @@ export function DmxOutputConfigPanel(props: DmxOutputConfigPanelProps) {
       </div>
 
       <details class="ioDisclosure dmxIndividualDiagnostics" data-io-disclosure="dmx-individual-diagnostics">
-        <summary>Individual DMX diagnostics</summary>
+        <summary>Diagnostics</summary>
         <div class="ioDisclosureBody">
           <div class="dmxRouteBuilder dmxPrimaryControls">
             <button
@@ -287,31 +287,31 @@ export function DmxOutputConfigPanel(props: DmxOutputConfigPanelProps) {
               disabled={!exactRoute() || props.output.enabled}
               aria-describedby="dmx-show-route-confirmation"
               onClick={() => void props.onEnableStagedShowArtNetLoopbackRoute()}
-            >Confirm and enable Art-Net loopback</button>
+            >Enable Art-Net loopback</button>
             <button
               data-io-control="dmx-send-dsf2026-artnet-acceptance-probe"
               class="danger"
               disabled={probeSendDisabled()}
               aria-describedby="dmx-dsf2026-artnet-acceptance-probe"
               onClick={() => void props.onSendDsf2026ArtNetAcceptanceProbe()}
-            >Send fixed red DSF2026 Art-Net probe once</button>
+            >Send fixed probe</button>
             <button
               data-io-control="dmx-acknowledge-dsf2026-artnet-acceptance-probe-in-doubt"
               class="danger"
               disabled={probeReconcileDisabled()}
               aria-describedby="dmx-dsf2026-artnet-acceptance-probe"
               onClick={() => void props.onAcknowledgeDsf2026ArtNetAcceptanceProbeInDoubt()}
-            >Reconcile DSF2026 probe InDoubt (no send)</button>
+            >Reconcile probe (no send)</button>
           </div>
 
           <div class="dmxRouteBuilder" data-io-usb-dmx-route>
-            <label for="show-usb-dmx-device">Machine-local USB-DMX device</label>
+            <label for="show-usb-dmx-device">USB-DMX device</label>
             <select
               id="show-usb-dmx-device"
               value={selectedSerialPort() ? serialPortKey(selectedSerialPort()!) : ""}
               onInput={(event) => setSelectedSerialPortKey(event.currentTarget.value)}
             >
-              <option value="">Select the exact current PnP device</option>
+              <option value="">Select device</option>
               {props.serialPorts.map((port) => (
                 <option
                   value={serialPortKey(port)}
@@ -334,18 +334,18 @@ export function DmxOutputConfigPanel(props: DmxOutputConfigPanelProps) {
                   void props.onConfirmSerialDmxMachineBinding(selected);
                 }
               }}
-            >Confirm this machine-local Open DMX binding</button>
+            >Confirm USB-DMX</button>
             <button
               data-io-control="dmx-enable-show-serial-dmx-safety-blackout-route"
               class="primary"
               disabled={!serialWorkerArmAdmissible() || !serialWorkerStatusKnown() || !bindingReady() || !props.safetyBlackoutEngaged || !artNetUnityMirrorEnabled()}
               onClick={() => void props.onEnableShowSerialDmxSafetyBlackoutRoute()}
-            >Arm Open DMX worker under S0</button>
+            >Arm USB-DMX under S0</button>
             <button
               data-io-control="dmx-stop-show-serial-dmx-safety-blackout-route"
               disabled={!serialWorkerActive() || !serialWorkerStatusKnown() || !props.safetyBlackoutEngaged}
               onClick={() => void props.onStopShowSerialDmxSafetyBlackoutRoute()}
-            >Stop Open DMX worker</button>
+            >Stop USB-DMX</button>
           </div>
 
           <RawUsbDmxIdentity
@@ -375,38 +375,25 @@ export function DmxOutputConfigPanel(props: DmxOutputConfigPanelProps) {
       </div>
 
       <details class="ioDisclosure dmxProtocolDetails" data-io-disclosure="dmx-protocol-details">
-        <summary>Protocol &amp; safety details</summary>
+        <summary>Route facts</summary>
         <div class="ioDisclosureBody">
-          <p id="dmx-show-route-confirmation" class="ioDisclosureDescription">
-            Same-PC only: completed DMX Universe 1 is emitted unchanged as ArtDmx wire Universe 0. DMX ch1 maps to payload[0]; unused ch500 is forced to 0.
-          </p>
-          <p id="dmx-dsf2026-artnet-acceptance-probe" class="ioDisclosureDescription">
-            One-shot fixed red 530-byte ArtDmx U0 proof only to 127.0.0.1:6454: payload[0] and payload[4] are 255; payload[499] remains 0. The authored route stays staged disabled. OS UDP acceptance only; receiver and physical output remain unverified.
-          </p>
-          <p class="ioDisclosureDescription" role="status">
-            {probeStatusReason()}
-          </p>
-          <p class="ioDisclosureDescription">
-            Reconcile is a separate no-send action after independent receiver and physical-output verification; it records the unobservable result as permanently consumed and never re-enables retry or another fixed probe.
-          </p>
+          <dl class="dmxProtocolFacts">
+            <dt>Art-Net</dt>
+            <dd id="dmx-show-route-confirmation">127.0.0.1:6454 · wire U0 · 512ch · 40–44fps</dd>
+            <dt>USB-DMX</dt>
+            <dd data-io-usb-dmx-artnet-mirror-state>{serialState()} · logical U0 · ≈32.5fps</dd>
+            <dt>Probe</dt>
+            <dd id="dmx-dsf2026-artnet-acceptance-probe" role="status">{probeStatusReason()}</dd>
+            <dt>Binding</dt>
+            <dd data-io-usb-dmx-binding-state>{bindingReady() ? "Confirmed" : "Required"}</dd>
+            <dt>Safety</dt>
+            <dd data-io-usb-dmx-safety-state>{props.safetyBlackoutEngaged ? "S0 engaged" : "S0 clear"}</dd>
+          </dl>
           {!exactRoute() && <p class="ioDisclosureDescription" role="alert">
-            The show route must remain Art-Net / 127.0.0.1:6454 / wire U0 with no serial interface. It is intentionally not configurable from this control.
+            Art-Net route mismatch · expected 127.0.0.1:6454 / wire U0.
           </p>}
-          <p class="ioDisclosureDescription">
-            Confirmation retains the native lease, safety-blackout, exact binding, sender-open, acknowledgement, and rollback fences. Binding cannot change while a worker or physical S0 transaction remains in flight. A faulted, joined worker may only accept an explicit replacement while S0 stays latched; selecting it sends nothing and does not clear the fault. It opens only while S0 is engaged and queues zero first; after the separately confirmed Release Blackout, the same worker mirrors the latest completed U0 frame alongside Art-Net. Re-engaging S0 preempts later live bytes with zero. The ≈32.5fps USB cadence is the current FT232R/COM3 rig default, not an Open DMX universal limit; USB does not promise physical delivery on every 44Hz engine tick. USB serial DMX is not a fallback route.
-          </p>
-          <p class="ioDisclosureDescription" role="status">
-            {props.serialDmxMachineBindingStatus?.detail ?? "USB-DMX machine-local selection is loading; no worker can start."}
-          </p>
-          <p class="ioDisclosureDescription" role="status">
-            {props.showSerialDmxSafetyBlackoutRouteStatus?.detail ?? "USB-DMX worker status is loading; no worker can start."}
-          </p>
-          <p class="ioDisclosureDescription" role="status" data-io-usb-dmx-artnet-mirror-state>
-            {props.showSerialDmxSafetyBlackoutRouteStatus?.artnetMirrorDetail
-              ?? "Art-Net mirror route state is loading; no USB-DMX worker action is enabled from unknown status."}
-          </p>
-          <p class="ioDisclosureDescription">
-            A generic FTDI VID/PID is not auto-selected and does not imply a protocol. This explicit operator selection is Open DMX only. Worker status distinguishes queue acceptance from the bounded physical zero transaction; neither is fixture or wire delivery. No one-shot USB probe is implemented in this tranche.
+          <p class="ioDisclosureDescription dmxLogHint">
+            Detailed diagnostics are written to the application log.
           </p>
         </div>
       </details>

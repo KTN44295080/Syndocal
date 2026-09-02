@@ -32,7 +32,7 @@ import { withMaterializedVerifiedExecutable } from "./verified-materialization.m
 
 export { withMaterializedVerifiedExecutable } from "./verified-materialization.mjs";
 
-export const expectedVersion = "1.2.0-alpha.64";
+export const expectedVersion = "1.2.0-alpha.65";
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const appRoot = resolve(scriptDir, "..");
 const workspaceRoot = resolve(appRoot, "..");
@@ -506,24 +506,24 @@ const currentReleaseBoundaryMarkers = Object.freeze([
   {
     path: "RELEASE_STATUS.md",
     markers: [
-      "## 2026-09-02 current alpha.64 fixture-count/UI checkpoint",
-      "Alpha.64 advances the product prerelease ordinal",
-      "fixture-family counts",
+      "## 2026-09-02 current alpha.65 DMX operator-copy checkpoint",
+      "Alpha.65 advances the product prerelease ordinal",
+      "Route facts` table",
     ],
   },
   {
     path: "qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md",
     markers: [
-      "## 2026-09-02 alpha.64 fixture-count/UI checkpoint",
-      "Alpha.64 advances the product prerelease ordinal",
-      "fixture-family counts",
+      "## 2026-09-02 alpha.65 DMX operator-copy checkpoint",
+      "Alpha.65 advances the product prerelease ordinal",
+      "compact Route facts table",
     ],
   },
   {
     path: "qa/SYNDOCAL_SHOW_COMPLETION_HANDOFF_2026-08-28.md",
     markers: [
-      "## 2026-09-02 alpha.64 fixture-count source checkpoint",
-      "Verified and bundled Patch section headers now count fixture",
+      "## 2026-09-02 alpha.65 DMX operator-copy source checkpoint",
+      "DMX route facts replace the long protocol",
       "native build",
     ],
   },
@@ -611,7 +611,7 @@ function assertCurrentReleaseDocumentation(readManifest, productVersion) {
   for (const { path, markers } of currentReleaseBoundaryMarkers) {
     const top = String(readManifest(path)).split(/\r?\n/u).slice(0, 45).join("\n");
     for (const marker of markers) {
-      const resolvedMarker = marker.replace("1.2.0-alpha.64", productVersion);
+      const resolvedMarker = marker.replace("1.2.0-alpha.65", productVersion);
       if (!top.includes(resolvedMarker)) {
         throw new Error(`${path} lacks its top ${productVersion} source-only marker: '${resolvedMarker}'.`);
       }

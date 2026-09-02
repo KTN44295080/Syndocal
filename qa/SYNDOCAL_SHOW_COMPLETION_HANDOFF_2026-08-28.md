@@ -4,6 +4,28 @@ Status date: 2026-09-02 JST
 
 This is the concise authoritative resume note for the final show-critical tranche. It supersedes chat-only status, but it does not supersede the detailed acceptance documents named below.
 
+## 2026-09-02 alpha.65 DMX operator-copy source checkpoint
+
+The Setup → I/O → DMX routine surface now keeps only the Show DMX action and
+logical route rows in view. DMX route facts replace the long protocol and
+safety prose; the compact table appears only when requested. Long
+protocol/safety explanations and raw diagnostic detail no longer occupy the
+operator surface and are recorded in application logs.
+The closed Diagnostics disclosure still exposes the explicit maintenance
+actions required by the existing acceptance harness, without changing their
+backend fences or fail-closed rules.
+
+Focused DMX contracts, output-control runtime checks, TypeScript, Node syntax,
+and scoped diff checks pass with first-party warnings `0`. The exact pinned
+Community MSVC `14.44.35207` no-bundle build passed in `3m23s`; the resulting
+`target/release/syndocal.exe` is Product/FileVersion `1.2.0-alpha.65`,
+`63,520,256` bytes, SHA-256
+`8068D4C80F2E8A9A5C29CFBB15D79858A14ECA47DF74954CC24D5383D3B1BE05`.
+PID `90464` supplied exactly one responsive, visible, maximized Syndocal
+window (`showCmd=3`). Physical USB-DMX, Art-Net/Unity, fixture,
+camera/MiraBox, Spout, and audio acceptance remain explicitly unverified
+external rows.
+
 ## 2026-09-02 alpha.64 fixture-count source checkpoint
 
 Alpha.64 advances the product prerelease ordinal for the fixture-pack count

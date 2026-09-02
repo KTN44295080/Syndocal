@@ -80,8 +80,14 @@ assert.match(panel, /<details class="ioDisclosure dmxProtocolDetails"[^>]*>/,
   "protocol and safety prose must use a disclosure");
 assert.doesNotMatch(panel, /<details class="ioDisclosure dmxProtocolDetails"[^>]*\bopen\b>/,
   "protocol and safety prose must default collapsed");
-assert.match(panel, /<summary>Protocol &amp; safety details<\/summary>/,
-  "the collapsed protocol disclosure needs an operator-facing label");
+assert.match(panel, /<summary>Route facts<\/summary>/,
+  "the collapsed route disclosure needs an operator-facing label");
+assert.match(panel, /<dl class="dmxProtocolFacts">/,
+  "route details must use a compact fact table rather than prose");
+assert.match(panel, /Detailed diagnostics are written to the application log\./,
+  "verbose diagnostics must be directed to the application log");
+assert.doesNotMatch(panel, /Same-PC only: completed DMX Universe 1|Confirmation retains the native lease|generic FTDI VID\/PID/,
+  "long protocol and safety explanations must not remain in the operator UI");
 assert.match(panel, /<strong>Show DMX<\/strong>\s*<span>USB-DMX \+ Art-Net mirror<\/span>/,
   "the default quick setup surface must use concise route copy");
 assert.doesNotMatch(panel.slice(0, protocolDetails), /Same-PC only: completed DMX Universe 1/,

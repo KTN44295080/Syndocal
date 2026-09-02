@@ -4,6 +4,25 @@ Date: 2026-08-19
 Branch at creation: `codex/syndocal-v1.0`
 Baseline before this document: `848d759846985cc3acf588356cfa3c996b4e2ef2`
 
+## 2026-09-02 alpha.65 DMX operator-copy checkpoint
+
+Alpha.65 advances the product prerelease ordinal for the DMX operator-copy
+cleanup. Setup → I/O → DMX now uses a compact Route facts table for Art-Net,
+USB-DMX, probe, binding, and S0 state instead of exposing long protocol and
+safety paragraphs. Diagnostics remain behind a closed disclosure and detailed
+failure context is written to the application log. Existing route, device
+identity, S0, lease, and probe fences are unchanged.
+
+The focused DMX show-setup and output-control contracts, TypeScript, Node
+syntax, and scoped diff checks pass with first-party warnings `0`. The exact
+pinned Community MSVC `14.44.35207` no-bundle build passed in `3m23s`; the
+resulting `target/release/syndocal.exe` is Product/FileVersion
+`1.2.0-alpha.65`, `63,520,256` bytes, SHA-256
+`8068D4C80F2E8A9A5C29CFBB15D79858A14ECA47DF74954CC24D5383D3B1BE05`.
+PID `90464` supplied exactly one responsive, visible, maximized Syndocal
+window (`showCmd=3`). Physical USB-DMX, Art-Net receiver, fixture,
+camera/MiraBox, Spout/Unity, and audio endpoint rows remain external gates.
+
 ## 2026-09-02 alpha.64 fixture-count/UI checkpoint
 
 Alpha.64 advances the product prerelease ordinal for the fixture-pack count

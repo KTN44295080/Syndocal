@@ -1,7 +1,28 @@
 # Syndocal historical v1.0 / current v1.2 alpha Release Status
 
 Updated: 2026-09-02
-Branch: `codex/syndocal-v1.2`; current product metadata is `1.2.0-alpha.64`.
+Branch: `codex/syndocal-v1.2`; current product metadata is `1.2.0-alpha.65`.
+
+## 2026-09-02 current alpha.65 DMX operator-copy checkpoint
+
+Alpha.65 advances the product prerelease ordinal for the operator-copy
+cleanup. The normal Setup → I/O → DMX surface keeps the Show DMX action and
+the two logical route rows visible. The formerly verbose protocol and safety
+paragraphs are now a short `Route facts` table; detailed diagnostics are
+directed to the application log. Maintenance controls remain behind the
+closed `Diagnostics` disclosure, and all existing exact-device, S0, lease, and
+one-shot probe fences are unchanged.
+
+Source validation and the pinned native build pass: the focused DMX contracts,
+TypeScript, and no-bundle build completed with first-party warnings `0` (only
+the existing Vite large-chunk advisory). The resulting
+`target/release/syndocal.exe` is Product/FileVersion `1.2.0-alpha.65`,
+`63,520,256` bytes, SHA-256
+`8068D4C80F2E8A9A5C29CFBB15D79858A14ECA47DF74954CC24D5383D3B1BE05`.
+PID `90464` supplied exactly one responsive, visible, maximized Syndocal
+window (`showCmd=3`). Physical USB-DMX, Art-Net receiver, fixture
+illumination, camera/MiraBox, Spout/Unity, and audible endpoint acceptance
+remain separate external gates.
 
 ## 2026-09-02 current alpha.64 fixture-count/UI checkpoint
 

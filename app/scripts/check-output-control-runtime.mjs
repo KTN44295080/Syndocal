@@ -1305,8 +1305,10 @@ assert.match(dmxOutputPanelSource, /output\.serial_port === ""/);
 assert.match(dmxOutputPanelSource, /output\.universe === 0/);
 assert.match(dmxOutputPanelSource, /data-io-control="dmx-enable-staged-show-artnet-loopback-route"/);
 assert.match(dmxOutputPanelSource, /data-io-usb-dmx-route/);
-assert.match(dmxOutputPanelSource, /Enttec Open DMX · machine local/);
-assert.match(dmxOutputPanelSource, /Worker status unavailable — S0 required/);
+assert.match(dmxOutputPanelSource, /<strong>Enttec Open DMX<\/strong>/,
+  "the routine route list must use the concise USB-DMX label");
+assert.match(dmxOutputPanelSource, /Worker unavailable · S0 required/,
+  "unknown USB-DMX worker state must remain visible without a prose block");
 assert.match(
   dmxOutputPanelSource,
   /const hasExactMachineLocalOpenDmxIdentity[\s\S]*port\.usb_vid > 0[\s\S]*port\.usb_pid > 0[\s\S]*serial_number[\s\S]*windows_device_instance_id/,
@@ -1332,28 +1334,22 @@ assert.match(
   /disabled=\{!serialWorkerActive\(\) \|\| !serialWorkerStatusKnown\(\) \|\| !props\.safetyBlackoutEngaged\}/,
   "USB-DMX stop must not claim a stale worker can be controlled after status loss",
 );
-assert.match(
+assert.match(dmxOutputPanelSource, /<dl class="dmxProtocolFacts">[\s\S]*wire U0 · 512ch · 40–44fps[\s\S]*logical U0 · ≈32\.5fps/,
+  "the USB-DMX UI must keep the concise Art-Net and USB route facts distinct");
+assert.match(dmxOutputPanelSource, /Detailed diagnostics are written to the application log\./,
+  "verbose USB-DMX diagnostics must be directed to the application log");
+assert.doesNotMatch(
   dmxOutputPanelSource,
-  /generic FTDI VID\/PID is not auto-selected and does not imply a protocol/,
-  "generic FTDI identities must require an explicit Open DMX confirmation",
-);
-assert.match(
-  dmxOutputPanelSource,
-  /queue acceptance from the bounded physical zero transaction/,
-  "the USB-DMX UI must distinguish accepted work from the physical zero receipt",
-);
-assert.match(
-  dmxOutputPanelSource,
-  /≈32\.5fps exact-rig USB cadence[\s\S]*latest-frame mirror[\s\S]*not an Open DMX universal limit[\s\S]*does not promise physical delivery on every 44Hz engine tick/,
-  "the USB-DMX UI must keep the exact-rig cadence distinct from Art-Net's 40-44Hz route",
+  /generic FTDI VID\/PID is not auto-selected|queue acceptance from the bounded physical zero transaction|latest-frame mirror[\s\S]*does not promise physical delivery/,
+  "the routine UI must not expose implementation prose for USB-DMX internals",
 );
 assert.match(dmxOutputPanelSource, /data-io-control="dmx-send-dsf2026-artnet-acceptance-probe"/);
 assert.match(dmxOutputPanelSource, /probeStatus\(\)\?\.status !== "available"/,
   "a successful or unknown durable one-shot status must keep the probe disabled");
 assert.match(dmxOutputPanelSource, /probeStatus\(\)\?\.status !== "in_doubt"/,
   "only a durable InDoubt outcome may enable the no-send reconciliation action");
-assert.match(dmxOutputPanelSource, /permanently consumed[\s\S]*second probe is prohibited/,
-  "the fixed probe UI must disclose that success never re-enables a second send");
+assert.match(dmxOutputPanelSource, /Consumed · no repeat/,
+  "the fixed probe UI must show the terminal no-repeat state concisely");
 assert.match(
   dmxOutputPanelSource,
   /disabled=\{!exactRoute\(\) \|\| props\.output\.enabled\}/,
