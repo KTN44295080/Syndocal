@@ -93,6 +93,15 @@ The harness still reports `native_hardware_claim=false`; this is a current
 HEAD/window topology proof only and does not add pixel, 60-fps, MiraBox,
 Unity/Spout, audible, DJ-Link, pedal, or physical fixture claims.
 
+After the receiver/pixel spot check was recorded, the same strict three-sample
+reader was rerun against clean HEAD `1396352a777f8be28cb443c33b4f3c7d7fc1393c`
+with the same exact alpha.60 artifact and stable monitor identities. It
+returned `accepted=true`; evidence is retained at
+`target\\qa\\alpha60-current-head-1396352-df05d7ee018f4e598d98d2e4aed4aeda`.
+The editor was maximized and exactly the two app-owned output windows (IDs 3
+and 4) remained visible/responsive. This refresh is still topology/window
+evidence only and does not change the native-hardware claim boundary.
+
 ## 2026-09-02 alpha.60 post-build Open-DMX barrier and restart checkpoint
 
 The final source adjustment closes a late-cleanup race in the bounded Open-DMX
