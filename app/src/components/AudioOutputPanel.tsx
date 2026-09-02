@@ -337,7 +337,11 @@ export function AudioOutputPanel(props: AudioOutputPanelProps) {
       </div>
       </Show>
 
-      <details class="audioOutputDisclosure" data-audio-output-disclosure="configuration" open>
+      <details
+        class="audioOutputDisclosure"
+        data-audio-output-disclosure="configuration"
+        open={props.view.backend === "normal-wasapi"}
+      >
         <summary>Output configuration</summary>
         <div class="audioOutputDisclosureBody">
           <div

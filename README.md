@@ -29,13 +29,15 @@ Current product metadata is `1.2.0-alpha.68` on branch
 `codex/syndocal-v1.2`. Alpha.68 keeps the routine Setup → I/O → DMX surface
 compact, closes the blackout-off recovery race by using the validated active-Both
 Enable receipt, and retains the stale ASIO setup response repair after an
-operator returns to Normal. Split or foreign ownership remains fail-closed. The
-exact pinned Community MSVC `14.44.35207` no-bundle build passed in `3m34s`
+operator returns to Normal. ASIO's advanced channel/rate configuration now
+starts collapsed while the Normal WASAPI route remains immediately visible.
+Split or foreign ownership remains fail-closed. The exact pinned Community MSVC
+`14.44.35207` no-bundle build passed in `3m20s`
 with first-party warnings `0` (only the existing Vite large-chunk advisory).
 The resulting `target/release/syndocal.exe` is Product/FileVersion
 `1.2.0-alpha.68`, `63,520,256` bytes, SHA-256
-`51F3A4AEF8E7E5EC992EEC6997929277FE6D12B40CF8FF2F8ABFC8A33E8AC97D`.
-PID `59636` supplied one responsive, visible, maximized Syndocal window
+`0B30AC14FD84F28A628522024AD573ADECE5DD1210FC84A80971F3A3F24FA08F`.
+PID `74264` supplied one responsive, visible, maximized Syndocal window
 (`showCmd=3`). The Patch source browser counts
 fixture families in section headers (with Mode counts retained per fixture),
 and its five-viewport contract follows the merged Setup → Lighting → Patch

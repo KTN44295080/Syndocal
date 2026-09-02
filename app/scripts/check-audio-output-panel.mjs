@@ -76,6 +76,7 @@ const assertions = [
   [/canTest: boolean;|canSolo: boolean;|livePlaybackActive: boolean;|testMode: AudioOutputTest|soloMode: AudioOutputSoloMode/u, panel, "debug-only state must not be part of the normal audio panel props", true],
   [/const testDisabled|const soloDisabled|testLabel\(|testKinds/u, panel, "debug-only UI helpers must not remain in the normal audio panel", true],
   [/<details[\s\S]*?Output configuration[\s\S]*?<\/details>/u, panel, "configuration must be a compact disclosure group"],
+  [/data-audio-output-disclosure="configuration"[\s\S]*?open=\{props\.view\.backend === "normal-wasapi"\}/u, panel, "ASIO advanced configuration must start closed while Normal WASAPI keeps its primary route visible"],
   [/<details[\s\S]*?preflight[\s\S]*?<\/details>/u, panel, "preflight/test disclosure must not be present in the normal audio panel", true],
   [/<AudioOutputPanel[\s\S]*?canTest=|<AudioOutputPanel[\s\S]*?onTest=|<AudioOutputPanel[\s\S]*?showAdvancedDiagnostics=\{true\}/u, app, "production AudioOutputPanel must not wire debug operations into the normal UI", true],
   [/import "\.\/AudioOutputPanel\.css";/u, panel, "panel must import only its local CSS surface"],

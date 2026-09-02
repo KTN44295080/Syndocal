@@ -15,12 +15,14 @@ Active split, foreign, ambiguous, or otherwise unproven ownership remains
 fail-closed.
 
 The focused output-control contract now covers a stale post-Enable lease read
-and proves that no release is sent without the Enable receipt proof. The exact
-pinned Community MSVC `14.44.35207` no-bundle native build passed in `3m34s`;
+and proves that no release is sent without the Enable receipt proof. ASIO
+advanced configuration starts closed while Normal WASAPI keeps its primary
+route visible. The exact pinned Community MSVC
+`14.44.35207` no-bundle native build passed in `3m20s`;
 the resulting `target/release/syndocal.exe` is Product/FileVersion
 `1.2.0-alpha.68`, `63,520,256` bytes, SHA-256
-`51F3A4AEF8E7E5EC992EEC6997929277FE6D12B40CF8FF2F8ABFC8A33E8AC97D`.
-Exactly one checkout-owned Syndocal process (PID `9716`) is responsive,
+`0B30AC14FD84F28A628522024AD573ADECE5DD1210FC84A80971F3A3F24FA08F`.
+Exactly one checkout-owned Syndocal process (PID `74264`) is responsive,
 visible, and maximized (`showCmd=3`). First-party warnings are `0` (only the
 existing Vite large-chunk advisory). Physical DMX/Art-Net, fixture, Unity,
 camera, and audio acceptance remain separate external gates.
