@@ -27,9 +27,23 @@ completion is accepted here. The oversized audio-runtime extraction from
 `app/src-tauri/src/main.rs` is deferred until after show acceptance because a
 pre-show ownership/lifecycle refactor is a risk.
 
+## Current 2026-09-02 default-ASIO decision
+
+The normal Windows application now includes the ASIO loader and command surface
+in its default feature set (`libav`, `spout`, `asio`). This makes ASIO a normal
+selectable backend in Setup > Audio. The SDK-derived
+`syndocal_asio_bridge.dll` is still not bundled: `qa/ASIO_SDK_PIN.json` keeps
+`distribution_approved: false`, so a missing bridge is shown as a visible
+Locked state and never falls back to WASAPI or an arbitrary driver. The
+separately built local bridge remains a same-host QA payload only. This changes
+the application availability boundary, not the licensing or physical-device
+acceptance boundary below.
+
 ## Release boundary
 
-Syndocal's default MIT build remains on the validated WASAPI shared input path. ASIO must be a separately built Windows feature and must not enter the normal installer until one of these distribution paths is selected and recorded:
+Syndocal's default MIT build keeps the validated WASAPI shared input path and
+now also carries the ASIO loader/commands. The SDK-derived bridge must not enter
+the normal installer until one of these distribution paths is selected and recorded:
 
 1. GPLv3 distribution, including the corresponding-source and notice obligations for the ASIO-linked artifact.
 2. A signed Steinberg proprietary ASIO SDK agreement covering the distributed artifact.

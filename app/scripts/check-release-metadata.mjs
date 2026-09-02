@@ -191,8 +191,8 @@ export class MissingStagedWindowsRuntimeError extends Error {
 
 function assertDefaultBundleDoesNotEnableNdi(readManifest) {
   const cargoManifest = readManifest("app/src-tauri/Cargo.toml");
-  if (!/^\s*default\s*=\s*\[\s*"libav"\s*,\s*"spout"\s*\]\s*$/mu.test(cargoManifest)) {
-    throw new Error("Default Tauri feature selection must remain exactly libav + spout; NDI-enabled bundling needs a separately licensed overlay.");
+  if (!/^\s*default\s*=\s*\[\s*"libav"\s*,\s*"spout"\s*,\s*"asio"\s*\]\s*$/mu.test(cargoManifest)) {
+    throw new Error("Default Tauri feature selection must remain exactly libav + spout + asio; NDI-enabled bundling needs a separately licensed overlay.");
   }
   const packageManifest = readManifest("app/package.json");
   const workflow = readManifest(".github/workflows/cross-platform.yml");

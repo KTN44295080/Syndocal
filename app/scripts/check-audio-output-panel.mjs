@@ -18,7 +18,7 @@ const assertions = [
   [
     /export type AudioOutputBackend = "normal-wasapi" \| "show-asio";/u,
     panel,
-    "backend type must distinguish Normal WASAPI and Show ASIO",
+  "backend type must distinguish Normal WASAPI and ASIO",
   ],
   [
     /export type AudioOutputState = "Ready" \| "Locked" \| "Active" \| "Fault";/u,
@@ -51,7 +51,7 @@ const assertions = [
   [/classList=\{\{ "audioOutputFieldGrid--normal": props\.view\.backend === "normal-wasapi" \}\}/u, panel, "Normal WASAPI configuration must collapse to one useful field"],
   [/<Show when=\{props\.view\.backend === "normal-wasapi"\}>[\s\S]*?data-audio-output-normal-notice[\s\S]*?<TimelineCueAudioRoutingPanel/u, panel, "Normal WASAPI must expose authoritative Timeline WDM routing in Setup Audio"],
   [/<Show when=\{props\.view\.backend === "show-asio"\}>\s*<details class="audioOutputDisclosure" data-audio-output-disclosure="preflight"/u, panel, "ASIO preflight controls must stay hidden in Normal WASAPI mode"],
-  [/Show ASIO/u, panel, "Show ASIO label must be visible"],
+  [/\{ value: "show-asio", label: "ASIO" \}/u, panel, "ASIO label must be visible"],
   [/aria-label="Audio output backend"/u, panel, "backend selector needs an accessible name"],
   [/aria-label="Audio output driver"/u, panel, "driver selector needs an accessible name"],
   [/aria-label="Audio output sample rate"/u, panel, "sample-rate selector needs an accessible name"],

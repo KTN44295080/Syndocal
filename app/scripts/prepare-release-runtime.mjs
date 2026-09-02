@@ -139,7 +139,7 @@ export function assertNoNdiEnabledBundling(environment = process.env) {
   }
 }
 
-const approvedDefaultFeatureTokens = Object.freeze(new Set(["libav", "spout"]));
+const approvedDefaultFeatureTokens = Object.freeze(new Set(["libav", "spout", "asio"]));
 const knownCargoSubcommands = Object.freeze(new Set([
   "add",
   "bench",
@@ -422,7 +422,7 @@ function ndiFeatureEscapeErrorMessage(label, path, failure) {
       + path
       + "): '"
       + failure.snippet
-      + "'. Default Tauri features must remain exactly libav + spout; a separately licensed NDI runtime overlay and its independent artifact proof are required.";
+      + "'. Default Tauri features must remain exactly libav + spout + asio; a separately licensed NDI runtime overlay and its independent artifact proof are required.";
   }
   if (failure.kind === "all-features-forbidden") {
     return "--all-features bundling is fail-closed in the "
@@ -431,7 +431,7 @@ function ndiFeatureEscapeErrorMessage(label, path, failure) {
       + path
       + "): '"
       + failure.snippet
-      + "'. Selecting every feature implicitly enables NDI; default Tauri features must remain exactly libav + spout and only the approved literal set may be selected.";
+      + "'. Selecting every feature implicitly enables NDI; default Tauri features must remain exactly libav + spout + asio and only the approved literal set may be selected.";
   }
   return "Unresolved NDI-feature indirection is fail-closed in the "
     + label
@@ -442,7 +442,7 @@ function ndiFeatureEscapeErrorMessage(label, path, failure) {
     + "' ("
     + failure.kind
     + (failure.detail ? ": " + failure.detail : "")
-    + "). Default Tauri features must remain exactly libav + spout; every packaging feature selection must resolve to the approved literal set.";
+    + "). Default Tauri features must remain exactly libav + spout + asio; every packaging feature selection must resolve to the approved literal set.";
 }
 
 function assertSurfaceFreeOfNdiFeatureEscape(readManifest, path, label) {
@@ -755,7 +755,7 @@ function benignSurfaceFixture(path) {
     case "app/src-tauri/tauri.updater.conf.json":
       return "{\n  \"plugins\": {\n    \"updater\": {\n      \"pubkey\": \"\",\n      \"endpoints\": []\n    }\n  }\n}";
     case "app/src-tauri/Cargo.toml":
-      return "[features]\ndefault = [\"libav\", \"spout\"]\n";
+      return "[features]\ndefault = [\"libav\", \"spout\", \"asio\"]\n";
     case "Cargo.toml":
       return "[workspace]\nresolver = \"2\"\n[workspace.dependencies]\ntauri = { version = \"=2.5.1\", features = [\"unstable\"] }\ngrafton-ndi = { version = \"=0.11.0\", default-features = false }\n";
     default:

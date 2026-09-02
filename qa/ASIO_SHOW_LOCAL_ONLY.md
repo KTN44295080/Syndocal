@@ -4,9 +4,12 @@
 
 This path exists only to run the imminent show on the Windows workstation that
 builds it. It is a separate, unbundled, same-host artifact. It does not change
-or relax the normal MIT/WASAPI installer, updater, or release artifact. The
-normal Tauri default features remain exactly `libav` and `spout`, and the normal
-ASIO packaging rejection remains authoritative.
+or relax the normal installer, updater, or release artifact. As of the
+2026-09-02 ASIO decision, the normal Tauri application includes the ASIO
+loader/commands in its default feature set (`libav`, `spout`, `asio`), while the
+SDK-derived bridge DLL remains an explicit, unbundled runtime payload because
+`distribution_approved` is still false. The normal packaging rejection for the
+bridge remains authoritative.
 
 The local artifact is always `distributionApproved: false`. It must not be
 installed, signed, archived, copied to another machine or checkout path,
@@ -113,8 +116,9 @@ The actual route requires all of the following, with no guessing:
 - the pinned ASIO SDK provenance and one exact bridge DLL with maximum ABI v3,
   exact nine v2 plus nine v3 exports, AMD64 PE32+ DLL identity, and unchanged
   build hash;
-- application integration feature `show-asio = ["asio"]`, while
-  `default = ["libav", "spout"]` remains unchanged.
+- application integration feature `show-asio = ["asio"]`, while the normal
+  `default = ["libav", "spout", "asio"]` includes only the loader/commands;
+  the bridge DLL remains unbundled and local-only.
 
 ## Historical alpha.12 build evidence (legacy schema v1)
 

@@ -4,6 +4,24 @@ Status date: 2026-09-02 JST
 
 This is the concise authoritative resume note for the final show-critical tranche. It supersedes chat-only status, but it does not supersede the detailed acceptance documents named below.
 
+## 2026-09-02 normal ASIO availability checkpoint (native rebuild pending)
+
+The normal Windows application now includes the ASIO loader and command surface
+in its default feature set: `libav`, `spout`, and `asio`. Setup → I/O → Audio
+therefore exposes a normal `ASIO` backend alongside Normal WASAPI; selecting it
+still requires an explicit driver, sample rate, buffer, channel routing, and
+Revalidate/Start sequence. No driver is selected automatically. The UI now
+labels the backend simply `ASIO`, and a missing optional bridge has an explicit
+Return-to-Normal recovery path instead of leaving the operator trapped in a
+Locked view.
+
+The SDK-derived `syndocal_asio_bridge.dll` remains an explicit same-host QA
+payload only (`qa/ASIO_SDK_PIN.json` keeps `distribution_approved: false`) and
+is not part of the approved normal installer/updater payload. Source checkers,
+TypeScript, fixed-linker Cargo check/test, and the release contract chain pass;
+the final native no-bundle rebuild and executable/runtime evidence for this
+checkpoint are recorded in the next section after the pushed source commit.
+
 ## 2026-09-02 alpha.60 native/managed-output checkpoint
 
 Alpha.60 is the current native candidate, based on upstream-equal parent

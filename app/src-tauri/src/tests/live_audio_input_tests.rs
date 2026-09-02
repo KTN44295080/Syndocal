@@ -654,7 +654,7 @@ mod live_audio_input_tests {
         }
         assert_eq!(backends[1].id, "asio");
         assert!(backends[1].requires_explicit_device);
-        assert_eq!(backends[1].distribution, "separate_artifact");
+        assert_eq!(backends[1].distribution, "default_loader_optional_bridge");
         #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
         let expected_asio_built = true;
         #[cfg(not(all(target_os = "windows", target_arch = "x86_64", feature = "asio")))]

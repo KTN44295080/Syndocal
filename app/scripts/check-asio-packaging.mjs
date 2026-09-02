@@ -283,7 +283,7 @@ assertions += 1;
 
 rejectsBoundary(
   (mutations) => {
-    const cargo = sourceMap.get("app/src-tauri/Cargo.toml").replace('default = ["libav", "spout"]', 'default = ["libav", "spout", "ndi"]');
+    const cargo = sourceMap.get("app/src-tauri/Cargo.toml").replace('default = ["libav", "spout", "asio"]', 'default = ["libav", "spout", "ndi"]');
     mutations.set("app/src-tauri/Cargo.toml", cargo);
   },
   /Default Tauri feature selection/,

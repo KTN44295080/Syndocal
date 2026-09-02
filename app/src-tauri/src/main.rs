@@ -43290,7 +43290,7 @@ fn live_audio_input_backends() -> Vec<LiveAudioInputBackendSummary> {
             availability_detail: asio.detail,
             built: asio.built,
             requires_explicit_device: true,
-            distribution: "separate_artifact".to_string(),
+            distribution: "default_loader_optional_bridge".to_string(),
         },
     ]
 }

@@ -132,7 +132,7 @@ export interface AudioOutputPanelProps {
 
 export const AUDIO_OUTPUT_BACKEND_OPTIONS: readonly AudioOutputBackendOption[] = [
   { value: "normal-wasapi", label: "Normal WASAPI" },
-  { value: "show-asio", label: "Show ASIO" },
+  { value: "show-asio", label: "ASIO" },
 ];
 
 const channelOptionLabel = (option: AudioOutputChannelOption): string =>

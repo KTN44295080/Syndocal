@@ -149,8 +149,8 @@ export function validateShowAsioFeatureContract(cargoText, requestedFeatures = s
   }
   const section = featureSection(cargoText);
   const defaults = parseFeatureArray(section, "default", "Tauri features");
-  if (JSON.stringify(defaults) !== JSON.stringify(["libav", "spout"])) {
-    throw new Error("Normal MIT/WASAPI default features must remain exactly libav + spout.");
+  if (JSON.stringify(defaults) !== JSON.stringify(["libav", "spout", "asio"])) {
+    throw new Error("Normal default features must remain exactly libav + spout + asio; the bridge DLL remains a separate explicit payload.");
   }
   if (!/^show-asio\s*=/mu.test(section)) {
     throw new ShowAsioBlockedError(
@@ -499,7 +499,7 @@ async function runSelfTest() {
   for (const args of [["--features", "ndi"], ["--plan", "extra"], ["--bundle"], ["--target-dir", "elsewhere"]]) {
     rejects(() => parseBuildMode(args), /overrides are forbidden|Usage/, "extra/override arguments fail closed: " + args.join(" "));
   }
-  const baseCargo = '[features]\ndefault = ["libav", "spout"]\nasio = ["dep:libloading"]\nshow-asio = ["asio"]\nlibav = []\nspout = []\nndi = []\n\n[dependencies]\n';
+  const baseCargo = '[features]\ndefault = ["libav", "spout", "asio"]\nasio = ["dep:libloading"]\nshow-asio = ["asio"]\nlibav = []\nspout = []\nndi = []\n\n[dependencies]\n';
   pass(JSON.stringify(validateShowAsioFeatureContract(baseCargo)) === JSON.stringify(showAsioFeatures), "exact feature contract is accepted");
   rejects(
     () => validateShowAsioFeatureContract(baseCargo.replace('show-asio = ["asio"]\n', "")),
@@ -507,7 +507,7 @@ async function runSelfTest() {
     "missing app integration produces typed BLOCKED before Cargo",
   );
   rejects(() => validateShowAsioFeatureContract(baseCargo, [...showAsioFeatures, "ndi"]), /feature union/, "extra requested feature is rejected");
-  rejects(() => validateShowAsioFeatureContract(baseCargo.replace('default = ["libav", "spout"]', 'default = ["libav", "spout", "show-asio"]')), /Normal MIT\/WASAPI/, "normal default feature contamination is rejected");
+  rejects(() => validateShowAsioFeatureContract(baseCargo.replace('default = ["libav", "spout", "asio"]', 'default = ["libav", "spout", "show-asio"]')), /Normal default features/, "normal default feature drift is rejected");
   rejects(() => validateShowAsioFeatureContract(baseCargo.replace('show-asio = ["asio"]', 'show-asio = ["asio", "legacy"]')), /fallback aliases/, "legacy/fallback show feature is rejected");
   const cleanGit = { branch: "beta", head: "a".repeat(40), upstream: "a".repeat(40), status: "" };
   pass(validateGitState(cleanGit).head === cleanGit.head, "clean pushed Git state is accepted");

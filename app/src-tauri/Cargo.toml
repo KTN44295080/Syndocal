@@ -5,7 +5,12 @@ edition.workspace = true
 license.workspace = true
 
 [features]
-default = ["libav", "spout"]
+# The normal Windows application includes the ASIO loader/commands.  The
+# separately licensed bridge DLL remains an explicit runtime payload; when it
+# is absent the UI fails closed instead of silently falling back or guessing a
+# device.  This makes ASIO a normal selectable backend without bundling the
+# SDK-derived bridge into the approved default package.
+default = ["libav", "spout", "asio"]
 asio = ["dep:libloading"]
 show-asio = ["asio"]
 libav = ["video/libav"]

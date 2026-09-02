@@ -176,7 +176,9 @@ host (for example symlink creation without privilege) are reported as explicit
 EACCES during fixture creation is never treated as a pass.
 
 NDI remains excluded from normal packaging. The sanctioned default feature set
-is exactly `libav + spout`. Detection is layered and repository-owned: (1) the
+is exactly `libav + spout + asio`; `asio` is the loader/command surface and the
+SDK-derived bridge remains unbundled until its distribution gate is approved.
+Detection is layered and repository-owned: (1) the
 four explicit feature-signal environment variables reject any NDI value;
 (2) any other NDI-named environment variable is rejected as an unknown bypass,
 except the reviewed SDK-path allowlist `WINDIR`, `NDI_SDK_DIR`, and
