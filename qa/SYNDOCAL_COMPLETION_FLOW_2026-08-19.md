@@ -51,6 +51,12 @@ installer/updater inspection remain open. The next safe action is one bounded
 operator/native acceptance pass; do not infer those rows from source, process,
 or device-presence evidence.
 
+The StandardRelease three-display observation harness is now pinned to the
+alpha.60 artifact/source identity and its deterministic seam suite passes
+`96/0`. It is not a signal or pixel test: it remains read-only except for its
+bounded editor-maximize seam and needs app-owned loopback CDP output
+observation and explicit monitor identities for a real acceptance run.
+
 The exact full-feature suite completed with `1415 passed / 1 failed / 14
 ignored`; the one failure is an operator-owned local `DSF2026.dvc` whose
 `4chPar` references an unavailable `Dimmer` attribute. This remains a visible,

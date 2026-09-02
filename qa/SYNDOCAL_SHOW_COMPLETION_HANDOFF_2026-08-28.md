@@ -57,6 +57,12 @@ Follow, and read the selected PROGRAM/CUE endpoint. MiraBox live content,
 Unity Art-Net/Spout, DJ-Link/pedal ACKs, show-ASIO physical routing, and
 installer/updater inspection remain explicitly unverified.
 
+The StandardRelease three-display observation harness is pinned to the same
+alpha.60 artifact/source identity; its deterministic seam suite passes `96/0`.
+It does not create outputs or claim signal/pixel success and cannot perform a
+real display acceptance until the app-owned loopback CDP output observation
+and three explicit monitor identities are available.
+
 Source gates now recorded: full-feature managed `28/28`, no-default managed
 `28/28`, control-plane inventory `28/28`, TypeScript, release metadata, and
 alpha54/alpha55 derivation checks all pass. The full Rust suite is

@@ -60,6 +60,13 @@ MiraBox frames, Unity Art-Net/Spout, DJ-Link/pedal ACKs, show-ASIO routing,
 and installer/updater inspection remain open external/runtime rows. Do not
 promote the process/window or device-enumeration evidence into those claims.
 
+The current three-display StandardRelease observation harness now pins this
+alpha.60 artifact and source commit; its deterministic seam suite passes
+`96/0`. It remains observation-only (apart from the explicitly bounded editor
+maximize operation) and requires the app-owned loopback CDP output observation
+plus three explicit monitor identities before any display acceptance can be
+reported.
+
 Verification after the managed-output fix: full-feature managed tests `28/28`,
 no-default managed tests `28/28`, control-plane inventory tests `28/28`,
 TypeScript and `check:release` pass, and both alpha54/alpha55 derivation
