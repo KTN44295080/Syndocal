@@ -77,6 +77,12 @@ two Display outputs. The harness deliberately reports
 content. Those remain separate external acceptance rows. The current process
 is left with both Display windows open and the USB-DMX worker in safe S0.
 
+A subsequent read-only strict sample after the documentation checkpoint also
+accepted the same topology with current clean HEAD
+`a7e3d249936ea714487dd1509c79ae6c0c819e4b`, exact artifact hash/size/version,
+PID `68032`, maximized editor, and the two app-owned output HWNDs. No output
+window was replaced or duplicated.
+
 ## 2026-09-02 alpha.60 post-build Open-DMX barrier and restart checkpoint
 
 The final source adjustment closes a late-cleanup race in the bounded Open-DMX
