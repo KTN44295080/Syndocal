@@ -1,7 +1,26 @@
 # Syndocal historical v1.0 / current v1.2 alpha Release Status
 
 Updated: 2026-09-02
-Branch: `codex/syndocal-v1.2`; current product metadata is `1.2.0-alpha.61`.
+Branch: `codex/syndocal-v1.2`; current product metadata is `1.2.0-alpha.62`.
+
+## 2026-09-02 current alpha.62 camera 4K/60 source candidate
+
+Alpha.62 is the next prerelease ordinal after the pushed alpha.61 UI/runtime
+checkpoint. The source base is upstream-equal parent
+`4d8fb69fb67169bf1032c45260355b87aa219476`. Its DirectShow catalog admits exact device-advertised profiles up
+to `4096x2160` at `60 fps`; `4K/120` remains fail-closed because the current
+latest-frame RGBA handoff is outside the high-resolution envelope. FHD/720p
+120fps remains selectable only when the camera advertises that exact profile.
+The one-frame endpoint probe is unchanged and output presentation remains
+capped at `60 Hz`. The exact pinned Community MSVC `14.44.35207` no-bundle
+build passed in `2m48s` with first-party warnings `0` (only the existing Vite
+large-chunk advisory). The resulting `target/release/syndocal.exe` is
+Product/FileVersion `1.2.0-alpha.62`, `63,520,256` bytes, SHA-256
+`8CD2E0C8B950022EECAFC89E8830F9B6734FB876CB4D70EFC1191EE25011ED81`.
+The exact executable was then launched from this checkout as PID `82876`;
+there is exactly one matching `Syndocal` process, responsive and visible with
+a maximized main window (`showCmd=3`). USB-DMX, camera/MiraBox, Spout/Unity,
+and physical display pixels remain unverified.
 
 ## 2026-09-02 current alpha.61 managed-output source candidate
 

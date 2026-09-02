@@ -98,12 +98,28 @@ assert.equal(camera.cameraProbeAllowsAdd("File", "", undefined, staleState), tru
 
 const panel = await read("src/components/VideoSourceCreatePanel.tsx");
 const picker = await read("src/components/VideoCameraProfilePicker.tsx");
+const nativeCatalog = await read("src-tauri/src/capture_catalog.rs");
 const control = await read("src/components/VideoControlPanel.tsx");
 const invokeTuple = await read("src/tauriInvokeCommands.ts");
 const localization = await read("src/uiLocalization.ts");
 const manifest = JSON.parse(await read("src/tauri-invoke-manifest.json"));
 
 assert.match(panel, /VideoCameraProfilePicker/);
+assert.match(
+  nativeCatalog,
+  /const MAX_HIGH_RESOLUTION_FRAME_RATE: FrameRate = FrameRate \{[\s\S]*?numerator: 60,/,
+  "4K/high-resolution camera profiles must admit up to 60fps",
+);
+assert.match(
+  nativeCatalog,
+  /width: 4096,[\s\S]*?height: 2160,[\s\S]*?frame_rate_numerator: 60,[\s\S]*?\.is_ok\(\)\);/,
+  "native camera bounds must keep a deterministic 4K60 acceptance proof",
+);
+assert.match(
+  nativeCatalog,
+  /width: 4096,[\s\S]*?height: 2160,[\s\S]*?frame_rate_numerator: 120,[\s\S]*?\.is_err\(\)\);/,
+  "native camera bounds must fail closed for 4K120",
+);
 assert.match(panel, /disabled=\{props\.sourceKind === "Camera" && !cameraAddAllowed\(\)\}/);
 assert.match(picker, /Refresh cameras/);
 assert.match(picker, /data-video-camera-device/);

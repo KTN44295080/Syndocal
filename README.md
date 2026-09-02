@@ -2,7 +2,7 @@
 
 Syndocal は、DMX照明とVJ映像を同じタイムライン、キュー、BPMクロック、エフェクトソースで駆動するデスクトップ制御ソフトウェアです。
 
-- 製品名: **Syndocal 1.2.0-alpha.61**
+- 製品名: **Syndocal 1.2.0-alpha.62**
 - 開発: **Seraf()のKTN**
 - プロジェクト: **`.sdc`** (可読JSON)
 - Tier 1: Windows 10+ / macOS 12+
@@ -25,15 +25,29 @@ See the [current output acceptance record](qa/DSF2026_SAME_PC_OUTPUT_ACCEPTANCE_
 for execution steps and unverified physical/lease evidence; this boundary is
 not a hardware acceptance claim.
 
-Current product metadata is `1.2.0-alpha.61` on branch
+Current product metadata is `1.2.0-alpha.62` on branch
 `codex/syndocal-v1.2`. Alpha.61 keeps the alpha.59 DMX/video performance work
 and repairs the post-confirmation authority boundary for two short operations:
 managed blackout release and reopening an existing Display window. Only the
 exact manager-owned Both lease is re-projected to the private serialized
 authorization; foreign, faulted, wrong-resource, wrong-project, and unrelated
 routes remain fail-closed, and Add Display keeps its separate two-phase path.
-Native and physical acceptance for alpha.61 remains pending until this source
-checkpoint is committed and built.
+The exact pinned Community MSVC `14.44.35207` no-bundle build for alpha.62
+passed in `2m48s` with first-party warnings `0` (only the existing Vite
+large-chunk advisory). The resulting executable is
+`target/release/syndocal.exe`, `63,520,256` bytes, SHA-256
+`8CD2E0C8B950022EECAFC89E8830F9B6734FB876CB4D70EFC1191EE25011ED81`.
+This is native build evidence only; physical USB-DMX, camera/MiraBox,
+Spout/Unity, and pixel-output acceptance remain separate gates.
+The exact executable was launched from this checkout as PID `82876`; one
+responsive, visible, maximized `Syndocal` main window was verified.
+
+Alpha.62 broadens the explicit DirectShow camera admission envelope from
+4K30 to 4K60. The catalog still rejects 4K120 because the current latest-frame
+RGBA handoff can approach `1.98 GiB/s` of copy traffic at 60 Hz, while
+FHD/720p profiles may use a device-advertised 120 fps capture mode. Output
+presentation remains capped at 60 Hz, and no sustained 4K or physical camera
+acceptance is inferred without the camera hardware gate.
 
 Alpha.58 preserved alpha.57's hash-verified machine-local
 media admission and removes a false native Display authority rejection caused
@@ -209,12 +223,13 @@ The historical alpha.36 native checkpoint carries the alpha.34/alpha.33 camera-c
 tranche, which replaces the old free-form DirectShow
 camera route, which was fixed at `1280x720` / `30 fps`, with an explicit
 current-generation device/profile catalog, opaque endpoint identities, and an
-exact one-frame probe before Add. Its admission envelope is at most
-`4096x2160`; profiles above `1920x1080` are admitted at no more than `30 fps`,
+exact one-frame probe before Add. Its current admission envelope is at most
+`4096x2160`; profiles above `1920x1080` are admitted at no more than `60 fps`,
 profiles above `1280x720` at no more than `60 fps`, and capture rates up to
-`120 fps` only when the device advertises that profile. Output presentation
-remains capped at `60 Hz`, while screen capture is unchanged at `1280x720` /
-`30 fps`. The acceptance authority is
+`120 fps` only when the device advertises that profile at a supported
+resolution. Output presentation remains capped at `60 Hz`, while screen
+capture is unchanged at `1280x720` / `30 fps`. 4K120 remains fail-closed
+because the raw RGBA handoff is outside the high-resolution envelope. The acceptance authority is
 [qa/CAMERA_INPUT_ACCEPTANCE.md](qa/CAMERA_INPUT_ACCEPTANCE.md); the historical
 alpha.34 and alpha.36 native builds passed. The now-historical alpha.37 native
 build/maximized-window gate passed, and the now-historical alpha.38 normal
@@ -446,7 +461,7 @@ unaccepted.
 
 CI/Release成果物は次の形式です。
 
-- Windows: `Syndocal_1.2.0-alpha.61_x64-setup.exe` (NSIS)、`Syndocal_1.2.0-alpha.61_x64_ja-JP.msi`
+- Windows: `Syndocal_1.2.0-alpha.62_x64-setup.exe` (NSIS)、`Syndocal_1.2.0-alpha.62_x64_ja-JP.msi`
 - macOS: `.app`、DMG
 - Linux: `.deb`、AppImage
 

@@ -39,7 +39,11 @@ const MAX_CAMERA_FRAME_RATE: FrameRate = FrameRate {
     denominator: 1,
 };
 const MAX_HIGH_RESOLUTION_FRAME_RATE: FrameRate = FrameRate {
-    numerator: 30,
+    // 4K/60 is an advertised capture mode that the transport can carry as a
+    // bounded single latest-frame stream.  Presentation still remains capped
+    // by the renderer at 60 Hz; 4K/120 is intentionally rejected because the
+    // raw RGBA handoff would exceed the supported high-resolution envelope.
+    numerator: 60,
     denominator: 1,
 };
 const MAX_FULL_HD_FRAME_RATE: FrameRate = FrameRate {
@@ -1704,6 +1708,15 @@ Error opening input file dummy.
                         denominator: 1
                     }
                 ),
+                (
+                    CameraInputFormat::PixelFormat("yuyv422".to_string()),
+                    4096,
+                    2160,
+                    FrameRate {
+                        numerator: 60,
+                        denominator: 1
+                    }
+                ),
             ]
         );
     }
@@ -1754,6 +1767,15 @@ Error opening input file dummy.
             width: 4096,
             height: 2160,
             frame_rate_numerator: 60,
+            frame_rate_denominator: 1,
+        })
+        .is_ok());
+        assert!(canonical_camera_endpoint(&CanonicalCameraSelection {
+            device_alternative_name: "@device_pnp_1".to_string(),
+            input_format: CameraInputFormat::PixelFormat("yuyv422".to_string()),
+            width: 4096,
+            height: 2160,
+            frame_rate_numerator: 120,
             frame_rate_denominator: 1,
         })
         .is_err());

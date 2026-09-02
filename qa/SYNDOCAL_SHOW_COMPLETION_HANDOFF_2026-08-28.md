@@ -4,6 +4,25 @@ Status date: 2026-09-02 JST
 
 This is the concise authoritative resume note for the final show-critical tranche. It supersedes chat-only status, but it does not supersede the detailed acceptance documents named below.
 
+## 2026-09-02 alpha.62 camera 4K/60 source checkpoint
+
+The camera catalog now admits advertised high-resolution profiles through
+source parent `4d8fb69fb67169bf1032c45260355b87aa219476` at the current
+upstream-equal checkpoint and through
+`4096x2160` at `60 fps`, while keeping `4K/120` fail-closed and retaining
+device-advertised 120fps capture for bounded lower resolutions. The one-frame
+probe remains mandatory and presentation remains capped at `60 Hz`. This
+checkpoint does not claim sustained 4K performance or physical camera output.
+The exact pinned Community MSVC `14.44.35207` no-bundle build passed in
+`2m48s` with first-party warnings `0` (only the existing Vite large-chunk
+advisory). `target/release/syndocal.exe` is Product/FileVersion
+`1.2.0-alpha.62`, `63,520,256` bytes, SHA-256
+`8CD2E0C8B950022EECAFC89E8830F9B6734FB876CB4D70EFC1191EE25011ED81`.
+The executable was then launched from this checkout as PID `82876`; exactly
+one matching `Syndocal` process was responsive and visible with a maximized
+main window (`showCmd=3`). USB-DMX, camera/MiraBox, Spout/Unity, and physical
+display pixels remain unverified.
+
 ## 2026-09-02 alpha.61 native/managed-output checkpoint
 
 Alpha.61 is the current native candidate, based on upstream-equal parent

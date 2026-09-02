@@ -4,6 +4,19 @@ Status date: 2026-08-31
 
 Branch: `codex/syndocal-v1.2`
 
+## 2026-09-02 alpha.62 source admission adjustment
+
+The current DirectShow catalog admits advertised profiles up to `4096x2160`
+at `60 fps`, so a real 4K/60 camera mode is selectable and probeable when the
+device advertises that exact tuple. The previous high-resolution cap of
+`30 fps` was removed. `4K/120` remains fail-closed because the current latest-
+frame RGBA handoff can approach `1.98 GiB/s` of copy traffic at 60 Hz; a
+device-advertised `120 fps` profile is still accepted only at the bounded
+lower resolutions already covered by the source tests. Presentation remains
+capped at `60 Hz`. This is a source/probe capability change, not sustained
+4K or physical camera acceptance; the hardware and long-run rows below remain
+open until they are run on the exact alpha.62 executable.
+
 ## 2026-09-01 alpha.57 native current boundary
 
 The current source checkpoint is `1545bedd189c1f14b9656551ca5046cb1d02023c`
@@ -114,8 +127,7 @@ The current admission envelope is:
 
 - maximum frame size: `4096x2160`;
 - maximum advertised capture rate: `120 fps`;
-- profiles above `1920x1080` are admitted at no more than `30 fps` in this
-  show-critical tranche;
+- profiles above `1920x1080` are admitted at no more than `60 fps`;
 - profiles above `1280x720` are admitted at no more than `60 fps`;
 - rates above `60 fps` are capture sampling only because the current native
   Program and NDI presentation loops are capped at `60 Hz`;
@@ -231,10 +243,14 @@ the RGBA frame at a fixed 60 Hz. A `4096x2160` RGBA frame is approximately
 copy traffic before compositing and upload. The one-frame profile probe does
 not close that performance risk.
 
-Therefore alpha.37 may claim explicit 4K30 and 1080p60 profile selection and
-probe after native evidence, but must not claim arbitrary sustained 4K stage
-output or 4K60. A future shared/pooled frame handoff with generation-based
-render pacing is required before broadening that claim.
+Therefore the current source envelope admits explicit 4K60 profile selection
+and probe, in addition to 1080p60. This does not claim arbitrary sustained 4K
+stage output or 4K60 physical acceptance: a `4096x2160` RGBA frame is about
+`33.75 MiB`, and the current renderer/NDI decoder can approach `1.98 GiB/s`
+of copy traffic at 60 Hz. A future shared/pooled frame handoff with
+generation-based render pacing is still required before broadening the
+sustained-performance claim. 4K120 remains fail-closed; rates above 60 fps
+remain capture sampling only and require a device-advertised profile.
 
 ## Historical alpha.45 native and hardware gates still required
 

@@ -4,6 +4,31 @@ Date: 2026-08-19
 Branch at creation: `codex/syndocal-v1.0`
 Baseline before this document: `848d759846985cc3acf588356cfa3c996b4e2ef2`
 
+## 2026-09-02 alpha.62 camera 4K/60 admission checkpoint
+
+Alpha.62 advances the product prerelease ordinal for the camera capability
+change. The DirectShow catalog now admits high-resolution profiles through
+source parent `4d8fb69fb67169bf1032c45260355b87aa219476` at the current
+upstream-equal checkpoint and through
+`4096x2160` at `60 fps`; the exact 4K/60 endpoint is still required to be
+advertised and to pass the one-frame probe. 4K/120 remains fail-closed due to
+the bounded RGBA handoff, while lower-resolution 120fps capture remains
+available when a device advertises it. Output presentation stays capped at
+60Hz. Sustained 4K performance and physical camera acceptance are not claimed
+from this source change; see `qa/CAMERA_INPUT_ACCEPTANCE.md` for the open
+hardware rows.
+
+The exact pinned Community MSVC `14.44.35207` no-bundle build passed in
+`2m48s` with first-party warnings `0` (only the existing Vite large-chunk
+advisory). The resulting `target/release/syndocal.exe` is
+Product/FileVersion `1.2.0-alpha.62`, `63,520,256` bytes, SHA-256
+`8CD2E0C8B950022EECAFC89E8830F9B6734FB876CB4D70EFC1191EE25011ED81`.
+The executable was then launched from this checkout as PID `82876`; exactly
+one matching `Syndocal` process was responsive and visible with a maximized
+main window (`showCmd=3`). This source change does not claim sustained 4K
+performance or physical camera output. The prior alpha.61 artifact remains
+historical and does not prove the new 4K/60 admission.
+
 ## 2026-09-02 alpha.61 native/managed-output checkpoint
 
 Alpha.61 is the current native candidate, based on upstream-equal parent
