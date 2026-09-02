@@ -2,9 +2,10 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import ts from "typescript";
 
-const [controllerSource, appSource, overlaySource, operatorPolicySource] = await Promise.all([
+const [controllerSource, appSource, outputControlSource, overlaySource, operatorPolicySource] = await Promise.all([
   readFile(new URL("../src/safetyBlackoutRuntimeController.ts", import.meta.url), "utf8"),
   readFile(new URL("../src/App.tsx", import.meta.url), "utf8"),
+  readFile(new URL("../src/outputControlController.ts", import.meta.url), "utf8"),
   readFile(new URL("../src/components/OperatorLockOverlay.tsx", import.meta.url), "utf8"),
   readFile(new URL("../src/operatorPolicy.ts", import.meta.url), "utf8"),
 ]);
@@ -82,8 +83,13 @@ assert.equal(unknownCalls, 1);
 assert.match(appSource, /if \(enabled\) \{\s*await safetyBlackoutRuntime\.engage\(\);/s);
 assert.match(
   appSource,
-  /await executeOutputControl\(\s*invoke,\s*\{\s*kind: "release_blackout"/s,
-  "App release must use the authenticated R4 OutputControl controller",
+  /await executeBlackoutRelease\(invoke\);/s,
+  "App release must use the authenticated blackout-release controller",
+);
+assert.match(
+  outputControlSource,
+  /export async function executeBlackoutRelease[\s\S]*?return executeOutputControlOperation\([\s\S]*?kind: "release_blackout"/s,
+  "Blackout release controller must use the authenticated R4 OutputControl operation",
 );
 assert.doesNotMatch(
   appSource,

@@ -14,10 +14,12 @@ to revalidate owner, project, fence, and lease state before releasing S0.
 Active split, foreign, ambiguous, or otherwise unproven ownership remains
 fail-closed.
 
-The focused output-control contract now covers a stale post-Enable lease read
-and proves that no release is sent without the Enable receipt proof. ASIO
-advanced configuration starts closed while Normal WASAPI keeps its primary
-route visible. The exact pinned Community MSVC
+The focused output-control and safety-blackout contracts now cover a stale
+post-Enable lease read and prove that no release is sent without the Enable
+receipt proof. The safety checker follows the extracted
+`executeBlackoutRelease` controller boundary, so the contract cannot drift
+when App wiring is refactored. ASIO advanced configuration starts closed
+while Normal WASAPI keeps its primary route visible. The exact pinned Community MSVC
 `14.44.35207` no-bundle native build passed in `3m20s`;
 the resulting `target/release/syndocal.exe` is Product/FileVersion
 `1.2.0-alpha.68`, `63,520,256` bytes, SHA-256

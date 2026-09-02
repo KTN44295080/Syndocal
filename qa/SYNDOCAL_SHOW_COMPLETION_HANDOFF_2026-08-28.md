@@ -15,8 +15,10 @@ its single bounded Enable recovery instead of trusting an immediately repeated
 fail-fast lease read. Release remains backend-fenced and fails closed if that
 receipt or current owner/lease CAS is not valid. ASIO advanced configuration
 starts collapsed in Setup while Normal WASAPI keeps its primary route visible.
-Focused output-control checker, TypeScript, Node syntax, and diff checks are
-the pre-native gates and pass. The
+Focused output-control and safety-blackout checkers, TypeScript, Node syntax,
+and diff checks are the pre-native gates and pass. The safety checker follows
+the extracted `executeBlackoutRelease` controller boundary rather than
+requiring App to inline the R4 operation. The
 exact pinned Community MSVC `14.44.35207` no-bundle native build passed in
 `3m20s`; the native artifact identity is the exact release evidence for this
 checkpoint: `target/release/syndocal.exe`, Product/FileVersion
