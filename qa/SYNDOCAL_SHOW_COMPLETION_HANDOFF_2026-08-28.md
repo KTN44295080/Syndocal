@@ -4,6 +4,16 @@ Status date: 2026-09-02 JST
 
 This is the concise authoritative resume note for the final show-critical tranche. It supersedes chat-only status, but it does not supersede the detailed acceptance documents named below.
 
+## 2026-09-02 alpha.60 native/managed-output checkpoint
+
+Alpha.60 is the current native candidate, based on upstream-equal parent
+`9ae8276cc6fbf807b3517770f22ee788e050f85f` on `codex/syndocal-v1.2`.
+managed-output focused `28/0/0` passed with first-party warnings `0`; the
+USB-DMX route remains an explicitly separate runtime and hardware acceptance
+row. This top boundary is the release-authority marker; the newer native
+Timeline, three-display, and Open-DMX evidence below records the current
+operator/runtime state.
+
 ## 2026-09-02 alpha.60 current native Timeline playback acceptance
 
 The already-running exact alpha.60 process was exercised through the native
@@ -104,7 +114,7 @@ new mutation). It is not a release tag. The running process is retained in
 safe S0 for operator Timeline work; the external acceptance rows above remain
 deliberately open until their physical or receiver-side evidence is captured.
 
-## 2026-09-02 alpha.60 native/managed-output checkpoint
+## Detailed alpha.60 native/managed-output evidence (superseded source snapshot)
 
 Alpha.60 is the current native candidate, based on upstream-equal parent
 `9ae8276cc6fbf807b3517770f22ee788e050f85f` on
