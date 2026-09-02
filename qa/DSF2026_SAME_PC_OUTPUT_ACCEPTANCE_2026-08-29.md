@@ -27,12 +27,20 @@ against `COM3` with the pinned Community MSVC 14.44 linker:
 serial write path reached the selected COM port; fixture illumination remains
 an operator visual check and is not inferred from the test.
 
+With the same pinned MSVC gate and the explicit WinGet FFmpeg root, the current
+alpha.60 native Timeline smoke passed: `phase1_smoke_project_sample_timeline`
+returned `2 passed / 0 failed` and
+`phase1_smoke_project_sample_sends_cue_to_artnet_loopback` returned
+`1 passed / 0 failed`. This proves the deterministic Timeline-to-event and
+Timeline-to-Art-Net loopback routes only; it does not prove physical DMX,
+audible PROGRAM/CUE, display pixels, or Unity reception.
+
 The deterministic three-display observation harness is pinned to this exact
 artifact and source identity; its seam suite passes `96/0`. It remains
 observation-only and cannot claim native display acceptance without app-owned
 output observation and explicit monitor identities. The next safe action is one
 bounded operator/native acceptance pass covering S0/USB-DMX, Display windows,
-Timeline, and PROGRAM/CUE; external Unity, DJ-Link, camera, ASIO, and
+Timeline UI loop/release/Follow, and PROGRAM/CUE; external Unity, DJ-Link, camera, ASIO, and
 installer/updater rows remain open.
 
 ## Historical 2026-09-01 alpha.57 native boundary

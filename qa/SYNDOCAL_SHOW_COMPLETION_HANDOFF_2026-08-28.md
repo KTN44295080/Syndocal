@@ -55,13 +55,20 @@ the pinned Community MSVC 14.44 linker (`master=10`, `seconds=15`):
 successful sends observed. This is engine-to-COM write evidence only; fixture
 illumination still requires an operator visual check.
 
-These process/window and device-presence observations are not signal or pixel
-acceptance. One bounded native/operator pass still must run the show-DMX
-action and S0 release, confirm continuous USB-DMX, open both Display outputs
-and collect their current 600-frame windows, exercise Timeline loop/release/
-Follow, and read the selected PROGRAM/CUE endpoint. MiraBox live content,
-Unity Art-Net/Spout, DJ-Link/pedal ACKs, show-ASIO physical routing, and
-installer/updater inspection remain explicitly unverified.
+The current alpha.60 native Timeline smoke then passed under the same pinned
+MSVC linker and explicit WinGet FFmpeg root: the automation/event route test
+returned `2 passed / 0 failed`, and the Art-Net loopback cue route returned
+`1 passed / 0 failed`. This is deterministic native/runtime route evidence;
+it does not establish a physical fixture, audible endpoint, display pixels, or
+Unity receiver.
+
+These process/window, device-presence, and Timeline-smoke observations are not
+signal or pixel acceptance. One bounded native/operator pass still must run the
+show-DMX action and S0 release, confirm continuous USB-DMX, open both Display
+outputs and collect their current 600-frame windows, exercise Timeline loop/
+release/Follow in the UI, and read the selected PROGRAM/CUE endpoint. MiraBox
+live content, Unity Art-Net/Spout, DJ-Link/pedal ACKs, show-ASIO physical
+routing, and installer/updater inspection remain explicitly unverified.
 
 The StandardRelease three-display observation harness is pinned to the same
 alpha.60 artifact/source identity; its deterministic seam suite passes `96/0`.

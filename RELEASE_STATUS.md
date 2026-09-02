@@ -61,11 +61,19 @@ send failure, and at least `439` successful sends observed. This is current
 engine-to-COM write evidence only; fixture illumination still requires an
 operator visual check.
 
+With the same pinned MSVC gate and the explicit WinGet FFmpeg root, the current
+alpha.60 native Timeline smoke passed: `phase1_smoke_project_sample_timeline`
+returned `2 passed / 0 failed` (automation position sharing and event-triggered
+light/video), and
+`phase1_smoke_project_sample_sends_cue_to_artnet_loopback` returned
+`1 passed / 0 failed`. These are deterministic native/runtime route checks;
+they do not claim a physical fixture, audible endpoint, or Unity receiver.
+
 Alpha.60 native UI actions, blackout release, physical USB-DMX continuity,
-two-Display performance windows, Timeline smoke, audible endpoint acceptance,
-MiraBox frames, Unity Art-Net/Spout, DJ-Link/pedal ACKs, show-ASIO routing,
-and installer/updater inspection remain open external/runtime rows. Do not
-promote the process/window or device-enumeration evidence into those claims.
+two-Display performance windows, audible endpoint acceptance, MiraBox frames,
+Unity Art-Net/Spout, DJ-Link/pedal ACKs, show-ASIO routing, and
+installer/updater inspection remain open external/runtime rows. Do not promote
+the process/window, device enumeration, or Timeline smoke into those claims.
 
 The current three-display StandardRelease observation harness now pins this
 alpha.60 artifact and source commit; its deterministic seam suite passes
