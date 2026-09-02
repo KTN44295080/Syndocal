@@ -183,12 +183,20 @@ The native Edit -> Video -> camera import surface was exercised against the
 current machine. Device refresh failed closed with a bounded FFmpeg/DirectShow
 timeout while enumerating `Insta360 Link`; no camera profile was exposed after
 the failed catalog refresh. `OBS Studio` was running during this attempt and
-may own one or more capture endpoints. The current PnP inventory did not
-contain a `MiraBox`-named device (it did contain `NDI Webcam Video` and
-`Insta360 Link`). No camera process was force-terminated and no false profile
-or 4K/60 acceptance was recorded. Retry after the camera provider is released
-and the intended capture device is connected; then select an exact advertised
-profile and require one complete-frame probe.
+may own one or more capture endpoints. A fresh PnP inventory does contain
+`MiraBox Video Capture` (USB VID `1BCF`, PID `2C99`), alongside `NDI Webcam
+Video` and `Insta360 Link`. No camera process was force-terminated and no false
+profile or 4K/60 acceptance was recorded. Retry after the camera provider is
+released and the intended capture device is connected; then select an exact
+advertised profile and require one complete-frame probe.
+
+An independent DirectShow option listing for the present `MiraBox Video
+Capture` succeeded. Its advertised maximum is `1920x1080` at `60.0002 fps`;
+it advertises no 3840x2160/4K mode. The product can accept higher-resolution
+profiles from a different capture device within its bounded 4096x2160/120-fps
+catalog policy, but this particular MiraBox cannot provide 4K. With the HDMI
+source disconnected, a one-frame 1080p60 probe did not complete within the
+bounded command window and was terminated; no frame-quality claim is made.
 
 ## 2026-09-02 alpha.60 Windows delivery self-tests
 
