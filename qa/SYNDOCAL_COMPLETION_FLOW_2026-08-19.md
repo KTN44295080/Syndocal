@@ -55,6 +55,9 @@ alpha.60 native Timeline smoke passed: the Timeline automation/event test
 returned `2 passed / 0 failed`, and the Art-Net loopback cue test returned
 `1 passed / 0 failed`. This is deterministic native/runtime route evidence only;
 it does not prove a physical fixture, audible output, or Unity receiver.
+The companion Engine `show_serial_dmx` protection suite returned `23 passed / 0
+failed`, covering S0-first writes, the shared 512-channel Art-Net/USB buffer,
+and fail-stop/recovery invariants.
 
 Blackout release, continuous USB-DMX signal, both Display metric windows,
 audible endpoint acceptance, MiraBox live content, Unity Art-Net/Spout,

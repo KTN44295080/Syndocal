@@ -68,6 +68,9 @@ light/video), and
 `phase1_smoke_project_sample_sends_cue_to_artnet_loopback` returned
 `1 passed / 0 failed`. These are deterministic native/runtime route checks;
 they do not claim a physical fixture, audible endpoint, or Unity receiver.
+The companion Engine `show_serial_dmx` protection suite returned `23 passed / 0
+failed`, covering S0-first writes, the shared 512-channel Art-Net/USB buffer,
+and fail-stop/recovery invariants.
 
 Alpha.60 native UI actions, blackout release, physical USB-DMX continuity,
 two-Display performance windows, audible endpoint acceptance, MiraBox frames,

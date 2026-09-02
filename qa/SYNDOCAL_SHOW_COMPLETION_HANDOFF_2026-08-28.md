@@ -61,6 +61,9 @@ returned `2 passed / 0 failed`, and the Art-Net loopback cue route returned
 `1 passed / 0 failed`. This is deterministic native/runtime route evidence;
 it does not establish a physical fixture, audible endpoint, display pixels, or
 Unity receiver.
+The companion Engine `show_serial_dmx` protection suite returned `23 passed / 0
+failed`, covering S0-first writes, the shared 512-channel Art-Net/USB buffer,
+and fail-stop/recovery invariants.
 
 These process/window, device-presence, and Timeline-smoke observations are not
 signal or pixel acceptance. One bounded native/operator pass still must run the

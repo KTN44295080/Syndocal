@@ -34,6 +34,9 @@ returned `2 passed / 0 failed` and
 `1 passed / 0 failed`. This proves the deterministic Timeline-to-event and
 Timeline-to-Art-Net loopback routes only; it does not prove physical DMX,
 audible PROGRAM/CUE, display pixels, or Unity reception.
+The companion Engine `show_serial_dmx` protection suite returned `23 passed / 0
+failed`, covering S0-first writes, the shared 512-channel Art-Net/USB buffer,
+and fail-stop/recovery invariants.
 
 The deterministic three-display observation harness is pinned to this exact
 artifact and source identity; its seam suite passes `96/0`. It remains
