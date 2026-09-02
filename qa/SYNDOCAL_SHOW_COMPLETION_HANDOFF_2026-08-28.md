@@ -98,9 +98,11 @@ USB fixture visual response, display pixel/60fps, MiraBox live content, Unity
 Art-Net/Spout delivery, audible PROGRAM/CUE, DJ-Link/pedal ACKs, and physical
 ASIO routing.
 
-The source/doc change is not yet a release tag; the next action is to commit
-and push this checkpoint, verify `HEAD == origin/codex/syndocal-v1.2`, and
-retain the running process in safe S0 for operator Timeline work.
+This source/doc checkpoint is committed and pushed on
+`codex/syndocal-v1.2` (verify `HEAD == origin/codex/syndocal-v1.2` before any
+new mutation). It is not a release tag. The running process is retained in
+safe S0 for operator Timeline work; the external acceptance rows above remain
+deliberately open until their physical or receiver-side evidence is captured.
 
 ## 2026-09-02 alpha.60 native/managed-output checkpoint
 
