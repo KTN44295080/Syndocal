@@ -18108,7 +18108,7 @@ async function checkPatchZoning(client) {
       initial.cacheManufacturerExpandedValues.every((value) => value === "false"),
     footprintFilterIsExactAndSearchAutoExpands:
       footprintFiltered.footprintFilterValue === "25" &&
-      footprintFiltered.verifiedSectionCountValue === 2 &&
+      footprintFiltered.verifiedSectionCountValue === 3 &&
       JSON.stringify(footprintFiltered.verifiedCategoryProfileCounts) === JSON.stringify([1, 2]) &&
       footprintFiltered.verifiedCategoryExpandedValues.length === 2 &&
       footprintFiltered.verifiedCategoryExpandedValues.every((value) => value === "true") &&
@@ -19798,8 +19798,8 @@ async function runPatchGdtfShareViewport(client, viewport) {
       batchCancelled.mock?.cache?.some((entry) => entry.rid === 7402) &&
       !batchCancelled.mock?.cache?.some((entry) => entry.rid === 7403),
     offlineCacheHeaderShowsCountAndMegabytes:
-      /^\d+ profiles · \d+\.\d MB$/.test(batchCompleted.cacheSummaryText) &&
-      /^\d+ profiles · \d+\.\d MB$/.test(batchCancelled.cacheSummaryText),
+      /^\d+ fixtures · \d+\.\d MB$/.test(batchCompleted.cacheSummaryText) &&
+      /^\d+ fixtures · \d+\.\d MB$/.test(batchCancelled.cacheSummaryText),
     authFailureShowsInlineLoginErrorAndCredentials:
       authFailure.shareState === "error" &&
       authFailure.shareErrorKind === "auth" &&
@@ -20036,6 +20036,9 @@ async function runPatchEmptyStateViewport(client, viewport) {
       bundledSectionCountValue: Number(document.querySelector(
         '[data-patch-profile-section="bundled"] > header [data-patch-profile-section-count="fixtures"]'
       )?.getAttribute('data-patch-profile-section-count-value') ?? -1),
+      verifiedSectionCountValue: Number(document.querySelector(
+        '[data-patch-profile-section="verified"] > header [data-patch-profile-section-count="fixtures"]'
+      )?.getAttribute('data-patch-profile-section-count-value') ?? -1),
       bundledLoadingRowCount: document.querySelectorAll('[data-patch-bundled-loading]').length,
       verifiedProfileRowCount: document.querySelectorAll(
         '[data-patch-profile-row][data-profile-source="verified"]'
@@ -20246,7 +20249,7 @@ async function runPatchEmptyStateViewport(client, viewport) {
       metrics.bundledAttributionText.includes('18cf9da'),
     footprintFilterIsExactAndAutoExpands:
       footprintFilterMetrics.filterValue === '25' &&
-      footprintFilterMetrics.sectionCountValue === 2 &&
+      footprintFilterMetrics.sectionCountValue === 3 &&
       JSON.stringify(footprintFilterMetrics.categoryProfileCounts) === JSON.stringify([1, 2]) &&
       footprintFilterMetrics.categoryExpandedValues.length === 2 &&
       footprintFilterMetrics.categoryExpandedValues.every((value) => value === 'true') &&

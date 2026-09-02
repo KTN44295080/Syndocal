@@ -45,6 +45,20 @@ failure, and preview RGB `(54,73,255)`. This proves Engine-to-COM writes only;
 fixture illumination and downstream DMX reception remain separate physical
 checks.
 
+## 2026-09-03 alpha.68 Patch acceptance-contract checkpoint
+
+The Patch UI's current product vocabulary is fixture-family based, not profile
+mode based. Its acceptance checker now measures the `fixtures` header/count
+attribute and expects the current three verified fixture families for the
+25-channel footprint filter. `pnpm --dir app run check:patch-viewport` passes
+the five required viewports, including DND, GDTF share, empty-state, and
+continuous-grid coverage; TypeScript and Node syntax also pass with zero
+first-party warnings. No native/runtime behavior changed and all physical
+DMX/Art-Net/Unity/Spout/camera/audio claims remain at the boundary stated
+above. The full browser aggregate is not promoted here because a separate
+2048x1152 CDP navigation timeout and an existing VJ-operator fixture selector
+failure remain to be investigated independently.
+
 ## Historical 2026-09-03 alpha.67 ASIO setup race source checkpoint
 
 ASIO setup requests are invalidated before publishing Normal, preventing a

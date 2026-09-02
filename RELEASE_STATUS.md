@@ -45,6 +45,25 @@ successful sends, and preview RGB `(54,73,255)`. This proves the alpha.68
 Engine-to-COM write path only; fixture illumination and downstream DMX
 reception remain separate operator/physical observations.
 
+## 2026-09-03 alpha.68 UI acceptance-contract checkpoint
+
+The Patch surface already reports fixture-family counts (for example, `31
+fixtures` overall and three verified fixture families in the 25-channel
+footprint filter). The viewport acceptance checker had retained the retired
+`profiles` wording and a two-family expectation, so it could reject the
+correct UI. The checker now observes the `fixtures` header/count attribute and
+the current three-family result. `pnpm --dir app run check:patch-viewport`
+passes all five required viewports (1920x1080, 1920x1032, 2048x1152,
+1366x768, and 1280x720), including DND, GDTF share, empty-state, and
+continuous-grid contracts. TypeScript and Node syntax checks pass with zero
+first-party warnings. This is checker/UI-contract evidence only; no native
+runtime, DMX, Art-Net, Unity/Spout, camera, or hardware claim changes.
+
+The broader browser aggregate remains unclaimed in this checkpoint: one run
+hit a CDP navigation timeout at 2048x1152, and the standalone VJ operator
+fixture currently cannot expose its layer-1 Advanced selector. Those are
+separate pre-existing fixture/gate issues and were not changed here.
+
 ## Historical 2026-09-03 alpha.67 ASIO setup race checkpoint
 
 Alpha.67 advances the product prerelease ordinal for a setup-only ASIO race
