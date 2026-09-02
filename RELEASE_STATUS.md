@@ -24,6 +24,15 @@ Exactly one checkout-owned Syndocal process (PID `65324`) is responsive,
 visible, and maximized (`showCmd=3`). Physical USB-DMX, Art-Net, Unity/Spout,
 fixture, camera, and audio acceptance remain separate external gates.
 
+An alpha.67 Engine physical serial smoke then ran against the currently
+connected FTDI `COM3` device under the same pinned linker with
+`SYNDOCAL_PHYSICAL_MASTER=10` and `SYNDOCAL_PHYSICAL_SECONDS=15`:
+`physical_serial_rainbow_demo_drives_master_dimmer_and_rgb_cells` returned
+`1 passed / 0 failed` in `15.02s`, with no serial send failure, `439`
+successful sends, and non-zero cell preview RGB `(54,73,255)`. This is
+Engine-to-COM write evidence only; fixture illumination and downstream
+reception still require a separate operator/physical observation.
+
 ## Historical 2026-09-02 alpha.66 DMX blackout release checkpoint
 
 Alpha.66 advances the product prerelease ordinal for the DMX blackout release

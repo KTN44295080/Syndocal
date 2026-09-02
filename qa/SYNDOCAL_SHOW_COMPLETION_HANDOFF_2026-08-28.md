@@ -20,6 +20,15 @@ PID `65324` supplied exactly one responsive, visible, maximized Syndocal
 window. Physical USB-DMX, Art-Net/Unity, fixture, camera/MiraBox, Spout, and
 audio acceptance remain explicitly unverified external rows.
 
+The current alpha.67 Engine physical serial smoke then ran against the
+connected FTDI `COM3` device with the pinned Community MSVC 14.44 linker:
+`SYNDOCAL_PHYSICAL_MASTER=10`, `SYNDOCAL_PHYSICAL_SECONDS=15`, and
+`physical_serial_rainbow_demo_drives_master_dimmer_and_rgb_cells` returned
+`1 passed / 0 failed` in `15.02s`, with `439` successful sends, no serial
+send failure, and preview RGB `(54,73,255)`. This is Engine-to-COM evidence
+only; fixture illumination and downstream DMX reception remain separate
+physical checks.
+
 ## Historical 2026-09-02 alpha.66 DMX blackout release source checkpoint
 
 Blackout clearing now recovers the canonical local Both output lease exactly
