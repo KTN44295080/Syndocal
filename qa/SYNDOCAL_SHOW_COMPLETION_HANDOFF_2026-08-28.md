@@ -4,7 +4,7 @@ Status date: 2026-09-02 JST
 
 This is the concise authoritative resume note for the final show-critical tranche. It supersedes chat-only status, but it does not supersede the detailed acceptance documents named below.
 
-## 2026-09-02 normal ASIO availability checkpoint (native rebuild pending)
+## 2026-09-02 normal ASIO availability checkpoint (native complete)
 
 The normal Windows application now includes the ASIO loader and command surface
 in its default feature set: `libav`, `spout`, and `asio`. Setup → I/O → Audio
@@ -17,10 +17,43 @@ Locked view.
 
 The SDK-derived `syndocal_asio_bridge.dll` remains an explicit same-host QA
 payload only (`qa/ASIO_SDK_PIN.json` keeps `distribution_approved: false`) and
-is not part of the approved normal installer/updater payload. Source checkers,
-TypeScript, fixed-linker Cargo check/test, and the release contract chain pass;
-the final native no-bundle rebuild and executable/runtime evidence for this
-checkpoint are recorded in the next section after the pushed source commit.
+is not part of the approved normal installer/updater payload. The setup-only
+return path is also explicit: when ASIO is selected but the native router is
+still `Normal`, the Return-to-Normal action is enabled and resets only the
+local view, without dispatching a redundant native Normal-selection command.
+
+Source commit `c528aa2` is pushed on `codex/syndocal-v1.2`. The exact pinned
+Community MSVC 14.44 no-bundle native build passed after this fix in `2m25s`;
+the release contract chain, TypeScript, focused audio checker, and fixed-linker
+Cargo check/test are green. The final executable/runtime evidence is recorded
+below. This is an internal alpha.60 checkpoint, not a release tag.
+
+## 2026-09-02 normal ASIO native/runtime evidence
+
+The native artifact built from the source content of `c528aa2` is
+`C:\Users\kouty\Documents\KDMX\target\release\syndocal.exe`,
+`63,518,208` bytes, SHA-256
+`21588CF7F603792D026DF7041863DD02000C9136EC8A0CA81AF66ECE999E08A4`.
+The same-host QA bridge beside it is `926,208` bytes, SHA-256
+`06132C2CC8C54F7D89947F8BB1E5320226986BCD8155069AFEC034C6E841B9AC`;
+it is deliberately not an approved normal package payload.
+
+The final executable was launched from the exact checkout path. Exactly one
+responsive `Syndocal` process is running (PID `55688`), with the main window
+maximized. On the native UI, Setup → I/O → Audio exposed the `ASIO` backend,
+enumerated 8 drivers, and selected `TOPPING Pro USB Audio Device`. Native
+status was schema/ABI 3, backend `asio-sdk-v3-rt`, `state=ready`,
+`routerState=Normal`, `catalogGeneration=1`, `profileReady=true`. Capabilities
+were 6 output channels, native `i32`, rates `44.1/48/88.2/96/176.4/192 kHz`,
+and fixed buffers `8..2048` with preferred `128` frames. Return-to-Normal was
+enabled in this setup-only Normal-router state; after activation it restored
+`normal-wasapi` / `Ready`, and the native status remained `ready` / `Normal`.
+
+This proves the normal binary's ASIO loader/command surface, explicit driver
+enumeration, capabilities, and recoverable setup UI. It does not claim a
+bundled licensed bridge, audible output, long-soak/XRUN or unplug recovery,
+USB-DMX fixture illumination, Art-Net/Spout/Unity receiver pixels, MiraBox
+frames, or DJ-Link/pedal ACKs. Those remain open external acceptance rows.
 
 ## 2026-09-02 alpha.60 native/managed-output checkpoint
 
