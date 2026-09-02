@@ -2,8 +2,8 @@
 
 Status date: 2026-09-03 JST
 Source checkpoint: branch `codex/syndocal-v1.2`; native artifact source commit
-`5ae65a37fc428760f2032ef30ea9b2ccd84bcd4a`; documentation is being finalized
-on the same branch before the final upstream-equality check.
+`5ae65a37fc428760f2032ef30ea9b2ccd84bcd4a`; serial-smoke evidence commit
+`734a2c9`; final HEAD/upstream equality is recorded after this handoff update.
 
 This is the concise authoritative resume note for the final show-critical tranche. It supersedes chat-only status, but it does not supersede the detailed acceptance documents named below.
 
