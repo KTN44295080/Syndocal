@@ -4,6 +4,55 @@ Status date: 2026-09-02 JST
 
 This is the concise authoritative resume note for the final show-critical tranche. It supersedes chat-only status, but it does not supersede the detailed acceptance documents named below.
 
+## 2026-09-02 alpha.60 post-build Open-DMX barrier and restart checkpoint
+
+The final source adjustment closes a late-cleanup race in the bounded Open-DMX
+sender open. The process-wide single-flight barrier now remains set until a
+timed-out worker's result has been received and, when a sender exists, its
+bounded shutdown has completed successfully. A timely result releases the
+barrier in the caller; a late constructor error releases it only after the
+reaper observes that error; a disconnected worker or cleanup failure keeps the
+barrier latched and requires process restart. No second driver open, fallback
+sender, or permissive retry is allowed. The regression test also attempts a
+second open while the first late open is still pending and requires the
+single-flight rejection before allowing a post-reaper retry.
+
+Focused verification after this adjustment passed: exact Community MSVC
+14.44 `show_serial_dmx_tests` `21 passed / 0 failed / 0 ignored` with
+first-party warnings `0`, `cargo fmt --all -- --check`, TypeScript, and the
+full `check:release` contract chain (ASIO packaging `169` assertions, ASIO v3
+`22`, timeline/audio/video/camera contracts). The fixed-linker no-bundle
+build passed in `2m32s`; only the existing Vite large-chunk advisory was
+emitted. Artifact:
+`C:\Users\kouty\Documents\KDMX\target\release\syndocal.exe`,
+Product/FileVersion `1.2.0-alpha.60`, `62,486,528` bytes, SHA-256
+`D31AB72AA54800BA93AA8305F467CD084979823885887F17535C65D5F842F0A3`.
+
+The rebuilt executable was relaunched once with the authored
+`target\qa\DSF2026-show-alpha55-dual-file-display.sdc` project. Exactly one
+exact-checkout `Syndocal` process (PID `68032`) was responsive and its main
+window was maximized. The persisted FTDI Open-DMX binding was
+`selected_and_present` on `USB Serial Port (COM3)` with the exact Windows
+device instance identity retained.
+
+The first post-restart one-click Prepare attempt was rejected at the final
+stage with `forbidden`; no output was applied. After refreshing the same
+binding/route state, one deliberate retry and its explicit native safety
+confirmation completed. Four one-second status samples then remained stable:
+`active=true`, `zeroFrameQueued=true`,
+`zeroFramePhysicalWriteCompleted=true`, `faulted=false`, and
+`artnetMirrorLive=true` (route status revision `3`). The worker is intentionally
+left in S0 with the latest all-zero frame queued; this proves native-to-Windows
+Open-DMX physical-write/queue state only, not fixture illumination, cable
+continuity, or audience output. The current external acceptance rows remain
+USB fixture visual response, display pixel/60fps, MiraBox live content, Unity
+Art-Net/Spout delivery, audible PROGRAM/CUE, DJ-Link/pedal ACKs, and physical
+ASIO routing.
+
+The source/doc change is not yet a release tag; the next action is to commit
+and push this checkpoint, verify `HEAD == origin/codex/syndocal-v1.2`, and
+retain the running process in safe S0 for operator Timeline work.
+
 ## 2026-09-02 alpha.60 native/managed-output checkpoint
 
 Alpha.60 is the current native candidate, based on upstream-equal parent

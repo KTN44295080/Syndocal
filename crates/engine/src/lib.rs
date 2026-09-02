@@ -66958,10 +66958,6 @@ where
         .name("syndocal-open-dmx-open".to_string())
         .spawn(move || {
             let result = create_sender(&identity, &safety_gate);
-            // Clear only after the constructor has returned.  A detached
-            // timeout worker therefore blocks a second open until its late
-            // result is safely reaped.
-            SHOW_SERIAL_DMX_SENDER_OPEN_IN_FLIGHT.store(false, Ordering::Release);
             let _ = result_tx.send(result);
         })
         .map_err(|error| {
@@ -66970,7 +66966,13 @@ where
         })?;
     let _ = worker;
     match result_rx.recv_timeout(timeout) {
-        Ok(result) => result,
+        Ok(result) => {
+            // The caller owns the sender on the timely path, so the
+            // single-flight barrier can be released only after the result
+            // has crossed the channel and is no longer detached.
+            SHOW_SERIAL_DMX_SENDER_OPEN_IN_FLIGHT.store(false, Ordering::Release);
+            result
+        }
         Err(mpsc::RecvTimeoutError::Timeout) => {
             eprintln!(
                 "Show serial DMX sender open exceeded {}ms; retaining S0 and reaping late result",
@@ -66986,12 +66988,20 @@ where
                             eprintln!(
                                 "Show serial DMX late sender cleanup failed after bounded open timeout: {error}"
                             );
+                        } else {
+                            // A late sender is not eligible for a fresh open
+                            // until its bounded shutdown has completed.
+                            SHOW_SERIAL_DMX_SENDER_OPEN_IN_FLIGHT
+                                .store(false, Ordering::Release);
                         }
                     }
                     Ok(Err(error)) => {
                         eprintln!(
                             "Show serial DMX late sender open failed after bounded timeout: {error}"
                         );
+                        // No sender escaped the worker, so the barrier can be
+                        // released once the late result has been observed.
+                        SHOW_SERIAL_DMX_SENDER_OPEN_IN_FLIGHT.store(false, Ordering::Release);
                     }
                     Err(_) => eprintln!(
                         "Show serial DMX bounded open worker disconnected without a result"

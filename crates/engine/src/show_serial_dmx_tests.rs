@@ -108,7 +108,7 @@ fn bounded_show_serial_dmx_sender_open_times_out_and_blocks_stacked_opens() {
         Duration::from_millis(10),
         |_identity, _safety_gate| {
             thread::sleep(Duration::from_millis(75));
-            Ok(DmxSender::TestExactArtNetRoute)
+            Err("deterministic late open failure".to_string())
         },
     ) {
         Ok(_) => panic!("a sender open beyond its deadline must fail closed"),
@@ -117,9 +117,22 @@ fn bounded_show_serial_dmx_sender_open_times_out_and_blocks_stacked_opens() {
     assert!(started.elapsed() < Duration::from_millis(60));
     assert!(error.contains("exceeded 10ms"));
 
+    // The detached worker is still resolving, so a second activation must be
+    // rejected rather than stacking another driver open against the adapter.
+    let in_flight = match run_bounded_show_serial_dmx_sender_open(
+        identity.clone(),
+        safety_gate.clone(),
+        Duration::from_secs(1),
+        |_identity, _safety_gate| Ok(DmxSender::TestExactArtNetRoute),
+    ) {
+        Ok(_) => panic!("a late open must retain the single-flight barrier"),
+        Err(error) => error,
+    };
+    assert!(in_flight.contains("already in flight"));
+
     // The late worker is allowed to finish and the reaper owns its result;
     // only then may a fresh open become eligible.  This also proves the
-    // process-wide single-flight barrier is released on a normal return.
+    // process-wide single-flight barrier is released after the late result.
     thread::sleep(Duration::from_millis(100));
     let sender = run_bounded_show_serial_dmx_sender_open(
         identity,
