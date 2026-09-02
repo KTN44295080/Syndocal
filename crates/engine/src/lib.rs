@@ -4,15 +4,12 @@ use std::{
     hash::{BuildHasherDefault, Hasher},
     net::UdpSocket,
     sync::{
-        atomic::{AtomicU32, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
         mpsc, Arc, Condvar, Mutex, RwLock, Weak,
     },
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-
-#[cfg(test)]
-use std::sync::atomic::AtomicBool;
 
 mod control_plane;
 mod move_path;
@@ -50564,7 +50561,7 @@ impl EngineRuntime {
             expected_device,
             expected_safety_epoch,
             expected_safety_generation,
-            create_verified_show_serial_dmx_sender,
+            create_verified_show_serial_dmx_sender_bounded,
         )
     }
 
@@ -66836,6 +66833,19 @@ const SHOW_ARTNET_LOOPBACK_UNUSED_CHANNEL_INDEX: usize = 499;
 const SHOW_SERIAL_DMX_UNIVERSE: u16 = 0;
 const SHOW_SERIAL_DMX_BAUD_RATE: u32 = 250_000;
 const SHOW_SERIAL_DMX_ZERO_WRITE_TIMEOUT: Duration = Duration::from_millis(250);
+/// Opening the machine-local COM interface performs several Windows PnP and
+/// HANDLE checks which are outside the engine's control.  A driver or SetupAPI
+/// call must not hold the OutputControl worker (and therefore the UI) forever.
+const SHOW_SERIAL_DMX_SENDER_OPEN_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// A timed-out COM open may continue in a detached worker because Win32 does
+/// not provide a safe cancellation primitive for an arbitrary driver call.
+/// Keep a process-wide single-flight barrier so a second activation cannot
+/// stack another open against the same physical adapter while the first one
+/// is still resolving.  The flag is deliberately conservative: a worker
+/// panic leaves it set until process restart, which is safer than permitting a
+/// potentially live old handle and a new handle to race.
+static SHOW_SERIAL_DMX_SENDER_OPEN_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
 
 /// The project-independent Open DMX logical route. It is intentionally not
 /// placed in `DmxOutputConfig`/the snapshot: COM and PnP identity belong to
@@ -66901,6 +66911,108 @@ fn create_verified_show_serial_dmx_sender(
     )
     .map(DmxSender::EnttecOpenDmx)
     .map_err(|error| error.to_string())
+}
+
+/// Bound the only show-critical operation which can enter an uncooperative
+/// Windows driver before an Open-DMX worker exists.  The caller remains on the
+/// engine thread only for the bounded receive; if the driver eventually
+/// returns a sender, the reaper owns its bounded shutdown and no live route is
+/// published.  No fallback sender or second open is attempted.
+fn create_verified_show_serial_dmx_sender_bounded(
+    identity: &io::serial_dmx::VerifiedUsbSerialPortIdentity,
+    open_dmx_safety_write_gate: &OpenDmxSafetyWriteGate,
+) -> Result<DmxSender, String> {
+    run_bounded_show_serial_dmx_sender_open(
+        identity.clone(),
+        open_dmx_safety_write_gate.clone(),
+        SHOW_SERIAL_DMX_SENDER_OPEN_TIMEOUT,
+        create_verified_show_serial_dmx_sender,
+    )
+}
+
+fn run_bounded_show_serial_dmx_sender_open<F>(
+    identity: io::serial_dmx::VerifiedUsbSerialPortIdentity,
+    safety_gate: OpenDmxSafetyWriteGate,
+    timeout: Duration,
+    create_sender: F,
+) -> Result<DmxSender, String>
+where
+    F: FnOnce(
+            &io::serial_dmx::VerifiedUsbSerialPortIdentity,
+            &OpenDmxSafetyWriteGate,
+        ) -> Result<DmxSender, String>
+        + Send
+        + 'static,
+{
+    if SHOW_SERIAL_DMX_SENDER_OPEN_IN_FLIGHT
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return Err(
+            "Show serial DMX sender open is already in flight; wait for its bounded recovery or restart Syndocal before retrying"
+                .to_string(),
+        );
+    }
+    let (result_tx, result_rx) = mpsc::sync_channel(1);
+    let worker = thread::Builder::new()
+        .name("syndocal-open-dmx-open".to_string())
+        .spawn(move || {
+            let result = create_sender(&identity, &safety_gate);
+            // Clear only after the constructor has returned.  A detached
+            // timeout worker therefore blocks a second open until its late
+            // result is safely reaped.
+            SHOW_SERIAL_DMX_SENDER_OPEN_IN_FLIGHT.store(false, Ordering::Release);
+            let _ = result_tx.send(result);
+        })
+        .map_err(|error| {
+            SHOW_SERIAL_DMX_SENDER_OPEN_IN_FLIGHT.store(false, Ordering::Release);
+            format!("Unable to start bounded Show serial DMX sender-open worker: {error}")
+        })?;
+    let _ = worker;
+    match result_rx.recv_timeout(timeout) {
+        Ok(result) => result,
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            eprintln!(
+                "Show serial DMX sender open exceeded {}ms; retaining S0 and reaping late result",
+                timeout.as_millis()
+            );
+            let reaper = thread::Builder::new()
+                .name("syndocal-open-dmx-open-reaper".to_string())
+                .spawn(move || match result_rx.recv() {
+                    Ok(Ok(mut sender)) => {
+                        if let Err(error) = sender.shutdown_open_dmx_bounded(
+                            SHOW_SERIAL_DMX_ZERO_WRITE_TIMEOUT,
+                        ) {
+                            eprintln!(
+                                "Show serial DMX late sender cleanup failed after bounded open timeout: {error}"
+                            );
+                        }
+                    }
+                    Ok(Err(error)) => {
+                        eprintln!(
+                            "Show serial DMX late sender open failed after bounded timeout: {error}"
+                        );
+                    }
+                    Err(_) => eprintln!(
+                        "Show serial DMX bounded open worker disconnected without a result"
+                    ),
+                });
+            if let Err(error) = reaper {
+                return Err(format!(
+                    "Show serial DMX sender open exceeded {}ms and its cleanup reaper could not start: {error}; S0 remains engaged",
+                    timeout.as_millis()
+                ));
+            }
+            Err(format!(
+                "Show serial DMX sender open exceeded {}ms; S0 remains engaged and the late physical result is being reaped; restart Syndocal before retrying",
+                timeout.as_millis()
+            ))
+        }
+        Err(mpsc::RecvTimeoutError::Disconnected) => Err(
+            "Show serial DMX bounded sender-open worker disconnected without a cleanup result; S0 remains engaged"
+                .to_string(),
+        ),
+    }
 }
 
 /// This is deliberately narrower than normal DMX validation. It identifies

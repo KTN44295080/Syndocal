@@ -89,6 +89,65 @@ The regenerable Cargo dev profile was cleaned after a `60,082`-file/
 action is one bounded operator/native acceptance pass; no hardware or pixel
 claim may be inferred from the process and device-presence evidence above.
 
+## 2026-09-02 alpha.60 bounded Open-DMX completion pass
+
+The source checkpoint began at upstream-equal `8bdd72417330e9ad3abb68a09125d383d8f25ba2`
+on `codex/syndocal-v1.2`. The show-critical change adds a bounded, process-wide
+single-flight around the Windows Open-DMX sender constructor. PnP/HANDLE and
+driver calls now have a five-second caller deadline; a late constructor result
+is owned by a bounded cleanup reaper, S0 remains engaged, and a second open is
+refused until the late result returns (or the process is restarted). No fallback
+sender or permissive retry is introduced. The previous path could hold the
+engine activation/UI indefinitely inside an uncooperative driver call; the new
+path fails closed with visible S0-retaining error text. The deterministic
+regression is
+`bounded_show_serial_dmx_sender_open_times_out_and_blocks_stacked_opens`.
+
+Final source gates for this change: `cargo fmt --all -- --check` PASS;
+`pnpm --dir app exec tsc --noEmit` PASS; `pnpm --dir app run check:release` PASS
+(ASIO packaging 169 assertions, ASIO v3 22 assertions, timeline/audio/video/
+camera contracts); exact Community MSVC `14.44.35207` engine
+`show_serial_dmx_tests` PASS `21/0/0` with first-party warnings `0`;
+`node --check` and `git diff --check` pass (Git only reports LF-to-CRLF
+conversion notices).
+
+The final exact native build used the required Community linker as the first
+`where.exe link.exe` result and passed
+`pnpm --dir app tauri build --no-bundle` in `2m30s`, with first-party Rust
+warnings `0` and only the existing Vite large-chunk advisory. Artifact:
+`target/release/syndocal.exe`, Product/FileVersion `1.2.0-alpha.60`,
+`62,486,528` bytes, SHA-256
+`2AA951CD29772B42B267C1A8512DCE2D3BC09692067C2004889398D342CE95A2`.
+The exact checkout process was relaunched once after the build; exactly one
+responsive, maximized `Syndocal` window was observed.
+
+Final native/operator observation on the same machine: persisted FTDI
+Open-DMX binding `COM3` was `selected_and_present`. The one-click **Prepare
+show DMX** flow completed after its explicit OS confirmation. It reported
+`active=true`, `zeroFrameQueued=true`,
+`zeroFramePhysicalWriteCompleted=true`, `faulted=false`, and
+`artnetMirrorLive=true`; after the explicit DMX blackout release, four
+one-second samples remained `active=true`, `liveFrameQueued=true`,
+`zeroFramePhysicalWriteCompleted=true`, `faulted=false`, and
+`artnetMirrorLive=true`. This is native-to-Windows Open-DMX physical-write and
+continuous queue evidence; it is not a fixture, cable, or audience-output
+claim. The release/prepare control intentionally retains one explicit safety
+confirmation so an unattended click cannot change live output.
+
+The same final binary was restarted once more and the complete prepare path
+was repeated: `selected_and_present`/COM3, S0 zero receipt complete, active
+worker, then S0 release with live-frame queueing. No native diagnostic logs
+remain in source. The final runtime was left with the USB worker active and
+S0 clear so the operator can continue Timeline work. Display pixel/60fps,
+MiraBox live content, Unity receiver delivery, audible PROGRAM/CUE endpoint,
+DJ-Link/pedal ACKs, and show-ASIO physical routing remain external acceptance
+rows; prior local display-routing evidence does not promote those claims.
+
+This checkpoint is not complete until this note and the two engine files are
+committed and pushed. Before commit, re-check that only the bounded sender
+implementation/test and this handoff note are owned changes, then record the
+new HEAD/upstream equality below.
+
 ## 2026-09-01 alpha.59 native and local hardware checkpoint
 
 Source checkpoint `9f1925cf98fd36dbdb8059a2b50143feb300f641` is

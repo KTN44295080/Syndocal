@@ -98,6 +98,40 @@ fn assert_open_dmx_physical_operation_order(
 }
 
 #[test]
+fn bounded_show_serial_dmx_sender_open_times_out_and_blocks_stacked_opens() {
+    let identity = exact_show_serial_dmx_test_identity();
+    let safety_gate = OpenDmxSafetyWriteGate::new();
+    let started = Instant::now();
+    let error = match run_bounded_show_serial_dmx_sender_open(
+        identity.clone(),
+        safety_gate.clone(),
+        Duration::from_millis(10),
+        |_identity, _safety_gate| {
+            thread::sleep(Duration::from_millis(75));
+            Ok(DmxSender::TestExactArtNetRoute)
+        },
+    ) {
+        Ok(_) => panic!("a sender open beyond its deadline must fail closed"),
+        Err(error) => error,
+    };
+    assert!(started.elapsed() < Duration::from_millis(60));
+    assert!(error.contains("exceeded 10ms"));
+
+    // The late worker is allowed to finish and the reaper owns its result;
+    // only then may a fresh open become eligible.  This also proves the
+    // process-wide single-flight barrier is released on a normal return.
+    thread::sleep(Duration::from_millis(100));
+    let sender = run_bounded_show_serial_dmx_sender_open(
+        identity,
+        safety_gate,
+        Duration::from_secs(1),
+        |_identity, _safety_gate| Ok(DmxSender::TestExactArtNetRoute),
+    )
+    .expect("a completed late result must release the single-flight barrier");
+    assert!(matches!(sender, DmxSender::TestExactArtNetRoute));
+}
+
+#[test]
 fn published_s0_linearizes_with_the_actual_open_dmx_serial_worker_transaction() {
     // S0-first: the public priority API latches the shared zero-only
     // direction before its queue item is consumed. A subsequently queued
