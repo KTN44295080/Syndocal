@@ -14,6 +14,20 @@ row. This top boundary is the release-authority marker; the newer native
 Timeline, three-display, and Open-DMX evidence below records the current
 operator/runtime state.
 
+## 2026-09-02 alpha.60 WDM audio device enumeration and selection
+
+Setup → I/O → Audio was opened on the running process. The Timeline authoring
+route enumerated the current Windows WDM catalogue (15 endpoints, including
+`Music (Elgato Virtual Audio)`, the E2x2 Playback pairs, `スピーカー (2-
+TOPPING USB DAC)`, and the JBL device) rather than relying on a fixed device
+name. Selecting the exact `Music (Elgato Virtual Audio)` endpoint and pressing
+the explicit Windows-output refresh left the route at `実行中` with no alert;
+the UI retained the exact endpoint in the device select. A short Timeline
+play/pause from `0 ms` advanced to `1177 ms` and paused at `1266 ms` while the
+route remained configured. This proves enumeration, exact selection, and
+native route lifecycle only; actual audible delivery and the operator's
+headphone level remain a separate hardware acceptance row.
+
 ## 2026-09-02 alpha.60 current native Timeline playback acceptance
 
 The already-running exact alpha.60 process was exercised through the native
