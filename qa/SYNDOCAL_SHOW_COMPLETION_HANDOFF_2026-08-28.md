@@ -4,9 +4,9 @@ Status date: 2026-09-02 JST
 
 This is the concise authoritative resume note for the final show-critical tranche. It supersedes chat-only status, but it does not supersede the detailed acceptance documents named below.
 
-## 2026-09-02 alpha.60 managed-output source candidate
+## 2026-09-02 alpha.60 native/managed-output checkpoint
 
-Alpha.60 is being prepared from upstream-equal parent
+Alpha.60 is the current native candidate, based on upstream-equal parent
 `9ae8276cc6fbf807b3517770f22ee788e050f85f` on
 `codex/syndocal-v1.2`. The current exact alpha.59 process reproduced a narrow
 post-confirmation race: the keepalive manager advanced the healthy exact Both
@@ -36,7 +36,7 @@ Its separate 3840x2160 media file is `43,807,726` bytes / SHA-256
 Absolute paths keep this a same-PC QA artifact, not a portable release bundle;
 USB-DMX remains a runtime-only acceptance row.
 
-Source checkpoint `dabbcaec8157b7c4f648af82516ee607394a7c90` is committed,
+The alpha.60 checkpoint `140bebcabeec4f574fa37bc30e03e1b294ecbc32` is committed,
 pushed, and upstream-equal. The exact Community MSVC `14.44.35207` pinned
 no-bundle build passed in `1m48s` with first-party warnings `0`; only the
 existing Vite large-chunk advisory was emitted. Artifact:
@@ -69,8 +69,9 @@ alpha54/alpha55 derivation checks all pass. The full Rust suite is
 `1415/1/14` (pass/fail/ignored); its only failure is the external local
 `DSF2026.dvc` `4chPar`/`Dimmer` mismatch, retained as fail-closed evidence.
 The regenerable Cargo dev profile was cleaned after a `60,082`-file/
-`151.2 GiB` dry-run; release and QA artifacts were not removed. Next action is
-the pinned native no-bundle build after the source checkpoint commit/push.
+`151.2 GiB` dry-run; release and QA artifacts were not removed. The next safe
+action is one bounded operator/native acceptance pass; no hardware or pixel
+claim may be inferred from the process and device-presence evidence above.
 
 ## 2026-09-01 alpha.59 native and local hardware checkpoint
 

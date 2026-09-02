@@ -33,8 +33,8 @@ The specimen is not portable because its media paths are machine-local.
 Source focused acceptance is GO.
 USB-DMX/runtime rows remain separate from that source verdict.
 
-The source checkpoint is committed and pushed at
-`dabbcaec8157b7c4f648af82516ee607394a7c90` on `codex/syndocal-v1.2`.
+The alpha.60 checkpoint is committed and pushed at
+`140bebcabeec4f574fa37bc30e03e1b294ecbc32` on `codex/syndocal-v1.2`.
 The exact Community MSVC `14.44.35207` pinned no-bundle native build passed
 in `1m48s` with first-party warnings `0`; the only build advisory was the
 existing Vite large-chunk notice. The resulting artifact is

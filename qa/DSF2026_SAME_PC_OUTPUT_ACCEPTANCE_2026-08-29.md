@@ -1,6 +1,32 @@
-# DSF2026 same-PC output acceptance — current 2026-09-01
+# DSF2026 same-PC output acceptance — current 2026-09-02
 
-## 2026-09-01 alpha.57 native current boundary
+## 2026-09-02 alpha.60 native launch checkpoint
+
+The current source checkpoint is `140bebcabeec4f574fa37bc30e03e1b294ecbc32`
+on branch `codex/syndocal-v1.2`, pushed and upstream-equal. The exact Community
+MSVC `14.44.35207` pinned no-bundle build passed in `1m48s` with first-party
+warnings `0`; the only build notice was the existing Vite large-chunk advisory.
+The resulting `target/release/syndocal.exe` is ProductVersion and FileVersion
+`1.2.0-alpha.60`, `62,435,840` bytes, SHA-256
+`29045BC40227F823E0A2259113E2BECC246B665AEC161E5A14111D9CB0E4EA1C`.
+
+Exactly one process resolved to this checkout's executable (PID `53420`),
+reported `Responding=True`, and exposed the maximized main `Syndocal` window.
+Read-only host enumeration found the persisted FTDI Open-DMX selection on
+`COM3`, the `Music (Elgato Virtual Audio)` endpoint, four display modes, and an
+`Unknown MiraBox Video Capture` device entry. These are presence observations
+only; they do not prove live USB-DMX frames, audible PROGRAM/CUE, display
+pixels/60fps, MiraBox content, or Unity Art-Net/Spout.
+
+The deterministic three-display observation harness is pinned to this exact
+artifact and source identity; its seam suite passes `96/0`. It remains
+observation-only and cannot claim native display acceptance without app-owned
+output observation and explicit monitor identities. The next safe action is one
+bounded operator/native acceptance pass covering S0/USB-DMX, Display windows,
+Timeline, and PROGRAM/CUE; external Unity, DJ-Link, camera, ASIO, and
+installer/updater rows remain open.
+
+## Historical 2026-09-01 alpha.57 native boundary
 
 The current source checkpoint is `1545bedd189c1f14b9656551ca5046cb1d02023c`
 on branch `codex/syndocal-v1.2`. Exact Community MSVC `14.44.35207`

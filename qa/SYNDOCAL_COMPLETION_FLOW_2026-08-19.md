@@ -4,9 +4,9 @@ Date: 2026-08-19
 Branch at creation: `codex/syndocal-v1.0`
 Baseline before this document: `848d759846985cc3acf588356cfa3c996b4e2ef2`
 
-## 2026-09-02 alpha.60 managed-output source candidate
+## 2026-09-02 alpha.60 native/managed-output checkpoint
 
-Alpha.60 is being prepared from upstream-equal parent
+Alpha.60 is the current native candidate, based on upstream-equal parent
 `9ae8276cc6fbf807b3517770f22ee788e050f85f` on
 `codex/syndocal-v1.2`. Alpha.59 native QA reproduced two safe but
 show-blocking rejections. After native confirmation, the keepalive manager had
@@ -31,7 +31,7 @@ outputs and three compositions and changes exactly `16` paths so Display 1
 uses the optimized 1920x1080 foreground file and Display 5 uses a distinct
 3840x2160 file; USB-DMX remains a runtime-only acceptance row.
 
-Source checkpoint `dabbcaec8157b7c4f648af82516ee607394a7c90` is committed,
+The alpha.60 checkpoint `140bebcabeec4f574fa37bc30e03e1b294ecbc32` is committed,
 pushed, and upstream-equal. The pinned Community MSVC `14.44.35207` no-bundle
 build passed in `1m48s` with first-party warnings `0` (only the existing Vite
 large-chunk advisory). The exact artifact is

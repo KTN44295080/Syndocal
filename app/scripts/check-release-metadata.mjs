@@ -516,8 +516,8 @@ const currentReleaseBoundaryMarkers = Object.freeze([
   {
     path: "qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md",
     markers: [
-      "## 2026-09-02 alpha.60 managed-output source candidate",
-      "Alpha.60 is being prepared from upstream-equal parent",
+      "## 2026-09-02 alpha.60 native/managed-output checkpoint",
+      "Alpha.60 is the current native candidate, based on upstream-equal parent",
       "managed-output focused `28/0/0`",
       "9ae8276cc6fbf807b3517770f22ee788e050f85f",
       "USB-DMX",
@@ -526,8 +526,8 @@ const currentReleaseBoundaryMarkers = Object.freeze([
   {
     path: "qa/SYNDOCAL_SHOW_COMPLETION_HANDOFF_2026-08-28.md",
     markers: [
-      "## 2026-09-02 alpha.60 managed-output source candidate",
-      "Alpha.60 is being prepared from upstream-equal parent",
+      "## 2026-09-02 alpha.60 native/managed-output checkpoint",
+      "Alpha.60 is the current native candidate, based on upstream-equal parent",
       "managed-output focused `28/0/0`",
       "9ae8276cc6fbf807b3517770f22ee788e050f85f",
       "USB-DMX",
