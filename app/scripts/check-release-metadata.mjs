@@ -32,7 +32,7 @@ import { withMaterializedVerifiedExecutable } from "./verified-materialization.m
 
 export { withMaterializedVerifiedExecutable } from "./verified-materialization.mjs";
 
-export const expectedVersion = "1.2.0-alpha.60";
+export const expectedVersion = "1.2.0-alpha.61";
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const appRoot = resolve(scriptDir, "..");
 const workspaceRoot = resolve(appRoot, "..");
@@ -506,7 +506,7 @@ const currentReleaseBoundaryMarkers = Object.freeze([
   {
     path: "RELEASE_STATUS.md",
     markers: [
-      "## 2026-09-02 current alpha.60 managed-output source candidate",
+      "## 2026-09-02 current alpha.61 managed-output source candidate",
       "Source focused acceptance is GO.",
       "managed-output focused `28/28`",
       "9ae8276cc6fbf807b3517770f22ee788e050f85f",
@@ -516,8 +516,8 @@ const currentReleaseBoundaryMarkers = Object.freeze([
   {
     path: "qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md",
     markers: [
-      "## 2026-09-02 alpha.60 native/managed-output checkpoint",
-      "Alpha.60 is the current native candidate, based on upstream-equal parent",
+      "## 2026-09-02 alpha.61 native/managed-output checkpoint",
+      "Alpha.61 is the current native candidate, based on upstream-equal parent",
       "managed-output focused `28/0/0`",
       "9ae8276cc6fbf807b3517770f22ee788e050f85f",
       "USB-DMX",
@@ -526,8 +526,8 @@ const currentReleaseBoundaryMarkers = Object.freeze([
   {
     path: "qa/SYNDOCAL_SHOW_COMPLETION_HANDOFF_2026-08-28.md",
     markers: [
-      "## 2026-09-02 alpha.60 native/managed-output checkpoint",
-      "Alpha.60 is the current native candidate, based on upstream-equal parent",
+      "## 2026-09-02 alpha.61 native/managed-output checkpoint",
+      "Alpha.61 is the current native candidate, based on upstream-equal parent",
       "managed-output focused `28/0/0`",
       "9ae8276cc6fbf807b3517770f22ee788e050f85f",
       "USB-DMX",
@@ -617,7 +617,7 @@ function assertCurrentReleaseDocumentation(readManifest, productVersion) {
   for (const { path, markers } of currentReleaseBoundaryMarkers) {
     const top = String(readManifest(path)).split(/\r?\n/u).slice(0, 45).join("\n");
     for (const marker of markers) {
-      const resolvedMarker = marker.replace("1.2.0-alpha.60", productVersion);
+      const resolvedMarker = marker.replace("1.2.0-alpha.61", productVersion);
       if (!top.includes(resolvedMarker)) {
         throw new Error(`${path} lacks its top ${productVersion} source-only marker: '${resolvedMarker}'.`);
       }

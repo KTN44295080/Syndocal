@@ -100,11 +100,6 @@ export interface AudioOutputPanelProps {
   canStart: boolean;
   canStop: boolean;
   canReturnToNormal: boolean;
-  canTest: boolean;
-  canSolo: boolean;
-  livePlaybackActive: boolean;
-  testMode: AudioOutputTest | null;
-  soloMode: AudioOutputSoloMode;
   onBackendChange: (backend: AudioOutputBackend) => void;
   onDriverChange: (driverId: string) => void;
   onSampleRateChange: (sampleRate: number | null) => void;
@@ -120,8 +115,6 @@ export interface AudioOutputPanelProps {
   onStart: AudioOutputAction;
   onStop: AudioOutputAction;
   onReturnToNormal: AudioOutputAction;
-  onTest: (test: AudioOutputTest | null) => void | Promise<void>;
-  onSoloModeChange: (mode: AudioOutputSoloMode) => void;
   /** Shared Normal-WASAPI Timeline media/Guide/Click route. */
   timelineCueAudioStatus?: TimelineCueAudioStatus;
   timelineCueAudioMutationBusy?: boolean;
@@ -232,29 +225,6 @@ function AudioOutputCueEndpointSelect(props: AudioOutputCueEndpointSelectProps) 
   );
 }
 
-const testLabel = (test: AudioOutputTest): string => {
-  switch (test) {
-    case "program-left":
-      return "Test PROGRAM L";
-    case "program-right":
-      return "Test PROGRAM R";
-    case "program-stereo":
-      return "Test PROGRAM Stereo";
-    case "cue":
-      return "Test CUE";
-    case "spare":
-      return "Test Spare";
-  }
-};
-
-const testKinds: readonly AudioOutputTest[] = [
-  "program-left",
-  "program-right",
-  "program-stereo",
-  "cue",
-  "spare",
-];
-
 export function AudioOutputPanel(props: AudioOutputPanelProps) {
   const selectedDriverIsListed = () =>
     props.view.driverId === "" || props.options.drivers.some((option) => option.id === props.view.driverId);
@@ -275,24 +245,6 @@ export function AudioOutputPanel(props: AudioOutputPanelProps) {
     !props.canReturnToNormal ||
     props.view.backend !== "show-asio" ||
     props.view.state === "Active" ||
-    props.view.state === "Fault";
-  const testDisabled = (test: AudioOutputTest): boolean => {
-    if (props.testMode === test) return props.busy;
-    if (props.testMode !== null && props.testMode !== test) return true;
-    if (test === "spare" && !props.options.hasSpare) return true;
-    return (
-      props.busy ||
-      !props.canTest ||
-      props.livePlaybackActive ||
-      props.view.state !== "Active"
-    );
-  };
-  const soloDisabled = () =>
-    props.busy ||
-    !props.canSolo ||
-    props.view.cueRoute === "split-device" ||
-    props.livePlaybackActive ||
-    props.testMode !== null ||
     props.view.state === "Fault";
   const cueRouteChange = (route: AudioOutputCueRoute) => {
     const handler = props.onCueRouteChange ?? props.onCueChange.setRoute;
@@ -587,87 +539,6 @@ export function AudioOutputPanel(props: AudioOutputPanelProps) {
         </div>
       </details>
 
-      <Show when={props.view.backend === "show-asio"}>
-      <details class="audioOutputDisclosure" data-audio-output-disclosure="preflight" open>
-        <summary>Preflight and tests</summary>
-        <div class="audioOutputDisclosureBody">
-          <label class="audioOutputField audioOutputSoloField">
-            <span>Routing preflight / solo</span>
-            <select
-              aria-label="PROGRAM and CUE routing preflight"
-              disabled={soloDisabled()}
-              value={props.soloMode}
-              onInput={(event) =>
-                props.onSoloModeChange(event.currentTarget.value as AudioOutputSoloMode)
-              }
-            >
-              <option value="none">No solo</option>
-              <option value="program-only">PROGRAM-only</option>
-              <option value="cue-only">CUE-only</option>
-            </select>
-          </label>
-
-          <Show when={!props.canTest}>
-            <p class="audioOutputDisconnected" data-audio-output-disconnected>
-              Not connected: native test controls are unavailable.
-            </p>
-          </Show>
-
-          <Show
-            when={
-              props.canTest &&
-              !props.canSolo &&
-              props.view.cueRoute === "split-device"
-            }
-          >
-            <p class="audioOutputDisconnected" data-audio-output-solo-unavailable>
-              Solo is unavailable in split-device mode; CUE tests remain available.
-            </p>
-          </Show>
-
-          <fieldset class="audioOutputTestFieldset" aria-label="Safe audio output tests">
-            <legend>Safe tests · one at a time</legend>
-            <div class="audioOutputTestGrid">
-              <For each={testKinds}>
-                {(test) => (
-                  <button
-                    type="button"
-                    class={props.testMode === test ? "active" : undefined}
-                    data-audio-output-test={test}
-                    aria-label={testLabel(test)}
-                    aria-pressed={props.testMode === test}
-                    disabled={testDisabled(test)}
-                    onClick={() =>
-                      void props.onTest(props.testMode === test ? null : test)
-                    }
-                  >
-                    {testLabel(test)}
-                  </button>
-                )}
-              </For>
-            </div>
-            <Show when={props.testMode !== null}>
-              <button
-                type="button"
-                class="audioOutputStopTest"
-                data-audio-output-action="stop-test"
-                disabled={props.busy}
-                aria-label="Stop audio test"
-                onClick={() => void props.onTest(null)}
-              >
-                Stop test
-              </button>
-            </Show>
-            <p class="audioOutputTestHint">
-              Tests use a bounded safe level and the selected channels.
-              <Show when={props.view.cueRoute === "split-device"}>
-                {" Split CUE test plays only on the selected WDM endpoint."}
-              </Show>
-            </p>
-          </fieldset>
-        </div>
-      </details>
-      </Show>
     </section>
   );
 }

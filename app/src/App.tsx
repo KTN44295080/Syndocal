@@ -28983,11 +28983,6 @@ export default function App() {
              canStart={audioOutputController.canStart()}
              canStop={audioOutputController.canStop()}
              canReturnToNormal={audioOutputController.canReturnToNormal()}
-             canTest={audioOutputController.canTest()}
-             canSolo={audioOutputController.canSolo()}
-             livePlaybackActive={audioOutputController.livePlaybackActive()}
-             testMode={audioOutputController.testMode()}
-             soloMode={audioOutputController.soloMode()}
              onBackendChange={audioOutputController.setBackend}
              onDriverChange={audioOutputController.setDriver}
              onSampleRateChange={audioOutputController.setSampleRate}
@@ -29001,8 +28996,6 @@ export default function App() {
              onStart={audioOutputController.start}
              onStop={audioOutputController.stop}
              onReturnToNormal={audioOutputController.returnToNormal}
-             onTest={audioOutputController.setTest}
-             onSoloModeChange={audioOutputController.setSoloMode}
              timelineCueAudioStatus={timelineCueAudioStatus()}
              timelineCueAudioMutationBusy={timelineCueAudioMutationBusy()}
              timelineCueAudioLocalError={timelineCueAudioLocalError()}

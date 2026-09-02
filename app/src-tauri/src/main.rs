@@ -45110,17 +45110,38 @@ fn set_asio_output_test(
 ) -> Result<AsioOutputStatusReply, String> {
     let request: asio_output_preflight_command::AsioOutputTestRequest =
         args.get_required("request")?;
+    eprintln!(
+        "[audio-output][debug] ASIO test request target={:?}",
+        request.target()
+    );
     let slot = state
         .audio_output_router
         .as_ref()
         .ok_or_else(|| "ASIO audio-output router process owner is unavailable".to_owned())?;
-    set_asio_output_test_for_active_state(
+    if let Err(error) = set_asio_output_test_for_active_state(
         &state.engine,
         slot,
         &state.asio_output_runtime,
         request.target(),
-    )?;
-    active_asio_output_status(&state)
+    ) {
+        eprintln!(
+            "[audio-output][debug] ASIO test rejected target={:?}: {error}",
+            request.target()
+        );
+        return Err(error);
+    }
+    let status = active_asio_output_status(&state);
+    match &status {
+        Ok(_) => eprintln!(
+            "[audio-output][debug] ASIO test accepted target={:?}",
+            request.target()
+        ),
+        Err(error) => eprintln!(
+            "[audio-output][debug] ASIO test status read failed target={:?}: {error}",
+            request.target()
+        ),
+    }
+    status
 }
 
 #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
@@ -45130,6 +45151,9 @@ fn set_explicit_wdm_cue_test(
     state: State<'_, AppState>,
 ) -> Result<AsioOutputStatusReply, String> {
     let enabled: bool = args.get_required("enabled")?;
+    eprintln!(
+        "[audio-output][debug] explicit WDM CUE test request enabled={enabled}"
+    );
     let slot = state
         .audio_output_router
         .as_ref()
@@ -45181,7 +45205,16 @@ fn set_explicit_wdm_cue_test(
         };
     }
     drop(asio_runtime);
-    active_asio_output_status(&state)
+    let status = active_asio_output_status(&state);
+    match &status {
+        Ok(_) => eprintln!(
+            "[audio-output][debug] explicit WDM CUE test accepted enabled={enabled}"
+        ),
+        Err(error) => eprintln!(
+            "[audio-output][debug] explicit WDM CUE test status read failed enabled={enabled}: {error}"
+        ),
+    }
+    status
 }
 
 #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
@@ -45239,17 +45272,38 @@ fn set_asio_output_solo(
 ) -> Result<AsioOutputStatusReply, String> {
     let request: asio_output_preflight_command::AsioOutputSoloRequest =
         args.get_required("request")?;
+    eprintln!(
+        "[audio-output][debug] ASIO solo request mode={:?}",
+        request.mode()
+    );
     let slot = state
         .audio_output_router
         .as_ref()
         .ok_or_else(|| "ASIO output router process owner is unavailable".to_owned())?;
-    set_asio_output_solo_for_active_state(
+    if let Err(error) = set_asio_output_solo_for_active_state(
         &state.engine,
         slot,
         &state.asio_output_runtime,
         request.mode(),
-    )?;
-    active_asio_output_status(&state)
+    ) {
+        eprintln!(
+            "[audio-output][debug] ASIO solo rejected mode={:?}: {error}",
+            request.mode()
+        );
+        return Err(error);
+    }
+    let status = active_asio_output_status(&state);
+    match &status {
+        Ok(_) => eprintln!(
+            "[audio-output][debug] ASIO solo accepted mode={:?}",
+            request.mode()
+        ),
+        Err(error) => eprintln!(
+            "[audio-output][debug] ASIO solo status read failed mode={:?}: {error}",
+            request.mode()
+        ),
+    }
+    status
 }
 
 #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]

@@ -34,6 +34,16 @@ buffers `8..2048` (preferred `128`). This proves availability and capability
 enumeration only; audible output, long-soak/XRUN/unplug recovery, and release
 licensing remain unchecked here.
 
+## 2026-09-02 alpha.61 normal-UI diagnostics boundary
+
+The ordinary Audio setup surface intentionally does not expose ASIO preflight,
+solo, or test-tone controls. These are backend-only maintenance commands. When
+called by a QA/maintenance harness, the native command handlers write a compact
+`[audio-output][debug]` request/result record to stderr; the production panel
+does not render a diagnostic disclosure or wire those commands. This keeps
+normal output routing user-facing while retaining an auditable backend test
+path.
+
 ## 2026-09-01 alpha.57 native current boundary
 
 The current source checkpoint is `1545bedd189c1f14b9656551ca5046cb1d02023c`

@@ -297,17 +297,21 @@ export function MappingFixtureTypeStrip(props: MappingFixtureTypeStripProps) {
     >
       <span>Types</span>
       <button
+        type="button"
         class={!props.selectedTypeKey ? "active" : ""}
+        aria-label="All fixture types"
+        title="Show all fixture types"
         onClick={() => props.onSelectType(null)}
       >
-        <span class="mappingTypeGlyph kind-all" />
-        All
+        All Types
         <small>{props.filteredFixtureCount}</small>
       </button>
       <For each={props.fixtureTypeRows}>
         {(row) => (
           <button
+            type="button"
             class={props.selectedTypeKey === row.key ? "active" : ""}
+            aria-label={`Filter by fixture type: ${row.label}`}
             onClick={() => props.onSelectType(row.key)}
             title={`${row.manufacturer} ${row.label}`}
           >

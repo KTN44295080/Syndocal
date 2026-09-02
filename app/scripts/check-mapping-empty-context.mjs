@@ -13,6 +13,10 @@ const projectorSource = await readFile(
   new URL("../src/components/MappingProjectorSelectionPanel.tsx", import.meta.url),
   "utf8",
 );
+const filterStripSource = await readFile(
+  new URL("../src/components/MappingFilterStrips.tsx", import.meta.url),
+  "utf8",
+);
 
 const contextStart = sidebarSource.indexOf("export function MappingSetupContextPanel");
 assert.ok(contextStart >= 0, "the Setup context panel must remain available");
@@ -81,6 +85,14 @@ assert.match(inspectorSource, /data-gdtf-geometry-disclosure/);
 assert.match(projectorSource, /<For\s+each=\{props\.outputs\}>/);
 assert.match(projectorSource, /<MappingProjectorControlsPanel/);
 assert.match(projectorSource, /Projection Surfaces/);
+
+const typeStripStart = filterStripSource.indexOf("export function MappingFixtureTypeStrip");
+assert.ok(typeStripStart >= 0, "the fixture type filter strip must remain available");
+const typeStripSource = filterStripSource.slice(typeStripStart);
+assert.match(typeStripSource, /<button\s+type="button"\s+class=\{!props\.selectedTypeKey \? "active" : ""\}\s+aria-label="All fixture types"\s+title="Show all fixture types"/);
+assert.match(typeStripSource, /All Types\s*<small>\{props\.filteredFixtureCount\}<\/small>/);
+assert.doesNotMatch(typeStripSource, /kind-all/);
+assert.match(typeStripSource, /<button\s+type="button"\s+class=\{props\.selectedTypeKey === row\.key/);
 
 const renderContext = ({ selectedFixture, outputs }) => ({
   selectionBrowser: true,

@@ -385,10 +385,12 @@ export const StageSelectionPanel = (props: StageSelectionPanelProps) => (
       </div>
     </div>
     <button
-      class={!props.selectedFixtureTypeFilter() ? "mappingTypeButton active" : "mappingTypeButton"}
+      type="button"
+      class={!props.selectedFixtureTypeFilter() ? "mappingTypeButton mappingTypeAll active" : "mappingTypeButton mappingTypeAll"}
+      aria-label="All fixture types"
+      title="Show all fixture types"
       onClick={() => props.selectFixtureTypeFilter(null)}
     >
-      <span class="mappingTypeGlyph kind-all" aria-hidden="true" />
       <span class="mappingTypeCopy">
         <strong>All Types</strong>
         <small>{props.selectedFixtureGroupFilter() ?? "All groups"}</small>
@@ -403,7 +405,9 @@ export const StageSelectionPanel = (props: StageSelectionPanelProps) => (
     <For each={props.fixtureTypeRows()}>
       {(row) => (
         <button
+          type="button"
           class={props.selectedFixtureTypeFilter() === row.key ? "mappingTypeButton active" : "mappingTypeButton"}
+          aria-label={`Filter by fixture type: ${row.label}`}
           title={`${row.manufacturer} / ${row.label} / ${row.mode}`}
           onClick={() => props.selectFixtureTypeFilter(row.key)}
         >

@@ -374,6 +374,21 @@ const assertions = [
     "Audio output must stay in the Setup I/O flow",
     true,
   ],
+  [
+    /fn set_asio_output_test[^]*?\[audio-output\]\[debug\][^]*?ASIO test request target[^]*?ASIO test rejected target[^]*?ASIO test accepted target/u,
+    nativeMain,
+    "Backend-only ASIO test commands must report request, rejection, and acceptance in logs",
+  ],
+  [
+    /fn set_explicit_wdm_cue_test[^]*?\[audio-output\]\[debug\][^]*?explicit WDM CUE test request enabled[^]*?explicit WDM CUE test accepted enabled/u,
+    nativeMain,
+    "Backend-only WDM CUE tests must report their request and result in logs",
+  ],
+  [
+    /fn set_asio_output_solo[^]*?\[audio-output\]\[debug\][^]*?ASIO solo request mode[^]*?ASIO solo rejected mode[^]*?ASIO solo accepted mode/u,
+    nativeMain,
+    "Backend-only ASIO solo commands must report request, rejection, and acceptance in logs",
+  ],
 ];
 
 for (const assertion of assertions) {

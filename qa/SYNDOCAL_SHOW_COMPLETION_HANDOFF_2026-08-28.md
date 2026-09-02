@@ -4,10 +4,10 @@ Status date: 2026-09-02 JST
 
 This is the concise authoritative resume note for the final show-critical tranche. It supersedes chat-only status, but it does not supersede the detailed acceptance documents named below.
 
-## 2026-09-02 alpha.60 native/managed-output checkpoint
+## 2026-09-02 alpha.61 native/managed-output checkpoint
 
-Alpha.60 is the current native candidate, based on upstream-equal parent
-`9ae8276cc6fbf807b3517770f22ee788e050f85f` on `codex/syndocal-v1.2`.
+Alpha.61 is the current native candidate, based on upstream-equal parent
+`d34a6011ff1c768f2f3a75bd8ec55900403da21b` on `codex/syndocal-v1.2`.
 managed-output focused `28/0/0` passed with first-party warnings `0`; the
 USB-DMX route remains an explicitly separate runtime and hardware acceptance
 row. This top boundary is the release-authority marker; the newer native
@@ -32,11 +32,24 @@ return path is also explicit: when ASIO is selected but the native router is
 still `Normal`, the Return-to-Normal action is enabled and resets only the
 local view, without dispatching a redundant native Normal-selection command.
 
-Source commit `c528aa2` is pushed on `codex/syndocal-v1.2`. The exact pinned
-Community MSVC 14.44 no-bundle native build passed after this fix in `2m25s`;
+## 2026-09-02 alpha.61 normal-UI diagnostics boundary (source checkpoint)
+
+The normal Audio setup surface no longer renders ASIO preflight, solo, or
+bounded test-tone controls. Those controls were diagnostic operations, not
+ordinary output configuration, so they are retained only as backend Tauri
+commands for QA/maintenance and are never wired into the production
+`AudioOutputPanel`. Backend invocations now emit a compact `[audio-output][debug]`
+request/result record to stderr; no test control or diagnostic disclosure is
+shown in the normal UI. PROGRAM/CUE routing, device selection, lifecycle state,
+and explicit Return-to-Normal remain ordinary setup controls.
+
+The diagnostic-boundary source parent was commit `c528aa2` on
+`codex/syndocal-v1.2`. The exact pinned Community MSVC 14.44 no-bundle native
+build for that parent passed in `2m25s`;
 the release contract chain, TypeScript, focused audio checker, and fixed-linker
 Cargo check/test are green. The final executable/runtime evidence is recorded
-below. This is an internal alpha.60 checkpoint, not a release tag.
+below. That parent evidence is historical; the alpha.61 build evidence is
+recorded below and is not a release tag.
 
 After the documentation repair, `pnpm --dir app run check:release` passed again
 with first-party warnings `0` (release metadata, ASIO packaging `169`, ASIO v3
@@ -45,6 +58,42 @@ and camera contracts). The matching `check:release:self-test` also passed:
 release metadata `125`, Windows artifact self-test `140`, and strict JSON `130`;
 the unapproved bridge was staged outside `target/release` for the packaging
 checks and restored with its original SHA-256.
+
+The alpha.61 native candidate then rebuilt after the diagnostics-boundary,
+fixture-pack count, and Setup Lighting filter-clarity changes. The pinned
+Community MSVC `14.44.35207` no-bundle build passed in `2m00s` with first-party
+warnings `0` (only the existing Vite large-chunk advisory). The artifact is
+`C:\Users\kouty\Documents\KDMX\target\release\syndocal.exe`,
+Product/FileVersion `1.2.0-alpha.61`, `63,520,256` bytes, SHA-256
+`872ED7DDCE00935DB8E13197966F97526A5DCB28D6074CFFA91CC39E5C4117C4`.
+It is running as PID `84596`; exactly one exact-checkout process is responsive
+and maximized (`showCmd=3`). The verified fixture-pack header now reports
+unique fixture-family count rather than summed mode count. Setup Lighting's
+fixture-type strip now says `All Types` and no longer renders the ambiguous
+red/white four-block glyph; the strip remains a filter independent of the
+current fixture selection, with explicit accessible label and tooltip. This is
+native build/window evidence, not physical USB-DMX, audible, pixel, camera,
+DJ-Link, or pedal acceptance.
+
+## 2026-09-02 alpha.61 Setup Lighting empty-selection clarity
+
+The small red/white four-block mark shown in Setup → Lighting when no fixture
+is picked was the old visual glyph for the `All Types` fixture-type filter. It
+was not a fixture state, DMX state, or an implicit fixture selection. The
+normal filter now renders the explicit `All Types` label, keeps the filtered
+fixture count, adds `aria-label="All fixture types"` and a tooltip, and removes
+the ambiguous glyph in both active and legacy selection surfaces. Type-specific
+filter buttons retain their existing behavior and now have explicit button
+semantics as well.
+
+Focused validation passed: `node app/scripts/check-mapping-empty-context.mjs`,
+`pnpm --dir app exec tsc --noEmit`, the audio panel/control checkers, GDTF
+profile-action checker, and `git diff --check` (exit `0`; only Git's expected
+LF→CRLF notices). The full `pnpm --dir app run check:release` chain also
+passed: ASIO packaging `169`, ASIO v3 `22`, Timeline audio/loop/watermark/
+bootstrap, video routing/window observation, and camera contracts. The
+unapproved ASIO bridge was staged outside `target/release` and restored with
+unchanged SHA-256 `06132C2CC8C54F7D89947F8BB1E5320226986BCD8155069AFEC034C6E841B9AC`.
 
 ## 2026-09-02 normal ASIO native/runtime evidence
 

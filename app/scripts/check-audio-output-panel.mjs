@@ -9,9 +9,10 @@ const read = (relativePath) =>
     source.replace(/\r\n?/gu, "\n"),
   );
 
-const [panel, css] = await Promise.all([
+const [panel, css, app] = await Promise.all([
   read("../src/components/AudioOutputPanel.tsx"),
   read("../src/components/AudioOutputPanel.css"),
+  read("../src/App.tsx"),
 ]);
 
 const assertions = [
@@ -41,7 +42,7 @@ const assertions = [
     "options type must expose driver/rate/buffer/channel capability lists",
   ],
   [
-    /export interface AudioOutputPanelProps[\s\S]*?view: AudioOutputView;[\s\S]*?options: AudioOutputOptions;[\s\S]*?canRefresh: boolean;[\s\S]*?canRevalidate: boolean;[\s\S]*?canStart: boolean;[\s\S]*?canStop: boolean;[\s\S]*?canReturnToNormal: boolean;[\s\S]*?canTest: boolean;/u,
+    /export interface AudioOutputPanelProps[\s\S]*?view: AudioOutputView;[\s\S]*?options: AudioOutputOptions;[\s\S]*?canRefresh: boolean;[\s\S]*?canRevalidate: boolean;[\s\S]*?canStart: boolean;[\s\S]*?canStop: boolean;[\s\S]*?canReturnToNormal: boolean;/u,
     panel,
     "props type must expose parent-owned action gates",
   ],
@@ -50,7 +51,7 @@ const assertions = [
   [/<Show when=\{props\.view\.backend === "show-asio"\}>\s*<div class="audioOutputActions"/u, panel, "ASIO lifecycle actions must stay hidden in Normal WASAPI mode"],
   [/classList=\{\{ "audioOutputFieldGrid--normal": props\.view\.backend === "normal-wasapi" \}\}/u, panel, "Normal WASAPI configuration must collapse to one useful field"],
   [/<Show when=\{props\.view\.backend === "normal-wasapi"\}>[\s\S]*?data-audio-output-normal-notice[\s\S]*?<TimelineCueAudioRoutingPanel/u, panel, "Normal WASAPI must expose authoritative Timeline WDM routing in Setup Audio"],
-  [/<Show when=\{props\.view\.backend === "show-asio"\}>\s*<details class="audioOutputDisclosure" data-audio-output-disclosure="preflight"/u, panel, "ASIO preflight controls must stay hidden in Normal WASAPI mode"],
+  [/<Show when=\{props\.view\.backend === "show-asio"\}>\s*<div class="audioOutputCueRouting"/u, panel, "ASIO routing must stay hidden in Normal WASAPI mode"],
   [/\{ value: "show-asio", label: "ASIO" \}/u, panel, "ASIO label must be visible"],
   [/aria-label="Audio output backend"/u, panel, "backend selector needs an accessible name"],
   [/aria-label="Audio output driver"/u, panel, "driver selector needs an accessible name"],
@@ -71,43 +72,12 @@ const assertions = [
   [/data-audio-output-action="start"[\s\S]*?>\s*Start\s*</u, panel, "Start action must be present"],
   [/data-audio-output-action="stop"[\s\S]*?>\s*Stop\s*</u, panel, "Stop action must be present"],
   [/data-audio-output-action="return-to-normal"[\s\S]*?>\s*Return to normal\s*</u, panel, "explicit Return to normal action must be present"],
-  [/Test PROGRAM L/u, panel, "PROGRAM L test must be present"],
-  [/Test PROGRAM R/u, panel, "PROGRAM R test must be present"],
-  [/Test PROGRAM Stereo/u, panel, "PROGRAM stereo test must be present"],
-  [/Test CUE/u, panel, "CUE test must be present"],
-  [/Test Spare/u, panel, "Spare test must be present"],
-  [/props\.testMode !== null && props\.testMode !== (?:test|kind)/u, panel, "test actions must remain mutually exclusive"],
-  [
-    /const testDisabled = \(test: AudioOutputTest\): boolean => \{[\s\S]*?test === "cue" && props\.view\.cueRoute === "split-device"[\s\S]*?return true;/u,
-    panel,
-    "split-device CUE test must not remain disabled at the panel layer",
-    true,
-  ],
-  [/Split CUE test plays only on the selected WDM endpoint\./u, panel, "split-device CUE test must identify its selected WDM endpoint"],
-  [
-    /<Show when=\{!props\.canTest\}>[\s\S]*?Not connected: native test controls are unavailable\./u,
-    panel,
-    "test-unavailable messaging must depend only on canTest",
-  ],
-  [
-    /<Show[\s\S]*?props\.canTest[\s\S]*?!props\.canSolo[\s\S]*?props\.view\.cueRoute === "split-device"[\s\S]*?Solo is unavailable in split-device mode; CUE tests remain available\./u,
-    panel,
-    "split-device solo messaging must remain separate while CUE tests stay available",
-  ],
-  [
-    /Not connected: native test and solo controls are unavailable\./u,
-    panel,
-    "combined test-and-solo unavailable messaging must be retired",
-    true,
-  ],
-  [/const testDisabled = [\s\S]*?props\.canTest[\s\S]*?props\.livePlaybackActive/u, panel, "tests must be disabled during live playback"],
-  [/const soloDisabled = \(\) =>[\s\S]*?!props\.canSolo[\s\S]*?props\.view\.cueRoute === "split-device"/u, panel, "all solo controls must be disabled in split-device"],
-  [/const soloDisabled = [\s\S]*?props\.canSolo[\s\S]*?props\.livePlaybackActive/u, panel, "solo must be disabled during live playback"],
-  [/onTest\(null\)/u, panel, "the selected test must have an explicit stop path"],
-  [/PROGRAM-only/u, panel, "PROGRAM-only preflight must be present"],
-  [/CUE-only/u, panel, "CUE-only preflight must be present"],
+  [/data-audio-output-disclosure="preflight"|data-audio-output-test|onTest|onSoloModeChange|PROGRAM-only|CUE-only|Safe audio output tests/u, panel, "debug preflight/test operations must not be exposed by the normal audio panel", true],
+  [/canTest: boolean;|canSolo: boolean;|livePlaybackActive: boolean;|testMode: AudioOutputTest|soloMode: AudioOutputSoloMode/u, panel, "debug-only state must not be part of the normal audio panel props", true],
+  [/const testDisabled|const soloDisabled|testLabel\(|testKinds/u, panel, "debug-only UI helpers must not remain in the normal audio panel", true],
   [/<details[\s\S]*?Output configuration[\s\S]*?<\/details>/u, panel, "configuration must be a compact disclosure group"],
-  [/<details[\s\S]*?Preflight and tests[\s\S]*?<\/details>/u, panel, "preflight/tests must be a compact disclosure group"],
+  [/<details[\s\S]*?preflight[\s\S]*?<\/details>/u, panel, "preflight/test disclosure must not be present in the normal audio panel", true],
+  [/<AudioOutputPanel[\s\S]*?canTest=|<AudioOutputPanel[\s\S]*?onTest=|<AudioOutputPanel[\s\S]*?showAdvancedDiagnostics=\{true\}/u, app, "production AudioOutputPanel must not wire debug operations into the normal UI", true],
   [/import "\.\/AudioOutputPanel\.css";/u, panel, "panel must import only its local CSS surface"],
   [/Output \$\{option\.index \+ 1\}/u, panel, "channel labels must cross the zero-based boundary exactly once"],
 ];

@@ -196,6 +196,7 @@ export function GdtfProfileTree(props: GdtfProfileTreeProps) {
                   title={props.source === "verified" ? group.description : undefined}
                   data-profile-tree-item="manufacturer"
                   data-profile-tree-profile-count={props.source === "verified" ? group.profileCount : undefined}
+                  data-profile-tree-fixture-count={props.source === "verified" ? group.fixtures.length : undefined}
                   onClick={() => setManufacturerExpanded(group.key, !expanded())}
                   onKeyDown={(event) => handleBranchKeyDown(
                     event,
@@ -206,10 +207,8 @@ export function GdtfProfileTree(props: GdtfProfileTreeProps) {
                   <span class="patchProfileTreeChevron" aria-hidden="true">{expanded() ? "▾" : "▸"}</span>
                   <strong data-no-localize={props.source === "verified" ? undefined : ""}>{group.manufacturer}</strong>
                   <span class="patchProfileTreeCount">
-                    <b data-no-localize>{props.source === "verified" ? group.profileCount : group.fixtures.length}</b>{" "}
-                    {props.source === "verified"
-                      ? (group.profileCount === 1 ? "Profile" : "profiles")
-                      : (group.fixtures.length === 1 ? "Fixture" : "fixtures")}
+                    <b data-no-localize>{group.fixtures.length}</b>{" "}
+                    {group.fixtures.length === 1 ? "Fixture" : "fixtures"}
                   </span>
                 </button>
 

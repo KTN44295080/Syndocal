@@ -4,10 +4,10 @@ Date: 2026-08-19
 Branch at creation: `codex/syndocal-v1.0`
 Baseline before this document: `848d759846985cc3acf588356cfa3c996b4e2ef2`
 
-## 2026-09-02 alpha.60 native/managed-output checkpoint
+## 2026-09-02 alpha.61 native/managed-output checkpoint
 
-Alpha.60 is the current native candidate, based on upstream-equal parent
-`9ae8276cc6fbf807b3517770f22ee788e050f85f` on
+Alpha.61 is the current native candidate, based on upstream-equal parent
+`d34a6011ff1c768f2f3a75bd8ec55900403da21b` on
 `codex/syndocal-v1.2`. Alpha.59 native QA reproduced two safe but
 show-blocking rejections. After native confirmation, the keepalive manager had
 legitimately renewed the exact Both lease, but blackout release and existing
@@ -31,7 +31,7 @@ outputs and three compositions and changes exactly `16` paths so Display 1
 uses the optimized 1920x1080 foreground file and Display 5 uses a distinct
 3840x2160 file; USB-DMX remains a runtime-only acceptance row.
 
-The alpha.60 checkpoint `140bebcabeec4f574fa37bc30e03e1b294ecbc32` is committed,
+The preceding alpha.60 checkpoint `140bebcabeec4f574fa37bc30e03e1b294ecbc32` is committed,
 pushed, and upstream-equal. The pinned Community MSVC `14.44.35207` no-bundle
 build passed in `1m48s` with first-party warnings `0` (only the existing Vite
 large-chunk advisory). The exact artifact is
@@ -81,6 +81,29 @@ control-plane inventory suite is `28/28`, TypeScript/release checks and the
 alpha54/alpha55 derivation checkers pass. A Cargo dev-profile cleanup removed
 the dry-run's `60,082` regenerable files (`151.2 GiB`); release/QA trees were
 left intact.
+
+The alpha.61 normal-UI cleanup is now included in the native candidate. The
+ordinary Audio setup surface renders only output configuration and lifecycle
+controls; ASIO preflight, solo, and test tones remain backend-only maintenance
+commands with compact stderr debug records. Verified fixture-pack headers show
+unique fixture-family counts, with mode counts retained on expanded fixture
+rows. Setup Lighting's `All Types` filter no longer uses the ambiguous red/white
+four-block glyph; its filter meaning is explicit and type buttons have normal
+button semantics. The pinned Community MSVC `14.44.35207` no-bundle build
+passed in `2m00s` with first-party warnings `0` (only the existing Vite
+large-chunk advisory). The artifact is `target/release/syndocal.exe`,
+Product/FileVersion `1.2.0-alpha.61`, `63,520,256` bytes, SHA-256
+`872ED7DDCE00935DB8E13197966F97526A5DCB28D6074CFFA91CC39E5C4117C4`.
+PID `84596` is the sole exact-checkout process and is responsive/maximized
+(`showCmd=3`). No physical or audible acceptance is inferred from this build.
+
+The focused Setup Lighting empty-selection contract passes
+`node app/scripts/check-mapping-empty-context.mjs`; the full
+`pnpm --dir app run check:release` chain passes as well (ASIO packaging `169`,
+ASIO v3 `22`, Timeline audio/loop/watermark/bootstrap, video routing/window
+observation, and camera contracts). The unapproved ASIO bridge was staged
+outside `target/release` and restored with its original SHA-256. The filter
+clarity change is UI-only and does not alter fixture selection or DMX output.
 
 ## 2026-09-01 alpha.59 source candidate before native acceptance
 

@@ -1,12 +1,12 @@
 # Syndocal historical v1.0 / current v1.2 alpha Release Status
 
 Updated: 2026-09-02
-Branch: `codex/syndocal-v1.2`; current product metadata is `1.2.0-alpha.60`.
+Branch: `codex/syndocal-v1.2`; current product metadata is `1.2.0-alpha.61`.
 
-## 2026-09-02 current alpha.60 managed-output source candidate
+## 2026-09-02 current alpha.61 managed-output source candidate
 
-Alpha.60 is based on upstream-equal parent
-`9ae8276cc6fbf807b3517770f22ee788e050f85f`. Alpha.59 native QA exposed a
+Alpha.61 is based on upstream-equal parent
+`d34a6011ff1c768f2f3a75bd8ec55900403da21b`. Alpha.59 native QA exposed a
 post-confirmation lease-generation defect: the healthy keepalive manager could
 renew its exact Both lease after the UI captured a request, so blackout release
 and existing Display-window reopen reached the ordinary lifecycle path with a
@@ -33,12 +33,34 @@ The specimen is not portable because its media paths are machine-local.
 Source focused acceptance is GO.
 USB-DMX/runtime rows remain separate from that source verdict.
 
-The alpha.60 checkpoint is committed and pushed at
+The alpha.61 normal-UI cleanup removes ASIO preflight, solo, and test-tone
+controls from the ordinary Audio setup surface; those maintenance commands
+remain backend-only and write compact `[audio-output][debug]` request/result
+records to stderr. Verified fixture-pack headers now show the unique fixture
+family count (for example, a pack is shown as `N fixtures`), while the mode
+count remains visible on each expanded fixture row. Setup Lighting's fixture
+type filter now says `All Types` instead of showing the ambiguous red/white
+four-block glyph; it remains an independent filter, not a fixture selection.
+The type buttons have explicit button semantics and accessible labels.
+
+The exact alpha.61 source tree was built with the pinned Community MSVC
+`14.44.35207` no-bundle gate in `2m00s`, with first-party warnings `0` and
+only the existing Vite large-chunk advisory. The artifact is
+`target/release/syndocal.exe`, Product/FileVersion `1.2.0-alpha.61`,
+`63,520,256` bytes, SHA-256
+`872ED7DDCE00935DB8E13197966F97526A5DCB28D6074CFFA91CC39E5C4117C4`.
+It was launched from the exact checkout path as PID `84596`; exactly one
+matching process is responsive and maximized (`showCmd=3`). This proves the
+native build and window launch only; USB-DMX illumination, audible delivery,
+DJ-Link/pedal, Art-Net/Spout/Unity, camera frames, and signed distribution
+remain separate acceptance rows.
+
+The preceding alpha.60 checkpoint is committed and pushed at
 `140bebcabeec4f574fa37bc30e03e1b294ecbc32` on `codex/syndocal-v1.2`.
 The exact Community MSVC `14.44.35207` pinned no-bundle native build passed
 in `1m48s` with first-party warnings `0`; the only build advisory was the
 existing Vite large-chunk notice. The resulting artifact is
-`target/release/syndocal.exe`, Product/FileVersion `1.2.0-alpha.60`,
+`target/release/syndocal.exe`, Product/FileVersion `1.2.0-alpha.61`,
 `62,435,840` bytes, SHA-256
 `29045BC40227F823E0A2259113E2BECC246B665AEC161E5A14111D9CB0E4EA1C`.
 
