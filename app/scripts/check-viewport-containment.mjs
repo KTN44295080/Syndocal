@@ -20,7 +20,7 @@ const appRoot = resolve(scriptDir, "..");
 const verifiedGenericProfileCount = 118;
 const verifiedGenericCategoryProfileCounts = [40, 18, 20, 12, 13, 5, 3, 7];
 const verifiedGenericCategoryCount = verifiedGenericCategoryProfileCounts.length;
-const verifiedGenericFirstProfileFavoriteKey = "verified:par-direct-rgb-3ch";
+const verifiedFixtureFamilyCount = 31;
 const largeShowMode = process.argv.includes("--large-show");
 const vjEmptyMode = process.argv.includes("--vj-empty");
 const liveAudioOnlyMode = process.argv.includes("--live-audio-only");
@@ -17907,6 +17907,9 @@ async function readPatchZoningState(client) {
       verifiedSectionCountText: (document.querySelector(
         '[data-patch-profile-section="verified"] > header span'
       )?.textContent || '').trim(),
+      verifiedSectionCountValue: Number(document.querySelector(
+        '[data-patch-profile-section="verified"] > header [data-patch-profile-section-count="fixtures"]'
+      )?.getAttribute('data-patch-profile-section-count-value') ?? -1),
       verifiedProfileFootprints: visibleMatches(
         '[data-patch-profile-row][data-profile-source="verified"]'
       ).map((row) => Number(row.getAttribute('data-profile-footprint'))),
@@ -18092,7 +18095,7 @@ async function checkPatchZoning(client) {
       initial.verifiedProfileTreeCount === 1 &&
       initial.verifiedCategoryCount === verifiedGenericCategoryCount &&
       JSON.stringify(initial.verifiedCategoryProfileCounts) === JSON.stringify(verifiedGenericCategoryProfileCounts) &&
-      initial.verifiedSectionCountText === String(verifiedGenericProfileCount) &&
+      initial.verifiedSectionCountValue === verifiedFixtureFamilyCount &&
       initial.verifiedCategoryExpandedValues.every((value) => value === "false") &&
       initial.verifiedProfileRowCount === 0 &&
       initial.recentProfileRowCount >= 1 &&
@@ -18105,7 +18108,7 @@ async function checkPatchZoning(client) {
       initial.cacheManufacturerExpandedValues.every((value) => value === "false"),
     footprintFilterIsExactAndSearchAutoExpands:
       footprintFiltered.footprintFilterValue === "25" &&
-      footprintFiltered.verifiedSectionCountText === "3" &&
+      footprintFiltered.verifiedSectionCountValue === 2 &&
       JSON.stringify(footprintFiltered.verifiedCategoryProfileCounts) === JSON.stringify([1, 2]) &&
       footprintFiltered.verifiedCategoryExpandedValues.length === 2 &&
       footprintFiltered.verifiedCategoryExpandedValues.every((value) => value === "true") &&
@@ -18115,7 +18118,7 @@ async function checkPatchZoning(client) {
       footprintFiltered.verifiedModeProfileRowCount === 3,
     clearedSearchRecollapsesVerifiedCategories:
       searchCleared.footprintFilterValue === "" &&
-      searchCleared.verifiedSectionCountText === String(verifiedGenericProfileCount) &&
+      searchCleared.verifiedSectionCountValue === verifiedFixtureFamilyCount &&
       searchCleared.verifiedCategoryCount === verifiedGenericCategoryCount &&
       searchCleared.verifiedCategoryExpandedValues.every((value) => value === "false") &&
       searchCleared.verifiedProfileRowCount === 0,
@@ -20030,6 +20033,9 @@ async function runPatchEmptyStateViewport(client, viewport) {
       bundledSectionCountText: document.querySelector(
         '[data-patch-profile-section="bundled"] > header span'
       )?.textContent?.trim() || '',
+      bundledSectionCountValue: Number(document.querySelector(
+        '[data-patch-profile-section="bundled"] > header [data-patch-profile-section-count="fixtures"]'
+      )?.getAttribute('data-patch-profile-section-count-value') ?? -1),
       bundledLoadingRowCount: document.querySelectorAll('[data-patch-bundled-loading]').length,
       verifiedProfileRowCount: document.querySelectorAll(
         '[data-patch-profile-row][data-profile-source="verified"]'
@@ -20087,6 +20093,9 @@ async function runPatchEmptyStateViewport(client, viewport) {
       sectionCountText: (document.querySelector(
         '[data-patch-profile-section="verified"] > header span'
       )?.textContent || '').trim(),
+      sectionCountValue: Number(document.querySelector(
+        '[data-patch-profile-section="verified"] > header [data-patch-profile-section-count="fixtures"]'
+      )?.getAttribute('data-patch-profile-section-count-value') ?? -1),
       categoryProfileCounts: [...document.querySelectorAll(
         '[data-patch-profile-tree="verified"] [data-profile-tree-profile-count]'
       )].map((row) => Number(row.getAttribute('data-profile-tree-profile-count'))),
@@ -20144,6 +20153,9 @@ async function runPatchEmptyStateViewport(client, viewport) {
       sectionCountText: (document.querySelector(
         '[data-patch-profile-section="verified"] > header span'
       )?.textContent || '').trim(),
+      sectionCountValue: Number(document.querySelector(
+        '[data-patch-profile-section="verified"] > header [data-patch-profile-section-count="fixtures"]'
+      )?.getAttribute('data-patch-profile-section-count-value') ?? -1),
       categoryProfileCounts: [...document.querySelectorAll(
         '[data-patch-profile-tree="verified"] [data-profile-tree-profile-count]'
       )].map((row) => Number(row.getAttribute('data-profile-tree-profile-count'))),
@@ -20174,6 +20186,9 @@ async function runPatchEmptyStateViewport(client, viewport) {
     sectionCountText: (document.querySelector(
       '[data-patch-profile-section="verified"] > header span'
     )?.textContent || '').trim(),
+    sectionCountValue: Number(document.querySelector(
+      '[data-patch-profile-section="verified"] > header [data-patch-profile-section-count="fixtures"]'
+    )?.getAttribute('data-patch-profile-section-count-value') ?? -1),
     categoryCount: document.querySelectorAll(
       '[data-patch-profile-tree="verified"] [data-profile-tree-item="manufacturer"]'
     ).length,
@@ -20204,7 +20219,7 @@ async function runPatchEmptyStateViewport(client, viewport) {
       metrics.verifiedCategoryCount === verifiedGenericCategoryCount &&
       JSON.stringify(metrics.verifiedCategoryProfileCounts) === JSON.stringify(verifiedGenericCategoryProfileCounts) &&
       metrics.verifiedCategoryExpandedValues.every((value) => value === 'false') &&
-      metrics.verifiedSectionCountText === String(verifiedGenericProfileCount) &&
+      metrics.verifiedSectionCountValue === verifiedFixtureFamilyCount &&
       metrics.verifiedProfileRowCount === 0 &&
       metrics.cachedProfileRowCount === 0 &&
       metrics.recentProfileRowCount === 0 &&
@@ -20219,7 +20234,7 @@ async function runPatchEmptyStateViewport(client, viewport) {
       metrics.bundledProfileTreeCount === 1 &&
       metrics.bundledLoadingRowCount === 0 &&
       metrics.bundledManufacturerCount >= 200 &&
-      Number(metrics.bundledSectionCountText) >= 7300 &&
+      metrics.bundledSectionCountValue >= 2200 &&
       metrics.bundledManufacturerExpandedValues.every((value) => value === 'false') &&
       metrics.bundledProfileRowCount === 0 &&
       metrics.bundledAttributionCount === 2 &&
@@ -20231,7 +20246,7 @@ async function runPatchEmptyStateViewport(client, viewport) {
       metrics.bundledAttributionText.includes('18cf9da'),
     footprintFilterIsExactAndAutoExpands:
       footprintFilterMetrics.filterValue === '25' &&
-      footprintFilterMetrics.sectionCountText === '3' &&
+      footprintFilterMetrics.sectionCountValue === 2 &&
       JSON.stringify(footprintFilterMetrics.categoryProfileCounts) === JSON.stringify([1, 2]) &&
       footprintFilterMetrics.categoryExpandedValues.length === 2 &&
       footprintFilterMetrics.categoryExpandedValues.every((value) => value === 'true') &&
@@ -20246,7 +20261,7 @@ async function runPatchEmptyStateViewport(client, viewport) {
       qlcSupplementMetrics.provenance.length === 1 &&
       qlcSupplementMetrics.provenance[0].includes('QLC+'),
     universityRigExactNameSearchShowsEverySaberMode:
-      universityRigSearchMetrics.sectionCountText === '12' &&
+      universityRigSearchMetrics.sectionCountValue === 1 &&
       JSON.stringify(universityRigSearchMetrics.categoryProfileCounts) === JSON.stringify([12]) &&
       universityRigSearchMetrics.categoryExpandedValues.length === 1 &&
       universityRigSearchMetrics.categoryExpandedValues.every((value) => value === 'true') &&
@@ -20262,7 +20277,7 @@ async function runPatchEmptyStateViewport(client, viewport) {
       footprintFilterMetrics.rowHeights.every((height) => height >= 24 && height <= 28),
     clearedSearchRecollapsesVerifiedCategories:
       clearedVerifiedTree.filterValue === '' &&
-      clearedVerifiedTree.sectionCountText === String(verifiedGenericProfileCount) &&
+      clearedVerifiedTree.sectionCountValue === verifiedFixtureFamilyCount &&
       clearedVerifiedTree.categoryCount === verifiedGenericCategoryCount &&
       clearedVerifiedTree.categoryExpandedValues.every((value) => value === 'false') &&
       clearedVerifiedTree.profileRowCount === 0,
@@ -21445,42 +21460,46 @@ async function runFixtureCatalogViewport(client, viewport) {
     deviceScaleFactor: 1,
     mobile: false,
   });
-  const url = fixtureUrl("scene-matrix");
-  await client.send("Page.navigate", { url });
-  await waitForApp(client);
-  await client.evaluate(`localStorage.removeItem('syndocal.fixtureCatalogFavorites.v1')`);
+  // #63: the former Library surface is now the self-contained Patch source
+  // browser. Keep this focused viewport gate on the current route so a stale
+  // Library selector cannot mask a broken fixture-pack surface.
+  const url = fixtureUrl("patch");
   await client.send("Page.navigate", { url });
   await waitForApp(client);
   await clickWorkspaceOption(client, "setup");
-  await clickVisibleByText(client, ".setupModeTabs button", "Library");
+  await clickByText(client, "Lighting");
+  await clickByText(client, "Patch");
   await waitForClientCondition(
     client,
-    "document.querySelector('.fixtureCatalogPanel')",
-    "fixture catalog panel",
+    "document.querySelector('[data-patch-profile-browser]')",
+    "patch profile browser",
   );
 
   const readState = async (scope) => await client.evaluate(`(() => {
-    const panel = document.querySelector('.fixtureCatalogPanel');
+    const panel = document.querySelector('[data-patch-profile-browser]');
     const host = panel?.parentElement;
     const panelRect = panel?.getBoundingClientRect();
     const hostRect = host?.getBoundingClientRect();
     const app = document.querySelector('.app');
-    const favorite = document.querySelector('.fixtureVerifiedGrid .fixtureCatalogFavorite');
-    const storedFavorites = (() => {
-      try { return JSON.parse(localStorage.getItem('syndocal.fixtureCatalogFavorites.v1') || '[]'); }
-      catch { return []; }
-    })();
+    const verifiedTree = document.querySelector('[data-patch-profile-tree="verified"]');
+    const bundledTree = document.querySelector('[data-patch-profile-tree="bundled"]');
+    const cacheTree = document.querySelector('[data-patch-profile-tree="cache"]');
     return {
       scope: ${JSON.stringify(scope)},
-      panelCount: document.querySelectorAll('.fixtureCatalogPanel').length,
-      profileLoadCount: document.querySelectorAll('.setupMode-library .profileLoadPanel').length,
-      profileSummaryCount: document.querySelectorAll('.setupMode-library .loadedProfileSummaryPanel').length,
-      verifiedCardCount: document.querySelectorAll('.fixtureVerifiedGrid .fixtureCatalogCard').length,
-      catalogSectionCount: document.querySelectorAll('.fixtureCatalogSection').length,
-      facetControlCount: document.querySelectorAll('.fixtureCatalogFacets input, .fixtureCatalogFacets select').length,
-      passwordInputCount: document.querySelectorAll('.fixtureCatalogCredentials input[type="password"][autocomplete="off"]').length,
-      favoritePressed: favorite?.getAttribute('aria-pressed') ?? '',
-      storedFavorites,
+      panelCount: document.querySelectorAll('[data-patch-profile-browser]').length,
+      oldLibraryPanelCount: document.querySelectorAll('.fixtureCatalogPanel, .setupMode-library').length,
+      sectionCount: document.querySelectorAll('[data-patch-profile-section]').length,
+      searchInputCount: document.querySelectorAll('[data-patch-profile-search]').length,
+      fixtureCountLabelCount: document.querySelectorAll('[data-patch-profile-section-count="fixtures"]').length,
+      verifiedTreeCount: verifiedTree ? 1 : 0,
+      bundledTreeCount: bundledTree ? 1 : 0,
+      cacheTreeCount: cacheTree ? 1 : 0,
+      verifiedFixtureCount: verifiedTree?.querySelectorAll('[data-profile-tree-item="fixture"]').length ?? 0,
+      bundledFixtureCount: bundledTree?.querySelectorAll('[data-profile-tree-item="fixture"]').length ?? 0,
+      cacheFixtureCount: cacheTree?.querySelectorAll('[data-profile-tree-item="fixture"]').length ?? 0,
+      verifiedSectionCountText: document.querySelector('[data-patch-profile-section="verified"] [data-patch-profile-section-count="fixtures"]')?.textContent?.trim() ?? '',
+      bundledSectionCountText: document.querySelector('[data-patch-profile-section="bundled"] [data-patch-profile-section-count="fixtures"]')?.textContent?.trim() ?? '',
+      verifiedSectionCountValue: Number(document.querySelector('[data-patch-profile-section="verified"] [data-patch-profile-section-count="fixtures"]')?.getAttribute('data-patch-profile-section-count-value') ?? -1),
       panelContained: Boolean(panelRect && hostRect &&
         panelRect.left >= hostRect.left - 1 && panelRect.right <= hostRect.right + 1 &&
         panelRect.top >= hostRect.top - 1 && panelRect.bottom <= Math.min(hostRect.bottom, innerHeight) + 1),
@@ -21496,29 +21515,23 @@ async function runFixtureCatalogViewport(client, viewport) {
   })()`);
 
   const initial = await readState("initial");
-  await client.evaluate(`document.querySelector('.fixtureVerifiedGrid .fixtureCatalogFavorite')?.click()`);
-  await sleep(80);
-  const favorited = await readState("favorited");
   const conditions = [
-    ["catalogVisible", () => initial.panelCount === 1 && initial.panelContained],
-    ["threePaneLibrary", () => initial.profileLoadCount === 1 && initial.profileSummaryCount === 1],
-    ["verifiedPack", () => initial.verifiedCardCount === verifiedGenericProfileCount],
-    ["catalogSections", () => initial.catalogSectionCount === 4],
-    ["facetControls", () => initial.facetControlCount === 5],
-    ["credentialSafetyField", () => initial.passwordInputCount === 1],
-    ["favoritePersistsLocally", () => initial.favoritePressed === "false" &&
-      favorited.favoritePressed === "true" &&
-      favorited.storedFavorites.includes(verifiedGenericFirstProfileFavoriteKey)],
-    ["viewportContained", () => initial.documentAndAppScrollZero && favorited.documentAndAppScrollZero],
+    ["patchSourceVisible", () => initial.panelCount === 1 && initial.panelContained],
+    ["legacyLibraryRemoved", () => initial.oldLibraryPanelCount === 0],
+    ["profileSections", () => initial.sectionCount === 5],
+    ["searchControl", () => initial.searchInputCount === 1],
+    ["fixtureCountLabels", () => initial.fixtureCountLabelCount === 3],
+    ["profileTrees", () => initial.verifiedTreeCount === 1 && initial.bundledTreeCount === 1 && initial.cacheTreeCount === 1],
+    ["verifiedFixtureFamilies", () => initial.verifiedSectionCountValue === verifiedFixtureFamilyCount],
+    ["viewportContained", () => initial.documentAndAppScrollZero],
   ];
   const failedChecks = conditions.filter(([, check]) => !check()).map(([name]) => name);
   return {
     viewport,
-    label: `fixture-catalog-${viewport.width}x${viewport.height}`,
+    label: `patch-profile-browser-${viewport.width}x${viewport.height}`,
     passed: failedChecks.length === 0,
     failedChecks,
     initial,
-    favorited,
   };
 }
 
@@ -38533,8 +38546,8 @@ async function main() {
         fixtureCatalogResults.push(result);
         console.log(
           `${result.passed ? "pass" : "fail"} ${result.label} ` +
-            `verified=${result.initial.verifiedCardCount} sections=${result.initial.catalogSectionCount} ` +
-            `facets=${result.initial.facetControlCount} favorite=${result.initial.favoritePressed}->${result.favorited.favoritePressed} ` +
+            `verified=${result.initial.verifiedFixtureCount} count=${result.initial.verifiedSectionCountValue} sections=${result.initial.sectionCount} ` +
+            `countLabels=${result.initial.fixtureCountLabelCount} scroll=${result.initial.documentAndAppScrollZero ? 0 : 1} ` +
             `failed=${JSON.stringify(result.failedChecks)}`,
         );
       }

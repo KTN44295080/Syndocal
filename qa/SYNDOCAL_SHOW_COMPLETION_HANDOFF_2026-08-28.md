@@ -4,6 +4,29 @@ Status date: 2026-09-02 JST
 
 This is the concise authoritative resume note for the final show-critical tranche. It supersedes chat-only status, but it does not supersede the detailed acceptance documents named below.
 
+## 2026-09-02 alpha.64 fixture-count source checkpoint
+
+Alpha.64 advances the product prerelease ordinal for the fixture-pack count
+correction. Verified and bundled Patch section headers now count fixture
+families, and Cached / offline counts fixture entries; selectable Mode counts
+remain on individual fixture rows. The current viewport gate follows the
+merged Setup → Lighting → Patch browser and removes the stale Library-panel
+assumption. Source parent is the upstream-equal alpha.63 checkpoint
+`5503913be77a8bf665a886f4ff9c898165b20fa0`.
+
+Focused checker (`10` assertions), fixture-catalog helpers (`69` assertions),
+all five Patch browser viewports, TypeScript, Node syntax, and scoped diff
+checks pass with first-party warnings `0`. The exact pinned Community MSVC
+`14.44.35207` no-bundle native build passed in `3m26s` with first-party
+warnings `0` (only the existing Vite large-chunk advisory). The resulting
+`target/release/syndocal.exe` is Product/FileVersion `1.2.0-alpha.64`,
+`63,524,352` bytes, SHA-256
+`F5E039B902BE4F8F0FD7AB17CE4CFF8FA88230268E5CE38FACA86FE6C4C03F6E`.
+PID `38416` supplied exactly one responsive, visible, maximized Syndocal
+window (`showCmd=3`). Physical USB-DMX, Art-Net, fixture illumination,
+camera/MiraBox, Spout/Unity, and audible output remain explicitly unverified
+external rows.
+
 ## 2026-09-02 alpha.63 DMX operator-surface source checkpoint
 
 The normal DMX setup surface now keeps protocol and safety prose closed by

@@ -32,7 +32,7 @@ import { withMaterializedVerifiedExecutable } from "./verified-materialization.m
 
 export { withMaterializedVerifiedExecutable } from "./verified-materialization.mjs";
 
-export const expectedVersion = "1.2.0-alpha.63";
+export const expectedVersion = "1.2.0-alpha.64";
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const appRoot = resolve(scriptDir, "..");
 const workspaceRoot = resolve(appRoot, "..");
@@ -506,29 +506,24 @@ const currentReleaseBoundaryMarkers = Object.freeze([
   {
     path: "RELEASE_STATUS.md",
     markers: [
-      "## 2026-09-02 current alpha.63 DMX operator-surface checkpoint",
-      "Alpha.63 advances the product prerelease ordinal",
-      "Protocol & safety details",
-      "08f700b51b2ffc5917796dbf6a5ee4370ce7499e",
+      "## 2026-09-02 current alpha.64 fixture-count/UI checkpoint",
+      "Alpha.64 advances the product prerelease ordinal",
+      "fixture-family counts",
     ],
   },
   {
     path: "qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md",
     markers: [
-      "## 2026-09-02 alpha.63 DMX operator-surface checkpoint",
-      "Alpha.63 advances the product prerelease ordinal",
-      "Protocol & safety details",
-      "08f700b51b2ffc5917796dbf6a5ee4370ce7499e",
-      "removing audit prose",
+      "## 2026-09-02 alpha.64 fixture-count/UI checkpoint",
+      "Alpha.64 advances the product prerelease ordinal",
+      "fixture-family counts",
     ],
   },
   {
     path: "qa/SYNDOCAL_SHOW_COMPLETION_HANDOFF_2026-08-28.md",
     markers: [
-      "## 2026-09-02 alpha.63 DMX operator-surface source checkpoint",
-      "The normal DMX setup surface now keeps protocol and safety prose closed",
-      "Protocol & safety details",
-      "08f700b51b2ffc5917796dbf6a5ee4370ce7499e",
+      "## 2026-09-02 alpha.64 fixture-count source checkpoint",
+      "Verified and bundled Patch section headers now count fixture",
       "native build",
     ],
   },
@@ -616,7 +611,7 @@ function assertCurrentReleaseDocumentation(readManifest, productVersion) {
   for (const { path, markers } of currentReleaseBoundaryMarkers) {
     const top = String(readManifest(path)).split(/\r?\n/u).slice(0, 45).join("\n");
     for (const marker of markers) {
-      const resolvedMarker = marker.replace("1.2.0-alpha.63", productVersion);
+      const resolvedMarker = marker.replace("1.2.0-alpha.64", productVersion);
       if (!top.includes(resolvedMarker)) {
         throw new Error(`${path} lacks its top ${productVersion} source-only marker: '${resolvedMarker}'.`);
       }

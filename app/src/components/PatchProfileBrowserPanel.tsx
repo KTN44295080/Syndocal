@@ -241,8 +241,7 @@ export function PatchProfileBrowserPanel(props: PatchProfileBrowserPanelProps) {
   const verifiedTreeFixtures = verifiedProfileTreeFixtures(previewVerifiedProfiles);
   const visibleVerifiedFixtures = createMemo(() =>
     filterGdtfProfileTreeFixtures(verifiedTreeFixtures, query()));
-  const visibleVerifiedProfileCount = createMemo(() => visibleVerifiedFixtures()
-    .reduce((total, fixture) => total + fixture.modes.length, 0));
+  const visibleVerifiedFixtureCount = createMemo(() => visibleVerifiedFixtures().length);
   const verifiedEntryForMode = (mode: GdtfProfileTreeMode) =>
     previewVerifiedProfiles.find((entry) => entry.id === mode.key);
   /* Offline OFL + QLC+ manufacturer bundles. Loaded lazily on first paint so
@@ -271,8 +270,7 @@ export function PatchProfileBrowserPanel(props: PatchProfileBrowserPanelProps) {
   onMount(() => void refreshBundledLibrary());
   const visibleBundledFixtures = createMemo(() =>
     filterGdtfProfileTreeFixtures(bundledFixtures(), query()));
-  const visibleBundledProfileCount = createMemo(() => visibleBundledFixtures()
-    .reduce((total, fixture) => total + fixture.modes.length, 0));
+  const visibleBundledFixtureCount = createMemo(() => visibleBundledFixtures().length);
 
   const cacheTreeFixtures = createMemo(() => cacheEntries().map((entry) =>
     profileTreeFixture(entry, entry.path)));
@@ -664,7 +662,15 @@ export function PatchProfileBrowserPanel(props: PatchProfileBrowserPanelProps) {
 
       <div class="patchProfileBrowserScroll" data-patch-profile-browser-scroll>
         <section class="patchProfileBrowserSection" data-patch-profile-section="verified">
-          <header><strong>Verified fixture packs</strong><span>{visibleVerifiedProfileCount()}</span></header>
+          <header>
+            <strong>Verified fixture packs</strong>
+            <span
+              data-patch-profile-section-count="fixtures"
+              data-patch-profile-section-count-value={visibleVerifiedFixtureCount()}
+            >
+              <b data-no-localize>{visibleVerifiedFixtureCount()}</b>{" "}<span>{visibleVerifiedFixtureCount() === 1 ? "fixture" : "fixtures"}</span>
+            </span>
+          </header>
           <GdtfProfileTree
             ariaLabel="Verified fixture profile tree"
             source="verified"
@@ -702,7 +708,7 @@ export function PatchProfileBrowserPanel(props: PatchProfileBrowserPanelProps) {
             }}
             onDragEnd={props.onProfileDragEnd}
           />
-          <Show when={visibleVerifiedProfileCount() === 0}>
+          <Show when={visibleVerifiedFixtureCount() === 0}>
             <p class="empty patchProfileRowEmpty">No matching profiles.</p>
           </Show>
         </section>
@@ -710,7 +716,12 @@ export function PatchProfileBrowserPanel(props: PatchProfileBrowserPanelProps) {
         <section class="patchProfileBrowserSection" data-patch-profile-section="bundled">
           <header>
             <strong>Bundled manufacturer library</strong>
-            <span>{visibleBundledProfileCount()}</span>
+            <span
+              data-patch-profile-section-count="fixtures"
+              data-patch-profile-section-count-value={visibleBundledFixtureCount()}
+            >
+              <b data-no-localize>{visibleBundledFixtureCount()}</b>{" "}<span>{visibleBundledFixtureCount() === 1 ? "fixture" : "fixtures"}</span>
+            </span>
           </header>
           <GdtfProfileTree
             ariaLabel="Bundled manufacturer profile tree"
@@ -757,7 +768,7 @@ export function PatchProfileBrowserPanel(props: PatchProfileBrowserPanelProps) {
               </div>
             )}
           </Show>
-          <Show when={bundledFixtures().length > 0 && visibleBundledProfileCount() === 0}>
+          <Show when={bundledFixtures().length > 0 && visibleBundledFixtureCount() === 0}>
             <p class="empty patchProfileRowEmpty">No matching profiles.</p>
           </Show>
           <Show when={bundledAttributions().length > 0}>
@@ -781,8 +792,12 @@ export function PatchProfileBrowserPanel(props: PatchProfileBrowserPanelProps) {
         <section class="patchProfileBrowserSection" data-patch-profile-section="cache">
           <header>
             <strong>Cached / offline GDTF</strong>
-            <span class="patchProfileCacheSummary">
-              <b data-no-localize>{cacheEntries().length}</b>{" "}<span>profiles</span>{" · "}
+            <span
+              class="patchProfileCacheSummary"
+              data-patch-profile-section-count="fixtures"
+              data-patch-profile-section-count-value={visibleCacheFixtures().length}
+            >
+              <b data-no-localize>{visibleCacheFixtures().length}</b>{" "}<span>{visibleCacheFixtures().length === 1 ? "fixture" : "fixtures"}</span>{" · "}
               <b data-no-localize>{cacheMegabytes()}</b>{" "}<span data-no-localize>MB</span>
             </span>
           </header>

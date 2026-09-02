@@ -4,6 +4,30 @@ Date: 2026-08-19
 Branch at creation: `codex/syndocal-v1.0`
 Baseline before this document: `848d759846985cc3acf588356cfa3c996b4e2ef2`
 
+## 2026-09-02 alpha.64 fixture-count/UI checkpoint
+
+Alpha.64 advances the product prerelease ordinal for the fixture-pack count
+correction. Setup → Lighting → Patch now counts fixture families in the
+Verified, Bundled, and Cached / offline section headers instead of summing
+their selectable modes. These are fixture-family counts; per-fixture Mode
+counts remain in each fixture row.
+The focused viewport contract follows the current merged Patch source browser
+and no longer depends on the removed Library panel. Source parent is the
+upstream-equal alpha.63 checkpoint `5503913be77a8bf665a886f4ff9c898165b20fa0`.
+
+Source validation passes with first-party warnings `0`: the patch-profile
+count checker (`10` assertions), fixture-catalog helper checker (`69`
+assertions), all five Patch browser viewport sizes, TypeScript, Node syntax,
+and scoped diff checks. The exact pinned Community MSVC `14.44.35207`
+no-bundle native build passed in `3m26s` with first-party warnings `0` (only
+the existing Vite large-chunk advisory). The resulting
+`target/release/syndocal.exe` is Product/FileVersion `1.2.0-alpha.64`,
+`63,524,352` bytes, SHA-256
+`F5E039B902BE4F8F0FD7AB17CE4CFF8FA88230268E5CE38FACA86FE6C4C03F6E`.
+PID `38416` supplied exactly one responsive, visible, maximized Syndocal
+window (`showCmd=3`). Physical USB-DMX, Art-Net, fixture, camera/MiraBox,
+Spout/Unity, and audio endpoint rows remain external gates.
+
 ## 2026-09-02 alpha.63 DMX operator-surface checkpoint
 
 Alpha.63 advances the product prerelease ordinal for the DMX operator-surface

@@ -1,7 +1,7 @@
 {
   "name": "syndocal",
   "private": true,
-  "version": "1.2.0-alpha.63",
+  "version": "1.2.0-alpha.64",
   "author": "Seraf()のKTN",
   "type": "module",
   "scripts": {
@@ -31,6 +31,7 @@
     "check:group-strobe": "node scripts/check-group-strobe.mjs",
     "check:group-strobe-viewport": "node scripts/check-viewport-containment.mjs --group-strobe-only",
     "check:fixture-catalog": "node scripts/check-fixture-catalog.mjs",
+    "check:patch-profile-counts": "node scripts/check-patch-profile-counts.mjs",
     "check:profile-library": "node scripts/check-profile-library.mjs",
     "check:gdtf-profile-actions": "node scripts/check-gdtf-profile-actions.mjs",
     "check:fixture-catalog-viewport": "node scripts/check-viewport-containment.mjs --fixture-catalog-only",
