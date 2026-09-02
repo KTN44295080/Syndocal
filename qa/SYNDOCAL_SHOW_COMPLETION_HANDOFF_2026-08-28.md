@@ -2749,3 +2749,56 @@ execution and physical rows are not closed by those facts.
   confirmation. Do not reuse or relabel historical alpha.31/
   alpha.32/alpha.35/alpha.36/alpha.37/alpha.38 artifacts.
 - Preserve the operator-owned DVC, all token material outside the checkout, and existing QA artifacts.
+
+## 2026-09-02 alpha.60 ASIO recovery and restart checkpoint
+
+- The current regular artifact was rebuilt from the working tree with the exact
+  Community MSVC `14.44.35207` x64 linker and the explicit WinGet FFmpeg
+  directory. The build command was `pnpm --dir app tauri build --no-bundle`;
+  it completed successfully in `2m50s`, with first-party warnings `0`. The
+  wrapper printed and verified the pinned linker first, followed by Git's
+  `usr\\bin\\link.exe`. Artifact identity after the rebuild is
+  `target/release/syndocal.exe`, `62,486,528` bytes, SHA-256
+  `F16104950048CEAC9706D4010F4E8DEE2C2CD69D5767B4EBD135C6AA62AC6EDB`,
+  Product/FileVersion `1.2.0-alpha.60`.
+- Root cause of the reported “cannot leave ASIO” state was a capability
+  mismatch: the normal MIT/WASAPI artifact intentionally does not register
+  the separate `get_asio_output_status` / Show-ASIO command set, while the
+  renderer still allowed the Show-ASIO selection to become a locked dead end.
+  `audioOutputControl.ts` now recognizes the exact missing-command boundary,
+  exposes `Show ASIO is not available in this build; choose Normal WASAPI.`,
+  and makes the backend selector available again once the failed probe settles.
+  Returning to Normal resets stale ASIO/CUE/preflight state without dispatching
+  an unsupported native command. `AudioOutputPanel.tsx` no longer disables the
+  backend selector merely because the view is Show-ASIO; it remains disabled
+  only during Active/Fault/busy states.
+- Focused evidence after the change: Audio controller `78` assertions with
+  runtime regression `59`, Audio panel `58`, TypeScript `pnpm --dir app exec
+  tsc --noEmit` exit `0`, and scoped `git diff --check` exit `0` (only the
+  repository's LF-to-CRLF notices). A maximized, responsive exact-checkout
+  window was relaunched as PID `31248` from
+  `C:\Users\kouty\Documents\KDMX\target\release\syndocal.exe`. In the real
+  UI, selecting Show-ASIO produced the actionable unavailable-build message;
+  selecting Normal WASAPI returned the card to `Ready · Normal WASAPI is
+  selected.`. The selected Timeline WDM endpoint remained
+  `Music (Elgato Virtual Audio)`.
+- After launch, the dedicated safer-direction S0 command was applied once and
+  acknowledged (`syndocal.safety.blackout.engage.v1`, audit sequence `1`),
+  leaving the final state blackout `true`, Timeline stopped at position `0`,
+  and no nonzero physical output operation. The project loaded was
+  `target/qa/DSF2026-show-alpha55-dual-file-display.sdc`. Art-Net remains the
+  configured same-PC logical route (`127.0.0.1:6454`, wire U0, 512ch), but the
+  current runtime is `ProjectSwapDisarmed` with zero sends; USB-DMX COM3 is
+  selected/present but its worker is stopped. This is a safe software state,
+  not a fixture or cable acceptance claim.
+- Existing external evidence remains bounded: strict two-display acceptance
+  passed for Display 1 `1920x1080` at the 60-fps budget and Display 5
+  `3840x2160` rendered with a measured 60-fps-budget failure; MiraBox advertises
+  MJPEG `1920x1080@60` maximum (no 4K mode); Art-Net monitor proved only the
+  safe-zero U0 wire shape/period. Unity/Spout, audible WDM playback, DJ-Link /
+  pedal, nonzero USB-DMX fixture output, physical ASIO, and installer/updater
+  acceptance remain unverified.
+- This checkpoint is source/runtime/UI only. The three changed source files
+  (`app/src/audioOutputControl.ts`, `app/src/components/AudioOutputPanel.tsx`,
+  `app/scripts/check-audio-output-control.mjs`) and this handoff document must
+  be committed and pushed together before calling the checkpoint complete.

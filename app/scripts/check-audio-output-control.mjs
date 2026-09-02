@@ -180,9 +180,29 @@ const assertions = [
     "Normal WASAPI must be visibly Ready by default",
   ],
   [
-    /Show ASIO command is unavailable in this build; output remains Locked\./u,
+    /Show ASIO is not available in this build; choose Normal WASAPI\./u,
     control,
     "Unavailable Show ASIO must remain visibly Locked",
+  ],
+  [
+    /const isMissingNativeCommand = \(error: unknown, command: string\): boolean =>[\s\S]*?Command \$\{command\} not found/u,
+    control,
+    "A missing native ASIO command must be detected as an explicit build capability boundary",
+  ],
+  [
+    /const \[asioCommandAvailable, setAsioCommandAvailable\] = createSignal\([\s\S]*?dependencies\.backendAvailable/u,
+    control,
+    "ASIO command availability must be reactive so Normal recovery becomes usable after a missing-command probe",
+  ],
+  [
+    /if \(isMissingNativeCommand\(error, "get_asio_output_status"\)\)[\s\S]*?Show ASIO is not available in this build; choose Normal WASAPI\./u,
+    control,
+    "A regular build status probe must expose the Normal WASAPI recovery action",
+  ],
+  [
+    /aria-label="Audio output backend"[\s\S]*?disabled=\{configurationDisabled\(\)\}/u,
+    panel,
+    "Backend selector must remain usable while a non-active Show-ASIO view is Locked",
   ],
   [
     /const canStart = (?:createMemo\(\(\) => \{|\(\): boolean => \{)[\s\S]*?view\(\)\.backend !== "show-asio" \|\| busy\(\) \|\| view\(\)\.state !== "Ready"/u,
@@ -849,6 +869,19 @@ check(calls.slice(faultStopFailureCallIndex).includes("get_asio_output_status"),
   "Faulted Stop/Close throw also re-reads authoritative native status");
 controller.dispose();
 check(controller.testMode() === null && controller.soloMode() === "none", "dispose clears stale preflight state");
+const unavailableController = createAudioOutputController({
+  invoke: async (command) => { throw new Error("Command " + command + " not found"); },
+  backendAvailable: true,
+  readLivePlaybackActive: () => false,
+});
+unavailableController.setBackend("show-asio");
+await settle();
+check(unavailableController.view().state === "Locked" && unavailableController.canReturnToNormal(),
+  "missing native ASIO status leaves an explicit Normal recovery action available");
+await unavailableController.returnToNormal();
+check(unavailableController.view().backend === "normal-wasapi" && unavailableController.view().state === "Ready",
+  "missing native ASIO command returns to the exact Normal WASAPI view without dispatching an unsupported native route");
+unavailableController.dispose();
 console.log("audio output controller runtime regression passed (" + checks.length + " assertions)");
 `;
 const runtimeResult = await execFile(
@@ -856,6 +889,6 @@ const runtimeResult = await execFile(
   ["--no-warnings", "--conditions=browser", "--experimental-strip-types", "--input-type=module", "-e", runtimeRegression],
   { cwd: resolve(scriptDirectory, "..") },
 );
-assert.match(runtimeResult.stdout, /audio output controller runtime regression passed \(57 assertions\)/u);
+assert.match(runtimeResult.stdout, /audio output controller runtime regression passed \(59 assertions\)/u);
 
-console.log(`audio output control checks passed (${assertions.length + requiredCommands.length + 3} assertions; runtime regression 57 assertions)`);
+console.log(`audio output control checks passed (${assertions.length + requiredCommands.length + 3} assertions; runtime regression 59 assertions)`);

@@ -750,6 +750,9 @@ const mergeCueEndpointOptions = (
 const errorText = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
 
+const isMissingNativeCommand = (error: unknown, command: string): boolean =>
+  errorText(error).includes(`Command ${command} not found`);
+
 const statusRouterPairIsConsistent = (status: AsioOutputStatusRecord): boolean => {
   switch (status.state) {
     case "normal":
@@ -832,10 +835,25 @@ export const createAudioOutputController = (
   let requestGeneration = 0;
   let nativeStatus: AsioOutputStatusRecord | null = null;
   let cueAudioStatus: TimelineCueAudioStatusRecord | null = null;
+  // The regular MIT/WASAPI artifact deliberately omits the separate Show-ASIO
+  // feature. Detect that exact native boundary once so an accidental Show ASIO
+  // selection can still be returned to the safe Normal route.
+  const [asioCommandAvailable, setAsioCommandAvailable] = createSignal(
+    dependencies.backendAvailable,
+  );
 
   const clearPreflightState = (): void => {
     setTestMode(null);
     setSoloModeState("none");
+  };
+
+  const resetToNormalView = (): void => {
+    nativeStatus = null;
+    cueAudioStatus = null;
+    clearPreflightState();
+    setView(normalView());
+    setOptions(emptyOptions());
+    setCapabilities(null);
   };
 
   const setLocked = (reason: string) => {
@@ -1009,7 +1027,12 @@ export const createAudioOutputController = (
     } catch (error) {
       if (!disposed && request === requestGeneration) {
         nativeStatus = null;
-        commandFailure("status", error);
+        if (isMissingNativeCommand(error, "get_asio_output_status")) {
+          setAsioCommandAvailable(false);
+          setLocked("Show ASIO is not available in this build; choose Normal WASAPI.");
+        } else {
+          commandFailure("status", error);
+        }
       }
       return null;
     } finally {
@@ -1069,8 +1092,8 @@ export const createAudioOutputController = (
       setCapabilities(null);
       return;
     }
-    if (!dependencies.backendAvailable) {
-      setLocked("Show ASIO command is unavailable in this build; output remains Locked.");
+    if (!dependencies.backendAvailable || !asioCommandAvailable()) {
+      setLocked("Show ASIO is not available in this build; choose Normal WASAPI.");
       return;
     }
     const request = ++requestGeneration;
@@ -1168,7 +1191,8 @@ export const createAudioOutputController = (
     setOptions(emptyOptions());
     setCapabilities(null);
     nativeStatus = null;
-    void refresh();
+    if (asioCommandAvailable()) void refresh();
+    else setLocked("Show ASIO is not available in this build; choose Normal WASAPI.");
   };
   const setDriver = (driverId: string) => {
     if (disposed || view().backend !== "show-asio") return;
@@ -1466,20 +1490,15 @@ export const createAudioOutputController = (
       }));
       return;
     }
-    if (dependencies.backendAvailable
+    if (dependencies.backendAvailable && asioCommandAvailable()
       && (!nativeStatus
         || !isSafeForEnumeration(nativeStatus)
         || (nativeStatus.routerState !== "Locked" && nativeStatus.routerState !== "AsioReady"))) {
       setLocked("Return to normal requires the native router to be Locked or AsioReady.");
       return;
     }
-    if (!dependencies.backendAvailable) {
-      nativeStatus = null;
-      cueAudioStatus = null;
-      clearPreflightState();
-      setView(normalView());
-      setOptions(emptyOptions());
-      setCapabilities(null);
+    if (!dependencies.backendAvailable || !asioCommandAvailable()) {
+      resetToNormalView();
       return;
     }
     const request = ++requestGeneration;
@@ -1500,7 +1519,14 @@ export const createAudioOutputController = (
         setCapabilities(null);
       }
     } catch (error) {
-      if (!disposed && request === requestGeneration) commandFailure("Return to normal", error);
+      if (!disposed && request === requestGeneration) {
+        if (nativeStatus === null && isMissingNativeCommand(error, "select_normal_audio_output")) {
+          setAsioCommandAvailable(false);
+          resetToNormalView();
+        } else {
+          commandFailure("Return to normal", error);
+        }
+      }
     } finally {
       if (!disposed && request === requestGeneration) setBusy(false);
     }
@@ -1508,8 +1534,8 @@ export const createAudioOutputController = (
 
   const preflightActionIsAllowed = (operation: string): boolean => {
     if (disposed) return false;
-    if (!dependencies.backendAvailable) {
-      setLocked(`Show ASIO ${operation} command is unavailable in this build; output remains Locked.`);
+    if (!dependencies.backendAvailable || !asioCommandAvailable()) {
+      setLocked("Show ASIO is not available in this build; choose Normal WASAPI.");
       return false;
     }
     if (busy()) {
@@ -1618,10 +1644,11 @@ export const createAudioOutputController = (
         return "warning";
     }
   });
-  const canRefresh = createMemo(() => view().backend === "show-asio" && dependencies.backendAvailable && !busy() && view().state !== "Active" && view().state !== "Fault");
+  const canRefresh = createMemo(() => view().backend === "show-asio" && dependencies.backendAvailable && asioCommandAvailable() && !busy() && view().state !== "Active" && view().state !== "Fault");
   const canRevalidate = createMemo(() =>
     view().backend === "show-asio"
     && dependencies.backendAvailable
+    && asioCommandAvailable()
     && !busy()
     && capabilities() !== null
     && view().state !== "Active"
@@ -1647,6 +1674,7 @@ export const createAudioOutputController = (
   const canStop = createMemo(() =>
     view().backend === "show-asio"
     && dependencies.backendAvailable
+    && asioCommandAvailable()
     && !busy()
     && (view().state === "Active" || view().state === "Fault")
     && nativeStatus !== null
@@ -1656,18 +1684,20 @@ export const createAudioOutputController = (
     && !busy()
     && view().state !== "Active"
     && view().state !== "Fault"
-    && (!dependencies.backendAvailable
+    && (!dependencies.backendAvailable || !asioCommandAvailable()
       || (nativeStatus !== null
         && isSafeForEnumeration(nativeStatus)
         && (nativeStatus.routerState === "Locked" || nativeStatus.routerState === "AsioReady"))));
   const canTest = (): boolean =>
     dependencies.backendAvailable
+    && asioCommandAvailable()
     && !busy()
     && view().backend === "show-asio"
     && view().state === "Active"
     && isActiveAsioOutputStatus(nativeStatus);
   const canSolo = (): boolean =>
     dependencies.backendAvailable
+    && asioCommandAvailable()
     && !busy()
     && view().backend === "show-asio"
     && view().state === "Active"

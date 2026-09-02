@@ -396,7 +396,7 @@ export function AudioOutputPanel(props: AudioOutputPanelProps) {
               <span>Backend</span>
               <select
                 aria-label="Audio output backend"
-                disabled={configurationDisabled() || props.view.backend === "show-asio"}
+                disabled={configurationDisabled()}
                 value={props.view.backend}
                 onInput={(event) =>
                   props.onBackendChange(event.currentTarget.value as AudioOutputBackend)
