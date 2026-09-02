@@ -83,6 +83,16 @@ accepted the same topology with current clean HEAD
 PID `68032`, maximized editor, and the two app-owned output HWNDs. No output
 window was replaced or duplicated.
 
+The final read-only strict sample was rerun against the current clean HEAD
+`f1187143b5884ca60618d9157a73ad56fbc0ca67` after the documentation-only
+checkpoint commits. It returned `accepted=true` with the same artifact
+`1.2.0-alpha.60`, PID `68032`, editor/output identities, and output IDs `3`
+and `4`. Evidence is retained at
+`target\\qa\\alpha60-three-display-current-head-f1187143-c2e61a9d4229447baed19c2594fbbb4e`.
+The harness still reports `native_hardware_claim=false`; this is a current
+HEAD/window topology proof only and does not add pixel, 60-fps, MiraBox,
+Unity/Spout, audible, DJ-Link, pedal, or physical fixture claims.
+
 ## 2026-09-02 alpha.60 post-build Open-DMX barrier and restart checkpoint
 
 The final source adjustment closes a late-cleanup race in the bounded Open-DMX
