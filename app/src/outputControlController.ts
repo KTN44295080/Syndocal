@@ -1056,7 +1056,12 @@ const assertSelectedLeaseIsUsable = (query: OutputLeaseAuthorityQuery, action: O
 };
 
 type OutputControlExecutionOptions = {
-  skipPublicLeaseQuery?: boolean;
+  /**
+   * The only non-Display bypass is the same-call Enable -> blackout release
+   * bridge below.  The Enable receipt is already a strictly validated active
+   * exact-Both proof; the backend still revalidates the lease before release.
+   */
+  skipPublicLeaseQuery?: "display-authority" | "enabled-lease-proof";
 };
 
 const executeOutputControlOperation = async (
@@ -1069,7 +1074,11 @@ const executeOutputControlOperation = async (
   assertAction(action);
   const authority = assertAuthority(await invoke<unknown>("query_output_control_authority_v1"));
   if (options.skipPublicLeaseQuery) {
-    if (action.kind !== "add_display" && action.kind !== "set_display_window_open") {
+    const displayBypass = options.skipPublicLeaseQuery === "display-authority"
+      && (action.kind === "add_display" || action.kind === "set_display_window_open");
+    const enabledLeaseProofBypass = options.skipPublicLeaseQuery === "enabled-lease-proof"
+      && action.kind === "release_blackout";
+    if (!displayBypass && !enabledLeaseProofBypass) {
       throw new Error("Only canonical Display actions may bypass the public lease query; nothing was applied.");
     }
   } else if (action.kind !== "reset_show_spout_outputs") {
@@ -1121,7 +1130,7 @@ export async function executeDisplayAddOutputControl(
   if (authority.lease_id !== action.lease.lease_id || authority.generation !== action.lease.generation) {
     throw new Error("Display Add lease authority changed before execution; nothing was applied.");
   }
-  return executeOutputControlOperation(invoke, action, { skipPublicLeaseQuery: true });
+  return executeOutputControlOperation(invoke, action, { skipPublicLeaseQuery: "display-authority" });
 }
 
 /** Execute the live Display window action through the Add-equivalent
@@ -1135,7 +1144,7 @@ export async function executeDisplayWindowOutputControl(
   if (authority.lease_id !== action.lease.lease_id || authority.generation !== action.lease.generation) {
     throw new Error("Display window lease authority changed before execution; nothing was applied.");
   }
-  return executeOutputControlOperation(invoke, action, { skipPublicLeaseQuery: true });
+  return executeOutputControlOperation(invoke, action, { skipPublicLeaseQuery: "display-authority" });
 }
 
 /** Normal one-step output path; no lease selection or six-digit code is shown. */
@@ -1166,9 +1175,27 @@ export async function executeBlackoutRelease(
     // canonical Both lease keeps the existing native ReleaseBlackout
     // ownership/consent boundary intact while making the UI toggle usable
     // after a process restart or lease expiry.
-    await enableOutput(invoke);
-    leaseQuery = await queryOutputLeaseAuthority(invoke);
-    lease = selectOnlyActiveOutputLease(leaseQuery, expectedResources);
+    const enableReceipt = await enableOutput(invoke);
+    const enabledLease = enableReceipt.lease_result;
+    if (!enabledLease
+      || enabledLease.phase !== "held_active"
+      || enabledLease.outcome !== "acquired" && enabledLease.outcome !== "recovered"
+      || !sameResources(enabledLease.resources, expectedResources)) {
+      throw new Error(
+        "Output enable returned without a current active Both lease; blackout remains engaged. Refresh output ownership in Setup > I/O.",
+      );
+    }
+    // Do not immediately re-read the public query here.  That query is a
+    // fail-fast observation and can still show the pre-Enable view while the
+    // renderer's read lane settles.  The receipt is the exact successful
+    // Enable proof; Release still performs its own backend owner/fence/lease
+    // CAS before touching the safety latch.
+    lease = { ...enabledLease.authority };
+    return executeOutputControlOperation(
+      invoke,
+      { kind: "release_blackout", lease },
+      { skipPublicLeaseQuery: "enabled-lease-proof" },
+    );
   } else {
     throw new Error(
       "DMX blackout release requires one active local Both output lease; resolve output ownership in Setup > I/O first. Blackout remains engaged.",

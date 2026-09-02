@@ -642,6 +642,16 @@ assert.match(
   /hasOnlyActiveOutputLease[\s\S]*await enableOutput\(invoke\)[\s\S]*executeOutputControl\(invoke, \{ kind: "release_blackout", lease \}\)/,
   "blackout release must recover the canonical Both lease only through the existing Enable path",
 );
+assert.match(
+  blackoutReleaseSource,
+  /const enableReceipt = await enableOutput\(invoke\)[\s\S]*enabledLease = enableReceipt\.lease_result[\s\S]*skipPublicLeaseQuery: "enabled-lease-proof"/,
+  "blackout recovery must consume the validated Enable receipt as its immediate release proof",
+);
+assert.doesNotMatch(
+  blackoutReleaseSource,
+  /await enableOutput\(invoke\)[\s\S]*await queryOutputLeaseAuthority\(invoke\)[\s\S]*selectOnlyActiveOutputLease/,
+  "blackout recovery must not depend on a second fail-fast lease read after Enable",
+);
 assert.equal(
   runtime.hasOnlyActiveOutputLease(leaseQuery([]), ["lighting", "video"]),
   false,
@@ -649,7 +659,6 @@ assert.equal(
 );
 
 const blackoutReleaseAction = { kind: "release_blackout", lease: lease() };
-let recoveredBlackoutLease = false;
 const blackoutRecoveryCalls = [];
 const blackoutRecoveryInvoke = async (command, args) => {
   blackoutRecoveryCalls.push(command);
@@ -659,13 +668,13 @@ const blackoutRecoveryInvoke = async (command, args) => {
   }
   if (command === "query_output_lease_authority_v1") {
     assert.equal(args, undefined);
-    return recoveredBlackoutLease
-      ? queryFor(blackoutReleaseAction, "active")
-      : leaseQuery([{ status: "unavailable" }]);
+    // The public read lane intentionally remains stale after Enable.  The
+    // Enable receipt, not a second fail-fast query, is the proof consumed by
+    // the immediate blackout Release bridge.
+    return leaseQuery([{ status: "unavailable" }]);
   }
   if (command === "enable_output_control_v2") {
     assert.deepEqual(args.request.action, enableAction);
-    recoveredBlackoutLease = true;
     return receiptFor(args.request, enableAction);
   }
   if (command === "release_blackout_output_control_v2") {
@@ -681,9 +690,7 @@ assert.deepEqual(blackoutRecoveryCalls, [
   "query_output_control_authority_v1",
   "query_output_lease_authority_v1",
   "enable_output_control_v2",
-  "query_output_lease_authority_v1",
   "query_output_control_authority_v1",
-  "query_output_lease_authority_v1",
   "release_blackout_output_control_v2",
 ], "a missing lease may recover exactly once before the fenced release");
 

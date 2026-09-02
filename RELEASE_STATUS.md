@@ -1,9 +1,31 @@
 # Syndocal historical v1.0 / current v1.2 alpha Release Status
 
 Updated: 2026-09-03
-Branch: `codex/syndocal-v1.2`; current product metadata is `1.2.0-alpha.67`.
+Branch: `codex/syndocal-v1.2`; current product metadata is `1.2.0-alpha.68`.
 
-## 2026-09-03 current alpha.67 ASIO setup race checkpoint
+## 2026-09-03 current alpha.68 blackout release query-race checkpoint
+
+Alpha.68 closes the remaining DMX blackout-off recovery race after lease recovery. When
+the engaged safety latch has no active local Both lease, the UI runs the
+canonical Enable path once and consumes its validated active-Both Enable receipt
+as the release authority. It no longer depends on a second fail-fast
+lease query that can still expose the pre-Enable view; the backend continues
+to revalidate owner, project, fence, and lease state before releasing S0.
+Active split, foreign, ambiguous, or otherwise unproven ownership remains
+fail-closed.
+
+The focused output-control contract now covers a stale post-Enable lease read
+and proves that no release is sent without the Enable receipt proof. The exact
+pinned Community MSVC `14.44.35207` no-bundle native build passed in `3m34s`;
+the resulting `target/release/syndocal.exe` is Product/FileVersion
+`1.2.0-alpha.68`, `63,520,256` bytes, SHA-256
+`51F3A4AEF8E7E5EC992EEC6997929277FE6D12B40CF8FF2F8ABFC8A33E8AC97D`.
+Exactly one checkout-owned Syndocal process (PID `59636`) is responsive,
+visible, and maximized (`showCmd=3`). First-party warnings are `0` (only the
+existing Vite large-chunk advisory). Physical DMX/Art-Net, fixture, Unity,
+camera, and audio acceptance remain separate external gates.
+
+## Historical 2026-09-03 alpha.67 ASIO setup race checkpoint
 
 Alpha.67 advances the product prerelease ordinal for a setup-only ASIO race
 repair. Returning to Normal now invalidates any in-flight ASIO status/catalogue

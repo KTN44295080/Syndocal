@@ -4,7 +4,24 @@ Date: 2026-08-19
 Branch at creation: `codex/syndocal-v1.0`
 Baseline before this document: `848d759846985cc3acf588356cfa3c996b4e2ef2`
 
-## 2026-09-03 alpha.67 ASIO setup race checkpoint
+## 2026-09-03 alpha.68 blackout release query-race checkpoint
+
+Alpha.68 closes the DMX blackout-off recovery race: after the one bounded
+Enable recovery, the validated active-Both Enable receipt is the release proof
+and no second fail-fast lease query is required. The Release command still
+passes through backend owner/fence/lease CAS; split, foreign, and ambiguous
+ownership remain fail-closed. Focused output-control checker, TypeScript,
+Node syntax, and diff checks pass. The exact pinned Community MSVC
+`14.44.35207` no-bundle native build passed in `3m34s`; the resulting
+`target/release/syndocal.exe` is Product/FileVersion `1.2.0-alpha.68`,
+`63,520,256` bytes, SHA-256
+`51F3A4AEF8E7E5EC992EEC6997929277FE6D12B40CF8FF2F8ABFC8A33E8AC97D`.
+PID `59636` supplied exactly one responsive, visible, maximized Syndocal
+window (`showCmd=3`). First-party warnings are `0` (only the existing Vite
+large-chunk advisory); physical USB-DMX, Art-Net/Unity, fixture, camera,
+Spout, and audio acceptance remain external.
+
+## Historical 2026-09-03 alpha.67 ASIO setup race checkpoint
 
 Alpha.67 advances the product prerelease ordinal for the setup-only ASIO race
 repair. Returning to Normal invalidates in-flight ASIO status/catalogue work

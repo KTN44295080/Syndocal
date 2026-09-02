@@ -4,7 +4,24 @@ Status date: 2026-09-03 JST
 
 This is the concise authoritative resume note for the final show-critical tranche. It supersedes chat-only status, but it does not supersede the detailed acceptance documents named below.
 
-## 2026-09-03 alpha.67 ASIO setup race source checkpoint
+## 2026-09-03 alpha.68 blackout release query-race source checkpoint
+
+The DMX blackout-off path now consumes the validated active-Both receipt from
+its single bounded Enable recovery instead of trusting an immediately repeated
+fail-fast lease read. Release remains backend-fenced and fails closed if that
+receipt or current owner/lease CAS is not valid. Focused output-control checker,
+TypeScript, Node syntax, and diff checks are the pre-native gates and pass. The
+exact pinned Community MSVC `14.44.35207` no-bundle native build passed in
+`3m34s`; the native artifact identity is the exact release evidence for this
+checkpoint: `target/release/syndocal.exe`, Product/FileVersion
+`1.2.0-alpha.68`, `63,520,256` bytes, SHA-256
+`51F3A4AEF8E7E5EC992EEC6997929277FE6D12B40CF8FF2F8ABFC8A33E8AC97D`.
+PID `59636` supplied exactly one responsive, visible, maximized Syndocal
+window (`showCmd=3`). First-party warnings are `0` (only the existing Vite
+large-chunk advisory); physical USB-DMX, Art-Net/Unity, fixture, camera/MiraBox,
+Spout, and audio acceptance remain explicitly unverified external rows.
+
+## Historical 2026-09-03 alpha.67 ASIO setup race source checkpoint
 
 ASIO setup requests are invalidated before publishing Normal, preventing a
 late ASIO response from overwriting the operator's selected Normal view or

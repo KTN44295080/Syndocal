@@ -2,7 +2,7 @@
 
 Syndocal は、DMX照明とVJ映像を同じタイムライン、キュー、BPMクロック、エフェクトソースで駆動するデスクトップ制御ソフトウェアです。
 
-- 製品名: **Syndocal 1.2.0-alpha.67**
+- 製品名: **Syndocal 1.2.0-alpha.68**
 - 開発: **Seraf()のKTN**
 - プロジェクト: **`.sdc`** (可読JSON)
 - Tier 1: Windows 10+ / macOS 12+
@@ -25,17 +25,17 @@ See the [current output acceptance record](qa/DSF2026_SAME_PC_OUTPUT_ACCEPTANCE_
 for execution steps and unverified physical/lease evidence; this boundary is
 not a hardware acceptance claim.
 
-Current product metadata is `1.2.0-alpha.67` on branch
-`codex/syndocal-v1.2`. Alpha.67 keeps the routine Setup → I/O → DMX surface
-compact, repairs blackout clearing after lease expiry/restart with bounded
-canonical Both recovery, and discards stale ASIO setup responses after an
+Current product metadata is `1.2.0-alpha.68` on branch
+`codex/syndocal-v1.2`. Alpha.68 keeps the routine Setup → I/O → DMX surface
+compact, closes the blackout-off recovery race by using the validated active-Both
+Enable receipt, and retains the stale ASIO setup response repair after an
 operator returns to Normal. Split or foreign ownership remains fail-closed. The
-exact pinned Community MSVC `14.44.35207` no-bundle build passed in `3m21s`
+exact pinned Community MSVC `14.44.35207` no-bundle build passed in `3m34s`
 with first-party warnings `0` (only the existing Vite large-chunk advisory).
 The resulting `target/release/syndocal.exe` is Product/FileVersion
-`1.2.0-alpha.67`, SHA-256
-`3D7BDF45B25189FD9F61694F7523C00125AB71A02E0622D222A2A0D113454CDE`.
-PID `65324` supplied one responsive, visible, maximized Syndocal window
+`1.2.0-alpha.68`, `63,520,256` bytes, SHA-256
+`51F3A4AEF8E7E5EC992EEC6997929277FE6D12B40CF8FF2F8ABFC8A33E8AC97D`.
+PID `59636` supplied one responsive, visible, maximized Syndocal window
 (`showCmd=3`). The Patch source browser counts
 fixture families in section headers (with Mode counts retained per fixture),
 and its five-viewport contract follows the merged Setup → Lighting → Patch
@@ -477,7 +477,7 @@ unaccepted.
 
 CI/Release成果物は次の形式です。
 
-- Windows: `Syndocal_1.2.0-alpha.67_x64-setup.exe` (NSIS)、`Syndocal_1.2.0-alpha.67_x64_ja-JP.msi`
+- Windows: `Syndocal_1.2.0-alpha.68_x64-setup.exe` (NSIS)、`Syndocal_1.2.0-alpha.68_x64_ja-JP.msi`
 - macOS: `.app`、DMG
 - Linux: `.deb`、AppImage
 
