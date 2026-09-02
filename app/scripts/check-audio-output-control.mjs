@@ -318,14 +318,14 @@ const assertions = [
     true,
   ],
   [
-    /nativeStatus\.routerState !== "Locked" && nativeStatus\.routerState !== "AsioReady"/u,
+    /nativeStatus\.routerState !== "Normal"[\s\S]*?nativeStatus\.routerState !== "Locked"[\s\S]*?nativeStatus\.routerState !== "AsioReady"/u,
     returnToNormalBody,
-    "Return to normal must admit only exact Locked or AsioReady router state",
+    "Return to normal must admit only exact Normal, Locked, or AsioReady router state",
   ],
   [
-    /const canReturnToNormal = createMemo\([\s\S]*?nativeStatus\.routerState === "Locked" \|\| nativeStatus\.routerState === "AsioReady"/u,
+    /const canReturnToNormal = createMemo\([\s\S]*?nativeStatus\.routerState === "Normal"[\s\S]*?nativeStatus\.routerState === "Locked"[\s\S]*?nativeStatus\.routerState === "AsioReady"/u,
     control,
-    "Return-to-Normal availability must include revalidated AsioReady without admitting other states",
+    "Return-to-Normal availability must include setup-only Normal and revalidated AsioReady without admitting other states",
   ],
   [
     /fn select_normal_audio_output\(/u,
@@ -589,6 +589,16 @@ const controller = createAudioOutputController({
   backendAvailable: true,
   readLivePlaybackActive: timelinePlaying,
 });
+controller.setBackend("show-asio");
+await settle();
+const setupOnlyReturnCallStart = calls.length;
+check(controller.canReturnToNormal(),
+  "setup-only ASIO selection with a Normal native router keeps an explicit Normal recovery action available");
+await controller.returnToNormal();
+check(controller.view().backend === "normal-wasapi"
+  && controller.view().state === "Ready"
+  && !calls.slice(setupOnlyReturnCallStart).includes("select_normal_audio_output"),
+"setup-only ASIO return resets the local view without a redundant native Normal-selection dispatch");
 controller.setBackend("show-asio");
 await settle();
 controller.setDriver("asio:mock");
@@ -902,6 +912,6 @@ const runtimeResult = await execFile(
   ["--no-warnings", "--conditions=browser", "--experimental-strip-types", "--input-type=module", "-e", runtimeRegression],
   { cwd: resolve(scriptDirectory, "..") },
 );
-assert.match(runtimeResult.stdout, /audio output controller runtime regression passed \(61 assertions\)/u);
+assert.match(runtimeResult.stdout, /audio output controller runtime regression passed \(63 assertions\)/u);
 
-console.log(`audio output control checks passed (${assertions.length + requiredCommands.length + 3} assertions; runtime regression 61 assertions)`);
+console.log(`audio output control checks passed (${assertions.length + requiredCommands.length + 3} assertions; runtime regression 63 assertions)`);

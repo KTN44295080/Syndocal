@@ -1503,8 +1503,18 @@ export const createAudioOutputController = (
     if (dependencies.backendAvailable && asioCommandAvailable()
       && (!nativeStatus
         || !isSafeForEnumeration(nativeStatus)
-        || (nativeStatus.routerState !== "Locked" && nativeStatus.routerState !== "AsioReady"))) {
-      setLocked("Return to normal requires the native router to be Locked or AsioReady.");
+        || (nativeStatus.routerState !== "Normal"
+          && nativeStatus.routerState !== "Locked"
+          && nativeStatus.routerState !== "AsioReady"))) {
+      setLocked("Return to normal requires the native router to be Normal, Locked, or AsioReady.");
+      return;
+    }
+    // The ASIO selector can be opened without taking native ownership.  In
+    // that setup-only state the native router remains Normal, so switching
+    // back is a local view change and must not issue a redundant Normal
+    // selection command that could race another owner.
+    if (nativeStatus?.routerState === "Normal") {
+      resetToNormalView();
       return;
     }
     if (!dependencies.backendAvailable || !asioCommandAvailable()) {
@@ -1699,7 +1709,9 @@ export const createAudioOutputController = (
       || !asioCommandAvailable()
       || (nativeStatus !== null
         && isSafeForEnumeration(nativeStatus)
-        && (nativeStatus.routerState === "Locked" || nativeStatus.routerState === "AsioReady"))));
+        && (nativeStatus.routerState === "Normal"
+          || nativeStatus.routerState === "Locked"
+          || nativeStatus.routerState === "AsioReady"))));
   const canTest = (): boolean =>
     dependencies.backendAvailable
     && asioCommandAvailable()
