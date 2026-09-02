@@ -4,6 +4,31 @@ Status date: 2026-09-02 JST
 
 This is the concise authoritative resume note for the final show-critical tranche. It supersedes chat-only status, but it does not supersede the detailed acceptance documents named below.
 
+## 2026-09-02 alpha.60 native three-display window acceptance
+
+With the current clean checkout and the rebuilt alpha.60 executable, the
+read-only/apply acceptance runner returned `accepted=true` after three
+consecutive stable samples. Evidence is retained at
+`target\\qa\\alpha60-three-display-current-aef9067c38c940b382c4fea897cd4941`.
+The exact artifact was `1.2.0-alpha.60`, `62,486,528` bytes,
+SHA-256 `D31AB72AA54800BA93AA8305F467CD084979823885887F17535C65D5F842F0A3`;
+the running process was PID `68032` from the exact checkout path.
+
+The verified three-screen topology is:
+
+- editor `Syndocal` on stable identity `\\?\\DISPLAY#PXO2500#5&eb37e8d&1&UID4355#{e6f07b5f-ee97-4a90-b076-33f57bf4eaa7}` / `DISPLAY2`, client `1920x1032`, effective DPI `96`, maximized;
+- output `3` / `Display 1` on stable identity `\\?\\DISPLAY#PXO1560#5&2c959af3&0&UID768#{e6f07b5f-ee97-4a90-b076-33f57bf4eaa7}` / `DISPLAY5`, exact physical client `1920x1080`, effective DPI `144`, title `Syndocal Output - Display 1`;
+- output `4` / `Display 5` on stable identity `\\?\\DISPLAY#MSI3DD2#5&eb37e8d&1&UID4357#{e6f07b5f-ee97-4a90-b076-33f57bf4eaa7}` / `DISPLAY3`, exact physical client `3840x2160`, effective DPI `144`, title `Syndocal Output - Display 5`.
+
+All three windows were visible, responsive, owned by PID `68032`, and matched
+their explicit output IDs/titles and monitor identities in every sample. This
+accepts real native window creation, placement, and geometry for the editor +
+two Display outputs. The harness deliberately reports
+`native_hardware_claim=false`: it does not sample pixels, decoder quality, a
+60-fps budget, MiraBox frames, Unity/Spout delivery, or audience-facing
+content. Those remain separate external acceptance rows. The current process
+is left with both Display windows open and the USB-DMX worker in safe S0.
+
 ## 2026-09-02 alpha.60 post-build Open-DMX barrier and restart checkpoint
 
 The final source adjustment closes a late-cleanup race in the bounded Open-DMX
