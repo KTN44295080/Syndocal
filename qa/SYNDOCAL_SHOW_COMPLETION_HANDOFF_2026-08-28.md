@@ -144,6 +144,57 @@ new mutation). It is not a release tag. The running process is retained in
 safe S0 for operator Timeline work; the external acceptance rows above remain
 deliberately open until their physical or receiver-side evidence is captured.
 
+## 2026-09-02 alpha.60 same-PC Art-Net receiver and two-output pixel spot check
+
+With the running alpha.60 process still in safe S0, the repository-owned
+external monitor captured the current Timeline route at
+`target\\qa\\artnet-alpha60-playback-probe-20260902.json`. The bounded
+12-second capture accepted `528` ArtDmx datagrams, rejected `0`, and recorded
+`528` U0 frames with a `512`-byte DMX payload, protocol version `14`, and a
+maximum inter-frame gap of `24 ms` (about `44 fps`). The first accepted raw
+packet has the canonical `Art-Net\\0` / `0x5000` header, wire universe `0`,
+and a `512`-byte payload. All payload bytes, including channel 500, were zero
+because S0 remained engaged. This closes current same-PC UDP receiver,
+universe/length/period, and safe-zero mirror evidence only; it does not claim
+non-zero Art-Net, Unity delivery, or fixture response.
+
+Read-only screen captures of the two already-open output windows are retained
+at `target\\qa\\display1-alpha60-20260902.png` (1280x720,
+SHA-256 `FFDFCA3A438AA3A1E2B80BB1EF589D13B6956B7243316D16DA995A992C84BEF6`)
+and `target\\qa\\display5-alpha60-20260902.png` (2560x1440,
+SHA-256 `008F6459434582A2B7FB92C05DD67DD48D20A6D90E95F76C6BB0C624F23F99B7`).
+The captures have different pixel content (Display 1 is predominantly black;
+Display 5 is a four-colour test composition), proving independent visible
+content on the two native output windows. The captures are a content spot
+check, not a 60-fps or audience-pixel acceptance measurement.
+
+## 2026-09-02 alpha.60 camera enumeration boundary
+
+The native Edit -> Video -> camera import surface was exercised against the
+current machine. Device refresh failed closed with a bounded FFmpeg/DirectShow
+timeout while enumerating `Insta360 Link`; no camera profile was exposed after
+the failed catalog refresh. `OBS Studio` was running during this attempt and
+may own one or more capture endpoints. The current PnP inventory did not
+contain a `MiraBox`-named device (it did contain `NDI Webcam Video` and
+`Insta360 Link`). No camera process was force-terminated and no false profile
+or 4K/60 acceptance was recorded. Retry after the camera provider is released
+and the intended capture device is connected; then select an exact advertised
+profile and require one complete-frame probe.
+
+## 2026-09-02 alpha.60 Windows delivery self-tests
+
+The SDK-independent release chain was rerun on clean HEAD `d8c6b7b`:
+`pnpm --dir app run check:release` passed (ASIO packaging `169`, ASIO v3 `22`,
+Timeline/audio/video/camera contracts), with the documented `FFMPEG_DIR is not
+set` informational line and zero first-party warnings. The deterministic
+Windows delivery checks also passed: `windows-candidate-extractor.mjs
+--self-test` (`43` assertions), its verified-materialization self-test (`4`),
+and `check-windows-release-artifacts.mjs --self-test` (`140`). These are
+packaging-boundary proofs only. A real NSIS/MSI/updater candidate was not built
+because the current product is an alpha prerelease and the signed release
+manifest/key inputs are intentionally absent; no installer or updater release
+claim follows from these self-tests.
+
 ## Detailed alpha.60 native/managed-output evidence (superseded source snapshot)
 
 Alpha.60 is the current native candidate, based on upstream-equal parent
