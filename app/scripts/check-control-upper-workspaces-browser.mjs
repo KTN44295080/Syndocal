@@ -769,7 +769,10 @@ const exercisePopupLastTarget = async (client, selector) => evaluate(client, `(a
     : null;
   const nestedHorizontalRegions = [
     ['bank', '.timelineBankBody'],
-    ['cueAudio', '.timelineCueAudioEditorBody'],
+    // Cue Audio editing is intentionally owned by Setup > I/O > Audio. The
+    // Timeline disclosure keeps a compact read-only summary and one explicit
+    // navigation action instead of mounting a second device editor here.
+    ['cueAudio', '.timelineCueAudioStatusSummary'],
     ['phases', '.timelinePhaseEditorBody'],
   ].map(([name, regionSelector]) => {
     const region = directPerformanceEditor?.querySelector(regionSelector);
@@ -844,7 +847,7 @@ const exerciseTimelineNestedRegionTargets = async (client) => evaluate(client, `
   };
   const specs = [
     ['bank', '[data-timeline-bank]', '.timelineBankBody'],
-    ['cueAudio', '[data-timeline-cue-audio-editor]', '.timelineCueAudioEditorBody'],
+    ['cueAudio', '[data-timeline-cue-audio-editor]', '.timelineCueAudioStatusSummary'],
     ['phases', '[data-timeline-phase-editor]', '.timelinePhaseEditorBody'],
   ];
   for (const [, detailsSelector] of specs) {
@@ -885,7 +888,10 @@ const exerciseTimelineNestedRegionTargets = async (client) => evaluate(client, `
     if (region instanceof HTMLElement && controls[0]) {
       targets.push(await proveTarget(region, controls[0], 'representative'));
     }
-    if (region instanceof HTMLElement && controls.at(-1)) {
+    // The compact Cue Audio summary has a single intentional action (open
+    // Setup). It is not an editor and therefore has no separate terminal
+    // control. Bank/Phases retain the representative + terminal coverage.
+    if (name !== 'cueAudio' && region instanceof HTMLElement && controls.at(-1)) {
       targets.push(await proveTarget(region, controls.at(-1), 'terminal'));
     }
     const regionRect = region instanceof HTMLElement ? region.getBoundingClientRect() : null;
@@ -1441,8 +1447,9 @@ try {
     for (const region of nestedRegionTargets?.regions ?? []) {
       assert.equal(region.detailsOpen, true, `Timeline ${region.name} details are open before reachability checks at ${viewport.width}x${viewport.height}: ${JSON.stringify(region)}`);
       assert.ok(region.region && region.enabledVisibleFocusableCount > 0, `Timeline ${region.name} has an enabled visible focusable control at ${viewport.width}x${viewport.height}: ${JSON.stringify(region)}`);
-      assert.deepEqual(region.targets.map(({ role }) => role), ['representative', 'terminal'], `Timeline ${region.name} exercises representative and terminal controls at ${viewport.width}x${viewport.height}: ${JSON.stringify(region)}`);
-      assert.equal(region.targets.every((target) => target.popupInsideViewport && target.targetInsideRegion && target.targetInsidePopup && target.targetInsideViewport && target.hit), true, `Timeline ${region.name} representative/terminal controls remain contained and hit-testable at ${viewport.width}x${viewport.height}: ${JSON.stringify(region)}`);
+      const expectedRoles = region.name === 'cueAudio' ? ['representative'] : ['representative', 'terminal'];
+      assert.deepEqual(region.targets.map(({ role }) => role), expectedRoles, `Timeline ${region.name} exercises ${expectedRoles.join(' + ')} controls at ${viewport.width}x${viewport.height}: ${JSON.stringify(region)}`);
+      assert.equal(region.targets.every((target) => target.popupInsideViewport && target.targetInsideRegion && target.targetInsidePopup && target.targetInsideViewport && target.hit), true, `Timeline ${region.name} controls remain contained and hit-testable at ${viewport.width}x${viewport.height}: ${JSON.stringify(region)}`);
     }
     const toolsLast = await exercisePopupLastTarget(client, '.timelineToolsDisclosure[open] .timelineToolsDisclosurePanel');
     assert.ok(toolsLast?.popupInsideLayout && toolsLast.popupInsideViewport, `Timeline Tools popup remains inside its layout and viewport: ${JSON.stringify(toolsLast)}`);
@@ -1536,7 +1543,7 @@ try {
       const target = [...panel.querySelectorAll('button, input, select, textarea, summary, [role="button"], [tabindex]')].filter(visible).at(-1);
       if (!(target instanceof HTMLElement)) return null;
       const nestedEditor = target.closest('.timelineBankPanel, .timelineCueAudioEditor, .timelinePhaseEditor');
-      const nestedRegion = target.closest('.timelineBankBody, .timelineCueAudioEditorBody, .timelinePhaseEditorBody');
+      const nestedRegion = target.closest('.timelineBankBody, .timelineCueAudioStatusSummary, .timelinePhaseEditorBody');
       if (!(nestedEditor instanceof HTMLDetailsElement) || !(nestedRegion instanceof HTMLElement) || !panel.contains(nestedEditor)) return null;
       target.scrollIntoView({ block: 'nearest', inline: 'nearest' });
       await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));

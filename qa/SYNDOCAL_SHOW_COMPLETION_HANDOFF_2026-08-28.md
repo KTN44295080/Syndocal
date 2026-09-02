@@ -30,6 +30,21 @@ window (`showCmd=3`). First-party warnings are `0` (only the existing Vite
 large-chunk advisory); physical USB-DMX, Art-Net/Unity, fixture, camera/MiraBox,
 Spout, and audio acceptance remain explicitly unverified external rows.
 
+## 2026-09-03 alpha.68 current-IA control-upper browser checkpoint
+
+Timeline Tools now intentionally keeps Cue Audio as a compact read-only summary;
+device editing belongs to Setup → I/O → Audio and is opened by the summary's
+explicit Setup action. The browser checker had retained the retired editor-body
+selector and two-control requirement, producing a false failure against this
+current IA. It now checks the summary region and its enabled Setup action while
+retaining representative/terminal reachability for the editable Bank and
+Phases regions. `pnpm --dir app run check:control-upper-workspaces` passes all
+four current browser sizes with zero CDP runtime, console, log, and harness
+errors. This checkpoint changes only acceptance evidence; no native build,
+physical DMX, Art-Net, Unity/Spout, camera, or audio claim is added. The old
+populated VJ-operator acceptance remains a separate stale gate and is not
+claimed here.
+
 The pinned native test gate also passed both blackout regressions:
 `native_display_safety_blackout_engage_release_cycle_rejects_stale_authority`
 and `managed_blackout_release_projection_drops_the_stale_public_generation`,

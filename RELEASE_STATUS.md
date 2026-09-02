@@ -64,6 +64,25 @@ hit a CDP navigation timeout at 2048x1152, and the standalone VJ operator
 fixture currently cannot expose its layer-1 Advanced selector. Those are
 separate pre-existing fixture/gate issues and were not changed here.
 
+## 2026-09-03 alpha.68 current-IA control-upper browser checkpoint
+
+The Timeline Tools Cue Audio disclosure is intentionally a compact read-only
+status summary. Device editing is owned by Setup → I/O → Audio, reached through
+the summary's explicit Setup action; Timeline must not mount a second WDM
+device editor. The control-upper browser checker still targeted the retired
+`.timelineCueAudioEditorBody` and required the old two-control shape, so it
+reported a false failure while the current UI was in its documented state.
+The checker now targets `.timelineCueAudioStatusSummary`, requires its enabled
+Setup action, and keeps representative/terminal reachability strict for the
+editable Bank and Phases regions.
+
+`pnpm --dir app run check:control-upper-workspaces` now passes all four current
+browser sizes (`3840x2160`, `2560x1440`, `1920x1080`, `1280x720`) with zero CDP
+runtime/console/log/harness errors. This is a checker and browser-contract
+checkpoint only; no native build or physical output claim changes. The legacy
+populated VJ-operator gate remains a separate stale acceptance surface and is
+not silently promoted by this repair.
+
 ## Historical 2026-09-03 alpha.67 ASIO setup race checkpoint
 
 Alpha.67 advances the product prerelease ordinal for a setup-only ASIO race

@@ -39,6 +39,20 @@ connected FTDI `COM3` device with the pinned Community MSVC 14.44 linker:
 failure, and preview RGB `(54,73,255)`. This is Engine-to-COM write evidence
 only; fixture illumination and downstream reception remain physical checks.
 
+## 2026-09-03 alpha.68 current-IA control-upper browser checkpoint
+
+The Timeline Tools Cue Audio section follows the current ownership boundary:
+Timeline shows a compact read-only status summary and a single Setup → I/O →
+Audio navigation action, while device selection remains Setup-owned. The
+control-upper checker was still asserting the retired Timeline editor body and
+old two-control shape. It now measures the summary action and preserves strict
+representative/terminal checks for the editable Bank and Phases sections.
+`pnpm --dir app run check:control-upper-workspaces` passes the four current
+browser sizes with zero CDP runtime, console, log, and harness errors. This is
+browser/checker evidence only; no native or physical acceptance is inferred.
+The legacy populated VJ-operator gate remains explicitly unpromoted pending a
+separate IA decision.
+
 ## Historical 2026-09-03 alpha.67 ASIO setup race checkpoint
 
 Alpha.67 advances the product prerelease ordinal for the setup-only ASIO race
