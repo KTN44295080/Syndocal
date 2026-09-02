@@ -643,6 +643,7 @@ import { createSafetyBlackoutRuntimeController } from "./safetyBlackoutRuntimeCo
 import {
   executeDisplayAddOutputControl,
   executeDisplayWindowOutputControl,
+  executeBlackoutRelease,
   executeOutputControl,
   applyVideoOutputWindowStatusQuery,
   applyVideoOutputWindowStateEvent,
@@ -650,7 +651,6 @@ import {
   queryDisplayAddLeaseAuthority,
   queryOutputLeaseAuthority,
   selectExactBothLeaseForDisplayAdd,
-  selectOnlyActiveOutputLease,
   resolveVideoOutputWindowActualOpen,
   VIDEO_OUTPUT_WINDOW_STATE_EVENT,
   type VideoOutputWindowPhysicalState,
@@ -17606,12 +17606,15 @@ export default function App() {
       if (enabled) {
         await safetyBlackoutRuntime.engage();
       } else {
-        const leaseQuery = await queryOutputLeaseAuthority(invoke);
-        const lease = selectOnlyActiveOutputLease(leaseQuery, ["lighting", "video"]);
-        await executeOutputControl(
-          invoke,
-          { kind: "release_blackout", lease },
-        );
+        // A clear request is meaningful only while the safety latch is on.
+        // If the lease expired/restarted, executeBlackoutRelease performs the
+        // bounded canonical Both recovery; split/foreign leases still fail
+        // closed without touching output.
+        if (!snapshot().blackout) {
+          await refreshSnapshot();
+          return;
+        }
+        await executeBlackoutRelease(invoke);
       }
       await refreshSnapshot();
     } catch (error) {

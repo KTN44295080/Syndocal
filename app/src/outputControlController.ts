@@ -1145,6 +1145,38 @@ export async function enableOutput(
   return executeOutputControl(invoke, { kind: "enable_output" });
 }
 
+/**
+ * Release the global DMX safety latch through the same owner-bound R4 route
+ * used by the ordinary operator control.  S0 engage is intentionally
+ * lease-free, so a restart/expiry can leave the latch engaged while no active
+ * Both lease is visible.  In that one bounded case, recover the canonical
+ * local Both lease first; never auto-recover when any active split/foreign or
+ * ambiguous lease exists, because that would conceal an ownership conflict.
+ */
+export async function executeBlackoutRelease(
+  invoke: FrontendTauriInvoke,
+): Promise<OutputControlReceipt> {
+  const expectedResources = ["lighting", "video"] as const;
+  let leaseQuery = await queryOutputLeaseAuthority(invoke);
+  let lease: OutputLeaseAuthority;
+  if (hasOnlyActiveOutputLease(leaseQuery, expectedResources)) {
+    lease = selectOnlyActiveOutputLease(leaseQuery, expectedResources);
+  } else if (!leaseQuery.statuses.some((status) => status.status === "held_active")) {
+    // Engage can be issued safely before Enable Output.  Recovering the
+    // canonical Both lease keeps the existing native ReleaseBlackout
+    // ownership/consent boundary intact while making the UI toggle usable
+    // after a process restart or lease expiry.
+    await enableOutput(invoke);
+    leaseQuery = await queryOutputLeaseAuthority(invoke);
+    lease = selectOnlyActiveOutputLease(leaseQuery, expectedResources);
+  } else {
+    throw new Error(
+      "DMX blackout release requires one active local Both output lease; resolve output ownership in Setup > I/O first. Blackout remains engaged.",
+    );
+  }
+  return executeOutputControl(invoke, { kind: "release_blackout", lease });
+}
+
 /** Execute a lease lifecycle action through the same fenced receipt lane. */
 export async function executeOutputLeaseLifecycle(
   invoke: FrontendTauriInvoke,

@@ -616,11 +616,97 @@ assert.equal(
   true,
   "normal Enable remains satisfied only while exactly one active Both lease exists",
 );
+assert.match(
+  controllerSource,
+  /export async function executeBlackoutRelease\(/,
+  "blackout release helper must remain an explicit controller boundary",
+);
+const blackoutReleaseSourceStart = controllerSource.indexOf(
+  "export async function executeBlackoutRelease(",
+);
+const blackoutReleaseSourceEnd = controllerSource.indexOf(
+  "\nexport ",
+  blackoutReleaseSourceStart + 1,
+);
+assert.notEqual(
+  blackoutReleaseSourceStart,
+  -1,
+  "blackout release helper source must be discoverable",
+);
+const blackoutReleaseSource = controllerSource.slice(
+  blackoutReleaseSourceStart,
+  blackoutReleaseSourceEnd === -1 ? controllerSource.length : blackoutReleaseSourceEnd,
+);
+assert.match(
+  blackoutReleaseSource,
+  /hasOnlyActiveOutputLease[\s\S]*await enableOutput\(invoke\)[\s\S]*executeOutputControl\(invoke, \{ kind: "release_blackout", lease \}\)/,
+  "blackout release must recover the canonical Both lease only through the existing Enable path",
+);
 assert.equal(
   runtime.hasOnlyActiveOutputLease(leaseQuery([]), ["lighting", "video"]),
   false,
   "expired or missing authority must re-enable the normal one-click Enable path",
 );
+
+const blackoutReleaseAction = { kind: "release_blackout", lease: lease() };
+let recoveredBlackoutLease = false;
+const blackoutRecoveryCalls = [];
+const blackoutRecoveryInvoke = async (command, args) => {
+  blackoutRecoveryCalls.push(command);
+  if (command === "query_output_control_authority_v1") {
+    assert.equal(args, undefined);
+    return { operation_id: runtime.OUTPUT_CONTROL_AUTHORITY_QUERY_OPERATION_ID, fence: structuredClone(fence) };
+  }
+  if (command === "query_output_lease_authority_v1") {
+    assert.equal(args, undefined);
+    return recoveredBlackoutLease
+      ? queryFor(blackoutReleaseAction, "active")
+      : leaseQuery([{ status: "unavailable" }]);
+  }
+  if (command === "enable_output_control_v2") {
+    assert.deepEqual(args.request.action, enableAction);
+    recoveredBlackoutLease = true;
+    return receiptFor(args.request, enableAction);
+  }
+  if (command === "release_blackout_output_control_v2") {
+    assert.deepEqual(args.request.action, blackoutReleaseAction);
+    return receiptFor(args.request, blackoutReleaseAction);
+  }
+  throw new Error(`unexpected blackout recovery command: ${command}`);
+};
+const blackoutRecoveryReceipt = await runtime.executeBlackoutRelease(blackoutRecoveryInvoke);
+assert.equal(blackoutRecoveryReceipt.operation_id, runtime.OUTPUT_BLACKOUT_RELEASE_OPERATION_ID);
+assert.deepEqual(blackoutRecoveryCalls, [
+  "query_output_lease_authority_v1",
+  "query_output_control_authority_v1",
+  "query_output_lease_authority_v1",
+  "enable_output_control_v2",
+  "query_output_lease_authority_v1",
+  "query_output_control_authority_v1",
+  "query_output_lease_authority_v1",
+  "release_blackout_output_control_v2",
+], "a missing lease may recover exactly once before the fenced release");
+
+const activeBlackoutHarness = createHarness({ action: blackoutReleaseAction, queryState: "active" });
+await runtime.executeBlackoutRelease(activeBlackoutHarness.invoke);
+assert.equal(activeBlackoutHarness.executeCalls, 1, "an active Both lease must release without an Enable mutation");
+
+const splitBlackoutCalls = [];
+await assert.rejects(
+  runtime.executeBlackoutRelease(async (command, args) => {
+    splitBlackoutCalls.push(command);
+    if (command === "query_output_lease_authority_v1") return leaseQuery([{
+      status: "held_active",
+      authority: lease(),
+      resources: ["lighting"],
+    }]);
+    throw new Error(`unexpected split blackout command: ${command}`);
+  }),
+  /requires one active local Both output lease/,
+  "an active split lease must remain fail-closed and must not be auto-recovered",
+);
+assert.deepEqual(splitBlackoutCalls, ["query_output_lease_authority_v1"]);
+
 assert.equal(
   runtime.hasOnlyActiveOutputLease(leaseQuery([
     { status: "held_active", authority: lease(1), resources: ["lighting", "video"] },
@@ -1220,7 +1306,16 @@ assert.match(
   "the off-event-loop lane reaches the canonical operation dispatcher",
 );
 assert.match(mainSource, /OutputControlActionV2::AddDisplay[\s\S]*vec!\[OutputLeaseResource::Lighting, OutputLeaseResource::Video\]/);
-assert.match(appSource, /selectOnlyActiveOutputLease\(leaseQuery, \["lighting", "video"\]\)/);
+const setBlackoutSourceStart = appSource.indexOf("const setBlackout = async (enabled: boolean) => {");
+const setBlackoutSourceEnd = appSource.indexOf("\n  const setAllBlackout = async", setBlackoutSourceStart + 1);
+assert.notEqual(setBlackoutSourceStart, -1, "the blackout handler must remain an explicit source boundary");
+assert.notEqual(setBlackoutSourceEnd, -1, "the blackout handler must have a bounded source slice");
+const setBlackoutSource = appSource.slice(setBlackoutSourceStart, setBlackoutSourceEnd);
+assert.match(
+  setBlackoutSource,
+  /if \(!snapshot\(\)\.blackout\) \{[\s\S]*await refreshSnapshot\(\);[\s\S]*return;[\s\S]*\}[\s\S]*await executeBlackoutRelease\(invoke\)/,
+  "a clear request while already clear must not auto-enable output",
+);
 assert.match(appSource, /fullscreen: target\.fullscreen/);
 assert.match(appSource, /width: target\.width[\s\S]*height: target\.height/);
 const setupIoFixtureStart = appSource.indexOf('if (viewportFixture === "setup-io") {');

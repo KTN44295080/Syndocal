@@ -1,9 +1,30 @@
 # Syndocal historical v1.0 / current v1.2 alpha Release Status
 
 Updated: 2026-09-02
-Branch: `codex/syndocal-v1.2`; current product metadata is `1.2.0-alpha.65`.
+Branch: `codex/syndocal-v1.2`; current product metadata is `1.2.0-alpha.66`.
 
-## 2026-09-02 current alpha.65 DMX operator-copy checkpoint
+## 2026-09-02 current alpha.66 DMX blackout release checkpoint
+
+Alpha.66 advances the product prerelease ordinal for the DMX blackout release
+path. Clearing blackout now uses bounded local Both lease recovery when the
+engaged safety latch has no active lease after restart or expiry: the canonical
+Enable Output path runs once, the lease is re-read, and only then is the
+fenced release sent. An existing active Both lease is released directly;
+active split, foreign, or ambiguous leases remain fail-closed with an
+actionable Setup → I/O message. A clear request while already clear is a
+no-op and does not acquire output ownership.
+
+The focused output-control checker, TypeScript, Node syntax, and scoped diff
+checks pass with first-party warnings `0`. The exact pinned Community MSVC
+`14.44.35207` no-bundle native build passed in `3m28s`. The resulting
+`target/release/syndocal.exe` is Product/FileVersion `1.2.0-alpha.66`,
+`63,515,136` bytes, SHA-256
+`E8A7C67137501BF2FF41F003587CE1B256E95D0D53BD74FE9E2F7604A71B331F`.
+PID `54896` supplied exactly one responsive, visible, maximized Syndocal
+window (`showCmd=3`). Physical USB-DMX, Art-Net, Unity/Spout, fixture,
+camera, and audio acceptance remain separate external gates.
+
+## Historical 2026-09-02 alpha.65 DMX operator-copy checkpoint
 
 Alpha.65 advances the product prerelease ordinal for the operator-copy
 cleanup. The normal Setup → I/O → DMX surface keeps the Show DMX action and

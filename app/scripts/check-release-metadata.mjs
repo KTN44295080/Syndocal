@@ -32,7 +32,7 @@ import { withMaterializedVerifiedExecutable } from "./verified-materialization.m
 
 export { withMaterializedVerifiedExecutable } from "./verified-materialization.mjs";
 
-export const expectedVersion = "1.2.0-alpha.65";
+export const expectedVersion = "1.2.0-alpha.66";
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const appRoot = resolve(scriptDir, "..");
 const workspaceRoot = resolve(appRoot, "..");
@@ -506,24 +506,24 @@ const currentReleaseBoundaryMarkers = Object.freeze([
   {
     path: "RELEASE_STATUS.md",
     markers: [
-      "## 2026-09-02 current alpha.65 DMX operator-copy checkpoint",
-      "Alpha.65 advances the product prerelease ordinal",
-      "Route facts` table",
+      "## 2026-09-02 current alpha.66 DMX blackout release checkpoint",
+      "Alpha.66 advances the product prerelease ordinal",
+      "bounded local Both lease recovery",
     ],
   },
   {
     path: "qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md",
     markers: [
-      "## 2026-09-02 alpha.65 DMX operator-copy checkpoint",
-      "Alpha.65 advances the product prerelease ordinal",
-      "compact Route facts table",
+      "## 2026-09-02 alpha.66 DMX blackout release checkpoint",
+      "Alpha.66 advances the product prerelease ordinal",
+      "bounded canonical Both recovery",
     ],
   },
   {
     path: "qa/SYNDOCAL_SHOW_COMPLETION_HANDOFF_2026-08-28.md",
     markers: [
-      "## 2026-09-02 alpha.65 DMX operator-copy source checkpoint",
-      "DMX route facts replace the long protocol",
+      "## 2026-09-02 alpha.66 DMX blackout release source checkpoint",
+      "Blackout clearing now recovers the canonical local Both output lease",
       "no-bundle build",
     ],
   },

@@ -4,7 +4,21 @@ Date: 2026-08-19
 Branch at creation: `codex/syndocal-v1.0`
 Baseline before this document: `848d759846985cc3acf588356cfa3c996b4e2ef2`
 
-## 2026-09-02 alpha.65 DMX operator-copy checkpoint
+## 2026-09-02 alpha.66 DMX blackout release checkpoint
+
+Alpha.66 advances the product prerelease ordinal for the blackout release
+repair. The UI now uses bounded canonical Both recovery only when an engaged
+safety latch has no active lease; direct active-Both release, split/foreign
+fail-closed ownership, and already-clear no-op behavior are covered by the
+focused output-control contract. The exact pinned Community MSVC `14.44.35207`
+no-bundle native build passed in `3m28s`; `target/release/syndocal.exe` is
+Product/FileVersion `1.2.0-alpha.66`, `63,515,136` bytes, SHA-256
+`E8A7C67137501BF2FF41F003587CE1B256E95D0D53BD74FE9E2F7604A71B331F`.
+PID `54896` supplied exactly one responsive, visible, maximized Syndocal
+window (`showCmd=3`). First-party warnings are `0`; physical USB-DMX,
+Art-Net/Unity, fixture, camera, Spout, and audio acceptance remain external.
+
+## Historical 2026-09-02 alpha.65 DMX operator-copy checkpoint
 
 Alpha.65 advances the product prerelease ordinal for the DMX operator-copy
 cleanup. Setup → I/O → DMX now uses a compact Route facts table for Art-Net,

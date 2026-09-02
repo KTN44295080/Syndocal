@@ -4,7 +4,23 @@ Status date: 2026-09-02 JST
 
 This is the concise authoritative resume note for the final show-critical tranche. It supersedes chat-only status, but it does not supersede the detailed acceptance documents named below.
 
-## 2026-09-02 alpha.65 DMX operator-copy source checkpoint
+## 2026-09-02 alpha.66 DMX blackout release source checkpoint
+
+Blackout clearing now recovers the canonical local Both output lease exactly
+once when the safety latch is engaged but no active lease remains after a
+restart or expiry. Existing active Both leases release directly; active split,
+foreign, or ambiguous ownership fails closed with an actionable Setup → I/O
+message, and an already-clear request is a no-op. The output-control checker,
+TypeScript, Node syntax, and scoped diff checks pass with first-party warnings
+`0`. The exact pinned Community MSVC `14.44.35207` no-bundle native build
+passed in `3m28s`; `target/release/syndocal.exe` is Product/FileVersion
+`1.2.0-alpha.66`, `63,515,136` bytes, SHA-256
+`E8A7C67137501BF2FF41F003587CE1B256E95D0D53BD74FE9E2F7604A71B331F`.
+PID `54896` supplied exactly one responsive, visible, maximized Syndocal
+window (`showCmd=3`). Physical USB-DMX, Art-Net/Unity, fixture, camera/MiraBox,
+Spout, and audio acceptance remain explicitly unverified external rows.
+
+## Historical 2026-09-02 alpha.65 DMX operator-copy source checkpoint
 
 The Setup → I/O → DMX routine surface now keeps only the Show DMX action and
 logical route rows in view. DMX route facts replace the long protocol and
