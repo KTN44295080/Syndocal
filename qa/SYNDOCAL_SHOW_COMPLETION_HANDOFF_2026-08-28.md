@@ -3,7 +3,8 @@
 Status date: 2026-09-03 JST
 Source checkpoint: branch `codex/syndocal-v1.2`; blackout-release source commit
 `5ae65a37fc428760f2032ef30ea9b2ccd84bcd4a`; serial-smoke evidence commit
-`734a2c9`; final HEAD/upstream are both `ada597fa94adebffd8e3ddf67e996185c83baaf4`.
+`734a2c9`; final HEAD equals upstream `origin/codex/syndocal-v1.2` (verified
+after this handoff update).
 
 This is the concise authoritative resume note for the final show-critical tranche. It supersedes chat-only status, but it does not supersede the detailed acceptance documents named below.
 
