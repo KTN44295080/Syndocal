@@ -4526,6 +4526,44 @@ h3 {
   min-width: 0;
 }
 
+/* The show route is an operator action, not an explanation panel. Keep its
+   primary controls on one compact row and move protocol/safety prose into the
+   closed disclosures below. */
+.dmxOutputConfigPanel .dmxShowSetup.dmxRouteBuilder {
+  grid-template-columns: minmax(180px, 1fr) minmax(150px, auto) minmax(200px, 1fr);
+  align-items: center;
+}
+
+.dmxShowSetupCopy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.dmxShowSetupCopy > strong,
+.dmxShowSetupCopy > span,
+.dmxShowSetup > p {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dmxShowSetupCopy > span,
+.dmxShowSetup > p {
+  color: #aaa19a;
+  font-size: 11px;
+}
+
+.dmxShowSetup > p {
+  margin: 0;
+}
+
+.dmxOutputConfigPanel > .dmxIndividualDiagnostics,
+.dmxOutputConfigPanel > .dmxProtocolDetails {
+  margin-top: 0;
+}
+
 .timelineCueAudioEditor {
   min-width: 0;
   border: 1px solid #24282b;

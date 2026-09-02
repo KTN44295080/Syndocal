@@ -4,6 +4,26 @@ Status date: 2026-09-02 JST
 
 This is the concise authoritative resume note for the final show-critical tranche. It supersedes chat-only status, but it does not supersede the detailed acceptance documents named below.
 
+## 2026-09-02 alpha.63 DMX operator-surface source checkpoint
+
+The normal DMX setup surface now keeps protocol and safety prose closed by
+default. `Protocol & safety details` and `Individual DMX diagnostics` remain
+explicit disclosures for maintenance and acceptance work; the routine path
+shows the Show DMX action, current Art-Net/USB-DMX route state, and concise
+status only. The backend safety fences, exact device selection, one-shot probe
+rules, and debug logging are unchanged. This source checkpoint is based on
+upstream-equal parent `08f700b51b2ffc5917796dbf6a5ee4370ce7499e`.
+
+Focused UI contracts and TypeScript pass with first-party warnings `0`.
+The exact pinned Community MSVC `14.44.35207` no-bundle native build passed in
+`3m47s` with first-party warnings `0` (only the existing Vite large-chunk
+advisory). `target/release/syndocal.exe` is Product/FileVersion
+`1.2.0-alpha.63`, `63,520,256` bytes, SHA-256
+`4263754F08529FBF509C631DBACF4D48A179F54707B94853B03FF851E379DD72`.
+PID `66028` provided exactly one responsive, visible, maximized Syndocal
+window (`showCmd=3`). Physical USB-DMX, Art-Net receiver, and fixture
+illumination remain separate hardware acceptance rows.
+
 ## 2026-09-02 alpha.62 camera 4K/60 source checkpoint
 
 The camera catalog now admits advertised high-resolution profiles through

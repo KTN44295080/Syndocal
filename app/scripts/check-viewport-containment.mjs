@@ -5006,6 +5006,18 @@ async function runSetupIoViewport(client, viewport, dmxOnly = false) {
   measurements.io = await measure(client, `setup-io-${viewport.width}x${viewport.height}`);
   const routePagination = await exerciseDmxRoutePagination(client);
   const logicalRoute = routePagination.routeSignatures[0] ?? null;
+  // The one-shot Art-Net action is intentionally not part of the default
+  // operator surface. Open its diagnostic disclosure only for this reachability
+  // probe, then close it again before the remaining disclosure checks.
+  await client.evaluate(`(() => {
+    const disclosure = document.querySelector('[data-io-disclosure="dmx-individual-diagnostics"]');
+    if (disclosure && !disclosure.open) disclosure.querySelector(':scope > summary')?.click();
+  })()`);
+  await waitForClientCondition(
+    client,
+    `document.querySelector('[data-io-disclosure="dmx-individual-diagnostics"]')?.open === true && Boolean(document.querySelector('[data-io-control="dmx-enable-staged-show-artnet-loopback-route"]'))`,
+    "DMX individual diagnostics disclosure",
+  );
   const showRouteControl = await evaluatePageFunction(client, () => {
     const panel = document.querySelector('.dmxOutputConfigPanel');
     const control = panel?.querySelector('[data-io-control="dmx-enable-staged-show-artnet-loopback-route"]');
@@ -5023,14 +5035,18 @@ async function runSetupIoViewport(client, viewport, dmxOnly = false) {
     client,
     `setup-io-show-artnet-loopback-${viewport.width}x${viewport.height}`,
   );
+  await client.evaluate(`(() => {
+    const disclosure = document.querySelector('[data-io-disclosure="dmx-individual-diagnostics"]');
+    if (disclosure?.open) disclosure.querySelector(':scope > summary')?.click();
+  })()`);
   flows.dmx = {
     logicalRouteExact:
-      measurements.io.ioRouteTotalCount === 1 &&
-      routePagination.totalRouteCount === 1 &&
+      measurements.io.ioRouteTotalCount === 2 &&
+      routePagination.totalRouteCount === 2 &&
       routePagination.pageCount === 1 &&
-      routePagination.visitedRouteCount === 1 &&
+      routePagination.visitedRouteCount === 2 &&
       routePagination.firstVisitedRouteIndex === 0 &&
-      routePagination.lastVisitedRouteIndex === 0 &&
+      routePagination.lastVisitedRouteIndex === 1 &&
       routePagination.reachedLastPage &&
       routePagination.firstPageRestored &&
       routePagination.forwardClicks === routePagination.backwardClicks &&
@@ -5294,11 +5310,14 @@ async function runSetupIoViewport(client, viewport, dmxOnly = false) {
     };
   }
 
-  // The operator surface now has one explicit staged-show Art-Net action
-  // in addition to its existing primary DMX controls. Keep the count exact
-  // and assert that the added control is the intended one.
-  const expectedDmxControlCount = 4;
-  const expectedDmxDisclosureCount = 3;
+  // The operator surface keeps the primary DMX controls plus the two visible
+  // disclosure summaries. Diagnostic/protocol controls stay collapsed until
+  // explicitly requested, so they must not count as default-visible controls.
+  const expectedDmxControlCount = 6;
+  // DMX keeps diagnostic controls and protocol/safety prose collapsed by
+  // default; both disclosures remain reachable without occupying the default
+  // operator surface.
+  const expectedDmxDisclosureCount = 5;
   const legacyStoredTabs = await exerciseLegacySetupIoStoredTabs(client);
   const checks = {
     ioSubTabBarRemoved:
@@ -5339,7 +5358,7 @@ async function runSetupIoViewport(client, viewport, dmxOnly = false) {
     dmxControlsAndDisclosuresPreserved:
       measurements.io.ioZoneVisibleControlCounts.dmx === expectedDmxControlCount &&
       measurements.io.ioActiveZoneVisibleControlCount === expectedDmxControlCount &&
-      measurements.io.visibleDmxEnableStagedShowArtNetLoopbackRouteCount === 1 &&
+      measurements.io.visibleDmxEnableStagedShowArtNetLoopbackRouteCount === 0 &&
       measurements.io.ioZoneDisclosureCounts.dmx === expectedDmxDisclosureCount &&
       measurements.io.ioZoneOpenDisclosureCounts.dmx === 0 &&
       measurements.io.ioDisclosureCount === expectedDmxDisclosureCount,
@@ -12978,16 +12997,16 @@ function hasExpectedSetupSurface(result) {
       result.ioVisibleZoneCount === 1 &&
       JSON.stringify(result.ioVisibleZoneNames) === JSON.stringify(["dmx"]) &&
       result.ioAllZoneRectsPositive &&
-      result.ioActiveZoneVisibleControlCount === 4 &&
-      result.visibleDmxEnableStagedShowArtNetLoopbackRouteCount === 1 &&
-      result.ioShowArtNetLoopbackControlReachable &&
-      JSON.stringify(result.ioZoneDisclosureCounts) === JSON.stringify({ dmx: 3 }) &&
+      result.ioActiveZoneVisibleControlCount === 6 &&
+      result.visibleDmxEnableStagedShowArtNetLoopbackRouteCount === 0 &&
+      !result.ioShowArtNetLoopbackControlReachable &&
+      JSON.stringify(result.ioZoneDisclosureCounts) === JSON.stringify({ dmx: 5 }) &&
       JSON.stringify(result.ioZoneOpenDisclosureCounts) === JSON.stringify({ dmx: 0 }) &&
-      result.ioDisclosureCount === 3 &&
+      result.ioDisclosureCount === 5 &&
       result.ioOpenDisclosureCount === 0 &&
-      result.ioRouteTotalCount === 1 &&
+      result.ioRouteTotalCount === 2 &&
       result.ioRoutePageCount === 1 &&
-      result.ioRouteRowCount === 1 &&
+      result.ioRouteRowCount === 2 &&
       result.ioCompleteRouteRowCount === result.ioRouteRowCount &&
       result.visibleDmxOutputConfigPanelCount === 1 &&
       result.visibleArtRdmPanelCount === 0 &&

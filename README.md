@@ -2,7 +2,7 @@
 
 Syndocal は、DMX照明とVJ映像を同じタイムライン、キュー、BPMクロック、エフェクトソースで駆動するデスクトップ制御ソフトウェアです。
 
-- 製品名: **Syndocal 1.2.0-alpha.62**
+- 製品名: **Syndocal 1.2.0-alpha.63**
 - 開発: **Seraf()のKTN**
 - プロジェクト: **`.sdc`** (可読JSON)
 - Tier 1: Windows 10+ / macOS 12+
@@ -25,9 +25,21 @@ See the [current output acceptance record](qa/DSF2026_SAME_PC_OUTPUT_ACCEPTANCE_
 for execution steps and unverified physical/lease evidence; this boundary is
 not a hardware acceptance claim.
 
-Current product metadata is `1.2.0-alpha.62` on branch
-`codex/syndocal-v1.2`. Alpha.61 keeps the alpha.59 DMX/video performance work
-and repairs the post-confirmation authority boundary for two short operations:
+Current product metadata is `1.2.0-alpha.63` on branch
+`codex/syndocal-v1.2`. Alpha.63 keeps the routine Setup → I/O → DMX surface
+compact: Show DMX and route state remain visible, while protocol/safety prose
+and individual diagnostics stay behind closed disclosures. The exact pinned
+Community MSVC `14.44.35207` no-bundle build passed in `3m47s` with
+first-party warnings `0` (only the existing Vite large-chunk advisory). The
+resulting executable is `target/release/syndocal.exe`, `63,520,256` bytes,
+SHA-256
+`4263754F08529FBF509C631DBACF4D48A179F54707B94853B03FF851E379DD72`.
+It was launched from this checkout as PID `66028`; one responsive, visible,
+maximized Syndocal main window was verified. Physical USB-DMX, Art-Net
+receiver, and fixture illumination remain separate acceptance gates.
+
+Alpha.61 keeps the alpha.59 DMX/video performance work and repairs the
+post-confirmation authority boundary for two short operations:
 managed blackout release and reopening an existing Display window. Only the
 exact manager-owned Both lease is re-projected to the private serialized
 authorization; foreign, faulted, wrong-resource, wrong-project, and unrelated
@@ -461,7 +473,7 @@ unaccepted.
 
 CI/Release成果物は次の形式です。
 
-- Windows: `Syndocal_1.2.0-alpha.62_x64-setup.exe` (NSIS)、`Syndocal_1.2.0-alpha.62_x64_ja-JP.msi`
+- Windows: `Syndocal_1.2.0-alpha.63_x64-setup.exe` (NSIS)、`Syndocal_1.2.0-alpha.63_x64_ja-JP.msi`
 - macOS: `.app`、DMG
 - Linux: `.deb`、AppImage
 

@@ -32,7 +32,7 @@ import { withMaterializedVerifiedExecutable } from "./verified-materialization.m
 
 export { withMaterializedVerifiedExecutable } from "./verified-materialization.mjs";
 
-export const expectedVersion = "1.2.0-alpha.62";
+export const expectedVersion = "1.2.0-alpha.63";
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const appRoot = resolve(scriptDir, "..");
 const workspaceRoot = resolve(appRoot, "..");
@@ -506,30 +506,30 @@ const currentReleaseBoundaryMarkers = Object.freeze([
   {
     path: "RELEASE_STATUS.md",
     markers: [
-      "## 2026-09-02 current alpha.62 camera 4K/60 source candidate",
-      "Alpha.62 is the next prerelease ordinal",
-      "4K/120",
-      "4d8fb69fb67169bf1032c45260355b87aa219476",
+      "## 2026-09-02 current alpha.63 DMX operator-surface checkpoint",
+      "Alpha.63 advances the product prerelease ordinal",
+      "Protocol & safety details",
+      "08f700b51b2ffc5917796dbf6a5ee4370ce7499e",
     ],
   },
   {
     path: "qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md",
     markers: [
-      "## 2026-09-02 alpha.62 camera 4K/60 admission checkpoint",
-      "Alpha.62 advances the product prerelease ordinal",
-      "4K/120",
-      "4d8fb69fb67169bf1032c45260355b87aa219476",
-      "hardware rows",
+      "## 2026-09-02 alpha.63 DMX operator-surface checkpoint",
+      "Alpha.63 advances the product prerelease ordinal",
+      "Protocol & safety details",
+      "08f700b51b2ffc5917796dbf6a5ee4370ce7499e",
+      "removing audit prose",
     ],
   },
   {
     path: "qa/SYNDOCAL_SHOW_COMPLETION_HANDOFF_2026-08-28.md",
     markers: [
-      "## 2026-09-02 alpha.62 camera 4K/60 source checkpoint",
-      "The camera catalog now admits advertised high-resolution profiles through",
-      "4K/120",
-      "4d8fb69fb67169bf1032c45260355b87aa219476",
-      "physical camera output",
+      "## 2026-09-02 alpha.63 DMX operator-surface source checkpoint",
+      "The normal DMX setup surface now keeps protocol and safety prose closed",
+      "Protocol & safety details",
+      "08f700b51b2ffc5917796dbf6a5ee4370ce7499e",
+      "native build",
     ],
   },
 ]);
@@ -616,7 +616,7 @@ function assertCurrentReleaseDocumentation(readManifest, productVersion) {
   for (const { path, markers } of currentReleaseBoundaryMarkers) {
     const top = String(readManifest(path)).split(/\r?\n/u).slice(0, 45).join("\n");
     for (const marker of markers) {
-      const resolvedMarker = marker.replace("1.2.0-alpha.62", productVersion);
+      const resolvedMarker = marker.replace("1.2.0-alpha.63", productVersion);
       if (!top.includes(resolvedMarker)) {
         throw new Error(`${path} lacks its top ${productVersion} source-only marker: '${resolvedMarker}'.`);
       }

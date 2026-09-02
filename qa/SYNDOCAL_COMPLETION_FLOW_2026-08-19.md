@@ -4,6 +4,28 @@ Date: 2026-08-19
 Branch at creation: `codex/syndocal-v1.0`
 Baseline before this document: `848d759846985cc3acf588356cfa3c996b4e2ef2`
 
+## 2026-09-02 alpha.63 DMX operator-surface checkpoint
+
+Alpha.63 advances the product prerelease ordinal for the DMX operator-surface
+cleanup. The normal Setup → I/O → DMX surface keeps only the routine Show DMX
+action and logical route summary in the default view. Protocol and safety
+details are retained behind the closed `Protocol & safety details` diagnostic
+disclosure, and individual probe/binding/worker controls remain explicitly
+reachable there when needed. This preserves the backend safety and logging
+boundary while removing audit prose from the routine operator path. The source
+parent is upstream-equal `08f700b51b2ffc5917796dbf6a5ee4370ce7499e`.
+
+The focused DMX show-setup contract, setup-I/O viewport contracts, and
+TypeScript checks pass with first-party warnings `0`. The exact pinned
+Community MSVC `14.44.35207` no-bundle build passed in `3m47s` with
+first-party warnings `0` (only the existing Vite large-chunk advisory). The
+resulting `target/release/syndocal.exe` is Product/FileVersion
+`1.2.0-alpha.63`, `63,520,256` bytes, SHA-256
+`4263754F08529FBF509C631DBACF4D48A179F54707B94853B03FF851E379DD72`.
+PID `66028` supplied exactly one responsive, visible, maximized Syndocal
+window (`showCmd=3`). Physical USB-DMX, Art-Net receiver, and fixture
+illumination remain separate acceptance rows and are not claimed here.
+
 ## 2026-09-02 alpha.62 camera 4K/60 admission checkpoint
 
 Alpha.62 advances the product prerelease ordinal for the camera capability

@@ -1,7 +1,29 @@
 # Syndocal historical v1.0 / current v1.2 alpha Release Status
 
 Updated: 2026-09-02
-Branch: `codex/syndocal-v1.2`; current product metadata is `1.2.0-alpha.62`.
+Branch: `codex/syndocal-v1.2`; current product metadata is `1.2.0-alpha.63`.
+
+## 2026-09-02 current alpha.63 DMX operator-surface checkpoint
+
+Alpha.63 advances the product prerelease ordinal for the DMX operator-surface
+cleanup. The normal Setup → I/O → DMX view now keeps the routine Show DMX
+action and the two logical routes visible, while protocol and safety details
+are behind the closed `Protocol & safety details` diagnostic disclosure.
+Individual probe, binding, and worker controls remain reachable only after
+opening the explicit diagnostic disclosure; native safety fences and backend
+logs are unchanged. This source change is based on upstream-equal parent
+`08f700b51b2ffc5917796dbf6a5ee4370ce7499e`.
+
+The focused DMX show-setup contract, all setup-I/O viewport contracts, and
+TypeScript checks pass with first-party warnings `0`. The exact pinned
+Community MSVC `14.44.35207` no-bundle build passed in `3m47s` with
+first-party warnings `0` (only the existing Vite large-chunk advisory). The
+resulting `target/release/syndocal.exe` is Product/FileVersion
+`1.2.0-alpha.63`, `63,520,256` bytes, SHA-256
+`4263754F08529FBF509C631DBACF4D48A179F54707B94853B03FF851E379DD72`.
+It was launched as PID `66028`; exactly one matching process was responsive,
+visible, and maximized (`showCmd=3`). This is native UI evidence only; physical
+USB-DMX, Art-Net receiver, and fixture illumination remain separate gates.
 
 ## 2026-09-02 current alpha.62 camera 4K/60 source candidate
 

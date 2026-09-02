@@ -225,7 +225,7 @@ export function DmxOutputConfigPanel(props: DmxOutputConfigPanelProps) {
   );
   const showDmxPreparationStatus = () => props.showDmxPreparationBusy
     ? `In progress: ${props.showDmxPreparationStage ?? "preflight"}`
-    : props.showDmxPreparationStage ?? "Select one exact machine-local device. Loopback is staged first; S0 is engaged before Open DMX is opened.";
+    : props.showDmxPreparationStage ?? "Select one USB-DMX device";
   const probeStatus = () => props.dsf2026ArtNetAcceptanceProbeStatus();
   const probeStatusReason = () => {
     switch (probeStatus()?.status) {
@@ -251,14 +251,14 @@ export function DmxOutputConfigPanel(props: DmxOutputConfigPanelProps) {
   return (
     <section class="dmxOutputConfigPanel ioConnectionDesk" data-io-default-surface="dmx">
       <header class="ioDeskHeader">
-        <div><h2>DMX Connections</h2><span>Same-PC production show route</span></div>
+        <div><h2>DMX Connections</h2><span>USB-DMX + Art-Net</span></div>
         <span class={`ioConnectionState ${routeStateTone()}`}><i aria-hidden="true" />{routeState()}</span>
       </header>
 
       <div class="dmxShowSetup dmxRouteBuilder" data-io-show-dmx-setup>
         <div class="dmxShowSetupCopy">
-          <strong>Show DMX quick setup</strong>
-          <span>Arm output role Both, confirm the selected device, enable the exact Art-Net route, engage S0, then arm Open DMX.</span>
+          <strong>Show DMX</strong>
+          <span>USB-DMX + Art-Net mirror</span>
         </div>
         <button
           data-io-control="dmx-prepare-show-dmx"
@@ -369,42 +369,47 @@ export function DmxOutputConfigPanel(props: DmxOutputConfigPanelProps) {
           <span data-io-route-universe>Wire U0 · 512ch · 40–44fps</span>
         </div><div class="dmxRouteRow" data-io-route-row data-route-index="1">
           <span class={`ioStatusDot ${serialStateTone() === "ready" ? "ok" : serialStateTone()}`} aria-hidden="true" />
-          <strong>Enttec Open DMX · machine local</strong><span data-io-route-target>{serialState()}</span>
-          <span data-io-route-universe>Logical U0 · 250000 baud · ≈32.5fps exact-rig USB cadence · S0-first latest-frame mirror</span>
+          <strong>Enttec Open DMX</strong><span data-io-route-target>{serialState()}</span>
+          <span data-io-route-universe>Logical U0 · ≈32.5fps</span>
         </div></div>
       </div>
 
-      <p id="dmx-show-route-confirmation" class="ioDisclosureDescription">
-        Same-PC only: completed DMX Universe 1 is emitted unchanged as ArtDmx wire Universe 0. DMX ch1 maps to payload[0]; unused ch500 is forced to 0.
-      </p>
-      <p id="dmx-dsf2026-artnet-acceptance-probe" class="ioDisclosureDescription">
-        One-shot fixed red 530-byte ArtDmx U0 proof only to 127.0.0.1:6454: payload[0] and payload[4] are 255; payload[499] remains 0. The authored route stays staged disabled. OS UDP acceptance only; receiver and physical output remain unverified.
-      </p>
-      <p class="ioDisclosureDescription" role="status">
-        {probeStatusReason()}
-      </p>
-      <p class="ioDisclosureDescription">
-        Reconcile is a separate no-send action after independent receiver and physical-output verification; it records the unobservable result as permanently consumed and never re-enables retry or another fixed probe.
-      </p>
-      {!exactRoute() && <p class="ioDisclosureDescription" role="alert">
-        The show route must remain Art-Net / 127.0.0.1:6454 / wire U0 with no serial interface. It is intentionally not configurable from this control.
-      </p>}
-      <p class="ioDisclosureDescription">
-        Confirmation retains the native lease, safety-blackout, exact binding, sender-open, acknowledgement, and rollback fences. Binding cannot change while a worker or physical S0 transaction remains in flight. A faulted, joined worker may only accept an explicit replacement while S0 stays latched; selecting it sends nothing and does not clear the fault. It opens only while S0 is engaged and queues zero first; after the separately confirmed Release Blackout, the same worker mirrors the latest completed U0 frame alongside Art-Net. Re-engaging S0 preempts later live bytes with zero. The ≈32.5fps USB cadence is the current FT232R/COM3 rig default, not an Open DMX universal limit; USB does not promise physical delivery on every 44Hz engine tick. USB serial DMX is not a fallback route.
-      </p>
-      <p class="ioDisclosureDescription" role="status">
-        {props.serialDmxMachineBindingStatus?.detail ?? "USB-DMX machine-local selection is loading; no worker can start."}
-      </p>
-      <p class="ioDisclosureDescription" role="status">
-        {props.showSerialDmxSafetyBlackoutRouteStatus?.detail ?? "USB-DMX worker status is loading; no worker can start."}
-      </p>
-      <p class="ioDisclosureDescription" role="status" data-io-usb-dmx-artnet-mirror-state>
-        {props.showSerialDmxSafetyBlackoutRouteStatus?.artnetMirrorDetail
-          ?? "Art-Net mirror route state is loading; no USB-DMX worker action is enabled from unknown status."}
-      </p>
-      <p class="ioDisclosureDescription">
-        A generic FTDI VID/PID is not auto-selected and does not imply a protocol. This explicit operator selection is Open DMX only. Worker status distinguishes queue acceptance from the bounded physical zero transaction; neither is fixture or wire delivery. No one-shot USB probe is implemented in this tranche.
-      </p>
+      <details class="ioDisclosure dmxProtocolDetails" data-io-disclosure="dmx-protocol-details">
+        <summary>Protocol &amp; safety details</summary>
+        <div class="ioDisclosureBody">
+          <p id="dmx-show-route-confirmation" class="ioDisclosureDescription">
+            Same-PC only: completed DMX Universe 1 is emitted unchanged as ArtDmx wire Universe 0. DMX ch1 maps to payload[0]; unused ch500 is forced to 0.
+          </p>
+          <p id="dmx-dsf2026-artnet-acceptance-probe" class="ioDisclosureDescription">
+            One-shot fixed red 530-byte ArtDmx U0 proof only to 127.0.0.1:6454: payload[0] and payload[4] are 255; payload[499] remains 0. The authored route stays staged disabled. OS UDP acceptance only; receiver and physical output remain unverified.
+          </p>
+          <p class="ioDisclosureDescription" role="status">
+            {probeStatusReason()}
+          </p>
+          <p class="ioDisclosureDescription">
+            Reconcile is a separate no-send action after independent receiver and physical-output verification; it records the unobservable result as permanently consumed and never re-enables retry or another fixed probe.
+          </p>
+          {!exactRoute() && <p class="ioDisclosureDescription" role="alert">
+            The show route must remain Art-Net / 127.0.0.1:6454 / wire U0 with no serial interface. It is intentionally not configurable from this control.
+          </p>}
+          <p class="ioDisclosureDescription">
+            Confirmation retains the native lease, safety-blackout, exact binding, sender-open, acknowledgement, and rollback fences. Binding cannot change while a worker or physical S0 transaction remains in flight. A faulted, joined worker may only accept an explicit replacement while S0 stays latched; selecting it sends nothing and does not clear the fault. It opens only while S0 is engaged and queues zero first; after the separately confirmed Release Blackout, the same worker mirrors the latest completed U0 frame alongside Art-Net. Re-engaging S0 preempts later live bytes with zero. The ≈32.5fps USB cadence is the current FT232R/COM3 rig default, not an Open DMX universal limit; USB does not promise physical delivery on every 44Hz engine tick. USB serial DMX is not a fallback route.
+          </p>
+          <p class="ioDisclosureDescription" role="status">
+            {props.serialDmxMachineBindingStatus?.detail ?? "USB-DMX machine-local selection is loading; no worker can start."}
+          </p>
+          <p class="ioDisclosureDescription" role="status">
+            {props.showSerialDmxSafetyBlackoutRouteStatus?.detail ?? "USB-DMX worker status is loading; no worker can start."}
+          </p>
+          <p class="ioDisclosureDescription" role="status" data-io-usb-dmx-artnet-mirror-state>
+            {props.showSerialDmxSafetyBlackoutRouteStatus?.artnetMirrorDetail
+              ?? "Art-Net mirror route state is loading; no USB-DMX worker action is enabled from unknown status."}
+          </p>
+          <p class="ioDisclosureDescription">
+            A generic FTDI VID/PID is not auto-selected and does not imply a protocol. This explicit operator selection is Open DMX only. Worker status distinguishes queue acceptance from the bounded physical zero transaction; neither is fixture or wire delivery. No one-shot USB probe is implemented in this tranche.
+          </p>
+        </div>
+      </details>
     </section>
   );
 }

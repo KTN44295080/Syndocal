@@ -8,6 +8,7 @@ const appRoot = path.resolve(scriptDirectory, "..");
 const read = (relativePath) => fs.readFileSync(path.join(appRoot, relativePath), "utf8");
 
 const panel = read("src/components/DmxOutputConfigPanel.tsx");
+const styles = read("src/styles.css");
 const controller = read("src/createOutputDiagnosticsController.ts");
 const app = read("src/App.tsx");
 const nativeMain = read("src-tauri/src/main.rs");
@@ -71,6 +72,24 @@ assert.match(panel, /&& !serialWorkerFaulted\(\)[\s\S]*&& serialWorkerArmAdmissi
   "quick setup preflight must reject faulted, active, live-frame, incomplete-shutdown, or pending-zero workers");
 assert.doesNotMatch(panel, /Prepare show DMX \(S0-safe\)/,
   "the complete sequence must not claim S0 safety before loopback staging");
+
+const protocolDetails = panel.indexOf('data-io-disclosure="dmx-protocol-details"');
+assert.ok(protocolDetails >= 0 && protocolDetails > oldUsbControl,
+  "protocol and safety prose must remain below the compact route controls");
+assert.match(panel, /<details class="ioDisclosure dmxProtocolDetails"[^>]*>/,
+  "protocol and safety prose must use a disclosure");
+assert.doesNotMatch(panel, /<details class="ioDisclosure dmxProtocolDetails"[^>]*\bopen\b>/,
+  "protocol and safety prose must default collapsed");
+assert.match(panel, /<summary>Protocol &amp; safety details<\/summary>/,
+  "the collapsed protocol disclosure needs an operator-facing label");
+assert.match(panel, /<strong>Show DMX<\/strong>\s*<span>USB-DMX \+ Art-Net mirror<\/span>/,
+  "the default quick setup surface must use concise route copy");
+assert.doesNotMatch(panel.slice(0, protocolDetails), /Same-PC only: completed DMX Universe 1/,
+  "wire-format prose must not consume the default DMX surface");
+assert.match(styles, /\.dmxOutputConfigPanel \.dmxShowSetup\.dmxRouteBuilder\s*\{[\s\S]*?grid-template-columns:\s*minmax\(180px, 1fr\)\s+minmax\(150px, auto\)\s+minmax\(200px, 1fr\);/,
+  "the show route primary controls must use the compact three-column layout");
+assert.match(styles, /\.dmxShowSetupCopy\s*\{[\s\S]*?display:\s*grid;/,
+  "the show route label must remain compact without wrapping into a prose block");
 
 assert.match(controller, /createSafetyBlackoutRuntimeController/);
 assert.match(controller, /import[\s\S]*enableOutput/,
