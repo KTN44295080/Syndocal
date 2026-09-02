@@ -24,6 +24,15 @@ window (`showCmd=3`). First-party warnings are `0` (only the existing Vite
 large-chunk advisory); physical USB-DMX, Art-Net/Unity, fixture, camera/MiraBox,
 Spout, and audio acceptance remain explicitly unverified external rows.
 
+The current alpha.68 Engine physical serial smoke then ran against the
+connected FTDI `COM3` device with the pinned Community MSVC 14.44 linker:
+`SYNDOCAL_PHYSICAL_MASTER=10`, `SYNDOCAL_PHYSICAL_SECONDS=15`, and
+`physical_serial_rainbow_demo_drives_master_dimmer_and_rgb_cells` returned
+`1 passed / 0 failed` in `15.02s`, with `439` successful sends, no serial send
+failure, and preview RGB `(54,73,255)`. This proves Engine-to-COM writes only;
+fixture illumination and downstream DMX reception remain separate physical
+checks.
+
 ## Historical 2026-09-03 alpha.67 ASIO setup race source checkpoint
 
 ASIO setup requests are invalidated before publishing Normal, preventing a

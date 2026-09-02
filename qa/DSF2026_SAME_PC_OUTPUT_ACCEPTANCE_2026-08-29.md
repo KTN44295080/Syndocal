@@ -1,5 +1,17 @@
 # DSF2026 same-PC output acceptance — current 2026-09-03
 
+## 2026-09-03 alpha.68 current-source serial smoke
+
+The alpha.68 Engine physical serial smoke ran against the connected FTDI
+`USB Serial Port (COM3)` with the pinned Community MSVC 14.44 linker. With
+`SYNDOCAL_PHYSICAL_MASTER=10` and `SYNDOCAL_PHYSICAL_SECONDS=15`,
+`physical_serial_rainbow_demo_drives_master_dimmer_and_rgb_cells` returned
+`1 passed / 0 failed` in `15.02s`; no serial send failure occurred, `439`
+successful sends were observed, and the Engine preview carried non-zero cell
+RGB `(54,73,255)`. This proves the alpha.68 Engine-to-COM write path only.
+Fixture illumination, electrical waveform, and downstream DMX reception still
+require a separate operator/physical check.
+
 ## 2026-09-03 alpha.67 current-source serial smoke
 
 The alpha.67 Engine physical serial smoke ran against the connected FTDI

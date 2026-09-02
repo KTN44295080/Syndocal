@@ -21,6 +21,14 @@ window (`showCmd=3`). First-party warnings are `0` (only the existing Vite
 large-chunk advisory); physical USB-DMX, Art-Net/Unity, fixture, camera,
 Spout, and audio acceptance remain external.
 
+The current alpha.68 Engine physical serial smoke also completed against the
+connected FTDI `COM3` device with the pinned Community MSVC 14.44 linker:
+`SYNDOCAL_PHYSICAL_MASTER=10`, `SYNDOCAL_PHYSICAL_SECONDS=15`, and
+`physical_serial_rainbow_demo_drives_master_dimmer_and_rgb_cells` returned
+`1 passed / 0 failed` in `15.02s`, with `439` successful sends, no serial send
+failure, and preview RGB `(54,73,255)`. This is Engine-to-COM write evidence
+only; fixture illumination and downstream reception remain physical checks.
+
 ## Historical 2026-09-03 alpha.67 ASIO setup race checkpoint
 
 Alpha.67 advances the product prerelease ordinal for the setup-only ASIO race
