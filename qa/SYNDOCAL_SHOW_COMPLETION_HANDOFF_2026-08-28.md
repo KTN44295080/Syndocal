@@ -30,6 +30,12 @@ window (`showCmd=3`). First-party warnings are `0` (only the existing Vite
 large-chunk advisory); physical USB-DMX, Art-Net/Unity, fixture, camera/MiraBox,
 Spout, and audio acceptance remain explicitly unverified external rows.
 
+The pinned native test gate also passed both blackout regressions:
+`native_display_safety_blackout_engage_release_cycle_rejects_stale_authority`
+and `managed_blackout_release_projection_drops_the_stale_public_generation`,
+each `1 passed / 0 failed` with `1666` filtered tests. This validates the
+stale-authority fence path, not physical fixture illumination.
+
 The current alpha.68 Engine physical serial smoke then ran against the
 connected FTDI `COM3` device with the pinned Community MSVC 14.44 linker:
 `SYNDOCAL_PHYSICAL_MASTER=10`, `SYNDOCAL_PHYSICAL_SECONDS=15`, and
