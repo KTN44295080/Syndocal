@@ -1,7 +1,50 @@
 # Syndocal historical v1.0 / current v1.2 alpha Release Status
 
-Updated: 2026-09-01
-Branch: `codex/syndocal-v1.2`; current product metadata is `1.2.0-alpha.59`.
+Updated: 2026-09-02
+Branch: `codex/syndocal-v1.2`; current product metadata is `1.2.0-alpha.60`.
+
+## 2026-09-02 current alpha.60 managed-output source candidate
+
+Alpha.60 is based on upstream-equal parent
+`9ae8276cc6fbf807b3517770f22ee788e050f85f`. Alpha.59 native QA exposed a
+post-confirmation lease-generation defect: the healthy keepalive manager could
+renew its exact Both lease after the UI captured a request, so blackout release
+and existing Display-window reopen reached the ordinary lifecycle path with a
+stale generation. Both operations rejected before publication even though the
+owner, resources, project, and safety fence were still exact.
+
+The new path re-projects only those two short routes after native confirmation.
+An exact manager-owned Both lease enters the existing private manager-serialized
+authorization. Blackout release holds that guard through the bounded Engine S0
+callback; Display reopen releases it after durable registry authorization and
+before native shell/GPU work. Add Display, Spout, probes, foreign/unmanaged
+leases, and unrelated lifecycle operations are unchanged. Faulted, foreign,
+wrong-resource, wrong-project, and stale-fence states remain fail-closed.
+
+Exact Community MSVC `14.44.35207` full-feature managed-output focused `28/28`
+passes with first-party warnings `0`; formatter and scoped diff checks pass.
+The local-only alpha55 dual-file QA specimen derives from the fixed alpha54
+identity and changes exactly `16` paths while preserving two Display outputs
+and three compositions. Output identity is `1,112,438` bytes, SHA-256
+`F57A98966CD58FE040D2AC3C2A5B41D7CA53F15BE2A6C5A9C117EC918A574459`;
+its 4K background media is `43,807,726` bytes, SHA-256
+`D51DCD2B4F55CB7A6FAE3F34E9B4D93E6BAC24B0B29A6BE500AB4B848D323E29`.
+The specimen is not portable because its media paths are machine-local.
+Source focused acceptance is GO.
+Alpha.60 native build, blackout release, physical USB-DMX live output, two
+Display performance windows, Timeline smoke, and audible endpoint acceptance
+remain unverified until after the source checkpoint.
+
+Verification after the managed-output fix: full-feature managed tests `28/28`,
+no-default managed tests `28/28`, control-plane inventory tests `28/28`,
+TypeScript and `check:release` pass, and both alpha54/alpha55 derivation
+checkers pass. The full Rust suite is `1415 passed / 1 failed / 14 ignored`;
+the single failure is the operator-owned local
+`C:\Users\kouty\Desktop\INMDAISUKI\DSF2026.dvc`, which fail-closed because
+`4chPar` does not provide the referenced `Dimmer` attribute. No product path
+was weakened to hide that external fixture error. Before recompiling, the
+regenerable Cargo dev profile was cleaned (`60,082` files / `151.2 GiB`
+reported by the dry-run); release and QA artifacts were retained.
 
 ## 2026-09-01 alpha.59 native/local-hardware checkpoint
 

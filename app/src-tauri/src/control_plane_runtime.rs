@@ -52,9 +52,11 @@ use super::output_lease::{
 use super::{
     ensure_no_pending_project_transaction, ensure_project_operator_video_clip_slot_runtime_allowed,
     lock_project_coordinator, lock_project_external_command_admission,
-    reconcile_project_checkpoint_for_coordinator, replay_durable_dsf2026_output_control_terminal,
-    AppState, ControlPlaneQueryState, ProjectCoordinator, StandbyCheckpointIdentity,
-    StandbyTakeoverCheckpointSelector,
+    reconcile_project_checkpoint_for_coordinator,
+    record_durable_managed_exact_both_output_control_terminal,
+    replay_durable_dsf2026_output_control_terminal,
+    replay_durable_managed_exact_both_output_control_terminal, AppState, ControlPlaneQueryState,
+    ProjectCoordinator, StandbyCheckpointIdentity, StandbyTakeoverCheckpointSelector,
 };
 
 const RECEIPT_TTL: Duration = Duration::from_secs(10 * 60);
@@ -567,7 +569,7 @@ where
     response
 }
 
-#[cfg(test)]
+#[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
 pub(crate) fn execute_show_spout_reset_without_lease_control_for_test<F>(
     state: &AppState,
     query_state: &ControlPlaneQueryState,
@@ -622,6 +624,25 @@ where
         Ok(binding) => binding,
         Err(_) => return output_control_rejection(&request, OutputControlErrorCodeV2::Forbidden),
     };
+    // A managed exact-Both lease may have renewed while the native dialog was
+    // open.  Resolve its canonical public terminal before checking mutable
+    // action state, fence, or confirmation so a lost reply remains replayable
+    // after process restart.  This is deliberately not a generic bridge:
+    // only ReleaseBlackout and SetDisplayWindowOpen are retained.
+    match replay_durable_managed_exact_both_output_control_terminal(
+        state,
+        &binding.principal,
+        &binding.window_label,
+        &request,
+        &shape_sha256,
+        &argument_fingerprint,
+    ) {
+        Ok(Some(response)) => return response,
+        Ok(None) => {}
+        Err(_) => {
+            return output_control_rejection(&request, OutputControlErrorCodeV2::InvalidRequest)
+        }
+    }
     match replay_durable_dsf2026_output_control_terminal(
         state,
         &binding.principal,
@@ -1332,6 +1353,33 @@ where
         }
         response
     };
+    if matches!(
+        &request.action,
+        OutputControlActionV2::ReleaseBlackout { .. }
+            | OutputControlActionV2::SetDisplayWindowOpen { .. }
+    ) && record_durable_managed_exact_both_output_control_terminal(
+        state,
+        &binding.principal,
+        &binding.window_label,
+        &request,
+        &shape_sha256,
+        &argument_fingerprint,
+        &response,
+    )
+    .is_err()
+    {
+        state
+            .runtime_control_plane
+            .finish_output_control_inflight(&inflight);
+        let response = output_control_rejection(&request, OutputControlErrorCodeV2::Internal);
+        state.runtime_control_plane.store_output_control_terminal(
+            key,
+            shape_sha256,
+            response.clone(),
+            Instant::now(),
+        );
+        return response;
+    }
     state
         .runtime_control_plane
         .finish_output_control_inflight(&inflight);

@@ -1,8 +1,56 @@
 # Syndocal 2026-09-01 show completion handoff
 
-Status date: 2026-09-01 JST
+Status date: 2026-09-02 JST
 
 This is the concise authoritative resume note for the final show-critical tranche. It supersedes chat-only status, but it does not supersede the detailed acceptance documents named below.
+
+## 2026-09-02 alpha.60 managed-output source candidate
+
+Alpha.60 is being prepared from upstream-equal parent
+`9ae8276cc6fbf807b3517770f22ee788e050f85f` on
+`codex/syndocal-v1.2`. The current exact alpha.59 process reproduced a narrow
+post-confirmation race: the keepalive manager advanced the healthy exact Both
+lease from generation `6` to `8` (and later `15`), while blackout release and
+existing Display reopen submitted the older UI generation. Both rejected
+before physical publication with `StaleGeneration`; the USB route remained in
+safe S0 zero output, `faulted=false`.
+
+The source fix recognizes only those two short routes after confirmation.
+Exact manager-owned Both authority uses the existing private serialized
+authorization; blackout release holds the guard through the bounded Engine S0
+callback, while Display reopen drops it immediately after durable registry
+authorization and before native window/GPU work. Add Display and every
+unrelated route are unchanged. Faulted, foreign, wrong-resource,
+wrong-project, and stale-fence states cannot fall back to ordinary authority.
+
+Exact Community MSVC `14.44.35207` full-feature managed-output focused `28/0/0`
+passes with first-party warnings `0`; formatter and scoped diff gates
+pass. The local-only alpha55 two-video specimen is also exact: it derives from
+alpha54 `1,112,448` bytes / SHA-256
+`D20A7891C1D2DBB6E1E41BA1291C4F1D9C13E348237ABD16F20FF059CA3D1347`,
+changes exactly `16` paths, preserves two Display outputs and three
+compositions, and publishes `1,112,438` bytes / SHA-256
+`F57A98966CD58FE040D2AC3C2A5B41D7CA53F15BE2A6C5A9C117EC918A574459`.
+Its separate 3840x2160 media file is `43,807,726` bytes / SHA-256
+`D51DCD2B4F55CB7A6FAE3F34E9B4D93E6BAC24B0B29A6BE500AB4B848D323E29`.
+Absolute paths keep this a same-PC QA artifact, not a portable release bundle.
+
+Source commit/push and all alpha.60 native/hardware rows remain open. The
+current alpha.59 process is intentionally left in S0 zero output until the new
+artifact is built. After build: launch alpha55, run one-click show DMX, release
+S0, confirm continuous USB-DMX, open both Display outputs, collect both current
+600-frame metric windows, then run Timeline loop/release/follow smoke and read
+the selected audio endpoint status. Do not infer any of those results from
+source proof alone.
+
+Source gates now recorded: full-feature managed `28/28`, no-default managed
+`28/28`, control-plane inventory `28/28`, TypeScript, release metadata, and
+alpha54/alpha55 derivation checks all pass. The full Rust suite is
+`1415/1/14` (pass/fail/ignored); its only failure is the external local
+`DSF2026.dvc` `4chPar`/`Dimmer` mismatch, retained as fail-closed evidence.
+The regenerable Cargo dev profile was cleaned after a `60,082`-file/
+`151.2 GiB` dry-run; release and QA artifacts were not removed. Next action is
+the pinned native no-bundle build after the source checkpoint commit/push.
 
 ## 2026-09-01 alpha.59 native and local hardware checkpoint
 

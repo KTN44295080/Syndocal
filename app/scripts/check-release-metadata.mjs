@@ -32,7 +32,7 @@ import { withMaterializedVerifiedExecutable } from "./verified-materialization.m
 
 export { withMaterializedVerifiedExecutable } from "./verified-materialization.mjs";
 
-export const expectedVersion = "1.2.0-alpha.59";
+export const expectedVersion = "1.2.0-alpha.60";
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const appRoot = resolve(scriptDir, "..");
 const workspaceRoot = resolve(appRoot, "..");
@@ -506,30 +506,30 @@ const currentReleaseBoundaryMarkers = Object.freeze([
   {
     path: "RELEASE_STATUS.md",
     markers: [
-      "## 2026-09-01 current alpha.59 show-output source candidate",
+      "## 2026-09-02 current alpha.60 managed-output source candidate",
       "Source focused acceptance is GO.",
-      "metrics focused `5/5`",
-      "951f377735b742f8353add01926f47aafe1521d9",
+      "managed-output focused `28/28`",
+      "9ae8276cc6fbf807b3517770f22ee788e050f85f",
       "USB-DMX",
     ],
   },
   {
     path: "qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md",
     markers: [
-      "## 2026-09-01 alpha.59 source candidate before native acceptance",
-      "Alpha.59 is being prepared from upstream-equal parent",
-      "metrics focused `5/0/0`",
-      "951f377735b742f8353add01926f47aafe1521d9",
+      "## 2026-09-02 alpha.60 managed-output source candidate",
+      "Alpha.60 is being prepared from upstream-equal parent",
+      "managed-output focused `28/0/0`",
+      "9ae8276cc6fbf807b3517770f22ee788e050f85f",
       "USB-DMX",
     ],
   },
   {
     path: "qa/SYNDOCAL_SHOW_COMPLETION_HANDOFF_2026-08-28.md",
     markers: [
-      "## 2026-09-01 alpha.59 source candidate before native acceptance",
-      "Alpha.59 is being prepared from upstream-equal parent",
-      "metrics focused `5/0/0`",
-      "951f377735b742f8353add01926f47aafe1521d9",
+      "## 2026-09-02 alpha.60 managed-output source candidate",
+      "Alpha.60 is being prepared from upstream-equal parent",
+      "managed-output focused `28/0/0`",
+      "9ae8276cc6fbf807b3517770f22ee788e050f85f",
       "USB-DMX",
     ],
   },
@@ -617,7 +617,7 @@ function assertCurrentReleaseDocumentation(readManifest, productVersion) {
   for (const { path, markers } of currentReleaseBoundaryMarkers) {
     const top = String(readManifest(path)).split(/\r?\n/u).slice(0, 45).join("\n");
     for (const marker of markers) {
-      const resolvedMarker = marker.replace("1.2.0-alpha.59", productVersion);
+      const resolvedMarker = marker.replace("1.2.0-alpha.60", productVersion);
       if (!top.includes(resolvedMarker)) {
         throw new Error(`${path} lacks its top ${productVersion} source-only marker: '${resolvedMarker}'.`);
       }

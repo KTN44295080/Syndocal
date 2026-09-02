@@ -2,7 +2,7 @@
 
 Syndocal は、DMX照明とVJ映像を同じタイムライン、キュー、BPMクロック、エフェクトソースで駆動するデスクトップ制御ソフトウェアです。
 
-- 製品名: **Syndocal 1.2.0-alpha.59**
+- 製品名: **Syndocal 1.2.0-alpha.60**
 - 開発: **Seraf()のKTN**
 - プロジェクト: **`.sdc`** (可読JSON)
 - Tier 1: Windows 10+ / macOS 12+
@@ -25,12 +25,15 @@ See the [current output acceptance record](qa/DSF2026_SAME_PC_OUTPUT_ACCEPTANCE_
 for execution steps and unverified physical/lease evidence; this boundary is
 not a hardware acceptance claim.
 
-Current product metadata is `1.2.0-alpha.59` on branch
-`codex/syndocal-v1.2`. Alpha.59 preserves alpha.58's exact Display authority
-boundary while optimizing the verified foreground decode/composition path and
-repairing restart-time show-DMX preparation so an already active, Ready/Both
-lease is reused without a redundant Arm. Native and physical acceptance for
-alpha.59 remains pending until the source checkpoint is committed and built.
+Current product metadata is `1.2.0-alpha.60` on branch
+`codex/syndocal-v1.2`. Alpha.60 keeps the alpha.59 DMX/video performance work
+and repairs the post-confirmation authority boundary for two short operations:
+managed blackout release and reopening an existing Display window. Only the
+exact manager-owned Both lease is re-projected to the private serialized
+authorization; foreign, faulted, wrong-resource, wrong-project, and unrelated
+routes remain fail-closed, and Add Display keeps its separate two-phase path.
+Native and physical acceptance for alpha.60 remains pending until the source
+checkpoint is committed and built.
 
 Alpha.58 preserved alpha.57's hash-verified machine-local
 media admission and removes a false native Display authority rejection caused
@@ -443,7 +446,7 @@ unaccepted.
 
 CI/Release成果物は次の形式です。
 
-- Windows: `Syndocal_1.2.0-alpha.59_x64-setup.exe` (NSIS)、`Syndocal_1.2.0-alpha.59_x64_ja-JP.msi`
+- Windows: `Syndocal_1.2.0-alpha.60_x64-setup.exe` (NSIS)、`Syndocal_1.2.0-alpha.60_x64_ja-JP.msi`
 - macOS: `.app`、DMG
 - Linux: `.deb`、AppImage
 

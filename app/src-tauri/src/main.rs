@@ -507,6 +507,23 @@ fn is_dsf2026_artnet_acceptance_probe_operation(operation_id: &str) -> bool {
     )
 }
 
+fn is_managed_exact_both_output_control_replay_action(
+    action: &protocol::control_plane_command::OutputControlActionV2,
+) -> bool {
+    matches!(
+        action,
+        protocol::control_plane_command::OutputControlActionV2::ReleaseBlackout { .. }
+            | protocol::control_plane_command::OutputControlActionV2::SetDisplayWindowOpen { .. }
+    )
+}
+
+fn is_managed_exact_both_output_control_replay_operation(operation_id: &str) -> bool {
+    matches!(
+        operation_id,
+        OUTPUT_BLACKOUT_RELEASE_OPERATION_ID | OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID
+    )
+}
+
 const OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_STATUS_QUERY_OPERATION_ID: &str =
     "syndocal.query.output.dsf2026_artnet_acceptance_probe.status.v1";
 const OUTPUT_LEASE_DURABLE_RECEIPT_STATE_FILE: &str = "output-lease-receipts.json";
@@ -644,6 +661,12 @@ const MAX_DURABLE_OUTPUT_LEASE_ORIGINS: usize = output_lease::MAX_OUTPUT_LEASE_R
 /// reply-loss retry remains a no-confirmation/no-transport replay after a
 /// process restart.
 const MAX_DURABLE_DSF2026_OUTPUT_CONTROL_TERMINALS: usize = 2;
+/// Only the two short post-confirmation managed-exact-Both routes retain an
+/// outer public terminal.  This bound is intentionally independent from the
+/// generic process-local output-control cache: it is a restart-safe reply
+/// record, not a new durable control-plane mechanism.
+const MAX_DURABLE_MANAGED_EXACT_BOTH_OUTPUT_CONTROL_TERMINALS: usize =
+    MAX_DURABLE_OUTPUT_LEASE_RECEIPTS;
 
 fn default_output_lease_replay_guard() -> bool {
     // Older journals did not distinguish a receiptless SafeAbort from an
@@ -693,6 +716,19 @@ struct PersistedDsf2026OutputControlTerminal {
     response: OutputControlResponseV2,
 }
 
+/// Public terminal retained for the two route-specific managed-exact-Both
+/// operations.  The private manager authorization never appears here: the
+/// response remains keyed by the canonical renderer request and caller
+/// binding, so a lost reply can be replayed before a now-stale fence is
+/// checked after restart.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PersistedManagedExactBothOutputControlTerminal {
+    principal: String,
+    window_label: String,
+    response: OutputControlResponseV2,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PersistedOutputLeaseReceiptState {
@@ -713,6 +749,12 @@ struct PersistedOutputLeaseReceiptState {
     /// output-control operations.
     #[serde(default)]
     dsf2026_artnet_acceptance_probe_terminals: Vec<PersistedDsf2026OutputControlTerminal>,
+    /// Restart-safe public responses are deliberately retained only for
+    /// ReleaseBlackout and SetDisplayWindowOpen.  AddDisplay remains outside
+    /// this bridge because its native work is a long two-phase transaction.
+    #[serde(default)]
+    managed_exact_both_output_control_terminals:
+        Vec<PersistedManagedExactBothOutputControlTerminal>,
 }
 
 impl Default for PersistedOutputLeaseReceiptState {
@@ -724,6 +766,7 @@ impl Default for PersistedOutputLeaseReceiptState {
             pending: Vec::new(),
             dsf2026_artnet_acceptance_probe_consumed: false,
             dsf2026_artnet_acceptance_probe_terminals: Vec::new(),
+            managed_exact_both_output_control_terminals: Vec::new(),
         }
     }
 }
@@ -1294,6 +1337,130 @@ impl OutputLeaseDurableReceiptJournal {
         Ok(())
     }
 
+    fn lookup_managed_exact_both_output_control_terminal(
+        &self,
+        principal: &str,
+        window_label: &str,
+        request: &OutputControlCommandRequestV2,
+        shape_sha256: &str,
+        argument_fingerprint: &str,
+    ) -> Result<Option<OutputControlResponseV2>, String> {
+        if !is_managed_exact_both_output_control_replay_action(&request.action) {
+            return Ok(None);
+        }
+        for terminal in &self.state.managed_exact_both_output_control_terminals {
+            if terminal.principal != principal
+                || terminal.window_label != window_label
+                || terminal.response.validate().is_err()
+            {
+                continue;
+            }
+            let OutputControlResponseV2::Receipt(receipt) = &terminal.response else {
+                return Err("Managed exact-Both durable terminal is not a receipt".to_string());
+            };
+            if receipt.operation_id != request.operation_id
+                || receipt.request_id != request.request_id
+            {
+                continue;
+            }
+            if receipt.shape_sha256 == shape_sha256
+                && receipt.argument_fingerprint == argument_fingerprint
+            {
+                return Ok(Some(terminal.response.clone()));
+            }
+            return Err(
+                "Managed exact-Both durable terminal request identity conflicts with its replay shape"
+                    .to_string(),
+            );
+        }
+        Ok(None)
+    }
+
+    fn record_managed_exact_both_output_control_terminal(
+        &mut self,
+        principal: &str,
+        window_label: &str,
+        request: &OutputControlCommandRequestV2,
+        shape_sha256: &str,
+        argument_fingerprint: &str,
+        response: &OutputControlResponseV2,
+    ) -> Result<(), String> {
+        if !is_managed_exact_both_output_control_replay_action(&request.action) {
+            return Ok(());
+        }
+        OutputLeaseOwner::new(principal, window_label, 1, 1).map_err(|_| {
+            "Managed exact-Both durable terminal caller identity is invalid".to_string()
+        })?;
+        response
+            .validate()
+            .map_err(|_| "Managed exact-Both durable terminal response is invalid".to_string())?;
+        let OutputControlResponseV2::Receipt(receipt) = response else {
+            return Err("Managed exact-Both durable terminal is not a receipt".to_string());
+        };
+        if receipt.operation_id != request.operation_id
+            || receipt.request_id != request.request_id
+            || receipt.shape_sha256 != shape_sha256
+            || receipt.argument_fingerprint != argument_fingerprint
+        {
+            return Err(
+                "Managed exact-Both durable terminal does not exactly match its request"
+                    .to_string(),
+            );
+        }
+        let mut candidate = self.state.clone();
+        if !candidate.receipts.iter().any(|lease_receipt| {
+            lease_receipt.key.principal == principal
+                && lease_receipt.key.domain == OUTPUT_LEASE_OUTPUT_CONTROL_DOMAIN
+                && lease_receipt.key.request_id == request.request_id
+        }) {
+            return Err(
+                "Managed exact-Both durable terminal has no canonical public lease receipt"
+                    .to_string(),
+            );
+        }
+        if let Some(existing) = candidate
+            .managed_exact_both_output_control_terminals
+            .iter()
+            .find(|existing| {
+                existing.principal == principal
+                    && existing.window_label == window_label
+                    && matches!(
+                        &existing.response,
+                        OutputControlResponseV2::Receipt(existing_receipt)
+                            if existing_receipt.operation_id == request.operation_id
+                                && existing_receipt.request_id == request.request_id
+                    )
+            })
+        {
+            if existing.response == *response {
+                return Ok(());
+            }
+            return Err(
+                "Managed exact-Both durable terminal request identity conflicts with an existing receipt"
+                    .to_string(),
+            );
+        }
+        if candidate.managed_exact_both_output_control_terminals.len()
+            >= MAX_DURABLE_MANAGED_EXACT_BOTH_OUTPUT_CONTROL_TERMINALS
+        {
+            return Err(
+                "Managed exact-Both durable terminal receipt capacity is exhausted".to_string(),
+            );
+        }
+        candidate.managed_exact_both_output_control_terminals.push(
+            PersistedManagedExactBothOutputControlTerminal {
+                principal: principal.to_string(),
+                window_label: window_label.to_string(),
+                response: response.clone(),
+            },
+        );
+        if let Some(path) = self.path.as_deref() {
+            persist_output_lease_receipt_state_to_path(path, &candidate)?;
+        }
+        self.state = candidate;
+        Ok(())
+    }
+
     #[cfg(test)]
     fn receipt_count(&self) -> usize {
         self.state.receipts.len()
@@ -1355,6 +1522,54 @@ pub(crate) fn replay_durable_dsf2026_output_control_terminal(
             request,
             shape_sha256,
             argument_fingerprint,
+        )
+}
+
+/// Resolve the narrowly retained public terminal before mutable output state,
+/// lease generation, or native confirmation is inspected.  A record is bound
+/// to the exact renderer principal and WebView label, so it cannot transfer a
+/// reply to a foreign/reloaded binding.
+pub(crate) fn replay_durable_managed_exact_both_output_control_terminal(
+    state: &AppState,
+    principal: &str,
+    window_label: &str,
+    request: &OutputControlCommandRequestV2,
+    shape_sha256: &str,
+    argument_fingerprint: &str,
+) -> Result<Option<OutputControlResponseV2>, String> {
+    state
+        .output_lease_durable_receipts
+        .lock()
+        .map_err(|_| "Output lease durable receipt journal lock was poisoned".to_string())?
+        .lookup_managed_exact_both_output_control_terminal(
+            principal,
+            window_label,
+            request,
+            shape_sha256,
+            argument_fingerprint,
+        )
+}
+
+pub(crate) fn record_durable_managed_exact_both_output_control_terminal(
+    state: &AppState,
+    principal: &str,
+    window_label: &str,
+    request: &OutputControlCommandRequestV2,
+    shape_sha256: &str,
+    argument_fingerprint: &str,
+    response: &OutputControlResponseV2,
+) -> Result<(), String> {
+    state
+        .output_lease_durable_receipts
+        .lock()
+        .map_err(|_| "Output lease durable receipt journal lock was poisoned".to_string())?
+        .record_managed_exact_both_output_control_terminal(
+            principal,
+            window_label,
+            request,
+            shape_sha256,
+            argument_fingerprint,
+            response,
         )
 }
 
@@ -55560,12 +55775,27 @@ where
         live_registry,
         request,
         None,
+        request,
         now_ms,
         context,
         pending_window_label,
         commit,
         durable_record,
     )
+}
+
+/// The registry may use an internal managed-action request identity, but a
+/// public OutputControl request must retain its original durable key/shape for
+/// reply-loss replay. The receipt's authority evidence is unchanged; only its
+/// durable correlation is rebound to the canonical public request.
+fn output_lease_receipt_for_durable_request(
+    receipt: &output_lease::OutputLeaseRequestReceipt,
+    durable_request: &OutputLeaseRequest,
+) -> output_lease::OutputLeaseRequestReceipt {
+    let mut durable_receipt = receipt.clone();
+    durable_receipt.key = durable_request.key.clone();
+    durable_receipt.shape_hash = durable_request.shape_hash.clone();
+    durable_receipt
 }
 
 /// Private implementation reached only after the generic or managed bridge
@@ -55581,6 +55811,7 @@ fn submit_output_lease_candidate_with_classified_commit_and_durable_record_for_p
     managed_authorization: Option<
         &output_lease_keepalive_runtime::OutputLeaseKeepaliveManagedExactBothAuthorizationGuard<'_>,
     >,
+    durable_request: &OutputLeaseRequest,
     now_ms: u64,
     context: &str,
     pending_window_label: Option<&str>,
@@ -55612,10 +55843,9 @@ where
                     "Output lease durable receipt journal lock was poisoned".to_string()
                 })?;
                 let prepare_result = match pending_window_label {
-                    Some(window_label) => {
-                        durable.prepare_dsf2026_artnet_acceptance_probe(request, window_label)
-                    }
-                    None => durable.prepare(request),
+                    Some(window_label) => durable
+                        .prepare_dsf2026_artnet_acceptance_probe(durable_request, window_label),
+                    None => durable.prepare(durable_request),
                 };
                 if matches!(
                     prepare_result.map_err(|error| {
@@ -55644,7 +55874,7 @@ where
                             )
                         })
                         .and_then(|mut durable| {
-                            durable.abort(request).map_err(|abort_error| {
+                            durable.abort(durable_request).map_err(|abort_error| {
                                 format!(
                                     "Output lease {context} safe rollback could not clear its pending receipt ({abort_error:?}): {error}"
                                 )
@@ -55661,11 +55891,13 @@ where
                     ));
                 }
             };
+            let durable_receipt =
+                output_lease_receipt_for_durable_request(&receipt, durable_request);
             {
                 let mut durable = state.output_lease_durable_receipts.lock().map_err(|_| {
                     "Output lease durable receipt journal lock was poisoned".to_string()
                 })?;
-                if let Err(error) = durable_record(&mut durable, &receipt) {
+                if let Err(error) = durable_record(&mut durable, &durable_receipt) {
                     // The physical callback already returned success. Keep
                     // the candidate live so authority matches the device, but
                     // retain the durable Pending marker and surface the
@@ -55677,7 +55909,7 @@ where
                 }
             }
             *live_registry = candidate;
-            Ok((committed, receipt))
+            Ok((committed, durable_receipt))
         }
         Err(output_lease::OutputLeaseError::Expired) => {
             // Expiry is the one deliberate rejection that advances authority
@@ -55960,6 +56192,43 @@ where
         live_registry,
         request,
         Some(authorization),
+        request,
+        now_ms,
+        context,
+        None,
+        || commit().map_err(OutputLeaseCandidateCommitFailure::safe),
+        |durable, receipt| {
+            durable
+                .record(receipt)
+                .map_err(|error| format!("{error:?}"))
+        },
+    )
+}
+
+/// Managed Release/Display authorization uses a private registry request so
+/// its public stale generation never enters the candidate. Its durable receipt
+/// nevertheless remains bound to the original public request for exact
+/// reply-loss replay and conflict detection.
+fn submit_managed_exact_both_public_candidate_with_commit<T, Commit>(
+    state: &AppState,
+    live_registry: &mut OutputLeaseRegistry,
+    public_request: &OutputLeaseRequest,
+    private_request: &OutputLeaseRequest,
+    authorization: &output_lease_keepalive_runtime::OutputLeaseKeepaliveManagedExactBothAuthorizationGuard<'_>,
+    now_ms: u64,
+    context: &str,
+    commit: Commit,
+) -> Result<(T, output_lease::OutputLeaseRequestReceipt), String>
+where
+    Commit: FnOnce() -> Result<T, String>,
+{
+    validate_managed_exact_both_candidate_bridge(private_request, Some(authorization))?;
+    submit_output_lease_candidate_with_classified_commit_and_durable_record_for_pending_window_inner(
+        state,
+        live_registry,
+        private_request,
+        Some(authorization),
+        public_request,
         now_ms,
         context,
         None,
@@ -56195,6 +56464,284 @@ pub(crate) fn build_output_lease_authorization_request(
             .map_err(|error| format!("Output lease request is invalid: {error:?}"))?;
     let now_ms = state.output_lease_now_ms()?;
     Ok((request, now_ms))
+}
+
+/// Re-project only the two short post-confirmation routes which may consume
+/// an exact-Both keepalive lease.  The public request deliberately retains its
+/// caller generation for pre-confirmation/replay handling; after the native
+/// confirmation, a lease that is *currently* managed must instead enter the
+/// private manager-serialized action.  This is intentionally not a generic
+/// compatibility bridge: AddDisplay keeps its long two-phase transaction and
+/// every other ordinary route retains its existing authority semantics.
+const OUTPUT_LEASE_MANAGED_EXACT_BOTH_INTERNAL_DOMAIN: &str = "output-control-managed-exact-both";
+
+fn managed_exact_both_request_after_confirmation(
+    state: &AppState,
+    request: &OutputLeaseRequest,
+    release_project_identity: Option<&str>,
+) -> Result<Option<OutputLeaseRequest>, String> {
+    let lease_id = request
+        .action
+        .as_ref()
+        .and_then(OutputLeaseRequestAction::managed_exact_both_lease_id)
+        .or_else(|| match request.action.as_ref() {
+            Some(OutputLeaseRequestAction::AuthorizeOrdinary { lease_id, .. })
+            | Some(OutputLeaseRequestAction::AuthorizeOrRecoverDisplay { lease_id, .. }) => {
+                Some(*lease_id)
+            }
+            _ => None,
+        })
+        .ok_or_else(|| {
+            "Managed exact-Both authorization is unavailable for this output route".to_string()
+        })?;
+    if !state
+        .output_lease_keepalive
+        .manages_lease_id(&lease_id.encode())?
+    {
+        return Ok(None);
+    }
+    managed_exact_both_route_request(request, release_project_identity).map(Some)
+}
+
+/// Construct the private managed action only after a caller has established
+/// that this exact route is manager-owned. Keeping the projection separately
+/// testable proves the two route-specific conversions cannot accidentally
+/// carry a stale caller generation into the private path.
+fn managed_exact_both_route_request(
+    request: &OutputLeaseRequest,
+    release_project_identity: Option<&str>,
+) -> Result<OutputLeaseRequest, String> {
+    let action = request
+        .action
+        .as_ref()
+        .ok_or_else(|| "Output lease authorization action is missing".to_string())?;
+    let (lease_id, owner, exact_resources, project_identity) = match action {
+        OutputLeaseRequestAction::AuthorizeOrdinary {
+            lease_id,
+            owner,
+            exact_resources,
+            ..
+        } => (
+            *lease_id,
+            owner.clone(),
+            exact_resources.clone(),
+            release_project_identity
+                .ok_or_else(|| {
+                    "Managed blackout release requires its exact project identity".to_string()
+                })?
+                .to_string(),
+        ),
+        OutputLeaseRequestAction::AuthorizeOrRecoverDisplay {
+            lease_id,
+            owner,
+            exact_resources,
+            project_identity,
+            ..
+        } => (
+            *lease_id,
+            owner.clone(),
+            exact_resources.clone(),
+            project_identity.clone(),
+        ),
+        OutputLeaseRequestAction::AuthorizeManagedExactBoth {
+            lease_id,
+            owner,
+            exact_resources,
+            project_identity,
+        } => (
+            *lease_id,
+            owner.clone(),
+            exact_resources.clone(),
+            project_identity.clone(),
+        ),
+        _ => {
+            return Err(
+                "Managed exact-Both authorization is unavailable for this output route".to_string(),
+            )
+        }
+    };
+    OutputLeaseRequest::from_action(
+        request.key.principal.clone(),
+        OUTPUT_LEASE_MANAGED_EXACT_BOTH_INTERNAL_DOMAIN,
+        request.key.request_id,
+        OutputLeaseRequestAction::AuthorizeManagedExactBoth {
+            lease_id,
+            owner,
+            exact_resources,
+            project_identity,
+        },
+    )
+    .map_err(|error| format!("Managed exact-Both authorization request is invalid: {error:?}"))
+}
+
+#[cfg(test)]
+#[test]
+fn managed_blackout_release_projection_drops_the_stale_public_generation() {
+    let lease_id = output_lease::OutputLeaseId::decode("lease-0000000000000001").unwrap();
+    let owner = OutputLeaseOwner::new("local-ui", "main", 71, 1).unwrap();
+    let resources =
+        OutputLeaseResources::new(&[OutputLeaseResource::Lighting, OutputLeaseResource::Video])
+            .unwrap();
+    let public = OutputLeaseRequest::from_action(
+        "local-ui",
+        "output-control",
+        99,
+        OutputLeaseRequestAction::AuthorizeOrdinary {
+            lease_id,
+            owner: owner.clone(),
+            expected_generation: 6,
+            exact_resources: resources.clone(),
+        },
+    )
+    .unwrap();
+
+    let private = managed_exact_both_route_request(&public, Some("project_epoch:71")).unwrap();
+    assert_eq!(private.key.principal, public.key.principal);
+    assert_eq!(private.key.request_id, public.key.request_id);
+    assert_eq!(
+        private.key.domain,
+        OUTPUT_LEASE_MANAGED_EXACT_BOTH_INTERNAL_DOMAIN
+    );
+    assert!(matches!(
+        private.action.as_ref(),
+        Some(OutputLeaseRequestAction::AuthorizeManagedExactBoth {
+            lease_id: actual_lease_id,
+            owner: actual_owner,
+            exact_resources: actual_resources,
+            project_identity,
+        }) if *actual_lease_id == lease_id
+            && *actual_owner == owner
+            && *actual_resources == resources
+            && project_identity == "project_epoch:71"
+    ));
+    assert_eq!(private.shape.expected_generation, None);
+}
+
+#[cfg(test)]
+#[test]
+fn managed_display_window_projection_preserves_its_exact_project_and_never_becomes_add_display() {
+    let lease_id = output_lease::OutputLeaseId::decode("lease-0000000000000002").unwrap();
+    let owner = OutputLeaseOwner::new("local-ui", "main", 72, 1).unwrap();
+    let resources =
+        OutputLeaseResources::new(&[OutputLeaseResource::Lighting, OutputLeaseResource::Video])
+            .unwrap();
+    let public = OutputLeaseRequest::from_action(
+        "local-ui",
+        "output-control",
+        100,
+        OutputLeaseRequestAction::AuthorizeOrRecoverDisplay {
+            lease_id,
+            owner: owner.clone(),
+            expected_generation: 6,
+            exact_resources: resources.clone(),
+            project_identity: "project_epoch:72".to_string(),
+            ttl_ms: output_lease::MAX_OUTPUT_LEASE_TTL_MS,
+        },
+    )
+    .unwrap();
+
+    let private = managed_exact_both_route_request(&public, None).unwrap();
+    assert!(matches!(
+        private.action.as_ref(),
+        Some(OutputLeaseRequestAction::AuthorizeManagedExactBoth {
+            lease_id: actual_lease_id,
+            owner: actual_owner,
+            exact_resources: actual_resources,
+            project_identity,
+        }) if *actual_lease_id == lease_id
+            && *actual_owner == owner
+            && *actual_resources == resources
+            && project_identity == "project_epoch:72"
+    ));
+    assert_eq!(private.shape.operation, "authorize_managed_exact_both");
+}
+
+#[cfg(test)]
+#[test]
+fn managed_exact_both_projection_refuses_unrelated_routes() {
+    let request = OutputLeaseRequest::from_action(
+        "local-ui",
+        "output-control",
+        101,
+        OutputLeaseRequestAction::EnableAcquireOrRecover {
+            owner: OutputLeaseOwner::new("local-ui", "main", 73, 1).unwrap(),
+            resources: OutputLeaseResources::new(&[
+                OutputLeaseResource::Lighting,
+                OutputLeaseResource::Video,
+            ])
+            .unwrap(),
+            project_identity: "project_epoch:73".to_string(),
+            ttl_ms: output_lease::MAX_OUTPUT_LEASE_TTL_MS,
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        managed_exact_both_route_request(&request, None),
+        Err("Managed exact-Both authorization is unavailable for this output route".to_string())
+    );
+}
+
+#[cfg(test)]
+#[test]
+fn managed_private_candidate_records_the_canonical_public_durable_receipt() {
+    let public = OutputLeaseRequest::from_action(
+        "local-ui",
+        OUTPUT_LEASE_OUTPUT_CONTROL_DOMAIN,
+        102,
+        OutputLeaseRequestAction::Acquire {
+            owner: OutputLeaseOwner::new("local-ui", "main", 41, 7).unwrap(),
+            resources: OutputLeaseResources::new(&[
+                OutputLeaseResource::Lighting,
+                OutputLeaseResource::Video,
+            ])
+            .unwrap(),
+            project_identity: output_lease_project_identity(0),
+            ttl_ms: 30_000,
+        },
+    )
+    .unwrap();
+    let private = OutputLeaseRequest::from_action(
+        public.key.principal.clone(),
+        OUTPUT_LEASE_MANAGED_EXACT_BOTH_INTERNAL_DOMAIN,
+        public.key.request_id,
+        public.action.clone().expect("public action"),
+    )
+    .expect("private registry request");
+    let mut registry = OutputLeaseRegistry::fresh_process(41).expect("fresh registry");
+    let private_receipt = registry
+        .submit_request(&private, 1)
+        .expect("private candidate receipt");
+    let public_receipt = output_lease_receipt_for_durable_request(&private_receipt, &public);
+    let mut journal = OutputLeaseDurableReceiptJournal::in_memory();
+    assert_eq!(
+        journal.prepare(&public),
+        Ok(OutputLeaseDurablePrepareResult::Fresh)
+    );
+    journal
+        .record(&public_receipt)
+        .expect("record public receipt");
+    assert_eq!(journal.lookup(&public), Ok(Some(public_receipt.clone())));
+
+    let conflicting = OutputLeaseRequest::from_action(
+        public.key.principal.clone(),
+        public.key.domain.clone(),
+        public.key.request_id,
+        OutputLeaseRequestAction::EnableAcquireOrRecover {
+            owner: OutputLeaseOwner::new("local-ui", "main", 41, 7).unwrap(),
+            resources: OutputLeaseResources::new(&[
+                OutputLeaseResource::Lighting,
+                OutputLeaseResource::Video,
+            ])
+            .unwrap(),
+            project_identity: output_lease_project_identity(0),
+            ttl_ms: 30_000,
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        journal.lookup(&conflicting),
+        Err(output_lease::OutputLeaseError::Conflict)
+    );
 }
 
 pub(crate) fn preflight_output_lease_for_control_action(
@@ -58568,6 +59115,14 @@ fn validate_output_lease_receipt_state(
             MAX_DURABLE_DSF2026_OUTPUT_CONTROL_TERMINALS
         ));
     }
+    if state.managed_exact_both_output_control_terminals.len()
+        > MAX_DURABLE_MANAGED_EXACT_BOTH_OUTPUT_CONTROL_TERMINALS
+    {
+        return Err(format!(
+            "Output-lease receipt state exceeds {} managed exact-Both public terminal records",
+            MAX_DURABLE_MANAGED_EXACT_BOTH_OUTPUT_CONTROL_TERMINALS
+        ));
+    }
     for (index, terminal) in state
         .dsf2026_artnet_acceptance_probe_terminals
         .iter()
@@ -58636,6 +59191,59 @@ fn validate_output_lease_receipt_state(
             "Output-lease receipt state has DSF2026 public terminal without consumed budget"
                 .to_string(),
         );
+    }
+    for (index, terminal) in state
+        .managed_exact_both_output_control_terminals
+        .iter()
+        .enumerate()
+    {
+        OutputLeaseOwner::new(&terminal.principal, &terminal.window_label, 1, 1).map_err(|_| {
+            format!(
+                "Output-lease receipt state has invalid managed exact-Both terminal caller at index {index}"
+            )
+        })?;
+        terminal.response.validate().map_err(|_| {
+            format!(
+                "Output-lease receipt state has invalid managed exact-Both terminal response at index {index}"
+            )
+        })?;
+        let OutputControlResponseV2::Receipt(receipt) = &terminal.response else {
+            return Err(format!(
+                "Output-lease receipt state has non-receipt managed exact-Both terminal at index {index}"
+            ));
+        };
+        if !is_managed_exact_both_output_control_replay_operation(&receipt.operation_id) {
+            return Err(format!(
+                "Output-lease receipt state has unexpected managed exact-Both terminal operation at index {index}"
+            ));
+        }
+        if !state.receipts.iter().any(|lease_receipt| {
+            lease_receipt.key.principal == terminal.principal
+                && lease_receipt.key.domain == OUTPUT_LEASE_OUTPUT_CONTROL_DOMAIN
+                && lease_receipt.key.request_id == receipt.request_id
+        }) {
+            return Err(format!(
+                "Output-lease receipt state has managed exact-Both public terminal without its canonical public lease receipt at index {index}"
+            ));
+        }
+        if state.managed_exact_both_output_control_terminals[index + 1..]
+            .iter()
+            .any(|other| {
+                other.principal == terminal.principal
+                    && other.window_label == terminal.window_label
+                    && matches!(
+                        &other.response,
+                        OutputControlResponseV2::Receipt(other_receipt)
+                            if other_receipt.operation_id == receipt.operation_id
+                                && other_receipt.request_id == receipt.request_id
+                    )
+            })
+        {
+            return Err(
+                "Output-lease receipt state has duplicate managed exact-Both public terminals"
+                    .to_string(),
+            );
+        }
     }
     if state
         .receipts
@@ -75084,33 +75692,89 @@ fn release_safety_blackout_with_output_control_fence(
                 project_publication_generation,
             ),
         )| {
+            if let Some(receipt) = state
+                .output_lease_durable_receipts
+                .lock()
+                .map_err(|_| {
+                    "Output lease durable receipt journal lock was poisoned before blackout release"
+                        .to_string()
+                })?
+                .lookup(lease_request)
+                .map_err(|error| {
+                    format!("Output lease blackout release durable lookup failed: {error:?}")
+                })?
+            {
+                // A reply-loss retry is already terminal under the canonical
+                // public request shape; it must never re-enter S0 release.
+                return Ok((false, expected_fence.clone(), receipt));
+            }
+            // The native confirmation and its public owner/fence
+            // revalidation have already completed.  If that exact lease is
+            // now manager-owned, replace only this route's stale
+            // caller-generation request with the private managed action.  A
+            // faulted manager still identifies the lease, then fails closed
+            // when the guard below requires the exact Armed run; it can never
+            // fall back to the ordinary path.
+            let managed_request = managed_exact_both_request_after_confirmation(
+                state,
+                lease_request,
+                Some(&output_lease_project_identity(expected_fence.project_epoch)),
+            )?;
+            let candidate_request = managed_request.as_ref().unwrap_or(lease_request);
+            // Keep this guard before the registry mutex and through the
+            // bounded S0 release callback. Renewal takes the same serial lane
+            // before its registry CAS, so it cannot advance an exact managed
+            // lease between authorization and publication.
+            let managed_authorization = candidate_request
+                .action
+                .as_ref()
+                .and_then(OutputLeaseRequestAction::managed_exact_both_lease_id)
+                .map(|lease_id| {
+                    state
+                        .output_lease_keepalive
+                        .begin_managed_exact_both_ordinary_authorization(&lease_id.encode())
+                })
+                .transpose()?;
             let mut lease_registry = state.output_lease_registry.lock().map_err(|_| {
                 "Output lease registry lock was poisoned before blackout release".to_string()
             })?;
             let final_lease_now_ms = state.output_lease_now_ms()?;
-            let (applied, lease_receipt) = submit_output_lease_candidate_with_commit(
-                state,
-                &mut lease_registry,
-                lease_request,
-                final_lease_now_ms,
-                "ordinary blackout release",
-                || {
-                    state
-                        .engine
-                        .safety_blackout_release_published(
-                            expected_fence.safety_blackout_epoch,
-                            expected_fence.safety_blackout_generation,
-                            Instant::now() + Duration::from_secs(2),
+            let submit_release = || {
+                state
+                    .engine
+                    .safety_blackout_release_published(
+                        expected_fence.safety_blackout_epoch,
+                        expected_fence.safety_blackout_generation,
+                        Instant::now() + Duration::from_secs(2),
+                    )
+                    .map(|disposition| {
+                        matches!(
+                            disposition,
+                            engine::SafetyBlackoutReleaseDisposition::Applied
                         )
-                        .map(|disposition| {
-                            matches!(
-                                disposition,
-                                engine::SafetyBlackoutReleaseDisposition::Applied
-                            )
-                        })
-                        .map_err(|error| error.to_string())
-                },
-            )?;
+                    })
+                    .map_err(|error| error.to_string())
+            };
+            let (applied, lease_receipt) = match managed_authorization.as_ref() {
+                Some(authorization) => submit_managed_exact_both_public_candidate_with_commit(
+                    state,
+                    &mut lease_registry,
+                    lease_request,
+                    candidate_request,
+                    authorization,
+                    final_lease_now_ms,
+                    "blackout release",
+                    submit_release,
+                ),
+                None => submit_output_lease_candidate_with_commit(
+                    state,
+                    &mut lease_registry,
+                    lease_request,
+                    final_lease_now_ms,
+                    "blackout release",
+                    submit_release,
+                ),
+            }?;
             Ok((
                 applied,
                 control_plane_runtime::committed_output_control_fence(
@@ -78186,13 +78850,100 @@ fn set_display_output_window_open_with_output_control_fence(
         return Err("Editor monitor changed while confirming Display window open".to_string());
     }
 
-    // Authorize before a physical delta.  This is the durable exact-Both
-    // lane, so a wrong/foreign/expired-unrecoverable lease fails before a
-    // shell is shown or retired.  The registry mutex is released before all
-    // native work below.
-    let lease_receipt =
+    // The local editor warning was intentionally outside every operation
+    // guard. Revalidate its owner/fence immediately after Yes before this
+    // route decides whether a managed exact-Both lease needs the private
+    // authorization action.
+    {
+        let _lifecycle = state
+            .standby_sync_lifecycle
+            .lock()
+            .map_err(|_| "Standby synchronization lifecycle lock was poisoned".to_string())?;
+        let _owner_rotation = state
+            .project_transaction_owner_rotation
+            .lock()
+            .map_err(|_| "Project transaction owner rotation lock was poisoned".to_string())?;
+        let _external = lock_project_external_command_admission(state)?;
+        let mut coordinator = lock_project_coordinator(state)?;
+        if reconcile_project_checkpoint_for_coordinator(state, &mut coordinator).is_err()
+            || !control_plane_runtime::exact_output_control_owner_matches(
+                state,
+                expected_owner_principal,
+                expected_owner_window_label,
+                expected_owner_incarnation,
+            )
+            || !control_plane_runtime::exact_output_control_fence_matches(
+                state,
+                &coordinator,
+                expected_fence,
+            )
+            || ensure_no_pending_project_transaction(&coordinator).is_err()
+        {
+            return Err(
+                "Output control fence changed after Display window confirmation".to_string(),
+            );
+        }
+    }
+
+    if let Some(receipt) = state
+        .output_lease_durable_receipts
+        .lock()
+        .map_err(|_| {
+            "Output lease durable receipt journal lock was poisoned before Display window authorization"
+                .to_string()
+        })?
+        .lookup(lease_request)
+        .map_err(|error| {
+            format!("Display window lease durable lookup failed: {error:?}")
+        })?
+    {
+        // Reply-loss recovery returns the public terminal receipt before any
+        // shell/worker work, regardless of whether this process still owns a
+        // managed keepalive run.
+        return Ok((false, expected_fence.clone(), receipt));
+    }
+
+    // Authorize before a physical delta. A manager-owned exact-Both lease
+    // receives the narrow private action and holds its serial guard only
+    // through registry/durable authorization. The guard is released before
+    // any shell, worker, GPU, or join work below. Unmanaged requests retain
+    // the existing active-or-orphan Display recovery semantics.
+    let managed_request =
+        managed_exact_both_request_after_confirmation(state, lease_request, None)?;
+    let lease_receipt = if let Some(managed_request) = managed_request.as_ref() {
+        let lease_id = managed_request
+            .action
+            .as_ref()
+            .and_then(OutputLeaseRequestAction::managed_exact_both_lease_id)
+            .ok_or_else(|| {
+                "Managed Display window authorization lost its exact lease identity".to_string()
+            })?;
+        // operation_serial precedes the registry lock. A faulted manager
+        // remains manager-owned and rejects here; do not retry through the
+        // ordinary recovery action.
+        let authorization = state
+            .output_lease_keepalive
+            .begin_managed_exact_both_ordinary_authorization(&lease_id.encode())?;
+        let mut registry = state.output_lease_registry.lock().map_err(|_| {
+            "Output lease registry lock was poisoned before Display window authorization"
+                .to_string()
+        })?;
+        let final_now_ms = state.output_lease_now_ms()?;
+        let (_, receipt) = submit_managed_exact_both_public_candidate_with_commit(
+            state,
+            &mut registry,
+            lease_request,
+            managed_request,
+            &authorization,
+            final_now_ms,
+            "Display window authorization",
+            || Ok(()),
+        )?;
+        receipt
+    } else {
         submit_output_lease_lifecycle_request(state, lease_request, lease_now_ms, false)
-            .map_err(|error| format!("Display window lease authorization failed: {error:?}"))?;
+            .map_err(|error| format!("Display window lease authorization failed: {error:?}"))?
+    };
     let changed =
         if already_open == open && (open || (!has_registered_worker && !has_registered_metrics)) {
             // Terminal idempotent result still passes through the exact durable

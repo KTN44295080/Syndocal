@@ -2291,7 +2291,7 @@ mod tests {
         // engine commands; the strict Show Spout Reset adds its separately
         // named atomic engine command. Its five Tauri routes and the local
         // Spout reset account for the six manifest entries below.
-        const ENGINE_COMMAND_COUNT: usize = 277;
+        const ENGINE_COMMAND_COUNT: usize = 278;
         const REMOTE_INPUT_EVENT_COUNT: usize = 51;
         const REMOTE_CLIENT_REQUEST_COUNT: usize = 7;
         const REMOTE_WIRE_OPERATION_COUNT: usize = 58;
@@ -2323,7 +2323,7 @@ mod tests {
                 + MIDI_OSC_DMX_OPERATION_COUNT
                 + FRONTEND_INVOKE_COUNT
         );
-        assert_eq!(registry.operations.len(), 1557);
+        assert_eq!(registry.operations.len(), 1558);
         verify_registry_exact_set(&names, &registry).unwrap();
         let r0 = registry
             .operations
@@ -2675,9 +2675,9 @@ mod tests {
         verify_canonical_registry_exact_sources(&legacy, &canonical).unwrap();
 
         const TAURI_COUNT: usize = FROZEN_TAURI_ROUTE_ADMISSION_COUNT;
-        // 276 prior engine sources plus the distinct atomic
+        // 277 prior engine sources plus the distinct atomic
         // `ResetShowSpoutOutputsExactPublished` source.
-        const ENGINE_COUNT: usize = 277;
+        const ENGINE_COUNT: usize = 278;
         const REMOTE_COUNT: usize = 116;
         const MIDI_OSC_DMX_COUNT: usize = 206;
         const FRONTEND_COUNT: usize = 449;
@@ -2687,8 +2687,8 @@ mod tests {
         const KEYBOARD_PROJECT_FILE_COUNT: usize = 3;
         const SOURCE_TOTAL: usize =
             LEGACY_SOURCE_TOTAL + KEYBOARD_APP_COUNT + KEYBOARD_PROJECT_FILE_COUNT;
-        assert_eq!(LEGACY_SOURCE_TOTAL, 1557);
-        assert_eq!(SOURCE_TOTAL, 1590);
+        assert_eq!(LEGACY_SOURCE_TOTAL, 1558);
+        assert_eq!(SOURCE_TOTAL, 1591);
         assert_eq!(canonical.source_inventory.len(), SOURCE_TOTAL);
         assert_eq!(canonical.canonical_operations.len(), 46);
 
@@ -3040,7 +3040,7 @@ mod tests {
         // The additional atomic Show Spout Reset engine source is deliberately
         // retained as an unclassified engine source; its local Tauri route is
         // the canonical Reset operation.
-        assert_eq!(unclassified.len(), 1090);
+        assert_eq!(unclassified.len(), 1091);
         assert_eq!(support_phases.len(), 0);
         assert_eq!(
             direct.len()
@@ -3753,12 +3753,12 @@ mod tests {
     #[test]
     fn legacy_v1_registry_json_and_count_remain_inventory_honest() {
         let legacy = registry().unwrap();
-        // 1556 prior legacy sources plus the exact Reset engine descriptor.
-        assert_eq!(legacy.operations.len(), 1557);
+        // 1557 prior legacy sources plus the exact Reset engine descriptor.
+        assert_eq!(legacy.operations.len(), 1558);
         let encoded = serde_json::to_value(&legacy).unwrap();
         assert_eq!(encoded["schema"]["version"], CONTROL_PLANE_SCHEMA_VERSION);
         let operations = encoded["operations"].as_array().unwrap();
-        assert_eq!(operations.len(), 1557);
+        assert_eq!(operations.len(), 1558);
         assert!(operations.iter().all(|operation| {
             operation["source_family"] != "keyboard_app"
                 && operation["source_family"] != "keyboard_project_file"

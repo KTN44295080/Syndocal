@@ -4,6 +4,47 @@ Date: 2026-08-19
 Branch at creation: `codex/syndocal-v1.0`
 Baseline before this document: `848d759846985cc3acf588356cfa3c996b4e2ef2`
 
+## 2026-09-02 alpha.60 managed-output source candidate
+
+Alpha.60 is being prepared from upstream-equal parent
+`9ae8276cc6fbf807b3517770f22ee788e050f85f` on
+`codex/syndocal-v1.2`. Alpha.59 native QA reproduced two safe but
+show-blocking rejections. After native confirmation, the keepalive manager had
+legitimately renewed the exact Both lease, but blackout release and existing
+Display-window reopen still submitted the UI's older public generation and
+failed with `StaleGeneration` before publication.
+
+Only those two short post-confirmation routes now recognize a currently
+manager-owned exact Both lease and use the existing private serialized action.
+Blackout release holds the manager guard through registry authorization and
+the bounded Engine S0 release callback. Existing Display reopen holds it only
+through durable authorization, then drops it before native shell/GPU work.
+Add Display keeps its long two-phase transaction; Spout, probes, unrelated
+routes, unmanaged leases, and external owners are not broadened. Faulted,
+foreign, wrong-resource, wrong-project, and stale-fence cases fail closed.
+
+Exact Community MSVC `14.44.35207` full-feature managed-output focused `28/0/0`
+passes with first-party warnings `0`; formatter and diff checks pass.
+The alpha55 local QA derivation also passes syntax, focused, exact identity,
+exclusive-write, final-reread, and verify-only gates. It preserves two Display
+outputs and three compositions and changes exactly `16` paths so Display 1
+uses the optimized 1920x1080 foreground file and Display 5 uses a distinct
+3840x2160 file. Source commit/push, alpha.60 native build, blackout release,
+USB-DMX live output, both Display metric windows, Timeline smoke, and audible
+endpoint acceptance remain open. The first safe native action is therefore to
+commit and push this source checkpoint, stop only the exact checkout artifact,
+and run the pinned no-bundle build.
+
+The exact full-feature suite completed with `1415 passed / 1 failed / 14
+ignored`; the one failure is an operator-owned local `DSF2026.dvc` whose
+`4chPar` references an unavailable `Dimmer` attribute. This remains a visible,
+fail-closed external-fixture boundary and is not treated as a product pass.
+The no-default and full-feature managed focused suites are both `28/28`, the
+control-plane inventory suite is `28/28`, TypeScript/release checks and the
+alpha54/alpha55 derivation checkers pass. A Cargo dev-profile cleanup removed
+the dry-run's `60,082` regenerable files (`151.2 GiB`); release/QA trees were
+left intact.
+
 ## 2026-09-01 alpha.59 source candidate before native acceptance
 
 Alpha.59 is being prepared from upstream-equal parent
