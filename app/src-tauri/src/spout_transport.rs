@@ -955,8 +955,9 @@ impl SpoutRouteWorker {
                         output_id,
                         &render_sender_name,
                     )
+                    .map_err(OutputPresentationRevalidationError::Other)
                     .and_then(|authority| {
-                        revalidate_output_presentation_authority(&render_engine, "Spout", &authority)?;
+                        revalidate_output_presentation_authority_classified(&render_engine, "Spout", &authority)?;
                         Ok(authority)
                     }) {
                         Ok(authority) => match follow.as_ref() {
@@ -1003,6 +1004,22 @@ impl SpoutRouteWorker {
                                     }
                                 }
                             }
+                            None if authority.project_blackout() =>
+                                materialize_current_hard_blackout(&authority).map(|frame| (
+                                    TimelineFollowOutputRenderDecision::Frame {
+                                        key: TimelineFollowOutputFrameKey {
+                                            epoch: authority.ownership_epoch(),
+                                            generation: 0,
+                                            output_id,
+                                            width: frame.width,
+                                            height: frame.height,
+                                        },
+                                        frame,
+                                        result: TimelineFollowSettlementAckResult::Applied,
+                                        follow_identity: None,
+                                    },
+                                    Some(authority),
+                                )),
                             None => renderer
                                 .prepare_output_artistic_render_result_preview_with_effects_and_transitions(
                                     &snapshot.video,
@@ -1035,7 +1052,14 @@ impl SpoutRouteWorker {
                                     Some(authority),
                                 )),
                         },
-                        Err(error) => match follow.as_ref() {
+                        Err(OutputPresentationRevalidationError::SafetyChanged(reason)) => Ok((
+                            TimelineFollowOutputRenderDecision::Retry {
+                                reason,
+                                key: follow.as_ref().and_then(|follow| timeline_follow_output_key(follow, output_id).ok()),
+                            },
+                            None,
+                        )),
+                        Err(OutputPresentationRevalidationError::Other(error)) => match follow.as_ref() {
                             Some(follow) => {
                                 let retry_key = timeline_follow_output_key(follow, output_id).ok();
                                 Ok((
@@ -1484,6 +1508,13 @@ where
                         timing.sent(start.elapsed(), keepalive_result.is_ok(), true);
                     }
                     if let Err(error) = keepalive_result {
+                        if matches!(&error, OutputPresentationRevalidationError::SafetyChanged(_)) {
+                            if let Some(remaining) = target_interval.checked_sub(started.elapsed()) {
+                                std::thread::sleep(remaining);
+                            }
+                            continue;
+                        }
+                        let error = error.to_string();
                         if !worker_stop.load(Ordering::Acquire) {
                             failure_lease = Some(
                                 engine.begin_output_ownership_failure_fence(format!(
@@ -1624,7 +1655,7 @@ where
                             timing.frame(frame.width, frame.height, frame.pts_ms);
                         }
                         let send_started = timing.as_ref().map(|_| Instant::now());
-                        let send_result = send_frame_if_authorized(
+                        let send_result = send_frame_if_authorized_typed(
                             "Spout",
                             &engine,
                             &authority,
@@ -1632,7 +1663,9 @@ where
                             || {
                                 if let Some(show_control) = show_control.as_ref() {
                                     if show_control.presentation_is_keepalive_black()? {
-                                        return send_strict_show_spout_black(
+                                        return send_authorized_show_spout_black(
+                                            &engine,
+                                            &authority,
                                             &mut sender,
                                             sender_name,
                                             show_control,
@@ -1646,6 +1679,7 @@ where
                                     )?;
                                     show_control.revalidate("Spout physical live send")?;
                                 }
+                                revalidate_final_sdk_authority(&engine, &authority)?;
                                 sender.send_image(&frame.data, frame.width, frame.height)?;
                                 if show_control.is_some() {
                                     ensure_strict_show_spout_sender_name(
@@ -1875,13 +1909,30 @@ pub(crate) fn send_strict_show_spout_black<S: SpoutOutputSender>(
     ensure_strict_show_spout_sender_name(sender, expected_name, &format!("{phase} completion"))
 }
 
+fn send_authorized_show_spout_black<S: SpoutOutputSender>(
+    engine: &EngineHandle,
+    authority: &OutputPresentationAuthority,
+    sender: &mut S,
+    expected_name: &str,
+    show_control: &ShowSpoutWorkerControl,
+    phase: &str,
+) -> Result<(), PhysicalOutputSendError> {
+    ensure_strict_show_spout_sender_name(sender, expected_name, phase)?;
+    show_control.revalidate(phase)?;
+    let black = show_control.black_frame(expected_name)?;
+    revalidate_final_sdk_authority(engine, authority)?;
+    sender.send_image(black.as_rgba(), black.width(), black.height())?;
+    ensure_strict_show_spout_sender_name(sender, expected_name, &format!("{phase} completion"))?;
+    Ok(())
+}
+
 fn send_show_spout_keepalive_frame<S: SpoutOutputSender>(
     output_id: u64,
     sender_name: &str,
     engine: &EngineHandle,
     sender: &mut S,
     show_control: &ShowSpoutWorkerControl,
-) -> Result<(), String> {
+) -> Result<(), OutputPresentationRevalidationError> {
     let presentation_sample = engine.video_presentation_sample();
     let authority = capture_output_presentation_authority(
         "Spout",
@@ -1891,28 +1942,46 @@ fn send_show_spout_keepalive_frame<S: SpoutOutputSender>(
         engine.safety_blackout_authority(),
         output_id,
         sender_name,
-    )?;
-    revalidate_output_presentation_authority(engine, "Spout", &authority)?;
+    ).map_err(OutputPresentationRevalidationError::Other)?;
+    revalidate_output_presentation_authority_classified(engine, "Spout", &authority)?;
     let _permit = engine
         .acquire_video_output()
-        .map_err(|error| format!("Spout keepalive video output admission failed: {error}"))?;
+        .map_err(|error| OutputPresentationRevalidationError::Other(format!("Spout keepalive video output admission failed: {error}")))?;
     send_frame_if_authorized("Spout", engine, &authority, None, || {
-        send_strict_show_spout_black(
+        // Preserve the inner typed revoke separately from SDK errors while
+        // retaining the common outer authority fence.
+        Ok(send_authorized_show_spout_black(
+            engine,
+            &authority,
             sender,
             sender_name,
             show_control,
             "Spout physical keepalive send",
-        )
+        ))
     })
-    .map_err(|error| match error {
-        PhysicalOutputSendError::Revoked(reason) => reason,
-        PhysicalOutputSendError::Sdk(error) => error,
-    })
+    .and_then(|result| result)
+    .map_err(|error| classify_spout_keepalive_send_error(engine, &authority, error))
+}
+
+fn classify_spout_keepalive_send_error(
+    engine: &EngineHandle,
+    authority: &OutputPresentationAuthority,
+    error: PhysicalOutputSendError,
+) -> OutputPresentationRevalidationError {
+    match error {
+        PhysicalOutputSendError::Revoked(reason) => match
+            revalidate_output_presentation_authority_classified(engine, "Spout", authority) {
+                Err(error @ OutputPresentationRevalidationError::SafetyChanged(_)) => error,
+                _ => OutputPresentationRevalidationError::Other(reason),
+            },
+        PhysicalOutputSendError::Sdk(error) => OutputPresentationRevalidationError::Other(error),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     include!("show_spout_project_retirement_tests.rs");
+    include!("spout_safety_cycle_tests.rs");
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
 

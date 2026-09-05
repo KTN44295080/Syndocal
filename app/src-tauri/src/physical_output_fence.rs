@@ -471,10 +471,11 @@ impl OutputPresentationAuthority {
     }
 
     pub(super) fn project_blackout(&self) -> bool {
-        self.project_blackout
+        // S0 reservation precedes snapshot publication. Either authority
+        // requires black until both have cleared.
+        self.project_blackout || self.blackout_authority.engaged
     }
 
-    #[cfg(test)]
     pub(super) fn blackout_authority(&self) -> SafetyBlackoutAuthority {
         self.blackout_authority
     }
@@ -497,41 +498,53 @@ impl OutputPresentationAuthority {
     }
 }
 
+/// Safety changed after capture while ownership and the complete bound output
+/// still match. The content token may also have advanced (including for S0);
+/// this is a discard/reacquire classification, not proof of token provenance.
+#[derive(Debug)]
+pub(super) enum OutputPresentationRevalidationError {
+    SafetyChanged(String),
+    Other(String),
+}
+
+impl std::fmt::Display for OutputPresentationRevalidationError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::SafetyChanged(reason) | Self::Other(reason) => formatter.write_str(reason),
+        }
+    }
+}
+
 pub(super) fn revalidate_output_presentation_authority(
     engine: &EngineHandle,
     backend_label: &str,
     authority: &OutputPresentationAuthority,
 ) -> Result<(), String> {
+    revalidate_output_presentation_authority_classified(engine, backend_label, authority)
+        .map_err(|error| error.to_string())
+}
+
+pub(super) fn revalidate_output_presentation_authority_classified(
+    engine: &EngineHandle,
+    backend_label: &str,
+    authority: &OutputPresentationAuthority,
+) -> Result<(), OutputPresentationRevalidationError> {
     // Exact ownership role/state/generation/epoch/reasons/error continuity.
     let ownership = engine.output_ownership_status();
     if ownership != authority.ownership {
-        return Err(format!(
+        return Err(OutputPresentationRevalidationError::Other(format!(
             "{backend_label} output {} authority changed before send",
             authority.output.id
-        ));
+        )));
     }
     if ownership.state != OutputOwnershipState::Ready || !ownership.video_allowed {
-        return Err(format!(
+        return Err(OutputPresentationRevalidationError::Other(format!(
             "{backend_label} output {} is no longer owned for video presentation",
             authority.output.id
-        ));
+        )));
     }
     let sample = engine.video_presentation_sample();
     let current = &sample.snapshot;
-    // Safety blackout latch: visible bit plus engaged/epoch/generation
-    // authority.
-    if current.blackout != authority.project_blackout {
-        return Err(format!(
-            "{backend_label} output {} project safety blackout changed before send",
-            authority.output.id
-        ));
-    }
-    if engine.safety_blackout_authority() != authority.blackout_authority {
-        return Err(format!(
-            "{backend_label} output {} project safety blackout authority changed before send",
-            authority.output.id
-        ));
-    }
     // Exact route/kind/endpoint and output identity/mapping/enabled/
     // dimension continuity for the bound output.
     let output = current
@@ -540,24 +553,38 @@ pub(super) fn revalidate_output_presentation_authority(
         .iter()
         .find(|output| output.id == authority.output.id)
         .ok_or_else(|| {
-            format!(
+            OutputPresentationRevalidationError::Other(format!(
                 "{backend_label} output {} was removed before send",
                 authority.output.id
-            )
+            ))
         })?;
     if output.kind != authority.output.kind
         || output.endpoint_name.as_deref() != Some(authority.route_endpoint_name.as_str())
     {
-        return Err(format!(
+        return Err(OutputPresentationRevalidationError::Other(format!(
             "{backend_label} output {} bound route resource identity changed before send",
             authority.output.id
-        ));
+        )));
     }
     if output != &authority.output || !output.enabled {
-        return Err(format!(
+        return Err(OutputPresentationRevalidationError::Other(format!(
             "{backend_label} output {} route, mapping, or enablement changed before send",
             authority.output.id
-        ));
+        )));
+    }
+    // Safety blackout latch: visible bit plus engaged/epoch/generation
+    // authority.
+    if current.blackout != authority.project_blackout {
+        return Err(OutputPresentationRevalidationError::SafetyChanged(format!(
+            "{backend_label} output {} project safety blackout changed before send",
+            authority.output.id
+        )));
+    }
+    if engine.safety_blackout_authority() != authority.blackout_authority() {
+        return Err(OutputPresentationRevalidationError::SafetyChanged(format!(
+            "{backend_label} output {} project safety blackout authority changed before send",
+            authority.output.id
+        )));
     }
     // Presentation-content mutation fence: every published presentation
     // mutation — including a mutate/revert pair that restores deep equality
@@ -565,12 +592,12 @@ pub(super) fn revalidate_output_presentation_authority(
     // playback progress never advances it, so live position/transition
     // changes are admitted without mass revocation.
     if sample.config_token != authority.presentation_config_token {
-        return Err(format!(
+        return Err(OutputPresentationRevalidationError::Other(format!(
             "{backend_label} output {} presentation authority token advanced before send (captured {}, current {})",
             authority.output.id,
             authority.presentation_config_token,
             sample.config_token
-        ));
+        )));
     }
     Ok(())
 }
@@ -640,6 +667,17 @@ pub(super) fn send_frame_if_authorized<T>(
     follow_identity: Option<TimelineFollowActiveIdentity>,
     send: impl FnOnce() -> Result<T, String>,
 ) -> Result<T, PhysicalOutputSendError> {
+    send_frame_if_authorized_typed(backend_label, engine, authority, follow_identity,
+        || send().map_err(PhysicalOutputSendError::Sdk))
+}
+
+pub(super) fn send_frame_if_authorized_typed<T>(
+    backend_label: &str,
+    engine: &EngineHandle,
+    authority: &OutputPresentationAuthority,
+    follow_identity: Option<TimelineFollowActiveIdentity>,
+    send: impl FnOnce() -> Result<T, PhysicalOutputSendError>,
+) -> Result<T, PhysicalOutputSendError> {
     // FC-28 fail-close authority fence. The full revalidation compares the
     // captured ownership epoch/generation, safety-blackout authority, and
     // complete mapping/output identity against a fresh engine presentation
@@ -665,7 +703,36 @@ pub(super) fn send_frame_if_authorized<T>(
             engine.video_presentation_config_token()
         )));
     }
-    send().map_err(PhysicalOutputSendError::Sdk)
+    revalidate_final_sdk_authority(engine, authority)?;
+    send()
+}
+
+/// After transport-specific validation, check S0 reservation as well as its
+/// eventually published presentation token immediately before the SDK call.
+pub(super) fn revalidate_final_sdk_authority(
+    engine: &EngineHandle,
+    authority: &OutputPresentationAuthority,
+) -> Result<(), PhysicalOutputSendError> {
+    validate_final_sdk_sample(authority, engine.video_presentation_config_token(),
+        engine.safety_blackout_authority())
+}
+
+pub(super) fn validate_final_sdk_sample(
+    authority: &OutputPresentationAuthority,
+    token: u64,
+    safety: SafetyBlackoutAuthority,
+) -> Result<(), PhysicalOutputSendError> {
+    if token != authority.presentation_config_token
+        || safety != authority.blackout_authority
+    {
+        return Err(PhysicalOutputSendError::Revoked(
+            "Output presentation or safety authority changed immediately before SDK send".into()));
+    }
+    Ok(())
+}
+
+impl From<String> for PhysicalOutputSendError {
+    fn from(error: String) -> Self { Self::Sdk(error) }
 }
 
 /// Safety state is current-project authority, not historical Follow input.
@@ -692,6 +759,17 @@ pub(super) fn render_timeline_follow_hard_blackout_output(
         width: authority.output.width,
         height: authority.output.height,
     };
+    Ok(TimelineFollowOutputRenderDecision::Frame {
+        key,
+        frame: materialize_current_hard_blackout(authority)?,
+        result: TimelineFollowSettlementAckResult::Applied,
+        follow_identity: Some(timeline_follow_active_identity(follow)),
+    })
+}
+
+pub(super) fn materialize_current_hard_blackout(
+    authority: &OutputPresentationAuthority,
+) -> Result<video::VideoFrame, String> {
     let artistic = video::VideoOutputArtisticRenderResult {
         payload: video::VideoOutputArtisticPayload::HardBlackout,
         output_mapping: authority.output.mapping.clone(),
@@ -705,12 +783,7 @@ pub(super) fn render_timeline_follow_hard_blackout_output(
             error: None,
         },
     };
-    Ok(TimelineFollowOutputRenderDecision::Frame {
-        key,
-        frame: materialize_output_artistic_result(artistic, authority)?,
-        result: TimelineFollowSettlementAckResult::Applied,
-        follow_identity: Some(timeline_follow_active_identity(follow)),
-    })
+    materialize_output_artistic_result(artistic, authority)
 }
 
 /// Render the exact engine-owned Follow inputs through each snapshot's full

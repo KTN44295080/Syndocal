@@ -94,6 +94,9 @@ claim that independent engage/release cycle fixed. Current reported release
 failure occurred in the already-Faulted run; retest and keep this remaining work
 explicit. Do not weaken the validator as a shortcut.
 
+Follow-up implementation and acceptance status for this boundary are now owned
+by `SPOUT_SAFETY_BLACKOUT_2026-09-06.md`.
+
 Spout cadence logs from PID93684 so far contain only paused black keepalive,
 not live render frames. They do not establish the reported video-stutter cause.
 After native integration, the first user test is opening the unchanged Unity4K

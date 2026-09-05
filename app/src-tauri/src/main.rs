@@ -75077,9 +75077,13 @@ fn enable_show_spout_outputs_with_output_control_fence(
                                     project_callback_epoch.load(Ordering::Acquire),
                                 )?;
                                 let safety = engine.safety_blackout_authority();
-                                if safety.engaged
-                                    || safety.epoch != expected_safety_epoch
-                                    || safety.generation != expected_safety_generation
+                                // Initial activation remains bound to its exact S0
+                                // proof. Published workers capture current safety
+                                // per frame and discard stale frames before send.
+                                if !published_for_worker.load(Ordering::Acquire)
+                                    && (safety.engaged
+                                        || safety.epoch != expected_safety_epoch
+                                        || safety.generation != expected_safety_generation)
                                 {
                                     return Err("safety blackout authority changed".to_string());
                                 }
