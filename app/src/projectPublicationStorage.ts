@@ -502,6 +502,7 @@ export type ProjectPublicationStatusCommandV1 = ProjectPublicationCommandV1
   | "abandon_project_publication_v1";
 
 export type ProjectPublicationAdoptionCommandV1 = "adopt_project_publication_owner_v1";
+export type ProjectPublicationMissingResolutionCommandV1 = "resolve_missing_project_publication_v1";
 
 export interface ProjectPublicationControllerV1Options {
   invokeStatus: (
@@ -513,6 +514,7 @@ export interface ProjectPublicationControllerV1Options {
     newOwnerId: string,
   ) => Promise<unknown>;
   currentOwnerId: string;
+  resolveMissing: (request: ProjectPublicationRequestV1) => Promise<unknown>;
   publishQueuedAcknowledgement: () => Promise<void>;
   settleTerminal: (status: ProjectPublicationStatusV1) => Promise<void>;
   applyIndeterminate: (status: ProjectPublicationStatusV1) => Promise<void>;
@@ -520,6 +522,7 @@ export interface ProjectPublicationControllerV1Options {
   ensureMutationAllowed: (
     command: ProjectPublicationCommandV1
       | ProjectPublicationAdoptionCommandV1
+      | ProjectPublicationMissingResolutionCommandV1
       | "abandon_project_publication_v1",
   ) => void;
   confirmAbandon: (
@@ -696,6 +699,62 @@ export const createProjectPublicationControllerV1 = (
     return abandoned;
   };
 
+  // Receipt absence cannot prove whether an old renderer dispatched its request.
+  // Only the native journal can close that identity without losing a write or
+  // leaving a gap in the durable origin sequence.
+  const resolveRetiredMissing = async (
+    intent: ProjectPublicationIntentV1,
+  ): Promise<ProjectPublicationStatusV1 | null> => {
+    options.ensureMutationAllowed("resolve_missing_project_publication_v1");
+    const reply = await options.resolveMissing(intent.request);
+    if (!isRecord(reply) || reply.schemaVersion !== 1) {
+      throw new Error("Backend returned an invalid missing-publication resolution; the request was retained.");
+    }
+    if (reply.kind === "terminal" && hasExactKeys(reply, ["kind", "schemaVersion", "status"])) {
+      const status = projectPublicationStatusForRequestFromUnknown(reply.status, intent.request);
+      if (!status || !projectPublicationStatusIsTerminal(status.state)) {
+        throw new Error("Missing-publication resolution was not terminal; the request was retained.");
+      }
+      return recordStatus(status, intent.request);
+    }
+    const acknowledged = projectPublicationRequestFromUnknown(reply.request);
+    if (reply.kind !== "acknowledged"
+      || !hasExactKeys(reply, ["kind", "schemaVersion", "request", "shapeHash"])
+      || !acknowledged || !projectPublicationRequestMatches(acknowledged, intent.request)
+      || !isSha256(reply.shapeHash)) {
+      throw new Error("Backend returned mismatched missing-publication evidence; the request was retained.");
+    }
+    // Keep the existing durable ACK queue and exact idempotent native ACK as
+    // the final check; never apply an already-acknowledged old project image.
+    if (!queueProjectPublicationAcknowledgement(intent.request)) {
+      throw new Error("The recovered publication changed before acknowledgement could be queued.");
+    }
+    await options.publishQueuedAcknowledgement();
+    return null;
+  };
+
+  const publishFresh = async (
+    surface: ProjectPublicationSurfaceV1,
+    requestedReason: string | null,
+    requestedPolicy: ProjectPublicationTargetPolicyV1,
+    deferTerminalAcknowledgement: boolean,
+  ): Promise<ProjectPublicationStatusV1> => {
+    const command = publicationCommandForSurface(surface);
+    options.ensureMutationAllowed(command);
+    const authoritySeed = await options.captureSeed();
+    const intent = beginProjectPublicationIntent({
+      ...authoritySeed,
+      surface,
+      reason: requestedReason,
+      targetPolicy: requestedPolicy,
+    });
+    if (!intent) throw new Error("Unable to durably record the project publication request before it was sent.");
+    const status = await invokeParsed(command, intent.request);
+    if (!status) throw new Error("Backend did not return the project publication receipt.");
+    await settleObserved(status, deferTerminalAcknowledgement);
+    return status;
+  };
+
   const start = async (
     surface: ProjectPublicationSurfaceV1,
     reason: string | null = null,
@@ -712,10 +771,24 @@ export const createProjectPublicationControllerV1 = (
       const queried = await queryExisting(existing);
       existing = queried.intent;
       let observed = queried.status;
+      if (!observed && existing.request.ownerId !== options.currentOwnerId) {
+        observed = await resolveRetiredMissing(existing);
+        if (!observed || observed.state === "abandoned") {
+          if (observed) await settleObserved(observed, false);
+          return publishFresh(surface, requestedReason, requestedPolicy, deferTerminalAcknowledgement);
+        }
+      }
       if (observed) {
         const adopted = await adoptOwnerIfRequired(existing, observed);
         existing = adopted.intent;
         observed = adopted.status;
+        if (surface === "backup" && requestedReason === "autosave"
+          && existing.request.ownerId !== options.currentOwnerId && observed.state === "succeeded") {
+          // An old renderer's backup cannot certify the current autosave image.
+          // Finish its ACK before capturing this renderer's one fresh request.
+          await settleObserved(observed, false);
+          return publishFresh(surface, requestedReason, requestedPolicy, deferTerminalAcknowledgement);
+        }
         await settleObserved(observed, deferTerminalAcknowledgement);
         if (projectPublicationStatusIsTerminal(observed.state) || observed.state === "indeterminate") {
           if (!metadataMatches) {
@@ -753,20 +826,7 @@ export const createProjectPublicationControllerV1 = (
       return resumed;
     }
 
-    const command = publicationCommandForSurface(surface);
-    options.ensureMutationAllowed(command);
-    const authoritySeed = await options.captureSeed();
-    const intent = beginProjectPublicationIntent({
-      ...authoritySeed,
-      surface,
-      reason: requestedReason,
-      targetPolicy: requestedPolicy,
-    });
-    if (!intent) throw new Error("Unable to durably record the project publication request before it was sent.");
-    const status = await invokeParsed(command, intent.request);
-    if (!status) throw new Error("Backend did not return the project publication receipt.");
-    await settleObserved(status, deferTerminalAcknowledgement);
-    return status;
+    return publishFresh(surface, requestedReason, requestedPolicy, deferTerminalAcknowledgement);
   };
 
   const recover = async (): Promise<void> => {
@@ -777,8 +837,12 @@ export const createProjectPublicationControllerV1 = (
     intent = queried.intent;
     let status = queried.status;
     if (!status) {
-      options.onMissing(intent);
-      return;
+      if (intent.request.ownerId === options.currentOwnerId) {
+        options.onMissing(intent);
+        return;
+      }
+      status = await resolveRetiredMissing(intent);
+      if (!status) return;
     }
     const adopted = await adoptOwnerIfRequired(intent, status);
     status = adopted.status;

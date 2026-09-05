@@ -204,6 +204,7 @@ try {
     invokeStatus,
     adoptOwner = async () => assert.fail("unexpected project publication owner adoption"),
     currentOwnerId = seed.ownerId,
+    resolveMissing = async () => assert.fail("unexpected missing-publication resolution"),
     ensureMutationAllowed = () => {},
     confirmAbandon = () => false,
     applyTerminal = async () => {},
@@ -224,6 +225,10 @@ try {
         return adoptOwner(request, newOwnerId, controller);
       },
       currentOwnerId,
+      resolveMissing: async (request) => {
+        calls.push(["resolve-missing", structuredClone(request)]);
+        return resolveMissing(request);
+      },
       publishQueuedAcknowledgement: async () => {
         calls.push(["publish-queued-ack"]);
         const queued = publication.loadProjectPublicationAcknowledgement();
@@ -246,7 +251,7 @@ try {
       },
       captureSeed: async () => {
         calls.push(["capture-seed"]);
-        return structuredClone(seed);
+        return structuredClone({ ...seed, ownerId: currentOwnerId });
       },
       ensureMutationAllowed: (command) => {
         calls.push(["admission", command]);
@@ -894,6 +899,101 @@ try {
   assert.equal(terminalOldStatus.state, "cancelled");
   assert.equal(terminalHarness.calls.some((call) => call[0] === "adopt-owner"), false, "terminal receipts are never adopted");
 
+  // A retired renderer's missing receipt is resolved by the journal, never
+  // replayed under its old owner or silently replaced by the new owner.
+  for (const entry of ["start", "recover"]) {
+    publication.clearProjectPublicationStorageForTests();
+    const old = publication.beginProjectPublicationIntent(seed);
+    const before = storage.get("syndocal.projectPublication.v1");
+    const unresolved = createControllerHarness({
+      currentOwnerId: adoptedOwnerId,
+      invokeStatus: async (command) => {
+        assert.equal(command, "get_project_publication_receipt_v1");
+        return null;
+      },
+      resolveMissing: async () => { throw new Error("journal outcome unknown"); },
+    });
+    await assert.rejects(() => entry === "start"
+      ? unresolved.controller.start("backup", "autosave") : unresolved.controller.recover(), /journal outcome unknown/);
+    assert.equal(storage.get("syndocal.projectPublication.v1"), before);
+    assert.equal(unresolved.calls.some(call => ["capture-seed", "native-ack", "adopt-owner"].includes(call[0])), false);
+    assert.deepEqual(unresolved.calls.find(call => call[0] === "resolve-missing")[1], old.request);
+  }
+
+  for (const resolutionKind of ["terminal", "acknowledged"]) {
+    publication.clearProjectPublicationStorageForTests();
+    const old = publication.beginProjectPublicationIntent(seed);
+    const resolved = createControllerHarness({
+      currentOwnerId: adoptedOwnerId,
+      invokeStatus: async (command, request) => {
+        if (command === "get_project_publication_receipt_v1") return null;
+        assert.equal(command, "save_project_backup_v1");
+        assert.equal(request.ownerId, adoptedOwnerId);
+        assert.equal(request.requestId, old.request.requestId + 1);
+        return backupSuccessStatus(request);
+      },
+      resolveMissing: async request => resolutionKind === "terminal"
+        ? { schemaVersion: 1, kind: "terminal", status: pendingStatus(request, "abandoned") }
+        : { schemaVersion: 1, kind: "acknowledged", request, shapeHash: "d".repeat(64) },
+    });
+    const saved = await resolved.controller.start("backup", "autosave");
+    assert.equal(saved.state, "succeeded");
+    assert.equal(publication.loadProjectPublicationIntent(), null);
+    assert.equal(publication.loadProjectPublicationAcknowledgement(), null);
+    assert.equal(resolved.calls.filter(call => call[0] === "capture-seed").length, 1);
+    assert.equal(resolved.calls.filter(call => call[0] === "adopt-owner").length, 0);
+    assert.deepEqual(resolved.calls.filter(call => call[0] === "apply-terminal").map(call => call[1]),
+      resolutionKind === "terminal" ? ["abandoned", "succeeded"] : ["succeeded"]);
+  }
+
+  for (const badReply of [
+    // Resolution replies must remain strict even when the old request exists.
+    () => null,
+    request => ({ schemaVersion: 2, kind: "acknowledged", request, shapeHash: "d".repeat(64) }),
+    request => ({ schemaVersion: 1, kind: "acknowledged", request: { ...request, ownerId: adoptedOwnerId }, shapeHash: "d".repeat(64) }),
+    request => ({ schemaVersion: 1, kind: "terminal", status: pendingStatus(request, "reserved") }),
+  ]) {
+    publication.clearProjectPublicationStorageForTests();
+    publication.beginProjectPublicationIntent(seed);
+    const before = storage.get("syndocal.projectPublication.v1");
+    const invalid = createControllerHarness({ currentOwnerId: adoptedOwnerId,
+      invokeStatus: async () => null, resolveMissing: async request => badReply(request) });
+    await assert.rejects(() => invalid.controller.recover(), /resolution|evidence/);
+    assert.equal(storage.get("syndocal.projectPublication.v1"), before);
+  }
+
+  for (const terminalViaResolver of [false, true]) {
+    publication.clearProjectPublicationStorageForTests();
+    const old = publication.beginProjectPublicationIntent(seed);
+    const recoveredBackup = createControllerHarness({ currentOwnerId: adoptedOwnerId,
+      invokeStatus: async (command, request) => {
+        if (command === "get_project_publication_receipt_v1") {
+          return terminalViaResolver ? null : backupSuccessStatus(old.request);
+        }
+        assert.equal(request.ownerId, adoptedOwnerId);
+        assert.equal(request.requestId, old.request.requestId + 1);
+        return backupSuccessStatus(request);
+      },
+      resolveMissing: async request => ({ schemaVersion: 1, kind: "terminal", status: backupSuccessStatus(request) }),
+    });
+    const currentBackup = await recoveredBackup.controller.start("backup", "autosave");
+    assert.equal(currentBackup.request.ownerId, adoptedOwnerId, "old backup success must not certify the current image");
+    assert.equal(recoveredBackup.calls.filter(call => call[0] === "capture-seed").length, 1);
+    const oldAck = recoveredBackup.calls.findIndex(call => call[0] === "native-ack" && call[1] === old.request.requestId);
+    assert.ok(oldAck >= 0 && oldAck < recoveredBackup.calls.findIndex(call => call[0] === "capture-seed"));
+  }
+
+  publication.clearProjectPublicationStorageForTests();
+  const oldAck = publication.beginProjectPublicationIntent(seed);
+  const lostAck = createControllerHarness({ currentOwnerId: adoptedOwnerId,
+    invokeStatus: async () => null,
+    resolveMissing: async request => ({ schemaVersion: 1, kind: "acknowledged", request, shapeHash: "d".repeat(64) }),
+    acknowledgeTerminal: async () => { throw new Error("exact ACK reply lost"); },
+  });
+  await assert.rejects(() => lostAck.controller.recover(), /exact ACK reply lost/);
+  assert.deepEqual(publication.loadProjectPublicationAcknowledgement(), oldAck.request);
+  assert.equal(lostAck.calls.some(call => call[0] === "capture-seed" || call[0] === "apply-terminal"), false);
+
   publication.clearProjectPublicationStorageForTests();
   storage.set("syndocal.projectPublication.v1", JSON.stringify({
     version: 1,
@@ -919,6 +1019,7 @@ try {
     assert.equal(operator.operatorCommandAllowed("Partial", maintenance, false), true, `${maintenance} must remain available for durable receipt recovery under Partial Lock`);
   }
   for (const publicationMutation of [
+    "resolve_missing_project_publication_v1",
     "adopt_project_publication_owner_v1",
     "save_project_v1",
     "save_project_as_v1",
@@ -949,6 +1050,7 @@ const handlerBlock = mainSource.slice(
   mainSource.indexOf("tauri::generate_handler!") + 25_000,
 );
 const v1Commands = [
+  "resolve_missing_project_publication_v1",
   "adopt_project_publication_owner_v1",
   "save_project_v1",
   "save_project_as_v1",
@@ -995,8 +1097,8 @@ const controllerOffset = storageSource.indexOf("export const createProjectPublic
 const controllerBlock = storageSource.slice(controllerOffset, controllerOffset + 15_000);
 assert.ok(controllerOffset >= 0, "shared production V1 publication controller must exist");
 assert.ok(
-  controllerBlock.indexOf("const queried = await queryExisting(existing)")
-    < controllerBlock.indexOf("options.captureSeed()"),
+  controllerBlock.slice(controllerBlock.indexOf("const start = async")).indexOf("const queried = await queryExisting(existing)")
+    < controllerBlock.slice(controllerBlock.indexOf("const start = async")).indexOf("return publishFresh("),
   "stored intent must be queried before any fresh mapping flush/current authority capture",
 );
 assert.match(controllerBlock, /different durable project publication request is unresolved/, "new UI actions must block rather than reuse a different pending request");

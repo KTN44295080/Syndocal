@@ -265,6 +265,7 @@ export const FRONTEND_TAURI_INVOKE_COMMANDS = [
   "reset_engine_telemetry",
   "reset_show_spout_outputs_v1",
   "reset_video_layer_isf_effect",
+  "resolve_missing_project_publication_v1",
   "revalidate_asio_program_cue_output",
   "rotate_dj_link_token",
   "run_phase1_smoke",

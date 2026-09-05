@@ -28,6 +28,7 @@ use media_asset_preview_contract::{
 #[cfg(test)]
 use media_asset_preview_contract::MEDIA_ASSET_THUMBNAIL_MAX_EDGE;
 mod project_snapshot_persistence;
+mod project_publication_missing;
 use project_snapshot_persistence::{
     clear_runtime_programmer_state, node_graph_for_persistence, normalize_project_timeline_layers,
     project_snapshot_for_save, use_authored_video_snapshot,
@@ -24939,7 +24940,7 @@ fn runtime_route_dispatch_policy(command: &str) -> Option<RuntimeInvokeDispatchP
 /// App-command admission is intentionally outside the generated Tauri
 /// dispatcher so raw `window.__TAURI_INTERNALS__.invoke` calls cross the same
 /// authority seam as facade calls. Plugin IPC is routed by Tauri before this
-/// application handler and is not part of the frozen 480-command inventory.
+/// application handler and is not part of the reviewed application inventory.
 fn admit_tauri_app_invoke<R: tauri::Runtime>(
     invoke: &tauri::ipc::Invoke<R>,
 ) -> Result<Option<ProjectTransactionLaneGuard>, String> {
@@ -51862,6 +51863,20 @@ fn commit_prepared_project_publication_observation_v1(
             Err(error)
         }
     }
+}
+
+#[tauri::command]
+fn resolve_missing_project_publication_v1(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    request: ProjectPublicationRequestV1,
+    current_owner_id: String,
+) -> Result<project_publication_missing::MissingPublicationResolutionV1, String> {
+    let app = project_swap_app_handle(&state)?;
+    let journal_path = project_recovery_authority_state_path(&app)?;
+    project_publication_missing::resolve_for_window(
+        &state, window.label(), &journal_path, request, current_owner_id,
+    )
 }
 
 #[tauri::command]
@@ -129993,6 +130008,7 @@ fn main() {
             save_project_as_v1,
             adopt_project_publication_owner_v1,
             get_project_publication_receipt_v1,
+            resolve_missing_project_publication_v1,
             acknowledge_project_publication_receipt_v1,
             abandon_project_publication_v1,
             load_project,

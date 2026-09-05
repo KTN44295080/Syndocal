@@ -61,9 +61,9 @@ const KEYBOARD_SHORTCUT_SOURCE_MANIFEST: &str =
 const KEYBOARD_SHORTCUT_SOURCE_MANIFEST_SCHEMA_VERSION: u16 = 1;
 const KEYBOARD_APP_SHORTCUT_SOURCE_COUNT: usize = 30;
 const KEYBOARD_PROJECT_FILE_SHORTCUT_SOURCE_COUNT: usize = 3;
-const FROZEN_TAURI_ROUTE_ADMISSION_COUNT: usize = 509;
+const FROZEN_TAURI_ROUTE_ADMISSION_COUNT: usize = 510;
 const FROZEN_TAURI_ROUTE_ADMISSION_SHA256: &str =
-    "d806e8380462507a590fdd795d5bb21fe9c1bd2bd16f65da725d103af2aa7486";
+    "1f9232298f721315ba798b39e29c4768cf3aeeb7179ae973da1d78bb78ef865c";
 /// The command source is parsed and validated exactly once.  Local discovery
 /// calls only clone this immutable, validated value; they never parse source
 /// text or make an external request on the invocation path.
@@ -197,6 +197,7 @@ fn classify_registered_tauri_route(command: &str) -> Option<TauriRouteAdmissionC
         "lock_project_operator_session"
             | "unlock_project_operator_session"
             | "adopt_project_publication_owner_v1"
+            | "resolve_missing_project_publication_v1"
             | "get_project_publication_receipt_v1"
             | "acknowledge_project_publication_receipt_v1"
             | "abandon_project_publication_v1"
@@ -2064,6 +2065,10 @@ mod tests {
         );
         for (route, expected) in [
             (
+                "resolve_missing_project_publication_v1",
+                TauriRouteAdmissionClass::RecoveryMaintenance,
+            ),
+            (
                 "register_project_transaction_owner",
                 TauriRouteAdmissionClass::RecoveryMaintenance,
             ),
@@ -2253,7 +2258,7 @@ mod tests {
         assert_eq!(counts[&TauriRouteAdmissionClass::RuntimeMutation], 156);
         assert_eq!(counts[&TauriRouteAdmissionClass::FileExportMutation], 20);
         assert_eq!(counts[&TauriRouteAdmissionClass::SafetyMutation], 1);
-        assert_eq!(counts[&TauriRouteAdmissionClass::RecoveryMaintenance], 26);
+        assert_eq!(counts[&TauriRouteAdmissionClass::RecoveryMaintenance], 27);
         assert_eq!(counts[&TauriRouteAdmissionClass::Retired], 29);
         assert_eq!(tauri_route_admission_class("patch_fixture"), None);
         assert_eq!(
@@ -2313,7 +2318,7 @@ mod tests {
             + OSC_INPUT_EVENT_COUNT
             + DMX_INPUT_PROTOCOL_COUNT
             + DMX_INPUT_EVENT_COUNT;
-        const FRONTEND_INVOKE_COUNT: usize = 449;
+        const FRONTEND_INVOKE_COUNT: usize = 450;
         assert_eq!(MIDI_OSC_DMX_OPERATION_COUNT, 206);
         assert_eq!(
             registry.operations.len(),
@@ -2323,7 +2328,7 @@ mod tests {
                 + MIDI_OSC_DMX_OPERATION_COUNT
                 + FRONTEND_INVOKE_COUNT
         );
-        assert_eq!(registry.operations.len(), 1558);
+        assert_eq!(registry.operations.len(), 1560);
         verify_registry_exact_set(&names, &registry).unwrap();
         let r0 = registry
             .operations
@@ -2680,15 +2685,15 @@ mod tests {
         const ENGINE_COUNT: usize = 278;
         const REMOTE_COUNT: usize = 116;
         const MIDI_OSC_DMX_COUNT: usize = 206;
-        const FRONTEND_COUNT: usize = 449;
+        const FRONTEND_COUNT: usize = 450;
         const LEGACY_SOURCE_TOTAL: usize =
             TAURI_COUNT + ENGINE_COUNT + REMOTE_COUNT + MIDI_OSC_DMX_COUNT + FRONTEND_COUNT;
         const KEYBOARD_APP_COUNT: usize = 30;
         const KEYBOARD_PROJECT_FILE_COUNT: usize = 3;
         const SOURCE_TOTAL: usize =
             LEGACY_SOURCE_TOTAL + KEYBOARD_APP_COUNT + KEYBOARD_PROJECT_FILE_COUNT;
-        assert_eq!(LEGACY_SOURCE_TOTAL, 1558);
-        assert_eq!(SOURCE_TOTAL, 1591);
+        assert_eq!(LEGACY_SOURCE_TOTAL, 1560);
+        assert_eq!(SOURCE_TOTAL, 1593);
         assert_eq!(canonical.source_inventory.len(), SOURCE_TOTAL);
         assert_eq!(canonical.canonical_operations.len(), 46);
 
@@ -3040,7 +3045,9 @@ mod tests {
         // The additional atomic Show Spout Reset engine source is deliberately
         // retained as an unclassified engine source; its local Tauri route is
         // the canonical Reset operation.
-        assert_eq!(unclassified.len(), 1091);
+        // The missing-publication recovery route is local maintenance, not a
+        // separately reviewed canonical operation.
+        assert_eq!(unclassified.len(), 1092);
         assert_eq!(support_phases.len(), 0);
         assert_eq!(
             direct.len()
@@ -3753,12 +3760,12 @@ mod tests {
     #[test]
     fn legacy_v1_registry_json_and_count_remain_inventory_honest() {
         let legacy = registry().unwrap();
-        // 1557 prior legacy sources plus the exact Reset engine descriptor.
-        assert_eq!(legacy.operations.len(), 1558);
+        // Includes both the native and frontend missing-publication resolver.
+        assert_eq!(legacy.operations.len(), 1560);
         let encoded = serde_json::to_value(&legacy).unwrap();
         assert_eq!(encoded["schema"]["version"], CONTROL_PLANE_SCHEMA_VERSION);
         let operations = encoded["operations"].as_array().unwrap();
-        assert_eq!(operations.len(), 1558);
+        assert_eq!(operations.len(), 1560);
         assert!(operations.iter().all(|operation| {
             operation["source_family"] != "keyboard_app"
                 && operation["source_family"] != "keyboard_project_file"

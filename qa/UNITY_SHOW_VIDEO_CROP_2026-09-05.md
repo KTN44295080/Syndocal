@@ -198,3 +198,9 @@ its native playback evidence is in `PREVIEW_CLOCK_FIXTURE_AIM_2026-09-05.md`.
   Actual successful replacement and Unity Spout receipt remain unverified; remove
   observer and restart normally after these checks. Commit covers source regression
   and native build/startup evidence, not end-to-end Unity acceptance.
+- Afterward, read-only native status confirmed the user-loaded4K project path and
+  live SpoutSender foreground3840×2160 configuration. The load blocker is no longer
+  present in that observation. User explicitly deferred Unity physical testing.
+  Follow-up autosave repair is tracked in
+  `PROJECT_PUBLICATION_RESTART_RECOVERY_2026-09-05.md`; do not resume Unity output
+  testing automatically while the user is away.

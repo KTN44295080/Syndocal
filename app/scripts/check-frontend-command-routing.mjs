@@ -404,8 +404,8 @@ assert.deepEqual(
   "the exact Spout V2 enable and local reset routes must remain present exactly once",
 );
 assert(!manifest.includes("enable_show_spout_outputs_v1"), "the retired Spout V1 route must remain unreachable");
-assert.equal(manifest.length, 449, "frontend Tauri manifest count drifted");
-assert.equal(backendRendererMutations.length, 131, "backend renderer-ticketed classification count drifted");
+assert.equal(manifest.length, 450, "frontend Tauri manifest count drifted");
+assert.equal(backendRendererMutations.length, 132, "backend renderer-ticketed classification count drifted");
 assert.equal(backendServerMutations.length, 31, "backend authoritative classification count drifted");
 assert.deepEqual(
   [...rendererMutations].sort(),

@@ -790,12 +790,14 @@ import {
   saveRecentProjectPaths,
   touchRecentProjectPath,
 } from "./projectRecentStorage";
+import { createProjectAutosaveCoordinator } from "./projectAutosaveCoordinator";
 import {
   acknowledgeProjectPublicationIntent,
   createProjectPublicationControllerV1,
   loadProjectPublicationAcknowledgement,
   settleProjectPublicationStatusV1,
   type ProjectPublicationAdoptionCommandV1,
+  type ProjectPublicationMissingResolutionCommandV1,
   type ProjectPublicationCommandV1,
   type ProjectPublicationRequestSeedV1,
 } from "./projectPublicationStorage";
@@ -1941,7 +1943,7 @@ const {
   commitProjectTransactionWithRecovery,
   recoverPublishedProjectTransactionCommandResult,
 } = createProjectTransactionRecoveryController({
-  invoke: tauriInvoke,
+  invoke: (command, args) => tauriInvoke(command, args),
   dispatchHistoryMutation: (mutation) => window.dispatchEvent(
     new CustomEvent<ProjectHistoryMutationResult>(projectHistoryChangedEvent, { detail: mutation }),
   ),
@@ -5322,11 +5324,11 @@ export default function App() {
   // generation instead of deleting data on an event-only notification.
   let recoveryCheckpointNeedsReplacement = false;
   let recoveryTombstoneWarningGeneration: number | null = null;
-  // A recovery write intentionally does not serialize slow backend/file work.
-  // Its monotonic request number instead makes reverse completion latest-wins.
+  // Timer captures run one at a time. The generation also fences identity
+  // replacement and other recovery work while backend/file operations await.
   let projectRecoveryWriteGeneration = 0;
   let lastDesktopBackupSignature: string | null = null;
-  let lastDesktopBackupAt = 0;
+  const projectAutosaveCoordinator = createProjectAutosaveCoordinator(!paneWindow);
   const applyAuthoritativeProjectHistoryStatus = (status: ProjectHistoryStatus): boolean => {
     if (!projectAuthorityCanApplyHistoryStatus(
       status,
@@ -11462,6 +11464,7 @@ export default function App() {
       // journal handshake.
       return;
     }
+    if (!projectAutosaveCoordinator.beginRecovery()) return;
     try {
       // Every persistence capture sees the same mapping authority as an
       // explicit Save. A debounced mapping edit cannot be omitted from a
@@ -11544,18 +11547,21 @@ export default function App() {
         recoveryCheckpointNeedsReplacement = false;
         activeProjectRecoveryIntent = null;
         setProjectRecoveryCheckpoint(checkpoint);
+        projectAutosaveCoordinator.recoverySucceeded();
       }
-      const now = Date.now();
-      if (signature !== lastDesktopBackupSignature && now - lastDesktopBackupAt >= 60_000) {
+      if (projectAutosaveCoordinator.beginDesktopBackup(signature !== lastDesktopBackupSignature)) {
         const backup = await startProjectPublication("backup", "autosave");
         if (backup.state !== "succeeded") {
           throw new Error(backup.error ?? `Autosave backup is ${backup.state}.`);
         }
         lastDesktopBackupSignature = signature;
-        lastDesktopBackupAt = now;
+        projectAutosaveCoordinator.recoverySucceeded();
       }
     } catch (error) {
-      setMessage(`Recovery checkpoint failed: ${String(error)}`);
+      const message = `Recovery checkpoint failed: ${String(error)}`;
+      if (projectAutosaveCoordinator.shouldReportError(message)) setMessage(message);
+    } finally {
+      projectAutosaveCoordinator.finishRecovery();
     }
   };
 
@@ -15392,6 +15398,7 @@ export default function App() {
   const ensureProjectPublicationMutationAllowed = (
     command: ProjectPublicationCommandV1
       | ProjectPublicationAdoptionCommandV1
+      | ProjectPublicationMissingResolutionCommandV1
       | "abandon_project_publication_v1",
   ) => {
     if (operatorCommandAllowed(activeOperatorLockMode, command, true)) return;
@@ -15520,6 +15527,14 @@ export default function App() {
   const projectPublicationController = createProjectPublicationControllerV1({
     invokeStatus: (command, request) => invokeProjectPublicationCommand<unknown>(command, request),
     adoptOwner: adoptProjectPublicationOwner,
+    resolveMissing: async (request) => {
+      ensureProjectPublicationMutationAllowed("resolve_missing_project_publication_v1");
+      await awaitProjectTransactionOwnerRegistrationBarrier();
+      return tauriInvoke<unknown>("resolve_missing_project_publication_v1", {
+        request,
+        currentOwnerId: projectTransactionOwnerId,
+      });
+    },
     currentOwnerId: projectTransactionOwnerId,
     publishQueuedAcknowledgement: async () => {
       await publishProjectPublicationAcknowledgement();
@@ -15536,7 +15551,7 @@ export default function App() {
     },
     onPending: (status) => setMessage(projectPublicationPendingMessage(status)),
     onMissing: () => setMessage(
-      "A durable project publication request was recorded before dispatch. Retry the same action to resume it.",
+      "A saved publication request has no current receipt. Its dispatch state is unconfirmed; retry the same action to query or resume it.",
     ),
     onAbandoned: (intent, requestedSurface) => {
       const description = intent.request.surface.replaceAll("_", " ");
@@ -15558,7 +15573,7 @@ export default function App() {
 
   let projectPublicationStartupRecoveryStarted = false;
   const initializeProjectPublicationRecovery = async () => {
-    if (!isTauriRuntime() || projectPublicationStartupRecoveryStarted) return;
+    if (!isTauriRuntime() || paneWindow || projectPublicationStartupRecoveryStarted) return;
     projectPublicationStartupRecoveryStarted = true;
     try {
       await projectPublicationController.recover();
