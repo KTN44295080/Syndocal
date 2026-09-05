@@ -1052,26 +1052,9 @@ impl SpoutRouteWorker {
                                     Some(authority),
                                 )),
                         },
-                        Err(OutputPresentationRevalidationError::SafetyChanged(reason)) => Ok((
-                            TimelineFollowOutputRenderDecision::Retry {
-                                reason,
-                                key: follow.as_ref().and_then(|follow| timeline_follow_output_key(follow, output_id).ok()),
-                            },
-                            None,
-                        )),
-                        Err(OutputPresentationRevalidationError::Other(error)) => match follow.as_ref() {
-                            Some(follow) => {
-                                let retry_key = timeline_follow_output_key(follow, output_id).ok();
-                                Ok((
-                                    TimelineFollowOutputRenderDecision::Retry {
-                                        reason: error,
-                                        key: retry_key,
-                                    },
-                                    None,
-                                ))
-                            }
-                            None => Err(error),
-                        },
+                        Err(error) => {
+                            spout_render_error_decision(error, follow.as_ref(), output_id)
+                        }
                     };
                     if let Err(error) = &rendered {
                         if let Some(follow) = follow.as_ref() {
@@ -1508,7 +1491,11 @@ where
                         timing.sent(start.elapsed(), keepalive_result.is_ok(), true);
                     }
                     if let Err(error) = keepalive_result {
-                        if matches!(&error, OutputPresentationRevalidationError::SafetyChanged(_)) {
+                        if matches!(
+                            &error,
+                            OutputPresentationRevalidationError::SafetyChanged(_)
+                                | OutputPresentationRevalidationError::PresentationChanged(_)
+                        ) {
                             if let Some(remaining) = target_interval.checked_sub(started.elapsed()) {
                                 std::thread::sleep(remaining);
                             }
@@ -1971,10 +1958,44 @@ fn classify_spout_keepalive_send_error(
     match error {
         PhysicalOutputSendError::Revoked(reason) => match
             revalidate_output_presentation_authority_classified(engine, "Spout", authority) {
-                Err(error @ OutputPresentationRevalidationError::SafetyChanged(_)) => error,
+                Err(error @ (OutputPresentationRevalidationError::SafetyChanged(_)
+                | OutputPresentationRevalidationError::PresentationChanged(_))) => error,
                 _ => OutputPresentationRevalidationError::Other(reason),
             },
         PhysicalOutputSendError::Sdk(error) => OutputPresentationRevalidationError::Other(error),
+    }
+}
+
+fn spout_render_error_decision(
+    error: OutputPresentationRevalidationError,
+    follow: Option<&engine::TimelineFollowVideoRenderSnapshot>,
+    output_id: u64,
+) -> Result<
+    (
+        TimelineFollowOutputRenderDecision,
+        Option<OutputPresentationAuthority>,
+    ),
+    String,
+> {
+    match error {
+        OutputPresentationRevalidationError::SafetyChanged(reason)
+        | OutputPresentationRevalidationError::PresentationChanged(reason) => Ok((
+            TimelineFollowOutputRenderDecision::Retry {
+                reason,
+                key: follow.and_then(|follow| timeline_follow_output_key(follow, output_id).ok()),
+            },
+            None,
+        )),
+        OutputPresentationRevalidationError::Other(error) => match follow {
+            Some(follow) => Ok((
+                TimelineFollowOutputRenderDecision::Retry {
+                    reason: error,
+                    key: timeline_follow_output_key(follow, output_id).ok(),
+                },
+                None,
+            )),
+            None => Err(error),
+        },
     }
 }
 
@@ -1982,6 +2003,7 @@ fn classify_spout_keepalive_send_error(
 mod tests {
     include!("show_spout_project_retirement_tests.rs");
     include!("spout_safety_cycle_tests.rs");
+    include!("spout_blackout_recovery_tests.rs");
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
 

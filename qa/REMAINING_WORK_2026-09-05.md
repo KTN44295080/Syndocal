@@ -150,7 +150,7 @@ Out of scope 6。Open 50行を未実装50件と数えない。
 | 限定対応済 | clip/transition/Follow/transportの小さいruntime取得が全snapshotをcloneしていた | 専用snapshot_readへ分離して必要fieldのみ取得。synthetic比較と既存runtime回帰を実施。tick構築と一般snapshot読取は未変更 |
 | 高 | `main.rs` の `engine_snapshot_delta` は深い比較/clone。Stage 30Hz consumerに対しUI apply間引きだけではbackend仕事量は減らない | 上記snapshot計測とまとめて検証してからrevision/dirty trackingを選ぶ |
 | 対応済 | libraryOnlyで非表示の旧mixer consumerがmountされ続けていた | 条件mountへ変更。FXはclosed/open/closedで0/1/0。CPU/FPS改善率は未計測 |
-| 高 | 録画のblocking stdin writeとStop joinに期限なし | fake encoderの停止・無応答で停止上限を設計/試験。今回のstderr排出だけで解消としない |
+| 高・一部対応 | 録画のblocking stdin write、encoder/renderer処理とDropに期限なし | 明示Stopのworker待機と二重Start防止は[続行記録](RECORDING_LIFECYCLE_2026-09-06.md)へ。encoderの正常確定を維持した停止上限は未解決で、250msのworker待機だけで全Stop完了としない |
 
 ### 肥大化ファイルの分割順序
 

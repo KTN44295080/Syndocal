@@ -72,6 +72,52 @@ fn output_blackout_target_video_fence_ignores_lighting_and_preserves_s0() {
         );
         assert_eq!(sends, 1);
         engine
+            .set_output_blackout_published(
+                Target::Video,
+                false,
+                Instant::now() + Duration::from_secs(2),
+            )
+            .unwrap();
+        assert!(matches!(
+            revalidate_output_presentation_authority_classified(&engine, "Target test", &visible),
+            Err(OutputPresentationRevalidationError::PresentationChanged(_))
+        ));
+        assert!(
+            send_frame_if_authorized("Target test", &engine, &visible, None, || {
+                sends += 1;
+                Ok(())
+            })
+            .is_err()
+        );
+        assert_eq!(
+            sends, 1,
+            "the ON/OFF round trip cannot revive a stale frame"
+        );
+        let fresh = capture();
+        assert!(!fresh.project_blackout());
+        revalidate_output_presentation_authority_classified(&engine, "Target test", &fresh)
+            .unwrap();
+        let mut wrong_route = fresh.clone();
+        wrong_route.route_endpoint_name = "retired route".into();
+        assert!(matches!(
+            revalidate_output_presentation_authority_classified(
+                &engine,
+                "Target test",
+                &wrong_route
+            ),
+            Err(OutputPresentationRevalidationError::Other(_))
+        ));
+        let mut wrong_owner = fresh.clone();
+        wrong_owner.ownership.epoch = wrong_owner.ownership.epoch.saturating_add(1);
+        assert!(matches!(
+            revalidate_output_presentation_authority_classified(
+                &engine,
+                "Target test",
+                &wrong_owner
+            ),
+            Err(OutputPresentationRevalidationError::Other(_))
+        ));
+        engine
             .safety_blackout_engage_published(Instant::now() + Duration::from_secs(2))
             .unwrap();
         engine

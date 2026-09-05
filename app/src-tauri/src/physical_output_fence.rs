@@ -498,19 +498,22 @@ impl OutputPresentationAuthority {
     }
 }
 
-/// Safety changed after capture while ownership and the complete bound output
-/// still match. The content token may also have advanced (including for S0);
-/// this is a discard/reacquire classification, not proof of token provenance.
+/// A stale safety/content observation can be discarded and reacquired only
+/// after ownership and the complete bound output still match. Neither variant
+/// permits sending the old frame or proves the provenance of a content token.
 #[derive(Debug)]
 pub(super) enum OutputPresentationRevalidationError {
     SafetyChanged(String),
+    PresentationChanged(String),
     Other(String),
 }
 
 impl std::fmt::Display for OutputPresentationRevalidationError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::SafetyChanged(reason) | Self::Other(reason) => formatter.write_str(reason),
+            Self::SafetyChanged(reason)
+            | Self::PresentationChanged(reason)
+            | Self::Other(reason) => formatter.write_str(reason),
         }
     }
 }
@@ -592,7 +595,7 @@ pub(super) fn revalidate_output_presentation_authority_classified(
     // playback progress never advances it, so live position/transition
     // changes are admitted without mass revocation.
     if sample.config_token != authority.presentation_config_token {
-        return Err(OutputPresentationRevalidationError::Other(format!(
+        return Err(OutputPresentationRevalidationError::PresentationChanged(format!(
             "{backend_label} output {} presentation authority token advanced before send (captured {}, current {})",
             authority.output.id,
             authority.presentation_config_token,
