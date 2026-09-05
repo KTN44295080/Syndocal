@@ -13,8 +13,9 @@ use std::{
 
 mod control_plane;
 mod move_path;
-mod snapshot_read;
 mod show_serial_dmx_status;
+mod snapshot_read;
+mod telemetry_percentiles;
 mod timeline_audio_live_fence;
 mod timeline_follow_hold;
 
@@ -24,6 +25,7 @@ use show_serial_dmx_status::{
     require_show_serial_dmx_enable_admission, ShowSerialDmxRouteStatusStore,
 };
 pub use show_serial_dmx_status::{ShowSerialDmxRouteStatus, ShowSerialDmxRouteStatusSnapshot};
+use telemetry_percentiles::PercentileWindow;
 pub use timeline_audio_live_fence::TimelineAudioLiveFence;
 use timeline_follow_hold::{
     destination_first_measure_hold_plan, resolve_follow_duration_ms,
@@ -192,7 +194,6 @@ const DMX_TICK_INTERVAL: Duration = Duration::from_micros(22_727);
 const LOW_LATENCY_DMX_TICK_THRESHOLD: Duration = Duration::from_micros(5_000);
 const TICK_SPIN_THRESHOLD: Duration = Duration::from_millis(1);
 const LIVE_AUDIO_SPECTRUM_TTL: Duration = Duration::from_millis(250);
-const JITTER_PERCENTILE_WINDOW: usize = 256;
 const DMX_RECONNECT_BASE_DELAY: Duration = Duration::from_millis(250);
 const DMX_RECONNECT_MAX_DELAY: Duration = Duration::from_secs(10);
 const AUTO_VJ_ACTION_LOG_LIMIT: usize = 64;
@@ -20619,15 +20620,11 @@ struct EngineRuntime {
     tick_jitter_samples: u64,
     tick_jitter_mean_us: f64,
     tick_jitter_m2_us: f64,
-    tick_jitter_abs_window: [u64; JITTER_PERCENTILE_WINDOW],
-    tick_jitter_abs_window_len: usize,
-    tick_jitter_abs_window_index: usize,
+    tick_jitter_abs_window: PercentileWindow,
     last_command_queue_latency_us: u64,
     command_queue_latency_abs_max_us: u64,
     command_queue_latency_samples: u64,
-    command_queue_latency_window: [u64; JITTER_PERCENTILE_WINDOW],
-    command_queue_latency_window_len: usize,
-    command_queue_latency_window_index: usize,
+    command_queue_latency_window: PercentileWindow,
     last_command_drain_count: usize,
     command_drain_abs_max: usize,
     command_drain_limit_hit_count: u64,
@@ -20635,9 +20632,7 @@ struct EngineRuntime {
     last_command_to_dmx_tick_latency_us: u64,
     command_to_dmx_tick_latency_abs_max_us: u64,
     command_to_dmx_tick_latency_samples: u64,
-    command_to_dmx_tick_latency_window: [u64; JITTER_PERCENTILE_WINDOW],
-    command_to_dmx_tick_latency_window_len: usize,
-    command_to_dmx_tick_latency_window_index: usize,
+    command_to_dmx_tick_latency_window: PercentileWindow,
     low_latency_dmx_tick_requested: bool,
     low_latency_dmx_tick_advanced: bool,
     last_dmx_output_tick_at: Option<Instant>,
@@ -21056,15 +21051,11 @@ impl EngineRuntime {
             tick_jitter_samples: 0,
             tick_jitter_mean_us: 0.0,
             tick_jitter_m2_us: 0.0,
-            tick_jitter_abs_window: [0; JITTER_PERCENTILE_WINDOW],
-            tick_jitter_abs_window_len: 0,
-            tick_jitter_abs_window_index: 0,
+            tick_jitter_abs_window: PercentileWindow::default(),
             last_command_queue_latency_us: 0,
             command_queue_latency_abs_max_us: 0,
             command_queue_latency_samples: 0,
-            command_queue_latency_window: [0; JITTER_PERCENTILE_WINDOW],
-            command_queue_latency_window_len: 0,
-            command_queue_latency_window_index: 0,
+            command_queue_latency_window: PercentileWindow::default(),
             last_command_drain_count: 0,
             command_drain_abs_max: 0,
             command_drain_limit_hit_count: 0,
@@ -21072,9 +21063,7 @@ impl EngineRuntime {
             last_command_to_dmx_tick_latency_us: 0,
             command_to_dmx_tick_latency_abs_max_us: 0,
             command_to_dmx_tick_latency_samples: 0,
-            command_to_dmx_tick_latency_window: [0; JITTER_PERCENTILE_WINDOW],
-            command_to_dmx_tick_latency_window_len: 0,
-            command_to_dmx_tick_latency_window_index: 0,
+            command_to_dmx_tick_latency_window: PercentileWindow::default(),
             low_latency_dmx_tick_requested: false,
             low_latency_dmx_tick_advanced: false,
             last_dmx_output_tick_at: None,
@@ -22132,18 +22121,12 @@ impl EngineRuntime {
         self.tick_jitter_samples = 0;
         self.tick_jitter_mean_us = 0.0;
         self.tick_jitter_m2_us = 0.0;
-        self.tick_jitter_abs_window = [0; JITTER_PERCENTILE_WINDOW];
-        self.tick_jitter_abs_window_len = 0;
-        self.tick_jitter_abs_window_index = 0;
+        self.tick_jitter_abs_window.reset();
         self.last_command_drain_count = 0;
         self.command_drain_abs_max = 0;
         self.command_drain_limit_hit_count = 0;
-        self.command_queue_latency_window = [0; JITTER_PERCENTILE_WINDOW];
-        self.command_queue_latency_window_len = 0;
-        self.command_queue_latency_window_index = 0;
-        self.command_to_dmx_tick_latency_window = [0; JITTER_PERCENTILE_WINDOW];
-        self.command_to_dmx_tick_latency_window_len = 0;
-        self.command_to_dmx_tick_latency_window_index = 0;
+        self.command_queue_latency_window.reset();
+        self.command_to_dmx_tick_latency_window.reset();
         self.last_dmx_output_tick_at = None;
         self.last_dmx_send_interval_us = 0;
         self.dmx_send_interval_min_us = 0;
@@ -33122,12 +33105,7 @@ impl EngineRuntime {
         self.last_command_queue_latency_us = latency_us;
         self.command_queue_latency_abs_max_us =
             self.command_queue_latency_abs_max_us.max(latency_us);
-        record_percentile_window_sample(
-            &mut self.command_queue_latency_window,
-            &mut self.command_queue_latency_window_len,
-            &mut self.command_queue_latency_window_index,
-            latency_us,
-        );
+        self.command_queue_latency_window.record(latency_us);
         self.command_queue_latency_samples = self.command_queue_latency_samples.saturating_add(1);
     }
 
@@ -33150,12 +33128,7 @@ impl EngineRuntime {
         self.last_command_to_dmx_tick_latency_us = latency_us;
         self.command_to_dmx_tick_latency_abs_max_us =
             self.command_to_dmx_tick_latency_abs_max_us.max(latency_us);
-        record_percentile_window_sample(
-            &mut self.command_to_dmx_tick_latency_window,
-            &mut self.command_to_dmx_tick_latency_window_len,
-            &mut self.command_to_dmx_tick_latency_window_index,
-            latency_us,
-        );
+        self.command_to_dmx_tick_latency_window.record(latency_us);
         self.command_to_dmx_tick_latency_samples =
             self.command_to_dmx_tick_latency_samples.saturating_add(1);
     }
@@ -33171,15 +33144,11 @@ impl EngineRuntime {
         self.tick_jitter_samples = 0;
         self.tick_jitter_mean_us = 0.0;
         self.tick_jitter_m2_us = 0.0;
-        self.tick_jitter_abs_window = [0; JITTER_PERCENTILE_WINDOW];
-        self.tick_jitter_abs_window_len = 0;
-        self.tick_jitter_abs_window_index = 0;
+        self.tick_jitter_abs_window.reset();
         self.last_command_queue_latency_us = 0;
         self.command_queue_latency_abs_max_us = 0;
         self.command_queue_latency_samples = 0;
-        self.command_queue_latency_window = [0; JITTER_PERCENTILE_WINDOW];
-        self.command_queue_latency_window_len = 0;
-        self.command_queue_latency_window_index = 0;
+        self.command_queue_latency_window.reset();
         self.last_command_drain_count = 0;
         self.command_drain_abs_max = 0;
         self.command_drain_limit_hit_count = 0;
@@ -33187,9 +33156,7 @@ impl EngineRuntime {
         self.last_command_to_dmx_tick_latency_us = 0;
         self.command_to_dmx_tick_latency_abs_max_us = 0;
         self.command_to_dmx_tick_latency_samples = 0;
-        self.command_to_dmx_tick_latency_window = [0; JITTER_PERCENTILE_WINDOW];
-        self.command_to_dmx_tick_latency_window_len = 0;
-        self.command_to_dmx_tick_latency_window_index = 0;
+        self.command_to_dmx_tick_latency_window.reset();
         self.low_latency_dmx_tick_requested = false;
         self.low_latency_dmx_tick_advanced = false;
         self.last_packet_bytes = 0;
@@ -33222,12 +33189,7 @@ impl EngineRuntime {
         self.last_tick_jitter_us = jitter.clamp(i64::MIN as i128, i64::MAX as i128) as i64;
         let abs_jitter = jitter.unsigned_abs().min(u64::MAX as u128) as u64;
         self.tick_jitter_abs_max_us = self.tick_jitter_abs_max_us.max(abs_jitter);
-        record_percentile_window_sample(
-            &mut self.tick_jitter_abs_window,
-            &mut self.tick_jitter_abs_window_len,
-            &mut self.tick_jitter_abs_window_index,
-            abs_jitter,
-        );
+        self.tick_jitter_abs_window.record(abs_jitter);
 
         self.tick_jitter_samples = self.tick_jitter_samples.saturating_add(1);
         let sample = self.last_tick_jitter_us as f64;
@@ -50165,6 +50127,12 @@ impl EngineRuntime {
             }
         }
 
+        let (tick_jitter_p95_us, tick_jitter_p99_us) = self.tick_jitter_abs_window.p95_p99();
+        let (command_queue_latency_p95_us, command_queue_latency_p99_us) =
+            self.command_queue_latency_window.p95_p99();
+        let (command_to_dmx_tick_latency_p95_us, command_to_dmx_tick_latency_p99_us) =
+            self.command_to_dmx_tick_latency_window.p95_p99();
+
         EngineSnapshot {
             fixtures,
             cues: self.cues.iter().map(cue_summary).collect(),
@@ -50228,37 +50196,21 @@ impl EngineRuntime {
                 tick_jitter_last_us: self.last_tick_jitter_us,
                 tick_jitter_abs_max_us: self.tick_jitter_abs_max_us,
                 tick_jitter_stddev_us: self.tick_jitter_stddev_us(),
-                tick_jitter_p95_us: self.tick_jitter_percentile_us(0.95),
-                tick_jitter_p99_us: self.tick_jitter_percentile_us(0.99),
+                tick_jitter_p95_us,
+                tick_jitter_p99_us,
                 tick_jitter_samples: self.tick_jitter_samples,
                 last_command_queue_latency_us: self.last_command_queue_latency_us,
                 command_queue_latency_abs_max_us: self.command_queue_latency_abs_max_us,
-                command_queue_latency_p95_us: percentile_window_value(
-                    &self.command_queue_latency_window,
-                    self.command_queue_latency_window_len,
-                    0.95,
-                ),
-                command_queue_latency_p99_us: percentile_window_value(
-                    &self.command_queue_latency_window,
-                    self.command_queue_latency_window_len,
-                    0.99,
-                ),
+                command_queue_latency_p95_us,
+                command_queue_latency_p99_us,
                 command_queue_latency_samples: self.command_queue_latency_samples,
                 last_command_drain_count: self.last_command_drain_count,
                 command_drain_abs_max: self.command_drain_abs_max,
                 command_drain_limit_hit_count: self.command_drain_limit_hit_count,
                 last_command_to_dmx_tick_latency_us: self.last_command_to_dmx_tick_latency_us,
                 command_to_dmx_tick_latency_abs_max_us: self.command_to_dmx_tick_latency_abs_max_us,
-                command_to_dmx_tick_latency_p95_us: percentile_window_value(
-                    &self.command_to_dmx_tick_latency_window,
-                    self.command_to_dmx_tick_latency_window_len,
-                    0.95,
-                ),
-                command_to_dmx_tick_latency_p99_us: percentile_window_value(
-                    &self.command_to_dmx_tick_latency_window,
-                    self.command_to_dmx_tick_latency_window_len,
-                    0.99,
-                ),
+                command_to_dmx_tick_latency_p95_us,
+                command_to_dmx_tick_latency_p99_us,
                 command_to_dmx_tick_latency_samples: self.command_to_dmx_tick_latency_samples,
                 last_dmx_send_interval_us: self.last_dmx_send_interval_us,
                 dmx_send_interval_min_us: self.dmx_send_interval_min_us,
@@ -50381,14 +50333,6 @@ impl EngineRuntime {
             return 0.0;
         }
         (self.tick_jitter_m2_us / (self.tick_jitter_samples - 1) as f64).sqrt() as f32
-    }
-
-    fn tick_jitter_percentile_us(&self, percentile: f64) -> u64 {
-        percentile_window_value(
-            &self.tick_jitter_abs_window,
-            self.tick_jitter_abs_window_len,
-            percentile,
-        )
     }
 
     fn dmx_output_snapshot(&self) -> Vec<DmxOutputConfig> {
@@ -52766,32 +52710,6 @@ fn auto_vj_manual_override_command(command: &EngineCommand) -> bool {
             | EngineCommand::FadeVideoOutputOpacity { .. }
             | EngineCommand::SetVideoOutputBlackout { .. }
     )
-}
-
-fn record_percentile_window_sample(
-    window: &mut [u64; JITTER_PERCENTILE_WINDOW],
-    window_len: &mut usize,
-    window_index: &mut usize,
-    sample: u64,
-) {
-    window[*window_index] = sample;
-    *window_index = (*window_index + 1) % JITTER_PERCENTILE_WINDOW;
-    *window_len = (*window_len + 1).min(JITTER_PERCENTILE_WINDOW);
-}
-
-fn percentile_window_value(
-    window: &[u64; JITTER_PERCENTILE_WINDOW],
-    len: usize,
-    percentile: f64,
-) -> u64 {
-    if len == 0 {
-        return 0;
-    }
-    let mut samples = *window;
-    samples[..len].sort_unstable();
-    let clamped_percentile = percentile.clamp(0.0, 1.0);
-    let index = ((len as f64 * clamped_percentile).ceil() as usize).saturating_sub(1);
-    samples[index.min(len - 1)]
 }
 
 fn cue_summary(cue: &RuntimeCue) -> CueSummary {
