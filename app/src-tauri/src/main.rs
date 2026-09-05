@@ -24871,7 +24871,6 @@ const PREFLIGHT_ONLY_NONPROJECT_OR_INNER_RUNTIME_ROUTES: &[&str] = &[
     "recover_output_lease_v2",
     "refresh_video_layer_metadata",
     "release_blackout_output_control_v2",
-    "set_blackout_output_control_v2",
     "release_video_layer_transition_bus_authoritative",
     "relink_media_asset",
     "relinquish_output_lease_v2",
@@ -24890,6 +24889,7 @@ const PREFLIGHT_ONLY_NONPROJECT_OR_INNER_RUNTIME_ROUTES: &[&str] = &[
     "send_usb_rdm_request",
     "set_asio_output_solo",
     "set_asio_output_test",
+    "set_blackout_output_control_v2",
     "set_display_output_window_open_v2",
     "set_explicit_wdm_cue_test",
     "set_machine_timeline_cue_audio_settings",
@@ -93114,7 +93114,7 @@ pub(crate) mod tests {
                     == Some(control_plane::TauriRouteAdmissionClass::RuntimeMutation)
             })
             .collect::<Vec<_>>();
-        assert_eq!(runtime_routes.len(), 156);
+        assert_eq!(runtime_routes.len(), 157);
         assert_eq!(
             OUTER_FENCED_SYNC_PROJECT_RUNTIME_ROUTES.len()
                 + PREFLIGHT_ONLY_NONPROJECT_OR_INNER_RUNTIME_ROUTES.len(),

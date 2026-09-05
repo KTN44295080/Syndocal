@@ -32,3 +32,38 @@ Open the original Unity-4K-test project and start its configured outputs through
 Independent source review accepted the final persisted publication change. Root inspected the integration and verified the test results. Compiler warnings for final engine/native tests: baseline 0, current 0, delta 0. The native adapter verifies and commits history images; a manual Ctrl+Z/redo round trip in the running app is not claimed.
 
 Exact frontend commands: `node app/scripts/check-output-control-runtime.mjs`, `node app/scripts/check-target-blackout-controller.mjs`, `node app/scripts/check-blackout-snapshot-delta.mjs`, `node app/scripts/check-safety-blackout-runtime.mjs`, `node app/scripts/check-workspace-operator.mjs`, `node app/scripts/check-frontend-tauri-invokes.mjs`, and `pnpm --dir app exec tsc --noEmit`. Preserve unrelated `app/scripts/check-viewport-containment.mjs`; no cleanup or version bump is part of this fix.
+
+## Follow-up: dispatch policy ordering
+
+Base `eef26a4fa8b36f517aac3e93c1f9a7bd582ea61c`, same branch and internal product version.
+The user pressing DMX BO received `set_blackout_output_control_v2 has no reviewed
+dispatch-fence policy`. Its entry existed, but had been inserted immediately
+after `release_blackout_output_control_v2` in a binary-searched sorted slice.
+That broke lookup before the native output handler ran. The frontend conservatively
+wrapped the rejection as a lost reply; that message did not establish a hardware failure.
+
+Moved the entry after `set_asio_output_test`, before `set_display_output_window_open_v2`.
+No output semantics, authorization, or recovery path changed. The existing test
+already checks ordering and resolution of every runtime command, but was omitted
+from the previous blackout checkpoint's selected tests. Its stale count 156 was
+updated to 157: 50 outer-fenced routes plus 107 preflight/inner-authority routes,
+matching the current admission inventory including the newly added blackout command.
+
+Exact MSVC wrapper command:
+`node target/qa/recording-atomic-20260905/run-native.mjs cargo test -p syndocal --locked synchronous_project_runtime_routes_hold_the_identity_fence_through_dispatch -- --nocapture --test-threads=1`.
+Before: failed the sorted-slice assertion. After: 1 PASS, 1726 filtered, including
+all 157 runtime policy resolutions. Logs: `blackout-dispatch-before.log` and
+`blackout-dispatch-after.log` under `target/qa/snapshot-cleanup-20260905/`.
+Independent review found this was the only ordering violation across the four
+related lookup slices; the minimal entry move and existing coverage are sufficient.
+
+`pnpm --dir app tauri build --no-bundle` PASS, native release 2m28s / Vite 9.59s.
+The wrapper verified and stopped exact-checkout PID 102504 and pinned the required
+MSVC linker. Relaunched exact executable as PID 101560, one responsive maximized
+Syndocal main window, SHA256
+`818ED47D0FE66D3D52F988329900BB68F4430D5A7C3E932D094A0E9EB5AF0699`.
+Evidence: `blackout-dispatch-build.log` and `blackout-dispatch-launch.json` in the
+same QA directory. Native test/build warnings: baseline 0/current 0/delta 0.
+Real user DMX/VID/ALL isolation in Unity and UI Undo/Redo remain unverified;
+no physical-output action was automated. Next action is the user's DMX BO retry
+in their project, then the target-isolation acceptance above.
