@@ -1,5 +1,10 @@
 import type { FrontendTauriInvoke } from "./tauriInvokeCommands";
-import type { PatchedFixtureSummary, ProjectAuthorityBundle } from "./types";
+import type {
+  OutputOwnershipStatus,
+  PatchedFixtureSummary,
+  ProjectAuthorityBundle,
+  VideoOutputSummary,
+} from "./types";
 import { fixtureTransformMatchesExpectation } from "./fixtureTransformConfirmation";
 
 export interface AgentBridgeRequest {
@@ -17,13 +22,34 @@ const projectToken = (bundle: ProjectAuthorityBundle) => ({
 const fixtureView = (fixture: PatchedFixtureSummary) => ({
   id: fixture.id, label: fixture.label, position: fixture.position, rotation: fixture.rotation,
 });
+const videoOutputView = (output: VideoOutputSummary) => ({
+  id: output.id,
+  name: output.label,
+  enabled: output.enabled,
+  composition_id: output.composition_id,
+  dimensions: { width: output.width, height: output.height },
+});
+const ownershipStatusView = (status: OutputOwnershipStatus) => ({
+  role: status.role,
+  effective_role: status.effective_role,
+  desired_role: status.desired_role,
+  persisted_role: status.persisted_role,
+  state: status.state,
+  generation: status.generation,
+  epoch: status.epoch,
+  lighting_allowed: status.lighting_allowed,
+  video_allowed: status.video_allowed,
+  lighting_reason: status.lighting_reason,
+  video_reason: status.video_reason,
+  error: status.error,
+});
 
 /** Only native-claimed requests enter here. Mutations still use the GUI transaction/CAS path. */
 export async function executeAgentBridgeRequest(invoke: FrontendTauriInvoke, request: AgentBridgeRequest) {
   let mutationStarted = false;
   try {
-    if (!["fixtures.list", "fixtures.get", "fixtures.set_transform"].includes(request.method)) {
-      return { ok: false, error: { code: "unknown_method", message: "Unsupported fixture operation." } };
+    if (!["fixtures.list", "fixtures.get", "fixtures.set_transform", "runtime.get"].includes(request.method)) {
+      return { ok: false, error: { code: "unknown_method", message: "Unsupported agent bridge operation." } };
     }
     const params = request.params;
     const expected = params.expectedProject as ReturnType<typeof projectToken> | undefined;
@@ -34,6 +60,38 @@ export async function executeAgentBridgeRequest(invoke: FrontendTauriInvoke, req
       expectedRevision: expected!.project_revision,
       expectedCheckpointHash: expected!.checkpoint_hash,
     } : {});
+    if (request.method === "runtime.get") {
+      // The authority bundle and ownership status are deliberately separate
+      // observations. The bundle is atomic; this second read is not folded
+      // into that claim and a failure rejects the whole diagnostic request.
+      const ownership = await invoke<OutputOwnershipStatus>("get_output_ownership_status");
+      const snapshot = before.snapshot;
+      const outputs = snapshot.video.outputs;
+      return {
+        ok: true,
+        project: projectToken(before),
+        blackout: snapshot.blackout,
+        authored_blackout: snapshot.authored_blackout,
+        safety_blackout_engaged: snapshot.safety_blackout_engaged,
+        video: {
+          blackout: snapshot.video.blackout,
+          authored_blackout: snapshot.authored_video?.blackout,
+          outputs: outputs.slice(0, 64).map(videoOutputView),
+          total: outputs.length,
+          truncated: outputs.length > 64,
+        },
+        timeline_runtime: before.timeline_runtime,
+        timeline: {
+          id: snapshot.timeline.id,
+          playing: snapshot.timeline.playing,
+          position_ms: snapshot.timeline.position_ms,
+          duration_ms: snapshot.timeline.duration_ms,
+        },
+        observations: {
+          output_ownership_status: ownershipStatusView(ownership),
+        },
+      };
+    }
     if (request.method === "fixtures.list") {
       const fixtures = before.snapshot.fixtures;
       return { ok: true, project: projectToken(before), fixtures: fixtures.slice(0, 256).map(fixtureView),

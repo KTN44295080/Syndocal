@@ -28,6 +28,7 @@ import { applyMappingFixtureTransformBatch } from "./mappingFixtureTransformBatc
 type StagePoint = { x: number; z: number };
 type MappingOutputDrag = Extract<MappingDragState, { outputId: number }>;
 type MappingStageObjectDrag = Extract<MappingDragState, { objectId: number }>;
+type MappingFixtureYawDrag = Extract<MappingDragState, { kind: "fixtureYaw" }>;
 type FixtureTransformUpdate = {
   position?: PatchFixtureRequest["position"];
   rotation?: PatchFixtureRequest["rotation"];
@@ -87,6 +88,11 @@ interface MappingInteractionControllerOptions {
 }
 
 export function createMappingInteractionController(options: MappingInteractionControllerOptions) {
+  // Keep a yaw drag alive while its transform is being persisted. The drag
+  // object is the lease: a later interaction gets a new object, so a late
+  // completion cannot clear or report against that newer interaction.
+  const pendingFixtureYawDrags = new Set<MappingFixtureYawDrag>();
+
   const stageSvgPointFromClient = (clientX: number, clientY: number, targetSvg: SVGSVGElement) => {
     const viewBox = options.mappingViewportBox();
     const clampToViewport = (point: { x: number; z: number }) => ({
@@ -457,6 +463,7 @@ export function createMappingInteractionController(options: MappingInteractionCo
 
     const drag = options.mappingDrag();
     if (drag && drag.pointerId === event.pointerId) {
+      if (drag.kind === "fixtureYaw" && pendingFixtureYawDrags.has(drag)) return;
       const currentWorld = drag.kind === "fixture" || drag.kind === "fixtureYaw"
         ? fixtureDragWorldPointFromPointer(drag, event, event.currentTarget)
         : cursorWorld;
@@ -481,6 +488,7 @@ export function createMappingInteractionController(options: MappingInteractionCo
 
     const drag = options.mappingDrag();
     if (drag && drag.pointerId === event.pointerId) {
+      if (drag.kind === "fixtureYaw" && pendingFixtureYawDrags.has(drag)) return;
       if (event.currentTarget.hasPointerCapture(event.pointerId)) {
         event.currentTarget.releasePointerCapture(event.pointerId);
       }
@@ -491,14 +499,41 @@ export function createMappingInteractionController(options: MappingInteractionCo
           )
         : Number.POSITIVE_INFINITY;
       if (drag.kind === "fixtureYaw") {
-        options.setMappingDrag(null);
-        if (fixtureDragDistance < MAPPING_FIXTURE_DRAG_THRESHOLD_PX) return;
+        if (event.type === "pointercancel") {
+          options.setMappingDrag(null);
+          return;
+        }
+        if (fixtureDragDistance < MAPPING_FIXTURE_DRAG_THRESHOLD_PX) {
+          options.setMappingDrag(null);
+          return;
+        }
         const fixture = options.snapshot().fixtures.find((candidate) => candidate.id === drag.fixtureId);
-        if (!fixture) return;
+        if (!fixture) {
+          options.setMappingDrag(null);
+          return;
+        }
         const yaw = options.mappingFixtureYawFromPoint(drag.centerWorld, drag.currentWorld);
-        if (yaw === null) return;
-        if (await options.setFixtureTransform(fixture, { rotation: { ...fixture.rotation, yaw } })) {
-          options.setMessage(`Set ${fixture.label} yaw to ${yaw} deg.`);
+        if (yaw === null) {
+          options.setMappingDrag(null);
+          return;
+        }
+        pendingFixtureYawDrags.add(drag);
+        try {
+          const persisted = await options.setFixtureTransform(fixture, { rotation: { ...fixture.rotation, yaw } });
+          // A cancellation, project replacement, or newer drag may have
+          // replaced this lease while the authority round-trip was pending.
+          if (options.mappingDrag() !== drag) return;
+          if (persisted) {
+            options.setMessage(`Set ${fixture.label} yaw to ${yaw} deg.`);
+          }
+        } finally {
+          pendingFixtureYawDrags.delete(drag);
+          // Clearing after the boolean result lets the confirmed snapshot
+          // replace the preview. A false result therefore visibly reverts to
+          // the authoritative state as well.
+          if (options.mappingDrag() === drag) {
+            options.setMappingDrag(null);
+          }
         }
         return;
       }

@@ -4,12 +4,14 @@ import {
   executeTargetBlackout,
   executeBlackoutRelease,
   type OutputControlTargetRole,
+  type OutputControlReceipt,
 } from "./outputControlController";
 
 /** Operator blackout is authored target state. Emergency S0 is independent. */
 export function createTargetBlackoutController(options: {
   invoke: FrontendTauriInvoke;
   safety: ReturnType<typeof createSafetyBlackoutRuntimeController>;
+  refreshProjectAuthority?: (receipt: OutputControlReceipt) => Promise<unknown>;
   refreshSnapshot: () => Promise<unknown>;
   setMessage: (message: string) => unknown;
 }) {
@@ -19,7 +21,8 @@ export function createTargetBlackoutController(options: {
     if (pending) return;
     pending = true;
     try {
-      await executeTargetBlackout(options.invoke, target, enabled);
+      const receipt = await executeTargetBlackout(options.invoke, target, enabled);
+      await options.refreshProjectAuthority?.(receipt);
       await options.refreshSnapshot();
     } catch (error) {
       options.setMessage(String(error));

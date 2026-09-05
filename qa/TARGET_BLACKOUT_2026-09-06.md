@@ -67,3 +67,7 @@ same QA directory. Native test/build warnings: baseline 0/current 0/delta 0.
 Real user DMX/VID/ALL isolation in Unity and UI Undo/Redo remain unverified;
 no physical-output action was automated. Next action is the user's DMX BO retry
 in their project, then the target-isolation acceptance above.
+
+The subsequent user DMX confirmation, Follow authority race fix and separate
+Video restoration evidence are tracked in
+[the overnight checkpoint](OVERNIGHT_FOLLOW_MAPPING_2026-09-06.md).

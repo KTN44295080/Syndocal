@@ -1,6 +1,6 @@
 # Syndocal MCP adapter
 
-Dependency-free Node.js stdio adapter for a running Syndocal agent bridge. It exposes only fixture listing, fixture reading, exact-project fixture transforms, and request-status lookup. It does not open devices, start Syndocal, or enable show output.
+Dependency-free Node.js stdio adapter for a running Syndocal agent bridge. It exposes only fixture listing, fixture reading, exact-project fixture transforms, request-status lookup, and bounded runtime diagnostics. It does not open devices, start Syndocal, or enable show output.
 
 ## Start
 
@@ -32,6 +32,7 @@ On Windows, process identity is read through a fixed, hidden PowerShell/CIM quer
 - `syndocal_get_fixture({fixtureId})`: read one fixture and project identity.
 - `syndocal_set_fixture_transform({requestId, fixtureId, position, rotation, expectedProject})`: send one complete transform with a caller-supplied UUID and the exact project identity returned by a read.
 - `syndocal_get_request_status({requestId})`: query the original request UUID.
+- `syndocal_get_runtime_status({})`: read the project token, lighting/video blackout bits, up to 64 video-output summaries, Timeline transport state, the exact `timeline_runtime` projection, and a separate `observations.output_ownership_status` read. The authority bundle and ownership observation are captured by separate reads and must not be treated as one atomic image.
 
 Position is `{x,y,z}` and rotation is `{pitch,yaw,roll}`. `expectedProject` is `{project_epoch,project_revision,checkpoint_hash}`. All fields are required, numbers must be finite, and unknown argument fields are rejected.
 

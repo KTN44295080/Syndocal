@@ -17,6 +17,13 @@ const [modelSource, bank, inspector, app, controller, styles, modes, types, touc
   read("../src/components/WorkspaceChrome.tsx"),
   read("../src/uiLocalization.ts"),
 ]);
+const clipSlotStylesStart = styles.indexOf("/* B4 shared Clip Slot bank");
+const timelineBankStylesStart = styles.indexOf("/* Timeline bank / Follow editor");
+assert.ok(
+  clipSlotStylesStart >= 0 && timelineBankStylesStart > clipSlotStylesStart,
+  "Clip Slot and Timeline bank style sections remain explicitly delimited",
+);
+const clipSlotStyles = styles.slice(clipSlotStylesStart, timelineBankStylesStart);
 
 const transpiled = ts.transpileModule(modelSource, {
   compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
@@ -121,8 +128,8 @@ assert.match(touch, /VideoClipSlotBankPanel/, "Control mounts the shared bank co
 assert.match(edit, /VideoClipSlotBankPanel/, "Edit Video mounts the shared bank component");
 assert.match(
   modes,
-  /editDomainModes = controlModes\.filter\(\(mode\) => mode\.id !== "live"\)/,
-  "Timeline remains excluded from the persistent Edit-domain peer chrome",
+  /editDomainModes = \[\s*controlModes\.find\(\(mode\) => mode\.id === "edit"\)!,\s*controlModes\.find\(\(mode\) => mode\.id === "mixer"\)!,\s*controlModes\.find\(\(mode\) => mode\.id === "live"\)!,\s*\]/,
+  "Edit domain exposes Lighting, Video, and Timeline in stable order",
 );
 
 assert.match(styles, /\.videoClipSlotBankPanel \{[\s\S]*overflow: auto;/, "bank scroll remains internal");
@@ -130,7 +137,7 @@ assert.match(styles, /\.videoClipSlotBankPanel \{[\s\S]*container-type: inline-s
 assert.match(styles, /\.videoClipSlotBankGrid \{[\s\S]*repeat\(auto-fit, minmax\(min\(112px, calc\(50% - 4px\)\), 1fr\)\)/, "grid auto-fits actual pane width without collapsing to one column");
 assert.match(styles, /\.videoClipSlotPad \{[\s\S]*aspect-ratio: 16 \/ 9;/, "pads preserve 16:9 contain geometry");
 assert.match(styles, /\.videoClipSlotPrimary img \{[\s\S]*object-fit: contain;/, "thumbnail media is contained rather than stretched");
-assert.doesNotMatch(styles.slice(styles.indexOf("/* B4 shared Clip Slot bank")), /@media \(max-width:/, "Clip Slot geometry does not use viewport breakpoints");
+assert.doesNotMatch(clipSlotStyles, /@media \(max-width:/, "Clip Slot geometry does not use viewport breakpoints");
 for (const label of ["Clip control", "Clip Inspector", "Create Slot", "Launch quantization", "No active slot", "Move Earlier", "Move Later", "Cancel Queue"]) {
   assert.ok(localization.includes(label), `localization source covers ${label}`);
 }

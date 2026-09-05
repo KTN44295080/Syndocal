@@ -75,11 +75,12 @@ try {
   child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
   assert.deepEqual((await rpc('ping')).result, {});
   const list = await rpc('tools/list');
-  assert.equal(list.result.tools.length, 4);
+  assert.equal(list.result.tools.length, 5);
   assert.ok(list.result.tools.every((tool) => tool.inputSchema.additionalProperties === false));
   checks++;
   assert.equal((await rpc('unknown')).error.code, -32601);
   assert.equal((await call('syndocal_list_fixtures', { extra: 1 })).error.code, -32602);
+  assert.equal((await call('syndocal_get_runtime_status', { extra: 1 })).error.code, -32602);
   assert.equal((await call('syndocal_get_fixture', { fixtureId: '1' })).error.code, -32602);
   assert.equal((await call('syndocal_get_request_status', { requestId: [randomUUID()] })).error.code, -32602);
   assert.equal((await call('syndocal_get_request_status', { requestId: 'abcdefab-cdef-4abc-8def-abcdefabcdef'.toUpperCase() })).error.code, -32602);
@@ -89,6 +90,12 @@ try {
   assert.equal(requests.at(-1).method, 'fixtures.list');
   await call('syndocal_get_fixture', { fixtureId: 7 });
   assert.deepEqual(requests.at(-1).params, { fixtureId: 7 });
+  checks++;
+  const runtime = await call('syndocal_get_runtime_status');
+  assert.equal(runtime.result.isError, false);
+  assert.equal(decode(runtime).status, 'completed');
+  assert.equal(requests.at(-1).method, 'runtime.get');
+  assert.deepEqual(requests.at(-1).params, {});
   checks++;
   const mutationId = randomUUID();
   const mutation = { requestId: mutationId, fixtureId: 7, position: { x: 1, y: 2, z: 3 }, rotation: { pitch: 0, yaw: 45, roll: 0 }, expectedProject: { project_epoch: 1, project_revision: 2, checkpoint_hash: 'abc' } };

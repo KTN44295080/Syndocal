@@ -53,6 +53,11 @@ fn agent_bridge_wire_auth_methods_and_bounds_are_strict() {
             .command()
             .is_err());
     }
+    let mut runtime = value.clone();
+    runtime["method"] = serde_json::json!("runtime.get");
+    assert!(matches!(serde_json::from_value::<Request>(runtime.clone()).unwrap().command().unwrap(), Command::RuntimeGet(_)));
+    runtime["params"] = serde_json::json!({"enableOutputs": true});
+    assert!(serde_json::from_value::<Request>(runtime).unwrap().command().is_err());
 }
 #[test]
 fn agent_bridge_claim_is_exact_once_and_replay_never_dispatches_twice() {

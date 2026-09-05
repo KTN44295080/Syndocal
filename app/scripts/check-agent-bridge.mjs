@@ -23,9 +23,20 @@ const { startAgentBridgeRuntime: start } = modules.get('./agentBridgeRuntime');
 const token = { project_epoch: 4, project_revision: 9, checkpoint_hash: 'checkpoint-A' };
 const fixture = { id: 17, label: 'Moving head', position: { x: 0, y: 1, z: 2 }, rotation: { pitch: 3, yaw: 4, roll: 5 } };
 const desired = { position: { x: 10, y: 20, z: 30 }, rotation: { pitch: 45, yaw: 90, roll: 135 } };
+const timelineRuntime = { transport_epoch: 4, transport_generation: 12, loop_runtime: { status: 'idle' }, follow_runtime: { epoch: 4, generation: 0 } };
+const output = { id: 1, label: 'Main', enabled: true, composition_id: 9, width: 1920, height: 1080, mapping: { secret: 'must not be returned' } };
+const ownership = { role: 'Both', effective_role: 'Both', desired_role: 'Both', persisted_role: 'Both', state: 'Ready', generation: 7, epoch: 8, lighting_allowed: true, video_allowed: true, lighting_reason: 'OwnedByMachineRole', video_reason: 'OwnedByMachineRole', error: null };
 const request = (method, params = {}) => ({ rendererGeneration: 5, requestId: 'canonical-request', method, params });
 const mutation = request('fixtures.set_transform', { fixtureId: fixture.id, ...desired, expectedProject: token });
-const bundle = (item = fixture, project = token) => ({ ...project, snapshot: { fixtures: item ? [structuredClone(item)] : [] } });
+const bundle = (item = fixture, project = token) => ({ ...project, timeline_runtime: structuredClone(timelineRuntime), snapshot: {
+  fixtures: item ? [structuredClone(item)] : [],
+  blackout: true,
+  authored_blackout: false,
+  safety_blackout_engaged: true,
+  authored_video: { blackout: false },
+  video: { blackout: true, outputs: Array.from({ length: 66 }, (_, index) => ({ ...output, id: index + 1, label: `Output ${index + 1}` })) },
+  timeline: { id: 3, playing: true, position_ms: 1250, duration_ms: 5000 },
+} });
 let groups = 0;
 
 {
@@ -35,6 +46,33 @@ let groups = 0;
   assert.deepEqual(result.fixture, fixture);
   assert.deepEqual(result.project, token);
   assert.deepEqual(calls, [['get_project_authority_bundle', {}]]);
+  const runtimeCalls = [];
+  const runtime = await execute(async (command, args) => {
+    runtimeCalls.push([command, args]);
+    if (command === 'get_project_authority_bundle') return bundle();
+    if (command === 'get_output_ownership_status') return ownership;
+    assert.fail(`Unexpected runtime call ${command}`);
+  }, request('runtime.get'));
+  assert.deepEqual(runtimeCalls, [['get_project_authority_bundle', {}], ['get_output_ownership_status', undefined]]);
+  assert.equal(runtime.ok, true);
+  assert.deepEqual(runtime.project, token);
+  assert.deepEqual(runtime.timeline_runtime, timelineRuntime);
+  assert.deepEqual(runtime.timeline, { id: 3, playing: true, position_ms: 1250, duration_ms: 5000 });
+  assert.equal(runtime.blackout, true);
+  assert.equal(runtime.authored_blackout, false);
+  assert.equal(runtime.safety_blackout_engaged, true);
+  assert.deepEqual(runtime.video.outputs[0], { id: 1, name: 'Output 1', enabled: true, composition_id: 9, dimensions: { width: 1920, height: 1080 } });
+  assert.equal(runtime.video.outputs.length, 64);
+  assert.equal(runtime.video.total, 66);
+  assert.equal(runtime.video.truncated, true);
+  assert.equal(runtime.video.authored_blackout, false);
+  assert.deepEqual(runtime.observations.output_ownership_status, ownership);
+  const failedRuntime = await execute(async (command) => {
+    if (command === 'get_project_authority_bundle') return bundle();
+    throw new Error('ownership observation unavailable');
+  }, request('runtime.get'));
+  assert.equal(failedRuntime.ok, false);
+  assert.equal(failedRuntime.error.code, 'request_rejected');
   const list = await execute(async () => ({ ...token, snapshot: { fixtures: Array.from({ length: 258 }, (_, i) => ({ ...fixture, id: i + 1 })) } }), request('fixtures.list'));
   assert.equal(list.fixtures.length, 256); assert.equal(list.total, 258); assert.equal(list.truncated, true);
   groups++;

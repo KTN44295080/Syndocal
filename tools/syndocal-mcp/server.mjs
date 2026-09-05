@@ -28,10 +28,12 @@ export const toolDefinitions = [
   { name: 'syndocal_get_fixture', description: 'Read one fixture and current project identity.', inputSchema: schema({ fixtureId: identifier }), annotations: { readOnlyHint: true } },
   { name: 'syndocal_set_fixture_transform', description: 'Set a complete fixture transform against the exact observed project. Supply a new UUID for a new intent. If pending or unknown, query its status; never repeat the mutation with a new ID to recover a timeout.', inputSchema: schema({ requestId: uuid, fixtureId: identifier, position, rotation, expectedProject }), annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false } },
   { name: 'syndocal_get_request_status', description: 'Read a previously submitted request by its original UUID. Unknown does not mean safe to resend.', inputSchema: schema({ requestId: uuid }), annotations: { readOnlyHint: true } },
+  { name: 'syndocal_get_runtime_status', description: 'Read bounded project runtime diagnostics, timeline state, video outputs, and a separate output-ownership observation from the selected running Syndocal instance. This never changes output state.', inputSchema: schema({}), annotations: { readOnlyHint: true } },
 ];
 
 function validateArguments(name, args) {
   if (name === 'syndocal_list_fixtures') return exact(args, []);
+  if (name === 'syndocal_get_runtime_status') return exact(args, []);
   if (name === 'syndocal_get_fixture') return exact(args, ['fixtureId']) && integer(args.fixtureId) && args.fixtureId > 0;
   if (name === 'syndocal_get_request_status') return exact(args, ['requestId']) && typeof args.requestId === 'string' && UUID.test(args.requestId);
   if (name !== 'syndocal_set_fixture_transform' || !exact(args, ['requestId', 'fixtureId', 'position', 'rotation', 'expectedProject'])) return false;
@@ -202,7 +204,7 @@ export function serve(options, input = process.stdin, output = process.stdout) {
       const args = params.arguments ?? {};
       const mutation = params.name === 'syndocal_set_fixture_transform';
       const requestId = mutation ? args.requestId : randomUUID();
-      const method = { syndocal_list_fixtures: 'fixtures.list', syndocal_get_fixture: 'fixtures.get', syndocal_set_fixture_transform: 'fixtures.set_transform', syndocal_get_request_status: 'request.status' }[params.name];
+      const method = { syndocal_list_fixtures: 'fixtures.list', syndocal_get_fixture: 'fixtures.get', syndocal_set_fixture_transform: 'fixtures.set_transform', syndocal_get_request_status: 'request.status', syndocal_get_runtime_status: 'runtime.get' }[params.name];
       const nativeParams = mutation ? Object.fromEntries(Object.entries(args).filter(([key]) => key !== 'requestId')) : args;
       const result = await nativeRequest(options, method, nativeParams, requestId, mutation);
       if (result.status !== 'completed') result.nextAction = 'Query syndocal_get_request_status with the original requestId. Do not automatically resubmit an unknown or pending mutation.';

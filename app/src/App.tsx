@@ -635,6 +635,10 @@ import { createTimelineKeyframeController } from "./createTimelineKeyframeContro
 import { createTimelineAutomationController } from "./createTimelineAutomationController";
 import { createSafetyBlackoutRuntimeController } from "./safetyBlackoutRuntimeController";
 import { createTargetBlackoutController } from "./createTargetBlackoutController";
+import { createProjectAuthorityReceiptConvergence } from "./projectAuthorityReceiptConvergence";
+import {
+  createTimelineFollowAuthorityConvergence,
+} from "./timelineFollowAuthorityConvergence";
 import {
   executeDisplayAddOutputControl,
   executeDisplayWindowOutputControl,
@@ -2740,11 +2744,17 @@ export default function App() {
   const timelineFollowAbortLease = createTimelineFollowAbortLease();
   const timelineFollowAbortFocusFence = createTimelineFollowAbortFocusFence();
   let timelineFollowRuntimeLastError = "";
+  // These indirections are initialized after the authority poller is created;
+  // project replacement can still invalidate a pending convergence attempt.
+  let suppressStaleTimelineFollowReadError = (_detail: string, _captured: ProjectAuthorityToken): Promise<boolean> =>
+    Promise.resolve(false);
+  let resetTimelineFollowAuthorityConvergence = () => {};
   const resetTimelineFollowRuntimeFence = () => {
     appliedTimelineFollowRuntime = null;
     timelineFollowRuntimeRequestSerial = 0;
     appliedTimelineFollowRuntimeRequestSerial = 0;
     timelineFollowRuntimeLastError = "";
+    resetTimelineFollowAuthorityConvergence();
     timelineFollowAbortLease.reset();
     timelineFollowAbortFocusFence.reset();
     setTimelineFollowAbortBusy(false);
@@ -11977,6 +11987,13 @@ export default function App() {
       scheduleProjectAuthorityPoll();
     }, document.hidden ? 2_000 : 1_000);
   };
+  const timelineFollowAuthorityConvergence = createTimelineFollowAuthorityConvergence({
+    isCurrent: isProjectAuthorityIdentityCurrent,
+    inFlightAuthorityPoll: () => projectAuthorityPollInFlight,
+    refreshAuthority: pollProjectAuthorityBundle,
+  });
+  suppressStaleTimelineFollowReadError = timelineFollowAuthorityConvergence.suppressStaleReadError;
+  resetTimelineFollowAuthorityConvergence = timelineFollowAuthorityConvergence.reset;
   scheduleProjectAuthorityPoll();
   const telemetryReportTimer = isTauriRuntime() ? window.setInterval(refreshEngineTelemetryReport, 1000) : null;
   const serialDmxRuntimeStatusTimer = isTauriRuntime()
@@ -15257,6 +15274,7 @@ export default function App() {
       return applyTimelineFollowRuntimeReport(report, requestSerial) ? report.runtime : null;
     } catch (error) {
       const detail = String(error);
+      if (await suppressStaleTimelineFollowReadError(detail, authority)) return null;
       if (showError && isProjectAuthorityIdentityCurrent(authority) && detail !== timelineFollowRuntimeLastError) {
         timelineFollowRuntimeLastError = detail;
         setMessage(`Timeline Follow runtime unavailable: ${detail}`);
@@ -17337,6 +17355,12 @@ export default function App() {
     }
   };
 
+  const refreshProjectAuthorityAfterTargetBlackout = createProjectAuthorityReceiptConvergence({
+    currentAuthority: projectMappingsAuthority,
+    inFlightAuthorityPoll: () => projectAuthorityPollInFlight,
+    pollProjectAuthorityBundle,
+  });
+
   const invokeSafetyBlackoutRuntime = async <T,>(
     command: FrontendTauriInvokeCommand,
     args?: Record<string, unknown>,
@@ -17348,7 +17372,10 @@ export default function App() {
     return tauriInvoke<T>(command, args);
   };
   const targetBlackout = createTargetBlackoutController({
-    invoke, refreshSnapshot, setMessage,
+    invoke,
+    refreshProjectAuthority: refreshProjectAuthorityAfterTargetBlackout,
+    refreshSnapshot,
+    setMessage,
     safety: createSafetyBlackoutRuntimeController({ invoke: invokeSafetyBlackoutRuntime }),
   });
   const setBlackout = targetBlackout.setLightingBlackout;

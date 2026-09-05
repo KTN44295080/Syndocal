@@ -190,6 +190,14 @@ video/lib.rs 581,530B。巨大な同居テストも含むため、数値をrunti
 - `node app/scripts/check-video-clip-slot-bank.mjs`: FAIL、変更外の122行目の旧Edit-domain live除外assertion。
   controller assertionsはそれ以前に通過。App.tsx/当該checkerは今回変更しておらず、assertionを緩めていない。
   現行のEdit routing契約との照合を独立した残件とする。
+- 2026-09-06 reconciliation: `check-video-clip-slot-bank.mjs` now asserts the current
+  three-domain `edit`/`mixer`/`live` `editDomainModes` contract. `uiModes.ts`,
+  `WorkspaceChrome.tsx`, the focused upper-workspace route checks, and shortcut checks
+  all confirm the three routes; product routing is unchanged. Its viewport-breakpoint
+  check is also scoped to the B4 Clip Slot section, excluding the later Timeline bank
+  section's intentional media query. The checker-only fix keeps retired assertions
+  from masking the current contract. The focused Clip Slot checker and affected
+  `git diff --check` passed; no product code changed in this reconciliation.
 - `pnpm --dir app run check:release`: PASS（構成する全gate成功）。
 - `node app/scripts/test-check-release-metadata.mjs`: PASS、125 assertion groups。
 - `cargo test -p syndocal --locked recording_ -- --test-threads=1`: PASS、21 passed / 2 ignored。

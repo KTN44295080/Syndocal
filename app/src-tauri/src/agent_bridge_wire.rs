@@ -25,6 +25,8 @@ pub(super) enum Command {
     SetTransform(Transform),
     #[serde(rename = "request.status")]
     Status(Status),
+    #[serde(rename = "runtime.get")]
+    RuntimeGet(Empty),
 }
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -91,7 +93,11 @@ impl Request {
         }
         if !matches!(
             self.method.as_str(),
-            "fixtures.list" | "fixtures.get" | "fixtures.set_transform" | "request.status"
+            "fixtures.list"
+                | "fixtures.get"
+                | "fixtures.set_transform"
+                | "request.status"
+                | "runtime.get"
         ) {
             return Err("unknown_method");
         }

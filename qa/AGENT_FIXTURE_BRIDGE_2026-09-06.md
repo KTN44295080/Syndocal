@@ -95,3 +95,7 @@ an undocumented UI/IPC route to manufacture that acceptance.
 
 Preserve the unrelated dirty `app/scripts/check-viewport-containment.mjs` and
 the user's Unity and test `.sdc` files. No cache cleanup is part of this checkpoint.
+
+The additive runtime diagnostic tool, actual current-session tool discovery and
+drag-preview follow-up are tracked in
+[the overnight checkpoint](OVERNIGHT_FOLLOW_MAPPING_2026-09-06.md).
