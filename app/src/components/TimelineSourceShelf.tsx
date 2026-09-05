@@ -29,6 +29,8 @@ import {
 import { translateUiText, type UiLocale } from "../uiLocalization";
 import type { TimelineSceneBlockCueOption } from "./TimelineSceneBlocksEditor";
 
+export type TimelineSourceContextMode = "sources" | "inspector" | "video-preview";
+
 export interface TimelineSourceShelfProps {
   cueOptions: TimelineSceneBlockCueOption[];
   /** The exact complete App verdict. The Timeline never computes a subset authority. */
@@ -50,9 +52,10 @@ export interface TimelineSourceShelfProps {
   ) => void | Promise<void>;
   onStatus: (message: string) => void;
   onOpenInspector: () => void;
-  contextMode?: "sources" | "inspector";
-  onContextModeChange?: (mode: "sources" | "inspector") => void;
+  contextMode?: TimelineSourceContextMode;
+  onContextModeChange?: (mode: TimelineSourceContextMode) => void;
   inspectorContent?: JSX.Element;
+  previewContent?: JSX.Element;
 }
 
 const mediaAssetHasVideo = (asset: MediaAssetSummary) =>
@@ -87,35 +90,29 @@ export function TimelineSourceShelf(props: TimelineSourceShelfProps) {
   // Source labels contain project-owned names, so translate only the stable
   // operator framing from the same reactive locale authority as App.
   const localizedSourceText = (source: string) => translateUiText(source, props.uiLocale);
-  const [sourceShelfTab, setSourceShelfTab] = createSignal<"Scenes" | "Media Library">("Scenes");
-  const [mediaShelfFilter, setMediaShelfFilter] = createSignal<"All" | "Video" | "Audio">("All");
+  const [sourceShelfFilter, setSourceShelfFilter] = createSignal<"All" | "Lighting" | "Video" | "Audio">("All");
   // A click has no canvas target, so retain an explicit choice only for the
   // ambiguous case. A single unlocked lane is the safe deterministic target;
   // DnD uses the lane actually hit in TimelineOverview as its primary target.
   const [sourceShelfTargetLayerIds, setSourceShelfTargetLayerIds] = createSignal<Partial<Record<TimelineLayerKind, number>>>({});
   const sourceContextMode = () => props.contextMode ?? "sources";
-  const selectSourceContextMode = (mode: "sources" | "inspector") => {
+  const selectSourceContextMode = (mode: TimelineSourceContextMode) => {
     props.onContextModeChange?.(mode);
     if (mode === "inspector") props.onOpenInspector();
   };
-  const selectSourceShelfTab = (tab: "Scenes" | "Media Library") => {
-    setSourceShelfTab(tab);
-    // The category buttons remain in the compact header while the Inspector
-    // is open. Make their intent explicit: choosing a source category always
-    // returns to the source browser instead of silently changing hidden state.
-    if (sourceContextMode() !== "sources") selectSourceContextMode("sources");
-  };
-  const focusSourceContextMode = (current: "sources" | "inspector", direction: -1 | 1 | "first" | "last") => {
-    const modes = ["sources", "inspector"] as const;
+  const focusSourceContextMode = (current: TimelineSourceContextMode, direction: -1 | 1 | "first" | "last") => {
+    const modes = ["sources", "inspector", "video-preview"] as const;
     const index = modes.indexOf(current);
-    const target = direction === "first" ? modes[0] : direction === "last" ? modes[1] : modes[(index + direction + modes.length) % modes.length];
+    const target = direction === "first" ? modes[0] : direction === "last" ? modes[modes.length - 1] : modes[(index + direction + modes.length) % modes.length];
     selectSourceContextMode(target);
     queueMicrotask(() => document.getElementById(`timeline-source-context-tab-${target}`)?.focus());
   };
 
   const mediaShelfAssets = createMemo(() => props.mediaAssets.filter((asset) => {
-    const filter = mediaShelfFilter();
-    return filter === "All" || (filter === "Video" ? mediaAssetHasVideo(asset) : mediaAssetHasAudio(asset));
+    const filter = sourceShelfFilter();
+    return filter === "All"
+      || (filter === "Video" && mediaAssetHasVideo(asset))
+      || (filter === "Audio" && mediaAssetHasAudio(asset));
   }));
   const mediaShelfHasSourceForKind = (kind: "Video" | "Audio") =>
     mediaShelfAssets().some((asset) => kind === "Video" ? mediaAssetHasVideo(asset) : mediaAssetHasAudio(asset));
@@ -332,11 +329,13 @@ export function TimelineSourceShelf(props: TimelineSourceShelfProps) {
     <section class="timelineExternalSourceShelf" aria-label="Timeline source shelf" data-timeline-source-shelf>
       <header class="timelineExternalSourceShelfHeader">
         <div>
-          <h3>Sources</h3>
-          <p>Drag a Scene, Video, or Audio source onto its matching lane.</p>
+          <h3>{localizedSourceText(sourceContextMode() === "sources" ? "Sources" : sourceContextMode() === "inspector" ? "Inspector" : "Video Preview")}</h3>
+          <Show when={sourceContextMode() === "sources"}>
+            <p>Drag a Scene, Video, or Audio source onto its matching lane.</p>
+          </Show>
         </div>
-        <div class="timelineExternalSourceShelfModes" role="tablist" aria-label="Timeline source or inspector">
-          <button type="button" id="timeline-source-context-tab-sources" role="tab" data-timeline-source-shelf-mode="sources" aria-selected={sourceContextMode() === "sources"} aria-controls={sourceShelfTab() === "Scenes" ? "timeline-source-context-panel-scenes" : "timeline-source-context-panel-media"} tabindex={sourceContextMode() === "sources" ? 0 : -1} classList={{ active: sourceContextMode() === "sources" }} onClick={() => selectSourceContextMode("sources")} onKeyDown={(event) => {
+        <div class="timelineExternalSourceShelfModes" role="tablist" aria-label="Timeline context">
+          <button type="button" id="timeline-source-context-tab-sources" role="tab" data-timeline-source-shelf-mode="sources" aria-selected={sourceContextMode() === "sources"} aria-controls="timeline-source-context-panel-sources" tabindex={sourceContextMode() === "sources" ? 0 : -1} classList={{ active: sourceContextMode() === "sources" }} onClick={() => selectSourceContextMode("sources")} onKeyDown={(event) => {
             if (event.key === "ArrowRight" || event.key === "ArrowDown") { event.preventDefault(); focusSourceContextMode("sources", 1); }
             else if (event.key === "ArrowLeft" || event.key === "ArrowUp") { event.preventDefault(); focusSourceContextMode("sources", -1); }
             else if (event.key === "Home") { event.preventDefault(); focusSourceContextMode("sources", "first"); }
@@ -348,93 +347,25 @@ export function TimelineSourceShelf(props: TimelineSourceShelfProps) {
             else if (event.key === "Home") { event.preventDefault(); focusSourceContextMode("inspector", "first"); }
             else if (event.key === "End") { event.preventDefault(); focusSourceContextMode("inspector", "last"); }
           }}>Inspector</button>
-        </div>
-        <div class="timelineExternalSourceShelfTabs" role="group" aria-label="Timeline source categories">
-          <button
-            type="button"
-            data-timeline-source-shelf-category="scenes"
-            aria-pressed={sourceShelfTab() === "Scenes"}
-            classList={{ active: sourceShelfTab() === "Scenes" }}
-            onClick={() => selectSourceShelfTab("Scenes")}
-          >Scenes</button>
-          <button
-            type="button"
-            data-timeline-source-shelf-category="media"
-            aria-pressed={sourceShelfTab() === "Media Library"}
-            classList={{ active: sourceShelfTab() === "Media Library" }}
-            onClick={() => selectSourceShelfTab("Media Library")}
-          >Media Library</button>
+          <button type="button" id="timeline-source-context-tab-video-preview" role="tab" data-timeline-source-shelf-mode="video-preview" aria-selected={sourceContextMode() === "video-preview"} aria-controls="timeline-source-context-panel-video-preview" tabindex={sourceContextMode() === "video-preview" ? 0 : -1} classList={{ active: sourceContextMode() === "video-preview" }} onClick={() => selectSourceContextMode("video-preview")} onKeyDown={(event) => {
+            if (event.key === "ArrowLeft" || event.key === "ArrowUp") { event.preventDefault(); focusSourceContextMode("video-preview", -1); }
+            else if (event.key === "ArrowRight" || event.key === "ArrowDown") { event.preventDefault(); focusSourceContextMode("video-preview", 1); }
+            else if (event.key === "Home") { event.preventDefault(); focusSourceContextMode("video-preview", "first"); }
+            else if (event.key === "End") { event.preventDefault(); focusSourceContextMode("video-preview", "last"); }
+          }}>Video Preview</button>
         </div>
       </header>
-      <Show when={sourceContextMode() === "sources" && sourceShelfTab() === "Scenes"}>
-        <div id="timeline-source-context-panel-scenes" role="tabpanel" aria-labelledby="timeline-source-context-tab-sources" class="timelineExternalSourceShelfBody" aria-label="Scenes">
-          <Show
-            when={sceneAuthorityUnavailable() === null}
-            fallback={
-              <p
-                class="emptyState"
-                role="alert"
-                data-bank-authority-unavailable={bankAuthority().issue?.kind ?? "cue_option_mismatch"}
-              >
-                {localizedSourceText(sceneAuthorityUnavailable() ?? "")}
-              </p>
-            }
-          >
-          {renderNoLaneStatus("Lighting")}
-          {renderLaneChoiceDisclosure("Lighting")}
-          <Show when={shelfBanks().length > 0} fallback={<p class="emptyState">No Scenes are available yet.</p>}>
-            <div class="timelineExternalSourceShelfBanks" data-timeline-source-shelf-banks>
-              <For each={shelfBanks()}>
-                {(bank) => (
-                  <section
-                    class="timelineExternalSourceShelfBank"
-                    style={{
-                      "--bank-identity": groupIdentityCss(timelineSourceShelfBankIdentity(bank.cue_list_id), undefined, "fill"),
-                      "--bank-identity-text": groupIdentityCss(timelineSourceShelfBankIdentity(bank.cue_list_id), undefined, "text"),
-                    }}
-                    data-timeline-source-shelf-bank={bank.key}
-                    data-timeline-source-shelf-bank-id={bank.cue_list_id}
-                    data-timeline-source-shelf-bank-hue={groupIdentityHue(timelineSourceShelfBankIdentity(bank.cue_list_id))}
-                    aria-label={localizedSourceText(`Timeline Bank ${bank.label}`)}
-                  >
-                    <header class="timelineExternalSourceShelfBankHeader">
-                      <i class="timelineExternalSourceShelfBankStrip" aria-hidden="true" />
-                      <div class="timelineExternalSourceShelfBankTitle">
-                        <strong data-no-localize>
-                          {bank.label}
-                        </strong>
-                        <span>{bank.scenes.length}</span>
-                      </div>
-                    </header>
-                    <Show
-                      when={bank.scenes.length > 0}
-                      fallback={<p class="emptyState timelineExternalSourceBankEmpty">{localizedSourceText("No Scenes in this Bank yet.")}</p>}
-                    >
-                      <div class="timelineExternalSourceShelfBankScenes">
-                        <For each={bank.scenes}>
-                          {(cue) => renderSceneSourceCard(cue)}
-                        </For>
-                      </div>
-                    </Show>
-                  </section>
-                )}
-              </For>
-            </div>
-          </Show>
-          </Show>
-        </div>
-      </Show>
-      <Show when={sourceContextMode() === "sources" && sourceShelfTab() === "Media Library"}>
-        <div id="timeline-source-context-panel-media" role="tabpanel" aria-labelledby="timeline-source-context-tab-sources" class="timelineExternalSourceShelfBody" aria-label="Media Library">
-          <div class="timelineExternalSourceShelfFilters" role="group" aria-label={localizedSourceText("Media source filters and verification")}>
-            <For each={["All", "Video", "Audio"] as const}>
+      <Show when={sourceContextMode() === "sources"}>
+        <div id="timeline-source-context-panel-sources" role="tabpanel" aria-labelledby="timeline-source-context-tab-sources" class="timelineExternalSourceShelfBody">
+          <div class="timelineExternalSourceShelfFilters" role="group" aria-label={localizedSourceText("Timeline source filters and verification")}>
+            <For each={["All", "Lighting", "Video", "Audio"] as const}>
               {(filter) => (
                 <button
                   type="button"
                   data-timeline-source-shelf-filter={filter.toLowerCase()}
-                  classList={{ active: mediaShelfFilter() === filter }}
-                  aria-pressed={mediaShelfFilter() === filter}
-                  onClick={() => setMediaShelfFilter(filter)}
+                  classList={{ active: sourceShelfFilter() === filter }}
+                  aria-pressed={sourceShelfFilter() === filter}
+                  onClick={() => setSourceShelfFilter(filter)}
                 >{filter}</button>
               )}
             </For>
@@ -446,79 +377,146 @@ export function TimelineSourceShelf(props: TimelineSourceShelfProps) {
               onClick={() => void props.onVerify(props.mediaAssets.map((asset) => asset.id))}
             >{localizedSourceText("Verify All")}</button>
           </div>
-          {renderMediaNoLaneStatus("Video")}
-          {renderMediaNoLaneStatus("Audio")}
-          {renderLaneChoiceDisclosure(...mediaShelfRelevantKinds())}
-          <Show when={mediaShelfAssets().length > 0} fallback={<p class="emptyState">No matching Media Library sources.</p>}>
-            <div class="timelineExternalSourceShelfItems">
-              <For each={mediaShelfAssets()}>
-                {(asset) => {
-                  const availability = () => props.mediaAssetAvailabilityById[asset.id];
-                  const placementAllowed = () => mediaAssetAvailabilityAllowsTimelinePlacement(availability());
-                  const availabilityIsError = () => {
-                    const kind = availability()?.kind;
-                    return kind === "missing" || kind === "hash_mismatch" || kind === "unreadable";
-                  };
-                  const placementTitle = (laneKind: "Video" | "Audio") => placementAllowed()
-                    ? `Drag to a ${laneKind} Timeline lane${mediaTimelineSourceDescription(asset, laneKind)}; click to place at the playhead`
-                    : `Verify ${asset.label} before placing it on the Timeline`;
-                  return <article class="timelineExternalSourceCard media" data-timeline-source-media-id={asset.id}>
-                    <div class="timelineExternalSourceCardTitle">
-                      <strong data-no-localize>{asset.label}</strong>
-                      <small
-                        data-timeline-source-media-availability={availability()?.kind ?? "unverified"}
-                        role={availabilityIsError() ? "alert" : "status"}
-                      >{localizedSourceText(mediaAssetAvailabilityLabel(availability()))}</small>
-                    </div>
-                    <div class="timelineExternalSourceCardActions">
-                      <button
-                        type="button"
-                        data-timeline-source-media-verify={asset.id}
-                        title={localizedSourceText(`Verify ${asset.label} on this machine`)}
-                        onClick={() => void props.onVerify([asset.id])}
-                      >{localizedSourceText("Verify")}</button>
-                      <Show when={mediaAssetHasVideo(asset)}>
-                        <button
-                          type="button"
-                          draggable={placementAllowed()}
-                          disabled={!placementAllowed()}
-                          data-timeline-external-source="media_asset"
-                          data-timeline-external-source-kind="Video"
-                          data-timeline-source-media-kind="Video"
-                          aria-label={localizedSourceText(`Drag media ${asset.label} to a Video lane${mediaTimelineSourceDescription(asset, "Video")}`)}
-                          title={localizedSourceText(placementTitle("Video"))}
-                          onDragStart={(event) => startSourceShelfDrag(event, mediaPayload(asset, "Video"))}
-                          onClick={() => placeSourceShelfPayload(mediaPayload(asset, "Video"))}
-                        >{mediaTimelineSourceLabel(asset, "Video")}</button>
-                      </Show>
-                      <Show when={mediaAssetHasAudio(asset)}>
-                        <button
-                          type="button"
-                          draggable={placementAllowed()}
-                          disabled={!placementAllowed()}
-                          data-timeline-external-source="media_asset"
-                          data-timeline-external-source-kind="Audio"
-                          data-timeline-source-media-kind="Audio"
-                          aria-label={localizedSourceText(`Drag media ${asset.label} to an Audio lane${mediaTimelineSourceDescription(asset, "Audio")}`)}
-                          title={localizedSourceText(placementTitle("Audio"))}
-                          onDragStart={(event) => startSourceShelfDrag(event, mediaPayload(asset, "Audio"))}
-                          onClick={() => placeSourceShelfPayload(mediaPayload(asset, "Audio"))}
-                        >{mediaTimelineSourceLabel(asset, "Audio")}</button>
-                      </Show>
-                      <Show when={!mediaAssetHasVideo(asset) && !mediaAssetHasAudio(asset)}>
-                        <span class="timelineExternalDragUnavailable">Timeline source unavailable</span>
-                      </Show>
-                    </div>
-                  </article>
-                }}
+          <Show when={sourceShelfFilter() === "All" || sourceShelfFilter() === "Lighting"}>
+            <section aria-label="Scenes" data-timeline-source-shelf-scenes>
+              <Show
+                when={sceneAuthorityUnavailable() === null}
+                fallback={
+                  <p
+                    class="emptyState"
+                    role="alert"
+                    data-bank-authority-unavailable={bankAuthority().issue?.kind ?? "cue_option_mismatch"}
+                  >
+                    {localizedSourceText(sceneAuthorityUnavailable() ?? "")}
+                  </p>
+                }
+              >
+              {renderNoLaneStatus("Lighting")}
+              {renderLaneChoiceDisclosure("Lighting")}
+              <Show when={shelfBanks().length > 0} fallback={<p class="emptyState">No Scenes are available yet.</p>}>
+                <div class="timelineExternalSourceShelfBanks" data-timeline-source-shelf-banks>
+                  <For each={shelfBanks()}>
+                    {(bank) => (
+                      <section
+                        class="timelineExternalSourceShelfBank"
+                        style={{
+                          "--bank-identity": groupIdentityCss(timelineSourceShelfBankIdentity(bank.cue_list_id), undefined, "fill"),
+                          "--bank-identity-text": groupIdentityCss(timelineSourceShelfBankIdentity(bank.cue_list_id), undefined, "text"),
+                        }}
+                        data-timeline-source-shelf-bank={bank.key}
+                        data-timeline-source-shelf-bank-id={bank.cue_list_id}
+                        data-timeline-source-shelf-bank-hue={groupIdentityHue(timelineSourceShelfBankIdentity(bank.cue_list_id))}
+                        aria-label={localizedSourceText(`Timeline Bank ${bank.label}`)}
+                      >
+                        <header class="timelineExternalSourceShelfBankHeader">
+                          <i class="timelineExternalSourceShelfBankStrip" aria-hidden="true" />
+                          <div class="timelineExternalSourceShelfBankTitle">
+                            <strong data-no-localize>
+                              {bank.label}
+                            </strong>
+                            <span>{bank.scenes.length}</span>
+                          </div>
+                        </header>
+                        <Show
+                          when={bank.scenes.length > 0}
+                          fallback={<p class="emptyState timelineExternalSourceBankEmpty">{localizedSourceText("No Scenes in this Bank yet.")}</p>}
+                        >
+                          <div class="timelineExternalSourceShelfBankScenes">
+                            <For each={bank.scenes}>
+                              {(cue) => renderSceneSourceCard(cue)}
+                            </For>
+                          </div>
+                        </Show>
+                      </section>
+                )}
               </For>
             </div>
+          </Show>
+          </Show>
+        </section>
+          </Show>
+          <Show when={sourceShelfFilter() !== "Lighting"}>
+            <section aria-label="Media Library" data-timeline-source-shelf-media>
+              {renderMediaNoLaneStatus("Video")}
+              {renderMediaNoLaneStatus("Audio")}
+              {renderLaneChoiceDisclosure(...mediaShelfRelevantKinds())}
+              <Show when={mediaShelfAssets().length > 0} fallback={<p class="emptyState">No matching Media Library sources.</p>}>
+                <div class="timelineExternalSourceShelfItems">
+                  <For each={mediaShelfAssets()}>
+                    {(asset) => {
+                      const availability = () => props.mediaAssetAvailabilityById[asset.id];
+                      const placementAllowed = () => mediaAssetAvailabilityAllowsTimelinePlacement(availability());
+                      const availabilityIsError = () => {
+                        const kind = availability()?.kind;
+                        return kind === "missing" || kind === "hash_mismatch" || kind === "unreadable";
+                      };
+                      const placementTitle = (laneKind: "Video" | "Audio") => placementAllowed()
+                        ? `Drag to a ${laneKind} Timeline lane${mediaTimelineSourceDescription(asset, laneKind)}; click to place at the playhead`
+                        : `Verify ${asset.label} before placing it on the Timeline`;
+                      return <article class="timelineExternalSourceCard media" data-timeline-source-media-id={asset.id}>
+                        <div class="timelineExternalSourceCardTitle">
+                          <strong data-no-localize>{asset.label}</strong>
+                          <small
+                            data-timeline-source-media-availability={availability()?.kind ?? "unverified"}
+                            role={availabilityIsError() ? "alert" : "status"}
+                          >{localizedSourceText(mediaAssetAvailabilityLabel(availability()))}</small>
+                        </div>
+                        <div class="timelineExternalSourceCardActions">
+                          <button
+                            type="button"
+                            data-timeline-source-media-verify={asset.id}
+                            title={localizedSourceText(`Verify ${asset.label} on this machine`)}
+                            onClick={() => void props.onVerify([asset.id])}
+                          >{localizedSourceText("Verify")}</button>
+                          <Show when={mediaAssetHasVideo(asset)}>
+                            <button
+                              type="button"
+                              draggable={placementAllowed()}
+                              disabled={!placementAllowed()}
+                              data-timeline-external-source="media_asset"
+                              data-timeline-external-source-kind="Video"
+                              data-timeline-source-media-kind="Video"
+                              aria-label={localizedSourceText(`Drag media ${asset.label} to a Video lane${mediaTimelineSourceDescription(asset, "Video")}`)}
+                              title={localizedSourceText(placementTitle("Video"))}
+                              onDragStart={(event) => startSourceShelfDrag(event, mediaPayload(asset, "Video"))}
+                              onClick={() => placeSourceShelfPayload(mediaPayload(asset, "Video"))}
+                            >{mediaTimelineSourceLabel(asset, "Video")}</button>
+                          </Show>
+                          <Show when={mediaAssetHasAudio(asset)}>
+                            <button
+                              type="button"
+                              draggable={placementAllowed()}
+                              disabled={!placementAllowed()}
+                              data-timeline-external-source="media_asset"
+                              data-timeline-external-source-kind="Audio"
+                              data-timeline-source-media-kind="Audio"
+                              aria-label={localizedSourceText(`Drag media ${asset.label} to an Audio lane${mediaTimelineSourceDescription(asset, "Audio")}`)}
+                              title={localizedSourceText(placementTitle("Audio"))}
+                              onDragStart={(event) => startSourceShelfDrag(event, mediaPayload(asset, "Audio"))}
+                              onClick={() => placeSourceShelfPayload(mediaPayload(asset, "Audio"))}
+                            >{mediaTimelineSourceLabel(asset, "Audio")}</button>
+                          </Show>
+                          <Show when={!mediaAssetHasVideo(asset) && !mediaAssetHasAudio(asset)}>
+                            <span class="timelineExternalDragUnavailable">Timeline source unavailable</span>
+                          </Show>
+                        </div>
+                      </article>
+                    }}
+                  </For>
+                </div>
+              </Show>
+            </section>
           </Show>
         </div>
       </Show>
       <Show when={sourceContextMode() === "inspector"}>
         <section id="timeline-source-context-panel-inspector" role="tabpanel" aria-labelledby="timeline-source-context-tab-inspector">
           {props.inspectorContent ?? <div class="timelineExternalSourceShelfInspector" data-timeline-source-shelf-inspector><p>Select a Timeline item to inspect it.</p></div>}
+        </section>
+      </Show>
+      <Show when={sourceContextMode() === "video-preview"}>
+        <section id="timeline-source-context-panel-video-preview" role="tabpanel" aria-labelledby="timeline-source-context-tab-video-preview">
+          {props.previewContent}
         </section>
       </Show>
     </section>

@@ -14,6 +14,8 @@ runtimeの小さい読取に伴う全量snapshot複製の除去は
 で解消し、最適化構成の比較値を同文書へ記録した。
 snapshot生成時のpercentile重複sortと測定窓分離は
 [telemetry改善チェックポイント](TELEMETRY_PERCENTILES_2026-09-05.md)を参照。
+追加依頼のTimeline全映像出力プレビューとソース分類統合は
+[Timeline出力プレビュー](TIMELINE_OUTPUT_PREVIEW_2026-09-05.md)を参照。
 以下のalpha.69録画チェックポイントのartifact/hashはその時点の記録を保持する。
 
 ## 台帳の読み替え

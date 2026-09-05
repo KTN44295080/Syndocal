@@ -10,6 +10,7 @@
     "check:frontend-invokes": "node scripts/check-frontend-tauri-invokes.mjs",
     "check:video-runtime-polling": "node scripts/check-video-runtime-polling.mjs",
     "check:edit-video-fx": "node scripts/check-edit-video-fx.mjs",
+    "check:timeline-output-preview": "node scripts/check-timeline-output-monitors.mjs && node scripts/check-timeline-output-preview-browser.mjs",
     "check:pane-window-lifecycle": "node scripts/check-pane-window-lifecycle.mjs",
     "check:frontend-command-routing": "node scripts/check-frontend-command-routing.mjs",
     "check:dmx-addressing": "node scripts/check-dmx-addressing-helpers.mjs",

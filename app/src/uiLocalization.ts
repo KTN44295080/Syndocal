@@ -514,6 +514,13 @@ const japaneseText: Record<string, string> = {
   "Timeline source categories": "タイムラインソースカテゴリ",
   "Timeline source or inspector": "タイムラインソースまたはインスペクター",
   "Timeline source shelf": "タイムラインソース棚",
+  "Timeline context": "タイムラインの表示",
+  "Timeline source filters and verification": "ソースの種類と検証",
+  "Video Preview": "映像プレビュー",
+  "Video output preview": "映像出力プレビュー",
+  "No video outputs configured.": "映像出力が設定されていません。",
+  "Invalid output resolution.": "出力解像度が無効です。",
+  "Waiting for output frame.": "出力映像を待っています。",
   "Audio lanes accept Audio media sources; Cue drops require a Lighting lane.":
     "音声レーンには音声メディアソースを配置できます。キューは照明レーンへドロップしてください。",
   "Video lanes accept Video media sources; Cue drops require a Lighting lane.":

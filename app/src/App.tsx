@@ -123,7 +123,8 @@ import {
   mediaAssetMappingPreflightProvenance,
 } from "./mediaAssetUiFences";
 import { TimelineCueEventsPanel } from "./components/TimelineCueEventsPanel";
-import { TimelineSourceShelf } from "./components/TimelineSourceShelf";
+import { TimelineSourceShelf, type TimelineSourceContextMode } from "./components/TimelineSourceShelf";
+import { TimelineOutputPreview } from "./components/TimelineOutputPreview";
 import { TimelineOperatorBar } from "./components/TimelineOperatorBar";
 import { TimelineLightingAutomationPanel } from "./components/TimelineLightingAutomationPanel";
 import { EditableTouchSurface } from "./components/EditableTouchSurface";
@@ -2356,7 +2357,7 @@ export default function App() {
   const [timelineContextDrawer, setTimelineContextDrawer] = createSignal<TimelineContextDrawer>(
     initialWorkspaceLayout.timeline_context_drawer,
   );
-  const [timelineLowerContextMode, setTimelineLowerContextMode] = createSignal<"sources" | "inspector">("sources");
+  const [timelineLowerContextMode, setTimelineLowerContextMode] = createSignal<TimelineSourceContextMode>("sources");
   const [timelineChildCueId, setTimelineChildCueId] = createSignal<number | null>(null);
   const [controlLiveView, setControlLiveView] = createSignal<"matrix" | "pads">("matrix");
   const [touchControlDomain, setTouchControlDomain] = createSignal<"lighting" | "video">("lighting");
@@ -28032,6 +28033,7 @@ export default function App() {
                 onContextModeChange={setTimelineLowerContextMode}
                 onOpenInspector={() => setTimelineLowerContextMode("inspector")}
                 inspectorContent={renderTimelineInspector()}
+                previewContent={<TimelineOutputPreview outputs={snapshot().video.outputs} invoke={invoke} backendAvailable={isTauriRuntime()} />}
               />
             ) : undefined
           }

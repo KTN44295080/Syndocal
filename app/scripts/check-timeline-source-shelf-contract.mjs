@@ -35,7 +35,7 @@ const localization = await load("uiLocalization.ts");
 const shelfSource = await readFile(new URL("../src/components/TimelineSourceShelf.tsx", import.meta.url), "utf8");
 const matrixSource = await readFile(new URL("../src/components/SceneMatrixPanel.tsx", import.meta.url), "utf8");
 const cueManagementSource = await readFile(new URL("../src/components/CueManagementPanel.tsx", import.meta.url), "utf8");
-const appSource = await readFile(new URL("../src/App.tsx", import.meta.url), "utf8");
+const appSource = (await readFile(new URL("../src/App.tsx", import.meta.url), "utf8")).replace(/\r\n/g, "\n");
 const timelineCommandDispatchersSource = await readFile(new URL("../src/timelineCommandDispatchers.ts", import.meta.url), "utf8");
 const cssSource = await readFile(new URL("../src/styles.css", import.meta.url), "utf8");
 const packageSource = await readFile(new URL("../package.json", import.meta.url), "utf8");
@@ -640,7 +640,7 @@ assert.match(shelfSource, /onVerify: \(assetIds: MediaAssetId\[\]\) => void \| P
 assert.match(shelfSource, /mediaAssetAvailabilityAllowsTimelinePlacement/);
 assert.doesNotMatch(shelfSource, /availability === undefined \|\| availability\.kind === "available_verified"/);
 assert.match(shelfSource, /data-timeline-source-media-verify-all/);
-assert.match(shelfSource, /aria-label=\{localizedSourceText\("Media source filters and verification"\)\}/);
+assert.match(shelfSource, /aria-label=\{localizedSourceText\("Timeline source filters and verification"\)\}/);
 assert.match(shelfSource, /onClick=\{\(\) => void props\.onVerify\(props\.mediaAssets\.map\(\(asset\) => asset\.id\)\)\}/);
 assert.match(shelfSource, /data-timeline-source-media-verify=\{asset\.id\}/);
 assert.match(shelfSource, /onClick=\{\(\) => void props\.onVerify\(\[asset\.id\]\)\}/);
@@ -660,7 +660,7 @@ for (const [source, expectedJapanese] of [
   ["Verify", "検証"],
   ["Verify All", "すべて検証"],
   ["Verify machine-local Media Library availability before Timeline placement", "タイムライン配置前に、このマシンのメディアライブラリ利用可否を検証"],
-  ["Media source filters and verification", "メディアソースの絞り込みと検証"],
+  ["Timeline source filters and verification", "ソースの種類と検証"],
   ["Verify Timeline AV Source on this machine", "Timeline AV Sourceをこのマシンで検証"],
   ["Verify Timeline AV Source before placing it on the Timeline", "Timeline AV Sourceをタイムラインへ配置する前に検証"],
 ]) {
@@ -883,11 +883,13 @@ const assertAppAuthorityGuards = (source, commandDispatchersSource) => {
   assert.match(source, /controlEditBankAuthorityFence\.isCurrent/);
 };
 assertAppAuthorityGuards(appSource, timelineCommandDispatchersSource);
+const appWithoutCreateExecutorGuard = appSource.replace(
+  "if (!requireAuthoritativeCueList(cueListId)) return;\n    try {\n      const executorId",
+  "try {\n      const executorId",
+);
+assert.notEqual(appWithoutCreateExecutorGuard, appSource, "the negative control must actually remove the create-executor guard");
 assert.throws(
-  () => assertAppAuthorityGuards(appSource.replace(
-    "if (!requireAuthoritativeCueList(cueListId)) return;\n    try {\n      const executorId",
-    "try {\n      const executorId",
-  ), timelineCommandDispatchersSource),
+  () => assertAppAuthorityGuards(appWithoutCreateExecutorGuard, timelineCommandDispatchersSource),
   /createPlaybackExecutor/,
   "the App contract must reject a component-bypass create-executor regression",
 );
@@ -959,12 +961,15 @@ assert.match(
   /onSelectEvent=\{\(eventId, openProperties = false\) => \{\s*selectTimelineEvent\(eventId, false\);/,
   "Lighting event selection also updates the shared tagged selection",
 );
-assert.match(
-  shelfSource,
-  /const selectSourceShelfTab = \(tab: "Scenes" \| "Media Library"\) => \{[\s\S]*?if \(sourceContextMode\(\) !== "sources"\) selectSourceContextMode\("sources"\);/,
-  "choosing Scenes or Media Library from the compact header returns to Sources",
-);
-assert.match(shelfSource, /onClick=\{\(\) => selectSourceShelfTab\("Scenes"\)\}/);
-assert.match(shelfSource, /onClick=\{\(\) => selectSourceShelfTab\("Media Library"\)\}/);
+// Source categories now live inside the single Sources panel. The former
+// header categories switched away from Inspector; they must no longer remain
+// as hidden-state controls while Inspector or Video Preview is selected.
+assert.doesNotMatch(shelfSource, /data-timeline-source-shelf-category|selectSourceShelfTab/);
+assert.match(shelfSource, /<Show when=\{sourceContextMode\(\) === "sources"\}>[\s\S]*?id="timeline-source-context-panel-sources"[\s\S]*?class="timelineExternalSourceShelfFilters"/);
+assert.match(shelfSource, /\["All", "Lighting", "Video", "Audio"\] as const/);
+assert.match(shelfSource, /aria-pressed=\{sourceShelfFilter\(\) === filter\}/);
+assert.match(shelfSource, /<Show when=\{sourceShelfFilter\(\) === "All" \|\| sourceShelfFilter\(\) === "Lighting"\}>[\s\S]*?data-timeline-source-shelf-scenes/);
+assert.match(shelfSource, /<Show when=\{sourceShelfFilter\(\) !== "Lighting"\}>[\s\S]*?data-timeline-source-shelf-media/);
+assert.match(shelfSource, /filter === "All"\s*\|\| \(filter === "Video" && mediaAssetHasVideo\(asset\)\)\s*\|\| \(filter === "Audio" && mediaAssetHasAudio\(asset\)\)/);
 
 console.log("timeline source shelf Bank/Scene contract ok");

@@ -2,16 +2,25 @@ import assert from "node:assert/strict";
 
 export async function assertTimelineSourceTargetReveal({ client, click, evaluate, waitFor }) {
   assert.equal(
-    await click(client, '[data-timeline-source-shelf-category="media"]'),
+    await click(client, '[data-timeline-source-shelf-mode="sources"]'),
     true,
-    "1280 Timeline Sources opens Media Library target controls",
+    "1280 Timeline opens Sources before choosing a source filter",
   );
   await waitFor(
-    () => evaluate(client, "document.querySelector('#timeline-source-context-panel-media')?.getBoundingClientRect().height > 0"),
+    () => evaluate(client, "document.querySelector('[data-timeline-source-shelf-filter=\"all\"]')?.getBoundingClientRect().height > 0"),
+    "1280 Timeline source kind filters",
+  );
+  assert.equal(
+    await click(client, '[data-timeline-source-shelf-filter="all"]'),
+    true,
+    "1280 Timeline Sources includes both media kinds in All",
+  );
+  await waitFor(
+    () => evaluate(client, "document.querySelector('[data-timeline-source-shelf-media]')?.getBoundingClientRect().height > 0"),
     "1280 Timeline Media Library source panel",
   );
   assert.equal(
-    await click(client, '#timeline-source-context-panel-media .timelineExternalSourcePlacementDisclosure > summary'),
+    await click(client, '[data-timeline-source-shelf-media] .timelineExternalSourcePlacementDisclosure > summary'),
     true,
     "1280 Timeline Media Library target disclosure opens",
   );
@@ -100,8 +109,8 @@ export async function assertTimelineSourceTargetReveal({ client, click, evaluate
     if (scrollport instanceof HTMLElement) scrollport.scrollTop = 0;
   })()`);
   assert.equal(
-    await click(client, '[data-timeline-source-shelf-category="scenes"]'),
+    await click(client, '[data-timeline-source-shelf-filter="lighting"]'),
     true,
-    "1280 Timeline Sources restores Scenes after target-reveal proof",
+    "1280 Timeline Sources shows Lighting sources after target-reveal proof",
   );
 }

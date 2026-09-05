@@ -665,15 +665,16 @@ assert.equal(rejectedCallbacks, runtimeCases.length, "each runtime rejection mus
 assert.equal(rejectedMutations, 0, "rejected external drops must not invoke a production mutation callback");
 
 const sourceShelf = await readFile(new URL("../src/components/TimelineSourceShelf.tsx", import.meta.url), "utf8");
-assert.match(sourceShelf, /role="tablist" aria-label="Timeline source or inspector"/);
-assert.match(sourceShelf, /id="timeline-source-context-tab-sources" role="tab"/);
-assert.match(sourceShelf, /id="timeline-source-context-panel-scenes" role="tabpanel"/);
-assert.match(sourceShelf, /id="timeline-source-context-panel-media" role="tabpanel"/);
-assert.equal(sourceShelf.match(/id="timeline-source-context-panel-scenes"/g)?.length, 1);
-assert.equal(sourceShelf.match(/id="timeline-source-context-panel-media"/g)?.length, 1);
-assert.match(sourceShelf, /id="timeline-source-context-panel-inspector" role="tabpanel"/);
-assert.match(sourceShelf, /role="group" aria-label="Timeline source categories"/);
-assert.match(sourceShelf, /aria-pressed=\{sourceShelfTab\(\) === "Scenes"\}/);
+assert.match(sourceShelf, /role="tablist" aria-label="Timeline context"/);
+for (const mode of ["sources", "inspector", "video-preview"]) {
+  assert.match(sourceShelf, new RegExp(`id="timeline-source-context-tab-${mode}" role="tab"`));
+  assert.match(sourceShelf, new RegExp(`id="timeline-source-context-panel-${mode}" role="tabpanel"`));
+  assert.equal(sourceShelf.match(new RegExp(`id="timeline-source-context-panel-${mode}"`, "g"))?.length, 1);
+}
+// One source tab now contains the kind filters; retired category panels must
+// not coexist with the unified source browser.
+assert.doesNotMatch(sourceShelf, /timeline-source-context-panel-(?:scenes|media)|data-timeline-source-shelf-category/);
+assert.match(sourceShelf, /aria-pressed=\{sourceShelfFilter\(\) === filter\}/);
 assert.match(sourceShelf, /data-timeline-source-shelf-filter/);
 assert.match(
   sourceShelf,
@@ -731,4 +732,4 @@ assert.match(
   "the shared controller must send cue, snapped time, track, and exact layer through add_timeline_scene_block",
 );
 
-console.log("timeline external DnD contract: PASS (strict MIME parser, exact drop-lane primary, sole-click auto-resolution, explicit linked companions, zero-candidate fail-closed, mounted Sources/Inspector, registered production mutation chain)");
+console.log("timeline external DnD contract: PASS (strict MIME parser, exact drop-lane primary, sole-click auto-resolution, explicit linked companions, zero-candidate fail-closed, mounted Sources/Inspector/Video Preview, unified source filters, registered production mutation chain)");
