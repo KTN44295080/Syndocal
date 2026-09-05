@@ -6,6 +6,7 @@ license.workspace = true
 
 [features]
 default = []
+test-support = []
 ndi = ["dep:grafton-ndi"]
 
 [dependencies]

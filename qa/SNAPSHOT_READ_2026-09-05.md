@@ -36,6 +36,8 @@ ACK/publication、command ownership順序は維持する。
 - 同benchmarkの`--release`試行は既存engineテストのコンパイルでFAIL（56 errors）。
   例: ioのOpenDmxTestSerialPortがdebug_assertions限定なのにrelease側engineテストが参照。
   今回変更していないテスト構成の残件。debug assertionやwarningを無効化して隠さない。
+  続行でこの構成不備を修正し、最適化構成で実行済み:
+  [テストsupport分離・release計測](SERIAL_TEST_SUPPORT_2026-09-05.md)。
 - `node app/scripts/check-video-runtime-polling.mjs`: PASS、clip/transition各1進行中read。
 - `node app/scripts/check-timeline-follow-runtime.mjs`: 初回CRLF sourceにLF固定regexが失敗。
   読込だけCRLF→LFへ正規化してPASS。既存assertionは変更していない。
