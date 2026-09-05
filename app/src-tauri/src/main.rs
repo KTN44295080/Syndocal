@@ -64859,7 +64859,7 @@ where
     // Take Over preparation already exists, any failure here removes it (or
     // leaves it pending fail-closed if the abort itself cannot be persisted).
     let desired_role = state.engine.output_ownership_status().desired_role;
-    let pre_ack_transition: Result<engine::OutputOwnershipTransition, String> = (|| {
+    let pre_ack_transition: Result<engine::OutputOwnershipRetirement, String> = (|| {
         if coordinator_effect != ProjectReplacementCoordinatorEffect::RuntimeSanitize {
             // Identity and HistoryNavigation invalidate any prior browser
             // recovery image. Persist the new machine-local serial before
@@ -64889,24 +64889,37 @@ where
             };
             platform.advance_recovery_authority(state, coordinator, transition)?;
         }
+        let stop_signals = show_spout_authority_change_stop_signals(state)?;
+        let retirement = state.engine
+            .reserve_output_ownership_retirement(desired_role, &stop_signals)
+            .map_err(|error| format!("Project replacement could not enter output fence: {error}"))?;
         // Fence callbacks before taking any input slot. A constructor can
         // receive data immediately, so every callback compares this
         // generation again just before it sends an engine command. On a later
         // retirement failure the old inputs remain fail-closed rather than
         // addressing the replacement.
-        reserve_project_callback_epoch(&state.project_callback_epoch)?;
-        reserve_project_callback_epoch(&state.project_mapping_callback_epoch)?;
-        retire_project_control_inputs_before_project_publish(state)?;
+        let input_retirement = (|| {
+            reserve_project_callback_epoch(&state.project_callback_epoch)?;
+            reserve_project_callback_epoch(&state.project_mapping_callback_epoch)?;
+            retire_project_control_inputs_before_project_publish(state)
+        })();
+        if let Err(error) = input_retirement {
+            // Stop signals are already visible. Join the resources even when
+            // callback/input fencing fails so no teardown lease is orphaned.
+            let cleanup = platform.fence_and_retire_outputs(state);
+            retirement.fail(error.clone());
+            return Err(match cleanup {
+                Ok(()) => error,
+                Err(cleanup_error) => format!("{error}; output retirement also failed: {cleanup_error}"),
+            });
+        }
         // Read desired only after serializing against Arm/role changes. The
         // guard above also prevents a stale R4 or cancelled polling
         // publication from touching recovery/callback/input state before this
         // physical boundary.
-        state
-            .engine
-            .begin_output_ownership_transition(desired_role)
-            .map_err(|error| format!("Project replacement could not enter output fence: {error}"))
+        Ok(retirement)
     })();
-    let mut transition = match pre_ack_transition {
+    let mut retirement = match pre_ack_transition {
         Ok(transition) => Some(transition),
         Err(error) => {
             if durable_takeover_pending {
@@ -64918,12 +64931,17 @@ where
         }
     };
 
+    let mut transition = None;
     let replacement = (|| {
         platform.fence_and_retire_outputs(state)?;
+        transition = Some(retirement.take().expect("retirement is consumed once").finish_retirement()?);
         publish_project_snapshot_with_runtime_reset_admission(state, prepared.snapshot.clone())
     })();
 
     if let Err(error) = replacement {
+        if let Some(retirement) = retirement.take() {
+            retirement.fail(error.clone());
+        }
         if let Some(transition) = transition.take() {
             // A failed retirement/publication is a physical transition
             // failure.  Keep desired/persisted role untouched.
@@ -70647,6 +70665,20 @@ fn harvest_spout_output_failures(
         .map_err(|_| "Spout transport state lock was poisoned".to_string())?
         .harvest_failed_workers(engine)
         .map_err(|error| error.message)
+}
+
+fn show_spout_authority_change_stop_signals(state: &AppState) -> Result<Vec<Arc<AtomicBool>>, String> {
+    #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+    {
+        return state.show_spout_transport.lock()
+            .map(|transport| transport.authority_change_stop_signals())
+            .map_err(|_| "Show Spout transport state lock was poisoned before authority transition".to_string());
+    }
+    #[cfg(not(all(feature = "spout", target_os = "windows", target_arch = "x86_64")))]
+    {
+        let _ = state;
+        Ok(Vec::new())
+    }
 }
 
 /// The strict show pair is not represented by generic route synchronization.
@@ -85514,6 +85546,7 @@ fn curl_binary_name() -> &'static str {
 
 #[cfg(test)]
 pub(crate) mod tests {
+    include!("project_retirement_boundary_tests.rs");
     use super::*;
     use protocol::{ClockSource, VideoLayerSummary};
 

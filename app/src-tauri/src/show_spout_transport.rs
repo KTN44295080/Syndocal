@@ -608,6 +608,14 @@ impl Default for ShowSpoutTransportState {
 }
 
 impl ShowSpoutTransportState {
+    /// Signal only while the engine gate atomically reserves all-deny.
+    /// Collection itself never stops a worker under Ready authority.
+    pub(crate) fn authority_change_stop_signals(&self) -> Vec<Arc<AtomicBool>> {
+        self.active.as_ref().map_or_else(Vec::new, |pair| {
+            vec![pair.background.stop_signal(), pair.foreground.stop_signal()]
+        })
+    }
+
     fn reject_reaping(&self, phase: &str) -> Result<(), String> {
         if let Some(reaping) = self.reaping.as_ref() {
             return Err(format!(
@@ -986,6 +994,7 @@ impl ShowSpoutTransportState {
             }
             return Ok(None);
         };
+        pair.request_stop();
         pair.control.mark_authority_lost();
         let reaping = ShowSpoutReaping {
             expected: pair.expected.clone(),
@@ -1094,7 +1103,15 @@ impl ShowSpoutTransportState {
         let failed = self
             .active
             .as_ref()
-            .is_some_and(ShowSpoutOutputPair::has_failed_worker);
+            .is_some_and(|pair| {
+                // The authority-transition owner already reserved these
+                // workers for stop/join. A concurrent R4/status harvest must
+                // not steal that pair merely because its planned stop finished.
+                // Either flag suffices: the gate stores the two flags in order.
+                pair.has_failed_worker()
+                    && !pair.background.stop_requested()
+                    && !pair.foreground.stop_requested()
+            });
         if !failed {
             return Ok(None);
         }
@@ -1219,6 +1236,11 @@ struct ShowSpoutOutputPair {
 }
 
 impl ShowSpoutOutputPair {
+    fn request_stop(&self) {
+        self.background.request_stop();
+        self.foreground.request_stop();
+    }
+
     fn matches(&self, expected: &ShowSpoutOutputs) -> bool {
         self.expected == *expected
     }
@@ -1299,6 +1321,7 @@ pub(crate) fn send_show_spout_keepalive_black<S: SpoutOutputSender>(
 
 #[cfg(test)]
 mod tests {
+    include!("show_spout_planned_harvest_tests.rs");
     use std::collections::HashMap;
     use std::sync::atomic::{AtomicUsize, Ordering};
 

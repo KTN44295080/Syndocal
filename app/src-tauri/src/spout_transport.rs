@@ -1243,6 +1243,39 @@ impl SpoutRouteWorker {
         drop(lease);
     }
 
+    /// Announce intentional retirement before invalidating shared authority.
+    /// Joining still reports any earlier worker or physical teardown failure.
+    pub(crate) fn request_stop(&self) {
+        self.stop.store(true, Ordering::Release);
+    }
+
+    pub(crate) fn stop_signal(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.stop)
+    }
+
+    pub(crate) fn stop_requested(&self) -> bool {
+        self.stop.load(Ordering::Acquire)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn completed_worker_for_retirement_tests(error: Option<String>) -> Self {
+        let result = error.map_or(Ok(()), |message| Err(SpoutOutputWorkerStopError { message }));
+        let failure = Arc::new(Mutex::new(result.as_ref().err().cloned()));
+        let worker = std::thread::spawn(move || result);
+        while !worker.is_finished() {
+            std::thread::yield_now();
+        }
+        Self {
+            endpoint_name: None,
+            stop: Arc::new(AtomicBool::new(false)),
+            worker: Some(worker),
+            failure,
+            teardown_lease: Arc::new(Mutex::new(None)),
+            start_signal: None,
+            creation_lease: None,
+        }
+    }
+
     pub(crate) fn stop(mut self) -> Result<(), SpoutOutputWorkerStopError> {
         let undelivered_creation_lease = self.signal_retirement();
         self.stop.store(true, Ordering::Release);
@@ -1879,6 +1912,7 @@ fn send_show_spout_keepalive_frame<S: SpoutOutputSender>(
 
 #[cfg(test)]
 mod tests {
+    include!("show_spout_project_retirement_tests.rs");
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
 

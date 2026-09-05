@@ -1407,6 +1407,39 @@ pub struct OutputOwnershipTransition {
     finished: bool,
 }
 
+/// All-deny reservation for physical retirement. It cannot activate outputs
+/// or complete a project swap until the caller has joined the old resources.
+pub struct OutputOwnershipRetirement {
+    transition: OutputOwnershipTransition,
+    epoch: u64,
+}
+
+#[cfg(test)]
+#[path = "output_ownership_retirement_tests.rs"]
+mod output_ownership_retirement_tests;
+
+impl OutputOwnershipRetirement {
+    pub fn fail(self, error: impl Into<String>) -> OutputOwnershipStatus {
+        self.transition.fail(error)
+    }
+
+    pub fn finish_retirement(self) -> Result<OutputOwnershipTransition, String> {
+        {
+            let state = self.transition.gate.inner.state.lock()
+                .map_err(|_| "Output ownership gate lock was poisoned".to_string())?;
+            if !state.transition_active
+                || state.status.state != OutputOwnershipState::Transitioning
+                || state.status.epoch != self.epoch
+                || state.status.desired_role != self.transition.target
+                || state.in_flight != 0
+            {
+                return Err("Project output retirement is not quiescent or its reservation was superseded".to_string());
+            }
+        }
+        Ok(self.transition)
+    }
+}
+
 impl OutputOwnershipGate {
     pub fn startup_denied() -> Self {
         Self::with_status(OutputOwnershipStatus::failed(
@@ -1528,6 +1561,14 @@ impl OutputOwnershipGate {
     /// intentional: failure handling must still be able to account for the
     /// resource that is about to be torn down.
     fn begin_failure_fence(&self, error: impl Into<String>) -> OutputOwnershipTeardownLease {
+        self.begin_failure_fence_stopping(error, &[])
+    }
+
+    fn begin_failure_fence_stopping(
+        &self,
+        error: impl Into<String>,
+        stop_signals: &[Arc<AtomicBool>],
+    ) -> OutputOwnershipTeardownLease {
         let mut state = match self.inner.state.lock() {
             Ok(state) => state,
             Err(poisoned) => poisoned.into_inner(),
@@ -1544,6 +1585,11 @@ impl OutputOwnershipGate {
         state.status = status;
         state.transition_active = true;
         state.in_flight = state.in_flight.saturating_add(1);
+        // Only atomic stores are allowed under this lock: workers may wake
+        // and acquire a teardown lease as soon as these signals are visible.
+        for signal in stop_signals {
+            signal.store(true, Ordering::Release);
+        }
         self.inner.changed.notify_all();
         OutputOwnershipTeardownLease {
             inner: Arc::clone(&self.inner),
@@ -1555,6 +1601,37 @@ impl OutputOwnershipGate {
         target: MachineOutputRole,
     ) -> Result<OutputOwnershipTransition, String> {
         self.begin_transition_with_timeout(target, OUTPUT_OWNERSHIP_TRANSITION_TIMEOUT)
+    }
+
+    fn reserve_retirement(
+        &self,
+        target: MachineOutputRole,
+        stop_signals: &[Arc<AtomicBool>],
+    ) -> Result<OutputOwnershipRetirement, String> {
+        let mut state = self.inner.state.lock()
+            .map_err(|_| "Output ownership gate lock was poisoned".to_string())?;
+        if state.transition_active {
+            return Err("Output ownership transition is already in progress".to_string());
+        }
+        let desired = state.status.desired_role;
+        let persisted = state.status.persisted_role;
+        let epoch = state.status.epoch.saturating_add(1);
+        state.transition_active = true;
+        state.status = OutputOwnershipStatus::transitioning(target, persisted, state.status.generation, epoch);
+        for signal in stop_signals {
+            signal.store(true, Ordering::Release);
+        }
+        self.inner.changed.notify_all();
+        // Do not drain here: stopped workers hold teardown leases until join.
+        Ok(OutputOwnershipRetirement {
+            transition: OutputOwnershipTransition {
+                gate: self.clone(), target,
+                pre_transition_desired_role: desired,
+                pre_transition_persisted_role: persisted,
+                finished: false,
+            },
+            epoch,
+        })
     }
 
     #[cfg(test)]
@@ -11112,6 +11189,22 @@ impl EngineHandle {
         role: MachineOutputRole,
     ) -> Result<OutputOwnershipTransition, String> {
         self.output_ownership_gate.begin_transition(role)
+    }
+
+    pub fn reserve_output_ownership_retirement(
+        &self,
+        role: MachineOutputRole,
+        stop_signals: &[Arc<AtomicBool>],
+    ) -> Result<OutputOwnershipRetirement, String> {
+        self.output_ownership_gate.reserve_retirement(role, stop_signals)
+    }
+
+    pub fn begin_output_ownership_failure_fence_stopping(
+        &self,
+        error: impl Into<String>,
+        stop_signals: &[Arc<AtomicBool>],
+    ) -> OutputOwnershipTeardownLease {
+        self.output_ownership_gate.begin_failure_fence_stopping(error, stop_signals)
     }
 
     pub fn fence_output_ownership(&self) -> Result<(), String> {

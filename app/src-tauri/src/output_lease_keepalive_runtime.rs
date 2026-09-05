@@ -2155,6 +2155,24 @@ pub(crate) struct ProductionKeepaliveFailStopPorts<'a> {
 }
 
 impl<'a> ProductionKeepaliveFailStopPorts<'a> {
+    fn reserve_failure_fence_stopping_outputs(&mut self) -> Result<(), crate::output_lease::output_lease_keepalive::OutputLeaseKeepalivePortError> {
+        if self.teardown_lease.is_some() {
+            return Ok(());
+        }
+        let (signals, signal_error) = match super::show_spout_authority_change_stop_signals(self.state) {
+            Ok(signals) => (signals, None),
+            Err(error) => {
+                self.record_failure_detail(&error);
+                (Vec::new(), Some(error))
+            }
+        };
+        self.teardown_lease = Some(self.state.engine.begin_output_ownership_failure_fence_stopping(
+            self.failure_detail.clone(), &signals,
+        ));
+        self.failure_epoch = Some(self.state.engine.output_ownership_status().epoch);
+        signal_error.map_or(Ok(()), |error| Err(Self::port_error(error)))
+    }
+
     pub(crate) fn new(
         app: &'a tauri::AppHandle,
         state: &'a super::AppState,
@@ -2253,6 +2271,11 @@ impl OutputLeaseKeepaliveFailStopPorts for ProductionKeepaliveFailStopPorts<'_> 
         _: &OutputLeaseKeepaliveFailStopPlan,
     ) -> Result<(), crate::output_lease::output_lease_keepalive::OutputLeaseKeepalivePortError>
     {
+        // Reserve all-deny and signal the strict workers in the same gate
+        // lock before S0 changes its identity. Otherwise the requested
+        // retirement is misreported as an unexpected worker failure.
+        // Even a poisoned show registry must not prevent emergency S0.
+        let reservation = self.reserve_failure_fence_stopping_outputs();
         let result = self
             .state
             .engine
@@ -2260,7 +2283,7 @@ impl OutputLeaseKeepaliveFailStopPorts for ProductionKeepaliveFailStopPorts<'_> 
         let authority = self.state.engine.safety_blackout_authority();
         self.safety = Some(authority);
         match result {
-            Ok(_) if authority.engaged => Ok(()),
+            Ok(_) if authority.engaged => reservation,
             Ok(_) => {
                 let error = "Safety blackout acknowledgement did not leave S0 engaged".to_string();
                 self.record_failure_detail(&error);
@@ -2278,14 +2301,7 @@ impl OutputLeaseKeepaliveFailStopPorts for ProductionKeepaliveFailStopPorts<'_> 
         _: &OutputLeaseKeepaliveFailStopPlan,
     ) -> Result<(), crate::output_lease::output_lease_keepalive::OutputLeaseKeepalivePortError>
     {
-        let lease = self
-            .state
-            .engine
-            .begin_output_ownership_failure_fence(self.failure_detail.clone());
-        let failure_epoch = self.state.engine.output_ownership_status().epoch;
-        self.teardown_lease = Some(lease);
-        self.failure_epoch = Some(failure_epoch);
-        Ok(())
+        self.reserve_failure_fence_stopping_outputs()
     }
 
     fn retire_dmx_usb_artnet(

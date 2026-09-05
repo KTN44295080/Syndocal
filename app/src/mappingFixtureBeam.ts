@@ -1,7 +1,30 @@
 import { cumulativeGeometryMatrix } from "./numericHelpers";
 import { rotateMappingFixtureDirection } from "./mappingFixtureOrientation";
 import { fixtureVisualKind } from "./fixtureVisuals";
-import type { PatchedFixtureSummary, Vec3 } from "./types";
+import type { AttributeValueSummary, PatchedFixtureSummary, Vec3 } from "./types";
+
+/** Same output-DMX precedence and 8/16-bit expansion as live fixture color. */
+export function mappingFixtureLiveMovement(
+  fixture: PatchedFixtureSummary,
+  previews: ReadonlyMap<number, number[]>,
+  liveAttributes: AttributeValueSummary[] = fixture.attribute_values,
+): { pan: number | undefined; tilt: number | undefined } {
+  const values = new Map(liveAttributes.map(value => [value.attribute.toLowerCase(), value.value]));
+  const read = (attribute: string) => {
+    const control = fixture.controls.find(control => control.attribute.toLowerCase() === attribute);
+    const preview = previews.get(fixture.universe);
+    if (preview !== undefined && control) {
+      const byte = (offset: number | undefined) => {
+        const value = offset ? preview[fixture.address + offset - 2] ?? 0 : 0;
+        return Math.max(0, Math.min(255, Number.isFinite(value) ? Math.round(value) : 0));
+      };
+      const coarse = byte(control.offsets[0]);
+      return control.resolution === "SixteenBit" ? coarse * 256 + byte(control.offsets[1]) : coarse * 257;
+    }
+    return values.get(attribute) ?? control?.default_value;
+  };
+  return { pan: read("pan"), tilt: read("tilt") };
+}
 
 const unit = (v: Vec3): Vec3 | null => {
   const size = Math.hypot(v.x, v.y, v.z);

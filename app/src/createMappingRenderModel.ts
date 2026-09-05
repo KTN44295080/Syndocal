@@ -6,7 +6,7 @@ import {
   fixtureLiveSegmentSkeleton,
 } from "./fixtureLiveColor";
 import { colorCandidates, readFixtureAttribute } from "./fixtureControlRuntime";
-import { mappingFixtureBeamShape, mappingBeamPoints } from "./mappingFixtureBeam";
+import { mappingFixtureBeamShape, mappingBeamPoints, mappingFixtureLiveMovement } from "./mappingFixtureBeam";
 import {
   fixtureTypeKey,
   fixtureVisualKind,
@@ -454,9 +454,26 @@ export const createMappingRenderModel = (options: MappingRenderModelOptions) => 
       const live = source && visible
         ? fixtureLiveColor(source, previewsByUniverse, liveSource?.attribute_values)
         : null;
+      const movement = source && visible
+        ? mappingFixtureLiveMovement(source, previewsByUniverse, liveSource?.attribute_values)
+        : null;
       const liveSegments = segmentSkeleton.length > 1
         ? live?.segments ?? segmentSkeleton
         : undefined;
+      const signature = live
+        ? `live:${movement?.pan}:${movement?.tilt}:${live.valueSource}:${live.color}:${live.intensity}:${liveSegments?.map((segment) => `${segment.color}:${segment.intensity}`).join("|") ?? "single"}`
+        : `offscreen:${liveSegments?.map((segment) => segment.key).join("|") ?? "single"}`;
+      const cached = mappingStageFixtureCache.get(base.id);
+      if (cached?.base === base && cached.signature === signature) {
+        return cached.fixture;
+      }
+      const beamShape = source && movement
+        ? mappingFixtureBeamShape(source, base.yaw, movement.pan, movement.tilt)
+        : base.beamShape;
+      const segmentBeamShapes = source && movement
+        ? segmentSkeleton.map(segment => mappingFixtureBeamShape(source, base.yaw, movement.pan, movement.tilt,
+          segment.key.startsWith("geometry-") ? segment.key.slice(9) : undefined))
+        : base.segmentBeamShapes;
       const beams = live && liveSegments
         ? liveSegments.map((segment, index) => {
             const exactCells = base.physicalCells?.filter(
@@ -471,7 +488,7 @@ export const createMappingRenderModel = (options: MappingRenderModelOptions) => 
                 points: mappingBeamPoints(
                   base.x + offset.x,
                   base.z + offset.z,
-                  base.segmentBeamShapes[index] === undefined ? base.beamShape : base.segmentBeamShapes[index],
+                  segmentBeamShapes[index] === undefined ? beamShape : segmentBeamShapes[index],
                 ),
                 intensity: segment.intensity,
                 color: segment.color,
@@ -493,21 +510,17 @@ export const createMappingRenderModel = (options: MappingRenderModelOptions) => 
             const z = base.z + offset.z;
             return {
               cellIndex: index + 1,
-              points: mappingBeamPoints(x, z, base.segmentBeamShapes[index] === undefined ? base.beamShape : base.segmentBeamShapes[index]),
+              points: mappingBeamPoints(x, z, segmentBeamShapes[index] === undefined ? beamShape : segmentBeamShapes[index]),
               intensity: segment.intensity,
               color: segment.color,
             };
           })
         : undefined;
-      const signature = live
-        ? `live:${live.valueSource}:${live.color}:${live.intensity}:${liveSegments?.map((segment) => `${segment.color}:${segment.intensity}`).join("|") ?? "single"}`
-        : `offscreen:${liveSegments?.map((segment) => segment.key).join("|") ?? "single"}`;
-      const cached = mappingStageFixtureCache.get(base.id);
-      if (cached?.base === base && cached.signature === signature) {
-        return cached.fixture;
-      }
       const fixture = {
         ...base,
+        beamShape,
+        segmentBeamShapes,
+        beamPoints: mappingBeamPoints(base.x, base.z, beamShape),
         ...(live ? { color: live.color, intensity: live.intensity } : {}),
         liveColorApplied: Boolean(live),
         liveColorValueSource: live?.valueSource,
