@@ -4,6 +4,10 @@
 現在の作業は録画保存の原子性修正・責務分離とVideo runtime取得の重複抑制。製品候補は `1.2.0-alpha.69`。
 この文書のコミットが今回のチェックポイントを特定する。
 
+続行したsnapshot同期の分離・複数windowでの全量応答削減は
+[snapshot同期チェックポイント](SNAPSHOT_SYNC_2026-09-05.md)を参照。
+以下のalpha.69録画チェックポイントのartifact/hashはその時点の記録を保持する。
+
 ## 台帳の読み替え
 
 元台帳58行は Supported 31 / External acceptance 19 / Deferred 2 /
@@ -133,7 +137,7 @@ Out of scope 6。Open 50行を未実装50件と数えない。
 
 | 優先 | 実装と懸念 | 最初の検証・修正境界 |
 | --- | --- | --- |
-| 高 | `main.rs` の `SnapshotSyncState` は全client共通の単一last snapshot/revision。別windowのpollが交互にrevisionを進め、full応答を増やす可能性 | 2clientのfull/delta比を決定的に計測。必要なら有界履歴またはwindow単位cursorへ分離。無制限mapを追加しない |
+| 対応済 | 監査時の `SnapshotSyncState` は全client共通の単一last snapshot/revisionで、交互pollがfull応答を増やしていた | 続行で履歴4件の独立moduleへ分離。2clientの100要求でfull100→2。[計測・制約](SNAPSHOT_SYNC_2026-09-05.md) |
 | 高 | `crates/engine/src/lib.rs` のsnapshot cloneとtick内snapshot生成がlock内にあり、authored collectionも複製 | 代表showでclone時間・lock待機・payload bytesを別々に計測。single mutation ownership、fence、ACKを維持 |
 | 高 | `main.rs` の `engine_snapshot_delta` は深い比較/clone。Stage 30Hz consumerに対しUI apply間引きだけではbackend仕事量は減らない | 上記snapshot計測とまとめて検証してからrevision/dirty trackingを選ぶ |
 | 中 | `VideoControlPanel.tsx` のlibraryOnlyはCSSでmixerを隠すが、LayerList/ISF subtreeをmountし続ける | FX到達性の修正時に必要なconsumerだけmount。見えないUIのreconcile回数を測る |
@@ -209,6 +213,7 @@ SHA-256 `0B30AC14FD84F28A628522024AD573ADECE5DD1210FC84A80971F3A3F24FA08F`。
 
 物理出力、実機録画の可聴/A/V長時間、全matrix、製品全体の完了は未検証。
 
-次の実装単位はVideo FX到達性・hidden consumerの修正か、2client snapshotの計測/責務分離。
+snapshot同期の計測/責務分離は続行文書へ移管。次の実装単位はVideo FX到達性・hidden consumer、
+またはengine snapshot clone/lock待機の実show計測。
 録画の残存CAS/停止上限と、別所有overlap差分は独立した境界のまま引き継ぐ。
 このチェックポイントは明示した所有ファイルのみcommit/pushし、upstream一致を確認する。

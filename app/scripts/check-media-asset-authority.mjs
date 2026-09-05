@@ -897,13 +897,17 @@ const historyApply = app.slice(
 );
 const applyEngineSnapshotSource = app.slice(
   app.indexOf("const applyEngineSnapshot = ("),
-  app.indexOf("  type SnapshotRefreshWaiter =", app.indexOf("const applyEngineSnapshot = (")),
+  app.indexOf("  const timelineSnapshotRefreshController =", app.indexOf("const applyEngineSnapshot = (")),
 );
 assert.match(
   applyEngineSnapshotSource,
-  /const applyEngineSnapshot = \(\s*incoming: EngineSnapshot,[\s\S]*?const next = normalizeEngineSnapshotVideoMediaAssets\(incoming\);/,
-  "raw full and authority snapshots normalize at the common apply boundary",
+  /const next = prepareTimelineRuntimeSnapshotIngress\(incoming, ingress\);[\s\S]*?if \(next === null\) return false;[\s\S]*?applyAcceptedEngineSnapshot\(next, syncProjectState, resetEditorDrafts\);/,
+  "raw full and authority snapshots pass the shared ingress before application",
 );
+assert.match(app, /createTimelineRuntimeSnapshotIngress\(\{[\s\S]*?normalizeEngineSnapshot: normalizeEngineSnapshotVideoMediaAssets,/, "shared ingress receives the media catalog normalizer");
+assert.match(app, /return timelineRuntimeSnapshotIngress\.prepare\(incoming, ingress\);/, "snapshot preparation delegates to the shared ingress");
+const snapshotIngress = await readFile(new URL("../src/timelineRuntimeSnapshotIngress.ts", import.meta.url), "utf8");
+assert.match(snapshotIngress, /const next = options\.normalizeEngineSnapshot\(hydrated\);/, "shared ingress normalizes the hydrated snapshot");
 assert.match(
   historyApply,
   /projectAuthorityTokenIsCurrent[\s\S]*?applyAuthoritativeProjectHistoryStatus\(result\.history_status\);[\s\S]*?return true;/,

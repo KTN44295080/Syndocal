@@ -18,6 +18,10 @@ use std::{
 #[cfg(test)]
 mod project_transaction_terminal_recovery_tests;
 mod recording_artifact;
+mod snapshot_sync;
+use snapshot_sync::{EngineSnapshotDelta, SnapshotSyncState};
+#[cfg(test)]
+use snapshot_sync::engine_snapshot_delta;
 mod video_recording;
 use video_recording::{run_video_output_recording, RecordingAudioInput, VideoOutputRecordingContext};
 #[cfg(test)]
@@ -26593,74 +26597,6 @@ struct ProjectHistoryNavigationResult {
 struct ProjectHistoryMutationResult {
     history_status: ProjectHistoryStatus,
     authority: ProjectAuthorityBundle,
-}
-
-#[derive(Debug, Default)]
-struct SnapshotSyncState {
-    revision: u64,
-    last_snapshot: Option<EngineSnapshot>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, PartialEq)]
-struct EngineSnapshotDelta {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    fixtures: Option<Vec<PatchedFixtureSummary>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    cues: Option<Vec<protocol::CueSummary>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    cue_lists: Option<Vec<protocol::CueListSummary>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    palettes: Option<Vec<protocol::ReferencePaletteSummary>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    playback_executors: Option<Vec<protocol::PlaybackExecutorSummary>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    playback_master: Option<f32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    active_cue_id: Option<Option<CueId>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    direct_child_timeline_transports: Option<Vec<protocol::DirectChildTimelineTransportSummary>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    active_group_cue_ids: Option<BTreeMap<String, CueId>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    cue_live_modifiers: Option<Vec<protocol::CueLiveModifierState>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    group_colors: Option<BTreeMap<String, String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    active_fade: Option<Option<protocol::ActiveFadeSummary>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    programmer: Option<protocol::ProgrammerSnapshot>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    timeline: Option<protocol::TimelineSnapshot>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    video: Option<protocol::VideoSnapshot>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    effects: Option<Vec<EffectSummary>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    node_graphs: Option<Vec<NodeGraphSummary>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    output: Option<DmxOutputConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    dmx_outputs: Option<Vec<DmxOutputConfig>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    lighting_master: Option<f32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    submasters: Option<Vec<protocol::SubmasterSummary>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    blackout: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    clock: Option<ClockSnapshot>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    stage_map: Option<StageMapConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    stage_map_presets: Option<Vec<StageMapPresetSummary>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    stage_objects: Option<Vec<StageObjectSummary>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    dmx_preview: Option<Vec<u8>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    dmx_previews: Option<Vec<protocol::DmxUniversePreview>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    telemetry: Option<EngineTelemetry>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -69818,47 +69754,6 @@ fn get_snapshot(state: State<'_, AppState>) -> EngineSnapshotRuntimeWireResponse
     }
 }
 
-fn engine_snapshot_delta(before: &EngineSnapshot, after: &EngineSnapshot) -> EngineSnapshotDelta {
-    macro_rules! changed {
-        ($field:ident) => {
-            (before.$field != after.$field).then(|| after.$field.clone())
-        };
-    }
-    EngineSnapshotDelta {
-        fixtures: changed!(fixtures),
-        cues: changed!(cues),
-        cue_lists: changed!(cue_lists),
-        palettes: changed!(palettes),
-        playback_executors: changed!(playback_executors),
-        playback_master: (before.playback_master != after.playback_master)
-            .then_some(after.playback_master),
-        active_cue_id: (before.active_cue_id != after.active_cue_id).then_some(after.active_cue_id),
-        direct_child_timeline_transports: changed!(direct_child_timeline_transports),
-        active_group_cue_ids: changed!(active_group_cue_ids),
-        cue_live_modifiers: changed!(cue_live_modifiers),
-        group_colors: changed!(group_colors),
-        active_fade: (before.active_fade != after.active_fade).then(|| after.active_fade.clone()),
-        programmer: changed!(programmer),
-        timeline: changed!(timeline),
-        video: changed!(video),
-        effects: changed!(effects),
-        node_graphs: changed!(node_graphs),
-        output: changed!(output),
-        dmx_outputs: changed!(dmx_outputs),
-        lighting_master: (before.lighting_master != after.lighting_master)
-            .then_some(after.lighting_master),
-        submasters: changed!(submasters),
-        blackout: (before.blackout != after.blackout).then_some(after.blackout),
-        clock: changed!(clock),
-        stage_map: changed!(stage_map),
-        stage_map_presets: changed!(stage_map_presets),
-        stage_objects: changed!(stage_objects),
-        dmx_preview: changed!(dmx_preview),
-        dmx_previews: changed!(dmx_previews),
-        telemetry: changed!(telemetry),
-    }
-}
-
 #[tauri::command]
 async fn get_snapshot_delta(
     app: tauri::AppHandle,
@@ -69866,34 +69761,22 @@ async fn get_snapshot_delta(
 ) -> Result<EngineSnapshotSyncResponse, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();
-        let current = state.engine.snapshot();
         let mut sync = state
             .snapshot_sync
             .lock()
             .map_err(|_| "Snapshot synchronization lock was poisoned".to_string())?;
-        let can_send_delta = client_revision == Some(sync.revision) && sync.last_snapshot.is_some();
-        sync.revision = sync.revision.wrapping_add(1).max(1);
-        let revision = sync.revision;
-        let response = if can_send_delta {
-            EngineSnapshotSyncResponse {
-                revision,
-                timeline_runtime: timeline_runtime_snapshot_wire(&current),
-                full: None,
-                delta: sync
-                    .last_snapshot
-                    .as_ref()
-                    .map(|before| engine_snapshot_delta(before, &current)),
-            }
-        } else {
-            EngineSnapshotSyncResponse {
-                revision,
-                timeline_runtime: timeline_runtime_snapshot_wire(&current),
-                full: Some(current.clone()),
-                delta: None,
-            }
-        };
-        sync.last_snapshot = Some(current);
-        Ok(response)
+        // Capture under the synchronization lock so concurrent windows cannot
+        // publish an older captured sample after a newer one. Snapshot cloning
+        // still holds this lock; reducing engine snapshot cost is a separate task.
+        let current = state.engine.snapshot();
+        let timeline_runtime = timeline_runtime_snapshot_wire(&current);
+        let payload = sync.publish(client_revision, current)?;
+        Ok(EngineSnapshotSyncResponse {
+            revision: payload.revision,
+            timeline_runtime,
+            full: payload.full,
+            delta: payload.delta,
+        })
     })
     .await
     .map_err(|error| format!("Snapshot delta query worker failed: {error}"))?
@@ -111357,32 +111240,6 @@ pub(crate) mod tests {
         )
         .unwrap();
         assert_eq!(history.undo.len(), 2);
-    }
-
-    #[test]
-    fn engine_snapshot_delta_contains_only_changed_top_level_sections() {
-        let before = EngineSnapshot::default();
-        let mut after = before.clone();
-        after.blackout = true;
-        after.clock.bpm = 127.0;
-        after.stage_map.max_x = 24.0;
-
-        let delta = engine_snapshot_delta(&before, &after);
-        assert_eq!(delta.blackout, Some(true));
-        assert_eq!(delta.clock.as_ref().map(|clock| clock.bpm), Some(127.0));
-        assert_eq!(delta.stage_map.as_ref().map(|map| map.max_x), Some(24.0));
-        assert!(delta.fixtures.is_none());
-        assert!(delta.cues.is_none());
-        assert!(delta.video.is_none());
-        assert!(delta.dmx_previews.is_none());
-        assert!(delta.telemetry.is_none());
-
-        let json = serde_json::to_value(delta).unwrap();
-        let object = json.as_object().unwrap();
-        assert_eq!(object.len(), 3);
-        assert!(object.contains_key("blackout"));
-        assert!(object.contains_key("clock"));
-        assert!(object.contains_key("stage_map"));
     }
 
     #[test]
