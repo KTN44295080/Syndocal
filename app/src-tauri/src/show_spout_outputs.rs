@@ -14,8 +14,10 @@ use protocol::{
 
 pub(crate) const SHOW_SPOUT_BACKGROUND_NAME: &str = "Syndocal Background";
 pub(crate) const SHOW_SPOUT_FOREGROUND_NAME: &str = "Syndocal Foreground";
-pub(crate) const SHOW_SPOUT_WIDTH: u32 = 1920;
-pub(crate) const SHOW_SPOUT_HEIGHT: u32 = 1080;
+pub(crate) const SHOW_SPOUT_BACKGROUND_WIDTH: u32 = 1920;
+pub(crate) const SHOW_SPOUT_BACKGROUND_HEIGHT: u32 = 1080;
+pub(crate) const SHOW_SPOUT_FOREGROUND_WIDTH: u32 = 3840;
+pub(crate) const SHOW_SPOUT_FOREGROUND_HEIGHT: u32 = 2160;
 pub(crate) const SHOW_SPOUT_OPACITY: f32 = 1.0;
 /// `Main` is deliberately not a publication target.  V1 pointed both fixed
 /// senders here; V2 is a clean break with one separately authored composition
@@ -24,8 +26,9 @@ pub(crate) const SHOW_SPOUT_MAIN_COMPOSITION_ID: CompositionId = 1;
 pub(crate) const SHOW_SPOUT_MAIN_COMPOSITION_LABEL: &str = "Main";
 pub(crate) const SHOW_SPOUT_BACKGROUND_COMPOSITION_LABEL: &str = "Background Video2 Camera";
 pub(crate) const SHOW_SPOUT_FOREGROUND_COMPOSITION_LABEL: &str = "Foreground Video 1";
-pub(crate) const SHOW_SPOUT_FRAME_PIXEL_LEN: usize =
-    (SHOW_SPOUT_WIDTH as usize) * (SHOW_SPOUT_HEIGHT as usize);
+#[cfg(test)]
+pub(crate) const SHOW_SPOUT_BACKGROUND_FRAME_PIXEL_LEN: usize =
+    (SHOW_SPOUT_BACKGROUND_WIDTH as usize) * (SHOW_SPOUT_BACKGROUND_HEIGHT as usize);
 
 /// Both senders use RGB black. The receiver derives Foreground transparency
 /// from RGB brightness, so the alpha byte is deliberately not relied upon.
@@ -47,6 +50,7 @@ pub(crate) struct ShowSpoutCompositionTargets {
 pub(crate) enum ShowSpoutResetCandidate {
     Absent,
     LegacyV1(ShowSpoutOutputs),
+    RetiredHdForeground(ShowSpoutOutputs),
     CurrentV2(ShowSpoutOutputs),
 }
 
@@ -92,7 +96,7 @@ impl fmt::Display for ShowSpoutValidationError {
                 "show Spout targets must be unique exact-name non-Main compositions"
             }
             Self::LegacyPairRejected => {
-                "legacy same-Main show Spout pair is retired; reset it before enabling V2"
+                "legacy show Spout dimensions/compositions are retired; Reset Show Spout Outputs before enabling the 4K Foreground pair"
             }
             Self::InvalidOutputBackreference => {
                 "show Spout composition output backreferences are inconsistent"
@@ -104,7 +108,7 @@ impl fmt::Display for ShowSpoutValidationError {
                 "reserved show Spout name is used by another output kind"
             }
             Self::NameMismatch => "show Spout label and endpoint must match exactly",
-            Self::InvalidDimensions => "show Spout sender must be exactly 1920x1080",
+            Self::InvalidDimensions => "show Spout requires Background 1920x1080 and Foreground 3840x2160; Reset Show Spout Outputs for a retired 1080p pair",
             Self::Disabled => "show Spout sender must be enabled",
             Self::BlackoutEnabled => "show Spout sender blackout must be disabled",
             Self::InvalidOpacity => "show Spout sender opacity must be exactly 1.0",
@@ -209,8 +213,8 @@ fn fixed_output(
         fullscreen: false,
         monitor_id: None,
         monitor_identity: None,
-        width: SHOW_SPOUT_WIDTH,
-        height: SHOW_SPOUT_HEIGHT,
+        width: if name == SHOW_SPOUT_FOREGROUND_NAME { SHOW_SPOUT_FOREGROUND_WIDTH } else { SHOW_SPOUT_BACKGROUND_WIDTH },
+        height: if name == SHOW_SPOUT_FOREGROUND_NAME { SHOW_SPOUT_FOREGROUND_HEIGHT } else { SHOW_SPOUT_BACKGROUND_HEIGHT },
         endpoint_name: Some(name.to_string()),
         opacity: SHOW_SPOUT_OPACITY,
         blackout: false,
@@ -325,13 +329,21 @@ fn exact_slot(output: &VideoOutputSummary) -> Result<ShowSpoutSlot, ShowSpoutVal
 }
 
 fn validate_output_contract(output: &VideoOutputSummary) -> Result<(), ShowSpoutValidationError> {
+    validate_output_contract_version(output, false)
+}
+
+fn validate_output_contract_version(output: &VideoOutputSummary, legacy: bool) -> Result<(), ShowSpoutValidationError> {
     if output.kind != VideoOutputKind::SpoutSender {
         return Err(ShowSpoutValidationError::UnexpectedSpoutOutput);
     }
     if output.id == 0 {
         return Err(ShowSpoutValidationError::InvalidOutputId);
     }
-    if output.width != SHOW_SPOUT_WIDTH || output.height != SHOW_SPOUT_HEIGHT {
+    let dimensions = match exact_slot(output)? {
+        ShowSpoutSlot::Foreground if !legacy => (SHOW_SPOUT_FOREGROUND_WIDTH, SHOW_SPOUT_FOREGROUND_HEIGHT),
+        _ => (SHOW_SPOUT_BACKGROUND_WIDTH, SHOW_SPOUT_BACKGROUND_HEIGHT),
+    };
+    if (output.width, output.height) != dimensions {
         return Err(ShowSpoutValidationError::InvalidDimensions);
     }
     if !output.enabled {
@@ -368,8 +380,8 @@ fn validate_pair_contract(pair: &ShowSpoutOutputs) -> Result<(), ShowSpoutValida
 }
 
 fn validate_legacy_pair_contract(pair: &ShowSpoutOutputs) -> Result<(), ShowSpoutValidationError> {
-    validate_output_contract(&pair.background)?;
-    validate_output_contract(&pair.foreground)?;
+    validate_output_contract_version(&pair.background, true)?;
+    validate_output_contract_version(&pair.foreground, true)?;
     if pair.background.composition_id != SHOW_SPOUT_MAIN_COMPOSITION_ID
         || pair.foreground.composition_id != SHOW_SPOUT_MAIN_COMPOSITION_ID
     {
@@ -386,7 +398,7 @@ pub(crate) fn validate_show_spout_outputs_with_compositions(
     compositions: &[CompositionSummary],
 ) -> Result<ShowSpoutOutputs, ShowSpoutValidationError> {
     let pair = match validate_show_spout_outputs(outputs) {
-        Err(ShowSpoutValidationError::CompositionMismatch)
+        Err(ShowSpoutValidationError::CompositionMismatch | ShowSpoutValidationError::InvalidDimensions)
             if outputs
                 .iter()
                 .filter(|output| output.kind == VideoOutputKind::SpoutSender)
@@ -397,6 +409,9 @@ pub(crate) fn validate_show_spout_outputs_with_compositions(
                     .filter(|output| output.kind == VideoOutputKind::SpoutSender)
                     .all(|output| output.composition_id == SHOW_SPOUT_MAIN_COMPOSITION_ID) =>
         {
+            let pair = collect_pair(outputs.iter().filter(|output| output.kind == VideoOutputKind::SpoutSender).collect())?;
+            validate_legacy_pair_contract(&pair)?;
+            validate_legacy_output_backreferences(&pair, compositions)?;
             return Err(ShowSpoutValidationError::LegacyPairRejected)
         }
         result => result?,
@@ -442,8 +457,8 @@ fn validate_output_backreferences(
     Ok(())
 }
 
-/// Reset accepts only absence, the exact retired V1 same-Main pair, or the
-/// exact current V2 pair.  It deliberately does not classify a partial or a
+/// Reset accepts absence, the exact retired V1 same-Main / HD Foreground
+/// pairs, or the current distinct-composition pair. It never admits a partial or a
 /// generic Spout sender as safe to delete.
 pub(crate) fn classify_show_spout_reset_candidate(
     outputs: &[VideoOutputSummary],
@@ -472,6 +487,16 @@ pub(crate) fn classify_show_spout_reset_candidate(
         validate_legacy_pair_contract(&pair)?;
         validate_legacy_output_backreferences(&pair, compositions)?;
         return Ok(ShowSpoutResetCandidate::LegacyV1(pair));
+    }
+    if (pair.foreground.width, pair.foreground.height) == (SHOW_SPOUT_BACKGROUND_WIDTH, SHOW_SPOUT_BACKGROUND_HEIGHT) {
+        validate_output_contract_version(&pair.background, true)?;
+        validate_output_contract_version(&pair.foreground, true)?;
+        let targets = derive_show_spout_composition_targets(compositions)?;
+        if pair.background.composition_id != targets.background || pair.foreground.composition_id != targets.foreground {
+            return Err(ShowSpoutValidationError::InvalidCompositionTarget);
+        }
+        validate_output_backreferences(&pair, compositions, &targets)?;
+        return Ok(ShowSpoutResetCandidate::RetiredHdForeground(pair));
     }
     let pair = validate_show_spout_outputs_with_compositions(outputs, compositions)?;
     Ok(ShowSpoutResetCandidate::CurrentV2(pair))
@@ -565,23 +590,28 @@ pub(crate) fn decide_show_spout_ensure(
 #[derive(Debug)]
 pub(crate) struct ShowSpoutBlackFrame {
     rgba: Box<[u8]>,
+    width: u32,
+    height: u32,
 }
 
 impl ShowSpoutBlackFrame {
-    pub(crate) fn new() -> Self {
-        Self {
-            rgba: SHOW_SPOUT_BLACK_PIXEL_RGBA
-                .repeat(SHOW_SPOUT_FRAME_PIXEL_LEN)
-                .into_boxed_slice(),
-        }
+    fn new(slot: ShowSpoutSlot) -> Self {
+        let (width, height) = match slot {
+            ShowSpoutSlot::Background => (SHOW_SPOUT_BACKGROUND_WIDTH, SHOW_SPOUT_BACKGROUND_HEIGHT),
+            ShowSpoutSlot::Foreground => (SHOW_SPOUT_FOREGROUND_WIDTH, SHOW_SPOUT_FOREGROUND_HEIGHT),
+        };
+        Self { rgba: SHOW_SPOUT_BLACK_PIXEL_RGBA.repeat(width as usize * height as usize).into_boxed_slice(), width, height }
     }
 
+    pub(crate) fn background() -> Self { Self::new(ShowSpoutSlot::Background) }
+    pub(crate) fn foreground() -> Self { Self::new(ShowSpoutSlot::Foreground) }
+
     pub(crate) const fn width(&self) -> u32 {
-        SHOW_SPOUT_WIDTH
+        self.width
     }
 
     pub(crate) const fn height(&self) -> u32 {
-        SHOW_SPOUT_HEIGHT
+        self.height
     }
 
     pub(crate) fn as_rgba(&self) -> &[u8] {
@@ -736,6 +766,8 @@ mod tests {
         let mut legacy = pair();
         legacy.background.composition_id = SHOW_SPOUT_MAIN_COMPOSITION_ID;
         legacy.foreground.composition_id = SHOW_SPOUT_MAIN_COMPOSITION_ID;
+        legacy.foreground.width = SHOW_SPOUT_BACKGROUND_WIDTH;
+        legacy.foreground.height = SHOW_SPOUT_BACKGROUND_HEIGHT;
         legacy
     }
 
@@ -1005,13 +1037,45 @@ mod tests {
     }
 
     #[test]
+    fn retired_hd_foreground_is_reset_only_and_current_pair_has_role_dimensions() {
+        let current = pair();
+        assert_eq!((current.background.width, current.background.height), (1920, 1080));
+        assert_eq!((current.foreground.width, current.foreground.height), (3840, 2160));
+        let compositions = v2_compositions(&current);
+        let mut retired = current.clone();
+        retired.foreground.width = 1920;
+        retired.foreground.height = 1080;
+        let outputs = vec![retired.background.clone(), retired.foreground.clone()];
+        let before = outputs.clone();
+        let error = validate_show_spout_outputs_with_compositions(&outputs, &compositions).unwrap_err();
+        assert!(error.to_string().contains("Reset Show Spout Outputs"));
+        assert_eq!(classify_show_spout_reset_candidate(&outputs, &compositions), Ok(ShowSpoutResetCandidate::RetiredHdForeground(retired)));
+        assert_eq!(outputs, before);
+        for defect in 0..4 {
+            let mut invalid = outputs.clone();
+            match defect {
+                0 => { invalid.pop(); },
+                1 => { let mut third = invalid[0].clone(); third.id = 99; invalid.push(third); },
+                2 => invalid[1].mapping.scale_x = 1.1,
+                _ => invalid[1].endpoint_name = Some("Syndocal Foreground_1".into()),
+            }
+            assert!(classify_show_spout_reset_candidate(&invalid, &compositions).is_err());
+            assert!(validate_show_spout_outputs_with_compositions(&invalid, &compositions).is_err());
+        }
+        let foreground = ShowSpoutBlackFrame::foreground();
+        assert_eq!((foreground.width(), foreground.height()), (3840, 2160));
+        assert_eq!(foreground.as_rgba().len(), 3840 * 2160 * 4);
+        assert!(foreground.as_rgba().chunks_exact(4).all(|pixel| pixel == SHOW_SPOUT_BLACK_PIXEL_RGBA));
+    }
+
+    #[test]
     fn black_frame_is_owned_fixed_size_and_reusable() {
-        let frame = ShowSpoutBlackFrame::new();
-        assert_eq!(frame.width(), SHOW_SPOUT_WIDTH);
-        assert_eq!(frame.height(), SHOW_SPOUT_HEIGHT);
+        let frame = ShowSpoutBlackFrame::background();
+        assert_eq!(frame.width(), SHOW_SPOUT_BACKGROUND_WIDTH);
+        assert_eq!(frame.height(), SHOW_SPOUT_BACKGROUND_HEIGHT);
         assert_eq!(
             frame.as_rgba().len(),
-            SHOW_SPOUT_FRAME_PIXEL_LEN * SHOW_SPOUT_BLACK_PIXEL_RGBA.len()
+            SHOW_SPOUT_BACKGROUND_FRAME_PIXEL_LEN * SHOW_SPOUT_BLACK_PIXEL_RGBA.len()
         );
         assert!(frame
             .as_rgba()

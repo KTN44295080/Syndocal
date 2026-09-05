@@ -1,18 +1,29 @@
 .timelineOutputPreview {
   min-width: 0;
+  height: 100%;
 }
 
 .timelineOutputPreviewGrid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr));
-  align-items: start;
+  grid-auto-rows: minmax(min(100cqh, 14rem), 1fr);
+  height: 100%;
   gap: 0.75rem;
 }
 
 .timelineOutputPreviewCard {
   display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
   gap: 0.45rem;
   min-width: 0;
+}
+
+.timelineOutputPreviewFrameArea {
+  min-width: 0;
+  min-height: 0;
+  container-type: size;
+  display: grid;
+  place-items: start center;
 }
 
 .timelineOutputPreviewCard header {
@@ -27,7 +38,8 @@
   display: grid;
   place-items: center;
   justify-self: center;
-  width: 100%;
+  width: min(100%, calc(100cqh * var(--output-aspect)));
+  max-height: 100%;
   min-width: 0;
   overflow: hidden;
   background: #000;
@@ -56,4 +68,11 @@
 #timeline-source-context-panel-video-preview {
   min-height: 0;
   overflow: hidden auto;
+  container-type: size;
+}
+
+.layoutSharedWorkspace.layoutControl.controlModeLive .controlContextPane
+  > .timelineExternalSourceShelf:has(> #timeline-source-context-panel-video-preview) {
+  height: 100%;
+  align-self: stretch;
 }

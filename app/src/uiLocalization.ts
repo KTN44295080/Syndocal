@@ -1254,13 +1254,13 @@ const japaneseText: Record<string, string> = {
   "Video Outputs": "映像出力",
   "Video Output Config": "映像出力設定",
   "Same-PC show video uses exactly": "同一PCの公演映像では",
-  "Spout senders at 1920×1080. Background uses":
-    "という2つのSpout送信元だけを1920×1080で使用します。Backgroundは",
+  "Spout senders: Background at 1920×1080, Foreground at 3840×2160. Background uses":
+    "という2つのSpout送信元を、背景1920×1080・前景3840×2160で使用します。Backgroundは",
   "; Foreground uses": "、Foregroundは",
   ". Stopped content keeps both senders alive with opaque RGB-black frames.":
     "を使用します。停止中も両方の送信元を不透明なRGB黒フレームで維持します。",
-  "Same-PC show video uses exactly Syndocal Background and Syndocal Foreground Spout senders at 1920×1080. Background uses Background Video2 Camera; Foreground uses Foreground Video 1. Stopped content keeps both senders alive with opaque RGB-black frames.":
-    "同一PCの公演映像ではSyndocal BackgroundとSyndocal ForegroundのSpout送信元だけを1920×1080で使用します。BackgroundはBackground Video2 Camera、ForegroundはForeground Video 1を使用します。停止中も両方の送信元を不透明なRGB黒フレームで維持します。",
+  "Same-PC show video uses exactly Syndocal Background and Syndocal Foreground Spout senders: Background at 1920×1080, Foreground at 3840×2160. Background uses Background Video2 Camera; Foreground uses Foreground Video 1. Stopped content keeps both senders alive with opaque RGB-black frames.":
+    "同一PCの公演映像ではSyndocal BackgroundとSyndocal Foregroundを、背景1920×1080・前景3840×2160で使用します。BackgroundはBackground Video2 Camera、ForegroundはForeground Video 1を使用します。停止中も両方の送信元を不透明なRGB黒フレームで維持します。",
   "Confirm and enable V2 show Spout outputs": "V2公演用Spout出力を確定して有効化",
   "Reset recognized show Spout outputs": "認識済みの公演用Spout出力をリセット",
   "Staged same-PC Art-Net loopback show route enabled.": "準備済みの同一PC Art-Netループバック公演ルートを有効化しました。",

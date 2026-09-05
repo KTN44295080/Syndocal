@@ -67060,13 +67060,29 @@ const SHOW_SPOUT_MAIN_COMPOSITION_ID: CompositionId = 1;
 const SHOW_SPOUT_MAIN_COMPOSITION_LABEL: &str = "Main";
 const SHOW_SPOUT_BACKGROUND_COMPOSITION_LABEL: &str = "Background Video2 Camera";
 const SHOW_SPOUT_FOREGROUND_COMPOSITION_LABEL: &str = "Foreground Video 1";
-const SHOW_SPOUT_WIDTH: u32 = 1920;
-const SHOW_SPOUT_HEIGHT: u32 = 1080;
+const SHOW_SPOUT_BACKGROUND_WIDTH: u32 = 1920;
+const SHOW_SPOUT_BACKGROUND_HEIGHT: u32 = 1080;
+const SHOW_SPOUT_FOREGROUND_WIDTH: u32 = 3840;
+const SHOW_SPOUT_FOREGROUND_HEIGHT: u32 = 2160;
 
 fn show_spout_output_is_exact(
     output: &VideoOutputSummary,
     name: &str,
     composition_id: CompositionId,
+) -> bool {
+    let dimensions = match name {
+        SHOW_SPOUT_BACKGROUND_NAME => (SHOW_SPOUT_BACKGROUND_WIDTH, SHOW_SPOUT_BACKGROUND_HEIGHT),
+        SHOW_SPOUT_FOREGROUND_NAME => (SHOW_SPOUT_FOREGROUND_WIDTH, SHOW_SPOUT_FOREGROUND_HEIGHT),
+        _ => return false,
+    };
+    show_spout_output_matches_dimensions(output, name, composition_id, dimensions)
+}
+
+fn show_spout_output_matches_dimensions(
+    output: &VideoOutputSummary,
+    name: &str,
+    composition_id: CompositionId,
+    dimensions: (u32, u32),
 ) -> bool {
     output.id != 0
         && output.label == name
@@ -67076,8 +67092,7 @@ fn show_spout_output_is_exact(
         && !output.fullscreen
         && output.monitor_id.is_none()
         && output.monitor_identity.is_none()
-        && output.width == SHOW_SPOUT_WIDTH
-        && output.height == SHOW_SPOUT_HEIGHT
+        && (output.width, output.height) == dimensions
         && output.endpoint_name.as_deref() == Some(name)
         && output.opacity == 1.0
         && !output.blackout
@@ -67106,7 +67121,7 @@ fn show_spout_pair_is_exact(
         )
 }
 
-/// Reset is the sole clean-break cleanup boundary for the accepted V1 shape.
+/// Reset alone accepts the retired all-HD V1/Main and V2/distinct-target pairs.
 /// It remains exact-name/spec-only and never becomes a generic output delete.
 fn show_spout_pair_is_resettable(
     background: &VideoOutputSummary,
@@ -67114,17 +67129,23 @@ fn show_spout_pair_is_resettable(
 ) -> bool {
     show_spout_pair_is_exact(background, foreground)
         || background.id != foreground.id
-            && background.composition_id == SHOW_SPOUT_MAIN_COMPOSITION_ID
-            && foreground.composition_id == SHOW_SPOUT_MAIN_COMPOSITION_ID
-            && show_spout_output_is_exact(
+            && ((background.composition_id == SHOW_SPOUT_MAIN_COMPOSITION_ID
+                && foreground.composition_id == SHOW_SPOUT_MAIN_COMPOSITION_ID)
+                || (background.composition_id != 0 && foreground.composition_id != 0
+                    && background.composition_id != foreground.composition_id
+                    && background.composition_id != SHOW_SPOUT_MAIN_COMPOSITION_ID
+                    && foreground.composition_id != SHOW_SPOUT_MAIN_COMPOSITION_ID))
+            && show_spout_output_matches_dimensions(
                 background,
                 SHOW_SPOUT_BACKGROUND_NAME,
-                SHOW_SPOUT_MAIN_COMPOSITION_ID,
+                background.composition_id,
+                (SHOW_SPOUT_BACKGROUND_WIDTH, SHOW_SPOUT_BACKGROUND_HEIGHT),
             )
-            && show_spout_output_is_exact(
+            && show_spout_output_matches_dimensions(
                 foreground,
                 SHOW_SPOUT_FOREGROUND_NAME,
-                SHOW_SPOUT_MAIN_COMPOSITION_ID,
+                foreground.composition_id,
+                (SHOW_SPOUT_BACKGROUND_WIDTH, SHOW_SPOUT_BACKGROUND_HEIGHT),
             )
 }
 
@@ -136550,8 +136571,8 @@ mod tests {
             fullscreen: false,
             monitor_id: None,
             monitor_identity: None,
-            width: SHOW_SPOUT_WIDTH,
-            height: SHOW_SPOUT_HEIGHT,
+            width: if label == SHOW_SPOUT_FOREGROUND_NAME && composition_id != SHOW_SPOUT_MAIN_COMPOSITION_ID { SHOW_SPOUT_FOREGROUND_WIDTH } else { SHOW_SPOUT_BACKGROUND_WIDTH },
+            height: if label == SHOW_SPOUT_FOREGROUND_NAME && composition_id != SHOW_SPOUT_MAIN_COMPOSITION_ID { SHOW_SPOUT_FOREGROUND_HEIGHT } else { SHOW_SPOUT_BACKGROUND_HEIGHT },
             endpoint_name: Some(label.to_string()),
             opacity: 1.0,
             blackout: false,
@@ -136585,6 +136606,29 @@ mod tests {
             show_spout_output(11, SHOW_SPOUT_BACKGROUND_NAME, 3),
             show_spout_output(12, SHOW_SPOUT_FOREGROUND_NAME, 2),
         )
+    }
+
+    #[test]
+    fn show_spout_hd_foreground_is_reset_only_and_swapped_dimensions_are_rejected() {
+        let (background, foreground) = show_spout_v2_pair();
+        assert!(show_spout_pair_is_exact(&background, &foreground));
+        let mut retired = foreground.clone();
+        retired.width = SHOW_SPOUT_BACKGROUND_WIDTH;
+        retired.height = SHOW_SPOUT_BACKGROUND_HEIGHT;
+        assert!(!show_spout_pair_is_exact(&background, &retired));
+        assert!(show_spout_pair_is_resettable(&background, &retired));
+        let mut runtime = EngineRuntime::new(staged_show_artnet_loopback_output());
+        seed_show_spout_v2_compositions(&mut runtime);
+        let before = runtime.build_snapshot(0);
+        let safety = runtime.shared_telemetry.safety_blackout_authority();
+        assert!(runtime.apply_show_spout_outputs_enable(&background, &retired, safety.epoch, safety.generation).is_err());
+        assert_eq!(runtime.build_snapshot(0).video, before.video);
+        let mut swapped_background = background.clone();
+        swapped_background.width = SHOW_SPOUT_FOREGROUND_WIDTH;
+        swapped_background.height = SHOW_SPOUT_FOREGROUND_HEIGHT;
+        assert!(!show_spout_pair_is_resettable(&swapped_background, &retired));
+        retired.width = 1280;
+        assert!(!show_spout_pair_is_resettable(&background, &retired));
     }
 
     #[test]
@@ -136804,8 +136848,8 @@ mod tests {
                 fullscreen: false,
                 monitor_id: None,
                 monitor_identity: None,
-                width: SHOW_SPOUT_WIDTH,
-                height: SHOW_SPOUT_HEIGHT,
+                width: SHOW_SPOUT_FOREGROUND_WIDTH,
+                height: SHOW_SPOUT_FOREGROUND_HEIGHT,
                 endpoint_name: Some(SHOW_SPOUT_FOREGROUND_NAME.to_string()),
             },
         );

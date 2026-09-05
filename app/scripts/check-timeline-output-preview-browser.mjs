@@ -52,8 +52,14 @@ const invoke = async (command, args) => {
   if(window.proof.mode==='pending')return new Promise(resolve=>window.proof.pending.push(()=>resolve(packet)));
   return packet;
 };
-render(() => <main style={{width:'600px', 'max-width':'100%', padding:'12px'}}>
-  <Show when={visible()}><TimelineOutputPreview outputs={outputs()} invoke={invoke} backendAvailable={true} projectEpoch={epoch()}/></Show>
+render(() => <main class="layoutSharedWorkspace layoutControl controlModeLive" style={{width:'min(1080px, 80vw)', height:'45vh', padding:'12px'}}>
+  <div class="controlContextPane" style={{height:'100%', display:'grid'}}>
+  <section class="timelineExternalSourceShelf">
+    <header class="timelineExternalSourceShelfHeader"><h3>Video Preview</h3></header>
+    <section id="timeline-source-context-panel-video-preview">
+      <Show when={visible()}><TimelineOutputPreview outputs={outputs()} invoke={invoke} backendAvailable={true} projectEpoch={epoch()}/></Show>
+    </section>
+  </section></div>
 </main>, document.body);
 `);
 const vite = spawn(process.execPath, [resolve(appRoot, "node_modules/vite/bin/vite.js"), "--host", "127.0.0.1", "--port", String(port), "--strictPort"],
@@ -127,11 +133,42 @@ try {
     await page.evaluate(()=>{window.proof.mode='frame';for(const resolve of window.proof.pending.splice(0))resolve();});
     await page.waitForFunction(()=>[...document.querySelectorAll('.timelineOutputPreviewViewport canvas')].every(canvas=>getComputedStyle(canvas).visibility==='visible'));
     await page.screenshot({path:resolve(artifacts,`outputs-${viewport.width}.png`)});
+    for (const ratios of [[2.5], [2.5,2.5], [16/9,9/16], [2.5,16/9,9/16,1,2.5,16/9]]) {
+      await page.evaluate(ratios=>window.proof.setOutputs(ratios.map((ratio,index)=>({
+        id:index+1,label:`Output ${index+1}`,width:Math.round(720*ratio),height:720,enabled:true,blackout:false,
+      }))),ratios);
+      await page.waitForFunction(count=>document.querySelectorAll('.timelineOutputPreviewViewport').length===count,ratios.length);
+      await page.waitForFunction(()=>[...document.querySelectorAll('.timelineOutputPreviewViewport canvas')].every(canvas=>getComputedStyle(canvas).visibility==='visible'));
+      const boxes=await page.locator('.timelineOutputPreviewViewport').evaluateAll(elements=>elements.map(el=>{
+        const r=el.getBoundingClientRect(), area=el.parentElement.getBoundingClientRect();
+        return {width:r.width,height:r.height,areaWidth:area.width,areaHeight:area.height,left:r.left,right:r.right};
+      }));
+      boxes.forEach((box,index)=>{
+        assert.ok(box.width>0 && box.height>0,JSON.stringify(box));
+        assert.ok(Math.abs(box.width/box.height-ratios[index])<0.015,JSON.stringify({box,ratio:ratios[index]}));
+        assert.ok(box.width<=box.areaWidth+1 && box.height<=box.areaHeight+1,JSON.stringify(box));
+        assert.ok(box.left>=0 && box.right<=viewport.width,JSON.stringify(box));
+        const ideal=Math.min(box.areaWidth,box.areaHeight*ratios[index]);
+        assert.ok(Math.abs(box.width-ideal)<2,'preview must fill the available width or height without the old 180px cap');
+      });
+      const containment=await page.locator('#timeline-source-context-panel-video-preview').evaluate(el=>({
+        client:el.clientWidth,scroll:el.scrollWidth,bottom:el.getBoundingClientRect().bottom,
+      }));
+      assert.ok(containment.scroll<=containment.client+1 && containment.bottom<=viewport.height,JSON.stringify(containment));
+      await page.locator('[data-timeline-output-id]').last().scrollIntoViewIfNeeded();
+      const lastVisible=await page.locator('[data-timeline-output-id]').last().evaluate(el=>{
+        const r=el.getBoundingClientRect(), panel=document.querySelector('#timeline-source-context-panel-video-preview').getBoundingClientRect();
+        return r.top>=panel.top-1 && r.bottom<=panel.bottom+1;
+      });
+      assert.ok(lastVisible,'every output remains reachable inside the preview panel');
+      await page.locator('#timeline-source-context-panel-video-preview').evaluate(el=>el.scrollTop=0);
+      await page.screenshot({path:resolve(artifacts,`sizing-${viewport.width}-${ratios.length}-${ratios[0]}.png`)});
+    }
     await page.evaluate(()=>window.proof.setVisible(false));
     await sleep(150); const closedCount=await page.evaluate(()=>window.proof.calls.length);
     await sleep(350); assert.equal(await page.evaluate(()=>window.proof.calls.length),closedCount);
     assert.deepEqual(errors,[]);
-    console.log(`PASS Timeline ${process.env.OUTPUT_PREVIEW_COMPONENT_ONLY === "1" ? "component-only" : "tabs and"} output preview ${viewport.width}: raw pixels, busy retention/expiry clear, generation rejection, persistent canvases, two actual ratios and unmount`);
+    console.log(`PASS Timeline ${process.env.OUTPUT_PREVIEW_COMPONENT_ONLY === "1" ? "component-only" : "tabs and"} output preview ${viewport.width}: raw pixels, busy retention/expiry clear, generation rejection, persistent canvases, available-area sizing for 1/2/6 mixed-aspect outputs, scroll reachability and unmount`);
     await page.close();
   }
 } finally {

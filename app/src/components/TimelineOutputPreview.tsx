@@ -57,9 +57,11 @@ export function TimelineOutputPreview(props: TimelineOutputPreviewProps) {
                     <span data-no-localize>{output().width} × {output().height}</span>
                   </header>
                   <Show when={validSize()} fallback={<p>Invalid output resolution.</p>}>
-                    <div class="timelineOutputPreviewViewport" style={{ "aspect-ratio": `${output().width} / ${output().height}`, width: `min(100%, ${180 * output().width / output().height}px)` }}>
-                      <TimelineOutputPreviewCanvas frame={frame()} />
-                      <Show when={!frame()}><span>{props.backendAvailable ? "Waiting for output frame." : "Open the desktop app for live video."}</span></Show>
+                    <div class="timelineOutputPreviewFrameArea">
+                      <div class="timelineOutputPreviewViewport" style={{ "aspect-ratio": `${output().width} / ${output().height}`, "--output-aspect": output().width / output().height }}>
+                        <TimelineOutputPreviewCanvas frame={frame()} />
+                        <Show when={!frame()}><span>{props.backendAvailable ? "Waiting for output frame." : "Open the desktop app for live video."}</span></Show>
+                      </div>
                     </div>
                   </Show>
                   <Show when={!output().enabled}><span>Output disabled</span></Show>

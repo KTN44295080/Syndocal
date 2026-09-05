@@ -1804,7 +1804,7 @@ pub(crate) fn send_strict_show_spout_black<S: SpoutOutputSender>(
 ) -> Result<(), String> {
     ensure_strict_show_spout_sender_name(sender, expected_name, phase)?;
     show_control.revalidate(phase)?;
-    let black = show_control.black_frame();
+    let black = show_control.black_frame(expected_name)?;
     sender.send_image(black.as_rgba(), black.width(), black.height())?;
     ensure_strict_show_spout_sender_name(sender, expected_name, &format!("{phase} completion"))
 }

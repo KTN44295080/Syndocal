@@ -155,7 +155,8 @@ type ShowSpoutAuthorityValidator = Mutex<Box<dyn FnMut() -> Result<(), String> +
 /// remains immutable, and is borrowed directly by the physical send closure.
 pub(crate) struct ShowSpoutWorkerControl {
     state: Mutex<ShowSpoutPresentationState>,
-    black: ShowSpoutBlackFrame,
+    background_black: ShowSpoutBlackFrame,
+    foreground_black: ShowSpoutBlackFrame,
     authority_validator: ShowSpoutAuthorityValidator,
     published_senders: AtomicUsize,
     // First-black completion proves that both SDK workers exist, but the R4
@@ -193,7 +194,8 @@ impl ShowSpoutWorkerControl {
     {
         Self {
             state: Mutex::new(ShowSpoutPresentationState::initial()),
-            black: ShowSpoutBlackFrame::new(),
+            background_black: ShowSpoutBlackFrame::background(),
+            foreground_black: ShowSpoutBlackFrame::foreground(),
             authority_validator: Mutex::new(Box::new(authority_validator)),
             published_senders: AtomicUsize::new(0),
             live_transfer_committed: AtomicBool::new(false),
@@ -310,8 +312,12 @@ impl ShowSpoutWorkerControl {
         self.first_black_changed.notify_all();
     }
 
-    pub(crate) fn black_frame(&self) -> &ShowSpoutBlackFrame {
-        &self.black
+    pub(crate) fn black_frame(&self, expected_name: &str) -> Result<&ShowSpoutBlackFrame, String> {
+        match expected_name {
+            crate::show_spout_outputs::SHOW_SPOUT_BACKGROUND_NAME => Ok(&self.background_black),
+            crate::show_spout_outputs::SHOW_SPOUT_FOREGROUND_NAME => Ok(&self.foreground_black),
+            _ => Err(format!("unknown strict show Spout sender '{expected_name}'")),
+        }
     }
 
     /// Both workers are released only after both creation leases have been
@@ -1287,7 +1293,7 @@ pub(crate) fn send_show_spout_keepalive_black<S: SpoutOutputSender>(
     control: &ShowSpoutWorkerControl,
 ) -> Result<(), String> {
     control.revalidate("Spout keepalive black frame send")?;
-    let black = control.black_frame();
+    let black = control.black_frame(&sender.sender_name())?;
     sender.send_image(black.as_rgba(), black.width(), black.height())
 }
 
@@ -1404,11 +1410,25 @@ mod tests {
         assert_eq!(sender.frames.len(), 2);
         assert!(sender.frames.iter().all(|(bytes, width, height, pixel)| {
             *bytes
-                == crate::show_spout_outputs::SHOW_SPOUT_FRAME_PIXEL_LEN
+                == crate::show_spout_outputs::SHOW_SPOUT_BACKGROUND_FRAME_PIXEL_LEN
                     * crate::show_spout_outputs::SHOW_SPOUT_BLACK_PIXEL_RGBA.len()
                 && (*width, *height) == (1920, 1080)
                 && *pixel == [0, 0, 0, 255]
         }));
+    }
+
+    #[test]
+    fn foreground_initial_and_keepalive_black_keep_4k_buffer_and_reject_unknown_role() {
+        let control = control_for_tests(|| Ok(()));
+        control.prepare_keepalive_black().unwrap();
+        let mut sender = FakeSender { name: "Syndocal Foreground".into(), ..FakeSender::default() };
+        let pointer = control.black_frame("Syndocal Foreground").unwrap().as_rgba().as_ptr();
+        crate::spout_transport::send_strict_show_spout_black(&mut sender, "Syndocal Foreground", &control, "first 4K black").unwrap();
+        send_show_spout_keepalive_black(&mut sender, &control).unwrap();
+        assert_eq!(sender.frames, vec![(3840 * 2160 * 4, 3840, 2160, [0, 0, 0, 255]); 2]);
+        assert_eq!(pointer, control.black_frame("Syndocal Foreground").unwrap().as_rgba().as_ptr());
+        assert_eq!((control.black_frame("Syndocal Background").unwrap().width(), control.black_frame("Syndocal Background").unwrap().height()), (1920, 1080));
+        assert!(control.black_frame("Syndocal Foreground_1").is_err());
     }
 
     #[test]
@@ -1433,7 +1453,7 @@ mod tests {
         assert_eq!(
             sender.frames[0],
             (
-                crate::show_spout_outputs::SHOW_SPOUT_FRAME_PIXEL_LEN
+                crate::show_spout_outputs::SHOW_SPOUT_BACKGROUND_FRAME_PIXEL_LEN
                     * crate::show_spout_outputs::SHOW_SPOUT_BLACK_PIXEL_RGBA.len(),
                 1920,
                 1080,

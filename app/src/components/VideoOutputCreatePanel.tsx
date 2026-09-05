@@ -233,7 +233,7 @@ export function VideoOutputCreatePanel(props: VideoOutputCreatePanelProps) {
       <div class="videoOutputForm">
         <div class="videoOutputQuickCreate" data-show-spout-output-activation>
           <p class="hint videoOutputQuickHint">
-            Same-PC show video uses exactly <strong data-no-localize>Syndocal Background</strong> and <strong data-no-localize>Syndocal Foreground</strong> Spout senders at 1920×1080. Background uses <strong data-no-localize>Background Video2 Camera</strong>; Foreground uses <strong data-no-localize>Foreground Video 1</strong>. Stopped content keeps both senders alive with opaque RGB-black frames.
+            Same-PC show video uses exactly <strong data-no-localize>Syndocal Background</strong> and <strong data-no-localize>Syndocal Foreground</strong> Spout senders: Background at 1920×1080, Foreground at 3840×2160. Background uses <strong data-no-localize>Background Video2 Camera</strong>; Foreground uses <strong data-no-localize>Foreground Video 1</strong>. Stopped content keeps both senders alive with opaque RGB-black frames.
           </p>
           <button
             class="primary"

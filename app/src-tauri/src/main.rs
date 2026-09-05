@@ -74170,6 +74170,7 @@ where
             return Ok((false, expected_fence.clone()));
         }
         show_spout_outputs::ShowSpoutResetCandidate::LegacyV1(pair)
+        | show_spout_outputs::ShowSpoutResetCandidate::RetiredHdForeground(pair)
         | show_spout_outputs::ShowSpoutResetCandidate::CurrentV2(pair) => pair,
     };
 
@@ -74188,6 +74189,7 @@ where
     })? {
         show_spout_outputs::ShowSpoutResetCandidate::Absent => {}
         show_spout_outputs::ShowSpoutResetCandidate::LegacyV1(current)
+        | show_spout_outputs::ShowSpoutResetCandidate::RetiredHdForeground(current)
         | show_spout_outputs::ShowSpoutResetCandidate::CurrentV2(current) => {
             if current != expected {
                 return Err(
@@ -88820,6 +88822,7 @@ pub(crate) mod tests {
     #[derive(Clone, Copy)]
     enum ShowSpoutResetFixtureKind {
         LegacyV1,
+        RetiredHdForeground,
         CurrentV2,
         Absent,
         Partial,
@@ -88842,8 +88845,8 @@ pub(crate) mod tests {
             fullscreen: false,
             monitor_id: None,
             monitor_identity: None,
-            width: show_spout_outputs::SHOW_SPOUT_WIDTH,
-            height: show_spout_outputs::SHOW_SPOUT_HEIGHT,
+            width: show_spout_outputs::SHOW_SPOUT_BACKGROUND_WIDTH,
+            height: show_spout_outputs::SHOW_SPOUT_BACKGROUND_HEIGHT,
             endpoint_name: Some(label.to_string()),
             opacity: show_spout_outputs::SHOW_SPOUT_OPACITY,
             blackout: false,
@@ -88859,11 +88862,19 @@ pub(crate) mod tests {
             ShowSpoutResetFixtureKind::CurrentV2 => {
                 vec![v2.background.clone(), v2.foreground.clone()]
             }
+            ShowSpoutResetFixtureKind::RetiredHdForeground => {
+                let mut foreground = v2.foreground.clone();
+                foreground.width = show_spout_outputs::SHOW_SPOUT_BACKGROUND_WIDTH;
+                foreground.height = show_spout_outputs::SHOW_SPOUT_BACKGROUND_HEIGHT;
+                vec![v2.background.clone(), foreground]
+            }
             ShowSpoutResetFixtureKind::LegacyV1 => {
                 let mut background = v2.background.clone();
                 let mut foreground = v2.foreground.clone();
                 background.composition_id = show_spout_outputs::SHOW_SPOUT_MAIN_COMPOSITION_ID;
                 foreground.composition_id = show_spout_outputs::SHOW_SPOUT_MAIN_COMPOSITION_ID;
+                foreground.width = show_spout_outputs::SHOW_SPOUT_BACKGROUND_WIDTH;
+                foreground.height = show_spout_outputs::SHOW_SPOUT_BACKGROUND_HEIGHT;
                 vec![background, foreground]
             }
             ShowSpoutResetFixtureKind::Absent => Vec::new(),
@@ -89004,8 +89015,9 @@ pub(crate) mod tests {
     #[test]
     fn production_show_spout_reset_inactive_legacy_removes_only_the_exact_pair_and_advances_checkpoint(
     ) {
+        for kind in [ShowSpoutResetFixtureKind::LegacyV1, ShowSpoutResetFixtureKind::RetiredHdForeground] {
         let harness = MediaAssetA6CommandHarness::new();
-        install_show_spout_reset_fixture(&harness.state, ShowSpoutResetFixtureKind::LegacyV1);
+        install_show_spout_reset_fixture(&harness.state, kind);
         assert!(harness
             .state
             .show_spout_transport
@@ -89046,6 +89058,7 @@ pub(crate) mod tests {
         assert!(query_state
             .validate_output_control_fence_window("media-asset-a6", &fence, incarnation)
             .is_ok());
+        }
     }
 
     #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]

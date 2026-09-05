@@ -28,6 +28,7 @@ mod gpu_surface;
 mod hap_decoder;
 mod isf_runtime;
 mod libav_decoder;
+mod show_spout_aspect_fit;
 
 pub use builtin_isf::{builtin_isf_effect, BuiltinIsfPreset, BUILTIN_ISF_PRESETS};
 pub use gpu_compositor::{GpuCompositeError, GpuCompositor};
@@ -1013,6 +1014,10 @@ pub enum VideoPreviewError {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VideoOutputRenderError {
+    ShowSpoutSourceDimensionsUnavailable {
+        output_id: VideoOutputId,
+        layer_id: VideoLayerId,
+    },
     MissingOutput {
         output_id: VideoOutputId,
     },
@@ -7012,7 +7017,7 @@ pub fn build_video_output_render_plan(
             output_id,
             composition_id: output.composition_id,
         })?;
-    Ok(video_output_render_plan(output, composition))
+    video_output_render_plan(output, composition)
 }
 
 pub fn render_video_output_test_pattern(
@@ -7156,7 +7161,7 @@ fn build_composition_plan(
 fn video_output_render_plan(
     output: VideoOutputSummary,
     mut composition: CompositionPlan,
-) -> VideoOutputRenderPlan {
+) -> Result<VideoOutputRenderPlan, VideoOutputRenderError> {
     let output_opacity = if output.opacity.is_finite() {
         output.opacity.clamp(0.0, 1.0)
     } else {
@@ -7173,7 +7178,8 @@ fn video_output_render_plan(
         composition.layers.retain(|layer| layer.opacity > 0.0);
     }
 
-    VideoOutputRenderPlan {
+    show_spout_aspect_fit::apply(&output, &mut composition)?;
+    Ok(VideoOutputRenderPlan {
         output_id: output.id,
         label: output.label,
         kind: output.kind,
@@ -7187,7 +7193,7 @@ fn video_output_render_plan(
         output_blackout,
         mapping: output.mapping,
         composition,
-    }
+    })
 }
 
 fn debug_color(layer_id: VideoLayerId, pts_ms: u64) -> [u8; 4] {
