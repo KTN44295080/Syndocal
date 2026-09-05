@@ -24,7 +24,7 @@ const clipGrid = await readFile(new URL("../src/components/VideoClipGridPanel.ts
 const liveMonitors = await readFile(new URL("../src/components/LiveVideoMonitorPanel.tsx", import.meta.url), "utf8");
 
 const workflowStart = app.indexOf("const createFirstRunVjShow = async () => {");
-const workflowEnd = app.indexOf("const videoThumbnailSourceSignature", workflowStart);
+const workflowEnd = app.indexOf("const thumbnailController", workflowStart);
 assert.ok(workflowStart >= 0 && workflowEnd > workflowStart, "first-run VJ workflow is missing");
 const workflow = app.slice(workflowStart, workflowEnd);
 assert.match(

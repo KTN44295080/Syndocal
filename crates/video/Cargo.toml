@@ -6,7 +6,7 @@ license.workspace = true
 
 [features]
 default = []
-libav = ["dep:ffmpeg-next"]
+libav = ["dep:ffmpeg-next", "dep:windows"]
 ndi = []
 spout = []
 
@@ -23,3 +23,6 @@ raw-window-handle.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 wgpu.workspace = true
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "=0.61.3", optional = true, features = ["Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common"] }

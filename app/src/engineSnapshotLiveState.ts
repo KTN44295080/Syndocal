@@ -59,9 +59,9 @@ const activeSnapshotCues = (snapshot: EngineSnapshot) => {
   return snapshot.cues.filter((cue) => activeCueIds.has(cue.id));
 };
 
-const cueTargetValuesByFixture = (snapshot: EngineSnapshot) => {
+const cueTargetValuesByFixture = (activeCues: EngineSnapshot["cues"]) => {
   const valuesByFixture = new Map<number, Map<string, number>>();
-  for (const cue of activeSnapshotCues(snapshot)) {
+  for (const cue of activeCues) {
     for (const target of cue.targets) {
       const fixtureValues = valuesByFixture.get(target.fixture_id) ?? new Map<string, number>();
       for (const value of target.values) {
@@ -100,7 +100,7 @@ export const snapshotLiveFixtures = (
   if (activeCues.length === 0) {
     return snapshot.fixtures;
   }
-  const valuesByFixture = cueTargetValuesByFixture(snapshot);
+  const valuesByFixture = cueTargetValuesByFixture(activeCues);
   return snapshot.fixtures.map((fixture) => ({
     ...fixture,
     attribute_values: renderedCueAttributeValues(

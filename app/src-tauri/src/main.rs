@@ -15,6 +15,23 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+mod fixture_profile_contract;
+use fixture_profile_contract::{
+    fixture_controls_footprint, validate_emitter_calibrations, validate_project_custom_profile_refs,
+    validate_project_custom_profiles, validate_project_fixture_geometries,
+};
+mod media_asset_preview_contract;
+use media_asset_preview_contract::{
+    media_asset_thumbnail_snapshot, validate_media_asset_preview_position,
+    validate_media_asset_thumbnail_contract, validate_media_asset_thumbnail_dimensions,
+};
+#[cfg(test)]
+use media_asset_preview_contract::MEDIA_ASSET_THUMBNAIL_MAX_EDGE;
+mod project_snapshot_persistence;
+use project_snapshot_persistence::{
+    clear_runtime_programmer_state, node_graph_for_persistence, normalize_project_timeline_layers,
+    project_snapshot_for_save, use_authored_video_snapshot,
+};
 #[cfg(test)]
 mod project_transaction_terminal_recovery_tests;
 mod recording_artifact;
@@ -22,6 +39,21 @@ mod snapshot_sync;
 use snapshot_sync::{EngineSnapshotDelta, SnapshotSyncState};
 #[cfg(test)]
 use snapshot_sync::engine_snapshot_delta;
+mod stage_map_contract;
+use stage_map_contract::{
+    canonical_stage_project_objects, normalize_stage_map_preset_label, normalize_stage_object,
+    prepare_stage_map_preset_import, validate_project_stage_map_presets,
+    validate_project_stage_objects, validate_stage_map_config,
+};
+mod video_output_mapping_contract;
+use video_output_mapping_contract::{
+    normalize_video_output_mapping_field, normalize_video_output_mapping_preset_label,
+    validate_video_output_mapping,
+};
+mod video_monitor_snapshot;
+use video_monitor_snapshot::capture_video_monitor_snapshot;
+mod live_video_monitor_packet;
+use live_video_monitor_packet::*;
 mod video_recording;
 use video_recording::{run_video_output_recording, RecordingAudioInput, VideoOutputRecordingContext};
 #[cfg(test)]
@@ -69,7 +101,6 @@ use minisign_verify::PublicKey;
 #[cfg(test)]
 use protocol::DmxControlAction;
 use protocol::{
-    canonical_video_output_mapping_field,
     control_plane_command::{
         AuthoredRequestV1, DisplayOutputSpecV2, OutputControlAuthorityBundleV1,
         OutputControlCommandRequestV2, OutputControlFenceV1, OutputControlResponseV2,
@@ -13820,7 +13851,7 @@ fn new_vj_preview_renderer() -> AppVideoPreviewRenderer {
     )
 }
 
-fn reset_vj_preview_renderer(state: &State<'_, AppState>) -> Result<(), String> {
+fn reset_vj_preview_renderer(state: &AppState) -> Result<(), String> {
     state
         .vj_preview_renderer_reset_pending
         .store(true, Ordering::Release);
@@ -24732,7 +24763,6 @@ const OUTER_FENCED_SYNC_PROJECT_RUNTIME_ROUTES: &[&str] = &[
     "seek_vj_preview",
     "set_auto_vj_armed",
     "set_auto_vj_hold",
-    "set_bpm",
     "set_cue_fade_paused",
     "set_cue_live_modifier",
     "set_direct_child_timeline_playing",
@@ -26604,7 +26634,7 @@ struct EngineSnapshotSyncResponse {
     revision: u64,
     timeline_runtime: TimelineRuntimeSnapshotWire,
     #[serde(skip_serializing_if = "Option::is_none")]
-    full: Option<EngineSnapshot>,
+    full: Option<Arc<EngineSnapshot>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     delta: Option<EngineSnapshotDelta>,
 }
@@ -29137,6 +29167,10 @@ async fn get_engine_telemetry_report(
 
 #[tauri::command]
 fn set_bpm(state: State<'_, AppState>, bpm: f32) -> Result<(), String> {
+    set_bpm_for_state(&state, bpm)
+}
+
+fn set_bpm_for_state(state: &AppState, bpm: f32) -> Result<(), String> {
     if !bpm.is_finite() || !(20.0..=300.0).contains(&bpm) {
         return Err("BPM must be between 20 and 300".to_string());
     }
@@ -58440,6 +58474,26 @@ where
         .is_some()
         .then(|| checked_project_mapping_replacement_generation_after_change(coordinator))
         .transpose()?;
+    // The remaining source-stack entry meets this entry at the target image.
+    // Its revision can differ after an earlier navigation publication, but
+    // its epoch and content must agree before we publish or consume anything.
+    let source_stack = if undo {
+        &coordinator.history.undo
+    } else {
+        &coordinator.history.redo
+    };
+    if let Some(adjacent) = source_stack.iter().rev().nth(1) {
+        let top = top.expect("an adjacent entry requires a history top");
+        let target = if undo { &top.before } else { &top.after };
+        let adjacent_source = if undo {
+            &adjacent.after
+        } else {
+            &adjacent.before
+        };
+        if adjacent_source.epoch != target.epoch || adjacent_source.hash != target.hash {
+            return Err("Adjacent project history does not match the navigation target".to_string());
+        }
+    }
     let entry = if undo {
         coordinator.history.undo.pop()
     } else {
@@ -58486,6 +58540,18 @@ where
         revision: coordinator.revision,
         hash: coordinator.checkpoint_hash.clone(),
     };
+    let adjacent = if undo {
+        coordinator.history.undo.last_mut()
+    } else {
+        coordinator.history.redo.last_mut()
+    };
+    if let Some(adjacent) = adjacent {
+        if undo {
+            adjacent.after = actual_target.clone();
+        } else {
+            adjacent.before = actual_target.clone();
+        }
+    }
     let entry = rewrite_navigated_project_history_entry(entry, undo, actual_target);
     if undo {
         coordinator.history.redo.push(entry);
@@ -62668,118 +62734,6 @@ fn export_diagnostic_package(
     Ok(Some(path.to_string_lossy().to_string()))
 }
 
-fn use_authored_video_snapshot(snapshot: &mut EngineSnapshot) {
-    if let Some(authored_video) = snapshot.authored_video.take() {
-        snapshot.video = authored_video;
-    }
-}
-
-fn node_graph_for_persistence(mut graph: NodeGraphSummary) -> NodeGraphSummary {
-    graph.audio_runtime.clear();
-    graph
-}
-
-fn normalize_project_timeline_snapshot_layers(timeline: &mut TimelineSnapshot) {
-    for event in &mut timeline.events {
-        if event.duration_ms == 0 {
-            event.fade_in_ms = 0;
-            event.fade_out_ms = 0;
-        } else {
-            event.fade_in_ms = event.fade_in_ms.min(event.duration_ms);
-            event.fade_out_ms = event.fade_out_ms.min(event.duration_ms);
-        }
-    }
-    for clip in &mut timeline.audio_clips {
-        clip.path = clip.path.trim().to_string();
-        clip.start_ms = clip.start_ms.min(u64::MAX.saturating_sub(clip.duration_ms));
-        clip.gain = if clip.gain.is_finite() {
-            clip.gain.clamp(0.0, 2.0)
-        } else {
-            1.0
-        };
-        clip.fade_in_ms = clip.fade_in_ms.min(clip.duration_ms);
-        clip.fade_out_ms = clip
-            .fade_out_ms
-            .min(clip.duration_ms.saturating_sub(clip.fade_in_ms));
-    }
-    timeline
-        .audio_clips
-        .sort_by_key(|clip| (clip.start_ms, clip.layer_id, clip.id));
-    if timeline.layers.is_empty() {
-        return;
-    }
-
-    timeline
-        .layers
-        .sort_by_key(|layer| (layer.kind.display_section_rank(), layer.order, layer.id));
-    for (index, layer) in timeline.layers.iter_mut().enumerate() {
-        layer.order = u32::try_from(index).unwrap_or(u32::MAX);
-    }
-
-    let layer_kinds = timeline
-        .layers
-        .iter()
-        .map(|layer| (layer.id, layer.kind))
-        .collect::<HashMap<_, _>>();
-    for event in &mut timeline.events {
-        let Some(kind) = event
-            .layer_id
-            .and_then(|layer_id| layer_kinds.get(&layer_id).copied())
-        else {
-            continue;
-        };
-        match kind {
-            TimelineLayerKind::Lighting => event.track = TimelineTrackKind::Lighting,
-            TimelineLayerKind::Video => event.track = TimelineTrackKind::Video,
-            TimelineLayerKind::Audio => {}
-        }
-    }
-}
-
-fn normalize_project_timeline_layers(snapshot: &mut EngineSnapshot) {
-    normalize_project_timeline_snapshot_layers(&mut snapshot.timeline);
-    for timeline in &mut snapshot.timeline_bank {
-        normalize_project_timeline_snapshot_layers(timeline);
-    }
-}
-
-fn project_snapshot_for_save(mut snapshot: EngineSnapshot) -> EngineSnapshot {
-    use_authored_video_snapshot(&mut snapshot);
-    normalize_project_timeline_layers(&mut snapshot);
-    // The shared clock's phase/counter/tap/external-lock fields advance at
-    // runtime even while the authored project is idle. Project load only
-    // restores the authored BPM, so persist exactly that stable surface.
-    snapshot.clock = ClockSnapshot {
-        bpm: snapshot.clock.bpm,
-        ..ClockSnapshot::default()
-    };
-    for graph in &mut snapshot.node_graphs {
-        graph.audio_runtime.clear();
-    }
-    snapshot.active_fade = None;
-    snapshot.direct_child_timeline_transports.clear();
-    snapshot.timeline.playing = false;
-    snapshot.video.auto_vj.status = protocol::AutoVjStatus::default();
-    snapshot.dmx_preview.clear();
-    snapshot.dmx_previews.clear();
-    clear_runtime_programmer_state(&mut snapshot);
-    snapshot.telemetry = EngineTelemetry::default();
-    // T17: latched scene live overrides are runtime-only; the engine's
-    // persistence snapshot already strips them, and the `.sdc` writer keeps
-    // that guarantee locally too.
-    snapshot.cue_live_modifiers.clear();
-    // T20: group strobe is a latched Live Mixer control, not project data.
-    for submaster in &mut snapshot.submasters {
-        submaster.strobe_hz = 0.0;
-        submaster.strobe_fixture_count = 0;
-    }
-    snapshot
-}
-
-fn clear_runtime_programmer_state(snapshot: &mut EngineSnapshot) {
-    snapshot.programmer = protocol::ProgrammerSnapshot::default();
-}
-
 #[tauri::command]
 fn load_project(
     window: WebviewWindow,
@@ -66437,130 +66391,6 @@ fn validate_project_fixture_patches(fixtures: &[PatchedFixtureSummary]) -> Resul
     Ok(())
 }
 
-fn validate_project_fixture_geometries(fixtures: &[PatchedFixtureSummary]) -> Result<(), String> {
-    for fixture in fixtures {
-        validate_geometry_collection(
-            &format!("fixture {} '{}'", fixture.id, fixture.label),
-            &fixture.geometries,
-            &fixture.controls,
-        )?;
-    }
-    Ok(())
-}
-
-fn validate_geometry_collection(
-    owner_label: &str,
-    geometries: &[GeometrySummary],
-    controls: &[AttributeControl],
-) -> Result<(), String> {
-    let mut geometry_names = HashSet::new();
-    let mut parents_by_name = HashMap::new();
-
-    for geometry in geometries {
-        let name = geometry.name.trim();
-        if name.is_empty() {
-            return Err(format!(
-                "Project {owner_label} has a geometry node with an empty name"
-            ));
-        }
-        if !geometry_names.insert(name.to_string()) {
-            return Err(format!(
-                "Project {owner_label} contains duplicate geometry node '{name}'"
-            ));
-        }
-        if geometry.kind.trim().is_empty() {
-            return Err(format!(
-                "Project {owner_label} geometry '{name}' has an empty kind"
-            ));
-        }
-        if geometry.matrix.iter().any(|value| !value.is_finite()) {
-            return Err(format!(
-                "Project {owner_label} geometry '{name}' has a non-finite transform matrix"
-            ));
-        }
-        let parent = geometry
-            .parent
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty());
-        if let Some(parent) = parent {
-            if parent == name {
-                return Err(format!(
-                    "Project {owner_label} geometry '{name}' cannot parent itself"
-                ));
-            }
-            parents_by_name.insert(name.to_string(), parent.to_string());
-        }
-        if let Some(dimensions) = geometry.model_dimensions {
-            if !dimensions.x.is_finite()
-                || !dimensions.y.is_finite()
-                || !dimensions.z.is_finite()
-                || dimensions.x < 0.0
-                || dimensions.y < 0.0
-                || dimensions.z < 0.0
-            {
-                return Err(format!(
-                    "Project {owner_label} geometry '{name}' has invalid model dimensions"
-                ));
-            }
-        }
-        for (label, value) in [
-            ("beam angle", geometry.beam_angle_deg),
-            ("field angle", geometry.field_angle_deg),
-            ("beam radius", geometry.beam_radius),
-        ] {
-            if let Some(value) = value {
-                if !value.is_finite() || value < 0.0 {
-                    return Err(format!(
-                        "Project {owner_label} geometry '{name}' has invalid {label}"
-                    ));
-                }
-            }
-        }
-    }
-
-    for (name, parent) in &parents_by_name {
-        if !geometry_names.contains(parent) {
-            return Err(format!(
-                "Project {owner_label} geometry '{name}' references missing parent '{parent}'"
-            ));
-        }
-    }
-
-    for geometry in geometries {
-        let mut seen = HashSet::new();
-        let mut current = geometry.name.trim().to_string();
-        while let Some(parent) = parents_by_name.get(&current) {
-            if !seen.insert(current.clone()) {
-                return Err(format!(
-                    "Project {owner_label} geometry '{}' contains a parent cycle",
-                    geometry.name
-                ));
-            }
-            current = parent.clone();
-        }
-    }
-
-    for control in controls {
-        let Some(geometry_name) = control
-            .geometry
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        else {
-            continue;
-        };
-        if !geometry_names.contains(geometry_name) {
-            return Err(format!(
-                "Project {owner_label} control '{}' references missing geometry '{geometry_name}'",
-                control.attribute
-            ));
-        }
-    }
-
-    Ok(())
-}
-
 fn validate_project_fixture_attribute_values(
     fixtures: &[PatchedFixtureSummary],
 ) -> Result<(), String> {
@@ -67590,125 +67420,6 @@ fn normalized_color_wheel_hex(value: &str) -> Option<String> {
     let value = value.trim().strip_prefix('#')?;
     (value.len() == 6 && value.bytes().all(|byte| byte.is_ascii_hexdigit()))
         .then(|| value.to_ascii_lowercase())
-}
-
-fn validate_project_custom_profiles(profiles: &[FixtureProfileSummary]) -> Result<(), String> {
-    let mut seen = HashSet::new();
-    for profile in profiles {
-        let source_path = profile.source_path.trim();
-        if source_path.is_empty() {
-            return Err("Project custom profile has an empty source path".to_string());
-        }
-        if !seen.insert(source_path.to_string()) {
-            return Err(format!(
-                "Project contains duplicate custom profile source path {source_path}"
-            ));
-        }
-        if profile.manufacturer.trim().is_empty() {
-            return Err(format!(
-                "Project custom profile {source_path} has an empty manufacturer"
-            ));
-        }
-        if profile.name.trim().is_empty() {
-            return Err(format!(
-                "Project custom profile {source_path} has an empty name"
-            ));
-        }
-        if profile.dmx_modes.is_empty() {
-            return Err(format!(
-                "Project custom profile {source_path} has no DMX modes"
-            ));
-        }
-        for mode in &profile.dmx_modes {
-            if mode.name.trim().is_empty() {
-                return Err(format!(
-                    "Project custom profile {source_path} has an empty DMX mode name"
-                ));
-            }
-            fixture_controls_footprint(&mode.controls).ok_or_else(|| {
-                format!(
-                    "Project custom profile {source_path} mode '{}' has no DMX channel offsets",
-                    mode.name
-                )
-            })?;
-            validate_emitter_calibrations(
-                &mode.controls,
-                &format!("Project custom profile {source_path} mode '{}'", mode.name),
-            )?;
-            validate_geometry_collection(
-                &format!("custom profile {source_path} mode '{}'", mode.name),
-                &profile.geometries,
-                &mode.controls,
-            )?;
-        }
-    }
-    Ok(())
-}
-
-fn validate_emitter_calibrations(
-    controls: &[AttributeControl],
-    context: &str,
-) -> Result<(), String> {
-    for control in controls {
-        for function in &control.functions {
-            let Some(emitter) = function.emitter.as_ref() else {
-                continue;
-            };
-            if emitter.name.trim().is_empty() {
-                return Err(format!(
-                    "{context} control '{}' has an emitter with an empty name",
-                    control.attribute
-                ));
-            }
-            if let Some(color) = emitter.color.as_ref() {
-                if !color.x.is_finite()
-                    || !color.y.is_finite()
-                    || !color.luminance.is_finite()
-                    || color.x < 0.0
-                    || color.y <= 0.0
-                    || color.luminance <= 0.0
-                    || color.x + color.y > 1.000_1
-                {
-                    return Err(format!(
-                        "{context} control '{}' emitter '{}' has invalid CIE xyY calibration",
-                        control.attribute, emitter.name
-                    ));
-                }
-            }
-            if emitter
-                .dominant_wavelength_nm
-                .is_some_and(|wavelength| !wavelength.is_finite() || wavelength <= 0.0)
-            {
-                return Err(format!(
-                    "{context} control '{}' emitter '{}' has invalid dominant wavelength",
-                    control.attribute, emitter.name
-                ));
-            }
-        }
-    }
-    Ok(())
-}
-
-fn validate_project_custom_profile_refs(
-    snapshot: &EngineSnapshot,
-    profiles: &[FixtureProfileSummary],
-) -> Result<(), String> {
-    let custom_profile_paths = profiles
-        .iter()
-        .map(|profile| profile.source_path.as_str())
-        .collect::<HashSet<_>>();
-    for fixture in &snapshot.fixtures {
-        let source_path = fixture.profile_source_path.trim();
-        if source_path.starts_with("memory://custom/")
-            && !custom_profile_paths.contains(source_path)
-        {
-            return Err(format!(
-                "Project fixture {} '{}' references missing custom profile {}",
-                fixture.id, fixture.label, source_path
-            ));
-        }
-    }
-    Ok(())
 }
 
 fn validate_project_video_graph(snapshot: &EngineSnapshot) -> Result<(), String> {
@@ -69941,18 +69652,6 @@ fn stage_project_transaction_label_result(
     }
 }
 
-fn canonical_stage_project_objects(
-    objects: Vec<StageObjectSummary>,
-) -> Result<Vec<StageObjectSummary>, String> {
-    let mut objects = objects
-        .into_iter()
-        .map(normalize_stage_object)
-        .collect::<Result<Vec<_>, _>>()?;
-    objects.sort_by_key(|object| object.id);
-    validate_project_stage_objects(&objects)?;
-    Ok(objects)
-}
-
 #[derive(Clone, Serialize)]
 struct StageObjectAddIntent {
     label: String,
@@ -70360,18 +70059,6 @@ fn import_stage_map_preset(
         )?,
         "import_stage_map_preset",
     )
-}
-
-fn prepare_stage_map_preset_import(
-    mut preset: StageMapPresetSummary,
-) -> Result<StageMapPresetSummary, String> {
-    preset.label = normalize_stage_map_preset_label(preset.label)?;
-    validate_stage_map_config(&preset.config)?;
-    if let Some(objects) = preset.stage_objects.take() {
-        preset.stage_objects = Some(canonical_stage_project_objects(objects)?);
-    }
-    validate_project_stage_map_presets(std::slice::from_ref(&preset))?;
-    Ok(preset)
 }
 
 #[tauri::command]
@@ -76496,31 +76183,6 @@ fn get_video_layer_thumbnail(
         .map_err(|error| format!("{error:?}"))
 }
 
-const MEDIA_ASSET_THUMBNAIL_MAX_EDGE: u32 = 512;
-const MEDIA_ASSET_PREVIEW_MAX_POSITION_MS: u64 = 24 * 60 * 60 * 1_000;
-
-fn validate_media_asset_thumbnail_dimensions(width: u32, height: u32) -> Result<(), String> {
-    if width == 0
-        || height == 0
-        || width > MEDIA_ASSET_THUMBNAIL_MAX_EDGE
-        || height > MEDIA_ASSET_THUMBNAIL_MAX_EDGE
-    {
-        return Err(format!(
-            "Media asset thumbnail dimensions must be between 1 and {MEDIA_ASSET_THUMBNAIL_MAX_EDGE} pixels"
-        ));
-    }
-    Ok(())
-}
-
-fn validate_media_asset_preview_position(position_ms: u64) -> Result<(), String> {
-    if position_ms > MEDIA_ASSET_PREVIEW_MAX_POSITION_MS {
-        return Err(format!(
-            "Media asset preview position must not exceed {MEDIA_ASSET_PREVIEW_MAX_POSITION_MS} ms"
-        ));
-    }
-    Ok(())
-}
-
 /// Capture a media-library entry from the persistence checkpoint without
 /// reconciling it. A thumbnail is a read-only machine-local operation: it must
 /// never advance the revision/history merely to make a stale catalog appear
@@ -76642,63 +76304,6 @@ fn media_asset_thumbnail_asset_for_checkpoint(
         .ok_or_else(|| format!("Media asset {asset_id} was not found"))?;
     validate_media_asset_thumbnail_contract(&asset)?;
     Ok((media_asset_prepare_authority(coordinator), asset))
-}
-
-/// This is deliberately stricter than the generic catalog schema. Rendering a
-/// thumbnail consumes a local file, so legacy entries without a persisted
-/// byte/hash identity are not authoritative enough to race safely.
-fn validate_media_asset_thumbnail_contract(asset: &MediaAssetSummary) -> Result<(), String> {
-    if !matches!(
-        asset.source.kind,
-        VideoSourceKind::File | VideoSourceKind::StillImage
-    ) {
-        return Err(
-            "Media asset thumbnails are available for local File and Still Image sources only"
-                .to_string(),
-        );
-    }
-    if asset
-        .source
-        .path
-        .as_deref()
-        .is_none_or(|path| path.trim().is_empty())
-    {
-        return Err("Media asset thumbnail requires a local source path".to_string());
-    }
-    if asset.content_hash.is_none() || asset.byte_size.is_none() {
-        return Err(
-            "Media asset thumbnail requires the catalog's exact local content identity".to_string(),
-        );
-    }
-    Ok(())
-}
-
-fn media_asset_thumbnail_snapshot(
-    asset: &MediaAssetSummary,
-    private_path: &Path,
-    position_ms: u64,
-) -> protocol::VideoSnapshot {
-    let mut snapshot = protocol::VideoSnapshot::default();
-    let mut private_source = asset.source.clone();
-    private_source.path = Some(private_path.to_string_lossy().into_owned());
-    snapshot.layers.push(protocol::VideoLayerSummary {
-        // The layer and its source are strictly ephemeral. Do not attach the
-        // catalog ID: the renderer must decode only the private verified copy,
-        // never the user-controlled catalog path again.
-        id: asset.id,
-        label: asset.label.clone(),
-        source: private_source,
-        media_asset_id: None,
-        blend_mode: VideoBlendMode::Normal,
-        state: VideoLayerState {
-            position_ms,
-            ..VideoLayerState::default()
-        },
-        isf_effect: None,
-        clip_slots: Vec::new(),
-        default_clip_slot_id: None,
-    });
-    snapshot
 }
 
 fn media_asset_thumbnail_prepared_matches_asset(
@@ -77211,133 +76816,28 @@ fn vj_preview_frame_is_current(
         && rendered.generation == current.generation
 }
 
-const LIVE_VIDEO_MONITOR_MAGIC: [u8; 4] = *b"SYLV";
-const LIVE_VIDEO_MONITOR_VERSION: u8 = 1;
-const LIVE_VIDEO_MONITOR_STATUS_FRAME: u8 = 0;
-const LIVE_VIDEO_MONITOR_STATUS_BUSY: u8 = 1;
-const LIVE_VIDEO_MONITOR_HEADER_LEN: usize = 40;
-const LIVE_VIDEO_MONITOR_MAX_WIDTH: u32 = 640;
-const LIVE_VIDEO_MONITOR_MAX_HEIGHT: u32 = 360;
-const LIVE_VIDEO_MONITOR_MAX_PIXELS: u32 =
-    LIVE_VIDEO_MONITOR_MAX_WIDTH * LIVE_VIDEO_MONITOR_MAX_HEIGHT;
-const LIVE_VIDEO_MONITOR_DEFAULT_JPEG_QUALITY: u8 = 68;
-const LIVE_VIDEO_MONITOR_MIN_JPEG_QUALITY: u8 = 40;
-const LIVE_VIDEO_MONITOR_MAX_JPEG_QUALITY: u8 = 90;
-const LIVE_VIDEO_MONITOR_MAX_DECODE_BUDGET: usize = 2;
-
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-enum LiveVideoMonitorKind {
-    Program,
-    Preview,
-}
-
-impl LiveVideoMonitorKind {
-    fn packet_value(self) -> u8 {
-        match self {
-            Self::Program => 0,
-            Self::Preview => 1,
-        }
-    }
-}
-
-fn live_video_monitor_dimensions(width: u32, height: u32) -> (u32, u32) {
-    let width = width.clamp(1, LIVE_VIDEO_MONITOR_MAX_WIDTH);
-    let height = height.clamp(1, LIVE_VIDEO_MONITOR_MAX_HEIGHT);
-    if width.saturating_mul(height) <= LIVE_VIDEO_MONITOR_MAX_PIXELS {
-        return (width, height);
-    }
-    (width, (LIVE_VIDEO_MONITOR_MAX_PIXELS / width).max(1))
-}
-
-fn live_video_monitor_quality(quality: Option<u8>) -> u8 {
-    quality
-        .unwrap_or(LIVE_VIDEO_MONITOR_DEFAULT_JPEG_QUALITY)
-        .clamp(
-            LIVE_VIDEO_MONITOR_MIN_JPEG_QUALITY,
-            LIVE_VIDEO_MONITOR_MAX_JPEG_QUALITY,
-        )
-}
-
-fn live_video_monitor_elapsed_us(started: Instant) -> u32 {
-    started.elapsed().as_micros().min(u128::from(u32::MAX)) as u32
-}
-
-#[allow(clippy::too_many_arguments)]
-fn live_video_monitor_packet(
-    status: u8,
-    kind: LiveVideoMonitorKind,
-    sequence: u64,
-    pts_ms: u64,
-    render_us: u32,
-    encode_us: u32,
-    width: u32,
-    height: u32,
-    jpeg: &[u8],
-) -> Result<Vec<u8>, String> {
-    let width = u16::try_from(width)
-        .map_err(|_| "Live video monitor frame width exceeded the packet format".to_string())?;
-    let height = u16::try_from(height)
-        .map_err(|_| "Live video monitor frame height exceeded the packet format".to_string())?;
-    let jpeg_len = u32::try_from(jpeg.len())
-        .map_err(|_| "Live video monitor JPEG exceeded the packet format".to_string())?;
-    let mut packet = Vec::with_capacity(LIVE_VIDEO_MONITOR_HEADER_LEN + jpeg.len());
-    packet.extend_from_slice(&LIVE_VIDEO_MONITOR_MAGIC);
-    packet.push(LIVE_VIDEO_MONITOR_VERSION);
-    packet.push(status);
-    packet.push(kind.packet_value());
-    packet.push(0);
-    packet.extend_from_slice(&sequence.to_le_bytes());
-    packet.extend_from_slice(&pts_ms.to_le_bytes());
-    packet.extend_from_slice(&render_us.to_le_bytes());
-    packet.extend_from_slice(&encode_us.to_le_bytes());
-    packet.extend_from_slice(&width.to_le_bytes());
-    packet.extend_from_slice(&height.to_le_bytes());
-    packet.extend_from_slice(&jpeg_len.to_le_bytes());
-    debug_assert_eq!(packet.len(), LIVE_VIDEO_MONITOR_HEADER_LEN);
-    packet.extend_from_slice(jpeg);
-    Ok(packet)
-}
-
-fn encode_live_video_monitor_jpeg(
-    frame: &video::VideoFrame,
-    quality: u8,
-) -> Result<Vec<u8>, String> {
-    if frame.format != video::VideoPixelFormat::Rgba8 {
-        return Err(format!(
-            "Live video monitor expected RGBA8, received {:?}",
-            frame.format
-        ));
-    }
-    let expected_len = u64::from(frame.width)
-        .saturating_mul(u64::from(frame.height))
-        .saturating_mul(4);
-    if expected_len != frame.data.len() as u64 {
-        return Err(format!(
-            "Live video monitor RGBA8 buffer has {} bytes; expected {expected_len}",
-            frame.data.len()
-        ));
-    }
-    let mut jpeg = Vec::new();
-    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, quality)
-        .encode(
-            &frame.data,
-            frame.width,
-            frame.height,
-            image::ColorType::Rgba8,
-        )
-        .map_err(|error| format!("Could not encode live video monitor JPEG: {error}"))?;
-    Ok(jpeg)
-}
-
 /// Returns one bounded Preview or Program monitor frame as a raw ArrayBuffer.
 ///
-/// The fixed 40-byte little-endian header is: magic[4], version/status/kind/reserved,
+/// The fixed 40-byte little-endian header is: magic[4], version/status/kind/pixel_format,
 /// sequence(u64), pts_ms(u64), render_us(u32), encode_us(u32), width/height(u16),
-/// jpeg_len(u32), followed by JPEG bytes. A busy response has status 1 and no payload.
+/// payload_len(u32), followed by JPEG or RGBA8 bytes. A busy response has status 1 and no payload.
 #[tauri::command]
-fn get_live_video_monitor_frame(
-    state: State<'_, AppState>,
+async fn get_live_video_monitor_frame(
+    app: tauri::AppHandle,
+    args: FlatInvokeArgs<Value>,
+) -> Result<tauri::ipc::Response, String> {
+    // Decode, composition and JPEG encoding must not occupy the WebView event
+    // callback thread. Renderer admission remains single-flight via try_lock.
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        render_live_video_monitor_frame(&state, args)
+    })
+    .await
+    .map_err(|error| format!("Live video monitor worker failed: {error}"))?
+}
+
+fn render_live_video_monitor_frame(
+    state: &AppState,
     args: FlatInvokeArgs<Value>,
 ) -> Result<tauri::ipc::Response, String> {
     read_flat_invoke_args!(args;
@@ -77347,25 +76847,19 @@ fn get_live_video_monitor_frame(
         width: u32 => "width",
         height: u32 => "height",
         quality: Option<u8> => "quality",
-        decode_budget: Option<usize> => "decodeBudget",
+        pixel_format: Option<LiveVideoMonitorPixelFormat> => "pixelFormat",
     );
     let sequence = LIVE_VIDEO_MONITOR_SEQUENCE.fetch_add(1, Ordering::Relaxed);
     let (width, height) = live_video_monitor_dimensions(width, height);
     let quality = live_video_monitor_quality(quality);
-    let (snapshot, program_render_epoch) = match monitor_kind {
-        LiveVideoMonitorKind::Program => {
-            let output_preview = capture_video_output_preview_effect_snapshot(&state.engine);
-            (
-                output_preview.snapshot,
-                Some(output_preview.project_render_epoch),
-            )
-        }
-        LiveVideoMonitorKind::Preview => (state.engine.snapshot(), None),
-    };
+    let pixel_format = pixel_format.unwrap_or_default();
+    let mut program_render_epoch = None;
     let render_started = Instant::now();
     let mut rendered_preview_summary: Option<VjPreviewTransportSummary> = None;
     let frame = match monitor_kind {
         LiveVideoMonitorKind::Program => {
+            let snapshot = capture_video_monitor_snapshot(&state.engine)?;
+            program_render_epoch = Some(snapshot.project_render_epoch);
             let output_id =
                 output_id.ok_or_else(|| "Program monitor requires an outputId".to_string())?;
             let mut renderer = match state.video_preview.try_lock() {
@@ -77381,6 +76875,7 @@ fn get_live_video_monitor_frame(
                         width,
                         height,
                         &[],
+                        pixel_format,
                     )?;
                     return Ok(tauri::ipc::Response::new(packet));
                 }
@@ -77390,28 +76885,18 @@ fn get_live_video_monitor_frame(
             };
             renderer
                 .frame_provider_mut()
-                .set_bpm(Some(snapshot.clock.bpm));
-            let decode_budget = resolved_video_preview_decode_budget(
-                &renderer,
-                snapshot.video.layers.len(),
-                Some(
-                    decode_budget
-                        .unwrap_or(1)
-                        .clamp(1, LIVE_VIDEO_MONITOR_MAX_DECODE_BUDGET),
-                ),
-            );
-            renderer
-                .warm_output_decode_queue(&snapshot.video, output_id, width, height, decode_budget)
-                .map_err(|error| format!("{error:?}"))?;
+                .set_bpm(Some(snapshot.bpm));
+            // The renderer fetches the current frame itself. Warming here would
+            // request and copy the same frame twice for every monitor sample.
             renderer
                 .render_output_preview_with_effects_and_transitions(
                     &snapshot.video,
                     video::VideoEffectRenderContext {
-                        clip_runtime: &snapshot.video_clip_runtime,
+                        clip_runtime: &snapshot.clip_runtime,
                         project_render_epoch: program_render_epoch
                             .expect("Program monitor captures an output render epoch"),
                     },
-                    &snapshot.video_transition_runtime,
+                    &snapshot.transition_runtime,
                     output_id,
                     width,
                     height,
@@ -77419,6 +76904,7 @@ fn get_live_video_monitor_frame(
                 .map_err(|error| format!("{error:?}"))?
         }
         LiveVideoMonitorKind::Preview => {
+            let snapshot = state.engine.snapshot();
             // layer_id remains in the binary IPC contract for compatibility, but Preview is
             // rendered exclusively from the explicitly staged ephemeral transport.
             let _ = layer_id;
@@ -77453,6 +76939,7 @@ fn get_live_video_monitor_frame(
                         width,
                         height,
                         &[],
+                        pixel_format,
                     )?;
                     return Ok(tauri::ipc::Response::new(packet));
                 }
@@ -77501,6 +76988,7 @@ fn get_live_video_monitor_frame(
                     width,
                     height,
                     &[],
+                    pixel_format,
                 )?;
                 return Ok(tauri::ipc::Response::new(packet));
             }
@@ -77511,8 +76999,23 @@ fn get_live_video_monitor_frame(
     let render_us = live_video_monitor_elapsed_us(render_started);
 
     let encode_started = Instant::now();
-    let jpeg = encode_live_video_monitor_jpeg(&frame, quality)?;
+    let payload = match pixel_format {
+        LiveVideoMonitorPixelFormat::Jpeg => encode_live_video_monitor_jpeg(&frame, quality)?,
+        LiveVideoMonitorPixelFormat::Rgba => {
+            if frame.format != video::VideoPixelFormat::Rgba8 {
+                return Err("Live video monitor expected RGBA8".to_string());
+            }
+            frame.data
+        }
+    };
     let encode_us = live_video_monitor_elapsed_us(encode_started);
+    // The UI can now admit a project replacement while this worker encodes.
+    // Reject Program captures whose epoch retired during rendering or encoding.
+    if program_render_epoch
+        .is_some_and(|epoch| state.engine.output_ownership_status().epoch != epoch)
+    {
+        return Err("Output changed while rendering; waiting for a current frame.".to_string());
+    }
     if let Some(rendered) = rendered_preview_summary.as_ref() {
         // Encoding is intentionally outside the transport lock. Recheck after it too, so a
         // seek/clear/project transition during JPEG work can never publish one stale packet.
@@ -77541,6 +77044,7 @@ fn get_live_video_monitor_frame(
                 width,
                 height,
                 &[],
+                pixel_format,
             )?;
             return Ok(tauri::ipc::Response::new(packet));
         }
@@ -77554,7 +77058,8 @@ fn get_live_video_monitor_frame(
         encode_us,
         frame.width,
         frame.height,
-        &jpeg,
+        &payload,
+        pixel_format,
     )?;
     Ok(tauri::ipc::Response::new(packet))
 }
@@ -77906,7 +77411,11 @@ mod live_video_monitor_tests {
                 .unwrap_or_else(|| panic!("missing boundary after output preview route {route}"));
             let route_source = &source[route_start..route_end];
             assert!(
-                route_source.contains("capture_video_output_preview_effect_snapshot"),
+                route_source.contains(if route == "get_live_video_monitor_frame" {
+                    "capture_video_monitor_snapshot"
+                } else {
+                    "capture_video_output_preview_effect_snapshot"
+                }),
                 "{route} must sample the NDI/Spout-order ownership epoch with its snapshot"
             );
             assert!(
@@ -77929,6 +77438,7 @@ mod live_video_monitor_tests {
             320,
             180,
             &jpeg,
+            LiveVideoMonitorPixelFormat::Jpeg,
         )
         .unwrap();
 
@@ -83874,93 +83384,6 @@ fn validate_fixture_transform(position: &Vec3, rotation: &Rotation3) -> Result<(
     Ok(())
 }
 
-fn validate_stage_map_config(config: &StageMapConfig) -> Result<(), String> {
-    if !config.min_x.is_finite()
-        || !config.max_x.is_finite()
-        || !config.min_z.is_finite()
-        || !config.max_z.is_finite()
-    {
-        return Err("Stage map bounds must be finite".to_string());
-    }
-    if config.min_x >= config.max_x || config.min_z >= config.max_z {
-        return Err("Stage map min bounds must be lower than max bounds".to_string());
-    }
-    if config.max_x - config.min_x < 0.1 || config.max_z - config.min_z < 0.1 {
-        return Err("Stage map bounds must span at least 0.1m".to_string());
-    }
-    Ok(())
-}
-
-fn normalize_stage_object(mut object: StageObjectSummary) -> Result<StageObjectSummary, String> {
-    if object.id == 0 {
-        return Err("Stage object id must be greater than zero".to_string());
-    }
-    object.label = object.label.trim().to_string();
-    if object.label.is_empty() {
-        return Err("Stage object label is required".to_string());
-    }
-    if [
-        object.x,
-        object.z,
-        object.width,
-        object.depth,
-        object.rotation_deg,
-    ]
-    .iter()
-    .any(|value| !value.is_finite())
-    {
-        return Err("Stage object values must be finite".to_string());
-    }
-    if object.width <= 0.0 || object.depth <= 0.0 {
-        return Err("Stage object size must be greater than zero".to_string());
-    }
-    object.x = object.x.clamp(-1_000.0, 1_000.0);
-    object.z = object.z.clamp(-1_000.0, 1_000.0);
-    object.width = object.width.clamp(0.05, 1_000.0);
-    object.depth = object.depth.clamp(0.05, 1_000.0);
-    object.rotation_deg = object.rotation_deg.clamp(-360.0, 360.0);
-    object.color = match object.color {
-        Some(color) if color.trim().is_empty() => None,
-        Some(color) => Some(normalize_stage_object_color(color)?),
-        None => None,
-    };
-    Ok(object)
-}
-
-fn normalize_stage_object_color(color: String) -> Result<String, String> {
-    let trimmed = color.trim();
-    let hex = trimmed
-        .strip_prefix('#')
-        .ok_or_else(|| "Stage object color must be a #rrggbb value".to_string())?;
-    if hex.len() == 6 && hex.chars().all(|character| character.is_ascii_hexdigit()) {
-        Ok(format!("#{hex}"))
-    } else {
-        Err("Stage object color must be a #rrggbb value".to_string())
-    }
-}
-
-fn validate_project_stage_objects(objects: &[StageObjectSummary]) -> Result<(), String> {
-    let mut ids = HashSet::new();
-    for object in objects {
-        let normalized = normalize_stage_object(object.clone())?;
-        if !ids.insert(normalized.id) {
-            return Err(format!(
-                "Project contains duplicate stage object id {}",
-                normalized.id
-            ));
-        }
-    }
-    Ok(())
-}
-
-fn normalize_stage_map_preset_label(label: String) -> Result<String, String> {
-    let trimmed = label.trim();
-    if trimmed.is_empty() {
-        return Err("Stage map preset label is required".to_string());
-    }
-    Ok(trimmed.to_string())
-}
-
 fn validate_stage_map_preset_file(file: &StageMapPresetFile) -> Result<(), String> {
     if file.version != 1 {
         return Err(format!(
@@ -83973,23 +83396,6 @@ fn validate_stage_map_preset_file(file: &StageMapPresetFile) -> Result<(), Strin
     validate_stage_map_config(&file.preset.config)?;
     if let Some(stage_objects) = &file.preset.stage_objects {
         validate_project_stage_objects(stage_objects)?;
-    }
-    Ok(())
-}
-
-fn validate_project_stage_map_presets(presets: &[StageMapPresetSummary]) -> Result<(), String> {
-    let mut labels = HashSet::new();
-    for preset in presets {
-        let label = normalize_stage_map_preset_label(preset.label.clone())?;
-        if !labels.insert(label.clone()) {
-            return Err(format!(
-                "Project contains duplicate stage map preset label {label}"
-            ));
-        }
-        validate_stage_map_config(&preset.config)?;
-        if let Some(stage_objects) = &preset.stage_objects {
-            validate_project_stage_objects(stage_objects)?;
-        }
     }
     Ok(())
 }
@@ -84196,13 +83602,6 @@ fn validate_fixture_patch_update(
     }
 
     Ok(())
-}
-
-fn fixture_controls_footprint(controls: &[AttributeControl]) -> Option<u16> {
-    controls
-        .iter()
-        .flat_map(|control| control.offsets.iter().copied())
-        .max()
 }
 
 fn dmx_range(start_address: u16, footprint: u16) -> Option<(u16, u16)> {
@@ -84616,111 +84015,6 @@ fn validate_video_backend_available(
             backend.label, backend.detail
         )),
     }
-}
-
-fn validate_video_output_mapping(mapping: &VideoOutputMapping) -> Result<(), String> {
-    let values = [
-        mapping.stage_x,
-        mapping.stage_y,
-        mapping.stage_z,
-        mapping.offset_x,
-        mapping.offset_y,
-        mapping.scale_x,
-        mapping.scale_y,
-        mapping.rotation_deg,
-        mapping.aspect_ratio,
-        mapping.lens_distortion,
-        mapping.edge_blend_left,
-        mapping.edge_blend_right,
-        mapping.edge_blend_top,
-        mapping.edge_blend_bottom,
-        mapping.edge_blend_gamma,
-        mapping.black_level,
-        mapping.mask_softness,
-        mapping.keystone_x,
-        mapping.keystone_y,
-        mapping.corner_top_left_x,
-        mapping.corner_top_left_y,
-        mapping.corner_top_right_x,
-        mapping.corner_top_right_y,
-        mapping.corner_bottom_right_x,
-        mapping.corner_bottom_right_y,
-        mapping.corner_bottom_left_x,
-        mapping.corner_bottom_left_y,
-    ];
-    if values.iter().any(|value| !value.is_finite()) {
-        return Err("Video output mapping values must be finite".to_string());
-    }
-    if mapping.scale_x <= 0.0 || mapping.scale_y <= 0.0 {
-        return Err("Video output mapping scale must be greater than 0".to_string());
-    }
-    if mapping.aspect_ratio <= 0.0 {
-        return Err("Video output mapping aspect ratio must be greater than 0".to_string());
-    }
-    if !(0.1..=8.0).contains(&mapping.edge_blend_gamma) {
-        return Err("Video output edge blend gamma must be between 0.1 and 8".to_string());
-    }
-    if [
-        mapping.edge_blend_left,
-        mapping.edge_blend_right,
-        mapping.edge_blend_top,
-        mapping.edge_blend_bottom,
-        mapping.black_level,
-    ]
-    .iter()
-    .any(|value| !(0.0..=1.0).contains(value))
-    {
-        return Err(
-            "Video output edge blend and black level values must be between 0 and 1".to_string(),
-        );
-    }
-    if !(0.0..=0.5).contains(&mapping.mask_softness) {
-        return Err("Video output mask softness must be between 0 and 0.5".to_string());
-    }
-    if usize::from(mapping.mask_point_count) > mapping.mask_points.len() {
-        return Err("Video output mask supports at most 8 points".to_string());
-    }
-    if mapping.mask_points[..usize::from(mapping.mask_point_count)]
-        .iter()
-        .any(|point| {
-            !point.x.is_finite()
-                || !point.y.is_finite()
-                || !(0.0..=1.0).contains(&point.x)
-                || !(0.0..=1.0).contains(&point.y)
-        })
-    {
-        return Err("Video output mask points must be finite values between 0 and 1".to_string());
-    }
-    let bitmap_disabled = mapping.bitmap_mask_width == 0 && mapping.bitmap_mask_height == 0;
-    let bitmap_valid = mapping.bitmap_mask_width > 0
-        && mapping.bitmap_mask_width <= protocol::VIDEO_OUTPUT_BITMAP_MASK_MAX_DIMENSION
-        && mapping.bitmap_mask_height > 0
-        && mapping.bitmap_mask_height <= protocol::VIDEO_OUTPUT_BITMAP_MASK_MAX_DIMENSION
-        && usize::from(mapping.bitmap_mask_width)
-            .saturating_mul(usize::from(mapping.bitmap_mask_height))
-            <= protocol::VIDEO_OUTPUT_BITMAP_MASK_WORD_CAPACITY * 8;
-    if !bitmap_disabled && !bitmap_valid {
-        return Err("Video output bitmap mask dimensions are invalid".to_string());
-    }
-    Ok(())
-}
-
-fn normalize_video_output_mapping_field(field: String) -> Result<String, String> {
-    let trimmed = field.trim();
-    if trimmed.is_empty() {
-        return Err("Video output mapping field is required".to_string());
-    }
-    canonical_video_output_mapping_field(trimmed)
-        .map(str::to_string)
-        .ok_or_else(|| format!("Video output mapping field '{trimmed}' is not supported"))
-}
-
-fn normalize_video_output_mapping_preset_label(label: String) -> Result<String, String> {
-    let trimmed = label.trim();
-    if trimmed.is_empty() {
-        return Err("Video output mapping preset label is required".to_string());
-    }
-    Ok(trimmed.to_string())
 }
 
 fn validate_video_output_mapping_preset_file(
@@ -89076,7 +88370,7 @@ pub(crate) mod tests {
                     video::VideoPreviewRenderer::with_frame_provider(
                         video::VideoRuntimeConfig::default(),
                         video::DecoderBackedFrameProvider::new(app_video_decoder)
-                            .with_prefetch(2, 33),
+                            .with_prefetch(0, 33),
                     ),
                 )),
                 video_recording: Mutex::new(VideoRecordingRuntime::default()),
@@ -93659,7 +92953,7 @@ pub(crate) mod tests {
             "trigger_cue",
             "move_cue_between_scene_banks_batch",
         ] {
-            if required == "move_cue_between_scene_banks_batch" {
+            if required == "move_cue_between_scene_banks_batch" || required == "set_bpm" {
                 assert_eq!(runtime_route_dispatch_policy(required), None);
             } else {
                 assert_eq!(
@@ -93699,7 +92993,7 @@ pub(crate) mod tests {
                     == Some(control_plane::TauriRouteAdmissionClass::RuntimeMutation)
             })
             .collect::<Vec<_>>();
-        assert_eq!(runtime_routes.len(), 157);
+        assert_eq!(runtime_routes.len(), 156);
         assert_eq!(
             OUTER_FENCED_SYNC_PROJECT_RUNTIME_ROUTES.len()
                 + PREFLIGHT_ONLY_NONPROJECT_OR_INNER_RUNTIME_ROUTES.len(),
@@ -98309,7 +97603,7 @@ pub(crate) mod tests {
         let full = EngineSnapshotSyncResponse {
             revision: 9,
             timeline_runtime: timeline_runtime_snapshot_wire(&captured),
-            full: Some(captured.clone()),
+            full: Some(Arc::new(captured.clone())),
             delta: None,
         };
         let delta = EngineSnapshotSyncResponse {
@@ -130112,7 +129406,7 @@ fn main() {
             video_preview: Arc::new(Mutex::new(
                 video::VideoPreviewRenderer::with_frame_provider(
                     video::VideoRuntimeConfig::default(),
-                    video::DecoderBackedFrameProvider::new(app_video_decoder).with_prefetch(2, 33),
+                    video::DecoderBackedFrameProvider::new(app_video_decoder).with_prefetch(0, 33),
                 ),
             )),
             video_recording: Mutex::new(VideoRecordingRuntime::default()),

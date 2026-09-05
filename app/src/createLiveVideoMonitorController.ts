@@ -160,10 +160,10 @@ export const createLiveVideoMonitorController = (options: LiveVideoMonitorContro
         width: options.width ?? 320,
         height: options.height ?? 180,
         quality: options.jpegQuality ?? 68,
-        decodeBudget: kind === "program" ? 1 : null,
       });
       if (disposed || requestGeneration !== generation) return;
       const packet = parseLiveVideoMonitorPacket(response);
+      if (packet.encoding !== "jpeg") throw new Error("Live monitor returned an unexpected pixel format.");
       if (packet.kind !== kind) throw new Error(`Live monitor returned ${packet.kind} for ${kind}.`);
       if (packet.status === "busy") {
         setBus(kind, (current) => ({ ...current, busyDrops: current.busyDrops + 1 }));

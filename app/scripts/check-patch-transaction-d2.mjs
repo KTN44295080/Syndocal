@@ -21,6 +21,9 @@ const [app, form, browser, types, d2Source, backend] = await Promise.all([
   readFile(new URL("../src-tauri/src/main.rs", import.meta.url), "utf8").then((source) => source.replace(/\r\n/g, "\n")),
 ]);
 
+const recoveryController = (await readFile(new URL("../src/createProjectTransactionRecoveryController.ts", import.meta.url), "utf8")).replace(/\r\n/g, "\n");
+const terminalRecovery = (await readFile(new URL("../src/projectTransactionRecovery.ts", import.meta.url), "utf8")).replace(/\r\n/g, "\n");
+
 const patchArgs = { requests: [{ label: "A" }, { label: "B" }] };
 const validPatch = { kind: "patch_fixtures", request_digest: "a".repeat(64), fixture_ids: [41, 42] };
 assert.equal(helper.projectTransactionCommandResultIsWellFormed(validPatch, "patch_fixtures", patchArgs), true);
@@ -370,12 +373,13 @@ assert.equal((app.match(/invokeFixtureProfileRepair\(/g) ?? []).length, 1, "Repa
 assert.doesNotMatch(app, /"patch_fixture"/, "the retired singular PATCH command must not remain in frontend transaction routing");
 assert.doesNotMatch(app, /invoke<number\[\]>\("patch_fixtures"/, "raw PATCH ID arrays are forbidden");
 assert.doesNotMatch(app, /tauriInvoke(?:<[^>]*>)?\("(?:patch_fixtures|repair_fixture_profile)"/, "PATCH/Repair may not bypass the transaction facade");
-assert.match(app, /recoverPublishedProjectTransactionCommandResult[\s\S]*?waitForPublishedCommandRecovery[\s\S]*?queryProjectTransactionRecovery\(identity\)/);
+assert.match(recoveryController, /recoverPublishedProjectTransactionCommandResult[\s\S]*?waitForPublishedCommandRecovery[\s\S]*?queryProjectTransactionRecovery\(identity\)/);
 assert.match(app, /ProjectTransactionPublicationUnconfirmedError[\s\S]*?ProjectTransactionPublicationIndeterminateError[\s\S]*?cancelOpenedProjectTransaction/);
 assert.match(app, /publishedCommandRecoveryDisposition\(recovered\)[\s\S]*?disposition === "hold"[\s\S]*?ProjectTransactionPublicationIndeterminateError[\s\S]*?ProjectTransactionPublicationUnconfirmedError/, "unknown and malformed B outcomes skip Cancel/replay");
 assert.match(app, /setPatchRepairRestartRequired\(true\)[\s\S]*?finishPatchRepairOperation = \(\) => \{\s*if \(!patchRepairRestartRequired\(\)\) patchRepairOperationLane\.finish\(\);?\s*\}/, "an indeterminate receipt retains the shared local lane until restart");
 assert.equal((app.match(/retainPatchRepairIntentIfIndeterminate\(error\)/g) ?? []).length, 4, "all PATCH/Repair callers retain their ticket on an indeterminate reply");
-assert.match(app, /window\.dispatchEvent[\s\S]*?await acknowledgeProjectTransaction\(transactionIdentity\)/, "one history result precedes its terminal ACK");
+assert.match(recoveryController, /createProjectTransactionTerminalSettlement\(\s*ports\.dispatchHistoryMutation,\s*\(\) => acknowledgeProjectTransaction\(identity\)/s, "recovery binds history delivery and ACK to the same settlement");
+assert.match(terminalRecovery, /apply\(mutation\)[\s\S]*?await acknowledge\(\)/, "one history result precedes its terminal ACK");
 assert.match(form, /operationBusy: boolean[\s\S]*?disabled=\{props\.operationBusy \|\| !props\.armed \|\| props\.invalid\}/);
 assert.match(browser, /operationBusy: boolean[\s\S]*?data-patch-fixture-repair[\s\S]*?\{props\.operationBusy \? "Applying…" : "Repair"\}/);
 

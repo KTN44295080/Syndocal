@@ -7,6 +7,7 @@ import { readFile, readdir } from "node:fs/promises";
 const readText = async (url) => (await readFile(url, "utf8")).replace(/\r\n/g, "\n");
 
 const app = await readText(new URL("../src/App.tsx", import.meta.url));
+const recoveryController = await readText(new URL("../src/createProjectTransactionRecoveryController.ts", import.meta.url));
 const srcRoot = new URL("../src/", import.meta.url);
 const collectSourceFiles = async (directory) => {
   const entries = await readdir(directory, { withFileTypes: true });
@@ -276,13 +277,13 @@ assert.match(
   "dialog-based project mutations must reject an identity change before Begin",
 );
 const beginRecoveryHelper = section(
-  app,
+  recoveryController,
   "const beginProjectTransactionWithRecovery = async (",
   "const cancelProjectTransactionWithRecovery = async (",
 );
 assert.match(
   beginRecoveryHelper,
-  /tauriInvoke<ProjectTransactionTicket>\("begin_project_transaction",\s*beginArgs\)/,
+  /ports\.invoke<ProjectTransactionTicket>\("begin_project_transaction",\s*beginArgs\)/,
   "the shared Begin recovery helper must invoke the canonical backend command with its exact arguments",
 );
 assert.match(
@@ -300,7 +301,7 @@ for (const match of transactionIdentityMatches) {
   assert.match(match[1], /ownerId:\s*projectTransactionOwnerId/, "every transaction identity must bind the renderer owner");
 }
 const cancelRecoveryHelper = section(
-  app,
+  recoveryController,
   "const cancelProjectTransactionWithRecovery = async (",
   "const commitProjectTransactionWithRecovery = async (",
 );
@@ -327,9 +328,9 @@ assert.match(
   "the generic Commit workflow must bind its exact transaction identity and terminal settlement",
 );
 const commitRecoveryHelper = section(
-  app,
+  recoveryController,
   "const commitProjectTransactionWithRecovery = async (",
-  "// A convergence poll can briefly leave the old transaction/recovery detail",
+  "\n  return {\n    resumeForegroundProjectTransactionTerminalRecoveryBeforeMutation",
 );
 assert.match(
   commitRecoveryHelper,

@@ -1,3 +1,6 @@
+import { createProjectTransactionRecoveryController } from "./createProjectTransactionRecoveryController";
+import { createMediaThumbnailController } from "./createMediaThumbnailController";
+import { createWorkspaceNavigationController, type WorkspaceNavigationRoute } from "./createWorkspaceNavigationController";
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import { listen as tauriListen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -125,6 +128,7 @@ import {
 import { TimelineCueEventsPanel } from "./components/TimelineCueEventsPanel";
 import { TimelineSourceShelf, type TimelineSourceContextMode } from "./components/TimelineSourceShelf";
 import { TimelineOutputPreview } from "./components/TimelineOutputPreview";
+import type { InlineChildParent } from "./timelineInlineChildProjection";
 import { TimelineOperatorBar } from "./components/TimelineOperatorBar";
 import { TimelineLightingAutomationPanel } from "./components/TimelineLightingAutomationPanel";
 import { EditableTouchSurface } from "./components/EditableTouchSurface";
@@ -137,7 +141,6 @@ import { TouchPanTiltPad } from "./components/TouchPanTiltPad";
 import { TouchVideoPanel } from "./components/TouchVideoPanel";
 import {
   PROJECT_TRANSACTION_SCHEMA_VERSION,
-  projectTransactionRecoveryCanAdopt,
   projectTransactionShapeFingerprint,
 } from "./types";
 import type {
@@ -300,7 +303,6 @@ import {
   publishedCommandLegacyReplyFromRecoveredResult,
   publishedCommandRecoveryDisposition,
   projectTransactionCommandResultIsWellFormed,
-  waitForPublishedCommandRecovery,
   type PatchRepairTransactionCommand,
 } from "./patchTransactionD2";
 import {
@@ -308,15 +310,6 @@ import {
   ProjectTransactionTerminalMalformedMutationError,
   ProjectTransactionTerminalRecoveryHoldError,
   ProjectTransactionTerminalRecoveryUnresolvedError,
-  createProjectTransactionTerminalSettlement,
-  projectTransactionTerminalArgs,
-  projectTransactionTerminalMutationIsWellFormed,
-  recoverProjectTransactionTerminalAction,
-  settleProjectTransactionTerminalAcknowledgement,
-  type ProjectTransactionIdentity,
-  type ProjectTransactionTerminalAction,
-  type ProjectTransactionTerminalArgs,
-  type ProjectTransactionTerminalRecoveryResult,
 } from "./projectTransactionRecovery";
 import {
   createTimelineCueAudioRefreshQueue,
@@ -442,10 +435,8 @@ import type {
   ProjectFile,
   ProjectHistoryStatus,
   ProjectHistoryMutationResult,
-  ProjectTransactionCommandResult,
   ProjectTransactionPatchCommandResult,
   ProjectTransactionRepairFixtureProfileCommandResult,
-  ProjectTransactionRecovery,
   ProjectTransactionTicket,
   ProjectHistoryNavigationResult,
   ProjectAuthorityBundle,
@@ -1116,6 +1107,7 @@ let activeOperatorLockMode: OperatorLockMode | null = null;
 let applyServerAuthoritativeProjectMutationResult: ((result: ProjectHistoryMutationResult) => boolean) | null = null;
 
 const projectMutationCommands = new Set([
+  "set_bpm",
   "analyze_audio_file",
   "clear_timeline_audio",
   "add_timeline_audio_clip",
@@ -1928,17 +1920,6 @@ const projectTransactionOperationId = () => typeof crypto !== "undefined" && "ra
   ? `project-op:${++projectTransactionOperationSequence}:${crypto.randomUUID()}`
   : `project-op:${++projectTransactionOperationSequence}:${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 
-const queryProjectTransactionRecovery = async (
-  identity: ProjectTransactionIdentity,
-): Promise<ProjectTransactionRecovery | null> => tauriInvoke<ProjectTransactionRecovery | null>(
-  "query_project_transaction",
-  identity,
-);
-
-const acknowledgeProjectTransaction = async (
-  identity: ProjectTransactionIdentity,
-) => tauriInvoke<void>("acknowledge_project_transaction", identity);
-
 const projectTransactionForegroundRecoveryEvent = "syndocal:project-transaction-terminal-recovery";
 
 type ProjectTransactionForegroundRecoveryDetail = Readonly<{
@@ -1953,307 +1934,21 @@ const reportProjectTransactionForegroundRecovery = (message: string) => {
   ));
 };
 
-const reportProjectTransactionForegroundRecoveryWithRetry = (message: string) =>
-  reportProjectTransactionForegroundRecovery(
-    `${message} Retry a project mutation to continue this exact terminal recovery.`,
-  );
-
-const waitForProjectTransactionTerminalRecovery = (milliseconds: number) => new Promise<void>((resolve) => {
-  window.setTimeout(resolve, milliseconds);
-});
-
-type ProjectTransactionForegroundTerminalRecovery = Readonly<{
-  phase: "terminal" | "acknowledgement";
-  action: ProjectTransactionTerminalAction;
-  identity: ProjectTransactionIdentity;
-  terminalArgs: ProjectTransactionTerminalArgs;
-  retry: () => Promise<unknown>;
-}>;
-
-// This is intentionally structured rather than a status string: a later
-// explicit project mutation resumes the exact action/ticket after its bounded
-// batch expires. The raw project mutation is never retained here, so no retry
-// path can replay it.
-let foregroundProjectTransactionTerminalRecovery: ProjectTransactionForegroundTerminalRecovery | null = null;
-
-const clearForegroundProjectTransactionTerminalRecovery = (
-  recovery: ProjectTransactionForegroundTerminalRecovery,
-) => {
-  if (foregroundProjectTransactionTerminalRecovery === recovery) {
-    foregroundProjectTransactionTerminalRecovery = null;
-  }
-};
-
-const installForegroundProjectTransactionTerminalRecovery = (
-  phase: ProjectTransactionForegroundTerminalRecovery["phase"],
-  action: ProjectTransactionTerminalAction,
-  identity: ProjectTransactionIdentity,
-  terminalArgs: ProjectTransactionTerminalArgs,
-  buildRetry: (
-    clear: () => void,
-  ) => () => Promise<unknown>,
-): ProjectTransactionForegroundTerminalRecovery => {
-  const existing = foregroundProjectTransactionTerminalRecovery;
-  if (existing) {
-    throw new Error(
-      `Project transaction ${existing.action} recovery remains pending; retry that exact ${existing.phase} before starting another mutation.`,
-    );
-  }
-  let recovery: ProjectTransactionForegroundTerminalRecovery;
-  const clear = () => clearForegroundProjectTransactionTerminalRecovery(recovery);
-  recovery = Object.freeze({
-    phase,
-    action,
-    identity,
-    terminalArgs,
-    retry: buildRetry(clear),
-  });
-  foregroundProjectTransactionTerminalRecovery = recovery;
-  return recovery;
-};
-
-const resumeForegroundProjectTransactionTerminalRecoveryBeforeMutation = async (): Promise<void> => {
-  const recovery = foregroundProjectTransactionTerminalRecovery;
-  if (!recovery) return;
-  reportProjectTransactionForegroundRecovery(
-    `Retrying pending project transaction ${recovery.action} ${recovery.phase} recovery before the next mutation.`,
-  );
-  await recovery.retry();
-};
-
-const createAppProjectTransactionTerminalSettlement = (identity: ProjectTransactionIdentity) =>
-  createProjectTransactionTerminalSettlement(
-    (mutation) => window.dispatchEvent(new CustomEvent<ProjectHistoryMutationResult>(
-      projectHistoryChangedEvent,
-      { detail: mutation },
-    )),
-    () => acknowledgeProjectTransaction(identity),
-  );
-
-const settleAppProjectTransactionTerminal = (
-  settlement: ReturnType<typeof createAppProjectTransactionTerminalSettlement>,
-  mutation: ProjectHistoryMutationResult,
-) => settleProjectTransactionTerminalAcknowledgement(
-  settlement,
-  mutation,
-  waitForProjectTransactionTerminalRecovery,
-  reportProjectTransactionForegroundRecoveryWithRetry,
-);
-
-const settleProjectTransactionTerminalInForeground = async (
-  action: ProjectTransactionTerminalAction,
-  identity: ProjectTransactionIdentity,
-  terminalArgs: ProjectTransactionTerminalArgs,
-  settlement: ReturnType<typeof createAppProjectTransactionTerminalSettlement>,
-  mutation: ProjectHistoryMutationResult,
-): Promise<void> => {
-  const recovery = installForegroundProjectTransactionTerminalRecovery(
-    "acknowledgement",
-    action,
-    identity,
-    terminalArgs,
-    (clear) => async () => {
-      await settleAppProjectTransactionTerminal(settlement, mutation);
-      clear();
-    },
-  );
-  await recovery.retry();
-};
-
-const recoverProjectTransactionTerminalInForeground = async (
-  action: ProjectTransactionTerminalAction,
-  terminalArgs: ProjectTransactionTerminalArgs,
-  identity: ProjectTransactionIdentity,
-  settlement: ReturnType<typeof createAppProjectTransactionTerminalSettlement>,
-): Promise<ProjectTransactionTerminalRecoveryResult> => {
-  const recovery = installForegroundProjectTransactionTerminalRecovery(
-    "terminal",
-    action,
-    identity,
-    terminalArgs,
-    (clear) => async () => {
-      const result = await recoverProjectTransactionTerminal(action, terminalArgs, identity);
-      const mutation = result.kind === "operation" ? result.mutation : result.recovery.mutation;
-      await settleAppProjectTransactionTerminal(settlement, mutation);
-      clear();
-      return result;
-    },
-  );
-  return await recovery.retry() as ProjectTransactionTerminalRecoveryResult;
-};
-
-const recoverProjectTransactionTerminal = async (
-  action: ProjectTransactionTerminalAction,
-  terminalArgs: ProjectTransactionTerminalArgs,
-  identity: ProjectTransactionIdentity,
-) => recoverProjectTransactionTerminalAction({
-  identity,
-  terminalArgs,
-  action,
-  query: queryProjectTransactionRecovery,
-  invokeTerminal: (args) => tauriInvoke<ProjectHistoryMutationResult>(
-    action === "commit" ? "commit_project_transaction" : "cancel_project_transaction",
-    args,
+const {
+  resumeForegroundProjectTransactionTerminalRecoveryBeforeMutation,
+  createAppProjectTransactionTerminalSettlement,
+  beginProjectTransactionWithRecovery,
+  cancelProjectTransactionWithRecovery,
+  commitProjectTransactionWithRecovery,
+  recoverPublishedProjectTransactionCommandResult,
+} = createProjectTransactionRecoveryController({
+  invoke: tauriInvoke,
+  dispatchHistoryMutation: (mutation) => window.dispatchEvent(
+    new CustomEvent<ProjectHistoryMutationResult>(projectHistoryChangedEvent, { detail: mutation }),
   ),
-  wait: waitForProjectTransactionTerminalRecovery,
-  reportUnresolved: reportProjectTransactionForegroundRecoveryWithRetry,
+  reportRecovery: reportProjectTransactionForegroundRecovery,
+  wait: (milliseconds) => new Promise<void>((resolve) => window.setTimeout(resolve, milliseconds)),
 });
-
-type PublishedProjectTransactionCommandRecovery =
-  | { kind: "published"; result: ProjectTransactionCommandResult }
-  | { kind: "not_published" }
-  | { kind: "indeterminate"; error: string }
-  | { kind: "unconfirmed" };
-
-const recoverPublishedProjectTransactionCommandResult = async (
-  identity: ProjectTransactionIdentity,
-  command: PatchRepairTransactionCommand,
-  commandArgs: Record<string, unknown>,
-): Promise<PublishedProjectTransactionCommandRecovery> => {
-  const decision = await waitForPublishedCommandRecovery(
-    () => queryProjectTransactionRecovery(identity),
-    command,
-    commandArgs,
-    (milliseconds) => new Promise((resolve) => window.setTimeout(resolve, milliseconds)),
-  );
-  return decision;
-};
-
-const recoverProjectTransactionBegin = async (
-  identity: ProjectTransactionIdentity,
-): Promise<ProjectTransactionRecovery | null> => {
-  let lastError: unknown = null;
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    try {
-      const queried = await queryProjectTransactionRecovery(identity);
-      if (!queried) return null;
-      if (!projectTransactionRecoveryCanAdopt(queried.status)) return queried;
-      return await tauriInvoke<ProjectTransactionRecovery>("adopt_project_transaction", identity);
-    } catch (error) {
-      lastError = error;
-    }
-  }
-  if (lastError) throw lastError;
-  return null;
-};
-
-const beginProjectTransactionWithRecovery = async (
-  beginArgs: Record<string, unknown>,
-  identity: ProjectTransactionIdentity,
-): Promise<ProjectTransactionTicket> => {
-  try {
-    return await tauriInvoke<ProjectTransactionTicket>("begin_project_transaction", beginArgs);
-  } catch (beginError) {
-    const recovered = await recoverProjectTransactionBegin(identity).catch(() => null);
-    if (!recovered) throw beginError;
-    if (recovered.status === "pending") return recovered.ticket;
-    if (recovered.status === "committed") {
-      const settlement = createAppProjectTransactionTerminalSettlement(identity);
-      await settleAppProjectTransactionTerminal(settlement, recovered.mutation);
-      throw new Error(
-        "Project transaction committed while the Begin reply was lost; command result was not delivered. Refresh before retrying.",
-      );
-    }
-    if (recovered.status === "cancelled") {
-      const settlement = createAppProjectTransactionTerminalSettlement(identity);
-      await settleAppProjectTransactionTerminal(settlement, recovered.mutation);
-      throw new Error("Project transaction was cancelled while the Begin reply was lost.");
-    }
-    throw new Error("Project transaction receipt was already acknowledged; use a new operation ID.");
-  }
-};
-
-const cancelProjectTransactionWithRecovery = async (
-  transaction: ProjectTransactionTicket,
-  identity: ProjectTransactionIdentity,
-): Promise<ProjectHistoryMutationResult | null> => {
-  const cancelArgs = projectTransactionTerminalArgs(transaction, identity);
-  const settleTerminal = createAppProjectTransactionTerminalSettlement(identity);
-  let cancellation: ProjectHistoryMutationResult | null = null;
-  try {
-    cancellation = await tauriInvoke<ProjectHistoryMutationResult>(
-      "cancel_project_transaction",
-      cancelArgs,
-    );
-    if (!projectTransactionTerminalMutationIsWellFormed(cancellation)) {
-      throw new ProjectTransactionTerminalMalformedMutationError(
-        "Project transaction Cancel reply was malformed; querying the exact terminal receipt.",
-      );
-    }
-  } catch {
-    const recovered = await recoverProjectTransactionTerminalInForeground(
-      "cancel",
-      cancelArgs,
-      identity,
-      settleTerminal,
-    );
-    if (recovered.kind === "operation") {
-      return recovered.mutation;
-    }
-    if (recovered.recovery.status === "cancelled") {
-      return recovered.recovery.mutation;
-    }
-    if (recovered.recovery.status === "committed") {
-      throw new Error(
-        "Project transaction committed while Cancel was in flight; inspect the recovered history before retrying.",
-      );
-    }
-  }
-  if (cancellation === null) {
-    throw new Error("Project transaction Cancel recovery returned no terminal mutation.");
-  }
-  await settleProjectTransactionTerminalInForeground(
-    "cancel",
-    identity,
-    cancelArgs,
-    settleTerminal,
-    cancellation,
-  );
-  return cancellation;
-};
-
-const commitProjectTransactionWithRecovery = async (
-  transaction: ProjectTransactionTicket,
-  identity: ProjectTransactionIdentity,
-  settleTerminal: ReturnType<typeof createAppProjectTransactionTerminalSettlement>,
-): Promise<ProjectHistoryMutationResult> => {
-  const commitArgs = projectTransactionTerminalArgs(transaction, identity);
-  let committed: ProjectHistoryMutationResult | null = null;
-  try {
-    committed = await tauriInvoke<ProjectHistoryMutationResult>(
-      "commit_project_transaction",
-      commitArgs,
-    );
-    if (!projectTransactionTerminalMutationIsWellFormed(committed)) {
-      throw new ProjectTransactionTerminalMalformedMutationError(
-        "Project transaction Commit reply was malformed; querying the exact terminal receipt.",
-      );
-    }
-  } catch {
-    const recovered = await recoverProjectTransactionTerminalInForeground(
-      "commit",
-      commitArgs,
-      identity,
-      settleTerminal,
-    );
-    if (recovered.kind === "operation") return recovered.mutation;
-    if (recovered.recovery.status === "committed") return recovered.recovery.mutation;
-    if (recovered.recovery.status === "cancelled") {
-      throw new Error("Project transaction was cancelled while Commit was in flight.");
-    }
-  }
-  if (committed === null) {
-    throw new Error("Project transaction Commit recovery returned no terminal mutation.");
-  }
-  await settleProjectTransactionTerminalInForeground(
-    "commit",
-    identity,
-    commitArgs,
-    settleTerminal,
-    committed,
-  );
-  return committed;
-};
 
 // A convergence poll can briefly leave the old transaction/recovery detail in
 // the global status line after the native Add transaction has already reached
@@ -2359,6 +2054,7 @@ export default function App() {
   );
   const [timelineLowerContextMode, setTimelineLowerContextMode] = createSignal<TimelineSourceContextMode>("sources");
   const [timelineChildCueId, setTimelineChildCueId] = createSignal<number | null>(null);
+  const [timelineNavigatorOpen, setTimelineNavigatorOpen] = createSignal(true);
   const [controlLiveView, setControlLiveView] = createSignal<"matrix" | "pads">("matrix");
   const [touchControlDomain, setTouchControlDomain] = createSignal<"lighting" | "video">("lighting");
   const [liveStatusExpanded, setLiveStatusExpanded] = createSignal(false);
@@ -2581,6 +2277,11 @@ export default function App() {
   // Request IDs distinguish replies within the same identity. This data-only
   // state is also exercised by app/scripts/check-project-authority.mjs.
   let projectAuthoritySync = createProjectAuthoritySyncState();
+  const [projectHistoryMappingsDirty, setProjectHistoryMappingsDirty] = createSignal(false);
+  const assignProjectAuthoritySync = (next: typeof projectAuthoritySync) => {
+    projectAuthoritySync = next;
+    setProjectHistoryMappingsDirty(projectAuthorityHasDirtyMappings(next));
+  };
   // Coherent authority publication invalidates all older independent reads
   // before the new token is visible to individual Solid signals.
   let projectReadGeneration = 0;
@@ -2652,7 +2353,7 @@ export default function App() {
   });
 
   const commitProjectAuthorityRuntimeState = (state: ProjectAuthorityRuntimeState) => {
-    projectAuthoritySync = state.sync;
+    assignProjectAuthoritySync(state.sync);
     lastAppliedProjectReplacement = state.lastAppliedProjectReplacement;
     observedProjectInputRuntimeGeneration = state.observedProjectInputRuntimeGeneration;
     observedMappingInputRuntimeGeneration = state.observedMappingInputRuntimeGeneration;
@@ -2896,16 +2597,6 @@ export default function App() {
   };
   const mediaLibraryStatusLease = createMediaLibraryStatusLease();
   const [autoVjBusy, setAutoVjBusy] = createSignal(false);
-  const [videoClipThumbnails, setVideoClipThumbnails] = createSignal<Record<number, string>>({});
-  const [mediaAssetThumbnails, setMediaAssetThumbnails] = createSignal<Record<number, string>>({});
-  const [videoThumbnailAccessAuthorized, setVideoThumbnailAccessAuthorized] = createSignal(false);
-  let videoThumbnailGeneration = 0;
-  let mediaAssetThumbnailGeneration = 0;
-  let videoThumbnailUrlCache: Record<number, string> = {};
-  let mediaAssetThumbnailUrlCache: Record<number, string> = {};
-  const videoThumbnailSignatures = new Map<number, string>();
-  const mediaAssetThumbnailSignatures = new Map<number, string>();
-  const authorizeVideoThumbnailAccess = () => setVideoThumbnailAccessAuthorized(true);
   let spokenTimelineGuideKey = "";
   const emptyTimelineCueAudioStatus = (): TimelineCueAudioStatus => ({
     runtimeIncarnation: 0,
@@ -3058,15 +2749,7 @@ export default function App() {
     setTimelineFollowRuntime(emptyTimelineFollowRuntime());
   };
   const resetMediaAssetUiForProjectReplacement = () => {
-    videoThumbnailGeneration += 1;
-    mediaAssetThumbnailGeneration += 1;
-    videoThumbnailUrlCache = {};
-    mediaAssetThumbnailUrlCache = {};
-    videoThumbnailSignatures.clear();
-    mediaAssetThumbnailSignatures.clear();
-    setVideoThumbnailAccessAuthorized(false);
-    setVideoClipThumbnails({});
-    setMediaAssetThumbnails({});
+    thumbnailController.reset();
     mediaAssetAvailabilityApplyFence.reset();
     mediaLibraryStatusLease.reset();
     mediaAssetAvailabilityRowAuthority.reset();
@@ -8611,6 +8294,22 @@ export default function App() {
     );
   });
   const timelinePositionMs = createMemo(() => activeTimeline().position_ms);
+  const timelineInlineChildParents = createMemo<InlineChildParent[]>(() => {
+    const layers = timelineLayers();
+    return timelineEventRows().filter((event) => event.track === "Lighting").map((event) => ({
+      id: event.id, cue_id: event.cue_id,
+      layer_id: timelineLayerIdForEvent(layers, event),
+      time_ms: event.time_ms, duration_ms: event.duration_ms,
+      total_duration_ms: timelineSceneBlockSpanMs(event),
+      source_offset_ms: event.source_offset_ms ?? 0, rate: event.rate ?? null,
+      conform_to_tempo: event.conform_to_tempo ?? false,
+      loop_fill: event.loop_fill ?? false, loop_count: event.loop_count,
+    }));
+  }, [], { equals: (previous, next) => previous.length === next.length && previous.every(
+    (parent, index) => (Object.keys(parent) as (keyof InlineChildParent)[]).every(
+      (key) => parent[key] === next[index][key],
+    ),
+  ) });
   const timelineOverviewEvents = createMemo<TimelineOverviewEvent[]>(() => {
     const visibleWindow = timelineVisibleWindow();
     const visibleSpanMs = timelineVisibleWindowSpanMs(visibleWindow);
@@ -9088,7 +8787,7 @@ export default function App() {
     return layers[0]?.id ?? null;
   });
   const videoDecoderDiagnosticsLabel = (diagnostics: VideoDecoderDiagnostics) =>
-    `routes HAP ${diagnostics.hap_successes}/${diagnostics.hap_requests}, libav ${diagnostics.libav_successes}/${diagnostics.libav_requests}, CLI ${diagnostics.cli_fallback_successes}/${diagnostics.cli_fallback_requests}, deferred ${diagnostics.deferred_requests}, failed ${diagnostics.decode_failures}, cache ${diagnostics.hap_cache_len}+${diagnostics.libav_cache_len}+${diagnostics.cli_cache_len}, libav sessions ${diagnostics.libav_session_count} (open ${diagnostics.libav_session_open_count}, reset ${diagnostics.libav_session_reset_count}, seq ${diagnostics.libav_sequential_continue_count}, reuse ${diagnostics.libav_frame_reuse_count}, evict ${diagnostics.libav_working_set_eviction_count}, error ${diagnostics.libav_session_error_count})`;
+    `routes HAP ${diagnostics.hap_successes}/${diagnostics.hap_requests}, libav ${diagnostics.libav_successes}/${diagnostics.libav_requests}, CLI ${diagnostics.cli_fallback_successes}/${diagnostics.cli_fallback_requests}, deferred ${diagnostics.deferred_requests}, failed ${diagnostics.decode_failures}, cache ${diagnostics.hap_cache_len}+${diagnostics.libav_cache_len}+${diagnostics.cli_cache_len}, libav sessions ${diagnostics.libav_session_count} (open ${diagnostics.libav_session_open_count}, reset ${diagnostics.libav_session_reset_count}, seq ${diagnostics.libav_sequential_continue_count}, reuse ${diagnostics.libav_frame_reuse_count}, evict ${diagnostics.libav_working_set_eviction_count}, error ${diagnostics.libav_session_error_count}), GPU decode sessions ${diagnostics.libav_hardware_session_count}, frames ${diagnostics.libav_hardware_frame_count}, errors ${diagnostics.libav_hardware_error_count}`;
   const videoPreviewDiagnosticsText = createMemo(() => {
     const diagnostics = videoPreviewDiagnostics();
     if (!diagnostics) {
@@ -11487,18 +11186,19 @@ export default function App() {
     }
   };
 
-  const refreshProjectHistoryStatus = async () => {
+  const refreshProjectHistoryStatus = async (): Promise<boolean> => {
     if (!isTauriRuntime()) {
-      return;
+      return false;
     }
     const guard = captureProjectReadGuard();
     try {
       const status = await invoke<ProjectHistoryStatus>("get_project_history_status");
-      if (!projectReadGuardIsCurrent(guard)) return;
-      applyAuthoritativeProjectHistoryStatus(status);
+      if (!projectReadGuardIsCurrent(guard)) return false;
+      return applyAuthoritativeProjectHistoryStatus(status);
     } catch (error) {
-      if (!projectReadGuardIsCurrent(guard)) return;
+      if (!projectReadGuardIsCurrent(guard)) return false;
       setMessage(`Unable to read Undo history: ${String(error)}`);
+      return false;
     }
   };
 
@@ -11523,17 +11223,13 @@ export default function App() {
     }
   };
 
-  const undoProject = async () => {
+  const performUndoProject = async () => {
     if (isfEventPulseBusy()) {
       setMessage("Wait for the active FX Event pulse to finish before Undo.");
       return;
     }
     if (!projectHistoryStatus().can_undo) {
       setMessage("Nothing to undo.");
-      return;
-    }
-    if (!confirmDiscardTimelineEditorDrafts()) {
-      setMessage("Undo canceled; unsaved Timeline edits were kept.");
       return;
     }
     if (!isTauriRuntime()) {
@@ -11624,17 +11320,13 @@ export default function App() {
     }
   };
 
-  const redoProject = async () => {
+  const performRedoProject = async () => {
     if (isfEventPulseBusy()) {
       setMessage("Wait for the active FX Event pulse to finish before Redo.");
       return;
     }
     if (!projectHistoryStatus().can_redo) {
       setMessage("Nothing to redo.");
-      return;
-    }
-    if (!confirmDiscardTimelineEditorDrafts()) {
-      setMessage("Redo canceled; unsaved Timeline edits were kept.");
       return;
     }
     if (viewportFixture === "scene-matrix") {
@@ -11724,6 +11416,40 @@ export default function App() {
       setMessage(`Redo failed: ${String(error)}`);
     }
   };
+
+  const [projectHistoryNavigationBusy, setProjectHistoryNavigationBusy] = createSignal(false);
+  const navigateProjectHistory = async (navigate: () => Promise<void>) => {
+    if (projectHistoryNavigationBusy()) {
+      setMessage("Undo / Redo の処理中です。");
+      return;
+    }
+    if (isfEventPulseBusy()) {
+      setMessage("Wait for the active FX Event pulse to finish before Undo / Redo.");
+      return;
+    }
+    if (!confirmDiscardTimelineEditorDrafts()) {
+      setMessage("Undo / Redo を取り消しました。未保存のタイムライン編集は保持されています。");
+      return;
+    }
+    setProjectHistoryNavigationBusy(true);
+    try {
+      if (isTauriRuntime() && !viewportFixture) {
+        const epoch = await flushProjectControlMappingsBeforeMutation();
+        if (!await refreshProjectHistoryStatus() || captureProjectAuthorityIdentity().project_epoch !== epoch) {
+          setMessage("履歴の同期が完了していません。Undo / Redo は実行していません。");
+          return;
+        }
+      }
+      await navigate();
+    } catch (error) {
+      setMessage(`Undo / Redo の準備に失敗しました: ${String(error)}`);
+    } finally {
+      setProjectHistoryNavigationBusy(false);
+    }
+  };
+  const undoProject = () => navigateProjectHistory(performUndoProject);
+  const redoProject = () => navigateProjectHistory(performRedoProject);
+  const hasPendingHistoryMappings = projectHistoryMappingsDirty;
 
   const saveProjectRecovery = async () => {
     if (!isTauriRuntime() || (!projectDirty() && !timelineEventEditorDirty())) {
@@ -14482,7 +14208,7 @@ export default function App() {
     && projectAuthorityResponseIsCurrent(projectAuthoritySync, request);
 
   const invalidateProjectControlMappingsForIdentity = () => {
-    projectAuthoritySync = invalidateProjectAuthorityIdentity(projectAuthoritySync);
+    assignProjectAuthoritySync(invalidateProjectAuthorityIdentity(projectAuthoritySync));
     // A newly published identity owns the mapping arrays. Drop any unsent A
     // edit rather than allowing a delayed A request to overwrite/recommit B.
     if (mappingSyncTimer !== null) {
@@ -14600,12 +14326,12 @@ export default function App() {
     }
     const readGuard = captureProjectReadGuard();
     const started = beginProjectAuthorityRequest(projectAuthoritySync);
-    projectAuthoritySync = started.state;
+    assignProjectAuthoritySync(started.state);
     const authority = await tauriInvoke<ProjectControlMappingsAuthority>("get_project_control_mappings");
     if (projectReadGuardIsCurrent(readGuard)
       && mappingResponseIsCurrent(started.request)
       && hydrateProjectControlMappings(authority)) {
-      projectAuthoritySync = markProjectAuthorityPersisted(projectAuthoritySync);
+      assignProjectAuthoritySync(markProjectAuthorityPersisted(projectAuthoritySync));
     }
     return authority;
   };
@@ -14630,7 +14356,7 @@ export default function App() {
     if (!prepared) return false;
     invalidateProjectControlMappingsForIdentity();
     commitPreparedProjectControlMappings(prepared);
-    projectAuthoritySync = markProjectAuthorityPersisted(projectAuthoritySync);
+    assignProjectAuthoritySync(markProjectAuthorityPersisted(projectAuthoritySync));
     return true;
   };
 
@@ -14653,7 +14379,7 @@ export default function App() {
     const sentGeneration = projectAuthoritySync.localGeneration;
     const requestFlushOwner = mappingPersistFlushOwner;
     const started = beginProjectAuthorityRequest(projectAuthoritySync);
-    projectAuthoritySync = started.state;
+    assignProjectAuthoritySync(started.state);
     const authority = projectMappingsAuthority();
     const sentMappings = currentProjectControlMappings();
     mappingSyncInFlight = true;
@@ -14690,11 +14416,11 @@ export default function App() {
           // Only the request that still owns this identity may acknowledge a
           // local generation. A newer local edit remains dirty and is sent
           // with this new CAS token below.
-          projectAuthoritySync = acknowledgeProjectAuthorityPersist(
+          assignProjectAuthoritySync(acknowledgeProjectAuthorityPersist(
             projectAuthoritySync,
             started.request,
             sentGeneration,
-          );
+          ));
           if (projectAuthoritySync.localGeneration === sentGeneration) {
             hydrateProjectControlMappings(next);
           }
@@ -14716,17 +14442,17 @@ export default function App() {
         // arrays or tokens after B has hydrated.
         if (!mappingResponseIsCurrent(started.request)) return untrusted();
         const recoveryStarted = beginProjectAuthorityRequest(projectAuthoritySync);
-        projectAuthoritySync = recoveryStarted.state;
+        assignProjectAuthoritySync(recoveryStarted.state);
         try {
           const current = await tauriInvoke<ProjectControlMappingsAuthority>("get_project_control_mappings");
           if (mappingResponseIsCurrent(recoveryStarted.request) && adoptProjectMappingsAuthority(current)) {
             if (projectAuthoritySync.localGeneration === sentGeneration) {
               if (hydrateProjectControlMappings(current)) {
-                projectAuthoritySync = acknowledgeProjectAuthorityPersist(
+                assignProjectAuthoritySync(acknowledgeProjectAuthorityPersist(
                   projectAuthoritySync,
                   recoveryStarted.request,
                   sentGeneration,
-                );
+                ));
               }
               setMessage(`Project control mappings changed before this edit could be saved: ${String(error)}`);
             } else {
@@ -15606,7 +15332,7 @@ export default function App() {
     if (signature === mappingObservedSignature) return;
     mappingObservedSignature = signature;
     if (!isTauriRuntime() || !projectMappingsAuthorityReady()) return;
-    projectAuthoritySync = noteLocalProjectAuthorityEdit(projectAuthoritySync);
+    assignProjectAuthoritySync(noteLocalProjectAuthorityEdit(projectAuthoritySync));
     scheduleProjectControlMappingsPersist();
   });
 
@@ -16102,9 +15828,9 @@ export default function App() {
           // arrived first; ordinary C remains the only rebase case.
           beginProjectReadGeneration();
           const started = beginProjectAuthorityRuntimeApplication(projectAuthorityRuntimeState());
-          projectAuthoritySync = started.state.sync;
+          assignProjectAuthoritySync(started.state.sync);
           if (preserveDirtyMappings) {
-            projectAuthoritySync = rebaseDirtyProjectAuthorityMappings(projectAuthoritySync, true);
+            assignProjectAuthoritySync(rebaseDirtyProjectAuthorityMappings(projectAuthoritySync, true));
           }
           const disposition = applyProjectAuthorityBundle(
             candidate,
@@ -16157,7 +15883,7 @@ export default function App() {
       bundle,
       {
         applyBundle: (startedState, nextBundle, application) => {
-          projectAuthoritySync = startedState.sync;
+          assignProjectAuthoritySync(startedState.sync);
           const disposition = applyProjectAuthorityBundle(nextBundle, application, true);
           return { state: projectAuthorityRuntimeState(), disposition };
         },
@@ -16198,7 +15924,7 @@ export default function App() {
 
     beginProjectReadGeneration();
     const started = beginProjectAuthorityApplication(projectAuthoritySync);
-    projectAuthoritySync = started.state;
+    assignProjectAuthoritySync(started.state);
     // Paired command replies already carry their exact fenced authority image.
     // Keep that B-over-A route synchronous. Only older backends cross the
     // compatibility fetch boundary and therefore require the stricter guard.
@@ -19854,9 +19580,13 @@ export default function App() {
     }
   };
 
-  const openOrCreateSuperScene = async (cueId: number) => {
+  const openOrCreateSuperScene = async (cueId: number, existingOnly = false) => {
     const cue = requireAuthoritativeCue(cueId);
     if (!cue) {
+      return false;
+    }
+    if (existingOnly && !cue.child_timeline) {
+      setMessage("選択した子タイムラインは存在しません。");
       return false;
     }
     if (!confirmDiscardTimelineEditorDrafts()) {
@@ -19975,6 +19705,44 @@ export default function App() {
     setTimelineVideoAutomationDrafts({});
     fitTimelineOverview();
     setMessage("Opened Show timeline.");
+  };
+
+  let timelineNavigatorBusy = false;
+  const openRootTimelineFromNavigator = async (timelineId: number) => {
+    if (timelineNavigatorBusy) return;
+    if (!timelineBank().some((timeline) => timeline.id === timelineId)) {
+      setMessage("選択したタイムラインは存在しません。");
+      return;
+    }
+    if (!confirmDiscardTimelineEditorDrafts()) return;
+    const epoch = projectMappingsAuthority().project_epoch;
+    const childCueId = timelineChildCueId();
+    timelineNavigatorBusy = true;
+    try {
+      if (snapshot().timeline.id !== timelineId) {
+        const result = await commitTimelineAdvanced({ kind: "select_timeline", timeline_id: timelineId, play: false });
+        if (!result) return;
+      }
+      if (projectMappingsAuthority().project_epoch !== epoch || timelineChildCueId() !== childCueId) return;
+      batch(() => {
+        setTimelineChildCueId(null);
+        setSelectedTimelineSceneBlockEventId(null);
+        setTimelineSelection(null);
+        setTimelineEventDrafts({});
+        setTimelineAutomationDrafts({});
+        setTimelineVideoAutomationDrafts({});
+        fitTimelineOverview();
+      });
+      setMessage("タイムラインを開きました。");
+    } catch (error) {
+      setMessage(`タイムラインを開けませんでした: ${String(error)}`);
+    } finally {
+      timelineNavigatorBusy = false;
+    }
+  };
+  const openChildTimelineFromNavigator = async (cueId: number) => {
+    if (timelineNavigatorBusy) return;
+    await openOrCreateSuperScene(cueId, true);
   };
 
   const snapTimelineDrafts = () => {
@@ -21206,135 +20974,19 @@ export default function App() {
       if (vjFirstRunOperationLease.isCurrent(firstRunLease)) setVjFirstRunBusy(false);
     }
   };
-  const videoThumbnailSourceSignature = createMemo(() => JSON.stringify(
-    snapshot().video.layers.map((layer) => ({
-      id: layer.id,
-      kind: layer.source.kind,
-      path: layer.source.path ?? null,
-      name: layer.source.name ?? null,
-    })),
-  ));
-  const mediaAssetThumbnailSourceSignature = createMemo(() => JSON.stringify(
-    snapshot().video.media_assets.map((asset) => ({
-      id: asset.id,
-      kind: asset.source.kind,
-      path: asset.source.path ?? null,
-      name: asset.source.name ?? null,
-      hash_algorithm: asset.content_hash?.algorithm ?? null,
-      hash_hex: asset.content_hash?.hex ?? null,
-      byte_size: asset.byte_size ?? null,
-    })),
-  ));
-  // This deliberately projects only the durable E/R/H identity.  The
-  // authority signal itself is re-published as a fresh object by polling, and
-  // subscribing to that object would otherwise restart a sequential batch on
-  // every equivalent publication.  A genuine identity change produces a
-  // different scalar, so the effect below starts one fresh fenced batch.
-  const mediaAssetThumbnailAuthoritySignature = createMemo(() => {
-    const authority = projectMappingsAuthority();
-    return JSON.stringify({
-      project_epoch: authority.project_epoch,
-      project_revision: authority.project_revision,
-      checkpoint_hash: authority.checkpoint_hash,
-    });
+  const thumbnailController = createMediaThumbnailController({
+    layers: () => snapshot().video.layers,
+    assets: () => snapshot().video.media_assets,
+    projectMappingsAuthority,
+    isProjectAuthorityIdentityCurrent,
+    isTauriRuntime,
+    loadVideoLayerThumbnail,
+    loadMediaAssetThumbnail,
   });
-  createEffect(() => {
-    const sources = JSON.parse(videoThumbnailSourceSignature()) as Array<{
-      id: number;
-      kind: VideoSourceKind;
-      path: string | null;
-      name: string | null;
-    }>;
-    const generation = ++videoThumbnailGeneration;
-    if (!videoThumbnailAccessAuthorized()) {
-      setVideoClipThumbnails({});
-      return;
-    }
-    const activeIds = new Set(sources.map((source) => source.id));
-    for (const layerId of videoThumbnailSignatures.keys()) {
-      if (!activeIds.has(layerId)) videoThumbnailSignatures.delete(layerId);
-    }
-    videoThumbnailUrlCache = Object.fromEntries(
-      Object.entries(videoThumbnailUrlCache).filter(([layerId]) => activeIds.has(Number(layerId))),
-    );
-    if (!isTauriRuntime()) {
-      setVideoClipThumbnails(videoThumbnailUrlCache);
-      return;
-    }
-    void (async () => {
-      const nextUrls = { ...videoThumbnailUrlCache };
-      const nextSignatures = new Map(videoThumbnailSignatures);
-      for (const source of sources) {
-        const signature = JSON.stringify(source);
-        if (nextSignatures.get(source.id) === signature && nextUrls[source.id]) continue;
-        try {
-          nextUrls[source.id] = await loadVideoLayerThumbnail(source.id);
-          nextSignatures.set(source.id, signature);
-        } catch {
-          delete nextUrls[source.id];
-          nextSignatures.delete(source.id);
-        }
-        if (generation !== videoThumbnailGeneration) return;
-      }
-      if (generation !== videoThumbnailGeneration) return;
-      videoThumbnailUrlCache = nextUrls;
-      videoThumbnailSignatures.clear();
-      for (const [layerId, signature] of nextSignatures) {
-        videoThumbnailSignatures.set(layerId, signature);
-      }
-      setVideoClipThumbnails(nextUrls);
-    })();
-  });
-  createEffect(() => {
-    const sources = JSON.parse(mediaAssetThumbnailSourceSignature()) as Array<{
-      id: MediaAssetId;
-      kind: VideoSourceKind;
-      path: string | null;
-      name: string | null;
-      hash_algorithm: string | null;
-      hash_hex: string | null;
-      byte_size: number | null;
-    }>;
-    const authority = JSON.parse(mediaAssetThumbnailAuthoritySignature()) as ProjectAuthorityToken;
-    const generation = ++mediaAssetThumbnailGeneration;
-    if (!videoThumbnailAccessAuthorized()) {
-      setMediaAssetThumbnails({});
-      return;
-    }
-    const thumbnailable = sources.filter((source) => source.kind === "File" || source.kind === "StillImage");
-    const activeIds = new Set(thumbnailable.map((source) => source.id));
-    for (const assetId of mediaAssetThumbnailSignatures.keys()) {
-      if (!activeIds.has(assetId)) mediaAssetThumbnailSignatures.delete(assetId);
-    }
-    mediaAssetThumbnailUrlCache = Object.fromEntries(
-      Object.entries(mediaAssetThumbnailUrlCache).filter(([assetId]) => activeIds.has(Number(assetId))),
-    );
-    if (!isTauriRuntime()) {
-      setMediaAssetThumbnails(mediaAssetThumbnailUrlCache);
-      return;
-    }
-    void (async () => {
-      const nextUrls = { ...mediaAssetThumbnailUrlCache };
-      const nextSignatures = new Map(mediaAssetThumbnailSignatures);
-      for (const source of thumbnailable) {
-        const signature = JSON.stringify(source);
-        if (nextSignatures.get(source.id) === signature && nextUrls[source.id]) continue;
-        try {
-          nextUrls[source.id] = await loadMediaAssetThumbnail(source.id);
-          nextSignatures.set(source.id, signature);
-        } catch {
-          delete nextUrls[source.id];
-          nextSignatures.delete(source.id);
-        }
-        if (generation !== mediaAssetThumbnailGeneration || !isProjectAuthorityIdentityCurrent(authority)) return;
-      }
-      if (generation !== mediaAssetThumbnailGeneration || !isProjectAuthorityIdentityCurrent(authority)) return;
-      mediaAssetThumbnailUrlCache = nextUrls;
-      mediaAssetThumbnailSignatures.clear();
-      for (const [assetId, signature] of nextSignatures) mediaAssetThumbnailSignatures.set(assetId, signature);
-      setMediaAssetThumbnails(nextUrls);
-    })();
-  });
+  const {
+    videoClipThumbnails, mediaAssetThumbnails, videoThumbnailAccessAuthorized,
+    authorizeVideoThumbnailAccess,
+  } = thumbnailController;
   const inspectMediaAssetIds = async (assetIds: MediaAssetId[]) => {
     const statusLease = mediaLibraryStatusLease.begin();
     const setMediaLibraryStatus = (message: string) => {
@@ -25242,6 +24894,61 @@ export default function App() {
     setTimelineContextDrawer("none");
   };
 
+  if (!paneWindow) createWorkspaceNavigationController({
+    history: window.history,
+    events: window,
+    sessionId: crypto.randomUUID(),
+    projectEpoch: () => projectMappingsAuthority().project_epoch,
+    route: (): WorkspaceNavigationRoute => {
+      const workspace = workspaceTab();
+      if (workspace === "setup") return { workspace, setupSubTab: setupSubTab(),
+        ...(setupSubTab() === "io" ? { activeIoConnection: activeIoConnection() } : {}) };
+      if (workspace === "touch") return { workspace, touchControlDomain: touchControlDomain() };
+      const mode = controlMode();
+      if (mode === "edit") return { workspace, controlMode: mode, editDeskSurface: editDeskSurface() };
+      if (mode === "live") return { workspace, controlMode: mode,
+        timelineDeskSurface: timelineDeskSurface(), timelineChildCueId: timelineChildCueId() };
+      return { workspace, controlMode: mode };
+    },
+    restore: (route) => {
+      if (route.workspace === "control" && route.controlMode === "edit" && operatorLockMode() === "Partial") {
+        setMessage("Lighting editing is locked for this operator.");
+        return false;
+      }
+      const childId = route.workspace === "control" && route.controlMode === "live"
+        ? route.timelineChildCueId ?? null : timelineChildCueId();
+      const child = childId === null ? null : snapshotCues().find((cue) => cue.id === childId && cue.child_timeline);
+      if (childId !== null && !child) {
+        setMessage("移動先の子タイムラインは削除されています。");
+        return false;
+      }
+      if (!confirmDiscardTimelineEditorDrafts()) return false;
+      batch(() => {
+        if (childId !== timelineChildCueId()) {
+          setTimelineChildCueId(childId);
+          setSelectedTimelineSceneBlockEventId(null);
+          setTimelineSelection(null);
+          setTimelineEventDrafts({});
+          setTimelineAutomationDrafts({});
+          setTimelineVideoAutomationDrafts({});
+          fitTimelineOverview();
+        }
+        if (route.workspace === "setup") {
+          selectSetupMode(route.setupSubTab!);
+          if (route.activeIoConnection) setActiveIoConnection(route.activeIoConnection as IoConnectionId);
+        } else if (route.workspace === "touch") {
+          setTouchControlDomain(route.touchControlDomain!);
+        } else {
+          selectControlMode(route.controlMode!);
+          if (route.controlMode === "edit") selectEditDeskSurface(route.editDeskSurface!);
+          if (route.controlMode === "live") selectTimelineDeskSurface(route.timelineDeskSurface!);
+        }
+        selectWorkspaceTab(route.workspace);
+      });
+      return true;
+    },
+  });
+
   // Timeline owns one desk header in its upper arranger. Keeping this render path
   // here avoids a lower-pane portal retaining stale controls across domain changes.
   const renderTimelineDeskHeaderTools = () => (
@@ -25684,6 +25391,7 @@ export default function App() {
     mappingViewportPanDrag,
     setMappingViewportPanDrag,
     snapshot,
+    activeTimeline,
     triggerPreviousCue,
     triggerNextCue,
     triggerCue,
@@ -26389,8 +26097,10 @@ export default function App() {
         daslightProjectImportBusy={daslightProjectImportBusy()}
         historyStatus={{
           ...projectHistoryStatus(),
-          can_undo: !isfEventPulseBusy() && projectHistoryStatus().can_undo,
-          can_redo: !isfEventPulseBusy() && projectHistoryStatus().can_redo,
+          can_undo: !isfEventPulseBusy() && !projectHistoryNavigationBusy()
+            && (projectHistoryStatus().can_undo || hasPendingHistoryMappings()),
+          can_redo: !isfEventPulseBusy() && !projectHistoryNavigationBusy()
+            && projectHistoryStatus().can_redo && !hasPendingHistoryMappings(),
         }}
         applicationUpdateConfiguration={applicationUpdateConfiguration()}
         applicationUpdateCheck={applicationUpdateCheck()}
@@ -26736,6 +26446,14 @@ export default function App() {
             <h2>Timeline</h2>
             <div class="controlContextHeaderTools">
               {renderTimelineDeskHeaderTools()}
+              <Show when={timelineDeskSurface() === "show"}>
+                <button type="button" class={timelineNavigatorOpen() ? "active" : ""}
+                  data-timeline-navigator-toggle title="タイムライン一覧" aria-label="タイムライン一覧"
+                  aria-expanded={timelineNavigatorOpen()} aria-controls="timeline-navigator"
+                  onClick={() => setTimelineNavigatorOpen((open) => !open)}>
+                  タイムライン一覧
+                </button>
+              </Show>
               <Show when={!paneWindow}>
                 <button
                   type="button"
@@ -28033,7 +27751,7 @@ export default function App() {
                 onContextModeChange={setTimelineLowerContextMode}
                 onOpenInspector={() => setTimelineLowerContextMode("inspector")}
                 inspectorContent={renderTimelineInspector()}
-                previewContent={<TimelineOutputPreview outputs={snapshot().video.outputs} invoke={invoke} backendAvailable={isTauriRuntime()} />}
+                previewContent={<TimelineOutputPreview outputs={snapshot().video.outputs} invoke={invoke} backendAvailable={isTauriRuntime()} projectEpoch={projectMappingsAuthority().project_epoch} />}
               />
             ) : undefined
           }
@@ -28564,6 +28282,12 @@ export default function App() {
               }}
             >
             <TimelineCueEventsPanel
+              navigatorOpen={timelineNavigatorOpen()}
+              onCloseNavigator={() => setTimelineNavigatorOpen(false)}
+              onNavigateRootTimeline={openRootTimelineFromNavigator}
+              onNavigateChildTimeline={openChildTimelineFromNavigator}
+              childTimelineCues={snapshotCues()}
+              inlineChildParents={timelineInlineChildParents()}
               bankAuthority={bankAuthority()}
               embeddedControls={false}
               contextDrawer={timelineContextDrawer()}

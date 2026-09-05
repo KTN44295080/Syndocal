@@ -1,5 +1,5 @@
-import { For, Show } from "solid-js";
-import { createTimelineOutputMonitorController } from "../createTimelineOutputMonitorController";
+import { createEffect, createMemo, For, Show } from "solid-js";
+import { createTimelineOutputMonitorController, type TimelineOutputMonitorFrame } from "../createTimelineOutputMonitorController";
 import type { FrontendTauriInvoke } from "../tauriInvokeCommands";
 import type { VideoOutputSummary } from "../types";
 import "./TimelineOutputPreview.css";
@@ -8,6 +8,27 @@ export interface TimelineOutputPreviewProps {
   outputs: readonly VideoOutputSummary[];
   invoke: FrontendTauriInvoke;
   backendAvailable: boolean;
+  projectEpoch: number;
+}
+
+/** The canvas remains mounted across frames; clearing a retired frame is
+ * synchronous and does not wait for browser image decoding or an object URL. */
+export function TimelineOutputPreviewCanvas(props: { frame: TimelineOutputMonitorFrame | null }) {
+  let canvas!: HTMLCanvasElement;
+  createEffect(() => {
+    const frame = props.frame;
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("Output preview requires a 2D canvas context.");
+    if (!frame) {
+      context.clearRect(0, 0, canvas.width, canvas.height);
+      return;
+    }
+    if (canvas.width !== frame.width) canvas.width = frame.width;
+    if (canvas.height !== frame.height) canvas.height = frame.height;
+    context.putImageData(new ImageData(frame.data, frame.width, frame.height), 0, 0);
+  });
+  return <canvas ref={canvas} role="img" aria-label="Video output preview"
+    style={{ visibility: props.frame ? "visible" : "hidden" }} />;
 }
 
 export function TimelineOutputPreview(props: TimelineOutputPreviewProps) {
@@ -15,6 +36,7 @@ export function TimelineOutputPreview(props: TimelineOutputPreviewProps) {
     invoke: props.invoke,
     outputs: () => props.outputs,
     backendAvailable: () => props.backendAvailable,
+    projectEpoch: () => props.projectEpoch,
     active: () => true,
   });
   return (
@@ -25,6 +47,7 @@ export function TimelineOutputPreview(props: TimelineOutputPreviewProps) {
             {(id) => {
               const output = () => props.outputs.find((candidate) => candidate.id === id)!;
               const state = () => monitor.states().get(id);
+              const frame = createMemo(() => state()?.frame ?? null);
               const validSize = () => Number.isFinite(output().width) && Number.isFinite(output().height)
                 && output().width > 0 && output().height > 0;
               return (
@@ -35,9 +58,8 @@ export function TimelineOutputPreview(props: TimelineOutputPreviewProps) {
                   </header>
                   <Show when={validSize()} fallback={<p>Invalid output resolution.</p>}>
                     <div class="timelineOutputPreviewViewport" style={{ "aspect-ratio": `${output().width} / ${output().height}`, width: `min(100%, ${180 * output().width / output().height}px)` }}>
-                      <Show when={state()?.frameUrl} fallback={<span>{props.backendAvailable ? "Waiting for output frame." : "Open the desktop app for live video."}</span>}>
-                        {(url) => <img src={url()} alt="Video output preview" draggable={false} />}
-                      </Show>
+                      <TimelineOutputPreviewCanvas frame={frame()} />
+                      <Show when={!frame()}><span>{props.backendAvailable ? "Waiting for output frame." : "Open the desktop app for live video."}</span></Show>
                     </div>
                   </Show>
                   <Show when={!output().enabled}><span>Output disabled</span></Show>

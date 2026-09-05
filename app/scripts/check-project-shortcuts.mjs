@@ -374,6 +374,11 @@ assert.deepEqual(resolve("KeyA", { shiftKey: true }, { timelineSurfaceActive: tr
 assert.deepEqual(resolve("KeyB", { shiftKey: true }, { timelineSurfaceActive: true }), { kind: "setTimelineLoopB" });
 assert.deepEqual(resolve("KeyB", { shiftKey: true }), null, "Shift+B remains unassigned outside Timeline");
 
+assert.deepEqual(resolve("Space", {}, { timelineSurfaceActive: true, timelinePlaying: false, timelineDurationMs: 1000 }), { kind: "toggleTimelinePlayback", operation: "play" });
+assert.deepEqual(resolve("Space", {}, { timelineSurfaceActive: true, timelinePlaying: true }), { kind: "toggleTimelinePlayback", operation: "pause" });
+assert.deepEqual(resolve("Space", {}, { timelineSurfaceActive: true, timelinePlaying: false, timelineDurationMs: 0 }), { kind: "toggleTimelinePlayback", operation: "none" });
+assert.deepEqual(resolve("Space", { shiftKey: true }, { timelineSurfaceActive: true }), { kind: "triggerPreviousCue", enabled: true }, "Shift+Space retains previous-cue behavior");
+assert.deepEqual(resolve("Space"), { kind: "triggerNextCue", enabled: true }, "Space outside Timeline retains GO");
 const representativeCases = [
   ["newProject", "KeyN", { ctrlKey: true }, {}],
   ["undoProject", "KeyZ", { ctrlKey: true }, {}],

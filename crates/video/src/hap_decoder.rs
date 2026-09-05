@@ -38,6 +38,9 @@ pub struct VideoDecoderDiagnostics {
     pub libav_frame_reuse_count: u64,
     pub libav_working_set_eviction_count: u64,
     pub libav_session_error_count: u64,
+    pub libav_hardware_session_count: usize,
+    pub libav_hardware_frame_count: u64,
+    pub libav_hardware_error_count: u64,
     pub cli_cache_len: usize,
 }
 
@@ -89,6 +92,14 @@ impl Default for PreferredVideoFrameDecoder {
 }
 
 impl PreferredVideoFrameDecoder {
+    #[cfg(all(test, feature = "libav"))]
+    pub(crate) fn with_software_libav_for_tests(fallback: FfmpegCliFrameDecoder) -> Self {
+        Self {
+            libav: LibavFrameDecoder::software_for_tests(),
+            ..Self::new(fallback)
+        }
+    }
+
     pub fn new(fallback: FfmpegCliFrameDecoder) -> Self {
         Self {
             hap: HapMovFrameDecoder::new(),
@@ -134,6 +145,9 @@ impl PreferredVideoFrameDecoder {
             libav_frame_reuse_count: libav_sessions.frame_reuses,
             libav_working_set_eviction_count: libav_sessions.evictions,
             libav_session_error_count: libav_sessions.errors,
+            libav_hardware_session_count: libav_sessions.hardware_sessions,
+            libav_hardware_frame_count: libav_sessions.hardware_frames,
+            libav_hardware_error_count: libav_sessions.hardware_errors,
             cli_cache_len: self.fallback.cache_len(),
             ..self.diagnostics
         }
@@ -191,6 +205,11 @@ impl PreferredVideoFrameDecoder {
             Ok(None) => self.decode_cli_fallback_input(input, primary_error),
             Err(libav_error) => {
                 self.diagnostics.libav_failures = self.diagnostics.libav_failures.saturating_add(1);
+                if matches!(libav_error, VideoDecodeError::HardwareDecode { .. }) {
+                    self.diagnostics.decode_failures =
+                        self.diagnostics.decode_failures.saturating_add(1);
+                    return Err(libav_error);
+                }
                 self.decode_cli_fallback_input(input, primary_error.or(Some(libav_error)))
             }
         }

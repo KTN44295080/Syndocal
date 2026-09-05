@@ -14,6 +14,7 @@ use std::{
 mod control_plane;
 mod move_path;
 mod show_serial_dmx_status;
+mod snapshot_public;
 mod snapshot_read;
 mod telemetry_percentiles;
 mod timeline_audio_live_fence;
@@ -10899,13 +10900,11 @@ impl EngineHandle {
         self.snapshot
             .read()
             .map(|snapshot| {
-                let mut public = snapshot.clone();
                 // The shared runtime publication carries an exact authored
                 // video image for backend consumers that must distinguish
                 // renderer-only Timeline projections from authored layers.
                 // Keep the established public/UI snapshot shape unchanged.
-                public.authored_video = None;
-                public
+                snapshot_public::clone_public_snapshot(&snapshot)
             })
             .unwrap_or_default()
     }
@@ -10922,9 +10921,7 @@ impl EngineHandle {
             Err(std::sync::TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
             Err(std::sync::TryLockError::WouldBlock) => return None,
         };
-        let mut public = snapshot.clone();
-        public.authored_video = None;
-        Some(public)
+        Some(snapshot_public::clone_public_snapshot(&snapshot))
     }
 
     /// Return the active Follow's exact source/target render inputs. `None`
@@ -47038,11 +47035,21 @@ impl EngineRuntime {
     }
 
     fn timeline_snapshot(&self) -> TimelineSnapshot {
+        self.timeline_snapshot_with_runtime::<true>()
+    }
+
+    fn authored_timeline_snapshot(&self) -> TimelineSnapshot {
+        self.timeline_snapshot_with_runtime::<false>()
+    }
+
+    fn timeline_snapshot_with_runtime<const INCLUDE_RUNTIME: bool>(&self) -> TimelineSnapshot {
         let mut layers = if self.timeline_layers.is_empty() {
             implicit_timeline_layers()
         } else {
             self.timeline_layers.clone()
         };
+        // Derived audio still contributes display lanes in the authored bank,
+        // even when that bank omits the derived clip payload itself.
         for clip in &self.timeline_audio_clips {
             if !layers.iter().any(|layer| layer.id == clip.layer_id) {
                 layers.push(default_timeline_audio_layer(clip.layer_id));
@@ -47069,7 +47076,11 @@ impl EngineRuntime {
                 .map(timeline_video_automation_summary)
                 .collect(),
             audio: self.timeline_audio.clone(),
-            audio_clips: self.timeline_audio_clips.clone(),
+            audio_clips: if INCLUDE_RUNTIME || !self.timeline_audio_clips_derived {
+                self.timeline_audio_clips.clone()
+            } else {
+                Vec::new()
+            },
             video_clips: self.timeline_video_clips.clone(),
             phases: self.timeline_phases.clone(),
             item_groups: self.timeline_item_groups.clone(),
@@ -47082,64 +47093,96 @@ impl EngineRuntime {
             count_in_beats: self.timeline_count_in_beats,
             tempo_meter_map: self.timeline_tempo_meter_map.clone(),
             tempo_meter_map_version: self.timeline_tempo_meter_map_version,
-            count_in_remaining_ms: self
-                .timeline_count_in_until
-                .map(|until| until.saturating_duration_since(self.last_tick).as_millis() as u64)
-                .unwrap_or(0),
-            audio_transport_revision: self.timeline_audio_transport_revision,
-            transport_epoch: self.timeline_transport_epoch,
-            transport_generation: self.timeline_transport_generation,
-            active_child_transports: self.active_child_timeline_transport_summaries(),
-            loop_runtime: self.timeline_loop_runtime.clone(),
-            follow_runtime: self.timeline_follow_runtime.clone(),
-            guide_cues: self.timeline_guide_cues.clone(),
-            click_events: self
-                .timeline_click_scheduler
-                .queued_events()
-                .iter()
-                .copied()
-                .collect(),
-            click_schedule_generation: self.timeline_click_scheduler.identity().schedule_generation,
-            click_queue_overflow: self
-                .timeline_click_scheduler
-                .overflow()
-                .map(ToOwned::to_owned),
-            playing: self.timeline_playing,
-            position_ms: self.timeline_position_ms,
+            count_in_remaining_ms: if INCLUDE_RUNTIME {
+                self.timeline_count_in_until
+                    .map(|until| until.saturating_duration_since(self.last_tick).as_millis() as u64)
+                    .unwrap_or(0)
+            } else {
+                0
+            },
+            audio_transport_revision: if INCLUDE_RUNTIME {
+                self.timeline_audio_transport_revision
+            } else {
+                0
+            },
+            transport_epoch: if INCLUDE_RUNTIME {
+                self.timeline_transport_epoch
+            } else {
+                0
+            },
+            transport_generation: if INCLUDE_RUNTIME {
+                self.timeline_transport_generation
+            } else {
+                0
+            },
+            active_child_transports: if INCLUDE_RUNTIME {
+                self.active_child_timeline_transport_summaries()
+            } else {
+                Vec::new()
+            },
+            loop_runtime: if INCLUDE_RUNTIME {
+                self.timeline_loop_runtime.clone()
+            } else {
+                TimelineLoopRuntimeSummary::default()
+            },
+            follow_runtime: if INCLUDE_RUNTIME {
+                self.timeline_follow_runtime.clone()
+            } else {
+                TimelineFollowRuntimeSummary::default()
+            },
+            guide_cues: if INCLUDE_RUNTIME {
+                self.timeline_guide_cues.clone()
+            } else {
+                Vec::new()
+            },
+            click_events: if INCLUDE_RUNTIME {
+                self.timeline_click_scheduler
+                    .queued_events()
+                    .iter()
+                    .copied()
+                    .collect()
+            } else {
+                Vec::new()
+            },
+            click_schedule_generation: if INCLUDE_RUNTIME {
+                self.timeline_click_scheduler.identity().schedule_generation
+            } else {
+                0
+            },
+            click_queue_overflow: if INCLUDE_RUNTIME {
+                self.timeline_click_scheduler.overflow().map(ToOwned::to_owned)
+            } else {
+                None
+            },
+            playing: INCLUDE_RUNTIME && self.timeline_playing,
+            position_ms: if INCLUDE_RUNTIME {
+                self.timeline_position_ms
+            } else {
+                0
+            },
             duration_ms: self.timeline_duration_ms(),
         }
     }
 
-    fn authored_timeline_snapshot(&self) -> TimelineSnapshot {
-        let mut timeline = self.timeline_snapshot();
-        timeline.playing = false;
-        timeline.position_ms = 0;
-        timeline.count_in_remaining_ms = 0;
-        timeline.audio_transport_revision = 0;
-        timeline.transport_epoch = 0;
-        timeline.transport_generation = 0;
-        timeline.active_child_transports.clear();
-        timeline.loop_runtime = TimelineLoopRuntimeSummary::default();
-        timeline.follow_runtime = TimelineFollowRuntimeSummary::default();
-        timeline.guide_cues.clear();
-        timeline.click_events.clear();
-        timeline.click_schedule_generation = 0;
-        timeline.click_queue_overflow = None;
-        if self.timeline_audio_clips_derived {
-            timeline.audio_clips.clear();
-        }
-        timeline
-    }
-
     fn timeline_bank_snapshot(&self) -> Vec<TimelineSnapshot> {
         let active = self.authored_timeline_snapshot();
-        let mut bank = self.timeline_bank.clone();
-        if let Some(entry) = bank.iter_mut().find(|entry| entry.id == self.timeline_id) {
-            *entry = active;
-        } else {
+        if let Some(index) = self
+            .timeline_bank
+            .iter()
+            .position(|entry| entry.id == self.timeline_id)
+        {
+            // The active entry is replaced on every publication. Do not deep-clone
+            // its stale authored image only to immediately discard that allocation.
+            let mut bank = Vec::with_capacity(self.timeline_bank.len());
+            bank.extend_from_slice(&self.timeline_bank[..index]);
             bank.push(active);
+            bank.extend_from_slice(&self.timeline_bank[index + 1..]);
+            bank
+        } else {
+            let mut bank = self.timeline_bank.clone();
+            bank.push(active);
+            bank
         }
-        bank
     }
 
     /// Resolve active Timeline Video clips into renderer layers without
@@ -47180,7 +47223,6 @@ impl EngineRuntime {
         playing: bool,
         used_ids: &mut HashSet<VideoLayerId>,
     ) -> Vec<RuntimeTimelineVideoProjection> {
-        let media_asset_availability = self.media_asset_availability_for_current_publication();
         let video_lanes = timeline_layers
             .iter()
             .filter(|layer| matches!(layer.kind, TimelineLayerKind::Video))
@@ -47216,6 +47258,10 @@ impl EngineRuntime {
             }
         }
 
+        if desired.is_empty() {
+            return Vec::new();
+        }
+        let media_asset_availability = self.media_asset_availability_for_current_publication();
         let mut projections = desired
             .into_iter()
             .filter_map(|(timeline_layer_id, (clip, timeline_layer))| {
@@ -50231,6 +50277,36 @@ impl EngineRuntime {
         }
     }
 
+    fn normalize_persistence_timeline(&self, timeline: &mut TimelineSnapshot) {
+        // Runtime snapshots may include implicit layers and resolved event lanes;
+        // persistence must retain the original authored layout, including emptiness.
+        timeline.layers = self.timeline_layers.clone();
+        // Timeline transport is entirely runtime-owned. In particular, the
+        // canonical local Play/Pause lane must not create a project/history
+        // delta merely because a caller observed a persistence image while it
+        // was playing.
+        timeline.playing = false;
+        timeline.position_ms = 0;
+        timeline.count_in_remaining_ms = 0;
+        timeline.audio_transport_revision = 0;
+        timeline.transport_epoch = 0;
+        timeline.transport_generation = 0;
+        timeline.active_child_transports.clear();
+        timeline.loop_runtime = TimelineLoopRuntimeSummary::default();
+        timeline.follow_runtime = TimelineFollowRuntimeSummary::default();
+        timeline.guide_cues.clear();
+        timeline.click_events.clear();
+        timeline.click_schedule_generation = 0;
+        timeline.click_queue_overflow = None;
+        if self.timeline_audio_clips_derived {
+            timeline.audio_clips.clear();
+        }
+        for (summary, event) in timeline.events.iter_mut().zip(self.timeline_events.iter()) {
+            summary.layer_id = event.layer_id;
+            summary.track = event.track.clone();
+        }
+    }
+
     fn build_persistence_snapshot(&self) -> EngineSnapshot {
         let mut snapshot = self.build_snapshot(0);
         // Persist only the authored blackout bit. The emergency S0 latch is
@@ -50250,65 +50326,21 @@ impl EngineRuntime {
             submaster.strobe_hz = 0.0;
             submaster.strobe_fixture_count = 0;
         }
-        snapshot.timeline.layers = self.timeline_layers.clone();
-        // Timeline transport is entirely runtime-owned. In particular, the
-        // canonical local Play/Pause lane must not create a project/history
-        // delta merely because a caller observed a persistence image while it
-        // was playing.
-        snapshot.timeline.playing = false;
-        snapshot.timeline.position_ms = 0;
-        snapshot.timeline.count_in_remaining_ms = 0;
-        snapshot.timeline.audio_transport_revision = 0;
-        snapshot.timeline.transport_epoch = 0;
-        snapshot.timeline.transport_generation = 0;
-        snapshot.timeline.active_child_transports.clear();
-        snapshot.timeline.loop_runtime = TimelineLoopRuntimeSummary::default();
-        snapshot.timeline.follow_runtime = TimelineFollowRuntimeSummary::default();
-        snapshot.timeline.guide_cues.clear();
-        snapshot.timeline.click_events.clear();
-        snapshot.timeline.click_schedule_generation = 0;
-        snapshot.timeline.click_queue_overflow = None;
-        if self.timeline_audio_clips_derived {
-            snapshot.timeline.audio_clips.clear();
-        }
-        for (summary, event) in snapshot
-            .timeline
-            .events
-            .iter_mut()
-            .zip(self.timeline_events.iter())
-        {
-            summary.layer_id = event.layer_id;
-            summary.track = event.track.clone();
-        }
-        // `build_snapshot` intentionally exposes the two implicit legacy
-        // layers, while persistence keeps an authored empty `layers` list.
-        // Keep the active bank entry byte-identical to that authored image;
-        // otherwise selecting a bank entry silently materializes display-only
-        // layers into history and `.sdc`.
-        let mut active_bank_timeline = snapshot.timeline.clone();
-        active_bank_timeline.playing = false;
-        active_bank_timeline.position_ms = 0;
-        active_bank_timeline.count_in_remaining_ms = 0;
-        active_bank_timeline.audio_transport_revision = 0;
-        active_bank_timeline.transport_epoch = 0;
-        active_bank_timeline.transport_generation = 0;
-        active_bank_timeline.active_child_transports.clear();
-        active_bank_timeline.loop_runtime = TimelineLoopRuntimeSummary::default();
-        active_bank_timeline.follow_runtime = TimelineFollowRuntimeSummary::default();
-        active_bank_timeline.guide_cues.clear();
-        active_bank_timeline.click_events.clear();
-        active_bank_timeline.click_schedule_generation = 0;
-        active_bank_timeline.click_queue_overflow = None;
-        if let Some(active) = snapshot
+        self.normalize_persistence_timeline(&mut snapshot.timeline);
+        // The internal bank builder replaces or appends the active entry. Keep
+        // that allocation and normalize it just like the root authored image.
+        let active = snapshot
             .timeline_bank
             .iter_mut()
-            .find(|timeline| timeline.id == active_bank_timeline.id)
-        {
-            *active = active_bank_timeline;
-        } else {
-            snapshot.timeline_bank.push(active_bank_timeline);
-        }
-        let mut authored_video = self.authored_video_snapshot_from_rendered(&snapshot.video);
+            .find(|timeline| timeline.id == snapshot.timeline.id)
+            .expect("internal snapshot builder must include the active timeline bank entry");
+        self.normalize_persistence_timeline(active);
+        // The internal builder already captured this authored image from the same
+        // rendered snapshot. None of the persistence-only changes above alter it.
+        let authored_video = snapshot
+            .authored_video
+            .as_mut()
+            .expect("internal snapshot builder must include authored video");
         for layer in &mut authored_video.layers {
             if let Some(effect) = &mut layer.isf_effect {
                 clear_transient_video_isf_event_controls(effect);
@@ -50324,7 +50356,6 @@ impl EngineRuntime {
                 clear_transient_video_effect_kind(&mut stage.effect);
             }
         }
-        snapshot.authored_video = Some(authored_video);
         snapshot
     }
 
@@ -67832,6 +67863,24 @@ mod tests {
     #[path = "../snapshot_read_tests.rs"]
     mod snapshot_read_tests;
 
+    #[path = "../timeline_bank_snapshot_tests.rs"]
+    mod timeline_bank_snapshot_tests;
+
+    #[path = "../persistence_video_snapshot_tests.rs"]
+    mod persistence_video_snapshot_tests;
+
+    #[path = "../persistence_timeline_snapshot_tests.rs"]
+    mod persistence_timeline_snapshot_tests;
+
+    #[path = "../timeline_snapshot_projection_tests.rs"]
+    mod timeline_snapshot_projection_tests;
+
+    #[path = "../snapshot_public_tests.rs"]
+    mod snapshot_public_tests;
+
+    #[path = "../timeline_video_empty_projection_tests.rs"]
+    mod timeline_video_empty_projection_tests;
+
     const RELEASE_GATE_EFFECT_COUNT: usize = SUPPORTED_EFFECT_ENVELOPE_ENABLED_EFFECTS;
     const RELEASE_GATE_FIXTURE_COUNT: usize = SUPPORTED_EFFECT_ENVELOPE_FIXTURES;
     const RELEASE_GATE_HZ: u32 = SUPPORTED_EFFECT_ENVELOPE_HZ;
@@ -72438,6 +72487,10 @@ mod tests {
 
         let persisted = runtime.build_persistence_snapshot();
         assert!((persisted.video.layers[0].state.opacity - 0.25).abs() < 0.000_1);
+        assert_eq!(
+            persisted.authored_video,
+            Some(runtime.authored_video_snapshot_from_rendered(&persisted.video))
+        );
         let authored_video = persisted.authored_video.as_ref().unwrap();
         assert!((authored_video.layers[0].state.opacity - 0.8).abs() < 0.000_1);
         assert_eq!(authored_video.compositions, persisted.video.compositions);

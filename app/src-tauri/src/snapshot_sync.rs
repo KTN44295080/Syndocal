@@ -7,21 +7,24 @@ use protocol::{
     StageObjectSummary,
 };
 use serde::Serialize;
-use std::collections::{BTreeMap, VecDeque};
+use std::{
+    collections::{BTreeMap, VecDeque},
+    sync::Arc,
+};
 
 const SNAPSHOT_HISTORY_CAPACITY: usize = 4;
 
 #[derive(Debug, Default)]
 pub(crate) struct SnapshotSyncState {
     revision: u64,
-    history: VecDeque<(u64, EngineSnapshot)>,
+    history: VecDeque<(u64, Arc<EngineSnapshot>)>,
 }
 
 #[derive(Debug, Serialize)]
 pub(crate) struct SnapshotSyncPayload {
     pub(crate) revision: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) full: Option<EngineSnapshot>,
+    pub(crate) full: Option<Arc<EngineSnapshot>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) delta: Option<EngineSnapshotDelta>,
 }
@@ -36,6 +39,9 @@ impl SnapshotSyncState {
     ) -> Result<SnapshotSyncPayload, String> {
         let revision = self.revision.checked_add(1).ok_or_else(||
             "Snapshot synchronization revision exhausted; restart Syndocal to establish a new session".to_string())?;
+        // A full response and its retained base share one immutable captured image.
+        // Eviction can release the history's ownership before response serialization.
+        let current = Arc::new(current);
         let before = client_revision.and_then(|requested| {
             self.history
                 .iter()
@@ -50,7 +56,7 @@ impl SnapshotSyncState {
             },
             None => SnapshotSyncPayload {
                 revision,
-                full: Some(current.clone()),
+                full: Some(Arc::clone(&current)),
                 delta: None,
             },
         };

@@ -11,6 +11,14 @@ use super::{
 #[cfg(feature = "libav")]
 use ffmpeg_next as ffmpeg;
 
+#[cfg(feature = "libav")]
+#[path = "libav_hardware.rs"]
+mod hardware;
+
+#[cfg(all(feature = "libav", test))]
+#[path = "libav_seek_projection_tests.rs"]
+mod seek_projection_tests;
+
 #[cfg(all(feature = "libav", test))]
 use std::cell::Cell;
 #[cfg(feature = "libav")]
@@ -51,6 +59,8 @@ pub struct LibavFrameDecoder {
     sessions: Vec<LibavDecodeSession>,
     #[cfg(feature = "libav")]
     session_counters: LibavSessionCounters,
+    #[cfg(feature = "libav")]
+    hardware_enabled: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -81,6 +91,9 @@ impl LibavRenderInputOwner {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct LibavSessionDiagnostics {
     pub active_sessions: usize,
+    pub hardware_sessions: usize,
+    pub hardware_frames: u64,
+    pub hardware_errors: u64,
     pub opens: u64,
     pub resets: u64,
     pub sequential_continues: u64,
@@ -112,6 +125,7 @@ struct LibavDecodeSession {
     signature: StillImageSignature,
     input: ffmpeg::format::context::Input,
     decoder: ffmpeg::decoder::Video,
+    hardware: bool,
     stream_index: usize,
     time_base: ffmpeg::Rational,
     timestamp_origin: i64,
@@ -133,6 +147,8 @@ struct LibavScalerCacheEntry {
 #[cfg(feature = "libav")]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct LibavSessionCounters {
+    hardware_frames: u64,
+    hardware_errors: u64,
     opens: u64,
     resets: u64,
     sequential_continues: u64,
@@ -170,6 +186,27 @@ impl LibavFrameDecoder {
             sessions: Vec::new(),
             #[cfg(feature = "libav")]
             session_counters: LibavSessionCounters::default(),
+            #[cfg(feature = "libav")]
+            hardware_enabled: true,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn software_for_tests() -> Self {
+        let decoder = Self::new();
+        #[cfg(feature = "libav")]
+        let decoder = Self {
+            hardware_enabled: false,
+            ..decoder
+        };
+        decoder
+    }
+
+    #[cfg(feature = "libav")]
+    fn record_hardware_error(&mut self, error: &VideoDecodeError) {
+        if matches!(error, VideoDecodeError::HardwareDecode { .. }) {
+            self.session_counters.hardware_errors =
+                self.session_counters.hardware_errors.saturating_add(1);
         }
     }
 
@@ -186,6 +223,13 @@ impl LibavFrameDecoder {
         {
             LibavSessionDiagnostics {
                 active_sessions: self.sessions.len(),
+                hardware_sessions: self
+                    .sessions
+                    .iter()
+                    .filter(|session| session.hardware)
+                    .count(),
+                hardware_frames: self.session_counters.hardware_frames,
+                hardware_errors: self.session_counters.hardware_errors,
                 opens: self.session_counters.opens,
                 resets: self.session_counters.resets,
                 sequential_continues: self.session_counters.sequential_continues,
@@ -364,11 +408,18 @@ impl LibavFrameDecoder {
             }
             self.release_input_key(key, request.layer_id);
             self.touch_input(key, request.layer_id);
-            let session = match open_libav_session(key, request, path.clone(), signature.clone()) {
+            let session = match open_libav_session(
+                key,
+                request,
+                path.clone(),
+                signature.clone(),
+                self.hardware_enabled,
+            ) {
                 Ok(session) => session,
                 Err(error) => {
                     self.session_counters.errors = self.session_counters.errors.saturating_add(1);
                     self.release_input_key(key, request.layer_id);
+                    self.record_hardware_error(&error);
                     return Err(error);
                 }
             };
@@ -386,22 +437,39 @@ impl LibavFrameDecoder {
             &mut self.sessions[session_index],
             seek_before_decode,
             terminal_frame,
+            &mut self.session_counters.hardware_frames,
         );
         let frame = match primary_decode {
             Ok(frame) => frame,
-            Err(_) if seek_before_decode && request.position_ms > 0 => {
-                let mut fallback_session =
-                    match open_libav_session(key, request, path.clone(), signature.clone()) {
-                        Ok(session) => session,
-                        Err(error) => {
-                            self.session_counters.errors =
-                                self.session_counters.errors.saturating_add(1);
-                            self.release_input_key(key, request.layer_id);
-                            return Err(error);
-                        }
-                    };
+            Err(ref error)
+                if !matches!(error, VideoDecodeError::HardwareDecode { .. })
+                    && seek_before_decode
+                    && request.position_ms > 0 =>
+            {
+                let mut fallback_session = match open_libav_session(
+                    key,
+                    request,
+                    path.clone(),
+                    signature.clone(),
+                    self.hardware_enabled,
+                ) {
+                    Ok(session) => session,
+                    Err(error) => {
+                        self.session_counters.errors =
+                            self.session_counters.errors.saturating_add(1);
+                        self.release_input_key(key, request.layer_id);
+                        self.record_hardware_error(&error);
+                        return Err(error);
+                    }
+                };
                 self.session_counters.opens = self.session_counters.opens.saturating_add(1);
-                match decode_libav_session_frame(request, &mut fallback_session, false, None) {
+                match decode_libav_session_frame(
+                    request,
+                    &mut fallback_session,
+                    false,
+                    None,
+                    &mut self.session_counters.hardware_frames,
+                ) {
                     Ok(frame) => {
                         self.sessions[session_index] = fallback_session;
                         frame
@@ -410,6 +478,7 @@ impl LibavFrameDecoder {
                         self.session_counters.errors =
                             self.session_counters.errors.saturating_add(1);
                         self.release_input_key(key, request.layer_id);
+                        self.record_hardware_error(&error);
                         return Err(error);
                     }
                 }
@@ -417,6 +486,7 @@ impl LibavFrameDecoder {
             Err(error) => {
                 self.session_counters.errors = self.session_counters.errors.saturating_add(1);
                 self.release_input_key(key, request.layer_id);
+                self.record_hardware_error(&error);
                 return Err(error);
             }
         };
@@ -564,6 +634,7 @@ fn open_libav_session(
     request: &VideoFrameRequest,
     path: PathBuf,
     signature: StillImageSignature,
+    hardware_enabled: bool,
 ) -> Result<LibavDecodeSession, VideoDecodeError> {
     use ffmpeg::media::Type;
     ffmpeg::init().map_err(|error| decode_error(request, error))?;
@@ -578,12 +649,13 @@ fn open_libav_session(
         ffmpeg::ffi::AV_NOPTS_VALUE => 0,
         timestamp => timestamp,
     };
-    let context = ffmpeg::codec::context::Context::from_parameters(stream.parameters())
+    let mut context = ffmpeg::codec::context::Context::from_parameters(stream.parameters())
         .map_err(|error| decode_error(request, error))?;
+    let hardware = hardware::configure(&mut context, request, hardware_enabled)?;
     let mut decoder = context
         .decoder()
         .video()
-        .map_err(|error| decode_error(request, error))?;
+        .map_err(|error| hardware::classify(request, hardware, decode_error(request, error)))?;
     decoder.flush();
     Ok(LibavDecodeSession {
         key,
@@ -594,6 +666,7 @@ fn open_libav_session(
         signature,
         input,
         decoder,
+        hardware,
         stream_index,
         time_base,
         timestamp_origin,
@@ -723,13 +796,27 @@ fn decode_libav_session_frame(
     session: &mut LibavDecodeSession,
     seek_before_decode: bool,
     terminal_frame: Option<&VideoFrame>,
+    hardware_frames: &mut u64,
 ) -> Result<VideoFrame, VideoDecodeError> {
-    let mut scaler = acquire_cached_libav_scaler(
+    let hardware = session.hardware;
+    decode_libav_session_frame_inner(
         request,
-        session.decoder.format(),
-        session.decoder.width(),
-        session.decoder.height(),
-    )?;
+        session,
+        seek_before_decode,
+        terminal_frame,
+        hardware_frames,
+    )
+    .map_err(|error| hardware::classify(request, hardware, error))
+}
+
+#[cfg(feature = "libav")]
+fn decode_libav_session_frame_inner(
+    request: &VideoFrameRequest,
+    session: &mut LibavDecodeSession,
+    seek_before_decode: bool,
+    terminal_frame: Option<&VideoFrame>,
+    hardware_frames: &mut u64,
+) -> Result<VideoFrame, VideoDecodeError> {
     let target_offset_us = request
         .position_ms
         .saturating_mul(1_000)
@@ -743,7 +830,8 @@ fn decode_libav_session_frame(
     let received = receive_target_frame(
         request,
         &mut session.decoder,
-        &mut scaler,
+        session.hardware,
+        hardware_frames,
         session.time_base,
         session.timestamp_origin,
         &mut candidate,
@@ -754,10 +842,13 @@ fn decode_libav_session_frame(
         return Ok(frame);
     }
     if session.decoder_drained {
-        let frame = candidate
-            .take()
-            .or_else(|| terminal_frame.cloned())
-            .ok_or_else(|| decode_message(request, "decoder produced no video frame"))?;
+        let frame = finish_decoded_candidate(
+            request,
+            candidate,
+            terminal_frame,
+            session.hardware,
+            hardware_frames,
+        )?;
         session.last_request_ms = Some(request.position_ms);
         return Ok(frame);
     }
@@ -773,7 +864,8 @@ fn decode_libav_session_frame(
         let received = receive_target_frame(
             request,
             &mut session.decoder,
-            &mut scaler,
+            session.hardware,
+            hardware_frames,
             session.time_base,
             session.timestamp_origin,
             &mut candidate,
@@ -794,7 +886,8 @@ fn decode_libav_session_frame(
     let received = receive_target_frame(
         request,
         &mut session.decoder,
-        &mut scaler,
+        session.hardware,
+        hardware_frames,
         session.time_base,
         session.timestamp_origin,
         &mut candidate,
@@ -804,21 +897,76 @@ fn decode_libav_session_frame(
         session.last_request_ms = Some(request.position_ms);
         return Ok(frame);
     }
-    let frame = candidate
-        .or_else(|| terminal_frame.cloned())
-        .ok_or_else(|| decode_message(request, "decoder produced no video frame"))?;
+    let frame = finish_decoded_candidate(
+        request,
+        candidate,
+        terminal_frame,
+        session.hardware,
+        hardware_frames,
+    )?;
     session.last_request_ms = Some(request.position_ms);
     Ok(frame)
+}
+
+#[cfg(feature = "libav")]
+struct DecodedCandidate {
+    frame: ffmpeg::util::frame::video::Video,
+    pts_ms: u64,
+}
+
+#[cfg(feature = "libav")]
+fn project_decoded_frame(
+    request: &VideoFrameRequest,
+    decoded: &ffmpeg::util::frame::video::Video,
+    pts_ms: u64,
+    hardware: bool,
+    hardware_frames: &mut u64,
+) -> Result<VideoFrame, VideoDecodeError> {
+    let transferred = hardware::transfer(request, hardware, decoded)?;
+    if hardware {
+        *hardware_frames = hardware_frames.saturating_add(1);
+    }
+    let source = transferred.as_ref().unwrap_or(decoded);
+    let mut scaler =
+        acquire_cached_libav_scaler(request, source.format(), source.width(), source.height())?;
+    let mut rgba = ffmpeg::util::frame::video::Video::empty();
+    scaler
+        .run(source, &mut rgba)
+        .map_err(|error| decode_error(request, error))?;
+    copy_rgba_frame(request, &rgba, pts_ms)
+}
+
+#[cfg(feature = "libav")]
+fn finish_decoded_candidate(
+    request: &VideoFrameRequest,
+    candidate: Option<DecodedCandidate>,
+    terminal_frame: Option<&VideoFrame>,
+    hardware: bool,
+    hardware_frames: &mut u64,
+) -> Result<VideoFrame, VideoDecodeError> {
+    match candidate {
+        Some(candidate) => project_decoded_frame(
+            request,
+            &candidate.frame,
+            candidate.pts_ms,
+            hardware,
+            hardware_frames,
+        ),
+        None => terminal_frame
+            .cloned()
+            .ok_or_else(|| decode_message(request, "decoder produced no video frame")),
+    }
 }
 
 #[cfg(feature = "libav")]
 fn receive_target_frame(
     request: &VideoFrameRequest,
     decoder: &mut ffmpeg_next::decoder::Video,
-    scaler: &mut LibavScalerLease,
+    hardware: bool,
+    hardware_frames: &mut u64,
     time_base: ffmpeg_next::Rational,
     timestamp_origin: i64,
-    candidate: &mut Option<VideoFrame>,
+    candidate: &mut Option<DecodedCandidate>,
 ) -> Result<LibavReceiveResult, VideoDecodeError> {
     use ffmpeg_next::error::EAGAIN;
     use ffmpeg_next::util::frame::video::Video;
@@ -834,18 +982,34 @@ fn receive_target_frame(
                     Some(_) => continue,
                     None => request.position_ms,
                 };
-                let mut rgba = Video::empty();
-                scaler
-                    .run(&decoded, &mut rgba)
-                    .map_err(|error| decode_error(request, error))?;
-                let frame = copy_rgba_frame(request, &rgba, pts_ms)?;
-                if frame.pts_ms >= request.position_ms {
+                // Even discarded frames must honor the selected HW format.
+                if hardware && decoded.format() != ffmpeg::format::Pixel::D3D11 {
+                    return Err(hardware::classify(
+                        request,
+                        true,
+                        decode_message(request, "decoder returned a non-D3D11 frame"),
+                    ));
+                }
+                if pts_ms >= request.position_ms {
+                    let frame = project_decoded_frame(
+                        request,
+                        &decoded,
+                        pts_ms,
+                        hardware,
+                        hardware_frames,
+                    )?;
                     return Ok(LibavReceiveResult {
                         frame: Some(frame),
                         decoder_drained: false,
                     });
                 }
-                *candidate = Some(frame);
+                // Keep only the latest decoder-owned frame as the EOF fallback.
+                // Moving its AVFrame retains one surface, not a CPU pixel copy;
+                // replaced candidates are released on each iteration.
+                *candidate = Some(DecodedCandidate {
+                    frame: std::mem::replace(&mut decoded, Video::empty()),
+                    pts_ms,
+                });
             }
             Err(ffmpeg_next::Error::Eof) => {
                 return Ok(LibavReceiveResult {
@@ -1073,7 +1237,7 @@ mod tests {
 
     #[test]
     fn cache_replaces_a_layers_entry_when_request_identity_changes() {
-        let mut decoder = LibavFrameDecoder::new();
+        let mut decoder = LibavFrameDecoder::software_for_tests();
         let mut request = request();
         let mut path = PathBuf::from("first.mp4");
         let mut file_signature = signature(1);
@@ -1161,7 +1325,7 @@ mod tests {
 
     #[test]
     fn retain_layers_prunes_the_bounded_layer_cache() {
-        let mut decoder = LibavFrameDecoder::new();
+        let mut decoder = LibavFrameDecoder::software_for_tests();
         let first = request();
         let mut second = request();
         second.layer_id = 2;
@@ -1268,7 +1432,7 @@ mod tests {
         request.width = 64;
         request.height = 36;
 
-        let mut decoder = LibavFrameDecoder::new();
+        let mut decoder = LibavFrameDecoder::software_for_tests();
         for target_ms in [0, 33, 66, 99, 0, 33] {
             request.position_ms = target_ms;
             let frame = decoder
@@ -1479,7 +1643,7 @@ mod tests {
         request.width = 64;
         request.height = 36;
 
-        let mut decoder = LibavFrameDecoder::new();
+        let mut decoder = LibavFrameDecoder::software_for_tests();
         for target_ms in [0, 0, 33, 33, 66, 500, 0, 33] {
             request.position_ms = target_ms;
             let frame = decoder
@@ -1514,7 +1678,7 @@ mod tests {
     #[cfg(not(feature = "libav"))]
     #[test]
     fn disabled_backend_defers_to_compatibility_decoder() {
-        let mut decoder = LibavFrameDecoder::new();
+        let mut decoder = LibavFrameDecoder::software_for_tests();
         assert!(!LibavFrameDecoder::is_built());
         assert_eq!(decoder.decode_frame(&request()), Ok(None));
     }
@@ -1597,7 +1761,7 @@ mod tests {
                 frame_rate: Some(2.0),
                 has_audio: false,
             });
-            let mut decoder = LibavFrameDecoder::new();
+            let mut decoder = LibavFrameDecoder::software_for_tests();
 
             let frame = decoder.decode_frame(&request).unwrap().unwrap();
 
@@ -1616,8 +1780,9 @@ mod tests {
                 "syndocal-missing-ffmpeg-{codec}-{}",
                 std::process::id()
             ));
-            let mut preferred =
-                PreferredVideoFrameDecoder::new(FfmpegCliFrameDecoder::new(missing_ffmpeg));
+            let mut preferred = PreferredVideoFrameDecoder::with_software_libav_for_tests(
+                FfmpegCliFrameDecoder::new(missing_ffmpeg),
+            );
             assert_eq!(preferred.decode_frame(&request).unwrap().unwrap(), frame);
             assert_eq!(
                 preferred.diagnostics(),
@@ -1696,7 +1861,7 @@ mod tests {
         const FRAME_BYTES: usize = 32 * 18 * 4;
         assert_eq!(reference.stdout.len(), 90 * FRAME_BYTES);
 
-        let mut sequential = LibavFrameDecoder::new();
+        let mut sequential = LibavFrameDecoder::software_for_tests();
         let mut request = request();
         request.source.path = Some(path.to_string_lossy().into_owned());
         request.source.codec = Some("mpeg4".to_string());
@@ -1738,7 +1903,7 @@ mod tests {
 
         request.position_ms = 1_500;
         let jumped = sequential.decode_frame(&request).unwrap().unwrap();
-        let mut fresh = LibavFrameDecoder::new();
+        let mut fresh = LibavFrameDecoder::software_for_tests();
         assert_seek_parity(
             &jumped,
             &fresh.decode_frame(&request).unwrap().unwrap(),
@@ -1749,7 +1914,7 @@ mod tests {
 
         request.position_ms = 100;
         let reversed = sequential.decode_frame(&request).unwrap().unwrap();
-        let mut fresh = LibavFrameDecoder::new();
+        let mut fresh = LibavFrameDecoder::software_for_tests();
         assert_seek_parity(
             &reversed,
             &fresh.decode_frame(&request).unwrap().unwrap(),
@@ -1758,7 +1923,7 @@ mod tests {
         assert_eq!(sequential.session_counters.opens, 3);
         assert_eq!(sequential.session_counters.resets, 2);
 
-        let mut through_eof = LibavFrameDecoder::new();
+        let mut through_eof = LibavFrameDecoder::software_for_tests();
         let mut final_frame = None;
         for target_ms in (0..=3_500).step_by(33) {
             request.position_ms = target_ms;
@@ -1877,7 +2042,7 @@ mod tests {
                 "{label} reference frame count"
             );
 
-            let mut decoder = LibavFrameDecoder::new();
+            let mut decoder = LibavFrameDecoder::software_for_tests();
             let mut request = request();
             request.source.path = Some(path.to_string_lossy().into_owned());
             request.source.codec = Some("mpeg2video".to_string());
@@ -1933,7 +2098,7 @@ mod tests {
             assert_eq!(decoder.session_counters.resets, 2, "{label}");
 
             if label == "positive" {
-                let mut bounded = LibavFrameDecoder::new();
+                let mut bounded = LibavFrameDecoder::software_for_tests();
                 request.position_ms = 0;
                 for layer_id in 1..=9 {
                     request.layer_id = layer_id;

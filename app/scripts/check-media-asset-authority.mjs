@@ -876,7 +876,7 @@ for (const command of [
   assert.match(app, new RegExp(`serverAuthoritativeProjectMutationCommands[\\s\\S]*?"${command}"`), `${command} stays classified as a mutation`);
 }
 assert.match(app, /const projectMutation = rendererTicketedMutation \|\| serverAuthoritativeMutation;/, "operator policy sees authoritative commands as mutations");
-assert.match(app, /const currentEpoch = authoredEffectFencePrepared \|\| projectMappingsFencePrepared[\s\S]*?: await flushProjectControlMappingsBeforeProjectMutation\?\.\(\) \?\? 0;[\s\S]*?if \(shouldAbortProjectMutation\?\.\(\)\)[\s\S]*?if \(serverAuthoritativeMutation\)[\s\S]*?return result;[\s\S]*?begin_project_transaction/, "mapping flush and abort fence precede direct authoritative dispatch and bypass Begin");
+assert.match(app, /const currentEpoch = authoredEffectFencePrepared \|\| projectMappingsFencePrepared[\s\S]*?: await flushProjectControlMappingsBeforeProjectMutation\?\.\(\) \?\? 0;[\s\S]*?if \(shouldAbortProjectMutation\?\.\(\)\)[\s\S]*?if \(serverAuthoritativeMutation\)[\s\S]*?return result;[\s\S]*?beginProjectTransactionWithRecovery\(beginArgs, transactionIdentity\)/, "mapping flush and abort fence precede direct authoritative dispatch and bypass Begin");
 assert.match(app, /const terminalRecovery = mediaAssetTerminalRecoveryCommands\.has\(command\)[\s\S]*?const mediaAssetAvailabilityReadOnly = mediaAssetAvailabilityReadOnlyCommands\.has\(command\);[\s\S]*?!terminalRecovery && !mediaAssetAvailabilityReadOnly[\s\S]*?!operatorCommandAllowed/, "Full Lock still permits exact terminal query/cancel cleanup");
 const mediaStartFence = app.slice(
   app.indexOf("const prepareMediaAssetOperationStart = async"),
@@ -1037,7 +1037,7 @@ assert.doesNotMatch(controller, /commit_prepared_(video_file_layer|still_image_l
 assert.match(app, /commitCommand: "commit_prepared_bootstrap_vj_show_authoritative"/, "first-run uses authoritative atomic Bootstrap");
 const firstRun = app.slice(
   app.indexOf("const createFirstRunVjShow = async"),
-  app.indexOf("const videoThumbnailSourceSignature", app.indexOf("const createFirstRunVjShow = async")),
+  app.indexOf("const thumbnailController", app.indexOf("const createFirstRunVjShow = async")),
 );
 assert.match(
   firstRun,

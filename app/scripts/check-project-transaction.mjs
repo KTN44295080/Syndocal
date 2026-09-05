@@ -21,6 +21,10 @@ const [rust, sceneCreationModule, app, transactionModule, recoveryModule, sceneB
   readWorkspaceFile("app/src/tauriInvokeCommands.ts"),
 ]);
 
+const recoveryController = await readWorkspaceFile("app/src/createProjectTransactionRecoveryController.ts");
+assert.match(app, /createProjectTransactionRecoveryController\(\{\s*invoke: tauriInvoke,/s, "App connects the recovery controller to the raw native port");
+assert.match(app, /dispatchHistoryMutation:.*window\.dispatchEvent[\s\S]*?projectHistoryChangedEvent/s, "App retains history event delivery at the composition boundary");
+
 // This is an executable production-source contract check, not a second
 // transaction implementation. The state machine itself is exercised by the
 // Rust tests over the real AppState helpers; this gate catches accidental raw
@@ -87,12 +91,12 @@ assert.match(
   "the central renderer mutation facade must retain one exact settlement across Commit and ACK recovery",
 );
 assert.match(
-  app,
+  recoveryController,
   /recoverProjectTransactionTerminalInForeground\(\s*"commit",\s*commitArgs,\s*identity,/s,
   "frontend Commit reply loss must retry only the exact Commit receipt",
 );
 assert.match(
-  app,
+  recoveryController,
   /recoverProjectTransactionTerminalInForeground\(\s*"cancel",\s*cancelArgs,\s*identity,/s,
   "frontend Cancel reply loss must retry only the exact Cancel receipt",
 );
@@ -142,7 +146,7 @@ assert.match(
   "the next project mutation must resume structured terminal recovery before opening a new ticket",
 );
 assert.match(
-  app,
+  recoveryController,
   /ProjectTransactionForegroundTerminalRecovery[\s\S]*?action:[\s\S]*?identity:[\s\S]*?terminalArgs:[\s\S]*?retry:/s,
   "foreground terminal recovery must retain its exact action, identity, ticket shape, and retry callback",
 );

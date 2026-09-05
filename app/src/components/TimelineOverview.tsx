@@ -1,3 +1,5 @@
+import { projectInlineChildTimelineRows, type InlineChildParent, type InlineChildRow } from "../timelineInlineChildProjection";
+import { TimelineInlineChildCanvas, TimelineInlineChildGutters } from "./TimelineInlineChildRows";
 import { createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import {
   shouldCommitTimelineMarkerDrag,
@@ -35,6 +37,7 @@ import {
 import { formatCompactClock } from "../clockDisplay";
 import type {
   AudioAnalysisSummary,
+  CueSummary,
   MediaAssetSummary,
   TimelineAudioClipSummary,
   TimelineItemGroupSummary,
@@ -77,6 +80,7 @@ export interface TimelineOverviewEvent {
   conform_to_tempo: boolean;
   loop_fill: boolean;
   authored_beats: number | null;
+  source_offset_ms?: number;
   rate: number | null;
   total_duration_ms: number;
   fade_in_ms: number;
@@ -131,6 +135,8 @@ interface TimelineOverviewProps {
   cueIdentities?: Record<number, CueIdentitySource>;
   cueDrag: TimelineCueDragState | null;
   events: TimelineOverviewEvent[];
+  childTimelineCues?: readonly CueSummary[];
+  inlineChildParents?: readonly InlineChildParent[];
   layerItemCounts: ReadonlyMap<number, number>;
   audioClips: TimelineAudioClipSummary[];
   videoClips: TimelineVideoClipSummary[];
@@ -163,6 +169,7 @@ interface TimelineOverviewProps {
     id: number;
     label: string;
     authored_beats: number | null;
+  source_offset_ms?: number;
     natural_duration_ms: number;
   } | null;
   snapTimeMs: (timeMs: number) => number;
@@ -628,7 +635,7 @@ export function TimelineOverview(props: TimelineOverviewProps) {
   // does not depend on the row map it creates.
   const automationLayerIds = createMemo(() => new Set(
     props.automationRanges.map((range) => range.layer_id),
-  ));
+  ), new Set<number>(), { equals: sameNumberSet });
   const overlapRailLayout = createMemo(() => buildTimelineOverlapRailLayout(
     props.events.map((event) => ({
       id: event.id,
@@ -657,6 +664,9 @@ export function TimelineOverview(props: TimelineOverviewProps) {
       ));
     }
     return counts;
+  }, new Map<number, number>(), {
+    equals: (previous, next) => previous.size === next.size
+      && [...previous].every(([id, count]) => next.get(id) === count),
   });
   const overlapLayerIds = createMemo(
     () => new Set(props.overlapLayerIds),
@@ -677,10 +687,25 @@ export function TimelineOverview(props: TimelineOverviewProps) {
       ? Math.max(timelineExpandedLaneHeightPx, overlapHeight)
       : timelineUserLaneHeightPx;
   };
+  const inlineChildRowsByLayer = createMemo(() => {
+    const rows = new Map<number, InlineChildRow[]>();
+    if (props.legacyMode) return rows;
+    for (const layer of orderedLayers()) {
+      // Only explicit arrow expansion opens children; automatic overlap height
+      // does not silently unfold an unrelated hierarchy.
+      if (!layer.expanded || layer.kind !== "Lighting") continue;
+      rows.set(layer.id, projectInlineChildTimelineRows(
+        (props.inlineChildParents ?? []).filter((event) => event.layer_id === layer.id),
+        props.childTimelineCues ?? [],
+      ));
+    }
+    return rows;
+  });
   const sectionLayout = createMemo(() => {
     const collapsed = collapsedSections();
     const sections: TimelineSectionRowLayout[] = [];
     const laneRows: TimelineLayerRowLayout[] = [];
+    const childRows: (InlineChildRow & { top: number; height: number; section: TimelineLayerKind })[] = [];
     let top = 0;
     for (const kind of timelineSectionKinds) {
       const layers = orderedLayers().filter((layer) => layer.kind === kind);
@@ -692,6 +717,11 @@ export function TimelineOverview(props: TimelineOverviewProps) {
           const height = timelineLayerHeightPx(layer);
           laneRows.push({ layer, top, height });
           top += height;
+          for (const child of inlineChildRowsByLayer().get(layer.id) ?? []) {
+            const childHeight = child.railCount * timelineUserLaneHeightPx;
+            childRows.push({ ...child, top, height: childHeight, section: kind });
+            top += childHeight;
+          }
         }
       }
       sections.push({
@@ -703,7 +733,7 @@ export function TimelineOverview(props: TimelineOverviewProps) {
         layers,
       });
     }
-    return { sections, laneRows, contentHeight: Math.max(timelineSectionHeaderHeightPx * 3, top) };
+    return { sections, laneRows, childRows, contentHeight: Math.max(timelineSectionHeaderHeightPx * 3, top) };
   });
   const layerRowById = createMemo(() => new Map(
     sectionLayout().laneRows.map((row) => [row.layer.id, row]),
@@ -2943,6 +2973,11 @@ export function TimelineOverview(props: TimelineOverviewProps) {
                   );
                 }}
               </For>
+              <TimelineInlineChildGutters
+                rows={sectionLayout().childRows.filter((row) => row.section === section.kind)}
+                sectionTop={section.top}
+                onOpen={props.onOpenSuperScene}
+              />
             </Show>
           </section>
         )}
@@ -3054,6 +3089,15 @@ export function TimelineOverview(props: TimelineOverviewProps) {
           )}
         </For>
       </Show>
+      <TimelineInlineChildCanvas
+        cueIdentities={props.cueIdentities}
+        rows={sectionLayout().childRows}
+        width={overviewW()}
+        visibleStartMs={props.visibleWindow.start_ms}
+        visibleEndMs={props.visibleWindow.end_ms}
+        laneHeight={timelineUserLaneHeightPx}
+        onOpen={props.onOpenSuperScene}
+      />
       <Show when={loopRegionGeometry()}>
         {(region) => (
           <g

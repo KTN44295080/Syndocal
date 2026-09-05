@@ -5,10 +5,12 @@ const componentRoot = new URL("../src/components/", import.meta.url);
 const clipGrid = await readFile(new URL("VideoClipGridPanel.tsx", componentRoot), "utf8");
 const controlPanel = await readFile(new URL("VideoControlPanel.tsx", componentRoot), "utf8");
 const sourceCreate = await readFile(new URL("VideoSourceCreatePanel.tsx", componentRoot), "utf8");
-const styles = await readFile(new URL("../src/styles.css", import.meta.url), "utf8");
+const timelineSourceShelf = (await readFile(new URL("TimelineSourceShelf.tsx", componentRoot), "utf8")).replaceAll("\r\n", "\n");
+const styles = (await readFile(new URL("../src/styles.css", import.meta.url), "utf8")).replaceAll("\r\n", "\n");
 const app = await readFile(new URL("../src/App.tsx", import.meta.url), "utf8");
 const controller = await readFile(new URL("../src/createVideoRuntimeController.ts", import.meta.url), "utf8");
 
+const thumbnailControllerSource = (await readFile(new URL("../src/createMediaThumbnailController.ts", import.meta.url), "utf8")).replaceAll("\r\n", "\n");
 const count = (source, needle) => source.split(needle).length - 1;
 
 function requiredIndex(source, marker, label, fromIndex = 0) {
@@ -335,12 +337,36 @@ assert.match(shortHeightMixerStyles, /\.videoControlPanelMixer \.videoMixerClipP
 assert.match(shortHeightMixerStyles, /:has\(> \.videoMediaOperationRail\)\s*\{[\s\S]*?grid-template-rows:\s*40px\s+auto\s+30px\s+22px\s+minmax\(0,\s*1fr\);/, "active operation layout must shift the library, drawer row, and clips explicitly");
 assert.match(shortHeightMixerStyles, /:has\(> \.videoMediaOperationRail\):has\(\[data-mixer-drawer-toggle\]\[aria-expanded="true"\]\)\s*\{[\s\S]*?grid-template-rows:\s*40px\s+auto\s+30px\s+22px\s+minmax\(56px,\s*64px\)\s+minmax\(0,\s*1fr\);/, "an open drawer with active media gets its own bounded local row before the clip grid");
 assert.match(controlPanel, /data-media-operation-cancel=\{operation\.id\}/, "the mounted operation rail exposes a stable Cancel target bound to the real operation id");
-const widthCompactMixerIndex = requiredIndex(styles, "@media (max-width: 1400px)", "width-compact mixer reflow");
+const widthCompactMixerAnchor = requiredIndex(styles, "/* Keep the existing Clip Grid controls", "width-compact mixer successor");
+const widthCompactMixerIndex = styles.lastIndexOf("@media (max-width: 1400px)", widthCompactMixerAnchor);
+assert.ok(widthCompactMixerIndex >= 0, "width-compact mixer reflow must precede its successor");
 const widthCompactMixerEnd = requiredIndex(styles, "\n}\n\n/* Keep the existing Clip Grid controls", "width-compact mixer reflow end", widthCompactMixerIndex);
 const widthCompactMixerStyles = styles.slice(widthCompactMixerIndex, widthCompactMixerEnd);
 assert.doesNotMatch(widthCompactMixerStyles, /videoClipGridPanel/, "width compaction must retain the existing 6px base or 4px short-height clip-grid padding instead of collapsing it to zero");
-assert.match(app, /data-lighting-context-tab="lighting"[\s\S]*?aria-keyshortcuts="E"/, "local Lighting tab exposes its E shortcut to assistive technology");
-assert.match(app, /data-lighting-context-tab="timeline"[\s\S]*?aria-keyshortcuts="L"/, "local Timeline tab exposes its L shortcut to assistive technology");
+// The retired Lighting/Timeline E/L tabs were replaced by three context tabs.
+// Check their real accessible keyboard contract and keep source classification
+// beneath Sources, rather than advertising shortcuts that no longer select tabs.
+assert.match(timelineSourceShelf, /role="tablist" aria-label="Timeline context"/, "Timeline context exposes an accessible tablist");
+assert.equal(count(timelineSourceShelf, 'role="tab"'), 3, "context has exactly Sources, Inspector and Video Preview tabs");
+assert.match(timelineSourceShelf, /const modes = \["sources", "inspector", "video-preview"\] as const;/, "keyboard navigation follows the same three context modes");
+for (const mode of ["sources", "inspector", "video-preview"]) {
+  const button = sliceBetween(timelineSourceShelf, `id="timeline-source-context-tab-${mode}"`, "</button>", `${mode} context tab`);
+  assert.ok(button.includes('role="tab"'), `${mode} exposes its tab role`);
+  assert.ok(button.includes(`aria-selected={sourceContextMode() === "${mode}"}`), `${mode} announces its selection`);
+  assert.ok(button.includes(`aria-controls="timeline-source-context-panel-${mode}"`), `${mode} controls the corresponding panel`);
+  assert.ok(button.includes(`tabindex={sourceContextMode() === "${mode}" ? 0 : -1}`), `${mode} participates in roving tab focus`);
+  assert.ok(button.includes(`onClick={() => selectSourceContextMode("${mode}")}`), `${mode} click selects the same keyboard mode`);
+  for (const key of ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"]) {
+    assert.ok(button.includes(`event.key === "${key}"`), `${mode} supports ${key} tab navigation`);
+  }
+  assert.ok(timelineSourceShelf.includes(`id="timeline-source-context-panel-${mode}" role="tabpanel" aria-labelledby="timeline-source-context-tab-${mode}"`), `${mode} panel is labelled by its own tab`);
+}
+assert.match(timelineSourceShelf, /queueMicrotask\(\(\) => document\.getElementById\(`timeline-source-context-tab-\$\{target\}`\)\?\.focus\(\)\);/, "keyboard selection transfers focus to the selected context tab");
+const sourcePanel = sliceBetween(timelineSourceShelf, '<Show when={sourceContextMode() === "sources"}>\n        <div', '<Show when={sourceContextMode() === "inspector"}>', "Sources context and lower classification");
+assert.ok(sourcePanel.includes('<For each={["All", "Lighting", "Video", "Audio"] as const}>'), "source classification retains All/Lighting/Video/Audio beneath Sources");
+assert.ok(sourcePanel.includes('aria-pressed={sourceShelfFilter() === filter}'), "source filters announce their selected classification");
+assert.ok(sourcePanel.includes('onClick={() => setSourceShelfFilter(filter)}'), "classification changes the source filter, not the context tab");
+assert.match(app, /contextMode=\{timelineLowerContextMode\(\)\}[\s\S]*?onContextModeChange=\{setTimelineLowerContextMode\}[\s\S]*?inspectorContent=\{renderTimelineInspector\(\)\}[\s\S]*?previewContent=\{<TimelineOutputPreview/, "App wires all three context surfaces to the current source shelf owner");
 for (const [width, height] of [[320, 180], [640, 360]]) {
   assert.ok(Math.abs((width / height) / (16 / 9) - 1) <= 0.01, `${width}x${height} thumbnail viewport remains within 1% of 16:9`);
 }
@@ -374,9 +400,20 @@ assert.ok(sourceCreatePredicate.includes("!props.mixer"), "normal source-create 
 assert.ok(sourceCreatePredicate.includes("!firstRunGuarded()"), "normal source-create predicate must stay closed during first-run reconciliation");
 assert.ok(!sourceCreatePredicate.includes("previewError"), "preview-staging errors must not hide a populated normal source surface");
 assert.equal(count(mixerGate, '<details class="videoMixerSourceDisclosure"'), 1, "mixer disclosure is enclosed by one exact mixer/populated gate");
-assert.equal(count(mixerDisclosure, '<VideoSourceCreatePanel {...props.sourceCreate} />'), 1, "mixer disclosure owns one source-create surface");
-assert.equal(count(normalSourceGate, '<VideoSourceCreatePanel {...props.sourceCreate} />'), 1, "normal mode owns one source-create surface");
-assert.equal(count(controlPanel, '<VideoSourceCreatePanel {...props.sourceCreate} />'), 2, "the two source surfaces are separate mutually exclusive mode branches");
+assert.equal(count(mixerDisclosure, '<VideoSourceCreatePanel'), 1, "mixer disclosure owns one source-create surface");
+assert.equal(count(normalSourceGate, '<VideoSourceCreatePanel'), 1, "normal mode owns one source-create surface");
+const librarySourceGate = balancedElement(controlPanel, '<Show when={props.libraryOnly}>', "Show", "library-only source disclosure");
+assert.equal(count(librarySourceGate, '<VideoSourceCreatePanel'), 1, "library-only mode owns its separate import surface");
+assert.ok(librarySourceGate.includes('data-edit-video-import-disclosure'), "library-only import has its own disclosure identity");
+assert.equal(count(controlPanel, '<VideoSourceCreatePanel'), 3, "library-only, mixer and normal mode own exactly three source declarations");
+const nonLibraryGates = [...controlPanel.matchAll(/<Show when=\{!props\.libraryOnly\}>/g)].map((match) =>
+  balancedElement(controlPanel, match[0], "Show", "non-library mode boundary", match.index),
+);
+assert.ok(nonLibraryGates.some((gate) => gate.includes(mixerGate)), "mixer import cannot coexist with library-only import");
+assert.ok(nonLibraryGates.some((gate) => gate.includes(normalSourceGate)), "normal import cannot coexist with library-only import");
+for (const surface of [mixerDisclosure, normalSourceGate, librarySourceGate]) {
+  assert.match(surface, /<VideoSourceCreatePanel\s+\{\.\.\.props\.sourceCreate\}\s+invokeCommand=\{props\.invokeCommand \?\? props\.sourceCreate\.invokeCommand\}\s*\/>/, "both source surfaces retain their source props and injected authority command port");
+}
 assert.equal(count(controlPanel, mixerGateMarker), 1, "mixer disclosure uses the exact mixer + populated predicate");
 assert.ok(!normalSourceGate.includes("videoMixerSourceDisclosure"), "populated normal mode cannot mount the mixer disclosure");
 const disclosureIndex = requiredIndex(controlPanel, 'data-vj-media-import-disclosure', "mixer disclosure order marker");
@@ -464,9 +501,9 @@ assert.equal(count(styles, "\n.videoMixerSourceDisclosure {"), 0, "disclosure st
 // hydrating a loaded snapshot must stop before the thumbnail IPC call; an
 // explicit Mixer selection or Load Thumbnails action is the only unlock.
 const thumbnailEffect = sliceBetween(
-  app,
+  thumbnailControllerSource,
   "const videoThumbnailSourceSignature = createMemo",
-  "const videoLayerHasMonitorableAudio =",
+  "  onCleanup(() => {",
   "thumbnail authority effect",
 );
 const thumbnailAuthorizationIndex = requiredIndex(
@@ -481,18 +518,18 @@ const thumbnailReadIndex = requiredIndex(
 );
 assert.ok(thumbnailAuthorizationIndex < thumbnailReadIndex, "no thumbnail source read is reachable before explicit authorization");
 assert.match(thumbnailEffect, /if \(!videoThumbnailAccessAuthorized\(\)\) \{[\s\S]*?setVideoClipThumbnails\(\{\}\);[\s\S]*?return;/, "unauthorized load/restart returns with an empty projection");
-assert.match(app, /if \(!videoThumbnailAccessAuthorized\(\)\) \{[\s\S]*?setMediaAssetThumbnails\(\{\}\);[\s\S]*?return;/, "unauthorized project load/reset returns with an empty asset-thumbnail projection");
-assert.match(app, /loadMediaAssetThumbnail\(source\.id\)/, "authorized Media Library thumbnail loading uses the single backend-owned asset thumbnail path");
-assert.match(app, /hash_algorithm:[\s\S]*?hash_hex:[\s\S]*?byte_size:/, "asset thumbnail cache identity fences source path and persisted content identity");
-assert.match(app, /let videoThumbnailGeneration = 0;[\s\S]*?let mediaAssetThumbnailGeneration = 0;/, "layer and asset thumbnail work use independent generation fences");
+assert.match(thumbnailControllerSource, /if \(!videoThumbnailAccessAuthorized\(\)\) \{[\s\S]*?setMediaAssetThumbnails\(\{\}\);[\s\S]*?return;/, "unauthorized project load/reset returns with an empty asset-thumbnail projection");
+assert.match(thumbnailControllerSource, /loadMediaAssetThumbnail\(source\.id\)/, "authorized Media Library thumbnail loading uses the single backend-owned asset thumbnail path");
+assert.match(thumbnailControllerSource, /hash_algorithm:[\s\S]*?hash_hex:[\s\S]*?byte_size:/, "asset thumbnail cache identity fences source path and persisted content identity");
+assert.match(thumbnailControllerSource, /let videoThumbnailGeneration = 0;[\s\S]*?let mediaAssetThumbnailGeneration = 0;/, "layer and asset thumbnail work use independent generation fences");
 const mediaAssetThumbnailEffect = sliceBetween(
   thumbnailEffect,
   "createEffect(() => {\n    const sources = JSON.parse(mediaAssetThumbnailSourceSignature())",
-  "  const inspectMediaAssetIds = async",
+  "  onCleanup(() => {",
   "Media Library thumbnail effect",
 );
 assert.match(
-  app,
+  thumbnailControllerSource,
   /const mediaAssetThumbnailAuthoritySignature = createMemo\(\(\) => \{[\s\S]*?const authority = projectMappingsAuthority\(\);[\s\S]*?return JSON\.stringify\(\{[\s\S]*?project_epoch: authority\.project_epoch,[\s\S]*?project_revision: authority\.project_revision,[\s\S]*?checkpoint_hash: authority\.checkpoint_hash,[\s\S]*?\}\);[\s\S]*?\}\);/,
   "Media Library tracks a stable E/R/H scalar, not each authority object publication",
 );
@@ -570,7 +607,7 @@ const thumbnailReplacement = mediaAssetThumbnailAuthorityBatchModel({
 const retiredReplacementBatch = thumbnailReplacement.startIfAuthorityChanged();
 thumbnailReplacement.setAuthority({ project_epoch: 8, project_revision: 0, checkpoint_hash: "C" });
 assert.equal(thumbnailReplacement.canPublish(retiredReplacementBatch), false, "a project replacement still rejects the retired thumbnail batch fail closed");
-assert.match(app, /generation !== mediaAssetThumbnailGeneration \|\| !isProjectAuthorityIdentityCurrent\(authority\)/, "asset-thumbnail async completion is fenced by its own generation and current project authority");
+assert.match(thumbnailControllerSource, /generation !== mediaAssetThumbnailGeneration \|\| !untrack\(\(\) => isProjectAuthorityIdentityCurrent\(authority\)\)/, "asset-thumbnail async completion is fenced by its own generation and current project authority");
 assert.match(app, /if \(mode === "mixer"\) authorizeVideoThumbnailAccess\(\);/, "an explicit Mixer selection authorizes thumbnails");
 assert.match(app, /onRequestThumbnails: authorizeVideoThumbnailAccess/, "the visible thumbnail request authorizes the same cache");
 assert.match(clipGrid, /data-vj-thumbnail-request[\s\S]*?onClick=\{props\.onRequestThumbnails\}/, "populated grid exposes an explicit source-read action");
@@ -581,21 +618,25 @@ const projectReset = sliceBetween(
   "project replacement Media UI reset",
 );
 for (const reset of [
-  "setVideoThumbnailAccessAuthorized(false)",
-  "videoThumbnailUrlCache = {}",
-  "videoThumbnailSignatures.clear()",
+  "thumbnailController.reset()",
   "setMediaAssetAvailabilityById({})",
   "setLastMediaAssetImportReport(null)",
 ]) {
   assert.ok(projectReset.includes(reset), `project replacement reset must include ${reset}`);
 }
-assert.match(app, /if \(replacement\) resetMediaAssetUiForProjectReplacement\(\);/, "only an admitted project replacement resets thumbnail authorization/cache");
+assert.match(app, /if \(options\.replacement\) resetMediaAssetUiForProjectReplacement\(\);/, "the authority-bundle replacement option gates thumbnail authorization/cache reset");
+assert.equal(count(app, "resetMediaAssetUiForProjectReplacement();"), 1, "project media reset has one authority-bundle call site");
 
+const thumbnailReset = sliceBetween(thumbnailControllerSource, "const reset = () => {", "\n  };", "controller project reset");
+for (const reset of ["setVideoThumbnailAccessAuthorized(false)", "videoThumbnailUrlCache = {}", "mediaAssetThumbnailUrlCache = {}", "videoThumbnailSignatures.clear()", "mediaAssetThumbnailSignatures.clear()"]) {
+  assert.ok(thumbnailReset.includes(reset), `controller replacement reset must include ${reset}`);
+}
+assert.match(app, /const thumbnailController = createMediaThumbnailController\(\{[\s\S]*?layers: \(\) => snapshot\(\)\.video\.layers,[\s\S]*?assets: \(\) => snapshot\(\)\.video\.media_assets,/, "App supplies authoritative source arrays to the thumbnail controller");
 // Media Library stays in the fixed clip pane and exposes read-only Verify,
 // asset Relink, exact per-entry import failure truth, and real operation cancel.
 const libraryRail = balancedElement(
   controlPanel,
-  '<details class="videoMediaLibraryRail" data-media-library-rail>',
+  '<details class="videoMediaLibraryRail" data-media-library-rail open={props.libraryOnly}>',
   "details",
   "Media Library rail",
 );
@@ -643,7 +684,7 @@ assert.match(app, /setPhase: \(phase: MediaAssetOperationPhase\) => \{[\s\S]*?co
 const sourcePicker = sliceBetween(
   app,
   "const selectVideoSourceFile = async () => {",
-  "const downloadGdtfFromUrl = async",
+  "\n  };",
   "single-source picker",
 );
 assert.match(sourcePicker, /beginMediaAssetOperation\("Choose video source", "picker"\)/, "single-source Browse exposes its picker phase");
@@ -948,4 +989,4 @@ assert.equal(fullBankPageCount, 2, "clip bank pager remains reachable for the ne
 assert.equal(mediaAccess({ layers: fullBank.length, mixer: true, firstRunAvailable: false, firstRunBusy: false, firstRunError: null }).importEntryCount, 1, "full bank/page keeps one mixer import entry");
 
 console.log("VJ media-import access static contract ok: guarded empty states, populated normal/mixer exclusivity, accessible names, scoped overlay CSS, and full bank/page reachability verified");
-console.log("Limitation: this repository has no focused Solid component mount runner, so this gate proves exact branch predicates and CSS contracts rather than browser-rendered reachability.");
+console.log("Limitation: this checker reads source and exercises policy fixtures; it does not mount components or establish browser/native rendered reachability.");

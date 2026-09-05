@@ -744,6 +744,9 @@ fn execute_set_effect_enabled_with_publish(
 
 #[cfg(test)]
 mod tests {
+    mod bpm_history_tests {
+        include!("bpm_history_tests.rs");
+    }
     use std::{
         sync::{
             atomic::{AtomicU64, Ordering},

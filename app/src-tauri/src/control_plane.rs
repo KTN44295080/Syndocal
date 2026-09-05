@@ -465,7 +465,6 @@ fn is_tauri_runtime_mutation(command: &str) -> bool {
             | "set_explicit_wdm_cue_test"
             | "set_auto_vj_armed"
             | "set_auto_vj_hold"
-            | "set_bpm"
             | "set_cue_fade_paused"
             | "set_cue_live_modifier"
             | "set_direct_child_timeline_playing"
@@ -572,6 +571,7 @@ fn is_renderer_ticketed_project_mutation(command: &str) -> bool {
     matches!(
         command,
         "analyze_audio_file"
+            | "set_bpm"
             | "clear_timeline_audio"
             | "add_timeline_audio_clip"
             | "update_timeline_audio_clip"
@@ -2240,7 +2240,7 @@ mod tests {
         assert_eq!(names.len(), FROZEN_TAURI_ROUTE_ADMISSION_COUNT);
         assert_eq!(
             counts[&TauriRouteAdmissionClass::RendererTicketedProjectMutation],
-            131
+            132
         );
         assert_eq!(
             counts[&TauriRouteAdmissionClass::BackendAuthoritativeProjectMutation],
@@ -2250,7 +2250,7 @@ mod tests {
         assert_eq!(counts[&TauriRouteAdmissionClass::ProjectReplacement], 8);
         assert_eq!(counts[&TauriRouteAdmissionClass::ProjectHistory], 3);
         assert_eq!(counts[&TauriRouteAdmissionClass::LocalPhysicalMutation], 6);
-        assert_eq!(counts[&TauriRouteAdmissionClass::RuntimeMutation], 157);
+        assert_eq!(counts[&TauriRouteAdmissionClass::RuntimeMutation], 156);
         assert_eq!(counts[&TauriRouteAdmissionClass::FileExportMutation], 20);
         assert_eq!(counts[&TauriRouteAdmissionClass::SafetyMutation], 1);
         assert_eq!(counts[&TauriRouteAdmissionClass::RecoveryMaintenance], 26);

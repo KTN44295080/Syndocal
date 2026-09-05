@@ -31,24 +31,29 @@ import { render } from 'solid-js/web';
 import { TimelineOutputPreview } from '/src/components/TimelineOutputPreview';
 import '/src/styles.css';
 const [visible, setVisible] = createSignal(true);
+const [epoch,setEpoch]=createSignal(1);
 const [outputs, setOutputs] = createSignal([
   {id: 1, label: 'Foreground', width: 1920, height: 1080, enabled: true, blackout: false},
   {id: 2, label: 'Background', width: 1080, height: 1920, enabled: true, blackout: false},
 ]);
-window.proof = {calls: [], setVisible, setOutputs};
+window.proof = {calls: [], setVisible, setOutputs, setEpoch, mode:"frame", pending:[]};
+URL.createObjectURL=()=>{throw new Error("Timeline must not create Blob URLs");};
 const invoke = async (command, args) => {
   if (command !== 'get_live_video_monitor_frame') throw new Error(command);
   window.proof.calls.push(args);
-  const canvas = document.createElement('canvas'); canvas.width = args.width; canvas.height = args.height;
-  const ctx = canvas.getContext('2d'); ctx.fillStyle = args.outputId === 1 ? '#c64372' : '#307bbe';
-  ctx.fillRect(0,0,canvas.width,canvas.height);
-  const jpeg = Uint8Array.from(atob(canvas.toDataURL('image/jpeg').split(',')[1]), c => c.charCodeAt(0));
-  const packet = new Uint8Array(40+jpeg.length); packet.set([83,89,76,86,1,0,0,0]);
-  const view = new DataView(packet.buffer); view.setUint16(32,args.width,true); view.setUint16(34,args.height,true);
-  view.setUint32(36,jpeg.length,true); packet.set(jpeg,40); return packet;
+  if(args.pixelFormat!=='rgba')throw new Error('Timeline must request RGBA');
+  const busy=window.proof.mode==='busy';
+  const length=busy?0:args.width*args.height*4;
+  const packet=new Uint8Array(40+length);packet.set([83,89,76,86,2,busy?1:0,0,1]);
+  const view=new DataView(packet.buffer);view.setUint16(32,args.width,true);view.setUint16(34,args.height,true);
+  view.setUint32(36,length,true);
+  const pixel=args.outputId===1?[198,67,114,255]:[48,123,190,255];
+  for(let offset=40;offset<packet.length;offset+=4)packet.set(pixel,offset);
+  if(window.proof.mode==='pending')return new Promise(resolve=>window.proof.pending.push(()=>resolve(packet)));
+  return packet;
 };
 render(() => <main style={{width:'600px', 'max-width':'100%', padding:'12px'}}>
-  <Show when={visible()}><TimelineOutputPreview outputs={outputs()} invoke={invoke} backendAvailable={true}/></Show>
+  <Show when={visible()}><TimelineOutputPreview outputs={outputs()} invoke={invoke} backendAvailable={true} projectEpoch={epoch()}/></Show>
 </main>, document.body);
 `);
 const vite = spawn(process.execPath, [resolve(appRoot, "node_modules/vite/bin/vite.js"), "--host", "127.0.0.1", "--port", String(port), "--strictPort"],
@@ -68,6 +73,7 @@ try {
     const page = await browser.newPage({viewport});
     const errors = []; page.on('pageerror', e => errors.push(String(e)));
     await page.addInitScript(() => localStorage.setItem('syndocal.uiLocale.v1','en'));
+    if (process.env.OUTPUT_PREVIEW_COMPONENT_ONLY !== '1') {
     await page.goto(`${origin}/?syndocalViewportFixture=timeline-layered`);
     await page.locator('[data-edit-domain-navigation] [data-control-mode-option="live"]').click();
     const tabs = page.locator('[data-timeline-source-shelf-mode]');
@@ -92,20 +98,40 @@ try {
     await tabs.last().focus(); await page.keyboard.press('Home');
     assert.equal(await page.locator('[data-timeline-output-preview]').count(),0);
     assert.deepEqual(errors,[]);
+    }
     await page.route('**/output-proof', route => route.fulfill({contentType:'text/html',body:`<!doctype html><html><body><script type="module" src="/${fixtureName}"></script></body></html>`}));
     await page.goto(`${origin}/output-proof`);
-    await page.waitForFunction(() => [...document.querySelectorAll('[data-timeline-output-id] img')].filter(x=>x.naturalWidth>0).length===2);
+    await page.waitForFunction(() => [...document.querySelectorAll('[data-timeline-output-id] canvas')].filter(x=>getComputedStyle(x).visibility==='visible').length===2);
     const dimensions = await page.locator('.timelineOutputPreviewViewport').evaluateAll(els=>els.map(el=>{const r=el.getBoundingClientRect();return r.width/r.height;}));
     assert.ok(Math.abs(dimensions[0]-16/9)<0.01 && Math.abs(dimensions[1]-9/16)<0.01, JSON.stringify(dimensions));
     const calls = await page.evaluate(()=>window.proof.calls);
     assert.deepEqual([...new Set(calls.map(c=>c.outputId))].sort(),[1,2]);
-    assert.ok(calls.every(c=>c.monitorKind==='program' && c.width<=320 && c.height<=180));
+    assert.ok(calls.every(c=>c.monitorKind==='program' && c.pixelFormat==='rgba' && c.width<=320 && c.height<=180));
+    const readPixels=()=>page.locator('.timelineOutputPreviewViewport canvas').evaluateAll(elements=>elements.map(canvas=>[...canvas.getContext('2d').getImageData(0,0,1,1).data]));
+    assert.deepEqual(await readPixels(),[[198,67,114,255],[48,123,190,255]],'raw RGBA channels render exactly without JPEG conversion');
+    await page.evaluate(()=>{window.proof.canvases=[...document.querySelectorAll('.timelineOutputPreviewViewport canvas')];window.proof.mode='busy';});
+    await sleep(100);
+    assert.deepEqual(await readPixels(),[[198,67,114,255],[48,123,190,255]],'brief BUSY preserves current pixels');
+    await page.waitForFunction(()=>[...document.querySelectorAll('.timelineOutputPreviewViewport canvas')].every(canvas=>getComputedStyle(canvas).visibility==='hidden'));
+    assert.deepEqual(await readPixels(),[[0,0,0,0],[0,0,0,0]],'expiry clears actual canvas storage, not just a label');
+    await page.evaluate(()=>window.proof.mode='frame');
+    await page.waitForFunction(()=>[...document.querySelectorAll('.timelineOutputPreviewViewport canvas')].every(canvas=>getComputedStyle(canvas).visibility==='visible'));
+    assert.equal(await page.evaluate(()=>window.proof.canvases.every((canvas,index)=>canvas===document.querySelectorAll('.timelineOutputPreviewViewport canvas')[index])),true,'frame recovery keeps the same canvas nodes');
+    await page.evaluate(()=>window.proof.mode='pending');
+    await page.waitForFunction(()=>window.proof.pending.length>0);
+    await page.evaluate(()=>window.proof.setEpoch(2));
+    assert.deepEqual(await readPixels(),[[0,0,0,0],[0,0,0,0]],'project change immediately clears both canvases');
+    await page.evaluate(()=>window.proof.pending.shift()());
+    await sleep(75);
+    assert.deepEqual(await readPixels(),[[0,0,0,0],[0,0,0,0]],'retired in-flight response cannot repaint cleared canvases');
+    await page.evaluate(()=>{window.proof.mode='frame';for(const resolve of window.proof.pending.splice(0))resolve();});
+    await page.waitForFunction(()=>[...document.querySelectorAll('.timelineOutputPreviewViewport canvas')].every(canvas=>getComputedStyle(canvas).visibility==='visible'));
     await page.screenshot({path:resolve(artifacts,`outputs-${viewport.width}.png`)});
     await page.evaluate(()=>window.proof.setVisible(false));
     await sleep(150); const closedCount=await page.evaluate(()=>window.proof.calls.length);
     await sleep(350); assert.equal(await page.evaluate(()=>window.proof.calls.length),closedCount);
     assert.deepEqual(errors,[]);
-    console.log(`PASS Timeline tabs and all output preview ${viewport.width}: two actual ratios, IPC stops on unmount`);
+    console.log(`PASS Timeline ${process.env.OUTPUT_PREVIEW_COMPONENT_ONLY === "1" ? "component-only" : "tabs and"} output preview ${viewport.width}: raw pixels, busy retention/expiry clear, generation rejection, persistent canvases, two actual ratios and unmount`);
     await page.close();
   }
 } finally {

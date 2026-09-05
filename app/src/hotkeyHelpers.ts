@@ -42,6 +42,21 @@ export const isEditableShortcutTarget = (target: EventTarget | null) => {
   return isEditableContextMenuTarget(target) || tagName === "select";
 };
 
+/** Only text editors own the browser's native Undo/Redo stack. Keep this
+ * separate from the broader shortcut guard: focused sliders, checkboxes and
+ * selects must still suppress transport/tool shortcuts while allowing history. */
+export const isNativeUndoShortcutTarget = (target: EventTarget | null) => {
+  if (!(target instanceof HTMLElement)) return false;
+  const editor = target.closest("input, textarea, [contenteditable]");
+  if (!(editor instanceof HTMLElement)) return false;
+  if (editor.isContentEditable) return true;
+  const tagName = editor.tagName.toLowerCase();
+  if (tagName === "textarea") return !(editor as HTMLTextAreaElement).readOnly;
+  if (tagName !== "input") return false;
+  const input = editor as HTMLInputElement;
+  return !input.readOnly && ["text", "search", "url", "tel", "email", "password", "number"].includes(input.type);
+};
+
 export const controlCueHotkeyIndex = (code: string) => {
   const digitMatch = code.match(/^(Digit|Numpad)(\d)$/);
   if (!digitMatch) {

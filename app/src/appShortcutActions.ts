@@ -105,6 +105,8 @@ export interface AppShortcutEvent {
 export interface AppShortcutContext {
   workspaceTab: WorkspaceTab;
   editable: boolean;
+  /** Omitted contexts retain the existing editable-target history guard. */
+  nativeUndo?: boolean;
   mappingHotkeyHelpOpen: boolean;
   mappingStageTool: "select" | "place" | "rotate" | "pan";
   mappingInteractionActive: boolean;
@@ -206,12 +208,13 @@ export function resolveAppShortcut(
   if (event.repeat) return null;
 
   const commandModifier = event.ctrlKey || event.metaKey;
+  const nativeUndo = context.nativeUndo ?? context.editable;
   if (!event.altKey && commandModifier) {
     if (!event.shiftKey && event.code === "KeyN") return { kind: "newProject" };
-    if (!context.editable && event.code === "KeyZ") {
+    if (!nativeUndo && event.code === "KeyZ") {
       return { kind: event.shiftKey ? "redoProject" : "undoProject" };
     }
-    if (!context.editable && !event.shiftKey && event.code === "KeyY") return { kind: "redoProject" };
+    if (!nativeUndo && !event.shiftKey && event.code === "KeyY") return { kind: "redoProject" };
   }
 
   if (!event.altKey) {
@@ -265,6 +268,10 @@ export function resolveAppShortcut(
   // Timeline-local commands win while the timeline surface is active. Outside
   // that surface, L keeps its established Control-mode switch behavior.
   if (context.timelineSurfaceActive) {
+    if (event.code === "Space" && !event.shiftKey) {
+      const operation = context.timelinePlaying ? "pause" : context.timelineDurationMs > 0 ? "play" : "none";
+      return { kind: "toggleTimelinePlayback", operation };
+    }
     if (event.code === "KeyL" && !event.shiftKey) {
       return { kind: "toggleTimelineLoop", enabled: context.timelineLoopAvailable ? !context.timelineLoopEnabled : null };
     }

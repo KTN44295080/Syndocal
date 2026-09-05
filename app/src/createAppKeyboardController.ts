@@ -1,6 +1,7 @@
 import type { Accessor, Setter } from "solid-js";
 import {
   isEditableShortcutTarget,
+  isNativeUndoShortcutTarget,
   mappingLayerToggleFromHotkey,
   mappingSelectionActionFromHotkey,
   mappingSelectionFlagFromHotkey,
@@ -11,7 +12,7 @@ import { executeAppShortcut, resolveAppShortcut, type AppShortcutExecutor } from
 import type { MappingDragState, MappingMarqueeState, MappingViewportPanDragState } from "./mappingRuntime";
 import type { MappingStageTool } from "./mappingViewPresets";
 import { dispatchProjectFileShortcut } from "./projectFileShortcuts";
-import type { EngineSnapshot } from "./types";
+import type { EngineSnapshot, TimelineSnapshot } from "./types";
 import {
   type ControlMode,
   type SetupSubTab,
@@ -53,6 +54,7 @@ interface AppKeyboardControllerOptions {
   mappingViewportPanDrag: Accessor<MappingViewportPanDragState | null>;
   setMappingViewportPanDrag: Setter<MappingViewportPanDragState | null>;
   snapshot: Accessor<EngineSnapshot>;
+  activeTimeline: Accessor<Pick<TimelineSnapshot, "playing" | "duration_ms">>;
   triggerPreviousCue: () => MaybePromise;
   triggerNextCue: () => MaybePromise;
   triggerCue: (cueId: number) => MaybePromise;
@@ -134,9 +136,11 @@ export function createAppKeyboardController(options: AppKeyboardControllerOption
   const handleControlKeyDown = (event: KeyboardEvent) => {
     if (dispatchProjectFileShortcut(event, options)) return;
     const snapshot = options.snapshot();
+    const timeline = options.activeTimeline();
     const action = resolveAppShortcut(event, {
       workspaceTab: options.workspaceTab(),
       editable: isEditableShortcutTarget(event.target),
+      nativeUndo: isNativeUndoShortcutTarget(event.target),
       mappingHotkeyHelpOpen: options.mappingHotkeyHelpOpen(),
       mappingStageTool: options.mappingStageTool(),
       mappingInteractionActive:
@@ -148,8 +152,8 @@ export function createAppKeyboardController(options: AppKeyboardControllerOption
       cueIds: snapshot.cues.map((cue) => cue.id),
       cuePadStartIndex: options.cuePadStartIndex(),
       activeFadePaused: snapshot.active_fade?.paused ?? null,
-      timelinePlaying: snapshot.timeline.playing,
-      timelineDurationMs: snapshot.timeline.duration_ms,
+      timelinePlaying: timeline.playing,
+      timelineDurationMs: timeline.duration_ms,
       timelineSurfaceActive: options.timelineSurfaceActive(),
       timelineLoopEnabled: options.timelineLoopEnabled(),
       timelineLoopAvailable: options.timelineLoopAvailable(),

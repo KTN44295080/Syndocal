@@ -99,6 +99,222 @@ fn revision_exhaustion_fails_without_mutating_or_wrapping_history() {
     assert_eq!(sync.history[0].0, 1);
 }
 
+#[test]
+fn full_response_shares_immutable_history_image_and_serializes_after_eviction() {
+    #[derive(Serialize)]
+    struct OwnedPayload {
+        revision: u64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        full: Option<EngineSnapshot>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        delta: Option<EngineSnapshotDelta>,
+    }
+
+    let mut sync = SnapshotSyncState::default();
+    let mut captured = EngineSnapshot::default();
+    captured.cues.push(protocol::CueSummary {
+        id: 42,
+        label: "captured cue".into(),
+        ..protocol::CueSummary::default()
+    });
+    let expected = serde_json::json!({ "revision": 1, "full": &captured });
+    let expected_bytes = serde_json::to_vec(&OwnedPayload {
+        revision: 1,
+        full: Some(captured.clone()),
+        delta: None,
+    })
+    .unwrap();
+    let mut response = sync.publish(None, captured).unwrap();
+    let full = response.full.as_mut().unwrap();
+    assert!(Arc::ptr_eq(full, &sync.history[0].1));
+    assert_eq!(Arc::strong_count(full), 2);
+    assert!(Arc::get_mut(full).is_none());
+    let retained = Arc::downgrade(full);
+
+    for index in 0..SNAPSHOT_HISTORY_CAPACITY {
+        let mut next = EngineSnapshot::default();
+        next.clock.bpm = 130.0 + index as f32;
+        sync.publish(None, next).unwrap();
+    }
+    assert_eq!(sync.history.len(), SNAPSHOT_HISTORY_CAPACITY);
+    assert!(sync.history.iter().all(|(revision, _)| *revision != 1));
+    assert_eq!(Arc::strong_count(response.full.as_ref().unwrap()), 1);
+    drop(sync);
+    // The original image remains intact even when IPC serialization is delayed
+    // beyond its eviction from the four retained client bases.
+    assert_eq!(serde_json::to_value(&response).unwrap(), expected);
+    assert_eq!(serde_json::to_vec(&response).unwrap(), expected_bytes);
+    drop(response);
+    assert!(retained.upgrade().is_none());
+}
+
+#[test]
+#[ignore = "fixed publication workloads; excludes serialization and real-show performance"]
+fn benchmark_full_snapshot_sync_shared_capture() {
+    use std::{
+        hint::black_box,
+        time::{Duration, Instant},
+    };
+
+    #[derive(Serialize)]
+    struct OwnedPayload {
+        revision: u64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        full: Option<EngineSnapshot>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        delta: Option<EngineSnapshotDelta>,
+    }
+
+    #[derive(Default)]
+    struct PreviousSync {
+        revision: u64,
+        history: VecDeque<(u64, EngineSnapshot)>,
+    }
+
+    impl PreviousSync {
+        // Exact pre-Arc publication algorithm, including four retained bases.
+        fn publish(
+            &mut self,
+            client_revision: Option<u64>,
+            current: EngineSnapshot,
+        ) -> Result<OwnedPayload, String> {
+            let revision = self.revision.checked_add(1).ok_or_else(||
+                "Snapshot synchronization revision exhausted; restart Syndocal to establish a new session".to_string())?;
+            let before = client_revision.and_then(|requested| {
+                self.history
+                    .iter()
+                    .find(|(revision, _)| *revision == requested)
+                    .map(|(_, snapshot)| snapshot)
+            });
+            let payload = match before {
+                Some(before) => OwnedPayload {
+                    revision,
+                    full: None,
+                    delta: Some(engine_snapshot_delta(before, &current)),
+                },
+                None => OwnedPayload {
+                    revision,
+                    full: Some(current.clone()),
+                    delta: None,
+                },
+            };
+            if self.history.len() == SNAPSHOT_HISTORY_CAPACITY {
+                self.history.pop_front();
+            }
+            self.history.push_back((revision, current));
+            self.revision = revision;
+            Ok(payload)
+        }
+    }
+
+    #[derive(Clone, Copy)]
+    enum Schedule {
+        Full,
+        Mixed,
+        Steady,
+    }
+
+    const ITERATIONS: usize = 1_000;
+    fn measure<P: Serialize>(
+        captured: &EngineSnapshot,
+        schedule: Schedule,
+        mut publish: impl FnMut(Option<u64>, EngineSnapshot) -> (u64, bool, P),
+    ) -> (Duration, (usize, usize), Vec<u8>) {
+        let mut clients = [None; 2];
+        let mut full_count = 0;
+        let mut last = None;
+        let started = Instant::now();
+        for step in 0..ITERATIONS {
+            let client = if matches!(schedule, Schedule::Mixed) {
+                step % 2
+            } else {
+                0
+            };
+            let requested = match schedule {
+                Schedule::Full => None,
+                Schedule::Mixed if step % 32 == 0 => None,
+                _ => clients[client],
+            };
+            let mut current = black_box(captured).clone();
+            // Clock changes are typical during playback; all authored collections
+            // remain identical. Both implementations pay the same capture clone.
+            current.clock.bpm = 120.0 + (step % 3) as f32;
+            let (revision, full, payload) = publish(requested, current);
+            clients[client] = Some(revision);
+            full_count += usize::from(full);
+            last = Some(black_box(payload));
+        }
+        let elapsed = started.elapsed();
+        // Serialization and assertions are deliberately outside the timed loop.
+        (
+            elapsed,
+            (full_count, ITERATIONS - full_count),
+            serde_json::to_vec(&last.unwrap()).unwrap(),
+        )
+    }
+
+    let mut captured = EngineSnapshot::default();
+    captured.cues = (0..1_024)
+        .map(|id| protocol::CueSummary {
+            id,
+            label: format!("cue {id}: {}", "authored label ".repeat(16)),
+            ..protocol::CueSummary::default()
+        })
+        .collect();
+    let light = EngineSnapshot::default();
+    for (name, input, schedule, expected_full) in [
+        ("full-heavy", &captured, Schedule::Full, 1_000),
+        ("mixed-heavy", &captured, Schedule::Mixed, 33),
+        ("steady-heavy", &captured, Schedule::Steady, 1),
+        ("steady-light", &light, Schedule::Steady, 1),
+    ] {
+        let mut previous_times = Vec::new();
+        let mut shared_times = Vec::new();
+        for round in 0..3 {
+            let mut previous = PreviousSync::default();
+            let mut shared = SnapshotSyncState::default();
+            let mut measure_previous = || {
+                measure(input, schedule, |requested, current| {
+                    let payload = previous.publish(requested, current).unwrap();
+                    (payload.revision, payload.full.is_some(), payload)
+                })
+            };
+            let mut measure_shared = || {
+                measure(input, schedule, |requested, current| {
+                    let payload = shared.publish(requested, current).unwrap();
+                    (payload.revision, payload.full.is_some(), payload)
+                })
+            };
+            let (old, new) = if round % 2 == 0 {
+                (measure_previous(), measure_shared())
+            } else {
+                let new = measure_shared();
+                (measure_previous(), new)
+            };
+            assert_eq!(old.1, (expected_full, ITERATIONS - expected_full));
+            assert_eq!(old.1, new.1);
+            assert_eq!(old.2, new.2, "final response wire differs for {name}");
+            assert_eq!(previous.history.len(), SNAPSHOT_HISTORY_CAPACITY);
+            assert_eq!(shared.history.len(), SNAPSHOT_HISTORY_CAPACITY);
+            assert_eq!(
+                serde_json::to_vec(&previous.history).unwrap(),
+                serde_json::to_vec(&shared.history).unwrap(),
+                "retained images differ for {name}"
+            );
+            println!(
+                "{name} round {round}: previous={:?}, shared={:?}, full/delta={:?}",
+                old.0, new.0, old.1
+            );
+            previous_times.push(old.0);
+            shared_times.push(new.0);
+        }
+        previous_times.sort_unstable();
+        shared_times.sort_unstable();
+        println!("{name} median, {ITERATIONS} requests, history 4: previous={:?}, shared={:?}; serialization excluded",
+            previous_times[1], shared_times[1]);
+    }
+}
+
 /// Deterministic payload workload, not a wall-clock/CPU benchmark. Both policies
 /// receive identical snapshots and client scheduling; only cache retention differs.
 #[test]
@@ -136,7 +352,7 @@ fn alternating_client_payload_workload_reports_full_delta_counts_and_bytes() {
         } else {
             SnapshotSyncPayload {
                 revision: old_revision + 1,
-                full: Some(snapshot.clone()),
+                full: Some(Arc::new(snapshot.clone())),
                 delta: None,
             }
         };

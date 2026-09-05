@@ -1045,6 +1045,12 @@ pub enum VideoFrameProviderError {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VideoDecodeError {
+    /// A selected hardware decoder failed. Do not hide this behind CLI decode.
+    HardwareDecode {
+        layer_id: VideoLayerId,
+        label: String,
+        message: String,
+    },
     MissingSourcePath {
         layer_id: VideoLayerId,
         label: String,
@@ -2594,8 +2600,13 @@ pub fn video_runtime_status_with_binaries(
                     VideoBackendState::NotBuilt
                 },
                 detail: if LibavFrameDecoder::is_built() {
-                    "libavcodec/libavformat decode is built in for H.264, H.265, and ProRes"
-                        .to_string()
+                    if cfg!(target_os = "windows") {
+                        "H.264/H.265 use D3D11VA GPU decode; hardware failures are reported. Other codecs use libav software decode."
+                            .to_string()
+                    } else {
+                        "libavcodec/libavformat software decode is built in for H.264, H.265, and ProRes"
+                            .to_string()
+                    }
                 } else {
                     "Build with the libav feature; FFmpeg CLI remains the compatibility path"
                         .to_string()
@@ -4733,10 +4744,10 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
             .map(|layer| layer.id)
             .collect::<Vec<_>>();
         let mut retained_inputs = Vec::new();
+        // This provider is shared by output previews. Retain the current input
+        // universe, not just the output being drawn; alternating outputs must
+        // not destroy each other's decoder sessions. Decoding stays scoped below.
         for layer in &snapshot.layers {
-            if !requested_layer_ids.contains(&layer.id) {
-                continue;
-            }
             let runtime_layer = clip_runtime
                 .layers
                 .iter()
@@ -4752,7 +4763,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
                     ),
                     (transition.incoming_slot_id, transition.incoming_playhead_ms),
                 ] {
-                    retained_inputs.push(video_render_input_for_clip_slot(
+                    let input = video_render_input_for_clip_slot(
                         snapshot,
                         layer,
                         slot_id,
@@ -4760,7 +4771,14 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
                         project_render_epoch,
                         width,
                         height,
-                    )?);
+                    );
+                    match input {
+                        Ok(input) => retained_inputs.push(input),
+                        Err(error) if requested_layer_ids.contains(&layer.id) => return Err(error),
+                        // An invalid input on another output is not retained,
+                        // but must not newly prevent this output from rendering.
+                        Err(_) => {}
+                    }
                 }
             } else {
                 retained_inputs.push(VideoRenderInput::legacy(VideoFrameRequest {
@@ -8222,6 +8240,9 @@ fn finite_or(value: f32, fallback: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    mod output_preview_session_tests {
+        include!("output_preview_session_tests.rs");
+    }
     use protocol::{
         AutoVjSnapshot, CompositionSummary, Transform2D, VideoBlendMode, VideoLayerSummary,
         VideoMaskPoint, VideoOutputKind, VideoOutputSummary, VideoSourceKind, VideoSourceSummary,

@@ -1,7 +1,9 @@
 import { createEffect, createMemo, createSignal, createUniqueId, For, onCleanup, onMount, Show } from "solid-js";
 import type { TimelineEventDraft } from "../editorDrafts";
+import type { InlineChildParent } from "../timelineInlineChildProjection";
 import type {
   AudioAnalysisSummary,
+  CueSummary,
   MediaAssetAvailability,
   MediaAssetSummary,
   TimelineAudioClipSummary,
@@ -47,6 +49,7 @@ import {
   type TimelineOverviewOverlapCluster,
 } from "./TimelineOverview";
 import { TimelineBankPanel } from "./TimelineBankPanel";
+import { TimelineNavigator } from "./TimelineNavigator";
 import {
   TimelineSceneBlocksEditor,
   type TimelineSceneBlockCueOption,
@@ -85,6 +88,10 @@ interface AudioBeatMarker {
 }
 
 interface TimelineCueEventsPanelProps {
+  navigatorOpen?: boolean;
+  onCloseNavigator?: () => void;
+  onNavigateRootTimeline?: (timelineId: number) => void | Promise<void>;
+  onNavigateChildTimeline?: (cueId: number) => void | Promise<void>;
   bankAuthority: FullBankAuthoritySnapshot;
   embeddedControls: boolean;
   contextDrawer: TimelineContextDrawer;
@@ -115,6 +122,8 @@ interface TimelineCueEventsPanelProps {
   lightingAutomationCount: number;
   videoAutomationCount: number;
   overviewEvents: TimelineOverviewEvent[];
+  childTimelineCues?: readonly CueSummary[];
+  inlineChildParents?: readonly InlineChildParent[];
   timelineLayers: TimelineLayerSummary[];
   timelineCueDrag: TimelineCueDragState | null;
   onDropExternalSource: (
@@ -1433,10 +1442,13 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
       </details>
       </>
       </Show>
+      <div class="timelineEditorWithNavigator" classList={{ navigatorOpen: Boolean(props.navigatorOpen) }}>
       <TimelineOverview
         bankAuthority={props.bankAuthority}
         timelineChildCueId={props.timelineChildCueId}
         events={props.overviewEvents}
+        childTimelineCues={props.childTimelineCues}
+        inlineChildParents={props.inlineChildParents}
         layerItemCounts={timelineLayerItemCounts()}
         cueIdentities={props.cueIdentities}
         audioClips={props.audioClips}
@@ -1526,6 +1538,18 @@ export function TimelineCueEventsPanel(props: TimelineCueEventsPanelProps) {
         }
         onOpenLayerMenu={openLayerMenu}
       />
+      <Show when={props.navigatorOpen}>
+        <TimelineNavigator
+          timelines={props.timelineBank}
+          childCues={(props.childTimelineCues ?? []).filter((cue) => cue.child_timeline)}
+          activeTimelineId={props.activeTimelineId}
+          selectedChildCueId={props.timelineChildCueId}
+          onSelectRoot={(id) => props.onNavigateRootTimeline?.(id)}
+          onSelectChild={(id) => props.onNavigateChildTimeline?.(id)}
+          onClose={() => props.onCloseNavigator?.()}
+        />
+      </Show>
+      </div>
       <Show when={itemContextMenu()}>
         {(menu) => (
           <TimelineItemContextMenu

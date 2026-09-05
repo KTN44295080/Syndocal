@@ -1,0 +1,21 @@
+.timelineInlineChildGutter {
+  position: absolute;
+  left: 0;
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  border-bottom: 1px solid var(--border, #343a40);
+  border-radius: 0;
+  background: var(--panel, #171c21);
+  color: inherit;
+  text-align: left;
+  padding: 0 8px;
+  font: inherit;
+  cursor: pointer;
+}
+.timelineInlineChildGutter span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.timelineInlineChildBackground { fill: #141d24; stroke: #343a40; }
+.timelineInlineChildBlock { fill: var(--identity); stroke: var(--identity-band); }
+.timelineInlineChildLabel { fill: #e1e7ed; font-size: 12px; pointer-events: none; }
+.timelineInlineChildCanvas g .timelineInlineChildLabel { fill: var(--identity-text); }
+.timelineInlineChildCanvas { cursor: pointer; }
