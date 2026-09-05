@@ -204,3 +204,47 @@ its native playback evidence is in `PREVIEW_CLOCK_FIXTURE_AIM_2026-09-05.md`.
   Follow-up autosave repair is tracked in
   `PROJECT_PUBLICATION_RESTART_RECOVERY_2026-09-05.md`; do not resume Unity output
   testing automatically while the user is away.
+
+## Unity reception and cadence follow-up
+
+- After checkpoint `129b893`, the user confirmed reception in Unity. The remaining
+  report is stutter in the video panels only; Syndocal's preview is smooth and
+  the user did not report whole-scene lighting/camera stutter. Reception is
+  user-observed evidence, not an independently measured frame-rate acceptance.
+- Current Unity project uses RTX5090 according to its Editor graphics startup
+  log. Klak.Spout receives and blits in Update; the foreground target is3840x2160
+  with no MSAA or mip generation. No Unity settings or authored scene are changed
+  during this investigation.
+- Syndocal's Spout worker renders independently at full output resolution and
+  uploads RGBA CPU pixels using SendImage. Smooth reduced-resolution preview does
+  not establish full-resolution transport cadence. SDK SendImage success alone
+  does not prove that its shared texture was updated when texture access times out.
+- Next evidence: opt-in bounded sender-side timing separates render cost, physical
+  send cost and SDK frame progress. Do not lower the requested4K/HD output contract
+  or declare Unity cadence fixed without a new live measurement.
+- Added diagnostic-only `spout_output_timing.rs`, activated explicitly by
+  `SYNDOCAL_SPOUT_TIMING=1` and an existing `SYNDOCAL_SPOUT_TIMING_DIR` directory.
+  Per-PID/output logs aggregate every2 seconds and stop after180 seconds/90 records.
+  File work is on a separate thread; a two-record nonblocking queue drops records
+  when its sink is slow. Disabled mode does no extra clock, SDK-counter or
+  formatting work per frame. Existing transport branches remain unchanged.
+- Metrics distinguish rendering, send-with-authority revalidation, paused black
+  keepalive, loop cadence, rendered-candidate PTS changes, and raw SDK frame/FPS.
+  Send timing excludes `acquire_video_output` admission wait. SDK counters may be
+  disabled/zero and neither these nor successful API calls prove Unity display.
+- Independent review ACCEPT after moving diagnostic file opening off the sender
+  thread. Exact-MSVC `node target/qa/recording-atomic-20260905/run-native.mjs cargo
+  test -p syndocal --locked spout_timing_ -- --nocapture --test-threads=1`:1 PASS,
+  1703 filtered, warnings0 (baseline0/delta0). Evidence
+  `target/qa/snapshot-cleanup-20260905/spout-timing-tests.log`.
+- Native `pnpm --dir app tauri build --no-bundle`: PASS1m59s, warnings0
+  (baseline0/delta0). Exact checkout PID27020 stopped and exact MSVC verified;
+  log `spout-timing-native-build.log`. Diagnostic launch PID93684 has one responsive
+  maximized main window, no remote-debugging port. Executable SHA256
+  `01DA3CC63F1A08D49FA26CC8AD59B3663BA684BCE94E542F899FD2C26A4014A4`;
+  evidence `spout-timing-launch.json` in the same QA directory. The process has
+  the timing environment enabled; stop/relaunch normally after measurement.
+- ffprobe confirms both supplied originals are30000/1001fps (foreground3840x1536,
+  background1920x768). Compare candidate-frame progression against that cadence,
+  not merely the transport's60Hz loop target. User asked to play the same4K show
+  with Unity reception for20 seconds. Timing results and stutter fix remain pending.

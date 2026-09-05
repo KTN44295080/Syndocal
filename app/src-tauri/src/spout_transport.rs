@@ -1,5 +1,8 @@
 #![cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
 
+#[path = "spout_output_timing.rs"]
+mod spout_output_timing;
+
 use std::{
     collections::HashMap,
     sync::{
@@ -505,9 +508,16 @@ pub(crate) trait SpoutOutputSender {
     fn sender_name(&self) -> String;
 
     fn send_image(&mut self, pixels: &[u8], width: u32, height: u32) -> Result<(), String>;
+
+    fn timing_counters(&self) -> Option<(i64, f64)> {
+        None
+    }
 }
 
 impl SpoutOutputSender for spout2::dx::Sender {
+    fn timing_counters(&self) -> Option<(i64, f64)> {
+        Some((self.frame(), self.fps()))
+    }
     fn sender_name(&self) -> String {
         self.name().to_string()
     }
@@ -1395,8 +1405,15 @@ where
     let mut worker_error = None;
     let mut failure_lease = None;
     let mut follow_output_state = TimelineFollowOutputState::default();
+    let mut timing = spout_output_timing::SpoutOutputTiming::from_env(output_id, sender_name);
     while !worker_stop.load(Ordering::Acquire) {
         let started = Instant::now();
+        if timing.as_ref().is_some_and(|timing| timing.expired(started)) {
+            timing = None;
+        }
+        if let Some(timing) = timing.as_mut() {
+            timing.tick(started, || sender.timing_counters());
+        }
         // A stopped/paused show timeline must keep both sender registrations
         // alive without entering the renderer. This path borrows the one
         // cached opaque black frame and still captures/revalidates authority
@@ -1422,13 +1439,18 @@ where
             }
             match show_control.presentation_is_keepalive_black() {
                 Ok(true) => {
-                    if let Err(error) = send_show_spout_keepalive_frame(
+                    let send_started = timing.as_ref().map(|_| Instant::now());
+                    let keepalive_result = send_show_spout_keepalive_frame(
                         output_id,
                         sender_name,
                         &engine,
                         &mut sender,
                         show_control,
-                    ) {
+                    );
+                    if let (Some(timing), Some(start)) = (timing.as_mut(), send_started) {
+                        timing.sent(start.elapsed(), keepalive_result.is_ok(), true);
+                    }
+                    if let Err(error) = keepalive_result {
                         if !worker_stop.load(Ordering::Acquire) {
                             failure_lease = Some(
                                 engine.begin_output_ownership_failure_fence(format!(
@@ -1458,7 +1480,11 @@ where
                 }
             }
         }
+        let render_started = timing.as_ref().map(|_| Instant::now());
         let rendered = render(&mut follow_output_state);
+        if let (Some(timing), Some(start)) = (timing.as_mut(), render_started) {
+            timing.rendered(start.elapsed());
+        }
         let handed_off_failure_lease =
             rendered
                 .as_ref()
@@ -1561,6 +1587,10 @@ where
                 };
                 match permit_outcome {
                     Ok(_permit) => {
+                        if let Some(timing) = timing.as_mut() {
+                            timing.frame(frame.width, frame.height, frame.pts_ms);
+                        }
+                        let send_started = timing.as_ref().map(|_| Instant::now());
                         let send_result = send_frame_if_authorized(
                             "Spout",
                             &engine,
@@ -1594,6 +1624,9 @@ where
                                 Ok(())
                             },
                         );
+                        if let (Some(timing), Some(start)) = (timing.as_mut(), send_started) {
+                            timing.sent(start.elapsed(), send_result.is_ok(), false);
+                        }
                         match send_result {
                             Ok(()) => {
                                 if follow_identity.is_some() {
