@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
+import ts from "typescript";
 
 const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
 const appRoot = path.resolve(scriptDirectory, "..");
@@ -281,4 +283,137 @@ for (const ownership of [
     "non-Ready/non-Both/blocked ownership must stop before later show-DMX stages");
 }
 
-console.log("DMX show setup UI contract: PASS (loopback-before-S0 boundary, exact device selection, singleflight, individual diagnostics disclosure)");
+// Exercise the actual controller with deterministic, read-only IPC stand-ins.
+// In particular, no delayed UI intent may be queued behind another action.
+const require = createRequire(import.meta.url);
+const controllerJs = ts.transpileModule(controller, {
+  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+}).outputText;
+function leaseFixture(initial = "unavailable", config = {}) {
+  const events = [], messages = [], actions = [];
+  let generation = 31;
+  let statuses = initial === "unavailable" ? [{status:initial}] : [{
+    status:initial, resources:["lighting","video"], authority:{lease_id:"fixture-lease",generation},
+  }];
+  const invoke = async command => {
+    events.push(command);
+    if (command === "get_output_ownership_status") return config.ownership ?? readyBothOwnership;
+    if (command === "query_output_control_authority_v1") {
+      generation++;
+      if (config.failFresh) throw new Error("fresh authority unavailable");
+      statuses[0].authority = {lease_id:"fixture-lease",generation};
+      return {};
+    }
+    if (command === "select_serial_dmx_machine_binding_v1") throw new Error("fixture stops before device mutation");
+    throw new Error(`unexpected invoke ${command}`);
+  };
+  const select = (query, resources) => {
+    assert.equal(query.statuses.length,1);
+    assert.equal(query.statuses[0].status,"held_active");
+    assert.deepEqual(query.statuses[0].resources,resources);
+    return {...query.statuses[0].authority};
+  };
+  const imports = {
+    "solid-js": require("solid-js"),
+    "./outputControlController": {
+      queryDsf2026ArtNetAcceptanceProbeStatus: async () => null,
+      queryOutputLeaseAuthority: async () => { events.push("lease-query"); return structuredClone({statuses}); },
+      selectOnlyActiveOutputLease: select,
+      enableOutput: async () => {
+        events.push("enable-output");
+        await config.enableGate;
+        if (config.failEnable) throw new Error("enable rejected");
+        generation++;
+        statuses=[{status:"held_active",resources:["lighting","video"],authority:{lease_id:"fixture-lease",generation}}];
+      },
+      executeOutputControl: async (_invoke, action) => {
+        events.push(action.kind);
+        assert.equal(action.lease.generation,generation,"route uses authority freshly selected after managed-lease refresh");
+        assert.ok(events.includes("query_output_control_authority_v1"));
+        actions.push(structuredClone(action));
+      },
+    },
+    "./serialDmxStatusPoller": {createSerialDmxStatusPoller:()=>({refresh:async()=>{},invalidate:()=>{}})},
+    "./safetyBlackoutRuntimeController": {createSafetyBlackoutRuntimeController:()=>({engage:async()=>{throw new Error("unexpected S0 mutation");}})},
+    "./serialDmxStatusValidation": {},
+  };
+  const exports = {};
+  new Function("require","exports",controllerJs)(name=>{
+    assert.ok(name in imports,`unexpected import ${name}`);return imports[name];
+  },exports);
+  const instance=exports.createOutputDiagnosticsController({invoke,setMessage:message=>messages.push(message),
+    refreshSnapshot:async()=>({}),safetyBlackout:()=>true,setSerialPorts:()=>{},
+  });
+  return {instance,events,messages,actions,setStatuses:value=>{statuses=value;}};
+}
+const routeMethods=["enableShowSpoutOutputs","enableStagedShowArtNetLoopbackRoute"];
+for (const method of routeMethods) {
+  for (const state of ["unavailable","held_active","held_orphaned"]) {
+    const f=leaseFixture(state);
+    await f.instance[method]();
+    assert.equal(f.events.filter(event=>event==="enable-output").length,state==="held_active"?0:1,`${method}/${state}`);
+    assert.equal(f.actions.length,1,`${method}/${state}`);
+    assert.equal(f.actions[0].kind,method==="enableShowSpoutOutputs"?"enable_show_spout_outputs":"enable_show_art_net_loopback_route");
+    assert.ok(f.actions[0].lease.generation>31);
+  }
+  for (const config of [{failEnable:true},{ownership:{...readyBothOwnership,state:"Failed"}},{failFresh:true}]) {
+    const f=leaseFixture("unavailable",config);
+    await f.instance[method]();
+    assert.equal(f.actions.length,0,`${method} must stop after any lease preparation failure`);
+    assert.ok(f.messages.some(message=>/rejected|without confirmed|unavailable/.test(message)));
+  }
+  const unready=leaseFixture("held_active",{ownership:{...readyBothOwnership,video_allowed:false}});
+  await unready.instance[method]();
+  assert.equal(unready.actions.length,0);
+  assert.ok(!unready.events.includes("enable-output"),"active but unready authority must not be stolen or rearmed");
+  for (const statuses of [
+    [{status:"held_active",resources:["lighting"],authority:activeBothAuthority}],
+    [{status:"held_active",resources:["lighting","video"],authority:activeBothAuthority},{status:"unavailable"}],
+  ]) {
+    const f=leaseFixture();f.setStatuses(statuses);
+    await f.instance[method]();
+    assert.equal(f.actions.length,0);
+    assert.ok(!f.events.includes("enable-output"));
+    assert.match(f.messages.at(-1),/ambiguous or has the wrong resources/);
+  }
+}
+for (const first of routeMethods) {
+  let release;const enableGate=new Promise(resolve=>{release=resolve;});
+  const f=leaseFixture("unavailable",{enableGate});
+  const pending=f.instance[first]();
+  assert.equal(f.instance[first](),pending,"same-action double click shares its existing promise");
+  const other=routeMethods.find(method=>method!==first);
+  await f.instance[other]();
+  await f.instance.prepareShowDmx({name:"COM-fixture",windows_device_instance_id:"fixture"});
+  assert.ok(f.messages.some(message=>/No additional action was queued/.test(message)));
+  assert.equal(f.actions.length,0);
+  release();await pending;
+  assert.equal(f.actions.length,1,"busy different actions never run later under a changed project authority");
+  assert.equal(f.events.filter(event=>event==="enable-output").length,1);
+  await f.instance[other]();
+  assert.equal(f.actions.length,2,"explicit retry after completion can reuse fresh authority");
+  assert.equal(f.events.filter(event=>event==="enable-output").length,1);
+}
+{
+  const config={failEnable:true};
+  const f=leaseFixture("unavailable",config);
+  await f.instance.enableShowSpoutOutputs();
+  assert.equal(f.actions.length,0);
+  config.failEnable=false;
+  await f.instance.enableShowSpoutOutputs();
+  assert.equal(f.actions.length,1,"failed standalone preparation releases its same-action promise for explicit retry");
+}
+{
+  let release;const enableGate=new Promise(resolve=>{release=resolve;});
+  const f=leaseFixture("unavailable",{enableGate});
+  const pending=f.instance.prepareShowDmx({name:"COM-fixture",windows_device_instance_id:"fixture"});
+  await f.instance.enableShowSpoutOutputs();
+  assert.ok(f.messages.some(message=>/No additional action was queued/.test(message)),
+    "busy rejection is reported even if the already active DMX action publishes its own later progress");
+  release();await pending;
+  assert.equal(f.actions.length,0,"failed DMX setup cannot wake a previously rejected Spout intent");
+  await f.instance.enableShowSpoutOutputs();
+  assert.equal(f.actions.length,1,"the shared lock is released after DMX preparation failure");
+  assert.equal(f.events.filter(event=>event==="enable-output").length,1);
+}
+console.log("DMX show setup UI contract: PASS (canonical standalone acquire/recover/reuse, fresh authority, fail-closed preparation, same-action singleflight, cross-action busy rejection, loopback-before-S0 boundary)");

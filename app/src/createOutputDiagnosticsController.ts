@@ -158,6 +158,25 @@ export function createOutputDiagnosticsController(options: OutputDiagnosticsCont
   const [showDmxPreparationBusy, setShowDmxPreparationBusy] = createSignal(false);
   const [showDmxPreparationStage, setShowDmxPreparationStage] = createSignal<string | null>(null);
   let showDmxPreparationPromise: Promise<void> | null = null;
+  let activeShowOutputPreparation: { key: string; promise: Promise<void> } | null = null;
+  const reportShowOutputPreparationBusy = (): Promise<void> => {
+    options.setMessage("Another show-output preparation is in progress; wait for it to finish, then retry this action. No additional action was queued.");
+    return Promise.resolve();
+  };
+  // Same-action double clicks share one operation. Different actions are
+  // explicitly rejected, never queued across a possible project/owner change.
+  const runShowOutputAction = (key: string, operation: () => Promise<void>): Promise<void> => {
+    if (activeShowOutputPreparation) {
+      return activeShowOutputPreparation.key === key
+        ? activeShowOutputPreparation.promise
+        : reportShowOutputPreparationBusy();
+    }
+    const promise = Promise.resolve().then(operation).finally(() => {
+      activeShowOutputPreparation = null;
+    });
+    activeShowOutputPreparation = { key, promise };
+    return promise;
+  };
   // Reuse the canonical safer-direction S0 command. This controller never
   // invokes the release operation, so a failed preparation cannot clear S0.
   const safetyBlackoutRuntime = createSafetyBlackoutRuntimeController({
@@ -319,14 +338,15 @@ export function createOutputDiagnosticsController(options: OutputDiagnosticsCont
     return options.refreshSnapshot();
   };
 
-  const enableStagedShowArtNetLoopbackRoute = async () => {
+  const enableStagedShowArtNetLoopbackRoute = () => runShowOutputAction("artnet", async () => {
     try {
+      await ensureBothOutputLease();
       await enableStagedShowArtNetLoopbackRouteInternal();
       options.setMessage("Staged same-PC Art-Net loopback show route enabled.");
     } catch (error) {
       options.setMessage(String(error));
     }
-  };
+  });
 
   const confirmSerialDmxMachineBindingInternal = async (port: SerialPortSummary) => {
     const instance = port.windows_device_instance_id?.trim();
@@ -385,6 +405,7 @@ export function createOutputDiagnosticsController(options: OutputDiagnosticsCont
 
   const prepareShowDmx = (port: SerialPortSummary): Promise<void> => {
     if (showDmxPreparationPromise) return showDmxPreparationPromise;
+    if (activeShowOutputPreparation) return reportShowOutputPreparationBusy();
     setShowDmxPreparationBusy(true);
     setShowDmxPreparationStage("Preflight");
     const run = async () => {
@@ -446,7 +467,7 @@ export function createOutputDiagnosticsController(options: OutputDiagnosticsCont
         options.setMessage(`Show DMX setup stopped at ${stage}: ${String(error).replace(/^Error:\s*/i, "")}`);
       }
     };
-    const promise = run().finally(() => {
+    const promise = runShowOutputAction("dmx", run).finally(() => {
       setShowDmxPreparationBusy(false);
       showDmxPreparationPromise = null;
     });
@@ -523,12 +544,10 @@ export function createOutputDiagnosticsController(options: OutputDiagnosticsCont
     }
   };
 
-  const enableShowSpoutOutputs = async () => {
+  const enableShowSpoutOutputs = () => runShowOutputAction("spout", async () => {
     try {
-      const lease = selectOnlyActiveOutputLease(
-        await queryOutputLeaseAuthority(options.invoke),
-        ["lighting", "video"],
-      );
+      await ensureBothOutputLease();
+      const lease = await selectFreshBothOutputLease();
       await executeOutputControl(options.invoke, {
         kind: "enable_show_spout_outputs",
         lease,
@@ -538,7 +557,7 @@ export function createOutputDiagnosticsController(options: OutputDiagnosticsCont
     } catch (error) {
       options.setMessage(String(error));
     }
-  };
+  });
 
   const resetShowSpoutOutputs = async () => {
     try {

@@ -239,7 +239,7 @@ export function VideoOutputCreatePanel(props: VideoOutputCreatePanelProps) {
             class="primary"
             data-video-output-enable-show-spout
             onClick={() => void props.onEnableShowSpoutOutputs()}
-          >Confirm and enable V2 show Spout outputs</button>
+          >Enable foreground/background Spout</button>
           <button
             class="secondary"
             data-video-output-reset-show-spout

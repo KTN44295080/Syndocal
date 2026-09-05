@@ -99,3 +99,47 @@ its native playback evidence is in `PREVIEW_CLOCK_FIXTURE_AIM_2026-09-05.md`.
   SETUP/I/O/DMX Connections/Diagnostics enable Art-Net loopback; play unified
   Timeline. Unity lighting/foreground/background visibility or exact error reply
   remains pending. Do not claim actual Art-Net/Spout receipt or4K output cadence.
+
+## Pending: one-step output activation and reported rejection
+
+- Base `66c59255de6b0f100adf85190c42fd57e5a702f8`, branch
+  `codex/syndocal-v1.2`. User reports Art-Net activation succeeded after global
+  Enable. Unity PID58932 owns UDP6454; visual receipt is not independently proven.
+- Standalone Art-Net/Spout activation now performs canonical output preparation,
+  verifies Ready/Both and selects fresh lease authority before route publication.
+  No separate global Enable prerequisite. Same-action clicks share one operation;
+  different overlapping actions are rejected without a deferred queue. Existing
+  S0 and ambiguous-ownership rejection remain. Canonical Enable restores configured
+  Both outputs; it is not a promise to activate only one transport.
+- Simplified Spout button label and Japanese translation; removed user-facing V2
+  and redundant confirmation wording. No control-size changes.
+- Focused actual-controller `node app/scripts/check-dmx-show-setup.mjs`: PASS;
+  independent review ACCEPT. `pnpm --dir app exec tsc --noEmit`: PASS, warnings0.
+  Owned diff check PASS. Localization checker fails at3658/3691 (99.1%): unrelated
+  existing strings remain untranslated; the changed Spout label has a matching
+  Japanese entry. Full localization acceptance is not claimed.
+- User corrected the Spout error to `OutputControl rejected (invalid_request)`.
+  The authored4K copy passes static topology checks; the currently loaded project
+  is not yet confirmed. Native current-action checks discard the concrete topology
+  error, while request/lease validation can return the same code. Do not infer a
+  GPU/sender failure or claim this rejection fixed by lease preparation alone.
+- Separately investigated recovery-owner error: a durable old-owner publication
+  intent with a missing receipt can be resent under the old owner. Receipt absence
+  does not prove the request was never reserved. No user storage was cleared or
+  owner replaced; a durable recovery fix remains separate unresolved work.
+- User confirmed closure; PID91532 remained, but the maintained build wrapper
+  verified its exact checkout path and stopped it successfully. Native gate
+  `pnpm --dir app tauri build --no-bundle`: PASS1m58s, first-party warnings0
+  (prior native gate0, delta0), exact pinned MSVC/where-first verified. Log:
+  `target/qa/snapshot-cleanup-20260905/one-step-output-native-build.log`.
+- Launched PID60304, one responsive maximized Syndocal main window, SHA256
+  `2890F6FDD9BAAFDA995AF78E5CD916A9E3D368964C84099043C42BC9E56F22A3`.
+  Temporary diagnostic port38479 is enabled for read-only snapshot inspection;
+  no timing hooks installed. Normal restart without the port remains due after
+  diagnosis. Evidence: `one-step-output-diagnostic-launch.json` in the same folder.
+- Live read-only `get_snapshot` after startup shows outputs=[] and only Main
+  composition, not the user's prior project. User asked to open the4K copy;
+  this empty startup state does not establish the cause of the prior rejection.
+  Next: read loaded topology and reproduce the rejected action through the user.
+  Spout rejection remains unresolved; commit covers one-step preparation only.
+  Protected viewport checker remains unchanged and excluded.
