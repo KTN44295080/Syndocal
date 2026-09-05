@@ -18,6 +18,7 @@ import { editDomainModes, setupAreaForSubTab, setupAreas, setupSubTabs, setupSub
 import type { ControlMode, SetupSubTab, WorkspaceTab } from "../uiModes";
 import type { UiLocale } from "../uiLocalization";
 import { TopbarPulseMeter } from "./TopbarPulseMeter";
+import { TopbarBpmControl } from "./TopbarBpmControl";
 import {
   controlMappingTargetData,
   type ControlLearnMode,
@@ -86,6 +87,7 @@ type WorkspaceChromeProps = {
   onLightingMaster: (level: number) => void | Promise<void>;
   onVideoMaster: (level: number) => void | Promise<void>;
   onTapBpm: () => void | Promise<void>;
+  onSetBpm: (bpm: number) => void | Promise<void>;
   onOpenLiveAudioInputSettings: () => void;
   onNewProject: () => void;
   onSaveUserTemplate: () => void;
@@ -701,10 +703,7 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
               </svg>
             </button>
           </div>
-          <span class="bpmReadout" data-tauri-drag-region>
-            <small data-tauri-drag-region>BPM</small>
-            <strong data-tauri-drag-region>{props.bpm.toFixed(0)}</strong>
-          </span>
+          <TopbarBpmControl bpm={props.bpm} onSetBpm={props.onSetBpm} />
           <button
             class="topbarTapButton"
             type="button"

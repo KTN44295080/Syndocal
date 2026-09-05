@@ -1,4 +1,4 @@
-import { createEffect, Show, type ComponentProps, type JSX } from "solid-js";
+import { createEffect, createMemo, Show, type ComponentProps, type JSX } from "solid-js";
 import type { ControlMode } from "../uiModes";
 import { defaultWorkspaceLayout } from "../workspaceLayoutStorage";
 import { MappingEditableStageShell } from "./MappingEditableStageShell";
@@ -43,6 +43,19 @@ type MappingPersistentWorkspaceBandProps = {
   keepChildrenMounted?: boolean;
   children?: JSX.Element;
 };
+
+/** JSX-valued props are getters: checking presence must reuse the mounted value,
+ * otherwise a second, invisible component tree can start its own native work. */
+export function MappingWorkspaceContextContent(props: Pick<MappingPersistentWorkspaceBandProps,
+  "contextContent" | "keepChildrenMounted" | "children">) {
+  const context = createMemo(() => props.contextContent);
+  return <>
+    {context() ?? props.children}
+    <Show when={context() && props.keepChildrenMounted}>
+      <div hidden data-persistent-band-background-content>{props.children}</div>
+    </Show>
+  </>;
+}
 
 export function MappingPersistentWorkspaceBand(props: MappingPersistentWorkspaceBandProps) {
   const contextClass = () =>
@@ -228,12 +241,9 @@ export function MappingPersistentWorkspaceBand(props: MappingPersistentWorkspace
                   </Show>
                 </header>
                 </Show>
-                {props.contextContent ?? props.children}
-                <Show when={props.contextContent && props.keepChildrenMounted}>
-                  <div hidden data-persistent-band-background-content>
-                    {props.children}
-                  </div>
-                </Show>
+                <MappingWorkspaceContextContent contextContent={props.contextContent} keepChildrenMounted={props.keepChildrenMounted}>
+                  {props.children}
+                </MappingWorkspaceContextContent>
               </>
             }
           >

@@ -26161,6 +26161,12 @@ export default function App() {
         onLightingMaster={setLightingMaster}
         onVideoMaster={setVideoMasterOpacity}
         onTapBpm={tapBpm}
+        onSetBpm={async (bpm) => {
+          await invoke("set_bpm", { bpm });
+          setBpmDraft(bpm.toFixed(1));
+          setMessage(`BPM set to ${bpm.toFixed(1)}`);
+          await refreshSnapshot();
+        }}
         onOpenLiveAudioInputSettings={openLiveAudioInputSettings}
         onNewProject={newProject}
         onSaveUserTemplate={() => void saveUserTemplate()}

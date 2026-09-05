@@ -1,0 +1,16 @@
+.topbarBpmControl { position: relative; }
+.topbarBpmControl .topbarBpmValue {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-height: 28px; padding: 0 2px; border: 0; background: transparent;
+  color: inherit; font: inherit; cursor: text;
+}
+.topbarBpmControl .topbarBpmInput {
+  width: 76px; min-height: 28px; box-sizing: border-box;
+  padding: 2px 4px; font: inherit; font-variant-numeric: tabular-nums;
+}
+.topbarBpmError {
+  position: fixed; z-index: 100;
+  width: 260px; padding: 8px; white-space: normal; overflow-wrap: anywhere;
+  background: var(--panel, #161b20); color: var(--text, #e4e7eb);
+  border: 1px solid var(--border, #38424b);
+}
