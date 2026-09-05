@@ -346,9 +346,17 @@ pub fn build_visualizer_scene(
     let fixture_models = fixture_model_nodes_from_geometry_nodes(&fixture_geometries);
     let beams = fixtures
         .iter()
-        .filter(|fixture| fixture.intensity >= config.minimum_beam_intensity)
-        .map(|fixture| {
+        // Fixture nodes preserve summary order; keep the authored mounting
+        // rotation separate from the node's combined display-angle fields.
+        .zip(snapshot.fixtures.iter())
+        .filter(|(fixture, _)| fixture.intensity >= config.minimum_beam_intensity)
+        .map(|(fixture, summary)| {
             let origin_geometry = beam_origin_geometry(fixture.id, &fixture_geometries);
+            let local_direction = origin_geometry
+                .map(|geometry| geometry.local_direction)
+                .unwrap_or(Vec3 { x: 0.0, y: 0.0, z: 1.0 });
+            let (pan_deg, tilt_deg) = fixture_head_angles(summary, &dmx_frames);
+            let head_direction = rotate_vec3(local_direction, tilt_deg, pan_deg, 0.0);
             BeamNode {
                 fixture_id: fixture.id,
                 geometry_name: origin_geometry.map(|geometry| geometry.name.clone()),
@@ -358,16 +366,12 @@ pub fn build_visualizer_scene(
                 origin: origin_geometry
                     .map(|geometry| geometry.position)
                     .unwrap_or(fixture.position),
-                direction: origin_geometry
-                    .map(|geometry| {
-                        normalize(rotate_vec3(
-                            geometry.local_direction,
-                            fixture.pitch_deg,
-                            fixture.yaw_deg,
-                            fixture.roll_deg,
-                        ))
-                    })
-                    .unwrap_or_else(|| beam_direction(fixture.yaw_deg, fixture.pitch_deg)),
+                direction: normalize(rotate_vec3(
+                    head_direction,
+                    summary.rotation.pitch,
+                    summary.rotation.yaw,
+                    summary.rotation.roll,
+                )),
                 length: config.beam_length.max(0.0),
                 radius: beam_radius(origin_geometry, config),
                 color: fixture.color,
@@ -2538,13 +2542,10 @@ fn rotate_vec3(vector: Vec3, pitch_deg: f32, yaw_deg: f32, roll_deg: f32) -> Vec
     }
 }
 
-fn fixture_node_from_summary(
+fn fixture_head_angles(
     fixture: &PatchedFixtureSummary,
     dmx_frames: &HashMap<u16, Vec<u8>>,
-) -> FixtureNode {
-    let dimmer = read_dmx_attribute(fixture, &["Dimmer", "Intensity"], dmx_frames)
-        .or_else(|| read_attribute(fixture, &["Dimmer", "Intensity"]))
-        .unwrap_or(0);
+) -> (f32, f32) {
     let pan_deg = read_dmx_attribute(fixture, &["Pan"], dmx_frames)
         .or_else(|| read_attribute(fixture, &["Pan"]))
         .map(|value| ((value as f32 - 32_768.0) / FULL_SCALE) * 540.0)
@@ -2553,6 +2554,17 @@ fn fixture_node_from_summary(
         .or_else(|| read_attribute(fixture, &["Tilt"]))
         .map(|value| ((value as f32 - 32_768.0) / FULL_SCALE) * 270.0)
         .unwrap_or(0.0);
+    (pan_deg, tilt_deg)
+}
+
+fn fixture_node_from_summary(
+    fixture: &PatchedFixtureSummary,
+    dmx_frames: &HashMap<u16, Vec<u8>>,
+) -> FixtureNode {
+    let dimmer = read_dmx_attribute(fixture, &["Dimmer", "Intensity"], dmx_frames)
+        .or_else(|| read_attribute(fixture, &["Dimmer", "Intensity"]))
+        .unwrap_or(0);
+    let (pan_deg, tilt_deg) = fixture_head_angles(fixture, dmx_frames);
     let red = read_dmx_attribute(fixture, &["ColorRed", "Red", "ColorAdd_R"], dmx_frames)
         .or_else(|| read_attribute(fixture, &["ColorRed", "Red", "ColorAdd_R"]))
         .map(normalized_u16)
@@ -2652,17 +2664,6 @@ fn read_attribute(fixture: &PatchedFixtureSummary, names: &[&str]) -> Option<u16
 
 fn normalized_u16(value: u16) -> f32 {
     (value as f32 / FULL_SCALE).clamp(0.0, 1.0)
-}
-
-fn beam_direction(yaw_deg: f32, pitch_deg: f32) -> Vec3 {
-    let yaw = yaw_deg.to_radians();
-    let pitch = pitch_deg.to_radians();
-    let horizontal = pitch.cos();
-    normalize(Vec3 {
-        x: yaw.sin() * horizontal,
-        y: -pitch.sin(),
-        z: yaw.cos() * horizontal,
-    })
 }
 
 fn normalize(vector: Vec3) -> Vec3 {
@@ -3062,6 +3063,66 @@ mod tests {
         assert_eq!(scene.beams[0].geometry_name, Some("Lens".to_string()));
         assert_eq!(scene.beams[0].origin, lens.position);
         assert_eq!(scene.bounds.max.y, 3.5);
+    }
+
+    #[test]
+    fn beam_head_rotation_is_local_before_mounting_rotation() {
+        for with_geometry in [false, true] {
+            let mut fixture = fixture(
+                1,
+                "Mounted moving head",
+                Vec3 { x: 10.0, y: 20.0, z: 30.0 },
+                vec![("Dimmer", 65_535), ("Pan", 43_691), ("Tilt", 32_768)],
+            );
+            fixture.rotation.pitch = 90.0;
+            for control in &mut fixture.controls {
+                if control.attribute == "Pan" {
+                    control.offsets = vec![2, 3];
+                    control.resolution = AttributeResolution::SixteenBit;
+                } else if control.attribute == "Tilt" {
+                    control.offsets = vec![4, 5];
+                    control.resolution = AttributeResolution::SixteenBit;
+                }
+            }
+            if with_geometry {
+                fixture.geometries = vec![geometry("Lens", "Beam", None, 2.0, 3.0, 4.0)];
+            }
+            let scene = build_visualizer_scene(
+                &snapshot_with_dmx_preview(vec![fixture]),
+                VisualizerConfig::default(),
+            );
+            let beam = &scene.beams[0];
+            // A local quarter-turn points +X. Mounting pitch about X cannot
+            // turn that direction into -Y, as adding the Euler angles did.
+            assert!((beam.direction.x - 1.0).abs() < 0.001);
+            assert!(beam.direction.y.abs() < 0.001);
+            assert!(beam.direction.z.abs() < 0.001);
+            assert!((scene.fixtures[0].yaw_deg - 90.0).abs() < 0.01);
+            assert_eq!(scene.fixtures[0].pitch_deg, 90.0);
+            let expected_origin = if with_geometry {
+                Vec3 { x: 12.0, y: 16.0, z: 33.0 }
+            } else {
+                Vec3 { x: 10.0, y: 20.0, z: 30.0 }
+            };
+            assert!((beam.origin.x - expected_origin.x).abs() < 0.001);
+            assert!((beam.origin.y - expected_origin.y).abs() < 0.001);
+            assert!((beam.origin.z - expected_origin.z).abs() < 0.001);
+        }
+    }
+
+    #[test]
+    fn beam_without_profile_geometry_respects_mounting_roll() {
+        let mut fixture = fixture(1, "Rolled mount", Vec3::default(), vec![("Dimmer", 65_535)]);
+        fixture.rotation.pitch = 90.0;
+        fixture.rotation.roll = 90.0;
+        let scene = build_visualizer_scene(
+            &snapshot_with_dmx_preview(vec![fixture]),
+            VisualizerConfig::default(),
+        );
+        // +Z pitched to -Y and rolled around Z becomes +X.
+        assert!((scene.beams[0].direction.x - 1.0).abs() < 0.001);
+        assert!(scene.beams[0].direction.y.abs() < 0.001);
+        assert!(scene.beams[0].direction.z.abs() < 0.001);
     }
 
     #[test]

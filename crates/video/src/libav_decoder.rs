@@ -20,12 +20,19 @@ mod hardware;
 mod seek_projection_tests;
 
 #[cfg(all(feature = "libav", test))]
+#[path = "libav_catch_up_tests.rs"]
+mod catch_up_tests;
+
+#[cfg(all(feature = "libav", test))]
 use std::cell::Cell;
 #[cfg(feature = "libav")]
 use std::cell::RefCell;
 
 #[cfg(feature = "libav")]
-const LIBAV_SEQUENTIAL_REQUEST_GAP_MS: u64 = 250;
+// Two serialized output decodes can briefly exceed 250 ms during cold GPU
+// startup. Reopening both sessions at that cadence sustains the slow path.
+// Bound forward catch-up to one second; larger jumps and reversals still seek.
+const LIBAV_SEQUENTIAL_REQUEST_GAP_MS: u64 = 1_000;
 #[cfg(any(feature = "libav", test))]
 const LIBAV_WORKING_SET_CAPACITY: usize = 8;
 
@@ -1364,7 +1371,7 @@ mod tests {
             LibavSessionDecision::ReuseFrame
         );
         assert_eq!(
-            session_decision(Some(100), Some(100), true, false, 351),
+            session_decision(Some(100), Some(100), true, false, 1_101),
             LibavSessionDecision::Reopen
         );
         assert_eq!(

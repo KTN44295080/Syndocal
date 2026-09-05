@@ -34,6 +34,7 @@ export interface StagePreviewFixture {
   segmentOrder: MappingFixtureSegmentOrder;
   yaw: number;
   beamPoints: string;
+  beamDescription?: string;
   beams?: VisualizerFixtureBeam[];
   intensity: number;
   color: string;
@@ -294,7 +295,7 @@ export function StagePreview2D(props: StagePreview2DProps) {
                   points={beam.points}
                   fill={beam.color}
                   opacity={Math.max(props.beamMinOpacity, beam.intensity * props.beamIntensityScale)}
-                />
+                ><title>{fixture.beamDescription}</title></polygon>
               )}
             </For>
           )}

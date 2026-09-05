@@ -76854,12 +76854,22 @@ fn render_live_video_monitor_frame(
     let quality = live_video_monitor_quality(quality);
     let pixel_format = pixel_format.unwrap_or_default();
     let mut program_render_epoch = None;
+    let mut program_sample_fence = None;
+    let sample_deadline_busy = |render_us, encode_us| {
+        live_video_monitor_packet(
+            LIVE_VIDEO_MONITOR_STATUS_BUSY, monitor_kind, sequence, 0,
+            render_us, encode_us, width, height, &[], pixel_format,
+        ).map(tauri::ipc::Response::new)
+    };
     let render_started = Instant::now();
     let mut rendered_preview_summary: Option<VjPreviewTransportSummary> = None;
     let frame = match monitor_kind {
         LiveVideoMonitorKind::Program => {
-            let snapshot = capture_video_monitor_snapshot(&state.engine)?;
+            let Some(snapshot) = capture_video_monitor_snapshot(&state.engine)? else {
+                return sample_deadline_busy(0, 0);
+            };
             program_render_epoch = Some(snapshot.project_render_epoch);
+            program_sample_fence = Some(snapshot.fence.clone());
             let output_id =
                 output_id.ok_or_else(|| "Program monitor requires an outputId".to_string())?;
             let mut renderer = match state.video_preview.try_lock() {
@@ -77015,6 +77025,17 @@ fn render_live_video_monitor_frame(
         .is_some_and(|epoch| state.engine.output_ownership_status().epoch != epoch)
     {
         return Err("Output changed while rendering; waiting for a current frame.".to_string());
+    }
+    if let Some(fence) = program_sample_fence.as_ref() {
+        match state.engine.validate_video_render_sample(fence)? {
+            engine::VideoRenderSampleValidation::Current => {}
+            engine::VideoRenderSampleValidation::DeadlineExpired => {
+                return sample_deadline_busy(render_us, encode_us);
+            }
+            engine::VideoRenderSampleValidation::SemanticStale => {
+                return Err("Output transport changed while rendering; waiting for a current frame.".to_string());
+            }
+        }
     }
     if let Some(rendered) = rendered_preview_summary.as_ref() {
         // Encoding is intentionally outside the transport lock. Recheck after it too, so a

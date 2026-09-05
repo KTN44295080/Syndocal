@@ -6,6 +6,7 @@ import {
   fixtureLiveSegmentSkeleton,
 } from "./fixtureLiveColor";
 import { colorCandidates, readFixtureAttribute } from "./fixtureControlRuntime";
+import { mappingFixtureBeamShape, mappingBeamPoints } from "./mappingFixtureBeam";
 import {
   fixtureTypeKey,
   fixtureVisualKind,
@@ -32,7 +33,6 @@ import {
   rotateStageOffsetYaw,
 } from "./numericHelpers";
 import {
-  beamPoints,
   mappingStageSvgFrame,
   mappingStageWorldToSvgPoint,
   type StageWorldBounds,
@@ -345,6 +345,7 @@ export const createMappingRenderModel = (options: MappingRenderModelOptions) => 
       const point = mappingStageWorldToSvgPoint(position.x, position.z, bounds);
       const dimmer = readFixtureAttribute(fixture, currentValues, ["Dimmer", "Intensity"]) ?? 0;
       const pan = readFixtureAttribute(fixture, currentValues, ["Pan"]);
+      const tilt = readFixtureAttribute(fixture, currentValues, ["Tilt"]);
       const red = readFixtureAttribute(fixture, currentValues, colorCandidates.red);
       const green = readFixtureAttribute(fixture, currentValues, colorCandidates.green);
       const blue = readFixtureAttribute(fixture, currentValues, colorCandidates.blue);
@@ -353,8 +354,10 @@ export const createMappingRenderModel = (options: MappingRenderModelOptions) => 
           ? `rgb(${red ? red >> 8 : 0}, ${green ? green >> 8 : 0}, ${blue ? blue >> 8 : 0})`
           : "rgb(88, 167, 246)";
       const intensity = clamp01(dimmer / 65_535);
-      const panDegrees = pan === undefined ? 0 : ((pan - 32_768) / 65_535) * 540;
       const yaw = mappingFixtureYaw(fixture);
+      const beamShape = mappingFixtureBeamShape(fixture, yaw, pan, tilt);
+      const segmentBeamShapes = fixtureSegmentSkeleton(fixture).map(segment =>
+        mappingFixtureBeamShape(fixture, yaw, pan, tilt, segment.key.startsWith("geometry-") ? segment.key.slice(9) : undefined));
       const visualKind = fixtureVisualKind(fixture);
       const segmentGrid = mappingFixtureSegmentGrid(
         fixture,
@@ -406,8 +409,10 @@ export const createMappingRenderModel = (options: MappingRenderModelOptions) => 
         segmentOrder,
         physicalCells,
         yaw,
-        beamYaw: yaw + panDegrees,
-        beamPoints: beamPoints(point.x, point.z, yaw + panDegrees, intensity),
+        beamShape,
+        segmentBeamShapes,
+        beamDescription: beamShape?.description ?? "ビーム定義が無効です",
+        beamPoints: mappingBeamPoints(point.x, point.z, beamShape),
         intensity,
         color,
         inGroupFilter: groupFilter ? fixture.group_ids.includes(groupFilter) : true,
@@ -463,11 +468,10 @@ export const createMappingRenderModel = (options: MappingRenderModelOptions) => 
               const offset = rotateStageOffsetYaw({ x: localX, z: localZ }, base.yaw);
               return {
                 cellIndex: index + 1,
-                points: beamPoints(
+                points: mappingBeamPoints(
                   base.x + offset.x,
                   base.z + offset.z,
-                  base.beamYaw,
-                  segment.intensity,
+                  base.segmentBeamShapes[index] === undefined ? base.beamShape : base.segmentBeamShapes[index],
                 ),
                 intensity: segment.intensity,
                 color: segment.color,
@@ -489,7 +493,7 @@ export const createMappingRenderModel = (options: MappingRenderModelOptions) => 
             const z = base.z + offset.z;
             return {
               cellIndex: index + 1,
-              points: beamPoints(x, z, base.beamYaw, segment.intensity),
+              points: mappingBeamPoints(x, z, base.segmentBeamShapes[index] === undefined ? base.beamShape : base.segmentBeamShapes[index]),
               intensity: segment.intensity,
               color: segment.color,
             };

@@ -48,10 +48,11 @@ assert.deepEqual(timelineOutputMonitorSize(2048, 512), { width: 320, height: 80 
 assert.equal(timelineOutputMonitorSize(0, 100), null);
 
 let now = 0, timerId = 0;
+let timerLateness = () => 0;
 const timers = new Map();
 Object.defineProperty(globalThis, "performance", { value: { now: () => now }, configurable: true });
 globalThis.window = {
-  setTimeout(fn, delay) { const id = ++timerId; timers.set(id, { fn, at: now + delay }); return id; },
+  setTimeout(fn, delay) { const id = ++timerId; timers.set(id, { fn, at: now + delay + timerLateness() }); return id; },
   clearTimeout(id) { timers.delete(id); },
 };
 globalThis.document = Object.assign(new EventTarget(), { hidden: false });
@@ -240,6 +241,12 @@ await advance(500);
 assert.equal(invalid.requests.length, 0);
 assert.equal(invalid.controller.states().get(3).status, "error");
 invalid.dispose();
+const slotOf = (request, origin) => Math.floor((request.at - origin + 1e-7) * 60 / 1_000);
+const assertUniqueSlots = (requests, origin) => {
+  const slots = requests.map(request => slotOf(request, origin));
+  assert.equal(new Set(slots).size, slots.length, "one request at most in each fixed 60 Hz slot");
+  for (let index = 1; index < slots.length; index++) assert(slots[index] > slots[index - 1]);
+};
 for (const outputCount of [1, 2, 4]) {
   const cadence = fixture(Array.from({ length: outputCount }, (_, index) => output(index + 10)));
   const startedAt = now;
@@ -252,19 +259,83 @@ for (const outputCount of [1, 2, 4]) {
       await flush();
     }
   }
-  assert(cadence.requests.length <= 60, "all outputs share a bounded 60 starts/s budget");
+  const measured = cadence.requests.filter(request => request.at < startedAt + 1_000);
+  assert(measured.length <= 60, "all outputs share 60 slots in a half-open one-second window");
+  assertUniqueSlots(cadence.requests, startedAt);
   for (let id = 10; id < 10 + outputCount; id++) {
-    const starts = cadence.requests.filter((request) => request.args.outputId === id);
+    const starts = measured.filter((request) => request.args.outputId === id);
     const minimum = outputCount <= 2 ? 28 : 14;
     assert(starts.length >= minimum && starts.length <= 30,
       `${outputCount} outputs: each gets its fair video cadence, got ${starts.length}`);
     for (let i = 1; i < starts.length; i++) {
-      assert(starts[i].at - starts[i - 1].at >= 1_000 / 30, "one output never exceeds 30 fps");
+      assert(slotOf(starts[i], startedAt) - slotOf(starts[i - 1], startedAt) >= 2,
+        "each output skips at least one shared slot; timer lateness does not move the phase");
     }
   }
   assert.equal(cadence.maxConcurrent(), 1, "higher cadence never queues concurrent readbacks");
   assert.equal(now - startedAt, 1_000);
   cadence.dispose();
+}
+
+// Persistent timer lateness must not accumulate into a slower clock. Mixed
+// lateness also crosses slot boundaries: obsolete slots are lost, never queued.
+for (const latePattern of [[3], [0, 4, 1, 8, 2, 5], [0, 41, 2, 75, 1]]) {
+  let timerIndex = 0;
+  timerLateness = () => latePattern[timerIndex++ % latePattern.length];
+  const origin = now;
+  const cadence = fixture();
+  let resolved = 0;
+  for (let elapsed = 0; elapsed < 5_000; elapsed++) {
+    await advance(1);
+    while (resolved < cadence.requests.length) {
+      const request = cadence.requests[resolved++];
+      request.resolve(packet(request)); await flush();
+    }
+  }
+  assertUniqueSlots(cadence.requests, origin);
+  for (const id of [1, 2]) {
+    const starts = cadence.requests.filter(request => request.args.outputId === id && request.at < origin + 5_000);
+    if (Math.max(...latePattern) < 10) {
+      assert(starts.length >= 149 && starts.length <= 150,
+        `timer lag ${latePattern} must preserve 30 Hz phase over five seconds, got ${starts.length}`);
+    }
+    for (let index = 1; index < starts.length; index++) {
+      assert(slotOf(starts[index], origin) - slotOf(starts[index - 1], origin) >= 2);
+    }
+  }
+  assert.equal(cadence.maxConcurrent(), 1);
+  cadence.dispose();
+  timerLateness = () => 0;
+}
+
+{
+  const origin = now, cadence = fixture();
+  await advance(0);
+  const first = cadence.requests[0];
+  await advance(10_000);
+  assert.equal(cadence.requests.length, 1, "hung readback does not accumulate requests");
+  first.resolve(packet(first)); await flush(); await advance(0);
+  assert.equal(cadence.requests.length, 2, "completion consumes only the current slot, not missed slots");
+  cadence.requests[1].resolve(packet(cadence.requests[1])); await flush();
+  await advance(0);
+  assert.equal(cadence.requests.length, 2, "no immediate catch-up after a late completion");
+  cadence.controller.retry();
+  cadence.setProjectEpoch(2);
+  cadence.setActive(false); cadence.setActive(true);
+  await advance(0);
+  assert.equal(cadence.requests.length, 2, "retry/project/pause cannot mint another start in a consumed slot");
+  document.hidden = true; document.dispatchEvent(new Event("visibilitychange"));
+  await advance(20_000);
+  assert.equal(cadence.requests.length, 2);
+  document.hidden = false; document.dispatchEvent(new Event("visibilitychange"));
+  await advance(0);
+  assert.equal(cadence.requests.length, 3, "visibility resume skips directly to the current slot");
+  cadence.requests[2].resolve(packet(cadence.requests[2])); await flush(); await advance(0);
+  assert.equal(cadence.requests.length, 3);
+  assertUniqueSlots(cadence.requests, origin);
+  assert.equal(cadence.maxConcurrent(), 1);
+  cadence.dispose();
+  assert.equal(timers.size, 0);
 }
 
 // The existing VJ bus still consumes JPEG. A valid RGBA packet must not become
@@ -306,4 +377,4 @@ disposeVj();
 assert.equal(revoked, 1);
 assert.equal(timers.size, 0);
 
-console.log("Timeline output monitor checks passed: aspect-fit, all-output fairness, aggregate throttling, single-flight, snapshot stability, bounded BUSY retention, hung-read expiry, project/config/removal fences, visibility, error recovery, invalid dimensions, disposal and VJ JPEG-only compatibility.");
+console.log("Timeline output monitor checks passed: aspect-fit, fair fixed-slot cadence under late/jittered timers, missed-slot dropping, single-flight, snapshot stability, bounded BUSY retention, hung-read expiry/recovery, project/config/removal fences, visibility, error recovery, invalid dimensions, disposal and VJ JPEG-only compatibility.");

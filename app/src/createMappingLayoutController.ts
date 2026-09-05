@@ -3,6 +3,7 @@ import type { MappingAxis } from "./mappingRuntime";
 import type { EngineSnapshot, PatchFixtureRequest, PatchedFixtureSummary, StageObjectSummary } from "./types";
 import { type FixtureTransformExpectation } from "./fixtureTransformConfirmation";
 import { applyMappingFixtureTransformBatch } from "./mappingFixtureTransformBatch";
+import { mappingInstallationRotationToward } from "./mappingFixtureOrientation";
 
 type FixtureLayoutMode = "line" | "grid" | "circle";
 type FixtureTransformUpdate = FixtureTransformExpectation;
@@ -37,6 +38,7 @@ export const mappingFixtureSelectionCenter = (fixtures: PatchedFixtureSummary[])
 });
 
 export function createMappingLayoutController(options: MappingLayoutControllerOptions) {
+  let orientationBusy = false;
   const applyFixtureTransforms = async (
     transforms: Array<{ fixture: PatchedFixtureSummary; update: FixtureTransformUpdate }>,
   ) => applyMappingFixtureTransformBatch({
@@ -45,6 +47,36 @@ export function createMappingLayoutController(options: MappingLayoutControllerOp
     refreshSnapshot: options.refreshSnapshot,
     setMessage: options.setMessage,
   });
+
+  const applySelectedInstallationRotations = async (
+    build: (fixtures: PatchedFixtureSummary[]) => Array<{ fixture: PatchedFixtureSummary; update: FixtureTransformUpdate }>,
+    message: string,
+  ) => {
+    if (orientationBusy) return;
+    const fixtures = options.selectedMappingFixtures();
+    if (fixtures.length === 0) { options.setMessage("向きを変更する灯体を選択してください。"); return; }
+    orientationBusy = true;
+    try {
+      // Resolve and validate every rotation before submitting the first mutation.
+      const transforms = build(fixtures);
+      if (await applyFixtureTransforms(transforms)) options.setMessage(message);
+    } catch (error) { options.setMessage(String(error)); }
+    finally { orientationBusy = false; }
+  };
+
+  const matchSelectedMappingFixtureOrientations = async () => applySelectedInstallationRotations(fixtures => {
+    const active = options.selectedFixture();
+    const anchor = active && fixtures.some(fixture => fixture.id === active.id) ? active : fixtures[0];
+    if (![anchor.rotation.yaw, anchor.rotation.pitch, anchor.rotation.roll].every(Number.isFinite)) {
+      throw new Error("基準灯体の設置姿勢が無効です。");
+    }
+    return fixtures.map(fixture => ({ fixture, update: { rotation: { ...anchor.rotation } } }));
+  }, "選択灯体の設置姿勢を基準灯体に揃えました。");
+
+  const aimSelectedMappingFixtureInstallationAxes = async (target: PatchFixtureRequest["position"]) =>
+    applySelectedInstallationRotations(fixtures => fixtures.map(fixture => ({ fixture,
+      update: { rotation: mappingInstallationRotationToward(fixture.position, target) },
+    })), "選択灯体の設置基準軸（+Z）を指定点へ向けました。DMX値は変更していません。");
 
   const layoutFixtures = async (
     fixtures: PatchedFixtureSummary[],
@@ -342,5 +374,7 @@ export function createMappingLayoutController(options: MappingLayoutControllerOp
     nudgeSelectedMappingFixtures,
     mirrorSelectedMappingFixtures,
     rotateSelectedMappingFixtures,
+    matchSelectedMappingFixtureOrientations,
+    aimSelectedMappingFixtureInstallationAxes,
   };
 }

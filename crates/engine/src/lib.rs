@@ -19,6 +19,8 @@ mod snapshot_read;
 mod telemetry_percentiles;
 mod timeline_audio_live_fence;
 mod timeline_follow_hold;
+mod video_render_sample;
+pub use video_render_sample::{VideoRenderSample, VideoRenderSampleFence, VideoRenderSampleValidation, VideoSamplingMode};
 
 pub use control_plane::{control_plane_engine_command_descriptors, engine_command_variant_count};
 use move_path::{move_rotation, transform_move_delta, CompiledMovePath};
@@ -6484,6 +6486,7 @@ impl Drop for EngineLifetime {
 }
 
 struct EngineSharedTelemetry {
+    video_render_sampling: RwLock<video_render_sample::VideoSamplingPublication>,
     queue_push_failure_count: AtomicU64,
     requested_live_audio_clear_generation: AtomicU64,
     live_audio_take_gate: Mutex<()>,
@@ -6506,6 +6509,7 @@ struct EngineSharedTelemetry {
 impl EngineSharedTelemetry {
     fn new() -> Self {
         Self {
+            video_render_sampling: RwLock::new(video_render_sample::VideoSamplingPublication::default()),
             queue_push_failure_count: AtomicU64::new(0),
             requested_live_audio_clear_generation: AtomicU64::new(0),
             live_audio_take_gate: Mutex::new(()),
@@ -20391,6 +20395,18 @@ struct DjLinkTimelineObservation {
     observed_at: Instant,
 }
 
+/// Sub-millisecond internal Timeline time, owned by one admitted transport
+/// image. Commands do not mutate this carry: a changed authority or position
+/// retires it, while a rolled-back command leaves the previous image usable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TimelineTickRemainder {
+    timeline_id: TimelineId,
+    transport_epoch: u64,
+    transport_generation: u64,
+    position_ms: u64,
+    nanoseconds: u32,
+}
+
 struct EngineRuntime {
     shared_telemetry: Arc<EngineSharedTelemetry>,
     pending_command_acks: Vec<PendingCommandAck>,
@@ -20539,6 +20555,7 @@ struct EngineRuntime {
     timeline_paused_at: Option<Instant>,
     direct_child_count_in: Option<RuntimeDirectChildCountIn>,
     timeline_position_ms: u64,
+    timeline_tick_remainder: Option<TimelineTickRemainder>,
     timeline_playhead_boundary_armed: bool,
     timeline_evaluated_boundary_position_ms: Option<u64>,
     timeline_jump_landed_event_id: Option<TimelineEventId>,
@@ -20982,6 +20999,7 @@ impl EngineRuntime {
             timeline_paused_at: None,
             direct_child_count_in: None,
             timeline_position_ms: 0,
+            timeline_tick_remainder: None,
             timeline_playhead_boundary_armed: false,
             timeline_evaluated_boundary_position_ms: None,
             timeline_jump_landed_event_id: None,
@@ -30545,6 +30563,7 @@ impl EngineRuntime {
                             .timeline_audio_live_fence
                             .enter_before_publication();
                     }
+                    self.publish_video_sampling(&next_snapshot, false);
                     *guard = next_snapshot;
                     self.commit_staged_media_asset_availability_after_snapshot_publication();
                     self.commit_timeline_audio_commit_publication(prepared_audio_commit.take());
@@ -30575,6 +30594,7 @@ impl EngineRuntime {
                                         .timeline_audio_live_fence
                                         .enter_before_publication();
                                 }
+                                self.publish_video_sampling(&next_snapshot, false);
                                 *guard = next_snapshot;
                                 self.commit_staged_media_asset_availability_after_snapshot_publication();
                                 self.commit_timeline_audio_commit_publication(
@@ -30785,6 +30805,18 @@ impl EngineRuntime {
             if receipt.is_some_and(DjLinkCommandReceipt::is_cancelled) {
                 return false;
             }
+            let mut video_sampling_guard = match self.shared_telemetry.video_render_sampling.try_write() {
+                Ok(guard) => guard,
+                Err(std::sync::TryLockError::Poisoned(_)) => return false,
+                Err(std::sync::TryLockError::WouldBlock) => {
+                    drop(projection_guard);
+                    drop(snapshot_guard);
+                    if Instant::now() >= deadline { return false; }
+                    std::thread::yield_now();
+                    continue;
+                }
+            };
+            let prepared_video_sampling = video_sampling_guard.prepare_command_publication();
             let commit_state = if let Some(receipt) = receipt {
                 let Some(response_snapshot) = prepared_receipt_snapshot.take() else {
                     return false;
@@ -30815,6 +30847,7 @@ impl EngineRuntime {
                     .timeline_audio_live_fence
                     .enter_before_publication();
             }
+            let old_video_sampling = std::mem::replace(&mut *video_sampling_guard, prepared_video_sampling);
             let old_snapshot = std::mem::replace(&mut *snapshot_guard, prepared_snapshot);
             let old_audio_commit_signature =
                 prepared_audio_commit.take().map(|(generation, signature)| {
@@ -30842,6 +30875,7 @@ impl EngineRuntime {
             if let Some((receipt, state)) = commit_state {
                 receipt.finish_commit(state, Ok(()));
             }
+            drop(video_sampling_guard);
             drop(projection_guard);
             drop(snapshot_guard);
             if !timeline_audio_live {
@@ -30849,6 +30883,7 @@ impl EngineRuntime {
                     .timeline_audio_live_fence
                     .exit_after_publication();
             }
+            drop(old_video_sampling);
             drop(old_snapshot);
             drop(old_audio_commit_signature);
             drop(old_audio_projection_signature);
@@ -32938,6 +32973,7 @@ impl EngineRuntime {
                     .timeline_audio_live_fence
                     .enter_before_publication();
             }
+            self.publish_video_sampling(&next_snapshot, true);
             *guard = next_snapshot;
             self.commit_timeline_audio_commit_publication(prepared_audio_commit);
             self.commit_timeline_audio_projection_publication(prepared_audio_projection);
@@ -42813,6 +42849,27 @@ impl EngineRuntime {
         )
     }
 
+    /// Preview the same delta for authority reservation and actual advancement.
+    /// Reading the carry never consumes it, so failed preflights are atomic.
+    fn timeline_tick_delta(&self) -> (u64, u32) {
+        let carried_ns = self
+            .timeline_tick_remainder
+            .filter(|carry| {
+                carry.timeline_id == self.timeline_id
+                    && carry.transport_epoch == self.timeline_transport_epoch
+                    && carry.transport_generation == self.timeline_transport_generation
+                    && carry.position_ms == self.timeline_position_ms
+            })
+            .map_or(0, |carry| carry.nanoseconds);
+        let total_ns = self.last_tick_interval.as_nanos() + u128::from(carried_ns);
+        let whole_ms = total_ns / 1_000_000;
+        if whole_ms > u128::from(u64::MAX) {
+            (u64::MAX, 0)
+        } else {
+            (whole_ms as u64, (total_ns % 1_000_000) as u32)
+        }
+    }
+
     fn timeline_tick_discontinuity_plan(&self) -> TimelineTickDiscontinuityPlan {
         if !self.timeline_playing
             || self.timeline_external_sync_source.is_some()
@@ -42825,11 +42882,7 @@ impl EngineRuntime {
         if duration == 0 || position >= duration {
             return TimelineTickDiscontinuityPlan::default();
         }
-        let delta_ms = self
-            .last_tick_interval
-            .as_millis()
-            .try_into()
-            .unwrap_or(u64::MAX);
+        let (delta_ms, _) = self.timeline_tick_delta();
         let include_position = self.timeline_playhead_boundary_armed;
         let loop_bounds = match self.timeline_loop_runtime.status {
             TimelineLoopRuntimeStatus::Disabled => None,
@@ -45860,10 +45913,12 @@ impl EngineRuntime {
         }
         self.advance_direct_child_count_in(now);
         if !self.timeline_playing || self.timeline_external_sync_source.is_some() {
+            self.timeline_tick_remainder = None;
             self.advance_child_transports(now);
             return;
         }
         if let Some(count_in_until) = self.timeline_count_in_until {
+            self.timeline_tick_remainder = None;
             if now < count_in_until {
                 return;
             }
@@ -45900,11 +45955,8 @@ impl EngineRuntime {
             return;
         }
 
-        let delta_ms = self
-            .last_tick_interval
-            .as_millis()
-            .try_into()
-            .unwrap_or(u64::MAX);
+        let tick_timeline_id = self.timeline_id;
+        let (delta_ms, remainder_ns) = self.timeline_tick_delta();
         let mut remaining_ms = delta_ms;
         let mut segment_start = previous_position;
         let mut segment_include_start = include_previous;
@@ -46060,7 +46112,7 @@ impl EngineRuntime {
                 include_previous,
                 true,
             );
-            self.advance_timeline_segment(
+            jumped = self.advance_timeline_segment(
                 previous_position,
                 previous_position,
                 include_previous,
@@ -46080,6 +46132,21 @@ impl EngineRuntime {
                 self.last_error = Some(error);
             }
         }
+        // Ordinary loop wraps consume the complete tick and carry fractional
+        // time into the new authority. Jumps/Follow/terminal transitions do not
+        // transfer an old source's unfinished tick to a different transport.
+        self.timeline_tick_remainder = (!jumped
+            && self.timeline_playing
+            && self.timeline_id == tick_timeline_id
+            && self.timeline_external_sync_source.is_none()
+            && self.timeline_count_in_until.is_none())
+        .then_some(TimelineTickRemainder {
+            timeline_id: self.timeline_id,
+            transport_epoch: self.timeline_transport_epoch,
+            transport_generation: self.timeline_transport_generation,
+            position_ms: self.timeline_position_ms,
+            nanoseconds: remainder_ns,
+        });
     }
 
     fn sync_timeline_position(
@@ -67880,6 +67947,9 @@ mod tests {
 
     #[path = "../timeline_video_empty_projection_tests.rs"]
     mod timeline_video_empty_projection_tests;
+
+    #[path = "../timeline_fractional_tick_tests.rs"]
+    mod timeline_fractional_tick_tests;
 
     const RELEASE_GATE_EFFECT_COUNT: usize = SUPPORTED_EFFECT_ENVELOPE_ENABLED_EFFECTS;
     const RELEASE_GATE_FIXTURE_COUNT: usize = SUPPORTED_EFFECT_ENVELOPE_FIXTURES;

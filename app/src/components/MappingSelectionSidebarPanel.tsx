@@ -81,6 +81,8 @@ export interface MappingSelectionPanelProps {
   onDistributeSelection: (axis: MappingAxis) => MaybePromise;
   onMirrorSelection: (axis: MappingAxis) => MaybePromise;
   onRotateSelection: (degrees: number) => MaybePromise;
+  onMatchSelectionOrientations: () => MaybePromise;
+  onAimSelectionInstallationAxes: (target: { x: number; y: number; z: number }) => MaybePromise;
   onLayoutFixtures: (mode: MappingFixtureLayoutMode) => MaybePromise;
   onControlActive: () => void;
   onOpenSceneFx: () => void;
@@ -219,6 +221,8 @@ export function MappingSetupContextPanel(props: MappingSetupContextPanelProps) {
         onDistribute={props.onDistributeSelection}
         onMirror={props.onMirrorSelection}
         onRotate={props.onRotateSelection}
+        onMatchOrientations={props.onMatchSelectionOrientations}
+        onAimInstallationAxes={props.onAimSelectionInstallationAxes}
         onDuplicate={props.onDuplicateSelected}
         onRemove={props.onRemoveSelected}
         onControlActive={props.onControlActive}

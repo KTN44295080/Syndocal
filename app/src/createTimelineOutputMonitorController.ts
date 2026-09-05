@@ -39,6 +39,7 @@ interface OutputRuntime {
   width: number;
   height: number;
   dueAt: number;
+  dueSlot: number;
   errors: number;
   lastFrameAt: number;
   frame: TimelineOutputMonitorFrame | null;
@@ -54,10 +55,10 @@ export const timelineOutputMonitorSize = (width: number, height: number) => {
 // A transient busy reply can retain only a recently received frame. This is
 // wall-clock freshness, independent of Timeline playing state or clip PTS.
 export const TIMELINE_OUTPUT_FRAME_MAX_AGE_MS = 1_000;
-const OUTPUT_FRAME_INTERVAL_MS = 1_000 / 30;
 const AGGREGATE_START_INTERVAL_MS = 1_000 / 60;
+const OUTPUT_START_SLOT_INTERVAL = 2;
 
-/** Target 30 fps per output, sharing at most 60 starts/s with one readback in flight. */
+/** Target 30 fps per output on a shared 60 Hz slot clock, with one readback in flight. */
 export const createTimelineOutputMonitorController = (options: Options) => {
   const [states, setStates] = createSignal<ReadonlyMap<number, TimelineOutputMonitorState>>(new Map());
   const [hidden, setHidden] = createSignal(typeof document !== "undefined" && document.hidden);
@@ -71,7 +72,11 @@ export const createTimelineOutputMonitorController = (options: Options) => {
   let inFlight = false;
   let timer: number | null = null;
   let expiryTimer: number | null = null;
-  let nextStartAt = 0;
+  const cadenceOrigin = performance.now();
+  let nextStartSlot = 0;
+  const slotTime = (slot: number) => cadenceOrigin + slot * AGGREGATE_START_INTERVAL_MS;
+  // Tolerate floating-point division at an exact slot boundary, not timer lag.
+  const slotAt = (now: number) => Math.max(0, Math.floor((now - cadenceOrigin + 1e-7) / AGGREGATE_START_INTERVAL_MS));
 
   const publish = (id: number, update: (state: TimelineOutputMonitorState) => TimelineOutputMonitorState) => {
     setStates((current) => {
@@ -114,31 +119,35 @@ export const createTimelineOutputMonitorController = (options: Options) => {
     scheduleExpiry();
     clearTimer();
     if (disposed || !active || inFlight || runtime.size === 0) return;
-    const due = Math.min(...Array.from(runtime.values(), (entry) => entry.dueAt));
+    const due = Math.min(...Array.from(runtime.values(), (entry) => Math.max(entry.dueAt, slotTime(entry.dueSlot))));
     if (!Number.isFinite(due)) return;
-    timer = window.setTimeout(() => void runNext(), Math.max(0, Math.ceil(Math.max(nextStartAt, due) - performance.now())));
+    timer = window.setTimeout(() => void runNext(), Math.max(0, Math.ceil(Math.max(slotTime(nextStartSlot), due) - performance.now())));
   };
   const runNext = async () => {
     timer = null;
     if (disposed || !active || inFlight) return;
     const now = performance.now();
+    const slot = slotAt(now);
     let id: number | undefined;
     for (let offset = 0; offset < order.length; offset += 1) {
       const index = (cursor + offset) % order.length;
       const candidate = order[index];
-      if ((runtime.get(candidate)?.dueAt ?? Infinity) <= now) {
+      const candidateRuntime = runtime.get(candidate);
+      if (candidateRuntime && candidateRuntime.dueAt <= now && candidateRuntime.dueSlot <= slot) {
         id = candidate;
         cursor = (index + 1) % order.length;
         break;
       }
     }
-    if (id === undefined || now < nextStartAt) { schedule(); return; }
+    if (id === undefined || slot < nextStartSlot) { schedule(); return; }
     const entry = runtime.get(id)!;
     const requestGeneration = generation;
     const current = () => !disposed && active && generation === requestGeneration && runtime.get(id!) === entry;
     inFlight = true;
-    nextStartAt = now + AGGREGATE_START_INTERVAL_MS;
-    entry.dueAt = now + OUTPUT_FRAME_INTERVAL_MS;
+    // Consume only the current slot. Missed slots are dropped, so delayed
+    // timers or a hung readback cannot become a burst of catch-up requests.
+    nextStartSlot = slot + 1;
+    entry.dueSlot = slot + OUTPUT_START_SLOT_INTERVAL;
     try {
       const response = await options.invoke<unknown>("get_live_video_monitor_frame", {
         monitorKind: "program", outputId: id, layerId: null,
@@ -220,7 +229,8 @@ export const createTimelineOutputMonitorController = (options: Options) => {
           if (entry) clearFrame(entry);
           const size = timelineOutputMonitorSize(output.width, output.height);
           entry = { key, width: size?.width ?? 0, height: size?.height ?? 0,
-            dueAt: size ? 0 : Infinity, errors: 0, lastFrameAt: 0, frame: null };
+            dueAt: size ? 0 : Infinity, dueSlot: entry?.dueSlot ?? 0,
+            errors: 0, lastFrameAt: 0, frame: null };
           runtime.set(output.id, entry);
           state = emptyState();
         }

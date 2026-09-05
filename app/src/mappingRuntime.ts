@@ -50,7 +50,9 @@ export interface VisualizerFixture {
   segmentRows: number;
   segmentOrder: MappingFixtureSegmentOrder;
   yaw: number;
-  beamYaw: number;
+  beamShape: import("./mappingFixtureBeam").MappingBeamShape | null;
+  segmentBeamShapes: Array<import("./mappingFixtureBeam").MappingBeamShape | null>;
+  beamDescription?: string;
   beamPoints: string;
   beams?: VisualizerFixtureBeam[];
   physicalCells?: MappingFixturePhysicalCell2d[];

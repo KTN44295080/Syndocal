@@ -839,7 +839,6 @@ import {
   groupPickedFixturesByType,
 } from "./fixtureTypeLiveEdit";
 import {
-  beamPoints,
   mappingStageWorldToSvgPoint,
   stagePadding,
   stageViewBoxSize,
@@ -13659,6 +13658,8 @@ export default function App() {
     nudgeSelectedMappingFixtures,
     mirrorSelectedMappingFixtures,
     rotateSelectedMappingFixtures,
+    matchSelectedMappingFixtureOrientations,
+    aimSelectedMappingFixtureInstallationAxes,
   } = createMappingLayoutController({
     snapshot,
     filteredFixtures,
@@ -28043,6 +28044,8 @@ export default function App() {
             onDistributeSelection: distributeSelectedMappingFixtures,
             onMirrorSelection: mirrorSelectedMappingFixtures,
             onRotateSelection: rotateSelectedMappingFixtures,
+            onMatchSelectionOrientations: matchSelectedMappingFixtureOrientations,
+            onAimSelectionInstallationAxes: aimSelectedMappingFixtureInstallationAxes,
             onLayoutFixtures: layoutFixturePositions,
             onControlActive: () => setWorkspaceTab("control"),
             onOpenSceneFx: openSceneFxFromMapping,

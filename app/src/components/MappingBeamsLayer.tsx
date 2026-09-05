@@ -4,6 +4,7 @@ import type { VisualizerFixtureBeam } from "../mappingRuntime";
 export interface MappingBeamFixture {
   id: number;
   beamPoints: string;
+  beamDescription?: string;
   beams?: VisualizerFixtureBeam[];
   intensity: number;
   color: string;
@@ -33,7 +34,7 @@ export function MappingBeamsLayer(props: MappingBeamsLayerProps) {
                 points={beam.points}
                 fill={beam.color}
                 opacity={Math.max(0.08, beam.intensity * 0.55)}
-              />
+              ><title>{fixture.beamDescription}</title></polygon>
             )}
           </For>
         );
