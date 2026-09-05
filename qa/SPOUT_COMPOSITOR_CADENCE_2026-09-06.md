@@ -84,3 +84,20 @@ remain unverified. After acceptance restart without diagnostic environment.
 The separate direct Safety BlackOut lifecycle boundary recorded in
 `SYNDOCAL_UNITY_RUNTIME_FIXES_2026-09-05.md` remains outside this optimization.
 Preserve unrelated `app/scripts/check-viewport-containment.mjs`.
+
+## User acceptance
+
+After checkpoint `dbc7657`, the user reported success in Unity and explicitly
+accepted the video issue as resolved. Live-only windows (zero keepalive frames)
+on PID83812 show full-renderer foreground mean 60.279 ms (780 renders/25 windows)
+and background 14.386 ms (2574 renders/25 windows), versus baseline 282.222 and
+71.460 ms. Loop cadence means are 65.250 and 19.528 ms. This is a substantial
+improvement and user visual acceptance, not a claim of 30 fps foreground
+delivery. Evidence: `spout-cadence-after-live-only-summary.json` and raw
+`spout-timing-83812-{1,2}.log` in the same QA evidence directory. The broader
+`spout-cadence-after-summary.json` includes mixed keepalive windows and must not
+be interpreted as active-playback cadence.
+
+The video-stutter issue is closed at the user's requested boundary. Next bounded
+work is the already-recorded direct BlackOut/Spout lifecycle defect; do not resume
+further video-performance changes without new evidence or a user request.
