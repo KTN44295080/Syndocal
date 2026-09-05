@@ -1,13 +1,14 @@
 {
   "name": "syndocal",
   "private": true,
-  "version": "1.2.0-alpha.68",
+  "version": "1.2.0-alpha.69",
   "author": "Seraf()のKTN",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "check:frontend-invokes": "node scripts/check-frontend-tauri-invokes.mjs",
+    "check:video-runtime-polling": "node scripts/check-video-runtime-polling.mjs",
     "check:pane-window-lifecycle": "node scripts/check-pane-window-lifecycle.mjs",
     "check:frontend-command-routing": "node scripts/check-frontend-command-routing.mjs",
     "check:dmx-addressing": "node scripts/check-dmx-addressing-helpers.mjs",

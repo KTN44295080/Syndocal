@@ -32,7 +32,7 @@ import { withMaterializedVerifiedExecutable } from "./verified-materialization.m
 
 export { withMaterializedVerifiedExecutable } from "./verified-materialization.mjs";
 
-export const expectedVersion = "1.2.0-alpha.68";
+export const expectedVersion = "1.2.0-alpha.69";
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const appRoot = resolve(scriptDir, "..");
 const workspaceRoot = resolve(appRoot, "..");
@@ -503,32 +503,18 @@ function assertReadmeVersionLines(markdown, productVersion) {
 }
 
 const currentReleaseBoundaryMarkers = Object.freeze([
-  {
-    path: "RELEASE_STATUS.md",
-    markers: [
-      "## 2026-09-03 current alpha.68 blackout release query-race checkpoint",
-      "Alpha.68 closes the remaining DMX blackout-off recovery race",
-      "validated active-Both Enable receipt",
-    ],
-  },
-  {
-    path: "qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md",
-    markers: [
-      "## 2026-09-03 alpha.68 blackout release query-race checkpoint",
-      "validated active-Both Enable receipt",
-      "backend owner/fence/lease CAS",
-    ],
-  },
-  {
-    path: "qa/SYNDOCAL_SHOW_COMPLETION_HANDOFF_2026-08-28.md",
-    markers: [
-      "## 2026-09-03 alpha.68 blackout release query-race source checkpoint",
-      "validated active-Both receipt",
-      "Release remains backend-fenced",
-      "native artifact identity",
-    ],
-  },
-]);
+  "RELEASE_STATUS.md",
+  "qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md",
+  "qa/SYNDOCAL_SHOW_COMPLETION_HANDOFF_2026-08-28.md",
+].map((path) => ({
+  path,
+  markers: [
+    "## 2026-09-05 alpha.69 recording atomic-publication SOURCE CANDIDATE",
+    "FFmpeg staging and atomic publication",
+    "this is not full Recording completion",
+    "REMAINING_WORK_2026-09-05.md",
+  ],
+})));
 
 const historicalReleaseAuthorityMarkers = Object.freeze([
   [

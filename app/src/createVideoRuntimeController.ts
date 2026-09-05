@@ -156,6 +156,10 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
   let appliedRuntimeGeneration = -1;
   let appliedTransitionRuntimeEpoch: number | null = null;
   let appliedTransitionRuntimeGeneration = -1;
+  let clipRuntimeRefreshInFlight = false;
+  let transitionRuntimeRefreshInFlight = false;
+  let clipRuntimeRefreshEpoch = 0;
+  let transitionRuntimeRefreshEpoch = 0;
   const nextVideoClipSlotRequestId = () => ++videoClipSlotRequestId;
   const nextVideoEffectCatalogRequestId = () => ++videoEffectCatalogRequestId;
   const setMessageIfAuthorityCurrent = (authority: ProjectAuthorityToken, message: string) => {
@@ -393,12 +397,18 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
     return true;
   };
   const resetVideoClipSlotRuntimeFence = () => {
+    clipRuntimeRefreshEpoch += 1;
     appliedRuntimeEpoch = null;
     appliedRuntimeGeneration = -1;
     options.setVideoClipRuntime({ layers: [] });
   };
   const refreshVideoClipSlotRuntime = async (showError = false) => {
+    // A replacement invalidates the reply, not the outstanding native read.
+    // Skip overlapping polls until it settles; never share an old project's promise.
+    if (clipRuntimeRefreshInFlight) return null;
     const authority = options.getCurrentProjectAuthority();
+    const refreshEpoch = clipRuntimeRefreshEpoch;
+    clipRuntimeRefreshInFlight = true;
     try {
       const result = await options.invoke<VideoClipRuntimeReport>("get_video_clip_slot_runtime", {
         expectedEpoch: authority.project_epoch,
@@ -406,10 +416,13 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
         expectedCheckpointHash: authority.checkpoint_hash,
         ownerId: options.projectTransactionOwnerId,
       });
+      if (refreshEpoch !== clipRuntimeRefreshEpoch || !options.isProjectAuthorityCurrent(authority)) return null;
       return applyVideoClipSlotRuntime(result) ? result : null;
     } catch (error) {
-      if (showError) setMessageIfAuthorityCurrent(authority, String(error));
+      if (showError && refreshEpoch === clipRuntimeRefreshEpoch) setMessageIfAuthorityCurrent(authority, String(error));
       return null;
+    } finally {
+      clipRuntimeRefreshInFlight = false;
     }
   };
   const applyVideoTransitionRuntime = (
@@ -432,12 +445,16 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
     return true;
   };
   const resetVideoTransitionRuntimeFence = () => {
+    transitionRuntimeRefreshEpoch += 1;
     appliedTransitionRuntimeEpoch = null;
     appliedTransitionRuntimeGeneration = -1;
     options.setVideoTransitionRuntime({ buses: [] });
   };
   const refreshVideoTransitionRuntime = async (showError = false) => {
+    if (transitionRuntimeRefreshInFlight) return null;
     const authority = options.getCurrentProjectAuthority();
+    const refreshEpoch = transitionRuntimeRefreshEpoch;
+    transitionRuntimeRefreshInFlight = true;
     try {
       const result = await options.invoke<VideoLayerTransitionRuntimeReport>(
         "get_video_layer_transition_runtime",
@@ -448,10 +465,13 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
           ownerId: options.projectTransactionOwnerId,
         },
       );
+      if (refreshEpoch !== transitionRuntimeRefreshEpoch || !options.isProjectAuthorityCurrent(authority)) return null;
       return applyVideoTransitionRuntime(result) ? result : null;
     } catch (error) {
-      if (showError) setMessageIfAuthorityCurrent(authority, String(error));
+      if (showError && refreshEpoch === transitionRuntimeRefreshEpoch) setMessageIfAuthorityCurrent(authority, String(error));
       return null;
+    } finally {
+      transitionRuntimeRefreshInFlight = false;
     }
   };
   const runVideoTransitionRuntime = async <T extends Record<string, unknown>>(

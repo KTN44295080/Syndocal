@@ -19,7 +19,16 @@ local edit, read the relevant contract only; do not read this entire file.
   do not reassign agents, authorize output, or revive an old pause/resume order.
 - Instruction-maintenance evidence: [2026-09-05 audit](INSTRUCTION_MAINTENANCE_2026-09-05.md).
 
-## 2026-09-03 alpha.68 blackout release query-race checkpoint
+## 2026-09-05 alpha.69 recording atomic-publication SOURCE CANDIDATE
+
+Current product metadata is `1.2.0-alpha.69`. The bounded source candidate
+uses FFmpeg staging and atomic publication to preserve an existing final recording
+on encoder failure. Query polling also prevents overlapping native reads.
+Build/test/native evidence and remaining concurrency boundaries are recorded below;
+this is not full Recording completion. See [remaining work and acceptance](REMAINING_WORK_2026-09-05.md).
+Earlier artifact versions, hashes and process observations below are historical.
+
+## Historical 2026-09-03 alpha.68 blackout release query-race checkpoint
 
 Alpha.68 closes the DMX blackout-off recovery race: after the one bounded
 Enable recovery, the validated active-Both Enable receipt is the release proof
@@ -1452,8 +1461,8 @@ review and evidence required for the behavior the current task consumes.
 
 ### 4.1 Current release train
 
-The product metadata is `1.2.0-alpha.68` at the 2026-09-05 instruction-maintenance
-checkpoint (unchanged by this documentation task). Verify Cargo, frontend and
+The product metadata is `1.2.0-alpha.69` for the 2026-09-05 recording
+atomic-publication source candidate; acceptance is pending. Verify Cargo, frontend and
 Tauri metadata before producing a new artifact. A branch name, past PID or older
 handoff is not a current artifact identity. The dated alpha.68 record above is
 historical build evidence; it is not a fresh native or physical acceptance run.

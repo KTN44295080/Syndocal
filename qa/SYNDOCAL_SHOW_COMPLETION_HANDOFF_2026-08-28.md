@@ -1,12 +1,23 @@
 # Syndocal 2026-09-02 show completion handoff
 
+## 2026-09-05 alpha.69 recording atomic-publication SOURCE CANDIDATE
+
+Current product metadata is `1.2.0-alpha.69`. The bounded source candidate
+uses FFmpeg staging and atomic publication to preserve an existing final recording
+on encoder failure. Query polling also prevents overlapping native reads.
+Build/test/native evidence and remaining concurrency boundaries are recorded below;
+this is not full Recording completion. See [remaining work and acceptance](REMAINING_WORK_2026-09-05.md).
+Earlier artifact versions, hashes and process observations below are historical.
+
+## Historical 2026-09-03 handoff
+
 Status date: 2026-09-03 JST
 Source checkpoint: branch `codex/syndocal-v1.2`; blackout-release source commit
 `5ae65a37fc428760f2032ef30ea9b2ccd84bcd4a`; serial-smoke evidence commit
 `734a2c9`; final HEAD equals upstream `origin/codex/syndocal-v1.2` (verified
 after this handoff update).
 
-This is the concise authoritative resume note for the final show-critical tranche. It supersedes chat-only status, but it does not supersede the detailed acceptance documents named below.
+This was the concise resume note for the recorded show-critical tranche. It supersedes chat-only status, but it does not supersede the detailed acceptance documents named below.
 
 ## 2026-09-03 alpha.68 blackout release query-race source checkpoint
 

@@ -1,9 +1,18 @@
 # Syndocal historical v1.0 / current v1.2 alpha Release Status
 
-Updated: 2026-09-03
-Branch: `codex/syndocal-v1.2`; current product metadata is `1.2.0-alpha.68`.
+Updated: 2026-09-05
+Branch: `codex/syndocal-v1.2`; current product metadata is `1.2.0-alpha.69`.
 
-## 2026-09-03 current alpha.68 blackout release query-race checkpoint
+## 2026-09-05 alpha.69 recording atomic-publication SOURCE CANDIDATE
+
+Current product metadata is `1.2.0-alpha.69`. The bounded source candidate
+uses FFmpeg staging and atomic publication to preserve an existing final recording
+on encoder failure. Query polling also prevents overlapping native reads.
+Build/test/native evidence and remaining concurrency boundaries are recorded below;
+this is not full Recording completion. See [remaining work and acceptance](qa/REMAINING_WORK_2026-09-05.md).
+Earlier artifact versions, hashes and process observations below are historical.
+
+## Historical 2026-09-03 alpha.68 blackout release query-race checkpoint
 
 Alpha.68 closes the remaining DMX blackout-off recovery race after lease recovery. When
 the engaged safety latch has no active local Both lease, the UI runs the

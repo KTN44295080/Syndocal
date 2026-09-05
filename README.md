@@ -2,11 +2,20 @@
 
 Syndocal は、DMX照明とVJ映像を同じタイムライン、キュー、BPMクロック、エフェクトソースで駆動するデスクトップ制御ソフトウェアです。
 
-- 製品名: **Syndocal 1.2.0-alpha.68**
+- 製品名: **Syndocal 1.2.0-alpha.69**
 - 開発: **Seraf()のKTN**
 - プロジェクト: **`.sdc`** (可読JSON)
 - Tier 1: Windows 10+ / macOS 12+
 - Tier 2: Ubuntu 22.04+ / Arch Linux
+
+## 2026-09-05 alpha.69 recording atomic-publication SOURCE CANDIDATE
+
+Current product metadata is `1.2.0-alpha.69`. The bounded source candidate
+uses FFmpeg staging and atomic publication to preserve an existing final recording
+on encoder failure. Query polling also prevents overlapping native reads.
+Build/test/native evidence and remaining concurrency boundaries are recorded below;
+this is not full Recording completion. See [remaining work and acceptance](qa/REMAINING_WORK_2026-09-05.md).
+Earlier artifact versions, hashes and process observations below are historical.
 
 ## Current show output boundary (2026-08-31 source tranche)
 
@@ -25,7 +34,7 @@ See the [current output acceptance record](qa/DSF2026_SAME_PC_OUTPUT_ACCEPTANCE_
 for execution steps and unverified physical/lease evidence; this boundary is
 not a hardware acceptance claim.
 
-Current product metadata is `1.2.0-alpha.68` on branch
+The historical alpha.68 checkpoint used `1.2.0-alpha.68` on branch
 `codex/syndocal-v1.2`. Alpha.68 keeps the routine Setup → I/O → DMX surface
 compact, closes the blackout-off recovery race by using the validated active-Both
 Enable receipt, and retains the stale ASIO setup response repair after an
@@ -479,7 +488,7 @@ unaccepted.
 
 CI/Release成果物は次の形式です。
 
-- Windows: `Syndocal_1.2.0-alpha.68_x64-setup.exe` (NSIS)、`Syndocal_1.2.0-alpha.68_x64_ja-JP.msi`
+- Windows: `Syndocal_1.2.0-alpha.69_x64-setup.exe` (NSIS)、`Syndocal_1.2.0-alpha.69_x64_ja-JP.msi`
 - macOS: `.app`、DMG
 - Linux: `.deb`、AppImage
 

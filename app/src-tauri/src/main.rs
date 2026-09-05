@@ -7,7 +7,7 @@ use std::{
     io::{Read, Seek, Write},
     net::{IpAddr, UdpSocket},
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::Command,
     sync::{
         atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering},
         mpsc, Arc, Condvar, LazyLock, Mutex, TryLockError,
@@ -17,6 +17,14 @@ use std::{
 
 #[cfg(test)]
 mod project_transaction_terminal_recovery_tests;
+mod recording_artifact;
+mod video_recording;
+use video_recording::{run_video_output_recording, RecordingAudioInput, VideoOutputRecordingContext};
+#[cfg(test)]
+use video_recording::{
+    configure_recording_audio_inputs, ffmpeg_atempo_filter, finish_video_recording_status,
+    video_recording_ffmpeg_command,
+};
 mod show_artnet_acceptance_probe;
 #[cfg(test)]
 mod show_artnet_loopback_route_tests;
@@ -20513,15 +20521,6 @@ impl Default for VideoRecordingStatus {
             last_error: None,
         }
     }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-struct RecordingAudioInput {
-    path: PathBuf,
-    position_ms: u64,
-    volume: f32,
-    speed: f32,
-    loop_enabled: bool,
 }
 
 #[derive(Default)]
@@ -76540,48 +76539,6 @@ fn sanitize_file_name_component(value: &str) -> String {
     }
 }
 
-fn video_recording_ffmpeg_command(
-    ffmpeg: impl AsRef<OsStr>,
-    path: &Path,
-    width: u32,
-    height: u32,
-    frame_rate: u32,
-    audio_inputs: &[RecordingAudioInput],
-) -> Command {
-    let dimensions = format!("{width}x{height}");
-    let rate = frame_rate.to_string();
-    let mut command = Command::new(ffmpeg);
-    command
-        .args(["-hide_banner", "-loglevel", "error", "-y", "-f", "rawvideo"])
-        .args([
-            "-pix_fmt",
-            "rgba",
-            "-s",
-            &dimensions,
-            "-r",
-            &rate,
-            "-i",
-            "pipe:0",
-        ]);
-    let audio_filter = configure_recording_audio_inputs(&mut command, audio_inputs);
-    command.args(["-map", "0:v:0"]);
-    if let Some(audio_filter) = audio_filter {
-        command
-            .args(["-filter_complex", &audio_filter, "-map", "[aout]"])
-            .args(["-c:a", "aac", "-b:a", "192k", "-shortest"]);
-    } else {
-        command.arg("-an");
-    }
-    command
-        .args([
-            "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p",
-        ])
-        .arg(path)
-        .stdin(Stdio::piped())
-        .stderr(Stdio::piped());
-    command
-}
-
 /// A single output-preview input captured in the same order as the NDI and
 /// Spout output workers. The ownership epoch fences all C1 renderer caches,
 /// while the snapshot carries the matching runtime clip-slot truth.
@@ -76610,186 +76567,6 @@ fn capture_video_output_preview_effect_snapshot(
     VideoOutputPreviewEffectSnapshot {
         snapshot,
         project_render_epoch,
-    }
-}
-
-struct VideoOutputRecordingContext {
-    engine: EngineHandle,
-    renderer: Arc<Mutex<AppVideoPreviewRenderer>>,
-    output_id: VideoOutputId,
-    path: PathBuf,
-    width: u32,
-    height: u32,
-    frame_rate: u32,
-    audio_inputs: Vec<RecordingAudioInput>,
-    stop: Arc<AtomicBool>,
-    status: Arc<Mutex<VideoRecordingStatus>>,
-}
-
-fn run_video_output_recording(context: VideoOutputRecordingContext) {
-    let VideoOutputRecordingContext {
-        engine,
-        renderer,
-        output_id,
-        path,
-        width,
-        height,
-        frame_rate,
-        audio_inputs,
-        stop,
-        status,
-    } = context;
-    let ffmpeg = env::var_os("SYNDOCAL_FFMPEG").unwrap_or_else(|| "ffmpeg".into());
-    let mut command =
-        video_recording_ffmpeg_command(ffmpeg, &path, width, height, frame_rate, &audio_inputs);
-    let mut child = match command.spawn() {
-        Ok(child) => child,
-        Err(error) => {
-            finish_video_recording_status(
-                &status,
-                Some(format!("Failed to start FFmpeg: {error}")),
-            );
-            return;
-        }
-    };
-    let Some(mut stdin) = child.stdin.take() else {
-        finish_video_recording_status(&status, Some("FFmpeg stdin was unavailable".to_string()));
-        let _ = child.kill();
-        return;
-    };
-    let frame_interval = Duration::from_secs_f64(1.0 / frame_rate as f64);
-    let mut next_frame_at = Instant::now();
-    while !stop.load(Ordering::Relaxed) {
-        let output_preview = capture_video_output_preview_effect_snapshot(&engine);
-        let frame = renderer.lock().ok().and_then(|mut renderer| {
-            renderer
-                .frame_provider_mut()
-                .set_bpm(Some(output_preview.snapshot.clock.bpm));
-            renderer
-                .render_output_preview_with_effects_and_transitions(
-                    &output_preview.snapshot.video,
-                    output_preview.render_context(),
-                    &output_preview.snapshot.video_transition_runtime,
-                    output_id,
-                    width,
-                    height,
-                )
-                .ok()
-        });
-        match frame {
-            Some(frame) if frame.format == video::VideoPixelFormat::Rgba8 => {
-                if let Err(error) = stdin.write_all(&frame.data) {
-                    finish_video_recording_status(
-                        &status,
-                        Some(format!("FFmpeg pipe failed: {error}")),
-                    );
-                    let _ = child.kill();
-                    return;
-                }
-                if let Ok(mut current) = status.lock() {
-                    current.frames_written = current.frames_written.saturating_add(1);
-                }
-            }
-            _ => {
-                if let Ok(mut current) = status.lock() {
-                    current.dropped_frames = current.dropped_frames.saturating_add(1);
-                }
-            }
-        }
-        next_frame_at += frame_interval;
-        let now = Instant::now();
-        if next_frame_at > now {
-            std::thread::sleep(next_frame_at - now);
-        } else if now.duration_since(next_frame_at) > frame_interval {
-            let missed = (now.duration_since(next_frame_at).as_secs_f64()
-                / frame_interval.as_secs_f64()) as u64;
-            if let Ok(mut current) = status.lock() {
-                current.dropped_frames = current.dropped_frames.saturating_add(missed);
-            }
-            next_frame_at = now;
-        }
-    }
-    drop(stdin);
-    match child.wait_with_output() {
-        Ok(output) if output.status.success() => finish_video_recording_status(&status, None),
-        Ok(output) => finish_video_recording_status(
-            &status,
-            Some(format!(
-                "FFmpeg exited with {}: {}",
-                output.status,
-                String::from_utf8_lossy(&output.stderr).trim()
-            )),
-        ),
-        Err(error) => {
-            finish_video_recording_status(&status, Some(format!("FFmpeg wait failed: {error}")))
-        }
-    }
-}
-
-fn configure_recording_audio_inputs(
-    command: &mut Command,
-    inputs: &[RecordingAudioInput],
-) -> Option<String> {
-    if inputs.is_empty() {
-        return None;
-    }
-    let mut chains = Vec::with_capacity(inputs.len() + 1);
-    for (index, input) in inputs.iter().enumerate() {
-        if input.loop_enabled {
-            command.args(["-stream_loop", "-1"]);
-        }
-        command
-            .args(["-ss", &format!("{:.6}", input.position_ms as f64 / 1_000.0)])
-            .arg("-i")
-            .arg(&input.path);
-        let output_label = if inputs.len() == 1 {
-            "aout".to_string()
-        } else {
-            format!("a{index}")
-        };
-        chains.push(format!(
-            "[{}:a]volume={:.6},{},apad[{}]",
-            index + 1,
-            input.volume,
-            ffmpeg_atempo_filter(input.speed),
-            output_label
-        ));
-    }
-    if inputs.len() > 1 {
-        let labels = (0..inputs.len())
-            .map(|index| format!("[a{index}]"))
-            .collect::<String>();
-        chains.push(format!(
-            "{labels}amix=inputs={}:duration=longest:dropout_transition=0[aout]",
-            inputs.len()
-        ));
-    }
-    Some(chains.join(";"))
-}
-
-fn ffmpeg_atempo_filter(speed: f32) -> String {
-    let mut remaining = if speed.is_finite() {
-        speed.abs().clamp(0.25, 4.0)
-    } else {
-        1.0
-    };
-    let mut filters = Vec::new();
-    while remaining < 0.5 - f32::EPSILON {
-        filters.push("atempo=0.5".to_string());
-        remaining /= 0.5;
-    }
-    while remaining > 2.0 + f32::EPSILON {
-        filters.push("atempo=2".to_string());
-        remaining /= 2.0;
-    }
-    filters.push(format!("atempo={remaining:.6}"));
-    filters.join(",")
-}
-
-fn finish_video_recording_status(status: &Mutex<VideoRecordingStatus>, error: Option<String>) {
-    if let Ok(mut current) = status.lock() {
-        current.active = false;
-        current.last_error = error;
     }
 }
 
@@ -78218,23 +77995,25 @@ mod live_video_monitor_tests {
 
     #[test]
     fn c1_effect_aware_output_preview_production_seams_are_wired() {
-        let source = include_str!("main.rs");
         let routes = [
             (
+                include_str!("video_recording.rs"),
                 "run_video_output_recording",
-                "fn finish_video_recording_status",
+                "fn failed_video_encoder_error",
             ),
             (
+                include_str!("main.rs"),
                 "get_debug_video_output_preview",
                 "fn get_vj_preview_transport",
             ),
             (
+                include_str!("main.rs"),
                 "get_live_video_monitor_frame",
                 "fn video_preview_decode_budget",
             ),
         ];
 
-        for (route, next_route) in routes {
+        for (source, route, next_route) in routes {
             let route_start = source
                 .find(&format!("fn {route}("))
                 .unwrap_or_else(|| panic!("missing output preview route {route}"));
@@ -129803,10 +129582,13 @@ mod video_recording_runtime_tests {
         let audio_path = std::env::temp_dir().join(format!("syndocal-recording-{suffix}.wav"));
         let output_path = std::env::temp_dir().join(format!("syndocal-recording-{suffix}.mp4"));
         write_test_tone_wav(&audio_path);
+        let sentinel = b"previous complete output must survive until publication";
+        fs::write(&output_path, sentinel).unwrap();
+        let mut artifact = recording_artifact::RecordingArtifact::reserve(&output_path).unwrap();
         let ffmpeg = env::var_os("SYNDOCAL_FFMPEG").unwrap_or_else(|| "ffmpeg".into());
         let mut command = video_recording_ffmpeg_command(
             ffmpeg,
-            &output_path,
+            artifact.path(),
             16,
             16,
             30,
@@ -129829,11 +129611,14 @@ mod video_recording_runtime_tests {
         }
         drop(stdin);
         let encoded = child.wait_with_output().unwrap();
+        assert_eq!(fs::read(&output_path).unwrap(), sentinel);
         assert!(
             encoded.status.success(),
             "FFmpeg failed: {}",
             String::from_utf8_lossy(&encoded.stderr)
         );
+        artifact.publish(30).unwrap();
+        assert!(!artifact.path().exists());
 
         let ffprobe = env::var_os("SYNDOCAL_FFPROBE").unwrap_or_else(|| "ffprobe".into());
         let probed = Command::new(ffprobe)
