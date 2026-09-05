@@ -1,3 +1,4 @@
+mod agent_bridge;
 use std::{
     cell::RefCell,
     collections::{hash_map::Entry, BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
@@ -24973,6 +24974,7 @@ fn admit_tauri_app_invoke<R: tauri::Runtime>(
                 | Class::ProjectHistory
                 | Class::SafetyMutation
                 | Class::RecoveryMaintenance
+                | Class::AgentTransportMaintenance
         )
     {
         return Ok(None);
@@ -57304,6 +57306,19 @@ fn cancel_project_transaction_for_window_label(
         receipt.state = ProjectTransactionReceiptState::Cancelled(result.clone());
     }
     Ok(result)
+}
+
+#[tauri::command]
+fn agent_bridge_register_v1(window: WebviewWindow, bridge: State<agent_bridge::AgentBridge>) -> Result<u64, String> {
+    bridge.register(window.label())
+}
+#[tauri::command]
+fn agent_bridge_claim_v1(window: WebviewWindow, bridge: State<agent_bridge::AgentBridge>, renderer_generation: u64, request_id: String) -> Result<agent_bridge::AgentBridgeDispatch, String> {
+    bridge.claim(window.label(), renderer_generation, &request_id)
+}
+#[tauri::command]
+fn agent_bridge_complete_v1(window: WebviewWindow, bridge: State<agent_bridge::AgentBridge>, renderer_generation: u64, request_id: String, result: serde_json::Value) -> Result<(), String> {
+    bridge.complete(window.label(), renderer_generation, &request_id, result)
 }
 
 /// Register the current generation of one concrete webview. Only the owner
@@ -129456,6 +129471,11 @@ fn main() {
             // the real outcome is unknown; the pending record is left durable so a
             // healthier relaunch can reconcile it.
             install_project_recovery_authority_from_path(&state, &recovery_authority_path)?;
+            match app.path().app_local_data_dir().map_err(|error| error.to_string())
+                .and_then(|directory| agent_bridge::AgentBridge::start(app.handle().clone(), &directory)) {
+                Ok(bridge) => { app.manage(bridge); }
+                Err(error) => eprintln!("Agent bridge unavailable: {error}"),
+            }
             if let Err(error) = initialize_output_ownership(app.handle(), &state) {
                 eprintln!("machine output ownership remains Standby: {error}");
             }
@@ -129634,6 +129654,9 @@ fn main() {
             dispatch_admitted_tauri_app_invoke(
                 invoke,
                 tauri::generate_handler![
+            agent_bridge_claim_v1,
+            agent_bridge_complete_v1,
+            agent_bridge_register_v1,
             get_control_plane_operation_registry,
             get_control_plane_canonical_registry,
             get_control_plane_query_schema_catalog,

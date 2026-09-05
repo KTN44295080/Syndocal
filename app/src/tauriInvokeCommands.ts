@@ -34,6 +34,9 @@ export const FRONTEND_TAURI_INVOKE_COMMANDS = [
   "add_video_output",
   "adopt_project_publication_owner_v1",
   "adopt_project_transaction",
+  "agent_bridge_claim_v1",
+  "agent_bridge_complete_v1",
+  "agent_bridge_register_v1",
   "analyze_audio_file",
   "analyze_timeline_audio_clip_path",
   "apply_reference_palette",
@@ -451,7 +454,7 @@ export const FRONTEND_TAURI_INVOKE_COMMANDS = [
   "update_video_clip_slot_authoritative",
   "use_fixture_profile",
   "video_audio_monitor_status",
-  "video_output_recording_status"
+  "video_output_recording_status",
 ] as const;
 
 export type FrontendTauriInvokeCommand = typeof FRONTEND_TAURI_INVOKE_COMMANDS[number];

@@ -1,0 +1,161 @@
+import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
+import { createServer } from 'node:net';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { randomUUID, randomBytes } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
+import { parseOptions } from './server.mjs';
+
+const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'syndocal-mcp-test-'));
+const descriptorPath = path.join(temporary, 'bridge.json');
+const token = 'test-secret-' + randomUUID();
+const requests = [];
+const sockets = new Set();
+let respond = (request, socket) => socket.end(JSON.stringify({ requestId: request.requestId, status: 'completed', result: { ok: true, fixtures: [], project: { project_epoch: 1, project_revision: 1, checkpoint_hash: 'test' } } }) + '\n');
+const broker = createServer((socket) => {
+  sockets.add(socket); socket.on('close', () => sockets.delete(socket)); socket.on('error', () => {});
+  let data = '';
+  socket.on('data', (chunk) => {
+    data += chunk;
+    if (!data.includes('\n')) return;
+    const request = JSON.parse(data.slice(0, data.indexOf('\n')));
+    requests.push(request);
+    assert.equal(request.token, token);
+    respond(request, socket);
+  });
+});
+await new Promise((resolve) => broker.listen(0, '127.0.0.1', resolve));
+const descriptor = { protocolVersion: 1, port: broker.address().port, token, instanceId: randomBytes(16).toString('hex'), processId: process.pid, executablePath: process.execPath };
+await fs.writeFile(descriptorPath, JSON.stringify(descriptor));
+const script = fileURLToPath(new URL('./server.mjs', import.meta.url));
+const child = spawn(process.execPath, [script, '--descriptor', descriptorPath, '--expected-executable', process.execPath], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+let stderr = '';
+let stdout = '';
+let pendingText = '';
+const replies = [];
+child.stderr.on('data', (chunk) => { stderr += chunk; });
+child.stdout.on('data', (chunk) => {
+  stdout += chunk; pendingText += chunk;
+  let newline;
+  while ((newline = pendingText.indexOf('\n')) >= 0) {
+    replies.push(JSON.parse(pendingText.slice(0, newline)));
+    pendingText = pendingText.slice(newline + 1);
+  }
+});
+let counter = 0;
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+async function waitReply(id) {
+  const deadline = Date.now() + 12000;
+  while (Date.now() < deadline) {
+    const index = replies.findIndex((reply) => reply.id === id);
+    if (index >= 0) return replies.splice(index, 1)[0];
+    assert.equal(child.exitCode, null, `child exited: ${stderr}`);
+    await delay(10);
+  }
+  throw new Error(`Response deadline for ${id}`);
+}
+async function rpc(method, params) {
+  const id = ++counter;
+  child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, ...(params === undefined ? {} : { params }) }) + '\n');
+  return waitReply(id);
+}
+const call = (name, args = {}) => rpc('tools/call', { name, arguments: args });
+const decode = (reply) => JSON.parse(reply.result.content[0].text);
+let checks = 0;
+try {
+  assert.throws(() => parseOptions([]));
+  assert.throws(() => parseOptions(['--expected-executable', 'relative', '--descriptor', descriptorPath]));
+  assert.throws(() => parseOptions(['--expected-executable', process.execPath, '--descriptor', descriptorPath, '--unknown', 'value']));
+  checks++;
+  assert.equal((await rpc('tools/list')).error.code, -32002);
+  const initialize = await rpc('initialize', { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'test', version: '1' } });
+  assert.equal(initialize.result.protocolVersion, '2025-11-25');
+  child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
+  assert.deepEqual((await rpc('ping')).result, {});
+  const list = await rpc('tools/list');
+  assert.equal(list.result.tools.length, 4);
+  assert.ok(list.result.tools.every((tool) => tool.inputSchema.additionalProperties === false));
+  checks++;
+  assert.equal((await rpc('unknown')).error.code, -32601);
+  assert.equal((await call('syndocal_list_fixtures', { extra: 1 })).error.code, -32602);
+  assert.equal((await call('syndocal_get_fixture', { fixtureId: '1' })).error.code, -32602);
+  assert.equal((await call('syndocal_get_request_status', { requestId: [randomUUID()] })).error.code, -32602);
+  assert.equal((await call('syndocal_get_request_status', { requestId: 'abcdefab-cdef-4abc-8def-abcdefabcdef'.toUpperCase() })).error.code, -32602);
+  assert.equal(requests.length, 0);
+  checks++;
+  assert.equal(decode(await call('syndocal_list_fixtures')).status, 'completed');
+  assert.equal(requests.at(-1).method, 'fixtures.list');
+  await call('syndocal_get_fixture', { fixtureId: 7 });
+  assert.deepEqual(requests.at(-1).params, { fixtureId: 7 });
+  checks++;
+  const mutationId = randomUUID();
+  const mutation = { requestId: mutationId, fixtureId: 7, position: { x: 1, y: 2, z: 3 }, rotation: { pitch: 0, yaw: 45, roll: 0 }, expectedProject: { project_epoch: 1, project_revision: 2, checkpoint_hash: 'abc' } };
+  respond = (req, socket) => socket.end(JSON.stringify({ requestId: req.requestId, status: 'pending' }) + '\n');
+  const pending = await call('syndocal_set_fixture_transform', mutation);
+  assert.equal(pending.result.isError, true);
+  assert.equal(decode(pending).requestId, mutationId);
+  assert.equal(requests.at(-1).requestId, mutationId);
+  assert.equal(requests.at(-1).method, 'fixtures.set_transform');
+  assert.equal(Object.hasOwn(requests.at(-1).params, 'requestId'), false);
+  const sent = requests.length;
+  await delay(100); assert.equal(requests.length, sent);
+  checks++;
+  respond = (req, socket) => socket.end(JSON.stringify({ requestId: req.params.requestId, status: 'unknown' }) + '\n');
+  const status = await call('syndocal_get_request_status', { requestId: mutationId });
+  assert.equal(status.result.isError, true);
+  assert.equal(decode(status).requestId, mutationId);
+  assert.equal(requests.at(-1).method, 'request.status');
+  assert.equal(requests.at(-1).params.requestId, mutationId);
+  assert.notEqual(requests.at(-1).requestId, mutationId);
+  checks++;
+  respond = (req, socket) => socket.end(JSON.stringify({ requestId: req.requestId, status: 'rejected', error: `do not leak ${token}` }) + '\n');
+  const rejected = await call('syndocal_get_fixture', { fixtureId: 7 });
+  assert.ok(rejected.result.content[0].text.includes('[REDACTED]'));
+  assert.ok(!stdout.includes(token)); assert.ok(!stderr.includes(token));
+  respond = (req, socket) => socket.end(JSON.stringify({ requestId: req.requestId, status: 'completed', result: { ok: false, error: { code: 'verification_failed', message: 'Fixture transform did not match.' } } }) + '\n');
+  assert.equal((await call('syndocal_get_fixture', { fixtureId: 7 })).result.isError, true);
+  checks++;
+  await fs.writeFile(descriptorPath, JSON.stringify({ ...descriptor, executablePath: script }));
+  const beforeWrong = requests.length;
+  assert.equal(decode(await call('syndocal_list_fixtures')).status, 'rejected');
+  assert.equal(requests.length, beforeWrong);
+  await fs.writeFile(descriptorPath, JSON.stringify({ ...descriptor, instanceId: randomUUID() }));
+  assert.equal(decode(await call('syndocal_list_fixtures')).status, 'rejected');
+  assert.equal(requests.length, beforeWrong);
+  await fs.writeFile(descriptorPath, JSON.stringify(descriptor));
+  assert.match(descriptor.instanceId, /^[0-9a-f]{32}$/);
+  checks++;
+  respond = (_req, socket) => socket.end('{bad}\n');
+  assert.equal(decode(await call('syndocal_get_fixture', { fixtureId: 7 })).status, 'rejected');
+  respond = (_req, socket) => socket.end('x'.repeat(256 * 1024 + 1) + '\n');
+  assert.equal(decode(await call('syndocal_get_fixture', { fixtureId: 7 })).status, 'rejected');
+  checks++;
+  respond = () => {};
+  const timeoutId = randomUUID();
+  const timeoutCall = call('syndocal_set_fixture_transform', { ...mutation, requestId: timeoutId });
+  await delay(20);
+  const overlap = await call('syndocal_list_fixtures');
+  assert.equal(overlap.result.isError, true);
+  const timeout = await timeoutCall;
+  assert.equal(decode(timeout).status, 'unknown');
+  assert.equal(decode(timeout).requestId, timeoutId);
+  assert.equal(requests.filter((req) => req.requestId === timeoutId).length, 1);
+  checks++;
+  child.stdin.write('{bad}\n');
+  assert.equal((await waitReply(null)).error.code, -32700);
+  child.stdin.write('x'.repeat(65537));
+  child.stdin.write('\n');
+  assert.equal((await waitReply(null)).error.code, -32600);
+  assert.deepEqual((await rpc('ping')).result, {});
+  checks++;
+  assert.ok(!stdout.includes(token)); assert.ok(!stderr.includes(token));
+  console.log(`PASS ${checks} adapter integration groups; fake loopback only, no Syndocal/device calls`);
+} finally {
+  child.stdin.end();
+  child.kill();
+  for (const socket of sockets) socket.destroy();
+  await new Promise((resolve) => broker.close(resolve));
+  await fs.rm(temporary, { recursive: true, force: true });
+}

@@ -1,3 +1,4 @@
+import { startAgentBridgeRuntime } from "./agentBridgeRuntime";
 import { createProjectTransactionRecoveryController } from "./createProjectTransactionRecoveryController";
 import { createMediaThumbnailController } from "./createMediaThumbnailController";
 import { createWorkspaceNavigationController, type WorkspaceNavigationRoute } from "./createWorkspaceNavigationController";
@@ -6,7 +7,7 @@ import { listen as tauriListen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getAllWebviewWindows } from "@tauri-apps/api/webviewWindow";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { batch, createEffect, createMemo, createSignal, For, onCleanup, Show, type ComponentProps } from "solid-js";
+import { batch, createEffect, createMemo, createSignal, For, onCleanup, onMount, Show, type ComponentProps } from "solid-js";
 import { Portal } from "solid-js/web";
 import type { FrontendTauriInvokeCommand } from "./tauriInvokeCommands";
 import {
@@ -3467,6 +3468,11 @@ export default function App() {
   // main window's record of which panes live in separate windows. Window
   // placement is machine-specific, so persistence is localStorage, not .sdc.
   const paneWindow = paneWindowMode();
+  onMount(() => {
+    if (!isTauriRuntime() || paneWindow || getCurrentWindow().label !== "main") return;
+    const bridge = startAgentBridgeRuntime(invoke, tauriListen, error => setMessage(error), tauriInvoke);
+    onCleanup(bridge.dispose);
+  });
   const autoOpenPaneWindows = new URLSearchParams(window.location.search).get("syndocalAutoPaneWindows") === "1";
   const paneWindowStorageKey = "syndocal.paneWindows.v1";
   let initialPoppedPanesStorageError: string | null = null;

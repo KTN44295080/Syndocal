@@ -61,9 +61,9 @@ const KEYBOARD_SHORTCUT_SOURCE_MANIFEST: &str =
 const KEYBOARD_SHORTCUT_SOURCE_MANIFEST_SCHEMA_VERSION: u16 = 1;
 const KEYBOARD_APP_SHORTCUT_SOURCE_COUNT: usize = 30;
 const KEYBOARD_PROJECT_FILE_SHORTCUT_SOURCE_COUNT: usize = 3;
-const FROZEN_TAURI_ROUTE_ADMISSION_COUNT: usize = 511;
+const FROZEN_TAURI_ROUTE_ADMISSION_COUNT: usize = 514;
 const FROZEN_TAURI_ROUTE_ADMISSION_SHA256: &str =
-    "a7f349ccf6bc270ada37f32744bc598198452693c7b5c242a7e2a9af2e670d02";
+    "bd34a85b031e607f22c3e983e74cc6fee626f7a6904df0b96e7d76f2c9adfc25";
 /// The command source is parsed and validated exactly once.  Local discovery
 /// calls only clone this immutable, validated value; they never parse source
 /// text or make an external request on the invocation path.
@@ -90,6 +90,8 @@ pub enum TauriRouteAdmissionClass {
     FileExportMutation,
     SafetyMutation,
     RecoveryMaintenance,
+    /// Local broker lifecycle; edits retain their normal project transaction.
+    AgentTransportMaintenance,
     Retired,
 }
 
@@ -130,7 +132,9 @@ pub fn tauri_route_admission_class(command: &str) -> Option<TauriRouteAdmissionC
 
 fn classify_registered_tauri_route(command: &str) -> Option<TauriRouteAdmissionClass> {
     use TauriRouteAdmissionClass as Class;
-    let class = if matches!(
+    let class = if matches!(command, "agent_bridge_claim_v1" | "agent_bridge_complete_v1" | "agent_bridge_register_v1") {
+        Class::AgentTransportMaintenance
+    } else if matches!(
         command,
         "commit_prepared_media_asset_relink"
             | "commit_prepared_media_assets"
@@ -2276,6 +2280,7 @@ mod tests {
         assert_eq!(counts[&TauriRouteAdmissionClass::SafetyMutation], 1);
         assert_eq!(counts[&TauriRouteAdmissionClass::RecoveryMaintenance], 27);
         assert_eq!(counts[&TauriRouteAdmissionClass::Retired], 29);
+        assert_eq!(counts[&TauriRouteAdmissionClass::AgentTransportMaintenance], 3);
         assert_eq!(tauri_route_admission_class("patch_fixture"), None);
         assert_eq!(
             tauri_route_admission_class("future_unreviewed_mutation"),
@@ -2334,7 +2339,7 @@ mod tests {
             + OSC_INPUT_EVENT_COUNT
             + DMX_INPUT_PROTOCOL_COUNT
             + DMX_INPUT_EVENT_COUNT;
-        const FRONTEND_INVOKE_COUNT: usize = 451;
+        const FRONTEND_INVOKE_COUNT: usize = 454;
         assert_eq!(MIDI_OSC_DMX_OPERATION_COUNT, 206);
         assert_eq!(
             registry.operations.len(),
@@ -2344,7 +2349,7 @@ mod tests {
                 + MIDI_OSC_DMX_OPERATION_COUNT
                 + FRONTEND_INVOKE_COUNT
         );
-        assert_eq!(registry.operations.len(), 1563);
+        assert_eq!(registry.operations.len(), 1569);
         verify_registry_exact_set(&names, &registry).unwrap();
         let r0 = registry
             .operations
@@ -2705,15 +2710,15 @@ mod tests {
         const ENGINE_COUNT: usize = 279;
         const REMOTE_COUNT: usize = 116;
         const MIDI_OSC_DMX_COUNT: usize = 206;
-        const FRONTEND_COUNT: usize = 451;
+        const FRONTEND_COUNT: usize = 454;
         const LEGACY_SOURCE_TOTAL: usize =
             TAURI_COUNT + ENGINE_COUNT + REMOTE_COUNT + MIDI_OSC_DMX_COUNT + FRONTEND_COUNT;
         const KEYBOARD_APP_COUNT: usize = 30;
         const KEYBOARD_PROJECT_FILE_COUNT: usize = 3;
         const SOURCE_TOTAL: usize =
             LEGACY_SOURCE_TOTAL + KEYBOARD_APP_COUNT + KEYBOARD_PROJECT_FILE_COUNT;
-        assert_eq!(LEGACY_SOURCE_TOTAL, 1563);
-        assert_eq!(SOURCE_TOTAL, 1596);
+        assert_eq!(LEGACY_SOURCE_TOTAL, 1569);
+        assert_eq!(SOURCE_TOTAL, 1602);
         assert_eq!(canonical.source_inventory.len(), SOURCE_TOTAL);
         assert_eq!(canonical.canonical_operations.len(), 47);
 
@@ -3074,7 +3079,8 @@ mod tests {
         // the canonical Reset operation.
         // The missing-publication recovery route is local maintenance, not a
         // separately reviewed canonical operation.
-        assert_eq!(unclassified.len(), 1093);
+        // Broker lifecycle adds three local native sources; its frontend sources are aliases.
+        assert_eq!(unclassified.len(), 1096);
         assert_eq!(support_phases.len(), 0);
         assert_eq!(
             direct.len()
@@ -3792,11 +3798,11 @@ mod tests {
     fn legacy_v1_registry_json_and_count_remain_inventory_honest() {
         let legacy = registry().unwrap();
         // Includes both the native and frontend missing-publication resolver.
-        assert_eq!(legacy.operations.len(), 1563);
+        assert_eq!(legacy.operations.len(), 1569);
         let encoded = serde_json::to_value(&legacy).unwrap();
         assert_eq!(encoded["schema"]["version"], CONTROL_PLANE_SCHEMA_VERSION);
         let operations = encoded["operations"].as_array().unwrap();
-        assert_eq!(operations.len(), 1563);
+        assert_eq!(operations.len(), 1569);
         assert!(operations.iter().all(|operation| {
             operation["source_family"] != "keyboard_app"
                 && operation["source_family"] != "keyboard_project_file"
