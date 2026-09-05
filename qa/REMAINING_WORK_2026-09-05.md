@@ -6,6 +6,8 @@
 
 続行したsnapshot同期の分離・複数windowでの全量応答削減は
 [snapshot同期チェックポイント](SNAPSHOT_SYNC_2026-09-05.md)を参照。
+続くEdit VideoのレイヤーFX復旧・非表示consumer停止は
+[Video FXチェックポイント](EDIT_VIDEO_FX_2026-09-05.md)を参照。
 以下のalpha.69録画チェックポイントのartifact/hashはその時点の記録を保持する。
 
 ## 台帳の読み替え
@@ -102,12 +104,10 @@ Out of scope 6。Open 50行を未実装50件と数えない。
    既存保存先はidentity/size/mtime変化を検出するが、最後の比較とreplaceはCASではない。
    通常の別writerもこの間に競合できるため、公開時の保存先独占を前提とする残存境界がある。
    partial所有権が変わった場合は公開/削除せず、encoder reap失敗ではpartialを明示して残す。
-2. **Video FXの到達不能（次のUI単位）**: 唯一の `VideoControlPanel` は `libraryOnly`。
-   `styles.css` の `.videoControlPanelLibrary > .videoMixerContextPane` が
-   唯一のLayer/ISFエディタを非表示にする。Advanced Video Controlsは説明文だけで、
-   SetupVideoにも代替ISF編集経路がない。ハーネスだけの旧セレクター問題ではない。
-   現行Edit Videoの文脈からlayer所有のFXへ到達させ、asset未選択でも使えるようにする。
-   旧全VJパネルを再表示して解決したことにしない。
+2. **Video FXの到達不能（限定修復済）**: 素材未選択でもEdit VideoのAdvancedから
+   対象layerの既存ISF編集へ到達する専用inspectorを追加。libraryOnlyで非表示だった
+   consumerは生成せず、開いたlayerのFX editorだけ生成する。Composition/Group/Output
+   FXと録画UIの全体再構成は別の残件。[証拠・範囲](EDIT_VIDEO_FX_2026-09-05.md)。
 3. **録画の停止・同期全体**: stderrの継続排出と64KiB上限は今回対応。stdin書込とStop joinの
    上限、A/V時計、空き容量、crash recovery inventory、playable検証、asset importを
    個別の受入に分ける。今回の保存修正だけで `RECORDING-001` を完了にしない。
@@ -140,7 +140,7 @@ Out of scope 6。Open 50行を未実装50件と数えない。
 | 対応済 | 監査時の `SnapshotSyncState` は全client共通の単一last snapshot/revisionで、交互pollがfull応答を増やしていた | 続行で履歴4件の独立moduleへ分離。2clientの100要求でfull100→2。[計測・制約](SNAPSHOT_SYNC_2026-09-05.md) |
 | 高 | `crates/engine/src/lib.rs` のsnapshot cloneとtick内snapshot生成がlock内にあり、authored collectionも複製 | 代表showでclone時間・lock待機・payload bytesを別々に計測。single mutation ownership、fence、ACKを維持 |
 | 高 | `main.rs` の `engine_snapshot_delta` は深い比較/clone。Stage 30Hz consumerに対しUI apply間引きだけではbackend仕事量は減らない | 上記snapshot計測とまとめて検証してからrevision/dirty trackingを選ぶ |
-| 中 | `VideoControlPanel.tsx` のlibraryOnlyはCSSでmixerを隠すが、LayerList/ISF subtreeをmountし続ける | FX到達性の修正時に必要なconsumerだけmount。見えないUIのreconcile回数を測る |
+| 対応済 | libraryOnlyで非表示の旧mixer consumerがmountされ続けていた | 条件mountへ変更。FXはclosed/open/closedで0/1/0。CPU/FPS改善率は未計測 |
 | 高 | 録画のblocking stdin writeとStop joinに期限なし | fake encoderの停止・無応答で停止上限を設計/試験。今回のstderr排出だけで解消としない |
 
 ### 肥大化ファイルの分割順序
@@ -154,11 +154,11 @@ video/lib.rs 581,530B。巨大な同居テストも含むため、数値をrunti
    mainは開始/停止のTauri adapterとengine/renderer/statusの接続を保持する。
    workerはまだ既存renderer/preview snapshot adapterに依存する段階的抽出で、
    完全なdomain層独立を達成したという意味ではない。
-2. **次のmain単位**: snapshot同期、project transaction、media lifecycleを個別責務で切り出す。
+2. **次のmain単位**: snapshot同期は分離済。project transaction、media lifecycleを個別責務で切り出す。
    UI/Tauri adapter → application service → domain/port → OS adapterの依存を意識し、
    domainがAppState/Tauriを参照する逆依存や、全状態を集めた巨大serviceを増やさない。
 3. **App**: 既存controllerを活用し、poll lifecycle・view・開発fixtureを切り分ける。
-   FX到達性とhidden consumer修正を先行し、同じstateの二重所有を作らない。
+   FX到達性とhidden consumer修正は専用inspectorへ分離済。同じstateの二重所有を作らない。
 4. **Engine/protocol/IO/video**: snapshot・timeline・video・transportの既存責務ごとに、
    公開APIとmutation所有権を維持して分離。同居テスト分離は可読性改善として扱う。
 5. **CSS**: cascade順序とscopeを保つ単位で分割。字体/操作対象の縮小を伴わせない。
@@ -213,7 +213,7 @@ SHA-256 `0B30AC14FD84F28A628522024AD573ADECE5DD1210FC84A80971F3A3F24FA08F`。
 
 物理出力、実機録画の可聴/A/V長時間、全matrix、製品全体の完了は未検証。
 
-snapshot同期の計測/責務分離は続行文書へ移管。次の実装単位はVideo FX到達性・hidden consumer、
-またはengine snapshot clone/lock待機の実show計測。
+snapshot同期とVideo FXの限定修復は各続行文書へ移管。次はengine snapshot clone/lock待機の
+実show計測、またはproject transaction/media lifecycleの独立した責務分離。
 録画の残存CAS/停止上限と、別所有overlap差分は独立した境界のまま引き継ぐ。
 このチェックポイントは明示した所有ファイルのみcommit/pushし、upstream一致を確認する。

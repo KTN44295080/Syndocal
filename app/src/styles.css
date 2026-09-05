@@ -2387,20 +2387,6 @@ h3 {
   grid-template-rows: auto minmax(0, 1fr);
 }
 
-.videoControlPanelLibrary > .videoMixerDiagnostics,
-.videoControlPanelLibrary > .videoMixerTopPane,
-.videoControlPanelLibrary > .videoMixerGridDivider,
-.videoControlPanelLibrary > .videoMixerContextPane,
-.videoControlPanelLibrary .videoMixerPaneHeader,
-.videoControlPanelLibrary .videoClipSlotBankPanel,
-.videoControlPanelLibrary .videoClipLegacyTransport,
-.videoControlPanelLibrary .mixerDrawerBar,
-.videoControlPanelLibrary .liveAudioInputRail,
-.videoControlPanelLibrary .autoVjStrip,
-.videoControlPanelLibrary .audioReactiveVjStrip {
-  display: none;
-}
-
 .videoControlPanelLibrary .videoMixerClipPane {
   min-height: 0;
   overflow: auto;

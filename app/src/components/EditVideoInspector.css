@@ -1,0 +1,72 @@
+.editVideoInspectorPane {
+  height: 100%;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-width: 0;
+}
+
+.editVideoLayerFx {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.editVideoLayerFx > label {
+  display: grid;
+  gap: 6px;
+}
+
+.editVideoLayerFx select {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.editVideoLayerFx .videoIsfQuickRack {
+  display: grid;
+  gap: 8px;
+  padding: 8px;
+  min-width: 0;
+}
+
+.editVideoLayerFx .videoIsfQuickStatus {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  overflow-wrap: anywhere;
+}
+
+.editVideoLayerFx .builtinIsfLibrary {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.editVideoLayerFx .videoIsfBody {
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
+}
+
+.editVideoLayerFx .videoIsfStackRow {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 64px), 1fr));
+}
+
+.editVideoLayerFx .videoIsfStageSelect {
+  grid-column: 1 / -1;
+}
+
+.editVideoLayerFx .videoIsfStackRow > button {
+  font-size: inherit;
+}
+
+.editVideoLayerFx .videoIsfControl {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 72px), 1fr));
+}
+
+.editVideoLayerFx .videoIsfControl > span {
+  grid-column: 1 / -1;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.editVideoLayerFx .videoIsfStackActions {
+  display: flex;
+  flex-wrap: wrap;
+}

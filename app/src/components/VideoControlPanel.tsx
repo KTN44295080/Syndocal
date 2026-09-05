@@ -257,6 +257,7 @@ export function VideoControlPanel(props: VideoControlPanelProps) {
           </details>
         </Show>
       </div>
+      <Show when={!props.libraryOnly}>
       <div class="videoMixerDiagnostics">
         <VideoPreviewDiagnosticsPanel {...props.previewDiagnostics} />
         <VideoOutputRenderPlanStatusPanel {...props.renderPlanStatus} />
@@ -277,7 +278,9 @@ export function VideoControlPanel(props: VideoControlPanelProps) {
         </div>
       </section>
       <div class="videoMixerGridDivider" aria-hidden="true" />
+      </Show>
       <section class="videoMixerClipPane" aria-label="Clip and transition desk">
+        <Show when={!props.libraryOnly}>
         <header class="videoMixerPaneHeader">
           <div>
             <strong>Clips</strong>
@@ -304,6 +307,7 @@ export function VideoControlPanel(props: VideoControlPanelProps) {
             >{props.clipSlotTake.label}</button>
           </div>
         </header>
+        </Show>
         <Show when={props.mediaLibrary.activeOperations.length > 0}>
           <div class="videoMediaOperationRail" role="group" aria-label="Active Media operations">
             <For each={props.mediaLibrary.activeOperations}>
@@ -463,6 +467,7 @@ export function VideoControlPanel(props: VideoControlPanelProps) {
             </Show>
           </div>
         </details>
+        <Show when={!props.libraryOnly}>
         <Show when={props.mixer}>
           <MixerDrawerBar id="audio-in" title="Audio In" status={audioInStatus()} open={audioInOpen()} onToggle={() => toggleDrawer("audio-in")} />
           <LiveAudioInputRail {...props.clipGrid} compact />
@@ -480,7 +485,9 @@ export function VideoControlPanel(props: VideoControlPanelProps) {
             sourceCreateVisible={sourceCreateVisible()}
           />
         </details>
+        </Show>
       </section>
+      <Show when={!props.libraryOnly}>
       <section class="videoMixerContextPane" aria-label="Layers and outputs">
         <section class="videoMixerProgramPane" aria-label="Video outputs">
           <header class="videoMixerPaneHeader">
@@ -597,6 +604,7 @@ export function VideoControlPanel(props: VideoControlPanelProps) {
       <div class="videoMixerAutomationTools">
         <VideoTimelineAutomationPanel {...props.timelineAutomation} />
       </div>
+      </Show>
     </section>
   );
 }

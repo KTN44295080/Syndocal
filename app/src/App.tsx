@@ -3,7 +3,7 @@ import { listen as tauriListen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getAllWebviewWindows } from "@tauri-apps/api/webviewWindow";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { batch, createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
+import { batch, createEffect, createMemo, createSignal, For, onCleanup, Show, type ComponentProps } from "solid-js";
 import { Portal } from "solid-js/web";
 import type { FrontendTauriInvokeCommand } from "./tauriInvokeCommands";
 import {
@@ -106,6 +106,7 @@ import {
   type VideoDisplayMonitorDescriptor,
 } from "./components/VideoOutputCreatePanel";
 import { StagePreview2D } from "./components/StagePreview2D";
+import { EditVideoInspector } from "./components/EditVideoInspector";
 import { VideoControlPanel } from "./components/VideoControlPanel";
 import { VideoClipSlotInspectorPanel } from "./components/VideoClipSlotInspectorPanel";
 import { defaultAutoVjSnapshot } from "./components/AutoVjStrip";
@@ -26197,6 +26198,34 @@ export default function App() {
     window.removeEventListener("beforeunload", handleBeforeUnload);
   });
 
+  const videoLayerListProps: ComponentProps<typeof VideoControlPanel>["layerList"] = {
+    get layers() { return snapshot().video.layers; },
+    get isfRuntimeErrors() { return videoPreviewDiagnostics()?.isf_stage_errors ?? []; },
+    get isfEventPulseBusy() { return isfEventPulseBusy(); },
+    onSetLayerLabel: setVideoLayerLabel,
+    onMoveLayer: moveVideoLayer,
+    onDuplicateLayer: duplicateVideoLayer,
+    onRefreshMetadata: refreshVideoLayerMetadata,
+    onSetBlendMode: setVideoLayerBlendMode,
+    onSetLayerState: setVideoLayerState,
+    onSetLayerTransform: setVideoLayerTransform,
+    onSetLayerColor: setVideoLayerColor,
+    onSetLayerFx: setVideoLayerFx,
+    onImportIsf: importVideoLayerIsf,
+    onApplyBuiltinIsf: applyBuiltinVideoIsfEffect,
+    onSetIsfEffect: setVideoLayerIsfEffect,
+    onMoveIsfEffect: moveVideoLayerIsfEffect,
+    onRemoveIsfEffect: removeVideoLayerIsfEffect,
+    onSetIsfEffectEnabled: setVideoLayerIsfEffectEnabled,
+    onResetIsfEffect: resetVideoLayerIsfEffect,
+    onSetIsfControl: setVideoLayerIsfControl,
+    onTriggerIsfEvent: triggerVideoLayerIsfEvent,
+    onAddCuePoint: addVideoCuePoint,
+    onJumpCuePoint: jumpVideoCuePoint,
+    onRemoveCuePoint: removeVideoCuePoint,
+    onRemoveLayer: removeVideoLayer,
+  };
+
   const renderTimelineInspector = () => {
     const selection = timelineSelection();
     const empty = (message = "Select a Timeline item to inspect it.") => (
@@ -27839,33 +27868,7 @@ export default function App() {
             get graphs() { return snapshot().node_graphs; },
             onSetEnabled: setNodeGraphEnabled,
           }}
-          layerList={{
-            get layers() { return snapshot().video.layers; },
-            get isfRuntimeErrors() { return videoPreviewDiagnostics()?.isf_stage_errors ?? []; },
-            get isfEventPulseBusy() { return isfEventPulseBusy(); },
-            onSetLayerLabel: setVideoLayerLabel,
-            onMoveLayer: moveVideoLayer,
-            onDuplicateLayer: duplicateVideoLayer,
-            onRefreshMetadata: refreshVideoLayerMetadata,
-            onSetBlendMode: setVideoLayerBlendMode,
-            onSetLayerState: setVideoLayerState,
-            onSetLayerTransform: setVideoLayerTransform,
-            onSetLayerColor: setVideoLayerColor,
-            onSetLayerFx: setVideoLayerFx,
-            onImportIsf: importVideoLayerIsf,
-            onApplyBuiltinIsf: applyBuiltinVideoIsfEffect,
-            onSetIsfEffect: setVideoLayerIsfEffect,
-            onMoveIsfEffect: moveVideoLayerIsfEffect,
-            onRemoveIsfEffect: removeVideoLayerIsfEffect,
-            onSetIsfEffectEnabled: setVideoLayerIsfEffectEnabled,
-            onResetIsfEffect: resetVideoLayerIsfEffect,
-            onSetIsfControl: setVideoLayerIsfControl,
-            onTriggerIsfEvent: triggerVideoLayerIsfEvent,
-            onAddCuePoint: addVideoCuePoint,
-            onJumpCuePoint: jumpVideoCuePoint,
-            onRemoveCuePoint: removeVideoCuePoint,
-            onRemoveLayer: removeVideoLayer,
-          }}
+          layerList={videoLayerListProps}
           effectScopes={{
             get catalog() { return videoEffectCatalog(); },
             get compositions() { return snapshot().video.compositions; },
@@ -28006,22 +28009,11 @@ export default function App() {
           }
           contextContent={
             workspaceTab() === "control" && controlMode() === "mixer" ? (
-              <section class="editVideoInspectorPane" data-edit-video-inspector aria-label="Selected media properties">
-                <header class="panelHeader"><h2>Media Properties</h2></header>
-                <Show when={selectedMediaLibraryAsset()} fallback={<div class="emptyState">Select a Media Library item to inspect its properties.</div>}>
-                  {(asset) => <div class="editVideoInspectorContent">
-                    <strong data-no-localize>{asset().label}</strong>
-                    <dl>
-                      <div><dt>Source</dt><dd data-no-localize>{asset().source.kind}</dd></div>
-                      <div><dt>Availability</dt><dd data-no-localize>{mediaAssetAvailabilityById()[asset().id]?.kind ?? "Not checked"}</dd></div>
-                    </dl>
-                    <details class="editVideoAdvancedDisclosure">
-                      <summary>Advanced Video Controls</summary>
-                      <p>Layers, output routing, and physical displays are configured in Setup Video.</p>
-                    </details>
-                  </div>}
-                </Show>
-              </section>
+              <EditVideoInspector
+                asset={selectedMediaLibraryAsset()}
+                availabilityById={mediaAssetAvailabilityById()}
+                layerFx={videoLayerListProps}
+              />
             ) : workspaceTab() === "control" && controlMode() === "live" ? (
               <TimelineSourceShelf
                 bankAuthority={bankAuthority()}
