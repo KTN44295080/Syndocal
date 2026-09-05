@@ -7678,6 +7678,86 @@ struct BlendTransformedRgba8Params<'a> {
 }
 
 fn blend_transformed_rgba8(params: BlendTransformedRgba8Params<'_>) {
+    if params.opacity == 1.0
+        && *params.blend_mode == VideoBlendMode::Normal
+        && *params.color == VideoColorAdjust::default()
+        && *params.fx == VideoFxAdjust::default()
+        && params.transform.rotation_deg == 0.0
+        && params.transform.x.is_finite()
+        && params.transform.y.is_finite()
+        && params.transform.scale_x.is_finite()
+        && params.transform.scale_y.is_finite()
+        && params.transform.crop_left.is_finite()
+        && params.transform.crop_right.is_finite()
+        && params.transform.crop_top.is_finite()
+        && params.transform.crop_bottom.is_finite()
+    {
+        blend_axis_aligned_identity_adjustments(params);
+    } else {
+        blend_transformed_rgba8_generic(params);
+    }
+}
+
+// Preserve the general sampler's pixel-center, crop, nearest-neighbor and alpha
+// rules while sharing horizontal sampling across rows. Artistic adjustments and
+// rotated layers retain the general path.
+fn blend_axis_aligned_identity_adjustments(params: BlendTransformedRgba8Params<'_>) {
+    let BlendTransformedRgba8Params {
+        destination,
+        frame,
+        width,
+        height,
+        transform,
+        ..
+    } = params;
+    let left = transform.crop_left.clamp(0.0, 1.0);
+    let top = transform.crop_top.clamp(0.0, 1.0);
+    let right = (1.0 - transform.crop_right.clamp(0.0, 1.0)).clamp(0.0, 1.0);
+    let bottom = (1.0 - transform.crop_bottom.clamp(0.0, 1.0)).clamp(0.0, 1.0);
+    if right <= left || bottom <= top {
+        return;
+    }
+    let scale_x = transform.scale_x.max(0.001);
+    let scale_y = transform.scale_y.max(0.001);
+    let source_columns = (0..width)
+        .map(|x| {
+            let centered = (x as f32 + 0.5) / width as f32 - 0.5 - transform.x;
+            let local = centered / scale_x + 0.5;
+            (0.0..1.0).contains(&local).then(|| {
+                ((left + local * (right - left)) * frame.width as f32)
+                    .floor()
+                    .clamp(0.0, (frame.width - 1) as f32) as usize
+                    * 4
+            })
+        })
+        .collect::<Vec<_>>();
+    for y in 0..height {
+        let centered = (y as f32 + 0.5) / height as f32 - 0.5 - transform.y;
+        let local = centered / scale_y + 0.5;
+        if !(0.0..1.0).contains(&local) {
+            continue;
+        }
+        let source_y = ((top + local * (bottom - top)) * frame.height as f32)
+            .floor()
+            .clamp(0.0, (frame.height - 1) as f32) as usize;
+        let source_row = source_y * frame.width as usize * 4;
+        let destination_row = y as usize * width as usize * 4;
+        for (x, source_x) in source_columns.iter().enumerate() {
+            let Some(source_x) = source_x else {
+                continue;
+            };
+            let source = &frame.data[source_row + source_x..source_row + source_x + 4];
+            let target = &mut destination[destination_row + x * 4..destination_row + x * 4 + 4];
+            if source[3] == 255 {
+                target.copy_from_slice(source);
+            } else {
+                blend_pixel(target, source, 1.0, &VideoBlendMode::Normal);
+            }
+        }
+    }
+}
+
+fn blend_transformed_rgba8_generic(params: BlendTransformedRgba8Params<'_>) {
     let BlendTransformedRgba8Params {
         destination,
         frame,
@@ -16425,3 +16505,7 @@ mod tests {
         assert_eq!(recovered.frame(), visible.frame());
     }
 }
+
+#[cfg(test)]
+#[path = "axis_aligned_composite_tests.rs"]
+mod axis_aligned_composite_tests;
