@@ -143,3 +143,58 @@ its native playback evidence is in `PREVIEW_CLOCK_FIXTURE_AIM_2026-09-05.md`.
   Next: read loaded topology and reproduce the rejected action through the user.
   Spout rejection remains unresolved; commit covers one-step preparation only.
   Protected viewport checker remains unchanged and excluded.
+
+## Live blocker after one-step activation checkpoint
+
+- Checkpoint `d50bdef56cf5c2cb954950f108d1e661103d8290` pushed/upstream equal.
+  Read-only live topology still has original Display5:2 outputs and Japanese
+  composition names; visible title is `DSF2026_NightGirl-AV-test.sdc *`.
+  Disk4K copy SHA remains unchanged. The requested replacement was not adopted.
+- User reports `Managed output authority is already Faulted and remains retained`.
+  Read-only `get_output_ownership_status` confirms Failed/Standby, desired Both,
+  both output permissions false, with exact cause:
+  `Managed output lease external project replacement; Managed DMX retire completion
+  failed: InDoubt("Managed show DMX fail-stop found no retained USB-DMX route for
+  its exact worker proof")`.
+- Production keepalive calls the USB-specific engine retirement proof for every
+  Both run, including Art-Net-only. This invalid applicability requirement blocks
+  project replacement; do not clear Faulted or weaken existing USB proof. Engine
+  implementation/review is in progress for exact no-USB topology retirement.
+- A temporary read-only IPC result observer `__projectOpenReadProbe` is installed
+  for load_project/load_project_path only. Remove it and restart without diagnostic
+  port after verification. No project-load/output mutation has been automated.
+
+## No-USB retirement correction
+
+- Engine retirement now accepts route-absent USB only with authoritative pristine
+  serial status: inactive, no queued/live/physical zero history, worker shutdown
+  complete and no fault. Prior worker loss/uncertainty remains rejected.
+- Exact active loopback Art-Net sends one zero datagram then retires; disabled
+  sender-absent DMX sends nothing and never binds a socket. Existing USB physical
+  zero/shutdown proof and mixed-route/input rejection remain unchanged.
+- Completion evidence distinguishes whether USB was required, retains real USB
+  status, and revalidates authority/status/absence for replay prevention. Cleanup
+  no longer invents a USB fault when USB was demonstrably unused. Manager Faulted
+  protections were not weakened; the required process restart replaces this run.
+- `node target/qa/recording-atomic-20260905/run-native.mjs cargo test -p engine
+  --locked managed_fail_stop -- --nocapture --test-threads=1`: final23 PASS,
+  0failed,1028filtered; exact MSVC gate, first-party warnings0 (delta0).
+  Initial22/1 failure exposed a fake-worker fixture that omitted production's
+  active-status publication. The fixture now publishes it before deleting the
+  worker; missing-worker rejection assertions remain. Independent review ACCEPT
+  for both implementation and fixture adjustment; owned diff check PASS.
+- PID60304's visible WebView closed before the next build (debug port refused),
+  while the single-instance process remained. Observer removal could not connect;
+  process replacement removes its in-memory observer.
+- Native `pnpm --dir app tauri build --no-bundle`: PASS2m54s, warnings0,
+  pinned MSVC gate and exact PID60304 retirement verified. Log
+  `target/qa/snapshot-cleanup-20260905/no-usb-retirement-native-build.log`.
+  Launched PID64164, one responsive maximized Syndocal main window; SHA256
+  `FD58D145294DDB28A3AE3EC548B58810AFD77F1AF807EAF2FC960A13179B31C8`.
+  Evidence `no-usb-retirement-diagnostic-launch.json` in the same folder.
+- Port38479 and project-open result observer are temporarily enabled on PID64164
+  for user-driven load verification. Startup ownership is ordinary StartupDenied
+  Standby, not the prior managed-retirement error. User asked to open4K copy.
+  Actual successful replacement and Unity Spout receipt remain unverified; remove
+  observer and restart normally after these checks. Commit covers source regression
+  and native build/startup evidence, not end-to-end Unity acceptance.

@@ -50,6 +50,12 @@ fn managed_fail_stop_live_runtime_with_before_write(
     runtime.show_serial_dmx_route = Some(RuntimeShowSerialDmxRoute {
         sender: Some(DmxSender::EnttecOpenDmx(sender)),
     });
+    // This fixture bypasses the production start path, so publish its live worker truth.
+    shared.set_show_serial_dmx_route_status(ShowSerialDmxRouteStatus {
+        active: true,
+        worker_shutdown_completed: false,
+        ..ShowSerialDmxRouteStatus::default()
+    });
     let (_, safety) = shared
         .engage_safety_blackout()
         .expect("test S0 engagement must succeed");
@@ -1257,4 +1263,103 @@ fn managed_fail_stop_wait_after_commit_is_indoubt_and_never_cancels_the_worker()
     inner.finish(Err(ManagedShowDmxFailStopError::in_doubt(
         "test worker terminal result",
     )));
+}
+
+#[test]
+fn managed_fail_stop_without_usb_handles_artnet_and_no_dmx_without_fabricated_usb_proof() {
+    for artnet in [false, true] {
+        let shared = Arc::new(EngineSharedTelemetry::new());
+        let mut runtime = EngineRuntime::new_with_shared_telemetry(
+            staged_show_artnet_loopback_output(),
+            shared.clone(),
+        );
+        if artnet {
+            runtime.output.enabled = true;
+            runtime.dmx_sender = Some(DmxSender::TestExactArtNetRoute);
+        }
+        let (_, safety) = shared.engage_safety_blackout().unwrap();
+        runtime.safety_blackout_engaged = true;
+        let _lease = runtime
+            .output_ownership_gate
+            .begin_failure_fence("no USB test");
+        let epoch = runtime.output_ownership_gate.status().epoch;
+        let operation = ManagedShowDmxFailStopOperationInner::new();
+        assert!(operation.admit());
+        let mut sends = 0;
+        let mut send = |packet: &[u8; 530]| {
+            sends += 1;
+            Ok(packet.len())
+        };
+        let receipt = runtime
+            .apply_managed_show_dmx_fail_stop_with_transport(
+                safety.epoch,
+                safety.generation,
+                epoch,
+                &operation,
+                &mut send,
+            )
+            .unwrap();
+        assert_eq!(receipt.artnet_zero_accepted(), artnet);
+        assert_eq!(sends, usize::from(artnet));
+        assert!(runtime.managed_show_dmx_terminal_absent());
+        let status = shared
+            .try_show_serial_dmx_route_status_snapshot()
+            .unwrap()
+            .status;
+        assert!(!status.zero_frame_physical_write_completed);
+        assert!(!status.zero_frame_queued);
+        assert!(!status.faulted);
+        let replay = ManagedShowDmxFailStopOperationInner::new();
+        assert!(replay.admit());
+        assert!(runtime
+            .apply_managed_show_dmx_fail_stop_with_transport(
+                safety.epoch,
+                safety.generation,
+                epoch,
+                &replay,
+                &mut |_| panic!("replay must not send")
+            )
+            .is_err());
+    }
+}
+
+#[test]
+fn managed_fail_stop_missing_usb_rejects_prior_worker_history_and_uncertain_status() {
+    for variant in 0..6 {
+        let shared = Arc::new(EngineSharedTelemetry::new());
+        let mut runtime = EngineRuntime::new_with_shared_telemetry(
+            staged_show_artnet_loopback_output(),
+            shared.clone(),
+        );
+        let (_, _) = shared.engage_safety_blackout().unwrap();
+        let mut status = ShowSerialDmxRouteStatus::default();
+        match variant {
+            0 => status.active = true,
+            1 => status.live_frame_queued = true,
+            2 => status.zero_frame_queued = true,
+            3 => status.zero_frame_physical_write_completed = true,
+            4 => status.worker_shutdown_completed = false,
+            _ => status.faulted = true,
+        }
+        shared.set_show_serial_dmx_route_status(status);
+        assert!(runtime
+            .managed_show_dmx_fail_stop_topology_preflight()
+            .is_err());
+        runtime.best_effort_retire_managed_show_dmx_after_fail_stop_error("missing worker");
+        assert!(shared.show_serial_dmx_route_status().faulted);
+    }
+}
+
+#[test]
+fn managed_fail_stop_no_usb_cleanup_does_not_invent_usb_fault() {
+    let shared = Arc::new(EngineSharedTelemetry::new());
+    let mut runtime = EngineRuntime::new_with_shared_telemetry(
+        staged_show_artnet_loopback_output(),
+        shared.clone(),
+    );
+    runtime.best_effort_retire_managed_show_dmx_after_fail_stop_error("Art-Net failure");
+    assert!(runtime.managed_show_dmx_terminal_absent());
+    let status = shared.show_serial_dmx_route_status();
+    assert!(!status.faulted);
+    assert!(!status.zero_frame_physical_write_completed);
 }

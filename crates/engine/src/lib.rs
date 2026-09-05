@@ -20347,6 +20347,7 @@ struct RuntimeShowSerialDmxRoute {
 /// or USB status revision invalidates this evidence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ManagedShowDmxFailStopCompletionEvidence {
+    usb_required: bool,
     completion_generation: u64,
     safety: SafetyBlackoutAuthority,
     failure_epoch: u64,
@@ -50866,6 +50867,23 @@ impl EngineRuntime {
         ManagedShowDmxFailStopAuthorityCheck::Exact
     }
 
+    // A missing route alone is not proof that a previously retained USB worker stopped.
+    fn managed_show_dmx_has_pristine_absent_usb(&self) -> bool {
+        self.show_serial_dmx_route.is_none()
+            && self
+                .shared_telemetry
+                .try_show_serial_dmx_route_status_snapshot()
+                .is_ok_and(|snapshot| {
+                    let status = snapshot.status;
+                    !status.active
+                        && !status.live_frame_queued
+                        && !status.zero_frame_queued
+                        && !status.zero_frame_physical_write_completed
+                        && status.worker_shutdown_completed
+                        && !status.faulted
+                })
+    }
+
     /// Verify the only topology that this one managed fail-stop understands.
     /// This routine is deliberately pure. Its caller has already crossed the
     /// consumed commit boundary, so an ambiguous route cannot be mistaken for
@@ -50894,7 +50912,8 @@ impl EngineRuntime {
                     .to_string(),
             );
         }
-        if self.show_serial_dmx_route.is_none() {
+        if self.show_serial_dmx_route.is_none() && !self.managed_show_dmx_has_pristine_absent_usb()
+        {
             return Err(
                 "Managed show DMX fail-stop found no retained USB-DMX route for its exact worker proof"
                     .to_string(),
@@ -50903,7 +50922,7 @@ impl EngineRuntime {
         if self
             .show_serial_dmx_route
             .as_ref()
-            .is_none_or(|route| route.sender.is_none())
+            .is_some_and(|route| route.sender.is_none())
         {
             return Err(
                 "Managed show DMX fail-stop found a USB-DMX route without its retained exact Open DMX sender"
@@ -50913,12 +50932,13 @@ impl EngineRuntime {
 
         if self.has_exact_live_show_serial_dmx_artnet_mirror() {
             Ok(())
-        } else if show_artnet_loopback_route_is_exact_staged(&self.output)
+        } else if (show_artnet_loopback_route_is_exact_staged(&self.output)
+            || (self.managed_show_dmx_has_pristine_absent_usb() && !self.output.enabled))
             && self.dmx_sender.is_none()
         {
-            // The primary route was already removed by the same exact failure
-            // fence.  The fail-stop still sends its one fixed local zero
-            // datagram; it never recreates a persistent sender.
+            // USB retirement still requires its fixed local zero datagram.
+            // Without any USB history, an inactive primary needs no send.
+            // Neither path recreates a persistent sender.
             Ok(())
         } else {
             Err(
@@ -50976,7 +50996,8 @@ impl EngineRuntime {
         if serial.revision != evidence.serial_status_revision
             || serial.status.active
             || serial.status.live_frame_queued
-            || !serial.status.zero_frame_physical_write_completed
+            || (evidence.usb_required && !serial.status.zero_frame_physical_write_completed)
+            || (!evidence.usb_required && !self.managed_show_dmx_has_pristine_absent_usb())
             || !serial.status.worker_shutdown_completed
             || serial.status.faulted
             || serial.status.artnet_mirror_live
@@ -51066,11 +51087,13 @@ impl EngineRuntime {
     fn best_effort_retire_managed_show_dmx_after_fail_stop_error(&mut self, cause: &str) {
         self.clear_managed_show_dmx_fail_stop_completion();
         // This path runs only after the consumed operation crossed commit.
-        // Call the bounded USB fault path even when the route is already
-        // absent: a missing worker is not evidence that its last frame was
-        // safe, and the fault path latches S0 plus publishes the sticky
-        // non-active status that blocks a later release.
-        self.fault_show_serial_dmx_route(cause);
+        // Missing-worker history still requires the bounded USB fault path.
+        // A pristine absent USB route has no physical write to prove and must
+        // not acquire a synthetic USB fault from an Art-Net-only failure.
+        let absent_usb = self.managed_show_dmx_has_pristine_absent_usb();
+        if !absent_usb {
+            self.fault_show_serial_dmx_route(cause);
+        }
         // `fault_show_serial_dmx_route` snapshots Art-Net truth before this
         // cleanup clears the primary sender. Re-publish the same USB fault
         // facts after sender retirement so an observer cannot retain a stale
@@ -51092,7 +51115,7 @@ impl EngineRuntime {
                     .zero_frame_physical_write_completed,
                 live_frame_queued: false,
                 worker_shutdown_completed: prior_serial_status.worker_shutdown_completed,
-                faulted: true,
+                faulted: !absent_usb,
                 artnet_mirror_live: false,
                 artnet_mirror_detail: "Managed fail-stop cleanup retired every runtime DMX sender after an ambiguous transaction; Art-Net mirror is absent. This remains route state only, not receiver or wire delivery proof.".to_string(),
                 // Preserve the USB-side fault description rather than
@@ -51211,23 +51234,33 @@ impl EngineRuntime {
         self.managed_show_dmx_fail_stop_topology_preflight()
             .map_err(ManagedShowDmxFailStopError::in_doubt)?;
 
-        let packet = build_art_dmx_packet(SHOW_ARTNET_LOOPBACK_UNIVERSE, &[0u8; 512]);
-        let sent = send(&packet)
+        let usb_required = self.show_serial_dmx_route.is_some();
+        let initial_serial_revision = self
+            .shared_telemetry
+            .try_show_serial_dmx_route_status_snapshot()
+            .map_err(ManagedShowDmxFailStopError::in_doubt)?
+            .revision;
+        let artnet_zero_required =
+            usb_required || self.has_exact_live_show_serial_dmx_artnet_mirror();
+        if artnet_zero_required {
+            let packet = build_art_dmx_packet(SHOW_ARTNET_LOOPBACK_UNIVERSE, &[0u8; 512]);
+            let sent = send(&packet)
             .map_err(|error| {
                 ManagedShowDmxFailStopError::in_doubt(format!(
                     "Managed show DMX fail-stop local Art-Net zero send is physically ambiguous: {error}",
                 ))
             })?;
-        if sent != packet.len() {
-            return Err(ManagedShowDmxFailStopError::in_doubt(format!(
-                "Managed show DMX fail-stop local Art-Net zero wrote {sent} of {} bytes",
-                packet.len(),
-            )));
+            if sent != packet.len() {
+                return Err(ManagedShowDmxFailStopError::in_doubt(format!(
+                    "Managed show DMX fail-stop local Art-Net zero wrote {sent} of {} bytes",
+                    packet.len(),
+                )));
+            }
+            #[cfg(test)]
+            self.record_managed_show_dmx_fail_stop_test_event(
+                ManagedShowDmxFailStopTestEvent::ArtNetZeroAccepted,
+            );
         }
-        #[cfg(test)]
-        self.record_managed_show_dmx_fail_stop_test_event(
-            ManagedShowDmxFailStopTestEvent::ArtNetZeroAccepted,
-        );
 
         // The normal USB stop owns the same gate while it revalidates S0 and
         // reserves the bounded physical-zero write.  Release our Art-Net
@@ -51236,15 +51269,17 @@ impl EngineRuntime {
         // than deadlocking this one irreversible transaction.
         drop(_safety_enqueue_gate);
 
-        self.apply_show_serial_dmx_safety_blackout_route_stop(
-            expected_safety_epoch,
-            expected_safety_generation,
-        )
-        .map_err(|error| {
-            ManagedShowDmxFailStopError::in_doubt(format!(
+        if usb_required {
+            self.apply_show_serial_dmx_safety_blackout_route_stop(
+                expected_safety_epoch,
+                expected_safety_generation,
+            )
+            .map_err(|error| {
+                ManagedShowDmxFailStopError::in_doubt(format!(
                 "Managed show DMX fail-stop USB physical-zero retirement did not complete: {error}",
             ))
-        })?;
+            })?;
+        }
         let serial = self
             .shared_telemetry
             .try_show_serial_dmx_route_status_snapshot()
@@ -51254,20 +51289,36 @@ impl EngineRuntime {
                 ))
             })?;
         #[cfg(test)]
-        if serial.status.zero_frame_physical_write_completed {
+        if usb_required && serial.status.zero_frame_physical_write_completed {
             self.record_managed_show_dmx_fail_stop_test_event(
                 ManagedShowDmxFailStopTestEvent::UsbZeroPhysicalCompleted,
             );
         }
         #[cfg(test)]
-        if serial.status.worker_shutdown_completed {
+        if usb_required && serial.status.worker_shutdown_completed {
             self.record_managed_show_dmx_fail_stop_test_event(
                 ManagedShowDmxFailStopTestEvent::WorkerShutdownCompleted,
             );
         }
+        if !usb_required
+            && (serial.revision != initial_serial_revision
+                || !matches!(
+                    self.managed_show_dmx_fail_stop_authority_preflight(
+                        expected_safety_epoch,
+                        expected_safety_generation,
+                        expected_failure_epoch
+                    ),
+                    ManagedShowDmxFailStopAuthorityCheck::Exact
+                ))
+        {
+            return Err(ManagedShowDmxFailStopError::in_doubt(
+                "Managed no-USB fail-stop authority or status changed",
+            ));
+        }
         if serial.status.active
             || serial.status.live_frame_queued
-            || !serial.status.zero_frame_physical_write_completed
+            || (usb_required && !serial.status.zero_frame_physical_write_completed)
+            || (!usb_required && !self.managed_show_dmx_has_pristine_absent_usb())
             || !serial.status.worker_shutdown_completed
             || serial.status.faulted
         {
@@ -51290,13 +51341,13 @@ impl EngineRuntime {
             .set_show_serial_dmx_route_status(ShowSerialDmxRouteStatus {
                 active: false,
                 zero_frame_queued: serial.status.zero_frame_queued,
-                zero_frame_physical_write_completed: true,
+                zero_frame_physical_write_completed: serial.status.zero_frame_physical_write_completed,
                 live_frame_queued: false,
                 worker_shutdown_completed: true,
                 faulted: false,
                 artnet_mirror_live: false,
-                artnet_mirror_detail: "Managed fail-stop retired the exact local Art-Net sender after one accepted zero datagram. This remains route state only, not receiver or wire delivery proof.".to_string(),
-                detail: "Managed show DMX fail-stop completed: local Art-Net zero acceptance preceded USB physical-zero completion and bounded worker shutdown; all runtime DMX senders are absent.".to_string(),
+                artnet_mirror_detail: if artnet_zero_required { "Exact Art-Net sender retired after one accepted zero datagram; not receiver or wire proof." } else { "No active DMX route was present; no Art-Net datagram was sent." }.to_string(),
+                detail: if usb_required { "Managed fail-stop completed Art-Net zero acceptance, USB physical zero and worker shutdown." } else { "Managed fail-stop completed without a USB worker; no USB physical write is claimed." }.to_string(),
             });
         let serial = self
             .shared_telemetry
@@ -51314,7 +51365,8 @@ impl EngineRuntime {
             || ownership.epoch != expected_failure_epoch
             || serial.status.active
             || serial.status.live_frame_queued
-            || !serial.status.zero_frame_physical_write_completed
+            || (usb_required && !serial.status.zero_frame_physical_write_completed)
+            || (!usb_required && !self.managed_show_dmx_has_pristine_absent_usb())
             || !serial.status.worker_shutdown_completed
             || serial.status.faulted
             || serial.status.artnet_mirror_live
@@ -51340,6 +51392,7 @@ impl EngineRuntime {
         self.managed_show_dmx_fail_stop_completion_generation = completion_generation;
         self.managed_show_dmx_fail_stop_completion =
             Some(ManagedShowDmxFailStopCompletionEvidence {
+                usb_required,
                 completion_generation,
                 safety,
                 failure_epoch: expected_failure_epoch,
@@ -51349,7 +51402,7 @@ impl EngineRuntime {
         Ok(ManagedShowDmxFailStopReceipt {
             safety,
             failure_epoch: expected_failure_epoch,
-            artnet_zero_accepted: true,
+            artnet_zero_accepted: artnet_zero_required,
             serial_status_revision: serial.revision,
         })
     }
