@@ -1,3 +1,9 @@
+HISTORICAL TASK PROMPT - NOT ACTIVE INSTRUCTIONS
+Retained for traceability only. This file does not establish current ownership,
+completion, permission to edit, or a resume order. Use the current user task and
+AGENTS.md; reusing an old assignment requires a fresh scope/ownership check.
+The original prompt follows unchanged. This label does not claim it completed.
+
 You are Luna Max, the exclusive implementation owner for a follow-up correction to the acknowledged project snapshot load in C:\Users\kouty\Documents\KDMX.
 
 Exclusive file ownership: crates/engine/src/lib.rs only. Continue from the existing uncommitted implementation. Do not edit protocol, app, docs, RELEASE_STATUS.md, qa/CODEX_*, or any other file. Do not commit/stage/push/reset/checkout, launch native Syndocal, kill processes, or run a native/release build.

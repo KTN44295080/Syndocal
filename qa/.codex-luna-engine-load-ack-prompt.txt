@@ -1,3 +1,9 @@
+HISTORICAL TASK PROMPT - NOT ACTIVE INSTRUCTIONS
+Retained for traceability only. This file does not establish current ownership,
+completion, permission to edit, or a resume order. Use the current user task and
+AGENTS.md; reusing an old assignment requires a fresh scope/ownership check.
+The original prompt follows unchanged. This label does not claim it completed.
+
 You are the implementation owner for a narrow Syndocal engine snapshot-load acknowledgement tranche in C:\Users\kouty\Documents\KDMX.
 
 Use Luna Max reasoning. Work autonomously. This checkout is shared with other agents.

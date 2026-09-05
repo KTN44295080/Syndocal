@@ -1,3 +1,9 @@
+HISTORICAL TASK PROMPT - NOT ACTIVE INSTRUCTIONS
+Retained for traceability only. This file does not establish current ownership,
+completion, permission to edit, or a resume order. Use the current user task and
+AGENTS.md; reusing an old assignment requires a fresh scope/ownership check.
+The original prompt follows unchanged. This label does not claim it completed.
+
 You own ONLY `crates/engine/src/lib.rs` in the shared `C:\Users\kouty\Documents\KDMX` worktree. Other agents own `app/src-tauri/src/main.rs`, frontend files, docs, and protocol files. Do not edit any other file. Do not stage, commit, push, reset, checkout, or modify user-owned release/handoff files.
 
 Continue the existing acknowledged project snapshot load implementation and fix this confirmed P1 without weakening its existing admission/cancellation/publication guarantees:

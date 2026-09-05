@@ -1,3 +1,9 @@
+HISTORICAL TASK PROMPT - NOT ACTIVE INSTRUCTIONS
+Retained for traceability only. This file does not establish current ownership,
+completion, permission to edit, or a resume order. Use the current user task and
+AGENTS.md; reusing an old assignment requires a fresh scope/ownership check.
+The original prompt follows unchanged. This label does not claim it completed.
+
 You own ONLY `crates/engine/src/lib.rs`. Continue the current acknowledged project-load allocator work after v3. Do not edit any other file. No stage/commit/push/reset/checkout.
 
 Confirmed remaining P1: allocator reservation uses `max_id.saturating_add(1)` and public allocation uses `fetch_add(1)`. A project snapshot containing `u64::MAX` in any u64 allocator domain or `u32::MAX` timeline layer is reserved as MAX; the next allocation returns an already-authored MAX and the following allocation wraps to 0. `MAX - 1` is also unsafe with the current raw allocator: reservation becomes MAX, the first allocation returns MAX, and the next wraps to 0. Current project-load validation does not reject exhausted or immediately-exhausting allocator domains.

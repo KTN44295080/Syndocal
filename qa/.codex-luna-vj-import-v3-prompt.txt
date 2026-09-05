@@ -1,3 +1,9 @@
+HISTORICAL TASK PROMPT - NOT ACTIVE INSTRUCTIONS
+Retained for traceability only. This file does not establish current ownership,
+completion, permission to edit, or a resume order. Use the current user task and
+AGENTS.md; reusing an old assignment requires a fresh scope/ownership check.
+The original prompt follows unchanged. This label does not claim it completed.
+
 You are Luna Max, the implementation owner for a narrow follow-up to the Syndocal VJ media-import reachability tranche in C:\Users\kouty\Documents\KDMX. Continue from the existing uncommitted diff. Work autonomously.
 
 Exclusive file ownership:

@@ -1,5 +1,10 @@
 # UI Competitive Redesign Plan (Timeline-first)
 
+> Operating rules and agent selection are owned by [AGENTS.md](../AGENTS.md).
+> Named model roles, approval sequences and completed-tranche work orders below
+> record the historical workflow; they are not standing instructions. Use this
+> document only for the domain contract relevant to the current task.
+
 作成: 2026-07-15 / 計画: Fable（実機比較・多段Workflow分析・敵対検証込み）/ 実装: Opus委任
 状態: **承認済み（2026-07-15）** — 実施順:
 T1✅ → T2✅ → T9✅ → T10✅ → T8✅ → F1✅ → F3✅ → F2✅ → F4✅ → T4✅（86ca79e）→ F5✅（243aaea）+ T3✅（f5cc523、Fable直接実装・合議マージf64ef96）→ F7✅（95b33b0、音声クリップブロック+可聴再生）+ T5✅（90dfa1a、Fable直接実装・合議マージ8c364a0）→ F6✅（59b6600、super scene）+ T6✅（4182ad6、Fable直接実装・合議マージf344713）→ F8✅（6a863a1、マルチステップStaticシーン）+ T7✅（60f1ad1、Fable直接実装 protocol込み・3ラウンド合議マージ7ee9214）→ T11✅（5c3de86、編集可能Touchサーフェス）+ T12✅（0010443、Fable直接実装・合議マージd95de64）— **シリーズ全完了 2026-07-18**

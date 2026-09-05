@@ -1,3 +1,9 @@
+HISTORICAL TASK PROMPT - NOT ACTIVE INSTRUCTIONS
+Retained for traceability only. This file does not establish current ownership,
+completion, permission to edit, or a resume order. Use the current user task and
+AGENTS.md; reusing an old assignment requires a fresh scope/ownership check.
+The original prompt follows unchanged. This label does not claim it completed.
+
 The supervising agent confirms that `crates/engine/src/lib.rs` is now free and its prior allocator tranche is frozen and independently approved. Begin now.
 
 You implement the additive `ProjectSwapDisarmed` ownership status across the shared KDMX worktree. Do not stage, commit, push, reset, checkout, or touch `RELEASE_STATUS.md`, `qa/CODEX_*`, project-swap docs, or unrelated files.

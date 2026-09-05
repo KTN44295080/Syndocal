@@ -1,5 +1,10 @@
 # Lighting Show Model v3 — F-series Design (Daslight functional parity)
 
+> Operating rules and agent selection are owned by [AGENTS.md](../AGENTS.md).
+> Named model roles, approval sequences and completed-tranche work orders below
+> record the historical workflow; they are not standing instructions. Use this
+> document only for the domain contract relevant to the current task.
+
 作成: 2026-07-16 / 設計: Fable Workflow（Inventory×2→Design→敵対検証14主張全CONFIRMED）
 / 実装: Codex gpt-5.6-sol（tranche-cycleスキル準拠）
 状態: **F1-F3意味論確定・承認済み（2026-07-16）**。確定事項:

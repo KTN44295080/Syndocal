@@ -1,3 +1,9 @@
+HISTORICAL TASK PROMPT - NOT ACTIVE INSTRUCTIONS
+Retained for traceability only. This file does not establish current ownership,
+completion, permission to edit, or a resume order. Use the current user task and
+AGENTS.md; reusing an old assignment requires a fresh scope/ownership check.
+The original prompt follows unchanged. This label does not claim it completed.
+
 You implement MediaAsset Library Tranche 1 for Syndocal after the supervising agent confirms the current project-coordinator tranche and all listed files are free. Use gpt-5.6-luna with maximum reasoning. Do not begin early. Do not stage, commit, push, reset, checkout, or touch `RELEASE_STATUS.md`, `qa/CODEX_*`, frontend UI files, `crates/video/**`, or unrelated files.
 
 Exclusive files for this tranche:

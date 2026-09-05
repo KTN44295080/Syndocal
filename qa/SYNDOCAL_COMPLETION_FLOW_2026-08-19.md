@@ -4,6 +4,21 @@ Date: 2026-08-19
 Branch at creation: `codex/syndocal-v1.0`
 Baseline before this document: `848d759846985cc3acf588356cfa3c996b4e2ef2`
 
+## Reading this file
+
+Operating rules live in [AGENTS.md](../AGENTS.md). This document owns product
+scope, dependencies, acceptance and the retained checkpoint record. For a small
+local edit, read the relevant contract only; do not read this entire file.
+
+- Current work: follow the user's requested scope and inspect the applicable
+  domain/ledger row. Sections 6-9 retain the machine-checked acceptance inventory.
+- Release work: sections 2, 4, 5 and 11 define release-level acceptance; they are
+  not the completion checklist for every internal edit.
+- Dated checkpoint sections are evidence snapshots of the named version/tree,
+  even when their historical text says "current", "next" or names a PID. They
+  do not reassign agents, authorize output, or revive an old pause/resume order.
+- Instruction-maintenance evidence: [2026-09-05 audit](INSTRUCTION_MAINTENANCE_2026-09-05.md).
+
 ## 2026-09-03 alpha.68 blackout release query-race checkpoint
 
 Alpha.68 closes the DMX blackout-off recovery race: after the one bounded
@@ -1398,8 +1413,8 @@ a current stop. The following documents remain normative within their domains:
 - `qa/CODEX_HANDOFF_2026-08-19.md`: historical implementation checkpoint log.
 
 Older percentages, resume instructions, and v1.0/v1.1 completion statements are
-historical when they conflict with the post-alpha.10 handoff, `AGENTS.md`, or this
-registry. In particular, the 2026-08-13 75.5% planning roll-up is not current
+historical. Current task instructions, `AGENTS.md`, and the applicable domain
+requirements govern; the rescinded post-alpha.10 handoff has no operating authority. In particular, the 2026-08-13 75.5% planning roll-up is not current
 release evidence, and its old Media A1 resume point must not replace the bounded
 residual selected through the current handoff.
 
@@ -1424,194 +1439,30 @@ implementation, automated proof, native/hardware proof, distribution/legal
 readiness, the affected domain, and the next blocking gate. A P0 blocker overrides
 all percentages.
 
-## 3. Mandatory workflow for every tranche
+## 3. Task workflow
 
-Every implementation tranche uses this flow. A later tranche may not consume an
-unreviewed or unverified predecessor.
-
-1. Read `AGENTS.md`, the post-alpha.10 handoff, this registry, and the selected
-   domain authority fully.
-2. Run `git status --short`, `git log -3 --oneline`, compare local/remote HEAD, and
-   preserve all unrelated or user-owned changes.
-3. Write the requirement, non-goals, risk class, compatibility/migration boundary,
-   file ownership, exact tests, native/hardware needs, and stop condition.
-4. Keep decomposition, instructions, integration, and completion claims with Sol.
-   Use the capability hierarchy Sol > Ox-alpha (`opencode/x-preview-f-free`) >
-   Terra > Luna, make Ox the default delegate for bounded implementation,
-   investigation, and review, and assign explicit files. Use Luna Max only for
-   small, explicit, low-ambiguity units already decomposed by Sol. A Terra
-   implementation requires an independent Ox adversarial review before integration.
-5. Assign a separate adversarial reviewer, defaulting to an independent Ox session.
-   The reviewer is read-only until the implementation owner reports a stable
-   checkpoint; implementer self-review is never sufficient.
-6. Parallel execution and elimination of avoidable elapsed time are mandatory.
-   Continuously fill every safely independent available lane with a
-   capability-appropriate assignment. While agents/builds/external I/O run, advance
-   non-overlapping implementation, investigation, test planning, documentation, or
-   evidence work. Leave a lane idle only when no safe productive task exists and
-   record why at the next checkpoint. Serialize only true dependencies, exclusive
-   UI/native operations, destructive actions, or same-file ownership, and never let
-   agents edit the same files concurrently.
-7. Implement one bounded unit. Do not mix refactors, warning cleanup, schema change,
-   UI change, and unrelated features in one commit unless they form one indivisible
-   correctness boundary.
-8. Run focused gates with nonzero selected tests, then neighboring regressions,
-   format/static/localization/viewport checks, and warning comparison.
-9. Freeze the diff and obtain independent P0/P1 review. Fix and re-review; a summary
-   from the implementer is not review evidence.
-10. For native UI/runtime changes, immediately before the release build resolve the
-    exact checkout executable path, stop only that exact process, run
-    `pnpm --dir app tauri build --no-bundle`, launch the exact executable, verify
-    exactly one responsive `Syndocal` window, and maximize it before UI actions.
-11. Record exact commands, counts, artifact/process/window evidence, warnings,
-    unverified hardware/external rows, and non-claims in roadmap/status/handoff.
-12. Run `git diff --check`; stage an explicit file list; inspect
-    `git diff --cached --name-only` and `git diff --cached --check`.
-13. Commit with a meaningful Conventional-style subject, push the active branch,
-    and verify local HEAD equals the upstream remote. If push fails, preserve the
-    commit and record the failure and recovery action.
-14. When a handoff must name the implementation hash, use a small documentation
-    follow-up commit, push it, then leave the worktree clean.
-
-No chat-only progress is a checkpoint. No frontend-only or unit-only run is native
-evidence. No unavailable physical device is a passing hardware result.
+[AGENTS.md](../AGENTS.md) is the single operating-rule authority, including
+proportional validation, delegation, checkpoint commits and stopping. Apply the
+requirements of the selected domain; do not repeat a second workflow here.
+Read only the sections needed for the task. Superseded pause handoffs are
+historical evidence, not mandatory startup reading. A predecessor must have the
+review and evidence required for the behavior the current task consumes.
 
 ## 4. Product version and schema version policy
 
 ### 4.1 Current release train
 
-The active train advanced from the long-lived `1.1.0` metadata through accepted
-alpha checkpoints; the superseded alpha.39 checkpoint is recorded below. Current
-source metadata at the latest pushed authority is `1.2.0-alpha.43` at
-`eaef0508df944dafdee08552acb6be28a74c9c46`, where local `HEAD` and upstream
-were recorded equal; implementation was introduced at
-`8d8c5461f314d85e0be64f4ab7bd4f1a857de619`, on
-`codex/syndocal-v1.2`; the active worktree metadata is alpha.44 as recorded at
-the top. The current native build/window authority is alpha.43 as
-recorded above; physical acceptance remains pending. The alpha.39 native
-checkpoint used source/docs `HEAD`
-and upstream `ec93e9160da853ad181de70aee4db7b4a75fafbb`, which were equal at
-the build checkpoint. It
-repairs the Timeline authoring-output selector's exact UI truth: only one exact
-selectable occurrence is admitted, duplicate/missing/ambiguous identities fail
-closed, and status-only polling may reapply the exact desired option without
-list/configuration/routing mutation. Browser Phase A/B passed after the strict
-external-video status-poll fixture was added; TypeScript, runtime, video-poll,
-`git diff --check`, and `pnpm --dir app run check:release` pass. Independent
-Terra select review is GO with P0/P1 `0`; the checker review is GO with P0/P1/P2
-`0`. The exact MSVC `14.44.35207` Community linker was pinned and first in
-`where.exe`; `pnpm --dir app tauri build --no-bundle` exited `0` in `2m57s` with
-first-party warnings `0`. The resulting exact executable
-`target/release/syndocal.exe` is `61,108,736` bytes, reports
-Product/FileVersion `1.2.0-alpha.39`, and has SHA-256
-`7923728D6D4D8F4D51DE5BEF337006ADD7851DC5EF0C2F384BA1664F3213D0C2`.
-Exactly one checkout-owned PID `87640` is responsive with maximized
-`Syndocal` window id `2033716740`; Daslight was preserved. Native alpha9 UI
-reverification passed without clicking the output selector or Refresh. The
-exact sequence was Play -> Pause -> status-only wait -> Play -> Pause ->
-status-only wait; throughout it, explicit-device and resolved output stayed at
-`Music (Elgato Virtual Audio)`, lifecycle `実行中`, `rev1`, with advancing output
-frames and no visible Backend, Local IPC, or CUE fault. The project remained
-unsaved and final Timeline state was paused. The reviewed native-evidence record
-was committed and pushed at `94b362bd2d733e447feabf0a0a6158699da6a2bf`, and
-`HEAD`/upstream equality was verified immediately after that push. The complete current
-source, native, show-output, audio, DJ, and remaining physical acceptance state
-is recorded in
-`qa/SYNDOCAL_SHOW_COMPLETION_HANDOFF_2026-08-28.md`.
+The product metadata is `1.2.0-alpha.68` at the 2026-09-05 instruction-maintenance
+checkpoint (unchanged by this documentation task). Verify Cargo, frontend and
+Tauri metadata before producing a new artifact. A branch name, past PID or older
+handoff is not a current artifact identity. The dated alpha.68 record above is
+historical build evidence; it is not a fresh native or physical acceptance run.
 
-The alpha.39 native build/window and selector/UI regression gates are complete
-only. Audible/device selection and operator audible confirmation remain pending.
-The alpha.38 native authority remains historical: its pushed source/build HEAD was
-`e4ec22384675aace5ed3912ddffdcfecca190919`, and its exact executable was
-`1.2.0-alpha.38`, `61,114,368` bytes, SHA-256
-`9E5CA0DB826D9998F7CDC76214E5CDC17597A6D4FC1CC27FEB5EF72D6E28FA37`, with
-responsive maximized PID `55624`. The alpha.38 authoring-output `<select>`
-displayed `3 - PX160 WAV...` after Pause while settings/resolved output stayed
-`Music (Elgato Virtual Audio)`; preserve this as immutable historical evidence
-and do not relabel its binary as alpha.39. Audible/device selection, dedicated
-Show-ASIO, Unity/GPU Art-Net/Spout, DJ, camera, and other hardware acceptance
-remain open. The next safe action is operator audible confirmation.
-
-The immediately preceding alpha.25 source/native checkpoint remains immutable
-historical evidence: source/native evidence was
-`566a7101b0d5c9307e8d0efa5ccf499aba3eb404`; the exact MSVC 14.44 linker was
-first, and `pnpm --dir app tauri build --no-bundle` passed in `3m06s` with
-first-party warnings `0`. Vite transformed `297` modules, emitting
-`App-CUUI4pgY.js` (`498.21 kB`) and `gdtfProfileActions-54y__lyr.js`
-(`3.91 kB`). Its artifact was `target/release/syndocal.exe`,
-Product/FileVersion `1.2.0-alpha.25`, `59,807,744` bytes, SHA-256
-`D42B0A1B245197A76E3D3B5CC45DEEB1C6C33EDE6261C7DA94C34147141239C1`,
-LastWrite `2026-08-28T06:20:27.6424691+09:00`, PID `83252`, handle
-`60826240`, title `Syndocal`, and responsive/maximized state verified. Native
-I/O DMX full-width selector/workbench and Setup Lighting/Profile rendering were
-accepted. At that historical checkpoint,
-`qa/harnesses/run-syndocal-three-display-show-acceptance.ps1` was the
-StandardRelease authority for that exact alpha.25 version,
-`59,807,744`-byte size, SHA-256, and source HEAD; PowerShell 7 and Windows
-PowerShell 5.1 self-tests both passed `88/88`, with syntax passing in both. No
-Apply or hardware acceptance was run. The current harness authority is the
-alpha.42 artifact recorded at the top of this document. DJ TCP re-established the `.50.2` peer,
-but `Untitled.sdc`/its mapping was not authoritative. The preceding alpha.23 source checkpoint remains
-historical at exact committed/pushed, upstream-equal source
-`5e7d27df7f5864449d4838782f6eca2f9b81d360`; alpha.22 authoritative Scene
-source evidence remains preserved in historical section 55. The historical
-alpha.21 Product/FileVersion was `1.2.0-alpha.21`, with its I/O/native source
-retained in historical section 54.
-The separate read-only show structural preflight is committed and pushed at
-`b35d3ba351b29caaedfb7d0c6f4e29fc84580e83`.
-`1.2.0-alpha.12` is the committed immutable prior checkpoint: its standard
-MIT/WASAPI and local Show-ASIO artifacts were built, natively verified, and
-hash-pinned from source checkpoint `ff61a6dec6eb5e4bc0993d9b65cd137fe1872aae`;
-later display-stable-identity-QA, Show-ASIO hardlink-fix, cleanup
-inaccessible-process-fix, and cleanup exact-gate checkpoints (`b543067`,
-`fb25ab1`, `ef7b647`, and `c40cfd8`) intentionally did not advance product
-metadata; and those alpha.12 artifacts are never rebuilt or replaced under their
-version. `1.2.0-alpha.13` is the committed and pushed Timeline context-menu UI
-checkpoint `bbb684cee4c8b01cfc019575569bd26835dbc732`; its exact native binary was
-built and window-verified before this DJ-Link tranche. The historical alpha.14
-advance synchronizes the strict DJ-Link v3 and Stage-1 no-response fallback
-surfaces. Its committed and pushed runtime/native source checkpoint is
-`92122f1b148d40845b2cfe3e4618a57ce132b3df`; the standard native artifact was
-built by the required gate and window-verified from that source. It is not a
-published tag or installer, and it does not close Show-ASIO or physical DJ
-acceptance. The branch name may remain historical; artifact metadata and tags
-must not derive a false version from it.
-
-The historical `1.2.0-alpha.18` any-deck DJ-Link/source and synchronized
-metadata checkpoint was committed at the exact `HEAD`/upstream
-`db4eefc348b01ee05dd2dc87945afa85de8803e` on `codex/syndocal-v1.2`. Focused
-MASTER clean-break gates passed protocol `7/7`, runtime `5/5`, single-thread
-I/O `37/37`, frontend/build, live, and static checks; the locked full source
-rerun passed `1164` / `0` / `11` for Syndocal pass/fail/intentional
-hardware-media ignores with zero first-party warnings. Frontend invokes are
-`422`, localization is `3559`, and the viewport/setup harness passes. Exact
-MSVC live discovery passed and marks Ethernet4 `192.168.50.1` eligible. The
-clean release gate `4fc443d` passed after staging seven pinned DLLs.
-
-The alpha.18 native build and maximized-window launch gate are now verified with
-the required MSVC 14.44 linker-first setup. Its artifact is
-`C:\Users\kouty\Documents\KDMX\target\release\syndocal.exe`,
-Product/FileVersion `1.2.0-alpha.18`, size `58,740,224` bytes, SHA-256
-`841068E08F80EB877FBA919FB86D3F52B3D4444314B47ABEF995BFA593E8D4F9`,
-LastWriteTimeUtc `2026-08-27T05:38:40.1840641Z`. Launch observed exactly one
-responsive process, PID `80264`, title `Syndocal`, window handle `854080`,
-`IsMaximized=true`, start `2026-08-27T14:38:57.8350806+09:00`. The last
-committed alpha.17 source checkpoint is the pushed, upstream-equal
-`fb5d18fdf898a1435bed173ddd17934a04a97897`. Its engine `dj_link_` proof is
-`25/25`, Syndocal `dj_link_dispatch_` is `8/8`, the three-display harness is
-`80/80`, the frontend build passed, detached `check:release` passed including
-`169` ASIO packaging assertions, and first-party warnings are `0`. Its exact
-native artifact is `C:\Users\kouty\Documents\KDMX\target\release\syndocal.exe`,
-Product/FileVersion `1.2.0-alpha.17`, size `59,021,824` bytes, SHA-256
-`8B35A0F89ED6FA9A1BF8B1929BFA323F7F6250DF059D6314CCE7DDD6D39EBE45`, with
-exactly one responsive maximized Syndocal window at PID `57640`. This alpha.17
-artifact/process evidence is historical and is not re-bound to alpha.18. The
-external rb-output v1.1.8 source is pushed and clean at exact commit
-`0f3e8c6851857c8542c132a89a7d44289002b1f5`; its stable suite passed `415` total
-/ `413` pass / `0` fail / `2` intentional skips, including the focused
-non-Master Deck 2 router-to-real-MIDI seven-byte proof at `12/12`. The verified
-alpha.16/alpha.15 artifacts remain immutable historical evidence and are not
-relabeled.
+The previous alpha.43/44 "current" prose and alpha.12-39 artifact narratives
+were removed from this policy section. Their exact original evidence remains
+in Git at `9ec650ea06372f417909da4826f29f028bbd8a8b` in this file; consult it only
+when investigating those artifacts. Domain acceptance and ledger rows below
+remain unchanged.
 
 The synchronized product-version surfaces are:
 
@@ -3860,7 +3711,7 @@ Physical DJ/MIDI/pedal acceptance, HW-4, and real-output acceptance remain
 unverified. This is not a final-completion claim; the remaining physical/show
 gates are open.
 
-## 58. 2026-08-28 CURRENT post-alpha.25 cleanup Plan
+## 58. 2026-08-28 HISTORICAL post-alpha.25 cleanup Plan
 
 After alpha.25, branch `codex/syndocal-v1.2` was clean and upstream-equal at
 exact `HEAD`/upstream `aaccd77e445e027544bbf57e46280bc10bd30cdf`. The read-only
