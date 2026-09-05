@@ -1921,6 +1921,7 @@ pub const OUTPUT_CONTROL_AUTHORITY_QUERY_OPERATION_ID: &str =
 // replaces the same-Main Spout enable action and appends its local reset.
 pub const OUTPUT_CONTROL_COMMAND_SCHEMA_VERSION: u16 = 8;
 pub const OUTPUT_OWNERSHIP_ARM_OPERATION_ID: &str = "syndocal.output.ownership.arm.v2";
+pub const OUTPUT_BLACKOUT_SET_OPERATION_ID: &str = "syndocal.output.blackout.set.v2";
 pub const OUTPUT_BLACKOUT_RELEASE_OPERATION_ID: &str = "syndocal.output.blackout.release.v2";
 pub const OUTPUT_STANDBY_TAKEOVER_OPERATION_ID: &str = "syndocal.output.standby.takeover.v2";
 pub const OUTPUT_LEASE_ACQUIRE_OPERATION_ID: &str = "syndocal.output.lease.acquire.v2";
@@ -2613,6 +2614,11 @@ pub enum OutputControlActionV2 {
     ReleaseBlackout {
         lease: OutputLeaseAuthorityV1,
     },
+    SetBlackout {
+        target: OutputControlTargetRoleV1,
+        enabled: bool,
+        lease: OutputLeaseAuthorityV1,
+    },
     TakeOverStandby {
         force: bool,
         standby_session_id: String,
@@ -2682,6 +2688,11 @@ enum OutputControlActionV2Wire {
     ReleaseBlackout {
         lease: OutputLeaseAuthorityV1,
     },
+    SetBlackout {
+        target: OutputControlTargetRoleV1,
+        enabled: bool,
+        lease: OutputLeaseAuthorityV1,
+    },
     TakeOverStandby {
         force: bool,
         standby_session_id: String,
@@ -2742,6 +2753,7 @@ impl OutputControlActionV2 {
             }
             Self::Arm { .. } => OUTPUT_OWNERSHIP_ARM_OPERATION_ID,
             Self::ReleaseBlackout { .. } => OUTPUT_BLACKOUT_RELEASE_OPERATION_ID,
+            Self::SetBlackout { .. } => OUTPUT_BLACKOUT_SET_OPERATION_ID,
             Self::TakeOverStandby { .. } => OUTPUT_STANDBY_TAKEOVER_OPERATION_ID,
             Self::AcquireLease { .. } => OUTPUT_LEASE_ACQUIRE_OPERATION_ID,
             Self::RenewLease { .. } => OUTPUT_LEASE_RENEW_OPERATION_ID,
@@ -2787,6 +2799,7 @@ impl OutputControlActionV2 {
             | Self::AcknowledgeDsf2026ArtNetAcceptanceProbeInDoubt { lease }
             | Self::Arm { lease, .. }
             | Self::ReleaseBlackout { lease }
+            | Self::SetBlackout { lease, .. }
             | Self::RenewLease { lease }
             | Self::RecoverLease { lease }
             | Self::RelinquishOutputLease { lease }
@@ -2861,6 +2874,15 @@ impl OutputControlActionV2 {
                 lease: lease.clone(),
             },
             Self::ReleaseBlackout { lease } => OutputControlActionV2Wire::ReleaseBlackout {
+                lease: lease.clone(),
+            },
+            Self::SetBlackout {
+                target,
+                enabled,
+                lease,
+            } => OutputControlActionV2Wire::SetBlackout {
+                target: *target,
+                enabled: *enabled,
                 lease: lease.clone(),
             },
             Self::TakeOverStandby {
@@ -2975,6 +2997,22 @@ impl OutputControlActionV2 {
                     OutputControlTargetRoleV1::Video => 1,
                     OutputControlTargetRoleV1::Both => 2,
                 });
+                output.extend_from_slice(lease.lease_id.as_bytes());
+                append_u64(output, lease.generation);
+            }
+            Self::SetBlackout {
+                target,
+                enabled,
+                lease,
+            } => {
+                // 0..=19 are frozen. Target changes runtime scope, never lease authority.
+                output.push(20);
+                output.push(match target {
+                    OutputControlTargetRoleV1::Lighting => 0,
+                    OutputControlTargetRoleV1::Video => 1,
+                    OutputControlTargetRoleV1::Both => 2,
+                });
+                output.push(u8::from(*enabled));
                 output.extend_from_slice(lease.lease_id.as_bytes());
                 append_u64(output, lease.generation);
             }
@@ -3101,6 +3139,15 @@ impl<'de> Deserialize<'de> for OutputControlActionV2 {
             }
             OutputControlActionV2Wire::Arm { role, lease } => Self::Arm { role, lease },
             OutputControlActionV2Wire::ReleaseBlackout { lease } => Self::ReleaseBlackout { lease },
+            OutputControlActionV2Wire::SetBlackout {
+                target,
+                enabled,
+                lease,
+            } => Self::SetBlackout {
+                target,
+                enabled,
+                lease,
+            },
             OutputControlActionV2Wire::TakeOverStandby {
                 force,
                 standby_session_id,
@@ -3540,6 +3587,7 @@ impl OutputControlLeaseResultV2 {
         let expected_outcome = match operation_id {
             OUTPUT_OWNERSHIP_ARM_OPERATION_ID
             | OUTPUT_BLACKOUT_RELEASE_OPERATION_ID
+            | OUTPUT_BLACKOUT_SET_OPERATION_ID
             | OUTPUT_STANDBY_TAKEOVER_OPERATION_ID => OutputLeaseReceiptOutcomeV2::Authorized,
             OUTPUT_LEASE_ACQUIRE_OPERATION_ID => OutputLeaseReceiptOutcomeV2::Acquired,
             OUTPUT_LEASE_RENEW_OPERATION_ID => OutputLeaseReceiptOutcomeV2::Renewed,
@@ -3747,6 +3795,7 @@ impl OutputControlReceiptV2 {
             self.operation_id.as_str(),
             OUTPUT_OWNERSHIP_ARM_OPERATION_ID
                 | OUTPUT_BLACKOUT_RELEASE_OPERATION_ID
+                | OUTPUT_BLACKOUT_SET_OPERATION_ID
                 | OUTPUT_STANDBY_TAKEOVER_OPERATION_ID
                 | OUTPUT_LEASE_ACQUIRE_OPERATION_ID
                 | OUTPUT_LEASE_RENEW_OPERATION_ID
@@ -3785,7 +3834,7 @@ impl OutputControlReceiptV2 {
                 Err(OutputControlValidationErrorV1::InvalidReceiptOutcome)
             }
             OutputControlReceiptOutcomeV2::Applied
-                if self.operation_id == OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID
+                if matches!(self.operation_id.as_str(), OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID | OUTPUT_BLACKOUT_SET_OPERATION_ID)
                     && (self.fence_after.process_incarnation
                         != self.fence_before.process_incarnation
                         || self.fence_after.session_incarnation
@@ -3807,7 +3856,10 @@ impl OutputControlReceiptV2 {
                                 .unwrap_or(0)
                         || self.fence_after.output_epoch != self.fence_before.output_epoch
                         || self.fence_after.output_generation
-                            != self.fence_before.output_generation) =>
+                            != self.fence_before.output_generation
+                        || (self.operation_id == OUTPUT_BLACKOUT_SET_OPERATION_ID
+                            && (self.fence_after.safety_blackout_epoch != self.fence_before.safety_blackout_epoch
+                                || self.fence_after.safety_blackout_generation != self.fence_before.safety_blackout_generation))) =>
             {
                 Err(OutputControlValidationErrorV1::InvalidReceiptOutcome)
             }
@@ -3912,6 +3964,7 @@ impl OutputControlRejectionV2 {
             self.operation_id.as_str(),
             OUTPUT_OWNERSHIP_ARM_OPERATION_ID
                 | OUTPUT_BLACKOUT_RELEASE_OPERATION_ID
+                | OUTPUT_BLACKOUT_SET_OPERATION_ID
                 | OUTPUT_STANDBY_TAKEOVER_OPERATION_ID
                 | OUTPUT_LEASE_ACQUIRE_OPERATION_ID
                 | OUTPUT_LEASE_RENEW_OPERATION_ID
@@ -5663,6 +5716,39 @@ mod tests {
             ..windows_device_label
         };
         assert!(safe_display_label.validate().is_ok());
+        let mut target_shapes = std::collections::HashSet::new();
+        for (target, byte) in [
+            (OutputControlTargetRoleV1::Lighting, 0),
+            (OutputControlTargetRoleV1::Video, 1),
+            (OutputControlTargetRoleV1::Both, 2),
+        ] {
+            for enabled in [false, true] {
+                let action = OutputControlActionV2::SetBlackout {
+                    target,
+                    enabled,
+                    lease: authority.clone(),
+                };
+                let mut canonical = Vec::new();
+                action.append_canonical_bytes(&mut canonical).unwrap();
+                assert_eq!(&canonical[..3], &[20, byte, u8::from(enabled)]);
+                assert!(target_shapes.insert(canonical));
+                assert_eq!(action.operation_id(), OUTPUT_BLACKOUT_SET_OPERATION_ID);
+                let json = serde_json::to_value(&action).unwrap();
+                assert_eq!(json["kind"], "set_blackout");
+                assert_eq!(
+                    serde_json::from_value::<OutputControlActionV2>(json.clone()).unwrap(),
+                    action
+                );
+                for key in ["release_safety", "resources", "extra"] {
+                    let mut invalid = json.clone();
+                    invalid[key] = serde_json::json!(true);
+                    assert!(serde_json::from_value::<OutputControlActionV2>(invalid).is_err());
+                }
+                let mut invalid = json;
+                invalid["target"] = serde_json::json!("standby");
+                assert!(serde_json::from_value::<OutputControlActionV2>(invalid).is_err());
+            }
+        }
         let legacy_shapes = [
             (
                 0,

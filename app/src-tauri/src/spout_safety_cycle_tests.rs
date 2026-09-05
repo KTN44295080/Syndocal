@@ -65,8 +65,8 @@ fn spout_safety_cycle_materializes_black_before_snapshot_catches_up() {
     )
     .unwrap();
     assert!(
-        authority.project_blackout(),
-        "release must wait for the snapshot too"
+        !authority.project_blackout(),
+        "DMX-only snapshot blackout must not blank video after S0 release"
     );
 }
 

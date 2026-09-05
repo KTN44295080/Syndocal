@@ -4273,6 +4273,8 @@ export interface EngineSnapshot {
   lighting_master: number;
   submasters: SubmasterSummary[];
   blackout: boolean;
+  authored_blackout: boolean;
+  safety_blackout_engaged: boolean;
   clock: {
     bpm: number;
     beat_phase: number;

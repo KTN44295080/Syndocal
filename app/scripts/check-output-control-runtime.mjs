@@ -83,6 +83,7 @@ const operationFor = (action) => ({
   reset_show_spout_outputs: runtime.OUTPUT_SHOW_SPOUT_OUTPUTS_RESET_OPERATION_ID,
   arm: runtime.OUTPUT_OWNERSHIP_ARM_OPERATION_ID,
   release_blackout: runtime.OUTPUT_BLACKOUT_RELEASE_OPERATION_ID,
+  set_blackout: runtime.OUTPUT_BLACKOUT_SET_OPERATION_ID,
   take_over_standby: runtime.OUTPUT_STANDBY_TAKEOVER_OPERATION_ID,
   add_display: runtime.OUTPUT_DISPLAY_ADD_OPERATION_ID,
   assign_video_output_composition: runtime.OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID,
@@ -104,6 +105,7 @@ const commandFor = (action) => ({
   reset_show_spout_outputs: "reset_show_spout_outputs_v1",
   arm: "arm_output_control_v2",
   release_blackout: "release_blackout_output_control_v2",
+  set_blackout: "set_blackout_output_control_v2",
   take_over_standby: "take_over_output_control_v2",
   add_display: "add_display_output_v2",
   assign_video_output_composition: "assign_video_output_composition_v2",
@@ -205,6 +207,7 @@ const ordinaryActions = [
   dsf2026ArtNetAcceptanceProbeAction,
   dsf2026ArtNetAcceptanceProbeReconcileAction,
   showSpoutOutputsAction,
+  ...["lighting", "video", "both"].flatMap(target => [false, true].map(enabled => ({ kind: "set_blackout", target, enabled, lease: lease() }))),
 ];
 const lifecycleActions = [
   { kind: "acquire_lease", role: "both" },
@@ -271,7 +274,7 @@ const receiptFor = (request, action, enableRecovery = false, enableRecoveryGener
         ? action.lease.generation + 1 : action.lease.generation;
   const relinquished = action.kind === "relinquish_output_lease";
   const outcome = ({
-    arm: "authorized", release_blackout: "authorized", take_over_standby: "authorized",
+    arm: "authorized", set_blackout: "authorized", release_blackout: "authorized", take_over_standby: "authorized",
     add_display: "authorized", assign_video_output_composition: "authorized",
     [canonicalShowArtNetActionKind]: "authorized",
     [canonicalShowSerialDmxEnableActionKind]: "authorized",
@@ -283,7 +286,7 @@ const receiptFor = (request, action, enableRecovery = false, enableRecoveryGener
     renew_lease: "renewed", recover_lease: "recovered", relinquish_output_lease: "relinquished",
     force_transfer_lease: "transferred",
   })[action.kind];
-  const persistedArtNetMutation = action.kind === canonicalShowArtNetActionKind;
+  const persistedArtNetMutation = action.kind === canonicalShowArtNetActionKind || action.kind === "set_blackout";
   return {
     type: "receipt",
     receipt: {
@@ -939,7 +942,7 @@ const requiredCommands = [
   "get_show_serial_dmx_safety_blackout_route_status_v1",
   "select_serial_dmx_machine_binding_v1",
   "send_dsf2026_artnet_acceptance_probe_v1",
-  "release_blackout_output_control_v2", "take_over_output_control_v2",
+  "release_blackout_output_control_v2", "set_blackout_output_control_v2", "take_over_output_control_v2",
   "acquire_output_lease_v2", "force_transfer_output_lease_v2", "query_output_lease_authority_v1",
   "recover_output_lease_v2", "relinquish_output_lease_v2", "renew_output_lease_v2",
 ];
@@ -964,6 +967,7 @@ const canonicalOutputMutationWrappers = [
   "relinquish_output_lease_v2",
   "renew_output_lease_v2",
   "send_dsf2026_artnet_acceptance_probe_v1",
+  "set_blackout_output_control_v2",
   "stop_show_serial_dmx_safety_blackout_route_v1",
   "take_over_output_control_v2",
 ];
@@ -978,6 +982,7 @@ const outputControlWrappers = new Set([
   "send_dsf2026_artnet_acceptance_probe_v1",
   "stop_show_serial_dmx_safety_blackout_route_v1",
   "release_blackout_output_control_v2",
+  "set_blackout_output_control_v2",
   "take_over_output_control_v2",
 ]);
 const manifest = JSON.parse(manifestSource);
@@ -1313,16 +1318,8 @@ assert.match(
   "the off-event-loop lane reaches the canonical operation dispatcher",
 );
 assert.match(mainSource, /OutputControlActionV2::AddDisplay[\s\S]*vec!\[OutputLeaseResource::Lighting, OutputLeaseResource::Video\]/);
-const setBlackoutSourceStart = appSource.indexOf("const setBlackout = async (enabled: boolean) => {");
-const setBlackoutSourceEnd = appSource.indexOf("\n  const setAllBlackout = async", setBlackoutSourceStart + 1);
-assert.notEqual(setBlackoutSourceStart, -1, "the blackout handler must remain an explicit source boundary");
-assert.notEqual(setBlackoutSourceEnd, -1, "the blackout handler must have a bounded source slice");
-const setBlackoutSource = appSource.slice(setBlackoutSourceStart, setBlackoutSourceEnd);
-assert.match(
-  setBlackoutSource,
-  /if \(!snapshot\(\)\.blackout\) \{[\s\S]*await refreshSnapshot\(\);[\s\S]*return;[\s\S]*\}[\s\S]*await executeBlackoutRelease\(invoke\)/,
-  "a clear request while already clear must not auto-enable output",
-);
+assert.match(appSource, /const setBlackout = targetBlackout.setLightingBlackout/);
+assert.match(appSource, /const setAllBlackout = targetBlackout.setAllBlackout/);
 assert.match(appSource, /fullscreen: target\.fullscreen/);
 assert.match(appSource, /width: target\.width[\s\S]*height: target\.height/);
 const setupIoFixtureStart = appSource.indexOf('if (viewportFixture === "setup-io") {');
@@ -2199,5 +2196,30 @@ await sleep(0);
 assert.equal(enableMutationHarness.rawPending, false);
 assert.equal(enableMutationHarness.authority, "unavailable",
   "a late terminal response must not directly restore enabled UI state");
+
+for (const target of ["lighting", "video", "both"]) {
+  for (const enabled of [false, true]) {
+    const action = { kind: "set_blackout", target, enabled, lease: lease() };
+    const harness = createHarness({ action });
+    await runtime.executeTargetBlackout(harness.invoke, target, enabled);
+    assert.equal(harness.executeCalls, 1);
+    assert.ok(!harness.calls.some(call => /enable_output|release_blackout/.test(call.command)));
+  }
+}
+const inactiveCalls = [];
+await assert.rejects(runtime.executeTargetBlackout(async command => {
+  inactiveCalls.push(command);
+  return { operation_id: runtime.OUTPUT_LEASE_AUTHORITY_QUERY_OPERATION_ID, statuses: [{ status: "unavailable" }] };
+}, "lighting", true), /Exactly one active output lease/);
+assert.deepEqual(inactiveCalls, ["query_output_lease_authority_v1"], "blackout must not momentarily arm a previously inactive output");
+
+for (const field of ["safety_blackout_epoch", "safety_blackout_generation", "output_epoch", "project_publication_generation"]) {
+  const action = { kind: "set_blackout", target: "lighting", enabled: true, lease: lease() };
+  const harness = createHarness({ action, receiptTransform(response) {
+    response.receipt.fence_after[field]++;
+    return response;
+  } });
+  await assert.rejects(runtime.executeTargetBlackout(harness.invoke, "lighting", true), /receipt was inconsistent/);
+}
 
 console.log("output control runtime contract: PASS (v8 output commands, fixed same-PC Art-Net loopback/DSF2026 probe plus no-send reconciliation/strict Spout V2 reset, revision-fenced USB-DMX status, strict receipts, fail-closed query)");

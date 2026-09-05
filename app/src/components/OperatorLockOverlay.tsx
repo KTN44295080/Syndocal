@@ -5,8 +5,6 @@ type OperatorLockOverlayProps = {
   mode: OperatorLockMode;
   restrictedPane?: boolean;
   blackout: boolean;
-  videoBlackout: boolean;
-  onSetBlackout: (enabled: boolean) => void;
   onSetAllBlackout: (enabled: boolean) => void;
   onUnlock: (password: string) => Promise<boolean>;
 };
@@ -41,17 +39,9 @@ export function OperatorLockOverlay(props: OperatorLockOverlayProps) {
               class={props.blackout ? "danger active" : ""}
               aria-pressed={props.blackout}
               disabled={props.blackout}
-              onClick={() => props.onSetBlackout(true)}
-            >
-              {props.blackout ? "DMX BLACKOUT ON" : "DMX BLACKOUT"}
-            </button>
-            <button
-              type="button"
-              class={props.videoBlackout ? "danger active" : ""}
-              aria-pressed={props.videoBlackout}
               onClick={() => props.onSetAllBlackout(true)}
             >
-              ALL BLACKOUT
+              {props.blackout ? "安全ブラックアウト中" : "緊急ブラックアウト（全出力）"}
             </button>
             <button type="button" class="safe" disabled>
               BLACKOUT RELEASE LOCKED

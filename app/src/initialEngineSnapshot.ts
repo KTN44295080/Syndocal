@@ -40,6 +40,8 @@ export const createInitialEngineSnapshot = (): EngineSnapshot => ({
   lighting_master: 1,
   submasters: [],
   blackout: false,
+  authored_blackout: false,
+  safety_blackout_engaged: false,
   clock: {
     bpm: 120,
     beat_phase: 0,

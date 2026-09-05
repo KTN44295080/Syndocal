@@ -457,3 +457,34 @@ fn multi_field_round_trips_reconstruct_nullable_and_removed_collections() {
         }
     }
 }
+
+#[test]
+fn snapshot_delta_transmits_authored_and_safety_blackout_independently_of_effective_blackout() {
+    let both = EngineSnapshot {
+        blackout: true,
+        authored_blackout: true,
+        safety_blackout_engaged: true,
+        ..EngineSnapshot::default()
+    };
+    for field in ["authored_blackout", "safety_blackout_engaged"] {
+        let mut single = both.clone();
+        match field {
+            "authored_blackout" => single.authored_blackout = false,
+            "safety_blackout_engaged" => single.safety_blackout_engaged = false,
+            _ => unreachable!(),
+        }
+        // Effective blackout remains true; the independent cause still changed.
+        for (before, after, expected) in [(&both, &single, false), (&single, &both, true)] {
+            let mut sync = SnapshotSyncState::default();
+            let first = sync.publish(None, before.clone()).unwrap();
+            let changed = sync.publish(Some(first.revision), after.clone()).unwrap();
+            let json = serde_json::to_value(&changed).unwrap();
+            assert_eq!(json["delta"], serde_json::json!({field: expected}));
+            let unchanged = sync.publish(Some(changed.revision), after.clone()).unwrap();
+            assert_eq!(
+                serde_json::to_value(unchanged).unwrap()["delta"],
+                serde_json::json!({})
+            );
+        }
+    }
+}

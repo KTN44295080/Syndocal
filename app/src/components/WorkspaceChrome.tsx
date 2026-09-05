@@ -29,6 +29,8 @@ type WorkspaceChromeProps = {
   setupSubTab: SetupSubTab;
   controlMode: ControlMode;
   blackout: boolean;
+  safetyBlackoutEngaged: boolean;
+  onReleaseSafetyBlackout: () => void;
   videoBlackout: boolean;
   lightingMaster: number;
   videoMaster: number;
@@ -605,6 +607,14 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
                   : <path d="M7 4.5 14 9l-7 4.5z" />}
               </svg>
             </button>
+            <Show when={props.safetyBlackoutEngaged}>
+              <button type="button" class="topbarSafetyButton engaged"
+                data-global-operator-action="safety-blackout-release"
+                title="安全ブラックアウト中。通常のDMX・映像ブラックアウトとは独立しています。"
+                onClick={props.onReleaseSafetyBlackout}>
+                安全ブラックアウト中 · 安全解除
+              </button>
+            </Show>
             <button
               type="button"
               class={`topbarIconButton topbarSafetyButton${props.blackout ? " engaged" : ""}`}

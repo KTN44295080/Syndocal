@@ -84,6 +84,7 @@ type VideoClipSlotRuntimeInvokeCommand =
   | "seek_video_clip_slot_authoritative";
 
 interface VideoRuntimeControllerOptions {
+  setVideoBlackout: (enabled: boolean) => Promise<void>;
   invoke: Invoke;
   snapshot: Accessor<EngineSnapshot>;
   refreshSnapshot: () => Promise<EngineSnapshot | null>;
@@ -1664,12 +1665,7 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
       "Video master opacity is unavailable until a lease-bound OutputControl action is reviewed; no state changed.",
     );
   };
-  const setVideoBlackout = async (enabled: boolean) => {
-    void enabled;
-    options.setMessage(
-      "Video-only blackout is unavailable until a target-aware OutputControl action is reviewed; no state changed.",
-    );
-  };
+  const { setVideoBlackout } = options;
 
   return {
     addVideoLayer, importMediaFiles, importMediaFilesFromPaths, launchVideoClip, takeVideoClip, stopVideoClip,

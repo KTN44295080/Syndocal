@@ -205,6 +205,7 @@ mod capture_transport;
 mod control_plane;
 mod control_plane_query;
 mod control_plane_runtime;
+mod output_blackout_control;
 mod dj_link_machine;
 mod dj_link_network;
 mod dj_link_persistence_runtime;
@@ -556,7 +557,8 @@ fn is_managed_exact_both_output_control_replay_action(
 ) -> bool {
     matches!(
         action,
-        protocol::control_plane_command::OutputControlActionV2::ReleaseBlackout { .. }
+        protocol::control_plane_command::OutputControlActionV2::SetBlackout { .. }
+        | protocol::control_plane_command::OutputControlActionV2::ReleaseBlackout { .. }
             | protocol::control_plane_command::OutputControlActionV2::SetDisplayWindowOpen { .. }
     )
 }
@@ -564,7 +566,8 @@ fn is_managed_exact_both_output_control_replay_action(
 fn is_managed_exact_both_output_control_replay_operation(operation_id: &str) -> bool {
     matches!(
         operation_id,
-        OUTPUT_BLACKOUT_RELEASE_OPERATION_ID | OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID
+        protocol::control_plane_command::OUTPUT_BLACKOUT_SET_OPERATION_ID
+            | OUTPUT_BLACKOUT_RELEASE_OPERATION_ID | OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID
     )
 }
 
@@ -24867,6 +24870,7 @@ const PREFLIGHT_ONLY_NONPROJECT_OR_INNER_RUNTIME_ROUTES: &[&str] = &[
     "recover_output_lease_v2",
     "refresh_video_layer_metadata",
     "release_blackout_output_control_v2",
+    "set_blackout_output_control_v2",
     "release_video_layer_transition_bus_authoritative",
     "relink_media_asset",
     "relinquish_output_lease_v2",
@@ -25404,6 +25408,7 @@ fn external_output_command_requires_local_r4(command: &EngineCommand) -> Option<
         | EngineCommand::ClearDmxInput(..)
         | EngineCommand::Blackout(..)
         | EngineCommand::SetAllBlackout(..)
+        | EngineCommand::SetOutputBlackoutPublished { .. }
         | EngineCommand::SafetyBlackoutEngagePublished { .. }
         | EngineCommand::SafetyBlackoutReleasePublished { .. }
         | EngineCommand::SetLightingMaster(..)
@@ -49182,6 +49187,19 @@ async fn query_display_add_lease_authority_v1(
 }
 
 #[tauri::command]
+async fn set_blackout_output_control_v2(
+    app: tauri::AppHandle,
+    window: WebviewWindow,
+    request: OutputControlCommandRequestV2,
+) -> OutputControlResponseV2 {
+    execute_output_control_off_event_loop(
+        app, window,
+        protocol::control_plane_command::OUTPUT_BLACKOUT_SET_OPERATION_ID,
+        request,
+    ).await
+}
+
+#[tauri::command]
 async fn release_blackout_output_control_v2(
     app: tauri::AppHandle,
     window: WebviewWindow,
@@ -56333,7 +56351,8 @@ fn output_lease_resources_for_control_action(
                 vec![OutputLeaseResource::Lighting, OutputLeaseResource::Video]
             }
         },
-        protocol::control_plane_command::OutputControlActionV2::ReleaseBlackout { .. }
+        protocol::control_plane_command::OutputControlActionV2::SetBlackout { .. }
+        | protocol::control_plane_command::OutputControlActionV2::ReleaseBlackout { .. }
         | protocol::control_plane_command::OutputControlActionV2::EnableShowArtNetLoopbackRoute {
             ..
         }
@@ -56471,6 +56490,7 @@ pub(crate) fn build_output_lease_authorization_request(
             }
         }
         OutputControlActionV2::Arm { lease, .. }
+        | OutputControlActionV2::SetBlackout { lease, .. }
         | OutputControlActionV2::ReleaseBlackout { lease }
         | OutputControlActionV2::SendDsf2026ArtNetAcceptanceProbe { lease }
         | OutputControlActionV2::AcknowledgeDsf2026ArtNetAcceptanceProbeInDoubt { lease }
@@ -79462,7 +79482,7 @@ fn capture_native_display_presentation_authority(
     Ok(NativeDisplayPresentationAuthority {
         source: NativeDisplayAuthoritySource::Published,
         ownership,
-        project_blackout: snapshot.blackout,
+        project_blackout: snapshot.video.blackout,
         blackout_authority,
         output,
         presentation_config_token: sample.config_token,
@@ -79489,7 +79509,7 @@ fn capture_unpublished_native_display_presentation_authority(
     Ok(NativeDisplayPresentationAuthority {
         source: NativeDisplayAuthoritySource::UnpublishedCandidate,
         ownership: ownership.clone(),
-        project_blackout: unpublished.blackout,
+        project_blackout: unpublished.video.blackout,
         blackout_authority,
         output,
         presentation_config_token,
@@ -79521,7 +79541,7 @@ fn revalidate_native_display_presentation_authority(
     }
     let sample = engine.video_presentation_sample();
     let current = &sample.snapshot;
-    if current.blackout != authority.project_blackout {
+    if current.video.blackout != authority.project_blackout {
         return Err(format!(
             "Native Display output {output_id} project safety blackout changed before present"
         ));
@@ -130001,6 +130021,7 @@ fn main() {
             query_output_control_authority_v1,
             query_dsf2026_artnet_acceptance_probe_status_v1,
             release_blackout_output_control_v2,
+            set_blackout_output_control_v2,
             arm_output_control_v2,
             enable_show_art_net_loopback_route_v1,
             enable_show_serial_dmx_safety_blackout_route_v1,

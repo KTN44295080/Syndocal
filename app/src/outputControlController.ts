@@ -7,6 +7,7 @@ export const OUTPUT_LEASE_AUTHORITY_QUERY_OPERATION_ID =
 export const OUTPUT_DISPLAY_ADD_AUTHORITY_QUERY_OPERATION_ID =
   "syndocal.query.output.display.add.authority.v1";
 export const OUTPUT_OWNERSHIP_ARM_OPERATION_ID = "syndocal.output.ownership.arm.v2";
+export const OUTPUT_BLACKOUT_SET_OPERATION_ID = "syndocal.output.blackout.set.v2";
 export const OUTPUT_BLACKOUT_RELEASE_OPERATION_ID = "syndocal.output.blackout.release.v2";
 export const OUTPUT_STANDBY_TAKEOVER_OPERATION_ID = "syndocal.output.standby.takeover.v2";
 export const OUTPUT_DISPLAY_ADD_OPERATION_ID = "syndocal.output.display.add.v2";
@@ -179,6 +180,7 @@ export type OutputControlAction =
   | OutputShowSpoutOutputsEnableAction
   | OutputShowSpoutOutputsResetAction
   | { kind: "arm"; role: OutputControlTargetRole; lease: OutputLeaseAuthority }
+  | { kind: "set_blackout"; target: OutputControlTargetRole; enabled: boolean; lease: OutputLeaseAuthority }
   | { kind: "release_blackout"; lease: OutputLeaseAuthority }
   | {
       kind: "take_over_standby";
@@ -429,6 +431,7 @@ const operationIdForAction = (action: OutputControlOperationAction): string => {
     case "enable_show_spout_outputs": return OUTPUT_SHOW_SPOUT_OUTPUTS_ENABLE_OPERATION_ID;
     case "reset_show_spout_outputs": return OUTPUT_SHOW_SPOUT_OUTPUTS_RESET_OPERATION_ID;
     case "arm": return OUTPUT_OWNERSHIP_ARM_OPERATION_ID;
+    case "set_blackout": return OUTPUT_BLACKOUT_SET_OPERATION_ID;
     case "release_blackout": return OUTPUT_BLACKOUT_RELEASE_OPERATION_ID;
     case "take_over_standby": return OUTPUT_STANDBY_TAKEOVER_OPERATION_ID;
     case "add_display": return OUTPUT_DISPLAY_ADD_OPERATION_ID;
@@ -452,6 +455,7 @@ type OutputControlInvokeCommand =
   | "enable_show_spout_outputs_v2"
   | "reset_show_spout_outputs_v1"
   | "arm_output_control_v2"
+  | "set_blackout_output_control_v2"
   | "release_blackout_output_control_v2"
   | "take_over_output_control_v2"
   | "add_display_output_v2"
@@ -474,6 +478,7 @@ const commandForAction = (action: OutputControlOperationAction): OutputControlIn
     case "enable_show_spout_outputs": return "enable_show_spout_outputs_v2";
     case "reset_show_spout_outputs": return "reset_show_spout_outputs_v1";
     case "arm": return "arm_output_control_v2";
+    case "set_blackout": return "set_blackout_output_control_v2";
     case "release_blackout": return "release_blackout_output_control_v2";
     case "take_over_standby": return "take_over_output_control_v2";
     case "add_display": return "add_display_output_v2";
@@ -773,6 +778,10 @@ const assertAction = (action: OutputControlOperationAction): void => {
     if (!hasExactKeys(record, ["kind", "role", "lease"]) || !["lighting", "video", "both"].includes(action.role)) {
       throw new Error("OutputControl arm action was invalid; nothing was applied.");
     }
+  } else if (action.kind === "set_blackout") {
+    if (!hasExactKeys(record, ["kind", "target", "enabled", "lease"])
+      || !["lighting", "video", "both"].includes(action.target)
+      || typeof action.enabled !== "boolean") throw new Error("Output blackout action was invalid; nothing was applied.");
   } else if (action.kind === "release_blackout") {
     if (!hasExactKeys(record, ["kind", "lease"])) throw new Error("OutputControl release action was invalid; nothing was applied.");
   } else if (action.kind === "take_over_standby") {
@@ -888,6 +897,7 @@ const assertLeaseResult = (value: unknown, action: OutputControlOperationAction)
     case "arm":
       if (outcome !== "authorized" || phase !== "held_active" || !sameResources(resources, resourcesForRole(action.role))) throw new Error(errorMessage);
       break;
+    case "set_blackout":
     case "release_blackout":
       if (outcome !== "authorized" || phase !== "held_active" || !sameResources(resources, ["lighting", "video"])) throw new Error(errorMessage);
       break;
@@ -979,7 +989,7 @@ const assertResponse = (
     || action.kind === "send_dsf2026_artnet_acceptance_probe"
     || action.kind === "acknowledge_dsf2026_artnet_acceptance_probe_in_doubt"
     || action.kind === "enable_show_spout_outputs";
-  const persistedArtNetFenceIsExact = action.kind !== "enable_show_art_net_loopback_route"
+  const persistedProjectFenceIsExact = (action.kind !== "enable_show_art_net_loopback_route" && action.kind !== "set_blackout")
     || result.outcome !== "applied"
     || fenceAfter.process_incarnation === fenceBefore.process_incarnation
       && fenceAfter.session_incarnation === fenceBefore.session_incarnation
@@ -988,7 +998,9 @@ const assertResponse = (
       && fenceAfter.project_checkpoint_hash !== fenceBefore.project_checkpoint_hash
       && fenceAfter.project_publication_generation === fenceBefore.project_publication_generation + 1
       && fenceAfter.output_epoch === fenceBefore.output_epoch
-      && fenceAfter.output_generation === fenceBefore.output_generation;
+      && fenceAfter.output_generation === fenceBefore.output_generation
+      && (action.kind !== "set_blackout" || fenceAfter.safety_blackout_epoch === fenceBefore.safety_blackout_epoch
+        && fenceAfter.safety_blackout_generation === fenceBefore.safety_blackout_generation);
   const resetWithoutLease = action.kind === "reset_show_spout_outputs" && result.lease_result === null;
   if (!fencesEqual(fenceBefore, expectedFence)
     || result.outcome === "no_op" && !fenceUnchanged
@@ -1000,7 +1012,7 @@ const assertResponse = (
     // must advance its project fence.
     || result.outcome === "applied" && !fenceUnchangedPhysicalAction && fenceUnchanged
     || fenceUnchangedPhysicalAction && !fenceUnchanged
-    || !persistedArtNetFenceIsExact) throw new Error("OutputControl receipt was inconsistent; physical output state is unknown.");
+    || !persistedProjectFenceIsExact) throw new Error("OutputControl receipt was inconsistent; physical output state is unknown.");
   return {
     operation_id: operationId,
     request_id: requestId,
@@ -1020,6 +1032,7 @@ const assertSelectedLeaseIsUsable = (query: OutputLeaseAuthorityQuery, action: O
     status.status !== "unavailable" && status.authority.lease_id === action.lease.lease_id);
   if (selected.length !== 1 || selected[0].authority.generation !== action.lease.generation
     || action.kind === "arm" && selected[0].status !== "held_active"
+    || action.kind === "set_blackout" && selected[0].status !== "held_active"
     || action.kind === "release_blackout" && selected[0].status !== "held_active"
     || action.kind === "enable_show_art_net_loopback_route" && selected[0].status !== "held_active"
     || action.kind === "enable_show_serial_dmx_safety_blackout_route" && selected[0].status !== "held_active"
@@ -1037,7 +1050,7 @@ const assertSelectedLeaseIsUsable = (query: OutputLeaseAuthorityQuery, action: O
     || action.kind === "recover_lease" && selected[0].status !== "held_orphaned") {
     throw new Error("Selected output lease is unavailable, orphaned, stale, or has the wrong resources; nothing was applied.");
   }
-  if (action.kind === "arm" || action.kind === "release_blackout" || action.kind === "take_over_standby") {
+  if (action.kind === "arm" || action.kind === "set_blackout" || action.kind === "release_blackout" || action.kind === "take_over_standby") {
     const expectedResources = action.kind === "arm"
       ? resourcesForRole(action.role)
       : ["lighting", "video"] as const;
@@ -1198,10 +1211,19 @@ export async function executeBlackoutRelease(
     );
   } else {
     throw new Error(
-      "DMX blackout release requires one active local Both output lease; resolve output ownership in Setup > I/O first. Blackout remains engaged.",
+      "Blackout control requires one active local Both output lease; resolve output ownership in Setup > I/O first. Blackout remains engaged.",
     );
   }
   return executeOutputControl(invoke, { kind: "release_blackout", lease });
+}
+
+/** Targeted blackout never arms previously inactive physical outputs. */
+export async function executeTargetBlackout(
+  invoke: FrontendTauriInvoke, target: OutputControlTargetRole, enabled: boolean,
+): Promise<OutputControlReceipt> {
+  const query = await queryOutputLeaseAuthority(invoke);
+  const lease = selectOnlyActiveOutputLease(query, ["lighting", "video"]);
+  return executeOutputControl(invoke, { kind: "set_blackout", target, enabled, lease });
 }
 
 /** Execute a lease lifecycle action through the same fenced receipt lane. */

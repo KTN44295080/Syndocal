@@ -20,9 +20,9 @@ use protocol::control_plane::{
 };
 use protocol::control_plane_command::{
     CUE_LIST_DELETE_OPERATION_ID, CUE_LIST_RENAME_OPERATION_ID, CUE_LIST_REORDER_OPERATION_ID,
-    OUTPUT_BLACKOUT_RELEASE_OPERATION_ID, OUTPUT_CONTROL_AUTHORITY_QUERY_OPERATION_ID,
-    OUTPUT_CONTROL_COMMAND_SCHEMA_VERSION, OUTPUT_DISPLAY_ADD_OPERATION_ID,
-    OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID,
+    OUTPUT_BLACKOUT_RELEASE_OPERATION_ID, OUTPUT_BLACKOUT_SET_OPERATION_ID,
+    OUTPUT_CONTROL_AUTHORITY_QUERY_OPERATION_ID, OUTPUT_CONTROL_COMMAND_SCHEMA_VERSION,
+    OUTPUT_DISPLAY_ADD_OPERATION_ID, OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID,
     OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_OPERATION_ID,
     OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_RECONCILE_OPERATION_ID, OUTPUT_ENABLE_OPERATION_ID,
     OUTPUT_LEASE_ACQUIRE_OPERATION_ID, OUTPUT_LEASE_FORCE_TRANSFER_OPERATION_ID,
@@ -61,9 +61,9 @@ const KEYBOARD_SHORTCUT_SOURCE_MANIFEST: &str =
 const KEYBOARD_SHORTCUT_SOURCE_MANIFEST_SCHEMA_VERSION: u16 = 1;
 const KEYBOARD_APP_SHORTCUT_SOURCE_COUNT: usize = 30;
 const KEYBOARD_PROJECT_FILE_SHORTCUT_SOURCE_COUNT: usize = 3;
-const FROZEN_TAURI_ROUTE_ADMISSION_COUNT: usize = 510;
+const FROZEN_TAURI_ROUTE_ADMISSION_COUNT: usize = 511;
 const FROZEN_TAURI_ROUTE_ADMISSION_SHA256: &str =
-    "1f9232298f721315ba798b39e29c4768cf3aeeb7179ae973da1d78bb78ef865c";
+    "a7f349ccf6bc270ada37f32744bc598198452693c7b5c242a7e2a9af2e670d02";
 /// The command source is parsed and validated exactly once.  Local discovery
 /// calls only clone this immutable, validated value; they never parse source
 /// text or make an external request on the invocation path.
@@ -438,6 +438,7 @@ fn is_tauri_runtime_mutation(command: &str) -> bool {
             | "recover_output_lease_v2"
             | "refresh_video_layer_metadata"
             | "release_blackout_output_control_v2"
+            | "set_blackout_output_control_v2"
             | "release_cue"
             | "release_video_layer_transition_bus_authoritative"
             | "relink_media_asset"
@@ -1186,6 +1187,7 @@ enum ReviewedCanonicalOperation {
     AbortTimelineFollow,
     EngageSafetyBlackout,
     ReleaseBlackout,
+    SetBlackout,
     ArmOutputOwnership,
     TakeOverStandby,
     AddDisplayOutput,
@@ -1220,6 +1222,7 @@ impl ReviewedCanonicalOperation {
             Self::AbortTimelineFollow => TIMELINE_FOLLOW_ABORT_OPERATION_ID,
             Self::EngageSafetyBlackout => SAFETY_BLACKOUT_ENGAGE_OPERATION_ID,
             Self::ReleaseBlackout => OUTPUT_BLACKOUT_RELEASE_OPERATION_ID,
+            Self::SetBlackout => OUTPUT_BLACKOUT_SET_OPERATION_ID,
             Self::ArmOutputOwnership => OUTPUT_OWNERSHIP_ARM_OPERATION_ID,
             Self::TakeOverStandby => OUTPUT_STANDBY_TAKEOVER_OPERATION_ID,
             Self::AddDisplayOutput => OUTPUT_DISPLAY_ADD_OPERATION_ID,
@@ -1271,6 +1274,7 @@ fn reviewed_canonical_operation(command: &str) -> Option<ReviewedCanonicalOperat
         "abort_timeline_follow_runtime_v1" => Some(ReviewedCanonicalOperation::AbortTimelineFollow),
         "safety_blackout_engage_v1" => Some(ReviewedCanonicalOperation::EngageSafetyBlackout),
         "release_blackout_output_control_v2" => Some(ReviewedCanonicalOperation::ReleaseBlackout),
+        "set_blackout_output_control_v2" => Some(ReviewedCanonicalOperation::SetBlackout),
         "arm_output_control_v2" => Some(ReviewedCanonicalOperation::ArmOutputOwnership),
         "take_over_output_control_v2" => Some(ReviewedCanonicalOperation::TakeOverStandby),
         "add_display_output_v2" => Some(ReviewedCanonicalOperation::AddDisplayOutput),
@@ -1437,7 +1441,8 @@ fn canonical_descriptor_for_source(
             AdapterPolicy::LocalWindowDangerousOutputControl,
             ReceiptPolicy::ExactTerminalReceipt,
         ),
-        ReviewedCanonicalOperation::SetDisplayWindowOpen => (
+        ReviewedCanonicalOperation::SetDisplayWindowOpen
+        | ReviewedCanonicalOperation::SetBlackout => (
             OperationClass::Mutation,
             vec![
                 OperationCapability::LocalWindowBound,
@@ -1476,6 +1481,7 @@ fn canonical_descriptor_for_source(
                 | ReviewedCanonicalOperation::AddDisplayOutput
                 | ReviewedCanonicalOperation::AssignVideoOutputComposition
                 | ReviewedCanonicalOperation::SetDisplayWindowOpen
+                | ReviewedCanonicalOperation::SetBlackout
                 | ReviewedCanonicalOperation::EnableShowArtNetLoopbackRoute
                 | ReviewedCanonicalOperation::EnableShowSerialDmxSafetyBlackoutRoute
                 | ReviewedCanonicalOperation::StopShowSerialDmxSafetyBlackoutRoute
@@ -1507,6 +1513,7 @@ fn canonical_descriptor_for_source(
                 | ReviewedCanonicalOperation::AddDisplayOutput
                 | ReviewedCanonicalOperation::AssignVideoOutputComposition
                 | ReviewedCanonicalOperation::SetDisplayWindowOpen
+                | ReviewedCanonicalOperation::SetBlackout
                 | ReviewedCanonicalOperation::EnableShowArtNetLoopbackRoute
                 | ReviewedCanonicalOperation::EnableShowSerialDmxSafetyBlackoutRoute
                 | ReviewedCanonicalOperation::StopShowSerialDmxSafetyBlackoutRoute
@@ -1539,6 +1546,7 @@ fn canonical_descriptor_for_source(
                 | ReviewedCanonicalOperation::AddDisplayOutput
                 | ReviewedCanonicalOperation::AssignVideoOutputComposition
                 | ReviewedCanonicalOperation::SetDisplayWindowOpen
+                | ReviewedCanonicalOperation::SetBlackout
                 | ReviewedCanonicalOperation::EnableShowArtNetLoopbackRoute
                 | ReviewedCanonicalOperation::EnableShowSerialDmxSafetyBlackoutRoute
                 | ReviewedCanonicalOperation::StopShowSerialDmxSafetyBlackoutRoute
@@ -1564,6 +1572,7 @@ fn canonical_descriptor_for_source(
             reviewed,
             ReviewedCanonicalOperation::EnableOutput
                 | ReviewedCanonicalOperation::SetDisplayWindowOpen
+                | ReviewedCanonicalOperation::SetBlackout
                 | ReviewedCanonicalOperation::AcquireOutputLease
                 | ReviewedCanonicalOperation::RenewOutputLease
                 | ReviewedCanonicalOperation::RecoverOutputLease
@@ -1783,6 +1792,12 @@ fn descriptor_for_command(operation_id: &str) -> OperationDescriptor {
             SAFETY_BLACKOUT_ENGAGE_OPERATION_ID,
         );
     }
+    if operation_id == "set_blackout_output_control_v2" {
+        return unavailable_descriptor_for_semantic_operation(
+            operation_id,
+            OUTPUT_BLACKOUT_SET_OPERATION_ID,
+        );
+    }
     if operation_id == "release_blackout_output_control_v2" {
         return unavailable_descriptor_for_semantic_operation(
             operation_id,
@@ -1914,6 +1929,7 @@ fn command_schema(operation_id: &str, direction: &str) -> SchemaIdentity {
         version: if matches!(
             operation_id,
             OUTPUT_BLACKOUT_RELEASE_OPERATION_ID
+                | OUTPUT_BLACKOUT_SET_OPERATION_ID
                 | OUTPUT_OWNERSHIP_ARM_OPERATION_ID
                 | OUTPUT_STANDBY_TAKEOVER_OPERATION_ID
                 | OUTPUT_DISPLAY_ADD_OPERATION_ID
@@ -2255,7 +2271,7 @@ mod tests {
         assert_eq!(counts[&TauriRouteAdmissionClass::ProjectReplacement], 8);
         assert_eq!(counts[&TauriRouteAdmissionClass::ProjectHistory], 3);
         assert_eq!(counts[&TauriRouteAdmissionClass::LocalPhysicalMutation], 6);
-        assert_eq!(counts[&TauriRouteAdmissionClass::RuntimeMutation], 156);
+        assert_eq!(counts[&TauriRouteAdmissionClass::RuntimeMutation], 157);
         assert_eq!(counts[&TauriRouteAdmissionClass::FileExportMutation], 20);
         assert_eq!(counts[&TauriRouteAdmissionClass::SafetyMutation], 1);
         assert_eq!(counts[&TauriRouteAdmissionClass::RecoveryMaintenance], 27);
@@ -2296,7 +2312,7 @@ mod tests {
         // engine commands; the strict Show Spout Reset adds its separately
         // named atomic engine command. Its five Tauri routes and the local
         // Spout reset account for the six manifest entries below.
-        const ENGINE_COMMAND_COUNT: usize = 278;
+        const ENGINE_COMMAND_COUNT: usize = 279;
         const REMOTE_INPUT_EVENT_COUNT: usize = 51;
         const REMOTE_CLIENT_REQUEST_COUNT: usize = 7;
         const REMOTE_WIRE_OPERATION_COUNT: usize = 58;
@@ -2318,7 +2334,7 @@ mod tests {
             + OSC_INPUT_EVENT_COUNT
             + DMX_INPUT_PROTOCOL_COUNT
             + DMX_INPUT_EVENT_COUNT;
-        const FRONTEND_INVOKE_COUNT: usize = 450;
+        const FRONTEND_INVOKE_COUNT: usize = 451;
         assert_eq!(MIDI_OSC_DMX_OPERATION_COUNT, 206);
         assert_eq!(
             registry.operations.len(),
@@ -2328,7 +2344,7 @@ mod tests {
                 + MIDI_OSC_DMX_OPERATION_COUNT
                 + FRONTEND_INVOKE_COUNT
         );
-        assert_eq!(registry.operations.len(), 1560);
+        assert_eq!(registry.operations.len(), 1563);
         verify_registry_exact_set(&names, &registry).unwrap();
         let r0 = registry
             .operations
@@ -2410,6 +2426,10 @@ mod tests {
             (
                 "release_blackout_output_control_v2",
                 OUTPUT_BLACKOUT_RELEASE_OPERATION_ID,
+            ),
+            (
+                "set_blackout_output_control_v2",
+                OUTPUT_BLACKOUT_SET_OPERATION_ID,
             ),
             ("arm_output_control_v2", OUTPUT_OWNERSHIP_ARM_OPERATION_ID),
             (
@@ -2682,20 +2702,20 @@ mod tests {
         const TAURI_COUNT: usize = FROZEN_TAURI_ROUTE_ADMISSION_COUNT;
         // 277 prior engine sources plus the distinct atomic
         // `ResetShowSpoutOutputsExactPublished` source.
-        const ENGINE_COUNT: usize = 278;
+        const ENGINE_COUNT: usize = 279;
         const REMOTE_COUNT: usize = 116;
         const MIDI_OSC_DMX_COUNT: usize = 206;
-        const FRONTEND_COUNT: usize = 450;
+        const FRONTEND_COUNT: usize = 451;
         const LEGACY_SOURCE_TOTAL: usize =
             TAURI_COUNT + ENGINE_COUNT + REMOTE_COUNT + MIDI_OSC_DMX_COUNT + FRONTEND_COUNT;
         const KEYBOARD_APP_COUNT: usize = 30;
         const KEYBOARD_PROJECT_FILE_COUNT: usize = 3;
         const SOURCE_TOTAL: usize =
             LEGACY_SOURCE_TOTAL + KEYBOARD_APP_COUNT + KEYBOARD_PROJECT_FILE_COUNT;
-        assert_eq!(LEGACY_SOURCE_TOTAL, 1560);
-        assert_eq!(SOURCE_TOTAL, 1593);
+        assert_eq!(LEGACY_SOURCE_TOTAL, 1563);
+        assert_eq!(SOURCE_TOTAL, 1596);
         assert_eq!(canonical.source_inventory.len(), SOURCE_TOTAL);
-        assert_eq!(canonical.canonical_operations.len(), 46);
+        assert_eq!(canonical.canonical_operations.len(), 47);
 
         let output_control_operations = canonical
             .canonical_operations
@@ -2704,6 +2724,7 @@ mod tests {
                 matches!(
                     operation.operation_id.as_str(),
                     OUTPUT_BLACKOUT_RELEASE_OPERATION_ID
+                        | OUTPUT_BLACKOUT_SET_OPERATION_ID
                         | OUTPUT_OWNERSHIP_ARM_OPERATION_ID
                         | OUTPUT_STANDBY_TAKEOVER_OPERATION_ID
                         | OUTPUT_DISPLAY_ADD_OPERATION_ID
@@ -2725,11 +2746,15 @@ mod tests {
                 )
             })
             .collect::<Vec<_>>();
-        assert_eq!(output_control_operations.len(), 19);
+        assert_eq!(output_control_operations.len(), 20);
         for (source_id, operation_id) in [
             (
                 "release_blackout_output_control_v2",
                 OUTPUT_BLACKOUT_RELEASE_OPERATION_ID,
+            ),
+            (
+                "set_blackout_output_control_v2",
+                OUTPUT_BLACKOUT_SET_OPERATION_ID,
             ),
             ("arm_output_control_v2", OUTPUT_OWNERSHIP_ARM_OPERATION_ID),
             (
@@ -2800,6 +2825,7 @@ mod tests {
                 if matches!(
                     operation_id,
                     OUTPUT_ENABLE_OPERATION_ID
+                        | OUTPUT_BLACKOUT_SET_OPERATION_ID
                         | OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID
                         | OUTPUT_LEASE_ACQUIRE_OPERATION_ID
                         | OUTPUT_LEASE_RENEW_OPERATION_ID
@@ -2828,6 +2854,7 @@ mod tests {
                 if matches!(
                     operation_id,
                     OUTPUT_ENABLE_OPERATION_ID
+                        | OUTPUT_BLACKOUT_SET_OPERATION_ID
                         | OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID
                         | OUTPUT_LEASE_ACQUIRE_OPERATION_ID
                         | OUTPUT_LEASE_RENEW_OPERATION_ID
@@ -3038,7 +3065,7 @@ mod tests {
                 )
             })
             .collect::<Vec<_>>();
-        assert_eq!(direct.len(), 46);
+        assert_eq!(direct.len(), 47);
         assert_eq!(aliases.len(), FRONTEND_COUNT);
         assert_eq!(internal_steps.len(), 4);
         assert_eq!(structural_routes.len(), 1);
@@ -3047,7 +3074,7 @@ mod tests {
         // the canonical Reset operation.
         // The missing-publication recovery route is local maintenance, not a
         // separately reviewed canonical operation.
-        assert_eq!(unclassified.len(), 1092);
+        assert_eq!(unclassified.len(), 1093);
         assert_eq!(support_phases.len(), 0);
         assert_eq!(
             direct.len()
@@ -3370,6 +3397,7 @@ mod tests {
             } else if matches!(
                 operation.operation_id.as_str(),
                 OUTPUT_BLACKOUT_RELEASE_OPERATION_ID
+                    | OUTPUT_BLACKOUT_SET_OPERATION_ID
                     | OUTPUT_OWNERSHIP_ARM_OPERATION_ID
                     | OUTPUT_STANDBY_TAKEOVER_OPERATION_ID
                     | OUTPUT_DISPLAY_ADD_OPERATION_ID
@@ -3521,6 +3549,7 @@ mod tests {
             } else if matches!(
                 operation.operation_id.as_str(),
                 OUTPUT_BLACKOUT_RELEASE_OPERATION_ID
+                    | OUTPUT_BLACKOUT_SET_OPERATION_ID
                     | OUTPUT_OWNERSHIP_ARM_OPERATION_ID
                     | OUTPUT_STANDBY_TAKEOVER_OPERATION_ID
                     | OUTPUT_DISPLAY_ADD_OPERATION_ID
@@ -3547,6 +3576,7 @@ mod tests {
                     if matches!(
                         operation.operation_id.as_str(),
                         OUTPUT_ENABLE_OPERATION_ID
+                            | OUTPUT_BLACKOUT_SET_OPERATION_ID
                             | OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID
                             | OUTPUT_LEASE_ACQUIRE_OPERATION_ID
                             | OUTPUT_LEASE_RENEW_OPERATION_ID
@@ -3571,6 +3601,7 @@ mod tests {
                     if matches!(
                         operation.operation_id.as_str(),
                         OUTPUT_ENABLE_OPERATION_ID
+                            | OUTPUT_BLACKOUT_SET_OPERATION_ID
                             | OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID
                             | OUTPUT_LEASE_ACQUIRE_OPERATION_ID
                             | OUTPUT_LEASE_RENEW_OPERATION_ID
@@ -3761,11 +3792,11 @@ mod tests {
     fn legacy_v1_registry_json_and_count_remain_inventory_honest() {
         let legacy = registry().unwrap();
         // Includes both the native and frontend missing-publication resolver.
-        assert_eq!(legacy.operations.len(), 1560);
+        assert_eq!(legacy.operations.len(), 1563);
         let encoded = serde_json::to_value(&legacy).unwrap();
         assert_eq!(encoded["schema"]["version"], CONTROL_PLANE_SCHEMA_VERSION);
         let operations = encoded["operations"].as_array().unwrap();
-        assert_eq!(operations.len(), 1560);
+        assert_eq!(operations.len(), 1563);
         assert!(operations.iter().all(|operation| {
             operation["source_family"] != "keyboard_app"
                 && operation["source_family"] != "keyboard_project_file"

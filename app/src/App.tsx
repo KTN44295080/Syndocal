@@ -633,10 +633,10 @@ import { createTimelineOverviewAutomationController } from "./createTimelineOver
 import { createTimelineKeyframeController } from "./createTimelineKeyframeController";
 import { createTimelineAutomationController } from "./createTimelineAutomationController";
 import { createSafetyBlackoutRuntimeController } from "./safetyBlackoutRuntimeController";
+import { createTargetBlackoutController } from "./createTargetBlackoutController";
 import {
   executeDisplayAddOutputControl,
   executeDisplayWindowOutputControl,
-  executeBlackoutRelease,
   executeOutputControl,
   applyVideoOutputWindowStatusQuery,
   applyVideoOutputWindowStateEvent,
@@ -5807,7 +5807,7 @@ export default function App() {
     refreshSnapshot: () => refreshSnapshot(),
     serialPorts,
     setSerialPorts,
-    safetyBlackout: () => snapshot().blackout,
+    safetyBlackout: () => snapshot().safety_blackout_engaged,
   });
   const audioOutputController = createAudioOutputController({
     invoke,
@@ -16566,13 +16566,13 @@ export default function App() {
         await tapBpm();
         break;
       case "blackout":
-        await setBlackout(!snapshot().blackout);
+        await setBlackout(!snapshot().authored_blackout);
         break;
       case "video_blackout":
         await setVideoBlackout(!snapshot().video.blackout);
         break;
       case "all_blackout":
-        await setAllBlackout(!(snapshot().blackout && snapshot().video.blackout));
+        await setAllBlackout(!(snapshot().authored_blackout && snapshot().video.blackout));
         break;
       default:
         break;
@@ -17341,51 +17341,12 @@ export default function App() {
     if (!isTauriRuntime()) throw new Error(tauriBackendUnavailableMessage);
     return tauriInvoke<T>(command, args);
   };
-  const safetyBlackoutRuntime = createSafetyBlackoutRuntimeController({
-    invoke: invokeSafetyBlackoutRuntime,
+  const targetBlackout = createTargetBlackoutController({
+    invoke, refreshSnapshot, setMessage,
+    safety: createSafetyBlackoutRuntimeController({ invoke: invokeSafetyBlackoutRuntime }),
   });
-
-  const setBlackout = async (enabled: boolean) => {
-    try {
-      if (enabled) {
-        await safetyBlackoutRuntime.engage();
-      } else {
-        // A clear request is meaningful only while the safety latch is on.
-        // If the lease expired/restarted, executeBlackoutRelease performs the
-        // bounded canonical Both recovery; split/foreign leases still fail
-        // closed without touching output.
-        if (!snapshot().blackout) {
-          await refreshSnapshot();
-          return;
-        }
-        await executeBlackoutRelease(invoke);
-      }
-      await refreshSnapshot();
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
-  const setAllBlackout = async (enabled: boolean) => {
-    try {
-      if (enabled) {
-        await safetyBlackoutRuntime.engage();
-      } else {
-        // The current R4 release schema is scoped to the safety blackout
-        // latch. It cannot truthfully clear authored all-output blackout
-        // state, so this direction stays fail-closed until a target-aware
-        // action is reviewed.
-        setMessage(
-          "All-output blackout release is unavailable until a target-aware OutputControl action is reviewed; no state changed.",
-        );
-        return;
-      }
-      setMessage(enabled ? "All blackout enabled." : "All blackout cleared.");
-      await refreshSnapshot();
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
+  const setBlackout = targetBlackout.setLightingBlackout;
+  const setAllBlackout = targetBlackout.setAllBlackout;
 
   const setLightingMaster = async (master: number) => {
     void master;
@@ -20421,6 +20382,7 @@ export default function App() {
     setVideoMasterOpacity,
     setVideoBlackout,
   } = createVideoRuntimeController({
+    setVideoBlackout: targetBlackout.setVideoBlackout,
     invoke,
     snapshot,
     refreshSnapshot,
@@ -26085,10 +26047,12 @@ export default function App() {
       data-control-learn-busy={controlLearnBusy() ? "true" : undefined}
     >
       <WorkspaceChrome
+        safetyBlackoutEngaged={snapshot().safety_blackout_engaged}
+        onReleaseSafetyBlackout={() => void targetBlackout.releaseSafetyBlackout()}
         workspaceTab={workspaceTab()}
         setupSubTab={setupSubTab()}
         controlMode={controlMode()}
-        blackout={snapshot().blackout}
+        blackout={snapshot().authored_blackout}
         videoBlackout={snapshot().video.blackout}
         lightingMaster={snapshot().lighting_master}
         videoMaster={snapshot().video.master_opacity}
@@ -28598,7 +28562,7 @@ export default function App() {
             serialPorts={serialPorts()}
             serialDmxMachineBindingStatus={serialDmxMachineBindingStatus()}
             showSerialDmxSafetyBlackoutRouteStatus={showSerialDmxSafetyBlackoutRouteStatus()}
-            safetyBlackoutEngaged={snapshot().blackout}
+            safetyBlackoutEngaged={snapshot().safety_blackout_engaged}
             showDmxPreparationBusy={showDmxPreparationBusy()}
             showDmxPreparationStage={showDmxPreparationStage()}
             dsf2026ArtNetAcceptanceProbeStatus={dsf2026ArtNetAcceptanceProbeStatus}
@@ -28962,10 +28926,8 @@ export default function App() {
           <OperatorLockOverlay
             mode={mode() as OperatorLockMode}
             restrictedPane={mode() === "Partial"}
-            blackout={snapshot().blackout}
-            videoBlackout={snapshot().video.blackout}
-            onSetBlackout={(enabled) => void setBlackout(enabled)}
-            onSetAllBlackout={(enabled) => void setAllBlackout(enabled)}
+            blackout={snapshot().safety_blackout_engaged}
+            onSetAllBlackout={() => void targetBlackout.engageSafetyBlackout()}
             onUnlock={unlockOperator}
           />
         )}

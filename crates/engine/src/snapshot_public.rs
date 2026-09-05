@@ -30,6 +30,8 @@ pub(super) fn clone_public_snapshot(snapshot: &EngineSnapshot) -> EngineSnapshot
         lighting_master: snapshot.lighting_master,
         submasters: snapshot.submasters.clone(),
         blackout: snapshot.blackout,
+        authored_blackout: snapshot.authored_blackout,
+        safety_blackout_engaged: snapshot.safety_blackout_engaged,
         clock: snapshot.clock.clone(),
         stage_map: snapshot.stage_map,
         stage_map_presets: snapshot.stage_map_presets.clone(),

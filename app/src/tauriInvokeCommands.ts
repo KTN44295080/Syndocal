@@ -310,6 +310,7 @@ export const FRONTEND_TAURI_INVOKE_COMMANDS = [
   "set_auto_vj_config",
   "set_auto_vj_hold",
   "set_blackout",
+  "set_blackout_output_control_v2",
   "set_bpm",
   "set_cue_child_timeline",
   "set_cue_child_timeline_audio_clip_output_bus",

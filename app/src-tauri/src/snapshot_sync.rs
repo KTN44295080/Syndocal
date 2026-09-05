@@ -118,6 +118,10 @@ pub(crate) struct EngineSnapshotDelta {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) blackout: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) authored_blackout: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) safety_blackout_engaged: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) clock: Option<ClockSnapshot>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) stage_map: Option<StageMapConfig>,
@@ -167,6 +171,10 @@ pub(crate) fn engine_snapshot_delta(
             .then_some(after.lighting_master),
         submasters: changed!(submasters),
         blackout: (before.blackout != after.blackout).then_some(after.blackout),
+        authored_blackout: (before.authored_blackout != after.authored_blackout)
+            .then_some(after.authored_blackout),
+        safety_blackout_engaged: (before.safety_blackout_engaged != after.safety_blackout_engaged)
+            .then_some(after.safety_blackout_engaged),
         clock: changed!(clock),
         stage_map: changed!(stage_map),
         stage_map_presets: changed!(stage_map_presets),

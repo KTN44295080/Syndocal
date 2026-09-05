@@ -9841,6 +9841,11 @@ pub struct EngineSnapshot {
     pub lighting_master: f32,
     pub submasters: Vec<SubmasterSummary>,
     pub blackout: bool,
+    /// Read-only UI telemetry; never used to restore authored state or S0.
+    #[serde(default)]
+    pub authored_blackout: bool,
+    #[serde(default)]
+    pub safety_blackout_engaged: bool,
     pub clock: ClockSnapshot,
     #[serde(default)]
     pub stage_map: StageMapConfig,
@@ -12864,6 +12869,8 @@ impl Default for EngineSnapshot {
             lighting_master: 1.0,
             submasters: Vec::new(),
             blackout: false,
+            authored_blackout: false,
+            safety_blackout_engaged: false,
             clock: ClockSnapshot::default(),
             stage_map: StageMapConfig::default(),
             stage_map_presets: Vec::new(),

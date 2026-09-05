@@ -454,7 +454,7 @@ export function createOutputDiagnosticsController(options: OutputDiagnosticsCont
           if (!options.safetyBlackout()) {
             await safetyBlackoutRuntime.engage();
             const refreshed = await options.refreshSnapshot();
-            if (!refreshed?.blackout && !options.safetyBlackout()) {
+            if (!refreshed?.safety_blackout_engaged && !options.safetyBlackout()) {
               throw new Error("S0 engagement was not confirmed by a fresh snapshot");
             }
           }

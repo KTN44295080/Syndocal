@@ -3558,13 +3558,13 @@ fn receive_project_snapshot_load_ack(
 /// Legacy authored/project replacement commands retain their existing
 /// definitive publication contract. They are not part of the bounded DJ Link
 /// shutdown lane and may wait for the snapshot writer after admission.
-fn receive_admitted_command_ack_unbounded(
-    receiver: mpsc::Receiver<Result<(), String>>,
+fn receive_admitted_command_ack_unbounded<T>(
+    receiver: mpsc::Receiver<Result<T, String>>,
     admission: &ProjectSnapshotLoadAdmission,
     deadline: Instant,
     timeout: Duration,
     operation: &str,
-) -> Result<(), String> {
+) -> Result<T, String> {
     match receiver.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
         Ok(result) => result,
         Err(mpsc::RecvTimeoutError::Timeout) => {
@@ -4204,6 +4204,13 @@ define_engine_command! {
     ClearDmxInput(u16),
     Blackout(bool),
     SetAllBlackout(bool),
+    SetOutputBlackoutPublished {
+        target: protocol::control_plane_command::OutputControlTargetRoleV1,
+        enabled: bool,
+        expires_at: Instant,
+        admission: ProjectSnapshotLoadAdmission,
+        ack: mpsc::SyncSender<Result<bool, String>>,
+    },
     /// Priority-queued, safer-direction-only emergency blackout. Only the
     /// separately authorized R4 release path may clear the runtime latch.
     SafetyBlackoutEngagePublished {
@@ -5477,10 +5484,14 @@ macro_rules! engine_command_video_presentation_relevance {
             | EngineCommand::SetMediaAssetAvailabilityBatch { .. }
             | EngineCommand::BootstrapVjShow { .. }
             | EngineCommand::BootstrapVjShowWithAllocatedAssets { .. } => true,
-            // Safety blackout where final video bytes or presentation
-            // permission change (lighting blackout gates rendered output too).
-            EngineCommand::Blackout(_)
-            | EngineCommand::SetAllBlackout(_)
+            // Lighting blackout does not invalidate video presentation.
+            EngineCommand::Blackout(_) => false,
+            EngineCommand::SetOutputBlackoutPublished { target, .. } => !matches!(
+                target,
+                protocol::control_plane_command::OutputControlTargetRoleV1::Lighting
+            ),
+            // Video/all authored blackout and the independent emergency latch.
+            EngineCommand::SetAllBlackout(_)
             | EngineCommand::SafetyBlackoutEngagePublished { .. }
             | EngineCommand::SafetyBlackoutReleasePublished { .. }
             | EngineCommand::SetVideoBlackout(_)
@@ -5939,6 +5950,7 @@ impl EngineCommand {
                 | EngineCommand::ClearDmxInput(_)
                 | EngineCommand::Blackout(_)
                 | EngineCommand::SetAllBlackout(_)
+                | EngineCommand::SetOutputBlackoutPublished { .. }
                 | EngineCommand::SafetyBlackoutEngagePublished { .. }
                 | EngineCommand::SafetyBlackoutReleasePublished { .. }
                 | EngineCommand::SetLightingMaster(_)
@@ -6125,6 +6137,20 @@ impl EnginePersistenceMutationSubmission<'_> {
     /// before this submission interval.
     pub fn persistence_snapshot(&self) -> Result<EngineSnapshot, String> {
         self.engine.persistence_snapshot()
+    }
+
+    /// Publish a blackout candidate while retaining this exact submission
+    /// interval through the caller's canonical post-publication verification.
+    pub fn set_output_blackout_published(
+        &self,
+        target: protocol::control_plane_command::OutputControlTargetRoleV1,
+        enabled: bool,
+        expires_at: Instant,
+    ) -> Result<bool, String> {
+        self.engine
+            .set_output_blackout_without_persistence_mutation_submission_gate(
+                target, enabled, expires_at,
+            )
     }
 
     /// Publish a routed video-output candidate without reacquiring the gate
@@ -8203,6 +8229,45 @@ impl EngineHandle {
                 Err(EngineError::QueueFull)
             }
         }
+    }
+
+    /// Update authored blackout targets atomically. Success follows snapshot
+    /// publication; emergency S0 is never engaged or released here.
+    pub fn set_output_blackout_published(
+        &self,
+        target: protocol::control_plane_command::OutputControlTargetRoleV1,
+        enabled: bool,
+        expires_at: Instant,
+    ) -> Result<bool, String> {
+        let submission = self.begin_persistence_mutation_submission()
+            .map_err(|error| error.to_string())?;
+        submission.set_output_blackout_published(target, enabled, expires_at)
+    }
+
+    fn set_output_blackout_without_persistence_mutation_submission_gate(
+        &self,
+        target: protocol::control_plane_command::OutputControlTargetRoleV1,
+        enabled: bool,
+        expires_at: Instant,
+    ) -> Result<bool, String> {
+        let timeout = expires_at.saturating_duration_since(Instant::now());
+        let admission = ProjectSnapshotLoadAdmission::new();
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send_without_persistence_mutation_submission_gate(EngineCommand::SetOutputBlackoutPublished {
+            target,
+            enabled,
+            expires_at,
+            admission: admission.clone(),
+            ack,
+        })
+        .map_err(|error| error.to_string())?;
+        receive_admitted_command_ack_unbounded(
+            receiver,
+            &admission,
+            expires_at,
+            timeout,
+            "output blackout",
+        )
     }
 
     /// Engage emergency DMX blackout through the independent priority lane.
@@ -12088,6 +12153,7 @@ impl EngineHandle {
             | EngineCommand::ClearDmxInput(_)
             | EngineCommand::Blackout(_)
             | EngineCommand::SetAllBlackout(_)
+            | EngineCommand::SetOutputBlackoutPublished { .. }
             | EngineCommand::SafetyBlackoutEngagePublished { .. }
             | EngineCommand::SafetyBlackoutReleasePublished { .. }
             | EngineCommand::SetLightingMaster(_)
@@ -19870,6 +19936,7 @@ struct AppliedVideoIsfEventPulse {
 /// reports the D4 Applied/Unchanged outcome on publication success.
 enum PendingCommandAckSender {
     Plain(mpsc::SyncSender<Result<(), String>>),
+    Changed(mpsc::SyncSender<Result<bool, String>>, bool),
     ClassifiedStage(
         mpsc::SyncSender<Result<StageProjectMutationOutcome, String>>,
         StageProjectMutationOutcome,
@@ -19882,6 +19949,9 @@ impl PendingCommandAckSender {
             Self::Plain(ack) => {
                 let _ = ack.send(result);
             }
+            Self::Changed(ack, changed) => {
+                let _ = ack.send(result.map(|()| changed));
+            }
             Self::ClassifiedStage(ack, outcome) => {
                 let _ = ack.send(Self::classify(result, outcome));
             }
@@ -19892,6 +19962,9 @@ impl PendingCommandAckSender {
         match self {
             Self::Plain(ack) => {
                 let _ = ack.try_send(result);
+            }
+            Self::Changed(ack, changed) => {
+                let _ = ack.try_send(result.map(|()| changed));
             }
             Self::ClassifiedStage(ack, outcome) => {
                 let _ = ack.try_send(Self::classify(result, outcome));
@@ -19960,6 +20033,10 @@ struct DjLinkTimelineStartRollbackImage {
 #[derive(Clone)]
 enum PendingCommandRollback {
     KeepApplied,
+    RestoreOutputBlackout {
+        lighting: bool,
+        video: bool,
+    },
     /// Safety blackout cannot be undone by a shared-snapshot publication
     /// failure; the worker republishes the already-engaged latch.
     SafetyBlackoutKeepApplied,
@@ -22907,6 +22984,7 @@ impl EngineRuntime {
                     | EngineCommand::DjLinkHalfCurrentTimelineLoop { .. }
                     | EngineCommand::DjLinkTimelineBeatJump { .. }
                     | EngineCommand::DjLinkRelease { .. }
+                    | EngineCommand::SetOutputBlackoutPublished { .. }
                     | EngineCommand::SafetyBlackoutEngagePublished { .. }
                     | EngineCommand::SafetyBlackoutReleasePublished { .. }
                     | EngineCommand::UpsertNodeGraphPublished { .. }
@@ -22970,6 +23048,8 @@ impl EngineRuntime {
         let rebuild_effect_activations = engine_command_rebuilds_effect_activations(&command);
         let pending_ack_count = self.pending_command_acks.len();
         let presentation_config_mutation = command.mutates_video_presentation_configuration();
+        let is_output_blackout =
+            matches!(&command, EngineCommand::SetOutputBlackoutPublished { .. });
         let is_media_asset_availability_batch = matches!(
             &command,
             EngineCommand::SetMediaAssetAvailabilityBatch { .. }
@@ -22983,7 +23063,12 @@ impl EngineRuntime {
                 .pending_command_acks
                 .last()
                 .is_some_and(|pending| pending.result.is_ok());
-        if presentation_config_mutation && batch_was_admitted {
+        let blackout_changed = !is_output_blackout
+            || self.pending_command_acks.last().is_some_and(|pending| {
+                pending.result.is_ok()
+                    && matches!(&pending.ack, PendingCommandAckSender::Changed(_, true))
+            });
+        if presentation_config_mutation && batch_was_admitted && blackout_changed {
             self.video_presentation_config_dirty = true;
         }
         if rebuild_effect_activations && self.pending_command_acks.len() == pending_ack_count {
@@ -24329,6 +24414,39 @@ impl EngineRuntime {
                 self.blackout = enabled;
                 self.video_blackout = enabled;
                 self.last_error = None;
+            }
+            EngineCommand::SetOutputBlackoutPublished {
+                target,
+                enabled,
+                expires_at,
+                admission,
+                ack,
+            } => {
+                let before = (self.blackout, self.video_blackout);
+                let result = if !admission.try_admit_before(expires_at) {
+                    Err("Output blackout expired or was cancelled before engine execution".to_string())
+                } else {
+                    use protocol::control_plane_command::OutputControlTargetRoleV1;
+                    match target {
+                        OutputControlTargetRoleV1::Lighting => self.blackout = enabled,
+                        OutputControlTargetRoleV1::Video => self.video_blackout = enabled,
+                        OutputControlTargetRoleV1::Both => {
+                            self.blackout = enabled;
+                            self.video_blackout = enabled;
+                        }
+                    }
+                    Ok(())
+                };
+                let changed = before != (self.blackout, self.video_blackout);
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack: PendingCommandAckSender::Changed(ack, changed),
+                    result,
+                    rollback: PendingCommandRollback::RestoreOutputBlackout {
+                        lighting: before.0,
+                        video: before.1,
+                    },
+                    publication_error: "Engine snapshot was busy; output blackout was not published",
+                });
             }
             EngineCommand::SafetyBlackoutEngagePublished {
                 expires_at,
@@ -30990,6 +31108,10 @@ impl EngineRuntime {
             PendingCommandRollback::KeepApplied
             | PendingCommandRollback::SafetyBlackoutKeepApplied
             | PendingCommandRollback::ProjectSnapshotApplied => {}
+            PendingCommandRollback::RestoreOutputBlackout { lighting, video } => {
+                self.blackout = lighting;
+                self.video_blackout = video;
+            }
             PendingCommandRollback::RestoreSafetyBlackoutAuthority { authority } => {
                 if self
                     .shared_telemetry
@@ -32829,7 +32951,12 @@ impl EngineRuntime {
         } else {
             self.render_dmx_preview_frames(now)
         };
-        if let Some(transition) = &self.timeline_follow_transition {
+        // Neither authored DMX blackout nor S0 may mix historical live values.
+        if let Some(transition) = self
+            .timeline_follow_transition
+            .as_ref()
+            .filter(|_| !self.blackout && !effective_safety_blackout)
+        {
             let elapsed_ms = now
                 .saturating_duration_since(transition.started_at)
                 .as_millis()
@@ -50383,6 +50510,9 @@ impl EngineRuntime {
             lighting_master: self.lighting_master,
             submasters: self.submaster_snapshot(),
             blackout: self.blackout || self.safety_blackout_engaged,
+            authored_blackout: self.blackout,
+            safety_blackout_engaged: self.safety_blackout_engaged
+                || self.shared_telemetry.safety_blackout_authority().engaged,
             clock: self.clock.snapshot(self.last_tick),
             stage_map: self.stage_map,
             stage_map_presets: self.stage_map_presets.clone(),
@@ -50474,6 +50604,7 @@ impl EngineRuntime {
         // runtime-only and survives project replacement until an authorized
         // R4 release explicitly clears it.
         snapshot.blackout = self.blackout;
+        snapshot.safety_blackout_engaged = false;
         // Runtime clip selection/queue/playhead is intentionally skipped by
         // serde, and is also cleared for callers which inspect this in-memory
         // snapshot before serializing it.
@@ -68084,6 +68215,9 @@ fn write_byte(frame: &mut [u8; 512], fixture_start_address: u16, offset: u16, by
 
 #[cfg(test)]
 mod tests {
+    mod output_blackout_target_tests {
+        include!("output_blackout_target_tests.rs");
+    }
     use super::*;
     use crate::timeline_audio_live_fence::TimelineAudioLiveFenceTestPoint;
     use io::{artnet::parse_art_dmx_packet, sacn::parse_sacn_dmx_packet};

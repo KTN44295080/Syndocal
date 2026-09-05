@@ -94,3 +94,10 @@ Unity video and lighting during playback, plus retained sender/output state,
 remain user-driven acceptance. Do not mark the S0 issue closed from unit tests.
 Managed project Open/New acceptance remains separate. No physical output or UI
 action was automated for the tests or launch verification.
+
+## Follow-up: target isolation
+
+The user accepted S0 restoration, then reported DMX BO also blanking video.
+[TARGET_BLACKOUT_2026-09-06.md](TARGET_BLACKOUT_2026-09-06.md) records the subsequent
+separation of authored DMX/VID/ALL from emergency S0. Its video predicate supersedes
+the effective-DMX snapshot predicate described at this checkpoint.

@@ -628,7 +628,7 @@ where
     // open.  Resolve its canonical public terminal before checking mutable
     // action state, fence, or confirmation so a lost reply remains replayable
     // after process restart.  This is deliberately not a generic bridge:
-    // only ReleaseBlackout and SetDisplayWindowOpen are retained.
+    // only the reviewed blackout and Display-window terminal lanes are retained.
     match replay_durable_managed_exact_both_output_control_terminal(
         state,
         &binding.principal,
@@ -1150,6 +1150,11 @@ where
         OutputControlActionV2::ResetShowSpoutOutputs {} => {
             Err("Show Spout reset bypassed its no-lease executor".to_string())
         }
+        OutputControlActionV2::SetBlackout { target, enabled, .. } => {
+            super::output_blackout_control::set_blackout_with_output_control_fence(
+                state, *target, *enabled, &request.expected_fence, &lease_request,
+            )
+        }
         OutputControlActionV2::ReleaseBlackout { .. } => {
             super::release_safety_blackout_with_output_control_fence(
                 state,
@@ -1356,6 +1361,7 @@ where
     if matches!(
         &request.action,
         OutputControlActionV2::ReleaseBlackout { .. }
+            | OutputControlActionV2::SetBlackout { .. }
             | OutputControlActionV2::SetDisplayWindowOpen { .. }
     ) && record_durable_managed_exact_both_output_control_terminal(
         state,
@@ -1533,7 +1539,9 @@ fn validate_output_action_current(
         OutputControlActionV2::ResetShowSpoutOutputs {} => {
             super::validate_current_show_spout_outputs_reset_action(state)
         }
-        OutputControlActionV2::Arm { .. } | OutputControlActionV2::ReleaseBlackout { .. } => Ok(()),
+        OutputControlActionV2::Arm { .. }
+        | OutputControlActionV2::ReleaseBlackout { .. }
+        | OutputControlActionV2::SetBlackout { .. } => Ok(()),
         OutputControlActionV2::AddDisplay { spec, .. } => {
             let snapshot = state.engine.snapshot();
             if snapshot.video.outputs.iter().any(|output| {
@@ -2647,6 +2655,7 @@ pub(crate) fn output_control_lease_result_from_registry_receipt(
         | OutputControlActionV2::AcknowledgeDsf2026ArtNetAcceptanceProbeInDoubt { .. }
         | OutputControlActionV2::EnableShowSpoutOutputs { .. }
         | OutputControlActionV2::ReleaseBlackout { .. }
+        | OutputControlActionV2::SetBlackout { .. }
         | OutputControlActionV2::TakeOverStandby { .. }
         | OutputControlActionV2::AddDisplay { .. }
         | OutputControlActionV2::AssignVideoOutputComposition { .. }
@@ -6377,6 +6386,26 @@ mod tests {
             false
         };
         assert!(output_confirmation_gate(&OutputControlActionV2::EnableOutput, &deny).is_ok());
+        for target in [
+            protocol::control_plane_command::OutputControlTargetRoleV1::Lighting,
+            protocol::control_plane_command::OutputControlTargetRoleV1::Video,
+            protocol::control_plane_command::OutputControlTargetRoleV1::Both,
+        ] {
+            for enabled in [false, true] {
+                assert!(output_confirmation_gate(
+                    &OutputControlActionV2::SetBlackout {
+                        target,
+                        enabled,
+                        lease: OutputLeaseAuthorityV1 {
+                            lease_id: "lease-0000000000000001".to_string(),
+                            generation: 1,
+                        },
+                    },
+                    &deny
+                )
+                .is_ok());
+            }
+        }
         assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
 
         let dangerous = OutputControlActionV2::ReleaseBlackout {

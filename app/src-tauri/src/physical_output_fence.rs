@@ -452,7 +452,7 @@ pub(super) fn capture_output_presentation_authority(
     }
     Ok(OutputPresentationAuthority {
         ownership,
-        project_blackout: snapshot.blackout,
+        project_blackout: snapshot.video.blackout,
         blackout_authority,
         output,
         route_endpoint_name: route_endpoint_name.to_string(),
@@ -574,7 +574,7 @@ pub(super) fn revalidate_output_presentation_authority_classified(
     }
     // Safety blackout latch: visible bit plus engaged/epoch/generation
     // authority.
-    if current.blackout != authority.project_blackout {
+    if current.video.blackout != authority.project_blackout {
         return Err(OutputPresentationRevalidationError::SafetyChanged(format!(
             "{backend_label} output {} project safety blackout changed before send",
             authority.output.id
@@ -1490,3 +1490,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "physical_output_blackout_target_tests.rs"]
+mod physical_output_blackout_target_tests;
