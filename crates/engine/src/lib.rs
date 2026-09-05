@@ -13,6 +13,7 @@ use std::{
 
 mod control_plane;
 mod move_path;
+mod snapshot_read;
 mod show_serial_dmx_status;
 mod timeline_audio_live_fence;
 mod timeline_follow_hold;
@@ -144,7 +145,7 @@ use protocol::{
     TimelineAudioClipId, TimelineAudioClipSummary, TimelineAudioOutputBus,
     TimelineAutomationSummary, TimelineClickEventSummary, TimelineCueEventSummary, TimelineEventId,
     TimelineEventPlacementUpdate, TimelineFollowDestinationStartMode,
-    TimelineFollowRuntimeStatusSnapshot, TimelineFollowRuntimeSummary, TimelineFollowSettlementAck,
+    TimelineFollowRuntimeSummary, TimelineFollowSettlementAck,
     TimelineFollowSettlementAckResult, TimelineFollowSettlementConsumerId,
     TimelineFollowSettlementConsumerSummary, TimelineFollowSettlementDomain,
     TimelineFollowSettlementDomainSummary, TimelineFollowSettlementState,
@@ -10189,22 +10190,6 @@ impl EngineHandle {
             })?
     }
 
-    /// The exact engine-owned fence used by the local runtime control plane.
-    /// It is non-persistent and becomes visible atomically with the snapshot.
-    pub fn timeline_transport_generation(&self) -> u64 {
-        self.snapshot().timeline.transport_generation
-    }
-
-    /// The exact pair must be captured from one shared snapshot. Callers must
-    /// not independently observe epoch and generation across a worker change.
-    pub fn timeline_transport_authority(&self) -> TimelineTransportAuthority {
-        let timeline = self.snapshot().timeline;
-        TimelineTransportAuthority {
-            epoch: timeline.transport_epoch,
-            generation: timeline.transport_generation,
-        }
-    }
-
     pub fn bootstrap_vj_show(
         &self,
         layers: Vec<(VideoLayerId, String, VideoSourceSummary)>,
@@ -10939,23 +10924,6 @@ impl EngineHandle {
         let mut public = snapshot.clone();
         public.authored_video = None;
         Some(public)
-    }
-
-    /// Return the public, runtime-only Follow status stamped with the caller's
-    /// authority epoch. The epoch is supplied by the backend fence; the
-    /// generation in the returned payload is the required abort ABA token.
-    pub fn timeline_follow_runtime_status(
-        &self,
-        epoch: u64,
-    ) -> TimelineFollowRuntimeStatusSnapshot {
-        let runtime = self.timeline_follow_runtime_summary();
-        TimelineFollowRuntimeStatusSnapshot::from_runtime(epoch, &runtime)
-    }
-
-    /// Raw runtime Follow summary for engine-local consumers. This is sourced
-    /// from the published snapshot and is never part of persistence.
-    pub fn timeline_follow_runtime_summary(&self) -> TimelineFollowRuntimeSummary {
-        self.snapshot().timeline.follow_runtime
     }
 
     /// Return the active Follow's exact source/target render inputs. `None`
@@ -67942,6 +67910,9 @@ mod tests {
 
     #[path = "dj_link_release.rs"]
     mod dj_link_release_tests;
+
+    #[path = "../snapshot_read_tests.rs"]
+    mod snapshot_read_tests;
 
     const RELEASE_GATE_EFFECT_COUNT: usize = SUPPORTED_EFFECT_ENVELOPE_ENABLED_EFFECTS;
     const RELEASE_GATE_FIXTURE_COUNT: usize = SUPPORTED_EFFECT_ENVELOPE_FIXTURES;

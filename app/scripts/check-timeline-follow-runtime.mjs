@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import ts from "typescript";
 
 const appRoot = new URL("..", import.meta.url);
-const read = (path) => readFile(new URL(path, appRoot), "utf8");
+const read = async (path) => (await readFile(new URL(path, appRoot), "utf8")).replace(/\r\n/g, "\n");
 
 const typesSource = await read("src/types.ts");
 const typesOutput = ts.transpileModule(typesSource, {

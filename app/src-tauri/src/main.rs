@@ -12541,7 +12541,7 @@ fn get_timeline_follow_operation_terminal_result(
 fn observe_current_video_layer_transition_runtime(
     state: &AppState,
 ) -> Result<(u64, VideoLayerTransitionRuntimeSnapshot), String> {
-    let runtime = state.engine.snapshot().video_transition_runtime;
+    let runtime = state.engine.video_layer_transition_runtime_snapshot();
     let mut observed = state
         .video_transition_runtime_observed
         .lock()
@@ -12596,7 +12596,7 @@ fn commit_authoritative_video_layer_transition_runtime(
             "Video transition runtime generation is exhausted; restart Syndocal".to_string()
         })?;
     publish()?;
-    let runtime = state.engine.snapshot().video_transition_runtime;
+    let runtime = state.engine.video_layer_transition_runtime_snapshot();
     *state
         .video_transition_runtime_observed
         .lock()
@@ -37762,7 +37762,7 @@ fn commit_authoritative_video_clip_slot_runtime(
         );
     }
     publish()?;
-    let runtime = state.engine.snapshot().video_clip_runtime;
+    let runtime = state.engine.video_clip_runtime_snapshot();
     *state
         .video_clip_slot_runtime_observed
         .lock()
@@ -37783,7 +37783,7 @@ fn commit_authoritative_video_clip_slot_runtime(
 fn observe_current_video_clip_runtime(
     state: &AppState,
 ) -> Result<(u64, VideoClipRuntimeSnapshot), String> {
-    let runtime = state.engine.snapshot().video_clip_runtime;
+    let runtime = state.engine.video_clip_runtime_snapshot();
     let mut observed = state
         .video_clip_slot_runtime_observed
         .lock()

@@ -8,6 +8,8 @@
 [snapshot同期チェックポイント](SNAPSHOT_SYNC_2026-09-05.md)を参照。
 続くEdit VideoのレイヤーFX復旧・非表示consumer停止は
 [Video FXチェックポイント](EDIT_VIDEO_FX_2026-09-05.md)を参照。
+runtimeの小さい読取に伴う全量snapshot複製の除去は
+[snapshot読取チェックポイント](SNAPSHOT_READ_2026-09-05.md)を参照。
 以下のalpha.69録画チェックポイントのartifact/hashはその時点の記録を保持する。
 
 ## 台帳の読み替え
@@ -139,6 +141,7 @@ Out of scope 6。Open 50行を未実装50件と数えない。
 | --- | --- | --- |
 | 対応済 | 監査時の `SnapshotSyncState` は全client共通の単一last snapshot/revisionで、交互pollがfull応答を増やしていた | 続行で履歴4件の独立moduleへ分離。2clientの100要求でfull100→2。[計測・制約](SNAPSHOT_SYNC_2026-09-05.md) |
 | 高 | `crates/engine/src/lib.rs` のsnapshot cloneとtick内snapshot生成がlock内にあり、authored collectionも複製 | 代表showでclone時間・lock待機・payload bytesを別々に計測。single mutation ownership、fence、ACKを維持 |
+| 限定対応済 | clip/transition/Follow/transportの小さいruntime取得が全snapshotをcloneしていた | 専用snapshot_readへ分離して必要fieldのみ取得。synthetic比較と既存runtime回帰を実施。tick構築と一般snapshot読取は未変更 |
 | 高 | `main.rs` の `engine_snapshot_delta` は深い比較/clone。Stage 30Hz consumerに対しUI apply間引きだけではbackend仕事量は減らない | 上記snapshot計測とまとめて検証してからrevision/dirty trackingを選ぶ |
 | 対応済 | libraryOnlyで非表示の旧mixer consumerがmountされ続けていた | 条件mountへ変更。FXはclosed/open/closedで0/1/0。CPU/FPS改善率は未計測 |
 | 高 | 録画のblocking stdin writeとStop joinに期限なし | fake encoderの停止・無応答で停止上限を設計/試験。今回のstderr排出だけで解消としない |
