@@ -130,6 +130,9 @@ export type MappingDragState =
       kind: "fixtureYaw";
       pointerId: number;
       fixtureId: number;
+      fixtureIds: number[];
+      startRotations: Record<number, PatchFixtureRequest["rotation"]>;
+      projectEpoch: number;
       startWorld: { x: number; z: number };
       currentWorld: { x: number; z: number };
       startClient: { x: number; y: number };
@@ -200,6 +203,17 @@ export type MappingDragState =
       currentWorld: { x: number; z: number };
       startObject: StageObjectSummary;
     };
+
+export const normalizeMappingFixtureYaw = (yaw: number) =>
+  Number((((yaw % 360) + 360) % 360).toFixed(1));
+
+export const mappingFixtureRotationWithYawDelta = (
+  rotation: PatchFixtureRequest["rotation"],
+  yawDelta: number,
+): PatchFixtureRequest["rotation"] => ({
+  ...rotation,
+  yaw: normalizeMappingFixtureYaw(rotation.yaw + yawDelta),
+});
 
 export interface MappingMarqueeState {
   pointerId: number;

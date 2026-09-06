@@ -10,6 +10,10 @@ use std::{
 
 static NEXT_RESERVATION: AtomicU64 = AtomicU64::new(0);
 
+#[cfg(windows)]
+#[path = "recording_publication.rs"]
+mod publication;
+
 pub(super) fn drain_encoder_stderr(mut stderr: impl Read) -> std::io::Result<Vec<u8>> {
     let mut tail = Vec::new();
     let mut buffer = [0_u8; 4096];
@@ -28,10 +32,11 @@ pub(super) fn drain_encoder_stderr(mut stderr: impl Read) -> std::io::Result<Vec
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 struct FileIdentity(u64, u64);
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 enum TargetState {
     Absent,
     Present {
@@ -55,54 +60,28 @@ fn target_state(path: &Path) -> Result<TargetState, String> {
             ))
         }
     };
-    let metadata = file.metadata().map_err(|error| {
-        format!(
-            "Cannot inspect recording target {}: {error}",
-            path.display()
-        )
-    })?;
+    state_from_file(&file)
+}
+
+fn state_from_file(file: &File) -> Result<TargetState, String> {
+    let metadata = file
+        .metadata()
+        .map_err(|error| format!("Cannot inspect recording file: {error}"))?;
     Ok(TargetState::Present {
-        identity: identity(&file)?,
+        identity: identity(file)?,
         len: metadata.len(),
-        modified: metadata.modified().map_err(|error| {
-            format!(
-                "Cannot read target modification time {}: {error}",
-                path.display()
-            )
-        })?,
+        modified: metadata
+            .modified()
+            .map_err(|error| format!("Cannot read recording modification time: {error}"))?,
     })
 }
 
 /// Publish an initially absent destination without overwriting a concurrent
 /// creator. The bool reports whether a staging link still needs removal.
+#[cfg(unix)]
 fn publish_new_file(staging: &Path, target: &Path) -> Result<bool, String> {
-    #[cfg(windows)]
-    {
-        use std::os::windows::ffi::OsStrExt;
-        use windows::{
-            core::PCWSTR,
-            Win32::Storage::FileSystem::{MoveFileExW, MOVEFILE_WRITE_THROUGH},
-        };
-        let staging_wide = staging
-            .as_os_str()
-            .encode_wide()
-            .chain(std::iter::once(0))
-            .collect::<Vec<_>>();
-        let target_wide = target
-            .as_os_str()
-            .encode_wide()
-            .chain(std::iter::once(0))
-            .collect::<Vec<_>>();
-        unsafe { MoveFileExW(PCWSTR(staging_wide.as_ptr()), PCWSTR(target_wide.as_ptr()), MOVEFILE_WRITE_THROUGH) }
-            .map_err(|error| format!("Cannot publish new recording {}; a concurrent destination will not be overwritten: {error}", target.display()))?;
-        Ok(false)
-    }
-    #[cfg(unix)]
-    {
-        // A same-filesystem link atomically refuses any existing destination.
-        fs::hard_link(staging, target).map_err(|error| format!("Cannot publish new recording {}; a concurrent destination will not be overwritten: {error}", target.display()))?;
-        Ok(true)
-    }
+    fs::hard_link(staging, target).map_err(|error| format!("Cannot publish new recording {}; a concurrent destination will not be overwritten: {error}", target.display()))?;
+    Ok(true)
 }
 
 fn identity(file: &File) -> Result<FileIdentity, String> {
@@ -201,6 +180,8 @@ impl RecordingArtifact {
             )
         })?;
         let target = parent.join(name);
+        #[cfg(windows)]
+        publication::recover(&target)?;
         let target_state = target_state(&target)?;
         let staging = parent.join(staging_name);
         if staging == target {
@@ -212,7 +193,8 @@ impl RecordingArtifact {
         {
             use std::os::windows::fs::OpenOptionsExt;
             // FFmpeg may write the reservation, but nobody may rename/delete it
-            // while encoding. Publication closes this handle before MoveFileExW.
+            // while encoding. Publication exchanges this for a verified,
+            // exclusively writable/deleteable handle before renaming.
             options.share_mode(3);
         }
         let file = options.open(&staging).map_err(|error| {
@@ -278,23 +260,30 @@ impl RecordingArtifact {
         if target_state(&self.target)? != self.target_state {
             return Err(format!("Recording target changed during capture; refusing to overwrite {}. Choose another destination and record again", self.target.display()));
         }
-        self.file.take();
-        self.verify_owned()?;
-        let staging_link_remains = match self.target_state {
-            TargetState::Absent => publish_new_file(&self.staging, &self.target)?,
-            TargetState::Present { .. } => {
-                // This existing-target check + replace is not CAS: even an
-                // ordinary writer can race after the final comparison. It
-                // requires exclusive destination use during final publication.
-                super::replace_file_atomically(&self.staging, &self.target)?;
-                false
-            }
-        };
-        self.owned = false;
-        if staging_link_remains {
-            fs::remove_file(&self.staging).map_err(|error| format!("Recording was published to {}, but its partial link {} could not be removed: {error}; remove that partial manually", self.target.display(), self.staging.display()))?;
+        #[cfg(windows)]
+        {
+            return publication::publish(self, |_| {});
         }
-        Ok(())
+        #[cfg(unix)]
+        {
+            self.file.take();
+            self.verify_owned()?;
+            let staging_link_remains = match self.target_state {
+                TargetState::Absent => publish_new_file(&self.staging, &self.target)?,
+                TargetState::Present { .. } => {
+                    // This existing-target check + replace is not CAS: even an
+                    // ordinary writer can race after the final comparison. It
+                    // requires exclusive destination use during final publication.
+                    super::replace_file_atomically(&self.staging, &self.target)?;
+                    false
+                }
+            };
+            self.owned = false;
+            if staging_link_remains {
+                fs::remove_file(&self.staging).map_err(|error| format!("Recording was published to {}, but its partial link {} could not be removed: {error}; remove that partial manually", self.target.display(), self.staging.display()))?;
+            }
+            Ok(())
+        }
     }
 
     pub(super) fn discard(&mut self) -> Result<(), String> {
@@ -431,11 +420,20 @@ mod tests {
         let mut artifact = RecordingArtifact::reserve(&dir.target()).unwrap();
         fs::write(artifact.path(), b"recording").unwrap();
         assert_eq!(target_state(&dir.target()).unwrap(), TargetState::Absent);
-        artifact.file.take();
-        artifact.verify_owned().unwrap();
-        // Simulate creation after publication's last destination comparison.
-        fs::write(dir.target(), b"late concurrent writer").unwrap();
-        assert!(publish_new_file(artifact.path(), &dir.target()).is_err());
+        #[cfg(windows)]
+        assert!(publication::publish(&mut artifact, |point| {
+            if point == publication::PublicationPoint::BeforeInstall {
+                fs::write(dir.target(), b"late concurrent writer").unwrap();
+            }
+        })
+        .is_err());
+        #[cfg(unix)]
+        {
+            artifact.file.take();
+            artifact.verify_owned().unwrap();
+            fs::write(dir.target(), b"late concurrent writer").unwrap();
+            assert!(publish_new_file(artifact.path(), &dir.target()).is_err());
+        }
         assert_eq!(fs::read(dir.target()).unwrap(), b"late concurrent writer");
         assert_eq!(fs::read(artifact.path()).unwrap(), b"recording");
         artifact.discard().unwrap();
@@ -514,7 +512,7 @@ mod tests {
         assert!(artifact
             .publish(1)
             .unwrap_err()
-            .contains("atomically replace"));
+            .contains("locked recording path"));
         artifact.discard().unwrap();
         assert_eq!(fs::read(dir.target()).unwrap(), b"previous");
         drop(locked);

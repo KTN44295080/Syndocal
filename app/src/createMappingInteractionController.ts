@@ -8,7 +8,9 @@ import type {
   MappingViewportPanDragState,
   VisualizerFixture,
 } from "./mappingRuntime";
+import { mappingFixtureRotationWithYawDelta } from "./mappingRuntime";
 import { clampRange } from "./numericHelpers";
+import type { ProjectAuthorityToken } from "./projectAuthority";
 import {
   mappingStageSvgDeltaToWorld,
   mappingStageSvgPointToWorld,
@@ -65,6 +67,7 @@ interface MappingInteractionControllerOptions {
   clearMappingFixtureSelection: () => void;
   mappingDrag: Accessor<MappingDragState | null>;
   setMappingDrag: Setter<MappingDragState | null>;
+  currentProjectAuthority: Accessor<ProjectAuthorityToken>;
   mappingMarquee: Accessor<MappingMarqueeState | null>;
   setMappingMarquee: Setter<MappingMarqueeState | null>;
   mappingViewportPanDrag: Accessor<MappingViewportPanDragState | null>;
@@ -92,6 +95,28 @@ export function createMappingInteractionController(options: MappingInteractionCo
   // object is the lease: a later interaction gets a new object, so a late
   // completion cannot clear or report against that newer interaction.
   const pendingFixtureYawDrags = new Set<MappingFixtureYawDrag>();
+  type MappingStageRotationOperation = {
+    projectEpoch: number;
+    selectedFixtureIds: number[];
+  };
+  let pendingStageRotationOperation: MappingStageRotationOperation | null = null;
+
+  const sameFixtureIdSet = (left: readonly number[], right: readonly number[]) =>
+    left.length === right.length && left.every((fixtureId) => right.includes(fixtureId));
+
+  const stageRotationOperationIsCurrent = (
+    operation: MappingStageRotationOperation,
+  ) => pendingStageRotationOperation === operation
+    && options.currentProjectAuthority().project_epoch === operation.projectEpoch
+    && sameFixtureIdSet(operation.selectedFixtureIds, options.selectedMappingFixtureIds())
+    && options.mappingDrag() === null;
+
+  const mappingProjectEpochIsCurrent = (projectEpoch: number) =>
+    options.currentProjectAuthority().project_epoch === projectEpoch;
+
+  const invalidatePendingStageRotation = () => {
+    pendingStageRotationOperation = null;
+  };
 
   const stageSvgPointFromClient = (clientX: number, clientY: number, targetSvg: SVGSVGElement) => {
     const viewBox = options.mappingViewportBox();
@@ -149,6 +174,7 @@ export function createMappingInteractionController(options: MappingInteractionCo
   const placeSelectedFixtureFromStage = async (
     event: PointerEvent & { currentTarget: SVGSVGElement },
   ) => {
+    invalidatePendingStageRotation();
     const fixture = options.selectedFixture();
     if (!fixture) return;
     const point = options.snapStagePoint(stageWorldPointFromPointer(event));
@@ -160,18 +186,68 @@ export function createMappingInteractionController(options: MappingInteractionCo
   const rotateSelectedFixtureFromStage = async (
     event: PointerEvent & { currentTarget: SVGSVGElement },
   ) => {
-    const fixture = options.selectedFixture();
-    if (!fixture) return;
+    invalidatePendingStageRotation();
+    const selected = options.selectedFixture();
+    if (!selected) return;
+    const snapshot = options.snapshot();
+    const anchor = snapshot.fixtures.find((fixture) => fixture.id === selected.id);
+    if (!anchor) return;
     const point = stageWorldPointFromPointer(event);
-    const dx = point.x - fixture.position.x;
-    const dz = point.z - fixture.position.z;
+    const dx = point.x - anchor.position.x;
+    const dz = point.z - anchor.position.z;
     if (Math.abs(dx) < 0.001 && Math.abs(dz) < 0.001) return;
     const yaw = Math.round(((Math.atan2(dz, dx) * 180) / Math.PI + 90 + 360) % 360);
-    await options.setFixtureTransform(fixture, { rotation: { ...fixture.rotation, yaw } });
+    const selectionBaseline = [...options.selectedMappingFixtureIds()];
+    const selectedIds = options.selectedMappingFixtureIdSet();
+    const fixtureIds = [...new Set(selectedIds.has(anchor.id)
+      ? options.selectedMappingFixtureIds()
+      : [anchor.id])];
+    const fixtures = snapshot.fixtures.filter((fixture) => fixtureIds.includes(fixture.id));
+    if (fixtures.length === 0 || !fixtures.some((fixture) => fixture.id === anchor.id)) return;
+    if (!fixtures.every((fixture) => Object.values(fixture.rotation).every(Number.isFinite))) {
+      options.setMessage("Cannot rotate fixtures with an invalid saved rotation.");
+      return;
+    }
+    const yawDelta = yaw - anchor.rotation.yaw;
+    const transforms = fixtures.map((fixture) => ({
+      fixture,
+      update: { rotation: mappingFixtureRotationWithYawDelta(fixture.rotation, yawDelta) },
+    }));
+    const operation: MappingStageRotationOperation = {
+      projectEpoch: options.currentProjectAuthority().project_epoch,
+      selectedFixtureIds: selectionBaseline,
+    };
+    pendingStageRotationOperation = operation;
+    try {
+      const persisted = await applyMappingFixtureTransformBatch({
+        transforms,
+        setFixtureTransform: (fixture, update, refresh) => {
+          if (!stageRotationOperationIsCurrent(operation)) return Promise.resolve(false);
+          return options.setFixtureTransform(fixture, update, refresh);
+        },
+        refreshSnapshot: options.refreshSnapshot,
+        setMessage: (message) => {
+          if (stageRotationOperationIsCurrent(operation)) options.setMessage(message);
+        },
+      });
+      if (!stageRotationOperationIsCurrent(operation)) return;
+      if (persisted) {
+        options.setMessage(
+          fixtures.length === 1
+            ? `Set ${anchor.label} yaw to ${yaw} deg.`
+            : `Rotated ${fixtures.length} selected fixtures by ${yawDelta} deg.`,
+        );
+      }
+    } finally {
+      if (pendingStageRotationOperation === operation) {
+        pendingStageRotationOperation = null;
+      }
+    }
   };
 
   const beginMappingFixtureDrag = (event: PointerEvent, fixtureId: number) => {
     if (event.button !== 0 || options.mappingStageTool() !== "select") return;
+    invalidatePendingStageRotation();
     const fixture = options.snapshot().fixtures.find((candidate) => candidate.id === fixtureId);
     const svg = (event.currentTarget as SVGElement).ownerSVGElement;
     if (!fixture || !svg) return;
@@ -205,19 +281,35 @@ export function createMappingInteractionController(options: MappingInteractionCo
 
   const beginMappingFixtureYawDrag = (event: PointerEvent, fixtureId: number) => {
     if (event.button !== 0 || options.mappingStageTool() === "pan" || options.mappingStageTool() === "place") return;
-    const fixture = options.snapshot().fixtures.find((candidate) => candidate.id === fixtureId);
+    invalidatePendingStageRotation();
+    const snapshot = options.snapshot();
+    const fixture = snapshot.fixtures.find((candidate) => candidate.id === fixtureId);
     const svg = (event.currentTarget as SVGElement).ownerSVGElement;
     if (!fixture || !svg) return;
     event.preventDefault();
     event.stopPropagation();
-    options.selectFixture(fixture);
-    options.activateFixture(fixture);
+    const selectedIds = options.selectedMappingFixtureIdSet();
+    const fixtureIds = [...new Set(
+      (selectedIds.has(fixtureId) ? options.selectedMappingFixtureIds() : [fixtureId])
+        .filter((id) => snapshot.fixtures.some((candidate) => candidate.id === id)),
+    )];
+    if (!fixtureIds.includes(fixtureId)) fixtureIds.unshift(fixtureId);
+    const selectedFixtures = snapshot.fixtures.filter((candidate) => fixtureIds.includes(candidate.id));
+    if (!selectedFixtures.every((candidate) => Object.values(candidate.rotation).every(Number.isFinite))) return;
+    const startRotations = Object.fromEntries(
+      selectedFixtures.map((candidate) => [candidate.id, { ...candidate.rotation }]),
+    ) as Record<number, PatchFixtureRequest["rotation"]>;
+    if (selectedIds.has(fixtureId)) options.activateFixture(fixture);
+    else options.selectFixture(fixture);
     const point = stageWorldPointFromPointer(event, svg);
     svg.setPointerCapture(event.pointerId);
     options.setMappingDrag({
       kind: "fixtureYaw",
       pointerId: event.pointerId,
       fixtureId,
+      fixtureIds,
+      startRotations,
+      projectEpoch: options.currentProjectAuthority().project_epoch,
       startWorld: point,
       currentWorld: point,
       startClient: { x: event.clientX, y: event.clientY },
@@ -228,6 +320,7 @@ export function createMappingInteractionController(options: MappingInteractionCo
 
   const beginMappingVideoOutputDrag = (event: PointerEvent, outputId: number) => {
     if (event.button !== 0 || options.mappingStageTool() !== "select") return;
+    invalidatePendingStageRotation();
     const output = options.snapshot().video.outputs.find((candidate) => candidate.id === outputId);
     const svg = (event.currentTarget as SVGElement).ownerSVGElement;
     if (!output || !svg) return;
@@ -246,6 +339,7 @@ export function createMappingInteractionController(options: MappingInteractionCo
 
   const beginMappingVideoOutputRotate = (event: PointerEvent, outputId: number) => {
     if (event.button !== 0 || options.mappingStageTool() !== "select") return;
+    invalidatePendingStageRotation();
     const output = options.snapshot().video.outputs.find((candidate) => candidate.id === outputId);
     const svg = (event.currentTarget as SVGElement).ownerSVGElement;
     if (!output || !svg) return;
@@ -266,6 +360,7 @@ export function createMappingInteractionController(options: MappingInteractionCo
 
   const beginMappingVideoOutputScale = (event: PointerEvent, outputId: number) => {
     if (event.button !== 0 || options.mappingStageTool() !== "select") return;
+    invalidatePendingStageRotation();
     const output = options.snapshot().video.outputs.find((candidate) => candidate.id === outputId);
     const svg = (event.currentTarget as SVGElement).ownerSVGElement;
     if (!output || !svg) return;
@@ -290,6 +385,7 @@ export function createMappingInteractionController(options: MappingInteractionCo
     corner: MappingVideoOutputCornerKey,
   ) => {
     if (event.button !== 0 || options.mappingStageTool() !== "select") return;
+    invalidatePendingStageRotation();
     const output = options.snapshot().video.outputs.find((candidate) => candidate.id === outputId);
     const svg = (event.currentTarget as SVGElement).ownerSVGElement;
     if (!output || !svg) return;
@@ -311,6 +407,7 @@ export function createMappingInteractionController(options: MappingInteractionCo
 
   const beginMappingStageObjectDrag = (event: PointerEvent, objectId: number) => {
     if (event.button !== 0 || options.mappingStageTool() !== "select") return;
+    invalidatePendingStageRotation();
     const object = options.snapshot().stage_objects.find((candidate) => candidate.id === objectId);
     const svg = (event.currentTarget as SVGElement).ownerSVGElement;
     if (!object || !svg) return;
@@ -333,6 +430,7 @@ export function createMappingInteractionController(options: MappingInteractionCo
 
   const beginMappingStageObjectRotate = (event: PointerEvent, objectId: number) => {
     if (event.button !== 0 || options.mappingStageTool() !== "select") return;
+    invalidatePendingStageRotation();
     const object = options.snapshot().stage_objects.find((candidate) => candidate.id === objectId);
     const svg = (event.currentTarget as SVGElement).ownerSVGElement;
     if (!object || !svg) return;
@@ -362,6 +460,7 @@ export function createMappingInteractionController(options: MappingInteractionCo
     resizeMode: MappingStageObjectResizeMode,
   ) => {
     if (event.button !== 0 || options.mappingStageTool() !== "select") return;
+    invalidatePendingStageRotation();
     const object = options.snapshot().stage_objects.find((candidate) => candidate.id === objectId);
     const svg = (event.currentTarget as SVGElement).ownerSVGElement;
     if (!object || !svg) return;
@@ -386,6 +485,7 @@ export function createMappingInteractionController(options: MappingInteractionCo
   const beginMappingViewportPan = (event: PointerEvent & { currentTarget: SVGSVGElement }) => {
     const isMiddleButtonPan = event.button === 1;
     if (!isMiddleButtonPan && (event.button !== 0 || options.mappingStageTool() !== "pan")) return;
+    invalidatePendingStageRotation();
     const rect = event.currentTarget.getBoundingClientRect();
     const box = options.mappingViewportBox();
     event.preventDefault();
@@ -424,6 +524,7 @@ export function createMappingInteractionController(options: MappingInteractionCo
 
   const beginMappingMarquee = (event: PointerEvent & { currentTarget: SVGSVGElement }) => {
     if (event.button !== 0 || options.mappingStageTool() !== "select") return;
+    invalidatePendingStageRotation();
     const point = stageSvgPointFromPointer(event);
     event.currentTarget.setPointerCapture(event.pointerId);
     options.setMappingMarquee({
@@ -503,28 +604,77 @@ export function createMappingInteractionController(options: MappingInteractionCo
           options.setMappingDrag(null);
           return;
         }
+        if (!mappingProjectEpochIsCurrent(drag.projectEpoch)) {
+          options.setMappingDrag(null);
+          return;
+        }
         if (fixtureDragDistance < MAPPING_FIXTURE_DRAG_THRESHOLD_PX) {
           options.setMappingDrag(null);
           return;
         }
-        const fixture = options.snapshot().fixtures.find((candidate) => candidate.id === drag.fixtureId);
-        if (!fixture) {
+        const snapshot = options.snapshot();
+        const fixturesById = new Map(snapshot.fixtures.map((fixture) => [fixture.id, fixture]));
+        const fixtures = drag.fixtureIds.map((fixtureId) => fixturesById.get(fixtureId));
+        if (fixtures.some((fixture) => !fixture)) {
+          options.setMappingDrag(null);
+          return;
+        }
+        const anchorRotation = drag.startRotations[drag.fixtureId];
+        if (!anchorRotation || !Object.values(anchorRotation).every(Number.isFinite)) {
           options.setMappingDrag(null);
           return;
         }
         const yaw = options.mappingFixtureYawFromPoint(drag.centerWorld, drag.currentWorld);
-        if (yaw === null) {
+        if (yaw === null || !Number.isFinite(yaw)) {
           options.setMappingDrag(null);
           return;
         }
+        const yawDelta = yaw - anchorRotation.yaw;
+        const transforms = [] as Array<{
+          fixture: PatchedFixtureSummary;
+          update: { rotation: PatchFixtureRequest["rotation"] };
+        }>;
+        for (const fixture of fixtures) {
+          if (!fixture) {
+            options.setMappingDrag(null);
+            return;
+          }
+          const startRotation = drag.startRotations[fixture.id];
+          if (!startRotation || !Object.values(startRotation).every(Number.isFinite)) {
+            options.setMappingDrag(null);
+            return;
+          }
+          transforms.push({
+            fixture,
+            update: { rotation: mappingFixtureRotationWithYawDelta(startRotation, yawDelta) },
+          });
+        }
         pendingFixtureYawDrags.add(drag);
         try {
-          const persisted = await options.setFixtureTransform(fixture, { rotation: { ...fixture.rotation, yaw } });
+          const persisted = await applyMappingFixtureTransformBatch({
+            transforms,
+            setFixtureTransform: (fixture, update, refresh) => {
+              if (options.mappingDrag() !== drag || !mappingProjectEpochIsCurrent(drag.projectEpoch)) {
+                return Promise.resolve(false);
+              }
+              return options.setFixtureTransform(fixture, update, refresh);
+            },
+            refreshSnapshot: options.refreshSnapshot,
+            setMessage: (message) => {
+              if (options.mappingDrag() === drag && mappingProjectEpochIsCurrent(drag.projectEpoch)) {
+                options.setMessage(message);
+              }
+            },
+          });
           // A cancellation, project replacement, or newer drag may have
           // replaced this lease while the authority round-trip was pending.
-          if (options.mappingDrag() !== drag) return;
+          if (options.mappingDrag() !== drag || !mappingProjectEpochIsCurrent(drag.projectEpoch)) return;
           if (persisted) {
-            options.setMessage(`Set ${fixture.label} yaw to ${yaw} deg.`);
+            options.setMessage(
+              transforms.length === 1
+                ? `Set ${transforms[0].fixture.label} yaw to ${yaw} deg.`
+                : `Rotated ${transforms.length} selected fixtures by ${yawDelta} deg.`,
+            );
           }
         } finally {
           pendingFixtureYawDrags.delete(drag);

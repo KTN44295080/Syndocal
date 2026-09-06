@@ -44,8 +44,10 @@ const createSvg = () => {
   };
 };
 
-const createHarness = () => {
-  let fixtures = [fixtureWithYaw()];
+const createHarness = (initialFixtures = [fixtureWithYaw()], stageTool = "select") => {
+  let fixtures = initialFixtures;
+  let selectedIds = fixtures.map((fixture) => fixture.id);
+  let projectEpoch = 1;
   let drag = null;
   const calls = [];
   const messages = [];
@@ -54,6 +56,9 @@ const createHarness = () => {
   const handle = { ownerSVGElement: svg };
   const setMappingDrag = (next) => {
     drag = typeof next === "function" ? next(drag) : next;
+  };
+  const setSelectedMappingFixtureIds = (next) => {
+    selectedIds = typeof next === "function" ? next(selectedIds) : next;
   };
   const controller = createMappingInteractionController({
     snapshot: () => ({ fixtures, stage_objects: [], video: { outputs: [] } }),
@@ -77,13 +82,13 @@ const createHarness = () => {
       } });
       return completion;
     },
-    mappingStageTool: () => "select",
+    mappingStageTool: () => stageTool,
     isAdditiveMappingSelectionEvent: () => false,
     selectMappingFixture: () => {},
-    selectedMappingFixtureIdSet: () => new Set([1]),
-    selectedMappingFixtureIds: () => [1],
-    setSelectedMappingFixtureIds: () => {},
-    selectFixture: () => {},
+    selectedMappingFixtureIdSet: () => new Set(selectedIds),
+    selectedMappingFixtureIds: () => selectedIds,
+    setSelectedMappingFixtureIds,
+    selectFixture: (fixture) => { selectedIds = [fixture.id]; },
     activateFixture: () => {},
     setSelectedFixtureId: () => {},
     setSelectedStageObjectId: () => {},
@@ -91,6 +96,7 @@ const createHarness = () => {
     clearMappingFixtureSelection: () => {},
     mappingDrag: () => drag,
     setMappingDrag,
+    currentProjectAuthority: () => ({ project_epoch: projectEpoch, project_revision: 0, checkpoint_hash: "" }),
     mappingMarquee: () => null,
     setMappingMarquee: () => {},
     mappingViewportPanDrag: () => null,
@@ -137,18 +143,31 @@ const createHarness = () => {
     controller.handleMappingStagePointerMove(pointer(pointerId, clientX, clientY));
   const finish = (pointerId, clientX = 60, clientY = 50, type = "pointerup") =>
     controller.finishMappingStageDrag({ ...pointer(pointerId, clientX, clientY), type });
+  const stageRotate = (pointerId = 1, clientX = 60, clientY = 50) =>
+    controller.handleMappingStagePointerDown(pointer(pointerId, clientX, clientY));
   return {
     controller,
     begin,
     move,
     finish,
+    stageRotate,
     setMappingDrag,
+    setSelectedMappingFixtureIds,
     get drag() { return drag; },
+    setProjectEpoch: (next) => { projectEpoch = next; },
     get fixtures() { return fixtures; },
     calls,
     messages,
     pending,
   };
+};
+
+const waitFor = async (predicate, message) => {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  assert(predicate(), message);
 };
 
 {
@@ -226,4 +245,115 @@ const createHarness = () => {
   assert.deepEqual(harness.messages, [], "a cancelled interaction must not publish a stale message");
 }
 
-console.log("Mapping rotation persistence checks passed (pending preview, duplicate events, rejection, cancellation and stale completion fencing).\n");
+{
+  const second = {
+    ...fixtureWithYaw(120),
+    id: 2,
+    label: "Fixture 2",
+    position: { x: 4, y: 1, z: -3 },
+    rotation: { pitch: 12, yaw: 120, roll: -8 },
+  };
+  const harness = createHarness([fixtureWithYaw(20), second], "rotate");
+  const rotate = harness.stageRotate();
+  assert.equal(harness.calls.length, 1, "group rotation starts with the first selected fixture");
+  assert.deepEqual(harness.calls[0].update.rotation, { pitch: 0, yaw: 90, roll: 0 });
+  harness.pending[0].resolve(true);
+  await waitFor(() => harness.calls.length === 2, "group rotation must submit every selected fixture");
+  assert.deepEqual(harness.calls[1].update.rotation, { pitch: 12, yaw: 190, roll: -8 });
+  harness.pending[1].resolve(true);
+  await rotate;
+  assert.deepEqual(harness.fixtures.map((fixture) => fixture.position), [
+    { x: 0, y: 0, z: 0 },
+    { x: 4, y: 1, z: -3 },
+  ], "stage rotation must not move selected fixtures");
+  assert.deepEqual(harness.messages, ["Rotated 2 selected fixtures by 70 deg."]);
+}
+
+{
+  const second = { ...fixtureWithYaw(120), id: 2, label: "Fixture 2" };
+  const harness = createHarness([fixtureWithYaw(20), second], "rotate");
+  const rotate = harness.stageRotate();
+  assert.equal(harness.calls.length, 1);
+  harness.setProjectEpoch(2);
+  harness.pending[0].resolve(true);
+  await rotate;
+  assert.equal(harness.calls.length, 1, "a project replacement must stop a pending stage rotation batch");
+  assert.deepEqual(harness.messages, [], "a stale stage rotation must not report against the replacement project");
+}
+
+{
+  const second = { ...fixtureWithYaw(120), id: 2, label: "Fixture 2" };
+  const harness = createHarness([fixtureWithYaw(20), second], "rotate");
+  const firstRotate = harness.stageRotate(1, 60, 50);
+  assert.equal(harness.calls.length, 1);
+  harness.begin(2);
+  harness.setMappingDrag(null);
+  harness.pending[0].resolve(true);
+  await firstRotate;
+  assert.equal(harness.calls.length, 1, "a newer mapping interaction must stop the pending stage rotation batch");
+  assert.deepEqual(harness.messages, [], "a stale stage rotation must not report after a newer interaction");
+}
+
+{
+  const harness = createHarness([fixtureWithYaw(20), { ...fixtureWithYaw(120), id: 2, label: "Fixture 2" }], "rotate");
+  harness.setSelectedMappingFixtureIds([]);
+  const rotate = harness.stageRotate();
+  assert.equal(harness.calls.length, 1, "an unselected anchor keeps the stage click single-fixture path");
+  assert.deepEqual(harness.calls[0].update.rotation, { pitch: 0, yaw: 90, roll: 0 });
+  harness.pending[0].resolve(true);
+  await rotate;
+  assert.deepEqual(harness.messages, ["Set Fixture 1 yaw to 90 deg."]);
+}
+
+{
+  const second = {
+    ...fixtureWithYaw(350),
+    id: 2,
+    label: "Fixture 2",
+    position: { x: 4, y: 0, z: 0 },
+    rotation: { pitch: 7, yaw: 350, roll: 3 },
+  };
+  const harness = createHarness([fixtureWithYaw(20), second]);
+  harness.begin(1);
+  harness.move(1, 60, 50);
+  const finish = harness.finish(1, 60, 50);
+  assert.deepEqual(harness.calls[0].update.rotation, { pitch: 0, yaw: 90, roll: 0 });
+  harness.pending[0].resolve(true);
+  await waitFor(() => harness.calls.length === 2, "yaw drag must submit every selected fixture");
+  assert.deepEqual(harness.calls[1].update.rotation, { pitch: 7, yaw: 60, roll: 3 });
+  harness.pending[1].resolve(true);
+  await finish;
+  assert.equal(harness.drag, null);
+  assert.deepEqual(harness.messages, ["Rotated 2 selected fixtures by 70 deg."]);
+}
+
+{
+  const second = { ...fixtureWithYaw(120), id: 2, label: "Fixture 2" };
+  const harness = createHarness([fixtureWithYaw(20), second]);
+  harness.begin(1);
+  harness.move(1, 60, 50);
+  const finish = harness.finish(1, 60, 50);
+  assert.equal(harness.calls.length, 1);
+  harness.setProjectEpoch(2);
+  harness.pending[0].resolve(true);
+  await finish;
+  assert.equal(harness.calls.length, 1, "a project replacement must stop a pending yaw batch");
+  assert.equal(harness.drag, null);
+  assert.deepEqual(harness.messages, [], "a stale yaw batch must not report against the replacement project");
+}
+
+{
+  const second = { ...fixtureWithYaw(120), id: 2, label: "Fixture 2" };
+  const harness = createHarness([fixtureWithYaw(20), second]);
+  harness.begin(1);
+  harness.move(1, 60, 50);
+  const finish = harness.finish(1, 60, 50);
+  assert.equal(harness.calls.length, 1);
+  harness.setMappingDrag(null);
+  harness.pending[0].resolve(true);
+  await finish;
+  assert.equal(harness.calls.length, 1, "a cancelled group drag must not submit later fixtures");
+  assert.deepEqual(harness.messages, [], "a cancelled group drag must not report a stale result");
+}
+
+console.log("Mapping rotation persistence checks passed (group delta, preserved orientation, pending preview, duplicate events, rejection, cancellation and stale completion fencing).\n");

@@ -17,6 +17,7 @@ import {
   mappingFixtureWorldToSvgScale,
 } from "./fixtureVisuals";
 import {
+  mappingFixtureRotationWithYawDelta,
   mappingGeometryClass,
   surfaceWorldHalfSize,
   type MappingDragState,
@@ -204,10 +205,16 @@ export const createMappingRenderModel = (options: MappingRenderModelOptions) => 
   };
   const mappingFixtureYaw = (fixture: PatchedFixtureSummary) => {
     const drag = options.mappingDrag();
-    if (drag?.kind !== "fixtureYaw" || drag.fixtureId !== fixture.id) {
+    if (drag?.kind !== "fixtureYaw" || !drag.fixtureIds.includes(fixture.id)) {
       return fixture.rotation.yaw;
     }
-    return mappingFixtureYawFromPoint(drag.centerWorld, drag.currentWorld) ?? fixture.rotation.yaw;
+    const startRotation = drag.startRotations[fixture.id];
+    const anchorRotation = drag.startRotations[drag.fixtureId];
+    if (!startRotation || !anchorRotation) return fixture.rotation.yaw;
+    const targetYaw = mappingFixtureYawFromPoint(drag.centerWorld, drag.currentWorld);
+    return targetYaw === null
+      ? startRotation.yaw
+      : mappingFixtureRotationWithYawDelta(startRotation, targetYaw - anchorRotation.yaw).yaw;
   };
   const mappingVideoOutputMapping = (output: VideoOutputSummary): VideoOutputMapping => {
     const drag = options.mappingDrag();

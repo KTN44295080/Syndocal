@@ -22635,6 +22635,7 @@ export default function App() {
     clearMappingFixtureSelection,
     mappingDrag,
     setMappingDrag,
+    currentProjectAuthority: projectMappingsAuthority,
     mappingMarquee,
     setMappingMarquee,
     mappingViewportPanDrag,

@@ -31,11 +31,12 @@ snapshot生成時のpercentile重複sortと測定窓分離は
 | 優先 | 残件 | 完了条件・現状 |
 | --- | --- | --- |
 | 1・部分解決 | 録画のencoder停止・回収 | [直接encoderの監視・終了](RECORDING_ENCODER_STOP_2026-09-06.md)を実装。Stop観測後5秒で終了を要求し、確認まで所有を保持する。継承pipe、同期renderer、OSが終了確認を返さない場合の全停止期限は残件。既存250msはStop呼出しの待機上限のみ |
-| 2 | 録画の既存保存先の競合 | 最終比較後の別writerを上書きしない。既存ファイルへの通常上書きと、失敗時の以前の成果物保全を維持して検証する |
+| 2・Windows限定完了 | 録画の既存保存先の競合 | [Windows保存先の保全と復旧](RECORDING_PUBLICATION_2026-09-06.md)：検証済みhandleを保持し、競合相手を上書きしない二段階renameと次回予約時の復旧を実装。48件の録画テスト・実FFmpeg・native build/起動確認通過。電源断耐久性や録画全体の受入とは区別する |
 | 3 | 肥大化コードの責務分離 | project transaction/media lifecycleを独立した単位で分離。全状態を持つ別の巨大serviceへの移動で終わらせない |
 | 4 | 全量snapshot生成・差分比較の負荷 | 実showでclone、writer待機、delta生成とpayload量を分けて計測してから変更する。送信前限定読取の改善値を全体性能へ流用しない |
 
 Spout開始、Video BOの復旧・照明との分離、Unity映像の滑らかさはユーザー確認済み。
+追加報告の複数灯体の回転は[修正・検証記録](MAPPING_GROUP_ROTATION_2026-09-06.md)を参照。
 これらを再度未確認として実機操作を要求しない。GUIの全操作Undo/Redoなど、
 上記と別の未検証項目はそれぞれの受入文書の境界を維持する。
 
