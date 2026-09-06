@@ -195,7 +195,7 @@ assert.match(app, /setDjLinkWiredCandidateCount\(candidates\.length\)/);
 assert.match(app, /setDjLinkWiredCandidateCount\(null\)/);
 assert.match(app, /setDjLinkSelectedBinding\(""\)/);
 assert.doesNotMatch(app, /localStorage[^\n]*(dj|DJ)[^\n]*token/i);
-const machineStatusFailureHandler = app.match(/const refreshDjLinkMachineStatus = async \(\) => \{[\s\S]*?\n  \};\n  const refreshDjLinkWiredCandidates/);
+const machineStatusFailureHandler = app.match(/const refreshDjLinkMachineStatus = async \(\) => \{[\s\S]*?\r?\n  \};\r?\n  const refreshDjLinkWiredCandidates/);
 assert.ok(machineStatusFailureHandler, "machine status refresh handler is present");
 assert.doesNotMatch(
   machineStatusFailureHandler[0],

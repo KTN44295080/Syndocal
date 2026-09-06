@@ -28826,10 +28826,10 @@ export default function App() {
             ) : (
           <section class="ioUnifiedZone ioCompactZone" data-io-zone="remote">
           <RemoteControlPanel
-            // Web Remote is an ordinary disclosure alongside endpoint/client,
-            // safety-limit, standby, and DJ Link disclosures. DJ Link keeps
-            // its existing direct authority surface when explicitly selected.
-            surface={connection === "dj" ? "dj" : "all"}
+            // Keep the selected remote surface direct in the fixed I/O
+            // workbench; its related safety, endpoint, standby, and DJ Link
+            // sections remain grouped below as disclosures.
+            surface={connection === "dj" ? "dj" : connection === "web" ? "web" : "all"}
             backendAvailable={isTauriRuntime()}
             invokeCommand={invoke}
             bindIp={remoteBindIp()}

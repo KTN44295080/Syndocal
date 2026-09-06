@@ -82,8 +82,8 @@ export function IoConnectionDeck(props: IoConnectionDeckProps) {
   );
   // Items are intentionally rebuilt when a connection's live status changes.
   // Keep the selected workbench keyed by its primitive connection id so those
-  // status refreshes update the header without remounting local draft state in
-  // the workbench (for example, a DJ Link mapping draft).
+  // status refreshes update the selected card without remounting local draft
+  // state in the workbench (for example, a DJ Link mapping draft).
   const activeItemId = createMemo(() => activeItem()?.id);
   const tabId = (id: IoConnectionId) => `${workbenchId()}-tab-${id}`;
 
@@ -107,6 +107,8 @@ export function IoConnectionDeck(props: IoConnectionDeckProps) {
                   type="button"
                   class="setupIoConnectionSelect"
                   id={tabId(item.id)}
+                  aria-label={`${item.label}: ${item.summary}`}
+                  title={item.summary}
                   role="tab"
                   aria-selected={selected()}
                   aria-controls={workbenchId()}
@@ -136,7 +138,6 @@ export function IoConnectionDeck(props: IoConnectionDeckProps) {
                   onClick={() => props.onActiveId(item.id)}
                 >
                   <span class="setupIoConnectionLabel">{item.label}</span>
-                  <span class="setupIoConnectionSummary">{item.summary}</span>
                 </button>
                 <div class="setupIoConnectionMeta">
                   <span class={`setupIoConnectionState ${item.stateTone ?? "idle"}`} role="status">
@@ -162,17 +163,9 @@ export function IoConnectionDeck(props: IoConnectionDeckProps) {
       >
         <Show when={activeItemId()} keyed>
           {(itemId) => (
-            <>
-              <header class="setupIoWorkbenchHeader">
-                <h2>{activeItem()?.label}</h2>
-                <span class={`setupIoConnectionState ${activeItem()?.stateTone ?? "idle"}`}>
-                  <i aria-hidden="true" />{activeItem()?.state}
-                </span>
-              </header>
-              <div class="setupIoWorkbenchBody" data-io-workbench-body>
-                {props.renderWorkbench(itemId)}
-              </div>
-            </>
+            <div class="setupIoWorkbenchBody" data-io-workbench-body>
+              {props.renderWorkbench(itemId)}
+            </div>
           )}
         </Show>
       </section>
@@ -185,25 +178,31 @@ export function IoConnectionDeck(props: IoConnectionDeckProps) {
  * every existing start/stop/apply authority callback owned by the caller.
  */
 export function SetupIoConnectionDeck(props: SetupIoConnectionDeckProps) {
+  const audioConnectionSummary = () => {
+    if (props.audioOutputState === "Ready") return "PROGRAM output";
+    if (props.audioOutputState === "Active") return "PROGRAM active";
+    return props.audioOutputSummary;
+  };
+
   const items = (): readonly IoConnectionDeckItem[] => [
     {
       id: "dmx",
       label: "DMX",
-      summary: "Output routing and optional input",
+      summary: "Output + input",
       state: props.outputEnabled ? "Output enabled" : "Output disabled",
       stateTone: props.outputEnabled ? "ok" : "idle",
     },
     {
       id: "audio",
       label: "Audio",
-      summary: props.audioOutputSummary,
+      summary: audioConnectionSummary(),
       state: props.audioOutputState,
       stateTone: props.audioOutputStateTone ?? "idle",
     },
     {
       id: "midi",
       label: "MIDI",
-      summary: "Clock, control, and feedback",
+      summary: "Clock + control",
       state: props.midiClockConnected || props.midiControlConnected ? "Connected" : "Stopped",
       stateTone: props.midiClockConnected || props.midiControlConnected ? "ok" : "idle",
       primaryAction: props.midiClockConnected
@@ -213,7 +212,7 @@ export function SetupIoConnectionDeck(props: SetupIoConnectionDeckProps) {
     {
       id: "osc",
       label: "OSC",
-      summary: "UDP listener and mappings",
+      summary: "UDP listener",
       state: props.oscRunning ? "Listening" : "Stopped",
       stateTone: props.oscRunning ? "ok" : "idle",
       primaryAction: props.oscRunning
@@ -223,7 +222,7 @@ export function SetupIoConnectionDeck(props: SetupIoConnectionDeckProps) {
     {
       id: "web",
       label: "Web Remote",
-      summary: "Browser control on local or trusted LAN",
+      summary: "Remote access",
       state: props.webRemoteRunning ? "Running" : "Stopped",
       stateTone: props.webRemoteRunning ? "ok" : "idle",
       primaryAction: props.webRemoteRunning
@@ -233,7 +232,7 @@ export function SetupIoConnectionDeck(props: SetupIoConnectionDeckProps) {
     {
       id: "dj",
       label: "DJ Link",
-      summary: "Rekordbox authority and show trigger",
+      summary: "Track triggers",
       state: props.djListenerRunning ? "Connected" : props.djLinkEnabled ? "Armed" : "Disarmed",
       stateTone: props.djListenerRunning ? "ok" : props.djLinkEnabled ? "warning" : "idle",
       primaryAction: props.djLinkEnabled

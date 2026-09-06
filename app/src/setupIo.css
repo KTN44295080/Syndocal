@@ -74,14 +74,6 @@
   white-space: nowrap;
 }
 
-.setupIoPanel[data-io-layout="operator"] .setupIoConnectionSummary {
-  overflow: hidden;
-  color: #aeb8c5;
-  font-size: 12px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .setupIoPanel[data-io-layout="operator"] .setupIoConnectionMeta {
   display: grid;
   align-content: center;
@@ -128,27 +120,6 @@
   border: 1px solid #3b4148;
   border-radius: var(--ui-radius-control);
   background: #171b1f;
-}
-
-.setupIoPanel[data-io-layout="operator"] .setupIoWorkbenchHeader {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  border-bottom: 1px solid #343a41;
-  padding: 8px 10px;
-}
-
-.setupIoPanel[data-io-layout="operator"] .setupIoWorkbenchHeader h2 {
-  overflow: hidden;
-  margin: 0;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.setupIoPanel[data-io-layout="operator"] .setupIoWorkbenchHeader h2 {
-  font-size: 14px;
 }
 
 .setupIoPanel[data-io-layout="operator"] .setupIoWorkbenchBody {
@@ -306,6 +277,16 @@
 @container setup-io-deck (max-width: 900px) {
   .setupIoPanel[data-io-layout="operator"] .setupIoConnectionCards {
     grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+/* Six connections fit on one rail on the normal desktop work area. Keeping
+   them together gives the selected workbench the vertical space instead of
+   spending a second row on a lone DJ Link card. The existing 5/3/2-column
+   fallbacks remain in charge when the deck itself becomes narrower. */
+@container setup-io-deck (min-width: 1120px) {
+  .setupIoPanel[data-io-layout="operator"] .setupIoConnectionCards {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
   }
 }
 

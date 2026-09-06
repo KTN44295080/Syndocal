@@ -1554,7 +1554,7 @@ assert.doesNotMatch(
   /onAddDmxRoute|onRemoveDmxRoute|onApplyDmxRoute|setOutputProtocol/,
   "the show DMX panel must not reintroduce a generic route editor",
 );
-assert.match(ioConnectionDeckSource, /id: "dmx"[\s\S]*summary: "Output routing and optional input"/);
+assert.match(ioConnectionDeckSource, /id: "dmx"[\s\S]*summary: "Output \+ input"/);
 assert.doesNotMatch(
   ioConnectionDeckSource,
   /dmx-enable-staged-show-artnet-loopback-route/,

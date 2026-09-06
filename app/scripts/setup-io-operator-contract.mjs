@@ -64,29 +64,29 @@ async function exerciseIoWorkbenchDraftContinuity(client, evaluatePageFunction) 
       .querySelector('[data-io-primary-connection] > button[role="tab"][aria-selected="true"]')
       ?.closest('[data-io-primary-connection]')
       ?.getAttribute('data-io-primary-connection') ?? null;
-    const headerState = () => document
-      .querySelector('[data-io-workbench-body]')
-      ?.closest('[role="tabpanel"]')
-      ?.querySelector(':scope > .setupIoWorkbenchHeader .setupIoConnectionState')
+    const activeConnectionState = () => document
+      .querySelector('[data-io-primary-connection] > button[role="tab"][aria-selected="true"]')
+      ?.closest('[data-io-primary-connection]')
+      ?.querySelector(':scope > .setupIoConnectionMeta .setupIoConnectionState')
       ?.textContent
       ?.trim() ?? null;
-    const waitForHeaderState = async (expected) => {
+    const waitForConnectionState = async (expected) => {
       const deadline = performance.now() + 2_400;
       while (performance.now() < deadline) {
-        if (headerState() === expected) return true;
+        if (activeConnectionState() === expected) return true;
         await pause(80);
       }
-      return headerState() === expected;
+      return activeConnectionState() === expected;
     };
     const readDraft = () => document.querySelector('[data-io-control="dj-track-title-contains"]');
     const draftBefore = readDraft();
     const refresh = document.querySelector('[data-io-control="dj-link-refresh-wired-candidates"]');
-    const initialHeaderState = headerState();
+    const initialConnectionState = activeConnectionState();
     const mock = window.__syndocalSetupIoMock;
     if (!(draftBefore instanceof HTMLInputElement) || !(refresh instanceof HTMLButtonElement) || refresh.disabled) {
       return { passed: false, reason: 'DJ Link draft or wired refresh control is unavailable' };
     }
-    if (!mock || typeof mock.setDjLinkListenerRunning !== 'function' || !initialHeaderState) {
+    if (!mock || typeof mock.setDjLinkListenerRunning !== 'function' || !initialConnectionState) {
       return { passed: false, reason: 'Setup I/O status continuity mock is unavailable' };
     }
 
@@ -110,15 +110,15 @@ async function exerciseIoWorkbenchDraftContinuity(client, evaluatePageFunction) 
     const activeAfter = activeConnection();
 
     mock.setDjLinkListenerRunning(true);
-    const connectedHeaderReached = await waitForHeaderState('Connected');
+    const connectedStateReached = await waitForConnectionState('Connected');
     const draftDuringStatus = readDraft();
     const activeDuringStatus = activeConnection();
-    const headerDuringStatus = headerState();
+    const stateDuringStatus = activeConnectionState();
     mock.setDjLinkListenerRunning(false);
-    const restoredHeaderReached = await waitForHeaderState(initialHeaderState);
+    const restoredStateReached = await waitForConnectionState(initialConnectionState);
     const draftAfterStatusRestore = readDraft();
     const activeAfterStatusRestore = activeConnection();
-    const headerAfterStatusRestore = headerState();
+    const stateAfterStatusRestore = activeConnectionState();
 
     document.querySelector('[data-io-primary-connection="midi"] > button[role="tab"]')?.click();
     await settle();
@@ -157,11 +157,11 @@ async function exerciseIoWorkbenchDraftContinuity(client, evaluatePageFunction) 
       activeAfter,
       activeDuringStatus,
       activeAfterStatusRestore,
-      headerStateBefore: initialHeaderState,
-      headerStateDuringStatus: headerDuringStatus,
-      headerStateAfterStatusRestore: headerAfterStatusRestore,
-      listenerStatusChanged: connectedHeaderReached && headerDuringStatus === 'Connected',
-      listenerStatusRestored: restoredHeaderReached && headerAfterStatusRestore === initialHeaderState,
+      connectionStateBefore: initialConnectionState,
+      connectionStateDuringStatus: stateDuringStatus,
+      connectionStateAfterStatusRestore: stateAfterStatusRestore,
+      listenerStatusChanged: connectedStateReached && stateDuringStatus === 'Connected',
+      listenerStatusRestored: restoredStateReached && stateAfterStatusRestore === initialConnectionState,
       activeMidi,
       activeDjAfterSwitch,
       midiZoneMounted: Boolean(midiZone),
@@ -170,7 +170,7 @@ async function exerciseIoWorkbenchDraftContinuity(client, evaluatePageFunction) 
       restoredRefreshIdle: restoredRefresh instanceof HTMLButtonElement && !restoredRefresh.disabled,
       restoredErrorAbsent: !restoredError,
       passed:
-        initialHeaderState === 'Disarmed' &&
+        initialConnectionState === 'Disarmed' &&
         activeBefore === 'dj' &&
         activeDuring === 'dj' &&
         activeAfter === 'dj' &&
@@ -181,14 +181,14 @@ async function exerciseIoWorkbenchDraftContinuity(client, evaluatePageFunction) 
         draftBefore === draftAfter &&
         draftAfter instanceof HTMLInputElement &&
         draftAfter.value === 'workbench-continuity-probe' &&
-        connectedHeaderReached &&
-        headerDuringStatus === 'Connected' &&
+        connectedStateReached &&
+        stateDuringStatus === 'Connected' &&
         activeDuringStatus === 'dj' &&
         draftBefore === draftDuringStatus &&
         draftDuringStatus instanceof HTMLInputElement &&
         draftDuringStatus.value === 'workbench-continuity-probe' &&
-        restoredHeaderReached &&
-        headerAfterStatusRestore === initialHeaderState &&
+        restoredStateReached &&
+        stateAfterStatusRestore === initialConnectionState &&
         activeAfterStatusRestore === 'dj' &&
         draftBefore === draftAfterStatusRestore &&
         draftAfterStatusRestore instanceof HTMLInputElement &&
@@ -312,8 +312,8 @@ export async function exerciseSetupIoOperatorDeck(client, helpers) {
         panelId: panel?.getAttribute("id") ?? null,
         panelLabelledBy: panel?.getAttribute("aria-labelledby") ?? null,
         panelConnection: panel?.getAttribute("data-io-connection-workbench") ?? null,
-        panelHeaderLabel: panel?.querySelector(":scope > .setupIoWorkbenchHeader h2")?.textContent?.trim() ?? null,
-        panelSummaryCount: panel?.querySelectorAll(":scope > .setupIoWorkbenchHeader p").length ?? 0,
+        panelConnectionId: panel?.getAttribute("data-io-connection-workbench") ?? null,
+        obsoleteHeaderCount: panel?.querySelectorAll(":scope > .setupIoWorkbenchHeader").length ?? 0,
         selectedIds: selectedCards.map(({ id }) => id),
         cards: cardMetrics,
         bodyOverflowProbePassed,
@@ -492,7 +492,9 @@ export async function exerciseSetupIoOperatorDeck(client, helpers) {
     enterSelectsExactWorkbench: enterState.selectedIds.length === 1 && enterState.selectedIds[0] === "midi" && enterState.panelConnection === "midi",
     spaceSelectsExactWorkbench: spaceState.selectedIds.length === 1 && spaceState.selectedIds[0] === "osc" && spaceState.panelConnection === "osc",
     exactTabpanelRelation,
-    activeWorkbenchLabelState: finalState.panelHeaderLabel === "DJ Link" && finalState.panelSummaryCount === 0,
+    activeWorkbenchLabelState: finalState.panelConnectionId === "dj" &&
+      finalState.obsoleteHeaderCount === 0 &&
+      finalState.selectedIds.length === 1 && finalState.selectedIds[0] === "dj",
     tabpanelRelationPerCard: cardResults.every((result) => result.tabpanelRelationExact),
     draftContinuity,
   };

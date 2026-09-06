@@ -95,7 +95,7 @@ const assertions = [
     "Setup I/O connection ids must include Audio",
   ],
   [
-    /id: "audio",[\s\S]*?summary: props\.audioOutputSummary,[\s\S]*?state: props\.audioOutputState,/u,
+    /const audioConnectionSummary = \(\) => \{[\s\S]*?id: "audio",[\s\S]*?summary: audioConnectionSummary\(\),[\s\S]*?state: props\.audioOutputState,/u,
     deck,
     "Audio must have a same-level connection card",
   ],

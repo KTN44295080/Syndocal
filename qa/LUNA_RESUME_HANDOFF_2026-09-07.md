@@ -194,6 +194,28 @@ The applicable detailed record is
 The remaining-work priority row must retain the distinction between this
 cooperative boundary and the unresolved hard shutdown deadline.
 
+## 2026-09-07 Setup I/O presentation cleanup
+
+The fixed three-screen layout was retained. The Setup I/O connection picker
+now keeps all six connections on one desktop rail, shows only the connection
+name plus live state/action in each card, and keeps the descriptive summary in
+the accessible label/tooltip. The selected workbench no longer renders a
+second generic active-connection header. Web Remote is direct when selected;
+its related safety, endpoint, standby, and DJ Link sections remain grouped as
+disclosures in the same workbench. Runtime and IPC ownership remain in
+`App.tsx` and the existing panels; this is a presentation-only consolidation.
+
+Focused evidence: app build passed; Setup I/O viewport contract passed at all
+five required sizes; output-control/audio-control checks passed; DJ Link
+frontend checks passed; browser fixture inspection at 1920x1032 and 1280x720
+reported no page errors and confirmed six cards in one row. The browser check
+used the bundled Playwright runtime with installed Chrome because the Browser
+plugin was unavailable. Native, hardware, and physical-output acceptance were
+not rerun for this CSS/presentation-only change.
+The broader localization check remains red at its existing 3657/3692 static
+coverage gate; the new compact card labels are registered in the Japanese
+dictionary, and the reported untranslated entries are outside this picker.
+
 ## Artifact and process protection
 
 At the pause boundary, `target/release/syndocal.exe` was an OLD artifact
