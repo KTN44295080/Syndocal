@@ -5310,14 +5310,12 @@ async function runSetupIoViewport(client, viewport, dmxOnly = false) {
     };
   }
 
-  // The operator surface keeps the primary DMX controls plus the two visible
-  // disclosure summaries. Diagnostic/protocol controls stay collapsed until
-  // explicitly requested, so they must not count as default-visible controls.
+  // The operator surface keeps the primary DMX controls while the route,
+  // identity, manual, and protocol details stay collapsed until explicitly
+  // requested. Nested details count toward the structural disclosure contract
+  // but must not count as default-visible controls.
   const expectedDmxControlCount = 6;
-  // DMX keeps diagnostic controls and protocol/safety prose collapsed by
-  // default; both disclosures remain reachable without occupying the default
-  // operator surface.
-  const expectedDmxDisclosureCount = 5;
+  const expectedDmxDisclosureCount = 7;
   const legacyStoredTabs = await exerciseLegacySetupIoStoredTabs(client);
   const checks = {
     ioSubTabBarRemoved:
@@ -13000,9 +12998,9 @@ function hasExpectedSetupSurface(result) {
       result.ioActiveZoneVisibleControlCount === 6 &&
       result.visibleDmxEnableStagedShowArtNetLoopbackRouteCount === 0 &&
       !result.ioShowArtNetLoopbackControlReachable &&
-      JSON.stringify(result.ioZoneDisclosureCounts) === JSON.stringify({ dmx: 5 }) &&
+      JSON.stringify(result.ioZoneDisclosureCounts) === JSON.stringify({ dmx: 7 }) &&
       JSON.stringify(result.ioZoneOpenDisclosureCounts) === JSON.stringify({ dmx: 0 }) &&
-      result.ioDisclosureCount === 5 &&
+      result.ioDisclosureCount === 7 &&
       result.ioOpenDisclosureCount === 0 &&
       result.ioRouteTotalCount === 2 &&
       result.ioRoutePageCount === 1 &&

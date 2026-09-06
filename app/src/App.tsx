@@ -268,6 +268,8 @@ import {
   type CustomProfileAttributeDraft,
 } from "./customFixtureProfile";
 import { createGdtfProfileActions } from "./gdtfProfileActions";
+import { createPatchFixtureDragController } from "./createPatchFixtureDragController";
+import { createFaderValueController } from "./createFaderValueController";
 import {
   addressRange,
   buildOccupiedDmxRanges,
@@ -2114,6 +2116,7 @@ export default function App() {
   const [wheelMediaLoading, setWheelMediaLoading] = createSignal<Record<string, true>>({});
   const [wheelMediaMissing, setWheelMediaMissing] = createSignal<Record<string, true>>({});
   const [faderValues, setFaderValues] = createSignal<Record<string, number>>({});
+  const faderValueController = createFaderValueController({ setValues: setFaderValues });
   const [rawDmxUniverse, setRawDmxUniverse] = createSignal(0);
   const [bpmDraft, setBpmDraft] = createSignal("120");
   const [midiInputs, setMidiInputs] = createSignal<MidiInputSummary[]>([]);
@@ -6370,10 +6373,12 @@ export default function App() {
   const patchAddressConflictFor = (
     ranges: ReturnType<typeof patchAddressRangesFor>,
     targetUniverse: number,
+    excludedFixtureId: number | null = null,
   ) => {
     for (const candidate of ranges) {
       if (!candidate.range) continue;
       const conflict = snapshot().fixtures.find((fixture) => {
+        if (fixture.id === excludedFixtureId) return false;
         if (fixture.universe !== targetUniverse) return false;
         const existingRange = addressRange(fixture.address, fixtureFootprint(fixture));
         return existingRange ? rangesOverlap(candidate.range!, existingRange) : false;
@@ -6568,7 +6573,24 @@ export default function App() {
     if (!patchProfileDragSource() || patchProfileDragAddress() === null) return null;
     return patchProfileDragInvalid() ? "conflict" as const : "valid" as const;
   });
+  const patchFixtureDragController = createPatchFixtureDragController({
+    invoke,
+    activeUniverse: activePatchGridUniverse,
+    setPatchGridUniverse,
+    setDmxPatchViewMode,
+    patchAddressConflictFor,
+    refreshSnapshot: () => refreshSnapshot(),
+    setSelectedFixtureLabelDraft,
+    setSelectedFixtureUniverseDraft,
+    setSelectedFixtureAddressDraft,
+    setMessage,
+  });
   const activePatchPreviewRanges = createMemo(() => {
+    if (patchFixtureDragController.source() && patchFixtureDragController.address() !== null) {
+      return patchFixtureDragController.previewRanges().filter(
+        (candidate): candidate is { index: number; start: number; range: [number, number] } => Boolean(candidate.range),
+      );
+    }
     if (patchProfileDragSource() && patchProfileDragAddress() !== null) {
       return patchProfileDragRanges().filter(
         (candidate): candidate is { index: number; start: number; range: [number, number] } => Boolean(candidate.range),
@@ -6581,9 +6603,12 @@ export default function App() {
     const map = activePatchGridMap();
     const selectedId = selectedFixtureId();
     const plannedRanges = activePatchPreviewRanges();
-    const dragPreviewInvalid = patchProfileDragSource() && patchProfileDragAddress() !== null
-      ? patchProfileDragInvalid()
-      : false;
+    const dragPreviewInvalid = patchFixtureDragController.source() && patchFixtureDragController.address() !== null
+      ? patchFixtureDragController.invalid()
+      : patchProfileDragSource() && patchProfileDragAddress() !== null
+        ? patchProfileDragInvalid()
+        : false;
+    const draggedFixtureId = patchFixtureDragController.source()?.id ?? null;
     return Array.from({ length: 512 }, (_, index) => {
       const channel = index + 1;
       const segment = map.segments.find((candidate) => channel >= candidate.start && channel <= candidate.end) ?? null;
@@ -6595,7 +6620,10 @@ export default function App() {
         isSelected: Boolean(segment && segment.fixture.id === selectedId),
         plannedIndex: planned?.index ?? null,
         plannedStart: planned?.range[0] === channel,
-        plannedConflict: Boolean(planned && (segment || dragPreviewInvalid)),
+        plannedConflict: Boolean(
+          planned
+          && ((segment && segment.fixture.id !== draggedFixtureId) || dragPreviewInvalid),
+        ),
       };
     });
   });
@@ -11557,6 +11585,7 @@ export default function App() {
     setLiveDmxPreviews(engineDmxPreviews(next));
     setLiveFixtures(snapshotLiveFixtures(next));
     if (resetEditorDrafts) {
+      faderValueController.clearAll();
       setSelectedTimelineSceneBlockEventId(null);
       setTimelineSelection(null);
       setVideoOutputConfigDrafts({});
@@ -11601,7 +11630,7 @@ export default function App() {
       }
       setOutput(next.output);
       setDmxOutputRoutes(next.dmx_outputs.length > 0 ? next.dmx_outputs : [next.output]);
-      setFaderValues((current) => ({ ...current, ...snapshotFaderValues(next) }));
+      setFaderValues((current) => faderValueController.mergeSnapshotValues(current, snapshotFaderValues(next)));
       syncVideoOutputConfigDrafts(next.video.outputs);
       syncCueMetadataDrafts(next.cues, next.effects);
       syncTimelineEventDrafts(next.timeline.events);
@@ -12370,6 +12399,7 @@ export default function App() {
     gdtfPath,
     setGdtfPath,
     gdtfShareUrl,
+    setLabel,
     setMessage,
     profileLoadMessage,
     setProfile,
@@ -13028,7 +13058,7 @@ export default function App() {
   const setAttribute = async (fixtureId: number, attribute: string, value: number) => {
     setSceneFxStagePreview(null);
     const editCueId = controlEditCueIdForWrite();
-    setFaderValues((current) => ({ ...current, [`${fixtureId}:${attribute}`]: value }));
+    faderValueController.setOptimistic(`${fixtureId}:${attribute}`, value);
     if (viewportFixture === "blind") {
       applyViewportBlindAttributes([{ fixtureId, attribute, value }]);
       queueControlEditLookUpdate(editCueId, { kind: "selectedFixture", fixtureId });
@@ -13038,12 +13068,13 @@ export default function App() {
       queueControlEditLookUpdate(editCueId, { kind: "selectedFixture", fixtureId });
       return;
     }
+    const command = snapshot().programmer.enabled ? "set_programmer_attribute" : "set_attribute";
     try {
-      await invoke(snapshot().programmer.enabled ? "set_programmer_attribute" : "set_attribute", {
-        fixtureId,
-        attribute,
+      await faderValueController.enqueue(
+        `${command}:${fixtureId}:${attribute}`,
         value,
-      });
+        () => invoke(command, { fixtureId, attribute, value }),
+      );
       queueControlEditLookUpdate(editCueId, { kind: "selectedFixture", fixtureId });
     } catch (error) {
       setMessage(String(error));
@@ -13057,13 +13088,9 @@ export default function App() {
       .fixtures
       .filter((fixture) => fixture.group_ids.includes(groupId))
       .map((fixture) => fixture.id);
-    setFaderValues((current) => {
-      const next = { ...current };
-      for (const fixtureId of fixtureIds) {
-        next[`${fixtureId}:${attribute}`] = value;
-      }
-      return next;
-    });
+    for (const fixtureId of fixtureIds) {
+      faderValueController.setOptimistic(`${fixtureId}:${attribute}`, value);
+    }
     if (viewportFixture === "blind") {
       applyViewportBlindAttributes(fixtureIds.map((fixtureId) => ({ fixtureId, attribute, value })));
       queueControlEditLookUpdate(editCueId, { kind: "selectedGroup", groupId });
@@ -13073,12 +13100,13 @@ export default function App() {
       queueControlEditLookUpdate(editCueId, { kind: "selectedGroup", groupId });
       return;
     }
+    const command = snapshot().programmer.enabled ? "set_programmer_group_attribute" : "set_group_attribute";
     try {
-      await invoke(snapshot().programmer.enabled ? "set_programmer_group_attribute" : "set_group_attribute", {
-        groupId,
-        attribute,
+      await faderValueController.enqueue(
+        `${command}:${groupId}:${attribute}`,
         value,
-      });
+        () => invoke(command, { groupId, attribute, value }),
+      );
       queueControlEditLookUpdate(editCueId, { kind: "selectedGroup", groupId });
     } catch (error) {
       setMessage(String(error));
@@ -13796,6 +13824,16 @@ export default function App() {
     setPatchProfileDropRejected(false);
     clearPatchProfileDrag();
   };
+
+  const beginPatchFixtureDrag = (fixture: PatchedFixtureSummary) => {
+    selectFixture(fixture);
+    patchFixtureDragController.begin(fixture);
+  };
+
+  const clearPatchFixtureDrag = patchFixtureDragController.clear;
+  const hoverPatchFixtureAddress = patchFixtureDragController.hover;
+  const leavePatchFixtureGrid = patchFixtureDragController.leave;
+  const dropPatchFixtureAtAddress = patchFixtureDragController.drop;
 
   const setFixturePatch = async (fixture: PatchedFixtureSummary) => {
     try {
@@ -20876,7 +20914,7 @@ export default function App() {
       }
       const failures = staged.report.failed + staged.report.skipped;
       setMessage(
-        `VJ show ready with ${result.layer_ids.length} clip(s). VJ Program remains Off and Blackout until you enable it explicitly.${failures > 0 ? ` ${mediaAssetImportReportMessage(staged.report)}` : ""}`,
+        `VJ show ready with ${result.layer_ids.length} clip(s). VJ Program remains Off until you enable it explicitly.${failures > 0 ? ` ${mediaAssetImportReportMessage(staged.report)}` : ""}`,
       );
     } catch (error) {
       if (!sideEffectsAreCurrent()) return;
@@ -27145,6 +27183,8 @@ export default function App() {
             plannedAddressSummary: plannedAddressSummary(),
             profileDragActive: Boolean(patchProfileDragSource()),
             profileDndStatus: patchProfileDndStatus(),
+            fixtureDragActive: Boolean(patchFixtureDragController.source()),
+            fixtureDndStatus: patchFixtureDragController.dndStatus(),
             onNextFreeAddress: selectNextFreePatchAddress,
             onUniverse: setPatchGridUniverse,
             onViewMode: setDmxPatchViewMode,
@@ -27153,6 +27193,11 @@ export default function App() {
             onProfileDragHover: hoverPatchProfileAddress,
             onProfileDragLeave: leavePatchProfileGrid,
             onProfileDrop: dropPatchProfileAtAddress,
+            onFixtureDragStart: beginPatchFixtureDrag,
+            onFixtureDragEnd: clearPatchFixtureDrag,
+            onFixtureDragHover: hoverPatchFixtureAddress,
+            onFixtureDragLeave: leavePatchFixtureGrid,
+            onFixtureDrop: dropPatchFixtureAtAddress,
           }}
           profileSummary={profile() ? {
             profile: profile()!,
@@ -28046,9 +28091,7 @@ export default function App() {
           </Portal>
           </Show>
           <FaderAttributeEditorPanel
-            categories={controlCategoryRows().filter((category) =>
-              editDeskSurface() === "attributes" ? category.id !== "fader" : category.id === "fader"
-            )}
+            categories={controlCategoryRows()}
             activeCategory={activeControlCategory()}
             onCategory={(category) => {
               setControlCategory(category);
@@ -28505,19 +28548,16 @@ export default function App() {
             safetyBlackoutEngaged={snapshot().safety_blackout_engaged}
             showDmxPreparationBusy={showDmxPreparationBusy()}
             showDmxPreparationStage={showDmxPreparationStage()}
-            dsf2026ArtNetAcceptanceProbeStatus={dsf2026ArtNetAcceptanceProbeStatus}
             onPrepareShowDmx={prepareShowDmx}
             onEnableStagedShowArtNetLoopbackRoute={enableStagedShowArtNetLoopbackRoute}
             onConfirmSerialDmxMachineBinding={confirmSerialDmxMachineBinding}
             onEnableShowSerialDmxSafetyBlackoutRoute={enableShowSerialDmxSafetyBlackoutRoute}
             onStopShowSerialDmxSafetyBlackoutRoute={stopShowSerialDmxSafetyBlackoutRoute}
-            onSendDsf2026ArtNetAcceptanceProbe={sendDsf2026ArtNetAcceptanceProbe}
-            onAcknowledgeDsf2026ArtNetAcceptanceProbeInDoubt={acknowledgeDsf2026ArtNetAcceptanceProbeInDoubt}
           />
           <div class="ioDisclosureStack">
           <IoDisclosure
             id="dmx-input"
-            summary="Advanced: DMX input and merge"
+            summary="DMX input and merge"
             description="Receive Art-Net or sACN, then choose raw merge to output or control mappings; these modes are mutually exclusive."
           >
           <DmxInputPanel
@@ -28532,7 +28572,7 @@ export default function App() {
           </IoDisclosure>
           <IoDisclosure
             id="dmx-rdm"
-            summary="Advanced: RDM tools"
+            summary="RDM tools"
             description="Use only with an RDM-capable gateway or USB interface to discover, inspect, or send RDM."
           >
           <ArtRdmPanel
@@ -28549,7 +28589,7 @@ export default function App() {
           </IoDisclosure>
           <IoDisclosure
             id="dmx-diagnostics"
-            summary="Advanced: DMX diagnostics and test"
+            summary="DMX diagnostics and test"
             description="Test frames, raw monitor, telemetry, masters, and clock controls."
             bodyClass="dmxDiagnosticsDisclosure"
           >
@@ -28579,6 +28619,8 @@ export default function App() {
             </Show>
           </DmxRawMonitor>
           <OutputDiagnosticsPanel
+            output={output()}
+            dsf2026ArtNetAcceptanceProbeStatus={dsf2026ArtNetAcceptanceProbeStatus}
             protocolLabel={outputProtocolLabel(output().protocol)}
             testChannel={dmxTestChannel()}
             testWidth={dmxTestWidth()}
@@ -28591,6 +28633,8 @@ export default function App() {
             onTestValue={setDmxTestValue}
             onSendTest={sendDmxTestFrame}
             onSendRoutes={sendDmxRoutesTestFrame}
+            onSendDsf2026ArtNetAcceptanceProbe={sendDsf2026ArtNetAcceptanceProbe}
+            onAcknowledgeDsf2026ArtNetAcceptanceProbeInDoubt={acknowledgeDsf2026ArtNetAcceptanceProbeInDoubt}
             onResetTelemetry={resetEngineTelemetry}
             onSaveTelemetryReport={saveEngineTelemetryReport}
           />

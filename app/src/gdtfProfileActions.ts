@@ -14,6 +14,7 @@ export interface GdtfProfileActionContext {
   gdtfPath: Accessor<string>;
   setGdtfPath: Setter<string>;
   gdtfShareUrl: Accessor<string>;
+  setLabel: Setter<string>;
   setMessage: (message: string) => unknown;
   profileLoadMessage: (prefix: string, profile: FixtureProfileSummary) => string;
   setProfile: Setter<FixtureProfileSummary | null>;
@@ -65,6 +66,13 @@ export interface GdtfProfileActions {
 }
 
 export function createGdtfProfileActions(context: GdtfProfileActionContext): GdtfProfileActions {
+  const fixtureLabelForProfile = (profile: FixtureProfileSummary) =>
+    profile.name.trim() || profile.manufacturer.trim() || "Fixture";
+
+  const applyFixtureLabelForProfile = (profile: FixtureProfileSummary) => {
+    context.setLabel(fixtureLabelForProfile(profile));
+  };
+
   const selectGdtfFile = async () => {
     try {
       const path = await context.invoke<string | null>("select_gdtf_file");
@@ -89,6 +97,7 @@ export function createGdtfProfileActions(context: GdtfProfileActionContext): Gdt
     context.setProfile(imported);
     context.setGdtfPath(imported.source_path);
     context.setSelectedMode(modeName);
+    applyFixtureLabelForProfile(imported);
     context.setMessage(context.profileLoadMessage(loadedMessage, imported));
     if (openPatch) {
       context.selectSetupMode("patch");
@@ -216,6 +225,7 @@ export function createGdtfProfileActions(context: GdtfProfileActionContext): Gdt
       context.setProfile(created);
       context.setGdtfPath(created.source_path);
       context.setSelectedMode(created.dmx_modes[0]?.name ?? "");
+      applyFixtureLabelForProfile(created);
       context.setMessage(context.profileLoadMessage("Created custom profile", created));
     } catch (error) {
       context.setMessage(String(error));
@@ -242,6 +252,7 @@ export function createGdtfProfileActions(context: GdtfProfileActionContext): Gdt
       context.setProfile(created);
       context.setGdtfPath(created.source_path);
       context.setSelectedMode(created.dmx_modes[0]?.name ?? "");
+      applyFixtureLabelForProfile(created);
       context.setCustomManufacturer(created.manufacturer);
       context.setCustomProfileName(created.name);
       context.setCustomModeName(created.dmx_modes[0]?.name ?? "Default");

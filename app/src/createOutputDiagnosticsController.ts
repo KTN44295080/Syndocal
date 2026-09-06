@@ -1,6 +1,7 @@
 import { createSignal, type Accessor, type Setter } from "solid-js";
 import {
   executeOutputControl,
+  executeBlackoutRelease,
   enableOutput,
   OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_STATUS_QUERY_OPERATION_ID,
   queryDsf2026ArtNetAcceptanceProbeStatus,
@@ -48,6 +49,20 @@ const isExactShowArtNetLoopbackRoute = (output: DmxOutputConfig) =>
   && output.port === 6454
   && output.universe === 0
   && output.serial_port === "";
+
+const hasSuccessfulShowArtNetSend = (snapshot: EngineSnapshot | null): boolean => {
+  if (!snapshot) return false;
+  const route = snapshot.dmx_outputs.length === 1
+    ? snapshot.dmx_outputs[0]
+    : snapshot.output;
+  if (!route || !isExactShowArtNetLoopbackRoute(route) || !route.enabled) return false;
+  return snapshot.telemetry.last_dmx_route_results.some((result) =>
+    result.index === 0
+    && result.universe === route.universe
+    && result.attempted
+    && result.success,
+  );
+};
 
 const enttecUsbProBaudRate = 57_600;
 const enttecOpenDmxBaudRate = 250_000;
@@ -179,8 +194,6 @@ export function createOutputDiagnosticsController(options: OutputDiagnosticsCont
     activeShowOutputPreparation = { key, promise };
     return promise;
   };
-  // Reuse the canonical safer-direction S0 command. This controller never
-  // invokes the release operation, so a failed preparation cannot clear S0.
   const safetyBlackoutRuntime = createSafetyBlackoutRuntimeController({
     invoke: options.invoke,
   });
@@ -340,6 +353,36 @@ export function createOutputDiagnosticsController(options: OutputDiagnosticsCont
     return options.refreshSnapshot();
   };
 
+  const waitForShowArtNetOutput = async () => {
+    const deadline = Date.now() + 1_500;
+    let snapshot = await options.refreshSnapshot();
+    while (!hasSuccessfulShowArtNetSend(snapshot) && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      snapshot = await options.refreshSnapshot();
+    }
+    if (!hasSuccessfulShowArtNetSend(snapshot)) {
+      const routeError = snapshot?.telemetry.last_dmx_route_results[0]?.error;
+      throw new Error(
+        routeError
+          ? `Art-Net sender did not report a successful frame: ${routeError}`
+          : "Art-Net sender did not report a successful frame before preparation completed",
+      );
+    }
+  };
+
+  const waitForShowSerialDmxLive = async () => {
+    const deadline = Date.now() + 1_500;
+    let status = showSerialDmxSafetyBlackoutRouteStatus();
+    while ((!status || !status.active || !status.liveFrameQueued || status.faulted) && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      await refreshSerialDmxRuntimeStatuses();
+      status = showSerialDmxSafetyBlackoutRouteStatus();
+    }
+    if (!status?.active || !status.liveFrameQueued || status.faulted) {
+      throw new Error("Open DMX worker did not confirm a live U0 frame after S0 release");
+    }
+  };
+
   const enableStagedShowArtNetLoopbackRoute = () => runShowOutputAction("artnet", async () => {
     try {
       await ensureBothOutputLease();
@@ -357,7 +400,7 @@ export function createOutputDiagnosticsController(options: OutputDiagnosticsCont
     }
     serialDmxStatusPoller.invalidate();
     try {
-      await options.invoke<SerialDmxMachineBindingStatus>(
+      return await options.invoke<SerialDmxMachineBindingStatus>(
         "select_serial_dmx_machine_binding_v1",
         { request: { portName: port.name, windowsDeviceInstanceId: instance } },
       );
@@ -375,14 +418,18 @@ export function createOutputDiagnosticsController(options: OutputDiagnosticsCont
     }
   };
 
-  const enableShowSerialDmxSafetyBlackoutRouteInternal = async () => {
+  const enableShowSerialDmxSafetyBlackoutRouteInternal = async (
+    confirmedBinding?: SerialDmxMachineBindingStatus,
+  ) => {
     serialDmxStatusPoller.invalidate();
     try {
       if (!options.safetyBlackout()) {
         throw new Error("Engage S0 safety blackout first; the USB-DMX worker is intentionally zero-first and will not start while S0 is clear.");
       }
       await refreshSerialDmxRuntimeStatuses();
-      const binding = serialDmxMachineBindingStatus();
+      const binding = confirmedBinding?.state === "selected_and_present"
+        ? confirmedBinding
+        : serialDmxMachineBindingStatus();
       if (binding?.state !== "selected_and_present") {
         throw new Error("USB-DMX worker is unavailable until exactly one confirmed machine-local identity is present.");
       }
@@ -405,17 +452,20 @@ export function createOutputDiagnosticsController(options: OutputDiagnosticsCont
     }
   };
 
-  const prepareShowDmx = (port: SerialPortSummary): Promise<void> => {
+  const prepareShowDmx = (port?: SerialPortSummary): Promise<void> => {
     if (showDmxPreparationPromise) return showDmxPreparationPromise;
     if (activeShowOutputPreparation) return reportShowOutputPreparationBusy();
     setShowDmxPreparationBusy(true);
     setShowDmxPreparationStage("Preflight");
     const run = async () => {
       let stage = "Preflight";
+      let safetyBlackoutEngagedByPreparation = false;
+      let safetyBlackoutReleasedByPreparation = false;
+      let confirmedBinding: SerialDmxMachineBindingStatus | undefined;
       const runStage = async <T,>(label: string, operation: () => Promise<T>): Promise<T> => {
         stage = label;
         setShowDmxPreparationStage(label);
-        options.setMessage(`Show DMX setup [${label}] starting; S0 will not be cleared.`);
+        options.setMessage(`Show DMX setup [${label}] starting; S0 changes only through the zero-first USB-DMX startup.`);
         try {
           return await operation();
         } catch (error) {
@@ -424,7 +474,7 @@ export function createOutputDiagnosticsController(options: OutputDiagnosticsCont
       };
 
       try {
-        if (!port.name.trim() || !port.windows_device_instance_id?.trim()) {
+        if (port && (!port.name.trim() || !port.windows_device_instance_id?.trim())) {
           throw new Error("the selected USB-DMX device has no complete machine-local identity");
         }
         if (!isExactShowArtNetLoopbackRoute(output())) {
@@ -440,30 +490,62 @@ export function createOutputDiagnosticsController(options: OutputDiagnosticsCont
         await runStage("1/4 output role Both", async () => {
           await ensureBothOutputLease();
         });
-        await runStage("2/4 machine-local binding", () => confirmSerialDmxMachineBindingInternal(port));
-        await runStage("3/4 Art-Net loopback", async () => {
-          if (output().enabled) return;
-          if (options.safetyBlackout()) {
-            throw new Error("the validated Art-Net loopback enable requires clear S0; S0 was not cleared");
+        await runStage("2/4 optional machine-local binding", async () => {
+          if (!port) {
+            options.setMessage("No USB-DMX device selected; continuing with the Art-Net show route.");
+            return;
           }
-          // Refresh again after stage 1/2.  Both lease generation and the
-          // output-control fence may have changed while the binding action
-          // completed; stage 3 must never reuse either earlier observation.
-          const lease = await selectFreshBothOutputLease();
-          await enableStagedShowArtNetLoopbackRouteInternal(lease);
+          confirmedBinding = await confirmSerialDmxMachineBindingInternal(port);
         });
-        await runStage("4/4 S0 + Open DMX arm", async () => {
+        await runStage("3/4 Art-Net loopback", async () => {
+          if (!output().enabled) {
+            if (options.safetyBlackout()) {
+              throw new Error("the validated Art-Net loopback enable requires clear S0; S0 was not cleared");
+            }
+            // Refresh again after stage 1/2.  Both lease generation and the
+            // output-control fence may have changed while the binding action
+            // completed; stage 3 must never reuse either earlier observation.
+            const lease = await selectFreshBothOutputLease();
+            await enableStagedShowArtNetLoopbackRouteInternal(lease);
+          }
+          await waitForShowArtNetOutput();
+        });
+        await runStage("4/4 optional Open DMX arm", async () => {
+          if (!port) {
+            options.setMessage(
+              "Show DMX prepared: Art-Net loopback is live. No USB-DMX device was selected, so the physical route remains unarmed.",
+            );
+            return;
+          }
           if (!options.safetyBlackout()) {
             await safetyBlackoutRuntime.engage();
-            const refreshed = await options.refreshSnapshot();
-            if (!refreshed?.safety_blackout_engaged && !options.safetyBlackout()) {
-              throw new Error("S0 engagement was not confirmed by a fresh snapshot");
+            safetyBlackoutEngagedByPreparation = true;
+            const engaged = await options.refreshSnapshot();
+            if (!engaged?.safety_blackout_engaged) {
+              throw new Error("the zero-first USB-DMX startup could not confirm S0 engagement");
             }
           }
-          await enableShowSerialDmxSafetyBlackoutRouteInternal();
+          await enableShowSerialDmxSafetyBlackoutRouteInternal(confirmedBinding);
+          if (safetyBlackoutEngagedByPreparation) {
+            await executeBlackoutRelease(options.invoke);
+            const released = await options.refreshSnapshot();
+            if (!released || released.safety_blackout_engaged) {
+              throw new Error("USB-DMX started, but S0 release was not confirmed; output remains fail-closed");
+            }
+            safetyBlackoutReleasedByPreparation = true;
+          }
+          if (safetyBlackoutReleasedByPreparation) {
+            await waitForShowSerialDmxLive();
+          }
         });
         setShowDmxPreparationStage("Complete");
-        options.setMessage("Show DMX setup complete: output role Both, machine binding, Art-Net loopback, S0, and Open DMX arm succeeded.");
+        options.setMessage(
+          safetyBlackoutReleasedByPreparation
+            ? "Show DMX setup complete: output role Both, machine binding, Art-Net loopback, and USB-DMX are live. S0 remains clear."
+            : options.safetyBlackout()
+              ? "Show DMX setup complete: output role Both, machine binding, Art-Net loopback, and Open DMX arm succeeded with the already-engaged S0."
+              : "Show DMX setup complete: output role Both, machine binding, and Art-Net loopback are ready. S0 remains clear and USB-DMX is unarmed.",
+        );
       } catch (error) {
         setShowDmxPreparationStage(`Stopped at ${stage}`);
         options.setMessage(`Show DMX setup stopped at ${stage}: ${String(error).replace(/^Error:\s*/i, "")}`);

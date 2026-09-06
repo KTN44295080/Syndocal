@@ -38,6 +38,14 @@ interface DmxPatchGridFragment {
   continuation: boolean;
 }
 
+interface FixturePointerDragState {
+  fixture: PatchedFixtureSummary;
+  pointerId: number;
+  startX: number;
+  startY: number;
+  active: boolean;
+}
+
 const dmxGridColumnCount = 32;
 const dmxGridRowCount = 16;
 const dmxGridMinimumCellSize = 16;
@@ -78,6 +86,8 @@ interface DmxPatchMapPanelProps {
   plannedAddressSummary: string;
   profileDragActive: boolean;
   profileDndStatus: PatchProfileDndStatus;
+  fixtureDragActive: boolean;
+  fixtureDndStatus: PatchProfileDndStatus;
   onNextFreeAddress: () => void;
   onUniverse: (universe: number) => void;
   onViewMode: (mode: DmxPatchViewMode) => void;
@@ -86,6 +96,11 @@ interface DmxPatchMapPanelProps {
   onProfileDragHover: (channel: number) => void;
   onProfileDragLeave: () => void;
   onProfileDrop: (channel: number) => void | Promise<void>;
+  onFixtureDragStart: (fixture: PatchedFixtureSummary) => void;
+  onFixtureDragEnd: () => void;
+  onFixtureDragHover: (channel: number) => void;
+  onFixtureDragLeave: () => void;
+  onFixtureDrop: (channel: number) => void | Promise<void>;
 }
 
 export function DmxPatchMapPanel(props: DmxPatchMapPanelProps) {
@@ -104,6 +119,8 @@ export function DmxPatchMapPanel(props: DmxPatchMapPanelProps) {
   let addressGridResizeObserver: ResizeObserver | undefined;
   let addressGridResizeFrame = 0;
   let lastRevealedSelectionKey = "";
+  let fixturePointerDrag: FixturePointerDragState | null = null;
+  let suppressNextFixtureClick = false;
 
   const updateAddressGridCellSize = () => {
     const grid = addressGrid;
@@ -166,6 +183,7 @@ export function DmxPatchMapPanel(props: DmxPatchMapPanelProps) {
   onCleanup(() => {
     addressGridResizeObserver?.disconnect();
     cancelAnimationFrame(addressGridResizeFrame);
+    fixturePointerDrag = null;
   });
 
   const scrollAddressIntoView = (channel: number): boolean => {
@@ -257,21 +275,90 @@ export function DmxPatchMapPanel(props: DmxPatchMapPanelProps) {
     if (nextFreeAddress !== null) revealAddress(nextFreeAddress);
   };
 
-  const handleProfileDragOver = (
+  const channelAtPoint = (clientX: number, clientY: number): number | null => {
+    const target = document.elementFromPoint(clientX, clientY);
+    const addressCell = target instanceof HTMLElement
+      ? target.closest<HTMLElement>("[data-dmx-address]")
+      : null;
+    const channel = Number(addressCell?.dataset.dmxAddress);
+    return Number.isInteger(channel) && channel >= 1 && channel <= 512 ? channel : null;
+  };
+
+  const handleFixturePointerDown = (
+    event: PointerEvent & { currentTarget: HTMLButtonElement },
+    fixture: PatchedFixtureSummary,
+  ) => {
+    if (event.button !== 0 || fixturePointerDrag) return;
+    fixturePointerDrag = {
+      fixture,
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      active: false,
+    };
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+  };
+
+  const handleFixturePointerMove = (event: PointerEvent) => {
+    const drag = fixturePointerDrag;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const distance = Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY);
+    if (!drag.active && distance < 5) return;
+    if (!drag.active) {
+      drag.active = true;
+      suppressNextFixtureClick = true;
+      props.onFixtureDragStart(drag.fixture);
+    }
+    event.preventDefault();
+    const channel = channelAtPoint(event.clientX, event.clientY);
+    if (channel === null) {
+      props.onFixtureDragLeave();
+    } else {
+      props.onFixtureDragHover(channel);
+    }
+  };
+
+  const handleFixturePointerEnd = (event: PointerEvent) => {
+    const drag = fixturePointerDrag;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    fixturePointerDrag = null;
+    if (!drag.active) return;
+    event.preventDefault();
+    const channel = channelAtPoint(event.clientX, event.clientY);
+    if (channel === null) {
+      props.onFixtureDragEnd();
+      return;
+    }
+    void props.onFixtureDrop(channel);
+  };
+
+  const handlePatchDragOver = (
     event: DragEvent & { currentTarget: HTMLButtonElement },
     channel: number,
   ) => {
+    if (props.fixtureDragActive) {
+      event.preventDefault();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+      props.onFixtureDragHover(channel);
+      return;
+    }
     if (!props.profileDragActive) return;
     event.preventDefault();
     if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
     props.onProfileDragHover(channel);
   };
 
-  const handleProfileDragLeave = (event: DragEvent & { currentTarget: HTMLDivElement }) => {
+  const handlePatchDragLeave = (event: DragEvent & { currentTarget: HTMLDivElement }) => {
     const nextTarget = event.relatedTarget;
     if (nextTarget instanceof Node && event.currentTarget.contains(nextTarget)) return;
-    props.onProfileDragLeave();
+    if (props.fixtureDragActive) {
+      props.onFixtureDragLeave();
+    } else if (props.profileDragActive) {
+      props.onProfileDragLeave();
+    }
   };
+
+  const activeDndStatus = () => props.fixtureDragActive ? props.fixtureDndStatus : props.profileDndStatus;
 
   return (
     <>
@@ -377,14 +464,16 @@ export function DmxPatchMapPanel(props: DmxPatchMapPanelProps) {
             </details>
           </div>
         </div>
-        <Show when={props.profileDndStatus}>
+        <Show when={activeDndStatus()}>
           {(status) => (
             <output
               class={`patchProfileDndStatus ${status()}`}
               data-patch-dnd-status={status()}
               role={status() === "conflict" || status() === "rejected" ? "alert" : "status"}
             >
-              {status() === "valid" ? "Drop to patch" : "Conflict: drop rejected"}
+              {status() === "valid"
+                ? props.fixtureDragActive ? "Drop to move" : "Drop to patch"
+                : props.fixtureDragActive ? "Conflict: move rejected" : "Conflict: drop rejected"}
             </output>
           )}
         </Show>
@@ -419,7 +508,10 @@ export function DmxPatchMapPanel(props: DmxPatchMapPanelProps) {
             aria-label={`Universe ${props.activeUniverse} DMX addresses 1 to 512`}
             aria-rowcount={dmxGridRowCount}
             aria-colcount={dmxGridColumnCount}
-            onDragLeave={handleProfileDragLeave}
+            onDragLeave={handlePatchDragLeave}
+            onPointerMove={handleFixturePointerMove}
+            onPointerUp={handleFixturePointerEnd}
+            onPointerCancel={handleFixturePointerEnd}
           >
             <For each={addressRows()}>
               {(cells, rowIndex) => (
@@ -457,21 +549,47 @@ export function DmxPatchMapPanel(props: DmxPatchMapPanelProps) {
                                 : `U${props.activeUniverse} A${cell.channel}`
                             }
                             data-dmx-address={cell.channel}
+                            draggable={Boolean(cell.segment)}
                             tabIndex={activeAddress() === cell.channel ? 0 : -1}
                             onFocus={() => {
                               setActiveAddress(cell.channel);
                               setInspectedAddress(cell.channel);
                             }}
+                            onPointerDown={(event) => {
+                              const fixture = cell.segment?.fixture;
+                              if (fixture) handleFixturePointerDown(event, fixture);
+                            }}
                             onPointerEnter={() => setInspectedAddress(cell.channel)}
-                            onDragEnter={(event) => handleProfileDragOver(event, cell.channel)}
-                            onDragOver={(event) => handleProfileDragOver(event, cell.channel)}
+                            onDragStart={(event) => {
+                              const fixture = cell.segment?.fixture;
+                              if (!fixture || !event.dataTransfer) {
+                                event.preventDefault();
+                                return;
+                              }
+                              fixturePointerDrag = null;
+                              event.dataTransfer.effectAllowed = "move";
+                              event.dataTransfer.setData("text/plain", `Move ${fixture.label}`);
+                              props.onFixtureDragStart(fixture);
+                            }}
+                            onDragEnd={props.onFixtureDragEnd}
+                            onDragEnter={(event) => handlePatchDragOver(event, cell.channel)}
+                            onDragOver={(event) => handlePatchDragOver(event, cell.channel)}
                             onDrop={(event) => {
+                              if (props.fixtureDragActive) {
+                                event.preventDefault();
+                                void props.onFixtureDrop(cell.channel);
+                                return;
+                              }
                               if (!props.profileDragActive) return;
                               event.preventDefault();
                               void props.onProfileDrop(cell.channel);
                             }}
                             onKeyDown={(event) => handleAddressKeyDown(event, cell.channel)}
                             onClick={() => {
+                              if (suppressNextFixtureClick) {
+                                suppressNextFixtureClick = false;
+                                return;
+                              }
                               setActiveAddress(cell.channel);
                               setInspectedAddress(cell.channel);
                               props.onAddressCell(cell);

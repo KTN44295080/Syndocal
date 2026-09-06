@@ -6,7 +6,6 @@ import type {
   SerialPortSummary,
   ShowSerialDmxSafetyBlackoutRouteStatus,
 } from "../types";
-import type { Dsf2026ArtNetAcceptanceProbeStatusQuery } from "../outputControlController";
 
 interface DmxOutputConfigPanelProps {
   output: DmxOutputConfig;
@@ -16,14 +15,11 @@ interface DmxOutputConfigPanelProps {
   safetyBlackoutEngaged: boolean;
   showDmxPreparationBusy: boolean;
   showDmxPreparationStage: string | null;
-  dsf2026ArtNetAcceptanceProbeStatus: () => Dsf2026ArtNetAcceptanceProbeStatusQuery | null;
-  onPrepareShowDmx: (port: SerialPortSummary) => void | Promise<void>;
+  onPrepareShowDmx: (port?: SerialPortSummary) => void | Promise<void>;
   onEnableStagedShowArtNetLoopbackRoute: () => void | Promise<void>;
   onConfirmSerialDmxMachineBinding: (port: SerialPortSummary) => void | Promise<void>;
   onEnableShowSerialDmxSafetyBlackoutRoute: () => void | Promise<void>;
   onStopShowSerialDmxSafetyBlackoutRoute: () => void | Promise<void>;
-  onSendDsf2026ArtNetAcceptanceProbe: () => void | Promise<void>;
-  onAcknowledgeDsf2026ArtNetAcceptanceProbeInDoubt: () => void | Promise<void>;
 }
 
 interface UsbDmxIdentityDisplay {
@@ -217,32 +213,11 @@ export function DmxOutputConfigPanel(props: DmxOutputConfigPanelProps) {
   const showDmxPreparationCanStart = () => Boolean(
     !props.showDmxPreparationBusy
     && exactRoute()
-    && serialWorkerStatusKnown()
-    && !serialWorkerActive()
-    && !serialWorkerFaulted()
-    && serialWorkerArmAdmissible()
-    && hasExactMachineLocalOpenDmxIdentity(selectedSerialPort()),
+    && !serialWorkerActive(),
   );
   const showDmxPreparationStatus = () => props.showDmxPreparationBusy
     ? `In progress: ${props.showDmxPreparationStage ?? "preflight"}`
-    : props.showDmxPreparationStage ?? "Select one USB-DMX device";
-  const probeStatus = () => props.dsf2026ArtNetAcceptanceProbeStatus();
-  const probeStatusReason = () => {
-    switch (probeStatus()?.status) {
-      case "available":
-        return "Available · one send";
-      case "in_doubt":
-        return "In doubt · reconcile only";
-      case "consumed":
-        return "Consumed · no repeat";
-      default:
-        return "Loading";
-    }
-  };
-  const probeSendDisabled = () =>
-    !exactRoute() || props.output.enabled || probeStatus()?.status !== "available";
-  const probeReconcileDisabled = () =>
-    !exactRoute() || props.output.enabled || probeStatus()?.status !== "in_doubt";
+    : props.showDmxPreparationStage ?? "Ready · Art-Net output can be prepared without a fixture or USB-DMX device";
   const routeState = () => !exactRoute()
     ? "Logical route mismatch"
     : props.output.enabled ? "Enabled" : "Staged disabled";
@@ -258,7 +233,30 @@ export function DmxOutputConfigPanel(props: DmxOutputConfigPanelProps) {
       <div class="dmxShowSetup dmxRouteBuilder" data-io-show-dmx-setup>
         <div class="dmxShowSetupCopy">
           <strong>Show DMX</strong>
-          <span>USB-DMX + Art-Net mirror</span>
+        </div>
+        <div class="dmxShowSetupControls">
+          <label class="dmxShowSetupUsb" for="show-usb-dmx-device">
+            <span>USB-DMX</span>
+            <select
+              id="show-usb-dmx-device"
+              value={selectedSerialPort() ? serialPortKey(selectedSerialPort()!) : ""}
+              onInput={(event) => setSelectedSerialPortKey(event.currentTarget.value)}
+            >
+              <option value="">No USB device</option>
+              {props.serialPorts.map((port) => (
+                <option
+                  value={serialPortKey(port)}
+                  disabled={!hasExactMachineLocalOpenDmxIdentity(port)}
+                  data-no-localize
+                >
+                  {`${port.name} · ${port.manufacturer ?? "unknown"} / ${port.product ?? "unknown"}`}
+                </option>
+              ))}
+            </select>
+          </label>
+          <span class="dmxShowSetupSelectionState" role="status" data-io-usb-dmx-selection-state>
+            {selectedSerialPortSelectionSource()}
+          </span>
         </div>
         <button
           data-io-control="dmx-prepare-show-dmx"
@@ -266,19 +264,16 @@ export function DmxOutputConfigPanel(props: DmxOutputConfigPanelProps) {
           disabled={!showDmxPreparationCanStart()}
           aria-describedby="dmx-show-dmx-setup-status"
           onClick={() => {
-            const selected = selectedSerialPort();
-            if (hasExactMachineLocalOpenDmxIdentity(selected)) {
-              void props.onPrepareShowDmx(selected);
-            }
+            void props.onPrepareShowDmx(selectedSerialPort());
           }}
-        >{props.showDmxPreparationBusy ? "Preparing show DMX…" : "Prepare show DMX"}</button>
-        <p id="dmx-show-dmx-setup-status" class="ioDisclosureDescription" role="status" data-io-show-dmx-setup-status>
+        >{props.showDmxPreparationBusy ? "Preparing…" : "Prepare"}</button>
+        <p id="dmx-show-dmx-setup-status" class="dmxShowSetupStatus ioDisclosureDescription" role="status" data-io-show-dmx-setup-status>
           {showDmxPreparationStatus()}
         </p>
       </div>
 
       <details class="ioDisclosure dmxIndividualDiagnostics" data-io-disclosure="dmx-individual-diagnostics">
-        <summary>Diagnostics</summary>
+        <summary>Advanced</summary>
         <div class="ioDisclosureBody">
           <div class="dmxRouteBuilder dmxPrimaryControls">
             <button
@@ -288,115 +283,90 @@ export function DmxOutputConfigPanel(props: DmxOutputConfigPanelProps) {
               aria-describedby="dmx-show-route-confirmation"
               onClick={() => void props.onEnableStagedShowArtNetLoopbackRoute()}
             >Enable Art-Net loopback</button>
-            <button
-              data-io-control="dmx-send-dsf2026-artnet-acceptance-probe"
-              class="danger"
-              disabled={probeSendDisabled()}
-              aria-describedby="dmx-dsf2026-artnet-acceptance-probe"
-              onClick={() => void props.onSendDsf2026ArtNetAcceptanceProbe()}
-            >Send fixed probe</button>
-            <button
-              data-io-control="dmx-acknowledge-dsf2026-artnet-acceptance-probe-in-doubt"
-              class="danger"
-              disabled={probeReconcileDisabled()}
-              aria-describedby="dmx-dsf2026-artnet-acceptance-probe"
-              onClick={() => void props.onAcknowledgeDsf2026ArtNetAcceptanceProbeInDoubt()}
-            >Reconcile probe (no send)</button>
           </div>
 
-          <div class="dmxRouteBuilder" data-io-usb-dmx-route>
-            <label for="show-usb-dmx-device">USB-DMX device</label>
-            <select
-              id="show-usb-dmx-device"
-              value={selectedSerialPort() ? serialPortKey(selectedSerialPort()!) : ""}
-              onInput={(event) => setSelectedSerialPortKey(event.currentTarget.value)}
-            >
-              <option value="">Select device</option>
-              {props.serialPorts.map((port) => (
-                <option
-                  value={serialPortKey(port)}
-                  disabled={!hasExactMachineLocalOpenDmxIdentity(port)}
-                  data-no-localize
-                >
-                  {`${port.name} · ${port.manufacturer ?? "unknown"} / ${port.product ?? "unknown"} · VID ${usbHex(port.usb_vid)} PID ${usbHex(port.usb_pid)} · ${port.serial_number ?? "no serial"} · ${port.windows_device_instance_id ?? "no Windows PnP instance"}`}
-                </option>
-              ))}
-            </select>
-            <p class="ioDisclosureDescription" role="status" data-io-usb-dmx-selection-state>
-              {selectedSerialPortSelectionSource()}
-            </p>
-            <button
-              data-io-control="dmx-confirm-serial-machine-binding"
-              disabled={!hasExactMachineLocalOpenDmxIdentity(selectedSerialPort()) || !serialBindingMutationAdmissible()}
-              onClick={() => {
-                const selected = selectedSerialPort();
-                if (hasExactMachineLocalOpenDmxIdentity(selected) && serialBindingMutationAdmissible()) {
-                  void props.onConfirmSerialDmxMachineBinding(selected);
-                }
-              }}
-            >Confirm USB-DMX</button>
-            <button
-              data-io-control="dmx-enable-show-serial-dmx-safety-blackout-route"
-              class="primary"
-              disabled={!serialWorkerArmAdmissible() || !serialWorkerStatusKnown() || !bindingReady() || !props.safetyBlackoutEngaged || !artNetUnityMirrorEnabled()}
-              onClick={() => void props.onEnableShowSerialDmxSafetyBlackoutRoute()}
-            >Arm USB-DMX under S0</button>
-            <button
-              data-io-control="dmx-stop-show-serial-dmx-safety-blackout-route"
-              disabled={!serialWorkerActive() || !serialWorkerStatusKnown() || !props.safetyBlackoutEngaged}
-              onClick={() => void props.onStopShowSerialDmxSafetyBlackoutRoute()}
-            >Stop USB-DMX</button>
-          </div>
+          <details class="ioDisclosure dmxNestedDisclosure" data-io-disclosure="dmx-usb-manual-controls">
+            <summary>Manual controls</summary>
+            <div class="ioDisclosureBody">
+              <div class="dmxRouteBuilder dmxPrimaryControls" data-io-usb-dmx-route>
+                <button
+                  data-io-control="dmx-confirm-serial-machine-binding"
+                  disabled={!hasExactMachineLocalOpenDmxIdentity(selectedSerialPort()) || !serialBindingMutationAdmissible()}
+                  onClick={() => {
+                    const selected = selectedSerialPort();
+                    if (hasExactMachineLocalOpenDmxIdentity(selected) && serialBindingMutationAdmissible()) {
+                      void props.onConfirmSerialDmxMachineBinding(selected);
+                    }
+                  }}
+                >Confirm USB-DMX</button>
+                <button
+                  data-io-control="dmx-enable-show-serial-dmx-safety-blackout-route"
+                  class="primary"
+                  disabled={!serialWorkerArmAdmissible() || !serialWorkerStatusKnown() || !bindingReady() || !props.safetyBlackoutEngaged || !artNetUnityMirrorEnabled()}
+                  onClick={() => void props.onEnableShowSerialDmxSafetyBlackoutRoute()}
+                >Arm USB-DMX under S0</button>
+                <button
+                  data-io-control="dmx-stop-show-serial-dmx-safety-blackout-route"
+                  disabled={!serialWorkerActive() || !serialWorkerStatusKnown() || !props.safetyBlackoutEngaged}
+                  onClick={() => void props.onStopShowSerialDmxSafetyBlackoutRoute()}
+                >Stop USB-DMX</button>
+              </div>
+            </div>
+          </details>
 
-          <RawUsbDmxIdentity
-            dataAttribute="data-io-usb-dmx-observed-identity"
-            heading="Observed selection — not persisted or protocol-inferred"
-            identity={observedSerialIdentity()}
-          />
-          <RawUsbDmxIdentity
-            dataAttribute="data-io-usb-dmx-confirmed-identity"
-            heading="Confirmed machine-local identity — expected for the current binding"
-            identity={confirmedSerialIdentity()}
-          />
+          <details class="ioDisclosure dmxNestedDisclosure" data-io-disclosure="dmx-usb-identities">
+            <summary>Device identity</summary>
+            <div class="ioDisclosureBody">
+              <RawUsbDmxIdentity
+                dataAttribute="data-io-usb-dmx-observed-identity"
+                heading="Observed selection"
+                identity={observedSerialIdentity()}
+              />
+              <RawUsbDmxIdentity
+                dataAttribute="data-io-usb-dmx-confirmed-identity"
+                heading="Confirmed machine-local identity"
+                identity={confirmedSerialIdentity()}
+              />
+            </div>
+          </details>
+
+          <details class="ioDisclosure dmxProtocolDetails dmxNestedDisclosure" data-io-disclosure="dmx-protocol-details">
+            <summary>Route facts</summary>
+            <div class="ioDisclosureBody">
+              <dl class="dmxProtocolFacts">
+                <dt>Art-Net</dt>
+                <dd id="dmx-show-route-confirmation">127.0.0.1:6454 · wire U0 · 512ch · 40–44fps</dd>
+                <dt>USB-DMX</dt>
+                <dd data-io-usb-dmx-artnet-mirror-state>{serialState()} · logical U0 · ≈32.5fps</dd>
+                <dt>Binding</dt>
+                <dd data-io-usb-dmx-binding-state>{bindingReady() ? "Confirmed" : "Required"}</dd>
+                <dt>Safety</dt>
+                <dd data-io-usb-dmx-safety-state>{props.safetyBlackoutEngaged ? "S0 engaged" : "S0 clear"}</dd>
+              </dl>
+              {!exactRoute() && <p class="ioDisclosureDescription" role="alert">
+                Art-Net route mismatch · expected 127.0.0.1:6454 / wire U0.
+              </p>}
+              <p class="ioDisclosureDescription dmxLogHint">
+                Detailed diagnostics are written to the application log.
+              </p>
+            </div>
+          </details>
+
+          <div class="dmxRouteList" data-io-route-list data-io-route-total="2" data-io-route-page-count="1">
+            <div class="panelHeader"><h3>Routes</h3><span>2</span></div>
+            <div class="dmxRouteRows"><div class="dmxRouteRow" data-io-route-row data-route-index="0">
+              <span class={`ioStatusDot ${routeStateTone() === "ready" ? "ok" : routeStateTone()}`} aria-hidden="true" />
+              <strong>Art-Net · ArtDmx</strong><span data-io-route-target>127.0.0.1:6454</span>
+              <span data-io-route-universe>Wire U0 · 512ch · 40–44fps</span>
+            </div><div class="dmxRouteRow" data-io-route-row data-route-index="1">
+              <span class={`ioStatusDot ${serialStateTone() === "ready" ? "ok" : serialStateTone()}`} aria-hidden="true" />
+              <strong>Enttec Open DMX</strong><span data-io-route-target>{serialState()}</span>
+              <span data-io-route-universe>Logical U0 · ≈32.5fps</span>
+            </div></div>
+          </div>
         </div>
       </details>
 
-      <div class="dmxRouteList" data-io-route-list data-io-route-total="2" data-io-route-page-count="1">
-        <div class="panelHeader"><h3>Logical routes</h3><span>2</span></div>
-        <div class="dmxRouteRows"><div class="dmxRouteRow" data-io-route-row data-route-index="0">
-          <span class={`ioStatusDot ${routeStateTone() === "ready" ? "ok" : routeStateTone()}`} aria-hidden="true" />
-          <strong>Art-Net · ArtDmx</strong><span data-io-route-target>127.0.0.1:6454</span>
-          <span data-io-route-universe>Wire U0 · 512ch · 40–44fps</span>
-        </div><div class="dmxRouteRow" data-io-route-row data-route-index="1">
-          <span class={`ioStatusDot ${serialStateTone() === "ready" ? "ok" : serialStateTone()}`} aria-hidden="true" />
-          <strong>Enttec Open DMX</strong><span data-io-route-target>{serialState()}</span>
-          <span data-io-route-universe>Logical U0 · ≈32.5fps</span>
-        </div></div>
-      </div>
-
-      <details class="ioDisclosure dmxProtocolDetails" data-io-disclosure="dmx-protocol-details">
-        <summary>Route facts</summary>
-        <div class="ioDisclosureBody">
-          <dl class="dmxProtocolFacts">
-            <dt>Art-Net</dt>
-            <dd id="dmx-show-route-confirmation">127.0.0.1:6454 · wire U0 · 512ch · 40–44fps</dd>
-            <dt>USB-DMX</dt>
-            <dd data-io-usb-dmx-artnet-mirror-state>{serialState()} · logical U0 · ≈32.5fps</dd>
-            <dt>Probe</dt>
-            <dd id="dmx-dsf2026-artnet-acceptance-probe" role="status">{probeStatusReason()}</dd>
-            <dt>Binding</dt>
-            <dd data-io-usb-dmx-binding-state>{bindingReady() ? "Confirmed" : "Required"}</dd>
-            <dt>Safety</dt>
-            <dd data-io-usb-dmx-safety-state>{props.safetyBlackoutEngaged ? "S0 engaged" : "S0 clear"}</dd>
-          </dl>
-          {!exactRoute() && <p class="ioDisclosureDescription" role="alert">
-            Art-Net route mismatch · expected 127.0.0.1:6454 / wire U0.
-          </p>}
-          <p class="ioDisclosureDescription dmxLogHint">
-            Detailed diagnostics are written to the application log.
-          </p>
-        </div>
-      </details>
     </section>
   );
 }

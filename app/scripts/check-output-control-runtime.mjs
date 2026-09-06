@@ -982,6 +982,7 @@ const [
   read("../crates/engine/src/show_serial_dmx_tests.rs"),
   read("../crates/protocol/src/control_plane_registry_v2.rs"),
 ]);
+const outputDiagnosticsPanelSource = await read("src/components/OutputDiagnosticsPanel.tsx");
 const serialDmxStatusPollerRuntime = await import(`data:text/javascript;base64,${Buffer.from(ts.transpileModule(
   serialDmxStatusPollerSource,
   {
@@ -1535,12 +1536,12 @@ assert.doesNotMatch(
   /generic FTDI VID\/PID is not auto-selected|queue acceptance from the bounded physical zero transaction|latest-frame mirror[\s\S]*does not promise physical delivery/,
   "the routine UI must not expose implementation prose for USB-DMX internals",
 );
-assert.match(dmxOutputPanelSource, /data-io-control="dmx-send-dsf2026-artnet-acceptance-probe"/);
-assert.match(dmxOutputPanelSource, /probeStatus\(\)\?\.status !== "available"/,
+assert.match(outputDiagnosticsPanelSource, /data-io-dmx-protocol-diagnostics[\s\S]*data-io-control="dmx-send-dsf2026-artnet-acceptance-probe"/);
+assert.match(outputDiagnosticsPanelSource, /probeStatus\(\)\?\.status !== "available"/,
   "a successful or unknown durable one-shot status must keep the probe disabled");
-assert.match(dmxOutputPanelSource, /probeStatus\(\)\?\.status !== "in_doubt"/,
+assert.match(outputDiagnosticsPanelSource, /probeStatus\(\)\?\.status !== "in_doubt"/,
   "only a durable InDoubt outcome may enable the no-send reconciliation action");
-assert.match(dmxOutputPanelSource, /Consumed · no repeat/,
+assert.match(outputDiagnosticsPanelSource, /Consumed · no repeat/,
   "the fixed probe UI must show the terminal no-repeat state concisely");
 assert.match(
   dmxOutputPanelSource,

@@ -4512,11 +4512,10 @@ h3 {
   min-width: 0;
 }
 
-/* The show route is an operator action, not an explanation panel. Keep its
-   primary controls on one compact row and move protocol/safety prose into the
-   closed disclosures below. */
+/* The show route is an operator action, not an explanation panel. Keep the
+   everyday flow visible and move manual controls and facts into Advanced. */
 .dmxOutputConfigPanel .dmxShowSetup.dmxRouteBuilder {
-  grid-template-columns: minmax(180px, 1fr) minmax(150px, auto) minmax(200px, 1fr);
+  grid-template-columns: minmax(150px, 0.65fr) minmax(260px, 1.4fr) minmax(96px, auto);
   align-items: center;
 }
 
@@ -4545,9 +4544,79 @@ h3 {
   margin: 0;
 }
 
-.dmxOutputConfigPanel > .dmxIndividualDiagnostics,
-.dmxOutputConfigPanel > .dmxProtocolDetails {
+.dmxShowSetupControls {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) max-content;
+  align-items: end;
+  gap: 6px 8px;
+  min-width: 0;
+}
+
+.dmxShowSetupUsb {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.dmxShowSetupUsb > span {
+  color: #a79d94;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.dmxShowSetupUsb select {
+  width: 100%;
+  min-width: 0;
+}
+
+.dmxShowSetupSelectionState {
+  min-width: 0;
+  overflow: hidden;
+  color: #8f8881;
+  font-size: 10px;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dmxShowSetupStatus {
+  grid-column: 1 / -1;
+}
+
+.dmxNestedDisclosure {
+  background: #181615;
+}
+
+.dmxNestedDisclosure > summary {
+  min-height: 28px;
+  padding-block: 6px;
+  color: #b8aea6;
+  font-size: 10px;
+}
+
+.dmxIndividualDiagnostics {
   margin-top: 0;
+}
+
+@media (max-width: 900px) {
+  .dmxOutputConfigPanel .dmxShowSetup.dmxRouteBuilder {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .dmxShowSetupControls {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .dmxShowSetupSelectionState {
+    text-align: left;
+  }
+
+  .dmxShowSetup > button {
+    width: 100%;
+  }
 }
 
 .dmxProtocolFacts {
@@ -4584,6 +4653,23 @@ h3 {
 .dmxLogHint {
   margin: 0;
   color: #8f8881;
+}
+
+.dmxProtocolDiagnostics {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  border-bottom: 1px solid #302c28;
+  padding-bottom: 6px;
+}
+
+.dmxProtocolDiagnostics .panelHeader {
+  min-height: 0;
+}
+
+.dmxProtocolDiagnostics .panelHeader > span {
+  color: #8f8881;
+  font-size: 10px;
 }
 
 .timelineCueAudioEditor {
@@ -7935,6 +8021,11 @@ progress {
   border-color: #715f39;
   background: #3a3327;
   color: #e6c982;
+  cursor: grab;
+}
+
+.dmxAddressCell.occupied:active {
+  cursor: grabbing;
 }
 
 .dmxAddressCell.planned {
@@ -23251,11 +23342,7 @@ h3 {
 }
 
 .layoutControl.controlModeEdit .faders.editDesk-faders > .fixtureEditSurface {
-  grid-template-columns: minmax(0, 1fr);
-}
-
-.layoutControl.controlModeEdit .faders.editDesk-faders .attributeCategoryRail {
-  display: none;
+  grid-template-columns: 86px minmax(0, 1fr);
 }
 
 .layoutControl.controlModeEdit .attributeCategoryRail button {
@@ -29096,7 +29183,9 @@ h3 {
    placement disclosure span beneath. */
 .patchFixtureMinimalForm {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  /* Address shares its cell with Next Free, so give it the space that the
+     numeric Universe and Count fields do not need. */
+  grid-template-columns: minmax(48px, 0.75fr) minmax(120px, 1.5fr) minmax(48px, 0.75fr);
   gap: 4px 5px;
   min-width: 0;
   border: 1px solid #393530;

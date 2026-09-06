@@ -10,6 +10,7 @@ const appRoot = path.resolve(scriptDirectory, "..");
 const read = (relativePath) => fs.readFileSync(path.join(appRoot, relativePath), "utf8");
 
 const panel = read("src/components/DmxOutputConfigPanel.tsx");
+const outputDiagnosticsPanel = read("src/components/OutputDiagnosticsPanel.tsx");
 const styles = read("src/styles.css");
 const controller = read("src/createOutputDiagnosticsController.ts");
 const app = read("src/App.tsx");
@@ -27,7 +28,7 @@ const ownershipSource = controller
 const isBothOutputOwnershipReady = new Function(
   `${ownershipSource}; return isBothOutputOwnershipReady;`,
 )();
-const decisionEnd = controller.indexOf("\n\nexport const outputProtocolLabel", decisionStart);
+const decisionEnd = controller.indexOf("export const outputProtocolLabel", decisionStart);
 assert.ok(decisionStart >= 0 && decisionEnd > decisionStart,
   "stage-1 lease decision helper must have a bounded source body");
 const decisionSource = controller
@@ -56,31 +57,47 @@ const preparation = controller.slice(preparationStart, preparationEnd);
 
 assert.match(panel, /data-io-show-dmx-setup/);
 assert.match(panel, /data-io-control="dmx-prepare-show-dmx"/);
-assert.match(panel, /onPrepareShowDmx\(selected\)/);
+assert.match(panel, /onPrepareShowDmx\(selectedSerialPort\(\)\)/);
 assert.match(panel, /showDmxPreparationBusy/);
 assert.match(panel, /showDmxPreparationStage/);
-assert.match(panel, /hasExactMachineLocalOpenDmxIdentity\(selectedSerialPort\(\)\)/);
-
 const diagnosticsDisclosure = panel.indexOf('data-io-disclosure="dmx-individual-diagnostics"');
+const quickSetupControlStart = panel.indexOf("const showDmxPreparationCanStart =");
+const quickSetupControlEnd = panel.indexOf("const showDmxPreparationStatus =", quickSetupControlStart);
+assert.ok(quickSetupControlStart >= 0 && quickSetupControlEnd > quickSetupControlStart && quickSetupControlEnd < diagnosticsDisclosure,
+  "quick setup eligibility must remain a local bounded control");
+const quickSetupControl = panel.slice(quickSetupControlStart, quickSetupControlEnd);
+assert.doesNotMatch(quickSetupControl, /fixture|patch/i,
+  "quick setup eligibility must not depend on fixtures or patch state");
+assert.doesNotMatch(quickSetupControl, /hasExactMachineLocalOpenDmxIdentity/,
+  "quick setup eligibility must not require a USB-DMX identity");
+assert.match(quickSetupControl, /&& !serialWorkerActive\(\)/,
+  "quick setup must still reject a duplicate active Open DMX worker");
+
 const oldLoopbackControl = panel.indexOf('data-io-control="dmx-enable-staged-show-artnet-loopback-route"');
 const oldUsbControl = panel.indexOf('data-io-control="dmx-enable-show-serial-dmx-safety-blackout-route"');
 assert.ok(diagnosticsDisclosure >= 0 && diagnosticsDisclosure < oldLoopbackControl, "individual loopback diagnostics must remain behind the disclosure");
 assert.ok(oldLoopbackControl < oldUsbControl, "individual Art-Net diagnostics must remain before USB diagnostics");
 assert.match(panel, /<details class="ioDisclosure dmxIndividualDiagnostics"[^>]*>/);
+assert.match(panel, /<summary>Advanced<\/summary>/,
+  "manual setup controls must be grouped under one Advanced disclosure");
+assert.match(panel, /data-io-disclosure="dmx-usb-manual-controls"[\s\S]*<summary>Manual controls<\/summary>/,
+  "manual route controls must remain behind a nested disclosure");
+assert.doesNotMatch(panel, /data-io-control="dmx-send-dsf2026-artnet-acceptance-probe"|data-io-control="dmx-acknowledge-dsf2026-artnet-acceptance-probe-in-doubt"/,
+  "fixed probe actions must not remain in the everyday DMX setup panel");
 assert.doesNotMatch(panel, /<details class="ioDisclosure dmxIndividualDiagnostics"[^>]*\bopen\b/,
   "individual diagnostics must default collapsed behind the quick setup");
 assert.match(panel, /disabled=\{!showDmxPreparationCanStart\(\)\}/);
-assert.match(panel, /&& !serialWorkerFaulted\(\)[\s\S]*&& serialWorkerArmAdmissible\(\)/,
-  "quick setup preflight must reject faulted, active, live-frame, incomplete-shutdown, or pending-zero workers");
+assert.match(panel, /const serialWorkerArmAdmissible = \(\) =>/,
+  "the explicit USB arm control must retain its strict worker admissibility gate");
 assert.doesNotMatch(panel, /Prepare show DMX \(S0-safe\)/,
   "the complete sequence must not claim S0 safety before loopback staging");
 
 const protocolDetails = panel.indexOf('data-io-disclosure="dmx-protocol-details"');
 assert.ok(protocolDetails >= 0 && protocolDetails > oldUsbControl,
   "protocol and safety prose must remain below the compact route controls");
-assert.match(panel, /<details class="ioDisclosure dmxProtocolDetails"[^>]*>/,
+assert.match(panel, /<details class="ioDisclosure dmxProtocolDetails[^"]*"[^>]*>/,
   "protocol and safety prose must use a disclosure");
-assert.doesNotMatch(panel, /<details class="ioDisclosure dmxProtocolDetails"[^>]*\bopen\b>/,
+assert.doesNotMatch(panel, /<details class="ioDisclosure dmxProtocolDetails[^"]*"[^>]*\bopen\b>/,
   "protocol and safety prose must default collapsed");
 assert.match(panel, /<summary>Route facts<\/summary>/,
   "the collapsed route disclosure needs an operator-facing label");
@@ -90,16 +107,27 @@ assert.match(panel, /Detailed diagnostics are written to the application log\./,
   "verbose diagnostics must be directed to the application log");
 assert.doesNotMatch(panel, /Same-PC only: completed DMX Universe 1|Confirmation retains the native lease|generic FTDI VID\/PID/,
   "long protocol and safety explanations must not remain in the operator UI");
-assert.match(panel, /<strong>Show DMX<\/strong>\s*<span>USB-DMX \+ Art-Net mirror<\/span>/,
+assert.match(panel, /<strong>Show DMX<\/strong>/,
   "the default quick setup surface must use concise route copy");
+assert.match(panel, /class="dmxShowSetupControls"[\s\S]*id="show-usb-dmx-device"[\s\S]*data-io-control="dmx-prepare-show-dmx"/,
+  "the default surface must keep device selection and Prepare together");
+assert.match(panel, /<summary>Device identity<\/summary>/,
+  "raw machine identity details must be kept behind a nested disclosure");
 assert.doesNotMatch(panel.slice(0, protocolDetails), /Same-PC only: completed DMX Universe 1/,
   "wire-format prose must not consume the default DMX surface");
-assert.match(styles, /\.dmxOutputConfigPanel \.dmxShowSetup\.dmxRouteBuilder\s*\{[\s\S]*?grid-template-columns:\s*minmax\(180px, 1fr\)\s+minmax\(150px, auto\)\s+minmax\(200px, 1fr\);/,
+assert.match(styles, /\.dmxOutputConfigPanel \.dmxShowSetup\.dmxRouteBuilder\s*\{[\s\S]*?grid-template-columns:\s*minmax\(150px, 0\.65fr\)\s+minmax\(260px, 1\.4fr\)\s+minmax\(96px, auto\);/,
   "the show route primary controls must use the compact three-column layout");
 assert.match(styles, /\.dmxShowSetupCopy\s*\{[\s\S]*?display:\s*grid;/,
   "the show route label must remain compact without wrapping into a prose block");
+assert.match(styles, /\.dmxShowSetupControls\s*\{[\s\S]*?display:\s*grid;/,
+  "the default setup controls must have a bounded responsive layout");
+assert.match(outputDiagnosticsPanel, /data-io-dmx-protocol-diagnostics[\s\S]*data-io-control="dmx-send-dsf2026-artnet-acceptance-probe"[\s\S]*data-io-control="dmx-acknowledge-dsf2026-artnet-acceptance-probe-in-doubt"/,
+  "fixed probe actions must live with DMX diagnostics");
+assert.match(styles, /\.dmxProtocolDiagnostics\s*\{[\s\S]*?display:\s*grid;/,
+  "the protocol diagnostic actions must use the existing compact layout language");
 
-assert.match(controller, /createSafetyBlackoutRuntimeController/);
+assert.match(controller, /const safetyBlackoutRuntime = createSafetyBlackoutRuntimeController\(/,
+  "USB preparation must own the bounded zero-first S0 startup controller");
 assert.match(controller, /import[\s\S]*enableOutput/,
   "quick setup must use the canonical normal output enable path");
 assert.match(controller, /const ensureBothOutputLease = async \(\) =>/);
@@ -125,13 +153,16 @@ for (const marker of [
   "showDmxPreparationPromise",
   "setShowDmxPreparationBusy(true)",
   'runStage("1/4 output role Both"',
-  'runStage("2/4 machine-local binding"',
+  'runStage("2/4 optional machine-local binding"',
   "confirmSerialDmxMachineBindingInternal",
   'runStage("3/4 Art-Net loopback"',
   "enableStagedShowArtNetLoopbackRouteInternal",
-  'runStage("4/4 S0 + Open DMX arm"',
+  'runStage("4/4 optional Open DMX arm"',
+  "No USB-DMX device was selected",
   "safetyBlackoutRuntime.engage()",
   "enableShowSerialDmxSafetyBlackoutRouteInternal",
+  "executeBlackoutRelease(options.invoke)",
+  "waitForShowSerialDmxLive",
   "setShowDmxPreparationBusy(false)",
 ]) {
   assert.ok(preparation.includes(marker), `quick setup must retain ${marker}`);
@@ -139,7 +170,7 @@ for (const marker of [
 assert.match(preparation, /await ensureBothOutputLease\(\);/,
   "stage 1 must complete through the lease preparation helper");
 const stage1Start = preparation.indexOf('runStage("1/4 output role Both"');
-const stage2Start = preparation.indexOf('runStage("2/4 machine-local binding"', stage1Start);
+const stage2Start = preparation.indexOf('runStage("2/4 optional machine-local binding"', stage1Start);
 assert.ok(stage1Start >= 0 && stage2Start > stage1Start, "stage 1 and stage 2 boundaries must remain ordered");
 const stage1Block = preparation.slice(stage1Start, stage2Start);
 assert.doesNotMatch(stage1Block, /kind:\s*"arm"/,
@@ -151,9 +182,9 @@ assert.doesNotMatch(preparation, /prepared\.enabled/,
 
 const orderedStages = [
   'runStage("1/4 output role Both"',
-  'runStage("2/4 machine-local binding"',
+  'runStage("2/4 optional machine-local binding"',
   'runStage("3/4 Art-Net loopback"',
-  'runStage("4/4 S0 + Open DMX arm"',
+  'runStage("4/4 optional Open DMX arm"',
 ].map((marker) => preparation.indexOf(marker));
 assert.ok(orderedStages.every((index) => index >= 0));
 for (let index = 1; index < orderedStages.length; index += 1) {
@@ -164,12 +195,16 @@ assert.match(stage3Block, /const lease = await selectFreshBothOutputLease\(\)/,
   "stage 3 must requery the output-control authority and exact Both generation after stages 1/2");
 assert.match(stage3Block, /await enableStagedShowArtNetLoopbackRouteInternal\(lease\)/,
   "stage 3 must execute with the freshly selected Both lease, not a pre-stage lease");
-const serialEnableStart = controller.indexOf("const enableShowSerialDmxSafetyBlackoutRouteInternal = async () =>");
+const serialEnableStart = controller.indexOf("const enableShowSerialDmxSafetyBlackoutRouteInternal = async (");
 const serialEnableEnd = controller.indexOf("const enableShowSerialDmxSafetyBlackoutRoute = async () =>", serialEnableStart);
 assert.ok(serialEnableStart >= 0 && serialEnableEnd > serialEnableStart,
   "USB arm helper must remain bounded for fresh authority auditing");
 assert.match(controller.slice(serialEnableStart, serialEnableEnd), /selectFreshBothOutputLease\(\)/,
   "stage 4 USB arm must also select the current Both generation after S0");
+assert.match(preparation, /confirmedBinding = await confirmSerialDmxMachineBindingInternal\(port\)/,
+  "stage 2 must retain the native binding result for the same Prepare sequence");
+assert.match(controller.slice(serialEnableStart, serialEnableEnd), /confirmedBinding\?\.state === "selected_and_present"/,
+  "stage 4 must accept the just-confirmed native binding when the status poller is still fenced");
 const artNetCommitStart = nativeMain.indexOf("fn enable_show_artnet_loopback_route_with_output_control_fence(");
 const artNetCommitEnd = nativeMain.indexOf("fn enable_show_spout_outputs_with_output_control_fence(", artNetCommitStart);
 assert.ok(artNetCommitStart >= 0 && artNetCommitEnd > artNetCommitStart,
@@ -183,8 +218,10 @@ assert.match(nativeMain, /fn committed_show_artnet_loopback_route_fence\([\s\S]*
   "the Stage 3 seam must preserve the exact committed fence constructor");
 assert.doesNotMatch(artNetCommit, /physical activation only:[\s\S]*expected_fence\.clone\(\)/,
   "stage 3 must not conceal its persisted route mutation behind the admitted fence");
-assert.doesNotMatch(preparation, /release_blackout|releaseBlackout/,
-  "quick setup must never clear S0");
+assert.match(preparation, /released\.safety_blackout_engaged/,
+  "automatic S0 release must be confirmed by a fresh snapshot");
+assert.match(preparation, /USB-DMX started, but S0 release was not confirmed/,
+  "an unconfirmed automatic S0 release must stop without Complete");
 assert.doesNotMatch(preparation, /enableShowSpoutOutputs|resetShowSpoutOutputs/,
   "quick setup must not alter the independent Spout route");
 
@@ -304,7 +341,10 @@ function leaseFixture(initial = "unavailable", config = {}) {
       statuses[0].authority = {lease_id:"fixture-lease",generation};
       return {};
     }
-    if (command === "select_serial_dmx_machine_binding_v1") throw new Error("fixture stops before device mutation");
+    if (command === "select_serial_dmx_machine_binding_v1") {
+      if (config.serialBinding) return config.serialBinding;
+      throw new Error("fixture stops before device mutation");
+    }
     throw new Error(`unexpected invoke ${command}`);
   };
   const select = (query, resources) => {
@@ -319,6 +359,7 @@ function leaseFixture(initial = "unavailable", config = {}) {
       queryDsf2026ArtNetAcceptanceProbeStatus: async () => null,
       queryOutputLeaseAuthority: async () => { events.push("lease-query"); return structuredClone({statuses}); },
       selectOnlyActiveOutputLease: select,
+      executeBlackoutRelease: async () => { events.push("release-blackout"); return {}; },
       enableOutput: async () => {
         events.push("enable-output");
         await config.enableGate;
@@ -334,7 +375,7 @@ function leaseFixture(initial = "unavailable", config = {}) {
       },
     },
     "./serialDmxStatusPoller": {createSerialDmxStatusPoller:()=>({refresh:async()=>{},invalidate:()=>{}})},
-    "./safetyBlackoutRuntimeController": {createSafetyBlackoutRuntimeController:()=>({engage:async()=>{throw new Error("unexpected S0 mutation");}})},
+    "./safetyBlackoutRuntimeController": {createSafetyBlackoutRuntimeController:()=>({engage:async()=>"applied"})},
     "./serialDmxStatusValidation": {},
   };
   const exports = {};
@@ -342,7 +383,7 @@ function leaseFixture(initial = "unavailable", config = {}) {
     assert.ok(name in imports,`unexpected import ${name}`);return imports[name];
   },exports);
   const instance=exports.createOutputDiagnosticsController({invoke,setMessage:message=>messages.push(message),
-    refreshSnapshot:async()=>({}),safetyBlackout:()=>true,setSerialPorts:()=>{},
+    refreshSnapshot:async()=>config.snapshot ?? {},safetyBlackout:()=>true,setSerialPorts:()=>{},
   });
   return {instance,events,messages,actions,setStatuses:value=>{statuses=value;}};
 }
@@ -376,6 +417,21 @@ for (const method of routeMethods) {
     assert.ok(!f.events.includes("enable-output"));
     assert.match(f.messages.at(-1),/ambiguous or has the wrong resources/);
   }
+}
+{
+  const f = leaseFixture("unavailable", {
+    serialBinding: { state: "selected_and_present" },
+    snapshot: {
+      output: { enabled: true, protocol: "ArtNet", target_ip: "127.0.0.1", port: 6454, universe: 0, serial_port: "", serial_baud_rate: 57_600 },
+      dmx_outputs: [],
+      telemetry: { last_dmx_route_results: [{ index: 0, universe: 0, attempted: true, success: true }] },
+    },
+  });
+  await f.instance.prepareShowDmx({ name: "COM-fixture", windows_device_instance_id: "fixture" });
+  assert.equal(f.actions.filter((action) => action.kind === "enable_show_serial_dmx_safety_blackout_route").length, 1,
+    "a fixture-less show preparation with a confirmed USB identity must arm Open DMX");
+  assert.match(f.messages.at(-1), /Show DMX setup complete/,
+    "a fixture-less show preparation must complete after the USB binding succeeds");
 }
 for (const first of routeMethods) {
   let release;const enableGate=new Promise(resolve=>{release=resolve;});

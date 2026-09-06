@@ -40618,7 +40618,7 @@ fn safe_first_run_vj_output(output_id: VideoOutputId) -> VideoOutputSummary {
         height: 1080,
         endpoint_name: None,
         opacity: 1.0,
-        blackout: true,
+        blackout: false,
         mapping: VideoOutputMapping::default(),
     }
 }
@@ -98935,7 +98935,7 @@ pub(crate) mod tests {
         assert_eq!(bootstrap.video.outputs.len(), 1);
         assert_eq!(bootstrap.video.outputs[0].id, 61);
         assert!(!bootstrap.video.outputs[0].enabled);
-        assert!(bootstrap.video.outputs[0].blackout);
+        assert!(!bootstrap.video.outputs[0].blackout);
     }
 
     #[test]
