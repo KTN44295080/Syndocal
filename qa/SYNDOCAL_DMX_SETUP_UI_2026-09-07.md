@@ -42,6 +42,14 @@ with `pnpm --dir app tauri build --bundles nsis`. The generated executable was
 started from this checkout and produced exactly one responsive `Syndocal`
 process. The Windows release artifact self-test passed with 140 assertions.
 
+## Follow-up viewport contract
+
+After explicit authorization, the previously preserved overlap viewport lane
+changes in `app/scripts/check-viewport-containment.mjs` were included in the
+follow-up checkpoint. The focused
+`pnpm --dir app exec node scripts/check-viewport-containment.mjs --scene-block-overlap-only`
+check passed at 1920×1080.
+
 ## Distributed artifact
 
 Installer: `target/release/bundle/nsis/Syndocal_1.2.0-alpha.69_x64-setup.exe`
@@ -58,6 +66,3 @@ illumination, downstream reception, and Art-Net/Unity reception still require
 the separate operator/hardware acceptance. The broader viewport suite is not
 promoted by this checkpoint; its unrelated Mixer drawer audio-input flow still
 has a separate settling failure.
-
-The working-tree changes owned by another Codex in the overlap viewport lane
-were preserved and are not included in this checkpoint's scope.

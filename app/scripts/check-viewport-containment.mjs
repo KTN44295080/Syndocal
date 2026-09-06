@@ -31920,7 +31920,7 @@ async function runSceneBlockHourViewport(client, viewport) {
   };
 }
 
-async function exerciseCompactSceneBlockMarker(client, track, expectedIds) {
+async function exerciseVisibleSceneBlockMarker(client, track, expectedIds) {
   const candidate = await evaluatePageFunction(client, (wantedTrack, wantedIds) => {
     const trackClass = wantedTrack.toLowerCase();
     const markers = wantedIds
@@ -31932,17 +31932,16 @@ async function exerciseCompactSceneBlockMarker(client, track, expectedIds) {
     const marker = markers.find((candidateMarker) => {
       if (!candidateMarker || !candidateMarker.classList.contains(trackClass)) return false;
       if (candidateMarker.classList.contains("selected")) return false;
-      if (candidateMarker.querySelector(".timelineSceneBlockBody")) return false;
-      const hit = candidateMarker.querySelector(".timelineSceneBlockHit");
-      const rect = hit?.getBoundingClientRect();
-      if (!hit || !rect || rect.width <= 0 || rect.height <= 0) return false;
+      const body = candidateMarker.querySelector(".timelineSceneBlockBody");
+      const rect = body?.getBoundingClientRect();
+      if (!body || !rect || rect.width <= 0 || rect.height <= 0) return false;
       const point = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
       const pointTarget = document.elementFromPoint(point.x, point.y);
-      return pointTarget === hit || hit.contains(pointTarget);
+      return pointTarget?.closest(".timelineMarker") === candidateMarker;
     });
     if (!marker) return null;
-    const hit = marker.querySelector(".timelineSceneBlockHit");
-    const rect = hit?.getBoundingClientRect();
+    const body = marker.querySelector(".timelineSceneBlockBody");
+    const rect = body?.getBoundingClientRect();
     const point = rect ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 } : null;
     const pointTarget = point ? document.elementFromPoint(point.x, point.y) : null;
     const eventId = Number(marker.getAttribute("data-timeline-event-id"));
@@ -31958,7 +31957,7 @@ async function exerciseCompactSceneBlockMarker(client, track, expectedIds) {
       point,
       pointTargetMarkerId: pointTarget?.closest(".timelineMarker")?.getAttribute("data-timeline-event-id") ?? "",
       pointTargetClass: pointTarget?.getAttribute("class") ?? "",
-      pointTargetIsHit: pointTarget === hit || hit?.contains(pointTarget) === true,
+      pointTargetIsMarker: pointTarget?.closest(".timelineMarker") === marker,
       role: marker.getAttribute("role") ?? "",
       ariaLabel: marker.getAttribute("aria-label") ?? "",
       tabIndex: marker.getAttribute("tabindex") ?? "",
@@ -32079,6 +32078,16 @@ async function exerciseCompactSceneBlockMarker(client, track, expectedIds) {
 
 async function runSceneBlockOverlapTrack(client, viewport, track, expectedIds, activationKind) {
   await openTimelineShowFixture(client, viewport, "scene-block-large");
+  // The bounded overlap rails can exceed a short viewport. Exercise the
+  // scrollport rather than treating the lower lane's initially clipped badge
+  // as a missing control.
+  await evaluatePageFunction(client, async (wantedTrack) => {
+    const scrollport = document.querySelector(".timelineLayerScrollport");
+    if (wantedTrack === "Video" && scrollport instanceof HTMLElement) {
+      scrollport.scrollTop = scrollport.scrollHeight;
+    }
+    await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+  }, track);
   const initialStats = await evaluatePageFunction(client, (wantedTrack, wantedIds) => {
     const badges = [...document.querySelectorAll(".timelineOverlapCluster")];
     const badge = badges.find((candidate) => candidate.getAttribute("data-overlap-track") === wantedTrack);
@@ -32112,6 +32121,25 @@ async function runSceneBlockOverlapTrack(client, viewport, track, expectedIds, a
           markerHitRect.top + markerHitRect.height / 2,
         )?.closest(".timelineMarker")
       : null;
+    const markerNodes = [...document.querySelectorAll(".timelineMarker.sceneBlock")];
+    const trackClass = wantedTrack.toLowerCase();
+    const trackMarkers = markerNodes.filter((candidate) => candidate.classList.contains(trackClass));
+    const visibleMarkerIds = trackMarkers
+      .map((candidate) => Number(candidate.getAttribute("data-timeline-event-id")))
+      .filter(Number.isInteger);
+    const visibleMarkerRailIndexes = trackMarkers
+      .map((candidate) => Number(candidate.getAttribute("data-timeline-overlap-rail")))
+      .filter(Number.isInteger)
+      .sort((left, right) => left - right);
+    const visibleMarkerRailCounts = trackMarkers
+      .map((candidate) => Number(candidate.getAttribute("data-timeline-overlap-rail-count")))
+      .filter(Number.isInteger);
+    const visibleMarkerBodyCounts = trackMarkers.map((candidate) =>
+      candidate.querySelectorAll(".timelineSceneBlockBody").length,
+    );
+    const visibleMarkerHitCounts = trackMarkers.map((candidate) =>
+      candidate.querySelectorAll(".timelineSceneBlockHit").length,
+    );
     return {
       badgeCount: badges.length,
       lightingCount: Number(
@@ -32145,6 +32173,13 @@ async function runSceneBlockOverlapTrack(client, viewport, track, expectedIds, a
       visibleBlockLabelsHaveIterationSuffix: [...document.querySelectorAll(".timelineSceneBlockLabel")]
         .some((label) => /(?:\bx|×)\d+\s*$/.test((label.textContent || "").trim())),
       markerCount: document.querySelectorAll(".timelineMarker.sceneBlock").length,
+      visibleMarkerCountForTrack: trackMarkers.length,
+      visibleMarkerIds,
+      visibleMarkerIdsBelongToTrack: visibleMarkerIds.every((eventId) => wantedIds.includes(eventId)),
+      visibleMarkerRailIndexes,
+      visibleMarkerRailCounts,
+      visibleMarkerBodyCounts,
+      visibleMarkerHitCounts,
       overviewNodeCount: document.querySelectorAll(".timelineOverview *").length,
       rulerTickCount: document.querySelectorAll("[data-timeline-ruler-ms]").length,
     };
@@ -32156,7 +32191,7 @@ async function runSceneBlockOverlapTrack(client, viewport, track, expectedIds, a
     }
     await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
   });
-  const compactMarkerStats = await exerciseCompactSceneBlockMarker(client, track, expectedIds);
+  const visibleMarkerStats = await exerciseVisibleSceneBlockMarker(client, track, expectedIds);
   const keyboardAccessStats = await focusTimelineOverlapClusterWithTab(client, track);
   await evaluatePageFunction(client, () => {
     const overview = document.querySelector(".timelineOverview");
@@ -32410,59 +32445,62 @@ async function runSceneBlockOverlapTrack(client, viewport, track, expectedIds, a
     initialStats.hitTrack === track &&
     initialStats.badgeWidth >= 20 &&
     initialStats.badgeHeight >= 10 &&
-    initialStats.markerHitId === String(expectedIds.at(-1)) &&
-    initialStats.markerHitClass === "timelineSceneBlockHit" &&
-    initialStats.markerChildCount === 1 &&
-    initialStats.markerLoopCount > 1 &&
-    initialStats.markerTitle === "" &&
+    initialStats.visibleMarkerCountForTrack === Math.min(8, expectedIds.length) &&
+    initialStats.visibleMarkerIdsBelongToTrack &&
+    initialStats.visibleMarkerRailIndexes.length === initialStats.visibleMarkerCountForTrack &&
+    initialStats.visibleMarkerRailIndexes.every((rail, index) => rail === index) &&
+    initialStats.visibleMarkerRailCounts.length === initialStats.visibleMarkerCountForTrack &&
+    initialStats.visibleMarkerRailCounts.every((railCount) => railCount === Math.min(8, expectedIds.length)) &&
+    initialStats.visibleMarkerBodyCounts.every((bodyCount) => bodyCount === 1) &&
+    initialStats.visibleMarkerHitCounts.every((hitCount) => hitCount === 0) &&
     !initialStats.visibleBlockLabelsHaveIterationSuffix &&
-    initialStats.markerCount === 500 &&
+    initialStats.markerCount === 16 &&
     initialStats.overviewNodeCount < 3_500 &&
     initialStats.rulerTickCount > 1 &&
      initialStats.rulerTickCount <= 64
      )],
-    ["compact-member-pointer-rehydrates", Boolean(
-      compactMarkerStats?.candidate?.track === track &&
-      Number.isInteger(compactMarkerStats.candidate.eventId) &&
-      expectedIds.includes(compactMarkerStats.candidate.eventId) &&
-      compactMarkerStats.candidate.selected === false &&
-      compactMarkerStats.candidate.hitCount === 1 &&
-      compactMarkerStats.candidate.bodyCount === 0 &&
-      compactMarkerStats.candidate.childCount === 1 &&
-      compactMarkerStats.candidate.pointTargetMarkerId === String(compactMarkerStats.candidate.eventId) &&
-      compactMarkerStats.candidate.pointTargetIsHit &&
-      compactMarkerStats.pointerSelection?.selected === true &&
-      compactMarkerStats.pointerSelection.eventId === compactMarkerStats.candidate.eventId &&
-      compactMarkerStats.pointerSelection.bodyCount === 1 &&
-      compactMarkerStats.pointerSelection.bodyWidth >= 16 &&
-      compactMarkerStats.pointerSelection.bodyHeight > 0 &&
-      compactMarkerStats.pointerSelection.resizeEdges.length === 2 &&
-      compactMarkerStats.pointerSelection.resizeEdges.includes("start") &&
-      compactMarkerStats.pointerSelection.resizeEdges.includes("end") &&
-      compactMarkerStats.pointerSelection.fadeEdges.length === 2 &&
-      compactMarkerStats.pointerSelection.fadeEdges.includes("in") &&
-      compactMarkerStats.pointerSelection.fadeEdges.includes("out")
+    ["visible-member-pointer-selection", Boolean(
+      visibleMarkerStats?.candidate?.track === track &&
+      Number.isInteger(visibleMarkerStats.candidate.eventId) &&
+      expectedIds.includes(visibleMarkerStats.candidate.eventId) &&
+      visibleMarkerStats.candidate.selected === false &&
+      visibleMarkerStats.candidate.hitCount === 0 &&
+      visibleMarkerStats.candidate.bodyCount === 1 &&
+      visibleMarkerStats.candidate.childCount > 1 &&
+      visibleMarkerStats.candidate.pointTargetMarkerId === String(visibleMarkerStats.candidate.eventId) &&
+      visibleMarkerStats.candidate.pointTargetIsMarker &&
+      visibleMarkerStats.pointerSelection?.selected === true &&
+      visibleMarkerStats.pointerSelection.eventId === visibleMarkerStats.candidate.eventId &&
+      visibleMarkerStats.pointerSelection.bodyCount === 1 &&
+      visibleMarkerStats.pointerSelection.bodyWidth >= 16 &&
+      visibleMarkerStats.pointerSelection.bodyHeight > 0 &&
+      visibleMarkerStats.pointerSelection.resizeEdges.length === 2 &&
+      visibleMarkerStats.pointerSelection.resizeEdges.includes("start") &&
+      visibleMarkerStats.pointerSelection.resizeEdges.includes("end") &&
+      visibleMarkerStats.pointerSelection.fadeEdges.length === 2 &&
+      visibleMarkerStats.pointerSelection.fadeEdges.includes("in") &&
+      visibleMarkerStats.pointerSelection.fadeEdges.includes("out")
       )],
-    ["marker-accessible-name-keyboard-activation", Boolean(
-      compactMarkerStats?.candidate?.role === "button" &&
-      compactMarkerStats.candidate.ariaLabel.length > 0 &&
-      compactMarkerStats.candidate.ariaLabel.includes(String(compactMarkerStats.candidate.eventId)) &&
-      compactMarkerStats.candidate.ariaLabel.includes(track) &&
-      compactMarkerStats.pointerSelection?.role === "button" &&
-      compactMarkerStats.pointerSelection.ariaLabel === compactMarkerStats.candidate.ariaLabel &&
-      compactMarkerStats.arrowFocus?.focusedEventId === String(compactMarkerStats.candidate.eventId) &&
-      compactMarkerStats.afterArrow?.selected === false &&
-      compactMarkerStats.keyboardBefore?.focusedEventId === String(compactMarkerStats.candidate.eventId) &&
-      compactMarkerStats.keyboardBefore.selected === false &&
-      compactMarkerStats.keyboardBefore.hitCount === 1 &&
-      compactMarkerStats.keyboardBefore.bodyCount === 0 &&
-      compactMarkerStats.keyboardBefore.role === "button" &&
-      compactMarkerStats.keyboardBefore.ariaLabel === compactMarkerStats.candidate.ariaLabel &&
-      compactMarkerStats.keyboardActivation?.selected === true &&
-      compactMarkerStats.keyboardActivation.eventId === compactMarkerStats.candidate.eventId &&
-      compactMarkerStats.keyboardActivation.bodyCount === 1 &&
-      compactMarkerStats.keyboardActivation.resizeEdges.length === 2 &&
-      compactMarkerStats.keyboardActivation.fadeEdges.length === 2
+    ["member-accessible-name-keyboard-activation", Boolean(
+      visibleMarkerStats?.candidate?.role === "button" &&
+      visibleMarkerStats.candidate.ariaLabel.length > 0 &&
+      visibleMarkerStats.candidate.ariaLabel.includes(String(visibleMarkerStats.candidate.eventId)) &&
+      visibleMarkerStats.candidate.ariaLabel.includes(track) &&
+      visibleMarkerStats.pointerSelection?.role === "button" &&
+      visibleMarkerStats.pointerSelection.ariaLabel === visibleMarkerStats.candidate.ariaLabel &&
+      visibleMarkerStats.arrowFocus?.focusedEventId === String(visibleMarkerStats.candidate.eventId) &&
+      visibleMarkerStats.afterArrow?.selected === false &&
+      visibleMarkerStats.keyboardBefore?.focusedEventId === String(visibleMarkerStats.candidate.eventId) &&
+      visibleMarkerStats.keyboardBefore.selected === false &&
+      visibleMarkerStats.keyboardBefore.hitCount === 0 &&
+      visibleMarkerStats.keyboardBefore.bodyCount === 1 &&
+      visibleMarkerStats.keyboardBefore.role === "button" &&
+      visibleMarkerStats.keyboardBefore.ariaLabel === visibleMarkerStats.candidate.ariaLabel &&
+      visibleMarkerStats.keyboardActivation?.selected === true &&
+      visibleMarkerStats.keyboardActivation.eventId === visibleMarkerStats.candidate.eventId &&
+      visibleMarkerStats.keyboardActivation.bodyCount === 1 &&
+      visibleMarkerStats.keyboardActivation.resizeEdges.length === 2 &&
+      visibleMarkerStats.keyboardActivation.fadeEdges.length === 2
       )],
      ["activation-timing", Boolean(
     activationStats !== null &&
@@ -32505,15 +32543,19 @@ async function runSceneBlockOverlapTrack(client, viewport, track, expectedIds, a
     searchStats !== null &&
     searchStats.foundIds.length === probeIds.length &&
     searchStats.foundIds.every((eventId, index) => eventId === probeIds[index]) &&
-    searchStats.selectedMarkerId === String(probeIds[1]) &&
-    searchStats.lastMarkerId === String(probeIds[1]) &&
+    // The middle probe is deliberately an overflow member. It remains selected
+    // in the inspector/list, but must not create a hidden SVG interaction marker;
+    // the bounded visible marker set stays intact instead.
+    searchStats.selectedMarkerId === "" &&
+    searchStats.lastMarkerId !== "" &&
+    searchStats.lastMarkerId !== String(probeIds[1]) &&
     searchStats.filterCleared &&
     searchStats.pagerLabelAfterClear.includes("/ 500") &&
     searchStats.rowCountAfterClear > 0 &&
     searchStats.rowCountAfterClear <= 12 &&
     searchStats.selectedRowVisibleAfterClear &&
     searchStats.selectedRowIdAfterClear === String(probeIds[1]) &&
-    searchStats.lastMarkerIdAfterClear === String(probeIds[1]) &&
+    searchStats.lastMarkerIdAfterClear === searchStats.lastMarkerId &&
     searchStats.overviewNodeCountAfterClear < 3_500
     )],
     ["search-dirty-guards", Boolean(
@@ -32530,7 +32572,7 @@ async function runSceneBlockOverlapTrack(client, viewport, track, expectedIds, a
     passed,
     initialStats,
     activationStats,
-    compactMarkerStats,
+    visibleMarkerStats,
     searchStats,
     containment,
     failedChecks,
@@ -32579,6 +32621,7 @@ async function runPartiallyClippedMarkerDrag(client, eventId) {
     const marker = document.querySelector(
       '.timelineMarker.sceneBlock[data-timeline-event-id="' + wantedEventId + '"]',
     );
+    if (!marker) return null;
     const bodyRect = marker?.querySelector(".timelineSceneBlockBody")?.getBoundingClientRect();
     return {
       startMs: Number(marker?.getAttribute("data-timeline-start-ms")),
@@ -32632,7 +32675,50 @@ async function runPartiallyClippedMarkerDrag(client, eventId) {
   await evaluatePageFunction(client, () =>
     new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame))),
   );
-  const settled = await markerSnapshot();
+  const markerSettled = await markerSnapshot();
+  // A committed move can legitimately reclassify the selected member as an
+  // overflowed interval (the eight-rail layout is recomputed from the new
+  // start time). In that case the marker is intentionally removed from the
+  // SVG, so confirm the durable value through the block inspector instead of
+  // treating the absent marker as a failed mutation.
+  let settled = markerSettled;
+  let settledFromInspector = false;
+  let inspectorSettledStats = null;
+  if (!markerSettled) {
+    await openSceneBlockBrowser(client);
+      const inspectorSettled = await evaluatePageFunction(client, async (wantedEventId) => {
+      const search = document.querySelector(".sceneBlockRowSearch");
+      if (search instanceof HTMLInputElement) {
+        search.value = String(wantedEventId);
+        search.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: String(wantedEventId) }));
+        await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+      }
+      const row = document.querySelector('.sceneBlockRow[data-scene-block-id="' + wantedEventId + '"]');
+      row?.click();
+      await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
+      const startInput = document.querySelector("[data-scene-block-inspector-start]");
+      const startValue = startInput instanceof HTMLInputElement ? startInput.value.trim() : "";
+      const clockParts = startValue.split(":");
+      const startMs = clockParts.length === 2
+        ? (Number(clockParts[0]) * 60 + Number(clockParts[1])) * 1_000
+        : clockParts.length === 3
+          ? (Number(clockParts[0]) * 3_600 + Number(clockParts[1]) * 60 + Number(clockParts[2])) * 1_000
+          : Number(startValue);
+      return {
+        startMs,
+        previewStartMs: startMs,
+        bodyLeft: null,
+        rowId: row?.getAttribute("data-scene-block-id") ?? "",
+        markerRendered: Boolean(document.querySelector('.timelineMarker.sceneBlock[data-timeline-event-id="' + wantedEventId + '"]')),
+      };
+      }, eventId);
+      inspectorSettledStats = inspectorSettled;
+      await closeSceneBlockDrawer(client);
+    if (inspectorSettled?.rowId === String(eventId) && Number.isFinite(inspectorSettled.startMs)) {
+      settled = inspectorSettled;
+      settledFromInspector = true;
+    }
+  }
   const visibleSpanMs = geometry.visibleEndMs - geometry.visibleStartMs;
   const expectedDeltaMs = (6 / geometry.svgWidth) * visibleSpanMs;
   const snappedExpectedStartMs = Math.round(
@@ -32646,6 +32732,8 @@ async function runPartiallyClippedMarkerDrag(client, eventId) {
     tiny,
     moved,
     settled,
+    settledFromInspector,
+    inspectorSettledStats,
     snapGuide,
     snapGuideTargetStartMs,
     expectedDeltaMs,
@@ -32724,6 +32812,8 @@ async function runSceneBlockOverlapViewport(client, viewport) {
       ?.getAttribute("data-timeline-event-id") ?? "",
     selectedMarkerAria: document.querySelector(".timelineMarker.sceneBlock.selected")
       ?.getAttribute("aria-label") ?? "",
+    selectedRowId: document.querySelector(".sceneBlockRow.selected")
+      ?.getAttribute("data-scene-block-id") ?? "",
   }));
   await closeSceneBlockDrawer(client);
   await evaluatePageFunction(client, async () => {
@@ -32783,9 +32873,16 @@ async function runSceneBlockOverlapViewport(client, viewport) {
     finalStats.videoBadgeVisible &&
     finalStats.pagerLabel.includes("/ 250") &&
     finalStats.overviewNodeCount < 3_500 &&
-    finalStats.selectedMarkerId === switchStats.selectedAfterVideo &&
-    finalStats.selectedMarkerAria.includes("Block #" + switchStats.selectedAfterVideo) &&
-    finalStats.selectedMarkerAria.includes("duration") &&
+    (
+      finalStats.selectedMarkerId === switchStats.selectedAfterVideo &&
+      finalStats.selectedMarkerAria.includes("Block #" + switchStats.selectedAfterVideo) &&
+      finalStats.selectedMarkerAria.includes("duration")
+      || (
+        clippedDragStats.settledFromInspector === true &&
+        finalStats.selectedMarkerId === "" &&
+        finalStats.selectedRowId === String(switchStats.selectedAfterVideo)
+      )
+    ) &&
     (!shouldCaptureViewport(viewport) || screenshotVerification?.verified === true) &&
     hasNoOuterOverflow(containment)
   );
