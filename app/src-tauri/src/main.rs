@@ -73,6 +73,8 @@ mod show_artnet_acceptance_probe;
 mod show_artnet_loopback_route_tests;
 #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
 mod show_spout_outputs;
+#[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+mod show_spout_generic_sync;
 
 use base64::Engine as _;
 use dj_link_persistence_runtime::{
@@ -71063,60 +71065,12 @@ fn sync_external_video_transports_from_snapshot(
     } = context;
     let plans =
         video::build_external_video_io_route_plans(&snapshot.video, &video::video_runtime_status());
-    // The two fixed show senders are an all-or-nothing R4-owned pair.  Generic
-    // Spout remains available only while that pair is absent.  Silently
-    // dropping a conflicting plan would leave a stale engine endpoint and a
-    // non-observable physical split, so conflicts are explicit before the
-    // generic driver can mutate either worker registry.
     #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
-    let plans = {
-        let mut plans = plans;
-        let is_reserved_show_name = |label: &str, endpoint_name: &str| {
-            matches!(
-                label,
-                show_spout_outputs::SHOW_SPOUT_BACKGROUND_NAME
-                    | show_spout_outputs::SHOW_SPOUT_FOREGROUND_NAME
-            ) || matches!(
-                endpoint_name,
-                show_spout_outputs::SHOW_SPOUT_BACKGROUND_NAME
-                    | show_spout_outputs::SHOW_SPOUT_FOREGROUND_NAME
-            )
-        };
-        let has_reserved_show_output = snapshot.video.outputs.iter().any(|output| {
-            is_reserved_show_name(
-                &output.label,
-                output.endpoint_name.as_deref().unwrap_or_default(),
-            )
-        });
-        match show_spout_outputs::validate_show_spout_outputs_with_compositions(
-            &snapshot.video.outputs,
-            &snapshot.video.compositions,
-        ) {
-            Ok(_) => {
-                if plans.outputs.iter().any(|plan| {
-                    plan.kind == VideoOutputKind::SpoutSender
-                        && !is_reserved_show_name(&plan.label, &plan.endpoint_name)
-                }) {
-                    return Err(
-                        "Generic Spout synchronization is blocked while the strict show pair is authored or active"
-                            .to_string(),
-                    );
-                }
-                plans
-                    .outputs
-                    .retain(|plan| plan.kind != VideoOutputKind::SpoutSender);
-            }
-            Err(show_spout_outputs::ShowSpoutValidationError::MissingPair)
-                if !has_reserved_show_output => {}
-            Err(error) if has_reserved_show_output => {
-                return Err(format!(
-                    "Generic Spout synchronization is blocked by an invalid or conflicting strict show pair: {error}"
-                ));
-            }
-            Err(_) => {}
-        }
-        plans
-    };
+    let plans = show_spout_generic_sync::filter_generic_spout_sync_plans(
+        plans,
+        &snapshot.video.outputs,
+        &snapshot.video.compositions,
+    )?;
     let mut transport = transport
         .lock()
         .map_err(|_| "External video transport runtime lock was poisoned".to_string())?;
