@@ -101,3 +101,49 @@ Evidence files live under `target/qa/mcp-fixture-roundtrip-20260906/`:
 `repaired-loaded-mcp.json`, `success-native-roundtrip.json`,
 `final-mcp-probe.json`, `verification.json`. `verify.mjs` asserts the observed
 round-trip, stale rejection, all-fixture equality, output denial and file hashes.
+
+## Subsequent read-only Unity acceptance audit
+
+Base `ab5589723c66f98ab6791952ece71042dd64bfd9`; product remains alpha.69.
+The Unity MCP connection is now available and was pinned to instance
+`590bbd28-07bd-4938-adc3-e6283ede43e7`, project
+`ArtNetForUnity-OshinoTools-HDRP-Test`. Live MCP reads found
+`DSF2026_Visualizer` loaded and clean, Play active, not paused, compiling or
+updating. Both screen objects and their Spout receivers/surface components are
+active. This audit made no Unity scene, playback or asset changes.
+
+Scoped component reads confirmed:
+
+| Surface | Receiver name | Expected source | Crop to physical 5:2 | Runtime observation |
+| --- | --- | --- | --- | --- |
+| Foreground | Syndocal Foreground | 3840 x 2160 | true | Stale, connected false, contract supported |
+| Background | Syndocal Background | 1920 x 1080 | true | Stale, connected false, contract supported |
+
+Both contract-error strings were empty. Receiver texture references exist, but
+neither their existence nor Play mode proves fresh frames. Syndocal remains on
+the output-disabled offline derivative described above; this audit did not
+activate output. Consequently the Stale observations do not reproduce the
+reported Video BO recovery failure or establish frame cadence.
+
+The current acceptance boundary is:
+
+- Native MCP fixture editing, independent readback, stale-intent rejection and
+  restoration are complete as evidenced above.
+- Video BO/Follow fixes and Spout worker recovery have focused and Windows
+  native evidence in [the overnight checkpoint](OVERNIGHT_FOLLOW_MAPPING_2026-09-06.md)
+  and the Spout recovery section of [the worker lifecycle checkpoint](RECORDING_LIFECYCLE_2026-09-06.md).
+  Unity Video BO recovery, lighting/video isolation and frame cadence still
+  require an active-output observation; receiver configuration alone does not
+  close them.
+- GUI drag-release and Undo/Redo remain separate from the native transform
+  round-trip. Project disk saving was not exercised.
+- [Recording lifecycle](RECORDING_LIFECYCLE_2026-09-06.md) owns the implemented
+  worker retention, separation and diagnostic-reader joining evidence. Full
+  renderer/encoder/Drop cancellation deadlines remain open; the bounded
+  explicit Stop wait is not a total shutdown deadline.
+
+No new performance improvement or full-roadmap completion is claimed by this
+read-only audit. Original show files, Unity assets and the unrelated dirty
+viewport checker remain preserved. Next acceptance should use the original
+Unity test show deliberately: the currently open offline copy intentionally
+has both video outputs disabled.
