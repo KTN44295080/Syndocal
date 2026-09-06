@@ -204,6 +204,7 @@ assert.deepEqual(
 const stageRoutes = {
   unit: [
     "set_fixture_transform",
+    "set_fixture_transforms",
     "set_stage_map_config",
     "apply_stage_map_preset",
     "remove_stage_map_preset",
@@ -234,7 +235,7 @@ const stageArgsByRoute = new Map([
   ["import_stage_map_preset", { preset: { label: "  Imported  " } }],
 ]);
 const stageArgs = (route) => stageArgsByRoute.get(route) ?? {};
-assert.equal(allStageRoutes.length, 9, "exactly nine Stage routes are renderer-ticketed");
+assert.equal(allStageRoutes.length, 10, "ten Stage routes include the atomic fixture group transform");
 for (const route of allStageRoutes) {
   const receipt = validStageReceiptByRoute.get(route);
   assert.equal(

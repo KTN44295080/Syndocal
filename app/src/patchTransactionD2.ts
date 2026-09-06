@@ -12,9 +12,10 @@ export type PatchRepairTransactionCommand =
   | "repair_fixture_profile"
   | StageRendererTicketedCommand;
 
-/** The nine Stage routes ticketed on the same backend project transaction lane. */
+/** Stage routes ticketed on the same backend project transaction lane. */
 export type StageRendererTicketedCommand =
   | "set_fixture_transform"
+  | "set_fixture_transforms"
   | "set_stage_map_config"
   | "save_stage_map_preset"
   | "apply_stage_map_preset"
@@ -26,6 +27,7 @@ export type StageRendererTicketedCommand =
 
 const stageRendererTicketedCommands: readonly string[] = [
   "set_fixture_transform",
+  "set_fixture_transforms",
   "set_stage_map_config",
   "save_stage_map_preset",
   "apply_stage_map_preset",
@@ -46,6 +48,7 @@ const stageRoutePayloadFamily = (
 ): StageRoutePayloadFamily | null => {
   switch (command) {
     case "set_fixture_transform":
+    case "set_fixture_transforms":
     case "set_stage_map_config":
     case "apply_stage_map_preset":
     case "remove_stage_map_preset":

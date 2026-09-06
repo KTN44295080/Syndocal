@@ -22,8 +22,17 @@ const [rust, sceneCreationModule, app, transactionModule, recoveryModule, sceneB
 ]);
 
 const recoveryController = await readWorkspaceFile("app/src/createProjectTransactionRecoveryController.ts");
-assert.match(app, /createProjectTransactionRecoveryController\(\{\s*invoke: tauriInvoke,/s, "App connects the recovery controller to the raw native port");
+const mutationController = await readWorkspaceFile("app/src/projectTransactionMutationController.ts");
+assert.match(app, /createProjectTransactionRecoveryController\(\{\s*invoke: \(command, args\) => tauriInvoke\(command, args\),/s, "App connects the recovery controller to the raw native port without reentering the transaction facade");
 assert.match(app, /dispatchHistoryMutation:.*window\.dispatchEvent[\s\S]*?projectHistoryChangedEvent/s, "App retains history event delivery at the composition boundary");
+assert.match(app, /createProjectTransactionMutationController\(\{\s*invoke: \(command, args\) => tauriInvoke\(command, args\),/s,
+  "the extracted mutation controller receives only the raw transport");
+assert.match(app, /return executeProjectTransactionMutation<T>\(\{[\s\S]*?transaction,[\s\S]*?identity: transactionIdentity,/s,
+  "App delegates the exact opened ticket and identity to the mutation controller");
+assert.doesNotMatch(app, /tauriInvoke<T>\(command, ticketedArgs\)/,
+  "App must not retain a second raw mutation implementation after extraction");
+assert.doesNotMatch(app, /class ProjectTransactionPublication(?:Unconfirmed|Indeterminate)Error/,
+  "publication errors must retain one shared constructor identity");
 
 // This is an executable production-source contract check, not a second
 // transaction implementation. The state machine itself is exercised by the
@@ -81,13 +90,13 @@ assert.match(
   "frontend Begin must converge through reply-loss recovery",
 );
 assert.match(
-  app,
+  mutationController,
   /cancelProjectTransactionWithRecovery\(/,
   "frontend Cancel must converge through terminal recovery after a lost reply",
 );
 assert.match(
-  app,
-  /const settleTerminal = createAppProjectTransactionTerminalSettlement\(transactionIdentity\);[\s\S]*?await commitProjectTransactionWithRecovery\(transaction, transactionIdentity, settleTerminal\);/s,
+  mutationController,
+  /const settleTerminal = ports\.createAppProjectTransactionTerminalSettlement\(identity\);[\s\S]*?await ports\.commitProjectTransactionWithRecovery\(transaction, identity, settleTerminal\);/s,
   "the central renderer mutation facade must retain one exact settlement across Commit and ACK recovery",
 );
 assert.match(
@@ -101,17 +110,17 @@ assert.match(
   "frontend Cancel reply loss must retry only the exact Cancel receipt",
 );
 assert.match(
-  app,
-  /openedTransactionCancellation = cancelProjectTransactionWithRecovery\(transaction, transactionIdentity\);/,
+  mutationController,
+  /openedTransactionCancellation = ports\.cancelProjectTransactionWithRecovery\(transaction, identity\);/,
   "outer cleanup must retain the exact Cancel promise instead of swallowing it",
 );
 assert.doesNotMatch(
-  app,
-  /cancelProjectTransactionWithRecovery\(transaction, transactionIdentity\)\.catch\(/,
+  mutationController,
+  /cancelProjectTransactionWithRecovery\(transaction, identity\)\.catch\(/,
   "outer cleanup must not swallow a failed terminal Cancel",
 );
 assert.equal(
-  [...app.matchAll(/tauriInvoke<T>\(command, ticketedArgs\)/g)].length,
+  [...mutationController.matchAll(/ports\.invoke<T>\(command, ticketedArgs\)/g)].length,
   1,
   "the raw renderer mutation must be dispatched exactly once; recovery may not replay it",
 );
@@ -151,7 +160,7 @@ assert.match(
   "foreground terminal recovery must retain its exact action, identity, ticket shape, and retry callback",
 );
 assert.match(
-  app,
+  mutationController,
   /ProjectTransactionTerminalMalformedMutationError[\s\S]*?ProjectTransactionTerminalRecoveryHoldError/s,
   "a malformed terminal result must not fall through to outer Cancel",
 );
@@ -500,8 +509,8 @@ assert.match(
   "Bank reorder must not retain a legacy nested sub-request inside the strict request envelope",
 );
 assert.match(
-  app,
-  /const strictTicketedRequestMutation = command === "set_fixture_transform"[\s\S]*?command === "move_cue_between_scene_banks_batch";[\s\S]*?const ticketedArgs = strictTicketedRequestMutation\s*\? \{ request: ticketedRequest \}\s*:\s*ticketedRequest;/s,
+  mutationController,
+  /const strictTicketedRequestMutation = command === "set_fixture_transform"[\s\S]*?command === "set_fixture_transforms"[\s\S]*?command === "move_cue_between_scene_banks_batch";[\s\S]*?const ticketedArgs = strictTicketedRequestMutation\s*\? \{ request: ticketedRequest \}\s*:\s*ticketedRequest;/s,
   "fixture transforms and cross-Bank Scene moves must cross Tauri in one strict nested ticket request object",
 );
 for (const [requestType, handler] of [

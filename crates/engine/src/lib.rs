@@ -184,6 +184,10 @@ use protocol::{
 use thiserror::Error;
 
 const ENGINE_QUEUE_CAPACITY: usize = 4096;
+/// Maximum number of fixture transforms admitted as one Stage transaction.
+/// This matches the renderer's bounded operator selection surface so one
+/// gesture cannot manufacture an unbounded history or publication payload.
+pub const MAX_FIXTURE_TRANSFORM_BATCH: usize = 4_096;
 /// Emergency safer-direction commands never wait behind the normal engine
 /// command backlog. The app-side S0 token bucket admits at most eight burst
 /// attempts, while this larger queue leaves bounded headroom for local UI
@@ -3398,11 +3402,21 @@ pub fn cue_list_labels_collide(candidate: &str, existing: &str) -> bool {
 /// same admitted shared-snapshot publication machinery as the D3/PATCH
 /// surface; no parallel transaction or receipt system is introduced.
 #[derive(Debug, Clone, PartialEq)]
+pub struct StageFixtureTransform {
+    pub fixture_id: FixtureId,
+    pub position: Vec3,
+    pub rotation: Rotation3,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum StageProjectMutation {
     SetFixtureTransform {
         fixture_id: FixtureId,
         position: Vec3,
         rotation: Rotation3,
+    },
+    SetFixtureTransforms {
+        transforms: Vec<StageFixtureTransform>,
     },
     SetStageMapConfig(StageMapConfig),
     SaveStageMapPreset {
@@ -21741,6 +21755,75 @@ impl EngineRuntime {
                 }
                 fixture.request.position = position;
                 fixture.request.rotation = rotation;
+                Ok(StageProjectMutationOutcome::Applied)
+            }
+            StageProjectMutation::SetFixtureTransforms { transforms } => {
+                if transforms.is_empty() {
+                    return Err("At least one fixture transform is required".to_string());
+                }
+                if transforms.len() > MAX_FIXTURE_TRANSFORM_BATCH {
+                    return Err(format!(
+                        "Fixture transform batch supports at most {MAX_FIXTURE_TRANSFORM_BATCH} fixtures"
+                    ));
+                }
+
+                // Resolve every target and validate every value before taking
+                // any mutable reference.  This is the atomicity boundary for
+                // the group gesture: a bad final item cannot leave earlier
+                // fixtures partially transformed.
+                let mut seen = HashSet::with_capacity(transforms.len());
+                let fixture_indices_by_id = self
+                    .fixtures
+                    .iter()
+                    .enumerate()
+                    .map(|(index, fixture)| (fixture.id, index))
+                    .collect::<HashMap<_, _>>();
+                let mut fixture_indices = Vec::with_capacity(transforms.len());
+                for transform in &transforms {
+                    if !transform.position.x.is_finite()
+                        || !transform.position.y.is_finite()
+                        || !transform.position.z.is_finite()
+                        || !transform.rotation.pitch.is_finite()
+                        || !transform.rotation.yaw.is_finite()
+                        || !transform.rotation.roll.is_finite()
+                    {
+                        return Err(format!(
+                            "Fixture {} transform contains non-finite values",
+                            transform.fixture_id
+                        ));
+                    }
+                    if !seen.insert(transform.fixture_id) {
+                        return Err(format!(
+                            "Fixture transform batch contains duplicate fixture {}",
+                            transform.fixture_id
+                        ));
+                    }
+                    let Some(&index) = fixture_indices_by_id.get(&transform.fixture_id) else {
+                        return Err(format!(
+                            "Fixture {} was not found",
+                            transform.fixture_id
+                        ));
+                    };
+                    fixture_indices.push(index);
+                }
+
+                let changed = fixture_indices
+                    .iter()
+                    .zip(&transforms)
+                    .any(|(index, transform)| {
+                        let fixture = &self.fixtures[*index];
+                        fixture.request.position != transform.position
+                            || fixture.request.rotation != transform.rotation
+                    });
+                if !changed {
+                    return Ok(StageProjectMutationOutcome::Unchanged);
+                }
+
+                for (index, transform) in fixture_indices.into_iter().zip(transforms) {
+                    let fixture = &mut self.fixtures[index];
+                    fixture.request.position = transform.position;
+                    fixture.request.rotation = transform.rotation;
+                }
                 Ok(StageProjectMutationOutcome::Applied)
             }
             StageProjectMutation::SetStageMapConfig(config) => {
@@ -68445,6 +68528,9 @@ mod tests {
 
     #[path = "../snapshot_read_tests.rs"]
     mod snapshot_read_tests;
+
+    #[path = "../fixture_transform_batch_tests.rs"]
+    mod fixture_transform_batch_tests;
 
     #[path = "../snapshot_output_read_benchmark.rs"]
     mod snapshot_output_read_benchmark;

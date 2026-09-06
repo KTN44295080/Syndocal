@@ -20,6 +20,8 @@ use std::{
 
 #[path = "video_recording_encoder.rs"]
 pub(crate) mod encoder;
+#[path = "video_recording_renderer_access.rs"]
+mod renderer_access;
 
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct RecordingAudioInput {
@@ -130,12 +132,20 @@ pub(super) fn run_video_output_recording(context: VideoOutputRecordingContext) {
         return;
     };
     let mut frames_written = 0_u64;
-    let mut pipe_error = None;
+    let mut recording_error = None;
     let frame_interval = Duration::from_secs_f64(1.0 / frame_rate as f64);
     let mut next_frame_at = Instant::now();
     while !stop.load(Ordering::Acquire) {
         let output_preview = capture_video_output_preview_effect_snapshot(&engine);
-        let frame = renderer.lock().ok().and_then(|mut renderer| {
+        let frame = {
+            let mut renderer = match renderer_access::acquire(&renderer, &stop) {
+                Ok(Some(renderer)) => renderer,
+                Ok(None) => break,
+                Err(error) => {
+                    recording_error = Some(error.to_string());
+                    break;
+                }
+            };
             renderer
                 .frame_provider_mut()
                 .set_bpm(Some(output_preview.snapshot.clock.bpm));
@@ -149,7 +159,7 @@ pub(super) fn run_video_output_recording(context: VideoOutputRecordingContext) {
                     height,
                 )
                 .ok()
-        });
+        };
         if stop.load(Ordering::Acquire) {
             break;
         }
@@ -161,7 +171,7 @@ pub(super) fn run_video_output_recording(context: VideoOutputRecordingContext) {
                     && frame.data.len() == width as usize * height as usize * 4 =>
             {
                 if let Err(error) = stdin.write_all(&frame.data) {
-                    pipe_error = Some(format!("FFmpeg pipe failed: {error}"));
+                    recording_error = Some(format!("FFmpeg pipe failed: {error}"));
                     break;
                 }
                 frames_written = frames_written.saturating_add(1);
@@ -189,7 +199,7 @@ pub(super) fn run_video_output_recording(context: VideoOutputRecordingContext) {
         }
     }
     drop(stdin);
-    let encoded = match pipe_error {
+    let encoded = match recording_error {
         Some(error) => encoder.fail(error),
         None => encoder.finish(),
     };

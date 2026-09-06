@@ -93,8 +93,8 @@ use engine::{
     validate_value_effect_request as validate_engine_value_effect_request, EngineCommand,
     EngineHandle, EnginePersistenceMutationSubmission, FixtureFlagClearKind,
     FixturePatchPublicationFailure, MediaAssetImportCandidate, MediaAssetTransaction,
-    OutputOwnershipActivation, SnapshotPublicationFailure, StageProjectMutation,
-    StageProjectMutationOutcome, TrustedTimelineLoopRuntimeAction,
+    OutputOwnershipActivation, SnapshotPublicationFailure, StageFixtureTransform,
+    StageProjectMutation, StageProjectMutationOutcome, TrustedTimelineLoopRuntimeAction,
     VideoClipSlotImportAndAssignCandidate, VideoClipSlotImportAssignment, VideoIsfStackMutation,
 };
 use io::midi::{
@@ -3897,6 +3897,23 @@ struct SetFixtureTransformRequest {
     fixture_id: FixtureId,
     position: Vec3,
     rotation: Rotation3,
+    project_transaction_id: u64,
+    expected_epoch: u64,
+    owner_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SetFixtureTransformBatchItem {
+    fixture_id: FixtureId,
+    position: Vec3,
+    rotation: Rotation3,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SetFixtureTransformsRequest {
+    transforms: Vec<SetFixtureTransformBatchItem>,
     project_transaction_id: u64,
     expected_epoch: u64,
     owner_id: String,
@@ -24674,7 +24691,7 @@ fn is_full_lock_correlated_terminal_recovery_runtime_route(command: &str) -> boo
         .is_ok()
 }
 
-const RECEIPT_BACKED_SELF_ADMITTED_RENDERER_ROUTES: [&str; 11] = [
+const RECEIPT_BACKED_SELF_ADMITTED_RENDERER_ROUTES: [&str; 12] = [
     "add_stage_object",
     "apply_stage_map_preset",
     "import_stage_map_preset",
@@ -24684,6 +24701,7 @@ const RECEIPT_BACKED_SELF_ADMITTED_RENDERER_ROUTES: [&str; 11] = [
     "repair_fixture_profile",
     "save_stage_map_preset",
     "set_fixture_transform",
+    "set_fixture_transforms",
     "set_stage_map_config",
     "set_stage_object",
 ];
@@ -28909,6 +28927,51 @@ fn set_fixture_transform(
             },
         )?,
         "set_fixture_transform",
+    )
+}
+
+#[tauri::command]
+fn set_fixture_transforms(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    request: SetFixtureTransformsRequest,
+) -> Result<(), String> {
+    let SetFixtureTransformsRequest {
+        transforms,
+        project_transaction_id,
+        expected_epoch,
+        owner_id,
+    } = request;
+    validate_fixture_transform_batch(&transforms)?;
+    stage_project_transaction_unit_result(
+        apply_stage_project_mutation_in_project_transaction(
+            &state,
+            StageProjectTransactionRequest {
+                project_transaction_id,
+                expected_epoch,
+                owner_id,
+                window_label: window.label().to_string(),
+                command_name: "set_fixture_transforms",
+            },
+            move |_| Ok(transforms),
+            |_, transforms| {
+                Ok(PreparedStageProjectMutation {
+                    mutation: StageProjectMutation::SetFixtureTransforms {
+                        transforms: transforms
+                            .into_iter()
+                            .map(|transform| StageFixtureTransform {
+                                fixture_id: transform.fixture_id,
+                                position: transform.position,
+                                rotation: transform.rotation,
+                            })
+                            .collect(),
+                    },
+                    stage_object_id: None,
+                    label: None,
+                })
+            },
+        )?,
+        "set_fixture_transforms",
     )
 }
 
@@ -58036,6 +58099,7 @@ fn is_stage_project_transaction_command(command_name: &str) -> bool {
     matches!(
         command_name,
         "set_fixture_transform"
+            | "set_fixture_transforms"
             | "set_stage_map_config"
             | "save_stage_map_preset"
             | "apply_stage_map_preset"
@@ -83625,6 +83689,31 @@ fn validate_fixture_transform(position: &Vec3, rotation: &Rotation3) -> Result<(
     Ok(())
 }
 
+fn validate_fixture_transform_batch(
+    transforms: &[SetFixtureTransformBatchItem],
+) -> Result<(), String> {
+    if transforms.is_empty() {
+        return Err("At least one fixture transform is required".to_string());
+    }
+    if transforms.len() > engine::MAX_FIXTURE_TRANSFORM_BATCH {
+        return Err(format!(
+            "Fixture transform batch supports at most {} fixtures",
+            engine::MAX_FIXTURE_TRANSFORM_BATCH
+        ));
+    }
+    let mut seen = HashSet::with_capacity(transforms.len());
+    for transform in transforms {
+        validate_fixture_transform(&transform.position, &transform.rotation)?;
+        if !seen.insert(transform.fixture_id) {
+            return Err(format!(
+                "Fixture transform batch contains duplicate fixture {}",
+                transform.fixture_id
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn validate_stage_map_preset_file(file: &StageMapPresetFile) -> Result<(), String> {
     if file.version != 1 {
         return Err(format!(
@@ -85720,6 +85809,10 @@ pub(crate) mod tests {
     include!("project_retirement_boundary_tests.rs");
     use super::*;
     use protocol::{ClockSource, VideoLayerSummary};
+
+    mod fixture_transform_batch_tests {
+        include!("fixture_transform_batch_tests.rs");
+    }
 
     #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
     mod show_spout_activation_commit_tests {
@@ -92939,7 +93032,7 @@ pub(crate) mod tests {
 
     #[test]
     fn self_admitted_renderer_routes_are_exact_and_preserve_reply_loss_retry() {
-        const ROUTE_ADMISSION_TARGETS: [(&str, &str, &str); 11] = [
+        const ROUTE_ADMISSION_TARGETS: [(&str, &str, &str); 12] = [
             (
                 "add_stage_object",
                 "apply_stage_project_mutation_in_project_transaction",
@@ -92982,6 +93075,11 @@ pub(crate) mod tests {
             ),
             (
                 "set_fixture_transform",
+                "apply_stage_project_mutation_in_project_transaction",
+                "apply_stage_project_mutation_in_project_transaction_with_publish",
+            ),
+            (
+                "set_fixture_transforms",
                 "apply_stage_project_mutation_in_project_transaction",
                 "apply_stage_project_mutation_in_project_transaction_with_publish",
             ),
@@ -93563,20 +93661,21 @@ pub(crate) mod tests {
                 "ownerId": "renderer:test"
             }
         });
-        let nested =
-            renderer_ticketed_request_payload("set_fixture_transform", &nested).unwrap();
-        assert_eq!(
-            required_tauri_invoke_json_u64(nested, "projectTransactionId").unwrap(),
-            9
-        );
-        assert_eq!(
-            required_tauri_invoke_json_u64(nested, "expectedEpoch").unwrap(),
-            4
-        );
-        assert_eq!(
-            required_tauri_invoke_json_string(nested, "ownerId").unwrap(),
-            "renderer:test"
-        );
+        for command in ["set_fixture_transform", "set_fixture_transforms"] {
+            let nested = renderer_ticketed_request_payload(command, &nested).unwrap();
+            assert_eq!(
+                required_tauri_invoke_json_u64(nested, "projectTransactionId").unwrap(),
+                9
+            );
+            assert_eq!(
+                required_tauri_invoke_json_u64(nested, "expectedEpoch").unwrap(),
+                4
+            );
+            assert_eq!(
+                required_tauri_invoke_json_string(nested, "ownerId").unwrap(),
+                "renderer:test"
+            );
+        }
     }
 
     #[derive(Default)]
@@ -129493,6 +129592,7 @@ fn main() {
             set_group_strobe,
             set_group_park,
             set_fixture_transform,
+            set_fixture_transforms,
             set_stage_map_config,
             set_touch_surface,
             set_fixture_highlight,

@@ -61,9 +61,9 @@ const KEYBOARD_SHORTCUT_SOURCE_MANIFEST: &str =
 const KEYBOARD_SHORTCUT_SOURCE_MANIFEST_SCHEMA_VERSION: u16 = 1;
 const KEYBOARD_APP_SHORTCUT_SOURCE_COUNT: usize = 30;
 const KEYBOARD_PROJECT_FILE_SHORTCUT_SOURCE_COUNT: usize = 3;
-const FROZEN_TAURI_ROUTE_ADMISSION_COUNT: usize = 514;
+const FROZEN_TAURI_ROUTE_ADMISSION_COUNT: usize = 515;
 const FROZEN_TAURI_ROUTE_ADMISSION_SHA256: &str =
-    "bd34a85b031e607f22c3e983e74cc6fee626f7a6904df0b96e7d76f2c9adfc25";
+    "6414db9fd02f7147ecc6b7503607bdb77e07a871e02f5b0c1cdd7742a48e37b5";
 /// The command source is parsed and validated exactly once.  Local discovery
 /// calls only clone this immutable, validated value; they never parse source
 /// text or make an external request on the invocation path.
@@ -602,6 +602,7 @@ fn is_renderer_ticketed_project_mutation(command: &str) -> bool {
             | "set_group_attribute"
             | "commit_programmer"
             | "set_fixture_transform"
+            | "set_fixture_transforms"
             | "set_stage_map_config"
             | "set_output_config"
             | "set_dmx_outputs"

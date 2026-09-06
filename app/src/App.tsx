@@ -300,18 +300,11 @@ import type { LiveAudioInputSavedSelectionState } from "./components/LiveAudioIn
 import {
   createPatchRepairSingleflight,
   fixturePatchIdsAreExact,
-  isStageRendererTicketedCommand,
-  publishedCommandLegacyReplyFromRecoveredResult,
-  publishedCommandRecoveryDisposition,
-  projectTransactionCommandResultIsWellFormed,
-  type PatchRepairTransactionCommand,
 } from "./patchTransactionD2";
 import {
-  ProjectTransactionTerminalAcknowledgementUnresolvedError,
-  ProjectTransactionTerminalMalformedMutationError,
-  ProjectTransactionTerminalRecoveryHoldError,
-  ProjectTransactionTerminalRecoveryUnresolvedError,
-} from "./projectTransactionRecovery";
+  createProjectTransactionMutationController,
+  ProjectTransactionPublicationIndeterminateError,
+} from "./projectTransactionMutationController";
 import {
   createTimelineCueAudioRefreshQueue,
   createTimelineCueAudioSettingsQueue,
@@ -615,6 +608,7 @@ import { createDvcImportController } from "./dvcImportController";
 import { createMappingRenderModel } from "./createMappingRenderModel";
 import { liveDmxPollIntervalMs } from "./fixtureLiveColor";
 import { createMappingInteractionController } from "./createMappingInteractionController";
+import { createMappingFixtureTransformGroupCommit } from "./mappingFixtureTransformGroup";
 import { createMappingLayoutController } from "./createMappingLayoutController";
 import { createSceneBankSceneCreationController } from "./sceneBankSceneCreationController";
 import {
@@ -1138,6 +1132,7 @@ const projectMutationCommands = new Set([
   "set_group_attribute",
   "commit_programmer",
   "set_fixture_transform",
+  "set_fixture_transforms",
   "set_stage_map_config",
   "set_output_config",
   "set_dmx_outputs",
@@ -1635,100 +1630,15 @@ const invoke = async <T,>(
   } catch (beginError) {
     throw beginError;
   }
-  // One opened ticket owns one terminal cleanup promise. A failed cleanup is
-  // deliberately retained and rethrown to the foreground; issuing a second
-  // Cancel from an outer catch would otherwise obscure the exact unresolved
-  // receipt and can strand the backend's closing lane.
-  let openedTransactionCancellation: Promise<ProjectHistoryMutationResult | null> | null = null;
-  const cancelOpenedProjectTransaction = () => {
-    if (!openedTransactionCancellation) {
-      openedTransactionCancellation = cancelProjectTransactionWithRecovery(transaction, transactionIdentity);
-    }
-    return openedTransactionCancellation;
-  };
-  try {
-    // A signal can arrive while Begin itself is awaiting. Recheck after its
-    // reply, before issuing the staged mutation. Release this newly opened
-    // ticket immediately, then await the helper's exact media-operation cancel
-    // request when available. Terminal Cancel recovery below keeps history
-    // delivery exact even when the transport reply is lost.
-    if (shouldAbortProjectMutation?.()) {
-      const mediaAbort = Promise.resolve(awaitProjectMutationAbort?.()).catch(() => undefined);
-      await cancelOpenedProjectTransaction();
-      await mediaAbort;
-      throw new DOMException("Project mutation was cancelled after Begin.", "AbortError");
-    }
-    onProjectTransactionOpened?.();
-    // Backend mutation commands may opt into server-authoritative transaction
-    // ownership. Tauri ignores unused object fields for legacy commands, while
-    // newly hardened commands reject raw/direct IPC without this exact ticket.
-    const ticketedRequest = {
-      ...commandArgs,
-      projectTransactionId: transaction.transaction_id,
-      expectedEpoch: transaction.project_epoch,
-      ownerId: projectTransactionOwnerId,
-    };
-    const strictTicketedRequestMutation = command === "set_fixture_transform"
-      || command === "move_cue_between_scene_banks_batch";
-    const ticketedArgs = strictTicketedRequestMutation
-      ? { request: ticketedRequest }
-      : ticketedRequest;
-    const publishedCommand: PatchRepairTransactionCommand | null = command === "patch_fixtures"
-      ? command
-      : command === "repair_fixture_profile"
-        ? command
-        : isStageRendererTicketedCommand(command)
-          ? command
-          : null;
-    let result: T;
-    try {
-      const replied = await tauriInvoke<T>(command, ticketedArgs);
-      // Stage routes keep their legacy reply shapes on the happy path; only
-      // PATCH/Repair expose and validate their receipt there.
-      if (publishedCommand && !isStageRendererTicketedCommand(publishedCommand)
-        && !projectTransactionCommandResultIsWellFormed(replied, publishedCommand, commandArgs)) {
-        throw new Error(`${publishedCommand} returned a malformed published-command receipt.`);
-      }
-      result = replied;
-    } catch (commandError) {
-      if (!publishedCommand) throw commandError;
-      const recovered = await recoverPublishedProjectTransactionCommandResult(
-        transactionIdentity,
-        publishedCommand,
-        commandArgs,
-      );
-      const disposition = publishedCommandRecoveryDisposition(recovered);
-      if (disposition === "commit" && recovered.kind === "published") {
-        // Only a recovered Stage receipt is converted back to its legacy shape.
-        result = publishedCommandLegacyReplyFromRecoveredResult(
-          publishedCommand,
-          recovered.result,
-          commandArgs,
-        ) as T;
-      } else if (disposition === "hold") {
-        // A command can finish publishing after its Tauri reply is lost.  No
-        // cancel/replay is safe until the backend's receipt says otherwise.
-        throw recovered.kind === "indeterminate"
-          ? new ProjectTransactionPublicationIndeterminateError(publishedCommand, recovered.error)
-          : new ProjectTransactionPublicationUnconfirmedError(publishedCommand);
-      } else {
-        throw commandError;
-      }
-    }
-    const settleTerminal = createAppProjectTransactionTerminalSettlement(transactionIdentity);
-    await commitProjectTransactionWithRecovery(transaction, transactionIdentity, settleTerminal);
-    return result;
-  } catch (error) {
-    if (!(error instanceof ProjectTransactionPublicationUnconfirmedError)
-      && !(error instanceof ProjectTransactionPublicationIndeterminateError)
-      && !(error instanceof ProjectTransactionTerminalAcknowledgementUnresolvedError)
-      && !(error instanceof ProjectTransactionTerminalMalformedMutationError)
-      && !(error instanceof ProjectTransactionTerminalRecoveryHoldError)
-      && !(error instanceof ProjectTransactionTerminalRecoveryUnresolvedError)) {
-      await cancelOpenedProjectTransaction();
-    }
-    throw error;
-  }
+  return executeProjectTransactionMutation<T>({
+    command,
+    commandArgs,
+    transaction,
+    identity: transactionIdentity,
+    onOpened: onProjectTransactionOpened,
+    shouldAbort: shouldAbortProjectMutation,
+    awaitAbort: awaitProjectMutationAbort,
+  });
 };
 
 const listen = <T,>(event: string, handler: (event: { payload: T }) => void) => {
@@ -1794,21 +1704,6 @@ type ViewportSceneMatrixBankMoveHistoryEntry = {
   afterCueLists?: CueListSummary[];
   operation?: "move" | "reorder" | "delete";
 };
-
-class ProjectTransactionPublicationUnconfirmedError extends Error {
-  constructor(command: PatchRepairTransactionCommand) {
-    super(`${command} may still be publishing; its terminal receipt was not confirmed. Do not retry yet.`);
-    this.name = "ProjectTransactionPublicationUnconfirmedError";
-  }
-}
-
-class ProjectTransactionPublicationIndeterminateError extends Error {
-  constructor(command: PatchRepairTransactionCommand, detail: string) {
-    super(`${command} publication is indeterminate; restart is required before retrying. ${detail}`);
-    this.name = "ProjectTransactionPublicationIndeterminateError";
-  }
-}
-
 
 interface LiveAudioInputLevels {
   running: boolean;
@@ -1954,6 +1849,15 @@ const {
   ),
   reportRecovery: reportProjectTransactionForegroundRecovery,
   wait: (milliseconds) => new Promise<void>((resolve) => window.setTimeout(resolve, milliseconds)),
+});
+
+const { executeProjectTransactionMutation } = createProjectTransactionMutationController({
+  invoke: (command, args) => tauriInvoke(command, args),
+  ownerId: projectTransactionOwnerId,
+  cancelProjectTransactionWithRecovery,
+  commitProjectTransactionWithRecovery,
+  createAppProjectTransactionTerminalSettlement,
+  recoverPublishedProjectTransactionCommandResult,
 });
 
 // A convergence poll can briefly leave the old transaction/recovery detail in
@@ -22614,6 +22518,9 @@ export default function App() {
     handleMappingStagePointerMove,
     finishMappingStageDrag,
   } = createMappingInteractionController({
+    commitFixtureTransformGroup: createMappingFixtureTransformGroupCommit({
+      commit: (args) => invoke("set_fixture_transforms", args), refreshSnapshot, setMessage,
+    }),
     snapshot,
     mappingViewportBox,
     stageWorldBounds,

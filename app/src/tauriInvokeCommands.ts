@@ -340,6 +340,7 @@ export const FRONTEND_TAURI_INVOKE_COMMANDS = [
   "set_fixture_patch",
   "set_fixture_solo",
   "set_fixture_transform",
+  "set_fixture_transforms",
   "set_group_attribute",
   "set_group_color",
   "set_group_highlight",

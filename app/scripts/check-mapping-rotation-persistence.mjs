@@ -23,6 +23,9 @@ const compile = async (url) => {
 const { createMappingInteractionController } = await import(
   await compile(new URL("../src/createMappingInteractionController.ts", import.meta.url)),
 );
+const { createMappingFixtureTransformGroupCommit } = await import(
+  await compile(new URL("../src/mappingFixtureTransformGroup.ts", import.meta.url)),
+);
 
 const bounds = { minX: -10, maxX: 10, minZ: -10, maxZ: 10 };
 const fixtureWithYaw = (yaw = 20) => ({
@@ -61,6 +64,29 @@ const createHarness = (initialFixtures = [fixtureWithYaw()], stageTool = "select
     selectedIds = typeof next === "function" ? next(selectedIds) : next;
   };
   const controller = createMappingInteractionController({
+    commitFixtureTransformGroup: createMappingFixtureTransformGroupCommit({
+      commit: async (args) => {
+        assert.equal(args.__expectedProjectEpoch, projectEpoch);
+        assert.equal(args.__shouldAbortProjectMutation(), false);
+        const transforms = args.transforms.map(({ fixtureId, position, rotation }) => ({
+          fixture: fixtures.find((fixture) => fixture.id === fixtureId),
+          update: { position, rotation },
+        }));
+        calls.push({ ...transforms[0], transforms });
+        await new Promise((resolve, reject) => pending.push({ resolve: (result) => {
+          if (!result) return reject(new Error("Group transform rejected"));
+          // Once admitted, cancelling the preview cannot revoke a native write.
+          // A replaced project has a different image and cannot receive it.
+          if (args.__expectedProjectEpoch === projectEpoch) fixtures = fixtures.map((fixture) => {
+            const transform = transforms.find((item) => item.fixture.id === fixture.id);
+            return transform ? { ...fixture, ...transform.update } : fixture;
+          });
+          resolve();
+        } }));
+      },
+      refreshSnapshot: async () => ({ fixtures }),
+      setMessage: (message) => messages.push(message),
+    }),
     snapshot: () => ({ fixtures, stage_objects: [], video: { outputs: [] } }),
     mappingViewportBox: () => ({ x: 0, z: 0, width: 100, height: 100 }),
     stageWorldBounds: () => bounds,
@@ -162,14 +188,6 @@ const createHarness = (initialFixtures = [fixtureWithYaw()], stageTool = "select
   };
 };
 
-const waitFor = async (predicate, message) => {
-  for (let attempt = 0; attempt < 20; attempt += 1) {
-    if (predicate()) return;
-    await new Promise((resolve) => setTimeout(resolve, 0));
-  }
-  assert(predicate(), message);
-};
-
 {
   const harness = createHarness();
   harness.begin(1);
@@ -255,12 +273,11 @@ const waitFor = async (predicate, message) => {
   };
   const harness = createHarness([fixtureWithYaw(20), second], "rotate");
   const rotate = harness.stageRotate();
-  assert.equal(harness.calls.length, 1, "group rotation starts with the first selected fixture");
+  assert.equal(harness.calls.length, 1, "group rotation submits one transaction");
+  assert.equal(harness.calls[0].transforms.length, 2);
   assert.deepEqual(harness.calls[0].update.rotation, { pitch: 0, yaw: 90, roll: 0 });
+  assert.deepEqual(harness.calls[0].transforms[1].update.rotation, { pitch: 12, yaw: 190, roll: -8 });
   harness.pending[0].resolve(true);
-  await waitFor(() => harness.calls.length === 2, "group rotation must submit every selected fixture");
-  assert.deepEqual(harness.calls[1].update.rotation, { pitch: 12, yaw: 190, roll: -8 });
-  harness.pending[1].resolve(true);
   await rotate;
   assert.deepEqual(harness.fixtures.map((fixture) => fixture.position), [
     { x: 0, y: 0, z: 0 },
@@ -318,10 +335,10 @@ const waitFor = async (predicate, message) => {
   harness.move(1, 60, 50);
   const finish = harness.finish(1, 60, 50);
   assert.deepEqual(harness.calls[0].update.rotation, { pitch: 0, yaw: 90, roll: 0 });
+  assert.equal(harness.calls.length, 1, "yaw group is a single native transaction");
+  assert.equal(harness.calls[0].transforms.length, 2);
+  assert.deepEqual(harness.calls[0].transforms[1].update.rotation, { pitch: 7, yaw: 60, roll: 3 });
   harness.pending[0].resolve(true);
-  await waitFor(() => harness.calls.length === 2, "yaw drag must submit every selected fixture");
-  assert.deepEqual(harness.calls[1].update.rotation, { pitch: 7, yaw: 60, roll: 3 });
-  harness.pending[1].resolve(true);
   await finish;
   assert.equal(harness.drag, null);
   assert.deepEqual(harness.messages, ["Rotated 2 selected fixtures by 70 deg."]);
@@ -354,6 +371,31 @@ const waitFor = async (predicate, message) => {
   await finish;
   assert.equal(harness.calls.length, 1, "a cancelled group drag must not submit later fixtures");
   assert.deepEqual(harness.messages, [], "a cancelled group drag must not report a stale result");
+  assert.deepEqual(harness.fixtures.map((fixture) => fixture.rotation.yaw), [90, 190],
+    "an already admitted group may finish after UI cancellation; it is not a rollback");
 }
 
-console.log("Mapping rotation persistence checks passed (group delta, preserved orientation, pending preview, duplicate events, rejection, cancellation and stale completion fencing).\n");
+{
+  const first = fixtureWithYaw(20);
+  const second = { ...fixtureWithYaw(120), id: 2, label: "Fixture 2" };
+  const transforms = [first, second].map((fixture) => ({
+    fixture, update: { rotation: { ...fixture.rotation, yaw: 90 } },
+  }));
+  let commits = 0;
+  const messages = [];
+  const commit = createMappingFixtureTransformGroupCommit({
+    commit: async () => { commits += 1; },
+    refreshSnapshot: async () => ({ fixtures: [
+      { ...first, rotation: transforms[0].update.rotation }, second,
+    ] }),
+    setMessage: (message) => messages.push(message),
+  });
+  assert.equal(await commit(transforms, 1, () => false), false);
+  assert.equal(commits, 0, "expired gestures cannot start a transaction");
+  assert.equal(await commit(transforms, 1, () => true), false,
+    "a successful ACK cannot hide a second fixture missing from authoritative confirmation");
+  assert.equal(commits, 1);
+  assert.equal(messages.length, 1);
+}
+
+console.log("Mapping rotation persistence checks passed (single group commit, complete readback, group delta, pending preview, rejection and stale completion fencing).\n");

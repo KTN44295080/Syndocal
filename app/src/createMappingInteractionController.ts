@@ -26,6 +26,7 @@ import type {
 } from "./types";
 import { mappingVideoOutputCorners, type MappingVideoOutputCornerKey } from "./videoOutputMapping";
 import { applyMappingFixtureTransformBatch } from "./mappingFixtureTransformBatch";
+import type { MappingFixtureTransformGroupCommit } from "./mappingFixtureTransformGroup";
 
 type StagePoint = { x: number; z: number };
 type MappingOutputDrag = Extract<MappingDragState, { outputId: number }>;
@@ -39,6 +40,7 @@ type FixtureTransformUpdate = {
 export const MAPPING_FIXTURE_DRAG_THRESHOLD_PX = 4;
 
 interface MappingInteractionControllerOptions {
+  commitFixtureTransformGroup: MappingFixtureTransformGroupCommit;
   snapshot: Accessor<EngineSnapshot>;
   mappingViewportBox: Accessor<MappingViewportBox>;
   stageWorldBounds: Accessor<StageWorldBounds>;
@@ -219,17 +221,9 @@ export function createMappingInteractionController(options: MappingInteractionCo
     };
     pendingStageRotationOperation = operation;
     try {
-      const persisted = await applyMappingFixtureTransformBatch({
-        transforms,
-        setFixtureTransform: (fixture, update, refresh) => {
-          if (!stageRotationOperationIsCurrent(operation)) return Promise.resolve(false);
-          return options.setFixtureTransform(fixture, update, refresh);
-        },
-        refreshSnapshot: options.refreshSnapshot,
-        setMessage: (message) => {
-          if (stageRotationOperationIsCurrent(operation)) options.setMessage(message);
-        },
-      });
+      const persisted = await options.commitFixtureTransformGroup(
+        transforms, operation.projectEpoch, () => stageRotationOperationIsCurrent(operation),
+      );
       if (!stageRotationOperationIsCurrent(operation)) return;
       if (persisted) {
         options.setMessage(
@@ -651,21 +645,10 @@ export function createMappingInteractionController(options: MappingInteractionCo
         }
         pendingFixtureYawDrags.add(drag);
         try {
-          const persisted = await applyMappingFixtureTransformBatch({
-            transforms,
-            setFixtureTransform: (fixture, update, refresh) => {
-              if (options.mappingDrag() !== drag || !mappingProjectEpochIsCurrent(drag.projectEpoch)) {
-                return Promise.resolve(false);
-              }
-              return options.setFixtureTransform(fixture, update, refresh);
-            },
-            refreshSnapshot: options.refreshSnapshot,
-            setMessage: (message) => {
-              if (options.mappingDrag() === drag && mappingProjectEpochIsCurrent(drag.projectEpoch)) {
-                options.setMessage(message);
-              }
-            },
-          });
+          const persisted = await options.commitFixtureTransformGroup(
+            transforms, drag.projectEpoch,
+            () => options.mappingDrag() === drag && mappingProjectEpochIsCurrent(drag.projectEpoch),
+          );
           // A cancellation, project replacement, or newer drag may have
           // replaced this lease while the authority round-trip was pending.
           if (options.mappingDrag() !== drag || !mappingProjectEpochIsCurrent(drag.projectEpoch)) return;

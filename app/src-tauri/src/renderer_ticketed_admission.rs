@@ -5,9 +5,10 @@ use serde_json::Value;
 /// this list separate from the flat legacy routes: accepting either shape
 /// here would let an outer admission check a different object than the
 /// generated command handler dispatches.
-const NESTED_RENDERER_TICKETED_ROUTES: [&str; 2] = [
+const NESTED_RENDERER_TICKETED_ROUTES: [&str; 3] = [
     "move_cue_between_scene_banks_batch",
     "set_fixture_transform",
+    "set_fixture_transforms",
 ];
 
 pub(crate) fn renderer_ticketed_request_payload<'a>(
@@ -47,6 +48,7 @@ mod tests {
     fn typed_renderer_routes_extract_only_the_exact_request_envelope() {
         for command in [
             "set_fixture_transform",
+            "set_fixture_transforms",
             "move_cue_between_scene_banks_batch",
         ] {
             let payload = serde_json::json!({
@@ -71,6 +73,7 @@ mod tests {
     fn typed_renderer_routes_reject_flat_missing_and_ambiguous_envelopes() {
         for command in [
             "set_fixture_transform",
+            "set_fixture_transforms",
             "move_cue_between_scene_banks_batch",
         ] {
             for payload in [
@@ -101,6 +104,7 @@ mod tests {
     fn typed_renderer_routes_reject_non_object_requests() {
         for command in [
             "set_fixture_transform",
+            "set_fixture_transforms",
             "move_cue_between_scene_banks_batch",
         ] {
             for request in [serde_json::Value::Null, serde_json::json!([])] {
