@@ -99,3 +99,12 @@ the user's Unity and test `.sdc` files. No cache cleanup is part of this checkpo
 The additive runtime diagnostic tool, actual current-session tool discovery and
 drag-preview follow-up are tracked in
 [the overnight checkpoint](OVERNIGHT_FOLLOW_MAPPING_2026-09-06.md).
+
+The later [native MCP round-trip checkpoint](MCP_FIXTURE_NATIVE_ROUNDTRIP_2026-09-06.md)
+supersedes the empty-project/changed-fixture acceptance boundary above. A
+derivative preserving the user's 46 fixtures with outputs disabled was opened
+through the documented official single-instance CLI path. The resulting native
+MCP test exposed and repaired nested-ticket admission for fixture rotation and
+scene-bank batch movement; rotation change, stale-token rejection and complete
+restoration passed. GUI drag-release/Undo/Redo, disk-save and Unity output remain
+separate acceptance. The original user file was not modified.

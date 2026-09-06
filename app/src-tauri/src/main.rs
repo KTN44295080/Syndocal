@@ -228,6 +228,7 @@ mod normal_audio_output;
 mod output_lease;
 mod output_lease_keepalive_integration;
 mod output_lease_keepalive_runtime;
+mod renderer_ticketed_admission;
 mod scene_creation;
 mod serial_dmx_machine;
 #[cfg(test)]
@@ -437,6 +438,7 @@ use output_lease::{
     OutputLeaseOwner, OutputLeaseRegistry, OutputLeaseRequest, OutputLeaseRequestAction,
     OutputLeaseResource, OutputLeaseResources,
 };
+use renderer_ticketed_admission::renderer_ticketed_request_payload;
 
 type AppVideoPreviewRenderer = video::VideoPreviewRenderer<
     video::DecoderBackedFrameProvider<ndi_transport::NdiAwareVideoFrameDecoder>,
@@ -24947,9 +24949,11 @@ fn admit_tauri_app_invoke<R: tauri::Runtime>(
                 ))
             }
         };
-        let transaction_id = required_tauri_invoke_json_u64(payload, "projectTransactionId")?;
-        let expected_epoch = required_tauri_invoke_json_u64(payload, "expectedEpoch")?;
-        let owner_id = required_tauri_invoke_json_string(payload, "ownerId")?;
+        let request_payload = renderer_ticketed_request_payload(command, payload)?;
+        let transaction_id =
+            required_tauri_invoke_json_u64(request_payload, "projectTransactionId")?;
+        let expected_epoch = required_tauri_invoke_json_u64(request_payload, "expectedEpoch")?;
+        let owner_id = required_tauri_invoke_json_string(request_payload, "ownerId")?;
         let (external_admission, coordinator, nested_admission) =
             lock_renderer_ticketed_project_mutation(
                 &state,
@@ -93209,6 +93213,28 @@ pub(crate) mod tests {
             assert!(required_tauri_invoke_json_u64(&invalid, "projectTransactionId").is_err());
         }
         assert!(required_tauri_invoke_json_string(&json!({"ownerId": 7}), "ownerId").is_err());
+
+        let nested = json!({
+            "request": {
+                "projectTransactionId": 9,
+                "expectedEpoch": 4,
+                "ownerId": "renderer:test"
+            }
+        });
+        let nested =
+            renderer_ticketed_request_payload("set_fixture_transform", &nested).unwrap();
+        assert_eq!(
+            required_tauri_invoke_json_u64(nested, "projectTransactionId").unwrap(),
+            9
+        );
+        assert_eq!(
+            required_tauri_invoke_json_u64(nested, "expectedEpoch").unwrap(),
+            4
+        );
+        assert_eq!(
+            required_tauri_invoke_json_string(nested, "ownerId").unwrap(),
+            "renderer:test"
+        );
     }
 
     #[derive(Default)]
