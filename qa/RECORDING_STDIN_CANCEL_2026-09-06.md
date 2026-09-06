@@ -79,7 +79,8 @@ remain applicable.
   `Seraf() / KTN`. This is metadata branding only; the alpha artifact remains
   unsigned until real Authenticode credentials are supplied.
 
-The full `check:release` reached `release metadata ok` and then stopped at the
-pre-existing `check-asio-v3-contract` source anchor assertion
-(`loader mutation source missing: CloseFn`). It is outside this recording and
-metadata change and is not represented as a recording failure.
+The full `check:release` now passes, including the ASIO v3 contract. The prior
+`loader mutation source missing: CloseFn` result was a checker self-test
+normalization defect: the mutation source was normalized for contract
+inspection but not for the fixture lookup. The checker now normalizes both
+mutation sides and its 22 assertions pass.

@@ -233,11 +233,14 @@ export function runSelfTest() {
     /must be exact/u,
     "loader symbol mutation rejects",
   );
+  const normalizedLoader = normalizedC(loader);
   for (const [name, original, replacement] of loaderSignatureMutations) {
-    assert.notEqual(original, replacement, "mutation must alter " + name);
-    assert.ok(loader.includes(original), "loader mutation source missing: " + name);
+    const normalizedOriginal = normalizedC(original);
+    const normalizedReplacement = normalizedC(replacement);
+    assert.notEqual(normalizedOriginal, normalizedReplacement, "mutation must alter " + name);
+    assert.ok(normalizedLoader.includes(normalizedOriginal), "loader mutation source missing: " + name);
     assert.throws(
-      () => assertV3LoaderSource(loader.replace(original, replacement)),
+      () => assertV3LoaderSource(normalizedLoader.replace(normalizedOriginal, normalizedReplacement)),
       new RegExp("loader FFI signature drifted: " + name, "u"),
       "loader signature mutation rejects: " + name,
     );

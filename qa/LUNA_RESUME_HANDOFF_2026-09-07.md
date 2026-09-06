@@ -135,10 +135,13 @@ Syndocal process or activating physical output:
   This does not claim Authenticode signing; the alpha artifact remains
   unsigned without a real certificate and signing key.
 
-The full `check:release` reached `release metadata ok: Syndocal 1.2.0-alpha.69 /
-.sdc / signed updater overlay / Seraf() / KTN`, then stopped at the existing
-ASIO v3 source-anchor assertion `loader mutation source missing: CloseFn`.
-That unrelated gate remains open and is not a failure of the recording tranche.
+The full `check:release` now passes, including release metadata, output-control,
+safety-blackout, ASIO packaging/v3, timeline audio/loop, snapshot watermark,
+project bootstrap, video output/window observation and camera-input checks.
+The previous `loader mutation source missing: CloseFn` failure was in the
+checker self-test: its normalized mutation source was compared with the raw
+multi-line fixture. The checker now normalizes both mutation sides and the
+22-assertion ASIO v3 self-test passes.
 The broader recording boundaries remain open: active renderer cancellation,
 total shutdown deadlines, OS cancellation/termination failure, and broader
 recording acceptance are not claimed complete.
