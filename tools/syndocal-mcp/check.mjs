@@ -75,8 +75,12 @@ try {
   child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
   assert.deepEqual((await rpc('ping')).result, {});
   const list = await rpc('tools/list');
-  assert.equal(list.result.tools.length, 5);
+  assert.equal(list.result.tools.length, 6);
   assert.ok(list.result.tools.every((tool) => tool.inputSchema.additionalProperties === false));
+  const videoTool = list.result.tools.find((tool) => tool.name === 'syndocal_set_video_blackout');
+  assert.deepEqual(Object.keys(videoTool.inputSchema.properties), ['requestId', 'enabled', 'expectedProject']);
+  assert.equal(videoTool.inputSchema.properties.enabled.type, 'boolean');
+  assert.equal(videoTool.inputSchema.properties.expectedProject.properties.checkpoint_hash.pattern, '^[0-9a-f]{64}$');
   checks++;
   assert.equal((await rpc('unknown')).error.code, -32601);
   assert.equal((await call('syndocal_list_fixtures', { extra: 1 })).error.code, -32602);
@@ -84,6 +88,19 @@ try {
   assert.equal((await call('syndocal_get_fixture', { fixtureId: '1' })).error.code, -32602);
   assert.equal((await call('syndocal_get_request_status', { requestId: [randomUUID()] })).error.code, -32602);
   assert.equal((await call('syndocal_get_request_status', { requestId: 'abcdefab-cdef-4abc-8def-abcdefabcdef'.toUpperCase() })).error.code, -32602);
+  const videoMutation = {
+    requestId: randomUUID(),
+    enabled: false,
+    expectedProject: { project_epoch: 1, project_revision: 2, checkpoint_hash: 'a'.repeat(64) },
+  };
+  for (const invalid of [
+    { ...videoMutation, enabled: 'false' },
+    { ...videoMutation, extra: true },
+    { ...videoMutation, expectedProject: { ...videoMutation.expectedProject, extra: true } },
+    { ...videoMutation, expectedProject: { ...videoMutation.expectedProject, project_epoch: Number.MAX_SAFE_INTEGER + 1 } },
+    { ...videoMutation, expectedProject: { ...videoMutation.expectedProject, checkpoint_hash: 'A'.repeat(64) } },
+    { ...videoMutation, expectedProject: { ...videoMutation.expectedProject, checkpoint_hash: 'a'.repeat(63) } },
+  ]) assert.equal((await call('syndocal_set_video_blackout', invalid)).error.code, -32602);
   assert.equal(requests.length, 0);
   checks++;
   assert.equal(decode(await call('syndocal_list_fixtures')).status, 'completed');
@@ -97,8 +114,38 @@ try {
   assert.equal(requests.at(-1).method, 'runtime.get');
   assert.deepEqual(requests.at(-1).params, {});
   checks++;
+  respond = (req, socket) => socket.end(JSON.stringify({ requestId: req.requestId, status: 'completed', result: { ok: false, error: { code: 'lease_required', message: 'Video output ownership is not active.' } } }) + '\n');
+  const videoFalse = await call('syndocal_set_video_blackout', videoMutation);
+  assert.equal(videoFalse.result.isError, true);
+  const videoFalseResult = decode(videoFalse);
+  assert.equal(videoFalseResult.status, 'completed');
+  assert.equal(videoFalseResult.result.ok, false);
+  assert.equal(requests.at(-1).requestId, videoMutation.requestId);
+  assert.equal(requests.at(-1).method, 'output.set_video_blackout');
+  assert.deepEqual(requests.at(-1).params, {
+    enabled: false,
+    expectedProject: videoMutation.expectedProject,
+  });
+  checks++;
+  const videoPendingId = randomUUID();
+  const videoPendingMutation = { ...videoMutation, requestId: videoPendingId, enabled: true };
+  respond = (req, socket) => socket.end(JSON.stringify({ requestId: req.requestId, status: 'pending' }) + '\n');
+  const videoPending = await call('syndocal_set_video_blackout', videoPendingMutation);
+  assert.equal(videoPending.result.isError, true);
+  assert.equal(decode(videoPending).status, 'pending');
+  const videoPendingRequests = requests.length;
+  await delay(100);
+  assert.equal(requests.length, videoPendingRequests);
+  respond = (req, socket) => socket.end(JSON.stringify({ requestId: req.params.requestId, status: 'unknown' }) + '\n');
+  const videoStatus = await call('syndocal_get_request_status', { requestId: videoPendingId });
+  assert.equal(videoStatus.result.isError, true);
+  assert.equal(decode(videoStatus).status, 'unknown');
+  assert.equal(requests.at(-1).method, 'request.status');
+  assert.equal(requests.at(-1).params.requestId, videoPendingId);
+  assert.notEqual(requests.at(-1).requestId, videoPendingId);
+  checks++;
   const mutationId = randomUUID();
-  const mutation = { requestId: mutationId, fixtureId: 7, position: { x: 1, y: 2, z: 3 }, rotation: { pitch: 0, yaw: 45, roll: 0 }, expectedProject: { project_epoch: 1, project_revision: 2, checkpoint_hash: 'abc' } };
+  const mutation = { requestId: mutationId, fixtureId: 7, position: { x: 1, y: 2, z: 3 }, rotation: { pitch: 0, yaw: 45, roll: 0 }, expectedProject: { project_epoch: 1, project_revision: 2, checkpoint_hash: 'a'.repeat(64) } };
   respond = (req, socket) => socket.end(JSON.stringify({ requestId: req.requestId, status: 'pending' }) + '\n');
   const pending = await call('syndocal_set_fixture_transform', mutation);
   assert.equal(pending.result.isError, true);

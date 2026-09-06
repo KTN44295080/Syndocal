@@ -115,6 +115,73 @@ fn output_blackout_target_release_never_clears_emergency_safety() {
 }
 
 #[test]
+fn output_blackout_target_video_authored_state_survives_s0_and_public_projection() {
+    let mut runtime = target_runtime();
+    let snapshot = RwLock::new(EngineSnapshot::default());
+
+    let lighting = apply_target(
+        &mut runtime,
+        Target::Lighting,
+        true,
+        Instant::now() + Duration::from_secs(2),
+    );
+    runtime.publish_pending_command_acks(0, &snapshot);
+    assert_eq!(lighting.recv().unwrap(), Ok(true));
+    assert!(runtime.blackout);
+
+    let (safety_ack, safety_receiver) = mpsc::sync_channel(1);
+    let safety_outcome = Arc::new(Mutex::new(None));
+    runtime.apply_command(EngineCommand::SafetyBlackoutEngagePublished {
+        expires_at: Instant::now() + Duration::from_secs(2),
+        completion: SafetyBlackoutPublicationCompletion {
+            ack: safety_ack,
+            outcome: Arc::clone(&safety_outcome),
+        },
+    });
+    runtime.publish_pending_command_acks(0, &snapshot);
+    assert_eq!(safety_receiver.recv().unwrap(), Ok(()));
+    assert_eq!(
+        safety_outcome.lock().unwrap().take(),
+        Some(SafetyBlackoutEngageDisposition::Applied)
+    );
+    assert!(runtime.safety_blackout_engaged);
+    assert!(runtime.shared_telemetry.safety_blackout_authority().engaged);
+
+    for enabled in [true, false] {
+        let receiver = apply_target(
+            &mut runtime,
+            Target::Video,
+            enabled,
+            Instant::now() + Duration::from_secs(2),
+        );
+        runtime.publish_pending_command_acks(0, &snapshot);
+        assert_eq!(receiver.recv().unwrap(), Ok(true));
+
+        let authored = snapshot.read().unwrap().clone();
+        assert_eq!(authored.video.blackout, enabled);
+        assert_eq!(
+            authored.authored_video.as_ref().map(|video| video.blackout),
+            Some(enabled)
+        );
+        assert!(authored.blackout);
+        assert!(authored.authored_blackout);
+        assert!(authored.safety_blackout_engaged);
+        assert!(runtime.blackout);
+        assert!(runtime.safety_blackout_engaged);
+        assert!(runtime.shared_telemetry.safety_blackout_authority().engaged);
+
+        let public = snapshot_public::clone_public_snapshot(&authored);
+        // Public `video.blackout` is the authored Video BO bit; S0 remains a
+        // separate global safety state rather than an effective-video claim.
+        assert!(public.authored_video.is_none());
+        assert_eq!(public.video.blackout, enabled);
+        assert!(public.blackout);
+        assert!(public.authored_blackout);
+        assert!(public.safety_blackout_engaged);
+    }
+}
+
+#[test]
 fn output_blackout_target_follow_outgoing_cannot_restore_lighting() {
     let now = Instant::now();
     let mut runtime =

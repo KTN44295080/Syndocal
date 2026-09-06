@@ -6,6 +6,12 @@ import type {
   VideoOutputSummary,
 } from "./types";
 import { fixtureTransformMatchesExpectation } from "./fixtureTransformConfirmation";
+import {
+  executeAgentBridgeVideoBlackout,
+  type AgentBridgeEffects,
+} from "./agentBridgeBlackout";
+
+export type { AgentBridgeEffects } from "./agentBridgeBlackout";
 
 export interface AgentBridgeRequest {
   rendererGeneration: number;
@@ -45,13 +51,25 @@ const ownershipStatusView = (status: OutputOwnershipStatus) => ({
 });
 
 /** Only native-claimed requests enter here. Mutations still use the GUI transaction/CAS path. */
-export async function executeAgentBridgeRequest(invoke: FrontendTauriInvoke, request: AgentBridgeRequest) {
+export async function executeAgentBridgeRequest(
+  invoke: FrontendTauriInvoke,
+  request: AgentBridgeRequest,
+  effects?: AgentBridgeEffects,
+) {
   let mutationStarted = false;
   try {
-    if (!["fixtures.list", "fixtures.get", "fixtures.set_transform", "runtime.get"].includes(request.method)) {
+    if (!["fixtures.list", "fixtures.get", "fixtures.set_transform", "runtime.get", "output.set_video_blackout"].includes(request.method)) {
       return { ok: false, error: { code: "unknown_method", message: "Unsupported agent bridge operation." } };
     }
     const params = request.params;
+    if (request.method === "output.set_video_blackout") {
+      return await executeAgentBridgeVideoBlackout(
+        invoke,
+        params,
+        effects,
+        () => { mutationStarted = true; },
+      );
+    }
     const expected = params.expectedProject as ReturnType<typeof projectToken> | undefined;
     const setTransform = request.method === "fixtures.set_transform";
     if (setTransform && !expected) throw new Error("Expected project token is required.");
@@ -75,7 +93,9 @@ export async function executeAgentBridgeRequest(invoke: FrontendTauriInvoke, req
         safety_blackout_engaged: snapshot.safety_blackout_engaged,
         video: {
           blackout: snapshot.video.blackout,
-          authored_blackout: snapshot.authored_video?.blackout,
+          // Public bundles deliberately omit the backend-only authored_video
+          // image; this persisted field is the authoritative video target bit.
+          authored_blackout: snapshot.video.blackout,
           outputs: outputs.slice(0, 64).map(videoOutputView),
           total: outputs.length,
           truncated: outputs.length > 64,

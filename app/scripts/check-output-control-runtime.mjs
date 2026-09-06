@@ -2206,6 +2206,35 @@ for (const target of ["lighting", "video", "both"]) {
     assert.ok(!harness.calls.some(call => /enable_output|release_blackout/.test(call.command)));
   }
 }
+const expectedTargetProject = {
+  project_epoch: fence.project_epoch,
+  project_revision: fence.project_revision,
+  checkpoint_hash: fence.project_checkpoint_hash,
+};
+const expectedTargetHarness = createHarness({ action: { kind: "set_blackout", target: "video", enabled: true, lease: lease() } });
+let targetDispatchObserved = false;
+await runtime.executeTargetBlackout(
+  expectedTargetHarness.invoke,
+  "video",
+  true,
+  { expectedProject: expectedTargetProject, onMutationDispatch: () => { targetDispatchObserved = true; } },
+);
+assert.equal(targetDispatchObserved, true, "the dispatch marker must run only after the live authority fence matches");
+const staleTargetHarness = createHarness({
+  action: { kind: "set_blackout", target: "video", enabled: true, lease: lease() },
+  authorityFence: {
+    ...fence,
+    project_revision: fence.project_revision + 1,
+    project_checkpoint_hash: hash("e"),
+    project_publication_generation: fence.project_publication_generation + 1,
+  },
+});
+await assert.rejects(
+  runtime.executeTargetBlackout(staleTargetHarness.invoke, "video", true, { expectedProject: expectedTargetProject }),
+  /project authority changed before dispatch/,
+  "a stale live project fence must reject before the native blackout command",
+);
+assert.equal(staleTargetHarness.executeCalls, 0);
 const inactiveCalls = [];
 await assert.rejects(runtime.executeTargetBlackout(async command => {
   inactiveCalls.push(command);

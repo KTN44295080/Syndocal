@@ -1,4 +1,4 @@
-import { startAgentBridgeRuntime } from "./agentBridgeRuntime";
+import { mountAgentBridge } from "./agentBridgeMount";
 import { createProjectTransactionRecoveryController } from "./createProjectTransactionRecoveryController";
 import { createMediaThumbnailController } from "./createMediaThumbnailController";
 import { createWorkspaceNavigationController, type WorkspaceNavigationRoute } from "./createWorkspaceNavigationController";
@@ -3478,11 +3478,6 @@ export default function App() {
   // main window's record of which panes live in separate windows. Window
   // placement is machine-specific, so persistence is localStorage, not .sdc.
   const paneWindow = paneWindowMode();
-  onMount(() => {
-    if (!isTauriRuntime() || paneWindow || getCurrentWindow().label !== "main") return;
-    const bridge = startAgentBridgeRuntime(invoke, tauriListen, error => setMessage(error), tauriInvoke);
-    onCleanup(bridge.dispose);
-  });
   const autoOpenPaneWindows = new URLSearchParams(window.location.search).get("syndocalAutoPaneWindows") === "1";
   const paneWindowStorageKey = "syndocal.paneWindows.v1";
   let initialPoppedPanesStorageError: string | null = null;
@@ -17360,6 +17355,8 @@ export default function App() {
     inFlightAuthorityPoll: () => projectAuthorityPollInFlight,
     pollProjectAuthorityBundle,
   });
+  mountAgentBridge(isTauriRuntime() && !paneWindow, invoke, setMessage,
+    refreshProjectAuthorityAfterTargetBlackout, refreshSnapshot);
 
   const invokeSafetyBlackoutRuntime = async <T,>(
     command: FrontendTauriInvokeCommand,

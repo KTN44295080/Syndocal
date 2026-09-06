@@ -23,6 +23,8 @@ pub(super) enum Command {
     Get(Fixture),
     #[serde(rename = "fixtures.set_transform")]
     SetTransform(Transform),
+    #[serde(rename = "output.set_video_blackout")]
+    SetVideoBlackout(VideoBlackout),
     #[serde(rename = "request.status")]
     Status(Status),
     #[serde(rename = "runtime.get")]
@@ -44,6 +46,13 @@ pub(super) struct Transform {
     pub fixture_id: u64,
     pub position: Position,
     pub rotation: Rotation,
+    #[serde(rename = "expectedProject")]
+    pub expected_project: Project,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(super) struct VideoBlackout {
+    pub enabled: bool,
     #[serde(rename = "expectedProject")]
     pub expected_project: Project,
 }
@@ -96,6 +105,7 @@ impl Request {
             "fixtures.list"
                 | "fixtures.get"
                 | "fixtures.set_transform"
+                | "output.set_video_blackout"
                 | "request.status"
                 | "runtime.get"
         ) {
@@ -126,6 +136,19 @@ impl Request {
                 {
                     return Err("invalid_transform");
                 }
+                let project = &value.expected_project;
+                if project.project_epoch > MAX_SAFE
+                    || project.project_revision > MAX_SAFE
+                    || project.checkpoint_hash.len() != 64
+                    || !project
+                        .checkpoint_hash
+                        .bytes()
+                        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+                {
+                    return Err("invalid_project_fence");
+                }
+            }
+            Command::SetVideoBlackout(value) => {
                 let project = &value.expected_project;
                 if project.project_epoch > MAX_SAFE
                     || project.project_revision > MAX_SAFE

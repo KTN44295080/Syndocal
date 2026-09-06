@@ -55,6 +55,13 @@ export interface OutputControlFence {
   safety_blackout_generation: number;
 }
 
+/** The persisted project identity expected by a caller before a mutation. */
+export interface OutputControlExpectedProject {
+  project_epoch: number;
+  project_revision: number;
+  checkpoint_hash: string;
+}
+
 export type OutputControlTargetRole = "lighting" | "video" | "both";
 export type OutputLeaseResource = "lighting" | "video";
 export type OutputLeaseResources = readonly OutputLeaseResource[];
@@ -1075,6 +1082,14 @@ type OutputControlExecutionOptions = {
    * exact-Both proof; the backend still revalidates the lease before release.
    */
   skipPublicLeaseQuery?: "display-authority" | "enabled-lease-proof";
+  /**
+   * Optional caller fence for an operation whose intent was prepared from a
+   * canonical project bundle.  The live OutputControl authority is checked
+   * immediately before any command dispatch; native CAS remains authoritative.
+   */
+  expectedProject?: OutputControlExpectedProject;
+  /** Set immediately before the first native mutation dispatch. */
+  onMutationDispatch?: () => void;
 };
 
 const executeOutputControlOperation = async (
@@ -1086,6 +1101,12 @@ const executeOutputControlOperation = async (
   const operationId = operationIdForAction(action);
   assertAction(action);
   const authority = assertAuthority(await invoke<unknown>("query_output_control_authority_v1"));
+  if (options.expectedProject
+    && (authority.fence.project_epoch !== options.expectedProject.project_epoch
+      || authority.fence.project_revision !== options.expectedProject.project_revision
+      || authority.fence.project_checkpoint_hash !== options.expectedProject.checkpoint_hash)) {
+    throw new Error("OutputControl project authority changed before dispatch; nothing was applied.");
+  }
   if (options.skipPublicLeaseQuery) {
     const displayBypass = options.skipPublicLeaseQuery === "display-authority"
       && (action.kind === "add_display" || action.kind === "set_display_window_open");
@@ -1104,6 +1125,7 @@ const executeOutputControlOperation = async (
   let terminal: unknown;
   const command = commandForAction(action);
   try {
+    options.onMutationDispatch?.();
     terminal = await invoke<unknown>(command, executeArgs);
   } catch (firstError) {
     if (action.kind === "send_dsf2026_artnet_acceptance_probe"
@@ -1113,6 +1135,7 @@ const executeOutputControlOperation = async (
       );
     }
     try {
+      options.onMutationDispatch?.();
       terminal = await invoke<unknown>(command, executeArgs);
     } catch {
       throw new Error(`OutputControl execution reply was lost (${String(firstError)}); physical output state is unknown.`);
@@ -1219,11 +1242,14 @@ export async function executeBlackoutRelease(
 
 /** Targeted blackout never arms previously inactive physical outputs. */
 export async function executeTargetBlackout(
-  invoke: FrontendTauriInvoke, target: OutputControlTargetRole, enabled: boolean,
+  invoke: FrontendTauriInvoke,
+  target: OutputControlTargetRole,
+  enabled: boolean,
+  options: Pick<OutputControlExecutionOptions, "expectedProject" | "onMutationDispatch"> = {},
 ): Promise<OutputControlReceipt> {
   const query = await queryOutputLeaseAuthority(invoke);
   const lease = selectOnlyActiveOutputLease(query, ["lighting", "video"]);
-  return executeOutputControl(invoke, { kind: "set_blackout", target, enabled, lease });
+  return executeOutputControlOperation(invoke, { kind: "set_blackout", target, enabled, lease }, options);
 }
 
 /** Execute a lease lifecycle action through the same fenced receipt lane. */

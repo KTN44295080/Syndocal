@@ -22,26 +22,32 @@ const identifier = { type: 'integer', minimum: 1, maximum: Number.MAX_SAFE_INTEG
 const uuid = { type: 'string', format: 'uuid', pattern: UUID.source };
 const position = schema({ x: number, y: number, z: number });
 const rotation = schema({ pitch: number, yaw: number, roll: number });
-const expectedProject = schema({ project_epoch: { type: 'integer', minimum: 0 }, project_revision: { type: 'integer', minimum: 0 }, checkpoint_hash: { type: 'string', minLength: 1, maxLength: 256 } });
+const expectedProject = schema({ project_epoch: { type: 'integer', minimum: 0, maximum: Number.MAX_SAFE_INTEGER }, project_revision: { type: 'integer', minimum: 0, maximum: Number.MAX_SAFE_INTEGER }, checkpoint_hash: { type: 'string', minLength: 64, maxLength: 64, pattern: '^[0-9a-f]{64}$' } });
 export const toolDefinitions = [
   { name: 'syndocal_list_fixtures', description: 'Read fixtures and current project identity from the selected running Syndocal instance.', inputSchema: schema({}), annotations: { readOnlyHint: true } },
   { name: 'syndocal_get_fixture', description: 'Read one fixture and current project identity.', inputSchema: schema({ fixtureId: identifier }), annotations: { readOnlyHint: true } },
   { name: 'syndocal_set_fixture_transform', description: 'Set a complete fixture transform against the exact observed project. Supply a new UUID for a new intent. If pending or unknown, query its status; never repeat the mutation with a new ID to recover a timeout.', inputSchema: schema({ requestId: uuid, fixtureId: identifier, position, rotation, expectedProject }), annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false } },
+  { name: 'syndocal_set_video_blackout', description: 'Set Video BO against the exact observed project. This requires both lighting and video output ownership to already be active; disabling may reveal that existing output. It never arms, acquires, or enables output.', inputSchema: schema({ requestId: uuid, enabled: { type: 'boolean' }, expectedProject }), annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false } },
   { name: 'syndocal_get_request_status', description: 'Read a previously submitted request by its original UUID. Unknown does not mean safe to resend.', inputSchema: schema({ requestId: uuid }), annotations: { readOnlyHint: true } },
   { name: 'syndocal_get_runtime_status', description: 'Read bounded project runtime diagnostics, timeline state, video outputs, and a separate output-ownership observation from the selected running Syndocal instance. This never changes output state.', inputSchema: schema({}), annotations: { readOnlyHint: true } },
 ];
+
+const projectFence = (value) => exact(value, ['project_epoch', 'project_revision', 'checkpoint_hash'])
+  && integer(value.project_epoch) && integer(value.project_revision)
+  && typeof value.checkpoint_hash === 'string' && /^[0-9a-f]{64}$/.test(value.checkpoint_hash);
 
 function validateArguments(name, args) {
   if (name === 'syndocal_list_fixtures') return exact(args, []);
   if (name === 'syndocal_get_runtime_status') return exact(args, []);
   if (name === 'syndocal_get_fixture') return exact(args, ['fixtureId']) && integer(args.fixtureId) && args.fixtureId > 0;
   if (name === 'syndocal_get_request_status') return exact(args, ['requestId']) && typeof args.requestId === 'string' && UUID.test(args.requestId);
+  if (name === 'syndocal_set_video_blackout') return exact(args, ['requestId', 'enabled', 'expectedProject'])
+    && typeof args.requestId === 'string' && UUID.test(args.requestId)
+    && typeof args.enabled === 'boolean' && projectFence(args.expectedProject);
   if (name !== 'syndocal_set_fixture_transform' || !exact(args, ['requestId', 'fixtureId', 'position', 'rotation', 'expectedProject'])) return false;
   return typeof args.requestId === 'string' && UUID.test(args.requestId) && integer(args.fixtureId) && args.fixtureId > 0
     && vector(args.position, ['x', 'y', 'z']) && vector(args.rotation, ['pitch', 'yaw', 'roll'])
-    && exact(args.expectedProject, ['project_epoch', 'project_revision', 'checkpoint_hash'])
-    && integer(args.expectedProject.project_epoch) && integer(args.expectedProject.project_revision)
-    && typeof args.expectedProject.checkpoint_hash === 'string' && args.expectedProject.checkpoint_hash.length > 0 && args.expectedProject.checkpoint_hash.length <= 256;
+    && projectFence(args.expectedProject);
 }
 
 export function parseOptions(argv, env = process.env) {
@@ -202,9 +208,9 @@ export function serve(options, input = process.stdin, output = process.stdout) {
     active = true;
     try {
       const args = params.arguments ?? {};
-      const mutation = params.name === 'syndocal_set_fixture_transform';
+      const mutation = params.name === 'syndocal_set_fixture_transform' || params.name === 'syndocal_set_video_blackout';
       const requestId = mutation ? args.requestId : randomUUID();
-      const method = { syndocal_list_fixtures: 'fixtures.list', syndocal_get_fixture: 'fixtures.get', syndocal_set_fixture_transform: 'fixtures.set_transform', syndocal_get_request_status: 'request.status', syndocal_get_runtime_status: 'runtime.get' }[params.name];
+      const method = { syndocal_list_fixtures: 'fixtures.list', syndocal_get_fixture: 'fixtures.get', syndocal_set_fixture_transform: 'fixtures.set_transform', syndocal_set_video_blackout: 'output.set_video_blackout', syndocal_get_request_status: 'request.status', syndocal_get_runtime_status: 'runtime.get' }[params.name];
       const nativeParams = mutation ? Object.fromEntries(Object.entries(args).filter(([key]) => key !== 'requestId')) : args;
       const result = await nativeRequest(options, method, nativeParams, requestId, mutation);
       if (result.status !== 'completed') result.nextAction = 'Query syndocal_get_request_status with the original requestId. Do not automatically resubmit an unknown or pending mutation.';

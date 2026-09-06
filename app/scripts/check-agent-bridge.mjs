@@ -4,7 +4,7 @@ import ts from 'typescript';
 
 // Transpile actual production modules and resolve only their actual local dependency.
 const modules = new Map();
-for (const name of ['fixtureTransformConfirmation', 'agentBridgeTools', 'agentBridgeRuntime']) {
+for (const name of ['fixtureTransformConfirmation', 'outputControlController', 'agentBridgeBlackout', 'agentBridgeTools', 'agentBridgeRuntime']) {
   const source = await readFile(new URL(`../src/${name}.ts`, import.meta.url), 'utf8');
   const exports = {};
   const compiled = ts.transpileModule(source, {
@@ -65,7 +65,7 @@ let groups = 0;
   assert.equal(runtime.video.outputs.length, 64);
   assert.equal(runtime.video.total, 66);
   assert.equal(runtime.video.truncated, true);
-  assert.equal(runtime.video.authored_blackout, false);
+  assert.equal(runtime.video.authored_blackout, true);
   assert.deepEqual(runtime.observations.output_ownership_status, ownership);
   const failedRuntime = await execute(async (command) => {
     if (command === 'get_project_authority_bundle') return bundle();
@@ -125,6 +125,244 @@ let groups = 0;
   groups++;
 }
 
+const outputToken = (revision, checkpointHash) => ({
+  project_epoch: 4,
+  project_revision: revision,
+  checkpoint_hash: checkpointHash,
+});
+const outputFence = (project, publicationGeneration) => ({
+  process_incarnation: 1,
+  session_incarnation: 2,
+  project_epoch: project.project_epoch,
+  project_revision: project.project_revision,
+  project_checkpoint_hash: project.checkpoint_hash,
+  project_publication_generation: publicationGeneration,
+  output_epoch: 6,
+  output_generation: 7,
+  safety_blackout_epoch: 8,
+  safety_blackout_generation: 9,
+});
+const outputLease = { lease_id: 'lease-1111111111111111', generation: 3 };
+const outputLeaseQuery = {
+  operation_id: 'syndocal.output.lease.authority.query.v1',
+  statuses: [{ status: 'held_active', authority: outputLease, resources: ['lighting', 'video'] }],
+};
+const outputBundle = (project, authoredBlackout) => {
+  const value = bundle(null, project);
+  delete value.snapshot.authored_video;
+  value.snapshot.blackout = true;
+  value.snapshot.safety_blackout_engaged = true;
+  value.snapshot.video.blackout = authoredBlackout;
+  return value;
+};
+const outputReceipt = (args, before, after) => ({
+  type: 'receipt',
+  receipt: {
+    operation_id: 'syndocal.output.blackout.set.v2',
+    request_id: args.request.request_id,
+    shape_sha256: 'c'.repeat(64),
+    argument_fingerprint: 'd'.repeat(64),
+    audit_sequence: 14,
+    fence_before: before,
+    fence_after: after,
+    outcome: 'applied',
+    lease_result: {
+      authority: outputLease,
+      resources: ['lighting', 'video'],
+      phase: 'held_active',
+      outcome: 'authorized',
+      audit_sequence: 15,
+      changes: [{
+        lease_id: outputLease.lease_id,
+        before_generation: outputLease.generation,
+        after_generation: outputLease.generation,
+        before_resources: ['lighting', 'video'],
+        after_resources: ['lighting', 'video'],
+        before_phase: 'held_active',
+        after_phase: 'held_active',
+      }],
+    },
+  },
+});
+const runVideoBlackout = async ({ enabled, beforeProject, beforeAuthored, afterProject, afterFenceProject, afterAuthored = enabled, effects }) => {
+  const beforeFence = outputFence(beforeProject, beforeProject.project_revision);
+  const afterFence = outputFence(afterFenceProject, afterFenceProject.project_revision);
+  afterFence.project_publication_generation = beforeFence.project_publication_generation + 1;
+  const calls = [];
+  const invoke = async (command, args) => {
+    calls.push([command, args]);
+    if (command === 'get_project_authority_bundle') {
+      return args?.expectedEpoch === undefined
+        ? outputBundle(afterProject, afterAuthored)
+        : outputBundle(beforeProject, beforeAuthored);
+    }
+    if (command === 'query_output_lease_authority_v1') return structuredClone(outputLeaseQuery);
+    if (command === 'query_output_control_authority_v1') {
+      return { operation_id: 'syndocal.query.output.control.authority.v1', fence: structuredClone(beforeFence) };
+    }
+    if (command === 'set_blackout_output_control_v2') {
+      assert.equal(args.request.action.target, 'video');
+      assert.equal(args.request.action.enabled, enabled);
+      assert.deepEqual(args.request.action.lease, outputLease);
+      return outputReceipt(args, beforeFence, afterFence);
+    }
+    assert.fail(`Unexpected video blackout call ${command}`);
+  };
+  const result = await execute(invoke, request('output.set_video_blackout', {
+    enabled,
+    expectedProject: beforeProject,
+  }), effects);
+  return { result, calls, beforeFence, afterFence };
+};
+
+{
+  const firstHookCalls = [];
+  const first = await runVideoBlackout({
+    enabled: true,
+    beforeProject: outputToken(9, 'a'.repeat(64)),
+    beforeAuthored: false,
+    afterProject: outputToken(10, 'b'.repeat(64)),
+    afterFenceProject: outputToken(10, 'b'.repeat(64)),
+    effects: {
+      refreshProjectAuthority: async receipt => { assert.equal(receipt.outcome, 'applied'); firstHookCalls.push('authority'); },
+      refreshSnapshot: async () => { firstHookCalls.push('snapshot'); },
+    },
+  });
+  assert.equal(first.result.ok, true);
+  assert.equal(first.result.verification, 'committed_project_state');
+  assert.deepEqual(first.result.project, outputToken(10, 'b'.repeat(64)));
+  assert.equal(first.result.video.blackout, true);
+  assert.equal(first.result.video.authored_blackout, true);
+  assert.equal(first.result.video.safety_blackout_engaged, true);
+  assert.equal(first.result.receipt.outcome, 'applied');
+  assert.deepEqual(first.calls.map(([command]) => command), [
+    'get_project_authority_bundle',
+    'query_output_lease_authority_v1',
+    'query_output_control_authority_v1',
+    'query_output_lease_authority_v1',
+    'set_blackout_output_control_v2',
+    'get_project_authority_bundle',
+  ]);
+  assert.deepEqual(first.calls[4][1].request.expected_fence, first.beforeFence);
+  assert.deepEqual(firstHookCalls, ['authority', 'snapshot']);
+
+  const second = await runVideoBlackout({
+    enabled: false,
+    beforeProject: outputToken(10, 'b'.repeat(64)),
+    beforeAuthored: true,
+    afterProject: outputToken(11, 'e'.repeat(64)),
+    afterFenceProject: outputToken(11, 'e'.repeat(64)),
+    effects: {
+      refreshProjectAuthority: async () => {},
+      refreshSnapshot: async () => {},
+    },
+  });
+  assert.equal(second.result.ok, true);
+  assert.equal(second.result.video.blackout, false, 'the public video bit is the authored target');
+  assert.equal(second.result.video.authored_blackout, false, 'authored video state is the requested target');
+  assert.equal(second.result.video.safety_blackout_engaged, true, 'independent S0 state must not be used as video readback');
+
+  const concurrentReplacement = await runVideoBlackout({
+    enabled: true,
+    beforeProject: outputToken(9, 'a'.repeat(64)),
+    beforeAuthored: false,
+    afterProject: outputToken(12, '3'.repeat(64)),
+    afterFenceProject: outputToken(10, 'b'.repeat(64)),
+    effects: {
+      refreshProjectAuthority: async () => {},
+      refreshSnapshot: async () => {},
+    },
+  });
+  assert.equal(concurrentReplacement.result.ok, false);
+  assert.equal(concurrentReplacement.result.error.code, 'mutation_not_confirmed');
+
+  const refreshFailure = await runVideoBlackout({
+    enabled: true,
+    beforeProject: outputToken(9, 'a'.repeat(64)),
+    beforeAuthored: false,
+    afterProject: outputToken(10, 'b'.repeat(64)),
+    afterFenceProject: outputToken(10, 'b'.repeat(64)),
+    effects: {
+      refreshProjectAuthority: async () => { throw new Error('canonical refresh failed'); },
+      refreshSnapshot: async () => { throw new Error('snapshot refresh must not run'); },
+    },
+  });
+  assert.equal(refreshFailure.result.ok, false);
+  assert.equal(refreshFailure.result.error.code, 'mutation_not_confirmed');
+  assert.equal(refreshFailure.calls.filter(([command]) => command === 'set_blackout_output_control_v2').length, 1);
+  assert.equal(refreshFailure.calls.filter(([command]) => command === 'get_project_authority_bundle').length, 1);
+  groups++;
+}
+
+{
+  const expected = outputToken(9, 'a'.repeat(64));
+  const effects = { refreshProjectAuthority: async () => {}, refreshSnapshot: async () => {} };
+  const staleCalls = [];
+  const stale = await execute(async (command, args) => {
+    staleCalls.push([command, args]);
+    assert.equal(command, 'get_project_authority_bundle');
+    throw new Error('Project changed before the video blackout preflight completed.');
+  }, request('output.set_video_blackout', { enabled: true, expectedProject: expected }), effects);
+  assert.equal(stale.ok, false);
+  assert.equal(stale.error.code, 'request_rejected');
+  assert.equal(staleCalls.length, 1);
+
+  const liveFence = outputFence(expected, expected.project_revision);
+  liveFence.project_revision += 1;
+  liveFence.project_checkpoint_hash = 'f'.repeat(64);
+  const liveCalls = [];
+  const liveStale = await execute(async (command, args) => {
+    liveCalls.push([command, args]);
+    if (command === 'get_project_authority_bundle') return outputBundle(expected, false);
+    if (command === 'query_output_lease_authority_v1') return structuredClone(outputLeaseQuery);
+    if (command === 'query_output_control_authority_v1') return { operation_id: 'syndocal.query.output.control.authority.v1', fence: liveFence };
+    assert.fail(`Live-stale request dispatched ${command}`);
+  }, request('output.set_video_blackout', { enabled: true, expectedProject: expected }), effects);
+  assert.equal(liveStale.ok, false);
+  assert.equal(liveStale.error.code, 'request_rejected');
+  assert.equal(liveCalls.some(([command]) => command === 'set_blackout_output_control_v2'), false);
+
+  const missingCalls = [];
+  const missingHooks = await execute(async command => { missingCalls.push(command); }, request('output.set_video_blackout', { enabled: true, expectedProject: expected }));
+  assert.equal(missingHooks.ok, false);
+  assert.equal(missingHooks.error.code, 'request_rejected');
+  assert.deepEqual(missingCalls, []);
+
+  const rejectedCalls = [];
+  const rejected = await execute(async (command, args) => {
+    rejectedCalls.push([command, args]);
+    if (command === 'get_project_authority_bundle') return outputBundle(expected, false);
+    if (command === 'query_output_lease_authority_v1') return structuredClone(outputLeaseQuery);
+    if (command === 'query_output_control_authority_v1') return { operation_id: 'syndocal.query.output.control.authority.v1', fence: outputFence(expected, expected.project_revision) };
+    if (command === 'set_blackout_output_control_v2') return {
+      type: 'rejected',
+      rejection: { operation_id: 'syndocal.output.blackout.set.v2', request_id: args.request.request_id, error: 'stale_fence' },
+    };
+    assert.fail(`Unexpected rejected-call command ${command}`);
+  }, request('output.set_video_blackout', { enabled: true, expectedProject: expected }), effects);
+  assert.equal(rejected.ok, false);
+  assert.equal(rejected.error.code, 'mutation_not_confirmed');
+  assert.equal(rejectedCalls.filter(([command]) => command === 'set_blackout_output_control_v2').length, 1);
+  assert.equal(rejectedCalls.some(([command]) => command === 'arm_output_control_v2'), false);
+
+  const unknownRequests = [];
+  const unknown = await execute(async (command, args) => {
+    if (command === 'get_project_authority_bundle') return outputBundle(expected, false);
+    if (command === 'query_output_lease_authority_v1') return structuredClone(outputLeaseQuery);
+    if (command === 'query_output_control_authority_v1') return { operation_id: 'syndocal.query.output.control.authority.v1', fence: outputFence(expected, expected.project_revision) };
+    if (command === 'set_blackout_output_control_v2') {
+      unknownRequests.push(args.request);
+      throw new Error('transport reply lost');
+    }
+    assert.fail(`Unexpected unknown-outcome command ${command}`);
+  }, request('output.set_video_blackout', { enabled: true, expectedProject: expected }), effects);
+  assert.equal(unknown.ok, false);
+  assert.equal(unknown.error.code, 'mutation_not_confirmed');
+  assert.equal(unknownRequests.length, 2, 'only the shared same-ticket retry is allowed');
+  assert.equal(unknownRequests[0].request_id, unknownRequests[1].request_id, 'caller must not replay with a new request identity');
+  groups++;
+}
+
 const tick = () => new Promise(resolve => setImmediate(resolve));
 async function until(predicate) {
   for (let i = 0; i < 100; i++) { if (predicate()) return; await tick(); }
@@ -179,6 +417,60 @@ async function until(predicate) {
   handler({ payload: mutation }); await until(() => resolveClaim);
   runtime.dispose(); resolveClaim(mutation); await tick(); await tick();
   assert.deepEqual(calls, ['agent_bridge_register_v1', 'agent_bridge_claim_v1']);
+  groups++;
+}
+{
+  let handler;
+  const transportCalls = [];
+  const invokeCalls = [];
+  const effectCalls = [];
+  const expected = outputToken(20, '1'.repeat(64));
+  const afterProject = outputToken(21, '2'.repeat(64));
+  const beforeFence = outputFence(expected, expected.project_revision);
+  const afterFence = outputFence(afterProject, afterProject.project_revision);
+  const invoke = async (command, args) => {
+    invokeCalls.push([command, args]);
+    if (command === 'get_project_authority_bundle') {
+      return args?.expectedEpoch === undefined
+        ? outputBundle(afterProject, true)
+        : outputBundle(expected, false);
+    }
+    if (command === 'query_output_lease_authority_v1') return structuredClone(outputLeaseQuery);
+    if (command === 'query_output_control_authority_v1') return {
+      operation_id: 'syndocal.query.output.control.authority.v1',
+      fence: structuredClone(beforeFence),
+    };
+    if (command === 'set_blackout_output_control_v2') return outputReceipt(args, beforeFence, afterFence);
+    assert.fail(`Unexpected runtime bridge invoke ${command}`);
+  };
+  const transport = async (command, args) => {
+    transportCalls.push([command, args]);
+    if (command === 'agent_bridge_register_v1') return 8;
+    if (command === 'agent_bridge_claim_v1') return request('output.set_video_blackout', {
+      enabled: true,
+      expectedProject: expected,
+    });
+    if (command === 'agent_bridge_complete_v1') return;
+    assert.fail(`Unexpected runtime bridge transport ${command}`);
+  };
+  const runtime = start(
+    invoke,
+    async (_event, callback) => { handler = callback; return () => {}; },
+    error => assert.fail(`Unexpected runtime bridge report ${error}`),
+    transport,
+    {
+      refreshProjectAuthority: async receipt => { assert.equal(receipt.fence_after.project_revision, 21); effectCalls.push('authority'); },
+      refreshSnapshot: async () => { effectCalls.push('snapshot'); },
+    },
+  );
+  await runtime.ready;
+  handler({ payload: { rendererGeneration: 8, requestId: 'wake-only-id' } });
+  await until(() => transportCalls.some(([command]) => command === 'agent_bridge_complete_v1'));
+  const completion = transportCalls.find(([command]) => command === 'agent_bridge_complete_v1')[1];
+  assert.equal(completion.result.ok, true);
+  assert.deepEqual(effectCalls, ['authority', 'snapshot']);
+  assert.equal(invokeCalls.some(([command]) => command === 'arm_output_control_v2'), false);
+  runtime.dispose();
   groups++;
 }
 console.log(`agent bridge: PASS (${groups} groups; real processor/runtime/confirmation modules, no native or device calls)`);

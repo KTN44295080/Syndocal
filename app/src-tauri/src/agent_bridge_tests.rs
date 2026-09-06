@@ -6,6 +6,14 @@ fn command(method: &str) -> Command {
     let params = match method {
         "fixtures.list" => serde_json::json!({}),
         "fixtures.get" => serde_json::json!({"fixtureId": 1}),
+        "output.set_video_blackout" => serde_json::json!({
+            "enabled": true,
+            "expectedProject": {
+                "project_epoch": 0,
+                "project_revision": 0,
+                "checkpoint_hash": "a".repeat(64)
+            }
+        }),
         _ => {
             serde_json::json!({"fixtureId":1,"position":{"x":1,"y":2,"z":3},"rotation":{"pitch":0,"yaw":0,"roll":0},"expectedProject":{"project_epoch":0,"project_revision":0,"checkpoint_hash":"a".repeat(64)}})
         }
@@ -58,6 +66,41 @@ fn agent_bridge_wire_auth_methods_and_bounds_are_strict() {
     assert!(matches!(serde_json::from_value::<Request>(runtime.clone()).unwrap().command().unwrap(), Command::RuntimeGet(_)));
     runtime["params"] = serde_json::json!({"enableOutputs": true});
     assert!(serde_json::from_value::<Request>(runtime).unwrap().command().is_err());
+
+    let video = serde_json::json!({
+        "token": "token",
+        "requestId": id(1),
+        "method": "output.set_video_blackout",
+        "params": {
+            "enabled": true,
+            "expectedProject": {
+                "project_epoch": 0,
+                "project_revision": 0,
+                "checkpoint_hash": "a".repeat(64)
+            }
+        }
+    });
+    assert!(matches!(
+        serde_json::from_value::<Request>(video.clone())
+            .unwrap()
+            .command()
+            .unwrap(),
+        Command::SetVideoBlackout(_)
+    ));
+    for invalid in [
+        serde_json::json!({"enabled": "true", "expectedProject": {"project_epoch": 0, "project_revision": 0, "checkpoint_hash": "a".repeat(64)}}),
+        serde_json::json!({"enabled": true, "expectedProject": {"project_epoch": 9_007_199_254_740_992u64, "project_revision": 0, "checkpoint_hash": "a".repeat(64)}}),
+        serde_json::json!({"enabled": true, "expectedProject": {"project_epoch": 0, "project_revision": 0, "checkpoint_hash": "A".repeat(64)}}),
+        serde_json::json!({"enabled": true, "expectedProject": {"project_epoch": 0, "project_revision": 0, "checkpoint_hash": "a".repeat(63)}}),
+        serde_json::json!({"enabled": true, "expectedProject": {"project_epoch": 0, "project_revision": 0, "checkpoint_hash": "a".repeat(64)}, "extra": false}),
+    ] {
+        let mut candidate = video.clone();
+        candidate["params"] = invalid;
+        assert!(serde_json::from_value::<Request>(candidate)
+            .unwrap()
+            .command()
+            .is_err());
+    }
 }
 #[test]
 fn agent_bridge_claim_is_exact_once_and_replay_never_dispatches_twice() {
@@ -94,6 +137,68 @@ fn agent_bridge_claim_is_exact_once_and_replay_never_dispatches_twice() {
             .as_deref(),
         Some("request_conflict")
     );
+}
+#[test]
+fn agent_bridge_video_blackout_is_a_deduplicated_mutation() {
+    let mut ledger = ledger::Ledger::new(None).unwrap();
+    let generation = ledger.register().unwrap();
+    let command = command("output.set_video_blackout");
+    let (pending, dispatch) = ledger.begin(&id(1), &command).unwrap();
+    assert_eq!(pending.status, "pending");
+    let dispatch = dispatch.unwrap();
+    assert_eq!(dispatch.method, "output.set_video_blackout");
+    assert_eq!(
+        dispatch.params,
+        serde_json::json!({
+            "enabled": true,
+            "expectedProject": {
+                "project_epoch": 0,
+                "project_revision": 0,
+                "checkpoint_hash": "a".repeat(64)
+            }
+        })
+    );
+    ledger.claim(generation, &id(1)).unwrap();
+    ledger
+        .complete(generation, &id(1), serde_json::json!({"ok": true}))
+        .unwrap();
+    let (completed, redispatch) = ledger.begin(&id(1), &command).unwrap();
+    assert_eq!(completed.status, "completed");
+    assert!(redispatch.is_none());
+    let changed = match command.clone() {
+        Command::SetVideoBlackout(mut value) => {
+            value.enabled = false;
+            Command::SetVideoBlackout(value)
+        }
+        _ => unreachable!(),
+    };
+    let (conflict, redispatch) = ledger.begin(&id(1), &changed).unwrap();
+    assert_eq!(conflict.error.as_deref(), Some("request_conflict"));
+    assert!(redispatch.is_none());
+}
+#[test]
+fn agent_bridge_video_blackout_mutation_survives_reload_without_redispatch() {
+    let directory = std::env::temp_dir().join(format!(
+        "syndocal-agent-video-test-{}",
+        storage::random_hex(12).unwrap()
+    ));
+    std::fs::create_dir(&directory).unwrap();
+    let path = directory.join("ledger.json");
+    let command = command("output.set_video_blackout");
+    {
+        let mut ledger = ledger::Ledger::new(Some(path.clone())).unwrap();
+        ledger.register().unwrap();
+        let (pending, dispatch) = ledger.begin(&id(1), &command).unwrap();
+        assert_eq!(pending.status, "pending");
+        assert!(dispatch.is_some());
+    }
+    let mut restarted = ledger::Ledger::new(Some(path.clone())).unwrap();
+    restarted.register().unwrap();
+    let (unknown, redispatch) = restarted.begin(&id(1), &command).unwrap();
+    assert_eq!(unknown.status, "unknown");
+    assert!(redispatch.is_none());
+    std::fs::remove_file(path).unwrap();
+    std::fs::remove_dir(directory).unwrap();
 }
 #[test]
 fn agent_bridge_reload_fences_late_completion_and_does_not_replay() {

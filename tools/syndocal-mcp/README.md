@@ -1,6 +1,6 @@
 # Syndocal MCP adapter
 
-Dependency-free Node.js stdio adapter for a running Syndocal agent bridge. It exposes only fixture listing, fixture reading, exact-project fixture transforms, request-status lookup, and bounded runtime diagnostics. It does not open devices, start Syndocal, or enable show output.
+Dependency-free Node.js stdio adapter for a running Syndocal agent bridge. It exposes only fixture listing, fixture reading, exact-project fixture transforms, exact-project Video BO control, request-status lookup, and bounded runtime diagnostics. It does not open devices, start Syndocal, or arm show output.
 
 ## Start
 
@@ -31,12 +31,13 @@ On Windows, process identity is read through a fixed, hidden PowerShell/CIM quer
 - `syndocal_list_fixtures({})`: read fixtures and the current project identity.
 - `syndocal_get_fixture({fixtureId})`: read one fixture and project identity.
 - `syndocal_set_fixture_transform({requestId, fixtureId, position, rotation, expectedProject})`: send one complete transform with a caller-supplied UUID and the exact project identity returned by a read.
+- `syndocal_set_video_blackout({requestId, enabled, expectedProject})`: set Video BO with a caller-supplied UUID and the exact project identity returned by a read. It requires both lighting and video output ownership to already be active; disabling may reveal that existing output and never arms, acquires, or enables output.
 - `syndocal_get_request_status({requestId})`: query the original request UUID.
 - `syndocal_get_runtime_status({})`: read the project token, lighting/video blackout bits, up to 64 video-output summaries, Timeline transport state, the exact `timeline_runtime` projection, and a separate `observations.output_ownership_status` read. The authority bundle and ownership observation are captured by separate reads and must not be treated as one atomic image.
 
-Position is `{x,y,z}` and rotation is `{pitch,yaw,roll}`. `expectedProject` is `{project_epoch,project_revision,checkpoint_hash}`. All fields are required, numbers must be finite, and unknown argument fields are rejected.
+Position is `{x,y,z}` and rotation is `{pitch,yaw,roll}`. `expectedProject` is `{project_epoch,project_revision,checkpoint_hash}`. All fields are required; transform coordinates must be finite, project epoch/revision values must be nonnegative safe integers, and `checkpoint_hash` must be exactly 64 lowercase hexadecimal characters. Unknown argument fields are rejected.
 
-A new transform intent needs a new lowercase, hyphenated UUID. Uppercase UUIDs are rejected so one intent has a single request identity. Preserve that UUID until its result is known. `pending` and `unknown` are tool errors with a status-query instruction; the adapter does not retry or automatically poll. A timeout after a mutation may have been sent is `unknown`, never proof that it was not applied. Query the original UUID before deciding any next action. Status requests use a fresh transport envelope UUID but the broker response identifies the queried original UUID. Broker `completed` means terminal processing; only a result with `ok:true` is tool success.
+A new transform or Video BO intent needs a new lowercase, hyphenated UUID. Uppercase UUIDs are rejected so one intent has a single request identity. Preserve that UUID until its result is known. `pending` and `unknown` are tool errors with a status-query instruction; the adapter does not retry or automatically poll. A timeout after a mutation may have been sent is `unknown`, never proof that it was not applied. Query the original UUID before deciding any next action. Status requests use a fresh transport envelope UUID but the broker response identifies the queried original UUID. Broker `completed` means terminal processing; only a result with `ok:true` is tool success, so a completed `{ok:false}` response remains an error with its original result.
 
 Only one broker request may be active. An overlapping call is explicitly rejected before dispatch. MCP input and native request frames are bounded to 64 KiB; native and MCP response frames are bounded to 256 KiB. Connection timeout is one second and native response timeout is three seconds. Nothing except newline-delimited MCP JSON-RPC is written to stdout.
 
@@ -46,6 +47,6 @@ Only one broker request may be active. An overlapping call is explicitly rejecte
 node tools/syndocal-mcp/check.mjs
 ```
 
-The integration check launches the CLI against its own fake loopback broker. It exercises negotiation, schemas, request correlation, pending/unknown behavior, no automatic retry, overlap rejection, malformed/oversized frames, executable mismatch and credential redaction. It does not operate Syndocal or physical devices. Real native bridge acceptance is a separate integration check.
+The integration check launches the CLI against its own fake loopback broker. It exercises negotiation, schemas, request correlation, Video BO false-success handling, pending/unknown behavior, no automatic retry, overlap rejection, malformed/oversized frames, executable mismatch and credential redaction. It does not operate Syndocal or physical devices. Real native bridge acceptance is a separate integration check.
 
 The adapter implements the MCP **2025-11-25** [stdio transport](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports), [initialization lifecycle](https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle), and [tools interface](https://modelcontextprotocol.io/specification/2025-11-25/server/tools). Supported JSON-RPC methods are `initialize`, `notifications/initialized`, `ping`, `tools/list`, and `tools/call`.
