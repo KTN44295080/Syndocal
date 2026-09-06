@@ -257,3 +257,10 @@ snapshot同期とVideo FXの限定修復は各続行文書へ移管。次はengi
 実show計測、またはproject transaction/media lifecycleの独立した責務分離。
 録画の残存CAS/停止上限と、別所有overlap差分は独立した境界のまま引き継ぐ。
 このチェックポイントは明示した所有ファイルのみcommit/pushし、upstream一致を確認する。
+
+2026-09-07 continuation: synthetic 30-minute FFmpeg A/V test passed 1/1 under
+the exact Build Tools MSVC 14.44.35207 linker. The retained report records
+1800 seconds, 54,000 frames, 0.0 ms start/end drift, first/middle/last video
+luma 255/0/255, and audio peaks 4276/0/4123. This is command/codec evidence;
+real in-app capture, hardware, and the renderer/OS shutdown deadline remain
+separate open boundaries.
