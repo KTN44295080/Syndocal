@@ -211,6 +211,7 @@ pub(super) fn run_video_output_recording(context: VideoOutputRecordingContext) {
     drop(stdin);
     if let Some(error) = pipe_error {
         let error = failed_video_encoder_error(&mut child, &mut artifact, error);
+        let error = join_failed_recording_diagnostics(stderr_reader, error);
         finish_failed_video_recording(&status, &mut artifact, error);
         return;
     }
@@ -222,6 +223,7 @@ pub(super) fn run_video_output_recording(context: VideoOutputRecordingContext) {
                 &mut artifact,
                 format!("FFmpeg wait failed: {error}"),
             );
+            let error = join_failed_recording_diagnostics(stderr_reader, error);
             finish_failed_video_recording(&status, &mut artifact, error);
             return;
         }
@@ -238,6 +240,19 @@ pub(super) fn run_video_output_recording(context: VideoOutputRecordingContext) {
     match result {
         Ok(()) => finish_video_recording_status(&status, None),
         Err(error) => finish_failed_video_recording(&status, &mut artifact, error),
+    }
+}
+
+fn join_failed_recording_diagnostics(
+    stderr_reader: std::thread::JoinHandle<std::io::Result<Vec<u8>>>,
+    primary_error: String,
+) -> String {
+    match stderr_reader.join() {
+        Ok(Ok(_)) => primary_error,
+        Ok(Err(error)) => format!(
+            "{primary_error}; Cannot finish reading FFmpeg diagnostics: {error}"
+        ),
+        Err(_) => format!("{primary_error}; FFmpeg diagnostic reader panicked"),
     }
 }
 
@@ -336,4 +351,9 @@ pub(super) fn finish_video_recording_status(
         current.active = false;
         current.last_error = error;
     }
+}
+
+#[cfg(test)]
+mod diagnostics_tests {
+    include!("video_recording_diagnostics_tests.rs");
 }

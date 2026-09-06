@@ -57,9 +57,10 @@ use video_monitor_snapshot::capture_video_monitor_snapshot;
 mod live_video_monitor_packet;
 use live_video_monitor_packet::*;
 mod video_recording_lifecycle;
-#[cfg(test)]
-#[path = "video_recording_runtime_lifecycle_tests.rs"]
-mod video_recording_runtime_lifecycle_tests;
+mod video_recording_runtime;
+use video_recording_runtime::{
+    stop_video_output_recording_runtime, VideoRecordingRuntime, VideoRecordingStatus,
+};
 mod video_recording;
 use video_recording::{run_video_output_recording, RecordingAudioInput, VideoOutputRecordingContext};
 #[cfg(test)]
@@ -20516,23 +20517,6 @@ fn execute_program_audio_job(
 }
 
 #[derive(Debug, Clone, Serialize)]
-struct VideoRecordingStatus {
-    active: bool,
-    output_id: Option<VideoOutputId>,
-    path: Option<String>,
-    width: u32,
-    height: u32,
-    frame_rate: u32,
-    frames_written: u64,
-    dropped_frames: u64,
-    audio_requested: bool,
-    audio_included: bool,
-    audio_track_count: usize,
-    started_unix_ms: Option<u64>,
-    last_error: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
 struct VideoBitmapMaskImportResult {
     width: u8,
     height: u8,
@@ -20545,96 +20529,6 @@ struct VjFirstRunSetupResult {
     layer_ids: Vec<VideoLayerId>,
     composition_id: CompositionId,
     output_id: VideoOutputId,
-}
-
-impl Default for VideoRecordingStatus {
-    fn default() -> Self {
-        Self {
-            active: false,
-            output_id: None,
-            path: None,
-            width: 0,
-            height: 0,
-            frame_rate: 30,
-            frames_written: 0,
-            dropped_frames: 0,
-            audio_requested: false,
-            audio_included: false,
-            audio_track_count: 0,
-            started_unix_ms: None,
-            last_error: None,
-        }
-    }
-}
-
-#[derive(Default)]
-struct VideoRecordingRuntime {
-    worker: Option<video_recording_lifecycle::RecordingWorkerLifecycle>,
-    status: Arc<Mutex<VideoRecordingStatus>>,
-}
-
-impl Drop for VideoRecordingRuntime {
-    fn drop(&mut self) {
-        if let Some(mut worker) = self.worker.take() {
-            // Runtime teardown keeps the old blocking ownership boundary. A
-            // renderer or encoder I/O call has no safe cancellation here, so
-            // dropping the handle would abandon the live worker and its
-            // recording artifact.
-            worker.request_stop();
-            let _ = worker.reap_blocking();
-        }
-    }
-}
-
-impl VideoRecordingRuntime {
-    fn ensure_recording_worker_available(&mut self) -> Result<(), String> {
-        self.reap_completed_worker()?;
-        if let Some(worker) = self.worker.as_ref() {
-            return Err(if worker.is_stopping() {
-                "A previous video output recording is still stopping".to_string()
-            } else {
-                "A previous video output recording worker is still finishing".to_string()
-            });
-        }
-        let active = self
-            .status
-            .lock()
-            .map_err(|_| "Video recording status lock was poisoned".to_string())?
-            .active;
-        if active {
-            return Err("A video output recording is already active".to_string());
-        }
-        Ok(())
-    }
-
-    fn reap_completed_worker(&mut self) -> Result<(), String> {
-        let reap = {
-            let Some(worker) = self.worker.as_mut() else {
-                return Ok(());
-            };
-            worker.reap_if_complete()
-        };
-        let Some(reap) = reap else {
-            return Ok(());
-        };
-        self.worker = None;
-        if reap == video_recording_lifecycle::WorkerReap::Panicked {
-            let error = "Video recording worker panicked".to_string();
-            match self.status.lock() {
-                Ok(mut status) => {
-                    status.active = false;
-                    status.last_error = Some(error.clone());
-                }
-                Err(_) => {
-                    return Err(format!(
-                        "{error}; video recording status lock was poisoned"
-                    ));
-                }
-            }
-            return Err(error);
-        }
-        Ok(())
-    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -72075,35 +71969,6 @@ where
     }
 }
 
-fn stop_video_output_recording_runtime(
-    video_recording: &Mutex<VideoRecordingRuntime>,
-) -> Result<VideoRecordingStatus, String> {
-    let mut runtime = video_recording
-        .lock()
-        .map_err(|_| "Video recording state lock was poisoned".to_string())?;
-    let Some(worker) = runtime.worker.as_mut() else {
-        return runtime
-            .status
-            .lock()
-            .map_err(|_| "Video recording status lock was poisoned".to_string())
-            .map(|status| status.clone());
-    };
-    worker.request_stop();
-    if worker.wait_for_completion(video_recording_lifecycle::STOP_ACKNOWLEDGEMENT_TIMEOUT)
-        == video_recording_lifecycle::CompletionWait::TimedOut
-    {
-        return Err(
-            "Video recording stop is still in progress; worker ownership was retained".to_string(),
-        );
-    }
-    runtime.reap_completed_worker()?;
-    runtime
-        .status
-        .lock()
-        .map_err(|_| "Video recording status lock was poisoned".to_string())
-        .map(|status| status.clone())
-}
-
 fn validate_output_role_change_for_standby_sync(
     state: &AppState,
     requested_role: MachineOutputRole,
@@ -76165,12 +76030,7 @@ fn start_video_output_recording(
             });
         })
         .map_err(|error| format!("Failed to start video recording worker: {error}"))?;
-    runtime.worker = Some(video_recording_lifecycle::RecordingWorkerLifecycle::new(
-        stop,
-        worker,
-    ));
-    runtime.status = status;
-    Ok(runtime.status.lock().ok().map(|status| status.clone()))
+    Ok(runtime.install_worker(stop, worker, status))
 }
 
 fn recording_audio_inputs(
@@ -76292,11 +76152,7 @@ fn video_output_recording_status(
         .video_recording
         .lock()
         .map_err(|_| "Video recording state lock was poisoned".to_string())?;
-    runtime
-        .status
-        .lock()
-        .map_err(|_| "Video recording status lock was poisoned".to_string())
-        .map(|status| status.clone())
+    runtime.status_snapshot()
 }
 
 #[tauri::command]

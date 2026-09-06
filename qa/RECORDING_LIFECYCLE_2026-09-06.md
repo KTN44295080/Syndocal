@@ -118,3 +118,47 @@ remain open. No physical output was activated, user show was opened or Unity
 asset changed. The recording encoder/renderer/Drop stop bound also remains open
 as described above. Changes add no per-frame polling, capture or pixel copies;
 no measured FPS improvement is claimed.
+
+## Follow-on: runtime separation and diagnostic-reader ownership
+
+Base `4d636c954e2b7f1e68f9e7ab87ba0e4155b9ddee`, same branch/product version.
+The recording status, runtime lifecycle and Stop application operation move
+out of main into `video_recording_runtime.rs`. The Tauri commands remain thin
+adapters; the thread termination mechanism remains in its separate lifecycle
+module. Status serialization and Start/Stop behavior are preserved.
+
+Inspection also found an ownership gap on encoder pipe/wait errors. Those
+paths returned after spawning the stderr reader but without joining it, so
+the outer worker could finish and admit a replacement recording while the old
+reader remained alive. Both error paths now retain the worker until the
+diagnostic reader joins, preserving the primary encoder error and any reader
+failure. This is not a full shutdown deadline: inherited pipe handles can keep
+the reader blocked even after the direct encoder child exits. The retained
+outer worker continues to gate Start and the explicit Stop wait remains bounded
+as documented above. No immediate kill on ordinary Stop is introduced.
+
+Independent review accepted both the runtime extraction and error-path reader
+ownership fix. Main is reduced by 144 lines; no per-frame work is added.
+`cargo test -p syndocal --locked recording_ -- --nocapture --test-threads=1`
+passed: 33 passed, 2 ignored, 1707 filtered, 0.65s. The four new tests exercise
+a reader blocked on a controlled Read, primary-error preservation, diagnostic
+read failure and reader panic. Existing timeout/Start/reap tests run inside the
+new runtime module with unchanged assertions. Exact MSVC pin and PATH-first
+checks passed; test compiler warnings zero. Evidence:
+`target/qa/recording-runtime-20260906/recording-tests.log`.
+
+`pnpm --dir app tauri build --no-bundle` passed: release 2m53s, Vite 10.98s,
+App 499.96kB unchanged. First-party compiler warnings and Vite advisories remain
+zero (baseline zero, delta zero). The exact-path build preflight stopped only
+the prior checkout process, PID 98136.
+
+Launched the new exact checkout executable, PID 108972, SHA256
+`1ACE2D233024EF7F616F97C7CFFFD0716B63CFDB85EF0C8A9E931BF5DE9FD743`.
+One responsive maximized Syndocal main window was verified. MCP negotiated five
+tools and completed fixture-list/runtime-status reads, zero mutations. The
+empty E0/R1 project, no outputs/fixtures, idle Follow and StartupDenied output
+ownership remain unchanged. Native logs, launch identity and read-only MCP
+proof are `native-build.log`, `native-launch.json`, `native-mcp-probe.json` in
+`target/qa/recording-runtime-20260906/`. User-show/Unity acceptance and the full
+recording cancellation/deadline boundary remain open. The unrelated viewport
+checker is preserved unchanged; only owned files belong to this checkpoint.

@@ -1,6 +1,9 @@
 use super::*;
 use std::{
-    sync::{atomic::AtomicBool, mpsc, Arc},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc, Arc,
+    },
     thread,
     time::Duration,
 };
