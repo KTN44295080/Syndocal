@@ -149,14 +149,16 @@ pub(super) fn run_video_output_recording(context: VideoOutputRecordingContext) {
             renderer
                 .frame_provider_mut()
                 .set_bpm(Some(output_preview.snapshot.clock.bpm));
+            let is_cancelled = || stop.load(Ordering::Acquire);
             renderer
-                .render_output_preview_with_effects_and_transitions(
+                .render_output_preview_with_effects_and_transitions_cancellable(
                     &output_preview.snapshot.video,
                     output_preview.render_context(),
                     &output_preview.snapshot.video_transition_runtime,
                     output_id,
                     width,
                     height,
+                    &is_cancelled,
                 )
                 .ok()
         };

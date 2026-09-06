@@ -228,6 +228,29 @@ impl video::VideoFrameDecoder for NdiAwareVideoFrameDecoder {
         }
         video::VideoFrameDecoder::decode_frame(&mut self.files, request)
     }
+
+    fn decode_input_frame_with_cancellation(
+        &mut self,
+        input: &video::VideoRenderInput,
+        cancellation: &dyn video::VideoRenderCancellation,
+    ) -> Result<Option<video::VideoFrame>, video::VideoDecodeError> {
+        if cancellation.is_cancelled() {
+            return Err(video::VideoDecodeError::Cancelled);
+        }
+        if input.request.source.kind == VideoSourceKind::File {
+            return video::VideoFrameDecoder::decode_input_frame_with_cancellation(
+                &mut self.files,
+                input,
+                cancellation,
+            );
+        }
+        let frame = self.decode_frame(&input.request)?;
+        if cancellation.is_cancelled() {
+            Err(video::VideoDecodeError::Cancelled)
+        } else {
+            Ok(frame)
+        }
+    }
 }
 
 #[cfg(feature = "ndi")]

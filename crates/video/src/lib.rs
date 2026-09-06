@@ -23,12 +23,14 @@ use protocol::{
 use serde::{Deserialize, Serialize};
 
 mod builtin_isf;
+mod ffmpeg_cancellable_process;
 mod gpu_compositor;
 mod gpu_surface;
 mod hap_decoder;
 mod isf_runtime;
 mod libav_decoder;
 mod show_spout_aspect_fit;
+mod video_render_cancellation;
 
 pub use builtin_isf::{builtin_isf_effect, BuiltinIsfPreset, BUILTIN_ISF_PRESETS};
 pub use gpu_compositor::{GpuCompositeError, GpuCompositor};
@@ -41,6 +43,10 @@ pub use isf_runtime::{
     ISF_MAX_SOURCE_BYTES,
 };
 pub use libav_decoder::LibavFrameDecoder;
+pub use video_render_cancellation::VideoRenderCancellation;
+
+use ffmpeg_cancellable_process::{run_cancellable_process, CancellableProcessError};
+use video_render_cancellation::{check_render_cancellation, check_runtime_cancellation};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum VideoPixelFormat {
@@ -967,11 +973,13 @@ impl Default for VideoRuntimeConfig {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VideoRuntimeError {
     MissingComposition,
+    Cancelled,
     Composite(CpuCompositeError),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VideoPreviewError {
+    Cancelled,
     InvalidSize,
     InvalidLayerTransition(String),
     MissingLayer {
@@ -1032,6 +1040,7 @@ pub enum VideoOutputRenderError {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VideoFrameProviderError {
+    Cancelled,
     MissingStillImagePath {
         layer_id: VideoLayerId,
         label: String,
@@ -1050,6 +1059,7 @@ pub enum VideoFrameProviderError {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VideoDecodeError {
+    Cancelled,
     /// A selected hardware decoder failed. Do not hide this behind CLI decode.
     HardwareDecode {
         layer_id: VideoLayerId,
@@ -1189,6 +1199,7 @@ impl From<CpuCompositeError> for VideoRuntimeError {
 impl From<VideoFrameProviderError> for VideoPreviewError {
     fn from(error: VideoFrameProviderError) -> Self {
         match error {
+            VideoFrameProviderError::Cancelled => Self::Cancelled,
             VideoFrameProviderError::MissingStillImagePath { layer_id, label } => {
                 Self::MissingStillImagePath { layer_id, label }
             }
@@ -1205,10 +1216,13 @@ impl From<VideoFrameProviderError> for VideoPreviewError {
                 layer_id,
                 label,
                 error,
-            } => Self::Decode {
-                layer_id,
-                label,
-                error,
+            } => match error {
+                VideoDecodeError::Cancelled => Self::Cancelled,
+                error => Self::Decode {
+                    layer_id,
+                    label,
+                    error,
+                },
             },
         }
     }
@@ -1670,6 +1684,20 @@ pub trait VideoFrameProvider {
             input.request.height,
         )
     }
+    fn frame_for_input_with_cancellation(
+        &mut self,
+        input: &VideoRenderInput,
+        cancellation: &dyn VideoRenderCancellation,
+    ) -> Result<VideoFrame, VideoFrameProviderError> {
+        if cancellation.is_cancelled() {
+            return Err(VideoFrameProviderError::Cancelled);
+        }
+        let frame = self.frame_for_input(input)?;
+        if cancellation.is_cancelled() {
+            return Err(VideoFrameProviderError::Cancelled);
+        }
+        Ok(frame)
+    }
     fn frames_for_layer(
         &mut self,
         layer: &VideoLayerSummary,
@@ -1678,6 +1706,22 @@ pub trait VideoFrameProvider {
     ) -> Result<Vec<VideoFrame>, VideoFrameProviderError> {
         self.frame_for_layer(layer, width, height)
             .map(|frame| vec![frame])
+    }
+    fn frames_for_layer_with_cancellation(
+        &mut self,
+        layer: &VideoLayerSummary,
+        width: u32,
+        height: u32,
+        cancellation: &dyn VideoRenderCancellation,
+    ) -> Result<Vec<VideoFrame>, VideoFrameProviderError> {
+        if cancellation.is_cancelled() {
+            return Err(VideoFrameProviderError::Cancelled);
+        }
+        let frames = self.frames_for_layer(layer, width, height)?;
+        if cancellation.is_cancelled() {
+            return Err(VideoFrameProviderError::Cancelled);
+        }
+        Ok(frames)
     }
 }
 
@@ -1703,6 +1747,20 @@ pub trait VideoFrameDecoder {
         input: &VideoRenderInput,
     ) -> Result<Option<VideoFrame>, VideoDecodeError> {
         self.decode_frame(&input.request)
+    }
+    fn decode_input_frame_with_cancellation(
+        &mut self,
+        input: &VideoRenderInput,
+        cancellation: &dyn VideoRenderCancellation,
+    ) -> Result<Option<VideoFrame>, VideoDecodeError> {
+        if cancellation.is_cancelled() {
+            return Err(VideoDecodeError::Cancelled);
+        }
+        let frame = self.decode_input_frame(input)?;
+        if cancellation.is_cancelled() {
+            return Err(VideoDecodeError::Cancelled);
+        }
+        Ok(frame)
     }
 }
 
@@ -2531,6 +2589,17 @@ impl FfmpegCliFrameDecoder {
         &mut self,
         input: &VideoRenderInput,
     ) -> Result<Option<VideoFrame>, VideoDecodeError> {
+        self.decode_input_with_cancellation(input, None)
+    }
+
+    fn decode_input_with_cancellation(
+        &mut self,
+        input: &VideoRenderInput,
+        cancellation: Option<&dyn VideoRenderCancellation>,
+    ) -> Result<Option<VideoFrame>, VideoDecodeError> {
+        if cancellation.is_some_and(VideoRenderCancellation::is_cancelled) {
+            return Err(VideoDecodeError::Cancelled);
+        }
         let request = &input.request;
         if request.source.kind != VideoSourceKind::File {
             self.evict_input(input.key, request.layer_id);
@@ -2556,7 +2625,18 @@ impl FfmpegCliFrameDecoder {
         }
 
         self.evict_input(input.key, request.layer_id);
-        let frame = decode_ffmpeg_cli_frame(request, &self.binary, &path)?;
+        let frame = match cancellation {
+            Some(cancellation) => decode_ffmpeg_cli_frame_with_cancellation(
+                request,
+                &self.binary,
+                &path,
+                cancellation,
+            )?,
+            None => decode_ffmpeg_cli_frame(request, &self.binary, &path)?,
+        };
+        if cancellation.is_some_and(VideoRenderCancellation::is_cancelled) {
+            return Err(VideoDecodeError::Cancelled);
+        }
         self.cache_frame(FfmpegCliFrameCacheEntry {
             key: input.key,
             layer_id: request.layer_id,
@@ -3043,6 +3123,14 @@ impl VideoFrameDecoder for FfmpegCliFrameDecoder {
     ) -> Result<Option<VideoFrame>, VideoDecodeError> {
         self.decode_input(input)
     }
+
+    fn decode_input_frame_with_cancellation(
+        &mut self,
+        input: &VideoRenderInput,
+        cancellation: &dyn VideoRenderCancellation,
+    ) -> Result<Option<VideoFrame>, VideoDecodeError> {
+        self.decode_input_with_cancellation(input, Some(cancellation))
+    }
 }
 
 impl VideoFrameDecoder for NullVideoDecoder {
@@ -3140,6 +3228,14 @@ impl<D: VideoFrameDecoder> VideoFrameProvider for DecoderBackedFrameProvider<D> 
         self.decode_or_placeholder_for_input(input)
     }
 
+    fn frame_for_input_with_cancellation(
+        &mut self,
+        input: &VideoRenderInput,
+        cancellation: &dyn VideoRenderCancellation,
+    ) -> Result<VideoFrame, VideoFrameProviderError> {
+        self.decode_or_placeholder_for_input_with_cancellation(input, cancellation)
+    }
+
     fn frames_for_layer(
         &mut self,
         layer: &VideoLayerSummary,
@@ -3159,6 +3255,35 @@ impl<D: VideoFrameDecoder> VideoFrameProvider for DecoderBackedFrameProvider<D> 
                 width,
                 height,
                 Some(position_ms),
+            )?);
+        }
+        Ok(frames)
+    }
+
+    fn frames_for_layer_with_cancellation(
+        &mut self,
+        layer: &VideoLayerSummary,
+        width: u32,
+        height: u32,
+        cancellation: &dyn VideoRenderCancellation,
+    ) -> Result<Vec<VideoFrame>, VideoFrameProviderError> {
+        let positions = preview_prefetch_positions_ms(
+            layer,
+            self.prefetch_count,
+            self.prefetch_interval_ms,
+            self.bpm,
+        );
+        let mut frames = Vec::with_capacity(positions.len());
+        for position_ms in positions {
+            if cancellation.is_cancelled() {
+                return Err(VideoFrameProviderError::Cancelled);
+            }
+            frames.push(self.decode_or_placeholder_for_layer_with_cancellation(
+                layer,
+                width,
+                height,
+                Some(position_ms),
+                cancellation,
             )?);
         }
         Ok(frames)
@@ -3184,6 +3309,27 @@ impl<D: VideoFrameDecoder> DecoderBackedFrameProvider<D> {
             height,
         });
         self.decode_or_placeholder_for_input(&input)
+    }
+
+    fn decode_or_placeholder_for_layer_with_cancellation(
+        &mut self,
+        layer: &VideoLayerSummary,
+        width: u32,
+        height: u32,
+        position_override_ms: Option<u64>,
+        cancellation: &dyn VideoRenderCancellation,
+    ) -> Result<VideoFrame, VideoFrameProviderError> {
+        let state = sanitize_layer_state(layer.state.clone());
+        let position_ms = position_override_ms.unwrap_or(state.position_ms);
+        let input = VideoRenderInput::legacy(VideoFrameRequest {
+            layer_id: layer.id,
+            label: layer.label.clone(),
+            source: layer.source.clone(),
+            position_ms,
+            width,
+            height,
+        });
+        self.decode_or_placeholder_for_input_with_cancellation(&input, cancellation)
     }
 
     fn decode_or_placeholder_for_input(
@@ -3236,6 +3382,83 @@ impl<D: VideoFrameDecoder> DecoderBackedFrameProvider<D> {
                     kind: request.source.kind.clone(),
                 },
             }),
+            Err(error) => Err(VideoFrameProviderError::Decode {
+                layer_id: request.layer_id,
+                label: request.label.clone(),
+                error,
+            }),
+        }
+    }
+
+    fn decode_or_placeholder_for_input_with_cancellation(
+        &mut self,
+        input: &VideoRenderInput,
+        cancellation: &dyn VideoRenderCancellation,
+    ) -> Result<VideoFrame, VideoFrameProviderError> {
+        if cancellation.is_cancelled() {
+            return Err(VideoFrameProviderError::Cancelled);
+        }
+        let request = &input.request;
+        if matches!(request.source.kind, VideoSourceKind::StillImage) {
+            self.decoder.release_input(input);
+            let path = request
+                .source
+                .path
+                .as_deref()
+                .filter(|path| !path.is_empty())
+                .ok_or_else(|| VideoFrameProviderError::MissingStillImagePath {
+                    layer_id: request.layer_id,
+                    label: request.label.clone(),
+                })?;
+            let frame = self
+                .still_images
+                .frame_for_input(
+                    input.key,
+                    request.layer_id,
+                    path,
+                    request.position_ms,
+                    request.width,
+                    request.height,
+                )
+                .map_err(|error| VideoFrameProviderError::StillImage {
+                    layer_id: request.layer_id,
+                    label: request.label.clone(),
+                    error,
+                })?;
+            return if cancellation.is_cancelled() {
+                Err(VideoFrameProviderError::Cancelled)
+            } else {
+                Ok(frame)
+            };
+        }
+
+        let decoded = self
+            .decoder
+            .decode_input_frame_with_cancellation(input, cancellation);
+        match decoded {
+            Ok(Some(frame)) => Ok(frame),
+            Ok(None) if self.placeholder_when_missing => {
+                if cancellation.is_cancelled() {
+                    Err(VideoFrameProviderError::Cancelled)
+                } else {
+                    Ok(debug_solid_frame_for_layer(
+                        request.layer_id,
+                        request.position_ms,
+                        request.width,
+                        request.height,
+                    ))
+                }
+            }
+            Ok(None) => Err(VideoFrameProviderError::Decode {
+                layer_id: request.layer_id,
+                label: request.label.clone(),
+                error: VideoDecodeError::UnsupportedSource {
+                    layer_id: request.layer_id,
+                    label: request.label.clone(),
+                    kind: request.source.kind.clone(),
+                },
+            }),
+            Err(VideoDecodeError::Cancelled) => Err(VideoFrameProviderError::Cancelled),
             Err(error) => Err(VideoFrameProviderError::Decode {
                 layer_id: request.layer_id,
                 label: request.label.clone(),
@@ -3849,6 +4072,41 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         )
     }
 
+    /// Recording-owner variant of the transition preview path. Cancellation
+    /// is cooperative: it is observed between decoder, composition, and
+    /// effect operations, while ownership remains with the caller until the
+    /// synchronous operation returns.
+    pub fn render_output_preview_with_effects_and_transitions_cancellable(
+        &mut self,
+        snapshot: &VideoSnapshot,
+        context: VideoEffectRenderContext<'_>,
+        transition_runtime: &VideoLayerTransitionRuntimeSnapshot,
+        output_id: VideoOutputId,
+        width: u32,
+        height: u32,
+        cancellation: &dyn VideoRenderCancellation,
+    ) -> Result<VideoFrame, VideoPreviewError> {
+        if width == 0 || height == 0 {
+            return Err(VideoPreviewError::InvalidSize);
+        }
+        if cancellation.is_cancelled() {
+            return Err(VideoPreviewError::Cancelled);
+        }
+        let mut plan = build_video_output_render_plan(snapshot, output_id)
+            .map_err(VideoPreviewError::Output)?;
+        apply_video_layer_transition_weights(snapshot, transition_runtime, &mut plan.composition)?;
+        let result = self.prepare_output_artistic_render_result_impl_with_cancellation(
+            snapshot,
+            context,
+            Some(transition_runtime),
+            &plan,
+            width,
+            height,
+            Some(cancellation),
+        )?;
+        Self::consume_fresh_artistic_frame(result, width, height, true)
+    }
+
     /// Evidenced preview counterpart of the existing transition-bus path.
     pub fn render_output_preview_with_effects_and_transitions_evidenced(
         &mut self,
@@ -4064,6 +4322,28 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         width: u32,
         height: u32,
     ) -> Result<VideoOutputArtisticRenderResult, VideoPreviewError> {
+        self.prepare_output_artistic_render_result_impl_with_cancellation(
+            snapshot,
+            context,
+            transition_runtime,
+            plan,
+            width,
+            height,
+            None,
+        )
+    }
+
+    fn prepare_output_artistic_render_result_impl_with_cancellation(
+        &mut self,
+        snapshot: &VideoSnapshot,
+        context: VideoEffectRenderContext<'_>,
+        transition_runtime: Option<&VideoLayerTransitionRuntimeSnapshot>,
+        plan: &VideoOutputRenderPlan,
+        width: u32,
+        height: u32,
+        cancellation: Option<&dyn VideoRenderCancellation>,
+    ) -> Result<VideoOutputArtisticRenderResult, VideoPreviewError> {
+        check_render_cancellation(cancellation)?;
         if width == 0 || height == 0 {
             return Err(VideoPreviewError::InvalidSize);
         }
@@ -4097,13 +4377,14 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
             entry.key.project_render_epoch == context.project_render_epoch
                 && (entry.key.output_id != plan.output_id || entry.key == key)
         });
-        match self.prepare_output_artistic_frame_with_effects_impl(
+        match self.prepare_output_artistic_frame_with_effects_impl_with_cancellation(
             snapshot,
             context,
             transition_runtime,
             plan,
             width,
             height,
+            cancellation,
         ) {
             Ok(frame) => {
                 if !self.last_effect_stage_faults.is_empty() {
@@ -4308,7 +4589,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         )
     }
 
-    fn prepare_output_artistic_frame_with_effects_impl(
+    fn prepare_output_artistic_frame_with_effects_impl_with_cancellation(
         &mut self,
         snapshot: &VideoSnapshot,
         context: VideoEffectRenderContext<'_>,
@@ -4316,7 +4597,9 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         plan: &VideoOutputRenderPlan,
         width: u32,
         height: u32,
+        cancellation: Option<&dyn VideoRenderCancellation>,
     ) -> Result<VideoFrame, VideoPreviewError> {
+        check_render_cancellation(cancellation)?;
         if width == 0 || height == 0 {
             return Err(VideoPreviewError::InvalidSize);
         }
@@ -4334,21 +4617,23 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
             .iter()
             .map(|layer| layer.layer_id)
             .collect::<Vec<_>>();
-        let mut faults = self.prepare_frames_with_effects(
+        let mut faults = self.prepare_frames_with_effects_with_cancellation(
             snapshot,
             context.clip_runtime,
             context.project_render_epoch,
             &layer_ids,
             width,
             height,
+            cancellation,
         )?;
         let (mut frame, composition_faults) = self
-            .compose_scoped_plan(
+            .compose_scoped_plan_with_cancellation(
                 snapshot,
                 transition_runtime,
                 &plan.composition,
                 width,
                 height,
+                cancellation,
             )
             .map_err(VideoPreviewError::Runtime)?;
         faults.extend(composition_faults);
@@ -4357,8 +4642,14 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         };
         match resolve_video_effect_chain(snapshot, &output_scope) {
             Ok(Some(chain)) => {
-                let (rendered, output_faults) =
-                    self.apply_resolved_effect_chain_to_frame(&chain, frame, None);
+                let (rendered, output_faults) = self
+                    .apply_resolved_effect_chain_to_frame_with_cancellation(
+                        &chain,
+                        frame,
+                        None,
+                        cancellation,
+                    )
+                    .map_err(VideoPreviewError::Runtime)?;
                 frame = rendered;
                 faults.extend(output_faults);
             }
@@ -4371,6 +4662,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
                 ordered_faults.push(fault);
             }
         }
+        check_render_cancellation(cancellation)?;
         self.record_effect_faults(ordered_faults, snapshot);
         Ok(frame)
     }
@@ -4390,14 +4682,16 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         self.clear_full_output_effect_diagnostics(snapshot);
     }
 
-    fn compose_scoped_plan(
+    fn compose_scoped_plan_with_cancellation(
         &mut self,
         snapshot: &VideoSnapshot,
         transition_runtime: Option<&VideoLayerTransitionRuntimeSnapshot>,
         plan: &CompositionPlan,
         width: u32,
         height: u32,
+        cancellation: Option<&dyn VideoRenderCancellation>,
     ) -> Result<(VideoFrame, Vec<VideoEffectStageFault>), VideoRuntimeError> {
+        check_runtime_cancellation(cancellation)?;
         let frames = self.runtime.select_frames_for_plan(plan);
         let mut faults = Vec::new();
         let active_buses = transition_runtime
@@ -4429,6 +4723,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
             .iter()
             .filter(|group| group.composition_id == plan.composition_id)
         {
+            check_runtime_cancellation(cancellation)?;
             let scope = VideoEffectScope::Group { group_id: group.id };
             match resolve_video_effect_chain(snapshot, &scope) {
                 Ok(Some(chain)) if resolved_chain_executes(&chain) => {
@@ -4453,6 +4748,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
             fast_output.unwrap_or_else(|| vec![0u8; width as usize * height as usize * 4]);
 
         for layer in &plan.layers {
+            check_runtime_cancellation(cancellation)?;
             if fast_path_applied {
                 break;
             }
@@ -4483,7 +4779,14 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
                     layers: bus_layers,
                 };
                 let (bus_data, bus_group_faults) = self
-                    .compose_plan_layers_with_groups(snapshot, &bus_plan, &frames, width, height)?;
+                    .compose_plan_layers_with_groups_with_cancellation(
+                        snapshot,
+                        &bus_plan,
+                        &frames,
+                        width,
+                        height,
+                        cancellation,
+                    )?;
                 faults.extend(bus_group_faults);
                 let bus_frame = VideoFrame {
                     layer_id: 0,
@@ -4501,8 +4804,13 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
                 };
                 let bus_frame = match resolve_video_effect_chain(snapshot, &scope) {
                     Ok(Some(chain)) => {
-                        let (rendered, bus_faults) =
-                            self.apply_resolved_effect_chain_to_frame(&chain, bus_frame, None);
+                        let (rendered, bus_faults) = self
+                            .apply_resolved_effect_chain_to_frame_with_cancellation(
+                                &chain,
+                                bus_frame,
+                                None,
+                                cancellation,
+                            )?;
                         faults.extend(bus_faults);
                         rendered
                     }
@@ -4516,6 +4824,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
                     .chunks_exact_mut(4)
                     .zip(bus_frame.data.chunks_exact(4))
                 {
+                    check_runtime_cancellation(cancellation)?;
                     blend_pixel(destination, source, 1.0, &VideoBlendMode::Normal);
                 }
                 continue;
@@ -4550,13 +4859,19 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
                 layers: group_layers,
             };
             let group_frame = composite_rgba8(&group_plan, &frames, width, height)?;
-            let (group_frame, group_faults) =
-                self.apply_resolved_effect_chain_to_frame(chain, group_frame, None);
+            let (group_frame, group_faults) = self
+                .apply_resolved_effect_chain_to_frame_with_cancellation(
+                    chain,
+                    group_frame,
+                    None,
+                    cancellation,
+                )?;
             faults.extend(group_faults);
             for (destination, source) in output
                 .chunks_exact_mut(4)
                 .zip(group_frame.data.chunks_exact(4))
             {
+                check_runtime_cancellation(cancellation)?;
                 blend_pixel(destination, source, 1.0, &VideoBlendMode::Normal);
             }
         }
@@ -4575,8 +4890,13 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         };
         match resolve_video_effect_chain(snapshot, &scope) {
             Ok(Some(chain)) => {
-                let (rendered, composition_faults) =
-                    self.apply_resolved_effect_chain_to_frame(&chain, frame, None);
+                let (rendered, composition_faults) = self
+                    .apply_resolved_effect_chain_to_frame_with_cancellation(
+                        &chain,
+                        frame,
+                        None,
+                        cancellation,
+                    )?;
                 frame = rendered;
                 faults.extend(composition_faults);
             }
@@ -4586,14 +4906,16 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         Ok((frame, faults))
     }
 
-    fn compose_plan_layers_with_groups(
+    fn compose_plan_layers_with_groups_with_cancellation(
         &mut self,
         snapshot: &VideoSnapshot,
         plan: &CompositionPlan,
         frames: &[VideoFrame],
         width: u32,
         height: u32,
+        cancellation: Option<&dyn VideoRenderCancellation>,
     ) -> Result<(Vec<u8>, Vec<VideoEffectStageFault>), VideoRuntimeError> {
+        check_runtime_cancellation(cancellation)?;
         let mut output = vec![0u8; width as usize * height as usize * 4];
         let mut faults = Vec::new();
         let mut active_groups = Vec::new();
@@ -4602,6 +4924,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
             .iter()
             .filter(|group| group.composition_id == plan.composition_id)
         {
+            check_runtime_cancellation(cancellation)?;
             let scope = VideoEffectScope::Group { group_id: group.id };
             match resolve_video_effect_chain(snapshot, &scope) {
                 Ok(Some(chain)) if resolved_chain_executes(&chain) => {
@@ -4612,6 +4935,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
             }
         }
         for layer in &plan.layers {
+            check_runtime_cancellation(cancellation)?;
             let group = active_groups
                 .iter()
                 .find(|(member_ids, _)| member_ids.contains(&layer.layer_id));
@@ -4642,13 +4966,19 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
                 layers: group_layers,
             };
             let group_frame = composite_rgba8(&group_plan, frames, width, height)?;
-            let (group_frame, group_faults) =
-                self.apply_resolved_effect_chain_to_frame(chain, group_frame, None);
+            let (group_frame, group_faults) = self
+                .apply_resolved_effect_chain_to_frame_with_cancellation(
+                    chain,
+                    group_frame,
+                    None,
+                    cancellation,
+                )?;
             faults.extend(group_faults);
             for (destination, source) in output
                 .chunks_exact_mut(4)
                 .zip(group_frame.data.chunks_exact(4))
             {
+                check_runtime_cancellation(cancellation)?;
                 blend_pixel(destination, source, 1.0, &VideoBlendMode::Normal);
             }
         }
@@ -4743,6 +5073,28 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         width: u32,
         height: u32,
     ) -> Result<Vec<VideoEffectStageFault>, VideoPreviewError> {
+        self.prepare_frames_with_effects_with_cancellation(
+            snapshot,
+            clip_runtime,
+            project_render_epoch,
+            requested_layer_ids,
+            width,
+            height,
+            None,
+        )
+    }
+
+    fn prepare_frames_with_effects_with_cancellation(
+        &mut self,
+        snapshot: &VideoSnapshot,
+        clip_runtime: &VideoClipRuntimeSnapshot,
+        project_render_epoch: u64,
+        requested_layer_ids: &[VideoLayerId],
+        width: u32,
+        height: u32,
+        cancellation: Option<&dyn VideoRenderCancellation>,
+    ) -> Result<Vec<VideoEffectStageFault>, VideoPreviewError> {
+        check_render_cancellation(cancellation)?;
         let layer_ids = snapshot
             .layers
             .iter()
@@ -4753,6 +5105,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         // universe, not just the output being drawn; alternating outputs must
         // not destroy each other's decoder sessions. Decoding stays scoped below.
         for layer in &snapshot.layers {
+            check_render_cancellation(cancellation)?;
             let runtime_layer = clip_runtime
                 .layers
                 .iter()
@@ -4802,6 +5155,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         let mut effect_faults = Vec::new();
 
         for layer in &snapshot.layers {
+            check_render_cancellation(cancellation)?;
             if !requested_layer_ids.contains(&layer.id) {
                 continue;
             }
@@ -4831,34 +5185,46 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
                     width,
                     height,
                 )?;
-                let outgoing_frame =
-                    self.frame_provider
-                        .frame_for_input(&outgoing)
-                        .map_err(|error| VideoPreviewError::RenderInput {
-                            key: outgoing.key,
-                            error,
-                        })?;
-                let incoming_frame =
-                    self.frame_provider
-                        .frame_for_input(&incoming)
-                        .map_err(|error| VideoPreviewError::RenderInput {
-                            key: incoming.key,
-                            error,
-                        })?;
-                let (outgoing_frame, outgoing_faults) = self.apply_clip_chain_to_frame(
-                    snapshot,
-                    layer.id,
-                    transition.outgoing_slot_id,
-                    outgoing_frame,
-                    Some(outgoing.key),
-                );
-                let (incoming_frame, incoming_faults) = self.apply_clip_chain_to_frame(
-                    snapshot,
-                    layer.id,
-                    transition.incoming_slot_id,
-                    incoming_frame,
-                    Some(incoming.key),
-                );
+                let outgoing_frame = match cancellation {
+                    Some(cancellation) => self
+                        .frame_provider
+                        .frame_for_input_with_cancellation(&outgoing, cancellation),
+                    None => self.frame_provider.frame_for_input(&outgoing),
+                }
+                .map_err(|error| VideoPreviewError::RenderInput {
+                    key: outgoing.key,
+                    error,
+                })?;
+                let incoming_frame = match cancellation {
+                    Some(cancellation) => self
+                        .frame_provider
+                        .frame_for_input_with_cancellation(&incoming, cancellation),
+                    None => self.frame_provider.frame_for_input(&incoming),
+                }
+                .map_err(|error| VideoPreviewError::RenderInput {
+                    key: incoming.key,
+                    error,
+                })?;
+                let (outgoing_frame, outgoing_faults) = self
+                    .apply_clip_chain_to_frame_with_cancellation(
+                        snapshot,
+                        layer.id,
+                        transition.outgoing_slot_id,
+                        outgoing_frame,
+                        Some(outgoing.key),
+                        cancellation,
+                    )
+                    .map_err(VideoPreviewError::Runtime)?;
+                let (incoming_frame, incoming_faults) = self
+                    .apply_clip_chain_to_frame_with_cancellation(
+                        snapshot,
+                        layer.id,
+                        transition.incoming_slot_id,
+                        incoming_frame,
+                        Some(incoming.key),
+                        cancellation,
+                    )
+                    .map_err(VideoPreviewError::Runtime)?;
                 effect_faults.extend(outgoing_faults);
                 effect_faults.extend(incoming_faults);
                 let (base_outgoing, base_incoming, base_progress) =
@@ -4884,17 +5250,27 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
                 };
                 let (frame, transition_faults) =
                     match resolve_video_effect_chain(snapshot, &transition_scope) {
-                        Ok(Some(chain)) => {
-                            self.apply_resolved_effect_chain_to_frame(&chain, frame, None)
-                        }
+                        Ok(Some(chain)) => self
+                            .apply_resolved_effect_chain_to_frame_with_cancellation(
+                                &chain,
+                                frame,
+                                None,
+                                cancellation,
+                            )
+                            .map_err(VideoPreviewError::Runtime)?,
                         Ok(None) => (frame, Vec::new()),
                         Err(fault) => (frame, vec![*fault]),
                     };
                 effect_faults.extend(transition_faults);
                 let (frame, layer_faults) = match resolve_effective_layer_chain(snapshot, layer) {
-                    Ok(Some(chain)) => {
-                        self.apply_resolved_effect_chain_to_frame(&chain, frame, None)
-                    }
+                    Ok(Some(chain)) => self
+                        .apply_resolved_effect_chain_to_frame_with_cancellation(
+                            &chain,
+                            frame,
+                            None,
+                            cancellation,
+                        )
+                        .map_err(VideoPreviewError::Runtime)?,
                     Ok(None) => (frame, Vec::new()),
                     Err(fault) => (frame, vec![*fault]),
                 };
@@ -4902,11 +5278,18 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
                 self.runtime.push_frame(frame);
                 continue;
             }
-            let frames = self
-                .frame_provider
-                .frames_for_layer(layer, width, height)
-                .map_err(VideoPreviewError::from)?;
+            let frames = match cancellation {
+                Some(cancellation) => self.frame_provider.frames_for_layer_with_cancellation(
+                    layer,
+                    width,
+                    height,
+                    cancellation,
+                ),
+                None => self.frame_provider.frames_for_layer(layer, width, height),
+            }
+            .map_err(VideoPreviewError::from)?;
             for frame in frames {
+                check_render_cancellation(cancellation)?;
                 let active_slot_id = clip_runtime
                     .layers
                     .iter()
@@ -4919,9 +5302,14 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
                             slot_id,
                         };
                         match resolve_video_effect_chain(snapshot, &scope) {
-                            Ok(Some(chain)) => {
-                                self.apply_resolved_effect_chain_to_frame(&chain, frame, None)
-                            }
+                            Ok(Some(chain)) => self
+                                .apply_resolved_effect_chain_to_frame_with_cancellation(
+                                    &chain,
+                                    frame,
+                                    None,
+                                    cancellation,
+                                )
+                                .map_err(VideoPreviewError::Runtime)?,
                             Ok(None) => (frame, Vec::new()),
                             Err(fault) => (frame, vec![*fault]),
                         }
@@ -4934,9 +5322,14 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
                     }
                 }
                 let (frame, layer_faults) = match resolve_effective_layer_chain(snapshot, layer) {
-                    Ok(Some(chain)) => {
-                        self.apply_resolved_effect_chain_to_frame(&chain, frame, None)
-                    }
+                    Ok(Some(chain)) => self
+                        .apply_resolved_effect_chain_to_frame_with_cancellation(
+                            &chain,
+                            frame,
+                            None,
+                            cancellation,
+                        )
+                        .map_err(VideoPreviewError::Runtime)?,
                     Ok(None) => (frame, Vec::new()),
                     Err(fault) => (frame, vec![*fault]),
                 };
@@ -4952,25 +5345,37 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         Ok(effect_faults)
     }
 
-    fn apply_clip_chain_to_frame(
+    fn apply_clip_chain_to_frame_with_cancellation(
         &mut self,
         snapshot: &VideoSnapshot,
         layer_id: VideoLayerId,
         slot_id: VideoClipSlotId,
         frame: VideoFrame,
         key: Option<protocol::VideoRenderInputKey>,
-    ) -> (VideoFrame, Vec<VideoEffectStageFault>) {
+        cancellation: Option<&dyn VideoRenderCancellation>,
+    ) -> Result<(VideoFrame, Vec<VideoEffectStageFault>), VideoRuntimeError> {
         let scope = VideoEffectScope::Clip { layer_id, slot_id };
         match resolve_video_effect_chain(snapshot, &scope) {
-            Ok(Some(chain)) => self.apply_resolved_effect_chain_to_frame(&chain, frame, key),
-            Ok(None) => (frame, Vec::new()),
-            Err(fault) => (
+            Ok(Some(chain)) => self.apply_resolved_effect_chain_to_frame_with_cancellation(
+                &chain,
                 frame,
-                vec![VideoEffectStageFault {
-                    render_input_key: key,
-                    ..*fault
-                }],
+                key,
+                cancellation,
             ),
+            Ok(None) => {
+                check_runtime_cancellation(cancellation)?;
+                Ok((frame, Vec::new()))
+            }
+            Err(fault) => {
+                check_runtime_cancellation(cancellation)?;
+                Ok((
+                    frame,
+                    vec![VideoEffectStageFault {
+                        render_input_key: key,
+                        ..*fault
+                    }],
+                ))
+            }
         }
     }
 
@@ -5011,12 +5416,30 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         frame: VideoFrame,
         render_input_key: Option<protocol::VideoRenderInputKey>,
     ) -> (VideoFrame, Vec<VideoEffectStageFault>) {
+        self.apply_resolved_effect_chain_to_frame_with_cancellation(
+            chain,
+            frame,
+            render_input_key,
+            None,
+        )
+        .expect("a render without a cancellation callback cannot be cancelled")
+    }
+
+    fn apply_resolved_effect_chain_to_frame_with_cancellation(
+        &mut self,
+        chain: &ResolvedVideoEffectChain,
+        frame: VideoFrame,
+        render_input_key: Option<protocol::VideoRenderInputKey>,
+        cancellation: Option<&dyn VideoRenderCancellation>,
+    ) -> Result<(VideoFrame, Vec<VideoEffectStageFault>), VideoRuntimeError> {
+        check_runtime_cancellation(cancellation)?;
         if !resolved_chain_executes(chain) {
-            return (frame, Vec::new());
+            return Ok((frame, Vec::new()));
         }
         let mut prepared_stages = Vec::new();
         let mut faults = Vec::new();
         for (stage_index, stage) in chain.stages.iter().enumerate() {
+            check_runtime_cancellation(cancellation)?;
             if !stage.enabled {
                 continue;
             }
@@ -5061,13 +5484,14 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
                         error.to_string(),
                     ));
                 }
-                return (frame, faults);
+                return Ok((frame, faults));
             }
         };
         if prepared_stages.is_empty() {
             runtime.advance_stage_local_chain_without_prepared_stages();
-            return (frame, faults);
+            return Ok((frame, faults));
         }
+        check_runtime_cancellation(cancellation)?;
         let stage_refs = prepared_stages
             .iter()
             .map(|(_, shader, controls)| (shader.as_ref(), controls.as_slice()))
@@ -5078,6 +5502,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
             frame.pts_ms as f32 / 1_000.0,
             frame.duration_ms as f32 / 1_000.0,
         );
+        check_runtime_cancellation(cancellation)?;
         for (prepared_index, error) in runtime_failures {
             let stage_index = prepared_stages[prepared_index].0;
             let stage = &chain.stages[stage_index];
@@ -5094,7 +5519,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
                 error.to_string(),
             ));
         }
-        (rendered, faults)
+        Ok((rendered, faults))
     }
 
     fn apply_isf_effect_to_frame(
@@ -6496,21 +6921,91 @@ pub fn decode_ffmpeg_cli_frame(
     binary: impl AsRef<Path>,
     path: impl AsRef<Path>,
 ) -> Result<VideoFrame, VideoDecodeError> {
-    if request.width == 0 || request.height == 0 {
-        return Err(VideoDecodeError::Decode {
-            layer_id: request.layer_id,
-            label: request.label.clone(),
-            message: "requested frame size must be greater than zero".to_string(),
-        });
-    }
+    let expected_len = ffmpeg_frame_expected_len(request)?;
+    let output = ffmpeg_frame_command(request, binary.as_ref(), path.as_ref())
+        .output()
+        .map_err(|error| {
+            decode_error_for_request(
+                request,
+                format!(
+                    "failed to run FFmpeg binary '{}': {error}",
+                    binary.as_ref().display()
+                ),
+            )
+        })?;
+    ffmpeg_frame_from_output(
+        request,
+        expected_len,
+        output.status,
+        output.stdout,
+        output.stderr,
+    )
+}
 
-    let expected_len = request.width as usize * request.height as usize * 4;
+pub fn decode_ffmpeg_cli_frame_with_cancellation(
+    request: &VideoFrameRequest,
+    binary: impl AsRef<Path>,
+    path: impl AsRef<Path>,
+    cancellation: &dyn VideoRenderCancellation,
+) -> Result<VideoFrame, VideoDecodeError> {
+    if cancellation.is_cancelled() {
+        return Err(VideoDecodeError::Cancelled);
+    }
+    let expected_len = ffmpeg_frame_expected_len(request)?;
+    let output = match run_cancellable_process(
+        ffmpeg_frame_command(request, binary.as_ref(), path.as_ref()),
+        cancellation,
+    ) {
+        Ok(output) => output,
+        Err(CancellableProcessError::Cancelled) => return Err(VideoDecodeError::Cancelled),
+        Err(CancellableProcessError::Failed(error)) => {
+            return Err(decode_error_for_request(
+                request,
+                format!(
+                    "failed to run FFmpeg binary '{}': {error}",
+                    binary.as_ref().display()
+                ),
+            ));
+        }
+    };
+    if cancellation.is_cancelled() {
+        return Err(VideoDecodeError::Cancelled);
+    }
+    ffmpeg_frame_from_output(
+        request,
+        expected_len,
+        output.status,
+        output.stdout,
+        output.stderr,
+    )
+}
+
+fn decode_error_for_request(request: &VideoFrameRequest, message: String) -> VideoDecodeError {
+    VideoDecodeError::Decode {
+        layer_id: request.layer_id,
+        label: request.label.clone(),
+        message,
+    }
+}
+
+fn ffmpeg_frame_expected_len(request: &VideoFrameRequest) -> Result<usize, VideoDecodeError> {
+    if request.width == 0 || request.height == 0 {
+        return Err(decode_error_for_request(
+            request,
+            "requested frame size must be greater than zero".to_string(),
+        ));
+    }
+    Ok(request.width as usize * request.height as usize * 4)
+}
+
+fn ffmpeg_frame_command(request: &VideoFrameRequest, binary: &Path, path: &Path) -> Command {
     let seek_seconds = format!("{:.3}", request.position_ms as f64 / 1000.0);
     let scale_filter = format!(
         "scale={}:{}:flags=fast_bilinear,format=rgba",
         request.width, request.height
     );
-    let output = Command::new(binary.as_ref())
+    let mut command = Command::new(binary);
+    command
         .args([
             "-hide_banner",
             "-loglevel",
@@ -6519,7 +7014,7 @@ pub fn decode_ffmpeg_cli_frame(
             &seek_seconds,
             "-i",
         ])
-        .arg(path.as_ref())
+        .arg(path)
         .args([
             "-frames:v",
             "1",
@@ -6532,37 +7027,33 @@ pub fn decode_ffmpeg_cli_frame(
             "-pix_fmt",
             "rgba",
             "pipe:1",
-        ])
-        .output()
-        .map_err(|error| VideoDecodeError::Decode {
-            layer_id: request.layer_id,
-            label: request.label.clone(),
-            message: format!(
-                "failed to run FFmpeg binary '{}': {error}",
-                binary.as_ref().display()
-            ),
-        })?;
+        ]);
+    command
+}
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(VideoDecodeError::Decode {
-            layer_id: request.layer_id,
-            label: request.label.clone(),
-            message: format!("FFmpeg decode failed: {}", stderr.trim()),
-        });
+fn ffmpeg_frame_from_output(
+    request: &VideoFrameRequest,
+    expected_len: usize,
+    status: std::process::ExitStatus,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+) -> Result<VideoFrame, VideoDecodeError> {
+    if !status.success() {
+        let stderr = String::from_utf8_lossy(&stderr);
+        return Err(decode_error_for_request(
+            request,
+            format!("FFmpeg decode failed: {}", stderr.trim()),
+        ));
     }
-
-    if output.stdout.len() != expected_len {
-        return Err(VideoDecodeError::Decode {
-            layer_id: request.layer_id,
-            label: request.label.clone(),
-            message: format!(
+    if stdout.len() != expected_len {
+        return Err(decode_error_for_request(
+            request,
+            format!(
                 "FFmpeg returned {} bytes, expected {expected_len}",
-                output.stdout.len()
+                stdout.len()
             ),
-        });
+        ));
     }
-
     Ok(VideoFrame {
         layer_id: request.layer_id,
         width: request.width,
@@ -6570,7 +7061,7 @@ pub fn decode_ffmpeg_cli_frame(
         pts_ms: request.position_ms,
         duration_ms: 16,
         format: VideoPixelFormat::Rgba8,
-        data: output.stdout,
+        data: stdout,
     })
 }
 
@@ -16509,3 +17000,7 @@ mod tests {
 #[cfg(test)]
 #[path = "axis_aligned_composite_tests.rs"]
 mod axis_aligned_composite_tests;
+
+#[cfg(test)]
+#[path = "video_render_cancellation_tests.rs"]
+mod video_render_cancellation_tests;

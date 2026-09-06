@@ -41,6 +41,12 @@
 - Preserve typography, controls, icons, spacing, and hit targets unless the user requests a smaller size for a named element. Reductions stay local to that element.
 - Solve space pressure through reflow, disclosure, pagination, or internal scrolling before size reduction.
 
+## Architecture and performance
+
+- Prefer clean responsibility boundaries when adding cross-cutting behavior: keep domain/rendering policy, lifecycle ownership, transport/process I/O, and UI adapters in separate modules. Public compatibility seams stay thin and delegate to one canonical implementation; do not duplicate hot-path behavior merely to preserve an old entry point.
+- Optimize the real hot path before adding abstraction overhead. Do not add avoidable frame copies, allocations, locks, polling threads, or detached workers to rendering and output loops. Cancellation and recovery checkpoints belong at ownership boundaries and must preserve the owner until the operation is safely reaped.
+- When an existing central file is already large, extract new reusable policy or process/lifecycle machinery into a focused module whenever practical. Keep a small forwarding seam in the central file only when it is required for the existing API or wiring, and record the measured performance and remaining blocking boundary in the applicable QA note.
+
 ## Checkpoints and stopping
 
 - A checkpoint is a completed, agreed unit of work, not every progress message. For substantive changes, update the relevant status/QA document or one concise handoff with branch/base, changed behavior, evidence, unresolved boundaries, and next action. Do not copy the operational log into multiple documents.

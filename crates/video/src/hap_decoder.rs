@@ -12,7 +12,7 @@ use serde::Serialize;
 use super::{
     render_input_cache_owner_matches, FfmpegCliFrameDecoder, LibavFrameDecoder,
     StillImageSignature, VideoDecodeError, VideoFrame, VideoFrameDecoder, VideoFrameRequest,
-    VideoPixelFormat, VideoRenderInput,
+    VideoPixelFormat, VideoRenderCancellation, VideoRenderInput,
 };
 
 #[derive(Debug, Clone, Copy, Default, Serialize, PartialEq, Eq)]
@@ -157,10 +157,17 @@ impl PreferredVideoFrameDecoder {
         &mut self,
         input: &VideoRenderInput,
         primary_error: Option<VideoDecodeError>,
+        cancellation: Option<&dyn VideoRenderCancellation>,
     ) -> Result<Option<VideoFrame>, VideoDecodeError> {
         self.diagnostics.cli_fallback_requests =
             self.diagnostics.cli_fallback_requests.saturating_add(1);
-        match self.fallback.decode_input_frame(input) {
+        let decoded = match cancellation {
+            Some(cancellation) => self
+                .fallback
+                .decode_input_frame_with_cancellation(input, cancellation),
+            None => self.fallback.decode_input_frame(input),
+        };
+        match decoded {
             Ok(Some(frame)) => {
                 self.diagnostics.cli_fallback_successes =
                     self.diagnostics.cli_fallback_successes.saturating_add(1);
@@ -185,7 +192,11 @@ impl PreferredVideoFrameDecoder {
         &mut self,
         input: &VideoRenderInput,
         primary_error: Option<VideoDecodeError>,
+        cancellation: Option<&dyn VideoRenderCancellation>,
     ) -> Result<Option<VideoFrame>, VideoDecodeError> {
+        if cancellation.is_some_and(VideoRenderCancellation::is_cancelled) {
+            return Err(VideoDecodeError::Cancelled);
+        }
         let request = &input.request;
         if request.source.kind != VideoSourceKind::File {
             self.diagnostics.deferred_requests =
@@ -196,13 +207,19 @@ impl PreferredVideoFrameDecoder {
             };
         }
         self.diagnostics.libav_requests = self.diagnostics.libav_requests.saturating_add(1);
-        match self.libav.decode_input_frame(input) {
+        let decoded = match cancellation {
+            Some(cancellation) => self
+                .libav
+                .decode_input_frame_with_cancellation(input, cancellation),
+            None => self.libav.decode_input_frame(input),
+        };
+        match decoded {
             Ok(Some(frame)) => {
                 self.diagnostics.libav_successes =
                     self.diagnostics.libav_successes.saturating_add(1);
                 Ok(Some(frame))
             }
-            Ok(None) => self.decode_cli_fallback_input(input, primary_error),
+            Ok(None) => self.decode_cli_fallback_input(input, primary_error, cancellation),
             Err(libav_error) => {
                 self.diagnostics.libav_failures = self.diagnostics.libav_failures.saturating_add(1);
                 if matches!(libav_error, VideoDecodeError::HardwareDecode { .. }) {
@@ -210,9 +227,60 @@ impl PreferredVideoFrameDecoder {
                         self.diagnostics.decode_failures.saturating_add(1);
                     return Err(libav_error);
                 }
-                self.decode_cli_fallback_input(input, primary_error.or(Some(libav_error)))
+                self.decode_cli_fallback_input(
+                    input,
+                    primary_error.or(Some(libav_error)),
+                    cancellation,
+                )
             }
         }
+    }
+
+    fn decode_input_frame_with_cancellation_impl(
+        &mut self,
+        input: &VideoRenderInput,
+        cancellation: Option<&dyn VideoRenderCancellation>,
+    ) -> Result<Option<VideoFrame>, VideoDecodeError> {
+        if cancellation.is_some_and(VideoRenderCancellation::is_cancelled) {
+            return Err(VideoDecodeError::Cancelled);
+        }
+        let request = &input.request;
+        self.diagnostics.total_requests = self.diagnostics.total_requests.saturating_add(1);
+        let has_file_path = request.source.kind == VideoSourceKind::File
+            && request
+                .source
+                .path
+                .as_deref()
+                .is_some_and(|path| !path.trim().is_empty());
+        if !has_file_path {
+            self.release_input(input);
+        }
+        if HapMovFrameDecoder::supports_request(request) {
+            self.libav.release_input(input);
+            VideoFrameDecoder::release_input(&mut self.fallback, input);
+            self.diagnostics.hap_requests = self.diagnostics.hap_requests.saturating_add(1);
+            let decoded = self.hap.decode_input_frame(input);
+            if cancellation.is_some_and(VideoRenderCancellation::is_cancelled) {
+                return Err(VideoDecodeError::Cancelled);
+            }
+            return match decoded {
+                Ok(Some(frame)) => {
+                    self.diagnostics.hap_successes =
+                        self.diagnostics.hap_successes.saturating_add(1);
+                    Ok(Some(frame))
+                }
+                Ok(None) => {
+                    self.diagnostics.deferred_requests =
+                        self.diagnostics.deferred_requests.saturating_add(1);
+                    Ok(None)
+                }
+                Err(error) => {
+                    self.diagnostics.hap_failures = self.diagnostics.hap_failures.saturating_add(1);
+                    self.decode_general_input(input, Some(error), cancellation)
+                }
+            };
+        }
+        self.decode_general_input(input, None, cancellation)
     }
 }
 
@@ -248,39 +316,15 @@ impl VideoFrameDecoder for PreferredVideoFrameDecoder {
         &mut self,
         input: &VideoRenderInput,
     ) -> Result<Option<VideoFrame>, VideoDecodeError> {
-        let request = &input.request;
-        self.diagnostics.total_requests = self.diagnostics.total_requests.saturating_add(1);
-        let has_file_path = request.source.kind == VideoSourceKind::File
-            && request
-                .source
-                .path
-                .as_deref()
-                .is_some_and(|path| !path.trim().is_empty());
-        if !has_file_path {
-            self.release_input(input);
-        }
-        if HapMovFrameDecoder::supports_request(request) {
-            self.libav.release_input(input);
-            VideoFrameDecoder::release_input(&mut self.fallback, input);
-            self.diagnostics.hap_requests = self.diagnostics.hap_requests.saturating_add(1);
-            return match self.hap.decode_input_frame(input) {
-                Ok(Some(frame)) => {
-                    self.diagnostics.hap_successes =
-                        self.diagnostics.hap_successes.saturating_add(1);
-                    Ok(Some(frame))
-                }
-                Ok(None) => {
-                    self.diagnostics.deferred_requests =
-                        self.diagnostics.deferred_requests.saturating_add(1);
-                    Ok(None)
-                }
-                Err(error) => {
-                    self.diagnostics.hap_failures = self.diagnostics.hap_failures.saturating_add(1);
-                    self.decode_general_input(input, Some(error))
-                }
-            };
-        }
-        self.decode_general_input(input, None)
+        self.decode_input_frame_with_cancellation_impl(input, None)
+    }
+
+    fn decode_input_frame_with_cancellation(
+        &mut self,
+        input: &VideoRenderInput,
+        cancellation: &dyn VideoRenderCancellation,
+    ) -> Result<Option<VideoFrame>, VideoDecodeError> {
+        self.decode_input_frame_with_cancellation_impl(input, Some(cancellation))
     }
 }
 

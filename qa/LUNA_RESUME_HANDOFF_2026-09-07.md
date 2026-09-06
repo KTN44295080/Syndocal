@@ -154,6 +154,46 @@ The broader recording boundaries remain open: active renderer cancellation,
 total shutdown deadlines, OS cancellation/termination failure, and broader
 recording acceptance are not claimed complete.
 
+## 2026-09-07 renderer-cancellation continuation
+
+The recording renderer boundary was continued without touching the installed
+Syndocal process or activating physical output. `VideoRenderCancellation` is a
+small public contract in its own video module, and cancellable FFmpeg process
+polling/termination/reader joining is in its own process module. The existing
+renderer and decoder APIs remain thin compatibility seams into one canonical
+implementation; ordinary rendering retains the synchronous decode path and
+does not spawn cancellation readers. The recording loop is the only current
+caller of the cancellable output-preview seam.
+
+The callback is observed before and between decoder/input, layer, composition,
+transition and effect stages. A cancelled direct FFmpeg child is killed,
+waited, and its readers are joined before returning. In-process HAP/libav or a
+single CPU/GPU/effect operation remains synchronous and is checked only at its
+boundaries. Descendant process-tree cleanup and an OS-level hard total-stop
+deadline remain explicitly unresolved.
+
+Current verification:
+
+- New video cancellation tests: `2/2` passed.
+- Cancellable process termination/reap test: `1/1` passed.
+- Recording filter: `54 passed / 6 ignored / 0 failed`.
+- `cargo check -p syndocal --locked`: passed with no first-party warnings.
+- `pnpm.cmd --dir app run check:release`: passed.
+- `pnpm.cmd --dir app tauri build --no-bundle`: passed with Build Tools MSVC
+  `14.44.35207`. Fresh `target/release/syndocal.exe` is version
+  `1.2.0-alpha.69`, SHA-256
+  `C753D6F8CE250D645D5176904F1FA139146B0FC7D680417F7087D0888F1B3886`.
+  Exact-checkout launch observed one responsive, maximized window and
+  `physicalOutputOperations=0`; only that exact checkout process was stopped.
+- Full video run: `171 passed / 3 failed / 3 ignored`; the three failures are
+  existing output-routing/GPU comparison failures outside this diff and are
+  not counted as cancellation acceptance.
+
+The applicable detailed record is
+[RECORDING_RENDERER_WAIT_2026-09-06.md](RECORDING_RENDERER_WAIT_2026-09-06.md).
+The remaining-work priority row must retain the distinction between this
+cooperative boundary and the unresolved hard shutdown deadline.
+
 ## Artifact and process protection
 
 At the pause boundary, `target/release/syndocal.exe` was an OLD artifact
