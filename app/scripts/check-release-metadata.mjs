@@ -628,7 +628,7 @@ export function validateStaticReleaseMetadata(readManifest = read, productVersio
   if (tauri.productName !== "Syndocal" || tauri.version !== productVersion || !tauri.bundle?.active) {
     throw new Error("Tauri product/version/bundle metadata is inconsistent.");
   }
-  if (tauri.bundle.publisher !== "Seraf()のKTN") {
+  if (tauri.bundle.publisher !== "Seraf() / KTN") {
     throw new Error("Tauri publisher metadata changed unexpectedly.");
   }
   if (!tauri.bundle.fileAssociations?.some((association) => association.ext?.includes("sdc"))) {
@@ -1158,7 +1158,7 @@ export function main(argv = process.argv.slice(2)) {
     validateCandidateFromCli(cli.manifestPath);
     console.log(`release candidate evidence ok: Syndocal ${expectedVersion}`);
   } else {
-    console.log(`release metadata ok: Syndocal ${expectedVersion} / .sdc / signed updater overlay / Seraf()のKTN`);
+    console.log(`release metadata ok: Syndocal ${expectedVersion} / .sdc / signed updater overlay / Seraf() / KTN`);
   }
 }
 

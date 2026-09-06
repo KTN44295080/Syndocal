@@ -37,8 +37,8 @@
   },
   "bundle": {
     "active": true,
-    "publisher": "Seraf()のKTN",
-    "copyright": "Copyright (c) 2026 Seraf()のKTN",
+    "publisher": "Seraf() / KTN",
+    "copyright": "Copyright (c) 2026 Seraf() / KTN",
     "category": "Music",
     "shortDescription": "Unified DMX lighting and live video control",
     "longDescription": "Syndocal drives DMX lighting and live video from a shared timeline, cue system, BPM clock, and effect engine.",

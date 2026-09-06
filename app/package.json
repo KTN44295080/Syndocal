@@ -2,7 +2,7 @@
   "name": "syndocal",
   "private": true,
   "version": "1.2.0-alpha.69",
-  "author": "Seraf()のKTN",
+  "author": "Seraf()",
   "type": "module",
   "scripts": {
     "dev": "vite",

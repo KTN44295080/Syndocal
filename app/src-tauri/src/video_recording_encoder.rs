@@ -1,8 +1,8 @@
 //! Direct encoder process supervision, independent of frame rendering and writes.
-//! Inherited pipe handles and a stuck renderer still retain the outer worker;
-//! this is a termination deadline for the owned child, not thread cancellation.
+//! Windows stdin cancellation also handles a reader inherited by a descendant.
+//! A stuck renderer still retains the outer worker; no thread is abandoned.
 use std::{
-    process::{ChildStdin, Command},
+    process::Command,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc, Mutex,
@@ -11,16 +11,19 @@ use std::{
     time::Duration,
 };
 
-#[path = "video_recording_encoder_process.rs"]
-mod process;
 #[path = "video_recording_encoder_diagnostics.rs"]
 mod diagnostics;
+#[path = "video_recording_encoder_stdin.rs"]
+mod input;
+#[path = "video_recording_encoder_process.rs"]
+mod process;
 
 const ENCODER_STOP_GRACE: Duration = Duration::from_secs(5);
 const DIAGNOSTICS_STOP_GRACE: Duration = Duration::from_millis(250);
+const INPUT_REAP_GRACE: Duration = Duration::from_millis(250);
 
 pub(crate) struct RecordingEncoder {
-    stdin: Option<ChildStdin>,
+    stdin: Option<input::RecordingStdin>,
     diagnostics: Option<diagnostics::DiagnosticsReader>,
     supervisor: Option<JoinHandle<Result<(), String>>>,
     stop: Arc<AtomicBool>,
@@ -47,6 +50,7 @@ impl RecordingEncoder {
         let stderr = child.take_stderr().ok_or("FFmpeg stderr was unavailable")?;
         let finishing = Arc::new(AtomicBool::new(false));
         let aborting = Arc::new(AtomicBool::new(false));
+        let (stdin, input_control) = input::RecordingStdin::new(stdin);
         // A failed thread spawn drops its closure. Keep a second owner of this
         // handoff cell so dropping a closure cannot abandon a live Child.
         let handoff = Arc::new(Mutex::new(Some(child)));
@@ -62,7 +66,19 @@ impl RecordingEncoder {
                     .unwrap_or_else(|p| p.into_inner())
                     .take()
                     .expect("encoder handoff has one consumer");
-                process::supervise(child, &stop, &worker_finishing, &worker_aborting, grace)
+                let outcome =
+                    process::supervise(child, &stop, &worker_finishing, &worker_aborting, grace);
+                let input_result = input_control.after_reap(
+                    &stop,
+                    &worker_aborting,
+                    outcome.is_err(),
+                    INPUT_REAP_GRACE,
+                );
+                match (outcome, input_result) {
+                    (Err(process), Err(input)) => Err(format!("{process}; {input}")),
+                    (Err(error), _) | (_, Err(error)) => Err(error),
+                    _ => Ok(()),
+                }
             })
             .map_err(|error| format!("Cannot supervise FFmpeg: {error}"))?;
         let mut encoder = Self {
@@ -85,7 +101,7 @@ impl RecordingEncoder {
         Ok(encoder)
     }
 
-    pub(crate) fn take_stdin(&mut self) -> Option<ChildStdin> {
+    pub(crate) fn take_stdin(&mut self) -> Option<input::RecordingStdin> {
         self.stdin.take()
     }
 
@@ -167,3 +183,7 @@ mod diagnostics_tests;
 #[cfg(all(test, windows))]
 #[path = "video_recording_encoder_inherited_stderr_tests.rs"]
 mod inherited_stderr_tests;
+
+#[cfg(all(test, windows))]
+#[path = "video_recording_encoder_inherited_stdin_tests.rs"]
+mod inherited_stdin_tests;

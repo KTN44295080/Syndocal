@@ -30,7 +30,7 @@ snapshot生成時のpercentile重複sortと測定窓分離は
 
 | 優先 | 残件 | 完了条件・現状 |
 | --- | --- | --- |
-| 1・部分解決 | 録画のencoder停止・回収 | [直接encoderの監視・終了](RECORDING_ENCODER_STOP_2026-09-06.md)を実装。[rendererロック待ちの停止対応](RECORDING_RENDERER_WAIT_2026-09-06.md)はテスト・native build/起動確認通過。[Windows診断pipeの停止対応](RECORDING_DIAGNOSTICS_CANCEL_2026-09-06.md)は実pipe回帰・実FFmpeg保存・native build/起動確認通過。継承stdin、実行中renderer、OSが終了確認を返さない場合の全停止期限は残件。既存250msはStop呼出しの待機上限のみ |
+| 1・部分解決 | 録画のencoder停止・回収 | [直接encoderの監視・終了](RECORDING_ENCODER_STOP_2026-09-06.md)を実装。[rendererロック待ちの停止対応](RECORDING_RENDERER_WAIT_2026-09-06.md)はテスト・native build/起動確認通過。[Windows診断pipeの停止対応](RECORDING_DIAGNOSTICS_CANCEL_2026-09-06.md)と[継承stdinの停止対応](RECORDING_STDIN_CANCEL_2026-09-06.md)は実pipe回帰・実FFmpeg保存・native build/起動確認通過。継承stdinの対象境界は確認済みだが、実行中renderer、OSが終了確認を返さない場合の全停止期限は残件。既存250msはStop呼出しの待機上限のみ |
 | 2・Windows限定完了 | 録画の既存保存先の競合 | [Windows保存先の保全と復旧](RECORDING_PUBLICATION_2026-09-06.md)：検証済みhandleを保持し、競合相手を上書きしない二段階renameと次回予約時の復旧を実装。48件の録画テスト・実FFmpeg・native build/起動確認通過。電源断耐久性や録画全体の受入とは区別する |
 | 3・部分対応 | 肥大化コードの責務分離 | [project transactionの確定・取消処理](PROJECT_MUTATION_LIFECYCLE_2026-09-06.md)を独立controllerへ分離し、実行テスト・型チェック・レビュー・native build/起動確認通過。Appのポリシー・authority管理は維持。media lifecycleの追加分離は残件 |
 | 4 | 全量snapshot生成・差分比較の負荷 | 実showでclone、writer待機、delta生成とpayload量を分けて計測してから変更する。送信前限定読取の改善値を全体性能へ流用しない |

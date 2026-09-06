@@ -27,7 +27,7 @@ export function isWindowsNativeCargoCommand(args) {
   return command === "build" || command === "dev";
 }
 
-// The Windows native gate is pinned to the exact VS2022 Community MSVC
+// The Windows native gate is pinned to the exact VS2022 Community / Build Tools MSVC
 // 14.44.35207 toolset. Cargo otherwise resolves a bare `link.exe` from PATH,
 // and Git for Windows ships usr/bin/link.exe, which accepts Unix arguments and
 // fails MSVC links, so the verified linker is always pinned explicitly and any
@@ -45,6 +45,13 @@ export const REQUIRED_MSVS_LINKER = path.win32.resolve(
 export const REQUIRED_VCVARS_BATCH =
   "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Auxiliary\\Build\\vcvars64.bat";
 export const REQUIRED_VCVARS_ARGUMENTS = "-vcvars_ver=14.44";
+export const REQUIRED_BUILD_TOOLS_VCTOOLS_INSTALL_DIR =
+  "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207";
+export const REQUIRED_BUILD_TOOLS_MSVS_LINKER = path.win32.resolve(
+  REQUIRED_BUILD_TOOLS_VCTOOLS_INSTALL_DIR, "bin", "Hostx64", "x64", "link.exe",
+);
+export const REQUIRED_BUILD_TOOLS_VCVARS_BATCH =
+  "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Auxiliary\\Build\\vcvars64.bat";
 
 // GitHub's hosted windows-2022 image ships Visual Studio Enterprise rather
 // than Community.  Keep that edition-root difference explicit and narrowly
@@ -78,6 +85,15 @@ export function requiredMsvcToolchain(environment = process.env) {
       edition: "Enterprise (GitHub-hosted windows-2022)",
       installDir: REQUIRED_GITHUB_HOSTED_VCTOOLS_INSTALL_DIR,
       linker: REQUIRED_GITHUB_HOSTED_MSVS_LINKER,
+    };
+  }
+  if (environment?.VCToolsInstallDir
+      && normalizeWindowsPathKey(resolveMsvcHostLinker(environment.VCToolsInstallDir.trim()))
+        === normalizeWindowsPathKey(REQUIRED_BUILD_TOOLS_MSVS_LINKER)) {
+    return {
+      edition: "Build Tools",
+      installDir: REQUIRED_BUILD_TOOLS_VCTOOLS_INSTALL_DIR,
+      linker: REQUIRED_BUILD_TOOLS_MSVS_LINKER,
     };
   }
   return {
@@ -127,10 +143,18 @@ export function parseCommandLineSetOutput(output) {
 export function captureRequiredVcvarsEnvironment(
   initialEnvironment = process.env,
   spawnCommandLine = spawnSync,
+  fileIsRegular = isRegularFile,
 ) {
+  // Preserve an explicitly initialized supported edition. Otherwise prefer
+  // Community when both exact installations exist. Never retry a failed batch
+  // against another edition or discover arbitrary Visual Studio installations.
+  const explicitlyBuildTools = requiredMsvcToolchain(initialEnvironment).edition === "Build Tools";
+  const vcvarsBatch = explicitlyBuildTools || (!fileIsRegular(REQUIRED_MSVS_LINKER)
+      && fileIsRegular(REQUIRED_BUILD_TOOLS_MSVS_LINKER))
+    ? REQUIRED_BUILD_TOOLS_VCVARS_BATCH : REQUIRED_VCVARS_BATCH;
   const result = spawnCommandLine(
     "cmd.exe",
-    ["/d", "/s", "/c", `""${REQUIRED_VCVARS_BATCH}" ${REQUIRED_VCVARS_ARGUMENTS} && set"`],
+    ["/d", "/s", "/c", `""${vcvarsBatch}" ${REQUIRED_VCVARS_ARGUMENTS} && set"`],
     {
       encoding: "utf8",
       env: initialEnvironment,
@@ -230,7 +254,7 @@ export function tauriCommandEnvironment(
     const capturedEnvironment = initializeVcvarsEnvironment(environment);
     if (!capturedEnvironment) {
       throw new Error(
-        `${ambientReason} Automatic vcvars64.bat -vcvars_ver=14.44 initialization failed; run pnpm from an x64 Visual Studio 2022 Community Developer Command Prompt.`,
+        `${ambientReason} Automatic vcvars64.bat -vcvars_ver=14.44 initialization failed; run pnpm from an x64 Visual Studio 2022 Community or Build Tools Developer Command Prompt.`,
       );
     }
     return verifiedNativeBuildEnvironment(capturedEnvironment, platform, fileIsRegular, locateLinkers);

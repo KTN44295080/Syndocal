@@ -1,9 +1,15 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readFile as readRawFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+// Source fixtures use LF anchors; Windows checkouts may materialize CRLF.
+const readFile = async (file, encoding) => (await readRawFile(file, encoding)).replace(/\r\n/g, "\n");
+
 import {
+  REQUIRED_BUILD_TOOLS_VCTOOLS_INSTALL_DIR,
+  REQUIRED_BUILD_TOOLS_MSVS_LINKER,
+  REQUIRED_BUILD_TOOLS_VCVARS_BATCH,
   GITHUB_HOSTED_WINDOWS_TOOLCHAIN_MARKER,
   GITHUB_HOSTED_WINDOWS_TOOLCHAIN_MARKER_VALUE,
   REQUIRED_GITHUB_HOSTED_MSVS_LINKER,
@@ -137,6 +143,40 @@ const staleVcToolsDir = "C:\\Program Files\\Microsoft Visual Studio\\2022\\Commu
 const staleLinkerPath = path.win32.resolve(staleVcToolsDir, "bin", "Hostx64", "x64", "link.exe");
 const properVcvarsEnvironment = { VCToolsInstallDir: REQUIRED_VCTOOLS_INSTALL_DIR };
 const requiredLinkers = () => [REQUIRED_MSVS_LINKER, gitLinkerPath];
+const buildToolsEnvironment = { VCToolsInstallDir: REQUIRED_BUILD_TOOLS_VCTOOLS_INSTALL_DIR };
+equal(REQUIRED_BUILD_TOOLS_VCTOOLS_INSTALL_DIR,
+  "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207");
+equal(REQUIRED_BUILD_TOOLS_MSVS_LINKER,
+  `${REQUIRED_BUILD_TOOLS_VCTOOLS_INSTALL_DIR}\\bin\\Hostx64\\x64\\link.exe`);
+equal(requiredMsvcToolchain(buildToolsEnvironment).edition, "Build Tools");
+equal(verifiedNativeBuildEnvironment(buildToolsEnvironment, "win32",
+  (candidate) => candidate === REQUIRED_BUILD_TOOLS_MSVS_LINKER,
+  () => [REQUIRED_BUILD_TOOLS_MSVS_LINKER, gitLinkerPath])
+  .CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER, REQUIRED_BUILD_TOOLS_MSVS_LINKER);
+throws(() => verifiedNativeBuildEnvironment(buildToolsEnvironment, "win32", () => true,
+  () => [gitLinkerPath, REQUIRED_BUILD_TOOLS_MSVS_LINKER]), /required first linker/);
+throws(() => verifiedNativeBuildEnvironment(buildToolsEnvironment, "win32", () => false,
+  () => [REQUIRED_BUILD_TOOLS_MSVS_LINKER]), /linker is missing/);
+for (const invalidRoot of [
+  REQUIRED_BUILD_TOOLS_VCTOOLS_INSTALL_DIR.replace("14.44.35207", "14.43.34808"),
+  REQUIRED_BUILD_TOOLS_VCTOOLS_INSTALL_DIR.replace("BuildTools", "Professional"),
+  REQUIRED_BUILD_TOOLS_VCTOOLS_INSTALL_DIR.replace("Program Files (x86)", "Program Files"),
+]) {
+  throws(() => requireExactMsvcToolset({ VCToolsInstallDir: invalidRoot }, () => true),
+    /does not match/);
+}
+for (const [environment, installed, expectedBatch] of [
+  [{}, [REQUIRED_MSVS_LINKER, REQUIRED_BUILD_TOOLS_MSVS_LINKER], REQUIRED_VCVARS_BATCH],
+  [{}, [REQUIRED_BUILD_TOOLS_MSVS_LINKER], REQUIRED_BUILD_TOOLS_VCVARS_BATCH],
+  [buildToolsEnvironment, [REQUIRED_MSVS_LINKER, REQUIRED_BUILD_TOOLS_MSVS_LINKER], REQUIRED_BUILD_TOOLS_VCVARS_BATCH],
+]) {
+  let selectedCommand;
+  captureRequiredVcvarsEnvironment(environment, (_file, args) => {
+    selectedCommand = args[3];
+    return { status: 1, stdout: "" };
+  }, (candidate) => installed.includes(candidate));
+  equal(selectedCommand, `""${expectedBatch}" -vcvars_ver=14.44 && set"`);
+}
 const githubHostedEnvironment = {
   GITHUB_ACTIONS: "true",
   RUNNER_OS: "Windows",

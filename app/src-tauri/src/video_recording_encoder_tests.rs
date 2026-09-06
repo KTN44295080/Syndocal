@@ -131,6 +131,19 @@ fn recording_encoder_eof_finishes_without_forcing_and_keeps_diagnostics() {
 }
 
 #[test]
+fn recording_encoder_stop_after_complete_frame_preserves_graceful_eof() {
+    let (mut command, _ready) = child("success");
+    let stop = Arc::new(AtomicBool::new(false));
+    let mut encoder = RecordingEncoder::spawn(&mut command, Arc::clone(&stop)).unwrap();
+    let mut stdin = encoder.take_stdin().unwrap();
+    stdin.write_all(b"one complete test frame").unwrap();
+    stop.store(true, Ordering::Release);
+    drop(stdin);
+    let tail = encoder.finish().unwrap();
+    assert!(String::from_utf8_lossy(&tail).contains("graceful diagnostic tail"));
+}
+
+#[test]
 fn recording_encoder_fail_preserves_primary_and_rejects_success_exit() {
     let (mut command, ready) = child("success");
     let mut encoder =

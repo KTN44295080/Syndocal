@@ -305,7 +305,8 @@ fn recording_publication_recovers_after_process_exit_at_each_boundary() {
             point,
             PublicationPoint::Prepared | PublicationPoint::BeforeInstall
         ) {
-            assert!(recovered.unwrap_err().contains("restored or preserved"));
+            let error = recovered.unwrap_err();
+            assert!(error.contains("restored or preserved"), "{point:?}: {error}");
             assert_eq!(
                 fs::read(&fixture.artifact.target).unwrap(),
                 b"previous movie"

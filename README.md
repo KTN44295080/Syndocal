@@ -3,7 +3,7 @@
 Syndocal は、DMX照明とVJ映像を同じタイムライン、キュー、BPMクロック、エフェクトソースで駆動するデスクトップ制御ソフトウェアです。
 
 - 製品名: **Syndocal 1.2.0-alpha.69**
-- 開発: **Seraf()のKTN**
+- 開発: **Seraf() / KTN**
 - プロジェクト: **`.sdc`** (可読JSON)
 - Tier 1: Windows 10+ / macOS 12+
 - Tier 2: Ubuntu 22.04+ / Arch Linux
