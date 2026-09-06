@@ -628,7 +628,9 @@ where
     // open.  Resolve its canonical public terminal before checking mutable
     // action state, fence, or confirmation so a lost reply remains replayable
     // after process restart.  This is deliberately not a generic bridge:
-    // only the reviewed blackout and Display-window terminal lanes are retained.
+    // only the reviewed blackout, Display-window, and authored Show Spout
+    // terminal lanes are retained. Show Spout Reset remains outside this
+    // journal because it has no lease receipt.
     match replay_durable_managed_exact_both_output_control_terminal(
         state,
         &binding.principal,
@@ -1363,6 +1365,7 @@ where
         OutputControlActionV2::ReleaseBlackout { .. }
             | OutputControlActionV2::SetBlackout { .. }
             | OutputControlActionV2::SetDisplayWindowOpen { .. }
+            | OutputControlActionV2::EnableShowSpoutOutputs { .. }
     ) && record_durable_managed_exact_both_output_control_terminal(
         state,
         &binding.principal,
@@ -5962,6 +5965,8 @@ mod tests {
         OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_OPERATION_ID, OUTPUT_LEASE_RENEW_OPERATION_ID,
         OUTPUT_OWNERSHIP_ARM_OPERATION_ID,
     };
+
+    include!("control_plane_runtime_spout_replay_tests.rs");
 
     fn test_binding(principal: &str, window_label: &str, owner_incarnation: u64) -> CallerBinding {
         CallerBinding {

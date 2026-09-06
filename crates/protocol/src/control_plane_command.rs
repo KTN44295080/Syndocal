@@ -3840,26 +3840,36 @@ impl OutputControlReceiptV2 {
                         || self.fence_after.session_incarnation
                             != self.fence_before.session_incarnation
                         || self.fence_after.project_epoch != self.fence_before.project_epoch
-                        || self.fence_after.project_revision
-                            != self
-                                .fence_before
-                                .project_revision
-                                .checked_add(1)
-                                .unwrap_or(0)
+                        || self.fence_before.project_revision.checked_add(1)
+                            != Some(self.fence_after.project_revision)
                         || self.fence_after.project_checkpoint_hash
                             == self.fence_before.project_checkpoint_hash
-                        || self.fence_after.project_publication_generation
-                            != self
-                                .fence_before
-                                .project_publication_generation
-                                .checked_add(1)
-                                .unwrap_or(0)
+                        || self
+                            .fence_before
+                            .project_publication_generation
+                            .checked_add(1)
+                            != Some(self.fence_after.project_publication_generation)
                         || self.fence_after.output_epoch != self.fence_before.output_epoch
                         || self.fence_after.output_generation
                             != self.fence_before.output_generation
                         || (self.operation_id == OUTPUT_BLACKOUT_SET_OPERATION_ID
                             && (self.fence_after.safety_blackout_epoch != self.fence_before.safety_blackout_epoch
                                 || self.fence_after.safety_blackout_generation != self.fence_before.safety_blackout_generation))) =>
+            {
+                Err(OutputControlValidationErrorV1::InvalidReceiptOutcome)
+            }
+            // Enabling the authored Show Spout pair may commit a project
+            // candidate. Its terminal is valid only when the persisted
+            // project fence is the exact one-step successor; a physical
+            // output or safety identity change must never be hidden in that
+            // project receipt.
+            OutputControlReceiptOutcomeV2::Applied
+                if self.operation_id == OUTPUT_SHOW_SPOUT_OUTPUTS_ENABLE_OPERATION_ID
+                    && self.fence_before != self.fence_after
+                    && !is_exact_show_spout_project_successor(
+                        &self.fence_before,
+                        &self.fence_after,
+                    ) =>
             {
                 Err(OutputControlValidationErrorV1::InvalidReceiptOutcome)
             }
@@ -3870,17 +3880,19 @@ impl OutputControlReceiptV2 {
                         OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID
                             | OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_ENABLE_OPERATION_ID
                             | OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_STOP_OPERATION_ID
-                            | OUTPUT_SHOW_SPOUT_OUTPUTS_ENABLE_OPERATION_ID
                             | OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_OPERATION_ID
                             | OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_RECONCILE_OPERATION_ID
                     ) =>
             {
                 Err(OutputControlValidationErrorV1::InvalidReceiptOutcome)
             }
-            // Runtime-only physical display-shell, serial-DMX, and Spout
-            // activation intentionally leave the persisted project fence
-            // unchanged. Enabling the show Art-Net route is different: it
-            // persists DmxOutputConfig and must advance the project checkpoint.
+            // Runtime-only physical display-shell and serial-DMX activation
+            // intentionally leave the persisted project fence unchanged.
+            // Show Spout also accepts that unchanged shape when its authored
+            // pair already exists; a persisted pair creation/enabling is
+            // checked by the exact successor branch above. Enabling the show
+            // Art-Net route is different: it persists DmxOutputConfig and
+            // must advance the project checkpoint.
             OutputControlReceiptOutcomeV2::Applied
                 if self.fence_before == self.fence_after
                     && !matches!(
@@ -3898,6 +3910,28 @@ impl OutputControlReceiptV2 {
             _ => Ok(()),
         }
     }
+}
+
+/// The authored Show Spout enable route has two valid Applied fence shapes:
+/// an unchanged fence when the pair already exists, or one exact persisted
+/// project successor when the route creates/enables the authored pair. Keep
+/// every process/session/output/safety identity invariant across that
+/// successor so a physical transition cannot masquerade as project commit.
+fn is_exact_show_spout_project_successor(
+    before: &OutputControlFenceV1,
+    after: &OutputControlFenceV1,
+) -> bool {
+    before.process_incarnation == after.process_incarnation
+        && before.session_incarnation == after.session_incarnation
+        && before.project_epoch == after.project_epoch
+        && before.project_revision.checked_add(1) == Some(after.project_revision)
+        && before.project_checkpoint_hash != after.project_checkpoint_hash
+        && before.project_publication_generation.checked_add(1)
+            == Some(after.project_publication_generation)
+        && before.output_epoch == after.output_epoch
+        && before.output_generation == after.output_generation
+        && before.safety_blackout_epoch == after.safety_blackout_epoch
+        && before.safety_blackout_generation == after.safety_blackout_generation
 }
 
 impl Serialize for OutputControlReceiptV2 {
@@ -5165,6 +5199,79 @@ mod tests {
             error: OutputControlErrorCodeV2::PublicationFailed,
         };
         assert!(invalid_rejection.validate().is_err());
+    }
+
+    #[test]
+    fn show_spout_persisted_successor_fence_is_exact_and_strict() {
+        let request = OutputControlCommandRequestV2 {
+            operation_id: OUTPUT_SHOW_SPOUT_OUTPUTS_ENABLE_OPERATION_ID.to_string(),
+            request_id: 66,
+            expected_fence: output_fence(),
+            action: OutputControlActionV2::EnableShowSpoutOutputs {
+                lease: lease_authority(),
+            },
+        };
+        let mut fence_after = request.expected_fence.clone();
+        fence_after.project_revision += 1;
+        fence_after.project_checkpoint_hash = hash('f');
+        fence_after.project_publication_generation += 1;
+        let receipt = OutputControlReceiptV2 {
+            operation_id: request.operation_id.clone(),
+            request_id: request.request_id,
+            shape_sha256: hash('d'),
+            argument_fingerprint: hash('e'),
+            audit_sequence: 1,
+            fence_before: request.expected_fence.clone(),
+            fence_after,
+            outcome: OutputControlReceiptOutcomeV2::Applied,
+            lease_result: Some(authorized_both_lease_result()),
+        };
+        assert_eq!(receipt.validate(), Ok(()));
+        let response = OutputControlResponseV2::Receipt(Box::new(receipt.clone()));
+        let encoded =
+            serde_json::to_value(&response).expect("persisted Spout successor response serializes");
+        assert_eq!(
+            serde_json::from_value::<OutputControlResponseV2>(encoded)
+                .expect("persisted Spout successor response deserializes"),
+            response
+        );
+
+        fn skip_revision(fence: &mut OutputControlFenceV1) {
+            fence.project_revision += 1;
+        }
+        fn keep_checkpoint(fence: &mut OutputControlFenceV1) {
+            fence.project_checkpoint_hash = hash('a');
+        }
+        fn skip_publication(fence: &mut OutputControlFenceV1) {
+            fence.project_publication_generation += 1;
+        }
+        fn change_output(fence: &mut OutputControlFenceV1) {
+            fence.output_generation += 1;
+        }
+        fn change_safety(fence: &mut OutputControlFenceV1) {
+            fence.safety_blackout_generation += 1;
+        }
+        fn change_process(fence: &mut OutputControlFenceV1) {
+            fence.process_incarnation += 1;
+        }
+        for (label, mutate) in [
+            (
+                "project revision skips a version",
+                skip_revision as fn(&mut OutputControlFenceV1),
+            ),
+            ("project checkpoint hash is unchanged", keep_checkpoint),
+            ("publication generation skips a version", skip_publication),
+            ("output generation changes", change_output),
+            ("safety generation changes", change_safety),
+            ("process incarnation changes", change_process),
+        ] {
+            let mut invalid = receipt.clone();
+            mutate(&mut invalid.fence_after);
+            assert!(
+                invalid.validate().is_err(),
+                "Spout persisted successor rejects {label}"
+            );
+        }
     }
 
     #[test]

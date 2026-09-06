@@ -4161,6 +4161,17 @@ define_engine_command! {
         expires_at: Instant,
         ack: mpsc::SyncSender<Result<(), String>>,
     },
+    /// Exact compensation for a physical show Spout activation that started
+    /// from an authored disabled pair. It restores the two summaries in place
+    /// and deliberately retains every output-fade backreference.
+    RestoreShowSpoutOutputsDisabledPublished {
+        expected_background: VideoOutputSummary,
+        expected_foreground: VideoOutputSummary,
+        restored_background: VideoOutputSummary,
+        restored_foreground: VideoOutputSummary,
+        expires_at: Instant,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
     /// Internal best-effort compensation after both physical fixed show
     /// Spout senders have stopped during an authority loss. This is not the
     /// user-initiated Reset path: it intentionally leaves a conflicting
@@ -5652,6 +5663,7 @@ macro_rules! engine_command_video_presentation_relevance {
             | EngineCommand::EnableShowArtNetLoopbackRoutePublished { .. }
             | EngineCommand::SendDsf2026ArtNetAcceptanceProbe { .. }
             | EngineCommand::EnableShowSpoutOutputsPublished { .. }
+            | EngineCommand::RestoreShowSpoutOutputsDisabledPublished { .. }
             | EngineCommand::RetireShowSpoutOutputsAfterAuthorityLossPublished { .. }
             | EngineCommand::ResetShowSpoutOutputsExactPublished { .. }
             | EngineCommand::SetDmxInputFrame { .. }
@@ -5941,6 +5953,7 @@ impl EngineCommand {
                 | EngineCommand::EnableShowArtNetLoopbackRoutePublished { .. }
                 | EngineCommand::SendDsf2026ArtNetAcceptanceProbe { .. }
                 | EngineCommand::EnableShowSpoutOutputsPublished { .. }
+                | EngineCommand::RestoreShowSpoutOutputsDisabledPublished { .. }
                 | EngineCommand::RetireShowSpoutOutputsAfterAuthorityLossPublished { .. }
                 | EngineCommand::ResetShowSpoutOutputsExactPublished { .. }
                 | EngineCommand::SetOutputOwnershipRole { .. }
@@ -7723,6 +7736,45 @@ impl EngineHandle {
             ),
             Err(mpsc::RecvTimeoutError::Disconnected) => Err(
                 "Show Spout output activation worker disconnected before acknowledgement"
+                    .to_string(),
+            ),
+        }
+    }
+
+    /// Restore the exact authored disabled pair after physical Spout
+    /// activation failed. This is intentionally separate from authority-loss
+    /// retirement: a failed reactivation must retain the staged pair and its
+    /// output-fade backreferences rather than deleting the outputs.
+    pub fn restore_show_spout_outputs_disabled_published(
+        &self,
+        expected_background: VideoOutputSummary,
+        expected_foreground: VideoOutputSummary,
+        restored_background: VideoOutputSummary,
+        restored_foreground: VideoOutputSummary,
+        expires_at: Instant,
+    ) -> Result<(), String> {
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::RestoreShowSpoutOutputsDisabledPublished {
+            expected_background,
+            expected_foreground,
+            restored_background,
+            restored_foreground,
+            expires_at,
+            ack,
+        })
+        .map_err(|error| {
+            format!(
+                "Show Spout disabled-pair restoration could not enqueue: {error}"
+            )
+        })?;
+        match receiver.recv_timeout(Duration::from_secs(3)) {
+            Ok(result) => result,
+            Err(mpsc::RecvTimeoutError::Timeout) => Err(
+                "Show Spout disabled-pair restoration did not receive an acknowledged snapshot"
+                    .to_string(),
+            ),
+            Err(mpsc::RecvTimeoutError::Disconnected) => Err(
+                "Show Spout disabled-pair restoration worker disconnected before acknowledgement"
                     .to_string(),
             ),
         }
@@ -12144,6 +12196,7 @@ impl EngineHandle {
             | EngineCommand::EnableShowArtNetLoopbackRoutePublished { .. }
             | EngineCommand::SendDsf2026ArtNetAcceptanceProbe { .. }
             | EngineCommand::EnableShowSpoutOutputsPublished { .. }
+            | EngineCommand::RestoreShowSpoutOutputsDisabledPublished { .. }
             | EngineCommand::RetireShowSpoutOutputsAfterAuthorityLossPublished { .. }
             | EngineCommand::ResetShowSpoutOutputsExactPublished { .. }
             | EngineCommand::SetOutputOwnershipRole { .. }
@@ -24328,6 +24381,38 @@ impl EngineRuntime {
                     rollback,
                     publication_error:
                         "Show Spout outputs could not publish an acknowledged engine snapshot",
+                });
+            }
+            EngineCommand::RestoreShowSpoutOutputsDisabledPublished {
+                expected_background,
+                expected_foreground,
+                restored_background,
+                restored_foreground,
+                expires_at,
+                ack,
+            } => {
+                let result = if Instant::now() > expires_at {
+                    Err(
+                        "Show Spout disabled-pair restoration expired before engine execution"
+                            .to_string(),
+                    )
+                } else {
+                    self.apply_show_spout_outputs_restore_disabled(
+                        &expected_background,
+                        &expected_foreground,
+                        &restored_background,
+                        &restored_foreground,
+                    )
+                };
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack: PendingCommandAckSender::Plain(ack),
+                    result,
+                    // Physical senders have already been retired before this
+                    // command is queued. Never revive the enabled pair if
+                    // the disabled restoration publication fails.
+                    rollback: PendingCommandRollback::KeepApplied,
+                    publication_error:
+                        "Show Spout disabled-pair restoration could not publish an acknowledged engine snapshot",
                 });
             }
             EngineCommand::RetireShowSpoutOutputsAfterAuthorityLossPublished {
@@ -52265,20 +52350,113 @@ impl EngineRuntime {
             self.last_error = None;
             return Ok(());
         }
-        if existing_spout.len() == 2
-            && show_spout_output_equal(existing_spout[0], expected_background)
-            && show_spout_output_equal(existing_spout[1], expected_foreground)
-            || existing_spout.len() == 2
-                && show_spout_output_equal(existing_spout[1], expected_background)
-                && show_spout_output_equal(existing_spout[0], expected_foreground)
-        {
-            self.last_error = None;
-            return Ok(());
+        if existing_spout.len() == 2 {
+            if show_spout_pair_matches_in_either_order(
+                existing_spout[0],
+                existing_spout[1],
+                expected_background,
+                expected_foreground,
+            ) {
+                self.last_error = None;
+                return Ok(());
+            }
+
+            // A disabled exact pair is an authored staged route. Reactivate
+            // it in place so its IDs and any output-fade backreferences stay
+            // intact; replacing the RuntimeVideoOutput summaries is the only
+            // mutation required for the published enabled image.
+            let expected_disabled_background = show_spout_disabled_variant(expected_background);
+            let expected_disabled_foreground = show_spout_disabled_variant(expected_foreground);
+            if show_spout_pair_matches_in_either_order(
+                existing_spout[0],
+                existing_spout[1],
+                &expected_disabled_background,
+                &expected_disabled_foreground,
+            ) {
+                for output in &mut self.video_outputs {
+                    if output.summary.id == expected_background.id {
+                        output.summary = expected_background.clone();
+                    } else if output.summary.id == expected_foreground.id {
+                        output.summary = expected_foreground.clone();
+                    }
+                }
+                self.last_error = None;
+                return Ok(());
+            }
         }
         Err(
             "Show Spout output activation requires no existing Spout sender or the exact fixed pair"
                 .to_string(),
         )
+    }
+
+    /// Restore a staged exact pair after the physical sender startup failed
+    /// following a successful engine activation. This never removes the
+    /// outputs or their fade references and is idempotent when the disabled
+    /// pair was already restored by an earlier bounded retry.
+    fn apply_show_spout_outputs_restore_disabled(
+        &mut self,
+        expected_background: &VideoOutputSummary,
+        expected_foreground: &VideoOutputSummary,
+        restored_background: &VideoOutputSummary,
+        restored_foreground: &VideoOutputSummary,
+    ) -> Result<(), String> {
+        if !show_spout_pair_is_exact(expected_background, expected_foreground)
+            || !show_spout_pair_is_exact_disabled_match(
+                restored_background,
+                restored_foreground,
+                expected_background,
+                expected_foreground,
+            )
+        {
+            return Err(
+                "Show Spout disabled-pair restoration did not name the exact enabled/disabled fixed pair"
+                    .to_string(),
+            );
+        }
+
+        let existing_spout = self
+            .video_outputs
+            .iter()
+            .filter(|output| output.summary.kind == VideoOutputKind::SpoutSender)
+            .map(|output| &output.summary)
+            .collect::<Vec<_>>();
+        if existing_spout.len() != 2 {
+            return Err(
+                "Show Spout disabled-pair restoration requires the exact two-sender pair"
+                    .to_string(),
+            );
+        }
+
+        let active_matches = show_spout_pair_matches_in_either_order(
+            existing_spout[0],
+            existing_spout[1],
+            expected_background,
+            expected_foreground,
+        );
+        let restored_matches = show_spout_pair_matches_in_either_order(
+            existing_spout[0],
+            existing_spout[1],
+            restored_background,
+            restored_foreground,
+        );
+        if !active_matches && !restored_matches {
+            return Err(
+                "Show Spout disabled-pair restoration found a changed or conflicting pair"
+                    .to_string(),
+            );
+        }
+        if active_matches {
+            for output in &mut self.video_outputs {
+                if output.summary.id == restored_background.id {
+                    output.summary = restored_background.clone();
+                } else if output.summary.id == restored_foreground.id {
+                    output.summary = restored_foreground.clone();
+                }
+            }
+        }
+        self.last_error = None;
+        Ok(())
     }
 
     fn show_spout_v2_targets_are_exact(
@@ -67430,6 +67608,40 @@ fn show_spout_output_equal(current: &VideoOutputSummary, expected: &VideoOutputS
     current == expected
 }
 
+fn show_spout_disabled_variant(output: &VideoOutputSummary) -> VideoOutputSummary {
+    let mut disabled = output.clone();
+    disabled.enabled = false;
+    disabled
+}
+
+fn show_spout_pair_matches_in_either_order(
+    current_background: &VideoOutputSummary,
+    current_foreground: &VideoOutputSummary,
+    expected_background: &VideoOutputSummary,
+    expected_foreground: &VideoOutputSummary,
+) -> bool {
+    (show_spout_output_equal(current_background, expected_background)
+        && show_spout_output_equal(current_foreground, expected_foreground))
+        || (show_spout_output_equal(current_background, expected_foreground)
+            && show_spout_output_equal(current_foreground, expected_background))
+}
+
+fn show_spout_pair_is_exact_disabled_match(
+    restored_background: &VideoOutputSummary,
+    restored_foreground: &VideoOutputSummary,
+    expected_background: &VideoOutputSummary,
+    expected_foreground: &VideoOutputSummary,
+) -> bool {
+    let expected_disabled_background = show_spout_disabled_variant(expected_background);
+    let expected_disabled_foreground = show_spout_disabled_variant(expected_foreground);
+    show_spout_pair_matches_in_either_order(
+        restored_background,
+        restored_foreground,
+        &expected_disabled_background,
+        &expected_disabled_foreground,
+    )
+}
+
 fn show_spout_reserved_name_collision(output: &VideoOutputSummary) -> bool {
     output.label == SHOW_SPOUT_BACKGROUND_NAME
         || output.label == SHOW_SPOUT_FOREGROUND_NAME
@@ -68215,6 +68427,9 @@ fn write_byte(frame: &mut [u8; 512], fixture_start_address: u16, offset: u16, by
 
 #[cfg(test)]
 mod tests {
+    mod show_spout_disabled_restore_tests {
+        include!("show_spout_disabled_restore_tests.rs");
+    }
     mod output_blackout_target_tests {
         include!("output_blackout_target_tests.rs");
     }
@@ -137007,6 +137222,93 @@ mod tests {
             )
             .is_err());
         assert_eq!(generic.build_snapshot(0), generic_before);
+    }
+
+    #[test]
+    fn show_spout_disabled_pair_reactivation_and_restore_preserve_fade_backreferences() {
+        let mut runtime = EngineRuntime::new(staged_show_artnet_loopback_output());
+        seed_show_spout_v2_compositions(&mut runtime);
+        let (background, foreground) = show_spout_v2_pair();
+        let disabled_background = show_spout_disabled_variant(&background);
+        let disabled_foreground = show_spout_disabled_variant(&foreground);
+        runtime.video_outputs = vec![
+            RuntimeVideoOutput {
+                summary: disabled_background.clone(),
+            },
+            RuntimeVideoOutput {
+                summary: disabled_foreground.clone(),
+            },
+        ];
+        let started_at = Instant::now();
+        runtime.video_output_fades = vec![
+            RuntimeVideoOutputFade {
+                output_id: background.id,
+                started_at,
+                duration: Duration::from_secs(3),
+                start_opacity: 0.2,
+                target_opacity: 1.0,
+            },
+            RuntimeVideoOutputFade {
+                output_id: foreground.id,
+                started_at,
+                duration: Duration::from_secs(5),
+                start_opacity: 1.0,
+                target_opacity: 0.4,
+            },
+        ];
+        let fade_shape = |runtime: &EngineRuntime| {
+            runtime
+                .video_output_fades
+                .iter()
+                .map(|fade| {
+                    (
+                        fade.output_id,
+                        fade.started_at,
+                        fade.duration,
+                        fade.start_opacity,
+                        fade.target_opacity,
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        let before_fades = fade_shape(&runtime);
+        let safety = runtime.shared_telemetry.safety_blackout_authority();
+
+        runtime
+            .apply_show_spout_outputs_enable(
+                &background,
+                &foreground,
+                safety.epoch,
+                safety.generation,
+            )
+            .expect("the exact disabled pair is reactivated in place");
+        assert_eq!(
+            runtime
+                .video_outputs
+                .iter()
+                .map(|output| output.summary.clone())
+                .collect::<Vec<_>>(),
+            vec![background.clone(), foreground.clone()]
+        );
+        assert_eq!(fade_shape(&runtime), before_fades);
+
+        runtime
+            .apply_show_spout_outputs_restore_disabled(
+                &background,
+                &foreground,
+                &disabled_background,
+                &disabled_foreground,
+            )
+            .expect("the failed activation restores the staged pair in place");
+        assert_eq!(
+            runtime
+                .video_outputs
+                .iter()
+                .map(|output| output.summary.clone())
+                .collect::<Vec<_>>(),
+            vec![disabled_background, disabled_foreground]
+        );
+        assert_eq!(fade_shape(&runtime), before_fades);
     }
 
     #[test]

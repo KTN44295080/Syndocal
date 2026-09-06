@@ -75,6 +75,8 @@ mod show_artnet_loopback_route_tests;
 mod show_spout_outputs;
 #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
 mod show_spout_generic_sync;
+#[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+mod show_spout_project_commit;
 
 use base64::Engine as _;
 use dj_link_persistence_runtime::{
@@ -569,7 +571,8 @@ fn is_managed_exact_both_output_control_replay_action(
         action,
         protocol::control_plane_command::OutputControlActionV2::SetBlackout { .. }
         | protocol::control_plane_command::OutputControlActionV2::ReleaseBlackout { .. }
-            | protocol::control_plane_command::OutputControlActionV2::SetDisplayWindowOpen { .. }
+        | protocol::control_plane_command::OutputControlActionV2::EnableShowSpoutOutputs { .. }
+        | protocol::control_plane_command::OutputControlActionV2::SetDisplayWindowOpen { .. }
     )
 }
 
@@ -577,7 +580,9 @@ fn is_managed_exact_both_output_control_replay_operation(operation_id: &str) -> 
     matches!(
         operation_id,
         protocol::control_plane_command::OUTPUT_BLACKOUT_SET_OPERATION_ID
-            | OUTPUT_BLACKOUT_RELEASE_OPERATION_ID | OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID
+            | OUTPUT_BLACKOUT_RELEASE_OPERATION_ID
+            | OUTPUT_SHOW_SPOUT_OUTPUTS_ENABLE_OPERATION_ID
+            | OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID
     )
 }
 
@@ -807,8 +812,9 @@ struct PersistedOutputLeaseReceiptState {
     #[serde(default)]
     dsf2026_artnet_acceptance_probe_terminals: Vec<PersistedDsf2026OutputControlTerminal>,
     /// Restart-safe public responses are deliberately retained only for
-    /// ReleaseBlackout and SetDisplayWindowOpen.  AddDisplay remains outside
-    /// this bridge because its native work is a long two-phase transaction.
+    /// ReleaseBlackout, EnableShowSpoutOutputs, and SetDisplayWindowOpen.
+    /// AddDisplay remains outside this bridge because its native work is a
+    /// long two-phase transaction.
     #[serde(default)]
     managed_exact_both_output_control_terminals:
         Vec<PersistedManagedExactBothOutputControlTerminal>,
@@ -25358,6 +25364,7 @@ fn external_output_command_requires_local_r4(command: &EngineCommand) -> Option<
         | EngineCommand::SendDsf2026ArtNetAcceptanceProbe { .. }
         | EngineCommand::EnableShowSpoutOutputsPublished { .. }
         | EngineCommand::RetireShowSpoutOutputsAfterAuthorityLossPublished { .. }
+        | EngineCommand::RestoreShowSpoutOutputsDisabledPublished { .. }
         | EngineCommand::ResetShowSpoutOutputsExactPublished { .. }
         | EngineCommand::SetOutputOwnershipRole { .. }
         | EngineCommand::FenceOutputOwnership { .. }
@@ -56421,7 +56428,8 @@ pub(crate) fn build_output_lease_authorization_request(
         }
         OutputControlActionV2::EnableShowArtNetLoopbackRoute { lease }
         | OutputControlActionV2::EnableShowSerialDmxSafetyBlackoutRoute { lease }
-        | OutputControlActionV2::StopShowSerialDmxSafetyBlackoutRoute { lease } => {
+        | OutputControlActionV2::StopShowSerialDmxSafetyBlackoutRoute { lease }
+        | OutputControlActionV2::EnableShowSpoutOutputs { lease } => {
             let lease_id = output_lease::OutputLeaseId::decode(&lease.lease_id)
                 .map_err(|error| format!("Output lease authority is invalid: {error:?}"))?;
             // Once an exact-Both lease is managed, only the runtime's narrow
@@ -56452,7 +56460,6 @@ pub(crate) fn build_output_lease_authorization_request(
         | OutputControlActionV2::ReleaseBlackout { lease }
         | OutputControlActionV2::SendDsf2026ArtNetAcceptanceProbe { lease }
         | OutputControlActionV2::AcknowledgeDsf2026ArtNetAcceptanceProbeInDoubt { lease }
-        | OutputControlActionV2::EnableShowSpoutOutputs { lease }
         | OutputControlActionV2::TakeOverStandby { lease, .. }
         | OutputControlActionV2::AssignVideoOutputComposition { lease, .. } => {
             let lease_id = output_lease::OutputLeaseId::decode(&lease.lease_id)
@@ -73952,49 +73959,152 @@ const SHOW_ARTNET_LOOPBACK_UNIVERSE: u16 =
 /// from its unique exact-name composition; accepting a UI-selected target here
 /// would turn the reviewed show route into a generic Spout creation API.
 #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+#[derive(Debug, Clone)]
+struct PreparedShowSpoutActivation {
+    expected: show_spout_outputs::ShowSpoutOutputs,
+    prior_disabled: Option<show_spout_outputs::ShowSpoutOutputs>,
+    project_change: show_spout_project_commit::ShowSpoutProjectChange,
+}
+
+/// Classified counterpart used by fixed routes whose cleanup can lose an
+/// acknowledgement. Managed exact-Both admission remains the same; only the
+/// callback is allowed to distinguish a proven SafeAbort from InDoubt.
+fn submit_managed_exact_both_candidate_with_classified_commit<T, Commit>(
+    state: &AppState,
+    live_registry: &mut OutputLeaseRegistry,
+    request: &OutputLeaseRequest,
+    authorization: &output_lease_keepalive_runtime::OutputLeaseKeepaliveManagedExactBothAuthorizationGuard<'_>,
+    now_ms: u64,
+    context: &str,
+    commit: Commit,
+) -> Result<(T, output_lease::OutputLeaseRequestReceipt), String>
+where
+    Commit: FnOnce() -> Result<T, OutputLeaseCandidateCommitFailure>,
+{
+    validate_managed_exact_both_candidate_bridge(request, Some(authorization))?;
+    submit_output_lease_candidate_with_classified_commit_and_durable_record_for_pending_window_inner(
+        state,
+        live_registry,
+        request,
+        Some(authorization),
+        request,
+        now_ms,
+        context,
+        None,
+        commit,
+        |durable, receipt| {
+            durable
+                .record(receipt)
+                .map_err(|error| format!("{error:?}"))
+        },
+    )
+}
+
+fn submit_show_output_candidate_with_classified_commit<T, Commit>(
+    state: &AppState,
+    live_registry: &mut OutputLeaseRegistry,
+    request: &OutputLeaseRequest,
+    authorization: Option<
+        &output_lease_keepalive_runtime::OutputLeaseKeepaliveManagedExactBothAuthorizationGuard<'_>,
+    >,
+    now_ms: u64,
+    context: &str,
+    commit: Commit,
+) -> Result<(T, output_lease::OutputLeaseRequestReceipt), String>
+where
+    Commit: FnOnce() -> Result<T, OutputLeaseCandidateCommitFailure>,
+{
+    match authorization {
+        Some(authorization) => submit_managed_exact_both_candidate_with_classified_commit(
+            state,
+            live_registry,
+            request,
+            authorization,
+            now_ms,
+            context,
+            commit,
+        ),
+        None => submit_output_lease_candidate_with_classified_commit(
+            state,
+            live_registry,
+            request,
+            now_ms,
+            context,
+            commit,
+        ),
+    }
+}
+
+#[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
 fn derive_current_show_spout_outputs(
     state: &AppState,
-) -> Result<show_spout_outputs::ShowSpoutOutputs, String> {
+) -> Result<PreparedShowSpoutActivation, String> {
     let snapshot = state.engine.snapshot();
-    let existing = show_spout_outputs::validate_show_spout_outputs_with_compositions(
+    let candidate = show_spout_outputs::classify_show_spout_activation_candidate(
         &snapshot.video.outputs,
         &snapshot.video.compositions,
-    );
-    match existing {
-        Ok(pair) => return Ok(pair),
-        Err(show_spout_outputs::ShowSpoutValidationError::MissingPair) => {}
-        Err(error) => {
-            return Err(format!(
-                "Show Spout activation requires no sender or the exact fixed pair: {error}"
-            ))
+    )
+    .map_err(|error| {
+        format!(
+            "Show Spout activation requires no sender or the exact fixed pair: {error}"
+        )
+    })?;
+    match candidate {
+        show_spout_outputs::ShowSpoutActivationCandidate::ExistingEnabled(pair) => {
+            Ok(PreparedShowSpoutActivation {
+                expected: pair,
+                prior_disabled: None,
+                project_change: show_spout_project_commit::ShowSpoutProjectChange::None,
+            })
         }
-    }
-    let targets =
-        show_spout_outputs::derive_show_spout_composition_targets(&snapshot.video.compositions)
+        show_spout_outputs::ShowSpoutActivationCandidate::ExistingDisabled(pair) => {
+            let mut expected = pair.clone();
+            expected.background.enabled = true;
+            expected.foreground.enabled = true;
+            Ok(PreparedShowSpoutActivation {
+                expected,
+                prior_disabled: Some(pair),
+                project_change: show_spout_project_commit::ShowSpoutProjectChange::EnableExisting,
+            })
+        }
+        show_spout_outputs::ShowSpoutActivationCandidate::Absent => {
+            let targets = show_spout_outputs::derive_show_spout_composition_targets(
+                &snapshot.video.compositions,
+            )
             .map_err(|error| {
                 format!("Show Spout activation requires exact V2 composition targets: {error}")
             })?;
-    let background_id = state.engine.allocate_video_output_id();
-    let foreground_id = state.engine.allocate_video_output_id();
-    show_spout_outputs::build_show_spout_outputs(
-        background_id,
-        foreground_id,
-        targets.background,
-        targets.foreground,
-    )
-    .map_err(|error| format!("Show Spout output allocation was invalid: {error}"))
+            let background_id = state.engine.allocate_video_output_id();
+            let foreground_id = state.engine.allocate_video_output_id();
+            let expected = show_spout_outputs::build_show_spout_outputs(
+                background_id,
+                foreground_id,
+                targets.background,
+                targets.foreground,
+            )
+            .map_err(|error| format!("Show Spout output allocation was invalid: {error}"))?;
+            Ok(PreparedShowSpoutActivation {
+                expected,
+                prior_disabled: None,
+                project_change: show_spout_project_commit::ShowSpoutProjectChange::Add,
+            })
+        }
+    }
 }
 
 fn validate_current_show_spout_outputs_action(state: &AppState) -> Result<(), String> {
     #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
     {
         let snapshot = state.engine.snapshot();
-        match show_spout_outputs::validate_show_spout_outputs_with_compositions(
+        match show_spout_outputs::classify_show_spout_activation_candidate(
             &snapshot.video.outputs,
             &snapshot.video.compositions,
         ) {
-            Ok(_) => return Ok(()),
-            Err(show_spout_outputs::ShowSpoutValidationError::MissingPair) => {}
+            Ok(show_spout_outputs::ShowSpoutActivationCandidate::ExistingEnabled(_))
+            | Ok(show_spout_outputs::ShowSpoutActivationCandidate::ExistingDisabled(_)) => {
+                return Ok(())
+            }
+            Ok(show_spout_outputs::ShowSpoutActivationCandidate::Absent) => {}
             Err(error) => {
                 return Err(format!(
                     "Show Spout activation requires no sender or the exact fixed pair: {error}"
@@ -74194,14 +74304,30 @@ fn confirm_current_show_spout_outputs(
     expected: &show_spout_outputs::ShowSpoutOutputs,
 ) -> Result<show_spout_outputs::ShowSpoutEnsureDecision, String> {
     let snapshot = state.engine.snapshot();
-    show_spout_outputs::validate_show_spout_outputs_with_compositions(
+    show_spout_outputs::classify_show_spout_activation_candidate(
         &snapshot.video.outputs,
         &snapshot.video.compositions,
     )
     .and_then(|current| {
-        (current == *expected)
-            .then_some(show_spout_outputs::ShowSpoutEnsureDecision::NoOp)
-            .ok_or(show_spout_outputs::ShowSpoutValidationError::ConflictingPair)
+        let decision = match current {
+            show_spout_outputs::ShowSpoutActivationCandidate::ExistingEnabled(current)
+                if current == *expected => show_spout_outputs::ShowSpoutEnsureDecision::NoOp,
+            show_spout_outputs::ShowSpoutActivationCandidate::ExistingDisabled(current) => {
+                let mut enabled = current;
+                enabled.background.enabled = true;
+                enabled.foreground.enabled = true;
+                if enabled == *expected {
+                    show_spout_outputs::ShowSpoutEnsureDecision::CreatePair
+                } else {
+                    return Err(show_spout_outputs::ShowSpoutValidationError::ConflictingPair);
+                }
+            }
+            show_spout_outputs::ShowSpoutActivationCandidate::Absent => {
+                show_spout_outputs::ShowSpoutEnsureDecision::CreatePair
+            }
+            _ => return Err(show_spout_outputs::ShowSpoutValidationError::ConflictingPair),
+        };
+        Ok(decision)
     })
     .map_err(|error| format!("Show Spout outputs changed before final publication: {error}"))
 }
@@ -74616,6 +74742,118 @@ enum ShowSpoutR4Preparation {
     Pending(show_spout_transport::ShowSpoutPendingOutputPair),
 }
 
+/// Roll back a candidate whose physical pair has not crossed the active
+/// handoff. A disabled authored pair is restored in place; a newly-created
+/// pair is retired. Any failed/ambiguous acknowledgement remains InDoubt so
+/// the durable output receipt keeps this exact request blocked.
+#[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+fn compensate_show_spout_activation_candidate(
+    state: &AppState,
+    expected: &show_spout_outputs::ShowSpoutOutputs,
+    prior_disabled: Option<&show_spout_outputs::ShowSpoutOutputs>,
+    project_change: show_spout_project_commit::ShowSpoutProjectChange,
+    primary_error: String,
+    pending_cleanup: Result<(), String>,
+) -> OutputLeaseCandidateCommitFailure {
+    let engine_cleanup = match project_change {
+        show_spout_project_commit::ShowSpoutProjectChange::EnableExisting => {
+            let Some(prior_disabled) = prior_disabled else {
+                return OutputLeaseCandidateCommitFailure::in_doubt(format!(
+                    "Show Spout activation failed without its staged disabled pair: {primary_error}"
+                ));
+            };
+            state.engine.restore_show_spout_outputs_disabled_published(
+                expected.background.clone(),
+                expected.foreground.clone(),
+                prior_disabled.background.clone(),
+                prior_disabled.foreground.clone(),
+                Instant::now() + Duration::from_secs(2),
+            )
+        }
+        show_spout_project_commit::ShowSpoutProjectChange::Add => state
+            .engine
+            .retire_show_spout_outputs_after_authority_loss_published(
+                expected.background.clone(),
+                expected.foreground.clone(),
+                Instant::now() + Duration::from_secs(2),
+            ),
+        show_spout_project_commit::ShowSpoutProjectChange::None => {
+            match show_spout_outputs::decide_show_spout_ensure(
+                &state.engine.snapshot().video.outputs,
+                expected,
+            ) {
+                Ok(show_spout_outputs::ShowSpoutEnsureDecision::NoOp) => Ok(()),
+                Err(error) => Err(format!(
+                    "existing enabled show Spout pair changed during rollback: {error}"
+                )),
+                Ok(show_spout_outputs::ShowSpoutEnsureDecision::CreatePair) => Err(
+                    "existing enabled show Spout pair disappeared during rollback".to_string(),
+                ),
+            }
+        }
+    };
+    let failure = match (pending_cleanup, engine_cleanup) {
+        (Ok(()), Ok(())) => OutputLeaseCandidateCommitFailure::safe(format!(
+            "Show Spout activation failed and its pending physical/engine candidate was rolled back: {primary_error}"
+        )),
+        (physical, engine) => {
+            let physical = physical
+                .err()
+                .map(|error| format!("pending sender-pair cleanup failed: {error}"));
+            let engine = engine
+                .err()
+                .map(|error| format!("engine candidate cleanup failed or was ambiguous: {error}"));
+            let details = physical
+                .into_iter()
+                .chain(engine)
+                .collect::<Vec<_>>()
+                .join("; ");
+            OutputLeaseCandidateCommitFailure::in_doubt(format!(
+                "Show Spout activation failed and cleanup is unresolved: {primary_error}; {details}"
+            ))
+        }
+    };
+    if matches!(failure, OutputLeaseCandidateCommitFailure::InDoubt(_)) {
+        state
+            .project_external_command_admission
+            .project_transaction_publication_faulted
+            .store(true, Ordering::Release);
+    }
+    failure
+}
+
+#[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+fn show_spout_in_doubt(
+    state: &AppState,
+    error: impl Into<String>,
+) -> OutputLeaseCandidateCommitFailure {
+    state
+        .project_external_command_admission
+        .project_transaction_publication_faulted
+        .store(true, Ordering::Release);
+    OutputLeaseCandidateCommitFailure::in_doubt(error)
+}
+
+#[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+fn finish_show_spout_activation_failure<Verify>(
+    state: &AppState,
+    failure: OutputLeaseCandidateCommitFailure,
+    verify_rollback: Verify,
+) -> OutputLeaseCandidateCommitFailure
+where
+    Verify: FnOnce() -> Result<(), String>,
+{
+    if matches!(failure, OutputLeaseCandidateCommitFailure::SafeAbort(_)) {
+        if let Err(error) = verify_rollback() {
+            return show_spout_in_doubt(
+                state,
+                format!("{failure:?}; project rollback verification failed: {error}"),
+            );
+        }
+    }
+    failure
+}
+
 /// Reserve a strict show pair under both transport mutexes, then perform a
 /// blocked exact engine-retirement acknowledgement only after both guards
 /// have dropped. This is intentionally the production R4 seam; tests use the
@@ -74827,7 +75065,7 @@ fn show_spout_r4_retry_ack_releases_both_transport_mutexes_before_engine_wait() 
     assert!(engine.snapshot().video.outputs.is_empty());
 }
 
-/// The single local R4 path for the fixed same-machine show Spout pair.  The
+/// The single local R4 path for the fixed same-machine show Spout pair. The
 /// IPC action is payloadless; this function derives both sender specs from the
 /// authoritative engine image and performs a bounded two-phase transaction:
 /// construct and exact-name-check both SDK senders, publish the exact engine
@@ -74912,296 +75150,308 @@ fn enable_show_spout_outputs_with_output_control_fence(
                 }
                 derive_current_show_spout_outputs(state)
             },
-            |_transition_guard, expected| {
+            |_transition_guard, activation| {
+                // The managed exact-Both request holds its keepalive serial
+                // guard through the complete candidate and physical callback.
+                let managed_authorization = lease_request
+                    .action
+                    .as_ref()
+                    .and_then(OutputLeaseRequestAction::managed_exact_both_lease_id)
+                    .map(|lease_id| {
+                        state
+                            .output_lease_keepalive
+                            .begin_managed_exact_both_ordinary_authorization(&lease_id.encode())
+                    })
+                    .transpose()?;
                 let mut lease_registry = state.output_lease_registry.lock().map_err(|_| {
                     "Output lease registry lock was poisoned before show Spout activation"
                         .to_string()
                 })?;
                 let final_lease_now_ms = state.output_lease_now_ms()?;
-                let ((applied, live_transfer_commit), lease_receipt) =
-                    submit_output_lease_candidate_with_commit(
-                        state,
-                        &mut lease_registry,
-                        lease_request,
-                        final_lease_now_ms,
-                        "show Spout output activation",
-                        || {
-                            {
-                                let mut coordinator = coordinator.borrow_mut();
-                                if reconcile_project_checkpoint_for_coordinator(
+                let callback_succeeded = Arc::new(AtomicBool::new(false));
+                let callback_succeeded_for_commit = Arc::clone(&callback_succeeded);
+                let candidate = submit_show_output_candidate_with_classified_commit(
+                    state,
+                    &mut lease_registry,
+                    lease_request,
+                    managed_authorization.as_ref(),
+                    final_lease_now_ms,
+                    "show Spout output activation",
+                    || {
+                        {
+                            let mut coordinator = coordinator.borrow_mut();
+                            if reconcile_project_checkpoint_for_coordinator(
+                                state,
+                                &mut *coordinator,
+                            )
+                            .is_err()
+                                || !control_plane_runtime::exact_output_control_fence_matches(
                                     state,
-                                    &mut *coordinator,
+                                    &*coordinator,
+                                    expected_fence,
                                 )
-                                .is_err()
-                                    || !control_plane_runtime::exact_output_control_fence_matches(
-                                        state,
-                                        &*coordinator,
-                                        expected_fence,
-                                    )
-                                    || ensure_no_pending_project_transaction(&*coordinator).is_err()
-                                {
-                                    return Err(
-                                    "Output control fence changed before show Spout physical publication"
-                                        .to_string(),
-                                );
-                                }
+                                || ensure_no_pending_project_transaction(&*coordinator).is_err()
+                            {
+                                return Err(OutputLeaseCandidateCommitFailure::safe(
+                                    "Output control fence changed before show Spout physical publication",
+                                ));
                             }
-                            let ownership = state.engine.output_ownership_status();
-                            if ownership.state != protocol::OutputOwnershipState::Ready
-                                || ownership.effective_role != MachineOutputRole::Both
-                                || ownership.desired_role != MachineOutputRole::Both
-                                || !ownership.video_allowed
+                        }
+                        let ownership = state.engine.output_ownership_status();
+                        if ownership.state != protocol::OutputOwnershipState::Ready
+                            || ownership.effective_role != MachineOutputRole::Both
+                            || ownership.desired_role != MachineOutputRole::Both
+                            || !ownership.video_allowed
+                        {
+                            return Err(OutputLeaseCandidateCommitFailure::safe(
+                                "Show Spout activation lost its local Both video authority",
+                            ));
+                        }
+                        let safety = state.engine.safety_blackout_authority();
+                        if safety.engaged
+                            || safety.epoch != expected_fence.safety_blackout_epoch
+                            || safety.generation != expected_fence.safety_blackout_generation
+                        {
+                            return Err(OutputLeaseCandidateCommitFailure::safe(
+                                "Show Spout activation was superseded by an emergency blackout authority change",
+                            ));
+                        }
+                        let current =
+                            confirm_current_show_spout_outputs(state, &activation.expected)?;
+
+                        // All project serialization, hash, history, and counter
+                        // checks happen before the engine changes its image.
+                        let mut project_plan = if activation.project_change
+                            == show_spout_project_commit::ShowSpoutProjectChange::None
+                        {
+                            None
+                        } else {
+                            let coordinator = coordinator.borrow();
+                            Some(show_spout_project_commit::prepare(
+                                state,
+                                &*coordinator,
+                                &activation.expected,
+                                activation.prior_disabled.as_ref(),
+                                activation.project_change,
+                            )
+                            .map_err(OutputLeaseCandidateCommitFailure::safe)?)
+                        };
+
+                        let engine = state.engine.clone();
+                        let expected_for_worker = activation.expected.clone();
+                        let expected_worker_ownership = state.engine.output_ownership_status();
+                        let expected_project_callback_epoch =
+                            state.project_callback_epoch.load(Ordering::Acquire);
+                        let project_callback_epoch = Arc::clone(&state.project_callback_epoch);
+                        let expected_safety_epoch = expected_fence.safety_blackout_epoch;
+                        let expected_safety_generation = expected_fence.safety_blackout_generation;
+                        let published = Arc::new(AtomicBool::new(false));
+                        let published_for_worker = Arc::clone(&published);
+                        let validator = move || {
+                            // Worker-side validation is side-effect-free. A
+                            // rejected fence makes that worker exit; the single
+                            // harvest owner then joins both SDK workers before
+                            // retiring the exact engine pair.
+                            let ownership = engine.output_ownership_status();
+                            validate_show_spout_worker_authority_identity(
+                                &expected_worker_ownership,
+                                &ownership,
+                                expected_project_callback_epoch,
+                                project_callback_epoch.load(Ordering::Acquire),
+                            )?;
+                            let safety = engine.safety_blackout_authority();
+                            if !published_for_worker.load(Ordering::Acquire)
+                                && (safety.engaged
+                                    || safety.epoch != expected_safety_epoch
+                                    || safety.generation != expected_safety_generation)
+                            {
+                                return Err("safety blackout authority changed".to_string());
+                            }
+                            if published_for_worker.load(Ordering::Acquire)
+                                && !matches!(
+                                    show_spout_outputs::decide_show_spout_ensure(
+                                        &engine.snapshot().video.outputs,
+                                        &expected_for_worker,
+                                    ),
+                                    Ok(show_spout_outputs::ShowSpoutEnsureDecision::NoOp)
+                                )
                             {
                                 return Err(
-                                    "Show Spout activation lost its local Both video authority"
-                                        .to_string(),
-                                );
-                            }
-                            let safety = state.engine.safety_blackout_authority();
-                            if safety.engaged
-                                || safety.epoch != expected_fence.safety_blackout_epoch
-                                || safety.generation != expected_fence.safety_blackout_generation
-                            {
-                                return Err(
-                                "Show Spout activation was superseded by an emergency blackout authority change"
-                                    .to_string(),
-                            );
-                            }
-                            let current = confirm_current_show_spout_outputs(state, &expected)?;
-                            let engine = state.engine.clone();
-                            let expected_for_worker = expected.clone();
-                            let expected_worker_ownership = state.engine.output_ownership_status();
-                            let expected_project_callback_epoch =
-                                state.project_callback_epoch.load(Ordering::Acquire);
-                            let project_callback_epoch = Arc::clone(&state.project_callback_epoch);
-                            let expected_safety_epoch = expected_fence.safety_blackout_epoch;
-                            let expected_safety_generation =
-                                expected_fence.safety_blackout_generation;
-                            let published = Arc::new(AtomicBool::new(false));
-                            let published_for_worker = Arc::clone(&published);
-                            let validator = move || {
-                                // Worker-side validation is deliberately
-                                // side-effect-free. A rejected fence makes that
-                                // physical worker exit; the single harvest owner
-                                // then joins both SDK workers before retiring the
-                                // exact engine pair. Never invert that ordering
-                                // from this validator mutex.
-                                let ownership = engine.output_ownership_status();
-                                validate_show_spout_worker_authority_identity(
-                                    &expected_worker_ownership,
-                                    &ownership,
-                                    expected_project_callback_epoch,
-                                    project_callback_epoch.load(Ordering::Acquire),
-                                )?;
-                                let safety = engine.safety_blackout_authority();
-                                // Initial activation remains bound to its exact S0
-                                // proof. Published workers capture current safety
-                                // per frame and discard stale frames before send.
-                                if !published_for_worker.load(Ordering::Acquire)
-                                    && (safety.engaged
-                                        || safety.epoch != expected_safety_epoch
-                                        || safety.generation != expected_safety_generation)
-                                {
-                                    return Err("safety blackout authority changed".to_string());
-                                }
-                                if published_for_worker.load(Ordering::Acquire)
-                                    && !matches!(
-                                        show_spout_outputs::decide_show_spout_ensure(
-                                            &engine.snapshot().video.outputs,
-                                            &expected_for_worker,
-                                        ),
-                                        Ok(show_spout_outputs::ShowSpoutEnsureDecision::NoOp)
-                                    )
-                                {
-                                    return Err(
                                     "published show Spout pair is no longer the exact engine pair"
                                         .to_string(),
                                 );
-                                }
-                                Ok(())
-                            };
-                            let activation = state
-                                .engine
-                                .admit_output_activation(MachineOutputRole::Both)
-                                .map_err(|error| {
-                                    format!(
-                                        "Show Spout physical activation was not admitted: {error}"
-                                    )
-                                })?;
-                            // A worker can fail between the first R4 check and
-                            // construction. This second harvest is deliberately
-                            // immediately before prepare; it fails this R4 rather
-                            // than allowing a new pair to overlap a retired one.
-                            harvest_show_spout_output_failures(
-                                state.show_spout_transport.as_ref(),
-                                &state.engine,
-                            )?;
-                            let prepared = prepare_show_spout_outputs_for_r4(
-                                state.spout_transport.as_ref(),
-                                state.show_spout_transport.as_ref(),
-                                &state.engine,
-                                expected.clone(),
-                                activation,
-                                validator,
-                                |retry| {
-                                    state
-                                        .engine
-                                        .retire_show_spout_outputs_after_authority_loss_published(
-                                            retry.expected().background.clone(),
-                                            retry.expected().foreground.clone(),
-                                            Instant::now() + Duration::from_secs(2),
-                                        )
-                                },
-                            )?;
-                            match prepared {
-                                ShowSpoutR4Preparation::NoOp => {
-                                    if !matches!(
-                                        current,
-                                        show_spout_outputs::ShowSpoutEnsureDecision::NoOp
-                                    ) {
-                                        return Err(
-                                        "Show Spout transport already exists but the engine did not retain the exact pair"
-                                            .to_string(),
-                                    );
-                                    }
-                                    state
-                                        .show_spout_transport
-                                        .lock()
-                                        .map_err(|_| {
-                                            "Show Spout transport state lock was poisoned while synchronizing an existing pair"
-                                                .to_string()
-                                        })?
-                                        .sync_content_state(state.engine.snapshot().timeline.playing)?;
-                                    Ok((false, None))
-                                }
-                                ShowSpoutR4Preparation::Pending(pending) => {
-                                    // The worker callbacks remain gated on `published` until
-                                    // this acknowledged engine image is exact. Engine-publication
-                                    // failure rolls the pending physical pair back explicitly so a
-                                    // teardown error is visible rather than discarded by Drop.
-                                    if let Err(error) =
-                                        state.engine.enable_show_spout_outputs_published(
-                                            expected.background.clone(),
-                                            expected.foreground.clone(),
-                                            expected_fence.safety_blackout_epoch,
-                                            expected_fence.safety_blackout_generation,
-                                            Instant::now() + Duration::from_secs(2),
-                                        )
-                                    {
-                                        let physical_cleanup = pending.retire();
-                                        // The enable ACK can be lost after the
-                                        // worker applied it. Submit the serial
-                                        // exact retire unconditionally: it runs
-                                        // after any queued enable and is the only
-                                        // source that can distinguish application
-                                        // from no-apply. Either result ends this
-                                        // R4; an error remains a persisted fresh-R4
-                                        // barrier rather than a new constructor.
-                                        let engine_cleanup =
-                                            state
-                                                .engine
-                                                .retire_show_spout_outputs_after_authority_loss_published(
-                                                expected.background.clone(),
-                                                expected.foreground.clone(),
-                                                Instant::now() + Duration::from_secs(2),
-                                            );
-                                        return match (physical_cleanup, engine_cleanup) {
-                                        (Ok(()), Ok(())) => Err(format!(
-                                            "Show Spout engine publication acknowledgement failed; the pending senders and exact engine pair were retired serially: {error}"
-                                        )),
-                                        (physical, Err(retire_error)) => {
-                                            let record = state
-                                                .show_spout_transport
-                                                .lock()
-                                                .map_err(|_| {
-                                                    "Show Spout transport state lock was poisoned while recording an unresolved engine retirement"
-                                                        .to_string()
-                                                })?
-                                                .record_unresolved_engine_retirement(
-                                                    expected.clone(),
-                                                    retire_error.clone(),
-                                                );
-                                            let physical = physical.err().map_or_else(
-                                                || "pending sender pair was retired".to_string(),
-                                                |cleanup_error| format!(
-                                                    "pending sender-pair retirement also failed: {cleanup_error}"
-                                                ),
-                                            );
-                                            match record {
-                                                Ok(()) => Err(format!(
-                                                    "Show Spout engine publication acknowledgement failed: {error}; {physical}; serial exact engine-pair retirement also failed and fresh-R4 retry is blocked: {retire_error}"
-                                                )),
-                                                Err(record_error) => Err(format!(
-                                                    "Show Spout engine publication acknowledgement failed: {error}; {physical}; serial exact engine-pair retirement also failed: {retire_error}; unresolved-cleanup barrier could not be recorded: {record_error}"
-                                                )),
-                                            }
-                                        }
-                                        (Err(cleanup_error), Ok(())) => Err(format!(
-                                            "Show Spout engine publication acknowledgement failed: {error}; exact engine pair was retired serially but pending sender-pair retirement also failed: {cleanup_error}"
-                                        )),
-                                    };
-                                    }
-                                    published.store(true, Ordering::Release);
-                                    // `publish_show_spout_outputs` waits for
-                                    // both first black frames and either joins
-                                    // both workers or makes the pair active.
-                                    // Release the show mutex before submitting
-                                    // a later engine retire ACK so that exact
-                                    // physical teardown remains the sole
-                                    // ordering boundary.
-                                    let live_transfer = match {
-                                        state
-                                            .show_spout_transport
-                                            .lock()
-                                            .map_err(|_| {
-                                                "Show Spout transport state lock was poisoned while publishing the pending pair"
-                                                    .to_string()
-                                            })?
-                                            .publish_show_spout_outputs(&state.engine, pending)
-                                    } {
-                                        Ok(token) => token,
-                                        Err(error) => {
-                                            let retire =
-                                                state
-                                                    .engine
-                                                    .retire_show_spout_outputs_after_authority_loss_published(
-                                                    expected.background.clone(),
-                                                    expected.foreground.clone(),
-                                                    Instant::now() + Duration::from_secs(2),
-                                                );
-                                            return match retire {
-                                        Ok(()) => Err(format!(
-                                            "Show Spout sender publication failed and the exact engine pair was retired: {error}"
-                                        )),
-                                        Err(retire_error) => {
-                                            let record = state
-                                                .show_spout_transport
-                                                .lock()
-                                                .map_err(|_| {
-                                                    "Show Spout transport state lock was poisoned while recording an unresolved engine retirement"
-                                                        .to_string()
-                                                })?
-                                                .record_unresolved_engine_retirement(
-                                                    expected.clone(),
-                                                    retire_error.clone(),
-                                                );
-                                            match record {
-                                                Ok(()) => Err(format!(
-                                                    "Show Spout sender publication failed: {error}; exact engine-pair retirement also failed and a fresh-R4 retry is blocked until its exact cleanup succeeds: {retire_error}"
-                                                )),
-                                                Err(record_error) => Err(format!(
-                                                    "Show Spout sender publication failed: {error}; exact engine-pair retirement also failed: {retire_error}; unresolved-cleanup barrier could not be recorded: {record_error}"
-                                                )),
-                                            }
-                                        }
-                                    };
-                                        }
-                                    };
-                                    Ok((true, Some(live_transfer)))
-                                }
                             }
-                        },
-                    )?;
+                            Ok(())
+                        };
+                        let output_activation = state
+                            .engine
+                            .admit_output_activation(MachineOutputRole::Both)
+                            .map_err(|error| {
+                                OutputLeaseCandidateCommitFailure::safe(format!(
+                                    "Show Spout physical activation was not admitted: {error}"
+                                ))
+                            })?;
+                        harvest_show_spout_output_failures(
+                            state.show_spout_transport.as_ref(),
+                            &state.engine,
+                        )
+                        .map_err(|error| show_spout_in_doubt(state, error))?;
+                        let prepared = prepare_show_spout_outputs_for_r4(
+                            state.spout_transport.as_ref(),
+                            state.show_spout_transport.as_ref(),
+                            &state.engine,
+                            activation.expected.clone(),
+                            output_activation,
+                            validator,
+                            |retry| {
+                                state
+                                    .engine
+                                    .retire_show_spout_outputs_after_authority_loss_published(
+                                        retry.expected().background.clone(),
+                                        retry.expected().foreground.clone(),
+                                        Instant::now() + Duration::from_secs(2),
+                                    )
+                            },
+                        )
+                        .map_err(|error| show_spout_in_doubt(state, error))?;
+                        match prepared {
+                            ShowSpoutR4Preparation::NoOp => {
+                                if !matches!(
+                                    current,
+                                    show_spout_outputs::ShowSpoutEnsureDecision::NoOp
+                                ) {
+                                    return Err(OutputLeaseCandidateCommitFailure::safe(
+                                        "Show Spout transport already exists but the engine did not retain the exact pair",
+                                    ));
+                                }
+                                state
+                                    .show_spout_transport
+                                    .lock()
+                                    .map_err(|_| {
+                                        OutputLeaseCandidateCommitFailure::safe(
+                                            "Show Spout transport state lock was poisoned while synchronizing an existing pair",
+                                        )
+                                    })?
+                                    .sync_content_state(state.engine.snapshot().timeline.playing)
+                                    .map_err(OutputLeaseCandidateCommitFailure::safe)?;
+                                callback_succeeded_for_commit.store(true, Ordering::Release);
+                                Ok((false, None))
+                            }
+                            ShowSpoutR4Preparation::Pending(pending) => {
+                                if let Err(error) = state
+                                    .engine
+                                    .enable_show_spout_outputs_published(
+                                        activation.expected.background.clone(),
+                                        activation.expected.foreground.clone(),
+                                        expected_fence.safety_blackout_epoch,
+                                        expected_fence.safety_blackout_generation,
+                                        Instant::now() + Duration::from_secs(2),
+                                    )
+                                {
+                                    let physical_cleanup = pending.retire();
+                                    let failure = compensate_show_spout_activation_candidate(
+                                        state,
+                                        &activation.expected,
+                                        activation.prior_disabled.as_ref(),
+                                        activation.project_change,
+                                        format!(
+                                            "Show Spout engine publication acknowledgement failed: {error}"
+                                        ),
+                                        physical_cleanup,
+                                    );
+                                    return Err(finish_show_spout_activation_failure(
+                                        state,
+                                        failure,
+                                        || {
+                                            if let Some(project_plan) = project_plan.as_ref() {
+                                                let coordinator = coordinator.borrow();
+                                                project_plan.verify_rollback(state, &*coordinator)
+                                            } else {
+                                                Ok(())
+                                            }
+                                        },
+                                    ));
+                                }
+
+                                // The engine ACK is definitive; verify the
+                                // complete authored image before native publish.
+                                if let Some(project_plan) = project_plan.as_ref() {
+                                    let verify = {
+                                        let coordinator = coordinator.borrow();
+                                        project_plan.verify(state, &*coordinator)
+                                    };
+                                    if let Err(error) = verify {
+                                        let physical_cleanup = pending.retire();
+                                        let failure = compensate_show_spout_activation_candidate(
+                                            state,
+                                            &activation.expected,
+                                            activation.prior_disabled.as_ref(),
+                                            activation.project_change,
+                                            format!(
+                                                "Show Spout project image verification failed: {error}"
+                                            ),
+                                            physical_cleanup,
+                                        );
+                                        return Err(finish_show_spout_activation_failure(
+                                            state,
+                                            failure,
+                                            || {
+                                                let coordinator = coordinator.borrow();
+                                                project_plan.verify_rollback(state, &*coordinator)
+                                            },
+                                        ));
+                                    }
+                                }
+                                published.store(true, Ordering::Release);
+                                let live_transfer = match state
+                                    .show_spout_transport
+                                    .lock()
+                                    .map_err(|_| {
+                                        show_spout_in_doubt(
+                                            state,
+                                            "Show Spout transport state lock was poisoned while publishing the pending pair",
+                                        )
+                                    })?
+                                    .publish_show_spout_outputs(&state.engine, pending)
+                                {
+                                    Ok(token) => token,
+                                    Err(error) => {
+                                        // The transport currently returns a
+                                        // string without a separate cleanup
+                                        // receipt. Treat the physical result as
+                                        // indeterminate, even when engine
+                                        // compensation succeeds.
+                                        return Err(
+                                            compensate_show_spout_activation_candidate(
+                                                state,
+                                                &activation.expected,
+                                                activation.prior_disabled.as_ref(),
+                                                activation.project_change,
+                                                format!(
+                                                    "Show Spout sender publication/teardown acknowledgement was indeterminate: {error}"
+                                                ),
+                                                Err(error),
+                                            ),
+                                        );
+                                    }
+                                };
+                                if let Some(project_plan) = project_plan.take() {
+                                    let mut coordinator = coordinator.borrow_mut();
+                                    project_plan.commit(&mut *coordinator);
+                                }
+                                callback_succeeded_for_commit.store(true, Ordering::Release);
+                                Ok((true, Some(live_transfer)))
+                            }
+                        }
+                    },
+                );
+                let ((applied, live_transfer_commit), lease_receipt) = match candidate {
+                    Ok(candidate) => candidate,
+                    Err(error) if callback_succeeded.load(Ordering::Acquire) => {
+                        return Err(show_spout_in_doubt(state, error).into_message());
+                    }
+                    Err(error) => return Err(error),
+                };
                 if let Some(token) = live_transfer_commit {
                     // Durable registry+receipt commit has completed. This is
                     // intentionally an infallible atomic release: any fence
@@ -75210,12 +75460,29 @@ fn enable_show_spout_outputs_with_output_control_fence(
                     // ambiguous command error.
                     token.commit();
                 }
-                Ok((applied, expected_fence.clone(), lease_receipt))
+                let fence_after = if applied {
+                    let coordinator = coordinator.borrow();
+                    control_plane_runtime::committed_output_control_fence(
+                        expected_fence,
+                        control_plane_runtime::CommittedOutputControlFenceValues {
+                            project_epoch: coordinator.epoch,
+                            project_revision: coordinator.revision,
+                            project_checkpoint_hash: &coordinator.checkpoint_hash,
+                            project_publication_generation: coordinator.publication_generation,
+                            output_epoch: expected_fence.output_epoch,
+                            output_generation: expected_fence.output_generation,
+                            safety_blackout_epoch: expected_fence.safety_blackout_epoch,
+                            safety_blackout_generation: expected_fence.safety_blackout_generation,
+                        },
+                    )
+                } else {
+                    expected_fence.clone()
+                };
+                Ok((applied, fence_after, lease_receipt))
             },
         )
     }
 }
-
 /// Release only the safety blackout latch that was named by the authenticated
 /// R4 fence. Project admission remains held while the engine consumes that
 /// fence, so a project swap cannot turn an authorization for one project into a
@@ -85454,6 +85721,11 @@ pub(crate) mod tests {
     use super::*;
     use protocol::{ClockSource, VideoLayerSummary};
 
+    #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+    mod show_spout_activation_commit_tests {
+        include!("show_spout_activation_commit_tests.rs");
+    }
+
     fn bank_mutation_test_snapshot() -> EngineSnapshot {
         EngineSnapshot {
             cue_lists: vec![
@@ -88768,6 +89040,122 @@ pub(crate) mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.directory);
         }
+    }
+
+    #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+    #[test]
+    fn show_spout_authorization_builder_uses_managed_exact_both_for_the_armed_lease() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let process_incarnation = harness
+            .state
+            .output_lease_registry
+            .lock()
+            .expect("show Spout authorization registry lock")
+            .process_session_incarnation();
+        let owner = OutputLeaseOwner::new(
+            MEDIA_ASSET_A6_OWNER,
+            "media-asset-a6",
+            process_incarnation,
+            1,
+        )
+        .expect("show Spout authorization owner");
+        let resources = OutputLeaseResources::new(&[
+            OutputLeaseResource::Lighting,
+            OutputLeaseResource::Video,
+        ])
+        .expect("show Spout authorization resources");
+        let enable_request = OutputLeaseRequest::from_action(
+            MEDIA_ASSET_A6_OWNER,
+            OUTPUT_LEASE_OUTPUT_CONTROL_DOMAIN,
+            990_101,
+            OutputLeaseRequestAction::EnableAcquireOrRecover {
+                owner: owner.clone(),
+                resources: resources.clone(),
+                project_identity: output_lease_project_identity(0),
+                ttl_ms: output_lease::MAX_OUTPUT_LEASE_TTL_MS,
+            },
+        )
+        .expect("show Spout durable Enable request");
+        let now_ms = harness
+            .state
+            .output_lease_now_ms()
+            .expect("show Spout authorization clock");
+        let enable_receipt = {
+            let mut registry = harness
+                .state
+                .output_lease_registry
+                .lock()
+                .expect("submit show Spout durable Enable");
+            registry
+                .submit_request(&enable_request, now_ms)
+                .expect("submit show Spout durable Enable")
+        };
+        let lease_id = enable_receipt
+            .lease_id
+            .expect("show Spout durable Enable lease id");
+        let generation = enable_receipt
+            .generation_after
+            .expect("show Spout durable Enable generation");
+        let identity = output_lease::output_lease_keepalive::OutputLeaseKeepaliveIdentity::new(
+            output_lease_project_identity(0),
+            MEDIA_ASSET_A6_OWNER,
+            "media-asset-a6",
+            format!("process:{process_incarnation};owner:1"),
+            format!(
+                "principal:{MEDIA_ASSET_A6_OWNER};domain:{OUTPUT_LEASE_OUTPUT_CONTROL_DOMAIN};request:{}",
+                enable_receipt.key.request_id
+            ),
+        )
+        .expect("show Spout durable Enable identity");
+        let evidence = {
+            let registry = harness
+                .state
+                .output_lease_registry
+                .lock()
+                .expect("issue show Spout keepalive evidence");
+            registry
+                .issue_managed_exact_both_durable_enable_evidence(&enable_receipt, identity)
+                .expect("issue show Spout keepalive evidence")
+        };
+        let admission = harness
+            .state
+            .output_lease_keepalive
+            .admit_verified_durable_enable_with(now_ms, || Ok(evidence))
+            .expect("arm show Spout managed lease");
+        assert!(matches!(
+            admission,
+            output_lease_keepalive_runtime::OutputLeaseKeepaliveRuntimeAdmission::SpawnWorker(_)
+        ));
+
+        let authority = protocol::control_plane_command::OutputLeaseAuthorityV1 {
+            lease_id: lease_id.encode(),
+            generation,
+        };
+        let action = protocol::control_plane_command::OutputControlActionV2::EnableShowSpoutOutputs {
+            lease: authority,
+        };
+        let (request, _) = build_output_lease_authorization_request(
+            &harness.state,
+            MEDIA_ASSET_A6_OWNER,
+            "media-asset-a6",
+            1,
+            990_102,
+            &action,
+            0,
+        )
+        .expect("build managed show Spout authorization request");
+        assert!(matches!(
+            request.action.as_ref(),
+            Some(OutputLeaseRequestAction::AuthorizeManagedExactBoth {
+                lease_id: actual_lease_id,
+                owner: actual_owner,
+                exact_resources: actual_resources,
+                project_identity,
+            }) if *actual_lease_id == lease_id
+                && *actual_owner == owner
+                && *actual_resources == resources
+                && project_identity == &output_lease_project_identity(0)
+        ));
     }
 
     #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]

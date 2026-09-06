@@ -9,6 +9,7 @@ import {
 } from "./outputControlController";
 import type { Dsf2026ArtNetAcceptanceProbeStatusQuery } from "./outputControlController";
 import type {
+  OutputControlReceipt,
   OutputLeaseAuthority,
   OutputLeaseAuthorityQuery,
 } from "./outputControlController";
@@ -135,6 +136,7 @@ interface OutputDiagnosticsControllerOptions {
   invoke: Invoke;
   setMessage: (message: string) => unknown;
   refreshSnapshot: () => Promise<EngineSnapshot | null>;
+  refreshProjectAuthority: (receipt: OutputControlReceipt) => Promise<void>;
   serialPorts: Accessor<SerialPortSummary[]>;
   setSerialPorts: Setter<SerialPortSummary[]>;
   safetyBlackout: Accessor<boolean>;
@@ -548,10 +550,11 @@ export function createOutputDiagnosticsController(options: OutputDiagnosticsCont
     try {
       await ensureBothOutputLease();
       const lease = await selectFreshBothOutputLease();
-      await executeOutputControl(options.invoke, {
+      const receipt = await executeOutputControl(options.invoke, {
         kind: "enable_show_spout_outputs",
         lease,
       });
+      await options.refreshProjectAuthority(receipt);
       await options.refreshSnapshot();
       options.setMessage("Same-PC V2 Syndocal Background/Foreground Spout outputs enabled.");
     } catch (error) {
@@ -561,7 +564,8 @@ export function createOutputDiagnosticsController(options: OutputDiagnosticsCont
 
   const resetShowSpoutOutputs = async () => {
     try {
-      await executeOutputControl(options.invoke, { kind: "reset_show_spout_outputs" });
+      const receipt = await executeOutputControl(options.invoke, { kind: "reset_show_spout_outputs" });
+      await options.refreshProjectAuthority(receipt);
       await options.refreshSnapshot();
       options.setMessage("Recognized show Spout outputs were reset.");
     } catch (error) {

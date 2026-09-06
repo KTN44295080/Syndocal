@@ -237,7 +237,13 @@ const queryFor = (action, state = "active") => {
   };
 };
 
-const receiptFor = (request, action, enableRecovery = false, enableRecoveryGenerationDelta = 1) => {
+const receiptFor = (
+  request,
+  action,
+  enableRecovery = false,
+  enableRecoveryGenerationDelta = 1,
+  spoutReceipt = "no_op",
+) => {
   if (action.kind === "reset_show_spout_outputs") {
     return {
       type: "receipt",
@@ -287,6 +293,9 @@ const receiptFor = (request, action, enableRecovery = false, enableRecoveryGener
     force_transfer_lease: "transferred",
   })[action.kind];
   const persistedArtNetMutation = action.kind === canonicalShowArtNetActionKind || action.kind === "set_blackout";
+  const persistedSpoutMutation = action.kind === "enable_show_spout_outputs" && spoutReceipt === "persisted";
+  const appliedSpoutPhysicalStart = action.kind === "enable_show_spout_outputs" && spoutReceipt === "physical";
+  const persistedProjectMutation = persistedArtNetMutation || persistedSpoutMutation;
   return {
     type: "receipt",
     receipt: {
@@ -296,13 +305,13 @@ const receiptFor = (request, action, enableRecovery = false, enableRecoveryGener
       argument_fingerprint: hash("b"),
       audit_sequence: 1,
       fence_before: structuredClone(request.expected_fence),
-      fence_after: persistedArtNetMutation ? {
+      fence_after: persistedProjectMutation ? {
         ...structuredClone(request.expected_fence),
         project_revision: request.expected_fence.project_revision + 1,
         project_checkpoint_hash: hash("e"),
         project_publication_generation: request.expected_fence.project_publication_generation + 1,
       } : structuredClone(request.expected_fence),
-      outcome: persistedArtNetMutation || action.kind === canonicalShowSerialDmxEnableActionKind
+      outcome: persistedProjectMutation || appliedSpoutPhysicalStart || action.kind === canonicalShowSerialDmxEnableActionKind
         || action.kind === canonicalShowSerialDmxStopActionKind
         || action.kind === "send_dsf2026_artnet_acceptance_probe"
         || action.kind === "acknowledge_dsf2026_artnet_acceptance_probe_in_doubt"
@@ -328,7 +337,7 @@ const receiptFor = (request, action, enableRecovery = false, enableRecoveryGener
   };
 };
 
-const createHarness = ({ action, queryState, authorityFence = fence, loseFirstReply = false, typedRejection = false, enableRecovery = false, enableRecoveryGenerationDelta = 1, receiptTransform } = {}) => {
+const createHarness = ({ action, queryState, authorityFence = fence, loseFirstReply = false, typedRejection = false, enableRecovery = false, enableRecoveryGenerationDelta = 1, spoutReceipt = "no_op", receiptTransform } = {}) => {
   const operationId = operationFor(action);
   const command = commandFor(action);
   const calls = [];
@@ -360,7 +369,7 @@ const createHarness = ({ action, queryState, authorityFence = fence, loseFirstRe
       type: "rejected",
       rejection: { operation_id: operationId, request_id: args.request.request_id, error: "forbidden" },
     };
-    const receipt = receiptFor(args.request, action, enableRecovery, enableRecoveryGenerationDelta);
+    const receipt = receiptFor(args.request, action, enableRecovery, enableRecoveryGenerationDelta, spoutReceipt);
     return receiptTransform ? receiptTransform(receipt) : receipt;
   };
   return { invoke, calls, executeArgs, get executeCalls() { return executeCalls; } };
@@ -490,11 +499,95 @@ for (const [action, operationId, command] of [
 const showSpoutOutputsHarness = createHarness({ action: showSpoutOutputsAction, queryState: "active" });
 const showSpoutOutputsReceipt = await runtime.executeOutputControl(showSpoutOutputsHarness.invoke, showSpoutOutputsAction);
 assert.equal(showSpoutOutputsReceipt.operation_id, runtime.OUTPUT_SHOW_SPOUT_OUTPUTS_ENABLE_OPERATION_ID);
+assert.equal(showSpoutOutputsReceipt.outcome, "no_op");
+assert.deepEqual(
+  showSpoutOutputsReceipt.fence_before,
+  showSpoutOutputsReceipt.fence_after,
+  "a Spout no-op must retain the complete output/project fence",
+);
 assert.deepEqual(
   Object.keys(showSpoutOutputsHarness.executeArgs[0].request.action).sort(),
   ["kind", "lease"],
   "the strict show Spout action must not carry names, dimensions, or generic route fields",
 );
+
+const showSpoutPhysicalStartHarness = createHarness({
+  action: showSpoutOutputsAction,
+  queryState: "active",
+  spoutReceipt: "physical",
+});
+const showSpoutPhysicalStartReceipt = await runtime.executeOutputControl(
+  showSpoutPhysicalStartHarness.invoke,
+  showSpoutOutputsAction,
+);
+assert.equal(showSpoutPhysicalStartReceipt.outcome, "applied");
+assert.deepEqual(
+  showSpoutPhysicalStartReceipt.fence_before,
+  showSpoutPhysicalStartReceipt.fence_after,
+  "starting an already-authored Spout pair may apply physical work without a project revision",
+);
+
+const showSpoutPersistedStartHarness = createHarness({
+  action: showSpoutOutputsAction,
+  queryState: "active",
+  spoutReceipt: "persisted",
+});
+const showSpoutPersistedStartReceipt = await runtime.executeOutputControl(
+  showSpoutPersistedStartHarness.invoke,
+  showSpoutOutputsAction,
+);
+assert.equal(showSpoutPersistedStartReceipt.outcome, "applied");
+assert.equal(
+  showSpoutPersistedStartReceipt.fence_after.project_revision,
+  showSpoutPersistedStartReceipt.fence_before.project_revision + 1,
+  "enabling the authored Spout pair must report its committed project revision",
+);
+assert.notEqual(
+  showSpoutPersistedStartReceipt.fence_after.project_checkpoint_hash,
+  showSpoutPersistedStartReceipt.fence_before.project_checkpoint_hash,
+  "enabling the authored Spout pair must report its committed project hash",
+);
+assert.equal(
+  showSpoutPersistedStartReceipt.fence_after.project_publication_generation,
+  showSpoutPersistedStartReceipt.fence_before.project_publication_generation + 1,
+  "enabling the authored Spout pair must report its committed publication generation",
+);
+for (const field of [
+  "process_incarnation",
+  "session_incarnation",
+  "project_epoch",
+  "output_epoch",
+  "output_generation",
+  "safety_blackout_epoch",
+  "safety_blackout_generation",
+]) {
+  assert.equal(
+    showSpoutPersistedStartReceipt.fence_after[field],
+    showSpoutPersistedStartReceipt.fence_before[field],
+    `Spout authored creation must preserve ${field}`,
+  );
+}
+
+for (const [name, mutate] of [
+  ["skipped project revision", (receipt) => { receipt.receipt.fence_after.project_revision += 1; }],
+  ["mutated output generation", (receipt) => { receipt.receipt.fence_after.output_generation += 1; }],
+  ["mutated safety generation", (receipt) => { receipt.receipt.fence_after.safety_blackout_generation += 1; }],
+]) {
+  const harness = createHarness({
+    action: showSpoutOutputsAction,
+    queryState: "active",
+    spoutReceipt: "persisted",
+    receiptTransform: (receipt) => {
+      mutate(receipt);
+      return receipt;
+    },
+  });
+  await assert.rejects(
+    runtime.executeOutputControl(harness.invoke, showSpoutOutputsAction),
+    /receipt was inconsistent; physical output state is unknown/,
+    `Spout receipt must reject ${name}`,
+  );
+}
 
 const showSpoutResetHarness = createHarness({ action: showSpoutResetAction });
 const showSpoutResetReceipt = await runtime.executeOutputControl(
@@ -1631,6 +1724,20 @@ assert.match(outputDiagnosticsSource, /sendDsf2026ArtNetAcceptanceProbe[\s\S]*st
   "a successful native receipt must leave the frontend probe control permanently disabled");
 assert.match(outputDiagnosticsSource, /enableShowSpoutOutputs[\s\S]*enable_show_spout_outputs/);
 assert.match(outputDiagnosticsSource, /resetShowSpoutOutputs[\s\S]*reset_show_spout_outputs/);
+assert.match(
+  outputDiagnosticsSource,
+  /refreshProjectAuthority:\s*\(receipt:\s*OutputControlReceipt\)\s*=>\s*Promise<void>/,
+  "Spout diagnostics must receive the canonical receipt-convergence hook",
+);
+const enableSpoutDiagnosticsBody = outputDiagnosticsSource.slice(
+  outputDiagnosticsSource.indexOf("const enableShowSpoutOutputs"),
+  outputDiagnosticsSource.indexOf("const sendDmxTestFrame"),
+);
+assert.match(
+  enableSpoutDiagnosticsBody,
+  /const receipt = await executeOutputControl[\s\S]*await options\.refreshProjectAuthority\(receipt\);[\s\S]*await options\.refreshSnapshot\(\)/,
+  "Spout enable/reset must converge canonical project authority before snapshot refresh",
+);
 assert.doesNotMatch(
   outputDiagnosticsSource,
   /invoke(?:<[^>]*>)?\(\s*["']set_dmx_outputs["']/,
@@ -2251,4 +2358,4 @@ for (const field of ["safety_blackout_epoch", "safety_blackout_generation", "out
   await assert.rejects(runtime.executeTargetBlackout(harness.invoke, "lighting", true), /receipt was inconsistent/);
 }
 
-console.log("output control runtime contract: PASS (v8 output commands, fixed same-PC Art-Net loopback/DSF2026 probe plus no-send reconciliation/strict Spout V2 reset, revision-fenced USB-DMX status, strict receipts, fail-closed query)");
+console.log("output control runtime contract: PASS (v9 output commands, fixed same-PC Art-Net loopback/DSF2026 probe plus no-send reconciliation/strict Spout V2 receipt fences/reset, revision-fenced USB-DMX status, strict receipts, fail-closed query)");

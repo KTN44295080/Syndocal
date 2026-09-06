@@ -117,6 +117,16 @@ await assert.rejects(
   "an unchanged canonical authority must fail closed",
 );
 
+await assert.rejects(
+  createProjectAuthorityReceiptConvergence({
+    currentAuthority: () => currentAuthority,
+    inFlightAuthorityPoll: () => null,
+    pollProjectAuthorityBundle: async () => {},
+  })(receipt, "Show Spout outputs"),
+  /Show Spout outputs applied, but canonical project authority did not converge; snapshot was not refreshed\./,
+  "a Spout convergence failure must identify the operation that committed",
+);
+
 assert.match(
   appSource,
   /const refreshProjectAuthorityAfterTargetBlackout = createProjectAuthorityReceiptConvergence\(\{[\s\S]*?currentAuthority: projectMappingsAuthority,[\s\S]*?inFlightAuthorityPoll: \(\) => projectAuthorityPollInFlight,[\s\S]*?pollProjectAuthorityBundle,[\s\S]*?\}\);/,
@@ -124,6 +134,10 @@ assert.match(
 );
 assert.match(source, /if \(inFlight\) await inFlight;/);
 assert.match(source, /await options\.pollProjectAuthorityBundle\(\);/);
-assert.match(source, /Target blackout applied, but canonical project authority did not converge/);
+assert.match(
+  source,
+  /operationLabel = options\.operationLabel \?\? "Target blackout"[\s\S]*\$\{operationLabel\} applied, but canonical project authority did not converge/,
+  "convergence errors must use the injected operation label",
+);
 
 console.log("target blackout authority convergence: PASS (pre-receipt race, exact convergence, later revision acceptance, and fail-closed mismatch)");

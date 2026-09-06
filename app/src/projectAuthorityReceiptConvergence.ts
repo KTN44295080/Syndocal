@@ -8,6 +8,8 @@ export type ProjectAuthorityReceiptConvergenceOptions = {
   currentAuthority: () => ProjectAuthorityToken;
   inFlightAuthorityPoll: () => Promise<unknown> | null;
   pollProjectAuthorityBundle: () => Promise<unknown>;
+  /** Human-readable operation name used when convergence fails. */
+  operationLabel?: string;
 };
 
 const authorityIsStrictlyAfter = (
@@ -25,7 +27,10 @@ const authorityIsStrictlyAfter = (
  */
 export const createProjectAuthorityReceiptConvergence = (
   options: ProjectAuthorityReceiptConvergenceOptions,
-) => async (receipt: OutputControlReceipt): Promise<void> => {
+) => async (
+  receipt: OutputControlReceipt,
+  operationLabel = options.operationLabel ?? "Target blackout",
+): Promise<void> => {
   const expected = {
     project_epoch: receipt.fence_after.project_epoch,
     project_revision: receipt.fence_after.project_revision,
@@ -43,7 +48,7 @@ export const createProjectAuthorityReceiptConvergence = (
   if (!projectAuthorityTokenIsCurrent(expected, converged)
     && !authorityIsStrictlyAfter(expected, converged)) {
     throw new Error(
-      "Target blackout applied, but canonical project authority did not converge; snapshot was not refreshed.",
+      `${operationLabel} applied, but canonical project authority did not converge; snapshot was not refreshed.`,
     );
   }
 };

@@ -27,11 +27,11 @@ pub(crate) fn filter_generic_spout_sync_plans(
         )
     });
 
-    match crate::show_spout_outputs::validate_show_spout_outputs_with_compositions(
+    match crate::show_spout_outputs::classify_show_spout_activation_candidate(
         outputs,
         compositions,
     ) {
-        Ok(_) => {
+        Ok(crate::show_spout_outputs::ShowSpoutActivationCandidate::ExistingEnabled(_)) => {
             if plans.outputs.iter().any(|plan| {
                 plan.kind == VideoOutputKind::SpoutSender
                     && !is_reserved_show_name(&plan.label, &plan.endpoint_name)
@@ -45,15 +45,19 @@ pub(crate) fn filter_generic_spout_sync_plans(
                 .outputs
                 .retain(|plan| plan.kind != VideoOutputKind::SpoutSender);
         }
-        Err(crate::show_spout_outputs::ShowSpoutValidationError::Disabled)
-            if fully_disabled_pair_is_structurally_valid(outputs, compositions) =>
-        {
+        Ok(crate::show_spout_outputs::ShowSpoutActivationCandidate::ExistingDisabled(_)) => {
             // Keep the authored disabled pair in the generic plan. Its `live`
             // values are false, so the generic runtime retires stale routes
             // without creating or sending a new route.
         }
-        Err(crate::show_spout_outputs::ShowSpoutValidationError::MissingPair)
-            if !has_reserved_show_output => {}
+        Ok(crate::show_spout_outputs::ShowSpoutActivationCandidate::Absent) => {
+            if has_reserved_show_output {
+                return Err(
+                    "Generic Spout synchronization is blocked while reserved show names are authored without the exact pair"
+                        .to_string(),
+                );
+            }
+        }
         Err(error) if has_reserved_show_output => {
             return Err(format!(
                 "Generic Spout synchronization is blocked by an invalid or conflicting strict show pair: {error}"
@@ -75,40 +79,6 @@ fn is_reserved_show_name(label: &str, endpoint_name: &str) -> bool {
         crate::show_spout_outputs::SHOW_SPOUT_BACKGROUND_NAME
             | crate::show_spout_outputs::SHOW_SPOUT_FOREGROUND_NAME
     )
-}
-
-/// Return true only for the exact two-sender pair with both senders disabled,
-/// after all strict non-activation invariants have been checked.
-fn fully_disabled_pair_is_structurally_valid(
-    outputs: &[VideoOutputSummary],
-    compositions: &[CompositionSummary],
-) -> bool {
-    let spout_count = outputs
-        .iter()
-        .filter(|output| output.kind == VideoOutputKind::SpoutSender)
-        .count();
-    if spout_count != 2
-        || outputs
-            .iter()
-            .filter(|output| output.kind == VideoOutputKind::SpoutSender)
-            .any(|output| output.enabled)
-    {
-        return false;
-    }
-
-    let mut structurally_enabled_outputs = outputs.to_vec();
-    for output in structurally_enabled_outputs
-        .iter_mut()
-        .filter(|output| output.kind == VideoOutputKind::SpoutSender)
-    {
-        output.enabled = true;
-    }
-
-    crate::show_spout_outputs::validate_show_spout_outputs_with_compositions(
-        &structurally_enabled_outputs,
-        compositions,
-    )
-    .is_ok()
 }
 
 #[cfg(test)]

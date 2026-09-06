@@ -60,3 +60,78 @@ recorded SHA256 hashes. No Unity settings or original project files changed.
 Successful user-operated Spout start and Unity reception remain separate from
 the software regression and responsive-window evidence; the user has been
 asked to repeat Spout start in the now-open preserved copy.
+
+## Retest: activation still blocked
+
+The user reported `OutputControl rejected (invalid_request); nothing was
+applied` at Spout start. `retest-runtime.json` now
+shows Ready/Both, both domains allowed, no ownership error, unchanged E1/R0,
+and both show outputs still disabled. Thus the generic synchronization failure
+is corrected, but this is not successful Spout activation acceptance.
+
+Further source tracing found active-only validation in the Spout activation
+preflight, derivation, final confirmation, and engine publication. Enabling
+these stored disabled descriptors also changes persisted project content;
+the previous Spout receipt contract incorrectly assumes an unchanged project
+fence for every successful activation. The follow-up must align strict
+activation validation, engine publication, managed authority, and canonical
+project receipt convergence before claiming the user path works.
+
+## Activation correction
+
+The activation classifier now accepts an exact fully disabled pair and enables
+it in place. Mixed enabled states, malformed mappings, wrong composition
+backreferences and extra senders remain rejected. Engine restoration preserves
+the authored pair and fades; only a newly added pair is removed on compensation.
+
+The managed exact-Both authorization route now includes Spout. Project commit
+preflight prepares the hash, checked counters and ordinary Undo entry before
+engine/native publication. The engine image is verified before the assignment-only
+coordinator commit. Unverified cleanup or post-callback durable failure fences
+all project/output command admission. Successful receipts preserve output/S0
+identity and use either the unchanged project fence or its exact persisted
+successor. The frontend converges canonical project authority before refreshing.
+
+Spout enable now participates in the existing public durable terminal journal;
+Reset remains excluded. Journal tests prove write/reload/exact response lookup
+and invalid-terminal rejection. Runtime ordering before mutable-fence checking
+was source-reviewed. These tests do not prove native redispatch behavior or
+atomic recovery across the separate private/public terminal writes.
+
+Independent frontend, native and protocol/runtime reviews accepted the stable
+diff. Focused checks passed:
+
+- Frontend output-control and authority-convergence checkers; TypeScript.
+- Engine Spout coverage: 8 tests, plus 2 restore rejection/idempotence tests.
+- Protocol control-plane command suite: 18 tests.
+- Final Windows native `show_spout` suite: 49 tests, including real-engine
+  project commit/Undo preservation, rollback hash verification, managed
+  authorization and durable journal replay. All selected tests ran with
+  zero failures or ignored tests; no compiler warnings in these final logs.
+
+Logs: `activation-engine-tests.log`, `activation-engine-restore-tests.log`,
+`activation-protocol-tests.log`, `activation-native-final-tests.log`.
+Earlier compile diagnostics were corrected before the final passing run.
+
+The latest autosave `backup-1788668815818.json` is separately preserved and
+exported as `DSF2026-before-activation-fix.sdc` with its project and control
+mappings intact. It includes later runtime cue state than the first backup.
+The original Unity show and protected dirty viewport checker still match their
+recorded hashes.
+
+`pnpm --dir app tauri build --no-bundle` passed (release 3m52s; Vite 8.77s).
+Compiler/Vite warnings for the checked Windows configuration: baseline 0,
+current 0, delta 0. The wrapper stopped only this checkout's PID 102516.
+Executable SHA256:
+`0326104031AFA2DE91B18F34E762129F5BBCF50F7B5A450BA45BB02E3B710A30`.
+Launch evidence records PID 55780 and one responsive maximized Syndocal main
+window. Standard project-open forwarding loaded the latest preserved copy;
+read-only MCP confirmed 46 fixtures, both named outputs with original IDs and
+dimensions, paused Timeline, Ready/Standby with no ownership error, and both
+outputs retained/disarmed. Logs: `activation-native-build.log`,
+`activation-native-launch.json`, `activation-after-runtime.json`.
+
+Actual Spout SDK activation and Unity reception remain user acceptance pending.
+The MCP bridge exposes runtime inspection but no Spout-start action, so these
+read-only observations are not proof of output delivery. Next action: start
+Spout in the open preserved copy and verify both senders arrive in Unity.

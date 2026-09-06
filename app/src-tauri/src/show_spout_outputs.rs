@@ -40,6 +40,16 @@ pub(crate) struct ShowSpoutOutputs {
     pub(crate) foreground: VideoOutputSummary,
 }
 
+/// The authored state observed before the native show-Spout activation
+/// candidate is built. A disabled exact pair is structurally valid but must be
+/// re-enabled in place; it is not treated as a missing pair with fresh IDs.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum ShowSpoutActivationCandidate {
+    Absent,
+    ExistingDisabled(ShowSpoutOutputs),
+    ExistingEnabled(ShowSpoutOutputs),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ShowSpoutCompositionTargets {
     pub(crate) background: CompositionId,
@@ -424,6 +434,45 @@ pub(crate) fn validate_show_spout_outputs_with_compositions(
     }
     validate_output_backreferences(&pair, compositions, &targets)?;
     Ok(pair)
+}
+
+/// Classify the current authored Spout state for the dedicated activation
+/// route. The normal validator remains strict and still reports `Disabled`;
+/// this boundary admits that error only after validating an exact clone with
+/// both fixed senders enabled, then returns the original disabled summaries so
+/// callers can preserve their IDs and other authored fields.
+pub(crate) fn classify_show_spout_activation_candidate(
+    outputs: &[VideoOutputSummary],
+    compositions: &[CompositionSummary],
+) -> Result<ShowSpoutActivationCandidate, ShowSpoutValidationError> {
+    match validate_show_spout_outputs_with_compositions(outputs, compositions) {
+        Ok(pair) => Ok(ShowSpoutActivationCandidate::ExistingEnabled(pair)),
+        Err(ShowSpoutValidationError::MissingPair) => {
+            Ok(ShowSpoutActivationCandidate::Absent)
+        }
+        Err(ShowSpoutValidationError::Disabled) => {
+            let spout = outputs
+                .iter()
+                .filter(|output| output.kind == VideoOutputKind::SpoutSender)
+                .collect::<Vec<_>>();
+            if spout.len() != 2 || spout.iter().any(|output| output.enabled) {
+                return Err(ShowSpoutValidationError::Disabled);
+            }
+            let mut enabled_outputs = outputs.to_vec();
+            for output in enabled_outputs
+                .iter_mut()
+                .filter(|output| output.kind == VideoOutputKind::SpoutSender)
+            {
+                output.enabled = true;
+            }
+            // This repeats the complete strict graph validation, including
+            // names, dimensions, compositions and every output backreference.
+            validate_show_spout_outputs_with_compositions(&enabled_outputs, compositions)?;
+            let pair = collect_pair(spout)?;
+            Ok(ShowSpoutActivationCandidate::ExistingDisabled(pair))
+        }
+        Err(error) => Err(error),
+    }
 }
 
 fn validate_output_backreferences(
@@ -897,6 +946,55 @@ mod tests {
         assert_eq!(
             build_show_spout_outputs(11, 12, 2, 2),
             Err(ShowSpoutValidationError::InvalidCompositionTarget)
+        );
+    }
+
+    #[test]
+    fn activation_classifier_preserves_exact_disabled_pair_and_rejects_partial_or_malformed_state()
+    {
+        let expected = pair();
+        let compositions = v2_compositions(&expected);
+        assert_eq!(
+            classify_show_spout_activation_candidate(
+                &[expected.background.clone(), expected.foreground.clone()],
+                &compositions,
+            ),
+            Ok(ShowSpoutActivationCandidate::ExistingEnabled(expected.clone()))
+        );
+
+        let mut disabled_background = expected.background.clone();
+        let mut disabled_foreground = expected.foreground.clone();
+        disabled_background.enabled = false;
+        disabled_foreground.enabled = false;
+        assert_eq!(
+            classify_show_spout_activation_candidate(
+                &[disabled_background.clone(), disabled_foreground.clone()],
+                &compositions,
+            ),
+            Ok(ShowSpoutActivationCandidate::ExistingDisabled(
+                ShowSpoutOutputs {
+                    background: disabled_background.clone(),
+                    foreground: disabled_foreground.clone(),
+                },
+            ))
+        );
+
+        assert_eq!(
+            classify_show_spout_activation_candidate(
+                &[disabled_background.clone(), expected.foreground.clone()],
+                &compositions,
+            ),
+            Err(ShowSpoutValidationError::Disabled)
+        );
+
+        let mut malformed_mapping = disabled_background;
+        malformed_mapping.mapping.scale_x = 1.25;
+        assert_eq!(
+            classify_show_spout_activation_candidate(
+                &[malformed_mapping, disabled_foreground],
+                &compositions,
+            ),
+            Err(ShowSpoutValidationError::InvalidMapping)
         );
     }
 

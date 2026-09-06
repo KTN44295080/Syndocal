@@ -990,6 +990,18 @@ const assertResponse = (
   const fenceBefore = assertFence(result.fence_before, "OutputControl receipt was invalid; physical output state is unknown.");
   const fenceAfter = assertFence(result.fence_after, "OutputControl receipt was invalid; physical output state is unknown.");
   const fenceUnchanged = fencesEqual(fenceBefore, fenceAfter);
+  const spoutAppliedPersistedProjectFence = action.kind === "enable_show_spout_outputs"
+    && result.outcome === "applied"
+    && fenceAfter.process_incarnation === fenceBefore.process_incarnation
+    && fenceAfter.session_incarnation === fenceBefore.session_incarnation
+    && fenceAfter.project_epoch === fenceBefore.project_epoch
+    && fenceAfter.project_revision === fenceBefore.project_revision + 1
+    && fenceAfter.project_checkpoint_hash !== fenceBefore.project_checkpoint_hash
+    && fenceAfter.project_publication_generation === fenceBefore.project_publication_generation + 1
+    && fenceAfter.output_epoch === fenceBefore.output_epoch
+    && fenceAfter.output_generation === fenceBefore.output_generation
+    && fenceAfter.safety_blackout_epoch === fenceBefore.safety_blackout_epoch
+    && fenceAfter.safety_blackout_generation === fenceBefore.safety_blackout_generation;
   const fenceUnchangedPhysicalAction = action.kind === "set_display_window_open"
     || action.kind === "enable_show_serial_dmx_safety_blackout_route"
     || action.kind === "stop_show_serial_dmx_safety_blackout_route"
@@ -1012,14 +1024,14 @@ const assertResponse = (
   if (!fencesEqual(fenceBefore, expectedFence)
     || result.outcome === "no_op" && !fenceUnchanged
     // Ordinary project/output-control mutations must advance their fence on
-    // Applied. The physical Display shell and the already-authored Art-Net
-    // runtime-only serial/Spout/window actions are deliberately outside that
-    // persisted fence, so both Applied and NoOp retain the same fence. Enabling
-    // the authored Art-Net route changes persisted project truth and therefore
-    // must advance its project fence.
+    // Applied. The physical Display shell and the runtime-only serial/Spout/
+    // window forms are deliberately outside that persisted fence, so both
+    // Applied and NoOp retain the same fence. Enabling the authored Art-Net
+    // route or enabling the authored Spout pair changes persisted project
+    // truth and therefore must advance its project fence.
     || result.outcome === "applied" && !fenceUnchangedPhysicalAction && fenceUnchanged
-    || fenceUnchangedPhysicalAction && !fenceUnchanged
-    || !persistedProjectFenceIsExact) throw new Error("OutputControl receipt was inconsistent; physical output state is unknown.");
+    || fenceUnchangedPhysicalAction && !fenceUnchanged && !spoutAppliedPersistedProjectFence
+    || !persistedProjectFenceIsExact && !spoutAppliedPersistedProjectFence) throw new Error("OutputControl receipt was inconsistent; physical output state is unknown.");
   return {
     operation_id: operationId,
     request_id: requestId,
