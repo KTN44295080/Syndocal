@@ -122,6 +122,14 @@ Syndocal process or activating physical output:
   inherited-stdin Stop/Drop tests, complete-frame graceful EOF, publication
   boundaries, and inherited-stderr cancellation. Subprocess helpers remain
   ignored and are invoked only by their owning tests.
+- The synthetic 30-minute FFmpeg A/V test passed `1/1` under the exact pinned
+  Build Tools linker. Its report records `1800s`, `54000` frames, `0.0ms`
+  start/end drift, video luma `255/0/255`, and audio peaks `4276/0/4123` for
+  first/middle/last samples. The MP4 is retained at
+  `target/qa/recording-stdin-cancel-20260906/long-av-sync-20260907/` with
+  SHA-256 `24B34D009F80C6468FDCBED0927E161DB8D82305E032124527B5F7AC3A89F286`.
+  This is synthetic command/codec evidence, not full in-app or hardware
+  recording acceptance.
 - `pnpm.cmd --dir app run check:tauri-build-wrapper` passed `243 assertions /
   27 hostile mutation fixtures`. The native no-bundle build passed in 3m32s
   under Build Tools MSVC `14.44.35207`; the exact artifact is

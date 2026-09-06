@@ -68,6 +68,13 @@ remain applicable.
   This includes inherited-stdin Stop/Drop, complete-frame graceful EOF,
   publication boundaries, and inherited-stderr cancellation. Ignored helper
   tests remain subprocess-owned and are not counted as standalone acceptance.
+- The synthetic 30-minute FFmpeg A/V test passed `1/1` under the exact pinned
+  Build Tools linker. The report records `1800s`, `54000` frames, `0.0ms`
+  start/end drift, video luma `255/0/255`, and audio peaks `4276/0/4123` for
+  first/middle/last samples. The retained MP4 SHA-256 is
+  `24B34D009F80C6468FDCBED0927E161DB8D82305E032124527B5F7AC3A89F286`.
+  This is synthetic command/codec evidence, not full in-app or hardware
+  recording acceptance.
 - `pnpm.cmd --dir app tauri build --no-bundle` passed under the exact Build
   Tools MSVC 14.44.35207 linker. The fresh artifact is
   `target/release/syndocal.exe`, version `1.2.0-alpha.69`, SHA-256
