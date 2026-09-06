@@ -1,9 +1,7 @@
 //! Direct encoder process supervision, independent of frame rendering and writes.
 //! Inherited pipe handles and a stuck renderer still retain the outer worker;
 //! this is a termination deadline for the owned child, not thread cancellation.
-use super::super::recording_artifact;
 use std::{
-    io,
     process::{ChildStdin, Command},
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -15,13 +13,17 @@ use std::{
 
 #[path = "video_recording_encoder_process.rs"]
 mod process;
+#[path = "video_recording_encoder_diagnostics.rs"]
+mod diagnostics;
 
 const ENCODER_STOP_GRACE: Duration = Duration::from_secs(5);
+const DIAGNOSTICS_STOP_GRACE: Duration = Duration::from_millis(250);
 
 pub(crate) struct RecordingEncoder {
     stdin: Option<ChildStdin>,
-    diagnostics: Option<JoinHandle<io::Result<Vec<u8>>>>,
+    diagnostics: Option<diagnostics::DiagnosticsReader>,
     supervisor: Option<JoinHandle<Result<(), String>>>,
+    stop: Arc<AtomicBool>,
     finishing: Arc<AtomicBool>,
     aborting: Arc<AtomicBool>,
 }
@@ -51,6 +53,7 @@ impl RecordingEncoder {
         let worker_handoff = Arc::clone(&handoff);
         let worker_finishing = Arc::clone(&finishing);
         let worker_aborting = Arc::clone(&aborting);
+        let encoder_stop = Arc::clone(&stop);
         let supervisor = thread::Builder::new()
             .name("syndocal-recording-encoder".into())
             .spawn(move || {
@@ -66,13 +69,11 @@ impl RecordingEncoder {
             stdin: Some(stdin),
             diagnostics: None,
             supervisor: Some(supervisor),
+            stop: encoder_stop,
             finishing,
             aborting,
         };
-        match thread::Builder::new()
-            .name("syndocal-recording-stderr".into())
-            .spawn(move || recording_artifact::drain_encoder_stderr(stderr))
-        {
+        match diagnostics::DiagnosticsReader::spawn(stderr) {
             Ok(reader) => encoder.diagnostics = Some(reader),
             Err(error) => {
                 let error = encoder
@@ -112,16 +113,16 @@ impl RecordingEncoder {
             })
             .unwrap_or(Ok(()));
         // A process exit does not prove pipe EOF: inherited handles can keep
-        // this join pending. Retain the outer recording worker in that case.
+        // this join pending. On an explicit stop/abort, the diagnostics reader
+        // gets a bounded chance to drain and then a platform cancellation;
+        // either way its join remains owned by this worker.
+        let cancel_diagnostics = self.stop.load(Ordering::Acquire)
+            || self.aborting.load(Ordering::Acquire)
+            || outcome.is_err();
         let diagnostics = self
             .diagnostics
             .take()
-            .map(|reader| {
-                reader
-                    .join()
-                    .map_err(|_| "FFmpeg diagnostic reader panicked".to_string())?
-                    .map_err(|error| format!("Cannot finish reading FFmpeg diagnostics: {error}"))
-            })
+            .map(|reader| reader.join_after_reap(cancel_diagnostics, DIAGNOSTICS_STOP_GRACE))
             .unwrap_or_else(|| Ok(Vec::new()));
         let mut errors = Vec::new();
         if let Some(primary) = primary {
@@ -162,3 +163,7 @@ mod tests;
 #[cfg(test)]
 #[path = "video_recording_diagnostics_tests.rs"]
 mod diagnostics_tests;
+
+#[cfg(all(test, windows))]
+#[path = "video_recording_encoder_inherited_stderr_tests.rs"]
+mod inherited_stderr_tests;

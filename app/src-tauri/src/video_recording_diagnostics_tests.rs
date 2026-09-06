@@ -1,4 +1,5 @@
 use super::*;
+use crate::recording_artifact;
 use std::{
     io::{self, Read},
     sync::mpsc,
@@ -12,8 +13,9 @@ fn join_failed_recording_diagnostics(
 ) -> String {
     let mut encoder = RecordingEncoder {
         stdin: None,
-        diagnostics: Some(reader),
+        diagnostics: Some(diagnostics::DiagnosticsReader::from_join_handle(reader)),
         supervisor: None,
+        stop: Arc::new(AtomicBool::new(false)),
         finishing: Arc::new(AtomicBool::new(false)),
         aborting: Arc::new(AtomicBool::new(false)),
     };

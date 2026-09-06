@@ -1,5 +1,12 @@
 use super::*;
-use std::{fs, io::Write, path::PathBuf, process::Stdio, sync::atomic::AtomicU64, time::Instant};
+use std::{
+    fs,
+    io::{self, Write},
+    path::PathBuf,
+    process::Stdio,
+    sync::atomic::AtomicU64,
+    time::Instant,
+};
 
 static NEXT_CHILD: AtomicU64 = AtomicU64::new(0);
 
