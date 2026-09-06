@@ -131,7 +131,15 @@ dimensions, paused Timeline, Ready/Standby with no ownership error, and both
 outputs retained/disarmed. Logs: `activation-native-build.log`,
 `activation-native-launch.json`, `activation-after-runtime.json`.
 
-Actual Spout SDK activation and Unity reception remain user acceptance pending.
-The MCP bridge exposes runtime inspection but no Spout-start action, so these
-read-only observations are not proof of output delivery. Next action: start
-Spout in the open preserved copy and verify both senders arrive in Unity.
+## User acceptance
+
+After the activation fix at `fa21f20`, the user replied "通りました" to the
+request to start Spout and check the Foreground/Background reception in Unity.
+The reported Spout-start rejection is resolved by user acceptance. This does
+not establish frame cadence, Video BO restoration/isolation, or crash recovery
+between the private/public terminal writes.
+
+A subsequent read-only MCP attempt could not verify its descriptor's process;
+the process inventory confirmed that Syndocal was no longer running. No output
+mutation or restart was performed during this acceptance update. Video BO
+active-output checks remain separate and require a running test session.
