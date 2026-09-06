@@ -308,15 +308,6 @@ impl RecordingArtifact {
         self.owned = false;
         Ok(())
     }
-
-    /// If the encoder could not be reaped, leave an explicit recovery artifact.
-    pub(super) fn retain(&mut self) -> String {
-        self.owned = false;
-        format!(
-            "Partial retained at {}; ensure FFmpeg has exited before inspecting/removing it",
-            self.staging.display()
-        )
-    }
 }
 
 impl Drop for RecordingArtifact {
@@ -550,20 +541,6 @@ mod tests {
         let result = drain_encoder_stderr(bytes.as_slice()).unwrap();
         assert_eq!(result.len(), 65_536);
         assert!(result.ends_with(b"last encoder error"));
-    }
-
-    #[test]
-    fn unreaped_encoder_retains_explicit_partial_without_publishing() {
-        let dir = TempDir::new();
-        fs::write(dir.target(), b"previous").unwrap();
-        let mut artifact = RecordingArtifact::reserve(&dir.target()).unwrap();
-        let partial = artifact.path().to_path_buf();
-        fs::write(&partial, b"unfinished").unwrap();
-        assert!(artifact.retain().contains(&partial.display().to_string()));
-        artifact.discard().unwrap();
-        drop(artifact);
-        assert_eq!(fs::read(partial).unwrap(), b"unfinished");
-        assert_eq!(fs::read(dir.target()).unwrap(), b"previous");
     }
 
     #[cfg(windows)]

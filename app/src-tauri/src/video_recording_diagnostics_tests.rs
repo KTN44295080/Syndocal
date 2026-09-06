@@ -6,6 +6,20 @@ use std::{
     time::Duration,
 };
 
+fn join_failed_recording_diagnostics(
+    reader: thread::JoinHandle<io::Result<Vec<u8>>>,
+    primary: String,
+) -> String {
+    let mut encoder = RecordingEncoder {
+        stdin: None,
+        diagnostics: Some(reader),
+        supervisor: None,
+        finishing: Arc::new(AtomicBool::new(false)),
+        aborting: Arc::new(AtomicBool::new(false)),
+    };
+    encoder.join_owned(Some(primary)).unwrap_err()
+}
+
 struct BlockingDiagnosticReader {
     ready: mpsc::Sender<()>,
     release: mpsc::Receiver<()>,
@@ -57,11 +71,11 @@ fn failed_recording_diagnostics_join_waits_for_blocked_reader() {
 }
 
 #[test]
-fn failed_recording_diagnostics_join_preserves_primary_error_on_reader_success() {
+fn failed_recording_diagnostics_join_preserves_primary_error_and_diagnostic_tail() {
     let reader = thread::spawn(|| Ok::<Vec<u8>, io::Error>(b"diagnostic tail".to_vec()));
     assert_eq!(
         join_failed_recording_diagnostics(reader, "FFmpeg wait failed".to_string()),
-        "FFmpeg wait failed"
+        "FFmpeg wait failed; diagnostic tail"
     );
 }
 

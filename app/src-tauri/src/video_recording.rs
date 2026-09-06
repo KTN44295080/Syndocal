@@ -18,6 +18,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[path = "video_recording_encoder.rs"]
+pub(crate) mod encoder;
+
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct RecordingAudioInput {
     pub(super) path: PathBuf,
@@ -112,51 +115,25 @@ pub(super) fn run_video_output_recording(context: VideoOutputRecordingContext) {
         frame_rate,
         &audio_inputs,
     );
-    let mut child = match command.spawn() {
-        Ok(child) => child,
+    let mut encoder = match encoder::RecordingEncoder::spawn(&mut command, Arc::clone(&stop)) {
+        Ok(encoder) => encoder,
         Err(error) => {
-            finish_failed_video_recording(
-                &status,
-                &mut artifact,
-                format!("Failed to start FFmpeg: {error}"),
-            );
-            return;
-        }
-    };
-    let Some(mut stdin) = child.stdin.take() else {
-        let error = failed_video_encoder_error(
-            &mut child,
-            &mut artifact,
-            "FFmpeg stdin was unavailable".into(),
-        );
-        finish_failed_video_recording(&status, &mut artifact, error);
-        return;
-    };
-    // Drain diagnostics while encoding so an error-filled stderr pipe cannot
-    // prevent the encoder from finishing and releasing the staging file.
-    let stderr_reader = child.stderr.take().map(|stderr| {
-        std::thread::Builder::new()
-            .name("syndocal-recording-stderr".into())
-            .spawn(move || recording_artifact::drain_encoder_stderr(stderr))
-    });
-    let stderr_reader = match stderr_reader {
-        Some(Ok(reader)) => reader,
-        reader => {
-            drop(stdin);
-            let reason = match reader {
-                Some(Err(error)) => format!("Cannot read FFmpeg diagnostics: {error}"),
-                _ => "FFmpeg stderr was unavailable".into(),
-            };
-            let error = failed_video_encoder_error(&mut child, &mut artifact, reason);
             finish_failed_video_recording(&status, &mut artifact, error);
             return;
         }
+    };
+    let Some(mut stdin) = encoder.take_stdin() else {
+        let error = encoder
+            .fail("FFmpeg stdin was unavailable".into())
+            .unwrap_err();
+        finish_failed_video_recording(&status, &mut artifact, error);
+        return;
     };
     let mut frames_written = 0_u64;
     let mut pipe_error = None;
     let frame_interval = Duration::from_secs_f64(1.0 / frame_rate as f64);
     let mut next_frame_at = Instant::now();
-    while !stop.load(Ordering::Relaxed) {
+    while !stop.load(Ordering::Acquire) {
         let output_preview = capture_video_output_preview_effect_snapshot(&engine);
         let frame = renderer.lock().ok().and_then(|mut renderer| {
             renderer
@@ -173,6 +150,9 @@ pub(super) fn run_video_output_recording(context: VideoOutputRecordingContext) {
                 )
                 .ok()
         });
+        if stop.load(Ordering::Acquire) {
+            break;
+        }
         match frame {
             Some(frame)
                 if frame.format == video::VideoPixelFormat::Rgba8
@@ -209,65 +189,14 @@ pub(super) fn run_video_output_recording(context: VideoOutputRecordingContext) {
         }
     }
     drop(stdin);
-    if let Some(error) = pipe_error {
-        let error = failed_video_encoder_error(&mut child, &mut artifact, error);
-        let error = join_failed_recording_diagnostics(stderr_reader, error);
-        finish_failed_video_recording(&status, &mut artifact, error);
-        return;
-    }
-    let exit_status = match child.wait() {
-        Ok(exit_status) => exit_status,
-        Err(error) => {
-            let error = failed_video_encoder_error(
-                &mut child,
-                &mut artifact,
-                format!("FFmpeg wait failed: {error}"),
-            );
-            let error = join_failed_recording_diagnostics(stderr_reader, error);
-            finish_failed_video_recording(&status, &mut artifact, error);
-            return;
-        }
+    let encoded = match pipe_error {
+        Some(error) => encoder.fail(error),
+        None => encoder.finish(),
     };
-    let result = match stderr_reader.join() {
-        Ok(Ok(stderr)) if !exit_status.success() => Err(format!(
-            "FFmpeg exited with {exit_status}: {}",
-            String::from_utf8_lossy(&stderr).trim()
-        )),
-        Ok(Ok(_)) => artifact.publish(frames_written),
-        Ok(Err(error)) => Err(format!("Cannot finish reading FFmpeg diagnostics: {error}")),
-        Err(_) => Err("FFmpeg diagnostic reader panicked".into()),
-    };
+    let result = encoded.and_then(|_| artifact.publish(frames_written));
     match result {
         Ok(()) => finish_video_recording_status(&status, None),
         Err(error) => finish_failed_video_recording(&status, &mut artifact, error),
-    }
-}
-
-fn join_failed_recording_diagnostics(
-    stderr_reader: std::thread::JoinHandle<std::io::Result<Vec<u8>>>,
-    primary_error: String,
-) -> String {
-    match stderr_reader.join() {
-        Ok(Ok(_)) => primary_error,
-        Ok(Err(error)) => format!(
-            "{primary_error}; Cannot finish reading FFmpeg diagnostics: {error}"
-        ),
-        Err(_) => format!("{primary_error}; FFmpeg diagnostic reader panicked"),
-    }
-}
-
-fn failed_video_encoder_error(
-    child: &mut std::process::Child,
-    artifact: &mut recording_artifact::RecordingArtifact,
-    error: String,
-) -> String {
-    let kill = child.kill();
-    match child.wait() {
-        Ok(_) => error,
-        Err(wait) => format!(
-            "{error}; encoder could not be reaped: {wait} (kill: {kill:?}); {}",
-            artifact.retain()
-        ),
     }
 }
 
@@ -351,9 +280,4 @@ pub(super) fn finish_video_recording_status(
         current.active = false;
         current.last_error = error;
     }
-}
-
-#[cfg(test)]
-mod diagnostics_tests {
-    include!("video_recording_diagnostics_tests.rs");
 }

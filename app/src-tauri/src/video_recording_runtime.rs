@@ -52,7 +52,7 @@ impl Drop for VideoRecordingRuntime {
     fn drop(&mut self) {
         if let Some(mut worker) = self.worker.take() {
             // Runtime teardown keeps the old blocking ownership boundary. A
-            // renderer or encoder I/O call has no safe cancellation here, so
+            // renderer call or inherited encoder pipe can still be pending, so
             // dropping the handle would abandon the live worker and its
             // recording artifact.
             worker.request_stop();

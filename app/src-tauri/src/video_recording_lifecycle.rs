@@ -4,7 +4,8 @@
 //! is requested. This module bounds only the caller's acknowledgement wait;
 //! a timeout keeps the stop flag and join handle owned by the runtime. The
 //! worker is never detached, and shutdown remains blocking when the runtime
-//! itself is dropped because no safe cancellation exists for those I/O calls.
+//! itself is dropped because renderer and inherited-pipe I/O can remain pending
+//! even after the encoder supervisor terminates the direct child.
 
 use std::{
     sync::{
