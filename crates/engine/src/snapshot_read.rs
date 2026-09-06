@@ -1,7 +1,7 @@
 use crate::{EngineHandle, TimelineTransportAuthority};
 use protocol::{
     EngineSnapshot, TimelineFollowRuntimeStatusSnapshot, TimelineFollowRuntimeSummary,
-    VideoClipRuntimeSnapshot, VideoLayerTransitionRuntimeSnapshot,
+    VideoClipRuntimeSnapshot, VideoLayerTransitionRuntimeSnapshot, VideoOutputSummary,
 };
 
 impl EngineHandle {
@@ -54,5 +54,17 @@ impl EngineHandle {
     /// Read Layer Transition Bus state from the latest complete publication.
     pub fn video_layer_transition_runtime_snapshot(&self) -> VideoLayerTransitionRuntimeSnapshot {
         self.read_snapshot_field(|snapshot| snapshot.video_transition_runtime.clone())
+    }
+
+    /// Read public/rendered video output summaries without cloning unrelated
+    /// project and runtime collections.
+    pub fn video_outputs_snapshot(&self) -> Vec<VideoOutputSummary> {
+        self.read_snapshot_field(|snapshot| snapshot.video.outputs.clone())
+    }
+
+    /// Read the published Timeline playing flag without cloning unrelated
+    /// public project and runtime collections.
+    pub fn timeline_playing(&self) -> bool {
+        self.read_snapshot_field(|snapshot| snapshot.timeline.playing)
     }
 }

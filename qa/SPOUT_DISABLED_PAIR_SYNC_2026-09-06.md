@@ -141,5 +141,10 @@ between the private/public terminal writes.
 
 A subsequent read-only MCP attempt could not verify its descriptor's process;
 the process inventory confirmed that Syndocal was no longer running. No output
-mutation or restart was performed during this acceptance update. Video BO
-active-output checks remain separate and require a running test session.
+mutation or restart was performed during this acceptance update.
+
+The user subsequently confirmed that Video BO restoration, lighting/video
+isolation and Unity video smoothness were also checked, and requested the next
+work item. Those reported reproduction cases are accepted. This is user visual
+acceptance, not a numerical FPS/latency benchmark or the broader crash-recovery
+and project-wide performance gates.

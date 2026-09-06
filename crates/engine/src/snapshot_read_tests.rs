@@ -2,7 +2,8 @@ use super::allocator_test_handle;
 use crate::{EngineHandle, TimelineTransportAuthority};
 use protocol::{
     EngineSnapshot, TimelineFollowRuntimeStatusSnapshot, VideoClipLayerRuntimeSummary,
-    VideoLayerTransitionBusRuntimeSummary, VideoLayerTransitionTarget,
+    VideoLayerTransitionBusRuntimeSummary, VideoLayerTransitionTarget, VideoOutputKind,
+    VideoOutputSummary,
 };
 use std::{
     hint::black_box,
@@ -14,6 +15,7 @@ fn publication(token: u64) -> EngineSnapshot {
     let mut snapshot = EngineSnapshot::default();
     snapshot.timeline.transport_epoch = token;
     snapshot.timeline.transport_generation = token + 1;
+    snapshot.timeline.playing = token % 2 == 0;
     snapshot.timeline.follow_runtime.generation = token + 2;
     snapshot.timeline.follow_runtime.fault = Some(format!("publication {token}"));
     snapshot.timeline.follow_runtime.source_timeline_id = Some(protocol::TimelineId(token));
@@ -34,6 +36,38 @@ fn publication(token: u64) -> EngineSnapshot {
     snapshot
         .video_clip_runtime
         .timeline_video_projection_layer_ids = vec![token + 4];
+    snapshot.video.outputs.push(VideoOutputSummary {
+        id: token,
+        label: format!("output {token}"),
+        kind: VideoOutputKind::Display,
+        enabled: true,
+        composition_id: 1,
+        fullscreen: false,
+        monitor_id: None,
+        monitor_identity: None,
+        width: 640,
+        height: 360,
+        endpoint_name: None,
+        opacity: 1.0,
+        blackout: false,
+        mapping: protocol::VideoOutputMapping::default(),
+    });
+    snapshot.video.outputs.push(VideoOutputSummary {
+        id: token + 10_000,
+        label: format!("secondary {token}"),
+        kind: VideoOutputKind::Display,
+        enabled: true,
+        composition_id: 1,
+        fullscreen: false,
+        monitor_id: None,
+        monitor_identity: None,
+        width: 640,
+        height: 360,
+        endpoint_name: None,
+        opacity: 1.0,
+        blackout: false,
+        mapping: protocol::VideoOutputMapping::default(),
+    });
     snapshot
         .video_transition_runtime
         .buses
@@ -83,6 +117,8 @@ fn assert_same_read_model(handle: &EngineHandle) {
         handle.video_layer_transition_runtime_snapshot(),
         expected.video_transition_runtime
     );
+    assert_eq!(handle.video_outputs_snapshot(), expected.video.outputs);
+    assert_eq!(handle.timeline_playing(), expected.timeline.playing);
 }
 
 #[test]
@@ -93,6 +129,9 @@ fn narrow_readers_match_public_snapshot_and_observe_replacement() {
     let retained = handle.video_clip_runtime_snapshot();
     let retained_follow = handle.timeline_follow_runtime_summary();
     let retained_transition = handle.video_layer_transition_runtime_snapshot();
+    let mut retained_outputs = handle.video_outputs_snapshot();
+    retained_outputs[0].label.push_str(" reader edit");
+    assert_eq!(handle.video_outputs_snapshot()[0].label, "output 7");
     *published.write().unwrap() = publication(18);
     assert_same_read_model(&handle);
     assert_eq!(retained.layers[0].layer_id, 7);
@@ -102,6 +141,8 @@ fn narrow_readers_match_public_snapshot_and_observe_replacement() {
         protocol::VideoTransitionBusId(7)
     );
     assert_eq!(handle.video_clip_runtime_snapshot().layers[0].layer_id, 18);
+    assert_eq!(handle.video_outputs_snapshot()[0].id, 18);
+    assert_eq!(handle.video_outputs_snapshot()[1].label, "secondary 18");
 }
 
 #[test]
@@ -119,6 +160,8 @@ fn poisoned_publication_preserves_public_snapshot_defaults() {
         EngineSnapshot::default().timeline.transport_epoch
     );
     assert!(handle.video_clip_runtime_snapshot().layers.is_empty());
+    assert!(handle.video_outputs_snapshot().is_empty());
+    assert!(!handle.timeline_playing());
 }
 
 #[test]
@@ -133,6 +176,26 @@ fn transport_authority_never_mixes_concurrent_publications() {
     for _ in 0..2000 {
         let authority = handle.timeline_transport_authority();
         assert_eq!(authority.generation, authority.epoch + 1);
+    }
+    writer.join().unwrap();
+}
+
+#[test]
+fn video_outputs_reader_never_mixes_concurrent_publications() {
+    let published = Arc::new(RwLock::new(publication(7)));
+    let handle = allocator_test_handle(Arc::clone(&published));
+    let writer = std::thread::spawn(move || {
+        for token in 10..1010 {
+            *published.write().unwrap() = publication(token);
+        }
+    });
+    for _ in 0..2000 {
+        let outputs = handle.video_outputs_snapshot();
+        assert_eq!(outputs.len(), 2);
+        let token = outputs[0].id;
+        assert_eq!(outputs[0].label, format!("output {token}"));
+        assert_eq!(outputs[1].id, token + 10_000);
+        assert_eq!(outputs[1].label, format!("secondary {token}"));
     }
     writer.join().unwrap();
 }

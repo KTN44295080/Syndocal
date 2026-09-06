@@ -68446,6 +68446,9 @@ mod tests {
     #[path = "../snapshot_read_tests.rs"]
     mod snapshot_read_tests;
 
+    #[path = "../snapshot_output_read_benchmark.rs"]
+    mod snapshot_output_read_benchmark;
+
     #[path = "../timeline_bank_snapshot_tests.rs"]
     mod timeline_bank_snapshot_tests;
 

@@ -18,6 +18,11 @@ snapshot生成時のpercentile重複sortと測定窓分離は
 [Timeline出力プレビュー](TIMELINE_OUTPUT_PREVIEW_2026-09-05.md)を参照。
 以下のalpha.69録画チェックポイントのartifact/hashはその時点の記録を保持する。
 
+2026-09-06: Spout開始とVideo BO復旧・照明との分離、Unity映像の滑らかさは
+[ユーザー受入記録](SPOUT_DISABLED_PAIR_SYNC_2026-09-06.md)で確認済み。
+続く軽量化は[Spout送信前の限定snapshot読取](SPOUT_OUTPUT_SNAPSHOT_2026-09-06.md)。
+一般snapshot/tick構築/深いdelta比較の残件とは区別する。
+
 ## 台帳の読み替え
 
 元台帳58行は Supported 31 / External acceptance 19 / Deferred 2 /

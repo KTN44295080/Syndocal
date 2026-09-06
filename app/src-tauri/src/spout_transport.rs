@@ -1460,7 +1460,7 @@ where
         // immediately before the SDK call.
         if let Some(show_control) = show_control.as_ref() {
             if let Err(error) =
-                show_control.sync_timeline_playing(engine.snapshot().timeline.playing)
+                show_control.sync_timeline_playing(engine.timeline_playing())
             {
                 if !worker_stop.load(Ordering::Acquire) {
                     failure_lease = Some(engine.begin_output_ownership_failure_fence(format!(

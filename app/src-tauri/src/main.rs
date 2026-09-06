@@ -74779,7 +74779,7 @@ fn compensate_show_spout_activation_candidate(
             ),
         show_spout_project_commit::ShowSpoutProjectChange::None => {
             match show_spout_outputs::decide_show_spout_ensure(
-                &state.engine.snapshot().video.outputs,
+                &state.engine.video_outputs_snapshot(),
                 expected,
             ) {
                 Ok(show_spout_outputs::ShowSpoutEnsureDecision::NoOp) => Ok(()),
@@ -75270,7 +75270,7 @@ fn enable_show_spout_outputs_with_output_control_fence(
                             if published_for_worker.load(Ordering::Acquire)
                                 && !matches!(
                                     show_spout_outputs::decide_show_spout_ensure(
-                                        &engine.snapshot().video.outputs,
+                                        &engine.video_outputs_snapshot(),
                                         &expected_for_worker,
                                     ),
                                     Ok(show_spout_outputs::ShowSpoutEnsureDecision::NoOp)
