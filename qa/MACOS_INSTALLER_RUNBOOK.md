@@ -13,6 +13,18 @@ The normal `Cross-platform` workflow intentionally excludes macOS packaging.
 This keeps every push and pull request from consuming a macOS runner; macOS
 packaging is an explicit, one-job action only when requested.
 
+## Verified run
+
+The repository is public at
+<https://github.com/KTN44295080/Syndocal>. Run
+<https://github.com/KTN44295080/Syndocal/actions/runs/34139676339> completed
+successfully from `main` at commit `33c7da89727fdf636822f45ae2882fe1f1a09af7`.
+The application bundle, LGPL FFmpeg runtime bundling, DMG creation, launch
+smoke test, `hdiutil imageinfo`, SHA-256 generation, and artifact upload all
+passed. The uploaded artifact is
+`syndocal-macos-ARM64-33c7da89727fdf636822f45ae2882fe1f1a09af7` (29,965,371
+bytes, retained for seven days).
+
 ## Distribution boundary
 
 The current DMG is a development artifact. The bundling script uses an
@@ -29,9 +41,6 @@ claimed by this workflow.
 ## Billing recovery
 
 This separation reduces future Actions use but cannot restore a consumed quota
-or override an account spending block. If the manual workflow is still blocked
-before its first step, inspect the account billing and Actions usage page,
-wait for the billing-cycle reset, or add a valid payment method and an
-appropriate budget. Making a private repository public would make standard
-GitHub-hosted runner minutes free, but is a repository-visibility decision and
-must be made deliberately outside this change.
+or override an account spending block. If the manual workflow is blocked before
+its first step, inspect the account billing and Actions usage page, wait for the
+billing-cycle reset, or add a valid payment method and an appropriate budget.
