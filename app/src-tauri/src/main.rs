@@ -186,6 +186,18 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 type DirectMediaAudioOutput = mac_audio_resources::MacAudioOutput;
 #[cfg(not(target_os = "macos"))]
 type DirectMediaAudioOutput = rodio::OutputStream;
+
+#[cfg(not(all(target_os = "windows", target_arch = "x86_64", feature = "asio")))]
+fn direct_media_audio_output_format(output: &DirectMediaAudioOutput) -> (u32, u16) {
+    #[cfg(target_os = "macos")]
+    {
+        (output.sample_rate(), output.channels())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        (output.config().sample_rate(), output.config().channel_count())
+    }
+}
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 #[cfg(windows)]
@@ -14382,10 +14394,11 @@ fn timeline_cue_program_destination(
     #[cfg(not(all(target_os = "windows", target_arch = "x86_64", feature = "asio")))]
     let (mixer, output_sample_rate, channels) = {
         let stream = playback.stream.as_ref()?;
+        let (output_sample_rate, channels) = direct_media_audio_output_format(stream);
         (
             stream.mixer().clone(),
-            stream.config().sample_rate(),
-            stream.config().channel_count(),
+            output_sample_rate,
+            channels,
         )
     };
     Some(TimelineCueProgramDestination {
@@ -14547,7 +14560,9 @@ fn prepare_explicit_timeline_cue_destination(
         "Explicit Timeline cue audio selection predates topology fencing; reselect the device"
             .to_string()
     })?;
-    let (mut devices, topology_fingerprint, endpoints) = enumerate_timeline_cue_audio_outputs()?;
+    let (devices, topology_fingerprint, endpoints) = enumerate_timeline_cue_audio_outputs()?;
+    #[cfg(not(target_os = "macos"))]
+    let mut devices = devices;
     let names = devices
         .iter()
         .map(|(name, _)| name.clone())

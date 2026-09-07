@@ -36,7 +36,9 @@ static QUARANTINED_CHILDREN: LazyLock<Mutex<Vec<QuarantinedChild>>> =
     LazyLock::new(|| Mutex::new(Vec::new()));
 
 impl ReapingChild {
-    pub(crate) fn new(mut child: Child) -> Result<Self, String> {
+    pub(crate) fn new(child: Child) -> Result<Self, String> {
+        #[cfg(windows)]
+        let mut child = child;
         retry_quarantined_children();
         #[cfg(windows)]
         let job = match ProcessJob::for_child(&child) {
