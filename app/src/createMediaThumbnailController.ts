@@ -1,6 +1,7 @@
 import { createEffect, createMemo, createSignal, onCleanup, untrack, type Accessor } from "solid-js";
 import type { MediaAssetId, MediaAssetSummary, VideoLayerSummary, VideoSourceKind } from "./types";
 import type { ProjectAuthorityToken } from "./projectAuthority";
+import { createLatestThumbnailBatch } from "./createLatestThumbnailBatch";
 
 interface Options {
   layers: Accessor<readonly VideoLayerSummary[]>;
@@ -21,16 +22,16 @@ export const createMediaThumbnailController = (options: Options) => {
   const [videoClipThumbnails, setVideoClipThumbnails] = createSignal<Record<number, string>>({});
   const [mediaAssetThumbnails, setMediaAssetThumbnails] = createSignal<Record<number, string>>({});
   const [videoThumbnailAccessAuthorized, setVideoThumbnailAccessAuthorized] = createSignal(false);
-  let videoThumbnailGeneration = 0;
-  let mediaAssetThumbnailGeneration = 0;
+  const videoBatch = createLatestThumbnailBatch();
+  const assetBatch = createLatestThumbnailBatch();
   let videoThumbnailUrlCache: Record<number, string> = {};
   let mediaAssetThumbnailUrlCache: Record<number, string> = {};
   const videoThumbnailSignatures = new Map<number, string>();
   const mediaAssetThumbnailSignatures = new Map<number, string>();
   const authorizeVideoThumbnailAccess = () => setVideoThumbnailAccessAuthorized(true);
   const reset = () => {
-    videoThumbnailGeneration += 1;
-    mediaAssetThumbnailGeneration += 1;
+    videoBatch.clear();
+    assetBatch.clear();
     videoThumbnailUrlCache = {};
     mediaAssetThumbnailUrlCache = {};
     videoThumbnailSignatures.clear();
@@ -82,8 +83,8 @@ export const createMediaThumbnailController = (options: Options) => {
       path: string | null;
       name: string | null;
     }>;
-    const generation = ++videoThumbnailGeneration;
     if (!videoThumbnailAccessAuthorized()) {
+      videoBatch.clear();
       setVideoClipThumbnails({});
       return;
     }
@@ -95,13 +96,15 @@ export const createMediaThumbnailController = (options: Options) => {
       Object.entries(videoThumbnailUrlCache).filter(([layerId]) => activeIds.has(Number(layerId))),
     );
     if (!isTauriRuntime()) {
+      videoBatch.clear();
       setVideoClipThumbnails(videoThumbnailUrlCache);
       return;
     }
-    void (async () => {
+    videoBatch.replace(async (isCurrent) => {
       const nextUrls = { ...videoThumbnailUrlCache };
       const nextSignatures = new Map(videoThumbnailSignatures);
       for (const source of sources) {
+        if (!isCurrent()) return;
         const signature = JSON.stringify(source);
         if (nextSignatures.get(source.id) === signature && nextUrls[source.id]) continue;
         try {
@@ -111,16 +114,20 @@ export const createMediaThumbnailController = (options: Options) => {
           delete nextUrls[source.id];
           nextSignatures.delete(source.id);
         }
-        if (generation !== videoThumbnailGeneration) return;
+        if (!isCurrent()) return;
       }
-      if (generation !== videoThumbnailGeneration) return;
+      if (!isCurrent()) return;
       videoThumbnailUrlCache = nextUrls;
       videoThumbnailSignatures.clear();
       for (const [layerId, signature] of nextSignatures) {
         videoThumbnailSignatures.set(layerId, signature);
       }
       setVideoClipThumbnails(nextUrls);
-    })();
+    }, () => {
+      videoThumbnailUrlCache = {};
+      videoThumbnailSignatures.clear();
+      setVideoClipThumbnails({});
+    });
   });
   createEffect(() => {
     const sources = JSON.parse(mediaAssetThumbnailSourceSignature()) as Array<{
@@ -133,8 +140,8 @@ export const createMediaThumbnailController = (options: Options) => {
       byte_size: number | null;
     }>;
     const authority = JSON.parse(mediaAssetThumbnailAuthoritySignature()) as ProjectAuthorityToken;
-    const generation = ++mediaAssetThumbnailGeneration;
     if (!videoThumbnailAccessAuthorized()) {
+      assetBatch.clear();
       setMediaAssetThumbnails({});
       return;
     }
@@ -147,13 +154,15 @@ export const createMediaThumbnailController = (options: Options) => {
       Object.entries(mediaAssetThumbnailUrlCache).filter(([assetId]) => activeIds.has(Number(assetId))),
     );
     if (!isTauriRuntime()) {
+      assetBatch.clear();
       setMediaAssetThumbnails(mediaAssetThumbnailUrlCache);
       return;
     }
-    void (async () => {
+    assetBatch.replace(async (isCurrent) => {
       const nextUrls = { ...mediaAssetThumbnailUrlCache };
       const nextSignatures = new Map(mediaAssetThumbnailSignatures);
       for (const source of thumbnailable) {
+        if (!isCurrent() || !untrack(() => isProjectAuthorityIdentityCurrent(authority))) return;
         const signature = JSON.stringify(source);
         if (nextSignatures.get(source.id) === signature && nextUrls[source.id]) continue;
         try {
@@ -163,21 +172,25 @@ export const createMediaThumbnailController = (options: Options) => {
           delete nextUrls[source.id];
           nextSignatures.delete(source.id);
         }
-        if (generation !== mediaAssetThumbnailGeneration || !untrack(() => isProjectAuthorityIdentityCurrent(authority))) return;
+        if (!isCurrent() || !untrack(() => isProjectAuthorityIdentityCurrent(authority))) return;
       }
       // Cache hits can reach this check synchronously inside the effect. Read
       // current authority without subscribing beyond the durable signature.
-      if (generation !== mediaAssetThumbnailGeneration || !untrack(() => isProjectAuthorityIdentityCurrent(authority))) return;
+      if (!isCurrent() || !untrack(() => isProjectAuthorityIdentityCurrent(authority))) return;
       mediaAssetThumbnailUrlCache = nextUrls;
       mediaAssetThumbnailSignatures.clear();
       for (const [assetId, signature] of nextSignatures) mediaAssetThumbnailSignatures.set(assetId, signature);
       setMediaAssetThumbnails(nextUrls);
-    })();
+    }, () => {
+      mediaAssetThumbnailUrlCache = {};
+      mediaAssetThumbnailSignatures.clear();
+      setMediaAssetThumbnails({});
+    });
   });
   onCleanup(() => {
-    // Invalidate unresolved reads before the owning Solid scope is disposed.
-    videoThumbnailGeneration += 1;
-    mediaAssetThumbnailGeneration += 1;
+    // Retain active reads until settled; discard successors and stale results.
+    videoBatch.dispose();
+    assetBatch.dispose();
   });
   return {
     videoClipThumbnails, mediaAssetThumbnails, videoThumbnailAccessAuthorized,
