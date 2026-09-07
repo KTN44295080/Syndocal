@@ -21,6 +21,8 @@ use fixture_profile_contract::{
     fixture_controls_footprint, validate_emitter_calibrations, validate_project_custom_profile_refs,
     validate_project_custom_profiles, validate_project_fixture_geometries,
 };
+mod native_thumbnail_work;
+mod native_thumbnail_dispatch;
 mod media_asset_preview_contract;
 use media_asset_preview_contract::{
     media_asset_thumbnail_snapshot, validate_media_asset_preview_position,
@@ -2833,6 +2835,7 @@ struct AppState {
     #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
     asio_output_machine: Mutex<AsioOutputMachineState>,
     video_preview: Arc<Mutex<AppVideoPreviewRenderer>>,
+    native_thumbnail_work: native_thumbnail_work::NativeThumbnailWork,
     video_recording: Mutex<VideoRecordingRuntime>,
     external_video_transport: Arc<Mutex<video::ExternalVideoTransportRuntime>>,
     external_video_transport_events: Arc<Mutex<Vec<ExternalVideoTransportDriverEvent>>>,
@@ -76570,7 +76573,7 @@ fn video_output_recording_status(
 }
 
 #[tauri::command]
-fn get_video_layer_thumbnail(
+async fn get_video_layer_thumbnail(
     state: State<'_, AppState>,
     layer_id: VideoLayerId,
     width: u32,
@@ -76579,17 +76582,18 @@ fn get_video_layer_thumbnail(
     if width == 0 || height == 0 || width > 512 || height > 512 {
         return Err("Video thumbnail dimensions must be between 1 and 512 pixels".to_string());
     }
-    let snapshot = state.engine.snapshot();
-    let mut renderer = state
-        .video_preview
-        .lock()
-        .map_err(|_| "Video preview renderer lock was poisoned".to_string())?;
-    renderer
-        .frame_provider_mut()
-        .set_bpm(Some(snapshot.clock.bpm));
-    renderer
-        .render_layer_preview(&snapshot.video, layer_id, width, height)
-        .map_err(|error| format!("{error:?}"))
+    let job = state.native_thumbnail_work.layers.try_acquire()?;
+    let engine = state.engine.clone();
+    let renderer = Arc::clone(&state.video_preview);
+    native_thumbnail_dispatch::run(job, move |cancel| {
+        let snapshot = engine.snapshot();
+        let mut renderer = native_thumbnail_work::lock_renderer(&renderer, cancel)?;
+        renderer.frame_provider_mut().set_bpm(Some(snapshot.clock.bpm));
+        renderer
+            .render_layer_preview(&snapshot.video, layer_id, width, height)
+            .map_err(|error| format!("{error:?}"))
+    })
+    .await
 }
 
 /// Capture a media-library entry from the persistence checkpoint without
@@ -76727,14 +76731,21 @@ fn media_asset_thumbnail_prepared_matches_asset(
 fn create_media_asset_preview_private_copy(
     asset: &MediaAssetSummary,
 ) -> Result<PrivateMediaSnapshot, String> {
+    create_media_asset_preview_private_copy_with_cancel(asset, &AtomicBool::new(false))
+}
+
+fn create_media_asset_preview_private_copy_with_cancel(
+    asset: &MediaAssetSummary,
+    cancel: &AtomicBool,
+) -> Result<PrivateMediaSnapshot, String> {
     let path = asset
         .source
         .path
         .clone()
         .ok_or_else(|| "Media asset thumbnail requires a local source path".to_string())?;
-    let cancel = AtomicBool::new(false);
+    native_thumbnail_work::ensure_not_cancelled(cancel)?;
     let before =
-        prepare_one_local_media_asset(0, asset.source.kind.clone(), path.clone(), &cancel)?;
+        prepare_one_local_media_asset(0, asset.source.kind.clone(), path.clone(), cancel)?;
     if !media_asset_thumbnail_prepared_matches_asset(&before, asset) {
         return Err("Media asset content no longer matches its catalog identity".to_string());
     }
@@ -76745,12 +76756,12 @@ fn create_media_asset_preview_private_copy(
     let mut source = fs::File::open(&path)
         .map_err(|error| format!("Unable to open media source for preview copy: {error}"))?;
     let (copy_hash, copy_size) =
-        copy_and_hash_into_snapshot(&mut source, &mut private_copy, &cancel)?;
+        copy_and_hash_into_snapshot(&mut source, &mut private_copy, cancel)?;
     if asset.content_hash.as_ref() != Some(&copy_hash) || asset.byte_size != Some(copy_size) {
         return Err("Media asset changed while its preview copy was being created".to_string());
     }
     drop(source);
-    let after = prepare_one_local_media_asset(0, asset.source.kind.clone(), path, &cancel)?;
+    let after = prepare_one_local_media_asset(0, asset.source.kind.clone(), path, cancel)?;
     if !media_asset_thumbnail_prepared_matches_asset(&after, asset)
         || !local_media_source_fingerprint_matches(&before.fingerprint, &after.fingerprint)
     {
@@ -76778,8 +76789,10 @@ fn render_media_asset_thumbnail(
     position_ms: u64,
     width: u32,
     height: u32,
+    cancel: &AtomicBool,
 ) -> Result<video::VideoFrame, String> {
-    let private_copy = create_media_asset_preview_private_copy(&asset)?;
+    let private_copy = create_media_asset_preview_private_copy_with_cancel(&asset, cancel)?;
+    native_thumbnail_work::ensure_not_cancelled(cancel)?;
     render_media_asset_preview_from_private_copy(&asset, &private_copy, position_ms, width, height)
 }
 
@@ -76805,13 +76818,13 @@ async fn get_media_asset_thumbnail(
     height: u32,
 ) -> Result<video::VideoFrame, String> {
     validate_media_asset_thumbnail_dimensions(width, height)?;
+    let job = state.native_thumbnail_work.assets.try_acquire()?;
     let (authority, asset) = capture_media_asset_thumbnail_asset(&state, asset_id)?;
     let render_asset = asset.clone();
-    let frame = tauri::async_runtime::spawn_blocking(move || {
-        render_media_asset_thumbnail(render_asset, 0, width, height)
+    let frame = native_thumbnail_dispatch::run(job, move |cancel| {
+        render_media_asset_thumbnail(render_asset, 0, width, height, cancel)
     })
-    .await
-    .map_err(|error| format!("Media asset thumbnail worker failed: {error}"))??;
+    .await?;
     let (current_authority, current_asset) = capture_media_asset_thumbnail_asset(&state, asset_id)?;
     ensure_media_asset_thumbnail_still_authoritative(
         &authority,
@@ -88838,6 +88851,7 @@ pub(crate) mod tests {
                             .with_prefetch(0, 33),
                     ),
                 )),
+                native_thumbnail_work: native_thumbnail_work::NativeThumbnailWork::default(),
                 video_recording: Mutex::new(VideoRecordingRuntime::default()),
                 external_video_transport: Arc::new(Mutex::new(
                     video::ExternalVideoTransportRuntime::new(),
@@ -129538,6 +129552,7 @@ fn main() {
                     video::DecoderBackedFrameProvider::new(app_video_decoder).with_prefetch(0, 33),
                 ),
             )),
+            native_thumbnail_work: native_thumbnail_work::NativeThumbnailWork::default(),
             video_recording: Mutex::new(VideoRecordingRuntime::default()),
             external_video_transport: Arc::new(Mutex::new(
                 video::ExternalVideoTransportRuntime::new(),

@@ -339,3 +339,20 @@ worker pool、cache容量、波形/proxy、実show性能は未証明。
   旧Windows-only保留記述を現在のMac開発禁止と読み替えない。
 
 前回のMac検証7ファイルは変更せず保全。今回のソフトウェア修正・検証とは別件。
+
+## 2026-09-08 直接継続：nativeサムネイルの受付と待機
+
+基準 `3809edc`。詳細は [native要求管理の記録](NATIVE_THUMBNAIL_WORK_2026-09-08.md)。
+両thumbnailコマンドにAppState共有の受付枠を設け、レイヤー側の同期処理を
+既存のblocking poolへ移した。枠は待機側の破棄ではなく、worker終了で解放する。
+共有rendererの取得待ちは取消確認付き・2秒の待機予算とし、素材コピーの
+既存hash/copy取消フラグと、生成後のE/R/H・素材同一性の検証を維持した。
+新規Rust 12件＋既存thumbnail/preview 10件、release/wrapper、native buildと
+exact-EXEの1window応答確認を実行した。独立レビューは未実施で自己レビューのみ。
+
+これはnativeデコードの完全取消や総停止期限の完成ではない。実行中のOS I/O・
+metadata probe・同期decoder/GPU処理、frontend resetからnativeへの取消伝達、
+preview-session側の全体上限、cache/proxy/waveformは引き続き別の残件。
+上限は今回の2コマンド・同一AppState内のworker受付に限定する。
+実showの性能・機器受入やMacの未完了検証へ結果を流用せず、
+`MEDIA-DERIVED-001`および50 Open＋8 Deferredの完了状態は変更していない。
