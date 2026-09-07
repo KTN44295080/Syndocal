@@ -150,7 +150,7 @@
     "check:pane-reflow": "node scripts/check-viewport-containment.mjs --pane-reflow-only",
     "check:viewport": "node scripts/check-viewport-containment.mjs",
     "check:vj-first-run-viewport": "node scripts/check-viewport-containment.mjs --vj-empty",
-    "prepare:runtime-libs": "pnpm run check:asio-packaging && node scripts/prepare-release-runtime.mjs",
+    "prepare:runtime-libs": "node scripts/prepare-runtime-libs.mjs",
     "tauri": "node scripts/run-tauri.mjs"
   },
   "dependencies": {
