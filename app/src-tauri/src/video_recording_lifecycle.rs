@@ -1,11 +1,10 @@
 //! Ownership and bounded acknowledgement for the video recording worker.
 //!
 //! The recording worker can still be inside renderer or encoder I/O when Stop
-//! is requested. This module bounds only the caller's acknowledgement wait;
-//! a timeout keeps the stop flag and join handle owned by the runtime. The
-//! worker is never detached, and shutdown remains blocking when the runtime
-//! itself is dropped because renderer and inherited-pipe I/O can remain pending
-//! even after the encoder supervisor terminates the direct child.
+//! is requested. This module owns the stop flag, the worker join handle, and
+//! the bounded fallback handoff. A timeout never makes the runtime forget a
+//! live worker: it is retained locally until the deadline, then transferred to
+//! the named recording reaper in `recording_shutdown`.
 
 use std::{
     sync::{
@@ -16,10 +15,16 @@ use std::{
     time::{Duration, Instant},
 };
 
+use super::recording_shutdown::DeferredWorker;
+
 /// The Stop command's acknowledgement window. This matches the existing
 /// 250ms process lifecycle convention while deliberately covering only the
 /// worker termination check, not renderer or encoder I/O.
 pub(crate) const STOP_ACKNOWLEDGEMENT_TIMEOUT: Duration = Duration::from_millis(250);
+/// Maximum time runtime teardown may wait for a renderer/encoder worker after
+/// cancellation. In-process code is not thread-killable safely; expiry moves
+/// the original join owner to the recording reaper instead of abandoning it.
+pub(crate) const TOTAL_STOP_DEADLINE: Duration = Duration::from_secs(10);
 const TERMINATION_POLL_INTERVAL: Duration = Duration::from_millis(5);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,6 +42,7 @@ pub(crate) enum WorkerReap {
 pub(crate) struct RecordingWorkerLifecycle {
     stop: Arc<AtomicBool>,
     worker: Option<JoinHandle<()>>,
+    deferred: Option<DeferredWorker>,
     stopping: bool,
 }
 
@@ -45,6 +51,7 @@ impl RecordingWorkerLifecycle {
         Self {
             stop,
             worker: Some(worker),
+            deferred: None,
             stopping: false,
         }
     }
@@ -63,6 +70,10 @@ impl RecordingWorkerLifecycle {
                 .worker
                 .as_ref()
                 .is_some_and(|worker| worker.is_finished())
+                || self
+                    .deferred
+                    .as_ref()
+                    .is_some_and(DeferredWorker::is_finished)
             {
                 return CompletionWait::Completed;
             }
@@ -77,25 +88,48 @@ impl RecordingWorkerLifecycle {
         self.stopping
     }
 
+    pub(crate) fn has_worker(&self) -> bool {
+        self.worker.is_some() || self.deferred.is_some()
+    }
+
     /// Reap a worker only after `JoinHandle::is_finished` reports termination.
     /// A timeout therefore leaves the original stop flag and join handle in
     /// this object.
     pub(crate) fn reap_if_complete(&mut self) -> Option<WorkerReap> {
-        if !self
+        if self
             .worker
             .as_ref()
             .is_some_and(|worker| worker.is_finished())
         {
-            return None;
+            return Some(self.reap());
         }
-        Some(self.reap())
+        if self
+            .deferred
+            .as_ref()
+            .is_some_and(DeferredWorker::is_finished)
+        {
+            let deferred = self.deferred.take().expect("deferred worker owner");
+            self.stopping = false;
+            return Some(deferred.outcome());
+        }
+        None
     }
 
-    /// Used only for the existing runtime-drop ownership boundary. It is
-    /// intentionally unbounded because dropping this object must not detach a
-    /// live recording worker.
-    pub(crate) fn reap_blocking(&mut self) -> WorkerReap {
-        self.reap()
+    /// Wait for a bounded shutdown window. If the worker is still live at the
+    /// deadline, the original join handle moves to an owned background reaper
+    /// and this lifecycle remains occupied until that reaper finishes.
+    pub(crate) fn reap_with_deadline(&mut self, timeout: Duration) -> CompletionWait {
+        if self.wait_for_completion(timeout) == CompletionWait::Completed {
+            let _ = self.reap_if_complete();
+            return CompletionWait::Completed;
+        }
+        if let Some(worker) = self.worker.take() {
+            self.deferred = Some(super::recording_shutdown::defer_worker(
+                worker,
+                "recording-worker",
+            ));
+        }
+        CompletionWait::TimedOut
     }
 
     fn reap(&mut self) -> WorkerReap {
@@ -112,9 +146,9 @@ impl RecordingWorkerLifecycle {
 
 impl Drop for RecordingWorkerLifecycle {
     fn drop(&mut self) {
-        if self.worker.is_some() {
+        if self.has_worker() {
             self.request_stop();
-            let _ = self.reap_blocking();
+            let _ = self.reap_with_deadline(TOTAL_STOP_DEADLINE);
         }
     }
 }
@@ -179,7 +213,7 @@ mod tests {
             }
             if let Some(lifecycle) = self.lifecycle.as_mut() {
                 lifecycle.request_stop();
-                let _ = lifecycle.reap_blocking();
+                let _ = lifecycle.reap_with_deadline(Duration::from_secs(1));
             }
         }
     }
@@ -198,7 +232,7 @@ mod tests {
             worker.lifecycle_mut().reap_if_complete(),
             Some(WorkerReap::Joined)
         );
-        assert!(worker.lifecycle().worker.is_none());
+        assert!(!worker.lifecycle().has_worker());
     }
 
     #[test]
@@ -212,7 +246,7 @@ mod tests {
             CompletionWait::TimedOut
         );
         assert!(worker.lifecycle().is_stopping());
-        assert!(worker.lifecycle().worker.is_some());
+        assert!(worker.lifecycle().has_worker());
         assert!(worker.stop.load(Ordering::Acquire));
         assert!(!worker.lifecycle_mut().request_stop());
         worker.release();
@@ -228,7 +262,7 @@ mod tests {
                 .wait_for_completion(Duration::from_millis(1)),
             CompletionWait::TimedOut
         );
-        assert!(worker.lifecycle().worker.is_some());
+        assert!(worker.lifecycle().has_worker());
         worker.release();
         assert_eq!(
             worker
@@ -236,12 +270,37 @@ mod tests {
                 .wait_for_completion(Duration::from_secs(1)),
             CompletionWait::Completed
         );
-        assert!(worker.lifecycle().worker.is_some());
+        assert!(worker.lifecycle().has_worker());
         assert_eq!(
             worker.lifecycle_mut().reap_if_complete(),
             Some(WorkerReap::Joined)
         );
-        assert!(worker.lifecycle().worker.is_none());
+        assert!(!worker.lifecycle().has_worker());
+    }
+
+    #[test]
+    fn deadline_handoffs_live_worker_to_owned_reaper() {
+        let mut worker = TestWorker::delayed(false);
+        worker.lifecycle_mut().request_stop();
+        assert_eq!(
+            worker
+                .lifecycle_mut()
+                .reap_with_deadline(Duration::from_millis(1)),
+            CompletionWait::TimedOut
+        );
+        assert!(worker.lifecycle().has_worker());
+        worker.release();
+        assert_eq!(
+            worker
+                .lifecycle()
+                .wait_for_completion(Duration::from_secs(1)),
+            CompletionWait::Completed
+        );
+        assert_eq!(
+            worker.lifecycle_mut().reap_if_complete(),
+            Some(WorkerReap::Joined)
+        );
+        assert!(!worker.lifecycle().has_worker());
     }
 
     #[test]
@@ -258,6 +317,6 @@ mod tests {
             worker.lifecycle_mut().reap_if_complete(),
             Some(WorkerReap::Panicked)
         );
-        assert!(worker.lifecycle().worker.is_none());
+        assert!(!worker.lifecycle().has_worker());
     }
 }

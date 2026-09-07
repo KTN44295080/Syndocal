@@ -4,7 +4,7 @@ import ts from 'typescript';
 
 // Transpile actual production modules and resolve only their actual local dependency.
 const modules = new Map();
-for (const name of ['fixtureTransformConfirmation', 'outputControlController', 'agentBridgeBlackout', 'agentBridgeTools', 'agentBridgeRuntime']) {
+for (const name of ['fixtureTransformConfirmation', 'outputControlController', 'agentBridgeBlackout', 'agentBridgeControlPlane', 'agentBridgeRecording', 'agentBridgeTools', 'agentBridgeRuntime']) {
   const source = await readFile(new URL(`../src/${name}.ts`, import.meta.url), 'utf8');
   const exports = {};
   const compiled = ts.transpileModule(source, {
@@ -67,6 +67,53 @@ let groups = 0;
   assert.equal(runtime.video.truncated, true);
   assert.equal(runtime.video.authored_blackout, true);
   assert.deepEqual(runtime.observations.output_ownership_status, ownership);
+  const registry = {
+    schema: { name: 'syndocal.control-plane.canonical-operation-registry', version: 4 },
+    canonical_operations: [{
+      operation_id: 'syndocal.query.snapshot.v1',
+      class: 'discovery',
+      risk: 'r0',
+      capabilities: ['read_only', 'registry_discovery'],
+      request_schema: { name: 'syndocal.query.snapshot.v1.request', version: 1 },
+      response_schema: { name: 'syndocal.query.snapshot.v1.response', version: 1 },
+      idempotency: 'read_only',
+      audit: 'not_applicable',
+      adapter_policy: 'local_window_read_only',
+      receipt_policy: 'fail_closed',
+      rate_policy: 'fail_closed',
+      payload_policy: 'fail_closed',
+      consent_policy: 'fail_closed',
+      derived_adapters: [{
+        adapter: 'local_tauri_window', binding_id: 'tauri_command:get_snapshot',
+        source_key: { family: 'tauri_command', source_id: 'get_snapshot' },
+      }],
+    }],
+    source_inventory: [{
+      source_key: { family: 'tauri_command', source_id: 'get_snapshot' },
+      disposition: { kind: 'operation' },
+    }],
+  };
+  const capabilities = await execute(async (command, args) => {
+    assert.equal(command, 'get_control_plane_canonical_registry');
+    assert.deepEqual(args, undefined);
+    return registry;
+  }, request('control_plane.get_capabilities'));
+  assert.equal(capabilities.ok, true);
+  assert.equal(capabilities.control_plane.canonical_operation_count, 1);
+  assert.deepEqual(capabilities.control_plane.source_inventory_by_family, { tauri_command: 1 });
+  assert.deepEqual(capabilities.agent_bridge.operations.slice(-2), ['control_plane.get_capabilities', 'recording.get_status']);
+  const recordingStatus = await execute(async (command, args) => {
+    assert.equal(command, 'video_output_recording_status');
+    assert.deepEqual(args, undefined);
+    return {
+      active: true, output_id: 2, path: 'C:/recordings/take.mp4', width: 1920, height: 1080,
+      frame_rate: 30, frames_written: 12, dropped_frames: 0, audio_requested: true,
+      audio_included: true, audio_track_count: 1, started_unix_ms: 1234, last_error: null,
+    };
+  }, request('recording.get_status'));
+  assert.equal(recordingStatus.ok, true);
+  assert.equal(recordingStatus.recording.active, true);
+  assert.equal(recordingStatus.recording.frames_written, 12);
   const failedRuntime = await execute(async (command) => {
     if (command === 'get_project_authority_bundle') return bundle();
     throw new Error('ownership observation unavailable');

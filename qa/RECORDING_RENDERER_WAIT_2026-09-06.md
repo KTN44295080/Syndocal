@@ -63,3 +63,27 @@ Verification on this checkout:
   `C753D6F8CE250D645D5176904F1FA139146B0FC7D680417F7087D0888F1B3886`.
   The exact-checkout launch check observed one responsive, maximized window;
   `physicalOutputOperations=0`.
+
+## 2026-09-07 bounded worker teardown and process-tree completion
+
+This section supersedes the unresolved teardown statements above for the
+current source. The recording lifecycle now gives the worker a ten-second
+total-stop deadline. If a renderer or encoder worker is still inside an
+in-process operation at that deadline, its original `JoinHandle` is transferred
+to a named, owned reaper; it is never detached or forgotten. The caller returns
+with the lifecycle still occupied, so a new recording cannot overlap the live
+worker. Later lifecycle polling reaps the deferred result.
+
+The direct FFmpeg child is placed in a Windows Job Object with
+`KILL_ON_JOB_CLOSE`. Its stdin and stderr owners retain the job guard until
+their handles are closed, so descendants that inherit either pipe remain part
+of the owned cleanup boundary. A descendant regression test now proves that a
+failure tears down the child process tree, not only the direct child. FFmpeg
+supervision still confirms `try_wait` termination before reporting cleanup.
+
+The deadline bounds caller return and ownership transfer. Safe Rust cannot
+forcibly interrupt an arbitrary synchronous HAP/libav/GPU/effect operation, so
+those operations remain cooperative at their stage boundaries; claiming a
+physical hard-kill of an in-process thread would be unsafe. Real MP4 and the
+synthetic 30-minute A/V acceptance both pass, while full in-app/hardware
+recording remains a separate acceptance boundary.

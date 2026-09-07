@@ -51,12 +51,12 @@ pub(crate) struct VideoRecordingRuntime {
 impl Drop for VideoRecordingRuntime {
     fn drop(&mut self) {
         if let Some(mut worker) = self.worker.take() {
-            // Runtime teardown keeps the old blocking ownership boundary. A
-            // renderer call or inherited encoder pipe can still be pending, so
-            // dropping the handle would abandon the live worker and its
-            // recording artifact.
+            // Runtime teardown has a hard deadline. A renderer call or
+            // inherited encoder pipe can still be pending, so the lifecycle
+            // transfers the original owner to its named reaper on expiry
+            // instead of blocking app teardown or abandoning the worker.
             worker.request_stop();
-            let _ = worker.reap_blocking();
+            let _ = worker.reap_with_deadline(video_recording_lifecycle::TOTAL_STOP_DEADLINE);
         }
     }
 }

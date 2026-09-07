@@ -18,10 +18,16 @@ pub(super) struct InputControl {
     cancelled: AtomicBool,
     // The owner must acquire this gate before closing the raw handle.
     handle: Mutex<Option<usize>>,
+    #[cfg(windows)]
+    _process_tree_guard: Option<super::process::ProcessTreeGuard>,
 }
 
 impl RecordingStdin {
-    pub(super) fn new(stdin: ChildStdin) -> (Self, Arc<InputControl>) {
+    pub(super) fn new(
+        stdin: ChildStdin,
+        #[cfg(windows)] process_tree_guard: Option<super::process::ProcessTreeGuard>,
+        #[cfg(not(windows))] _process_tree_guard: Option<()>,
+    ) -> (Self, Arc<InputControl>) {
         #[cfg(windows)]
         let handle = {
             use std::os::windows::io::AsRawHandle;
@@ -32,6 +38,8 @@ impl RecordingStdin {
         let control = Arc::new(InputControl {
             cancelled: AtomicBool::new(false),
             handle: Mutex::new(Some(handle)),
+            #[cfg(windows)]
+            _process_tree_guard: process_tree_guard,
         });
         (
             Self {
@@ -76,6 +84,34 @@ impl Drop for RecordingStdin {
 }
 
 impl InputControl {
+    /// Interrupt an outstanding Windows pipe write as soon as the independent
+    /// process supervisor observes Stop/abort. The post-reap path still
+    /// verifies cancellation and joins ownership before reporting completion.
+    pub(super) fn cancel_if_requested(&self, stop: &AtomicBool, aborting: &AtomicBool) {
+        #[cfg(not(windows))]
+        {
+            let _ = (stop, aborting);
+        }
+        #[cfg(windows)]
+        if stop.load(Ordering::Acquire) || aborting.load(Ordering::Acquire) {
+            use windows::Win32::{
+                Foundation::{ERROR_NOT_FOUND, HANDLE},
+                System::IO::CancelIoEx,
+            };
+            self.cancelled.store(true, Ordering::SeqCst);
+            let guard = self.handle.lock().unwrap_or_else(|p| p.into_inner());
+            if let Some(raw) = *guard {
+                let _ = unsafe { CancelIoEx(HANDLE(raw as *mut _), None) }.or_else(|error| {
+                    if error.code() == windows::core::HRESULT::from_win32(ERROR_NOT_FOUND.0) {
+                        Ok(())
+                    } else {
+                        Err(error)
+                    }
+                });
+            }
+        }
+    }
+
     pub(super) fn after_reap(
         &self,
         stop: &AtomicBool,

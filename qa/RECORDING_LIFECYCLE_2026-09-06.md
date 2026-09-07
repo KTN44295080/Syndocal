@@ -162,3 +162,19 @@ proof are `native-build.log`, `native-launch.json`, `native-mcp-probe.json` in
 `target/qa/recording-runtime-20260906/`. User-show/Unity acceptance and the full
 recording cancellation/deadline boundary remain open. The unrelated viewport
 checker is preserved unchanged; only owned files belong to this checkpoint.
+
+## 2026-09-07 bounded total-stop deadline
+
+The lifecycle now owns both the active worker and any deferred worker reaper.
+Explicit Stop keeps the existing 250 ms acknowledgement window. Runtime Drop
+and teardown use a ten-second total-stop deadline; a worker that is still
+running is moved, with its original `JoinHandle`, to the named recording reaper
+and remains an occupied recording owner until that reaper reports completion.
+This bounds the caller without abandoning or overlapping a live worker.
+
+`deadline_handoffs_live_worker_to_owned_reaper` proves the handoff and late
+reap path. The implementation deliberately does not use unsafe thread killing:
+an arbitrary synchronous renderer/libav/GPU/effect operation can only be
+cancelled at its cooperative stage boundaries. The deadline is therefore a
+bounded ownership-transfer guarantee, not a claim that an in-process CPU/GPU
+instruction can be physically interrupted.

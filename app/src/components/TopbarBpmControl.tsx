@@ -34,8 +34,8 @@ export function TopbarBpmControl(props: { bpm: number; onSetBpm: (bpm: number) =
   return <span ref={container} class="bpmReadout topbarBpmControl" onClick={begin} onPointerDown={event => event.stopPropagation()}
     onMouseDown={event => event.stopPropagation()} onDblClick={event => event.stopPropagation()}>
     <small>BPM</small>
-    <Show when={editing()} fallback={<button type="button" class="topbarBpmValue" aria-label="BPMを編集"
-      title="BPMを編集" onClick={begin}><strong>{props.bpm.toFixed(0)}</strong></button>}>
+    <Show when={editing()} fallback={<button type="button" class="topbarBpmValue" aria-label="Edit BPM"
+      title="Edit BPM" onClick={begin}><strong>{props.bpm.toFixed(0)}</strong></button>}>
       <input class="topbarBpmInput" type="number" min="20" max="300" step="0.1" aria-label="BPM"
         aria-invalid={Boolean(error())} title={error() ?? "BPM (20〜300)"} disabled={busy()} value={draft()}
         ref={element => queueMicrotask(() => { if (mounted && element.isConnected) { element.focus(); element.select(); } })}

@@ -610,9 +610,9 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
             <Show when={props.safetyBlackoutEngaged}>
               <button type="button" class="topbarSafetyButton engaged"
                 data-global-operator-action="safety-blackout-release"
-                title="安全ブラックアウト中。通常のDMX・映像ブラックアウトとは独立しています。"
+                title="Safety blackout is engaged. It is independent of normal DMX/video blackout."
                 onClick={props.onReleaseSafetyBlackout}>
-                安全ブラックアウト中 · 安全解除
+                Safety blackout engaged · Release safety
               </button>
             </Show>
             <button

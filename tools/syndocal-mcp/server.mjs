@@ -30,6 +30,8 @@ export const toolDefinitions = [
   { name: 'syndocal_set_video_blackout', description: 'Set Video BO against the exact observed project. This requires both lighting and video output ownership to already be active; disabling may reveal that existing output. It never arms, acquires, or enables output.', inputSchema: schema({ requestId: uuid, enabled: { type: 'boolean' }, expectedProject }), annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false } },
   { name: 'syndocal_get_request_status', description: 'Read a previously submitted request by its original UUID. Unknown does not mean safe to resend.', inputSchema: schema({ requestId: uuid }), annotations: { readOnlyHint: true } },
   { name: 'syndocal_get_runtime_status', description: 'Read bounded project runtime diagnostics, timeline state, video outputs, and a separate output-ownership observation from the selected running Syndocal instance. This never changes output state.', inputSchema: schema({}), annotations: { readOnlyHint: true } },
+  { name: 'syndocal_get_control_plane_capabilities', description: 'Read the backend-owned canonical operation registry as a bounded capability inventory. It reports which operations have an explicit local-window adapter; FailClosed entries are discovery-only and cannot be invoked through MCP.', inputSchema: schema({}), annotations: { readOnlyHint: true } },
+  { name: 'syndocal_get_recording_status', description: 'Read bounded video recording status from the selected running Syndocal instance. This never starts, stops, finalizes, or replaces a recording.', inputSchema: schema({}), annotations: { readOnlyHint: true } },
 ];
 
 const projectFence = (value) => exact(value, ['project_epoch', 'project_revision', 'checkpoint_hash'])
@@ -39,6 +41,8 @@ const projectFence = (value) => exact(value, ['project_epoch', 'project_revision
 function validateArguments(name, args) {
   if (name === 'syndocal_list_fixtures') return exact(args, []);
   if (name === 'syndocal_get_runtime_status') return exact(args, []);
+  if (name === 'syndocal_get_control_plane_capabilities') return exact(args, []);
+  if (name === 'syndocal_get_recording_status') return exact(args, []);
   if (name === 'syndocal_get_fixture') return exact(args, ['fixtureId']) && integer(args.fixtureId) && args.fixtureId > 0;
   if (name === 'syndocal_get_request_status') return exact(args, ['requestId']) && typeof args.requestId === 'string' && UUID.test(args.requestId);
   if (name === 'syndocal_set_video_blackout') return exact(args, ['requestId', 'enabled', 'expectedProject'])
@@ -210,7 +214,7 @@ export function serve(options, input = process.stdin, output = process.stdout) {
       const args = params.arguments ?? {};
       const mutation = params.name === 'syndocal_set_fixture_transform' || params.name === 'syndocal_set_video_blackout';
       const requestId = mutation ? args.requestId : randomUUID();
-      const method = { syndocal_list_fixtures: 'fixtures.list', syndocal_get_fixture: 'fixtures.get', syndocal_set_fixture_transform: 'fixtures.set_transform', syndocal_set_video_blackout: 'output.set_video_blackout', syndocal_get_request_status: 'request.status', syndocal_get_runtime_status: 'runtime.get' }[params.name];
+      const method = { syndocal_list_fixtures: 'fixtures.list', syndocal_get_fixture: 'fixtures.get', syndocal_set_fixture_transform: 'fixtures.set_transform', syndocal_set_video_blackout: 'output.set_video_blackout', syndocal_get_request_status: 'request.status', syndocal_get_runtime_status: 'runtime.get', syndocal_get_control_plane_capabilities: 'control_plane.get_capabilities', syndocal_get_recording_status: 'recording.get_status' }[params.name];
       const nativeParams = mutation ? Object.fromEntries(Object.entries(args).filter(([key]) => key !== 'requestId')) : args;
       const result = await nativeRequest(options, method, nativeParams, requestId, mutation);
       if (result.status !== 'completed') result.nextAction = 'Query syndocal_get_request_status with the original requestId. Do not automatically resubmit an unknown or pending mutation.';

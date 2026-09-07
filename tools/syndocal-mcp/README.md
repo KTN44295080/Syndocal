@@ -1,6 +1,6 @@
 # Syndocal MCP adapter
 
-Dependency-free Node.js stdio adapter for a running Syndocal agent bridge. It exposes only fixture listing, fixture reading, exact-project fixture transforms, exact-project Video BO control, request-status lookup, and bounded runtime diagnostics. It does not open devices, start Syndocal, or arm show output.
+Dependency-free Node.js stdio adapter for a running Syndocal agent bridge. It exposes fixture listing, fixture reading, exact-project fixture transforms, exact-project Video BO control, request-status lookup, bounded runtime diagnostics, canonical backend capability discovery, and read-only recording status. It does not open devices, start Syndocal, or arm show output.
 
 ## Start
 
@@ -34,6 +34,8 @@ On Windows, process identity is read through a fixed, hidden PowerShell/CIM quer
 - `syndocal_set_video_blackout({requestId, enabled, expectedProject})`: set Video BO with a caller-supplied UUID and the exact project identity returned by a read. It requires both lighting and video output ownership to already be active; disabling may reveal that existing output and never arms, acquires, or enables output.
 - `syndocal_get_request_status({requestId})`: query the original request UUID.
 - `syndocal_get_runtime_status({})`: read the project token, lighting/video blackout bits, up to 64 video-output summaries, Timeline transport state, the exact `timeline_runtime` projection, and a separate `observations.output_ownership_status` read. The authority bundle and ownership observation are captured by separate reads and must not be treated as one atomic image.
+- `syndocal_get_control_plane_capabilities({})`: read a bounded projection of the backend-owned canonical operation/source inventory and exact local adapter policy. `FailClosed` entries are discovery-only and cannot be invoked through MCP.
+- `syndocal_get_recording_status({})`: read bounded active recording, dimensions, frame/drop counters, audio inclusion, path, and last-error state. It never starts, stops, finalizes, or replaces a recording.
 
 Position is `{x,y,z}` and rotation is `{pitch,yaw,roll}`. `expectedProject` is `{project_epoch,project_revision,checkpoint_hash}`. All fields are required; transform coordinates must be finite, project epoch/revision values must be nonnegative safe integers, and `checkpoint_hash` must be exactly 64 lowercase hexadecimal characters. Unknown argument fields are rejected.
 
@@ -47,6 +49,6 @@ Only one broker request may be active. An overlapping call is explicitly rejecte
 node tools/syndocal-mcp/check.mjs
 ```
 
-The integration check launches the CLI against its own fake loopback broker. It exercises negotiation, schemas, request correlation, Video BO false-success handling, pending/unknown behavior, no automatic retry, overlap rejection, malformed/oversized frames, executable mismatch and credential redaction. It does not operate Syndocal or physical devices. Real native bridge acceptance is a separate integration check.
+The integration check launches the CLI against its own fake loopback broker. It exercises negotiation, all eight tool schemas, request correlation, Video BO false-success handling, pending/unknown behavior, no automatic retry, overlap rejection, malformed/oversized frames, executable mismatch and credential redaction. It does not operate Syndocal or physical devices. Real native bridge acceptance is a separate integration check.
 
 The adapter implements the MCP **2025-11-25** [stdio transport](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports), [initialization lifecycle](https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle), and [tools interface](https://modelcontextprotocol.io/specification/2025-11-25/server/tools). Supported JSON-RPC methods are `initialize`, `notifications/initialized`, `ping`, `tools/list`, and `tools/call`.

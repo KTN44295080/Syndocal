@@ -56,17 +56,17 @@ export function MappingSelectionActionsPanel(props: MappingSelectionActionsPanel
             <button type="button" disabled={orientationBusy() || props.selectedCount < 2}
               onClick={() => void orient(props.onMatchOrientations)}>基準灯体と同じ姿勢に揃える</button>
           </div>
-          <p>選択中の基準灯体のYaw・Pitch・Rollを揃えます。</p>
+          <p>Match the selected reference fixture's Yaw, Pitch, and Roll.</p>
           <div class="mappingTransformGrid">
-            <label>指定点 X<input type="number" step="0.1" value={targetX()} onInput={event => setTargetX(event.currentTarget.value)} /></label>
-            <label>指定点 Y<input type="number" step="0.1" value={targetY()} onInput={event => setTargetY(event.currentTarget.value)} /></label>
-            <label>指定点 Z<input type="number" step="0.1" value={targetZ()} onInput={event => setTargetZ(event.currentTarget.value)} /></label>
+            <label>Target X<input type="number" step="0.1" value={targetX()} onInput={event => setTargetX(event.currentTarget.value)} /></label>
+            <label>Target Y<input type="number" step="0.1" value={targetY()} onInput={event => setTargetY(event.currentTarget.value)} /></label>
+            <label>Target Z<input type="number" step="0.1" value={targetZ()} onInput={event => setTargetZ(event.currentTarget.value)} /></label>
           </div>
           <div class="mappingTransformActions" style={{ "grid-template-columns": "minmax(0, 1fr)" }}><button type="button" disabled={orientationBusy() || !validTarget()}
             onClick={() => void orient(() => props.onAimInstallationAxes({ x: Number(targetX()), y: Number(targetY()), z: Number(targetZ()) }))}>
-            設置基準軸（+Z）を指定点へ向ける
+            Aim installation axis (+Z) at target
           </button></div>
-          <p>Rollは0、DMX値は変更しません。プロファイルの光軸やPan・Tiltが加わるため、各ビームの照射点とは異なる場合があります。</p>
+          <p>Roll is 0; DMX values are unchanged. Profile optics and Pan/Tilt may affect each beam's point.</p>
         </div>
       </Show>
       <Show when={hasSelection()}>

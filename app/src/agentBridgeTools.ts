@@ -10,6 +10,8 @@ import {
   executeAgentBridgeVideoBlackout,
   type AgentBridgeEffects,
 } from "./agentBridgeBlackout";
+import { executeAgentBridgeControlPlane } from "./agentBridgeControlPlane";
+import { executeAgentBridgeRecordingStatus } from "./agentBridgeRecording";
 
 export type { AgentBridgeEffects } from "./agentBridgeBlackout";
 
@@ -58,10 +60,18 @@ export async function executeAgentBridgeRequest(
 ) {
   let mutationStarted = false;
   try {
-    if (!["fixtures.list", "fixtures.get", "fixtures.set_transform", "runtime.get", "output.set_video_blackout"].includes(request.method)) {
+    if (!["fixtures.list", "fixtures.get", "fixtures.set_transform", "runtime.get", "output.set_video_blackout", "control_plane.get_capabilities", "recording.get_status"].includes(request.method)) {
       return { ok: false, error: { code: "unknown_method", message: "Unsupported agent bridge operation." } };
     }
     const params = request.params;
+    if (request.method === "control_plane.get_capabilities") {
+      if (Object.keys(params).length !== 0) throw new Error("Control-plane capability discovery takes no parameters.");
+      return await executeAgentBridgeControlPlane(invoke);
+    }
+    if (request.method === "recording.get_status") {
+      if (Object.keys(params).length !== 0) throw new Error("Recording status takes no parameters.");
+      return await executeAgentBridgeRecordingStatus(invoke);
+    }
     if (request.method === "output.set_video_blackout") {
       return await executeAgentBridgeVideoBlackout(
         invoke,

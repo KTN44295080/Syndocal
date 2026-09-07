@@ -268,3 +268,43 @@ Suggested continuation prompt:
 > 引き継いでください。未コミット差分と証拠を保全し、保存復旧テストの原因調査、
 > libx264対応FFmpegでの実保存検証、native検証、独立レビュー、commit/pushまで
 > 進めてください。Build Tools正式対応は承認済み。実機出力は操作しないでください。
+
+## 2026-09-07 current source checkpoint
+
+上記の旧記録に残る「process tree / total deadline / localization未完了」は、
+現行ソースでは次の実装・検証で更新されている。履歴としての旧記述は削除せず、
+この節を現在の引き継ぎ状態とする。
+
+- 録画フィルタは正確なBuild Tools MSVC 14.44.35207 linkerで
+  `56 passed / 6 ignored / 0 failed`。停止中rendererの協調キャンセル、stdin/
+  stderrのWindows I/Oキャンセル、FFmpeg直接子の終了確認、Job Objectによる
+  子孫回収、10秒のworker total-stop deadlineとnamed reaper移管を含む。
+- 新設の `recording_encoder_failure_reaps_the_descendant_process_tree` は
+  親終了後もpipeを保持する子孫を生成し、failure後に子孫が回収されることを
+  実プロセスで確認した。任意の同期HAP/libav/GPU/effect命令を安全に強制中断
+  することはできないため、deadlineは呼び出し元の復帰・所有権移管を保証し、
+  in-process instructionの物理hard-killを主張しない。
+- H.264/AAC実MP4は `1/1`、合成30分A/Vは `1/1`。後者は54,000 frames、
+  start/end drift `0.0ms`、first/middle/last luma `255/0/255`、audio peak
+  `4276/0/4123`。実show・カメラ・物理デバイスの受入証明とは区別する。
+- `cargo test -p video --locked` は現行でも `171 passed / 3 failed / 3 ignored`。
+  失敗は `output_preview_renderer_requests_only_routed_layers_and_skips_blackout_decode`,
+  `gpu_compositor::tests::gpu_compositor_matches_cpu_transform_crop_and_source_size`,
+  `gpu_compositor::tests::gpu_output_mapping_matches_cpu_aspect_modes` の既存
+  output-routing/GPU比較経路で、今回のUI/MCP/録画差分外として残す。
+- localizationは `3693/3693 (100.0%)`、unprotected bare user-data labels `0`。
+  Setup I/Oは固定三画面レイアウトのまま、接続カードを一列の要約表示へ整理した。
+- backend/MCPは専用モジュールへ分離し、canonical registryのbounded capability
+  discoveryとread-only recording statusを追加。MCPは8 typed tools、実EXEで
+  initialize/tools/list、capability/statusを `pending→completed` として確認した。
+  `47 canonical operations / 1606 source inventory` を返し、FailClosedは
+  discovery-only。動的Tauri invoke、script、DOM操作、独自retryは追加していない。
+- native no-bundle buildは成功。`target/release/syndocal.exe`、version
+  `1.2.0-alpha.69`、SHA-256 `AC6C2F786E5C0FFACCD379392C3BE850F11A6977711F67564EB28812A4179CE7`。
+  exact checkout版で一つのresponsive/maximized `Syndocal` window、
+  `physicalOutputOperations=0`を確認し、そのPIDだけ停止した。
+
+残る非主張は、既存のvideo 3比較失敗、実show/物理デバイス受入、任意の同期
+in-process命令の強制中断、およびcanonical registryのFailClosed領域を含む
+製品全体AI parityである。これは安全境界であり、今回のbounded implementation
+を「全製品操作がMCPで完了」と誤表示しない。

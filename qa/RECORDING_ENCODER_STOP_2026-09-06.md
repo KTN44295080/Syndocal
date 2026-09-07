@@ -102,3 +102,21 @@ target compare-and-replace concurrency, synchronous renderer cancellation,
 recording clock/crash/import acceptance and the broader recording ledger remain
 separate unresolved work. Spout, Video BO isolation/restoration and Unity
 smoothness already have user acceptance and are not reopened by this tranche.
+
+## 2026-09-07 process-tree and encoder deadline completion
+
+The current encoder process owner creates a Windows Job Object for every direct
+FFmpeg child and sets `KILL_ON_JOB_CLOSE`. The stdin and stderr reader controls
+retain an erased Job Object guard until their respective handles are closed.
+This closes the inherited-pipe descendant ownership gap: a descendant cannot
+outlive the last owned cleanup handle. `recording_encoder_failure_reaps_the_descendant_process_tree`
+proves the direct-child/descendant case; the existing inherited stdin/stderr
+tests continue to prove blocked pipe cancellation.
+
+The supervisor continues to poll and confirm process exit. At the shared
+ten-second total-stop deadline it transfers the complete child owner to a
+named process reaper, retaining a retry/quarantine path if reaper creation
+fails. No false-success publication is possible after abort or termination
+failure. The separate renderer worker lifecycle applies the same bounded
+ownership transfer, while arbitrary in-process renderer operations remain
+cooperative because safe Rust cannot force-kill their thread.

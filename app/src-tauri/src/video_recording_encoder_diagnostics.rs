@@ -24,8 +24,12 @@ pub(super) struct DiagnosticsReader {
 }
 
 impl DiagnosticsReader {
-    pub(super) fn spawn(stderr: ChildStderr) -> io::Result<Self> {
-        let control = Arc::new(ReaderControl::new(&stderr));
+    pub(super) fn spawn(
+        stderr: ChildStderr,
+        #[cfg(windows)] process_tree_guard: Option<super::process::ProcessTreeGuard>,
+        #[cfg(not(windows))] _process_tree_guard: Option<()>,
+    ) -> io::Result<Self> {
+        let control = Arc::new(ReaderControl::new(&stderr, process_tree_guard));
         let worker_control = Arc::clone(&control);
         let join = thread::Builder::new()
             .name("syndocal-recording-stderr".into())
@@ -118,16 +122,23 @@ struct ReaderControl {
     cancel_requested: AtomicBool,
     /// Serializes handle cancellation with the reader's final handle drop.
     drop_gate: Mutex<Option<usize>>,
+    #[cfg(windows)]
+    _process_tree_guard: Option<super::process::ProcessTreeGuard>,
 }
 
 impl ReaderControl {
-    fn new(stderr: &ChildStderr) -> Self {
+    fn new(
+        stderr: &ChildStderr,
+        #[cfg(windows)] process_tree_guard: Option<super::process::ProcessTreeGuard>,
+        #[cfg(not(windows))] _process_tree_guard: Option<()>,
+    ) -> Self {
         #[cfg(windows)]
         {
             use std::os::windows::io::AsRawHandle;
             return Self {
                 cancel_requested: AtomicBool::new(false),
                 drop_gate: Mutex::new(Some(stderr.as_raw_handle() as usize)),
+                _process_tree_guard: process_tree_guard,
             };
         }
         #[cfg(not(windows))]
@@ -142,6 +153,8 @@ impl ReaderControl {
         Self {
             cancel_requested: AtomicBool::new(false),
             drop_gate: Mutex::new(None),
+            #[cfg(windows)]
+            _process_tree_guard: None,
         }
     }
 

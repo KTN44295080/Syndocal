@@ -75,7 +75,7 @@ try {
   child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
   assert.deepEqual((await rpc('ping')).result, {});
   const list = await rpc('tools/list');
-  assert.equal(list.result.tools.length, 6);
+  assert.equal(list.result.tools.length, 8);
   assert.ok(list.result.tools.every((tool) => tool.inputSchema.additionalProperties === false));
   const videoTool = list.result.tools.find((tool) => tool.name === 'syndocal_set_video_blackout');
   assert.deepEqual(Object.keys(videoTool.inputSchema.properties), ['requestId', 'enabled', 'expectedProject']);
@@ -112,6 +112,16 @@ try {
   assert.equal(runtime.result.isError, false);
   assert.equal(decode(runtime).status, 'completed');
   assert.equal(requests.at(-1).method, 'runtime.get');
+  assert.deepEqual(requests.at(-1).params, {});
+  const capabilities = await call('syndocal_get_control_plane_capabilities');
+  assert.equal(capabilities.result.isError, false);
+  assert.equal(decode(capabilities).status, 'completed');
+  assert.equal(requests.at(-1).method, 'control_plane.get_capabilities');
+  assert.deepEqual(requests.at(-1).params, {});
+  const recording = await call('syndocal_get_recording_status');
+  assert.equal(recording.result.isError, false);
+  assert.equal(decode(recording).status, 'completed');
+  assert.equal(requests.at(-1).method, 'recording.get_status');
   assert.deepEqual(requests.at(-1).params, {});
   checks++;
   respond = (req, socket) => socket.end(JSON.stringify({ requestId: req.requestId, status: 'completed', result: { ok: false, error: { code: 'lease_required', message: 'Video output ownership is not active.' } } }) + '\n');

@@ -1088,7 +1088,7 @@ const localeInvariantText = new Set([
   "Sine", "Cosine", "Triangle", "Saw", "Square", "Random", "Perlin", "Rainbow",
   "STEPS", "COLOR FX", "CHASER FX", "MOVE FX", "VALUE FX", "CURVE FX", "2D MAPPING",
   "Phase %", "Position ms",
-  "Art-Net", "sACN", "sACN / E1.31", "sACN E1.31", "Enttec USB PRO", "Syphon Server", "Spout Sender",
+  "Art-Net", "USB-DMX", "USB-DMX + Art-Net", "sACN", "sACN / E1.31", "sACN E1.31", "Enttec USB PRO", "Syphon Server", "Spout Sender",
   "NDI Sender", "Bezier", "Linear", "Full", "Half", "Scale X", "Scale Y",
   "ms", "x", "U", "ch", "CH", "deg", "m", "Hz", "MB", "P", "S", "O", "V", "D", "H", "L",
   "f", "· BUF", "f · CB", "· CB", "C→W", "I/O", "k ·", "kHz", "OVR", "XRUN", "Q",

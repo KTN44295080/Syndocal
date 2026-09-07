@@ -37,6 +37,7 @@ use project_snapshot_persistence::{
 #[cfg(test)]
 mod project_transaction_terminal_recovery_tests;
 mod recording_artifact;
+mod recording_shutdown;
 mod snapshot_sync;
 use snapshot_sync::{EngineSnapshotDelta, SnapshotSyncState};
 #[cfg(test)]

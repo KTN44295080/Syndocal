@@ -29,6 +29,10 @@ pub(super) enum Command {
     Status(Status),
     #[serde(rename = "runtime.get")]
     RuntimeGet(Empty),
+    #[serde(rename = "control_plane.get_capabilities")]
+    ControlPlaneCapabilities(Empty),
+    #[serde(rename = "recording.get_status")]
+    RecordingStatus(Empty),
 }
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -108,6 +112,8 @@ impl Request {
                 | "output.set_video_blackout"
                 | "request.status"
                 | "runtime.get"
+                | "control_plane.get_capabilities"
+                | "recording.get_status"
         ) {
             return Err("unknown_method");
         }

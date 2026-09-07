@@ -45,12 +45,16 @@ impl RecordingEncoder {
             command
                 .spawn()
                 .map_err(|error| format!("Failed to start FFmpeg: {error}"))?,
-        );
+        )?;
+        #[cfg(windows)]
+        let process_tree_guard = Some(child.process_tree_guard());
+        #[cfg(not(windows))]
+        let process_tree_guard = None;
         let stdin = child.take_stdin().ok_or("FFmpeg stdin was unavailable")?;
         let stderr = child.take_stderr().ok_or("FFmpeg stderr was unavailable")?;
         let finishing = Arc::new(AtomicBool::new(false));
         let aborting = Arc::new(AtomicBool::new(false));
-        let (stdin, input_control) = input::RecordingStdin::new(stdin);
+        let (stdin, input_control) = input::RecordingStdin::new(stdin, process_tree_guard.clone());
         // A failed thread spawn drops its closure. Keep a second owner of this
         // handoff cell so dropping a closure cannot abandon a live Child.
         let handoff = Arc::new(Mutex::new(Some(child)));
@@ -66,8 +70,18 @@ impl RecordingEncoder {
                     .unwrap_or_else(|p| p.into_inner())
                     .take()
                     .expect("encoder handoff has one consumer");
-                let outcome =
-                    process::supervise(child, &stop, &worker_finishing, &worker_aborting, grace);
+                let outcome = process::supervise(
+                    child,
+                    &stop,
+                    &worker_finishing,
+                    &worker_aborting,
+                    grace,
+                    || {
+                        if !worker_finishing.load(Ordering::Acquire) {
+                            input_control.cancel_if_requested(&stop, &worker_aborting);
+                        }
+                    },
+                );
                 let input_result = input_control.after_reap(
                     &stop,
                     &worker_aborting,
@@ -89,7 +103,7 @@ impl RecordingEncoder {
             finishing,
             aborting,
         };
-        match diagnostics::DiagnosticsReader::spawn(stderr) {
+        match diagnostics::DiagnosticsReader::spawn(stderr, process_tree_guard) {
             Ok(reader) => encoder.diagnostics = Some(reader),
             Err(error) => {
                 let error = encoder

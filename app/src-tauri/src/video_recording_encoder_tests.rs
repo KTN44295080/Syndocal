@@ -8,6 +8,14 @@ use std::{
     time::Instant,
 };
 
+#[cfg(windows)]
+use windows::Win32::{
+    Foundation::{HANDLE, WAIT_OBJECT_0},
+    System::Threading::{
+        OpenProcess, TerminateProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
+    },
+};
+
 static NEXT_CHILD: AtomicU64 = AtomicU64::new(0);
 
 struct ReadyFile(PathBuf);
@@ -55,9 +63,41 @@ fn await_ready(ready: &ReadyFile) {
 #[ignore = "subprocess helper; selected only by recording encoder tests"]
 fn recording_encoder_child_process() {
     let mode = std::env::var("SYNDOCAL_RECORDING_TEST_CHILD").expect("child test mode");
-    let ready = std::env::var_os("SYNDOCAL_RECORDING_TEST_READY").expect("child readiness file");
+    let ready = PathBuf::from(
+        std::env::var_os("SYNDOCAL_RECORDING_TEST_READY").expect("child readiness file"),
+    );
     if mode == "eof_hang" || mode == "success" {
         io::copy(&mut io::stdin().lock(), &mut io::sink()).unwrap();
+    }
+    if mode == "spawn_descendant" {
+        let go = ready.with_extension("go");
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while !go.exists() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(go.exists(), "descendant spawn gate was not opened");
+        let holder = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "video_recording::encoder::tests::recording_encoder_child_process",
+                "--ignored",
+                "--nocapture",
+            ])
+            .env("SYNDOCAL_RECORDING_TEST_CHILD", "descendant_holder")
+            .env("SYNDOCAL_RECORDING_TEST_READY", &ready)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            // Keep a copy of the encoder's stderr pipe alive after the
+            // direct child exits. The Windows Job Object must own this child.
+            .stderr(Stdio::inherit())
+            .spawn()
+            .expect("descendant holder process");
+        fs::write(&ready, holder.id().to_string()).unwrap();
+        return;
+    }
+    if mode == "descendant_holder" {
+        thread::sleep(Duration::from_secs(30));
+        return;
     }
     fs::write(ready, b"ready").unwrap();
     if mode == "success" {
@@ -173,4 +213,29 @@ fn recording_encoder_drop_reaps_the_direct_child() {
     let started = Instant::now();
     drop(encoder);
     assert!(started.elapsed() < Duration::from_secs(5));
+}
+
+#[cfg(windows)]
+#[test]
+fn recording_encoder_failure_reaps_the_descendant_process_tree() {
+    let (mut command, ready) = child("spawn_descendant");
+    let encoder = RecordingEncoder::spawn(&mut command, Arc::new(AtomicBool::new(false))).unwrap();
+    fs::write(ready.0.with_extension("go"), b"go").unwrap();
+    await_ready(&ready);
+    let holder_pid = fs::read_to_string(&ready.0)
+        .unwrap()
+        .parse::<u32>()
+        .unwrap();
+    let holder = unsafe { OpenProcess(PROCESS_SYNCHRONIZE | PROCESS_TERMINATE, false, holder_pid) }
+        .expect("retain descendant process handle");
+    let holder = HANDLE(holder.0);
+
+    let error = encoder.fail("descendant cleanup test".into()).unwrap_err();
+    let reaped = unsafe { WaitForSingleObject(holder, 5000) } == WAIT_OBJECT_0;
+    if !reaped {
+        let _ = unsafe { TerminateProcess(holder, 1) };
+        let _ = unsafe { WaitForSingleObject(holder, 5000) };
+    }
+    assert!(reaped, "recording failure must reap the encoder descendant");
+    assert!(error.contains("descendant cleanup test"), "{error}");
 }

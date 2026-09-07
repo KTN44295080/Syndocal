@@ -5,6 +5,9 @@ fn id(value: usize) -> String {
 fn command(method: &str) -> Command {
     let params = match method {
         "fixtures.list" => serde_json::json!({}),
+        "runtime.get" | "control_plane.get_capabilities" | "recording.get_status" => {
+            serde_json::json!({})
+        }
         "fixtures.get" => serde_json::json!({"fixtureId": 1}),
         "output.set_video_blackout" => serde_json::json!({
             "enabled": true,
@@ -63,9 +66,40 @@ fn agent_bridge_wire_auth_methods_and_bounds_are_strict() {
     }
     let mut runtime = value.clone();
     runtime["method"] = serde_json::json!("runtime.get");
-    assert!(matches!(serde_json::from_value::<Request>(runtime.clone()).unwrap().command().unwrap(), Command::RuntimeGet(_)));
+    assert!(matches!(
+        serde_json::from_value::<Request>(runtime.clone())
+            .unwrap()
+            .command()
+            .unwrap(),
+        Command::RuntimeGet(_)
+    ));
     runtime["params"] = serde_json::json!({"enableOutputs": true});
-    assert!(serde_json::from_value::<Request>(runtime).unwrap().command().is_err());
+    assert!(serde_json::from_value::<Request>(runtime)
+        .unwrap()
+        .command()
+        .is_err());
+
+    let mut capabilities = value.clone();
+    capabilities["method"] = serde_json::json!("control_plane.get_capabilities");
+    capabilities["params"] = serde_json::json!({});
+    assert!(matches!(
+        serde_json::from_value::<Request>(capabilities)
+            .unwrap()
+            .command()
+            .unwrap(),
+        Command::ControlPlaneCapabilities(_)
+    ));
+
+    let mut recording = value.clone();
+    recording["method"] = serde_json::json!("recording.get_status");
+    recording["params"] = serde_json::json!({});
+    assert!(matches!(
+        serde_json::from_value::<Request>(recording)
+            .unwrap()
+            .command()
+            .unwrap(),
+        Command::RecordingStatus(_)
+    ));
 
     let video = serde_json::json!({
         "token": "token",

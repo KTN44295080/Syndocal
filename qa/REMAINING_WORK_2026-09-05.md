@@ -173,7 +173,7 @@ Out of scope 6。Open 50行を未実装50件と数えない。
 | 限定対応済 | clip/transition/Follow/transportの小さいruntime取得が全snapshotをcloneしていた | 専用snapshot_readへ分離して必要fieldのみ取得。synthetic比較と既存runtime回帰を実施。tick構築と一般snapshot読取は未変更 |
 | 高 | `main.rs` の `engine_snapshot_delta` は深い比較/clone。Stage 30Hz consumerに対しUI apply間引きだけではbackend仕事量は減らない | 上記snapshot計測とまとめて検証してからrevision/dirty trackingを選ぶ |
 | 対応済 | libraryOnlyで非表示の旧mixer consumerがmountされ続けていた | 条件mountへ変更。FXはclosed/open/closedで0/1/0。CPU/FPS改善率は未計測 |
-| 高・一部対応 | 録画のblocking stdin write、encoder/renderer処理とDropに期限なし | 明示Stopのworker待機と二重Start防止は[続行記録](RECORDING_LIFECYCLE_2026-09-06.md)へ。encoderの正常確定を維持した停止上限は未解決で、250msのworker待機だけで全Stop完了としない |
+| 対応済（限定境界） | 録画のblocking stdin write、encoder/renderer処理とDropの停止所有権 | Windows FFmpegはJob Objectで子孫まで回収し、stdin/stderrの管轄を保持。worker/Dropは10秒で所有reaperへ移管し、二重Startを防止する。任意の同期インプロセス処理を安全に強制中断することはできないため、rendererは境界協調キャンセルとして扱う |
 
 ### 肥大化ファイルの分割順序
 
@@ -264,3 +264,17 @@ the exact Build Tools MSVC 14.44.35207 linker. The retained report records
 luma 255/0/255, and audio peaks 4276/0/4123. This is command/codec evidence;
 real in-app capture, hardware, and the renderer/OS shutdown deadline remain
 separate open boundaries.
+
+## 2026-09-07 current continuation status
+
+The recording teardown boundary in the table above is now implemented and
+verified. The focused current filter is `56 passed / 6 ignored / 0 failed`, the
+explicit H.264/AAC MP4 test is `1/1`, the synthetic 30-minute A/V test is `1/1`
+with 54,000 frames and 0.0 ms start/end drift, and the descendant process-tree
+regression is `1/1`. The three ignored subprocess helpers are invoked only by
+their owning tests.
+
+The remaining non-claim is intentional: these tests do not prove a real
+operator show, physical output, camera/device capture, or safe interruption of
+one already-running synchronous CPU/GPU instruction. Those require their
+separate hardware/native acceptance boundaries.

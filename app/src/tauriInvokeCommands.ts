@@ -115,6 +115,7 @@ export const FRONTEND_TAURI_INVOKE_COMMANDS = [
   "get_application_update_configuration",
   "get_asio_output_capabilities",
   "get_asio_output_status",
+  "get_control_plane_canonical_registry",
   "get_debug_video_output_preview",
   "get_debug_video_output_test_pattern",
   "get_debug_video_preview",
