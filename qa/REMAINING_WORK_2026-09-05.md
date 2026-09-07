@@ -34,7 +34,7 @@ operationsへ拡張した。release build/launch、MCP実EXE round-trip、locali
 `3693/3693`、I/O直列回帰 `180/0/2` も通過している。詳細は
 [Luna引き継ぎ](LUNA_RESUME_HANDOFF_2026-09-07.md)の final continuation を参照。
 
-残るのは実装不備ではなく、現ホストで外部設備・秘密情報を要する受入である。
+この2026-09-07の限定対応で残るのは、現ホストで外部設備・秘密情報を要する受入である。製品全体の実装・統合・検証完了を意味しない。
 serial DMX/Enttec COMと物理MIDIは安全な列挙で不在、会場GPU/実show総合受入は
 未実施、Authenticodeは実証明書・秘密鍵不在のため未署名である。これらを
 ソフトウェアloopbackや自己署名証明書で完了扱いにしない。
@@ -292,3 +292,24 @@ The remaining non-claim is intentional: these tests do not prove a real
 operator show, physical output, camera/device capture, or safe interruption of
 one already-running synchronous CPU/GPU instruction. Those require their
 separate hardware/native acceptance boundaries.
+
+## 2026-09-08 製品全体の継続対象
+
+照合元は `main / 00e8785`。完成台帳チェックは50 Open＋8 Deferred、
+Q1-Q4対応表チェックも通過した。ただし台帳の整合性は実装・受入の完了ではない。
+Open行を未実装件数へ読み替えず、既存コードと個別の証拠を照合して閉じる。
+
+- AI/MCP: 47 reviewed operationsの境界を維持する。全製品操作のparity、
+  管理UI、認可・復旧・外部クライアント受入はそれぞれ別契約。
+  今回の具体的なアダプター不具合は
+  [canonical admission記録](AGENT_CANONICAL_ADMISSION_2026-09-08.md)を参照。
+- ShowClock、Audio、Recording: 既存実装を確認し、時計・所有権・障害復旧の
+  仕様と統合証拠を揃える。合成30分の保存成功を実showの完了へ拡張しない。
+- Media、UI、構造: derived dataの寿命・取消・cache、機能到達性、media lifecycle
+  分離を個別に扱う。snapshot負荷は計測を先行し、大規模な無根拠移動をしない。
+- 実機・配布: ASIO/DMX/MIDI/映像機器、会場、Mac実機、証明書は別の受入条件。
+  arm64開発DMGの生成成功は全Mac機能・Gatekeeper対応の証明ではない。
+
+Mac最終DMG検証ツールは別の未完了作業として保全している。
+単体46件とreleaseチェックの成功はあるが、独立レビューの終了判定・レポート
+確定時の指摘と、変更後のmacOS CI検証は未完了。製品完成率は算出しない。

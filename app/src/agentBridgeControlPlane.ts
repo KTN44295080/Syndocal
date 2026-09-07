@@ -76,6 +76,9 @@ export async function executeAgentBridgeCanonicalOperation(
     || request === null || typeof request !== "object" || Array.isArray(request)) {
     throw new Error("Canonical operation id and typed request object are required.");
   }
+  if (!Object.hasOwn(CANONICAL_TAURI_COMMANDS, operationId)) {
+    throw new Error("Canonical operation is not executable through the reviewed adapter set.");
+  }
   const command = CANONICAL_TAURI_COMMANDS[
     operationId as keyof typeof CANONICAL_TAURI_COMMANDS
   ];
