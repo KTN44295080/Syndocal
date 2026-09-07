@@ -23,6 +23,8 @@ use fixture_profile_contract::{
 };
 mod native_thumbnail_work;
 mod native_thumbnail_dispatch;
+#[cfg(test)]
+mod native_thumbnail_render_tests;
 mod media_asset_preview_contract;
 use media_asset_preview_contract::{
     media_asset_thumbnail_snapshot, validate_media_asset_preview_position,
@@ -76589,8 +76591,9 @@ async fn get_video_layer_thumbnail(
         let snapshot = engine.snapshot();
         let mut renderer = native_thumbnail_work::lock_renderer(&renderer, cancel)?;
         renderer.frame_provider_mut().set_bpm(Some(snapshot.clock.bpm));
+        let cancellation = || cancel.load(Ordering::Acquire);
         renderer
-            .render_layer_preview(&snapshot.video, layer_id, width, height)
+            .render_layer_preview_cancellable(&snapshot.video, layer_id, width, height, &cancellation)
             .map_err(|error| format!("{error:?}"))
     })
     .await
@@ -76777,11 +76780,28 @@ fn render_media_asset_preview_from_private_copy(
     width: u32,
     height: u32,
 ) -> Result<video::VideoFrame, String> {
+    render_media_asset_preview_from_private_copy_with_cancellation(
+        asset, private_copy, position_ms, width, height, None,
+    )
+}
+
+fn render_media_asset_preview_from_private_copy_with_cancellation(
+    asset: &MediaAssetSummary,
+    private_copy: &PrivateMediaSnapshot,
+    position_ms: u64,
+    width: u32,
+    height: u32,
+    cancellation: Option<&dyn video::VideoRenderCancellation>,
+) -> Result<video::VideoFrame, String> {
     let snapshot = media_asset_thumbnail_snapshot(asset, &private_copy.path, position_ms);
     let mut renderer = new_vj_preview_renderer();
-    renderer
-        .render_layer_preview(&snapshot, asset.id, width, height)
-        .map_err(|error| format!("{error:?}"))
+    match cancellation {
+        Some(cancellation) => renderer.render_layer_preview_cancellable(
+            &snapshot, asset.id, width, height, cancellation,
+        ),
+        None => renderer.render_layer_preview(&snapshot, asset.id, width, height),
+    }
+    .map_err(|error| format!("{error:?}"))
 }
 
 fn render_media_asset_thumbnail(
@@ -76793,7 +76813,10 @@ fn render_media_asset_thumbnail(
 ) -> Result<video::VideoFrame, String> {
     let private_copy = create_media_asset_preview_private_copy_with_cancel(&asset, cancel)?;
     native_thumbnail_work::ensure_not_cancelled(cancel)?;
-    render_media_asset_preview_from_private_copy(&asset, &private_copy, position_ms, width, height)
+    let cancellation = || cancel.load(Ordering::Acquire);
+    render_media_asset_preview_from_private_copy_with_cancellation(
+        &asset, &private_copy, position_ms, width, height, Some(&cancellation),
+    )
 }
 
 fn ensure_media_asset_thumbnail_still_authoritative(

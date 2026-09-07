@@ -29,6 +29,7 @@ mod gpu_surface;
 mod hap_decoder;
 mod isf_runtime;
 mod libav_decoder;
+mod layer_thumbnail_render;
 mod show_spout_aspect_fit;
 mod video_render_cancellation;
 
@@ -3862,42 +3863,7 @@ impl<P: VideoFrameProvider> VideoPreviewRenderer<P> {
         width: u32,
         height: u32,
     ) -> Result<VideoFrame, VideoPreviewError> {
-        if width == 0 || height == 0 {
-            return Err(VideoPreviewError::InvalidSize);
-        }
-        let layer = snapshot
-            .layers
-            .iter()
-            .find(|layer| layer.id == layer_id)
-            .ok_or(VideoPreviewError::MissingLayer { layer_id })?;
-        let state = sanitize_layer_state(layer.state.clone());
-        let position_ms = if state.position_ms > 0 {
-            state.position_ms
-        } else {
-            state.loop_start_ms
-        };
-        let plan = CompositionPlan {
-            composition_id: 0,
-            label: format!("{} Thumbnail", layer.label),
-            output_ids: Vec::new(),
-            master_opacity: 1.0,
-            blackout: false,
-            layers: vec![CompositionLayerPlan {
-                layer_id,
-                label: layer.label.clone(),
-                source: layer.source.clone(),
-                blend_mode: VideoBlendMode::Normal,
-                opacity: 1.0,
-                position_ms,
-                transform: state.transform,
-                color: state.color,
-                fx: state.fx,
-            }],
-        };
-        self.prepare_frames(snapshot, &[layer_id], width, height)?;
-        self.runtime
-            .compose_plan(&plan, width, height)
-            .map_err(VideoPreviewError::Runtime)
+        self.render_layer_thumbnail(snapshot, layer_id, width, height, None)
     }
 
     pub fn render_output(
