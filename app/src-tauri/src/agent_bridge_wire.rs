@@ -3,6 +3,59 @@ use serde_json::Value;
 
 pub(super) const MAX_REQUEST_BYTES: usize = 64 * 1024;
 pub(super) const MAX_RESULT_BYTES: usize = 255 * 1024;
+pub(super) const CANONICAL_OPERATION_IDS: &[&str] = &[
+    "syndocal.query.control_plane.registry.v1",
+    "syndocal.query.control_plane.canonical_registry.v3",
+    "syndocal.query.control_plane.schemas.v1",
+    "syndocal.query.control_plane.capabilities.v1",
+    "syndocal.query.project.authority.v1",
+    "syndocal.query.runtime.generations.v1",
+    "syndocal.query.runtime.timeline.transport.authority.v1",
+    "syndocal.query.runtime.timeline.loop.authority.v1",
+    "syndocal.query.runtime.timeline.follow.abort.authority.v1",
+    "syndocal.query.output.control.authority.v1",
+    "syndocal.query.output.dsf2026_artnet_acceptance_probe.status.v1",
+    "syndocal.query.output.display.add.authority.v1",
+    "syndocal.query.output.ownership.v1",
+    "syndocal.query.video.display_monitors.v1",
+    "syndocal.query.video.camera_profiles.v1",
+    "syndocal.query.video.camera_profile_probe.v1",
+    "syndocal.query.video.output_window_observation.v1",
+    "syndocal.query.events.observations.v1",
+    "syndocal.effects.set_enabled.v1",
+    "syndocal.runtime.timeline.transport.set_playing.v1",
+    "syndocal.runtime.timeline.loop.commit.v1",
+    "syndocal.runtime.timeline.follow.abort.v1",
+    "syndocal.safety.blackout.engage.v1",
+    "syndocal.output.blackout.release.v2",
+    "syndocal.output.blackout.set.v2",
+    "syndocal.output.ownership.arm.v2",
+    "syndocal.output.standby.takeover.v2",
+    "syndocal.output.display.add.v2",
+    "syndocal.output.display.window.set_open.v2",
+    "syndocal.output.video.composition.assign.v2",
+    "syndocal.output.show_artnet_loopback_route.enable.v1",
+    "syndocal.output.show_serial_dmx_s0_route.enable.v1",
+    "syndocal.output.show_serial_dmx_s0_route.stop.v1",
+    "syndocal.output.show_spout_outputs.enable.v2",
+    "syndocal.output.show_spout_outputs.reset.v1",
+    "syndocal.output.dsf2026_artnet_acceptance_probe.send.v1",
+    "syndocal.output.dsf2026_artnet_acceptance_probe.reconcile.v1",
+    "syndocal.output.enable.v2",
+    "syndocal.output.lease.acquire.v2",
+    "syndocal.output.lease.renew.v2",
+    "syndocal.output.lease.recover.v2",
+    "syndocal.output.lease.relinquish.v2",
+    "syndocal.output.lease.force_transfer.v2",
+    "syndocal.cue_lists.reorder.v1",
+    "syndocal.cue_lists.rename.v1",
+    "syndocal.cue_lists.delete.v1",
+    "syndocal.scenes.create.v1",
+];
+
+pub(super) fn canonical_operation_is_mutation(operation_id: &str) -> bool {
+    !operation_id.starts_with("syndocal.query.")
+}
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -33,6 +86,8 @@ pub(super) enum Command {
     ControlPlaneCapabilities(Empty),
     #[serde(rename = "recording.get_status")]
     RecordingStatus(Empty),
+    #[serde(rename = "control_plane.execute")]
+    ControlPlaneExecute(CanonicalOperation),
 }
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -87,6 +142,13 @@ pub(super) struct Status {
     #[serde(rename = "requestId")]
     pub request_id: String,
 }
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(super) struct CanonicalOperation {
+    #[serde(rename = "operationId")]
+    pub operation_id: String,
+    pub request: Value,
+}
 
 pub(super) fn valid_uuid(value: &str) -> bool {
     value.len() == 36
@@ -114,6 +176,7 @@ impl Request {
                 | "runtime.get"
                 | "control_plane.get_capabilities"
                 | "recording.get_status"
+                | "control_plane.execute"
         ) {
             return Err("unknown_method");
         }
@@ -165,6 +228,15 @@ impl Request {
                         .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
                 {
                     return Err("invalid_project_fence");
+                }
+            }
+            Command::ControlPlaneExecute(value) => {
+                if value.operation_id.is_empty()
+                    || value.operation_id.len() > 512
+                    || !CANONICAL_OPERATION_IDS.contains(&value.operation_id.as_str())
+                    || !value.request.is_object()
+                {
+                    return Err("invalid_canonical_operation");
                 }
             }
             Command::Status(value) if !valid_uuid(&value.request_id) => {

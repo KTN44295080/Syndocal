@@ -34308,6 +34308,37 @@ html[data-window-mode="fullscreen"] .desktopResizeZones {
   grid-column: 1 / -1;
 }
 
+/* Keep the compact source rail usable at every supported desktop height. The
+   audio section is a real grid row, while the longer composition/output
+   editors own their internal scrollports; no child is painted outside its
+   hit surface. */
+.layoutSetup.setupMode-video .videoSetupSidebar {
+  grid-template-rows: minmax(0, 1fr) auto minmax(0, 1fr) minmax(180px, auto);
+  overflow: hidden auto;
+}
+
+.layoutSetup.setupMode-video .videoSetupSidebar > .compositionList,
+.layoutSetup.setupMode-video .videoSetupSidebar > .videoSetupDisclosure,
+.layoutSetup.setupMode-video .videoSetupSidebar > .videoOutputCreateSurface,
+.layoutSetup.setupMode-video .videoSetupSidebar > .setupOutputAudioInput {
+  min-height: 0;
+}
+
+.layoutSetup.setupMode-video .videoSetupSidebar > .compositionList,
+.layoutSetup.setupMode-video .videoSetupSidebar > .videoSetupDisclosure > .videoCompositionForm,
+.layoutSetup.setupMode-video .videoSetupSidebar > .videoOutputCreateSurface > .videoOutputForm {
+  overflow: auto;
+}
+
+.layoutSetup.setupMode-video .videoSetupSidebar > .videoSetupDisclosure,
+.layoutSetup.setupMode-video .videoSetupSidebar > .videoOutputCreateSurface {
+  overflow: hidden;
+}
+
+.layoutSetup.setupMode-video .videoSetupSidebar > .setupOutputAudioInput {
+  min-height: 180px;
+}
+
 .layoutControl .liveControlPanel {
   grid-template-rows: auto auto auto minmax(0, 1fr) auto;
 }
@@ -38302,7 +38333,7 @@ a[href]:focus-visible,
   grid-column: 1;
   grid-row: 2;
   grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: minmax(0, 1fr);
+  grid-template-rows: minmax(180px, 0.82fr) minmax(180px, 1fr);
   min-width: 0;
   min-height: 0;
   overflow: hidden;
@@ -38323,6 +38354,16 @@ a[href]:focus-visible,
   min-height: 0;
   overflow: hidden;
   border-bottom: 0;
+}
+
+.layout.layoutSharedWorkspace.layoutControl.controlModeMixer
+  > .videoControlPanelLibrary
+  .videoClipSlotBankPanel {
+  grid-column: 1;
+  grid-row: 2;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
 }
 
 .layout.layoutSharedWorkspace.layoutControl.controlModeMixer
@@ -38908,12 +38949,11 @@ button.timelineExternalSourceCard:active,
     min-height: 44px;
   }
 
-  /* The source/tool rail is its own scrollport.  Layout containment keeps
-     its intentionally taller composition/output tool list from contributing
-     scrollable overflow to the fixed application shell while preserving the
-     existing internal rail scroll and all authored hit-target sizes. */
+  /* The source/tool rail is its own scrollport. Do not apply layout
+     containment here: it suppresses the intrinsic height of the disclosure
+     and audio controls, leaving painted children outside their hit surface. */
   .layoutSetup.setupMode-video .videoSetupSidebar {
-    contain: layout;
+    contain: none;
   }
 }
 

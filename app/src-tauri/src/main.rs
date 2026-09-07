@@ -59,11 +59,13 @@ mod live_video_monitor_packet;
 use live_video_monitor_packet::*;
 mod video_recording_lifecycle;
 mod video_recording_runtime;
+mod video_recording_renderer_process;
 use video_recording_runtime::{
     stop_video_output_recording_runtime, VideoRecordingRuntime, VideoRecordingStatus,
 };
 mod video_recording;
 use video_recording::{run_video_output_recording, RecordingAudioInput, VideoOutputRecordingContext};
+use video_recording::RecordingExternalFrameSources;
 #[cfg(test)]
 use video_recording::{
     configure_recording_audio_inputs, ffmpeg_atempo_filter, finish_video_recording_status,
@@ -76295,11 +76297,20 @@ fn start_video_output_recording(
         audio_included: !audio_inputs.is_empty(),
         audio_track_count: audio_inputs.len(),
         started_unix_ms: Some(current_unix_ms().min(u64::MAX as u128) as u64),
+        renderer_process_isolated: true,
+        renderer_force_termination: true,
+        stop_deadline_ms: video_recording_lifecycle::TOTAL_STOP_DEADLINE.as_millis() as u64,
         last_error: None,
     }));
     let worker_stop = Arc::clone(&stop);
     let worker_status = Arc::clone(&status);
-    let renderer = Arc::clone(&state.video_preview);
+    let input_sources = RecordingExternalFrameSources::new(
+        Arc::clone(&state.capture_inputs),
+        #[cfg(feature = "ndi")]
+        Arc::clone(&state.ndi_inputs),
+        #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+        Arc::clone(&state.spout_inputs),
+    );
     let engine = state.engine.clone();
     let width = output.width;
     let height = output.height;
@@ -76308,7 +76319,7 @@ fn start_video_output_recording(
         .spawn(move || {
             run_video_output_recording(VideoOutputRecordingContext {
                 engine,
-                renderer,
+                input_sources,
                 output_id,
                 path,
                 width,
@@ -128979,6 +128990,13 @@ include!("tests/live_audio_input_tests.rs");
 mod video_recording_runtime_tests;
 
 fn main() {
+    if video_recording_renderer_process::worker_cli_requested(env::args_os().skip(1)) {
+        if let Err(error) = video_recording_renderer_process::run_worker() {
+            eprintln!("Recording renderer worker failed: {error}");
+            std::process::exit(1);
+        }
+        return;
+    }
     if updater_release_identity_cli_requested(env::args_os().skip(1)) {
         match application_update_release_identity_json() {
             Ok(identity) => {

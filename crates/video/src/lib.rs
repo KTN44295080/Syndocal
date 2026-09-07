@@ -7847,10 +7847,10 @@ fn apply_video_output_mapping(frame: VideoFrame, mapping: &VideoOutputMapping) -
                 continue;
             }
 
-            let source_x = ((src_x + 0.5) * frame.width as f32)
+            let source_x = ((src_x + 0.5) * frame.width as f32 + 1.0e-6)
                 .floor()
                 .clamp(0.0, (frame.width - 1) as f32) as u32;
-            let source_y = ((src_y + 0.5) * frame.height as f32)
+            let source_y = ((src_y + 0.5) * frame.height as f32 + 1.0e-6)
                 .floor()
                 .clamp(0.0, (frame.height - 1) as f32) as u32;
             let src_index = ((source_y * frame.width + source_x) * 4) as usize;
@@ -12576,7 +12576,10 @@ mod tests {
 
         let frame = renderer.render_output(&snapshot, 9).unwrap();
         assert_eq!(frame.data, vec![2, 0, 0, 255, 2, 0, 0, 255]);
-        assert_eq!(renderer.frame_provider().retained, vec![vec![2], vec![2]]);
+        // Retention follows the full snapshot so alternating outputs cannot
+        // evict each other's decoder sessions. Actual decode requests remain
+        // scoped to the routed layer below.
+        assert_eq!(renderer.frame_provider().retained, vec![vec![1, 2], vec![1, 2]]);
         assert_eq!(renderer.frame_provider().requested, vec![2, 2]);
 
         snapshot.outputs[0].blackout = true;
@@ -12585,14 +12588,14 @@ mod tests {
         assert!(prepared.frames.is_empty());
         let frame = renderer.render_output(&snapshot, 9).unwrap();
         assert_eq!(frame.data, vec![0, 0, 0, 255, 0, 0, 0, 255]);
-        assert_eq!(renderer.frame_provider().retained, vec![vec![2], vec![2]]);
+        assert_eq!(renderer.frame_provider().retained, vec![vec![1, 2], vec![1, 2]]);
         assert_eq!(renderer.frame_provider().requested, vec![2, 2]);
 
         snapshot.outputs[0].blackout = false;
         snapshot.outputs[0].enabled = false;
         let frame = renderer.render_output(&snapshot, 9).unwrap();
         assert_eq!(frame.data, vec![0, 0, 0, 255, 0, 0, 0, 255]);
-        assert_eq!(renderer.frame_provider().retained, vec![vec![2], vec![2]]);
+        assert_eq!(renderer.frame_provider().retained, vec![vec![1, 2], vec![1, 2]]);
         assert_eq!(renderer.frame_provider().requested, vec![2, 2]);
     }
 

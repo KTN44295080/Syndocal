@@ -90,7 +90,7 @@ async function runSavedCatalogueBarrierScenario(dependencies, {
   await waitForClientCondition(
     client,
     `(() => {
-      const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar');
+      const rail = document.querySelector('.liveAudioInputBar');
       const backend = rail?.querySelector('[data-live-audio-control="backend"]');
       const action = rail?.querySelector('[data-live-audio-action="transport"]');
       const saved = rail?.querySelector('[data-live-audio-saved-state]');
@@ -163,7 +163,7 @@ async function runSavedCatalogueBarrierScenario(dependencies, {
     await waitForClientCondition(
       client,
       `(() => {
-        const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar');
+      const rail = document.querySelector('.liveAudioInputBar');
         const device = rail?.querySelector('[data-live-audio-control="device"]');
         const action = rail?.querySelector('[data-live-audio-action="transport"]');
         const saved = rail?.querySelector('[data-live-audio-saved-state]');
@@ -279,7 +279,7 @@ async function runSavedDeviceCatalogueFailureScenario(dependencies, {
   await waitForClientCondition(
     client,
     `(() => {
-      const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar');
+      const rail = document.querySelector('.liveAudioInputBar');
       const device = rail?.querySelector('[data-live-audio-control="device"]');
       const action = rail?.querySelector('[data-live-audio-action="transport"]');
       const saved = rail?.querySelector('[data-live-audio-saved-state]');
@@ -304,7 +304,7 @@ async function runSavedDeviceCatalogueFailureScenario(dependencies, {
   await waitForClientCondition(
     client,
     `(() => {
-      const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar');
+      const rail = document.querySelector('.liveAudioInputBar');
       const device = rail?.querySelector('[data-live-audio-control="device"]');
       const action = rail?.querySelector('[data-live-audio-action="transport"]');
       const saved = rail?.querySelector('[data-live-audio-saved-state]');
@@ -371,7 +371,7 @@ async function runSavedDeviceCatalogueFailureScenario(dependencies, {
   await waitForClientCondition(
     client,
     `(() => {
-      const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar');
+      const rail = document.querySelector('.liveAudioInputBar');
       const device = rail?.querySelector('[data-live-audio-control="device"]');
       const action = rail?.querySelector('[data-live-audio-action="transport"]');
       const saved = rail?.querySelector('[data-live-audio-saved-state]');
@@ -544,7 +544,7 @@ async function runColdSavedDeviceCatalogueFailureScenario(dependencies, {
   await waitForClientCondition(
     client,
     `(() => {
-      const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar');
+      const rail = document.querySelector('.liveAudioInputBar');
       const device = rail?.querySelector('[data-live-audio-control="device"]');
       const action = rail?.querySelector('[data-live-audio-action="transport"]');
       const saved = rail?.querySelector('[data-live-audio-saved-state]');
@@ -659,7 +659,7 @@ export async function runLiveAudioBackendDisappearanceContract({
   await waitForClientCondition(
     client,
     `(() => {
-      const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar');
+      const rail = document.querySelector('.liveAudioInputBar');
       return rail?.getAttribute('data-live-audio-backend') === 'wasapi_shared' &&
         [...(rail?.querySelector('[data-live-audio-control="device"]')?.options ?? [])]
           .some((option) => option.value === 'viewport-wasapi-studio-g1');
@@ -705,7 +705,7 @@ export async function runLiveAudioBackendDisappearanceContract({
   await waitForClientCondition(
     client,
     `(() => {
-      const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar');
+      const rail = document.querySelector('.liveAudioInputBar');
       const backend = rail?.querySelector('[data-live-audio-control="backend"]');
       const device = rail?.querySelector('[data-live-audio-control="device"]');
       const action = rail?.querySelector('[data-live-audio-action="transport"]');
@@ -770,7 +770,7 @@ export async function runLiveAudioBackendDisappearanceContract({
   await waitForClientCondition(
     client,
     `(() => {
-      const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar');
+      const rail = document.querySelector('.liveAudioInputBar');
       return window.__syndocalLiveAudioMock?.asioGeneration === 1 &&
         rail?.getAttribute('data-live-audio-backend') === 'asio' &&
         [...(rail?.querySelector('[data-live-audio-control="device"]')?.options ?? [])]
@@ -818,7 +818,7 @@ export async function runLiveAudioBackendDisappearanceContract({
   await waitForClientCondition(
     client,
     `(() => {
-      const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar');
+      const rail = document.querySelector('.liveAudioInputBar');
       const backend = rail?.querySelector('[data-live-audio-control="backend"]');
       const device = rail?.querySelector('[data-live-audio-control="device"]');
       const action = rail?.querySelector('[data-live-audio-action="transport"]');
@@ -888,7 +888,7 @@ export async function runLiveAudioBackendDisappearanceContract({
   await waitForClientCondition(
     client,
     `(() => {
-      const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar');
+      const rail = document.querySelector('.liveAudioInputBar');
       const backend = rail?.querySelector('[data-live-audio-control="backend"]');
       const device = rail?.querySelector('[data-live-audio-control="device"]');
       const action = rail?.querySelector('[data-live-audio-action="transport"]');
@@ -956,7 +956,7 @@ export async function runLiveAudioBackendDisappearanceContract({
   await waitForClientCondition(
     client,
     `(() => {
-      const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar');
+      const rail = document.querySelector('.liveAudioInputBar');
       const device = rail?.querySelector('[data-live-audio-control="device"]');
       const action = rail?.querySelector('[data-live-audio-action="transport"]');
       return window.__syndocalLiveAudioMock?.asioGeneration === 2 &&
@@ -1020,7 +1020,7 @@ export async function runLiveAudioBackendDisappearanceContract({
   await waitForClientCondition(
     client,
     `(() => {
-      const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar');
+      const rail = document.querySelector('.liveAudioInputBar');
       const device = rail?.querySelector('[data-live-audio-control="device"]');
       const action = rail?.querySelector('[data-live-audio-action="transport"]');
       const saved = rail?.querySelector('[data-live-audio-saved-state]');

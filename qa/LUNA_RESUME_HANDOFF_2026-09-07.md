@@ -269,13 +269,16 @@ Suggested continuation prompt:
 > libx264対応FFmpegでの実保存検証、native検証、独立レビュー、commit/pushまで
 > 進めてください。Build Tools正式対応は承認済み。実機出力は操作しないでください。
 
-## 2026-09-07 current source checkpoint
+## 2026-09-07 pre-final checkpoint (superseded)
+
+この節は最終補正前の履歴であり、現在の判定は下の `final continuation` と
+`final verification correction` を正とする。
 
 上記の旧記録に残る「process tree / total deadline / localization未完了」は、
 現行ソースでは次の実装・検証で更新されている。履歴としての旧記述は削除せず、
 この節を現在の引き継ぎ状態とする。
 
-- 録画フィルタは正確なBuild Tools MSVC 14.44.35207 linkerで
+- 当時の録画フィルタは正確なBuild Tools MSVC 14.44.35207 linkerで
   `56 passed / 6 ignored / 0 failed`。停止中rendererの協調キャンセル、stdin/
   stderrのWindows I/Oキャンセル、FFmpeg直接子の終了確認、Job Objectによる
   子孫回収、10秒のworker total-stop deadlineとnamed reaper移管を含む。
@@ -287,7 +290,7 @@ Suggested continuation prompt:
 - H.264/AAC実MP4は `1/1`、合成30分A/Vは `1/1`。後者は54,000 frames、
   start/end drift `0.0ms`、first/middle/last luma `255/0/255`、audio peak
   `4276/0/4123`。実show・カメラ・物理デバイスの受入証明とは区別する。
-- `cargo test -p video --locked` は現行でも `171 passed / 3 failed / 3 ignored`。
+- この時点の `cargo test -p video --locked` は `171 passed / 3 failed / 3 ignored`。
   失敗は `output_preview_renderer_requests_only_routed_layers_and_skips_blackout_decode`,
   `gpu_compositor::tests::gpu_compositor_matches_cpu_transform_crop_and_source_size`,
   `gpu_compositor::tests::gpu_output_mapping_matches_cpu_aspect_modes` の既存
@@ -295,12 +298,12 @@ Suggested continuation prompt:
 - localizationは `3693/3693 (100.0%)`、unprotected bare user-data labels `0`。
   Setup I/Oは固定三画面レイアウトのまま、接続カードを一列の要約表示へ整理した。
 - backend/MCPは専用モジュールへ分離し、canonical registryのbounded capability
-  discoveryとread-only recording statusを追加。MCPは8 typed tools、実EXEで
+  discoveryとread-only recording statusを追加した時点で、MCPは8 typed tools、実EXEで
   initialize/tools/list、capability/statusを `pending→completed` として確認した。
   `47 canonical operations / 1606 source inventory` を返し、FailClosedは
   discovery-only。動的Tauri invoke、script、DOM操作、独自retryは追加していない。
 - native no-bundle buildは成功。`target/release/syndocal.exe`、version
-  `1.2.0-alpha.69`、SHA-256 `AC6C2F786E5C0FFACCD379392C3BE850F11A6977711F67564EB28812A4179CE7`。
+  当時の `1.2.0-alpha.69`、SHA-256 `AC6C2F786E5C0FFACCD379392C3BE850F11A6977711F67564EB28812A4179CE7`。
   exact checkout版で一つのresponsive/maximized `Syndocal` window、
   `physicalOutputOperations=0`を確認し、そのPIDだけ停止した。
 
@@ -308,3 +311,70 @@ Suggested continuation prompt:
 in-process命令の強制中断、およびcanonical registryのFailClosed領域を含む
 製品全体AI parityである。これは安全境界であり、今回のbounded implementation
 を「全製品操作がMCPで完了」と誤表示しない。
+
+## 2026-09-07 final continuation — current source and acceptance
+
+上記の pre-final checkpoint を、今回の最終検証結果で更新する。旧記録の
+数値は履歴として保持し、この節を現在の候補に対する判定とする。
+
+- Full video は `174 passed / 0 failed / 3 ignored`。旧来の3失敗
+  (`output_preview_renderer_requests_only_routed_layers_and_skips_blackout_decode`,
+  `gpu_compositor_matches_cpu_transform_crop_and_source_size`,
+  `gpu_output_mapping_matches_cpu_aspect_modes`) は、GPU source sampling、
+  output mapping、preview retentionの境界を修正して全て通過した。残る3 ignored
+  は既存のGPU・出力経路比較のignored条件で、今回の変更による失敗ではない。
+- 録画はrendererを `--syndocal-recording-renderer-worker` の長寿命子プロセスへ
+  分離した。親はencoderと最新の外部入力、子は同期decoder/HAP/libav/GPU/effect
+  renderを所有する。Stop/deadline watchdog、Job Objectによる子孫回収、10秒の
+  total-stop deadline、250msのreap確認を分離責務として実装した。録画フィルタは
+  直列実行で `57 passed / 0 failed / 6 ignored`。renderer worker回帰2/2、
+  descendant process-tree回帰1/1、実H.264/AAC MP4 1/1、合成30分A/V 1/1
+  (54,000 frames、start/end drift 0.0ms)も通過した。
+- MCPは9 typed tools、47 reviewed canonical operationsの静的typed adapter、
+  bounded capability discovery、read-only recording statusを提供する。実EXEで
+  descriptor/PID/executable identity、MCP initialize、tools/list、capabilityと
+  recording statusの `pending -> completed` を確認した。未レビュー・FailClosed
+  操作、動的Tauri invoke、script/DOM操作、独自retryは実行できない。
+- 現行release artifactは `target/release/syndocal.exe`、version
+  `1.2.0-alpha.69`、SHA-256
+  `9001B78E509B72927345BE00E6F91B292AF59CA6B9C1289CFC4DAB5A645AA4D8`。
+  exact checkout版を起動し、PID 7124、title `Syndocal`、responsive/maximized、
+  responsive/maximizedを確認後、そのPIDだけ停止した。physical outputは起動
+  受入中に有効化していない。publisher/companyは `Seraf() / KTN`。
+- `cargo test -p io --locked -- --test-threads=1` は `180 passed / 0 failed /
+  2 ignored`。現ホストの安全な列挙では ASUSカメラ3台、virtual MIDIのみを検出し、
+  serial DMX/Enttec/COMポートと物理MIDIは検出できなかった。ASUS cameraの
+  DirectShow 1280x720 NV12/30fpsは、production workerのstart/stop 2回を1/1で
+  確認した。実DMX、物理MIDI操作、venue/show総合受入は機材・会場がないため未実施。
+- Authenticodeは `app/scripts/sign-windows-artifact.mjs` と `sign:windows` を追加し、
+  SDK signtool、SHA-256、timestamp、`/verify /pa /all /tw` をfail-closedで実行する。
+  現ホストのCurrentUser証明書ストアに証明書・秘密鍵がなく、artifactの状態は
+  `NotSigned`。鍵を捏造せず、信頼済み署名完了とは主張しない。
+- localizationは `3693/3693 (100.0%)`、unprotected bare user-data labels `0`。
+  fixed three-screen layoutとSetup I/Oの要約表示は維持されている。
+
+## 2026-09-07 final verification correction
+
+最終continuation後の直列再実行で、録画関連は `cargo test -p syndocal
+--locked recording -- --test-threads=1` が `57 passed / 0 failed / 6 ignored`、
+`video_recording` filter単体も `31 passed / 0 failed / 5 ignored` になった。
+継承stdinを保持した子孫を含む停止テストは10回連続で通過し、先行実行の一時的な
+1件失敗は再現しなかった。`cargo test -p video --locked` は
+`174 passed / 0 failed / 3 ignored`、`cargo test -p io --locked --
+--test-threads=1` は `180 passed / 0 failed / 2 ignored` である。
+
+現行UIのfocused受入はSetup Video 5サイズ、VJ Clip Bank 5サイズ、Live Audio
+英日10ケース、復元/FailClosed、MCP 15群、frontend invoke 456件、camera UI、
+`pnpm run check:release` が全て通過した。ASUS 5M webcamはcanonical
+DirectShow profile（NV12 1280x720/30fps）でproduction workerの2回start/stopを
+`1/1`で確認した。
+
+ネイティブ候補の現ハッシュは上記 `9001B78E...` であり、会社名は
+`Seraf() / KTN`。SDK `signtool.exe` の `/verify /pa /all /tw` 経路は存在するが、
+このホストに証明書/秘密鍵がないため状態は `NotSigned`。現ホストにserial
+DMX/Enttec/COMまたは物理MIDIはなく、実DMX、物理MIDI操作、会場での総合show受入は
+未実施である。loopbackや自己署名でこれらを完了扱いにしない。
+
+この候補でソース実装・ソフトウェア/native検証は完了した。外部設備が必要な
+実機/実show受入と、外部秘密情報が必要なAuthenticode署名だけは、現ホストで
+実行不能な境界として残る。

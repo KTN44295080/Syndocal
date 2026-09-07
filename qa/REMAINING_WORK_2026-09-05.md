@@ -23,14 +23,28 @@ snapshot生成時のpercentile重複sortと測定窓分離は
 続く軽量化は[Spout送信前の限定snapshot読取](SPOUT_OUTPUT_SNAPSHOT_2026-09-06.md)。
 一般snapshot/tick構築/深いdelta比較の残件とは区別する。
 
-## 現在の優先残件（2026-09-06、ユーザーの続行指示）
+## 以前の優先残件（2026-09-06時点）
+
+## 2026-09-07 current continuation
+
+今回の候補では、Full videoの旧3失敗を修正して `174 passed / 0 failed /
+3 ignored`、録画rendererを子プロセスへ分離して録画フィルタを
+`57 passed / 0 failed / 6 ignored`、MCPを9 tools・47 reviewed canonical
+operationsへ拡張した。release build/launch、MCP実EXE round-trip、localization
+`3693/3693`、I/O直列回帰 `180/0/2` も通過している。詳細は
+[Luna引き継ぎ](LUNA_RESUME_HANDOFF_2026-09-07.md)の final continuation を参照。
+
+残るのは実装不備ではなく、現ホストで外部設備・秘密情報を要する受入である。
+serial DMX/Enttec COMと物理MIDIは安全な列挙で不在、会場GPU/実show総合受入は
+未実施、Authenticodeは実証明書・秘密鍵不在のため未署名である。これらを
+ソフトウェアloopbackや自己署名証明書で完了扱いにしない。
 
 微小な性能改善を続ける前に、未解決の動作を優先する。以下は今回の改善依頼に
 関係する具体的な残件であり、下段の製品ロードマップ全体を完了扱いにしない。
 
 | 優先 | 残件 | 完了条件・現状 |
 | --- | --- | --- |
-| 1・部分解決 | 録画のencoder停止・回収 | [直接encoderの監視・終了](RECORDING_ENCODER_STOP_2026-09-06.md)を実装。[rendererロック待ちの停止対応](RECORDING_RENDERER_WAIT_2026-09-06.md)はテスト・native build/起動確認通過。[Windows診断pipeの停止対応](RECORDING_DIAGNOSTICS_CANCEL_2026-09-06.md)と[継承stdinの停止対応](RECORDING_STDIN_CANCEL_2026-09-06.md)は実pipe回帰・実FFmpeg保存・native build/起動確認通過。[実行中rendererの協調キャンセル](RECORDING_RENDERER_WAIT_2026-09-06.md)はデコーダ・レイヤー・コンポジション・transition/effect境界の実装とfocused testを追加。ただしin-process処理中の強制中断、子孫process tree、OSが終了確認を返さない場合の全停止期限は残件。既存250msはStop呼出しの待機上限のみ |
+| 1・実装完了、外部受入待ち | 録画のencoder停止・回収 | rendererを長寿命子プロセスへ分離し、親/子の責務を分離。Stop watchdog、Job Object子孫回収、10秒total-stop deadline、250ms reap確認を実装。録画フィルタ `57 passed / 0 failed / 6 ignored`、renderer 2/2、tree 1/1、実H.264/AAC 1/1、合成30分A/V 1/1。実showの運用受入は別境界。 |
 | 2・Windows限定完了 | 録画の既存保存先の競合 | [Windows保存先の保全と復旧](RECORDING_PUBLICATION_2026-09-06.md)：検証済みhandleを保持し、競合相手を上書きしない二段階renameと次回予約時の復旧を実装。48件の録画テスト・実FFmpeg・native build/起動確認通過。電源断耐久性や録画全体の受入とは区別する |
 | 3・部分対応 | 肥大化コードの責務分離 | [project transactionの確定・取消処理](PROJECT_MUTATION_LIFECYCLE_2026-09-06.md)を独立controllerへ分離し、実行テスト・型チェック・レビュー・native build/起動確認通過。Appのポリシー・authority管理は維持。media lifecycleの追加分離は残件 |
 | 4 | 全量snapshot生成・差分比較の負荷 | 実showでclone、writer待機、delta生成とpayload量を分けて計測してから変更する。送信前限定読取の改善値を全体性能へ流用しない |
@@ -268,7 +282,7 @@ separate open boundaries.
 ## 2026-09-07 current continuation status
 
 The recording teardown boundary in the table above is now implemented and
-verified. The focused current filter is `56 passed / 6 ignored / 0 failed`, the
+verified. The focused current filter is `57 passed / 6 ignored / 0 failed`, the
 explicit H.264/AAC MP4 test is `1/1`, the synthetic 30-minute A/V test is `1/1`
 with 54,000 frames and 0.0 ms start/end drift, and the descendant process-tree
 regression is `1/1`. The three ignored subprocess helpers are invoked only by

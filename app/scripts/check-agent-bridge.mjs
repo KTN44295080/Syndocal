@@ -101,7 +101,7 @@ let groups = 0;
   assert.equal(capabilities.ok, true);
   assert.equal(capabilities.control_plane.canonical_operation_count, 1);
   assert.deepEqual(capabilities.control_plane.source_inventory_by_family, { tauri_command: 1 });
-  assert.deepEqual(capabilities.agent_bridge.operations.slice(-2), ['control_plane.get_capabilities', 'recording.get_status']);
+  assert.deepEqual(capabilities.agent_bridge.operations.slice(-3), ['control_plane.get_capabilities', 'recording.get_status', 'control_plane.execute']);
   const recordingStatus = await execute(async (command, args) => {
     assert.equal(command, 'video_output_recording_status');
     assert.deepEqual(args, undefined);
@@ -114,6 +114,25 @@ let groups = 0;
   assert.equal(recordingStatus.ok, true);
   assert.equal(recordingStatus.recording.active, true);
   assert.equal(recordingStatus.recording.frames_written, 12);
+  const canonical = await execute(async (command, args) => {
+    assert.equal(command, 'get_control_plane_query_capabilities');
+    assert.deepEqual(args, {});
+    return { supported: true };
+  }, request('control_plane.execute', {
+    operationId: 'syndocal.query.control_plane.capabilities.v1',
+    request: {},
+  }));
+  assert.deepEqual(canonical, {
+    ok: true,
+    operation_id: 'syndocal.query.control_plane.capabilities.v1',
+    result: { supported: true },
+  });
+  const rejectedCanonical = await execute(async () => assert.fail('unreviewed canonical operation must not invoke Tauri'), request('control_plane.execute', {
+    operationId: 'syndocal.query.not_reviewed.v1',
+    request: {},
+  }));
+  assert.equal(rejectedCanonical.ok, false);
+  assert.equal(rejectedCanonical.error.code, 'request_rejected');
   const failedRuntime = await execute(async (command) => {
     if (command === 'get_project_authority_bundle') return bundle();
     throw new Error('ownership observation unavailable');

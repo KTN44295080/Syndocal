@@ -1,5 +1,7 @@
-//! Authenticated loopback broker. Only renderer-owned fixture operations are exposed.
-//! Events are wake hints; the main renderer must claim the canonical request.
+//! Authenticated loopback broker. Reviewed renderer-owned control-plane
+//! operations are exposed through typed adapter commands; unreviewed source
+//! inventory remains discovery-only. Events are wake hints; the main renderer
+//! must claim the canonical request.
 #[path = "agent_bridge_ledger.rs"]
 mod ledger;
 #[path = "agent_bridge_storage.rs"]

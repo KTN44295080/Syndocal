@@ -17,6 +17,10 @@ fn command(method: &str) -> Command {
                 "checkpoint_hash": "a".repeat(64)
             }
         }),
+        "control_plane.execute" => serde_json::json!({
+            "operationId": "syndocal.query.control_plane.capabilities.v1",
+            "request": {}
+        }),
         _ => {
             serde_json::json!({"fixtureId":1,"position":{"x":1,"y":2,"z":3},"rotation":{"pitch":0,"yaw":0,"roll":0},"expectedProject":{"project_epoch":0,"project_revision":0,"checkpoint_hash":"a".repeat(64)}})
         }
@@ -100,6 +104,28 @@ fn agent_bridge_wire_auth_methods_and_bounds_are_strict() {
             .unwrap(),
         Command::RecordingStatus(_)
     ));
+
+    let mut canonical = value.clone();
+    canonical["method"] = serde_json::json!("control_plane.execute");
+    canonical["params"] = serde_json::json!({
+        "operationId": "syndocal.query.control_plane.capabilities.v1",
+        "request": {}
+    });
+    assert!(matches!(
+        serde_json::from_value::<Request>(canonical.clone())
+            .unwrap()
+            .command()
+            .unwrap(),
+        Command::ControlPlaneExecute(_)
+    ));
+    canonical["params"]["operationId"] = serde_json::json!("syndocal.query.not_reviewed.v1");
+    assert_eq!(
+        serde_json::from_value::<Request>(canonical)
+            .unwrap()
+            .command()
+            .unwrap_err(),
+        "invalid_canonical_operation"
+    );
 
     let video = serde_json::json!({
         "token": "token",
@@ -231,6 +257,42 @@ fn agent_bridge_video_blackout_mutation_survives_reload_without_redispatch() {
     let (unknown, redispatch) = restarted.begin(&id(1), &command).unwrap();
     assert_eq!(unknown.status, "unknown");
     assert!(redispatch.is_none());
+    std::fs::remove_file(path).unwrap();
+    std::fs::remove_dir(directory).unwrap();
+}
+
+#[test]
+fn agent_bridge_canonical_reads_are_not_persisted_mutations_but_writes_are() {
+    let directory = std::env::temp_dir().join(format!(
+        "syndocal-agent-canonical-test-{}",
+        storage::random_hex(12).unwrap()
+    ));
+    std::fs::create_dir(&directory).unwrap();
+    let path = directory.join("ledger.json");
+    let mut ledger = ledger::Ledger::new(Some(path.clone())).unwrap();
+    let generation = ledger.register().unwrap();
+    let read = command("control_plane.execute");
+    let (pending, dispatch) = ledger.begin(&id(1), &read).unwrap();
+    assert_eq!(pending.status, "pending");
+    assert!(dispatch.is_some());
+    ledger.claim(generation, &id(1)).unwrap();
+    ledger
+        .complete(generation, &id(1), serde_json::json!({"ok": true}))
+        .unwrap();
+    let write = Command::ControlPlaneExecute(wire::CanonicalOperation {
+        operation_id: "syndocal.output.enable.v2".to_string(),
+        request: serde_json::json!({"request_id": id(2)}),
+    });
+    ledger.begin(&id(2), &write).unwrap();
+    drop(ledger);
+    let mut restarted = ledger::Ledger::new(Some(path.clone())).unwrap();
+    restarted.register().unwrap();
+    let (read_again, read_dispatch) = restarted.begin(&id(1), &read).unwrap();
+    assert_eq!(read_again.status, "pending");
+    assert!(read_dispatch.is_some());
+    let (write_again, write_dispatch) = restarted.begin(&id(2), &write).unwrap();
+    assert_eq!(write_again.status, "unknown");
+    assert!(write_dispatch.is_none());
     std::fs::remove_file(path).unwrap();
     std::fs::remove_dir(directory).unwrap();
 }

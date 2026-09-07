@@ -70,6 +70,10 @@ fn ndi_output_effect_render_context(
 
 pub struct NdiAwareVideoFrameDecoder {
     files: video::PreferredVideoFrameDecoder,
+    /// Frames supplied by the recording renderer broker. External inputs are
+    /// still captured by the parent transport, but the expensive composition
+    /// and effect work remains killable in the child process.
+    injected_frames: HashMap<u64, video::VideoFrame>,
     #[cfg(feature = "ndi")]
     ndi_inputs: NdiInputRegistry,
     #[cfg(feature = "ndi")]
@@ -83,6 +87,7 @@ impl NdiAwareVideoFrameDecoder {
     pub fn from_env() -> Self {
         Self {
             files: video::PreferredVideoFrameDecoder::from_env(),
+            injected_frames: HashMap::new(),
             #[cfg(feature = "ndi")]
             ndi_inputs: Arc::new(Mutex::new(HashMap::new())),
             #[cfg(feature = "ndi")]
@@ -116,6 +121,10 @@ impl NdiAwareVideoFrameDecoder {
         self
     }
 
+    pub fn replace_injected_frames(&mut self, frames: HashMap<u64, video::VideoFrame>) {
+        self.injected_frames = frames;
+    }
+
     pub fn diagnostics(&self) -> video::VideoDecoderDiagnostics {
         self.files.diagnostics()
     }
@@ -139,6 +148,8 @@ impl NdiAwareVideoFrameDecoder {
 impl video::VideoFrameDecoder for NdiAwareVideoFrameDecoder {
     fn retain_layers(&mut self, layer_ids: &[VideoLayerId]) {
         video::VideoFrameDecoder::retain_layers(&mut self.files, layer_ids);
+        self.injected_frames
+            .retain(|layer_id, _| layer_ids.contains(layer_id));
         #[cfg(feature = "ndi")]
         self.ndi_frames
             .retain(|layer_id, _| layer_ids.contains(layer_id));
@@ -151,6 +162,12 @@ impl video::VideoFrameDecoder for NdiAwareVideoFrameDecoder {
         &mut self,
         request: &video::VideoFrameRequest,
     ) -> Result<Option<video::VideoFrame>, video::VideoDecodeError> {
+        if let Some(frame) = self.injected_frames.get(&request.layer_id) {
+            let mut frame = frame.clone();
+            frame.layer_id = request.layer_id;
+            frame.pts_ms = request.position_ms;
+            return Ok(Some(frame));
+        }
         #[cfg(feature = "ndi")]
         if request.source.kind == VideoSourceKind::Ndi {
             let inputs = self

@@ -1,8 +1,25 @@
 # M4 External I/O Validation Matrix
 
-Updated: 2026-07-13
+Updated: 2026-09-07
 
 This is an engineering evidence record, not user documentation. README and release documentation remain deferred to M6.
+
+## Current host check — 2026-09-07
+
+The current release candidate was built and launched from the exact checkout.
+The native window was responsive and maximized, and no physical output route was
+enabled during the check. `cargo test -p io --locked -- --test-threads=1` passed
+`180 / 0 / 2` (passed / failed / ignored). The safe device inventory found ASUS
+5M, ASUS 13M AF, and ASUS IR cameras, plus virtual MIDI ports; no serial DMX/
+Enttec/COM device and no physical MIDI endpoint was present.
+
+The ASUS DirectShow camera was exercised through the production capture worker at
+1280x720 NV12/30fps. Two clean start/stop cycles passed (`1/1`). This updates the
+current camera evidence only; it does not replace venue capture, unplug/replug,
+physical MIDI interaction, DMX fixture output, or integrated show acceptance.
+Those rows remain external hardware gates. Existing historical FT232R/COM3,
+SMC-Mixer, NDI, and Spout evidence remains valid for its recorded device/date and
+must not be inferred as a current-host comprehensive acceptance.
 
 | Path | Automated or local evidence | Physical hardware evidence | Status |
 |---|---|---|---|

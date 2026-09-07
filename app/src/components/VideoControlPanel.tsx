@@ -467,6 +467,9 @@ export function VideoControlPanel(props: VideoControlPanelProps) {
             </Show>
           </div>
         </details>
+        <Show when={props.libraryOnly}>
+          <VideoClipSlotBankPanel {...props.clipSlotBank} />
+        </Show>
         <Show when={!props.libraryOnly}>
         <Show when={props.mixer}>
           <MixerDrawerBar id="audio-in" title="Audio In" status={audioInStatus()} open={audioInOpen()} onToggle={() => toggleDrawer("audio-in")} />

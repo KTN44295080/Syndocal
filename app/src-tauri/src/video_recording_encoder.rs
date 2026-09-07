@@ -16,7 +16,7 @@ mod diagnostics;
 #[path = "video_recording_encoder_stdin.rs"]
 mod input;
 #[path = "video_recording_encoder_process.rs"]
-mod process;
+pub(crate) mod process;
 
 const ENCODER_STOP_GRACE: Duration = Duration::from_secs(5);
 const DIAGNOSTICS_STOP_GRACE: Duration = Duration::from_millis(250);

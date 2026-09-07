@@ -11,6 +11,55 @@ const VERSION = '2025-11-25';
 const INPUT_LIMIT = 64 * 1024;
 const RESPONSE_LIMIT = 256 * 1024;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const CANONICAL_OPERATION_IDS = new Set([
+  'syndocal.query.control_plane.registry.v1',
+  'syndocal.query.control_plane.canonical_registry.v3',
+  'syndocal.query.control_plane.schemas.v1',
+  'syndocal.query.control_plane.capabilities.v1',
+  'syndocal.query.project.authority.v1',
+  'syndocal.query.runtime.generations.v1',
+  'syndocal.query.runtime.timeline.transport.authority.v1',
+  'syndocal.query.runtime.timeline.loop.authority.v1',
+  'syndocal.query.runtime.timeline.follow.abort.authority.v1',
+  'syndocal.query.output.control.authority.v1',
+  'syndocal.query.output.dsf2026_artnet_acceptance_probe.status.v1',
+  'syndocal.query.output.display.add.authority.v1',
+  'syndocal.query.output.ownership.v1',
+  'syndocal.query.video.display_monitors.v1',
+  'syndocal.query.video.camera_profiles.v1',
+  'syndocal.query.video.camera_profile_probe.v1',
+  'syndocal.query.video.output_window_observation.v1',
+  'syndocal.query.events.observations.v1',
+  'syndocal.effects.set_enabled.v1',
+  'syndocal.runtime.timeline.transport.set_playing.v1',
+  'syndocal.runtime.timeline.loop.commit.v1',
+  'syndocal.runtime.timeline.follow.abort.v1',
+  'syndocal.safety.blackout.engage.v1',
+  'syndocal.output.blackout.release.v2',
+  'syndocal.output.blackout.set.v2',
+  'syndocal.output.ownership.arm.v2',
+  'syndocal.output.standby.takeover.v2',
+  'syndocal.output.display.add.v2',
+  'syndocal.output.display.window.set_open.v2',
+  'syndocal.output.video.composition.assign.v2',
+  'syndocal.output.show_artnet_loopback_route.enable.v1',
+  'syndocal.output.show_serial_dmx_s0_route.enable.v1',
+  'syndocal.output.show_serial_dmx_s0_route.stop.v1',
+  'syndocal.output.show_spout_outputs.enable.v2',
+  'syndocal.output.show_spout_outputs.reset.v1',
+  'syndocal.output.dsf2026_artnet_acceptance_probe.send.v1',
+  'syndocal.output.dsf2026_artnet_acceptance_probe.reconcile.v1',
+  'syndocal.output.enable.v2',
+  'syndocal.output.lease.acquire.v2',
+  'syndocal.output.lease.renew.v2',
+  'syndocal.output.lease.recover.v2',
+  'syndocal.output.lease.relinquish.v2',
+  'syndocal.output.lease.force_transfer.v2',
+  'syndocal.cue_lists.reorder.v1',
+  'syndocal.cue_lists.rename.v1',
+  'syndocal.cue_lists.delete.v1',
+  'syndocal.scenes.create.v1',
+]);
 const record = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const exact = (v, keys, required = keys) => record(v)
   && Object.keys(v).every((k) => keys.includes(k)) && required.every((k) => Object.hasOwn(v, k));
@@ -32,6 +81,7 @@ export const toolDefinitions = [
   { name: 'syndocal_get_runtime_status', description: 'Read bounded project runtime diagnostics, timeline state, video outputs, and a separate output-ownership observation from the selected running Syndocal instance. This never changes output state.', inputSchema: schema({}), annotations: { readOnlyHint: true } },
   { name: 'syndocal_get_control_plane_capabilities', description: 'Read the backend-owned canonical operation registry as a bounded capability inventory. It reports which operations have an explicit local-window adapter; FailClosed entries are discovery-only and cannot be invoked through MCP.', inputSchema: schema({}), annotations: { readOnlyHint: true } },
   { name: 'syndocal_get_recording_status', description: 'Read bounded video recording status from the selected running Syndocal instance. This never starts, stops, finalizes, or replaces a recording.', inputSchema: schema({}), annotations: { readOnlyHint: true } },
+  { name: 'syndocal_execute_control_plane', description: 'Execute one of the 47 reviewed canonical backend operations through a static typed Tauri adapter. operationId must come from the capability registry and request must be that operation’s exact typed object. Unreviewed or FailClosed inventory entries are rejected. Supply a fresh requestId; if pending or unknown, query its status before any retry.', inputSchema: schema({ requestId: uuid, operationId: { type: 'string', minLength: 1, maxLength: 512 }, request: { type: 'object', additionalProperties: true } }), annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false } },
 ];
 
 const projectFence = (value) => exact(value, ['project_epoch', 'project_revision', 'checkpoint_hash'])
@@ -43,6 +93,10 @@ function validateArguments(name, args) {
   if (name === 'syndocal_get_runtime_status') return exact(args, []);
   if (name === 'syndocal_get_control_plane_capabilities') return exact(args, []);
   if (name === 'syndocal_get_recording_status') return exact(args, []);
+  if (name === 'syndocal_execute_control_plane') return exact(args, ['requestId', 'operationId', 'request'])
+    && typeof args.requestId === 'string' && UUID.test(args.requestId)
+    && typeof args.operationId === 'string' && args.operationId.length > 0 && args.operationId.length <= 512
+    && CANONICAL_OPERATION_IDS.has(args.operationId) && record(args.request);
   if (name === 'syndocal_get_fixture') return exact(args, ['fixtureId']) && integer(args.fixtureId) && args.fixtureId > 0;
   if (name === 'syndocal_get_request_status') return exact(args, ['requestId']) && typeof args.requestId === 'string' && UUID.test(args.requestId);
   if (name === 'syndocal_set_video_blackout') return exact(args, ['requestId', 'enabled', 'expectedProject'])
@@ -212,11 +266,14 @@ export function serve(options, input = process.stdin, output = process.stdout) {
     active = true;
     try {
       const args = params.arguments ?? {};
-      const mutation = params.name === 'syndocal_set_fixture_transform' || params.name === 'syndocal_set_video_blackout';
+      const mutation = params.name === 'syndocal_set_fixture_transform' || params.name === 'syndocal_set_video_blackout' || params.name === 'syndocal_execute_control_plane';
       const requestId = mutation ? args.requestId : randomUUID();
       const method = { syndocal_list_fixtures: 'fixtures.list', syndocal_get_fixture: 'fixtures.get', syndocal_set_fixture_transform: 'fixtures.set_transform', syndocal_set_video_blackout: 'output.set_video_blackout', syndocal_get_request_status: 'request.status', syndocal_get_runtime_status: 'runtime.get', syndocal_get_control_plane_capabilities: 'control_plane.get_capabilities', syndocal_get_recording_status: 'recording.get_status' }[params.name];
-      const nativeParams = mutation ? Object.fromEntries(Object.entries(args).filter(([key]) => key !== 'requestId')) : args;
-      const result = await nativeRequest(options, method, nativeParams, requestId, mutation);
+      const nativeMethod = params.name === 'syndocal_execute_control_plane' ? 'control_plane.execute' : method;
+      const nativeParams = params.name === 'syndocal_execute_control_plane'
+        ? { operationId: args.operationId, request: args.request }
+        : mutation ? Object.fromEntries(Object.entries(args).filter(([key]) => key !== 'requestId')) : args;
+      const result = await nativeRequest(options, nativeMethod, nativeParams, requestId, mutation);
       if (result.status !== 'completed') result.nextAction = 'Query syndocal_get_request_status with the original requestId. Do not automatically resubmit an unknown or pending mutation.';
       success({ content: [{ type: 'text', text: JSON.stringify(result) }], isError: result.status !== 'completed' || result.result?.ok !== true });
     } catch { success({ content: [{ type: 'text', text: 'Bridge request failed. No automatic retry was performed; query the original requestId.' }], isError: true }); }

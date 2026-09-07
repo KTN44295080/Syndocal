@@ -2723,6 +2723,9 @@ export default function App() {
     audio_included: false,
     audio_track_count: 0,
     started_unix_ms: null,
+    renderer_process_isolated: true,
+    renderer_force_termination: true,
+    stop_deadline_ms: 10_000,
     last_error: null,
   });
   const [liveAudioInputDevices, setLiveAudioInputDevices] = createSignal<LiveAudioInputDeviceSummary[]>([]);
@@ -4736,6 +4739,9 @@ export default function App() {
       audio_included: true,
       audio_track_count: 1,
       started_unix_ms: 1_700_000_000_000,
+      renderer_process_isolated: true,
+      renderer_force_termination: true,
+      stop_deadline_ms: 10_000,
       last_error: null,
     });
     setSnapshot((current) => ({

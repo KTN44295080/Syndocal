@@ -1647,6 +1647,9 @@ export interface VideoRecordingStatus {
   audio_included: boolean;
   audio_track_count: number;
   started_unix_ms?: number | null;
+  renderer_process_isolated: boolean;
+  renderer_force_termination: boolean;
+  stop_deadline_ms: number;
   last_error?: string | null;
 }
 

@@ -81,6 +81,20 @@ The v1.0 software release gate is complete. Physical Art-Net/sACN/serial wavefor
 
 v1.0 personal distribution is intentionally unsigned. Windows SmartScreen and macOS Gatekeeper instructions must remain in the user README. A public trusted release requires an Authenticode certificate and an Apple Developer ID/notarization secret; neither credential is stored in this repository.
 
+## Current alpha.69 signing gate — 2026-09-07
+
+The current candidate keeps the normalized publisher/company metadata
+`Seraf() / KTN`. `app/scripts/sign-windows-artifact.mjs` provides the bounded
+Authenticode path: it accepts only this checkout's `target/release/syndocal.exe`,
+uses SHA-256 file and signature verification, supports certificate-store or PFX
+selection, and requires timestamped `/verify /pa /all /tw` success before it
+reports signed.
+
+The current artifact is intentionally `NotSigned` because this host has no
+certificate/private key. No self-signed certificate was created and no unsigned
+artifact is represented as a trusted release. A real certificate/key and the
+release operator's signing authorization remain the only open signing gate.
+
 ## Signed updater readiness (v1.1)
 
 The application now embeds Tauri's minisign-verified updater and supports

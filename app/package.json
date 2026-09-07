@@ -96,6 +96,7 @@
     "check:warnings": "node scripts/check-warning-ratchet.mjs",
     "check:warnings:self-test": "node scripts/test-warning-ratchet.mjs",
     "check:tauri-build-wrapper": "node scripts/check-tauri-build-wrapper.mjs",
+    "sign:windows": "node scripts/sign-windows-artifact.mjs",
     "check:release-ui:browser": "pnpm run check:viewport && pnpm run check:vj-operator && pnpm run check:timeline-viewport",
     "check:release-ui": "pnpm run check:desktop-window && pnpm run check:release-ui:browser && pnpm run check:native-window",
     "check:scene-blocks": "node scripts/check-scene-block-helpers.mjs",

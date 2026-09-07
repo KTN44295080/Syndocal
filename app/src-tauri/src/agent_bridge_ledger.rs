@@ -1,6 +1,6 @@
 //! Bounded request identity and renderer incarnation authority. No engine access.
 use super::{
-    wire::{Command, Response},
+    wire::{canonical_operation_is_mutation, Command, Response},
     AgentBridgeDispatch,
 };
 use serde::{Deserialize, Serialize};
@@ -161,10 +161,13 @@ impl Ledger {
         if !self.available {
             return Ok((Response::rejected(id, "not_available"), None));
         }
-        let mutation = matches!(
-            command,
-            Command::SetTransform(_) | Command::SetVideoBlackout(_)
-        );
+        let mutation = match command {
+            Command::SetTransform(_) | Command::SetVideoBlackout(_) => true,
+            Command::ControlPlaneExecute(value) => {
+                canonical_operation_is_mutation(&value.operation_id)
+            }
+            _ => false,
+        };
         if mutation && self.durable.mutations.len() == MUTATION_ID_LIMIT {
             return Ok((Response::rejected(id, "ledger_capacity"), None));
         }

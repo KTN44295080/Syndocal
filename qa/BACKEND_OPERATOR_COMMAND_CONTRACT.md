@@ -49,18 +49,20 @@ WebSocketは単一の型付きCommand/Query Registryへのアダプタであり�
 
 ## 2026-09-07 backend/MCP capability continuation
 
-The backend now exposes the canonical operation/source inventory through the
+The backend exposes the canonical operation/source inventory through the
 trusted local-window command `get_control_plane_canonical_registry`. The MCP
-sidecar adds the read-only tools `syndocal_get_control_plane_capabilities` and
-`syndocal_get_recording_status`, for eight typed tools total. Capability output
-is bounded and reports exact derived adapters, source families, dispositions,
-and the execution boundary. `FailClosed` entries remain discovery-only.
+sidecar provides nine typed tools, including
+`syndocal_execute_control_plane` for the 47 explicitly reviewed canonical
+operations. Capability output is bounded and reports exact derived adapters,
+source families, dispositions, and the execution boundary. `FailClosed` entries
+remain discovery-only.
 
 The sidecar still has no dynamic command name, script, DOM, or arbitrary Tauri
-invoke escape hatch. Its executable operations remain the explicitly reviewed
-fixture transform and Video BO adapters; runtime, recording, registry, fixture,
-and request status are typed observations. This makes the available surface
-usable without Computer Use while preserving the fail-closed rule for the
-unreviewed remainder of the 456-command frontend inventory. Full-product AI
-parity remains an explicit future registry/adapter acceptance item, not an
-implicit claim from capability discovery.
+invoke escape hatch. Every canonical execution goes through the static
+operation-to-Tauri adapter map and the existing backend command validation,
+authority, lease, consent, and receipt paths. This makes the reviewed product
+surface usable without Computer Use while preserving the fail-closed rule for
+the unreviewed remainder of the 456-command frontend inventory and other
+remote/MIDI/OSC/shortcut ingress. Full-product AI parity remains an explicit
+future registry/adapter acceptance item, not an implicit claim from capability
+discovery.

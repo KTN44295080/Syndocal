@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { randomUUID, randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { parseOptions } from './server.mjs';
+import { parseOptions, toolDefinitions } from './server.mjs';
 
 const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'syndocal-mcp-test-'));
 const descriptorPath = path.join(temporary, 'bridge.json');
@@ -75,8 +75,9 @@ try {
   child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
   assert.deepEqual((await rpc('ping')).result, {});
   const list = await rpc('tools/list');
-  assert.equal(list.result.tools.length, 8);
+  assert.equal(list.result.tools.length, 9);
   assert.ok(list.result.tools.every((tool) => tool.inputSchema.additionalProperties === false));
+  assert.equal(toolDefinitions.find((tool) => tool.name === 'syndocal_execute_control_plane').inputSchema.properties.request.additionalProperties, true);
   const videoTool = list.result.tools.find((tool) => tool.name === 'syndocal_set_video_blackout');
   assert.deepEqual(Object.keys(videoTool.inputSchema.properties), ['requestId', 'enabled', 'expectedProject']);
   assert.equal(videoTool.inputSchema.properties.enabled.type, 'boolean');
@@ -118,6 +119,26 @@ try {
   assert.equal(decode(capabilities).status, 'completed');
   assert.equal(requests.at(-1).method, 'control_plane.get_capabilities');
   assert.deepEqual(requests.at(-1).params, {});
+  const canonicalQuery = {
+    requestId: randomUUID(),
+    operationId: 'syndocal.query.control_plane.capabilities.v1',
+    request: {},
+  };
+  const canonical = await call('syndocal_execute_control_plane', canonicalQuery);
+  assert.equal(canonical.result.isError, false);
+  assert.equal(decode(canonical).status, 'completed');
+  assert.equal(requests.at(-1).requestId, canonicalQuery.requestId);
+  assert.equal(requests.at(-1).method, 'control_plane.execute');
+  assert.deepEqual(requests.at(-1).params, {
+    operationId: canonicalQuery.operationId,
+    request: {},
+  });
+  for (const invalid of [
+    { ...canonicalQuery, operationId: 'syndocal.query.not_reviewed.v1' },
+    { ...canonicalQuery, operationId: 'syndocal.query.control_plane.capabilities.v1', request: [] },
+    { ...canonicalQuery, extra: true },
+  ]) assert.equal((await call('syndocal_execute_control_plane', invalid)).error.code, -32602);
+  checks++;
   const recording = await call('syndocal_get_recording_status');
   assert.equal(recording.result.isError, false);
   assert.equal(decode(recording).status, 'completed');

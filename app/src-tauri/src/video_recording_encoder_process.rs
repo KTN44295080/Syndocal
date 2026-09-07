@@ -1,5 +1,5 @@
 use std::{
-    process::{Child, ChildStderr, ChildStdin, ExitStatus},
+    process::{Child, ChildStderr, ChildStdin, ChildStdout, ExitStatus},
     sync::Arc,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -15,14 +15,14 @@ const KILL_RETRY_INTERVAL: Duration = Duration::from_millis(250);
 /// A Child handle must never be dropped while process termination is unknown.
 /// Windows also owns a Job Object so descendants holding inherited pipes are
 /// terminated with the encoder.
-pub(super) struct ReapingChild {
+pub(crate) struct ReapingChild {
     child: Option<Child>,
     #[cfg(windows)]
     job: Option<Arc<ProcessJob>>,
 }
 
 #[cfg(windows)]
-pub(super) type ProcessTreeGuard = Arc<dyn Send + Sync>;
+pub(crate) type ProcessTreeGuard = Arc<dyn Send + Sync>;
 
 struct QuarantinedChild {
     child: ReapingChild,
@@ -36,7 +36,7 @@ static QUARANTINED_CHILDREN: LazyLock<Mutex<Vec<QuarantinedChild>>> =
     LazyLock::new(|| Mutex::new(Vec::new()));
 
 impl ReapingChild {
-    pub(super) fn new(mut child: Child) -> Result<Self, String> {
+    pub(crate) fn new(mut child: Child) -> Result<Self, String> {
         retry_quarantined_children();
         #[cfg(windows)]
         let job = match ProcessJob::for_child(&child) {
@@ -57,19 +57,22 @@ impl ReapingChild {
     }
 
     #[cfg(windows)]
-    pub(super) fn process_tree_guard(&self) -> ProcessTreeGuard {
+    pub(crate) fn process_tree_guard(&self) -> ProcessTreeGuard {
         self.job
             .as_ref()
             .map(|job| Arc::clone(job) as ProcessTreeGuard)
             .expect("recording process tree job is installed")
     }
-    pub(super) fn take_stdin(&mut self) -> Option<ChildStdin> {
+    pub(crate) fn take_stdin(&mut self) -> Option<ChildStdin> {
         self.child.as_mut().and_then(|child| child.stdin.take())
     }
-    pub(super) fn take_stderr(&mut self) -> Option<ChildStderr> {
+    pub(crate) fn take_stderr(&mut self) -> Option<ChildStderr> {
         self.child.as_mut().and_then(|child| child.stderr.take())
     }
-    fn poll(&mut self) -> std::io::Result<Option<ExitStatus>> {
+    pub(crate) fn take_stdout(&mut self) -> Option<ChildStdout> {
+        self.child.as_mut().and_then(|child| child.stdout.take())
+    }
+    pub(crate) fn poll(&mut self) -> std::io::Result<Option<ExitStatus>> {
         let result = self
             .child
             .as_mut()
@@ -80,7 +83,7 @@ impl ReapingChild {
         }
         Ok(result)
     }
-    fn terminate(&mut self) -> std::io::Result<()> {
+    pub(crate) fn terminate(&mut self) -> std::io::Result<()> {
         #[cfg(windows)]
         if let Some(job) = &self.job {
             return job.terminate();

@@ -19,6 +19,9 @@ pub(crate) struct VideoRecordingStatus {
     pub(crate) audio_included: bool,
     pub(crate) audio_track_count: usize,
     pub(crate) started_unix_ms: Option<u64>,
+    pub(crate) renderer_process_isolated: bool,
+    pub(crate) renderer_force_termination: bool,
+    pub(crate) stop_deadline_ms: u64,
     pub(crate) last_error: Option<String>,
 }
 
@@ -37,6 +40,9 @@ impl Default for VideoRecordingStatus {
             audio_included: false,
             audio_track_count: 0,
             started_unix_ms: None,
+            renderer_process_isolated: true,
+            renderer_force_termination: true,
+            stop_deadline_ms: video_recording_lifecycle::TOTAL_STOP_DEADLINE.as_millis() as u64,
             last_error: None,
         }
     }

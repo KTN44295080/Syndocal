@@ -1732,7 +1732,7 @@ async function installLiveAudioInvokeMock(client) {
 }
 
 function readLiveAudioRailStateInPage() {
-  const rail = document.querySelector(".videoMixerClipPane > .liveAudioInputBar");
+  const rail = document.querySelector(".liveAudioInputBar");
   if (!rail) return null;
   const action = rail.querySelector('[data-live-audio-action="transport"]');
   const refresh = rail.querySelector('[data-live-audio-action="refresh"]');
@@ -2533,8 +2533,8 @@ function readAutoVjStateInPage() {
     readout: (readout?.querySelector("span")?.textContent ?? "").trim(),
     secondaryReadout: (readout?.querySelector("small")?.textContent ?? "").trim(),
     statusCount: strip.querySelectorAll('[role="status"]').length,
-    accessibleMeterCount: document.querySelectorAll('.videoMixerClipPane > .liveAudioInputBar [role="meter"]').length,
-    visualBandCount: document.querySelectorAll(".videoMixerClipPane > .liveAudioInputBar .liveAudioBandSpectrum > em").length,
+    accessibleMeterCount: document.querySelectorAll('.liveAudioInputBar [role="meter"]').length,
+    visualBandCount: document.querySelectorAll(".liveAudioInputBar .liveAudioBandSpectrum > em").length,
     horizontalOverflowPx: Math.max(0, strip.scrollWidth - strip.clientWidth),
     outsideViewport:
       rect.left < -0.5 ||
@@ -11541,37 +11541,37 @@ async function measure(client, label) {
       visibleVideoRecordingBarCount: visibleCount('.videoRecordingBar'),
       visibleLiveAudioInputBarCount: visibleCount('.liveAudioInputBar'),
       liveAudioInputBarDomCount: document.querySelectorAll('.liveAudioInputBar').length,
-      visibleLiveAudioRailCount: visibleCount('.videoMixerClipPane > .liveAudioInputBar'),
+      visibleLiveAudioRailCount: visibleCount('.liveAudioInputBar'),
       visibleEmbeddedLiveAudioCount: visibleCount('.videoClipGridPanel > .liveAudioInputBar'),
       liveAudioRailHeight: (() => {
-        const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar');
+        const rail = document.querySelector('.liveAudioInputBar');
         return rail ? rail.getBoundingClientRect().height : 0;
       })(),
       liveAudioRailBelowMaster: (() => {
-        const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar')?.getBoundingClientRect();
+        const rail = document.querySelector('.liveAudioInputBar')?.getBoundingClientRect();
         const master = document.querySelector('.videoMixerTopContent > .videoMasterControls')?.getBoundingClientRect();
         return Boolean(rail && master && rail.top >= master.bottom - 1);
       })(),
       liveAudioRailAboveClipGrid: (() => {
-        const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar')?.getBoundingClientRect();
+        const rail = document.querySelector('.liveAudioInputBar')?.getBoundingClientRect();
         const grid = document.querySelector('.videoMixerClipPane > .videoClipGridPanel')?.getBoundingClientRect();
         return Boolean(rail && grid && rail.bottom <= grid.top + 1);
       })(),
       liveAudioRailOverflowX: (() => {
-        const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar');
+        const rail = document.querySelector('.liveAudioInputBar');
         return rail ? Math.max(0, rail.scrollWidth - rail.clientWidth) : 0;
       })(),
       liveAudioRailOverflowY: (() => {
-        const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar');
+        const rail = document.querySelector('.liveAudioInputBar');
         return rail ? Math.max(0, rail.scrollHeight - rail.clientHeight) : 0;
       })(),
       liveAudioRailControlOverflowY: (() => {
-        const controls = document.querySelector('.videoMixerClipPane > .liveAudioInputBar .liveAudioInputControls');
+        const controls = document.querySelector('.liveAudioInputBar .liveAudioInputControls');
         return controls ? Math.max(0, controls.scrollHeight - controls.clientHeight) : 0;
       })(),
       liveAudioRailPrimaryControlMinHeight: (() => {
         const controls = [...document.querySelectorAll(
-          '.videoMixerClipPane > .liveAudioInputBar .liveAudioInputControls select, .videoMixerClipPane > .liveAudioInputBar .liveAudioInputControls button',
+          '.liveAudioInputBar .liveAudioInputControls select, .liveAudioInputBar .liveAudioInputControls button',
         )];
         return controls.length > 0
           ? Math.round(Math.min(...controls.map((element) => element.getBoundingClientRect().height)))
@@ -11579,36 +11579,36 @@ async function measure(client, label) {
       })(),
       liveAudioRailConfigControlMinHeight: (() => {
         const controls = [...document.querySelectorAll(
-          '.videoMixerClipPane > .liveAudioInputBar .liveAudioConfigControls select',
+          '.liveAudioInputBar .liveAudioConfigControls select',
         )];
         return controls.length > 0
           ? Math.round(Math.min(...controls.map((element) => element.getBoundingClientRect().height)))
           : 0;
       })(),
       visibleLiveAudioConfigLabelCount: [...document.querySelectorAll(
-        '.videoMixerClipPane > .liveAudioInputBar .liveAudioConfigControls label > span',
+        '.liveAudioInputBar .liveAudioConfigControls label > span',
       )].filter((element) => {
         const rect = element.getBoundingClientRect();
         const style = getComputedStyle(element);
         return rect.width >= 8 && rect.height >= 8 && style.visibility !== 'hidden' && style.clipPath === 'none';
       }).length,
-      liveAudioRailMeterCount: visibleCount('.videoMixerClipPane > .liveAudioInputBar [role="meter"]'),
-      liveAudioRailPoliteRegionCount: visibleCount('.videoMixerClipPane > .liveAudioInputBar [aria-live="polite"]'),
-      liveAudioRailTelemetryBadgeCount: visibleCount('.videoMixerClipPane > .liveAudioInputBar .liveAudioTelemetry > span'),
+      liveAudioRailMeterCount: visibleCount('.liveAudioInputBar [role="meter"]'),
+      liveAudioRailPoliteRegionCount: visibleCount('.liveAudioInputBar [aria-live="polite"]'),
+      liveAudioRailTelemetryBadgeCount: visibleCount('.liveAudioInputBar .liveAudioTelemetry > span'),
       liveAudioRailTelemetryText: [...document.querySelectorAll(
-        '.videoMixerClipPane > .liveAudioInputBar .liveAudioTelemetry > span',
+        '.liveAudioInputBar .liveAudioTelemetry > span',
       )].map((element) => (element.textContent || '').trim().replace(/\\s+/g, ' ')).join(' | '),
       liveAudioRailTelemetryTruncatedCount: [...document.querySelectorAll(
-        '.videoMixerClipPane > .liveAudioInputBar .liveAudioTelemetry > span, .videoMixerClipPane > .liveAudioInputBar .liveAudioTelemetryIo > i',
+        '.liveAudioInputBar .liveAudioTelemetry > span, .liveAudioInputBar .liveAudioTelemetryIo > i',
       )].filter((element) => element.scrollWidth - element.clientWidth > 1).length,
       liveAudioRailCriticalTelemetryOverflowCount: [...document.querySelectorAll(
-        '.videoMixerClipPane > .liveAudioInputBar .liveAudioTelemetryOvr, .videoMixerClipPane > .liveAudioInputBar .liveAudioTelemetryLatency, .videoMixerClipPane > .liveAudioInputBar .liveAudioTelemetryQueue',
+        '.liveAudioInputBar .liveAudioTelemetryOvr, .liveAudioInputBar .liveAudioTelemetryLatency, .liveAudioInputBar .liveAudioTelemetryQueue',
       )].filter((element) => element.scrollWidth - element.clientWidth > 1).length,
       liveAudioRailFullscreenCriticalOverflowCount: [...document.querySelectorAll(
-        '.videoMixerClipPane > .liveAudioInputBar .liveAudioTelemetryOvr, .videoMixerClipPane > .liveAudioInputBar .liveAudioTelemetryXrun, .videoMixerClipPane > .liveAudioInputBar .liveAudioTelemetryLatency, .videoMixerClipPane > .liveAudioInputBar .liveAudioTelemetryIo, .videoMixerClipPane > .liveAudioInputBar .liveAudioTelemetryIo > i, .videoMixerClipPane > .liveAudioInputBar .liveAudioTelemetryQueue',
+        '.liveAudioInputBar .liveAudioTelemetryOvr, .liveAudioInputBar .liveAudioTelemetryXrun, .liveAudioInputBar .liveAudioTelemetryLatency, .liveAudioInputBar .liveAudioTelemetryIo, .liveAudioInputBar .liveAudioTelemetryIo > i, .liveAudioInputBar .liveAudioTelemetryQueue',
       )].filter((element) => element.scrollWidth - element.clientWidth > 1).length,
       liveAudioRailTelemetryOutsideCount: (() => {
-        const telemetry = document.querySelector('.videoMixerClipPane > .liveAudioInputBar .liveAudioTelemetry');
+        const telemetry = document.querySelector('.liveAudioInputBar .liveAudioTelemetry');
         if (!telemetry) return 0;
         const bounds = telemetry.getBoundingClientRect();
         return [...telemetry.children].filter((element) => {
@@ -13467,7 +13467,7 @@ async function checkEditableTouchSurface(client, expectedPage, expectedDefaultPr
 }
 
 function clickLiveAudioControlInPage(kind) {
-  const rail = document.querySelector(".videoMixerClipPane > .liveAudioInputBar");
+  const rail = document.querySelector(".liveAudioInputBar");
   if (!rail) return false;
   const button = rail.querySelector(
     `[data-live-audio-action="${kind === "refresh" ? "refresh" : "transport"}"]`,
@@ -13506,13 +13506,16 @@ async function dispatchLiveAudioCdpControlClick(
   description,
   { forceDisabledForDirectHandlerProof = false } = {},
 ) {
-  const selector = `.videoMixerClipPane > .liveAudioInputBar [data-live-audio-action="${action}"]`;
+  const selector = `.liveAudioInputBar [data-live-audio-action="${action}"]`;
   const target = await client.evaluate(`(() => {
     const button = document.querySelector(${JSON.stringify(selector)});
     if (!(button instanceof HTMLButtonElement)) return { found: false };
     const wasDisabled = button.disabled;
     if (${forceDisabledForDirectHandlerProof ? "true" : "false"}) button.disabled = false;
-    button.scrollIntoView({ block: "nearest", inline: "nearest" });
+    // Setup Video's sidebar is internally scrollable while the fixed lower
+    // workspace band owns the bottom edge. Center the target before the real
+    // CDP hit so the splitter cannot occlude the control.
+    button.scrollIntoView({ block: "center", inline: "nearest" });
     const rect = button.getBoundingClientRect();
     const x = rect.left + rect.width / 2;
     const y = rect.top + rect.height / 2;
@@ -13572,7 +13575,7 @@ async function dispatchLiveAudioCdpControlClick(
 }
 
 function setLiveAudioSelectInPage(kind, value) {
-  const rail = document.querySelector(".videoMixerClipPane > .liveAudioInputBar");
+  const rail = document.querySelector(".liveAudioInputBar");
   if (!rail) return false;
   const select = rail.querySelector(`[data-live-audio-control="${kind}"]`);
   if (!select || select.disabled || ![...select.options].some((option) => option.value === value)) {
@@ -13606,6 +13609,18 @@ async function setLiveAudioSelectWhenEnabled(client, kind, value, description) {
 }
 
 async function runLiveAudioAcceptance(client, locale, label) {
+  // The production owner is Setup > Video > Outputs. This also makes the
+  // acceptance reusable from the broad control-surface run without relying
+  // on whichever surface happened to be active before this scenario.
+  await clickWorkspaceOption(client, "setup");
+  await waitForClientCondition(
+    client,
+    "document.querySelector('.setupAreaTabs button') instanceof HTMLElement",
+    "Setup navigation for live audio",
+  );
+  await clickVisibleSelector(client, ".setupAreaTabs button:nth-of-type(2)");
+  await clickVisibleSelector(client, ".setupModeTabs button:nth-of-type(1)");
+  await sleep(120);
   await installLiveAudioInvokeMock(client);
   const legacyStartShapeRejected = await client.evaluate(`(() => {
     try {
@@ -13627,16 +13642,21 @@ async function runLiveAudioAcceptance(client, locale, label) {
     }
   })()`);
   await sleep(60);
-  // T6: the live audio rail sits behind the collapsed "Audio In" drawer by
-  // default; open it so every existing rail assertion measures the open state.
-  await openMixerDrawer(client, "audio-in", ".videoMixerClipPane > .liveAudioInputBar");
+  // Live audio is owned by Setup > Video > Outputs. Keep the acceptance on
+  // that compact, persistent surface; the old Mixer drawer is intentionally
+  // not mounted in the fixed three-screen Video authoring surface.
+  await waitForClientCondition(
+    client,
+    "document.querySelector('#setup-output-audio-input .liveAudioInputBar') instanceof HTMLElement",
+    "Setup Video live audio input",
+  );
   const initial = await readLiveAudioRailState(client);
   const refreshClicked = await clickLiveAudioControl(client, "refresh");
   await sleep(45);
   const refreshBusy = await readLiveAudioRailState(client);
   await waitForClientCondition(
     client,
-    "(() => { const action = [...document.querySelectorAll('.videoMixerClipPane > .liveAudioInputBar .liveAudioInputControls > button')].at(-1); return Boolean(action && !action.disabled && document.querySelector('.videoMixerClipPane > .liveAudioInputBar .liveAudioConfigFormat')?.textContent?.includes('WASAPI') && window.__syndocalLiveAudioMock?.calls.some((call) => call.command === 'get_live_audio_input_capabilities')); })()",
+    "(() => { const action = [...document.querySelectorAll('.liveAudioInputBar .liveAudioInputControls > button')].at(-1); return Boolean(action && !action.disabled && document.querySelector('.liveAudioInputBar .liveAudioConfigFormat')?.textContent?.includes('WASAPI') && window.__syndocalLiveAudioMock?.calls.some((call) => call.command === 'get_live_audio_input_capabilities')); })()",
     "Live audio device refresh and default capability resolution",
   );
   const refreshed = await readLiveAudioRailState(client);
@@ -13644,14 +13664,14 @@ async function runLiveAudioAcceptance(client, locale, label) {
   const deviceSelected = await setLiveAudioSelect(client, "device", "viewport-wasapi-studio-g1");
   await waitForClientCondition(
     client,
-    "(() => { const calls = window.__syndocalLiveAudioMock?.calls ?? []; const latest = calls.filter((call) => call.command === 'get_live_audio_input_capabilities').at(-1); const action = [...document.querySelectorAll('.videoMixerClipPane > .liveAudioInputBar .liveAudioInputControls > button')].at(-1); return latest?.args?.request?.deviceId === 'viewport-wasapi-studio-g1' && Boolean(action && !action.disabled); })()",
+    "(() => { const calls = window.__syndocalLiveAudioMock?.calls ?? []; const latest = calls.filter((call) => call.command === 'get_live_audio_input_capabilities').at(-1); const action = [...document.querySelectorAll('.liveAudioInputBar .liveAudioInputControls > button')].at(-1); return latest?.args?.request?.deviceId === 'viewport-wasapi-studio-g1' && Boolean(action && !action.disabled); })()",
     "Explicit live audio input capability resolution",
   );
 
   const uniqueRefreshClicked = await clickLiveAudioControl(client, "refresh");
   await waitForClientCondition(
     client,
-    "(() => { const calls = window.__syndocalLiveAudioMock?.calls ?? []; const latest = calls.filter((call) => call.command === 'get_live_audio_input_capabilities').at(-1); const device = document.querySelector('.videoMixerClipPane > .liveAudioInputBar .liveAudioInputControls select'); const action = [...document.querySelectorAll('.videoMixerClipPane > .liveAudioInputBar .liveAudioInputControls > button')].at(-1); return device?.value === 'viewport-wasapi-studio-g2' && latest?.args?.request?.deviceId === 'viewport-wasapi-studio-g2' && Boolean(action && !action.disabled); })()",
+    "(() => { const calls = window.__syndocalLiveAudioMock?.calls ?? []; const latest = calls.filter((call) => call.command === 'get_live_audio_input_capabilities').at(-1); const device = document.querySelector('.liveAudioInputBar .liveAudioInputControls select'); const action = [...document.querySelectorAll('.liveAudioInputBar .liveAudioInputControls > button')].at(-1); return device?.value === 'viewport-wasapi-studio-g2' && latest?.args?.request?.deviceId === 'viewport-wasapi-studio-g2' && Boolean(action && !action.disabled); })()",
     "Unique generation ID remap after live audio Refresh",
   );
   const uniquelyRemapped = await readLiveAudioRailState(client);
@@ -13668,13 +13688,13 @@ async function runLiveAudioAcceptance(client, locale, label) {
   const finalDeviceSelected = await setLiveAudioSelect(client, "device", "viewport-wasapi-studio-g3a");
   await waitForClientCondition(
     client,
-    "(() => { const calls = window.__syndocalLiveAudioMock?.calls ?? []; const latest = calls.filter((call) => call.command === 'get_live_audio_input_capabilities').at(-1); const action = [...document.querySelectorAll('.videoMixerClipPane > .liveAudioInputBar .liveAudioInputControls > button')].at(-1); return latest?.args?.request?.deviceId === 'viewport-wasapi-studio-g3a' && Boolean(action && !action.disabled); })()",
+    "(() => { const calls = window.__syndocalLiveAudioMock?.calls ?? []; const latest = calls.filter((call) => call.command === 'get_live_audio_input_capabilities').at(-1); const action = [...document.querySelectorAll('.liveAudioInputBar .liveAudioInputControls > button')].at(-1); return latest?.args?.request?.deviceId === 'viewport-wasapi-studio-g3a' && Boolean(action && !action.disabled); })()",
     "Explicit live audio reselection after ambiguous Refresh",
   );
   const rateSelected = await setLiveAudioSelect(client, "rate", "192000");
   await waitForClientCondition(
     client,
-    "(() => { const calls = window.__syndocalLiveAudioMock?.calls ?? []; const latest = calls.filter((call) => call.command === 'get_live_audio_input_capabilities').at(-1); const action = [...document.querySelectorAll('.videoMixerClipPane > .liveAudioInputBar .liveAudioInputControls > button')].at(-1); return latest?.args?.request?.sampleRate === 192000 && Boolean(action && !action.disabled); })()",
+    "(() => { const calls = window.__syndocalLiveAudioMock?.calls ?? []; const latest = calls.filter((call) => call.command === 'get_live_audio_input_capabilities').at(-1); const action = [...document.querySelectorAll('.liveAudioInputBar .liveAudioInputControls > button')].at(-1); return latest?.args?.request?.sampleRate === 192000 && Boolean(action && !action.disabled); })()",
     "Selected live audio sample-rate capability resolution",
   );
   const bufferSelected = await setLiveAudioSelect(client, "buffer", "8192");
@@ -13685,7 +13705,7 @@ async function runLiveAudioAcceptance(client, locale, label) {
   const asioBackendSelected = await setLiveAudioSelect(client, "backend", "asio");
   await waitForClientCondition(
     client,
-    "window.__syndocalLiveAudioMock?.asioGeneration === 1 && document.querySelector('.videoMixerClipPane > .liveAudioInputBar')?.getAttribute('data-live-audio-backend-state') === 'select_device'",
+    "window.__syndocalLiveAudioMock?.asioGeneration === 1 && document.querySelector('.liveAudioInputBar')?.getAttribute('data-live-audio-backend-state') === 'select_device'",
     "ASIO explicit driver selection gate",
   );
   const asioUnselected = await readLiveAudioRailState(client);
@@ -13726,7 +13746,7 @@ async function runLiveAudioAcceptance(client, locale, label) {
   try {
     await waitForClientCondition(
       client,
-      "window.__syndocalLiveAudioMock?.deviceGeneration === 4 && document.querySelector('.videoMixerClipPane > .liveAudioInputBar')?.getAttribute('data-live-audio-backend-state') === 'ready'",
+      "window.__syndocalLiveAudioMock?.deviceGeneration === 4 && document.querySelector('.liveAudioInputBar')?.getAttribute('data-live-audio-backend-state') === 'ready'",
       "WASAPI backend restoration",
     );
   } catch (error) {
@@ -13734,8 +13754,8 @@ async function runLiveAudioAcceptance(client, locale, label) {
       deviceGeneration: window.__syndocalLiveAudioMock?.deviceGeneration ?? null,
       calls: (window.__syndocalLiveAudioMock?.calls ?? []).filter((call) =>
         call.command === 'list_audio_input_devices' || call.command === 'get_live_audio_input_capabilities'),
-      backendState: document.querySelector('.videoMixerClipPane > .liveAudioInputBar')?.getAttribute('data-live-audio-backend-state') ?? null,
-      backend: document.querySelector('.videoMixerClipPane > .liveAudioInputBar')?.getAttribute('data-live-audio-backend') ?? null,
+      backendState: document.querySelector('.liveAudioInputBar')?.getAttribute('data-live-audio-backend-state') ?? null,
+      backend: document.querySelector('.liveAudioInputBar')?.getAttribute('data-live-audio-backend') ?? null,
       backendDisabled: document.querySelector('[data-live-audio-control="backend"]')?.disabled ?? null,
       backendOptions: [...(document.querySelector('[data-live-audio-control="backend"]')?.options ?? [])].map((option) => option.value),
       status: document.querySelector('.appStatusText')?.textContent ?? '',
@@ -13764,7 +13784,7 @@ async function runLiveAudioAcceptance(client, locale, label) {
   const startBusy = await readLiveAudioRailState(client);
   await waitForClientCondition(
     client,
-    "document.querySelector('.videoMixerClipPane > .liveAudioInputBar')?.getAttribute('data-health') === 'live'",
+    "document.querySelector('.liveAudioInputBar')?.getAttribute('data-health') === 'live'",
     "Live audio Start response",
   );
   await sleep(60);
@@ -13776,7 +13796,7 @@ async function runLiveAudioAcceptance(client, locale, label) {
   const stopBusy = await readLiveAudioRailState(client);
   await waitForClientCondition(
     client,
-    "document.querySelector('.videoMixerClipPane > .liveAudioInputBar')?.getAttribute('data-health') === 'clearing'",
+    "document.querySelector('.liveAudioInputBar')?.getAttribute('data-health') === 'clearing'",
     "Live audio Stop safety-clear response",
   );
   await sleep(60);
@@ -14050,9 +14070,14 @@ async function prepareLiveAudioAcceptanceViewport(client, viewport, locale, full
   );
   await client.send("Page.navigate", { url: appUrl });
   await waitForApp(client);
-  await pressKey(client, "F2");
-  await sleep(120);
-  await clickControlModeOption(client, "mixer");
+  await clickWorkspaceOption(client, "setup");
+  await waitForClientCondition(
+    client,
+    "document.querySelector('.setupAreaTabs button') instanceof HTMLElement",
+    "Setup navigation",
+  );
+  await clickVisibleSelector(client, ".setupAreaTabs button:nth-of-type(2)");
+  await clickVisibleSelector(client, ".setupModeTabs button:nth-of-type(1)");
   await sleep(120);
   if (fullscreen) {
     await client.evaluate("document.documentElement.setAttribute('data-window-mode','fullscreen')");
@@ -14102,11 +14127,21 @@ async function prepareLiveAudioRestoreViewport(client, viewport, rawSelection, l
       "window.localStorage.setItem('syndocal.uiLocale.v1', " + JSON.stringify(locale) + ");",
   );
   await reloadReadyApp(client);
-  await pressKey(client, "F2");
+  await clickWorkspaceOption(client, "setup");
+  await waitForClientCondition(
+    client,
+    "document.querySelector('.setupAreaTabs button') instanceof HTMLElement",
+    "Setup navigation for persisted live audio",
+  );
+  await clickVisibleSelector(client, ".setupAreaTabs button:nth-of-type(2)");
+  await clickVisibleSelector(client, ".setupModeTabs button:nth-of-type(1)");
   await sleep(120);
-  await clickControlModeOption(client, "mixer");
-  await sleep(120);
-  await openMixerDrawer(client, "audio-in", ".videoMixerClipPane > .liveAudioInputBar");
+  await waitForClientCondition(
+    client,
+    "document.querySelector('#setup-output-audio-input .liveAudioInputBar') instanceof HTMLElement",
+    "Setup Video persisted live audio input",
+  );
+  await sleep(180);
   const beforeMock = await readLiveAudioRailState(client);
   const storedBeforeMock = await client.evaluate(
     `window.localStorage.getItem(${JSON.stringify(liveAudioInputSelectionStorageKey)})`,
@@ -14148,7 +14183,7 @@ async function runLiveAudioRestoreScenario(
   await waitForClientCondition(
     client,
     `(() => {
-      const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar');
+      const rail = document.querySelector('.liveAudioInputBar');
       const saved = rail?.querySelector('[data-live-audio-saved-state]');
       const calls = window.__syndocalLiveAudioMock?.calls ?? [];
       return Boolean(
@@ -14194,7 +14229,7 @@ async function runLiveAudioSavedReadyProbeFaultDirectStart(client) {
   await waitForClientCondition(
     client,
     `(() => {
-      const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar');
+      const rail = document.querySelector('.liveAudioInputBar');
       const calls = window.__syndocalLiveAudioMock?.calls ?? [];
       return rail?.getAttribute('data-live-audio-backend-state') === 'fault' &&
         rail?.getAttribute('data-live-audio-backend-availability') === 'fault' &&
@@ -14287,20 +14322,24 @@ async function runLiveAudioNativeAsioVerdictAcceptance(client, viewport) {
     "refresh",
     "Native ASIO verdict initial backend discovery",
   );
+  try {
+    await waitForClientCondition(
+      client,
+      `(() => {
+        const rail = document.querySelector('.liveAudioInputBar');
+        return rail?.getAttribute('data-live-audio-backend') === 'wasapi_shared' &&
+          [...(rail?.querySelector('[data-live-audio-control="device"]')?.options ?? [])]
+            .some((option) => option.value === 'viewport-wasapi-studio-g1');
+      })()`,
+      "Native ASIO verdict initial ready WASAPI catalogue",
+    );
+  } catch (error) {
+    throw new Error(`${String(error)}; rail=${JSON.stringify(await readLiveAudioRailState(client))}; audit=${JSON.stringify(await readLiveAudioRestoreMockAudit(client))}`);
+  }
   await waitForClientCondition(
     client,
     `(() => {
-      const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar');
-      return rail?.getAttribute('data-live-audio-backend') === 'wasapi_shared' &&
-        [...(rail?.querySelector('[data-live-audio-control="device"]')?.options ?? [])]
-          .some((option) => option.value === 'viewport-wasapi-studio-g1');
-    })()`,
-    "Native ASIO verdict initial ready WASAPI catalogue",
-  );
-  await waitForClientCondition(
-    client,
-    `(() => {
-      const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar');
+      const rail = document.querySelector('.liveAudioInputBar');
       const action = rail?.querySelector('[data-live-audio-action="transport"]');
       const refresh = rail?.querySelector('[data-live-audio-action="refresh"]');
       return action instanceof HTMLButtonElement && !action.disabled &&
@@ -14312,7 +14351,7 @@ async function runLiveAudioNativeAsioVerdictAcceptance(client, viewport) {
   await waitForClientCondition(
     client,
     `(() => {
-      const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar');
+      const rail = document.querySelector('.liveAudioInputBar');
       return window.__syndocalLiveAudioMock?.asioGeneration >= 1 &&
         rail?.getAttribute('data-live-audio-backend') === 'asio';
     })()`,
@@ -14357,7 +14396,7 @@ async function runLiveAudioNativeAsioVerdictAcceptance(client, viewport) {
   await waitForClientCondition(
     client,
     `(() => {
-      const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar');
+      const rail = document.querySelector('.liveAudioInputBar');
       const action = rail?.querySelector('[data-live-audio-action="transport"]');
       return rail?.querySelector('[data-live-audio-asio-verdict]')?.getAttribute('data-live-audio-asio-verdict') === 'invalid' &&
         rail?.querySelector('[data-live-audio-asio-verdict]')?.getAttribute('data-live-audio-asio-reason') === 'ASIO_STORAGE_SCHEMA_FUTURE' &&
@@ -14398,7 +14437,7 @@ async function runLiveAudioNativeAsioVerdictAcceptance(client, viewport) {
   await waitForClientCondition(
     client,
     `(() => {
-      const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar');
+      const rail = document.querySelector('.liveAudioInputBar');
       const action = rail?.querySelector('[data-live-audio-action="transport"]');
       const calls = window.__syndocalLiveAudioMock?.calls ?? [];
       const status = document.querySelector('.appStatusLine .appStatusText')?.textContent ?? '';
@@ -14421,7 +14460,7 @@ async function runLiveAudioNativeAsioVerdictAcceptance(client, viewport) {
   await waitForClientCondition(
     client,
     `(() => {
-      const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar');
+      const rail = document.querySelector('.liveAudioInputBar');
       const action = rail?.querySelector('[data-live-audio-action="transport"]');
       return rail?.querySelector('[data-live-audio-control="buffer"]')?.value === '256' &&
         action instanceof HTMLButtonElement && action.disabled;
@@ -14487,7 +14526,7 @@ async function runLiveAudioNativeAsioVerdictAcceptance(client, viewport) {
   await waitForClientCondition(
     client,
     `(() => {
-      const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar');
+      const rail = document.querySelector('.liveAudioInputBar');
       const action = rail?.querySelector('[data-live-audio-action="transport"]');
       return rail?.querySelector('[data-live-audio-asio-verdict]')?.getAttribute('data-live-audio-asio-message') ===
           'The saved ASIO selection changed after the revalidation arm.' &&
@@ -14568,7 +14607,7 @@ async function runLiveAudioNativeAsioVerdictAcceptance(client, viewport) {
   await waitForClientCondition(
     client,
     `(() => {
-      const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar');
+      const rail = document.querySelector('.liveAudioInputBar');
       const verdict = rail?.querySelector('[data-live-audio-asio-verdict]');
       const calls = window.__syndocalLiveAudioMock?.calls ?? [];
       return rail?.getAttribute('data-health') === 'live' &&
@@ -14597,7 +14636,7 @@ async function runLiveAudioNativeAsioVerdictAcceptance(client, viewport) {
   await waitForClientCondition(
     client,
     `(() => {
-      const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar');
+      const rail = document.querySelector('.liveAudioInputBar');
       return rail?.getAttribute('data-health') === 'stopped' &&
         rail?.querySelector('[data-live-audio-action="refresh"]')?.disabled === false;
     })()`,
@@ -14629,7 +14668,7 @@ async function runLiveAudioNativeAsioVerdictAcceptance(client, viewport) {
   await waitForClientCondition(
     client,
     `(() => {
-      const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar');
+      const rail = document.querySelector('.liveAudioInputBar');
       return rail?.getAttribute('data-live-audio-backend') === 'wasapi_shared' &&
         [...(rail?.querySelector('[data-live-audio-control="device"]')?.options ?? [])]
           .some((option) => option.value.startsWith('viewport-wasapi-studio-g'));
@@ -14659,7 +14698,7 @@ async function runLiveAudioNativeAsioVerdictAcceptance(client, viewport) {
     await waitForClientCondition(
       client,
       `(() => {
-        const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar');
+        const rail = document.querySelector('.liveAudioInputBar');
         const action = rail?.querySelector('[data-live-audio-action="transport"]');
         return rail?.getAttribute('data-live-audio-backend') === 'wasapi_shared' &&
           rail?.querySelector('[data-live-audio-asio-verdict]')?.getAttribute('data-live-audio-asio-verdict') === 'invalid' &&
@@ -14677,7 +14716,7 @@ async function runLiveAudioNativeAsioVerdictAcceptance(client, viewport) {
   await waitForClientCondition(
     client,
     `(() => {
-      const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar');
+      const rail = document.querySelector('.liveAudioInputBar');
       return window.__syndocalLiveAudioMock?.asioGeneration >= ${restoredAsioGenerationBeforeSelect + 1} &&
         rail?.getAttribute('data-live-audio-backend') === 'asio';
     })()`,
@@ -14711,7 +14750,7 @@ async function runLiveAudioNativeAsioVerdictAcceptance(client, viewport) {
   await waitForClientCondition(
     client,
     `(() => {
-      const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar');
+      const rail = document.querySelector('.liveAudioInputBar');
       const verdict = rail?.querySelector('[data-live-audio-asio-verdict]');
       const action = rail?.querySelector('[data-live-audio-action="transport"]');
       return verdict?.getAttribute('data-live-audio-asio-verdict') === 'restored' &&
@@ -14731,7 +14770,7 @@ async function runLiveAudioNativeAsioVerdictAcceptance(client, viewport) {
   await waitForClientCondition(
     client,
     `(() => {
-      const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar');
+      const rail = document.querySelector('.liveAudioInputBar');
       const verdict = rail?.querySelector('[data-live-audio-asio-verdict]');
       const calls = window.__syndocalLiveAudioMock?.calls ?? [];
       return rail?.getAttribute('data-health') === 'live' &&
@@ -14921,7 +14960,7 @@ async function runLiveAudioAsioArmConsumptionHostileAcceptance(client, viewport)
     await waitForClientCondition(
       client,
       `(() => {
-        const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar');
+        const rail = document.querySelector('.liveAudioInputBar');
         const action = rail?.querySelector('[data-live-audio-action="transport"]');
         const refresh = rail?.querySelector('[data-live-audio-action="refresh"]');
         const verdict = rail?.querySelector('[data-live-audio-asio-verdict]');
@@ -14939,7 +14978,7 @@ async function runLiveAudioAsioArmConsumptionHostileAcceptance(client, viewport)
     await waitForClientCondition(
       client,
       `(() => {
-        const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar');
+      const rail = document.querySelector('.liveAudioInputBar');
         const action = rail?.querySelector('[data-live-audio-action="transport"]');
         const verdict = rail?.querySelector('[data-live-audio-asio-verdict]');
         return rail?.getAttribute('data-health') === 'stopped' &&
@@ -14985,7 +15024,7 @@ async function runLiveAudioAsioArmConsumptionHostileAcceptance(client, viewport)
     await waitForClientCondition(
       client,
       `(() => {
-        const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar');
+      const rail = document.querySelector('.liveAudioInputBar');
         const backend = rail?.getAttribute('data-live-audio-backend');
         return (backend === 'wasapi_shared' || backend === 'asio') &&
           [...(rail?.querySelector('[data-live-audio-control="device"]')?.options ?? [])]
@@ -14994,7 +15033,7 @@ async function runLiveAudioAsioArmConsumptionHostileAcceptance(client, viewport)
       `${label} initial catalogue`,
     );
     const initialBackend = await client.evaluate(
-      "document.querySelector('.videoMixerClipPane > .liveAudioInputBar')?.getAttribute('data-live-audio-backend')",
+      "document.querySelector('.liveAudioInputBar')?.getAttribute('data-live-audio-backend')",
     );
     if (initialBackend !== "asio") {
       await setLiveAudioSelectWhenEnabled(client, "backend", "asio", `${label} ASIO backend`);
@@ -15002,7 +15041,7 @@ async function runLiveAudioAsioArmConsumptionHostileAcceptance(client, viewport)
     await waitForClientCondition(
       client,
       `(() => {
-        const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar');
+      const rail = document.querySelector('.liveAudioInputBar');
         return rail?.getAttribute('data-live-audio-backend') === 'asio' &&
           [...(rail?.querySelector('[data-live-audio-control="device"]')?.options ?? [])]
             .some((option) => option.value.startsWith('viewport-asio-studio-g'));
@@ -15017,7 +15056,7 @@ async function runLiveAudioAsioArmConsumptionHostileAcceptance(client, viewport)
 
   let asioDeviceId = null;
   const liveRailSnapshot = () => client.evaluate(`(() => {
-    const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar');
+    const rail = document.querySelector('.liveAudioInputBar');
     const value = (kind) => rail?.querySelector('[data-live-audio-control="' + kind + '"]')?.value ?? "";
     return {
       device: value("device"),
@@ -15031,7 +15070,7 @@ async function runLiveAudioAsioArmConsumptionHostileAcceptance(client, viewport)
   const waitIdleControls = async (label) => {
     await waitForClientCondition(
       client,
-      "document.querySelector('.videoMixerClipPane > .liveAudioInputBar [data-live-audio-action=\"refresh\"]')?.disabled === false",
+      "document.querySelector('.liveAudioInputBar [data-live-audio-action=\"refresh\"]')?.disabled === false",
       `${label} controls settle`,
     );
   };
@@ -15071,7 +15110,7 @@ async function runLiveAudioAsioArmConsumptionHostileAcceptance(client, viewport)
       await clickAction("refresh", `${label} pass ${attempt} saved-selection revalidation refresh`);
       await waitForClientCondition(
         client,
-        `(() => document.querySelector('.videoMixerClipPane > .liveAudioInputBar [data-live-audio-saved-state]')?.getAttribute('data-live-audio-saved-state') === 'ready')()`,
+        `(() => document.querySelector('.liveAudioInputBar [data-live-audio-saved-state]')?.getAttribute('data-live-audio-saved-state') === 'ready')()`,
         `${label} pass ${attempt} saved selection ready`,
       );
       await waitIdleControls(`${label} pass ${attempt} post-refresh settle`);
@@ -15101,12 +15140,12 @@ async function runLiveAudioAsioArmConsumptionHostileAcceptance(client, viewport)
   await clickAction("refresh", "Arm consumption long refresh to open the busy window");
   await waitForClientCondition(
     client,
-    "document.querySelector('.videoMixerClipPane > .liveAudioInputBar [data-live-audio-action=\"transport\"]')?.textContent?.trim() === 'Checking'",
+    "document.querySelector('.liveAudioInputBar [data-live-audio-action=\"transport\"]')?.textContent?.trim() === 'Checking'",
     "Arm consumption busy window opened",
   );
   const busyForcedStartTarget = await clickAction("transport", "Arm consumption mid-busy hostile Start", true);
   const stillBusyAfterMidBusyStart = await client.evaluate(
-    "document.querySelector('.videoMixerClipPane > .liveAudioInputBar [data-live-audio-action=\"transport\"]')?.textContent?.trim() === 'Checking'",
+    "document.querySelector('.liveAudioInputBar [data-live-audio-action=\"transport\"]')?.textContent?.trim() === 'Checking'",
   );
   await setMockFlags({ deviceListHoldMs: 120 });
   await waitInvalidLocked("Arm consumption settled locked after busy-boundary Start spend");
@@ -15140,7 +15179,7 @@ async function runLiveAudioAsioArmConsumptionHostileAcceptance(client, viewport)
   await setMockFlags({ startDelayMs: 120 });
   await waitForClientCondition(
     client,
-    "document.querySelector('.videoMixerClipPane > .liveAudioInputBar')?.getAttribute('data-health') === 'unknown'",
+    "document.querySelector('.liveAudioInputBar')?.getAttribute('data-health') === 'unknown'",
     "Arm consumption unknown status after failed armed Start",
   );
   const startsBeforeUnknownReplay = await startCallCount();
@@ -15152,7 +15191,7 @@ async function runLiveAudioAsioArmConsumptionHostileAcceptance(client, viewport)
   await clickAction("refresh", "Arm consumption refresh into status outage");
   await waitForClientCondition(
     client,
-    "document.querySelector('.videoMixerClipPane > .liveAudioInputBar')?.getAttribute('data-health') === 'unknown'",
+    "document.querySelector('.liveAudioInputBar')?.getAttribute('data-health') === 'unknown'",
     "Arm consumption status outage unknown window",
   );
   const outageRail = await readLiveAudioRailState(client);
@@ -15167,7 +15206,7 @@ async function runLiveAudioAsioArmConsumptionHostileAcceptance(client, viewport)
   // idle controls before driving the recovery Refresh.
   await waitForClientCondition(
     client,
-    "document.querySelector('.videoMixerClipPane > .liveAudioInputBar [data-live-audio-action=\"refresh\"]')?.disabled === false",
+    "document.querySelector('.liveAudioInputBar [data-live-audio-action=\"refresh\"]')?.disabled === false",
     "Arm consumption controls settle after status outage",
   );
   await setMockFlags({ statusPollReject: false });
@@ -15193,7 +15232,7 @@ async function runLiveAudioAsioArmConsumptionHostileAcceptance(client, viewport)
   await waitForClientCondition(
     client,
     `(() => {
-      const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar');
+      const rail = document.querySelector('.liveAudioInputBar');
       const verdict = rail?.querySelector('[data-live-audio-asio-verdict]');
       return rail?.getAttribute('data-health') === 'live' &&
         verdict?.getAttribute('data-live-audio-asio-verdict') === 'revalidated';
@@ -15210,7 +15249,7 @@ async function runLiveAudioAsioArmConsumptionHostileAcceptance(client, viewport)
   await clickAction("transport", "Arm consumption clean Stop after fresh Start");
   await waitForClientCondition(
     client,
-    "document.querySelector('.videoMixerClipPane > .liveAudioInputBar')?.getAttribute('data-health') === 'stopped'",
+    "document.querySelector('.liveAudioInputBar')?.getAttribute('data-health') === 'stopped'",
     "Arm consumption stopped after fresh Start",
   );
   await setMockFlags({ stopReturnsCleared: false });
@@ -15250,7 +15289,7 @@ async function runLiveAudioAsioArmConsumptionHostileAcceptance(client, viewport)
   await waitForClientCondition(
     client,
     `(() => {
-      const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar');
+      const rail = document.querySelector('.liveAudioInputBar');
       const saved = rail?.querySelector('[data-live-audio-saved-state]');
       return saved?.getAttribute('data-live-audio-saved-state') === 'ready' &&
         saved?.getAttribute('data-live-audio-saved-reason') === 'REVALIDATED';
@@ -15297,7 +15336,7 @@ async function runLiveAudioAsioArmConsumptionHostileAcceptance(client, viewport)
     await waitForClientCondition(
       client,
       `(() => {
-        const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar');
+      const rail = document.querySelector('.liveAudioInputBar');
         return rail?.getAttribute('data-live-audio-backend') === 'wasapi_shared' &&
           rail?.querySelector('[data-live-audio-action="transport"]') instanceof HTMLButtonElement &&
           rail?.querySelector('[data-live-audio-action="transport"]')?.disabled === true;
@@ -15330,11 +15369,20 @@ async function runLiveAudioAsioArmConsumptionHostileAcceptance(client, viewport)
       loaded,
     ]);
     await waitForApp(client);
-    await pressKey(client, "F2");
+    await clickWorkspaceOption(client, "setup");
+    await waitForClientCondition(
+      client,
+      "document.querySelector('.setupAreaTabs button') instanceof HTMLElement",
+      "Setup navigation after reload",
+    );
+    await clickVisibleSelector(client, ".setupAreaTabs button:nth-of-type(2)");
+    await clickVisibleSelector(client, ".setupModeTabs button:nth-of-type(1)");
     await sleep(120);
-    await clickControlModeOption(client, "mixer");
-    await sleep(120);
-    await openMixerDrawer(client, "audio-in", ".videoMixerClipPane > .liveAudioInputBar");
+    await waitForClientCondition(
+      client,
+      "document.querySelector('#setup-output-audio-input .liveAudioInputBar') instanceof HTMLElement",
+      "Setup Video live audio input after reload",
+    );
     await installLiveAudioInvokeMock(client);
     await setMockFlags({ freezeDeviceGeneration: true });
   };
@@ -15350,7 +15398,7 @@ async function runLiveAudioAsioArmConsumptionHostileAcceptance(client, viewport)
   await waitArmedUnlock("Reload boundary arm unlock");
   await hardReloadSeededFixture("post-reload");
   const reloadedTransportPresent = await client.evaluate(
-    "document.querySelector('.videoMixerClipPane > .liveAudioInputBar [data-live-audio-action=\"transport\"]') instanceof HTMLButtonElement",
+    "document.querySelector('.liveAudioInputBar [data-live-audio-action=\"transport\"]') instanceof HTMLButtonElement",
   );
   const startsBeforeReloadForcedStart = await startCallCount();
   const reloadImmediateForcedStartTarget = await clickAction(
@@ -15487,7 +15535,7 @@ async function configureLiveAudioWasapiForStart(client, description) {
   await waitForClientCondition(
     client,
     `(() => {
-      const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar');
+      const rail = document.querySelector('.liveAudioInputBar');
       const action = rail?.querySelector('[data-live-audio-action="transport"]');
       return rail?.getAttribute('data-live-audio-backend') === 'wasapi_shared' &&
         action instanceof HTMLButtonElement && !action.disabled;
@@ -15525,7 +15573,7 @@ async function runLiveAudioSavedSelectionBackendScopeAcceptance(client, viewport
   await waitForClientCondition(
     client,
     `(() => {
-      const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar');
+      const rail = document.querySelector('.liveAudioInputBar');
       const action = rail?.querySelector('[data-live-audio-action="transport"]');
       const saved = rail?.querySelector('[data-live-audio-saved-state]');
       return rail?.getAttribute('data-live-audio-backend') === 'asio' &&
@@ -15565,7 +15613,7 @@ async function runLiveAudioSavedSelectionBackendScopeAcceptance(client, viewport
   await waitForClientCondition(
     client,
     `(() => {
-      const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar');
+      const rail = document.querySelector('.liveAudioInputBar');
       return rail?.getAttribute('data-live-audio-backend') === 'wasapi_shared' &&
         [...(rail?.querySelector('[data-live-audio-control="device"]')?.options ?? [])]
           .some((option) => option.value.startsWith('viewport-wasapi-studio-g'));
@@ -15585,7 +15633,7 @@ async function runLiveAudioSavedSelectionBackendScopeAcceptance(client, viewport
   await waitForClientCondition(
     client,
     `(() => {
-      const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar');
+      const rail = document.querySelector('.liveAudioInputBar');
       const calls = window.__syndocalLiveAudioMock?.calls ?? [];
       return rail?.getAttribute('data-health') === 'live' &&
         calls.filter((call) => call.command === 'start_live_audio_input').length === ${
@@ -15614,7 +15662,7 @@ async function runLiveAudioSavedSelectionBackendScopeAcceptance(client, viewport
   await waitForClientCondition(
     client,
     `(() => {
-      const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar');
+      const rail = document.querySelector('.liveAudioInputBar');
       const action = rail?.querySelector('[data-live-audio-action="transport"]');
       const saved = rail?.querySelector('[data-live-audio-saved-state]');
       return rail?.getAttribute('data-live-audio-backend') === 'wasapi_shared' &&
@@ -15638,7 +15686,7 @@ async function runLiveAudioSavedSelectionBackendScopeAcceptance(client, viewport
   await waitForClientCondition(
     client,
     `(() => {
-      const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar');
+      const rail = document.querySelector('.liveAudioInputBar');
       const calls = window.__syndocalLiveAudioMock?.calls ?? [];
       return rail?.getAttribute('data-health') === 'live' &&
         calls.filter((call) => call.command === 'start_live_audio_input').length === ${
@@ -15762,7 +15810,7 @@ async function runLiveAudioRestoreAcceptanceViewport(client, viewport) {
     const backendErrorSettled = await waitForClientCondition(
       client,
       `(() => {
-        const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar');
+      const rail = document.querySelector('.liveAudioInputBar');
         const calls = window.__syndocalLiveAudioMock?.calls ?? [];
         return Boolean(
           rail?.getAttribute('data-live-audio-backend-state') === 'fault' &&
@@ -15786,7 +15834,7 @@ async function runLiveAudioRestoreAcceptanceViewport(client, viewport) {
     await waitForClientCondition(
       client,
       `(() => {
-        const rail = document.querySelector('.videoMixerClipPane > .liveAudioInputBar');
+      const rail = document.querySelector('.liveAudioInputBar');
         return rail?.getAttribute('data-live-audio-backend-state') === ${JSON.stringify(availability)} &&
           rail?.getAttribute('data-live-audio-backend-availability') === ${JSON.stringify(availability)};
       })()`,
@@ -22947,11 +22995,11 @@ async function exerciseSceneMatrixCrossBankMoveAndUndo(client) {
   };
 }
 
-// B4: the authoritative 32-slot bank is the primary Clip surface and must keep
-// all stable pad identities within its own scrollport. The prior 12-layer
-// transport/capture grid remains available behind its collapsed disclosure;
-// this gate opens that disclosure and proves its terminal pad remains reachable
-// through local scrolling without reviving it as the primary surface.
+// B4: the authoritative 32-slot bank is the primary Clip surface of the fixed
+// Video authoring domain and must keep all stable pad identities within its own
+// scrollport. The older live-mixer/transport consumers are intentionally not
+// mounted in this source-preparation surface; Control/Touch owns performance
+// controls. This keeps the three-screen editor contract small and explicit.
 async function runVjBankViewport(client, viewport) {
   await client.send("Emulation.setDeviceMetricsOverride", {
     width: viewport.width,
@@ -23003,36 +23051,30 @@ async function runVjBankViewport(client, viewport) {
         && app.scrollWidth === app.clientWidth && app.scrollHeight === app.clientHeight,
     };
   });
-  const legacyTransport = await evaluatePageFunction(client, () => {
-    const app = document.querySelector('.app');
-    const details = document.querySelector('.videoMixerClipPane .videoClipLegacyTransport');
-    if (!(app instanceof HTMLElement) || !(details instanceof HTMLDetailsElement)) return { present: false };
-    const initiallyOpen = details.open;
-    details.open = true;
-    const panel = details.querySelector('.videoClipGridPanel');
-    const grid = details.querySelector('.videoClipGrid');
-    const pads = [...details.querySelectorAll('.videoClipPad')];
-    if (!(panel instanceof HTMLElement) || !(grid instanceof HTMLElement)) {
-      details.open = initiallyOpen;
-      return { present: true, initiallyOpen, reachable: false, count: pads.length };
-    }
-    const before = { windowX: window.scrollX, windowY: window.scrollY, appTop: app.scrollTop, appLeft: app.scrollLeft };
-    details.scrollIntoView({ block: 'nearest' });
-    panel.scrollTop = panel.scrollHeight;
-    grid.scrollTop = grid.scrollHeight;
-    const terminal = pads.at(-1)?.getBoundingClientRect();
-    const panelRect = panel.getBoundingClientRect();
-    const reachable = Boolean(terminal)
-      && terminal.left >= panelRect.left - 1 && terminal.right <= panelRect.right + 1
-      && terminal.top >= panelRect.top - 1 && terminal.bottom <= panelRect.bottom + 1;
-    const after = { windowX: window.scrollX, windowY: window.scrollY, appTop: app.scrollTop, appLeft: app.scrollLeft };
-    details.open = initiallyOpen;
+  const currentSurface = await evaluatePageFunction(client, () => {
+    const visible = (element) => {
+      if (!(element instanceof HTMLElement)) return false;
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+    };
+    const upper = document.querySelector('[data-video-media-library="true"]');
+    const lowerLeft = document.querySelector('[data-edit-video-preview]');
+    const lowerRight = document.querySelector('[data-edit-video-inspector]');
+    const hiddenMixerConsumers = [
+      '.videoMixerTopPane',
+      '[data-mixer-drawer-toggle]',
+      '.videoMixerContextPane',
+      '.videoClipLegacyTransport',
+      '.videoClipGridPanel',
+    ].filter((selector) => [...document.querySelectorAll(selector)].some(visible));
     return {
-      present: true,
-      initiallyOpen,
-      count: pads.length,
-      reachable,
-      outerScrollStable: JSON.stringify(before) === JSON.stringify(after),
+      upperLibrary: visible(upper),
+      mediaRail: visible(upper?.querySelector('[data-media-library-rail]')),
+      bank: visible(upper?.querySelector('[data-video-clip-slot-bank="edit"]')),
+      lowerLeftPreview: visible(lowerLeft),
+      lowerRightInspector: visible(lowerRight),
+      hiddenMixerConsumers,
     };
   });
   const conditions = [
@@ -23044,34 +23086,10 @@ async function runVjBankViewport(client, viewport) {
       b4Bank.overflowY === "auto" && b4Bank.terminalReachable],
     ["vjBankPrimaryPreservesTargetsAndOuterFrame", () =>
       b4Bank.undersizedTargets === 0 && b4Bank.outerScrollStable && b4Bank.documentFixed],
-    ["vjBankLegacyTransportCollapsedAndReachable", () =>
-      legacyTransport.present && !legacyTransport.initiallyOpen &&
-      legacyTransport.count === 12 && legacyTransport.reachable && legacyTransport.outerScrollStable],
-    ["vjBankDrawersDefaultClosed", () =>
-      containment.mixerDrawerBarCount === 3 && containment.mixerDrawerOpenCount === 0],
-    ["vjBankMonitorsDominateCenterColumn", () => containment.videoMixerMonitorHeightRatio >= 0.65],
-    ["vjBankTopMonitorAndMasterRemainUsable", () =>
-      containment.videoMixerTopPaneUsability.present &&
-      containment.videoMixerTopPaneUsability.previewViewport[1] >= 100 &&
-      containment.videoMixerTopPaneUsability.programViewport[1] >= 100 &&
-      containment.videoMixerTopPaneUsability.monitorContained &&
-      containment.videoMixerTopPaneUsability.previewViewportContained &&
-      containment.videoMixerTopPaneUsability.programViewportContained &&
-      containment.videoMixerTopPaneUsability.transportContained &&
-      containment.videoMixerTopPaneUsability.transportSeparateFromBuses &&
-      containment.videoMixerTopPaneUsability.masterContained &&
-      containment.videoMixerTopPaneUsability.terminalMasterControlReachable],
-    ["vjBankShortHeightDrawerControlsRemainReachable", () => {
-      const layout = containment.mixerDrawerShortHeightLayout;
-      return !layout.shortHeight || (
-        layout.present && layout.sameRow && layout.ordered &&
-        layout.drawers.length === 3 &&
-        layout.drawers.every((drawer) => drawer.contained && drawer.titleUnclipped && drawer.statusUnclipped)
-      );
-    }],
-    ["vjBankLayerTerminalControlReachable", () => containment.videoMixerRightContextControlsReachable.layers?.reachable],
-    ["vjBankKillVocabularyPresent", () => containment.visibleMixerKillButtonCount >= 1],
-    ["vjBankPagerPresentForSecondBank", () => containment.visibleVideoDeckPagerCount >= 1],
+    ["vjBankUsesTheFixedThreeScreenVideoSurface", () =>
+      currentSurface.upperLibrary && currentSurface.mediaRail && currentSurface.bank &&
+      currentSurface.lowerLeftPreview && currentSurface.lowerRightInspector],
+    ["vjBankDoesNotMountHiddenMixerConsumers", () => currentSurface.hiddenMixerConsumers.length === 0],
     ["vjBankContained", () => isContained(containment)],
   ];
   const failedChecks = conditions.filter(([, check]) => !check()).map(([name]) => name);
@@ -23082,17 +23100,12 @@ async function runVjBankViewport(client, viewport) {
     failedChecks,
     pads: [b4Bank.count, b4Bank.columns, b4Bank.undersizedTargets],
     b4Bank,
-    legacyTransport,
+    currentSurface,
     padGeometry: {
       gridHeight: containment.videoClipGridClientHeight,
       firstPad: containment.videoClipFirstPadBounds,
       grid: containment.videoClipGridBounds,
     },
-    drawers: [containment.mixerDrawerBarCount, containment.mixerDrawerOpenCount],
-    monitorRatio: containment.videoMixerMonitorHeightRatio,
-    topPane: containment.videoMixerTopPaneUsability,
-    rightContextReachability: containment.videoMixerRightContextControlsReachable,
-    layerRows: containment.fullyVisibleVideoLayerItemCount,
     containment: {
       document: [containment.documentScrollWidth, containment.documentClientWidth, containment.documentScrollHeight, containment.documentClientHeight],
       app: [containment.appScrollWidth, containment.appClientWidth, containment.appScrollHeight, containment.appClientHeight],
@@ -40382,8 +40395,7 @@ async function main() {
         vjBankResults.push(result);
         console.log(
           `${result.passed ? "pass" : "fail"} ${result.label} ` +
-          `pads=${result.pads.join("/")} drawers=${result.drawers.join("/")} ` +
-          `monitorRatio=${result.monitorRatio} layerRows=${result.layerRows} ` +
+          `pads=${result.pads.join("/")} surface=${result.currentSurface.upperLibrary ? "fixed-three-screen" : "missing"} ` +
           `failed=${JSON.stringify(result.failedChecks)}`,
         );
       }
@@ -40943,7 +40955,7 @@ async function main() {
     }
     for (const result of vjBankResults) {
       console.log(
-        `${result.passed ? "pass" : "fail"} ${result.label} pads=${result.pads.join("/")} drawers=${result.drawers.join("/")} monitorRatio=${result.monitorRatio} layerRows=${result.layerRows} kill=${result.killButtons} failed=${JSON.stringify(result.failedChecks)}`,
+        `${result.passed ? "pass" : "fail"} ${result.label} pads=${result.pads.join("/")} surface=${result.currentSurface.upperLibrary ? "fixed-three-screen" : "missing"} failed=${JSON.stringify(result.failedChecks)}`,
       );
     }
     for (const result of liveEditTypeResults) {

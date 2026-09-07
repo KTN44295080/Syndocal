@@ -15,6 +15,9 @@ struct Params {
     fx_b: vec4<f32>,
 };
 
+const SAMPLE_COORDINATE_EPSILON: f32 = 0.000001;
+const UNIT_INTERVAL_EDGE_EPSILON: f32 = 0.000001;
+
 @group(0) @binding(0)
 var<storage, read> source_pixels: array<u32>;
 
@@ -227,7 +230,9 @@ fn composite_layer(@builtin(global_invocation_id) invocation_id: vec3<u32>) {
     let rotated_y = centered_x * sine + centered_y * cosine;
     let local_x = rotated_x / params.transform_a.z + 0.5;
     let local_y = rotated_y / params.transform_a.w + 0.5;
-    if (local_x < 0.0 || local_x >= 1.0 || local_y < 0.0 || local_y >= 1.0) {
+    if (local_x < 0.0 || local_x >= 1.0 || local_y < 0.0 || local_y >= 1.0
+        || local_x >= 1.0 - UNIT_INTERVAL_EDGE_EPSILON
+        || local_y >= 1.0 - UNIT_INTERVAL_EDGE_EPSILON) {
         return;
     }
 
@@ -236,8 +241,8 @@ fn composite_layer(@builtin(global_invocation_id) invocation_id: vec3<u32>) {
     if (params.transform_b.w <= params.transform_b.y || params.transform_c.x <= params.transform_b.z) {
         return;
     }
-    let source_x = min(u32(floor(source_u * f32(params.source_width))), params.source_width - 1u);
-    let source_y = min(u32(floor(source_v * f32(params.source_height))), params.source_height - 1u);
+    let source_x = min(u32(floor(source_u * f32(params.source_width) + SAMPLE_COORDINATE_EPSILON)), params.source_width - 1u);
+    let source_y = min(u32(floor(source_v * f32(params.source_height) + SAMPLE_COORDINATE_EPSILON)), params.source_height - 1u);
     let sampled = sample_with_fx(source_x, source_y);
     let sampled_pixel = pack_rgba(sampled.rgb, sampled.a);
     let source = apply_color_key(adjust_color(sampled_pixel));

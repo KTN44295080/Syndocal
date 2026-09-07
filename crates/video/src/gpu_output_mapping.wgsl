@@ -13,6 +13,8 @@ struct Params {
     mask_points: array<vec4<f32>, 8>,
 };
 
+const SAMPLE_COORDINATE_EPSILON: f32 = 0.000001;
+
 @group(0) @binding(0)
 var<storage, read> source_pixels: array<u32>;
 
@@ -163,8 +165,8 @@ fn map_output(@builtin(global_invocation_id) invocation_id: vec3<u32>) {
         return;
     }
 
-    let pixel_x = min(u32(floor((source_x + 0.5) * f32(params.width))), params.width - 1u);
-    let pixel_y = min(u32(floor((source_y + 0.5) * f32(params.height))), params.height - 1u);
+    let pixel_x = min(u32(floor((source_x + 0.5) * f32(params.width) + SAMPLE_COORDINATE_EPSILON)), params.width - 1u);
+    let pixel_y = min(u32(floor((source_y + 0.5) * f32(params.height) + SAMPLE_COORDINATE_EPSILON)), params.height - 1u);
     let packed = source_pixels[pixel_y * params.width + pixel_x];
     let source = vec4<f32>(
         f32(packed & 0xffu),

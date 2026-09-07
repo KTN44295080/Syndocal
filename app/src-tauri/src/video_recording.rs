@@ -1,7 +1,6 @@
 //! FFmpeg recording orchestration; UI/runtime ownership stays in the application adapter.
 use super::{
-    capture_video_output_preview_effect_snapshot, recording_artifact, AppVideoPreviewRenderer,
-    VideoRecordingStatus,
+    capture_video_output_preview_effect_snapshot, recording_artifact, VideoRecordingStatus,
 };
 use engine::EngineHandle;
 use protocol::VideoOutputId;
@@ -20,8 +19,84 @@ use std::{
 
 #[path = "video_recording_encoder.rs"]
 pub(crate) mod encoder;
-#[path = "video_recording_renderer_access.rs"]
-mod renderer_access;
+use super::video_recording_renderer_process::{self, RecordingRenderRequest};
+
+/// The application-side input ownership seam for isolated recording. Live
+/// capture transports stay in the parent, while the child owns decode,
+/// composition, effects and output mapping.
+pub(super) struct RecordingExternalFrameSources {
+    capture_inputs: crate::capture_transport::CaptureInputRegistry,
+    #[cfg(feature = "ndi")]
+    ndi_inputs: crate::ndi_transport::NdiInputRegistry,
+    #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+    spout_inputs: crate::spout_transport::SpoutInputRegistry,
+}
+
+impl RecordingExternalFrameSources {
+    pub(super) fn new(
+        capture_inputs: crate::capture_transport::CaptureInputRegistry,
+        #[cfg(feature = "ndi")] ndi_inputs: crate::ndi_transport::NdiInputRegistry,
+        #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+        spout_inputs: crate::spout_transport::SpoutInputRegistry,
+    ) -> Self {
+        Self {
+            capture_inputs,
+            #[cfg(feature = "ndi")]
+            ndi_inputs,
+            #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+            spout_inputs,
+        }
+    }
+
+    fn snapshot(&self, video: &protocol::VideoSnapshot) -> Vec<video::VideoFrame> {
+        let capture = self.capture_inputs.lock().ok();
+        #[cfg(feature = "ndi")]
+        let mut ndi = self.ndi_inputs.lock().ok();
+        #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+        let spout = self.spout_inputs.lock().ok();
+        let mut frames = Vec::new();
+        for layer in &video.layers {
+            let mut frame = match layer.source.kind {
+                protocol::VideoSourceKind::Camera | protocol::VideoSourceKind::ScreenCapture => {
+                    capture.as_ref().and_then(|frames| frames.get(&layer.id).cloned())
+                }
+                #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+                protocol::VideoSourceKind::Spout => {
+                    spout.as_ref().and_then(|frames| frames.get(&layer.id).cloned())
+                }
+                #[cfg(feature = "ndi")]
+                protocol::VideoSourceKind::Ndi => ndi.as_mut().and_then(|inputs| {
+                    inputs
+                        .get(&layer.id)
+                        .and_then(|input| input.take_latest().ok().flatten())
+                        .map(|frame| video::VideoFrame {
+                            layer_id: layer.id,
+                            width: frame.width,
+                            height: frame.height,
+                            pts_ms: layer.state.position_ms,
+                            duration_ms: 0,
+                            format: video::VideoPixelFormat::Rgba8,
+                            data: frame.rgba,
+                        })
+                }),
+                _ => None,
+            };
+            let Some(mut frame) = frame.take() else {
+                continue;
+            };
+            frame.layer_id = layer.id;
+            frame.pts_ms = layer.state.position_ms;
+            if frame.format == video::VideoPixelFormat::Rgba8
+                && frame.width > 0
+                && frame.height > 0
+                && frame.width as usize * frame.height as usize * 4 == frame.data.len()
+            {
+                frames.push(frame);
+            }
+        }
+        frames
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct RecordingAudioInput {
@@ -77,7 +152,7 @@ pub(super) fn video_recording_ffmpeg_command(
 
 pub(super) struct VideoOutputRecordingContext {
     pub(super) engine: EngineHandle,
-    pub(super) renderer: Arc<Mutex<AppVideoPreviewRenderer>>,
+    pub(super) input_sources: RecordingExternalFrameSources,
     pub(super) output_id: VideoOutputId,
     pub(super) path: PathBuf,
     pub(super) width: u32,
@@ -91,7 +166,7 @@ pub(super) struct VideoOutputRecordingContext {
 pub(super) fn run_video_output_recording(context: VideoOutputRecordingContext) {
     let VideoOutputRecordingContext {
         engine,
-        renderer,
+        input_sources,
         output_id,
         path,
         width,
@@ -131,36 +206,48 @@ pub(super) fn run_video_output_recording(context: VideoOutputRecordingContext) {
         finish_failed_video_recording(&status, &mut artifact, error);
         return;
     };
+    let renderer = match video_recording_renderer_process::RecordingRendererProcess::spawn(
+        Arc::clone(&stop),
+    ) {
+        Ok(renderer) => renderer,
+        Err(error) => {
+            let error = match encoder.fail(format!(
+                "Unable to start isolated recording renderer: {error}"
+            )) {
+                Ok(_) => {
+                    "Recording encoder stopped without returning the renderer startup error"
+                        .to_string()
+                }
+                Err(error) => error,
+            };
+            finish_failed_video_recording(&status, &mut artifact, error);
+            return;
+        }
+    };
     let mut frames_written = 0_u64;
     let mut recording_error = None;
     let frame_interval = Duration::from_secs_f64(1.0 / frame_rate as f64);
     let mut next_frame_at = Instant::now();
     while !stop.load(Ordering::Acquire) {
         let output_preview = capture_video_output_preview_effect_snapshot(&engine);
-        let frame = {
-            let mut renderer = match renderer_access::acquire(&renderer, &stop) {
-                Ok(Some(renderer)) => renderer,
-                Ok(None) => break,
-                Err(error) => {
-                    recording_error = Some(error.to_string());
-                    break;
-                }
-            };
-            renderer
-                .frame_provider_mut()
-                .set_bpm(Some(output_preview.snapshot.clock.bpm));
-            let is_cancelled = || stop.load(Ordering::Acquire);
-            renderer
-                .render_output_preview_with_effects_and_transitions_cancellable(
-                    &output_preview.snapshot.video,
-                    output_preview.render_context(),
-                    &output_preview.snapshot.video_transition_runtime,
-                    output_id,
-                    width,
-                    height,
-                    &is_cancelled,
-                )
-                .ok()
+        let request = RecordingRenderRequest {
+            video: output_preview.snapshot.video.clone(),
+            clip_runtime: output_preview.snapshot.video_clip_runtime.clone(),
+            transition_runtime: output_preview.snapshot.video_transition_runtime.clone(),
+            project_render_epoch: output_preview.project_render_epoch,
+            bpm: output_preview.snapshot.clock.bpm,
+            output_id,
+            width,
+            height,
+            injected_frames: input_sources.snapshot(&output_preview.snapshot.video),
+        };
+        let frame = match renderer.render(&request, &stop) {
+            Ok(frame) => Some(frame),
+            Err(_error) if stop.load(Ordering::Acquire) => break,
+            Err(error) => {
+                recording_error = Some(error);
+                break;
+            }
         };
         if stop.load(Ordering::Acquire) {
             break;
@@ -200,6 +287,7 @@ pub(super) fn run_video_output_recording(context: VideoOutputRecordingContext) {
             next_frame_at = now;
         }
     }
+    drop(renderer);
     drop(stdin);
     let encoded = match recording_error {
         Some(error) => encoder.fail(error),
