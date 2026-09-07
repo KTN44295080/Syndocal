@@ -66,6 +66,8 @@ use video_recording_runtime::{
 mod video_recording;
 use video_recording::{run_video_output_recording, RecordingAudioInput, VideoOutputRecordingContext};
 use video_recording::RecordingExternalFrameSources;
+#[cfg(target_os = "macos")]
+mod mac_audio_resources;
 #[cfg(test)]
 use video_recording::{
     configure_recording_audio_inputs, ffmpeg_atempo_filter, finish_video_recording_status,
@@ -179,6 +181,11 @@ use protocol::{
     VideoTransitionBusId, COLOR_EFFECT_SPATIAL_PARAMETER_MODEL_VERSION,
 };
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
+
+#[cfg(target_os = "macos")]
+type DirectMediaAudioOutput = mac_audio_resources::MacAudioOutput;
+#[cfg(not(target_os = "macos"))]
+type DirectMediaAudioOutput = rodio::OutputStream;
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 #[cfg(windows)]
@@ -13977,7 +13984,7 @@ struct TimelineCueEngineIdentity {
 enum TimelineCueAudioAttachmentOutput {
     Legacy {
         mixer: rodio::mixer::Mixer,
-        _explicit_stream: Option<rodio::OutputStream>,
+        _explicit_stream: Option<DirectMediaAudioOutput>,
     },
     #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
     AsioCue {
@@ -14223,7 +14230,7 @@ struct PreparedTimelineCueDestination {
     program_device_generation: Option<u64>,
     resolved_device_name: Option<String>,
     topology_fingerprint: Option<String>,
-    explicit_stream: Option<rodio::OutputStream>,
+    explicit_stream: Option<DirectMediaAudioOutput>,
     assets: timeline_cue_audio::GuideAssetBank,
 }
 
@@ -14551,14 +14558,44 @@ fn prepare_explicit_timeline_cue_destination(
         expected_topology,
         &topology_fingerprint,
     )?;
-    let (_, device) = devices.swap_remove(index);
-    let resolved_device_name = device.name().ok();
-    let stream = rodio::OutputStreamBuilder::from_device(device)
-        .and_then(|builder| builder.open_stream())
-        .map_err(|error| format!("Failed to open Timeline cue audio output: {error}"))?;
-    let output_sample_rate = stream.config().sample_rate();
-    let channels = stream.config().channel_count();
-    let mixer = stream.mixer().clone();
+    #[cfg(target_os = "macos")]
+    let _ = index;
+    #[cfg(target_os = "macos")]
+    let (resolved_device_name, output_sample_rate, channels, mixer, explicit_stream) = {
+        // CoreAudio's stream is owned by a dedicated resource thread. Only
+        // its thread-safe Mixer and immutable format metadata cross into the
+        // shared Tauri state.
+        let output = mac_audio_resources::MacAudioOutput::open(Some(requested_name), false)?;
+        let resolved_device_name = output.device_name().map(str::to_owned);
+        let output_sample_rate = output.sample_rate();
+        let channels = output.channels();
+        let mixer = output.mixer().clone();
+        (
+            resolved_device_name,
+            output_sample_rate,
+            channels,
+            mixer,
+            Some(output),
+        )
+    };
+    #[cfg(not(target_os = "macos"))]
+    let (resolved_device_name, output_sample_rate, channels, mixer, explicit_stream) = {
+        let (_, device) = devices.swap_remove(index);
+        let resolved_device_name = device.name().ok();
+        let stream = rodio::OutputStreamBuilder::from_device(device)
+            .and_then(|builder| builder.open_stream())
+            .map_err(|error| format!("Failed to open Timeline cue audio output: {error}"))?;
+        let output_sample_rate = stream.config().sample_rate();
+        let channels = stream.config().channel_count();
+        let mixer = stream.mixer().clone();
+        (
+            resolved_device_name,
+            output_sample_rate,
+            channels,
+            mixer,
+            Some(stream),
+        )
+    };
     let assets = timeline_cue_audio::GuideAssetBank::prepare_embedded(output_sample_rate)?;
     Ok((
         PreparedTimelineCueDestination {
@@ -14568,7 +14605,7 @@ fn prepare_explicit_timeline_cue_destination(
             program_device_generation: None,
             resolved_device_name,
             topology_fingerprint: Some(topology_fingerprint),
-            explicit_stream: Some(stream),
+            explicit_stream,
             assets,
         },
         endpoints,
@@ -17972,7 +18009,7 @@ struct MediaAudioPlayback {
     #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
     pending_normal_output_retirements: Vec<PendingNormalOutputRetirement>,
     #[cfg(not(all(target_os = "windows", target_arch = "x86_64", feature = "asio")))]
-    stream: Option<rodio::OutputStream>,
+    stream: Option<DirectMediaAudioOutput>,
     #[cfg(test)]
     timeline_test_mixer: Option<rodio::mixer::Mixer>,
     device_name: Option<String>,
@@ -18134,7 +18171,7 @@ enum PreparedMediaAudioOutput {
     Router(normal_audio_output::NormalAudioOutput),
     #[cfg(not(all(target_os = "windows", target_arch = "x86_64", feature = "asio")))]
     Direct {
-        stream: rodio::OutputStream,
+        stream: DirectMediaAudioOutput,
         mixer: rodio::mixer::Mixer,
         device_name: Option<String>,
         requested_device_name: Option<String>,
@@ -21176,8 +21213,13 @@ impl LiveAudioInputWatchdog {
 }
 
 enum LiveAudioCaptureStream {
+    #[cfg(not(target_os = "macos"))]
     Wasapi {
         _stream: rodio::cpal::Stream,
+    },
+    #[cfg(target_os = "macos")]
+    Mac {
+        owner: mac_audio_resources::MacAudioInputStream,
     },
     #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
     Asio {
@@ -21270,6 +21312,27 @@ impl Drop for LiveAudioInput {
 fn prepare_media_audio_output(
     requested_device_name: Option<&str>,
 ) -> Result<PreparedMediaAudioOutput, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let output = mac_audio_resources::MacAudioOutput::open(requested_device_name, true)?;
+        let mixer = output.mixer().clone();
+        let device_name = requested_device_name
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .map(str::to_owned)
+            .or_else(|| output.device_name().map(str::to_owned));
+        return Ok(PreparedMediaAudioOutput::Direct {
+            stream: output,
+            mixer,
+            device_name,
+            requested_device_name: requested_device_name
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .map(str::to_owned),
+        });
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
     use rodio::cpal::traits::{DeviceTrait, HostTrait};
 
     let requested_device_name = requested_device_name
@@ -21297,6 +21360,7 @@ fn prepare_media_audio_output(
         device_name: requested_device_name.map(str::to_string).or(resolved_name),
         requested_device_name: requested_device_name.map(str::to_string),
     })
+    }
 }
 
 fn prepare_timeline_audio_clip(
@@ -45897,13 +45961,13 @@ where
     )
 }
 
-fn build_wasapi_live_audio_capture(
+fn build_live_audio_input_cpal_stream(
     device: &rodio::cpal::Device,
     config: &rodio::cpal::StreamConfig,
     sample_format: rodio::cpal::SampleFormat,
     capture: LiveAudioCaptureCallbackContext,
     errors: LiveAudioStreamErrorContext,
-) -> Result<LiveAudioCaptureStream, String> {
+) -> Result<rodio::cpal::Stream, String> {
     use rodio::cpal::traits::StreamTrait;
 
     let stream = match sample_format {
@@ -45943,13 +46007,47 @@ fn build_wasapi_live_audio_capture(
         rodio::cpal::SampleFormat::F64 => {
             build_live_audio_input_stream::<f64>(device, config, capture, errors)
         }
-        format => return Err(format!("Unsupported audio input sample format {format:?}")),
+        _ => return Err(format!("Unsupported audio input sample format {sample_format:?}")),
     }
     .map_err(|error| format!("Failed to build audio input stream: {error}"))?;
     stream
         .play()
         .map_err(|error| format!("Failed to start audio input stream: {error}"))?;
+    Ok(stream)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn build_wasapi_live_audio_capture(
+    device: &rodio::cpal::Device,
+    config: &rodio::cpal::StreamConfig,
+    sample_format: rodio::cpal::SampleFormat,
+    capture: LiveAudioCaptureCallbackContext,
+    errors: LiveAudioStreamErrorContext,
+) -> Result<LiveAudioCaptureStream, String> {
+    let stream = build_live_audio_input_cpal_stream(device, config, sample_format, capture, errors)?;
     Ok(LiveAudioCaptureStream::Wasapi { _stream: stream })
+}
+
+#[cfg(target_os = "macos")]
+fn build_wasapi_live_audio_capture(
+    device: &rodio::cpal::Device,
+    config: &rodio::cpal::StreamConfig,
+    sample_format: rodio::cpal::SampleFormat,
+    capture: LiveAudioCaptureCallbackContext,
+    errors: LiveAudioStreamErrorContext,
+) -> Result<LiveAudioCaptureStream, String> {
+    let device = device.clone();
+    let config = config.clone();
+    let owner = mac_audio_resources::own_input_stream(move || {
+        build_live_audio_input_cpal_stream(
+            &device,
+            &config,
+            sample_format,
+            capture,
+            errors,
+        )
+    })?;
+    Ok(LiveAudioCaptureStream::Mac { owner })
 }
 
 #[tauri::command]
@@ -129528,6 +129626,7 @@ fn main() {
                 }
                 if let Ok(mut pending_paths) = app_handle
                     .state::<AppState>()
+                    .inner()
                     .pending_project_open_paths
                     .lock()
                 {
@@ -130083,7 +130182,7 @@ fn main() {
                 let state = app_handle.state::<AppState>();
                 if let Err(error) = output_lease_keepalive_integration::execute_current_boundary(
                     app_handle,
-                    &state,
+                    state.inner(),
                     output_lease::output_lease_keepalive::OutputLeaseKeepaliveBoundary::SessionIdentityChanged,
                     "Managed output lease process exit",
                 ) {
@@ -130111,6 +130210,7 @@ fn main() {
                 if !project_paths.is_empty() {
                     if let Ok(mut pending_paths) = app_handle
                         .state::<AppState>()
+                        .inner()
                         .pending_project_open_paths
                         .lock()
                     {

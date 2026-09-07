@@ -29,7 +29,10 @@ impl DiagnosticsReader {
         #[cfg(windows)] process_tree_guard: Option<super::process::ProcessTreeGuard>,
         #[cfg(not(windows))] _process_tree_guard: Option<()>,
     ) -> io::Result<Self> {
+        #[cfg(windows)]
         let control = Arc::new(ReaderControl::new(&stderr, process_tree_guard));
+        #[cfg(not(windows))]
+        let control = Arc::new(ReaderControl::new(&stderr));
         let worker_control = Arc::clone(&control);
         let join = thread::Builder::new()
             .name("syndocal-recording-stderr".into())
@@ -130,7 +133,6 @@ impl ReaderControl {
     fn new(
         stderr: &ChildStderr,
         #[cfg(windows)] process_tree_guard: Option<super::process::ProcessTreeGuard>,
-        #[cfg(not(windows))] _process_tree_guard: Option<()>,
     ) -> Self {
         #[cfg(windows)]
         {
