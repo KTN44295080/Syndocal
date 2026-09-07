@@ -24,8 +24,6 @@ jobs:
         include:
           - name: Windows 10+
             os: windows-2022
-          - name: macOS 12+
-            os: macos-15
           - name: Ubuntu 22.04
             os: ubuntu-22.04
 
@@ -55,51 +53,6 @@ jobs:
             librsvg2-dev \
             xvfb \
             ffmpeg
-
-      - name: Install macOS video SDK
-        if: runner.os == 'macOS'
-        run: |
-          brew install ffmpeg llvm pkg-config xz
-          echo "LIBCLANG_PATH=$(brew --prefix llvm)/lib" >> "$GITHUB_ENV"
-
-      - name: Cache macOS LGPL FFmpeg runtime
-        if: runner.os == 'macOS'
-        uses: actions/cache@v4
-        with:
-          path: ~/ffmpeg-lgpl-8.1.2
-          key: ffmpeg-lgpl-8.1.2-macos15-arm64-v2
-
-      - name: Build macOS LGPL FFmpeg runtime
-        if: runner.os == 'macOS'
-        run: |
-          prefix="$HOME/ffmpeg-lgpl-8.1.2"
-          if [[ ! -f "$prefix/lib/libavcodec.dylib" ]]; then
-            archive="$RUNNER_TEMP/ffmpeg-8.1.2.tar.xz"
-            source_dir="$RUNNER_TEMP/ffmpeg-8.1.2"
-            curl --fail --location --retry 3 \
-              https://ffmpeg.org/releases/ffmpeg-8.1.2.tar.xz \
-              --output "$archive"
-            tar -xf "$archive" -C "$RUNNER_TEMP"
-            cd "$source_dir"
-            MACOSX_DEPLOYMENT_TARGET=12.0 ./configure \
-              --prefix="$prefix" \
-              --disable-programs \
-              --disable-doc \
-              --disable-debug \
-              --disable-gpl \
-              --disable-autodetect \
-              --enable-version3 \
-              --disable-static \
-              --enable-shared \
-              --enable-pic \
-              --extra-cflags=-mmacosx-version-min=12.0 \
-              --extra-ldflags=-mmacosx-version-min=12.0
-            make -j3
-            make install
-          fi
-          echo "FFMPEG_PREFIX=$prefix" >> "$GITHUB_ENV"
-          echo "PKG_CONFIG_PATH=$prefix/lib/pkgconfig" >> "$GITHUB_ENV"
-          echo "MACOSX_DEPLOYMENT_TARGET=12.0" >> "$GITHUB_ENV"
 
       - name: Install Windows video SDK
         if: runner.os == 'Windows'
@@ -343,14 +296,6 @@ jobs:
         if: runner.os == 'Windows'
         run: pnpm --dir app tauri build --ci --bundles nsis,msi
 
-      - name: Bundle macOS application
-        if: runner.os == 'macOS'
-        run: |
-          pnpm --dir app tauri build --ci --bundles app
-          bash app/scripts/bundle-macos-runtime.sh \
-            target/release/bundle/macos/Syndocal.app \
-            target/release/bundle/dmg
-
       - name: Bundle Linux packages
         if: runner.os == 'Linux'
         run: pnpm --dir app tauri build --ci --bundles deb,appimage
@@ -391,18 +336,6 @@ jobs:
             $uninstall = Start-Process $uninstaller -ArgumentList '/S' -Wait -PassThru
             if ($uninstall.ExitCode -ne 0) { throw "NSIS uninstall failed with code $($uninstall.ExitCode)." }
           }
-
-      - name: Smoke-test macOS application
-        if: runner.os == 'macOS'
-        run: |
-          app_path=$(find target/release/bundle/macos -maxdepth 1 -name '*.app' -print -quit)
-          test -n "$app_path"
-          executable="$app_path/Contents/MacOS/syndocal"
-          test -x "$executable"
-          env -u DYLD_LIBRARY_PATH "$executable" & process_id=$!
-          sleep 8
-          kill -0 "$process_id"
-          kill "$process_id"
 
       - name: Smoke-test Linux AppImage
         if: runner.os == 'Linux'
