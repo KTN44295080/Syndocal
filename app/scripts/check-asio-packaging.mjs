@@ -587,6 +587,7 @@ try {
     workspace: workspaceRoot,
     targetTriple: undefined,
     environment: {},
+    processSnapshot: [{ processId: currentProcessId, parentProcessId: 0, commandLine: "node scripts/check-asio-packaging.mjs" }],
   });
   pass(result.stagedDirectories.length === 0, "unset FFMPEG_DIR creates no release directory");
   if (targetExistedBefore) {

@@ -565,6 +565,7 @@ export function main(options = {}) {
     workspace = workspaceRoot,
     targetTriple = process.env.TAURI_ENV_TARGET_TRIPLE,
     environment = process.env,
+    processSnapshot,
   } = options;
   const ffmpegDir = Object.hasOwn(options, "ffmpegDir") ? options.ffmpegDir : process.env.FFMPEG_DIR;
   validateAsioPackagingBoundary(undefined, {
@@ -576,7 +577,7 @@ export function main(options = {}) {
     return { stagedDirectories: [] };
   }
   assertNoNdiEnabledBundling(environment);
-  assertNoNdiCliBypass(environment, { platform });
+  assertNoNdiCliBypass(environment, { platform, snapshot: processSnapshot });
   const inventory = loadWindowsRuntimeInventory({ workspace });
   const releaseDirs = releaseDirectories(workspace, targetTriple);
   for (const releaseDir of releaseDirs) {

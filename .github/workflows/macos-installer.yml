@@ -85,9 +85,11 @@ jobs:
       - name: Install frontend dependencies
         run: pnpm --dir app install --frozen-lockfile
 
-      - name: Bundle macOS application and DMG
+      - name: Build macOS application bundle
+        run: pnpm --dir app tauri build --ci --bundles app
+
+      - name: Bundle macOS FFmpeg runtime and create DMG
         run: |
-          pnpm --dir app tauri build --ci --bundles app
           bash app/scripts/bundle-macos-runtime.sh \
             target/release/bundle/macos/Syndocal.app \
             target/release/bundle/dmg
