@@ -383,7 +383,7 @@ for (const [hostileLine, label] of [
     { ProcessId: 600, ParentProcessId: 0, CommandLine: "explorer.exe" },
   ]));
   rejects(
-    () => assertNoNdiCliBypass(process.env, { platform, currentProcessId, snapshot: processes }),
+    () => assertNoNdiCliBypass(process.env, { platform: "win32", currentProcessId, snapshot: processes }),
     /ancestor packaging process was invoked with an NDI feature flag/,
     "NDI CLI bypass chain rejection: " + label,
   );
@@ -395,12 +395,12 @@ for (const [hostileLine, label] of [
     { ProcessId: 600, ParentProcessId: 0, CommandLine: "Runner.Worker.exe" },
   ]));
   pass(
-    assertNoNdiCliBypass({ NDI_SDK_DIR: "C:\\Program Files\\NDI" }, { platform, currentProcessId, snapshot: benignProcesses }) === undefined,
+    assertNoNdiCliBypass({ NDI_SDK_DIR: "C:\\Program Files\\NDI" }, { platform: "win32", currentProcessId, snapshot: benignProcesses }) === undefined,
     "a benign ancestor chain with documented NDI_SDK_DIR usage passes the CLI bypass audit",
   );
 }
 rejects(
-  () => assertNoNdiCliBypass({}, { platform, currentProcessId: 999999, snapshot: [{ processId: 1, parentProcessId: 0, commandLine: "" }] }),
+  () => assertNoNdiCliBypass({}, { platform: "win32", currentProcessId: 999999, snapshot: [{ processId: 1, parentProcessId: 0, commandLine: "" }] }),
   /could not locate the packaging process itself/,
   "an incomplete process snapshot fails closed",
 );
