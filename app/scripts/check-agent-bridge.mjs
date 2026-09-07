@@ -2,6 +2,34 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import ts from 'typescript';
 
+const sourceText = async (relativePath) =>
+  readFile(new URL(relativePath, import.meta.url), 'utf8');
+const quoted = (source, pattern, quote) => {
+  const match = source.match(pattern);
+  assert.ok(match, `Canonical operation declaration was not found: ${pattern}`);
+  return [...match[1].matchAll(new RegExp(`${quote}([^${quote}]+)${quote}`, 'g'))]
+    .map((item) => item[1]);
+};
+
+const rustCanonicalIds = quoted(
+  await sourceText('../src-tauri/src/agent_bridge_wire.rs'),
+  /CANONICAL_OPERATION_IDS:\s*&\[&str\]\s*=\s*&\[\s*([\s\S]*?)\s*\];/,
+  '"',
+);
+const typescriptCanonicalIds = quoted(
+  await sourceText('../src/agentBridgeControlPlane.ts'),
+  /CANONICAL_TAURI_COMMANDS\s*=\s*\{\s*([\s\S]*?)\s*\}\s*as const;/,
+  '"',
+).filter((id) => id.startsWith('syndocal.'));
+const nodeCanonicalIds = quoted(
+  await sourceText('../../tools/syndocal-mcp/server.mjs'),
+  /const CANONICAL_OPERATION_IDS = new Set\(\[\s*([\s\S]*?)\s*\]\);/,
+  "'",
+);
+assert.equal(rustCanonicalIds.length, 47);
+assert.deepEqual([...typescriptCanonicalIds].sort(), [...rustCanonicalIds].sort());
+assert.deepEqual([...nodeCanonicalIds].sort(), [...rustCanonicalIds].sort());
+
 // Transpile actual production modules and resolve only their actual local dependency.
 const modules = new Map();
 for (const name of ['fixtureTransformConfirmation', 'outputControlController', 'agentBridgeBlackout', 'agentBridgeControlPlane', 'agentBridgeRecording', 'agentBridgeTools', 'agentBridgeRuntime']) {
@@ -38,6 +66,7 @@ const bundle = (item = fixture, project = token) => ({ ...project, timeline_runt
   timeline: { id: 3, playing: true, position_ms: 1250, duration_ms: 5000 },
 } });
 let groups = 0;
+groups++;
 
 {
   const calls = [];
