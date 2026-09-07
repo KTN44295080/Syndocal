@@ -47,6 +47,7 @@ for (const name of ['fixtureTransformConfirmation', 'outputControlController', '
   modules.set(`./${name}`, exports);
 }
 const { executeAgentBridgeRequest: execute } = modules.get('./agentBridgeTools');
+const { executeAgentBridgeCanonicalOperation: executeCanonical, CANONICAL_TAURI_COMMANDS } = modules.get('./agentBridgeControlPlane');
 const { startAgentBridgeRuntime: start } = modules.get('./agentBridgeRuntime');
 const token = { project_epoch: 4, project_revision: 9, checkpoint_hash: 'checkpoint-A' };
 const fixture = { id: 17, label: 'Moving head', position: { x: 0, y: 1, z: 2 }, rotation: { pitch: 3, yaw: 4, roll: 5 } };
@@ -67,6 +68,30 @@ const bundle = (item = fixture, project = token) => ({ ...project, timeline_runt
 } });
 let groups = 0;
 groups++;
+
+// Exercise actual adapter admission before any invoke or mutation notification.
+for (const operationId of Object.getOwnPropertyNames(Object.prototype)) {
+  let invokes = 0, notifications = 0;
+  await assert.rejects(executeCanonical(async () => { invokes++; return {}; },
+    { operationId, request: {} }, () => { notifications++; }), /not executable/);
+  assert.equal(invokes, 0, `${operationId} must not reach invoke`);
+  assert.equal(notifications, 0, `${operationId} must not mark a mutation started`);
+  const result = await execute(async () => { invokes++; return {}; },
+    request('control_plane.execute', { operationId, request: {} }));
+  assert.equal(result.ok, false);
+  assert.equal(result.error.code, 'request_rejected');
+  assert.equal(invokes, 0);
+}
+for (const [operationId, expectedCommand] of Object.entries(CANONICAL_TAURI_COMMANDS)) {
+  const calls = []; let notifications = 0;
+  const payload = {};
+  await executeCanonical(async (command, args) => { calls.push([command, args]); return {}; },
+    { operationId, request: payload }, () => { notifications++; });
+  assert.deepEqual(calls, [[expectedCommand, payload]]);
+  assert.equal(notifications, operationId.startsWith('syndocal.query.') ? 0 : 1);
+}
+groups++;
+
 
 {
   const calls = [];
