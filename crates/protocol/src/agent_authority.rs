@@ -251,6 +251,9 @@ impl AgentAuthority {
         principal: AgentPrincipalId,
         incarnation: u64,
     ) -> Result<(), AgentAuthorityError> {
+        if self.kill_switch_active {
+            return Err(AgentAuthorityError::KillSwitchActive);
+        }
         if incarnation == 0 {
             return Err(AgentAuthorityError::InvalidIncarnation);
         }
@@ -262,11 +265,17 @@ impl AgentAuthority {
                 return Err(AgentAuthorityError::PrincipalIncarnationStale);
             }
         }
+        let generation = self
+            .principals
+            .get(&principal)
+            .map(|existing| next_generation(existing.generation))
+            .transpose()?
+            .unwrap_or(1);
         self.principals.insert(
             principal,
             PrincipalState {
                 incarnation,
-                generation: 1,
+                generation,
                 mode: PrincipalMode::Safe,
                 revoked: false,
                 grants: BTreeSet::new(),
@@ -886,6 +895,63 @@ mod tests {
             }),
             Err(AgentAuthorityError::PrincipalIncarnationStale)
         );
+    }
+
+    #[test]
+    fn re_pairing_advances_principal_generation_and_invalidates_old_authorization() {
+        let id = principal("client-a");
+        let mut authority = AgentAuthority::default();
+        authority.pair_external(id.clone(), 7).unwrap();
+        let read = AgentRequestContext {
+            risk: OperationRisk::R0,
+            capability: AgentCapability::Read,
+            operation_id: "syndocal.query.project.authority.v1".to_string(),
+            project_id: None,
+            owner_incarnation: 0,
+            ..context(&id, AgentCapability::Read, OperationRisk::R0)
+        };
+        authority
+            .grant(
+                &id,
+                7,
+                AgentGrant::new(
+                    AdapterKind::ExternalMcp,
+                    AgentCapability::Read,
+                    &read.operation_id,
+                    None,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let old_authorization = authority.authorize(&read).unwrap();
+        authority.revoke(&id, 7).unwrap();
+        authority.pair_external(id.clone(), 8).unwrap();
+        assert_eq!(
+            authority.validate_authorization(&id, 8, old_authorization),
+            Err(AgentAuthorityError::PrincipalIncarnationStale)
+        );
+        assert_eq!(
+            authority.authorize(&AgentRequestContext {
+                principal_incarnation: 8,
+                ..read
+            }),
+            Err(AgentAuthorityError::MissingGrant)
+        );
+    }
+
+    #[test]
+    fn pairing_is_closed_while_kill_switch_is_active_until_repair_after_clear() {
+        let id = principal("client-a");
+        let other = principal("client-b");
+        let mut authority = AgentAuthority::default();
+        authority.pair_external(id, 7).unwrap();
+        authority.kill_switch().unwrap();
+        assert_eq!(
+            authority.pair_external(other.clone(), 1),
+            Err(AgentAuthorityError::KillSwitchActive)
+        );
+        authority.clear_kill_switch().unwrap();
+        authority.pair_external(other, 1).unwrap();
     }
 
     #[test]
