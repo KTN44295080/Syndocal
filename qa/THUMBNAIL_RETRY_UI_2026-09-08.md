@@ -3,7 +3,7 @@
 Base main: `f6281167925ece4ad6b8fdee74bf65ad88c2b275`.
 Branch: `chatgpt/thumbnail-recovery-ui-20260908`.
 Scope: reachable explicit recovery for missing thumbnails, not GUI cancellation.
-Main promotion requires the remaining checks stated below.
+Main promotion was completed after the remaining checks stated below passed.
 
 ## Behavior and responsibilities
 
@@ -145,6 +145,7 @@ operator facade; recovery interaction evidence above is the component/browser
 fixture. GUI cancellation, running-decoder-stop latency, physical devices, Mac
 execution of this UI change, signing and venue acceptance remain outside scope.
 
-Final disposition: candidate source and evidence saved on its own branch; main
-not updated. Outstanding ordinary regressions and independent re-review of the
-final capability fix are the handoff, not a request to reimplement the feature.
+Final disposition: the candidate and its QA checkpoint were fast-forwarded to
+main after validation. The final main SHA is
+`edb677292639f9b5f6cea75ad8cbad2857c56f2c`, equal to `origin/main`. The
+remaining boundaries are not a request to reimplement this feature.
