@@ -1,6 +1,6 @@
 //! Opt-in comparison on a preserved show image; never starts an engine worker
 //! or opens a media/device/output resource.
-use super::allocator_test_handle;
+use super::{allocator_test_handle, EngineRuntime};
 use crate::snapshot_public;
 use protocol::EngineSnapshot;
 use std::{
@@ -157,5 +157,42 @@ fn benchmark_show_snapshot_clone_and_payload() {
         encode_times[2],
         combined_times[2],
         payload.len()
+    );
+}
+
+#[test]
+#[ignore = "fixed representative fixture; measurement only, not tick budget or FPS acceptance"]
+fn benchmark_show_tick_snapshot_construction() {
+    let path = std::env::var_os("SYNDOCAL_SNAPSHOT_BENCH_PROJECT")
+        .expect("provide an explicit preserved .sdc path");
+    let bytes = std::fs::read(path).expect("read benchmark show without modification");
+    let document: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let snapshot: EngineSnapshot = serde_json::from_value(document["snapshot"].clone()).unwrap();
+    let mut runtime = EngineRuntime::new(protocol::DmxOutputConfig {
+        enabled: false,
+        ..protocol::DmxOutputConfig::default()
+    });
+    runtime.load_project_snapshot(snapshot);
+    assert_eq!(runtime.last_error, None);
+
+    const ITERATIONS: usize = 1_000;
+    let measure = || {
+        let started = Instant::now();
+        for _ in 0..ITERATIONS {
+            black_box(runtime.build_snapshot(0));
+        }
+        started.elapsed().as_nanos()
+    };
+    black_box(measure());
+    let mut times = Vec::new();
+    for round in 0..5 {
+        let elapsed = measure();
+        println!("round={round} iterations={ITERATIONS} build_snapshot_ns={elapsed}");
+        times.push(elapsed);
+    }
+    times.sort_unstable();
+    println!(
+        "median iterations={ITERATIONS} build_snapshot_ns={}",
+        times[2]
     );
 }
