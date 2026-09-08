@@ -429,6 +429,76 @@ const rendererDispatchBody = functionSlice(
   "const invoke = async <T,>(",
   "const listen = <T,>",
 );
+const operatorAdmissionGuardCondition = "!terminalRecovery && !mediaAssetAvailabilityReadOnly && !operatorCommandAllowed(activeOperatorLockMode, command, projectMutation)";
+const hasFailClosedOperatorAdmissionGuard = (sourceText) => {
+  const source = ts.createSourceFile(
+    "renderer-dispatch.ts",
+    sourceText,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS,
+  );
+  let found = false;
+  const visit = (node) => {
+    if (ts.isVariableDeclaration(node)
+      && ts.isIdentifier(node.name)
+      && node.name.text === "invoke"
+      && node.initializer
+      && ts.isArrowFunction(node.initializer)
+      && ts.isBlock(node.initializer.body)) {
+      found = node.initializer.body.statements.some((statement) => {
+        if (!ts.isIfStatement(statement)
+          || statement.expression.getText(source).replace(/\s+/g, "")
+            !== operatorAdmissionGuardCondition.replace(/\s+/g, "")
+          || !ts.isBlock(statement.thenStatement)) return false;
+        return statement.thenStatement.statements.some((child) => ts.isThrowStatement(child));
+      });
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  return found;
+};
+assert.equal(
+  hasFailClosedOperatorAdmissionGuard(rendererDispatchBody),
+  true,
+  "central invoke facade must keep the operator admission guard as a direct fail-closed statement",
+);
+const disabledOperatorAdmissionFixture = rendererDispatchBody.replace(
+  "&& !operatorCommandAllowed(activeOperatorLockMode, command, projectMutation)",
+  "&& false && !operatorCommandAllowed(activeOperatorLockMode, command, projectMutation)",
+);
+assert.equal(
+  hasFailClosedOperatorAdmissionGuard(disabledOperatorAdmissionFixture),
+  false,
+  "operator admission negative fixture must reject a guard disabled by an unconditional false branch",
+);
+const unreachableOperatorAdmissionFixture = `
+const invoke = async () => {
+  if (false) {
+    if (${operatorAdmissionGuardCondition}) {
+      throw new Error("blocked");
+    }
+  }
+};
+`;
+assert.equal(
+  hasFailClosedOperatorAdmissionGuard(unreachableOperatorAdmissionFixture),
+  false,
+  "operator admission negative fixture must reject a guard nested under an unreachable condition",
+);
+const missingOperatorAdmissionRejectionFixture = `
+const invoke = async () => {
+  if (${operatorAdmissionGuardCondition}) {
+    void new Error("blocked");
+  }
+};
+`;
+assert.equal(
+  hasFailClosedOperatorAdmissionGuard(missingOperatorAdmissionRejectionFixture),
+  false,
+  "operator admission negative fixture must reject a guard without a throwing rejection branch",
+);
 for (const marker of [
   "await awaitProjectTransactionOwnerRegistrationBarrier();",
   "projectMutationCommands.has(command)",
@@ -677,6 +747,36 @@ const legacyOutputRoutes = new Set(
 
 const allowedRawInvokeFiles = new Set([appPath, detachedVideoPath, agentBridgeMountPath]);
 const machineFileMutations = new Set(["cache_gdtf_from_share"]);
+const retiredFrontendRoutes = new Set([
+  "enable_show_spout_outputs_v1",
+  "set_cue_list",
+  "remove_cue_list",
+  "create_cue_from_current",
+  "create_empty_cue",
+]);
+const retiredRawRouteViolation = (raw, command, location) => raw && retiredFrontendRoutes.has(command)
+  ? `${location} raw invocation of retired route ${command}`
+  : null;
+const collectRetiredRawRouteErrors = (sourceFile) => {
+  const violations = [];
+  const visit = (node) => {
+    if (ts.isCallExpression(node)
+      && ts.isIdentifier(node.expression)
+      && node.expression.text === "tauriInvoke"
+      && ts.isStringLiteralLike(node.arguments[0])
+      && retiredFrontendRoutes.has(node.arguments[0].text)) {
+      const violation = retiredRawRouteViolation(
+        true,
+        node.arguments[0].text,
+        locationOf(sourceFile, node.arguments[0]),
+      );
+      if (violation) violations.push(violation);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  return violations;
+};
 const broadCastPattern = /^(?:Parameters\s*<\s*FrontendTauriInvoke\s*>\s*\[\s*0\s*\]|FrontendTauriInvokeCommand)$/;
 const isBroadCommandCast = (node, sourceFile) => {
   if (!ts.isAsExpression(node) && !ts.isTypeAssertionExpression(node)) return false;
@@ -721,6 +821,40 @@ assert.deepEqual(
   rawRendererNegativeCommands.filter((command) => rendererMutationSet.has(command)),
   [...legacySingleCueCommands, ...atomicBatchCommands],
   "raw renderer-ticketed negative fixture did not reject the cue mutation routes",
+);
+
+const retiredRawRouteNegativeSource = ts.createSourceFile(
+  "retired-raw-route.ts",
+  [...retiredFrontendRoutes].map((command) => `tauriInvoke("${command}", {});`).join("\n"),
+  ts.ScriptTarget.Latest,
+  true,
+  ts.ScriptKind.TS,
+);
+const retiredRawRouteNegativeCommands = [];
+const retiredRawRouteNegativeVisit = (node) => {
+  if (ts.isCallExpression(node)
+    && ts.isIdentifier(node.expression)
+    && node.expression.text === "tauriInvoke"
+    && ts.isStringLiteralLike(node.arguments[0])) {
+    retiredRawRouteNegativeCommands.push(node.arguments[0].text);
+  }
+  ts.forEachChild(node, retiredRawRouteNegativeVisit);
+};
+retiredRawRouteNegativeVisit(retiredRawRouteNegativeSource);
+assert.deepEqual(
+  retiredRawRouteNegativeCommands.filter((command) => retiredFrontendRoutes.has(command)),
+  [...retiredFrontendRoutes],
+  "retired raw-route negative fixture did not retain every retired command",
+);
+assert.deepEqual(
+  collectRetiredRawRouteErrors(retiredRawRouteNegativeSource).map((error) => error.slice(error.indexOf("raw invocation"))),
+  [...retiredFrontendRoutes].map((command) => `raw invocation of retired route ${command}`),
+  "retired raw-route negative fixture must execute the production rejection branch",
+);
+assert.deepEqual(
+  [...retiredFrontendRoutes].map((command) => retiredRawRouteViolation(true, command, "fixture")),
+  [...retiredFrontendRoutes].map((command) => `fixture raw invocation of retired route ${command}`),
+  "retired raw-route negative fixture must retain raw alias rejection coverage",
 );
 
 const tauriInternalsNegativeSource = ts.createSourceFile(
@@ -872,6 +1006,12 @@ for (const sourceFile of sourceFiles) {
         }
         if (commands) {
           for (const command of commands) {
+            const retiredRouteError = retiredRawRouteViolation(
+              raw,
+              command,
+              locationOf(sourceFile, argument),
+            );
+            if (retiredRouteError) errors.push(retiredRouteError);
             if (legacyOutputRoutes.has(command)) {
               errors.push(`${locationOf(sourceFile, argument)} frontend invokes fail-closed legacy output route ${command}`);
             }

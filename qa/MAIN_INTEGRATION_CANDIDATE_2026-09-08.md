@@ -182,3 +182,33 @@ evidence, not browser-mounted or native-rendered reachability evidence.
 This checker-only repair does not claim a new native build, EXE launch, device
 acceptance, physical output, Mac validation, signing/notarization, release
 publication, or venue acceptance. Those boundaries remain as recorded above.
+
+## 2026-09-08 follow-up review and icon update
+
+An independent review found and the checker now rejects two additional
+fail-open fixtures: an operator admission guard disabled by an unconditional
+`false` branch, and an admission guard nested under an unreachable condition.
+The direct guard is checked from the TypeScript AST as a statement of the
+central `invoke` facade. The retired raw-route fixture is also connected to the
+production rejection branch, so removing that `errors.push` path fails the
+checker contract. `pnpm --dir app run check:frontend-command-routing` passed
+after this repair with 133 renderer mutations, 31 server-authoritative
+mutations, 28 raw dispatches, and 463 facade dispatches.
+
+The application icon was regenerated from the deterministic SVG mark with the
+unwanted rounded-square background removed. The tracked SVG and generated PNG,
+ICO, and ICNS assets now represent a solid black square with the centered white
+geometric mark.
+
+The final no-bundle executable was rebuilt from this working tree and passed a
+release-native probe. It is version `1.2.0-alpha.69`, 64,532,992 bytes, with
+SHA-256
+`6A37854E6B8926CEA63D07C129C4F943C491931082BB2EE44A5C59FE1286C517`.
+The probe observed one responsive/maximized `Syndocal` window, verified the
+owned loopback listener, read Standby ownership and the initial snapshot,
+rejected missing asset/layer thumbnail IPC with the expected errors, issued no
+physical output, and returned the exact application/listener counts to zero.
+
+This evidence does not claim the completed missing-file/re-fetch/recovery unit
+again, physical hardware or venue acceptance, Mac real-machine validation,
+ASIO/NDI/MIDI acceptance, signing/notarization, or release publication.
