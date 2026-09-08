@@ -23,6 +23,7 @@ const [app, form, browser, types, d2Source, backend] = await Promise.all([
 
 const recoveryController = (await readFile(new URL("../src/createProjectTransactionRecoveryController.ts", import.meta.url), "utf8")).replace(/\r\n/g, "\n");
 const terminalRecovery = (await readFile(new URL("../src/projectTransactionRecovery.ts", import.meta.url), "utf8")).replace(/\r\n/g, "\n");
+const mutationController = (await readFile(new URL("../src/projectTransactionMutationController.ts", import.meta.url), "utf8")).replace(/\r\n/g, "\n");
 
 const patchArgs = { requests: [{ label: "A" }, { label: "B" }] };
 const validPatch = { kind: "patch_fixtures", request_digest: "a".repeat(64), fixture_ids: [41, 42] };
@@ -375,8 +376,8 @@ assert.doesNotMatch(app, /"patch_fixture"/, "the retired singular PATCH command 
 assert.doesNotMatch(app, /invoke<number\[\]>\("patch_fixtures"/, "raw PATCH ID arrays are forbidden");
 assert.doesNotMatch(app, /tauriInvoke(?:<[^>]*>)?\("(?:patch_fixtures|repair_fixture_profile)"/, "PATCH/Repair may not bypass the transaction facade");
 assert.match(recoveryController, /recoverPublishedProjectTransactionCommandResult[\s\S]*?waitForPublishedCommandRecovery[\s\S]*?queryProjectTransactionRecovery\(identity\)/);
-assert.match(app, /ProjectTransactionPublicationUnconfirmedError[\s\S]*?ProjectTransactionPublicationIndeterminateError[\s\S]*?cancelOpenedProjectTransaction/);
-assert.match(app, /publishedCommandRecoveryDisposition\(recovered\)[\s\S]*?disposition === "hold"[\s\S]*?ProjectTransactionPublicationIndeterminateError[\s\S]*?ProjectTransactionPublicationUnconfirmedError/, "unknown and malformed B outcomes skip Cancel/replay");
+assert.match(mutationController, /ProjectTransactionPublicationUnconfirmedError[\s\S]*?ProjectTransactionPublicationIndeterminateError[\s\S]*?cancelOpenedProjectTransaction/);
+assert.match(mutationController, /publishedCommandRecoveryDisposition\(recovered\)[\s\S]*?disposition === "hold"[\s\S]*?ProjectTransactionPublicationIndeterminateError[\s\S]*?ProjectTransactionPublicationUnconfirmedError/, "unknown and malformed B outcomes skip Cancel/replay");
 assert.match(app, /setPatchRepairRestartRequired\(true\)[\s\S]*?finishPatchRepairOperation = \(\) => \{\s*if \(!patchRepairRestartRequired\(\)\) patchRepairOperationLane\.finish\(\);?\s*\}/, "an indeterminate receipt retains the shared local lane until restart");
 assert.equal((app.match(/retainPatchRepairIntentIfIndeterminate\(error\)/g) ?? []).length, 4, "all PATCH/Repair callers retain their ticket on an indeterminate reply");
 assert.match(recoveryController, /createProjectTransactionTerminalSettlement\(\s*ports\.dispatchHistoryMutation,\s*\(\) => acknowledgeProjectTransaction\(identity\)/s, "recovery binds history delivery and ACK to the same settlement");
@@ -399,17 +400,17 @@ for (const route of allStageRoutes) {
   );
 }
 assert.match(
-  app,
+  mutationController,
   /isStageRendererTicketedCommand\(command\)\s*\?\s*command\s*:\s*null/,
   "all nine Stage commands must join the shared published-command recovery detection",
 );
 assert.match(
-  app,
+  mutationController,
   /publishedCommand && !isStageRendererTicketedCommand\(publishedCommand\)\s*&& !projectTransactionCommandResultIsWellFormed\(replied, publishedCommand, commandArgs\)/,
   "normal Stage replies keep their legacy shapes while PATCH/Repair still validate their receipt",
 );
 assert.match(
-  app,
+  mutationController,
   /result = publishedCommandLegacyReplyFromRecoveredResult\([\s\S]*?publishedCommand,[\s\S]*?recovered\.result,[\s\S]*?commandArgs,[\s\S]*?\) as T;/,
   "only a recovered Stage receipt is converted back to its legacy reply shape",
 );
