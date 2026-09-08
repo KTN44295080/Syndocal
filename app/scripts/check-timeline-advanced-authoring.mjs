@@ -150,8 +150,10 @@ const mismatchedTimelineResult = engineSnapshotWithTimelineAdvancedResult({
 assert.equal(mismatchedTimelineResult.timeline.id, 1, "different-identity fallback keeps the prior active Timeline pending canonical refresh");
 assert.equal(mismatchedTimelineResult.timeline.loop_runtime.status, "looping", "different-identity fallback never exposes the target bank's runtime-free OFF state");
 assert.equal(mismatchedTimelineResult.timeline_bank[0].id, 2, "different-identity fallback still exposes the committed bank for later canonical hydration");
-const appSource = await readFile(new URL("../src/App.tsx", import.meta.url), "utf8");
-const timelineCommandDispatchersSource = await readFile(new URL("../src/timelineCommandDispatchers.ts", import.meta.url), "utf8");
+const appSource = (await readFile(new URL("../src/App.tsx", import.meta.url), "utf8"))
+  .replace(/\r\n?/g, "\n");
+const timelineCommandDispatchersSource = (await readFile(new URL("../src/timelineCommandDispatchers.ts", import.meta.url), "utf8"))
+  .replace(/\r\n?/g, "\n");
 const timelineSnapshotRefreshSource = await readFile(new URL("../src/timelineSnapshotRefreshController.ts", import.meta.url), "utf8");
 assert.match(
   appSource,
