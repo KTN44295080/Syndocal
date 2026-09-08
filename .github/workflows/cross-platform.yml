@@ -254,10 +254,13 @@ jobs:
 
       - name: Enforce Windows warning ratchets
         if: runner.os == 'Windows'
+        shell: pwsh
         env:
           WARNING_RATCHET_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
           WARNING_RATCHET_HEAD_REF: ${{ github.sha }}
         run: |
+          $ErrorActionPreference = 'Stop'
+          Remove-Item Env:CARGO_HOME -ErrorAction SilentlyContinue
           pnpm --dir app run check:warnings -- --configuration windows-default-all-targets
           pnpm --dir app run check:warnings -- --configuration windows-default-release
           pnpm --dir app run check:warnings -- --configuration windows-workspace-tests
@@ -266,10 +269,13 @@ jobs:
 
       - name: Enforce Windows ASIO/NDI warning ratchets when SDKs are configured
         if: runner.os == 'Windows' && vars.NDI_SDK_DIR != '' && vars.CPAL_ASIO_DIR != ''
+        shell: pwsh
         env:
           WARNING_RATCHET_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
           WARNING_RATCHET_HEAD_REF: ${{ github.sha }}
         run: |
+          $ErrorActionPreference = 'Stop'
+          Remove-Item Env:CARGO_HOME -ErrorAction SilentlyContinue
           pnpm --dir app run check:warnings -- --configuration windows-syndocal-asio
           pnpm --dir app run check:warnings -- --configuration windows-syndocal-ndi
           pnpm --dir app run check:warnings -- --configuration windows-asio-bridge
@@ -291,10 +297,14 @@ jobs:
 
       - name: Enforce Windows native release warning ratchet
         if: runner.os == 'Windows'
+        shell: pwsh
         env:
           WARNING_RATCHET_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
           WARNING_RATCHET_HEAD_REF: ${{ github.sha }}
-        run: pnpm --dir app run check:warnings -- --configuration windows-native-release
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Remove-Item Env:CARGO_HOME -ErrorAction SilentlyContinue
+          pnpm --dir app run check:warnings -- --configuration windows-native-release
 
       - name: Test Rust workspace
         run: cargo test --workspace --locked -- --test-threads=1

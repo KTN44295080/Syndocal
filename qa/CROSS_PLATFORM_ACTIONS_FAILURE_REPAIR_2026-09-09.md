@@ -65,6 +65,13 @@ both explicit SDK variables are present; otherwise the workflow reports those
 gates as unverified/skipped. The GitHub Actions rerun after this follow-up is
 required before claiming the Windows or Linux hosted build gates pass.
 
+The same rerun also exposed two independent baseline conditions: the hosted
+Windows `cargo fmt --check` gate reports existing formatting differences across
+the current Rust workspace (reproduced locally), and later Windows warning
+steps must remove the runner's `CARGO_HOME` for each child process. The latter
+is included in the next bounded workflow repair; the former remains a product
+source formatting baseline and is not being hidden or auto-reformatted here.
+
 ## Boundary
 
 This checkpoint does not claim Windows native-window, hardware, physical

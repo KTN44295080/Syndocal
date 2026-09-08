@@ -59,6 +59,11 @@ const warningRatchetHostPlatform = detectHostPlatform();
 const warningRatchetAlternatePlatform = warningRatchetHostPlatform === "windows-x86_64-msvc"
   ? "linux-x86_64"
   : "windows-x86_64-msvc";
+const hostDefaultReleaseConfigurationId = warningRatchetHostPlatform.startsWith("linux-")
+  ? "linux-default-release"
+  : warningRatchetHostPlatform.startsWith("macos-")
+    ? "macos-default-release"
+    : "windows-default-release";
 const lines = readFileSync(path.join(fixtureRoot, "cargo-warning.jsonl"), "utf8").trim().split(/\r?\n/);
 const metadata = JSON.parse(readFileSync(path.join(fixtureRoot, "cargo-metadata.json"), "utf8"));
 const context = {
@@ -1214,7 +1219,7 @@ try {
   const artifactToolchain = detectToolchain();
   const artifactBaseInventory = structuredClone(inventory);
   const artifactBaseConfiguration = artifactBaseInventory.configurations.find(
-    (candidate) => candidate.id === "windows-default-release",
+    (candidate) => candidate.id === hostDefaultReleaseConfigurationId,
   );
   artifactBaseConfiguration.expectedArtifacts = artifactBaseConfiguration.expectedArtifacts.filter(
     (artifact) => artifact.target !== "dj_link_v3_sender_contract",
@@ -1235,7 +1240,7 @@ try {
 
   const artifactHeadInventory = structuredClone(artifactBaseInventory);
   const artifactHeadConfiguration = artifactHeadInventory.configurations.find(
-    (candidate) => candidate.id === "windows-default-release",
+    (candidate) => candidate.id === hostDefaultReleaseConfigurationId,
   );
   artifactHeadConfiguration.expectedArtifacts.push({
     package: "protocol",
@@ -1266,11 +1271,11 @@ try {
     repoRoot: artifactFixtureRoot,
     baseRef: artifactBase,
     headRef: artifactHead,
-    configurationId: "windows-default-release",
+    configurationId: hostDefaultReleaseConfigurationId,
     schema,
     runConfiguration: runArtifactConfiguration,
   });
-  assert.equal(artifactResult.configurationId, "windows-default-release");
+  assert.equal(artifactResult.configurationId, hostDefaultReleaseConfigurationId);
   assert.equal(artifactResult.comparison.base, artifactBase);
   assert.equal(artifactResult.comparison.head, artifactHead);
   assert.equal(artifactResult.coverage.ok, true);
@@ -1281,7 +1286,7 @@ try {
       repoRoot: artifactFixtureRoot,
       baseRef: null,
       headRef: artifactHead,
-      configurationId: "windows-default-release",
+      configurationId: hostDefaultReleaseConfigurationId,
       schema,
       runConfiguration: runArtifactConfiguration,
     }),
@@ -1295,7 +1300,7 @@ try {
   };
   fixtureGit(["checkout", "-b", "artifact-removal-rejection", artifactHead]);
   const removalInventory = structuredClone(artifactHeadInventory);
-  const removalConfiguration = removalInventory.configurations.find((candidate) => candidate.id === "windows-default-release");
+  const removalConfiguration = removalInventory.configurations.find((candidate) => candidate.id === hostDefaultReleaseConfigurationId);
   removalConfiguration.expectedArtifacts = [
     ...removalConfiguration.expectedArtifacts.slice(1),
     { package: "protocol", target: "replacement", targetKinds: ["test"], crateTypes: ["bin"] },
@@ -1306,7 +1311,7 @@ try {
       repoRoot: artifactFixtureRoot,
       baseRef: artifactBase,
       headRef: removalHead,
-      configurationId: "windows-default-release",
+      configurationId: hostDefaultReleaseConfigurationId,
       schema,
       runConfiguration: runArtifactConfiguration,
     }),
@@ -1315,7 +1320,7 @@ try {
   fixtureGit(["checkout", "main"]);
   fixtureGit(["checkout", "-b", "artifact-immutable-field-rejection", artifactHead]);
   const immutableInventory = structuredClone(artifactHeadInventory);
-  const immutableConfiguration = immutableInventory.configurations.find((candidate) => candidate.id === "windows-default-release");
+  const immutableConfiguration = immutableInventory.configurations.find((candidate) => candidate.id === hostDefaultReleaseConfigurationId);
   immutableConfiguration.command.args.push("--release");
   immutableConfiguration.evidence.command = "cargo check --message-format=json --release";
   const immutableHead = commitArtifactInventory(immutableInventory, "reject Cargo artifact immutable field");
@@ -1324,7 +1329,7 @@ try {
       repoRoot: artifactFixtureRoot,
       baseRef: artifactBase,
       headRef: immutableHead,
-      configurationId: "windows-default-release",
+      configurationId: hostDefaultReleaseConfigurationId,
       schema,
       runConfiguration: runArtifactConfiguration,
     }),
@@ -1337,7 +1342,7 @@ try {
       repoRoot: artifactFixtureRoot,
       baseRef: artifactBase,
       headRef: artifactHead,
-      configurationId: "windows-default-release",
+      configurationId: hostDefaultReleaseConfigurationId,
       schema,
       runConfiguration: async (configuration) => ({
         ...(await runArtifactConfiguration(configuration)),
@@ -1357,7 +1362,7 @@ try {
       repoRoot: artifactFixtureRoot,
       baseRef: artifactBase,
       headRef: otherConfigurationHead,
-      configurationId: "windows-default-release",
+      configurationId: hostDefaultReleaseConfigurationId,
       schema,
       runConfiguration: runArtifactConfiguration,
     }),
@@ -1374,7 +1379,7 @@ try {
       repoRoot: artifactFixtureRoot,
       baseRef: artifactBase,
       headRef: outsideHead,
-      configurationId: "windows-default-release",
+      configurationId: hostDefaultReleaseConfigurationId,
       schema,
       runConfiguration: runArtifactConfiguration,
     }),
@@ -1419,6 +1424,7 @@ try {
   const outputMarkerBaseConfiguration = outputMarkerBaseInventory.configurations.find(
     (candidate) => candidate.id === "frontend-typescript-vite-windows",
   );
+  outputMarkerBaseConfiguration.platform = warningRatchetHostPlatform;
   outputMarkerBaseConfiguration.command = outputMarkerCommand;
   outputMarkerBaseConfiguration.expectedOutputMarkers = [
     "vite v6.4.2 building for production...",
@@ -1688,7 +1694,14 @@ await assert.rejects(
   }, repoRoot),
   /--config is forbidden/,
 );
-const defaultConfiguration = inventory.configurations.find((candidate) => candidate.id === "windows-default-all-targets");
+const defaultConfiguration = {
+  ...inventory.configurations.find((candidate) => candidate.id === (
+    warningRatchetHostPlatform.startsWith("linux-") ? "linux-default-all-targets" : "windows-default-all-targets"
+  )),
+  id: "required-environment-fixture",
+  platform: warningRatchetHostPlatform,
+  requiredEnvironment: ["FFMPEG_DIR", "LIBCLANG_PATH"],
+};
 const environmentWithoutSdk = { ...process.env };
 delete environmentWithoutSdk.FFMPEG_DIR;
 delete environmentWithoutSdk.LIBCLANG_PATH;
