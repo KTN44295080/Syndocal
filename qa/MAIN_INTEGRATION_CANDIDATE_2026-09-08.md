@@ -1,7 +1,7 @@
 # Selected main integration candidate - 2026-09-08
 
-Status: NOT promoted to main. Final frontend validation and selected-tree native
-build/IPC acceptance are outstanding. Main remains `00e8785`.
+Status: PROMOTED to main on 2026-09-08. Final frontend validation and
+selected-tree native build/IPC acceptance passed. Main is recorded below.
 Candidate branch: `chatgpt/core-integration-candidate-20260908`.
 
 ## Selected scope
@@ -127,6 +127,15 @@ physical output, signing/notarization, release publication, and venue acceptance
 remain outside this checkpoint. The known main-baseline checker failures remain
 unchanged and are not covered by this candidate result.
 
-Final status: selected candidate is ready for main integration. The seven
+Final status: selected candidate was fast-forwarded to main at
+`55ef1d58eb19b36224be1dcc7453ff16b28fd47f`. The seven
 uncommitted Mac files and the unrelated `check-frontend-command-routing.mjs`
 working-tree state remain unowned and must not be staged.
+
+## Main integration record
+
+Remote `main` was re-fetched immediately before integration at
+`00e878500f9c0613871109aa612c435d6393be06`. The candidate was an ancestor-safe
+fast-forward source; no merge commit, force-push, unrelated branch, or uncommitted
+Mac work was included. The integration commit was pushed normally and verified as
+remote `main` at `55ef1d58eb19b36224be1dcc7453ff16b28fd47f`.
