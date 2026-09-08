@@ -58,11 +58,22 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          winget install --id Gyan.FFmpeg.Shared --exact --version 8.1.2 --accept-package-agreements --accept-source-agreements --disable-interactivity
-          $packageRoot = Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Packages\Gyan.FFmpeg.Shared_Microsoft.Winget.Source_8wekyb3d8bbwe'
-          $sdkRoots = @(Get-ChildItem -LiteralPath $packageRoot -Directory -Filter 'ffmpeg-8.1.2-full_build-shared' -ErrorAction Stop)
-          if ($sdkRoots.Count -ne 1) { throw "Expected exactly one pinned Gyan FFmpeg 8.1.2 shared SDK under $packageRoot; found $($sdkRoots.Count)." }
-          $sdk = $sdkRoots[0].FullName
+          $ErrorActionPreference = 'Stop'
+          $archive = Join-Path $env:RUNNER_TEMP 'ffmpeg-8.1.2-full_build-shared.zip'
+          $extractRoot = Join-Path $env:RUNNER_TEMP 'syndocal-ffmpeg-8.1.2'
+          $uri = 'https://github.com/GyanD/codexffmpeg/releases/download/8.1.2/ffmpeg-8.1.2-full_build-shared.zip'
+          Invoke-WebRequest -Uri $uri -OutFile $archive
+          $actualHash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash
+          $expectedHash = '274923C68904A9B76C73B908F57923DAFBA81155856CD742138515DED570D066'
+          if (-not [StringComparer]::OrdinalIgnoreCase.Equals($actualHash, $expectedHash)) {
+            throw "Pinned Gyan FFmpeg 8.1.2 shared SDK archive hash mismatch: expected $expectedHash, got $actualHash."
+          }
+          New-Item -ItemType Directory -Path $extractRoot -Force | Out-Null
+          Expand-Archive -LiteralPath $archive -DestinationPath $extractRoot -Force
+          $sdk = Join-Path $extractRoot 'ffmpeg-8.1.2-full_build-shared'
+          if (-not (Test-Path -LiteralPath $sdk -PathType Container)) {
+            throw "Pinned Gyan FFmpeg 8.1.2 shared SDK archive did not contain the expected root: $sdk"
+          }
           if (-not (Test-Path -LiteralPath (Join-Path $sdk 'bin\avcodec-62.dll') -PathType Leaf)) {
             throw "Pinned Gyan FFmpeg 8.1.2 shared runtime is incomplete: $sdk"
           }
@@ -219,8 +230,20 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
-      - name: Test warning ratchet
-        run: pnpm --dir app run check:warnings:self-test
+      - name: Test warning ratchet (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Remove-Item Env:CARGO_HOME -ErrorAction SilentlyContinue
+          pnpm --dir app run check:warnings:self-test
+
+      - name: Test warning ratchet (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          env -u CARGO_HOME pnpm --dir app run check:warnings:self-test
 
       - name: Enforce Windows warning ratchets
         if: runner.os == 'Windows'

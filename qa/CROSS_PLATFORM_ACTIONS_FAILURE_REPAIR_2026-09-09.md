@@ -1,0 +1,60 @@
+# Cross-platform Actions failure repair — 2026-09-09
+
+## Scope
+
+This checkpoint addresses the environment failures observed before the
+Cross-platform workflow reached product compilation or native packaging. It
+does not change product code, feature selection, warning assertions, or native
+acceptance claims.
+
+## Observed failures
+
+The following `main` runs failed at the same pre-build gates:
+
+- [34290258811](https://github.com/KTN44295080/Syndocal/actions/runs/34290258811)
+  at `Install Windows video SDK`: GitHub's `windows-2022` runner reported that
+  `winget` was not recognized.
+- The same Windows failure was reproduced by runs
+  [34290158382](https://github.com/KTN44295080/Syndocal/actions/runs/34290158382),
+  [34289890211](https://github.com/KTN44295080/Syndocal/actions/runs/34289890211),
+  and [34287314800](https://github.com/KTN44295080/Syndocal/actions/runs/34287314800).
+- The Ubuntu job in those runs stopped at `Test warning ratchet` with
+  `warning-affecting environment is forbidden: CARGO_HOME`; the runner exposed
+  `CARGO_HOME=/home/runner/.cargo` to the self-test.
+
+Neither job reached Rust compilation, frontend build, Tauri admission, or
+installer packaging. These failures are workflow-environment failures, not
+evidence of a product build failure.
+
+## Bounded repair
+
+`.github/workflows/cross-platform.yml` now:
+
+1. downloads the official Gyan FFmpeg 8.1.2 shared ZIP directly because the
+   hosted Windows image does not provide the `winget` command;
+2. verifies the published SHA-256
+   `274923C68904A9B76C73B908F57923DAFBA81155856CD742138515DED570D066` before
+   extraction;
+3. uses only the expected extracted SDK root and keeps the existing DLL,
+   header, import-library, and runtime checks;
+4. removes only the runner-injected `CARGO_HOME` from the warning-ratchet
+   child environment on each platform. The ratchet's rejection tests and
+   warning assertions remain unchanged.
+
+## Local evidence
+
+At the repair checkpoint:
+
+- `pnpm.cmd --dir app run check:warnings:self-test` — passed;
+- `pnpm.cmd --dir app run check:tauri-build-wrapper` — passed (243 assertions,
+  27 hostile mutation fixtures);
+- `pnpm.cmd --dir app run check:release` — passed;
+- `git diff --check` — passed.
+
+The GitHub Actions rerun after this repair is required before claiming the
+Windows or Linux hosted build gates pass.
+
+## Boundary
+
+This checkpoint does not claim Windows native-window, hardware, physical
+output, release publication, signing, or notarization acceptance.
