@@ -60,6 +60,7 @@ was involved.
 | --- | --- |
 | `rustfmt --edition 2021 crates/protocol/src/agent_authority.rs` | PASS |
 | `cargo test -p protocol --release --locked agent_authority -- --nocapture --test-threads=1` | PASS — 7 passed, 0 failed; 207 filtered |
+| `pnpm.cmd --dir app run check:release` | PASS — static release contract, 516 native admission commands, media/snapshot/agent/output/safety/ASIO/timeline/video gates, and development metadata |
 | `pnpm.cmd --dir app tauri build --no-bundle` | PASS — exact wrapper, Vite/TypeScript and release native build |
 | New EXE native launch/state/thumbnail rejection probe | PASS — one responsive maximized window, Standby, snapshot shape, invalid asset/layer thumbnail IPC rejection, clean exit/listener |
 | Physical output operations | 0 |
