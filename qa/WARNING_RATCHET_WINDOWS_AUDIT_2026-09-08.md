@@ -49,6 +49,7 @@ The final documentation checkpoint is recorded after B→C validation.
 | `node app/scripts/check-warning-ratchet.mjs --configuration windows-default-release` | BLOCKED by existing artifact inventory drift after Cargo execution |
 | `node app/scripts/test-warning-ratchet.mjs` on A | PASS — `warning ratchet self-tests ok`, including artifact rebaseline negatives |
 | `--rebaseline-artifacts --base-ref A --head-ref B --configuration windows-default-release` | PASS — exact MSVC 14.44.35207, Cargo completed, artifact coverage `12`, changed files `1` |
+| normal `windows-default-release` gate B→C | PASS — artifact coverage `12/12`, baseline/current warnings `83/0`, identity removals `67` |
 
 The warning-ratchet run initialized the exact local toolchain and executed
 `cargo check --workspace --all-targets --release --locked
