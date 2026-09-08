@@ -8,6 +8,7 @@ import {
   aggregateDiagnostics,
   auditZeroWarningPromotion,
   auditOutputMarkerRebaseline,
+  auditArtifactRebaseline,
   artifactIdentity,
   compareArtifactCoverage,
   compareOutputMarkerCoverage,
@@ -1197,6 +1198,182 @@ try {
   );
 } finally {
   rmSync(promotionFixtureRoot, { recursive: true, force: true });
+}
+const artifactFixtureRoot = mkdtempSync(path.join(tmpdir(), "syndocal-warning-artifact-rebaseline-"));
+try {
+  const fixtureGit = (args) => execFileSync("git", args, { cwd: artifactFixtureRoot, encoding: "utf8" }).trim();
+  fixtureGit(["init", "--initial-branch=main"]);
+  fixtureGit(["config", "user.name", "Warning Ratchet Artifact Rebaseline Test"]);
+  fixtureGit(["config", "user.email", "warning-ratchet-artifact@example.invalid"]);
+  mkdirSync(path.join(artifactFixtureRoot, "qa/warnings"), { recursive: true });
+  const artifactToolchain = detectToolchain();
+  const artifactBaseInventory = structuredClone(inventory);
+  const artifactBaseConfiguration = artifactBaseInventory.configurations.find(
+    (candidate) => candidate.id === "windows-default-release",
+  );
+  artifactBaseConfiguration.command = { executable: "cargo", args: ["check", "--message-format=json"] };
+  artifactBaseConfiguration.evidence = {
+    ...artifactBaseConfiguration.evidence,
+    commit: "b".repeat(40),
+    capturedAt: "2026-08-23T00:00:00Z",
+    command: "cargo check --message-format=json",
+    toolchain: artifactToolchain,
+  };
+  const artifactInventoryFile = path.join(artifactFixtureRoot, "qa/warnings/warning-inventory.json");
+  writeFileSync(artifactInventoryFile, `${JSON.stringify(artifactBaseInventory, null, 2)}\n`);
+  fixtureGit(["add", "qa/warnings/warning-inventory.json"]);
+  fixtureGit(["commit", "-m", "trusted Cargo artifact inventory"]);
+  const artifactBase = fixtureGit(["rev-parse", "HEAD"]);
+
+  const artifactHeadInventory = structuredClone(artifactBaseInventory);
+  const artifactHeadConfiguration = artifactHeadInventory.configurations.find(
+    (candidate) => candidate.id === "windows-default-release",
+  );
+  artifactHeadConfiguration.expectedArtifacts.push({
+    package: "protocol",
+    target: "dj_link_v3_sender_contract",
+    targetKinds: ["test"],
+    crateTypes: ["bin"],
+  });
+  artifactHeadConfiguration.evidence = {
+    ...artifactHeadConfiguration.evidence,
+    commit: artifactBase,
+    capturedAt: "2026-08-23T00:01:00Z",
+  };
+  writeFileSync(artifactInventoryFile, `${JSON.stringify(artifactHeadInventory, null, 2)}\n`);
+  fixtureGit(["add", "qa/warnings/warning-inventory.json"]);
+  fixtureGit(["commit", "-m", "reviewed Cargo artifact rebaseline"]);
+  const artifactHead = fixtureGit(["rev-parse", "HEAD"]);
+  const runArtifactConfiguration = async (configuration) => ({
+    timedOut: false,
+    outputLimitExceeded: false,
+    exitCode: 0,
+    invalidJsonLines: [],
+    buildFinished: [true],
+    stderrWarning: false,
+    artifacts: configuration.expectedArtifacts,
+    diagnostics: configuration.diagnostics,
+  });
+  const artifactResult = await auditArtifactRebaseline({
+    repoRoot: artifactFixtureRoot,
+    baseRef: artifactBase,
+    headRef: artifactHead,
+    configurationId: "windows-default-release",
+    schema,
+    runConfiguration: runArtifactConfiguration,
+  });
+  assert.equal(artifactResult.configurationId, "windows-default-release");
+  assert.equal(artifactResult.comparison.base, artifactBase);
+  assert.equal(artifactResult.comparison.head, artifactHead);
+  assert.equal(artifactResult.coverage.ok, true);
+  assert.equal(artifactResult.result.artifacts.length, artifactHeadConfiguration.expectedArtifacts.length);
+
+  await assert.rejects(
+    auditArtifactRebaseline({
+      repoRoot: artifactFixtureRoot,
+      baseRef: null,
+      headRef: artifactHead,
+      configurationId: "windows-default-release",
+      schema,
+      runConfiguration: runArtifactConfiguration,
+    }),
+    /requires explicit base and head refs/,
+  );
+  const commitArtifactInventory = (next, message) => {
+    writeFileSync(artifactInventoryFile, `${JSON.stringify(next, null, 2)}\n`);
+    fixtureGit(["add", "qa/warnings/warning-inventory.json"]);
+    fixtureGit(["commit", "-m", message]);
+    return fixtureGit(["rev-parse", "HEAD"]);
+  };
+  fixtureGit(["checkout", "-b", "artifact-removal-rejection", artifactHead]);
+  const removalInventory = structuredClone(artifactHeadInventory);
+  const removalConfiguration = removalInventory.configurations.find((candidate) => candidate.id === "windows-default-release");
+  removalConfiguration.expectedArtifacts = [
+    ...removalConfiguration.expectedArtifacts.slice(1),
+    { package: "protocol", target: "replacement", targetKinds: ["test"], crateTypes: ["bin"] },
+  ];
+  const removalHead = commitArtifactInventory(removalInventory, "reject Cargo artifact removal");
+  await assert.rejects(
+    auditArtifactRebaseline({
+      repoRoot: artifactFixtureRoot,
+      baseRef: artifactBase,
+      headRef: removalHead,
+      configurationId: "windows-default-release",
+      schema,
+      runConfiguration: runArtifactConfiguration,
+    }),
+    /cannot remove existing artifacts/,
+  );
+  fixtureGit(["checkout", "main"]);
+  fixtureGit(["checkout", "-b", "artifact-immutable-field-rejection", artifactHead]);
+  const immutableInventory = structuredClone(artifactHeadInventory);
+  const immutableConfiguration = immutableInventory.configurations.find((candidate) => candidate.id === "windows-default-release");
+  immutableConfiguration.command.args.push("--release");
+  immutableConfiguration.evidence.command = "cargo check --message-format=json --release";
+  const immutableHead = commitArtifactInventory(immutableInventory, "reject Cargo artifact immutable field");
+  await assert.rejects(
+    auditArtifactRebaseline({
+      repoRoot: artifactFixtureRoot,
+      baseRef: artifactBase,
+      headRef: immutableHead,
+      configurationId: "windows-default-release",
+      schema,
+      runConfiguration: runArtifactConfiguration,
+    }),
+    /changed immutable configuration fields/,
+  );
+  fixtureGit(["checkout", "main"]);
+  fixtureGit(["checkout", "-b", "artifact-runner-rejection", artifactHead]);
+  await assert.rejects(
+    auditArtifactRebaseline({
+      repoRoot: artifactFixtureRoot,
+      baseRef: artifactBase,
+      headRef: artifactHead,
+      configurationId: "windows-default-release",
+      schema,
+      runConfiguration: async (configuration) => ({
+        ...(await runArtifactConfiguration(configuration)),
+        artifacts: configuration.expectedArtifacts.slice(0, -1),
+      }),
+    }),
+    /artifact coverage mismatch/,
+  );
+  fixtureGit(["checkout", "main"]);
+  fixtureGit(["checkout", "-b", "artifact-other-config-rejection", artifactHead]);
+  const otherConfigurationInventory = structuredClone(artifactHeadInventory);
+  otherConfigurationInventory.configurations.find((candidate) => candidate.id === "frontend-typescript-vite-windows")
+    .evidence.capturedAt = "2026-08-23T00:02:00Z";
+  const otherConfigurationHead = commitArtifactInventory(otherConfigurationInventory, "reject other Cargo artifact configuration");
+  await assert.rejects(
+    auditArtifactRebaseline({
+      repoRoot: artifactFixtureRoot,
+      baseRef: artifactBase,
+      headRef: otherConfigurationHead,
+      configurationId: "windows-default-release",
+      schema,
+      runConfiguration: runArtifactConfiguration,
+    }),
+    /changed another configuration/,
+  );
+  fixtureGit(["checkout", "main"]);
+  fixtureGit(["checkout", "-b", "artifact-outside-file-rejection", artifactHead]);
+  writeFileSync(path.join(artifactFixtureRoot, "outside.txt"), "not inventory-only\n");
+  fixtureGit(["add", "outside.txt"]);
+  fixtureGit(["commit", "-m", "reject non-inventory Cargo artifact file"]);
+  const outsideHead = fixtureGit(["rev-parse", "HEAD"]);
+  await assert.rejects(
+    auditArtifactRebaseline({
+      repoRoot: artifactFixtureRoot,
+      baseRef: artifactBase,
+      headRef: outsideHead,
+      configurationId: "windows-default-release",
+      schema,
+      runConfiguration: runArtifactConfiguration,
+    }),
+    /outside inventory\/warning gate scope/,
+  );
+} finally {
+  rmSync(artifactFixtureRoot, { recursive: true, force: true });
 }
 const outputMarkerFixtureRoot = mkdtempSync(path.join(tmpdir(), "syndocal-warning-output-marker-rebaseline-"));
 try {

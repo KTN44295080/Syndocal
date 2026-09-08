@@ -1668,6 +1668,10 @@ export const OUTPUT_MARKER_REBASELINE_ALLOWED_FILES = Object.freeze([
   "qa/warnings/warning-inventory.json",
 ]);
 
+export const ARTIFACT_REBASELINE_ALLOWED_FILES = Object.freeze([
+  "qa/warnings/warning-inventory.json",
+]);
+
 const VARIABLE_MODULE_COUNT_MARKER = /^\d+ modules transformed\.$/;
 const STABLE_MODULE_TRANSFORMED_MARKER = "modules transformed.";
 
@@ -1972,6 +1976,146 @@ export async function auditOutputMarkerRebaseline({
   const result = await runConfiguration(configuration, repoRoot, environment);
   assertOutputMarkerRebaselineRunnerResult(configuration, result);
   return { comparison, configurationId, modifiedFiles, result };
+}
+
+function assertArtifactRebaselineConfiguration(previous, current, comparison) {
+  if (previous.status !== "enforced" || current.status !== "enforced") {
+    throw new Error(`artifact rebaseline only supports an enforced configuration: ${current.id}`);
+  }
+  if (previous.command?.executable !== "cargo" || current.command?.executable !== "cargo") {
+    throw new Error(`artifact rebaseline only supports an enforced Cargo configuration: ${current.id}`);
+  }
+  if (!sameJson(previous.diagnostics ?? [], current.diagnostics ?? [])
+    || !sameJson(previous.externalWarningAllows ?? [], current.externalWarningAllows ?? [])) {
+    throw new Error(`artifact rebaseline cannot change diagnostics or external warning allows: ${current.id}`);
+  }
+
+  const previousShape = { ...previous };
+  const currentShape = { ...current };
+  delete previousShape.expectedArtifacts;
+  delete previousShape.evidence;
+  delete currentShape.expectedArtifacts;
+  delete currentShape.evidence;
+  if (!sameJson(previousShape, currentShape)) {
+    throw new Error(`artifact rebaseline changed immutable configuration fields: ${current.id}`);
+  }
+  if (!sameJson(previous.evidence?.toolchain, current.evidence?.toolchain)) {
+    throw new Error(`artifact rebaseline changed the recorded toolchain: ${current.id}`);
+  }
+
+  const previousKeys = new Set((previous.expectedArtifacts ?? []).map(artifactIdentity));
+  const currentKeys = new Set((current.expectedArtifacts ?? []).map(artifactIdentity));
+  const removed = [...previousKeys].filter((key) => !currentKeys.has(key));
+  const added = [...currentKeys].filter((key) => !previousKeys.has(key));
+  if (removed.length > 0) {
+    throw new Error(`artifact rebaseline cannot remove existing artifacts: ${current.id}`);
+  }
+  if (added.length === 0) {
+    throw new Error(`artifact rebaseline requires at least one added artifact: ${current.id}`);
+  }
+  if (current.evidence?.commit !== comparison.base) {
+    throw new Error(`artifact rebaseline evidence.commit must equal trusted base ${comparison.base}: ${current.id}`);
+  }
+  if (current.evidence?.command !== expectedEvidenceCommand(current)) {
+    throw new Error(`artifact rebaseline evidence.command must exactly match the Cargo command: ${current.id}`);
+  }
+}
+
+function assertArtifactRebaselineRunnerResult(configuration, result) {
+  if (result.timedOut) throw new Error(`${configuration.id} warning command timed out during artifact rebaseline`);
+  if (result.outputLimitExceeded) throw new Error(`${configuration.id} warning command exceeded output limit during artifact rebaseline`);
+  if (result.exitCode !== 0) throw new Error(`${configuration.id} warning command exited with ${result.exitCode} during artifact rebaseline`);
+  if ((result.invalidJsonLines?.length ?? 0) > 0) {
+    throw new Error(`${configuration.id} emitted malformed Cargo JSON during artifact rebaseline`);
+  }
+  if (JSON.stringify(result.buildFinished ?? []) !== JSON.stringify([true])) {
+    throw new Error(`${configuration.id} Cargo build-finished coverage is not exactly one successful build during artifact rebaseline`);
+  }
+  if (result.stderrWarning) throw new Error(`${configuration.id} emitted warning-shaped Cargo stderr during artifact rebaseline`);
+  const coverage = compareArtifactCoverage(configuration.expectedArtifacts, result.artifacts ?? []);
+  if (!coverage.ok) throw new Error(`${configuration.id} artifact coverage mismatch during artifact rebaseline`);
+  const diagnostics = compareDiagnostics(configuration, result.diagnostics ?? []);
+  if (!diagnostics.ok) {
+    throw new Error(`${configuration.id} diagnostic ratchet failed during artifact rebaseline: ${diagnostics.failures.join("; ")}`);
+  }
+  return { coverage, diagnostics };
+}
+
+/**
+ * Audits a narrowly scoped Cargo artifact-coverage rebaseline. This is an
+ * explicit, inventory-only checkpoint for a real compiler target becoming
+ * observable in an existing command. It never writes the inventory and never
+ * relaxes the normal warning gate's immutable-baseline rule.
+ */
+export async function auditArtifactRebaseline({
+  repoRoot,
+  baseRef,
+  headRef,
+  configurationId,
+  inventoryPath = "qa/warnings/warning-inventory.json",
+  schema = null,
+  environment = process.env,
+  runConfiguration = runWarningConfiguration,
+  allowedFiles = ARTIFACT_REBASELINE_ALLOWED_FILES,
+}) {
+  if (typeof baseRef !== "string" || baseRef.trim().length === 0
+    || typeof headRef !== "string" || headRef.trim().length === 0) {
+    throw new Error("artifact rebaseline requires explicit base and head refs");
+  }
+  if (typeof configurationId !== "string" || configurationId.trim().length === 0) {
+    throw new Error("artifact rebaseline requires an explicit configuration id");
+  }
+  const comparison = resolveExplicitAncestorComparison(repoRoot, baseRef, headRef);
+  const priorInventory = loadInventoryAtRef(repoRoot, comparison.base, inventoryPath);
+  const currentInventory = loadInventoryAtRef(repoRoot, comparison.head, inventoryPath);
+  const priorErrors = validateInventory(priorInventory, schema);
+  if (priorErrors.length > 0) throw new Error(`trusted prior inventory validation failed: ${priorErrors.join("; ")}`);
+  const currentErrors = validateInventory(currentInventory, schema);
+  if (currentErrors.length > 0) throw new Error(`artifact rebaseline head inventory validation failed: ${currentErrors.join("; ")}`);
+  if (!sameJson(priorInventory.policy, currentInventory.policy)) {
+    throw new Error("artifact rebaseline cannot change inventory policy");
+  }
+
+  const priorById = configurationsById(priorInventory, "trusted prior");
+  const currentById = configurationsById(currentInventory, "artifact rebaseline head");
+  const priorIds = [...priorById.keys()].sort();
+  const currentIds = [...currentById.keys()].sort();
+  if (!sameJson(priorIds, currentIds)) {
+    throw new Error("artifact rebaseline rejects configuration add/remove");
+  }
+  const previous = priorById.get(configurationId);
+  const configuration = currentById.get(configurationId);
+  if (!previous || !configuration) throw new Error(`warning inventory has no configuration named ${configurationId}`);
+  for (const id of priorIds) {
+    if (id === configurationId) continue;
+    if (!sameJson(priorById.get(id), currentById.get(id))) {
+      throw new Error(`artifact rebaseline changed another configuration: ${id}`);
+    }
+  }
+  assertArtifactRebaselineConfiguration(previous, configuration, comparison);
+
+  const modifiedFiles = collectModifiedFiles(repoRoot, comparison);
+  const allowed = new Set(allowedFiles.map((file) => normalizeComparisonPath(file)));
+  const disallowed = [...modifiedFiles].filter((file) => !allowed.has(normalizeComparisonPath(file))).sort();
+  if (disallowed.length > 0) {
+    throw new Error(`artifact rebaseline changed files outside inventory/warning gate scope: ${disallowed.join(", ")}`);
+  }
+  const suppressions = findAddedSuppressions(repoRoot, comparison);
+  if (suppressions.length > 0) throw new Error(`artifact rebaseline found suppression loopholes: ${suppressions.join(", ")}`);
+
+  const hostPlatform = detectHostPlatform();
+  if (configuration.platform !== hostPlatform) {
+    throw new Error(`configuration ${configuration.id} targets ${configuration.platform}, but this host is ${hostPlatform}`);
+  }
+  const currentToolchain = detectToolchain();
+  for (const [tool, expected] of Object.entries(configuration.evidence?.toolchain ?? {})) {
+    if (currentToolchain[tool] !== expected) {
+      throw new Error(`toolchain drift for ${tool}: inventory=${expected}; current=${currentToolchain[tool]}`);
+    }
+  }
+  const result = await runConfiguration(configuration, repoRoot, environment);
+  const checks = assertArtifactRebaselineRunnerResult(configuration, result);
+  return { comparison, configurationId, modifiedFiles, result, ...checks };
 }
 
 export function loadInventory(file) {

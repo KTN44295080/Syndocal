@@ -14,6 +14,7 @@ import {
   resolveTrustedComparison,
   auditZeroWarningPromotion,
   auditOutputMarkerRebaseline,
+  auditArtifactRebaseline,
   runWarningConfiguration,
   validateInventory,
 } from "./warning-ratchet-lib.mjs";
@@ -31,6 +32,7 @@ function parseArgs(values) {
     bootstrap: false,
     promotion: false,
     outputMarkerRebaseline: false,
+    artifactRebaseline: false,
     baseRefExplicit: false,
     headRefExplicit: false,
   };
@@ -49,18 +51,22 @@ function parseArgs(values) {
     else if (value === "--bootstrap-baseline") result.bootstrap = true;
     else if (value === "--promote-zero-warning") result.promotion = true;
     else if (value === "--rebaseline-output-markers") result.outputMarkerRebaseline = true;
+    else if (value === "--rebaseline-artifacts") result.artifactRebaseline = true;
     else throw new Error(`unknown argument: ${value}`);
   }
-  if (result.promotion && result.outputMarkerRebaseline) {
-    throw new Error("--promote-zero-warning and --rebaseline-output-markers are mutually exclusive");
+  const auditModes = [result.promotion, result.outputMarkerRebaseline, result.artifactRebaseline].filter(Boolean).length;
+  if (auditModes > 1) {
+    throw new Error("warning rebaseline modes are mutually exclusive");
   }
-  if ((result.promotion || result.outputMarkerRebaseline) && (!result.baseRefExplicit || !result.headRefExplicit)) {
-    throw new Error(`${result.promotion ? "--promote-zero-warning" : "--rebaseline-output-markers"} requires explicit --base-ref and --head-ref`);
+  if (auditModes > 0 && (!result.baseRefExplicit || !result.headRefExplicit)) {
+    const mode = result.promotion ? "--promote-zero-warning" : result.outputMarkerRebaseline ? "--rebaseline-output-markers" : "--rebaseline-artifacts";
+    throw new Error(`${mode} requires explicit --base-ref and --head-ref`);
   }
-  if ((result.promotion || result.outputMarkerRebaseline) && !result.configuration) {
-    throw new Error(`${result.promotion ? "--promote-zero-warning" : "--rebaseline-output-markers"} requires --configuration`);
+  if (auditModes > 0 && !result.configuration) {
+    const mode = result.promotion ? "--promote-zero-warning" : result.outputMarkerRebaseline ? "--rebaseline-output-markers" : "--rebaseline-artifacts";
+    throw new Error(`${mode} requires --configuration`);
   }
-  if (!result.promotion && !result.outputMarkerRebaseline && !result.configuration) throw new Error("--configuration is required");
+  if (auditModes === 0 && !result.configuration) throw new Error("--configuration is required");
   return result;
 }
 
@@ -179,6 +185,20 @@ if (args.promotion) {
   console.log(`executed configuration: ${rebaseline.configurationId}`);
   console.log(`changed files: ${rebaseline.modifiedFiles.size}`);
   console.log("output-marker rebaseline audit ok; inventory was not written");
+} else if (args.artifactRebaseline) {
+  const schema = loadInventory(schemaPath);
+  const rebaseline = await auditArtifactRebaseline({
+    repoRoot,
+    baseRef: args.baseRef,
+    headRef: args.headRef,
+    configurationId: args.configuration,
+    schema,
+  });
+  console.log(`artifact rebaseline audit: ${rebaseline.comparison.base}...${rebaseline.comparison.head}`);
+  console.log(`executed configuration: ${rebaseline.configurationId}`);
+  console.log(`artifact coverage: ${rebaseline.result.artifacts.length}`);
+  console.log(`changed files: ${rebaseline.modifiedFiles.size}`);
+  console.log("artifact rebaseline audit ok; inventory was not written");
 } else {
   await runNormalWarningGate();
 }
