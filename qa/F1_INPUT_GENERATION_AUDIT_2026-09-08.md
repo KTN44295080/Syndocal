@@ -1,0 +1,77 @@
+# F1 input-generation audit — 2026-09-08
+
+## Scope
+
+This is a bounded audit of the existing project and mapping input-generation
+boundary. It does not add a MIDI/OSC/DMX API, enable physical output, or close
+the full F1 ledger row.
+
+- Source base: `828bbe178f639bb3843ff9461a862c13619fa2e4`
+- Working tree before this document: clean; `main` matched `origin/main`
+- Product source changes: none
+- Prior real-file thumbnail missing → UI Retry → recovery test: not rerun
+
+## Existing implementation checked
+
+`app/src-tauri/src/main.rs` keeps separate callback generations for all
+project-owned inputs and mapping-driven inputs. The callback seam checks the
+captured generation immediately before send, refuses constructor callbacks until
+the worker is installed, and uses non-blocking external admission so a worker
+being retired cannot deadlock the replacement waiting to join it. Project
+replacement reserves both generations before taking callback-capable input
+slots; mapping replacement advances only the mapping generation and preserves
+the independent MIDI Clock input. `retire_after_project_control_slots_taken`
+joins/releases taken workers before publication and releases partial takes on
+failure.
+
+The same source also keeps external admission ahead of coordinator locking for
+the direct MIDI/OSC/DMX/Remote mutators and the renderer-ticketed project
+mutation path. Stale project epochs and generation-counter exhaustion fail
+closed without reserving or publishing a mutation.
+
+## Focused verification
+
+The Rust commands ran from the repository root after
+`vcvars64.bat -vcvars_ver=14.44`, with the exact Build Tools MSVC
+`14.44.35207` x64 linker pinned in
+`CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER` and returned first by
+`where.exe link.exe`.
+
+| Command/filter | Result |
+| --- | --- |
+| `cargo test -p syndocal --release --locked callback_epoch -- --test-threads=1` | PASS — 3 passed |
+| `cargo test -p syndocal --release --locked installed_callback_gate -- --test-threads=1` | PASS — 1 passed |
+| `cargo test -p syndocal --release --locked project_transaction_fence -- --test-threads=1` | PASS — 1 passed |
+| `cargo test -p syndocal --release --locked external_admission_ -- --test-threads=1` | PASS — 2 passed |
+| `cargo test -p syndocal --release --locked project_control_retirement -- --test-threads=1` | PASS — 1 passed |
+| `cargo test -p syndocal --release --locked project_retirement -- --test-threads=1` | PASS — 6 passed |
+| `pnpm --dir app run check:project-transaction` | PASS — project transaction and project authority deterministic checks |
+
+The 14 Rust cases cover stale constructor callbacks and installation, overflow,
+non-waiting retirement admission, transaction-boundary blocking, callback /
+Remote / transaction baseline linearization, lock ordering, join-before-publish
+and partial-take release, and project-replacement callback failure without
+publication. No app process, physical output, device, or external client was
+started.
+
+## Related checker repair boundary
+
+During this audit the existing `check-output-ownership.mjs` was also run. Its
+first attempt exposed a retired source marker, `fn
+stop_video_output_recording_runtime`, after that helper had moved to
+`video_recording_runtime.rs`. The checker-only boundary repair is recorded
+separately in `qa/OUTPUT_OWNERSHIP_CHECKER_REPAIR_2026-09-08.md` and is already
+integrated as `828bbe1`; no F1 assertion was weakened.
+
+## Remaining boundary
+
+`F1-INPUT-GENERATIONS-001` remains `Open` in
+`qa/SYNDOCAL_COMPLETION_LEDGER.json`. This checkpoint proves the audited local
+generation/admission seams and deterministic stale-callback behavior only. It
+does not prove physical MIDI/OSC/DMX clients, device reconnect/latency, all
+input worker implementations, venue operation, or the dependent F2 full output
+ownership and ShowClock decisions. ASIO/NDI/DMX physical acceptance, Mac
+real-device, signing, publication, and product-wide acceptance remain
+unclaimed.
+
+No assertion was weakened and no runtime or physical-output behavior changed.
