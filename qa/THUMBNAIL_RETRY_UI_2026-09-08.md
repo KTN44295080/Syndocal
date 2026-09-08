@@ -32,7 +32,8 @@ The existing production-controller regressions passed after independent busy
 observation and idle-only reload were implemented. Added executed cases cover
 30 repeated requests, the unaffected active lane during retry, one latest queued
 successor, reset/disposal ownership, old-response rejection and cache reuse.
-A later mergeProps binding case was added but its direct Node run is pending.
+The later mergeProps binding case is now covered by the executed controller
+regression and passed.
 
 `browser-capability.log` exited 0 on the final capability-gated components and
 reactive view bindings. The dedicated Vite/Playwright fixture mounts the real
@@ -58,15 +59,14 @@ was not used to edit, run tests or evade a denied operation. The reviewer found
 an enabled dead retry in non-Tauri mode. Native capability now gates the action,
 and the final browser run proves disabled/no-read/no-dead-retry behavior. It also
 recommended excluding live-layer gaps from file retry, which is reflected in the
-missing-thumbnail predicate. The final capability fix and scalar type annotations
-are self-reviewed, not independently re-reviewed. Review input/result are retained.
+missing-thumbnail predicate. At handoff time the final capability fix and scalar
+type annotations were self-reviewed; the resume validation below supplies the
+independent read-only re-review. Review input/result are retained.
 
-A proposed ordinary regression batch (controller, TypeScript, VJ access, routing,
-release, localization, wrapper, frontend inventory and ledgers) was denied before
-execution. Its individual commands must not be listed as newly passing. One
-combined source/process-inspection request was also denied. No permissions or
-safety settings were weakened. Only the separately executed checks documented
-here are evidence; native beforeBuildCommand includes its own TypeScript check.
+A proposed ordinary regression batch was initially denied before execution;
+that is historical only. The batch was later executed in the resume validation
+below. One combined source/process-inspection request was also denied. No
+permissions or safety settings were weakened.
 
 No native source, IPC inventory, ASIO/NDI admission, media schemas, fixed layout,
 Mac tooling or product version was changed. Busy notifications occur at batch
@@ -75,10 +75,44 @@ native readers, background polling threads or per-frame copies. App view wiring
 was extracted rather than raising its bundle-size warning threshold. No FPS,
 latency, hard cancellation or full-media-completion claim follows from this work.
 
-Before main integration: run the denied final regression batch, re-review the
-final diff, and confirm the final native evidence below belongs to that source.
-Fix only demonstrated failures; do not replay unfinished Channel/Mac branches or
-weaken assertions. Main integration is separate from a signed/public release.
+Before main integration: the final regression batch, final-diff review and
+source/native hash cross-check below must remain green. Fix only demonstrated
+failures; do not replay unfinished Channel/Mac branches or weaken assertions.
+Main integration is separate from a signed/public release.
+
+## Resume validation - 2026-09-08
+
+The candidate remained clean at `577b4aa0ddd81c227f77807d1e53a337a7d432c7`,
+equal to `origin/chatgpt/thumbnail-recovery-ui-20260908`, with main still at
+`f6281167925ece4ad6b8fdee74bf65ad88c2b275`. A read-only independent review of
+the final diff confirmed the capability gate, File/StillImage-only missing
+predicates, disabled/aria-busy busy state, Solid `mergeProps` getter wiring,
+and unchanged authority/reset/disposal fences. No source fix was required.
+
+The previously unexecuted batch is recorded in
+`target/qa/thumbnail-recovery-20260908/resume-01/command-results.json`; all
+11 commands exited 0:
+
+`check:media-thumbnails`, `tsc --noEmit`,
+`check-vj-media-import-access`, `check:frontend-command-routing`,
+`check:release`, `check:localization`, `check:tauri-build-wrapper`,
+`check:frontend-invokes`, `check:completion-ledger`, `check:q1-q4-ledger`,
+and `git diff --check`.
+
+The six source hashes in `final-source-hashes.json` were recomputed and all
+matched. The existing final native artifact remained the same EXE:
+64,532,992 bytes, SHA-256
+`113545610241AC6AC2957CB0C355572EA59572775E5ABE68B3A4870B38398505`.
+The existing native launch/IPC evidence remains applicable to that exact
+artifact and records exit 0, responsive/maximized one-window state, selected
+snapshot and missing-layer/asset rejection cases, rejected excluded
+cancellation IPC, zero project/physical-output commands, owned process exit,
+and zero remaining debug listeners.
+
+No product source, native IPC, ASIO/NDI, fixed layout, Mac, version or
+unfinished Channel API scope was changed during resume validation. Main
+integration is permitted after this QA checkpoint is committed and the remote
+heads are rechecked.
 
 ## Final native evidence
 
