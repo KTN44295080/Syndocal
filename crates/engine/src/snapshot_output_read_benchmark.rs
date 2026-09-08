@@ -1,6 +1,7 @@
 //! Opt-in comparison on a preserved show image; never starts an engine worker
 //! or opens a media/device/output resource.
 use super::allocator_test_handle;
+use crate::snapshot_public;
 use protocol::EngineSnapshot;
 use std::{
     hint::black_box,
@@ -72,5 +73,89 @@ fn benchmark_show_video_outputs_snapshot() {
     println!(
         "median iterations={ITERATIONS} full_ns={} narrow_ns={}",
         previous[2], narrow[2]
+    );
+}
+
+#[test]
+#[ignore = "fixed representative fixture; measurement only, not FPS or lock-wait acceptance"]
+fn benchmark_show_snapshot_clone_and_payload() {
+    let path = std::env::var_os("SYNDOCAL_SNAPSHOT_BENCH_PROJECT")
+        .expect("provide an explicit preserved .sdc path");
+    let bytes = std::fs::read(path).expect("read benchmark show without modification");
+    let document: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let snapshot: EngineSnapshot = serde_json::from_value(document["snapshot"].clone()).unwrap();
+    let public = snapshot_public::clone_public_snapshot(&snapshot);
+    let payload = serde_json::to_vec(&public).unwrap();
+    let combined_payload =
+        serde_json::to_vec(&snapshot_public::clone_public_snapshot(&snapshot)).unwrap();
+    assert_eq!(payload, combined_payload);
+
+    const ITERATIONS: usize = 1_000;
+    let measure = |operation: &dyn Fn()| {
+        let started = Instant::now();
+        for _ in 0..ITERATIONS {
+            operation();
+        }
+        started.elapsed().as_nanos()
+    };
+    let clone = || {
+        black_box(snapshot_public::clone_public_snapshot(black_box(&snapshot)));
+    };
+    let encode = || {
+        black_box(serde_json::to_vec(black_box(&public)).unwrap());
+    };
+    let clone_and_encode = || {
+        black_box(
+            serde_json::to_vec(black_box(&snapshot_public::clone_public_snapshot(
+                black_box(&snapshot),
+            )))
+            .unwrap(),
+        );
+    };
+
+    black_box(measure(&clone));
+    black_box(measure(&encode));
+    black_box(measure(&clone_and_encode));
+    let mut clone_times = Vec::new();
+    let mut encode_times = Vec::new();
+    let mut combined_times = Vec::new();
+    for round in 0..5 {
+        let (clone_ns, encode_ns, combined_ns) = match round % 3 {
+            0 => {
+                let clone_ns = measure(&clone);
+                let encode_ns = measure(&encode);
+                let combined_ns = measure(&clone_and_encode);
+                (clone_ns, encode_ns, combined_ns)
+            }
+            1 => {
+                let encode_ns = measure(&encode);
+                let combined_ns = measure(&clone_and_encode);
+                let clone_ns = measure(&clone);
+                (clone_ns, encode_ns, combined_ns)
+            }
+            _ => {
+                let combined_ns = measure(&clone_and_encode);
+                let clone_ns = measure(&clone);
+                let encode_ns = measure(&encode);
+                (clone_ns, encode_ns, combined_ns)
+            }
+        };
+        println!(
+            "round={round} iterations={ITERATIONS} clone_ns={clone_ns} encode_ns={encode_ns} clone_encode_ns={combined_ns} payload_bytes={}",
+            payload.len()
+        );
+        clone_times.push(clone_ns);
+        encode_times.push(encode_ns);
+        combined_times.push(combined_ns);
+    }
+    clone_times.sort_unstable();
+    encode_times.sort_unstable();
+    combined_times.sort_unstable();
+    println!(
+        "median iterations={ITERATIONS} clone_ns={} encode_ns={} clone_encode_ns={} payload_bytes={}",
+        clone_times[2],
+        encode_times[2],
+        combined_times[2],
+        payload.len()
     );
 }
