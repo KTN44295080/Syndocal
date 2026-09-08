@@ -389,3 +389,19 @@ Mac検証7ファイルは別の未完了作業として保全し、製品全体�
 demuxer・preroll・復旧を含む別設計として残す。frontendからnativeへの取消、
 総停止期限、cache/proxy/waveform、実機・配布受入は未完了のまま。
 Codex/Worksや別モデルは使わず自己レビューのみ。Macの未完了7ファイルは保全。
+
+## 2026-09-08 thumbnail取消の画面側接続：受入未完了の候補
+
+基準 `8a8e530`。詳細は [画面側取消の候補記録](THUMBNAIL_UI_CANCELLATION_2026-09-08.md)。
+素材切替・project resetのAbortSignalを、nativeが通知する要求チケットに接続した。
+取消対象は呼出元window・lane・request IDの一致に限定し、worker終了前に枠を解放しない。
+この候補の検証ではclient 17件、native thumbnail 23件、既存controller、TypeScript、
+releaseチェック、457件のfrontend invoke一覧照合が通過。Windows build/1window起動も通過した。
+Lunaへの委任は許可後のread-only独立レビュー1回のみで、編集・検証はChatGPTが実施した。
+
+未解消：実WebViewから両laneへの通知・取消の通し確認、App破棄時の登録解除と
+取消通知の順序。同期I/O/decoderの総停止期限も未完了である。
+`check:frontend-command-routing`は旧固定値450と現行457の不一致で失敗。
+変更前のmanifestも456であり、今回追加は取消1件だけ。checker修正は未反映で、
+後続assertionの通過は主張しない。releaseチェック成功とこの失敗は別の結果として残す。
+上記を閉じるまで完成受入・main統合には進めず、MEDIA-DERIVED全体も未完了とする。

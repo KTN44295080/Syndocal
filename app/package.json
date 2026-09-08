@@ -97,7 +97,7 @@
     "check:warnings:self-test": "node scripts/test-warning-ratchet.mjs",
     "check:tauri-build-wrapper": "node scripts/check-tauri-build-wrapper.mjs",
     "check:agent-bridge": "node scripts/check-agent-bridge.mjs",
-    "check:media-thumbnails": "node scripts/check-media-thumbnail-controller.mjs",
+    "check:media-thumbnails": "node scripts/check-media-thumbnail-controller.mjs && node --experimental-strip-types --test scripts/native-thumbnail-request.test.ts",
     "sign:windows": "node scripts/sign-windows-artifact.mjs",
     "check:release-ui:browser": "pnpm run check:viewport && pnpm run check:vj-operator && pnpm run check:timeline-viewport",
     "check:release-ui": "pnpm run check:desktop-window && pnpm run check:release-ui:browser && pnpm run check:native-window",

@@ -111,10 +111,10 @@ console.log("PASS media thumbnail controller: 100 unchanged-array and 100 equiva
 function boundedFixture(initialAssets = [asset]) {
   const requests = { layers: [], assets: [] };
   const active = { layers: 0, assets: 0 }, peak = { layers: 0, assets: 0 };
-  const load = (kind) => (id) => {
+  const load = (kind) => (id, signal) => {
     active[kind]++;
     peak[kind] = Math.max(peak[kind], active[kind]);
-    return new Promise((resolve, reject) => requests[kind].push({ id, resolve, reject }))
+    return new Promise((resolve, reject) => requests[kind].push({ id, signal, resolve, reject }))
       .finally(() => { active[kind]--; });
   };
   const result = { requests, active, peak };
@@ -143,11 +143,15 @@ function boundedFixture(initialAssets = [asset]) {
   await flush();
   assert.deepEqual(f.peak, { layers: 1, assets: 1 }, 'burst cannot multiply in-flight native reads');
   assert.deepEqual([f.requests.layers.length, f.requests.assets.length], [1, 1]);
+  assert.equal(f.requests.layers[0].signal.aborted, true);
+  assert.equal(f.requests.assets[0].signal.aborted, true);
   f.requests.layers[0].resolve('retired-layer');
   f.requests.assets[0].reject(new Error('retired-error')); await flush();
   assert.deepEqual(f.controller.videoClipThumbnails(), {});
   assert.deepEqual(f.controller.mediaAssetThumbnails(), {});
   assert.deepEqual([f.requests.layers.length, f.requests.assets.length], [2, 2], 'only the latest successor runs');
+  assert.equal(f.requests.layers[1].signal.aborted, false);
+  assert.equal(f.requests.assets[1].signal.aborted, false);
   f.requests.layers[1].resolve('latest-layer');
   f.requests.assets[1].resolve('latest-asset'); await flush();
   assert.equal(f.controller.videoClipThumbnails()[1], 'latest-layer');
@@ -179,9 +183,28 @@ function boundedFixture(initialAssets = [asset]) {
   for (let i = 0; i < 20; i++) { f.controller.reset(); f.controller.authorizeVideoThumbnailAccess(); }
   assert.deepEqual([f.requests.layers.length, f.requests.assets.length], [1, 1]);
   f.controller.reset();
+  assert.equal(f.requests.layers[0].signal.aborted, true);
+  assert.equal(f.requests.assets[0].signal.aborted, true);
   f.requests.layers[0].resolve('old'); f.requests.assets[0].resolve('old'); await flush();
   assert.deepEqual(f.controller.mediaAssetThumbnails(), {});
   assert.deepEqual(f.controller.videoClipThumbnails(), {});
   assert.deepEqual([f.requests.layers.length, f.requests.assets.length], [1, 1], 'reset removes the pending successor');
   f.dispose();
+}
+
+{
+  const f = boundedFixture(); f.controller.authorizeVideoThumbnailAccess(); await flush();
+  f.setAuthority(authorityB); f.setLayers([{ ...layer, id: 9 }]);
+  let layerAborts = 0, assetAborts = 0;
+  f.requests.layers[0].signal.addEventListener('abort', () => layerAborts++);
+  f.requests.assets[0].signal.addEventListener('abort', () => assetAborts++);
+  assert.equal(f.requests.layers[0].signal.aborted, true);
+  assert.equal(f.requests.assets[0].signal.aborted, true);
+  f.dispose(); f.controller.authorizeVideoThumbnailAccess();
+  f.requests.layers[0].resolve('disposed'); f.requests.assets[0].resolve('disposed'); await flush();
+  assert.deepEqual([f.requests.layers.length, f.requests.assets.length], [1, 1]);
+  assert.deepEqual([layerAborts, assetAborts], [0, 0], 'already-aborted signals do not emit a second abort on disposal');
+  assert.deepEqual(f.controller.videoClipThumbnails(), {});
+  assert.deepEqual(f.controller.mediaAssetThumbnails(), {});
+  console.log('PASS disposal discards queued successors and retains the original request until settlement');
 }

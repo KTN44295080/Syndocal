@@ -2,7 +2,7 @@ import { mountAgentBridge } from "./agentBridgeMount";
 import { createProjectTransactionRecoveryController } from "./createProjectTransactionRecoveryController";
 import { createMediaThumbnailController } from "./createMediaThumbnailController";
 import { createWorkspaceNavigationController, type WorkspaceNavigationRoute } from "./createWorkspaceNavigationController";
-import { invoke as tauriInvoke } from "@tauri-apps/api/core";
+import { Channel, invoke as tauriInvoke } from "@tauri-apps/api/core";
 import { listen as tauriListen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getAllWebviewWindows } from "@tauri-apps/api/webviewWindow";
@@ -1302,6 +1302,9 @@ const mediaAssetTerminalRecoveryCommands = new Set([
   "get_video_effect_catalog_operation_terminal_result",
   "get_timeline_advanced_operation_terminal_result",
   "cancel_media_asset_operation",
+  // An exact native-issued thumbnail ticket can only cancel this window's own work.
+  // Keep the normal registration barrier; this is terminal cleanup, not a mutation.
+  "cancel_native_thumbnail_request_v1",
   // Runtime-only Timeline Follow observation/abort has no authored-history
   // effect. Full Lock intentionally keeps this emergency transport available.
   "get_timeline_follow_runtime",
@@ -20362,6 +20365,7 @@ export default function App() {
     setVideoMasterOpacity,
     setVideoBlackout,
   } = createVideoRuntimeController({
+    createThumbnailChannel: () => new Channel<unknown>(),
     setVideoBlackout: targetBlackout.setVideoBlackout,
     invoke,
     snapshot,

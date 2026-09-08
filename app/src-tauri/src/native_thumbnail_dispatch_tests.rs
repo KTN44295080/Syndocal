@@ -10,14 +10,14 @@ use std::{
 #[test]
 fn blocking_dispatch_returns_success_and_errors_without_leaking_admission() {
     let gate = ThumbnailGate::default();
-    let result = tauri::async_runtime::block_on(run(gate.try_acquire().unwrap(), |_| Ok(42)));
+    let result = tauri::async_runtime::block_on(run(gate.try_acquire("main").unwrap(), |_| Ok(42)));
     assert_eq!(result.unwrap(), 42);
     let result: Result<(), String> =
-        tauri::async_runtime::block_on(run(gate.try_acquire().unwrap(), |_| {
+        tauri::async_runtime::block_on(run(gate.try_acquire("main").unwrap(), |_| {
             Err("decode failed".into())
         }));
     assert_eq!(result.unwrap_err(), "decode failed");
-    assert!(gate.try_acquire().is_ok());
+    assert!(gate.try_acquire("main").is_ok());
 }
 
 #[test]
@@ -30,7 +30,7 @@ fn dropping_async_waiter_does_not_admit_a_second_running_job() {
     let (started_tx, started_rx) = mpsc::sync_channel(1);
     let (release_tx, release_rx) = mpsc::sync_channel(1);
     let (cancel_tx, cancel_rx) = mpsc::sync_channel(1);
-    let mut request = Box::pin(run(gate.try_acquire().unwrap(), move |cancel| {
+    let mut request = Box::pin(run(gate.try_acquire("main").unwrap(), move |cancel| {
         started_tx.send(()).unwrap();
         release_rx.recv_timeout(Duration::from_secs(5)).unwrap();
         cancel_tx
@@ -46,14 +46,14 @@ fn dropping_async_waiter_does_not_admit_a_second_running_job() {
     started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
     drop(request);
     assert!(
-        gate.try_acquire().is_err(),
+        gate.try_acquire("main").is_err(),
         "dropped waiter must not release the executing worker"
     );
     release_tx.send(()).unwrap();
     assert!(cancel_rx.recv_timeout(Duration::from_secs(5)).unwrap());
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
-        if let Ok(job) = gate.try_acquire() {
+        if let Ok(job) = gate.try_acquire("main") {
             drop(job);
             break;
         }
@@ -69,7 +69,9 @@ fn dropping_async_waiter_does_not_admit_a_second_running_job() {
 fn panicked_worker_reports_failure_and_releases_admission() {
     let gate = ThumbnailGate::default();
     let result: Result<(), String> =
-        tauri::async_runtime::block_on(run(gate.try_acquire().unwrap(), |_| panic!("fixture")));
+        tauri::async_runtime::block_on(run(gate.try_acquire("main").unwrap(), |_| {
+            panic!("fixture")
+        }));
     assert!(result.unwrap_err().contains("Thumbnail worker failed"));
-    assert!(gate.try_acquire().is_ok());
+    assert!(gate.try_acquire("main").is_ok());
 }

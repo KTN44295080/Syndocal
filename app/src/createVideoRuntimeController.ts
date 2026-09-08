@@ -1,3 +1,4 @@
+import { requestNativeThumbnail, type ThumbnailStartChannel } from "./nativeThumbnailRequest";
 import type { Accessor, Setter } from "solid-js";
 import type { FrontendTauriInvoke } from "./tauriInvokeCommands";
 import { videoFrameToDataUrl } from "./videoFrameCanvas";
@@ -86,6 +87,7 @@ type VideoClipSlotRuntimeInvokeCommand =
 interface VideoRuntimeControllerOptions {
   setVideoBlackout: (enabled: boolean) => Promise<void>;
   invoke: Invoke;
+  createThumbnailChannel: () => ThumbnailStartChannel;
   snapshot: Accessor<EngineSnapshot>;
   refreshSnapshot: () => Promise<EngineSnapshot | null>;
   setMessage: (message: string) => unknown;
@@ -1462,20 +1464,16 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
       options.setMessage(String(error));
     }
   };
-  const loadVideoLayerThumbnail = async (layerId: number) => {
-    const frame = await options.invoke<VideoFrame>("get_video_layer_thumbnail", {
-      layerId,
-      width: 160,
-      height: 90,
-    });
+  const loadVideoLayerThumbnail = async (layerId: number, signal: AbortSignal) => {
+    const frame = await requestNativeThumbnail({
+      invoke: options.invoke, createChannel: options.createThumbnailChannel,
+    }, "layer", layerId, signal);
     return videoFrameToDataUrl(frame);
   };
-  const loadMediaAssetThumbnail = async (assetId: MediaAssetId) => {
-    const frame = await options.invoke<VideoFrame>("get_media_asset_thumbnail", {
-      assetId,
-      width: 160,
-      height: 90,
-    });
+  const loadMediaAssetThumbnail = async (assetId: MediaAssetId, signal: AbortSignal) => {
+    const frame = await requestNativeThumbnail({
+      invoke: options.invoke, createChannel: options.createThumbnailChannel,
+    }, "asset", assetId, signal);
     return videoFrameToDataUrl(frame);
   };
   const beginMediaAssetPreview = async (assetId: MediaAssetId) => {

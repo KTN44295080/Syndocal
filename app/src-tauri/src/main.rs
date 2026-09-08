@@ -21,6 +21,7 @@ use fixture_profile_contract::{
     fixture_controls_footprint, validate_emitter_calibrations, validate_project_custom_profile_refs,
     validate_project_custom_profiles, validate_project_fixture_geometries,
 };
+mod native_thumbnail_ticket;
 mod native_thumbnail_work;
 mod native_thumbnail_dispatch;
 #[cfg(test)]
@@ -76574,9 +76575,21 @@ fn video_output_recording_status(
     runtime.status_snapshot()
 }
 
+/// Requests cancellation only for the caller's exact native-issued thumbnail ticket.
+#[tauri::command]
+fn cancel_native_thumbnail_request_v1(
+    state: State<'_, AppState>,
+    window: WebviewWindow,
+    ticket: native_thumbnail_ticket::ThumbnailTicket,
+) -> Result<bool, String> {
+    state.native_thumbnail_work.cancel(window.label(), &ticket)
+}
+
 #[tauri::command]
 async fn get_video_layer_thumbnail(
     state: State<'_, AppState>,
+    window: WebviewWindow,
+    started: tauri::ipc::Channel<native_thumbnail_ticket::ThumbnailTicket>,
     layer_id: VideoLayerId,
     width: u32,
     height: u32,
@@ -76584,7 +76597,10 @@ async fn get_video_layer_thumbnail(
     if width == 0 || height == 0 || width > 512 || height > 512 {
         return Err("Video thumbnail dimensions must be between 1 and 512 pixels".to_string());
     }
-    let job = state.native_thumbnail_work.layers.try_acquire()?;
+    state.ensure_window_authority_not_blocked(window.label())?;
+    let job = state.native_thumbnail_work.layers.try_acquire(window.label())?;
+    started.send(job.ticket(native_thumbnail_ticket::ThumbnailLane::Layer))
+        .map_err(|error| format!("Unable to announce thumbnail request: {error}"))?;
     let engine = state.engine.clone();
     let renderer = Arc::clone(&state.video_preview);
     native_thumbnail_dispatch::run(job, move |cancel| {
@@ -76836,12 +76852,17 @@ fn ensure_media_asset_thumbnail_still_authoritative(
 #[tauri::command]
 async fn get_media_asset_thumbnail(
     state: State<'_, AppState>,
+    window: WebviewWindow,
+    started: tauri::ipc::Channel<native_thumbnail_ticket::ThumbnailTicket>,
     asset_id: MediaAssetId,
     width: u32,
     height: u32,
 ) -> Result<video::VideoFrame, String> {
     validate_media_asset_thumbnail_dimensions(width, height)?;
-    let job = state.native_thumbnail_work.assets.try_acquire()?;
+    state.ensure_window_authority_not_blocked(window.label())?;
+    let job = state.native_thumbnail_work.assets.try_acquire(window.label())?;
+    started.send(job.ticket(native_thumbnail_ticket::ThumbnailLane::Asset))
+        .map_err(|error| format!("Unable to announce thumbnail request: {error}"))?;
     let (authority, asset) = capture_media_asset_thumbnail_asset(&state, asset_id)?;
     let render_asset = asset.clone();
     let frame = native_thumbnail_dispatch::run(job, move |cancel| {
@@ -130200,6 +130221,7 @@ fn main() {
             start_video_output_recording,
             stop_video_output_recording,
             video_output_recording_status,
+            cancel_native_thumbnail_request_v1,
             get_video_layer_thumbnail,
             get_media_asset_thumbnail,
             begin_media_asset_preview,

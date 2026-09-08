@@ -9,8 +9,8 @@ interface Options {
   projectMappingsAuthority: Accessor<ProjectAuthorityToken>;
   isProjectAuthorityIdentityCurrent: (authority: ProjectAuthorityToken) => boolean;
   isTauriRuntime: () => boolean;
-  loadVideoLayerThumbnail: (id: number) => Promise<string>;
-  loadMediaAssetThumbnail: (id: MediaAssetId) => Promise<string>;
+  loadVideoLayerThumbnail: (id: number, signal: AbortSignal) => Promise<string>;
+  loadMediaAssetThumbnail: (id: MediaAssetId, signal: AbortSignal) => Promise<string>;
 }
 
 /** Owns opt-in thumbnail caches; project replacement resets permission and both batches. */
@@ -100,7 +100,7 @@ export const createMediaThumbnailController = (options: Options) => {
       setVideoClipThumbnails(videoThumbnailUrlCache);
       return;
     }
-    videoBatch.replace(async (isCurrent) => {
+    videoBatch.replace(async (isCurrent, signal) => {
       const nextUrls = { ...videoThumbnailUrlCache };
       const nextSignatures = new Map(videoThumbnailSignatures);
       for (const source of sources) {
@@ -108,7 +108,7 @@ export const createMediaThumbnailController = (options: Options) => {
         const signature = JSON.stringify(source);
         if (nextSignatures.get(source.id) === signature && nextUrls[source.id]) continue;
         try {
-          nextUrls[source.id] = await loadVideoLayerThumbnail(source.id);
+          nextUrls[source.id] = await loadVideoLayerThumbnail(source.id, signal);
           nextSignatures.set(source.id, signature);
         } catch {
           delete nextUrls[source.id];
@@ -158,7 +158,7 @@ export const createMediaThumbnailController = (options: Options) => {
       setMediaAssetThumbnails(mediaAssetThumbnailUrlCache);
       return;
     }
-    assetBatch.replace(async (isCurrent) => {
+    assetBatch.replace(async (isCurrent, signal) => {
       const nextUrls = { ...mediaAssetThumbnailUrlCache };
       const nextSignatures = new Map(mediaAssetThumbnailSignatures);
       for (const source of thumbnailable) {
@@ -166,7 +166,7 @@ export const createMediaThumbnailController = (options: Options) => {
         const signature = JSON.stringify(source);
         if (nextSignatures.get(source.id) === signature && nextUrls[source.id]) continue;
         try {
-          nextUrls[source.id] = await loadMediaAssetThumbnail(source.id);
+          nextUrls[source.id] = await loadMediaAssetThumbnail(source.id, signal);
           nextSignatures.set(source.id, signature);
         } catch {
           delete nextUrls[source.id];
