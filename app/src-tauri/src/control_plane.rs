@@ -61,9 +61,9 @@ const KEYBOARD_SHORTCUT_SOURCE_MANIFEST: &str =
 const KEYBOARD_SHORTCUT_SOURCE_MANIFEST_SCHEMA_VERSION: u16 = 1;
 const KEYBOARD_APP_SHORTCUT_SOURCE_COUNT: usize = 30;
 const KEYBOARD_PROJECT_FILE_SHORTCUT_SOURCE_COUNT: usize = 3;
-const FROZEN_TAURI_ROUTE_ADMISSION_COUNT: usize = 515;
+const FROZEN_TAURI_ROUTE_ADMISSION_COUNT: usize = 516;
 const FROZEN_TAURI_ROUTE_ADMISSION_SHA256: &str =
-    "6414db9fd02f7147ecc6b7503607bdb77e07a871e02f5b0c1cdd7742a48e37b5";
+    "5120894f36feb82ac58fffd4db20739d80ae1b1a1c556fc95838a1708cbb8eea";
 /// The command source is parsed and validated exactly once.  Local discovery
 /// calls only clone this immutable, validated value; they never parse source
 /// text or make an external request on the invocation path.
@@ -217,6 +217,7 @@ fn classify_registered_tauri_route(command: &str) -> Option<TauriRouteAdmissionC
             | "start_media_asset_operation"
             | "start_media_asset_availability_operation"
             | "cancel_media_asset_operation"
+            | "cancel_native_thumbnail_request_v1"
             | "get_media_asset_operation_terminal_result"
             | "get_video_clip_slot_operation_terminal_result"
             | "get_video_effect_catalog_operation_terminal_result"
@@ -2085,6 +2086,10 @@ mod tests {
             names.iter().cloned().collect::<BTreeSet<_>>()
         );
         for (route, expected) in [
+            ("get_snapshot", TauriRouteAdmissionClass::ReadOnly),
+            ("get_video_layer_thumbnail", TauriRouteAdmissionClass::ReadOnly),
+            ("get_media_asset_thumbnail", TauriRouteAdmissionClass::ReadOnly),
+            ("cancel_native_thumbnail_request_v1", TauriRouteAdmissionClass::RecoveryMaintenance),
             (
                 "resolve_missing_project_publication_v1",
                 TauriRouteAdmissionClass::RecoveryMaintenance,
@@ -2266,7 +2271,7 @@ mod tests {
         assert_eq!(names.len(), FROZEN_TAURI_ROUTE_ADMISSION_COUNT);
         assert_eq!(
             counts[&TauriRouteAdmissionClass::RendererTicketedProjectMutation],
-            132
+            133
         );
         assert_eq!(
             counts[&TauriRouteAdmissionClass::BackendAuthoritativeProjectMutation],
@@ -2279,7 +2284,7 @@ mod tests {
         assert_eq!(counts[&TauriRouteAdmissionClass::RuntimeMutation], 157);
         assert_eq!(counts[&TauriRouteAdmissionClass::FileExportMutation], 20);
         assert_eq!(counts[&TauriRouteAdmissionClass::SafetyMutation], 1);
-        assert_eq!(counts[&TauriRouteAdmissionClass::RecoveryMaintenance], 27);
+        assert_eq!(counts[&TauriRouteAdmissionClass::RecoveryMaintenance], 28);
         assert_eq!(counts[&TauriRouteAdmissionClass::Retired], 29);
         assert_eq!(counts[&TauriRouteAdmissionClass::AgentTransportMaintenance], 3);
         assert_eq!(tauri_route_admission_class("patch_fixture"), None);
@@ -2314,11 +2319,11 @@ mod tests {
             TIMELINE_TRANSPORT_AUTHORITY_QUERY_OPERATION_ID,
         ];
         assert_eq!(names.len(), FROZEN_TAURI_ROUTE_ADMISSION_COUNT);
-        // Exact current-source delta: the frozen USB route contributes two
-        // engine commands; the strict Show Spout Reset adds its separately
-        // named atomic engine command. Its five Tauri routes and the local
-        // Spout reset account for the six manifest entries below.
-        const ENGINE_COMMAND_COUNT: usize = 279;
+        // Freeze the inspected current source families as well as their exact
+        // sets below. The thumbnail cancellation adds one Tauri/renderer route;
+        // prior engine and frontend additions must not be mistaken for new
+        // external capabilities merely because their metadata is enumerated.
+        const ENGINE_COMMAND_COUNT: usize = 280;
         const REMOTE_INPUT_EVENT_COUNT: usize = 51;
         const REMOTE_CLIENT_REQUEST_COUNT: usize = 7;
         const REMOTE_WIRE_OPERATION_COUNT: usize = 58;
@@ -2340,7 +2345,7 @@ mod tests {
             + OSC_INPUT_EVENT_COUNT
             + DMX_INPUT_PROTOCOL_COUNT
             + DMX_INPUT_EVENT_COUNT;
-        const FRONTEND_INVOKE_COUNT: usize = 454;
+        const FRONTEND_INVOKE_COUNT: usize = 457;
         assert_eq!(MIDI_OSC_DMX_OPERATION_COUNT, 206);
         assert_eq!(
             registry.operations.len(),
@@ -2350,7 +2355,7 @@ mod tests {
                 + MIDI_OSC_DMX_OPERATION_COUNT
                 + FRONTEND_INVOKE_COUNT
         );
-        assert_eq!(registry.operations.len(), 1569);
+        assert_eq!(registry.operations.len(), 1575);
         verify_registry_exact_set(&names, &registry).unwrap();
         let r0 = registry
             .operations
@@ -2706,20 +2711,19 @@ mod tests {
         verify_canonical_registry_exact_sources(&legacy, &canonical).unwrap();
 
         const TAURI_COUNT: usize = FROZEN_TAURI_ROUTE_ADMISSION_COUNT;
-        // 277 prior engine sources plus the distinct atomic
-        // `ResetShowSpoutOutputsExactPublished` source.
-        const ENGINE_COUNT: usize = 279;
+        // Current declarative EngineCommand source inventory, inspected as 280 variants.
+        const ENGINE_COUNT: usize = 280;
         const REMOTE_COUNT: usize = 116;
         const MIDI_OSC_DMX_COUNT: usize = 206;
-        const FRONTEND_COUNT: usize = 454;
+        const FRONTEND_COUNT: usize = 457;
         const LEGACY_SOURCE_TOTAL: usize =
             TAURI_COUNT + ENGINE_COUNT + REMOTE_COUNT + MIDI_OSC_DMX_COUNT + FRONTEND_COUNT;
         const KEYBOARD_APP_COUNT: usize = 30;
         const KEYBOARD_PROJECT_FILE_COUNT: usize = 3;
         const SOURCE_TOTAL: usize =
             LEGACY_SOURCE_TOTAL + KEYBOARD_APP_COUNT + KEYBOARD_PROJECT_FILE_COUNT;
-        assert_eq!(LEGACY_SOURCE_TOTAL, 1569);
-        assert_eq!(SOURCE_TOTAL, 1602);
+        assert_eq!(LEGACY_SOURCE_TOTAL, 1575);
+        assert_eq!(SOURCE_TOTAL, 1608);
         assert_eq!(canonical.source_inventory.len(), SOURCE_TOTAL);
         assert_eq!(canonical.canonical_operations.len(), 47);
 
@@ -3081,7 +3085,14 @@ mod tests {
         // The missing-publication recovery route is local maintenance, not a
         // separately reviewed canonical operation.
         // Broker lifecycle adds three local native sources; its frontend sources are aliases.
-        assert_eq!(unclassified.len(), 1096);
+        // 1608 total minus 47 canonical, 457 frontend aliases, four internal
+        // steps and one structural route. Extra local inventory is NOT an
+        // authorization grant to external clients.
+        assert_eq!(unclassified.len(), 1099);
+        assert!(canonical.canonical_operation_for_source(&SourceKey::new(
+            CanonicalSourceFamily::TauriCommand,
+            "cancel_native_thumbnail_request_v1",
+        )).unwrap().is_none());
         assert_eq!(support_phases.len(), 0);
         assert_eq!(
             direct.len()
@@ -3799,11 +3810,11 @@ mod tests {
     fn legacy_v1_registry_json_and_count_remain_inventory_honest() {
         let legacy = registry().unwrap();
         // Includes both the native and frontend missing-publication resolver.
-        assert_eq!(legacy.operations.len(), 1569);
+        assert_eq!(legacy.operations.len(), 1575);
         let encoded = serde_json::to_value(&legacy).unwrap();
         assert_eq!(encoded["schema"]["version"], CONTROL_PLANE_SCHEMA_VERSION);
         let operations = encoded["operations"].as_array().unwrap();
-        assert_eq!(operations.len(), 1569);
+        assert_eq!(operations.len(), 1575);
         assert!(operations.iter().all(|operation| {
             operation["source_family"] != "keyboard_app"
                 && operation["source_family"] != "keyboard_project_file"
