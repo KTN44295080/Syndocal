@@ -680,7 +680,10 @@ const measureArrangerGeometry = (client) => evaluate(client, `(() => {
   const host = livePanel?.querySelector(':scope > .timelineArrangerUpperHost');
   const desk = document.querySelector('.faders.timelineDesk-show');
   const surface = desk?.querySelector('.timelineShowSurface');
-  const frame = surface?.querySelector(':scope > .timelineOverviewFrame');
+  // TimelineCueEventsPanel owns the overview through its local TimelinePanel
+  // wrapper; keep the surface as the upper-boundary owner without requiring a
+  // brittle direct-child relationship.
+  const frame = surface?.querySelector('.timelineOverviewFrame');
   const scrollport = frame?.querySelector('.timelineLayerScrollport');
   const lowerBand = document.querySelector('.layoutSharedWorkspace.controlModeLive > .mappingPersistentWorkspaceBand');
   const lowerContext = lowerBand?.querySelector('[data-workspace-pane="lower-right"]');
