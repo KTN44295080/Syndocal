@@ -5,9 +5,46 @@ use crate::snapshot_public;
 use protocol::EngineSnapshot;
 use std::{
     hint::black_box,
-    sync::{Arc, RwLock},
+    sync::{mpsc, Arc, RwLock},
+    thread,
     time::Instant,
 };
+
+fn measure_contended_snapshot_read(
+    handle: &super::EngineHandle,
+    published: Arc<RwLock<EngineSnapshot>>,
+    iterations: usize,
+    operation: impl Fn(&super::EngineHandle) -> bool,
+) -> (Vec<u128>, usize) {
+    let (go_tx, go_rx) = mpsc::sync_channel(0);
+    let (ready_tx, ready_rx) = mpsc::sync_channel(0);
+    let (started_tx, started_rx) = mpsc::sync_channel(0);
+    let writer = thread::spawn(move || {
+        for _ in 0..iterations {
+            go_rx.recv().unwrap();
+            let guard = published.write().unwrap();
+            ready_tx.send(()).unwrap();
+            started_rx.recv().unwrap();
+            thread::sleep(std::time::Duration::from_millis(2));
+            drop(guard);
+        }
+    });
+
+    let mut samples = Vec::with_capacity(iterations);
+    let mut successful_reads = 0;
+    for _ in 0..iterations {
+        go_tx.send(()).unwrap();
+        ready_rx.recv().unwrap();
+        let started = Instant::now();
+        started_tx.send(()).unwrap();
+        if operation(handle) {
+            successful_reads += 1;
+        }
+        samples.push(started.elapsed().as_nanos());
+    }
+    writer.join().unwrap();
+    (samples, successful_reads)
+}
 
 #[test]
 #[ignore = "requires SYNDOCAL_SNAPSHOT_BENCH_PROJECT; isolated read cost, not native FPS"]
@@ -194,5 +231,43 @@ fn benchmark_show_tick_snapshot_construction() {
     println!(
         "median iterations={ITERATIONS} build_snapshot_ns={}",
         times[2]
+    );
+}
+
+#[test]
+#[ignore = "fixed representative fixture; synthetic writer-wait report, not FPS acceptance"]
+fn benchmark_show_snapshot_reads_under_writer_contention() {
+    let path = std::env::var_os("SYNDOCAL_SNAPSHOT_BENCH_PROJECT")
+        .expect("provide an explicit preserved .sdc path");
+    let bytes = std::fs::read(path).expect("read benchmark show without modification");
+    let document: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let snapshot: EngineSnapshot = serde_json::from_value(document["snapshot"].clone()).unwrap();
+    let published = Arc::new(RwLock::new(snapshot));
+    let handle = allocator_test_handle(Arc::clone(&published));
+    const ITERATIONS: usize = 100;
+
+    let (mut full, full_successes) =
+        measure_contended_snapshot_read(&handle, Arc::clone(&published), ITERATIONS, |handle| {
+            black_box(handle.snapshot());
+            true
+        });
+    let (mut narrow, narrow_successes) =
+        measure_contended_snapshot_read(&handle, Arc::clone(&published), ITERATIONS, |handle| {
+            black_box(handle.video_outputs_snapshot());
+            true
+        });
+    let (mut try_read, try_successes) =
+        measure_contended_snapshot_read(&handle, published, ITERATIONS, |handle| {
+            black_box(handle.try_snapshot()).is_some()
+        });
+
+    full.sort_unstable();
+    narrow.sort_unstable();
+    try_read.sort_unstable();
+    println!(
+        "writer_contention iterations={ITERATIONS} hold_ms=2 full_median_ns={} narrow_median_ns={} try_median_ns={} full_successes={full_successes} narrow_successes={narrow_successes} try_successes={try_successes}",
+        full[ITERATIONS / 2],
+        narrow[ITERATIONS / 2],
+        try_read[ITERATIONS / 2],
     );
 }
