@@ -7,8 +7,8 @@ the implemented `set_effect_enabled` vertical and the existing project
 transaction mutation controller without widening the supported operation set,
 adding a new API, or marking the full AI2 tranche complete.
 
-- Source base: `5c421d3b4889877c24781d5c4706715501c44427`
-- Working tree before this document: clean; `main` matched `origin/main`
+- Source base for this revalidation: `1441f6379ca4b67c09c5b22bf735aeb4bab8b77e`
+- Working tree before this revalidation: clean; `main` matched `origin/main`
 - Product source changes: none
 - Prior real-file thumbnail missing → UI Retry → recovery test: not rerun
 

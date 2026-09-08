@@ -7,8 +7,8 @@ event implementation. It records current source evidence without creating a
 new API, widening the supported external-client claim, or marking the full
 AI1 tranche complete.
 
-- Source base: `1cd4b0cf1b3650ac48f5553640f0e67d5e3a98a9`
-- Working tree before this document: clean; `main` matched `origin/main`
+- Source base for this revalidation: `1441f6379ca4b67c09c5b22bf735aeb4bab8b77e`
+- Working tree before this revalidation: clean; `main` matched `origin/main`
 - Product source changes: none
 - Prior real-file thumbnail missing → UI Retry → recovery test: not rerun
 
