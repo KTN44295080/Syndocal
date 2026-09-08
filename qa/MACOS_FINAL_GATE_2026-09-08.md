@@ -2,8 +2,9 @@
 
 Base main: `cfac3c324bd866b2947fa15e18042f7a796e9d5b`.
 Candidate: `chatgpt/macos-final-gate-20260908`.
-Status: implemented and Windows Node tests passed; macOS CI and independent
-review of this integrated candidate remain outstanding. Not promoted to main.
+Status: implemented; independent review and all required local checks passed;
+the candidate-specific macOS CI run and its DMG evidence remain outstanding.
+Not promoted to main.
 
 ## Bounded change
 
@@ -48,8 +49,39 @@ Windows / Node 22.22.1. Evidence directory:
   pnpm reported its existing ignored-esbuild-build-script policy; it was not
   changed and is not a compiler-warning or runtime acceptance measurement.
 
-The subsequent release/wrapper/completion/Q1-Q4 command was service-denied
-before execution. Those four checks were NOT rerouted or counted as passed.
+## Independent review and residual local checks
+
+The stable 13-file diff was independently reviewed against base main. The review
+confirmed that abnormal exit, timeout, interruption and unreaped-child states
+remain failures; direct-child ownership is retained until `close`; unknown mount
+metadata, failed detach and still-mounted volumes preserve the temporary
+directory; report publication keeps a pending/final boundary; final report
+acceptance requires the exact commit/run/attempt, complete check inventory,
+non-cancelled validation outcome, one DMG/checksum pair and matching SHA-256;
+and the workflow keeps a manual single job with validation/acceptance-gated DMG
+upload plus always-retained evidence. No assertion or environment guard was
+removed.
+
+Fresh evidence is under `target/qa/macos-final-gate-20260908/resume-02/`:
+
+- The integrated artifact/policy/report/acceptance/workflow suite passed
+  `147/147`, with zero failures, skips or cancellations.
+- `check:tauri-build-wrapper` passed 243 assertions and 27 hostile fixtures.
+- `check:completion-ledger`, `check:q1-q4-ledger`, and `git diff --check` passed.
+- The first `check:release` attempt correctly stopped because this worktree had
+  no staged Windows runtime DLLs. `prepare:runtime-libs` also correctly rejected
+  the available external SDK because its DLL bytes did not match the pinned
+  inventory. For the final rerun, the exact seven pinned DLLs were copied from
+  the already verified base-main `target/release` artifact after SHA-256/size
+  verification; they are ignored build artifacts, not source changes. The final
+  `check:release` then passed all subchecks, including the exact 515-command
+  inventory and 18 negative fixtures. The initial environment failure is retained
+  in `check-release.log` and is not counted as a candidate code failure.
+
+The local gate is complete, but no macOS Actions run or real DMG acceptance is
+claimed yet. The candidate-specific workflow must still run against the final
+candidate HEAD and provide its run/attempt, step outcomes, report, DMG hash and
+cleanup evidence.
 
 ## Remaining acceptance and handoff
 
