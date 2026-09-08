@@ -1908,7 +1908,21 @@ mod tests {
         assert!(!sequential.sessions[0].eof_sent);
         assert!(!sequential.sessions[0].decoder_drained);
 
-        request.position_ms = 1_500;
+        // The sequential loop ends at 592ms. Exactly 1000ms forward must
+        // continue; a subsequent 1001ms gap must reopen, both inside this clip.
+        assert_eq!(request.position_ms, 592);
+        request.position_ms += 1_000;
+        let caught_up = sequential.decode_frame(&request).unwrap().unwrap();
+        let frame_index = ((caught_up.pts_ms * 30 + 500) / 1_000) as usize;
+        assert_rgba_reference_parity(
+            &caught_up,
+            &reference.stdout[frame_index * FRAME_BYTES..(frame_index + 1) * FRAME_BYTES],
+            "inclusive forward catch-up boundary",
+        );
+        assert_eq!(sequential.session_counters.opens, 1);
+        assert_eq!(sequential.session_counters.resets, 0);
+
+        request.position_ms += 1_001;
         let jumped = sequential.decode_frame(&request).unwrap().unwrap();
         let mut fresh = LibavFrameDecoder::software_for_tests();
         assert_seek_parity(
@@ -2074,8 +2088,8 @@ mod tests {
                 );
                 assert_rgba_reference_parity(
                     &frame,
-                    &reference.stdout[expected_frame_index * FRAME_BYTES
-                        ..(expected_frame_index + 1) * FRAME_BYTES],
+                    &reference.stdout
+                        [expected_frame_index * FRAME_BYTES..(expected_frame_index + 1) * FRAME_BYTES],
                     &format!("{label} sequential target {target_ms}ms"),
                 );
             }
@@ -2086,7 +2100,9 @@ mod tests {
                 "{label} stream start-time sign"
             );
 
-            for target_ms in [1_500_u64, 100] {
+            // 500 -> 1500 is inclusive catch-up. Reversal and a 1001ms
+            // forward gap must reset, for both positive and negative origins.
+            for (target_ms, expected_resets) in [(1_500_u64, 0), (100, 1), (1_101, 2)] {
                 request.position_ms = target_ms;
                 let frame = decoder.decode_frame(&request).unwrap().unwrap();
                 let expected_frame_index = target_ms.div_ceil(100) as usize;
@@ -2097,10 +2113,19 @@ mod tests {
                 );
                 assert_rgba_reference_parity(
                     &frame,
-                    &reference.stdout[expected_frame_index * FRAME_BYTES
-                        ..(expected_frame_index + 1) * FRAME_BYTES],
+                    &reference.stdout
+                        [expected_frame_index * FRAME_BYTES..(expected_frame_index + 1) * FRAME_BYTES],
                     &format!("{label} seek target {target_ms}ms"),
                 );
+                assert_eq!(
+                    decoder.session_counters.resets, expected_resets,
+                    "{label} target {target_ms}ms"
+                );
+                // Reopens may include the existing bounded demux-seek retry;
+                // only the catch-up branch must leave the open count unchanged.
+                if expected_resets == 0 {
+                    assert_eq!(decoder.session_counters.opens, 1, "{label} catch-up");
+                }
             }
             assert_eq!(decoder.session_counters.resets, 2, "{label}");
 
