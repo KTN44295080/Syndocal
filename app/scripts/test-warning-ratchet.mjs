@@ -1211,6 +1211,9 @@ try {
   const artifactBaseConfiguration = artifactBaseInventory.configurations.find(
     (candidate) => candidate.id === "windows-default-release",
   );
+  artifactBaseConfiguration.expectedArtifacts = artifactBaseConfiguration.expectedArtifacts.filter(
+    (artifact) => artifact.target !== "dj_link_v3_sender_contract",
+  );
   artifactBaseConfiguration.command = { executable: "cargo", args: ["check", "--message-format=json"] };
   artifactBaseConfiguration.evidence = {
     ...artifactBaseConfiguration.evidence,
