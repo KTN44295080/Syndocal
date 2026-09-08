@@ -4034,4 +4034,70 @@ mod tests {
             1
         );
     }
+
+    #[test]
+    #[ignore = "requires virtual MIDI ports named by SYNDOCAL_TEST_LOOP_MIDI_INPUT/OUTPUT"]
+    fn virtual_midi_loopback_routes_control_through_production_midir_path() {
+        let input_match = std::env::var("SYNDOCAL_TEST_LOOP_MIDI_INPUT")
+            .expect("set SYNDOCAL_TEST_LOOP_MIDI_INPUT to part of a virtual input port name");
+        let output_match = std::env::var("SYNDOCAL_TEST_LOOP_MIDI_OUTPUT")
+            .expect("set SYNDOCAL_TEST_LOOP_MIDI_OUTPUT to part of a virtual output port name");
+        let inputs = list_midi_inputs().unwrap();
+        let outputs = list_midi_outputs().unwrap();
+        println!("Virtual MIDI inputs: {inputs:?}");
+        println!("Virtual MIDI outputs: {outputs:?}");
+        let input = inputs
+            .iter()
+            .find(|port| {
+                port.name
+                    .to_lowercase()
+                    .contains(&input_match.to_lowercase())
+            })
+            .unwrap_or_else(|| panic!("no virtual MIDI input matched '{input_match}'"));
+        let output = outputs
+            .iter()
+            .find(|port| {
+                port.name
+                    .to_lowercase()
+                    .contains(&output_match.to_lowercase())
+            })
+            .unwrap_or_else(|| panic!("no virtual MIDI output matched '{output_match}'"));
+
+        let mapping = MidiControlMapping {
+            channel: Some(0),
+            message: MidiControlMessage::ControlChange,
+            number: 123,
+            action: MidiControlAction::TapBpm,
+            fixture_id: None,
+            attribute: None,
+            group_id: None,
+            cue_id: None,
+            layer_id: None,
+            video_param: None,
+            cue_point_index: None,
+            output_id: None,
+            duration_ms: None,
+            feedback: None,
+            low: 0.0,
+            high: 1.0,
+        };
+        let (sender, receiver) = mpsc::channel();
+        let _input = connect_midi_control(input.index, vec![mapping], move |event| {
+            let _ = sender.send(event);
+        })
+        .unwrap();
+
+        let mut feedback = connect_midi_feedback_output(output.index).unwrap();
+        assert_eq!(
+            feedback
+                .send_feedback_messages(&[vec![0xb0, 123, 127]])
+                .unwrap(),
+            1
+        );
+
+        assert_eq!(
+            receiver.recv_timeout(Duration::from_secs(1)).unwrap(),
+            MidiControlEvent::TapBpm
+        );
+    }
 }

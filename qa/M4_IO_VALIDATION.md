@@ -76,6 +76,11 @@ $env:SYNDOCAL_TEST_MIDI_INPUT = "SMC-Mixer"
 $env:SYNDOCAL_TEST_MIDI_OUTPUT = "SMC-Mixer"
 cargo test -p io --locked physical_midi_ports_enumerate_open_and_send_feedback -- --ignored --nocapture
 
+# Virtual loopMIDI control-path test; this is separate from physical-device acceptance.
+$env:SYNDOCAL_TEST_LOOP_MIDI_INPUT = "TestMIDI"
+$env:SYNDOCAL_TEST_LOOP_MIDI_OUTPUT = "TestMIDI"
+cargo test -p io --locked virtual_midi_loopback_routes_control_through_production_midir_path -- --ignored --nocapture
+
 # Local FFmpeg/FFprobe H.264 + AAC recording/mux runtime.
 cargo test -p syndocal --locked recording_command_writes_a_real_video_and_audio_mp4 -- --ignored --nocapture
 $env:SYNDOCAL_LONG_AV_QA_DIR = "$PWD/target/qa/long-av-sync"
@@ -111,3 +116,11 @@ The NDI 6 Test Patterns and Studio Monitor executables could not directly start 
 For each still-pending physical row, record the date, OS, device/software version, project file, measured latency or waveform, and pass/fail result here. Do not convert a software loopback into a physical pass.
 
 For RDM, also record transport, gateway/interface firmware, fixture UID/PID, discovery duration, collision fixture count, ACK/NACK/timeout behavior, and inventory add/remove time. For A/V recording, attach the `ffprobe -show_streams -show_format` output and measured first/last sync error. For projection, attach the source mask, projector model, overlap width/gamma/black-level values, and before/after capture. For Spout, record sender/receiver applications, texture format, dimensions, frame rate, resize/reconnect result, and dropped-frame observation.
+
+### 2026-09-08 virtual loopMIDI control-path check
+
+| Path | Device/application | Capture | Result |
+|---|---|---|---|
+| MIDI control loopback | loopMIDI `TestMIDI` input/output | The port was enumerated as input index `2` and output index `3`. A `B0 7B 7F` CC sent to the virtual output was received by the production `connect_midi_control` path and decoded as `MidiControlEvent::TapBpm`; `virtual_midi_loopback_routes_control_through_production_midir_path` returned `1 passed / 0 failed / 0 ignored` | Virtual transport and production decode path pass; physical controller movement, clock/MTC, LED feedback, USB buffering, and end-to-end latency remain unverified |
+
+This is a software/host-local loopback result. It is intentionally recorded separately from the physical MIDI acceptance row and does not promote that row to a physical pass.
