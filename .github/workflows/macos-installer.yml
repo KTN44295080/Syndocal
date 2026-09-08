@@ -85,6 +85,12 @@ jobs:
       - name: Install frontend dependencies
         run: pnpm --dir app install --frozen-lockfile
 
+      - name: Test macOS artifact validator
+        run: |
+          mkdir -p target/qa/macos-artifact
+          set -o pipefail
+          node --test app/scripts/test-macos-artifact.mjs app/scripts/test-macos-artifact-report.mjs app/scripts/test-macos-artifact-acceptance.mjs app/scripts/test-macos-artifact-workflow.mjs | tee target/qa/macos-artifact/tests.tap
+
       - name: Build macOS application bundle
         run: pnpm --dir app tauri build --ci --bundles app
 
@@ -94,23 +100,34 @@ jobs:
             target/release/bundle/macos/Syndocal.app \
             target/release/bundle/dmg
 
-      - name: Smoke-test macOS application and DMG
+      - name: Validate application extracted from final DMG
+        id: validate
         run: |
-          app_path=$(find target/release/bundle/macos -maxdepth 1 -name '*.app' -print -quit)
-          test -n "$app_path"
-          executable="$app_path/Contents/MacOS/syndocal"
-          test -x "$executable"
-          env -u DYLD_LIBRARY_PATH "$executable" & process_id=$!
-          sleep 8
-          kill -0 "$process_id"
-          kill "$process_id"
+          node app/scripts/check-macos-artifact.mjs \
+            --dmg-dir target/release/bundle/dmg \
+            --report target/qa/macos-artifact/report.json
 
-          dmg_path=$(find target/release/bundle/dmg -maxdepth 1 -name '*.dmg' -print -quit)
-          test -n "$dmg_path"
-          hdiutil imageinfo "$dmg_path" >/dev/null
-          shasum -a 256 "$dmg_path" > "$dmg_path.sha256"
+      - name: Verify final DMG evidence before upload
+        id: acceptance
+        if: ${{ success() && !cancelled() && steps.validate.outcome == 'success' }}
+        env:
+          MACOS_VALIDATION_OUTCOME: ${{ steps.validate.outcome }}
+        run: |
+          node app/scripts/macos-artifact-acceptance.mjs \
+            --dmg-dir target/release/bundle/dmg \
+            --report target/qa/macos-artifact/report.json
+
+      - name: Upload macOS validation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: syndocal-macos-evidence-${{ github.sha }}-${{ github.run_attempt }}
+          path: target/qa/macos-artifact/
+          if-no-files-found: warn
+          retention-days: 7
 
       - name: Upload macOS DMG
+        if: ${{ success() && !cancelled() && steps.validate.outcome == 'success' && steps.acceptance.outcome == 'success' }}
         uses: actions/upload-artifact@v4
         with:
           name: syndocal-macos-${{ runner.arch }}-${{ github.sha }}
