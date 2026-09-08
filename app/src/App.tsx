@@ -11740,13 +11740,15 @@ export default function App() {
       timelineRuntime: response.timeline_runtime,
     });
     if (next === null) return null;
-    latestEngineSnapshot = next;
-    setLiveDmxPreviews(engineDmxPreviews(next));
-    setLiveFixtures(snapshotLiveFixtures(next));
-    setSnapshotRevision(response.revision);
     if (syncUiState || response.full) {
+      setSnapshotRevision(response.revision);
       applyAcceptedEngineSnapshot(next, false);
       lastSnapshotUiApplyAt = performance.now();
+    } else {
+      latestEngineSnapshot = next;
+      setLiveDmxPreviews(engineDmxPreviews(next));
+      setLiveFixtures(snapshotLiveFixtures(next));
+      setSnapshotRevision(response.revision);
     }
     return next;
   };
