@@ -49,3 +49,24 @@ This proves the bounded Windows native launch/state/IPC layer only. It does
 not prove physical ASIO/NDI/DMX output, venue acceptance, Mac execution,
 signing, publication, or product-wide completion. The real-file missing PNG →
 Retry → recovery evidence was not rerun.
+
+## Post-warning-gate artifact
+
+The explicit warning gate
+`pnpm.cmd --dir app run check:warnings -- --configuration windows-native-release`
+passed with baseline/current totals `0/0` and regenerated the unbundled
+release executable. Because the artifact changed, the native probe was rerun
+in `target/qa/native-final-validation-20260908-09/` rather than reusing the
+older hash-bound result:
+
+| Item | Result |
+| --- | --- |
+| Size | 64,700,928 bytes |
+| SHA-256 | `8E637D54E02D7575F6B3EE068730677A771DB4C0748D9DE0FABA87499557152C` |
+| Process/window | PID 78972; one responsive, maximized `Syndocal` window |
+| IPC | Standby ownership, snapshot arrays, valid native ticket, expected missing asset/layer errors |
+| Cleanup | physical output `0`; exact process and port `51491` listener both `0` |
+
+This latest hash is the current native artifact evidence. It is still not a
+release package, signed artifact, physical-device result, or product-wide
+completion claim.
