@@ -15,7 +15,7 @@ const helpers = await import(
   `data:text/javascript;base64,${Buffer.from(transpiled.outputText).toString("base64")}`
 );
 const guardSource = await readFile(new URL("../src/snapshotRequestGuard.ts", import.meta.url), "utf8");
-const appSource = await readFile(new URL("../src/App.tsx", import.meta.url), "utf8");
+const appSource = (await readFile(new URL("../src/App.tsx", import.meta.url), "utf8")).replaceAll("\r\n", "\n");
 const cueManagementPanelSource = await readFile(
   new URL("../src/components/CueManagementPanel.tsx", import.meta.url),
   "utf8",
@@ -89,7 +89,7 @@ assert.match(
 );
 assert.match(
   appSource,
-  /const undoProject = async \(\) => \{[\s\S]*?const undoAuthority = captureProjectAuthorityIdentity\(\);[\s\S]*?const undoHistory = projectHistoryStatus\(\);[\s\S]*?const undoEntryId = undoHistory\.undo_entry_id;[\s\S]*?const undoCheckpointHash = undoHistory\.undo_checkpoint_hash;[\s\S]*?typeof undoEntryId !== "number"[\s\S]*?typeof undoCheckpointHash !== "string"[\s\S]*?void refreshProjectHistoryStatus\(\);[\s\S]*?undo_project_transaction", \{[\s\S]*?ownerId: projectTransactionOwnerId,[\s\S]*?expectedEpoch: undoAuthority\.project_epoch,[\s\S]*?expectedEntryId: undoEntryId,[\s\S]*?expectedCheckpointHash: undoCheckpointHash,[\s\S]*?\}\);[\s\S]*?const applied = applyAuthorityBundleAsReplacement\(navigation\.authority\);[\s\S]*?if \(!projectAuthorityApplicationResultIsCurrent\(applied\)\) return;[\s\S]*?applyAuthoritativeProjectHistoryStatus\(navigation\.history_status\);[\s\S]*?\} catch \(error\) \{[\s\S]*?void pollProjectAuthorityBundle\(\);[\s\S]*?\n  \};\n\n  const redoProject = async/,
+  /const performUndoProject = async \(\) => \{[\s\S]*?const undoAuthority = captureProjectAuthorityIdentity\(\);[\s\S]*?const undoHistory = projectHistoryStatus\(\);[\s\S]*?const undoEntryId = undoHistory\.undo_entry_id;[\s\S]*?const undoCheckpointHash = undoHistory\.undo_checkpoint_hash;[\s\S]*?typeof undoEntryId !== "number"[\s\S]*?typeof undoCheckpointHash !== "string"[\s\S]*?void refreshProjectHistoryStatus\(\);[\s\S]*?undo_project_transaction", \{[\s\S]*?ownerId: projectTransactionOwnerId,[\s\S]*?expectedEpoch: undoAuthority\.project_epoch,[\s\S]*?expectedEntryId: undoEntryId,[\s\S]*?expectedCheckpointHash: undoCheckpointHash,[\s\S]*?\}\);[\s\S]*?const applied = applyAuthorityBundleAsReplacement\(navigation\.authority\);[\s\S]*?if \(!projectAuthorityApplicationResultIsCurrent\(applied\)\) return;[\s\S]*?applyAuthoritativeProjectHistoryStatus\(navigation\.history_status\);[\s\S]*?\} catch \(error\) \{[\s\S]*?void pollProjectAuthorityBundle\(\);[\s\S]*?\n  \};\n\n  const performRedoProject = async/,
   "Undo must validate its exact project ticket, apply the authoritative rollback bundle, and refresh authority on failure",
 );
 assert.match(
