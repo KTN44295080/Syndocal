@@ -7,6 +7,9 @@ import { readFile, readdir } from "node:fs/promises";
 const readText = async (url) => (await readFile(url, "utf8")).replace(/\r\n/g, "\n");
 
 const app = await readText(new URL("../src/App.tsx", import.meta.url));
+const projectTransactionMutationController = await readText(
+  new URL("../src/projectTransactionMutationController.ts", import.meta.url),
+);
 const recoveryController = await readText(new URL("../src/createProjectTransactionRecoveryController.ts", import.meta.url));
 const srcRoot = new URL("../src/", import.meta.url);
 const collectSourceFiles = async (directory) => {
@@ -121,8 +124,13 @@ assert.doesNotMatch(
 );
 assert.match(
   app,
-  /projectTransactionId:\s*transaction\.transaction_id[\s\S]*?expectedEpoch:\s*transaction\.project_epoch/,
-  "the App mutation facade must pass the backend-authoritative transaction ticket",
+  /return executeProjectTransactionMutation<T>\(\{[\s\S]*?commandArgs,[\s\S]*?transaction,[\s\S]*?identity:\s*transactionIdentity,/,
+  "the App mutation facade must pass the backend-authoritative transaction ticket to the shared mutation controller",
+);
+assert.match(
+  projectTransactionMutationController,
+  /const ticketedRequest = \{[\s\S]*?projectTransactionId:\s*transaction\.transaction_id,[\s\S]*?expectedEpoch:\s*transaction\.project_epoch,[\s\S]*?ownerId:\s*ports\.ownerId,[\s\S]*?\};[\s\S]*?ports\.invoke<T>\(command,\s*ticketedArgs\)/,
+  "the shared mutation controller must pass the exact backend-authoritative transaction ticket",
 );
 const repairCommand = section(backend, "fn repair_fixture_profile(", "fn create_custom_fixture_profile(");
 assert.match(
@@ -232,7 +240,7 @@ for (const stageRoute of [
   );
 }
 assert.match(
-  app,
+  projectTransactionMutationController,
   /isStageRendererTicketedCommand\(command\)\s*\?\s*command\s*:\s*null/,
   "all nine Stage commands must join the shared published-command recovery query",
 );
@@ -311,21 +319,20 @@ assert.match(
   "Cancel must derive the complete owner-bound terminal envelope from the shared strict helper",
 );
 assert.match(cancelRecoveryHelper, /"cancel_project_transaction",\s*cancelArgs/);
-assert.equal(
-  [...app.matchAll(/\bcancelProjectTransactionWithRecovery\(/g)].length,
-  1,
+assert.match(
+  app,
+  /createProjectTransactionMutationController\(\{[\s\S]*?cancelProjectTransactionWithRecovery,[\s\S]*?commitProjectTransactionWithRecovery,/,
+  "the App wiring must pass the owner-bound Cancel and Commit recovery helpers to the shared mutation controller",
+);
+assert.match(
+  projectTransactionMutationController,
+  /await cancelOpenedProjectTransaction\(\);/,
   "the central Cancel workflow must use the owner-bound recovery helper",
 );
-assert.equal(
-  [...app.matchAll(/\bcommitProjectTransactionWithRecovery\(/g)].length,
-  1,
-  "the sole central mutation workflow must use the shared Commit recovery helper",
-);
-const genericCommit = section(app, "transaction = await beginProjectTransactionWithRecovery", "const listen = <T,>");
 assert.match(
-  genericCommit,
-  /commitProjectTransactionWithRecovery\(transaction, transactionIdentity, settleTerminal\)/,
-  "the generic Commit workflow must bind its exact transaction identity and terminal settlement",
+  projectTransactionMutationController,
+  /ports\.commitProjectTransactionWithRecovery\(transaction, identity, settleTerminal\)/,
+  "the sole central mutation workflow must use the shared Commit recovery helper",
 );
 const commitRecoveryHelper = section(
   recoveryController,
