@@ -403,6 +403,17 @@ const hitVerifiedPointerClick = async (client, selector, label, clickCount = 1) 
   return target;
 };
 const selectTimelineShelfLightingLaneWithPointerKeyboard = async (client, expectedLayerId) => {
+  const disclosureOpen = await evaluate(client, `(() => {
+    const disclosure = document.querySelector('details.timelineExternalSourcePlacementDisclosure[data-timeline-source-click-placement="Lighting"]');
+    return disclosure instanceof HTMLDetailsElement && disclosure.open;
+  })()`);
+  if (!disclosureOpen) {
+    await hitVerifiedPointerClick(
+      client,
+      'details.timelineExternalSourcePlacementDisclosure[data-timeline-source-click-placement="Lighting"] > summary',
+      "open child Timeline Lighting click controls",
+    );
+  }
   const target = await evaluate(client, `(() => {
     const label = [...document.querySelectorAll("label.timelineExternalSourceTarget")]
       .find((candidate) => candidate.querySelector("span")?.textContent?.trim() === "Lighting lane");
