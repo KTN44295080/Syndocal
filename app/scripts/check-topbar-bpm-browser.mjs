@@ -33,13 +33,20 @@ let log="";vite.stdout.on("data",d=>log+=d);vite.stderr.on("data",d=>log+=d);
 let browser;
 try {
   for(let i=0;;i++){assert.equal(vite.exitCode,null,log);try{if((await fetch(origin)).ok)break;}catch{}assert(i<150,log);await new Promise(r=>setTimeout(r,100));}
-  const executablePath=["C:/Program Files/Google/Chrome/Application/chrome.exe","C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe"].find(existsSync);
+  const executablePath=[
+    process.env.CHROME_PATH,
+    process.env.EDGE_PATH,
+    process.env.LOCALAPPDATA ? resolve(process.env.LOCALAPPDATA,"Google/Chrome/Application/chrome.exe") : null,
+    process.env.LOCALAPPDATA ? resolve(process.env.LOCALAPPDATA,"Microsoft/Edge/Application/msedge.exe") : null,
+    "C:/Program Files/Google/Chrome/Application/chrome.exe",
+    "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe",
+  ].filter(Boolean).find(existsSync);
   browser=await chromium.launch({headless:true,...(executablePath?{executablePath}:{})});
   const page=await browser.newPage({viewport:{width:1280,height:720}}), errors=[];
   page.on('pageerror',error=>errors.push(String(error)));
   await page.route('**/bpm-proof',r=>r.fulfill({contentType:'text/html',body:`<html><body><script type="module" src="/${fixtureName}"></script></body></html>`}));
   await page.goto(`${origin}/bpm-proof`);
-  const value=page.getByRole('button',{name:'BPMを編集'}), input=page.getByRole('spinbutton',{name:'BPM'});
+  const value=page.getByRole('button',{name:'Edit BPM'}), input=page.getByRole('spinbutton',{name:'BPM'});
   await value.click(); await input.waitFor();
   assert.equal(await input.evaluate(el=>document.activeElement===el),true);
   assert.equal(await page.locator('.topbarBpmControl [data-tauri-drag-region]').count(),0);
