@@ -47,7 +47,14 @@ let log=""; vite.stdout.on("data",d=>log+=d); vite.stderr.on("data",d=>log+=d);
 let browser;
 try {
   for(let i=0;;i++) { assert.equal(vite.exitCode,null,log); try {if((await fetch(origin)).ok) break;}catch{} assert.ok(i<150,log); await new Promise(r=>setTimeout(r,100)); }
-  const executablePath=["C:/Program Files/Google/Chrome/Application/chrome.exe","C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe"].find(existsSync);
+  const executablePath=[
+    process.env.CHROME_PATH,
+    process.env.EDGE_PATH,
+    process.env.LOCALAPPDATA ? resolve(process.env.LOCALAPPDATA,"Google/Chrome/Application/chrome.exe") : null,
+    process.env.LOCALAPPDATA ? resolve(process.env.LOCALAPPDATA,"Microsoft/Edge/Application/msedge.exe") : null,
+    "C:/Program Files/Google/Chrome/Application/chrome.exe",
+    "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe",
+  ].filter(Boolean).find(existsSync);
   browser=await chromium.launch({headless:true,...(executablePath?{executablePath}:{})});
   for(const width of [1280,640]) {
     const page=await browser.newPage({viewport:{width,height:480}}); const errors=[]; page.on('pageerror',e=>errors.push(String(e)));
