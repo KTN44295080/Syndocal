@@ -39,12 +39,40 @@ public static class SyndocalWorkspaceWindow {
   public static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
 
   [DllImport("user32.dll")]
+  public static extern bool GetClientRect(IntPtr hWnd, out RECT rect);
+
+  [DllImport("user32.dll")]
   public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+
+  [DllImport("user32.dll", SetLastError = true)]
+  private static extern bool SetProcessDpiAwarenessContext(IntPtr dpiAwarenessContext);
+
+  [DllImport("user32.dll")]
+  private static extern IntPtr GetThreadDpiAwarenessContext();
+
+  [DllImport("user32.dll")]
+  private static extern int GetAwarenessFromDpiAwarenessContext(IntPtr dpiAwarenessContext);
+
+  [DllImport("shcore.dll", SetLastError = true)]
+  private static extern int SetProcessDpiAwareness(int value);
 
   [DllImport("user32.dll")]
   public static extern bool PostMessage(IntPtr hWnd, uint message, IntPtr wParam, IntPtr lParam);
+
+  public static bool EnsurePerMonitorDpiAwareness() {
+    // PROCESS_PER_MONITOR_DPI_AWARE = 2; the context value -4 is
+    // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2. The fallback covers older
+    // Windows 10 builds while the query makes an already-aware process safe.
+    if (SetProcessDpiAwarenessContext(new IntPtr(-4))) return true;
+    if (GetAwarenessFromDpiAwarenessContext(GetThreadDpiAwarenessContext()) >= 2) return true;
+    return SetProcessDpiAwareness(2) == 0;
+  }
 }
 "@
+
+if (-not [SyndocalWorkspaceWindow]::EnsurePerMonitorDpiAwareness()) {
+  throw "The native workspace checker could not enable Per-Monitor DPI awareness; refusing virtualized window geometry."
+}
 
 function Test-FfmpegSdkRoot {
   param([Parameter(Mandatory = $true)][string]$Root)
@@ -184,6 +212,8 @@ function Get-VisibleWindows {
     [void][SyndocalWorkspaceWindow]::GetWindowText($Handle, $title, $title.Capacity)
     $rect = [SyndocalWorkspaceWindow+RECT]::new()
     if (-not [SyndocalWorkspaceWindow]::GetWindowRect($Handle, [ref]$rect)) { return $true }
+    $clientRect = [SyndocalWorkspaceWindow+RECT]::new()
+    if (-not [SyndocalWorkspaceWindow]::GetClientRect($Handle, [ref]$clientRect)) { return $true }
     [uint32]$processId = 0
     [void][SyndocalWorkspaceWindow]::GetWindowThreadProcessId($Handle, [ref]$processId)
     $windows.Add([pscustomobject]@{
@@ -194,6 +224,8 @@ function Get-VisibleWindows {
       Y = $rect.Top
       Width = $rect.Right - $rect.Left
       Height = $rect.Bottom - $rect.Top
+      ClientWidth = $clientRect.Right - $clientRect.Left
+      ClientHeight = $clientRect.Bottom - $clientRect.Top
     })
     return $true
   }
@@ -288,13 +320,16 @@ try {
       Y = 64 + $index * 34
     }
   }
+  # Tauri's placement width/height are inner (client) dimensions. The outer
+  # frame includes DPI-scaled title-bar/border pixels, so validate the client
+  # area while retaining the native outer position and minimum-size checks.
   $misplaced = @($matched | Where-Object {
     if (-not $expectedPlacements.ContainsKey($_.Title)) { return $false }
     $expected = $expectedPlacements[$_.Title]
     [Math]::Abs($_.X - $expected.X) -gt 16 -or
       [Math]::Abs($_.Y - $expected.Y) -gt 16 -or
-      $_.Width -lt 840 -or $_.Width -gt 900 -or
-      $_.Height -lt 500 -or $_.Height -gt 580
+      $_.ClientWidth -lt 840 -or $_.ClientWidth -gt 900 -or
+      $_.ClientHeight -lt 500 -or $_.ClientHeight -gt 580
   })
   if ($misplaced.Count -gt 0) {
     throw "Native pane placement was not applied: $($misplaced.Title -join ', ')."
@@ -308,7 +343,15 @@ try {
     process_id = $processIds[0]
     pane_count = $paneTitles.Count
     windows = @($matched | ForEach-Object {
-      [ordered]@{ title = $_.Title; x = $_.X; y = $_.Y; width = $_.Width; height = $_.Height }
+      [ordered]@{
+        title = $_.Title
+        x = $_.X
+        y = $_.Y
+        width = $_.Width
+        height = $_.Height
+        client_width = $_.ClientWidth
+        client_height = $_.ClientHeight
+      }
     })
   }
   $reportPath = Join-Path $EvidenceDir "native-workspace-acceptance.json"
