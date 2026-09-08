@@ -7,8 +7,8 @@ This is a bounded audit of the existing source-inventory gates for
 registry, increasing the covered-operation claim, or treating a Tauri/frontend
 inventory as complete coverage of every mutation source.
 
-- Source base: `3ba5cb0b352eefec9f2355e4d684882ed3080bdf`
-- Working tree before this document: clean; `main` matched `origin/main`
+- Source base for this revalidation: `f264ab07c0f89d69e5eee7c54b0a5f8ec476ef0f`
+- Working tree before this revalidation: clean; `main` matched `origin/main`
 - Product source changes: none
 - Prior real-file thumbnail missing → UI Retry → recovery test: not rerun
 
@@ -20,6 +20,7 @@ inventory as complete coverage of every mutation source.
 | `pnpm --dir app run check:q1-q4-ledger` | PASS — 32 Q1 rows, 29/29 Q0 domains, 10/10 source contracts, 58/58 Flow markers |
 | `node app/scripts/check-tauri-admission-inventory.mjs` | PASS — 516 exact native Tauri commands, SHA-256 `5120894f36feb82ac58fffd4db20739d80ae1b1a1c556fc95838a1708cbb8eea`, 18 negative fixtures rejected |
 | `node app/scripts/check-frontend-command-routing.mjs` | PASS — renderer 133, server-authoritative 31, raw dispatch 28, facade dispatch 464 |
+| `cargo test -p protocol --release --locked control_plane_registry_v2 -- --test-threads=1` | PASS — 13 passed, 0 failed; 203 filtered |
 
 The checks use the current source and preserve strict unknown-command,
 duplicate, frozen-count, frozen-hash, malformed-syntax, and routing assertions.
