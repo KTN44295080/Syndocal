@@ -1,7 +1,8 @@
 # Native thumbnail success path — 2026-09-08
 
-Base main: `139b5b8608428dd473d5afef3e4a94327f3e85a4`.
-Branch: `chatgpt/thumbnail-native-ui-20260908`.
+Original repair base: `139b5b8608428dd473d5afef3e4a94327f3e85a4`.
+Integration base: `573a09919d415c22f75dad48948f0ea3bed223cc` (parallel icon update preserved).
+Branch: `chatgpt/thumbnail-native-ui-integration-20260908`.
 Completed subset: real operator PNG/MP4 import, immediate library population,
 real native thumbnail decoding and visible image content in an isolated Windows app.
 Fault-injected retry, GUI cancellation and general media acceptance are NOT closed.
@@ -103,3 +104,29 @@ GUI cancellation/stop latency, physical devices, Mac execution of this change,
 signing and venue acceptance remain open. No broad completion-ledger row is closed.
 Only this normal native operator import/render/display failure and its recurrence
 are addressed here. Complete and review each remaining boundary independently.
+
+## Final integration validation
+
+Before promotion, main had advanced through the separately accepted icon update
+`573a099`. Integration stopped at the old-base guard, inspected that seven-file
+icon/QA delta, and cherry-picked only this four-file repair onto the new main.
+Application TypeScript, scripts and crates match the reviewed repair exactly;
+all new icon files were preserved. No force-push or rollback of parallel work.
+
+The combined tree `b0132b7d9f2350d26a7ef0a1a676825c167635eb` was rebuilt with
+the same identifier-only isolation config: exit 0, Rust warning diagnostics 0.
+Its QA EXE SHA-256 is
+`A7A8CCAECB8721EEFC00CD4107080023CDD8C78765E64F2DFF84A5005A8768BF`
+(64,532,992 bytes). A new native run again imported PNG and MP4 through actual
+UI actions, immediately populated both cards and verified 160x90 image pixels
+without view remount, raw mutation commands or mocked native readers.
+At `2026-09-08T07:51:57.8268646Z`, PID 69588 had completed the passing probe;
+one responsive maximized window, owned application exit, debug listener count 0.
+The final-run comparison confirmed all six ordinary top-level JSON files unchanged
+within that run; this does not retroactively erase the earlier descriptor change.
+
+Final evidence: `integrated-build.log`, `integrated-artifact.json`,
+`integrated-probe.json`, `integrated-launch.json`, `integrated-preservation.json`
+and `integrated-success.png` beside the earlier retained evidence. The successful
+unit is normal native import/render/display plus the omitted-runtime regression;
+fault-injected native retry remains the next distinct acceptance unit.
