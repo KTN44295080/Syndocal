@@ -147,5 +147,5 @@ execution of this UI change, signing and venue acceptance remain outside scope.
 
 Final disposition: the candidate and its QA checkpoint were fast-forwarded to
 main after validation. The final main SHA is
-`edb677292639f9b5f6cea75ad8cbad2857c56f2c`, equal to `origin/main`. The
+`74fb2c709dd3a612c2e85c6bb7b49aacebaac7a5`, equal to `origin/main`. The
 remaining boundaries are not a request to reimplement this feature.
