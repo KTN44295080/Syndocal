@@ -17,6 +17,7 @@ import {
   controlledChildEnvironment,
   controlledGenericCommandEnvironment,
   CURRENT_FILE_CONTENT_MAX_BYTES,
+  detectHostPlatform,
   detectToolchain,
   detectSuppressionText,
   diagnosticIdentityHash,
@@ -54,6 +55,10 @@ const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "../..");
 const fixtureRoot = path.join(scriptDir, "fixtures/warning-ratchet");
 const pnpmExecutable = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
+const warningRatchetHostPlatform = detectHostPlatform();
+const warningRatchetAlternatePlatform = warningRatchetHostPlatform === "windows-x86_64-msvc"
+  ? "linux-x86_64"
+  : "windows-x86_64-msvc";
 const lines = readFileSync(path.join(fixtureRoot, "cargo-warning.jsonl"), "utf8").trim().split(/\r?\n/);
 const metadata = JSON.parse(readFileSync(path.join(fixtureRoot, "cargo-metadata.json"), "utf8"));
 const context = {
@@ -1016,7 +1021,7 @@ try {
   const promotionCommand = { executable: "pnpm", args: ["--dir", path.join(repoRoot, "app"), "exec", "node", "-e", "process.stdout.write('promotion-marker')"] };
   promotionBaseInventory.configurations.push({
     id: "generic-promotion-fixture",
-    platform: "windows-x86_64-msvc",
+    platform: warningRatchetHostPlatform,
     profile: "promotion-fixture",
     features: [],
     command: promotionCommand,
@@ -1030,7 +1035,7 @@ try {
     externalWarningAllows: [],
   }, {
     id: "generic-linux-promotion-fixture",
-    platform: "linux-x86_64",
+    platform: warningRatchetAlternatePlatform,
     profile: "promotion-fixture-linux",
     features: [],
     command: promotionCommand,
@@ -1119,7 +1124,7 @@ try {
       configurationId: "generic-linux-promotion-fixture",
       schema,
     }),
-    /targets linux-x86_64, but this host is windows-x86_64-msvc/,
+    new RegExp(`targets ${warningRatchetAlternatePlatform.replaceAll("-", "\\-")}, but this host is ${warningRatchetHostPlatform.replaceAll("-", "\\-")}`),
   );
   const outsidePromotionFile = path.join(promotionFixtureRoot, "outside.txt");
   writeFileSync(outsidePromotionFile, "not part of an inventory-only promotion\n");

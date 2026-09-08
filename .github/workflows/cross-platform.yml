@@ -190,7 +190,7 @@ jobs:
         run: pnpm --dir app run check:asio-packaging
 
       - name: Validate Windows warning ratchet SDK paths
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && vars.NDI_SDK_DIR != '' && vars.CPAL_ASIO_DIR != ''
         shell: pwsh
         env:
           # These SDKs are deliberately not downloaded by CI: NDI and ASIO
@@ -227,6 +227,13 @@ jobs:
           Add-Content -Path $env:GITHUB_ENV -Value "NDI_SDK_DIR=$env:NDI_SDK_DIR"
           Add-Content -Path $env:GITHUB_ENV -Value "CPAL_ASIO_DIR=$env:CPAL_ASIO_DIR"
 
+      - name: Report unavailable Windows ASIO/NDI warning gates
+        if: runner.os == 'Windows' && (vars.NDI_SDK_DIR == '' || vars.CPAL_ASIO_DIR == '')
+        shell: pwsh
+        run: |
+          Write-Host 'ASIO/NDI SDK variables are not configured on this hosted runner.'
+          Write-Host 'ASIO/NDI warning gates are skipped and remain unverified; default Windows gates remain enforced.'
+
       - name: Check formatting
         run: cargo fmt --all -- --check
 
@@ -255,10 +262,17 @@ jobs:
           pnpm --dir app run check:warnings -- --configuration windows-default-release
           pnpm --dir app run check:warnings -- --configuration windows-workspace-tests
           pnpm --dir app run check:warnings -- --configuration windows-syndocal-spout
+          pnpm --dir app run check:warnings -- --configuration frontend-typescript-vite-windows
+
+      - name: Enforce Windows ASIO/NDI warning ratchets when SDKs are configured
+        if: runner.os == 'Windows' && vars.NDI_SDK_DIR != '' && vars.CPAL_ASIO_DIR != ''
+        env:
+          WARNING_RATCHET_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
+          WARNING_RATCHET_HEAD_REF: ${{ github.sha }}
+        run: |
           pnpm --dir app run check:warnings -- --configuration windows-syndocal-asio
           pnpm --dir app run check:warnings -- --configuration windows-syndocal-ndi
           pnpm --dir app run check:warnings -- --configuration windows-asio-bridge
-          pnpm --dir app run check:warnings -- --configuration frontend-typescript-vite-windows
 
       - name: Stop checkout Syndocal before native warning ratchet
         if: runner.os == 'Windows'

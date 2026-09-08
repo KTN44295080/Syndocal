@@ -51,8 +51,19 @@ At the repair checkpoint:
 - `pnpm.cmd --dir app run check:release` — passed;
 - `git diff --check` — passed.
 
-The GitHub Actions rerun after this repair is required before claiming the
-Windows or Linux hosted build gates pass.
+The first repair rerun reached two additional existing boundaries:
+
+- the warning-ratchet self-test's promotion fixture was hard-coded to a
+  Windows host and failed on Ubuntu before the product gate;
+- hosted Windows does not provide the locally licensed ASIO/NDI SDKs, so the
+  workflow's default cross-platform gates could not reach their own checks.
+
+The follow-up repair makes the promotion fixture use the detected host while
+retaining an opposite-platform rejection assertion. It also keeps default
+Windows warning gates enforced and runs the ASIO/NDI warning gates only when
+both explicit SDK variables are present; otherwise the workflow reports those
+gates as unverified/skipped. The GitHub Actions rerun after this follow-up is
+required before claiming the Windows or Linux hosted build gates pass.
 
 ## Boundary
 
