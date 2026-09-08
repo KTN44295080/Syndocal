@@ -97,6 +97,16 @@
           ]
         },
         {
+          "package": "protocol",
+          "target": "dj_link_v3_sender_contract",
+          "targetKinds": [
+            "test"
+          ],
+          "crateTypes": [
+            "bin"
+          ]
+        },
+        {
           "package": "syndocal",
           "target": "build-script-build",
           "targetKinds": [
@@ -1893,8 +1903,8 @@
       ],
       "externalWarningAllows": [],
       "evidence": {
-        "commit": "e87ad9c9629bc25b847d9197216dd8aa20181dd8",
-        "capturedAt": "2026-08-20T08:15:46.107Z",
+        "commit": "21b403dc6d03af745cd11e6fcd8281cfc675cf10",
+        "capturedAt": "2026-09-09T05:02:38.943+09:00",
         "command": "cargo check --workspace --all-targets --locked --message-format=json",
         "toolchain": {
           "cargo": "1.97.1 (c980f4866 2026-06-30)",
