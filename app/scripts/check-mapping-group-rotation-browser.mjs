@@ -52,7 +52,14 @@ try {
     try { if ((await fetch(origin)).ok) break; } catch {}
     assert(i < 150, log); await new Promise(resolve => setTimeout(resolve, 100));
   }
-  const executablePath = ['C:/Program Files/Google/Chrome/Application/chrome.exe', 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'].find(existsSync);
+  const executablePath = [
+    process.env.CHROME_PATH,
+    process.env.EDGE_PATH,
+    process.env.LOCALAPPDATA ? resolve(process.env.LOCALAPPDATA, 'Google/Chrome/Application/chrome.exe') : null,
+    process.env.LOCALAPPDATA ? resolve(process.env.LOCALAPPDATA, 'Microsoft/Edge/Application/msedge.exe') : null,
+    'C:/Program Files/Google/Chrome/Application/chrome.exe',
+    'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
+  ].filter(Boolean).find(existsSync);
   browser = await chromium.launch({ headless: true, ...(executablePath ? { executablePath } : {}) });
   const page = await browser.newPage({ viewport: { width: 1000, height: 620 } });
   const errors = []; page.on('pageerror', error => errors.push(String(error)));
