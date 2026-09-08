@@ -3,7 +3,8 @@
 Base main: `cfac3c324bd866b2947fa15e18042f7a796e9d5b`.
 Candidate: `chatgpt/macos-final-gate-20260908`.
 Status: implemented; independent review, all required local checks, and the
-candidate-specific macOS CI/DMG gate passed. Not promoted to main.
+candidate-specific macOS CI/DMG gate passed. The candidate was fast-forwarded
+to main at `89dea805988a92ba6b8c1015ba584bac6f26f0eb`.
 
 ## Bounded change
 
@@ -130,4 +131,6 @@ M2/macOS 12 execution, hardware, venue or public Release acceptance is claimed.
 Application code, Windows ASIO/NDI fail-closed routes, fixed three-screen layout,
 product versions and the other dirty worktrees are unchanged. No permanent
 background work is added to rendering/audio/DMX. New logic runs only in tooling.
-Main promotion remains separate from publishing this candidate source branch.
+Main promotion was a normal fast-forward from `cfac3c324bd866b2947fa15e18042f7a796e9d5b`
+to the recorded candidate integration commit above; no force-push, merge of
+unrelated branches, or unconfirmed worktree changes was included.
