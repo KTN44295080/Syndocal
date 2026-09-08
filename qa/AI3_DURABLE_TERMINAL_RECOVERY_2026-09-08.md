@@ -7,8 +7,8 @@ the current implementation and focused regression evidence without creating a
 second durable journal or claiming the complete AI3, physical re-arm, native
 ingress, or hardware acceptance gates.
 
-- Source base: `27a9360b755a7f5225f4e8c8503a2b89b4f8df3d`
-- Working tree before this document: clean; `main` matched `origin/main`
+- Source base for this revalidation: `465ed1b5923e2fdf1550b79fd5db88271127d26a`
+- Working tree before this revalidation: clean; `main` matched `origin/main`
 - Owner: this checkpoint owns only this QA record
 - Product source changes: none
 - Previous real-file thumbnail missing → UI Retry → recovery evidence: not rerun
@@ -55,9 +55,15 @@ The current exact Windows release artifact remains:
 
 - `target/release/syndocal.exe`
 - version `1.2.0-alpha.69`
-- size `64,700,928` bytes
-- SHA-256 `CC984A75AB399E80C373C6B9133C5FFA6661ABA6878B4D17EF606A063F6523B3`
-- native build/one-window launch evidence: `target/qa/snapshot-live-publication-20260908-01/`
+- size `64,699,904` bytes
+- SHA-256 `F32CE630FD7E31D3857A0F66948C05D712073A326C0A5497A14660753B025905`
+- native build/one-window launch evidence: `target/qa/native-final-validation-20260909-09/native-final-validation.json`
+
+The current native probe matched this exact executable hash and verified one
+responsive maximized window, Standby ownership, snapshot shape, invalid
+thumbnail IPC rejection, zero physical-output operations, exact process exit,
+and no remaining debug listener. The probe does not claim a dangerous-action,
+external-client, physical-resource, or venue acceptance.
 
 That launch evidence proves only the general native artifact launch boundary:
 one responsive, maximized Syndocal window, exact executable cleanup, and zero
