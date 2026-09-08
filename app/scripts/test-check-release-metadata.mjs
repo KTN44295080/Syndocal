@@ -261,6 +261,21 @@ try {
   pass(parseSemver(version)?.prerelease.join(".") === "rc.1", "RC SemVer parses");
   assert.throws(() => parseCli([], version), /require --release-candidate --manifest evidence/);
   assertions += 1;
+  const packageScripts = JSON.parse(readFileSync(resolve(scriptDir, "../package.json"), "utf8")).scripts;
+  pass(
+    typeof packageScripts["check:release:static"] === "string"
+      && !packageScripts["check:release:static"].includes("check-release-metadata.mjs"),
+    "release candidate static gate excludes the RC-only metadata invocation",
+  );
+  pass(
+    packageScripts["check:release"] === "pnpm run check:release:static && node scripts/check-release-metadata.mjs",
+    "normal release gate runs static checks followed by development metadata validation",
+  );
+  pass(
+    packageScripts["check:release:candidate"].startsWith("pnpm run check:release:static && node scripts/check-release-metadata.mjs --release-candidate --manifest")
+      && !packageScripts["check:release:candidate"].includes("pnpm run check:release &&"),
+    "release candidate gate reaches explicit RC evidence before artifact extraction",
+  );
   pass(
     parseCli(["--release-candidate", "--manifest", manifestPath], version).candidate,
     "RC command accepts only explicit candidate evidence mode",
