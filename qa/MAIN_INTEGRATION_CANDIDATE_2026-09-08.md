@@ -139,3 +139,46 @@ Remote `main` was re-fetched immediately before integration at
 fast-forward source; no merge commit, force-push, unrelated branch, or uncommitted
 Mac work was included. The integration commit was pushed normally and verified as
 remote `main` at `55ef1d58eb19b36224be1dcc7453ff16b28fd47f`.
+
+## 2026-09-08 checker contract repair
+
+The checker-repair lane started from main `3eef03d71f8c0500dd7717b2c8296aa2ee6fef6c`.
+Only the following two checker files were changed; product source, native source,
+unfinished UI/Channel cancellation work, and the separate Mac worktree were not
+edited or staged:
+
+- `app/scripts/check-frontend-command-routing.mjs`
+- `app/scripts/check-vj-media-import-access.mjs`
+
+The routing checker now matches the current `456` frontend routes and `133/31`
+renderer/server mutation classification, while keeping the transaction ticket,
+owner registration barrier, finite route classes, and fail-closed raw transport
+boundaries. The three current transport exceptions are exact and scoped: the
+canonical agent bridge command cast, the injected agent bridge mount, and the
+transaction controller's `tauriInvoke(command, args)` adapter. The old checker
+assumption that App itself owns `projectTransactionId/expectedEpoch/ownerId` was
+replaced with an assertion that `projectTransactionMutationController.ts` owns
+that envelope, dispatch, commit/cancel, and recovery boundary.
+
+The VJ checker now normalizes LF/CRLF source input, checks the current
+`createLatestThumbnailBatch` and `readThumbnailWithRetry` contracts, and invokes
+the executable media-thumbnail controller regression instead of maintaining a
+duplicated stale authority model. It still requires unauthorized empty
+projections and rejects source reads before explicit authorization.
+
+Fresh checker-repair evidence is retained under
+`target/qa/checker-contract-repair-20260908-02/`. All requested commands exited
+zero: routing, VJ media-import access, project transaction controller, media
+thumbnails, frontend invokes, TypeScript, check:release, completion ledger,
+Q1-Q4 ledger, and `git diff --check`. The negative paths cover broad/raw route
+casts and retired routes, missing authorization before thumbnail reads, stale
+authority/batch and retry results, reset/dispose retirement, bounded transient
+retry and explicit recovery, transaction owner/epoch ticketing, abort before
+raw mutation, cancel-on-definitive-failure, no-replay after not-published
+recovery, commit-on-published recovery, and hold-on-indeterminate/unconfirmed
+publication. The VJ checker continues to state that it is source/policy
+evidence, not browser-mounted or native-rendered reachability evidence.
+
+This checker-only repair does not claim a new native build, EXE launch, device
+acceptance, physical output, Mac validation, signing/notarization, release
+publication, or venue acceptance. Those boundaries remain as recorded above.

@@ -14,6 +14,9 @@ const dvcImportControllerPath = path.join(srcRoot, "dvcImportController.ts");
 const phase1ActionsPath = path.join(srcRoot, "phase1Actions.ts");
 const detachedVideoPath = path.join(srcRoot, "components", "VideoOutputWindow.tsx");
 const controlPlanePath = path.join(appRoot, "src-tauri", "src", "control_plane.rs");
+const projectTransactionControllerPath = path.join(srcRoot, "projectTransactionMutationController.ts");
+const agentBridgeControlPlanePath = path.join(srcRoot, "agentBridgeControlPlane.ts");
+const agentBridgeMountPath = path.join(srcRoot, "agentBridgeMount.ts");
 const manifest = JSON.parse(fs.readFileSync(path.join(srcRoot, "tauri-invoke-manifest.json"), "utf8"));
 const manifestSet = new Set(manifest);
 
@@ -312,6 +315,7 @@ assert(serverMutations.includes("set_project_control_mappings"), "project mappin
 assert(serverMutations.includes("create_scene_authoritative_v1"), "Scene create must use the server-authoritative facade lane");
 
 const controlPlaneSource = fs.readFileSync(controlPlanePath, "utf8");
+const projectTransactionControllerSource = fs.readFileSync(projectTransactionControllerPath, "utf8").replaceAll("\r\n", "\n");
 const rustClassification = (functionName, nextMarker) => {
   const body = functionSlice(
     controlPlaneSource,
@@ -404,8 +408,10 @@ assert.deepEqual(
   "the exact Spout V2 enable and local reset routes must remain present exactly once",
 );
 assert(!manifest.includes("enable_show_spout_outputs_v1"), "the retired Spout V1 route must remain unreachable");
-assert.equal(manifest.length, 450, "frontend Tauri manifest count drifted");
-assert.equal(backendRendererMutations.length, 132, "backend renderer-ticketed classification count drifted");
+// Current main has 456 frontend routes, with the exact 133/31 mutation
+// classifications checked against both App and control_plane.rs below.
+assert.equal(manifest.length, 456, "frontend Tauri manifest count drifted");
+assert.equal(backendRendererMutations.length, 133, "backend renderer-ticketed classification count drifted");
 assert.equal(backendServerMutations.length, 31, "backend authoritative classification count drifted");
 assert.deepEqual(
   [...rendererMutations].sort(),
@@ -426,21 +432,40 @@ const rendererDispatchBody = functionSlice(
 for (const marker of [
   "await awaitProjectTransactionOwnerRegistrationBarrier();",
   "projectMutationCommands.has(command)",
-  "projectTransactionId: transaction.transaction_id",
-  "expectedEpoch: transaction.project_epoch",
-  "ownerId: projectTransactionOwnerId",
+  "serverAuthoritativeProjectMutationCommands.has(command)",
+  "operatorCommandAllowed(activeOperatorLockMode, command, projectMutation)",
 ]) {
   assert(rendererDispatchBody.includes(marker), `central invoke facade is missing ${marker}`);
 }
 assert(
   rendererDispatchBody.indexOf("await awaitProjectTransactionOwnerRegistrationBarrier();")
     < rendererDispatchBody.indexOf("const rendererTicketedMutation"),
-  "central invoke must await an owner registration before any native command classification or transaction work",
+  "App invoke facade must await an owner registration before native command classification or transaction work",
 );
 assert.doesNotMatch(
   rendererDispatchBody,
   /register_project_transaction_owner/,
-  "owner registration must remain a raw primitive and never recurse through central invoke",
+  "owner registration must remain a raw primitive and never recurse through the App invoke facade",
+);
+const transactionControllerBody = functionSlice(
+  projectTransactionControllerSource,
+  "const executeProjectTransactionMutation = async <T,>(",
+  "\n  return { executeProjectTransactionMutation };",
+);
+for (const marker of [
+  "projectTransactionId: transaction.transaction_id",
+  "expectedEpoch: transaction.project_epoch",
+  "ownerId: ports.ownerId",
+  "ports.invoke<T>(command, ticketedArgs)",
+  "ports.commitProjectTransactionWithRecovery(transaction, identity, settleTerminal)",
+  "cancelOpenedProjectTransaction()",
+]) {
+  assert(transactionControllerBody.includes(marker), "transaction controller is missing " + marker);
+}
+assert.doesNotMatch(
+  rendererDispatchBody,
+  /projectTransactionId:\s*transaction\.transaction_id/,
+  "App invoke facade must not own the controller's ticket envelope",
 );
 const legacySingleCueCommands = [
   "update_cue_from_current",
@@ -650,7 +675,7 @@ const legacyOutputRoutes = new Set(
   [...outputChecker.slice(legacyStart, legacyEnd).matchAll(/"([a-z0-9_]+)"/g)].map((match) => match[1]),
 );
 
-const allowedRawInvokeFiles = new Set([appPath, detachedVideoPath]);
+const allowedRawInvokeFiles = new Set([appPath, detachedVideoPath, agentBridgeMountPath]);
 const machineFileMutations = new Set(["cache_gdtf_from_share"]);
 const broadCastPattern = /^(?:Parameters\s*<\s*FrontendTauriInvoke\s*>\s*\[\s*0\s*\]|FrontendTauriInvokeCommand)$/;
 const isBroadCommandCast = (node, sourceFile) => {
@@ -756,6 +781,24 @@ const approvedRawDynamicDispatchers = new Map([
   ])],
   [detachedVideoPath, new Set(["invoke"])],
 ]);
+const isApprovedCanonicalBridgeCast = (node, sourceFile) => path.resolve(sourceFile.fileName) === agentBridgeControlPlanePath
+  && (ts.isAsExpression(node) || ts.isTypeAssertionExpression(node))
+  && node.getText(sourceFile).replace(/\s+/g, "") === "commandasFrontendTauriInvokeCommand";
+const isProjectTransactionControllerTransportBoundary = (node, sourceFile) => {
+  if (path.resolve(sourceFile.fileName) !== appPath
+    || !ts.isCallExpression(node)
+    || !ts.isIdentifier(node.expression)
+    || node.expression.text !== "tauriInvoke"
+    || node.getText(sourceFile) !== "tauriInvoke(command, args)") return false;
+  let current = node.parent;
+  while (current) {
+    if (ts.isCallExpression(current)
+      && ts.isIdentifier(current.expression)
+      && current.expression.text === "createProjectTransactionMutationController") return true;
+    current = current.parent;
+  }
+  return false;
+};
 
 const sourceContract = (source, marker, nextMarker, required, forbidden = []) => {
   const body = functionSlice(source, marker, nextMarker);
@@ -767,7 +810,7 @@ sourceContract(appText, "const invokeTimelineFollowAbortRuntime", "const timelin
   '"query_timeline_follow_abort_authority_v1"',
   '"abort_timeline_follow_runtime_v1"',
 ]);
-sourceContract(appText, "const invokeSafetyBlackoutRuntime", "const safetyBlackoutRuntime", [
+sourceContract(appText, "const invokeSafetyBlackoutRuntime", "const targetBlackout", [
   '"safety_blackout_engage_v1"',
 ]);
 sourceContract(appText, "const invokeTimelineTransportRuntime", "const timelineTransportRuntime", [
@@ -800,7 +843,7 @@ for (const sourceFile of sourceFiles) {
     if (isTauriInternalsInvoke(node)) {
       errors.push(`${locationOf(sourceFile, node)} window.__TAURI_INTERNALS__.invoke bypasses typed Tauri routing`);
     }
-    if (isBroadCommandCast(node, sourceFile)) {
+    if (isBroadCommandCast(node, sourceFile) && !isApprovedCanonicalBridgeCast(node, sourceFile)) {
       errors.push(`${locationOf(sourceFile, node)} broad FrontendTauriInvoke command cast hides the actual route`);
     }
     if (ts.isImportDeclaration(node)
@@ -842,7 +885,8 @@ for (const sourceFile of sourceFiles) {
         } else if (raw) {
           const dispatcher = enclosingDispatcherName(node);
           const allowlist = approvedRawDynamicDispatchers.get(resolvedFile);
-          if (!dispatcher || !allowlist?.has(dispatcher)) {
+          if (!isProjectTransactionControllerTransportBoundary(node, sourceFile)
+            && (!dispatcher || !allowlist?.has(dispatcher))) {
             errors.push(`${locationOf(sourceFile, node)} raw dynamic dispatcher ${dispatcher ?? "<unknown>"} is outside the finite allowlist`);
           }
         }

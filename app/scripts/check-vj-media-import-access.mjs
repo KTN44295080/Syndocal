@@ -2,15 +2,22 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
 const componentRoot = new URL("../src/components/", import.meta.url);
-const clipGrid = await readFile(new URL("VideoClipGridPanel.tsx", componentRoot), "utf8");
-const controlPanel = await readFile(new URL("VideoControlPanel.tsx", componentRoot), "utf8");
-const sourceCreate = await readFile(new URL("VideoSourceCreatePanel.tsx", componentRoot), "utf8");
-const timelineSourceShelf = (await readFile(new URL("TimelineSourceShelf.tsx", componentRoot), "utf8")).replaceAll("\r\n", "\n");
-const styles = (await readFile(new URL("../src/styles.css", import.meta.url), "utf8")).replaceAll("\r\n", "\n");
-const app = await readFile(new URL("../src/App.tsx", import.meta.url), "utf8");
-const controller = await readFile(new URL("../src/createVideoRuntimeController.ts", import.meta.url), "utf8");
+const normalizeSource = (source) => source.replaceAll("\r\n", "\n");
+const readSource = async (url) => normalizeSource(await readFile(url, "utf8"));
+const clipGrid = await readSource(new URL("VideoClipGridPanel.tsx", componentRoot));
+const controlPanel = await readSource(new URL("VideoControlPanel.tsx", componentRoot));
+const sourceCreate = await readSource(new URL("VideoSourceCreatePanel.tsx", componentRoot));
+const timelineSourceShelf = await readSource(new URL("TimelineSourceShelf.tsx", componentRoot));
+const styles = await readSource(new URL("../src/styles.css", import.meta.url));
+const app = await readSource(new URL("../src/App.tsx", import.meta.url));
+const controller = await readSource(new URL("../src/createVideoRuntimeController.ts", import.meta.url));
 
-const thumbnailControllerSource = (await readFile(new URL("../src/createMediaThumbnailController.ts", import.meta.url), "utf8")).replaceAll("\r\n", "\n");
+const thumbnailControllerSource = await readSource(new URL("../src/createMediaThumbnailController.ts", import.meta.url));
+assert.equal(
+  normalizeSource(clipGrid.replaceAll("\n", "\r\n")),
+  clipGrid,
+  "LF and CRLF source copies must enter the checker through the same normalized representation",
+);
 const count = (source, needle) => source.split(needle).length - 1;
 
 function requiredIndex(source, marker, label, fromIndex = 0) {
@@ -513,18 +520,22 @@ const thumbnailAuthorizationIndex = requiredIndex(
 );
 const thumbnailReadIndex = requiredIndex(
   thumbnailEffect,
-  "await loadVideoLayerThumbnail(source.id)",
+  "loadVideoLayerThumbnail(source.id)",
   "thumbnail source read",
 );
 assert.ok(thumbnailAuthorizationIndex < thumbnailReadIndex, "no thumbnail source read is reachable before explicit authorization");
 assert.match(thumbnailEffect, /if \(!videoThumbnailAccessAuthorized\(\)\) \{[\s\S]*?setVideoClipThumbnails\(\{\}\);[\s\S]*?return;/, "unauthorized load/restart returns with an empty projection");
 assert.match(thumbnailControllerSource, /if \(!videoThumbnailAccessAuthorized\(\)\) \{[\s\S]*?setMediaAssetThumbnails\(\{\}\);[\s\S]*?return;/, "unauthorized project load/reset returns with an empty asset-thumbnail projection");
-assert.match(thumbnailControllerSource, /loadMediaAssetThumbnail\(source\.id\)/, "authorized Media Library thumbnail loading uses the single backend-owned asset thumbnail path");
+assert.match(thumbnailControllerSource, /readThumbnailWithRetry\(\(\) => loadVideoLayerThumbnail\(source\.id\), isCurrent\)/, "authorized layer thumbnail loading uses the bounded retry path");
+assert.match(thumbnailControllerSource, /readThumbnailWithRetry\(\(\) => loadMediaAssetThumbnail\(source\.id\),/, "authorized Media Library thumbnail loading uses the bounded retry path");
 assert.match(thumbnailControllerSource, /hash_algorithm:[\s\S]*?hash_hex:[\s\S]*?byte_size:/, "asset thumbnail cache identity fences source path and persisted content identity");
-assert.match(thumbnailControllerSource, /let videoThumbnailGeneration = 0;[\s\S]*?let mediaAssetThumbnailGeneration = 0;/, "layer and asset thumbnail work use independent generation fences");
+assert.match(thumbnailControllerSource, /const videoBatch = createLatestThumbnailBatch\(\);[\s\S]*?const assetBatch = createLatestThumbnailBatch\(\);/, "layer and asset thumbnail work use independent latest-batch owners");
+assert.match(thumbnailControllerSource, /videoBatch\.replace\(async \(isCurrent\) =>[\s\S]*?if \(!isCurrent\(\)\) return;/, "layer thumbnail work rejects retired batches before publication");
+assert.match(thumbnailControllerSource, /assetBatch\.replace\(async \(isCurrent\) =>[\s\S]*?isProjectAuthorityIdentityCurrent\(authority\)/, "asset thumbnail work rejects retired authority batches before publication");
+assert.match(thumbnailControllerSource, /setReloadRequest\(value => value \+ 1\)/, "explicit thumbnail authorization can retry missing entries");
 const mediaAssetThumbnailEffect = sliceBetween(
   thumbnailEffect,
-  "createEffect(() => {\n    const sources = JSON.parse(mediaAssetThumbnailSourceSignature())",
+  "createEffect(() => {\n    reloadRequest(); // An explicit load action retries missing entries, not cached successes.\n    const sources = JSON.parse(mediaAssetThumbnailSourceSignature())",
   "  onCleanup(() => {",
   "Media Library thumbnail effect",
 );
@@ -535,79 +546,10 @@ assert.match(
 );
 assert.match(mediaAssetThumbnailEffect, /const authority = JSON\.parse\(mediaAssetThumbnailAuthoritySignature\(\)\) as ProjectAuthorityToken;/, "a genuine E/R/H change starts one new Media Library thumbnail generation");
 assert.doesNotMatch(mediaAssetThumbnailEffect, /captureProjectAuthorityIdentity\(\)/, "Media Library thumbnail effect must not synchronously track the object-valued authority publication");
-// Model the race precisely. A poll can republish an equivalent object while a
-// source decode is in flight, but an actual E/R/H change must invalidate that
-// batch and immediately start exactly one successor. A replacement remains
-// fail-closed for the retired batch.
-const mediaAssetThumbnailAuthorityBatchModel = (initialAuthority) => {
-  let currentAuthority = { ...initialAuthority };
-  let observedSignature = null;
-  let generation = 0;
-  const batches = [];
-  const authoritySignature = (authority) => JSON.stringify({
-    project_epoch: authority.project_epoch,
-    project_revision: authority.project_revision,
-    checkpoint_hash: authority.checkpoint_hash,
-  });
-  const startIfAuthorityChanged = () => {
-    const signature = authoritySignature(currentAuthority);
-    if (signature === observedSignature) return null;
-    observedSignature = signature;
-    const batch = { generation: ++generation, authority: { ...currentAuthority } };
-    batches.push(batch);
-    return batch;
-  };
-  const setAuthority = (next) => {
-    currentAuthority = { ...next };
-    return startIfAuthorityChanged();
-  };
-  const canPublish = (batch) => batch.generation === generation
-    && authoritySignature(batch.authority) === authoritySignature(currentAuthority);
-  return { batches, startIfAuthorityChanged, setAuthority, canPublish };
-};
-
-const thumbnailEquivalentPoll = mediaAssetThumbnailAuthorityBatchModel({
-  project_epoch: 7,
-  project_revision: 11,
-  checkpoint_hash: "A",
-});
-const equivalentInitialBatch = thumbnailEquivalentPoll.startIfAuthorityChanged();
-const equivalentRepublish = thumbnailEquivalentPoll.setAuthority({
-  project_epoch: 7,
-  project_revision: 11,
-  checkpoint_hash: "A",
-});
-assert.equal(equivalentRepublish, null, "equivalent authority-object churn does not restart the in-flight Media Library thumbnail batch");
-assert.equal(thumbnailEquivalentPoll.batches.length, 1, "equivalent authority-object churn keeps exactly one thumbnail generation");
-assert.equal(thumbnailEquivalentPoll.canPublish(equivalentInitialBatch), true, "the original batch publishes after equivalent authority-object churn");
-
-const thumbnailGenuineChange = mediaAssetThumbnailAuthorityBatchModel({
-  project_epoch: 7,
-  project_revision: 11,
-  checkpoint_hash: "A",
-});
-const staleGenuineBatch = thumbnailGenuineChange.startIfAuthorityChanged();
-const freshGenuineBatch = thumbnailGenuineChange.setAuthority({
-  project_epoch: 7,
-  project_revision: 12,
-  checkpoint_hash: "B",
-});
-assert.equal(thumbnailGenuineChange.canPublish(staleGenuineBatch), false, "a genuine same-project E/R/H change rejects the stale mid-batch thumbnail result");
-assert.deepEqual(freshGenuineBatch, {
-  generation: 2,
-  authority: { project_epoch: 7, project_revision: 12, checkpoint_hash: "B" },
-}, "a genuine same-project E/R/H change starts exactly one fresh thumbnail batch");
-assert.equal(thumbnailGenuineChange.canPublish(freshGenuineBatch), true, "the fresh genuine-authority batch publishes after the stale batch is rejected");
-
-const thumbnailReplacement = mediaAssetThumbnailAuthorityBatchModel({
-  project_epoch: 7,
-  project_revision: 11,
-  checkpoint_hash: "A",
-});
-const retiredReplacementBatch = thumbnailReplacement.startIfAuthorityChanged();
-thumbnailReplacement.setAuthority({ project_epoch: 8, project_revision: 0, checkpoint_hash: "C" });
-assert.equal(thumbnailReplacement.canPublish(retiredReplacementBatch), false, "a project replacement still rejects the retired thumbnail batch fail closed");
-assert.match(thumbnailControllerSource, /generation !== mediaAssetThumbnailGeneration \|\| !untrack\(\(\) => isProjectAuthorityIdentityCurrent\(authority\)\)/, "asset-thumbnail async completion is fenced by its own generation and current project authority");
+// The executable controller regression owns the actual Solid lifecycle and
+// deferred native-read races. Do not duplicate it with a hand-written model
+// that can drift from createLatestThumbnailBatch/readThumbnailWithRetry.
+await import("./check-media-thumbnail-controller.mjs");
 assert.match(app, /if \(mode === "mixer"\) authorizeVideoThumbnailAccess\(\);/, "an explicit Mixer selection authorizes thumbnails");
 assert.match(app, /onRequestThumbnails: authorizeVideoThumbnailAccess/, "the visible thumbnail request authorizes the same cache");
 assert.match(clipGrid, /data-vj-thumbnail-request[\s\S]*?onClick=\{props\.onRequestThumbnails\}/, "populated grid exposes an explicit source-read action");
