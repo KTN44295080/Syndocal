@@ -315,6 +315,72 @@ fn benchmark_full_snapshot_sync_shared_capture() {
     }
 }
 
+#[test]
+#[ignore = "fixed representative fixture; measurement only, not IPC or multi-window acceptance"]
+fn benchmark_phase1_snapshot_sync_delta_and_serialization() {
+    use std::{hint::black_box, time::Instant};
+
+    let document: serde_json::Value =
+        serde_json::from_str(include_str!("../../../samples/phase1-mini-show.sdc")).unwrap();
+    let baseline: EngineSnapshot = serde_json::from_value(document["snapshot"].clone()).unwrap();
+    assert_eq!(baseline.fixtures.len(), 1);
+    assert_eq!(baseline.cues.len(), 1);
+    assert_eq!(baseline.video.outputs.len(), 1);
+
+    const ITERATIONS: usize = 1_000;
+    let measure = |serialize: bool| {
+        let mut sync = SnapshotSyncState::default();
+        let mut clients = [None; 2];
+        let mut current = baseline.clone();
+        let mut full_count = 0;
+        let mut delta_count = 0;
+        let mut serialized_bytes = 0;
+        let started = Instant::now();
+        for step in 0..ITERATIONS {
+            current.clock.bpm = 120.0 + (step % 3) as f32;
+            let client = step % 2;
+            let payload = sync.publish(clients[client], current.clone()).unwrap();
+            clients[client] = Some(payload.revision);
+            full_count += usize::from(payload.full.is_some());
+            delta_count += usize::from(payload.delta.is_some());
+            if serialize {
+                serialized_bytes += serde_json::to_vec(&payload).unwrap().len();
+            }
+            black_box(payload);
+        }
+        (
+            started.elapsed().as_nanos(),
+            full_count,
+            delta_count,
+            serialized_bytes,
+        )
+    };
+
+    let warmup = measure(true);
+    black_box(warmup);
+    let mut publish_times = Vec::new();
+    let mut serialized_times = Vec::new();
+    for round in 0..5 {
+        let (publish_ns, full_count, delta_count, _) = measure(false);
+        let (serialized_ns, serialized_full, serialized_delta, serialized_bytes) = measure(true);
+        assert_eq!((full_count, delta_count), (2, ITERATIONS - 2));
+        assert_eq!((serialized_full, serialized_delta), (2, ITERATIONS - 2));
+        println!(
+            "round={round} iterations={ITERATIONS} publish_ns={publish_ns} publish_serialize_ns={serialized_ns} full/delta={full_count}/{delta_count} serialized_bytes={serialized_bytes}"
+        );
+        publish_times.push(publish_ns);
+        serialized_times.push(serialized_ns);
+    }
+    publish_times.sort_unstable();
+    serialized_times.sort_unstable();
+    println!(
+        "median iterations={ITERATIONS} publish_ns={} publish_serialize_ns={} full/delta=2/{}",
+        publish_times[2],
+        serialized_times[2],
+        ITERATIONS - 2
+    );
+}
+
 /// Deterministic payload workload, not a wall-clock/CPU benchmark. Both policies
 /// receive identical snapshots and client scheduling; only cache retention differs.
 #[test]
