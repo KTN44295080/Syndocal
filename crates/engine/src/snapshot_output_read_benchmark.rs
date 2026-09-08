@@ -235,6 +235,90 @@ fn benchmark_show_tick_snapshot_construction() {
 }
 
 #[test]
+#[ignore = "fixed representative fixture; video-surface measurement, not tick budget or FPS acceptance"]
+fn benchmark_show_tick_video_surface_construction() {
+    let path = std::env::var_os("SYNDOCAL_SNAPSHOT_BENCH_PROJECT")
+        .expect("provide an explicit preserved .sdc path");
+    let bytes = std::fs::read(path).expect("read benchmark show without modification");
+    let document: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let snapshot: EngineSnapshot = serde_json::from_value(document["snapshot"].clone()).unwrap();
+    let mut runtime = EngineRuntime::new(protocol::DmxOutputConfig {
+        enabled: false,
+        ..protocol::DmxOutputConfig::default()
+    });
+    runtime.load_project_snapshot(snapshot);
+    assert_eq!(runtime.last_error, None);
+
+    const ITERATIONS: usize = 1_000;
+    let measure_rendered = || {
+        let started = Instant::now();
+        for _ in 0..ITERATIONS {
+            black_box(runtime.video_snapshot());
+        }
+        started.elapsed().as_nanos()
+    };
+    let measure_authored = || {
+        let started = Instant::now();
+        for _ in 0..ITERATIONS {
+            let rendered = runtime.video_snapshot();
+            black_box(runtime.authored_video_snapshot_from_rendered(black_box(&rendered)));
+        }
+        started.elapsed().as_nanos()
+    };
+    let measure_both = || {
+        let started = Instant::now();
+        for _ in 0..ITERATIONS {
+            let rendered = runtime.video_snapshot();
+            let authored = runtime.authored_video_snapshot_from_rendered(black_box(&rendered));
+            black_box((rendered, authored));
+        }
+        started.elapsed().as_nanos()
+    };
+
+    black_box(measure_rendered());
+    black_box(measure_authored());
+    black_box(measure_both());
+    let mut rendered_times = Vec::new();
+    let mut authored_times = Vec::new();
+    let mut both_times = Vec::new();
+    for round in 0..5 {
+        let (rendered_ns, authored_ns, both_ns) = match round % 3 {
+            0 => {
+                let rendered_ns = measure_rendered();
+                let authored_ns = measure_authored();
+                let both_ns = measure_both();
+                (rendered_ns, authored_ns, both_ns)
+            }
+            1 => {
+                let both_ns = measure_both();
+                let rendered_ns = measure_rendered();
+                let authored_ns = measure_authored();
+                (rendered_ns, authored_ns, both_ns)
+            }
+            _ => {
+                let authored_ns = measure_authored();
+                let both_ns = measure_both();
+                let rendered_ns = measure_rendered();
+                (rendered_ns, authored_ns, both_ns)
+            }
+        };
+        println!(
+            "round={round} iterations={ITERATIONS} rendered_ns={rendered_ns} authored_from_rendered_ns={authored_ns} both_ns={both_ns}"
+        );
+        rendered_times.push(rendered_ns);
+        authored_times.push(authored_ns);
+        both_times.push(both_ns);
+    }
+    rendered_times.sort_unstable();
+    authored_times.sort_unstable();
+    both_times.sort_unstable();
+    println!(
+        "median iterations={ITERATIONS} rendered_ns={} authored_from_rendered_ns={} both_ns={}",
+        rendered_times[2], authored_times[2], both_times[2]
+    );
+}
+
+#[test]
 #[ignore = "fixed representative fixture; synthetic writer-wait report, not FPS acceptance"]
 fn benchmark_show_snapshot_reads_under_writer_contention() {
     let path = std::env::var_os("SYNDOCAL_SNAPSHOT_BENCH_PROJECT")
