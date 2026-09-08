@@ -12,7 +12,8 @@ const [
 ] = await Promise.all([
   readFile(new URL("../src/App.tsx", import.meta.url), "utf8"),
   readFile(new URL("../src/components/ValueEffectEditorPanel.tsx", import.meta.url), "utf8"),
-  readFile(new URL("../src/components/ColorEffectEditorPanel.tsx", import.meta.url), "utf8"),
+  readFile(new URL("../src/components/ColorEffectEditorPanel.tsx", import.meta.url), "utf8")
+    .then((source) => source.replaceAll("\r\n", "\n")),
   readFile(new URL("../src/types.ts", import.meta.url), "utf8"),
   readFile(new URL("../src/sceneFxDefaults.ts", import.meta.url), "utf8"),
   readFile(new URL("../src/components/SceneSettingsPane.tsx", import.meta.url), "utf8"),

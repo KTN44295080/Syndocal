@@ -74,7 +74,8 @@ try {
   const [appSource, paneSource, editorSource, protocolSource, tauriSource, engineSource, dvcSource] = await Promise.all([
     readFile(resolve(appRoot, "src/App.tsx"), "utf8"),
     readFile(resolve(appRoot, "src/components/SceneSettingsPane.tsx"), "utf8"),
-    readFile(resolve(appRoot, "src/components/ColorEffectEditorPanel.tsx"), "utf8"),
+    readFile(resolve(appRoot, "src/components/ColorEffectEditorPanel.tsx"), "utf8")
+      .then((source) => source.replaceAll("\r\n", "\n")),
     readFile(resolve(workspaceRoot, "crates/protocol/src/lib.rs"), "utf8"),
     readFile(resolve(appRoot, "src-tauri/src/main.rs"), "utf8"),
     readFile(resolve(workspaceRoot, "crates/engine/src/lib.rs"), "utf8"),
