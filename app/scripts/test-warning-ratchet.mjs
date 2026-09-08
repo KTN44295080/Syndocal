@@ -52,6 +52,7 @@ import {
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, "../..");
 const fixtureRoot = path.join(scriptDir, "fixtures/warning-ratchet");
+const pnpmExecutable = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
 const lines = readFileSync(path.join(fixtureRoot, "cargo-warning.jsonl"), "utf8").trim().split(/\r?\n/);
 const metadata = JSON.parse(readFileSync(path.join(fixtureRoot, "cargo-metadata.json"), "utf8"));
 const context = {
@@ -495,10 +496,23 @@ assert.equal(timeoutResult.timedOut, true);
 
 const genericConfiguration = (code, markers = ["generic-marker"], timeoutMs = 5_000) => ({
   id: "generic-warning-fixture",
-  command: { executable: "pnpm", args: ["exec", "node", "-e", code] },
+  command: { executable: "pnpm", args: ["--dir", path.join(repoRoot, "app"), "exec", "node", "-e", code] },
   timeoutMs,
   expectedOutputMarkers: markers,
 });
+const runGenericCode = async (code, markers = ["generic-marker"], timeoutMs = 5_000) => {
+  const previous = process.env.WARNING_RATCHET_TEST_CODE;
+  process.env.WARNING_RATCHET_TEST_CODE = code;
+  try {
+    return await runGenericConfiguration(
+      genericConfiguration("eval(process.env.WARNING_RATCHET_TEST_CODE)", markers, timeoutMs),
+      repoRoot,
+    );
+  } finally {
+    if (previous === undefined) delete process.env.WARNING_RATCHET_TEST_CODE;
+    else process.env.WARNING_RATCHET_TEST_CODE = previous;
+  }
+};
 const genericSuccess = await runWarningConfiguration(
   genericConfiguration("process.stdout.write('generic-marker')"),
   repoRoot,
@@ -512,35 +526,32 @@ assert.deepEqual(compareOutputMarkerCoverage(["literal"], "literal output"), {
   missing: [],
   expected: ["literal"],
 });
-const genericStdoutWarning = await runGenericConfiguration(
-  genericConfiguration("process.stdout.write('generic-marker\\nwarning: synthetic')"),
-  repoRoot,
-);
+const runGenericWithOutput = async (value) => {
+  const previous = process.env.WARNING_RATCHET_TEST_ENV;
+  process.env.WARNING_RATCHET_TEST_ENV = value;
+  try {
+    return await runGenericConfiguration(
+      genericConfiguration("process.stdout.write(process.env.WARNING_RATCHET_TEST_ENV)"),
+      repoRoot,
+    );
+  } finally {
+    if (previous === undefined) delete process.env.WARNING_RATCHET_TEST_ENV;
+    else process.env.WARNING_RATCHET_TEST_ENV = previous;
+  }
+};
+const genericStdoutWarning = await runGenericWithOutput("generic-marker\nwarning: synthetic");
 assert.equal(genericStdoutWarning.warningShaped, true);
-const genericStderrWarning = await runGenericConfiguration(
-  genericConfiguration("process.stdout.write('generic-marker'); process.stderr.write('WARN synthetic')"),
-  repoRoot,
+const genericStderrWarning = await runGenericCode(
+  "process.stdout.write('generic-marker'); process.stderr.write('WARN synthetic')",
 );
 assert.equal(genericStderrWarning.warningShaped, true);
-const genericViteWarning = await runGenericConfiguration(
-  genericConfiguration("process.stdout.write('generic-marker\\n(!) Vite synthetic warning')"),
-  repoRoot,
-);
+const genericViteWarning = await runGenericWithOutput("generic-marker\n(!) Vite synthetic warning");
 assert.equal(genericViteWarning.warningShaped, true);
-const genericNonzero = await runGenericConfiguration(
-  genericConfiguration("process.stdout.write('generic-marker'); process.exitCode = 7"),
-  repoRoot,
-);
+const genericNonzero = await runGenericCode("process.stdout.write('generic-marker'); process.exitCode = 7");
 assert.equal(genericNonzero.exitCode, 7);
-const genericTimeout = await runGenericConfiguration(
-  genericConfiguration("setTimeout(() => process.stdout.write('generic-marker'), 10_000)", ["generic-marker"], 1_000),
-  repoRoot,
-);
+const genericTimeout = await runGenericCode("setTimeout(() => process.stdout.write('generic-marker'), 10_000)", ["generic-marker"], 1_000);
 assert.equal(genericTimeout.timedOut, true);
-const genericMissingMarker = await runGenericConfiguration(
-  genericConfiguration("process.stdout.write('generic-marker')", ["missing-marker"]),
-  repoRoot,
-);
+const genericMissingMarker = await runGenericCode("process.stdout.write('generic-marker')", ["missing-marker"]);
 assert.equal(genericMissingMarker.markerCoverage.ok, false);
 assert.deepEqual(genericMissingMarker.markerCoverage.missing, ["missing-marker"]);
 const forwardedEnvironment = { ...process.env, WARNING_RATCHET_TEST_ENV: "forwarded" };
@@ -1255,12 +1266,13 @@ try {
   fixtureGit(["commit", "-m", "rebaseline stable Vite marker"]);
   const outputMarkerHead = fixtureGit(["rev-parse", "HEAD"]);
   const runOutputMarkerCli = (args) => execFileSync(
-    "pnpm",
+    pnpmExecutable,
     ["--dir", path.join(repoRoot, "app"), "exec", "node", path.join(outputMarkerFixtureRoot, "app/scripts/check-warning-ratchet.mjs"), ...args],
     {
       cwd: outputMarkerFixtureRoot,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
+      shell: process.platform === "win32",
     },
   );
   const outputMarkerResult = await auditOutputMarkerRebaseline({

@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { execFileSync, spawn } from "node:child_process";
 import { once } from "node:events";
-import { closeSync, openSync, readFileSync, readSync, statSync } from "node:fs";
+import { closeSync, existsSync, openSync, readFileSync, readSync, statSync } from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
 import Ajv2020 from "ajv/dist/2020.js";
@@ -61,6 +61,7 @@ const CARGO_CONFIG_ENV_KEYS = new Set([
 // empty values, other triples), and Cargo config linker overrides stay forbidden.
 export const PINNED_WINDOWS_MSVC_TARGET_LINKER_KEY = "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER";
 export const PINNED_WINDOWS_MSVC_TARGET_LINKER_VALUE = String.raw`C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe`;
+export const PINNED_BUILD_TOOLS_WINDOWS_MSVC_TARGET_LINKER_VALUE = String.raw`C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe`;
 export const PINNED_GITHUB_HOSTED_WINDOWS_MSVC_TARGET_LINKER_VALUE =
   String.raw`C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe`;
 export const GITHUB_HOSTED_WINDOWS_TOOLCHAIN_MARKER =
@@ -69,6 +70,8 @@ export const GITHUB_HOSTED_WINDOWS_TOOLCHAIN_MARKER_VALUE =
   "windows-2022-enterprise";
 const REQUIRED_LOCAL_VCVARS_BATCH =
   String.raw`C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat`;
+const REQUIRED_BUILD_TOOLS_VCVARS_BATCH =
+  String.raw`C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat`;
 const REQUIRED_GITHUB_HOSTED_VCVARS_BATCH =
   String.raw`C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat`;
 
@@ -87,7 +90,8 @@ function isGitHubActionsWindows(environment) {
 
 function isPinnedWindowsMsvcTargetLinkerEntry(key, value, environment) {
   if (key !== PINNED_WINDOWS_MSVC_TARGET_LINKER_KEY) return false;
-  if (value === PINNED_WINDOWS_MSVC_TARGET_LINKER_VALUE) {
+  if (value === PINNED_WINDOWS_MSVC_TARGET_LINKER_VALUE
+      || value === PINNED_BUILD_TOOLS_WINDOWS_MSVC_TARGET_LINKER_VALUE) {
     return !isGitHubActionsWindows(environment);
   }
   return value === PINNED_GITHUB_HOSTED_WINDOWS_MSVC_TARGET_LINKER_VALUE
@@ -140,7 +144,9 @@ function parseCommandLineSetOutput(output) {
 function defaultInitializeWindowsMsvcEnvironment(environment) {
   const vcvarsBatch = isGitHubHostedWindowsToolchain(environment)
     ? REQUIRED_GITHUB_HOSTED_VCVARS_BATCH
-    : REQUIRED_LOCAL_VCVARS_BATCH;
+    : defaultFileIsRegular(PINNED_WINDOWS_MSVC_TARGET_LINKER_VALUE)
+      ? REQUIRED_LOCAL_VCVARS_BATCH
+      : REQUIRED_BUILD_TOOLS_VCVARS_BATCH;
   try {
     const output = execFileSync(
       "cmd.exe",
@@ -154,7 +160,16 @@ function defaultInitializeWindowsMsvcEnvironment(environment) {
         stdio: ["ignore", "pipe", "pipe"],
       },
     );
-    return parseCommandLineSetOutput(output);
+    const initializedEnvironment = parseCommandLineSetOutput(output);
+    if (!initializedEnvironment?.VCToolsInstallDir) return initializedEnvironment;
+    initializedEnvironment[PINNED_WINDOWS_MSVC_TARGET_LINKER_KEY] = path.win32.resolve(
+      initializedEnvironment.VCToolsInstallDir.trim(),
+      "bin",
+      "Hostx64",
+      "x64",
+      "link.exe",
+    );
+    return initializedEnvironment;
   } catch {
     return null;
   }
@@ -186,7 +201,10 @@ export function verifyExactWindowsMsvcCargoEnvironment(
   const hosted = isGitHubHostedWindowsToolchain(initializedEnvironment);
   const expectedLinker = hosted
     ? PINNED_GITHUB_HOSTED_WINDOWS_MSVC_TARGET_LINKER_VALUE
-    : PINNED_WINDOWS_MSVC_TARGET_LINKER_VALUE;
+    : normalizeWindowsPathKey(initializedEnvironment?.VCToolsInstallDir)
+      === normalizeWindowsPathKey(toolsetDirectoryForLinker(PINNED_BUILD_TOOLS_WINDOWS_MSVC_TARGET_LINKER_VALUE))
+      ? PINNED_BUILD_TOOLS_WINDOWS_MSVC_TARGET_LINKER_VALUE
+      : PINNED_WINDOWS_MSVC_TARGET_LINKER_VALUE;
   const expectedToolsetDirectory = toolsetDirectoryForLinker(expectedLinker);
   const actualToolsetDirectory = initializedEnvironment?.VCToolsInstallDir?.trim();
   if (!actualToolsetDirectory) {
@@ -271,6 +289,20 @@ const STRIPPED_GENERIC_COMMAND_ENV = [
 ];
 const SUPPORTED_COMMAND_EXECUTABLES = new Set(["cargo", "pnpm"]);
 export const GENERIC_COMMAND_OUTPUT_LIMIT_BYTES = 8 * 1024 * 1024;
+
+function resolvePnpmInvocation(args) {
+  if (process.platform !== "win32") return { executable: "pnpm", args, shell: false };
+  const nodeDirectory = path.dirname(process.execPath);
+  const directPnpmScriptCandidates = [
+    path.join(nodeDirectory, "node_modules", "corepack", "dist", "pnpm.js"),
+    path.join(nodeDirectory, "node_modules", "pnpm", "bin", "pnpm.cjs"),
+  ];
+  const directPnpmScript = directPnpmScriptCandidates.find((candidate) => existsSync(candidate));
+  if (directPnpmScript) {
+    return { executable: process.execPath, args: [directPnpmScript, ...args], shell: false };
+  }
+  return { executable: "pnpm.cmd", args, shell: true };
+}
 
 const SUPPRESSION_PATTERNS = [
   // A separated rustc lint level is a same-command-line token pair. Restrict
@@ -676,10 +708,16 @@ export async function runProcessWithTimeout(executable, args, options) {
   if (maxOutputBytes !== null && (!Number.isSafeInteger(maxOutputBytes) || maxOutputBytes < 1)) {
     throw new Error("process output limit is invalid");
   }
-  const child = spawn(executable, args, {
+  const pnpmInvocation = executable === "pnpm" ? resolvePnpmInvocation(args) : null;
+  const resolvedExecutable = pnpmInvocation?.executable ?? executable;
+  const resolvedArgs = pnpmInvocation?.args ?? args;
+  const child = spawn(resolvedExecutable, resolvedArgs, {
     cwd: options.cwd,
     env: options.env,
-    shell: false,
+    // The fallback .cmd adapter is used only when no direct pnpm script is
+    // available. Direct Node invocation keeps generic-command output free of
+    // cmd.exe command-echo noise on Windows.
+    shell: pnpmInvocation?.shell ?? false,
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
   });
@@ -1953,7 +1991,14 @@ export function detectHostPlatform() {
 }
 
 function versionLine(executable, args) {
-  return execFileSync(executable, args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim().replace(/^v/, "");
+  const pnpmInvocation = executable === "pnpm" ? resolvePnpmInvocation(args) : null;
+  const resolvedExecutable = pnpmInvocation?.executable ?? executable;
+  const resolvedArgs = pnpmInvocation?.args ?? args;
+  return execFileSync(resolvedExecutable, resolvedArgs, {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    shell: pnpmInvocation?.shell ?? false,
+  }).trim().replace(/^v/, "");
 }
 
 export function detectToolchain() {
