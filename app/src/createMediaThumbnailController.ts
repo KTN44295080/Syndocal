@@ -1,7 +1,8 @@
-import { createEffect, createMemo, createSignal, onCleanup, untrack, type Accessor } from "solid-js";
+import { batch, createEffect, createMemo, createSignal, onCleanup, untrack, type Accessor } from "solid-js";
 import type { MediaAssetId, MediaAssetSummary, VideoLayerSummary, VideoSourceKind } from "./types";
 import type { ProjectAuthorityToken } from "./projectAuthority";
 import { createLatestThumbnailBatch } from "./createLatestThumbnailBatch";
+import { readThumbnailWithRetry } from "./thumbnailReadRetry";
 
 interface Options {
   layers: Accessor<readonly VideoLayerSummary[]>;
@@ -28,7 +29,11 @@ export const createMediaThumbnailController = (options: Options) => {
   let mediaAssetThumbnailUrlCache: Record<number, string> = {};
   const videoThumbnailSignatures = new Map<number, string>();
   const mediaAssetThumbnailSignatures = new Map<number, string>();
-  const authorizeVideoThumbnailAccess = () => setVideoThumbnailAccessAuthorized(true);
+  const [reloadRequest, setReloadRequest] = createSignal(0);
+  const authorizeVideoThumbnailAccess = () => batch(() => {
+    setVideoThumbnailAccessAuthorized(true);
+    setReloadRequest(value => value + 1);
+  });
   const reset = () => {
     videoBatch.clear();
     assetBatch.clear();
@@ -77,6 +82,7 @@ export const createMediaThumbnailController = (options: Options) => {
     });
   });
   createEffect(() => {
+    reloadRequest(); // An explicit load action retries missing entries, not cached successes.
     const sources = JSON.parse(videoThumbnailSourceSignature()) as Array<{
       id: number;
       kind: VideoSourceKind;
@@ -108,7 +114,7 @@ export const createMediaThumbnailController = (options: Options) => {
         const signature = JSON.stringify(source);
         if (nextSignatures.get(source.id) === signature && nextUrls[source.id]) continue;
         try {
-          nextUrls[source.id] = await loadVideoLayerThumbnail(source.id);
+          nextUrls[source.id] = await readThumbnailWithRetry(() => loadVideoLayerThumbnail(source.id), isCurrent);
           nextSignatures.set(source.id, signature);
         } catch {
           delete nextUrls[source.id];
@@ -130,6 +136,7 @@ export const createMediaThumbnailController = (options: Options) => {
     });
   });
   createEffect(() => {
+    reloadRequest(); // An explicit load action retries missing entries, not cached successes.
     const sources = JSON.parse(mediaAssetThumbnailSourceSignature()) as Array<{
       id: MediaAssetId;
       kind: VideoSourceKind;
@@ -166,7 +173,8 @@ export const createMediaThumbnailController = (options: Options) => {
         const signature = JSON.stringify(source);
         if (nextSignatures.get(source.id) === signature && nextUrls[source.id]) continue;
         try {
-          nextUrls[source.id] = await loadMediaAssetThumbnail(source.id);
+          nextUrls[source.id] = await readThumbnailWithRetry(() => loadMediaAssetThumbnail(source.id),
+            () => isCurrent() && untrack(() => isProjectAuthorityIdentityCurrent(authority)));
           nextSignatures.set(source.id, signature);
         } catch {
           delete nextUrls[source.id];

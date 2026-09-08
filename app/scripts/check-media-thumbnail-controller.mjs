@@ -13,12 +13,19 @@ const laneCode = ts.transpileModule(laneSource, {
 }).outputText;
 const laneUrl = `data:text/javascript;base64,${Buffer.from(laneCode).toString("base64")}`;
 const { createLatestThumbnailBatch } = await import(laneUrl);
+const retrySource = await readFile(new URL("../src/thumbnailReadRetry.ts", import.meta.url), "utf8");
+const retryCode = ts.transpileModule(retrySource, {
+  compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
+}).outputText;
+const retryUrl = `data:text/javascript;base64,${Buffer.from(retryCode).toString("base64")}`;
+const { readThumbnailWithRetry } = await import(retryUrl);
 const code = ts.transpileModule(source, {
   compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
 }).outputText.replaceAll('from "solid-js"', `from "${solidUrl}"`)
-  .replaceAll('from "./createLatestThumbnailBatch"', `from "${laneUrl}"`);
+  .replaceAll('from "./createLatestThumbnailBatch"', `from "${laneUrl}"`)
+  .replaceAll('from "./thumbnailReadRetry"', `from "${retryUrl}"`);
 const { createMediaThumbnailController } = await import(`data:text/javascript;base64,${Buffer.from(code).toString("base64")}`);
-const flush = async () => { for (let i = 0; i < 6; i++) await Promise.resolve(); };
+const flush = async () => { for (let i = 0; i < 16; i++) await Promise.resolve(); };
 const authorityA = { project_epoch: 1, project_revision: 0, checkpoint_hash: "A" };
 const authorityB = { project_epoch: 2, project_revision: 0, checkpoint_hash: "B" };
 const layer = { id: 1, source: { kind: "File", path: "a.mp4" } };
@@ -185,3 +192,67 @@ function boundedFixture(initialAssets = [asset]) {
   assert.deepEqual([f.requests.layers.length, f.requests.assets.length], [1, 1], 'reset removes the pending successor');
   f.dispose();
 }
+
+// Retry policy is bounded and never treats authority/decode failures as transient.
+const busy = 'Thumbnail work is already queued or running; retry after it completes';
+const timeout = 'Thumbnail renderer wait timed out; retry after preview work completes';
+for (const error of [busy, new Error(timeout)]) {
+  let calls = 0, waits = 0;
+  const value = await readThumbnailWithRetry(async () => {
+    if (++calls === 1) throw error; return 'retried';
+  }, () => true, async () => { waits++; });
+  assert.equal(value, 'retried'); assert.equal(calls, 2); assert.equal(waits, 1);
+}
+{
+  let calls = 0, waits = 0;
+  await assert.rejects(readThumbnailWithRetry(async () => { calls++; throw new Error(busy); },
+    () => true, async () => { waits++; }), /already queued/);
+  assert.equal(calls, 2); assert.equal(waits, 1, 'no recursive retry');
+}
+for (const error of [new Error('decode failed'), new Error('project authority changed'), null]) {
+  let calls = 0, waits = 0;
+  try { await readThumbnailWithRetry(async () => { calls++; throw error; }, () => true,
+    async () => { waits++; }); assert.fail('expected rejection'); }
+  catch (actual) { assert.equal(actual, error); }
+  assert.equal(calls, 1); assert.equal(waits, 0);
+}
+{
+  let calls = 0, current = true, release;
+  const waiting = new Promise(resolve => { release = resolve; });
+  const result = readThumbnailWithRetry(async () => { calls++; throw busy; }, () => current, () => waiting);
+  await flush(); current = false; release();
+  await assert.rejects(result, /retired before retry/); assert.equal(calls, 1);
+  await assert.rejects(readThumbnailWithRetry(async () => { calls++; return 'wrong'; }, () => false), /retired before read/);
+  assert.equal(calls, 1);
+}
+{
+  const f = boundedFixture(); f.controller.authorizeVideoThumbnailAccess(); await flush();
+  f.requests.assets[0].reject(busy);
+  await new Promise(resolve => setTimeout(resolve, 130)); await flush();
+  assert.equal(f.requests.assets.length, 2, 'one transient retry is performed');
+  f.requests.assets[1].reject(busy);
+  await new Promise(resolve => setTimeout(resolve, 130)); await flush();
+  assert.equal(f.requests.assets.length, 2, 'persistent busy does not loop');
+  f.controller.authorizeVideoThumbnailAccess(); await flush();
+  assert.equal(f.requests.assets.length, 3, 'explicit load retries an absent unchanged-source entry');
+  f.requests.assets[2].resolve('manual-recovery'); await flush();
+  assert.equal(f.controller.mediaAssetThumbnails()[2], 'manual-recovery');
+  assert.deepEqual(f.peak, { layers: 1, assets: 1 });
+  f.dispose(); f.requests.layers[0].resolve('retired'); await flush();
+}
+{
+  const f = boundedFixture(); f.controller.authorizeVideoThumbnailAccess(); await flush();
+  f.requests.layers[0].resolve('cached-layer'); f.requests.assets[0].resolve('cached-asset'); await flush();
+  f.controller.authorizeVideoThumbnailAccess(); await flush();
+  assert.deepEqual([f.requests.layers.length, f.requests.assets.length], [1, 1], 'explicit load retains valid cached successes');
+  f.dispose();
+}
+{
+  const f = boundedFixture(); f.controller.authorizeVideoThumbnailAccess(); await flush();
+  f.requests.assets[0].reject(timeout); await flush();
+  f.controller.reset();
+  await new Promise(resolve => setTimeout(resolve, 130)); await flush();
+  assert.equal(f.requests.assets.length, 1, 'reset retires the scheduled retry before native work');
+  f.dispose(); f.requests.layers[0].resolve('retired'); await flush();
+}
+console.log('PASS bounded transient retry, terminal error rejection, stale retry retirement, explicit recovery and cache reuse');
