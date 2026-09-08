@@ -73,6 +73,8 @@ interface VideoControlPanelProps {
   mediaLibrary: {
     assets: MediaAssetSummary[];
     thumbnails: Record<number, string>;
+    thumbnailsBusy?: boolean;
+    thumbnailsAvailable?: boolean;
     availabilityById: Record<number, MediaAssetAvailability>;
     activeOperations: MediaAssetActiveOperation[];
     lastImportReport: MediaAssetImportReport | null;
@@ -156,6 +158,9 @@ export function VideoControlPanel(props: VideoControlPanelProps) {
   const importIssues = createMemo(() => props.mediaLibrary.lastImportReport?.entries.filter(
     (entry) => entry.status === "failed" || entry.status === "skipped",
   ) ?? []);
+  const thumbnailableAssets = createMemo(() => props.mediaLibrary.assets.filter(asset =>
+    asset.source.kind === "File" || asset.source.kind === "StillImage"));
+  const thumbnailsMissing = createMemo(() => thumbnailableAssets().some(asset => !props.mediaLibrary.thumbnails[asset.id]));
   const [previewAssetId, setPreviewAssetId] = createSignal<MediaAssetId | null>(null);
   const [previewAssetIdentity, setPreviewAssetIdentity] = createSignal<string | null>(null);
   const [previewFrameUrl, setPreviewFrameUrl] = createSignal("");
@@ -338,13 +343,15 @@ export function VideoControlPanel(props: VideoControlPanelProps) {
           <div class="videoMediaLibrarySurface">
             <div class="videoMediaLibraryActions">
               <span>Availability is machine-local and never saved in the project.</span>
-              <Show when={props.mediaLibrary.assets.length > 0 && !props.clipGrid.thumbnailsAuthorized}>
+              <Show when={thumbnailableAssets().length > 0 && (!props.clipGrid.thumbnailsAuthorized || (props.mediaLibrary.thumbnailsAvailable && (props.mediaLibrary.thumbnailsBusy || thumbnailsMissing())))}>
                 <button
                   data-media-library-thumbnail-request
-                  title="Read local media only after this explicit request"
+                  disabled={!props.mediaLibrary.thumbnailsAvailable || props.mediaLibrary.thumbnailsBusy}
+                  aria-busy={props.mediaLibrary.thumbnailsBusy}
+                  title={props.mediaLibrary.thumbnailsAvailable ? "Read local media only after this explicit request" : "Desktop required"}
                   onClick={props.clipGrid.onRequestThumbnails}
                 >
-                  Load Thumbnails
+                  {props.mediaLibrary.thumbnailsBusy ? "Loading Thumbnails" : props.clipGrid.thumbnailsAuthorized ? "Retry Thumbnails" : "Load Thumbnails"}
                 </button>
               </Show>
               <button

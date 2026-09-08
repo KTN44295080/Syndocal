@@ -529,13 +529,15 @@ assert.match(thumbnailControllerSource, /if \(!videoThumbnailAccessAuthorized\(\
 assert.match(thumbnailControllerSource, /readThumbnailWithRetry\(\(\) => loadVideoLayerThumbnail\(source\.id\), isCurrent\)/, "authorized layer thumbnail loading uses the bounded retry path");
 assert.match(thumbnailControllerSource, /readThumbnailWithRetry\(\(\) => loadMediaAssetThumbnail\(source\.id\),/, "authorized Media Library thumbnail loading uses the bounded retry path");
 assert.match(thumbnailControllerSource, /hash_algorithm:[\s\S]*?hash_hex:[\s\S]*?byte_size:/, "asset thumbnail cache identity fences source path and persisted content identity");
-assert.match(thumbnailControllerSource, /const videoBatch = createLatestThumbnailBatch\(\);[\s\S]*?const assetBatch = createLatestThumbnailBatch\(\);/, "layer and asset thumbnail work use independent latest-batch owners");
+assert.match(thumbnailControllerSource, /const videoBatch = createLatestThumbnailBatch\(setVideoThumbnailBusy\);[\s\S]*?const assetBatch = createLatestThumbnailBatch\(setMediaAssetThumbnailBusy\);/, "layer and asset thumbnail work use independent latest-batch owners");
 assert.match(thumbnailControllerSource, /videoBatch\.replace\(async \(isCurrent\) =>[\s\S]*?if \(!isCurrent\(\)\) return;/, "layer thumbnail work rejects retired batches before publication");
 assert.match(thumbnailControllerSource, /assetBatch\.replace\(async \(isCurrent\) =>[\s\S]*?isProjectAuthorityIdentityCurrent\(authority\)/, "asset thumbnail work rejects retired authority batches before publication");
-assert.match(thumbnailControllerSource, /setReloadRequest\(value => value \+ 1\)/, "explicit thumbnail authorization can retry missing entries");
+for (const lane of ["Video", "Asset"]) {
+  assert.ok(thumbnailControllerSource.includes(`set${lane}ReloadRequest(value => value + 1)`), "each independent lane retains explicit retry");
+}
 const mediaAssetThumbnailEffect = sliceBetween(
   thumbnailEffect,
-  "createEffect(() => {\n    reloadRequest(); // An explicit load action retries missing entries, not cached successes.\n    const sources = JSON.parse(mediaAssetThumbnailSourceSignature())",
+  "createEffect(() => {\n    assetReloadRequest(); // An explicit load action retries missing entries, not cached successes.\n    const sources = JSON.parse(mediaAssetThumbnailSourceSignature())",
   "  onCleanup(() => {",
   "Media Library thumbnail effect",
 );

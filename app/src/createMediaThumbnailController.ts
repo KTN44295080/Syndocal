@@ -23,16 +23,23 @@ export const createMediaThumbnailController = (options: Options) => {
   const [videoClipThumbnails, setVideoClipThumbnails] = createSignal<Record<number, string>>({});
   const [mediaAssetThumbnails, setMediaAssetThumbnails] = createSignal<Record<number, string>>({});
   const [videoThumbnailAccessAuthorized, setVideoThumbnailAccessAuthorized] = createSignal(false);
-  const videoBatch = createLatestThumbnailBatch();
-  const assetBatch = createLatestThumbnailBatch();
+  const [videoThumbnailBusy, setVideoThumbnailBusy] = createSignal(false);
+  const [mediaAssetThumbnailBusy, setMediaAssetThumbnailBusy] = createSignal(false);
+  const videoBatch = createLatestThumbnailBatch(setVideoThumbnailBusy);
+  const assetBatch = createLatestThumbnailBatch(setMediaAssetThumbnailBusy);
+  let disposed = false;
   let videoThumbnailUrlCache: Record<number, string> = {};
   let mediaAssetThumbnailUrlCache: Record<number, string> = {};
   const videoThumbnailSignatures = new Map<number, string>();
   const mediaAssetThumbnailSignatures = new Map<number, string>();
-  const [reloadRequest, setReloadRequest] = createSignal(0);
+  const [videoReloadRequest, setVideoReloadRequest] = createSignal(0);
+  const [assetReloadRequest, setAssetReloadRequest] = createSignal(0);
   const authorizeVideoThumbnailAccess = () => batch(() => {
+    if (disposed) return;
     setVideoThumbnailAccessAuthorized(true);
-    setReloadRequest(value => value + 1);
+    // Repeated clicks never retire active work; the independent idle lane may retry.
+    if (!untrack(videoThumbnailBusy)) setVideoReloadRequest(value => value + 1);
+    if (!untrack(mediaAssetThumbnailBusy)) setAssetReloadRequest(value => value + 1);
   });
   const reset = () => {
     videoBatch.clear();
@@ -82,7 +89,7 @@ export const createMediaThumbnailController = (options: Options) => {
     });
   });
   createEffect(() => {
-    reloadRequest(); // An explicit load action retries missing entries, not cached successes.
+    videoReloadRequest(); // An explicit load action retries missing entries, not cached successes.
     const sources = JSON.parse(videoThumbnailSourceSignature()) as Array<{
       id: number;
       kind: VideoSourceKind;
@@ -136,7 +143,7 @@ export const createMediaThumbnailController = (options: Options) => {
     });
   });
   createEffect(() => {
-    reloadRequest(); // An explicit load action retries missing entries, not cached successes.
+    assetReloadRequest(); // An explicit load action retries missing entries, not cached successes.
     const sources = JSON.parse(mediaAssetThumbnailSourceSignature()) as Array<{
       id: MediaAssetId;
       kind: VideoSourceKind;
@@ -196,12 +203,24 @@ export const createMediaThumbnailController = (options: Options) => {
     });
   });
   onCleanup(() => {
+    disposed = true;
     // Retain active reads until settled; discard successors and stale results.
     videoBatch.dispose();
     assetBatch.dispose();
   });
   return {
     videoClipThumbnails, mediaAssetThumbnails, videoThumbnailAccessAuthorized,
-    authorizeVideoThumbnailAccess, reset,
+    authorizeVideoThumbnailAccess, videoThumbnailBusy, mediaAssetThumbnailBusy, reset,
+    layerThumbnailView: {
+      get thumbnails() { return videoClipThumbnails(); },
+      get thumbnailsAuthorized() { return videoThumbnailAccessAuthorized(); },
+      get thumbnailsBusy() { return videoThumbnailBusy(); },
+      get thumbnailsAvailable() { return isTauriRuntime(); },
+    },
+    assetThumbnailView: {
+      get thumbnails() { return mediaAssetThumbnails(); },
+      get thumbnailsBusy() { return mediaAssetThumbnailBusy(); },
+      get thumbnailsAvailable() { return isTauriRuntime(); },
+    },
   };
 };

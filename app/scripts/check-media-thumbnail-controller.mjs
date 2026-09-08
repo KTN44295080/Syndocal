@@ -256,3 +256,76 @@ for (const error of [new Error('decode failed'), new Error('project authority ch
   f.dispose(); f.requests.layers[0].resolve('retired'); await flush();
 }
 console.log('PASS bounded transient retry, terminal error rejection, stale retry retirement, explicit recovery and cache reuse');
+
+// Busy is worker lifetime, not permission: clear must not claim an outstanding read ended.
+{
+  const observed = []; let release;
+  const gate = createLatestThumbnailBatch(value => observed.push(value));
+  const held = new Promise(resolve => { release = resolve; });
+  gate.replace(async () => { await held; }, error => { throw error; });
+  gate.clear();
+  assert.deepEqual(observed, [true]);
+  let successors = 0;
+  for (let i = 0; i < 20; i++) gate.replace(async () => { successors++; }, () => {});
+  release(); await flush();
+  assert.equal(successors, 1); assert.deepEqual(observed, [true, false]);
+  gate.dispose();
+}
+{
+  const f = boundedFixture();
+  assert.equal(f.controller.videoThumbnailBusy(), false);
+  assert.equal(f.controller.mediaAssetThumbnailBusy(), false);
+  f.controller.authorizeVideoThumbnailAccess(); await flush();
+  for (let i = 0; i < 30; i++) f.controller.authorizeVideoThumbnailAccess();
+  assert.deepEqual([f.requests.layers.length, f.requests.assets.length], [1, 1]);
+  assert.equal(f.controller.videoThumbnailBusy(), true);
+  assert.equal(f.controller.mediaAssetThumbnailBusy(), true);
+  f.requests.assets[0].reject(new Error('decode unavailable')); await flush();
+  assert.equal(f.controller.mediaAssetThumbnailBusy(), false);
+  assert.equal(f.controller.videoThumbnailBusy(), true);
+  f.controller.authorizeVideoThumbnailAccess(); await flush();
+  assert.deepEqual([f.requests.layers.length, f.requests.assets.length], [1, 2]);
+  f.requests.layers[0].resolve('not-retired-by-click');
+  f.requests.assets[1].resolve('retry-recovered'); await flush();
+  assert.equal(f.controller.videoClipThumbnails()[1], 'not-retired-by-click');
+  assert.equal(f.controller.mediaAssetThumbnails()[2], 'retry-recovered');
+  assert.equal(f.controller.videoThumbnailBusy(), false);
+  assert.equal(f.controller.mediaAssetThumbnailBusy(), false);
+  f.controller.authorizeVideoThumbnailAccess(); await flush();
+  assert.deepEqual([f.requests.layers.length, f.requests.assets.length], [1, 2], 'successful caches do not reload');
+  f.dispose();
+}
+{
+  const f = boundedFixture(); f.controller.authorizeVideoThumbnailAccess(); await flush();
+  f.controller.reset();
+  assert.equal(f.controller.videoThumbnailAccessAuthorized(), false);
+  assert.equal(f.controller.videoThumbnailBusy(), true);
+  assert.equal(f.controller.mediaAssetThumbnailBusy(), true);
+  f.dispose(); f.controller.authorizeVideoThumbnailAccess();
+  assert.equal(f.controller.videoThumbnailAccessAuthorized(), false);
+  f.requests.layers[0].resolve('old'); f.requests.assets[0].resolve('old'); await flush();
+  assert.equal(f.controller.videoThumbnailBusy(), false);
+  assert.equal(f.controller.mediaAssetThumbnailBusy(), false);
+  assert.deepEqual(f.controller.videoClipThumbnails(), {});
+  assert.deepEqual(f.controller.mediaAssetThumbnails(), {});
+  assert.deepEqual([f.requests.layers.length, f.requests.assets.length], [1, 1]);
+}
+console.log('PASS independent busy lifetimes, repeated-click admission, visible retry eligibility and retired-worker ownership');
+
+{
+  const { mergeProps } = await import(solidUrl);
+  const f = boundedFixture();
+  const layerView = mergeProps(f.controller.layerThumbnailView, { label: 'unrelated' });
+  const assetView = mergeProps(f.controller.assetThumbnailView, { label: 'unrelated' });
+  assert.equal(layerView.thumbnailsAuthorized, false);
+  f.controller.authorizeVideoThumbnailAccess(); await flush();
+  assert.equal(layerView.thumbnailsAuthorized, true);
+  assert.equal(layerView.thumbnailsBusy, true); assert.equal(assetView.thumbnailsBusy, true);
+  f.requests.layers[0].resolve('view-layer'); f.requests.assets[0].resolve('view-asset'); await flush();
+  assert.equal(layerView.thumbnailsBusy, false); assert.equal(assetView.thumbnailsBusy, false);
+  assert.equal(layerView.thumbnails[1], 'view-layer'); assert.equal(assetView.thumbnails[2], 'view-asset');
+  f.controller.reset();
+  assert.equal(layerView.thumbnailsAuthorized, false); assert.deepEqual(assetView.thumbnails, {});
+  f.dispose();
+}
+console.log('PASS reactive thumbnail view bindings across loading, completion and reset');

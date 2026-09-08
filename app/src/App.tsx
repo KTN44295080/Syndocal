@@ -1,3 +1,4 @@
+import { mergeProps as mergeThumbnailViewProps } from "solid-js";
 import { mountAgentBridge } from "./agentBridgeMount";
 import { createProjectTransactionRecoveryController } from "./createProjectTransactionRecoveryController";
 import { createMediaThumbnailController } from "./createMediaThumbnailController";
@@ -27424,10 +27425,8 @@ export default function App() {
             onImportMultiple: importMediaFiles,
             onAddLayer: addVideoLayer,
           }}
-          clipGrid={{
+          clipGrid={mergeThumbnailViewProps(thumbnailController.layerThumbnailView, {
             get layers() { return snapshot().video.layers; },
-            get thumbnails() { return videoClipThumbnails(); },
-            get thumbnailsAuthorized() { return videoThumbnailAccessAuthorized(); },
             get fadeMs() { return videoOutputFadeMs(); },
             get audioMonitorVolume() { return videoAudioMonitorVolume(); },
             get audioMonitorLayerIds() { return videoAudioMonitorStatus().active_layer_ids; },
@@ -27448,7 +27447,7 @@ export default function App() {
             get liveAudioInputDevices() { return liveAudioInputDevices(); },
             get selectedLiveAudioInputDevice() { return selectedLiveAudioInputDevice(); },
             get lastKnownLiveAudioInputDeviceIdentity() { return lastKnownLiveAudioInputDeviceIdentity(); },
-            localize: (source) => translateUiText(source, uiLocale()),
+            localize: (source: string) => translateUiText(source, uiLocale()),
             get liveAudioInputCapabilities() { return liveAudioInputCapabilities(); },
             get liveAudioInputCapabilitiesBusy() { return liveAudioInputCapabilitiesBusy(); },
             get liveAudioInputSampleRate() { return liveAudioInputSampleRate(); },
@@ -27476,7 +27475,7 @@ export default function App() {
             onRefreshAudioOutputDevices: refreshAudioOutputDevices,
             onAssignDeck: assignVideoDeck,
             onSetAbMix: applyVideoAbMix,
-            onCommitAbMix: (mix) => applyVideoAbMix(mix, true),
+            onCommitAbMix: (mix: number) => applyVideoAbMix(mix, true),
             onLaunchDeck: launchVideoDeck,
             onStartRecording: startVideoOutputRecording,
             onStopRecording: stopVideoOutputRecording,
@@ -27495,10 +27494,10 @@ export default function App() {
             onLaunch: launchVideoClipFromGrid,
             onTake: takeVideoClipFromGrid,
             onStop: stopVideoClipFromGrid,
-            onMonitorAudio: (layerId, volume) => playVideoLayerAudioMonitor(layerId, volume, selectedAudioOutputDevice()),
+            onMonitorAudio: (layerId: number, volume: number) => playVideoLayerAudioMonitor(layerId, volume, selectedAudioOutputDevice()),
             onStopAudio: stopVideoLayerAudioMonitor,
             onRequestThumbnails: authorizeVideoThumbnailAccess,
-          }}
+          })}
           clipSlotBank={{
             mode: "edit",
             get layers() { return snapshot().video.layers; },
@@ -27538,9 +27537,8 @@ export default function App() {
             get label() { return selectedVideoClipSlotRuntime()?.transition ? "Reverse" : "Take"; },
             onTake: takeSelectedVideoClipSlot,
           }}
-          mediaLibrary={{
+          mediaLibrary={mergeThumbnailViewProps(thumbnailController.assetThumbnailView, {
             get assets() { return snapshot().video.media_assets; },
-            get thumbnails() { return mediaAssetThumbnails(); },
             get availabilityById() { return mediaAssetAvailabilityById(); },
             get activeOperations() { return activeMediaAssetOperations(); },
             get lastImportReport() { return lastMediaAssetImportReport(); },
@@ -27551,7 +27549,7 @@ export default function App() {
             onPreviewFrame: loadMediaAssetPreviewFrame,
             onPreviewEnd: endMediaAssetPreview,
             onCancelOperation: cancelMediaAssetOperation,
-          }}
+          })}
           autoVj={{
             get snapshot() { return snapshot().video.auto_vj ?? emptyAutoVjSnapshot; },
             get layers() { return snapshot().video.layers; },

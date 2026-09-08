@@ -1685,6 +1685,8 @@ const japaneseText: Record<string, string> = {
   "Live source · inspected": "ライブソース・検証済み",
   "Live sources cannot be relinked to a file": "ライブソースはファイルへ再リンクできません",
   "Load Thumbnails": "サムネイルを読み込む",
+  "Loading Thumbnails": "サムネイル読込中",
+  "Retry Thumbnails": "サムネイルを再取得",
   "Media import failure details": "メディア読み込み失敗の詳細",
   "Media import canceled.": "メディア読み込みをキャンセルしました。",
   "Media Library": "メディアライブラリ",

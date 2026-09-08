@@ -6,7 +6,7 @@ interface ThumbnailBatch {
 }
 
 /** One running batch and one replaceable successor; no detached native reads. */
-export const createLatestThumbnailBatch = () => {
+export const createLatestThumbnailBatch = (onBusyChange: (busy: boolean) => void = () => {}) => {
   let generation = 0;
   let running = false;
   let disposed = false;
@@ -17,6 +17,7 @@ export const createLatestThumbnailBatch = () => {
   };
   const drain = async () => {
     running = true;
+    onBusyChange(true);
     try {
       while (!disposed && pending) {
         const batch = pending;
@@ -30,6 +31,7 @@ export const createLatestThumbnailBatch = () => {
       }
     } finally {
       running = false;
+      onBusyChange(false);
     }
   };
   return {

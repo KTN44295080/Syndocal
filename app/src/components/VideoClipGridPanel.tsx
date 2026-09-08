@@ -11,6 +11,8 @@ export interface VideoClipGridPanelProps extends LiveAudioInputRailProps {
   layers: VideoLayerSummary[];
   thumbnails: Record<number, string>;
   thumbnailsAuthorized: boolean;
+  thumbnailsBusy?: boolean;
+  thumbnailsAvailable?: boolean;
   fadeMs: number;
   audioMonitorVolume: number;
   audioMonitorLayerIds: number[];
@@ -71,6 +73,8 @@ export function VideoClipGridPanel(props: VideoClipGridPanelProps) {
     const start = bank() * CLIPS_PER_BANK;
     return props.layers.slice(start, start + CLIPS_PER_BANK);
   });
+  const thumbnailsMissing = createMemo(() => props.layers.some(layer =>
+    (layer.source.kind === "File" || layer.source.kind === "StillImage") && !props.thumbnails[layer.id]));
   const previewLayer = createMemo(() =>
     props.layers.find((layer) => layer.id === props.previewLayerId) ?? null,
   );
@@ -101,13 +105,15 @@ export function VideoClipGridPanel(props: VideoClipGridPanelProps) {
           <h3>Clip Grid</h3>
           <span>{props.layers.length} clip(s)</span>
         </div>
-        <Show when={props.layers.length > 0 && !props.thumbnailsAuthorized}>
+        <Show when={props.layers.length > 0 && (!props.thumbnailsAuthorized || (props.thumbnailsAvailable && (props.thumbnailsBusy || thumbnailsMissing())))}>
           <button
             data-vj-thumbnail-request
-            title="Read local media only after this explicit request"
+            disabled={!props.thumbnailsAvailable || props.thumbnailsBusy}
+            aria-busy={props.thumbnailsBusy}
+            title={props.thumbnailsAvailable ? "Read local media only after this explicit request" : "Desktop required"}
             onClick={props.onRequestThumbnails}
           >
-            Load Thumbnails
+            {props.thumbnailsBusy ? "Loading Thumbnails" : props.thumbnailsAuthorized ? "Retry Thumbnails" : "Load Thumbnails"}
           </button>
         </Show>
         <details class={`videoClipUtilities ${props.compact ? "compact" : ""}`} open={!props.compact}>
