@@ -37,15 +37,20 @@ pub struct AgentPrincipalId(String);
 
 impl AgentPrincipalId {
     pub fn new(value: impl Into<String>) -> Result<Self, AgentAuthorityError> {
-        let value = value.into();
-        if !bounded_ascii(&value, MAX_PRINCIPAL_BYTES) {
-            return Err(AgentAuthorityError::InvalidPrincipal);
-        }
-        Ok(Self(value))
+        let principal = Self(value.into());
+        principal.validate()?;
+        Ok(principal)
     }
 
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+
+    fn validate(&self) -> Result<(), AgentAuthorityError> {
+        if !bounded_ascii(&self.0, MAX_PRINCIPAL_BYTES) {
+            return Err(AgentAuthorityError::InvalidPrincipal);
+        }
+        Ok(())
     }
 }
 
@@ -102,22 +107,28 @@ impl AgentGrant {
         operation_id: impl Into<String>,
         project_id: Option<String>,
     ) -> Result<Self, AgentAuthorityError> {
-        let operation_id = operation_id.into();
-        if !bounded_ascii(&operation_id, MAX_OPERATION_BYTES) {
+        let grant = Self {
+            adapter,
+            capability,
+            operation_id: operation_id.into(),
+            project_id,
+        };
+        grant.validate()?;
+        Ok(grant)
+    }
+
+    fn validate(&self) -> Result<(), AgentAuthorityError> {
+        if !bounded_ascii(&self.operation_id, MAX_OPERATION_BYTES) {
             return Err(AgentAuthorityError::InvalidOperation);
         }
-        if project_id
+        if self
+            .project_id
             .as_deref()
             .is_some_and(|value| !bounded_ascii(value, MAX_PROJECT_BYTES))
         {
             return Err(AgentAuthorityError::InvalidProject);
         }
-        Ok(Self {
-            adapter,
-            capability,
-            operation_id,
-            project_id,
-        })
+        Ok(())
     }
 }
 
@@ -141,6 +152,7 @@ pub struct AgentRequestContext {
 
 impl AgentRequestContext {
     pub fn validate(&self) -> Result<(), AgentAuthorityError> {
+        self.principal.validate()?;
         if self.principal_incarnation == 0 {
             return Err(AgentAuthorityError::InvalidIncarnation);
         }
@@ -251,6 +263,7 @@ impl AgentAuthority {
         principal: AgentPrincipalId,
         incarnation: u64,
     ) -> Result<(), AgentAuthorityError> {
+        principal.validate()?;
         if self.kill_switch_active {
             return Err(AgentAuthorityError::KillSwitchActive);
         }
@@ -302,6 +315,7 @@ impl AgentAuthority {
         incarnation: u64,
         grant: AgentGrant,
     ) -> Result<AgentAuthorization, AgentAuthorityError> {
+        grant.validate()?;
         let state = self.active_state_mut(principal, incarnation)?;
         if state.grants.len() >= MAX_GRANTS_PER_PRINCIPAL && !state.grants.contains(&grant) {
             return Err(AgentAuthorityError::GrantCapacity);
@@ -985,5 +999,30 @@ mod tests {
         );
         assert!(!authority.is_kill_switch_active());
         assert!(!authority.principals.get(&id).unwrap().revoked);
+    }
+
+    #[test]
+    fn admission_revalidates_deserialized_principal_and_grant_values() {
+        let invalid_principal = AgentPrincipalId("client with spaces".to_string());
+        let mut authority = AgentAuthority::default();
+        assert_eq!(
+            authority.pair_external(invalid_principal, 1),
+            Err(AgentAuthorityError::InvalidPrincipal)
+        );
+        assert!(authority.principals.is_empty());
+
+        let id = principal("client-a");
+        authority.pair_external(id.clone(), 7).unwrap();
+        let invalid_grant = AgentGrant {
+            adapter: AdapterKind::ExternalMcp,
+            capability: AgentCapability::Read,
+            operation_id: "operation with spaces".to_string(),
+            project_id: None,
+        };
+        assert_eq!(
+            authority.grant(&id, 7, invalid_grant),
+            Err(AgentAuthorityError::InvalidOperation)
+        );
+        assert!(authority.principals.get(&id).unwrap().grants.is_empty());
     }
 }

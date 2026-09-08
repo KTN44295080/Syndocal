@@ -34,7 +34,7 @@ owned by the future backend/desktop adapter and are explicit open boundaries.
 
 ## Regression coverage
 
-The nine focused protocol tests cover:
+The ten focused protocol tests cover:
 
 - safe-mode pairing with explicit read/runtime grant admission;
 - promotion without implicit permission and exact grant matching;
@@ -49,6 +49,8 @@ The nine focused protocol tests cover:
   incarnation cannot validate against the replacement incarnation;
 - pairing rejection while the kill switch is active until it is explicitly
   cleared.
+- admission revalidation of deserialized/forged principal and grant values,
+  with invalid values rejected before authority state changes.
 
 No assertion was weakened. The expired/revoked case was corrected to assert
 the stronger current-principal rejection (`PrincipalRevoked`) before the
@@ -63,7 +65,7 @@ was involved.
 | Command / gate | Result |
 | --- | --- |
 | `rustfmt --edition 2021 crates/protocol/src/agent_authority.rs` | PASS |
-| `cargo test -p protocol --release --locked agent_authority -- --nocapture --test-threads=1` | PASS — 9 passed, 0 failed; 207 filtered |
+| `cargo test -p protocol --release --locked agent_authority -- --nocapture --test-threads=1` | PASS — 10 passed, 0 failed; 207 filtered |
 | `pnpm.cmd --dir app run check:release` | PASS — static release contract, 516 native admission commands, media/snapshot/agent/output/safety/ASIO/timeline/video gates, and development metadata |
 | `pnpm.cmd --dir app tauri build --no-bundle` | PASS — exact wrapper, Vite/TypeScript and release native build |
 | New EXE native launch/state/thumbnail rejection probe | PASS — one responsive maximized window, Standby, snapshot shape, Channel-backed invalid asset/layer thumbnail IPC rejection, clean exit/listener |
@@ -71,7 +73,7 @@ was involved.
 | Real file missing → UI Retry → restore → recovery | Not run; the approved file-moving helper remained blocked and this evidence is not claimed |
 
 Native evidence is in the local ignored run directory
-`target/qa/native-final-validation-20260909-09/native-final-validation.json`.
+`target/qa/native-final-validation-20260909-10/native-final-validation.json`.
 The saved probe's obsolete thumbnail arguments were not used as evidence; an
 in-memory adaptation supplied the current Tauri `started` Channel serialization
 from the actual WebView, with the original probe file left unchanged.
@@ -81,7 +83,7 @@ The resulting exact executable was:
 - `target/release/syndocal.exe`
 - product version `1.2.0-alpha.69`
 - `64,699,904` bytes
-- SHA-256 `F32CE630FD7E31D3857A0F66948C05D712073A326C0A5497A14660753B025905`
+- SHA-256 `C977A1EBFBB78BEB2D3686A652D1F5CF348DB3C20C9B9D591DF0E9A9950B0197`
 
 ## Remaining boundary
 
