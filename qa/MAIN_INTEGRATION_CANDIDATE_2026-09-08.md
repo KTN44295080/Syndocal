@@ -83,3 +83,50 @@ Evidence is retained under `target/qa/main-integration-20260908/` (Rust summarie
 frontend/baseline logs and independent review). Seven old Mac files retain their
 starting hashes and remain outside the commit. No installer, release, device or
 venue acceptance, final native build, or main update is claimed by this checkpoint.
+
+## 2026-09-08 final candidate validation
+
+The selected tree remained at `d5f64fd8e79974a4b5fdafcb49165c74a6372c05` after
+the fresh source review; no product source was edited during this validation.
+The thumbnail retry, latest-batch/controller, native-worker ownership, and strict
+handler-inventory changes were re-reviewed against the source and their focused
+regressions. The review found no blocker. The JavaScript generation fence still
+retires stale results without claiming to force-stop an already-running native
+worker; worker ownership remains held until the blocking operation returns.
+
+Fresh checks, all exit 0:
+
+- `pnpm --dir app run check:media-thumbnails`: focused controller checks passed,
+  including bounded transient retry, terminal failure, stale retry retirement,
+  explicit recovery, and valid-cache reuse.
+- `pnpm --dir app exec tsc --noEmit`.
+- `pnpm --dir app run check:release`: exact 515-command native inventory,
+  SHA-256 `6414db9fd02f7147ecc6b7503607bdb77e07a871e02f5b0c1cdd7742a48e37b5`,
+  and 18 negative fixtures rejected.
+- `pnpm --dir app run check:frontend-invokes`: exact 456-command inventory.
+- `pnpm --dir app run check:tauri-build-wrapper`: 243 assertions and 27 hostile
+  mutation fixtures.
+- `git diff --check`: no whitespace errors. The displayed LF/CRLF notices were
+  for unrelated uncommitted Mac work, which remains outside this change.
+
+The no-bundle executable at `target/release/syndocal.exe` was matched to source
+HEAD and the recorded artifact: version `1.2.0-alpha.69`, 64,528,896 bytes,
+SHA-256 `E042B928F7B0918A31118D19E0DBA5E9FE0DCE990F28A9F0BF9FD55368D47CED`.
+The new evidence is under
+`target/qa/integration-native-20260908-final-run-01/`. Its real-WebView probe
+read the snapshot, accepted omitted `media_assets`, rejected invalid absent-ID
+layer and asset requests with their specific missing-resource errors twice each,
+and rejected the excluded cancellation command. It observed one responsive,
+maximized `Syndocal` window; it issued zero project mutations and zero physical
+output commands. The owned application exited and the loopback debug listener
+count returned to zero.
+
+This is selected-scope integration evidence only. GUI cancellation, successful
+thumbnail decoding, decoder-stop latency, Mac validation, ASIO/NDI/MIDI hardware,
+physical output, signing/notarization, release publication, and venue acceptance
+remain outside this checkpoint. The known main-baseline checker failures remain
+unchanged and are not covered by this candidate result.
+
+Final status: selected candidate is ready for main integration. The seven
+uncommitted Mac files and the unrelated `check-frontend-command-routing.mjs`
+working-tree state remain unowned and must not be staged.
