@@ -1,0 +1,97 @@
+{
+  "schemaVersion": 1,
+  "node": "v22.22.1",
+  "platform": "win32",
+  "sourceHashes": {
+    "app": "bd6a01a7c717d761f348145c1df33860ba5d8fcbf56ec109b28e709e98e658f3",
+    "liveProjection": "8581aa3bf52afce94c23b11eb9bf7732c23b914420db324d91dad443588f9558"
+  },
+  "scope": "App sync/prefix source harness and synthetic frontend projection timings; no real-show/native/IPC/lock/GPU measurement",
+  "paths": [
+    {
+      "name": "full-response",
+      "liveProjections": 2,
+      "fixturePublications": 2,
+      "dmxPublications": 2,
+      "editorApplies": 1
+    },
+    {
+      "name": "delta-with-ui",
+      "liveProjections": 2,
+      "fixturePublications": 2,
+      "dmxPublications": 2,
+      "editorApplies": 1
+    },
+    {
+      "name": "delta-live-only",
+      "liveProjections": 1,
+      "fixturePublications": 1,
+      "dmxPublications": 1,
+      "editorApplies": 0
+    },
+    {
+      "name": "stale-rejected",
+      "liveProjections": 0,
+      "fixturePublications": 0,
+      "dmxPublications": 0,
+      "editorApplies": 0
+    }
+  ],
+  "workloads": [
+    {
+      "fixtures": 64,
+      "controlsPerFixture": 8,
+      "activeCues": 8,
+      "once": {
+        "samples": 200,
+        "p50_ms": 0.029999999999972715,
+        "p95_ms": 0.05089999999995598,
+        "max_ms": 0.30589999999995143
+      },
+      "twice": {
+        "samples": 200,
+        "p50_ms": 0.05980000000010932,
+        "p95_ms": 0.10009999999999764,
+        "max_ms": 1.306699999999978
+      },
+      "inactiveReturnsOriginalArray": true
+    },
+    {
+      "fixtures": 512,
+      "controlsPerFixture": 8,
+      "activeCues": 8,
+      "once": {
+        "samples": 200,
+        "p50_ms": 0.25149999999996453,
+        "p95_ms": 0.5233000000000629,
+        "max_ms": 0.86749999999995
+      },
+      "twice": {
+        "samples": 200,
+        "p50_ms": 0.5050999999999704,
+        "p95_ms": 0.9449000000000751,
+        "max_ms": 1.2882999999999356
+      },
+      "inactiveReturnsOriginalArray": true
+    },
+    {
+      "fixtures": 2048,
+      "controlsPerFixture": 8,
+      "activeCues": 8,
+      "once": {
+        "samples": 200,
+        "p50_ms": 1.0343000000000302,
+        "p95_ms": 1.6178999999999633,
+        "max_ms": 1.9501999999999953
+      },
+      "twice": {
+        "samples": 200,
+        "p50_ms": 2.125,
+        "p95_ms": 2.943499999999972,
+        "max_ms": 3.414600000000064
+      },
+      "inactiveReturnsOriginalArray": true
+    }
+  ],
+  "timingAssertions": false
+}
