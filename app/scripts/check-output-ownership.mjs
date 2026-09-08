@@ -738,7 +738,7 @@ assert.match(spoutTransport, /injected_spout_send_failure_fences_while_frame_per
 const displayCreationHelper = sliceBetween(
   appBackend,
   "fn with_output_resource_creation_lease",
-  "\nfn stop_video_output_recording_runtime",
+  "fn with_output_resource_creation_lease_with_cleanup",
   "Display output creation helper",
 );
 for (const marker of [
