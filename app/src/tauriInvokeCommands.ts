@@ -52,6 +52,7 @@ export const FRONTEND_TAURI_INVOKE_COMMANDS = [
   "begin_project_transaction",
   "cache_gdtf_from_share",
   "cancel_media_asset_operation",
+  "cancel_native_thumbnail_request_v1",
   "cancel_pane_window_close",
   "cancel_project_transaction",
   "cancel_queued_video_clip_slot_authoritative",

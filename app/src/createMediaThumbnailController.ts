@@ -10,8 +10,8 @@ interface Options {
   projectMappingsAuthority: Accessor<ProjectAuthorityToken>;
   isProjectAuthorityIdentityCurrent: (authority: ProjectAuthorityToken) => boolean;
   isTauriRuntime: () => boolean;
-  loadVideoLayerThumbnail: (id: number) => Promise<string>;
-  loadMediaAssetThumbnail: (id: MediaAssetId) => Promise<string>;
+  loadVideoLayerThumbnail: (id: number, signal: AbortSignal) => Promise<string>;
+  loadMediaAssetThumbnail: (id: MediaAssetId, signal: AbortSignal) => Promise<string>;
 }
 
 /** Owns opt-in thumbnail caches; project replacement resets permission and both batches. */
@@ -113,23 +113,26 @@ export const createMediaThumbnailController = (options: Options) => {
       setVideoClipThumbnails(videoThumbnailUrlCache);
       return;
     }
-    videoBatch.replace(async (isCurrent) => {
+    videoBatch.replace(async (isCurrent, signal) => {
       const nextUrls = { ...videoThumbnailUrlCache };
       const nextSignatures = new Map(videoThumbnailSignatures);
       for (const source of sources) {
-        if (!isCurrent()) return;
+        if (!isCurrent() || signal.aborted) return;
         const signature = JSON.stringify(source);
         if (nextSignatures.get(source.id) === signature && nextUrls[source.id]) continue;
         try {
-          nextUrls[source.id] = await readThumbnailWithRetry(() => loadVideoLayerThumbnail(source.id), isCurrent);
+          nextUrls[source.id] = await readThumbnailWithRetry(
+            () => loadVideoLayerThumbnail(source.id, signal),
+            () => isCurrent() && !signal.aborted,
+          );
           nextSignatures.set(source.id, signature);
         } catch {
           delete nextUrls[source.id];
           nextSignatures.delete(source.id);
         }
-        if (!isCurrent()) return;
+        if (!isCurrent() || signal.aborted) return;
       }
-      if (!isCurrent()) return;
+      if (!isCurrent() || signal.aborted) return;
       videoThumbnailUrlCache = nextUrls;
       videoThumbnailSignatures.clear();
       for (const [layerId, signature] of nextSignatures) {
@@ -172,26 +175,29 @@ export const createMediaThumbnailController = (options: Options) => {
       setMediaAssetThumbnails(mediaAssetThumbnailUrlCache);
       return;
     }
-    assetBatch.replace(async (isCurrent) => {
+    assetBatch.replace(async (isCurrent, signal) => {
       const nextUrls = { ...mediaAssetThumbnailUrlCache };
       const nextSignatures = new Map(mediaAssetThumbnailSignatures);
       for (const source of thumbnailable) {
-        if (!isCurrent() || !untrack(() => isProjectAuthorityIdentityCurrent(authority))) return;
+        if (!isCurrent() || signal.aborted || !untrack(() => isProjectAuthorityIdentityCurrent(authority))) return;
         const signature = JSON.stringify(source);
         if (nextSignatures.get(source.id) === signature && nextUrls[source.id]) continue;
         try {
-          nextUrls[source.id] = await readThumbnailWithRetry(() => loadMediaAssetThumbnail(source.id),
-            () => isCurrent() && untrack(() => isProjectAuthorityIdentityCurrent(authority)));
+          nextUrls[source.id] = await readThumbnailWithRetry(
+            () => loadMediaAssetThumbnail(source.id, signal),
+            () => isCurrent() && !signal.aborted
+              && untrack(() => isProjectAuthorityIdentityCurrent(authority)),
+          );
           nextSignatures.set(source.id, signature);
         } catch {
           delete nextUrls[source.id];
           nextSignatures.delete(source.id);
         }
-        if (!isCurrent() || !untrack(() => isProjectAuthorityIdentityCurrent(authority))) return;
+        if (!isCurrent() || signal.aborted || !untrack(() => isProjectAuthorityIdentityCurrent(authority))) return;
       }
       // Cache hits can reach this check synchronously inside the effect. Read
       // current authority without subscribing beyond the durable signature.
-      if (!isCurrent() || !untrack(() => isProjectAuthorityIdentityCurrent(authority))) return;
+      if (!isCurrent() || signal.aborted || !untrack(() => isProjectAuthorityIdentityCurrent(authority))) return;
       mediaAssetThumbnailUrlCache = nextUrls;
       mediaAssetThumbnailSignatures.clear();
       for (const [assetId, signature] of nextSignatures) mediaAssetThumbnailSignatures.set(assetId, signature);

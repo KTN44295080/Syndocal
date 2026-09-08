@@ -1,7 +1,7 @@
 type CurrentBatch = () => boolean;
 interface ThumbnailBatch {
   generation: number;
-  run: (isCurrent: CurrentBatch) => Promise<void>;
+  run: (isCurrent: CurrentBatch, signal: AbortSignal) => Promise<void>;
   onError: (error: unknown) => void;
 }
 
@@ -11,9 +11,11 @@ export const createLatestThumbnailBatch = (onBusyChange: (busy: boolean) => void
   let running = false;
   let disposed = false;
   let pending: ThumbnailBatch | undefined;
+  let activeController: AbortController | undefined;
   const clear = () => {
     generation += 1;
     pending = undefined;
+    activeController?.abort();
   };
   const drain = async () => {
     running = true;
@@ -23,10 +25,14 @@ export const createLatestThumbnailBatch = (onBusyChange: (busy: boolean) => void
         const batch = pending;
         pending = undefined;
         const isCurrent = () => !disposed && generation === batch.generation;
+        const controller = new AbortController();
+        activeController = controller;
         try {
-          await batch.run(isCurrent);
+          await batch.run(isCurrent, controller.signal);
         } catch (error) {
           if (isCurrent()) batch.onError(error);
+        } finally {
+          if (activeController === controller) activeController = undefined;
         }
       }
     } finally {
@@ -38,6 +44,7 @@ export const createLatestThumbnailBatch = (onBusyChange: (busy: boolean) => void
     replace(run: ThumbnailBatch["run"], onError: ThumbnailBatch["onError"]) {
       if (disposed) return;
       pending = { generation: ++generation, run, onError };
+      activeController?.abort();
       if (!running) void drain();
     },
     clear,

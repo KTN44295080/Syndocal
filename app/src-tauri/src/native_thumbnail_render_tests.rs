@@ -189,7 +189,7 @@ fn real_file_thumbnail_successful_native_worker_releases_admission() {
     let asset = fixture_asset(&path, VideoSourceKind::StillImage, 78);
     let work = native_thumbnail_work::NativeThumbnailWork::default();
     for _ in 0..2 {
-        let job = work.assets.try_acquire().unwrap();
+        let job = work.assets.try_acquire("main").unwrap();
         let source = asset.clone();
         let frame =
             tauri::async_runtime::block_on(native_thumbnail_dispatch::run(job, move |cancel| {
@@ -199,7 +199,7 @@ fn real_file_thumbnail_successful_native_worker_releases_admission() {
         assert_quadrants(&frame, COLORS_A, 0);
         drop(
             work.assets
-                .try_acquire()
+                .try_acquire("main")
                 .expect("successful worker retained admission"),
         );
     }

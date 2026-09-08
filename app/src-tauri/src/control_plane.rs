@@ -61,9 +61,9 @@ const KEYBOARD_SHORTCUT_SOURCE_MANIFEST: &str =
 const KEYBOARD_SHORTCUT_SOURCE_MANIFEST_SCHEMA_VERSION: u16 = 1;
 const KEYBOARD_APP_SHORTCUT_SOURCE_COUNT: usize = 30;
 const KEYBOARD_PROJECT_FILE_SHORTCUT_SOURCE_COUNT: usize = 3;
-const FROZEN_TAURI_ROUTE_ADMISSION_COUNT: usize = 515;
+const FROZEN_TAURI_ROUTE_ADMISSION_COUNT: usize = 516;
 const FROZEN_TAURI_ROUTE_ADMISSION_SHA256: &str =
-    "6414db9fd02f7147ecc6b7503607bdb77e07a871e02f5b0c1cdd7742a48e37b5";
+    "5120894f36feb82ac58fffd4db20739d80ae1b1a1c556fc95838a1708cbb8eea";
 /// The command source is parsed and validated exactly once.  Local discovery
 /// calls only clone this immutable, validated value; they never parse source
 /// text or make an external request on the invocation path.
@@ -132,7 +132,10 @@ pub fn tauri_route_admission_class(command: &str) -> Option<TauriRouteAdmissionC
 
 fn classify_registered_tauri_route(command: &str) -> Option<TauriRouteAdmissionClass> {
     use TauriRouteAdmissionClass as Class;
-    let class = if matches!(command, "agent_bridge_claim_v1" | "agent_bridge_complete_v1" | "agent_bridge_register_v1") {
+    let class = if matches!(
+        command,
+        "agent_bridge_claim_v1" | "agent_bridge_complete_v1" | "agent_bridge_register_v1"
+    ) {
         Class::AgentTransportMaintenance
     } else if matches!(
         command,
@@ -217,6 +220,7 @@ fn classify_registered_tauri_route(command: &str) -> Option<TauriRouteAdmissionC
             | "start_media_asset_operation"
             | "start_media_asset_availability_operation"
             | "cancel_media_asset_operation"
+            | "cancel_native_thumbnail_request_v1"
             | "get_media_asset_operation_terminal_result"
             | "get_video_clip_slot_operation_terminal_result"
             | "get_video_effect_catalog_operation_terminal_result"
@@ -2086,8 +2090,18 @@ mod tests {
         );
         for (route, expected) in [
             ("get_snapshot", TauriRouteAdmissionClass::ReadOnly),
-            ("get_video_layer_thumbnail", TauriRouteAdmissionClass::ReadOnly),
-            ("get_media_asset_thumbnail", TauriRouteAdmissionClass::ReadOnly),
+            (
+                "cancel_native_thumbnail_request_v1",
+                TauriRouteAdmissionClass::RecoveryMaintenance,
+            ),
+            (
+                "get_video_layer_thumbnail",
+                TauriRouteAdmissionClass::ReadOnly,
+            ),
+            (
+                "get_media_asset_thumbnail",
+                TauriRouteAdmissionClass::ReadOnly,
+            ),
             (
                 "resolve_missing_project_publication_v1",
                 TauriRouteAdmissionClass::RecoveryMaintenance,
@@ -2282,9 +2296,12 @@ mod tests {
         assert_eq!(counts[&TauriRouteAdmissionClass::RuntimeMutation], 157);
         assert_eq!(counts[&TauriRouteAdmissionClass::FileExportMutation], 20);
         assert_eq!(counts[&TauriRouteAdmissionClass::SafetyMutation], 1);
-        assert_eq!(counts[&TauriRouteAdmissionClass::RecoveryMaintenance], 27);
+        assert_eq!(counts[&TauriRouteAdmissionClass::RecoveryMaintenance], 28);
         assert_eq!(counts[&TauriRouteAdmissionClass::Retired], 29);
-        assert_eq!(counts[&TauriRouteAdmissionClass::AgentTransportMaintenance], 3);
+        assert_eq!(
+            counts[&TauriRouteAdmissionClass::AgentTransportMaintenance],
+            3
+        );
         assert_eq!(tauri_route_admission_class("patch_fixture"), None);
         assert_eq!(
             tauri_route_admission_class("future_unreviewed_mutation"),

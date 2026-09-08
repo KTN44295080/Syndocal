@@ -7,34 +7,34 @@ use std::{
 #[test]
 fn one_job_per_lane_and_independent_asset_lane() {
     let work = NativeThumbnailWork::default();
-    let layer = work.layers.try_acquire().unwrap();
+    let layer = work.layers.try_acquire("main").unwrap();
     for _ in 0..100 {
-        assert!(work.layers.try_acquire().is_err());
+        assert!(work.layers.try_acquire("main").is_err());
     }
-    let asset = work.assets.try_acquire().unwrap();
-    assert!(work.assets.try_acquire().is_err());
+    let asset = work.assets.try_acquire("main").unwrap();
+    assert!(work.assets.try_acquire("main").is_err());
     drop(layer);
-    assert!(work.layers.try_acquire().is_ok());
-    assert!(work.assets.try_acquire().is_err());
+    assert!(work.layers.try_acquire("main").is_ok());
+    assert!(work.assets.try_acquire("main").is_err());
     drop(asset);
-    assert!(work.assets.try_acquire().is_ok());
+    assert!(work.assets.try_acquire("main").is_ok());
 }
 
 #[test]
 fn cancelled_queued_job_never_starts_and_retains_slot_until_dropped() {
     let gate = ThumbnailGate::default();
-    let job = gate.try_acquire().unwrap();
+    let job = gate.try_acquire("main").unwrap();
     drop(job.request_guard());
-    assert!(gate.try_acquire().is_err());
+    assert!(gate.try_acquire("main").is_err());
     let result: Result<(), String> = job.execute(|_| panic!("cancelled job started"));
     assert!(result.unwrap_err().contains("cancelled"));
-    assert!(gate.try_acquire().is_ok());
+    assert!(gate.try_acquire("main").is_ok());
 }
 
 #[test]
 fn cancellation_keeps_running_worker_owned_and_rejects_late_success() {
     let gate = ThumbnailGate::default();
-    let job = gate.try_acquire().unwrap();
+    let job = gate.try_acquire("main").unwrap();
     let waiter = job.request_guard();
     let (started_tx, started_rx) = mpsc::sync_channel(1);
     let (release_tx, release_rx) = mpsc::sync_channel(1);
@@ -48,29 +48,35 @@ fn cancellation_keeps_running_worker_owned_and_rejects_late_success() {
     });
     started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
     drop(waiter);
-    assert!(gate.try_acquire().is_err());
+    assert!(gate.try_acquire("main").is_err());
     release_tx.send(()).unwrap();
     assert!(worker.join().unwrap().unwrap_err().contains("cancelled"));
-    assert!(gate.try_acquire().is_ok());
+    assert!(gate.try_acquire("main").is_ok());
 }
 
 #[test]
 fn success_error_and_unwind_release_the_slot() {
     let gate = ThumbnailGate::default();
-    assert_eq!(gate.try_acquire().unwrap().execute(|_| Ok(7)).unwrap(), 7);
     assert_eq!(
-        gate.try_acquire()
+        gate.try_acquire("main")
+            .unwrap()
+            .execute(|_| Ok(7))
+            .unwrap(),
+        7
+    );
+    assert_eq!(
+        gate.try_acquire("main")
             .unwrap()
             .execute::<()>(|_| Err("decode".into()))
             .unwrap_err(),
         "decode"
     );
     assert!(catch_unwind(AssertUnwindSafe(|| gate
-        .try_acquire()
+        .try_acquire("main")
         .unwrap()
         .execute::<()>(|_| panic!("fixture"))))
     .is_err());
-    assert!(gate.try_acquire().is_ok());
+    assert!(gate.try_acquire("main").is_ok());
 }
 
 #[test]
@@ -83,7 +89,7 @@ fn concurrent_admission_has_one_winner() {
             let start = Arc::clone(&start);
             thread::spawn(move || {
                 start.wait();
-                gate.try_acquire().ok()
+                gate.try_acquire("main").ok()
             })
         })
         .collect();
@@ -93,9 +99,9 @@ fn concurrent_admission_has_one_winner() {
         .filter_map(|worker| worker.join().unwrap())
         .collect();
     assert_eq!(jobs.len(), 1);
-    assert!(gate.try_acquire().is_err());
+    assert!(gate.try_acquire("main").is_err());
     drop(jobs);
-    assert!(gate.try_acquire().is_ok());
+    assert!(gate.try_acquire("main").is_ok());
 }
 
 #[test]

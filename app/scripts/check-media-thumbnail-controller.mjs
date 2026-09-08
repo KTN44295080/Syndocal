@@ -262,8 +262,11 @@ console.log('PASS bounded transient retry, terminal error rejection, stale retry
   const observed = []; let release;
   const gate = createLatestThumbnailBatch(value => observed.push(value));
   const held = new Promise(resolve => { release = resolve; });
-  gate.replace(async () => { await held; }, error => { throw error; });
+  let activeSignal;
+  gate.replace(async (_isCurrent, signal) => { activeSignal = signal; await held; }, error => { throw error; });
+  await flush();
   gate.clear();
+  assert.equal(activeSignal?.aborted, true, "clear aborts the active native request signal");
   assert.deepEqual(observed, [true]);
   let successors = 0;
   for (let i = 0; i < 20; i++) gate.replace(async () => { successors++; }, () => {});
