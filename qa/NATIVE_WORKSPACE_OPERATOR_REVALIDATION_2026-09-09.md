@@ -39,6 +39,10 @@ Result: **PASS, 7/7 native WebView2 pane windows**.
   acceptance range.
 - The evidence JSON is
   `target/qa/native-workspace-acceptance-20260909-06/native-workspace-acceptance.json`.
+- The package's official Windows entry was also run unchanged:
+  `pnpm.cmd --dir app run check:workspace-operator-native` — exit 0, PASS
+  `7/7`; its report was written to the unique temp run
+  `syndocal-workspace-acceptance-20260908-175941`.
 - The acceptance script's `finally` cleanup completed. No Syndocal/cargo/rustc
   process or listener on port 5191 remained after the run.
 - The isolated config has bundling disabled and no physical output operation
