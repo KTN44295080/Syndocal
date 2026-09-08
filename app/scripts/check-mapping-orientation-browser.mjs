@@ -23,18 +23,25 @@ const vite=spawn(process.execPath,[resolve(root,'node_modules/vite/bin/vite.js')
 let log='';vite.stdout.on('data',d=>log+=d);vite.stderr.on('data',d=>log+=d);let browser;
 try{
 for(let i=0;;i++){assert.equal(vite.exitCode,null,log);try{if((await fetch(origin)).ok)break;}catch{}assert(i<150,log);await new Promise(r=>setTimeout(r,100));}
-const executablePath=['C:/Program Files/Google/Chrome/Application/chrome.exe','C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'].find(existsSync);
+const executablePath=[
+process.env.CHROME_PATH,
+process.env.EDGE_PATH,
+process.env.LOCALAPPDATA ? resolve(process.env.LOCALAPPDATA,'Google/Chrome/Application/chrome.exe') : null,
+process.env.LOCALAPPDATA ? resolve(process.env.LOCALAPPDATA,'Microsoft/Edge/Application/msedge.exe') : null,
+'C:/Program Files/Google/Chrome/Application/chrome.exe',
+'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
+].filter(Boolean).find(existsSync);
 browser=await chromium.launch({headless:true,...(executablePath?{executablePath}:{})});
 for(const width of [1280,640]){
 const page=await browser.newPage({viewport:{width,height:900}}),errors=[];page.on('pageerror',e=>errors.push(String(e)));
 await page.route('**/orientation-proof',r=>r.fulfill({contentType:'text/html',body:'<html><body><script type="module" src="/'+name+'"></script></body></html>'}));
 await page.goto(origin+'/orientation-proof');
 const panel=page.locator('[data-mapping-installation-orientation]');await panel.waitFor();
-const match=panel.getByRole('button',{name:'基準灯体と同じ姿勢に揃える'}),aim=panel.getByRole('button',{name:'設置基準軸（+Z）を指定点へ向ける'});
+const match=panel.getByRole('button',{name:'基準灯体と同じ姿勢に揃える'}),aim=panel.getByRole('button',{name:'Aim installation axis (+Z) at target'});
 await match.click();assert.equal(await aim.isDisabled(),true);await page.evaluate(()=>window.proof.finish());await page.waitForFunction(()=>!document.querySelector('[data-mapping-installation-orientation] button').disabled);
-await panel.getByLabel('指定点 X').fill('-2.5');await panel.getByLabel('指定点 Y').fill('3');await panel.getByLabel('指定点 Z').fill('4');
+await panel.getByLabel('Target X').fill('-2.5');await panel.getByLabel('Target Y').fill('3');await panel.getByLabel('Target Z').fill('4');
 await aim.focus();await aim.press('Enter');assert.deepEqual(await page.evaluate(()=>window.proof.calls),['match',{x:-2.5,y:3,z:4}]);
-await panel.getByLabel('指定点 X').fill('');assert.equal(await aim.isDisabled(),true);await panel.getByLabel('指定点 X').fill('0');
+await panel.getByLabel('Target X').fill('');assert.equal(await aim.isDisabled(),true);await panel.getByLabel('Target X').fill('0');
 await page.evaluate(()=>window.proof.setCount(1));assert.equal(await match.isDisabled(),true);assert.equal(await aim.isEnabled(),true);
 const size=await panel.evaluate(el=>{const r=el.getBoundingClientRect();return {left:r.left,right:r.right,width:r.width,scroll:el.scrollWidth,client:el.clientWidth,buttons:[...el.querySelectorAll('button')].map(b=>b.getBoundingClientRect().height),buttonWidths:[...el.querySelectorAll('button')].map(b=>b.getBoundingClientRect().width)}});
 assert(size.left>=0&&size.right<=width&&size.scroll<=size.client+1,JSON.stringify(size));assert(size.buttons.every(h=>h>=28),JSON.stringify(size));
