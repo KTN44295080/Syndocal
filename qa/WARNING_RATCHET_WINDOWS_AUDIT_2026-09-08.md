@@ -38,7 +38,7 @@ checkpoint `db898cab30db1245ff4207282b9ba261728c1f1b`.
 
 The checker implementation is A=`db898cab30db1245ff4207282b9ba261728c1f1b`;
 the inventory-only rebaseline is B=`b1e90813f103990dcc7f253175c5cf8dbeec1cf4`.
-The final documentation checkpoint is recorded after B→C validation.
+The final documentation checkpoint is recorded after D→E validation.
 
 | Check | Result |
 | --- | --- |
@@ -50,6 +50,8 @@ The final documentation checkpoint is recorded after B→C validation.
 | `node app/scripts/test-warning-ratchet.mjs` on A | PASS — `warning ratchet self-tests ok`, including artifact rebaseline negatives |
 | `--rebaseline-artifacts --base-ref A --head-ref B --configuration windows-default-release` | PASS — exact MSVC 14.44.35207, Cargo completed, artifact coverage `12`, changed files `1` |
 | normal `windows-default-release` gate B→C | PASS — artifact coverage `12/12`, baseline/current warnings `83/0`, identity removals `67` |
+| `pnpm.cmd --dir app run check:warnings:self-test` on E=`812498e7d1128df83067d562327ad39fe6c4c7ef` | PASS — `warning ratchet self-tests ok` |
+| normal `windows-default-release` gate D→E | PASS — artifact coverage `12/12`, baseline/current warnings `83/0`, identity removals `67` |
 
 The warning-ratchet run initialized the exact local toolchain and executed
 `cargo check --workspace --all-targets --release --locked
