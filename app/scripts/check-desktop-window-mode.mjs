@@ -27,7 +27,7 @@ const workspaceChrome = await readFile(
 );
 const styles = await readFile(new URL("../src/styles.css", import.meta.url), "utf8");
 const main = await readFile(new URL("../src/main.tsx", import.meta.url), "utf8");
-const app = await readFile(new URL("../src/App.tsx", import.meta.url), "utf8");
+const app = (await readFile(new URL("../src/App.tsx", import.meta.url), "utf8")).replaceAll("\r\n", "\n");
 const uiLocalization = await readFile(new URL("../src/uiLocalization.ts", import.meta.url), "utf8");
 const backend = await readFile(new URL("../src-tauri/src/main.rs", import.meta.url), "utf8");
 const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
