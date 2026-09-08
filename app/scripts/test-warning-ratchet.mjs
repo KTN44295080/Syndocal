@@ -1396,7 +1396,7 @@ try {
   fixtureGit(["config", "user.email", "warning-ratchet-output-marker@example.invalid"]);
   mkdirSync(path.join(outputMarkerFixtureRoot, "qa/warnings"), { recursive: true });
   mkdirSync(path.join(outputMarkerFixtureRoot, "app/scripts"), { recursive: true });
-  writeFileSync(path.join(outputMarkerFixtureRoot, ".gitignore"), "app/node_modules/\n");
+  writeFileSync(path.join(outputMarkerFixtureRoot, ".gitignore"), "app/node_modules\n");
   writeFileSync(
     path.join(outputMarkerFixtureRoot, "qa/warnings/warning-inventory.schema.json"),
     readFileSync(path.join(repoRoot, "qa/warnings/warning-inventory.schema.json"), "utf8"),

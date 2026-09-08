@@ -72,6 +72,14 @@ steps must remove the runner's `CARGO_HOME` for each child process. The latter
 is included in the next bounded workflow repair; the former remains a product
 source formatting baseline and is not being hidden or auto-reformatted here.
 
+The latest rerun [34291912613](https://github.com/KTN44295080/Syndocal/actions/runs/34291912613)
+reached the output-marker rebaseline self-test on Ubuntu, where the Linux
+runner treated the fixture's `app/node_modules` symlink as an untracked path
+despite the directory-only ignore pattern used on Windows. The fixture now
+ignores that path name without weakening the audit's allowed-file policy. The
+same self-test, release checks, Tauri wrapper checker, and `git diff --check`
+pass locally after this bounded change.
+
 ## Boundary
 
 This checkpoint does not claim Windows native-window, hardware, physical
