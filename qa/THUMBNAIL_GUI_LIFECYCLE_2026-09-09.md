@@ -7,7 +7,7 @@ controller and its lifecycle boundaries. It does not claim the real-file
 missing → Retry → recovery flow, native decoder hard-stop, physical output,
 or whole-product completion.
 
-- Source base: `8815e3b92681ca9a188571082a2bd328cfc3d53f`
+- Source base: `8466811d990a6d445d0f2e050745e8bd7f874637`
 - Worktree before this record: clean `main`, equal to `origin/main`
 - Product source changes: none
 - File-moving fault injection: not attempted
@@ -26,6 +26,7 @@ The fixture exercised real DOM interactions with deferred readers and checked:
 
 - no reads before explicit authorization and no reads when native capability is unavailable;
 - disabled repeated clicks and independent layer/asset lanes;
+- reset aborts both active deferred readers, and a later authorization starts fresh work;
 - keyboard asset Retry and layer Retry reachability;
 - successful cache reuse without re-reading already successful entries;
 - reset, live-only catalog handling, and no dead retry action.

@@ -13,7 +13,19 @@ function Fixture() {
   const [assets, setAssets] = createSignal([{ id: 2, label: 'Asset fixture', source: { kind: 'StillImage', path: 'fixture.png' }, content_hash: { algorithm: 'Sha256', hex: 'a'.repeat(64) }, byte_size: 1 }]);
   const [nativeAvailable, setNativeAvailable] = createSignal(true);
   const requests = { layer: [], asset: [] };
-  const reader = lane => id => new Promise((resolve, reject) => requests[lane].push({ id, resolve, reject }));
+  const aborts = { layer: 0, asset: 0 };
+  const reader = lane => (id, signal) => new Promise((resolve, reject) => {
+    const request = { id, resolve, reject, aborted: false };
+    const abort = () => {
+      if (request.aborted) return;
+      request.aborted = true;
+      aborts[lane] += 1;
+      reject(new Error('Fixture request aborted'));
+    };
+    signal.addEventListener('abort', abort, { once: true });
+    requests[lane].push(request);
+    if (signal.aborted) abort();
+  });
   const authority = { project_epoch: 1, project_revision: 0, checkpoint_hash: 'fixture' };
   const controller = createMediaThumbnailController({ layers, assets,
     projectMappingsAuthority: () => authority, isProjectAuthorityIdentityCurrent: a => a === authority || JSON.stringify(a) === JSON.stringify(authority),
@@ -37,6 +49,7 @@ function Fixture() {
     onSetLabel: unexpected, onSetPath: unexpected, onBrowseSource: unexpected, onImportMultiple: unexpected, onAddLayer: unexpected };
   window.__thumbnailRecoveryFixture = {
     counts: () => ({ layer: requests.layer.length, asset: requests.asset.length }),
+    aborts: () => ({ layer: aborts.layer, asset: aborts.asset }),
     settle: (lane, index, success) => {
       const request = requests[lane][index]; if (!request) throw new Error('Missing fixture request');
       if (success) request.resolve(png); else request.reject(new Error('Fixture decode failure'));
