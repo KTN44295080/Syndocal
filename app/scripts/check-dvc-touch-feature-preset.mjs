@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
-const protocol = await readFile(new URL("../../crates/protocol/src/lib.rs", import.meta.url), "utf8");
+const protocol = (await readFile(new URL("../../crates/protocol/src/lib.rs", import.meta.url), "utf8")).replaceAll("\r\n", "\n");
 const engine = await readFile(new URL("../../crates/engine/src/lib.rs", import.meta.url), "utf8");
 const importer = await readFile(new URL("../src-tauri/src/dvc_import.rs", import.meta.url), "utf8");
 const backend = await readFile(new URL("../src-tauri/src/main.rs", import.meta.url), "utf8");
