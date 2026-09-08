@@ -53,8 +53,10 @@ try {
     assert.match(await inspector.innerText(), /Select a Media Library item/,
       "Fixture has no selected media asset; layer controls must still be reachable");
     assert.equal(await page.locator("[data-video-isf-layer-id]").count(), 0, "Closed inspector mounts no FX consumers");
-    const legacy = ".videoControlPanelLibrary :is(.videoMixerContextPane,.videoClipLegacyTransport,.videoClipSlotBankPanel,.videoClipGridPanel,.videoMixerTopPane,.videoMixerDiagnostics,.videoMixerPaneHeader)";
-    assert.equal(await page.locator(legacy).count(), 0, "Library-only mode does not mount legacy consumer subtrees");
+    const legacy = ".videoControlPanelLibrary :is(.videoMixerContextPane,.videoClipLegacyTransport,.videoClipGridPanel,.videoMixerTopPane,.videoMixerDiagnostics,.videoMixerPaneHeader)";
+    assert.equal(await page.locator(legacy).count(), 0, "Library-only mode does not mount hidden legacy consumer subtrees");
+    assert.equal(await page.locator('.videoControlPanelLibrary [data-video-clip-slot-bank="edit"]').count(), 1,
+      "Library-only mode keeps the Edit Video Clip Bank reachable");
     await inspector.locator(".editVideoAdvancedDisclosure > summary").click();
     await page.locator("[data-video-isf-layer-id]").waitFor();
     assert.equal(await page.locator("[data-video-isf-layer-id]").count(), 1);
