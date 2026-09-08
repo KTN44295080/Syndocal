@@ -131,3 +131,27 @@ if (baselineIndex < 0) {
   await Promise.all(reads);
   console.log("video runtime polling deferred-response checks passed");
 }
+
+if (baselineIndex < 0) {
+  for (const [name, refresh, , , , key] of lanes) {
+    const f = fixture();
+    const omitted = f.controller[refresh]();
+    f.pending[0].resolve({ ...token(), runtime_generation: 1, runtime: {} });
+    assert.notEqual(await omitted, null);
+    assert.deepEqual(f.applied[0], { [key]: [] }, `${name}: native omitted empty collection becomes a usable UI array`);
+    for (const invalid of [null, [], { [key]: null }, { [key]: 'invalid' }, { [key]: {} }, { [key]: undefined }]) {
+      const count = f.applied.length, i = f.pending.length;
+      const rejected = f.controller[refresh]();
+      f.pending[i].resolve({ ...token(), runtime_generation: 100, runtime: invalid });
+      assert.equal(await rejected, null, `${name}: malformed explicit collection must fail closed`);
+      assert.equal(f.applied.length, count);
+    }
+    const i = f.pending.length, array = [{ fixtureId: 9 }], runtime = { [key]: array };
+    const valid = f.controller[refresh]();
+    f.pending[i].resolve({ ...token(), runtime_generation: 2, runtime });
+    assert.notEqual(await valid, null, `${name}: rejected data must not advance accepted generation`);
+    assert.equal(f.applied.at(-1), runtime, `${name}: valid publication is not copied`);
+    assert.equal(f.applied.at(-1)[key], array);
+  }
+  console.log('PASS omitted native runtime arrays, explicit-malformed rejection, generation retention and zero-copy valid arrays');
+}

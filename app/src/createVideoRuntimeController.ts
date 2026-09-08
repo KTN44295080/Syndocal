@@ -1,6 +1,7 @@
 import type { Accessor, Setter } from "solid-js";
 import type { FrontendTauriInvoke } from "./tauriInvokeCommands";
 import { videoFrameToDataUrl } from "./videoFrameCanvas";
+import { normalizeVideoClipRuntimeSnapshot, normalizeVideoLayerTransitionRuntimeSnapshot } from "./videoRuntimeCollectionWire";
 import { defaultColorAdjust, defaultFxAdjust, defaultTransform } from "./videoLayerDefaults";
 import {
   mediaAssetImportReportMessage,
@@ -392,9 +393,10 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
       checkpoint_hash: result.checkpoint_hash,
     })) return false;
     if (!generationCanApply) return false;
+    const runtime = normalizeVideoClipRuntimeSnapshot(result.runtime);
     appliedRuntimeEpoch = result.project_epoch;
     appliedRuntimeGeneration = result.runtime_generation;
-    options.setVideoClipRuntime(result.runtime);
+    options.setVideoClipRuntime(runtime);
     return true;
   };
   const resetVideoClipSlotRuntimeFence = () => {
@@ -440,9 +442,10 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
       project_revision: result.project_revision,
       checkpoint_hash: result.checkpoint_hash,
     }) || !generationCanApply) return false;
+    const runtime = normalizeVideoLayerTransitionRuntimeSnapshot(result.runtime);
     appliedTransitionRuntimeEpoch = result.project_epoch;
     appliedTransitionRuntimeGeneration = result.runtime_generation;
-    options.setVideoTransitionRuntime(result.runtime);
+    options.setVideoTransitionRuntime(runtime);
     return true;
   };
   const resetVideoTransitionRuntimeFence = () => {
