@@ -2,9 +2,8 @@
 
 Base main: `cfac3c324bd866b2947fa15e18042f7a796e9d5b`.
 Candidate: `chatgpt/macos-final-gate-20260908`.
-Status: implemented; independent review and all required local checks passed;
-the candidate-specific macOS CI run and its DMG evidence remain outstanding.
-Not promoted to main.
+Status: implemented; independent review, all required local checks, and the
+candidate-specific macOS CI/DMG gate passed. Not promoted to main.
 
 ## Bounded change
 
@@ -78,23 +77,52 @@ Fresh evidence is under `target/qa/macos-final-gate-20260908/resume-02/`:
   inventory and 18 negative fixtures. The initial environment failure is retained
   in `check-release.log` and is not counted as a candidate code failure.
 
-The local gate is complete, but no macOS Actions run or real DMG acceptance is
-claimed yet. The candidate-specific workflow must still run against the final
-candidate HEAD and provide its run/attempt, step outcomes, report, DMG hash and
-cleanup evidence.
+The local gate and candidate-specific workflow gate are complete; the detailed
+Actions and DMG evidence follows.
+
+## Candidate macOS Actions evidence
+
+The implementation candidate `c4144d0dd092a8d9f2ad8f79d6b6816be3d050fc` was
+run by the existing manual workflow without changing its trigger or guards.
+Run `34188473755`, attempt `1`, job `101941484394`, and the workflow checkout
+all report that exact head SHA. The run and job concluded `success` and were not
+cancelled. Every required and post-job step completed successfully, including
+the validator test, application build, final-DMG build, extracted-app
+validation, acceptance, validation-evidence upload, and DMG upload.
+
+The downloaded evidence is retained under
+`target/qa/macos-final-gate-20260908/resume-02/actions/`:
+
+- Final report: `status: pass`, `interrupted: false`; all ten checks are `pass`.
+- Report/run identity: commit `c4144d0...`, run `34188473755`, attempt `1`.
+- DMG: `Syndocal_1.2.0-alpha.69_arm64.dmg`, 31,505,009 bytes,
+  SHA-256 `a795234d4d3db6347dded02394bd836b9f9f84a95ab14960576eb8c16315d277`.
+- Process survival: 8,010 ms observed, reaped, requested SIGTERM, no abnormal
+  exit or signal.
+- Cleanup: exact temporary mount detached and temporary directory removed;
+  final report staging alias was absent before acceptance.
+- Acceptance re-read the DMG and sidecar from the upload directory and matched
+  the same hash. Evidence artifact ID `10041501120` and DMG artifact ID
+  `10041502006` were both uploaded successfully.
+
+This is final-DMG structural/signature/process evidence on a GitHub-hosted
+macOS 15 arm64 runner. It does not claim M2 hardware, macOS 12 execution,
+native UI responsiveness, device I/O, Developer ID trust, notarization,
+Gatekeeper, or venue acceptance.
 
 ## Remaining acceptance and handoff
 
 ChatGPT implemented and self-reviewed this candidate without delegating execution.
 The older isolated report module had a Luna review, but that is NOT independent
 approval of this integrated diff. Review the stable candidate and its tests.
-Then rerun the four outstanding checks and dispatch the existing manual
-`macos-installer.yml` for this branch through an authenticated GitHub interface.
-Do not change the workflow trigger or remove guards to obtain a run.
+The stable candidate has now received the independent review, all four local
+checks, and the authenticated manual `macos-installer.yml` run recorded above.
+The workflow trigger and guards were not changed to obtain the run.
 
-Record the exact run head SHA, run ID/attempt, validation/acceptance outcomes,
-report, DMG SHA-256 and cleanup result. If a Mac-only issue is found, fix its
-cause and rerun against the new SHA; do not relax inspection to reuse old success.
+The exact run head SHA, run ID/attempt, validation/acceptance outcomes, report,
+DMG SHA-256 and cleanup result are recorded above. If a future Mac-only issue
+is found, fix its cause and rerun against the new SHA; do not relax inspection
+to reuse old success.
 The previous successful run 34139676339 predates these changes and cannot prove
 this candidate. No new macOS job, Developer ID signing, notarization, Gatekeeper,
 M2/macOS 12 execution, hardware, venue or public Release acceptance is claimed.
