@@ -45,3 +45,23 @@ cleanup passed.
 No native application, physical output, device, external client, or Mac
 environment was started. Browser evidence does not close native, hardware,
 physical-output, persistence, Mac, signing, or product-wide completion gates.
+
+## Current-main revalidation — 2026-09-09
+
+The two browser checkers were rerun against current `main` at
+`5504d94e73c054c94d3bb36c87073f5c6bb5b755` with the installed Chrome supplied
+through `CHROME_PATH=C:\Users\janua\AppData\Local\Google\Chrome\Application\chrome.exe`.
+
+Results:
+
+- `check-timeline-performance-browser.mjs`: PASS at 1920×1080, 1366×768,
+  860×520, and 1280×720; wheel, phase/bank/media/selection, direct resize,
+  linked automation, unlinked routes, and Alt-isolate contracts passed.
+- `check-timeline-navigator-browser.mjs`: PASS at 1280×640; containment,
+  internal scrolling, root/child selection, pending exclusion, collapse, and
+  pending-unmount cleanup passed.
+
+No Playwright browser shell was downloaded. This is browser fixture/DOM/
+geometry evidence only and does not claim native application, hardware,
+physical-output, persistence, Mac, signing, publication, or product-wide
+completion.
