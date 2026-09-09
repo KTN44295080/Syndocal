@@ -75,3 +75,24 @@ real-device, signing, publication, and product-wide acceptance remain
 unclaimed.
 
 No assertion was weakened and no runtime or physical-output behavior changed.
+
+## Current-main software revalidation
+
+The bounded F1 checks were repeated on current `main` at source HEAD
+`9389ec5e74a6457b2c93beb197933953b37ced22`. No input API, generation model,
+or physical-output path was changed.
+
+| Check | Result |
+| --- | --- |
+| `pnpm.cmd --dir app run check:project-transaction` | PASS — project transaction production contract and project authority checks |
+| `cargo test -p syndocal --release --locked callback_epoch -- --test-threads=1` | PASS — 3 passed, 0 failed |
+| `cargo test -p syndocal --release --locked installed_callback_gate -- --test-threads=1` | PASS — 1 passed, 0 failed |
+| `cargo test -p syndocal --release --locked project_transaction_fence -- --test-threads=1` | PASS — 1 passed, 0 failed |
+| `cargo test -p syndocal --release --locked external_admission_ -- --test-threads=1` | PASS — 2 passed, 0 failed |
+| `cargo test -p syndocal --release --locked project_control_retirement -- --test-threads=1` | PASS — 1 passed, 0 failed |
+| `cargo test -p syndocal --release --locked project_retirement -- --test-threads=1` | PASS — 6 passed, 0 failed |
+
+All native commands used the exact MSVC 14.44.35207 x64 linker pin and
+`where.exe link.exe` first-match check. This is current-main software evidence
+for the audited generation/admission seams only; physical input clients,
+reconnect/latency, device behavior, and venue operation remain unclaimed.
