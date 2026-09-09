@@ -31,6 +31,7 @@ import {
   loadInventory,
   loadInventoryAtRef,
   normalizeRepoPath,
+  normalizeGenericCommandOutput,
   parseCargoJsonLines,
   GITHUB_HOSTED_WINDOWS_TOOLCHAIN_MARKER,
   GITHUB_HOSTED_WINDOWS_TOOLCHAIN_MARKER_VALUE,
@@ -542,6 +543,15 @@ assert.deepEqual(compareOutputMarkerCoverage(["literal"], "literal output"), {
   missing: [],
   expected: ["literal"],
 });
+assert.equal(
+  normalizeGenericCommandOutput("\u001b[36mvite v6.4.2 \u001b[32mbuilding for production...\u001b[39m"),
+  "vite v6.4.2 building for production...",
+);
+const genericColoredOutput = await runGenericCode(
+  "process.stdout.write('\\u001b[36mvite v6.4.2 \\u001b[32mbuilding for production...\\u001b[39m')",
+  ["vite v6.4.2 building for production..."],
+);
+assert.equal(genericColoredOutput.markerCoverage.ok, true);
 const runGenericWithOutput = async (value) => {
   const previous = process.env.WARNING_RATCHET_TEST_ENV;
   process.env.WARNING_RATCHET_TEST_ENV = value;
@@ -563,6 +573,8 @@ const genericStderrWarning = await runGenericCode(
 assert.equal(genericStderrWarning.warningShaped, true);
 const genericViteWarning = await runGenericWithOutput("generic-marker\n(!) Vite synthetic warning");
 assert.equal(genericViteWarning.warningShaped, true);
+const genericColoredWarning = await runGenericWithOutput("generic-marker\n\u001b[31mwarning: synthetic\u001b[39m");
+assert.equal(genericColoredWarning.warningShaped, true);
 const genericNonzero = await runGenericCode("process.stdout.write('generic-marker'); process.exitCode = 7");
 assert.equal(genericNonzero.exitCode, 7);
 const genericTimeout = await runGenericCode("setTimeout(() => process.stdout.write('generic-marker'), 10_000)", ["generic-marker"], 1_000);

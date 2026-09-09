@@ -132,6 +132,28 @@ failed on the current workspace's broad pre-existing formatting diff and also
 reported a `76544627040`-byte allocation failure. No broad auto-format or
 format-gate suppression was applied.
 
+The next run [34302972902](https://github.com/KTN44295080/Syndocal/actions/runs/34302972902)
+reached the remaining gates on both hosts. Its Windows job passed the warning
+self-test and all Cargo warning ratchets, then failed only in the frontend
+generic-output checker because the literal marker
+`vite v6.4.2 building for production...` was not found. The Vite build itself
+completed successfully. This was reproduced locally by removing `NO_COLOR`:
+Vite inserts ANSI color codes inside that marker (`vite v6.4.2 <color>building`),
+so the marker text is still semantically present but not byte-contiguous.
+`app/scripts/warning-ratchet-lib.mjs` now removes terminal escape sequences
+before applying the same exact marker and warning-shaped-output assertions;
+the self-test includes ANSI-colored marker and warning fixtures. No marker was
+shortened or removed.
+
+On the same run, Ubuntu reported `1427 passed; 2 failed; 12 ignored`. The two
+failures are `ndi_open_failure_hands_one_fence_to_parent_until_cleanup_ack`
+and `ndi_startup_timeout_and_late_constructor_error_share_one_fence`; both
+panic at the explicit re-arm with `Output ownership transition is already in
+progress`. Windows focused executions of both tests pass. An Ubuntu-only
+rerun was started without source changes (attempt 2 of run 34302972902) to
+separate a hosted scheduling/resource flake from a deterministic Linux gate;
+its result remains required before claiming the hosted Linux gate is green.
+
 ## Boundary
 
 This checkpoint does not claim Windows native-window, hardware, physical

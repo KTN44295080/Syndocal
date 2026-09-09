@@ -32,6 +32,13 @@ const CARGO_BUILD_CONTROL_KEYS = [...CARGO_COMPILER_SELECTION_KEYS, "rustdoc", "
 // The current repository diff is well below this limit; overflow is a hard error rather than a partial audit.
 export const GIT_OUTPUT_MAX_BUFFER = 16 * 1024 * 1024;
 export const GIT_OUTPUT_LIMIT_ERROR_CODE = "WARNING_RATCHET_GIT_OUTPUT_LIMIT";
+// Generic commands such as Vite may color output even when their stdout is a
+// pipe. Strip terminal control sequences before checking literal markers and
+// warning-shaped output; the substantive marker text remains exact.
+const TERMINAL_ESCAPE_SEQUENCE = /\u001B(?:\[[0-?]*[ -/]*[@-~]|\][^\u0007]*(?:\u0007|\u001B\\))/g;
+export function normalizeGenericCommandOutput(output = "") {
+  return String(output).replace(TERMINAL_ESCAPE_SEQUENCE, "");
+}
 // Current-file inspection has its own byte ceiling. Untracked files share this as an
 // aggregate budget; modified Cargo configs share a separate aggregate budget.
 export const CURRENT_FILE_CONTENT_MAX_BYTES = 16 * 1024 * 1024;
@@ -882,11 +889,14 @@ export async function runGenericConfiguration(configuration, repoRoot, environme
     forwardStderr: false,
   });
   const output = `${processResult.stdout}\n${processResult.stderr}`;
+  const normalizedStdout = normalizeGenericCommandOutput(processResult.stdout);
+  const normalizedStderr = normalizeGenericCommandOutput(processResult.stderr);
+  const normalizedOutput = `${normalizedStdout}\n${normalizedStderr}`;
   return {
     ...processResult,
     output,
-    warningShaped: warningShapedOutput(processResult.stdout, processResult.stderr),
-    markerCoverage: compareOutputMarkerCoverage(configuration.expectedOutputMarkers, output),
+    warningShaped: warningShapedOutput(normalizedStdout, normalizedStderr),
+    markerCoverage: compareOutputMarkerCoverage(configuration.expectedOutputMarkers, normalizedOutput),
   };
 }
 
