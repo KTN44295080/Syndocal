@@ -235,6 +235,11 @@ jobs:
           Write-Host 'ASIO/NDI warning gates are skipped and remain unverified; default Windows gates remain enforced.'
 
       - name: Check formatting
+        # rustfmt 1.97.1 currently emits a platform-specific whole-workspace
+        # diff and then attempts a ~76 GB allocation on the hosted Windows
+        # runner. Formatting is a source-invariant gate, so enforce it once on
+        # Ubuntu and let the Windows job reach its native tests/builds.
+        if: runner.os == 'Linux'
         run: cargo fmt --all -- --check
 
       - name: Test warning ratchet (Windows)
