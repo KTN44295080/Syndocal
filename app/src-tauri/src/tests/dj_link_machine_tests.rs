@@ -546,10 +546,10 @@ fn unsupported_platform_fails_closed() {
 #[test]
 fn native_platform_store_is_unsupported_off_windows() {
     assert!(!dj_link_machine_credential_persistence_supported());
-    assert_eq!(
+    assert!(matches!(
         PlatformDjLinkCredentialStore::new(),
         Err(DjLinkCredentialError::PlatformUnsupported)
-    );
+    ));
 }
 
 #[cfg(target_os = "windows")]

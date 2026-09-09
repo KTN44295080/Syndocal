@@ -80,6 +80,16 @@ ignores that path name without weakening the audit's allowed-file policy. The
 same self-test, release checks, Tauri wrapper checker, and `git diff --check`
 pass locally after this bounded change.
 
+After that repair, run 34292560030 passed Linux formatting and warning-ratchet
+checks but exposed a real Linux-only test compilation error at
+`app/src-tauri/src/tests/dj_link_machine_tests.rs:549`: an `assert_eq!` compared
+the whole `Result<PlatformDjLinkCredentialStore, ...>`, requiring `PartialEq`
+for the platform store even though the non-Windows constructor always returns
+the fail-closed `PlatformUnsupported` error. The assertion now uses
+`matches!`, preserving the exact rejection contract without adding equality to
+the credential-store type. The same focused test group passes on Windows
+locally; a hosted Linux rerun is required to close this gate.
+
 ## Boundary
 
 This checkpoint does not claim Windows native-window, hardware, physical
