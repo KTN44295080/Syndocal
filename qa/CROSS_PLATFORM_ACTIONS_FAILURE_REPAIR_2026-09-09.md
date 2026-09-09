@@ -113,6 +113,25 @@ runner/resource and current-workspace formatting baseline conditions. The
 Windows formatting baseline remains intentionally unfixed and is not being
 masked by changing the gate.
 
+The hosted rerun [34294742712](https://github.com/KTN44295080/Syndocal/actions/runs/34294742712)
+confirmed that the two repaired engine contracts are no longer blockers:
+the engine test binary reported `1061 passed; 0 failed; 14 ignored`. The same
+workspace command then reached the Tauri application binary and reported
+`1417 passed; 12 failed; 12 ignored`. These 12 failures are in existing
+application acceptance/fixture areas (UNC-path admission, C1 preview seam,
+NDI startup-fence cleanup, publication-owner retirement, durable lease parent
+paths, first-run VJ bootstrap, and Unix media-file versioning). They are not
+caused by the two test-only changes in commit `09f415c` and are not being
+silently skipped or relaxed as part of this CI prerequisite repair. They need
+a separately owned Linux/application-compatibility tranche before the Linux
+hosted gate can be called green.
+
+The same rerun reconfirmed the Windows boundary: SDK/MSVC/runtime staging and
+the ASIO/NDI availability report passed, while `cargo fmt --all -- --check`
+failed on the current workspace's broad pre-existing formatting diff and also
+reported a `76544627040`-byte allocation failure. No broad auto-format or
+format-gate suppression was applied.
+
 ## Boundary
 
 This checkpoint does not claim Windows native-window, hardware, physical
