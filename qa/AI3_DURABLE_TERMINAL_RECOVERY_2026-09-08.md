@@ -110,3 +110,25 @@ It does not close `AI3-DURABLE-RECOVERY-001`, because a real crash/restart
 process drill, external-client reply-loss acceptance, physical output
 retirement/re-Arm, and hardware acknowledgement remain outside this local
 test boundary.
+
+## Current-main follow-up — `c26201bc1cc4d46a2c00b52446def7ef57e14b5a`
+
+The three focused software slices were rerun after the QA-only main
+checkpoint. Product source was unchanged. The same exact Windows native
+procedure was applied before all Cargo commands.
+
+```text
+cargo test -p syndocal --release --locked durable -- --test-threads=1
+test result: ok. 23 passed; 0 failed; 0 ignored; 1795 filtered out
+
+cargo test -p syndocal --release --locked dsf2026 -- --test-threads=1
+test result: ok. 6 passed; 0 failed; 0 ignored; 1812 filtered out
+
+cargo test -p syndocal --release --locked managed_exact_both -- --test-threads=1
+test result: ok. 13 passed; 0 failed; 0 ignored; 1805 filtered out
+```
+
+This current-main follow-up remains bounded software evidence. It does not
+close the ledger item or claim real crash/restart process acceptance,
+external-client reply-loss, physical output retirement/re-Arm, or hardware
+acknowledgement.
