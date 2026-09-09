@@ -37,6 +37,21 @@ Several tests deliberately panic inside injected poison seams; the panic
 messages are caught by those tests and the aggregate result above is the
 authoritative pass result. No assertion was weakened.
 
+## Current-main follow-up — `c6afe83211289875dc3d056e83fda3622372e68a`
+
+The same focused regression was rerun after the thumbnail cancellation
+lifecycle checkpoint. Product source was unchanged by this QA-only follow-up.
+The exact Windows native procedure above was applied again before Cargo.
+
+```text
+cargo test -p syndocal --release --locked output_lease -- --nocapture --test-threads=1
+test result: ok. 133 passed, 0 failed, 0 ignored, 0 measured; 1685 filtered out
+```
+
+The current-main result covers the same authority, receipt, fail-closed,
+worker ownership, stale-callback, and cleanup/retry boundaries. The prior
+native thumbnail missing-file recovery trial was not repeated.
+
 ## Boundary
 
 This proves the current software-level output-lease regression surface only.
