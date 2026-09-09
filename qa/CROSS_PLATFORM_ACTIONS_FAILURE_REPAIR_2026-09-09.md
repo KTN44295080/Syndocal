@@ -197,6 +197,30 @@ process cancellation. The Windows job had already passed setup, MSVC pinning,
 runtime staging, and the colored-output warning gate before the run was
 superseded by this bounded test repair. A new hosted rerun is required.
 
+The next hosted run [34307971676](https://github.com/KTN44295080/Syndocal/actions/runs/34307971676)
+confirmed the earlier repairs on Ubuntu: the full Ubuntu job passed in 25m49s,
+including Rust workspace tests, Tauri checks, Linux deb/AppImage packaging,
+smoke testing, and artifact upload. Its Node.js 20 deprecation annotation is
+an action-runtime warning, not a job failure. Windows passed setup, MSVC and
+runtime staging, all default warning ratchets, and the native release warning
+ratchet, but then failed three Windows recording publication tests:
+
+- `recording_artifact::tests::absent_target_publication_atomically_rejects_a_late_creator`;
+- `recording_artifact::tests::absent_target_publication_succeeds_and_removes_owned_partial`;
+- `recording_artifact::tests::complete_output_replaces_target_only_on_publish`.
+
+The result was `1791 passed; 3 failed; 21 ignored`. All three failures came
+from `SetFileInformationByHandle(FileRenameInfo)` returning
+`ERROR_INVALID_NAME (0x8007007B)` when the short canonicalized target was
+passed with Rust's `\\?\\` extended prefix. The product publication protocol
+was not weakened: no replace flag was enabled, ownership and recovery journal
+checks remain unchanged, and the late-creator test still requires rejection.
+The Windows rename adapter now converts only short extended drive/UNC paths
+to conventional absolute DOS/UNC form for `FileRenameInfo`; paths exceeding
+the conventional limit retain the extended form and therefore remain
+fail-closed. Pure path-normalization tests cover drive, UNC, and long-path
+cases. A hosted Windows rerun is required to validate the API-level repair.
+
 ## Boundary
 
 This checkpoint does not claim Windows native-window, hardware, physical

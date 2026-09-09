@@ -41,6 +41,28 @@ fn encode_path(path: &Path) -> Result<Vec<u16>, String> {
     Ok(units)
 }
 
+fn encode_rename_target(path: &Path) -> Result<Vec<u16>, String> {
+    let units = encode_path(path)?;
+    const EXTENDED_PREFIX: &[u16] = &[b'\\' as u16, b'\\' as u16, b'?' as u16, b'\\' as u16];
+    const UNC_MARKER: &[u16] = &[b'U' as u16, b'N' as u16, b'C' as u16, b'\\' as u16];
+    const MAX_WIN32_PATH_UNITS_WITHOUT_NUL: usize = 259;
+
+    let Some(extended) = units.strip_prefix(EXTENDED_PREFIX) else {
+        return Ok(units);
+    };
+    let conventional = if let Some(unc_path) = extended.strip_prefix(UNC_MARKER) {
+        let mut path = vec![b'\\' as u16, b'\\' as u16];
+        path.extend_from_slice(unc_path);
+        path
+    } else {
+        extended.to_vec()
+    };
+    if conventional.len() <= MAX_WIN32_PATH_UNITS_WITHOUT_NUL {
+        return Ok(conventional);
+    }
+    Ok(units)
+}
+
 fn validate_regular_file(file: &File, path: &Path) -> Result<(), String> {
     let mut attributes = FILE_ATTRIBUTE_TAG_INFO::default();
     unsafe {
@@ -122,7 +144,12 @@ pub(super) fn rename_no_replace(source: &File, target: &Path) -> Result<(), Stri
             target.display()
         ));
     }
-    let name = encode_path(target)?;
+    // SetFileInformationByHandle accepts the conventional absolute DOS/UNC
+    // form for short paths. Rust canonicalization produces an extended
+    // `\\?\\` path, which is valid for CreateFileW but is rejected by the
+    // hosted Windows runner's FileRenameInfo implementation with
+    // ERROR_INVALID_NAME. Keep the extended form for paths that need it.
+    let name = encode_rename_target(target)?;
     let name_bytes = name
         .len()
         .checked_mul(size_of::<u16>())
@@ -163,6 +190,45 @@ pub(super) fn rename_no_replace(source: &File, target: &Path) -> Result<(), Stri
             target.display()
         )
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::windows::ffi::OsStringExt;
+    use std::{ffi::OsString, path::PathBuf};
+
+    fn path_from_units(units: &[u16]) -> PathBuf {
+        PathBuf::from(OsString::from_wide(units))
+    }
+
+    #[test]
+    fn short_extended_drive_path_uses_conventional_form_for_file_rename_info() {
+        let extended = Path::new(r"\\?\C:\Temp\recording.mp4");
+        assert_eq!(
+            encode_rename_target(extended).unwrap(),
+            encode_path(Path::new(r"C:\Temp\recording.mp4")).unwrap()
+        );
+    }
+
+    #[test]
+    fn short_extended_unc_path_uses_conventional_form_for_file_rename_info() {
+        let extended = Path::new(r"\\?\UNC\server\share\recording.mp4");
+        assert_eq!(
+            encode_rename_target(extended).unwrap(),
+            encode_path(Path::new(r"\\server\share\recording.mp4")).unwrap()
+        );
+    }
+
+    #[test]
+    fn long_extended_path_remains_extended_for_file_rename_info() {
+        let suffix = "x".repeat(260);
+        let extended = PathBuf::from(format!(r"\\?\C:\Temp\{suffix}.mp4"));
+        assert_eq!(
+            path_from_units(&encode_rename_target(&extended).unwrap()),
+            extended
+        );
+    }
 }
 
 pub(super) fn delete_owned(file: &File) -> Result<(), String> {
