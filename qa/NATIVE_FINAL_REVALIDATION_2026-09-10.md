@@ -11,7 +11,7 @@ physical output.
 ## Source and artifact identity
 
 - Source checkout: `C:\Users\janua\OneDrive\ドキュメント\GitHub\Syndocal`
-- Source HEAD: `20ecd6cd68fe93c26134cbabb47da8e92deca968`
+- Source HEAD at build time: `20ecd6cd68fe93c26134cbabb47da8e92deca968`
 - Build command: `pnpm.cmd --dir app tauri build --no-bundle`
 - Build result: exit `0`; maintained wrapper selected the exact MSVC
   `14.44.35207` Build Tools linker and returned it first from `where.exe link.exe`
@@ -19,6 +19,20 @@ physical output.
 - Product version: `1.2.0-alpha.69`
 - Bytes: `64,541,696`
 - SHA-256: `6EDBA1ACB75BCBBF757EC3B8B5A36288D55891B3B47D211B994BDE179C703628`
+
+## Post-checkpoint CI
+
+- QA-record commit: `323f83a983cd0f9482b9d883a27d1e07f92d2657`
+- GitHub Actions run: `34380451853`
+- Windows 10+: success; Rust workspace, in-process video decode, frontend,
+  Tauri/release checks, Windows installer bundle, and installer smoke stages
+  passed.
+- Ubuntu 22.04: success; Rust workspace, in-process video decode, frontend,
+  Tauri/release checks, Linux package/AppImage bundle and smoke stages passed.
+- SDK-dependent Windows ASIO/NDI checks were unavailable/skipped according to
+  the workflow boundary; this is not physical-device acceptance.
+- The workflow emitted upstream Node.js 20 deprecation annotations for pinned
+  actions; no job failed because of them.
 
 ## Native probe result
 
