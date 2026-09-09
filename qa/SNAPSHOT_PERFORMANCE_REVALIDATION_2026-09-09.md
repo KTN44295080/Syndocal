@@ -97,3 +97,46 @@ Those items require a fixed workload and before/after evidence before a
 product change is justified. This checkpoint therefore closes measurement
 revalidation only; it does not claim snapshot-performance completion, native
 hardware acceptance, or whole-product completion.
+
+## Current-main revalidation
+
+The read-only measurement was repeated on current `main` at source HEAD
+`045f3c8f8483ea85e5a2bfa85548415db446f701`. The preserved fixture remained
+unchanged at 21,612 bytes with SHA-256
+`45FBBFC1165C8A79BAEDBCBA6C44C99F101120E1814AB5E9D3AD14C4589F99DB`.
+
+The exact Windows native procedure used Build Tools 14.44.35207, set
+`CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER` to the absolute
+`...14.44.35207...\\link.exe`, and verified that `where.exe link.exe` returned
+that linker first. The engine benchmark also received the required preserved
+fixture path through `SYNDOCAL_SNAPSHOT_BENCH_PROJECT`.
+
+```text
+cargo test -p engine --release --locked snapshot_output_read_benchmark -- --ignored --nocapture --test-threads=1
+test result: ok. 5 passed; 0 failed; 0 ignored
+clone_ns=3364500 encode_ns=9773300 clone_encode_ns=13746400
+writer_contention full_median_ns=2522300 narrow_median_ns=2518800 try_median_ns=12200 full_successes=100 narrow_successes=100 try_successes=0
+build_snapshot_ns=11151800
+rendered_ns=1242000 authored_from_rendered_ns=1997400 both_ns=2010000
+full_ns=13933600 narrow_ns=142200
+```
+
+The focused application and engine regressions also passed under the same
+linker procedure:
+
+```text
+cargo test --manifest-path app/src-tauri/Cargo.toml --release --locked -j 1 snapshot_sync -- --nocapture --test-threads=1
+test result: ok. 9 passed; 0 failed; 2 ignored
+
+cargo test -p engine --release --locked snapshot_read -- --test-threads=1
+test result: ok. 4 passed; 0 failed; 2 ignored
+```
+
+An initial invocation without `SYNDOCAL_SNAPSHOT_BENCH_PROJECT` failed all
+five opt-in benchmark cases at their explicit-fixture guard. This was a
+command-input omission, not a product result; the corrected invocation above
+passed without changing source or weakening assertions.
+
+This current-main checkpoint remains measurement evidence only. It does not
+close the larger snapshot-performance design boundary, native hardware
+acceptance, or whole-product completion claims.
