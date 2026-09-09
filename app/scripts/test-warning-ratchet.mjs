@@ -510,7 +510,9 @@ assert.equal(timeoutResult.timedOut, true);
 // healthy generic command into an exitCode:null startup false negative.
 const genericConfiguration = (code, markers = ["generic-marker"], timeoutMs = 30_000) => ({
   id: "generic-warning-fixture",
-  command: { executable: "pnpm", args: ["--dir", path.join(repoRoot, "app"), "exec", "node", "-e", code] },
+  // Keep the fixture output deterministic when Windows resolves pnpm through
+  // the action-installed package instead of the host's Corepack shim.
+  command: { executable: "pnpm", args: ["--silent", "--dir", path.join(repoRoot, "app"), "exec", "node", "-e", code] },
   timeoutMs,
   expectedOutputMarkers: markers,
 });

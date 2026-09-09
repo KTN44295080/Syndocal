@@ -293,7 +293,11 @@ export const GENERIC_COMMAND_OUTPUT_LIMIT_BYTES = 8 * 1024 * 1024;
 function resolvePnpmInvocation(args) {
   if (process.platform !== "win32") return { executable: "pnpm", args, shell: false };
   const nodeDirectory = path.dirname(process.execPath);
+  const pnpmHome = process.env.PNPM_HOME;
   const directPnpmScriptCandidates = [
+    ...(pnpmHome
+      ? [path.resolve(pnpmHome, "..", "pnpm", "bin", "pnpm.cjs")]
+      : []),
     path.join(nodeDirectory, "node_modules", "corepack", "dist", "pnpm.js"),
     path.join(nodeDirectory, "node_modules", "pnpm", "bin", "pnpm.cjs"),
   ];
