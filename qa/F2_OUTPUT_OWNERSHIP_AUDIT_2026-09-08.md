@@ -70,3 +70,41 @@ Mac real-device, signing, publication, and product-wide acceptance remain
 unclaimed.
 
 No assertion was weakened and no runtime or physical-output behavior changed.
+
+## Current-main software revalidation
+
+The bounded F2 checks were repeated on current `main` at source HEAD
+`9389ec5e74a6457b2c93beb197933953b37ced22`. No ownership policy, output route,
+or physical-output state was changed.
+
+The six static contracts all passed:
+
+```text
+check-output-ownership.mjs
+check-output-control-runtime.mjs
+check-standby-sync-output-lease-ui.mjs
+check-video-output-routing-runtime.mjs
+check-video-output-window-runtime.mjs
+check-video-output-window-observation.mjs
+```
+
+The exact MSVC 14.44.35207 x64 linker pin and `where.exe link.exe`
+first-match check were used for the native tests. Results were:
+
+```text
+cargo test -p engine --release --locked output_ownership -- --test-threads=1
+test result: ok. 9 passed; 0 failed; 0 ignored
+
+Syndocal targeted ownership tests: 11 passed; 0 failed; 0 ignored
+```
+
+The targeted Syndocal set included the existing atomic role/persistence,
+Standby, stale-window, project-load, fenced-creation, and injected-Spout
+cases. Two historical filter labels in the older audit (`native_video_output_window_close_attempts_all_labels`
+and `warm_standby_project_disarms_every_output`) matched zero tests on current
+source and were explicitly excluded from the pass count; the actual current
+test names were resolved and run instead. A zero-test filter is not evidence.
+
+This current-main software evidence does not close `F2-OUTPUT-OWNERSHIP-001`:
+real Lighting/Video/Both/Standby devices, NDI/Spout/display teardown ACKs,
+Take Over hardware behavior, and venue acceptance remain unclaimed.
