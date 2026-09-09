@@ -51,3 +51,20 @@ AI3-wide safety, external/hardware/Mac real-device, signing, publication, and
 product-wide acceptance remain unclaimed.
 
 No assertion was weakened and no runtime or physical-output behavior changed.
+
+## Current-main software revalidation
+
+The focused query/event tests were repeated on current `main` at source HEAD
+`818235abe6c17f5571bd8a4ee2ad2132564e1ed0`. No product source or query/event
+schema was changed.
+
+```text
+cargo test -p syndocal --release --locked control_plane_query -- --test-threads=1
+test result: ok. 14 passed; 0 failed; 0 ignored; 1804 filtered out
+```
+
+The run used the exact MSVC 14.44.35207 x64 linker pin and the
+`where.exe link.exe` first-match check. This is current-main software evidence
+for the existing bounded query/event vertical only; AI1 remains Open for full
+canonical-family parity, external adapters, and real-client reconnect or
+recovery acceptance.
