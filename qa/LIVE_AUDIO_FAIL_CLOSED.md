@@ -176,3 +176,18 @@ node --no-warnings --experimental-strip-types \
 No product assertion was weakened, no device or physical input was started,
 and the existing ASIO, hardware, latency, soak, and TouchDesigner boundaries
 remain open.
+
+The focused browser restore gate was also rerun after the repair against
+`524afe27e466d64fbef0e85ff925891a6e0fc47e` with the configured desktop
+Playwright runtime and installed Chrome:
+
+```text
+pnpm.cmd --dir app run check:live-audio-restore                              PASS
+pass live-audio-restore-1920x1080 {"failedChecks":[], ...}
+```
+
+The fixture retained the exact forced-start IPC barriers and passed the
+unsaved/saved ASIO and WASAPI disappearance, malformed catalogue, stale
+device, explicit reselection, and stable-identity checks. This is browser
+fixture evidence only; it did not start the native app, a physical input, or
+any ASIO/WASAPI device.
