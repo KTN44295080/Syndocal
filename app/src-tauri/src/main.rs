@@ -88101,6 +88101,21 @@ pub(crate) mod tests {
             runtime_identity.transport_generation(),
             engine_authority.generation
         );
+        // Keep the real public Play transition live long enough for the
+        // linearization assertion. An empty Timeline reaches its terminal
+        // boundary on the next engine tick and can otherwise clear the live
+        // snapshot before this assertion observes it.
+        let mut timeline = engine.snapshot().timeline;
+        timeline.phases = vec![protocol::TimelinePhaseSummary {
+            id: protocol::TimelinePhaseId(1),
+            label: "ASIO test live-fence test body".to_owned(),
+            role: protocol::TimelinePhaseRole::Intro,
+            start_ms: 0,
+            end_ms: 16_000,
+        }];
+        engine
+            .apply_timeline_bank_published(vec![timeline.clone()], timeline.id, false)
+            .expect("seed a non-empty Timeline for the public test Play transition");
         arm_asio_test(&asio_output_runtime);
 
         set_timeline_playing_asio_linearized(

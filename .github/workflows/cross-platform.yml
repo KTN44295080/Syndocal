@@ -267,6 +267,10 @@ jobs:
           WARNING_RATCHET_HEAD_REF: ${{ github.sha }}
         run: |
           $ErrorActionPreference = 'Stop'
+          if (-not [string]::IsNullOrWhiteSpace($env:WARNING_RATCHET_BASE_REF) -and $env:WARNING_RATCHET_BASE_REF -match '^0+$') {
+            Write-Host 'Push event supplied an all-zero comparison SHA; use the checked-out HEAD parent instead.'
+            Remove-Item Env:WARNING_RATCHET_BASE_REF -ErrorAction SilentlyContinue
+          }
           Remove-Item Env:CARGO_HOME -ErrorAction SilentlyContinue
           pnpm --dir app run check:warnings -- --configuration windows-default-all-targets
           pnpm --dir app run check:warnings -- --configuration windows-default-release
@@ -282,6 +286,10 @@ jobs:
           WARNING_RATCHET_HEAD_REF: ${{ github.sha }}
         run: |
           $ErrorActionPreference = 'Stop'
+          if (-not [string]::IsNullOrWhiteSpace($env:WARNING_RATCHET_BASE_REF) -and $env:WARNING_RATCHET_BASE_REF -match '^0+$') {
+            Write-Host 'Push event supplied an all-zero comparison SHA; use the checked-out HEAD parent instead.'
+            Remove-Item Env:WARNING_RATCHET_BASE_REF -ErrorAction SilentlyContinue
+          }
           Remove-Item Env:CARGO_HOME -ErrorAction SilentlyContinue
           pnpm --dir app run check:warnings -- --configuration windows-syndocal-asio
           pnpm --dir app run check:warnings -- --configuration windows-syndocal-ndi
@@ -310,6 +318,10 @@ jobs:
           WARNING_RATCHET_HEAD_REF: ${{ github.sha }}
         run: |
           $ErrorActionPreference = 'Stop'
+          if (-not [string]::IsNullOrWhiteSpace($env:WARNING_RATCHET_BASE_REF) -and $env:WARNING_RATCHET_BASE_REF -match '^0+$') {
+            Write-Host 'Push event supplied an all-zero comparison SHA; use the checked-out HEAD parent instead.'
+            Remove-Item Env:WARNING_RATCHET_BASE_REF -ErrorAction SilentlyContinue
+          }
           Remove-Item Env:CARGO_HOME -ErrorAction SilentlyContinue
           pnpm --dir app run check:warnings -- --configuration windows-native-release
 
