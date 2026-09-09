@@ -85,3 +85,28 @@ not claim:
   wide completion.
 
 No assertion was weakened and no physical output was enabled for this audit.
+
+## Current-main software revalidation
+
+The focused software evidence was repeated on current `main` at source HEAD
+`9735873ae401c84020e062d2ef53066dc6ad0abf`. No product source was changed;
+the existing journal and output-lease implementation was tested as-is. The
+same Windows procedure initialized Build Tools 14.44.35207, pinned the
+absolute x64 linker, and verified it was first in `where.exe link.exe`.
+
+```text
+cargo test --manifest-path app/src-tauri/Cargo.toml --release --locked -j 1 durable -- --test-threads=1
+test result: ok. 23 passed; 0 failed; 0 ignored
+
+cargo test --manifest-path app/src-tauri/Cargo.toml --release --locked -j 1 dsf2026 -- --test-threads=1
+test result: ok. 6 passed; 0 failed; 0 ignored
+
+cargo test --manifest-path app/src-tauri/Cargo.toml --release --locked -j 1 managed_exact_both -- --test-threads=1
+test result: ok. 13 passed; 0 failed; 0 ignored
+```
+
+This revalidation strengthens the current-main software journal evidence only.
+It does not close `AI3-DURABLE-RECOVERY-001`, because a real crash/restart
+process drill, external-client reply-loss acceptance, physical output
+retirement/re-Arm, and hardware acknowledgement remain outside this local
+test boundary.
