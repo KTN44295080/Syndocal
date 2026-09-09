@@ -40706,7 +40706,7 @@ fn safe_first_run_vj_output(output_id: VideoOutputId) -> VideoOutputSummary {
         height: 1080,
         endpoint_name: None,
         opacity: 1.0,
-        blackout: false,
+        blackout: true,
         mapping: VideoOutputMapping::default(),
     }
 }
@@ -90498,10 +90498,10 @@ pub(crate) mod tests {
         let blocker = directory.join("parent-file");
         fs::write(&blocker, b"cannot be a parent directory").expect("write journal blocker");
         let blocked_path = blocker.join(OUTPUT_LEASE_DURABLE_RECEIPT_STATE_FILE);
-        let mut journal = OutputLeaseDurableReceiptJournal::in_memory();
-        journal
-            .install_path(blocked_path)
-            .expect("load missing journal behind blocked parent");
+        let mut journal = OutputLeaseDurableReceiptJournal {
+            path: Some(blocked_path),
+            state: PersistedOutputLeaseReceiptState::default(),
+        };
         let mut registry = OutputLeaseRegistry::fresh_process(41).unwrap();
         let request = durable_output_lease_acquire_request(1);
         let error = registry
@@ -90761,13 +90761,15 @@ pub(crate) mod tests {
         fs::create_dir_all(&directory).unwrap();
         let blocker = directory.join("parent-file");
         fs::write(&blocker, b"not a directory").unwrap();
-        harness
+        *harness
             .state
             .output_lease_durable_receipts
             .lock()
             .unwrap()
-            .install_path(blocker.join(OUTPUT_LEASE_DURABLE_RECEIPT_STATE_FILE))
-            .unwrap();
+            = OutputLeaseDurableReceiptJournal {
+                path: Some(blocker.join(OUTPUT_LEASE_DURABLE_RECEIPT_STATE_FILE)),
+                state: PersistedOutputLeaseReceiptState::default(),
+            };
         let request = durable_output_lease_acquire_request(1);
         let physical_calls = AtomicU64::new(0);
         let prepared = prepare_output_lease_durable_physical_commit(&harness.state, &request);
@@ -99129,7 +99131,7 @@ pub(crate) mod tests {
         assert_eq!(bootstrap.video.outputs.len(), 1);
         assert_eq!(bootstrap.video.outputs[0].id, 61);
         assert!(!bootstrap.video.outputs[0].enabled);
-        assert!(!bootstrap.video.outputs[0].blackout);
+        assert!(bootstrap.video.outputs[0].blackout);
     }
 
     #[test]
