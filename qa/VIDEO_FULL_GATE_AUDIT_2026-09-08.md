@@ -56,3 +56,35 @@ hardware, Mac real-device, signing, publication, and product-wide acceptance
 remain unclaimed.
 
 No assertion was weakened and no runtime or physical-output behavior changed.
+
+## Current-main software revalidation
+
+The bounded software checks were repeated on current `main` at source HEAD
+`9618c2f2a767f64f2b6b2a0d72b3b46b4cae6fe4`. No video feature, transition
+contract, browser dependency, or physical-output path was changed.
+
+| Check | Result |
+| --- | --- |
+| `node app/scripts/check-video-clip-slot-bank.mjs` | PASS — B4 focused model/browser-contract gate |
+| `node app/scripts/check-timeline-follow-runtime.mjs` | PASS — stale E/G, E/R/H, visibility/focus/target contracts |
+| `node app/scripts/check-timeline-follow-hold-ui.mjs` | PASS — explicit normalized Immediate/Hold modes |
+| `cargo test -p engine --release --locked video_full_gate_engine_path -- --test-threads=1` | PASS — 1 passed, 0 failed |
+| `cargo test -p engine --release --locked video_transition_bus_c3_is_typed -- --test-threads=1` | PASS — 1 passed, 0 failed |
+| `cargo test -p engine --release --locked video_sample_clip_take_queue -- --test-threads=1` | PASS — 1 passed, 0 failed |
+| `cargo test -p engine --release --locked video_sample_follow_admission -- --test-threads=1` | PASS — 1 passed, 0 failed |
+
+The native Cargo commands used the exact MSVC 14.44.35207 x64 linker pin and
+`where.exe link.exe` first-match check. The browser gate was attempted without
+downloading dependencies:
+
+```text
+node app/scripts/check-edit-video-fx.mjs
+exit 1
+browserType.launch: Executable doesn't exist at
+C:\Users\janua\AppData\Local\ms-playwright\chromium_headless_shell-1234\chrome-headless-shell.exe
+```
+
+No browser assertion was counted. This is an environment prerequisite
+failure, not a product pass or a source assertion change. The Video/C2/C4 and
+Timeline Follow parent rows remain Open for the unavailable browser/native
+renderer/physical-output boundaries.
