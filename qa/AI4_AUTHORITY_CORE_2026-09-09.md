@@ -96,3 +96,21 @@ The resulting exact executable was:
   external-client acceptance;
 - AI3-wide ingress/output/hardware acceptance, ASIO/NDI/DMX/MIDI, Mac real
   device acceptance, signing/publication, or whole-product completion.
+
+## Current-main revalidation — 2026-09-09
+
+The current `main` source at `43c4326851143a6a4842aeabfa9dd17446bd06c0`
+was independently rechecked against the admission-input repair in `1c30650`:
+
+```text
+cmd.exe /v:on /c 'call "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat" -vcvars_ver=14.44 && set "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe" && where.exe link.exe && cargo test -p protocol --release --locked agent_authority -- --nocapture --test-threads=1'
+```
+
+The exact Build Tools linker was first in `where.exe link.exe` and the focused
+suite passed: **10 passed, 0 failed, 207 filtered out**.
+
+The review confirms that deserialized principal and grant values are
+revalidated at `pair_external`, `grant`, and `AgentRequestContext::validate`
+before authority state changes. The negative test verifies invalid principal and
+operation inputs leave the authority state unchanged. No assertion was
+weakened and no product source changed during this revalidation.
