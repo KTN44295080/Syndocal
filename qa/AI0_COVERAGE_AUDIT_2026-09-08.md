@@ -66,3 +66,21 @@ The protocol test used the exact MSVC 14.44.35207 x64 linker pin and
 `where.exe link.exe` first-match check. The current-main revalidation does not
 expand the coverage claim: AI0 still requires a fail-closed inventory and
 classification of every relevant non-Tauri mutation source.
+
+## Current-main follow-up — `7890bcf89c8f17af27f1b50b317b5a90a173a725`
+
+The bounded AI0 checks were rerun after the Phase 0 QA-only checkpoint.
+Product source, inventory counts, and the coverage claim were unchanged.
+
+| Check | Result |
+| --- | --- |
+| `node app/scripts/check-tauri-admission-inventory.mjs` | PASS — 516 exact commands, SHA-256 `5120894f36feb82ac58fffd4db20739d80ae1b1a1c556fc95838a1708cbb8eea`, 18 negative fixtures rejected |
+| `node app/scripts/check-frontend-command-routing.mjs` | PASS — renderer 133, server-authoritative 31, raw 28, facade 464 |
+| `cargo test -p protocol --release --locked control_plane_registry_v2 -- --test-threads=1` | PASS — 13 passed, 0 failed; 204 filtered |
+| `git diff --check` | PASS for this follow-up |
+
+The exact Windows MSVC 14.44.35207 x64 linker was pinned and returned first by
+`where.exe link.exe`. This follow-up remains bounded inventory evidence; it
+does not close `AI0-COVERAGE-001` or claim that every MIDI/OSC/Remote,
+shortcut, audio-analysis/BPM, native-output-window, or UI mutation source is
+classified and fail-closed.
