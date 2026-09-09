@@ -138323,7 +138323,16 @@ mod tests {
 
         assert!(result.is_err());
         assert!(runtime.shared_telemetry.safety_blackout_authority().engaged);
-        assert_eq!(runtime.build_snapshot(0), before);
+        let after = runtime.build_snapshot(0);
+        assert!(after.safety_blackout_engaged);
+        assert_eq!(after.blackout, before.blackout);
+        let mut comparable_after = after;
+        comparable_after.safety_blackout_engaged = false;
+        assert_eq!(
+            comparable_after,
+            before,
+            "only the externally visible safety latch may change when route activation rolls back"
+        );
         assert_eq!(runtime.dmx_route_configuration_generation, generation);
         assert!(runtime.dmx_sender.is_none());
     }

@@ -86,11 +86,10 @@ mod tests {
 
     #[test]
     fn exact_engine_command_inventory_is_generated_once_and_conservative() {
-        // 276 prior commands plus `RetireManagedShowDmxAfterSafetyBlackout`
-        // and the project-identity-fenced complete media verifier batch.
-        // The renamed authority-loss command remains one descriptor; Reset
-        // adds the separate atomic authored-mutation boundary.
-        const EXPECTED_ENGINE_COMMAND_COUNT: usize = 278;
+        // The generated inventory contains the 278-command baseline plus the
+        // disabled Spout restoration publication and authored blackout target
+        // publication added afterward.
+        const EXPECTED_ENGINE_COMMAND_COUNT: usize = 280;
         let descriptors = control_plane_engine_command_descriptors();
         let variant_names = EngineCommand::CONTROL_PLANE_VARIANT_NAMES
             .iter()
@@ -115,6 +114,8 @@ mod tests {
         assert!(variant_names.contains("SendDsf2026ArtNetAcceptanceProbe"));
         assert!(variant_names.contains("SetVideoCompositionTimelineLayers"));
         assert!(variant_names.contains("SetMediaAssetAvailabilityBatch"));
+        assert!(variant_names.contains("RestoreShowSpoutOutputsDisabledPublished"));
+        assert!(variant_names.contains("SetOutputBlackoutPublished"));
         assert_eq!(
             descriptors
                 .iter()

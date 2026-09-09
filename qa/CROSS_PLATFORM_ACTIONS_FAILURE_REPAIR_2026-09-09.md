@@ -90,6 +90,29 @@ the fail-closed `PlatformUnsupported` error. The assertion now uses
 the credential-store type. The same focused test group passes on Windows
 locally; a hosted Linux rerun is required to close this gate.
 
+The next rerun [34293175543](https://github.com/KTN44295080/Syndocal/actions/runs/34293175543)
+passed the Windows prerequisites, formatting/warning self-test on Ubuntu, and
+reached the engine test suite on Ubuntu. It then exposed two stale test
+contracts, both unrelated to a product-code regression:
+
+- the generated engine command inventory is now 280 entries, but the test
+  still expected the earlier 278-entry baseline; the test now expects 280 and
+  explicitly keeps tripwires for the two later publication variants;
+- the Art-Net route linearization test still required a byte-for-byte
+  unchanged snapshot even though the current safety-authority contract
+  publishes `safety_blackout_engaged` after the priority blackout. The test
+  now asserts that only this externally visible safety latch changes, while
+  route generation, sender ownership, ordinary blackout, and all other
+  snapshot fields remain unchanged.
+
+The two focused engine tests pass locally after this test-only repair. A
+hosted rerun is required before claiming the Linux test/build gate passes.
+The same run also reported a hosted Linux allocation failure while compiling
+and a hosted Windows allocation failure during `cargo fmt --check`; these are
+runner/resource and current-workspace formatting baseline conditions. The
+Windows formatting baseline remains intentionally unfixed and is not being
+masked by changing the gate.
+
 ## Boundary
 
 This checkpoint does not claim Windows native-window, hardware, physical
