@@ -28654,7 +28654,7 @@ async function exerciseTimelineBlockPropertiesDrawerLayout(client) {
     await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
     const surface = document.querySelector('[data-timeline-arranger-upper] .timelineShowSurface')
       ?? document.querySelector('.timelineShowSurface');
-    const frame = surface?.querySelector(':scope > .timelineOverviewFrame');
+    const frame = surface?.querySelector('.timelineOverviewFrame');
     const drawer = surface?.querySelector(
       ':scope > [data-timeline-context-drawer-panel="block"]:not(.timelineBlockBrowserDrawer)',
     );
@@ -29172,7 +29172,6 @@ async function measureTimelineSourceShelf(client) {
     };
     const rect = shelf.getBoundingClientRect();
     const context = shelf.closest('[data-workspace-pane="lower-right"]');
-    const categoryButtons = [...shelf.querySelectorAll('[data-timeline-source-shelf-category]')];
     const filters = [...shelf.querySelectorAll('[data-timeline-source-shelf-filter]')];
     const placementButtons = [...shelf.querySelectorAll('[data-timeline-external-source]')];
     const targetSelects = [...shelf.querySelectorAll('.timelineExternalSourceTarget select')];
@@ -29198,7 +29197,6 @@ async function measureTimelineSourceShelf(client) {
       present: true,
       contained: rect.left >= -0.5 && rect.right <= innerWidth + 0.5 && rect.top >= -0.5 && rect.bottom <= innerHeight + 0.5,
       compactTopAligned: context instanceof HTMLElement && rect.top >= context.getBoundingClientRect().top - 1 && rect.bottom <= context.getBoundingClientRect().bottom + 1 && rect.height < context.getBoundingClientRect().height - 4,
-      categoryButtonCount: categoryButtons.length,
       filterCount: filters.length,
       placementButtonCount: placementButtons.length,
       sourceKinds,
@@ -29220,7 +29218,7 @@ async function measureTimelineSourceShelf(client) {
 
 async function focusTimelineSourceShelf(client) {
   return client.evaluate(`(() => {
-    const target = document.querySelector('[data-timeline-source-shelf-category="media"]');
+    const target = document.querySelector('[data-timeline-source-shelf-filter="video"]');
     if (!(target instanceof HTMLButtonElement)) return false;
     target.focus();
     return document.activeElement === target;
@@ -29316,8 +29314,8 @@ async function exerciseTimelineSourceShelfContextSwitch(client) {
   await pressKey(client, 'End');
   await sleep(48);
   const end = await client.evaluate(`(() => ({
-    focused: document.activeElement?.getAttribute('data-timeline-source-shelf-mode') === 'inspector',
-    selected: document.querySelector('[data-timeline-source-shelf-mode="inspector"]')?.getAttribute('aria-selected') === 'true',
+    focused: document.activeElement?.getAttribute('data-timeline-source-shelf-mode') === 'video-preview',
+    selected: document.querySelector('[data-timeline-source-shelf-mode="video-preview"]')?.getAttribute('aria-selected') === 'true',
   }))()`);
   await pressKey(client, 'Home');
   await sleep(48);
@@ -29341,7 +29339,7 @@ async function exerciseTimelineSourceShelfContextSwitch(client) {
 
 async function showTimelineSourceShelfMedia(client) {
   const categoryShown = await client.evaluate(`(() => {
-    const target = document.querySelector('[data-timeline-source-shelf-category="media"]');
+    const target = document.querySelector('[data-timeline-source-shelf-filter="video"]');
     if (!(target instanceof HTMLButtonElement)) return false;
     target.click();
     return true;
@@ -29397,7 +29395,7 @@ async function readTimelineInitialShelfState(client) {
 async function prepareTimelineSourceShelfMediaPlacement(client) {
   return client.evaluate(`(async () => {
     const shelf = document.querySelector('[data-timeline-source-shelf]');
-    const category = shelf?.querySelector('[data-timeline-source-shelf-category="media"]');
+    const category = shelf?.querySelector('[data-timeline-source-shelf-filter="video"]');
     if (!(category instanceof HTMLButtonElement)) {
       return { prepared: false, reason: 'missing-media-disclosure-or-targets' };
     }
@@ -29596,7 +29594,7 @@ const timelineSourceShelfAvailabilityCaptureMatches = (capture, assetId) => {
 async function verifyTimelineSourceShelfMediaForPlacement(client) {
   const target = await client.evaluate(`(async () => {
     const shelf = document.querySelector('[data-timeline-source-shelf]');
-    const category = shelf?.querySelector('[data-timeline-source-shelf-category="media"]');
+    const category = shelf?.querySelector('[data-timeline-source-shelf-filter="video"]');
     if (!(category instanceof HTMLButtonElement)) return { verified: false, reason: 'missing-media-category' };
     category.click();
     await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
@@ -30992,7 +30990,7 @@ async function runTimelineSlimViewport(client, viewport, recycleClient = null) {
     ['timelineSlimKeepsLightingMatrixOutOfTimelineDomain', () =>
       visual.gutterCount > 0 && sourceShelf.present],
     ['timelineSlimUsesShelfInsteadOfCrossDomainMatrixDrag', () =>
-      sourceShelf.present && sourceShelf.categoryButtonCount === 2 && sourceShelf.filterCount === 3],
+      sourceShelf.present && sourceShelf.filterCount === 4],
     ['timelineSourceShelfSceneClickPlacesExactlyOneBlockOnSelectedVisibleLane', () =>
       sourceShelfScenePlacement.passed],
     ['timelineSourceShelfSceneDragHitsVisibleLaneAndPlacesExactlyOneBlock', () =>
@@ -31016,7 +31014,7 @@ async function runTimelineSlimViewport(client, viewport, recycleClient = null) {
       (!sourceShelfSceneCards.fxFixtureSupplied || sourceShelfSceneCards.equalHeights)],
     ['timelineSourceShelfExposesExactSourceAndTargetControls', () =>
       sourceShelfMediaDisclosurePrepared === true &&
-      sourceShelf.categoryButtonCount === 2 && sourceShelf.filterCount === 3 &&
+      sourceShelf.filterCount === 4 &&
       initialShelfState?.sourceKinds.includes('Lighting') &&
       sourceShelf.sourceKinds.includes('Video') && sourceShelf.sourceKinds.includes('Audio') &&
       sourceShelf.placementButtonCount >= 2 &&
@@ -39541,7 +39539,6 @@ async function main() {
             `t14=${result.t14.subThresholdClick?.movedPx ?? "?"}/${result.t14.oneGestureDrag?.sourceCueId ?? "?"}@${result.t14.oneGestureDrag?.targetLayerId ?? "?"} ` +
             `t14Failed=${JSON.stringify(result.t14.failedChecks)} ` +
             `shelf=${JSON.stringify({
-              categories: result.sourceShelf.categoryButtonCount,
               filters: result.sourceShelf.filterCount,
               sources: result.sourceShelf.sourceKinds,
               targets: result.sourceShelf.targetValues,

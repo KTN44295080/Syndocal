@@ -2495,8 +2495,10 @@ h3 {
   align-content: start;
   width: 100%;
   min-height: 0;
-  height: auto;
-  max-height: 100%;
+  /* Reserve a stable compact rail; the body owns card overflow instead of
+     allowing the grid item to expand to the whole lower pane. */
+  height: 200px;
+  max-height: min(200px, 100%);
   overflow: hidden;
 }
 
