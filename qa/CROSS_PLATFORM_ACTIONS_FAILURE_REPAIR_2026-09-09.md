@@ -343,11 +343,24 @@ Local validation after the repair:
   pre-existing workspace formatting differences outside this change, so no
   broad formatting rewrite was applied.
 
-The Ubuntu hosted rerun after this test-only repair remains required before
+The Ubuntu hosted rerun after this test-only repair was required before
 claiming the combined Cross-platform workflow green. A non-fatal hosted
 `memory allocation of 32969475296 bytes failed` message occurred during an
 earlier warning-ratchet formatting subprocess and is recorded separately from
 the Rust test failure.
+
+## Hosted result after the bounded NDI re-arm repair
+
+The hosted run [34329223985](https://github.com/KTN44295080/Syndocal/actions/runs/34329223985)
+used `22ddc0a5298d4f838ffeec6258245e9161562580` and completed successfully
+for both Windows 10+ and Ubuntu 22.04. Windows passed the exact MSVC/runtime
+setup, warning ratchets, Rust workspace tests, video decode, frontend/Tauri
+checks, release metadata, NSIS/MSI bundle generation, two-root installer
+smoke tests, and installer upload. Ubuntu passed the Rust workspace tests,
+video decode, frontend/Tauri checks, release metadata, Linux package
+generation, AppImage smoke tests, and artifact upload. The repaired NDI test
+therefore passed on the hosted Ubuntu runner; the test-only bounded retry did
+not weaken the fail-closed assertion.
 
 ## Boundary
 
