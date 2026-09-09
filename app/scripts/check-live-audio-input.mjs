@@ -1295,7 +1295,7 @@ assert.match(
   "the stale device format must be localized instead of leaving its dynamic unavailable state English-only",
 );
 assert.ok(
-  [...app.matchAll(/localize: \(source\) => translateUiText\(source, uiLocale\(\)\)/g)].length >= 3,
+  [...app.matchAll(/localize: \(source(?:\s*:\s*string)?\) => translateUiText\(source, uiLocale\(\)\)/g)].length >= 3,
   "both mounted Live Audio rails must receive the same App-owned locale source without disturbing existing localized callers",
 );
 assert.ok(

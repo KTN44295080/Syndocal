@@ -151,3 +151,28 @@ Rack and deterministic Auto VJ while retaining this fail-closed contract.
 TouchDesigner parity is not claimed. The terminal CPAL error callback may
 allocate while formatting its one-shot fault detail; the real-time normal data
 callback does not.
+
+## Checker repair revalidation — 2026-09-09
+
+The current `main` source before this bounded repair was
+`92bbf3680abaed0b824a4f414b5e62be315ffa01`. The product source was not
+changed. `check-live-audio-input.mjs` rejected the existing App wiring because
+its count pattern matched only the untyped form
+`localize: (source) => ...`, while one of the three App-owned locale adapters
+was explicitly typed as `source: string`. The checker now accepts the optional
+parameter type annotation while retaining the `>= 3` assertion and its
+original failure message.
+
+Verification after the repair:
+
+```text
+node --check app/scripts/check-live-audio-input.mjs                         PASS
+node app/scripts/check-live-audio-input.mjs                                  PASS
+pnpm.cmd --dir app run check:live-audio                                      PASS
+node --no-warnings --experimental-strip-types \
+  app/scripts/check-live-audio-input-ipc-v1.mjs                              PASS
+```
+
+No product assertion was weakened, no device or physical input was started,
+and the existing ASIO, hardware, latency, soak, and TouchDesigner boundaries
+remain open.
