@@ -46,3 +46,27 @@ ASIO/DMX/MIDI, venue operation, Mac behavior, signing, publication, or
 product-wide completion.
 
 `git diff --check`: PASS before commit.
+
+## Current-main revalidation — 2026-09-09
+
+The same focused release regressions were rerun against current `main` at
+`52c749c1c456107466e183b81329eb2b324981fa`. Product source was not changed by
+this checkpoint, and the previously completed real-file thumbnail recovery was
+not rerun.
+
+Both commands used the exact Build Tools 14.44.35207 x64 linker, with
+`where.exe link.exe` resolving that linker first. Results:
+
+```text
+cargo test --manifest-path app/src-tauri/Cargo.toml --release --locked -j 1 recording_ -- --nocapture --test-threads=1
+test result: ok. 60 passed; 0 failed; 6 ignored; 1752 filtered out
+
+cargo test --manifest-path app/src-tauri/Cargo.toml --release --locked -j 1 spout_ -- --nocapture --test-threads=1
+test result: ok. 101 passed; 0 failed; 5 ignored; 1712 filtered out
+```
+
+The expected injected panic/failure messages were observed inside tests that
+returned `ok`; no assertion was weakened. This remains Windows software
+evidence only. It does not claim real FFmpeg H.264/AAC recording, real Spout2,
+external Spout interoperability, GPU/display hardware, NDI, ASIO/DMX/MIDI,
+physical output, Mac behavior, signing, publication, or venue acceptance.
