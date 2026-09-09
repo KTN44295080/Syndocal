@@ -182,6 +182,21 @@ differences in other files, so no broad formatting change was made. A new
 hosted rerun of the changed commit is required before claiming the Linux gate
 green.
 
+The next hosted run [34307030258](https://github.com/KTN44295080/Syndocal/actions/runs/34307030258)
+used `5a325a413048ba44663ba1a0858a055a7f3ab0c8`. Ubuntu passed setup,
+formatting, and warning gates, and the Rust workspace reached the video crate
+before failing
+`ffmpeg_cancellable_process::tests::cancellation_terminates_and_reaps_a_running_process`.
+The test reported `cancelled child must be reaped promptly` after 35 seconds.
+The Linux fixture used `sh -c "sleep 30"`; killing only the shell leaves its
+grandchild holding the piped descriptors, so the reader joins wait for the
+grandchild. This is a test-fixture process-tree issue, not an FFmpeg
+cancellation result. The fixture is now a direct `sleep 30` child on Unix,
+preserving the direct-child kill/reap assertion without changing product
+process cancellation. The Windows job had already passed setup, MSVC pinning,
+runtime staging, and the colored-output warning gate before the run was
+superseded by this bounded test repair. A new hosted rerun is required.
+
 ## Boundary
 
 This checkpoint does not claim Windows native-window, hardware, physical

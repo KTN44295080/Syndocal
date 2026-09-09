@@ -112,8 +112,12 @@ mod tests {
             ]);
             command
         } else {
-            let mut command = Command::new("sh");
-            command.args(["-c", "sleep 30"]);
+            // Use the long-running process directly. A shell wrapper would
+            // leave its `sleep` grandchild holding the piped descriptors after
+            // the wrapper is killed, so the reader joins would measure shell
+            // process-tree behavior instead of direct-child cancellation.
+            let mut command = Command::new("sleep");
+            command.arg("30");
             command
         };
         let started = Instant::now();
