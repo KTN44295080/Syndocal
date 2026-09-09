@@ -54,3 +54,21 @@ remain open in the completion ledger until their wider acceptance conditions
 are met. This run does not claim native renderer/GPU/display behavior, real
 show media, physical output, hardware, Mac execution, signing, publication,
 or product-wide completion.
+
+## Current-main revalidation — 2026-09-09
+
+The same browser fixture was rerun against current `main` at
+`d394370875ef8ce4592633d9ac52b2693feb1e15` using the configured desktop
+Playwright runtime, installed Chrome, and exclusive port `5217`.
+
+Exit code was `0`, with the same results at 1920×1080 and 1280×720:
+
+```text
+PASS edit-video-fx 1920x1080: mounted=0/1/0, selected-layer callback=2, controls=64, outer-overflow=0
+PASS edit-video-fx 1280x720: mounted=0/1/0, selected-layer callback=2, controls=64, outer-overflow=0
+```
+
+No product source was changed, no Playwright dependency was downloaded, and
+no native application, physical output, device, or external client was
+started. This strengthens browser-contract evidence only and does not close
+the broader video ledger rows.
