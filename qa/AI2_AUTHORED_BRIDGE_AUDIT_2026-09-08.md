@@ -73,3 +73,21 @@ unclaimed.
 This checkpoint contains documentation only. The incomplete Channel API and
 old Mac candidates were not merged, and the prior real-file recovery test was
 not repeated.
+
+## Current-main software revalidation
+
+The existing authored vertical was revalidated on current `main` at source
+HEAD `818235abe6c17f5571bd8a4ee2ad2132564e1ed0`. No authored operation set,
+receipt schema, or mutation controller was changed.
+
+| Check | Result |
+| --- | --- |
+| `node app/scripts/check-authored-effect-enable.mjs` | PASS — strict rendered route, receipt, superseded A/B, stale retry and rollback scenarios |
+| `node app/scripts/check-project-transaction-mutation-controller.mjs` | PASS — 6 scenarios; no native/UI side effects |
+| `cargo test -p syndocal --release --locked authored -- --test-threads=1` | PASS — 34 passed, 0 failed; 1784 filtered |
+
+The Rust run used the exact MSVC 14.44.35207 x64 linker pin and
+`where.exe link.exe` first-match check. This strengthens only the existing
+vertical evidence; `AI2-COMMAND-BRIDGE-001` remains Open for all authored
+families, external adapters, consent policy, and adversarial or real-client
+recovery matrices.
