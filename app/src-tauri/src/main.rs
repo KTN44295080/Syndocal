@@ -86189,6 +86189,7 @@ pub(crate) mod tests {
             );
         }
         let route = "create_scene_authoritative_v1";
+        let normalized_scene_creation_source = scene_creation_source.replace("\r\n", "\n");
         let signature = format!("fn {route}(");
         let start = source
             .find(&signature)
@@ -86207,7 +86208,7 @@ pub(crate) mod tests {
             "Scene create modes must reach one authoritative commit core"
         );
         assert!(
-            scene_creation_source.contains(
+            normalized_scene_creation_source.contains(
                 "tag = \"mode\",\n    rename_all = \"camelCase\",\n    rename_all_fields = \"camelCase\",\n    deny_unknown_fields"
             ),
             "Scene create request must reject legacy, missing, or unknown fields"
