@@ -505,7 +505,10 @@ const timeoutResult = await runProcessWithTimeout(process.execPath, ["-e", "setT
 });
 assert.equal(timeoutResult.timedOut, true);
 
-const genericConfiguration = (code, markers = ["generic-marker"], timeoutMs = 5_000) => ({
+// Hosted Windows runners can spend several seconds starting pnpm on a cold
+// cache. Keep the explicit timeout fixture below short, but do not turn a
+// healthy generic command into an exitCode:null startup false negative.
+const genericConfiguration = (code, markers = ["generic-marker"], timeoutMs = 30_000) => ({
   id: "generic-warning-fixture",
   command: { executable: "pnpm", args: ["--dir", path.join(repoRoot, "app"), "exec", "node", "-e", code] },
   timeoutMs,
