@@ -68,3 +68,31 @@ This audit does not close `TIMELINE-PERSISTENCE-001` or any parent completion
 ledger row solely from software evidence. Remaining ledger rows and external,
 hardware, browser, Mac, signing, and release gates remain governed by their
 respective acceptance records.
+
+## Current-main revalidation — 2026-09-09
+
+The same bounded audit was rerun against current `main` at
+`92909028aaac3906d0320993c0a1579cf42e7883`. Product source files were not
+changed by this checkpoint; the prior missing-file thumbnail recovery was not
+rerun.
+
+The ten existing static checkers listed above all passed. The Rust filters were
+run with `vcvars64.bat -vcvars_ver=14.44`, and
+`where.exe link.exe` first resolved to
+`C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe`:
+
+| Focused filter | Result |
+| --- | --- |
+| `project_publication_` | 18 passed, 0 failed |
+| `project_backup_` | 2 passed, 0 failed |
+| `project_coordinator_identity_swap` | 1 passed, 0 failed |
+| `project_history_generation_preflight` | 1 passed, 0 failed |
+| `project_history_skips_noops` | 1 passed, 0 failed |
+| `project_save_reload_uses_authored_video` | 1 passed, 0 failed |
+| `project_load_recomputes_stale_conform_rate` | 1 passed, 0 failed |
+| `timeline_scene_block_edits_survive_project_history_entries` | 1 passed, 0 failed |
+| `timeline_snap_batch_is_preserved_as_one_project_history_entry` | 1 passed, 0 failed |
+
+This current-main revalidation strengthens the software evidence only. It does
+not close the ledger row or claim browser/native UI, external-client,
+physical-output, Mac, signing, or publication acceptance.
