@@ -28,3 +28,22 @@ No assertion was weakened and no external or physical-output acceptance is
 claimed. The GUI cancellation/stop-latency, real-file media recovery,
 snapshot full-show performance, macOS, hardware and venue boundaries remain
 open under the handoff.
+
+## Current-main revalidation — 2026-09-09
+
+The same bounded checks were rerun against current `main` at
+`e2cf572514b3f281dcdebb42aa6dc9a164ddc304`. Product source files were not
+changed by this checkpoint, and the previously completed real-file thumbnail
+recovery was not rerun.
+
+The following all passed: `check-media-asset-authority.mjs`,
+`check-project-transaction-mutation-controller.mjs` (6 scenarios),
+`check-project-history-preflight.mjs`, `check-project-autosave-coordinator.mjs`,
+and `pnpm.cmd --dir app run check:project-transaction` (production transaction
+contract plus deterministic project authority). No assertion was weakened.
+
+This is current-main software evidence only. It does not close
+`MEDIA-DERIVED-001` and does not claim real-file recovery, GUI cancellation or
+stop latency, cache/waveform/proxy performance, native/browser reachability,
+external clients, physical output, Mac, signing, publication, or venue
+acceptance.
