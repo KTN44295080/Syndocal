@@ -17,7 +17,9 @@ jobs:
   test:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
+    # Windows runs the full native validation and both installers in this job.
+    # Keep enough wall-clock budget for NSIS/MSI packaging after the test gates.
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:

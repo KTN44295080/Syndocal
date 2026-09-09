@@ -238,6 +238,20 @@ wall-clock budget failure in the combined Windows test-and-bundle job, not a
 new product or recording-publication failure. The Node.js 20 deprecation
 annotation is an action-runtime warning and is not a job failure.
 
+## CI wall-clock budget repair
+
+The Windows test-and-bundle job exceeded its explicit 60-minute limit after
+the source repair had already passed the Rust workspace, video decode,
+frontend, Tauri, and release-metadata gates. The measured run spent about
+19 minutes in the Windows warning ratchets and about 15 minutes in the native
+release warning ratchet before the test/build gates completed; it reached NSIS
+only near the end of the one-hour budget. The workflow job timeout is now 90
+minutes so the existing installer, smoke-test, and upload assertions can run
+to completion. This changes no product code, warning assertion, SDK
+availability boundary, or packaging command. A hosted rerun at the new
+workflow commit is required before claiming the Windows hosted packaging gate
+green.
+
 ## Boundary
 
 This checkpoint does not claim Windows native-window, hardware, physical
