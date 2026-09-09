@@ -749,7 +749,7 @@ mod tests {
                 },
             )
             .unwrap_err()
-            .contains("lexically below"));
+            .contains("must be absolute"));
             assert_eq!(non_native_path_probes, 0);
         }
 

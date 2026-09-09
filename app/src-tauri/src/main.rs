@@ -100774,6 +100774,10 @@ pub(crate) mod tests {
             true,
             &cancel,
             move || {
+                // Keep the in-place write in a later clock interval so filesystems
+                // with coarse ctime update scheduling cannot make the test setup
+                // indistinguishable from the original inode version.
+                std::thread::sleep(Duration::from_millis(25));
                 fs::write(&rewrite_path, b"xyz")
                     .map_err(|error| format!("unable to rewrite source: {error}"))?;
                 set_test_file_modified_time(&rewrite_path, original_modified);

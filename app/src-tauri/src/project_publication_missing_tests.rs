@@ -7,7 +7,7 @@ fn request(id: u64) -> ProjectPublicationRequestV1 {
         surface: ProjectPublicationSurfaceV1::Backup,
         expected_project_epoch: 7, expected_project_revision: 11,
         expected_checkpoint_hash: "a".repeat(64), mapping_authority_hash: "a".repeat(64),
-        source_path: Some("C:/fixture/original.sdc".into()), reason: Some("autosave".into()),
+        source_path: Some(std::env::temp_dir().join("syndocal-missing-publication-original.sdc").to_string_lossy().into_owned()), reason: Some("autosave".into()),
         target_policy: ProjectPublicationTargetPolicyV1::ManagedUnique,
     }
 }
