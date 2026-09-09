@@ -44,3 +44,28 @@ audio-consumer acknowledgement.
 This is a focused software audit. It does not close `TIMELINE-FOLLOW-001` or
 `VIDEO-FULL-GATE-001`; native window operation, physical audio/video, browser
 DOM evidence, external clients, and venue/soak gates remain separate.
+
+## Current-main software revalidation
+
+The Timeline Follow software vertical was revalidated on current `main` at
+source HEAD `d50cf957f4ec7e85c1db7875724a51254426a9e5`. No follow schema,
+transport, or UI behavior was changed.
+
+```text
+node app/scripts/check-timeline-follow-runtime.mjs
+PASS
+node app/scripts/check-timeline-follow-hold-ui.mjs
+PASS
+
+cargo test -p engine --release --locked timeline_follow -- --test-threads=1
+test result: ok. 27 passed; 0 failed; 0 ignored
+
+cargo test -p syndocal --release --locked timeline_follow -- --test-threads=1
+test result: ok. 3 passed; 0 failed; 0 ignored
+```
+
+The Cargo commands used the exact MSVC 14.44.35207 x64 linker pin and
+`where.exe link.exe` first-match check. This is current-main software evidence
+only; browser DOM, native window, physical audio/video, external client, and
+venue/soak acceptance remain outside this audit and the parent ledger row stays
+Open.
