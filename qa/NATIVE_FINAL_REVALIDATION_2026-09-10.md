@@ -60,3 +60,15 @@ flow (file movement was not performed and the result is intentionally
 unclaimed), GUI thumbnail cancellation hard-stop latency, physical output,
 device acceptance, Mac execution, signing, publication, or product-wide
 completion.
+
+## Historical recovery-record disposition
+
+The tracked records
+`qa/THUMBNAIL_NATIVE_FAILURE_RECOVERY_2026-09-08.md`,
+`qa/THUMBNAIL_NATIVE_FAILURE_RECOVERY_2026-09-09.md`, and
+`qa/THUMBNAIL_NATIVE_FAILURE_RECOVERY_REVALIDATION_2026-09-09.md` contain
+historical pass wording for a file-moving PNG recovery probe. Under the
+current handoff authority, that file-moving helper operation was not performed
+for this acceptance decision. Those historical records and their raw reports
+are therefore not used to claim the missing-file → Retry → recovery gate here;
+the gate remains unclaimed without rerunning the operation.
