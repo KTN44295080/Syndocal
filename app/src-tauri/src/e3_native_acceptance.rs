@@ -720,19 +720,38 @@ mod tests {
         )
         .unwrap_err()
         .contains("unsafe parent"));
-        let mut unc_probes = 0;
-        assert!(E3NativeAcceptanceConfig::for_test_with_probe(
-            PathBuf::from(r"\\server\share\e3-acceptance"),
-            Duration::from_millis(100),
-            &executable_parent,
-            |_| {
-                unc_probes += 1;
-                Err("UNC path must not be probed".to_string())
-            },
-        )
-        .unwrap_err()
-        .contains("remote or device"));
-        assert_eq!(unc_probes, 0);
+        #[cfg(windows)]
+        {
+            let mut unc_probes = 0;
+            assert!(E3NativeAcceptanceConfig::for_test_with_probe(
+                PathBuf::from(r"\\server\share\e3-acceptance"),
+                Duration::from_millis(100),
+                &executable_parent,
+                |_| {
+                    unc_probes += 1;
+                    Err("UNC path must not be probed".to_string())
+                },
+            )
+            .unwrap_err()
+            .contains("remote or device"));
+            assert_eq!(unc_probes, 0);
+        }
+        #[cfg(not(windows))]
+        {
+            let mut non_native_path_probes = 0;
+            assert!(E3NativeAcceptanceConfig::for_test_with_probe(
+                PathBuf::from(r"\\server\share\e3-acceptance"),
+                Duration::from_millis(100),
+                &executable_parent,
+                |_| {
+                    non_native_path_probes += 1;
+                    Err("non-native path must not be probed".to_string())
+                },
+            )
+            .unwrap_err()
+            .contains("lexically below"));
+            assert_eq!(non_native_path_probes, 0);
+        }
 
         #[cfg(windows)]
         {

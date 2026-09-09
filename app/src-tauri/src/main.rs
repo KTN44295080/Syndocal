@@ -77878,20 +77878,23 @@ mod live_video_monitor_tests {
                 include_str!("video_recording.rs"),
                 "run_video_output_recording",
                 "fn finish_failed_video_recording",
+                "renderer.render",
             ),
             (
                 include_str!("main.rs"),
                 "get_debug_video_output_preview",
                 "fn get_vj_preview_transport",
+                "render_output_preview_with_effects",
             ),
             (
                 include_str!("main.rs"),
                 "get_live_video_monitor_frame",
                 "fn video_preview_decode_budget",
+                "render_output_preview_with_effects",
             ),
         ];
 
-        for (source, route, next_route) in routes {
+        for (source, route, next_route, render_seam) in routes {
             let route_start = source
                 .find(&format!("fn {route}("))
                 .unwrap_or_else(|| panic!("missing output preview route {route}"));
@@ -77909,10 +77912,15 @@ mod live_video_monitor_tests {
                 "{route} must sample the NDI/Spout-order ownership epoch with its snapshot"
             );
             assert!(
-                route_source.contains("render_output_preview_with_effects"),
+                route_source.contains(render_seam),
                 "{route} must retain output mapping/blackout/last-valid behavior through the C1 renderer"
             );
         }
+        let recording_worker = include_str!("video_recording_renderer_process.rs");
+        assert!(
+            recording_worker.contains("render_output_preview_with_effects_and_transitions_cancellable"),
+            "the isolated recording renderer must retain the C1 effect-aware output render"
+        );
     }
 
     #[test]
