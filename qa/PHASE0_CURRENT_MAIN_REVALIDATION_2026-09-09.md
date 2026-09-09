@@ -27,6 +27,23 @@ or release policy was changed.
 SDK-independent boundary check and did not create or treat an ASIO artifact as
 distributable.
 
+## Current-main follow-up — `8a9185eae41933c1c71edfcd9688627fcaf83cde`
+
+The Phase 0 software checks were rerun after the durable-recovery QA-only
+checkpoint. Product source, ledger status, acceptance assertions, and release
+policy were unchanged.
+
+| Command | Result |
+| --- | --- |
+| `node app/scripts/check-completion-ledger.mjs` | PASS — 50 Open + 8 Deferred authority rows; 58 total |
+| `node app/scripts/check-q1-q4-ledger.mjs` | PASS — 32 Q1 rows, 29/29 Q0 domains, 10/10 source contracts, 58/58 flow markers, mirror parity |
+| `pnpm.cmd --dir app run check:release` | PASS — all static admission, thumbnail, snapshot, bridge, output/safety, ASIO boundary, timeline/audio, project, video/camera, and alpha metadata gates |
+| `pnpm.cmd --dir app run check:release:self-test` | PASS — release metadata 128, ASIO packaging 169, video routing, candidate extractor 43, verified materialization 4, Windows release artifact 144, strict JSON 130 |
+| `git diff --check` | PASS for this follow-up |
+
+`FFMPEG_DIR` remained unset. No distributable ASIO runtime was created or
+treated as available.
+
 ## Boundary
 
 This closes only the current-main Phase 0 software revalidation checkpoint. It
