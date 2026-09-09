@@ -312,6 +312,43 @@ A hosted rerun after these workflow, checker, and MSI configuration changes
 is still required before claiming the Windows hosted packaging and installer
 smoke gates green.
 
+## Hosted result after the MSI/checker repair
+
+The next hosted run [34323784842](https://github.com/KTN44295080/Syndocal/actions/runs/34323784842)
+used `d299bd747474dd0033283e6a262c78dbdacd8ee0`. Windows passed the full
+job, including Rust workspace tests, video decode, frontend/Tauri checks,
+release metadata, NSIS/MSI generation, installer smoke tests, and artifact
+upload. This confirms that the numeric MSI version and two-root checker repair
+work on the hosted Windows runner.
+
+Ubuntu failed only in the Rust workspace test command. The Tauri binary
+reported `1428 passed; 1 failed; 12 ignored`; the failure was
+`ndi_transport::capture_decoder_tests::ndi_open_failure_hands_one_fence_to_parent_until_cleanup_ack`.
+After the startup cleanup lease was dropped, the test asserted an immediate
+re-arm even though the test engine's 44 Hz tick could still hold a Lighting
+permit admitted before the failure fence. It therefore observed the exact
+fail-closed response `Output ownership transition is already in progress`.
+The bounded test-only repair retries only that response for one second and
+panics on every other error; no production output gate or assertion was
+weakened. The separate sibling test already used this same bounded-quiescence
+contract.
+
+Local validation after the repair:
+
+- the repaired test passed 20/20 focused repetitions;
+- the same focused test passed with the documented MSVC 14.44.35207 linker
+  pin and PATH-first check;
+- `git diff --check` passed;
+- the local unpinned `cargo fmt --all -- --check` still reports broad,
+  pre-existing workspace formatting differences outside this change, so no
+  broad formatting rewrite was applied.
+
+The Ubuntu hosted rerun after this test-only repair remains required before
+claiming the combined Cross-platform workflow green. A non-fatal hosted
+`memory allocation of 32969475296 bytes failed` message occurred during an
+earlier warning-ratchet formatting subprocess and is recorded separately from
+the Rust test failure.
+
 ## Boundary
 
 This checkpoint does not claim Windows native-window, hardware, physical
