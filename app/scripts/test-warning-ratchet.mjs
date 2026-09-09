@@ -986,6 +986,12 @@ assert.ok(findBaselineLaundering(
 const inventory = loadInventory(path.join(repoRoot, "qa/warnings/warning-inventory.json"));
 const schema = loadInventory(path.join(repoRoot, "qa/warnings/warning-inventory.schema.json"));
 const spoutConfiguration = inventory.configurations.find((candidate) => candidate.id === "windows-syndocal-spout");
+const validPinnedLinkerForTestRunner = process.env.GITHUB_ACTIONS === "true"
+  && process.env.RUNNER_OS === "Windows"
+  && process.env.RUNNER_ENVIRONMENT === "github-hosted"
+  && process.env.SYNDOCAL_GITHUB_HOSTED_WINDOWS_MSVC === GITHUB_HOSTED_WINDOWS_TOOLCHAIN_MARKER_VALUE
+  ? PINNED_GITHUB_HOSTED_WINDOWS_MSVC_TARGET_LINKER_VALUE
+  : PINNED_WINDOWS_MSVC_TARGET_LINKER_VALUE;
 const genericInventoryConfiguration = {
   id: "generic-schema-fixture",
   platform: "windows-x86_64-msvc",
@@ -1680,7 +1686,7 @@ await assert.rejects(
 await assert.rejects(
   runCargoConfiguration(spoutConfiguration, repoRoot, {
     ...process.env,
-    [PINNED_WINDOWS_MSVC_TARGET_LINKER_KEY]: PINNED_WINDOWS_MSVC_TARGET_LINKER_VALUE,
+    [PINNED_WINDOWS_MSVC_TARGET_LINKER_KEY]: validPinnedLinkerForTestRunner,
     RUSTFLAGS: "-A" + "warnings",
   }),
   /warning-affecting environment is forbidden: RUSTFLAGS/,
