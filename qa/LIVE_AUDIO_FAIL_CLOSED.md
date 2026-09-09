@@ -191,3 +191,28 @@ unsaved/saved ASIO and WASAPI disappearance, malformed catalogue, stale
 device, explicit reselection, and stable-identity checks. This is browser
 fixture evidence only; it did not start the native app, a physical input, or
 any ASIO/WASAPI device.
+
+## Current-main Windows software revalidation — 2026-09-09
+
+The focused native-side regression set was rerun against
+`39e7bf34ac09c3b8e859291d7ea5194f7e551f5a` with `vcvars64.bat
+-vcvars_ver=14.44`, the absolute Build Tools 14.44.35207 x64 linker, and
+that linker first in `where.exe link.exe`.
+
+```text
+cargo test --manifest-path app/src-tauri/Cargo.toml --release --locked -j 1 live_audio_input_tests -- --nocapture --test-threads=1
+test result: ok. 95 passed; 0 failed; 1723 filtered out
+
+cargo test -p engine --release --locked live_audio_spectrum_expires_inside_the_engine_at_the_ttl_boundary -- --nocapture --test-threads=1
+test result: ok. 1 passed; 0 failed; 1074 filtered out
+
+cargo test -p engine --release --locked unverified_legacy_live_audio_cannot_drive_node_graph -- --nocapture --test-threads=1
+test result: ok. 1 passed; 0 failed; 1074 filtered out
+```
+
+The app-side set covered generation fencing, device/catalogue fail-closed
+handling, callback bounds and formats, stale watchdog/clear retry, stop/fault
+ownership, ASIO separation, and reactive feature sanitization. The engine
+tests covered the TTL boundary and rejection of unverified legacy live audio.
+Injected panic output in one test was expected and the test returned `ok`.
+No physical input, ASIO/WASAPI device, or output was started.
