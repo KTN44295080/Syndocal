@@ -154,6 +154,34 @@ rerun was started without source changes (attempt 2 of run 34302972902) to
 separate a hosted scheduling/resource flake from a deterministic Linux gate;
 its result remains required before claiming the hosted Linux gate is green.
 
+The follow-up run [34305610272](https://github.com/KTN44295080/Syndocal/actions/runs/34305610272)
+used commit `25ba7aea41d72b0d66ed121ba5ec6ab223b468c8`. Its Windows job passed
+the warning self-test, generic warning ratchets, and the unavailable-SDK
+boundary before reaching the native release warning gate. Its Ubuntu job
+passed the warning gates and engine suite, then reported `1428 passed; 1
+failed; 12 ignored` in the Tauri application binary. The only reported test
+failure was
+`ndi_transport::capture_decoder_tests::ndi_startup_timeout_and_late_constructor_error_share_one_fence`
+at its explicit re-arm assertion. The sibling
+`ndi_open_failure_hands_one_fence_to_parent_until_cleanup_ack` passed in this
+run. An earlier runner-side `memory allocation of 32969475296 bytes failed`
+message did not terminate the job and is recorded separately from the test
+failure.
+
+The failing test was narrowed to a real scheduling boundary: the test engine
+continues its 44 Hz tick while the NDI startup failure fence is held, and a
+Lighting permit admitted just before the fence remains in-flight until that
+tick returns. Dropping the startup cleanup lease must therefore keep
+`transition_active` set until the permit drains; the fail-closed production
+gate is not weakened. The test now retries only that exact
+`Output ownership transition is already in progress` response, with a
+one-second deadline, before asserting the re-arm. Local Windows focused runs
+of both NDI fence tests passed 40/40 paired repetitions after this change;
+`cargo fmt --all -- --check` still reports unrelated pre-existing formatting
+differences in other files, so no broad formatting change was made. A new
+hosted rerun of the changed commit is required before claiming the Linux gate
+green.
+
 ## Boundary
 
 This checkpoint does not claim Windows native-window, hardware, physical

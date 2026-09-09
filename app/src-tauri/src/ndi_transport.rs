@@ -3369,9 +3369,25 @@ mod capture_decoder_tests {
             .is_err());
         drop(failure_lease);
 
-        let rearmed = engine
-            .begin_output_ownership_transition(protocol::MachineOutputRole::Both)
-            .unwrap();
+        // The test engine continues its normal 44 Hz tick while the startup
+        // worker is fenced. A tick that already admitted Lighting before the
+        // fence remains accounted until that tick returns; retry only the
+        // exact fail-closed transition-in-progress result, with a bounded
+        // deadline, so this assertion waits for quiescence without weakening
+        // the gate or hiding another failure.
+        let rearm_deadline = Instant::now() + Duration::from_secs(1);
+        let rearmed = loop {
+            match engine.begin_output_ownership_transition(protocol::MachineOutputRole::Both) {
+                Ok(transition) => break transition,
+                Err(error)
+                    if error == "Output ownership transition is already in progress"
+                        && Instant::now() < rearm_deadline =>
+                {
+                    std::thread::yield_now();
+                }
+                Err(error) => panic!("unexpected output rearm failure: {error}"),
+            }
+        };
         rearmed.complete().unwrap();
     }
 }
