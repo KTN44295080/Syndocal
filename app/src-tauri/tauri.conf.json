@@ -71,7 +71,8 @@
         "languages": ["Japanese", "English"]
       },
       "wix": {
-        "language": "ja-JP"
+        "language": "ja-JP",
+        "version": "1.2.0.69"
       }
     },
     "macOS": {

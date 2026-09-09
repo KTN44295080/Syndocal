@@ -383,7 +383,10 @@ jobs:
           if (-not (Get-ChildItem $msiExe.DirectoryName -Filter 'avcodec-*.dll')) {
             throw 'MSI did not place FFmpeg DLLs beside syndocal.exe.'
           }
-          pnpm --dir app run check:windows-release-artifacts -- --nsis-root $installDir --msi-root $extractDir
+          $canonicalExe = Join-Path $env:GITHUB_WORKSPACE 'target/release/syndocal.exe'
+          $productVersion = (Get-Content -LiteralPath (Join-Path $env:GITHUB_WORKSPACE 'app/package.json') -Raw | ConvertFrom-Json).version
+          $exeSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $canonicalExe).Hash.ToLowerInvariant()
+          pnpm --dir app run check:windows-release-artifacts --nsis-root $installDir --msi-root $msiExe.DirectoryName --product-version $productVersion --exe-sha256 $exeSha256
 
           $uninstaller = Join-Path $installDir 'uninstall.exe'
           if (Test-Path $uninstaller) {

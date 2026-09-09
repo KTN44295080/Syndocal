@@ -284,7 +284,13 @@ function assertCompatibleWindowsFileVersion(fileVersion, productVersion, label) 
   }
 }
 
-function assertSyndocalExecutableReleaseIdentity(root, label, authority, inspector) {
+function assertSyndocalExecutableReleaseIdentity(
+  root,
+  label,
+  authority,
+  inspector,
+  { allowExactProductVersionFileVersion = false } = {},
+) {
   const executablePath = join(root, "syndocal.exe");
   const record = assertSyndocalExecutable(executablePath, label + " syndocal.exe", [root]);
   const actualSha256 = createHash("sha256").update(record.bytes).digest("hex");
@@ -313,14 +319,22 @@ function assertSyndocalExecutableReleaseIdentity(root, label, authority, inspect
         + ".",
     );
   }
-  assertCompatibleWindowsFileVersion(identity.fileVersion, authority.productVersion, label);
+  if (!(allowExactProductVersionFileVersion && identity.fileVersion === authority.productVersion)) {
+    assertCompatibleWindowsFileVersion(identity.fileVersion, authority.productVersion, label);
+  }
   return Object.freeze({ sha256: actualSha256, productVersion: identity.productVersion, fileVersion: identity.fileVersion });
 }
 
-export function assertExtractedWindowsArtifactContents(root, label, inventory = loadWindowsRuntimeInventory()) {
+export function assertExtractedWindowsArtifactContents(
+  root,
+  label,
+  inventory = loadWindowsRuntimeInventory(),
+  { allowedExtraFiles = [] } = {},
+) {
   const realRoot = assertSafeExternalDirectory(root, label);
   const verifiedInventory = validateWindowsRuntimeInventory(inventory, label + " runtime inventory");
   const approvedFiles = approvedArtifactFiles(verifiedInventory);
+  const extraFiles = new Set(allowedExtraFiles);
   const approvedDirectories = approvedArtifactDirectories(verifiedInventory);
   const filesByRelativePath = new Map();
   for (const file of walkVerifiedFiles(realRoot, label, { inventory: verifiedInventory })) {
@@ -329,13 +343,18 @@ export function assertExtractedWindowsArtifactContents(root, label, inventory = 
       throw new Error(label + " contains duplicate canonical artifact file path: " + relativeFile);
     }
     filesByRelativePath.set(relativeFile, file);
-    if (!approvedFiles.has(relativeFile)) {
+    if (!approvedFiles.has(relativeFile) && !extraFiles.has(relativeFile)) {
       throw new Error(label + " contains an unapproved artifact file: " + relativeFile);
     }
   }
   for (const [relativeFile] of approvedFiles) {
     if (!filesByRelativePath.has(relativeFile)) {
       throw new Error(label + " is missing approved artifact file: " + relativeFile);
+    }
+  }
+  for (const relativeFile of extraFiles) {
+    if (!filesByRelativePath.has(relativeFile)) {
+      throw new Error(label + " is missing allowed extra artifact file: " + relativeFile);
     }
   }
   const extractedDirectories = extractedArtifactDirectories(realRoot, label);
@@ -421,6 +440,61 @@ export function assertManualThreeRootWindowsReleaseArtifacts({
             + ").",
         );
       }
+    }
+  }
+  return Object.freeze({
+    productVersion: authority.productVersion,
+    executableSha256: authority.executableSha256,
+    inspectorKind: activeInspector.kind,
+    roots: Object.freeze(Object.fromEntries(identities)),
+  });
+}
+
+export function assertManualTwoRootWindowsInstallerArtifacts({
+  nsisRoot,
+  msiRoot,
+  productVersion,
+  executableSha256,
+  inspector,
+  inventory = loadWindowsRuntimeInventory(),
+}) {
+  if (typeof nsisRoot !== "string" || typeof msiRoot !== "string") {
+    throw new Error("Manual two-root Windows installer mode requires explicit NSIS and MSI application directories.");
+  }
+  const authority = parseWindowsReleaseExeAuthority({ product_version: productVersion, executable_sha256: executableSha256 }, "manual two-root Windows installer executable authority");
+  const activeInspector = inspector === undefined
+    ? createWindowsFileVersionInfoInspector()
+    : normalizeInjectedWindowsVersionInfoInspector(inspector);
+  const verifiedInventory = validateWindowsRuntimeInventory(inventory, "manual two-root Windows installer runtime inventory");
+  const roots = [
+    ["NSIS", nsisRoot, { allowedExtraFiles: ["uninstall.exe"] }],
+    ["MSI", msiRoot, {}],
+  ];
+  const identities = [];
+  for (const [roleLabel, root, options] of roots) {
+    assertExtractedWindowsArtifactContents(root, roleLabel + " installed artifact", verifiedInventory, options);
+    identities.push([
+      roleLabel,
+      assertSyndocalExecutableReleaseIdentity(
+        root,
+        roleLabel + " installed artifact",
+        authority,
+        activeInspector,
+        { allowExactProductVersionFileVersion: true },
+      ),
+    ]);
+  }
+  for (const field of ["sha256", "productVersion", "fileVersion"]) {
+    if (identities[0][1][field] !== identities[1][1][field]) {
+      throw new Error(
+        "Manual two-root Windows installer roots disagree on syndocal.exe "
+          + field
+          + " ("
+          + JSON.stringify(identities[0][1][field])
+          + " vs "
+          + JSON.stringify(identities[1][1][field])
+          + ").",
+      );
     }
   }
   return Object.freeze({
@@ -858,6 +932,21 @@ function parseCli(argv) {
   if (argv.length === 1 && argv[0] === "--self-test") return { selfTest: true };
   if (argv.length === 1 && argv[0] === "--require-candidate-extraction") return { requireCandidate: true };
   if (
+    argv.length === 8
+    && argv[0] === "--nsis-root"
+    && argv[2] === "--msi-root"
+    && argv[4] === "--product-version"
+    && argv[6] === "--exe-sha256"
+  ) {
+    return {
+      installerRoots: true,
+      nsisRoot: argv[1],
+      msiRoot: argv[3],
+      productVersion: argv[5],
+      exeSha256: argv[7],
+    };
+  }
+  if (
     argv.length === 10
     && argv[0] === "--nsis-root"
     && argv[2] === "--msi-root"
@@ -875,6 +964,7 @@ function parseCli(argv) {
   }
   throw new Error(
     "Usage: check-windows-release-artifacts.mjs --self-test | --require-candidate-extraction"
+      + " | --nsis-root <installed-dir> --msi-root <installed-dir> --product-version <canonical-SemVer> --exe-sha256 <64-hex>"
       + " | --nsis-root <dir> --msi-root <dir> --updater-root <dir> --product-version <canonical-SemVer> --exe-sha256 <64-hex>"
       + " (manual three-root mode requires the explicit canonical product SemVer and executable SHA-256 authority; PE shape alone never accepts syndocal.exe)",
   );
@@ -917,6 +1007,22 @@ function selfTest() {
     parseCli([
       "--nsis-root", "nsis-dir",
       "--msi-root", "msi-dir",
+      "--product-version", "1.2.3-rc.1",
+      "--exe-sha256", "a".repeat(64),
+    ]),
+    {
+      installerRoots: true,
+      nsisRoot: "nsis-dir",
+      msiRoot: "msi-dir",
+      productVersion: "1.2.3-rc.1",
+      exeSha256: "a".repeat(64),
+    },
+  );
+  assertions += 1;
+  assert.deepStrictEqual(
+    parseCli([
+      "--nsis-root", "nsis-dir",
+      "--msi-root", "msi-dir",
       "--updater-root", "updater-dir",
       "--product-version", "1.2.3-rc.1",
       "--exe-sha256", "a".repeat(64),
@@ -937,6 +1043,12 @@ function selfTest() {
     "--product-version", "1.2.3-rc.1",
     "--exe-sha256", "a".repeat(64),
   ];
+  const installerArgs = [
+    "--nsis-root", "nsis-dir",
+    "--msi-root", "msi-dir",
+    "--product-version", "1.2.3-rc.1",
+    "--exe-sha256", "a".repeat(64),
+  ];
   const usageAttack = (argv) => rejects(() => parseCli(argv), /Usage: check-windows-release-artifacts\.mjs/u);
   usageAttack([]);
   usageAttack(["--self-test", "--extra"]);
@@ -944,7 +1056,8 @@ function selfTest() {
   usageAttack(["--require-candidate-extraction", "--extra"]);
   usageAttack(["--self-test", "--require-candidate-extraction"]);
   usageAttack(happyArgs.slice(0, 8));
-  usageAttack([...happyArgs.slice(0, 4), ...happyArgs.slice(6)]);
+  usageAttack(installerArgs.slice(0, 6));
+  usageAttack([...happyArgs.slice(0, 4), "--exe-sha256", "a".repeat(64), "--product-version", "1.2.3-rc.1"]);
   usageAttack([
     "--nsis-root", "nsis-dir",
     "--updater-root", "updater-dir",
@@ -1617,6 +1730,38 @@ function selfTest() {
         && materializedAuthorityInspectorPaths.every((path) => !originalAuthorityExecutablePaths.has(path)),
       "exact positive: all three root exes match the authoritative version, hash, and AMD64 PE identity through an injected inspector that receives only materialized copies",
     );
+    writeFileSync(join(roleDirs.NSIS, "uninstall.exe"), Buffer.from("synthetic NSIS uninstaller", "utf8"), { flag: "wx" });
+    authorityInspectionIndex = 0;
+    const installerSummary = assertManualTwoRootWindowsInstallerArtifacts({
+      nsisRoot: roleDirs.NSIS,
+      msiRoot: roleDirs.MSI,
+      productVersion: authorityProductVersion,
+      executableSha256: canonicalExeSha256,
+      inspector: injectedInspector,
+      inventory: cleanInventory,
+    });
+    pass(
+      installerSummary.roots.NSIS.sha256 === canonicalExeSha256
+        && installerSummary.roots.MSI.sha256 === canonicalExeSha256
+        && installerSummary.productVersion === authorityProductVersion,
+      "two-root installer smoke mode verifies NSIS/MSI trees against the same executable authority",
+    );
+    stageAllGoodReports(authorityProductVersion);
+    authorityInspectionIndex = 0;
+    const prereleaseInstallerSummary = assertManualTwoRootWindowsInstallerArtifacts({
+      nsisRoot: roleDirs.NSIS,
+      msiRoot: roleDirs.MSI,
+      productVersion: authorityProductVersion,
+      executableSha256: canonicalExeSha256,
+      inspector: injectedInspector,
+      inventory: cleanInventory,
+    });
+    pass(
+      prereleaseInstallerSummary.roots.NSIS.fileVersion === authorityProductVersion
+        && prereleaseInstallerSummary.roots.MSI.fileVersion === authorityProductVersion,
+      "two-root installer smoke mode accepts the exact canonical pre-release FileVersion while retaining product identity checks",
+    );
+    rmSync(join(roleDirs.NSIS, "uninstall.exe"));
     stageAllGoodReports("1.2.3.0");
     runThreeRoots();
     pass(true, "the exact positive also accepts the stamped FileVersion quad companion of the canonical SemVer");
@@ -1787,6 +1932,24 @@ function main(argv = process.argv.slice(2)) {
         + " with exact NSIS/MSI/updater payload roots, SHA-256 identities, and ASIO-free approved normal-bundle trees ("
         + summary.method
         + ").",
+    );
+    return;
+  }
+  if (cli.installerRoots) {
+    const summary = assertManualTwoRootWindowsInstallerArtifacts({
+      nsisRoot: cli.nsisRoot,
+      msiRoot: cli.msiRoot,
+      productVersion: cli.productVersion,
+      executableSha256: cli.exeSha256,
+    });
+    console.log(
+      "Windows installer smoke artifact acceptance passed: NSIS/MSI syndocal.exe both match product "
+        + summary.productVersion
+        + ", SHA-256 "
+        + summary.executableSha256
+        + ", and AMD64 PE32+ identity (inspector "
+        + summary.inspectorKind
+        + "); plus the exact approved file tree with the NSIS uninstaller allowance and 7 pinned FFmpeg DLLs.",
     );
     return;
   }

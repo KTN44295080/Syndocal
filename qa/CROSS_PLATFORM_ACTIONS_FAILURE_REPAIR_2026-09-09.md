@@ -252,6 +252,66 @@ availability boundary, or packaging command. A hosted rerun at the new
 workflow commit is required before claiming the Windows hosted packaging gate
 green.
 
+## Hosted result after the timeout-budget repair
+
+The next hosted run [34316112980](https://github.com/KTN44295080/Syndocal/actions/runs/34316112980)
+used `905b2e31be2878d950de64e0dfcab1bee0ae7250`. Ubuntu passed the full job,
+including Rust workspace tests, video decode, frontend/Tauri checks, Linux
+packaging, AppImage smoke, and artifact upload. Windows passed setup, the
+pinned MSVC/runtime boundary, warning ratchets, the unavailable ASIO/NDI
+boundary, Rust tests, video decode, frontend/Tauri checks, and release
+metadata. It generated the NSIS installer, then failed deterministically while
+generating MSI:
+
+```
+optional pre-release identifier in app version must be numeric-only and cannot be greater than 65535 for msi target
+```
+
+This run did not fail from the 90-minute timeout; the workflow reached the MSI
+version validator. Tauri was deriving the MSI ProductVersion from the product
+version `1.2.0-alpha.69`, whose pre-release identifier is not a numeric MSI
+field. The product version and artifact filename remain unchanged. The bounded
+configuration repair sets `bundle.windows.wix.version` to the numeric MSI
+version `1.2.0.69`, without changing product code or the product SemVer.
+
+The same hosted run revealed that the post-install checker invocation had
+drifted from the checker contract: the workflow supplied only two roots (and
+an extra `--` argument), while the checker required three roots plus explicit
+product and executable authorities. The checker now has an explicit two-root
+installer-smoke mode. It validates the NSIS installed application directory
+(with only its expected `uninstall.exe` allowance) and the MSI application
+directory, requiring the same canonical product version, executable SHA-256,
+AMD64 PE32+ identity, seven pinned FFmpeg DLLs, and four common resources.
+The hosted workflow supplies the MSI application directory, product version,
+and hash from the current checkout; the existing strict three-root candidate
+mode remains unchanged.
+
+## Local evidence for the MSI and installer-smoke repairs
+
+- `pnpm.cmd --dir app run check:release` — passed after the numeric MSI
+  version configuration was added.
+- `pnpm.cmd --dir app run check:windows-release-artifacts --self-test` — passed,
+  144 assertions, including the two-root and exact pre-release FileVersion
+  contracts.
+- `pnpm.cmd --dir app tauri build --ci --bundles nsis,msi` — passed with an
+  ASCII-path temporary SDK containing the already pinned runtime DLLs; the
+  machine's default `FFMPEG_DIR` was a different SDK and was intentionally not
+  accepted by the fixed runtime inventory.
+- Local NSIS silent install and MSI administrative extraction both passed the
+  two-root checker. The installed EXE remained responsive for 8 seconds and
+  was then terminated by its exact path.
+- Local bundle identities: NSIS
+  `0648546bee6cf2b43b9caad529c6206bf5227079756b3685747b199d9ab4435a`,
+  81,437,839 bytes; MSI
+  `f8840b9a920492bb486a0c6780e1c503c5e9015bf488ed1d21f6145bca6b2c7b`,
+  121,806,848 bytes. The canonical built EXE SHA-256 used for the smoke
+  authority was
+  `c74b9d6922b1934263a89e16b1cb9b98c641117009c0017f0ef4c7803a31f4d0`.
+
+A hosted rerun after these workflow, checker, and MSI configuration changes
+is still required before claiming the Windows hosted packaging and installer
+smoke gates green.
+
 ## Boundary
 
 This checkpoint does not claim Windows native-window, hardware, physical
