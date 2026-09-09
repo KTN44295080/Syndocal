@@ -221,6 +221,23 @@ the conventional limit retain the extended form and therefore remain
 fail-closed. Pure path-normalization tests cover drive, UNC, and long-path
 cases. A hosted Windows rerun is required to validate the API-level repair.
 
+The hosted rerun [34311340390](https://github.com/KTN44295080/Syndocal/actions/runs/34311340390)
+validated the source repair but did not complete the Windows job within the
+workflow's explicit `timeout-minutes: 60` limit. Ubuntu completed successfully
+in 20m55s, including the Rust workspace, in-process video decode, Tauri checks,
+Linux packaging, smoke test, and artifact upload. Windows passed setup, MSVC
+pinning, runtime staging, all warning ratchets, the Rust workspace (including
+the three previously failing recording publication tests), in-process video
+decode, frontend build, Tauri check, and release metadata. It reached
+`pnpm --dir app tauri build --ci --bundles nsis,msi`; the release binary finished
+in 6m31s, pinned FFmpeg DLL staging and the ASIO packaging self-test passed, and
+NSIS `makensis` started. The job was then canceled at 05:32:10Z with
+`The job has exceeded the maximum execution time of 1h0m0s`; no compiler,
+test, packaging assertion, or installer error was reported. This is a CI
+wall-clock budget failure in the combined Windows test-and-bundle job, not a
+new product or recording-publication failure. The Node.js 20 deprecation
+annotation is an action-runtime warning and is not a job failure.
+
 ## Boundary
 
 This checkpoint does not claim Windows native-window, hardware, physical
