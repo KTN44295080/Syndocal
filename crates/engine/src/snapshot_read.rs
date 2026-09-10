@@ -1,6 +1,7 @@
 use crate::{EngineHandle, TimelineTransportAuthority};
 use protocol::{
-    EngineSnapshot, TimelineFollowRuntimeStatus, TimelineFollowRuntimeStatusSnapshot,
+    CompositionSummary, EngineSnapshot, TimelineFollowRuntimeStatus,
+    TimelineFollowRuntimeStatusSnapshot,
     TimelineFollowRuntimeSummary, TimelineLoopRuntimeStatus, VideoClipRuntimeSnapshot,
     VideoLayerTransitionBusSummary, VideoLayerTransitionRuntimeSnapshot, VideoOutputSummary,
 };
@@ -107,6 +108,16 @@ impl EngineHandle {
     /// unrelated public project and runtime collections.
     pub fn video_transition_buses_snapshot(&self) -> Vec<VideoLayerTransitionBusSummary> {
         self.read_snapshot_field(|snapshot| snapshot.video.transition_buses.clone())
+    }
+
+    /// Read the authored video collections needed to validate an output
+    /// composition assignment without cloning unrelated public state.
+    pub fn video_outputs_and_compositions_snapshot(
+        &self,
+    ) -> (Vec<VideoOutputSummary>, Vec<CompositionSummary>) {
+        self.read_snapshot_field(|snapshot| {
+            (snapshot.video.outputs.clone(), snapshot.video.compositions.clone())
+        })
     }
 
     /// Read the published Timeline playing flag without cloning unrelated

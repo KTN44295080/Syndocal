@@ -1576,18 +1576,14 @@ fn validate_output_action_current(
             composition_id,
             ..
         } => {
-            let snapshot = state.engine.snapshot();
-            if !snapshot
-                .video
-                .outputs
+            let (outputs, compositions) = state.engine.video_outputs_and_compositions_snapshot();
+            if !outputs
                 .iter()
                 .any(|output| output.id == *output_id)
             {
                 return Err("Video output no longer exists".to_string());
             }
-            if !snapshot
-                .video
-                .compositions
+            if !compositions
                 .iter()
                 .any(|composition| composition.id == *composition_id)
             {

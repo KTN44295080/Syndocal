@@ -106,3 +106,22 @@ the maintained wrapper and produced a 64,545,280-byte EXE with SHA-256
 That exact executable launched one responsive `Syndocal` window and was cleaned
 up by exact path. The fixture-only extension is test configuration and does
 not alter the release executable inputs.
+
+## Output-composition validation reader follow-up
+
+The output-composition assignment validator now reads only the authored output
+and composition collections it needs, under one publication guard. Output
+existence, composition existence, and the existing rejection messages remain
+unchanged; no output is enabled or opened by this change. This is a structural
+clone reduction, not a physical-output or measured show-performance claim.
+
+After this reader change, the pinned Windows focused suites passed again:
+`cargo test -p engine --release --locked snapshot_read_tests --
+--test-threads=1` — 4 passed, 1 ignored, 0 failed; and
+`cargo test -p syndocal --release --locked control_plane::tests --
+--test-threads=1` — 30 passed, 0 ignored, 0 failed. The maintained Tauri
+wrapper then completed `pnpm --dir app tauri build --no-bundle` with the exact
+MSVC linker. The current EXE is 64,546,816 bytes with SHA-256
+`FBF710AD11D9C9C7CD35FD1F30018CE04B91D9CD697BC3879070A7EA5B5A296D`.
+Launching that exact path produced one responsive `Syndocal` window and exact
+process cleanup succeeded.

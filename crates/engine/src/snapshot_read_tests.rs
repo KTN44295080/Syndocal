@@ -1,7 +1,8 @@
 use super::allocator_test_handle;
 use crate::{EngineHandle, TimelineTransportAuthority};
 use protocol::{
-    EngineSnapshot, TimelineFollowRuntimeStatusSnapshot, VideoClipLayerRuntimeSummary,
+    CompositionSummary, EngineSnapshot, TimelineFollowRuntimeStatusSnapshot,
+    VideoClipLayerRuntimeSummary,
     VideoClipTakeDuration, VideoClipTakeKind, VideoLayerTransitionBusRuntimeSummary,
     VideoLayerTransitionBusSummary, VideoLayerTransitionCurve, VideoLayerTransitionTarget,
     VideoOutputKind, VideoOutputSummary, VideoTransitionBusId,
@@ -89,6 +90,13 @@ fn publication(token: u64) -> EngineSnapshot {
             default_curve: VideoLayerTransitionCurve::EaseInOut,
             matte_source: None,
         });
+    snapshot.video.compositions.push(CompositionSummary {
+        id: 1,
+        label: format!("composition {token}"),
+        layer_ids: vec![token],
+        timeline_layer_ids: Vec::new(),
+        output_ids: vec![token],
+    });
     snapshot
         .video_transition_runtime
         .buses
@@ -143,6 +151,10 @@ fn assert_same_read_model(handle: &EngineHandle) {
         handle.video_transition_buses_snapshot(),
         expected.video.transition_buses
     );
+    assert_eq!(
+        handle.video_outputs_and_compositions_snapshot(),
+        (expected.video.outputs, expected.video.compositions)
+    );
     assert_eq!(handle.timeline_playing(), expected.timeline.playing);
 }
 
@@ -172,6 +184,13 @@ fn narrow_readers_match_public_snapshot_and_observe_replacement() {
         handle.video_transition_buses_snapshot(),
         publication(18).video.transition_buses
     );
+    assert_eq!(
+        handle.video_outputs_and_compositions_snapshot(),
+        (
+            publication(18).video.outputs,
+            publication(18).video.compositions
+        )
+    );
 }
 
 #[test]
@@ -191,6 +210,10 @@ fn poisoned_publication_preserves_public_snapshot_defaults() {
     assert!(handle.video_clip_runtime_snapshot().layers.is_empty());
     assert!(handle.video_outputs_snapshot().is_empty());
     assert!(handle.video_transition_buses_snapshot().is_empty());
+    assert_eq!(
+        handle.video_outputs_and_compositions_snapshot(),
+        (Vec::new(), Vec::new())
+    );
     assert!(!handle.timeline_playing());
 }
 
