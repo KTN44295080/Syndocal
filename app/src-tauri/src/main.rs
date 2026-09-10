@@ -71223,7 +71223,7 @@ struct ExternalVideoTransportSyncContext<'a> {
 }
 
 fn sync_external_video_transports_from_snapshot(
-    snapshot: &EngineSnapshot,
+    snapshot: &protocol::VideoSnapshot,
     output_ownership_role: MachineOutputRole,
     context: ExternalVideoTransportSyncContext<'_>,
 ) -> Result<ExternalVideoTransportSyncResponse, String> {
@@ -71252,12 +71252,12 @@ fn sync_external_video_transports_from_snapshot(
         maintenance_transition,
     } = context;
     let plans =
-        video::build_external_video_io_route_plans(&snapshot.video, &video::video_runtime_status());
+        video::build_external_video_io_route_plans(snapshot, &video::video_runtime_status());
     #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
     let plans = show_spout_generic_sync::filter_generic_spout_sync_plans(
         plans,
-        &snapshot.video.outputs,
-        &snapshot.video.compositions,
+        &snapshot.outputs,
+        &snapshot.compositions,
     )?;
     let mut transport = transport
         .lock()
@@ -72181,7 +72181,7 @@ fn sync_output_ownership_routes_for_role(
     if !role.video_allowed() {
         retire_show_spout_outputs_for_authority_change(state)?;
     }
-    let snapshot = state.engine.snapshot();
+    let snapshot = state.engine.video_snapshot();
     sync_external_video_transports_from_snapshot(
         &snapshot,
         role,
@@ -76183,7 +76183,7 @@ fn sync_external_video_transports(
         transition.fail(error.clone());
         return Err(error);
     }
-    let snapshot = state.engine.snapshot();
+    let snapshot = state.engine.video_snapshot();
     let result = sync_external_video_transports_from_snapshot(
         &snapshot,
         role,
