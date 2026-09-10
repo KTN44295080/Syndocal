@@ -35397,8 +35397,9 @@ fn add_timeline_automation(
     attribute: String,
     keyframes: Vec<AutomationKeyframeSummary>,
 ) -> Result<AutomationId, String> {
+    let fixtures = state.engine.fixtures_snapshot();
     validate_timeline_automation_request(
-        &state.engine.snapshot(),
+        &fixtures,
         fixture_id,
         &attribute,
         &keyframes,
@@ -35424,9 +35425,9 @@ fn add_timeline_group_automation(
     keyframes: Vec<AutomationKeyframeSummary>,
 ) -> Result<TimelineGroupAutomationAddResult, String> {
     let group_id = normalize_control_group_id(group_id)?;
-    let snapshot = state.engine.snapshot();
+    let fixtures = state.engine.fixtures_snapshot();
     let (fixture_ids, skipped_count) =
-        compatible_timeline_automation_targets(&snapshot, &group_id, &attribute, &keyframes)?;
+        compatible_timeline_automation_targets(&fixtures, &group_id, &attribute, &keyframes)?;
     let mut automation_ids = Vec::with_capacity(fixture_ids.len());
     for fixture_id in fixture_ids {
         let automation_id = state.engine.allocate_automation_id();
@@ -35456,16 +35457,13 @@ fn set_timeline_automation(
     attribute: String,
     keyframes: Vec<AutomationKeyframeSummary>,
 ) -> Result<(), String> {
-    let snapshot = state.engine.snapshot();
-    if !snapshot
-        .timeline
-        .automations
-        .iter()
-        .any(|automation| automation.id == automation_id)
-    {
+    let (fixtures, automation_ids) = state
+        .engine
+        .timeline_dmx_automation_admission_snapshot();
+    if !automation_ids.contains(&automation_id) {
         return Err(format!("Automation {automation_id} was not found"));
     }
-    validate_timeline_automation_request(&snapshot, fixture_id, &attribute, &keyframes)?;
+    validate_timeline_automation_request(&fixtures, fixture_id, &attribute, &keyframes)?;
     state
         .engine
         .send(EngineCommand::SetTimelineAutomation {
@@ -83767,7 +83765,7 @@ where
 }
 
 fn validate_timeline_automation_request(
-    snapshot: &EngineSnapshot,
+    fixtures: &[PatchedFixtureSummary],
     fixture_id: FixtureId,
     attribute: &str,
     keyframes: &[AutomationKeyframeSummary],
@@ -83778,8 +83776,7 @@ fn validate_timeline_automation_request(
     if keyframes.is_empty() {
         return Err("Automation requires at least one keyframe".to_string());
     }
-    let Some(fixture) = snapshot
-        .fixtures
+    let Some(fixture) = fixtures
         .iter()
         .find(|fixture| fixture.id == fixture_id)
     else {
@@ -83799,7 +83796,7 @@ fn validate_timeline_automation_request(
 }
 
 fn compatible_timeline_automation_targets(
-    snapshot: &EngineSnapshot,
+    fixtures: &[PatchedFixtureSummary],
     group_id: &str,
     attribute: &str,
     keyframes: &[AutomationKeyframeSummary],
@@ -83813,7 +83810,7 @@ fn compatible_timeline_automation_targets(
 
     let mut group_fixture_count = 0usize;
     let mut fixture_ids = Vec::new();
-    for fixture in &snapshot.fixtures {
+    for fixture in fixtures {
         let in_group = fixture
             .group_ids
             .iter()
@@ -83842,7 +83839,7 @@ fn compatible_timeline_automation_targets(
         ));
     }
     for fixture_id in &fixture_ids {
-        validate_timeline_automation_request(snapshot, *fixture_id, attribute, keyframes)?;
+        validate_timeline_automation_request(fixtures, *fixture_id, attribute, keyframes)?;
     }
     let applied_count = fixture_ids.len();
     Ok((fixture_ids, group_fixture_count - applied_count))
@@ -93370,6 +93367,20 @@ pub(crate) mod tests {
             .map(|offset| function_start + offset);
         let body = &source[function_start..next_attribute.unwrap_or(source.len())];
         assert!(body.contains("timeline_automation_ids_snapshot"));
+        assert!(!body.contains("engine.snapshot()"));
+    }
+
+    #[test]
+    fn set_timeline_automation_uses_the_narrow_engine_reader() {
+        let source = include_str!("main.rs");
+        let function_start = source
+            .find("fn set_timeline_automation(")
+            .expect("missing set timeline automation command");
+        let next_attribute = source[function_start..]
+            .find("\n#[tauri::command]")
+            .map(|offset| function_start + offset);
+        let body = &source[function_start..next_attribute.unwrap_or(source.len())];
+        assert!(body.contains("timeline_dmx_automation_admission_snapshot"));
         assert!(!body.contains("engine.snapshot()"));
     }
 
@@ -118528,7 +118539,7 @@ f 1 2 3
         };
 
         let (fixture_ids, skipped_count) = compatible_timeline_automation_targets(
-            &snapshot,
+            &snapshot.fixtures,
             "front",
             "Pan",
             &sample_automation_keyframes(),
@@ -118552,7 +118563,7 @@ f 1 2 3
         };
 
         assert!(compatible_timeline_automation_targets(
-            &snapshot,
+            &snapshot.fixtures,
             "front",
             "Pan",
             &sample_automation_keyframes(),
@@ -118560,7 +118571,7 @@ f 1 2 3
         .unwrap_err()
         .contains("No fixtures"));
         assert!(compatible_timeline_automation_targets(
-            &snapshot,
+            &snapshot.fixtures,
             "missing",
             "Dimmer",
             &sample_automation_keyframes(),

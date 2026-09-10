@@ -280,6 +280,18 @@ fn assert_same_read_model(handle: &EngineHandle) {
             .collect::<Vec<_>>()
     );
     assert_eq!(
+        handle.timeline_dmx_automation_admission_snapshot(),
+        (
+            expected.fixtures.clone(),
+            expected
+                .timeline
+                .automations
+                .iter()
+                .map(|automation| automation.id)
+                .collect::<Vec<_>>(),
+        )
+    );
+    assert_eq!(
         handle.fixture_group_ids_snapshot(),
         expected
             .fixtures

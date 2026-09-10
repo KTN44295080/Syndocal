@@ -298,6 +298,24 @@ impl EngineHandle {
         })
     }
 
+    /// Read fixtures and authored DMX automation IDs for automation
+    /// replacement admission from one published generation.
+    pub fn timeline_dmx_automation_admission_snapshot(
+        &self,
+    ) -> (Vec<PatchedFixtureSummary>, Vec<AutomationId>) {
+        self.read_snapshot_field(|snapshot| {
+            (
+                snapshot.fixtures.clone(),
+                snapshot
+                    .timeline
+                    .automations
+                    .iter()
+                    .map(|automation| automation.id)
+                    .collect(),
+            )
+        })
+    }
+
     /// Read only the stage objects attached to one published preset for
     /// enqueue-time allocator reservation. Trimming and first-match policy
     /// remain owned by the caller, matching the existing command path.
