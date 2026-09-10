@@ -253,6 +253,17 @@ fn assert_same_read_model(handle: &EngineHandle) {
         )
     );
     assert_eq!(
+        handle.timeline_scene_block_admission_snapshot(),
+        (
+            expected
+                .cues
+                .iter()
+                .map(|cue| (cue.id, cue.authored_beats))
+                .collect::<Vec<_>>(),
+            expected.timeline.events,
+        )
+    );
+    assert_eq!(
         handle.fixture_group_ids_snapshot(),
         expected
             .fixtures

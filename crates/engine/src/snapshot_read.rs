@@ -1,11 +1,12 @@
 use crate::{EngineHandle, TimelineTransportAuthority};
 use protocol::{
     AutoVjAction, ClockSnapshot, CompositionSummary, CueId, DmxOutputConfig, EngineSnapshot,
-    EngineTelemetry, PatchedFixtureSummary, StageObjectSummary, TimelineEventId,
-    TimelineFollowRuntimeStatus, TimelineFollowRuntimeStatusSnapshot, TimelineFollowRuntimeSummary,
-    TimelineLayerSummary, TimelineLoopRuntimeStatus, VideoClipRuntimeSnapshot, VideoLayerId,
-    VideoLayerState, VideoLayerTransitionBusSummary, VideoLayerTransitionRuntimeSnapshot,
-    VideoOutputId, VideoOutputSummary, VideoSnapshot, VideoSourceSummary,
+    EngineTelemetry, PatchedFixtureSummary, StageObjectSummary, TimelineCueEventSummary,
+    TimelineEventId, TimelineFollowRuntimeStatus, TimelineFollowRuntimeStatusSnapshot,
+    TimelineFollowRuntimeSummary, TimelineLayerSummary, TimelineLoopRuntimeStatus,
+    VideoClipRuntimeSnapshot, VideoLayerId, VideoLayerState, VideoLayerTransitionBusSummary,
+    VideoLayerTransitionRuntimeSnapshot, VideoOutputId, VideoOutputSummary, VideoSnapshot,
+    VideoSourceSummary,
 };
 
 /// The runtime-only projection required by the control-plane query adapter.
@@ -256,6 +257,23 @@ impl EngineHandle {
                     .iter()
                     .map(|event| event.id)
                     .collect(),
+            )
+        })
+    }
+
+    /// Read the cue timing references and timeline-event IDs required by
+    /// scene-block admission from one published generation.
+    pub fn timeline_scene_block_admission_snapshot(
+        &self,
+    ) -> (Vec<(CueId, Option<f32>)>, Vec<TimelineCueEventSummary>) {
+        self.read_snapshot_field(|snapshot| {
+            (
+                snapshot
+                    .cues
+                    .iter()
+                    .map(|cue| (cue.id, cue.authored_beats))
+                    .collect(),
+                snapshot.timeline.events.clone(),
             )
         })
     }

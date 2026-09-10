@@ -35180,6 +35180,7 @@ type TimelineSceneBlockTiming = (
     Option<TimelineEventId>,
 );
 
+#[cfg(test)]
 fn validate_timeline_scene_block_request(
     snapshot: &EngineSnapshot,
     owner: &str,
@@ -35217,6 +35218,34 @@ fn validate_timeline_scene_block_request(
     )
 }
 
+fn validate_timeline_scene_block_admission_request(
+    cues: &[(CueId, Option<f32>)],
+    events: &[protocol::TimelineCueEventSummary],
+    owner: &str,
+    cue_id: CueId,
+    timing: TimelineSceneBlockTiming,
+) -> Result<(), String> {
+    let cue_authored_beats = cues
+        .iter()
+        .find(|(id, _)| *id == cue_id)
+        .map(|(_, authored_beats)| *authored_beats)
+        .ok_or_else(|| format!("Cue {cue_id} was not found"))?;
+    validate_timeline_scene_block_fields(
+        events,
+        owner,
+        timing.0,
+        timing.1,
+        timing.2,
+        timing.3,
+        timing.4,
+        timing.5,
+        timing.6,
+        timing.7,
+        false,
+        cue_authored_beats,
+    )
+}
+
 #[allow(clippy::too_many_arguments)]
 #[tauri::command]
 fn add_timeline_scene_block(
@@ -35236,9 +35265,12 @@ fn add_timeline_scene_block(
     loop_count: u16,
     jump_to_event_id: Option<TimelineEventId>,
 ) -> Result<TimelineEventId, String> {
-    let snapshot = state.engine.snapshot();
-    validate_timeline_scene_block_request(
-        &snapshot,
+    let (cues, events) = state
+        .engine
+        .timeline_scene_block_admission_snapshot();
+    validate_timeline_scene_block_admission_request(
+        &cues,
+        &events,
         "Timeline scene block",
         cue_id,
         (
@@ -35293,17 +35325,15 @@ fn set_timeline_scene_block(
     loop_count: u16,
     jump_to_event_id: Option<TimelineEventId>,
 ) -> Result<(), String> {
-    let snapshot = state.engine.snapshot();
-    if !snapshot
-        .timeline
-        .events
-        .iter()
-        .any(|event| event.id == event_id)
-    {
+    let (cues, events) = state
+        .engine
+        .timeline_scene_block_admission_snapshot();
+    if !events.iter().any(|event| event.id == event_id) {
         return Err(format!("Timeline scene block {event_id} was not found"));
     }
-    validate_timeline_scene_block_request(
-        &snapshot,
+    validate_timeline_scene_block_admission_request(
+        &cues,
+        &events,
         &format!("Timeline scene block {event_id}"),
         cue_id,
         (
@@ -93305,6 +93335,34 @@ pub(crate) mod tests {
             .map(|offset| function_start + offset);
         let body = &source[function_start..next_attribute.unwrap_or(source.len())];
         assert!(body.contains("timeline_cue_event_ids_snapshot"));
+        assert!(!body.contains("engine.snapshot()"));
+    }
+
+    #[test]
+    fn add_timeline_scene_block_uses_the_narrow_engine_reader() {
+        let source = include_str!("main.rs");
+        let function_start = source
+            .find("fn add_timeline_scene_block(")
+            .expect("missing add timeline scene block command");
+        let next_attribute = source[function_start..]
+            .find("\n#[tauri::command]")
+            .map(|offset| function_start + offset);
+        let body = &source[function_start..next_attribute.unwrap_or(source.len())];
+        assert!(body.contains("timeline_scene_block_admission_snapshot"));
+        assert!(!body.contains("engine.snapshot()"));
+    }
+
+    #[test]
+    fn set_timeline_scene_block_uses_the_narrow_engine_reader() {
+        let source = include_str!("main.rs");
+        let function_start = source
+            .find("fn set_timeline_scene_block(")
+            .expect("missing set timeline scene block command");
+        let next_attribute = source[function_start..]
+            .find("\n#[tauri::command]")
+            .map(|offset| function_start + offset);
+        let body = &source[function_start..next_attribute.unwrap_or(source.len())];
+        assert!(body.contains("timeline_scene_block_admission_snapshot"));
         assert!(!body.contains("engine.snapshot()"));
     }
 

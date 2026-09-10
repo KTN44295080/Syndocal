@@ -919,6 +919,37 @@ This checkpoint does not claim real-file missing → Retry → recovery, actual
 NDI/Spout sender or display hardware, physical output, device, Mac, signing,
 publication, or product-wide completion.
 
+## Timeline scene-block admission reader follow-up
+
+The `add_timeline_scene_block` and `set_timeline_scene_block` admission paths
+now read only cue IDs with authored beat lengths and the authored timeline
+event collection through one `EngineHandle` publication-generation reader.
+Existing cue/event rejection, timing validation, jump-target validation,
+event-ID allocation, and scene-block publication behavior are unchanged.
+
+The focused engine snapshot-reader regression passed `7/7` with two existing
+ignored tests, including the scene-block admission projection in the shared
+read-model comparison. The app release structural regression passed `2/2`;
+changed engine files passed the individual rustfmt checks, `git diff --check`
+passed, and the maintained wrapper checker passed `243` assertions with `27`
+hostile mutation fixtures.
+
+A fresh maintained-wrapper `pnpm.cmd --dir app tauri build --no-bundle`
+completed with the pinned MSVC 14.44.35207 Build Tools linker and no first-
+party compiler warnings. The exact checkout executable is 64,789,504 bytes
+with SHA-256
+`927897E70674FCE7372EBEB8BAD0C02CA519599E299C86B03F5EAF7A977DC762`.
+The isolated native probe at
+`target/qa/native-final-validation-20260911-23/native-final-validation.json`
+passed: one maximized responsive `Syndocal` window, Standby ownership with
+lighting/video disabled, snapshot IPC, missing media/layer thumbnail IPC
+rejection with valid native tickets, zero physical-output operations, and
+exact executable/listener cleanup.
+
+This checkpoint does not claim real-file missing → Retry → recovery, actual
+NDI/Spout sender or display hardware, physical output, device, Mac, signing,
+publication, or product-wide completion.
+
 ## Video-layer ID reader follow-up
 
 The `set_video_layer_order` and `add_video_composition` admission paths now
