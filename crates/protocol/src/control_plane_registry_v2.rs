@@ -2086,6 +2086,71 @@ mod tests {
     }
 
     #[test]
+    fn dispatch_source_requires_existing_family_and_never_becomes_an_adapter() {
+        let mut routed = valid_registry();
+        let routed_source = source(
+            CanonicalSourceFamily::RemoteInputEvent,
+            "set_effect_enabled",
+            SourceDisposition::DispatchesToFamily {
+                target_family: CanonicalSourceFamily::TauriCommand,
+            },
+        );
+        let routed_key = routed_source.source_key.clone();
+        routed.source_inventory.push(routed_source);
+        routed
+            .source_inventory
+            .sort_by(|left, right| left.source_key.cmp(&right.source_key));
+        routed.validate().unwrap();
+        assert!(routed
+            .canonical_operation_for_source(&routed_key)
+            .unwrap()
+            .is_none());
+        assert!(routed.canonical_operations.iter().all(|operation| operation
+            .derived_adapters
+            .iter()
+            .all(|adapter| adapter.source_key != routed_key)));
+
+        let mut missing_family = valid_registry();
+        missing_family.source_inventory.push(source(
+            CanonicalSourceFamily::RemoteInputEvent,
+            "set_effect_enabled",
+            SourceDisposition::DispatchesToFamily {
+                target_family: CanonicalSourceFamily::DmxInputEvent,
+            },
+        ));
+        missing_family
+            .source_inventory
+            .sort_by(|left, right| left.source_key.cmp(&right.source_key));
+        assert!(matches!(
+            missing_family.validate(),
+            Err(CanonicalRegistryValidationError::MissingDispatchFamily(
+                CanonicalSourceFamily::DmxInputEvent
+            ))
+        ));
+
+        let mut local = valid_registry();
+        local.source_inventory.push(source(
+            CanonicalSourceFamily::TauriCommand,
+            "forwarded_source",
+            SourceDisposition::DispatchesToFamily {
+                target_family: CanonicalSourceFamily::TauriCommand,
+            },
+        ));
+        local
+            .source_inventory
+            .sort_by(|left, right| left.source_key.cmp(&right.source_key));
+        assert!(matches!(
+            local.validate(),
+            Err(
+                CanonicalRegistryValidationError::InvalidDispositionForFamily(
+                    _,
+                    "dispatches_to_family"
+                )
+            )
+        ));
+    }
+
+    #[test]
     fn canonical_registry_keyboard_sources_are_versioned_unclassified_and_cannot_be_exposed() {
         assert_eq!(
             CanonicalSourceFamily::from(LegacyOperationSourceFamily::TauriCommand),
