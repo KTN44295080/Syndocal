@@ -268,3 +268,42 @@ This is source/static release evidence only. It does not close the 50 Open +
 external-client, Mac real-device, signing, publication, or product-wide
 acceptance boundaries. No Actions result was awaited or used as a success
 substitute.
+
+## 2026-09-10 current-main workspace release test gate
+
+Current `main` source HEAD `3faf8d6086408a91ef629e75d2e39b28ed6e2fe3` was
+tested with the exact Windows MSVC `14.44.35207` x64 linker pinned and returned
+first by `where.exe link.exe`.
+
+The default local release workspace command was run without changing any source
+or assertion:
+
+```text
+cargo test --workspace --release --locked -j 1
+```
+
+It exited `1` after the audio crate passed; the Engine binary reported
+`1046 passed / 15 failed / 14 ignored`. All 15 failures were the existing 44 Hz
+release performance percentile gates, and the observed p95 values were above
+their existing limits only under the default concurrent Rust test-thread mode.
+The failure is retained as observed evidence; no threshold or assertion was
+removed or weakened.
+
+Each of the 15 failed filters was then rerun independently with
+`--test-threads=1`; all 15 passed. The full deterministic workspace command
+also passed:
+
+```text
+cargo test --workspace --release --locked -j 1 --quiet -- --test-threads=1
+```
+
+The serialized run exited `0` with `3533 passed / 0 failed / 46 ignored` across
+non-empty test binaries. This identifies host contention in the default local
+benchmark execution mode, not a deterministic product regression. The checked
+in GitHub Actions workflow already uses `--test-threads=1` for the workspace
+and video tests, so no workflow or product change was made for this observation.
+
+This is local source/build/test evidence only. It does not claim native window,
+physical output, external-client, Mac, signing, publication, or product-wide
+completion. The Actions runs for this SHA were observed but not awaited or used
+as a local test substitute.
