@@ -155,3 +155,52 @@ fail-closed authority mismatches. It does not close
 reply-loss, physical project retirement/re-Arm, device acknowledgement, and
 venue acceptance remain unclaimed. The real-file thumbnail recovery trial was
 not rerun.
+
+## Windows process-boundary probe correction — 2026-09-10
+
+The prepared Windows process drill was corrected to follow the existing Agent
+Bridge wire contract: an accepted request first returns `pending`, and the
+terminal response is obtained with a separate `request.status` query for the
+same request identity. The earlier local timeout was therefore a probe
+interpretation failure, not a product failure. No product source change was
+kept from the temporary investigation; the final product tree is identical to
+the verified `main` tree at `88d730129df6955347499ddd2352642039b25919`.
+
+The corrected no-output process drill was run against both the candidate build
+and the pre-change `main` executable. It started the exact checkout, confirmed
+one responsive Syndocal window through the bridge, observed `Standby` with
+`lighting_allowed=false` and `video_allowed=false`, sent one video-blackout
+request with the exact project fence, force-terminated only that exact
+executable before completion, restarted it, and verified:
+
+| Check | Candidate | Pre-change `main` comparison |
+| --- | --- | --- |
+| Initial runtime/state | PASS | PASS |
+| Forced exact-process termination and cleanup | PASS | PASS |
+| Post-restart status for in-doubt request | `unknown` | `unknown` |
+| Same-ID replay after restart | `unknown` | `unknown` |
+| Changed-shape reuse of same ID | `request_conflict` | `request_conflict` |
+| Ownership after restart | Standby; lighting/video denied | Standby; lighting/video denied |
+| Physical output operations | 0 | 0 |
+
+Candidate drill evidence: `target/qa/ai3-durable-process-drill-20260910-01/ai3-durable-process-drill.json`, source `8df9e0a514f09dec8e550a6d74e7513464e8cc3d`, executable SHA-256
+`EF3456FD91DCE8D2B7B9DD24D24007D65AE968E79428A9A6C02FA1BEC00E7070`,
+64,542,208 bytes. The final product tree contains no diagnostic logging;
+that diagnostic-only executable is not a release artifact.
+
+The verified no-bundle executable for the final unchanged product tree is
+`target/release/syndocal.exe`, SHA-256
+`98A3A347954E1FABDF98F336791A473B4D7FCEC34D6A337B1F540DB7588EA8CE`,
+64,541,696 bytes. Focused checks on the final source passed:
+
+```text
+pnpm --dir app run check:agent-bridge       PASS (11 groups)
+node app/scripts/check-agent-bridge-bootstrap.mjs  PASS (4 groups)
+pnpm --dir app exec tsc --noEmit            PASS
+```
+
+This process drill closes only the local no-output Agent Bridge
+pending/unknown/replay/conflict evidence slice. It does not close the AI3
+ledger item or claim external-client reply-loss coverage, physical output
+retirement/re-Arm, device acknowledgement, venue acceptance, Mac acceptance,
+signing, or publication. The real-file thumbnail recovery trial was not rerun.
