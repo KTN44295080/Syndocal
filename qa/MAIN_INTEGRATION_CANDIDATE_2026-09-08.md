@@ -339,3 +339,26 @@ remain part of the local execution history; neither was converted into a
 success by changing an assertion. This checkpoint is checker-fixture evidence
 only. It does not claim a new EXE, native-window, physical-output,
 external-client, Mac, signing, publication, or product-wide completion.
+
+## 2026-09-10 Windows checkout line-ending determinism repair
+
+The release self-test was rerun independently after the checkpoint above. On
+this Windows checkout, the signed `.bin` fixture was present as CRLF bytes
+while its tracked Git blob and signature were LF bytes. The cryptographic
+checker correctly rejected those different payload bytes. The public key and
+signature verifier were not weakened and no rejection assertion was removed.
+
+The narrow repair makes the three release signer fixtures explicit `text
+eol=lf` entries in `.gitattributes`, then verifies that the working-tree bytes
+match the signed LF payload. No production source, release metadata, or
+acceptance assertion changed.
+
+| Check | Result |
+| --- | --- |
+| `git ls-files --eol` for signer fixtures | PASS — signed payload and signature are `w/lf`; public-key evidence is parsed after canonical trim |
+| `pnpm.cmd --dir app run check:release:self-test` | PASS — release metadata 128 assertion groups, ASIO 169, Windows candidate extractor 43, materialization 4, Windows artifact 144, strict JSON 130 |
+| `git diff --check` | PASS |
+
+The real-file thumbnail missing -> Retry -> recovery trial remains not run and
+this checkpoint does not claim native window, physical output, Mac, signing,
+publication, or product-wide completion.

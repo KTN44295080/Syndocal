@@ -6,5 +6,6 @@ THIRD_PARTY_NOTICES.md text eol=lf
 licenses/FFmpeg-LGPL-3.0.txt text eol=lf
 licenses/Spout2-BSD-2-Clause.txt text eol=lf
 licenses/bcdec_rs-MIT.txt text eol=lf
-app/scripts/fixtures/release/Syndocal_1.2.0-rc.1_tauri-signer-fixture.bin -text
-app/scripts/fixtures/release/Syndocal_1.2.0-rc.1_tauri-signer-fixture.bin.sig -text
+app/scripts/fixtures/release/Syndocal_1.2.0-rc.1_tauri-signer-fixture.bin text eol=lf
+app/scripts/fixtures/release/Syndocal_1.2.0-rc.1_tauri-signer-fixture.bin.sig text eol=lf
+app/scripts/fixtures/release/tauri-signer-public.key text eol=lf
