@@ -62,3 +62,33 @@ stop-latency, hard cancellation deadlines, application restart, saved-project
 reload, cold-disk performance, ASIO/NDI, physical output, Mac, signing,
 publication, venue, or product-wide completion. The broader GUI/native
 acceptance remains open under the handoff.
+
+## Current-main follow-up — `b6889f704a2f5ae4ae9f0df9607d7aee5d421d1c`
+
+The current `main` source has no changes to the thumbnail lifecycle files
+listed above since the focused revalidation base. The focused checks were
+rerun against the current checkout:
+
+| Check | Result |
+| --- | --- |
+| `pnpm.cmd --dir app run check:native-thumbnail-request` | PASS — normal success, exact cancellation, stale-result and malformed/foreign ticket rejection |
+| `pnpm.cmd --dir app run check:media-thumbnails` | PASS — controller authority/reset/disposal, bounded retry/cache reuse, one active read per lane, and visible retry eligibility |
+| `cargo test --manifest-path app/src-tauri/Cargo.toml --release --locked -j 1 native_thumbnail -- --test-threads=1` | PASS — 23 passed, 0 failed, 0 ignored, 1795 filtered out; Build Tools 14.44.35207 linker was absolute-pinned and first in `where.exe link.exe` |
+
+The current executable was also checked with a fresh, non-overwriting native
+WebView probe at
+`target/qa/native-thumbnail-cancel-20260910-01/native-thumbnail-cancel.json`:
+
+- executable SHA-256:
+  `F9A2DD70959A7C00303EC5D69A0E1CC25E4D5A18C6B98A768CA6A34E46AC385C`;
+- one responsive, maximized `Syndocal` window; `Standby`, lighting/video
+  denied; zero physical-output operations;
+- real WebView `Channel` announcement, exact layer and asset cancellation,
+  acknowledged cancellation, and cancelled native result for each lane;
+- known `get_snapshot` succeeded and an unknown route was rejected;
+- the exact application exited and the debug listener count returned to zero.
+
+This follow-up does not claim a hard GUI stop deadline, interruption of a
+synchronous decoder/OS-I/O section, physical output, Mac, signing,
+publication, or product-wide completion. The real-file missing → Retry →
+recovery evidence was not rerun.
