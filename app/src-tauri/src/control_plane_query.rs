@@ -26,8 +26,7 @@ use protocol::{
         QueryOutputOwnershipState, QueryProtocolVersion, QuerySchemaDescriptor, QuerySchemaKind,
         RuntimeDomainGeneration, RuntimeGenerationPayload, SchemaCatalog,
     },
-    MachineOutputRole, OutputOwnershipReason, OutputOwnershipState, TimelineFollowRuntimeStatus,
-    TimelineLoopRuntimeStatus,
+    MachineOutputRole, OutputOwnershipReason, OutputOwnershipState,
 };
 use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Manager, State, WebviewWindow};
@@ -1017,7 +1016,7 @@ fn capture_source_once(app: &AppState) -> Result<SourceCapture, QueryError> {
         };
         project_projection(&coordinator)
     };
-    let snapshot = app.engine.snapshot();
+    let snapshot = app.engine.control_plane_runtime_snapshot();
     let output = output_projection(&app.engine.output_ownership_status())?;
     let runtime = vec![
         // Unlike observer-only runtime domains, this generation is itself the
@@ -1026,21 +1025,21 @@ fn capture_source_once(app: &AppState) -> Result<SourceCapture, QueryError> {
         // sequence that could be behind a worker's stale check.
         RuntimeCandidate {
             domain: "timeline.transport".to_string(),
-            source_epoch: snapshot.timeline.transport_epoch,
-            source_generation: snapshot.timeline.transport_generation,
-            active: snapshot.timeline.playing,
+            source_epoch: snapshot.timeline_transport_epoch,
+            source_generation: snapshot.timeline_transport_generation,
+            active: snapshot.timeline_transport_active,
         },
         RuntimeCandidate {
             domain: "timeline.follow".to_string(),
             source_epoch: 1,
-            source_generation: snapshot.timeline.follow_runtime.generation,
-            active: snapshot.timeline.follow_runtime.status != TimelineFollowRuntimeStatus::Idle,
+            source_generation: snapshot.timeline_follow_generation,
+            active: snapshot.timeline_follow_active,
         },
         RuntimeCandidate {
             domain: "timeline.loop".to_string(),
             source_epoch: 1,
-            source_generation: snapshot.timeline.loop_runtime.generation,
-            active: snapshot.timeline.loop_runtime.status != TimelineLoopRuntimeStatus::Disabled,
+            source_generation: snapshot.timeline_loop_generation,
+            active: snapshot.timeline_loop_active,
         },
         RuntimeCandidate {
             domain: "video.clip_slots".to_string(),
@@ -1048,12 +1047,7 @@ fn capture_source_once(app: &AppState) -> Result<SourceCapture, QueryError> {
             source_generation: app
                 .video_clip_slot_runtime_generation
                 .load(std::sync::atomic::Ordering::Acquire),
-            active: snapshot.video_clip_runtime.layers.iter().any(|layer| {
-                layer.playing
-                    || layer.active_slot_id.is_some()
-                    || layer.pending_launch.is_some()
-                    || layer.transition.is_some()
-            }),
+            active: snapshot.video_clip_slots_active,
         },
         RuntimeCandidate {
             domain: "video.transitions".to_string(),
@@ -1061,7 +1055,7 @@ fn capture_source_once(app: &AppState) -> Result<SourceCapture, QueryError> {
             source_generation: app
                 .video_transition_runtime_generation
                 .load(std::sync::atomic::Ordering::Acquire),
-            active: !snapshot.video_transition_runtime.buses.is_empty(),
+            active: snapshot.video_transitions_active,
         },
     ];
     Ok(SourceCapture {

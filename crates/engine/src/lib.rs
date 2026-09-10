@@ -21,6 +21,7 @@ mod timeline_audio_live_fence;
 mod timeline_follow_hold;
 mod video_render_sample;
 pub use video_render_sample::{VideoRenderSample, VideoRenderSampleFence, VideoRenderSampleValidation, VideoSamplingMode};
+pub use snapshot_read::ControlPlaneRuntimeSnapshot;
 
 pub use control_plane::{control_plane_engine_command_descriptors, engine_command_variant_count};
 use move_path::{move_rotation, transform_move_delta, CompiledMovePath};

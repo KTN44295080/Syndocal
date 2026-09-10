@@ -61,6 +61,53 @@ fn public_snapshot_copy_keeps_try_lock_and_distinct_poison_policies() {
 }
 
 #[test]
+fn control_plane_runtime_snapshot_matches_the_published_runtime_fields() {
+    let snapshot = populated_publication();
+    let published = Arc::new(RwLock::new(snapshot.clone()));
+    let handle = allocator_test_handle(Arc::clone(&published));
+
+    let runtime = handle.control_plane_runtime_snapshot();
+    assert_eq!(
+        runtime.timeline_transport_epoch,
+        snapshot.timeline.transport_epoch
+    );
+    assert_eq!(
+        runtime.timeline_transport_generation,
+        snapshot.timeline.transport_generation
+    );
+    assert_eq!(runtime.timeline_transport_active, snapshot.timeline.playing);
+    assert_eq!(
+        runtime.timeline_follow_generation,
+        snapshot.timeline.follow_runtime.generation
+    );
+    assert_eq!(
+        runtime.timeline_follow_active,
+        snapshot.timeline.follow_runtime.status != protocol::TimelineFollowRuntimeStatus::Idle
+    );
+    assert_eq!(
+        runtime.timeline_loop_generation,
+        snapshot.timeline.loop_runtime.generation
+    );
+    assert_eq!(
+        runtime.timeline_loop_active,
+        snapshot.timeline.loop_runtime.status != protocol::TimelineLoopRuntimeStatus::Disabled
+    );
+    assert_eq!(
+        runtime.video_clip_slots_active,
+        snapshot.video_clip_runtime.layers.iter().any(|layer| {
+            layer.playing
+                || layer.active_slot_id.is_some()
+                || layer.pending_launch.is_some()
+                || layer.transition.is_some()
+        })
+    );
+    assert_eq!(
+        runtime.video_transitions_active,
+        !snapshot.video_transition_runtime.buses.is_empty()
+    );
+}
+
+#[test]
 #[ignore = "fixed public-copy workload; not end-to-end FPS or lock-wait acceptance"]
 fn benchmark_public_snapshot_copy_without_authored_video() {
     use std::hint::black_box;
