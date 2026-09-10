@@ -104,3 +104,19 @@ Neither hosted timing failure reproduced locally. No assertion, retry, skip,
 or product behavior was changed in response to those observations. These
 focused tests do not replace the hosted matrix and do not claim physical
 output, external-client, hardware, or product-wide acceptance.
+
+## Ubuntu dependency-index resilience — 2026-09-10
+
+Hosted run [34385989058](https://github.com/KTN44295080/Syndocal/actions/runs/34385989058)
+also recorded an independent Ubuntu setup failure before compilation:
+`apt-get update` received a `Hash Sum mismatch` from the Google Chrome APT
+repository. This is an external package-index transport failure, not a product
+test result. The Linux dependency step now invokes apt with its bounded native
+`Acquire::Retries=3` option. It still fails the job when the repository remains
+unavailable; no package, test, or release assertion is skipped or weakened.
+
+Local evidence for this workflow-only change is `git diff --check` passing. A
+Linux hosted rerun is required to claim the changed setup step green; this
+checkpoint does not claim that rerun, nor Windows native-window, hardware,
+physical output, release publication, signing, notarization, or product-wide
+completion.
