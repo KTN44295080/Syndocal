@@ -272,6 +272,11 @@ try {
     "release candidate static gate excludes the RC-only metadata invocation",
   );
   pass(
+    packageScripts["check:release:static"].includes("pnpm run check:completion-ledger")
+      && packageScripts["check:release:static"].includes("pnpm run check:q1-q4-ledger"),
+    "release static gate preserves completion-ledger and Q1-Q4 structure checks",
+  );
+  pass(
     packageScripts["check:release"] === "pnpm run check:release:static && node scripts/check-release-metadata.mjs",
     "normal release gate runs static checks followed by development metadata validation",
   );

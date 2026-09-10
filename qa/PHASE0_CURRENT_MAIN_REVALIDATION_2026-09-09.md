@@ -73,3 +73,15 @@ revalidation is software evidence only; it does not close the real-file
 thumbnail recovery boundary, GUI/native IPC acceptance, external clients,
 physical output, Mac/Linux real-device acceptance, signing, publication, or
 venue acceptance.
+
+## Release static gate coverage checkpoint — based on `d18c2bb17992ba6d3a26f72904dd9c7a60eb7d7e`
+
+The existing completion-ledger and Q1–Q4 validators are now invoked by
+`check:release:static`, before native admission and product contract checks.
+This is validation wiring only: it does not change ledger statuses, add
+product behavior, create release artifacts, sign or publish anything, or
+reintroduce a non-library workspace.
+
+The metadata self-test also asserts that both validator commands remain in the
+static gate. The normal and candidate release modes continue to use the same
+static gate, while RC evidence remains explicit and absent in this checkout.
