@@ -286,6 +286,35 @@ lighting/video disabled, snapshot IPC, missing media/layer thumbnail IPC
 rejection with valid native tickets, zero physical-output operations, and
 exact executable/listener cleanup.
 
+## Video-output existence reader follow-up
+
+The seven legacy video-output configuration/mapping command adapters now check
+one output ID through `EngineHandle::video_output_exists()` instead of cloning
+the complete public `EngineSnapshot`. The existing missing-output error,
+legacy-route rejection, output lease path, and native output lifecycle are
+unchanged; a poisoned publication remains fail-closed as “not found.”
+
+The focused app boundary regression passed `1/1` for missing output IDs. The
+engine snapshot-reader regression passed `6/6` with one existing synthetic
+benchmark ignored, including present IDs, replacement, and poison/default
+checks. Changed engine files passed the individual rustfmt check and
+`git diff --check` passed.
+
+A fresh maintained-wrapper `pnpm.cmd --dir app tauri build --no-bundle`
+completed with the pinned MSVC 14.44.35207 Build Tools linker. The exact
+checkout executable is 64,565,760 bytes with SHA-256
+`63D0E6A2C8D1198732DC3BCD16092E95D85109F43E15D4DF4C73658E0DE4F9FA`.
+The isolated native probe at
+`target/qa/native-final-validation-20260911-02/native-final-validation.json`
+passed: one maximized responsive `Syndocal` window, Standby ownership with
+lighting/video disabled, snapshot IPC, missing media/layer thumbnail IPC
+rejection with valid native tickets, zero physical-output operations, and
+exact executable/listener cleanup.
+
+This checkpoint does not claim video-output hardware/display acceptance,
+physical output, device, Mac, signing, publication, or product-wide
+completion.
+
 ## Fixture-group validation reader follow-up
 
 `set_group_fixture_limits` now reads only the published fixture group-ID

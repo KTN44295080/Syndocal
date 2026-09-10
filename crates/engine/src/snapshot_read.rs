@@ -3,8 +3,8 @@ use protocol::{
     AutoVjAction, CompositionSummary, DmxOutputConfig, EngineSnapshot, StageObjectSummary,
     TimelineFollowRuntimeStatus, TimelineFollowRuntimeStatusSnapshot, TimelineFollowRuntimeSummary,
     TimelineLayerSummary, TimelineLoopRuntimeStatus, VideoClipRuntimeSnapshot,
-    VideoLayerTransitionBusSummary, VideoLayerTransitionRuntimeSnapshot, VideoOutputSummary,
-    VideoSnapshot,
+    VideoLayerTransitionBusSummary, VideoLayerTransitionRuntimeSnapshot, VideoOutputId,
+    VideoOutputSummary, VideoSnapshot,
 };
 
 /// The runtime-only projection required by the control-plane query adapter.
@@ -185,6 +185,18 @@ impl EngineHandle {
                 .iter()
                 .map(|fixture| fixture.group_ids.clone())
                 .collect()
+        })
+    }
+
+    /// Check one published video-output ID without cloning the public video
+    /// image or unrelated project/runtime collections.
+    pub fn video_output_exists(&self, output_id: VideoOutputId) -> bool {
+        self.read_snapshot_field(|snapshot| {
+            snapshot
+                .video
+                .outputs
+                .iter()
+                .any(|output| output.id == output_id)
         })
     }
 

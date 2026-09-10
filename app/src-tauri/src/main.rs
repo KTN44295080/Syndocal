@@ -48269,7 +48269,7 @@ fn add_video_output(
 #[tauri::command]
 fn remove_video_output(state: State<'_, AppState>, output_id: VideoOutputId) -> Result<(), String> {
     reject_legacy_output_control_route::<()>("Video output removal")?;
-    validate_video_output_exists(&state.engine.snapshot(), output_id)?;
+    validate_video_output_exists_from_engine(&state.engine, output_id)?;
     state
         .engine
         .send(EngineCommand::RemoveVideoOutput(output_id))
@@ -48293,7 +48293,7 @@ fn set_video_output_config(
         endpoint_name: Option<String> => "endpointName",
     );
     reject_legacy_output_control_route::<()>("Video output configuration")?;
-    validate_video_output_exists(&state.engine.snapshot(), output_id)?;
+    validate_video_output_exists_from_engine(&state.engine, output_id)?;
     let config = normalize_video_output_config(
         label,
         kind,
@@ -48338,7 +48338,7 @@ fn set_video_output_enabled(
     enabled: bool,
 ) -> Result<(), String> {
     reject_legacy_output_control_route::<()>("Video output enable/release")?;
-    validate_video_output_exists(&state.engine.snapshot(), output_id)?;
+    validate_video_output_exists_from_engine(&state.engine, output_id)?;
     state
         .engine
         .send(EngineCommand::SetVideoOutputEnabled { output_id, enabled })
@@ -48355,7 +48355,7 @@ fn set_video_output_opacity(
     if !opacity.is_finite() {
         return Err("Video output opacity must be finite".to_string());
     }
-    validate_video_output_exists(&state.engine.snapshot(), output_id)?;
+    validate_video_output_exists_from_engine(&state.engine, output_id)?;
     state
         .engine
         .send(EngineCommand::SetVideoOutputOpacity { output_id, opacity })
@@ -48373,7 +48373,7 @@ fn fade_video_output_opacity(
     if !opacity.is_finite() {
         return Err("Video output opacity must be finite".to_string());
     }
-    validate_video_output_exists(&state.engine.snapshot(), output_id)?;
+    validate_video_output_exists_from_engine(&state.engine, output_id)?;
     state
         .engine
         .send(EngineCommand::FadeVideoOutputOpacity {
@@ -48405,7 +48405,7 @@ fn set_video_output_mapping(
     mapping: VideoOutputMapping,
 ) -> Result<(), String> {
     reject_legacy_output_control_route::<()>("Video output mapping")?;
-    validate_video_output_exists(&state.engine.snapshot(), output_id)?;
+    validate_video_output_exists_from_engine(&state.engine, output_id)?;
     validate_video_output_mapping(&mapping)?;
     state
         .engine
@@ -48421,7 +48421,7 @@ fn set_video_output_mapping_field(
     value: f32,
 ) -> Result<(), String> {
     reject_legacy_output_control_route::<()>("Video output mapping field")?;
-    validate_video_output_exists(&state.engine.snapshot(), output_id)?;
+    validate_video_output_exists_from_engine(&state.engine, output_id)?;
     let field = normalize_video_output_mapping_field(field)?;
     if !value.is_finite() {
         return Err("Video output mapping value must be finite".to_string());
@@ -48461,7 +48461,7 @@ fn apply_video_output_mapping_preset(
     label: String,
 ) -> Result<(), String> {
     reject_legacy_output_control_route::<()>("Video output mapping preset")?;
-    validate_video_output_exists(&state.engine.snapshot(), output_id)?;
+    validate_video_output_exists_from_engine(&state.engine, output_id)?;
     let label = normalize_video_output_mapping_preset_label(label)?;
     state
         .engine
@@ -84443,6 +84443,17 @@ fn validate_video_output_exists(
         .iter()
         .any(|output| output.id == output_id)
     {
+        Ok(())
+    } else {
+        Err(format!("Video output {output_id} was not found"))
+    }
+}
+
+fn validate_video_output_exists_from_engine(
+    engine: &EngineHandle,
+    output_id: VideoOutputId,
+) -> Result<(), String> {
+    if engine.video_output_exists(output_id) {
         Ok(())
     } else {
         Err(format!("Video output {output_id} was not found"))
