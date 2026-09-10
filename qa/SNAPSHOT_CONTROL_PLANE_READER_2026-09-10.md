@@ -228,3 +228,28 @@ zero matching processes.
 This remains a local Windows native gate and allocator/read-model regression.
 It does not claim physical stage-map output, venue, thumbnail-recovery, or
 product-wide acceptance.
+
+## USB RDM serial-port safety reader follow-up
+
+The USB RDM request and discovery admission checks now read only the primary
+DMX output and managed DMX route collection through the existing narrow reader.
+The conflict predicate, case-insensitive serial-port match, fail-closed
+behavior, and user-facing error remain unchanged. No RDM request or device
+discovery was opened; this is a snapshot-clone reduction around the safety
+check, not physical I/O acceptance.
+
+The focused pinned Windows MSVC 14.44.35207 app suite passed 3/3:
+`cargo test -p syndocal --release --locked art_rdm_request_tests --
+--test-threads=1`. The added regression covers primary-route conflict,
+managed-route conflict, and a non-conflicting port.
+
+A fresh maintained-wrapper `pnpm.cmd --dir app tauri build --no-bundle`
+completed after TypeScript/Vite and Rust release compilation. The resulting
+EXE is 64,580,608 bytes with SHA-256
+`35A87704A9DEB573BA6E8CA574219DF8426892D535C6A767D9539CF191BEA17E`.
+Launching that exact executable produced one maximized-requested,
+responsive `Syndocal` window with title `Syndocal`; exact-path cleanup left
+zero matching processes.
+
+This remains a local Windows native safety-gate regression. It does not claim
+USB RDM hardware, serial-DMX output, venue, or product-wide acceptance.

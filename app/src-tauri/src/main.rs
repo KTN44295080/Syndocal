@@ -32692,7 +32692,8 @@ async fn send_usb_rdm_request(
     if serial_port.is_empty() {
         return Err("ENTTEC USB Pro serial port is required".to_string());
     }
-    ensure_serial_rdm_port_available(&state.engine.snapshot(), &serial_port)?;
+    let (dmx_outputs, output) = state.engine.dmx_outputs_and_output_snapshot();
+    ensure_serial_rdm_port_available(&output, &dmx_outputs, &serial_port)?;
     let message = build_rdm_request_message(
         &request.source_uid,
         &request.target_uid,
@@ -32723,11 +32724,12 @@ async fn send_usb_rdm_request(
 }
 
 fn ensure_serial_rdm_port_available(
-    snapshot: &EngineSnapshot,
+    output: &DmxOutputConfig,
+    dmx_outputs: &[DmxOutputConfig],
     serial_port: &str,
 ) -> Result<(), String> {
-    let conflicts = std::iter::once(&snapshot.output)
-        .chain(snapshot.dmx_outputs.iter())
+    let conflicts = std::iter::once(output)
+        .chain(dmx_outputs.iter())
         .any(|output| {
             output.enabled
                 && matches!(
@@ -32756,7 +32758,8 @@ async fn discover_usb_rdm_devices(
     if serial_port.is_empty() {
         return Err("ENTTEC USB Pro serial port is required".to_string());
     }
-    ensure_serial_rdm_port_available(&state.engine.snapshot(), &serial_port)?;
+    let (dmx_outputs, output) = state.engine.dmx_outputs_and_output_snapshot();
+    ensure_serial_rdm_port_available(&output, &dmx_outputs, &serial_port)?;
     let source_uid = parse_rdm_uid(&source_uid)?;
     let timeout = Duration::from_millis(timeout_ms.unwrap_or(60_000).clamp(1_000, 120_000));
     let lighting_permit = ensure_lighting_output_allowed(&state.engine)?;
@@ -129180,6 +129183,32 @@ mod art_rdm_request_tests {
         RDM_TRANSACTION_NUMBER.store(u8::MAX, Ordering::Relaxed);
         assert_eq!(next_rdm_transaction_number(), u8::MAX);
         assert_eq!(next_rdm_transaction_number(), 1);
+    }
+
+    #[test]
+    fn serial_rdm_port_gate_checks_primary_and_managed_routes() {
+        let primary = DmxOutputConfig {
+            enabled: true,
+            protocol: DmxOutputProtocol::EnttecUsbPro,
+            serial_port: "COM7".to_string(),
+            ..DmxOutputConfig::default()
+        };
+        let managed = DmxOutputConfig {
+            enabled: true,
+            protocol: DmxOutputProtocol::DmxKingUltraDmx,
+            serial_port: "COM8".to_string(),
+            ..DmxOutputConfig::default()
+        };
+
+        assert!(ensure_serial_rdm_port_available(&primary, &[], "com7").is_err());
+        assert!(
+            ensure_serial_rdm_port_available(&primary, std::slice::from_ref(&managed), "com8")
+                .is_err()
+        );
+        assert!(
+            ensure_serial_rdm_port_available(&primary, std::slice::from_ref(&managed), "COM9")
+                .is_ok()
+        );
     }
 }
 
