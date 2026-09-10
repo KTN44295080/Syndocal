@@ -43006,14 +43006,11 @@ fn stop_video_clip(
     layer_id: VideoLayerId,
     fade_ms: u64,
 ) -> Result<(), String> {
-    let snapshot = state.engine.snapshot();
-    let layer = snapshot
-        .video
-        .layers
-        .iter()
-        .find(|layer| layer.id == layer_id)
+    let layer_state = state
+        .engine
+        .video_layer_state_snapshot(layer_id)
         .ok_or_else(|| format!("Video layer {layer_id} was not found"))?;
-    let next = stopped_video_clip_state(&layer.state, fade_ms);
+    let next = stopped_video_clip_state(&layer_state, fade_ms);
     state
         .engine
         .send(EngineCommand::SetVideoLayerState {

@@ -461,6 +461,34 @@ This checkpoint does not claim real-file missing → Retry → recovery, video
 display hardware, physical output, device, Mac, signing, publication, or
 product-wide completion.
 
+## Video-layer stop-state reader follow-up
+
+The legacy `stop_video_clip` admission path now reuses the selected published
+layer-state reader instead of cloning the complete public snapshot. Missing-
+layer rejection, stopped-state construction, fade ordering, and
+poison/default fail-closed behavior are unchanged. AB-mix and audio-monitor
+paths remain separate because they require additional fields or coordinated
+side effects.
+
+The app release `video` regression passed `139/139` with six existing ignored
+tests. The maintained wrapper checker passed `243` assertions with `27`
+hostile mutation fixtures, and `git diff --check` passed.
+
+A fresh maintained-wrapper `pnpm.cmd --dir app tauri build --no-bundle`
+completed with the pinned MSVC 14.44.35207 Build Tools linker. The exact
+checkout executable is 64,569,856 bytes with SHA-256
+`28B8253CBD5879AD4A3B8FC18666CD887153E02D26A4D76BD9D18A176C6AFD3D`.
+The isolated native probe at
+`target/qa/native-final-validation-20260911-05/native-final-validation.json`
+passed: one maximized responsive `Syndocal` window, Standby ownership with
+lighting/video disabled, snapshot IPC, missing media/layer thumbnail IPC
+rejection with valid native tickets, zero physical-output operations, and
+exact executable/listener cleanup.
+
+This checkpoint does not claim real-file missing → Retry → recovery, video
+display hardware, physical output, device, Mac, signing, publication, or
+product-wide completion.
+
 ## Video-layer ID reader follow-up
 
 The `set_video_layer_order` and `add_video_composition` admission paths now
