@@ -76225,7 +76225,7 @@ fn get_video_runtime_status() -> VideoRuntimeStatus {
 fn get_video_preview_diagnostics(
     state: State<'_, AppState>,
 ) -> Result<VideoPreviewDiagnostics, String> {
-    let snapshot = state.engine.snapshot();
+    let snapshot = state.engine.video_snapshot();
     let renderer = state
         .video_preview
         .lock()
@@ -76250,7 +76250,6 @@ fn get_video_preview_diagnostics(
         prefetch_interval_ms,
         bpm,
         layer_queues: snapshot
-            .video
             .layers
             .iter()
             .map(|layer| {
@@ -76284,7 +76283,7 @@ fn get_video_preview_diagnostics(
             })
             .collect(),
         output_decode_previews: video_output_decode_preview_summaries(
-            &snapshot.video,
+            &snapshot,
             config,
             prefetch_count,
             prefetch_interval_ms,
@@ -76975,20 +76974,18 @@ fn get_debug_video_preview(
     width: u32,
     height: u32,
 ) -> Result<video::VideoFrame, String> {
-    let snapshot = state.engine.snapshot();
+    let (snapshot, bpm) = state.engine.video_layer_thumbnail_snapshot();
     let mut renderer = state
         .video_preview
         .lock()
         .map_err(|_| "Video preview renderer lock was poisoned".to_string())?;
+    renderer.frame_provider_mut().set_bpm(Some(bpm));
+    let decode_budget = video_preview_decode_budget(&renderer, snapshot.layers.len());
     renderer
-        .frame_provider_mut()
-        .set_bpm(Some(snapshot.clock.bpm));
-    let decode_budget = video_preview_decode_budget(&renderer, snapshot.video.layers.len());
-    renderer
-        .warm_first_composition_decode_queue(&snapshot.video, width, height, decode_budget)
+        .warm_first_composition_decode_queue(&snapshot, width, height, decode_budget)
         .map_err(|error| format!("{error:?}"))?;
     renderer
-        .render(&snapshot.video, width, height)
+        .render(&snapshot, width, height)
         .map_err(|error| format!("{error:?}"))
 }
 
