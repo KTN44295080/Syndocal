@@ -2,7 +2,7 @@ use crate::{EngineHandle, TimelineTransportAuthority};
 use protocol::{
     EngineSnapshot, TimelineFollowRuntimeStatus, TimelineFollowRuntimeStatusSnapshot,
     TimelineFollowRuntimeSummary, TimelineLoopRuntimeStatus, VideoClipRuntimeSnapshot,
-    VideoLayerTransitionRuntimeSnapshot, VideoOutputSummary,
+    VideoLayerTransitionBusSummary, VideoLayerTransitionRuntimeSnapshot, VideoOutputSummary,
 };
 
 /// The runtime-only projection required by the control-plane query adapter.
@@ -101,6 +101,12 @@ impl EngineHandle {
     /// project and runtime collections.
     pub fn video_outputs_snapshot(&self) -> Vec<VideoOutputSummary> {
         self.read_snapshot_field(|snapshot| snapshot.video.outputs.clone())
+    }
+
+    /// Read authored video transition-bus definitions without cloning the
+    /// unrelated public project and runtime collections.
+    pub fn video_transition_buses_snapshot(&self) -> Vec<VideoLayerTransitionBusSummary> {
+        self.read_snapshot_field(|snapshot| snapshot.video.transition_buses.clone())
     }
 
     /// Read the published Timeline playing flag without cloning unrelated

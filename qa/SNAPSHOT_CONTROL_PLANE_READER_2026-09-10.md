@@ -85,3 +85,24 @@ passed 30/30 with no first-party compiler warning. A fresh
 `A955DFA2FD6028B83D52604879AF5CC73C4DE78D4B8A255A2AF3546DDC8CB502`.
 The exact executable launched one responsive, maximized `Syndocal` window and
 was terminated and verified absent by exact path.
+
+## Authored transition-bus reader follow-up
+
+The video-effect-catalog entry point now reads only the authored transition-bus
+definitions it carries forward, instead of cloning the complete public engine
+snapshot. The catalog mutation contract and its single published admission are
+unchanged; runtime transition state remains owned by the existing runtime
+reader. This is a structural clone reduction, not a measured show-performance
+claim.
+
+The focused reader regression was strengthened with a non-empty authored bus
+fixture and rerun under the same pinned MSVC environment:
+`cargo test -p engine --release --locked snapshot_read_tests --
+--test-threads=1` — 4 passed, 1 existing synthetic benchmark ignored, 0 failed.
+The consumer suite remained green at 30/30 in `control_plane::tests`. The
+native build immediately before the test-only fixture extension succeeded via
+the maintained wrapper and produced a 64,545,280-byte EXE with SHA-256
+`8B29F4499834358868276712A3FE7222A3992173C8B1FDBC1CE108BEAB86BF9E`.
+That exact executable launched one responsive `Syndocal` window and was cleaned
+up by exact path. The fixture-only extension is test configuration and does
+not alter the release executable inputs.

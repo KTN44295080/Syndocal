@@ -10907,7 +10907,7 @@ impl EngineHandle {
         effect_presets: Vec<VideoEffectPresetSummary>,
         layer_groups: Vec<VideoLayerGroupSummary>,
     ) -> Result<(), String> {
-        let transition_buses = self.snapshot().video.transition_buses;
+        let transition_buses = self.video_transition_buses_snapshot();
         self.apply_video_effect_catalog_with_transition_buses(
             effect_chains,
             effect_presets,

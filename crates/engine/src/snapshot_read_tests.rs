@@ -2,8 +2,9 @@ use super::allocator_test_handle;
 use crate::{EngineHandle, TimelineTransportAuthority};
 use protocol::{
     EngineSnapshot, TimelineFollowRuntimeStatusSnapshot, VideoClipLayerRuntimeSummary,
-    VideoLayerTransitionBusRuntimeSummary, VideoLayerTransitionTarget, VideoOutputKind,
-    VideoOutputSummary,
+    VideoClipTakeDuration, VideoClipTakeKind, VideoLayerTransitionBusRuntimeSummary,
+    VideoLayerTransitionBusSummary, VideoLayerTransitionCurve, VideoLayerTransitionTarget,
+    VideoOutputKind, VideoOutputSummary, VideoTransitionBusId,
 };
 use std::{
     hint::black_box,
@@ -68,6 +69,26 @@ fn publication(token: u64) -> EngineSnapshot {
         blackout: false,
         mapping: protocol::VideoOutputMapping::default(),
     });
+    let first_target = VideoLayerTransitionTarget::Layer { layer_id: token };
+    let second_target = VideoLayerTransitionTarget::Layer {
+        layer_id: token + 1,
+    };
+    snapshot
+        .video
+        .transition_buses
+        .push(VideoLayerTransitionBusSummary {
+            id: VideoTransitionBusId(token),
+            label: format!("bus {token}"),
+            composition_id: 1,
+            enabled: true,
+            members: vec![first_target.clone(), second_target.clone()],
+            default_from: first_target,
+            default_to: second_target,
+            default_kind: VideoClipTakeKind::Crossfade,
+            default_duration: VideoClipTakeDuration::milliseconds(400),
+            default_curve: VideoLayerTransitionCurve::EaseInOut,
+            matte_source: None,
+        });
     snapshot
         .video_transition_runtime
         .buses
@@ -118,6 +139,10 @@ fn assert_same_read_model(handle: &EngineHandle) {
         expected.video_transition_runtime
     );
     assert_eq!(handle.video_outputs_snapshot(), expected.video.outputs);
+    assert_eq!(
+        handle.video_transition_buses_snapshot(),
+        expected.video.transition_buses
+    );
     assert_eq!(handle.timeline_playing(), expected.timeline.playing);
 }
 
@@ -143,6 +168,10 @@ fn narrow_readers_match_public_snapshot_and_observe_replacement() {
     assert_eq!(handle.video_clip_runtime_snapshot().layers[0].layer_id, 18);
     assert_eq!(handle.video_outputs_snapshot()[0].id, 18);
     assert_eq!(handle.video_outputs_snapshot()[1].label, "secondary 18");
+    assert_eq!(
+        handle.video_transition_buses_snapshot(),
+        publication(18).video.transition_buses
+    );
 }
 
 #[test]
@@ -161,6 +190,7 @@ fn poisoned_publication_preserves_public_snapshot_defaults() {
     );
     assert!(handle.video_clip_runtime_snapshot().layers.is_empty());
     assert!(handle.video_outputs_snapshot().is_empty());
+    assert!(handle.video_transition_buses_snapshot().is_empty());
     assert!(!handle.timeline_playing());
 }
 
