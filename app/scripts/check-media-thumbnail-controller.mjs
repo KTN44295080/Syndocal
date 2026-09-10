@@ -39,7 +39,7 @@ const measured = (values, count) => new Proxy(values, {
 });
 let controller, setSnapshot, setAuthority, dispose;
 const layerRequests = [], assetRequests = [];
-const deferredLoad = (requests) => (id) => new Promise((resolve, reject) => requests.push({ id, resolve, reject }));
+const deferredLoad = (requests) => (id, signal) => new Promise((resolve, reject) => requests.push({ id, signal, resolve, reject }));
 const layers = measured([layer], () => layerScans++);
 const assets = measured([asset], () => assetScans++);
 createRoot((cleanup) => {
@@ -98,6 +98,7 @@ await flush();
 assert.deepEqual([layerScans, assetScans], [2, 1], "changed layer array only rescans layers");
 assert.equal(layerRequests.length, 2);
 controller.reset();
+assert.equal(layerRequests[1].signal.aborted, true, "controller reset aborts the active layer loader signal");
 layerRequests[1].resolve("after-reset");
 await flush();
 assert.equal(controller.videoThumbnailAccessAuthorized(), false);
@@ -107,6 +108,8 @@ controller.authorizeVideoThumbnailAccess();
 await flush();
 assert.deepEqual([layerRequests.length, assetRequests.length], [3, 3], "replacement reset retires cache and both generations");
 dispose();
+assert.equal(layerRequests[2].signal.aborted, true, "scope disposal aborts the active layer loader signal");
+assert.equal(assetRequests[2].signal.aborted, true, "scope disposal aborts the independent asset loader signal");
 layerRequests[2].resolve("after-dispose-layer");
 assetRequests[2].resolve("after-dispose-asset");
 await flush();
@@ -118,10 +121,10 @@ console.log("PASS media thumbnail controller: 100 unchanged-array and 100 equiva
 function boundedFixture(initialAssets = [asset]) {
   const requests = { layers: [], assets: [] };
   const active = { layers: 0, assets: 0 }, peak = { layers: 0, assets: 0 };
-  const load = (kind) => (id) => {
+  const load = (kind) => (id, signal) => {
     active[kind]++;
     peak[kind] = Math.max(peak[kind], active[kind]);
-    return new Promise((resolve, reject) => requests[kind].push({ id, resolve, reject }))
+    return new Promise((resolve, reject) => requests[kind].push({ id, signal, resolve, reject }))
       .finally(() => { active[kind]--; });
   };
   const result = { requests, active, peak };
@@ -186,6 +189,8 @@ function boundedFixture(initialAssets = [asset]) {
   for (let i = 0; i < 20; i++) { f.controller.reset(); f.controller.authorizeVideoThumbnailAccess(); }
   assert.deepEqual([f.requests.layers.length, f.requests.assets.length], [1, 1]);
   f.controller.reset();
+  assert.equal(f.requests.layers[0].signal.aborted, true, "reset aborts the active layer loader signal");
+  assert.equal(f.requests.assets[0].signal.aborted, true, "reset aborts the independent asset loader signal");
   f.requests.layers[0].resolve('old'); f.requests.assets[0].resolve('old'); await flush();
   assert.deepEqual(f.controller.mediaAssetThumbnails(), {});
   assert.deepEqual(f.controller.videoClipThumbnails(), {});

@@ -92,3 +92,26 @@ This follow-up does not claim a hard GUI stop deadline, interruption of a
 synchronous decoder/OS-I/O section, physical output, Mac, signing,
 publication, or product-wide completion. The real-file missing → Retry →
 recovery evidence was not rerun.
+
+## Current-source signal propagation follow-up — 2026-09-10
+
+The focused controller checker was strengthened without changing product
+source. Its deferred loader now records the `AbortSignal` supplied by the
+controller and asserts that `reset()` aborts both active lane signals and that
+Solid-scope disposal aborts both independent active lane signals. This closes
+the evidence gap between the existing batch-level abort contract and the
+controller-to-loader seam. The native request checker still covers mapping an
+announced exact ticket to the cancellation route and rejecting an unacknowledged
+cancellation.
+
+| Check | Result | Boundary covered |
+| --- | --- | --- |
+| `pnpm.cmd --dir app run check:media-thumbnails` | PASS | controller `reset()`/scope disposal abort the active layer and asset loader signals; existing authority, successor, retry and cache assertions remain active |
+| `pnpm.cmd --dir app run check:native-thumbnail-request` | PASS | exact ticket cancellation, cancellation acknowledgement failure, stale-result and malformed/foreign ticket rejection |
+| `git diff --check` | PASS | whitespace integrity |
+
+This is still cooperative cancellation evidence. It does not claim hard-stop
+latency, interruption of synchronous decoder/OS-I/O/GPU sections, native child
+termination, application restart, physical output, Mac, signing, publication,
+or product-wide completion. The real-file missing → Retry → recovery evidence
+was not rerun.
