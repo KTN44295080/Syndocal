@@ -85,3 +85,12 @@ reintroduce a non-library workspace.
 The metadata self-test also asserts that both validator commands remain in the
 static gate. The normal and candidate release modes continue to use the same
 static gate, while RC evidence remains explicit and absent in this checkout.
+
+## Frontend source-inventory gate coverage — based on `0e6e726b756315d6c0dd064085948cc1b582efd5`
+
+The existing frontend routing and Tauri invoke inventory checks are now also
+invoked by `check:release:static`, alongside the completion-ledger and Q1–Q4
+validators. The release metadata self-test asserts this routing so the gate
+cannot silently lose the source-inventory checks. This remains validation
+wiring only; `AI0-COVERAGE-001` stays Open for the broader non-frontend
+mutation-source inventory and fail-closed classification.

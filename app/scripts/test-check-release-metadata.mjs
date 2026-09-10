@@ -277,6 +277,11 @@ try {
     "release static gate preserves completion-ledger and Q1-Q4 structure checks",
   );
   pass(
+    packageScripts["check:release:static"].includes("pnpm run check:frontend-command-routing")
+      && packageScripts["check:release:static"].includes("pnpm run check:frontend-invokes"),
+    "release static gate preserves frontend routing and invoke inventory checks",
+  );
+  pass(
     packageScripts["check:release"] === "pnpm run check:release:static && node scripts/check-release-metadata.mjs",
     "normal release gate runs static checks followed by development metadata validation",
   );
