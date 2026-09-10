@@ -48646,7 +48646,11 @@ fn update_lfo_effect(
     request: LfoEffectRequest,
 ) -> Result<(), String> {
     validate_lfo_effect_request(&request)?;
-    validate_effect_update_kind(&state.engine.snapshot(), effect_id, EffectKind::Lfo)?;
+    validate_effect_update_kind(
+        state.engine.effect_kind_snapshot(effect_id),
+        effect_id,
+        EffectKind::Lfo,
+    )?;
     state
         .engine
         .send(EngineCommand::UpdateLfoEffect { effect_id, request })
@@ -48661,7 +48665,7 @@ fn update_position_wave_effect(
 ) -> Result<(), String> {
     validate_position_wave_effect_request(&request)?;
     validate_effect_update_kind(
-        &state.engine.snapshot(),
+        state.engine.effect_kind_snapshot(effect_id),
         effect_id,
         EffectKind::PositionWave,
     )?;
@@ -48678,7 +48682,11 @@ fn update_color_effect(
     request: ColorEffectRequest,
 ) -> Result<(), String> {
     validate_color_effect_request(&request)?;
-    validate_effect_update_kind(&state.engine.snapshot(), effect_id, EffectKind::Color)?;
+    validate_effect_update_kind(
+        state.engine.effect_kind_snapshot(effect_id),
+        effect_id,
+        EffectKind::Color,
+    )?;
     state.engine.update_color_effect(effect_id, request)
 }
 
@@ -48689,7 +48697,11 @@ fn update_chaser_effect(
     request: ChaserEffectRequest,
 ) -> Result<(), String> {
     validate_chaser_effect_request(&request)?;
-    validate_effect_update_kind(&state.engine.snapshot(), effect_id, EffectKind::Chaser)?;
+    validate_effect_update_kind(
+        state.engine.effect_kind_snapshot(effect_id),
+        effect_id,
+        EffectKind::Chaser,
+    )?;
     state.engine.update_chaser_effect(effect_id, request)
 }
 
@@ -48700,7 +48712,11 @@ fn update_move_effect(
     request: MoveEffectRequest,
 ) -> Result<(), String> {
     validate_move_effect_request(&request)?;
-    validate_effect_update_kind(&state.engine.snapshot(), effect_id, EffectKind::Move)?;
+    validate_effect_update_kind(
+        state.engine.effect_kind_snapshot(effect_id),
+        effect_id,
+        EffectKind::Move,
+    )?;
     state.engine.update_move_effect(effect_id, request)
 }
 
@@ -48711,7 +48727,11 @@ fn update_value_effect(
     request: ValueEffectRequest,
 ) -> Result<(), String> {
     validate_value_effect_request(&request)?;
-    validate_effect_update_kind(&state.engine.snapshot(), effect_id, EffectKind::Value)?;
+    validate_effect_update_kind(
+        state.engine.effect_kind_snapshot(effect_id),
+        effect_id,
+        EffectKind::Value,
+    )?;
     state.engine.update_value_effect(effect_id, request)
 }
 
@@ -48722,7 +48742,11 @@ fn update_curve_effect(
     request: CurveEffectRequest,
 ) -> Result<(), String> {
     validate_curve_effect_request(&request)?;
-    validate_effect_update_kind(&state.engine.snapshot(), effect_id, EffectKind::Curve)?;
+    validate_effect_update_kind(
+        state.engine.effect_kind_snapshot(effect_id),
+        effect_id,
+        EffectKind::Curve,
+    )?;
     state.engine.update_curve_effect(effect_id, request)
 }
 
@@ -48733,7 +48757,11 @@ fn update_mapping_effect(
     request: MappingEffectRequest,
 ) -> Result<(), String> {
     validate_mapping_effect_request(&request)?;
-    validate_effect_update_kind(&state.engine.snapshot(), effect_id, EffectKind::Mapping)?;
+    validate_effect_update_kind(
+        state.engine.effect_kind_snapshot(effect_id),
+        effect_id,
+        EffectKind::Mapping,
+    )?;
     state.engine.update_mapping_effect(effect_id, request)
 }
 
@@ -48745,7 +48773,7 @@ fn update_color_mapping_effect(
 ) -> Result<(), String> {
     validate_color_mapping_effect_request(&request)?;
     validate_effect_update_kind(
-        &state.engine.snapshot(),
+        state.engine.effect_kind_snapshot(effect_id),
         effect_id,
         EffectKind::ColorMapping,
     )?;
@@ -48753,19 +48781,15 @@ fn update_color_mapping_effect(
 }
 
 fn validate_effect_update_kind(
-    snapshot: &EngineSnapshot,
+    effect_kind: Option<EffectKind>,
     effect_id: EffectId,
     expected: EffectKind,
 ) -> Result<(), String> {
-    let effect = snapshot
-        .effects
-        .iter()
-        .find(|effect| effect.id == effect_id)
-        .ok_or_else(|| format!("Effect {effect_id} was not found"))?;
-    if effect.effect_type != expected {
+    let effect_kind = effect_kind.ok_or_else(|| format!("Effect {effect_id} was not found"))?;
+    if effect_kind != expected {
         return Err(format!(
             "Effect {effect_id} is {:?}, not {:?}; change the Type to start a new effect",
-            effect.effect_type, expected
+            effect_kind, expected
         ));
     }
     Ok(())
@@ -93430,6 +93454,32 @@ pub(crate) mod tests {
                 .map(|offset| function_start + offset);
             let body = &source[function_start..next_attribute.unwrap_or(source.len())];
             assert!(body.contains("playback_executor_admission_snapshot"));
+            assert!(!body.contains("engine.snapshot()"));
+        }
+    }
+
+    #[test]
+    fn effect_update_commands_use_the_narrow_engine_reader() {
+        let source = include_str!("main.rs");
+        for command in [
+            "update_lfo_effect",
+            "update_position_wave_effect",
+            "update_color_effect",
+            "update_chaser_effect",
+            "update_move_effect",
+            "update_value_effect",
+            "update_curve_effect",
+            "update_mapping_effect",
+            "update_color_mapping_effect",
+        ] {
+            let function_start = source
+                .find(&format!("fn {command}("))
+                .unwrap_or_else(|| panic!("missing {command} command"));
+            let next_attribute = source[function_start..]
+                .find("\n#[tauri::command]")
+                .map(|offset| function_start + offset);
+            let body = &source[function_start..next_attribute.unwrap_or(source.len())];
+            assert!(body.contains("effect_kind_snapshot"));
             assert!(!body.contains("engine.snapshot()"));
         }
     }

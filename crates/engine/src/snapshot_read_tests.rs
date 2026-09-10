@@ -355,6 +355,15 @@ fn assert_same_read_model(handle: &EngineHandle) {
         )
     );
     assert_eq!(
+        handle.effect_kind_snapshot(1),
+        expected
+            .effects
+            .iter()
+            .find(|effect| effect.id == 1)
+            .map(|effect| effect.effect_type)
+    );
+    assert_eq!(handle.effect_kind_snapshot(999_999), None);
+    assert_eq!(
         handle.fixture_group_ids_snapshot(),
         expected
             .fixtures

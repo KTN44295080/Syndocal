@@ -1,9 +1,9 @@
 use crate::{EngineHandle, TimelineTransportAuthority};
 use protocol::{
     AutoVjAction, AutomationId, ClockSnapshot, CompositionSummary, CueId, CueListId,
-    DmxOutputConfig, EngineSnapshot, EngineTelemetry, FixtureId, PaletteId, PatchedFixtureSummary,
-    PlaybackExecutorSummary, StageObjectSummary, TimelineAudioClipId, TimelineAudioOutputBus,
-    TimelineCueEventSummary, TimelineEventId, TimelineFollowRuntimeStatus,
+    DmxOutputConfig, EffectId, EffectKind, EngineSnapshot, EngineTelemetry, FixtureId, PaletteId,
+    PatchedFixtureSummary, PlaybackExecutorSummary, StageObjectSummary, TimelineAudioClipId,
+    TimelineAudioOutputBus, TimelineCueEventSummary, TimelineEventId, TimelineFollowRuntimeStatus,
     TimelineFollowRuntimeStatusSnapshot, TimelineFollowRuntimeSummary, TimelineLayerSummary,
     TimelineLoopRuntimeStatus, VideoClipRuntimeSnapshot, VideoLayerId, VideoLayerState,
     VideoLayerTransitionBusSummary, VideoLayerTransitionRuntimeSnapshot, VideoOutputId,
@@ -393,6 +393,18 @@ impl EngineHandle {
                     .collect(),
                 snapshot.playback_executors.clone(),
             )
+        })
+    }
+
+    /// Read one authored effect kind for update admission without cloning the
+    /// complete effect or runtime snapshot.
+    pub fn effect_kind_snapshot(&self, effect_id: EffectId) -> Option<EffectKind> {
+        self.read_snapshot_field(|snapshot| {
+            snapshot
+                .effects
+                .iter()
+                .find(|effect| effect.id == effect_id)
+                .map(|effect| effect.effect_type)
         })
     }
 
