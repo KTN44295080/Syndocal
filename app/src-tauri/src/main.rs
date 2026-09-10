@@ -74602,19 +74602,18 @@ fn is_exact_staged_show_artnet_loopback_route(route: &DmxOutputConfig) -> bool {
 fn validate_current_staged_show_artnet_loopback_route(
     state: &AppState,
 ) -> Result<DmxOutputConfig, String> {
-    let snapshot = state.engine.snapshot();
-    if snapshot.dmx_outputs.len() != 1 {
+    let (dmx_outputs, output) = state.engine.dmx_outputs_and_output_snapshot();
+    if dmx_outputs.len() != 1 {
         return Err(
             "Show Art-Net loopback route activation requires exactly one authored disabled route"
                 .to_string(),
         );
     }
-    let route = snapshot
-        .dmx_outputs
+    let route = dmx_outputs
         .first()
         .expect("length was checked")
         .clone();
-    if snapshot.output != route {
+    if output != route {
         return Err(
             "Show Art-Net loopback route activation rejected an ambiguous primary route projection"
                 .to_string(),
@@ -93489,6 +93488,20 @@ pub(crate) mod tests {
             .map(|offset| function_start + offset);
         let body = &source[function_start..next_attribute.unwrap_or(source.len())];
         assert!(body.contains("node_graph_exists"));
+        assert!(!body.contains("engine.snapshot()"));
+    }
+
+    #[test]
+    fn staged_show_artnet_route_validation_uses_the_consistent_narrow_reader() {
+        let source = include_str!("main.rs");
+        let function_start = source
+            .find("fn validate_current_staged_show_artnet_loopback_route(")
+            .expect("missing staged show Art-Net route validator");
+        let next_function = source[function_start..]
+            .find("\nfn committed_show_artnet_loopback_route_fence(")
+            .map(|offset| function_start + offset);
+        let body = &source[function_start..next_function.unwrap_or(source.len())];
+        assert!(body.contains("dmx_outputs_and_output_snapshot"));
         assert!(!body.contains("engine.snapshot()"));
     }
 
