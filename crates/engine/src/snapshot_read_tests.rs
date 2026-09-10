@@ -237,6 +237,22 @@ fn assert_same_read_model(handle: &EngineHandle) {
     assert_eq!(handle.fixtures_snapshot(), expected.fixtures);
     assert_eq!(handle.timeline_layers_snapshot(), expected.timeline.layers);
     assert_eq!(
+        handle.timeline_cue_ids_snapshot(),
+        expected.cues.iter().map(|cue| cue.id).collect::<Vec<_>>()
+    );
+    assert_eq!(
+        handle.timeline_cue_event_ids_snapshot(),
+        (
+            expected.cues.iter().map(|cue| cue.id).collect::<Vec<_>>(),
+            expected
+                .timeline
+                .events
+                .iter()
+                .map(|event| event.id)
+                .collect::<Vec<_>>(),
+        )
+    );
+    assert_eq!(
         handle.fixture_group_ids_snapshot(),
         expected
             .fixtures

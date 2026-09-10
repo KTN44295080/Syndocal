@@ -35038,8 +35038,11 @@ fn add_timeline_cue_event(
     layer_id: Option<u32>,
 ) -> Result<TimelineEventId, String> {
     validate_timeline_time_beats("Timeline cue event", time_beats)?;
-    let snapshot = state.engine.snapshot();
-    if !snapshot.cues.iter().any(|cue| cue.id == cue_id) {
+    if !state
+        .engine
+        .timeline_cue_ids_snapshot()
+        .contains(&cue_id)
+    {
         return Err(format!("Cue {cue_id} was not found"));
     }
     let event_id = state.engine.allocate_timeline_event_id();
@@ -35060,16 +35063,11 @@ fn set_timeline_cue_event(
     layer_id: Option<u32>,
 ) -> Result<(), String> {
     validate_timeline_time_beats(&format!("Timeline event {event_id}"), time_beats)?;
-    let snapshot = state.engine.snapshot();
-    if !snapshot.cues.iter().any(|cue| cue.id == cue_id) {
+    let (cue_ids, event_ids) = state.engine.timeline_cue_event_ids_snapshot();
+    if !cue_ids.contains(&cue_id) {
         return Err(format!("Cue {cue_id} was not found"));
     }
-    if !snapshot
-        .timeline
-        .events
-        .iter()
-        .any(|event| event.id == event_id)
-    {
+    if !event_ids.contains(&event_id) {
         return Err(format!("Timeline event {event_id} was not found"));
     }
     state
@@ -93279,6 +93277,34 @@ pub(crate) mod tests {
             .map(|offset| function_start + offset);
         let body = &source[function_start..next_attribute.unwrap_or(source.len())];
         assert!(body.contains("timeline_layers_snapshot"));
+        assert!(!body.contains("engine.snapshot()"));
+    }
+
+    #[test]
+    fn add_timeline_cue_event_uses_the_narrow_engine_reader() {
+        let source = include_str!("main.rs");
+        let function_start = source
+            .find("fn add_timeline_cue_event(")
+            .expect("missing add timeline cue event command");
+        let next_attribute = source[function_start..]
+            .find("\n#[tauri::command]")
+            .map(|offset| function_start + offset);
+        let body = &source[function_start..next_attribute.unwrap_or(source.len())];
+        assert!(body.contains("timeline_cue_ids_snapshot"));
+        assert!(!body.contains("engine.snapshot()"));
+    }
+
+    #[test]
+    fn set_timeline_cue_event_uses_the_narrow_engine_reader() {
+        let source = include_str!("main.rs");
+        let function_start = source
+            .find("fn set_timeline_cue_event(")
+            .expect("missing set timeline cue event command");
+        let next_attribute = source[function_start..]
+            .find("\n#[tauri::command]")
+            .map(|offset| function_start + offset);
+        let body = &source[function_start..next_attribute.unwrap_or(source.len())];
+        assert!(body.contains("timeline_cue_event_ids_snapshot"));
         assert!(!body.contains("engine.snapshot()"));
     }
 

@@ -1,11 +1,11 @@
 use crate::{EngineHandle, TimelineTransportAuthority};
 use protocol::{
-    AutoVjAction, ClockSnapshot, CompositionSummary, DmxOutputConfig, EngineSnapshot,
-    EngineTelemetry, PatchedFixtureSummary, StageObjectSummary, TimelineFollowRuntimeStatus,
-    TimelineFollowRuntimeStatusSnapshot, TimelineFollowRuntimeSummary, TimelineLayerSummary,
-    TimelineLoopRuntimeStatus, VideoClipRuntimeSnapshot, VideoLayerId, VideoLayerState,
-    VideoLayerTransitionBusSummary, VideoLayerTransitionRuntimeSnapshot, VideoOutputId,
-    VideoOutputSummary, VideoSnapshot, VideoSourceSummary,
+    AutoVjAction, ClockSnapshot, CompositionSummary, CueId, DmxOutputConfig, EngineSnapshot,
+    EngineTelemetry, PatchedFixtureSummary, StageObjectSummary, TimelineEventId,
+    TimelineFollowRuntimeStatus, TimelineFollowRuntimeStatusSnapshot, TimelineFollowRuntimeSummary,
+    TimelineLayerSummary, TimelineLoopRuntimeStatus, VideoClipRuntimeSnapshot, VideoLayerId,
+    VideoLayerState, VideoLayerTransitionBusSummary, VideoLayerTransitionRuntimeSnapshot,
+    VideoOutputId, VideoOutputSummary, VideoSnapshot, VideoSourceSummary,
 };
 
 /// The runtime-only projection required by the control-plane query adapter.
@@ -236,6 +236,28 @@ impl EngineHandle {
     /// cloning unrelated project and runtime collections.
     pub fn timeline_layers_snapshot(&self) -> Vec<TimelineLayerSummary> {
         self.read_snapshot_field(|snapshot| snapshot.timeline.layers.clone())
+    }
+
+    /// Read published cue IDs for timeline-event admission without cloning
+    /// unrelated authored and runtime collections.
+    pub fn timeline_cue_ids_snapshot(&self) -> Vec<CueId> {
+        self.read_snapshot_field(|snapshot| snapshot.cues.iter().map(|cue| cue.id).collect())
+    }
+
+    /// Read published cue and timeline-event IDs from one generation for
+    /// timeline-event replacement admission.
+    pub fn timeline_cue_event_ids_snapshot(&self) -> (Vec<CueId>, Vec<TimelineEventId>) {
+        self.read_snapshot_field(|snapshot| {
+            (
+                snapshot.cues.iter().map(|cue| cue.id).collect(),
+                snapshot
+                    .timeline
+                    .events
+                    .iter()
+                    .map(|event| event.id)
+                    .collect(),
+            )
+        })
     }
 
     /// Read only the stage objects attached to one published preset for

@@ -887,6 +887,38 @@ This checkpoint does not claim real-file missing → Retry → recovery, actual
 NDI/Spout sender or display hardware, physical output, device, Mac, signing,
 publication, or product-wide completion.
 
+## Timeline cue-event admission reader follow-up
+
+The `add_timeline_cue_event` and `set_timeline_cue_event` admission paths now
+read only the published cue and timeline-event ID collections through the
+narrow engine readers. Missing-cue and missing-event rejection, timing
+validation, event ID allocation, and the existing publication paths are
+unchanged. The replacement path captures both ID collections from one
+publication generation so the two checks cannot mix snapshots.
+
+The focused engine snapshot-reader regression passed `7/7` with two existing
+ignored tests, including the cue/event projections in the shared read-model
+comparison. The app release structural regression passed `2/2`; changed
+engine files passed the individual rustfmt checks, `git diff --check` passed,
+and the maintained wrapper checker passed `243` assertions with `27` hostile
+mutation fixtures.
+
+A fresh maintained-wrapper `pnpm.cmd --dir app tauri build --no-bundle`
+completed with the pinned MSVC 14.44.35207 Build Tools linker and no first-
+party compiler warnings. The exact checkout executable is 64,783,360 bytes
+with SHA-256
+`7D7F7238A0320C2D566B0BBDC53C9E1F44F1D783F58B424F3725E3C4D2306106`.
+The isolated native probe at
+`target/qa/native-final-validation-20260911-22/native-final-validation.json`
+passed: one maximized responsive `Syndocal` window, Standby ownership with
+lighting/video disabled, snapshot IPC, missing media/layer thumbnail IPC
+rejection with valid native tickets, zero physical-output operations, and
+exact executable/listener cleanup.
+
+This checkpoint does not claim real-file missing → Retry → recovery, actual
+NDI/Spout sender or display hardware, physical output, device, Mac, signing,
+publication, or product-wide completion.
+
 ## Video-layer ID reader follow-up
 
 The `set_video_layer_order` and `add_video_composition` admission paths now
