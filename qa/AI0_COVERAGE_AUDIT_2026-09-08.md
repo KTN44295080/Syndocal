@@ -147,3 +147,16 @@ is only a validation boundary and not a complete classification of every
 Engine, Remote, MIDI/OSC, shortcut, audio-analysis/BPM, native-window, or UI
 mutation source. The real-file thumbnail recovery trial, external-client,
 physical-output, Mac, signing, publication, and venue gates remain unclaimed.
+
+After the fast-forward integration, the application-side control-plane suite
+was also rerun against `35aa13309950b720e6b38815ecd55a883f7f586d`:
+
+```text
+cargo test -p syndocal --release --locked control_plane::tests -- --test-threads=1
+test result: ok. 30 passed; 0 failed; 1788 filtered out
+```
+
+This integration run used the exact Build Tools MSVC `14.44.35207` x64 linker
+pin and `where.exe link.exe` first-match check. It adds no new coverage claim;
+the complete AI0 source classification and all external/device boundaries
+remain open.
