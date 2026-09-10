@@ -1,9 +1,9 @@
 use crate::{EngineHandle, TimelineTransportAuthority};
 use protocol::{
-    CompositionSummary, EngineSnapshot, TimelineFollowRuntimeStatus,
-    TimelineFollowRuntimeStatusSnapshot,
-    TimelineFollowRuntimeSummary, TimelineLoopRuntimeStatus, VideoClipRuntimeSnapshot,
-    VideoLayerTransitionBusSummary, VideoLayerTransitionRuntimeSnapshot, VideoOutputSummary,
+    CompositionSummary, DmxOutputConfig, EngineSnapshot, TimelineFollowRuntimeStatus,
+    TimelineFollowRuntimeStatusSnapshot, TimelineFollowRuntimeSummary, TimelineLoopRuntimeStatus,
+    VideoClipRuntimeSnapshot, VideoLayerTransitionBusSummary, VideoLayerTransitionRuntimeSnapshot,
+    VideoOutputSummary,
 };
 
 /// The runtime-only projection required by the control-plane query adapter.
@@ -116,8 +116,17 @@ impl EngineHandle {
         &self,
     ) -> (Vec<VideoOutputSummary>, Vec<CompositionSummary>) {
         self.read_snapshot_field(|snapshot| {
-            (snapshot.video.outputs.clone(), snapshot.video.compositions.clone())
+            (
+                snapshot.video.outputs.clone(),
+                snapshot.video.compositions.clone(),
+            )
         })
+    }
+
+    /// Read the two authored DMX routes required by the managed serial-DMX
+    /// admission check without cloning unrelated project and runtime state.
+    pub fn dmx_outputs_and_output_snapshot(&self) -> (Vec<DmxOutputConfig>, DmxOutputConfig) {
+        self.read_snapshot_field(|snapshot| (snapshot.dmx_outputs.clone(), snapshot.output.clone()))
     }
 
     /// Read the published Timeline playing flag without cloning unrelated

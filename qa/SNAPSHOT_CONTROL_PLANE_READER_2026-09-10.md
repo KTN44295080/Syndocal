@@ -132,8 +132,9 @@ The two production Show Spout pair-verification paths now read the published
 video-output list through the existing narrow reader. They retain the same
 exact-pair decision, unresolved-retirement barrier, and fail-closed behavior;
 no sender is constructed or physical output is enabled by this change. The
-serial-DMX route remains on its full snapshot because it validates both the
-DMX route collection and the canonical output configuration.
+serial-DMX route is covered by a separate paired DMX/output reader follow-up
+below; no sender is constructed or physical output is enabled by either
+change.
 
 The default-feature Show Spout regression suite passed 49/49 with no ignored
 tests. A fresh pinned `pnpm --dir app tauri build --no-bundle` then produced a
@@ -142,3 +143,30 @@ tests. A fresh pinned `pnpm --dir app tauri build --no-bundle` then produced a
 Launching that exact executable produced one responsive `Syndocal` window and
 exact process cleanup succeeded. No sender registration or physical output
 acceptance was performed.
+
+## Serial-DMX route validation reader follow-up
+
+The managed serial-DMX admission check now reads the DMX route collection and
+canonical output configuration together through a narrow reader, instead of
+cloning the complete engine snapshot. The exact one-route check, canonical
+route equality, error messages, and fail-closed default on poisoned
+publication remain unchanged. No serial worker was started and no physical
+DMX bytes were emitted.
+
+The reader regression suite passed:
+`cargo test -p engine --release --locked snapshot_read_tests --
+--test-threads=1` — 4 passed, 1 existing synthetic benchmark ignored, 0
+failed. The pinned Windows MSVC 14.44.35207 app suite passed 5/5:
+`cargo test -p syndocal --release --locked show_serial_dmx --
+--test-threads=1`.
+
+A fresh maintained-wrapper `pnpm.cmd --dir app tauri build --no-bundle`
+completed after TypeScript/Vite and Rust release compilation. The resulting
+EXE is 64,552,960 bytes with SHA-256
+`9AF10A2007ACA9FE91C223444A6DD491DB7957DF2FE408C1FE8EB80A2A74C6CE`.
+Launching that exact path produced one maximized, responsive `Syndocal`
+window; exact-path cleanup left zero matching processes.
+
+This is a structural snapshot-clone reduction and local Windows native gate
+only. It does not claim serial-DMX device, Art-Net, physical-output, venue, or
+product-wide acceptance.

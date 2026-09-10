@@ -304,14 +304,14 @@ pub(super) fn is_exact_enabled_show_artnet_loopback_route(route: &DmxOutputConfi
 }
 
 fn validate_current_enabled_show_artnet_loopback_route(state: &AppState) -> Result<(), String> {
-    let snapshot = state.engine.snapshot();
-    let [route] = snapshot.dmx_outputs.as_slice() else {
+    let (dmx_outputs, output) = state.engine.dmx_outputs_and_output_snapshot();
+    let [route] = dmx_outputs.as_slice() else {
         return Err(
             "Show serial DMX activation requires exactly one enabled Art-Net Unity mirror route"
                 .to_string(),
         );
     };
-    if &snapshot.output != route || !is_exact_enabled_show_artnet_loopback_route(route) {
+    if output != *route || !is_exact_enabled_show_artnet_loopback_route(route) {
         return Err(
             "Show serial DMX activation requires the exact enabled Art-Net 127.0.0.1:6454/U0 Unity mirror"
                 .to_string(),

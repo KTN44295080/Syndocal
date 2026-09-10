@@ -1,11 +1,11 @@
 use super::allocator_test_handle;
 use crate::{EngineHandle, TimelineTransportAuthority};
 use protocol::{
-    CompositionSummary, EngineSnapshot, TimelineFollowRuntimeStatusSnapshot,
-    VideoClipLayerRuntimeSummary,
-    VideoClipTakeDuration, VideoClipTakeKind, VideoLayerTransitionBusRuntimeSummary,
-    VideoLayerTransitionBusSummary, VideoLayerTransitionCurve, VideoLayerTransitionTarget,
-    VideoOutputKind, VideoOutputSummary, VideoTransitionBusId,
+    CompositionSummary, DmxOutputConfig, DmxOutputProtocol, EngineSnapshot,
+    TimelineFollowRuntimeStatusSnapshot, VideoClipLayerRuntimeSummary, VideoClipTakeDuration,
+    VideoClipTakeKind, VideoLayerTransitionBusRuntimeSummary, VideoLayerTransitionBusSummary,
+    VideoLayerTransitionCurve, VideoLayerTransitionTarget, VideoOutputKind, VideoOutputSummary,
+    VideoTransitionBusId,
 };
 use std::{
     hint::black_box,
@@ -26,6 +26,15 @@ fn publication(token: u64) -> EngineSnapshot {
     snapshot.timeline.follow_runtime.duration_ms = 100;
     snapshot.timeline.follow_runtime.progress_millis = 500;
     snapshot.timeline.follow_runtime.transition_hold_active = true;
+    snapshot.output = DmxOutputConfig {
+        target_ip: format!("192.0.2.{token}"),
+        ..DmxOutputConfig::default()
+    };
+    snapshot.dmx_outputs = vec![DmxOutputConfig {
+        protocol: DmxOutputProtocol::ArtNet,
+        target_ip: format!("198.51.100.{token}"),
+        ..DmxOutputConfig::default()
+    }];
     snapshot
         .video_clip_runtime
         .layers
@@ -155,6 +164,10 @@ fn assert_same_read_model(handle: &EngineHandle) {
         handle.video_outputs_and_compositions_snapshot(),
         (expected.video.outputs, expected.video.compositions)
     );
+    assert_eq!(
+        handle.dmx_outputs_and_output_snapshot(),
+        (expected.dmx_outputs, expected.output)
+    );
     assert_eq!(handle.timeline_playing(), expected.timeline.playing);
 }
 
@@ -213,6 +226,10 @@ fn poisoned_publication_preserves_public_snapshot_defaults() {
     assert_eq!(
         handle.video_outputs_and_compositions_snapshot(),
         (Vec::new(), Vec::new())
+    );
+    assert_eq!(
+        handle.dmx_outputs_and_output_snapshot(),
+        (vec![DmxOutputConfig::default()], DmxOutputConfig::default())
     );
     assert!(!handle.timeline_playing());
 }
