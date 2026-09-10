@@ -321,3 +321,28 @@ The real-file missing → Retry → recovery trial was not rerun; its existing
 isolated evidence remains separately recorded. No PNG was moved. This
 checkpoint does not claim thumbnail recovery, physical output, device, Mac,
 signing, publication, or product-wide completion.
+
+## Show Spout content-state reader follow-up
+
+The existing-pair NoOp branch of the Show Spout activation transaction now
+reads only the published Timeline `playing` flag through
+`EngineHandle::timeline_playing()`. It no longer clones the complete public
+engine snapshot for content-state synchronization. The transaction's exact
+pair validation, output lease/authority checks, fail-closed behavior, and
+physical sender lifecycle are unchanged.
+
+The focused Show Spout regression suite passed `49/49` with no failures under
+the pinned Windows MSVC 14.44.35207 environment. A fresh maintained-wrapper
+`pnpm.cmd --dir app tauri build --no-bundle` completed. The exact checkout
+executable is 64,579,072 bytes with SHA-256
+`4194BB2BE7540AE961984169A76A86A00D25B77578538BAC370F2B58FE21984E`.
+The isolated native probe at
+`target/qa/native-final-validation-20260910-08/native-final-validation.json`
+passed: one maximized responsive `Syndocal` window, Standby ownership with
+lighting/video disabled, snapshot IPC, missing media/layer thumbnail IPC
+rejection with valid native tickets, zero physical-output operations, and
+exact executable/listener cleanup.
+
+This is a local reader and transaction regression only. No physical Spout
+sender was enabled, and this checkpoint does not claim physical output,
+device, Mac, signing, publication, or product-wide completion.

@@ -75517,7 +75517,7 @@ fn enable_show_spout_outputs_with_output_control_fence(
                                             "Show Spout transport state lock was poisoned while synchronizing an existing pair",
                                         )
                                     })?
-                                    .sync_content_state(state.engine.snapshot().timeline.playing)
+                                    .sync_content_state(state.engine.timeline_playing())
                                     .map_err(OutputLeaseCandidateCommitFailure::safe)?;
                                 callback_succeeded_for_commit.store(true, Ordering::Release);
                                 Ok((false, None))
