@@ -88,3 +88,40 @@ No browser assertion was counted. This is an environment prerequisite
 failure, not a product pass or a source assertion change. The Video/C2/C4 and
 Timeline Follow parent rows remain Open for the unavailable browser/native
 renderer/physical-output boundaries.
+
+## Current-main rendered UI revalidation — 2026-09-10
+
+The previously unavailable local browser prerequisite was supplied in the
+user-level Playwright cache only; no repository dependency or product source
+was changed. The browser plugin was unavailable in this environment, so the
+documented regular-Playwright fallback was used. This closes the local
+rendered UI prerequisite reported above, but it does not close the broader
+Video/C2/C4 completion rows.
+
+Source HEAD: `f40aa2fbc0dfe7b991f0f238ed849b99b5be29d6`.
+
+Command:
+
+```text
+node app/scripts/check-edit-video-fx.mjs
+```
+
+Result: PASS at both required viewports.
+
+| Viewport | Interaction/result | Page errors | Geometry |
+| --- | --- | --- | --- |
+| 1920x1080 | mounted `0/1/0`; selected-layer callback `2`; `add_builtin_video_isf_effect` dispatched | 0 | 64 controls; outer overflow `0/0`; inspector contained |
+| 1280x720 | mounted `0/1/0`; selected-layer callback `2`; `add_builtin_video_isf_effect` dispatched | 0 | 64 controls; outer overflow `0/0`; inspector contained |
+
+The result JSON records `shortControls: []`, `clippedControls: []`, and a
+successful effect dispatch for each viewport. Screenshot evidence is retained
+under `target/qa/edit-video-fx-20260905/`:
+
+- `overview-1920x1080.png`, `controls-1920x1080.png`, `expanded-1920x1080.png`, `stack-1920x1080.png`
+- `overview-1280x720.png`, `controls-1280x720.png`, `expanded-1280x720.png`, `stack-1280x720.png`
+- `result-1920x1080.json`, `result-1280x720.json`
+
+This evidence covers the local Vite/operator fixture and rendered frontend
+interaction only. Native renderer/GPU/display behavior, 4K/three-output
+presentation, real show media, physical output, Mac real-device acceptance,
+signing/publication, and the complete C2/C4 reintegration remain unclaimed.
