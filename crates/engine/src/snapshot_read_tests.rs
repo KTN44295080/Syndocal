@@ -344,6 +344,17 @@ fn assert_same_read_model(handle: &EngineHandle) {
         )
     );
     assert_eq!(
+        handle.playback_executor_admission_snapshot(),
+        (
+            expected
+                .cue_lists
+                .iter()
+                .map(|cue_list| cue_list.id)
+                .collect::<Vec<_>>(),
+            expected.playback_executors.clone(),
+        )
+    );
+    assert_eq!(
         handle.fixture_group_ids_snapshot(),
         expected
             .fixtures

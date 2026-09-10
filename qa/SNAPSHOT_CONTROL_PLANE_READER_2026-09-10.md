@@ -1145,6 +1145,42 @@ This checkpoint does not claim real-file missing → Retry → recovery, actual
 NDI/Spout sender or display hardware, physical output, device, Mac, signing,
 publication, or product-wide completion.
 
+## Playback Executor admission reader follow-up
+
+The `create_playback_executor` and `update_playback_executor` admission paths
+now read the authored cue-list IDs and Playback Executor summaries through
+one narrow `EngineHandle` publication-generation reader. Existing invalid-ID,
+missing-bank, duplicate page/slot, range, level, and update-not-found
+rejection behavior is unchanged; unrelated engine collections are no longer
+cloned for these admission checks.
+
+The focused engine snapshot-reader regression passed `7/7` with two existing
+ignored tests, including the Playback Executor projection in the shared
+read-model comparison. The app release structural regression passed `1/1`.
+The two changed engine files passed individual rustfmt checks, `git diff
+--check` passed, and the maintained wrapper checker passed `243` assertions
+with `27` hostile mutation fixtures. The full app rustfmt check remains
+baseline-noisy because of unrelated pre-existing formatting differences in
+`main.rs`; no broad formatting rewrite was included.
+
+A fresh maintained-wrapper `pnpm.cmd --dir app tauri build --no-bundle`
+completed with the pinned MSVC 14.44.35207 Build Tools linker and no first-
+party compiler warnings. The exact checkout executable is 64,636,416 bytes
+with SHA-256
+`DA91E5E44DD840163559A278A7E4C426AB101992CF4D7A6BE2CAD960400F031C`.
+The isolated native probe at
+`target/qa/native-final-validation-20260911-30/native-final-validation.json`
+passed: one maximized responsive `Syndocal` window, Standby ownership with
+lighting/video disabled, snapshot IPC, missing media/layer thumbnail IPC
+rejection with valid native tickets, zero physical-output operations, and
+exact executable/listener cleanup. A direct post-probe check found zero
+exact-path Syndocal processes and only the expected port `TIME_WAIT` entry
+owned by PID 0.
+
+This checkpoint does not claim real-file missing → Retry → recovery, actual
+NDI/Spout sender or display hardware, physical output, device, Mac, signing,
+publication, or product-wide completion.
+
 ## Video-layer ID reader follow-up
 
 The `set_video_layer_order` and `add_video_composition` admission paths now

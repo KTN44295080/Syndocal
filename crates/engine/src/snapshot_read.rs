@@ -1,13 +1,13 @@
 use crate::{EngineHandle, TimelineTransportAuthority};
 use protocol::{
-    AutoVjAction, AutomationId, ClockSnapshot, CompositionSummary, CueId, DmxOutputConfig,
-    EngineSnapshot, EngineTelemetry, FixtureId, PaletteId, PatchedFixtureSummary,
-    StageObjectSummary, TimelineAudioClipId, TimelineAudioOutputBus, TimelineCueEventSummary,
-    TimelineEventId, TimelineFollowRuntimeStatus, TimelineFollowRuntimeStatusSnapshot,
-    TimelineFollowRuntimeSummary, TimelineLayerSummary, TimelineLoopRuntimeStatus,
-    VideoClipRuntimeSnapshot, VideoLayerId, VideoLayerState, VideoLayerTransitionBusSummary,
-    VideoLayerTransitionRuntimeSnapshot, VideoOutputId, VideoOutputSummary, VideoSnapshot,
-    VideoSourceSummary,
+    AutoVjAction, AutomationId, ClockSnapshot, CompositionSummary, CueId, CueListId,
+    DmxOutputConfig, EngineSnapshot, EngineTelemetry, FixtureId, PaletteId, PatchedFixtureSummary,
+    PlaybackExecutorSummary, StageObjectSummary, TimelineAudioClipId, TimelineAudioOutputBus,
+    TimelineCueEventSummary, TimelineEventId, TimelineFollowRuntimeStatus,
+    TimelineFollowRuntimeStatusSnapshot, TimelineFollowRuntimeSummary, TimelineLayerSummary,
+    TimelineLoopRuntimeStatus, VideoClipRuntimeSnapshot, VideoLayerId, VideoLayerState,
+    VideoLayerTransitionBusSummary, VideoLayerTransitionRuntimeSnapshot, VideoOutputId,
+    VideoOutputSummary, VideoSnapshot, VideoSourceSummary,
 };
 
 /// The runtime-only projection required by the control-plane query adapter.
@@ -375,6 +375,23 @@ impl EngineHandle {
             (
                 snapshot.palettes.iter().map(|palette| palette.id).collect(),
                 snapshot.fixtures.iter().map(|fixture| fixture.id).collect(),
+            )
+        })
+    }
+
+    /// Read the authored collections required by Playback Executor admission
+    /// from one published generation.
+    pub fn playback_executor_admission_snapshot(
+        &self,
+    ) -> (Vec<CueListId>, Vec<PlaybackExecutorSummary>) {
+        self.read_snapshot_field(|snapshot| {
+            (
+                snapshot
+                    .cue_lists
+                    .iter()
+                    .map(|cue_list| cue_list.id)
+                    .collect(),
+                snapshot.playback_executors.clone(),
             )
         })
     }

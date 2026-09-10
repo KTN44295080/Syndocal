@@ -34005,7 +34005,8 @@ fn set_cue_palette_targets(
 }
 
 fn validate_playback_executor_request(
-    snapshot: &EngineSnapshot,
+    cue_list_ids: &[protocol::CueListId],
+    playback_executors: &[protocol::PlaybackExecutorSummary],
     executor_id: protocol::ExecutorId,
     label: &str,
     cue_list_id: protocol::CueListId,
@@ -34016,11 +34017,7 @@ fn validate_playback_executor_request(
     if executor_id == 0 || label.trim().is_empty() {
         return Err("Playback Executor requires a valid ID and label".to_string());
     }
-    if !snapshot
-        .cue_lists
-        .iter()
-        .any(|cue_list| cue_list.id == cue_list_id)
-    {
+    if !cue_list_ids.contains(&cue_list_id) {
         return Err(format!("Bank {cue_list_id} was not found"));
     }
     if page == 0 || page > 99 || slot == 0 || slot > 16 {
@@ -34029,7 +34026,7 @@ fn validate_playback_executor_request(
     if !level.is_finite() {
         return Err("Playback Executor level must be finite".to_string());
     }
-    if snapshot.playback_executors.iter().any(|executor| {
+    if playback_executors.iter().any(|executor| {
         executor.id != executor_id && executor.page == page && executor.slot == slot
     }) {
         return Err(format!(
@@ -34048,9 +34045,11 @@ fn create_playback_executor(
     slot: u16,
 ) -> Result<protocol::ExecutorId, String> {
     let executor_id = state.engine.allocate_executor_id();
-    let snapshot = state.engine.snapshot();
+    let (cue_list_ids, playback_executors) =
+        state.engine.playback_executor_admission_snapshot();
     validate_playback_executor_request(
-        &snapshot,
+        &cue_list_ids,
+        &playback_executors,
         executor_id,
         &label,
         cue_list_id,
@@ -34083,15 +34082,16 @@ fn update_playback_executor(
     page: u16,
     slot: u16,
 ) -> Result<(), String> {
-    let snapshot = state.engine.snapshot();
-    let level = snapshot
-        .playback_executors
+    let (cue_list_ids, playback_executors) =
+        state.engine.playback_executor_admission_snapshot();
+    let level = playback_executors
         .iter()
         .find(|executor| executor.id == executor_id)
         .map(|executor| executor.level)
         .ok_or_else(|| format!("Playback Executor {executor_id} was not found"))?;
     validate_playback_executor_request(
-        &snapshot,
+        &cue_list_ids,
+        &playback_executors,
         executor_id,
         &label,
         cue_list_id,
@@ -93416,6 +93416,22 @@ pub(crate) mod tests {
         let body = &source[function_start..next_attribute.unwrap_or(source.len())];
         assert!(body.contains("reference_palette_admission_snapshot"));
         assert!(!body.contains("engine.snapshot()"));
+    }
+
+    #[test]
+    fn playback_executor_admission_commands_use_the_narrow_engine_reader() {
+        let source = include_str!("main.rs");
+        for command in ["create_playback_executor", "update_playback_executor"] {
+            let function_start = source
+                .find(&format!("fn {command}("))
+                .unwrap_or_else(|| panic!("missing {command} command"));
+            let next_attribute = source[function_start..]
+                .find("\n#[tauri::command]")
+                .map(|offset| function_start + offset);
+            let body = &source[function_start..next_attribute.unwrap_or(source.len())];
+            assert!(body.contains("playback_executor_admission_snapshot"));
+            assert!(!body.contains("engine.snapshot()"));
+        }
     }
 
     #[test]
