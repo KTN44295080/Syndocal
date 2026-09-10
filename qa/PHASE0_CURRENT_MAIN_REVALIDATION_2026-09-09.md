@@ -51,3 +51,25 @@ does not close the completion ledger, the real-file-missing → UI Retry →
 restore → recovery acceptance, browser/native-window evidence, physical
 ASIO/NDI/DMX/video/audio acceptance, Mac/Linux real-device acceptance,
 signing, publication, or venue acceptance.
+
+## Current-main follow-up — `f45dfe5418dde792b4b2b3f4fe162297aedefbd5`
+
+The Phase 0 software checks were rerun against the current `main` after the
+media-operation lifecycle responsibility extraction. The extraction does not
+change ledger status, release policy, product version, native admission, or
+the fixed three-workspace boundary.
+
+| Command | Result |
+| --- | --- |
+| `pnpm.cmd --dir app run check:completion-ledger` | PASS — 50 Open + 8 Deferred authority rows; 58 total |
+| `pnpm.cmd --dir app run check:q1-q4-ledger` | PASS — 32 Q1 rows, 29/29 Q0 domains, 10/10 source contracts, 58/58 flow markers, mirror parity |
+| `pnpm.cmd --dir app run check:release:self-test` | PASS — release metadata 129 groups, ASIO packaging 169, video routing, candidate extractor 43, verified materialization 4, Windows release artifact 144, strict JSON 130 |
+| `pnpm.cmd --dir app run check:warnings:self-test` | PASS — warning-ratchet negative and positive fixtures |
+| `git diff --check` | PASS |
+
+`FFMPEG_DIR` was not set. The ASIO check remained the SDK-independent
+self-test and did not create or treat an ASIO artifact as distributable. This
+revalidation is software evidence only; it does not close the real-file
+thumbnail recovery boundary, GUI/native IPC acceptance, external clients,
+physical output, Mac/Linux real-device acceptance, signing, publication, or
+venue acceptance.
