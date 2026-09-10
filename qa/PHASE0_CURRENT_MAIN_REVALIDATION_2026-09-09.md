@@ -120,3 +120,12 @@ The existing project/app shortcut checker is now also invoked by
 typed source unions, byte-exact source manifest, and one-dispatch Save/Open
 contracts remain unchanged. This is validation wiring only; native-window and
 physical keyboard acceptance are not claimed.
+
+## Media authority and output ownership gate coverage — based on `b1f28442644c04200dcfdca9820209bb9d6a024e`
+
+The existing media asset authority checker is now exposed as an explicit
+package script and invoked by `check:release:static`, together with the
+existing output ownership checker. Their cancellation-CAS, reply-loss,
+authority-continuity, owner, and fail-closed route assertions remain unchanged.
+This is validation wiring only; it does not close derived-media performance,
+physical output, or product-wide AI3 acceptance.

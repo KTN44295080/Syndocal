@@ -296,6 +296,15 @@ try {
     "release static gate preserves project recovery and publication checks",
   );
   pass(
+    packageScripts["check:media-asset-authority"] === "node scripts/check-media-asset-authority.mjs"
+      && packageScripts["check:release:static"].includes("pnpm run check:media-asset-authority"),
+    "release static gate preserves media asset authority checks",
+  );
+  pass(
+    packageScripts["check:release:static"].includes("pnpm run check:output-ownership"),
+    "release static gate preserves output ownership checks",
+  );
+  pass(
     packageScripts["check:release"] === "pnpm run check:release:static && node scripts/check-release-metadata.mjs",
     "normal release gate runs static checks followed by development metadata validation",
   );
