@@ -71608,9 +71608,10 @@ fn native_video_output_retirement_labels(
     })
 }
 
-fn desired_native_video_output_window_labels(snapshot: &EngineSnapshot) -> HashSet<String> {
+fn desired_native_video_output_window_labels(
+    snapshot: &protocol::VideoSnapshot,
+) -> HashSet<String> {
     snapshot
-        .video
         .outputs
         .iter()
         .filter(|output| output.kind == VideoOutputKind::Display)
@@ -71649,7 +71650,7 @@ where
 fn stale_native_video_output_retirement_labels(
     app: &tauri::AppHandle,
     workers: &Mutex<HashMap<String, NativeVideoOutputWorker>>,
-    snapshot: &EngineSnapshot,
+    snapshot: &protocol::VideoSnapshot,
 ) -> Result<Vec<String>, String> {
     native_video_output_worker_labels(workers).map(|worker_labels| {
         stale_native_video_output_retirement_labels_from(
@@ -78017,8 +78018,8 @@ fn get_debug_video_output_test_pattern(
     width: u32,
     height: u32,
 ) -> Result<video::VideoFrame, String> {
-    let snapshot = state.engine.snapshot();
-    video::render_video_output_test_pattern(&snapshot.video, output_id, width, height)
+    let snapshot = state.engine.video_snapshot();
+    video::render_video_output_test_pattern(&snapshot, output_id, width, height)
         .map_err(|error| format!("{error:?}"))
 }
 
@@ -81177,9 +81178,8 @@ async fn sync_open_video_output_windows(
             .mark_output_ownership_transition_failure(error.clone());
         error
     })?;
-    let snapshot = state.engine.snapshot();
+    let snapshot = state.engine.video_snapshot();
     for output in snapshot
-        .video
         .outputs
         .iter()
         .filter(|output| output.kind == VideoOutputKind::Display)
@@ -81220,7 +81220,6 @@ async fn sync_open_video_output_windows(
                 Vec::new(),
             );
             for output in snapshot
-                .video
                 .outputs
                 .iter()
                 .filter(|output| output.kind == VideoOutputKind::Display)
@@ -81351,9 +81350,8 @@ async fn sync_video_output_window(
     })?;
     let test_pattern = test_pattern.unwrap_or(false);
     let label = video_output_window_label(output_id, test_pattern);
-    let snapshot = state.engine.snapshot();
+    let snapshot = state.engine.video_snapshot();
     let output = match snapshot
-        .video
         .outputs
         .iter()
         .find(|output| output.id == output_id)
@@ -82307,9 +82305,8 @@ async fn open_video_output_window(
         error
     })?;
     let test_pattern = test_pattern.unwrap_or(false);
-    let snapshot = state.engine.snapshot();
+    let snapshot = state.engine.video_snapshot();
     let output = snapshot
-        .video
         .outputs
         .iter()
         .find(|output| output.id == output_id)
@@ -82422,7 +82419,7 @@ async fn open_video_output_window(
                         output.fullscreen,
                     )?;
                     let frame = video::render_video_output_test_pattern(
-                        &snapshot.video,
+                        &snapshot,
                         output_id,
                         output.width.max(1),
                         output.height.max(1),
