@@ -42,3 +42,19 @@ This run does not prove DPAPI/credential storage, nonce pairing, Raw Input
 presence, desktop consent UI, audit integration, external-client acceptance,
 release-bypass absence, physical output, Mac, signing, publication, or
 product-wide completion.
+
+## Current-main software revalidation — 2026-09-10
+
+The same bounded authority-core test was rerun against current `main` source
+HEAD `0589258c1ea3145fc914483d3d80a1e6ed2b1cff`. No product source or
+authority policy changed; this checkpoint records only fresh evidence.
+
+```text
+cargo test -p protocol --release --locked agent_authority -- --test-threads=1
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 207 filtered out
+```
+
+The exact Build Tools MSVC `14.44.35207` x64 linker was pinned in
+`CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER` after
+`vcvars64.bat -vcvars_ver=14.44`, and it was first in `where.exe link.exe`.
+The AI4 service/integration and all boundaries listed above remain open.

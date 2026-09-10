@@ -80,3 +80,20 @@ high-risk automation, native/hardware output, physical acceptance, thumbnail
 file-move recovery, Mac acceptance, signing, publication, or product-wide
 completion. No application process, device, physical output, or external
 network service was started by these checks.
+
+## Current-main software revalidation — 2026-09-10
+
+The three deterministic sidecar/bridge checks were rerun against current
+`main` source HEAD `0589258c1ea3145fc914483d3d80a1e6ed2b1cff`. No product
+source, transport, or authentication policy changed.
+
+| Command | Result |
+| --- | --- |
+| `node tools/syndocal-mcp/check.mjs` | PASS — 15 adapter integration groups; fake loopback broker only |
+| `node app/scripts/check-agent-bridge.mjs` | PASS — 11 groups; no native/device calls |
+| `node app/scripts/check-agent-bridge-bootstrap.mjs` | PASS — 4 deferred lifecycle groups |
+
+These results remain limited to deterministic local seams. The authenticated
+external API, real external client, pairing/revocation across that API,
+sidecar restart, physical output, Mac, signing, publication, and thumbnail
+file-move recovery are not claimed.

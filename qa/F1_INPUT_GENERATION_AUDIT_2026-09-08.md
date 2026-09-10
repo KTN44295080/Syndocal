@@ -96,3 +96,25 @@ All native commands used the exact MSVC 14.44.35207 x64 linker pin and
 `where.exe link.exe` first-match check. This is current-main software evidence
 for the audited generation/admission seams only; physical input clients,
 reconnect/latency, device behavior, and venue operation remain unclaimed.
+
+## Current-main software revalidation — 2026-09-10
+
+The bounded F1 checks were rerun against current `main` source HEAD
+`0589258c1ea3145fc914483d3d80a1e6ed2b1cff`; no input API or generation model
+was changed.
+
+| Check | Result |
+| --- | --- |
+| `pnpm.cmd --dir app run check:project-transaction` | PASS — project transaction production contract and project authority checks |
+| `cargo test -p syndocal --release --locked callback_epoch -- --test-threads=1` | PASS — 3 passed, 0 failed |
+| `cargo test -p syndocal --release --locked installed_callback_gate -- --test-threads=1` | PASS — 1 passed, 0 failed |
+| `cargo test -p syndocal --release --locked project_transaction_fence -- --test-threads=1` | PASS — 1 passed, 0 failed |
+| `cargo test -p syndocal --release --locked external_admission_ -- --test-threads=1` | PASS — 2 passed, 0 failed |
+| `cargo test -p syndocal --release --locked project_control_retirement -- --test-threads=1` | PASS — 1 passed, 0 failed |
+| `cargo test -p syndocal --release --locked project_retirement -- --test-threads=1` | PASS — 6 passed, 0 failed |
+
+All Cargo commands used the exact Build Tools MSVC `14.44.35207` x64 linker
+pin after `vcvars64.bat -vcvars_ver=14.44`, with that linker first in
+`where.exe link.exe`. This remains software-only evidence; physical MIDI,
+OSC, DMX, reconnect/latency, device, venue, Mac, signing, and publication
+acceptance remain open.

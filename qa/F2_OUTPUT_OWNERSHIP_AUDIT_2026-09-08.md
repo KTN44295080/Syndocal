@@ -108,3 +108,44 @@ test names were resolved and run instead. A zero-test filter is not evidence.
 This current-main software evidence does not close `F2-OUTPUT-OWNERSHIP-001`:
 real Lighting/Video/Both/Standby devices, NDI/Spout/display teardown ACKs,
 Take Over hardware behavior, and venue acceptance remain unclaimed.
+
+## Current-main software revalidation — 2026-09-10
+
+The bounded F2 checks were rerun against current `main` source HEAD
+`0589258c1ea3145fc914483d3d80a1e6ed2b1cff`. No output route, ownership
+policy, or physical-output state changed.
+
+The static contracts all passed:
+
+```text
+pnpm.cmd --dir app run check:output-ownership
+pnpm.cmd --dir app run check:output-control-runtime
+pnpm.cmd --dir app run check:video-output-routing-runtime
+pnpm.cmd --dir app run check:video-output-window-runtime
+pnpm.cmd --dir app run check:video-output-window-observation
+```
+
+`check:output-control-runtime` also passed the Standby Sync output-lease UI
+contract. With the exact Build Tools MSVC `14.44.35207` x64 linker pinned
+after `vcvars64.bat -vcvars_ver=14.44` and returned first by
+`where.exe link.exe`, the focused native tests were:
+
+| Package/filter | Result |
+| --- | --- |
+| `cargo test -p engine --release --locked output_ownership_gate -- --test-threads=1` | PASS — 3 passed |
+| `cargo test -p engine --release --locked output_ownership_teardown_lease -- --test-threads=1` | PASS — 1 passed |
+| `cargo test -p engine --release --locked output_worker_failure_fence -- --test-threads=1` | PASS — 1 passed |
+| `cargo test -p engine --release --locked output_resource_creation_lease -- --test-threads=1` | PASS — 2 passed |
+| `cargo test -p engine --release --locked project_swap_disarmed -- --test-threads=1` | PASS — 1 passed |
+| Current targeted Syndocal ownership filters | PASS — 11 passed, 0 failed, 0 ignored |
+
+The Syndocal set covered atomic Both rollback, Standby admission/publication,
+project replacement retirement fencing, partial native creation cleanup,
+destroyed-window lease failure, stale-window labeling, authored-project
+preservation, constructor admission, output-lease commit separation, and
+injected-Spout authority. No zero-test historical filter was counted.
+
+This remains local software evidence only. Physical Lighting/Video/Both/
+Standby ownership, DMX/NDI/Spout/display teardown acknowledgements, Take Over
+hardware behavior, venue acceptance, Mac, signing, publication, and thumbnail
+file-move recovery remain unclaimed.
