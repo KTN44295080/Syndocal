@@ -43046,21 +43046,17 @@ fn play_video_layer_audio_monitor(
     if !volume.is_finite() {
         return Err("Audio monitor volume must be finite".to_string());
     }
-    let snapshot = state.engine.snapshot();
-    let layer = snapshot
-        .video
-        .layers
-        .iter()
-        .find(|layer| layer.id == layer_id)
+    let (layer_state, layer_source, auto_vj_last_action) = state
+        .engine
+        .video_layer_audio_monitor_snapshot(layer_id)
         .ok_or_else(|| format!("Video layer {layer_id} was not found"))?;
-    if layer.state.speed < 0.0 {
+    if layer_state.speed < 0.0 {
         return Err("Reverse video audio monitoring is not supported".to_string());
     }
-    let path = layer
-        .source
+    let path = layer_source
         .path
         .as_deref()
-        .filter(|_| layer.source.kind == VideoSourceKind::File)
+        .filter(|_| layer_source.kind == VideoSourceKind::File)
         .ok_or_else(|| "Audio monitoring requires a local video file layer".to_string())?;
     let (direct_generation, recovery_target) = {
         let mut handoff = state
@@ -43076,7 +43072,7 @@ fn play_video_layer_audio_monitor(
         handoff.pending_job = None;
         handoff.owned_layer_id = None;
         handoff.desired_layer_id = None;
-        handoff.suppress_through(snapshot.video.auto_vj.status.last_action.as_ref());
+        handoff.suppress_through(auto_vj_last_action.as_ref());
         (generation, recovery_target)
     };
     let result = state
@@ -43087,8 +43083,8 @@ fn play_video_layer_audio_monitor(
             audio.play(
                 layer_id,
                 Path::new(path),
-                layer.state.position_ms,
-                layer.state.speed,
+                layer_state.position_ms,
+                layer_state.speed,
                 volume,
                 device_name.as_deref(),
             )?;

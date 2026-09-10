@@ -250,9 +250,18 @@ fn assert_same_read_model(handle: &EngineHandle) {
             handle.video_layer_states_snapshot(&[layer.id]),
             vec![(layer.id, layer.state.clone())]
         );
+        assert_eq!(
+            handle.video_layer_audio_monitor_snapshot(layer.id),
+            Some((
+                layer.state.clone(),
+                layer.source.clone(),
+                expected.video.auto_vj.status.last_action.clone()
+            ))
+        );
     } else {
         assert_eq!(handle.video_layer_state_snapshot(7), None);
         assert!(handle.video_layer_states_snapshot(&[7]).is_empty());
+        assert_eq!(handle.video_layer_audio_monitor_snapshot(7), None);
     }
     assert_eq!(handle.video_layer_state_snapshot(99_999), None);
     assert_eq!(

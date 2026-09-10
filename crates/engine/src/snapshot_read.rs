@@ -4,7 +4,7 @@ use protocol::{
     TimelineFollowRuntimeStatus, TimelineFollowRuntimeStatusSnapshot, TimelineFollowRuntimeSummary,
     TimelineLayerSummary, TimelineLoopRuntimeStatus, VideoClipRuntimeSnapshot, VideoLayerId,
     VideoLayerState, VideoLayerTransitionBusSummary, VideoLayerTransitionRuntimeSnapshot,
-    VideoOutputId, VideoOutputSummary, VideoSnapshot,
+    VideoOutputId, VideoOutputSummary, VideoSnapshot, VideoSourceSummary,
 };
 
 /// The runtime-only projection required by the control-plane query adapter.
@@ -235,6 +235,28 @@ impl EngineHandle {
                         .map(|layer| (*layer_id, layer.state.clone()))
                 })
                 .collect()
+        })
+    }
+
+    /// Read the layer state/source and Auto VJ action needed by the direct
+    /// audio monitor path from one published snapshot generation.
+    pub fn video_layer_audio_monitor_snapshot(
+        &self,
+        layer_id: VideoLayerId,
+    ) -> Option<(VideoLayerState, VideoSourceSummary, Option<AutoVjAction>)> {
+        self.read_snapshot_field(|snapshot| {
+            snapshot
+                .video
+                .layers
+                .iter()
+                .find(|layer| layer.id == layer_id)
+                .map(|layer| {
+                    (
+                        layer.state.clone(),
+                        layer.source.clone(),
+                        snapshot.video.auto_vj.status.last_action.clone(),
+                    )
+                })
         })
     }
 
