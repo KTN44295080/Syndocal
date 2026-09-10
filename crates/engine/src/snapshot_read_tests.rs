@@ -234,6 +234,7 @@ fn assert_same_read_model(handle: &EngineHandle) {
     );
     assert_eq!(handle.video_snapshot(), expected.video);
     assert_eq!(handle.stage_objects_snapshot(), expected.stage_objects);
+    assert_eq!(handle.fixtures_snapshot(), expected.fixtures);
     assert_eq!(
         handle.fixture_group_ids_snapshot(),
         expected

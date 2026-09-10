@@ -818,6 +818,36 @@ This checkpoint does not claim real-file missing → Retry → recovery, actual
 NDI/Spout sender or display hardware, physical output, device, Mac, signing,
 publication, or product-wide completion.
 
+## Fixture profile health reader follow-up
+
+The fixture-profile health query now reads only the published fixture summaries
+through `EngineHandle::fixtures_snapshot()`. GDTF file inspection, custom
+profile locking, fixture ordering, embedded/snapshot detection, and
+healthy/warnings/fallback/missing classification remain unchanged. The
+full-snapshot helper is retained for its existing unit coverage and is
+test-only; production no longer clones unrelated project and runtime
+collections for this read-only query.
+
+The engine snapshot-reader regression passed `6/6` with two existing ignored
+tests. The fixture health regression passed `1/1`, covering the existing
+healthy/fallback behavior, and the app source contract passed for the command's
+narrow reader. The maintained wrapper checker passed `243` assertions with
+`27` hostile mutation fixtures. Changed engine files passed individual rustfmt
+checks and `git diff --check` passed. The release build completed with the
+pinned MSVC 14.44.35207 Build Tools linker without warnings. The exact
+checkout executable is 64,772,608 bytes with SHA-256
+`F98F37F769779190CAE668D1FF318FF3C08C38C6FFBAC2AEAE6CED3E717A0B4D`.
+The isolated native probe at
+`target/qa/native-final-validation-20260911-17/native-final-validation.json`
+passed: one maximized responsive `Syndocal` window, Standby ownership with
+lighting/video disabled, snapshot IPC, missing media/layer thumbnail IPC
+rejection with valid native tickets, zero physical-output operations, and
+exact executable/listener cleanup.
+
+This checkpoint does not claim real-file missing → Retry → recovery, actual
+NDI/Spout sender or display hardware, physical output, device, Mac, signing,
+publication, or product-wide completion.
+
 ## Video-layer ID reader follow-up
 
 The `set_video_layer_order` and `add_video_composition` admission paths now

@@ -27298,7 +27298,10 @@ fn cache_gdtf_from_share(
 fn get_fixture_profile_health(
     state: State<'_, AppState>,
 ) -> Result<Vec<FixtureProfileHealthSummary>, String> {
-    fixture_profile_health_summaries(&state.engine.snapshot(), &state.custom_profiles)
+    fixture_profile_health_summaries_from_fixtures(
+        &state.engine.fixtures_snapshot(),
+        &state.custom_profiles,
+    )
 }
 
 #[tauri::command]
@@ -85573,8 +85576,16 @@ fn fixture_profile_repair_layout_matches(
             })
 }
 
+#[cfg(test)]
 fn fixture_profile_health_summaries(
     snapshot: &EngineSnapshot,
+    profiles: &Mutex<HashMap<String, FixtureProfileSummary>>,
+) -> Result<Vec<FixtureProfileHealthSummary>, String> {
+    fixture_profile_health_summaries_from_fixtures(&snapshot.fixtures, profiles)
+}
+
+fn fixture_profile_health_summaries_from_fixtures(
+    fixtures: &[PatchedFixtureSummary],
     profiles: &Mutex<HashMap<String, FixtureProfileSummary>>,
 ) -> Result<Vec<FixtureProfileHealthSummary>, String> {
     let cached_paths = profiles
@@ -85583,8 +85594,7 @@ fn fixture_profile_health_summaries(
         .keys()
         .cloned()
         .collect::<HashSet<_>>();
-    let mut summaries = snapshot
-        .fixtures
+    let mut summaries = fixtures
         .iter()
         .map(|fixture| {
             let source_path = fixture.profile_source_path.trim();
@@ -93205,6 +93215,20 @@ pub(crate) mod tests {
                 "{command} must not clone the full public snapshot"
             );
         }
+    }
+
+    #[test]
+    fn fixture_profile_health_command_uses_the_narrow_engine_reader() {
+        let source = include_str!("main.rs");
+        let function_start = source
+            .find("fn get_fixture_profile_health(")
+            .expect("missing fixture profile health command");
+        let next_attribute = source[function_start..]
+            .find("\n#[tauri::command]")
+            .map(|offset| function_start + offset);
+        let body = &source[function_start..next_attribute.unwrap_or(source.len())];
+        assert!(body.contains("fixtures_snapshot"));
+        assert!(!body.contains("engine.snapshot()"));
     }
 
     #[test]

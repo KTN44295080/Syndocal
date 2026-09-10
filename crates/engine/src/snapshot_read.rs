@@ -1,7 +1,7 @@
 use crate::{EngineHandle, TimelineTransportAuthority};
 use protocol::{
     AutoVjAction, ClockSnapshot, CompositionSummary, DmxOutputConfig, EngineSnapshot,
-    EngineTelemetry, StageObjectSummary, TimelineFollowRuntimeStatus,
+    EngineTelemetry, PatchedFixtureSummary, StageObjectSummary, TimelineFollowRuntimeStatus,
     TimelineFollowRuntimeStatusSnapshot, TimelineFollowRuntimeSummary, TimelineLayerSummary,
     TimelineLoopRuntimeStatus, VideoClipRuntimeSnapshot, VideoLayerId, VideoLayerState,
     VideoLayerTransitionBusSummary, VideoLayerTransitionRuntimeSnapshot, VideoOutputId,
@@ -252,6 +252,12 @@ impl EngineHandle {
     /// cloning unrelated public and runtime collections.
     pub fn stage_objects_snapshot(&self) -> Vec<StageObjectSummary> {
         self.read_snapshot_field(|snapshot| snapshot.stage_objects.clone())
+    }
+
+    /// Read authored fixture summaries for profile-health inspection without
+    /// cloning unrelated published and runtime collections.
+    pub fn fixtures_snapshot(&self) -> Vec<PatchedFixtureSummary> {
+        self.read_snapshot_field(|snapshot| snapshot.fixtures.clone())
     }
 
     /// Read only fixture group memberships for group-scoped validation.
