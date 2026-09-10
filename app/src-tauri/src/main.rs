@@ -34982,10 +34982,8 @@ fn add_timeline_layer(
     label: String,
     kind: TimelineLayerKind,
 ) -> Result<u32, String> {
-    let snapshot = state.engine.snapshot();
-    let order = snapshot
-        .timeline
-        .layers
+    let layers = state.engine.timeline_layers_snapshot();
+    let order = layers
         .iter()
         .map(|layer| layer.order)
         .max()
@@ -93267,6 +93265,20 @@ pub(crate) mod tests {
             .map(|offset| function_start + offset);
         let body = &source[function_start..next_attribute.unwrap_or(source.len())];
         assert!(body.contains("fixtures_snapshot"));
+        assert!(!body.contains("engine.snapshot()"));
+    }
+
+    #[test]
+    fn add_timeline_layer_uses_the_narrow_engine_reader() {
+        let source = include_str!("main.rs");
+        let function_start = source
+            .find("fn add_timeline_layer(")
+            .expect("missing add timeline layer command");
+        let next_attribute = source[function_start..]
+            .find("\n#[tauri::command]")
+            .map(|offset| function_start + offset);
+        let body = &source[function_start..next_attribute.unwrap_or(source.len())];
+        assert!(body.contains("timeline_layers_snapshot"));
         assert!(!body.contains("engine.snapshot()"));
     }
 

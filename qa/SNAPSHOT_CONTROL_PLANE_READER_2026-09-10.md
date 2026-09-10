@@ -862,6 +862,31 @@ the fixture-only reader; DMX conflict checks and generated batch commands are
 unchanged. The focused app source contract covers all four narrow-reader
 command paths.
 
+## Timeline layer allocator reader follow-up
+
+The `add_timeline_layer` order allocator now reads only the authored timeline
+layer collection through `EngineHandle::timeline_layers_snapshot()`. Layer
+ordering, next-order selection, ID allocation, and the existing publication
+path are unchanged; unrelated project and runtime collections are no longer
+cloned for this command.
+
+The engine snapshot-reader regression passed `7/7` with two existing ignored
+tests, and the focused app source contract passed `1/1`. The maintained wrapper
+checker passed `243` assertions with `27` hostile mutation fixtures. The release
+build completed with the pinned MSVC 14.44.35207 Build Tools linker without
+warnings. The exact checkout executable is 64,779,264 bytes with SHA-256
+`7678A395F887310D1FCA7D52A48CBEBE60FE725B6DA4DDE9168BDB0E445EEFDB`.
+The isolated native probe at
+`target/qa/native-final-validation-20260911-21/native-final-validation.json`
+passed: one maximized responsive `Syndocal` window, Standby ownership with
+lighting/video disabled, snapshot IPC, missing media/layer thumbnail IPC
+rejection with valid native tickets, zero physical-output operations, and
+exact executable/listener cleanup.
+
+This checkpoint does not claim real-file missing → Retry → recovery, actual
+NDI/Spout sender or display hardware, physical output, device, Mac, signing,
+publication, or product-wide completion.
+
 ## Video-layer ID reader follow-up
 
 The `set_video_layer_order` and `add_video_composition` admission paths now

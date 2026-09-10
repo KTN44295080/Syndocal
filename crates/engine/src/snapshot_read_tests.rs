@@ -235,6 +235,7 @@ fn assert_same_read_model(handle: &EngineHandle) {
     assert_eq!(handle.video_snapshot(), expected.video);
     assert_eq!(handle.stage_objects_snapshot(), expected.stage_objects);
     assert_eq!(handle.fixtures_snapshot(), expected.fixtures);
+    assert_eq!(handle.timeline_layers_snapshot(), expected.timeline.layers);
     assert_eq!(
         handle.fixture_group_ids_snapshot(),
         expected
@@ -333,6 +334,24 @@ fn timeline_audio_allocator_reader_matches_published_projection() {
     );
     let handle = allocator_test_handle(Arc::new(RwLock::new(snapshot)));
     assert_eq!(handle.timeline_audio_allocator_snapshot(), expected);
+}
+
+#[test]
+fn timeline_layers_reader_matches_published_projection() {
+    let mut snapshot = EngineSnapshot::default();
+    snapshot.timeline.layers = vec![TimelineLayerSummary {
+        id: 41,
+        label: "Lighting".to_string(),
+        order: 7,
+        muted: false,
+        locked: false,
+        solo: false,
+        expanded: false,
+        kind: TimelineLayerKind::Lighting,
+    }];
+    let expected = snapshot.timeline.layers.clone();
+    let handle = allocator_test_handle(Arc::new(RwLock::new(snapshot)));
+    assert_eq!(handle.timeline_layers_snapshot(), expected);
 }
 
 #[test]

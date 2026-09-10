@@ -232,6 +232,12 @@ impl EngineHandle {
         })
     }
 
+    /// Read authored timeline layers for layer-order allocation without
+    /// cloning unrelated project and runtime collections.
+    pub fn timeline_layers_snapshot(&self) -> Vec<TimelineLayerSummary> {
+        self.read_snapshot_field(|snapshot| snapshot.timeline.layers.clone())
+    }
+
     /// Read only the stage objects attached to one published preset for
     /// enqueue-time allocator reservation. Trimming and first-match policy
     /// remain owned by the caller, matching the existing command path.
