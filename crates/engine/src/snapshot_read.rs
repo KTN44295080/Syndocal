@@ -1,9 +1,9 @@
 use crate::{EngineHandle, TimelineTransportAuthority};
 use protocol::{
-    CompositionSummary, DmxOutputConfig, EngineSnapshot, TimelineFollowRuntimeStatus,
-    TimelineFollowRuntimeStatusSnapshot, TimelineFollowRuntimeSummary, TimelineLayerSummary,
-    TimelineLoopRuntimeStatus, VideoClipRuntimeSnapshot, VideoLayerTransitionBusSummary,
-    VideoLayerTransitionRuntimeSnapshot, VideoOutputSummary,
+    CompositionSummary, DmxOutputConfig, EngineSnapshot, StageObjectSummary,
+    TimelineFollowRuntimeStatus, TimelineFollowRuntimeStatusSnapshot, TimelineFollowRuntimeSummary,
+    TimelineLayerSummary, TimelineLoopRuntimeStatus, VideoClipRuntimeSnapshot,
+    VideoLayerTransitionBusSummary, VideoLayerTransitionRuntimeSnapshot, VideoOutputSummary,
 };
 
 /// The runtime-only projection required by the control-plane query adapter.
@@ -139,6 +139,22 @@ impl EngineHandle {
                 snapshot.timeline.audio_clips.is_empty(),
                 snapshot.timeline.layers.clone(),
             )
+        })
+    }
+
+    /// Read only the stage objects attached to one published preset for
+    /// enqueue-time allocator reservation. Trimming and first-match policy
+    /// remain owned by the caller, matching the existing command path.
+    pub fn stage_map_preset_allocator_objects(
+        &self,
+        label: &str,
+    ) -> Option<Vec<StageObjectSummary>> {
+        self.read_snapshot_field(|snapshot| {
+            snapshot
+                .stage_map_presets
+                .iter()
+                .find(|preset| preset.label == label)
+                .and_then(|preset| preset.stage_objects.clone())
         })
     }
 

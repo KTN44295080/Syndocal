@@ -12138,14 +12138,10 @@ impl EngineHandle {
                 StageProjectMutation::ApplyStageMapPreset { label } => {
                     let label = label.trim();
                     if !label.is_empty() {
-                        if let Some(stage_objects) = self
-                            .snapshot()
-                            .stage_map_presets
-                            .iter()
-                            .find(|preset| preset.label == label)
-                            .and_then(|preset| preset.stage_objects.as_deref())
+                        if let Some(stage_objects) =
+                            self.stage_map_preset_allocator_objects(label)
                         {
-                            observe_stage_object_allocator_sources(&mut maxima, stage_objects);
+                            observe_stage_object_allocator_sources(&mut maxima, &stage_objects);
                         }
                     }
                 }
@@ -12158,14 +12154,8 @@ impl EngineHandle {
             EngineCommand::ApplyStageMapPreset { label } => {
                 let label = label.trim();
                 if !label.is_empty() {
-                    if let Some(stage_objects) = self
-                        .snapshot()
-                        .stage_map_presets
-                        .iter()
-                        .find(|preset| preset.label == label)
-                        .and_then(|preset| preset.stage_objects.as_deref())
-                    {
-                        observe_stage_object_allocator_sources(&mut maxima, stage_objects);
+                    if let Some(stage_objects) = self.stage_map_preset_allocator_objects(label) {
+                        observe_stage_object_allocator_sources(&mut maxima, &stage_objects);
                     }
                 }
             }
@@ -77185,6 +77175,24 @@ mod tests {
         assert_eq!(
             allocator_counter_value(&engine, AllocatorDomain::TimelineLayers),
             43
+        );
+    }
+
+    #[test]
+    fn stage_map_preset_allocator_reservation_uses_narrow_published_reader() {
+        let mut snapshot = EngineSnapshot::default();
+        snapshot.stage_map_presets = vec![published_stage_map_preset("Front Room", 41)];
+        let engine = allocator_test_handle(Arc::new(RwLock::new(snapshot)));
+
+        engine
+            .send(EngineCommand::ApplyStageMapPreset {
+                label: "  Front Room  ".to_string(),
+            })
+            .unwrap();
+
+        assert_eq!(
+            allocator_counter_value(&engine, AllocatorDomain::StageObjects),
+            42
         );
     }
 

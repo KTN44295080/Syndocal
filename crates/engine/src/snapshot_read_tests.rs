@@ -205,6 +205,23 @@ fn timeline_audio_allocator_reader_matches_published_projection() {
 }
 
 #[test]
+fn stage_map_preset_allocator_reader_matches_label_selection() {
+    let mut snapshot = EngineSnapshot::default();
+    snapshot.stage_map_presets = vec![super::published_stage_map_preset("Front Room", 41)];
+    let expected = snapshot.stage_map_presets[0].stage_objects.clone();
+    let handle = allocator_test_handle(Arc::new(RwLock::new(snapshot)));
+
+    assert_eq!(
+        handle.stage_map_preset_allocator_objects("Front Room"),
+        expected
+    );
+    assert_eq!(
+        handle.stage_map_preset_allocator_objects("Missing Room"),
+        None
+    );
+}
+
+#[test]
 fn narrow_readers_match_public_snapshot_and_observe_replacement() {
     let published = Arc::new(RwLock::new(publication(7)));
     let handle = allocator_test_handle(Arc::clone(&published));

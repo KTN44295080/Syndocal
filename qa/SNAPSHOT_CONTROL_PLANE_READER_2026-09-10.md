@@ -200,3 +200,31 @@ zero matching processes.
 This remains a local Windows native gate and allocator/read-model regression.
 It does not claim audio-device, physical-output, thumbnail-recovery, venue,
 or product-wide acceptance.
+
+## Stage-map preset allocator reservation reader follow-up
+
+The enqueue-time `ApplyStageMapPreset` and authored stage-project mutation
+reservation paths now read only the selected preset's stage-object collection
+through the narrow snapshot reader. Existing trim-before-match, first-match,
+missing-label no-op, and allocator observation behavior remain unchanged. The
+reader returns a copied selected collection only; it does not expose or mutate
+the published snapshot. This is a structural allocation reduction, not a
+measured show-performance claim.
+
+The reader and reservation regressions passed 2/2, the reader suite passed
+6/6 with 1 existing synthetic benchmark ignored, and the focused allocator
+suite passed 25/25 under the pinned Windows MSVC 14.44.35207 environment.
+The reservation test includes a whitespace-padded label and stage-object ID
+41, preserving the expected next allocator value 42.
+
+A fresh maintained-wrapper `pnpm.cmd --dir app tauri build --no-bundle`
+completed after TypeScript/Vite and Rust release compilation. The resulting
+EXE is 64,555,520 bytes with SHA-256
+`8C61BAD547BC76E480DD4ED47983DF7A6881AE33686487FCFF9634D79F52D91D`.
+Launching that exact executable produced one maximized-requested,
+responsive `Syndocal` window with title `Syndocal`; exact-path cleanup left
+zero matching processes.
+
+This remains a local Windows native gate and allocator/read-model regression.
+It does not claim physical stage-map output, venue, thumbnail-recovery, or
+product-wide acceptance.
