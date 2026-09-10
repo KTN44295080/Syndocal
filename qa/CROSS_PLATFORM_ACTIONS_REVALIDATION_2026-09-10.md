@@ -81,3 +81,26 @@ macOS, signing, publication, or product-wide completion.
 This checkpoint does not close the completion ledger, AI3 durable crash/restart
 acceptance, real-file thumbnail recovery, ASIO/NDI/DMX/hardware acceptance,
 macOS acceptance, signing, publication, or product-wide completion.
+
+## Current-tree timing-boundary revalidation — 2026-09-10
+
+The current tree at `383d84894ea9cde54506f6344193cae6399f6998` was checked
+against the source used by the hosted-success checkpoint. The intervening
+changes contain QA records and release-test fixtures only; no product source,
+workflow, Cargo manifest, or frontend dependency changed in the two timing
+test paths.
+
+Under the documented Windows procedure, Build Tools `14.44.35207` was
+initialized, the absolute x64 linker was pinned, and `where.exe link.exe`
+reported that linker first. The focused tests were rerun from the current
+feature worktree:
+
+| Check | Result |
+| --- | --- |
+| `recording_publication_recovers_after_process_exit_at_each_boundary` | PASS — 1 passed, 0 failed |
+| `dj_link_production_remote_stop_is_bounded_and_replacement_rejects_replay` | PASS — 1 passed, 0 failed |
+
+Neither hosted timing failure reproduced locally. No assertion, retry, skip,
+or product behavior was changed in response to those observations. These
+focused tests do not replace the hosted matrix and do not claim physical
+output, external-client, hardware, or product-wide acceptance.
