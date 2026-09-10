@@ -8,14 +8,15 @@ import { startDeferredAgentBridge } from "./agentBridgeBootstrap";
 
 /** Only the native main window owns the agent request receiver. */
 export function mountAgentBridge(
-  eligible: boolean,
+  eligible: boolean | (() => boolean),
   invoke: FrontendTauriInvoke,
   report: (message: string) => void,
   refreshProjectAuthority: AgentBridgeEffects["refreshProjectAuthority"],
   refreshSnapshot: AgentBridgeEffects["refreshSnapshot"],
 ) {
   onMount(() => {
-    if (!eligible || getCurrentWindow().label !== "main") return;
+    const isEligible = typeof eligible === "function" ? eligible() : eligible;
+    if (!isEligible || getCurrentWindow().label !== "main") return;
     const bridge = startDeferredAgentBridge(invoke, listen, report, transport, {
       refreshProjectAuthority, refreshSnapshot,
     });

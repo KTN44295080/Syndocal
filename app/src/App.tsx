@@ -17309,7 +17309,7 @@ export default function App() {
     inFlightAuthorityPoll: () => projectAuthorityPollInFlight,
     pollProjectAuthorityBundle,
   });
-  mountAgentBridge(isTauriRuntime() && !paneWindow, invoke, setMessage,
+  mountAgentBridge(() => isTauriRuntime() && !paneWindow, invoke, setMessage,
     refreshProjectAuthorityAfterTargetBlackout, refreshSnapshot);
 
   const invokeSafetyBlackoutRuntime = async <T,>(
