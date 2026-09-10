@@ -305,6 +305,16 @@ try {
     "release static gate preserves output ownership checks",
   );
   pass(
+    [
+      "check:live-audio",
+      "check:live-audio-ipc-v1",
+      "check:timeline-transport-runtime",
+      "check:timeline-follow-runtime",
+      "check:video-runtime-polling",
+    ].every((script) => packageScripts["check:release:static"].includes(`pnpm run ${script}`)),
+    "release static gate preserves live-audio, timeline, and video runtime checks",
+  );
+  pass(
     packageScripts["check:release"] === "pnpm run check:release:static && node scripts/check-release-metadata.mjs",
     "normal release gate runs static checks followed by development metadata validation",
   );

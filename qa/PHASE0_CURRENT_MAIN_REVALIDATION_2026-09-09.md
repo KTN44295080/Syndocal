@@ -129,3 +129,12 @@ existing output ownership checker. Their cancellation-CAS, reply-loss,
 authority-continuity, owner, and fail-closed route assertions remain unchanged.
 This is validation wiring only; it does not close derived-media performance,
 physical output, or product-wide AI3 acceptance.
+
+## Live-audio, timeline, and video runtime gate coverage — based on `704aa479b80588e2d7aa9f0c13f5014be1a0c1a6`
+
+The existing live-audio fail-closed and IPC checks, Timeline Transport/Follow
+runtime checks, and deferred-response video runtime polling check are now also
+invoked by `check:release:static`. Their generation, retry, stale-result,
+selection, and concurrency assertions remain unchanged. This is validation
+wiring only; it does not close ShowClock decisions, physical audio/video
+devices, or venue acceptance.
