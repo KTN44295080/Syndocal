@@ -829,18 +829,19 @@ test-only; production no longer clones unrelated project and runtime
 collections for this read-only query.
 
 The engine snapshot-reader regression passed `6/6` with two existing ignored
-tests. The fixture-profile regression passed `16/16`, covering the existing
-profile conversion and validation behavior plus both narrow-reader command
+tests. The fixture-profile and fixture-patch regression passed `49/49`,
+covering the existing profile conversion, DMX self-exclusion/conflict and
+invalid-value rejection behavior plus all three narrow-reader command
 contracts. The maintained wrapper checker passed `243` assertions with `27`
 hostile mutation fixtures. The changed main source remained formatted in the
 targeted check; the repository-wide check still reports pre-existing formatting
 differences in `control_plane_runtime.rs` and `fixture_profile_contract.rs`.
 `git diff --check` passed. The release build completed with the pinned MSVC
 14.44.35207 Build Tools linker without warnings. The exact checkout executable
-is 64,772,608 bytes with SHA-256
-`29731E793408C9CEB69BE9EEA6BAFE5494E422CB9CD76787F4C30BFFCA7BB20F`.
+is 64,778,752 bytes with SHA-256
+`24048A8066CE7816D81EF13CBCCABF1C19BACC6532F2710C911A1E80AE97980E`.
 The isolated native probe at
-`target/qa/native-final-validation-20260911-18/native-final-validation.json`
+`target/qa/native-final-validation-20260911-19/native-final-validation.json`
 passed: one maximized responsive `Syndocal` window, Standby ownership with
 lighting/video disabled, snapshot IPC, missing media/layer thumbnail IPC
 rejection with valid native tickets, zero physical-output operations, and

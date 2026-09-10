@@ -27853,8 +27853,9 @@ fn set_fixture_patch(
     address: u16,
 ) -> Result<(), String> {
     let label = label.trim().to_string();
+    let fixtures = state.engine.fixtures_snapshot();
     validate_fixture_patch_update(
-        &state.engine.snapshot(),
+        &fixtures,
         fixture_id,
         &label,
         universe,
@@ -84049,7 +84050,7 @@ fn validate_prepared_patch_conflicts(
 }
 
 fn validate_fixture_patch_update(
-    snapshot: &EngineSnapshot,
+    fixtures: &[PatchedFixtureSummary],
     fixture_id: FixtureId,
     label: &str,
     universe: u16,
@@ -84061,8 +84062,7 @@ fn validate_fixture_patch_update(
     if address == 0 || address > 512 {
         return Err("DMX address must be between 1 and 512".to_string());
     }
-    let fixture = snapshot
-        .fixtures
+    let fixture = fixtures
         .iter()
         .find(|fixture| fixture.id == fixture_id)
         .ok_or_else(|| format!("Fixture {fixture_id} was not found"))?;
@@ -84078,8 +84078,7 @@ fn validate_fixture_patch_update(
         ));
     }
 
-    for existing in snapshot
-        .fixtures
+    for existing in fixtures
         .iter()
         .filter(|existing| existing.id != fixture_id && existing.universe == universe)
     {
@@ -93236,6 +93235,20 @@ pub(crate) mod tests {
         let function_start = source
             .find("fn use_fixture_profile(")
             .expect("missing use fixture profile command");
+        let next_attribute = source[function_start..]
+            .find("\n#[tauri::command]")
+            .map(|offset| function_start + offset);
+        let body = &source[function_start..next_attribute.unwrap_or(source.len())];
+        assert!(body.contains("fixtures_snapshot"));
+        assert!(!body.contains("engine.snapshot()"));
+    }
+
+    #[test]
+    fn set_fixture_patch_command_uses_the_narrow_engine_reader() {
+        let source = include_str!("main.rs");
+        let function_start = source
+            .find("fn set_fixture_patch(")
+            .expect("missing set fixture patch command");
         let next_attribute = source[function_start..]
             .find("\n#[tauri::command]")
             .map(|offset| function_start + offset);
@@ -125099,9 +125112,10 @@ f 1 2 3
             ..EngineSnapshot::default()
         };
 
-        assert!(validate_fixture_patch_update(&snapshot, 7, "Renamed", 1, 10).is_ok());
+        assert!(validate_fixture_patch_update(&snapshot.fixtures, 7, "Renamed", 1, 10).is_ok());
 
-        let error = validate_fixture_patch_update(&snapshot, 7, "Renamed", 1, 18).unwrap_err();
+        let error =
+            validate_fixture_patch_update(&snapshot.fixtures, 7, "Renamed", 1, 18).unwrap_err();
 
         assert!(error.contains("DMX address conflict"));
         assert!(error.contains("18-21"));
@@ -125117,10 +125131,10 @@ f 1 2 3
             ..EngineSnapshot::default()
         };
 
-        assert!(validate_fixture_patch_update(&snapshot, 7, "", 1, 10)
+        assert!(validate_fixture_patch_update(&snapshot.fixtures, 7, "", 1, 10)
             .unwrap_err()
             .contains("label"));
-        assert!(validate_fixture_patch_update(&snapshot, 7, "Fixture", 1, 0)
+        assert!(validate_fixture_patch_update(&snapshot.fixtures, 7, "Fixture", 1, 0)
             .unwrap_err()
             .contains("between 1 and 512"));
     }
