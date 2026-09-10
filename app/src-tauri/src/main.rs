@@ -42969,7 +42969,13 @@ fn set_video_ab_mix(
     if layer_a_id.is_some() && layer_a_id == layer_b_id {
         return Err("Video Deck A and Deck B must use different layers".to_string());
     }
-    let snapshot = state.engine.snapshot();
+    let requested_layer_ids = [layer_a_id, layer_b_id]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+    let published_layer_states = state
+        .engine
+        .video_layer_states_snapshot(&requested_layer_ids);
     let updates = [
         (layer_a_id, 1.0 - mix.clamp(0.0, 1.0)),
         (layer_b_id, mix.clamp(0.0, 1.0)),
@@ -42977,13 +42983,12 @@ fn set_video_ab_mix(
     .into_iter()
     .filter_map(|(layer_id, opacity)| layer_id.map(|layer_id| (layer_id, opacity)))
     .map(|(layer_id, opacity)| {
-        let layer = snapshot
-            .video
-            .layers
+        let layer_state = published_layer_states
             .iter()
-            .find(|layer| layer.id == layer_id)
+            .find(|(published_layer_id, _)| *published_layer_id == layer_id)
+            .map(|(_, state)| state)
             .ok_or_else(|| format!("Video layer {layer_id} was not found"))?;
-        let mut next = layer.state.clone();
+        let mut next = layer_state.clone();
         next.opacity = opacity;
         Ok((layer_id, next))
     })

@@ -211,13 +211,30 @@ impl EngineHandle {
     /// Read one published layer state for a launch admission without cloning
     /// the public video/project snapshot or unrelated runtime collections.
     pub fn video_layer_state_snapshot(&self, layer_id: VideoLayerId) -> Option<VideoLayerState> {
+        self.video_layer_states_snapshot(&[layer_id])
+            .into_iter()
+            .next()
+            .map(|(_, state)| state)
+    }
+
+    /// Read several published layer states under one guard for paired
+    /// controls that must not mix two public snapshot generations.
+    pub fn video_layer_states_snapshot(
+        &self,
+        layer_ids: &[VideoLayerId],
+    ) -> Vec<(VideoLayerId, VideoLayerState)> {
         self.read_snapshot_field(|snapshot| {
-            snapshot
-                .video
-                .layers
+            layer_ids
                 .iter()
-                .find(|layer| layer.id == layer_id)
-                .map(|layer| layer.state.clone())
+                .filter_map(|layer_id| {
+                    snapshot
+                        .video
+                        .layers
+                        .iter()
+                        .find(|layer| layer.id == *layer_id)
+                        .map(|layer| (*layer_id, layer.state.clone()))
+                })
+                .collect()
         })
     }
 

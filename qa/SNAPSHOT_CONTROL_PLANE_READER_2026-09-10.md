@@ -489,6 +489,34 @@ This checkpoint does not claim real-file missing → Retry → recovery, video
 display hardware, physical output, device, Mac, signing, publication, or
 product-wide completion.
 
+## Video-layer A/B state-pair reader follow-up
+
+The legacy `set_video_ab_mix` path now reads the requested A/B layer states
+under one publication guard through `EngineHandle::video_layer_states_snapshot()`.
+The distinct-layer check, missing-layer rejection, opacity calculation, send
+ordering, and poison/default fail-closed behavior are unchanged. The paired
+reader prevents two independent reads from mixing publication generations.
+
+The engine snapshot-reader regression passed `6/6` with two existing ignored
+tests. The app release `video` regression passed `139/139` with six existing
+ignored tests. Changed engine files passed the individual rustfmt check and
+`git diff --check` passed.
+
+A fresh maintained-wrapper `pnpm.cmd --dir app tauri build --no-bundle`
+completed with the pinned MSVC 14.44.35207 Build Tools linker. The exact
+checkout executable is 64,761,856 bytes with SHA-256
+`009BE3AFD32C393323558E8F3191054FBA5949FE2F884AE8FEE61D7661DD182C`.
+The isolated native probe at
+`target/qa/native-final-validation-20260911-06/native-final-validation.json`
+passed: one maximized responsive `Syndocal` window, Standby ownership with
+lighting/video disabled, snapshot IPC, missing media/layer thumbnail IPC
+rejection with valid native tickets, zero physical-output operations, and
+exact executable/listener cleanup.
+
+This checkpoint does not claim real-file missing → Retry → recovery, video
+display hardware, physical output, device, Mac, signing, publication, or
+product-wide completion.
+
 ## Video-layer ID reader follow-up
 
 The `set_video_layer_order` and `add_video_composition` admission paths now
