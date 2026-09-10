@@ -72,3 +72,31 @@ current handoff authority, that file-moving helper operation was not performed
 for this acceptance decision. Those historical records and their raw reports
 are therefore not used to claim the missing-file → Retry → recovery gate here;
 the gate remains unclaimed without rerunning the operation.
+
+## Current-main rebuild and IPC revalidation — 2026-09-10
+
+The exact no-bundle executable was rebuilt from current `main` source HEAD
+`06208e877af2f0eef05d4966c834266dc082ac61` after the documented MSVC
+14.44.35207 linker/PATH-first preflight. The maintained wrapper reported the
+absolute Build Tools linker first in `where.exe link.exe`; the frontend
+TypeScript/Vite build and Rust release build completed successfully.
+
+- Executable: `target/release/syndocal.exe`
+- Product version: `1.2.0-alpha.69`
+- Bytes: `64,541,696`
+- SHA-256: `98A3A347954E1FABDF98F336791A473B4D7FCEC34D6A337B1F540DB7588EA8CE`
+- Build command: `pnpm.cmd --dir app tauri build --no-bundle`
+
+Fresh file-move-free native evidence is under
+`target/qa/native-final-validation-20260910-05/`. The probe passed with one
+responsive, maximized `Syndocal` window; effective ownership `Standby` with
+`lighting_allowed=false` and `video_allowed=false`; a valid initial snapshot
+with zero video outputs; and real WebView IPC rejection of missing media asset
+and missing video layer requests with valid lane/request tickets. It issued
+zero physical-output operations, then observed exact application exit and
+zero remaining loopback debug listeners/processes.
+
+This is an exact current-main startup/state/thumbnail-IPC check only. It does
+not claim the real-file missing → UI Retry → recovery flow: no test PNG was
+moved or renamed. Physical devices/output, Mac execution, signing,
+publication, and product-wide completion remain unclaimed.
