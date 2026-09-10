@@ -775,7 +775,7 @@ impl ShowSpoutTransportState {
             return Ok(None);
         };
         if let Err(error) =
-            decide_show_spout_ensure(&engine.snapshot().video.outputs, &blocked.expected)
+            decide_show_spout_ensure(&engine.video_outputs_snapshot(), &blocked.expected)
         {
             return Err(format!(
                 "strict show Spout retry is blocked because its old engine pair was substituted or conflicted ({error}); explicit operator recovery is required (prior automatic retirement error: {})",
@@ -912,7 +912,7 @@ impl ShowSpoutTransportState {
             .pair
             .take()
             .ok_or_else(|| "strict show Spout pending pair was already consumed".to_string())?;
-        let decision = decide_show_spout_ensure(&engine.snapshot().video.outputs, &pair.expected)
+        let decision = decide_show_spout_ensure(&engine.video_outputs_snapshot(), &pair.expected)
             .map_err(|error| {
                 format!("strict show Spout engine publication was not admitted: {error}")
             });

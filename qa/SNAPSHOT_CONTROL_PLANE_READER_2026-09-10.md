@@ -125,3 +125,20 @@ MSVC linker. The current EXE is 64,546,816 bytes with SHA-256
 `FBF710AD11D9C9C7CD35FD1F30018CE04B91D9CD697BC3879070A7EA5B5A296D`.
 Launching that exact path produced one responsive `Syndocal` window and exact
 process cleanup succeeded.
+
+## Show Spout validation reader follow-up
+
+The two production Show Spout pair-verification paths now read the published
+video-output list through the existing narrow reader. They retain the same
+exact-pair decision, unresolved-retirement barrier, and fail-closed behavior;
+no sender is constructed or physical output is enabled by this change. The
+serial-DMX route remains on its full snapshot because it validates both the
+DMX route collection and the canonical output configuration.
+
+The default-feature Show Spout regression suite passed 49/49 with no ignored
+tests. A fresh pinned `pnpm --dir app tauri build --no-bundle` then produced a
+64,547,328-byte EXE with SHA-256
+`3557C58F02616C0D666C47576C54A647F9C24F8118F7ED7EB36D90C0FA641760`.
+Launching that exact executable produced one responsive `Syndocal` window and
+exact process cleanup succeeded. No sender registration or physical output
+acceptance was performed.
