@@ -33963,23 +33963,17 @@ fn set_cue_palette_targets(
     cue_id: CueId,
     palette_targets: Vec<protocol::CuePaletteTarget>,
 ) -> Result<(), String> {
-    let snapshot = state.engine.snapshot();
-    if !snapshot.cues.iter().any(|cue| cue.id == cue_id) {
+    let (cue_ids, palette_ids, fixture_ids) = state
+        .engine
+        .cue_palette_target_admission_snapshot();
+    if !cue_ids.contains(&cue_id) {
         return Err(format!("Cue {cue_id} was not found"));
     }
     if palette_targets.len() > 128 {
         return Err("A cue can reference at most 128 palettes".to_string());
     }
-    let palette_ids = snapshot
-        .palettes
-        .iter()
-        .map(|palette| palette.id)
-        .collect::<HashSet<_>>();
-    let fixture_ids = snapshot
-        .fixtures
-        .iter()
-        .map(|fixture| fixture.id)
-        .collect::<HashSet<_>>();
+    let palette_ids = palette_ids.into_iter().collect::<HashSet<_>>();
+    let fixture_ids = fixture_ids.into_iter().collect::<HashSet<_>>();
     let mut seen = HashSet::new();
     for target in &palette_targets {
         if !palette_ids.contains(&target.palette_id) {
@@ -93397,6 +93391,20 @@ pub(crate) mod tests {
             .map(|offset| function_start + offset);
         let body = &source[function_start..next_attribute.unwrap_or(source.len())];
         assert!(body.contains("timeline_audio_clip_admission_snapshot"));
+        assert!(!body.contains("engine.snapshot()"));
+    }
+
+    #[test]
+    fn set_cue_palette_targets_uses_the_narrow_engine_reader() {
+        let source = include_str!("main.rs");
+        let function_start = source
+            .find("fn set_cue_palette_targets(")
+            .expect("missing set cue palette targets command");
+        let next_attribute = source[function_start..]
+            .find("\n#[tauri::command]")
+            .map(|offset| function_start + offset);
+        let body = &source[function_start..next_attribute.unwrap_or(source.len())];
+        assert!(body.contains("cue_palette_target_admission_snapshot"));
         assert!(!body.contains("engine.snapshot()"));
     }
 

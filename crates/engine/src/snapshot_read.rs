@@ -1,12 +1,13 @@
 use crate::{EngineHandle, TimelineTransportAuthority};
 use protocol::{
     AutoVjAction, AutomationId, ClockSnapshot, CompositionSummary, CueId, DmxOutputConfig,
-    EngineSnapshot, EngineTelemetry, PatchedFixtureSummary, StageObjectSummary,
-    TimelineAudioClipId, TimelineAudioOutputBus, TimelineCueEventSummary, TimelineEventId,
-    TimelineFollowRuntimeStatus, TimelineFollowRuntimeStatusSnapshot, TimelineFollowRuntimeSummary,
-    TimelineLayerSummary, TimelineLoopRuntimeStatus, VideoClipRuntimeSnapshot, VideoLayerId,
-    VideoLayerState, VideoLayerTransitionBusSummary, VideoLayerTransitionRuntimeSnapshot,
-    VideoOutputId, VideoOutputSummary, VideoSnapshot, VideoSourceSummary,
+    EngineSnapshot, EngineTelemetry, FixtureId, PaletteId, PatchedFixtureSummary,
+    StageObjectSummary, TimelineAudioClipId, TimelineAudioOutputBus, TimelineCueEventSummary,
+    TimelineEventId, TimelineFollowRuntimeStatus, TimelineFollowRuntimeStatusSnapshot,
+    TimelineFollowRuntimeSummary, TimelineLayerSummary, TimelineLoopRuntimeStatus,
+    VideoClipRuntimeSnapshot, VideoLayerId, VideoLayerState, VideoLayerTransitionBusSummary,
+    VideoLayerTransitionRuntimeSnapshot, VideoOutputId, VideoOutputSummary, VideoSnapshot,
+    VideoSourceSummary,
 };
 
 /// The runtime-only projection required by the control-plane query adapter.
@@ -349,6 +350,20 @@ impl EngineHandle {
                     .iter()
                     .find(|clip| clip.id == clip_id)
                     .map(|clip| clip.output_bus),
+            )
+        })
+    }
+
+    /// Read the authored IDs required by cue palette-target admission from
+    /// one published generation.
+    pub fn cue_palette_target_admission_snapshot(
+        &self,
+    ) -> (Vec<CueId>, Vec<PaletteId>, Vec<FixtureId>) {
+        self.read_snapshot_field(|snapshot| {
+            (
+                snapshot.cues.iter().map(|cue| cue.id).collect(),
+                snapshot.palettes.iter().map(|palette| palette.id).collect(),
+                snapshot.fixtures.iter().map(|fixture| fixture.id).collect(),
             )
         })
     }

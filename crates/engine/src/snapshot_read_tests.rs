@@ -313,6 +313,22 @@ fn assert_same_read_model(handle: &EngineHandle) {
         (expected.timeline.layers.clone(), None)
     );
     assert_eq!(
+        handle.cue_palette_target_admission_snapshot(),
+        (
+            expected.cues.iter().map(|cue| cue.id).collect::<Vec<_>>(),
+            expected
+                .palettes
+                .iter()
+                .map(|palette| palette.id)
+                .collect::<Vec<_>>(),
+            expected
+                .fixtures
+                .iter()
+                .map(|fixture| fixture.id)
+                .collect::<Vec<_>>(),
+        )
+    );
+    assert_eq!(
         handle.fixture_group_ids_snapshot(),
         expected
             .fixtures
