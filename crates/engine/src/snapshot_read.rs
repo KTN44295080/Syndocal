@@ -2,11 +2,11 @@ use crate::{EngineHandle, TimelineTransportAuthority};
 use protocol::{
     AutoVjAction, AutomationId, ClockSnapshot, CompositionSummary, CueId, DmxOutputConfig,
     EngineSnapshot, EngineTelemetry, PatchedFixtureSummary, StageObjectSummary,
-    TimelineCueEventSummary, TimelineEventId, TimelineFollowRuntimeStatus,
-    TimelineFollowRuntimeStatusSnapshot, TimelineFollowRuntimeSummary, TimelineLayerSummary,
-    TimelineLoopRuntimeStatus, VideoClipRuntimeSnapshot, VideoLayerId, VideoLayerState,
-    VideoLayerTransitionBusSummary, VideoLayerTransitionRuntimeSnapshot, VideoOutputId,
-    VideoOutputSummary, VideoSnapshot, VideoSourceSummary,
+    TimelineAudioClipId, TimelineAudioOutputBus, TimelineCueEventSummary, TimelineEventId,
+    TimelineFollowRuntimeStatus, TimelineFollowRuntimeStatusSnapshot, TimelineFollowRuntimeSummary,
+    TimelineLayerSummary, TimelineLoopRuntimeStatus, VideoClipRuntimeSnapshot, VideoLayerId,
+    VideoLayerState, VideoLayerTransitionBusSummary, VideoLayerTransitionRuntimeSnapshot,
+    VideoOutputId, VideoOutputSummary, VideoSnapshot, VideoSourceSummary,
 };
 
 /// The runtime-only projection required by the control-plane query adapter.
@@ -330,6 +330,25 @@ impl EngineHandle {
                     .iter()
                     .map(|automation| automation.id)
                     .collect(),
+            )
+        })
+    }
+
+    /// Read timeline layers and one audio clip's logical output bus for clip
+    /// replacement admission from one published generation.
+    pub fn timeline_audio_clip_admission_snapshot(
+        &self,
+        clip_id: TimelineAudioClipId,
+    ) -> (Vec<TimelineLayerSummary>, Option<TimelineAudioOutputBus>) {
+        self.read_snapshot_field(|snapshot| {
+            (
+                snapshot.timeline.layers.clone(),
+                snapshot
+                    .timeline
+                    .audio_clips
+                    .iter()
+                    .find(|clip| clip.id == clip_id)
+                    .map(|clip| clip.output_bus),
             )
         })
     }

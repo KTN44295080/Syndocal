@@ -1044,6 +1044,36 @@ This checkpoint does not claim real-file missing → Retry → recovery, actual
 NDI/Spout sender or display hardware, physical output, device, Mac, signing,
 publication, or product-wide completion.
 
+## Timeline audio clip replacement reader follow-up
+
+The `update_timeline_audio_clip` admission path now reads the authored
+timeline layers and the target clip's logical output bus through one narrow
+engine reader. The existing missing-clip rejection, audio-lane and locked-
+layer rejection, sanitization, and publication behavior are unchanged.
+
+The focused engine snapshot-reader regression passed `7/7` with two existing
+ignored tests, including the audio-clip admission projection in the shared
+read-model comparison. The app release command structural regression passed
+`1/1`; changed engine files and the app command passed targeted rustfmt
+checks, `git diff --check` passed, and the maintained wrapper checker passed
+`243` assertions with `27` hostile mutation fixtures.
+
+A fresh maintained-wrapper `pnpm.cmd --dir app tauri build --no-bundle`
+completed with the pinned MSVC 14.44.35207 Build Tools linker and no first-
+party compiler warnings. The exact checkout executable is 64,799,744 bytes
+with SHA-256
+`FB1457CDB366B66BB58BD879580BC124CEE91A095B37BC4D4BE3421F57E11589`.
+The isolated native probe at
+`target/qa/native-final-validation-20260911-27/native-final-validation.json`
+passed: one maximized responsive `Syndocal` window, Standby ownership with
+lighting/video disabled, snapshot IPC, missing media/layer thumbnail IPC
+rejection with valid native tickets, zero physical-output operations, and
+exact executable/listener cleanup.
+
+This checkpoint does not claim real-file missing → Retry → recovery, actual
+NDI/Spout sender or display hardware, physical output, device, Mac, signing,
+publication, or product-wide completion.
+
 ## Video-layer ID reader follow-up
 
 The `set_video_layer_order` and `add_video_composition` admission paths now

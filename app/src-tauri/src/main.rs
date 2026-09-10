@@ -29384,7 +29384,7 @@ fn analyze_timeline_audio_clip_path(path: String) -> Result<AudioAnalysisSummary
 }
 
 fn sanitize_timeline_audio_clip_request(
-    snapshot: &EngineSnapshot,
+    layers: &[protocol::TimelineLayerSummary],
     mut clip: TimelineAudioClipSummary,
 ) -> Result<TimelineAudioClipSummary, String> {
     clip.path = clip.path.trim().to_string();
@@ -29394,9 +29394,7 @@ fn sanitize_timeline_audio_clip_request(
     if clip.duration_ms == 0 {
         return Err("Audio Clip duration must be greater than zero".to_string());
     }
-    let layer = snapshot
-        .timeline
-        .layers
+    let layer = layers
         .iter()
         .find(|layer| layer.id == clip.layer_id)
         .ok_or_else(|| format!("Timeline layer {} was not found", clip.layer_id))?;
@@ -29439,8 +29437,9 @@ fn add_timeline_audio_clip(
     fade_out_ms: u64,
 ) -> Result<TimelineAudioClipId, String> {
     let id = state.engine.allocate_timeline_audio_clip_id();
+    let layers = state.engine.timeline_layers_snapshot();
     let clip = sanitize_timeline_audio_clip_request(
-        &state.engine.snapshot(),
+        &layers,
         TimelineAudioClipSummary {
             id,
             layer_id,
@@ -29473,16 +29472,13 @@ fn update_timeline_audio_clip(
     fade_in_ms: u64,
     fade_out_ms: u64,
 ) -> Result<(), String> {
-    let snapshot = state.engine.snapshot();
-    let output_bus = snapshot
-        .timeline
-        .audio_clips
-        .iter()
-        .find(|clip| clip.id == id)
-        .map(|clip| clip.output_bus)
+    let (layers, output_bus) = state
+        .engine
+        .timeline_audio_clip_admission_snapshot(id);
+    let output_bus = output_bus
         .ok_or_else(|| format!("Timeline audio clip {id} was not found"))?;
     let clip = sanitize_timeline_audio_clip_request(
-        &snapshot,
+        &layers,
         TimelineAudioClipSummary {
             id,
             layer_id,
@@ -93387,6 +93383,20 @@ pub(crate) mod tests {
             .map(|offset| function_start + offset);
         let body = &source[function_start..next_attribute.unwrap_or(source.len())];
         assert!(body.contains("timeline_video_automation_admission_snapshot"));
+        assert!(!body.contains("engine.snapshot()"));
+    }
+
+    #[test]
+    fn update_timeline_audio_clip_uses_the_narrow_engine_reader() {
+        let source = include_str!("main.rs");
+        let function_start = source
+            .find("fn update_timeline_audio_clip(")
+            .expect("missing update timeline audio clip command");
+        let next_attribute = source[function_start..]
+            .find("\n#[tauri::command]")
+            .map(|offset| function_start + offset);
+        let body = &source[function_start..next_attribute.unwrap_or(source.len())];
+        assert!(body.contains("timeline_audio_clip_admission_snapshot"));
         assert!(!body.contains("engine.snapshot()"));
     }
 

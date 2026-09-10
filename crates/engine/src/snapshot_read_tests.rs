@@ -309,6 +309,10 @@ fn assert_same_read_model(handle: &EngineHandle) {
         )
     );
     assert_eq!(
+        handle.timeline_audio_clip_admission_snapshot(999_999),
+        (expected.timeline.layers.clone(), None)
+    );
+    assert_eq!(
         handle.fixture_group_ids_snapshot(),
         expected
             .fixtures
