@@ -49,6 +49,14 @@ fn publication(token: u64) -> EngineSnapshot {
         rotation_deg: 0.0,
         color: Some("#55ccff".to_string()),
     }];
+    snapshot.node_graphs = vec![protocol::NodeGraphSummary {
+        id: token,
+        label: format!("node graph {token}"),
+        enabled: true,
+        nodes: Vec::new(),
+        edges: Vec::new(),
+        audio_runtime: Vec::new(),
+    }];
     snapshot.fixtures = vec![PatchedFixtureSummary {
         id: token,
         label: format!("fixture {token}"),
@@ -363,6 +371,12 @@ fn assert_same_read_model(handle: &EngineHandle) {
             .map(|effect| effect.effect_type)
     );
     assert_eq!(handle.effect_kind_snapshot(999_999), None);
+    if let Some(node_graph) = expected.node_graphs.first() {
+        assert!(handle.node_graph_exists(node_graph.id));
+    } else {
+        assert!(!handle.node_graph_exists(1));
+    }
+    assert!(!handle.node_graph_exists(999_999));
     assert_eq!(
         handle.fixture_group_ids_snapshot(),
         expected

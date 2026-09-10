@@ -48815,13 +48815,7 @@ fn set_node_graph_enabled(
     graph_id: NodeGraphId,
     enabled: bool,
 ) -> Result<(), String> {
-    if !state
-        .engine
-        .snapshot()
-        .node_graphs
-        .iter()
-        .any(|graph| graph.id == graph_id)
-    {
+    if !state.engine.node_graph_exists(graph_id) {
         return Err(format!("Node graph {graph_id} was not found"));
     }
     state.engine.set_node_graph_enabled(graph_id, enabled)
@@ -93482,6 +93476,20 @@ pub(crate) mod tests {
             assert!(body.contains("effect_kind_snapshot"));
             assert!(!body.contains("engine.snapshot()"));
         }
+    }
+
+    #[test]
+    fn node_graph_enable_command_uses_the_narrow_engine_reader() {
+        let source = include_str!("main.rs");
+        let function_start = source
+            .find("fn set_node_graph_enabled(")
+            .expect("missing set_node_graph_enabled command");
+        let next_attribute = source[function_start..]
+            .find("\n#[tauri::command]")
+            .map(|offset| function_start + offset);
+        let body = &source[function_start..next_attribute.unwrap_or(source.len())];
+        assert!(body.contains("node_graph_exists"));
+        assert!(!body.contains("engine.snapshot()"));
     }
 
     #[test]

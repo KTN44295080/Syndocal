@@ -1,13 +1,13 @@
 use crate::{EngineHandle, TimelineTransportAuthority};
 use protocol::{
     AutoVjAction, AutomationId, ClockSnapshot, CompositionSummary, CueId, CueListId,
-    DmxOutputConfig, EffectId, EffectKind, EngineSnapshot, EngineTelemetry, FixtureId, PaletteId,
-    PatchedFixtureSummary, PlaybackExecutorSummary, StageObjectSummary, TimelineAudioClipId,
-    TimelineAudioOutputBus, TimelineCueEventSummary, TimelineEventId, TimelineFollowRuntimeStatus,
-    TimelineFollowRuntimeStatusSnapshot, TimelineFollowRuntimeSummary, TimelineLayerSummary,
-    TimelineLoopRuntimeStatus, VideoClipRuntimeSnapshot, VideoLayerId, VideoLayerState,
-    VideoLayerTransitionBusSummary, VideoLayerTransitionRuntimeSnapshot, VideoOutputId,
-    VideoOutputSummary, VideoSnapshot, VideoSourceSummary,
+    DmxOutputConfig, EffectId, EffectKind, EngineSnapshot, EngineTelemetry, FixtureId, NodeGraphId,
+    PaletteId, PatchedFixtureSummary, PlaybackExecutorSummary, StageObjectSummary,
+    TimelineAudioClipId, TimelineAudioOutputBus, TimelineCueEventSummary, TimelineEventId,
+    TimelineFollowRuntimeStatus, TimelineFollowRuntimeStatusSnapshot, TimelineFollowRuntimeSummary,
+    TimelineLayerSummary, TimelineLoopRuntimeStatus, VideoClipRuntimeSnapshot, VideoLayerId,
+    VideoLayerState, VideoLayerTransitionBusSummary, VideoLayerTransitionRuntimeSnapshot,
+    VideoOutputId, VideoOutputSummary, VideoSnapshot, VideoSourceSummary,
 };
 
 /// The runtime-only projection required by the control-plane query adapter.
@@ -405,6 +405,17 @@ impl EngineHandle {
                 .iter()
                 .find(|effect| effect.id == effect_id)
                 .map(|effect| effect.effect_type)
+        })
+    }
+
+    /// Check one authored node-graph ID for enable/disable admission without
+    /// cloning the complete graph bodies or runtime snapshot.
+    pub fn node_graph_exists(&self, graph_id: NodeGraphId) -> bool {
+        self.read_snapshot_field(|snapshot| {
+            snapshot
+                .node_graphs
+                .iter()
+                .any(|graph| graph.id == graph_id)
         })
     }
 

@@ -1181,6 +1181,42 @@ This checkpoint does not claim real-file missing → Retry → recovery, actual
 NDI/Spout sender or display hardware, physical output, device, Mac, signing,
 publication, or product-wide completion.
 
+## NodeGraph enable reader follow-up
+
+The `set_node_graph_enabled` admission path now checks the requested authored
+NodeGraph ID through `EngineHandle::node_graph_exists()` instead of cloning the
+complete engine snapshot. Its existing missing-graph rejection and the
+subsequent engine-owned enable/disable mutation are unchanged. Compound graph
+validation and persistence paths remain on full snapshots because they require
+graph bodies and cross-collection checks.
+
+The focused engine snapshot-reader regression passed `7/7` with two existing
+ignored tests, including positive and missing-ID behavior plus poisoned
+publication fail-closed defaults. The app release structural regression passed
+`1/1`. The changed engine files passed individual rustfmt checks and
+`git diff --check` passed. The maintained wrapper checker passed `243`
+assertions with `27` hostile mutation fixtures. The full app rustfmt check
+remains baseline-noisy because of unrelated pre-existing formatting
+differences in `main.rs`; no broad formatting rewrite was included.
+
+A fresh maintained-wrapper `pnpm.cmd --dir app tauri build --no-bundle`
+completed with the pinned MSVC 14.44.35207 Build Tools linker and no first-
+party compiler warnings. The exact checkout executable is 64,635,904 bytes
+with SHA-256
+`3F88F1C028C391B89AAEF59BFC3B195F66B0AB1749E149639DB1382A2FC4C371`.
+The isolated native probe at
+`target/qa/native-final-validation-20260911-32/native-final-validation.json`
+passed: one maximized responsive `Syndocal` window, Standby ownership with
+lighting/video disabled, snapshot IPC, missing media/layer thumbnail IPC
+rejection with valid native tickets, zero physical-output operations, and
+exact executable/listener cleanup. A direct post-probe check found zero
+exact-path Syndocal processes and only the expected port `TIME_WAIT` entry
+owned by PID 0.
+
+This checkpoint does not claim real-file missing → Retry → recovery, actual
+NDI/Spout sender or display hardware, physical output, device, Mac, signing,
+publication, or product-wide completion.
+
 ## Effect update kind reader follow-up
 
 The nine effect update commands now validate the existing effect kind through
