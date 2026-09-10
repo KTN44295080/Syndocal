@@ -123,3 +123,27 @@ native-window, and all relevant UI mutation sources are not thereby proven to
 be completely classified and fail-closed. The real-file thumbnail recovery,
 external-client, physical-output, Mac, signing, publication, and venue gates
 were not rerun or claimed.
+
+## Current-main dispatch classification boundary — 2026-09-10
+
+The canonical registry's existing `DispatchesToFamily` disposition received a
+focused fail-closed regression test. The source base before this checkpoint was
+`27ab6d294fd8f8e40cccb092af71faa1bbc63cc3`; the test-only change does not add
+an external adapter, promote any legacy Remote/MIDI/OSC/DMX source, or change
+the current inventory counts and hashes.
+
+| Check | Result |
+| --- | --- |
+| `cargo test -p protocol --locked control_plane_registry_v2 -- --test-threads=1` | PASS — 14 passed, 0 failed |
+| `cargo test -p protocol --release --locked -- --test-threads=1` | PASS — 218 library tests, 7 integration tests, 4 doc-tests; 0 failed |
+| `pnpm.cmd --dir app run check:release:static` | PASS — all registered static release gates |
+| `rustfmt --check --edition 2021 crates/protocol/src/control_plane_registry_v2.rs` | PASS |
+| `git diff --check` | PASS |
+
+The new test proves that a dispatch source must use an ingress role, must point
+to a family present in the inventory, resolves to no canonical operation, and
+does not create a derived local adapter. `AI0-COVERAGE-001` remains Open: this
+is only a validation boundary and not a complete classification of every
+Engine, Remote, MIDI/OSC, shortcut, audio-analysis/BPM, native-window, or UI
+mutation source. The real-file thumbnail recovery trial, external-client,
+physical-output, Mac, signing, publication, and venue gates remain unclaimed.
