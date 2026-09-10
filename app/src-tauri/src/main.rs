@@ -27618,9 +27618,8 @@ fn use_fixture_profile(
     state: State<'_, AppState>,
     fixture_id: FixtureId,
 ) -> Result<FixtureProfileSummary, String> {
-    let snapshot = state.engine.snapshot();
-    let fixture = snapshot
-        .fixtures
+    let fixtures = state.engine.fixtures_snapshot();
+    let fixture = fixtures
         .iter()
         .find(|fixture| fixture.id == fixture_id)
         .ok_or_else(|| format!("Fixture {fixture_id} was not found"))?;
@@ -93223,6 +93222,20 @@ pub(crate) mod tests {
         let function_start = source
             .find("fn get_fixture_profile_health(")
             .expect("missing fixture profile health command");
+        let next_attribute = source[function_start..]
+            .find("\n#[tauri::command]")
+            .map(|offset| function_start + offset);
+        let body = &source[function_start..next_attribute.unwrap_or(source.len())];
+        assert!(body.contains("fixtures_snapshot"));
+        assert!(!body.contains("engine.snapshot()"));
+    }
+
+    #[test]
+    fn use_fixture_profile_command_uses_the_narrow_engine_reader() {
+        let source = include_str!("main.rs");
+        let function_start = source
+            .find("fn use_fixture_profile(")
+            .expect("missing use fixture profile command");
         let next_attribute = source[function_start..]
             .find("\n#[tauri::command]")
             .map(|offset| function_start + offset);

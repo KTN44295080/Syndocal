@@ -829,16 +829,18 @@ test-only; production no longer clones unrelated project and runtime
 collections for this read-only query.
 
 The engine snapshot-reader regression passed `6/6` with two existing ignored
-tests. The fixture health regression passed `1/1`, covering the existing
-healthy/fallback behavior, and the app source contract passed for the command's
-narrow reader. The maintained wrapper checker passed `243` assertions with
-`27` hostile mutation fixtures. Changed engine files passed individual rustfmt
-checks and `git diff --check` passed. The release build completed with the
-pinned MSVC 14.44.35207 Build Tools linker without warnings. The exact
-checkout executable is 64,772,608 bytes with SHA-256
-`F98F37F769779190CAE668D1FF318FF3C08C38C6FFBAC2AEAE6CED3E717A0B4D`.
+tests. The fixture-profile regression passed `16/16`, covering the existing
+profile conversion and validation behavior plus both narrow-reader command
+contracts. The maintained wrapper checker passed `243` assertions with `27`
+hostile mutation fixtures. The changed main source remained formatted in the
+targeted check; the repository-wide check still reports pre-existing formatting
+differences in `control_plane_runtime.rs` and `fixture_profile_contract.rs`.
+`git diff --check` passed. The release build completed with the pinned MSVC
+14.44.35207 Build Tools linker without warnings. The exact checkout executable
+is 64,772,608 bytes with SHA-256
+`29731E793408C9CEB69BE9EEA6BAFE5494E422CB9CD76787F4C30BFFCA7BB20F`.
 The isolated native probe at
-`target/qa/native-final-validation-20260911-17/native-final-validation.json`
+`target/qa/native-final-validation-20260911-18/native-final-validation.json`
 passed: one maximized responsive `Syndocal` window, Standby ownership with
 lighting/video disabled, snapshot IPC, missing media/layer thumbnail IPC
 rejection with valid native tickets, zero physical-output operations, and
@@ -847,6 +849,11 @@ exact executable/listener cleanup.
 This checkpoint does not claim real-file missing → Retry → recovery, actual
 NDI/Spout sender or display hardware, physical output, device, Mac, signing,
 publication, or product-wide completion.
+
+The adjacent `use_fixture_profile` command now uses the same fixture-only
+reader when rebuilding a selected patched fixture as a memory profile. Its
+profile conversion and missing-fixture rejection behavior are unchanged.
+The focused app source contract covers both narrow-reader command paths.
 
 ## Video-layer ID reader follow-up
 
