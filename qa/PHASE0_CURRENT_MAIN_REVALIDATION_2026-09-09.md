@@ -103,3 +103,12 @@ ownership, approval, stale authority, terminal state, permission, and recovery
 remains authoritative; this change only prevents the checks from being omitted
 from the normal static release gate. No product runtime code or acceptance
 assertion was changed.
+
+## Project recovery/publication checker gate coverage — based on `aaf628ff1c001766c834e36f563c28477dafee59`
+
+The existing E3 recovery and E4 publication checkers are now also invoked by
+`check:release:static`. They retain their production-boundary checks for
+durable intent, reply loss, recovery ownership, publication authority, and
+stale-result rejection. This is validation wiring only; it does not claim the
+real-file thumbnail recovery, native-window, physical-output, signing,
+publication, or product-wide acceptance boundaries.

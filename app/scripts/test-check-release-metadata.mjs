@@ -287,6 +287,11 @@ try {
     "release static gate preserves backend authority and transaction checks",
   );
   pass(
+    packageScripts["check:release:static"].includes("pnpm run check:project-recovery-e3")
+      && packageScripts["check:release:static"].includes("pnpm run check:project-publication-e4"),
+    "release static gate preserves project recovery and publication checks",
+  );
+  pass(
     packageScripts["check:release"] === "pnpm run check:release:static && node scripts/check-release-metadata.mjs",
     "normal release gate runs static checks followed by development metadata validation",
   );
