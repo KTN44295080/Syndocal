@@ -241,6 +241,15 @@ fn assert_same_read_model(handle: &EngineHandle) {
             .map(|layer| layer.id)
             .collect::<Vec<_>>()
     );
+    if let Some(layer) = expected.video.layers.first() {
+        assert_eq!(
+            handle.video_layer_state_snapshot(layer.id),
+            Some(layer.state.clone())
+        );
+    } else {
+        assert_eq!(handle.video_layer_state_snapshot(7), None);
+    }
+    assert_eq!(handle.video_layer_state_snapshot(99_999), None);
     assert_eq!(
         handle.auto_vj_last_action(),
         expected.video.auto_vj.status.last_action
@@ -367,6 +376,7 @@ fn poisoned_publication_preserves_public_snapshot_defaults() {
     assert!(handle.stage_objects_snapshot().is_empty());
     assert!(handle.fixture_group_ids_snapshot().is_empty());
     assert!(!handle.video_output_exists(1));
+    assert_eq!(handle.video_layer_state_snapshot(7), None);
     let default_snapshot = EngineSnapshot::default();
     assert_eq!(
         handle.video_layer_thumbnail_snapshot(),

@@ -3,8 +3,8 @@ use protocol::{
     AutoVjAction, CompositionSummary, DmxOutputConfig, EngineSnapshot, StageObjectSummary,
     TimelineFollowRuntimeStatus, TimelineFollowRuntimeStatusSnapshot, TimelineFollowRuntimeSummary,
     TimelineLayerSummary, TimelineLoopRuntimeStatus, VideoClipRuntimeSnapshot, VideoLayerId,
-    VideoLayerTransitionBusSummary, VideoLayerTransitionRuntimeSnapshot, VideoOutputId,
-    VideoOutputSummary, VideoSnapshot,
+    VideoLayerState, VideoLayerTransitionBusSummary, VideoLayerTransitionRuntimeSnapshot,
+    VideoOutputId, VideoOutputSummary, VideoSnapshot,
 };
 
 /// The runtime-only projection required by the control-plane query adapter.
@@ -205,6 +205,19 @@ impl EngineHandle {
     pub fn video_layer_ids_snapshot(&self) -> Vec<VideoLayerId> {
         self.read_snapshot_field(|snapshot| {
             snapshot.video.layers.iter().map(|layer| layer.id).collect()
+        })
+    }
+
+    /// Read one published layer state for a launch admission without cloning
+    /// the public video/project snapshot or unrelated runtime collections.
+    pub fn video_layer_state_snapshot(&self, layer_id: VideoLayerId) -> Option<VideoLayerState> {
+        self.read_snapshot_field(|snapshot| {
+            snapshot
+                .video
+                .layers
+                .iter()
+                .find(|layer| layer.id == layer_id)
+                .map(|layer| layer.state.clone())
         })
     }
 

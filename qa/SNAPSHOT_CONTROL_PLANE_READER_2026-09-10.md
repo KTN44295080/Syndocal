@@ -431,6 +431,36 @@ exact executable/listener cleanup.
 This checkpoint does not claim file-dialog interaction, physical output,
 device, Mac, signing, publication, or product-wide completion.
 
+## Video-layer launch-state reader follow-up
+
+The legacy `launch_video_clip` admission path now reads only the selected
+published layer state through `EngineHandle::video_layer_state_snapshot()`.
+Missing-layer rejection, fade-state construction, command ordering, and
+poison/default fail-closed behavior are unchanged. Preview reconciliation and
+other multi-collection video paths remain on their existing full snapshot
+read.
+
+The focused engine snapshot-reader regression passed `6/6` with two existing
+ignored tests, including present/replacement and poisoned-publication checks
+for the new state reader. The app release `video` regression passed `139/139`
+with six existing ignored tests. Changed engine files passed the individual
+rustfmt check and `git diff --check` passed.
+
+A fresh maintained-wrapper `pnpm.cmd --dir app tauri build --no-bundle`
+completed with the pinned MSVC 14.44.35207 Build Tools linker. The exact
+checkout executable is 64,569,344 bytes with SHA-256
+`CA61C46736BD46F43B9446F20AAFAAAD8E7234C59778656AFE0C3689B205221C`.
+The isolated native probe at
+`target/qa/native-final-validation-20260911-04/native-final-validation.json`
+passed: one maximized responsive `Syndocal` window, Standby ownership with
+lighting/video disabled, snapshot IPC, missing media/layer thumbnail IPC
+rejection with valid native tickets, zero physical-output operations, and
+exact executable/listener cleanup.
+
+This checkpoint does not claim real-file missing → Retry → recovery, video
+display hardware, physical output, device, Mac, signing, publication, or
+product-wide completion.
+
 ## Video-layer ID reader follow-up
 
 The `set_video_layer_order` and `add_video_composition` admission paths now
