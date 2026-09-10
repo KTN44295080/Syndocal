@@ -258,6 +258,10 @@ const git = (args, cwd) => execFileSync("git", args, {
 }).trim();
 
 try {
+  pass(
+    tauriSignerFixtureBytes.equals(Buffer.from("Syndocal Tauri signer compatibility fixture v1\n", "utf8")),
+    "Tauri signer fixture payload bytes remain the canonical LF-signed bytes",
+  );
   pass(parseSemver(version)?.prerelease.join(".") === "rc.1", "RC SemVer parses");
   assert.throws(() => parseCli([], version), /require --release-candidate --manifest evidence/);
   assertions += 1;

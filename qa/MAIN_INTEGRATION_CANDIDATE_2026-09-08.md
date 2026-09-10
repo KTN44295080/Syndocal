@@ -353,10 +353,15 @@ eol=lf` entries in `.gitattributes`, then verifies that the working-tree bytes
 match the signed LF payload. No production source, release metadata, or
 acceptance assertion changed.
 
+The self-test now asserts the exact canonical fixture payload bytes before
+cryptographic verification, so a CRLF-converted or otherwise stale payload is
+rejected as a test failure rather than silently becoming a new signature
+fixture.
+
 | Check | Result |
 | --- | --- |
 | `git ls-files --eol` for signer fixtures | PASS — signed payload and signature are `w/lf`; public-key evidence is parsed after canonical trim |
-| `pnpm.cmd --dir app run check:release:self-test` | PASS — release metadata 128 assertion groups, ASIO 169, Windows candidate extractor 43, materialization 4, Windows artifact 144, strict JSON 130 |
+| `pnpm.cmd --dir app run check:release:self-test` | PASS — release metadata 129 assertion groups, ASIO 169, Windows candidate extractor 43, materialization 4, Windows artifact 144, strict JSON 130 |
 | `git diff --check` | PASS |
 
 The real-file thumbnail missing -> Retry -> recovery trial remains not run and
