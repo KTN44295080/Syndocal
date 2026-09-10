@@ -235,3 +235,36 @@ by this checker-only revalidation. The real-file thumbnail missing -> Retry ->
 recovery trial was not rerun. The ledger remains `50 Open + 8 Deferred`; the
 remaining external, physical, Mac, signing/publication, and product-wide
 acceptance boundaries remain unclaimed.
+
+## 2026-09-10 current-main release static gate
+
+Current `main` source HEAD `9d086420268417a8ba69130469cd076c4def561f` was
+rechecked without changing product source. The full static release gate
+completed with exit `0`:
+
+```text
+Native Tauri admission inventory exact: 516 commands; 18 negative fixtures rejected
+check:media-thumbnails: PASS
+check:native-thumbnail-request: PASS
+check:snapshot-live-publication: PASS
+check:agent-bridge: PASS
+check:output-control-runtime: PASS
+check:safety-blackout-runtime: PASS
+check:asio-packaging: PASS (169 assertions)
+check:asio-v3-contract: PASS (22 assertions)
+check:timeline-cue-audio: PASS
+check:timeline-audio-output-bus: PASS (11 assertions)
+check:timeline-loop-runtime: PASS
+check:snapshot-runtime-watermark: PASS
+check:project-open-bootstrap: PASS
+check:video-output-routing-runtime: PASS
+check:video-output-window-observation: PASS
+check:camera-input: PASS
+release metadata: PASS — Syndocal 1.2.0-alpha.69
+```
+
+This is source/static release evidence only. It does not close the 50 Open +
+8 Deferred ledger, real-file MP4 missing-file recovery, physical output,
+external-client, Mac real-device, signing, publication, or product-wide
+acceptance boundaries. No Actions result was awaited or used as a success
+substitute.
