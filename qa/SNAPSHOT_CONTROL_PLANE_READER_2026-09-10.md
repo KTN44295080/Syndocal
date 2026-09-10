@@ -288,7 +288,7 @@ exact executable/listener cleanup.
 
 ## Video-output existence reader follow-up
 
-The seven legacy video-output configuration/mapping command adapters now check
+The eight legacy video-output configuration/mapping command adapters now check
 one output ID through `EngineHandle::video_output_exists()` instead of cloning
 the complete public `EngineSnapshot`. The existing missing-output error,
 legacy-route rejection, output lease path, and native output lifecycle are
@@ -430,6 +430,37 @@ exact executable/listener cleanup.
 
 This checkpoint does not claim file-dialog interaction, physical output,
 device, Mac, signing, publication, or product-wide completion.
+
+## Video-layer ID reader follow-up
+
+The `set_video_layer_order` and `add_video_composition` admission paths now
+read only the published video-layer ID list through
+`EngineHandle::video_layer_ids_snapshot()`. Their existing missing-layer
+error, command ordering, allocation boundary, and poison/default fail-closed
+behavior are unchanged. Compound validators that need other authored
+collections remain on one full snapshot read to preserve cross-collection
+consistency.
+
+The focused engine snapshot-reader regression passed `6/6` with two existing
+ignored tests, including published-ID replacement and poisoned-publication
+checks for this reader. The app release `video` regression passed `139/139`
+with six existing ignored tests. Changed engine files passed the individual
+rustfmt check and `git diff --check` passed.
+
+A fresh maintained-wrapper `pnpm.cmd --dir app tauri build --no-bundle`
+completed with the pinned MSVC 14.44.35207 Build Tools linker. The exact
+checkout executable is 64,567,296 bytes with SHA-256
+`8488EE10CF0BB9B236C74F04FEE6DD7E5FDEE8CDE4B9CD9B5BD7757C112A2B8F`.
+The isolated native probe at
+`target/qa/native-final-validation-20260911-03/native-final-validation.json`
+passed: one maximized responsive `Syndocal` window, Standby ownership with
+lighting/video disabled, snapshot IPC, missing media/layer thumbnail IPC
+rejection with valid native tickets, zero physical-output operations, and
+exact executable/listener cleanup.
+
+This checkpoint does not claim real-file missing → Retry → recovery, video
+display hardware, physical output, device, Mac, signing, publication, or
+product-wide completion.
 
 ## Stage Map export reader follow-up
 

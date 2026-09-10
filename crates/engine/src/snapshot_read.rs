@@ -2,7 +2,7 @@ use crate::{EngineHandle, TimelineTransportAuthority};
 use protocol::{
     AutoVjAction, CompositionSummary, DmxOutputConfig, EngineSnapshot, StageObjectSummary,
     TimelineFollowRuntimeStatus, TimelineFollowRuntimeStatusSnapshot, TimelineFollowRuntimeSummary,
-    TimelineLayerSummary, TimelineLoopRuntimeStatus, VideoClipRuntimeSnapshot,
+    TimelineLayerSummary, TimelineLoopRuntimeStatus, VideoClipRuntimeSnapshot, VideoLayerId,
     VideoLayerTransitionBusSummary, VideoLayerTransitionRuntimeSnapshot, VideoOutputId,
     VideoOutputSummary, VideoSnapshot,
 };
@@ -197,6 +197,14 @@ impl EngineHandle {
                 .outputs
                 .iter()
                 .any(|output| output.id == output_id)
+        })
+    }
+
+    /// Read only published video-layer IDs for admission checks that do not
+    /// need the authored layer bodies or unrelated project/runtime state.
+    pub fn video_layer_ids_snapshot(&self) -> Vec<VideoLayerId> {
+        self.read_snapshot_field(|snapshot| {
+            snapshot.video.layers.iter().map(|layer| layer.id).collect()
         })
     }
 

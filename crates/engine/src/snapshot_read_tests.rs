@@ -4,10 +4,10 @@ use protocol::{
     AutoVjAction, CompositionSummary, DmxOutputConfig, DmxOutputProtocol, EngineSnapshot,
     PatchedFixtureSummary, Rotation3, StageObjectKind, StageObjectSummary,
     TimelineFollowRuntimeStatusSnapshot, TimelineLayerKind, TimelineLayerSummary, Vec3,
-    VideoClipLayerRuntimeSummary, VideoClipTakeDuration, VideoClipTakeKind,
-    VideoLayerTransitionBusRuntimeSummary, VideoLayerTransitionBusSummary,
-    VideoLayerTransitionCurve, VideoLayerTransitionTarget, VideoOutputKind, VideoOutputSummary,
-    VideoTransitionBusId,
+    VideoBlendMode, VideoClipLayerRuntimeSummary, VideoClipTakeDuration, VideoClipTakeKind,
+    VideoLayerState, VideoLayerSummary, VideoLayerTransitionBusRuntimeSummary,
+    VideoLayerTransitionBusSummary, VideoLayerTransitionCurve, VideoLayerTransitionTarget,
+    VideoOutputKind, VideoOutputSummary, VideoSourceKind, VideoSourceSummary, VideoTransitionBusId,
 };
 use std::{
     hint::black_box,
@@ -70,6 +70,23 @@ fn publication(token: u64) -> EngineSnapshot {
         soloed: false,
         parked: false,
     }];
+    snapshot.video.layers.push(VideoLayerSummary {
+        id: token,
+        label: format!("video layer {token}"),
+        source: VideoSourceSummary {
+            kind: VideoSourceKind::StillImage,
+            path: Some(format!("still-{token}.png")),
+            name: None,
+            codec: None,
+            metadata: None,
+        },
+        media_asset_id: None,
+        blend_mode: VideoBlendMode::Normal,
+        state: VideoLayerState::default(),
+        isf_effect: None,
+        clip_slots: Vec::new(),
+        default_clip_slot_id: None,
+    });
     snapshot
         .video_clip_runtime
         .layers
@@ -215,6 +232,15 @@ fn assert_same_read_model(handle: &EngineHandle) {
         assert!(handle.video_output_exists(output.id));
     }
     assert!(!handle.video_output_exists(99_999));
+    assert_eq!(
+        handle.video_layer_ids_snapshot(),
+        expected
+            .video
+            .layers
+            .iter()
+            .map(|layer| layer.id)
+            .collect::<Vec<_>>()
+    );
     assert_eq!(
         handle.auto_vj_last_action(),
         expected.video.auto_vj.status.last_action

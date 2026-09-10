@@ -41561,7 +41561,7 @@ fn set_video_layer_order(
     state: State<'_, AppState>,
     layer_ids: Vec<VideoLayerId>,
 ) -> Result<(), String> {
-    validate_video_layer_ids(&state.engine.snapshot(), &layer_ids)?;
+    validate_video_layer_ids_from_engine(&state.engine, &layer_ids)?;
     state
         .engine
         .send(EngineCommand::SetVideoLayerOrder(layer_ids))
@@ -47733,7 +47733,7 @@ fn add_video_composition(
     if label.trim().is_empty() {
         return Err("Video composition label is required".to_string());
     }
-    validate_video_layer_ids(&state.engine.snapshot(), &layer_ids)?;
+    validate_video_layer_ids_from_engine(&state.engine, &layer_ids)?;
     let composition_id = state.engine.allocate_composition_id();
     state
         .engine
@@ -84365,6 +84365,19 @@ fn validate_video_layer_ids(
             .iter()
             .any(|layer| layer.id == *layer_id)
         {
+            return Err(format!("Video layer {layer_id} was not found"));
+        }
+    }
+    Ok(())
+}
+
+fn validate_video_layer_ids_from_engine(
+    engine: &EngineHandle,
+    layer_ids: &[VideoLayerId],
+) -> Result<(), String> {
+    let published_layer_ids = engine.video_layer_ids_snapshot();
+    for layer_id in layer_ids {
+        if !published_layer_ids.contains(layer_id) {
             return Err(format!("Video layer {layer_id} was not found"));
         }
     }
