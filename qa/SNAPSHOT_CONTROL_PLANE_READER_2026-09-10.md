@@ -1110,6 +1110,41 @@ This checkpoint does not claim real-file missing → Retry → recovery, actual
 NDI/Spout sender or display hardware, physical output, device, Mac, signing,
 publication, or product-wide completion.
 
+## Reference-palette application reader follow-up
+
+The `apply_reference_palette` admission path now reads the authored palette
+and fixture ID collections through one narrow `EngineHandle` publication-
+generation reader. Existing missing-palette and missing-fixture rejection,
+empty-selection rejection, and palette application behavior are unchanged;
+the command no longer clones unrelated engine state for this admission check.
+
+The focused engine snapshot-reader regression passed `7/7` with two existing
+ignored tests, including the palette/fixture projection in the shared
+read-model comparison. The app release structural regression passed `1/1`.
+The two changed engine files passed individual rustfmt checks, `git diff
+--check` passed, and the maintained wrapper checker passed `243` assertions
+with `27` hostile mutation fixtures. The full app rustfmt check remains
+baseline-noisy because of unrelated pre-existing formatting differences in
+`main.rs`; no broad formatting rewrite was included.
+
+A fresh maintained-wrapper `pnpm.cmd --dir app tauri build --no-bundle`
+completed with the pinned MSVC 14.44.35207 Build Tools linker and no first-
+party compiler warnings. The exact checkout executable is 64,634,368 bytes
+with SHA-256
+`73E84B3BE926749317DC93AF0A51AD31C461BB96CDA6D2568E4EE7325F9BDFBF`.
+The isolated native probe at
+`target/qa/native-final-validation-20260911-29/native-final-validation.json`
+passed: one maximized responsive `Syndocal` window, Standby ownership with
+lighting/video disabled, snapshot IPC, missing media/layer thumbnail IPC
+rejection with valid native tickets, zero physical-output operations, and
+exact executable/listener cleanup. A direct post-probe check found zero
+exact-path Syndocal processes and only the expected port `TIME_WAIT` entry
+owned by PID 0.
+
+This checkpoint does not claim real-file missing → Retry → recovery, actual
+NDI/Spout sender or display hardware, physical output, device, Mac, signing,
+publication, or product-wide completion.
+
 ## Video-layer ID reader follow-up
 
 The `set_video_layer_order` and `add_video_composition` admission paths now

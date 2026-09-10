@@ -33928,23 +33928,19 @@ fn apply_reference_palette(
     fixture_ids: Vec<FixtureId>,
     programmer: bool,
 ) -> Result<(), String> {
-    let snapshot = state.engine.snapshot();
-    if !snapshot
-        .palettes
-        .iter()
-        .any(|palette| palette.id == palette_id)
-    {
+    let (palette_ids, authored_fixture_ids) =
+        state.engine.reference_palette_admission_snapshot();
+    if !palette_ids.contains(&palette_id) {
         return Err(format!("Palette {palette_id} was not found"));
     }
     if fixture_ids.is_empty() {
         return Err("Select at least one fixture".to_string());
     }
-    if let Some(fixture_id) = fixture_ids.iter().find(|fixture_id| {
-        !snapshot
-            .fixtures
-            .iter()
-            .any(|fixture| fixture.id == **fixture_id)
-    }) {
+    let authored_fixture_ids = authored_fixture_ids.into_iter().collect::<HashSet<_>>();
+    if let Some(fixture_id) = fixture_ids
+        .iter()
+        .find(|fixture_id| !authored_fixture_ids.contains(fixture_id))
+    {
         return Err(format!("Fixture {fixture_id} was not found"));
     }
     state
@@ -93405,6 +93401,20 @@ pub(crate) mod tests {
             .map(|offset| function_start + offset);
         let body = &source[function_start..next_attribute.unwrap_or(source.len())];
         assert!(body.contains("cue_palette_target_admission_snapshot"));
+        assert!(!body.contains("engine.snapshot()"));
+    }
+
+    #[test]
+    fn apply_reference_palette_uses_the_narrow_engine_reader() {
+        let source = include_str!("main.rs");
+        let function_start = source
+            .find("fn apply_reference_palette(")
+            .expect("missing apply reference palette command");
+        let next_attribute = source[function_start..]
+            .find("\n#[tauri::command]")
+            .map(|offset| function_start + offset);
+        let body = &source[function_start..next_attribute.unwrap_or(source.len())];
+        assert!(body.contains("reference_palette_admission_snapshot"));
         assert!(!body.contains("engine.snapshot()"));
     }
 

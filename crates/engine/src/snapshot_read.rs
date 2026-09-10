@@ -368,6 +368,17 @@ impl EngineHandle {
         })
     }
 
+    /// Read the authored IDs required by reference-palette admission from
+    /// one published generation.
+    pub fn reference_palette_admission_snapshot(&self) -> (Vec<PaletteId>, Vec<FixtureId>) {
+        self.read_snapshot_field(|snapshot| {
+            (
+                snapshot.palettes.iter().map(|palette| palette.id).collect(),
+                snapshot.fixtures.iter().map(|fixture| fixture.id).collect(),
+            )
+        })
+    }
+
     /// Read only the stage objects attached to one published preset for
     /// enqueue-time allocator reservation. Trimming and first-match policy
     /// remain owned by the caller, matching the existing command path.

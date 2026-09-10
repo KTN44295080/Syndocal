@@ -329,6 +329,21 @@ fn assert_same_read_model(handle: &EngineHandle) {
         )
     );
     assert_eq!(
+        handle.reference_palette_admission_snapshot(),
+        (
+            expected
+                .palettes
+                .iter()
+                .map(|palette| palette.id)
+                .collect::<Vec<_>>(),
+            expected
+                .fixtures
+                .iter()
+                .map(|fixture| fixture.id)
+                .collect::<Vec<_>>(),
+        )
+    );
+    assert_eq!(
         handle.fixture_group_ids_snapshot(),
         expected
             .fixtures
