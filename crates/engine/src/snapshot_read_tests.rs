@@ -2,8 +2,9 @@ use super::allocator_test_handle;
 use crate::{EngineHandle, TimelineTransportAuthority};
 use protocol::{
     CompositionSummary, DmxOutputConfig, DmxOutputProtocol, EngineSnapshot,
-    TimelineFollowRuntimeStatusSnapshot, VideoClipLayerRuntimeSummary, VideoClipTakeDuration,
-    VideoClipTakeKind, VideoLayerTransitionBusRuntimeSummary, VideoLayerTransitionBusSummary,
+    TimelineFollowRuntimeStatusSnapshot, TimelineLayerKind, TimelineLayerSummary,
+    VideoClipLayerRuntimeSummary, VideoClipTakeDuration, VideoClipTakeKind,
+    VideoLayerTransitionBusRuntimeSummary, VideoLayerTransitionBusSummary,
     VideoLayerTransitionCurve, VideoLayerTransitionTarget, VideoOutputKind, VideoOutputSummary,
     VideoTransitionBusId,
 };
@@ -169,6 +170,38 @@ fn assert_same_read_model(handle: &EngineHandle) {
         (expected.dmx_outputs, expected.output)
     );
     assert_eq!(handle.timeline_playing(), expected.timeline.playing);
+}
+
+#[test]
+fn timeline_audio_allocator_reader_matches_published_projection() {
+    let mut snapshot = EngineSnapshot::default();
+    snapshot.timeline.audio = Some(protocol::AudioAnalysisSummary {
+        path: "memory://allocator-reader.wav".to_string(),
+        sample_rate: 48_000,
+        channels: 2,
+        duration_ms: 1_000,
+        estimated_bpm: None,
+        waveform: Vec::new(),
+        spectrum: Vec::new(),
+        beats: Vec::new(),
+    });
+    snapshot.timeline.layers = vec![TimelineLayerSummary {
+        id: 41,
+        label: "Lighting".to_string(),
+        order: 0,
+        muted: false,
+        locked: false,
+        solo: false,
+        expanded: false,
+        kind: TimelineLayerKind::Lighting,
+    }];
+    let expected = (
+        snapshot.timeline.audio.is_some(),
+        snapshot.timeline.audio_clips.is_empty(),
+        snapshot.timeline.layers.clone(),
+    );
+    let handle = allocator_test_handle(Arc::new(RwLock::new(snapshot)));
+    assert_eq!(handle.timeline_audio_allocator_snapshot(), expected);
 }
 
 #[test]

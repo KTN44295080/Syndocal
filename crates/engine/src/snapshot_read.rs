@@ -1,9 +1,9 @@
 use crate::{EngineHandle, TimelineTransportAuthority};
 use protocol::{
     CompositionSummary, DmxOutputConfig, EngineSnapshot, TimelineFollowRuntimeStatus,
-    TimelineFollowRuntimeStatusSnapshot, TimelineFollowRuntimeSummary, TimelineLoopRuntimeStatus,
-    VideoClipRuntimeSnapshot, VideoLayerTransitionBusSummary, VideoLayerTransitionRuntimeSnapshot,
-    VideoOutputSummary,
+    TimelineFollowRuntimeStatusSnapshot, TimelineFollowRuntimeSummary, TimelineLayerSummary,
+    TimelineLoopRuntimeStatus, VideoClipRuntimeSnapshot, VideoLayerTransitionBusSummary,
+    VideoLayerTransitionRuntimeSnapshot, VideoOutputSummary,
 };
 
 /// The runtime-only projection required by the control-plane query adapter.
@@ -127,6 +127,19 @@ impl EngineHandle {
     /// admission check without cloning unrelated project and runtime state.
     pub fn dmx_outputs_and_output_snapshot(&self) -> (Vec<DmxOutputConfig>, DmxOutputConfig) {
         self.read_snapshot_field(|snapshot| (snapshot.dmx_outputs.clone(), snapshot.output.clone()))
+    }
+
+    /// Read only the authored Timeline fields needed by enqueue-time legacy
+    /// audio allocator reservation. The public projection is intentionally
+    /// preserved so implicit/derived layer semantics stay identical.
+    pub fn timeline_audio_allocator_snapshot(&self) -> (bool, bool, Vec<TimelineLayerSummary>) {
+        self.read_snapshot_field(|snapshot| {
+            (
+                snapshot.timeline.audio.is_some(),
+                snapshot.timeline.audio_clips.is_empty(),
+                snapshot.timeline.layers.clone(),
+            )
+        })
     }
 
     /// Read the published Timeline playing flag without cloning unrelated

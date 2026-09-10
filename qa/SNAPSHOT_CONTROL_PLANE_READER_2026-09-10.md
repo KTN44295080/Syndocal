@@ -170,3 +170,33 @@ window; exact-path cleanup left zero matching processes.
 This is a structural snapshot-clone reduction and local Windows native gate
 only. It does not claim serial-DMX device, Art-Net, physical-output, venue, or
 product-wide acceptance.
+
+## Timeline-audio allocator reservation reader follow-up
+
+The enqueue-time `SetTimelineAudio` allocator reservation now reads only the
+published audio-presence flag, audio-clip emptiness, and projected timeline
+layers through the narrow snapshot reader. It no longer clones the complete
+public `EngineSnapshot` for this legacy derived-layer reservation. The public
+timeline projection is still the source of the layer list, so implicit and
+derived layer semantics, ID boundaries, and fail-closed reservation behavior
+are unchanged. This is a structural allocation reduction, not a measured
+show-performance claim.
+
+The new reader regression passed 1/1, and the focused release allocator suite
+passed 23/23. The reader suite passed 5/5 with 1 existing synthetic benchmark
+ignored. The pinned Windows MSVC 14.44.35207 app control-plane suite passed
+30/30:
+`cargo test -p syndocal --release --locked control_plane::tests --
+--test-threads=1`.
+
+A fresh maintained-wrapper `pnpm.cmd --dir app tauri build --no-bundle`
+completed after TypeScript/Vite and Rust release compilation. The resulting
+EXE is 64,553,472 bytes with SHA-256
+`71B5BFBD6916345F11AF55764E58E963B44EB20A4B6430C49106EBB22565EB3B`.
+Launching that exact executable produced one maximized-requested,
+responsive `Syndocal` window with title `Syndocal`; exact-path cleanup left
+zero matching processes.
+
+This remains a local Windows native gate and allocator/read-model regression.
+It does not claim audio-device, physical-output, thumbnail-recovery, venue,
+or product-wide acceptance.

@@ -11967,11 +11967,12 @@ impl EngineHandle {
                 maxima.observe_u64(AllocatorDomain::Automations, *automation_id);
             }
             EngineCommand::SetTimelineAudio(Some(_)) => {
-                let snapshot = self.snapshot();
-                if snapshot.timeline.audio.is_some() && snapshot.timeline.audio_clips.is_empty() {
+                let (has_audio, audio_clips_empty, timeline_layers) =
+                    self.timeline_audio_allocator_snapshot();
+                if has_audio && audio_clips_empty {
                     observe_derived_legacy_audio_layer_allocator_source(
                         &mut maxima,
-                        &snapshot.timeline.layers,
+                        &timeline_layers,
                     )?;
                 }
             }
@@ -77157,6 +77158,34 @@ mod tests {
             spectrum: Vec::new(),
             beats: Vec::new(),
         }
+    }
+
+    #[test]
+    fn timeline_audio_allocator_reservation_uses_narrow_published_reader() {
+        let mut snapshot = EngineSnapshot::default();
+        snapshot.timeline.audio = Some(allocator_audio_summary());
+        snapshot.timeline.layers = vec![TimelineLayerSummary {
+            id: 41,
+            label: "Lighting".to_string(),
+            order: 0,
+            muted: false,
+            locked: false,
+            solo: false,
+            expanded: false,
+            kind: TimelineLayerKind::Lighting,
+        }];
+        let engine = allocator_test_handle(Arc::new(RwLock::new(snapshot)));
+
+        engine
+            .send(EngineCommand::SetTimelineAudio(Some(
+                allocator_audio_summary(),
+            )))
+            .unwrap();
+
+        assert_eq!(
+            allocator_counter_value(&engine, AllocatorDomain::TimelineLayers),
+            43
+        );
     }
 
     #[test]
