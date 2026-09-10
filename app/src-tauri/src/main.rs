@@ -29255,8 +29255,8 @@ fn save_engine_telemetry_report(
     state: State<'_, AppState>,
 ) -> Result<Option<String>, String> {
     let captured_at_unix_ms = current_unix_ms();
-    let snapshot = state.engine.snapshot();
-    let report = engine_telemetry_report_from_snapshot(&snapshot, captured_at_unix_ms);
+    let snapshot = state.engine.engine_telemetry_snapshot();
+    let report = engine_telemetry_report_from_telemetry_snapshot(&snapshot, captured_at_unix_ms);
     let Some(path) = parented_file_dialog(&window)
         .add_filter("Syndocal Telemetry Report", &["json"])
         .set_file_name(format!("syndocal-telemetry-{captured_at_unix_ms}.json"))
@@ -29276,8 +29276,8 @@ async fn get_engine_telemetry_report(
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();
         let captured_at_unix_ms = current_unix_ms();
-        let snapshot = state.engine.snapshot();
-        Ok(engine_telemetry_report_from_snapshot(
+        let snapshot = state.engine.engine_telemetry_snapshot();
+        Ok(engine_telemetry_report_from_telemetry_snapshot(
             &snapshot,
             captured_at_unix_ms,
         ))
@@ -85753,27 +85753,33 @@ fn engine_telemetry_report_from_snapshot(
     snapshot: &EngineSnapshot,
     captured_at_unix_ms: u128,
 ) -> EngineTelemetryReport {
-    let enabled_dmx_output_count = snapshot
-        .dmx_outputs
-        .iter()
-        .filter(|output| output.enabled)
-        .count();
+    let snapshot = engine::EngineTelemetrySnapshot::from_snapshot(snapshot);
+    engine_telemetry_report_from_telemetry_snapshot(&snapshot, captured_at_unix_ms)
+}
+
+fn engine_telemetry_report_from_telemetry_snapshot(
+    snapshot: &engine::EngineTelemetrySnapshot,
+    captured_at_unix_ms: u128,
+) -> EngineTelemetryReport {
     EngineTelemetryReport {
         version: 1,
         captured_at_unix_ms,
-        fixture_count: snapshot.fixtures.len(),
-        cue_count: snapshot.cues.len(),
-        effect_count: snapshot.effects.len(),
-        node_graph_count: snapshot.node_graphs.len(),
-        video_layer_count: snapshot.video.layers.len(),
-        video_output_count: snapshot.video.outputs.len(),
-        dmx_output_count: snapshot.dmx_outputs.len(),
-        enabled_dmx_output_count,
-        dmx_preview_universe_count: snapshot.dmx_previews.len(),
+        fixture_count: snapshot.fixture_count,
+        cue_count: snapshot.cue_count,
+        effect_count: snapshot.effect_count,
+        node_graph_count: snapshot.node_graph_count,
+        video_layer_count: snapshot.video_layer_count,
+        video_output_count: snapshot.video_output_count,
+        dmx_output_count: snapshot.dmx_output_count,
+        enabled_dmx_output_count: snapshot.enabled_dmx_output_count,
+        dmx_preview_universe_count: snapshot.dmx_preview_universe_count,
         clock: snapshot.clock.clone(),
-        primary_output: snapshot.output.clone(),
+        primary_output: snapshot.primary_output.clone(),
         dmx_outputs: snapshot.dmx_outputs.clone(),
-        budget: engine_telemetry_budget_report(&snapshot.telemetry, enabled_dmx_output_count),
+        budget: engine_telemetry_budget_report(
+            &snapshot.telemetry,
+            snapshot.enabled_dmx_output_count,
+        ),
         telemetry: snapshot.telemetry.clone(),
     }
 }
@@ -93174,6 +93180,29 @@ pub(crate) mod tests {
             assert!(
                 body.contains("spawn_blocking"),
                 "{command} must dispatch off the event loop"
+            );
+        }
+    }
+
+    #[test]
+    fn telemetry_report_commands_use_the_narrow_engine_reader() {
+        let source = include_str!("main.rs");
+        for command in ["save_engine_telemetry_report", "get_engine_telemetry_report"] {
+            let function_marker = format!("fn {command}(");
+            let function_start = source
+                .find(&function_marker)
+                .unwrap_or_else(|| panic!("missing telemetry command {command}"));
+            let next_attribute = source[function_start + function_marker.len()..]
+                .find("\n#[tauri::command]")
+                .map(|offset| function_start + function_marker.len() + offset);
+            let body = &source[function_start..next_attribute.unwrap_or(source.len())];
+            assert!(
+                body.contains("engine_telemetry_snapshot"),
+                "{command} must use the narrow engine telemetry reader"
+            );
+            assert!(
+                !body.contains("engine.snapshot()"),
+                "{command} must not clone the full public snapshot"
             );
         }
     }

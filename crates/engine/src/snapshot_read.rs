@@ -1,10 +1,11 @@
 use crate::{EngineHandle, TimelineTransportAuthority};
 use protocol::{
-    AutoVjAction, CompositionSummary, DmxOutputConfig, EngineSnapshot, StageObjectSummary,
-    TimelineFollowRuntimeStatus, TimelineFollowRuntimeStatusSnapshot, TimelineFollowRuntimeSummary,
-    TimelineLayerSummary, TimelineLoopRuntimeStatus, VideoClipRuntimeSnapshot, VideoLayerId,
-    VideoLayerState, VideoLayerTransitionBusSummary, VideoLayerTransitionRuntimeSnapshot,
-    VideoOutputId, VideoOutputSummary, VideoSnapshot, VideoSourceSummary,
+    AutoVjAction, ClockSnapshot, CompositionSummary, DmxOutputConfig, EngineSnapshot,
+    EngineTelemetry, StageObjectSummary, TimelineFollowRuntimeStatus,
+    TimelineFollowRuntimeStatusSnapshot, TimelineFollowRuntimeSummary, TimelineLayerSummary,
+    TimelineLoopRuntimeStatus, VideoClipRuntimeSnapshot, VideoLayerId, VideoLayerState,
+    VideoLayerTransitionBusSummary, VideoLayerTransitionRuntimeSnapshot, VideoOutputId,
+    VideoOutputSummary, VideoSnapshot, VideoSourceSummary,
 };
 
 /// The runtime-only projection required by the control-plane query adapter.
@@ -22,6 +23,50 @@ pub struct ControlPlaneRuntimeSnapshot {
     pub timeline_loop_active: bool,
     pub video_clip_slots_active: bool,
     pub video_transitions_active: bool,
+}
+
+/// The authored counts, DMX routes, clock, and telemetry needed by the
+/// diagnostics report without cloning the rest of the public snapshot.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EngineTelemetrySnapshot {
+    pub fixture_count: usize,
+    pub cue_count: usize,
+    pub effect_count: usize,
+    pub node_graph_count: usize,
+    pub video_layer_count: usize,
+    pub video_output_count: usize,
+    pub dmx_output_count: usize,
+    pub enabled_dmx_output_count: usize,
+    pub dmx_preview_universe_count: usize,
+    pub clock: ClockSnapshot,
+    pub primary_output: DmxOutputConfig,
+    pub dmx_outputs: Vec<DmxOutputConfig>,
+    pub telemetry: EngineTelemetry,
+}
+
+impl EngineTelemetrySnapshot {
+    pub fn from_snapshot(snapshot: &EngineSnapshot) -> Self {
+        let enabled_dmx_output_count = snapshot
+            .dmx_outputs
+            .iter()
+            .filter(|output| output.enabled)
+            .count();
+        Self {
+            fixture_count: snapshot.fixtures.len(),
+            cue_count: snapshot.cues.len(),
+            effect_count: snapshot.effects.len(),
+            node_graph_count: snapshot.node_graphs.len(),
+            video_layer_count: snapshot.video.layers.len(),
+            video_output_count: snapshot.video.outputs.len(),
+            dmx_output_count: snapshot.dmx_outputs.len(),
+            enabled_dmx_output_count,
+            dmx_preview_universe_count: snapshot.dmx_previews.len(),
+            clock: snapshot.clock.clone(),
+            primary_output: snapshot.output.clone(),
+            dmx_outputs: snapshot.dmx_outputs.clone(),
+            telemetry: snapshot.telemetry.clone(),
+        }
+    }
 }
 
 impl EngineHandle {
@@ -87,6 +132,12 @@ impl EngineHandle {
             }),
             video_transitions_active: !snapshot.video_transition_runtime.buses.is_empty(),
         })
+    }
+
+    /// Read the diagnostics report inputs without cloning unrelated project
+    /// collections or runtime surfaces.
+    pub fn engine_telemetry_snapshot(&self) -> EngineTelemetrySnapshot {
+        self.read_snapshot_field(EngineTelemetrySnapshot::from_snapshot)
     }
 
     /// Read Clip Slot transport from the latest complete engine publication.

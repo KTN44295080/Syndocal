@@ -789,6 +789,35 @@ This checkpoint does not claim real-file missing → Retry → recovery, actual
 NDI/Spout sender or display hardware, physical output, device, Mac, signing,
 publication, or product-wide completion.
 
+## Engine telemetry report reader follow-up
+
+The telemetry report commands now read only the counts, clock, DMX routes, and
+telemetry needed by the report through
+`EngineHandle::engine_telemetry_snapshot()`. The existing report schema,
+budget calculations, save dialog, async worker boundary, and diagnostic-package
+full snapshot path are unchanged. The reader retains one publication guard and
+does not change output ownership or physical-output behavior.
+
+The engine snapshot-reader regression passed `6/6` with two existing ignored
+tests. The app telemetry regression passed `2/2`, covering report content and
+the source contract that both Tauri commands use the narrow reader without a
+full `engine.snapshot()` clone. The maintained wrapper checker passed `243`
+assertions with `27` hostile mutation fixtures. Changed engine files passed
+individual rustfmt checks and `git diff --check` passed. The release build
+completed with the pinned MSVC 14.44.35207 Build Tools linker without warnings.
+The exact checkout executable is 64,771,072 bytes with SHA-256
+`4280D3B725F559A66594B1045848232464DE7A428074955CC012AC01722261B3`.
+The isolated native probe at
+`target/qa/native-final-validation-20260911-16/native-final-validation.json`
+passed: one maximized responsive `Syndocal` window, Standby ownership with
+lighting/video disabled, snapshot IPC, missing media/layer thumbnail IPC
+rejection with valid native tickets, zero physical-output operations, and
+exact executable/listener cleanup.
+
+This checkpoint does not claim real-file missing → Retry → recovery, actual
+NDI/Spout sender or display hardware, physical output, device, Mac, signing,
+publication, or product-wide completion.
+
 ## Video-layer ID reader follow-up
 
 The `set_video_layer_order` and `add_video_composition` admission paths now

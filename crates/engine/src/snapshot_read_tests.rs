@@ -1,5 +1,5 @@
 use super::allocator_test_handle;
-use crate::{EngineHandle, TimelineTransportAuthority};
+use crate::{EngineHandle, EngineTelemetrySnapshot, TimelineTransportAuthority};
 use protocol::{
     AutoVjAction, CompositionSummary, DmxOutputConfig, DmxOutputProtocol, EngineSnapshot,
     PatchedFixtureSummary, Rotation3, StageObjectKind, StageObjectSummary,
@@ -227,6 +227,10 @@ fn assert_same_read_model(handle: &EngineHandle) {
             expected.video_transition_runtime.clone(),
             expected.clock.bpm,
         )
+    );
+    assert_eq!(
+        handle.engine_telemetry_snapshot(),
+        EngineTelemetrySnapshot::from_snapshot(&expected)
     );
     assert_eq!(handle.video_snapshot(), expected.video);
     assert_eq!(handle.stage_objects_snapshot(), expected.stage_objects);
