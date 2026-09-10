@@ -70,3 +70,18 @@ EXE with SHA-256
 `8234529A271A7147A1C1E47FB6595615713CF1041D5B98278F09DCD19CEC8E71`.
 The exact executable launched one responsive `Syndocal` window, was maximized,
 and was terminated and verified absent by exact path.
+
+## Output-control validation follow-up
+
+The current output-control validation now uses the existing narrow output-list
+reader for `AddDisplay` and `SetDisplayWindowOpen`; the composition-assignment
+path remains on the full snapshot because it also validates authored
+compositions. This does not alter output ownership, confirmation, receipt, or
+fail-closed decisions.
+
+After this source change, the pinned Windows `control_plane::tests` suite again
+passed 30/30 with no first-party compiler warning. A fresh
+`tauri build --no-bundle` produced a 64,545,280-byte EXE with SHA-256
+`A955DFA2FD6028B83D52604879AF5CC73C4DE78D4B8A255A2AF3546DDC8CB502`.
+The exact executable launched one responsive, maximized `Syndocal` window and
+was terminated and verified absent by exact path.

@@ -1546,8 +1546,8 @@ fn validate_output_action_current(
         | OutputControlActionV2::ReleaseBlackout { .. }
         | OutputControlActionV2::SetBlackout { .. } => Ok(()),
         OutputControlActionV2::AddDisplay { spec, .. } => {
-            let snapshot = state.engine.snapshot();
-            if snapshot.video.outputs.iter().any(|output| {
+            let outputs = state.engine.video_outputs_snapshot();
+            if outputs.iter().any(|output| {
                 output.kind == protocol::VideoOutputKind::Display
                     && output.monitor_id == Some(spec.monitor_index)
             }) {
@@ -1556,10 +1556,8 @@ fn validate_output_action_current(
             Ok(())
         }
         OutputControlActionV2::SetDisplayWindowOpen { output_id, .. } => {
-            let snapshot = state.engine.snapshot();
-            let output = snapshot
-                .video
-                .outputs
+            let outputs = state.engine.video_outputs_snapshot();
+            let output = outputs
                 .iter()
                 .find(|output| output.id == *output_id)
                 .ok_or_else(|| "Display output no longer exists".to_string())?;
