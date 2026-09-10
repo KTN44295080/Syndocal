@@ -132,3 +132,26 @@ This current-main follow-up remains bounded software evidence. It does not
 close the ledger item or claim real crash/restart process acceptance,
 external-client reply-loss, physical output retirement/re-Arm, or hardware
 acknowledgement.
+
+## Current-main durable-boundary revalidation — 2026-09-10
+
+The focused AI3 software suites were rerun against current `main` at source
+HEAD `2de0067299150355eb9015bdfb3fb8cdea831226`. Product source was unchanged
+by this QA-only checkpoint. Each Cargo invocation initialized the documented
+MSVC `14.44.35207` environment, pinned the absolute x64 linker, and confirmed
+that path was first in `where.exe link.exe`.
+
+| Command/filter | Result |
+| --- | --- |
+| `cargo test --manifest-path app/src-tauri/Cargo.toml --release --locked -j 1 durable -- --test-threads=1` | PASS — 23 passed, 0 failed, 0 ignored |
+| `cargo test --manifest-path app/src-tauri/Cargo.toml --release --locked -j 1 dsf2026 -- --test-threads=1` | PASS — 6 passed, 0 failed, 0 ignored |
+| `cargo test --manifest-path app/src-tauri/Cargo.toml --release --locked -j 1 managed_exact_both -- --test-threads=1` | PASS — 13 passed, 0 failed, 0 ignored |
+
+The evidence covers durable Pending/terminal boundaries, exact retry and
+shape/identity rejection, restart non-reclamation, DSF2026 one-shot and
+no-send reconciliation, managed exact-Both renewal/relinquish/expiry, and
+fail-closed authority mismatches. It does not close
+`AI3-DURABLE-RECOVERY-001`: real crash/restart process drills, external-client
+reply-loss, physical project retirement/re-Arm, device acknowledgement, and
+venue acceptance remain unclaimed. The real-file thumbnail recovery trial was
+not rerun.
