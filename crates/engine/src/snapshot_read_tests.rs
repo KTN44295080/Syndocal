@@ -27,6 +27,7 @@ fn publication(token: u64) -> EngineSnapshot {
     snapshot.timeline.follow_runtime.duration_ms = 100;
     snapshot.timeline.follow_runtime.progress_millis = 500;
     snapshot.timeline.follow_runtime.transition_hold_active = true;
+    snapshot.clock.bpm = 120.0 + token as f32;
     snapshot.output = DmxOutputConfig {
         target_ip: format!("192.0.2.{token}"),
         ..DmxOutputConfig::default()
@@ -165,6 +166,10 @@ fn assert_same_read_model(handle: &EngineHandle) {
         expected.video_clip_runtime
     );
     assert_eq!(
+        handle.video_layer_thumbnail_snapshot(),
+        (expected.video.clone(), expected.clock.bpm)
+    );
+    assert_eq!(
         handle.auto_vj_last_action(),
         expected.video.auto_vj.status.last_action
     );
@@ -287,6 +292,11 @@ fn poisoned_publication_preserves_public_snapshot_defaults() {
         EngineSnapshot::default().timeline.transport_epoch
     );
     assert!(handle.video_clip_runtime_snapshot().layers.is_empty());
+    let default_snapshot = EngineSnapshot::default();
+    assert_eq!(
+        handle.video_layer_thumbnail_snapshot(),
+        (default_snapshot.video, default_snapshot.clock.bpm)
+    );
     assert_eq!(handle.auto_vj_last_action(), None);
     assert!(handle.video_outputs_snapshot().is_empty());
     assert!(handle.video_transition_buses_snapshot().is_empty());

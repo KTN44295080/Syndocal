@@ -290,3 +290,34 @@ The real-file missing → Retry → recovery trial was not rerun; its existing
 isolated evidence remains separately recorded. This checkpoint does not claim
 thumbnail recovery, physical output, device, Mac, signing, publication, or
 product-wide completion.
+
+## Native layer-thumbnail reader follow-up
+
+The native `get_video_layer_thumbnail` worker now reads the published
+`VideoSnapshot` and BPM together through one narrow snapshot-reader call. It
+preserves the same publication pairing used by the renderer while avoiding a
+clone of unrelated `EngineSnapshot` state. Cancellation, renderer ownership,
+layer selection, frame-provider BPM, and fail-closed poison/default behavior
+remain unchanged.
+
+The focused engine reader regression passed `6/6` with one existing synthetic
+benchmark ignored. The native thumbnail regression passed `5/5`, covering
+real PNG pixels and dimensions, real-file video-frame positioning, copy
+isolation/catalog replacement, worker admission, and cancellation. Individual
+rustfmt checks for the changed engine files and `git diff --check` passed.
+
+A fresh maintained-wrapper `pnpm.cmd --dir app tauri build --no-bundle`
+completed with the pinned MSVC 14.44.35207 Build Tools linker. The exact
+checkout executable is 64,579,072 bytes with SHA-256
+`169CEB01730A70CBEB7E6510873DCFB334DEAE4A01A95A402F08968FE7032420`.
+The isolated native probe at
+`target/qa/native-final-validation-20260910-07/native-final-validation.json`
+passed: one maximized responsive `Syndocal` window, Standby ownership with
+lighting/video disabled, snapshot IPC, missing media/layer thumbnail IPC
+rejection with valid native tickets, zero physical-output operations, and
+exact executable/listener cleanup.
+
+The real-file missing → Retry → recovery trial was not rerun; its existing
+isolated evidence remains separately recorded. No PNG was moved. This
+checkpoint does not claim thumbnail recovery, physical output, device, Mac,
+signing, publication, or product-wide completion.

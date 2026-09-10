@@ -76594,12 +76594,12 @@ async fn get_video_layer_thumbnail(
     let engine = state.engine.clone();
     let renderer = Arc::clone(&state.video_preview);
     native_thumbnail_dispatch::run(job, move |cancel| {
-        let snapshot = engine.snapshot();
+        let (video, bpm) = engine.video_layer_thumbnail_snapshot();
         let mut renderer = native_thumbnail_work::lock_renderer(&renderer, cancel)?;
-        renderer.frame_provider_mut().set_bpm(Some(snapshot.clock.bpm));
+        renderer.frame_provider_mut().set_bpm(Some(bpm));
         let cancellation = || cancel.load(Ordering::Acquire);
         renderer
-            .render_layer_preview_cancellable(&snapshot.video, layer_id, width, height, &cancellation)
+            .render_layer_preview_cancellable(&video, layer_id, width, height, &cancellation)
             .map_err(|error| format!("{error:?}"))
     })
     .await

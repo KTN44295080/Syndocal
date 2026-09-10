@@ -4,6 +4,7 @@ use protocol::{
     TimelineFollowRuntimeStatus, TimelineFollowRuntimeStatusSnapshot, TimelineFollowRuntimeSummary,
     TimelineLayerSummary, TimelineLoopRuntimeStatus, VideoClipRuntimeSnapshot,
     VideoLayerTransitionBusSummary, VideoLayerTransitionRuntimeSnapshot, VideoOutputSummary,
+    VideoSnapshot,
 };
 
 /// The runtime-only projection required by the control-plane query adapter.
@@ -91,6 +92,12 @@ impl EngineHandle {
     /// Read Clip Slot transport from the latest complete engine publication.
     pub fn video_clip_runtime_snapshot(&self) -> VideoClipRuntimeSnapshot {
         self.read_snapshot_field(|snapshot| snapshot.video_clip_runtime.clone())
+    }
+
+    /// Read the video image and BPM needed by the native layer-thumbnail
+    /// renderer from one published snapshot without cloning unrelated state.
+    pub fn video_layer_thumbnail_snapshot(&self) -> (VideoSnapshot, f32) {
+        self.read_snapshot_field(|snapshot| (snapshot.video.clone(), snapshot.clock.bpm))
     }
 
     /// Read the last Auto VJ action needed by the manual Program handoff
