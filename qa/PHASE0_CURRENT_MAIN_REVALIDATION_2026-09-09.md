@@ -94,3 +94,12 @@ validators. The release metadata self-test asserts this routing so the gate
 cannot silently lose the source-inventory checks. This remains validation
 wiring only; `AI0-COVERAGE-001` stays Open for the broader non-frontend
 mutation-source inventory and fail-closed classification.
+
+## Backend authority checker gate coverage — based on `a7c63a2770ea84dfd807e94e9df3cc9e9fe471a5`
+
+The existing backend operator and project transaction/authority checkers are now
+also invoked by `check:release:static`. Their existing rejection coverage for
+ownership, approval, stale authority, terminal state, permission, and recovery
+remains authoritative; this change only prevents the checks from being omitted
+from the normal static release gate. No product runtime code or acceptance
+assertion was changed.
