@@ -5071,14 +5071,14 @@ pub(crate) fn issue_timeline_loop_runtime_authority(
     let project = query_state
         .issue_project_mutation_fence_for_window(window.label(), state)
         .map_err(|_| RuntimeCommandErrorV1::new(RuntimeCommandErrorCodeV1::Forbidden))?;
-    let source = state.engine.snapshot();
+    let source = state.engine.control_plane_runtime_snapshot();
     let fence = TimelineLoopRuntimeFenceV1 {
         project,
         domain: TIMELINE_LOOP_RUNTIME_DOMAIN_V1.to_string(),
-        source_runtime_epoch: source.timeline.transport_epoch,
-        source_runtime_generation: source.timeline.transport_generation,
-        source_loop_generation: source.timeline.loop_runtime.generation,
-        source_follow_generation: source.timeline.follow_runtime.generation,
+        source_runtime_epoch: source.timeline_transport_epoch,
+        source_runtime_generation: source.timeline_transport_generation,
+        source_loop_generation: source.timeline_loop_generation,
+        source_follow_generation: source.timeline_follow_generation,
     };
     fence
         .validate()

@@ -54,3 +54,19 @@ CPU, or lock-wait percentage.
 Tick-time snapshot construction, authored/rendered video duplication, deep
 delta comparison, and representative-show writer-wait measurement remain
 separate work. The completion ledger remains unchanged.
+
+## Timeline Loop authority follow-up
+
+The Loop authority issuer now consumes the same narrow runtime reader for its
+transport, loop, and Follow generations. This removes its unrelated full
+snapshot clone while preserving the exact fence fields and validation order.
+
+After that source change, the pinned Windows focused suite remained green:
+`cargo test -p syndocal --release --locked control_plane::tests --
+--test-threads=1` — 30 passed, 0 failed, with no first-party compiler warning.
+The wrapper checker again passed (243 assertions, 27 hostile mutation
+fixtures), and a fresh `tauri build --no-bundle` produced a 64,544,768-byte
+EXE with SHA-256
+`8234529A271A7147A1C1E47FB6595615713CF1041D5B98278F09DCD19CEC8E71`.
+The exact executable launched one responsive `Syndocal` window, was maximized,
+and was terminated and verified absent by exact path.
