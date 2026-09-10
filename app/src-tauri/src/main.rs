@@ -74218,10 +74218,10 @@ where
 fn derive_current_show_spout_outputs(
     state: &AppState,
 ) -> Result<PreparedShowSpoutActivation, String> {
-    let snapshot = state.engine.snapshot();
+    let (outputs, compositions) = state.engine.video_outputs_and_compositions_snapshot();
     let candidate = show_spout_outputs::classify_show_spout_activation_candidate(
-        &snapshot.video.outputs,
-        &snapshot.video.compositions,
+        &outputs,
+        &compositions,
     )
     .map_err(|error| {
         format!(
@@ -74247,12 +74247,13 @@ fn derive_current_show_spout_outputs(
             })
         }
         show_spout_outputs::ShowSpoutActivationCandidate::Absent => {
-            let targets = show_spout_outputs::derive_show_spout_composition_targets(
-                &snapshot.video.compositions,
-            )
-            .map_err(|error| {
-                format!("Show Spout activation requires exact V2 composition targets: {error}")
-            })?;
+            let targets =
+                show_spout_outputs::derive_show_spout_composition_targets(&compositions)
+                    .map_err(|error| {
+                        format!(
+                            "Show Spout activation requires exact V2 composition targets: {error}"
+                        )
+                    })?;
             let background_id = state.engine.allocate_video_output_id();
             let foreground_id = state.engine.allocate_video_output_id();
             let expected = show_spout_outputs::build_show_spout_outputs(
@@ -74274,10 +74275,10 @@ fn derive_current_show_spout_outputs(
 fn validate_current_show_spout_outputs_action(state: &AppState) -> Result<(), String> {
     #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
     {
-        let snapshot = state.engine.snapshot();
+        let (outputs, compositions) = state.engine.video_outputs_and_compositions_snapshot();
         match show_spout_outputs::classify_show_spout_activation_candidate(
-            &snapshot.video.outputs,
-            &snapshot.video.compositions,
+            &outputs,
+            &compositions,
         ) {
             Ok(show_spout_outputs::ShowSpoutActivationCandidate::ExistingEnabled(_))
             | Ok(show_spout_outputs::ShowSpoutActivationCandidate::ExistingDisabled(_)) => {
@@ -74290,13 +74291,11 @@ fn validate_current_show_spout_outputs_action(state: &AppState) -> Result<(), St
                 ))
             }
         }
-        return show_spout_outputs::derive_show_spout_composition_targets(
-            &snapshot.video.compositions,
-        )
-        .map(|_| ())
-        .map_err(|error| {
-            format!("Show Spout activation requires exact V2 composition targets: {error}")
-        });
+        return show_spout_outputs::derive_show_spout_composition_targets(&compositions)
+            .map(|_| ())
+            .map_err(|error| {
+                format!("Show Spout activation requires exact V2 composition targets: {error}")
+            });
     }
     #[cfg(not(all(feature = "spout", target_os = "windows", target_arch = "x86_64")))]
     {
@@ -74311,10 +74310,10 @@ fn validate_current_show_spout_outputs_action(state: &AppState) -> Result<(), St
 fn validate_current_show_spout_outputs_reset_action(state: &AppState) -> Result<(), String> {
     #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
     {
-        let snapshot = state.engine.snapshot();
+        let (outputs, compositions) = state.engine.video_outputs_and_compositions_snapshot();
         return show_spout_outputs::classify_show_spout_reset_candidate(
-            &snapshot.video.outputs,
-            &snapshot.video.compositions,
+            &outputs,
+            &compositions,
         )
         .map(|_| ())
         .map_err(|error| format!("Show Spout reset requires an exact recognized pair: {error}"));
@@ -74482,10 +74481,10 @@ fn confirm_current_show_spout_outputs(
     state: &AppState,
     expected: &show_spout_outputs::ShowSpoutOutputs,
 ) -> Result<show_spout_outputs::ShowSpoutEnsureDecision, String> {
-    let snapshot = state.engine.snapshot();
+    let (outputs, compositions) = state.engine.video_outputs_and_compositions_snapshot();
     show_spout_outputs::classify_show_spout_activation_candidate(
-        &snapshot.video.outputs,
-        &snapshot.video.compositions,
+        &outputs,
+        &compositions,
     )
     .and_then(|current| {
         let decision = match current {

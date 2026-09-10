@@ -577,6 +577,35 @@ This checkpoint does not claim real-file missing → Retry → recovery, video
 display hardware, physical output, device, Mac, signing, publication, or
 product-wide completion.
 
+## Show Spout candidate reader follow-up
+
+The Windows x64 Show Spout candidate, activation validation, reset
+validation, and final confirmation paths now read the authored video outputs
+and compositions through the existing
+`EngineHandle::video_outputs_and_compositions_snapshot()` reader. The exact
+pair/composition validation, allocation boundary, ownership fences,
+fail-closed errors, and physical sender lifecycle remain unchanged; only the
+unrelated public snapshot clone was removed.
+
+The app release `video` regression passed `139/139` with six existing ignored
+tests. The maintained wrapper checker passed `243` assertions with `27`
+hostile mutation fixtures, and `git diff --check` passed.
+
+A fresh maintained-wrapper `pnpm.cmd --dir app tauri build --no-bundle`
+completed with the pinned MSVC 14.44.35207 Build Tools linker. The exact
+checkout executable is 64,768,000 bytes with SHA-256
+`423C13D1FE10360D8B5FA006EF5302B480DD0D5869034B60A4BE300A45F4FFAC`.
+The isolated native probe at
+`target/qa/native-final-validation-20260911-09/native-final-validation.json`
+passed: one maximized responsive `Syndocal` window, Standby ownership with
+lighting/video disabled, snapshot IPC, missing media/layer thumbnail IPC
+rejection with valid native tickets, zero physical-output operations, and
+exact executable/listener cleanup.
+
+This checkpoint does not claim real-file missing → Retry → recovery, actual
+Spout sender/display hardware, physical output, device, Mac, signing,
+publication, or product-wide completion.
+
 ## Video-layer ID reader follow-up
 
 The `set_video_layer_order` and `add_video_composition` admission paths now
