@@ -28719,11 +28719,10 @@ fn operator_feature_fader_command(
     if context.fixture_ids.is_empty() {
         return Err("Operator feature fader requires at least one selected fixture".to_string());
     }
-    let snapshot = engine.snapshot();
+    let fixtures = engine.fixtures_snapshot();
     let mut targets = Vec::with_capacity(context.fixture_ids.len());
     for fixture_id in &context.fixture_ids {
-        let fixture = snapshot
-            .fixtures
+        let fixture = fixtures
             .iter()
             .find(|fixture| fixture.id == *fixture_id)
             .ok_or_else(|| format!("Selected fixture {fixture_id} is no longer patched"))?;
@@ -93249,6 +93248,20 @@ pub(crate) mod tests {
         let function_start = source
             .find("fn set_fixture_patch(")
             .expect("missing set fixture patch command");
+        let next_attribute = source[function_start..]
+            .find("\n#[tauri::command]")
+            .map(|offset| function_start + offset);
+        let body = &source[function_start..next_attribute.unwrap_or(source.len())];
+        assert!(body.contains("fixtures_snapshot"));
+        assert!(!body.contains("engine.snapshot()"));
+    }
+
+    #[test]
+    fn operator_feature_fader_uses_the_narrow_engine_reader() {
+        let source = include_str!("main.rs");
+        let function_start = source
+            .find("fn operator_feature_fader_command(")
+            .expect("missing operator feature fader command");
         let next_attribute = source[function_start..]
             .find("\n#[tauri::command]")
             .map(|offset| function_start + offset);

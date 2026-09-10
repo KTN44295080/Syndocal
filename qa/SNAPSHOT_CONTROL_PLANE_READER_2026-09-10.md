@@ -829,19 +829,22 @@ test-only; production no longer clones unrelated project and runtime
 collections for this read-only query.
 
 The engine snapshot-reader regression passed `6/6` with two existing ignored
-tests. The fixture-profile and fixture-patch regression passed `49/49`,
-covering the existing profile conversion, DMX self-exclusion/conflict and
-invalid-value rejection behavior plus all three narrow-reader command
-contracts. The maintained wrapper checker passed `243` assertions with `27`
+tests. The fixture-profile and fixture-patch regression passed `49/49`.
+The operator feature-fader regression passed `2/2`.
+Together these regressions cover the existing profile conversion, DMX
+self-exclusion/conflict and invalid-value rejection behavior, existing
+operator batch-command behavior,
+and all four narrow-reader command contracts. The maintained wrapper checker
+passed `243` assertions with `27`
 hostile mutation fixtures. The changed main source remained formatted in the
 targeted check; the repository-wide check still reports pre-existing formatting
 differences in `control_plane_runtime.rs` and `fixture_profile_contract.rs`.
 `git diff --check` passed. The release build completed with the pinned MSVC
 14.44.35207 Build Tools linker without warnings. The exact checkout executable
 is 64,778,752 bytes with SHA-256
-`24048A8066CE7816D81EF13CBCCABF1C19BACC6532F2710C911A1E80AE97980E`.
+`2CD5E1B98A14AB3F877D85CDB7A57F186EA03F58F7DE9653A7968915DA093316`.
 The isolated native probe at
-`target/qa/native-final-validation-20260911-19/native-final-validation.json`
+`target/qa/native-final-validation-20260911-20/native-final-validation.json`
 passed: one maximized responsive `Syndocal` window, Standby ownership with
 lighting/video disabled, snapshot IPC, missing media/layer thumbnail IPC
 rejection with valid native tickets, zero physical-output operations, and
@@ -854,7 +857,10 @@ publication, or product-wide completion.
 The adjacent `use_fixture_profile` command now uses the same fixture-only
 reader when rebuilding a selected patched fixture as a memory profile. Its
 profile conversion and missing-fixture rejection behavior are unchanged.
-The focused app source contract covers both narrow-reader command paths.
+The `set_fixture_patch` validation and operator feature-fader command also use
+the fixture-only reader; DMX conflict checks and generated batch commands are
+unchanged. The focused app source contract covers all four narrow-reader
+command paths.
 
 ## Video-layer ID reader follow-up
 
