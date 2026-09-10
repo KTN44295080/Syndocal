@@ -42801,14 +42801,14 @@ fn take_video_clip(
             preview_position_ms: Some(preview_take_state.position_ms),
             preview_speed: Some(preview_take_state.speed),
         });
-    let published = state.engine.snapshot();
+    let published_auto_vj_last_action = state.engine.auto_vj_last_action();
     let mut program_handoff = state
         .program_audio_handoff
         .state
         .lock()
         .map_err(|_| "Program audio handoff lock was poisoned".to_string())?;
     if result.is_ok() {
-        program_handoff.suppress_through(published.video.auto_vj.status.last_action.as_ref());
+        program_handoff.suppress_through(published_auto_vj_last_action.as_ref());
         if let Some(plan) = program_handoff.manual_take_plan(layer_id) {
             state
                 .program_audio_handoff
@@ -42821,15 +42821,11 @@ fn take_video_clip(
             .desired_layer_id
             .or(program_handoff.owned_layer_id)
             .or_else(|| {
-                published
-                    .video
-                    .auto_vj
-                    .status
-                    .last_action
+                published_auto_vj_last_action
                     .as_ref()
                     .map(|action| action.layer_id)
             });
-        program_handoff.suppress_through(published.video.auto_vj.status.last_action.as_ref());
+        program_handoff.suppress_through(published_auto_vj_last_action.as_ref());
         if let Some(recovery_layer_id) = recovery_layer_id {
             if let Some(plan) = program_handoff.manual_take_plan(recovery_layer_id) {
                 state

@@ -253,3 +253,40 @@ zero matching processes.
 
 This remains a local Windows native safety-gate regression. It does not claim
 USB RDM hardware, serial-DMX output, venue, or product-wide acceptance.
+
+## Auto VJ handoff reader follow-up
+
+The manual `take_video_clip` handoff now reads only the published
+`AutoVjAction` required to suppress an already-observed automatic audio
+handoff. It no longer clones the complete public engine snapshot after the
+visual Take publication. The existing action identity, recovery-layer choice,
+and poison/default behavior are unchanged; no audio device is opened by this
+reader change.
+
+The focused engine reader regression passed `6/6` with one existing synthetic
+benchmark ignored. The app Audio playback regression passed `86/86` with no
+ignored tests. The maintained wrapper checker passed `243` assertions with
+`27` hostile mutation fixtures; release self-tests passed the metadata (`137`),
+ASIO packaging (`169`), Windows candidate extractor (`43`), materialization
+(`4`), Windows release artifact (`144`), and strict JSON (`130`) assertion
+groups. `git diff --check` passed. Individual rustfmt checks for the changed
+engine files passed; the repository-wide `cargo fmt --all -- --check` still
+reports two pre-existing formatting differences in
+`app/src-tauri/src/control_plane_runtime.rs` and
+`app/src-tauri/src/fixture_profile_contract.rs`, outside this change.
+
+A fresh maintained-wrapper `pnpm.cmd --dir app tauri build --no-bundle`
+completed with the pinned MSVC 14.44.35207 Build Tools linker. The exact
+checkout executable is 64,580,608 bytes with SHA-256
+`EBECD9A62D88C1EF05B486AE436AB0FBE693A1A9164620C1496F319A82AA48E7`.
+The isolated native probe at
+`target/qa/native-final-validation-20260910-06/native-final-validation.json`
+passed: one maximized responsive `Syndocal` window, Standby ownership with
+lighting/video disabled, snapshot IPC, missing media/layer thumbnail IPC
+rejection with valid native tickets, zero physical-output operations, and
+exact executable/listener cleanup.
+
+The real-file missing → Retry → recovery trial was not rerun; its existing
+isolated evidence remains separately recorded. This checkpoint does not claim
+thumbnail recovery, physical output, device, Mac, signing, publication, or
+product-wide completion.

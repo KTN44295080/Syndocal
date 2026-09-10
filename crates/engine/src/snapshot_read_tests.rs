@@ -1,7 +1,7 @@
 use super::allocator_test_handle;
 use crate::{EngineHandle, TimelineTransportAuthority};
 use protocol::{
-    CompositionSummary, DmxOutputConfig, DmxOutputProtocol, EngineSnapshot,
+    AutoVjAction, CompositionSummary, DmxOutputConfig, DmxOutputProtocol, EngineSnapshot,
     TimelineFollowRuntimeStatusSnapshot, TimelineLayerKind, TimelineLayerSummary,
     VideoClipLayerRuntimeSummary, VideoClipTakeDuration, VideoClipTakeKind,
     VideoLayerTransitionBusRuntimeSummary, VideoLayerTransitionBusSummary,
@@ -107,6 +107,18 @@ fn publication(token: u64) -> EngineSnapshot {
         timeline_layer_ids: Vec::new(),
         output_ids: vec![token],
     });
+    snapshot.video.auto_vj.status.last_action = Some(AutoVjAction {
+        sequence: token,
+        boundary_index: token + 1,
+        beat: token + 2,
+        layer_id: token + 3,
+        transition_ms: 400,
+        selection_token: token + 4,
+        seed: token + 5,
+        show_revision: token + 6,
+        trigger: protocol::AutoVjTrigger::ClockBoundary,
+        live_audio_feature_sequence: Some(token + 7),
+    });
     snapshot
         .video_transition_runtime
         .buses
@@ -151,6 +163,10 @@ fn assert_same_read_model(handle: &EngineHandle) {
     assert_eq!(
         handle.video_clip_runtime_snapshot(),
         expected.video_clip_runtime
+    );
+    assert_eq!(
+        handle.auto_vj_last_action(),
+        expected.video.auto_vj.status.last_action
     );
     assert_eq!(
         handle.video_layer_transition_runtime_snapshot(),
@@ -271,6 +287,7 @@ fn poisoned_publication_preserves_public_snapshot_defaults() {
         EngineSnapshot::default().timeline.transport_epoch
     );
     assert!(handle.video_clip_runtime_snapshot().layers.is_empty());
+    assert_eq!(handle.auto_vj_last_action(), None);
     assert!(handle.video_outputs_snapshot().is_empty());
     assert!(handle.video_transition_buses_snapshot().is_empty());
     assert_eq!(

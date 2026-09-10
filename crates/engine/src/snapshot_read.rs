@@ -1,6 +1,6 @@
 use crate::{EngineHandle, TimelineTransportAuthority};
 use protocol::{
-    CompositionSummary, DmxOutputConfig, EngineSnapshot, StageObjectSummary,
+    AutoVjAction, CompositionSummary, DmxOutputConfig, EngineSnapshot, StageObjectSummary,
     TimelineFollowRuntimeStatus, TimelineFollowRuntimeStatusSnapshot, TimelineFollowRuntimeSummary,
     TimelineLayerSummary, TimelineLoopRuntimeStatus, VideoClipRuntimeSnapshot,
     VideoLayerTransitionBusSummary, VideoLayerTransitionRuntimeSnapshot, VideoOutputSummary,
@@ -91,6 +91,12 @@ impl EngineHandle {
     /// Read Clip Slot transport from the latest complete engine publication.
     pub fn video_clip_runtime_snapshot(&self) -> VideoClipRuntimeSnapshot {
         self.read_snapshot_field(|snapshot| snapshot.video_clip_runtime.clone())
+    }
+
+    /// Read the last Auto VJ action needed by the manual Program handoff
+    /// without cloning the complete public video/project snapshot.
+    pub fn auto_vj_last_action(&self) -> Option<AutoVjAction> {
+        self.read_snapshot_field(|snapshot| snapshot.video.auto_vj.status.last_action.clone())
     }
 
     /// Read Layer Transition Bus state from the latest complete publication.
