@@ -103,3 +103,23 @@ stays Open for every relevant Engine, Remote, MIDI/OSC, shortcut,
 audio-analysis/BPM, native-window, and UI mutation source to be mechanically
 classified and fail-closed. The real-file thumbnail recovery trial was not
 rerun.
+
+## Current-main invoke inventory revalidation — `c3270fd48ef0614fb438f4a31a95fed821b83db3`
+
+The bounded AI0 checks were rerun after the release-static gate wiring. No
+inventory count, admission hash, routing assertion, or coverage claim was
+changed. The completion ledger remains `50 Open + 8 Deferred`.
+
+| Check | Result |
+| --- | --- |
+| `pnpm.cmd --dir app run check:frontend-command-routing` | PASS — renderer 133, server-authoritative 31, raw 28, facade 464 |
+| `pnpm.cmd --dir app run check:frontend-invokes` | PASS — frontend Tauri invoke inventory exact: 457 commands |
+| `node app/scripts/check-tauri-admission-inventory.mjs` | PASS — 516 exact commands, SHA-256 `5120894f36feb82ac58fffd4db20739d80ae1b1a1c556fc95838a1708cbb8eea`, 18 negative fixtures rejected |
+| `git diff --check` | PASS |
+
+This is still bounded source-inventory evidence. `AI0-COVERAGE-001` remains
+Open because Engine, Remote, MIDI/OSC, shortcut, audio-analysis/BPM,
+native-window, and all relevant UI mutation sources are not thereby proven to
+be completely classified and fail-closed. The real-file thumbnail recovery,
+external-client, physical-output, Mac, signing, publication, and venue gates
+were not rerun or claimed.
