@@ -2,8 +2,8 @@ use super::allocator_test_handle;
 use crate::{EngineHandle, TimelineTransportAuthority};
 use protocol::{
     AutoVjAction, CompositionSummary, DmxOutputConfig, DmxOutputProtocol, EngineSnapshot,
-    TimelineFollowRuntimeStatusSnapshot, TimelineLayerKind, TimelineLayerSummary,
-    VideoClipLayerRuntimeSummary, VideoClipTakeDuration, VideoClipTakeKind,
+    StageObjectKind, StageObjectSummary, TimelineFollowRuntimeStatusSnapshot, TimelineLayerKind,
+    TimelineLayerSummary, VideoClipLayerRuntimeSummary, VideoClipTakeDuration, VideoClipTakeKind,
     VideoLayerTransitionBusRuntimeSummary, VideoLayerTransitionBusSummary,
     VideoLayerTransitionCurve, VideoLayerTransitionTarget, VideoOutputKind, VideoOutputSummary,
     VideoTransitionBusId,
@@ -36,6 +36,17 @@ fn publication(token: u64) -> EngineSnapshot {
         protocol: DmxOutputProtocol::ArtNet,
         target_ip: format!("198.51.100.{token}"),
         ..DmxOutputConfig::default()
+    }];
+    snapshot.stage_objects = vec![StageObjectSummary {
+        id: token,
+        label: format!("stage object {token}"),
+        kind: StageObjectKind::Screen,
+        x: token as f32,
+        z: -1.0,
+        width: 2.0,
+        depth: 0.5,
+        rotation_deg: 0.0,
+        color: Some("#55ccff".to_string()),
     }];
     snapshot
         .video_clip_runtime
@@ -169,6 +180,7 @@ fn assert_same_read_model(handle: &EngineHandle) {
         handle.video_layer_thumbnail_snapshot(),
         (expected.video.clone(), expected.clock.bpm)
     );
+    assert_eq!(handle.stage_objects_snapshot(), expected.stage_objects);
     assert_eq!(
         handle.auto_vj_last_action(),
         expected.video.auto_vj.status.last_action
@@ -292,6 +304,7 @@ fn poisoned_publication_preserves_public_snapshot_defaults() {
         EngineSnapshot::default().timeline.transport_epoch
     );
     assert!(handle.video_clip_runtime_snapshot().layers.is_empty());
+    assert!(handle.stage_objects_snapshot().is_empty());
     let default_snapshot = EngineSnapshot::default();
     assert_eq!(
         handle.video_layer_thumbnail_snapshot(),

@@ -346,3 +346,30 @@ exact executable/listener cleanup.
 This is a local reader and transaction regression only. No physical Spout
 sender was enabled, and this checkpoint does not claim physical output,
 device, Mac, signing, publication, or product-wide completion.
+
+## Stage Map export reader follow-up
+
+Standalone Stage Map preset export now reads only the authored
+`stage_objects` collection through `EngineHandle::stage_objects_snapshot()`.
+The exported schema, object ordering, validation, save-dialog behavior, and
+the transactional Stage Map mutation path are unchanged; unrelated published
+project and runtime collections are no longer cloned for this export.
+
+The focused engine snapshot-reader regression passed `6/6` with one existing
+synthetic benchmark ignored, including published-value, replacement, and
+poison/default checks for the new reader. Changed engine files passed the
+individual rustfmt check and `git diff --check` passed.
+
+A fresh maintained-wrapper `pnpm.cmd --dir app tauri build --no-bundle`
+completed with the pinned MSVC 14.44.35207 Build Tools linker. The exact
+checkout executable is 64,573,440 bytes with SHA-256
+`73246D69753EA9D0BFF237C1AF2026F9E98EDE2F73EE3E697EA604923F06FE31`.
+The isolated native probe at
+`target/qa/native-final-validation-20260910-09/native-final-validation.json`
+passed: one maximized responsive `Syndocal` window, Standby ownership with
+lighting/video disabled, snapshot IPC, missing media/layer thumbnail IPC
+rejection with valid native tickets, zero physical-output operations, and
+exact executable/listener cleanup.
+
+This checkpoint does not claim file-dialog interaction, physical output,
+device, Mac, signing, publication, or product-wide completion.

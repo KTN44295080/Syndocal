@@ -171,6 +171,12 @@ impl EngineHandle {
         })
     }
 
+    /// Read authored stage objects for standalone Stage Map export without
+    /// cloning unrelated public and runtime collections.
+    pub fn stage_objects_snapshot(&self) -> Vec<StageObjectSummary> {
+        self.read_snapshot_field(|snapshot| snapshot.stage_objects.clone())
+    }
+
     /// Read the published Timeline playing flag without cloning unrelated
     /// public project and runtime collections.
     pub fn timeline_playing(&self) -> bool {

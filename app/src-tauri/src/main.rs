@@ -70208,7 +70208,7 @@ fn save_stage_map_preset_file(
         preset: StageMapPresetSummary {
             label: label.clone(),
             config,
-            stage_objects: Some(state.engine.snapshot().stage_objects),
+            stage_objects: Some(state.engine.stage_objects_snapshot()),
         },
     };
     let Some(path) = parented_file_dialog(&window)
