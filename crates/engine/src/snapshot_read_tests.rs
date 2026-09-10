@@ -2,8 +2,9 @@ use super::allocator_test_handle;
 use crate::{EngineHandle, TimelineTransportAuthority};
 use protocol::{
     AutoVjAction, CompositionSummary, DmxOutputConfig, DmxOutputProtocol, EngineSnapshot,
-    StageObjectKind, StageObjectSummary, TimelineFollowRuntimeStatusSnapshot, TimelineLayerKind,
-    TimelineLayerSummary, VideoClipLayerRuntimeSummary, VideoClipTakeDuration, VideoClipTakeKind,
+    PatchedFixtureSummary, Rotation3, StageObjectKind, StageObjectSummary,
+    TimelineFollowRuntimeStatusSnapshot, TimelineLayerKind, TimelineLayerSummary, Vec3,
+    VideoClipLayerRuntimeSummary, VideoClipTakeDuration, VideoClipTakeKind,
     VideoLayerTransitionBusRuntimeSummary, VideoLayerTransitionBusSummary,
     VideoLayerTransitionCurve, VideoLayerTransitionTarget, VideoOutputKind, VideoOutputSummary,
     VideoTransitionBusId,
@@ -47,6 +48,27 @@ fn publication(token: u64) -> EngineSnapshot {
         depth: 0.5,
         rotation_deg: 0.0,
         color: Some("#55ccff".to_string()),
+    }];
+    snapshot.fixtures = vec![PatchedFixtureSummary {
+        id: token,
+        label: format!("fixture {token}"),
+        profile_source_path: String::new(),
+        profile_name: "test".to_string(),
+        manufacturer: "test".to_string(),
+        mode_name: "test".to_string(),
+        universe: 1,
+        address: 1,
+        group_ids: vec![format!("group-{token}"), "shared-group".to_string()],
+        position: Vec3::default(),
+        rotation: Rotation3::default(),
+        geometries: Vec::new(),
+        controls: Vec::new(),
+        stage_layout: None,
+        attribute_values: Vec::new(),
+        limits: protocol::FixtureLimits::default(),
+        highlighted: false,
+        soloed: false,
+        parked: false,
     }];
     snapshot
         .video_clip_runtime
@@ -182,6 +204,14 @@ fn assert_same_read_model(handle: &EngineHandle) {
     );
     assert_eq!(handle.stage_objects_snapshot(), expected.stage_objects);
     assert_eq!(
+        handle.fixture_group_ids_snapshot(),
+        expected
+            .fixtures
+            .iter()
+            .map(|fixture| fixture.group_ids.clone())
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
         handle.auto_vj_last_action(),
         expected.video.auto_vj.status.last_action
     );
@@ -305,6 +335,7 @@ fn poisoned_publication_preserves_public_snapshot_defaults() {
     );
     assert!(handle.video_clip_runtime_snapshot().layers.is_empty());
     assert!(handle.stage_objects_snapshot().is_empty());
+    assert!(handle.fixture_group_ids_snapshot().is_empty());
     let default_snapshot = EngineSnapshot::default();
     assert_eq!(
         handle.video_layer_thumbnail_snapshot(),

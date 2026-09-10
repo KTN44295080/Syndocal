@@ -177,6 +177,17 @@ impl EngineHandle {
         self.read_snapshot_field(|snapshot| snapshot.stage_objects.clone())
     }
 
+    /// Read only fixture group memberships for group-scoped validation.
+    pub fn fixture_group_ids_snapshot(&self) -> Vec<Vec<String>> {
+        self.read_snapshot_field(|snapshot| {
+            snapshot
+                .fixtures
+                .iter()
+                .map(|fixture| fixture.group_ids.clone())
+                .collect()
+        })
+    }
+
     /// Read the published Timeline playing flag without cloning unrelated
     /// public project and runtime collections.
     pub fn timeline_playing(&self) -> bool {

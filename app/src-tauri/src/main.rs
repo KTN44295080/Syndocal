@@ -27901,9 +27901,8 @@ fn set_group_fixture_limits(
     validate_fixture_limits(&limits)?;
     let limits = normalize_fixture_limits(limits);
     let group_id = normalize_control_group_id(group_id)?;
-    if !state.engine.snapshot().fixtures.iter().any(|fixture| {
-        fixture
-            .group_ids
+    if !state.engine.fixture_group_ids_snapshot().iter().any(|group_ids| {
+        group_ids
             .iter()
             .any(|fixture_group_id| group_matches(fixture_group_id, &group_id))
     }) {

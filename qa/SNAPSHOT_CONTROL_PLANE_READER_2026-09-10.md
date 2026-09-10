@@ -286,6 +286,34 @@ lighting/video disabled, snapshot IPC, missing media/layer thumbnail IPC
 rejection with valid native tickets, zero physical-output operations, and
 exact executable/listener cleanup.
 
+## Fixture-group validation reader follow-up
+
+`set_group_fixture_limits` now reads only the published fixture group-ID
+lists through `EngineHandle::fixture_group_ids_snapshot()`. The existing
+group normalization/matching and missing-group rejection remain in the app
+adapter; poison/default behavior is fail-closed as an empty membership set.
+Fixture payloads and unrelated public/runtime collections are no longer
+cloned for this validation.
+
+The focused engine snapshot-reader regression passed `6/6` with one existing
+synthetic benchmark ignored, including published-value, replacement, and
+poison/default checks for the group-membership reader. Changed engine files
+passed the individual rustfmt check and `git diff --check` passed.
+
+A fresh maintained-wrapper `pnpm.cmd --dir app tauri build --no-bundle`
+completed with the pinned MSVC 14.44.35207 Build Tools linker. The exact
+checkout executable is 64,563,200 bytes with SHA-256
+`769D058089319337B2742ABF62BE981BA5CE9C0ACEB69854755239C174A0AA3E`.
+The isolated native probe at
+`target/qa/native-final-validation-20260911-01/native-final-validation.json`
+passed: one maximized responsive `Syndocal` window, Standby ownership with
+lighting/video disabled, snapshot IPC, missing media/layer thumbnail IPC
+rejection with valid native tickets, zero physical-output operations, and
+exact executable/listener cleanup.
+
+This checkpoint does not claim physical output, device, Mac, signing,
+publication, or product-wide completion.
+
 The real-file missing → Retry → recovery trial was not rerun; its existing
 isolated evidence remains separately recorded. This checkpoint does not claim
 thumbnail recovery, physical output, device, Mac, signing, publication, or
