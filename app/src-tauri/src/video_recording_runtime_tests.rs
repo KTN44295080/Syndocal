@@ -235,7 +235,7 @@ fn recording_audio_inputs_select_only_playing_monitored_layers_on_output() {
         },
     )]);
 
-    let inputs = recording_audio_inputs(&snapshot, 9, &sources);
+    let inputs = recording_audio_inputs(&snapshot.video, 9, &sources);
 
     assert_eq!(inputs.len(), 1);
     assert_eq!(inputs[0].position_ms, 2_500);

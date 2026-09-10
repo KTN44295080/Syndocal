@@ -76359,9 +76359,8 @@ fn start_video_output_recording(
     frame_rate: Option<u32>,
     include_audio: Option<bool>,
 ) -> Result<Option<VideoRecordingStatus>, String> {
-    let snapshot = state.engine.snapshot();
+    let snapshot = state.engine.video_snapshot();
     let output = snapshot
-        .video
         .outputs
         .iter()
         .find(|output| output.id == output_id)
@@ -76449,12 +76448,11 @@ fn start_video_output_recording(
 }
 
 fn recording_audio_inputs(
-    snapshot: &EngineSnapshot,
+    snapshot: &protocol::VideoSnapshot,
     output_id: VideoOutputId,
     sources: &HashMap<VideoLayerId, MediaAudioSourceConfig>,
 ) -> Vec<RecordingAudioInput> {
     let Some(output) = snapshot
-        .video
         .outputs
         .iter()
         .find(|output| output.id == output_id)
@@ -76462,7 +76460,6 @@ fn recording_audio_inputs(
         return Vec::new();
     };
     let layer_ids = snapshot
-        .video
         .compositions
         .iter()
         .find(|composition| composition.id == output.composition_id)
@@ -76481,7 +76478,6 @@ fn recording_audio_inputs(
                 return None;
             }
             let layer = snapshot
-                .video
                 .layers
                 .iter()
                 .find(|layer| layer.id == *layer_id)?;
