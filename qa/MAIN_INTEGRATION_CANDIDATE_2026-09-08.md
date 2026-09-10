@@ -307,3 +307,35 @@ This is local source/build/test evidence only. It does not claim native window,
 physical output, external-client, Mac, signing, publication, or product-wide
 completion. The Actions runs for this SHA were observed but not awaited or used
 as a local test substitute.
+
+## 2026-09-10 release checker signature-fixture repair
+
+The existing `check:release:self-test` exposed a real fixture regression before
+any production-code change: the Tauri-signer public key and signature fixture
+had been changed while the signed fixture payload remained unchanged. The
+cryptographic gate correctly rejected the mismatched `windows-x86_64` payload;
+the verifier, signature assertions, and rejection paths were not weakened.
+
+The owned repair restores the public-key/signature pair that matches the
+tracked fixture payload. Only these fixture files changed:
+
+- `app/scripts/fixtures/release/tauri-signer-public.key`
+- `app/scripts/fixtures/release/Syndocal_1.2.0-rc.1_tauri-signer-fixture.bin.sig`
+
+The exact pinned FFmpeg staging source
+`C:\SyndocalQA\ffmpeg-8.1.2-full_build-shared` was checked against all seven
+inventory byte sizes and SHA-256 values before staging; the staging directory
+was not added to Git.
+
+| Check | Result |
+| --- | --- |
+| `pnpm --dir app install --frozen-lockfile` | PASS; lockfile unchanged |
+| `pnpm --dir app run check:release:self-test` | PASS — release metadata 128 assertion groups, ASIO 169, Windows candidate extractor 43, materialization 4, Windows artifact 144, strict JSON 130 |
+| `pnpm --dir app run check:release` | PASS — native inventory 516, 18 negative fixtures, all chained static gates, release metadata `1.2.0-alpha.69` |
+| `git diff --check` | PASS |
+
+The initial cryptographic rejection and the missing-staged-runtime prerequisite
+remain part of the local execution history; neither was converted into a
+success by changing an assertion. This checkpoint is checker-fixture evidence
+only. It does not claim a new EXE, native-window, physical-output,
+external-client, Mac, signing, publication, or product-wide completion.
