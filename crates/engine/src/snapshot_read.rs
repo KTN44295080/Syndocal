@@ -1,12 +1,12 @@
 use crate::{EngineHandle, TimelineTransportAuthority};
 use protocol::{
-    AutoVjAction, ClockSnapshot, CompositionSummary, CueId, DmxOutputConfig, EngineSnapshot,
-    EngineTelemetry, PatchedFixtureSummary, StageObjectSummary, TimelineCueEventSummary,
-    TimelineEventId, TimelineFollowRuntimeStatus, TimelineFollowRuntimeStatusSnapshot,
-    TimelineFollowRuntimeSummary, TimelineLayerSummary, TimelineLoopRuntimeStatus,
-    VideoClipRuntimeSnapshot, VideoLayerId, VideoLayerState, VideoLayerTransitionBusSummary,
-    VideoLayerTransitionRuntimeSnapshot, VideoOutputId, VideoOutputSummary, VideoSnapshot,
-    VideoSourceSummary,
+    AutoVjAction, AutomationId, ClockSnapshot, CompositionSummary, CueId, DmxOutputConfig,
+    EngineSnapshot, EngineTelemetry, PatchedFixtureSummary, StageObjectSummary,
+    TimelineCueEventSummary, TimelineEventId, TimelineFollowRuntimeStatus,
+    TimelineFollowRuntimeStatusSnapshot, TimelineFollowRuntimeSummary, TimelineLayerSummary,
+    TimelineLoopRuntimeStatus, VideoClipRuntimeSnapshot, VideoLayerId, VideoLayerState,
+    VideoLayerTransitionBusSummary, VideoLayerTransitionRuntimeSnapshot, VideoOutputId,
+    VideoOutputSummary, VideoSnapshot, VideoSourceSummary,
 };
 
 /// The runtime-only projection required by the control-plane query adapter.
@@ -275,6 +275,26 @@ impl EngineHandle {
                     .collect(),
                 snapshot.timeline.events.clone(),
             )
+        })
+    }
+
+    /// Read authored DMX and video automation IDs for enable/disable
+    /// admission without cloning unrelated timeline state.
+    pub fn timeline_automation_ids_snapshot(&self) -> Vec<AutomationId> {
+        self.read_snapshot_field(|snapshot| {
+            snapshot
+                .timeline
+                .automations
+                .iter()
+                .map(|automation| automation.id)
+                .chain(
+                    snapshot
+                        .timeline
+                        .video_automations
+                        .iter()
+                        .map(|automation| automation.id),
+                )
+                .collect()
         })
     }
 

@@ -35534,18 +35534,11 @@ fn set_timeline_automation_enabled(
     automation_id: AutomationId,
     enabled: bool,
 ) -> Result<(), String> {
-    let snapshot = state.engine.snapshot();
-    let found = snapshot
-        .timeline
-        .automations
-        .iter()
-        .any(|automation| automation.id == automation_id)
-        || snapshot
-            .timeline
-            .video_automations
-            .iter()
-            .any(|automation| automation.id == automation_id);
-    if !found {
+    if !state
+        .engine
+        .timeline_automation_ids_snapshot()
+        .contains(&automation_id)
+    {
         return Err(format!("Automation {automation_id} was not found"));
     }
     state
@@ -93363,6 +93356,20 @@ pub(crate) mod tests {
             .map(|offset| function_start + offset);
         let body = &source[function_start..next_attribute.unwrap_or(source.len())];
         assert!(body.contains("timeline_scene_block_admission_snapshot"));
+        assert!(!body.contains("engine.snapshot()"));
+    }
+
+    #[test]
+    fn set_timeline_automation_enabled_uses_the_narrow_engine_reader() {
+        let source = include_str!("main.rs");
+        let function_start = source
+            .find("fn set_timeline_automation_enabled(")
+            .expect("missing set timeline automation enabled command");
+        let next_attribute = source[function_start..]
+            .find("\n#[tauri::command]")
+            .map(|offset| function_start + offset);
+        let body = &source[function_start..next_attribute.unwrap_or(source.len())];
+        assert!(body.contains("timeline_automation_ids_snapshot"));
         assert!(!body.contains("engine.snapshot()"));
     }
 

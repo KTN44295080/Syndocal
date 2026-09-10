@@ -264,6 +264,22 @@ fn assert_same_read_model(handle: &EngineHandle) {
         )
     );
     assert_eq!(
+        handle.timeline_automation_ids_snapshot(),
+        expected
+            .timeline
+            .automations
+            .iter()
+            .map(|automation| automation.id)
+            .chain(
+                expected
+                    .timeline
+                    .video_automations
+                    .iter()
+                    .map(|automation| automation.id),
+            )
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
         handle.fixture_group_ids_snapshot(),
         expected
             .fixtures
