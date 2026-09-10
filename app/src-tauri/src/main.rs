@@ -34518,27 +34518,20 @@ fn set_cue_metadata(state: State<'_, AppState>, args: FlatInvokeArgs<Value>) -> 
         .map(|group_id| normalize_group_id(&group_id))
         .transpose()?;
     validate_cue_authored_beats(authored_beats)?;
-    let snapshot = state.engine.snapshot();
-    if !snapshot.cues.iter().any(|cue| cue.id == cue_id) {
-        return Err(format!("Cue {cue_id} was not found"));
-    }
-    if snapshot.cues.iter().any(|cue| {
-        cue.id != cue_id
-            && snapshot
-                .cues
-                .iter()
-                .find(|candidate| candidate.id == cue_id)
-                .map(|current| current.cue_list_id == cue.cue_list_id)
-                .unwrap_or(false)
-            && cue.cue_number == cue_number
-    }) {
+    let admission = state.engine.cue_metadata_admission_snapshot(cue_id);
+    let cue = admission
+        .cue
+        .as_ref()
+        .ok_or_else(|| format!("Cue {cue_id} was not found"))?;
+    if admission
+        .same_bank_numbers
+        .iter()
+        .any(|(candidate_id, candidate_number)| {
+            *candidate_id != cue_id && candidate_number == &cue_number
+        })
+    {
         return Err(format!("Cue number '{cue_number}' is already in use"));
     }
-    let cue = snapshot
-        .cues
-        .iter()
-        .find(|cue| cue.id == cue_id)
-        .ok_or_else(|| format!("Cue {cue_id} was not found"))?;
     validate_cue_parts_for_summary(cue, &parts)?;
     validate_cue_mib_fixture_ids(cue, &mib_fixture_ids)?;
     state.engine.set_cue_details_published(
@@ -93502,6 +93495,20 @@ pub(crate) mod tests {
             .map(|offset| function_start + offset);
         let body = &source[function_start..next_function.unwrap_or(source.len())];
         assert!(body.contains("dmx_outputs_and_output_snapshot"));
+        assert!(!body.contains("engine.snapshot()"));
+    }
+
+    #[test]
+    fn cue_metadata_command_uses_the_narrow_engine_reader() {
+        let source = include_str!("main.rs");
+        let function_start = source
+            .find("fn set_cue_metadata(")
+            .expect("missing set_cue_metadata command");
+        let next_attribute = source[function_start..]
+            .find("\n#[tauri::command]")
+            .map(|offset| function_start + offset);
+        let body = &source[function_start..next_attribute.unwrap_or(source.len())];
+        assert!(body.contains("cue_metadata_admission_snapshot"));
         assert!(!body.contains("engine.snapshot()"));
     }
 

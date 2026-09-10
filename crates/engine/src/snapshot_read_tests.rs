@@ -1,4 +1,5 @@
 use super::allocator_test_handle;
+use crate::snapshot_read::CueMetadataAdmissionSnapshot;
 use crate::{EngineHandle, EngineTelemetrySnapshot, TimelineTransportAuthority};
 use protocol::{
     AutoVjAction, CompositionSummary, DmxOutputConfig, DmxOutputProtocol, EngineSnapshot,
@@ -378,6 +379,13 @@ fn assert_same_read_model(handle: &EngineHandle) {
     }
     assert!(!handle.node_graph_exists(999_999));
     assert_eq!(
+        handle.cue_metadata_admission_snapshot(999_999),
+        CueMetadataAdmissionSnapshot {
+            cue: None,
+            same_bank_numbers: Vec::new(),
+        }
+    );
+    assert_eq!(
         handle.fixture_group_ids_snapshot(),
         expected
             .fixtures
@@ -443,6 +451,50 @@ fn assert_same_read_model(handle: &EngineHandle) {
         (expected.dmx_outputs, expected.output)
     );
     assert_eq!(handle.timeline_playing(), expected.timeline.playing);
+}
+
+#[test]
+fn cue_metadata_admission_reader_keeps_one_bank_generation() {
+    let mut snapshot = publication(7);
+    snapshot.cues = vec![
+        protocol::CueSummary {
+            id: 7,
+            cue_list_id: 2,
+            cue_number: "10".to_string(),
+            label: "Cue 10".to_string(),
+            ..protocol::CueSummary::default()
+        },
+        protocol::CueSummary {
+            id: 8,
+            cue_list_id: 2,
+            cue_number: "11".to_string(),
+            label: "Cue 11".to_string(),
+            ..protocol::CueSummary::default()
+        },
+        protocol::CueSummary {
+            id: 9,
+            cue_list_id: 3,
+            cue_number: "10".to_string(),
+            label: "Other bank cue 10".to_string(),
+            ..protocol::CueSummary::default()
+        },
+    ];
+    let expected = snapshot.cues[0].clone();
+    let published = Arc::new(RwLock::new(snapshot));
+    let handle = allocator_test_handle(Arc::clone(&published));
+    let admission = handle.cue_metadata_admission_snapshot(7);
+    assert_eq!(admission.cue, Some(expected));
+    assert_eq!(
+        admission.same_bank_numbers,
+        vec![(7, "10".to_string()), (8, "11".to_string())]
+    );
+    assert_eq!(
+        handle.cue_metadata_admission_snapshot(999_999),
+        CueMetadataAdmissionSnapshot {
+            cue: None,
+            same_bank_numbers: Vec::new(),
+        }
+    );
 }
 
 #[test]

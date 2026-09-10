@@ -1,6 +1,6 @@
 use crate::{EngineHandle, TimelineTransportAuthority};
 use protocol::{
-    AutoVjAction, AutomationId, ClockSnapshot, CompositionSummary, CueId, CueListId,
+    AutoVjAction, AutomationId, ClockSnapshot, CompositionSummary, CueId, CueListId, CueSummary,
     DmxOutputConfig, EffectId, EffectKind, EngineSnapshot, EngineTelemetry, FixtureId, NodeGraphId,
     PaletteId, PatchedFixtureSummary, PlaybackExecutorSummary, StageObjectSummary,
     TimelineAudioClipId, TimelineAudioOutputBus, TimelineCueEventSummary, TimelineEventId,
@@ -44,6 +44,15 @@ pub struct EngineTelemetrySnapshot {
     pub primary_output: DmxOutputConfig,
     pub dmx_outputs: Vec<DmxOutputConfig>,
     pub telemetry: EngineTelemetry,
+}
+
+/// The authored Cue fields required by metadata admission. Keeping the
+/// current Cue body together with same-bank numbering preserves one
+/// publication generation without cloning unrelated project collections.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CueMetadataAdmissionSnapshot {
+    pub cue: Option<CueSummary>,
+    pub same_bank_numbers: Vec<(CueId, String)>,
 }
 
 impl EngineTelemetrySnapshot {
@@ -244,6 +253,29 @@ impl EngineHandle {
     /// unrelated authored and runtime collections.
     pub fn timeline_cue_ids_snapshot(&self) -> Vec<CueId> {
         self.read_snapshot_field(|snapshot| snapshot.cues.iter().map(|cue| cue.id).collect())
+    }
+
+    /// Read one Cue body and the numbering of its bank for metadata admission
+    /// without cloning unrelated authored and runtime collections.
+    pub fn cue_metadata_admission_snapshot(&self, cue_id: CueId) -> CueMetadataAdmissionSnapshot {
+        self.read_snapshot_field(|snapshot| {
+            let cue = snapshot.cues.iter().find(|cue| cue.id == cue_id).cloned();
+            let same_bank_numbers = cue
+                .as_ref()
+                .map(|current| {
+                    snapshot
+                        .cues
+                        .iter()
+                        .filter(|candidate| candidate.cue_list_id == current.cue_list_id)
+                        .map(|candidate| (candidate.id, candidate.cue_number.clone()))
+                        .collect()
+                })
+                .unwrap_or_default();
+            CueMetadataAdmissionSnapshot {
+                cue,
+                same_bank_numbers,
+            }
+        })
     }
 
     /// Read published cue and timeline-event IDs from one generation for
