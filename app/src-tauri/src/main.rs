@@ -69978,7 +69978,7 @@ fn save_stage_map_preset(
                     label,
                     config,
                     stage_objects: Some(canonical_stage_project_objects(
-                        state.engine.snapshot().stage_objects,
+                        state.engine.stage_objects_snapshot(),
                     )?),
                 })
             },

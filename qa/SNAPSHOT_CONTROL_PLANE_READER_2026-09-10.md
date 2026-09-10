@@ -347,13 +347,41 @@ This is a local reader and transaction regression only. No physical Spout
 sender was enabled, and this checkpoint does not claim physical output,
 device, Mac, signing, publication, or product-wide completion.
 
+## Stage Map transaction reader follow-up
+
+The admitted `save_stage_map_preset` transaction now uses the same narrow
+`stage_objects_snapshot()` reader when constructing its canonical request.
+The ticket admission, request digest, replay behavior, canonicalization,
+publication acknowledgement, and fail-closed transaction boundaries are
+unchanged; only the unrelated snapshot clone is removed from this read.
+
+The focused Stage Map app regression passed `3/3` with no failures. The
+engine reader regression remained `6/6` with one existing synthetic benchmark
+ignored, and the changed engine files passed the individual rustfmt check.
+`git diff --check` passed.
+
+A fresh maintained-wrapper `pnpm.cmd --dir app tauri build --no-bundle`
+completed with the pinned MSVC 14.44.35207 Build Tools linker. The exact
+checkout executable is 64,561,152 bytes with SHA-256
+`F44C62CB5892BB19E9C6CF2FAB645F1C6C6253604413D6F6FC92A9A3DD72FF74`.
+The isolated native probe at
+`target/qa/native-final-validation-20260910-10/native-final-validation.json`
+passed: one maximized responsive `Syndocal` window, Standby ownership with
+lighting/video disabled, snapshot IPC, missing media/layer thumbnail IPC
+rejection with valid native tickets, zero physical-output operations, and
+exact executable/listener cleanup.
+
+This checkpoint does not claim file-dialog interaction, physical output,
+device, Mac, signing, publication, or product-wide completion.
+
 ## Stage Map export reader follow-up
 
-Standalone Stage Map preset export now reads only the authored
-`stage_objects` collection through `EngineHandle::stage_objects_snapshot()`.
-The exported schema, object ordering, validation, save-dialog behavior, and
-the transactional Stage Map mutation path are unchanged; unrelated published
-project and runtime collections are no longer cloned for this export.
+Standalone Stage Map preset export and the admitted Stage Map preset-save
+transaction now read only the authored `stage_objects` collection through
+`EngineHandle::stage_objects_snapshot()`. The exported schema, object
+ordering, validation, save-dialog behavior, transaction ticket/digest
+boundary, and publication path are unchanged; unrelated published project
+and runtime collections are no longer cloned for these Stage Map reads.
 
 The focused engine snapshot-reader regression passed `6/6` with one existing
 synthetic benchmark ignored, including published-value, replacement, and
