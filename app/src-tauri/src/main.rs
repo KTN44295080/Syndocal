@@ -76530,6 +76530,7 @@ struct VideoOutputPreviewEffectSnapshot {
 }
 
 impl VideoOutputPreviewEffectSnapshot {
+    #[cfg(test)]
     fn render_context(&self) -> video::VideoEffectRenderContext<'_> {
         video::VideoEffectRenderContext {
             clip_runtime: &self.snapshot.video_clip_runtime,
@@ -76997,33 +76998,27 @@ fn get_debug_video_output_preview(
     height: u32,
     decode_budget: Option<usize>,
 ) -> Result<video::VideoFrame, String> {
-    let output_preview = capture_video_output_preview_effect_snapshot(&state.engine);
+    let project_render_epoch = state.engine.output_ownership_status().epoch;
+    let (video, clip_runtime, transition_runtime, bpm) =
+        state.engine.video_output_preview_snapshot();
     let mut renderer = state
         .video_preview
         .lock()
         .map_err(|_| "Video preview renderer lock was poisoned".to_string())?;
+    renderer.frame_provider_mut().set_bpm(Some(bpm));
+    let decode_budget =
+        resolved_video_preview_decode_budget(&renderer, video.layers.len(), decode_budget);
     renderer
-        .frame_provider_mut()
-        .set_bpm(Some(output_preview.snapshot.clock.bpm));
-    let decode_budget = resolved_video_preview_decode_budget(
-        &renderer,
-        output_preview.snapshot.video.layers.len(),
-        decode_budget,
-    );
-    renderer
-        .warm_output_decode_queue(
-            &output_preview.snapshot.video,
-            output_id,
-            width,
-            height,
-            decode_budget,
-        )
+        .warm_output_decode_queue(&video, output_id, width, height, decode_budget)
         .map_err(|error| format!("{error:?}"))?;
     renderer
         .render_output_preview_with_effects_and_transitions(
-            &output_preview.snapshot.video,
-            output_preview.render_context(),
-            &output_preview.snapshot.video_transition_runtime,
+            &video,
+            video::VideoEffectRenderContext {
+                clip_runtime: &clip_runtime,
+                project_render_epoch,
+            },
+            &transition_runtime,
             output_id,
             width,
             height,
@@ -77891,12 +77886,13 @@ mod live_video_monitor_tests {
                 .map(|offset| route_start + offset)
                 .unwrap_or_else(|| panic!("missing boundary after output preview route {route}"));
             let route_source = &source[route_start..route_end];
+            let ownership_capture = match route {
+                "get_live_video_monitor_frame" => "capture_video_monitor_snapshot",
+                "get_debug_video_output_preview" => "video_output_preview_snapshot",
+                _ => "capture_video_output_preview_effect_snapshot",
+            };
             assert!(
-                route_source.contains(if route == "get_live_video_monitor_frame" {
-                    "capture_video_monitor_snapshot"
-                } else {
-                    "capture_video_output_preview_effect_snapshot"
-                }),
+                route_source.contains(ownership_capture),
                 "{route} must sample the NDI/Spout-order ownership epoch with its snapshot"
             );
             assert!(

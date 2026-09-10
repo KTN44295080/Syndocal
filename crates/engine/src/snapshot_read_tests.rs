@@ -219,6 +219,15 @@ fn assert_same_read_model(handle: &EngineHandle) {
         handle.video_layer_thumbnail_snapshot(),
         (expected.video.clone(), expected.clock.bpm)
     );
+    assert_eq!(
+        handle.video_output_preview_snapshot(),
+        (
+            expected.video.clone(),
+            expected.video_clip_runtime.clone(),
+            expected.video_transition_runtime.clone(),
+            expected.clock.bpm,
+        )
+    );
     assert_eq!(handle.video_snapshot(), expected.video);
     assert_eq!(handle.stage_objects_snapshot(), expected.stage_objects);
     assert_eq!(

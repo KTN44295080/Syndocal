@@ -758,6 +758,37 @@ This checkpoint does not claim real-file missing → Retry → recovery, actual
 NDI/Spout sender or display hardware, physical output, device, Mac, signing,
 publication, or product-wide completion.
 
+## Debug output preview reader follow-up
+
+The debug output preview now reads the published video image, clip runtime,
+transition runtime, and BPM through
+`EngineHandle::video_output_preview_snapshot()` under one publication guard.
+It still samples the output ownership epoch before the reader and preserves
+output mapping/effects/transitions, decode-budget selection, renderer locking,
+and fail-closed behavior. The production full snapshot capture used by native
+Display/Timeline Follow paths remains unchanged because it carries timeline
+generation and Follow validation identity.
+
+The engine snapshot-reader regression passed `6/6` with two existing ignored
+tests. The app release `video` regression passed `139/139` with six existing
+ignored tests after the route-specific seam contract was updated. The
+maintained wrapper checker passed `243` assertions with `27` hostile mutation
+fixtures, and `git diff --check` passed. The changed engine files passed
+individual rustfmt checks. The release build completed with the pinned MSVC
+14.44.35207 Build Tools linker without warnings. The exact checkout
+executable is 64,773,120 bytes with SHA-256
+`4177D7D406EFD83E907593E009C56F5B8A1F555FFCA36B7DBF6430063B613EEB`.
+The isolated native probe at
+`target/qa/native-final-validation-20260911-15/native-final-validation.json`
+passed: one maximized responsive `Syndocal` window, Standby ownership with
+lighting/video disabled, snapshot IPC, missing media/layer thumbnail IPC
+rejection with valid native tickets, zero physical-output operations, and
+exact executable/listener cleanup.
+
+This checkpoint does not claim real-file missing → Retry → recovery, actual
+NDI/Spout sender or display hardware, physical output, device, Mac, signing,
+publication, or product-wide completion.
+
 ## Video-layer ID reader follow-up
 
 The `set_video_layer_order` and `add_video_composition` admission paths now

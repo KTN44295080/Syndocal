@@ -100,6 +100,26 @@ impl EngineHandle {
         self.read_snapshot_field(|snapshot| (snapshot.video.clone(), snapshot.clock.bpm))
     }
 
+    /// Read the video image, clip/transition runtime, and BPM needed by the
+    /// debug output preview without cloning unrelated project collections.
+    pub fn video_output_preview_snapshot(
+        &self,
+    ) -> (
+        VideoSnapshot,
+        VideoClipRuntimeSnapshot,
+        VideoLayerTransitionRuntimeSnapshot,
+        f32,
+    ) {
+        self.read_snapshot_field(|snapshot| {
+            (
+                snapshot.video.clone(),
+                snapshot.video_clip_runtime.clone(),
+                snapshot.video_transition_runtime.clone(),
+                snapshot.clock.bpm,
+            )
+        })
+    }
+
     /// Read the published video projection without cloning unrelated engine
     /// collections for read-only plan queries.
     pub fn video_snapshot(&self) -> VideoSnapshot {
