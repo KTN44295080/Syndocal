@@ -53,11 +53,28 @@ and verified that exact path was first in `where.exe link.exe`.
 | all-zero comparison-ref workflow smoke | passed; environment value removed and checker fallback preserved |
 | `git diff --check` | passed |
 
-The existing run [34391689414](https://github.com/KTN44295080/Syndocal/actions/runs/34391689414)
-was testing the pre-checkpoint `main` HEAD `86fee3e7400f490ccd9258a9b4ec11e304ec81a3`
-while this checkpoint was prepared. It is not post-repair evidence. A hosted
-run for this checkpoint is required before claiming the cross-platform hosted
-Windows/Linux workflow green.
+## Hosted revalidation
+
+Hosted run [34430832502](https://github.com/KTN44295080/Syndocal/actions/runs/34430832502)
+validated checkpoint HEAD `ddb392dbffbaacf25ca573b1c7aebbb9c0951a60` on both
+Ubuntu 22.04 and Windows 10+; both jobs and all Windows steps completed
+successfully.
+
+The first attempt on this SHA exposed one timing-sensitive Windows failure in
+`dj_link_production_remote_stop_is_bounded_and_replacement_rejects_replay`
+(`Busy` was observed where the test expected `Accepted`). The second attempt
+exposed one different Windows failure in
+`recording_artifact::publication::tests::recording_publication_recovers_after_process_exit_at_each_boundary`
+at `BeforeInstall` (`Recording recovery is ambiguous`). Neither failure was
+caused by this checkpoint's icon, warning-ratchet, or ASIO timeline changes.
+The DJ Link test passed in 10 focused local repetitions, the recording
+publication test passed in 20 focused local repetitions under the pinned MSVC
+linker, and the third attempt of the same hosted run completed successfully.
+These two initial failures remain recorded as observed hosted timing/file-boundary
+flakes; no assertion was removed or weakened and no test was skipped.
+
+This hosted result does not establish ASIO/NDI/DMX hardware, physical output,
+macOS, signing, publication, or product-wide completion.
 
 ## Remaining boundary
 
