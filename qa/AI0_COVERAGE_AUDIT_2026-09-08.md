@@ -84,3 +84,22 @@ The exact Windows MSVC 14.44.35207 x64 linker was pinned and returned first by
 does not close `AI0-COVERAGE-001` or claim that every MIDI/OSC/Remote,
 shortcut, audio-analysis/BPM, native-output-window, or UI mutation source is
 classified and fail-closed.
+
+## Current-main coverage revalidation — 2026-09-10
+
+The bounded AI0 gates were rerun against current `main` at source HEAD
+`50a0ed98e3f501d1676cd1809a8921e3fad76489`. Product source, inventory counts,
+and the coverage claim were unchanged. The exact MSVC 14.44.35207 linker was
+pinned and returned first by `where.exe link.exe`.
+
+| Check | Result |
+| --- | --- |
+| `node app/scripts/check-tauri-admission-inventory.mjs` | PASS — 516 exact commands, SHA-256 `5120894f36feb82ac58fffd4db20739d80ae1b1a1c556fc95838a1708cbb8eea`, 18 negative fixtures rejected |
+| `node app/scripts/check-frontend-command-routing.mjs` | PASS — renderer 133, server-authoritative 31, raw 28, facade 464 |
+| `cargo test -p protocol --release --locked control_plane_registry_v2 -- --test-threads=1` | PASS — 13 passed, 0 failed, 0 ignored |
+
+This remains bounded Tauri/frontend/protocol inventory evidence. `AI0-COVERAGE-001`
+stays Open for every relevant Engine, Remote, MIDI/OSC, shortcut,
+audio-analysis/BPM, native-window, and UI mutation source to be mechanically
+classified and fail-closed. The real-file thumbnail recovery trial was not
+rerun.

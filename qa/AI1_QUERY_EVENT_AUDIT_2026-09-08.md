@@ -68,3 +68,22 @@ The run used the exact MSVC 14.44.35207 x64 linker pin and the
 for the existing bounded query/event vertical only; AI1 remains Open for full
 canonical-family parity, external adapters, and real-client reconnect or
 recovery acceptance.
+
+## Current-main query/event revalidation — 2026-09-10
+
+The bounded query/event suite was rerun against current `main` at source HEAD
+`50a0ed98e3f501d1676cd1809a8921e3fad76489`. Product source and the query/event
+wire were unchanged by this QA-only checkpoint. The documented MSVC
+14.44.35207 absolute linker was pinned and returned first by `where.exe link.exe`.
+
+```text
+cargo test --manifest-path app/src-tauri/Cargo.toml --release --locked -j 1 control_plane_query -- --test-threads=1
+test result: ok. 14 passed; 0 failed; 0 ignored; 1804 filtered out
+```
+
+The run covers owner-bound cursor/tamper/replay rejection, expiry and capacity,
+stale/future fences, strict page bounds, serialized capture ordering,
+project-replacement redaction, event backlog convergence, and explicit
+retention-gap resnapshot. `AI1-SCHEMAS-001` remains Open for complete canonical
+family parity, generated external schemas, external adapters, and real-client
+reconnect/recovery. The real-file thumbnail recovery trial was not rerun.

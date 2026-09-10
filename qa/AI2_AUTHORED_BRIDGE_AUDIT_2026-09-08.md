@@ -91,3 +91,23 @@ The Rust run used the exact MSVC 14.44.35207 x64 linker pin and
 vertical evidence; `AI2-COMMAND-BRIDGE-001` remains Open for all authored
 families, external adapters, consent policy, and adversarial or real-client
 recovery matrices.
+
+## Current-main authored-bridge revalidation — 2026-09-10
+
+The bounded authored bridge was rerun against current `main` at source HEAD
+`50a0ed98e3f501d1676cd1809a8921e3fad76489`. Product source, operation sets,
+and receipt schemas were unchanged. The exact MSVC 14.44.35207 linker was
+pinned and verified first in `where.exe link.exe`.
+
+| Check | Result |
+| --- | --- |
+| `node app/scripts/check-authored-effect-enable.mjs` | PASS — strict route, receipt validation, superseded intents, bounded stale retry, rollback baseline |
+| `node app/scripts/check-project-transaction-mutation-controller.mjs` | PASS — 6 scenarios, no native/UI side effects |
+| `cargo test --manifest-path app/src-tauri/Cargo.toml --release --locked -j 1 authored -- --test-threads=1` | PASS — 34 passed, 0 failed, 0 ignored |
+
+The run retains rejection of wrong operation/payload, owner/window mismatch,
+stale/future/expired fences, same-key shape conflict, retired-owner replay,
+publication failure drift, and superseded results. `AI2-COMMAND-BRIDGE-001`
+remains Open for all authored families, generated schema parity, external
+adapters, consent policy, and adversarial or real-client recovery. The
+real-file thumbnail recovery trial was not rerun.
