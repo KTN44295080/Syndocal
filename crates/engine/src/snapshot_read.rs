@@ -316,6 +316,24 @@ impl EngineHandle {
         })
     }
 
+    /// Read video-layer IDs and authored video automation IDs for video
+    /// automation replacement admission from one published generation.
+    pub fn timeline_video_automation_admission_snapshot(
+        &self,
+    ) -> (Vec<VideoLayerId>, Vec<AutomationId>) {
+        self.read_snapshot_field(|snapshot| {
+            (
+                snapshot.video.layers.iter().map(|layer| layer.id).collect(),
+                snapshot
+                    .timeline
+                    .video_automations
+                    .iter()
+                    .map(|automation| automation.id)
+                    .collect(),
+            )
+        })
+    }
+
     /// Read only the stage objects attached to one published preset for
     /// enqueue-time allocator reservation. Trimming and first-match policy
     /// remain owned by the caller, matching the existing command path.

@@ -35482,8 +35482,8 @@ fn add_timeline_video_automation(
     param: VideoParam,
     keyframes: Vec<VideoAutomationKeyframeSummary>,
 ) -> Result<AutomationId, String> {
-    let snapshot = state.engine.snapshot();
-    validate_timeline_video_automation_request(&snapshot, layer_id, &keyframes)?;
+    let layer_ids = state.engine.video_layer_ids_snapshot();
+    validate_timeline_video_automation_request(&layer_ids, layer_id, &keyframes)?;
     let automation_id = state.engine.allocate_automation_id();
     state
         .engine
@@ -35505,16 +35505,13 @@ fn set_timeline_video_automation(
     param: VideoParam,
     keyframes: Vec<VideoAutomationKeyframeSummary>,
 ) -> Result<(), String> {
-    let snapshot = state.engine.snapshot();
-    if !snapshot
-        .timeline
-        .video_automations
-        .iter()
-        .any(|automation| automation.id == automation_id)
-    {
+    let (layer_ids, automation_ids) = state
+        .engine
+        .timeline_video_automation_admission_snapshot();
+    if !automation_ids.contains(&automation_id) {
         return Err(format!("Video automation {automation_id} was not found"));
     }
-    validate_timeline_video_automation_request(&snapshot, layer_id, &keyframes)?;
+    validate_timeline_video_automation_request(&layer_ids, layer_id, &keyframes)?;
     state
         .engine
         .send(EngineCommand::SetTimelineVideoAutomation {
@@ -83846,7 +83843,7 @@ fn compatible_timeline_automation_targets(
 }
 
 fn validate_timeline_video_automation_request(
-    snapshot: &EngineSnapshot,
+    layer_ids: &[VideoLayerId],
     layer_id: VideoLayerId,
     keyframes: &[VideoAutomationKeyframeSummary],
 ) -> Result<(), String> {
@@ -83856,12 +83853,7 @@ fn validate_timeline_video_automation_request(
     if keyframes.iter().any(|keyframe| !keyframe.value.is_finite()) {
         return Err("Video automation values must be finite".to_string());
     }
-    if !snapshot
-        .video
-        .layers
-        .iter()
-        .any(|layer| layer.id == layer_id)
-    {
+    if !layer_ids.contains(&layer_id) {
         return Err(format!("Video layer {layer_id} was not found"));
     }
     Ok(())
@@ -93381,6 +93373,20 @@ pub(crate) mod tests {
             .map(|offset| function_start + offset);
         let body = &source[function_start..next_attribute.unwrap_or(source.len())];
         assert!(body.contains("timeline_dmx_automation_admission_snapshot"));
+        assert!(!body.contains("engine.snapshot()"));
+    }
+
+    #[test]
+    fn set_timeline_video_automation_uses_the_narrow_engine_reader() {
+        let source = include_str!("main.rs");
+        let function_start = source
+            .find("fn set_timeline_video_automation(")
+            .expect("missing set timeline video automation command");
+        let next_attribute = source[function_start..]
+            .find("\n#[tauri::command]")
+            .map(|offset| function_start + offset);
+        let body = &source[function_start..next_attribute.unwrap_or(source.len())];
+        assert!(body.contains("timeline_video_automation_admission_snapshot"));
         assert!(!body.contains("engine.snapshot()"));
     }
 

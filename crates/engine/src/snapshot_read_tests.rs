@@ -292,6 +292,23 @@ fn assert_same_read_model(handle: &EngineHandle) {
         )
     );
     assert_eq!(
+        handle.timeline_video_automation_admission_snapshot(),
+        (
+            expected
+                .video
+                .layers
+                .iter()
+                .map(|layer| layer.id)
+                .collect::<Vec<_>>(),
+            expected
+                .timeline
+                .video_automations
+                .iter()
+                .map(|automation| automation.id)
+                .collect::<Vec<_>>(),
+        )
+    );
+    assert_eq!(
         handle.fixture_group_ids_snapshot(),
         expected
             .fixtures

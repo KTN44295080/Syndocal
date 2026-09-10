@@ -1013,6 +1013,37 @@ This checkpoint does not claim real-file missing → Retry → recovery, actual
 NDI/Spout sender or display hardware, physical output, device, Mac, signing,
 publication, or product-wide completion.
 
+## Timeline video automation replacement reader follow-up
+
+The `set_timeline_video_automation` admission path now reads the published
+video-layer IDs and authored video automation IDs from one narrow engine
+reader. The existing missing-automation rejection, missing-layer rejection,
+keyframe validation, and publication command are unchanged; the two
+collections cannot be mixed across publication generations.
+
+The focused engine snapshot-reader regression passed `7/7` with two existing
+ignored tests, including the video automation admission projection in the
+shared read-model comparison. The app release command structural regression
+passed `1/1`; changed engine files and the app command passed targeted
+rustfmt checks, `git diff --check` passed, and the maintained wrapper checker
+passed `243` assertions with `27` hostile mutation fixtures.
+
+A fresh maintained-wrapper `pnpm.cmd --dir app tauri build --no-bundle`
+completed with the pinned MSVC 14.44.35207 Build Tools linker and no first-
+party compiler warnings. The exact checkout executable is 64,798,720 bytes
+with SHA-256
+`9894B23151C06F426D0A61B7B167D71F12262EED16280B9E5A62E73BDD0DBC64`.
+The isolated native probe at
+`target/qa/native-final-validation-20260911-26/native-final-validation.json`
+passed: one maximized responsive `Syndocal` window, Standby ownership with
+lighting/video disabled, snapshot IPC, missing media/layer thumbnail IPC
+rejection with valid native tickets, zero physical-output operations, and
+exact executable/listener cleanup.
+
+This checkpoint does not claim real-file missing → Retry → recovery, actual
+NDI/Spout sender or display hardware, physical output, device, Mac, signing,
+publication, or product-wide completion.
+
 ## Video-layer ID reader follow-up
 
 The `set_video_layer_order` and `add_video_composition` admission paths now
