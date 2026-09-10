@@ -81076,10 +81076,9 @@ fn get_video_output_window_observation_v1(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> Result<VideoOutputWindowObservationV1, String> {
-    let snapshot = state.engine.snapshot();
-    let configured_displays = snapshot
-        .video
-        .outputs
+    let configured_displays = state
+        .engine
+        .video_outputs_snapshot()
         .iter()
         .filter(|output| output.kind == VideoOutputKind::Display)
         .map(|output| (output.id, output.label.clone()))
@@ -81113,11 +81112,9 @@ fn get_video_output_window_statuses(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> Vec<VideoOutputWindowStatus> {
-    let snapshot = state.engine.snapshot();
+    let outputs = state.engine.video_outputs_snapshot();
     let ownership = state.engine.output_ownership_status();
-    snapshot
-        .video
-        .outputs
+    outputs
         .iter()
         .filter(|output| output.kind == VideoOutputKind::Display)
         .map(|output| {
