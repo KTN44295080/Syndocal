@@ -47,3 +47,24 @@ This is current-main software evidence only. It does not close
 stop latency, cache/waveform/proxy performance, native/browser reachability,
 external clients, physical output, Mac, signing, publication, or venue
 acceptance.
+
+## Media operation lifecycle responsibility checkpoint — 2026-09-10
+
+The candidate was rechecked from `main` at `09b23af6e0db7eaae2afe78bb87affde0b1fa441`.
+The existing media operation behavior was moved from `App.tsx` into
+`app/src/mediaAssetOperationController.ts`; the App still owns the reactive
+publication, while the focused controller owns operation IDs, AbortControllers,
+phase updates, exact cancellation, release, and owner cleanup. No Channel API,
+screen ticket, native command, or product behavior was added.
+
+The following passed without changing assertions: `pnpm.cmd --dir app run
+check:media-asset-operations` (phase publication, exact cancellation,
+idempotent release, owner cleanup), `pnpm.cmd --dir app run
+check:media-thumbnails`, `pnpm.cmd --dir app run check:project-transaction`,
+`pnpm.cmd --dir app exec tsc --noEmit`, `pnpm.cmd --dir app run build`, and
+`pnpm.cmd --dir app run check:release` (including the new controller check).
+`git diff --check` also passed.
+
+This remains a source-level frontend responsibility checkpoint. It does not
+claim the unexecuted real-file missing-to-recovery GUI trial, native window/IPC
+acceptance, physical output, macOS, signing, publication, or venue acceptance.

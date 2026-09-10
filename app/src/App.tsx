@@ -2,6 +2,7 @@ import { mergeProps as mergeThumbnailViewProps } from "solid-js";
 import { mountAgentBridge } from "./agentBridgeMount";
 import { createProjectTransactionRecoveryController } from "./createProjectTransactionRecoveryController";
 import { createMediaThumbnailController } from "./createMediaThumbnailController";
+import { createMediaAssetOperationController } from "./mediaAssetOperationController";
 import { createWorkspaceNavigationController, type WorkspaceNavigationRoute } from "./createWorkspaceNavigationController";
 import { Channel, invoke as tauriInvoke } from "@tauri-apps/api/core";
 import { listen as tauriListen } from "@tauri-apps/api/event";
@@ -400,7 +401,6 @@ import type {
   MediaAssetAuthoritativeTerminalEnvelope,
   MediaAssetId,
   MediaAssetImportReport,
-  MediaAssetOperationPhase,
   MidiControlAction,
   MidiControlMapping,
   MidiControlMessage,
@@ -2425,48 +2425,13 @@ export default function App() {
   const mediaAssetAvailabilityRowAuthority = createMediaAssetAvailabilityRowAuthority();
   const [lastMediaAssetImportReport, setLastMediaAssetImportReport] =
     createSignal<MediaAssetImportReport | null>(null);
-  let nextMediaAssetUiOperationId = 0;
-  const activeMediaAssetOperationControllers = new Map<number, AbortController>();
-  const beginMediaAssetOperation = (
-    label: string,
-    initialPhase: MediaAssetOperationPhase,
-  ) => {
-    const controller = new AbortController();
-    nextMediaAssetUiOperationId += 1;
-    const id = nextMediaAssetUiOperationId;
-    activeMediaAssetOperationControllers.set(id, controller);
-    setActiveMediaAssetOperations((current) => [...current, { id, label, phase: initialPhase }]);
-    let released = false;
-    return {
-      signal: controller.signal,
-      setPhase: (phase: MediaAssetOperationPhase) => {
-        if (released || controller.signal.aborted) return;
-        setActiveMediaAssetOperations((current) => current.map((operation) =>
-          operation.id === id ? { ...operation, phase } : operation));
-      },
-      release: () => {
-        if (released) return;
-        released = true;
-        activeMediaAssetOperationControllers.delete(id);
-        setActiveMediaAssetOperations((current) => current.filter((operation) => operation.id !== id));
-      },
-    };
-  };
-  const cancelMediaAssetOperation = (id: number) => {
-    const controller = activeMediaAssetOperationControllers.get(id);
-    if (!controller || controller.signal.aborted) return;
-    controller.abort();
-    setActiveMediaAssetOperations((current) => current.map((operation) =>
-      operation.id === id ? { ...operation, phase: "cancelling" } : operation));
-  };
-  const abortActiveMediaAssetOperations = () => {
-    for (const controller of activeMediaAssetOperationControllers.values()) controller.abort();
-    setActiveMediaAssetOperations((current) => current.map((operation) => ({
-      ...operation,
-      phase: "cancelling",
-    })));
-  };
-  onCleanup(() => abortActiveMediaAssetOperations());
+  const mediaAssetOperationController = createMediaAssetOperationController({
+    publish: setActiveMediaAssetOperations,
+    registerCleanup: onCleanup,
+  });
+  const beginMediaAssetOperation = mediaAssetOperationController.begin;
+  const cancelMediaAssetOperation = mediaAssetOperationController.cancel;
+  const abortActiveMediaAssetOperations = mediaAssetOperationController.abortAll;
   const [videoPreviewInfo, setVideoPreviewInfo] = createSignal("No preview");
   const [videoPreviewUrl, setVideoPreviewUrl] = createSignal("");
   const [videoPreviewLayerId, setVideoPreviewLayerId] = createSignal<number | null>(null);
