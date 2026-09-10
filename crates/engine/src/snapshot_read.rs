@@ -100,6 +100,12 @@ impl EngineHandle {
         self.read_snapshot_field(|snapshot| (snapshot.video.clone(), snapshot.clock.bpm))
     }
 
+    /// Read the published video projection without cloning unrelated engine
+    /// collections for read-only plan queries.
+    pub fn video_snapshot(&self) -> VideoSnapshot {
+        self.read_snapshot_field(|snapshot| snapshot.video.clone())
+    }
+
     /// Read the last Auto VJ action needed by the manual Program handoff
     /// without cloning the complete public video/project snapshot.
     pub fn auto_vj_last_action(&self) -> Option<AutoVjAction> {

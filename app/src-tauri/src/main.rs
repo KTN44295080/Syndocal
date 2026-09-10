@@ -70671,21 +70671,23 @@ fn visualizer_external_model_asset_format(
 
 #[tauri::command]
 fn get_video_composition_plans(state: State<'_, AppState>) -> Vec<video::CompositionPlan> {
-    video::build_composition_plans(&state.engine.snapshot().video)
+    let snapshot = state.engine.video_snapshot();
+    video::build_composition_plans(&snapshot)
 }
 
 #[tauri::command]
 fn get_video_output_render_plans(
     state: State<'_, AppState>,
 ) -> Result<Vec<video::VideoOutputRenderPlan>, String> {
-    video::build_video_output_render_plans(&state.engine.snapshot().video)
+    let snapshot = state.engine.video_snapshot();
+    video::build_video_output_render_plans(&snapshot)
         .map_err(|error| format!("{error:?}"))
 }
 
 #[tauri::command]
 fn get_external_video_io_plans(state: State<'_, AppState>) -> video::ExternalVideoIoRoutePlans {
-    let snapshot = state.engine.snapshot();
-    video::build_external_video_io_route_plans(&snapshot.video, &video::video_runtime_status())
+    let snapshot = state.engine.video_snapshot();
+    video::build_external_video_io_route_plans(&snapshot, &video::video_runtime_status())
 }
 
 #[tauri::command]
