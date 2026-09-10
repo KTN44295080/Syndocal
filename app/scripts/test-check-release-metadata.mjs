@@ -282,6 +282,10 @@ try {
     "release static gate preserves frontend routing and invoke inventory checks",
   );
   pass(
+    packageScripts["check:release:static"].includes("pnpm run check:project-shortcuts"),
+    "release static gate preserves project shortcut source checks",
+  );
+  pass(
     packageScripts["check:release:static"].includes("pnpm run check:backend-operator-contract")
       && packageScripts["check:release:static"].includes("pnpm run check:project-transaction"),
     "release static gate preserves backend authority and transaction checks",

@@ -112,3 +112,11 @@ durable intent, reply loss, recovery ownership, publication authority, and
 stale-result rejection. This is validation wiring only; it does not claim the
 real-file thumbnail recovery, native-window, physical-output, signing,
 publication, or product-wide acceptance boundaries.
+
+## Project shortcut source gate coverage — based on `3393d18127f59f1e62f464bbb39922844994e11d`
+
+The existing project/app shortcut checker is now also invoked by
+`check:release:static`. Its exact 30 app and 3 project-file shortcut matrix,
+typed source unions, byte-exact source manifest, and one-dispatch Save/Open
+contracts remain unchanged. This is validation wiring only; native-window and
+physical keyboard acceptance are not claimed.
