@@ -212,3 +212,26 @@ physical output, and returned the exact application/listener counts to zero.
 This evidence does not claim the completed missing-file/re-fetch/recovery unit
 again, physical hardware or venue acceptance, Mac real-machine validation,
 ASIO/NDI/MIDI acceptance, signing/notarization, or release publication.
+
+## 2026-09-10 current-main checker revalidation
+
+The current `main` source at `026ec16a818226fd6c47d57610d1b146d5acd166`
+was rechecked without modifying product source. This revalidation covers the
+existing permission/approval/owner-authority and stale-or-old-result rejection
+contracts; it does not change their scope or claim external-client or native
+hardware acceptance.
+
+| Check | Result |
+| --- | --- |
+| `node app/scripts/check-backend-operator-contract.mjs` | PASS — 516 commands, 334 literal frontend calls, 133 transactional mutations |
+| `node app/scripts/check-agent-bridge.mjs` | PASS — 11 groups; canonical bridge parity and fail-closed rejection paths |
+| `pnpm.cmd --dir app run check:frontend-command-routing` | PASS — 133 renderer mutations, 31 server-authoritative mutations, 28 raw dispatches, 464 facade dispatches |
+| `pnpm.cmd --dir app run check:project-transaction` | PASS — production contract and deterministic authority checks |
+| `node app/scripts/check-completion-ledger.mjs` | PASS — 50 Open + 8 Deferred rows preserved |
+| `node app/scripts/check-q1-q4-ledger.mjs` | PASS — 32 Q1 rows, 29/29 Q0 domains, 10/10 source contracts, 58/58 markers |
+
+No physical output, external service, device, or release artifact was started
+by this checker-only revalidation. The real-file thumbnail missing -> Retry ->
+recovery trial was not rerun. The ledger remains `50 Open + 8 Deferred`; the
+remaining external, physical, Mac, signing/publication, and product-wide
+acceptance boundaries remain unclaimed.
