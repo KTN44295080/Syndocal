@@ -70,3 +70,20 @@ assertions, 243 build-wrapper assertions with 27 hostile fixtures, and no
 unprotected bare user-data labels. Native three-screen layout, viewport and
 scaling, screen-reader/high-contrast/IME behavior, and native keyboard-only
 acceptance remain unclaimed.
+
+## Current-main accessibility software rerun — 2026-09-12
+
+The six deterministic accessibility-related checks were rerun against current
+`main` at `205dcebc7b501dd669de6110dde0134390925117`:
+
+- localization — PASS, 3689/3689 static UI entries and 0 unprotected labels;
+- terminology — PASS;
+- empty-state guidance — PASS;
+- project-history keyboard routing — PASS;
+- Timeline Space keyboard routing — PASS;
+- stage-label anchoring/eligibility/priority/overlap — PASS.
+
+This remains software/static evidence only. Native screen-reader, High
+Contrast, color-independent presentation, 125/150/200% scaling, IME,
+reduced-motion, dialog focus return, and native keyboard-only workflows remain
+unclaimed.
