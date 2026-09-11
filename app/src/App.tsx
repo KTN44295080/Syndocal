@@ -5696,8 +5696,10 @@ export default function App() {
     invoke,
     setMessage,
     refreshSnapshot: () => refreshSnapshot(),
-    refreshProjectAuthority: (receipt) =>
-      refreshProjectAuthorityAfterTargetBlackout(receipt, "Show Spout outputs"),
+    refreshProjectAuthority: (receipt, operationLabel) =>
+      refreshProjectAuthorityAfterTargetBlackout(receipt, operationLabel ?? "Show Spout outputs"),
+    captureProjectAuthorityIdentity,
+    isProjectAuthorityIdentityCurrent,
     serialPorts,
     setSerialPorts,
     safetyBlackout: () => snapshot().safety_blackout_engaged,

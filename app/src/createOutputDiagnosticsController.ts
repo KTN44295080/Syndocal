@@ -16,6 +16,7 @@ import type {
 } from "./outputControlController";
 import type { FrontendTauriInvoke } from "./tauriInvokeCommands";
 import type { OutputOwnershipStatus } from "./types";
+import type { ProjectAuthorityToken } from "./projectAuthority";
 import { createSerialDmxStatusPoller } from "./serialDmxStatusPoller";
 import { createSafetyBlackoutRuntimeController } from "./safetyBlackoutRuntimeController";
 import {
@@ -151,7 +152,9 @@ interface OutputDiagnosticsControllerOptions {
   invoke: Invoke;
   setMessage: (message: string) => unknown;
   refreshSnapshot: () => Promise<EngineSnapshot | null>;
-  refreshProjectAuthority: (receipt: OutputControlReceipt) => Promise<void>;
+  refreshProjectAuthority: (receipt: OutputControlReceipt, operationLabel?: string) => Promise<void>;
+  captureProjectAuthorityIdentity: () => ProjectAuthorityToken;
+  isProjectAuthorityIdentityCurrent: (captured: ProjectAuthorityToken) => boolean;
   serialPorts: Accessor<SerialPortSummary[]>;
   setSerialPorts: Setter<SerialPortSummary[]>;
   safetyBlackout: Accessor<boolean>;
@@ -344,13 +347,12 @@ export function createOutputDiagnosticsController(options: OutputDiagnosticsCont
 
   const enableStagedShowArtNetLoopbackRouteInternal = async (
     lease?: Awaited<ReturnType<typeof selectFreshBothOutputLease>>,
-  ) => {
+  ): Promise<OutputControlReceipt> => {
     const currentLease = lease ?? await selectFreshBothOutputLease();
-    await executeOutputControl(options.invoke, {
+    return executeOutputControl(options.invoke, {
       kind: "enable_show_art_net_loopback_route",
       lease: currentLease,
     });
-    return options.refreshSnapshot();
   };
 
   const waitForShowArtNetOutput = async () => {
@@ -384,11 +386,19 @@ export function createOutputDiagnosticsController(options: OutputDiagnosticsCont
   };
 
   const enableStagedShowArtNetLoopbackRoute = () => runShowOutputAction("artnet", async () => {
+    let authority = options.captureProjectAuthorityIdentity();
     try {
+      if (!options.isProjectAuthorityIdentityCurrent(authority)) return;
       await ensureBothOutputLease();
-      await enableStagedShowArtNetLoopbackRouteInternal();
+      if (!options.isProjectAuthorityIdentityCurrent(authority)) return;
+      const receipt = await enableStagedShowArtNetLoopbackRouteInternal();
+      await options.refreshProjectAuthority(receipt, "Show Art-Net loopback");
+      authority = options.captureProjectAuthorityIdentity();
+      await options.refreshSnapshot();
+      if (!options.isProjectAuthorityIdentityCurrent(authority)) return;
       options.setMessage("Staged same-PC Art-Net loopback show route enabled.");
     } catch (error) {
+      if (!options.isProjectAuthorityIdentityCurrent(authority)) return;
       options.setMessage(String(error));
     }
   });
@@ -444,10 +454,14 @@ export function createOutputDiagnosticsController(options: OutputDiagnosticsCont
   };
 
   const enableShowSerialDmxSafetyBlackoutRoute = async () => {
+    const authority = options.captureProjectAuthorityIdentity();
     try {
+      if (!options.isProjectAuthorityIdentityCurrent(authority)) return;
       await enableShowSerialDmxSafetyBlackoutRouteInternal();
+      if (!options.isProjectAuthorityIdentityCurrent(authority)) return;
       options.setMessage("USB-DMX Open DMX worker activated with S0 queued. This is not a fixture or physical-wire acceptance result.");
     } catch (error) {
+      if (!options.isProjectAuthorityIdentityCurrent(authority)) return;
       options.setMessage(String(error));
     }
   };
@@ -458,16 +472,24 @@ export function createOutputDiagnosticsController(options: OutputDiagnosticsCont
     setShowDmxPreparationBusy(true);
     setShowDmxPreparationStage("Preflight");
     const run = async () => {
+      let authority = options.captureProjectAuthorityIdentity();
       let stage = "Preflight";
       let safetyBlackoutEngagedByPreparation = false;
       let safetyBlackoutReleasedByPreparation = false;
       let confirmedBinding: SerialDmxMachineBindingStatus | undefined;
       const runStage = async <T,>(label: string, operation: () => Promise<T>): Promise<T> => {
+        if (!options.isProjectAuthorityIdentityCurrent(authority)) {
+          throw new Error("Project changed while Show DMX setup was pending; the older setup was discarded.");
+        }
         stage = label;
         setShowDmxPreparationStage(label);
         options.setMessage(`Show DMX setup [${label}] starting; S0 changes only through the zero-first USB-DMX startup.`);
         try {
-          return await operation();
+          const result = await operation();
+          if (!options.isProjectAuthorityIdentityCurrent(authority)) {
+            throw new Error("Project changed while Show DMX setup was pending; the older setup was discarded.");
+          }
+          return result;
         } catch (error) {
           throw new Error(`stage=${label}; ${String(error)}`);
         }
@@ -506,7 +528,9 @@ export function createOutputDiagnosticsController(options: OutputDiagnosticsCont
             // output-control fence may have changed while the binding action
             // completed; stage 3 must never reuse either earlier observation.
             const lease = await selectFreshBothOutputLease();
-            await enableStagedShowArtNetLoopbackRouteInternal(lease);
+            const receipt = await enableStagedShowArtNetLoopbackRouteInternal(lease);
+            await options.refreshProjectAuthority(receipt, "Show Art-Net loopback");
+            authority = options.captureProjectAuthorityIdentity();
           }
           await waitForShowArtNetOutput();
         });
@@ -538,6 +562,7 @@ export function createOutputDiagnosticsController(options: OutputDiagnosticsCont
             await waitForShowSerialDmxLive();
           }
         });
+        if (!options.isProjectAuthorityIdentityCurrent(authority)) return;
         setShowDmxPreparationStage("Complete");
         options.setMessage(
           safetyBlackoutReleasedByPreparation
@@ -547,6 +572,10 @@ export function createOutputDiagnosticsController(options: OutputDiagnosticsCont
               : "Show DMX setup complete: output role Both, machine binding, and Art-Net loopback are ready. S0 remains clear and USB-DMX is unarmed.",
         );
       } catch (error) {
+        if (!options.isProjectAuthorityIdentityCurrent(authority)) {
+          setShowDmxPreparationStage(`Stopped at ${stage}`);
+          return;
+        }
         setShowDmxPreparationStage(`Stopped at ${stage}`);
         options.setMessage(`Show DMX setup stopped at ${stage}: ${String(error).replace(/^Error:\s*/i, "")}`);
       }
@@ -560,8 +589,10 @@ export function createOutputDiagnosticsController(options: OutputDiagnosticsCont
   };
 
   const stopShowSerialDmxSafetyBlackoutRoute = async () => {
+    const authority = options.captureProjectAuthorityIdentity();
     serialDmxStatusPoller.invalidate();
     try {
+      if (!options.isProjectAuthorityIdentityCurrent(authority)) return;
       const lease = selectOnlyActiveOutputLease(
         await queryOutputLeaseAuthority(options.invoke),
         ["lighting", "video"],
@@ -570,8 +601,10 @@ export function createOutputDiagnosticsController(options: OutputDiagnosticsCont
         kind: "stop_show_serial_dmx_safety_blackout_route",
         lease,
       });
+      if (!options.isProjectAuthorityIdentityCurrent(authority)) return;
       options.setMessage("USB-DMX Open DMX worker stopped. No project route was changed.");
     } catch (error) {
+      if (!options.isProjectAuthorityIdentityCurrent(authority)) return;
       options.setMessage(String(error));
     } finally {
       await refreshAuthoritativeSerialDmxRuntimeStatuses();
@@ -579,7 +612,9 @@ export function createOutputDiagnosticsController(options: OutputDiagnosticsCont
   };
 
   const sendDsf2026ArtNetAcceptanceProbe = async () => {
+    const authority = options.captureProjectAuthorityIdentity();
     try {
+      if (!options.isProjectAuthorityIdentityCurrent(authority)) return;
       const status = await refreshDsf2026ArtNetAcceptanceProbeStatus();
       if (status?.status !== "available") {
         throw new Error("DSF2026 fixed probe is unavailable: its durable one-shot status was not available for a new send.");
@@ -592,6 +627,7 @@ export function createOutputDiagnosticsController(options: OutputDiagnosticsCont
         kind: "send_dsf2026_artnet_acceptance_probe",
         lease,
       });
+      if (!options.isProjectAuthorityIdentityCurrent(authority)) return;
       await options.refreshSnapshot();
       setDsf2026ArtNetAcceptanceProbeStatus({
         operationId: OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_STATUS_QUERY_OPERATION_ID,
@@ -599,12 +635,15 @@ export function createOutputDiagnosticsController(options: OutputDiagnosticsCont
       });
       options.setMessage("DSF2026 fixed red probe: OS accepted one 530-byte ArtDmx U0 datagram to 127.0.0.1:6454; receiver and physical output remain unverified. A second probe is permanently prohibited, including after restart.");
     } catch (error) {
+      if (!options.isProjectAuthorityIdentityCurrent(authority)) return;
       options.setMessage(String(error));
     }
   };
 
   const acknowledgeDsf2026ArtNetAcceptanceProbeInDoubt = async () => {
+    const authority = options.captureProjectAuthorityIdentity();
     try {
+      if (!options.isProjectAuthorityIdentityCurrent(authority)) return;
       const status = await refreshDsf2026ArtNetAcceptanceProbeStatus();
       if (status?.status !== "in_doubt") {
         throw new Error("DSF2026 probe reconciliation is unavailable: there is no durable InDoubt outcome to resolve.");
@@ -617,6 +656,7 @@ export function createOutputDiagnosticsController(options: OutputDiagnosticsCont
         kind: "acknowledge_dsf2026_artnet_acceptance_probe_in_doubt",
         lease,
       });
+      if (!options.isProjectAuthorityIdentityCurrent(authority)) return;
       await options.refreshSnapshot();
       setDsf2026ArtNetAcceptanceProbeStatus({
         operationId: OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_STATUS_QUERY_OPERATION_ID,
@@ -624,33 +664,47 @@ export function createOutputDiagnosticsController(options: OutputDiagnosticsCont
       });
       options.setMessage("DSF2026 probe InDoubt hold reconciled without sending Art-Net. Receiver and physical output were independently verified by the operator. A fresh probe remains permanently prohibited.");
     } catch (error) {
+      if (!options.isProjectAuthorityIdentityCurrent(authority)) return;
       options.setMessage(String(error));
     }
   };
 
   const enableShowSpoutOutputs = () => runShowOutputAction("spout", async () => {
+    let authority = options.captureProjectAuthorityIdentity();
     try {
+      if (!options.isProjectAuthorityIdentityCurrent(authority)) return;
       await ensureBothOutputLease();
+      if (!options.isProjectAuthorityIdentityCurrent(authority)) return;
       const lease = await selectFreshBothOutputLease();
       const receipt = await executeOutputControl(options.invoke, {
         kind: "enable_show_spout_outputs",
         lease,
       });
+      if (!options.isProjectAuthorityIdentityCurrent(authority)) return;
       await options.refreshProjectAuthority(receipt);
+      authority = options.captureProjectAuthorityIdentity();
       await options.refreshSnapshot();
+      if (!options.isProjectAuthorityIdentityCurrent(authority)) return;
       options.setMessage("Same-PC V2 Syndocal Background/Foreground Spout outputs enabled.");
     } catch (error) {
+      if (!options.isProjectAuthorityIdentityCurrent(authority)) return;
       options.setMessage(String(error));
     }
   });
 
   const resetShowSpoutOutputs = async () => {
+    let authority = options.captureProjectAuthorityIdentity();
     try {
+      if (!options.isProjectAuthorityIdentityCurrent(authority)) return;
       const receipt = await executeOutputControl(options.invoke, { kind: "reset_show_spout_outputs" });
+      if (!options.isProjectAuthorityIdentityCurrent(authority)) return;
       await options.refreshProjectAuthority(receipt);
+      authority = options.captureProjectAuthorityIdentity();
       await options.refreshSnapshot();
+      if (!options.isProjectAuthorityIdentityCurrent(authority)) return;
       options.setMessage("Recognized show Spout outputs were reset.");
     } catch (error) {
+      if (!options.isProjectAuthorityIdentityCurrent(authority)) return;
       options.setMessage(String(error));
     }
   };

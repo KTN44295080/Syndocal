@@ -328,6 +328,7 @@ const controllerJs = ts.transpileModule(controller, {
 }).outputText;
 function leaseFixture(initial = "unavailable", config = {}) {
   const events = [], messages = [], actions = [];
+  let authorityCurrent = true;
   let generation = 31;
   let statuses = initial === "unavailable" ? [{status:initial}] : [{
     status:initial, resources:["lighting","video"], authority:{lease_id:"fixture-lease",generation},
@@ -363,6 +364,7 @@ function leaseFixture(initial = "unavailable", config = {}) {
       enableOutput: async () => {
         events.push("enable-output");
         await config.enableGate;
+        if (config.staleDuringEnable) authorityCurrent = false;
         if (config.failEnable) throw new Error("enable rejected");
         generation++;
         statuses=[{status:"held_active",resources:["lighting","video"],authority:{lease_id:"fixture-lease",generation}}];
@@ -383,7 +385,10 @@ function leaseFixture(initial = "unavailable", config = {}) {
     assert.ok(name in imports,`unexpected import ${name}`);return imports[name];
   },exports);
   const instance=exports.createOutputDiagnosticsController({invoke,setMessage:message=>messages.push(message),
-    refreshSnapshot:async()=>config.snapshot ?? {},safetyBlackout:()=>true,setSerialPorts:()=>{},
+    refreshSnapshot:async()=>config.snapshot ?? {},refreshProjectAuthority:async()=>{},
+    captureProjectAuthorityIdentity:()=>({project_epoch:0,project_revision:1,checkpoint_hash:"fixture-checkpoint"}),
+    isProjectAuthorityIdentityCurrent:()=>authorityCurrent,
+    safetyBlackout:()=>true,setSerialPorts:()=>{},
   });
   return {instance,events,messages,actions,setStatuses:value=>{statuses=value;}};
 }
@@ -402,6 +407,13 @@ for (const method of routeMethods) {
     await f.instance[method]();
     assert.equal(f.actions.length,0,`${method} must stop after any lease preparation failure`);
     assert.ok(f.messages.some(message=>/rejected|without confirmed|unavailable/.test(message)));
+  }
+  for (const staleConfig of [{ staleDuringEnable: true }, { staleDuringEnable: true, failEnable: true }]) {
+    const stale = leaseFixture("unavailable", staleConfig);
+    await stale.instance[method]();
+    assert.equal(stale.actions.length, 0, `${method} must discard a stale result after managed lease preparation`);
+    assert.ok(!stale.messages.some(message => /enable rejected|enabled|rejected/.test(message)),
+      `${method} must suppress stale errors and success messages`);
   }
   const unready=leaseFixture("held_active",{ownership:{...readyBothOwnership,video_allowed:false}});
   await unready.instance[method]();

@@ -1727,7 +1727,7 @@ assert.match(outputDiagnosticsSource, /enableShowSpoutOutputs[\s\S]*enable_show_
 assert.match(outputDiagnosticsSource, /resetShowSpoutOutputs[\s\S]*reset_show_spout_outputs/);
 assert.match(
   outputDiagnosticsSource,
-  /refreshProjectAuthority:\s*\(receipt:\s*OutputControlReceipt\)\s*=>\s*Promise<void>/,
+  /refreshProjectAuthority:\s*\(receipt:\s*OutputControlReceipt(?:,\s*operationLabel\?:\s*string)?\)\s*=>\s*Promise<void>/,
   "Spout diagnostics must receive the canonical receipt-convergence hook",
 );
 const enableSpoutDiagnosticsBody = outputDiagnosticsSource.slice(
