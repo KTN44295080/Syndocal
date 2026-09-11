@@ -35,3 +35,22 @@ Authenticode/Developer ID/notarized artifact, ASIO license publication,
 clean-machine install/upgrade/uninstall, live updater, physical acceptance,
 public tag, or external publication was performed. The latest EXE hash above
 identifies an unbundled local development artifact only.
+
+## Current-main software revalidation — 2026-09-12
+
+The release software gates were re-run after the prior record. The executable
+was built from `8812a7ff0e1d2e679bb66f4eb61de6302919498b`; the current `main`
+recording point is `5cbd6bc1a53662511d4bc35139a89e6aeac01861`, whose intervening
+changes are QA documents and ledger mirrors only.
+
+- Current release metadata check: **PASS** — `pnpm.cmd --dir app run check:release`
+- Current release self-tests: **PASS** — metadata 137 assertion groups, ASIO packaging 169 assertions, Windows artifact 144 assertions, strict JSON 130 assertions
+- Current warning gate: **PASS** — Windows native no-bundle build; baseline/current total `0/0`, first-party `0/0`, third-party `0/0`, identity removals `0`
+- Current warning self-test: **PASS**
+- Current Tauri build wrapper: **PASS** — 243 assertions, 27 hostile mutation fixtures
+- Current unbundled EXE: `target/release/syndocal.exe`, `64,569,856` bytes, SHA-256 `144CD12F9B247575DE4E40FC966BEA703D74206B159C736AFA5A6FE66957C9E3`
+
+The current EXE hash is also bound to the native thumbnail cancellation probe
+in `qa/THUMBNAIL_NATIVE_CANCELLATION_CURRENT_MAIN_2026-09-12.md`. It remains a
+local unbundled development artifact; no signed release candidate, publication,
+or clean-machine/updater acceptance is claimed.
