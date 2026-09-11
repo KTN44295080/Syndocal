@@ -1984,3 +1984,40 @@ owned by PID 0.
 This checkpoint does not claim real-file missing → Retry → recovery, actual
 Art-Net/ASIO/NDI/Spout/device output, Mac, signing, publication, or
 product-wide completion.
+
+## Diagnostic package telemetry reader follow-up
+
+The diagnostic ZIP export now reads the existing
+`EngineHandle::engine_telemetry_snapshot()` projection instead of cloning a
+full `EngineSnapshot`. The projection now includes Timeline event,
+automation, and video-automation counts required by `project-summary.json`;
+the existing engine telemetry report values and archive entry contract remain
+unchanged. The former full-snapshot report helper is test-only because
+production diagnostics now use the published telemetry projection directly.
+
+The engine snapshot-reader regression passed `8/8` with two existing ignored
+tests. App diagnostic regressions passed `12/12` with one existing ignored
+subprocess test, including the required archive entries and the structural
+narrow-reader guard. The maintained wrapper checker passed `243` assertions
+with `27` hostile mutation fixtures, and `git diff --check` passed. An
+intermediate native compile exposed one newly-unused test helper after the
+reader replacement; it was constrained to `cfg(test)`, and the final native
+compile emitted no first-party warnings.
+
+A fresh maintained-wrapper `pnpm.cmd --dir app tauri build --no-bundle`
+completed with the pinned MSVC 14.44.35207 Build Tools linker and no
+first-party compiler warnings. The exact checkout executable is 64,721,920
+bytes with SHA-256
+`8BDF1971B75FB6295C9FABD3BAB283D8AB71732C40055A323083A4CE2A961BFB`.
+The isolated native probe at
+`target/qa/native-final-validation-20260911-52/native-final-validation.json`
+passed: one maximized responsive `Syndocal` window, Standby ownership with
+lighting/video disabled, snapshot IPC, missing media/layer thumbnail IPC
+rejection with valid native tickets, zero physical-output operations, and
+exact executable/listener cleanup. A direct post-probe check found zero
+exact-path Syndocal processes and only the expected port `TIME_WAIT` entry
+owned by PID 0.
+
+This checkpoint does not claim real-file missing → Retry → recovery, actual
+Art-Net/ASIO/NDI/Spout/device output, Mac, signing, publication, or
+product-wide completion.

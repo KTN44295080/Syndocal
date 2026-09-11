@@ -256,6 +256,16 @@ fn assert_same_read_model(handle: &EngineHandle) {
         handle.engine_telemetry_snapshot(),
         EngineTelemetrySnapshot::from_snapshot(&expected)
     );
+    let telemetry = handle.engine_telemetry_snapshot();
+    assert_eq!(telemetry.timeline_event_count, expected.timeline.events.len());
+    assert_eq!(
+        telemetry.timeline_automation_count,
+        expected.timeline.automations.len()
+    );
+    assert_eq!(
+        telemetry.timeline_video_automation_count,
+        expected.timeline.video_automations.len()
+    );
     assert_eq!(handle.video_snapshot(), expected.video);
     assert_eq!(handle.stage_objects_snapshot(), expected.stage_objects);
     assert_eq!(handle.fixtures_snapshot(), expected.fixtures);

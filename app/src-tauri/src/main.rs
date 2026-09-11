@@ -62923,7 +62923,7 @@ fn export_diagnostic_package(
     let path = diagnostic_zip_file_name(path);
     let file = fs::File::create(&path)
         .map_err(|error| format!("Unable to create diagnostic package: {error}"))?;
-    let snapshot = state.engine.snapshot();
+    let snapshot = state.engine.engine_telemetry_snapshot();
     let current_project_path = state
         .current_project_path
         .lock()
@@ -62943,18 +62943,18 @@ fn export_diagnostic_package(
         "application_update": application_update,
     });
     let project_summary = json!({
-        "fixtures": snapshot.fixtures.len(),
-        "cues": snapshot.cues.len(),
-        "effects": snapshot.effects.len(),
-        "node_graphs": snapshot.node_graphs.len(),
-        "timeline_events": snapshot.timeline.events.len(),
-        "timeline_automations": snapshot.timeline.automations.len(),
-        "timeline_video_automations": snapshot.timeline.video_automations.len(),
-        "video_layers": snapshot.video.layers.len(),
-        "video_outputs": snapshot.video.outputs.len(),
-        "dmx_outputs": snapshot.dmx_outputs.len(),
+        "fixtures": snapshot.fixture_count,
+        "cues": snapshot.cue_count,
+        "effects": snapshot.effect_count,
+        "node_graphs": snapshot.node_graph_count,
+        "timeline_events": snapshot.timeline_event_count,
+        "timeline_automations": snapshot.timeline_automation_count,
+        "timeline_video_automations": snapshot.timeline_video_automation_count,
+        "video_layers": snapshot.video_layer_count,
+        "video_outputs": snapshot.video_output_count,
+        "dmx_outputs": snapshot.dmx_output_count,
     });
-    let telemetry = engine_telemetry_report_from_snapshot(&snapshot, captured_at_unix_ms);
+    let telemetry = engine_telemetry_report_from_telemetry_snapshot(&snapshot, captured_at_unix_ms);
     let runtime = video::video_runtime_status();
     let entries = vec![
         (
@@ -85907,6 +85907,7 @@ fn install_crash_report_hook(crash_directory: Arc<Mutex<Option<PathBuf>>>) {
     }));
 }
 
+#[cfg(test)]
 fn engine_telemetry_report_from_snapshot(
     snapshot: &EngineSnapshot,
     captured_at_unix_ms: u128,
@@ -93378,6 +93379,22 @@ pub(crate) mod tests {
         let body = &source[function_start..function_end];
         assert!(body.contains("timeline_ids_snapshot"));
         assert!(!body.contains("state.engine.snapshot()"));
+    }
+
+    #[test]
+    fn diagnostic_export_uses_the_narrow_engine_telemetry_reader() {
+        let source = include_str!("main.rs");
+        let function_start = source
+            .find("fn export_diagnostic_package(")
+            .expect("missing diagnostic export command");
+        let function_end = source[function_start..]
+            .find("\nfn load_project(")
+            .map(|offset| function_start + offset)
+            .expect("missing diagnostic export boundary");
+        let body = &source[function_start..function_end];
+        assert!(body.contains("engine_telemetry_snapshot"));
+        assert!(body.contains("engine_telemetry_report_from_telemetry_snapshot"));
+        assert!(!body.contains("engine.snapshot()"));
     }
 
     #[test]
