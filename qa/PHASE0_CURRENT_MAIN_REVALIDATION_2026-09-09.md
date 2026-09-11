@@ -138,3 +138,29 @@ invoked by `check:release:static`. Their generation, retry, stale-result,
 selection, and concurrency assertions remain unchanged. This is validation
 wiring only; it does not close ShowClock decisions, physical audio/video
 devices, or venue acceptance.
+
+## Current-main full release-static revalidation — 2026-09-11
+
+The complete `check:release` gate was rerun at source HEAD
+`186d621200f1a94ed4d9e3427faccee1e550df6b`. Evidence is preserved under
+`target/qa/phase0-current-main-20260911-01/check-release-output.txt`.
+
+```text
+pnpm.cmd --dir app run check:release
+exit_code=0
+```
+
+The run passed the completion and Q1–Q4 ledger validators while preserving
+`50 Open + 8 Deferred`; frontend routing/invoke and backend operator contracts;
+project transaction, recovery, and publication gates; exact 516-command
+native admission inventory with 18 negative fixtures; thumbnail, media
+operation/authority, native thumbnail request, and snapshot publication
+contracts; Agent Bridge; output ownership/control and safety blackout;
+ASIO packaging/v3 fail-closed contracts; live-audio/IPC; Timeline audio,
+loop, transport, and Follow; snapshot watermark; project-open bootstrap;
+video runtime/output/window/camera checks; and release metadata.
+
+This is the current static software gate only. It does not close any ledger
+row by count, and does not claim native-window launch, real media recovery,
+external-client, physical I/O, ASIO/NDI/DMX hardware, Mac, signing,
+publication, venue, or product-wide acceptance.
