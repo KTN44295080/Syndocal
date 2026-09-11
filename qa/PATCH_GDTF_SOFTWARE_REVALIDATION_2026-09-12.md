@@ -49,3 +49,15 @@ and comparator parity are not proven here. `DEC-STANDALONE-001` remains an
 out-of-scope boundary; no standalone-hardware programming was added.
 
 `git diff --check`: PASS before commit.
+
+## Current-main rerun — 2026-09-12
+
+The same software gate was rerun against current `main` at
+`aff411a7a97c8129368b257c17940091e38d4fa2`, with the documented MSVC
+14.44.35207 x64 absolute linker pin confirmed first by `where.exe link.exe`.
+
+All focused checks passed: the eight static/source contracts; Tauri `d2_`
+9/9, `patch_` 30/30, and `gdtf_` 10/10; engine `fixture_patch_` 10/10 and
+`fixture_profile_repair_` 6/6; and the gdtf crate 18/18 plus zero doc-test
+failures. No physical DMX, fixture output, native UI, or visual comparator
+acceptance was performed.
