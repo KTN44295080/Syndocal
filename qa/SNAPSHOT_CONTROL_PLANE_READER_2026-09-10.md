@@ -1254,6 +1254,63 @@ This checkpoint does not claim real-file missing → Retry → recovery, actual
 Art-Net/ASIO/NDI/Spout/device output, Mac, signing, publication, or
 product-wide completion.
 
+## Current-main representative snapshot benchmark revalidation — 2026-09-11
+
+This is a measurement-only revalidation of the snapshot-reader work already
+present on current `main`. It does not add a reader, move the publication
+lock, change snapshot ownership, alter the wire format, or claim application
+FPS/CPU acceptance.
+
+- Source HEAD: `8a07616be5e567b21447843d275caa51d33626d4`
+- Fixture: `samples/phase1-mini-show.sdc`
+- Fixture identity: 21,612 bytes, SHA-256
+  `45FBBFC1165C8A79BAEDBCBA6C44C99F101120E1814AB5E9D3AD14C4589F99DB`
+- Fixture shape: `fixtures=1`, `cues=1`, `video.outputs=1`
+- Toolchain: MSVC 14.44.35207 pinned through `vcvars64.bat`; `where.exe
+  link.exe` reported the pinned absolute linker first
+- Evidence: `target/qa/snapshot-current-main-20260911-01/benchmark-output.txt`
+  (expected setup failure: relative fixture path was resolved from the Cargo
+  test working directory and was not found)
+- Successful evidence:
+  `target/qa/snapshot-current-main-20260911-02/benchmark-output.txt`
+  (absolute fixture path; no source or fixture mutation)
+
+The successful command was:
+
+```text
+cargo test -p engine --release --locked benchmark_show_ -- --ignored --nocapture --test-threads=1
+```
+
+All five opt-in measurements passed: `1 passed`, `0 failed`, `0 ignored` in
+the filtered test binary. The medians were:
+
+```text
+clone=3,798,900 ns / 1,000 iterations
+encode=9,898,300 ns / 1,000 iterations
+clone+encode=13,410,600 ns / 1,000 iterations
+build_snapshot=11,991,900 ns / 1,000 iterations
+rendered_video=1,123,700 ns / 1,000 iterations
+authored_from_rendered=1,943,600 ns / 1,000 iterations
+rendered+authored=1,927,600 ns / 1,000 iterations
+full_video_read=14,095,500 ns / 2,000 iterations
+narrow_video_read=137,900 ns / 2,000 iterations
+writer_hold=2 ms: full=2,520,800 ns, narrow=2,517,700 ns
+try_snapshot=11,900 ns, successes=0/100
+```
+
+The writer benchmark intentionally holds the shared publication lock for
+2 ms. It shows that the blocking full and narrow readers both wait for the
+writer, while `try_snapshot` returns `None` for all 100 reads. Therefore this
+run does not justify a shadow cache, a lock move, or replacing readers with a
+non-blocking path without a retained-image/fail-closed contract. The result
+is a current-main measurement boundary only, not a real-show tick budget,
+FPS, multi-client delta, IPC, native-window, hardware, Mac, signing, or
+publication acceptance.
+
+The initial relative-path failure is preserved as setup evidence and is not
+counted as a product failure. The successful rerun used the same fixture and
+unchanged assertions.
+
 ## Follow output effect runtime projection checkpoint
 
 Source base before this checkpoint: `ae432dd0139bfcc234b72898d028fa0fa7c4b153`.
