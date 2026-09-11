@@ -433,6 +433,17 @@ fn assert_same_read_model(handle: &EngineHandle) {
     assert_eq!(handle.node_graph_summary_snapshot(999_999), None);
     assert!(!handle.node_graph_exists(999_999));
     assert_eq!(
+        handle.video_composition_layer_admission_snapshot(1),
+        (
+            expected
+                .video
+                .compositions
+                .iter()
+                .any(|composition| composition.id == 1),
+            expected.video.layers.iter().map(|layer| layer.id).collect()
+        )
+    );
+    assert_eq!(
         handle.cue_metadata_admission_snapshot(999_999),
         CueMetadataAdmissionSnapshot {
             cue: None,

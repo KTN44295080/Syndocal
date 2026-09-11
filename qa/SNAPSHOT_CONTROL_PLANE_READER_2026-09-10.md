@@ -1624,3 +1624,38 @@ owned by PID 0.
 This checkpoint does not claim real-file missing → Retry → recovery, actual
 Art-Net/ASIO/NDI/Spout/device output, Mac, signing, publication, or
 product-wide completion.
+
+## Video composition layer admission reader follow-up
+
+The `set_video_composition_layers` admission path now reads editable
+composition presence and published video-layer IDs through one
+`EngineHandle::video_composition_layer_admission_snapshot()` publication
+read. Main-composition rejection, missing-composition rejection, missing
+layer rejection, and the existing `SetVideoCompositionLayers` mutation are
+unchanged. Timeline-layer composition editing and other multi-collection
+video paths remain on their existing full-snapshot paths.
+
+The focused engine snapshot-reader regression passed `8/8` with two existing
+ignored tests, including the composition/layer admission projection and
+poisoned-publication default behavior. The app release structural regression
+passed `1/1`. The changed engine files passed individual rustfmt checks and
+`git diff --check` passed. The maintained wrapper checker passed `243`
+assertions with `27` hostile mutation fixtures.
+
+A fresh maintained-wrapper `pnpm.cmd --dir app tauri build --no-bundle`
+completed with the pinned MSVC 14.44.35207 Build Tools linker and no
+first-party compiler warnings. The exact checkout executable is 64,677,376
+bytes with SHA-256
+`F82FA57784FE2B8802ADA0248B95F1C9297774A2F4A3597222EAA826C7AF7E0D`.
+The isolated native probe at
+`target/qa/native-final-validation-20260911-42/native-final-validation.json`
+passed: one maximized responsive `Syndocal` window, Standby ownership with
+lighting/video disabled, snapshot IPC, missing media/layer thumbnail IPC
+rejection with valid native tickets, zero physical-output operations, and
+exact executable/listener cleanup. A direct post-probe check found zero
+exact-path Syndocal processes and only the expected port `TIME_WAIT` entry
+owned by PID 0.
+
+This checkpoint does not claim real-file missing → Retry → recovery, actual
+Art-Net/ASIO/NDI/Spout/device output, Mac, signing, publication, or
+product-wide completion.

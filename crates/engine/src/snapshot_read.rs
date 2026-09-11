@@ -584,6 +584,24 @@ impl EngineHandle {
         })
     }
 
+    /// Read the editable composition presence and published layer IDs under
+    /// one snapshot guard for composition-layer admission.
+    pub fn video_composition_layer_admission_snapshot(
+        &self,
+        composition_id: CompositionId,
+    ) -> (bool, Vec<VideoLayerId>) {
+        self.read_snapshot_field(|snapshot| {
+            (
+                snapshot
+                    .video
+                    .compositions
+                    .iter()
+                    .any(|composition| composition.id == composition_id),
+                snapshot.video.layers.iter().map(|layer| layer.id).collect(),
+            )
+        })
+    }
+
     /// Read only published video-layer IDs for admission checks that do not
     /// need the authored layer bodies or unrelated project/runtime state.
     pub fn video_layer_ids_snapshot(&self) -> Vec<VideoLayerId> {

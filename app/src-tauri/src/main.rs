@@ -47756,9 +47756,18 @@ fn set_video_composition_layers(
     composition_id: CompositionId,
     layer_ids: Vec<VideoLayerId>,
 ) -> Result<(), String> {
-    let snapshot = state.engine.snapshot();
-    validate_editable_video_composition(&snapshot, composition_id)?;
-    validate_video_layer_ids(&snapshot, &layer_ids)?;
+    if composition_id == 1 {
+        return Err("Main video composition cannot be edited directly".to_string());
+    }
+    let (composition_exists, published_layer_ids) = state
+        .engine
+        .video_composition_layer_admission_snapshot(composition_id);
+    if !composition_exists {
+        return Err(format!(
+            "Video composition {composition_id} was not found"
+        ));
+    }
+    validate_video_layer_ids_from_published(&published_layer_ids, &layer_ids)?;
     state
         .engine
         .send(EngineCommand::SetVideoCompositionLayers {
@@ -84352,6 +84361,13 @@ fn validate_video_layer_ids_from_engine(
     layer_ids: &[VideoLayerId],
 ) -> Result<(), String> {
     let published_layer_ids = engine.video_layer_ids_snapshot();
+    validate_video_layer_ids_from_published(&published_layer_ids, layer_ids)
+}
+
+fn validate_video_layer_ids_from_published(
+    published_layer_ids: &[VideoLayerId],
+    layer_ids: &[VideoLayerId],
+) -> Result<(), String> {
     for layer_id in layer_ids {
         if !published_layer_ids.contains(layer_id) {
             return Err(format!("Video layer {layer_id} was not found"));
@@ -93614,6 +93630,20 @@ pub(crate) mod tests {
             .map(|offset| function_start + offset);
         let body = &source[function_start..next_attribute.unwrap_or(source.len())];
         assert!(body.contains("node_graph_summary_snapshot"));
+        assert!(!body.contains("engine.snapshot()"));
+    }
+
+    #[test]
+    fn set_video_composition_layers_uses_the_narrow_engine_reader() {
+        let source = include_str!("main.rs");
+        let function_start = source
+            .find("fn set_video_composition_layers(")
+            .expect("missing set_video_composition_layers command");
+        let next_attribute = source[function_start..]
+            .find("\n#[tauri::command]")
+            .map(|offset| function_start + offset);
+        let body = &source[function_start..next_attribute.unwrap_or(source.len())];
+        assert!(body.contains("video_composition_layer_admission_snapshot"));
         assert!(!body.contains("engine.snapshot()"));
     }
 
