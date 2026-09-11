@@ -379,6 +379,15 @@ fn assert_same_read_model(handle: &EngineHandle) {
             .map(|effect| effect.effect_type)
     );
     assert_eq!(handle.effect_kind_snapshot(999_999), None);
+    assert_eq!(
+        handle.effect_summary_snapshot(1),
+        expected
+            .effects
+            .iter()
+            .find(|effect| effect.id == 1)
+            .cloned()
+    );
+    assert_eq!(handle.effect_summary_snapshot(999_999), None);
     let expected_effect_target_admission = expected
         .effects
         .iter()

@@ -1,13 +1,14 @@
 use crate::{EngineHandle, TimelineTransportAuthority};
 use protocol::{
     AutoVjAction, AutomationId, ClockSnapshot, CompositionId, CompositionSummary, CueId, CueListId,
-    CueSummary, DmxOutputConfig, EffectId, EffectKind, EngineSnapshot, EngineTelemetry, FixtureId,
-    NodeGraphId, PaletteId, PatchedFixtureSummary, PlaybackExecutorSummary, StageObjectSummary,
-    TimelineAudioClipId, TimelineAudioOutputBus, TimelineCueEventSummary, TimelineEventId,
-    TimelineFollowRuntimeStatus, TimelineFollowRuntimeStatusSnapshot, TimelineFollowRuntimeSummary,
-    TimelineLayerSummary, TimelineLoopRuntimeStatus, VideoClipRuntimeSnapshot, VideoLayerId,
-    VideoLayerState, VideoLayerTransitionBusSummary, VideoLayerTransitionRuntimeSnapshot,
-    VideoOutputId, VideoOutputSummary, VideoSnapshot, VideoSourceSummary,
+    CueSummary, DmxOutputConfig, EffectId, EffectKind, EffectSummary, EngineSnapshot,
+    EngineTelemetry, FixtureId, NodeGraphId, PaletteId, PatchedFixtureSummary,
+    PlaybackExecutorSummary, StageObjectSummary, TimelineAudioClipId, TimelineAudioOutputBus,
+    TimelineCueEventSummary, TimelineEventId, TimelineFollowRuntimeStatus,
+    TimelineFollowRuntimeStatusSnapshot, TimelineFollowRuntimeSummary, TimelineLayerSummary,
+    TimelineLoopRuntimeStatus, VideoClipRuntimeSnapshot, VideoLayerId, VideoLayerState,
+    VideoLayerTransitionBusSummary, VideoLayerTransitionRuntimeSnapshot, VideoOutputId,
+    VideoOutputSummary, VideoSnapshot, VideoSourceSummary,
 };
 
 /// The runtime-only projection required by the control-plane query adapter.
@@ -437,6 +438,18 @@ impl EngineHandle {
                 .iter()
                 .find(|effect| effect.id == effect_id)
                 .map(|effect| effect.effect_type)
+        })
+    }
+
+    /// Read one authored Effect body for preset export without cloning
+    /// unrelated effects, authored collections, or runtime state.
+    pub fn effect_summary_snapshot(&self, effect_id: EffectId) -> Option<EffectSummary> {
+        self.read_snapshot_field(|snapshot| {
+            snapshot
+                .effects
+                .iter()
+                .find(|effect| effect.id == effect_id)
+                .cloned()
         })
     }
 

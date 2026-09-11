@@ -50114,13 +50114,11 @@ fn save_effect_preset(
     state: State<'_, AppState>,
     effect_id: EffectId,
 ) -> Result<Option<String>, String> {
-    let snapshot = state.engine.snapshot();
-    let effect = snapshot
-        .effects
-        .iter()
-        .find(|effect| effect.id == effect_id)
+    let effect = state
+        .engine
+        .effect_summary_snapshot(effect_id)
         .ok_or_else(|| format!("Effect {effect_id} was not found"))?;
-    let preset = effect_summary_to_preset(effect)?;
+    let preset = effect_summary_to_preset(&effect)?;
     let Some(path) = parented_file_dialog(&window)
         .add_filter("Syndocal Effect", &["effect"])
         .set_file_name(format!("{}.effect", safe_file_stem(&effect.label)))
@@ -93566,6 +93564,20 @@ pub(crate) mod tests {
             .map(|offset| function_start + offset);
         let body = &source[function_start..next_attribute.unwrap_or(source.len())];
         assert!(body.contains("effect_video_target_admission_snapshot"));
+        assert!(!body.contains("engine.snapshot()"));
+    }
+
+    #[test]
+    fn save_effect_preset_uses_the_narrow_engine_reader() {
+        let source = include_str!("main.rs");
+        let function_start = source
+            .find("fn save_effect_preset(")
+            .expect("missing save_effect_preset command");
+        let next_attribute = source[function_start..]
+            .find("\n#[tauri::command]")
+            .map(|offset| function_start + offset);
+        let body = &source[function_start..next_attribute.unwrap_or(source.len())];
+        assert!(body.contains("effect_summary_snapshot"));
         assert!(!body.contains("engine.snapshot()"));
     }
 

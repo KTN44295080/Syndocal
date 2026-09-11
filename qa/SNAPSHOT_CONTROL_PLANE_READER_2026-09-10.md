@@ -1487,3 +1487,37 @@ owned by PID 0.
 This checkpoint does not claim real-file missing → Retry → recovery, actual
 Art-Net/ASIO/NDI/Spout/device output, Mac, signing, publication, or
 product-wide completion.
+
+## Effect preset export reader follow-up
+
+The `save_effect_preset` admission/export path now reads one authored
+`EffectSummary` through `EngineHandle::effect_summary_snapshot()` instead of
+cloning the complete engine snapshot. Existing missing-Effect rejection,
+effect-to-preset conversion, dialog behavior, serialization, and file-write
+boundary are unchanged. Effect creation, duplication, and compound target
+validation remain on their existing paths.
+
+The focused engine snapshot-reader regression passed `8/8` with two existing
+ignored tests, including positive/missing Effect body projection and
+poisoned-publication default behavior. The app release structural regression
+passed `1/1`. The changed engine files passed individual rustfmt checks and
+`git diff --check` passed. The maintained wrapper checker passed `243`
+assertions with `27` hostile mutation fixtures.
+
+A fresh maintained-wrapper `pnpm.cmd --dir app tauri build --no-bundle`
+completed with the pinned MSVC 14.44.35207 Build Tools linker and no
+first-party compiler warnings. The exact checkout executable is 64,667,648
+bytes with SHA-256
+`EF249BDB2AA680856A81380BFFD1654C9CA0A36658B11EE59498726DF73A8BFC`.
+The isolated native probe at
+`target/qa/native-final-validation-20260911-38/native-final-validation.json`
+passed: one maximized responsive `Syndocal` window, Standby ownership with
+lighting/video disabled, snapshot IPC, missing media/layer thumbnail IPC
+rejection with valid native tickets, zero physical-output operations, and
+exact executable/listener cleanup. A direct post-probe check found zero
+exact-path Syndocal processes and only the expected port `TIME_WAIT` entry
+owned by PID 0.
+
+This checkpoint does not claim real-file missing → Retry → recovery, actual
+Art-Net/ASIO/NDI/Spout/device output, Mac, signing, publication, or
+product-wide completion.
