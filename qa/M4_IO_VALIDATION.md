@@ -1,6 +1,6 @@
 # M4 External I/O Validation Matrix
 
-Updated: 2026-09-07
+Updated: 2026-09-12
 
 This is an engineering evidence record, not user documentation. README and release documentation remain deferred to M6.
 
@@ -138,3 +138,21 @@ but registry presence does not prove a connected driver, opened stream, fault
 recovery, soak, or latency acceptance. No fixture, serial-DMX, or external
 comparison application was operated. The DMX/RDM, physical MIDI, ASIO matrix,
 venue, and pinned comparison rows therefore remain external gates.
+
+### 2026-09-12 current-host physical MIDI recheck
+
+The read-only availability result above is superseded for MIDI by this
+current-host run. Windows exposed `SMC-Mixer` as a physical MIDI input and
+output endpoint, and `COM5` as `USB Serial Port (FTDI VID 0403 / PID 6001)` for
+the separate serial-DMX path.
+
+| Check | Device/command | Capture | Result |
+|---|---|---|---|
+| Physical MIDI enumerate/open/feedback | MSVC 14.44.35207 x64; `SYNDOCAL_TEST_MIDI_INPUT=SMC-Mixer`; `SYNDOCAL_TEST_MIDI_OUTPUT=SMC-Mixer`; `cargo test -p io --locked physical_midi_ports_enumerate_open_and_send_feedback -- --ignored --nocapture` | Production `midir` listed input `SMC-Mixer` (index 1) and output `SMC-Mixer` (index 2), opened the clock input and feedback output, and sent one channel-1 All Notes Off message `B0 7B 00` | PASS — `1 passed / 0 failed / 0 ignored` |
+
+This closes only the current physical MIDI enumerate/open/safe-feedback slice.
+It does not claim physical knob/button/clock/MTC movement, LED feedback
+observation, p50/p95/p99/max latency, OSC/Remote acceptance, or any DMX fixture
+output. The FTDI `COM5` path remains pending an explicitly identified fixture
+and an operator-visible output capture before the existing physical serial test
+is run or promoted.
