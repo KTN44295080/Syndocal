@@ -18,3 +18,14 @@ source proof. `DEC-FILE-ID-001` remains open for the non-Windows identity
 decision, and real storage/media corpus, cross-platform execution, browser or
 native rendered reachability, and product-wide acceptance remain open.
 `COV-MEDIA-T1-001` remains `In progress`.
+
+## Current-main rerun — 2026-09-12
+
+The five Media T1 software checks were rerun against current `main` at
+`c1f94878cf18a687f875e75b2c20f408bd3d0ad9`: media authority, VJ first-run,
+VJ media-import access, backend operator contract, and project transaction.
+All five passed. The thumbnail controller policy fixtures again covered
+bounded retry, terminal rejection, stale-retry retirement, explicit recovery,
+cache reuse, burst admission, and worker disposal. This remains source/policy
+evidence only; no media corpus, browser/native rendered reachability,
+cross-platform execution, or product-wide acceptance was performed.
