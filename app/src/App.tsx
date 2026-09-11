@@ -5773,15 +5773,16 @@ export default function App() {
     }]);
   }
   let dmxInputStatusRequestGeneration = 0;
+  let dmxInputStatusDisposed = false;
   const refreshDmxInputStatus = async () => {
     if (!isTauriRuntime()) return;
     const requestGeneration = ++dmxInputStatusRequestGeneration;
     try {
       const status = await invoke<DmxInputStatus>("dmx_input_status");
-      if (requestGeneration !== dmxInputStatusRequestGeneration) return;
+      if (dmxInputStatusDisposed || requestGeneration !== dmxInputStatusRequestGeneration) return;
       setDmxInputStatus(status);
     } catch (error) {
-      if (requestGeneration === dmxInputStatusRequestGeneration) {
+      if (!dmxInputStatusDisposed && requestGeneration === dmxInputStatusRequestGeneration) {
         setMessage(`DMX input status failed: ${String(error)}`);
       }
     }
@@ -11940,6 +11941,8 @@ export default function App() {
     disposeSerialDmxRuntimeStatuses();
     if (dmxInputStatusTimer !== null) {
       window.clearInterval(dmxInputStatusTimer);
+      dmxInputStatusDisposed = true;
+      dmxInputStatusRequestGeneration += 1;
     }
     if (recoveryTimer !== null) {
       window.clearInterval(recoveryTimer);

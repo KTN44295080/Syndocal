@@ -203,15 +203,16 @@ and product-wide completion remain unclaimed.
 ## Current-main DMX status generation fence — 2026-09-11
 
 The existing DMX input status poll now rejects an older overlapping status
-response before publication and suppresses an older polling error message. The
-DMX Start and Stop failure paths also check the captured project authority
-before changing status or reporting an error. No DMX command, mapping format,
-worker, or physical output behavior changed.
+response before publication, suppresses an older polling error message, and
+retires an in-flight response during App cleanup. The DMX Start and Stop
+failure paths also check the captured project authority before changing status
+or reporting an error. No DMX command, mapping format, worker, or physical
+output behavior changed.
 
 | Check | Result |
 | --- | --- |
 | `pnpm.cmd --dir app exec tsc --noEmit` | PASS |
-| `pnpm.cmd --dir app run check:dvc-dmx-shortcuts` | PASS — 38 assertions, including DMX status and Start/Stop stale-failure fences |
+| `pnpm.cmd --dir app run check:dvc-dmx-shortcuts` | PASS — 39 assertions, including DMX status cleanup and Start/Stop stale-failure fences |
 | `pnpm.cmd --dir app run check:frontend-command-routing` | PASS — 133 renderer, 31 server-authoritative, 28 raw, 464 facade dispatches |
 | `pnpm.cmd --dir app run check:release` | PASS — full static release gate; 50 Open + 8 Deferred preserved |
 | `git diff --check` | PASS |
@@ -220,9 +221,9 @@ The exact Windows native no-bundle procedure used MSVC `14.44.35207` as the
 first `where.exe link.exe` result. The fresh executable was
 `target/release/syndocal.exe`, version `1.2.0-alpha.69`, 64,744,448 bytes,
 SHA-256
-`9F2521CCD3E016B8D562ABED3D61322196FDD0B92989351C7C1AA638607DCB9E`.
+`F5970F35A04AC252E22581C14A157FB37AD370CDDF610B019C8F25B0E3763292`.
 The fresh probe report is
-`target/qa/native-final-validation-20260911-62/native-final-validation.json`:
+`target/qa/native-final-validation-20260911-63/native-final-validation.json`:
 one responsive maximized `Syndocal` window, Standby with lighting/video
 disabled, snapshot IPC, expected missing-asset/layer thumbnail rejection,
 zero physical-output operations, exact application exit, and zero remaining

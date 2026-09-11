@@ -99,9 +99,11 @@ const checks = [
     && /await invoke\("start_dmx_input", \{\s*config: controlConfig,\s*mappings: dmxMappings\(\),\s*expectedEpoch: authority\.project_epoch,\s*\}\);/.test(app),
   "learned mappings are persisted and applied to the active input under one captured project authority"],
   [/const\s+requestGeneration\s*=\s*\+\+dmxInputStatusRequestGeneration/.test(dmxStatusRefresh)
-    && /if\s*\(requestGeneration\s*!==\s*dmxInputStatusRequestGeneration\)\s*return;/.test(dmxStatusRefresh)
-    && /if\s*\(requestGeneration\s*===\s*dmxInputStatusRequestGeneration\)\s*\{/.test(dmxStatusRefresh),
+    && /if\s*\(dmxInputStatusDisposed\s*\|\|\s*requestGeneration\s*!==\s*dmxInputStatusRequestGeneration\)\s*return;/.test(dmxStatusRefresh)
+    && /if\s*\(!dmxInputStatusDisposed\s*&&\s*requestGeneration\s*===\s*dmxInputStatusRequestGeneration\)\s*\{/.test(dmxStatusRefresh),
   "DMX input status polling rejects stale success and failure responses"],
+  [app.includes("dmxInputStatusDisposed = true;") && app.includes("dmxInputStatusRequestGeneration += 1;"),
+  "DMX input status polling retires an in-flight response on App cleanup"],
   [/catch\s*\(error\)[\s\S]*?if\s*\(!isProjectAuthorityIdentityCurrent\(authority\)\)\s*return;[\s\S]*?setDmxInputStatus/.test(dmxStartRoute),
   "DMX input Start failure cannot write after project authority replacement"],
   [/catch\s*\(error\)[\s\S]*?if\s*\(!isProjectAuthorityIdentityCurrent\(authority\)\)\s*return;[\s\S]*?setMessage/.test(dmxStopRoute),
