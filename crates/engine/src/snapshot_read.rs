@@ -4,8 +4,7 @@ use protocol::{
     CueSummary, DmxOutputConfig, DmxUniversePreview, EffectId, EffectKind, EffectSummary,
     EngineSnapshot, EngineTelemetry, FixtureId, NodeGraphId, NodeGraphSummary, PaletteId,
     PatchedFixtureSummary, PlaybackExecutorSummary, StageObjectSummary, TimelineAudioClipId,
-    TimelineAudioOutputBus,
-    TimelineCueEventSummary, TimelineEventId, TimelineFollowRuntimeStatus,
+    TimelineAudioOutputBus, TimelineCueEventSummary, TimelineEventId, TimelineFollowRuntimeStatus,
     TimelineFollowRuntimeStatusSnapshot, TimelineFollowRuntimeSummary, TimelineId,
     TimelineLayerSummary, TimelineLoopRuntimeStatus, VideoClipRuntimeSnapshot,
     VideoIsfEffectSummary, VideoLayerId, VideoLayerState, VideoLayerTransitionBusSummary,
@@ -28,6 +27,22 @@ pub struct ControlPlaneRuntimeSnapshot {
     pub timeline_loop_active: bool,
     pub video_clip_slots_active: bool,
     pub video_transitions_active: bool,
+}
+
+/// The published runtime values required by the native Follow/output effect
+/// renderer.  This keeps the renderer's epoch/fence capture paired with one
+/// complete snapshot publication without cloning authored/project collections
+/// that the effect path never reads.
+#[derive(Debug, Clone, PartialEq)]
+pub struct VideoOutputEffectRuntimeSnapshot {
+    pub clip_runtime: VideoClipRuntimeSnapshot,
+    pub transition_runtime: VideoLayerTransitionRuntimeSnapshot,
+    pub clock_bpm: f32,
+    pub timeline_id: TimelineId,
+    pub timeline_transport_epoch: u64,
+    pub timeline_transport_generation: u64,
+    pub timeline_loop_generation: u64,
+    pub timeline_follow_generation: u64,
 }
 
 /// The authored counts, DMX routes, clock, and telemetry needed by the
@@ -253,6 +268,21 @@ impl EngineHandle {
                 snapshot.video_transition_runtime.clone(),
                 snapshot.clock.bpm,
             )
+        })
+    }
+
+    /// Read the runtime-only values needed by the native output effect path
+    /// without cloning the rendered video or the rest of the public snapshot.
+    pub fn video_output_effect_runtime_snapshot(&self) -> VideoOutputEffectRuntimeSnapshot {
+        self.read_snapshot_field(|snapshot| VideoOutputEffectRuntimeSnapshot {
+            clip_runtime: snapshot.video_clip_runtime.clone(),
+            transition_runtime: snapshot.video_transition_runtime.clone(),
+            clock_bpm: snapshot.clock.bpm,
+            timeline_id: snapshot.timeline.id,
+            timeline_transport_epoch: snapshot.timeline.transport_epoch,
+            timeline_transport_generation: snapshot.timeline.transport_generation,
+            timeline_loop_generation: snapshot.timeline.loop_runtime.generation,
+            timeline_follow_generation: snapshot.timeline.follow_runtime.generation,
         })
     }
 

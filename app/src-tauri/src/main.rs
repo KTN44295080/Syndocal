@@ -76684,25 +76684,15 @@ fn sanitize_file_name_component(value: &str) -> String {
     }
 }
 
-/// A single output-preview input captured in the same order as the NDI and
-/// Spout output workers. The ownership epoch fences all C1 renderer caches,
-/// while the snapshot carries the matching runtime clip-slot truth.
+/// A full output-preview input used by the recording path. The ownership epoch
+/// fences the renderer cache while the snapshot supplies the rendered video
+/// image and the runtime values that the isolated recording renderer needs.
 ///
 /// Keep the epoch read before the snapshot: this is the output ownership
 /// boundary used by the production transport renderers as well.
 struct VideoOutputPreviewEffectSnapshot {
     snapshot: EngineSnapshot,
     project_render_epoch: u64,
-}
-
-impl VideoOutputPreviewEffectSnapshot {
-    #[cfg(test)]
-    fn render_context(&self) -> video::VideoEffectRenderContext<'_> {
-        video::VideoEffectRenderContext {
-            clip_runtime: &self.snapshot.video_clip_runtime,
-            project_render_epoch: self.project_render_epoch,
-        }
-    }
 }
 
 fn capture_video_output_preview_effect_snapshot(
@@ -76712,6 +76702,35 @@ fn capture_video_output_preview_effect_snapshot(
     let snapshot = engine.snapshot();
     VideoOutputPreviewEffectSnapshot {
         snapshot,
+        project_render_epoch,
+    }
+}
+
+/// Runtime-only Follow/output effect input captured in the same ownership
+/// order as the NDI and Spout workers. It avoids cloning rendered video and
+/// authored/project collections that the Follow combiner never reads.
+struct VideoOutputEffectRuntimeContext {
+    runtime: engine::VideoOutputEffectRuntimeSnapshot,
+    project_render_epoch: u64,
+}
+
+impl VideoOutputEffectRuntimeContext {
+    #[cfg(test)]
+    fn render_context(&self) -> video::VideoEffectRenderContext<'_> {
+        video::VideoEffectRenderContext {
+            clip_runtime: &self.runtime.clip_runtime,
+            project_render_epoch: self.project_render_epoch,
+        }
+    }
+}
+
+fn capture_video_output_effect_runtime_context(
+    engine: &EngineHandle,
+) -> VideoOutputEffectRuntimeContext {
+    let project_render_epoch = engine.output_ownership_status().epoch;
+    let runtime = engine.video_output_effect_runtime_snapshot();
+    VideoOutputEffectRuntimeContext {
+        runtime,
         project_render_epoch,
     }
 }
@@ -78002,15 +78021,24 @@ mod live_video_monitor_tests {
                 active_slot_id: Some(VideoClipSlotId(23)),
                 ..Default::default()
             });
-        let captured = VideoOutputPreviewEffectSnapshot {
-            snapshot,
+        let captured = VideoOutputEffectRuntimeContext {
+            runtime: engine::VideoOutputEffectRuntimeSnapshot {
+                clip_runtime: snapshot.video_clip_runtime,
+                transition_runtime: snapshot.video_transition_runtime,
+                clock_bpm: snapshot.clock.bpm,
+                timeline_id: snapshot.timeline.id,
+                timeline_transport_epoch: snapshot.timeline.transport_epoch,
+                timeline_transport_generation: snapshot.timeline.transport_generation,
+                timeline_loop_generation: snapshot.timeline.loop_runtime.generation,
+                timeline_follow_generation: snapshot.timeline.follow_runtime.generation,
+            },
             project_render_epoch: 41,
         };
 
         let context = captured.render_context();
 
         assert_eq!(context.project_render_epoch, 41);
-        assert_eq!(context.clip_runtime, &captured.snapshot.video_clip_runtime);
+        assert_eq!(context.clip_runtime, &captured.runtime.clip_runtime);
         assert_eq!(context.clip_runtime.layers[0].layer_id, 17);
         assert_eq!(
             context.clip_runtime.layers[0].active_slot_id,
@@ -78068,6 +78096,24 @@ mod live_video_monitor_tests {
         assert!(
             recording_worker.contains("render_output_preview_with_effects_and_transitions_cancellable"),
             "the isolated recording renderer must retain the C1 effect-aware output render"
+        );
+    }
+
+    #[test]
+    fn c1_follow_output_context_uses_runtime_projection_not_full_snapshot() {
+        let source = include_str!("main.rs");
+        let start = source
+            .find("fn capture_video_output_effect_runtime_context(")
+            .expect("missing C1 Follow runtime context capture");
+        let end = source[start..]
+            .find("#[tauri::command]")
+            .map(|offset| start + offset)
+            .expect("missing boundary after C1 Follow runtime context capture");
+        let body = &source[start..end];
+        assert!(body.contains("video_output_effect_runtime_snapshot"));
+        assert!(
+            !body.contains("engine.snapshot()"),
+            "C1 Follow output context must not clone the full public snapshot"
         );
     }
 
@@ -79950,6 +79996,50 @@ fn native_video_output_validation_identity(
     width: u32,
     height: u32,
 ) -> NativeVideoOutputValidationIdentity {
+    native_video_output_validation_identity_from_fields(
+        authority,
+        snapshot.timeline.id,
+        snapshot.timeline.transport_epoch,
+        snapshot.timeline.transport_generation,
+        snapshot.timeline.loop_runtime.generation,
+        snapshot.timeline.follow_runtime.generation,
+        follow_identity,
+        width,
+        height,
+    )
+}
+
+fn native_video_output_validation_identity_from_runtime(
+    authority: &NativeDisplayPresentationAuthority,
+    runtime: &engine::VideoOutputEffectRuntimeSnapshot,
+    follow_identity: Option<NativeTimelineFollowActiveIdentity>,
+    width: u32,
+    height: u32,
+) -> NativeVideoOutputValidationIdentity {
+    native_video_output_validation_identity_from_fields(
+        authority,
+        runtime.timeline_id,
+        runtime.timeline_transport_epoch,
+        runtime.timeline_transport_generation,
+        runtime.timeline_loop_generation,
+        runtime.timeline_follow_generation,
+        follow_identity,
+        width,
+        height,
+    )
+}
+
+fn native_video_output_validation_identity_from_fields(
+    authority: &NativeDisplayPresentationAuthority,
+    timeline_id: TimelineId,
+    timeline_transport_epoch: u64,
+    timeline_transport_generation: u64,
+    timeline_loop_generation: u64,
+    timeline_follow_generation: u64,
+    follow_identity: Option<NativeTimelineFollowActiveIdentity>,
+    width: u32,
+    height: u32,
+) -> NativeVideoOutputValidationIdentity {
     NativeVideoOutputValidationIdentity {
         authority_source: authority.source.clone(),
         ownership: authority.ownership.clone(),
@@ -79957,11 +80047,11 @@ fn native_video_output_validation_identity(
         blackout_authority: authority.blackout_authority,
         output: authority.output.clone(),
         presentation_config_token: authority.presentation_config_token,
-        timeline_id: snapshot.timeline.id,
-        timeline_transport_epoch: snapshot.timeline.transport_epoch,
-        timeline_transport_generation: snapshot.timeline.transport_generation,
-        timeline_loop_generation: snapshot.timeline.loop_runtime.generation,
-        timeline_follow_generation: snapshot.timeline.follow_runtime.generation,
+        timeline_id,
+        timeline_transport_epoch,
+        timeline_transport_generation,
+        timeline_loop_generation,
+        timeline_follow_generation,
         follow_identity,
         width: width.max(1),
         height: height.max(1),
@@ -80334,10 +80424,10 @@ fn report_native_timeline_follow_video_result(
 fn capture_native_timeline_follow_video_render_snapshot(
     engine: &EngineHandle,
 ) -> Option<(
-    VideoOutputPreviewEffectSnapshot,
+    VideoOutputEffectRuntimeContext,
     engine::TimelineFollowVideoRenderSnapshot,
 )> {
-    let context = capture_video_output_preview_effect_snapshot(engine);
+    let context = capture_video_output_effect_runtime_context(engine);
     let follow = engine.timeline_follow_video_render_snapshot()?;
     (follow.epoch == context.project_render_epoch).then_some((context, follow))
 }
@@ -80359,7 +80449,7 @@ fn opaque_follow_side_frame(width: u32, height: u32) -> video::VideoFrame {
 
 fn prepare_native_timeline_follow_video_output(
     renderer: &mut AppVideoPreviewRenderer,
-    context: &VideoOutputPreviewEffectSnapshot,
+    context: &VideoOutputEffectRuntimeContext,
     authority: &NativeDisplayPresentationAuthority,
     follow: &engine::TimelineFollowVideoRenderSnapshot,
     output_id: VideoOutputId,
@@ -80447,7 +80537,7 @@ fn prepare_native_timeline_follow_video_output(
     // Clip/Composition/Group/Output chain, blackout and mapping semantics for
     // each unweighted side before the canonical Follow combiner runs.
     let render_context = video::VideoEffectRenderContext {
-        clip_runtime: &context.snapshot.video_clip_runtime,
+        clip_runtime: &context.runtime.clip_runtime,
         project_render_epoch: follow.epoch,
     };
     let mut faults = Vec::new();
@@ -80460,7 +80550,7 @@ fn prepare_native_timeline_follow_video_output(
             .prepare_output_artistic_render_result_preview_with_effects_and_transitions(
                 video,
                 render_context,
-                &context.snapshot.video_transition_runtime,
+                &context.runtime.transition_runtime,
                 output_id,
                 width,
                 height,
@@ -80597,9 +80687,9 @@ fn prepare_native_timeline_follow_video_output(
         frame: rendered.frame.clone(),
     });
     let follow_identity = native_timeline_follow_active_identity(follow);
-    let validation_identity = native_video_output_validation_identity(
+    let validation_identity = native_video_output_validation_identity_from_runtime(
         authority,
-        &context.snapshot,
+        &context.runtime,
         Some(follow_identity),
         width,
         height,
@@ -80655,7 +80745,7 @@ fn prepare_native_video_output(
     if let Some((context, follow)) = capture_native_timeline_follow_video_render_snapshot(engine) {
         renderer
             .frame_provider_mut()
-            .set_bpm(Some(context.snapshot.clock.bpm));
+            .set_bpm(Some(context.runtime.clock_bpm));
         let sample = engine.video_presentation_sample();
         let authority = capture_native_display_presentation_authority(
             &sample,
@@ -96839,9 +96929,18 @@ pub(crate) mod tests {
     #[test]
     fn native_display_follow_nonfresh_results_yield_exactly_zero_physical_payloads() {
         let context_snapshot = EngineSnapshot::default();
-        let context = VideoOutputPreviewEffectSnapshot {
+        let context = VideoOutputEffectRuntimeContext {
             project_render_epoch: 21,
-            snapshot: context_snapshot,
+            runtime: engine::VideoOutputEffectRuntimeSnapshot {
+                clip_runtime: context_snapshot.video_clip_runtime,
+                transition_runtime: context_snapshot.video_transition_runtime,
+                clock_bpm: context_snapshot.clock.bpm,
+                timeline_id: context_snapshot.timeline.id,
+                timeline_transport_epoch: context_snapshot.timeline.transport_epoch,
+                timeline_transport_generation: context_snapshot.timeline.transport_generation,
+                timeline_loop_generation: context_snapshot.timeline.loop_runtime.generation,
+                timeline_follow_generation: context_snapshot.timeline.follow_runtime.generation,
+            },
         };
         let follow = follow_render_snapshot_for_display(21, 34);
         let side_output = follow

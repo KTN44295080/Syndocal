@@ -18,9 +18,11 @@ use std::{
 
 fn publication(token: u64) -> EngineSnapshot {
     let mut snapshot = EngineSnapshot::default();
+    snapshot.timeline.id = protocol::TimelineId(token);
     snapshot.timeline.transport_epoch = token;
     snapshot.timeline.transport_generation = token + 1;
     snapshot.timeline.playing = token % 2 == 0;
+    snapshot.timeline.loop_runtime.generation = token + 8;
     snapshot.timeline.follow_runtime.generation = token + 2;
     snapshot.timeline.follow_runtime.fault = Some(format!("publication {token}"));
     snapshot.timeline.follow_runtime.source_timeline_id = Some(protocol::TimelineId(token));
@@ -252,6 +254,30 @@ fn assert_same_read_model(handle: &EngineHandle) {
             expected.clock.bpm,
         )
     );
+    let effect_runtime = handle.video_output_effect_runtime_snapshot();
+    assert_eq!(effect_runtime.clip_runtime, expected.video_clip_runtime);
+    assert_eq!(
+        effect_runtime.transition_runtime,
+        expected.video_transition_runtime
+    );
+    assert_eq!(effect_runtime.clock_bpm, expected.clock.bpm);
+    assert_eq!(effect_runtime.timeline_id, expected.timeline.id);
+    assert_eq!(
+        effect_runtime.timeline_transport_epoch,
+        expected.timeline.transport_epoch
+    );
+    assert_eq!(
+        effect_runtime.timeline_transport_generation,
+        expected.timeline.transport_generation
+    );
+    assert_eq!(
+        effect_runtime.timeline_loop_generation,
+        expected.timeline.loop_runtime.generation
+    );
+    assert_eq!(
+        effect_runtime.timeline_follow_generation,
+        expected.timeline.follow_runtime.generation
+    );
     assert_eq!(
         handle.engine_telemetry_snapshot(),
         EngineTelemetrySnapshot::from_snapshot(&expected)
@@ -268,7 +294,10 @@ fn assert_same_read_model(handle: &EngineHandle) {
     assert_eq!(feedback.video.master_opacity, expected.video.master_opacity);
     assert_eq!(feedback.video.blackout, expected.video.blackout);
     assert_eq!(feedback.timeline.playing, expected.timeline.playing);
-    assert_eq!(feedback.timeline.loop_runtime, expected.timeline.loop_runtime);
+    assert_eq!(
+        feedback.timeline.loop_runtime,
+        expected.timeline.loop_runtime
+    );
     assert_eq!(feedback.timeline.position_ms, expected.timeline.position_ms);
     assert_eq!(feedback.timeline.duration_ms, expected.timeline.duration_ms);
     assert_eq!(feedback.clock.bpm, expected.clock.bpm);
@@ -750,6 +779,7 @@ fn narrow_readers_match_public_snapshot_and_observe_replacement() {
     assert!(handle.video_composition_exists(1));
     assert!(!handle.video_composition_exists(99_999));
     let retained = handle.video_clip_runtime_snapshot();
+    let retained_effect_runtime = handle.video_output_effect_runtime_snapshot();
     let retained_follow = handle.timeline_follow_runtime_summary();
     let retained_transition = handle.video_layer_transition_runtime_snapshot();
     let mut retained_outputs = handle.video_outputs_snapshot();
@@ -765,6 +795,20 @@ fn narrow_readers_match_public_snapshot_and_observe_replacement() {
         protocol::VideoTransitionBusId(7)
     );
     assert_eq!(handle.video_clip_runtime_snapshot().layers[0].layer_id, 18);
+    assert_eq!(retained_effect_runtime.clip_runtime.layers[0].layer_id, 7);
+    assert_eq!(
+        handle
+            .video_output_effect_runtime_snapshot()
+            .clip_runtime
+            .layers[0]
+            .layer_id,
+        18
+    );
+    assert_eq!(retained_effect_runtime.timeline_id, protocol::TimelineId(7));
+    assert_eq!(
+        handle.video_output_effect_runtime_snapshot().timeline_id,
+        protocol::TimelineId(18)
+    );
     assert_eq!(handle.video_outputs_snapshot()[0].id, 18);
     assert_eq!(handle.video_outputs_snapshot()[1].label, "secondary 18");
     assert_eq!(
@@ -850,6 +894,32 @@ fn video_outputs_reader_never_mixes_concurrent_publications() {
         assert_eq!(outputs[0].label, format!("output {token}"));
         assert_eq!(outputs[1].id, token + 10_000);
         assert_eq!(outputs[1].label, format!("secondary {token}"));
+    }
+    writer.join().unwrap();
+}
+
+#[test]
+fn video_output_effect_runtime_reader_never_mixes_concurrent_publications() {
+    let published = Arc::new(RwLock::new(publication(7)));
+    let handle = allocator_test_handle(Arc::clone(&published));
+    let writer = std::thread::spawn(move || {
+        for token in 10..1010 {
+            *published.write().unwrap() = publication(token);
+        }
+    });
+    for _ in 0..2000 {
+        let runtime = handle.video_output_effect_runtime_snapshot();
+        let token = runtime.timeline_id.0;
+        assert_eq!(runtime.clip_runtime.layers[0].layer_id, token);
+        assert_eq!(runtime.timeline_transport_epoch, token);
+        assert_eq!(runtime.timeline_transport_generation, token + 1);
+        assert_eq!(runtime.timeline_loop_generation, token + 8);
+        assert_eq!(runtime.timeline_follow_generation, token + 2);
+        assert_eq!(runtime.clock_bpm, 120.0 + token as f32);
+        assert_eq!(
+            runtime.transition_runtime.buses[0].bus_id,
+            protocol::VideoTransitionBusId(token)
+        );
     }
     writer.join().unwrap();
 }

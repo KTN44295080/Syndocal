@@ -1216,6 +1216,52 @@ This checkpoint does not claim real-file missing → Retry → recovery, actual
 Art-Net/ASIO/NDI/Spout/device output, Mac, signing, publication, or
 product-wide completion.
 
+## Follow output effect runtime projection checkpoint
+
+Source base before this checkpoint: `ae432dd0139bfcc234b72898d028fa0fa7c4b153`.
+The native Follow/output effect context now reads a dedicated
+`VideoOutputEffectRuntimeSnapshot` from one published read guard. It retains
+the clip runtime, transition runtime, BPM, Timeline identity, and transport /
+loop / Follow generations needed by the existing renderer and validation
+identity. The output ownership epoch is still read first, and the existing
+authority, presentation token, audio/output ordering, renderer semantics, and
+physical-present fences are unchanged.
+
+The recording path was deliberately kept on its existing full snapshot because
+the isolated recorder also consumes the rendered video image and injected-frame
+catalog. The narrower projection is limited to the Follow renderer path; no
+recording data was dropped and no compatibility or IPC wire shape changed.
+
+The first release compile caught that recording dependency before acceptance;
+the context was split into the existing full recording capture and the new
+Follow-only runtime capture. No failed compile was counted as a pass.
+
+Verification on the final source:
+
+- `cargo test -p engine --release --locked -j 1 snapshot_read_tests -- --test-threads=1`: 9 passed, 1 existing ignored.
+- `cargo test --manifest-path app/src-tauri/Cargo.toml --release --locked -j 1 live_video_monitor_tests -- --test-threads=1`: 6 passed.
+- `cargo test --manifest-path app/src-tauri/Cargo.toml --release --locked -j 1 native_display_follow_nonfresh_results_yield_exactly_zero_physical_payloads -- --test-threads=1`: 1 passed.
+- `pnpm.cmd --dir app run check:tauri-build-wrapper`: 243 assertions, 27 hostile mutation fixtures passed.
+- `pnpm.cmd --dir app run check:release`: passed, including media thumbnail, native thumbnail request, output ownership, Timeline Follow, and release metadata checks.
+- Owned engine files passed `rustfmt --check --edition 2021`; `git diff --check` passed. The known whole-workspace formatting baseline was not rewritten.
+
+The exact Windows native procedure used Build Tools MSVC `14.44.35207`, with
+the required linker first in `where.exe link.exe`. The no-bundle build passed
+including TypeScript/Vite and Rust release compilation. The exact checkout
+executable is 64,739,840 bytes with SHA-256
+`258D6DFB15F03F4E75167AAE95E58314C79250A10808F8EE25EB8E4E2F7AA52D`.
+The isolated native probe at
+`target/qa/native-final-validation-20260911-58/native-final-validation.json`
+passed: one responsive maximized `Syndocal` window, Standby ownership with
+lighting/video disabled, snapshot IPC, expected missing media/layer thumbnail
+IPC errors with valid native tickets, zero physical-output operations, and
+exact executable/listener cleanup. Post-checks found zero exact-path
+Syndocal processes and zero debug listeners.
+
+This checkpoint is a local runtime/performance-boundary improvement, not a
+real-show FPS/CPU result, physical Art-Net/ASIO/NDI/Spout/device acceptance,
+Mac acceptance, signing, publication, or product-wide completion claim.
+
 ## MIDI feedback projection reader follow-up
 
 The `send_midi_feedback` command now reads the existing `EngineSnapshot`
