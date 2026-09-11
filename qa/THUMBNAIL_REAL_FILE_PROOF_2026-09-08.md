@@ -101,7 +101,7 @@ and cancellation paths described above.
 ## Current-main source re-review — 2026-09-12
 
 The existing retry and controller implementation was independently re-read at
-current `main` source HEAD `360caec7814b1dc051545a211fde5c2113aeb5e9`.
+current `main` source HEAD `d62eee51bdcd22050c0195a91cb451e54a6cc1d9`.
 `thumbnailReadRetry.ts` admits only the two explicit transient native errors,
 checks batch ownership before the first read, after the wait, and before the
 single retry, and treats the second failure as terminal. The controller keeps
@@ -117,8 +117,42 @@ defect was found; no product code change was required.
 | `pnpm.cmd --dir app run check:completion-ledger` | PASS — 50 Open + 8 Deferred authority rows preserved |
 | `pnpm.cmd --dir app run check:q1-q4-ledger` | PASS — 32 Q1 rows, 58/58 flow markers, master mirror parity |
 
-This is a source/checker re-review only. The real-file missing → Retry →
-restore → native recovery flow was not rerun because it requires the blocked
-file-moving helper; it remains unclaimed. This note also does not close the
-broader `MEDIA-DERIVED-001` row, native UI cancellation acceptance, physical
-device, Mac, signing, publication, or product-wide completion.
+The real-file missing → Retry → restore → native recovery flow was rerun on
+current `main` after the file-moving operation was explicitly authorized. The
+current source HEAD was `d62eee51bdcd22050c0195a91cb451e54a6cc1d9`; the exact
+launched EXE was `target/release/syndocal.exe`, version `1.2.0-alpha.69`,
+64,569,856 bytes, SHA-256
+`71E861A8A716F36D09178DCF3694B86A835EA3BAF83787E86369ED0A06AF5819`.
+
+Run evidence is in
+`target/qa/native-thumbnail-failure-recovery-20260912-01/`. The isolated
+application had one responsive maximized window, Standby ownership, both
+lighting/video domains denied, zero physical-output enable commands, and zero
+raw project-mutation commands. The test-owned PNG copy
+(`1561115A3B4A825BDC64C3FC2633D4736C1EDCD8CAB7EBF1FE9AC6313FA19460`, 253
+bytes) was moved to `materials/held`, produced a real missing-file failure with
+an enabled `Retry Thumbnails` control, was restored byte-for-byte, and Retry
+recovered a 160×90 four-quadrant image. The healthy MP4 remained displayable;
+only the missing PNG asset was reread after Retry. The PNG case is therefore a
+current-main real-WebView success.
+
+An independent MP4 case was attempted in the same isolated run. The
+test-owned MP4 copy (`56FCBB1725220525F53E87CCCAF6EBA670C4888C35AEEF05C381E41193648D69`,
+1,344 bytes) could not be moved while the native video handle was held:
+Windows returned `EBUSY` before the missing-file state was reached. The source
+copy remained present and its final hash matched. This is an environment/native
+handle boundary, not a successful MP4 missing→Retry→recovery proof, so the
+MP4 case remains open and the overall real-file acceptance is limited to the
+PNG case.
+
+The app exited through the owned-process cleanup path and the probe listener
+count was zero. The test-owned held directory was empty after cleanup. The
+normal-profile digest changed only for `agent-bridge-v1.json`
+(`1075de22116ccdaf19465802e9b7c4759a727b278660382f69e729788f7695e4` before →
+`6d82fea3f788468001395e51606aab04a11a08c988af2391f4b78dd64f98ade9` after);
+the other recorded files were unchanged. The descriptor was not repaired or
+restored, and its cause is not attributed by this test.
+
+This evidence does not close the broader `MEDIA-DERIVED-001` row, native UI
+cancellation acceptance, physical device, Mac, signing, publication, or
+product-wide completion.
