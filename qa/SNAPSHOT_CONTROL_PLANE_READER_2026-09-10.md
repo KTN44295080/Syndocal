@@ -1841,3 +1841,38 @@ owned by PID 0.
 This checkpoint does not claim real-file missing → Retry → recovery, actual
 Art-Net/ASIO/NDI/Spout/device output, Mac, signing, publication, or
 product-wide completion.
+
+## Effect duplication reader follow-up
+
+The `duplicate_effect_in_engine` path now reads the requested Effect through
+the existing `EngineHandle::effect_summary_snapshot()` reader instead of
+cloning the complete engine snapshot. Unknown-effect rejection, summary to
+preset conversion, copy relabeling, target validation through the existing
+add path, and the resulting mutation are unchanged.
+
+The focused duplicate-effect regression passed `2/2`, and the broader
+duplicate-named app regression passed `41/41`; this included LFO, Color, and
+Chaser duplicate behavior plus the structural narrow-reader contract. The
+maintained wrapper checker passed `243` assertions with `27` hostile mutation
+fixtures, and `git diff --check` passed. The full app rustfmt check remains
+baseline-noisy because of unrelated pre-existing formatting differences in
+`control_plane_runtime.rs` and `fixture_profile_contract.rs`; no formatting
+rewrite was included.
+
+A fresh maintained-wrapper `pnpm.cmd --dir app tauri build --no-bundle`
+completed with the pinned MSVC 14.44.35207 Build Tools linker and no
+first-party compiler warnings. The exact checkout executable is 64,687,616
+bytes with SHA-256
+`1977C42F1944CE6415238327EA7366B22E5C392AA2E82BD3C65E10C824C692E5`.
+The isolated native probe at
+`target/qa/native-final-validation-20260911-48/native-final-validation.json`
+passed: one maximized responsive `Syndocal` window, Standby ownership with
+lighting/video disabled, snapshot IPC, missing media/layer thumbnail IPC
+rejection with valid native tickets, zero physical-output operations, and
+exact executable/listener cleanup. A direct post-probe check found zero
+exact-path Syndocal processes and only the expected port `TIME_WAIT` entry
+owned by PID 0.
+
+This checkpoint does not claim real-file missing → Retry → recovery, actual
+Art-Net/ASIO/NDI/Spout/device output, Mac, signing, publication, or
+product-wide completion.

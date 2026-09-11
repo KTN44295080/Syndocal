@@ -49761,13 +49761,10 @@ fn duplicate_effect_in_engine(
     engine: &EngineHandle,
     effect_id: EffectId,
 ) -> Result<EffectId, String> {
-    let snapshot = engine.snapshot();
-    let effect = snapshot
-        .effects
-        .iter()
-        .find(|effect| effect.id == effect_id)
+    let effect = engine
+        .effect_summary_snapshot(effect_id)
         .ok_or_else(|| format!("Effect {effect_id} was not found"))?;
-    let preset = effect_summary_to_preset(effect)?;
+    let preset = effect_summary_to_preset(&effect)?;
     let preset = relabel_effect_preset(preset, format!("{} Copy", effect.label));
     add_effect_preset_to_engine(engine, preset, None)
 }
@@ -93725,6 +93722,20 @@ pub(crate) mod tests {
         let function_start = source
             .find("fn save_effect_preset(")
             .expect("missing save_effect_preset command");
+        let next_attribute = source[function_start..]
+            .find("\n#[tauri::command]")
+            .map(|offset| function_start + offset);
+        let body = &source[function_start..next_attribute.unwrap_or(source.len())];
+        assert!(body.contains("effect_summary_snapshot"));
+        assert!(!body.contains("engine.snapshot()"));
+    }
+
+    #[test]
+    fn duplicate_effect_uses_the_narrow_engine_reader() {
+        let source = include_str!("main.rs");
+        let function_start = source
+            .find("fn duplicate_effect_in_engine(")
+            .expect("missing duplicate_effect_in_engine helper");
         let next_attribute = source[function_start..]
             .find("\n#[tauri::command]")
             .map(|offset| function_start + offset);
