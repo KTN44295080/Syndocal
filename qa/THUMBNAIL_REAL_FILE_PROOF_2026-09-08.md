@@ -97,3 +97,28 @@ existing native test module, generated MP4, fixture recipe, and this checkpoint.
 It adds no application startup, decode-loop, UI or transport work. Integration of
 these tests does not close MEDIA-DERIVED-001 or the outstanding native UI success
 and cancellation paths described above.
+
+## Current-main source re-review — 2026-09-12
+
+The existing retry and controller implementation was independently re-read at
+current `main` source HEAD `360caec7814b1dc051545a211fde5c2113aeb5e9`.
+`thumbnailReadRetry.ts` admits only the two explicit transient native errors,
+checks batch ownership before the first read, after the wait, and before the
+single retry, and treats the second failure as terminal. The controller keeps
+layer and asset lanes independently bounded, retires active work on reset or
+dispose, and allows an unchanged missing asset to be explicitly retried without
+continuing a retired batch. No unbounded retry, stale publication, or ownership
+defect was found; no product code change was required.
+
+| Recheck | Result |
+| --- | --- |
+| `pnpm.cmd --dir app run check:media-thumbnails` | PASS — bounded retry, terminal rejection, stale retirement, explicit recovery/cache reuse, lane ownership and view bindings |
+| `pnpm.cmd --dir app run check:native-thumbnail-request` | PASS — normal success, exact abort, stale-result rejection, cancellation failure, malformed/foreign ticket rejection |
+| `pnpm.cmd --dir app run check:completion-ledger` | PASS — 50 Open + 8 Deferred authority rows preserved |
+| `pnpm.cmd --dir app run check:q1-q4-ledger` | PASS — 32 Q1 rows, 58/58 flow markers, master mirror parity |
+
+This is a source/checker re-review only. The real-file missing → Retry →
+restore → native recovery flow was not rerun because it requires the blocked
+file-moving helper; it remains unclaimed. This note also does not close the
+broader `MEDIA-DERIVED-001` row, native UI cancellation acceptance, physical
+device, Mac, signing, publication, or product-wide completion.
