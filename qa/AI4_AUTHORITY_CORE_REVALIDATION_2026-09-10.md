@@ -58,3 +58,29 @@ The exact Build Tools MSVC `14.44.35207` x64 linker was pinned in
 `CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER` after
 `vcvars64.bat -vcvars_ver=14.44`, and it was first in `where.exe link.exe`.
 The AI4 service/integration and all boundaries listed above remain open.
+
+## Current-main authority-core revalidation — 2026-09-11
+
+The bounded authority-core suite was rerun after the current output, snapshot,
+input-generation, and authored-bridge checkpoints at source HEAD
+`77b065b251999b313db5ad8668c60bb6771b7772`. Evidence is preserved under
+`target/qa/ai4-current-main-20260911-01/`. The documented MSVC
+14.44.35207 x64 linker was initialized and returned first by
+`where.exe link.exe`.
+
+```text
+cargo test -p protocol --release --locked agent_authority -- --test-threads=1
+test result: ok. 10 passed; 0 failed; 0 ignored
+```
+
+The run retained fail-closed coverage for safe-mode grants, exact consent
+binding to principal/incarnation/adapter/operation/owner/arguments/project
+and generations, single-use and expiry, revoke and kill-switch, re-pair
+invalidations, overflow without partial state, and wrong-principal/owner/
+operation/argument rejection without consuming valid consent.
+
+`AI4-CONSENT-001` remains Open. This is pure authority-core evidence only;
+DPAPI or credential storage, nonce pairing, Raw Input presence, desktop
+consent UI, audit integration, Agent Bridge wiring, external sidecars,
+physical output, Mac, signing, publication, and product-wide acceptance are
+not claimed.
