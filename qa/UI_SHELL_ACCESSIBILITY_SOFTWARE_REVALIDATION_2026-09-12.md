@@ -51,3 +51,22 @@ reduced-motion behavior, and native keyboard-only safety workflows.
 `COV-UI-SHELL-001` and `COV-ACCESSIBILITY-001` remain `In progress`; this
 checkpoint records software evidence without changing that status or claiming
 native accessibility acceptance.
+
+## Current-main UI shell rerun — 2026-09-12
+
+The 13 UI-shell software/static checks were rerun against current `main` at
+`0017c55b1f45ede38fed7e3de29f68fab37ee68d` and all passed:
+
+- frontend command routing and invoke inventory — PASS;
+- desktop-window, localization, terminology, build-wrapper, and empty-state
+  checks — PASS;
+- project shortcuts, workspace/operator, pane lifecycle, history keyboard,
+  Timeline Space keyboard, and stage-label checks — PASS.
+
+The run measured 133 renderer mutations, 31 server-authoritative mutations,
+28 raw dispatches, 464 facade dispatches, 457 exact Tauri commands, 3689/3689
+localized static UI entries, 15552 shortcut matrix cases, 28 workspace/operator
+assertions, 243 build-wrapper assertions with 27 hostile fixtures, and no
+unprotected bare user-data labels. Native three-screen layout, viewport and
+scaling, screen-reader/high-contrast/IME behavior, and native keyboard-only
+acceptance remain unclaimed.
