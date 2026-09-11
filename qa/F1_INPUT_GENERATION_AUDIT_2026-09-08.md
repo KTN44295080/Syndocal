@@ -378,3 +378,27 @@ and `INPUT-PHYSICAL-001` remain Open for full input-source generation coverage,
 real MIDI/OSC/DMX clients, reconnect/latency, device and venue behavior,
 ASIO/NDI physical acceptance, Mac, signing, publication, and product-wide
 completion.
+
+## Current-main DMX checker repair and input software gate — 2026-09-12
+
+The current input software boundary was rerun at source HEAD
+`822d4f05cd87fe643681ac2d153fdbbf859f96fb`. The first DMX checker run failed
+at its stale-authority failure-path assertion. Re-review showed that the
+production App source used CRLF while the checker searched for a literal LF
+sequence; the authority guards themselves were present. The checker now
+normalizes only its read-only `App.tsx` fixture input from CRLF to LF. No
+product source or assertion was removed or weakened.
+
+| Check | Result |
+| --- | --- |
+| `pnpm.cmd --dir app run check:dvc-midi-shortcuts` | PASS — 39 assertions |
+| `node app/scripts/check-dvc-dmx-shortcuts.mjs` | PASS — 41 assertions after checker repair |
+| `node app/scripts/check-dmx-show-setup.mjs` | PASS — canonical acquire/recover/reuse, authority and fail-closed preparation |
+| `node app/scripts/check-dmx-addressing-helpers.mjs` | PASS |
+| `pnpm.cmd --dir app run check:frontend-command-routing` | PASS — 133 renderer, 31 server-authoritative, 28 raw, 464 facade dispatches |
+| `cargo test ... midi_feedback_route_uses_the_narrow_engine_reader` | PASS — 1 passed, 0 failed, 0 ignored, 1865 filtered out |
+
+The bounded automated proof is now recorded as passing for `COV-INPUT-001`.
+Physical MIDI/OSC/DMX/Remote clients, reconnect and latency matrices, native
+device behavior, venue acceptance, Mac, signing and publication remain open;
+the row stays `In progress`.

@@ -394,7 +394,7 @@
       "scope": "Supported",
       "owner_files": "Input-runtime owner per flow Phase 4",
       "dependencies": ["Project replacement authority", "Ingress canonicalization already landed code-side"],
-      "automated_proof": { "status": "not-passing", "command": "Planned: generation/retirement regression suite; none authored for this row yet.", "expected_count": null },
+      "automated_proof": { "status": "passing", "command": "pnpm --dir app run check:dvc-midi-shortcuts && node app/scripts/check-dvc-dmx-shortcuts.mjs && node app/scripts/check-dmx-show-setup.mjs && node app/scripts/check-dmx-addressing-helpers.mjs && pnpm --dir app run check:frontend-command-routing && cargo test --manifest-path app/src-tauri/Cargo.toml --release --locked -j 1 midi_feedback_route_uses_the_narrow_engine_reader -- --test-threads=1", "expected_count": 6 },
       "native_proof": { "status": "not-run", "artifact_hash": null, "raw_evidence_paths": [], "na_reason": "Generated source inventory is not physical ingress acceptance." },
       "hardware_external_proof": { "status": "not-run", "device_topology_duration": "Physical MIDI/OSC controllers, TouchOSC/iPad/Android over wired/Wi-Fi with p50/p95/p99/max latency.", "artifact_hash": null, "raw_evidence_paths": [], "na_reason": null },
       "status": "In progress",
