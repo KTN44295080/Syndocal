@@ -41,3 +41,16 @@ unified threat-model review, adversarial LAN/Remote client exercise, update
 signature/replay acceptance, archive/path parser fuzz matrix, public-network
 safety, or product-wide AI adapter bypass absence. Those boundaries remain
 release-blocking and are not waived by these focused tests.
+
+## Current-main rerun — 2026-09-12
+
+The same six software checks were rerun against current `main` at
+`65d0b784e7b2140e9f28eeb792f69efbc511fedd`. The documented MSVC
+14.44.35207 x64 environment was initialized first and `where.exe link.exe`
+returned the pinned Build Tools linker. All six checks passed: agent bridge,
+bootstrap, native admission inventory, strict JSON, `agent_authority` (10
+passed), and `control_plane` (57 passed). The admission inventory again
+reported 516 commands and 18 rejected negative fixtures with SHA-256
+`5120894f36feb82ac58fffd4db20739d80ae1b1a1c556fc95838a1708cbb8eea`.
+No external client, public-network, update, archive/path fuzz, device, or
+product-wide security acceptance was performed.
