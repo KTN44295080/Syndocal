@@ -61,3 +61,15 @@ Source base before this checkpoint: `31d015c375c512130c96e009fd0bd1816baf92c0`.
 The repair protects the renderer from applying stale output-diagnostics results
 after project replacement. It does not claim the external or physical rows in
 Sections 6–9 are accepted, and it does not change their ledger status.
+
+## Current-main output-local software rerun — 2026-09-12
+
+The bounded output-local software gate was rerun against current `main` at
+`2a770915974123c29433c6777f027d7482948743`, with the documented MSVC
+14.44.35207 x64 absolute linker pin confirmed first by `where.exe link.exe`.
+
+All focused checks passed: output ownership, output-control/Standby Sync,
+safety blackout, video routing/window runtime/observation; engine ownership
+(9/9); Tauri ownership (5/5), managed Spout terminal (2/2), Spout retirement
+(5/5), callback-failure retirement (1/1), disabled activation compensation
+(2/2), and managed-display projection (1/1). No physical output was enabled.
