@@ -2,7 +2,7 @@ use crate::{EngineHandle, TimelineTransportAuthority};
 use protocol::{
     AutoVjAction, AutomationId, ClockSnapshot, CompositionId, CompositionSummary, CueId, CueListId,
     CueSummary, DmxOutputConfig, EffectId, EffectKind, EffectSummary, EngineSnapshot,
-    EngineTelemetry, FixtureId, NodeGraphId, PaletteId, PatchedFixtureSummary,
+    EngineTelemetry, FixtureId, NodeGraphId, NodeGraphSummary, PaletteId, PatchedFixtureSummary,
     PlaybackExecutorSummary, StageObjectSummary, TimelineAudioClipId, TimelineAudioOutputBus,
     TimelineCueEventSummary, TimelineEventId, TimelineFollowRuntimeStatus,
     TimelineFollowRuntimeStatusSnapshot, TimelineFollowRuntimeSummary, TimelineLayerSummary,
@@ -483,6 +483,18 @@ impl EngineHandle {
                 .node_graphs
                 .iter()
                 .any(|graph| graph.id == graph_id)
+        })
+    }
+
+    /// Read one authored node-graph body for preset export without cloning
+    /// unrelated graph bodies, authored collections, or runtime state.
+    pub fn node_graph_summary_snapshot(&self, graph_id: NodeGraphId) -> Option<NodeGraphSummary> {
+        self.read_snapshot_field(|snapshot| {
+            snapshot
+                .node_graphs
+                .iter()
+                .find(|graph| graph.id == graph_id)
+                .cloned()
         })
     }
 

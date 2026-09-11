@@ -48824,13 +48824,11 @@ fn save_node_graph_preset_file(
     state: State<'_, AppState>,
     graph_id: NodeGraphId,
 ) -> Result<Option<String>, String> {
-    let snapshot = state.engine.snapshot();
-    let graph = snapshot
-        .node_graphs
-        .iter()
-        .find(|graph| graph.id == graph_id)
+    let graph = state
+        .engine
+        .node_graph_summary_snapshot(graph_id)
         .ok_or_else(|| format!("Node graph {graph_id} was not found"))?;
-    let graph = node_graph_for_persistence(graph.clone());
+    let graph = node_graph_for_persistence(graph);
     let file = NodeGraphPresetFile {
         version: 1,
         app: APP_NAME.to_string(),
@@ -93602,6 +93600,20 @@ pub(crate) mod tests {
             .map(|offset| function_start + offset);
         let body = &source[function_start..next_attribute.unwrap_or(source.len())];
         assert!(body.contains("fixture_summary_snapshot"));
+        assert!(!body.contains("engine.snapshot()"));
+    }
+
+    #[test]
+    fn save_node_graph_preset_file_uses_the_narrow_engine_reader() {
+        let source = include_str!("main.rs");
+        let function_start = source
+            .find("fn save_node_graph_preset_file(")
+            .expect("missing save_node_graph_preset_file command");
+        let next_attribute = source[function_start..]
+            .find("\n#[tauri::command]")
+            .map(|offset| function_start + offset);
+        let body = &source[function_start..next_attribute.unwrap_or(source.len())];
+        assert!(body.contains("node_graph_summary_snapshot"));
         assert!(!body.contains("engine.snapshot()"));
     }
 

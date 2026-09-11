@@ -423,9 +423,14 @@ fn assert_same_read_model(handle: &EngineHandle) {
     assert_eq!(handle.effect_video_target_admission_snapshot(999_999), None);
     if let Some(node_graph) = expected.node_graphs.first() {
         assert!(handle.node_graph_exists(node_graph.id));
+        assert_eq!(
+            handle.node_graph_summary_snapshot(node_graph.id),
+            Some(node_graph.clone())
+        );
     } else {
         assert!(!handle.node_graph_exists(1));
     }
+    assert_eq!(handle.node_graph_summary_snapshot(999_999), None);
     assert!(!handle.node_graph_exists(999_999));
     assert_eq!(
         handle.cue_metadata_admission_snapshot(999_999),
