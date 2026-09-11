@@ -186,3 +186,26 @@ MIDI/OSC, shortcut, audio-analysis/BPM, native-window, and all relevant UI
 mutation sources is not proven by these checks. External-client,
 physical-output, Mac, signing, publication, and venue acceptance remain
 unclaimed.
+
+## Current-main coverage and dispatch revalidation — 2026-09-12
+
+The bounded AI0 vertical was rerun against current `main` at source HEAD
+`3558362b6cc4a0ba2864db1a7d0e0d90e96fbd07`; `origin/main` matched before the
+run. No product source or inventory disposition was changed.
+
+| Check | Result |
+| --- | --- |
+| `pnpm.cmd --dir app run check:frontend-command-routing` | PASS — 133 renderer mutations, 31 server-authoritative mutations, 28 raw dispatches, 464 facade dispatches |
+| `pnpm.cmd --dir app run check:frontend-invokes` | PASS — 457 frontend Tauri invokes |
+| `node app/scripts/check-tauri-admission-inventory.mjs` | PASS — 516 exact commands, SHA-256 `5120894f36feb82ac58fffd4db20739d80ae1b1a1c556fc95838a1708cbb8eea`, 18 negative fixtures rejected |
+| `cargo test -p protocol --release --locked control_plane_registry_v2 -- --test-threads=1` | PASS — 14 passed, 0 failed, 0 ignored, 204 filtered out; MSVC 14.44.35207 linker pinned and first in `where.exe link.exe` |
+
+The current run retains rejection of forged authority shapes, invalid
+serialization, unknown/unclassified sources, duplicate/orphan/alias-cycle
+registry entries, old registry schema, and dispatch families that cannot
+resolve to an existing canonical operation. `AI0-COVERAGE-001` remains Open:
+these are bounded inventory and dispatch checks, not complete classification
+of every Engine, Remote, MIDI/OSC, shortcut, audio-analysis/BPM,
+native-window, and relevant UI mutation source. External-client,
+physical-output, Mac, signing, publication, and venue acceptance remain
+unclaimed.
