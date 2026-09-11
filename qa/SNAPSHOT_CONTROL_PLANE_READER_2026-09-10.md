@@ -1804,3 +1804,40 @@ owned by PID 0.
 This checkpoint does not claim real-file missing → Retry → recovery, actual
 Art-Net/ASIO/NDI/Spout/device output, Mac, signing, publication, or
 product-wide completion.
+
+## Cue effect target admission reader follow-up
+
+The `set_cue_effect_targets` admission path now reads only the published Cue
+and Effect IDs through one
+`EngineHandle::cue_effect_target_admission_snapshot()` publication read.
+Cue existence, duplicate target rejection, legacy missing-effect rejection,
+transition bounds, and Cue-owned parameter validation retain their existing
+fail-closed behavior and error messages. Cue capture and other project-wide
+validation paths remain on their existing full-snapshot boundary where they
+validate cross-collection authored state together; the mutation and
+persistence behavior is unchanged.
+
+The focused engine snapshot-reader regression passed `8/8` with two existing
+ignored tests. The focused app Cue/Effect regression passed `4/4`, including
+save-history/legacy compatibility, Cue-owned parameter round-trip, duplicate
+and unknown-target rejection, and the structural narrow-reader contract. The
+maintained wrapper checker passed `243` assertions with `27` hostile mutation
+fixtures; `git diff --check` passed.
+
+A fresh maintained-wrapper `pnpm.cmd --dir app tauri build --no-bundle`
+completed with the pinned MSVC 14.44.35207 Build Tools linker and no
+first-party compiler warnings. The exact checkout executable is 64,687,616
+bytes with SHA-256
+`1C02103CD39D552D45F44347AC28B6558125C727D879C8A6749110237F525D3F`.
+The isolated native probe at
+`target/qa/native-final-validation-20260911-47/native-final-validation.json`
+passed: one maximized responsive `Syndocal` window, Standby ownership with
+lighting/video disabled, snapshot IPC, missing media/layer thumbnail IPC
+rejection with valid native tickets, zero physical-output operations, and
+exact executable/listener cleanup. A direct post-probe check found zero
+exact-path Syndocal processes and only the expected port `TIME_WAIT` entry
+owned by PID 0.
+
+This checkpoint does not claim real-file missing → Retry → recovery, actual
+Art-Net/ASIO/NDI/Spout/device output, Mac, signing, publication, or
+product-wide completion.

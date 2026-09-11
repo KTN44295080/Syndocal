@@ -34417,13 +34417,11 @@ fn set_cue_effect_targets_on_engine(
     cue_id: CueId,
     effect_targets: Vec<CueEffectTarget>,
 ) -> Result<(), String> {
-    let snapshot = engine.snapshot();
-    snapshot
-        .cues
-        .iter()
-        .find(|cue| cue.id == cue_id)
-        .ok_or_else(|| format!("Cue {cue_id} was not found"))?;
-    validate_cue_effect_targets(&snapshot, &effect_targets)?;
+    let (cue_ids, effect_ids) = engine.cue_effect_target_admission_snapshot();
+    if !cue_ids.contains(&cue_id) {
+        return Err(format!("Cue {cue_id} was not found"));
+    }
+    validate_cue_effect_targets_from_published(&effect_ids, &effect_targets)?;
     engine.set_cue_effect_targets_published(cue_id, effect_targets)
 }
 
@@ -83579,7 +83577,14 @@ fn validate_cue_effect_targets(
         .effects
         .iter()
         .map(|effect| effect.id)
-        .collect::<HashSet<_>>();
+        .collect::<Vec<_>>();
+    validate_cue_effect_targets_from_published(&effect_ids, effect_targets)
+}
+
+fn validate_cue_effect_targets_from_published(
+    effect_ids: &[EffectId],
+    effect_targets: &[CueEffectTarget],
+) -> Result<(), String> {
     let mut seen = HashSet::new();
     for target in effect_targets {
         if target.transition_ms.is_some() && target.params.is_none() {
@@ -93655,6 +93660,20 @@ pub(crate) mod tests {
             .map(|offset| function_start + offset);
         let body = &source[function_start..next_attribute.unwrap_or(source.len())];
         assert!(body.contains("cue_metadata_admission_snapshot"));
+        assert!(!body.contains("engine.snapshot()"));
+    }
+
+    #[test]
+    fn set_cue_effect_targets_uses_the_narrow_engine_reader() {
+        let source = include_str!("main.rs");
+        let function_start = source
+            .find("fn set_cue_effect_targets_on_engine(")
+            .expect("missing set_cue_effect_targets_on_engine helper");
+        let next_attribute = source[function_start..]
+            .find("\n#[tauri::command]")
+            .map(|offset| function_start + offset);
+        let body = &source[function_start..next_attribute.unwrap_or(source.len())];
+        assert!(body.contains("cue_effect_target_admission_snapshot"));
         assert!(!body.contains("engine.snapshot()"));
     }
 

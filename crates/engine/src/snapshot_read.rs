@@ -268,6 +268,17 @@ impl EngineHandle {
         self.read_snapshot_field(|snapshot| snapshot.cues.iter().map(|cue| cue.id).collect())
     }
 
+    /// Read Cue and Effect IDs required by cue-effect admission without
+    /// cloning unrelated authored and runtime collections.
+    pub fn cue_effect_target_admission_snapshot(&self) -> (Vec<CueId>, Vec<EffectId>) {
+        self.read_snapshot_field(|snapshot| {
+            (
+                snapshot.cues.iter().map(|cue| cue.id).collect(),
+                snapshot.effects.iter().map(|effect| effect.id).collect(),
+            )
+        })
+    }
+
     /// Read one Cue body and the numbering of its bank for metadata admission
     /// without cloning unrelated authored and runtime collections.
     pub fn cue_metadata_admission_snapshot(&self, cue_id: CueId) -> CueMetadataAdmissionSnapshot {

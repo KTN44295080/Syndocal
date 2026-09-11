@@ -281,6 +281,17 @@ fn assert_same_read_model(handle: &EngineHandle) {
         expected.cues.iter().map(|cue| cue.id).collect::<Vec<_>>()
     );
     assert_eq!(
+        handle.cue_effect_target_admission_snapshot(),
+        (
+            expected.cues.iter().map(|cue| cue.id).collect::<Vec<_>>(),
+            expected
+                .effects
+                .iter()
+                .map(|effect| effect.id)
+                .collect::<Vec<_>>(),
+        )
+    );
+    assert_eq!(
         handle.timeline_cue_event_ids_snapshot(),
         (
             expected.cues.iter().map(|cue| cue.id).collect::<Vec<_>>(),
