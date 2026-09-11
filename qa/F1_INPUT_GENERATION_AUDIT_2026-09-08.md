@@ -311,3 +311,23 @@ format differences in untouched Rust files (including existing sections of
 workspace crates). No formatter rewrite or assertion weakening was applied to
 this checkpoint; the modified Rust lines compile and the focused native test
 passed.
+
+## Current-main full Tauri Rust regression — 2026-09-11
+
+After the manual MIDI feedback authority repair, the full application Rust
+unit-test binary was rebuilt and run from source HEAD
+`3b5d288e2243daff65e14f0e3a530bd51185475c`. The documented MSVC
+14.44.35207 x64 environment was initialized, and the absolute pinned linker
+was the first `where.exe link.exe` result.
+
+```text
+cargo test --manifest-path app/src-tauri/Cargo.toml --release --locked -j 1 -- --test-threads=1
+finished: 1866 tests; 1845 passed, 0 failed, 21 ignored
+```
+
+The ignored cases are existing physical-device, external-process, or
+long-duration acceptance tests (including the real FFmpeg recording case).
+They were not promoted to success by this run. No physical output, external
+client, or application UI was started by the test command. This is a stronger
+source regression result for the current Rust tree; it does not close the F1
+physical-input or product-wide acceptance boundaries.
