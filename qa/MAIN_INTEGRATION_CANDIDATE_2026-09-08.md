@@ -367,3 +367,24 @@ fixture.
 The real-file thumbnail missing -> Retry -> recovery trial remains not run and
 this checkpoint does not claim native window, physical output, Mac, signing,
 publication, or product-wide completion.
+
+## 2026-09-11 current-main release checker self-test revalidation
+
+The release checker self-tests were rerun at source HEAD
+`0097f292f420c8bfd87d3e0a0ad522bc282729e4`. Evidence is preserved under
+`target/qa/release-metadata-current-main-20260911-01/`.
+
+| Check | Result |
+| --- | --- |
+| `pnpm.cmd --dir app run check:release:self-test` | PASS — release metadata 137 assertion groups, ASIO 169, video output routing, Windows artifact self-tests, strict JSON 130 |
+| `node app/scripts/check-windows-release-artifacts.mjs --self-test` | PASS — candidate extractor 43, materialization 4, artifact self-test 144 assertions |
+| `git diff --check` | PASS |
+
+The negative paths remain strict for mismatched signer payloads, line-ending
+drift, malformed artifact metadata, invalid candidate materialization, and
+duplicate-key JSON. No signature, rejection assertion, or publication path was
+weakened.
+
+This is local checker evidence only. It does not claim a signed artifact,
+public release, clean-machine install, native-window acceptance, physical
+output, external-client, Mac, or product-wide completion.
