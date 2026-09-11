@@ -1216,6 +1216,40 @@ This checkpoint does not claim real-file missing → Retry → recovery, actual
 Art-Net/ASIO/NDI/Spout/device output, Mac, signing, publication, or
 product-wide completion.
 
+## MIDI feedback projection reader follow-up
+
+The `send_midi_feedback` command now reads the existing `EngineSnapshot`
+compatibility seam through `EngineHandle::midi_feedback_snapshot()`. The
+projection copies only the published fields consumed by MIDI feedback:
+fixtures, cue activity, effects, node graphs, video layer/output state,
+timeline transport state, BPM, masters, submasters, fade pause, and blackout
+state. The existing `crates/io` feedback API is unchanged; no output device or
+MIDI transport behavior was widened.
+
+The engine snapshot-reader regression passed `8/8` with two existing ignored
+tests, including field-by-field MIDI projection coverage. The app structural
+guard for the `send_midi_feedback` route passed `1/1`, the existing MIDI
+feedback regressions passed `18/18` with one existing ignored physical-port
+test, the maintained wrapper checker passed `243` assertions with `27`
+hostile mutation fixtures, and `git diff --check` passed.
+
+A fresh maintained-wrapper `pnpm.cmd --dir app tauri build --no-bundle`
+completed with the pinned MSVC 14.44.35207 Build Tools linker and no observed
+first-party compiler warnings. The exact checkout executable is 64,733,696
+bytes with SHA-256
+`66F45FB5E5CB7E048CCE48B29966E50A47F74CB9CF36744AB3168CA79B159684`.
+The isolated native probe at
+`target/qa/native-final-validation-20260911-54/native-final-validation.json`
+passed: one responsive maximized `Syndocal` window, Standby ownership with
+lighting/video disabled, snapshot IPC, expected missing media/layer thumbnail
+IPC rejection with valid native tickets, zero physical-output operations, and
+exact executable/listener cleanup. A direct post-probe check found zero
+exact-path Syndocal processes and zero listeners on probe port `51670`.
+
+This checkpoint does not claim real-file missing → Retry → recovery: no PNG
+was moved or renamed. It also does not claim actual Art-Net/ASIO/NDI/Spout or
+other device output, Mac, signing, publication, or product-wide completion.
+
 ## Cue metadata admission reader follow-up
 
 The `set_cue_metadata` admission path now reads the current Cue body and

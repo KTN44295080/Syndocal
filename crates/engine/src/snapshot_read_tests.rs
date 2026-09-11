@@ -256,6 +256,26 @@ fn assert_same_read_model(handle: &EngineHandle) {
         handle.engine_telemetry_snapshot(),
         EngineTelemetrySnapshot::from_snapshot(&expected)
     );
+    let feedback = handle.midi_feedback_snapshot();
+    assert_eq!(feedback.fixtures, expected.fixtures);
+    assert_eq!(feedback.cue_lists, expected.cue_lists);
+    assert_eq!(feedback.active_cue_id, expected.active_cue_id);
+    assert_eq!(feedback.active_group_cue_ids, expected.active_group_cue_ids);
+    assert_eq!(feedback.effects, expected.effects);
+    assert_eq!(feedback.node_graphs, expected.node_graphs);
+    assert_eq!(feedback.video.layers, expected.video.layers);
+    assert_eq!(feedback.video.outputs, expected.video.outputs);
+    assert_eq!(feedback.video.master_opacity, expected.video.master_opacity);
+    assert_eq!(feedback.video.blackout, expected.video.blackout);
+    assert_eq!(feedback.timeline.playing, expected.timeline.playing);
+    assert_eq!(feedback.timeline.loop_runtime, expected.timeline.loop_runtime);
+    assert_eq!(feedback.timeline.position_ms, expected.timeline.position_ms);
+    assert_eq!(feedback.timeline.duration_ms, expected.timeline.duration_ms);
+    assert_eq!(feedback.clock.bpm, expected.clock.bpm);
+    assert_eq!(feedback.lighting_master, expected.lighting_master);
+    assert_eq!(feedback.submasters, expected.submasters);
+    assert_eq!(feedback.active_fade, expected.active_fade);
+    assert_eq!(feedback.blackout, expected.blackout);
     let telemetry = handle.engine_telemetry_snapshot();
     assert_eq!(
         telemetry.timeline_event_count,

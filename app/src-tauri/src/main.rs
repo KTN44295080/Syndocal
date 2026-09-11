@@ -30224,7 +30224,7 @@ fn send_midi_feedback(
         );
     }
     let mappings = coordinator.mappings.midi_mappings.clone();
-    let snapshot = state.engine.snapshot();
+    let snapshot = state.engine.midi_feedback_snapshot();
     let operator_selection = state
         .operator_selection
         .lock()
@@ -94018,6 +94018,21 @@ pub(crate) mod tests {
             assert!(body.contains(reader), "{route} must use {reader}");
             assert!(!body.contains("engine.snapshot()"), "{route} widened its read");
         }
+    }
+
+    #[test]
+    fn midi_feedback_route_uses_the_narrow_engine_reader() {
+        let source = include_str!("main.rs");
+        let start = source
+            .find("fn send_midi_feedback(")
+            .expect("send_midi_feedback command");
+        let end = source[start..]
+            .find("\n#[tauri::command]\nfn learn_midi_control(")
+            .map(|offset| start + offset)
+            .expect("send_midi_feedback boundary");
+        let body = &source[start..end];
+        assert!(body.contains("midi_feedback_snapshot"));
+        assert!(!body.contains("engine.snapshot()"));
     }
 
     #[test]

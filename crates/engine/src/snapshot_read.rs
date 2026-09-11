@@ -184,6 +184,35 @@ impl EngineHandle {
         self.read_snapshot_field(EngineTelemetrySnapshot::from_snapshot)
     }
 
+    /// Read only the published fields required to build MIDI feedback.
+    /// Keeping the existing EngineSnapshot seam here avoids cloning the
+    /// unrelated project, output, and diagnostic collections on each send.
+    pub fn midi_feedback_snapshot(&self) -> EngineSnapshot {
+        self.read_snapshot_field(|snapshot| {
+            let mut feedback = EngineSnapshot::default();
+            feedback.fixtures = snapshot.fixtures.clone();
+            feedback.cue_lists = snapshot.cue_lists.clone();
+            feedback.active_cue_id = snapshot.active_cue_id;
+            feedback.active_group_cue_ids = snapshot.active_group_cue_ids.clone();
+            feedback.effects = snapshot.effects.clone();
+            feedback.node_graphs = snapshot.node_graphs.clone();
+            feedback.video.layers = snapshot.video.layers.clone();
+            feedback.video.outputs = snapshot.video.outputs.clone();
+            feedback.video.master_opacity = snapshot.video.master_opacity;
+            feedback.video.blackout = snapshot.video.blackout;
+            feedback.timeline.playing = snapshot.timeline.playing;
+            feedback.timeline.loop_runtime = snapshot.timeline.loop_runtime.clone();
+            feedback.timeline.position_ms = snapshot.timeline.position_ms;
+            feedback.timeline.duration_ms = snapshot.timeline.duration_ms;
+            feedback.clock.bpm = snapshot.clock.bpm;
+            feedback.lighting_master = snapshot.lighting_master;
+            feedback.submasters = snapshot.submasters.clone();
+            feedback.active_fade = snapshot.active_fade.clone();
+            feedback.blackout = snapshot.blackout;
+            feedback
+        })
+    }
+
     /// Read only the published fields required by Visualizer queries.
     pub fn visualizer_snapshot(&self) -> VisualizerSnapshot {
         self.read_snapshot_field(|snapshot| VisualizerSnapshot {
