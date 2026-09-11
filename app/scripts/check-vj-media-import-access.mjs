@@ -11,6 +11,7 @@ const timelineSourceShelf = await readSource(new URL("TimelineSourceShelf.tsx", 
 const styles = await readSource(new URL("../src/styles.css", import.meta.url));
 const app = await readSource(new URL("../src/App.tsx", import.meta.url));
 const controller = await readSource(new URL("../src/createVideoRuntimeController.ts", import.meta.url));
+const mediaAssetOperationController = await readSource(new URL("../src/mediaAssetOperationController.ts", import.meta.url));
 
 const thumbnailControllerSource = await readSource(new URL("../src/createMediaThumbnailController.ts", import.meta.url));
 assert.equal(
@@ -623,8 +624,10 @@ assert.match(libraryRail, /onRelink\(asset\.id\)/, "each local asset has a Relin
 assert.match(controlPanel, /entry\.status === "failed" \|\| entry\.status === "skipped"/, "mixed import issues retain per-entry failure truth");
 assert.match(libraryRail, /entry\.path[\s\S]*?entry\.message/, "mixed import UI exposes path and backend message, not aggregate counts only");
 assert.match(controlPanel, /onCancelOperation\(operation\.id\)/, "operation Cancel targets the exact projected controller ID");
-assert.match(app, /const cancelMediaAssetOperation = \(id: number\)[\s\S]*?controller\.abort\(\)/, "operation Cancel aborts the real AbortController");
-assert.match(app, /setPhase: \(phase: MediaAssetOperationPhase\) => \{[\s\S]*?controller\.signal\.aborted[\s\S]*?return;/, "an aborted operation cannot overwrite Cancelling with a later worker phase");
+assert.match(app, /const mediaAssetOperationController = createMediaAssetOperationController\(\{/, "App owns one media operation controller for projected cancellation");
+assert.match(app, /const cancelMediaAssetOperation = mediaAssetOperationController\.cancel;/, "operation Cancel is wired to the dedicated media operation controller");
+assert.match(mediaAssetOperationController, /const cancel = \(id: number\) => \{[\s\S]*?controller\.abort\(\)/, "operation Cancel aborts the real AbortController in its lifecycle owner");
+assert.match(mediaAssetOperationController, /setPhase: \(phase\) => \{[\s\S]*?controller\.signal\.aborted[\s\S]*?return;/, "an aborted operation cannot overwrite Cancelling with a later worker phase");
 const sourcePicker = sliceBetween(
   app,
   "const selectVideoSourceFile = async () => {",
