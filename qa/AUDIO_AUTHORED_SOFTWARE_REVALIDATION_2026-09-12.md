@@ -27,3 +27,19 @@ replacement, and silent/fail-closed fault behavior. They do not freeze the
 open `DEC-CLOCK-MASTER-001`, prove migration corpus compatibility, launch a
 native UI, exercise a real audio device, or establish long-duration/venue
 acceptance. `COV-AUDIO-AUTHORED-001` therefore remains `In progress`.
+
+## Current-main rerun — 2026-09-12
+
+The authored-audio software checks were rerun against current `main` at
+`19e04420100cae89e536be92554efe061a65307e`. All six focused checks passed:
+
+- `pnpm.cmd --dir app run check:timeline-cue-audio` — PASS;
+- `pnpm.cmd --dir app run check:timeline-audio-output-bus` — PASS, 11 assertions;
+- `pnpm.cmd --dir app run check:timeline-loop-runtime` — PASS;
+- `pnpm.cmd --dir app run check:timeline-transport-runtime` — PASS;
+- Tauri `timeline_audio` — 34 passed, 0 failed, 0 ignored;
+- engine `timeline_fractional_ticks` — 6 passed, 0 failed, 0 ignored.
+
+Both Rust invocations used the documented MSVC 14.44.35207 x64 absolute
+linker pin, confirmed first by `where.exe link.exe`. No browser, native UI,
+audio device, physical output, or venue/long-duration acceptance is claimed.
