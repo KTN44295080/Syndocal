@@ -47,6 +47,11 @@ const dmxStopRoute = sectionBetween(
   "const stopDmxInput = async () =>",
   "const sendArtRdmRequest =",
 );
+const dmxLearnRoute = sectionBetween(
+  app,
+  "const learnDmxControlForTargets = async",
+  "const setControlLearnMode =",
+);
 
 const checks = [
   [protocol.includes("pub merge_enabled: bool") && protocol.includes('serde(default = "default_true")'), "legacy DMX input remains raw-merge compatible"],
@@ -108,6 +113,11 @@ const checks = [
   "DMX input Start failure cannot write after project authority replacement"],
   [/catch\s*\(error\)[\s\S]*?if\s*\(!isProjectAuthorityIdentityCurrent\(authority\)\)\s*return;[\s\S]*?setMessage/.test(dmxStopRoute),
   "DMX input Stop failure cannot write after project authority replacement"],
+  [/if\s*\(!authorityIsCurrent\(\)\)\s*return;\s*setDmxMappings\(nextMappings\);/.test(dmxLearnRoute),
+  "DMX Learn rejects a stale authority before publishing learned mappings"],
+  [dmxLearnRoute.includes("if (!isProjectAuthorityIdentityCurrent(authority)) return;\n        setMessage(`DMX Learn could not start input")
+    && dmxLearnRoute.includes("if (!isProjectAuthorityIdentityCurrent(authority)) return;\n      setMessage(`DMX Learn failed"),
+  "DMX Learn failure paths reject stale project errors before messaging"],
   [panel.includes('data-io-control="dmx-input-use"') && panel.includes('value="control">Control mappings'), "Setup I/O exposes an explicit Control mappings mode"],
   [panel.includes("props.mappings.map") && panel.includes("onRemoveMapping(index)"), "operators can inspect and remove imported or learned mappings"],
   [viewport.includes("command === 'learn_dmx_control'") && viewport.includes("dmxSelected.controlLearnMockCalls"), "real browser pointer flow covers DMX Learn"],

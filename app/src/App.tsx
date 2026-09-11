@@ -17856,6 +17856,7 @@ export default function App() {
           return;
         }
       } catch (error) {
+        if (!isProjectAuthorityIdentityCurrent(authority)) return;
         setMessage(`DMX Learn could not start input: ${String(error)}`);
         return;
       }
@@ -17874,8 +17875,8 @@ export default function App() {
         ...dmxMappings().filter((mapping) => !sameDmxSource(mapping, learned)),
         ...learnedMappings,
       ];
-      setDmxMappings(nextMappings);
       if (!authorityIsCurrent()) return;
+      setDmxMappings(nextMappings);
       const controlConfig = { ...dmxInputConfig(), merge_enabled: false };
       setDmxInputConfig(controlConfig);
       await invoke("stop_dmx_input", { expectedEpoch: authority.project_epoch });
@@ -17901,6 +17902,7 @@ export default function App() {
         `Mapped U${learned.universe + 1} Ch ${learned.channel} to ${learnedMappings.length} control(s). DMX input is active in Control mappings mode.`,
       );
     } catch (error) {
+      if (!isProjectAuthorityIdentityCurrent(authority)) return;
       setMessage(`DMX Learn failed: ${String(error)}`);
     }
   };
