@@ -84,3 +84,26 @@ DPAPI or credential storage, nonce pairing, Raw Input presence, desktop
 consent UI, audit integration, Agent Bridge wiring, external sidecars,
 physical output, Mac, signing, publication, and product-wide acceptance are
 not claimed.
+
+## Current-main authority-core revalidation — 2026-09-12
+
+The bounded authority-core suite was rerun against current `main` at source
+HEAD `100de87f15698bf8a6329c736da45d3d9bc891c1`; `origin/main` matched before
+the run. No authority policy or product integration was changed. The
+documented MSVC 14.44.35207 x64 linker was pinned and returned first by
+`where.exe link.exe`.
+
+```text
+cargo test -p protocol --release --locked agent_authority -- --test-threads=1
+test result: ok. 10 passed; 0 failed; 0 ignored; 208 filtered out
+```
+
+The run retains fail-closed safe-mode and exact-grant decisions, consent
+binding to principal/incarnation/adapter/operation/owner/arguments/project
+and generations, single-use/expiry/revoke/kill-switch behavior, re-pair
+generation invalidation, overflow without partial state, and wrong-principal,
+owner, operation, or argument rejection without consuming valid consent.
+`AI4-CONSENT-001` remains Open for DPAPI/credential storage, nonce pairing,
+Raw Input presence, desktop consent UI, audit integration, Agent Bridge
+wiring, external clients, physical output, Mac, signing, publication, and
+product-wide acceptance.
