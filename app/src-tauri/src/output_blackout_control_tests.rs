@@ -77,7 +77,8 @@ fn target_blackout_stale_fence_and_split_lease_cannot_publish() {
         OutputControlTargetRoleV1::Lighting,
         true,
         &stale,
-        &request
+        &request,
+        None
     )
     .is_err());
     assert!(set_blackout_with_output_control_fence(
@@ -85,7 +86,8 @@ fn target_blackout_stale_fence_and_split_lease_cannot_publish() {
         OutputControlTargetRoleV1::Lighting,
         true,
         &current,
-        &request
+        &request,
+        None
     )
     .is_err());
     let after = state.engine.snapshot();
@@ -103,12 +105,49 @@ fn target_blackout_toggle_is_published_and_exact_retry_never_reapplies() {
         &[OutputLeaseResource::Lighting, OutputLeaseResource::Video],
     );
     let current = fence(state);
+    use protocol::control_plane_command::{
+        OutputControlActionV2, OutputControlCommandRequestV2, OutputControlReceiptOutcomeV2,
+        OutputControlReceiptV2, OutputControlResponseV2, OutputLeaseAuthorityV1,
+        OUTPUT_BLACKOUT_SET_OPERATION_ID,
+    };
+    let (lease_id, generation) = match request.action.as_ref() {
+        Some(crate::output_lease::OutputLeaseRequestAction::AuthorizeOrdinary {
+            lease_id,
+            expected_generation,
+            ..
+        }) => (*lease_id, *expected_generation),
+        action => panic!("unexpected blackout authorization action: {action:?}"),
+    };
+    let public = OutputControlCommandRequestV2 {
+        operation_id: OUTPUT_BLACKOUT_SET_OPERATION_ID.to_string(),
+        request_id: request.key.request_id,
+        expected_fence: current.clone(),
+        action: OutputControlActionV2::SetBlackout {
+            target: OutputControlTargetRoleV1::Lighting,
+            enabled: true,
+            lease: OutputLeaseAuthorityV1 {
+                lease_id: lease_id.encode(),
+                generation,
+            },
+        },
+    };
+    let shape = crate::sha256_hex(&public.canonical_shape_bytes().unwrap());
+    let fingerprint = crate::sha256_hex(&public.argument_fingerprint_bytes().unwrap());
+    let terminal_identity = crate::ManagedExactBothOutputControlTerminalIdentity {
+        principal: "blackout-test",
+        window_label: "main",
+        operation_id: &public.operation_id,
+        request_id: public.request_id,
+        shape_sha256: &shape,
+        argument_fingerprint: &fingerprint,
+    };
     let (applied, after, receipt) = set_blackout_with_output_control_fence(
         state,
         OutputControlTargetRoleV1::Lighting,
         true,
         &current,
         &request,
+        Some(terminal_identity),
     )
     .unwrap();
     assert!(applied);
@@ -131,27 +170,6 @@ fn target_blackout_toggle_is_published_and_exact_retry_never_reapplies() {
 
     // Exercise the real public terminal store/replay seam used before adapter
     // admission. The old request fence is intentionally stale after commit.
-    use protocol::control_plane_command::{
-        OutputControlActionV2, OutputControlCommandRequestV2, OutputControlReceiptOutcomeV2,
-        OutputControlReceiptV2, OutputControlResponseV2, OutputLeaseAuthorityV1,
-        OUTPUT_BLACKOUT_SET_OPERATION_ID,
-    };
-    let action = OutputControlActionV2::SetBlackout {
-        target: OutputControlTargetRoleV1::Lighting,
-        enabled: true,
-        lease: OutputLeaseAuthorityV1 {
-            lease_id: receipt.lease_id.unwrap().encode(),
-            generation: receipt.generation_before.unwrap(),
-        },
-    };
-    let public = OutputControlCommandRequestV2 {
-        operation_id: OUTPUT_BLACKOUT_SET_OPERATION_ID.to_string(),
-        request_id: 2,
-        expected_fence: current.clone(),
-        action,
-    };
-    let shape = crate::sha256_hex(&public.canonical_shape_bytes().unwrap());
-    let fingerprint = crate::sha256_hex(&public.argument_fingerprint_bytes().unwrap());
     let response = OutputControlResponseV2::Receipt(Box::new(OutputControlReceiptV2 {
         operation_id: public.operation_id.clone(),
         request_id: public.request_id,
@@ -177,6 +195,7 @@ fn target_blackout_toggle_is_published_and_exact_retry_never_reapplies() {
         &public,
         &shape,
         &fingerprint,
+        &receipt,
         &response,
     )
     .unwrap();
@@ -225,6 +244,7 @@ fn target_blackout_noop_keeps_project_fence_and_history() {
         false,
         &before,
         &request,
+        None,
     )
     .unwrap();
     assert!(!applied);
@@ -267,7 +287,14 @@ fn target_blackout_each_target_and_direction_commits_exact_persisted_image() {
             );
             let before = fence(state);
             let (applied, after, _) =
-                set_blackout_with_output_control_fence(state, target, enabled, &before, &request)
+                set_blackout_with_output_control_fence(
+                    state,
+                    target,
+                    enabled,
+                    &before,
+                    &request,
+                    None,
+                )
                     .unwrap();
             assert!(applied, "{target:?} -> {enabled}");
             assert_eq!(after.project_revision, before.project_revision + 1);

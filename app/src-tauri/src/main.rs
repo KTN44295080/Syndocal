@@ -819,6 +819,24 @@ struct PersistedManagedExactBothOutputControlTerminal {
     response: OutputControlResponseV2,
 }
 
+/// A managed exact-Both physical action whose private lease authorization has
+/// completed, but whose public control-plane response has not yet been
+/// durably published.  This is deliberately a fail-closed barrier: after a
+/// restart the private receipt is not sufficient to reconstruct the exact
+/// public fence/result, so the request must not reach the physical callback a
+/// second time.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PersistedManagedExactBothOutputControlPendingTerminal {
+    principal: String,
+    window_label: String,
+    operation_id: String,
+    request_id: u64,
+    shape_sha256: String,
+    argument_fingerprint: String,
+    private_receipt: output_lease::OutputLeaseRequestReceipt,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PersistedOutputLeaseReceiptState {
@@ -846,6 +864,13 @@ struct PersistedOutputLeaseReceiptState {
     #[serde(default)]
     managed_exact_both_output_control_terminals:
         Vec<PersistedManagedExactBothOutputControlTerminal>,
+    /// A physical managed exact-Both action may finish immediately before the
+    /// public response is built/persisted. Retain an explicit barrier for
+    /// that narrow window instead of treating the private lease receipt as a
+    /// replayable public response.
+    #[serde(default)]
+    managed_exact_both_output_control_pending_terminals:
+        Vec<PersistedManagedExactBothOutputControlPendingTerminal>,
 }
 
 impl Default for PersistedOutputLeaseReceiptState {
@@ -858,6 +883,7 @@ impl Default for PersistedOutputLeaseReceiptState {
             dsf2026_artnet_acceptance_probe_consumed: false,
             dsf2026_artnet_acceptance_probe_terminals: Vec::new(),
             managed_exact_both_output_control_terminals: Vec::new(),
+            managed_exact_both_output_control_pending_terminals: Vec::new(),
         }
     }
 }
@@ -872,6 +898,26 @@ struct OutputLeaseDurableReceiptJournal {
 enum OutputLeaseDurablePrepareResult {
     Fresh,
     Terminal,
+}
+
+/// Public control-plane identity captured before a managed exact-Both action
+/// enters its physical commit seam.  The durable journal uses it only to
+/// convert the private receipt into a restart-safe fail-closed barrier.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ManagedExactBothOutputControlTerminalIdentity<'a> {
+    pub(crate) principal: &'a str,
+    pub(crate) window_label: &'a str,
+    pub(crate) operation_id: &'a str,
+    pub(crate) request_id: u64,
+    pub(crate) shape_sha256: &'a str,
+    pub(crate) argument_fingerprint: &'a str,
+}
+
+fn is_lower_hex_fingerprint(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 /// Durable visibility for the fixed DSF2026 machine-local probe.  This is
@@ -979,6 +1025,22 @@ impl OutputLeaseDurableReceiptJournal {
     {
         if request.shape.canonical_hash()? != request.shape_hash {
             return Err(output_lease::OutputLeaseError::InvalidRequest);
+        }
+        if self
+            .state
+            .managed_exact_both_output_control_pending_terminals
+            .iter()
+            .any(|pending| {
+                pending.private_receipt.key.principal == request.key.principal
+                    && pending.private_receipt.key.domain == request.key.domain
+                    && pending.private_receipt.key.request_id == request.key.request_id
+            })
+        {
+            // A managed exact-Both physical action completed without a
+            // replayable public response.  The private receipt is not enough
+            // to reconstruct its public fence/target truth, so fail closed
+            // before any caller can re-enter the physical route.
+            return Err(output_lease::OutputLeaseError::RequestCapacity);
         }
         if let Some(receipt) = self
             .state
@@ -1159,6 +1221,85 @@ impl OutputLeaseDurableReceiptJournal {
         if let Some(path) = self.path.as_deref() {
             persist_output_lease_receipt_state_to_path(path, &candidate)
                 .map_err(|_| output_lease::OutputLeaseError::RequestCapacity)?;
+        }
+        self.state = candidate;
+        Ok(())
+    }
+
+    /// Replace the public Pending record with an explicit managed terminal
+    /// barrier after the physical callback has returned.  The private lease
+    /// receipt is retained inside that barrier, not exposed through the
+    /// ordinary receipt lookup, because it cannot reconstruct the public
+    /// response's exact fence and action truth on its own.
+    fn record_managed_exact_both_output_control_pending_terminal(
+        &mut self,
+        identity: ManagedExactBothOutputControlTerminalIdentity<'_>,
+        durable_request: &OutputLeaseRequest,
+        private_receipt: &output_lease::OutputLeaseRequestReceipt,
+    ) -> Result<(), String> {
+        if !is_managed_exact_both_output_control_replay_operation(identity.operation_id) {
+            return Err(
+                "Managed exact-Both pending terminal operation is not replayable".to_string(),
+            );
+        }
+        OutputLeaseOwner::new(identity.principal, identity.window_label, 1, 1).map_err(|_| {
+            "Managed exact-Both pending terminal caller identity is invalid".to_string()
+        })?;
+        output_lease::validate_persisted_receipt(private_receipt)
+            .map_err(|error| format!("Managed exact-Both pending private receipt is invalid: {error:?}"))?;
+        if private_receipt.key != durable_request.key
+            || private_receipt.shape_hash != durable_request.shape_hash
+            || private_receipt.key.principal != identity.principal
+            || private_receipt.key.request_id != identity.request_id
+        {
+            return Err(
+                "Managed exact-Both pending private receipt does not match its public request"
+                    .to_string(),
+            );
+        }
+        if !is_lower_hex_fingerprint(identity.shape_sha256)
+            || !is_lower_hex_fingerprint(identity.argument_fingerprint)
+        {
+            return Err(
+                "Managed exact-Both pending public response identity is invalid".to_string(),
+            );
+        }
+        let mut candidate = self.state.clone();
+        let pending_index = candidate.pending.iter().position(|pending| {
+            pending.key == durable_request.key && pending.shape_hash == durable_request.shape_hash
+        });
+        if pending_index.is_none() {
+            return Err(
+                "Managed exact-Both pending terminal has no durable Pending record".to_string(),
+            );
+        }
+        if candidate
+            .managed_exact_both_output_control_pending_terminals
+            .iter()
+            .any(|pending| {
+                pending.principal == identity.principal
+                    && pending.window_label == identity.window_label
+                    && pending.request_id == identity.request_id
+            })
+        {
+            return Err(
+                "Managed exact-Both pending terminal already exists for this request".to_string(),
+            );
+        }
+        candidate.pending.remove(pending_index.expect("checked above"));
+        candidate
+            .managed_exact_both_output_control_pending_terminals
+            .push(PersistedManagedExactBothOutputControlPendingTerminal {
+                principal: identity.principal.to_string(),
+                window_label: identity.window_label.to_string(),
+                operation_id: identity.operation_id.to_string(),
+                request_id: identity.request_id,
+                shape_sha256: identity.shape_sha256.to_string(),
+                argument_fingerprint: identity.argument_fingerprint.to_string(),
+                private_receipt: private_receipt.clone(),
+            });
+        if let Some(path) = self.path.as_deref() {
+            persist_output_lease_receipt_state_to_path(path, &candidate)?;
         }
         self.state = candidate;
         Ok(())
@@ -1464,6 +1605,30 @@ impl OutputLeaseDurableReceiptJournal {
                     .to_string(),
             );
         }
+        for pending in &self
+            .state
+            .managed_exact_both_output_control_pending_terminals
+        {
+            if pending.principal != principal
+                || pending.window_label != window_label
+                || pending.request_id != request.request_id
+            {
+                continue;
+            }
+            if pending.operation_id == request.operation_id
+                && pending.shape_sha256 == shape_sha256
+                && pending.argument_fingerprint == argument_fingerprint
+            {
+                return Err(
+                    "Managed exact-Both durable terminal is pending physical reconciliation"
+                        .to_string(),
+                );
+            }
+            return Err(
+                "Managed exact-Both pending terminal request identity conflicts with its replay shape"
+                    .to_string(),
+            );
+        }
         Ok(None)
     }
 
@@ -1474,6 +1639,7 @@ impl OutputLeaseDurableReceiptJournal {
         request: &OutputControlCommandRequestV2,
         shape_sha256: &str,
         argument_fingerprint: &str,
+        private_receipt: &output_lease::OutputLeaseRequestReceipt,
         response: &OutputControlResponseV2,
     ) -> Result<(), String> {
         if !is_managed_exact_both_output_control_replay_action(&request.action) {
@@ -1495,19 +1661,72 @@ impl OutputLeaseDurableReceiptJournal {
         {
             return Err(
                 "Managed exact-Both durable terminal does not exactly match its request"
-                    .to_string(),
+                .to_string(),
             );
         }
         let mut candidate = self.state.clone();
-        if !candidate.receipts.iter().any(|lease_receipt| {
-            lease_receipt.key.principal == principal
-                && lease_receipt.key.domain == OUTPUT_LEASE_OUTPUT_CONTROL_DOMAIN
-                && lease_receipt.key.request_id == request.request_id
+        let pending_index = candidate
+            .managed_exact_both_output_control_pending_terminals
+            .iter()
+            .position(|pending| {
+                pending.principal == principal
+                    && pending.window_label == window_label
+                    && pending.operation_id == request.operation_id
+                    && pending.request_id == request.request_id
+                    && pending.shape_sha256 == shape_sha256
+                    && pending.argument_fingerprint == argument_fingerprint
+            });
+        if let Some(pending_index) = pending_index {
+            let pending = candidate
+                .managed_exact_both_output_control_pending_terminals
+                .remove(pending_index);
+            if pending.private_receipt != *private_receipt {
+                return Err(
+                    "Managed exact-Both durable terminal private receipt conflicts with its pending barrier"
+                        .to_string(),
+                );
+            }
+        } else if !candidate.receipts.iter().any(|lease_receipt| {
+            lease_receipt.key == private_receipt.key
+                && lease_receipt.shape_hash == private_receipt.shape_hash
         }) {
             return Err(
-                "Managed exact-Both durable terminal has no canonical public lease receipt"
+                "Managed exact-Both durable terminal has no private receipt or pending barrier"
                     .to_string(),
             );
+        }
+        let expected_lease_result =
+            control_plane_runtime::output_control_lease_result_from_registry_receipt(
+                &request.action,
+                private_receipt,
+            )
+            .map_err(|error| {
+                format!(
+                    "Managed exact-Both durable terminal private receipt is not public-replayable: {error}"
+                )
+            })?;
+        if receipt.lease_result.as_ref() != Some(&expected_lease_result) {
+            return Err(
+                "Managed exact-Both durable terminal lease result conflicts with its private receipt"
+                    .to_string(),
+            );
+        }
+        let has_private_receipt = candidate.receipts.iter().any(|lease_receipt| {
+            lease_receipt.key == private_receipt.key
+                && lease_receipt.shape_hash == private_receipt.shape_hash
+        });
+        if !has_private_receipt {
+            // The temporary Pending record lets the canonical receipt
+            // recorder preserve the request-origin high-water invariant. It
+            // is removed atomically by record_receipt_in_candidate.
+            candidate.pending.push(PersistedOutputLeasePendingReceipt {
+                key: private_receipt.key.clone(),
+                shape_hash: private_receipt.shape_hash.clone(),
+                window_label: None,
+            });
+            Self::record_receipt_in_candidate(&mut candidate, private_receipt).map_err(|error| {
+                format!("Managed exact-Both private terminal receipt is invalid: {error:?}")
+            })?;
         }
         if let Some(existing) = candidate
             .managed_exact_both_output_control_terminals
@@ -1648,6 +1867,7 @@ pub(crate) fn record_durable_managed_exact_both_output_control_terminal(
     request: &OutputControlCommandRequestV2,
     shape_sha256: &str,
     argument_fingerprint: &str,
+    private_receipt: &output_lease::OutputLeaseRequestReceipt,
     response: &OutputControlResponseV2,
 ) -> Result<(), String> {
     state
@@ -1660,6 +1880,7 @@ pub(crate) fn record_durable_managed_exact_both_output_control_terminal(
             request,
             shape_sha256,
             argument_fingerprint,
+            private_receipt,
             response,
         )
 }
@@ -56028,6 +56249,7 @@ where
         request,
         None,
         request,
+        None,
         now_ms,
         context,
         pending_window_label,
@@ -56064,6 +56286,7 @@ fn submit_output_lease_candidate_with_classified_commit_and_durable_record_for_p
         &output_lease_keepalive_runtime::OutputLeaseKeepaliveManagedExactBothAuthorizationGuard<'_>,
     >,
     durable_request: &OutputLeaseRequest,
+    managed_terminal_identity: Option<ManagedExactBothOutputControlTerminalIdentity<'_>>,
     now_ms: u64,
     context: &str,
     pending_window_label: Option<&str>,
@@ -56149,7 +56372,19 @@ where
                 let mut durable = state.output_lease_durable_receipts.lock().map_err(|_| {
                     "Output lease durable receipt journal lock was poisoned".to_string()
                 })?;
-                if let Err(error) = durable_record(&mut durable, &durable_receipt) {
+                let record_result = if managed_authorization.is_some() {
+                    let identity = managed_terminal_identity.ok_or_else(|| {
+                        "Managed exact-Both public terminal identity is missing".to_string()
+                    })?;
+                    durable.record_managed_exact_both_output_control_pending_terminal(
+                        identity,
+                        durable_request,
+                        &durable_receipt,
+                    )
+                } else {
+                    durable_record(&mut durable, &durable_receipt)
+                };
+                if let Err(error) = record_result {
                     // The physical callback already returned success. Keep
                     // the candidate live so authority matches the device, but
                     // retain the durable Pending marker and surface the
@@ -56433,6 +56668,7 @@ fn submit_managed_exact_both_candidate_with_commit<T, Commit>(
     authorization: &output_lease_keepalive_runtime::OutputLeaseKeepaliveManagedExactBothAuthorizationGuard<'_>,
     now_ms: u64,
     context: &str,
+    managed_terminal_identity: Option<ManagedExactBothOutputControlTerminalIdentity<'_>>,
     commit: Commit,
 ) -> Result<(T, output_lease::OutputLeaseRequestReceipt), String>
 where
@@ -56445,6 +56681,7 @@ where
         request,
         Some(authorization),
         request,
+        managed_terminal_identity,
         now_ms,
         context,
         None,
@@ -56469,6 +56706,7 @@ fn submit_managed_exact_both_public_candidate_with_commit<T, Commit>(
     authorization: &output_lease_keepalive_runtime::OutputLeaseKeepaliveManagedExactBothAuthorizationGuard<'_>,
     now_ms: u64,
     context: &str,
+    managed_terminal_identity: Option<ManagedExactBothOutputControlTerminalIdentity<'_>>,
     commit: Commit,
 ) -> Result<(T, output_lease::OutputLeaseRequestReceipt), String>
 where
@@ -56481,6 +56719,7 @@ where
         private_request,
         Some(authorization),
         public_request,
+        managed_terminal_identity,
         now_ms,
         context,
         None,
@@ -56519,6 +56758,7 @@ where
             authorization,
             now_ms,
             context,
+            None,
             commit,
         ),
         None => submit_output_lease_candidate_with_commit(
@@ -59423,6 +59663,16 @@ fn validate_output_lease_receipt_state(
             MAX_DURABLE_MANAGED_EXACT_BOTH_OUTPUT_CONTROL_TERMINALS
         ));
     }
+    if state
+        .managed_exact_both_output_control_pending_terminals
+        .len()
+        > MAX_DURABLE_MANAGED_EXACT_BOTH_OUTPUT_CONTROL_TERMINALS
+    {
+        return Err(format!(
+            "Output-lease receipt state exceeds {} managed exact-Both pending terminal records",
+            MAX_DURABLE_MANAGED_EXACT_BOTH_OUTPUT_CONTROL_TERMINALS
+        ));
+    }
     for (index, terminal) in state
         .dsf2026_artnet_acceptance_probe_terminals
         .iter()
@@ -59541,6 +59791,77 @@ fn validate_output_lease_receipt_state(
         {
             return Err(
                 "Output-lease receipt state has duplicate managed exact-Both public terminals"
+                    .to_string(),
+            );
+        }
+    }
+    for (index, pending) in state
+        .managed_exact_both_output_control_pending_terminals
+        .iter()
+        .enumerate()
+    {
+        OutputLeaseOwner::new(&pending.principal, &pending.window_label, 1, 1).map_err(|_| {
+            format!(
+                "Output-lease receipt state has invalid managed exact-Both pending caller at index {index}"
+            )
+        })?;
+        if !is_managed_exact_both_output_control_replay_operation(&pending.operation_id)
+            || !is_lower_hex_fingerprint(&pending.shape_sha256)
+            || !is_lower_hex_fingerprint(&pending.argument_fingerprint)
+        {
+            return Err(format!(
+                "Output-lease receipt state has invalid managed exact-Both pending identity at index {index}"
+            ));
+        }
+        output_lease::validate_persisted_receipt(&pending.private_receipt).map_err(|error| {
+            format!(
+                "Output-lease receipt state has invalid managed exact-Both pending receipt at index {index}: {error:?}"
+            )
+        })?;
+        if pending.private_receipt.key.principal != pending.principal
+            || pending.private_receipt.key.domain != OUTPUT_LEASE_OUTPUT_CONTROL_DOMAIN
+            || pending.private_receipt.key.request_id != pending.request_id
+        {
+            return Err(format!(
+                "Output-lease receipt state has mismatched managed exact-Both pending receipt at index {index}"
+            ));
+        }
+        if state.receipts.iter().any(|receipt| {
+            receipt.key == pending.private_receipt.key
+                || receipt.key.request_id == pending.request_id
+                    && receipt.key.principal == pending.principal
+                    && receipt.key.domain == OUTPUT_LEASE_OUTPUT_CONTROL_DOMAIN
+        }) || state.pending.iter().any(|receipt| receipt.key == pending.private_receipt.key)
+        {
+            return Err(format!(
+                "Output-lease receipt state has duplicate managed exact-Both pending request at index {index}"
+            ));
+        }
+        let Some(origin) = state.origins.iter().find(|origin| {
+            origin.principal == pending.private_receipt.key.principal
+                && origin.domain == pending.private_receipt.key.domain
+        }) else {
+            return Err(format!(
+                "Output-lease receipt state has managed exact-Both pending request without origin {}",
+                pending.request_id
+            ));
+        };
+        if !origin.replay_guard || pending.request_id > origin.high_water_request_id {
+            return Err(format!(
+                "Output-lease receipt state has invalid managed exact-Both pending origin {}",
+                pending.request_id
+            ));
+        }
+        if state.managed_exact_both_output_control_pending_terminals[index + 1..]
+            .iter()
+            .any(|other| {
+                other.principal == pending.principal
+                    && other.window_label == pending.window_label
+                    && other.request_id == pending.request_id
+            })
+        {
+            return Err(
+                "Output-lease receipt state has duplicate managed exact-Both pending terminals"
                     .to_string(),
             );
         }
@@ -73046,6 +73367,7 @@ struct DisplayOutputWindowControlRequest<'a> {
     expected_owner_principal: &'a str,
     expected_owner_window_label: &'a str,
     expected_owner_incarnation: u64,
+    managed_terminal_identity: Option<ManagedExactBothOutputControlTerminalIdentity<'a>>,
 }
 
 struct VideoOutputCompositionAssignmentControlRequest<'a> {
@@ -74323,6 +74645,7 @@ fn submit_managed_exact_both_candidate_with_classified_commit<T, Commit>(
     authorization: &output_lease_keepalive_runtime::OutputLeaseKeepaliveManagedExactBothAuthorizationGuard<'_>,
     now_ms: u64,
     context: &str,
+    managed_terminal_identity: Option<ManagedExactBothOutputControlTerminalIdentity<'_>>,
     commit: Commit,
 ) -> Result<(T, output_lease::OutputLeaseRequestReceipt), String>
 where
@@ -74335,6 +74658,7 @@ where
         request,
         Some(authorization),
         request,
+        managed_terminal_identity,
         now_ms,
         context,
         None,
@@ -74356,6 +74680,7 @@ fn submit_show_output_candidate_with_classified_commit<T, Commit>(
     >,
     now_ms: u64,
     context: &str,
+    managed_terminal_identity: Option<ManagedExactBothOutputControlTerminalIdentity<'_>>,
     commit: Commit,
 ) -> Result<(T, output_lease::OutputLeaseRequestReceipt), String>
 where
@@ -74369,6 +74694,7 @@ where
             authorization,
             now_ms,
             context,
+            managed_terminal_identity,
             commit,
         ),
         None => submit_output_lease_candidate_with_classified_commit(
@@ -74903,6 +75229,7 @@ fn enable_show_artnet_loopback_route_with_output_control_fence(
                     authorization,
                     final_lease_now_ms,
                     "show Art-Net loopback route activation",
+                    None,
                     || {
                         // Recheck all mutable truth immediately before the engine
                         // opens its fixed loopback socket. A stale project leaves
@@ -75426,6 +75753,7 @@ fn enable_show_spout_outputs_with_output_control_fence(
     expected_fence: &OutputControlFenceV1,
     lease_request: &OutputLeaseRequest,
     _lease_now_ms: u64,
+    managed_terminal_identity: Option<ManagedExactBothOutputControlTerminalIdentity<'_>>,
 ) -> Result<
     (
         bool,
@@ -75524,6 +75852,7 @@ fn enable_show_spout_outputs_with_output_control_fence(
                     managed_authorization.as_ref(),
                     final_lease_now_ms,
                     "show Spout output activation",
+                    managed_terminal_identity,
                     || {
                         {
                             let mut coordinator = coordinator.borrow_mut();
@@ -75839,6 +76168,7 @@ fn release_safety_blackout_with_output_control_fence(
     expected_fence: &OutputControlFenceV1,
     lease_request: &OutputLeaseRequest,
     _lease_now_ms: u64,
+    managed_terminal_identity: Option<ManagedExactBothOutputControlTerminalIdentity<'_>>,
 ) -> Result<
     (
         bool,
@@ -75971,6 +76301,7 @@ fn release_safety_blackout_with_output_control_fence(
                     authorization,
                     final_lease_now_ms,
                     "blackout release",
+                    managed_terminal_identity,
                     submit_release,
                 ),
                 None => submit_output_lease_candidate_with_commit(
@@ -78850,6 +79181,7 @@ fn set_display_output_window_open_with_output_control_fence(
             &authorization,
             final_now_ms,
             "Display window authorization",
+            request.managed_terminal_identity,
             || Ok(()),
         )?;
         receipt

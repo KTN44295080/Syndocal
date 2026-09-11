@@ -3,6 +3,7 @@
 use super::{
     control_plane_runtime, ensure_no_pending_project_transaction, lock_output_ownership_transition,
     lock_project_coordinator, lock_project_external_command_admission,
+    ManagedExactBothOutputControlTerminalIdentity,
     managed_exact_both_request_after_confirmation,
     output_lease::{OutputLeaseRequest, OutputLeaseRequestAction, OutputLeaseRequestReceipt},
     output_lease_project_identity, reconcile_project_checkpoint_for_coordinator,
@@ -24,6 +25,7 @@ pub(crate) fn set_blackout_with_output_control_fence(
     enabled: bool,
     expected_fence: &OutputControlFenceV1,
     lease_request: &OutputLeaseRequest,
+    managed_terminal_identity: Option<ManagedExactBothOutputControlTerminalIdentity<'_>>,
 ) -> Result<(bool, OutputControlFenceV1, OutputLeaseRequestReceipt), String> {
     let _lifecycle = state
         .standby_sync_lifecycle
@@ -80,7 +82,7 @@ pub(crate) fn set_blackout_with_output_control_fence(
     let now = state.output_lease_now_ms()?;
     let publication = submit_output_lease_candidate_with_classified_commit_and_durable_record_for_pending_window_inner(
         state, &mut registry, candidate_request, managed_authorization.as_ref(),
-        lease_request, now, "target blackout", None,
+        lease_request, managed_terminal_identity, now, "target blackout", None,
         || {
             if !plan.changed() {
                 return Ok((false, expected_fence.clone()));

@@ -171,8 +171,19 @@ fn show_spout_managed_terminal_replays_exact_response_after_successor_fence_pers
         Ok(crate::OutputLeaseDurablePrepareResult::Fresh)
     );
     journal
-        .record(&private_receipt)
-        .expect("record canonical Spout lease receipt");
+        .record_managed_exact_both_output_control_pending_terminal(
+            crate::ManagedExactBothOutputControlTerminalIdentity {
+                principal: "local-ui",
+                window_label: "main",
+                operation_id: &request.operation_id,
+                request_id: request.request_id,
+                shape_sha256: &shape_sha256,
+                argument_fingerprint: &argument_fingerprint,
+            },
+            &private_request,
+            &private_receipt,
+        )
+        .expect("record pending Spout public terminal barrier");
     journal
         .record_managed_exact_both_output_control_terminal(
             "local-ui",
@@ -180,6 +191,7 @@ fn show_spout_managed_terminal_replays_exact_response_after_successor_fence_pers
             &request,
             &shape_sha256,
             &argument_fingerprint,
+            &private_receipt,
             &response,
         )
         .expect("record exact Spout public terminal");
@@ -228,14 +240,25 @@ fn show_spout_managed_terminal_rejects_invalid_fence_without_publishing() {
 
     let mut journal = crate::OutputLeaseDurableReceiptJournal::in_memory();
     journal
-        .install_path(path)
+        .install_path(path.clone())
         .expect("install Spout invalid-terminal journal");
     journal
         .prepare(&private_request)
         .expect("prepare Spout invalid-terminal private receipt");
     journal
-        .record(&private_receipt)
-        .expect("record Spout invalid-terminal private receipt");
+        .record_managed_exact_both_output_control_pending_terminal(
+            crate::ManagedExactBothOutputControlTerminalIdentity {
+                principal: "local-ui",
+                window_label: "main",
+                operation_id: &request.operation_id,
+                request_id: request.request_id,
+                shape_sha256: &shape_sha256,
+                argument_fingerprint: &argument_fingerprint,
+            },
+            &private_request,
+            &private_receipt,
+        )
+        .expect("record pending Spout invalid-terminal barrier");
     assert!(
         journal
             .record_managed_exact_both_output_control_terminal(
@@ -244,12 +267,13 @@ fn show_spout_managed_terminal_rejects_invalid_fence_without_publishing() {
                 &request,
                 &shape_sha256,
                 &argument_fingerprint,
+                &private_receipt,
                 &invalid_response,
             )
             .is_err(),
         "a physical/output fence change is rejected as an invalid Spout terminal"
     );
-    assert_eq!(
+    assert!(
         journal
             .lookup_managed_exact_both_output_control_terminal(
                 "local-ui",
@@ -258,9 +282,24 @@ fn show_spout_managed_terminal_rejects_invalid_fence_without_publishing() {
                 &shape_sha256,
                 &argument_fingerprint,
             )
-            .expect("lookup rejected Spout terminal"),
-        None,
-        "invalid terminal rejection does not publish a replay record"
+            .is_err(),
+        "invalid terminal rejection keeps the physical retry barrier"
+    );
+    let mut restarted = crate::OutputLeaseDurableReceiptJournal::in_memory();
+    restarted
+        .install_path(path.clone())
+        .expect("restart loads pending Spout terminal barrier");
+    assert!(
+        restarted
+            .lookup_managed_exact_both_output_control_terminal(
+                "local-ui",
+                "main",
+                &request,
+                &shape_sha256,
+                &argument_fingerprint,
+            )
+            .is_err(),
+        "restart preserves the no-second-physical-attempt barrier"
     );
     fs::remove_dir_all(directory).expect("remove Spout invalid-terminal directory");
 }

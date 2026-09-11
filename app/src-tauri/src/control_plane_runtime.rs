@@ -56,7 +56,8 @@ use super::{
     record_durable_managed_exact_both_output_control_terminal,
     replay_durable_dsf2026_output_control_terminal,
     replay_durable_managed_exact_both_output_control_terminal, AppState, ControlPlaneQueryState,
-    ProjectCoordinator, StandbyCheckpointIdentity, StandbyTakeoverCheckpointSelector,
+    ManagedExactBothOutputControlTerminalIdentity, ProjectCoordinator, StandbyCheckpointIdentity,
+    StandbyTakeoverCheckpointSelector,
 };
 
 const RECEIPT_TTL: Duration = Duration::from_secs(10 * 60);
@@ -624,6 +625,15 @@ where
         Ok(binding) => binding,
         Err(_) => return output_control_rejection(&request, OutputControlErrorCodeV2::Forbidden),
     };
+    let managed_terminal_identity =
+        ManagedExactBothOutputControlTerminalIdentity {
+            principal: &binding.principal,
+            window_label: &binding.window_label,
+            operation_id: &request.operation_id,
+            request_id: request.request_id,
+            shape_sha256: &shape_sha256,
+            argument_fingerprint: &argument_fingerprint,
+        };
     // A managed exact-Both lease may have renewed while the native dialog was
     // open.  Resolve its canonical public terminal before checking mutable
     // action state, fence, or confirmation so a lost reply remains replayable
@@ -1147,6 +1157,7 @@ where
                 &request.expected_fence,
                 &lease_request,
                 lease_now_ms,
+                Some(managed_terminal_identity),
             )
         }
         OutputControlActionV2::ResetShowSpoutOutputs {} => {
@@ -1154,7 +1165,12 @@ where
         }
         OutputControlActionV2::SetBlackout { target, enabled, .. } => {
             super::output_blackout_control::set_blackout_with_output_control_fence(
-                state, *target, *enabled, &request.expected_fence, &lease_request,
+                state,
+                *target,
+                *enabled,
+                &request.expected_fence,
+                &lease_request,
+                Some(managed_terminal_identity),
             )
         }
         OutputControlActionV2::ReleaseBlackout { .. } => {
@@ -1163,6 +1179,7 @@ where
                 &request.expected_fence,
                 &lease_request,
                 lease_now_ms,
+                Some(managed_terminal_identity),
             )
         }
         OutputControlActionV2::Arm { role, .. } => {
@@ -1237,6 +1254,7 @@ where
                 expected_owner_principal: &binding.principal,
                 expected_owner_window_label: &binding.window_label,
                 expected_owner_incarnation: binding.owner_incarnation,
+                managed_terminal_identity: Some(managed_terminal_identity),
             },
         ),
         OutputControlActionV2::AssignVideoOutputComposition {
@@ -1373,6 +1391,7 @@ where
         &request,
         &shape_sha256,
         &argument_fingerprint,
+        &lease_receipt,
         &response,
     )
     .is_err()
