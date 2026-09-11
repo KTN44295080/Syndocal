@@ -55,3 +55,21 @@ The Rust checks used the documented MSVC 14.44.35207 x64 absolute linker pin,
 confirmed first by `where.exe link.exe`. Browser, native UI, GPU, 4K,
 multi-display, physical output, venue, and full C2/C4 integration remain
 unclaimed.
+
+## Current-main FX rerun — 2026-09-12
+
+The FX/transition software checks were rerun against current `main` at
+`796dca7755f0f0d20958a0a3b00ba2e51e7a63a6`. All seven checks passed:
+
+- `node app/scripts/check-authored-effect-enable.mjs` — PASS;
+- `node app/scripts/check-effect-draft-helpers.mjs` — PASS;
+- `node app/scripts/check-value-effect-generator.mjs` — PASS;
+- `node app/scripts/check-cue-effect-recall.mjs` — PASS;
+- `pnpm.cmd --dir app run check:fx-visual` — PASS;
+- `pnpm.cmd --dir app run check:fx-palettes` — PASS;
+- `video_transition_bus_c3_is_typed` — 1 passed, 0 failed, 0 ignored.
+
+The Rust check used the documented MSVC 14.44.35207 x64 absolute linker pin,
+confirmed first by `where.exe link.exe`. This remains source/engine evidence
+only; GPU, native rendering, physical output, venue behavior, and full C2/C4
+integration are not claimed.
