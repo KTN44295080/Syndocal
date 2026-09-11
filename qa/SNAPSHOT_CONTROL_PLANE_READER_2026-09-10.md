@@ -2324,3 +2324,32 @@ Syndocal processes and zero remaining debug listener after cleanup.
 This checkpoint does not claim real-file missing → Retry → recovery, actual
 Art-Net/ASIO/NDI/Spout/device output, Mac, signing, publication, or
 product-wide completion.
+
+## Current-main representative snapshot benchmark revalidation — 2026-09-12
+
+The existing snapshot-reader measurements were repeated against current `main`
+at source HEAD `f1ba552d0120809bbf16921fa19ac29980dc535b`. The product source
+is unchanged from the preceding MIDI authority checkpoint; this is a
+measurement-only QA update.
+
+- Fixture: `samples/phase1-mini-show.sdc`
+- Fixture identity: 21,612 bytes, SHA-256
+  `45FBBFC1165C8A79BAEDBCBA6C44C99F101120E1814AB5E9D3AD14C4589F99DB`
+- Shape: one fixture, one cue, one video output
+- MSVC: Build Tools `14.44.35207`, absolute linker pin verified first by
+  `where.exe link.exe`
+
+```text
+cargo test -p engine --release --locked benchmark_show_ -- --ignored --nocapture --test-threads=1
+test result: ok. 5 passed; 0 failed; 0 ignored
+clone_ns=3296100 encode_ns=10953200 clone_encode_ns=14919600
+build_snapshot_ns=11121000 rendered_ns=1118500 authored_from_rendered_ns=1922500 both_ns=1986200
+writer_hold=2ms full_ns=2502700 narrow_ns=2509200 try_ns=6600 try_successes=0/100
+full_video_read_ns=14611400 narrow_video_read_ns=162900
+```
+
+The run used the preserved fixture read-only and started no application,
+external client, device, or physical-output path. The results are local
+reader/construction measurements only; they do not establish application FPS,
+real-show latency, hardware, Mac, signing, publication, or product-wide
+completion.
