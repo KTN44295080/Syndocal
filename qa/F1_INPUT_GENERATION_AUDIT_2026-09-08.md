@@ -356,3 +356,25 @@ This review remains bounded to the existing MIDI authority repair. It does not
 close physical MIDI/OSC/DMX client, reconnect/latency, device, venue, F2,
 Mac, signing, publication, or product-wide acceptance. The real-file
 thumbnail missing → Retry → recovery trial was not rerun.
+
+## Current-main input-generation software revalidation — 2026-09-12
+
+The existing F1 software boundary was rerun against current `main` at source
+HEAD `585b4a9726593f7c2359aa03b1887683445906b9`; `origin/main` matched before
+the run. No input API or physical-device behavior was changed. The documented
+MSVC 14.44.35207 x64 linker was pinned and returned first by
+`where.exe link.exe`.
+
+| Check | Result |
+| --- | --- |
+| `pnpm.cmd --dir app run check:dvc-midi-shortcuts` | PASS — 39 assertions |
+| `pnpm.cmd --dir app run check:frontend-command-routing` | PASS — 133 renderer, 31 server-authoritative, 28 raw, 464 facade dispatches |
+| `cargo test --manifest-path app/src-tauri/Cargo.toml --release --locked -j 1 midi_feedback_route_uses_the_narrow_engine_reader -- --test-threads=1` | PASS — 1 passed, 0 failed, 0 ignored, 1865 filtered out |
+
+The existing checks retain the manual MIDI feedback project-authority fence,
+stale success/failure suppression, mapping validation before engine read/send,
+and the current DVC/MIDI shortcut classification. `F1-INPUT-GENERATIONS-001`
+and `INPUT-PHYSICAL-001` remain Open for full input-source generation coverage,
+real MIDI/OSC/DMX clients, reconnect/latency, device and venue behavior,
+ASIO/NDI physical acceptance, Mac, signing, publication, and product-wide
+completion.
