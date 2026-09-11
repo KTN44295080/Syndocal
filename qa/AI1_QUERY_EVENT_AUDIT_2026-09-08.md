@@ -111,3 +111,24 @@ source selection, and explicit retention-gap resnapshot.
 it does not prove every canonical family, generated external schema parity,
 Remote/MCP/JSON-RPC adapters, or real-client reconnect/recovery. Physical,
 Mac, signing, publication, and product-wide acceptance remain unclaimed.
+
+## Current-main query/event revalidation — 2026-09-12
+
+The bounded AI1 suite was rerun against current `main` at source HEAD
+`eae8b9e07343f1c34cb3d8a7e25d400128c18b21`; `origin/main` matched before the
+run. The product query/event source was unchanged. The documented MSVC
+14.44.35207 x64 linker was pinned and returned first by `where.exe link.exe`.
+
+```text
+cargo test --manifest-path app/src-tauri/Cargo.toml --release --locked -j 1 control_plane_query -- --test-threads=1
+test result: ok. 14 passed; 0 failed; 0 ignored; 1852 filtered out
+```
+
+The run retains owner-bound cursor/tamper/replay rejection, expiry and
+capacity bounds, stale/future fence rejection, strict page bounds,
+project-replacement redaction, event backlog convergence, retained-gap
+resnapshot, serialized capture ordering, and exact timeline transport
+generation sourcing. `AI1-SCHEMAS-001` remains Open for complete canonical
+family parity, generated external schema parity, Remote/MCP/JSON-RPC adapters,
+and real-client reconnect/recovery. Physical, Mac, signing, publication, and
+product-wide acceptance remain unclaimed.
