@@ -2164,7 +2164,7 @@ unchecked row.
       "scope": "Supported",
       "owner_files": "ASIO bridge/product owner; tools/asio-bridge lane kept separately licensed",
       "dependencies": ["Explicit GPLv3-separated artifact or Steinberg SDK decision", "Second-vendor driver cycle already passed"],
-      "automated_proof": { "status": "not-passing", "command": "Planned: deterministic ASIO loader/negotiation suites plus qa/ASIO_INPUT_ACCEPTANCE.md gates; real-device rows cannot be automated.", "expected_count": null },
+      "automated_proof": { "status": "passing", "command": "pnpm --dir app run check:live-audio && pnpm --dir app run check:live-audio-ipc-v1 && pnpm --dir app run check:asio-packaging && pnpm --dir app run check:asio-v3-contract && cargo test --manifest-path app/src-tauri/Cargo.toml --release --locked -j 1 live_audio_input_tests -- --test-threads=1 && cargo test -p engine --release --locked -j 1 live_audio_spectrum_expires_inside_the_engine_at_the_ttl_boundary -- --test-threads=1 && cargo test -p engine --release --locked -j 1 unverified_legacy_live_audio_cannot_drive_node_graph -- --test-threads=1", "expected_count": 7 },
       "native_proof": { "status": "recorded", "artifact_hash": null, "raw_evidence_paths": ["qa/ASIO_INPUT_ACCEPTANCE.md"], "na_reason": null },
       "hardware_external_proof": { "status": "not-run", "device_topology_duration": "HOTONE second-vendor cycle passed historically; advertised matrix, fault injection, matched one-hour soak, and TouchDesigner trials pending on current source.", "artifact_hash": null, "raw_evidence_paths": [], "na_reason": null },
       "status": "In progress",
