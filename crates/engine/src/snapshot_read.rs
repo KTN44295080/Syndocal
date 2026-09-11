@@ -723,6 +723,19 @@ impl EngineHandle {
         })
     }
 
+    /// Read one published video output without cloning the complete output
+    /// collection or unrelated public/runtime snapshot fields.
+    pub fn video_output_snapshot(&self, output_id: VideoOutputId) -> Option<VideoOutputSummary> {
+        self.read_snapshot_field(|snapshot| {
+            snapshot
+                .video
+                .outputs
+                .iter()
+                .find(|output| output.id == output_id)
+                .cloned()
+        })
+    }
+
     /// Check one editable video-composition ID without cloning the full video
     /// image or unrelated authored and runtime collections.
     pub fn video_composition_exists(&self, composition_id: CompositionId) -> bool {

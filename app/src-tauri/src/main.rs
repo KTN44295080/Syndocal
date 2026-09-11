@@ -78692,12 +78692,7 @@ fn set_display_output_window_open_with_output_control_fence(
     } = request;
     let output = state
         .engine
-        .snapshot()
-        .video
-        .outputs
-        .iter()
-        .find(|output| output.id == output_id)
-        .cloned()
+        .video_output_snapshot(output_id)
         .ok_or_else(|| format!("Video output {output_id} was not found"))?;
     if output.kind != VideoOutputKind::Display {
         return Err("Only Display outputs have a physical live window".to_string());
@@ -93583,6 +93578,21 @@ pub(crate) mod tests {
             4,
             "Display output admission must read only the published video-output projection"
         );
+        assert!(!body.contains("engine.snapshot()"));
+    }
+
+    #[test]
+    fn display_window_operation_reads_only_the_requested_output() {
+        let source = include_str!("main.rs");
+        let function_start = source
+            .find("fn set_display_output_window_open_with_output_control_fence(")
+            .expect("missing Display window operation");
+        let function_end = source[function_start..]
+            .find("\nfn ")
+            .map(|offset| function_start + offset)
+            .expect("missing Display window operation boundary");
+        let body = &source[function_start..function_end];
+        assert!(body.contains("video_output_snapshot(output_id)"));
         assert!(!body.contains("engine.snapshot()"));
     }
 

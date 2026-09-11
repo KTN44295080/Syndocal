@@ -778,6 +778,11 @@ fn narrow_readers_match_public_snapshot_and_observe_replacement() {
     assert_same_read_model(&handle);
     assert!(handle.video_composition_exists(1));
     assert!(!handle.video_composition_exists(99_999));
+    assert_eq!(
+        handle.video_output_snapshot(7),
+        Some(publication(7).video.outputs[0].clone())
+    );
+    assert_eq!(handle.video_output_snapshot(99_999), None);
     let retained = handle.video_clip_runtime_snapshot();
     let retained_effect_runtime = handle.video_output_effect_runtime_snapshot();
     let retained_follow = handle.timeline_follow_runtime_summary();
@@ -842,6 +847,7 @@ fn poisoned_publication_preserves_public_snapshot_defaults() {
     assert!(handle.stage_objects_snapshot().is_empty());
     assert!(handle.fixture_group_ids_snapshot().is_empty());
     assert!(!handle.video_output_exists(1));
+    assert_eq!(handle.video_output_snapshot(1), None);
     assert_eq!(handle.video_layer_state_snapshot(7), None);
     let default_snapshot = EngineSnapshot::default();
     assert_eq!(

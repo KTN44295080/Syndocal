@@ -1216,6 +1216,44 @@ This checkpoint does not claim real-file missing → Retry → recovery, actual
 Art-Net/ASIO/NDI/Spout/device output, Mac, signing, publication, or
 product-wide completion.
 
+## Display window single-output reader follow-up
+
+The physical Display-window control path now reads only the requested
+published `VideoOutputSummary` through
+`EngineHandle::video_output_snapshot(output_id)`. The existing Display-kind
+check, persisted monitor identity resolution, output-control owner/fence and
+lease admission, native window lifecycle, first-frame fencing, and cleanup
+ordering are unchanged. A missing output and a poisoned publication remain
+fail-closed as not found; no output is enabled by this change.
+
+The focused engine snapshot-reader suite passed `9/9` with one existing
+synthetic benchmark ignored, including present-output, missing-output,
+replacement, and poisoned-publication behavior. The app structural regression
+`display_window_operation_reads_only_the_requested_output` passed `1/1`.
+The maintained wrapper checker passed `243` assertions with `27` hostile
+mutation fixtures, `pnpm.cmd --dir app run check:release` passed, and owned
+Rust files plus `git diff --check` passed.
+
+The exact Windows no-bundle procedure used Build Tools MSVC `14.44.35207`
+with the pinned linker first in `where.exe link.exe`. TypeScript/Vite and the
+Rust/Tauri release build passed. The exact checkout executable is 64,744,448
+bytes with SHA-256
+`86386B43D4C27FF8295C23187C2465888974B573AEE1FA822006C246C3F9C02C`.
+The first native probe invocation was rejected before launch because a
+PowerShell 5.1-to-PowerShell 7 pipeline mangled the Japanese workspace path;
+the same prepared probe was rerun with UTF-8-safe transport. The successful
+probe is recorded at
+`target/qa/native-final-validation-20260911-59/native-final-validation.json`:
+one responsive maximized `Syndocal` window, Standby ownership with
+lighting/video disabled, snapshot IPC, expected missing media/layer thumbnail
+IPC errors with valid native tickets, zero physical-output operations, and
+exact executable/listener cleanup. Post-checks found zero exact-path
+Syndocal processes and zero debug listeners.
+
+This checkpoint does not claim real-file missing → Retry → recovery, actual
+Art-Net/ASIO/NDI/Spout/device output, Mac, signing, publication, or
+product-wide completion.
+
 ## Follow output effect runtime projection checkpoint
 
 Source base before this checkpoint: `ae432dd0139bfcc234b72898d028fa0fa7c4b153`.
