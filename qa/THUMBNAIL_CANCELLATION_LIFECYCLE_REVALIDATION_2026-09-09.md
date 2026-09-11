@@ -133,3 +133,34 @@ rejection, cancellation failure, and malformed/foreign ticket cases.
 passed. This checker-only regression does not claim hard cancellation latency,
 decoder/OS I/O interruption, native hardware, real-file Retry recovery, Mac,
 signing, publication, or product-wide completion.
+
+## Current-main lifecycle revalidation — 2026-09-11
+
+The current `main` source was revalidated after the managed output terminal
+checkpoint. Product behavior was unchanged by this QA-only update; the
+thumbnail lifecycle implementation remains the existing
+`mediaAssetOperationController`, `createLatestThumbnailBatch`, and exact native
+ticket protocol.
+
+| Check | Result |
+| --- | --- |
+| `pnpm --dir app run check:media-asset-operations` | PASS — phase, exact cancellation, idempotent release, owner cleanup |
+| `pnpm --dir app run check:media-thumbnails` | PASS — bounded lanes, authority/reset/disposal, retry/cache, visible eligibility |
+| `pnpm --dir app run check:native-thumbnail-request` | PASS — normal, exact abort, stale, cancellation failure, malformed/foreign tickets |
+| `node app/scripts/check-tauri-admission-inventory.mjs` | PASS — 516 commands, 18 negative fixtures rejected |
+| `node app/scripts/check-frontend-command-routing.mjs` | PASS — 133 renderer, 31 server, 28 raw, 464 facade |
+| `cargo test --manifest-path app/src-tauri/Cargo.toml --release --locked -j 1 native_thumbnail -- --test-threads=1` | PASS — 23 passed, 0 failed, 0 ignored; 1843 filtered |
+
+The Cargo run initialized the documented MSVC `14.44.35207` environment and
+returned the pinned x64 linker first from `where.exe link.exe`. The tests cover
+worker admission/reaping, real PNG/MP4 pixels, private-copy isolation,
+cancellation and lane/request scoping, malformed tickets, late-result
+rejection, renderer wait expiry, poisoned-lock rejection, and worker unwind
+cleanup.
+
+This is current-main software/lifecycle evidence only. It does not claim a
+hard stop deadline for synchronous decoder/OS-I/O/GPU work, native child
+termination, application restart, saved-project reload, physical output,
+device acceptance, Mac, signing, publication, venue acceptance, or
+product-wide completion. The real-file PNG recovery is recorded separately;
+MP4 missing-file recovery remains unclaimed.
