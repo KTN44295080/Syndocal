@@ -117,6 +117,8 @@ interface ControlInputControllerOptions {
 }
 
 export function createControlInputController(options: ControlInputControllerOptions) {
+  let midiInputRefreshGeneration = 0;
+  let midiOutputRefreshGeneration = 0;
   const reportMessage = (message: string): void => {
     options.setMessage(message);
   };
@@ -130,22 +132,26 @@ export function createControlInputController(options: ControlInputControllerOpti
     return false;
   };
   const refreshMidiInputs = async () => {
+    const requestGeneration = ++midiInputRefreshGeneration;
     try {
       const inputs = await options.invoke<MidiInputSummary[]>("list_midi_inputs");
+      if (requestGeneration !== midiInputRefreshGeneration) return;
       options.setMidiInputs(inputs);
       if (options.selectedMidiInput() === null && inputs.length > 0) options.setSelectedMidiInput(inputs[0].index);
     } catch (error) {
-      options.setMessage(String(error));
+      if (requestGeneration === midiInputRefreshGeneration) options.setMessage(String(error));
     }
   };
 
   const refreshMidiOutputs = async () => {
+    const requestGeneration = ++midiOutputRefreshGeneration;
     try {
       const outputs = await options.invoke<MidiOutputSummary[]>("list_midi_outputs");
+      if (requestGeneration !== midiOutputRefreshGeneration) return;
       options.setMidiOutputs(outputs);
       if (options.selectedMidiOutput() === null && outputs.length > 0) options.setSelectedMidiOutput(outputs[0].index);
     } catch (error) {
-      options.setMessage(String(error));
+      if (requestGeneration === midiOutputRefreshGeneration) options.setMessage(String(error));
     }
   };
 

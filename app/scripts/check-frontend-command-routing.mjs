@@ -12,6 +12,7 @@ const appPath = path.join(srcRoot, "App.tsx");
 // three AST sources; scanning App alone would silently omit extracted routes.
 const dvcImportControllerPath = path.join(srcRoot, "dvcImportController.ts");
 const phase1ActionsPath = path.join(srcRoot, "phase1Actions.ts");
+const controlInputControllerPath = path.join(srcRoot, "createControlInputController.ts");
 const detachedVideoPath = path.join(srcRoot, "components", "VideoOutputWindow.tsx");
 const controlPlanePath = path.join(appRoot, "src-tauri", "src", "control_plane.rs");
 const projectTransactionControllerPath = path.join(srcRoot, "projectTransactionMutationController.ts");
@@ -43,7 +44,12 @@ const phase1ActionsSource = sourceFiles.find(
   (sourceFile) => path.resolve(sourceFile.fileName) === phase1ActionsPath,
 );
 assert(phase1ActionsSource, "phase1Actions.ts must be part of the frontend TypeScript program");
+const controlInputControllerSource = sourceFiles.find(
+  (sourceFile) => path.resolve(sourceFile.fileName) === controlInputControllerPath,
+);
+assert(controlInputControllerSource, "createControlInputController.ts must be part of the frontend TypeScript program");
 const appText = appSource.getFullText();
+const controlInputControllerText = controlInputControllerSource.getFullText();
 
 const functionSlice = (source, marker, nextMarker) => {
   const start = source.indexOf(marker);
@@ -62,6 +68,16 @@ const djMachineRefreshBody = functionSlice(
   appText,
   "const refreshDjLinkMachineStatus = async",
   "const refreshDjLinkWiredCandidates = async",
+);
+const midiInputRefreshBody = functionSlice(
+  controlInputControllerText,
+  "const refreshMidiInputs = async",
+  "const refreshMidiOutputs = async",
+);
+const midiOutputRefreshBody = functionSlice(
+  controlInputControllerText,
+  "const refreshMidiOutputs = async",
+  "const connectMidiClock = async",
 );
 const countSetterWrites = (body, setter) => [...body.matchAll(new RegExp(`${setter}\\(`, "g"))].length;
 
@@ -93,6 +109,27 @@ assert.match(
   /catch\s*\{[\s\S]*?if\s*\(requestGeneration\s*===\s*djLinkMachineRequestGeneration\)\s*\{[\s\S]*?setDjLinkMachineStatus\(/,
   "DJ machine status failure write must remain inside its current-generation block",
 );
+
+for (const [body, generation, label] of [
+  [midiInputRefreshBody, "midiInputRefreshGeneration", "MIDI input catalogue"],
+  [midiOutputRefreshBody, "midiOutputRefreshGeneration", "MIDI output catalogue"],
+]) {
+  assert.match(
+    body,
+    new RegExp(`const\\s+requestGeneration\\s*=\\s*\\+\\+${generation}`),
+    `${label} refresh must capture a monotonic request generation`,
+  );
+  assert.match(
+    body,
+    new RegExp(`if\\s*\\(requestGeneration\\s*!==\\s*${generation}\\)\\s*return`),
+    `${label} stale success must be rejected before state writes`,
+  );
+  assert.match(
+    body,
+    new RegExp(`if\\s*\\(requestGeneration\\s*===\\s*${generation}\\)\\s*options\\.setMessage`),
+    `${label} stale failure must not overwrite the current message`,
+  );
+}
 
 assert.equal(
   [...appText.matchAll(/createEffect\(\(\) => \{\s*\/\/ The authority and candidate list live outside project persistence\.[\s\S]*?void refreshDjLinkMachineStatusAndCandidates\(\);\s*\}\);/g)].length,
@@ -169,6 +206,8 @@ const runLatestGenerationRegression = async (label) => {
 };
 await runLatestGenerationRegression("remote URLs");
 await runLatestGenerationRegression("DJ LAN interfaces");
+await runLatestGenerationRegression("MIDI input catalogue");
+await runLatestGenerationRegression("MIDI output catalogue");
 
 const locationOf = (sourceFile, node) => {
   const { line, character } = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile));

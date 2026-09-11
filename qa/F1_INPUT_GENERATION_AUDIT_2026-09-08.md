@@ -118,3 +118,42 @@ pin after `vcvars64.bat -vcvars_ver=14.44`, with that linker first in
 `where.exe link.exe`. This remains software-only evidence; physical MIDI,
 OSC, DMX, reconnect/latency, device, venue, Mac, signing, and publication
 acceptance remain open.
+
+## Current-main UI catalogue generation fence — 2026-09-11
+
+The frontend control-input controller now assigns independent monotonic
+request generations to overlapping MIDI input and MIDI output catalogue
+refreshes. A late success cannot replace a newer catalogue or selection, and a
+late failure cannot replace the current operator message. The existing
+backend callback/project generations, mapping authority, connection routes,
+and physical-I/O behavior are unchanged. This is a stale-UI-result repair, not
+a new MIDI/OSC/DMX API or a physical-device acceptance.
+
+The focused checker was extended with source-shape assertions and deferred
+success/failure/retirement regressions for both catalogues:
+
+| Check | Result |
+| --- | --- |
+| `pnpm.cmd --dir app run check:frontend-command-routing` | PASS — 133 renderer, 31 server-authoritative, 28 raw, 464 facade dispatches; MIDI input/output latest-generation fixtures passed |
+| `pnpm.cmd --dir app exec tsc --noEmit` | PASS |
+| `pnpm.cmd --dir app run check:dvc-midi-shortcuts` | PASS — 39 assertions |
+| `pnpm.cmd --dir app run check:release` | PASS — full static release gate; 50 Open + 8 Deferred preserved |
+| `git diff --check` | PASS |
+
+The exact Windows native procedure was used for the no-bundle build: MSVC
+14.44.35207 was first in `where.exe link.exe`. The resulting executable was
+`target/release/syndocal.exe`, version `1.2.0-alpha.69`, 64,744,448 bytes,
+SHA-256
+`38938F3771354F6E46B9F7F11478E56BA0975671212BDD497ABF281BFB7A02E8`.
+The fresh native probe is
+`target/qa/native-final-validation-20260911-60/native-final-validation.json`:
+one responsive maximized `Syndocal` window, Standby with lighting/video
+disabled, snapshot IPC, expected missing-asset/layer thumbnail rejection,
+zero physical-output operations, exact application exit, and zero remaining
+debug listener.
+
+This checkpoint does not close the full `F1-INPUT-GENERATIONS-001` row. Real
+MIDI/OSC/DMX clients, reconnect/latency, device and venue behavior, dependent
+F2 ownership, ASIO/NDI/DMX physical acceptance, Mac, signing, publication,
+and product-wide completion remain unclaimed. The real-file thumbnail
+missing → Retry → recovery trial was not rerun.
