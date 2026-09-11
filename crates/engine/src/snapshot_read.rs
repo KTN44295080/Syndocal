@@ -498,6 +498,19 @@ impl EngineHandle {
         })
     }
 
+    /// Read the fixture and video-layer references required by effect-preset
+    /// admission without cloning effect bodies or runtime collections.
+    pub fn effect_target_admission_snapshot(
+        &self,
+    ) -> (Vec<PatchedFixtureSummary>, Vec<VideoLayerId>) {
+        self.read_snapshot_field(|snapshot| {
+            (
+                snapshot.fixtures.clone(),
+                snapshot.video.layers.iter().map(|layer| layer.id).collect(),
+            )
+        })
+    }
+
     /// Check one authored node-graph ID for enable/disable admission without
     /// cloning the complete graph bodies or runtime snapshot.
     pub fn node_graph_exists(&self, graph_id: NodeGraphId) -> bool {

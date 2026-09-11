@@ -447,6 +447,13 @@ fn assert_same_read_model(handle: &EngineHandle) {
         expected_effect_target_admission
     );
     assert_eq!(handle.effect_video_target_admission_snapshot(999_999), None);
+    assert_eq!(
+        handle.effect_target_admission_snapshot(),
+        (
+            expected.fixtures.clone(),
+            expected.video.layers.iter().map(|layer| layer.id).collect(),
+        )
+    );
     if let Some(node_graph) = expected.node_graphs.first() {
         assert!(handle.node_graph_exists(node_graph.id));
         assert_eq!(

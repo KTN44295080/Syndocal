@@ -49880,7 +49880,7 @@ fn add_effect_preset_to_engine(
     preset: EffectPreset,
     target_override: Option<&EffectTargetOverride>,
 ) -> Result<EffectId, String> {
-    let snapshot = engine.snapshot();
+    let (fixtures, video_layer_ids) = engine.effect_target_admission_snapshot();
     let effect_id = engine.allocate_effect_id();
     let enabled = preset.enabled;
     match preset.effect_type {
@@ -49897,7 +49897,8 @@ fn add_effect_preset_to_engine(
                 None => request,
             };
             validate_effect_target_references(
-                &snapshot,
+                &fixtures,
+                &video_layer_ids,
                 &request.fixture_ids,
                 &request.video_targets,
             )?;
@@ -49919,7 +49920,8 @@ fn add_effect_preset_to_engine(
                 None => request,
             };
             validate_effect_target_references(
-                &snapshot,
+                &fixtures,
+                &video_layer_ids,
                 &request.fixture_ids,
                 &request.video_targets,
             )?;
@@ -49939,7 +49941,12 @@ fn add_effect_preset_to_engine(
                 }
                 None => request,
             };
-            validate_effect_target_references(&snapshot, &request.fixture_ids, &[])?;
+            validate_effect_target_references(
+                &fixtures,
+                &video_layer_ids,
+                &request.fixture_ids,
+                &[],
+            )?;
             engine.add_color_effect(effect_id, request, enabled)?;
         }
         EffectKind::Chaser => {
@@ -49948,7 +49955,7 @@ fn add_effect_preset_to_engine(
                 .ok_or_else(|| "Chaser effect preset is missing its request body".to_string())?;
             let request = match target_override {
                 Some(target_override) => {
-                    apply_chaser_effect_target_override(request, target_override, &snapshot)?
+                    apply_chaser_effect_target_override(request, target_override, &fixtures)?
                 }
                 None => request,
             };
@@ -49967,7 +49974,12 @@ fn add_effect_preset_to_engine(
                 }
                 None => request,
             };
-            validate_effect_target_references(&snapshot, &request.fixture_ids, &[])?;
+            validate_effect_target_references(
+                &fixtures,
+                &video_layer_ids,
+                &request.fixture_ids,
+                &[],
+            )?;
             engine.add_move_effect(effect_id, request, enabled)?;
         }
         EffectKind::Value => {
@@ -49981,7 +49993,12 @@ fn add_effect_preset_to_engine(
                 None => request,
             };
             validate_value_effect_request(&request)?;
-            validate_effect_target_references(&snapshot, &request.fixture_ids, &[])?;
+            validate_effect_target_references(
+                &fixtures,
+                &video_layer_ids,
+                &request.fixture_ids,
+                &[],
+            )?;
             engine.add_value_effect(effect_id, request, enabled)?;
         }
         EffectKind::Curve => {
@@ -49995,7 +50012,12 @@ fn add_effect_preset_to_engine(
                 None => request,
             };
             validate_curve_effect_request(&request)?;
-            validate_effect_target_references(&snapshot, &request.fixture_ids, &[])?;
+            validate_effect_target_references(
+                &fixtures,
+                &video_layer_ids,
+                &request.fixture_ids,
+                &[],
+            )?;
             engine.add_curve_effect(effect_id, request, enabled)?;
         }
         EffectKind::Mapping => {
@@ -50009,7 +50031,12 @@ fn add_effect_preset_to_engine(
                 None => request,
             };
             validate_mapping_effect_request(&request)?;
-            validate_effect_target_references(&snapshot, &request.fixture_ids, &[])?;
+            validate_effect_target_references(
+                &fixtures,
+                &video_layer_ids,
+                &request.fixture_ids,
+                &[],
+            )?;
             engine.add_mapping_effect(effect_id, request, enabled)?;
         }
         EffectKind::ColorMapping => {
@@ -50023,9 +50050,15 @@ fn add_effect_preset_to_engine(
                 None => request,
             };
             validate_color_mapping_effect_request(&request)?;
-            validate_effect_target_references(&snapshot, &request.fixture_ids, &[])?;
             validate_effect_target_references(
-                &snapshot,
+                &fixtures,
+                &video_layer_ids,
+                &request.fixture_ids,
+                &[],
+            )?;
+            validate_effect_target_references(
+                &fixtures,
+                &video_layer_ids,
                 &request
                     .cells
                     .iter()
@@ -50069,11 +50102,11 @@ fn add_sample_effect_preset_to_engine(
                 .chaser
                 .take()
                 .ok_or_else(|| "Chaser effect preset is missing its request body".to_string())?;
-            let snapshot = engine.snapshot();
+            let (fixtures, _) = engine.effect_target_admission_snapshot();
             preset.chaser = Some(apply_fixture_index_chaser_effect_target_override(
                 request,
                 target_override,
-                &snapshot,
+                &fixtures,
             )?);
             return add_effect_preset_to_engine(engine, preset, None);
         }
@@ -68844,10 +68877,10 @@ fn apply_color_effect_target_override(
 fn apply_chaser_effect_target_override(
     mut request: ChaserEffectRequest,
     target_override: &EffectTargetOverride,
-    snapshot: &EngineSnapshot,
+    fixtures: &[PatchedFixtureSummary],
 ) -> Result<ChaserEffectRequest, String> {
     validate_chaser_effect_target_override(target_override)?;
-    let fixture_ids = resolve_chaser_effect_target_override(target_override, snapshot)?;
+    let fixture_ids = resolve_chaser_effect_target_override(target_override, fixtures)?;
     let mut target_cursor = 0_usize;
     request.steps = request
         .steps
@@ -68948,10 +68981,10 @@ fn apply_color_mapping_effect_target_override(
 fn apply_fixture_index_chaser_effect_target_override(
     mut request: ChaserEffectRequest,
     target_override: &EffectTargetOverride,
-    snapshot: &EngineSnapshot,
+    fixtures: &[PatchedFixtureSummary],
 ) -> Result<ChaserEffectRequest, String> {
     validate_chaser_effect_target_override(target_override)?;
-    let fixture_ids = resolve_chaser_effect_target_override(target_override, snapshot)?;
+    let fixture_ids = resolve_chaser_effect_target_override(target_override, fixtures)?;
     let single_fixture_target = fixture_ids.len() == 1;
 
     let active_level = request
@@ -68996,9 +69029,9 @@ fn apply_fixture_index_chaser_effect_target_override(
 
 fn resolve_chaser_effect_target_override(
     target_override: &EffectTargetOverride,
-    snapshot: &EngineSnapshot,
+    fixtures: &[PatchedFixtureSummary],
 ) -> Result<Vec<FixtureId>, String> {
-    validate_effect_target_references(snapshot, &target_override.fixture_ids, &[])?;
+    validate_effect_target_references(fixtures, &[], &target_override.fixture_ids, &[])?;
 
     let mut fixture_ids = Vec::new();
     let mut seen_fixture_ids = HashSet::new();
@@ -69009,7 +69042,7 @@ fn resolve_chaser_effect_target_override(
     }
     for group_id in &target_override.target_group_ids {
         let mut matched = false;
-        for fixture in &snapshot.fixtures {
+        for fixture in fixtures {
             if fixture
                 .group_ids
                 .iter()
@@ -69683,13 +69716,13 @@ fn validate_effect_preset(preset: &EffectPreset) -> Result<(), String> {
 }
 
 fn validate_effect_target_references(
-    snapshot: &EngineSnapshot,
+    fixtures: &[PatchedFixtureSummary],
+    video_layer_ids: &[VideoLayerId],
     fixture_ids: &[FixtureId],
     video_targets: &[VideoEffectTarget],
 ) -> Result<(), String> {
     for fixture_id in fixture_ids {
-        if !snapshot
-            .fixtures
+        if !fixtures
             .iter()
             .any(|fixture| fixture.id == *fixture_id)
         {
@@ -69697,7 +69730,7 @@ fn validate_effect_target_references(
         }
     }
     for target in video_targets {
-        validate_video_layer_ids(snapshot, &target.layer_ids)?;
+        validate_video_layer_ids_from_published(video_layer_ids, &target.layer_ids)?;
     }
     Ok(())
 }
@@ -84442,23 +84475,6 @@ fn validate_video_effect_targets(targets: &[VideoEffectTarget]) -> Result<(), St
     Ok(())
 }
 
-fn validate_video_layer_ids(
-    snapshot: &EngineSnapshot,
-    layer_ids: &[VideoLayerId],
-) -> Result<(), String> {
-    for layer_id in layer_ids {
-        if !snapshot
-            .video
-            .layers
-            .iter()
-            .any(|layer| layer.id == *layer_id)
-        {
-            return Err(format!("Video layer {layer_id} was not found"));
-        }
-    }
-    Ok(())
-}
-
 fn validate_video_layer_ids_from_engine(
     engine: &EngineHandle,
     layer_ids: &[VideoLayerId],
@@ -93741,6 +93757,30 @@ pub(crate) mod tests {
             .map(|offset| function_start + offset);
         let body = &source[function_start..next_attribute.unwrap_or(source.len())];
         assert!(body.contains("effect_summary_snapshot"));
+        assert!(!body.contains("engine.snapshot()"));
+    }
+
+    #[test]
+    fn effect_preset_admission_uses_the_narrow_engine_reader() {
+        let source = include_str!("main.rs");
+        let function_start = source
+            .find("fn add_effect_preset_to_engine(")
+            .expect("missing add_effect_preset_to_engine helper");
+        let next_function = source[function_start..]
+            .find("\nfn add_sample_effect_preset_to_engine(")
+            .map(|offset| function_start + offset);
+        let body = &source[function_start..next_function.unwrap_or(source.len())];
+        assert!(body.contains("effect_target_admission_snapshot"));
+        assert!(!body.contains("engine.snapshot()"));
+
+        let function_start = source
+            .find("fn add_sample_effect_preset_to_engine(")
+            .expect("missing add_sample_effect_preset_to_engine helper");
+        let next_attribute = source[function_start..]
+            .find("\n#[tauri::command]")
+            .map(|offset| function_start + offset);
+        let body = &source[function_start..next_attribute.unwrap_or(source.len())];
+        assert!(body.contains("effect_target_admission_snapshot"));
         assert!(!body.contains("engine.snapshot()"));
     }
 
@@ -127047,7 +127087,7 @@ f 1 2 3
         let retargeted = apply_fixture_index_chaser_effect_target_override(
             request.clone(),
             &target_override,
-            &snapshot,
+            &snapshot.fixtures,
         )
         .unwrap();
         assert_eq!(
@@ -127073,7 +127113,7 @@ f 1 2 3
         let single = apply_fixture_index_chaser_effect_target_override(
             request.clone(),
             &single_override,
-            &snapshot,
+            &snapshot.fixtures,
         )
         .unwrap();
         assert_eq!(single.steps.len(), 2);
@@ -127093,7 +127133,7 @@ f 1 2 3
         let multi_feature = apply_fixture_index_chaser_effect_target_override(
             sample_chaser_effect_request(),
             &multi_feature_override,
-            &snapshot,
+            &snapshot.fixtures,
         )
         .unwrap();
         assert_eq!(multi_feature.features[0].attribute, "Dimmer");
@@ -127104,7 +127144,7 @@ f 1 2 3
         assert!(apply_fixture_index_chaser_effect_target_override(
             request,
             &video_override,
-            &snapshot
+            &snapshot.fixtures
         )
         .unwrap_err()
         .contains("cannot target video"));
@@ -127138,7 +127178,8 @@ f 1 2 3
         };
 
         let retargeted =
-            apply_chaser_effect_target_override(request, &target_override, &snapshot).unwrap();
+            apply_chaser_effect_target_override(request, &target_override, &snapshot.fixtures)
+                .unwrap();
 
         assert_eq!(retargeted.steps.len(), 3);
         assert_eq!(retargeted.steps[0].fixture_ids, vec![3]);
@@ -127164,7 +127205,7 @@ f 1 2 3
         let retargeted_single = apply_chaser_effect_target_override(
             single_feature_request,
             &target_override,
-            &snapshot,
+            &snapshot.fixtures,
         )
         .unwrap();
         assert_eq!(retargeted_single.features[0].attribute, original_attribute);
@@ -127844,7 +127885,7 @@ f 1 2 3
         let chase_request = apply_fixture_index_chaser_effect_target_override(
             chase.chaser.unwrap(),
             &light_target_override,
-            &snapshot,
+            &snapshot.fixtures,
         )
         .unwrap();
         validate_chaser_effect_request(&chase_request).unwrap();
