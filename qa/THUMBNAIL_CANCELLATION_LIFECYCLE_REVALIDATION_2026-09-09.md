@@ -164,3 +164,29 @@ termination, application restart, saved-project reload, physical output,
 device acceptance, Mac, signing, publication, venue acceptance, or
 product-wide completion. The real-file PNG recovery is recorded separately;
 MP4 missing-file recovery remains unclaimed.
+
+## Current-main native WebView revalidation — 2026-09-12
+
+The exact current `main` executable was revalidated without changing product
+source or re-running the completed real-file PNG recovery. The source and
+remote were equal at `5126cad130c44f2e20a5a7143b5df127ca86620a`.
+
+Evidence: `target/qa/native-thumbnail-cancel-20260912-01/native-thumbnail-cancel.json`.
+
+| Item | Result |
+| --- | --- |
+| Executable | `target/release/syndocal.exe`, version `1.2.0-alpha.69`, 64,569,856 bytes |
+| SHA-256 | `71E861A8A716F36D09178DCF3694B86A835EA3BAF83787E86369ED0A06AF5819` |
+| Native window | one responsive, maximized `Syndocal` window |
+| Output ownership | effective `Standby`; lighting/video denied; zero physical-output operations |
+| Snapshot and route fence | `get_snapshot` succeeded; unknown route rejected |
+| Layer cancellation | real WebView `Channel` announcement → exact native ticket cancellation → acknowledged cancelled result |
+| Asset cancellation | real WebView `Channel` announcement → exact native ticket cancellation → acknowledged cancelled result |
+| Cleanup | exact application exited; debug listener count returned to zero |
+
+Both cancellation results explicitly retained worker ownership until return.
+This confirms the cooperative lifecycle/IPC contract on the current executable;
+it does not claim a hard GUI stop deadline, interruption of synchronous
+decoder/OS-I/O/GPU work, native child termination, physical output, Mac,
+signing, publication, or product-wide completion. MP4 missing-file recovery
+remains unclaimed.
