@@ -1950,7 +1950,7 @@ unchecked row.
     "q1_rows": 32,
     "q2_decisions": 12,
     "q3_risks": 14,
-    "q4_evidence": 4
+    "q4_evidence": 6
   },
   "q0_registry": {
     "mirrored_from": "master section 21 Q0 tables; the master Markdown tables remain authoritative",
@@ -2362,16 +2362,16 @@ unchecked row.
       "scope": "Supported",
       "owner_files": "Remote/security and DJ Link peer owners",
       "dependencies": ["AI4/AI5 consent and sidecar policy", "Authenticated /dj-link ingress implementation"],
-      "automated_proof": { "status": "not-passing", "command": "Planned: parser/path/archive fuzz and remote security suites; none authored for this row yet.", "expected_count": null },
+      "automated_proof": { "status": "passing", "command": "node app/scripts/check-dvc-touch-feature-preset.mjs && node app/scripts/check-workspace-navigation-controller.mjs && node app/scripts/check-dj-track-mapping-policy.mjs && node app/scripts/check-dj-link-runtime.mjs && cargo test -p io --release --locked remote_ -- --test-threads=1", "expected_count": 5 },
       "native_proof": { "status": "not-run", "artifact_hash": null, "raw_evidence_paths": [], "na_reason": "The 2026-08-25 live-LAN preflight observed no TCP 9100 listener and checked none of HW-4.1..HW-4.12." },
       "hardware_external_proof": { "status": "not-run", "device_topology_duration": "Wired DJ-PC Agent, Stream Deck Pedal, rekordbox Master Track, TouchOSC/iPad clients; DJ/Pedal submatrix currently 0/12.", "artifact_hash": null, "raw_evidence_paths": [], "na_reason": null },
       "status": "In progress",
       "commit": "",
-      "residual_risk": { "classification": "P1", "disposition": "Restart token/bind restoration gap (P1) and NIC ambiguity (P2) recorded in flow section 40." },
-      "nonclaim": "This row does not claim LAN exposure safety, DJ hardware acceptance, or completed peer-artifact identity binding.",
+      "residual_risk": { "classification": "P1", "disposition": "Current software authentication/path/fence checks pass; restart token/bind restoration gap (P1), NIC ambiguity (P2), peer identity, LAN, and hardware proof remain open." },
+      "nonclaim": "This row does not claim LAN exposure safety, DJ hardware acceptance, TouchOSC/Pedal/Agent acceptance, RDM/TOD physical acceptance, or completed peer-artifact identity binding.",
       "decision_ids": [],
       "risk_ids": [],
-      "evidence_ids": []
+      "evidence_ids": ["EV-REMOTE-TOUCH-SW-2026-09-12"]
     },
     {
       "id": "COV-RDM-001",
@@ -2384,16 +2384,16 @@ unchecked row.
       "scope": "Supported",
       "owner_files": "DMX/RDM hardware acceptance owner",
       "dependencies": ["F2 output ownership"],
-      "automated_proof": { "status": "not-passing", "command": "Planned: RDM timeout/cancellation unit harness; none authored for this row yet.", "expected_count": null },
+      "automated_proof": { "status": "passing", "command": "cargo test -p io --release --locked rdm -- --test-threads=1", "expected_count": 1 },
       "native_proof": { "status": "not-run", "artifact_hash": null, "raw_evidence_paths": [], "na_reason": "No current-source native acceptance run is recorded for this row in the owned evidence manifest." },
       "hardware_external_proof": { "status": "not-run", "device_topology_duration": "Physical RDM devices with discovery/timeout captures.", "artifact_hash": null, "raw_evidence_paths": [], "na_reason": null },
       "status": "In progress",
       "commit": "",
-      "residual_risk": { "classification": "P2", "disposition": "Physical, timeout/cancellation, and ownership proof all remain." },
+      "residual_risk": { "classification": "P2", "disposition": "Parser/codec/framing checks pass; physical discovery, timeout/cancellation, replacement ownership, and TOD proof all remain." },
       "nonclaim": "This row does not claim RDM/TOD physical operation.",
       "decision_ids": [],
       "risk_ids": [],
-      "evidence_ids": []
+      "evidence_ids": ["EV-RDM-SW-2026-09-12"]
     },
     {
       "id": "COV-SHOWCLOCK-001",
@@ -2738,7 +2738,9 @@ unchecked row.
     { "id": "EV-MEDIA-T1-A7-2026-08-13", "scope": "Ordered automated Media Asset A7 gate and current native build hash", "kind": "historical-evidence", "status": "accepted-historical", "date": "2026-08-13", "command": null, "exit_code": null, "assertion_count": null, "ignored_count": null, "warning_count": null, "artifact_hash": null, "artifact_na_reason": "Exact artifact hashes are recorded inside the linked evidence document.", "raw_evidence_paths": ["qa/MEDIA_ASSET_T1_A7_EVIDENCE_2026-08-13.md"], "currency_nonclaim": "Historical A7 tranche evidence only; it cannot be used as current-source acceptance.", "linked_q1_ids": ["COV-MEDIA-T1-001"] },
     { "id": "EV-MEDIA-T1-A8-2026-08-13", "scope": "Full native Media Asset workflow matrix plus rebuilt thumbnail/hover supplement", "kind": "historical-evidence", "status": "accepted-historical", "date": "2026-08-13", "command": null, "exit_code": null, "assertion_count": null, "ignored_count": null, "warning_count": null, "artifact_hash": null, "artifact_na_reason": "Exact artifact hashes are recorded inside the linked evidence document.", "raw_evidence_paths": ["qa/MEDIA_ASSET_T1_A8_NATIVE_EVIDENCE_2026-08-13.md"], "currency_nonclaim": "Accepted for the declared historical Windows tranche only; it cannot be cited as current-source acceptance and non-Windows execution remains separate.", "linked_q1_ids": ["COV-MEDIA-T1-001"] },
     { "id": "EV-ALPHA11-D4-2026-08-25", "scope": "Alpha.11 D4 Stage software/native integration acceptance and main-checkout launch parity", "kind": "historical-evidence", "status": "accepted-historical", "date": "2026-08-25", "command": null, "exit_code": null, "assertion_count": null, "ignored_count": null, "warning_count": null, "artifact_hash": "1B010C40242A5C7DD7A2797EAC1ECA2D31BCACE4455BA57C7F935611075B582B", "artifact_na_reason": null, "raw_evidence_paths": ["qa/SYNDOCAL_ALPHA11_MAIN_INTEGRATION_CHECKPOINT_2026-08-25.md"], "currency_nonclaim": "Bound to the identified alpha.11 executable; this historical record cannot be promoted to current-source acceptance without a fresh exact-process native gate.", "linked_q1_ids": ["COV-STAGE-001", "COV-PROJECT-TX-001"] },
-    { "id": "EV-Q1Q4-COVERAGE-INFRA-2026-08-25", "scope": "Fail-closed Q1-Q4 coverage infrastructure: validator, isolated-fixture self-test, master mirror parity, and full Q0/Flow reference coverage", "kind": "current-source-automated", "status": "accepted-current", "date": "2026-08-25", "command": "node app/scripts/check-q1-q4-ledger.mjs && node app/scripts/test-check-q1-q4-ledger.mjs", "exit_code": 0, "assertion_count": 46, "ignored_count": 0, "warning_count": 0, "artifact_hash": null, "artifact_na_reason": "Deterministic script evidence has no binary artifact; the ledger, validator, and self-test sources are the inspectable artifacts and are re-runnable byte-for-byte.", "raw_evidence_paths": ["qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md", "qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/SYNDOCAL_COMPLETION_LEDGER.json", "app/scripts/check-completion-ledger.mjs", "app/scripts/test-check-completion-ledger.mjs"], "currency_nonclaim": "Automated documentation/tooling proof only; it is not current-source acceptance of any domain and does not constitute native, hardware, external, soak, or distribution acceptance, nor does it close COMP-Q1-Q4-001.", "linked_q1_ids": ["COV-Q1Q4-INFRA-001"] }
+    { "id": "EV-Q1Q4-COVERAGE-INFRA-2026-08-25", "scope": "Fail-closed Q1-Q4 coverage infrastructure: validator, isolated-fixture self-test, master mirror parity, and full Q0/Flow reference coverage", "kind": "current-source-automated", "status": "accepted-current", "date": "2026-08-25", "command": "node app/scripts/check-q1-q4-ledger.mjs && node app/scripts/test-check-q1-q4-ledger.mjs", "exit_code": 0, "assertion_count": 46, "ignored_count": 0, "warning_count": 0, "artifact_hash": null, "artifact_na_reason": "Deterministic script evidence has no binary artifact; the ledger, validator, and self-test sources are the inspectable artifacts and are re-runnable byte-for-byte.", "raw_evidence_paths": ["qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md", "qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/SYNDOCAL_COMPLETION_LEDGER.json", "app/scripts/check-completion-ledger.mjs", "app/scripts/test-check-completion-ledger.mjs"], "currency_nonclaim": "Automated documentation/tooling proof only; it is not current-source acceptance of any domain and does not constitute native, hardware, external, soak, or distribution acceptance, nor does it close COMP-Q1-Q4-001.", "linked_q1_ids": ["COV-Q1Q4-INFRA-001"] },
+    { "id": "EV-REMOTE-TOUCH-SW-2026-09-12", "scope": "Current-main Remote/Touch, Web Remote authority, and DJ Link software contracts", "kind": "current-source-automated", "status": "accepted-current", "date": "2026-09-12", "command": "node app/scripts/check-dvc-touch-feature-preset.mjs && node app/scripts/check-workspace-navigation-controller.mjs && node app/scripts/check-dj-track-mapping-policy.mjs && node app/scripts/check-dj-link-runtime.mjs && cargo test -p io --release --locked remote_ -- --test-threads=1", "exit_code": 0, "assertion_count": 67, "ignored_count": 1, "warning_count": 0, "artifact_hash": null, "artifact_na_reason": "Deterministic source checks and Rust tests have no shipped binary artifact; the exact source base, toolchain, commands, and results are recorded in the linked QA document.", "raw_evidence_paths": ["qa/REMOTE_TOUCH_SOFTWARE_REVALIDATION_2026-09-12.md"], "currency_nonclaim": "Current-source software evidence only; it cannot establish LAN, peer-device, DJ Link hardware, TouchOSC, Pedal/Agent, or RDM/TOD acceptance.", "linked_q1_ids": ["COV-REMOTE-TOUCH-001"] },
+    { "id": "EV-RDM-SW-2026-09-12", "scope": "Current-main RDM/TOD parser, codec, and serial framing software contracts", "kind": "current-source-automated", "status": "accepted-current", "date": "2026-09-12", "command": "cargo test -p io --release --locked rdm -- --test-threads=1", "exit_code": 0, "assertion_count": 14, "ignored_count": 0, "warning_count": 0, "artifact_hash": null, "artifact_na_reason": "Deterministic source tests have no shipped binary artifact; the exact source base, toolchain, command, and result are recorded in the linked QA document.", "raw_evidence_paths": ["qa/RDM_SOFTWARE_REVALIDATION_2026-09-12.md"], "currency_nonclaim": "Current-source software evidence only; it cannot establish physical RDM/TOD discovery, timeout/cancellation, replacement ownership, or device acceptance.", "linked_q1_ids": ["COV-RDM-001"] }
   ]
 }
 ```
