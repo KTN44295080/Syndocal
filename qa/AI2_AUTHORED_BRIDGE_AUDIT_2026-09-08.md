@@ -136,3 +136,26 @@ the existing authored vertical; it does not prove all authored families,
 generated schema parity, external Remote/MCP/JSON-RPC adapters, consent
 policy, adversarial matrices, or real-client recovery. Physical, Mac,
 signing, publication, and product-wide acceptance remain unclaimed.
+
+## Current-main authored-bridge revalidation — 2026-09-12
+
+The bounded AI2 vertical was rerun against current `main` at source HEAD
+`49db4d3f12749b2c0f6c7604929eed91e644fc81`; `origin/main` matched before the
+run. No authored operation set, receipt schema, or mutation controller was
+changed. The documented MSVC 14.44.35207 x64 linker was pinned and returned
+first by `where.exe link.exe`.
+
+| Check | Result |
+| --- | --- |
+| `node app/scripts/check-authored-effect-enable.mjs` | PASS — strict rendered route, receipt validation, superseded intents, stale retry and rollback baseline |
+| `node app/scripts/check-project-transaction-mutation-controller.mjs` | PASS — 6 scenarios; no native/UI side effects |
+| `cargo test --manifest-path app/src-tauri/Cargo.toml --release --locked -j 1 authored -- --test-threads=1` | PASS — 34 passed, 0 failed, 0 ignored, 1832 filtered out |
+
+The run retains rejection of wrong operation/payload, owner/window mismatch,
+stale/future/expired fences, same-key shape conflict, retired-owner replay,
+publication failure drift, and superseded results. It also retains exact
+receipt retry, terminal retention/tombstones, NoOp, and byte-identical
+authored Undo/Redo. `AI2-COMMAND-BRIDGE-001` remains Open for all authored
+families, generated schema parity, external adapters, consent policy,
+adversarial matrices, and real-client recovery. Physical, Mac, signing,
+publication, and product-wide acceptance remain unclaimed.
