@@ -42,3 +42,15 @@ saturation evidence is not complete, and AI8 current-source native/external
 MCP/JSON-RPC/Remote clients, clean-install, restart, hardware output, and
 publication acceptance are not proven. No external R4/R5 enablement claim is
 made, and the retired Raw Input challenge remains retired.
+
+## Current-main rerun — 2026-09-12
+
+The same AI Control software gate was rerun against current `main` at
+`0488c09ce3af3ed5a46670f6ab773fb11c620e23`. The documented MSVC
+14.44.35207 x64 linker was confirmed first with `where.exe link.exe`. All
+fourteen command groups passed: frontend/ backend routing and admission,
+transaction and snapshot contracts, fake-loopback MCP, agent bridge and
+bootstrap, registry v2 (14 tests), query (15 tests), durable Tauri state (23
+tests), and authority (10 tests). No external client, clean-install,
+restart, hardware, admin-UI, complete AI7 adversarial, or AI8 acceptance was
+performed.
