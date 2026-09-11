@@ -160,3 +160,29 @@ This integration run used the exact Build Tools MSVC `14.44.35207` x64 linker
 pin and `where.exe link.exe` first-match check. It adds no new coverage claim;
 the complete AI0 source classification and all external/device boundaries
 remain open.
+
+## Current-main inventory and dispatch revalidation — 2026-09-11
+
+The bounded AI0 checks were rerun after the current output and snapshot
+checkpoints at source HEAD `302b33e4490712029a6378a9518d4744b36e737a`.
+Evidence is preserved under `target/qa/ai0-current-main-20260911-01/`.
+No inventory count, admission hash, or coverage claim was changed.
+
+| Check | Result |
+| --- | --- |
+| `pnpm.cmd --dir app run check:frontend-command-routing` | PASS — 133 renderer, 31 server-authoritative, 28 raw, 464 facade dispatches |
+| `pnpm.cmd --dir app run check:frontend-invokes` | PASS — 457 frontend Tauri invokes |
+| `node app/scripts/check-tauri-admission-inventory.mjs` | PASS — 516 exact commands, SHA-256 `5120894f36feb82ac58fffd4db20739d80ae1b1a1c556fc95838a1708cbb8eea`, 18 negative fixtures rejected |
+| `cargo test -p protocol --release --locked control_plane_registry_v2 -- --test-threads=1` | PASS — 14 passed, 0 failed, 204 filtered |
+
+The protocol cases retained strict rejection of forged read/full-lock and
+external shapes, duplicate/orphan/alias-cycle registry entries, unknown or
+unclassified sources, invalid outbound serialization, and dispatch sources
+that cannot resolve to an existing canonical family.
+
+This remains bounded inventory and dispatch evidence. `AI0-COVERAGE-001`
+stays Open because the complete fail-closed classification of Engine, Remote,
+MIDI/OSC, shortcut, audio-analysis/BPM, native-window, and all relevant UI
+mutation sources is not proven by these checks. External-client,
+physical-output, Mac, signing, publication, and venue acceptance remain
+unclaimed.
