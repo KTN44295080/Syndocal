@@ -1216,6 +1216,43 @@ This checkpoint does not claim real-file missing → Retry → recovery, actual
 Art-Net/ASIO/NDI/Spout/device output, Mac, signing, publication, or
 product-wide completion.
 
+## Video composition timeline layer admission reader follow-up
+
+The `set_video_composition_timeline_layers` admission path now reads editable
+composition presence and all published timeline layer summaries through one
+`EngineHandle::video_composition_timeline_layer_admission_snapshot()` publication
+read. Main-composition rejection, missing-composition rejection, zero or
+duplicate lane rejection, stale or non-Video lane rejection, and the existing
+`SetVideoCompositionTimelineLayers` mutation are unchanged. The
+`take_video_clip` and runtime/Preview ownership paths remain unchanged.
+
+The focused engine snapshot-reader regression passed `8/8` with two existing
+ignored tests, including the timeline-layer projection and poisoned-publication
+default behavior. The app release structural regression passed `1/1`. The
+changed engine files passed individual rustfmt checks and `git diff --check`
+passed. The maintained wrapper checker passed `243` assertions with `27`
+hostile mutation fixtures. The first native build exposed one newly-unused
+test-only helper; it was scoped with `#[cfg(test)]`, and the subsequent focused
+app test and final native build completed with no first-party compiler warnings.
+
+A fresh maintained-wrapper `pnpm.cmd --dir app tauri build --no-bundle`
+completed with the pinned MSVC 14.44.35207 Build Tools linker and no
+first-party compiler warnings. The exact checkout executable is 64,681,472
+bytes with SHA-256
+`011B03C8A4CCFF0DED0927D3DD86088E311706C41EA4848F9697159CE0351C67`.
+The isolated native probe at
+`target/qa/native-final-validation-20260911-44/native-final-validation.json`
+passed: one maximized responsive `Syndocal` window, Standby ownership with
+lighting/video disabled, snapshot IPC, missing media/layer thumbnail IPC
+rejection with valid native tickets, zero physical-output operations, and
+exact executable/listener cleanup. A direct post-probe check found zero
+exact-path Syndocal processes and only the expected port `TIME_WAIT` entry
+owned by PID 0.
+
+This checkpoint does not claim real-file missing → Retry → recovery, actual
+Art-Net/ASIO/NDI/Spout/device output, Mac, signing, publication, or
+product-wide completion.
+
 ## Cue metadata admission reader follow-up
 
 The `set_cue_metadata` admission path now reads the current Cue body and

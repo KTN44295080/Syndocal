@@ -171,7 +171,8 @@ use protocol::{
     TimelineFollowSettlementConsumerId, TimelineFollowSettlementDomain,
     TimelineFollowSettlementState, TimelineFollowSummary, TimelineGuideAssetKey, TimelineId,
     TimelineItemGroupId, TimelineItemGroupSummary, TimelineItemRef, TimelineLayerKind,
-    TimelineLoopRegionSummary, TimelinePhaseSummary, TimelineScheduleSource, TimelineSnapRequest,
+    TimelineLayerSummary, TimelineLoopRegionSummary, TimelinePhaseSummary,
+    TimelineScheduleSource, TimelineSnapRequest,
     TimelineSnapshot, TimelineTrackKind, TimelineVideoClipSummary, TimelineVideoLayerRef,
     TouchControlBinding, TouchFeaturePresetTarget, TouchSurfaceSummary, ValueEffectRequest, Vec3,
     VideoAutomationKeyframeSummary, VideoBackendState, VideoBlendMode, VideoClipRuntimeSnapshot,
@@ -47780,9 +47781,18 @@ fn set_video_composition_timeline_layers(
     composition_id: CompositionId,
     timeline_layer_ids: Vec<TimelineVideoLayerRef>,
 ) -> Result<(), String> {
-    let snapshot = state.engine.snapshot();
-    validate_editable_video_composition(&snapshot, composition_id)?;
-    validate_timeline_video_layer_ids(&snapshot, &timeline_layer_ids)?;
+    if composition_id == 1 {
+        return Err("Main video composition cannot be edited directly".to_string());
+    }
+    let (composition_exists, timelines) = state
+        .engine
+        .video_composition_timeline_layer_admission_snapshot(composition_id);
+    if !composition_exists {
+        return Err(format!(
+            "Video composition {composition_id} was not found"
+        ));
+    }
+    validate_timeline_video_layer_ids_from_published(&timelines, &timeline_layer_ids)?;
     state
         .engine
         .send(EngineCommand::SetVideoCompositionTimelineLayers {
@@ -84373,8 +84383,8 @@ fn validate_video_layer_ids_from_published(
     Ok(())
 }
 
-fn validate_timeline_video_layer_ids(
-    snapshot: &EngineSnapshot,
+fn validate_timeline_video_layer_ids_from_published(
+    timelines: &[(TimelineId, Vec<TimelineLayerSummary>)],
     timeline_layer_ids: &[TimelineVideoLayerRef],
 ) -> Result<(), String> {
     let mut seen = HashSet::new();
@@ -84388,13 +84398,11 @@ fn validate_timeline_video_layer_ids(
                 timeline_layer.timeline_id.0, timeline_layer.layer_id
             ));
         }
-        if !snapshot
-            .timeline_bank
+        if !timelines
             .iter()
-            .chain(std::iter::once(&snapshot.timeline))
-            .find(|timeline| timeline.id == timeline_layer.timeline_id)
-            .is_some_and(|timeline| {
-                timeline.layers.iter().any(|layer| {
+            .find(|(timeline_id, _)| *timeline_id == timeline_layer.timeline_id)
+            .is_some_and(|(_, layers)| {
+                layers.iter().any(|layer| {
                     layer.id == timeline_layer.layer_id
                         && matches!(layer.kind, TimelineLayerKind::Video)
                 })
@@ -84425,6 +84433,7 @@ fn validate_video_composition_exists(
     }
 }
 
+#[cfg(test)]
 fn validate_editable_video_composition(
     snapshot: &EngineSnapshot,
     composition_id: CompositionId,
@@ -93641,6 +93650,20 @@ pub(crate) mod tests {
             .map(|offset| function_start + offset);
         let body = &source[function_start..next_attribute.unwrap_or(source.len())];
         assert!(body.contains("video_composition_layer_admission_snapshot"));
+        assert!(!body.contains("engine.snapshot()"));
+    }
+
+    #[test]
+    fn set_video_composition_timeline_layers_uses_the_narrow_engine_reader() {
+        let source = include_str!("main.rs");
+        let function_start = source
+            .find("fn set_video_composition_timeline_layers(")
+            .expect("missing set_video_composition_timeline_layers command");
+        let next_attribute = source[function_start..]
+            .find("\n#[tauri::command]")
+            .map(|offset| function_start + offset);
+        let body = &source[function_start..next_attribute.unwrap_or(source.len())];
+        assert!(body.contains("video_composition_timeline_layer_admission_snapshot"));
         assert!(!body.contains("engine.snapshot()"));
     }
 

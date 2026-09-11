@@ -201,6 +201,12 @@ fn publication(token: u64) -> EngineSnapshot {
 
 fn assert_same_read_model(handle: &EngineHandle) {
     let expected = handle.snapshot();
+    let expected_timeline_layer_admission = expected
+        .timeline_bank
+        .iter()
+        .chain(std::iter::once(&expected.timeline))
+        .map(|timeline| (timeline.id, timeline.layers.clone()))
+        .collect::<Vec<_>>();
     assert_eq!(
         handle.timeline_transport_generation(),
         expected.timeline.transport_generation
@@ -441,6 +447,17 @@ fn assert_same_read_model(handle: &EngineHandle) {
                 .iter()
                 .any(|composition| composition.id == 1),
             expected.video.layers.iter().map(|layer| layer.id).collect()
+        )
+    );
+    assert_eq!(
+        handle.video_composition_timeline_layer_admission_snapshot(1),
+        (
+            expected
+                .video
+                .compositions
+                .iter()
+                .any(|composition| composition.id == 1),
+            expected_timeline_layer_admission
         )
     );
     if let Some(layer) = expected.video.layers.first() {

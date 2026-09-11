@@ -5,10 +5,11 @@ use protocol::{
     EngineTelemetry, FixtureId, NodeGraphId, NodeGraphSummary, PaletteId, PatchedFixtureSummary,
     PlaybackExecutorSummary, StageObjectSummary, TimelineAudioClipId, TimelineAudioOutputBus,
     TimelineCueEventSummary, TimelineEventId, TimelineFollowRuntimeStatus,
-    TimelineFollowRuntimeStatusSnapshot, TimelineFollowRuntimeSummary, TimelineLayerSummary,
-    TimelineLoopRuntimeStatus, VideoClipRuntimeSnapshot, VideoIsfEffectSummary, VideoLayerId,
-    VideoLayerState, VideoLayerTransitionBusSummary, VideoLayerTransitionRuntimeSnapshot,
-    VideoOutputId, VideoOutputSummary, VideoSnapshot, VideoSourceSummary,
+    TimelineFollowRuntimeStatusSnapshot, TimelineFollowRuntimeSummary, TimelineId,
+    TimelineLayerSummary, TimelineLoopRuntimeStatus, VideoClipRuntimeSnapshot,
+    VideoIsfEffectSummary, VideoLayerId, VideoLayerState, VideoLayerTransitionBusSummary,
+    VideoLayerTransitionRuntimeSnapshot, VideoOutputId, VideoOutputSummary, VideoSnapshot,
+    VideoSourceSummary,
 };
 
 /// The runtime-only projection required by the control-plane query adapter.
@@ -609,6 +610,29 @@ impl EngineHandle {
                     .iter()
                     .any(|composition| composition.id == composition_id),
                 snapshot.video.layers.iter().map(|layer| layer.id).collect(),
+            )
+        })
+    }
+
+    /// Read editable composition presence and all authored timeline layers
+    /// needed by timeline-video admission under one snapshot guard.
+    pub fn video_composition_timeline_layer_admission_snapshot(
+        &self,
+        composition_id: CompositionId,
+    ) -> (bool, Vec<(TimelineId, Vec<TimelineLayerSummary>)>) {
+        self.read_snapshot_field(|snapshot| {
+            (
+                snapshot
+                    .video
+                    .compositions
+                    .iter()
+                    .any(|composition| composition.id == composition_id),
+                snapshot
+                    .timeline_bank
+                    .iter()
+                    .chain(std::iter::once(&snapshot.timeline))
+                    .map(|timeline| (timeline.id, timeline.layers.clone()))
+                    .collect(),
             )
         })
     }
