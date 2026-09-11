@@ -53,3 +53,13 @@ full in-app artifact-import acceptance, or claim ASIO/DMX/MIDI, Mac,
 signature, publication, venue, or product-wide completion.
 
 `git diff --check`: PASS before commit.
+
+## Current-main rerun — 2026-09-12
+
+The recording software regression suite was rerun against current `main` at
+`d15d6d9b16b102131b54d6c10c18412c00bc1297` with the documented MSVC
+14.44.35207 x64 linker pin confirmed first by `where.exe link.exe`.
+
+Result: 60 passed, 0 failed, 6 ignored, 1800 filtered. The ignored cases are
+subprocess helpers plus the opt-in real H.264/AAC MP4 and 30-minute A/V tests;
+they are not counted as acceptance. No product assertion was weakened.
