@@ -1416,3 +1416,39 @@ owned by PID 0.
 This checkpoint does not claim real-file missing → Retry → recovery, actual
 Art-Net/ASIO/NDI/Spout/device output, Mac, signing, publication, or
 product-wide completion.
+
+## Touch Surface admission reader follow-up
+
+The `set_touch_surface` admission path now reads only the authored fixture
+summaries and Cue IDs required by Touch Surface reference validation through
+`EngineHandle::touch_surface_admission_snapshot()`. Grid bounds, page/control
+limits, duplicate IDs, fixture attributes, group bindings, color and Pan/Tilt
+capabilities, Feature Preset ranges and duplicate targets, Cue existence, and
+all existing rejection messages remain unchanged. Project-file validation
+continues to use the full snapshot boundary because it validates the complete
+persisted project.
+
+The focused engine snapshot-reader regression passed `8/8` with two existing
+ignored tests, including the new fixture/Cue admission projection and
+poisoned-publication default behavior. The app release structural regression
+passed `1/1`. The changed engine files passed individual rustfmt checks and
+`git diff --check` passed. The maintained wrapper checker passed `243`
+assertions with `27` hostile mutation fixtures.
+
+A fresh maintained-wrapper `pnpm.cmd --dir app tauri build --no-bundle`
+completed with the pinned MSVC 14.44.35207 Build Tools linker and no
+first-party compiler warnings. The exact checkout executable is 64,658,432
+bytes with SHA-256
+`3BB038CD89D1E4F393725F42E95988B2018137D05782A7159297C6327DEF9B87`.
+The isolated native probe at
+`target/qa/native-final-validation-20260911-36/native-final-validation.json`
+passed: one maximized responsive `Syndocal` window, Standby ownership with
+lighting/video disabled, snapshot IPC, missing media/layer thumbnail IPC
+rejection with valid native tickets, zero physical-output operations, and
+exact executable/listener cleanup. A direct post-probe check found zero
+exact-path Syndocal processes and only the expected port `TIME_WAIT` entry
+owned by PID 0.
+
+This checkpoint does not claim real-file missing → Retry → recovery, actual
+Art-Net/ASIO/NDI/Spout/device output, Mac, signing, publication, or
+product-wide completion.

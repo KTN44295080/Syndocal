@@ -479,6 +479,17 @@ impl EngineHandle {
         self.read_snapshot_field(|snapshot| snapshot.fixtures.clone())
     }
 
+    /// Read the authored references needed to validate one Touch Surface
+    /// update without cloning unrelated published and runtime collections.
+    pub fn touch_surface_admission_snapshot(&self) -> (Vec<PatchedFixtureSummary>, Vec<CueId>) {
+        self.read_snapshot_field(|snapshot| {
+            (
+                snapshot.fixtures.clone(),
+                snapshot.cues.iter().map(|cue| cue.id).collect(),
+            )
+        })
+    }
+
     /// Read only fixture group memberships for group-scoped validation.
     pub fn fixture_group_ids_snapshot(&self) -> Vec<Vec<String>> {
         self.read_snapshot_field(|snapshot| {

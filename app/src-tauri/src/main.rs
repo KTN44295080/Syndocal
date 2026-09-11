@@ -65820,6 +65820,16 @@ fn validate_touch_surface(
     surface: &TouchSurfaceSummary,
     snapshot: &EngineSnapshot,
 ) -> Result<(), String> {
+    validate_touch_surface_references(surface, &snapshot.fixtures, |cue_id| {
+        snapshot.cues.iter().any(|cue| cue.id == cue_id)
+    })
+}
+
+fn validate_touch_surface_references(
+    surface: &TouchSurfaceSummary,
+    fixtures: &[PatchedFixtureSummary],
+    cue_exists: impl Fn(CueId) -> bool,
+) -> Result<(), String> {
     const TOUCH_GRID_COLUMNS: u16 = 12;
     const TOUCH_GRID_ROWS: u16 = 8;
     if surface.pages.len() > 64 {
@@ -65871,8 +65881,7 @@ fn validate_touch_surface(
                     fixture_id,
                     attribute,
                 } => {
-                    let fixture = snapshot
-                        .fixtures
+                    let fixture = fixtures
                         .iter()
                         .find(|fixture| fixture.id == *fixture_id)
                         .ok_or_else(|| {
@@ -65896,7 +65905,7 @@ fn validate_touch_surface(
                     group_id,
                     attribute,
                 } => {
-                    if !snapshot.fixtures.iter().any(|fixture| {
+                    if !fixtures.iter().any(|fixture| {
                         fixture.group_ids.contains(group_id)
                             && fixture
                                 .controls
@@ -65935,8 +65944,7 @@ fn validate_touch_surface(
                                 control.id
                             ));
                         }
-                        let fixture = snapshot
-                            .fixtures
+                        let fixture = fixtures
                             .iter()
                             .find(|fixture| fixture.id == target.fixture_id)
                             .ok_or_else(|| {
@@ -65958,7 +65966,7 @@ fn validate_touch_surface(
                     }
                 }
                 TouchControlBinding::FixtureColor { fixture_id } => {
-                    if !snapshot.fixtures.iter().any(|fixture| {
+                    if !fixtures.iter().any(|fixture| {
                         fixture.id == *fixture_id && fixture_supports_color_effect(fixture)
                     }) {
                         return Err(format!(
@@ -65968,7 +65976,7 @@ fn validate_touch_surface(
                     }
                 }
                 TouchControlBinding::GroupColor { group_id } => {
-                    if !snapshot.fixtures.iter().any(|fixture| {
+                    if !fixtures.iter().any(|fixture| {
                         fixture.group_ids.contains(group_id)
                             && fixture_supports_color_effect(fixture)
                     }) {
@@ -65983,8 +65991,7 @@ fn validate_touch_surface(
                     pan_attribute,
                     tilt_attribute,
                 } => {
-                    let fixture = snapshot
-                        .fixtures
+                    let fixture = fixtures
                         .iter()
                         .find(|fixture| fixture.id == *fixture_id)
                         .ok_or_else(|| {
@@ -66013,7 +66020,7 @@ fn validate_touch_surface(
                     pan_attribute,
                     tilt_attribute,
                 } => {
-                    if !snapshot.fixtures.iter().any(|fixture| {
+                    if !fixtures.iter().any(|fixture| {
                         fixture.group_ids.contains(group_id)
                             && [pan_attribute, tilt_attribute]
                                 .into_iter()
@@ -66031,7 +66038,7 @@ fn validate_touch_surface(
                     }
                 }
                 TouchControlBinding::Cue { cue_id } => {
-                    if !snapshot.cues.iter().any(|cue| cue.id == *cue_id) {
+                    if !cue_exists(*cue_id) {
                         return Err(format!(
                             "Touch control {} references missing cue {}",
                             control.id, cue_id
@@ -66039,8 +66046,7 @@ fn validate_touch_surface(
                     }
                 }
                 TouchControlBinding::GroupSelect { group_id } => {
-                    if !snapshot
-                        .fixtures
+                    if !fixtures
                         .iter()
                         .any(|fixture| fixture.group_ids.contains(group_id))
                     {
@@ -66051,8 +66057,7 @@ fn validate_touch_surface(
                     }
                 }
                 TouchControlBinding::GroupSubmaster { group_id } => {
-                    if !snapshot
-                        .fixtures
+                    if !fixtures
                         .iter()
                         .any(|fixture| fixture.group_ids.contains(group_id))
                     {
@@ -69953,7 +69958,8 @@ fn set_touch_surface(
     state: State<'_, AppState>,
     surface: TouchSurfaceSummary,
 ) -> Result<(), String> {
-    validate_touch_surface(&surface, &state.engine.snapshot())?;
+    let (fixtures, cue_ids) = state.engine.touch_surface_admission_snapshot();
+    validate_touch_surface_references(&surface, &fixtures, |cue_id| cue_ids.contains(&cue_id))?;
     state.engine.set_touch_surface(surface)
 }
 
@@ -93536,6 +93542,20 @@ pub(crate) mod tests {
             .map(|offset| function_start + offset);
         let body = &source[function_start..next_attribute.unwrap_or(source.len())];
         assert!(body.contains("validate_editable_video_composition_from_engine"));
+        assert!(!body.contains("engine.snapshot()"));
+    }
+
+    #[test]
+    fn set_touch_surface_uses_the_narrow_engine_reader() {
+        let source = include_str!("main.rs");
+        let function_start = source
+            .find("fn set_touch_surface(")
+            .expect("missing set_touch_surface command");
+        let next_attribute = source[function_start..]
+            .find("\n#[tauri::command]")
+            .map(|offset| function_start + offset);
+        let body = &source[function_start..next_attribute.unwrap_or(source.len())];
+        assert!(body.contains("touch_surface_admission_snapshot"));
         assert!(!body.contains("engine.snapshot()"));
     }
 

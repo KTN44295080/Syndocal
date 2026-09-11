@@ -244,6 +244,13 @@ fn assert_same_read_model(handle: &EngineHandle) {
     assert_eq!(handle.video_snapshot(), expected.video);
     assert_eq!(handle.stage_objects_snapshot(), expected.stage_objects);
     assert_eq!(handle.fixtures_snapshot(), expected.fixtures);
+    assert_eq!(
+        handle.touch_surface_admission_snapshot(),
+        (
+            expected.fixtures.clone(),
+            expected.cues.iter().map(|cue| cue.id).collect::<Vec<_>>(),
+        )
+    );
     assert_eq!(handle.timeline_layers_snapshot(), expected.timeline.layers);
     assert_eq!(
         handle.timeline_cue_ids_snapshot(),
