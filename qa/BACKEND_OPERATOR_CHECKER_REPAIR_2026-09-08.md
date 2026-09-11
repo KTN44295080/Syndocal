@@ -54,3 +54,23 @@ This checkpoint does not close the handoff. The ledger remains `50 Open + 8
 Deferred`; Mac, physical ASIO/NDI/DMX/video, signing/publication, and other
 documented gates remain separate. The existing EXE evidence is not a rebuild
 of this checker-only change.
+
+## Current-main checker revalidation — 2026-09-12
+
+The checker and its referenced transaction/recovery contracts were re-read and
+run at current `main` source HEAD `4e593cc5addba7bc59fe2e9df1410bf5fb24acf3`.
+The source still asserts registered-owner admission, exact transaction and
+epoch tickets, approval/permission boundaries, terminal Cancel/Commit
+recovery, stale-authority and old-result rejection, and fail-closed unknown
+routes. No assertion was removed or weakened, and no product runtime code was
+changed by this revalidation.
+
+| Check | Result |
+| --- | --- |
+| `pnpm.cmd --dir app run check:backend-operator-contract` | PASS — 516 commands, 334 literal frontend calls, 133 transactional mutations |
+| `pnpm.cmd --dir app run check:project-transaction` | PASS — production-contract and project-authority checks |
+| `pnpm.cmd --dir app run check:project-recovery-e3` | PASS — project authority checks and E3 recovery production driver |
+
+These are checker/source-contract results, not external-client, native-window,
+physical-output, or product-wide acceptance. The previously completed PNG
+missing-file recovery was not rerun, and no file-moving helper was used.
