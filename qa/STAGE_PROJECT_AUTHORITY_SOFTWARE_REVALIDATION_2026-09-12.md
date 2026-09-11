@@ -36,3 +36,15 @@ The bounded project-authority checks were rerun against current `main` at
 This is deterministic software evidence only. It does not claim the frozen
 re-audit, native UI, external client, physical output, or product-wide
 acceptance.
+
+## Current-main full rerun — 2026-09-12
+
+The complete bounded Stage/Project Transaction/Project Authority software
+set was rerun against current `main` at
+`1e020da1e9486cba114cc85cd1a5fa781df29a45`. All eleven command groups
+passed: stage labels and geometry, D2 transaction, mutation controller,
+engine fixture-transform batch (5 tests), Tauri fixture-transform (4 tests),
+Tauri stage batch (2 tests), project transaction, E3 recovery, E4
+publication, and history preflight. The MSVC 14.44.35207 x64 linker was
+confirmed first with `where.exe link.exe`. No fixture hardware, native UI
+launch, cross-platform execution, or product-wide acceptance was performed.

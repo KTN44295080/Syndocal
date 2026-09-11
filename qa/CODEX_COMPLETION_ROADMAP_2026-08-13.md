@@ -1950,7 +1950,7 @@ unchecked row.
     "q1_rows": 32,
     "q2_decisions": 12,
     "q3_risks": 14,
-    "q4_evidence": 28
+    "q4_evidence": 29
   },
   "q0_registry": {
     "mirrored_from": "master section 21 Q0 tables; the master Markdown tables remain authoritative",
@@ -2239,7 +2239,7 @@ unchecked row.
       "nonclaim": "This row does not claim fixture/hardware Stage behavior acceptance, and the recorded alpha.11 hash is historical tranche evidence, not current-source acceptance.",
       "decision_ids": [],
       "risk_ids": [],
-      "evidence_ids": ["EV-ALPHA11-D4-2026-08-25"]
+      "evidence_ids": ["EV-ALPHA11-D4-2026-08-25", "EV-STAGE-PROJECT-SW-2026-09-12"]
     },
     {
       "id": "COV-PROJECT-TX-001",
@@ -2261,7 +2261,7 @@ unchecked row.
       "nonclaim": "This row does not claim macOS/Linux execution or that alpha.11 hashes constitute current-source acceptance.",
       "decision_ids": [],
       "risk_ids": ["R-TX-BEGIN-001"],
-      "evidence_ids": ["EV-ALPHA11-D4-2026-08-25"]
+      "evidence_ids": ["EV-ALPHA11-D4-2026-08-25", "EV-STAGE-PROJECT-SW-2026-09-12"]
     },
     {
       "id": "COV-PROJECT-AUTH-001",
@@ -2283,7 +2283,7 @@ unchecked row.
       "nonclaim": "This row does not claim the frozen re-audit has been performed.",
       "decision_ids": [],
       "risk_ids": [],
-      "evidence_ids": ["EV-PROJECT-AUTHORITY-SW-2026-09-12"]
+      "evidence_ids": ["EV-PROJECT-AUTHORITY-SW-2026-09-12", "EV-STAGE-PROJECT-SW-2026-09-12"]
     },
     {
       "id": "COV-RECOVERY-SAVE-001",
@@ -2763,6 +2763,7 @@ unchecked row.
     ,{ "id": "EV-TIMELINE-MUSICAL-SW-2026-09-12", "scope": "Current-main Timeline/Musical deterministic scheduler, follow/hold, cue-audio, loop, transport, and fractional-tick software contracts", "kind": "current-source-automated", "status": "accepted-current", "date": "2026-09-12", "command": "pnpm.cmd --dir app run check:timeline-advanced && node app/scripts/check-timeline-navigator-actions.mjs && pnpm.cmd --dir app run check:timeline-automation && node app/scripts/check-timeline-overlap-clusters.mjs && node app/scripts/check-timeline-block-loop.mjs && pnpm.cmd --dir app run check:timeline-follow-runtime && pnpm.cmd --dir app run check:timeline-follow-hold-ui && pnpm.cmd --dir app run check:timeline-cue-audio && pnpm.cmd --dir app run check:timeline-loop-runtime && pnpm.cmd --dir app run check:timeline-transport-runtime && cargo test -p engine --release --locked -j 1 timeline_fractional_ticks -- --test-threads=1", "exit_code": 0, "assertion_count": 11, "ignored_count": 0, "warning_count": 0, "artifact_hash": null, "raw_evidence_paths": ["qa/TIMELINE_MUSICAL_SOFTWARE_REVALIDATION_2026-09-12.md"], "artifact_na_reason": "Deterministic source checks and six focused engine tests have no shipped binary artifact; the exact current-main source base, MSVC linker procedure, commands, results, and non-native boundary are recorded in the linked QA document.", "currency_nonclaim": "Current-source software evidence only; it cannot establish audible devices, native A/V/Lighting synchronization, external clocks, browser acceptance, venue acceptance, or product-wide acceptance.", "linked_q1_ids": ["COV-TIMELINE-MUSICAL-001"] }
     ,{ "id": "EV-SECURITY-SW-2026-09-12", "scope": "Current-main registry/admission/authority/parser software contracts for security and AI-safety boundaries", "kind": "current-source-automated", "status": "accepted-current", "date": "2026-09-12", "command": "pnpm.cmd --dir app run check:agent-bridge && node app/scripts/check-agent-bridge-bootstrap.mjs && node app/scripts/check-tauri-admission-inventory.mjs && pnpm.cmd --dir app run check:strict-json && cargo test -p protocol --release --locked agent_authority -- --test-threads=1 && cargo test -p protocol --release --locked control_plane -- --test-threads=1", "exit_code": 0, "assertion_count": 6, "ignored_count": 0, "warning_count": 0, "artifact_hash": null, "artifact_na_reason": "Deterministic source checks and focused protocol tests have no shipped binary artifact; the exact current-main source base, MSVC linker, commands, results, and no-external-boundary are recorded in the linked QA document.", "raw_evidence_paths": ["qa/SECURITY_SOFTWARE_REVALIDATION_2026-09-12.md"], "currency_nonclaim": "Current-source software evidence only; it cannot establish public-network safety, update-signature/replay acceptance, adversarial client acceptance, parser fuzz completion, external devices, or product-wide AI adapter bypass absence.", "linked_q1_ids": ["COV-SECURITY-001"] }
     ,{ "id": "EV-AI-CONTROL-SW-2026-09-12", "scope": "Current-main AI Control software contracts across routing, admission, registry/query, snapshots, bridge, MCP validation, durable recovery, and authority", "kind": "current-source-automated", "status": "accepted-current", "date": "2026-09-12", "command": "pnpm.cmd --dir app run check:frontend-command-routing && pnpm.cmd --dir app run check:frontend-invokes && node app/scripts/check-tauri-admission-inventory.mjs && pnpm.cmd --dir app run check:backend-operator-contract && node app/scripts/check-project-transaction-mutation-controller.mjs && pnpm.cmd --dir app run check:snapshot-live-publication && pnpm.cmd --dir app run check:snapshot-runtime-watermark && node tools/syndocal-mcp/check.mjs && pnpm.cmd --dir app run check:agent-bridge && node app/scripts/check-agent-bridge-bootstrap.mjs && cargo test -p protocol --release --locked control_plane_registry_v2 -- --test-threads=1 && cargo test -p protocol --release --locked control_plane_query -- --test-threads=1 && cargo test --manifest-path app/src-tauri/Cargo.toml --release --locked -j 1 durable -- --test-threads=1 && cargo test -p protocol --release --locked agent_authority -- --test-threads=1", "exit_code": 0, "assertion_count": 14, "ignored_count": 0, "warning_count": 0, "artifact_hash": null, "artifact_na_reason": "Deterministic source checks and focused Rust tests have no shipped binary artifact; the exact current-main source base, MSVC linker, commands, results, and external-boundary are recorded in the linked QA document.", "raw_evidence_paths": ["qa/AI_CONTROL_SOFTWARE_REVALIDATION_2026-09-12.md"], "currency_nonclaim": "Current-source AI Control software evidence only; it cannot establish AI6 administration UI completion, complete AI7 adversarial parity/fuzz/saturation, AI8 external clients, clean-install/restart acceptance, hardware output, or product-wide acceptance.", "linked_q1_ids": ["COV-AI-CONTROL-001"] }
+    ,{ "id": "EV-STAGE-PROJECT-SW-2026-09-12", "scope": "Current-main Stage fixture-transform, project transaction, recovery, publication, history-preflight, and project-authority software contracts", "kind": "current-source-automated", "status": "accepted-current", "date": "2026-09-12", "command": "pnpm.cmd --dir app run check:stage-labels && pnpm.cmd --dir app run check:mapping-stage-geometry && node app/scripts/check-patch-transaction-d2.mjs && node app/scripts/check-project-transaction-mutation-controller.mjs && cargo test -p engine --release --locked -j 1 fixture_transform_batch -- --test-threads=1 && cargo test --manifest-path app/src-tauri/Cargo.toml --release --locked -j 1 fixture_transform -- --test-threads=1 && cargo test --manifest-path app/src-tauri/Cargo.toml --release --locked -j 1 stage_fixture_transform_batch -- --test-threads=1 && pnpm.cmd --dir app run check:project-transaction && pnpm.cmd --dir app run check:project-recovery-e3 && pnpm.cmd --dir app run check:project-publication-e4 && node app/scripts/check-project-history-preflight.mjs", "exit_code": 0, "assertion_count": 11, "ignored_count": 0, "warning_count": 0, "artifact_hash": null, "artifact_na_reason": "Deterministic source checks and focused Rust tests have no shipped binary artifact; the exact current-main source base, MSVC linker, commands, results, and non-external boundary are recorded in the linked QA document.", "raw_evidence_paths": ["qa/STAGE_PROJECT_AUTHORITY_SOFTWARE_REVALIDATION_2026-09-12.md"], "currency_nonclaim": "Current-source software evidence only; it cannot establish fixture hardware, native UI launch, cross-platform execution, external clients, physical output, or product-wide acceptance.", "linked_q1_ids": ["COV-STAGE-001", "COV-PROJECT-TX-001", "COV-PROJECT-AUTH-001"] }
   ]
 }
 ```
