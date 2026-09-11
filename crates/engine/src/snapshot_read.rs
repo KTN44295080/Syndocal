@@ -1,8 +1,8 @@
 use crate::{EngineHandle, TimelineTransportAuthority};
 use protocol::{
-    AutoVjAction, AutomationId, ClockSnapshot, CompositionSummary, CueId, CueListId, CueSummary,
-    DmxOutputConfig, EffectId, EffectKind, EngineSnapshot, EngineTelemetry, FixtureId, NodeGraphId,
-    PaletteId, PatchedFixtureSummary, PlaybackExecutorSummary, StageObjectSummary,
+    AutoVjAction, AutomationId, ClockSnapshot, CompositionId, CompositionSummary, CueId, CueListId,
+    CueSummary, DmxOutputConfig, EffectId, EffectKind, EngineSnapshot, EngineTelemetry, FixtureId,
+    NodeGraphId, PaletteId, PatchedFixtureSummary, PlaybackExecutorSummary, StageObjectSummary,
     TimelineAudioClipId, TimelineAudioOutputBus, TimelineCueEventSummary, TimelineEventId,
     TimelineFollowRuntimeStatus, TimelineFollowRuntimeStatusSnapshot, TimelineFollowRuntimeSummary,
     TimelineLayerSummary, TimelineLoopRuntimeStatus, VideoClipRuntimeSnapshot, VideoLayerId,
@@ -499,6 +499,18 @@ impl EngineHandle {
                 .outputs
                 .iter()
                 .any(|output| output.id == output_id)
+        })
+    }
+
+    /// Check one editable video-composition ID without cloning the full video
+    /// image or unrelated authored and runtime collections.
+    pub fn video_composition_exists(&self, composition_id: CompositionId) -> bool {
+        self.read_snapshot_field(|snapshot| {
+            snapshot
+                .video
+                .compositions
+                .iter()
+                .any(|composition| composition.id == composition_id)
         })
     }
 

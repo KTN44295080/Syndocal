@@ -47743,8 +47743,7 @@ fn remove_video_composition(
     state: State<'_, AppState>,
     composition_id: CompositionId,
 ) -> Result<(), String> {
-    let snapshot = state.engine.snapshot();
-    validate_editable_video_composition(&snapshot, composition_id)?;
+    validate_editable_video_composition_from_engine(&state.engine, composition_id)?;
     state
         .engine
         .send(EngineCommand::RemoveVideoComposition(composition_id))
@@ -84429,6 +84428,20 @@ fn validate_editable_video_composition(
     validate_video_composition_exists(snapshot, composition_id)
 }
 
+fn validate_editable_video_composition_from_engine(
+    engine: &EngineHandle,
+    composition_id: CompositionId,
+) -> Result<(), String> {
+    if composition_id == 1 {
+        return Err("Main video composition cannot be edited directly".to_string());
+    }
+    if engine.video_composition_exists(composition_id) {
+        Ok(())
+    } else {
+        Err(format!("Video composition {composition_id} was not found"))
+    }
+}
+
 fn validate_video_output_exists(
     snapshot: &EngineSnapshot,
     output_id: VideoOutputId,
@@ -93509,6 +93522,20 @@ pub(crate) mod tests {
             .map(|offset| function_start + offset);
         let body = &source[function_start..next_attribute.unwrap_or(source.len())];
         assert!(body.contains("cue_metadata_admission_snapshot"));
+        assert!(!body.contains("engine.snapshot()"));
+    }
+
+    #[test]
+    fn remove_video_composition_uses_the_narrow_engine_reader() {
+        let source = include_str!("main.rs");
+        let function_start = source
+            .find("fn remove_video_composition(")
+            .expect("missing remove_video_composition command");
+        let next_attribute = source[function_start..]
+            .find("\n#[tauri::command]")
+            .map(|offset| function_start + offset);
+        let body = &source[function_start..next_attribute.unwrap_or(source.len())];
+        assert!(body.contains("validate_editable_video_composition_from_engine"));
         assert!(!body.contains("engine.snapshot()"));
     }
 

@@ -569,6 +569,8 @@ fn narrow_readers_match_public_snapshot_and_observe_replacement() {
     let published = Arc::new(RwLock::new(publication(7)));
     let handle = allocator_test_handle(Arc::clone(&published));
     assert_same_read_model(&handle);
+    assert!(handle.video_composition_exists(1));
+    assert!(!handle.video_composition_exists(99_999));
     let retained = handle.video_clip_runtime_snapshot();
     let retained_follow = handle.timeline_follow_runtime_summary();
     let retained_transition = handle.video_layer_transition_runtime_snapshot();
@@ -577,6 +579,7 @@ fn narrow_readers_match_public_snapshot_and_observe_replacement() {
     assert_eq!(handle.video_outputs_snapshot()[0].label, "output 7");
     *published.write().unwrap() = publication(18);
     assert_same_read_model(&handle);
+    assert!(handle.video_composition_exists(1));
     assert_eq!(retained.layers[0].layer_id, 7);
     assert_eq!(retained_follow.fault.as_deref(), Some("publication 7"));
     assert_eq!(

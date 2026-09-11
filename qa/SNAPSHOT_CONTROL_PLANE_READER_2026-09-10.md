@@ -1382,3 +1382,37 @@ exact executable/listener cleanup.
 
 This checkpoint does not claim file-dialog interaction, physical output,
 device, Mac, signing, publication, or product-wide completion.
+
+## Video composition removal reader follow-up
+
+The `remove_video_composition` admission path now checks the requested
+authored composition ID through
+`EngineHandle::video_composition_exists()`. The protected Main composition
+(ID 1) rejection, missing-composition rejection, and subsequent engine-owned
+mutation are unchanged. Compound video composition and layer/timeline edits
+remain on full snapshots where cross-collection consistency is required.
+
+The focused engine snapshot-reader regression passed `8/8` with two existing
+ignored tests, including positive and missing-composition behavior and the
+poisoned-publication default path. The app release structural regression
+passed `1/1`. The changed engine files passed individual rustfmt checks and
+`git diff --check` passed. The maintained wrapper checker passed `243`
+assertions with `27` hostile mutation fixtures.
+
+A fresh maintained-wrapper `pnpm.cmd --dir app tauri build --no-bundle`
+completed with the pinned MSVC 14.44.35207 Build Tools linker and no
+first-party compiler warnings. The exact checkout executable is 64,650,240
+bytes with SHA-256
+`B603EC01C612AC4C9BC33CA59FEBFED52E70DAB4ACAA0D2E7C7C7B6B26D0A125`.
+The isolated native probe at
+`target/qa/native-final-validation-20260911-35/native-final-validation.json`
+passed: one maximized responsive `Syndocal` window, Standby ownership with
+lighting/video disabled, snapshot IPC, missing media/layer thumbnail IPC
+rejection with valid native tickets, zero physical-output operations, and
+exact executable/listener cleanup. A direct post-probe check found zero
+exact-path Syndocal processes and only the expected port `TIME_WAIT` entry
+owned by PID 0.
+
+This checkpoint does not claim real-file missing → Retry → recovery, actual
+Art-Net/ASIO/NDI/Spout/device output, Mac, signing, publication, or
+product-wide completion.
