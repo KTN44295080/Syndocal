@@ -514,6 +514,18 @@ impl EngineHandle {
         self.read_snapshot_field(|snapshot| snapshot.fixtures.clone())
     }
 
+    /// Read one authored Fixture body for preset export without cloning the
+    /// complete fixture catalog or unrelated published/runtime collections.
+    pub fn fixture_summary_snapshot(&self, fixture_id: FixtureId) -> Option<PatchedFixtureSummary> {
+        self.read_snapshot_field(|snapshot| {
+            snapshot
+                .fixtures
+                .iter()
+                .find(|fixture| fixture.id == fixture_id)
+                .cloned()
+        })
+    }
+
     /// Read the authored references needed to validate one Touch Surface
     /// update without cloning unrelated published and runtime collections.
     pub fn touch_surface_admission_snapshot(&self) -> (Vec<PatchedFixtureSummary>, Vec<CueId>) {

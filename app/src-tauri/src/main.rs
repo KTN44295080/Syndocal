@@ -50174,11 +50174,9 @@ fn save_fixture_preset(
     state: State<'_, AppState>,
     fixture_id: FixtureId,
 ) -> Result<Option<String>, String> {
-    let snapshot = state.engine.snapshot();
-    let fixture = snapshot
-        .fixtures
-        .iter()
-        .find(|fixture| fixture.id == fixture_id)
+    let fixture = state
+        .engine
+        .fixture_summary_snapshot(fixture_id)
         .ok_or_else(|| format!("Fixture {fixture_id} was not found"))?;
     let preset = FixturePreset {
         version: 1,
@@ -93578,6 +93576,20 @@ pub(crate) mod tests {
             .map(|offset| function_start + offset);
         let body = &source[function_start..next_attribute.unwrap_or(source.len())];
         assert!(body.contains("effect_summary_snapshot"));
+        assert!(!body.contains("engine.snapshot()"));
+    }
+
+    #[test]
+    fn save_fixture_preset_uses_the_narrow_engine_reader() {
+        let source = include_str!("main.rs");
+        let function_start = source
+            .find("fn save_fixture_preset(")
+            .expect("missing save_fixture_preset command");
+        let next_attribute = source[function_start..]
+            .find("\n#[tauri::command]")
+            .map(|offset| function_start + offset);
+        let body = &source[function_start..next_attribute.unwrap_or(source.len())];
+        assert!(body.contains("fixture_summary_snapshot"));
         assert!(!body.contains("engine.snapshot()"));
     }
 

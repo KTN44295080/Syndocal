@@ -245,6 +245,15 @@ fn assert_same_read_model(handle: &EngineHandle) {
     assert_eq!(handle.stage_objects_snapshot(), expected.stage_objects);
     assert_eq!(handle.fixtures_snapshot(), expected.fixtures);
     assert_eq!(
+        handle.fixture_summary_snapshot(1),
+        expected
+            .fixtures
+            .iter()
+            .find(|fixture| fixture.id == 1)
+            .cloned()
+    );
+    assert_eq!(handle.fixture_summary_snapshot(999_999), None);
+    assert_eq!(
         handle.touch_surface_admission_snapshot(),
         (
             expected.fixtures.clone(),
