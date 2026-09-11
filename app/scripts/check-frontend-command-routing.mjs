@@ -131,6 +131,76 @@ for (const [body, generation, label] of [
   );
 }
 
+const authorityFailureBodies = [
+  [
+    functionSlice(controlInputControllerText, "const connectMidiClock = async", "const disconnectMidiClock = async"),
+    "MIDI Clock connect",
+    "options.setMidiConnected",
+  ],
+  [
+    functionSlice(controlInputControllerText, "const disconnectMidiClock = async", "const addMidiMapping ="),
+    "MIDI Clock disconnect",
+    "options.setMessage",
+  ],
+  [
+    functionSlice(controlInputControllerText, "const learnMidiControl = async", "const learnMidiControlForTargets ="),
+    "MIDI learn",
+    "options.setMessage",
+  ],
+  [
+    functionSlice(controlInputControllerText, "const connectMidiControl = async", "const disconnectMidiControl = async"),
+    "MIDI control connect",
+    "options.setMidiControlConnected",
+  ],
+  [
+    functionSlice(controlInputControllerText, "const disconnectMidiControl = async", "const connectMidiFeedback = async"),
+    "MIDI control disconnect",
+    "options.setMessage",
+  ],
+  [
+    functionSlice(controlInputControllerText, "const connectMidiFeedback = async", "const disconnectMidiFeedback = async"),
+    "MIDI feedback connect",
+    "options.setMidiFeedbackConnected",
+  ],
+  [
+    functionSlice(controlInputControllerText, "const disconnectMidiFeedback = async", "const sendMidiFeedback = async"),
+    "MIDI feedback disconnect",
+    "options.setMessage",
+  ],
+  [
+    functionSlice(controlInputControllerText, "const learnOscControl = async", "const learnOscControlForTargets ="),
+    "OSC learn",
+    "options.setMessage",
+  ],
+  [
+    functionSlice(controlInputControllerText, "const startOscInput = async", "const stopOscInput = async"),
+    "OSC start",
+    "options.setOscRunning",
+  ],
+  [
+    functionSlice(controlInputControllerText, "const stopOscInput = async", "return {"),
+    "OSC stop",
+    "options.setMessage",
+  ],
+];
+for (const [body, label, setter] of authorityFailureBodies) {
+  assert.match(
+    body,
+    new RegExp(`catch\\s*\\(error\\)[\\s\\S]*?if\\s*\\((?:authority\\s*!==\\s*null\\s*&&\\s*)?!options\\.isProjectAuthorityIdentityCurrent\\(authority\\)\\)\\s*return(?:\\s+false)?;[\\s\\S]*?${setter.replaceAll(".", "\\.")}\\(`),
+    `${label} failure must not write stale project state or message`,
+  );
+}
+for (const [body, label] of [
+  [functionSlice(controlInputControllerText, "const learnMidiControlForTargets = async", "const saveMidiMappings = async"), "targeted MIDI learn"],
+  [functionSlice(controlInputControllerText, "const learnOscControlForTargets = async", "const startOscInput = async"), "targeted OSC learn"],
+]) {
+  assert.match(
+    body,
+    /catch\s*\(error\)[\s\S]*?if\s*\(!options\.isProjectAuthorityIdentityCurrent\(authority\)\)\s*return\s+false;[\s\S]*?options\.setMessage\(/,
+    `${label} failure must not write a stale project message`,
+  );
+}
+
 assert.equal(
   [...appText.matchAll(/createEffect\(\(\) => \{\s*\/\/ The authority and candidate list live outside project persistence\.[\s\S]*?void refreshDjLinkMachineStatusAndCandidates\(\);\s*\}\);/g)].length,
   1,

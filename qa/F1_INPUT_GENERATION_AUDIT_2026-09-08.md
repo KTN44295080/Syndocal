@@ -157,3 +157,45 @@ MIDI/OSC/DMX clients, reconnect/latency, device and venue behavior, dependent
 F2 ownership, ASIO/NDI/DMX physical acceptance, Mac, signing, publication,
 and product-wide completion remain unclaimed. The real-file thumbnail
 missing → Retry → recovery trial was not rerun.
+
+## Current-main authority-fenced failure responses — 2026-09-11
+
+The control-input controller now fences failure responses as well as success
+responses for the existing project-authority-bearing MIDI and OSC operations.
+When a project replacement changes the captured authority while Connect,
+Disconnect, Learn, Start, or Stop is pending, the older error cannot reset the
+new project's connection state or overwrite its operator message. The backend
+commands, expected-epoch fields, physical I/O routes, and fixed three-screen
+UI remain unchanged. This is a stale-result repair, not a new API or a
+physical-output enablement.
+
+The frontend checker now requires each affected catch path to test the captured
+authority before its state/message write, including the recovery catch inside
+targeted MIDI/OSC Learn. The normal path and stale/authority-rejection shape
+are therefore covered without weakening the existing assertions:
+
+| Check | Result |
+| --- | --- |
+| `pnpm.cmd --dir app run check:frontend-command-routing` | PASS — 133 renderer, 31 server-authoritative, 28 raw, 464 facade dispatches; stale success/failure fences passed |
+| `pnpm.cmd --dir app exec tsc --noEmit` | PASS |
+| `pnpm.cmd --dir app run check:dvc-midi-shortcuts` | PASS — 39 assertions |
+| `pnpm.cmd --dir app run check:release` | PASS — full static release gate; 50 Open + 8 Deferred preserved |
+| `git diff --check` | PASS |
+
+The exact Windows native no-bundle procedure used MSVC `14.44.35207` as the
+first `where.exe link.exe` result. The fresh executable was
+`target/release/syndocal.exe`, version `1.2.0-alpha.69`, 64,744,448 bytes,
+SHA-256
+`7AB2261D5BB601ACCA09E5D16AC30F70CC2F6F064F1500F6758DD534529A2E7B`.
+The fresh probe report is
+`target/qa/native-final-validation-20260911-61/native-final-validation.json`:
+one responsive maximized `Syndocal` window, Standby with lighting/video
+disabled, snapshot IPC, expected missing-asset/layer thumbnail rejection,
+zero physical-output operations, exact application exit, and zero remaining
+debug listener. The real-file thumbnail missing → Retry → recovery trial was
+not rerun.
+
+This checkpoint does not close the full `F1-INPUT-GENERATIONS-001` row. Real
+MIDI/OSC/DMX clients, reconnect/latency, device and venue behavior, dependent
+F2 ownership, ASIO/NDI/DMX physical acceptance, Mac, signing, publication,
+and product-wide completion remain unclaimed.

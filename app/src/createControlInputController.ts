@@ -161,18 +161,21 @@ export function createControlInputController(options: ControlInputControllerOpti
       options.setMessage("No MIDI input selected.");
       return;
     }
+    let authority: ProjectAuthorityToken | null = null;
     try {
       await flushProjectControlMappingsAuthority();
-      const authority = options.captureProjectAuthorityIdentity();
+      const capturedAuthority = options.captureProjectAuthorityIdentity();
+      authority = capturedAuthority;
       options.setMidiConnected(false);
       await options.invoke("connect_midi_clock", {
         inputIndex,
-        expectedEpoch: authority.project_epoch,
+        expectedEpoch: capturedAuthority.project_epoch,
       });
-      if (!options.isProjectAuthorityIdentityCurrent(authority)) return;
+      if (!options.isProjectAuthorityIdentityCurrent(capturedAuthority)) return;
       options.setMidiConnected(true);
       options.setMessage("MIDI Clock connected.");
     } catch (error) {
+      if (authority !== null && !options.isProjectAuthorityIdentityCurrent(authority)) return;
       options.setMidiConnected(false);
       options.setMessage(String(error));
     }
@@ -186,6 +189,7 @@ export function createControlInputController(options: ControlInputControllerOpti
       options.setMidiConnected(false);
       options.setMessage("MIDI Clock disconnected.");
     } catch (error) {
+      if (!options.isProjectAuthorityIdentityCurrent(authority)) return;
       options.setMessage(String(error));
     }
   };
@@ -269,6 +273,7 @@ export function createControlInputController(options: ControlInputControllerOpti
       if (learned) applyLearnedMidiControl(learned);
       else options.setMessage("MIDI learn timed out.");
     } catch (error) {
+      if (!options.isProjectAuthorityIdentityCurrent(authority)) return;
       options.setMessage(String(error));
     }
   };
@@ -368,9 +373,11 @@ export function createControlInputController(options: ControlInputControllerOpti
             restored = true;
           }
         } catch {
+          if (!options.isProjectAuthorityIdentityCurrent(authority)) return false;
           options.setMidiControlConnected(false);
         }
       }
+      if (!options.isProjectAuthorityIdentityCurrent(authority)) return false;
       options.setMessage(
         `MIDI Learn failed: ${String(error)}`
         + (restored ? "; the previous mapping connection was restored." : ""),
@@ -399,21 +406,24 @@ export function createControlInputController(options: ControlInputControllerOpti
     const inputIndex = options.selectedMidiInput();
     if (inputIndex === null) return reportMessage("No MIDI input selected.");
     if (options.midiMappings().length === 0) return reportMessage("Add at least one MIDI mapping first.");
+    let authority: ProjectAuthorityToken | null = null;
     try {
       await flushProjectControlMappingsAuthority();
-      const authority = options.captureProjectAuthorityIdentity();
+      const capturedAuthority = options.captureProjectAuthorityIdentity();
+      authority = capturedAuthority;
       const mappings = options.midiMappings();
       if (mappings.length === 0) return reportMessage("Add at least one MIDI mapping first.");
       options.setMidiControlConnected(false);
       await options.invoke("connect_midi_control", {
         inputIndex,
         mappings,
-        expectedEpoch: authority.project_epoch,
+        expectedEpoch: capturedAuthority.project_epoch,
       });
-      if (!options.isProjectAuthorityIdentityCurrent(authority)) return;
+      if (!options.isProjectAuthorityIdentityCurrent(capturedAuthority)) return;
       options.setMidiControlConnected(true);
       options.setMessage(`MIDI control connected with ${mappings.length} mapping(s).`);
     } catch (error) {
+      if (authority !== null && !options.isProjectAuthorityIdentityCurrent(authority)) return;
       options.setMidiControlConnected(false);
       options.setMessage(String(error));
     }
@@ -425,24 +435,30 @@ export function createControlInputController(options: ControlInputControllerOpti
       if (!options.isProjectAuthorityIdentityCurrent(authority)) return;
       options.setMidiControlConnected(false);
       options.setMessage("MIDI control disconnected.");
-    } catch (error) { options.setMessage(String(error)); }
+    } catch (error) {
+      if (!options.isProjectAuthorityIdentityCurrent(authority)) return;
+      options.setMessage(String(error));
+    }
   };
   const connectMidiFeedback = async () => {
     const outputIndex = options.selectedMidiOutput();
     if (outputIndex === null) return reportMessage("No MIDI output selected.");
+    let authority: ProjectAuthorityToken | null = null;
     try {
       await flushProjectControlMappingsAuthority();
-      const authority = options.captureProjectAuthorityIdentity();
+      const capturedAuthority = options.captureProjectAuthorityIdentity();
+      authority = capturedAuthority;
       options.setMidiFeedbackConnected(false);
       options.setMidiFeedbackEnabled(false);
       await options.invoke("connect_midi_feedback", {
         outputIndex,
-        expectedEpoch: authority.project_epoch,
+        expectedEpoch: capturedAuthority.project_epoch,
       });
-      if (!options.isProjectAuthorityIdentityCurrent(authority)) return;
+      if (!options.isProjectAuthorityIdentityCurrent(capturedAuthority)) return;
       options.setMidiFeedbackConnected(true);
       options.setMessage("MIDI feedback connected.");
     } catch (error) {
+      if (authority !== null && !options.isProjectAuthorityIdentityCurrent(authority)) return;
       options.setMidiFeedbackConnected(false);
       options.setMidiFeedbackEnabled(false);
       options.setMessage(String(error));
@@ -456,7 +472,10 @@ export function createControlInputController(options: ControlInputControllerOpti
       options.setMidiFeedbackConnected(false);
       options.setMidiFeedbackEnabled(false);
       options.setMessage("MIDI feedback disconnected.");
-    } catch (error) { options.setMessage(String(error)); }
+    } catch (error) {
+      if (!options.isProjectAuthorityIdentityCurrent(authority)) return;
+      options.setMessage(String(error));
+    }
   };
   const sendMidiFeedback = async (report = true) => {
     if (!options.midiFeedbackConnected() || options.midiMappings().length === 0) {
@@ -607,7 +626,10 @@ export function createControlInputController(options: ControlInputControllerOpti
       if (!learnAuthorityIsCurrent(authority)) return;
       if (learned) applyLearnedOscControl(learned);
       else options.setMessage("OSC learn timed out.");
-    } catch (error) { options.setMessage(String(error)); }
+    } catch (error) {
+      if (!options.isProjectAuthorityIdentityCurrent(authority)) return;
+      options.setMessage(String(error));
+    }
   };
   const learnOscControlForTargets = async (targets: readonly ControlMappingTarget[]) => {
     if (targets.length === 0) {
@@ -690,9 +712,11 @@ export function createControlInputController(options: ControlInputControllerOpti
           options.setOscRunning(true);
           restored = true;
         } catch {
+          if (!options.isProjectAuthorityIdentityCurrent(authority)) return false;
           options.setOscRunning(false);
         }
       }
+      if (!options.isProjectAuthorityIdentityCurrent(authority)) return false;
       options.setMessage(
         `OSC Learn failed: ${String(error)}`
         + (restored ? "; the previous listener was restored." : ""),
@@ -702,19 +726,22 @@ export function createControlInputController(options: ControlInputControllerOpti
   };
   const startOscInput = async () => {
     const config: OscInputConfig = { bind_ip: options.oscBindIp(), port: options.oscPort() };
+    let authority: ProjectAuthorityToken | null = null;
     try {
       await flushProjectControlMappingsAuthority();
-      const authority = options.captureProjectAuthorityIdentity();
+      const capturedAuthority = options.captureProjectAuthorityIdentity();
+      authority = capturedAuthority;
       options.setOscRunning(false);
       await options.invoke("start_osc_input", {
         config,
         mappings: options.oscMappings(),
-        expectedEpoch: authority.project_epoch,
+        expectedEpoch: capturedAuthority.project_epoch,
       });
-      if (!options.isProjectAuthorityIdentityCurrent(authority)) return;
+      if (!options.isProjectAuthorityIdentityCurrent(capturedAuthority)) return;
       options.setOscRunning(true);
       options.setMessage(`OSC input listening on ${config.bind_ip}:${config.port} with ${options.oscMappings().length} mapping(s)`);
     } catch (error) {
+      if (authority !== null && !options.isProjectAuthorityIdentityCurrent(authority)) return;
       options.setOscRunning(false);
       options.setMessage(String(error));
     }
@@ -726,7 +753,10 @@ export function createControlInputController(options: ControlInputControllerOpti
       if (!options.isProjectAuthorityIdentityCurrent(authority)) return;
       options.setOscRunning(false);
       options.setMessage("OSC input stopped.");
-    } catch (error) { options.setMessage(String(error)); }
+    } catch (error) {
+      if (!options.isProjectAuthorityIdentityCurrent(authority)) return;
+      options.setMessage(String(error));
+    }
   };
 
   return {
