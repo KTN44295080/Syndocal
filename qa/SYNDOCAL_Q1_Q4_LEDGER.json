@@ -196,7 +196,7 @@
       "scope": "Supported",
       "owner_files": "Live-video source owner per flow Phase 5",
       "dependencies": ["Output ownership F2 fence"],
-      "automated_proof": { "status": "not-passing", "command": "Planned: live-source identity/retirement harness; none authored for this row yet.", "expected_count": null },
+      "automated_proof": { "status": "passing", "command": "pnpm --dir app run check:camera-input && pnpm --dir app run check:video-output-window-runtime && pnpm --dir app run check:video-output-window-observation && node app/scripts/check-timeline-source-shelf-contract.mjs", "expected_count": 4 },
       "native_proof": { "status": "not-run", "artifact_hash": null, "raw_evidence_paths": [], "na_reason": "No current-source native acceptance run is recorded for this row in the owned evidence manifest." },
       "hardware_external_proof": { "status": "not-run", "device_topology_duration": "Cameras, capture devices, NDI/Spout peers, one-hour matrices.", "artifact_hash": null, "raw_evidence_paths": [], "na_reason": null },
       "status": "In progress",
