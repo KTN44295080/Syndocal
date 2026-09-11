@@ -407,3 +407,32 @@ The complete output is preserved under
 This is current-main Windows source/build/test evidence only. It does not
 claim native-window, physical-output, external-client, Mac, signing,
 publication, clean-machine installation, or product-wide completion.
+
+## 2026-09-11 current-main hosted workspace-command reproduction
+
+The Windows Rust workspace command used by `.github/workflows/cross-platform.yml`
+was run locally against the same current-main source without adding Cargo
+parallelism changes:
+
+```text
+cargo test --workspace --locked -- --test-threads=1
+```
+
+The exact MSVC `14.44.35207` x64 linker was initialized and confirmed first by
+`where.exe link.exe`. The command exited `0` with the aggregate result
+`3579 passed / 0 failed / 46 ignored`. Raw output is preserved under
+`target/qa/ci-workspace-current-main-20260911-01/cargo-test-output.txt`.
+
+This revalidates that the single Windows workspace failure observed at older
+source `d22b353fb3858ca941230a64e7c9010a7d47ed5a` is not deterministic on the
+current main: that run had one `spout_startup_timeout_and_late_constructor_error_share_one_fence`
+failure reporting `Output ownership transition is already in progress`, while
+the current source and the same workflow command pass. The old failure is
+retained as historical evidence; no test assertion or threshold was weakened
+and no workflow serialization change was introduced from this observation.
+
+The GitHub Actions run for the current QA-only HEAD is tracked separately and
+is not used as a substitute for this local reproduction. This remains local
+source/build/test evidence only and does not claim native-window,
+physical-output, external-client, Mac, signing, publication, or
+product-wide completion.
