@@ -379,6 +379,30 @@ fn assert_same_read_model(handle: &EngineHandle) {
             .map(|effect| effect.effect_type)
     );
     assert_eq!(handle.effect_kind_snapshot(999_999), None);
+    let expected_effect_target_admission = expected
+        .effects
+        .iter()
+        .find(|effect| effect.id == 1)
+        .map(|effect| {
+            (
+                effect
+                    .video_targets
+                    .iter()
+                    .flat_map(|target| target.layer_ids.iter().copied())
+                    .collect::<Vec<_>>(),
+                expected
+                    .video
+                    .layers
+                    .iter()
+                    .map(|layer| layer.id)
+                    .collect::<Vec<_>>(),
+            )
+        });
+    assert_eq!(
+        handle.effect_video_target_admission_snapshot(1),
+        expected_effect_target_admission
+    );
+    assert_eq!(handle.effect_video_target_admission_snapshot(999_999), None);
     if let Some(node_graph) = expected.node_graphs.first() {
         assert!(handle.node_graph_exists(node_graph.id));
     } else {

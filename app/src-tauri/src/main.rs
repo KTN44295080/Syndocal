@@ -49659,18 +49659,14 @@ fn set_effect_video_target_position(
     if !position.x.is_finite() || !position.y.is_finite() || !position.z.is_finite() {
         return Err("Video effect target position values must be finite".to_string());
     }
-    let snapshot = state.engine.snapshot();
-    let effect = snapshot
-        .effects
-        .iter()
-        .find(|effect| effect.id == effect_id)
+    let (target_layer_ids, published_layer_ids) = state
+        .engine
+        .effect_video_target_admission_snapshot(effect_id)
         .ok_or_else(|| format!("Effect {effect_id} was not found"))?;
-    validate_video_layer_ids(&snapshot, &[layer_id])?;
-    if !effect
-        .video_targets
-        .iter()
-        .any(|target| target.layer_ids.contains(&layer_id))
-    {
+    if !published_layer_ids.contains(&layer_id) {
+        return Err(format!("Video layer {layer_id} was not found"));
+    }
+    if !target_layer_ids.contains(&layer_id) {
         return Err(format!(
             "Video target for layer {layer_id} was not found on effect {effect_id}"
         ));
@@ -93556,6 +93552,20 @@ pub(crate) mod tests {
             .map(|offset| function_start + offset);
         let body = &source[function_start..next_attribute.unwrap_or(source.len())];
         assert!(body.contains("touch_surface_admission_snapshot"));
+        assert!(!body.contains("engine.snapshot()"));
+    }
+
+    #[test]
+    fn set_effect_video_target_position_uses_the_narrow_engine_reader() {
+        let source = include_str!("main.rs");
+        let function_start = source
+            .find("fn set_effect_video_target_position(")
+            .expect("missing set_effect_video_target_position command");
+        let next_attribute = source[function_start..]
+            .find("\n#[tauri::command]")
+            .map(|offset| function_start + offset);
+        let body = &source[function_start..next_attribute.unwrap_or(source.len())];
+        assert!(body.contains("effect_video_target_admission_snapshot"));
         assert!(!body.contains("engine.snapshot()"));
     }
 

@@ -440,6 +440,28 @@ impl EngineHandle {
         })
     }
 
+    /// Read the effect target and published layer IDs needed by one video
+    /// effect-target admission without cloning unrelated effect bodies or
+    /// runtime collections.
+    pub fn effect_video_target_admission_snapshot(
+        &self,
+        effect_id: EffectId,
+    ) -> Option<(Vec<VideoLayerId>, Vec<VideoLayerId>)> {
+        self.read_snapshot_field(|snapshot| {
+            let effect = snapshot
+                .effects
+                .iter()
+                .find(|effect| effect.id == effect_id)?;
+            let target_layer_ids = effect
+                .video_targets
+                .iter()
+                .flat_map(|target| target.layer_ids.iter().copied())
+                .collect();
+            let published_layer_ids = snapshot.video.layers.iter().map(|layer| layer.id).collect();
+            Some((target_layer_ids, published_layer_ids))
+        })
+    }
+
     /// Check one authored node-graph ID for enable/disable admission without
     /// cloning the complete graph bodies or runtime snapshot.
     pub fn node_graph_exists(&self, graph_id: NodeGraphId) -> bool {
