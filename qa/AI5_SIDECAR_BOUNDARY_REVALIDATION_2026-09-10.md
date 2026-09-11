@@ -97,3 +97,28 @@ These results remain limited to deterministic local seams. The authenticated
 external API, real external client, pairing/revocation across that API,
 sidecar restart, physical output, Mac, signing, publication, and thumbnail
 file-move recovery are not claimed.
+
+## Current-main sidecar and bridge revalidation — 2026-09-11
+
+The deterministic AI5 checks were rerun after the current authority,
+output, snapshot, and authored-bridge checkpoints at source HEAD
+`15096b5b4f36ffd7dba610e11f749d11cabe2e6b`. Evidence is preserved under
+`target/qa/ai5-current-main-20260911-01/`.
+
+| Check | Result |
+| --- | --- |
+| `node tools/syndocal-mcp/check.mjs` | PASS — 15 adapter integration groups; fake loopback only |
+| `node app/scripts/check-agent-bridge.mjs` | PASS — 11 groups; no native/device calls |
+| `node app/scripts/check-agent-bridge-bootstrap.mjs` | PASS — 4 deferred lifecycle groups |
+| `git diff --check` | PASS |
+
+The checks retain strict tool schemas, canonical operation allowlisting,
+request correlation, false-success/pending/unknown behavior, overlap and
+malformed/oversized frame rejection, executable mismatch, credential
+redaction, stale authority, reply-loss handling, and unmounted cleanup.
+
+`AI5-SIDECAR-001` remains Open. This is deterministic local adapter and
+bridge evidence only; authenticated external JSON-RPC/REST/WebSocket parity,
+per-principal queues/event fan-out, active-show sidecar restart, real client
+pairing/revocation, physical output, Mac, signing, publication, and
+product-wide acceptance remain unclaimed.
