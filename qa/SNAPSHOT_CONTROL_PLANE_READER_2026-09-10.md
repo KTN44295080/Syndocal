@@ -1555,3 +1555,35 @@ owned by PID 0.
 This checkpoint does not claim real-file missing → Retry → recovery, actual
 Art-Net/ASIO/NDI/Spout/device output, Mac, signing, publication, or
 product-wide completion.
+
+## Fixture preset load reader follow-up
+
+The `load_fixture_preset` validation path now reads one authored Fixture
+through `EngineHandle::fixture_summary_snapshot()` instead of cloning the
+complete engine snapshot. Preset version, manufacturer/profile/mode and
+attribute validation, missing-Fixture rejection, and the subsequent
+`ApplyAttributeValues` command are unchanged. Group and all-matching preset
+load paths remain on their existing full-snapshot paths.
+
+The focused app release structural regression passed `1/1`, and the
+maintained wrapper checker passed `243` assertions with `27` hostile mutation
+fixtures. `git diff --check` passed; no engine reader implementation was
+changed in this unit.
+
+A fresh maintained-wrapper `pnpm.cmd --dir app tauri build --no-bundle`
+completed with the pinned MSVC 14.44.35207 Build Tools linker and no
+first-party compiler warnings. The exact checkout executable is 64,675,328
+bytes with SHA-256
+`857810B7944912E042825E9DC2596C42314B2353B3E5AA8235F124EDF711FB3E`.
+The isolated native probe at
+`target/qa/native-final-validation-20260911-40/native-final-validation.json`
+passed: one maximized responsive `Syndocal` window, Standby ownership with
+lighting/video disabled, snapshot IPC, missing media/layer thumbnail IPC
+rejection with valid native tickets, zero physical-output operations, and
+exact executable/listener cleanup. A direct post-probe check found zero
+exact-path Syndocal processes and only the expected port `TIME_WAIT` entry
+owned by PID 0.
+
+This checkpoint does not claim real-file missing → Retry → recovery, actual
+Art-Net/ASIO/NDI/Spout/device output, Mac, signing, publication, or
+product-wide completion.

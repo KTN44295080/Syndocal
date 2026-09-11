@@ -50213,11 +50213,9 @@ fn load_fixture_preset(
     };
     let json = fs::read_to_string(&path).map_err(|error| error.to_string())?;
     let preset: FixturePreset = serde_json::from_str(&json).map_err(|error| error.to_string())?;
-    let snapshot = state.engine.snapshot();
-    let fixture = snapshot
-        .fixtures
-        .iter()
-        .find(|fixture| fixture.id == fixture_id)
+    let fixture = state
+        .engine
+        .fixture_summary_snapshot(fixture_id)
         .ok_or_else(|| format!("Fixture {fixture_id} was not found"))?;
     validate_fixture_preset(
         &preset,
@@ -93585,6 +93583,20 @@ pub(crate) mod tests {
         let function_start = source
             .find("fn save_fixture_preset(")
             .expect("missing save_fixture_preset command");
+        let next_attribute = source[function_start..]
+            .find("\n#[tauri::command]")
+            .map(|offset| function_start + offset);
+        let body = &source[function_start..next_attribute.unwrap_or(source.len())];
+        assert!(body.contains("fixture_summary_snapshot"));
+        assert!(!body.contains("engine.snapshot()"));
+    }
+
+    #[test]
+    fn load_fixture_preset_uses_the_narrow_engine_reader() {
+        let source = include_str!("main.rs");
+        let function_start = source
+            .find("fn load_fixture_preset(")
+            .expect("missing load_fixture_preset command");
         let next_attribute = source[function_start..]
             .find("\n#[tauri::command]")
             .map(|offset| function_start + offset);
