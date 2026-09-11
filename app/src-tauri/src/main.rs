@@ -30436,9 +30436,13 @@ fn send_midi_feedback(
     state: State<'_, AppState>,
     mappings: Vec<MidiControlMapping>,
     force: Option<bool>,
+    expected_epoch: Option<u64>,
 ) -> Result<usize, String> {
     let received_mappings = validate_midi_control_mappings(mappings)?;
+    let _external_admission = lock_project_external_command_admission(&state)?;
     let coordinator = lock_project_coordinator(&state)?;
+    ensure_optional_project_epoch_matches(&coordinator, expected_epoch)?;
+    ensure_no_pending_project_transaction(&coordinator)?;
     if received_mappings != coordinator.mappings.midi_mappings {
         return Err(
             "MIDI control mappings changed locally; refresh before sending feedback".to_string(),
@@ -94516,6 +94520,9 @@ pub(crate) mod tests {
         let body = &source[start..end];
         assert!(body.contains("midi_feedback_snapshot"));
         assert!(!body.contains("engine.snapshot()"));
+        assert!(body.contains("lock_project_external_command_admission"));
+        assert!(body.contains("ensure_optional_project_epoch_matches"));
+        assert!(body.contains("ensure_no_pending_project_transaction"));
     }
 
     #[test]

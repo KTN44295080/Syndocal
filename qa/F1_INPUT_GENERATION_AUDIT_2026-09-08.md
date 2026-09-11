@@ -265,3 +265,49 @@ join-before-publish retirement, and partial-take cleanup. It does not close
 reconnect/latency, devices, venue behavior, dependent F2 ownership, ASIO/NDI
 physical acceptance, Mac, signing, publication, and product-wide completion
 remain unclaimed.
+
+## Current-main manual MIDI feedback authority fence — 2026-09-11
+
+The existing manual `send_midi_feedback` route now uses the same project
+authority boundary as the other MIDI control routes. The frontend captures the
+current project token, sends its `expectedEpoch`, and discards both a stale
+success and a stale failure before changing the operator message or feedback
+state. The backend holds external-command admission, rejects an epoch mismatch
+and a pending project transaction, and only then compares the supplied mapping
+against the current project before reading the engine snapshot and sending
+feedback. This is a stale-result and output-admission repair; it adds no new
+MIDI API, device support, or physical-output enablement.
+
+Focused evidence:
+
+| Check | Result |
+| --- | --- |
+| `pnpm.cmd --dir app run check:frontend-command-routing` | PASS — 133 renderer, 31 server-authoritative, 28 raw, 464 facade dispatches; manual MIDI feedback success/failure stale fences included |
+| `pnpm.cmd --dir app run check:dvc-midi-shortcuts` | PASS — 39 assertions |
+| `pnpm.cmd --dir app exec tsc --noEmit` | PASS |
+| `cargo test -p syndocal --release --locked midi_feedback_route_uses_the_narrow_engine_reader -- --test-threads=1` | PASS — 1 passed, 0 failed; MSVC 14.44.35207 linker first in `where.exe link.exe` |
+| `pnpm.cmd --dir app run check:release` | PASS — static release gate; 50 Open + 8 Deferred preserved |
+| `pnpm.cmd --dir app run check:release:self-test` | PASS — release metadata 137, ASIO 169, candidate extractor 43, materialization 4, Windows artifact 144, strict JSON 130 assertion groups |
+
+The current-source Windows no-bundle build used the repository MSVC procedure
+and produced `target/release/syndocal.exe`, version `1.2.0-alpha.69`,
+64,569,856 bytes, SHA-256
+`71E861A8A716F36D09178DCF3694B86A835EA3BAF83787E86369ED0A06AF5819`.
+The fresh native probe is under
+`target/qa/native-final-validation-20260911-69/`. It verified one responsive
+maximized `Syndocal` window, Standby with lighting/video disabled, snapshot
+retrieval, expected missing-asset/layer thumbnail IPC errors, zero physical
+output operations, exact application exit, and zero remaining debug listeners.
+
+This checkpoint does not close `F1-INPUT-GENERATIONS-001` or
+`INPUT-PHYSICAL-001`: real MIDI/OSC/DMX clients, reconnect/latency, device and
+venue behavior, dependent F2 ownership, ASIO/NDI/DMX physical acceptance, Mac,
+signing, publication, and product-wide completion remain unclaimed. The
+real-file thumbnail missing → Retry → recovery trial was not rerun.
+
+The repository-wide `cargo fmt --all -- --check` remains red on pre-existing
+format differences in untouched Rust files (including existing sections of
+`main.rs`, `control_plane_runtime.rs`, `fixture_profile_contract.rs`, and
+workspace crates). No formatter rewrite or assertion weakening was applied to
+this checkpoint; the modified Rust lines compile and the focused native test
+passed.

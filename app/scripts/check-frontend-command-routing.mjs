@@ -190,6 +190,31 @@ for (const [body, label, setter] of authorityFailureBodies) {
     `${label} failure must not write stale project state or message`,
   );
 }
+const manualMidiFeedbackBody = functionSlice(
+  controlInputControllerText,
+  "const sendMidiFeedback = async",
+  "let midiFeedbackConfigurationGeneration = 0",
+);
+assert.match(
+  manualMidiFeedbackBody,
+  /const authority\s*=\s*options\.captureProjectAuthorityIdentity\(\)/,
+  "manual MIDI feedback must capture project authority before its async send",
+);
+assert.match(
+  manualMidiFeedbackBody,
+  /expectedEpoch\s*:\s*authority\.project_epoch/,
+  "manual MIDI feedback must send the captured project epoch",
+);
+assert.match(
+  manualMidiFeedbackBody,
+  /await options\.invoke[\s\S]*?if\s*\(!options\.isProjectAuthorityIdentityCurrent\(authority\)\)\s*return;/,
+  "manual MIDI feedback must reject a stale success before writing a message",
+);
+assert.match(
+  manualMidiFeedbackBody,
+  /catch\s*\(error\)[\s\S]*?if\s*\(!options\.isProjectAuthorityIdentityCurrent\(authority\)\)\s*return;[\s\S]*?options\.setMidiFeedbackEnabled\(/,
+  "manual MIDI feedback must reject a stale failure before changing feedback state",
+);
 for (const [body, label] of [
   [functionSlice(controlInputControllerText, "const learnMidiControlForTargets = async", "const saveMidiMappings = async"), "targeted MIDI learn"],
   [functionSlice(controlInputControllerText, "const learnOscControlForTargets = async", "const startOscInput = async"), "targeted OSC learn"],

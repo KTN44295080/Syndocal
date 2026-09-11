@@ -482,13 +482,18 @@ export function createControlInputController(options: ControlInputControllerOpti
       if (report) options.setMessage("Connect MIDI feedback and add mappings first.");
       return;
     }
+    const authority = options.captureProjectAuthorityIdentity();
+    const mappings = options.midiMappings();
     try {
       const sent = await options.invoke<number>("send_midi_feedback", {
-        mappings: options.midiMappings(),
+        mappings,
         force: true,
+        expectedEpoch: authority.project_epoch,
       });
+      if (!options.isProjectAuthorityIdentityCurrent(authority)) return;
       if (report) options.setMessage(`Sent ${sent} MIDI feedback message(s).`);
     } catch (error) {
+      if (!options.isProjectAuthorityIdentityCurrent(authority)) return;
       options.setMidiFeedbackEnabled(false);
       options.setMessage(String(error));
     }
