@@ -13613,15 +13613,14 @@ impl VjPreviewTransportRuntime {
 
     fn reconcile_at(
         &mut self,
-        snapshot: &EngineSnapshot,
+        video: &protocol::VideoSnapshot,
         now: Instant,
         updated_at_ms: u64,
     ) -> bool {
         let Some(session) = self.session.as_ref() else {
             return true;
         };
-        let valid = snapshot
-            .video
+        let valid = video
             .layers
             .iter()
             .find(|layer| layer.id == session.layer_id)
@@ -42756,7 +42755,7 @@ fn take_video_clip(
     layer_id: VideoLayerId,
     fade_ms: u64,
 ) -> Result<(), String> {
-    let snapshot = state.engine.snapshot();
+    let snapshot = state.engine.video_snapshot();
     let now = Instant::now();
     let updated_at_ms = vj_preview_timestamp_ms();
     let (preview_take_state, preview_valid) = {
@@ -77173,7 +77172,7 @@ fn get_debug_video_output_preview(
 fn get_vj_preview_transport(
     state: State<'_, AppState>,
 ) -> Result<VjPreviewTransportSummary, String> {
-    let snapshot = state.engine.snapshot();
+    let snapshot = state.engine.video_snapshot();
     let now = Instant::now();
     let updated_at_ms = vj_preview_timestamp_ms();
     let mut transport = state
@@ -77211,12 +77210,12 @@ fn stage_vj_preview_layer(
         ensure_no_pending_project_transaction(&coordinator)?;
         reconcile_project_checkpoint_for_coordinator(&state, &mut coordinator)?;
         return with_exact_vj_preview_project_authority(&coordinator, &expected_authority, || {
-            let snapshot = state.engine.snapshot();
+            let snapshot = state.engine.video_snapshot();
             stage_vj_preview_layer_from_snapshot(&state, &snapshot, layer_id)
         });
     }
 
-    let snapshot = state.engine.snapshot();
+    let snapshot = state.engine.video_snapshot();
     stage_vj_preview_layer_from_snapshot(&state, &snapshot, layer_id)
 }
 
@@ -77266,11 +77265,10 @@ fn with_exact_vj_preview_project_authority<T>(
 
 fn stage_vj_preview_layer_from_snapshot(
     state: &State<'_, AppState>,
-    snapshot: &EngineSnapshot,
+    snapshot: &protocol::VideoSnapshot,
     layer_id: VideoLayerId,
 ) -> Result<VjPreviewTransportSummary, String> {
     let layer = snapshot
-        .video
         .layers
         .iter()
         .find(|layer| layer.id == layer_id)
@@ -77297,7 +77295,7 @@ fn set_vj_preview_playing(
     state: State<'_, AppState>,
     playing: bool,
 ) -> Result<VjPreviewTransportSummary, String> {
-    let snapshot = state.engine.snapshot();
+    let snapshot = state.engine.video_snapshot();
     let now = Instant::now();
     let updated_at_ms = vj_preview_timestamp_ms();
     let mut transport = state
@@ -77318,7 +77316,7 @@ fn seek_vj_preview(
     state: State<'_, AppState>,
     position_ms: u64,
 ) -> Result<VjPreviewTransportSummary, String> {
-    let snapshot = state.engine.snapshot();
+    let snapshot = state.engine.video_snapshot();
     let now = Instant::now();
     let updated_at_ms = vj_preview_timestamp_ms();
     let mut transport = state
@@ -77339,7 +77337,7 @@ fn set_vj_preview_speed(
     state: State<'_, AppState>,
     speed: f32,
 ) -> Result<VjPreviewTransportSummary, String> {
-    let snapshot = state.engine.snapshot();
+    let snapshot = state.engine.video_snapshot();
     let now = Instant::now();
     let updated_at_ms = vj_preview_timestamp_ms();
     let mut transport = state
@@ -77367,12 +77365,11 @@ fn clear_vj_preview(state: State<'_, AppState>) -> Result<VjPreviewTransportSumm
 }
 
 fn vj_preview_render_snapshot(
-    snapshot: &EngineSnapshot,
+    snapshot: &protocol::VideoSnapshot,
     layer_id: VideoLayerId,
     position_ms: u64,
 ) -> Result<protocol::VideoSnapshot, String> {
     let mut layer = snapshot
-        .video
         .layers
         .iter()
         .find(|layer| layer.id == layer_id)
@@ -77509,7 +77506,7 @@ fn render_live_video_monitor_frame(
                 .map_err(|error| format!("{error:?}"))?
         }
         LiveVideoMonitorKind::Preview => {
-            let snapshot = state.engine.snapshot();
+            let (snapshot, bpm) = state.engine.video_layer_thumbnail_snapshot();
             // layer_id remains in the binary IPC contract for compatibility, but Preview is
             // rendered exclusively from the explicitly staged ephemeral transport.
             let _ = layer_id;
@@ -77560,7 +77557,7 @@ fn render_live_video_monitor_frame(
             }
             renderer
                 .frame_provider_mut()
-                .set_bpm(Some(snapshot.clock.bpm));
+                .set_bpm(Some(bpm));
             let frame = renderer
                 .render_layer_preview(&preview_video, layer_id, width, height)
                 .map_err(|error| format!("{error:?}"))?;
@@ -77568,7 +77565,7 @@ fn render_live_video_monitor_frame(
 
             // A seek, restage, clear, layer removal, or source replacement may race a slow
             // decode. Do not publish that stale frame into the Preview bus.
-            let latest_snapshot = state.engine.snapshot();
+            let latest_snapshot = state.engine.video_snapshot();
             let check_now = Instant::now();
             let check_timestamp_ms = vj_preview_timestamp_ms();
             let (current, valid) = {
@@ -77635,7 +77632,7 @@ fn render_live_video_monitor_frame(
     if let Some(rendered) = rendered_preview_summary.as_ref() {
         // Encoding is intentionally outside the transport lock. Recheck after it too, so a
         // seek/clear/project transition during JPEG work can never publish one stale packet.
-        let latest_snapshot = state.engine.snapshot();
+        let latest_snapshot = state.engine.video_snapshot();
         let check_now = Instant::now();
         let check_timestamp_ms = vj_preview_timestamp_ms();
         let (current, valid) = {
@@ -77802,7 +77799,7 @@ mod vj_preview_transport_tests {
         assert_eq!(staged.position_ms, 1_750);
         assert!(staged.generation > initial.generation);
         assert_eq!(staged.updated_at_ms, 1_001);
-        let preview = vj_preview_render_snapshot(&snapshot, 7, staged.position_ms).unwrap();
+        let preview = vj_preview_render_snapshot(&snapshot.video, 7, staged.position_ms).unwrap();
         assert_eq!(preview.layers.len(), 1);
         assert_eq!(preview.layers[0].state.position_ms, 1_750);
         assert_eq!(snapshot.video.layers[0].state.position_ms, 250);
@@ -77924,11 +77921,11 @@ mod vj_preview_transport_tests {
 
         let mut replaced = snapshot.clone();
         replaced.video.layers[0].source.path = Some("replacement.mp4".to_string());
-        assert!(!runtime.reconcile_at(&replaced, started, 51));
+        assert!(!runtime.reconcile_at(&replaced.video, started, 51));
         assert_eq!(runtime.summary_at(started, 51).layer_id, None);
 
         runtime.stage_at(&original, started, 52).unwrap();
-        let empty = EngineSnapshot::default();
+        let empty = protocol::VideoSnapshot::default();
         assert!(!runtime.reconcile_at(&empty, started, 53));
         assert_eq!(runtime.summary_at(started, 53).layer_id, None);
     }
@@ -93885,6 +93882,53 @@ pub(crate) mod tests {
         let body = &source[function_start..next_attribute.unwrap_or(source.len())];
         assert!(body.contains("video_layer_duplicate_admission_snapshot"));
         assert!(!body.contains("engine.snapshot()"));
+    }
+
+    #[test]
+    fn vj_preview_routes_use_video_snapshot_readers() {
+        let source = include_str!("main.rs");
+        let routes = [
+            (
+                "fn take_video_clip(",
+                "\nfn set_auto_vj_config_engine(",
+                "video_snapshot",
+            ),
+            (
+                "fn get_vj_preview_transport(",
+                "\n#[tauri::command]\nfn stage_vj_preview_layer(",
+                "video_snapshot",
+            ),
+            (
+                "fn set_vj_preview_playing(",
+                "\n#[tauri::command]\nfn seek_vj_preview(",
+                "video_snapshot",
+            ),
+            (
+                "fn seek_vj_preview(",
+                "\n#[tauri::command]\nfn set_vj_preview_speed(",
+                "video_snapshot",
+            ),
+            (
+                "fn set_vj_preview_speed(",
+                "\n#[tauri::command]\nfn clear_vj_preview(",
+                "video_snapshot",
+            ),
+            (
+                "fn render_live_video_monitor_frame(",
+                "\n#[cfg(test)]\nmod vj_preview_transport_tests",
+                "video_layer_thumbnail_snapshot",
+            ),
+        ];
+        for (route, next_route, reader) in routes {
+            let function_start = source.find(route).expect("missing VJ Preview route");
+            let function_end = source[function_start..]
+                .find(next_route)
+                .map(|offset| function_start + offset)
+                .expect("missing VJ Preview route boundary");
+            let body = &source[function_start..function_end];
+            assert!(body.contains(reader), "{route} must use {reader}");
+            assert!(!body.contains("engine.snapshot()"), "{route} widened its read");
+        }
     }
 
     #[test]

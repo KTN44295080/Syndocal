@@ -1914,3 +1914,37 @@ owned by PID 0.
 This checkpoint does not claim real-file missing → Retry → recovery, actual
 Art-Net/ASIO/NDI/Spout/device output, Mac, signing, publication, or
 product-wide completion.
+
+## VJ Preview video snapshot reader follow-up
+
+The VJ Preview transport, clip lookup, layer staging, play/seek/speed
+commands, and Preview monitor now read the published video projection through
+`EngineHandle::video_snapshot()` or the existing
+`video_layer_thumbnail_snapshot()` pair. These paths no longer acquire a full
+`EngineSnapshot` merely to inspect video layers or the preview BPM. Program
+monitor capture and the output fence remain on their existing full-capture
+path. Source identity checks, layer validity, stale-frame rechecks, explicit
+staging/authority handling, and renderer behavior remain unchanged.
+
+The focused VJ Preview and transport regression passed `26/26`, including the
+source-structure guard for the narrow readers. The maintained wrapper checker
+passed `243` assertions with `27` hostile mutation fixtures, and
+`git diff --check` passed.
+
+A fresh maintained-wrapper `pnpm.cmd --dir app tauri build --no-bundle`
+completed with the pinned MSVC 14.44.35207 Build Tools linker and no
+first-party compiler warnings. The exact checkout executable is 64,693,248
+bytes with SHA-256
+`B885EF2BBF93455CC8FD992617376D42D56CF3D7CDF50B859FBA1D0139B5FC08`.
+The isolated native probe at
+`target/qa/native-final-validation-20260911-50/native-final-validation.json`
+passed: one maximized responsive `Syndocal` window, Standby ownership with
+lighting/video disabled, snapshot IPC, missing media/layer thumbnail IPC
+rejection with valid native tickets, zero physical-output operations, and
+exact executable/listener cleanup. A direct post-probe check found zero
+exact-path Syndocal processes and only the expected port `TIME_WAIT` entry
+owned by PID 0.
+
+This checkpoint does not claim real-file missing → Retry → recovery, actual
+Art-Net/ASIO/NDI/Spout/device output, Mac, signing, publication, or
+product-wide completion.
