@@ -204,3 +204,26 @@ pending/unknown/replay/conflict evidence slice. It does not close the AI3
 ledger item or claim external-client reply-loss coverage, physical output
 retirement/re-Arm, device acknowledgement, venue acceptance, Mac acceptance,
 signing, or publication. The real-file thumbnail recovery trial was not rerun.
+
+## Current-main durable revalidation — 2026-09-11
+
+The current `main` source was revalidated at `3f00746090b68d9163edfe27cdcae06d02e32c31`
+after the output-diagnostics authority-fence and intervening snapshot/output
+read changes. The source was clean and matched `origin/main` before the run.
+Each Cargo command initialized the documented MSVC `14.44.35207` environment;
+`where.exe link.exe` returned the pinned x64 linker first.
+
+| Command/filter | Result |
+| --- | --- |
+| `cargo test --manifest-path app/src-tauri/Cargo.toml --release --locked -j 1 durable -- --test-threads=1` | PASS — 23 passed, 0 failed, 0 ignored |
+| `cargo test --manifest-path app/src-tauri/Cargo.toml --release --locked -j 1 dsf2026 -- --test-threads=1` | PASS — 6 passed, 0 failed, 0 ignored |
+| `cargo test --manifest-path app/src-tauri/Cargo.toml --release --locked -j 1 managed_exact_both -- --test-threads=1` | PASS — 13 passed, 0 failed, 0 ignored |
+
+This is current-source software evidence only. It confirms the bounded
+Pending/terminal journal, exact retry and shape/identity rejection, DSF2026
+one-shot/no-send reconciliation, managed exact-Both authority checks, and
+fail-closed durable boundaries after the current source changes. It does not
+close `AI3-DURABLE-RECOVERY-001`: generic external-client reply-loss,
+physical project retirement/re-Arm, device acknowledgement, five-display or
+venue acceptance remain unverified. The real-file thumbnail recovery trial
+was not rerun.
