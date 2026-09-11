@@ -65630,14 +65630,14 @@ fn reset_project_runtime_after_published_snapshot_infallible(state: &AppState) {
         audio.last_sync_error = None;
         audio.timeline_last_sync_error = None;
     }
-    let published = state.engine.snapshot();
+    let published_auto_vj_last_action = state.engine.auto_vj_last_action();
     let mut program_handoff = state
         .program_audio_handoff
         .state
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     program_handoff.reset_for_project_change();
-    program_handoff.suppress_through(published.video.auto_vj.status.last_action.as_ref());
+    program_handoff.suppress_through(published_auto_vj_last_action.as_ref());
     drop(program_handoff);
     state.program_audio_handoff.wake.notify_all();
     let mut transport = state
@@ -93443,6 +93443,21 @@ pub(crate) mod tests {
                 "{command} clones the full snapshot"
             );
         }
+    }
+
+    #[test]
+    fn project_runtime_reset_uses_the_auto_vj_reader() {
+        let source = include_str!("main.rs");
+        let function_start = source
+            .find("fn reset_project_runtime_after_published_snapshot_infallible(")
+            .expect("missing project runtime reset");
+        let function_end = source[function_start..]
+            .find("\n/// Single integration seam for the engine's publication acknowledgement.")
+            .map(|offset| function_start + offset)
+            .expect("missing project runtime reset boundary");
+        let body = &source[function_start..function_end];
+        assert!(body.contains("auto_vj_last_action"));
+        assert!(!body.contains("engine.snapshot()"));
     }
 
     #[test]

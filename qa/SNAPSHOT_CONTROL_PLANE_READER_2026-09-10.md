@@ -1250,6 +1250,33 @@ This checkpoint does not claim real-file missing → Retry → recovery: no PNG
 was moved or renamed. It also does not claim actual Art-Net/ASIO/NDI/Spout or
 other device output, Mac, signing, publication, or product-wide completion.
 
+## Project runtime reset reader follow-up
+
+The post-publication project runtime reset now reads the existing
+`EngineHandle::auto_vj_last_action()` projection instead of cloning a full
+`EngineSnapshot` only to suppress the prior Auto VJ audio handoff. Reset
+ordering and poison-recovery behavior are unchanged; this removes an
+unrelated project/output/diagnostic clone from the publication boundary.
+
+The app structural guard passed `1/1`, the maintained wrapper checker passed
+`243` assertions with `27` hostile mutation fixtures, and `git diff --check`
+passed. A fresh maintained-wrapper
+`pnpm.cmd --dir app tauri build --no-bundle` completed with the pinned MSVC
+14.44.35207 Build Tools linker and no observed first-party compiler warnings.
+The exact checkout executable is 64,732,672 bytes with SHA-256
+`673201CD1B1B6FCCE29A00905EECBB97B043CD9770BB50E02D2A21F4DEC67BC7`.
+The isolated native probe at
+`target/qa/native-final-validation-20260911-55/native-final-validation.json`
+passed: one responsive maximized `Syndocal` window, Standby ownership with
+lighting/video disabled, snapshot IPC, expected missing media/layer thumbnail
+IPC rejection with valid native tickets, zero physical-output operations, and
+exact executable/listener cleanup. A direct post-probe check found zero
+exact-path Syndocal processes and zero listeners on probe port `51671`.
+
+This checkpoint does not claim real-file missing → Retry → recovery: no PNG
+was moved or renamed. It also does not claim actual Art-Net/ASIO/NDI/Spout or
+other device output, Mac, signing, publication, or product-wide completion.
+
 ## Cue metadata admission reader follow-up
 
 The `set_cue_metadata` admission path now reads the current Cue body and
