@@ -5772,12 +5772,18 @@ export default function App() {
       high: 1,
     }]);
   }
+  let dmxInputStatusRequestGeneration = 0;
   const refreshDmxInputStatus = async () => {
     if (!isTauriRuntime()) return;
+    const requestGeneration = ++dmxInputStatusRequestGeneration;
     try {
-      setDmxInputStatus(await invoke<DmxInputStatus>("dmx_input_status"));
+      const status = await invoke<DmxInputStatus>("dmx_input_status");
+      if (requestGeneration !== dmxInputStatusRequestGeneration) return;
+      setDmxInputStatus(status);
     } catch (error) {
-      setMessage(`DMX input status failed: ${String(error)}`);
+      if (requestGeneration === dmxInputStatusRequestGeneration) {
+        setMessage(`DMX input status failed: ${String(error)}`);
+      }
     }
   };
   const startDmxInput = async () => {
@@ -5800,6 +5806,7 @@ export default function App() {
       await refreshDmxInputStatus();
       setMessage("DMX input started.");
     } catch (error) {
+      if (!isProjectAuthorityIdentityCurrent(authority)) return;
       setDmxInputStatus((current) => ({
         ...current,
         running: false,
@@ -5817,6 +5824,7 @@ export default function App() {
       await refreshDmxInputStatus();
       setMessage("DMX input stopped and the merged input frame was cleared.");
     } catch (error) {
+      if (!isProjectAuthorityIdentityCurrent(authority)) return;
       setMessage(`DMX input stop failed: ${String(error)}`);
     }
   };

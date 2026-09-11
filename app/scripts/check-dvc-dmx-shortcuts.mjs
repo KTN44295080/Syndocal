@@ -32,6 +32,21 @@ const dmxInputCommand = sectionBetween(
   "fn start_dmx_input(",
   "fn learn_dmx_control(",
 );
+const dmxStatusRefresh = sectionBetween(
+  app,
+  "let dmxInputStatusRequestGeneration = 0;",
+  "const startDmxInput = async () =>",
+);
+const dmxStartRoute = sectionBetween(
+  app,
+  "const startDmxInput = async () =>",
+  "const stopDmxInput = async () =>",
+);
+const dmxStopRoute = sectionBetween(
+  app,
+  "const stopDmxInput = async () =>",
+  "const sendArtRdmRequest =",
+);
 
 const checks = [
   [protocol.includes("pub merge_enabled: bool") && protocol.includes('serde(default = "default_true")'), "legacy DMX input remains raw-merge compatible"],
@@ -83,6 +98,14 @@ const checks = [
   [app.includes('await invoke("stop_dmx_input", { expectedEpoch: authority.project_epoch })')
     && /await invoke\("start_dmx_input", \{\s*config: controlConfig,\s*mappings: dmxMappings\(\),\s*expectedEpoch: authority\.project_epoch,\s*\}\);/.test(app),
   "learned mappings are persisted and applied to the active input under one captured project authority"],
+  [/const\s+requestGeneration\s*=\s*\+\+dmxInputStatusRequestGeneration/.test(dmxStatusRefresh)
+    && /if\s*\(requestGeneration\s*!==\s*dmxInputStatusRequestGeneration\)\s*return;/.test(dmxStatusRefresh)
+    && /if\s*\(requestGeneration\s*===\s*dmxInputStatusRequestGeneration\)\s*\{/.test(dmxStatusRefresh),
+  "DMX input status polling rejects stale success and failure responses"],
+  [/catch\s*\(error\)[\s\S]*?if\s*\(!isProjectAuthorityIdentityCurrent\(authority\)\)\s*return;[\s\S]*?setDmxInputStatus/.test(dmxStartRoute),
+  "DMX input Start failure cannot write after project authority replacement"],
+  [/catch\s*\(error\)[\s\S]*?if\s*\(!isProjectAuthorityIdentityCurrent\(authority\)\)\s*return;[\s\S]*?setMessage/.test(dmxStopRoute),
+  "DMX input Stop failure cannot write after project authority replacement"],
   [panel.includes('data-io-control="dmx-input-use"') && panel.includes('value="control">Control mappings'), "Setup I/O exposes an explicit Control mappings mode"],
   [panel.includes("props.mappings.map") && panel.includes("onRemoveMapping(index)"), "operators can inspect and remove imported or learned mappings"],
   [viewport.includes("command === 'learn_dmx_control'") && viewport.includes("dmxSelected.controlLearnMockCalls"), "real browser pointer flow covers DMX Learn"],
