@@ -122,3 +122,25 @@ bridge evidence only; authenticated external JSON-RPC/REST/WebSocket parity,
 per-principal queues/event fan-out, active-show sidecar restart, real client
 pairing/revocation, physical output, Mac, signing, publication, and
 product-wide acceptance remain unclaimed.
+
+## Current-main sidecar and bridge revalidation — 2026-09-12
+
+The deterministic AI5 checks were rerun against current `main` at source HEAD
+`100de87f15698bf8a6329c736da45d3d9bc891c1`; `origin/main` matched before the
+run. No transport, authentication, or sidecar policy was changed.
+
+| Check | Result |
+| --- | --- |
+| `node tools/syndocal-mcp/check.mjs` | PASS — 15 adapter integration groups; fake loopback only, no Syndocal/device calls |
+| `node app/scripts/check-agent-bridge.mjs` | PASS — 11 groups; real processor/runtime/confirmation modules, no native/device calls |
+| `node app/scripts/check-agent-bridge-bootstrap.mjs` | PASS — 4 deferred lifecycle groups |
+| `git diff --check` | PASS |
+
+The run retains strict tool schemas, canonical operation allowlisting,
+request correlation, false-success/pending/unknown behavior, overlap and
+malformed/oversized frame rejection, executable mismatch, credential
+redaction, stale authority, reply-loss handling, and unmounted cleanup.
+`AI5-SIDECAR-001` remains Open for authenticated external JSON-RPC/REST/
+WebSocket parity, per-principal queue/event fan-out, active-show sidecar
+restart, real-client pairing/revocation, physical output, Mac, signing,
+publication, and product-wide acceptance.
