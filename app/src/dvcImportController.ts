@@ -14,6 +14,7 @@ export type DvcImportControllerOptions<AppliedResult> = {
   projectTransactionOwnerId: string;
   daslightProjectImportBusy: Accessor<boolean>;
   captureProjectAuthorityIdentity: () => ProjectAuthorityToken;
+  isProjectAuthorityIdentityCurrent: (captured: ProjectAuthorityToken) => boolean;
   confirmDiscardProjectChanges: (actionLabel: string) => Promise<boolean>;
   applyLoadedProjectResult: (
     result: ProjectLoadResult,
@@ -67,6 +68,7 @@ export function createDvcImportController<AppliedResult>(
         `Imported Daslight Project (.dvc): ${report.summary.fixtures} fixtures, ${report.summary.cues} cues, ${report.midi_mappings?.length ?? 0} MIDI and ${report.dmx_mappings?.length ?? 0} DMX mappings. Save As to create a Syndocal Project (.sdc).`,
       );
     } catch (error) {
+      if (!options.isProjectAuthorityIdentityCurrent(authority)) return;
       options.setMessage(`Daslight Project import failed: ${String(error)}`);
     } finally {
       options.setDaslightProjectImportBusy(false);

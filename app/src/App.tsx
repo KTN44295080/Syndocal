@@ -15994,6 +15994,7 @@ export default function App() {
     projectTransactionOwnerId,
     daslightProjectImportBusy,
     captureProjectAuthorityIdentity,
+    isProjectAuthorityIdentityCurrent,
     confirmDiscardProjectChanges,
     applyLoadedProjectResult,
     projectAuthorityApplicationResultIsCurrent,

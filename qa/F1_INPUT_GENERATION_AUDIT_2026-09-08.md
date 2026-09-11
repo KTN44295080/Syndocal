@@ -221,9 +221,9 @@ The exact Windows native no-bundle procedure used MSVC `14.44.35207` as the
 first `where.exe link.exe` result. The fresh executable was
 `target/release/syndocal.exe`, version `1.2.0-alpha.69`, 64,744,448 bytes,
 SHA-256
-`2C693189D634ABD03C1607EF981DD90D79DC8F5CB6CE88A65EF1DBE48C855CF9`.
+`AA770E13226E2DE2DB2BB86AD6C25C34356E14D74C4C635F381D8212F91CF648`.
 The fresh probe report is
-`target/qa/native-final-validation-20260911-64/native-final-validation.json`:
+`target/qa/native-final-validation-20260911-65/native-final-validation.json`:
 one responsive maximized `Syndocal` window, Standby with lighting/video
 disabled, snapshot IPC, expected missing-asset/layer thumbnail rejection,
 zero physical-output operations, exact application exit, and zero remaining

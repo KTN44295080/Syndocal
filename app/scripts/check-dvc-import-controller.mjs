@@ -44,6 +44,7 @@ function makeController({
       capturedAuthorities.push(true);
       return authority;
     },
+    isProjectAuthorityIdentityCurrent: () => current,
     confirmDiscardProjectChanges: async () => discard,
     applyLoadedProjectResult: async (nextLoad, legacyCurrentPath) => {
       applied.push({ nextLoad, legacyCurrentPath });
@@ -168,6 +169,16 @@ async function testFinallyClearsBusyForCancelAndFailure() {
   assert.equal(failure.messages.at(-1)?.text, "Daslight Project import failed: Error: broken");
 }
 
+async function testStaleFailureDoesNotPublishError() {
+  const test = makeController({
+    current: false,
+    invoke: async () => { throw new Error("stale project"); },
+  });
+  await test.importDaslightProject();
+  assert.equal(test.busy, false);
+  assert.equal(test.messages.at(-1)?.text, "Importing Daslight Project...");
+}
+
 const tests = [
   testBusyDoubleStartSuppression,
   testDiscardRejectionSkipsInvoke,
@@ -176,6 +187,7 @@ const tests = [
   testStaleResultDoesNotPublish,
   testCurrentResultPublishes,
   testFinallyClearsBusyForCancelAndFailure,
+  testStaleFailureDoesNotPublishError,
 ];
 
 for (const test of tests) {
