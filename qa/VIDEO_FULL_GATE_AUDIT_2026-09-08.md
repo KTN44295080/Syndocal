@@ -125,3 +125,32 @@ This evidence covers the local Vite/operator fixture and rendered frontend
 interaction only. Native renderer/GPU/display behavior, 4K/three-output
 presentation, real show media, physical output, Mac real-device acceptance,
 signing/publication, and the complete C2/C4 reintegration remain unclaimed.
+
+## Current-main video software revalidation — 2026-09-12
+
+The bounded video/Follow software slice was rerun against current `main` at
+source HEAD `c6b2f22c4670814aef192d1ef9506178e114cf81`; `origin/main` matched
+before the run. No video feature, browser dependency, or physical-output path
+was changed. The documented MSVC 14.44.35207 x64 linker was pinned and
+returned first by `where.exe link.exe`.
+
+| Check | Result |
+| --- | --- |
+| `node app/scripts/check-video-clip-slot-bank.mjs` | PASS — B4 focused model/browser-contract gate |
+| `pnpm.cmd --dir app run check-timeline-follow-runtime` | PASS — stale E/G, E/R/H, visibility/focus/target, and localization contracts |
+| `pnpm.cmd --dir app run check-timeline-follow-hold-ui` | PASS — explicit normalized Immediate/Hold and one-measure wait modes |
+| `pnpm.cmd --dir app run check-video-runtime-polling` | PASS — deferred-response, malformed-array, generation, and zero-copy valid-array contracts |
+| `cargo test -p engine --release --locked video_full_gate_engine_path -- --test-threads=1` | PASS — 1 passed, 0 failed, 0 ignored, 1082 filtered out |
+| `cargo test -p engine --release --locked video_transition_bus_c3_is_typed -- --test-threads=1` | PASS — 1 passed, 0 failed, 0 ignored, 1082 filtered out |
+| `cargo test -p engine --release --locked video_sample_clip_take_queue -- --test-threads=1` | PASS — 1 passed, 0 failed, 0 ignored, 1082 filtered out |
+| `cargo test -p engine --release --locked video_sample_follow_admission -- --test-threads=1` | PASS — 1 passed, 0 failed, 0 ignored, 1082 filtered out |
+
+An older documented `pnpm run check:video-clip-slot-bank` invocation was
+attempted and returned `ERR_PNPM_NO_SCRIPT`; the checker exists and passed
+when invoked directly by its current path. No checker or assertion was
+weakened. The prior rendered-browser evidence is retained as evidence for its
+recorded ancestor; this checkpoint does not claim a new browser run, native
+renderer/GPU/display behavior, 4K/three-output presentation, real show media,
+physical output, Mac, signing/publication, or complete C2/C4 reintegration.
+`VIDEO-FULL-GATE-001`, `VIDEO-C2-C4-001`, and `TIMELINE-FOLLOW-001` remain
+Open.
