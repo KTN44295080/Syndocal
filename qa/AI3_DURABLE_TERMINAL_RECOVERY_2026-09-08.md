@@ -227,3 +227,51 @@ close `AI3-DURABLE-RECOVERY-001`: generic external-client reply-loss,
 physical project retirement/re-Arm, device acknowledgement, five-display or
 venue acceptance remain unverified. The real-file thumbnail recovery trial
 was not rerun.
+
+## Managed exact-Both reply-loss barrier — `a6a3e22ed2cb7e2d959d4d9d30e530a8eb3c31f6`
+
+The current main product checkpoint adds a bounded fail-closed barrier for
+managed exact-Both output-control routes. Before the public response is
+durably recorded, the private lease receipt is now held behind an explicit
+pending terminal barrier. A retry, restart, malformed response, identity
+mismatch, or public-shape mismatch cannot reach the physical callback through
+that barrier. A valid public response converts the barrier to the existing
+durable terminal record. The change covers SetBlackout, ReleaseBlackout,
+EnableShowSpoutOutputs, and SetDisplayWindowOpen; ordinary non-managed routes
+retain their existing receipt path.
+
+The source checkpoint was committed and pushed as
+`a6a3e22ed2cb7e2d959d4d9d30e530a8eb3c31f6`. No physical output was enabled.
+
+| Check | Result |
+| --- | --- |
+| `cargo test ... durable` | PASS — 23 passed, 0 failed |
+| `cargo test ... managed_exact_both` | PASS — 13 passed, 0 failed |
+| `cargo test ... blackout` | PASS — 24 passed, 0 failed |
+| `cargo test ... show_spout_managed_terminal` | PASS — 2 passed, 0 failed |
+| Full release unit test | PASS — 1845 passed, 0 failed, 21 existing ignored |
+| `pnpm --dir app tauri build --no-bundle` | PASS — pinned linker/PATH, TypeScript, Vite, and release EXE |
+
+The full test's 21 ignored cases are existing physical, external, or long-run
+tests; no new test was ignored. The invalid-response regression reloads the
+journal and verifies the barrier still rejects a second physical attempt.
+
+The verified release executable is:
+
+- `target/release/syndocal.exe`
+- version `1.2.0-alpha.69`
+- size `64,568,320` bytes
+- SHA-256 `CBC9CE9502D1173CB85A3BC28D75D0A37FD6FAA623473285F4ACBC20E5040B6E`
+- probe report:
+  `target/qa/native-final-validation-20260911-68/native-final-validation.json`
+
+The Windows probe matched this hash and verified one responsive maximized
+`Syndocal` window, Standby ownership, snapshot and thumbnail IPC rejection,
+zero physical-output operations, exact process exit, and no remaining debug
+listener. The probe did not enable physical output.
+
+This remains a bounded software and local native-boundary checkpoint. It does
+not close `AI3-DURABLE-RECOVERY-001`: generic external-client reply-loss,
+physical project retirement/re-Arm, device acknowledgement, five-display or
+venue acceptance, Mac acceptance, signing, and publication remain unverified.
+The real-file thumbnail missing-to-retry-to-recovery trial was not rerun.
