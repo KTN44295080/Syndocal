@@ -275,3 +275,30 @@ not close `AI3-DURABLE-RECOVERY-001`: generic external-client reply-loss,
 physical project retirement/re-Arm, device acknowledgement, five-display or
 venue acceptance, Mac acceptance, signing, and publication remain unverified.
 The real-file thumbnail missing-to-retry-to-recovery trial was not rerun.
+
+## Current-main release process drill — 2026-09-12
+
+The no-output crash/restart drill was rerun against the exact current release
+executable after the thumbnail cancellation QA checkpoint. Source and remote
+were equal at `4534d063dd5998ebd4b2f4b71a233b48264e9d5f` before the drill.
+
+Evidence: `target/qa/ai3-durable-process-drill-20260912-01/ai3-durable-process-drill.json`.
+
+| Check | Result |
+| --- | --- |
+| Executable | `target/release/syndocal.exe`, version `1.2.0-alpha.69`, 64,569,856 bytes |
+| SHA-256 | `71E861A8A716F36D09178DCF3694B86A835EA3BAF83787E86369ED0A06AF5819` |
+| Startup/restart ownership | Standby; lighting/video denied before and after restart |
+| In-doubt request after exact-process termination | `unknown` |
+| Same-ID replay after restart | `unknown` |
+| Changed-shape reuse of same ID | rejected with `request_conflict` |
+| Physical output | 0 operations |
+| Cleanup | both exact-checkout processes stopped; no exact process remained |
+
+This extends only the local no-output durable pending/unknown/replay/conflict
+evidence to the current release executable. It does not close
+`AI3-DURABLE-RECOVERY-001`: generic external-client reply-loss, physical
+project retirement/re-Arm, device acknowledgement, five-display or venue
+acceptance, Mac acceptance, signing, publication, or product-wide completion
+remain unverified. The real-file thumbnail missing-to-retry-to-recovery trial
+was not rerun.
