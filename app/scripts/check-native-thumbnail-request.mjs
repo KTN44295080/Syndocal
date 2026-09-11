@@ -65,6 +65,39 @@ const disposableChannel = () => {
 {
   const controller = new AbortController();
   const calls = [];
+  let announceTicket;
+  let finishRead;
+  const request = requestNativeThumbnail({
+    createChannel: fakeChannel,
+    invoke: (command, args) => {
+      calls.push({ command, args });
+      if (command === "get_video_layer_thumbnail") {
+        announceTicket = () => args.started.onmessage(ticket("layer", "f".repeat(32)));
+        return new Promise(resolve => { finishRead = resolve; });
+      }
+      if (command === "cancel_native_thumbnail_request_v1") return true;
+      throw new Error(`unexpected command ${command}`);
+    },
+  }, "layer", 10, controller.signal);
+  await flush();
+  controller.abort();
+  await flush();
+  assert.deepEqual(calls.map(({ command }) => command), ["get_video_layer_thumbnail"],
+    "an abort before ticket announcement cannot cancel an unrelated request");
+  announceTicket();
+  await flush();
+  finishRead(frame);
+  await assert.rejects(request);
+  assert.deepEqual(calls.map(({ command }) => command), [
+    "get_video_layer_thumbnail",
+    "cancel_native_thumbnail_request_v1",
+  ]);
+  assert.deepEqual(calls[1].args.ticket, ticket("layer", "f".repeat(32)));
+}
+
+{
+  const controller = new AbortController();
+  const calls = [];
   let finishRead;
   const request = requestNativeThumbnail({
     createChannel: fakeChannel,
