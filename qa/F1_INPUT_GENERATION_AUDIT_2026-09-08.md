@@ -402,3 +402,13 @@ The bounded automated proof is now recorded as passing for `COV-INPUT-001`.
 Physical MIDI/OSC/DMX/Remote clients, reconnect and latency matrices, native
 device behavior, venue acceptance, Mac, signing and publication remain open;
 the row stays `In progress`.
+
+## Current-main rerun — 2026-09-12
+
+The same bounded input software gate was rerun against current `main` at
+`7e8bac04616d0df000587fd464845e43d84f3fdf`, with the documented MSVC
+14.44.35207 x64 absolute linker pin confirmed first by `where.exe link.exe`.
+All six checks passed: MIDI shortcuts (39 assertions), DMX shortcuts (41),
+DMX show setup, DMX addressing, frontend command routing, and the focused MIDI
+feedback reader test (1 passed, 0 failed, 0 ignored). No physical MIDI/OSC/DMX
+or remote client was used.
