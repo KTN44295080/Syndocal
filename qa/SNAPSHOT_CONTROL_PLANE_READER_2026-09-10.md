@@ -2151,3 +2151,35 @@ Syndocal processes and zero remaining debug listener after cleanup.
 This checkpoint does not claim real-file missing → Retry → recovery, actual
 Art-Net/ASIO/NDI/Spout/device output, Mac, signing, publication, or
 product-wide completion.
+
+## Display output admission paired projection reader follow-up
+
+The Display output admission core now uses the existing
+`EngineHandle::video_outputs_snapshot()` projection for its four serialized
+output-presence checks. The checks still read the same published output list;
+project authority, owner/fence and lease validation, native hidden-shell/GPU
+phases, first-frame fencing, Engine publication, and cleanup ordering are
+unchanged. No physical display was opened or enabled by this change.
+
+Display-related app regressions passed `29/29`, including the structural
+narrow-reader guard, exact monitor/dimension validation, stale authority
+rejection, pending/in-doubt retry barriers, and native display fake-driver
+paths. The canonical native-output QA driver passed `1/1`. The maintained
+wrapper checker passed `243` assertions with `27` hostile mutation fixtures,
+and `git diff --check` passed.
+
+A fresh maintained-wrapper `pnpm.cmd --dir app tauri build --no-bundle`
+completed with the pinned MSVC 14.44.35207 Build Tools linker. The exact
+checkout executable is 64,732,672 bytes with SHA-256
+`9B09F4A9E075BCD50189773F74694176BF0DBFA54E08E3EDFAA61476B85356FE`.
+The isolated native probe at
+`target/qa/native-final-validation-20260911-57/native-final-validation.json`
+passed: one maximized responsive `Syndocal` window, Standby ownership with
+lighting/video disabled, snapshot IPC, missing media/layer thumbnail IPC
+rejection with valid native tickets, zero physical-output operations, and
+exact executable/listener cleanup. The report records zero exact-path
+Syndocal processes and zero remaining debug listener after cleanup.
+
+This checkpoint does not claim real-file missing → Retry → recovery, actual
+Art-Net/ASIO/NDI/Spout/device output, Mac, signing, publication, or
+product-wide completion.

@@ -73463,9 +73463,7 @@ where
         }
         if state
             .engine
-            .snapshot()
-            .video
-            .outputs
+            .video_outputs_snapshot()
             .iter()
             .any(|candidate| {
                 candidate.kind == VideoOutputKind::Display
@@ -73690,9 +73688,7 @@ where
                 || *lease_registry != prepared_lease.baseline
                 || state
                     .engine
-                    .snapshot()
-                    .video
-                    .outputs
+                    .video_outputs_snapshot()
                     .iter()
                     .any(|candidate| {
                         candidate.kind == VideoOutputKind::Display
@@ -73883,9 +73879,7 @@ where
             || *lease_registry != prepared_lease.baseline
             || state
                 .engine
-                .snapshot()
-                .video
-                .outputs
+                .video_outputs_snapshot()
                 .iter()
                 .any(|candidate| {
                     candidate.kind == VideoOutputKind::Display
@@ -74043,8 +74037,8 @@ where
                 "Display project candidate changed before final publication",
             ));
         }
-        let snapshot = state.engine.snapshot();
-        let exact_engine_candidate = snapshot.video.outputs.iter().any(|candidate| {
+        let outputs = state.engine.video_outputs_snapshot();
+        let exact_engine_candidate = outputs.iter().any(|candidate| {
             candidate.id == output.id
                 && candidate.kind == VideoOutputKind::Display
                 && candidate.monitor_id == output.monitor_id
@@ -74052,7 +74046,7 @@ where
                 && candidate.width == output.width
                 && candidate.height == output.height
         });
-        let competing_target = snapshot.video.outputs.iter().any(|candidate| {
+        let competing_target = outputs.iter().any(|candidate| {
             candidate.id != output.id
                 && candidate.kind == VideoOutputKind::Display
                 && (candidate.monitor_id == output.monitor_id
@@ -93481,6 +93475,25 @@ pub(crate) mod tests {
             "show Spout reset must read the paired video projection before and after physical retirement"
         );
         assert!(!body.contains("state.engine.snapshot()"));
+    }
+
+    #[test]
+    fn display_output_admission_uses_the_narrow_video_output_reader() {
+        let source = include_str!("main.rs");
+        let function_start = source
+            .find("fn add_display_output_with_output_control_fence_core<")
+            .expect("missing Display output admission core");
+        let function_end = source[function_start..]
+            .find("\nfn apply_output_ownership_role_with_output_control_fence(")
+            .map(|offset| function_start + offset)
+            .expect("missing Display output admission core boundary");
+        let body = &source[function_start..function_end];
+        assert_eq!(
+            body.matches("video_outputs_snapshot()").count(),
+            4,
+            "Display output admission must read only the published video-output projection"
+        );
+        assert!(!body.contains("engine.snapshot()"));
     }
 
     #[test]
