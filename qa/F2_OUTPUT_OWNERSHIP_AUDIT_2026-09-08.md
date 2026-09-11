@@ -228,3 +228,28 @@ stays Open for real Lighting/Video/Both/Standby resources, DMX/NDI/Spout/
 display teardown acknowledgements, Take Over hardware, physical output,
 venue acceptance, Mac, signing, publication, and thumbnail file-move
 recovery.
+
+## Current-main output software gate — 2026-09-12
+
+The same bounded F2 checks were rerun at current source HEAD
+`48d57f1d86188ec097006387009df3a0aedefb7e`. No product output policy or
+physical resource was changed. All six static contracts passed. The exact
+MSVC 14.44.35207 x64 linker was initialized and returned first by
+`where.exe link.exe` for every Rust invocation.
+
+| Check group | Result |
+| --- | --- |
+| output ownership/control, safety blackout, video routing/window/observation | PASS — 6 static gates |
+| Engine `output_ownership` | PASS — 9 passed, 0 failed, 0 ignored |
+| Syndocal `output_ownership` | PASS — 5 passed, 0 failed, 0 ignored |
+| Syndocal `show_spout_managed_terminal` | PASS — 2 passed, 0 failed, 0 ignored |
+| Syndocal `project_retirement_spout` | PASS — 5 passed, 0 failed, 0 ignored |
+| Syndocal `project_retirement_callback_failure` | PASS — 1 passed, 0 failed, 0 ignored |
+| Syndocal `show_spout_disabled_activation` | PASS — 2 passed, 0 failed, 0 ignored |
+| Syndocal `managed_display_window_projection` | PASS — 1 passed, 0 failed, 0 ignored |
+
+The automated proof is recorded as passing for `COV-OUTPUT-LOCAL-001`.
+This remains software/native focused evidence only. Physical DMX/NDI/Spout/
+display teardown acknowledgements, Take Over hardware, venue acceptance, Mac,
+signing, publication, and product-wide completion remain open; the row stays
+`In progress`.
