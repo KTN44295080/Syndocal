@@ -1948,3 +1948,39 @@ owned by PID 0.
 This checkpoint does not claim real-file missing → Retry → recovery, actual
 Art-Net/ASIO/NDI/Spout/device output, Mac, signing, publication, or
 product-wide completion.
+
+## Project control mapping Timeline ID reader follow-up
+
+The project-control mapping publication path now validates DJ track trigger
+Timeline references through one `EngineHandle::timeline_ids_snapshot()` read.
+The reader publishes the same authored Timeline ID order as the former
+full-snapshot validation (`timeline_bank` followed by the current Timeline),
+while the existing `validate_dj_track_triggers_against_snapshot` wrapper is
+retained for project-file validation paths. Shape validation and rejection of
+unknown Timeline IDs remain fail-closed; no fallback or permissive admission
+was added.
+
+The engine snapshot-reader regression passed `8/8` with two existing ignored
+tests. App regressions passed: the publication structural guard `1/1`, the
+normal/unknown Timeline reference fail-closed test `1/1`, and the existing
+project-control mapping roundtrip test `1/1`. The maintained wrapper checker
+passed `243` assertions with `27` hostile mutation fixtures, and
+`git diff --check` passed.
+
+A fresh maintained-wrapper `pnpm.cmd --dir app tauri build --no-bundle`
+completed with the pinned MSVC 14.44.35207 Build Tools linker and no observed
+first-party compiler warnings. The exact checkout executable is 64,721,920
+bytes with SHA-256
+`5A68CBA3836B08FB3DDECDD78A10C3041E0AF09E6E9758F426670FCA55A27A94`.
+The isolated native probe at
+`target/qa/native-final-validation-20260911-51/native-final-validation.json`
+passed: one maximized responsive `Syndocal` window, Standby ownership with
+lighting/video disabled, snapshot IPC, missing media/layer thumbnail IPC
+rejection with valid native tickets, zero physical-output operations, and
+exact executable/listener cleanup. A direct post-probe check found zero
+exact-path Syndocal processes and only the expected port `TIME_WAIT` entry
+owned by PID 0.
+
+This checkpoint does not claim real-file missing → Retry → recovery, actual
+Art-Net/ASIO/NDI/Spout/device output, Mac, signing, publication, or
+product-wide completion.

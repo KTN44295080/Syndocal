@@ -30369,14 +30369,22 @@ fn validate_dj_track_triggers_against_snapshot(
     mappings: &[protocol::DjTrackTriggerMapping],
     snapshot: &EngineSnapshot,
 ) -> Result<(), String> {
-    protocol::validate_dj_track_trigger_mappings(mappings)
-        .map_err(|error| format!("DJ track trigger mappings are invalid: {error}"))?;
-    let mut authored_ids = snapshot
+    let timeline_ids = snapshot
         .timeline_bank
         .iter()
         .map(|timeline| timeline.id)
-        .collect::<HashSet<_>>();
-    authored_ids.insert(snapshot.timeline.id);
+        .chain(std::iter::once(snapshot.timeline.id))
+        .collect::<Vec<_>>();
+    validate_dj_track_triggers_against_timeline_ids(mappings, &timeline_ids)
+}
+
+fn validate_dj_track_triggers_against_timeline_ids(
+    mappings: &[protocol::DjTrackTriggerMapping],
+    timeline_ids: &[TimelineId],
+) -> Result<(), String> {
+    protocol::validate_dj_track_trigger_mappings(mappings)
+        .map_err(|error| format!("DJ track trigger mappings are invalid: {error}"))?;
+    let authored_ids = timeline_ids.iter().copied().collect::<HashSet<_>>();
     for mapping in mappings {
         if !authored_ids.contains(&mapping.timeline_id) {
             return Err(format!(
@@ -53669,7 +53677,8 @@ fn publish_project_control_mappings_after_validation(
             coordinator.epoch, coordinator.revision
         ));
     }
-    validate_dj_track_triggers_against_snapshot(&dj_track_triggers, &state.engine.snapshot())?;
+    let timeline_ids = state.engine.timeline_ids_snapshot();
+    validate_dj_track_triggers_against_timeline_ids(&dj_track_triggers, &timeline_ids)?;
     let mappings = ProjectControlMappings {
         midi_mappings,
         osc_mappings,
@@ -93357,6 +93366,21 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn project_control_mapping_publication_uses_timeline_id_reader() {
+        let source = include_str!("main.rs");
+        let function_start = source
+            .find("fn publish_project_control_mappings_after_validation(")
+            .expect("missing project control mapping publication core");
+        let function_end = source[function_start..]
+            .find("\nfn get_project_checkpoint(")
+            .map(|offset| function_start + offset)
+            .expect("missing project control mapping publication boundary");
+        let body = &source[function_start..function_end];
+        assert!(body.contains("timeline_ids_snapshot"));
+        assert!(!body.contains("state.engine.snapshot()"));
+    }
+
+    #[test]
     fn fixture_profile_health_command_uses_the_narrow_engine_reader() {
         let source = include_str!("main.rs");
         let function_start = source
@@ -129531,6 +129555,31 @@ f 1 2 3
             },
         )])
         .is_err());
+    }
+
+    #[test]
+    fn dj_track_trigger_timeline_reference_validation_is_fail_closed() {
+        let mapping = dj_link_test_mapping(
+            "timeline-reference",
+            protocol::DjTrackSelector {
+                content_id: Some("content".to_string()),
+                title: None,
+                artist: None,
+                title_contains: None,
+                fallback_deck: None,
+            },
+        );
+        assert!(
+            validate_dj_track_triggers_against_timeline_ids(
+                &[mapping.clone()],
+                &[TimelineId(7_701)],
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_dj_track_triggers_against_timeline_ids(&[mapping], &[TimelineId(7_702)])
+                .is_err()
+        );
     }
 
     mod dj_track_runtime_tests;

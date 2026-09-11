@@ -277,6 +277,15 @@ fn assert_same_read_model(handle: &EngineHandle) {
     );
     assert_eq!(handle.timeline_layers_snapshot(), expected.timeline.layers);
     assert_eq!(
+        handle.timeline_ids_snapshot(),
+        expected
+            .timeline_bank
+            .iter()
+            .map(|timeline| timeline.id)
+            .chain(std::iter::once(expected.timeline.id))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
         handle.timeline_cue_ids_snapshot(),
         expected.cues.iter().map(|cue| cue.id).collect::<Vec<_>>()
     );
