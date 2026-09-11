@@ -96,3 +96,41 @@ run with `vcvars64.bat -vcvars_ver=14.44`, and
 This current-main revalidation strengthens the software evidence only. It does
 not close the ledger row or claim browser/native UI, external-client,
 physical-output, Mac, signing, or publication acceptance.
+
+## Current-main persistence revalidation — 2026-09-12
+
+The bounded Timeline/project persistence slice was rerun against current
+`main` at source HEAD `9ada31b1d762ff65e4b94bd3d7c756056ceb59b3`;
+`origin/main` matched before the run. No persistence schema or project
+authority behavior was changed. The documented MSVC 14.44.35207 x64 linker
+was pinned and returned first by `where.exe link.exe`.
+
+| Check | Result |
+| --- | --- |
+| `node app/scripts/check-project-autosave-coordinator.mjs` | PASS |
+| `node app/scripts/check-project-history-keyboard.mjs` | PASS |
+| `node app/scripts/check-project-history-preflight.mjs` | PASS |
+| `node app/scripts/check-project-open-bootstrap.mjs` | PASS |
+| `node app/scripts/check-project-publication-e4.mjs` | PASS |
+| `node app/scripts/check-project-recovery-e3.mjs` | PASS |
+| `node app/scripts/check-project-storage-helpers.mjs` | PASS |
+| `node app/scripts/check-timeline-transport-runtime.mjs` | PASS |
+| `node app/scripts/check-timeline-navigator-actions.mjs` | PASS |
+| `node app/scripts/check-timeline-advanced-authoring.mjs` | PASS |
+| `cargo test ... project_publication_` | PASS — 18 passed, 0 failed |
+| `cargo test ... project_backup_` | PASS — 2 passed, 0 failed |
+| `cargo test ... project_coordinator_identity_swap` | PASS — 1 passed, 0 failed |
+| `cargo test ... project_history_generation_preflight` | PASS — 1 passed, 0 failed |
+| `cargo test ... project_history_skips_noops` | PASS — 1 passed, 0 failed |
+| `cargo test ... project_save_reload_uses_authored_video` | PASS — 1 passed, 0 failed |
+| `cargo test ... project_load_recomputes_stale_conform_rate` | PASS — 1 passed, 0 failed |
+| `cargo test ... timeline_scene_block_edits_survive_project_history_entries` | PASS — 1 passed, 0 failed |
+| `cargo test ... timeline_snap_batch_is_preserved_as_one_project_history_entry` | PASS — 1 passed, 0 failed |
+
+The Rust total is 27 passed with no failures or ignored cases in these
+focused filters. The checks retain exact publication/recovery and backup
+boundaries, identity/generation fencing, no-op/coalescing behavior,
+authored-video save/reload, stale-derived recomputation, and Timeline history
+batching. `TIMELINE-PERSISTENCE-001` remains Open for browser/native UI,
+external-client recovery, physical output, Mac, signing, publication, and
+product-wide acceptance.
