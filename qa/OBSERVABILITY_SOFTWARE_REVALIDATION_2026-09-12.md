@@ -36,6 +36,31 @@ telemetry-reader ownership, bounded diagnostic evidence, redacted project
 replacement events, updater identity shape, exact CLI argument admission,
 unconfigured updater fail-closed behavior, and public-key non-serialization.
 
+## Current-main rerun — 2026-09-12
+
+The same software gate was rerun against current `main` at
+`24c10e691ed9880a616d0009186789f21ff87bc8` after the snapshot, native
+thumbnail-cancellation, and release-software QA checkpoints. No product source
+changed between the recorded source point and this rerun.
+
+Passed commands and results:
+
+- `pnpm.cmd --dir app run check:status` — PASS;
+- `pnpm.cmd --dir app run check:bundled-library` — PASS;
+- `pnpm.cmd --dir app run check:strict-json` — PASS, 130 assertions;
+- `node app/scripts/check-windows-release-artifacts.mjs --self-test` — PASS,
+  43 extractor assertions plus 4 materialization assertions;
+- exact MSVC 14.44.35207 x64 release Rust tests — PASS:
+  `diagnostic_` 6/6, `updater_` 3/3, and
+  `project_replacement_is_redacted` 1/1; all had 0 failed and 0 ignored.
+
+The focused Rust invocation used the absolute linker pin required by
+`qa/WINDOWS_NATIVE_BUILD.md`, with `where.exe link.exe` confirming the pinned
+Build Tools linker was first. No external endpoint, signed update, installer,
+physical device, or output was used. The remaining support-drill, live-update,
+clean-machine, signing/publication, and hardware boundaries therefore remain
+open as stated above.
+
 ## Remaining boundary
 
 The software gate remains `In progress`. This does not prove a deployed
