@@ -302,3 +302,22 @@ project retirement/re-Arm, device acknowledgement, five-display or venue
 acceptance, Mac acceptance, signing, publication, or product-wide completion
 remain unverified. The real-file thumbnail missing-to-retry-to-recovery trial
 was not rerun.
+
+## Current-main durable unit test after the latest source checkpoint — 2026-09-12
+
+The focused release test was rerun after the current main source checkpoint,
+including the managed exact-Both terminal barrier. The documented Build Tools
+14.44.35207 linker was pinned by absolute path and was first in
+`where.exe link.exe`.
+
+| Command | Result |
+| --- | --- |
+| `cargo test --manifest-path app/src-tauri/Cargo.toml --release --locked -j 1 durable -- --test-threads=1` | PASS — 23 passed, 0 failed, 0 ignored, 1843 filtered out |
+
+The passing set includes durable journal corruption/unwritable-state
+fail-closed behavior, restart receipt retention without authority reclaim,
+replay and eviction guards, exact registry identity, managed terminal barrier
+retries, and physical-publish rejection before durable preparation. This is
+still local software evidence and does not close the external-client,
+physical, device, venue, Mac, signing, publication, or product-wide
+boundaries listed above.
