@@ -1,9 +1,10 @@
 use crate::{EngineHandle, TimelineTransportAuthority};
 use protocol::{
     AutoVjAction, AutomationId, ClockSnapshot, CompositionId, CompositionSummary, CueId, CueListId,
-    CueSummary, DmxOutputConfig, EffectId, EffectKind, EffectSummary, EngineSnapshot,
-    EngineTelemetry, FixtureId, NodeGraphId, NodeGraphSummary, PaletteId, PatchedFixtureSummary,
-    PlaybackExecutorSummary, StageObjectSummary, TimelineAudioClipId, TimelineAudioOutputBus,
+    CueSummary, DmxOutputConfig, DmxUniversePreview, EffectId, EffectKind, EffectSummary,
+    EngineSnapshot, EngineTelemetry, FixtureId, NodeGraphId, NodeGraphSummary, PaletteId,
+    PatchedFixtureSummary, PlaybackExecutorSummary, StageObjectSummary, TimelineAudioClipId,
+    TimelineAudioOutputBus,
     TimelineCueEventSummary, TimelineEventId, TimelineFollowRuntimeStatus,
     TimelineFollowRuntimeStatusSnapshot, TimelineFollowRuntimeSummary, TimelineId,
     TimelineLayerSummary, TimelineLoopRuntimeStatus, VideoClipRuntimeSnapshot,
@@ -69,6 +70,19 @@ fn video_isf_effect_source_bytes(effect: &VideoIsfEffectSummary) -> Result<usize
 pub struct CueMetadataAdmissionSnapshot {
     pub cue: Option<CueSummary>,
     pub same_bank_numbers: Vec<(CueId, String)>,
+}
+
+/// The published fields required to build a read-only Visualizer scene.
+/// Keeping this projection separate avoids cloning authored and runtime
+/// collections that the Visualizer never reads.
+#[derive(Debug, Clone, PartialEq)]
+pub struct VisualizerSnapshot {
+    pub fixtures: Vec<PatchedFixtureSummary>,
+    pub dmx_previews: Vec<DmxUniversePreview>,
+    pub primary_dmx_universe: u16,
+    pub primary_dmx_values: Vec<u8>,
+    pub video_outputs: Vec<VideoOutputSummary>,
+    pub stage_objects: Vec<StageObjectSummary>,
 }
 
 impl EngineTelemetrySnapshot {
@@ -168,6 +182,18 @@ impl EngineHandle {
     /// collections or runtime surfaces.
     pub fn engine_telemetry_snapshot(&self) -> EngineTelemetrySnapshot {
         self.read_snapshot_field(EngineTelemetrySnapshot::from_snapshot)
+    }
+
+    /// Read only the published fields required by Visualizer queries.
+    pub fn visualizer_snapshot(&self) -> VisualizerSnapshot {
+        self.read_snapshot_field(|snapshot| VisualizerSnapshot {
+            fixtures: snapshot.fixtures.clone(),
+            dmx_previews: snapshot.dmx_previews.clone(),
+            primary_dmx_universe: snapshot.output.universe,
+            primary_dmx_values: snapshot.dmx_preview.clone(),
+            video_outputs: snapshot.video.outputs.clone(),
+            stage_objects: snapshot.stage_objects.clone(),
+        })
     }
 
     /// Read Clip Slot transport from the latest complete engine publication.

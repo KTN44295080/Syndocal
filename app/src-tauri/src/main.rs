@@ -70423,12 +70423,25 @@ fn import_stage_map_preset(
     )
 }
 
+fn visualizer_snapshot(state: &AppState) -> visualizer::VisualizerSnapshot {
+    let snapshot = state.engine.visualizer_snapshot();
+    visualizer::VisualizerSnapshot {
+        fixtures: snapshot.fixtures,
+        dmx_previews: snapshot.dmx_previews,
+        primary_dmx_universe: snapshot.primary_dmx_universe,
+        primary_dmx_values: snapshot.primary_dmx_values,
+        video_outputs: snapshot.video_outputs,
+        stage_objects: snapshot.stage_objects,
+    }
+}
+
 #[tauri::command]
 fn get_visualizer_scene(
     state: State<'_, AppState>,
     config: Option<visualizer::VisualizerConfig>,
 ) -> visualizer::VisualizerScene {
-    visualizer::build_visualizer_scene(&state.engine.snapshot(), config.unwrap_or_default())
+    let snapshot = visualizer_snapshot(&state);
+    visualizer::build_visualizer_scene_from_snapshot(&snapshot, config.unwrap_or_default())
 }
 
 #[tauri::command]
@@ -70436,8 +70449,11 @@ fn get_visualizer_model_render_plans(
     state: State<'_, AppState>,
     config: Option<visualizer::VisualizerConfig>,
 ) -> Vec<visualizer::FixtureModelRenderPlan> {
-    let scene =
-        visualizer::build_visualizer_scene(&state.engine.snapshot(), config.unwrap_or_default());
+    let snapshot = visualizer_snapshot(&state);
+    let scene = visualizer::build_visualizer_scene_from_snapshot(
+        &snapshot,
+        config.unwrap_or_default(),
+    );
     visualizer::build_fixture_model_render_plans(&scene)
 }
 
@@ -70446,8 +70462,9 @@ fn get_visualizer_render_payload(
     state: State<'_, AppState>,
     config: Option<visualizer::VisualizerConfig>,
 ) -> visualizer::VisualizerRenderPayload {
-    visualizer::build_visualizer_render_payload(
-        &state.engine.snapshot(),
+    let snapshot = visualizer_snapshot(&state);
+    visualizer::build_visualizer_render_payload_from_snapshot(
+        &snapshot,
         config.unwrap_or_default(),
     )
 }
@@ -70457,8 +70474,9 @@ fn get_visualizer_external_model_assets(
     state: State<'_, AppState>,
     config: Option<visualizer::VisualizerConfig>,
 ) -> Vec<VisualizerExternalModelAsset> {
-    let payload = visualizer::build_visualizer_render_payload(
-        &state.engine.snapshot(),
+    let snapshot = visualizer_snapshot(&state);
+    let payload = visualizer::build_visualizer_render_payload_from_snapshot(
+        &snapshot,
         config.unwrap_or_default(),
     );
     visualizer_external_model_assets_from_payload(&payload, Some(&state.visualizer_model_assets))
@@ -70469,8 +70487,9 @@ fn get_visualizer_resolved_render_payload(
     state: State<'_, AppState>,
     config: Option<visualizer::VisualizerConfig>,
 ) -> VisualizerResolvedRenderPayload {
-    let payload = visualizer::build_visualizer_render_payload(
-        &state.engine.snapshot(),
+    let snapshot = visualizer_snapshot(&state);
+    let payload = visualizer::build_visualizer_render_payload_from_snapshot(
+        &snapshot,
         config.unwrap_or_default(),
     );
     visualizer_resolved_render_payload(payload, Some(&state.visualizer_model_assets))
@@ -93395,6 +93414,35 @@ pub(crate) mod tests {
         assert!(body.contains("engine_telemetry_snapshot"));
         assert!(body.contains("engine_telemetry_report_from_telemetry_snapshot"));
         assert!(!body.contains("engine.snapshot()"));
+    }
+
+    #[test]
+    fn visualizer_queries_use_the_narrow_engine_reader() {
+        let source = include_str!("main.rs");
+        for command in [
+            "get_visualizer_scene",
+            "get_visualizer_model_render_plans",
+            "get_visualizer_render_payload",
+            "get_visualizer_external_model_assets",
+            "get_visualizer_resolved_render_payload",
+        ] {
+            let function_marker = format!("fn {command}(");
+            let function_start = source
+                .find(&function_marker)
+                .unwrap_or_else(|| panic!("missing Visualizer query {command}"));
+            let next_attribute = source[function_start + function_marker.len()..]
+                .find("\n#[tauri::command]")
+                .map(|offset| function_start + function_marker.len() + offset);
+            let body = &source[function_start..next_attribute.unwrap_or(source.len())];
+            assert!(
+                body.contains("visualizer_snapshot"),
+                "{command} widened its reader"
+            );
+            assert!(
+                !body.contains("engine.snapshot()"),
+                "{command} clones the full snapshot"
+            );
+        }
     }
 
     #[test]

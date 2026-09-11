@@ -2021,3 +2021,37 @@ owned by PID 0.
 This checkpoint does not claim real-file missing → Retry → recovery, actual
 Art-Net/ASIO/NDI/Spout/device output, Mac, signing, publication, or
 product-wide completion.
+
+## Visualizer projection reader follow-up
+
+The five read-only Visualizer query paths now use one
+`EngineHandle::visualizer_snapshot()` projection containing only fixtures, DMX
+preview frames, video output summaries, and stage objects. The existing
+EngineSnapshot-based Visualizer API remains as a compatibility seam and is
+implemented through the same projection, so scene, beam, video-surface,
+stage-object, model-plan, and primitive-mesh behavior remains unchanged. No
+output-control, renderer worker, or physical-output path was changed.
+
+The engine snapshot-reader regression passed `8/8` with two existing ignored
+tests. The Visualizer regression passed `23/23`, and the app structural guard
+for all five query paths passed `1/1`. The maintained wrapper checker passed
+`243` assertions with `27` hostile mutation fixtures, and `git diff --check`
+passed.
+
+A fresh maintained-wrapper `pnpm.cmd --dir app tauri build --no-bundle`
+completed with the pinned MSVC 14.44.35207 Build Tools linker and no
+first-party compiler warnings. The exact checkout executable is 64,729,088
+bytes with SHA-256
+`F6DBEC60D5BD2ED17E7AF8E3DF12153E519D998FD57BDEB5EA5B2412F0683886`.
+The isolated native probe at
+`target/qa/native-final-validation-20260911-53/native-final-validation.json`
+passed: one maximized responsive `Syndocal` window, Standby ownership with
+lighting/video disabled, snapshot IPC, missing media/layer thumbnail IPC
+rejection with valid native tickets, zero physical-output operations, and
+exact executable/listener cleanup. A direct post-probe check found zero
+exact-path Syndocal processes and only the expected port `TIME_WAIT` entry
+owned by PID 0.
+
+This checkpoint does not claim real-file missing → Retry → recovery, actual
+Art-Net/ASIO/NDI/Spout/device output, Mac, signing, publication, or
+product-wide completion.

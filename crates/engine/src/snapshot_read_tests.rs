@@ -257,7 +257,10 @@ fn assert_same_read_model(handle: &EngineHandle) {
         EngineTelemetrySnapshot::from_snapshot(&expected)
     );
     let telemetry = handle.engine_telemetry_snapshot();
-    assert_eq!(telemetry.timeline_event_count, expected.timeline.events.len());
+    assert_eq!(
+        telemetry.timeline_event_count,
+        expected.timeline.events.len()
+    );
     assert_eq!(
         telemetry.timeline_automation_count,
         expected.timeline.automations.len()
@@ -268,6 +271,17 @@ fn assert_same_read_model(handle: &EngineHandle) {
     );
     assert_eq!(handle.video_snapshot(), expected.video);
     assert_eq!(handle.stage_objects_snapshot(), expected.stage_objects);
+    assert_eq!(
+        handle.visualizer_snapshot(),
+        crate::VisualizerSnapshot {
+            fixtures: expected.fixtures.clone(),
+            dmx_previews: expected.dmx_previews.clone(),
+            primary_dmx_universe: expected.output.universe,
+            primary_dmx_values: expected.dmx_preview.clone(),
+            video_outputs: expected.video.outputs.clone(),
+            stage_objects: expected.stage_objects.clone(),
+        }
+    );
     assert_eq!(handle.fixtures_snapshot(), expected.fixtures);
     assert_eq!(
         handle.fixture_summary_snapshot(1),

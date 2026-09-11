@@ -1,9 +1,9 @@
 use std::collections::{HashMap, HashSet};
 
 use protocol::{
-    AttributeControl, EngineSnapshot, FixtureId, GeometrySummary, PatchedFixtureSummary,
-    StageObjectId, StageObjectKind, StageObjectSummary, Vec3, VideoOutputId, VideoOutputKind,
-    VideoOutputSummary,
+    AttributeControl, DmxUniversePreview, EngineSnapshot, FixtureId, GeometrySummary,
+    PatchedFixtureSummary, StageObjectId, StageObjectKind, StageObjectSummary, Vec3, VideoOutputId,
+    VideoOutputKind, VideoOutputSummary,
 };
 use serde::{Deserialize, Serialize};
 
@@ -44,6 +44,29 @@ pub struct VisualizerRenderPayload {
     pub scene: VisualizerScene,
     pub model_render_plans: Vec<FixtureModelRenderPlan>,
     pub primitive_meshes: Vec<FixtureModelPrimitiveMesh>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct VisualizerSnapshot {
+    pub fixtures: Vec<PatchedFixtureSummary>,
+    pub dmx_previews: Vec<DmxUniversePreview>,
+    pub primary_dmx_universe: u16,
+    pub primary_dmx_values: Vec<u8>,
+    pub video_outputs: Vec<VideoOutputSummary>,
+    pub stage_objects: Vec<StageObjectSummary>,
+}
+
+impl VisualizerSnapshot {
+    fn from_engine_snapshot(snapshot: &EngineSnapshot) -> Self {
+        Self {
+            fixtures: snapshot.fixtures.clone(),
+            dmx_previews: snapshot.dmx_previews.clone(),
+            primary_dmx_universe: snapshot.output.universe,
+            primary_dmx_values: snapshot.dmx_preview.clone(),
+            video_outputs: snapshot.video.outputs.clone(),
+            stage_objects: snapshot.stage_objects.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -332,6 +355,14 @@ pub fn build_visualizer_scene(
     snapshot: &EngineSnapshot,
     config: VisualizerConfig,
 ) -> VisualizerScene {
+    let projection = VisualizerSnapshot::from_engine_snapshot(snapshot);
+    build_visualizer_scene_from_snapshot(&projection, config)
+}
+
+pub fn build_visualizer_scene_from_snapshot(
+    snapshot: &VisualizerSnapshot,
+    config: VisualizerConfig,
+) -> VisualizerScene {
     let dmx_frames = dmx_preview_frames(snapshot);
     let fixtures = snapshot
         .fixtures
@@ -380,8 +411,7 @@ pub fn build_visualizer_scene(
         })
         .collect::<Vec<_>>();
     let video_surfaces = snapshot
-        .video
-        .outputs
+        .video_outputs
         .iter()
         .map(video_surface_node_from_summary)
         .collect::<Vec<_>>();
@@ -413,7 +443,15 @@ pub fn build_visualizer_render_payload(
     snapshot: &EngineSnapshot,
     config: VisualizerConfig,
 ) -> VisualizerRenderPayload {
-    let scene = build_visualizer_scene(snapshot, config);
+    let projection = VisualizerSnapshot::from_engine_snapshot(snapshot);
+    build_visualizer_render_payload_from_snapshot(&projection, config)
+}
+
+pub fn build_visualizer_render_payload_from_snapshot(
+    snapshot: &VisualizerSnapshot,
+    config: VisualizerConfig,
+) -> VisualizerRenderPayload {
+    let scene = build_visualizer_scene_from_snapshot(snapshot, config);
     let model_render_plans = build_fixture_model_render_plans(&scene);
     let primitive_meshes = build_fixture_model_primitive_meshes(&model_render_plans);
     VisualizerRenderPayload {
@@ -2598,15 +2636,15 @@ fn fixture_node_from_summary(
     }
 }
 
-fn dmx_preview_frames(snapshot: &EngineSnapshot) -> HashMap<u16, Vec<u8>> {
+fn dmx_preview_frames(snapshot: &VisualizerSnapshot) -> HashMap<u16, Vec<u8>> {
     let mut frames = snapshot
         .dmx_previews
         .iter()
         .map(|preview| (preview.universe, preview.values.clone()))
         .collect::<HashMap<_, _>>();
     frames
-        .entry(snapshot.output.universe)
-        .or_insert_with(|| snapshot.dmx_preview.clone());
+        .entry(snapshot.primary_dmx_universe)
+        .or_insert_with(|| snapshot.primary_dmx_values.clone());
     frames
 }
 
