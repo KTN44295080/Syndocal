@@ -331,3 +331,28 @@ They were not promoted to success by this run. No physical output, external
 client, or application UI was started by the test command. This is a stronger
 source regression result for the current Rust tree; it does not close the F1
 physical-input or product-wide acceptance boundaries.
+
+## Independent source re-review — 2026-09-12
+
+The manual MIDI feedback repair was re-read against current `main` at source
+HEAD `dadd913028ed998e66b49bd2aa0a3f0b50ebcbd2`. The frontend captures the
+project authority and mapping snapshot before invoking the existing route, and
+checks that authority before both the success message and the failure-side
+feedback-state/message writes. The backend takes external-command admission
+before the project coordinator, rejects an optional epoch mismatch and any
+pending project transaction, then compares the submitted mapping with the
+current project before reading the engine snapshot or sending MIDI output.
+The admission guard remains held through the send, so project replacement
+cannot interleave with this operation. No stale-result, lock-order, or
+fail-closed defect was found; no product code change was required by this
+review.
+
+| Recheck | Result |
+| --- | --- |
+| `pnpm.cmd --dir app run check:frontend-command-routing` | PASS — 133 renderer, 31 server-authoritative, 28 raw, 464 facade dispatches |
+| `pnpm.cmd --dir app run check:dvc-midi-shortcuts` | PASS — 39 assertions |
+
+This review remains bounded to the existing MIDI authority repair. It does not
+close physical MIDI/OSC/DMX client, reconnect/latency, device, venue, F2,
+Mac, signing, publication, or product-wide acceptance. The real-file
+thumbnail missing → Retry → recovery trial was not rerun.
