@@ -153,6 +153,21 @@ the separate serial-DMX path.
 This closes only the current physical MIDI enumerate/open/safe-feedback slice.
 It does not claim physical knob/button/clock/MTC movement, LED feedback
 observation, p50/p95/p99/max latency, OSC/Remote acceptance, or any DMX fixture
-output. The FTDI `COM5` path remains pending an explicitly identified fixture
-and an operator-visible output capture before the existing physical serial test
-is run or promoted.
+output. The FTDI `COM5` path is covered by the physical serial-DMX recheck
+below; its fixture result is recorded separately from the remaining timing and
+protocol gates.
+
+### 2026-09-12 current-host physical serial-DMX recheck
+
+The current host exposed the FTDI serial-DMX interface as `USB Serial Port
+(COM5)`, USB VID `0403`, PID `6001`. The existing env-gated 121-channel
+physical serial test was run with a deliberately short, low-master window:
+
+| Check | Device/command | Capture | Result |
+|---|---|---|---|
+| Enttec Open DMX serial worker | MSVC 14.44.35207 x64; `SYNDOCAL_PHYSICAL_SERIAL=COM5`; `SYNDOCAL_PHYSICAL_SECONDS=10`; `SYNDOCAL_PHYSICAL_MASTER=20`; `cargo test -p engine --locked physical_serial_rainbow_demo_drives_master_dimmer_and_rgb_cells -- --ignored --nocapture` | Existing production Engine path patched one master dimmer and 40 RGB cells; telemetry reported `sends=439`, zero send failures, the test completed in 10.02 s, and the operator confirmed the connected fixture output was successful | PASS — `1 passed / 0 failed / 0 ignored` |
+
+This records current serial-port open/write, worker telemetry, and the
+operator-confirmed fixture result. Logic-analyzer waveform, sustained 44
+Hz/long-run capture, RDM/TOD, Art-Net/sACN, output ownership replacement, or
+venue acceptance was not performed; those claims remain open.
