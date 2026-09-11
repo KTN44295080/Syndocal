@@ -191,3 +191,40 @@ display admission, and the narrow snapshot readers. It does not close
 DMX/NDI/Spout/display teardown acknowledgements, Take Over hardware,
 physical output, venue acceptance, Mac, signing, publication, and thumbnail
 file-move recovery remain unclaimed.
+
+## Current-main ownership and retirement revalidation — 2026-09-12
+
+The bounded F2 software/native checks were rerun against current `main` at
+source HEAD `278b5101dc5d0e74595b0e9b5e7ba2e99045b18d`; `origin/main` matched
+before the run. No ownership policy or physical-output state was changed.
+The documented MSVC 14.44.35207 x64 linker was pinned and returned first by
+`where.exe link.exe`.
+
+| Check | Result |
+| --- | --- |
+| `pnpm.cmd --dir app run check:output-ownership` | PASS |
+| `pnpm.cmd --dir app run check:output-control-runtime` | PASS — output commands, strict receipts, fail-closed query, and Standby Sync UI |
+| `pnpm.cmd --dir app run check:video-output-routing-runtime` | PASS — R4 contract |
+| `pnpm.cmd --dir app run check:video-output-window-runtime` | PASS — exact-Both recovery, receipt rejection, singleflight, incarnation reducer, legacy invoke count 0 |
+| `pnpm.cmd --dir app run check:video-output-window-observation` | PASS |
+| `cargo test -p engine --release --locked output_ownership -- --test-threads=1` | PASS — 9 passed, 0 failed, 0 ignored, 1074 filtered out |
+| `cargo test --manifest-path app/src-tauri/Cargo.toml --release --locked -j 1 output_ownership -- --test-threads=1` | PASS — 5 passed, 0 failed, 0 ignored, 1861 filtered out |
+| `cargo test --manifest-path app/src-tauri/Cargo.toml --release --locked -j 1 show_spout_managed_terminal -- --test-threads=1` | PASS — 2 passed, 0 failed, 0 ignored, 1864 filtered out |
+| `cargo test --manifest-path app/src-tauri/Cargo.toml --release --locked -j 1 project_retirement_spout -- --test-threads=1` | PASS — 5 passed, 0 failed, 0 ignored, 1861 filtered out |
+| `cargo test --manifest-path app/src-tauri/Cargo.toml --release --locked -j 1 project_retirement_callback_failure -- --test-threads=1` | PASS — 1 passed, 0 failed, 0 ignored, 1865 filtered out |
+| `cargo test --manifest-path app/src-tauri/Cargo.toml --release --locked -j 1 show_spout_disabled_activation -- --test-threads=1` | PASS — 2 passed, 0 failed, 0 ignored, 1864 filtered out |
+| `cargo test --manifest-path app/src-tauri/Cargo.toml --release --locked -j 1 managed_display_window_projection -- --test-threads=1` | PASS — 1 passed, 0 failed, 0 ignored, 1865 filtered out |
+
+The historical `project_swap_disarmed` filter was also checked and matched
+zero tests; it was explicitly excluded from the pass count and no assertion
+or filter was weakened. The current passing cases retain role/lease gating,
+worker teardown and failure harvest ordering, managed terminal replay and
+invalid-fence rejection, project retirement before publication, disabled
+activation compensation, exact project display projection, and no accidental
+Add Display path.
+
+This remains local software/native evidence only. `F2-OUTPUT-OWNERSHIP-001`
+stays Open for real Lighting/Video/Both/Standby resources, DMX/NDI/Spout/
+display teardown acknowledgements, Take Over hardware, physical output,
+venue acceptance, Mac, signing, publication, and thumbnail file-move
+recovery.
