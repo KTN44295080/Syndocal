@@ -2428,7 +2428,7 @@ unchecked row.
       "scope": "Supported",
       "owner_files": "Timeline runtime/editor owners",
       "dependencies": ["Sample-frame scheduler acceptance (alpha.4 era)", "Guide vocabulary assets"],
-      "automated_proof": { "status": "not-passing", "command": "Planned: rerun of timeline-follow-runtime/timeline-cue-audio checkers and Engine scheduler suites on current source.", "expected_count": null },
+      "automated_proof": { "status": "passing", "command": "pnpm --dir app run check:timeline-advanced && node app/scripts/check-timeline-navigator-actions.mjs && pnpm --dir app run check:timeline-automation && node app/scripts/check-timeline-overlap-clusters.mjs && node app/scripts/check-timeline-block-loop.mjs && pnpm --dir app run check:timeline-follow-runtime && pnpm --dir app run check:timeline-follow-hold-ui && pnpm --dir app run check:timeline-cue-audio && pnpm --dir app run check:timeline-loop-runtime && pnpm --dir app run check:timeline-transport-runtime && cargo test -p engine --release --locked -j 1 timeline_fractional_ticks -- --test-threads=1", "expected_count": 11 },
       "native_proof": { "status": "not-run", "artifact_hash": null, "raw_evidence_paths": [], "na_reason": "Audible-device and final three-screen passes remain; browser/sample-frame proofs do not establish them." },
       "hardware_external_proof": { "status": "not-run", "device_topology_duration": "Audible click/Guide routing on real outputs plus MTC/DJ discontinuity drills.", "artifact_hash": null, "raw_evidence_paths": [], "na_reason": null },
       "status": "In progress",
