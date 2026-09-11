@@ -149,3 +149,45 @@ This remains local software evidence only. Physical Lighting/Video/Both/
 Standby ownership, DMX/NDI/Spout/display teardown acknowledgements, Take Over
 hardware behavior, venue acceptance, Mac, signing, publication, and thumbnail
 file-move recovery remain unclaimed.
+
+## Current-main ownership and teardown revalidation — 2026-09-11
+
+The bounded F2 software checks were rerun after the current snapshot/output
+reader and managed-terminal changes at source HEAD
+`cba6ca7b949d28d318f02bd38c779e49850d0b5b`. Evidence is preserved under
+`target/qa/f2-current-main-20260911-01/`. No application process or physical
+output was started.
+
+The five static contracts passed:
+
+```text
+check-output-ownership.mjs
+check-output-control-runtime.mjs
+check-video-output-routing-runtime.mjs
+check-video-output-window-runtime.mjs
+check-video-output-window-observation.mjs
+```
+
+With MSVC 14.44.35207 initialized by `vcvars64.bat -vcvars_ver=14.44`, and
+the pinned linker first in `where.exe link.exe`, the focused native test set
+passed with zero failures:
+
+```text
+engine output_ownership                  9 passed
+engine output_worker_failure_fence       1 passed
+engine output_resource_creation_lease    2 passed
+engine project_swap_disarmed             1 passed
+Syndocal show_spout_managed_terminal     2 passed
+Syndocal Standby/output-role             2 passed
+Syndocal project retirement/display      5 passed
+Syndocal narrow display/Spout readers    2 passed
+```
+
+This current-main software evidence covers role gating, teardown leases,
+failure fences, stale epoch/role rejection, explicit Standby re-arm,
+managed-terminal replay, project retirement before publication, pending
+display admission, and the narrow snapshot readers. It does not close
+`F2-OUTPUT-OWNERSHIP-001`: real Lighting/Video/Both/Standby resources,
+DMX/NDI/Spout/display teardown acknowledgements, Take Over hardware,
+physical output, venue acceptance, Mac, signing, publication, and thumbnail
+file-move recovery remain unclaimed.
