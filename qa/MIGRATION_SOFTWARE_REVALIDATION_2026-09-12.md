@@ -45,3 +45,16 @@ non-Windows claims. No external endpoint, destructive migration, or physical
 output was used.
 
 `git diff --check`: PASS before commit.
+
+## Current-main rerun — 2026-09-12
+
+The migration/project-file software gate was rerun against current `main` at
+`6469547b19f068d8d87a51c25de218bdf6926204` with the documented MSVC
+14.44.35207 x64 absolute linker pin confirmed first by `where.exe link.exe`.
+
+All twelve command groups passed. The focused tests reported 33
+`project_file_`, 2 `project_recovery_`, and 18 `project_publication_` tests
+passed, with 0 failed and 0 ignored; strict JSON reported 130 assertions.
+This is current-source software evidence only. Upgrade/downgrade machine
+rehearsals, hostile-input fuzz breadth, cross-platform file identity, external
+endpoints, and physical output remain unclaimed.
