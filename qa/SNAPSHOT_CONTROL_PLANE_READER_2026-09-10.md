@@ -2116,3 +2116,38 @@ owned by PID 0.
 This checkpoint does not claim real-file missing → Retry → recovery, actual
 Art-Net/ASIO/NDI/Spout/device output, Mac, signing, publication, or
 product-wide completion.
+
+## Show Spout reset paired projection reader follow-up
+
+The serialized Show Spout reset path now reads only the paired authored video
+outputs and compositions through the existing
+`EngineHandle::video_outputs_and_compositions_snapshot()` projection before
+and after physical sender retirement. Owner/fence admission, exact pair
+classification, physical-before-engine ordering, and the fail-closed
+ambiguous-pair behavior are unchanged; no physical output is enabled by this
+change.
+
+The app regression set for Show Spout reset passed `5/5`, including absent,
+legacy, active, physical-retirement-failure, and the structural narrow-reader
+guard. The broader narrow-reader structural set passed `31/31` before this
+local change. The maintained wrapper checker passed `243` assertions with
+`27` hostile mutation fixtures, and `git diff --check` passed.
+
+A fresh maintained-wrapper `pnpm.cmd --dir app tauri build --no-bundle`
+completed with the pinned MSVC 14.44.35207 Build Tools linker. The exact
+checkout executable is 64,733,184 bytes with SHA-256
+`14FE8D853E8C00ADD5D57734BA04C71030B3C70145D5FDDDDDEAC6FCA179E2C5`.
+The first probe invocation was not accepted because Windows PowerShell 5.1
+misread the Japanese workspace path before application launch; the same
+fixed script was rerun with PowerShell 7. The successful isolated native probe
+is recorded at
+`target/qa/native-final-validation-20260911-56/native-final-validation.json`:
+one maximized responsive `Syndocal` window, Standby ownership with
+lighting/video disabled, snapshot IPC, missing media/layer thumbnail IPC
+rejection with valid native tickets, zero physical-output operations, and
+exact executable/listener cleanup. The report records zero exact-path
+Syndocal processes and zero remaining debug listener after cleanup.
+
+This checkpoint does not claim real-file missing → Retry → recovery, actual
+Art-Net/ASIO/NDI/Spout/device output, Mac, signing, publication, or
+product-wide completion.

@@ -74585,10 +74585,11 @@ where
         &coordinator,
         expected_owner_principal,
     )?;
-    let before = state.engine.snapshot();
+    let (before_outputs, before_compositions) =
+        state.engine.video_outputs_and_compositions_snapshot();
     let candidate = show_spout_outputs::classify_show_spout_reset_candidate(
-        &before.video.outputs,
-        &before.video.compositions,
+        &before_outputs,
+        &before_compositions,
     )
     .map_err(|error| format!("Show Spout reset requires an exact recognized pair: {error}"))?;
     let expected = match candidate {
@@ -74605,10 +74606,11 @@ where
     // joins; if it leaves the authored pair intact, this Reset-only command
     // performs the separately prevalidated atomic removal below.
     retire_physical(state)?;
-    let after_physical = state.engine.snapshot();
+    let (after_outputs, after_compositions) =
+        state.engine.video_outputs_and_compositions_snapshot();
     match show_spout_outputs::classify_show_spout_reset_candidate(
-        &after_physical.video.outputs,
-        &after_physical.video.compositions,
+        &after_outputs,
+        &after_compositions,
     )
     .map_err(|error| {
         format!("Show Spout reset became ambiguous after native retirement: {error}")
@@ -93458,6 +93460,27 @@ pub(crate) mod tests {
         let body = &source[function_start..function_end];
         assert!(body.contains("auto_vj_last_action"));
         assert!(!body.contains("engine.snapshot()"));
+    }
+
+    #[test]
+    fn show_spout_reset_uses_the_narrow_video_projection_reader() {
+        let source = include_str!("main.rs");
+        let function_start = source
+            .find("fn reset_show_spout_outputs_without_output_lease_with_physical_retirement<")
+            .expect("missing show Spout reset core");
+        let function_end = source[function_start..]
+            .find(
+                "\n#[cfg(all(feature = \"spout\", target_os = \"windows\", target_arch = \"x86_64\"))]",
+            )
+            .map(|offset| function_start + offset)
+            .expect("missing show Spout reset core boundary");
+        let body = &source[function_start..function_end];
+        assert_eq!(
+            body.matches("video_outputs_and_compositions_snapshot()").count(),
+            2,
+            "show Spout reset must read the paired video projection before and after physical retirement"
+        );
+        assert!(!body.contains("state.engine.snapshot()"));
     }
 
     #[test]
