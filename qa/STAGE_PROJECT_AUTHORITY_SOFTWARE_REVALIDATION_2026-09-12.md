@@ -23,3 +23,16 @@ first with `where.exe link.exe`. The old alpha.11 native hash remains
 historical evidence only. Fixture hardware, current native UI launch,
 cross-platform execution and product-wide acceptance are not claimed; all
 three rows remain `In progress`.
+
+## Current-main project authority rerun — 2026-09-12
+
+The bounded project-authority checks were rerun against current `main` at
+`b0af6a052bc22ed9c51484af2b76689f0ab0fd5b`:
+
+- `pnpm.cmd --dir app run check:project-transaction` — PASS;
+- `node app/scripts/check-project-transaction-mutation-controller.mjs` — PASS,
+  6 scenarios with no native/UI side effects.
+
+This is deterministic software evidence only. It does not claim the frozen
+re-audit, native UI, external client, physical output, or product-wide
+acceptance.
