@@ -235,3 +235,33 @@ This checkpoint does not close the physical `INPUT-PHYSICAL-001` or full
 latency, device and venue behavior, dependent F2 ownership, ASIO/NDI physical
 acceptance, Mac, signing, publication, and product-wide completion remain
 unclaimed.
+
+## Current-main generation/retirement revalidation — 2026-09-11
+
+After the current snapshot/output reader changes and stale-result fences, the
+bounded F1 software checks were rerun against source HEAD
+`8b759bcd8ad0dab6e391707052aaa4fcb9e838b7`. No input API, generation model,
+or physical-output behavior was changed by this revalidation.
+
+Evidence is preserved under
+`target/qa/f1-current-main-20260911-01/`. The project transaction and project
+authority checker passed. With MSVC 14.44.35207 initialized by
+`vcvars64.bat -vcvars_ver=14.44`, and the pinned linker first in
+`where.exe link.exe`, all six focused Rust filters passed:
+
+```text
+callback_epoch                         3 passed, 0 failed
+installed_callback_gate                1 passed, 0 failed
+project_transaction_fence              1 passed, 0 failed
+external_admission_                    2 passed, 0 failed
+project_control_retirement             1 passed, 0 failed
+project_retirement                     6 passed, 0 failed
+```
+
+This is current-main software evidence for stale constructor callbacks,
+generation overflow, non-waiting admission, transaction-boundary fencing,
+join-before-publish retirement, and partial-take cleanup. It does not close
+`F1-INPUT-GENERATIONS-001` or `INPUT-PHYSICAL-001`: real MIDI/OSC/DMX clients,
+reconnect/latency, devices, venue behavior, dependent F2 ownership, ASIO/NDI
+physical acceptance, Mac, signing, publication, and product-wide completion
+remain unclaimed.
