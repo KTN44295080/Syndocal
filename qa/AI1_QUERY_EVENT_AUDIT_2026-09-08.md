@@ -87,3 +87,27 @@ project-replacement redaction, event backlog convergence, and explicit
 retention-gap resnapshot. `AI1-SCHEMAS-001` remains Open for complete canonical
 family parity, generated external schemas, external adapters, and real-client
 reconnect/recovery. The real-file thumbnail recovery trial was not rerun.
+
+## Current-main query/event revalidation — 2026-09-11
+
+The bounded AI1 suite was rerun after the current output and snapshot
+checkpoints at source HEAD `3e51a8ae4c1290d3db34ac0b6a3389ef417fe4b9`.
+Evidence is preserved under `target/qa/ai1-current-main-20260911-01/`.
+The exact MSVC 14.44.35207 x64 linker was initialized with
+`vcvars64.bat -vcvars_ver=14.44` and returned first by `where.exe link.exe`.
+
+```text
+cargo test --manifest-path app/src-tauri/Cargo.toml --release --locked -j 1 control_plane_query -- --test-threads=1
+test result: ok. 14 passed; 0 failed; 0 ignored
+```
+
+The run retained the existing coverage for catalog bounds/order,
+owner-bound single-use cursors, tamper/replay and expiry/capacity rejection,
+stale/future fence rejection, strict page bounds, serialized capture ordering,
+project-replacement redaction, event backlog convergence, exact generation
+source selection, and explicit retention-gap resnapshot.
+
+`AI1-SCHEMAS-001` remains Open. This is bounded local query/event evidence;
+it does not prove every canonical family, generated external schema parity,
+Remote/MCP/JSON-RPC adapters, or real-client reconnect/recovery. Physical,
+Mac, signing, publication, and product-wide acceptance remain unclaimed.
