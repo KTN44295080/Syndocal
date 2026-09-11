@@ -54,3 +54,17 @@ The current EXE hash is also bound to the native thumbnail cancellation probe
 in `qa/THUMBNAIL_NATIVE_CANCELLATION_CURRENT_MAIN_2026-09-12.md`. It remains a
 local unbundled development artifact; no signed release candidate, publication,
 or clean-machine/updater acceptance is claimed.
+
+## Current-main static release rerun — 2026-09-12
+
+The complete `pnpm.cmd --dir app run check:release` static gate was rerun at
+current `main` `d18f7d76768929ec2958832937adc6fb5fd0e47a`. It passed through
+the completion/Q1-Q4 ledgers, routing/invoke and shortcut inventories,
+transaction/recovery/publication, admission, media/thumbnail policy,
+snapshot publication, agent bridge, output fail-closed, ASIO packaging and
+v3 contract, live-audio IPC, Timeline audio/loop/transport/follow,
+watermark/bootstrap, video polling/routing/window observation, camera UI, and
+release metadata checks. The ASIO packaging self-test reported 169 assertions;
+the ASIO v3 contract reported 22; the audio output bus reported 11. This was a
+static software gate only: no new native build, physical output, signed or
+published artifact, updater service, or external-device acceptance was run.
