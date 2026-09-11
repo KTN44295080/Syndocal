@@ -115,3 +115,21 @@ latency, interruption of synchronous decoder/OS-I/O/GPU sections, native child
 termination, application restart, physical output, Mac, signing, publication,
 or product-wide completion. The real-file missing → Retry → recovery evidence
 was not rerun.
+
+## Pre-announcement cancellation regression — 2026-09-11
+
+The existing native thumbnail request protocol now has an explicit checker
+case for the ordering where the frontend Abort arrives after command dispatch
+but before the native start ticket is delivered to JavaScript. The test proves
+that no cancellation is sent without a ticket, then the exact announced
+lane/request ticket is cancelled once it arrives. The product implementation,
+ticket schema, owner binding, worker admission lifetime, and IPC inventory are
+unchanged.
+
+`pnpm.cmd --dir app run check:native-thumbnail-request` passed, including the
+normal success, exact abort cancellation, pre-announcement abort, stale-result
+rejection, cancellation failure, and malformed/foreign ticket cases.
+`pnpm.cmd --dir app run check:media-thumbnails` passed, and `git diff --check`
+passed. This checker-only regression does not claim hard cancellation latency,
+decoder/OS I/O interruption, native hardware, real-file Retry recovery, Mac,
+signing, publication, or product-wide completion.
