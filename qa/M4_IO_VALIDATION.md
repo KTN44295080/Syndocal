@@ -124,3 +124,17 @@ For RDM, also record transport, gateway/interface firmware, fixture UID/PID, dis
 | MIDI control loopback | loopMIDI `TestMIDI` input/output | The port was enumerated as input index `2` and output index `3`. A `B0 7B 7F` CC sent to the virtual output was received by the production `connect_midi_control` path and decoded as `MidiControlEvent::TapBpm`; `virtual_midi_loopback_routes_control_through_production_midir_path` returned `1 passed / 0 failed / 0 ignored` | Virtual transport and production decode path pass; physical controller movement, clock/MTC, LED feedback, USB buffering, and end-to-end latency remain unverified |
 
 This is a software/host-local loopback result. It is intentionally recorded separately from the physical MIDI acceptance row and does not promote that row to a physical pass.
+
+### 2026-09-12 current-host availability recheck
+
+This is a read-only Windows host inventory, not an acceptance run. The current
+host exposed no COM/serial ports through `[System.IO.Ports.SerialPort]::GetPortNames()`.
+Present MIDI-related devices were `teVirtualMIDI - Virtual MIDI Driver x64`,
+`CustomMIDI1`, and Windows virtual MIDI service/loop devices; no physical MIDI
+endpoint was identified. Present audio devices included Realtek, Elgato
+Virtual Audio, Bluetooth endpoints, and the built-in audio path. ASIO registry
+entries existed for DDJ-FLX10, HOTONE, MOTU M Series, Realtek, and Topping,
+but registry presence does not prove a connected driver, opened stream, fault
+recovery, soak, or latency acceptance. No fixture, serial-DMX, or external
+comparison application was operated. The DMX/RDM, physical MIDI, ASIO matrix,
+venue, and pinned comparison rows therefore remain external gates.
