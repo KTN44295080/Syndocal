@@ -145,13 +145,23 @@ handle boundary, not a successful MP4 missing→Retry→recovery proof, so the
 MP4 case remains open and the overall real-file acceptance is limited to the
 PNG case.
 
+To separate the path from the native handle, the same two-case probe was
+repeated as run `target/qa/native-thumbnail-failure-recovery-20260912-02`,
+with both test-owned materials staged under an ASCII LocalAppData path outside
+OneDrive. PNG again completed missing→Retry→recovery; MP4 again returned
+`EBUSY` on the move before missing state. The external staging was removed
+after its hashes and empty held directory were verified; the raw run report is
+retained. This reproduces the MP4 boundary independently of the OneDrive path.
+
 The app exited through the owned-process cleanup path and the probe listener
 count was zero. The test-owned held directory was empty after cleanup. The
-normal-profile digest changed only for `agent-bridge-v1.json`
-(`1075de22116ccdaf19465802e9b7c4759a727b278660382f69e729788f7695e4` before →
-`6d82fea3f788468001395e51606aab04a11a08c988af2391f4b78dd64f98ade9` after);
-the other recorded files were unchanged. The descriptor was not repaired or
-restored, and its cause is not attributed by this test.
+The normal-profile digest changed only for `agent-bridge-v1.json` in each run
+(`1075de22116ccdaf19465802e9b7c4759a727b278660382f69e729788f7695e4` →
+`6d82fea3f788468001395e51606aab04a11a08c988af2391f4b78dd64f98ade9` in run
+01, then `6d82fea3f788468001395e51606aab04a11a08c988af2391f4b78dd64f98ade9`
+→ `a5e2b5ddea04d08544d9a5991ad997e0405705de7d697c4f4b6e1d57b2e93227` in
+run 02); the other recorded files were unchanged. The descriptor was not
+repaired or restored, and its cause is not attributed by this test.
 
 This evidence does not close the broader `MEDIA-DERIVED-001` row, native UI
 cancellation acceptance, physical device, Mac, signing, publication, or
