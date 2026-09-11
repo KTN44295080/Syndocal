@@ -6,9 +6,9 @@ use protocol::{
     PlaybackExecutorSummary, StageObjectSummary, TimelineAudioClipId, TimelineAudioOutputBus,
     TimelineCueEventSummary, TimelineEventId, TimelineFollowRuntimeStatus,
     TimelineFollowRuntimeStatusSnapshot, TimelineFollowRuntimeSummary, TimelineLayerSummary,
-    TimelineLoopRuntimeStatus, VideoClipRuntimeSnapshot, VideoLayerId, VideoLayerState,
-    VideoLayerTransitionBusSummary, VideoLayerTransitionRuntimeSnapshot, VideoOutputId,
-    VideoOutputSummary, VideoSnapshot, VideoSourceSummary,
+    TimelineLoopRuntimeStatus, VideoClipRuntimeSnapshot, VideoIsfEffectSummary, VideoLayerId,
+    VideoLayerState, VideoLayerTransitionBusSummary, VideoLayerTransitionRuntimeSnapshot,
+    VideoOutputId, VideoOutputSummary, VideoSnapshot, VideoSourceSummary,
 };
 
 /// The runtime-only projection required by the control-plane query adapter.
@@ -45,6 +45,17 @@ pub struct EngineTelemetrySnapshot {
     pub primary_output: DmxOutputConfig,
     pub dmx_outputs: Vec<DmxOutputConfig>,
     pub telemetry: EngineTelemetry,
+}
+
+fn video_isf_effect_source_bytes(effect: &VideoIsfEffectSummary) -> Result<usize, String> {
+    effect
+        .stack
+        .iter()
+        .try_fold(effect.source.len(), |total, stage| {
+            total
+                .checked_add(stage.source.len())
+                .ok_or_else(|| "Project ISF source size overflowed".to_string())
+        })
 }
 
 /// The authored Cue fields required by metadata admission. Keeping the
@@ -607,6 +618,44 @@ impl EngineHandle {
     pub fn video_layer_ids_snapshot(&self) -> Vec<VideoLayerId> {
         self.read_snapshot_field(|snapshot| {
             snapshot.video.layers.iter().map(|layer| layer.id).collect()
+        })
+    }
+
+    /// Read one layer's ISF addition and the current project ISF total under
+    /// one snapshot guard for duplicate-layer admission.
+    pub fn video_layer_duplicate_admission_snapshot(
+        &self,
+        layer_id: VideoLayerId,
+    ) -> Option<Result<(usize, usize), String>> {
+        self.read_snapshot_field(|snapshot| {
+            let source_layer = snapshot
+                .video
+                .layers
+                .iter()
+                .find(|layer| layer.id == layer_id)?;
+            let added_source_bytes = match source_layer
+                .isf_effect
+                .as_ref()
+                .map(video_isf_effect_source_bytes)
+                .transpose()
+            {
+                Ok(bytes) => bytes.unwrap_or(0),
+                Err(error) => return Some(Err(error)),
+            };
+            let current_source_bytes = match snapshot
+                .video
+                .layers
+                .iter()
+                .filter_map(|layer| layer.isf_effect.as_ref())
+                .try_fold(0_usize, |total, effect| {
+                    video_isf_effect_source_bytes(effect)?
+                        .checked_add(total)
+                        .ok_or_else(|| "Project ISF source size overflowed".to_string())
+                }) {
+                Ok(bytes) => bytes,
+                Err(error) => return Some(Err(error)),
+            };
+            Some(Ok((added_source_bytes, current_source_bytes)))
         })
     }
 

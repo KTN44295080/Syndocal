@@ -41506,20 +41506,15 @@ fn duplicate_video_layer(
     source_layer_id: VideoLayerId,
     label: String,
 ) -> Result<VideoLayerId, String> {
-    let snapshot = state.engine.snapshot();
-    let source_layer = snapshot
-        .video
-        .layers
-        .iter()
-        .find(|layer| layer.id == source_layer_id)
+    let admission = state
+        .engine
+        .video_layer_duplicate_admission_snapshot(source_layer_id)
         .ok_or_else(|| format!("Video layer {source_layer_id} was not found"))?;
-    let added_source_bytes = source_layer
-        .isf_effect
-        .as_ref()
-        .map(video_isf_effect_source_bytes)
-        .transpose()?
-        .unwrap_or(0);
-    validate_project_isf_source_budget_after_addition(&snapshot, added_source_bytes)?;
+    let (added_source_bytes, current_source_bytes) = admission?;
+    let total_source_bytes = current_source_bytes
+        .checked_add(added_source_bytes)
+        .ok_or_else(|| "Project ISF source size overflowed".to_string())?;
+    validate_project_isf_source_budget(total_source_bytes)?;
     let label = normalize_video_layer_label(label)?;
     let new_layer_id = state.engine.allocate_video_layer_id();
     state
@@ -42669,6 +42664,7 @@ fn validate_project_isf_source_budget(total_source_bytes: usize) -> Result<(), S
     Ok(())
 }
 
+#[cfg(test)]
 fn validate_project_isf_source_budget_after_addition(
     snapshot: &EngineSnapshot,
     added_source_bytes: usize,
@@ -42676,6 +42672,7 @@ fn validate_project_isf_source_budget_after_addition(
     validate_project_isf_source_budget_after_change(snapshot, None, None, added_source_bytes)
 }
 
+#[cfg(test)]
 fn validate_project_isf_source_budget_after_change(
     snapshot: &EngineSnapshot,
     replaced_layer_id: Option<VideoLayerId>,
@@ -93644,6 +93641,20 @@ pub(crate) mod tests {
             .map(|offset| function_start + offset);
         let body = &source[function_start..next_attribute.unwrap_or(source.len())];
         assert!(body.contains("video_composition_layer_admission_snapshot"));
+        assert!(!body.contains("engine.snapshot()"));
+    }
+
+    #[test]
+    fn duplicate_video_layer_uses_the_narrow_engine_reader() {
+        let source = include_str!("main.rs");
+        let function_start = source
+            .find("fn duplicate_video_layer(")
+            .expect("missing duplicate_video_layer command");
+        let next_attribute = source[function_start..]
+            .find("\n#[tauri::command]")
+            .map(|offset| function_start + offset);
+        let body = &source[function_start..next_attribute.unwrap_or(source.len())];
+        assert!(body.contains("video_layer_duplicate_admission_snapshot"));
         assert!(!body.contains("engine.snapshot()"));
     }
 

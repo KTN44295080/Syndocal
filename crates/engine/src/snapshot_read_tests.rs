@@ -443,6 +443,18 @@ fn assert_same_read_model(handle: &EngineHandle) {
             expected.video.layers.iter().map(|layer| layer.id).collect()
         )
     );
+    if let Some(layer) = expected.video.layers.first() {
+        assert_eq!(
+            handle.video_layer_duplicate_admission_snapshot(layer.id),
+            Some(Ok((0, 0)))
+        );
+    } else {
+        assert_eq!(handle.video_layer_duplicate_admission_snapshot(1), None);
+    }
+    assert_eq!(
+        handle.video_layer_duplicate_admission_snapshot(999_999),
+        None
+    );
     assert_eq!(
         handle.cue_metadata_admission_snapshot(999_999),
         CueMetadataAdmissionSnapshot {
