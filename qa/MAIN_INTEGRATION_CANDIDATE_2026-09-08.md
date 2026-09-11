@@ -388,3 +388,22 @@ weakened.
 This is local checker evidence only. It does not claim a signed artifact,
 public release, clean-machine install, native-window acceptance, physical
 output, external-client, Mac, or product-wide completion.
+
+## 2026-09-11 current-main serialized workspace release revalidation
+
+The current `main` source HEAD `87b0f8855124272bfac2b95a18cad0ff6955a4f4`
+was revalidated with the exact Windows MSVC `14.44.35207` x64 linker pinned
+and confirmed first by `where.exe link.exe`. The serialized command was:
+
+```text
+cargo test --workspace --release --locked -j 1 --quiet -- --test-threads=1
+```
+
+It exited `0`. Across the non-empty test binaries the aggregate result was
+`3579 passed / 0 failed / 46 ignored`; no assertion or threshold was changed.
+The complete output is preserved under
+`target/qa/workspace-release-current-main-20260911-01/cargo-test-output.txt`.
+
+This is current-main Windows source/build/test evidence only. It does not
+claim native-window, physical-output, external-client, Mac, signing,
+publication, clean-machine installation, or product-wide completion.
