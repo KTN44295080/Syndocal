@@ -111,3 +111,28 @@ publication failure drift, and superseded results. `AI2-COMMAND-BRIDGE-001`
 remains Open for all authored families, generated schema parity, external
 adapters, consent policy, and adversarial or real-client recovery. The
 real-file thumbnail recovery trial was not rerun.
+
+## Current-main authored-bridge revalidation — 2026-09-11
+
+The bounded AI2 checks were rerun after the current output, snapshot, and
+input-generation checkpoints at source HEAD
+`9c4a5e9f6cc1886b475f55a8536bbee1754f72e7`. Evidence is preserved under
+`target/qa/ai2-current-main-20260911-01/`.
+
+| Check | Result |
+| --- | --- |
+| `node app/scripts/check-authored-effect-enable.mjs` | PASS — strict rendered route, receipt validation, superseded A/B, bounded stale retry, rollback baseline |
+| `node app/scripts/check-project-transaction-mutation-controller.mjs` | PASS — 6 scenarios; no native/UI side effects |
+| `cargo test --manifest-path app/src-tauri/Cargo.toml --release --locked -j 1 authored -- --test-threads=1` | PASS — 34 passed, 0 failed, 0 ignored |
+
+The Rust run retained rejection of wrong operation/payload, owner/window
+mismatch, stale/future/expired fences, same-key shape conflicts,
+retired-owner replay, publication failure drift, and superseded results. It
+also retained exact authored commit Undo/Redo and byte-identical terminal
+retry behavior.
+
+`AI2-COMMAND-BRIDGE-001` remains Open. This is bounded local evidence for
+the existing authored vertical; it does not prove all authored families,
+generated schema parity, external Remote/MCP/JSON-RPC adapters, consent
+policy, adversarial matrices, or real-client recovery. Physical, Mac,
+signing, publication, and product-wide acceptance remain unclaimed.
