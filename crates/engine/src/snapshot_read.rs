@@ -498,6 +498,17 @@ impl EngineHandle {
         })
     }
 
+    /// Read the authored references required by node-graph admission without
+    /// cloning unrelated node-graph, authored, or runtime collections.
+    pub fn node_graph_admission_snapshot(&self) -> (Vec<PatchedFixtureSummary>, Vec<VideoLayerId>) {
+        self.read_snapshot_field(|snapshot| {
+            (
+                snapshot.fixtures.clone(),
+                snapshot.video.layers.iter().map(|layer| layer.id).collect(),
+            )
+        })
+    }
+
     /// Read one authored node-graph body for preset export without cloning
     /// unrelated graph bodies, authored collections, or runtime state.
     pub fn node_graph_summary_snapshot(&self, graph_id: NodeGraphId) -> Option<NodeGraphSummary> {

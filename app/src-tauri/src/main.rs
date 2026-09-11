@@ -48812,7 +48812,8 @@ fn save_node_graph(
         graph.id = state.engine.allocate_node_graph_id();
     }
     graph.audio_runtime.clear();
-    validate_node_graph_summary(&graph, &state.engine.snapshot())?;
+    let (fixtures, video_layer_ids) = state.engine.node_graph_admission_snapshot();
+    validate_node_graph_summary_from_published(&graph, &fixtures, &video_layer_ids)?;
     state.engine.upsert_node_graph(graph.clone())?;
     Ok(graph.id)
 }
@@ -48876,7 +48877,8 @@ fn load_node_graph_preset_file(
     let json = fs::read_to_string(&path).map_err(|error| error.to_string())?;
     let file: NodeGraphPresetFile =
         serde_json::from_str(&json).map_err(|error| error.to_string())?;
-    validate_node_graph_preset_file(&file, &state.engine.snapshot())?;
+    let (fixtures, video_layer_ids) = state.engine.node_graph_admission_snapshot();
+    validate_node_graph_preset_file_from_published(&file, &fixtures, &video_layer_ids)?;
     let mut graph = file.graph;
     graph.id = state.engine.allocate_node_graph_id();
     graph = node_graph_for_persistence(graph);
@@ -69145,9 +69147,86 @@ fn validate_effect_target_override_for_preset(
     }
 }
 
+fn validate_node_graph_fixture_targets_from_published(
+    fixtures: &[PatchedFixtureSummary],
+    fixtures_by_id: &HashMap<FixtureId, &PatchedFixtureSummary>,
+    fixture_ids: &[FixtureId],
+    target_group_ids: &[String],
+    attribute: &str,
+    owner_label: &str,
+) -> Result<(), String> {
+    validate_project_unique_refs(owner_label, fixture_ids)?;
+    for fixture_id in fixture_ids {
+        validate_project_fixture_attribute_ref(
+            fixtures_by_id,
+            *fixture_id,
+            attribute,
+            owner_label,
+        )?;
+    }
+    for group_id in target_group_ids {
+        let group_fixtures = fixtures
+            .iter()
+            .filter(|fixture| {
+                fixture
+                    .group_ids
+                    .iter()
+                    .any(|candidate| group_matches(candidate, group_id))
+            })
+            .collect::<Vec<_>>();
+        if group_fixtures.is_empty() {
+            return Err(format!(
+                "Project {owner_label} references missing fixture group '{group_id}'"
+            ));
+        }
+        if !group_fixtures.iter().any(|fixture| {
+            fixture
+                .controls
+                .iter()
+                .any(|control| control.attribute == attribute)
+        }) {
+            return Err(format!(
+                "Project {owner_label} group '{group_id}' has no fixtures exposing attribute {attribute}"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_node_graph_target_references_from_published(
+    fixtures: &[PatchedFixtureSummary],
+    video_layer_ids: &[VideoLayerId],
+    fixture_ids: &[FixtureId],
+    video_targets: &[VideoEffectTarget],
+) -> Result<(), String> {
+    for fixture_id in fixture_ids {
+        if !fixtures.iter().any(|fixture| fixture.id == *fixture_id) {
+            return Err(format!("Fixture {fixture_id} was not found"));
+        }
+    }
+    for target in video_targets {
+        validate_video_layer_ids_from_published(video_layer_ids, &target.layer_ids)?;
+    }
+    Ok(())
+}
+
 fn validate_node_graph_summary(
     graph: &NodeGraphSummary,
     snapshot: &EngineSnapshot,
+) -> Result<(), String> {
+    let video_layer_ids = snapshot
+        .video
+        .layers
+        .iter()
+        .map(|layer| layer.id)
+        .collect::<Vec<_>>();
+    validate_node_graph_summary_from_published(graph, &snapshot.fixtures, &video_layer_ids)
+}
+
+fn validate_node_graph_summary_from_published(
+    graph: &NodeGraphSummary,
+    fixtures: &[PatchedFixtureSummary],
+    video_layer_ids: &[VideoLayerId],
 ) -> Result<(), String> {
     if graph.id == 0 {
         return Err("Node graph id must be greater than 0".to_string());
@@ -69361,21 +69440,21 @@ fn validate_node_graph_summary(
                 }
                 validate_group_ids(&output.target_group_ids)?;
                 validate_video_effect_targets(&output.video_targets)?;
-                let fixtures_by_id = snapshot
-                    .fixtures
+                let fixtures_by_id = fixtures
                     .iter()
                     .map(|fixture| (fixture.id, fixture))
                     .collect::<HashMap<_, _>>();
-                validate_project_effect_fixture_targets(
-                    snapshot,
+                validate_node_graph_fixture_targets_from_published(
+                    fixtures,
                     &fixtures_by_id,
                     &output.fixture_ids,
                     &output.target_group_ids,
                     &output.attribute,
                     &format!("node graph '{}' output node {}", graph.label, node.id),
                 )?;
-                validate_effect_target_references(
-                    snapshot,
+                validate_node_graph_target_references_from_published(
+                    fixtures,
+                    video_layer_ids,
                     &output.fixture_ids,
                     &output.video_targets,
                 )?;
@@ -69401,6 +69480,7 @@ fn validate_node_graph_summary(
     Ok(())
 }
 
+#[cfg(test)]
 fn validate_node_graph_preset_file(
     file: &NodeGraphPresetFile,
     snapshot: &EngineSnapshot,
@@ -69413,6 +69493,21 @@ fn validate_node_graph_preset_file(
     }
     validate_app_name("node graph preset", &file.app)?;
     validate_node_graph_summary(&file.graph, snapshot)
+}
+
+fn validate_node_graph_preset_file_from_published(
+    file: &NodeGraphPresetFile,
+    fixtures: &[PatchedFixtureSummary],
+    video_layer_ids: &[VideoLayerId],
+) -> Result<(), String> {
+    if file.version != 1 {
+        return Err(format!(
+            "Unsupported node graph preset version {}",
+            file.version
+        ));
+    }
+    validate_app_name("node graph preset", &file.app)?;
+    validate_node_graph_summary_from_published(&file.graph, fixtures, video_layer_ids)
 }
 
 fn validate_effect_preset(preset: &EffectPreset) -> Result<(), String> {
@@ -93511,6 +93606,29 @@ pub(crate) mod tests {
         let body = &source[function_start..next_attribute.unwrap_or(source.len())];
         assert!(body.contains("node_graph_exists"));
         assert!(!body.contains("engine.snapshot()"));
+    }
+
+    #[test]
+    fn node_graph_admission_commands_use_the_narrow_engine_reader() {
+        let source = include_str!("main.rs");
+        let expectations = [
+            ("save_node_graph", "node_graph_admission_snapshot"),
+            (
+                "load_node_graph_preset_file",
+                "node_graph_preset_file_from_published",
+            ),
+        ];
+        for (command, reader) in expectations {
+            let function_start = source
+                .find(&format!("fn {command}("))
+                .unwrap_or_else(|| panic!("missing {command} command"));
+            let next_attribute = source[function_start..]
+                .find("\n#[tauri::command]")
+                .map(|offset| function_start + offset);
+            let body = &source[function_start..next_attribute.unwrap_or(source.len())];
+            assert!(body.contains(reader));
+            assert!(!body.contains("engine.snapshot()"));
+        }
     }
 
     #[test]

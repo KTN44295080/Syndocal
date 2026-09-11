@@ -1732,3 +1732,42 @@ owned by PID 0.
 This checkpoint does not claim real-file missing → Retry → recovery, actual
 Art-Net/ASIO/NDI/Spout/device output, Mac, signing, publication, or
 product-wide completion.
+
+## Node Graph admission reader follow-up
+
+The `save_node_graph` and `load_node_graph_preset_file` admission paths now
+read only published fixture summaries and video-layer IDs through one
+`EngineHandle::node_graph_admission_snapshot()` publication read. Node graph
+shape, node/edge, fixture attribute/group, video-layer, preset version, and
+application-name validation remain fail-closed; project-wide validation keeps
+its existing full-snapshot boundary because it validates all authored
+collections together. The node graph mutation and persistence paths are
+unchanged.
+
+The focused engine snapshot-reader regression passed `8/8` with two existing
+ignored tests, including the node-graph projection and poisoned-publication
+default behavior. The app release structural regression passed `1/1`. The
+changed engine files passed individual rustfmt checks and `git diff --check`
+passed. The maintained wrapper checker passed `243` assertions with `27`
+hostile mutation fixtures. The first native build exposed one newly-unused
+test-only validation wrapper; it was scoped with `#[cfg(test)]`, and the
+subsequent focused app test and final native build completed with no
+first-party compiler warnings.
+
+A fresh maintained-wrapper `pnpm.cmd --dir app tauri build --no-bundle`
+completed with the pinned MSVC 14.44.35207 Build Tools linker and no
+first-party compiler warnings. The exact checkout executable is 64,677,376
+bytes with SHA-256
+`F774630E4A1818827950C5774D17D2BDA150025CC9B3BFA46D6974838D06C88C`.
+The isolated native probe at
+`target/qa/native-final-validation-20260911-45/native-final-validation.json`
+passed: one maximized responsive `Syndocal` window, Standby ownership with
+lighting/video disabled, snapshot IPC, missing media/layer thumbnail IPC
+rejection with valid native tickets, zero physical-output operations, and
+exact executable/listener cleanup. A direct post-probe check found zero
+exact-path Syndocal processes and only the expected port `TIME_WAIT` entry
+owned by PID 0.
+
+This checkpoint does not claim real-file missing → Retry → recovery, actual
+Art-Net/ASIO/NDI/Spout/device output, Mac, signing, publication, or
+product-wide completion.

@@ -201,6 +201,15 @@ fn publication(token: u64) -> EngineSnapshot {
 
 fn assert_same_read_model(handle: &EngineHandle) {
     let expected = handle.snapshot();
+    let expected_node_graph_admission = (
+        expected.fixtures.clone(),
+        expected
+            .video
+            .layers
+            .iter()
+            .map(|layer| layer.id)
+            .collect::<Vec<_>>(),
+    );
     let expected_timeline_layer_admission = expected
         .timeline_bank
         .iter()
@@ -438,6 +447,10 @@ fn assert_same_read_model(handle: &EngineHandle) {
     }
     assert_eq!(handle.node_graph_summary_snapshot(999_999), None);
     assert!(!handle.node_graph_exists(999_999));
+    assert_eq!(
+        handle.node_graph_admission_snapshot(),
+        expected_node_graph_admission
+    );
     assert_eq!(
         handle.video_composition_layer_admission_snapshot(1),
         (
