@@ -52,3 +52,54 @@ lighting/video permissions denied, and no video outputs. The probe then:
 This proves the real native missing-file → Retry → recovery path for the
 current source/EXE. It does not prove physical output, release publication,
 signing/notarization, or whole-product completion.
+
+## Current-main artifact revalidation — 2026-09-11
+
+The already accepted PNG missing-file recovery was revalidated against the
+current `main` source and a fresh identifier-only QA build. This is an
+artifact/source revalidation, not a second acceptance claim for the older
+run, and it did not change product source or the thumbnail contract.
+
+- Source HEAD: `746f8bba30820ae9dd202764b14d883d736ada7b`
+- Evidence: `target/qa/native-thumbnail-failure-recovery-20260911-02/`
+- QA build config:
+  `target/qa/native-thumbnail-failure-recovery-20260911-01-tauri.conf.json`
+- QA executable: `target/release/syndocal.exe` during the run
+- QA executable bytes: `64,568,320`
+- QA executable SHA-256:
+  `61D1C10115D751E17197191EE2D0DF8DABEF9C73D4F4C660C59CE2428D80F5B0`
+
+The maintained Windows wrapper selected and verified the MSVC
+`14.44.35207` x64 linker, and `tsc --noEmit` plus Vite completed during the
+build. The real WebView probe imported fresh test-owned PNG/MP4 copies,
+verified both 160x90 images, moved only the PNG copy to the held directory,
+reloaded the same native process, observed the missing-file error and enabled
+`Retry Thumbnails`, restored the exact PNG bytes, and used the real Retry UI.
+
+The restored PNG pixels matched the original red/green/blue/white opaque
+quadrants. The healthy MP4 URL and pixels remained unchanged, and the Retry
+added exactly one asset-thumbnail request for the missing asset. The run
+recorded 11 thumbnail requests total, zero page errors, zero raw project
+mutation commands, zero physical-output enable commands, one responsive
+maximized window, owned-process exit, and zero remaining debug listeners.
+The normal profile JSON digest was unchanged; both test fixture hashes matched
+their manifests after cleanup.
+
+Independent review of this run passed `node --check` for the bridge/probe,
+PowerShell launcher parsing, and a raw JSON assertion over the fault,
+retry-count, pixel, output, window, and cleanup fields. The thumbnail
+production modules had no diff between the previous revalidation source
+`1c30650da9ac0f356fbdbc41b07fc1f3ea9d5e26` and this source. The only change in
+the filtered video source was an existing test-only direct-child cancellation
+fixture adjustment; it does not alter thumbnail behavior.
+
+The ordinary non-QA executable was restored and rechecked after the isolated
+run: `target/release/syndocal.exe`, 64,568,320 bytes, SHA-256
+`CBC9CE9502D1173CB85A3BC28D75D0A37FD6FAA623473285F4ACBC20E5040B6E`.
+
+This revalidation covers the PNG missing-file → Retry → recovery path on the
+current main artifact. An independent MP4 missing-file move remains unclaimed
+because the prior bounded move helper encountered Windows `EBUSY` after MP4
+decoding; no forceful rename or byte alteration is allowed. GUI cancellation,
+physical output, Mac validation, signing/notarization, release publication,
+and whole-product completion remain separate boundaries.
