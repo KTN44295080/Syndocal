@@ -2032,7 +2032,7 @@ unchecked row.
       "scope": "Supported",
       "owner_files": "Media asset backend/engine owners per critical path A assignments",
       "dependencies": ["Project transaction authority E1-E4", "DEC-FILE-ID-001 disposition for non-Windows identity"],
-      "automated_proof": { "status": "not-passing", "command": "Planned: focused Media Asset gate equivalent to the historical A7 evidence command; rerun required on current source.", "expected_count": null },
+      "automated_proof": { "status": "passing", "command": "pnpm --dir app run check:media-asset-authority && node app/scripts/check-vj-first-run.mjs && node app/scripts/check-vj-media-import-access.mjs && pnpm --dir app run check:backend-operator-contract && pnpm --dir app run check:project-transaction", "expected_count": 5 },
       "native_proof": { "status": "recorded", "artifact_hash": null, "raw_evidence_paths": ["qa/MEDIA_ASSET_T1_A8_NATIVE_EVIDENCE_2026-08-13.md"], "na_reason": null },
       "hardware_external_proof": { "status": "not-run", "device_topology_duration": "Real storage/media corpora on the operator PC; macOS/Linux execution pending.", "artifact_hash": null, "raw_evidence_paths": [], "na_reason": null },
       "status": "In progress",
