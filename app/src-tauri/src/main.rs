@@ -50272,9 +50272,8 @@ fn load_fixture_preset_for_group(
         return Err(format!("Unsupported preset version {}", preset.version));
     }
 
-    let snapshot = state.engine.snapshot();
-    let group_fixtures = snapshot
-        .fixtures
+    let fixtures = state.engine.fixtures_snapshot();
+    let group_fixtures = fixtures
         .iter()
         .filter(|fixture| {
             fixture
@@ -50329,8 +50328,8 @@ fn load_fixture_preset_for_all_matching(
         return Err(format!("Unsupported preset version {}", preset.version));
     }
 
-    let snapshot = state.engine.snapshot();
-    let all_fixtures = snapshot.fixtures.iter().collect::<Vec<_>>();
+    let fixtures = state.engine.fixtures_snapshot();
+    let all_fixtures = fixtures.iter().collect::<Vec<_>>();
     let (fixture_ids, skipped_count) = compatible_fixture_preset_targets(&preset, all_fixtures);
     if fixture_ids.is_empty() {
         return Err("Preset is not compatible with any patched fixtures".to_string());
@@ -93741,6 +93740,25 @@ pub(crate) mod tests {
         let body = &source[function_start..next_attribute.unwrap_or(source.len())];
         assert!(body.contains("fixture_summary_snapshot"));
         assert!(!body.contains("engine.snapshot()"));
+    }
+
+    #[test]
+    fn fixture_preset_group_commands_use_the_narrow_engine_reader() {
+        let source = include_str!("main.rs");
+        for command in [
+            "load_fixture_preset_for_group",
+            "load_fixture_preset_for_all_matching",
+        ] {
+            let function_start = source
+                .find(&format!("fn {command}("))
+                .unwrap_or_else(|| panic!("missing {command} command"));
+            let next_attribute = source[function_start..]
+                .find("\n#[tauri::command]")
+                .map(|offset| function_start + offset);
+            let body = &source[function_start..next_attribute.unwrap_or(source.len())];
+            assert!(body.contains("fixtures_snapshot"));
+            assert!(!body.contains("engine.snapshot()"));
+        }
     }
 
     #[test]
