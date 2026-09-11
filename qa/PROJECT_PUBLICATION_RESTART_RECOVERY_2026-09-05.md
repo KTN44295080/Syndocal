@@ -118,3 +118,19 @@ master Q1 mirror and JSON ledger. This is only the deterministic software
 slice: native application launch, power-loss/disk-fault matrices, upgrade
 compatibility corpus, and product-wide recovery acceptance remain open. The
 row therefore stays `In progress`; no external or hardware success is claimed.
+
+## Current-main rerun — 2026-09-12
+
+The deterministic recovery/save checks were rerun against current `main` at
+`7fa035a0a6ef18482a4391cd76de4cbc7e4f3bc7`:
+
+- `pnpm.cmd --dir app run check:project-recovery-e3` — PASS;
+- `pnpm.cmd --dir app run check:project-publication-e4` — PASS;
+- `pnpm.cmd --dir app run check:project-storage` — PASS;
+- `node app/scripts/check-project-history-preflight.mjs` — PASS;
+- `node app/scripts/check-project-history-keyboard.mjs` — PASS.
+
+This is deterministic software evidence only. It does not claim native
+launch, power/disk-fault matrices, upgrade compatibility, cross-platform
+identity, external endpoint, physical output, or product-wide recovery
+acceptance.
