@@ -98,3 +98,23 @@ the user. This tranche repairs the separately observed autosave owner error.
   in Unity. External video cadence, crop and physical lighting remain unverified.
 - Preserve unrelated `app/scripts/check-viewport-containment.mjs` unchanged; it
   is excluded from this checkpoint. No Unity files or show-output actions changed.
+
+## Current-main recovery/save ledger slice — 2026-09-12
+
+The `RECOVERY-SAVE` software slice was rerun against current `main` at
+`f8169d1547bd238d5eb486b4d64c8d139d481dbb`. Product source was unchanged by
+this checkpoint. The following current-source checks passed:
+
+| Check | Result |
+| --- | --- |
+| `pnpm --dir app run check:project-recovery-e3` | PASS — authority/recovery production driver, durable intent, reply-loss, stale and late-ACK rejection |
+| `pnpm --dir app run check:project-publication-e4` | PASS — publication receipt, abandoned/retired request, malformed/future reply and lost-ACK rejection |
+| `pnpm --dir app run check:project-storage` | PASS — recovery checkpoint normalization, invalid app/project/snapshot rejection, runtime stripping |
+| `node app/scripts/check-project-history-preflight.mjs` | PASS — flush failure, stale/epoch fence, CAS and redo invalidation |
+| `node app/scripts/check-project-history-keyboard.mjs` | PASS — Ctrl/Meta Undo/Redo routing with native text-editor preservation |
+
+The `COV-RECOVERY-SAVE-001` automated proof is now recorded as passing in the
+master Q1 mirror and JSON ledger. This is only the deterministic software
+slice: native application launch, power-loss/disk-fault matrices, upgrade
+compatibility corpus, and product-wide recovery acceptance remain open. The
+row therefore stays `In progress`; no external or hardware success is claimed.

@@ -2296,7 +2296,7 @@ unchecked row.
       "scope": "Supported",
       "owner_files": "Recovery/save owner (E3/E4 lanes)",
       "dependencies": ["E4 publication receipts"],
-      "automated_proof": { "status": "not-passing", "command": "Planned: rerun of project-recovery-e3/project-publication-e4 checkers on current source.", "expected_count": null },
+      "automated_proof": { "status": "passing", "command": "pnpm --dir app run check:project-recovery-e3 && pnpm --dir app run check:project-publication-e4 && pnpm --dir app run check:project-storage && node app/scripts/check-project-history-preflight.mjs && node app/scripts/check-project-history-keyboard.mjs", "expected_count": 5 },
       "native_proof": { "status": "not-run", "artifact_hash": null, "raw_evidence_paths": [], "na_reason": "No current-source native acceptance run is recorded for this row in the owned evidence manifest." },
       "hardware_external_proof": { "status": "not-run", "device_topology_duration": "Power-loss/disk-fault simulation hardware or VM matrices.", "artifact_hash": null, "raw_evidence_paths": [], "na_reason": null },
       "status": "In progress",
