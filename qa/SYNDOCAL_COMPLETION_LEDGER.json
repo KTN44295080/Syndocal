@@ -3,7 +3,7 @@
   "source_document": "qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md",
   "authoritative_sections": ["6", "7", "8", "9"],
   "classifications": ["Supported", "Deferred", "External acceptance", "Out of scope"],
-  "expected_status_counts": { "Open": 50, "Deferred": 8 },
+  "expected_status_counts": { "Open": 49, "Deferred": 8, "Complete": 1 },
   "expected_section_counts": { "6": 37, "7": 6, "8": 9, "9": 6 },
   "items": [
     {
@@ -28,13 +28,13 @@
     },
     {
       "id": "RELEASE-METADATA-GATE-001",
-      "source": { "section": "6", "kind": "Open" },
+      "source": { "section": "6", "kind": "Complete" },
       "classification": "Supported",
       "owner": "Release metadata owner",
       "dependency": "Synchronized product metadata and release-train policy",
       "nonclaim": "Does not claim a signed tag, updater, or published artifact exists.",
-      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/UPDATE_RELEASE_RUNBOOK.md"],
-      "status": "Open"
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/UPDATE_RELEASE_RUNBOOK.md", "qa/RELEASE_SOFTWARE_REVALIDATION_2026-09-12.md", "qa/RELEASE_METADATA_GATE_CHECKPOINT_2026-09-13.md"],
+      "status": "Complete"
     },
     {
       "id": "AI3-DURABLE-RECOVERY-001",

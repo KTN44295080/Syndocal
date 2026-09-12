@@ -14,11 +14,11 @@ export const allowedClassifications = Object.freeze([
   "External acceptance",
   "Out of scope",
 ]);
-export const allowedSourceKinds = Object.freeze(["Open", "Deferred"]);
-export const expectedStatusCounts = Object.freeze({ Open: 50, Deferred: 8 });
+export const allowedSourceKinds = Object.freeze(["Open", "Deferred", "Complete"]);
+export const expectedStatusCounts = Object.freeze({ Open: 49, Deferred: 8, Complete: 1 });
 export const expectedSectionCounts = Object.freeze({ "6": 37, "7": 6, "8": 9, "9": 6 });
 
-const markerPattern = /<!--\s*completion-ledger:\s*(Open|Deferred):\s*([A-Z0-9-]+)\s*-->/gu;
+const markerPattern = /<!--\s*completion-ledger:\s*(Open|Deferred|Complete):\s*([A-Z0-9-]+)\s*-->/gu;
 const stableIdPattern = /^[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)*-\d{3}$/u;
 
 function assert(condition, message) {
@@ -74,6 +74,7 @@ export function collectAuthoritativeMarkers(documentText) {
     const markedRows = [...line.matchAll(markerPattern)].map((match) => ({ kind: match[1], id: match[2] }));
     const hasLedgerMarker = /<!--\s*completion-ledger:/u.test(line);
     const openCheckbox = /^- \[ \]/u.test(line);
+    const completeCheckbox = /^- \[x\]/iu.test(line);
     const explicitDeferred = /^- \*\*Deferred outside the Windows target:/u.test(line);
     const frozenDeferred = /^- \*\*Frozen \/ out of scope for the current Windows-local completion target:/u.test(line);
     const deferredRow = explicitDeferred || frozenDeferred;
@@ -83,8 +84,11 @@ export function collectAuthoritativeMarkers(documentText) {
     if (openCheckbox && (markedRows.length !== 1 || markedRows[0].kind !== "Open")) {
       throw new Error(`unmapped authoritative open row at ${sourceDocumentPath}:${index + 1}: exactly one Open marker is required.`);
     }
-    if (!openCheckbox && markedRows.length > 0 && !deferredRow) {
-      throw new Error(`arbitrary completion-ledger marker at ${sourceDocumentPath}:${index + 1} is not an open or deferred authority row.`);
+    if (completeCheckbox && markedRows.length > 0 && (markedRows.length !== 1 || markedRows[0].kind !== "Complete")) {
+      throw new Error(`unmapped authoritative completed row at ${sourceDocumentPath}:${index + 1}: exactly one Complete marker is required.`);
+    }
+    if (!openCheckbox && !completeCheckbox && markedRows.length > 0 && !deferredRow) {
+      throw new Error(`arbitrary completion-ledger marker at ${sourceDocumentPath}:${index + 1} is not an authority row.`);
     }
     if (deferredRow && (markedRows.length !== 1 || markedRows[0].kind !== "Deferred")) {
       throw new Error(`unmapped authoritative deferred row at ${sourceDocumentPath}:${index + 1}: exactly one Deferred marker is required.`);
@@ -133,10 +137,8 @@ export function validateCompletionLedger({
   assert(
     ledger.expected_status_counts
       && typeof ledger.expected_status_counts === "object"
-      && ledger.expected_status_counts.Open === expectedStatusCounts.Open
-      && ledger.expected_status_counts.Deferred === expectedStatusCounts.Deferred
-      && Object.keys(ledger.expected_status_counts).length === Object.keys(expectedStatusCounts).length,
-    "completion ledger expected_status_counts must be exactly Open=50 and Deferred=8.",
+      && JSON.stringify(ledger.expected_status_counts) === JSON.stringify(expectedStatusCounts),
+    "completion ledger expected_status_counts must match the current Open/Deferred/Complete counts.",
   );
   assert(
     ledger.expected_section_counts
@@ -156,7 +158,7 @@ export function validateCompletionLedger({
   }
 
   const ledgerById = new Map();
-  const statusCounts = { Open: 0, Deferred: 0 };
+  const statusCounts = { Open: 0, Deferred: 0, Complete: 0 };
   for (const [index, item] of ledger.items.entries()) {
     const label = `ledger item ${index + 1}`;
     assert(item && typeof item === "object" && !Array.isArray(item), `${label} must be an object.`);
@@ -175,20 +177,22 @@ export function validateCompletionLedger({
         `external acceptance ${item.id} must remain Open and may never be Deferred or Complete.`,
       );
     }
-    assert(item.status !== "Complete", `${item.id} may not be Complete in the current ledger.`);
-    assert(item.status === "Open" || item.status === "Deferred", `${item.id} has an invalid status.`);
+    assert(item.status === "Open" || item.status === "Deferred" || item.status === "Complete", `${item.id} has an invalid status.`);
     if (item.source.kind === "Open") {
       assert(item.status === "Open", `open source row ${item.id} must remain status Open.`);
       assert(
         item.classification === "Supported" || item.classification === "External acceptance",
         `open source row ${item.id} must be Supported or External acceptance.`,
       );
-    } else {
+    } else if (item.source.kind === "Deferred") {
       assert(item.status === "Deferred", `deferred source row ${item.id} must remain status Deferred.`);
       assert(
         item.classification === "Deferred" || item.classification === "Out of scope",
         `deferred source row ${item.id} must be Deferred or Out of scope.`,
       );
+    } else {
+      assert(item.status === "Complete", `completed source row ${item.id} must remain status Complete.`);
+      assert(item.classification === "Supported", `completed source row ${item.id} must remain Supported.`);
     }
     statusCounts[item.status] += 1;
     assert(Array.isArray(item.evidence_paths) && item.evidence_paths.length > 0, `${item.id} is missing evidence paths.`);
@@ -214,8 +218,8 @@ export function validateCompletionLedger({
   }
 
   assert(
-    statusCounts.Open === expectedStatusCounts.Open && statusCounts.Deferred === expectedStatusCounts.Deferred,
-    `completion ledger must retain ${expectedStatusCounts.Open} Open + ${expectedStatusCounts.Deferred} Deferred rows.`,
+    JSON.stringify(statusCounts) === JSON.stringify(expectedStatusCounts),
+    `completion ledger must retain ${expectedStatusCounts.Open} Open + ${expectedStatusCounts.Deferred} Deferred + ${expectedStatusCounts.Complete} Complete rows.`,
   );
   const sectionCounts = Object.fromEntries(
     requiredSections.map((section) => [section, markers.filter((marker) => marker.section === section).length]),
@@ -244,7 +248,7 @@ export function runCompletionLedgerCheck({ repoRoot = workspaceRoot } = {}) {
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const result = runCompletionLedgerCheck();
   console.log(
-    `completion ledger ok; ${result.statusCounts.Open} Open + ${result.statusCounts.Deferred} Deferred authority rows `
+    `completion ledger ok; ${result.statusCounts.Open} Open + ${result.statusCounts.Deferred} Deferred + ${result.statusCounts.Complete} Complete authority rows `
       + `(${result.itemCount} total; sections 6=${result.sectionCounts["6"]}, 7=${result.sectionCounts["7"]}, `
       + `8=${result.sectionCounts["8"]}, 9=${result.sectionCounts["9"]})`,
   );

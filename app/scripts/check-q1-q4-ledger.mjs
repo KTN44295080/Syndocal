@@ -357,7 +357,7 @@ export function validateQ1Q4Ledger({
   const markerById = new Map(flowMarkers.map((marker) => [marker.id, marker]));
   const completionItems = Array.isArray(completionLedger?.items) ? completionLedger.items : [];
   const completionById = new Map(completionItems.map((item) => [item.id, item]));
-  const statusCountsFromLedger = { Open: 0, Deferred: 0 };
+  const statusCountsFromLedger = { Open: 0, Deferred: 0, Complete: 0 };
   for (const item of completionItems) {
     if (item.status in statusCountsFromLedger) statusCountsFromLedger[item.status] += 1;
   }
@@ -373,8 +373,12 @@ export function validateQ1Q4Ledger({
     }
   }
   const declaredFlowCounts = ledger.expected_counts?.flow_markers ?? {};
-  if (declaredFlowCounts.Open !== statusCountsFromLedger.Open || declaredFlowCounts.Deferred !== statusCountsFromLedger.Deferred) {
-    findings.add("STALE_EXPECTED_COUNTS", "expected_counts.flow_markers must equal the live completion-ledger Open/Deferred counts.");
+  if (
+    declaredFlowCounts.Open !== statusCountsFromLedger.Open
+      || declaredFlowCounts.Deferred !== statusCountsFromLedger.Deferred
+      || declaredFlowCounts.Complete !== statusCountsFromLedger.Complete
+  ) {
+    findings.add("STALE_EXPECTED_COUNTS", "expected_counts.flow_markers must equal the live completion-ledger Open/Deferred/Complete counts.");
   }
   const infraItem = completionById.get("COMP-Q1-Q4-001");
   if (!infraItem || infraItem.status !== "Open") {
@@ -671,7 +675,11 @@ export function validateQ1Q4Ledger({
   const actualCounts = {
     q0_domains: domainRegistryIds.length,
     q0_source_contracts: sourceContractPaths.length,
-    flow_markers: { Open: statusCountsFromLedger.Open, Deferred: statusCountsFromLedger.Deferred },
+    flow_markers: {
+      Open: statusCountsFromLedger.Open,
+      Deferred: statusCountsFromLedger.Deferred,
+      Complete: statusCountsFromLedger.Complete,
+    },
     q1_rows: q1Rows.length,
     q2_decisions: q2Rows.length,
     q3_risks: q3Rows.length,
@@ -720,7 +728,11 @@ export function validateQ1Q4Ledger({
     domainsCovered: coveredDomains.size,
     sourceContractsCovered: coveredSources.size,
     flowMarkersReferenced: coveredFlowMarkers.size,
-    flowMarkerCounts: { Open: statusCountsFromLedger.Open, Deferred: statusCountsFromLedger.Deferred },
+    flowMarkerCounts: {
+      Open: statusCountsFromLedger.Open,
+      Deferred: statusCountsFromLedger.Deferred,
+      Complete: statusCountsFromLedger.Complete,
+    },
   };
 }
 
@@ -737,7 +749,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   console.log(
     `q1-q4 coverage ledger ok; ${result.q1Rows} Q1 rows cover ${result.domainsCovered}/29 Q0 domains and `
       + `${result.sourceContractsCovered}/10 source contracts; ${result.flowMarkersReferenced}/58 Flow markers referenced `
-      + `(${result.flowMarkerCounts.Open} Open + ${result.flowMarkerCounts.Deferred} Deferred preserved); `
+      + `(${result.flowMarkerCounts.Open} Open + ${result.flowMarkerCounts.Deferred} Deferred + ${result.flowMarkerCounts.Complete} Complete); `
       + `${result.q2Decisions} decisions, ${result.q3Risks} risks, ${result.q4Evidence} evidence records linked; `
       + "master mirror parity verified",
   );

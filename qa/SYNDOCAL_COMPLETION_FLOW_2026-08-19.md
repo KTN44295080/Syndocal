@@ -1616,13 +1616,14 @@ blocked every job, so no CI/platform claim is derived from that run.
 
 ## 6. Dependency-ordered remaining implementation
 
-`qa/SYNDOCAL_COMPLETION_LEDGER.json` is the machine-readable open-item index for
-sections 6 through 9. It records exactly 50 `Open` current checkboxes and 8
-`Deferred` rows: the two explicit platform deferrals plus the six frozen
-distribution rows. Each carries one stable trailing `completion-ledger` marker
-whose `Open` or `Deferred` kind is checked against the ledger. The index is
+`qa/SYNDOCAL_COMPLETION_LEDGER.json` is the machine-readable completion index for
+sections 6 through 9. It currently records 49 `Open` current checkboxes, 8
+`Deferred` rows, and 1 `Complete` current checkbox: the two explicit platform
+deferrals plus the six frozen distribution rows remain deferred. Each indexed
+row carries one stable trailing `completion-ledger` marker whose `Open`,
+`Deferred`, or `Complete` kind is checked against the ledger. The index is
 additive: it records dependencies, evidence paths, and non-claims without
-changing a row's open/accepted truth or replacing the master roadmap's Q1-Q5.
+replacing the master roadmap's Q1-Q5 contract.
 
 ### Phase 0 — Rebaseline, version, warnings, and ledgers
 
@@ -1633,7 +1634,7 @@ changing a row's open/accepted truth or replacing the master roadmap's Q1-Q5.
 - **Deferred outside the Windows target:** macOS dev/release warning enforcement. <!-- completion-ledger: Deferred: WARN-MACOS-001 -->
   The global inventory may remain 11 enforced / 2 pending without blocking the
   current Windows completion target.
-- [ ] Extend `check:release` with tag/previous-version/updater/artifact checks. <!-- completion-ledger: Open: RELEASE-METADATA-GATE-001 -->
+- [x] Extend `check:release` with tag/previous-version/updater/artifact checks. <!-- completion-ledger: Complete: RELEASE-METADATA-GATE-001 -->
 
 Exit: synchronized version metadata, warning baseline, current traceability/risk/
 evidence ledgers, clean reviewed commit, and pushed handoff.

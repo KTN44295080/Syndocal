@@ -20,7 +20,7 @@ const fixtureOptions = {
 const result = validateCompletionLedger({ ledger, sourceDocument, repoRoot: workspaceRoot });
 assert.equal(result.itemCount, 58);
 assert.deepEqual(result.sections, ["6", "7", "8", "9"]);
-assert.deepEqual(result.statusCounts, { Open: 50, Deferred: 8 });
+assert.deepEqual(result.statusCounts, { Open: 49, Deferred: 8, Complete: 1 });
 assert.deepEqual(result.sectionCounts, { "6": 37, "7": 6, "8": 9, "9": 6 });
 
 function expectFailure(name, mutate, pattern, options = {}) {
@@ -97,9 +97,15 @@ expectFailure(
   /external acceptance .*may never be Deferred or Complete/u,
 );
 expectFailure(
-  "no non-external row can be marked Complete",
+  "open source row cannot be marked Complete",
   (candidate) => { candidate.items[0].status = "Complete"; },
-  /COMP-Q1-Q4-001 may not be Complete/u,
+  /open source row COMP-Q1-Q4-001 must remain status Open/u,
+);
+
+expectFailure(
+  "completed source row requires Complete status",
+  (candidate) => { candidate.items.find((item) => item.id === "RELEASE-METADATA-GATE-001").status = "Open"; },
+  /completed source row RELEASE-METADATA-GATE-001 must remain status Complete/u,
 );
 
 expectFailure(

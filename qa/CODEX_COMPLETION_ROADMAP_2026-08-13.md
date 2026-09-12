@@ -1815,9 +1815,9 @@ stable markers on current sections 6-9 rows, required ownership/dependency/
 non-claim/evidence fields, and tracked evidence paths. It does not replace this
 master Q1-Q5 contract, complete an unchecked row, or convert native, hardware,
 external, soak, or distribution acceptance into a source-only claim.
-At this checkpoint it reports exactly 50 `Open` rows and 8 `Deferred` rows; the
-six section-9 distribution rows remain frozen/out of scope until distribution
-becomes a product goal.
+At this checkpoint it reports exactly 49 `Open`, 8 `Deferred`, and 1 `Complete`
+row; the six section-9 distribution rows remain frozen/out of scope until
+distribution becomes a product goal.
 
 The Q1-Q4 coverage contract additionally carries an additive machine-readable
 mirror at `qa/SYNDOCAL_Q1_Q4_LEDGER.json`, enforced fail-closed by
@@ -1940,13 +1940,13 @@ unchecked row.
   },
   "nonclaims": {
     "overall": "This ledger mirrors traceability state only. It does not claim any domain, native build, hardware device, external client, soak, distribution, or release acceptance, and it does not close COMP-Q1-Q4-001.",
-    "flow_reference": "Referencing a completion-ledger marker from a Q1 row records traceability only; the Flow document is not treated as complete requirement coverage and no referenced marker is closed, accepted, or completed by this ledger.",
+    "flow_reference": "Referencing a completion-ledger marker from a Q1 row records traceability only; Open/Deferred references are never closure, completion, or acceptance, and a Complete marker does not make its Q1 row accepted by this ledger.",
     "historical_evidence": "Historical evidence rows record past tranche proof only; they cannot be used or cited as current-source acceptance."
   },
   "expected_counts": {
     "q0_domains": 29,
     "q0_source_contracts": 10,
-    "flow_markers": { "Open": 50, "Deferred": 8 },
+    "flow_markers": { "Open": 49, "Deferred": 8, "Complete": 1 },
     "q1_rows": 32,
     "q2_decisions": 12,
     "q3_risks": 14,
@@ -2001,7 +2001,7 @@ unchecked row.
   "q1_requirements": [
     {
       "id": "COV-Q1Q4-INFRA-001",
-      "requirement": "Every Q0 domain and source contract carries at least one maintained Q1 requirement row, every current Flow Open/Deferred marker is referenced by traceability without closure, and the master fenced mirror equals qa/SYNDOCAL_Q1_Q4_LEDGER.json exactly; drift fails closed through check:q1-q4-ledger.",
+      "requirement": "Every Q0 domain and source contract carries at least one maintained Q1 requirement row, every current Flow marker is referenced by traceability while Open/Deferred markers remain explicit until their own evidence gate closes, and the master fenced mirror equals qa/SYNDOCAL_Q1_Q4_LEDGER.json exactly; drift fails closed through check:q1-q4-ledger.",
       "failure_behavior": "Missing domain/source/marker coverage, duplicate IDs, unknown enum values, orphan decisions/risks/evidence, untracked evidence paths, or master-to-JSON drift makes check:q1-q4-ledger exit nonzero.",
       "source": "Master roadmap section 21 Q1-Q5 contract plus the additive completion-ledger paragraph in Q1.",
       "source_contracts": ["AGENTS.md", "RELEASE_STATUS.md", "qa/SYNDOCAL_UI_PRODUCT_VISION.md", "qa/SYNDOCAL_UI_IMPLEMENTATION_ROADMAP.md", "qa/SYNDOCAL_VIDEO_LAYER_MEDIA_TRANSITION_MODEL.md", "qa/SYNDOCAL_VIDEO_MODEL_GAP_AUDIT_2026-08-12.md", "qa/SYNDOCAL_SYNAPSERACK_VIDEO_OPERATOR_BENCHMARK.md", "qa/SYNDOCAL_2PC_TRANCHE1_OUTPUT_OWNERSHIP.md", "qa/SYNDOCAL_AI_CONTROL_PLANE_ROADMAP.md", "qa/DASLIGHT_PARITY_COMPLETION_PLAN.md"],
