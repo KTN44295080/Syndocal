@@ -3,7 +3,7 @@
   "source_document": "qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md",
   "authoritative_sections": ["6", "7", "8", "9"],
   "classifications": ["Supported", "Deferred", "External acceptance", "Out of scope"],
-  "expected_status_counts": { "Open": 49, "Deferred": 8, "Complete": 1 },
+  "expected_status_counts": { "Open": 48, "Deferred": 8, "Complete": 2 },
   "expected_section_counts": { "6": 37, "7": 6, "8": 9, "9": 6 },
   "items": [
     {
@@ -38,13 +38,13 @@
     },
     {
       "id": "AI3-DURABLE-RECOVERY-001",
-      "source": { "section": "6", "kind": "Open" },
+      "source": { "section": "6", "kind": "Complete" },
       "classification": "Supported",
       "owner": "AI3 output-lease owner",
       "dependency": "Existing process-local receipt and owner-retirement implementation",
-      "nonclaim": "Does not claim terminal recovery survives a crash.",
-      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/SYNDOCAL_AI_CONTROL_PLANE_ROADMAP.md"],
-      "status": "Open"
+      "nonclaim": "Does not claim native ingress, physical project re-Arm, external-client acceptance, or product-wide recovery completion.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/SYNDOCAL_AI_CONTROL_PLANE_ROADMAP.md", "qa/AI3_DURABLE_TERMINAL_RECOVERY_2026-09-08.md", "qa/AI3_DURABLE_RECOVERY_CHECKPOINT_2026-09-13.md"],
+      "status": "Complete"
     },
     {
       "id": "AI3-NATIVE-INGRESS-001",

@@ -1815,7 +1815,7 @@ stable markers on current sections 6-9 rows, required ownership/dependency/
 non-claim/evidence fields, and tracked evidence paths. It does not replace this
 master Q1-Q5 contract, complete an unchecked row, or convert native, hardware,
 external, soak, or distribution acceptance into a source-only claim.
-At this checkpoint it reports exactly 49 `Open`, 8 `Deferred`, and 1 `Complete`
+At this checkpoint it reports exactly 48 `Open`, 8 `Deferred`, and 2 `Complete`
 row; the six section-9 distribution rows remain frozen/out of scope until
 distribution becomes a product goal.
 
@@ -1946,7 +1946,7 @@ unchecked row.
   "expected_counts": {
     "q0_domains": 29,
     "q0_source_contracts": 10,
-    "flow_markers": { "Open": 49, "Deferred": 8, "Complete": 1 },
+    "flow_markers": { "Open": 48, "Deferred": 8, "Complete": 2 },
     "q1_rows": 32,
     "q2_decisions": 12,
     "q3_risks": 14,

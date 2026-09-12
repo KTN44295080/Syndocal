@@ -20,7 +20,7 @@ const fixtureOptions = {
 const result = validateCompletionLedger({ ledger, sourceDocument, repoRoot: workspaceRoot });
 assert.equal(result.itemCount, 58);
 assert.deepEqual(result.sections, ["6", "7", "8", "9"]);
-assert.deepEqual(result.statusCounts, { Open: 49, Deferred: 8, Complete: 1 });
+assert.deepEqual(result.statusCounts, { Open: 48, Deferred: 8, Complete: 2 });
 assert.deepEqual(result.sectionCounts, { "6": 37, "7": 6, "8": 9, "9": 6 });
 
 function expectFailure(name, mutate, pattern, options = {}) {

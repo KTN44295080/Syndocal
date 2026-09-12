@@ -1617,8 +1617,8 @@ blocked every job, so no CI/platform claim is derived from that run.
 ## 6. Dependency-ordered remaining implementation
 
 `qa/SYNDOCAL_COMPLETION_LEDGER.json` is the machine-readable completion index for
-sections 6 through 9. It currently records 49 `Open` current checkboxes, 8
-`Deferred` rows, and 1 `Complete` current checkbox: the two explicit platform
+sections 6 through 9. It currently records 48 `Open` current checkboxes, 8
+`Deferred` rows, and 2 `Complete` current checkboxes: the two explicit platform
 deferrals plus the six frozen distribution rows remain deferred. Each indexed
 row carries one stable trailing `completion-ledger` marker whose `Open`,
 `Deferred`, or `Complete` kind is checked against the ledger. The index is
@@ -1663,7 +1663,7 @@ Exit: no project/file mutation bypasses one recoverable authority/publication pa
   Lighting/Video overlap handling.
 - [x] Add process-local exact request receipts, same-ID/different-shape rejection,
   bounded lanes, rate limit, audit truth, and restart non-reclamation.
-- [ ] Add crash-safe/durable terminal recovery rather than reclaiming pre-crash <!-- completion-ledger: Open: AI3-DURABLE-RECOVERY-001 -->
+- [x] Add crash-safe/durable terminal recovery rather than reclaiming pre-crash <!-- completion-ledger: Complete: AI3-DURABLE-RECOVERY-001 -->
   authority or presenting process-local receipts as durable truth.
 - [x] Wire lease state into AppState, generation-stamped query, canonical commands,
   registry metadata, and current-process owner retirement.
