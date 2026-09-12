@@ -519,3 +519,35 @@ DMX output was emitted in this checkpoint.
 Next safe action is to run the ledger validator and diff checks, then commit
 and push this documentation-only artifact refresh. External gates still
 require their actual UI/device/two-machine topology and separate evidence.
+
+## Continuation checkpoint — session-monotonic action admission
+
+This checkpoint is based on branch `codex/showclock-review-20260912` at
+`9c3a3672` and closes a concrete Primary-side replay path found during the
+remaining IPC/output audit.
+
+The generation-bound action scheduler now retains a session-local monotonic
+sequence floor. It rejects replayed or reordered Primary action sequences
+before queue mutation, rejects same-time/same-sequence collisions rather than
+overwriting the queued action, and resets the floor only after an explicitly
+advanced armed-fence rebind. The regression proves both queued-action
+preservation and post-dispatch replay rejection.
+
+Current focused evidence is protocol 20/20 and full protocol 238 unit + 7
+integration + 4 doctests, with IO LAN 3/3, two-process 2/2, and Tauri
+ShowClock 6/6 also passing. The exact pinned MSVC 14.44.35207 x64 no-bundle
+build passed in 3m33s without first-party warnings. Exact-path process smoke
+observed one responsive `Syndocal` window, requested maximize, and exited
+cleanly. The current-source executable SHA-256 is
+`A8BC08E37C6C1E0BAA16BE8D5A8B74AF34D558F7F6C304B75D3D3D1CB6C9324D`.
+
+This closes the local session-sequence replay/overwrite path only. It does not
+provide crash/restart durable replay restoration or exactly-once effects
+across process failure, and it does not claim native UI interaction, physical
+MIDI/OSC/DMX/Art-Net output, real wired two-machine partition/rejoin/soak,
+witness/interlock, automatic failover, venue, signing, publication, or
+product-wide completion. No physical DMX output was emitted.
+
+Next safe action is to run the ledger validator and diff checks, then commit
+and push this implementation/evidence checkpoint. External gates require
+their actual UI/device/two-machine topology and separate evidence.

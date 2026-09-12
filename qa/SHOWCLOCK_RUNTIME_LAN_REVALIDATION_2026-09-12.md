@@ -21,6 +21,9 @@ authenticated action-payload extension to the v1 action schema:
 - Canonical sample/action bytes use explicit stable wire-tag mappings rather
   than enum declaration casts, preserving the v1 vectors if declarations are
   reordered later.
+- Action scheduling keeps a session-local monotonic sequence floor, rejects
+  replayed or reordered Primary actions before queue mutation, and refuses a
+  same-time/same-sequence collision instead of overwriting the queued action.
 
 The frozen software policy is:
 
@@ -40,9 +43,10 @@ The frozen software policy is:
 
 The estimator publishes monotonic show time and never steps it backwards. A
 valid sample in Hold updates no output state and cannot leave Hold by itself.
-The action scheduler refuses generation mismatches and out-of-horizon actions,
-does not consume the queue when output authorization fails, and clears old
-actions on an explicitly armed fence rebind. The output gate requires exact
+The action scheduler refuses generation mismatches, replayed/reordered action
+sequences, and out-of-horizon actions, does not consume the queue when output
+authorization fails, and clears old actions on an explicitly armed fence
+rebind. The output gate requires exact
 owner identity and exact project/lease/audio/recording/clock/fencing context,
 plus Locked estimator state. The native integration holds the local lighting
 ownership permit while the gate is armed; video actions reacquire a local video
@@ -62,8 +66,8 @@ the exact Build Tools linker pinned first:
 
 | Command | Observed result |
 | --- | --- |
-| `cargo test -p protocol --locked show_clock -- --nocapture --test-threads=1` | PASS — 19 focused tests |
-| `cargo test -p protocol --locked -- --test-threads=1` | PASS — 237 unit, 7 integration, 4 doctests; 0 failed/ignored |
+| `cargo test -p protocol --locked show_clock -- --nocapture --test-threads=1` | PASS — 20 focused tests |
+| `cargo test -p protocol --locked -- --test-threads=1` | PASS — 238 unit, 7 integration, 4 doctests; 0 failed/ignored |
 | `cargo test -p io --locked show_clock_lan -- --nocapture --test-threads=1` | PASS — 3 focused loopback tests |
 | `cargo test -p io --locked -- --test-threads=1` | PASS — 184 unit tests, 3 ignored, 0 failed; 2 two-process integration tests passed; 0 doctests |
 | `cargo test --manifest-path app/src-tauri/Cargo.toml --locked show_clock_ipc::tests -- --nocapture --test-threads=1` | PASS — 6 lifecycle/action/fence/output-dispatch tests |
@@ -93,6 +97,8 @@ proves that STALE/FAULT revokes an armed local output gate and permit before
 queue polling.
 The combined peer admission regression proves that a validator does not commit
 sequence state when estimator generation validation rejects the same sample.
+The action scheduler regression proves that a replayed Primary sequence cannot
+replace an already queued action or become executable again after dispatch.
 
 ## Tauri IPC/UI and process loopback
 
