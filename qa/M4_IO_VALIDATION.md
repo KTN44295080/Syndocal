@@ -27,7 +27,7 @@ must not be inferred as a current-host comprehensive acceptance.
 | sACN / E1.31 output | Packet, multicast address derivation, and UDP loopback tests pass | Multicast-capable node -> fixture output capture required | Software pass; hardware pending |
 | Enttec USB Pro / DMXKing | Packet framing and serial route validation tests pass | USB interface + DMX receiver capture required | Software pass; hardware pending |
 | Enttec Open DMX | Dedicated worker, bounded latest-frame mailbox, 176 us break, 16 us MAB, payload, and frame-pacing tests pass (11/11) | 2026-08-03 physical pass: generic FT232R USB-RS485 cable (VID 0403 / PID 6001, COM3) drove a 4ch Dimmer/RGB fixture at address 1 with sustained white and dimmed output, operator-confirmed stable. The rig exposed a real defect fixed the same day: the worker loop had no wire-rate pacing, so each frame's break sliced the previous frame still draining from the FTDI buffer (symptom: one initial flash then dark; with a 2 ms guard, a ~2 s periodic dropout). Pacing to the 22,764 us frame wire time plus an empirically required 8 ms guard (~32 fps) stabilized output. 2026-08-04 second physical pass at scale: the fixture reconfigured to its 121ch mode (ch1 master dimmer + 40x RGB cells) was driven through the same COM3 path by the env-gated `physical_serial_rainbow_demo_drives_master_dimmer_and_rgb_cells` engine test (three phase-shifted PositionWave effects forming a moving rainbow; 60.2 s, 2,641+ successful serial sends, zero failures) and the operator visually confirmed the moving rainbow across the cells. Logic-analyzer break/MAB waveform capture still pending (no analyzer on site) | Physical pass (4ch + 121ch); waveform pending |
-| MIDI input/output | Decode, clock, MTC, mapping, and feedback tests pass | `SMC-Mixer-bt` input/output enumerated and opened through the production `midir` path; a safe All Notes Off feedback message was sent. Physical note/CC/clock movement and visible feedback confirmation remain | Partial physical pass; operator interaction pending |
+| MIDI input/output | Decode, clock, MTC, mapping, and feedback tests pass | `SMC-Mixer-bt` input/output enumerated and opened through the production `midir` path; a safe All Notes Off feedback message was sent. A separate direct WinMM point-light check visibly confirmed channel-1 LED on/off; physical note/CC/clock movement and latency remain | Partial physical pass; broader operator interaction pending |
 | OSC input | Mapping, wildcard, clock, effect, video, and bundle tests pass | TouchOSC or equivalent LAN round trip recommended | Software pass; device pending |
 | Web remote | HTTP/WebSocket protocol and snapshot/status tests pass | iPad/Android Wi-Fi interaction and latency capture required | Software pass; device pending |
 | NDI input/output | Official Windows NDI 6 SDK feature build; local sender -> discovery -> RGBA receiver loopback passes. External NDI Test Patterns -> Syndocal input received 1920x1080 RGBA at 30000/1001. Syndocal output -> NDI Studio Monitor displayed the QA bars, reported 1-2 SDK clients, and stayed connected across 640x360 -> 1280x720 | Representative OBS/Resolume material and macOS/Linux host coverage remain recommended | Windows NDI 6 cross-application pass |
@@ -156,6 +156,21 @@ observation, p50/p95/p99/max latency, OSC/Remote acceptance, or any DMX fixture
 output. The FTDI `COM5` path is covered by the physical serial-DMX recheck
 below; its fixture result is recorded separately from the remaining timing and
 protocol gates.
+
+### 2026-09-12 SMC-Mixer direct LED point-light check
+
+The user explicitly confirmed the visible result of a separate, direct Windows
+WinMM test. It enumerated exactly one output named `SMC-Mixer` at index `2`,
+opened only that output through Python `ctypes`, and sent channel-1 Note On
+messages for notes `0`, `8`, `16`, and `24` at velocity `127` for two seconds,
+then value `0` for one second, for three cycles. The run was observed from
+`15:11:24` through `15:11:33` JST; every send succeeded, cleanup sent the final
+OFF values, the port closed, and the process exited `0`. The user observed the
+LED response and confirmed it was working.
+
+This closes only the connected-unit USB MIDI LED on/off slice. It is not a
+Syndocal auto-feedback mapping/native UI run and does not claim controller
+movement, MIDI Clock/MTC, latency, or the full physical MIDI/OSC/Remote matrix.
 
 ### 2026-09-12 current-host physical serial-DMX recheck
 
