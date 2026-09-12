@@ -3,7 +3,7 @@
   "source_document": "qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md",
   "authoritative_sections": ["6", "7", "8", "9"],
   "classifications": ["Supported", "Deferred", "External acceptance", "Out of scope"],
-  "expected_status_counts": { "Open": 43, "Deferred": 8, "Complete": 7 },
+  "expected_status_counts": { "Open": 42, "Deferred": 8, "Complete": 8 },
   "expected_section_counts": { "6": 37, "7": 6, "8": 9, "9": 6 },
   "items": [
     {
@@ -158,13 +158,13 @@
     },
     {
       "id": "F1-INPUT-GENERATIONS-001",
-      "source": { "section": "6", "kind": "Open" },
+      "source": { "section": "6", "kind": "Complete" },
       "classification": "Supported",
       "owner": "Input-runtime owner",
       "dependency": "Project replacement authority and input-worker lifecycle",
-      "nonclaim": "Does not claim stale MIDI, OSC, or DMX callbacks are retired.",
-      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/M4_IO_VALIDATION.md"],
-      "status": "Open"
+      "nonclaim": "Does not claim physical MIDI, OSC, DMX, or Remote client acceptance, device reconnect/latency, or venue operation.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/F1_INPUT_GENERATION_AUDIT_2026-09-08.md", "app/scripts/check-f1-input-generations.mjs", "qa/F1_INPUT_GENERATIONS_CHECKPOINT_2026-09-13.md"],
+      "status": "Complete"
     },
     {
       "id": "F2-OUTPUT-OWNERSHIP-001",

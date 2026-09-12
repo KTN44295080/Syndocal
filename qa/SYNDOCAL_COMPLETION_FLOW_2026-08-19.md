@@ -1706,7 +1706,7 @@ Exit: AI0-AI8 accepted without weakening local Blackout or claiming unattended R
 
 ### Phase 4 — Output ownership, project swap, and ShowClock decision freeze
 
-- [ ] F1 monotonic input generations for MIDI/OSC/DMX Learn/workers and stale callback <!-- completion-ledger: Open: F1-INPUT-GENERATIONS-001 -->
+- [x] F1 monotonic input generations for MIDI/OSC/DMX Learn/workers and stale callback <!-- completion-ledger: Complete: F1-INPUT-GENERATIONS-001 -->
   retirement on mapping/project replacement.
 - [ ] F2 full Lighting/Video/Both/Standby ownership across DMX, NDI, Spout/Syphon, <!-- completion-ledger: Open: F2-OUTPUT-OWNERSHIP-001 -->
   Display, native windows, SDK resources, Take Over, teardown ACK, and explicit Arm.
