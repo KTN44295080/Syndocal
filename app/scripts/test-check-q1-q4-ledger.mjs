@@ -28,7 +28,7 @@ assert.equal(realResult.q1Rows, 32);
 assert.equal(realResult.domainsCovered, 29);
 assert.equal(realResult.sourceContractsCovered, 10);
 assert.equal(realResult.flowMarkersReferenced, 58);
-assert.deepEqual(realResult.flowMarkerCounts, { Open: 44, Deferred: 8, Complete: 6 });
+assert.deepEqual(realResult.flowMarkerCounts, { Open: 43, Deferred: 8, Complete: 7 });
 console.log("ok - real-repository baseline passes end to end");
 
 function byId(collection, id) {

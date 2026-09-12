@@ -135,7 +135,7 @@ impl AgentGrant {
 /// All facts that a high-risk consent must bind.  The argument fingerprint is
 /// supplied by the canonical operation registry; this module never hashes or
 /// rewrites an adapter payload.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentRequestContext {
     pub principal: AgentPrincipalId,
     pub principal_incarnation: u64,
@@ -184,7 +184,7 @@ impl AgentRequestContext {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentAuthorization {
     pub authority_generation: u64,
     pub principal_generation: u64,

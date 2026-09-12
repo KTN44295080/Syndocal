@@ -3,7 +3,7 @@
   "source_document": "qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md",
   "authoritative_sections": ["6", "7", "8", "9"],
   "classifications": ["Supported", "Deferred", "External acceptance", "Out of scope"],
-  "expected_status_counts": { "Open": 44, "Deferred": 8, "Complete": 6 },
+  "expected_status_counts": { "Open": 43, "Deferred": 8, "Complete": 7 },
   "expected_section_counts": { "6": 37, "7": 6, "8": 9, "9": 6 },
   "items": [
     {
@@ -108,13 +108,13 @@
     },
     {
       "id": "AI4-CONSENT-001",
-      "source": { "section": "6", "kind": "Open" },
+      "source": { "section": "6", "kind": "Complete" },
       "classification": "Supported",
       "owner": "AI safety and consent owner",
       "dependency": "AI0-AI2 authority paths and the accepted local-consent decision",
-      "nonclaim": "Does not claim external disruptive automation is approved or safe.",
-      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/SYNDOCAL_AI_CONTROL_PLANE_ROADMAP.md"],
-      "status": "Open"
+      "nonclaim": "Does not claim external disruptive automation, sidecar adapters, administration UI, physical output, or release-native acceptance is approved or safe.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/SYNDOCAL_AI_CONTROL_PLANE_ROADMAP.md", "app/scripts/check-ai4-authority-service.mjs", "qa/AI4_AUTHORITY_SERVICE_CHECKPOINT_2026-09-13.md"],
+      "status": "Complete"
     },
     {
       "id": "AI5-SIDECAR-001",

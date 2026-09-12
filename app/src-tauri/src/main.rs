@@ -57947,6 +57947,130 @@ fn agent_bridge_complete_v1(window: WebviewWindow, bridge: State<agent_bridge::A
     bridge.complete(window.label(), renderer_generation, &request_id, result)
 }
 
+#[tauri::command]
+fn agent_authority_status_v1(
+    window: WebviewWindow,
+    bridge: State<agent_bridge::AgentBridge>,
+) -> Result<agent_bridge::AuthorityStatus, String> {
+    bridge.authority(window.label())?.status()
+}
+
+#[tauri::command]
+fn agent_authority_begin_pairing_v1(
+    window: WebviewWindow,
+    bridge: State<agent_bridge::AgentBridge>,
+    principal_id: String,
+) -> Result<agent_bridge::PairingChallenge, String> {
+    bridge.authority(window.label())?.begin_pairing(&principal_id)
+}
+
+#[tauri::command]
+fn agent_authority_approve_pairing_v1(
+    window: WebviewWindow,
+    bridge: State<agent_bridge::AgentBridge>,
+    challenge_id: String,
+    challenge: String,
+) -> Result<agent_bridge::PairingApproval, String> {
+    bridge
+        .authority(window.label())?
+        .approve_pairing(&challenge_id, &challenge)
+}
+
+#[tauri::command]
+fn agent_authority_authenticate_v1(
+    window: WebviewWindow,
+    bridge: State<agent_bridge::AgentBridge>,
+    principal_id: String,
+    principal_incarnation: u64,
+    credential: String,
+) -> Result<(), String> {
+    bridge.authority(window.label())?.authenticate(
+        &principal_id,
+        principal_incarnation,
+        &credential,
+    )
+}
+
+#[tauri::command]
+fn agent_authority_promote_v1(
+    window: WebviewWindow,
+    bridge: State<agent_bridge::AgentBridge>,
+    principal_id: String,
+    principal_incarnation: u64,
+) -> Result<protocol::agent_authority::AgentAuthorization, String> {
+    bridge
+        .authority(window.label())?
+        .promote(&principal_id, principal_incarnation)
+}
+
+#[tauri::command]
+fn agent_authority_grant_v1(
+    window: WebviewWindow,
+    bridge: State<agent_bridge::AgentBridge>,
+    principal_id: String,
+    principal_incarnation: u64,
+    grant: protocol::agent_authority::AgentGrant,
+) -> Result<protocol::agent_authority::AgentAuthorization, String> {
+    bridge
+        .authority(window.label())?
+        .grant(&principal_id, principal_incarnation, grant)
+}
+
+#[tauri::command]
+fn agent_authority_revoke_v1(
+    window: WebviewWindow,
+    bridge: State<agent_bridge::AgentBridge>,
+    principal_id: String,
+    principal_incarnation: u64,
+) -> Result<(), String> {
+    bridge
+        .authority(window.label())?
+        .revoke(&principal_id, principal_incarnation)
+}
+
+#[tauri::command]
+fn agent_authority_kill_switch_v1(
+    window: WebviewWindow,
+    bridge: State<agent_bridge::AgentBridge>,
+) -> Result<(), String> {
+    bridge.authority(window.label())?.kill_switch()
+}
+
+#[tauri::command]
+fn agent_authority_clear_kill_switch_v1(
+    window: WebviewWindow,
+    bridge: State<agent_bridge::AgentBridge>,
+) -> Result<(), String> {
+    bridge.authority(window.label())?.clear_kill_switch()
+}
+
+#[tauri::command]
+fn agent_authority_prepare_consent_v1(
+    window: WebviewWindow,
+    bridge: State<agent_bridge::AgentBridge>,
+    consent_id: String,
+    context: protocol::agent_authority::AgentRequestContext,
+    now_ms: u64,
+    ttl_ms: u64,
+) -> Result<(), String> {
+    bridge
+        .authority(window.label())?
+        .prepare_consent(consent_id, context, now_ms, ttl_ms)
+}
+
+#[tauri::command]
+fn agent_authority_authorize_with_consent_v1(
+    window: WebviewWindow,
+    bridge: State<agent_bridge::AgentBridge>,
+    consent_id: String,
+    context: protocol::agent_authority::AgentRequestContext,
+    now_ms: u64,
+) -> Result<protocol::agent_authority::AgentAuthorization, String> {
+    bridge
+        .authority(window.label())?
+        .authorize_with_consent(&consent_id, &context, now_ms)
+}
+
 /// Register the current generation of one concrete webview. Only the owner
 /// displaced from this same window may be recovered here; a live pane's
 /// transaction is never stolen merely because the main renderer reloaded.
@@ -131406,6 +131530,17 @@ fn main() {
             agent_bridge_claim_v1,
             agent_bridge_complete_v1,
             agent_bridge_register_v1,
+            agent_authority_status_v1,
+            agent_authority_begin_pairing_v1,
+            agent_authority_approve_pairing_v1,
+            agent_authority_authenticate_v1,
+            agent_authority_promote_v1,
+            agent_authority_grant_v1,
+            agent_authority_revoke_v1,
+            agent_authority_kill_switch_v1,
+            agent_authority_clear_kill_switch_v1,
+            agent_authority_prepare_consent_v1,
+            agent_authority_authorize_with_consent_v1,
             get_control_plane_operation_registry,
             get_control_plane_canonical_registry,
             get_control_plane_query_schema_catalog,

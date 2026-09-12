@@ -1691,7 +1691,7 @@ Exit: all five AI3 roadmap categories accepted. Do not begin AI4 before this exi
 - [x] AI0 complete source inventory/coverage gate; unclassified mutations fail. <!-- completion-ledger: Complete: AI0-COVERAGE-001 -->
 - [x] AI1 query/event schemas, snapshots, generations, gap/resnapshot, bounds. <!-- completion-ledger: Complete: AI1-SCHEMAS-001 -->
 - [x] AI2 authored command bridge with E/R/H, owner incarnation, receipts, Undo. <!-- completion-ledger: Complete: AI2-COMMAND-BRIDGE-001 -->
-- [ ] AI4 principals, pairing, grants, revocation, kill switch, exact reviewed <!-- completion-ledger: Open: AI4-CONSENT-001 -->
+- [x] AI4 principals, pairing, grants, revocation, kill switch, exact reviewed <!-- completion-ledger: Complete: AI4-CONSENT-001 -->
   local/native consent policies, and release-build bypass absence. This does not
   restore the retired Raw Input/six-digit/Enter challenge.
 - [ ] AI5 authenticated localhost sidecar, MCP, JSON-RPC/REST, WebSocket, discovery, <!-- completion-ledger: Open: AI5-SIDECAR-001 -->

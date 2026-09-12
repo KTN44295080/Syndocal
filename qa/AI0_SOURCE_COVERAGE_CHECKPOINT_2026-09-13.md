@@ -24,7 +24,7 @@ The gate reports the current source counts:
 
 | Source family or projection | Count | Boundary |
 | --- | ---: | --- |
-| Tauri production handler | 523 | Frozen count and SHA-256 admission identity |
+| Tauri production handler | 534 | Frozen count and SHA-256 admission identity |
 | Engine command declaration | 280 | Macro-generated inventory; unavailable until reviewed |
 | Remote input/request/wire | 116 | Generated inventory; unavailable until reviewed |
 | MIDI/OSC/DMX | 206 | Declaration-macro inventory; unavailable until reviewed |

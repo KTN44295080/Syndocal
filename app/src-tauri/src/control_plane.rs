@@ -61,9 +61,9 @@ const KEYBOARD_SHORTCUT_SOURCE_MANIFEST: &str =
 const KEYBOARD_SHORTCUT_SOURCE_MANIFEST_SCHEMA_VERSION: u16 = 1;
 const KEYBOARD_APP_SHORTCUT_SOURCE_COUNT: usize = 30;
 const KEYBOARD_PROJECT_FILE_SHORTCUT_SOURCE_COUNT: usize = 3;
-const FROZEN_TAURI_ROUTE_ADMISSION_COUNT: usize = 523;
+const FROZEN_TAURI_ROUTE_ADMISSION_COUNT: usize = 534;
 const FROZEN_TAURI_ROUTE_ADMISSION_SHA256: &str =
-    "21d7c111c44a2d896e15097a980d477485928adab7607973d951deb043baaec4";
+    "fa38ad3a5caccf0647539021c59940b25fa2029fb1b38a1db65f24164ccdabea";
 /// The command source is parsed and validated exactly once.  Local discovery
 /// calls only clone this immutable, validated value; they never parse source
 /// text or make an external request on the invocation path.

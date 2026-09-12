@@ -4,6 +4,8 @@
 //! must claim the canonical request.
 #[path = "agent_bridge_ledger.rs"]
 mod ledger;
+#[path = "agent_authority_service.rs"]
+mod authority;
 #[path = "agent_bridge_storage.rs"]
 mod storage;
 #[path = "agent_bridge_wire.rs"]
@@ -21,6 +23,10 @@ use std::{
 };
 use tauri::Emitter;
 use wire::{Command, Request, Response};
+
+pub(crate) use authority::{
+    AuthorityStatus, PairingApproval, PairingChallenge,
+};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -42,6 +48,7 @@ struct Descriptor {
 }
 struct Inner {
     token: String,
+    authority: authority::AgentAuthorityService,
     ledger: Mutex<ledger::Ledger>,
     emit: Box<dyn Fn(&AgentBridgeDispatch) -> Result<(), String> + Send + Sync>,
     connections: AtomicUsize,
@@ -86,6 +93,7 @@ impl AgentBridge {
         };
         let inner = Arc::new(Inner {
             token,
+            authority: authority::AgentAuthorityService::new(),
             ledger: Mutex::new(ledger),
             emit: Box::new(move |request| {
                 app.emit_to("main", "syndocal://agent-request-v1", request)
@@ -170,6 +178,17 @@ impl AgentBridge {
             .lock()
             .map_err(|_| "agent_state_poisoned")?
             .complete(renderer_generation, request_id, result)
+    }
+
+    /// The authority service is accessible only through the trusted local
+    /// main window. It is intentionally not exposed to the socket adapter;
+    /// pairing and administrative approval remain local UI decisions.
+    pub(crate) fn authority(
+        &self,
+        window_label: &str,
+    ) -> Result<&authority::AgentAuthorityService, String> {
+        main_only(window_label)?;
+        Ok(&self.inner.authority)
     }
 }
 fn main_only(label: &str) -> Result<(), String> {
