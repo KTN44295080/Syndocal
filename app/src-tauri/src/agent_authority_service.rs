@@ -15,7 +15,7 @@ use protocol::control_plane_registry_v2::AdapterKind;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     sync::Mutex,
     time::{Duration, Instant},
 };
@@ -25,6 +25,7 @@ const MAX_CHALLENGES: usize = 32;
 const PAIRING_TTL: Duration = Duration::from_secs(60);
 const CREDENTIAL_BYTES: usize = 32;
 const CREDENTIAL_TARGET_PREFIX: &str = "Syndocal/AgentAuthority/v1/";
+const MAX_AUDIT_RECORDS: usize = 512;
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -57,7 +58,20 @@ pub(crate) struct PrincipalSummary {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct AuthorityStatus {
     pub kill_switch_active: bool,
+    pub active_sessions: u64,
     pub principals: Vec<PrincipalSummary>,
+    pub audit: Vec<AuditRecord>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AuditRecord {
+    pub sequence: u64,
+    pub event: String,
+    pub principal_id: Option<String>,
+    pub principal_incarnation: Option<u64>,
+    pub operation_id: Option<String>,
+    pub outcome: String,
 }
 
 #[derive(Debug, Clone)]
@@ -88,6 +102,8 @@ struct Inner {
     principals: BTreeMap<AgentPrincipalId, PrincipalRecord>,
     pending: BTreeMap<String, PendingPairing>,
     kill_switch_active: bool,
+    audit: VecDeque<AuditRecord>,
+    next_audit_sequence: u64,
 }
 
 /// The OS credential store is intentionally hidden behind this small type so
@@ -279,6 +295,29 @@ impl Default for AgentAuthorityService {
     }
 }
 
+fn record_audit(
+    inner: &mut Inner,
+    event: &str,
+    principal: Option<&AgentPrincipalId>,
+    principal_incarnation: Option<u64>,
+    operation_id: Option<&str>,
+    outcome: &str,
+) {
+    let sequence = inner.next_audit_sequence;
+    inner.next_audit_sequence = inner.next_audit_sequence.saturating_add(1);
+    if inner.audit.len() >= MAX_AUDIT_RECORDS {
+        inner.audit.pop_front();
+    }
+    inner.audit.push_back(AuditRecord {
+        sequence,
+        event: event.to_string(),
+        principal_id: principal.map(|value| value.as_str().to_string()),
+        principal_incarnation,
+        operation_id: operation_id.map(str::to_string),
+        outcome: outcome.to_string(),
+    });
+}
+
 impl AgentAuthorityService {
     pub(crate) fn new() -> Self {
         Self {
@@ -287,6 +326,8 @@ impl AgentAuthorityService {
                 principals: BTreeMap::new(),
                 pending: BTreeMap::new(),
                 kill_switch_active: false,
+                audit: VecDeque::new(),
+                next_audit_sequence: 1,
             }),
             credentials: CredentialStore::default(),
         }
@@ -318,6 +359,14 @@ impl AgentAuthorityService {
                 challenge: challenge.clone(),
                 expires_at: Instant::now() + PAIRING_TTL,
             },
+        );
+        record_audit(
+            &mut inner,
+            "pairing.challenge_created",
+            Some(&principal),
+            None,
+            None,
+            "success",
         );
         Ok(PairingChallenge {
             challenge_id,
@@ -380,6 +429,14 @@ impl AgentAuthorityService {
                 revoked: false,
                 grants: BTreeSet::new(),
             },
+        );
+        record_audit(
+            &mut inner,
+            "pairing.approved",
+            Some(&pending.principal),
+            Some(incarnation),
+            None,
+            "success",
         );
         Ok(PairingApproval {
             principal_id: pending.principal.as_str().to_string(),
@@ -546,6 +603,14 @@ impl AgentAuthorityService {
             .get_mut(&principal)
             .ok_or_else(|| "agent_principal_state_missing".to_string())?
             .mode = PrincipalMode::Promoted;
+        record_audit(
+            &mut inner,
+            "principal.promoted",
+            Some(&principal),
+            Some(incarnation),
+            None,
+            "success",
+        );
         Ok(authorization)
     }
 
@@ -561,12 +626,21 @@ impl AgentAuthorityService {
             .authority
             .grant(&principal, incarnation, grant.clone())
             .map_err(|error| authority_error(error).to_string())?;
+        let operation_id = grant.operation_id.clone();
         inner
             .principals
             .get_mut(&principal)
             .ok_or_else(|| "agent_principal_state_missing".to_string())?
             .grants
             .insert(grant);
+        record_audit(
+            &mut inner,
+            "grant.installed",
+            Some(&principal),
+            Some(incarnation),
+            Some(&operation_id),
+            "success",
+        );
         Ok(authorization)
     }
 
@@ -586,6 +660,14 @@ impl AgentAuthorityService {
             record.mode = PrincipalMode::Safe;
             record.grants.clear();
         }
+        record_audit(
+            &mut inner,
+            "principal.revoked",
+            Some(&principal),
+            Some(incarnation),
+            None,
+            "success",
+        );
         self.credentials.remove(&principal)
     }
 
@@ -600,6 +682,14 @@ impl AgentAuthorityService {
             record.revoked = true;
             record.grants.clear();
         }
+        record_audit(
+            &mut inner,
+            "authority.kill_switch",
+            None,
+            None,
+            None,
+            "success",
+        );
         let principals = inner.principals.keys().cloned().collect::<Vec<_>>();
         drop(inner);
         for principal in principals {
@@ -615,6 +705,14 @@ impl AgentAuthorityService {
             .clear_kill_switch()
             .map_err(|error| authority_error(error).to_string())?;
         inner.kill_switch_active = false;
+        record_audit(
+            &mut inner,
+            "authority.kill_switch_cleared",
+            None,
+            None,
+            None,
+            "success",
+        );
         Ok(())
     }
 
@@ -639,7 +737,9 @@ impl AgentAuthorityService {
     pub(crate) fn status(&self) -> Result<AuthorityStatus, String> {
         Ok(AuthorityStatus {
             kill_switch_active: self.is_kill_switch_active()?,
+            active_sessions: 0,
             principals: self.summaries()?,
+            audit: self.lock()?.audit.iter().cloned().collect(),
         })
     }
 
@@ -654,10 +754,23 @@ impl AgentAuthorityService {
         now_ms: u64,
         ttl_ms: u64,
     ) -> Result<(), String> {
-        self.lock()?
+        let principal = context.principal.clone();
+        let principal_incarnation = context.principal_incarnation;
+        let operation_id = context.operation_id.clone();
+        let mut inner = self.lock()?;
+        inner
             .authority
             .prepare_consent(consent_id, context, now_ms, ttl_ms)
-            .map_err(|error| authority_error(error).to_string())
+            .map_err(|error| authority_error(error).to_string())?;
+        record_audit(
+            &mut inner,
+            "consent.prepared",
+            Some(&principal),
+            Some(principal_incarnation),
+            Some(&operation_id),
+            "success",
+        );
+        Ok(())
     }
 
     pub(crate) fn authorize_with_consent(
@@ -666,10 +779,23 @@ impl AgentAuthorityService {
         context: &AgentRequestContext,
         now_ms: u64,
     ) -> Result<AgentAuthorization, String> {
-        self.lock()?
+        let principal = context.principal.clone();
+        let operation_id = context.operation_id.clone();
+        let principal_incarnation = context.principal_incarnation;
+        let mut inner = self.lock()?;
+        let authorization = inner
             .authority
             .authorize_with_consent(consent_id, context, now_ms)
-            .map_err(|error| authority_error(error).to_string())
+            .map_err(|error| authority_error(error).to_string())?;
+        record_audit(
+            &mut inner,
+            "consent.consumed",
+            Some(&principal),
+            Some(principal_incarnation),
+            Some(&operation_id),
+            "success",
+        );
+        Ok(authorization)
     }
 
     fn principal(&self, principal_id: &str) -> Result<AgentPrincipalId, String> {
@@ -871,6 +997,15 @@ mod tests {
         assert_eq!(approval.principal_id, "client-a");
         assert_eq!(approval.credential.len(), CREDENTIAL_BYTES * 2);
         assert_eq!(service.summaries().unwrap()[0].mode, "safe");
+        let status = service.status().unwrap();
+        assert_eq!(status.active_sessions, 0);
+        assert_eq!(status.audit.len(), 2);
+        assert_eq!(status.audit[0].event, "pairing.challenge_created");
+        assert_eq!(status.audit[1].event, "pairing.approved");
+        assert!(status
+            .audit
+            .iter()
+            .all(|entry| !entry.event.contains(&approval.credential)));
         assert!(service
             .authenticate(
                 "client-a",

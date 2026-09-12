@@ -1696,7 +1696,7 @@ Exit: all five AI3 roadmap categories accepted. Do not begin AI4 before this exi
   restore the retired Raw Input/six-digit/Enter challenge.
 - [ ] AI5 authenticated localhost sidecar, MCP, JSON-RPC/REST, WebSocket, discovery, <!-- completion-ledger: Open: AI5-SIDECAR-001 -->
   bounded queues, process lifecycle, and no cached authority replay.
-- [ ] AI6 administration UI for principals/grants/revocation/audit/health. <!-- completion-ledger: Open: AI6-ADMIN-UI-001 -->
+- [x] AI6 administration UI for principals/grants/revocation/audit/health. <!-- completion-ledger: Complete: AI6-ADMIN-UI-001 -->
 - [ ] AI7 adversarial parity/security/rate/reply-loss/fuzz/saturation proof across <!-- completion-ledger: Open: AI7-ADVERSARIAL-PROOF-001 -->
   Tauri, MIDI/OSC/DMX, Remote, shortcuts, API, and MCP.
 - [ ] AI8 release-native real external clients, clean install, hardware output, <!-- completion-ledger: Open: AI8-EXTERNAL-ACCEPTANCE-001 -->

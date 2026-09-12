@@ -200,6 +200,11 @@ impl AgentBridge {
         main_only(window_label)?;
         Ok(&self.inner.authority)
     }
+
+    pub(crate) fn active_connections(&self, window_label: &str) -> Result<u64, String> {
+        main_only(window_label)?;
+        Ok(self.inner.connections.load(Ordering::Acquire) as u64)
+    }
 }
 fn main_only(label: &str) -> Result<(), String> {
     if label == "main" {

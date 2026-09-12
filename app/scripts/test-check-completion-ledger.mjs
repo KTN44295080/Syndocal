@@ -20,7 +20,7 @@ const fixtureOptions = {
 const result = validateCompletionLedger({ ledger, sourceDocument, repoRoot: workspaceRoot });
 assert.equal(result.itemCount, 58);
 assert.deepEqual(result.sections, ["6", "7", "8", "9"]);
-assert.deepEqual(result.statusCounts, { Open: 41, Deferred: 8, Complete: 9 });
+assert.deepEqual(result.statusCounts, { Open: 40, Deferred: 8, Complete: 10 });
 assert.deepEqual(result.sectionCounts, { "6": 37, "7": 6, "8": 9, "9": 6 });
 
 function expectFailure(name, mutate, pattern, options = {}) {
@@ -137,12 +137,12 @@ expectFailure(
 expectFailure(
   "wrong source kind fails closed",
   (candidate) => {
-    const item = candidate.items.find((entry) => entry.id === "F1-INPUT-GENERATIONS-001");
+    const item = candidate.items.find((entry) => entry.id === "AI5-SIDECAR-001");
     item.source.kind = "Deferred";
     item.classification = "Deferred";
     item.status = "Deferred";
   },
-  /stale ledger ID F1-INPUT-GENERATIONS-001: source kind Deferred does not match Open/u,
+  /stale ledger ID AI5-SIDECAR-001: source kind Deferred does not match Open/u,
 );
 expectFailure(
   "arbitrary marker line fails closed",

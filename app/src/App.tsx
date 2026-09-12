@@ -100,6 +100,7 @@ import { ProgrammerPanel } from "./components/ProgrammerPanel";
 import { PlaybackExecutorPanel } from "./components/PlaybackExecutorPanel";
 import { ReferencePalettePanel } from "./components/ReferencePalettePanel";
 import { RemoteControlPanel } from "./components/RemoteControlPanel";
+import { AgentAuthorityPanel } from "./components/AgentAuthorityPanel";
 import {
   type EffectChooserFamily,
   type EffectRecipeFamily,
@@ -28501,6 +28502,11 @@ export default function App() {
         </MappingPersistentWorkspaceBand>
         </Show>
 
+        <Show when={workspaceTab() === "setup" && setupSubTab() === "authority"}>
+          <AgentAuthorityPanel
+            invokeCommand={invoke}
+          />
+        </Show>
         <Show when={workspaceTab() === "setup" && setupSubTab() === "io"}>
         <aside
           class={setupPanelClass("panel output setupIoPanel setupPanel controlPanel", ["io"])}

@@ -3,7 +3,7 @@
   "source_document": "qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md",
   "authoritative_sections": ["6", "7", "8", "9"],
   "classifications": ["Supported", "Deferred", "External acceptance", "Out of scope"],
-  "expected_status_counts": { "Open": 41, "Deferred": 8, "Complete": 9 },
+  "expected_status_counts": { "Open": 40, "Deferred": 8, "Complete": 10 },
   "expected_section_counts": { "6": 37, "7": 6, "8": 9, "9": 6 },
   "items": [
     {
@@ -128,13 +128,13 @@
     },
     {
       "id": "AI6-ADMIN-UI-001",
-      "source": { "section": "6", "kind": "Open" },
+      "source": { "section": "6", "kind": "Complete" },
       "classification": "Supported",
       "owner": "AI administration UI owner",
       "dependency": "AI4 principal/grant model and AI5 sidecar health model",
-      "nonclaim": "Does not claim operators can administer principals, grants, revocation, audit, or health.",
-      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/SYNDOCAL_AI_CONTROL_PLANE_ROADMAP.md"],
-      "status": "Open"
+      "nonclaim": "Does not claim native UI interaction, screen-reader/High Contrast/DPI acceptance, external-client pairing, hardware, venue operation, or full AI7/AI8 acceptance.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/SYNDOCAL_AI_CONTROL_PLANE_ROADMAP.md", "app/scripts/check-ai6-admin-ui.mjs", "qa/AI6_ADMIN_UI_CHECKPOINT_2026-09-13.md"],
+      "status": "Complete"
     },
     {
       "id": "AI7-ADVERSARIAL-PROOF-001",

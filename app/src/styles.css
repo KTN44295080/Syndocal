@@ -3733,6 +3733,128 @@ h3 {
   min-width: 0;
 }
 
+.agentAuthorityPanel {
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.agentAuthoritySection {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-top: 1px solid #2a3440;
+  padding-top: 10px;
+}
+
+.agentAuthoritySection h3,
+.agentAuthoritySection p {
+  margin: 0;
+}
+
+.agentAuthoritySectionHeading,
+.agentAuthorityPrincipal,
+.agentAuthorityActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.agentAuthoritySectionHeading {
+  justify-content: space-between;
+}
+
+.agentAuthorityForm {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 8px;
+  align-items: end;
+}
+
+.agentAuthorityForm label,
+.agentAuthorityChallenge label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.agentAuthorityForm input,
+.agentAuthorityForm select,
+.agentAuthorityChallenge input {
+  min-width: 0;
+}
+
+.agentAuthorityChallenge,
+.agentAuthorityCredential,
+.agentAuthorityPrincipal {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  border: 1px solid #354250;
+  border-radius: 5px;
+  padding: 8px;
+}
+
+.agentAuthorityPrincipal {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) auto auto;
+  width: 100%;
+}
+
+.agentAuthorityPrincipal > div:first-child {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.agentAuthorityPrincipal span,
+.agentAuthorityCredential small {
+  color: #a8b3c1;
+  font-size: 0.82rem;
+}
+
+.agentAuthorityChallenge code,
+.agentAuthorityCredential code {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
+.agentAuthorityPrincipalList {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.agentAuthorityAudit {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 260px;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.agentAuthorityAuditRow {
+  display: grid;
+  grid-template-columns: auto minmax(150px, 1fr) minmax(120px, 0.8fr) minmax(160px, 1.5fr) auto;
+  gap: 6px;
+  align-items: baseline;
+  border-bottom: 1px solid #27313d;
+  padding: 4px 0;
+  font-size: 0.82rem;
+}
+
+.agentAuthorityAuditRow code {
+  overflow-wrap: anywhere;
+}
+
+.safeStatus { color: #8dd7a5; }
+.dangerStatus { color: #ff9c9c; }
+
 @media (max-height: 760px) {
   .app {
     gap: 4px;

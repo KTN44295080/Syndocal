@@ -1,6 +1,6 @@
 export type WorkspaceTab = "setup" | "control" | "touch";
-export type SetupArea = "lighting" | "video" | "mapping" | "io";
-export type SetupSubTab = "patch" | "video" | "mapping" | "io";
+export type SetupArea = "lighting" | "video" | "mapping" | "io" | "security";
+export type SetupSubTab = "patch" | "video" | "mapping" | "io" | "authority";
 export type ControlMode = "edit" | "live" | "mixer";
 export type ControlCategory = "dimmer" | "color" | "position" | "gobo" | "beam" | "focus" | "other" | "fader";
 export type TimelineDeskSurface = "show" | "automation" | "playback";
@@ -11,12 +11,14 @@ export const setupAreas: { id: SetupArea; label: string; description: string; de
   { id: "lighting", label: "Lighting", description: "Fixture library, profiles, and DMX patch", defaultTab: "patch" },
   { id: "video", label: "Video", description: "Compositions, displays, and projector calibration", defaultTab: "video" },
   { id: "io", label: "I/O", description: "DMX, MIDI, OSC, and remote connections", defaultTab: "io" },
+  { id: "security", label: "Security", description: "AI principals, grants, consent, and emergency revocation", defaultTab: "authority" },
 ];
 
 export const setupSubTabs: { id: SetupSubTab; area: SetupArea; label: string; description: string }[] = [
   { id: "patch", area: "lighting", label: "Patch", description: "Fixture profiles, DMX addressing, and assignment" },
   { id: "video", area: "video", label: "Outputs", description: "Compositions, output routing, resolution, and projection calibration" },
   { id: "io", area: "io", label: "I/O", description: "DMX, MIDI, OSC, and remote connections" },
+  { id: "authority", area: "security", label: "AI Access", description: "Pair principals, scope grants, and revoke external control" },
 ];
 
 export const setupAreaForSubTab = (tab: SetupSubTab): SetupArea =>

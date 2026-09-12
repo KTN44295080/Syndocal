@@ -57952,7 +57952,9 @@ fn agent_authority_status_v1(
     window: WebviewWindow,
     bridge: State<agent_bridge::AgentBridge>,
 ) -> Result<agent_bridge::AuthorityStatus, String> {
-    bridge.authority(window.label())?.status()
+    let mut status = bridge.authority(window.label())?.status()?;
+    status.active_sessions = bridge.active_connections(window.label())?;
+    Ok(status)
 }
 
 #[tauri::command]
