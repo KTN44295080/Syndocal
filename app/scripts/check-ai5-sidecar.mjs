@@ -10,10 +10,11 @@ const read = (relativePath) =>
     source.replace(/\r\n?/gu, "\n"),
   );
 
-const [roadmap, server, adapterCheck, wire, bridge, authority, readme] = await Promise.all([
+const [roadmap, server, adapterCheck, transportCheck, wire, bridge, authority, readme] = await Promise.all([
   read("../../qa/SYNDOCAL_AI_CONTROL_PLANE_ROADMAP.md"),
   read("../../tools/syndocal-mcp/server.mjs"),
   read("../../tools/syndocal-mcp/check.mjs"),
+  read("../../tools/syndocal-mcp/check-transports.mjs"),
   read("../src-tauri/src/agent_bridge_wire.rs"),
   read("../src-tauri/src/agent_bridge.rs"),
   read("../src-tauri/src/agent_authority_service.rs"),
@@ -55,6 +56,16 @@ for (const marker of [
   "INPUT_LIMIT",
   "RESPONSE_LIMIT",
   "active",
+  "dispatchRpc",
+  "serveHttp",
+  "HTTP_CONNECTION_LIMIT",
+  "WEBSOCKET_CONNECTION_LIMIT",
+  "loopbackHost",
+  "'/rpc'",
+  "'/rest/tools/'",
+  "'/ws'",
+  "X-Syndocal-Session",
+  "websocketFrame",
 ]) required(server, marker, "sidecar authentication and bounds");
 
 for (const marker of [
@@ -91,12 +102,16 @@ for (const marker of [
   "const overlap",
 ]) required(adapterCheck, marker, "sidecar auth integration check");
 
+for (const marker of ["fetch(", "new WebSocket", "healthz", "rest/tools", "tools/list"]) {
+  required(transportCheck, marker, "sidecar transport integration check");
+}
+
 for (const marker of [
   "fresh client nonce",
   "HMAC-SHA256",
   "exact ExternalMcp grant",
   "R4/R5 requests remain consent-bound",
-  "Nothing except newline-delimited MCP JSON-RPC is written to stdout",
+  "stdio mode writes nothing except newline-delimited MCP JSON-RPC to stdout",
 ]) required(readme, marker, "sidecar security contract");
 
 ordered(server, ["readDescriptor(options)", "readCredential(options)", "createHmac('sha256'", "socket.write(wire)"], "proof before forwarding");
@@ -118,5 +133,13 @@ if (process.argv.includes("--self-test")) {
   });
   process.stdout.write(result.stdout);
   process.stderr.write(result.stderr);
-  console.log("AI5 sidecar auth boundary ok; authenticated discovery, nonce proof, exact grant admission, bounded MCP forwarding and redaction verified");
+  const transport = fileURLToPath(new URL("../../tools/syndocal-mcp/check-transports.mjs", import.meta.url));
+  const transportResult = await execFileAsync(process.execPath, [transport], {
+    cwd: root,
+    windowsHide: true,
+    maxBuffer: 1024 * 1024,
+  });
+  process.stdout.write(transportResult.stdout);
+  process.stderr.write(transportResult.stderr);
+  console.log("AI5 sidecar auth/transport boundary ok; authenticated discovery, nonce proof, exact grant admission, bounded MCP/HTTP/REST/WebSocket forwarding and redaction verified");
 }

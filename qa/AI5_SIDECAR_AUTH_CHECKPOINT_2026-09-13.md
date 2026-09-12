@@ -38,9 +38,21 @@ management, and release-native/external acceptance.
   (`remove_dir` left the owned lock file); the test now removes its own
   temporary directory recursively.
 
+## Transport sub-unit
+
+- The canonical JSON-RPC dispatcher is shared by stdio and a loopback-only
+  streamable HTTP listener. `GET /healthz` is the only unauthenticated probe;
+  `POST /rpc` requires a bounded session header and `POST /rest/tools/<name>`
+  is a facade over the same typed MCP tool call. `/ws` carries the same JSON-RPC
+  dispatcher with masked text frames, bounded payloads, ping/pong, close, and a
+  connection cap.
+- `node tools/syndocal-mcp/check-transports.mjs` passes health, HTTP JSON-RPC,
+  REST, WebSocket, and the same nonce-proof checks against a fake loopback
+  broker.
+
 ## Remaining AI5 boundary
 
-The marker is not promoted by this document. HTTP/streamable MCP, REST and
-WebSocket transport adapters, per-client bounded lifecycle/queue handling,
-sidecar crash/restart proof, and release executable plus real external-client
+The marker is not promoted by this document. Full per-client bounded lifecycle
+and queue/overload semantics, sidecar crash/restart proof, OS-protected
+credential transfer, and release executable plus real external-client
 acceptance remain open. No device, venue, or production acceptance is claimed.

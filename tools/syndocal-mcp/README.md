@@ -1,6 +1,6 @@
 # Syndocal MCP adapter
 
-Dependency-free Node.js stdio adapter for a running Syndocal agent bridge. It exposes fixture listing, fixture reading, exact-project fixture transforms, exact-project Video BO control, request-status lookup, bounded runtime diagnostics, canonical backend capability discovery, read-only recording status, and the 47 reviewed canonical control-plane operations. It does not open devices, start Syndocal, or bypass the backend's output ownership, lease, safety, or typed-command checks.
+Dependency-free Node.js sidecar for a running Syndocal agent bridge. It exposes fixture listing, fixture reading, exact-project fixture transforms, exact-project Video BO control, request-status lookup, bounded runtime diagnostics, canonical backend capability discovery, read-only recording status, and the 47 reviewed canonical control-plane operations. It does not open devices, start Syndocal, or bypass the backend's output ownership, lease, safety, or typed-command checks.
 
 ## Start
 
@@ -11,6 +11,16 @@ node C:/Users/kouty/Documents/KDMX/tools/syndocal-mcp/server.mjs --expected-exec
 ```
 
 `--expected-executable` is required. `--descriptor` optionally overrides the default `%LOCALAPPDATA%/jp.seraf.ktn.syndocal/agent-bridge-v1.json`. Both paths must be absolute. Real tools additionally require `--principal-id`, `--principal-incarnation`, and `--credential-file`; the file contains the single 64-character credential returned by local pairing and must remain outside project state. Launch the expected Syndocal executable with its agent bridge enabled first. This adapter checks the descriptor protocol, process ID, executable path, and per-launch session nonce before every broker connection. It uses only `127.0.0.1`.
+
+For streamable HTTP/JSON-RPC, start the same sidecar with `--http-port 0` (or a
+fixed local port). It binds only to `127.0.0.1`; `GET /healthz` is an
+unauthenticated compatibility probe, `POST /rpc` carries the same JSON-RPC
+messages and requires an `X-Syndocal-Session` header, `POST
+/rest/tools/<tool-name>` is a bounded conventional facade over the same MCP
+tool dispatch, and `/ws` carries the same JSON-RPC messages over WebSocket.
+REST and WebSocket calls still prove the configured principal on every native
+request. The transport has bounded HTTP sessions/connections and eight WebSocket
+connections; it has no LAN or public-listener mode.
 
 The local Codex client can register this server using its installed CLI:
 
@@ -43,14 +53,15 @@ Position is `{x,y,z}` and rotation is `{pitch,yaw,roll}`. `expectedProject` is `
 
 A new mutation intent needs a new lowercase, hyphenated UUID. Uppercase UUIDs are rejected so one intent has a single request identity. Preserve that UUID until its result is known. `pending` and `unknown` are tool errors with a status-query instruction; the adapter does not retry or automatically poll. A timeout after a mutation may have been sent is `unknown`, never proof that it was not applied. Query the original UUID before deciding any next action. Status requests use a fresh transport envelope UUID but the broker response identifies the queried original UUID. Broker `completed` means terminal processing; only a result with `ok:true` is tool success, so a completed `{ok:false}` response remains an error with its original result. The canonical executor remains a bounded static map; it is not arbitrary `invoke(command, params)`. Query operations are not persisted as mutation tombstones, while canonical mutations retain the same durable replay protection.
 
-Only one broker request may be active. An overlapping call is explicitly rejected before dispatch. MCP input and native request frames are bounded to 64 KiB; native and MCP response frames are bounded to 256 KiB. Connection timeout is one second and native response timeout is three seconds. Every broker request carries a fresh client nonce and HMAC-SHA256 proof bound to the descriptor's per-launch session nonce, principal incarnation, request ID, and method. The native broker rejects missing, stale, invalid, or replayed proof before renderer dispatch and then applies the exact ExternalMcp grant; R4/R5 requests remain consent-bound. Nothing except newline-delimited MCP JSON-RPC is written to stdout.
+Only one broker request may be active per transport session. An overlapping call is explicitly rejected before dispatch. MCP, HTTP, REST, and WebSocket input frames are bounded to 64 KiB; native and sidecar response frames are bounded to 256 KiB. Connection timeout is one second and native response timeout is three seconds. Every broker request carries a fresh client nonce and HMAC-SHA256 proof bound to the descriptor's per-launch session nonce, principal incarnation, request ID, and method. The native broker rejects missing, stale, invalid, or replayed proof before renderer dispatch and then applies the exact ExternalMcp grant; R4/R5 requests remain consent-bound. The stdio mode writes nothing except newline-delimited MCP JSON-RPC to stdout.
 
 ## Validate
 
 ```text
 node tools/syndocal-mcp/check.mjs
+node tools/syndocal-mcp/check-transports.mjs
 ```
 
-The integration check launches the CLI against its own fake loopback broker. It exercises negotiation, all nine tool schemas, canonical operation allowlisting, request correlation, Video BO false-success handling, pending/unknown behavior, no automatic retry, overlap rejection, malformed/oversized frames, executable mismatch and credential redaction. It does not operate Syndocal or physical devices. Real native bridge acceptance is a separate integration check.
+The integration check launches the CLI against its own fake loopback broker. It exercises negotiation, all nine tool schemas, canonical operation allowlisting, request correlation, Video BO false-success handling, pending/unknown behavior, no automatic retry, overlap rejection, malformed/oversized frames, executable mismatch and credential redaction. The transport check exercises health, JSON-RPC over HTTP, the REST facade, WebSocket JSON-RPC, and the same nonce proof against a fake loopback broker. These checks do not operate Syndocal or physical devices. Real native bridge acceptance is a separate integration check.
 
-The adapter implements the MCP **2025-11-25** [stdio transport](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports), [initialization lifecycle](https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle), and [tools interface](https://modelcontextprotocol.io/specification/2025-11-25/server/tools). Supported JSON-RPC methods are `initialize`, `notifications/initialized`, `ping`, `tools/list`, and `tools/call`.
+The adapter implements the MCP **2025-11-25** [stdio transport](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports), [initialization lifecycle](https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle), and [tools interface](https://modelcontextprotocol.io/specification/2025-11-25/server/tools). Supported JSON-RPC methods are `initialize`, `notifications/initialized`, `ping`, `tools/list`, and `tools/call`. The HTTP and WebSocket transports reuse the same JSON-RPC dispatcher and native authentication path; they do not add a second command registry.

@@ -1,7 +1,8 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import net from 'node:net';
-import { createHmac, randomBytes, randomUUID } from 'node:crypto';
+import http from 'node:http';
+import { createHash, createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { pathToFileURL } from 'node:url';
@@ -117,6 +118,7 @@ export function parseOptions(argv, env = process.env) {
       '--principal-id': 'principalId',
       '--principal-incarnation': 'principalIncarnation',
       '--credential-file': 'credentialFile',
+      '--http-port': 'httpPort',
     }[argv[i]];
     if (!key || opts[key] || !argv[i + 1]) throw new Error('usage');
     opts[key] = argv[i + 1];
@@ -132,6 +134,11 @@ export function parseOptions(argv, env = process.env) {
     if (!Number.isSafeInteger(opts.principalIncarnation) || opts.principalIncarnation < 1) throw new Error('usage');
   }
   if (opts.credentialFile !== undefined && !path.isAbsolute(opts.credentialFile)) throw new Error('usage');
+  if (opts.httpPort !== undefined) {
+    if (!/^\d+$/.test(opts.httpPort)) throw new Error('usage');
+    opts.httpPort = Number(opts.httpPort);
+    if (!Number.isSafeInteger(opts.httpPort) || opts.httpPort > 65535) throw new Error('usage');
+  }
   return opts;
 }
 
@@ -262,10 +269,63 @@ export async function nativeRequest(options, method, params, requestId, mutation
   });
 }
 
+export async function dispatchRpc(options, state, req) {
+  if (!exact(req, ['jsonrpc', 'id', 'method', 'params'], ['jsonrpc', 'method']) || req.jsonrpc !== '2.0' || typeof req.method !== 'string'
+    || (Object.hasOwn(req, 'id') && !(typeof req.id === 'string' || (typeof req.id === 'number' && Number.isSafeInteger(req.id))))) {
+    return { jsonrpc: '2.0', id: null, error: { code: -32600, message: 'Invalid JSON-RPC request.' } };
+  }
+  const notification = !Object.hasOwn(req, 'id');
+  if (notification) {
+    if (req.method === 'notifications/initialized' && state.negotiated && (req.params === undefined || exact(req.params, []))) state.initialized = true;
+    return null;
+  }
+  const error = (code, message) => ({ jsonrpc: '2.0', id: req.id, error: { code, message } });
+  const success = (result) => ({ jsonrpc: '2.0', id: req.id, result });
+  const params = req.params ?? {};
+  if (req.method === 'initialize') {
+    if (state.negotiated || !exact(params, ['protocolVersion', 'capabilities', 'clientInfo', '_meta'], ['protocolVersion', 'capabilities', 'clientInfo'])
+      || typeof params.protocolVersion !== 'string' || !record(params.capabilities)
+      || !record(params.clientInfo) || typeof params.clientInfo.name !== 'string' || typeof params.clientInfo.version !== 'string') {
+      return error(-32602, 'Invalid initialize parameters or already initialized.');
+    }
+    state.negotiated = true;
+    return success({ protocolVersion: VERSION, capabilities: { tools: { listChanged: false } }, serverInfo: { name: 'syndocal-mcp', version: '1.0.0' } });
+  }
+  if (req.method === 'ping') {
+    if (!exact(params, [])) return error(-32602, 'Ping takes no parameters.');
+    return success({});
+  }
+  if (!state.initialized) return error(-32002, 'Initialize and send notifications/initialized first.');
+  if (req.method === 'tools/list') {
+    if (!exact(params, ['_meta'], [])) return error(-32602, 'Unexpected tools/list parameters.');
+    const authentication = await nativeRequest(options, 'control_plane.get_capabilities', {}, randomUUID());
+    if (authentication.status !== 'completed') return error(-32001, 'Authenticated principal is required before tool discovery.');
+    return success({ tools: toolDefinitions });
+  }
+  if (req.method !== 'tools/call') return error(-32601, 'Method not found.');
+  if (!exact(params, ['name', 'arguments', '_meta'], ['name']) || typeof params.name !== 'string'
+    || !validateArguments(params.name, params.arguments ?? {})) return error(-32602, 'Unknown tool or invalid arguments. Use tools/list for the exact schema.');
+  if (state.active) return success({ content: [{ type: 'text', text: 'Another native request is active. This request was not sent; wait for its response.' }], isError: true });
+  state.active = true;
+  try {
+    const args = params.arguments ?? {};
+    const mutation = params.name === 'syndocal_set_fixture_transform' || params.name === 'syndocal_set_video_blackout' || params.name === 'syndocal_execute_control_plane';
+    const requestId = mutation ? args.requestId : randomUUID();
+    const method = { syndocal_list_fixtures: 'fixtures.list', syndocal_get_fixture: 'fixtures.get', syndocal_set_fixture_transform: 'fixtures.set_transform', syndocal_set_video_blackout: 'output.set_video_blackout', syndocal_get_request_status: 'request.status', syndocal_get_runtime_status: 'runtime.get', syndocal_get_control_plane_capabilities: 'control_plane.get_capabilities', syndocal_get_recording_status: 'recording.get_status' }[params.name];
+    const nativeMethod = params.name === 'syndocal_execute_control_plane' ? 'control_plane.execute' : method;
+    const nativeParams = params.name === 'syndocal_execute_control_plane'
+      ? { operationId: args.operationId, request: args.request }
+      : mutation ? Object.fromEntries(Object.entries(args).filter(([key]) => key !== 'requestId')) : args;
+    const result = await nativeRequest(options, nativeMethod, nativeParams, requestId, mutation);
+    if (result.status !== 'completed') result.nextAction = 'Query syndocal_get_request_status with the original requestId. Do not automatically resubmit an unknown or pending mutation.';
+    return success({ content: [{ type: 'text', text: JSON.stringify(result) }], isError: result.status !== 'completed' || result.result?.ok !== true });
+  } catch {
+    return success({ content: [{ type: 'text', text: 'Bridge request failed. No automatic retry was performed; query the original requestId.' }], isError: true });
+  } finally { state.active = false; }
+}
+
 export function serve(options, input = process.stdin, output = process.stdout) {
-  let initialized = false;
-  let negotiated = false;
-  let active = false;
+  const state = { initialized: false, negotiated: false, active: false };
   let tail = Buffer.alloc(0);
   let discarding = false;
   function emit(message) {
@@ -279,54 +339,8 @@ export function serve(options, input = process.stdin, output = process.stdout) {
     let req;
     try { req = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(line)); }
     catch { error(null, -32700, 'Invalid UTF-8 JSON.'); return; }
-    if (!exact(req, ['jsonrpc', 'id', 'method', 'params'], ['jsonrpc', 'method']) || req.jsonrpc !== '2.0' || typeof req.method !== 'string'
-      || (Object.hasOwn(req, 'id') && !(typeof req.id === 'string' || (typeof req.id === 'number' && Number.isSafeInteger(req.id))))) {
-      error(null, -32600, 'Invalid JSON-RPC request.'); return;
-    }
-    const notification = !Object.hasOwn(req, 'id');
-    if (notification) {
-      if (req.method === 'notifications/initialized' && negotiated && (req.params === undefined || exact(req.params, []))) initialized = true;
-      return;
-    }
-    const success = (result) => emit({ jsonrpc: '2.0', id: req.id, result });
-    const params = req.params ?? {};
-    if (req.method === 'initialize') {
-      if (negotiated || !exact(params, ['protocolVersion', 'capabilities', 'clientInfo', '_meta'], ['protocolVersion', 'capabilities', 'clientInfo'])
-        || typeof params.protocolVersion !== 'string' || !record(params.capabilities)
-        || !record(params.clientInfo) || typeof params.clientInfo.name !== 'string' || typeof params.clientInfo.version !== 'string') return error(req.id, -32602, 'Invalid initialize parameters or already initialized.');
-      negotiated = true;
-      return success({ protocolVersion: VERSION, capabilities: { tools: { listChanged: false } }, serverInfo: { name: 'syndocal-mcp', version: '1.0.0' } });
-    }
-    if (req.method === 'ping') {
-      if (!exact(params, [])) return error(req.id, -32602, 'Ping takes no parameters.');
-      return success({});
-    }
-    if (!initialized) return error(req.id, -32002, 'Initialize and send notifications/initialized first.');
-    if (req.method === 'tools/list') {
-      if (!exact(params, ['_meta'], [])) return error(req.id, -32602, 'Unexpected tools/list parameters.');
-      const authentication = await nativeRequest(options, 'control_plane.get_capabilities', {}, randomUUID());
-      if (authentication.status !== 'completed') return error(req.id, -32001, 'Authenticated principal is required before tool discovery.');
-      return success({ tools: toolDefinitions });
-    }
-    if (req.method !== 'tools/call') return error(req.id, -32601, 'Method not found.');
-    if (!exact(params, ['name', 'arguments', '_meta'], ['name']) || typeof params.name !== 'string'
-      || !validateArguments(params.name, params.arguments ?? {})) return error(req.id, -32602, 'Unknown tool or invalid arguments. Use tools/list for the exact schema.');
-    if (active) return success({ content: [{ type: 'text', text: 'Another native request is active. This request was not sent; wait for its response.' }], isError: true });
-    active = true;
-    try {
-      const args = params.arguments ?? {};
-      const mutation = params.name === 'syndocal_set_fixture_transform' || params.name === 'syndocal_set_video_blackout' || params.name === 'syndocal_execute_control_plane';
-      const requestId = mutation ? args.requestId : randomUUID();
-      const method = { syndocal_list_fixtures: 'fixtures.list', syndocal_get_fixture: 'fixtures.get', syndocal_set_fixture_transform: 'fixtures.set_transform', syndocal_set_video_blackout: 'output.set_video_blackout', syndocal_get_request_status: 'request.status', syndocal_get_runtime_status: 'runtime.get', syndocal_get_control_plane_capabilities: 'control_plane.get_capabilities', syndocal_get_recording_status: 'recording.get_status' }[params.name];
-      const nativeMethod = params.name === 'syndocal_execute_control_plane' ? 'control_plane.execute' : method;
-      const nativeParams = params.name === 'syndocal_execute_control_plane'
-        ? { operationId: args.operationId, request: args.request }
-        : mutation ? Object.fromEntries(Object.entries(args).filter(([key]) => key !== 'requestId')) : args;
-      const result = await nativeRequest(options, nativeMethod, nativeParams, requestId, mutation);
-      if (result.status !== 'completed') result.nextAction = 'Query syndocal_get_request_status with the original requestId. Do not automatically resubmit an unknown or pending mutation.';
-      success({ content: [{ type: 'text', text: JSON.stringify(result) }], isError: result.status !== 'completed' || result.result?.ok !== true });
-    } catch { success({ content: [{ type: 'text', text: 'Bridge request failed. No automatic retry was performed; query the original requestId.' }], isError: true }); }
-    finally { active = false; }
+    const response = await dispatchRpc(options, state, req);
+    if (response) emit(response);
   }
   input.on('data', (chunk) => {
     // Process raw bytes; a multi-byte UTF-8 character may span chunks.
@@ -347,7 +361,198 @@ export function serve(options, input = process.stdin, output = process.stdout) {
   input.on('end', () => { if (tail.length && !discarding) error(null, -32700, 'Input ended before newline.'); });
 }
 
+const HTTP_CONNECTION_LIMIT = 16;
+const HTTP_SESSION_LIMIT = 64;
+const WEBSOCKET_CONNECTION_LIMIT = 8;
+
+function loopbackHost(host) {
+  return host === '127.0.0.1' || host === '::1';
+}
+
+function boundedHttpBody(request) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let size = 0;
+    let rejected = false;
+    request.on('data', (chunk) => {
+      if (rejected) return;
+      size += chunk.length;
+      if (size > INPUT_LIMIT) {
+        rejected = true;
+        request.resume();
+        reject(new Error('body-too-large'));
+        return;
+      }
+      chunks.push(chunk);
+    });
+    request.on('end', () => {
+      if (!rejected) resolve(Buffer.concat(chunks));
+    });
+    request.on('error', (error) => {
+      if (!rejected) { rejected = true; reject(error); }
+    });
+  });
+}
+
+function httpJson(response, status, value) {
+  let body = JSON.stringify(value);
+  if (Buffer.byteLength(body) > RESPONSE_LIMIT) {
+    status = 500;
+    body = JSON.stringify({ error: 'Response exceeds 256 KiB.' });
+  }
+  response.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'content-length': Buffer.byteLength(body), 'cache-control': 'no-store' });
+  response.end(body);
+}
+
+function websocketFrame(payload, opcode = 1) {
+  const length = payload.length;
+  if (length > RESPONSE_LIMIT) throw new Error('frame-too-large');
+  if (length < 126) return Buffer.concat([Buffer.from([0x80 | opcode, length]), payload]);
+  if (length <= 0xffff) {
+    const header = Buffer.alloc(4);
+    header[0] = 0x80 | opcode; header[1] = 126; header.writeUInt16BE(length, 2);
+    return Buffer.concat([header, payload]);
+  }
+  const header = Buffer.alloc(10);
+  header[0] = 0x80 | opcode; header[1] = 127; header.writeBigUInt64BE(BigInt(length), 2);
+  return Buffer.concat([header, payload]);
+}
+
+function websocketClose(socket, code, reason = '') {
+  if (socket.destroyed) return;
+  const detail = Buffer.from(reason, 'utf8').subarray(0, 120);
+  socket.end(websocketFrame(Buffer.concat([Buffer.from([(code >> 8) & 0xff, code & 0xff]), detail]), 8));
+}
+
+function attachWebSocket(socket, options, onClose) {
+  const state = { initialized: false, negotiated: false, active: false };
+  let tail = Buffer.alloc(0);
+  let closed = false;
+  let consuming = false;
+  const send = (response) => {
+    if (closed || !response) return;
+    try {
+      const payload = Buffer.from(JSON.stringify(response));
+      socket.write(websocketFrame(payload));
+    } catch { websocketClose(socket, 1011, 'Response encoding failed.'); }
+  };
+  const consume = async () => {
+    while (tail.length >= 2 && !closed) {
+      const first = tail[0];
+      const second = tail[1];
+      if (!(first & 0x80) || (first & 0x70) !== 0) return websocketClose(socket, 1002, 'Fragmentation is not supported.');
+      const opcode = first & 0x0f;
+      const masked = Boolean(second & 0x80);
+      let length = second & 0x7f;
+      let headerLength = 2;
+      if (length === 126) {
+        if (tail.length < 4) return;
+        length = tail.readUInt16BE(2); headerLength = 4;
+      } else if (length === 127) {
+        if (tail.length < 10) return;
+        const value = tail.readBigUInt64BE(2);
+        if (value > BigInt(INPUT_LIMIT)) return websocketClose(socket, 1009, 'Frame exceeds 64 KiB.');
+        length = Number(value); headerLength = 10;
+      }
+      if (!masked) return websocketClose(socket, 1002, 'Client frames must be masked.');
+      if (length > INPUT_LIMIT) return websocketClose(socket, 1009, 'Frame exceeds 64 KiB.');
+      const frameLength = headerLength + 4 + length;
+      if (tail.length < frameLength) return;
+      const mask = tail.subarray(headerLength, headerLength + 4);
+      const payload = Buffer.from(tail.subarray(headerLength + 4, frameLength));
+      tail = tail.subarray(frameLength);
+      for (let index = 0; index < payload.length; index += 1) payload[index] ^= mask[index % 4];
+      if (opcode === 8) { websocketClose(socket, 1000); return; }
+      if (opcode === 9) { socket.write(websocketFrame(payload, 10)); continue; }
+      if (opcode !== 1) return websocketClose(socket, 1003, 'Only text frames are supported.');
+      let request;
+      try { request = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(payload)); }
+      catch { send({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Invalid UTF-8 JSON.' } }); continue; }
+      send(await dispatchRpc(options, state, request));
+    }
+  };
+  const pump = () => {
+    if (consuming || closed) return;
+    consuming = true;
+    void consume().finally(() => {
+      consuming = false;
+      if (tail.length && !closed) pump();
+    });
+  };
+  socket.on('data', (chunk) => {
+    if (closed) return;
+    tail = Buffer.concat([tail, Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)]);
+    if (tail.length > INPUT_LIMIT + 14) return websocketClose(socket, 1009, 'Frame exceeds 64 KiB.');
+    pump();
+  });
+  const close = () => { closed = true; onClose(); };
+  socket.on('close', close); socket.on('error', close);
+  socket.setNoDelay(true);
+}
+
+export function serveHttp(options, { host = '127.0.0.1', port = 0 } = {}) {
+  if (!loopbackHost(host) || !Number.isSafeInteger(port) || port < 0 || port > 65535) throw new Error('loopback-only HTTP transport');
+  const sessions = new Map();
+  const websockets = new Set();
+  const server = http.createServer(async (request, response) => {
+    const url = new URL(request.url ?? '/', `http://${host}`);
+    if (request.method === 'GET' && url.pathname === '/healthz') return httpJson(response, 200, { ok: true, protocolVersion: VERSION, transport: 'streamable-http' });
+    if (request.method !== 'POST' || (url.pathname !== '/rpc' && !url.pathname.startsWith('/rest/tools/'))) return httpJson(response, 404, { error: 'Not found.' });
+    let body;
+    try {
+      const bytes = await boundedHttpBody(request);
+      body = bytes.length ? JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)) : {};
+    } catch (error) {
+      return httpJson(response, error?.message === 'body-too-large' ? 413 : 400, { error: 'Request body must be bounded UTF-8 JSON.' });
+    }
+    let sessionId = request.headers['x-syndocal-session'];
+    if (Array.isArray(sessionId)) sessionId = sessionId[0];
+    if (sessionId === undefined && url.pathname.startsWith('/rest/tools/')) sessionId = 'rest-default';
+    if (typeof sessionId !== 'string' || !/^[A-Za-z0-9._-]{1,128}$/.test(sessionId)) return httpJson(response, 400, { error: 'X-Syndocal-Session is required and must be bounded.' });
+    let state = sessions.get(sessionId);
+    if (!state) {
+      if (sessions.size >= HTTP_SESSION_LIMIT) return httpJson(response, 429, { error: 'overloaded' });
+      state = { initialized: false, negotiated: false, active: false, touched: Date.now() };
+      sessions.set(sessionId, state);
+    }
+    state.touched = Date.now();
+    if (url.pathname.startsWith('/rest/tools/')) {
+      const name = decodeURIComponent(url.pathname.slice('/rest/tools/'.length));
+      state.negotiated = true; state.initialized = true;
+      const rpc = { jsonrpc: '2.0', id: randomUUID(), method: 'tools/call', params: { name, arguments: body } };
+      const result = await dispatchRpc(options, state, rpc);
+      return httpJson(response, result?.error ? 400 : 200, result?.error ?? result?.result ?? { error: 'Empty response.' });
+    }
+    let result;
+    try { result = await dispatchRpc(options, state, body); }
+    catch { return httpJson(response, 500, { error: 'Request processing failed.' }); }
+    if (!result) return response.writeHead(202).end();
+    return httpJson(response, 200, result);
+  });
+  server.maxConnections = HTTP_CONNECTION_LIMIT;
+  server.keepAliveTimeout = 5000;
+  server.headersTimeout = 5000;
+  server.requestTimeout = 5000;
+  server.on('upgrade', (request, socket) => {
+    const url = new URL(request.url ?? '/', `http://${host}`);
+    const key = request.headers['sec-websocket-key'];
+    if (url.pathname !== '/ws' || request.headers.upgrade?.toLowerCase() !== 'websocket' || request.headers['sec-websocket-version'] !== '13' || typeof key !== 'string' || websockets.size >= WEBSOCKET_CONNECTION_LIMIT) {
+      socket.destroy(); return;
+    }
+    const accept = createHash('sha1').update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`).digest('base64');
+    socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`);
+    websockets.add(socket);
+    attachWebSocket(socket, options, () => websockets.delete(socket));
+  });
+  server.listen(port, host);
+  return server;
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
-  try { serve(parseOptions(process.argv.slice(2))); }
-  catch { process.stderr.write('Usage: node server.mjs --expected-executable <absolute path> [--descriptor <absolute path>] [--principal-id <id> --principal-incarnation <n> --credential-file <absolute path>]\n'); process.exitCode = 2; }
+  try {
+    const options = parseOptions(process.argv.slice(2));
+    if (options.httpPort !== undefined) serveHttp(options, { port: options.httpPort });
+    else serve(options);
+  }
+  catch { process.stderr.write('Usage: node server.mjs --expected-executable <absolute path> [--descriptor <absolute path>] [--principal-id <id> --principal-incarnation <n> --credential-file <absolute path>] [--http-port <0-65535>]\n'); process.exitCode = 2; }
 }
