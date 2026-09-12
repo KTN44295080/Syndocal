@@ -29,7 +29,9 @@ import {
   type ControlMappingTarget,
 } from "./controlMappingLearn";
 import {
+  projectAuthorityLearnContinuation,
   runAfterProjectAuthorityFlush,
+  type ProjectAuthorityMappingFlushResult,
   type ProjectAuthorityToken,
 } from "./projectAuthority";
 
@@ -45,9 +47,10 @@ interface ControlInputControllerOptions {
   // Mapping edits are debounced in App.  A mapping-driven worker must never be
   // constructed from the pre-ack clone, including the reconnect branches in
   // Learn, so every Connect/Start route shares this one barrier.
-  flushProjectControlMappingsAuthority: () => Promise<void>;
+  flushProjectControlMappingsAuthority: () => Promise<ProjectAuthorityMappingFlushResult>;
   /** Captured before a Learn await; exact token equality is required before
-   * the learned result can edit signals or revive an old runtime. */
+   * the learned result can edit signals or revive an old runtime. A trusted
+   * flush may explicitly return this flow's own replacement token. */
   captureProjectAuthorityIdentity: () => ProjectAuthorityToken;
   isProjectAuthorityIdentityCurrent: (captured: ProjectAuthorityToken) => boolean;
   setMessage: (message: string) => unknown;
@@ -124,12 +127,31 @@ export function createControlInputController(options: ControlInputControllerOpti
   };
   const flushProjectControlMappingsAuthority = () => runAfterProjectAuthorityFlush(
     options.flushProjectControlMappingsAuthority,
-    async () => undefined,
+    async (flushed) => flushed,
   );
+  const flushForInputAction = async (): Promise<void> => {
+    const flushed = await flushProjectControlMappingsAuthority();
+    if (!flushed.trusted) {
+      throw new Error("Project control mappings could not be durably synchronized; input start was canceled.");
+    }
+  };
   const learnAuthorityIsCurrent = (captured: ProjectAuthorityToken): boolean => {
     if (options.isProjectAuthorityIdentityCurrent(captured)) return true;
     options.setMessage("Project changed while Learn was waiting; the older learned input was discarded.");
     return false;
+  };
+  const learnAuthorityAfterFlush = (
+    captured: ProjectAuthorityToken,
+    flushed: ProjectAuthorityMappingFlushResult,
+  ): ProjectAuthorityToken | null => {
+    const continued = projectAuthorityLearnContinuation(
+      captured,
+      options.captureProjectAuthorityIdentity(),
+      flushed,
+    );
+    if (continued !== null) return continued;
+    options.setMessage("Project changed or control mappings were not durably synchronized while Learn was waiting; the older learned input was discarded.");
+    return null;
   };
   const refreshMidiInputs = async () => {
     const requestGeneration = ++midiInputRefreshGeneration;
@@ -163,7 +185,7 @@ export function createControlInputController(options: ControlInputControllerOpti
     }
     let authority: ProjectAuthorityToken | null = null;
     try {
-      await flushProjectControlMappingsAuthority();
+      await flushForInputAction();
       const capturedAuthority = options.captureProjectAuthorityIdentity();
       authority = capturedAuthority;
       options.setMidiConnected(false);
@@ -288,7 +310,7 @@ export function createControlInputController(options: ControlInputControllerOpti
       reportMessage("This control does not expose a MIDI mapping target.");
       return false;
     }
-    const authority = options.captureProjectAuthorityIdentity();
+    let authority = options.captureProjectAuthorityIdentity();
     const previousMappings = options.midiMappings();
     const wasConnected = options.midiControlConnected();
     let disconnectedForLearn = false;
@@ -308,8 +330,10 @@ export function createControlInputController(options: ControlInputControllerOpti
       if (!learnAuthorityIsCurrent(authority)) return false;
       if (!learned) {
         if (wasConnected && learnAuthorityIsCurrent(authority)) {
-          await flushProjectControlMappingsAuthority();
-          if (!learnAuthorityIsCurrent(authority)) return false;
+          const flushed = await flushProjectControlMappingsAuthority();
+          const continued = learnAuthorityAfterFlush(authority, flushed);
+          if (continued === null) return false;
+          authority = continued;
           const mappings = options.midiMappings();
           if (mappings.length > 0) {
             options.setMidiControlConnected(false);
@@ -333,8 +357,10 @@ export function createControlInputController(options: ControlInputControllerOpti
         ...midiMappingsFromLearnedControl(targets, learned),
       ];
       options.setMidiMappings(nextMappings);
-      await flushProjectControlMappingsAuthority();
-      if (!learnAuthorityIsCurrent(authority)) return false;
+      const flushed = await flushProjectControlMappingsAuthority();
+      const continued = learnAuthorityAfterFlush(authority, flushed);
+      if (continued === null) return false;
+      authority = continued;
       const mappings = options.midiMappings();
       if (mappings.length === 0) {
         options.setMidiControlConnected(false);
@@ -358,8 +384,10 @@ export function createControlInputController(options: ControlInputControllerOpti
       let restored = false;
       if (wasConnected && disconnectedForLearn && learnAuthorityIsCurrent(authority)) {
         try {
-          await flushProjectControlMappingsAuthority();
-          if (!learnAuthorityIsCurrent(authority)) return false;
+          const flushed = await flushProjectControlMappingsAuthority();
+          const continued = learnAuthorityAfterFlush(authority, flushed);
+          if (continued === null) return false;
+          authority = continued;
           const mappings = options.midiMappings();
           if (mappings.length > 0) {
             options.setMidiControlConnected(false);
@@ -408,7 +436,7 @@ export function createControlInputController(options: ControlInputControllerOpti
     if (options.midiMappings().length === 0) return reportMessage("Add at least one MIDI mapping first.");
     let authority: ProjectAuthorityToken | null = null;
     try {
-      await flushProjectControlMappingsAuthority();
+      await flushForInputAction();
       const capturedAuthority = options.captureProjectAuthorityIdentity();
       authority = capturedAuthority;
       const mappings = options.midiMappings();
@@ -445,7 +473,7 @@ export function createControlInputController(options: ControlInputControllerOpti
     if (outputIndex === null) return reportMessage("No MIDI output selected.");
     let authority: ProjectAuthorityToken | null = null;
     try {
-      await flushProjectControlMappingsAuthority();
+      await flushForInputAction();
       const capturedAuthority = options.captureProjectAuthorityIdentity();
       authority = capturedAuthority;
       options.setMidiFeedbackConnected(false);
@@ -641,7 +669,7 @@ export function createControlInputController(options: ControlInputControllerOpti
       reportMessage("This control does not expose an OSC mapping target.");
       return false;
     }
-    const authority = options.captureProjectAuthorityIdentity();
+    let authority = options.captureProjectAuthorityIdentity();
     const config: OscInputConfig = { bind_ip: options.oscBindIp(), port: options.oscPort() };
     const previousMappings = options.oscMappings();
     const wasRunning = options.oscRunning();
@@ -662,8 +690,10 @@ export function createControlInputController(options: ControlInputControllerOpti
       if (!learnAuthorityIsCurrent(authority)) return false;
       if (!learned) {
         if (wasRunning && learnAuthorityIsCurrent(authority)) {
-          await flushProjectControlMappingsAuthority();
-          if (!learnAuthorityIsCurrent(authority)) return false;
+          const flushed = await flushProjectControlMappingsAuthority();
+          const continued = learnAuthorityAfterFlush(authority, flushed);
+          if (continued === null) return false;
+          authority = continued;
           const mappings = options.oscMappings();
           options.setOscRunning(false);
           await options.invoke("start_osc_input", {
@@ -685,8 +715,10 @@ export function createControlInputController(options: ControlInputControllerOpti
         ...oscMappingsFromLearnedControl(targets, learned),
       ];
       options.setOscMappings(nextMappings);
-      await flushProjectControlMappingsAuthority();
-      if (!learnAuthorityIsCurrent(authority)) return false;
+      const flushed = await flushProjectControlMappingsAuthority();
+      const continued = learnAuthorityAfterFlush(authority, flushed);
+      if (continued === null) return false;
+      authority = continued;
       options.setOscRunning(false);
       await options.invoke("start_osc_input", {
         config,
@@ -705,8 +737,10 @@ export function createControlInputController(options: ControlInputControllerOpti
       let restored = false;
       if (wasRunning && stoppedForLearn && learnAuthorityIsCurrent(authority)) {
         try {
-          await flushProjectControlMappingsAuthority();
-          if (!learnAuthorityIsCurrent(authority)) return false;
+          const flushed = await flushProjectControlMappingsAuthority();
+          const continued = learnAuthorityAfterFlush(authority, flushed);
+          if (continued === null) return false;
+          authority = continued;
           options.setOscRunning(false);
           await options.invoke("start_osc_input", {
             config,
@@ -733,7 +767,7 @@ export function createControlInputController(options: ControlInputControllerOpti
     const config: OscInputConfig = { bind_ip: options.oscBindIp(), port: options.oscPort() };
     let authority: ProjectAuthorityToken | null = null;
     try {
-      await flushProjectControlMappingsAuthority();
+      await flushForInputAction();
       const capturedAuthority = options.captureProjectAuthorityIdentity();
       authority = capturedAuthority;
       options.setOscRunning(false);

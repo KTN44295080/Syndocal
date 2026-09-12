@@ -31,6 +31,7 @@ import {
   projectRecoveryIntentStartupAction,
   projectAuthorityResponseIsCurrent,
   projectAuthorityShouldRetryPersist,
+  projectAuthorityLearnContinuation,
   successfulStaleProjectControlMappingsReplyIsRetryable,
   projectAuthorityTokenIsCurrent,
   rebaseDirtyProjectAuthorityMappings,
@@ -299,11 +300,17 @@ assert.equal(
 );
 
 const events = [];
+const flushResult = {
+  trusted: true,
+  ownAcknowledgements: [{ project_epoch: 0, project_revision: 1, checkpoint_hash: "B" }],
+};
+let forwardedFlushResult = null;
 await runAfterProjectAuthorityFlush(
-  async () => { events.push("flush"); },
-  async () => { events.push("start"); },
+  async () => { events.push("flush"); return flushResult; },
+  async (flushed) => { forwardedFlushResult = flushed; events.push("start"); },
 );
 assert.deepEqual(events, ["flush", "start"], "input construction must wait for the authority flush");
+assert.equal(forwardedFlushResult, flushResult, "the flush barrier must forward its trusted own-ACK result");
 
 const empty = { project_epoch: 0, project_revision: 0, checkpoint_hash: "" };
 const a = { project_epoch: 2, project_revision: 3, checkpoint_hash: "a" };
@@ -544,6 +551,57 @@ for (const source of ["MIDI", "OSC", "DMX"]) {
   );
   assert.equal(projectAuthorityTokenIsCurrent(learnB, learnB), true);
 }
+assert.deepEqual(
+  projectAuthorityLearnContinuation(learnA, learnA),
+  learnA,
+  "Learn may continue when its captured authority remains unchanged",
+);
+assert.deepEqual(
+  projectAuthorityLearnContinuation(learnA, learnB, {
+    trusted: true,
+    ownAcknowledgements: [learnB],
+  }),
+  learnB,
+  "Learn may continue across its own trusted mapping ACK",
+);
+assert.equal(
+  projectAuthorityLearnContinuation(learnA, learnB, {
+    trusted: true,
+    ownAcknowledgements: [],
+  }),
+  null,
+  "a foreign replacement must not be accepted without an exact own ACK",
+);
+assert.equal(
+  projectAuthorityLearnContinuation(learnA, learnB, {
+    trusted: false,
+    ownAcknowledgements: [learnB],
+  }),
+  null,
+  "an untrusted flush must not revive a Learn continuation",
+);
+assert.equal(
+  projectAuthorityLearnContinuation(learnA, learnA, {
+    trusted: false,
+    ownAcknowledgements: [],
+  }),
+  null,
+  "an untrusted flush must not continue even when the token stayed unchanged",
+);
+let releaseLearnFlush;
+const deferredLearnFlush = new Promise((resolve) => { releaseLearnFlush = resolve; });
+const deferredLearnContinuation = deferredLearnFlush.then((flushed) =>
+  projectAuthorityLearnContinuation(learnA, learnB, flushed));
+let deferredLearnSettled = false;
+void deferredLearnContinuation.then(() => { deferredLearnSettled = true; });
+await Promise.resolve();
+assert.equal(deferredLearnSettled, false, "Learn must remain pending until its mapping flush settles");
+releaseLearnFlush({ trusted: true, ownAcknowledgements: [learnB] });
+assert.deepEqual(
+  await deferredLearnContinuation,
+  learnB,
+  "a deferred flush must resume Learn with its exact own ACK token",
+);
 
 // Input runtime is one coherent pair of callback fences. A delayed A event,
 // reply, or poll cannot lower either member or overwrite B's live truth; a

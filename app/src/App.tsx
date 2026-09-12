@@ -17725,7 +17725,7 @@ export default function App() {
     stopOscInput,
   } = createControlInputController({
     invoke,
-    flushProjectControlMappingsAuthority: async () => { await flushProjectControlMappingsAuthority(); },
+    flushProjectControlMappingsAuthority,
     captureProjectAuthorityIdentity,
     isProjectAuthorityIdentityCurrent,
     setMessage,

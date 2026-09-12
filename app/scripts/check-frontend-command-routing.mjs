@@ -224,7 +224,22 @@ for (const [body, label] of [
     /catch\s*\(error\)[\s\S]*?if\s*\(!options\.isProjectAuthorityIdentityCurrent\(authority\)\)\s*return\s+false;[\s\S]*?options\.setMessage\(/,
     `${label} failure must not write a stale project message`,
   );
+  assert.match(
+    body,
+    /const flushed = await flushProjectControlMappingsAuthority\(\)[\s\S]*?const continued = learnAuthorityAfterFlush\(authority, flushed\)[\s\S]*?authority = continued;/,
+    `${label} must adopt only its trusted own mapping ACK before reconnecting`,
+  );
 }
+assert.match(
+  controlInputControllerText,
+  /flushProjectControlMappingsAuthority:\s*\(\) => Promise<ProjectAuthorityMappingFlushResult>/,
+  "input controller must receive the typed trusted mapping-flush result",
+);
+assert.match(
+  appText,
+  /flushProjectControlMappingsAuthority,\s*\n\s*captureProjectAuthorityIdentity,/,
+  "App must pass the authority flush result through to input Learn",
+);
 
 assert.equal(
   [...appText.matchAll(/createEffect\(\(\) => \{\s*\/\/ The authority and candidate list live outside project persistence\.[\s\S]*?void refreshDjLinkMachineStatusAndCandidates\(\);\s*\}\);/g)].length,

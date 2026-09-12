@@ -196,6 +196,24 @@ This closes only the current-source IO software slice. Physical DMX, external
 Art-Net nodes, native acceptance, LAN, two-process, two-machine, and venue
 gates remain open.
 
+### MIDI/OSC frontend authority checkpoint
+
+The frontend lifecycle finding is addressed in the current continuation
+checkpoint. The App wiring now preserves the typed trusted-flush result from
+the mapping authority bridge. Targeted MIDI and OSC Learn accept their own
+exact successful mapping ACK and update the continuation token before
+reconnecting; foreign replacements and untrusted flushes remain fail-closed.
+Connect/Start/Feedback routes also stop before IPC when the mapping flush is
+not trusted. Deferred authority tests and the frontend routing contract pass,
+the frontend build passes, and the pinned Windows Tauri `--no-bundle` native
+build plus process/window-handle smoke passes. Evidence is recorded in
+`qa/FRONTEND_INPUT_AUTHORITY_REVALIDATION_2026-09-12.md`.
+
+This closes only the current-source frontend/native-build software slice. The
+physical MIDI/OSC matrix, external clients, controller movement, LED/clock/MTC
+observation, latency, LAN, two-process, two-machine, and venue gates remain
+open.
+
 ### 4. MIDI/OSC frontend authority and lifecycle
 
 The frontend reviewer traced `app/src/createControlInputController.ts` against

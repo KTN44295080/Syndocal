@@ -132,6 +132,31 @@ export const projectAuthorityTokenIsCurrent = (
   && captured.project_revision === current.project_revision
   && captured.checkpoint_hash === current.checkpoint_hash;
 
+export type ProjectAuthorityMappingFlushResult = {
+  trusted: boolean;
+  ownAcknowledgements: readonly ProjectAuthorityToken[];
+};
+
+/**
+ * A Learn flow may cross its own successful mapping commit. The original
+ * token is still valid when unchanged; otherwise only the exact current token
+ * returned by this flow's trusted flush may continue. A poll-won or foreign
+ * replacement remains stale and must retire the continuation.
+ */
+export const projectAuthorityLearnContinuation = (
+  captured: ProjectAuthorityToken,
+  current: ProjectAuthorityToken,
+  flushed: ProjectAuthorityMappingFlushResult | null = null,
+): ProjectAuthorityToken | null => {
+  if (flushed !== null && !flushed.trusted) return null;
+  if (projectAuthorityTokenIsCurrent(captured, current)) return captured;
+  if (flushed === null) return null;
+  return flushed.ownAcknowledgements.some((acknowledged) =>
+    projectAuthorityTokenIsCurrent(acknowledged, current))
+    ? current
+    : null;
+};
+
 /**
  * A successful mapping RPC may return after a poll has already adopted that
  * exact committed token. This is retryable only inside the same identity; a
@@ -363,12 +388,12 @@ export const projectAuthorityApplicationIsCurrent = (
  * The callback is evaluated only after the frontend's authoritative mapping
  * flush settles, so Learn/manual Connect cannot pass a debounce-era clone.
  */
-export const runAfterProjectAuthorityFlush = async <T>(
-  flush: () => Promise<void>,
-  start: () => Promise<T>,
-): Promise<T> => {
-  await flush();
-  return start();
+export const runAfterProjectAuthorityFlush = async <FlushResult, Result>(
+  flush: () => Promise<FlushResult>,
+  start: (flushed: FlushResult) => Promise<Result>,
+): Promise<Result> => {
+  const flushed = await flush();
+  return start(flushed);
 };
 
 /** Saved-file dirty truth is an authority baseline, never a partial UI hash. */
