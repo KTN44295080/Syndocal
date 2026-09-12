@@ -152,6 +152,22 @@ from continuous beat-position policy, preferably in an extracted clock module.
 Do not introduce frame polling/allocations to solve this. Native acceptance is
 required for integration, with physical MIDI timing remaining a separate gate.
 
+### Engine clock continuity checkpoint
+
+The engine clock finding is addressed in the current continuation checkpoint.
+BpmClock now retains an absolute beat position while MIDI Clock tempo
+estimation and external phase synchronization update their rate/phase; they
+no longer reset the integer beat counter. The deterministic regression covers
+96 MIDI Clock pulses, repeated phase wrapping, external re-sync, and the
+existing queued Clip Take generation/hold boundary.
+
+Evidence is recorded in
+qa/ENGINE_CLOCK_CONTINUITY_REVALIDATION_2026-09-12.md. The focused clock
+tests pass (5/5), the affected Clip Take test passes (1/1), and the full
+engine suite passes (1070 passed, 14 ignored, 0 failed). This closes only the
+current-source engine software slice. Estimator/bounded-slew/Hold/STALE,
+LAN, native, physical, two-process, two-machine, and venue gates remain open.
+
 ### 3. DMX input timeout starvation
 
 - **P1 source finding:** `crates/io/src/dmx_input.rs` 207-216 continues on

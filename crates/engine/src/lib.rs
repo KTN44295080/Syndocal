@@ -66036,6 +66036,7 @@ fn hash_u32(seed: u32) -> u32 {
 struct BpmClock {
     bpm: f32,
     anchor: Instant,
+    anchor_beat: f64,
     taps: [Option<Instant>; 4],
     tap_cursor: usize,
     tap_count: usize,
@@ -66051,6 +66052,7 @@ impl BpmClock {
         Self {
             bpm: clamp_bpm(bpm),
             anchor: now,
+            anchor_beat: 0.0,
             taps: [None; 4],
             tap_cursor: 0,
             tap_count: 0,
@@ -66065,6 +66067,7 @@ impl BpmClock {
     fn set_bpm(&mut self, bpm: f32, now: Instant) {
         self.bpm = clamp_bpm(bpm);
         self.anchor = now;
+        self.anchor_beat = 0.0;
         self.tap_count = 0;
         self.tap_cursor = 0;
         self.taps = [None; 4];
@@ -66074,12 +66077,10 @@ impl BpmClock {
     }
 
     fn set_bpm_preserving_beat_position(&mut self, bpm: f32, now: Instant) {
-        let beat_position =
-            now.saturating_duration_since(self.anchor).as_secs_f64() * f64::from(self.bpm) / 60.0;
+        let beat_position = self.beat_position_at(now);
         self.bpm = clamp_bpm(bpm);
-        let elapsed =
-            Duration::from_secs_f64((beat_position * 60.0 / f64::from(self.bpm)).max(0.0));
-        self.anchor = now.checked_sub(elapsed).unwrap_or(now);
+        self.anchor = now;
+        self.anchor_beat = beat_position;
     }
 
     fn tap(&mut self, now: Instant) {
@@ -66108,6 +66109,7 @@ impl BpmClock {
             if average > 0.0 {
                 self.bpm = clamp_bpm(60.0 / average);
                 self.anchor = now;
+                self.anchor_beat = 0.0;
                 self.source = ClockSource::Tap;
             }
         }
@@ -66135,8 +66137,10 @@ impl BpmClock {
                 .sum();
             let average_pulse = total / (pulses.len() - 1) as f32;
             if average_pulse > 0.0 {
+                let beat_position = self.beat_position_at(now);
                 self.bpm = clamp_bpm(60.0 / (average_pulse * 24.0));
                 self.anchor = now;
+                self.anchor_beat = beat_position;
                 self.source = ClockSource::MidiClock;
             }
         }
@@ -66149,14 +66153,17 @@ impl BpmClock {
         source: ClockSource,
         now: Instant,
     ) {
+        let current_beat_position = self.beat_position_at(now);
         self.bpm = clamp_bpm(bpm);
         let phase = if beat_phase.is_finite() {
             beat_phase.rem_euclid(1.0)
         } else {
             0.0
         };
-        let phase_duration = Duration::from_secs_f32((phase * 60.0 / self.bpm.max(1.0)).max(0.0));
-        self.anchor = now.checked_sub(phase_duration).unwrap_or(now);
+        let current_phase = current_beat_position.rem_euclid(1.0);
+        let phase_delta = shortest_phase_delta(f64::from(phase), current_phase);
+        self.anchor = now;
+        self.anchor_beat = current_beat_position + phase_delta;
         self.tap_count = 0;
         self.tap_cursor = 0;
         self.taps = [None; 4];
@@ -66176,8 +66183,7 @@ impl BpmClock {
     }
 
     fn snapshot(&self, now: Instant) -> ClockSnapshot {
-        let elapsed_beats =
-            now.saturating_duration_since(self.anchor).as_secs_f32() * self.bpm / 60.0;
+        let elapsed_beats = self.beat_position_at(now);
         let external_sync_age_ms = self.last_external_sync.map(|last_sync| {
             now.saturating_duration_since(last_sync)
                 .as_millis()
@@ -66195,13 +66201,20 @@ impl BpmClock {
             && external_sync_age_ms.is_some_and(|age| age <= external_sync_timeout_ms);
         ClockSnapshot {
             bpm: self.bpm,
-            beat_phase: elapsed_beats.fract(),
-            beat_counter: elapsed_beats.floor() as u64,
+            beat_phase: elapsed_beats.rem_euclid(1.0) as f32,
+            beat_counter: elapsed_beats.max(0.0).floor() as u64,
             tap_count: self.tap_count,
             source: self.source.clone(),
             external_sync_age_ms,
             external_sync_locked,
         }
+    }
+
+    fn beat_position_at(&self, now: Instant) -> f64 {
+        self.anchor_beat
+            + now.saturating_duration_since(self.anchor).as_secs_f64()
+                * f64::from(self.bpm)
+                / 60.0
     }
 
     fn latest_tap(&self) -> Option<Instant> {
@@ -66240,6 +66253,15 @@ impl BpmClock {
         self.midi_pulses = [None; 48];
         self.midi_cursor = 0;
         self.midi_count = 0;
+    }
+}
+
+fn shortest_phase_delta(target_phase: f64, current_phase: f64) -> f64 {
+    let delta = (target_phase - current_phase).rem_euclid(1.0);
+    if delta > 0.5 {
+        delta - 1.0
+    } else {
+        delta
     }
 }
 
@@ -100423,6 +100445,43 @@ mod tests {
         assert_eq!(snapshot.source, ClockSource::MidiClock);
         assert!(snapshot.external_sync_locked);
         assert_eq!(snapshot.external_sync_age_ms, Some(20));
+    }
+
+    #[test]
+    fn bpm_clock_preserves_absolute_beat_position_across_midi_pulses_and_resync() {
+        let now = Instant::now();
+        let pulse = Duration::from_nanos(20_833_333);
+        let mut clock = BpmClock::new(120.0, now);
+
+        let mut two_beats = None;
+        for index in 0..=96_u32 {
+            let pulse_at = now + pulse * index;
+            clock.midi_clock_pulse(pulse_at);
+            if index == 48 {
+                two_beats = Some(clock.snapshot(pulse_at));
+            }
+        }
+
+        let four_beats = clock.snapshot(now + pulse * 96);
+        let two_beats = two_beats.expect("snapshot captured at the two-beat boundary");
+        assert!(two_beats.beat_counter >= 1, "{two_beats:?}");
+        assert!(four_beats.beat_counter >= 3, "{four_beats:?}");
+        assert!(
+            four_beats.beat_counter > two_beats.beat_counter,
+            "two={two_beats:?}, four={four_beats:?}"
+        );
+
+        let sync_at = now + Duration::from_secs(5);
+        let before_resync = clock.snapshot(sync_at);
+        clock.sync_external_clock(120.0, 0.5, ClockSource::AbletonLink, sync_at);
+        let after_resync = clock.snapshot(sync_at);
+        assert!(after_resync.beat_counter >= before_resync.beat_counter);
+        assert!(after_resync.beat_counter >= 10);
+
+        let wrapped_sync_at = sync_at + Duration::from_millis(250);
+        clock.sync_external_clock(120.0, 0.0, ClockSource::AbletonLink, wrapped_sync_at);
+        let wrapped = clock.snapshot(wrapped_sync_at);
+        assert!(wrapped.beat_counter >= after_resync.beat_counter);
     }
 
     #[test]
