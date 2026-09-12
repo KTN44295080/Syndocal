@@ -30,10 +30,49 @@ fn command(method: &str) -> Command {
         request_id: id(1),
         method: method.to_string(),
         params,
+        auth: None,
     }
     .command()
     .unwrap()
 }
+
+fn hex_bytes(value: &str) -> Vec<u8> {
+    value
+        .as_bytes()
+        .chunks_exact(2)
+        .map(|chunk| {
+            let high = (chunk[0] as char).to_digit(16).unwrap();
+            let low = (chunk[1] as char).to_digit(16).unwrap();
+            ((high << 4) | low) as u8
+        })
+        .collect()
+}
+
+fn proof(key: &str, message: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let key = hex_bytes(key);
+    let mut normalized = [0u8; 64];
+    normalized[..key.len()].copy_from_slice(&key);
+    let mut inner_pad = [0x36u8; 64];
+    let mut outer_pad = [0x5cu8; 64];
+    for index in 0..64 {
+        inner_pad[index] ^= normalized[index];
+        outer_pad[index] ^= normalized[index];
+    }
+    let mut inner = Sha256::new();
+    inner.update(inner_pad);
+    inner.update(message.as_bytes());
+    let inner_digest = inner.finalize();
+    let mut outer = Sha256::new();
+    outer.update(outer_pad);
+    outer.update(inner_digest);
+    outer
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
 #[test]
 fn agent_bridge_wire_auth_methods_and_bounds_are_strict() {
     assert!(token_matches("abcdef", "abcdef"));
@@ -161,6 +200,103 @@ fn agent_bridge_wire_auth_methods_and_bounds_are_strict() {
             .command()
             .is_err());
     }
+}
+
+#[test]
+fn agent_bridge_process_requires_nonce_proof_and_exact_external_grant() {
+    let directory = std::env::temp_dir().join(format!(
+        "syndocal-agent-auth-test-{}",
+        storage::random_hex(12).unwrap()
+    ));
+    std::fs::create_dir(&directory).unwrap();
+    let captured = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let captured_for_emit = std::sync::Arc::clone(&captured);
+    let service = authority::AgentAuthorityService::new();
+    let pairing = service.begin_pairing("client-a").unwrap();
+    let approval = service
+        .approve_pairing(&pairing.challenge_id, &pairing.challenge)
+        .unwrap();
+    service
+        .grant(
+            "client-a",
+            approval.principal_incarnation,
+            protocol::agent_authority::AgentGrant::new(
+                protocol::control_plane_registry_v2::AdapterKind::ExternalMcp,
+                protocol::agent_authority::AgentCapability::Read,
+                "syndocal.query.agent_bridge.fixtures.list.v1",
+                None,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    let lock = storage::instance_lock(&directory).unwrap();
+    let inner = Inner {
+        token: "bridge-token".to_string(),
+        session_nonce: "a".repeat(64),
+        authority: service,
+        ledger: Mutex::new(ledger::Ledger::new(None).unwrap()),
+        auth_nonces: Mutex::new(std::collections::BTreeSet::new()),
+        emit: Box::new(move |dispatch| {
+            captured_for_emit.lock().unwrap().push(dispatch.clone());
+            Ok(())
+        }),
+        connections: AtomicUsize::new(0),
+        _lock: lock,
+        descriptor_path: directory.join("missing-descriptor.json"),
+    };
+    inner.ledger.lock().unwrap().register().unwrap();
+    let request_id = id(91);
+    let client_nonce = "b".repeat(64);
+    let method = "fixtures.list";
+    let auth = wire::Auth {
+        principal_id: "client-a".to_string(),
+        principal_incarnation: approval.principal_incarnation,
+        client_nonce: client_nonce.clone(),
+        proof: proof(
+            &approval.credential,
+            &authority::auth_proof_message(
+                &inner.session_nonce,
+                &client_nonce,
+                &request_id,
+                method,
+            ),
+        ),
+    };
+    let request = Request {
+        token: inner.token.clone(),
+        request_id: request_id.clone(),
+        method: method.to_string(),
+        params: serde_json::json!({}),
+        auth: Some(auth.clone()),
+    };
+    let missing_auth = serde_json::to_vec(&Request {
+        auth: None,
+        ..request.clone()
+    })
+    .unwrap();
+    assert_eq!(
+        process(&inner, &missing_auth).error.as_deref(),
+        Some("agent_authentication_required")
+    );
+    let mut invalid_auth = request.clone();
+    invalid_auth.auth.as_mut().unwrap().proof = "0".repeat(64);
+    assert_eq!(
+        process(&inner, &serde_json::to_vec(&invalid_auth).unwrap())
+            .error
+            .as_deref(),
+        Some("agent_auth_proof_invalid")
+    );
+    let response = process(&inner, &serde_json::to_vec(&request).unwrap());
+    assert_eq!(response.status, "pending");
+    assert_eq!(captured.lock().unwrap()[0].principal_id, "client-a");
+    assert_eq!(
+        process(&inner, &serde_json::to_vec(&request).unwrap())
+            .error
+            .as_deref(),
+        Some("agent_auth_nonce_replayed")
+    );
+    drop(inner);
+    std::fs::remove_dir_all(&directory).unwrap();
 }
 #[test]
 fn agent_bridge_claim_is_exact_once_and_replay_never_dispatches_twice() {

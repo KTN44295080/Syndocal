@@ -191,6 +191,8 @@ impl Ledger {
                 .ok_or("request_encode_failed")?
                 .to_string(),
             params: command_json["params"].clone(),
+            principal_id: String::new(),
+            principal_incarnation: 0,
         };
         let response = Response::status(id, "pending");
         let mut candidate = self.durable.clone();

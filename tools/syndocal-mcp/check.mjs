@@ -4,13 +4,17 @@ import { createServer } from 'node:net';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { randomUUID, randomBytes } from 'node:crypto';
+import { createHmac, randomUUID, randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { parseOptions, toolDefinitions } from './server.mjs';
 
 const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'syndocal-mcp-test-'));
 const descriptorPath = path.join(temporary, 'bridge.json');
+const credentialPath = path.join(temporary, 'credential.txt');
 const token = 'test-secret-' + randomUUID();
+const sessionNonce = randomBytes(32).toString('hex');
+const credential = randomBytes(32).toString('hex');
+await fs.writeFile(credentialPath, `${credential}\n`, { encoding: 'utf8', mode: 0o600 });
 const requests = [];
 const sockets = new Set();
 let respond = (request, socket) => socket.end(JSON.stringify({ requestId: request.requestId, status: 'completed', result: { ok: true, fixtures: [], project: { project_epoch: 1, project_revision: 1, checkpoint_hash: 'test' } } }) + '\n');
@@ -23,14 +27,21 @@ const broker = createServer((socket) => {
     const request = JSON.parse(data.slice(0, data.indexOf('\n')));
     requests.push(request);
     assert.equal(request.token, token);
+    assert.equal(request.auth.principalId, 'test-client');
+    assert.equal(request.auth.principalIncarnation, 1);
+    assert.match(request.auth.clientNonce, /^[0-9a-f]{64}$/);
+    const proof = createHmac('sha256', Buffer.from(credential, 'hex'))
+      .update(`${sessionNonce}\0${request.auth.clientNonce}\0${request.requestId}\0${request.method}`)
+      .digest('hex');
+    assert.equal(request.auth.proof, proof);
     respond(request, socket);
   });
 });
 await new Promise((resolve) => broker.listen(0, '127.0.0.1', resolve));
-const descriptor = { protocolVersion: 1, port: broker.address().port, token, instanceId: randomBytes(16).toString('hex'), processId: process.pid, executablePath: process.execPath };
+const descriptor = { protocolVersion: 1, port: broker.address().port, token, sessionNonce, instanceId: randomBytes(16).toString('hex'), processId: process.pid, executablePath: process.execPath };
 await fs.writeFile(descriptorPath, JSON.stringify(descriptor));
 const script = fileURLToPath(new URL('./server.mjs', import.meta.url));
-const child = spawn(process.execPath, [script, '--descriptor', descriptorPath, '--expected-executable', process.execPath], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+const child = spawn(process.execPath, [script, '--descriptor', descriptorPath, '--expected-executable', process.execPath, '--principal-id', 'test-client', '--principal-incarnation', '1', '--credential-file', credentialPath], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
 let stderr = '';
 let stdout = '';
 let pendingText = '';
@@ -68,6 +79,7 @@ try {
   assert.throws(() => parseOptions([]));
   assert.throws(() => parseOptions(['--expected-executable', 'relative', '--descriptor', descriptorPath]));
   assert.throws(() => parseOptions(['--expected-executable', process.execPath, '--descriptor', descriptorPath, '--unknown', 'value']));
+  assert.throws(() => parseOptions(['--expected-executable', process.execPath, '--descriptor', descriptorPath, '--principal-id', 'test-client']));
   checks++;
   assert.equal((await rpc('tools/list')).error.code, -32002);
   const initialize = await rpc('initialize', { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'test', version: '1' } });
@@ -75,6 +87,8 @@ try {
   child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
   assert.deepEqual((await rpc('ping')).result, {});
   const list = await rpc('tools/list');
+  assert.equal(requests.at(-1).method, 'control_plane.get_capabilities');
+  assert.deepEqual(requests.at(-1).params, {});
   assert.equal(list.result.tools.length, 9);
   assert.ok(list.result.tools.every((tool) => tool.inputSchema.additionalProperties === false));
   assert.equal(toolDefinitions.find((tool) => tool.name === 'syndocal_execute_control_plane').inputSchema.properties.request.additionalProperties, true);
@@ -102,7 +116,7 @@ try {
     { ...videoMutation, expectedProject: { ...videoMutation.expectedProject, checkpoint_hash: 'A'.repeat(64) } },
     { ...videoMutation, expectedProject: { ...videoMutation.expectedProject, checkpoint_hash: 'a'.repeat(63) } },
   ]) assert.equal((await call('syndocal_set_video_blackout', invalid)).error.code, -32602);
-  assert.equal(requests.length, 0);
+  assert.equal(requests.length, 1);
   checks++;
   assert.equal(decode(await call('syndocal_list_fixtures')).status, 'completed');
   assert.equal(requests.at(-1).method, 'fixtures.list');

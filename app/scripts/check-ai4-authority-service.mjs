@@ -62,6 +62,8 @@ async function run() {
     "CredDeleteW",
     "CRED_PERSIST_LOCAL_MACHINE",
     "constant_time_bytes_eq",
+    "authenticate_proof",
+    "authorize_bridge_request",
     "agent_credential_store_read_failed",
   ], "AI4 authority service");
   assert(!authority.includes("Raw Input"), "AI4 service must not restore the retired Raw Input challenge");
@@ -73,7 +75,9 @@ async function run() {
     "AgentAuthorityService::new()",
     "pub(crate) fn authority",
     "main_only(window_label)",
-    "not exposed to the socket adapter",
+    "separate bounded",
+    "request-proof",
+    "exact-grant admission methods",
   ], "AI4 Agent Bridge boundary");
 
   for (const command of [

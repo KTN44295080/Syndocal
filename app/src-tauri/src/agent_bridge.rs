@@ -2,16 +2,17 @@
 //! operations are exposed through typed adapter commands; unreviewed source
 //! inventory remains discovery-only. Events are wake hints; the main renderer
 //! must claim the canonical request.
-#[path = "agent_bridge_ledger.rs"]
-mod ledger;
 #[path = "agent_authority_service.rs"]
 mod authority;
+#[path = "agent_bridge_ledger.rs"]
+mod ledger;
 #[path = "agent_bridge_storage.rs"]
 mod storage;
 #[path = "agent_bridge_wire.rs"]
 mod wire;
 use serde::Serialize;
 use std::{
+    collections::BTreeSet,
     io::{BufRead, BufReader, Write},
     net::{TcpListener, TcpStream},
     path::{Path, PathBuf},
@@ -24,9 +25,7 @@ use std::{
 use tauri::Emitter;
 use wire::{Command, Request, Response};
 
-pub(crate) use authority::{
-    AuthorityStatus, PairingApproval, PairingChallenge,
-};
+pub(crate) use authority::{AuthorityStatus, PairingApproval, PairingChallenge};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -35,6 +34,8 @@ pub(crate) struct AgentBridgeDispatch {
     pub request_id: String,
     pub method: String,
     pub params: serde_json::Value,
+    pub principal_id: String,
+    pub principal_incarnation: u64,
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -42,14 +43,17 @@ struct Descriptor {
     protocol_version: u32,
     port: u16,
     token: String,
+    session_nonce: String,
     process_id: u32,
     executable_path: String,
     instance_id: String,
 }
 struct Inner {
     token: String,
+    session_nonce: String,
     authority: authority::AgentAuthorityService,
     ledger: Mutex<ledger::Ledger>,
+    auth_nonces: Mutex<BTreeSet<String>>,
     emit: Box<dyn Fn(&AgentBridgeDispatch) -> Result<(), String> + Send + Sync>,
     connections: AtomicUsize,
     _lock: std::fs::File,
@@ -78,12 +82,14 @@ impl AgentBridge {
             .map_err(|_| "agent_address_failed")?
             .port();
         let token = storage::random_hex(32)?;
+        let session_nonce = storage::random_hex(32)?;
         let descriptor_path = directory.join("agent-bridge-v1.json");
         let ledger = ledger::Ledger::new(Some(directory.join("agent-bridge-ledger-v1.json")))?;
         let descriptor = Descriptor {
             protocol_version: 1,
             port,
             token: token.clone(),
+            session_nonce: session_nonce.clone(),
             process_id: std::process::id(),
             executable_path: std::env::current_exe()
                 .map_err(|_| "agent_executable_unknown")?
@@ -93,8 +99,10 @@ impl AgentBridge {
         };
         let inner = Arc::new(Inner {
             token,
+            session_nonce,
             authority: authority::AgentAuthorityService::new(),
             ledger: Mutex::new(ledger),
+            auth_nonces: Mutex::new(BTreeSet::new()),
             emit: Box::new(move |request| {
                 app.emit_to("main", "syndocal://agent-request-v1", request)
                     .map_err(|_| "renderer_dispatch_failed".to_string())
@@ -180,9 +188,11 @@ impl AgentBridge {
             .complete(renderer_generation, request_id, result)
     }
 
-    /// The authority service is accessible only through the trusted local
-    /// main window. It is intentionally not exposed to the socket adapter;
-    /// pairing and administrative approval remain local UI decisions.
+    /// Administrative authority remains accessible only through the trusted
+    /// local main window. The socket adapter may use the separate bounded
+    /// request-proof and exact-grant admission methods, but pairing,
+    /// promotion, grants, revocation, and consent approval remain local UI
+    /// decisions.
     pub(crate) fn authority(
         &self,
         window_label: &str,
@@ -221,6 +231,42 @@ fn process(inner: &Inner, bytes: &[u8]) -> Response {
         Ok(value) => value,
         Err(error) => return Response::rejected(&request.request_id, error),
     };
+    let Some(auth) = request.auth.as_ref() else {
+        return Response::rejected(&request.request_id, "agent_authentication_required");
+    };
+    if let Err(error) = inner.authority.authenticate_proof(
+        &auth.principal_id,
+        auth.principal_incarnation,
+        &inner.session_nonce,
+        &auth.client_nonce,
+        &request.request_id,
+        &request.method,
+        &auth.proof,
+    ) {
+        return Response::rejected(&request.request_id, &error);
+    }
+    let mut auth_nonces = match inner.auth_nonces.lock() {
+        Ok(value) => value,
+        Err(_) => return Response::rejected(&request.request_id, "agent_state_poisoned"),
+    };
+    if auth_nonces.contains(&auth.client_nonce) {
+        return Response::rejected(&request.request_id, "agent_auth_nonce_replayed");
+    }
+    if auth_nonces.len() >= 512 {
+        if let Some(oldest) = auth_nonces.iter().next().cloned() {
+            auth_nonces.remove(&oldest);
+        }
+    }
+    auth_nonces.insert(auth.client_nonce.clone());
+    drop(auth_nonces);
+    if let Err(error) = inner.authority.authorize_bridge_request(
+        &auth.principal_id,
+        auth.principal_incarnation,
+        &request.method,
+        &request.params,
+    ) {
+        return Response::rejected(&request.request_id, &error);
+    }
     let mut ledger = match inner.ledger.lock() {
         Ok(value) => value,
         Err(_) => return Response::rejected(&request.request_id, "agent_state_poisoned"),
@@ -234,6 +280,9 @@ fn process(inner: &Inner, bytes: &[u8]) -> Response {
     };
     drop(ledger);
     if let Some(dispatch) = dispatch {
+        let mut dispatch = dispatch;
+        dispatch.principal_id = auth.principal_id.clone();
+        dispatch.principal_incarnation = auth.principal_incarnation;
         if (inner.emit)(&dispatch).is_err() {
             if let Ok(mut ledger) = inner.ledger.lock() {
                 ledger.dispatch_failed(&request.request_id);

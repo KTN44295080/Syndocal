@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import net from 'node:net';
-import { randomUUID } from 'node:crypto';
+import { createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { pathToFileURL } from 'node:url';
@@ -111,12 +111,27 @@ function validateArguments(name, args) {
 export function parseOptions(argv, env = process.env) {
   const opts = {};
   for (let i = 0; i < argv.length; i += 2) {
-    const key = { '--descriptor': 'descriptor', '--expected-executable': 'executable' }[argv[i]];
+    const key = {
+      '--descriptor': 'descriptor',
+      '--expected-executable': 'executable',
+      '--principal-id': 'principalId',
+      '--principal-incarnation': 'principalIncarnation',
+      '--credential-file': 'credentialFile',
+    }[argv[i]];
     if (!key || opts[key] || !argv[i + 1]) throw new Error('usage');
     opts[key] = argv[i + 1];
   }
   opts.descriptor ??= env.LOCALAPPDATA ? path.join(env.LOCALAPPDATA, 'jp.seraf.ktn.syndocal', 'agent-bridge-v1.json') : undefined;
   if (!opts.descriptor || !opts.executable || !path.isAbsolute(opts.descriptor) || !path.isAbsolute(opts.executable)) throw new Error('usage');
+  const authOptions = [opts.principalId, opts.principalIncarnation, opts.credentialFile];
+  if (authOptions.some((value) => value !== undefined) && authOptions.some((value) => value === undefined)) throw new Error('usage');
+  if (opts.principalId !== undefined && (typeof opts.principalId !== 'string' || !/^[^\s]{1,128}$/.test(opts.principalId))) throw new Error('usage');
+  if (opts.principalIncarnation !== undefined) {
+    if (!/^\d+$/.test(opts.principalIncarnation)) throw new Error('usage');
+    opts.principalIncarnation = Number(opts.principalIncarnation);
+    if (!Number.isSafeInteger(opts.principalIncarnation) || opts.principalIncarnation < 1) throw new Error('usage');
+  }
+  if (opts.credentialFile !== undefined && !path.isAbsolute(opts.credentialFile)) throw new Error('usage');
   return opts;
 }
 
@@ -143,16 +158,30 @@ export async function readDescriptor(options) {
     if (bytesRead > INPUT_LIMIT) throw new Error('descriptor');
     descriptor = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(buffer.subarray(0, bytesRead)));
   } finally { await handle.close(); }
-  if (!exact(descriptor, ['protocolVersion', 'port', 'token', 'instanceId', 'processId', 'executablePath'])
+  if (!exact(descriptor, ['protocolVersion', 'port', 'token', 'sessionNonce', 'instanceId', 'processId', 'executablePath'])
     || descriptor.protocolVersion !== 1 || !integer(descriptor.port) || descriptor.port < 1 || descriptor.port > 65535
     || !integer(descriptor.processId) || descriptor.processId < 1
     || typeof descriptor.token !== 'string' || descriptor.token.length < 16 || descriptor.token.length > 4096
+    || typeof descriptor.sessionNonce !== 'string' || !/^[0-9a-f]{64}$/.test(descriptor.sessionNonce)
     || typeof descriptor.instanceId !== 'string' || !/^[0-9a-f]{32}$/.test(descriptor.instanceId)
     || typeof descriptor.executablePath !== 'string' || !path.isAbsolute(descriptor.executablePath)) throw new Error('descriptor');
   const canonical = async (p) => (await fs.realpath(p)).toLowerCase();
   const expected = await canonical(options.executable);
   if (await canonical(descriptor.executablePath) !== expected || await canonical(await processExecutable(descriptor.processId)) !== expected) throw new Error('identity');
   return descriptor;
+}
+
+async function readCredential(options) {
+  if (options.principalId === undefined || options.principalIncarnation === undefined || options.credentialFile === undefined) {
+    throw new Error('authentication configuration is required');
+  }
+  const value = (await fs.readFile(options.credentialFile, 'utf8')).trim();
+  if (!/^[0-9a-f]{64}$/.test(value)) throw new Error('credential');
+  return value;
+}
+
+function proofMessage(sessionNonce, clientNonce, requestId, method) {
+  return `${sessionNonce}\0${clientNonce}\0${requestId}\0${method}`;
 }
 
 function redactCredential(value, token) {
@@ -167,7 +196,25 @@ export async function nativeRequest(options, method, params, requestId, mutation
   let descriptor;
   try { descriptor = await readDescriptor(options); }
   catch { return { requestId: resultId, status: 'rejected', error: 'Selected Syndocal descriptor/process/executable could not be verified. Start the expected executable and verify --descriptor and --expected-executable.' }; }
-  const wire = Buffer.from(JSON.stringify({ token: descriptor.token, requestId, method, params }) + '\n');
+  let credential;
+  try { credential = await readCredential(options); }
+  catch { return { requestId: resultId, status: 'rejected', error: 'Sidecar principal authentication is not configured or its OS-protected credential could not be read.' }; }
+  const clientNonce = randomBytes(32).toString('hex');
+  const proof = createHmac('sha256', Buffer.from(credential, 'hex'))
+    .update(proofMessage(descriptor.sessionNonce, clientNonce, requestId, method))
+    .digest('hex');
+  const wire = Buffer.from(JSON.stringify({
+    token: descriptor.token,
+    requestId,
+    method,
+    params,
+    auth: {
+      principalId: options.principalId,
+      principalIncarnation: options.principalIncarnation,
+      clientNonce,
+      proof,
+    },
+  }) + '\n');
   if (wire.length > INPUT_LIMIT) return { requestId: resultId, status: 'rejected', error: 'Native request exceeds 64 KiB.' };
   return new Promise((resolve) => {
     let sent = false;
@@ -208,7 +255,7 @@ export async function nativeRequest(options, method, params, requestId, mutation
           || !['pending', 'completed', 'unknown', 'rejected'].includes(value.status)
           || (value.error !== undefined && typeof value.error !== 'string')) return fail('Native response contract mismatch.');
         // Treat broker payloads as data and redact the credential even on a malicious echo.
-        const redacted = redactCredential(value, descriptor.token);
+        const redacted = redactCredential(redactCredential(value, descriptor.token), credential);
         done(redacted);
       } catch { fail('Native response was not valid UTF-8 JSON.'); }
     });
@@ -257,6 +304,8 @@ export function serve(options, input = process.stdin, output = process.stdout) {
     if (!initialized) return error(req.id, -32002, 'Initialize and send notifications/initialized first.');
     if (req.method === 'tools/list') {
       if (!exact(params, ['_meta'], [])) return error(req.id, -32602, 'Unexpected tools/list parameters.');
+      const authentication = await nativeRequest(options, 'control_plane.get_capabilities', {}, randomUUID());
+      if (authentication.status !== 'completed') return error(req.id, -32001, 'Authenticated principal is required before tool discovery.');
       return success({ tools: toolDefinitions });
     }
     if (req.method !== 'tools/call') return error(req.id, -32601, 'Method not found.');
@@ -300,5 +349,5 @@ export function serve(options, input = process.stdin, output = process.stdout) {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   try { serve(parseOptions(process.argv.slice(2))); }
-  catch { process.stderr.write('Usage: node server.mjs --expected-executable <absolute path> [--descriptor <absolute path>]\n'); process.exitCode = 2; }
+  catch { process.stderr.write('Usage: node server.mjs --expected-executable <absolute path> [--descriptor <absolute path>] [--principal-id <id> --principal-incarnation <n> --credential-file <absolute path>]\n'); process.exitCode = 2; }
 }

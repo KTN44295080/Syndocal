@@ -57,7 +57,7 @@ pub(super) fn canonical_operation_is_mutation(operation_id: &str) -> bool {
     !operation_id.starts_with("syndocal.query.")
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Request {
     pub token: String,
@@ -65,6 +65,20 @@ pub(super) struct Request {
     pub request_id: String,
     pub method: String,
     pub params: Value,
+    #[serde(default)]
+    pub auth: Option<Auth>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(super) struct Auth {
+    #[serde(rename = "principalId")]
+    pub principal_id: String,
+    #[serde(rename = "principalIncarnation")]
+    pub principal_incarnation: u64,
+    #[serde(rename = "clientNonce")]
+    pub client_nonce: String,
+    pub proof: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

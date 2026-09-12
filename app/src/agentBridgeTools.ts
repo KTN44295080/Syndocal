@@ -23,6 +23,8 @@ export interface AgentBridgeRequest {
   requestId: string;
   method: string;
   params: Record<string, unknown>;
+  principalId: string;
+  principalIncarnation: number;
 }
 
 const projectToken = (bundle: ProjectAuthorityBundle) => ({

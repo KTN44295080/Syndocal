@@ -10,6 +10,8 @@ use protocol::agent_authority::{
     AgentAuthority, AgentAuthorityError, AgentAuthorization, AgentGrant, AgentPrincipalId,
     AgentRequestContext,
 };
+use protocol::control_plane::OperationRisk;
+use protocol::control_plane_registry_v2::AdapterKind;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::{
@@ -421,6 +423,113 @@ impl AgentAuthorityService {
         Ok(())
     }
 
+    /// Authenticate one broker request without putting the long-lived
+    /// credential on the wire. The sidecar signs a fresh client nonce and the
+    /// broker's per-launch session nonce plus the exact request identity.
+    /// Replay protection for the nonce is owned by `agent_bridge` because it
+    /// is transport/session state rather than principal authority state.
+    pub(crate) fn authenticate_proof(
+        &self,
+        principal_id: &str,
+        incarnation: u64,
+        session_nonce: &str,
+        client_nonce: &str,
+        request_id: &str,
+        method: &str,
+        proof: &str,
+    ) -> Result<(), String> {
+        let principal = AgentPrincipalId::new(principal_id.to_string())
+            .map_err(|error| authority_error(error).to_string())?;
+        if !is_nonce(session_nonce) || !is_nonce(client_nonce) {
+            return Err("agent_auth_nonce_invalid".to_string());
+        }
+        if request_id.len() > 128 || method.is_empty() || method.len() > 128 {
+            return Err("agent_auth_request_identity_invalid".to_string());
+        }
+        let inner = self.lock()?;
+        if inner.kill_switch_active {
+            return Err(authority_error(AgentAuthorityError::KillSwitchActive).to_string());
+        }
+        let record = inner
+            .principals
+            .get(&principal)
+            .ok_or_else(|| authority_error(AgentAuthorityError::UnknownPrincipal).to_string())?;
+        if record.revoked {
+            return Err(authority_error(AgentAuthorityError::PrincipalRevoked).to_string());
+        }
+        if record.incarnation != incarnation {
+            return Err(
+                authority_error(AgentAuthorityError::PrincipalIncarnationStale).to_string(),
+            );
+        }
+        let expected = self
+            .credentials
+            .get(&principal)?
+            .ok_or_else(|| "agent_credential_missing".to_string())?;
+        let message = auth_proof_message(session_nonce, client_nonce, request_id, method);
+        let expected_proof = hmac_sha256_hex(&expected, message.as_bytes());
+        if !constant_time_text_eq(&expected_proof, proof) {
+            return Err("agent_auth_proof_invalid".to_string());
+        }
+        Ok(())
+    }
+
+    /// Final backend-side grant admission for the authenticated bridge. The
+    /// renderer still owns domain execution, but an authenticated principal
+    /// must also hold the exact ExternalMcp grant for this operation before a
+    /// request can reach that renderer.
+    pub(crate) fn authorize_bridge_request(
+        &self,
+        principal_id: &str,
+        incarnation: u64,
+        method: &str,
+        params: &serde_json::Value,
+    ) -> Result<(), String> {
+        let (operation_id, risk) = bridge_operation(method, params)?;
+        let capability = match risk {
+            OperationRisk::R0 => protocol::agent_authority::AgentCapability::Read,
+            OperationRisk::R1 => protocol::agent_authority::AgentCapability::Runtime,
+            OperationRisk::R2 => protocol::agent_authority::AgentCapability::Live,
+            OperationRisk::R3 => protocol::agent_authority::AgentCapability::Authored,
+            OperationRisk::R4 => protocol::agent_authority::AgentCapability::Output,
+            OperationRisk::R5 => protocol::agent_authority::AgentCapability::File,
+            OperationRisk::S0 => protocol::agent_authority::AgentCapability::SafetyBlackoutEngage,
+        };
+        let fingerprint = Sha256::digest(
+            serde_json::to_vec(params).map_err(|_| "agent_bridge_arguments_invalid".to_string())?,
+        );
+        let mut canonical_arguments_fingerprint = [0u8; 32];
+        canonical_arguments_fingerprint.copy_from_slice(&fingerprint);
+        let expected_project_generation = params
+            .get("expectedProject")
+            .and_then(|value| value.get("project_epoch"))
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0);
+        let context = AgentRequestContext {
+            principal: AgentPrincipalId::new(principal_id.to_string())
+                .map_err(|error| authority_error(error).to_string())?,
+            principal_incarnation: incarnation,
+            adapter: AdapterKind::ExternalMcp,
+            operation_id,
+            capability,
+            risk,
+            owner_incarnation: if matches!(risk, OperationRisk::R4 | OperationRisk::R5) {
+                1
+            } else {
+                0
+            },
+            canonical_arguments_fingerprint,
+            project_id: None,
+            project_generation: expected_project_generation,
+            output_generation: 0,
+        };
+        self.lock()?
+            .authority
+            .authorize(&context)
+            .map(|_| ())
+            .map_err(|error| authority_error(error).to_string())
+    }
+
     pub(crate) fn promote(
         &self,
         principal_id: &str,
@@ -579,6 +688,50 @@ impl AgentAuthorityService {
     }
 }
 
+fn bridge_operation(
+    method: &str,
+    params: &serde_json::Value,
+) -> Result<(String, OperationRisk), String> {
+    let direct = match method {
+        "fixtures.list" => Some((
+            "syndocal.query.agent_bridge.fixtures.list.v1",
+            OperationRisk::R0,
+        )),
+        "fixtures.get" => Some((
+            "syndocal.query.agent_bridge.fixtures.get.v1",
+            OperationRisk::R0,
+        )),
+        "runtime.get" => Some(("syndocal.query.agent_bridge.runtime.v1", OperationRisk::R0)),
+        "control_plane.get_capabilities" => Some((
+            "syndocal.query.control_plane.capabilities.v1",
+            OperationRisk::R0,
+        )),
+        "recording.get_status" => Some(("syndocal.query.recording.status.v1", OperationRisk::R0)),
+        "fixtures.set_transform" => Some((
+            "syndocal.authored.agent_bridge.fixtures.set_transform.v1",
+            OperationRisk::R3,
+        )),
+        "output.set_video_blackout" => Some(("syndocal.output.blackout.set.v2", OperationRisk::R4)),
+        "control_plane.execute" => None,
+        _ => return Err("agent_bridge_operation_unknown".to_string()),
+    };
+    if let Some((operation_id, risk)) = direct {
+        return Ok((operation_id.to_string(), risk));
+    }
+    let operation_id = params
+        .get("operationId")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| "agent_bridge_operation_invalid".to_string())?;
+    let registry = crate::control_plane::canonical_registry()
+        .map_err(|_| "agent_control_plane_registry_unavailable".to_string())?;
+    let descriptor = registry
+        .canonical_operations
+        .iter()
+        .find(|operation| operation.operation_id == operation_id)
+        .ok_or_else(|| "agent_bridge_operation_not_reviewed".to_string())?;
+    Ok((descriptor.operation_id.clone(), descriptor.risk))
+}
+
 fn random_bytes(length: usize) -> Result<Zeroizing<Vec<u8>>, String> {
     let mut bytes = Zeroizing::new(vec![0u8; length]);
     getrandom::getrandom(&mut bytes).map_err(|_| "secure_random_failed".to_string())?;
@@ -623,6 +776,45 @@ fn constant_time_bytes_eq(expected: &[u8], supplied: &[u8]) -> bool {
         .zip(supplied.iter())
         .fold(0u8, |value, (left, right)| value | (left ^ right));
     expected.len() == supplied.len() && mismatch == 0
+}
+
+fn is_nonce(value: &str) -> bool {
+    value.len() == CREDENTIAL_BYTES * 2 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+pub(crate) fn auth_proof_message(
+    session_nonce: &str,
+    client_nonce: &str,
+    request_id: &str,
+    method: &str,
+) -> String {
+    format!("{session_nonce}\0{client_nonce}\0{request_id}\0{method}")
+}
+
+fn hmac_sha256_hex(key: &[u8], message: &[u8]) -> String {
+    const BLOCK: usize = 64;
+    let mut normalized = [0u8; BLOCK];
+    if key.len() > BLOCK {
+        let digest = Sha256::digest(key);
+        normalized[..digest.len()].copy_from_slice(&digest);
+    } else {
+        normalized[..key.len()].copy_from_slice(key);
+    }
+    let mut inner_pad = [0x36u8; BLOCK];
+    let mut outer_pad = [0x5cu8; BLOCK];
+    for index in 0..BLOCK {
+        inner_pad[index] ^= normalized[index];
+        outer_pad[index] ^= normalized[index];
+    }
+    let mut inner = Sha256::new();
+    inner.update(inner_pad);
+    inner.update(message);
+    let inner_digest = inner.finalize();
+    let mut outer = Sha256::new();
+    outer.update(outer_pad);
+    outer.update(inner_digest);
+    let digest = outer.finalize();
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 fn authority_error(error: AgentAuthorityError) -> &'static str {
@@ -689,6 +881,135 @@ mod tests {
         assert!(service
             .authenticate("client-a", approval.principal_incarnation, &"0".repeat(64))
             .is_err());
+    }
+
+    #[test]
+    fn request_proof_binds_launch_nonce_and_request_identity() {
+        let service = service();
+        let challenge = service.begin_pairing("client-a").unwrap();
+        let approval = service
+            .approve_pairing(&challenge.challenge_id, &challenge.challenge)
+            .unwrap();
+        let session_nonce = "a".repeat(CREDENTIAL_BYTES * 2);
+        let client_nonce = "b".repeat(CREDENTIAL_BYTES * 2);
+        let request_id = "00000000-0000-4000-8000-000000000001";
+        let method = "runtime.get";
+        let credential = hex_decode(&approval.credential).unwrap();
+        let proof = hmac_sha256_hex(
+            &credential,
+            auth_proof_message(&session_nonce, &client_nonce, request_id, method).as_bytes(),
+        );
+        assert!(service
+            .authenticate_proof(
+                "client-a",
+                approval.principal_incarnation,
+                &session_nonce,
+                &client_nonce,
+                request_id,
+                method,
+                &proof,
+            )
+            .is_ok());
+        assert_eq!(
+            service
+                .authenticate_proof(
+                    "client-a",
+                    approval.principal_incarnation,
+                    &session_nonce,
+                    &client_nonce,
+                    request_id,
+                    "fixtures.list",
+                    &proof,
+                )
+                .unwrap_err(),
+            "agent_auth_proof_invalid"
+        );
+        assert_eq!(
+            service
+                .authenticate_proof(
+                    "client-a",
+                    approval.principal_incarnation,
+                    &session_nonce,
+                    &"c".repeat(CREDENTIAL_BYTES * 2),
+                    request_id,
+                    method,
+                    &proof,
+                )
+                .unwrap_err(),
+            "agent_auth_proof_invalid"
+        );
+    }
+
+    #[test]
+    fn bridge_grant_admission_is_exact_and_high_risk_stays_consent_bound() {
+        let service = service();
+        let challenge = service.begin_pairing("client-a").unwrap();
+        let approval = service
+            .approve_pairing(&challenge.challenge_id, &challenge.challenge)
+            .unwrap();
+        let read_grant = AgentGrant::new(
+            AdapterKind::ExternalMcp,
+            AgentCapability::Read,
+            "syndocal.query.agent_bridge.fixtures.list.v1",
+            None,
+        )
+        .unwrap();
+        service
+            .grant("client-a", approval.principal_incarnation, read_grant)
+            .unwrap();
+        assert!(service
+            .authorize_bridge_request(
+                "client-a",
+                approval.principal_incarnation,
+                "fixtures.list",
+                &serde_json::json!({}),
+            )
+            .is_ok());
+        assert_eq!(
+            service
+                .authorize_bridge_request(
+                    "client-a",
+                    approval.principal_incarnation,
+                    "fixtures.get",
+                    &serde_json::json!({"fixtureId": 1}),
+                )
+                .unwrap_err(),
+            "agent_missing_grant"
+        );
+        service
+            .promote("client-a", approval.principal_incarnation)
+            .unwrap();
+        service
+            .grant(
+                "client-a",
+                approval.principal_incarnation,
+                AgentGrant::new(
+                    AdapterKind::ExternalMcp,
+                    AgentCapability::Output,
+                    "syndocal.output.blackout.set.v2",
+                    None,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        assert_eq!(
+            service
+                .authorize_bridge_request(
+                    "client-a",
+                    approval.principal_incarnation,
+                    "output.set_video_blackout",
+                    &serde_json::json!({
+                        "enabled": true,
+                        "expectedProject": {
+                            "project_epoch": 0,
+                            "project_revision": 0,
+                            "checkpoint_hash": "a".repeat(64)
+                        }
+                    }),
+                )
+                .unwrap_err(),
+            "agent_consent_required"
+        );
     }
 
     #[test]
