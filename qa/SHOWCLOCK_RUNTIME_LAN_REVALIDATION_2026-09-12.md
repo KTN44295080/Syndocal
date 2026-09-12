@@ -74,12 +74,12 @@ the exact Build Tools linker pinned first:
 | `cargo test --manifest-path app/src-tauri/Cargo.toml --locked control_plane::tests -- --nocapture --test-threads=1` | PASS — 30 command-admission tests |
 | `pnpm.cmd --dir app exec tsc --noEmit; pnpm.cmd --dir app run build` | PASS — TypeScript and Vite production build; 354 modules transformed |
 | `pnpm.cmd --dir app run check:frontend-invokes; pnpm.cmd --dir app run check:frontend-command-routing; node app/scripts/check-tauri-admission-inventory.mjs; pnpm.cmd --dir app run check:output-control-runtime` | PASS — 464 frontend commands; routing 133/31/28/471; 523 native commands with 18 negative fixtures rejected; output-control contracts pass |
-| `pnpm.cmd --dir app tauri build --no-bundle` | PASS — exact MSVC 14.44.35207 linker; final release executable built in 2m37s (180.02s wall) without first-party warnings |
-| Exact `target/release/syndocal.exe` process smoke | PASS — exactly 1 exact-path process, `Syndocal` title, nonzero window handle, `Responding=True`, maximize requested, exact-path cleanup complete |
+| `pnpm.cmd --dir app tauri build --no-bundle` | PASS — exact MSVC 14.44.35207 linker; final release executable built in 2m31s (174.5s wall) without first-party warnings |
+| Exact `target/release/syndocal.exe` process smoke | PASS — exactly 1 exact-path process, `Syndocal` title, nonzero window handle, `Responding=True`, maximize requested, graceful exit code 0, exact-path process count 0 after close |
 | `git diff --check` | PASS |
 
 The final current-source executable SHA-256 is
-`56BD2EF7B828D1597ECFD3C4EC842248FDC41A668A16D5C298AA14310854FCC2`.
+`963EFCAF7F53D9E9E14A0AC6D3B7CFA6819CA56E096F90D6309AD2CC1A356EF4`.
 It is an unsigned, unpublished process-smoke binary, not release acceptance.
 
 The new protocol tests cover required and kind-bound action payloads, payload
@@ -156,3 +156,45 @@ partition/rejoin, crash/restart with restored replay state, automatic failover,
 witness/physical interlock, venue behavior, signing, or product completion.
 The process worker intentionally requires a fresh session/key after restart;
 there is no replay-state restoration implementation in this checkpoint.
+
+## Continuation checkpoint — generation-reset status and child-process reap safety
+
+This checkpoint is based on branch `codex/showclock-review-20260912` at
+`9eb7d584` before the pending checkpoint commit and closes two concrete local
+boundaries found during the remaining ShowClock IPC/process audit.
+
+Manual Re-arm now resets every generation-scoped action status field, not only
+the scheduler length. After a successful re-arm, accepted-action count,
+scheduled-action count, last sequence, and last action id all start at zero for
+the new generation. The existing lifecycle regression now asserts these
+values, so stale old-generation status cannot be exposed as current state.
+
+The two-process loopback harness now owns its spawned child through a Drop
+guard. If a parent assertion or setup path exits early, the guard kills and
+joins the still-running child; the success path still waits for normal child
+completion. This is test-harness process safety only and does not extend the
+software evidence to a real two-machine topology.
+
+Current evidence is Tauri ShowClock 7/7, two-process 2/2, and the exact pinned
+MSVC 14.44.35207 x64 no-bundle build. The release build completed in 2m31s
+(174.5s wall) without first-party warnings. Exact-path process smoke observed
+one responsive `Syndocal` window with HWND 11863936, requested maximize, then
+closed cleanly with exit code 0 and zero exact-path processes remaining. The
+current-source executable SHA-256 is
+`963EFCAF7F53D9E9E14A0AC6D3B7CFA6819CA56E096F90D6309AD2CC1A356EF4`.
+
+`rustfmt --check` passes for the changed two-process test and `git diff --check`
+passes. The full-file rustfmt check for the ShowClock IPC source still reports
+only the pre-existing unrelated `matches!` formatting delta at
+`app/src-tauri/src/show_clock_ipc.rs:1210`; it was not reformatted into this
+checkpoint. No physical DMX output was emitted.
+
+This closes local generation-status and test-child-reaping boundaries only. It
+does not claim native UI button-by-button interaction, physical
+MIDI/OSC/DMX/Art-Net output, real wired two-machine partition/rejoin or
+crash/restart/soak, replay restoration, witness/interlock, automatic failover,
+venue behavior, signing, publication, or product-wide completion.
+
+Next safe action is to run the ledger validator and diff checks, then commit
+and push this bounded implementation/evidence checkpoint. External gates still
+require their actual UI/device/two-machine topology and separate evidence.

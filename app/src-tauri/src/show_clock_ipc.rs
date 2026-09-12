@@ -870,7 +870,10 @@ impl ShowClockWorkerRuntime {
             current.fence_state = self.fence.state().into();
             current.show_clock_gate_armed = false;
             current.output_armed = false;
+            current.accepted_actions = 0;
             current.scheduled_actions = 0;
+            current.last_action_sequence = 0;
+            current.last_action_id = None;
             current.last_action_status = Some("manual_rearm_waiting_for_lock".to_string());
             current.last_error = None;
         });
@@ -1645,7 +1648,10 @@ mod tests {
         assert_eq!(rearmed.state, ShowClockIpcPhase::Acquiring);
         assert_eq!(rearmed.fence_state, ShowClockIpcFenceState::Armed);
         assert_eq!(rearmed.fencing_generation, 2);
+        assert_eq!(rearmed.accepted_actions, 0);
         assert_eq!(rearmed.scheduled_actions, 0);
+        assert_eq!(rearmed.last_action_sequence, 0);
+        assert_eq!(rearmed.last_action_id, None);
         assert!(!rearmed.show_clock_gate_armed);
         standby.stop().unwrap();
     }

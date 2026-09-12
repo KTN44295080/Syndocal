@@ -1,4 +1,9 @@
-use std::{env, net::UdpSocket, process::Command, time::Duration};
+use std::{
+    env,
+    net::UdpSocket,
+    process::{Child, Command},
+    time::Duration,
+};
 
 use io::show_clock_lan::{ShowClockLanMessage, ShowClockLanTransport};
 use protocol::show_clock::{
@@ -10,6 +15,20 @@ use protocol::show_clock_runtime::{ShowClockEstimatorState, ShowClockPeerEstimat
 
 const CHILD_ENV: &str = "SYNDOCAL_SHOWCLOCK_TWO_PROCESS_CHILD";
 const KEY: [u8; 32] = [0x42; 32];
+
+struct ChildGuard(Child);
+
+impl Drop for ChildGuard {
+    fn drop(&mut self) {
+        match self.0.try_wait() {
+            Ok(Some(_)) => {}
+            Ok(None) | Err(_) => {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
+    }
+}
 
 fn sample(sequence: u64) -> AuthenticatedShowClockSample {
     AuthenticatedShowClockSample::sign(
@@ -63,14 +82,16 @@ fn paired_transport_round_trips_across_two_processes() {
     drop(sender_probe);
     let receiver = ShowClockLanTransport::bind(receiver_address, sender_address).unwrap();
 
-    let mut child = Command::new(env::current_exe().unwrap())
-        .arg("--exact")
-        .arg("child_sender")
-        .arg("--nocapture")
-        .env(CHILD_ENV, receiver_address.to_string())
-        .env("SYNDOCAL_SHOWCLOCK_CHILD_BIND", sender_address.to_string())
-        .spawn()
-        .unwrap();
+    let mut child = ChildGuard(
+        Command::new(env::current_exe().unwrap())
+            .arg("--exact")
+            .arg("child_sender")
+            .arg("--nocapture")
+            .env(CHILD_ENV, receiver_address.to_string())
+            .env("SYNDOCAL_SHOWCLOCK_CHILD_BIND", sender_address.to_string())
+            .spawn()
+            .unwrap(),
+    );
     let mut validator = protocol::show_clock::ShowClockPeerValidator::new(
         ShowClockSessionId::new("two-process-session").unwrap(),
         ShowClockNodeId::new("node-primary").unwrap(),
@@ -94,7 +115,7 @@ fn paired_transport_round_trips_across_two_processes() {
             .unwrap();
         estimator.estimator_mut().advance(received_at);
     }
-    let exit = child.wait().unwrap();
+    let exit = child.0.wait().unwrap();
     assert!(exit.success());
     assert_eq!(validator.last_sequence(), 3);
     assert_eq!(
