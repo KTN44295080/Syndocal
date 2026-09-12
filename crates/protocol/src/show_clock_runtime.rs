@@ -317,6 +317,7 @@ pub enum ShowClockActionDispatch {
 pub struct ShowClockActionScheduler {
     generation: ShowClockActionGeneration,
     horizon_us: u64,
+    last_sequence: u64,
     actions: BTreeMap<(u64, u64), QueuedShowClockAction>,
     action_ids: BTreeMap<[u8; 16], (u64, u64)>,
 }
@@ -332,6 +333,7 @@ impl ShowClockActionScheduler {
         Ok(Self {
             generation,
             horizon_us,
+            last_sequence: 0,
             actions: BTreeMap::new(),
             action_ids: BTreeMap::new(),
         })
@@ -364,10 +366,20 @@ impl ShowClockActionScheduler {
         if self.action_ids.contains_key(&action.action_id) {
             return Err(ShowClockValidationError::DuplicateAction);
         }
+        if action.sequence <= self.last_sequence {
+            return Err(if action.sequence == self.last_sequence {
+                ShowClockValidationError::Replay
+            } else {
+                ShowClockValidationError::Reordered
+            });
+        }
         if self.actions.len() >= SHOW_CLOCK_MAX_SCHEDULED_ACTIONS {
             return Err(ShowClockValidationError::ActionScheduleCapacityExceeded);
         }
         let key = (action.target_show_time_us, action.sequence);
+        if self.actions.contains_key(&key) {
+            return Err(ShowClockValidationError::Replay);
+        }
         self.actions.insert(
             key,
             QueuedShowClockAction {
@@ -376,6 +388,7 @@ impl ShowClockActionScheduler {
             },
         );
         self.action_ids.insert(action.action_id, key);
+        self.last_sequence = action.sequence;
         Ok(())
     }
 
@@ -457,6 +470,7 @@ impl ShowClockActionScheduler {
         }
         self.generation =
             ShowClockActionGeneration::new(fence.clock_generation(), fence.fencing_generation())?;
+        self.last_sequence = 0;
         let removed = self.actions.len();
         self.actions.clear();
         self.action_ids.clear();
@@ -853,6 +867,33 @@ mod tests {
             Some(ShowClockActionDispatch::Held { .. })
         ));
         assert_eq!(scheduler.len(), 1);
+    }
+
+    #[test]
+    fn scheduler_rejects_reused_sequence_without_replacing_queued_action() {
+        let generation = ShowClockActionGeneration::new(1, 1).unwrap();
+        let mut scheduler = ShowClockActionScheduler::new(generation, 10_000).unwrap();
+        let first = action(1, 10_100, ShowClockLatePolicy::ExecuteImmediately);
+        scheduler.schedule(first.clone(), 10_000).unwrap();
+
+        let mut replay = first.clone();
+        replay.action_id = [0xabu8; 16];
+        assert_eq!(
+            scheduler.schedule(replay, 10_000),
+            Err(ShowClockValidationError::Replay)
+        );
+        assert_eq!(scheduler.len(), 1);
+        assert_eq!(
+            scheduler.poll(10_100, ShowClockEstimatorState::Locked),
+            Some(ShowClockActionDispatch::Execute(first))
+        );
+
+        let mut post_dispatch_replay = action(1, 10_200, ShowClockLatePolicy::Drop);
+        post_dispatch_replay.action_id = [0xcdu8; 16];
+        assert_eq!(
+            scheduler.schedule(post_dispatch_replay, 10_100),
+            Err(ShowClockValidationError::Replay)
+        );
     }
 
     #[test]
