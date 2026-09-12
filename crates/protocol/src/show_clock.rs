@@ -16,6 +16,10 @@ pub const SHOW_CLOCK_TICKS_PER_SECOND: u64 = 1_000_000;
 pub const SHOW_CLOCK_MAX_ID_BYTES: usize = 128;
 pub const SHOW_CLOCK_MAX_EXPIRY_US: u64 = 5_000_000;
 pub const SHOW_CLOCK_DEFAULT_MAX_SLEW_US_PER_SAMPLE: u64 = 1_000;
+/// Maximum number of action identities retained by one receiver session.
+/// Entries are never evicted: exhaustion fails closed until the session is
+/// replaced by its owner.
+pub const SHOW_CLOCK_MAX_ACCEPTED_ACTIONS: usize = 4_096;
 
 const SAMPLE_DOMAIN: &[u8] = b"syndocal.show-clock.sample.v1\0";
 const ACTION_DOMAIN: &[u8] = b"syndocal.show-clock.action.v1\0";
@@ -48,6 +52,8 @@ pub enum ShowClockValidationError {
     HoldRequired,
     OperatorConfirmationRequired,
     ReArmGenerationNotAdvanced,
+    ReArmClockGenerationRewound,
+    ActionAdmissionCapacityExceeded,
     AlreadyArmed,
 }
 
@@ -80,6 +86,10 @@ impl std::fmt::Display for ShowClockValidationError {
             Self::HoldRequired => "ShowClock peer must be in manual Hold",
             Self::OperatorConfirmationRequired => "explicit operator confirmation is required",
             Self::ReArmGenerationNotAdvanced => "re-arm fencing generation did not advance",
+            Self::ReArmClockGenerationRewound => "re-arm clock generation moved backwards",
+            Self::ActionAdmissionCapacityExceeded => {
+                "ShowClock action admission capacity is exhausted"
+            }
             Self::AlreadyArmed => "ShowClock peer is already armed",
         })
     }
@@ -87,7 +97,7 @@ impl std::fmt::Display for ShowClockValidationError {
 
 impl std::error::Error for ShowClockValidationError {}
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(transparent)]
 pub struct ShowClockSessionId(String);
 
@@ -103,7 +113,17 @@ impl ShowClockSessionId {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+impl<'de> Deserialize<'de> for ShowClockSessionId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Self::new(value).map_err(serde::de::Error::custom)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(transparent)]
 pub struct ShowClockNodeId(String);
 
@@ -116,6 +136,16 @@ impl ShowClockNodeId {
 
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+}
+
+impl<'de> Deserialize<'de> for ShowClockNodeId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Self::new(value).map_err(serde::de::Error::custom)
     }
 }
 
@@ -143,54 +173,59 @@ impl ShowClockNonce {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[repr(u8)]
 pub enum ShowClockSource {
-    ShowClock,
-    MidiClock,
-    MidiTimecode,
-    Ltc,
-    AbletonLink,
-    Manual,
+    ShowClock = 0,
+    MidiClock = 1,
+    MidiTimecode = 2,
+    Ltc = 3,
+    AbletonLink = 4,
+    Manual = 5,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[repr(u8)]
 pub enum ShowTransportState {
-    Stopped,
-    Playing,
-    Paused,
-    Holding,
+    Stopped = 0,
+    Playing = 1,
+    Paused = 2,
+    Holding = 3,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[repr(u8)]
 pub enum ShowClockPeerState {
-    Locked,
-    Acquiring,
-    Hold,
-    Stale,
-    Fault,
+    Locked = 0,
+    Acquiring = 1,
+    Hold = 2,
+    Stale = 3,
+    Fault = 4,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[repr(u8)]
 pub enum ShowClockActionKind {
-    Go,
-    Stop,
-    Back,
-    Release,
-    Blackout,
-    Take,
-    ClipLaunch,
-    Transition,
-    TimelineJump,
+    Go = 0,
+    Stop = 1,
+    Back = 2,
+    Release = 3,
+    Blackout = 4,
+    Take = 5,
+    ClipLaunch = 6,
+    Transition = 7,
+    TimelineJump = 8,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[repr(u8)]
 pub enum ShowClockLatePolicy {
-    ExecuteImmediately,
-    Drop,
-    Hold,
+    ExecuteImmediately = 0,
+    Drop = 1,
+    Hold = 2,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -296,30 +331,47 @@ impl AuthenticatedShowClockSample {
     }
 
     pub fn verify(&self, key: &[u8; 32]) -> Result<(), ShowClockValidationError> {
+        self.verify_and_canonical(key).map(|_| ())
+    }
+
+    fn verify_and_canonical(&self, key: &[u8; 32]) -> Result<Vec<u8>, ShowClockValidationError> {
         let canonical = self.body.canonical_bytes()?;
         if constant_time_eq(&self.authentication_tag, &hmac_sha256(key, &canonical)) {
-            Ok(())
+            Ok(canonical)
         } else {
             Err(ShowClockValidationError::InvalidAuthentication)
         }
     }
 }
 
+#[derive(Clone, PartialEq, Eq)]
+struct ShowClockAuthenticationKey([u8; 32]);
+
+impl std::fmt::Debug for ShowClockAuthenticationKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("[redacted]")
+    }
+}
+
+impl ShowClockAuthenticationKey {
+    fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ShowClockPeerValidator {
+struct ShowClockPeerContext {
     expected_session: ShowClockSessionId,
     expected_sender: ShowClockNodeId,
     expected_project_hash: ShowClockHash,
     expected_media_hash: ShowClockHash,
     expected_clock_generation: u64,
     expected_fencing_generation: u64,
-    key: [u8; 32],
-    last_sequence: u64,
-    last_show_time_us: Option<u64>,
+    key: ShowClockAuthenticationKey,
 }
 
-impl ShowClockPeerValidator {
-    pub fn new(
+impl ShowClockPeerContext {
+    fn new(
         expected_session: ShowClockSessionId,
         expected_sender: ShowClockNodeId,
         expected_project_hash: ShowClockHash,
@@ -328,6 +380,8 @@ impl ShowClockPeerValidator {
         expected_fencing_generation: u64,
         key: [u8; 32],
     ) -> Result<Self, ShowClockValidationError> {
+        validate_ascii_id(expected_session.as_str())?;
+        validate_ascii_id(expected_sender.as_str())?;
         if expected_clock_generation == 0 || expected_fencing_generation == 0 {
             return Err(ShowClockValidationError::ZeroGeneration);
         }
@@ -341,9 +395,87 @@ impl ShowClockPeerValidator {
             expected_media_hash,
             expected_clock_generation,
             expected_fencing_generation,
+            key: ShowClockAuthenticationKey(key),
+        })
+    }
+
+    fn validate_sample(&self, sample: &ShowClockSample) -> Result<(), ShowClockValidationError> {
+        if sample.session_id != self.expected_session {
+            return Err(ShowClockValidationError::SessionMismatch);
+        }
+        if sample.sender != self.expected_sender {
+            return Err(ShowClockValidationError::SenderMismatch);
+        }
+        if sample.project_hash != self.expected_project_hash {
+            return Err(ShowClockValidationError::ProjectHashMismatch);
+        }
+        if sample.media_hash != self.expected_media_hash {
+            return Err(ShowClockValidationError::MediaHashMismatch);
+        }
+        if sample.clock_generation != self.expected_clock_generation {
+            return Err(ShowClockValidationError::ClockGenerationMismatch);
+        }
+        if sample.fencing_generation != self.expected_fencing_generation {
+            return Err(ShowClockValidationError::FencingGenerationMismatch);
+        }
+        Ok(())
+    }
+
+    fn validate_action(&self, action: &ShowClockAction) -> Result<(), ShowClockValidationError> {
+        if action.session_id != self.expected_session {
+            return Err(ShowClockValidationError::SessionMismatch);
+        }
+        if action.sender != self.expected_sender {
+            return Err(ShowClockValidationError::SenderMismatch);
+        }
+        if action.project_hash != self.expected_project_hash {
+            return Err(ShowClockValidationError::ProjectHashMismatch);
+        }
+        if action.media_hash != self.expected_media_hash {
+            return Err(ShowClockValidationError::MediaHashMismatch);
+        }
+        if action.clock_generation != self.expected_clock_generation {
+            return Err(ShowClockValidationError::ClockGenerationMismatch);
+        }
+        if action.fencing_generation != self.expected_fencing_generation {
+            return Err(ShowClockValidationError::FencingGenerationMismatch);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShowClockPeerValidator {
+    peer: ShowClockPeerContext,
+    last_sequence: u64,
+    last_show_time_us: Option<u64>,
+    last_sender_monotonic_us: Option<u64>,
+}
+
+impl ShowClockPeerValidator {
+    pub fn new(
+        expected_session: ShowClockSessionId,
+        expected_sender: ShowClockNodeId,
+        expected_project_hash: ShowClockHash,
+        expected_media_hash: ShowClockHash,
+        expected_clock_generation: u64,
+        expected_fencing_generation: u64,
+        key: [u8; 32],
+    ) -> Result<Self, ShowClockValidationError> {
+        let peer = ShowClockPeerContext::new(
+            expected_session,
+            expected_sender,
+            expected_project_hash,
+            expected_media_hash,
+            expected_clock_generation,
+            expected_fencing_generation,
             key,
+        )?;
+        Ok(Self {
+            peer,
             last_sequence: 0,
             last_show_time_us: None,
+            last_sender_monotonic_us: None,
         })
     }
 
@@ -351,32 +483,20 @@ impl ShowClockPeerValidator {
         &mut self,
         sample: &AuthenticatedShowClockSample,
     ) -> Result<(), ShowClockValidationError> {
-        sample.body.validate_shape()?;
-        sample.verify(&self.key)?;
-        if sample.body.session_id != self.expected_session {
-            return Err(ShowClockValidationError::SessionMismatch);
-        }
-        if sample.body.sender != self.expected_sender {
-            return Err(ShowClockValidationError::SenderMismatch);
-        }
-        if sample.body.project_hash != self.expected_project_hash {
-            return Err(ShowClockValidationError::ProjectHashMismatch);
-        }
-        if sample.body.media_hash != self.expected_media_hash {
-            return Err(ShowClockValidationError::MediaHashMismatch);
-        }
-        if sample.body.clock_generation != self.expected_clock_generation {
-            return Err(ShowClockValidationError::ClockGenerationMismatch);
-        }
-        if sample.body.fencing_generation != self.expected_fencing_generation {
-            return Err(ShowClockValidationError::FencingGenerationMismatch);
-        }
+        sample.verify_and_canonical(self.peer.key.as_bytes())?;
+        self.peer.validate_sample(&sample.body)?;
         if sample.body.sequence <= self.last_sequence {
             return Err(if sample.body.sequence == self.last_sequence {
                 ShowClockValidationError::Replay
             } else {
                 ShowClockValidationError::Reordered
             });
+        }
+        if self
+            .last_sender_monotonic_us
+            .is_some_and(|last| sample.body.sender_monotonic_us < last)
+        {
+            return Err(ShowClockValidationError::Reordered);
         }
         if self
             .last_show_time_us
@@ -386,11 +506,16 @@ impl ShowClockPeerValidator {
         }
         self.last_sequence = sample.body.sequence;
         self.last_show_time_us = Some(sample.body.show_time_us);
+        self.last_sender_monotonic_us = Some(sample.body.sender_monotonic_us);
         Ok(())
     }
 
     pub fn last_sequence(&self) -> u64 {
         self.last_sequence
+    }
+
+    pub fn last_sender_monotonic_us(&self) -> Option<u64> {
+        self.last_sender_monotonic_us
     }
 }
 
@@ -422,7 +547,10 @@ impl ShowClockAction {
         }
         validate_ascii_id(self.session_id.as_str())?;
         validate_ascii_id(self.sender.as_str())?;
-        if self.sequence == 0 || self.clock_generation == 0 || self.fencing_generation == 0 {
+        if self.sequence == 0 {
+            return Err(ShowClockValidationError::ZeroSequence);
+        }
+        if self.clock_generation == 0 || self.fencing_generation == 0 {
             return Err(ShowClockValidationError::ZeroGeneration);
         }
         if self.action_id == [0; 16] {
@@ -430,6 +558,9 @@ impl ShowClockAction {
         }
         if self.project_hash.is_zero() || self.media_hash.is_zero() {
             return Err(ShowClockValidationError::ZeroHash);
+        }
+        if self.target_show_time_us == 0 {
+            return Err(ShowClockValidationError::InvalidTargetTime);
         }
         Ok(())
     }
@@ -471,10 +602,10 @@ impl AuthenticatedShowClockAction {
         })
     }
 
-    fn verify(&self, key: &[u8; 32]) -> Result<(), ShowClockValidationError> {
+    fn verify_and_canonical(&self, key: &[u8; 32]) -> Result<Vec<u8>, ShowClockValidationError> {
         let canonical = self.body.canonical_bytes()?;
         if constant_time_eq(&self.authentication_tag, &hmac_sha256(key, &canonical)) {
-            Ok(())
+            Ok(canonical)
         } else {
             Err(ShowClockValidationError::InvalidAuthentication)
         }
@@ -489,15 +620,9 @@ pub enum ShowClockActionAdmission {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ShowClockActionReceiver {
-    expected_session: ShowClockSessionId,
-    expected_sender: ShowClockNodeId,
-    expected_project_hash: ShowClockHash,
-    expected_media_hash: ShowClockHash,
-    expected_clock_generation: u64,
-    expected_fencing_generation: u64,
-    key: [u8; 32],
+    peer: ShowClockPeerContext,
     last_sequence: u64,
-    accepted_actions: BTreeMap<[u8; 16], Vec<u8>>,
+    accepted_actions: BTreeMap<[u8; 16], [u8; 32]>,
 }
 
 impl ShowClockActionReceiver {
@@ -510,13 +635,7 @@ impl ShowClockActionReceiver {
         expected_fencing_generation: u64,
         key: [u8; 32],
     ) -> Result<Self, ShowClockValidationError> {
-        if expected_clock_generation == 0 || expected_fencing_generation == 0 {
-            return Err(ShowClockValidationError::ZeroGeneration);
-        }
-        if expected_project_hash.is_zero() || expected_media_hash.is_zero() {
-            return Err(ShowClockValidationError::ZeroHash);
-        }
-        Ok(Self {
+        let peer = ShowClockPeerContext::new(
             expected_session,
             expected_sender,
             expected_project_hash,
@@ -524,6 +643,9 @@ impl ShowClockActionReceiver {
             expected_clock_generation,
             expected_fencing_generation,
             key,
+        )?;
+        Ok(Self {
+            peer,
             last_sequence: 0,
             accepted_actions: BTreeMap::new(),
         })
@@ -533,30 +655,11 @@ impl ShowClockActionReceiver {
         &mut self,
         action: &AuthenticatedShowClockAction,
     ) -> Result<ShowClockActionAdmission, ShowClockValidationError> {
-        action.body.validate_shape()?;
-        action.verify(&self.key)?;
-        if action.body.session_id != self.expected_session {
-            return Err(ShowClockValidationError::SessionMismatch);
-        }
-        if action.body.sender != self.expected_sender {
-            return Err(ShowClockValidationError::SenderMismatch);
-        }
-        if action.body.project_hash != self.expected_project_hash {
-            return Err(ShowClockValidationError::ProjectHashMismatch);
-        }
-        if action.body.media_hash != self.expected_media_hash {
-            return Err(ShowClockValidationError::MediaHashMismatch);
-        }
-        if action.body.clock_generation != self.expected_clock_generation {
-            return Err(ShowClockValidationError::ClockGenerationMismatch);
-        }
-        if action.body.fencing_generation != self.expected_fencing_generation {
-            return Err(ShowClockValidationError::FencingGenerationMismatch);
-        }
-
-        let canonical = action.body.canonical_bytes()?;
+        let canonical = action.verify_and_canonical(self.peer.key.as_bytes())?;
+        self.peer.validate_action(&action.body)?;
+        let fingerprint = canonical_fingerprint(&canonical);
         if let Some(previous) = self.accepted_actions.get(&action.body.action_id) {
-            return if previous == &canonical {
+            return if previous == &fingerprint {
                 Ok(ShowClockActionAdmission::Duplicate)
             } else {
                 Err(ShowClockValidationError::ActionConflict)
@@ -569,10 +672,17 @@ impl ShowClockActionReceiver {
                 ShowClockValidationError::Reordered
             });
         }
+        if self.accepted_actions.len() >= SHOW_CLOCK_MAX_ACCEPTED_ACTIONS {
+            return Err(ShowClockValidationError::ActionAdmissionCapacityExceeded);
+        }
         self.last_sequence = action.body.sequence;
         self.accepted_actions
-            .insert(action.body.action_id, canonical);
+            .insert(action.body.action_id, fingerprint);
         Ok(ShowClockActionAdmission::Accepted)
+    }
+
+    pub fn accepted_action_count(&self) -> usize {
+        self.accepted_actions.len()
     }
 }
 
@@ -596,16 +706,23 @@ pub enum ShowClockFenceState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ShowClockManualFence {
     state: ShowClockFenceState,
+    /// Monotonic floor observed by this fence. It does not claim to be the
+    /// authoritative live clock generation.
+    clock_generation: u64,
     fencing_generation: u64,
 }
 
 impl ShowClockManualFence {
-    pub fn new(fencing_generation: u64) -> Result<Self, ShowClockValidationError> {
-        if fencing_generation == 0 {
+    pub fn new(
+        clock_generation: u64,
+        fencing_generation: u64,
+    ) -> Result<Self, ShowClockValidationError> {
+        if clock_generation == 0 || fencing_generation == 0 {
             return Err(ShowClockValidationError::ZeroGeneration);
         }
         Ok(Self {
             state: ShowClockFenceState::Disarmed,
+            clock_generation,
             fencing_generation,
         })
     }
@@ -616,6 +733,10 @@ impl ShowClockManualFence {
 
     pub fn fencing_generation(self) -> u64 {
         self.fencing_generation
+    }
+
+    pub fn clock_generation(self) -> u64 {
+        self.clock_generation
     }
 
     pub fn enter_hold(&mut self) {
@@ -629,9 +750,16 @@ impl ShowClockManualFence {
         if !request.operator_confirmed_primary_stopped {
             return Err(ShowClockValidationError::OperatorConfirmationRequired);
         }
-        if request.clock_generation == 0 || request.fencing_generation <= self.fencing_generation {
+        if request.clock_generation < self.clock_generation {
+            return Err(ShowClockValidationError::ReArmClockGenerationRewound);
+        }
+        if request.fencing_generation <= self.fencing_generation {
             return Err(ShowClockValidationError::ReArmGenerationNotAdvanced);
         }
+        if request.clock_generation == 0 {
+            return Err(ShowClockValidationError::ReArmClockGenerationRewound);
+        }
+        self.clock_generation = request.clock_generation;
         self.fencing_generation = request.fencing_generation;
         self.state = ShowClockFenceState::Armed;
         Ok(())
@@ -647,7 +775,7 @@ fn validate_ascii_id(value: &str) -> Result<(), ShowClockValidationError> {
         || value.len() > SHOW_CLOCK_MAX_ID_BYTES
         || value
             .bytes()
-            .any(|byte| !byte.is_ascii() || byte.is_ascii_whitespace())
+            .any(|byte| !byte.is_ascii() || byte.is_ascii_whitespace() || byte.is_ascii_control())
     {
         return Err(ShowClockValidationError::EmptyOrInvalidId);
     }
@@ -704,6 +832,13 @@ fn constant_time_eq(left: &[u8; 32], right: &[u8; 32]) -> bool {
     difference == 0
 }
 
+fn canonical_fingerprint(canonical: &[u8]) -> [u8; 32] {
+    let digest = Sha256::digest(canonical);
+    let mut fingerprint = [0_u8; 32];
+    fingerprint.copy_from_slice(&digest);
+    fingerprint
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -746,6 +881,26 @@ mod tests {
         ShowClockPeerValidator::new(session(), sender(), PROJECT, MEDIA, 1, 1, KEY).unwrap()
     }
 
+    fn action(action_id: u64, sequence: u64) -> ShowClockAction {
+        let mut id = [0_u8; 16];
+        id[..8].copy_from_slice(&action_id.to_le_bytes());
+        ShowClockAction {
+            schema_version: SHOW_CLOCK_SCHEMA_VERSION,
+            protocol_version: SHOW_CLOCK_PROTOCOL_VERSION,
+            session_id: session(),
+            sender: sender(),
+            action_id: id,
+            sequence,
+            clock_generation: 1,
+            fencing_generation: 1,
+            target_show_time_us: 2_000_000 + sequence,
+            action: ShowClockActionKind::Go,
+            late_policy: ShowClockLatePolicy::Drop,
+            project_hash: PROJECT,
+            media_hash: MEDIA,
+        }
+    }
+
     #[test]
     fn authenticated_sample_rejects_tamper_replay_and_stale_generation() {
         let first = AuthenticatedShowClockSample::sign(sample(1, 1_000_000), &KEY).unwrap();
@@ -770,7 +925,26 @@ mod tests {
             Err(ShowClockValidationError::Reordered)
         );
 
-        let mut next = sample(2, 1_001_000);
+        let mut backwards_sender_time = sample(2, 1_002_000);
+        backwards_sender_time.sender_monotonic_us = 999_999;
+        let backwards_sender_time =
+            AuthenticatedShowClockSample::sign(backwards_sender_time, &KEY).unwrap();
+        assert_eq!(
+            receiver.accept(&backwards_sender_time),
+            Err(ShowClockValidationError::Reordered)
+        );
+        assert_eq!(receiver.last_sequence(), 1);
+        assert_eq!(receiver.last_sender_monotonic_us(), Some(1_000_000));
+
+        let mut equal_sender_time = sample(2, 1_001_000);
+        equal_sender_time.sender_monotonic_us = 1_000_000;
+        let equal_sender_time =
+            AuthenticatedShowClockSample::sign(equal_sender_time, &KEY).unwrap();
+        receiver.accept(&equal_sender_time).unwrap();
+        assert_eq!(receiver.last_sequence(), 2);
+        assert_eq!(receiver.last_sender_monotonic_us(), Some(1_000_000));
+
+        let mut next = sample(3, 1_003_000);
         next.fencing_generation = 2;
         let next = AuthenticatedShowClockSample::sign(next, &KEY).unwrap();
         assert_eq!(
@@ -780,22 +954,8 @@ mod tests {
     }
 
     #[test]
-    fn authenticated_action_is_exactly_once_and_rejects_conflicts() {
-        let body = ShowClockAction {
-            schema_version: SHOW_CLOCK_SCHEMA_VERSION,
-            protocol_version: SHOW_CLOCK_PROTOCOL_VERSION,
-            session_id: session(),
-            sender: sender(),
-            action_id: [7; 16],
-            sequence: 1,
-            clock_generation: 1,
-            fencing_generation: 1,
-            target_show_time_us: 2_000_000,
-            action: ShowClockActionKind::Go,
-            late_policy: ShowClockLatePolicy::Drop,
-            project_hash: PROJECT,
-            media_hash: MEDIA,
-        };
+    fn authenticated_action_is_at_most_once_and_rejects_conflicts() {
+        let body = action(7, 1);
         let signed = AuthenticatedShowClockAction::sign(body.clone(), &KEY).unwrap();
         let mut receiver =
             ShowClockActionReceiver::new(session(), sender(), PROJECT, MEDIA, 1, 1, KEY).unwrap();
@@ -819,8 +979,9 @@ mod tests {
 
     #[test]
     fn manual_fence_never_arms_without_hold_confirmation_and_advanced_generation() {
-        let mut fence = ShowClockManualFence::new(1).unwrap();
+        let mut fence = ShowClockManualFence::new(1, 1).unwrap();
         assert_eq!(fence.state(), ShowClockFenceState::Disarmed);
+        assert_eq!(fence.clock_generation(), 1);
         assert_eq!(
             fence.rearm(ShowClockReArm {
                 operator_confirmed_primary_stopped: true,
@@ -854,6 +1015,166 @@ mod tests {
             })
             .unwrap();
         assert_eq!(fence.state(), ShowClockFenceState::Armed);
+        assert_eq!(fence.clock_generation(), 2);
         assert_eq!(fence.fencing_generation(), 2);
+
+        fence.enter_hold();
+        assert_eq!(
+            fence.rearm(ShowClockReArm {
+                operator_confirmed_primary_stopped: true,
+                clock_generation: 1,
+                fencing_generation: 3,
+            }),
+            Err(ShowClockValidationError::ReArmClockGenerationRewound)
+        );
+        assert_eq!(fence.state(), ShowClockFenceState::Hold);
+        assert_eq!(fence.fencing_generation(), 2);
+    }
+
+    #[test]
+    fn admission_capacity_is_bounded_and_fails_closed_without_eviction() {
+        let mut receiver =
+            ShowClockActionReceiver::new(session(), sender(), PROJECT, MEDIA, 1, 1, KEY).unwrap();
+        for sequence in 1..=SHOW_CLOCK_MAX_ACCEPTED_ACTIONS as u64 {
+            let signed =
+                AuthenticatedShowClockAction::sign(action(sequence, sequence), &KEY).unwrap();
+            assert_eq!(
+                receiver.admit(&signed),
+                Ok(ShowClockActionAdmission::Accepted)
+            );
+        }
+        assert_eq!(
+            receiver.accepted_action_count(),
+            SHOW_CLOCK_MAX_ACCEPTED_ACTIONS
+        );
+        let full = AuthenticatedShowClockAction::sign(
+            action(
+                (SHOW_CLOCK_MAX_ACCEPTED_ACTIONS as u64) + 1,
+                (SHOW_CLOCK_MAX_ACCEPTED_ACTIONS as u64) + 1,
+            ),
+            &KEY,
+        )
+        .unwrap();
+        assert_eq!(
+            receiver.admit(&full),
+            Err(ShowClockValidationError::ActionAdmissionCapacityExceeded)
+        );
+        assert_eq!(
+            receiver.last_sequence,
+            SHOW_CLOCK_MAX_ACCEPTED_ACTIONS as u64
+        );
+        assert_eq!(
+            receiver.admit(&full),
+            Err(ShowClockValidationError::ActionAdmissionCapacityExceeded)
+        );
+
+        let duplicate = AuthenticatedShowClockAction::sign(action(1, 1), &KEY).unwrap();
+        assert_eq!(
+            receiver.admit(&duplicate),
+            Ok(ShowClockActionAdmission::Duplicate)
+        );
+        let mut conflicting = action(1, 1);
+        conflicting.action = ShowClockActionKind::Take;
+        let conflicting = AuthenticatedShowClockAction::sign(conflicting, &KEY).unwrap();
+        assert_eq!(
+            receiver.admit(&conflicting),
+            Err(ShowClockValidationError::ActionConflict)
+        );
+    }
+
+    #[test]
+    fn identifiers_validate_on_construction_and_deserialization() {
+        assert!(ShowClockSessionId::new("bad\u{0001}").is_err());
+        assert!(ShowClockNodeId::new("bad\t").is_err());
+        assert!(serde_json::from_str::<ShowClockSessionId>("\"bad\\u0001\"").is_err());
+        assert!(serde_json::from_str::<ShowClockNodeId>("\"bad\\n\"").is_err());
+
+        let mut invalid_action = action(1, 1);
+        invalid_action.sequence = 0;
+        assert_eq!(
+            invalid_action.validate_shape(),
+            Err(ShowClockValidationError::ZeroSequence)
+        );
+        invalid_action.sequence = 1;
+        invalid_action.target_show_time_us = 0;
+        assert_eq!(
+            invalid_action.validate_shape(),
+            Err(ShowClockValidationError::InvalidTargetTime)
+        );
+    }
+
+    #[test]
+    fn peer_debug_redacts_authentication_key() {
+        let validator = validator();
+        let receiver =
+            ShowClockActionReceiver::new(session(), sender(), PROJECT, MEDIA, 1, 1, KEY).unwrap();
+        let validator_debug = format!("{validator:?}");
+        let receiver_debug = format!("{receiver:?}");
+        assert!(validator_debug.contains("[redacted]"));
+        assert!(receiver_debug.contains("[redacted]"));
+        assert!(!validator_debug.contains("66, 66, 66"));
+        assert!(!receiver_debug.contains("66, 66, 66"));
+    }
+
+    #[test]
+    fn authenticated_sample_vector_is_stable() {
+        let signed = AuthenticatedShowClockSample::sign(sample(1, 1_000_000), &KEY).unwrap();
+        let mut expected_canonical = Vec::new();
+        expected_canonical.extend_from_slice(b"syndocal.show-clock.sample.v1\0");
+        expected_canonical.extend_from_slice(&[1, 0, 1, 0]);
+        expected_canonical.extend_from_slice(&[9, 0]);
+        expected_canonical.extend_from_slice(b"session-1");
+        expected_canonical.extend_from_slice(&[12, 0]);
+        expected_canonical.extend_from_slice(b"node-primary");
+        expected_canonical.extend_from_slice(&1_u64.to_le_bytes());
+        expected_canonical.extend_from_slice(&1_u64.to_le_bytes());
+        expected_canonical.extend_from_slice(&1_u64.to_le_bytes());
+        expected_canonical.extend_from_slice(&1_000_000_u64.to_le_bytes());
+        expected_canonical.extend_from_slice(&1_000_000_u64.to_le_bytes());
+        expected_canonical.extend_from_slice(&120_000_u32.to_le_bytes());
+        expected_canonical.extend_from_slice(&250_000_u32.to_le_bytes());
+        expected_canonical.extend_from_slice(&[1, 0]);
+        expected_canonical.extend_from_slice(&[0x11; 32]);
+        expected_canonical.extend_from_slice(&[0x22; 32]);
+        expected_canonical.extend_from_slice(&250_000_u64.to_le_bytes());
+        expected_canonical.extend_from_slice(&[1; 16]);
+        assert_eq!(signed.body.canonical_bytes().unwrap(), expected_canonical);
+        assert_eq!(
+            signed.authentication_tag,
+            [
+                0xe8, 0x1b, 0x22, 0xfa, 0x02, 0x17, 0xfc, 0x7a, 0x51, 0x08, 0x5b, 0xb2, 0x41, 0x1f,
+                0x05, 0x90, 0xa2, 0x5b, 0xed, 0xb9, 0x3d, 0xaf, 0x8c, 0xa4, 0xf4, 0x06, 0xbd, 0xb4,
+                0x65, 0x94, 0x0e, 0x0d,
+            ]
+        );
+    }
+
+    #[test]
+    fn authenticated_action_vector_is_stable() {
+        let signed = AuthenticatedShowClockAction::sign(action(7, 1), &KEY).unwrap();
+        let mut expected_canonical = Vec::new();
+        expected_canonical.extend_from_slice(b"syndocal.show-clock.action.v1\0");
+        expected_canonical.extend_from_slice(&[1, 0, 1, 0]);
+        expected_canonical.extend_from_slice(&[9, 0]);
+        expected_canonical.extend_from_slice(b"session-1");
+        expected_canonical.extend_from_slice(&[12, 0]);
+        expected_canonical.extend_from_slice(b"node-primary");
+        expected_canonical.extend_from_slice(&[7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        expected_canonical.extend_from_slice(&1_u64.to_le_bytes());
+        expected_canonical.extend_from_slice(&1_u64.to_le_bytes());
+        expected_canonical.extend_from_slice(&1_u64.to_le_bytes());
+        expected_canonical.extend_from_slice(&2_000_001_u64.to_le_bytes());
+        expected_canonical.extend_from_slice(&[0, 1]);
+        expected_canonical.extend_from_slice(&[0x11; 32]);
+        expected_canonical.extend_from_slice(&[0x22; 32]);
+        assert_eq!(signed.body.canonical_bytes().unwrap(), expected_canonical);
+        assert_eq!(
+            signed.authentication_tag,
+            [
+                0x23, 0x03, 0xcc, 0x7d, 0x52, 0x43, 0x27, 0x01, 0x32, 0xb3, 0x6e, 0x9b, 0x1e, 0x7a,
+                0xd8, 0x9f, 0x5d, 0x9d, 0x2e, 0x1c, 0xde, 0xa8, 0xe4, 0x41, 0x71, 0x04, 0x73, 0x8a,
+                0x34, 0x1a, 0xc3, 0xaa,
+            ]
+        );
     }
 }
