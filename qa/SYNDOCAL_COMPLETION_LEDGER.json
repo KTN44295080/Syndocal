@@ -3,7 +3,7 @@
   "source_document": "qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md",
   "authoritative_sections": ["6", "7", "8", "9"],
   "classifications": ["Supported", "Deferred", "External acceptance", "Out of scope"],
-  "expected_status_counts": { "Open": 45, "Deferred": 8, "Complete": 5 },
+  "expected_status_counts": { "Open": 44, "Deferred": 8, "Complete": 6 },
   "expected_section_counts": { "6": 37, "7": 6, "8": 9, "9": 6 },
   "items": [
     {
@@ -98,13 +98,13 @@
     },
     {
       "id": "AI2-COMMAND-BRIDGE-001",
-      "source": { "section": "6", "kind": "Open" },
+      "source": { "section": "6", "kind": "Complete" },
       "classification": "Supported",
       "owner": "AI control-plane owner",
       "dependency": "AI1 schemas and project authority receipts",
-      "nonclaim": "Does not claim authored commands have E/R/H, owner, receipt, and Undo parity.",
-      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/SYNDOCAL_AI_CONTROL_PLANE_ROADMAP.md"],
-      "status": "Open"
+      "nonclaim": "Does not claim consent/principal policy, sidecar adapters, administration UI, broad adversarial parity, native or physical acceptance, or whole AI0-AI8 completion.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/SYNDOCAL_AI_CONTROL_PLANE_ROADMAP.md", "app/scripts/check-ai2-authored-command-bridge.mjs", "qa/AI2_AUTHORED_COMMAND_BRIDGE_CHECKPOINT_2026-09-13.md"],
+      "status": "Complete"
     },
     {
       "id": "AI4-CONSENT-001",

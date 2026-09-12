@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{CueCaptureScope, ProjectHistoryMutationResult};
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(
     tag = "mode",
     rename_all = "camelCase",
@@ -22,6 +22,7 @@ use super::{CueCaptureScope, ProjectHistoryMutationResult};
 )]
 pub(super) enum AuthoritativeSceneCreateRequest {
     Empty {
+        request_id: String,
         cue_list_id: protocol::CueListId,
         expected_epoch: u64,
         expected_revision: u64,
@@ -29,6 +30,7 @@ pub(super) enum AuthoritativeSceneCreateRequest {
         owner_id: String,
     },
     CaptureCurrent {
+        request_id: String,
         cue_list_id: protocol::CueListId,
         label: String,
         fade_ms: u64,
@@ -40,6 +42,14 @@ pub(super) enum AuthoritativeSceneCreateRequest {
         expected_checkpoint_hash: String,
         owner_id: String,
     },
+}
+
+impl AuthoritativeSceneCreateRequest {
+    pub(super) fn request_id(&self) -> &str {
+        match self {
+            Self::Empty { request_id, .. } | Self::CaptureCurrent { request_id, .. } => request_id,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

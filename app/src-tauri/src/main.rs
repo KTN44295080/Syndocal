@@ -4103,9 +4103,10 @@ struct VideoClipSlotReorderRequest {
     slot_ids: Vec<VideoClipSlotId>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct AuthoritativeCueListCreateRequest {
+    request_id: String,
     label: String,
     expected_epoch: u64,
     expected_revision: u64,
@@ -4113,11 +4114,12 @@ struct AuthoritativeCueListCreateRequest {
     owner_id: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct AuthoritativeCueListReorderRequest {
     /// The complete desired order. Every visible Bank is included exactly
     /// once; ID 1 has no special position or deletion privilege here.
+    request_id: String,
     cue_list_ids: Vec<protocol::CueListId>,
     expected_epoch: u64,
     expected_revision: u64,
@@ -4125,9 +4127,10 @@ struct AuthoritativeCueListReorderRequest {
     owner_id: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct AuthoritativeCueListRenameRequest {
+    request_id: String,
     cue_list_id: protocol::CueListId,
     label: String,
     expected_epoch: u64,
@@ -4136,9 +4139,10 @@ struct AuthoritativeCueListRenameRequest {
     owner_id: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct AuthoritativeCueListDeleteRequest {
+    request_id: String,
     cue_list_id: protocol::CueListId,
     expected_epoch: u64,
     expected_revision: u64,
@@ -23246,7 +23250,7 @@ impl MediaAudioPlayback {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(
     tag = "kind",
     rename_all = "camelCase",
@@ -33886,7 +33890,9 @@ fn create_scene_authoritative_v1(
     state: State<'_, AppState>,
     window: WebviewWindow,
     request: AuthoritativeSceneCreateRequest,
-) -> Result<SceneCreationMutationReceipt, String> {
+) -> Result<Value, String> {
+    let shape_sha256 = authored_mutation_shape_sha256(&request)?;
+    let request_id = validate_authored_mutation_request_id(request.request_id().to_string())?;
     let (
         cue_list_id,
         expected_epoch,
@@ -33896,6 +33902,7 @@ fn create_scene_authoritative_v1(
         requested_create,
     ) = match request {
         AuthoritativeSceneCreateRequest::Empty {
+            request_id: _,
             cue_list_id,
             expected_epoch,
             expected_revision,
@@ -33910,6 +33917,7 @@ fn create_scene_authoritative_v1(
             AuthoritativeSceneCreateKind::Empty,
         ),
         AuthoritativeSceneCreateRequest::CaptureCurrent {
+            request_id: _,
             cue_list_id,
             label,
             fade_ms,
@@ -33936,19 +33944,37 @@ fn create_scene_authoritative_v1(
         ),
     };
     let owner_id = normalize_project_transaction_owner_id(owner_id)?;
-    capture_video_clip_slot_caller_binding_for_window_label(&state, window.label(), &owner_id)?;
+    let binding = capture_video_clip_slot_caller_binding_for_window_label(&state, window.label(), &owner_id)?;
+    let owner_id = binding.owner_id.clone();
     let expected_authority = MediaAssetPrepareAuthority {
         epoch: expected_epoch,
         revision: expected_revision,
         checkpoint_hash: expected_checkpoint_hash,
     };
-    commit_authoritative_scene_create(
-        &state,
-        expected_epoch,
-        &owner_id,
+    let key = authored_mutation_receipt_key(
+        "syndocal.scenes.create.v1",
+        request_id,
+        &binding,
         &expected_authority,
-        cue_list_id,
-        requested_create,
+    );
+    state.authored_control_plane.generic_terminal_single_flight(
+        key,
+        shape_sha256,
+        Instant::now(),
+        || {
+            commit_authoritative_scene_create(
+                &state,
+                expected_epoch,
+                &owner_id,
+                &expected_authority,
+                cue_list_id,
+                requested_create,
+            )
+            .and_then(|receipt| {
+                serde_json::to_value(receipt)
+                    .map_err(|error| format!("Scene receipt serialization failed: {error}"))
+            })
+        },
     )
 }
 
@@ -33957,28 +33983,56 @@ fn create_cue_list(
     state: State<'_, AppState>,
     window: WebviewWindow,
     request: AuthoritativeCueListCreateRequest,
-) -> Result<CueListMutationReceipt, String> {
+) -> Result<Value, String> {
     let AuthoritativeCueListCreateRequest {
+        request_id,
         label,
         expected_epoch,
         expected_revision,
         expected_checkpoint_hash,
         owner_id,
     } = request;
+    let shape_sha256 = authored_mutation_shape_sha256(&AuthoritativeCueListCreateRequest {
+        request_id: request_id.clone(),
+        label: label.clone(),
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash: expected_checkpoint_hash.clone(),
+        owner_id: owner_id.clone(),
+    })?;
+    let request_id = validate_authored_mutation_request_id(request_id)?;
     let label = validate_cue_list_label(&label)?;
     let owner_id = normalize_project_transaction_owner_id(owner_id)?;
-    capture_video_clip_slot_caller_binding_for_window_label(&state, window.label(), &owner_id)?;
+    let binding = capture_video_clip_slot_caller_binding_for_window_label(&state, window.label(), &owner_id)?;
+    let owner_id = binding.owner_id.clone();
     let expected_authority = MediaAssetPrepareAuthority {
         epoch: expected_epoch,
         revision: expected_revision,
         checkpoint_hash: expected_checkpoint_hash,
     };
-    commit_authoritative_cue_list_create(
-        &state,
-        expected_epoch,
-        &owner_id,
+    let key = authored_mutation_receipt_key(
+        "syndocal.cue_lists.create.v1",
+        request_id,
+        &binding,
         &expected_authority,
-        &label,
+    );
+    state.authored_control_plane.generic_terminal_single_flight(
+        key,
+        shape_sha256,
+        Instant::now(),
+        || {
+            commit_authoritative_cue_list_create(
+                &state,
+                expected_epoch,
+                &owner_id,
+                &expected_authority,
+                &label,
+            )
+            .and_then(|receipt| {
+                serde_json::to_value(receipt)
+                    .map_err(|error| format!("Bank receipt serialization failed: {error}"))
+            })
+        },
     )
 }
 
@@ -33987,27 +34041,55 @@ fn reorder_cue_lists(
     state: State<'_, AppState>,
     window: WebviewWindow,
     request: AuthoritativeCueListReorderRequest,
-) -> Result<ProjectHistoryMutationResult, String> {
+) -> Result<Value, String> {
     let AuthoritativeCueListReorderRequest {
+        request_id,
         cue_list_ids,
         expected_epoch,
         expected_revision,
         expected_checkpoint_hash,
         owner_id,
     } = request;
+    let shape_sha256 = authored_mutation_shape_sha256(&AuthoritativeCueListReorderRequest {
+        request_id: request_id.clone(),
+        cue_list_ids: cue_list_ids.clone(),
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash: expected_checkpoint_hash.clone(),
+        owner_id: owner_id.clone(),
+    })?;
+    let request_id = validate_authored_mutation_request_id(request_id)?;
     let owner_id = normalize_project_transaction_owner_id(owner_id)?;
-    capture_video_clip_slot_caller_binding_for_window_label(&state, window.label(), &owner_id)?;
+    let binding = capture_video_clip_slot_caller_binding_for_window_label(&state, window.label(), &owner_id)?;
+    let owner_id = binding.owner_id.clone();
     let expected_authority = MediaAssetPrepareAuthority {
         epoch: expected_epoch,
         revision: expected_revision,
         checkpoint_hash: expected_checkpoint_hash,
     };
-    commit_authoritative_cue_list_reorder(
-        &state,
-        expected_epoch,
-        &owner_id,
+    let key = authored_mutation_receipt_key(
+        "syndocal.cue_lists.reorder.v1",
+        request_id,
+        &binding,
         &expected_authority,
-        &cue_list_ids,
+    );
+    state.authored_control_plane.generic_terminal_single_flight(
+        key,
+        shape_sha256,
+        Instant::now(),
+        || {
+            commit_authoritative_cue_list_reorder(
+                &state,
+                expected_epoch,
+                &owner_id,
+                &expected_authority,
+                &cue_list_ids,
+            )
+            .and_then(|receipt| {
+                serde_json::to_value(receipt)
+                    .map_err(|error| format!("Bank reorder receipt serialization failed: {error}"))
+            })
+        },
     )
 }
 
@@ -34016,27 +34098,55 @@ fn delete_cue_list(
     state: State<'_, AppState>,
     window: WebviewWindow,
     request: AuthoritativeCueListDeleteRequest,
-) -> Result<ProjectHistoryMutationResult, String> {
+) -> Result<Value, String> {
     let AuthoritativeCueListDeleteRequest {
+        request_id,
         cue_list_id,
         expected_epoch,
         expected_revision,
         expected_checkpoint_hash,
         owner_id,
     } = request;
+    let shape_sha256 = authored_mutation_shape_sha256(&AuthoritativeCueListDeleteRequest {
+        request_id: request_id.clone(),
+        cue_list_id,
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash: expected_checkpoint_hash.clone(),
+        owner_id: owner_id.clone(),
+    })?;
+    let request_id = validate_authored_mutation_request_id(request_id)?;
     let owner_id = normalize_project_transaction_owner_id(owner_id)?;
-    capture_video_clip_slot_caller_binding_for_window_label(&state, window.label(), &owner_id)?;
+    let binding = capture_video_clip_slot_caller_binding_for_window_label(&state, window.label(), &owner_id)?;
+    let owner_id = binding.owner_id.clone();
     let expected_authority = MediaAssetPrepareAuthority {
         epoch: expected_epoch,
         revision: expected_revision,
         checkpoint_hash: expected_checkpoint_hash,
     };
-    commit_authoritative_cue_list_delete(
-        &state,
-        expected_epoch,
-        &owner_id,
+    let key = authored_mutation_receipt_key(
+        "syndocal.cue_lists.delete.v1",
+        request_id,
+        &binding,
         &expected_authority,
-        cue_list_id,
+    );
+    state.authored_control_plane.generic_terminal_single_flight(
+        key,
+        shape_sha256,
+        Instant::now(),
+        || {
+            commit_authoritative_cue_list_delete(
+                &state,
+                expected_epoch,
+                &owner_id,
+                &expected_authority,
+                cue_list_id,
+            )
+            .and_then(|receipt| {
+                serde_json::to_value(receipt)
+                    .map_err(|error| format!("Bank delete receipt serialization failed: {error}"))
+            })
+        },
     )
 }
 
@@ -34411,8 +34521,9 @@ fn rename_cue_list(
     state: State<'_, AppState>,
     window: WebviewWindow,
     request: AuthoritativeCueListRenameRequest,
-) -> Result<ProjectHistoryMutationResult, String> {
+) -> Result<Value, String> {
     let AuthoritativeCueListRenameRequest {
+        request_id,
         cue_list_id,
         label,
         expected_epoch,
@@ -34420,22 +34531,88 @@ fn rename_cue_list(
         expected_checkpoint_hash,
         owner_id,
     } = request;
+    let shape_sha256 = authored_mutation_shape_sha256(&AuthoritativeCueListRenameRequest {
+        request_id: request_id.clone(),
+        cue_list_id,
+        label: label.clone(),
+        expected_epoch,
+        expected_revision,
+        expected_checkpoint_hash: expected_checkpoint_hash.clone(),
+        owner_id: owner_id.clone(),
+    })?;
+    let request_id = validate_authored_mutation_request_id(request_id)?;
     let label = validate_cue_list_label(&label)?;
     let owner_id = normalize_project_transaction_owner_id(owner_id)?;
-    capture_video_clip_slot_caller_binding_for_window_label(&state, window.label(), &owner_id)?;
+    let binding = capture_video_clip_slot_caller_binding_for_window_label(&state, window.label(), &owner_id)?;
+    let owner_id = binding.owner_id.clone();
     let expected_authority = MediaAssetPrepareAuthority {
         epoch: expected_epoch,
         revision: expected_revision,
         checkpoint_hash: expected_checkpoint_hash,
     };
-    commit_authoritative_cue_list_rename(
-        &state,
-        expected_epoch,
-        &owner_id,
+    let key = authored_mutation_receipt_key(
+        "syndocal.cue_lists.rename.v1",
+        request_id,
+        &binding,
         &expected_authority,
-        cue_list_id,
-        &label,
+    );
+    state.authored_control_plane.generic_terminal_single_flight(
+        key,
+        shape_sha256,
+        Instant::now(),
+        || {
+            commit_authoritative_cue_list_rename(
+                &state,
+                expected_epoch,
+                &owner_id,
+                &expected_authority,
+                cue_list_id,
+                &label,
+            )
+            .and_then(|receipt| {
+                serde_json::to_value(receipt)
+                    .map_err(|error| format!("Bank rename receipt serialization failed: {error}"))
+            })
+        },
     )
+}
+
+fn validate_authored_mutation_request_id(request_id: String) -> Result<String, String> {
+    let normalized = request_id.trim().to_string();
+    if normalized.is_empty() || normalized.len() > 256 {
+        return Err(
+            "Authored mutation request_id must be a non-empty value of at most 256 bytes"
+                .to_string(),
+        );
+    }
+    if !normalized.is_ascii() {
+        return Err("Authored mutation request_id must be ASCII".to_string());
+    }
+    Ok(normalized)
+}
+
+fn authored_mutation_shape_sha256<T: Serialize>(request: &T) -> Result<String, String> {
+    let canonical = serde_json::to_vec(request)
+        .map_err(|error| format!("Authored mutation request shape is not serializable: {error}"))?;
+    Ok(sha256_hex(&canonical))
+}
+
+fn authored_mutation_receipt_key(
+    operation_id: &str,
+    request_id: String,
+    binding: &VideoClipSlotCallerBinding,
+    expected_authority: &MediaAssetPrepareAuthority,
+) -> authored_control_plane::GenericAuthoredMutationReceiptKey {
+    authored_control_plane::GenericAuthoredMutationReceiptKey {
+        operation_id: operation_id.to_string(),
+        request_id,
+        window_label: binding.window_label.clone(),
+        owner_id: binding.owner_id.clone(),
+        owner_incarnation: binding.incarnation,
+        start_epoch: expected_authority.epoch,
+        start_revision: expected_authority.revision,
+        start_checkpoint_hash: expected_authority.checkpoint_hash.clone(),
+    }
 }
 
 #[tauri::command]
@@ -57997,6 +58174,7 @@ fn register_project_transaction_owner_for_window_label(
                 .media_asset_operations
                 .purge_video_effect_catalog_authoritative_for_owner(retired_owner);
             state.authored_control_plane.retire_principal(retired_owner);
+            state.authored_control_plane.generic_retire_owner(retired_owner);
             state.runtime_control_plane.retire_principal(retired_owner);
         }
     }
@@ -58245,6 +58423,7 @@ fn retire_project_transaction_owner_for_window_incarnation_under_rotation(
             .media_asset_operations
             .purge_video_effect_catalog_authoritative_for_owner(retired_owner);
         state.authored_control_plane.retire_principal(retired_owner);
+        state.authored_control_plane.generic_retire_owner(retired_owner);
         state.runtime_control_plane.retire_principal(retired_owner);
     }
     Ok(recovered)

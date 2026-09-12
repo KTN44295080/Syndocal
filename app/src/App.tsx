@@ -1591,6 +1591,9 @@ const invoke = async <T,>(
         ? {
           request: {
             ...commandArgs,
+            requestId: typeof commandArgs.requestId === "string"
+              ? commandArgs.requestId
+              : projectTransactionOperationId(),
             expectedEpoch,
             ownerId: projectTransactionOwnerId,
           },

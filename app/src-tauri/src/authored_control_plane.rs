@@ -17,6 +17,7 @@ use protocol::control_plane_command::{
     SetEffectEnabledTerminalReceiptV1, SET_EFFECT_ENABLED_OPERATION_ID,
     SET_EFFECT_ENABLED_SHAPE_DOMAIN_V1,
 };
+use serde::{de::DeserializeOwned, Serialize};
 use sha2::{Digest, Sha256};
 use tauri::WebviewWindow;
 
@@ -39,6 +40,58 @@ const RETIRED_KEY_TOMBSTONE_TTL: Duration = Duration::from_secs(10 * 60);
 const MAX_TERMINAL_RECEIPTS: usize = 256;
 const MAX_PUBLICATION_LANES: usize = 256;
 const MAX_RETIRED_KEY_TOMBSTONES: usize = 512;
+
+const GENERIC_TERMINAL_RECEIPT_TTL: Duration = Duration::from_secs(15 * 60);
+const GENERIC_RETIRED_KEY_TOMBSTONE_TTL: Duration = Duration::from_secs(10 * 60);
+const MAX_GENERIC_TERMINAL_RECEIPTS: usize = 256;
+const MAX_GENERIC_PUBLICATION_LANES: usize = 256;
+const MAX_GENERIC_RETIRED_KEY_TOMBSTONES: usize = 512;
+
+/// Server-derived identity for the legacy local Tauri authored commands.
+///
+/// The caller still sends the historical owner string for compatibility, but
+/// the command wrapper first binds it to the invoking WebView and its backend
+/// incarnation.  E/R/H and request identity are retained in the key so a
+/// lost reply can recover one immutable result without publishing again.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct GenericAuthoredMutationReceiptKey {
+    pub(crate) operation_id: String,
+    pub(crate) request_id: String,
+    pub(crate) window_label: String,
+    pub(crate) owner_id: String,
+    pub(crate) owner_incarnation: u64,
+    pub(crate) start_epoch: u64,
+    pub(crate) start_revision: u64,
+    pub(crate) start_checkpoint_hash: String,
+}
+
+#[derive(Debug, Clone)]
+struct GenericTerminalReceiptRecord {
+    shape_sha256: String,
+    outcome: Result<serde_json::Value, String>,
+    expires_at: Instant,
+    last_used: u64,
+}
+
+#[derive(Debug, Clone)]
+struct GenericRetiredKeyTombstone {
+    expires_at: Instant,
+    last_used: u64,
+}
+
+#[derive(Debug)]
+struct GenericAuthoredControlPlaneInner {
+    receipts: HashMap<GenericAuthoredMutationReceiptKey, GenericTerminalReceiptRecord>,
+    lanes: HashMap<GenericAuthoredMutationReceiptKey, Arc<Mutex<()>>>,
+    tombstones: HashMap<GenericAuthoredMutationReceiptKey, GenericRetiredKeyTombstone>,
+    sequence: u64,
+}
+
+enum GenericReceiptReservation {
+    Terminal(Result<serde_json::Value, String>),
+    Rejected(String),
+    Lane(Arc<Mutex<()>>),
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct SetEffectEnabledReceiptKey {
@@ -90,6 +143,7 @@ struct AuthoredControlPlaneInner {
 /// an owner ABA rotation.
 pub(crate) struct AuthoredControlPlaneState {
     inner: Mutex<AuthoredControlPlaneInner>,
+    generic_inner: Mutex<GenericAuthoredControlPlaneInner>,
 }
 
 impl Default for AuthoredControlPlaneState {
@@ -101,8 +155,211 @@ impl Default for AuthoredControlPlaneState {
                 tombstones: HashMap::new(),
                 sequence: 0,
             }),
+            generic_inner: Mutex::new(GenericAuthoredControlPlaneInner {
+                receipts: HashMap::new(),
+                lanes: HashMap::new(),
+                tombstones: HashMap::new(),
+                sequence: 0,
+            }),
         }
     }
+}
+
+impl AuthoredControlPlaneState {
+    /// Execute one legacy authored mutation behind an exact terminal receipt.
+    /// The closure runs at most once per key while the receipt is retained;
+    /// concurrent duplicates wait on the same lane and then receive the exact
+    /// serialized success or failure outcome.
+    pub(crate) fn generic_terminal_single_flight<T>(
+        &self,
+        key: GenericAuthoredMutationReceiptKey,
+        shape_sha256: String,
+        now: Instant,
+        publish: impl FnOnce() -> Result<T, String>,
+    ) -> Result<T, String>
+    where
+        T: Serialize + DeserializeOwned,
+    {
+        let lane = match self.generic_reserve_at(&key, &shape_sha256, now) {
+            GenericReceiptReservation::Terminal(outcome) => return decode_generic_outcome(outcome),
+            GenericReceiptReservation::Rejected(error) => return Err(error),
+            GenericReceiptReservation::Lane(lane) => lane,
+        };
+        let _lane_guard = lane.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+
+        {
+            let mut inner = self
+                .generic_inner
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            generic_purge_expired(&mut inner, now);
+            let last_used = generic_next_sequence(&mut inner);
+            if let Some(record) = inner.receipts.get_mut(&key) {
+                record.last_used = last_used;
+                return if record.shape_sha256 == shape_sha256 {
+                    decode_generic_outcome(record.outcome.clone())
+                } else {
+                    Err(
+                        "Authored mutation request id was reused with a different shape"
+                            .to_string(),
+                    )
+                };
+            }
+            if let Some(tombstone) = inner.tombstones.get_mut(&key) {
+                tombstone.last_used = last_used;
+                return Err("Authored mutation request identity has been retired".to_string());
+            }
+        }
+
+        let outcome = match publish() {
+            Ok(value) => serde_json::to_value(value).map_err(|error| {
+                format!("Authored mutation receipt serialization failed: {error}")
+            }),
+            Err(error) => Err(error),
+        };
+        let mut inner = self
+            .generic_inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        generic_purge_expired(&mut inner, now);
+        let last_used = generic_next_sequence(&mut inner);
+        debug_assert!(inner.receipts.len() < MAX_GENERIC_TERMINAL_RECEIPTS);
+        inner.receipts.insert(
+            key,
+            GenericTerminalReceiptRecord {
+                shape_sha256,
+                outcome: outcome.clone(),
+                expires_at: now + GENERIC_TERMINAL_RECEIPT_TTL,
+                last_used,
+            },
+        );
+        decode_generic_outcome(outcome)
+    }
+
+    fn generic_reserve_at(
+        &self,
+        key: &GenericAuthoredMutationReceiptKey,
+        shape_sha256: &str,
+        now: Instant,
+    ) -> GenericReceiptReservation {
+        let mut inner = self
+            .generic_inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        generic_purge_expired(&mut inner, now);
+        let last_used = generic_next_sequence(&mut inner);
+        if let Some(record) = inner.receipts.get_mut(key) {
+            record.last_used = last_used;
+            return if record.shape_sha256 == shape_sha256 {
+                GenericReceiptReservation::Terminal(record.outcome.clone())
+            } else {
+                GenericReceiptReservation::Rejected(
+                    "Authored mutation request id was reused with a different shape".to_string(),
+                )
+            };
+        }
+        if let Some(tombstone) = inner.tombstones.get_mut(key) {
+            tombstone.last_used = last_used;
+            return GenericReceiptReservation::Rejected(
+                "Authored mutation request identity has been retired".to_string(),
+            );
+        }
+        if let Some(lane) = inner.lanes.get(key) {
+            return GenericReceiptReservation::Lane(Arc::clone(lane));
+        }
+        if inner.lanes.len() >= MAX_GENERIC_PUBLICATION_LANES
+            || inner.receipts.len() >= MAX_GENERIC_TERMINAL_RECEIPTS
+        {
+            return GenericReceiptReservation::Rejected(
+                "Authored mutation receipt capacity is exhausted; retry after recovery".to_string(),
+            );
+        }
+        let lane = Arc::new(Mutex::new(()));
+        inner.lanes.insert(key.clone(), Arc::clone(&lane));
+        GenericReceiptReservation::Lane(lane)
+    }
+
+    pub(crate) fn generic_retire_owner(&self, owner_id: &str) {
+        let mut inner = self
+            .generic_inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let now = Instant::now();
+        generic_purge_expired(&mut inner, now);
+        let keys = inner
+            .receipts
+            .keys()
+            .chain(inner.lanes.keys())
+            .filter(|key| key.owner_id == owner_id)
+            .cloned()
+            .collect::<HashSet<_>>();
+        for key in keys {
+            inner.receipts.remove(&key);
+            inner.lanes.remove(&key);
+            generic_insert_tombstone(&mut inner, key, now);
+        }
+    }
+}
+
+fn decode_generic_outcome<T>(outcome: Result<serde_json::Value, String>) -> Result<T, String>
+where
+    T: DeserializeOwned,
+{
+    outcome.and_then(|value| {
+        serde_json::from_value(value).map_err(|error| {
+            format!("Authored mutation terminal receipt could not be decoded: {error}")
+        })
+    })
+}
+
+fn generic_next_sequence(inner: &mut GenericAuthoredControlPlaneInner) -> u64 {
+    inner.sequence = inner.sequence.wrapping_add(1);
+    inner.sequence
+}
+
+fn generic_purge_expired(inner: &mut GenericAuthoredControlPlaneInner, now: Instant) {
+    let expired = inner
+        .receipts
+        .iter()
+        .filter_map(|(key, record)| (record.expires_at <= now).then_some(key.clone()))
+        .collect::<Vec<_>>();
+    for key in expired {
+        inner.receipts.remove(&key);
+        inner.lanes.remove(&key);
+        generic_insert_tombstone(inner, key, now);
+    }
+    inner
+        .tombstones
+        .retain(|_, tombstone| tombstone.expires_at > now);
+}
+
+fn generic_insert_tombstone(
+    inner: &mut GenericAuthoredControlPlaneInner,
+    key: GenericAuthoredMutationReceiptKey,
+    now: Instant,
+) {
+    while inner.tombstones.len() >= MAX_GENERIC_RETIRED_KEY_TOMBSTONES
+        && !inner.tombstones.contains_key(&key)
+    {
+        let oldest = inner
+            .tombstones
+            .iter()
+            .min_by_key(|(_, tombstone)| tombstone.last_used)
+            .map(|(oldest, _)| oldest.clone());
+        if let Some(oldest) = oldest {
+            inner.tombstones.remove(&oldest);
+        } else {
+            break;
+        }
+    }
+    let last_used = generic_next_sequence(inner);
+    inner.tombstones.insert(
+        key,
+        GenericRetiredKeyTombstone {
+            expires_at: now + GENERIC_RETIRED_KEY_TOMBSTONE_TTL,
+            last_used,
+        },
+    );
 }
 
 enum ReceiptReservation {
@@ -1902,5 +2159,71 @@ mod tests {
         }
         assert_eq!(engine_persistence_bytes(&harness.state), before_engine);
         assert_eq!(coordinator_audit(&harness.state), before_coordinator);
+    }
+
+    #[test]
+    fn generic_authored_bridge_replays_exact_terminal_result_and_rejects_shape_reuse() {
+        let state = AuthoredControlPlaneState::default();
+        let key = GenericAuthoredMutationReceiptKey {
+            operation_id: "syndocal.cue_lists.rename.v1".to_string(),
+            request_id: "project-op:1:lost-reply".to_string(),
+            window_label: "main".to_string(),
+            owner_id: "renderer:test".to_string(),
+            owner_incarnation: 7,
+            start_epoch: 11,
+            start_revision: 12,
+            start_checkpoint_hash: hash('h'),
+        };
+        let publish_count = Arc::new(AtomicU64::new(0));
+        let first_count = Arc::clone(&publish_count);
+        let first = state
+            .generic_terminal_single_flight(
+                key.clone(),
+                "shape-a".to_string(),
+                Instant::now(),
+                move || {
+                    first_count.fetch_add(1, Ordering::AcqRel);
+                    Ok::<_, String>(serde_json::json!({
+                        "revision": 13,
+                        "history": "rename"
+                    }))
+                },
+            )
+            .unwrap();
+        let second_count = Arc::clone(&publish_count);
+        let second = state
+            .generic_terminal_single_flight(
+                key.clone(),
+                "shape-a".to_string(),
+                Instant::now(),
+                move || {
+                    second_count.fetch_add(1, Ordering::AcqRel);
+                    Ok::<_, String>(serde_json::json!({ "unexpected": true }))
+                },
+            )
+            .unwrap();
+        assert_eq!(first, second);
+        assert_eq!(publish_count.load(Ordering::Acquire), 1);
+
+        let conflict = state.generic_terminal_single_flight(
+            key.clone(),
+            "shape-b".to_string(),
+            Instant::now(),
+            || Ok::<_, String>(serde_json::json!({ "unexpected": true })),
+        );
+        assert!(conflict
+            .expect_err("same request id with a changed shape must fail closed")
+            .contains("different shape"));
+
+        state.generic_retire_owner("renderer:test");
+        let retired = state.generic_terminal_single_flight(
+            key,
+            "shape-a".to_string(),
+            Instant::now(),
+            || Ok::<_, String>(serde_json::json!({ "unexpected": true })),
+        );
+        assert!(retired
+            .expect_err("retired owner receipt must not be replayable")
+            .contains("retired"));
     }
 }
