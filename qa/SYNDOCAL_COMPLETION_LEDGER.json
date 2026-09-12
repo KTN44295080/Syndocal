@@ -3,7 +3,7 @@
   "source_document": "qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md",
   "authoritative_sections": ["6", "7", "8", "9"],
   "classifications": ["Supported", "Deferred", "External acceptance", "Out of scope"],
-  "expected_status_counts": { "Open": 47, "Deferred": 8, "Complete": 3 },
+  "expected_status_counts": { "Open": 46, "Deferred": 8, "Complete": 4 },
   "expected_section_counts": { "6": 37, "7": 6, "8": 9, "9": 6 },
   "items": [
     {
@@ -78,13 +78,13 @@
     },
     {
       "id": "AI0-COVERAGE-001",
-      "source": { "section": "6", "kind": "Open" },
+      "source": { "section": "6", "kind": "Complete" },
       "classification": "Supported",
       "owner": "AI control-plane owner",
       "dependency": "AI3 completion and authoritative operation registry",
-      "nonclaim": "Does not claim all mutation sources are classified or fail closed.",
-      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/SYNDOCAL_AI_CONTROL_PLANE_ROADMAP.md"],
-      "status": "Open"
+      "nonclaim": "Does not claim physical ingress, native UI, hardware, external-client, venue, signing, publication, or product-wide AI0-AI8 acceptance.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/SYNDOCAL_AI_CONTROL_PLANE_ROADMAP.md", "app/scripts/check-ai0-source-coverage.mjs", "qa/AI0_SOURCE_COVERAGE_CHECKPOINT_2026-09-13.md"],
+      "status": "Complete"
     },
     {
       "id": "AI1-SCHEMAS-001",
