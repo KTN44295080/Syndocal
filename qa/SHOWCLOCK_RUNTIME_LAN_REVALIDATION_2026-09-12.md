@@ -74,12 +74,12 @@ the exact Build Tools linker pinned first:
 | `cargo test --manifest-path app/src-tauri/Cargo.toml --locked control_plane::tests -- --nocapture --test-threads=1` | PASS — 30 command-admission tests |
 | `pnpm.cmd --dir app exec tsc --noEmit; pnpm.cmd --dir app run build` | PASS — TypeScript and Vite production build; 354 modules transformed |
 | `pnpm.cmd --dir app run check:frontend-invokes; pnpm.cmd --dir app run check:frontend-command-routing; node app/scripts/check-tauri-admission-inventory.mjs; pnpm.cmd --dir app run check:output-control-runtime` | PASS — 464 frontend commands; routing 133/31/28/471; 523 native commands with 18 negative fixtures rejected; output-control contracts pass |
-| `pnpm.cmd --dir app tauri build --no-bundle` | PASS — exact MSVC 14.44.35207 linker; final release executable built in 3m32s without first-party warnings |
+| `pnpm.cmd --dir app tauri build --no-bundle` | PASS — exact MSVC 14.44.35207 linker; final release executable built in 2m31s without first-party warnings |
 | Exact `target/release/syndocal.exe` process smoke | PASS — exactly 1 exact-path process, `Syndocal` title, nonzero window handle, `Responding=True`, maximize requested, exact-path cleanup complete |
 | `git diff --check` | PASS |
 
 The final current-source executable SHA-256 is
-`ABE07C3592AC2F06EA94BD19E1CBCBE592848224430451AFD3FA712E954F34B5`.
+`2E7F01BF5DD427E4544494B2303194D9A4ABA2E51EFCDAFD747ABAC1C4737C95`.
 It is an unsigned, unpublished process-smoke binary, not release acceptance.
 
 The new protocol tests cover required and kind-bound action payloads, payload
@@ -113,7 +113,10 @@ process-local session registry rejects reuse of a session incarnation. The
 Setup/IO ShowClock LAN panel exposes pairing settings plus action scheduling,
 Manual Hold, and an operator-confirmed Re-arm form; only non-secret settings
 are remembered. The session and key are deliberately not persisted, so a
-process restart requires a fresh paired session and key.
+process restart requires a fresh paired session and key. When the panel is
+remounted or refreshed, its action-sequence input advances from the latest
+backend status, preventing a stale UI value from resubmitting a prior
+sequence.
 
 An accepted action is retained in the generation-bound scheduler while the
 ShowClock output gate is disarmed. Primary output arm requires the explicit

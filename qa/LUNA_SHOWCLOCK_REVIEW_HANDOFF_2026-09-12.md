@@ -551,3 +551,33 @@ product-wide completion. No physical DMX output was emitted.
 Next safe action is to run the ledger validator and diff checks, then commit
 and push this implementation/evidence checkpoint. External gates require
 their actual UI/device/two-machine topology and separate evidence.
+
+## Continuation checkpoint — UI sequence recovery
+
+This checkpoint is based on branch `codex/showclock-review-20260912` at
+`3570ee5a` and closes the corresponding UI recovery path after the backend
+sequence admission hardening.
+
+The ShowClock panel now reconciles its action-sequence input from the latest
+backend `last_action_sequence` on status polling and command responses. A
+panel remount or refresh therefore advances to the next safe sequence without
+persisting the session id or pairing key. Unsafe/non-safe integer status values
+are ignored rather than coerced.
+
+TypeScript/Vite production build passes with 354 modules, frontend invoke
+inventory passes with 464 commands, and command routing passes with
+133/31/28/471 counts. The pinned MSVC 14.44.35207 x64 no-bundle build passes
+in 2m31s without first-party warnings. Exact-path process smoke observed one
+responsive `Syndocal` window, requested maximize, and exited cleanly. The
+current-source executable SHA-256 is
+`2E7F01BF5DD427E4544494B2303194D9A4ABA2E51EFCDAFD747ABAC1C4737C95`.
+
+This remains software and native process-smoke evidence; no native
+button-by-button UI session was observed because the available computer-use
+surface exposed no native app. Physical MIDI/OSC/DMX/Art-Net output, real
+wired two-machine partition/rejoin/crash/restart/soak, replay restoration,
+witness/interlock, automatic failover, venue, signing, publication, and
+product-wide completion remain unaccepted external gates.
+
+Next safe action is to run the ledger validator and diff checks, then commit
+and push this UI implementation/evidence checkpoint.
