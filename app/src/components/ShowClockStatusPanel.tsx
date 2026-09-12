@@ -105,11 +105,20 @@ export function ShowClockStatusPanel(props: ShowClockStatusPanelProps) {
   let pollFlight: Promise<void> | null = null;
   let pollTimer: number | undefined;
 
+  const reconcileActionSequence = (next: ShowClockIpcStatus) => {
+    const latest = next.last_action_sequence;
+    if (!Number.isSafeInteger(latest) || latest < 0 || latest >= Number.MAX_SAFE_INTEGER) return;
+    setActionSequence((current) => Math.max(current, latest + 1));
+  };
+
   const poll = async () => {
     if (disposed || pollFlight || !props.backendAvailable) return;
     const flight = props.invokeCommand<ShowClockIpcStatus>("get_show_clock_status")
       .then((next) => {
-        if (!disposed) setStatus(next);
+        if (!disposed) {
+          setStatus(next);
+          reconcileActionSequence(next);
+        }
       })
       .catch((reason) => {
         if (!disposed) setError(String(reason));
@@ -170,7 +179,9 @@ export function ShowClockStatusPanel(props: ShowClockStatusPanelProps) {
         bpm_milli: 120000,
         initial_show_time_us: 1000000,
       };
-      setStatus(await props.invokeCommand<ShowClockIpcStatus>("start_show_clock", { request }));
+      const next = await props.invokeCommand<ShowClockIpcStatus>("start_show_clock", { request });
+      setStatus(next);
+      reconcileActionSequence(next);
       setKeyHex("");
     } catch (reason) {
       setError(String(reason));
@@ -206,7 +217,7 @@ export function ShowClockStatusPanel(props: ShowClockStatusPanelProps) {
       if (payload && (!Number.isSafeInteger(cueId()) || cueId() <= 0 || !Number.isSafeInteger(videoLayerId()) || videoLayerId() <= 0 || !Number.isSafeInteger(videoFadeMs()) || videoFadeMs() < 0 || !Number.isSafeInteger(videoSlotId()) || videoSlotId() <= 0 || !Number.isSafeInteger(timelineJumpPosition()) || timelineJumpPosition() < 0)) {
         throw new Error("Action payload values must be safe non-negative integers; IDs must be positive.");
       }
-      setStatus(await props.invokeCommand<ShowClockIpcStatus>("schedule_show_clock_action", {
+      const next = await props.invokeCommand<ShowClockIpcStatus>("schedule_show_clock_action", {
         request: {
           action_id_hex: newActionId(),
           sequence: actionSequence(),
@@ -215,8 +226,9 @@ export function ShowClockStatusPanel(props: ShowClockStatusPanelProps) {
           late_policy: latePolicy(),
           payload,
         },
-      }));
-      setActionSequence((value) => value + 1);
+      });
+      setStatus(next);
+      reconcileActionSequence(next);
     } catch (reason) {
       setError(String(reason));
     } finally {
@@ -231,7 +243,9 @@ export function ShowClockStatusPanel(props: ShowClockStatusPanelProps) {
     try {
       if (!confirmOutputArm()) throw new Error("Confirm local output ownership before Arm.");
       const request: ShowClockArmOutputRequest = { operator_confirmed: true };
-      setStatus(await props.invokeCommand<ShowClockIpcStatus>("arm_show_clock_output", { request }));
+      const next = await props.invokeCommand<ShowClockIpcStatus>("arm_show_clock_output", { request });
+      setStatus(next);
+      reconcileActionSequence(next);
       setConfirmOutputArm(false);
     } catch (reason) {
       setError(String(reason));
@@ -245,7 +259,9 @@ export function ShowClockStatusPanel(props: ShowClockStatusPanelProps) {
     setBusy(true);
     setError(null);
     try {
-      setStatus(await props.invokeCommand<ShowClockIpcStatus>("hold_show_clock"));
+      const next = await props.invokeCommand<ShowClockIpcStatus>("hold_show_clock");
+      setStatus(next);
+      reconcileActionSequence(next);
     } catch (reason) {
       setError(String(reason));
     } finally {
@@ -273,7 +289,9 @@ export function ShowClockStatusPanel(props: ShowClockStatusPanelProps) {
         project_hash_hex: projectHash().trim(),
         media_hash_hex: mediaHash().trim(),
       };
-      setStatus(await props.invokeCommand<ShowClockIpcStatus>("rearm_show_clock", { request }));
+      const next = await props.invokeCommand<ShowClockIpcStatus>("rearm_show_clock", { request });
+      setStatus(next);
+      reconcileActionSequence(next);
       setConfirmPrimaryStopped(false);
     } catch (reason) {
       setError(String(reason));
@@ -287,7 +305,9 @@ export function ShowClockStatusPanel(props: ShowClockStatusPanelProps) {
     setBusy(true);
     setError(null);
     try {
-      setStatus(await props.invokeCommand<ShowClockIpcStatus>("stop_show_clock"));
+      const next = await props.invokeCommand<ShowClockIpcStatus>("stop_show_clock");
+      setStatus(next);
+      reconcileActionSequence(next);
     } catch (reason) {
       setError(String(reason));
     } finally {
