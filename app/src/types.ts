@@ -27,6 +27,11 @@ export interface OutputOwnershipStatus {
 
 export type ShowClockIpcRole = "primary" | "standby";
 export type ShowClockIpcPhase = "STOPPED" | "ACQUIRING" | "LOCKED" | "HOLD" | "STALE" | "FAULT";
+export type ShowClockIpcFenceState = "DISARMED" | "HOLD" | "ARMED";
+export type ShowClockActionKind =
+  | "go" | "stop" | "back" | "release" | "blackout" | "take"
+  | "clip_launch" | "transition" | "timeline_jump";
+export type ShowClockLatePolicy = "execute_immediately" | "drop" | "hold";
 
 export interface ShowClockIpcStatus {
   running: boolean;
@@ -43,6 +48,13 @@ export interface ShowClockIpcStatus {
   offset_us: number;
   sample_age_us: number | null;
   output_armed: boolean;
+  show_clock_gate_armed: boolean;
+  fence_state: ShowClockIpcFenceState;
+  accepted_actions: number;
+  scheduled_actions: number;
+  last_action_sequence: number;
+  last_action_id: string | null;
+  last_action_status: string | null;
   last_error: string | null;
 }
 
@@ -58,8 +70,32 @@ export interface ShowClockStartRequest {
   key_hex: string;
   clock_generation: number;
   fencing_generation: number;
+  project_generation: number;
+  lease_generation: number;
+  audio_generation: number;
+  recording_generation: number;
   bpm_milli: number;
   initial_show_time_us: number;
+}
+
+export interface ShowClockActionRequest {
+  action_id_hex: string;
+  sequence: number;
+  target_show_time_us: number;
+  action: ShowClockActionKind;
+  late_policy: ShowClockLatePolicy;
+}
+
+export interface ShowClockReArmRequest {
+  operator_confirmed_primary_stopped: boolean;
+  clock_generation: number;
+  fencing_generation: number;
+  project_generation: number;
+  lease_generation: number;
+  audio_generation: number;
+  recording_generation: number;
+  project_hash_hex: string;
+  media_hash_hex: string;
 }
 
 export type AttributeResolution = "EightBit" | "SixteenBit";

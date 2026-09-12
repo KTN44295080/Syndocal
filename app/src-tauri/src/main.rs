@@ -207,7 +207,10 @@ fn direct_media_audio_output_format(output: &DirectMediaAudioOutput) -> (u32, u1
 }
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
-use show_clock_ipc::{ShowClockIpcState, ShowClockIpcStatus, ShowClockStartRequest};
+use show_clock_ipc::{
+    ShowClockActionRequest, ShowClockIpcState, ShowClockIpcStatus, ShowClockReArmRequest,
+    ShowClockStartRequest,
+};
 #[cfg(windows)]
 use std::os::windows::{fs::OpenOptionsExt, io::AsRawHandle};
 // macOS/Linux file coherence relies on the stable Unix inode identity/version
@@ -25134,6 +25137,7 @@ const PREFLIGHT_ONLY_NONPROJECT_OR_INNER_RUNTIME_ROUTES: &[&str] = &[
     "finalize_prepared_media_asset_relink",
     "finalize_prepared_media_assets",
     "force_transfer_output_lease_v2",
+    "hold_show_clock",
     "import_gdtf",
     "launch_video_clip_slot_authoritative",
     "launch_video_layer_transition_bus_authoritative",
@@ -25183,6 +25187,7 @@ const PREFLIGHT_ONLY_NONPROJECT_OR_INNER_RUNTIME_ROUTES: &[&str] = &[
     "set_explicit_wdm_cue_test",
     "set_machine_timeline_cue_audio_settings",
     "set_midi_feedback_auto",
+    "schedule_show_clock_action",
     "set_timeline_transport_playing_runtime_v1",
     "stage_vj_preview_layer",
     "start_art_rdm_full_discovery",
@@ -25200,6 +25205,7 @@ const PREFLIGHT_ONLY_NONPROJECT_OR_INNER_RUNTIME_ROUTES: &[&str] = &[
     "stop_osc_input",
     "stop_remote_control",
     "stop_show_clock",
+    "rearm_show_clock",
     "stop_standby_sync",
     "stop_video_layer_audio_monitor",
     "stop_video_output_recording",
@@ -76648,6 +76654,27 @@ fn start_show_clock(
 #[tauri::command]
 fn stop_show_clock(state: State<'_, ShowClockIpcState>) -> Result<ShowClockIpcStatus, String> {
     state.stop()
+}
+
+#[tauri::command]
+fn schedule_show_clock_action(
+    state: State<'_, ShowClockIpcState>,
+    request: ShowClockActionRequest,
+) -> Result<ShowClockIpcStatus, String> {
+    state.schedule_action(request)
+}
+
+#[tauri::command]
+fn hold_show_clock(state: State<'_, ShowClockIpcState>) -> Result<ShowClockIpcStatus, String> {
+    state.enter_hold()
+}
+
+#[tauri::command]
+fn rearm_show_clock(
+    state: State<'_, ShowClockIpcState>,
+    request: ShowClockReArmRequest,
+) -> Result<ShowClockIpcStatus, String> {
+    state.rearm(request)
 }
 
 #[tauri::command]
@@ -131266,6 +131293,9 @@ fn main() {
             set_dmx_outputs,
             get_output_ownership_status,
             get_show_clock_status,
+            schedule_show_clock_action,
+            hold_show_clock,
+            rearm_show_clock,
             start_show_clock,
             stop_show_clock,
             set_output_ownership_role,

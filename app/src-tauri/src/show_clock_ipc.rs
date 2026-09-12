@@ -11,6 +11,7 @@ use std::{
     net::SocketAddr,
     sync::{
         atomic::{AtomicBool, Ordering},
+        mpsc::{self, Receiver, Sender, SyncSender},
         Arc, Mutex,
     },
     thread::{self, JoinHandle},
@@ -20,11 +21,18 @@ use std::{
 use io::show_clock_lan::{ShowClockLanError, ShowClockLanMessage, ShowClockLanTransport};
 use protocol::{
     show_clock::{
-        AuthenticatedShowClockSample, ShowClockHash, ShowClockNodeId, ShowClockNonce,
-        ShowClockPeerValidator, ShowClockSample, ShowClockSessionId, ShowClockSource,
-        ShowTransportState, SHOW_CLOCK_PROTOCOL_VERSION, SHOW_CLOCK_SCHEMA_VERSION,
+        AuthenticatedShowClockAction, AuthenticatedShowClockSample, ShowClockAction,
+        ShowClockActionAdmission, ShowClockActionKind, ShowClockActionReceiver,
+        ShowClockFenceState, ShowClockHash, ShowClockLatePolicy, ShowClockManualFence,
+        ShowClockNodeId, ShowClockNonce, ShowClockPeerValidator, ShowClockReArm, ShowClockSample,
+        ShowClockSessionId, ShowClockSource, ShowTransportState, SHOW_CLOCK_PROTOCOL_VERSION,
+        SHOW_CLOCK_SCHEMA_VERSION,
     },
-    show_clock_runtime::{ShowClockEstimatorState, ShowClockPeerEstimator},
+    show_clock_runtime::{
+        ShowClockActionDispatch, ShowClockActionGeneration, ShowClockActionScheduler,
+        ShowClockEstimatorState, ShowClockOutputContext, ShowClockOutputGate,
+        ShowClockPeerEstimator,
+    },
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -50,6 +58,24 @@ pub enum ShowClockIpcPhase {
     Hold,
     Stale,
     Fault,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum ShowClockIpcFenceState {
+    Disarmed,
+    Hold,
+    Armed,
+}
+
+impl From<ShowClockFenceState> for ShowClockIpcFenceState {
+    fn from(state: ShowClockFenceState) -> Self {
+        match state {
+            ShowClockFenceState::Disarmed => Self::Disarmed,
+            ShowClockFenceState::Hold => Self::Hold,
+            ShowClockFenceState::Armed => Self::Armed,
+        }
+    }
 }
 
 impl ShowClockIpcPhase {
@@ -81,6 +107,13 @@ pub struct ShowClockIpcStatus {
     pub offset_us: i64,
     pub sample_age_us: Option<u64>,
     pub output_armed: bool,
+    pub show_clock_gate_armed: bool,
+    pub fence_state: ShowClockIpcFenceState,
+    pub accepted_actions: u32,
+    pub scheduled_actions: u32,
+    pub last_action_sequence: u64,
+    pub last_action_id: Option<String>,
+    pub last_action_status: Option<String>,
     pub last_error: Option<String>,
 }
 
@@ -101,6 +134,13 @@ impl Default for ShowClockIpcStatus {
             offset_us: 0,
             sample_age_us: None,
             output_armed: false,
+            show_clock_gate_armed: false,
+            fence_state: ShowClockIpcFenceState::Disarmed,
+            accepted_actions: 0,
+            scheduled_actions: 0,
+            last_action_sequence: 0,
+            last_action_id: None,
+            last_action_status: None,
             last_error: None,
         }
     }
@@ -125,8 +165,40 @@ pub struct ShowClockStartRequest {
     pub key_hex: String,
     pub clock_generation: u64,
     pub fencing_generation: u64,
+    #[serde(default = "default_generation")]
+    pub project_generation: u64,
+    #[serde(default = "default_generation")]
+    pub lease_generation: u64,
+    #[serde(default = "default_generation")]
+    pub audio_generation: u64,
+    #[serde(default = "default_generation")]
+    pub recording_generation: u64,
     pub bpm_milli: u32,
     pub initial_show_time_us: u64,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ShowClockActionRequest {
+    pub action_id_hex: String,
+    pub sequence: u64,
+    pub target_show_time_us: u64,
+    pub action: ShowClockActionKind,
+    pub late_policy: ShowClockLatePolicy,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ShowClockReArmRequest {
+    pub operator_confirmed_primary_stopped: bool,
+    pub clock_generation: u64,
+    pub fencing_generation: u64,
+    pub project_generation: u64,
+    pub lease_generation: u64,
+    pub audio_generation: u64,
+    pub recording_generation: u64,
+    pub project_hash_hex: String,
+    pub media_hash_hex: String,
 }
 
 #[derive(Clone)]
@@ -142,12 +214,23 @@ struct ShowClockConfig {
     key: [u8; 32],
     clock_generation: u64,
     fencing_generation: u64,
+    project_generation: u64,
+    lease_generation: u64,
+    audio_generation: u64,
+    recording_generation: u64,
     bpm_milli: u32,
     initial_show_time_us: u64,
 }
 
+enum ShowClockWorkerCommand {
+    ScheduleAction(ShowClockActionRequest, SyncSender<Result<(), String>>),
+    EnterHold(SyncSender<Result<(), String>>),
+    ReArm(ShowClockReArmRequest, SyncSender<Result<(), String>>),
+}
+
 struct ShowClockWorker {
     stop: Arc<AtomicBool>,
+    commands: Sender<ShowClockWorkerCommand>,
     join: JoinHandle<()>,
 }
 
@@ -209,6 +292,9 @@ impl ShowClockIpcState {
             status.running = false;
             status.state = ShowClockIpcPhase::Stopped;
             status.output_armed = false;
+            status.show_clock_gate_armed = false;
+            status.fence_state = ShowClockIpcFenceState::Disarmed;
+            status.scheduled_actions = 0;
             status.last_error = None;
         }
         let transport = ShowClockLanTransport::bind(config.bind, config.peer)
@@ -244,23 +330,35 @@ impl ShowClockIpcState {
                 sample_age_us: None,
                 // This worker has no physical-output authority by design.
                 output_armed: false,
+                show_clock_gate_armed: false,
+                fence_state: ShowClockIpcFenceState::Disarmed,
+                accepted_actions: 0,
+                scheduled_actions: 0,
+                last_action_sequence: 0,
+                last_action_id: None,
+                last_action_status: None,
                 last_error: None,
             };
         }
 
         let stop = Arc::new(AtomicBool::new(false));
+        let (commands_tx, commands_rx) = mpsc::channel();
         let worker_stop = Arc::clone(&stop);
         let worker_status = Arc::clone(&self.status);
         let join = thread::Builder::new()
             .name(format!("syndocal-show-clock-{:?}", config.role))
-            .spawn(move || run_worker(config, transport, worker_stop, worker_status))
+            .spawn(move || run_worker(config, transport, worker_stop, worker_status, commands_rx))
             .map_err(|error| format!("ShowClock worker could not start: {error}"))?;
 
         let mut lifecycle = self
             .lifecycle
             .lock()
             .map_err(|_| "ShowClock lifecycle lock was poisoned; restart Syndocal".to_string())?;
-        *lifecycle = Some(ShowClockWorker { stop, join });
+        *lifecycle = Some(ShowClockWorker {
+            stop,
+            commands: commands_tx,
+            join,
+        });
         drop(lifecycle);
         self.status()
     }
@@ -277,7 +375,59 @@ impl ShowClockIpcState {
         status.running = false;
         status.state = ShowClockIpcPhase::Stopped;
         status.output_armed = false;
+        status.show_clock_gate_armed = false;
+        status.fence_state = ShowClockIpcFenceState::Disarmed;
+        status.scheduled_actions = 0;
         Ok(status.clone())
+    }
+
+    pub fn schedule_action(
+        &self,
+        request: ShowClockActionRequest,
+    ) -> Result<ShowClockIpcStatus, String> {
+        let _operation = self.operation.lock().map_err(|_| {
+            "ShowClock lifecycle operation lock was poisoned; restart Syndocal".to_string()
+        })?;
+        self.send_command(|reply| ShowClockWorkerCommand::ScheduleAction(request, reply))?;
+        self.status()
+    }
+
+    pub fn enter_hold(&self) -> Result<ShowClockIpcStatus, String> {
+        let _operation = self.operation.lock().map_err(|_| {
+            "ShowClock lifecycle operation lock was poisoned; restart Syndocal".to_string()
+        })?;
+        self.send_command(|reply| ShowClockWorkerCommand::EnterHold(reply))?;
+        self.status()
+    }
+
+    pub fn rearm(&self, request: ShowClockReArmRequest) -> Result<ShowClockIpcStatus, String> {
+        let _operation = self.operation.lock().map_err(|_| {
+            "ShowClock lifecycle operation lock was poisoned; restart Syndocal".to_string()
+        })?;
+        self.send_command(|reply| ShowClockWorkerCommand::ReArm(request, reply))?;
+        self.status()
+    }
+
+    fn send_command(
+        &self,
+        command: impl FnOnce(SyncSender<Result<(), String>>) -> ShowClockWorkerCommand,
+    ) -> Result<(), String> {
+        let (reply_tx, reply_rx) = mpsc::sync_channel(1);
+        let lifecycle = self
+            .lifecycle
+            .lock()
+            .map_err(|_| "ShowClock lifecycle lock was poisoned; restart Syndocal".to_string())?;
+        let worker = lifecycle
+            .as_ref()
+            .ok_or_else(|| "ShowClock is not running".to_string())?;
+        worker
+            .commands
+            .send(command(reply_tx))
+            .map_err(|_| "ShowClock worker is no longer accepting commands".to_string())?;
+        drop(lifecycle);
+        reply_rx
+            .recv_timeout(Duration::from_secs(2))
+            .map_err(|_| "ShowClock worker did not acknowledge the command".to_string())?
     }
 
     fn stop_worker(&self) -> Result<(), String> {
@@ -353,10 +503,28 @@ impl TryFrom<ShowClockStartRequest> for ShowClockConfig {
             key: parse_fixed_hex::<32>(&request.key_hex, "pairing key")?,
             clock_generation: request.clock_generation,
             fencing_generation: request.fencing_generation,
+            project_generation: validate_nonzero_generation(request.project_generation, "project")?,
+            lease_generation: validate_nonzero_generation(request.lease_generation, "lease")?,
+            audio_generation: validate_nonzero_generation(request.audio_generation, "audio")?,
+            recording_generation: validate_nonzero_generation(
+                request.recording_generation,
+                "recording",
+            )?,
             bpm_milli: request.bpm_milli,
             initial_show_time_us: request.initial_show_time_us,
         })
     }
+}
+
+fn default_generation() -> u64 {
+    1
+}
+
+fn validate_nonzero_generation(value: u64, label: &str) -> Result<u64, String> {
+    if value == 0 {
+        return Err(format!("ShowClock {label} generation must be non-zero"));
+    }
+    Ok(value)
 }
 
 fn parse_fixed_hex<const N: usize>(value: &str, label: &str) -> Result<[u8; N], String> {
@@ -391,21 +559,38 @@ fn hex_nibble(byte: u8) -> Option<u8> {
     }
 }
 
+fn hex_string(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        output.push(HEX[(byte >> 4) as usize] as char);
+        output.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    output
+}
+
 fn run_worker(
     config: ShowClockConfig,
     transport: ShowClockLanTransport,
     stop: Arc<AtomicBool>,
     status: Arc<Mutex<ShowClockIpcStatus>>,
+    commands: Receiver<ShowClockWorkerCommand>,
 ) {
-    let result = match config.role {
-        ShowClockIpcRole::Primary => run_primary(&config, &transport, &stop, &status),
-        ShowClockIpcRole::Standby => run_standby(&config, &transport, &stop, &status),
-    };
+    let result = ShowClockWorkerRuntime::new(&config).and_then(|mut runtime| match config.role {
+        ShowClockIpcRole::Primary => {
+            run_primary(&config, &transport, &stop, &status, &commands, &mut runtime)
+        }
+        ShowClockIpcRole::Standby => {
+            run_standby(&config, &transport, &stop, &status, &commands, &mut runtime)
+        }
+    });
     if let Err(error) = result {
         update_status(&status, |current| {
             current.running = false;
             current.state = ShowClockIpcPhase::Fault;
             current.output_armed = false;
+            current.show_clock_gate_armed = false;
+            current.fence_state = ShowClockIpcFenceState::Disarmed;
             current.last_error = Some(error);
         });
     } else if !stop.load(Ordering::Acquire) {
@@ -413,7 +598,225 @@ fn run_worker(
             current.running = false;
             current.state = ShowClockIpcPhase::Stopped;
             current.output_armed = false;
+            current.show_clock_gate_armed = false;
         });
+    }
+}
+
+struct ShowClockWorkerRuntime {
+    owner: ShowClockNodeId,
+    session_id: ShowClockSessionId,
+    peer_node_id: ShowClockNodeId,
+    key: [u8; 32],
+    project_hash: ShowClockHash,
+    media_hash: ShowClockHash,
+    fence: ShowClockManualFence,
+    scheduler: ShowClockActionScheduler,
+    output_gate: ShowClockOutputGate,
+    estimator: Option<ShowClockPeerEstimator>,
+    validator: Option<ShowClockPeerValidator>,
+    action_receiver: Option<ShowClockActionReceiver>,
+    held: bool,
+}
+
+impl ShowClockWorkerRuntime {
+    fn new(config: &ShowClockConfig) -> Result<Self, String> {
+        let context = ShowClockOutputContext::new(
+            config.project_generation,
+            config.lease_generation,
+            config.audio_generation,
+            config.recording_generation,
+            config.clock_generation,
+            config.fencing_generation,
+            config.project_hash,
+            config.media_hash,
+        )
+        .map_err(|error| format!("ShowClock output context initialization failed: {error}"))?;
+        let fence = ShowClockManualFence::new(config.clock_generation, config.fencing_generation)
+            .map_err(|error| {
+            format!("ShowClock manual fence initialization failed: {error}")
+        })?;
+        let generation =
+            ShowClockActionGeneration::new(config.clock_generation, config.fencing_generation)
+                .map_err(|error| {
+                    format!("ShowClock action generation initialization failed: {error}")
+                })?;
+        let scheduler = ShowClockActionScheduler::new(
+            generation,
+            protocol::show_clock_runtime::SHOW_CLOCK_DEFAULT_ACTION_HORIZON_US,
+        )
+        .map_err(|error| format!("ShowClock action scheduler initialization failed: {error}"))?;
+        let output_gate = ShowClockOutputGate::new(config.node_id.clone(), context)
+            .map_err(|error| format!("ShowClock output gate initialization failed: {error}"))?;
+        let (estimator, validator, action_receiver) = match config.role {
+            ShowClockIpcRole::Primary => (None, None, None),
+            ShowClockIpcRole::Standby => {
+                let validator = ShowClockPeerValidator::new(
+                    config.session_id.clone(),
+                    config.peer_node_id.clone(),
+                    config.project_hash,
+                    config.media_hash,
+                    config.clock_generation,
+                    config.fencing_generation,
+                    config.key,
+                )
+                .map_err(|error| {
+                    format!("ShowClock standby validator initialization failed: {error}")
+                })?;
+                let estimator = ShowClockPeerEstimator::new(
+                    Default::default(),
+                    config.clock_generation,
+                    config.fencing_generation,
+                )
+                .map_err(|error| {
+                    format!("ShowClock standby estimator initialization failed: {error}")
+                })?;
+                let action_receiver = ShowClockActionReceiver::new(
+                    config.session_id.clone(),
+                    config.peer_node_id.clone(),
+                    config.project_hash,
+                    config.media_hash,
+                    config.clock_generation,
+                    config.fencing_generation,
+                    config.key,
+                )
+                .map_err(|error| {
+                    format!("ShowClock action receiver initialization failed: {error}")
+                })?;
+                (Some(estimator), Some(validator), Some(action_receiver))
+            }
+        };
+        Ok(Self {
+            owner: config.node_id.clone(),
+            session_id: config.session_id.clone(),
+            peer_node_id: config.peer_node_id.clone(),
+            key: config.key,
+            project_hash: config.project_hash,
+            media_hash: config.media_hash,
+            fence,
+            scheduler,
+            output_gate,
+            estimator,
+            validator,
+            action_receiver,
+            held: false,
+        })
+    }
+
+    fn enter_hold(&mut self, status: &Arc<Mutex<ShowClockIpcStatus>>) {
+        self.fence.enter_hold();
+        self.held = true;
+        self.output_gate.disarm();
+        if let Some(estimator) = self.estimator.as_mut() {
+            estimator.estimator_mut().enter_hold();
+        }
+        update_status(status, |current| {
+            current.state = ShowClockIpcPhase::Hold;
+            current.fence_state = self.fence.state().into();
+            current.show_clock_gate_armed = false;
+            current.output_armed = false;
+            current.last_action_status = Some("manual_hold".to_string());
+        });
+    }
+
+    fn rearm(
+        &mut self,
+        request: ShowClockReArmRequest,
+        status: &Arc<Mutex<ShowClockIpcStatus>>,
+    ) -> Result<(), String> {
+        let mut fence = self.fence;
+        fence
+            .rearm(ShowClockReArm {
+                operator_confirmed_primary_stopped: request.operator_confirmed_primary_stopped,
+                clock_generation: request.clock_generation,
+                fencing_generation: request.fencing_generation,
+            })
+            .map_err(|error| format!("ShowClock Manual Re-arm rejected: {error}"))?;
+        let project_hash = ShowClockHash(parse_fixed_hex::<32>(
+            &request.project_hash_hex,
+            "project hash",
+        )?);
+        let media_hash = ShowClockHash(parse_fixed_hex::<32>(
+            &request.media_hash_hex,
+            "media hash",
+        )?);
+        let context = ShowClockOutputContext::new(
+            request.project_generation,
+            request.lease_generation,
+            request.audio_generation,
+            request.recording_generation,
+            request.clock_generation,
+            request.fencing_generation,
+            project_hash,
+            media_hash,
+        )
+        .map_err(|error| format!("ShowClock re-arm output context rejected: {error}"))?;
+        let mut estimator = self
+            .estimator
+            .clone()
+            .ok_or_else(|| "ShowClock Manual Re-arm is available on Standby only".to_string())?;
+        estimator
+            .estimator_mut()
+            .rearm_from_fence(fence)
+            .map_err(|error| format!("ShowClock estimator re-arm rejected: {error}"))?;
+        let mut scheduler = self.scheduler.clone();
+        scheduler
+            .rebind_to_armed_fence(fence)
+            .map_err(|error| format!("ShowClock action generation re-arm rejected: {error}"))?;
+        let mut output_gate = self.output_gate.clone();
+        output_gate
+            .replace_context(context)
+            .map_err(|error| format!("ShowClock output context replacement rejected: {error}"))?;
+        // Re-arm proves the new generation and clears old actions. The gate
+        // remains disarmed until the separate local output ownership path is
+        // explicitly connected to a physical dispatcher.
+        output_gate.disarm();
+        let validator = ShowClockPeerValidator::new(
+            self.session_id.clone(),
+            self.peer_node_id.clone(),
+            project_hash,
+            media_hash,
+            request.clock_generation,
+            request.fencing_generation,
+            self.key,
+        )
+        .map_err(|error| format!("ShowClock re-arm validator rejected: {error}"))?;
+        let action_receiver = ShowClockActionReceiver::new(
+            self.session_id.clone(),
+            self.peer_node_id.clone(),
+            project_hash,
+            media_hash,
+            request.clock_generation,
+            request.fencing_generation,
+            self.key,
+        )
+        .map_err(|error| format!("ShowClock re-arm action receiver rejected: {error}"))?;
+
+        self.project_hash = project_hash;
+        self.media_hash = media_hash;
+        self.fence = fence;
+        self.scheduler = scheduler;
+        self.output_gate = output_gate;
+        self.estimator = Some(estimator);
+        self.validator = Some(validator);
+        self.action_receiver = Some(action_receiver);
+        self.held = false;
+        update_status(status, |current| {
+            current.state = ShowClockIpcPhase::Acquiring;
+            current.clock_generation = request.clock_generation;
+            current.fencing_generation = request.fencing_generation;
+            current.accepted_samples = 0;
+            current.last_sequence = 0;
+            current.offset_us = 0;
+            current.sample_age_us = None;
+            current.fence_state = self.fence.state().into();
+            current.show_clock_gate_armed = false;
+            current.output_armed = false;
+            current.scheduled_actions = 0;
+            current.last_action_status = Some("manual_rearm_waiting_for_lock".to_string());
+            current.last_error = None;
+        });
+        Ok(())
     }
 }
 
@@ -422,11 +825,18 @@ fn run_primary(
     transport: &ShowClockLanTransport,
     stop: &AtomicBool,
     status: &Arc<Mutex<ShowClockIpcStatus>>,
+    commands: &Receiver<ShowClockWorkerCommand>,
+    runtime: &mut ShowClockWorkerRuntime,
 ) -> Result<(), String> {
     let origin = Instant::now();
     let mut sequence = 1_u64;
     let mut next_send = origin;
     while !stop.load(Ordering::Acquire) {
+        drain_commands(config, transport, status, commands, runtime, origin)?;
+        if runtime.held {
+            thread::sleep(Duration::from_millis(10));
+            continue;
+        }
         let now = Instant::now();
         if now >= next_send {
             let elapsed_us = monotonic_elapsed_us(origin, now);
@@ -466,6 +876,12 @@ fn run_primary(
             });
             sequence = sequence.saturating_add(1);
             next_send = now + SAMPLE_INTERVAL;
+            pump_actions(
+                runtime,
+                status,
+                show_time_us,
+                ShowClockEstimatorState::Locked,
+            )?;
         } else {
             thread::sleep((next_send - now).min(Duration::from_millis(10)));
         }
@@ -478,32 +894,31 @@ fn run_standby(
     transport: &ShowClockLanTransport,
     stop: &AtomicBool,
     status: &Arc<Mutex<ShowClockIpcStatus>>,
+    commands: &Receiver<ShowClockWorkerCommand>,
+    runtime: &mut ShowClockWorkerRuntime,
 ) -> Result<(), String> {
-    let mut validator = ShowClockPeerValidator::new(
-        config.session_id.clone(),
-        config.peer_node_id.clone(),
-        config.project_hash,
-        config.media_hash,
-        config.clock_generation,
-        config.fencing_generation,
-        config.key,
-    )
-    .map_err(|error| format!("ShowClock standby validator initialization failed: {error}"))?;
-    let mut estimator = ShowClockPeerEstimator::new(
-        Default::default(),
-        config.clock_generation,
-        config.fencing_generation,
-    )
-    .map_err(|error| format!("ShowClock standby estimator initialization failed: {error}"))?;
     let origin = Instant::now();
     while !stop.load(Ordering::Acquire) {
+        drain_commands(config, transport, status, commands, runtime, origin)?;
         let received = match transport.receive(RECEIVE_POLL_INTERVAL) {
             Ok(message) => message,
             Err(ShowClockLanError::Timeout) => {
-                let estimate = estimator
+                let estimate = runtime
+                    .estimator
+                    .as_mut()
+                    .expect("standby estimator exists")
                     .estimator_mut()
                     .advance(monotonic_elapsed_us(origin, Instant::now()));
-                publish_estimate(status, &estimate, validator.last_sequence());
+                publish_estimate(
+                    status,
+                    &estimate,
+                    runtime
+                        .validator
+                        .as_ref()
+                        .expect("standby validator exists")
+                        .last_sequence(),
+                );
+                pump_actions(runtime, status, estimate.show_time_us, estimate.state)?;
                 continue;
             }
             Err(error) => return Err(format!("ShowClock standby receive failed: {error}")),
@@ -511,18 +926,229 @@ fn run_standby(
         match received {
             ShowClockLanMessage::Sample(sample) => {
                 let received_at_us = monotonic_elapsed_us(origin, Instant::now());
-                estimator
-                    .accept_authenticated_sample(&mut validator, &sample, received_at_us)
+                runtime
+                    .estimator
+                    .as_mut()
+                    .expect("standby estimator exists")
+                    .accept_authenticated_sample(
+                        runtime
+                            .validator
+                            .as_mut()
+                            .expect("standby validator exists"),
+                        &sample,
+                        received_at_us,
+                    )
                     .map_err(|error| format!("ShowClock standby sample rejected: {error}"))?;
-                let estimate = estimator.estimator_mut().advance(received_at_us);
-                publish_estimate(status, &estimate, validator.last_sequence());
-            }
-            ShowClockLanMessage::Action(_) => {
-                return Err(
-                    "ShowClock standby received an action before action runtime wiring".to_string(),
+                let estimate = runtime
+                    .estimator
+                    .as_mut()
+                    .expect("standby estimator exists")
+                    .estimator_mut()
+                    .advance(received_at_us);
+                publish_estimate(
+                    status,
+                    &estimate,
+                    runtime
+                        .validator
+                        .as_ref()
+                        .expect("standby validator exists")
+                        .last_sequence(),
                 );
+                pump_actions(runtime, status, estimate.show_time_us, estimate.state)?;
+            }
+            ShowClockLanMessage::Action(action) => {
+                let admission = runtime
+                    .action_receiver
+                    .as_mut()
+                    .expect("standby action receiver exists")
+                    .admit(&action)
+                    .map_err(|error| format!("ShowClock standby action rejected: {error}"))?;
+                let action_id = hex_string(&action.body.action_id);
+                update_status(status, |current| {
+                    current.last_action_sequence = action.body.sequence;
+                    current.last_action_id = Some(action_id.clone());
+                    current.last_action_status = Some(
+                        match admission {
+                            ShowClockActionAdmission::Accepted => "authenticated",
+                            ShowClockActionAdmission::Duplicate => "duplicate",
+                        }
+                        .to_string(),
+                    );
+                    current.accepted_actions = runtime
+                        .action_receiver
+                        .as_ref()
+                        .expect("standby action receiver exists")
+                        .accepted_action_count()
+                        as u32;
+                });
+                if admission == ShowClockActionAdmission::Accepted {
+                    let received_at_us = monotonic_elapsed_us(origin, Instant::now());
+                    let estimate = runtime
+                        .estimator
+                        .as_mut()
+                        .expect("standby estimator exists")
+                        .estimator_mut()
+                        .advance(received_at_us);
+                    runtime
+                        .scheduler
+                        .schedule(action.body, estimate.show_time_us)
+                        .map_err(|error| {
+                            format!("ShowClock action scheduling rejected: {error}")
+                        })?;
+                    update_status(status, |current| {
+                        current.scheduled_actions = runtime.scheduler.len() as u32;
+                        current.last_action_status =
+                            Some("authenticated_and_scheduled".to_string());
+                    });
+                    pump_actions(runtime, status, estimate.show_time_us, estimate.state)?;
+                }
             }
         }
+    }
+    Ok(())
+}
+
+fn drain_commands(
+    config: &ShowClockConfig,
+    transport: &ShowClockLanTransport,
+    status: &Arc<Mutex<ShowClockIpcStatus>>,
+    commands: &Receiver<ShowClockWorkerCommand>,
+    runtime: &mut ShowClockWorkerRuntime,
+    origin: Instant,
+) -> Result<(), String> {
+    while let Ok(command) = commands.try_recv() {
+        match command {
+            ShowClockWorkerCommand::ScheduleAction(request, reply) => {
+                let result = if config.role == ShowClockIpcRole::Primary {
+                    schedule_primary_action(config, transport, runtime, status, origin, request)
+                } else {
+                    Err("ShowClock actions must be scheduled by Primary".to_string())
+                };
+                let _ = reply.send(result);
+            }
+            ShowClockWorkerCommand::EnterHold(reply) => {
+                runtime.enter_hold(status);
+                let _ = reply.send(Ok(()));
+            }
+            ShowClockWorkerCommand::ReArm(request, reply) => {
+                let result = if config.role == ShowClockIpcRole::Standby {
+                    runtime.rearm(request, status)
+                } else {
+                    Err("ShowClock Manual Re-arm is available on Standby only".to_string())
+                };
+                let _ = reply.send(result);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn schedule_primary_action(
+    config: &ShowClockConfig,
+    transport: &ShowClockLanTransport,
+    runtime: &mut ShowClockWorkerRuntime,
+    status: &Arc<Mutex<ShowClockIpcStatus>>,
+    origin: Instant,
+    request: ShowClockActionRequest,
+) -> Result<(), String> {
+    if runtime.held {
+        return Err("ShowClock primary is in Manual Hold".to_string());
+    }
+    let action = ShowClockAction {
+        schema_version: SHOW_CLOCK_SCHEMA_VERSION,
+        protocol_version: SHOW_CLOCK_PROTOCOL_VERSION,
+        session_id: config.session_id.clone(),
+        sender: config.node_id.clone(),
+        action_id: parse_fixed_hex::<16>(&request.action_id_hex, "action id")?,
+        sequence: request.sequence,
+        clock_generation: config.clock_generation,
+        fencing_generation: config.fencing_generation,
+        target_show_time_us: request.target_show_time_us,
+        action: request.action,
+        late_policy: request.late_policy,
+        project_hash: config.project_hash,
+        media_hash: config.media_hash,
+    };
+    let now = config
+        .initial_show_time_us
+        .saturating_add(monotonic_elapsed_us(origin, Instant::now()))
+        .max(1);
+    runtime
+        .scheduler
+        .schedule(action.clone(), now)
+        .map_err(|error| format!("ShowClock action scheduling rejected: {error}"))?;
+    let signed = AuthenticatedShowClockAction::sign(action.clone(), &config.key)
+        .map_err(|error| format!("ShowClock action signing failed: {error}"))?;
+    if let Err(error) = transport.send_action(&signed) {
+        update_status(status, |current| {
+            current.scheduled_actions = runtime.scheduler.len() as u32;
+            current.last_action_sequence = action.sequence;
+            current.last_action_id = Some(hex_string(&action.action_id));
+            current.last_action_status = Some("send_failed_action_retained_locally".to_string());
+            current.last_error = Some(error.to_string());
+        });
+        return Err(format!("ShowClock primary action send failed: {error}"));
+    }
+    update_status(status, |current| {
+        current.scheduled_actions = runtime.scheduler.len() as u32;
+        current.last_action_sequence = action.sequence;
+        current.last_action_id = Some(hex_string(&action.action_id));
+        current.last_action_status = Some("sent_and_scheduled".to_string());
+        current.last_error = None;
+    });
+    Ok(())
+}
+
+fn pump_actions(
+    runtime: &mut ShowClockWorkerRuntime,
+    status: &Arc<Mutex<ShowClockIpcStatus>>,
+    current_show_time_us: u64,
+    state: ShowClockEstimatorState,
+) -> Result<(), String> {
+    if runtime.scheduler.is_empty() {
+        return Ok(());
+    }
+    let dispatch = if state == ShowClockEstimatorState::Locked {
+        match runtime.scheduler.poll_authorized(
+            current_show_time_us,
+            state,
+            &runtime.output_gate,
+            &runtime.owner,
+            runtime.output_gate.context(),
+        ) {
+            Ok(dispatch) => dispatch,
+            Err(protocol::show_clock::ShowClockValidationError::OutputNotArmed) => {
+                update_status(status, |current| {
+                    current.scheduled_actions = runtime.scheduler.len() as u32;
+                    current.show_clock_gate_armed = runtime.output_gate.is_armed();
+                    current.last_action_status = Some("blocked_output_gate_disarmed".to_string());
+                });
+                return Ok(());
+            }
+            Err(error) => return Err(format!("ShowClock output authorization failed: {error}")),
+        }
+    } else {
+        runtime.scheduler.poll(current_show_time_us, state)
+    };
+    update_status(status, |current| {
+        current.scheduled_actions = runtime.scheduler.len() as u32;
+        if dispatch.is_some() {
+            current.last_action_status = Some(
+                match &dispatch {
+                    Some(ShowClockActionDispatch::Held { .. }) => "held_until_locked",
+                    Some(ShowClockActionDispatch::Dropped { .. }) => "dropped_late_action",
+                    Some(ShowClockActionDispatch::Execute(_)) => "execute_authorized",
+                    None => "no_dispatch",
+                }
+                .to_string(),
+            );
+        }
+    });
+    if matches!(dispatch, Some(ShowClockActionDispatch::Execute(_))) {
+        return Err(
+            "ShowClock action reached an authorized gate but no physical output dispatcher is wired"
+                .to_string(),
+        );
     }
     Ok(())
 }
@@ -606,6 +1232,10 @@ mod tests {
             key_hex: KEY.to_string(),
             clock_generation: 1,
             fencing_generation: 1,
+            project_generation: 1,
+            lease_generation: 1,
+            audio_generation: 1,
+            recording_generation: 1,
             bpm_milli: 120_000,
             initial_show_time_us: 1_000_000,
         }
@@ -717,5 +1347,91 @@ mod tests {
         assert!(!status.running);
         assert_eq!(status.state, ShowClockIpcPhase::Stopped);
         assert!(!status.output_armed);
+    }
+
+    #[test]
+    fn authenticated_action_is_scheduled_and_manual_rearm_clears_old_generation() {
+        let primary_probe = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let standby_probe = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let primary_address = primary_probe.local_addr().unwrap();
+        let standby_address = standby_probe.local_addr().unwrap();
+        drop(primary_probe);
+        drop(standby_probe);
+
+        let primary = ShowClockIpcState::default();
+        let standby = ShowClockIpcState::default();
+        primary
+            .start(request(
+                ShowClockIpcRole::Primary,
+                primary_address.to_string(),
+                standby_address.to_string(),
+                "node-primary",
+                "node-standby",
+            ))
+            .unwrap();
+        standby
+            .start(request(
+                ShowClockIpcRole::Standby,
+                standby_address.to_string(),
+                primary_address.to_string(),
+                "node-standby",
+                "node-primary",
+            ))
+            .unwrap();
+
+        for _ in 0..30 {
+            if standby.status().unwrap().state == ShowClockIpcPhase::Locked {
+                break;
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+        primary
+            .schedule_action(ShowClockActionRequest {
+                action_id_hex: "01000000000000000000000000000000".to_string(),
+                sequence: 1,
+                target_show_time_us: 1_500_000,
+                action: ShowClockActionKind::Go,
+                late_policy: ShowClockLatePolicy::Hold,
+            })
+            .unwrap();
+        for _ in 0..20 {
+            if standby.status().unwrap().accepted_actions >= 1 {
+                break;
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
+        let action_status = standby.status().unwrap();
+        assert_eq!(action_status.accepted_actions, 1);
+        assert_eq!(action_status.scheduled_actions, 1);
+        assert_eq!(
+            action_status.last_action_status.as_deref(),
+            Some("blocked_output_gate_disarmed")
+        );
+
+        primary.stop().unwrap();
+        standby.enter_hold().unwrap();
+        let held = standby.status().unwrap();
+        assert_eq!(held.state, ShowClockIpcPhase::Hold);
+        assert_eq!(held.fence_state, ShowClockIpcFenceState::Hold);
+        standby
+            .rearm(ShowClockReArmRequest {
+                operator_confirmed_primary_stopped: true,
+                clock_generation: 1,
+                fencing_generation: 2,
+                project_generation: 1,
+                lease_generation: 1,
+                audio_generation: 1,
+                recording_generation: 1,
+                project_hash_hex: HASH.to_string(),
+                media_hash_hex: MEDIA.to_string(),
+            })
+            .unwrap();
+        let rearmed = standby.status().unwrap();
+        assert_eq!(rearmed.state, ShowClockIpcPhase::Acquiring);
+        assert_eq!(rearmed.fence_state, ShowClockIpcFenceState::Armed);
+        assert_eq!(rearmed.fencing_generation, 2);
+        assert_eq!(rearmed.scheduled_actions, 0);
+        assert!(!rearmed.show_clock_gate_armed);
+        standby.stop().unwrap();
     }
 }

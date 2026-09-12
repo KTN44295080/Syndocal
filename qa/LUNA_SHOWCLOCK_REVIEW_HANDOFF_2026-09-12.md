@@ -245,25 +245,31 @@ restoration, witness/interlock, and venue acceptance remain open.
 ### ShowClock Tauri IPC/UI and two-process checkpoint
 
 This checkpoint adds `app/src-tauri/src/show_clock_ipc.rs`, the typed
-Tauri commands `get_show_clock_status`, `start_show_clock`, and
-`stop_show_clock`, and a Setup/IO `ShowClock LAN` panel. The process-owned
-worker has explicit Primary/Standby roles, signed 250 ms samples, exact-peer
-UDP pairing, authentication-before-estimation, clean joined shutdown, stale
-transition after Primary loss, and a process-local session-incarnation fence.
-The UI keeps only non-secret pairing settings; session IDs and pairing keys are
-not persisted, so restart requires a fresh paired session/key. The output
-status is always fenced (`output_armed=false`) in this checkpoint.
+Tauri commands `get_show_clock_status`, `start_show_clock`, `stop_show_clock`,
+`schedule_show_clock_action`, `hold_show_clock`, and `rearm_show_clock`, and a
+Setup/IO `ShowClock LAN` panel. The process-owned worker has explicit
+Primary/Standby roles, signed 250 ms samples/actions, exact-peer UDP pairing,
+authentication-before-estimation, a fixed-capacity generation-bound action
+queue, clean joined shutdown, stale transition after Primary loss, and a
+process-local session-incarnation fence. The UI keeps only non-secret pairing
+settings; session IDs and pairing keys are not persisted, so restart requires a
+fresh paired session/key. Manual Hold stops the Primary sample loop and
+disarms the gate; operator-confirmed Re-arm advances fencing generation and
+clears old actions. The output status is always fenced (`output_armed=false`)
+in this checkpoint.
 
-Evidence passing on the current source: Tauri worker focused tests `2/2`;
-two-process integration test `2/2`; TypeScript; Vite production build;
-frontend invoke/routing checks (`460` commands); native admission inventory
-(`519` commands, `18` negative fixtures); output-control contract; the
+Evidence passing on the current source: Tauri worker/action/fence focused tests
+`3/3`; two-process integration test `2/2`; TypeScript; Vite production build;
+frontend invoke/routing checks (`463` commands); native admission inventory
+(`522` commands, `18` negative fixtures); output-control contract; the
 specified MSVC release build; and exact executable process smoke. QA/ledger
 updates are included in this checkpoint before commit and push.
 
-This does not close action IPC, Manual Hold/Re-arm UI or authority wiring,
-output-gate arm, physical output, real wired two-machine partition/rejoin,
-replay restoration after crash/restart, witness/interlock, or venue acceptance.
+This closes action IPC, Manual Hold/Re-arm UI, and generation-bound scheduler
+wiring at the process boundary. It does not close output-gate arm and local
+output-ownership authority wiring, physical output, real wired two-machine
+partition/rejoin, replay restoration after crash/restart, witness/interlock, or
+venue acceptance.
 
 ### 4. MIDI/OSC frontend authority and lifecycle
 
@@ -338,11 +344,12 @@ at the next applicable checkpoint without closing the full INPUT requirement.
 4. Address engine-clock, DMX-timeout and frontend authority findings in bounded
    tranches with the affected tests/native gate. Continue remaining repository
    review before claiming the user's review/refactoring phase complete.
-5. Then continue ShowClock per master G9: complete action scheduling,
-   generation coupling, Manual Hold/Re-arm authority, output ownership and
-   native UI integration. Freeze concrete thresholds, pairing/key/restart
-   policy, ports, action horizon/capacity/late behavior, then run the distinct
-   two-machine fault/soak and physical-output gates.
+5. Then continue ShowClock per master G9: connect the generation-bound action
+   scheduler to local output ownership and a physical dispatcher, complete the
+   native UI interaction matrix, and run the distinct two-machine fault/soak
+   and physical-output gates. The software thresholds, pairing/key/restart
+   policy, ports, action horizon/capacity/late behavior, and Manual Hold/Re-arm
+   contract are now frozen and tested.
 6. Two-process loopback is distinct from two-machine wired partition/rejoin
    and physical output. Follow Phase 5 audio/recording/live-source ownership
    prerequisites and do not infer hardware, venue, publication or total product

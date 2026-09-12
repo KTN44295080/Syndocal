@@ -61,9 +61,9 @@ const KEYBOARD_SHORTCUT_SOURCE_MANIFEST: &str =
 const KEYBOARD_SHORTCUT_SOURCE_MANIFEST_SCHEMA_VERSION: u16 = 1;
 const KEYBOARD_APP_SHORTCUT_SOURCE_COUNT: usize = 30;
 const KEYBOARD_PROJECT_FILE_SHORTCUT_SOURCE_COUNT: usize = 3;
-const FROZEN_TAURI_ROUTE_ADMISSION_COUNT: usize = 519;
+const FROZEN_TAURI_ROUTE_ADMISSION_COUNT: usize = 522;
 const FROZEN_TAURI_ROUTE_ADMISSION_SHA256: &str =
-    "bf6ce87083bb277f6ac8e2f3d6f5e8d08e5219d90e87395ec2bfeee732f3361e";
+    "8517c1b016c3bf5f3996b8b1c0115329e93bcac248469f5d5710aad87b6c8c6c";
 /// The command source is parsed and validated exactly once.  Local discovery
 /// calls only clone this immutable, validated value; they never parse source
 /// text or make an external request on the invocation path.
@@ -419,6 +419,7 @@ fn is_tauri_runtime_mutation(command: &str) -> bool {
             | "finalize_prepared_media_asset_relink"
             | "finalize_prepared_media_assets"
             | "force_transfer_output_lease_v2"
+            | "hold_show_clock"
             | "import_gdtf"
             | "jump_video_cue_point"
             | "jump_video_cue_point_relative"
@@ -453,6 +454,7 @@ fn is_tauri_runtime_mutation(command: &str) -> bool {
             | "relink_media_asset"
             | "relinquish_output_lease_v2"
             | "renew_output_lease_v2"
+            | "rearm_show_clock"
             | "request_dj_link_operator_return_to_dj_control"
             | "reset_engine_telemetry"
             | "reselect_asio_output_profile"
@@ -470,6 +472,7 @@ fn is_tauri_runtime_mutation(command: &str) -> bool {
             | "send_dmx_routes_test_frame"
             | "send_dmx_test_frame"
             | "send_midi_feedback"
+            | "schedule_show_clock_action"
             | "send_usb_rdm_request"
             | "set_asio_output_solo"
             | "set_asio_output_test"
@@ -2292,11 +2295,11 @@ mod tests {
             counts[&TauriRouteAdmissionClass::BackendAuthoritativeProjectMutation],
             31
         );
-        assert_eq!(counts[&TauriRouteAdmissionClass::ReadOnly], 97);
+        assert_eq!(counts[&TauriRouteAdmissionClass::ReadOnly], 98);
         assert_eq!(counts[&TauriRouteAdmissionClass::ProjectReplacement], 8);
         assert_eq!(counts[&TauriRouteAdmissionClass::ProjectHistory], 3);
         assert_eq!(counts[&TauriRouteAdmissionClass::LocalPhysicalMutation], 6);
-        assert_eq!(counts[&TauriRouteAdmissionClass::RuntimeMutation], 157);
+        assert_eq!(counts[&TauriRouteAdmissionClass::RuntimeMutation], 162);
         assert_eq!(counts[&TauriRouteAdmissionClass::FileExportMutation], 20);
         assert_eq!(counts[&TauriRouteAdmissionClass::SafetyMutation], 1);
         assert_eq!(counts[&TauriRouteAdmissionClass::RecoveryMaintenance], 28);
@@ -2363,7 +2366,7 @@ mod tests {
             + OSC_INPUT_EVENT_COUNT
             + DMX_INPUT_PROTOCOL_COUNT
             + DMX_INPUT_EVENT_COUNT;
-        const FRONTEND_INVOKE_COUNT: usize = 460;
+        const FRONTEND_INVOKE_COUNT: usize = 463;
         assert_eq!(MIDI_OSC_DMX_OPERATION_COUNT, 206);
         assert_eq!(
             registry.operations.len(),
@@ -2373,7 +2376,7 @@ mod tests {
                 + MIDI_OSC_DMX_OPERATION_COUNT
                 + FRONTEND_INVOKE_COUNT
         );
-        assert_eq!(registry.operations.len(), 1575);
+        assert_eq!(registry.operations.len(), 1587);
         verify_registry_exact_set(&names, &registry).unwrap();
         let r0 = registry
             .operations
@@ -2734,15 +2737,15 @@ mod tests {
         const ENGINE_COUNT: usize = 280;
         const REMOTE_COUNT: usize = 116;
         const MIDI_OSC_DMX_COUNT: usize = 206;
-        const FRONTEND_COUNT: usize = 460;
+        const FRONTEND_COUNT: usize = 463;
         const LEGACY_SOURCE_TOTAL: usize =
             TAURI_COUNT + ENGINE_COUNT + REMOTE_COUNT + MIDI_OSC_DMX_COUNT + FRONTEND_COUNT;
         const KEYBOARD_APP_COUNT: usize = 30;
         const KEYBOARD_PROJECT_FILE_COUNT: usize = 3;
         const SOURCE_TOTAL: usize =
             LEGACY_SOURCE_TOTAL + KEYBOARD_APP_COUNT + KEYBOARD_PROJECT_FILE_COUNT;
-        assert_eq!(LEGACY_SOURCE_TOTAL, 1575);
-        assert_eq!(SOURCE_TOTAL, 1608);
+        assert_eq!(LEGACY_SOURCE_TOTAL, 1587);
+        assert_eq!(SOURCE_TOTAL, 1620);
         assert_eq!(canonical.source_inventory.len(), SOURCE_TOTAL);
         assert_eq!(canonical.canonical_operations.len(), 47);
 
@@ -3104,7 +3107,7 @@ mod tests {
         // The missing-publication recovery route is local maintenance, not a
         // separately reviewed canonical operation.
         // Broker lifecycle adds three local native sources; its frontend sources are aliases.
-        assert_eq!(unclassified.len(), 1099);
+        assert_eq!(unclassified.len(), 1105);
         assert_eq!(support_phases.len(), 0);
         assert_eq!(
             direct.len()
@@ -3822,11 +3825,11 @@ mod tests {
     fn legacy_v1_registry_json_and_count_remain_inventory_honest() {
         let legacy = registry().unwrap();
         // Includes both the native and frontend missing-publication resolver.
-        assert_eq!(legacy.operations.len(), 1575);
+        assert_eq!(legacy.operations.len(), 1587);
         let encoded = serde_json::to_value(&legacy).unwrap();
         assert_eq!(encoded["schema"]["version"], CONTROL_PLANE_SCHEMA_VERSION);
         let operations = encoded["operations"].as_array().unwrap();
-        assert_eq!(operations.len(), 1575);
+        assert_eq!(operations.len(), 1587);
         assert!(operations.iter().all(|operation| {
             operation["source_family"] != "keyboard_app"
                 && operation["source_family"] != "keyboard_project_file"

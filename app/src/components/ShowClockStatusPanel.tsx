@@ -4,6 +4,9 @@ import type {
   ShowClockIpcPhase,
   ShowClockIpcRole,
   ShowClockIpcStatus,
+  ShowClockActionKind,
+  ShowClockLatePolicy,
+  ShowClockReArmRequest,
   ShowClockStartRequest,
 } from "../types";
 
@@ -27,6 +30,13 @@ const emptyStatus: ShowClockIpcStatus = {
   offset_us: 0,
   sample_age_us: null,
   output_armed: false,
+  show_clock_gate_armed: false,
+  fence_state: "DISARMED",
+  accepted_actions: 0,
+  scheduled_actions: 0,
+  last_action_sequence: 0,
+  last_action_id: null,
+  last_action_status: null,
   last_error: null,
 };
 
@@ -55,6 +65,12 @@ function formatAge(age: number | null): string {
   return age === null ? "—" : `${Math.round(age / 1000)} ms`;
 }
 
+function newActionId(): string {
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
 export function ShowClockStatusPanel(props: ShowClockStatusPanelProps) {
   const [status, setStatus] = createSignal(emptyStatus);
   const [role, setRole] = createSignal<ShowClockIpcRole>(stored(roleKey, "standby") === "primary" ? "primary" : "standby");
@@ -68,6 +84,13 @@ export function ShowClockStatusPanel(props: ShowClockStatusPanelProps) {
   const [projectHash, setProjectHash] = createSignal(stored(projectKey, ""));
   const [mediaHash, setMediaHash] = createSignal(stored(mediaKey, ""));
   const [keyHex, setKeyHex] = createSignal("");
+  const [actionSequence, setActionSequence] = createSignal(1);
+  const [targetShowTime, setTargetShowTime] = createSignal(1500000);
+  const [actionKind, setActionKind] = createSignal<ShowClockActionKind>("go");
+  const [latePolicy, setLatePolicy] = createSignal<ShowClockLatePolicy>("hold");
+  const [rearmClockGeneration, setRearmClockGeneration] = createSignal(1);
+  const [rearmFencingGeneration, setRearmFencingGeneration] = createSignal(2);
+  const [confirmPrimaryStopped, setConfirmPrimaryStopped] = createSignal(false);
   const [busy, setBusy] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
   let disposed = false;
@@ -132,11 +155,83 @@ export function ShowClockStatusPanel(props: ShowClockStatusPanelProps) {
         key_hex: keyHex().trim(),
         clock_generation: 1,
         fencing_generation: 1,
+        project_generation: 1,
+        lease_generation: 1,
+        audio_generation: 1,
+        recording_generation: 1,
         bpm_milli: 120000,
         initial_show_time_us: 1000000,
       };
       setStatus(await props.invokeCommand<ShowClockIpcStatus>("start_show_clock", { request }));
       setKeyHex("");
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setBusy(false);
+      void poll();
+    }
+  };
+
+  const scheduleAction = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      if (role() !== "primary") throw new Error("Only Primary may schedule ShowClock actions.");
+      if (!Number.isSafeInteger(actionSequence()) || actionSequence() <= 0 || !Number.isSafeInteger(targetShowTime()) || targetShowTime() <= 0) {
+        throw new Error("Action sequence and target show time must be positive integers.");
+      }
+      setStatus(await props.invokeCommand<ShowClockIpcStatus>("schedule_show_clock_action", {
+        request: {
+          action_id_hex: newActionId(),
+          sequence: actionSequence(),
+          target_show_time_us: targetShowTime(),
+          action: actionKind(),
+          late_policy: latePolicy(),
+        },
+      }));
+      setActionSequence((value) => value + 1);
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setBusy(false);
+      void poll();
+    }
+  };
+
+  const hold = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      setStatus(await props.invokeCommand<ShowClockIpcStatus>("hold_show_clock"));
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setBusy(false);
+      void poll();
+    }
+  };
+
+  const rearm = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      if (!confirmPrimaryStopped()) throw new Error("Confirm that the old Primary is stopped before Re-arm.");
+      if (!/^[0-9a-fA-F]{64}$/.test(projectHash()) || !/^[0-9a-fA-F]{64}$/.test(mediaHash())) {
+        throw new Error("Project and media hashes must each be 64 hexadecimal characters.");
+      }
+      const request: ShowClockReArmRequest = {
+        operator_confirmed_primary_stopped: true,
+        clock_generation: rearmClockGeneration(),
+        fencing_generation: rearmFencingGeneration(),
+        project_generation: 1,
+        lease_generation: 1,
+        audio_generation: 1,
+        recording_generation: 1,
+        project_hash_hex: projectHash().trim(),
+        media_hash_hex: mediaHash().trim(),
+      };
+      setStatus(await props.invokeCommand<ShowClockIpcStatus>("rearm_show_clock", { request }));
+      setConfirmPrimaryStopped(false);
     } catch (reason) {
       setError(String(reason));
     } finally {
@@ -175,6 +270,8 @@ export function ShowClockStatusPanel(props: ShowClockStatusPanelProps) {
         <div><dt>Sequence</dt><dd>{status().last_sequence}</dd></div>
         <div><dt>Peer</dt><dd>{status().peer_address ?? "—"}</dd></div>
         <div><dt>Output</dt><dd>{status().output_armed ? "Armed" : "Fenced"}</dd></div>
+        <div><dt>Fence</dt><dd>{status().fence_state}</dd></div>
+        <div><dt>Actions</dt><dd>{status().scheduled_actions} queued / {status().accepted_actions} accepted</dd></div>
       </dl>
       <details class="advancedOutputControls">
         <summary>Pairing and runtime settings</summary>
@@ -199,8 +296,31 @@ export function ShowClockStatusPanel(props: ShowClockStatusPanelProps) {
       <div class="buttonRow">
         <button class="primary" onClick={() => void start()} disabled={!props.backendAvailable || status().running || busy()}>Start ShowClock</button>
         <button onClick={() => void stop()} disabled={!props.backendAvailable || !status().running || busy()}>Stop</button>
+        <button onClick={() => void hold()} disabled={!props.backendAvailable || !status().running || busy()}>Manual Hold</button>
       </div>
+      <details class="advancedOutputControls">
+        <summary>Action scheduling and Re-arm</summary>
+        <div class="showClockForm">
+          <div class="split">
+            <label>Action<select value={actionKind()} disabled={busy()} onChange={(event) => setActionKind(event.currentTarget.value as ShowClockActionKind)}><option value="go">Go</option><option value="stop">Stop</option><option value="back">Back</option><option value="release">Release</option><option value="blackout">Blackout</option><option value="take">Take</option><option value="clip_launch">Clip launch</option><option value="transition">Transition</option><option value="timeline_jump">Timeline jump</option></select></label>
+            <label>Late policy<select value={latePolicy()} disabled={busy()} onChange={(event) => setLatePolicy(event.currentTarget.value as ShowClockLatePolicy)}><option value="hold">Hold</option><option value="execute_immediately">Execute immediately</option><option value="drop">Drop</option></select></label>
+          </div>
+          <div class="split">
+            <label>Action sequence<input type="number" min="1" value={actionSequence()} disabled={busy()} onInput={(event) => setActionSequence(Number(event.currentTarget.value))} /></label>
+            <label>Target show time (µs)<input type="number" min="1" value={targetShowTime()} disabled={busy()} onInput={(event) => setTargetShowTime(Number(event.currentTarget.value))} /></label>
+          </div>
+          <button onClick={() => void scheduleAction()} disabled={!props.backendAvailable || !status().running || status().role !== "primary" || busy()}>Send authenticated action</button>
+          <div class="split">
+            <label>Re-arm clock generation<input type="number" min="1" value={rearmClockGeneration()} disabled={busy()} onInput={(event) => setRearmClockGeneration(Number(event.currentTarget.value))} /></label>
+            <label>Re-arm fencing generation<input type="number" min="2" value={rearmFencingGeneration()} disabled={busy()} onInput={(event) => setRearmFencingGeneration(Number(event.currentTarget.value))} /></label>
+          </div>
+          <label class="checkboxLabel"><input type="checkbox" checked={confirmPrimaryStopped()} disabled={busy()} onChange={(event) => setConfirmPrimaryStopped(event.currentTarget.checked)} /> I confirm the old Primary is stopped</label>
+          <button onClick={() => void rearm()} disabled={!props.backendAvailable || !status().running || status().role !== "standby" || busy()}>Manual Re-arm</button>
+          <p class="textPretty standbyIntro">Re-arm advances the fencing generation, clears prior queued actions, and keeps the ShowClock output gate disarmed until local output ownership and a physical dispatcher are explicitly connected.</p>
+        </div>
+      </details>
       <p class="showClockEndpoint tabularNums">Local {status().local_address ?? "—"} · Session {status().session_id ?? sessionId()}</p>
+      <Show when={status().last_action_status}>{(message) => <p class="showClockEndpoint">Action: {message()}</p>}</Show>
       <Show when={error() ?? status().last_error}>{(message) => <p class="fieldError textPretty" role="alert" aria-live="polite">{message()}</p>}</Show>
     </section>
   );
