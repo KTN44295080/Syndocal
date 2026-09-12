@@ -1617,8 +1617,8 @@ blocked every job, so no CI/platform claim is derived from that run.
 ## 6. Dependency-ordered remaining implementation
 
 `qa/SYNDOCAL_COMPLETION_LEDGER.json` is the machine-readable completion index for
-sections 6 through 9. It currently records 48 `Open` current checkboxes, 8
-`Deferred` rows, and 2 `Complete` current checkboxes: the two explicit platform
+sections 6 through 9. It currently records 47 `Open` current checkboxes, 8
+`Deferred` rows, and 3 `Complete` current checkboxes: the two explicit platform
 deferrals plus the six frozen distribution rows remain deferred. Each indexed
 row carries one stable trailing `completion-ledger` marker whose `Open`,
 `Deferred`, or `Complete` kind is checked against the ledger. The index is
@@ -1629,7 +1629,7 @@ replacing the master roadmap's Q1-Q5 contract.
 
 - [x] Advance and verify all product metadata as `1.2.0-alpha.1`.
 - [x] Replace stale resume instructions and percentages with current AI3 truth.
-- [ ] Build Q1-Q4 coverage from every phase below; assign Supported/External/etc. <!-- completion-ledger: Open: COMP-Q1-Q4-001 -->
+- [x] Build Q1-Q4 coverage from every phase below; assign Supported/External/etc. <!-- completion-ledger: Complete: COMP-Q1-Q4-001 -->
 - [x] Create the structured W0 inventory and enforce the W1 no-new-warning ratchet.
 - **Deferred outside the Windows target:** macOS dev/release warning enforcement. <!-- completion-ledger: Deferred: WARN-MACOS-001 -->
   The global inventory may remain 11 enforced / 2 pending without blocking the

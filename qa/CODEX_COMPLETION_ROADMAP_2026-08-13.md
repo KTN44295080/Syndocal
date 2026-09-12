@@ -1815,7 +1815,7 @@ stable markers on current sections 6-9 rows, required ownership/dependency/
 non-claim/evidence fields, and tracked evidence paths. It does not replace this
 master Q1-Q5 contract, complete an unchecked row, or convert native, hardware,
 external, soak, or distribution acceptance into a source-only claim.
-At this checkpoint it reports exactly 48 `Open`, 8 `Deferred`, and 2 `Complete`
+At this checkpoint it reports exactly 47 `Open`, 8 `Deferred`, and 3 `Complete`
 row; the six section-9 distribution rows remain frozen/out of scope until
 distribution becomes a product goal.
 
@@ -1939,14 +1939,14 @@ unchecked row.
     "completion_ledger": "qa/SYNDOCAL_COMPLETION_LEDGER.json"
   },
   "nonclaims": {
-    "overall": "This ledger mirrors traceability state only. It does not claim any domain, native build, hardware device, external client, soak, distribution, or release acceptance, and it does not close COMP-Q1-Q4-001.",
+    "overall": "This ledger mirrors traceability state only. It does not claim any domain, native build, hardware device, external client, soak, distribution, or release acceptance; closing COMP-Q1-Q4-001 closes only the coverage-infrastructure marker.",
     "flow_reference": "Referencing a completion-ledger marker from a Q1 row records traceability only; Open/Deferred references are never closure, completion, or acceptance, and a Complete marker does not make its Q1 row accepted by this ledger.",
     "historical_evidence": "Historical evidence rows record past tranche proof only; they cannot be used or cited as current-source acceptance."
   },
   "expected_counts": {
     "q0_domains": 29,
     "q0_source_contracts": 10,
-    "flow_markers": { "Open": 48, "Deferred": 8, "Complete": 2 },
+    "flow_markers": { "Open": 47, "Deferred": 8, "Complete": 3 },
     "q1_rows": 32,
     "q2_decisions": 12,
     "q3_risks": 14,
@@ -2013,10 +2013,10 @@ unchecked row.
       "automated_proof": { "status": "passing", "command": "pnpm --dir app run check:q1-q4-ledger && pnpm --dir app run check:q1-q4-ledger:self-test", "expected_count": 46 },
       "native_proof": { "status": "not-applicable", "artifact_hash": null, "raw_evidence_paths": [], "na_reason": "Documentation and Node-script coverage infrastructure involves no native UI or runtime surface." },
       "hardware_external_proof": { "status": "not-applicable", "device_topology_duration": "", "artifact_hash": null, "raw_evidence_paths": [], "na_reason": "No physical device, external client, or venue is involved in this documentation/tooling row." },
-      "status": "In progress",
-      "commit": "",
+      "status": "Reviewed",
+      "commit": "f064cb03bfd942c5e17e2643a7ae967163e3c868",
       "residual_risk": { "classification": "non-blocking", "disposition": "Coverage mirror is additive; stale future rows are caught by the fail-closed checker." },
-      "nonclaim": "This row does not claim COMP-Q1-Q4-001 is closed, nor that any mirrored domain is implemented or accepted.",
+      "nonclaim": "This row does not claim any mirrored product domain is implemented or accepted; its Complete marker covers only traceability infrastructure.",
       "decision_ids": [],
       "risk_ids": [],
       "evidence_ids": ["EV-Q1Q4-COVERAGE-INFRA-2026-08-25"]

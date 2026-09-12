@@ -381,8 +381,8 @@ export function validateQ1Q4Ledger({
     findings.add("STALE_EXPECTED_COUNTS", "expected_counts.flow_markers must equal the live completion-ledger Open/Deferred/Complete counts.");
   }
   const infraItem = completionById.get("COMP-Q1-Q4-001");
-  if (!infraItem || infraItem.status !== "Open") {
-    findings.add("COMPLETION_INFRA_ROW_CLOSED", "COMP-Q1-Q4-001 must remain Open while this coverage infrastructure tranche stands.");
+  if (!infraItem || infraItem.status !== "Complete") {
+    findings.add("COMPLETION_INFRA_ROW_CLOSED", "COMP-Q1-Q4-001 must be Complete after the Q1-Q4 coverage infrastructure is built.");
   }
 
   const q1Rows = Array.isArray(ledger.q1_requirements) ? ledger.q1_requirements : [];

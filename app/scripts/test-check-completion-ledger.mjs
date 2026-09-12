@@ -20,7 +20,7 @@ const fixtureOptions = {
 const result = validateCompletionLedger({ ledger, sourceDocument, repoRoot: workspaceRoot });
 assert.equal(result.itemCount, 58);
 assert.deepEqual(result.sections, ["6", "7", "8", "9"]);
-assert.deepEqual(result.statusCounts, { Open: 48, Deferred: 8, Complete: 2 });
+assert.deepEqual(result.statusCounts, { Open: 47, Deferred: 8, Complete: 3 });
 assert.deepEqual(result.sectionCounts, { "6": 37, "7": 6, "8": 9, "9": 6 });
 
 function expectFailure(name, mutate, pattern, options = {}) {
@@ -72,7 +72,7 @@ expectFailure(
   "unmapped authoritative open section row fails closed",
   () => {},
   /unmapped authoritative open row/u,
-  { sourceDocument: sourceDocument.replace("<!-- completion-ledger: Open: COMP-Q1-Q4-001 -->", "") },
+  { sourceDocument: sourceDocument.replace("- [x] Build Q1-Q4 coverage from every phase below; assign Supported/External/etc. <!-- completion-ledger: Complete: COMP-Q1-Q4-001 -->", "- [ ] Build Q1-Q4 coverage from every phase below; assign Supported/External/etc. <!-- completion-ledger: Complete: COMP-Q1-Q4-001 -->") },
 );
 expectFailure(
   "stale source section fails closed",
@@ -98,8 +98,8 @@ expectFailure(
 );
 expectFailure(
   "open source row cannot be marked Complete",
-  (candidate) => { candidate.items[0].status = "Complete"; },
-  /open source row COMP-Q1-Q4-001 must remain status Open/u,
+  (candidate) => { candidate.items.find((item) => item.id === "AI0-COVERAGE-001").status = "Complete"; },
+  /open source row AI0-COVERAGE-001 must remain status Open/u,
 );
 
 expectFailure(
@@ -126,22 +126,23 @@ expectFailure(
 );
 expectFailure(
   "wrong classification for an open source row fails closed",
-  (candidate) => { candidate.items[0].classification = "Deferred"; },
-  /open source row COMP-Q1-Q4-001 must be Supported or External acceptance/u,
+  (candidate) => { candidate.items.find((item) => item.id === "AI0-COVERAGE-001").classification = "Deferred"; },
+  /open source row AI0-COVERAGE-001 must be Supported or External acceptance/u,
 );
 expectFailure(
   "wrong status for an open source row fails closed",
-  (candidate) => { candidate.items[0].status = "Deferred"; },
-  /open source row COMP-Q1-Q4-001 must remain status Open/u,
+  (candidate) => { candidate.items.find((item) => item.id === "AI0-COVERAGE-001").status = "Deferred"; },
+  /open source row AI0-COVERAGE-001 must remain status Open/u,
 );
 expectFailure(
   "wrong source kind fails closed",
   (candidate) => {
-    candidate.items[0].source.kind = "Deferred";
-    candidate.items[0].classification = "Deferred";
-    candidate.items[0].status = "Deferred";
+    const item = candidate.items.find((entry) => entry.id === "AI0-COVERAGE-001");
+    item.source.kind = "Deferred";
+    item.classification = "Deferred";
+    item.status = "Deferred";
   },
-  /stale ledger ID COMP-Q1-Q4-001: source kind Deferred does not match Open/u,
+  /stale ledger ID AI0-COVERAGE-001: source kind Deferred does not match Open/u,
 );
 expectFailure(
   "arbitrary marker line fails closed",

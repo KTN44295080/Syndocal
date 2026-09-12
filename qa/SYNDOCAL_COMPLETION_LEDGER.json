@@ -3,18 +3,18 @@
   "source_document": "qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md",
   "authoritative_sections": ["6", "7", "8", "9"],
   "classifications": ["Supported", "Deferred", "External acceptance", "Out of scope"],
-  "expected_status_counts": { "Open": 48, "Deferred": 8, "Complete": 2 },
+  "expected_status_counts": { "Open": 47, "Deferred": 8, "Complete": 3 },
   "expected_section_counts": { "6": 37, "7": 6, "8": 9, "9": 6 },
   "items": [
     {
       "id": "COMP-Q1-Q4-001",
-      "source": { "section": "6", "kind": "Open" },
+      "source": { "section": "6", "kind": "Complete" },
       "classification": "Supported",
       "owner": "Completion-ledger maintainer",
       "dependency": "Current flow authority and the master roadmap Q1-Q5 contract",
-      "nonclaim": "Does not claim Q1-Q4 coverage is complete or that any linked domain is accepted.",
-      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md"],
-      "status": "Open"
+      "nonclaim": "Does not claim any linked product domain, native surface, hardware, external client, or release is accepted.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md", "qa/Q1_Q4_COVERAGE_CHECKPOINT_2026-09-13.md"],
+      "status": "Complete"
     },
     {
       "id": "WARN-MACOS-001",

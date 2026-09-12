@@ -28,7 +28,7 @@ assert.equal(realResult.q1Rows, 32);
 assert.equal(realResult.domainsCovered, 29);
 assert.equal(realResult.sourceContractsCovered, 10);
 assert.equal(realResult.flowMarkersReferenced, 58);
-assert.deepEqual(realResult.flowMarkerCounts, { Open: 48, Deferred: 8, Complete: 2 });
+assert.deepEqual(realResult.flowMarkerCounts, { Open: 47, Deferred: 8, Complete: 3 });
 console.log("ok - real-repository baseline passes end to end");
 
 function byId(collection, id) {
@@ -149,7 +149,9 @@ expectFailure("REQUIRED_FIELD_MISSING", mutateLedger((copy) => {
 }));
 
 expectFailure("COMMIT_MUST_BE_SHA", mutateLedger((copy) => {
-  byId(copy.q1_requirements, "COV-Q1Q4-INFRA-001").status = "Implemented";
+  const row = byId(copy.q1_requirements, "COV-Q1Q4-INFRA-001");
+  row.status = "Implemented";
+  row.commit = "";
 }));
 
 expectFailure("UNKNOWN_DOMAIN_REFERENCE", mutateLedger((copy) => {
@@ -185,7 +187,7 @@ expectFailure("COMPLETION_LEDGER_MARKER_DRIFT", mutateCompletion((copy) => {
 }));
 
 expectFailure("ACCEPTED_ROW_REFERENCES_OPEN_FLOW_MARKER", mutateLedger((copy) => {
-  byId(copy.q1_requirements, "COV-Q1Q4-INFRA-001").status = "Accepted";
+  byId(copy.q1_requirements, "COV-AI-CONTROL-001").status = "Accepted";
 }));
 
 expectFailure("ROW_STATUS_ACCEPTED_WITHOUT_ACCEPTED_PROOFS", mutateLedger((copy) => {
