@@ -1213,6 +1213,17 @@ fn pump_actions(
     current_show_time_us: u64,
     state: ShowClockEstimatorState,
 ) -> Result<(), String> {
+    if matches!(state, ShowClockEstimatorState::Stale | ShowClockEstimatorState::Fault)
+        && (runtime.output_gate.is_armed() || runtime.output_permit.is_some())
+    {
+        runtime.output_gate.disarm();
+        runtime.output_permit.take();
+        update_status(status, |current| {
+            current.show_clock_gate_armed = false;
+            current.output_armed = false;
+            current.last_action_status = Some("auto_disarmed_unsafe_clock_state".to_string());
+        });
+    }
     if runtime.scheduler.is_empty() {
         return Ok(());
     }
@@ -1695,6 +1706,55 @@ mod tests {
         assert!(!held.output_armed);
         assert!(!held.show_clock_gate_armed);
         state.stop().unwrap();
+    }
+
+    #[test]
+    fn stale_clock_state_revokes_local_output_permit_before_queue_poll() {
+        let primary_probe = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let primary_address = primary_probe.local_addr().unwrap();
+        drop(primary_probe);
+        let config = ShowClockConfig::try_from(request(
+            ShowClockIpcRole::Primary,
+            primary_address.to_string(),
+            "127.0.0.1:9".to_string(),
+            "node-primary",
+            "node-standby",
+        ))
+        .unwrap();
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let mut runtime = ShowClockWorkerRuntime::new(&config, Some(engine.clone())).unwrap();
+        let permit = engine.acquire_lighting_output().unwrap();
+        let status = Arc::new(Mutex::new(ShowClockIpcStatus::default()));
+        runtime
+            .arm_output(
+                ShowClockArmOutputRequest {
+                    operator_confirmed: true,
+                },
+                permit,
+                &status,
+            )
+            .unwrap();
+        assert!(runtime.output_gate.is_armed());
+        assert!(runtime.output_permit.is_some());
+
+        pump_actions(
+            &mut runtime,
+            &status,
+            1_000_000,
+            ShowClockEstimatorState::Stale,
+        )
+        .unwrap();
+        assert!(!runtime.output_gate.is_armed());
+        assert!(runtime.output_permit.is_none());
+        let status = status.lock().unwrap().clone();
+        assert!(!status.output_armed);
+        assert_eq!(
+            status.last_action_status.as_deref(),
+            Some("auto_disarmed_unsafe_clock_state")
+        );
     }
 
     #[test]

@@ -58,20 +58,20 @@ the exact Build Tools linker pinned first:
 
 | Command | Observed result |
 | --- | --- |
-| `cargo test -p protocol --locked show_clock -- --nocapture --test-threads=1` | PASS — 17 focused tests |
-| `cargo test -p protocol --locked -- --test-threads=1` | PASS — 235 unit, 7 integration, 4 doctests; 0 failed/ignored |
+| `cargo test -p protocol --locked show_clock -- --nocapture --test-threads=1` | PASS — 18 focused tests |
+| `cargo test -p protocol --locked -- --test-threads=1` | PASS — 236 unit, 7 integration, 4 doctests; 0 failed/ignored |
 | `cargo test -p io --locked show_clock_lan -- --nocapture --test-threads=1` | PASS — 3 focused loopback tests |
 | `cargo test -p io --locked -- --test-threads=1` | PASS — 184 unit tests, 3 ignored, 0 failed; 2 two-process integration tests passed; 0 doctests |
-| `cargo test --manifest-path app/src-tauri/Cargo.toml --locked show_clock_ipc::tests -- --nocapture --test-threads=1` | PASS — 5 lifecycle/action/fence/output-dispatch tests |
+| `cargo test --manifest-path app/src-tauri/Cargo.toml --locked show_clock_ipc::tests -- --nocapture --test-threads=1` | PASS — 6 lifecycle/action/fence/output-dispatch tests |
 | `cargo test --manifest-path app/src-tauri/Cargo.toml --locked control_plane::tests -- --nocapture --test-threads=1` | PASS — 30 command-admission tests |
 | `pnpm.cmd --dir app exec tsc --noEmit; pnpm.cmd --dir app run build` | PASS — TypeScript and Vite production build; 354 modules transformed |
 | `pnpm.cmd --dir app run check:frontend-invokes; pnpm.cmd --dir app run check:frontend-command-routing; node app/scripts/check-tauri-admission-inventory.mjs; pnpm.cmd --dir app run check:output-control-runtime` | PASS — 464 frontend commands; routing 133/31/28/471; 523 native commands with 18 negative fixtures rejected; output-control contracts pass |
-| `pnpm.cmd --dir app tauri build --no-bundle` | PASS — exact MSVC 14.44.35207 linker; final release executable built in 2m29s without first-party warnings |
+| `pnpm.cmd --dir app tauri build --no-bundle` | PASS — exact MSVC 14.44.35207 linker; final release executable built in 3m38s without first-party warnings |
 | Exact `target/release/syndocal.exe` process smoke | PASS — exactly 1 exact-path process, `Syndocal` title, nonzero window handle, `Responding=True`, maximize requested, exact-path cleanup complete |
 | `git diff --check` | PASS |
 
 The final current-source executable SHA-256 is
-`75EE768A6500E3C0BCEFBF6B2F505046ECAFF82C8F57C42E30121266060D0CDE`.
+`916E8221F81984A8740DFF569CB988BBEA54A2ADBB633194C6E381988595E132`.
 It is an unsigned, unpublished process-smoke binary, not release acceptance.
 
 The new protocol tests cover required and kind-bound action payloads, payload
@@ -83,6 +83,10 @@ protocol tests cover authentication-before-estimation, backward receive-time
 atomicity, bounded slew, monotonic output, expiry-derived STALE, Hold/Re-arm,
 late action behavior, generation invalidation, output gate protection, and a
 10,000-sample deterministic fault/soak loop.
+The estimator regression also proves that STALE remains latched until explicit
+Manual Hold and an advanced armed fence; the native dispatcher regression
+proves that STALE/FAULT revokes an armed local output gate and permit before
+queue polling.
 
 ## Tauri IPC/UI and process loopback
 

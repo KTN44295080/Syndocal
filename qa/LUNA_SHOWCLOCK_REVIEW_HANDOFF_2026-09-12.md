@@ -412,3 +412,43 @@ Next safe action is to commit and push the owned source/QA/ledger mirror after
 the applicable static checks. The remaining external gates must be executed
 with the required native UI/device/two-machine topology and recorded against
 the exact artifact; they must not be inferred from this local evidence.
+
+## Continuation checkpoint — STALE safety closure
+
+This checkpoint is based on the same branch at `4221ab42` and records the
+follow-up safety changes after the local output-arm/dispatcher checkpoint.
+
+Implemented changes:
+
+- A ShowClock estimator that has entered `STALE` remains latched there when a
+  later sample arrives. It can return to `Acquiring` only after explicit local
+  Manual Hold and a newly advanced armed fence/re-arm sequence.
+- The Tauri worker revokes the local lighting permit and disarms the output
+  gate before polling queued actions whenever the clock state is `STALE` or
+  `FAULT`, and publishes `auto_disarmed_unsafe_clock_state`.
+
+Current evidence:
+
+- protocol focused 18/18 and full protocol 236 unit + 7 integration + 4
+  doctests, all passing;
+- Tauri ShowClock focused 6/6, with the new STALE permit-revocation test
+  passing;
+- the prior IO focused/full and two-process loopback results remain unchanged;
+- MSVC 14.44.35207 x64 release no-bundle build passed without first-party
+  warnings. Exact release process smoke observed one responsive `Syndocal`
+  window, issued maximize, and cleaned up only that exact executable path.
+  The current executable SHA-256 is
+  `916E8221F81984A8740DFF569CB988BBEA54A2ADBB633194C6E381988595E132`.
+
+The updated ledger and roadmap mirror the current counts: ShowClock protocol
+evidence 247 assertions, runtime/LAN evidence 21 assertions, and IPC/UI/two-
+process evidence 46 assertions. This remains software and loopback evidence;
+native UI interaction coverage, physical output, real wired two-machine
+partition/rejoin/fault/soak, crash/restart replay restoration,
+witness/interlock, automatic failover, venue, signing, publication, and
+product-wide completion remain open and are not inferred here. No additional
+physical DMX output was emitted.
+
+Next safe action is to run the ledger validator and diff checks, then commit
+and push this bounded safety checkpoint. Any remaining external gates require
+their actual native UI/device/two-machine topology and separate evidence.

@@ -170,9 +170,12 @@ impl ShowClockEstimator {
         self.last_local_time_us = self.last_local_time_us.max(received_at_us);
         let sample_time = apply_offset(received_at_us, self.offset_us);
         self.last_show_time_us = self.last_show_time_us.max(sample_time);
-        if self.state != ShowClockEstimatorState::Hold
-            && self.state != ShowClockEstimatorState::Fault
-        {
+        if !matches!(
+            self.state,
+            ShowClockEstimatorState::Hold
+                | ShowClockEstimatorState::Fault
+                | ShowClockEstimatorState::Stale
+        ) {
             self.state = if self.accepted_samples >= self.config.lock_after_samples {
                 ShowClockEstimatorState::Locked
             } else {
@@ -936,6 +939,34 @@ mod tests {
         }
         assert_eq!(estimator.accepted_samples(), 10_000);
         assert_ne!(estimator.state(), ShowClockEstimatorState::Fault);
+    }
+
+    #[test]
+    fn stale_estimator_requires_hold_and_rearm_before_relocking() {
+        let mut estimator = ShowClockEstimator::new(Default::default(), 1, 1).unwrap();
+        for sequence in 1..=3 {
+            estimator
+                .observe(&sample(sequence, 1_000_000 + sequence), 1_000_000 + sequence)
+                .unwrap();
+        }
+        assert_eq!(estimator.state(), ShowClockEstimatorState::Locked);
+        estimator.advance(1_751_000);
+        assert_eq!(estimator.state(), ShowClockEstimatorState::Stale);
+
+        estimator.observe(&sample(4, 1_751_004), 1_751_004).unwrap();
+        assert_eq!(estimator.state(), ShowClockEstimatorState::Stale);
+        estimator.enter_hold();
+        let mut fence = ShowClockManualFence::new(1, 1).unwrap();
+        fence.enter_hold();
+        fence
+            .rearm(crate::show_clock::ShowClockReArm {
+                operator_confirmed_primary_stopped: true,
+                clock_generation: 1,
+                fencing_generation: 2,
+            })
+            .unwrap();
+        estimator.rearm_from_fence(fence).unwrap();
+        assert_eq!(estimator.state(), ShowClockEstimatorState::Acquiring);
     }
 
     #[test]
