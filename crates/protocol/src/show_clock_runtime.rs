@@ -730,6 +730,7 @@ mod tests {
             target_show_time_us: target,
             action: ShowClockActionKind::Go,
             late_policy,
+            payload: None,
             project_hash: PROJECT,
             media_hash: MEDIA,
         }

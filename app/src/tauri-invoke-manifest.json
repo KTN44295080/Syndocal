@@ -44,6 +44,7 @@
   "arm_dj_link_machine",
   "arm_output_control_v2",
   "arm_output_ownership_role",
+  "arm_show_clock_output",
   "assign_video_clip_slot_asset_authoritative",
   "assign_video_output_composition_v2",
   "begin_media_asset_preview",

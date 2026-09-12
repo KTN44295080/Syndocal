@@ -2,8 +2,8 @@
 
 ## Scope
 
-This checkpoint continues the accepted ShowClock decisions without changing
-the v1 wire schema:
+This checkpoint continues the accepted ShowClock decisions with an additive,
+authenticated action-payload extension to the v1 action schema:
 
 - `crates/protocol/src/show_clock_runtime.rs` owns the deterministic estimator,
   bounded correction, stale/hold policy, action horizon/late policy, fixed
@@ -14,6 +14,9 @@ the v1 wire schema:
   authenticated sample/action, then pass the accepted body through runtime
   policy. Project, lease, audio, recording, clock, and fencing generations are
   checked together before output dispatch.
+- `ShowClockActionPayload` binds Release, Take, ClipLaunch/Transition, and
+  TimelineJump to their required typed fields. Payload presence, kind, IDs,
+  and values are validated before canonical authentication bytes are accepted.
 
 The frozen software policy is:
 
@@ -37,7 +40,9 @@ The action scheduler refuses generation mismatches and out-of-horizon actions,
 does not consume the queue when output authorization fails, and clears old
 actions on an explicitly armed fence rebind. The output gate requires exact
 owner identity and exact project/lease/audio/recording/clock/fencing context,
-plus Locked estimator state.
+plus Locked estimator state. The native integration holds the local lighting
+ownership permit while the gate is armed; video actions reacquire a local video
+permit for each dispatch.
 
 The LAN adapter serializes a strict versioned envelope containing an already
 authenticated sample or action. It ignores traffic from non-paired endpoints
@@ -53,22 +58,25 @@ the exact Build Tools linker pinned first:
 
 | Command | Observed result |
 | --- | --- |
-| `cargo test -p protocol --locked show_clock -- --nocapture --test-threads=1` | PASS — 16 focused tests |
-| `cargo test -p protocol --locked -- --test-threads=1` | PASS — 234 unit, 7 integration, 4 doctests; 0 failed/ignored |
+| `cargo test -p protocol --locked show_clock -- --nocapture --test-threads=1` | PASS — 17 focused tests |
+| `cargo test -p protocol --locked -- --test-threads=1` | PASS — 235 unit, 7 integration, 4 doctests; 0 failed/ignored |
 | `cargo test -p io --locked show_clock_lan -- --nocapture --test-threads=1` | PASS — 3 focused loopback tests |
 | `cargo test -p io --locked -- --test-threads=1` | PASS — 184 unit tests, 3 ignored, 0 failed; 2 two-process integration tests passed; 0 doctests |
-| `cargo test --manifest-path app/src-tauri/Cargo.toml --locked show_clock_ipc::tests -- --nocapture --test-threads=1` | PASS — 3 lifecycle/action/fence tests |
+| `cargo test --manifest-path app/src-tauri/Cargo.toml --locked show_clock_ipc::tests -- --nocapture --test-threads=1` | PASS — 5 lifecycle/action/fence/output-dispatch tests |
+| `cargo test --manifest-path app/src-tauri/Cargo.toml --locked control_plane::tests -- --nocapture --test-threads=1` | PASS — 30 command-admission tests |
 | `pnpm.cmd --dir app exec tsc --noEmit; pnpm.cmd --dir app run build` | PASS — TypeScript and Vite production build; 354 modules transformed |
-| `pnpm.cmd --dir app run check:frontend-invokes; pnpm.cmd --dir app run check:frontend-command-routing; node app/scripts/check-tauri-admission-inventory.mjs; pnpm.cmd --dir app run check:output-control-runtime` | PASS — 463 frontend commands; routing 133/31/28/470; 522 native commands with 18 negative fixtures rejected; output-control contracts pass |
-| `pnpm.cmd --dir app tauri build --no-bundle` | PASS — exact MSVC 14.44.35207 linker; final release executable built in 2m31s |
+| `pnpm.cmd --dir app run check:frontend-invokes; pnpm.cmd --dir app run check:frontend-command-routing; node app/scripts/check-tauri-admission-inventory.mjs; pnpm.cmd --dir app run check:output-control-runtime` | PASS — 464 frontend commands; routing 133/31/28/471; 523 native commands with 18 negative fixtures rejected; output-control contracts pass |
+| `pnpm.cmd --dir app tauri build --no-bundle` | PASS — exact MSVC 14.44.35207 linker; final release executable built in 2m29s without first-party warnings |
 | Exact `target/release/syndocal.exe` process smoke | PASS — exactly 1 exact-path process, `Syndocal` title, nonzero window handle, `Responding=True`, maximize requested, exact-path cleanup complete |
 | `git diff --check` | PASS |
 
 The final current-source executable SHA-256 is
-`89D70698A224920F04B22CC8A5C733DB0C5A6B560F039A3ECF0DCE66365E00D6`.
+`75EE768A6500E3C0BCEFBF6B2F505046ECAFF82C8F57C42E30121266060D0CDE`.
 It is an unsigned, unpublished process-smoke binary, not release acceptance.
 
-The new LAN tests cover signed-sample round trip over two explicitly paired
+The new protocol tests cover required and kind-bound action payloads, payload
+authentication bytes, and operator confirmation for the initial Manual Fence
+arm. The new LAN tests cover signed-sample round trip over two explicitly paired
 loopback sockets, wrong-source traffic that cannot extend timeout, and
 malformed paired traffic rejected before any caller can process it. The
 protocol tests cover authentication-before-estimation, backward receive-time
@@ -81,6 +89,7 @@ late action behavior, generation invalidation, output gate protection, and a
 The native app now owns a process-lifetime ShowClock worker through the typed
 commands `get_show_clock_status`, `start_show_clock`, `stop_show_clock`,
 `schedule_show_clock_action`, `hold_show_clock`, and `rearm_show_clock`.
+`arm_show_clock_output` is a separate explicit operator-confirmed command.
 Primary emits signed samples every 250 ms and signs actions; Standby admits the
 exact paired UDP sender before updating the estimator or fixed-capacity action
 queue. Worker stop joins the thread before the socket is replaced, and a
@@ -91,11 +100,14 @@ are remembered. The session and key are deliberately not persisted, so a
 process restart requires a fresh paired session and key.
 
 An accepted action is retained in the generation-bound scheduler while the
-ShowClock output gate is disarmed. Manual Hold disarms the gate and stops the
-Primary sample loop; Re-arm requires an advanced fencing generation and clears
-old queued actions, then waits for the new generation to lock. `output_armed`
-remains false because the local output-ownership and physical action dispatcher
-are not connected by this checkpoint.
+ShowClock output gate is disarmed. Primary output arm requires the explicit
+confirmation and a local lighting ownership permit. Standby output arm
+requires `LOCKED` estimator state plus the already-established Manual Hold /
+Re-arm fence. Manual Hold and Re-arm disarm the gate and drop the permit.
+Lighting actions are dispatched through the existing local `EngineHandle`; Take
+and ClipLaunch/Transition actions additionally recheck local video ownership
+per operation. `output_armed` therefore records software ownership/gate state,
+not physical output observation.
 
 The parent/child integration test sends three authenticated samples across two
 separate worker processes and verifies Standby admission plus LOCKED estimator
@@ -105,9 +117,10 @@ boundary. Frontend command inventory/routing, TypeScript, Vite production
 build, native admission inventory, and output-control contract checks also pass.
 
 The current IPC/UI surface exposes action scheduling, Manual Hold, operator
-Re-arm, and all-domain generation context selection. Output-gate arm remains
-disarmed by design until a separate local output-ownership integration gives
-the gate a physical dispatcher and an acceptance matrix.
+Re-arm, explicit output-arm confirmation, and all-domain generation context
+selection. The UI and native dispatcher now cover the local software ownership
+boundary; native UI interaction and physical-output acceptance remain separate
+gates.
 
 ## Boundaries that remain open
 

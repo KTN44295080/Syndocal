@@ -361,3 +361,54 @@ commit/push remain authorized; do not repeatedly ask for permission. Keep
 architecture boundaries clear and record measured hot-path performance only
 when actually measured. No product version bump, publication or cleanup is
 needed for this documentation-only transfer.
+
+## Continuation checkpoint — local output arm and dispatcher
+
+This checkpoint supersedes the output-arm boundary described above for the
+current source tree. It is based on branch
+`codex/showclock-review-20260912` at `e8ad8212` and keeps the existing v1
+transport decisions and additive compatibility behavior.
+
+Implemented changes:
+
+- `ShowClockActionPayload` is required for Release, Take, ClipLaunch/
+  Transition, and TimelineJump; its kind, fields, IDs, and values are bound to
+  the action before canonical HMAC bytes are accepted.
+- `arm_show_clock_output` is a separate typed IPC command with mandatory
+  operator confirmation. Primary arm acquires the existing local lighting
+  ownership permit and arms the ShowClock gate. Standby arm requires LOCKED
+  estimator state and the prior Manual Hold/Re-arm fence.
+- Hold/Re-arm drop the permit and disarm the gate. Lighting actions are passed
+  through the existing local `EngineHandle`; video Take/ClipLaunch/Transition
+  reacquire local video ownership for each operation and fail closed in
+  Standby. The Setup/IO panel exposes the explicit arm confirmation.
+- The Tauri admission inventory and frontend routing classification include the
+  new runtime mutation command.
+
+Current evidence:
+
+- protocol focused 17/17 and full protocol 235 unit + 7 integration + 4
+  doctests, all passing;
+- IO focused LAN 3/3 and full IO 184 unit + 3 ignored, with both two-process
+  integration tests passing;
+- Tauri ShowClock focused 5/5 and control-plane focused 30/30;
+- frontend TypeScript/Vite build, 464 invoke commands, routing 133/31/28/471,
+  native inventory 523 commands with 18 negative fixtures, and output-control
+  checks passing;
+- MSVC 14.44.35207 x64 release no-bundle build passed without first-party
+  warnings. Exact release process smoke observed one responsive `Syndocal`
+  window, issued maximize, and cleaned up only that exact executable path.
+  The current executable SHA-256 is
+  `75EE768A6500E3C0BCEFBF6B2F505046ECAFF82C8F57C42E30121266060D0CDE`.
+
+The evidence proves the local software ownership/gate and dispatcher boundary,
+not physical output. Native UI button-by-button observation, real wired
+two-machine partition/rejoin/fault/soak, crash/restart replay restoration,
+witness or physical interlock, automatic failover, venue, signing,
+publication, and product-wide completion remain open. No additional physical
+DMX output was emitted in this checkpoint.
+
+Next safe action is to commit and push the owned source/QA/ledger mirror after
+the applicable static checks. The remaining external gates must be executed
+with the required native UI/device/two-machine topology and recorded against
+the exact artifact; they must not be inferred from this local evidence.

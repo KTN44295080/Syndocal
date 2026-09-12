@@ -208,8 +208,8 @@ fn direct_media_audio_output_format(output: &DirectMediaAudioOutput) -> (u32, u1
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use show_clock_ipc::{
-    ShowClockActionRequest, ShowClockIpcState, ShowClockIpcStatus, ShowClockReArmRequest,
-    ShowClockStartRequest,
+    ShowClockActionRequest, ShowClockArmOutputRequest, ShowClockIpcState, ShowClockIpcStatus,
+    ShowClockReArmRequest, ShowClockStartRequest,
 };
 #[cfg(windows)]
 use std::os::windows::{fs::OpenOptionsExt, io::AsRawHandle};
@@ -25137,6 +25137,7 @@ const PREFLIGHT_ONLY_NONPROJECT_OR_INNER_RUNTIME_ROUTES: &[&str] = &[
     "finalize_prepared_media_asset_relink",
     "finalize_prepared_media_assets",
     "force_transfer_output_lease_v2",
+    "arm_show_clock_output",
     "hold_show_clock",
     "import_gdtf",
     "launch_video_clip_slot_authoritative",
@@ -76675,6 +76676,14 @@ fn rearm_show_clock(
     request: ShowClockReArmRequest,
 ) -> Result<ShowClockIpcStatus, String> {
     state.rearm(request)
+}
+
+#[tauri::command]
+fn arm_show_clock_output(
+    state: State<'_, ShowClockIpcState>,
+    request: ShowClockArmOutputRequest,
+) -> Result<ShowClockIpcStatus, String> {
+    state.arm_output(request)
 }
 
 #[tauri::command]
@@ -131040,7 +131049,7 @@ fn main() {
             Ok(())
         })
         .manage(AppState {
-            engine,
+            engine: engine.clone(),
             app_handle: Mutex::new(None),
             vj_first_run: Arc::new(Mutex::new(())),
             vj_preview_transport: Mutex::new(VjPreviewTransportRuntime::default()),
@@ -131162,7 +131171,7 @@ fn main() {
             native_video_output_metrics: Mutex::new(HashMap::new()),
             native_video_output_workers: Mutex::new(HashMap::new()),
         })
-        .manage(ShowClockIpcState::default())
+        .manage(ShowClockIpcState::with_engine(engine.clone()))
         .manage(PaneWindowLifecycleRegistry::default())
         .manage(control_plane_query_state)
         .on_window_event(|window, event| {
@@ -131293,6 +131302,7 @@ fn main() {
             set_dmx_outputs,
             get_output_ownership_status,
             get_show_clock_status,
+            arm_show_clock_output,
             schedule_show_clock_action,
             hold_show_clock,
             rearm_show_clock,

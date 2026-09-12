@@ -32,6 +32,13 @@ export type ShowClockActionKind =
   | "go" | "stop" | "back" | "release" | "blackout" | "take"
   | "clip_launch" | "transition" | "timeline_jump";
 export type ShowClockLatePolicy = "execute_immediately" | "drop" | "hold";
+export type ShowClockVideoTransitionKind =
+  | "Cut" | "Crossfade" | "Dip" | "Wipe" | "Luma" | "Displacement" | "Blur" | "Glitch" | "Custom";
+export type ShowClockActionPayload =
+  | { kind: "cue_release"; cue_id: number }
+  | { kind: "video_take"; target_layer_id: number; fade_ms: number; preview_position_ms?: number | null; preview_speed_milli?: number | null }
+  | { kind: "clip_launch"; layer_id: number; slot_id?: number | null; transition_kind?: ShowClockVideoTransitionKind; transition_duration_ms?: number }
+  | { kind: "timeline_jump"; position_ms: number };
 
 export interface ShowClockIpcStatus {
   running: boolean;
@@ -84,6 +91,11 @@ export interface ShowClockActionRequest {
   target_show_time_us: number;
   action: ShowClockActionKind;
   late_policy: ShowClockLatePolicy;
+  payload?: ShowClockActionPayload | null;
+}
+
+export interface ShowClockArmOutputRequest {
+  operator_confirmed: boolean;
 }
 
 export interface ShowClockReArmRequest {

@@ -2,9 +2,9 @@
 //!
 //! The protocol crate owns authentication, estimation, scheduling, and
 //! fencing policy.  This module owns only the process lifecycle and the
-//! manually configured LAN worker.  It deliberately has no path that arms
-//! lighting/video/audio output; that remains a separate local ownership
-//! operation.
+//! manually configured LAN worker. Lighting output is armable only through
+//! the existing local ownership permit and explicit ShowClock fence; video and
+//! audio output remain outside this module.
 
 use std::{
     collections::HashSet,
@@ -18,15 +18,16 @@ use std::{
     time::{Duration, Instant},
 };
 
+use engine::{EngineCommand, EngineHandle, OutputOwnershipPermit};
 use io::show_clock_lan::{ShowClockLanError, ShowClockLanMessage, ShowClockLanTransport};
 use protocol::{
     show_clock::{
         AuthenticatedShowClockAction, AuthenticatedShowClockSample, ShowClockAction,
-        ShowClockActionAdmission, ShowClockActionKind, ShowClockActionReceiver,
-        ShowClockFenceState, ShowClockHash, ShowClockLatePolicy, ShowClockManualFence,
-        ShowClockNodeId, ShowClockNonce, ShowClockPeerValidator, ShowClockReArm, ShowClockSample,
-        ShowClockSessionId, ShowClockSource, ShowTransportState, SHOW_CLOCK_PROTOCOL_VERSION,
-        SHOW_CLOCK_SCHEMA_VERSION,
+        ShowClockActionAdmission, ShowClockActionKind, ShowClockActionPayload,
+        ShowClockActionReceiver, ShowClockFenceState, ShowClockHash, ShowClockLatePolicy,
+        ShowClockManualFence, ShowClockNodeId, ShowClockNonce, ShowClockPeerValidator,
+        ShowClockReArm, ShowClockSample, ShowClockSessionId, ShowClockSource, ShowTransportState,
+        SHOW_CLOCK_PROTOCOL_VERSION, SHOW_CLOCK_SCHEMA_VERSION,
     },
     show_clock_runtime::{
         ShowClockActionDispatch, ShowClockActionGeneration, ShowClockActionScheduler,
@@ -185,6 +186,14 @@ pub struct ShowClockActionRequest {
     pub target_show_time_us: u64,
     pub action: ShowClockActionKind,
     pub late_policy: ShowClockLatePolicy,
+    #[serde(default)]
+    pub payload: Option<ShowClockActionPayload>,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ShowClockArmOutputRequest {
+    pub operator_confirmed: bool,
 }
 
 #[derive(Clone, Deserialize)]
@@ -226,6 +235,11 @@ enum ShowClockWorkerCommand {
     ScheduleAction(ShowClockActionRequest, SyncSender<Result<(), String>>),
     EnterHold(SyncSender<Result<(), String>>),
     ReArm(ShowClockReArmRequest, SyncSender<Result<(), String>>),
+    ArmOutput(
+        ShowClockArmOutputRequest,
+        OutputOwnershipPermit,
+        SyncSender<Result<(), String>>,
+    ),
 }
 
 struct ShowClockWorker {
@@ -235,6 +249,7 @@ struct ShowClockWorker {
 }
 
 pub struct ShowClockIpcState {
+    engine: Option<EngineHandle>,
     status: Arc<Mutex<ShowClockIpcStatus>>,
     operation: Mutex<()>,
     lifecycle: Mutex<Option<ShowClockWorker>>,
@@ -244,6 +259,7 @@ pub struct ShowClockIpcState {
 impl Default for ShowClockIpcState {
     fn default() -> Self {
         Self {
+            engine: None,
             status: Arc::new(Mutex::new(ShowClockIpcStatus::default())),
             operation: Mutex::new(()),
             lifecycle: Mutex::new(None),
@@ -253,6 +269,12 @@ impl Default for ShowClockIpcState {
 }
 
 impl ShowClockIpcState {
+    pub fn with_engine(engine: EngineHandle) -> Self {
+        let mut state = Self::default();
+        state.engine = Some(engine);
+        state
+    }
+
     pub fn status(&self) -> Result<ShowClockIpcStatus, String> {
         self.status
             .lock()
@@ -345,9 +367,19 @@ impl ShowClockIpcState {
         let (commands_tx, commands_rx) = mpsc::channel();
         let worker_stop = Arc::clone(&stop);
         let worker_status = Arc::clone(&self.status);
+        let worker_engine = self.engine.clone();
         let join = thread::Builder::new()
             .name(format!("syndocal-show-clock-{:?}", config.role))
-            .spawn(move || run_worker(config, transport, worker_stop, worker_status, commands_rx))
+            .spawn(move || {
+                run_worker(
+                    config,
+                    transport,
+                    worker_stop,
+                    worker_status,
+                    commands_rx,
+                    worker_engine,
+                )
+            })
             .map_err(|error| format!("ShowClock worker could not start: {error}"))?;
 
         let mut lifecycle = self
@@ -405,6 +437,22 @@ impl ShowClockIpcState {
             "ShowClock lifecycle operation lock was poisoned; restart Syndocal".to_string()
         })?;
         self.send_command(|reply| ShowClockWorkerCommand::ReArm(request, reply))?;
+        self.status()
+    }
+
+    pub fn arm_output(
+        &self,
+        request: ShowClockArmOutputRequest,
+    ) -> Result<ShowClockIpcStatus, String> {
+        let _operation = self.operation.lock().map_err(|_| {
+            "ShowClock lifecycle operation lock was poisoned; restart Syndocal".to_string()
+        })?;
+        let engine = self
+            .engine
+            .as_ref()
+            .ok_or_else(|| "ShowClock local output engine is unavailable".to_string())?;
+        let permit = engine.acquire_lighting_output()?;
+        self.send_command(|reply| ShowClockWorkerCommand::ArmOutput(request, permit, reply))?;
         self.status()
     }
 
@@ -575,15 +623,17 @@ fn run_worker(
     stop: Arc<AtomicBool>,
     status: Arc<Mutex<ShowClockIpcStatus>>,
     commands: Receiver<ShowClockWorkerCommand>,
+    engine: Option<EngineHandle>,
 ) {
-    let result = ShowClockWorkerRuntime::new(&config).and_then(|mut runtime| match config.role {
-        ShowClockIpcRole::Primary => {
-            run_primary(&config, &transport, &stop, &status, &commands, &mut runtime)
-        }
-        ShowClockIpcRole::Standby => {
-            run_standby(&config, &transport, &stop, &status, &commands, &mut runtime)
-        }
-    });
+    let result =
+        ShowClockWorkerRuntime::new(&config, engine).and_then(|mut runtime| match config.role {
+            ShowClockIpcRole::Primary => {
+                run_primary(&config, &transport, &stop, &status, &commands, &mut runtime)
+            }
+            ShowClockIpcRole::Standby => {
+                run_standby(&config, &transport, &stop, &status, &commands, &mut runtime)
+            }
+        });
     if let Err(error) = result {
         update_status(&status, |current| {
             current.running = false;
@@ -604,6 +654,7 @@ fn run_worker(
 }
 
 struct ShowClockWorkerRuntime {
+    role: ShowClockIpcRole,
     owner: ShowClockNodeId,
     session_id: ShowClockSessionId,
     peer_node_id: ShowClockNodeId,
@@ -616,11 +667,13 @@ struct ShowClockWorkerRuntime {
     estimator: Option<ShowClockPeerEstimator>,
     validator: Option<ShowClockPeerValidator>,
     action_receiver: Option<ShowClockActionReceiver>,
+    engine: Option<EngineHandle>,
+    output_permit: Option<OutputOwnershipPermit>,
     held: bool,
 }
 
 impl ShowClockWorkerRuntime {
-    fn new(config: &ShowClockConfig) -> Result<Self, String> {
+    fn new(config: &ShowClockConfig, engine: Option<EngineHandle>) -> Result<Self, String> {
         let context = ShowClockOutputContext::new(
             config.project_generation,
             config.lease_generation,
@@ -687,6 +740,7 @@ impl ShowClockWorkerRuntime {
             }
         };
         Ok(Self {
+            role: config.role,
             owner: config.node_id.clone(),
             session_id: config.session_id.clone(),
             peer_node_id: config.peer_node_id.clone(),
@@ -699,6 +753,8 @@ impl ShowClockWorkerRuntime {
             estimator,
             validator,
             action_receiver,
+            engine,
+            output_permit: None,
             held: false,
         })
     }
@@ -707,6 +763,7 @@ impl ShowClockWorkerRuntime {
         self.fence.enter_hold();
         self.held = true;
         self.output_gate.disarm();
+        self.output_permit.take();
         if let Some(estimator) = self.estimator.as_mut() {
             estimator.estimator_mut().enter_hold();
         }
@@ -768,8 +825,8 @@ impl ShowClockWorkerRuntime {
             .replace_context(context)
             .map_err(|error| format!("ShowClock output context replacement rejected: {error}"))?;
         // Re-arm proves the new generation and clears old actions. The gate
-        // remains disarmed until the separate local output ownership path is
-        // explicitly connected to a physical dispatcher.
+        // remains disarmed until explicit local output ownership is acquired
+        // through the engine dispatcher.
         output_gate.disarm();
         let validator = ShowClockPeerValidator::new(
             self.session_id.clone(),
@@ -797,6 +854,7 @@ impl ShowClockWorkerRuntime {
         self.fence = fence;
         self.scheduler = scheduler;
         self.output_gate = output_gate;
+        self.output_permit.take();
         self.estimator = Some(estimator);
         self.validator = Some(validator);
         self.action_receiver = Some(action_receiver);
@@ -814,6 +872,51 @@ impl ShowClockWorkerRuntime {
             current.output_armed = false;
             current.scheduled_actions = 0;
             current.last_action_status = Some("manual_rearm_waiting_for_lock".to_string());
+            current.last_error = None;
+        });
+        Ok(())
+    }
+
+    fn arm_output(
+        &mut self,
+        request: ShowClockArmOutputRequest,
+        permit: OutputOwnershipPermit,
+        status: &Arc<Mutex<ShowClockIpcStatus>>,
+    ) -> Result<(), String> {
+        if !request.operator_confirmed {
+            return Err("ShowClock output Arm requires explicit operator confirmation".to_string());
+        }
+        if self.output_gate.is_armed() {
+            return Err("ShowClock output is already armed".to_string());
+        }
+        if self.role == ShowClockIpcRole::Standby
+            && self.estimator.as_ref().is_none_or(|estimator| {
+                estimator.estimator().state() != ShowClockEstimatorState::Locked
+            })
+        {
+            return Err("ShowClock Standby output Arm requires LOCKED peer state".to_string());
+        }
+
+        let mut fence = self.fence;
+        if self.role == ShowClockIpcRole::Primary {
+            fence
+                .arm_initial(true)
+                .map_err(|error| format!("ShowClock Primary output Arm rejected: {error}"))?;
+        } else if fence.state() != ShowClockFenceState::Armed {
+            return Err("ShowClock Standby output Arm requires Manual Re-arm first".to_string());
+        }
+        let mut output_gate = self.output_gate.clone();
+        output_gate
+            .arm(fence, output_gate.context())
+            .map_err(|error| format!("ShowClock output Arm rejected: {error}"))?;
+        self.fence = fence;
+        self.output_gate = output_gate;
+        self.output_permit = Some(permit);
+        update_status(status, |current| {
+            current.fence_state = self.fence.state().into();
+            current.show_clock_gate_armed = self.output_gate.is_armed();
+            current.output_armed = self.output_permit.is_some();
+            current.last_action_status = Some("local_output_armed".to_string());
             current.last_error = None;
         });
         Ok(())
@@ -1038,6 +1141,10 @@ fn drain_commands(
                 };
                 let _ = reply.send(result);
             }
+            ShowClockWorkerCommand::ArmOutput(request, permit, reply) => {
+                let result = runtime.arm_output(request, permit, status);
+                let _ = reply.send(result);
+            }
         }
     }
     Ok(())
@@ -1066,6 +1173,7 @@ fn schedule_primary_action(
         target_show_time_us: request.target_show_time_us,
         action: request.action,
         late_policy: request.late_policy,
+        payload: request.payload,
         project_hash: config.project_hash,
         media_hash: config.media_hash,
     };
@@ -1144,13 +1252,89 @@ fn pump_actions(
             );
         }
     });
-    if matches!(dispatch, Some(ShowClockActionDispatch::Execute(_))) {
-        return Err(
-            "ShowClock action reached an authorized gate but no physical output dispatcher is wired"
-                .to_string(),
-        );
+    if let Some(ShowClockActionDispatch::Execute(action)) = dispatch {
+        let engine = runtime
+            .engine
+            .as_ref()
+            .ok_or_else(|| "ShowClock output dispatcher engine is unavailable".to_string())?;
+        dispatch_show_clock_action(engine, &action)?;
+        update_status(status, |current| {
+            current.last_action_status = Some("executed_by_local_output_dispatcher".to_string());
+        });
     }
     Ok(())
+}
+
+fn dispatch_show_clock_action(
+    engine: &EngineHandle,
+    action: &ShowClockAction,
+) -> Result<(), String> {
+    // Lighting is held for the lifetime of an armed ShowClock worker. Video
+    // actions acquire the matching capability for the complete synchronous
+    // EngineHandle operation, so a role transition cannot overlap a Take or
+    // Clip Launch admission.
+    let _video_output_permit = matches!(
+        action.action,
+        ShowClockActionKind::Take
+            | ShowClockActionKind::ClipLaunch
+            | ShowClockActionKind::Transition
+    )
+    .then(|| engine.acquire_video_output())
+    .transpose()?;
+    match (action.action, action.payload.as_ref()) {
+        (ShowClockActionKind::Go, None) => engine
+            .send(EngineCommand::SetTimelinePlaying(true))
+            .map_err(|error| error.to_string()),
+        (ShowClockActionKind::Stop, None) => engine
+            .send(EngineCommand::SetTimelinePlaying(false))
+            .map_err(|error| error.to_string()),
+        (ShowClockActionKind::Back, None) => engine
+            .send(EngineCommand::SeekTimeline(0))
+            .map_err(|error| error.to_string()),
+        (ShowClockActionKind::Blackout, None) => engine
+            .send(EngineCommand::SetAllBlackout(true))
+            .map_err(|error| error.to_string()),
+        (ShowClockActionKind::Release, Some(ShowClockActionPayload::CueRelease { cue_id })) => {
+            engine
+                .send(EngineCommand::ReleaseCue(*cue_id))
+                .map_err(|error| error.to_string())
+        }
+        (
+            ShowClockActionKind::Take,
+            Some(ShowClockActionPayload::VideoTake {
+                target_layer_id,
+                fade_ms,
+                preview_position_ms,
+                preview_speed_milli,
+            }),
+        ) => engine.exclusive_video_take(protocol::ExclusiveVideoTakeRequest {
+            target_layer_id: *target_layer_id,
+            fade_ms: *fade_ms,
+            preview_position_ms: *preview_position_ms,
+            preview_speed: preview_speed_milli.map(|speed| speed as f32 / 1000.0),
+        }),
+        (
+            ShowClockActionKind::ClipLaunch | ShowClockActionKind::Transition,
+            Some(ShowClockActionPayload::ClipLaunch {
+                layer_id,
+                slot_id,
+                transition_kind,
+                transition_duration_ms,
+            }),
+        ) => engine.launch_video_clip_slot_with_transition_published(
+            *layer_id,
+            *slot_id,
+            *transition_kind,
+            *transition_duration_ms,
+        ),
+        (
+            ShowClockActionKind::TimelineJump,
+            Some(ShowClockActionPayload::TimelineJump { position_ms }),
+        ) => engine
+            .send(EngineCommand::SeekTimeline(*position_ms))
+            .map_err(|error| error.to_string()),
+        _ => Err("ShowClock action payload did not match its dispatch kind".to_string()),
+    }
 }
 
 fn publish_estimate(
@@ -1207,6 +1391,7 @@ fn sample_nonce(config: &ShowClockConfig, sequence: u64) -> [u8; 16] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use protocol::DmxOutputConfig;
     use std::net::UdpSocket;
 
     const HASH: &str = "1111111111111111111111111111111111111111111111111111111111111111";
@@ -1392,6 +1577,7 @@ mod tests {
                 target_show_time_us: 1_500_000,
                 action: ShowClockActionKind::Go,
                 late_policy: ShowClockLatePolicy::Hold,
+                payload: None,
             })
             .unwrap();
         for _ in 0..20 {
@@ -1433,5 +1619,115 @@ mod tests {
         assert_eq!(rearmed.scheduled_actions, 0);
         assert!(!rearmed.show_clock_gate_armed);
         standby.stop().unwrap();
+    }
+
+    #[test]
+    fn primary_arm_requires_confirmation_and_dispatches_through_local_engine() {
+        let primary_probe = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let primary_address = primary_probe.local_addr().unwrap();
+        drop(primary_probe);
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        let state = ShowClockIpcState::with_engine(engine.clone());
+        state
+            .start(request(
+                ShowClockIpcRole::Primary,
+                primary_address.to_string(),
+                "127.0.0.1:9".to_string(),
+                "node-primary",
+                "node-standby",
+            ))
+            .unwrap();
+
+        let confirmation_error = state
+            .arm_output(ShowClockArmOutputRequest {
+                operator_confirmed: false,
+            })
+            .unwrap_err();
+        assert!(confirmation_error.contains("explicit operator confirmation"));
+
+        let armed = state
+            .arm_output(ShowClockArmOutputRequest {
+                operator_confirmed: true,
+            })
+            .unwrap();
+        assert!(armed.output_armed);
+        assert!(armed.show_clock_gate_armed);
+        assert_eq!(armed.fence_state, ShowClockIpcFenceState::Armed);
+        let initial_transport = engine.timeline_transport_authority();
+
+        state
+            .schedule_action(ShowClockActionRequest {
+                action_id_hex: "03000000000000000000000000000000".to_string(),
+                sequence: 1,
+                target_show_time_us: 1_000_001,
+                action: ShowClockActionKind::Go,
+                late_policy: ShowClockLatePolicy::ExecuteImmediately,
+                payload: None,
+            })
+            .unwrap();
+        for _ in 0..30 {
+            if state.status().unwrap().last_action_status.as_deref()
+                == Some("executed_by_local_output_dispatcher")
+            {
+                break;
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
+        let dispatched = state.status().unwrap();
+        assert_eq!(
+            dispatched.last_action_status.as_deref(),
+            Some("executed_by_local_output_dispatcher")
+        );
+        for _ in 0..20 {
+            if engine.timeline_transport_authority() != initial_transport {
+                break;
+            }
+            thread::sleep(Duration::from_millis(25));
+        }
+        assert_ne!(engine.timeline_transport_authority(), initial_transport);
+
+        state.enter_hold().unwrap();
+        let held = state.status().unwrap();
+        assert_eq!(held.state, ShowClockIpcPhase::Hold);
+        assert!(!held.output_armed);
+        assert!(!held.show_clock_gate_armed);
+        state.stop().unwrap();
+    }
+
+    #[test]
+    fn video_show_clock_actions_recheck_local_video_ownership() {
+        let engine = EngineHandle::start_for_tests(DmxOutputConfig {
+            enabled: false,
+            ..DmxOutputConfig::default()
+        });
+        engine
+            .set_output_ownership_role(protocol::MachineOutputRole::Standby)
+            .unwrap();
+        let action = ShowClockAction {
+            schema_version: SHOW_CLOCK_SCHEMA_VERSION,
+            protocol_version: SHOW_CLOCK_PROTOCOL_VERSION,
+            session_id: ShowClockSessionId::new("video-ownership-test").unwrap(),
+            sender: ShowClockNodeId::new("node-primary").unwrap(),
+            action_id: [4; 16],
+            sequence: 1,
+            clock_generation: 1,
+            fencing_generation: 1,
+            target_show_time_us: 1,
+            action: ShowClockActionKind::Take,
+            late_policy: ShowClockLatePolicy::ExecuteImmediately,
+            payload: Some(ShowClockActionPayload::VideoTake {
+                target_layer_id: 1,
+                fade_ms: 0,
+                preview_position_ms: None,
+                preview_speed_milli: None,
+            }),
+            project_hash: ShowClockHash([1; 32]),
+            media_hash: ShowClockHash([2; 32]),
+        };
+        let error = dispatch_show_clock_action(&engine, &action).unwrap_err();
+        assert!(error.contains("Video output is blocked"));
     }
 }

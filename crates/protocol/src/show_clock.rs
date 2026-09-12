@@ -38,6 +38,9 @@ pub enum ShowClockValidationError {
     ZeroHash,
     InvalidActionId,
     InvalidTargetTime,
+    ActionPayloadRequired,
+    ActionPayloadUnexpected,
+    InvalidActionPayload,
     InvalidAuthentication,
     SessionMismatch,
     SenderMismatch,
@@ -78,6 +81,9 @@ impl std::fmt::Display for ShowClockValidationError {
             Self::ZeroHash => "ShowClock project/media hash must be non-zero",
             Self::InvalidActionId => "ShowClock action id must be non-zero",
             Self::InvalidTargetTime => "ShowClock action target time is invalid",
+            Self::ActionPayloadRequired => "ShowClock action requires a typed payload",
+            Self::ActionPayloadUnexpected => "ShowClock action does not accept a typed payload",
+            Self::InvalidActionPayload => "ShowClock action payload is invalid",
             Self::InvalidAuthentication => "ShowClock authentication tag is invalid",
             Self::SessionMismatch => "ShowClock session does not match the paired session",
             Self::SenderMismatch => "ShowClock sender does not match the paired peer",
@@ -240,6 +246,41 @@ pub enum ShowClockLatePolicy {
     ExecuteImmediately = 0,
     Drop = 1,
     Hold = 2,
+}
+
+/// Typed target data for actions that need an authored/runtime identity.
+///
+/// The payload is part of the authenticated canonical action bytes.  It is
+/// optional at the struct boundary so legacy v1 actions retain their exact
+/// canonical bytes; action kinds that require a target reject `None` during
+/// shape validation. Unknown payload kinds or malformed fields are rejected
+/// by serde and the explicit action-kind binding below.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ShowClockActionPayload {
+    CueRelease {
+        cue_id: u64,
+    },
+    VideoTake {
+        target_layer_id: u64,
+        fade_ms: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        preview_position_ms: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        preview_speed_milli: Option<u32>,
+    },
+    ClipLaunch {
+        layer_id: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        slot_id: Option<crate::VideoClipSlotId>,
+        #[serde(default)]
+        transition_kind: crate::VideoClipTakeKind,
+        #[serde(default)]
+        transition_duration_ms: u64,
+    },
+    TimelineJump {
+        position_ms: u64,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -547,6 +588,8 @@ pub struct ShowClockAction {
     pub target_show_time_us: u64,
     pub action: ShowClockActionKind,
     pub late_policy: ShowClockLatePolicy,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub payload: Option<ShowClockActionPayload>,
     pub project_hash: ShowClockHash,
     pub media_hash: ShowClockHash,
 }
@@ -576,6 +619,7 @@ impl ShowClockAction {
         if self.target_show_time_us == 0 {
             return Err(ShowClockValidationError::InvalidTargetTime);
         }
+        validate_action_payload(self.action, self.payload.as_ref())?;
         Ok(())
     }
 
@@ -594,9 +638,155 @@ impl ShowClockAction {
         append_u64(&mut output, self.target_show_time_us);
         output.push(self.action as u8);
         output.push(self.late_policy as u8);
+        if let Some(payload) = self.payload.as_ref() {
+            append_action_payload(&mut output, payload)?;
+        }
         output.extend_from_slice(&self.project_hash.0);
         output.extend_from_slice(&self.media_hash.0);
         Ok(output)
+    }
+}
+
+fn validate_action_payload(
+    action: ShowClockActionKind,
+    payload: Option<&ShowClockActionPayload>,
+) -> Result<(), ShowClockValidationError> {
+    let expected = match action {
+        ShowClockActionKind::Release
+        | ShowClockActionKind::Take
+        | ShowClockActionKind::ClipLaunch
+        | ShowClockActionKind::Transition
+        | ShowClockActionKind::TimelineJump => true,
+        ShowClockActionKind::Go
+        | ShowClockActionKind::Stop
+        | ShowClockActionKind::Back
+        | ShowClockActionKind::Blackout => false,
+    };
+    if expected && payload.is_none() {
+        return Err(ShowClockValidationError::ActionPayloadRequired);
+    }
+    if !expected && payload.is_some() {
+        return Err(ShowClockValidationError::ActionPayloadUnexpected);
+    }
+    let Some(payload) = payload else {
+        return Ok(());
+    };
+    let compatible = matches!(
+        (action, payload),
+        (
+            ShowClockActionKind::Release,
+            ShowClockActionPayload::CueRelease { .. }
+        ) | (
+            ShowClockActionKind::Take,
+            ShowClockActionPayload::VideoTake { .. }
+        ) | (
+            ShowClockActionKind::ClipLaunch | ShowClockActionKind::Transition,
+            ShowClockActionPayload::ClipLaunch { .. }
+        ) | (
+            ShowClockActionKind::TimelineJump,
+            ShowClockActionPayload::TimelineJump { .. }
+        )
+    );
+    if !compatible {
+        return Err(ShowClockValidationError::InvalidActionPayload);
+    }
+    match payload {
+        ShowClockActionPayload::CueRelease { cue_id } => {
+            if *cue_id == 0 {
+                return Err(ShowClockValidationError::InvalidActionPayload);
+            }
+        }
+        ShowClockActionPayload::VideoTake {
+            target_layer_id, ..
+        } => {
+            if *target_layer_id == 0 {
+                return Err(ShowClockValidationError::InvalidActionPayload);
+            }
+        }
+        ShowClockActionPayload::ClipLaunch { layer_id, .. } => {
+            if *layer_id == 0 {
+                return Err(ShowClockValidationError::InvalidActionPayload);
+            }
+        }
+        ShowClockActionPayload::TimelineJump { .. } => {}
+    }
+    Ok(())
+}
+
+fn append_action_payload(
+    output: &mut Vec<u8>,
+    payload: &ShowClockActionPayload,
+) -> Result<(), ShowClockValidationError> {
+    match payload {
+        ShowClockActionPayload::CueRelease { cue_id } => {
+            output.push(1);
+            append_u64(output, *cue_id);
+        }
+        ShowClockActionPayload::VideoTake {
+            target_layer_id,
+            fade_ms,
+            preview_position_ms,
+            preview_speed_milli,
+        } => {
+            output.push(2);
+            append_u64(output, *target_layer_id);
+            append_u64(output, *fade_ms);
+            append_optional_u64(output, *preview_position_ms);
+            match preview_speed_milli {
+                Some(speed) => {
+                    output.push(1);
+                    append_u32(output, *speed);
+                }
+                None => output.push(0),
+            }
+        }
+        ShowClockActionPayload::ClipLaunch {
+            layer_id,
+            slot_id,
+            transition_kind,
+            transition_duration_ms,
+        } => {
+            output.push(3);
+            append_u64(output, *layer_id);
+            match slot_id {
+                Some(slot_id) => {
+                    output.push(1);
+                    append_u64(output, slot_id.0);
+                }
+                None => output.push(0),
+            }
+            output.push(video_clip_take_kind_tag(*transition_kind));
+            append_u64(output, *transition_duration_ms);
+        }
+        ShowClockActionPayload::TimelineJump { position_ms } => {
+            output.push(4);
+            append_u64(output, *position_ms);
+        }
+    }
+    Ok(())
+}
+
+fn append_optional_u64(output: &mut Vec<u8>, value: Option<u64>) {
+    match value {
+        Some(value) => {
+            output.push(1);
+            append_u64(output, value);
+        }
+        None => output.push(0),
+    }
+}
+
+fn video_clip_take_kind_tag(kind: crate::VideoClipTakeKind) -> u8 {
+    match kind {
+        crate::VideoClipTakeKind::Cut => 0,
+        crate::VideoClipTakeKind::Crossfade => 1,
+        crate::VideoClipTakeKind::Dip => 2,
+        crate::VideoClipTakeKind::Wipe => 3,
+        crate::VideoClipTakeKind::Luma => 4,
+        crate::VideoClipTakeKind::Displacement => 5,
+        crate::VideoClipTakeKind::Blur => 6,
+        crate::VideoClipTakeKind::Glitch => 7,
+        crate::VideoClipTakeKind::Custom => 8,
     }
 }
 
@@ -757,6 +947,27 @@ impl ShowClockManualFence {
         self.state = ShowClockFenceState::Hold;
     }
 
+    /// Arm a freshly started Primary without changing its initial generation.
+    /// Standby takeover must use [`Self::rearm`] so it always carries Hold,
+    /// operator confirmation, and an advanced fencing generation.
+    pub fn arm_initial(
+        &mut self,
+        operator_confirmed: bool,
+    ) -> Result<(), ShowClockValidationError> {
+        if self.state != ShowClockFenceState::Disarmed {
+            return Err(if self.state == ShowClockFenceState::Armed {
+                ShowClockValidationError::AlreadyArmed
+            } else {
+                ShowClockValidationError::HoldRequired
+            });
+        }
+        if !operator_confirmed {
+            return Err(ShowClockValidationError::OperatorConfirmationRequired);
+        }
+        self.state = ShowClockFenceState::Armed;
+        Ok(())
+    }
+
     pub fn rearm(&mut self, request: ShowClockReArm) -> Result<(), ShowClockValidationError> {
         if self.state != ShowClockFenceState::Hold {
             return Err(ShowClockValidationError::HoldRequired);
@@ -910,6 +1121,7 @@ mod tests {
             target_show_time_us: 2_000_000 + sequence,
             action: ShowClockActionKind::Go,
             late_policy: ShowClockLatePolicy::Drop,
+            payload: None,
             project_hash: PROJECT,
             media_hash: MEDIA,
         }
@@ -984,6 +1196,12 @@ mod tests {
 
         let mut conflicting = body;
         conflicting.action = ShowClockActionKind::Take;
+        conflicting.payload = Some(ShowClockActionPayload::VideoTake {
+            target_layer_id: 1,
+            fade_ms: 0,
+            preview_position_ms: None,
+            preview_speed_milli: None,
+        });
         let conflicting = AuthenticatedShowClockAction::sign(conflicting, &KEY).unwrap();
         assert_eq!(
             receiver.admit(&conflicting),
@@ -992,7 +1210,56 @@ mod tests {
     }
 
     #[test]
+    fn action_payload_is_required_kind_bound_and_authenticated() {
+        let mut missing = action(8, 1);
+        missing.action = ShowClockActionKind::Take;
+        assert_eq!(
+            missing.validate_shape(),
+            Err(ShowClockValidationError::ActionPayloadRequired)
+        );
+
+        let mut unexpected = action(9, 1);
+        unexpected.payload = Some(ShowClockActionPayload::CueRelease { cue_id: 1 });
+        assert_eq!(
+            unexpected.validate_shape(),
+            Err(ShowClockValidationError::ActionPayloadUnexpected)
+        );
+
+        let mut invalid = action(10, 1);
+        invalid.action = ShowClockActionKind::Release;
+        invalid.payload = Some(ShowClockActionPayload::CueRelease { cue_id: 0 });
+        assert_eq!(
+            invalid.validate_shape(),
+            Err(ShowClockValidationError::InvalidActionPayload)
+        );
+
+        let mut valid = action(11, 1);
+        valid.action = ShowClockActionKind::TimelineJump;
+        valid.payload = Some(ShowClockActionPayload::TimelineJump { position_ms: 4_200 });
+        let signed = AuthenticatedShowClockAction::sign(valid, &KEY).unwrap();
+        signed.verify_and_canonical(&KEY).unwrap();
+        let mut receiver =
+            ShowClockActionReceiver::new(session(), sender(), PROJECT, MEDIA, 1, 1, KEY).unwrap();
+        assert_eq!(
+            receiver.admit(&signed),
+            Ok(ShowClockActionAdmission::Accepted)
+        );
+    }
+
+    #[test]
     fn manual_fence_never_arms_without_hold_confirmation_and_advanced_generation() {
+        let mut initial = ShowClockManualFence::new(1, 1).unwrap();
+        assert_eq!(
+            initial.arm_initial(false),
+            Err(ShowClockValidationError::OperatorConfirmationRequired)
+        );
+        initial.arm_initial(true).unwrap();
+        assert_eq!(initial.state(), ShowClockFenceState::Armed);
+        assert_eq!(
+            initial.arm_initial(true),
+            Err(ShowClockValidationError::AlreadyArmed)
+        );
+
         let mut fence = ShowClockManualFence::new(1, 1).unwrap();
         assert_eq!(fence.state(), ShowClockFenceState::Disarmed);
         assert_eq!(fence.clock_generation(), 1);
@@ -1089,6 +1356,12 @@ mod tests {
         );
         let mut conflicting = action(1, 1);
         conflicting.action = ShowClockActionKind::Take;
+        conflicting.payload = Some(ShowClockActionPayload::VideoTake {
+            target_layer_id: 1,
+            fade_ms: 0,
+            preview_position_ms: None,
+            preview_speed_milli: None,
+        });
         let conflicting = AuthenticatedShowClockAction::sign(conflicting, &KEY).unwrap();
         assert_eq!(
             receiver.admit(&conflicting),

@@ -5,7 +5,9 @@ import type {
   ShowClockIpcRole,
   ShowClockIpcStatus,
   ShowClockActionKind,
+  ShowClockActionPayload,
   ShowClockLatePolicy,
+  ShowClockArmOutputRequest,
   ShowClockReArmRequest,
   ShowClockStartRequest,
 } from "../types";
@@ -88,6 +90,12 @@ export function ShowClockStatusPanel(props: ShowClockStatusPanelProps) {
   const [targetShowTime, setTargetShowTime] = createSignal(1500000);
   const [actionKind, setActionKind] = createSignal<ShowClockActionKind>("go");
   const [latePolicy, setLatePolicy] = createSignal<ShowClockLatePolicy>("hold");
+  const [cueId, setCueId] = createSignal(1);
+  const [videoLayerId, setVideoLayerId] = createSignal(1);
+  const [videoFadeMs, setVideoFadeMs] = createSignal(0);
+  const [videoSlotId, setVideoSlotId] = createSignal(1);
+  const [timelineJumpPosition, setTimelineJumpPosition] = createSignal(0);
+  const [confirmOutputArm, setConfirmOutputArm] = createSignal(false);
   const [rearmClockGeneration, setRearmClockGeneration] = createSignal(1);
   const [rearmFencingGeneration, setRearmFencingGeneration] = createSignal(2);
   const [confirmPrimaryStopped, setConfirmPrimaryStopped] = createSignal(false);
@@ -180,6 +188,24 @@ export function ShowClockStatusPanel(props: ShowClockStatusPanelProps) {
       if (!Number.isSafeInteger(actionSequence()) || actionSequence() <= 0 || !Number.isSafeInteger(targetShowTime()) || targetShowTime() <= 0) {
         throw new Error("Action sequence and target show time must be positive integers.");
       }
+      const payload: ShowClockActionPayload | null = (() => {
+        switch (actionKind()) {
+          case "release":
+            return { kind: "cue_release", cue_id: cueId() };
+          case "take":
+            return { kind: "video_take", target_layer_id: videoLayerId(), fade_ms: videoFadeMs() };
+          case "clip_launch":
+          case "transition":
+            return { kind: "clip_launch", layer_id: videoLayerId(), slot_id: videoSlotId(), transition_kind: "Cut", transition_duration_ms: videoFadeMs() };
+          case "timeline_jump":
+            return { kind: "timeline_jump", position_ms: timelineJumpPosition() };
+          default:
+            return null;
+        }
+      })();
+      if (payload && (!Number.isSafeInteger(cueId()) || cueId() <= 0 || !Number.isSafeInteger(videoLayerId()) || videoLayerId() <= 0 || !Number.isSafeInteger(videoFadeMs()) || videoFadeMs() < 0 || !Number.isSafeInteger(videoSlotId()) || videoSlotId() <= 0 || !Number.isSafeInteger(timelineJumpPosition()) || timelineJumpPosition() < 0)) {
+        throw new Error("Action payload values must be safe non-negative integers; IDs must be positive.");
+      }
       setStatus(await props.invokeCommand<ShowClockIpcStatus>("schedule_show_clock_action", {
         request: {
           action_id_hex: newActionId(),
@@ -187,9 +213,26 @@ export function ShowClockStatusPanel(props: ShowClockStatusPanelProps) {
           target_show_time_us: targetShowTime(),
           action: actionKind(),
           late_policy: latePolicy(),
+          payload,
         },
       }));
       setActionSequence((value) => value + 1);
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setBusy(false);
+      void poll();
+    }
+  };
+
+  const armOutput = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      if (!confirmOutputArm()) throw new Error("Confirm local output ownership before Arm.");
+      const request: ShowClockArmOutputRequest = { operator_confirmed: true };
+      setStatus(await props.invokeCommand<ShowClockIpcStatus>("arm_show_clock_output", { request }));
+      setConfirmOutputArm(false);
     } catch (reason) {
       setError(String(reason));
     } finally {
@@ -309,6 +352,21 @@ export function ShowClockStatusPanel(props: ShowClockStatusPanelProps) {
             <label>Action sequence<input type="number" min="1" value={actionSequence()} disabled={busy()} onInput={(event) => setActionSequence(Number(event.currentTarget.value))} /></label>
             <label>Target show time (µs)<input type="number" min="1" value={targetShowTime()} disabled={busy()} onInput={(event) => setTargetShowTime(Number(event.currentTarget.value))} /></label>
           </div>
+          <Show when={actionKind() === "release"}>
+            <label>Cue ID<input type="number" min="1" value={cueId()} disabled={busy()} onInput={(event) => setCueId(Number(event.currentTarget.value))} /></label>
+          </Show>
+          <Show when={actionKind() === "take" || actionKind() === "clip_launch" || actionKind() === "transition"}>
+            <div class="split">
+              <label>Video layer ID<input type="number" min="1" value={videoLayerId()} disabled={busy()} onInput={(event) => setVideoLayerId(Number(event.currentTarget.value))} /></label>
+              <label>Fade/transition (ms)<input type="number" min="0" value={videoFadeMs()} disabled={busy()} onInput={(event) => setVideoFadeMs(Number(event.currentTarget.value))} /></label>
+            </div>
+          </Show>
+          <Show when={actionKind() === "clip_launch" || actionKind() === "transition"}>
+            <label>Video clip slot ID<input type="number" min="1" value={videoSlotId()} disabled={busy()} onInput={(event) => setVideoSlotId(Number(event.currentTarget.value))} /></label>
+          </Show>
+          <Show when={actionKind() === "timeline_jump"}>
+            <label>Timeline position (ms)<input type="number" min="0" value={timelineJumpPosition()} disabled={busy()} onInput={(event) => setTimelineJumpPosition(Number(event.currentTarget.value))} /></label>
+          </Show>
           <button onClick={() => void scheduleAction()} disabled={!props.backendAvailable || !status().running || status().role !== "primary" || busy()}>Send authenticated action</button>
           <div class="split">
             <label>Re-arm clock generation<input type="number" min="1" value={rearmClockGeneration()} disabled={busy()} onInput={(event) => setRearmClockGeneration(Number(event.currentTarget.value))} /></label>
@@ -316,7 +374,9 @@ export function ShowClockStatusPanel(props: ShowClockStatusPanelProps) {
           </div>
           <label class="checkboxLabel"><input type="checkbox" checked={confirmPrimaryStopped()} disabled={busy()} onChange={(event) => setConfirmPrimaryStopped(event.currentTarget.checked)} /> I confirm the old Primary is stopped</label>
           <button onClick={() => void rearm()} disabled={!props.backendAvailable || !status().running || status().role !== "standby" || busy()}>Manual Re-arm</button>
-          <p class="textPretty standbyIntro">Re-arm advances the fencing generation, clears prior queued actions, and keeps the ShowClock output gate disarmed until local output ownership and a physical dispatcher are explicitly connected.</p>
+          <label class="checkboxLabel"><input type="checkbox" checked={confirmOutputArm()} disabled={busy()} onChange={(event) => setConfirmOutputArm(event.currentTarget.checked)} /> I confirm local lighting output ownership before Arm</label>
+          <button onClick={() => void armOutput()} disabled={!props.backendAvailable || !status().running || status().output_armed || busy()}>Arm local output</button>
+          <p class="textPretty standbyIntro">Re-arm clears prior queued actions. Arm then requires local lighting ownership and LOCKED state; scheduled actions are dispatched through the existing EngineHandle boundary.</p>
         </div>
       </details>
       <p class="showClockEndpoint tabularNums">Local {status().local_address ?? "—"} · Session {status().session_id ?? sessionId()}</p>
