@@ -70,12 +70,12 @@ the exact Build Tools linker pinned first:
 | `cargo test --manifest-path app/src-tauri/Cargo.toml --locked control_plane::tests -- --nocapture --test-threads=1` | PASS — 30 command-admission tests |
 | `pnpm.cmd --dir app exec tsc --noEmit; pnpm.cmd --dir app run build` | PASS — TypeScript and Vite production build; 354 modules transformed |
 | `pnpm.cmd --dir app run check:frontend-invokes; pnpm.cmd --dir app run check:frontend-command-routing; node app/scripts/check-tauri-admission-inventory.mjs; pnpm.cmd --dir app run check:output-control-runtime` | PASS — 464 frontend commands; routing 133/31/28/471; 523 native commands with 18 negative fixtures rejected; output-control contracts pass |
-| `pnpm.cmd --dir app tauri build --no-bundle` | PASS — exact MSVC 14.44.35207 linker; final release executable built in 3m35s without first-party warnings |
+| `pnpm.cmd --dir app tauri build --no-bundle` | PASS — exact MSVC 14.44.35207 linker; final release executable built in 3m32s without first-party warnings |
 | Exact `target/release/syndocal.exe` process smoke | PASS — exactly 1 exact-path process, `Syndocal` title, nonzero window handle, `Responding=True`, maximize requested, exact-path cleanup complete |
 | `git diff --check` | PASS |
 
 The final current-source executable SHA-256 is
-`DBD55E63DA4AA2CE629941838E1779081ED7A22107B11FEC4DD548F9C7CFEF3E`.
+`ABE07C3592AC2F06EA94BD19E1CBCBE592848224430451AFD3FA712E954F34B5`.
 It is an unsigned, unpublished process-smoke binary, not release acceptance.
 
 The new protocol tests cover required and kind-bound action payloads, payload

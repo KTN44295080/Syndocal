@@ -494,3 +494,28 @@ output was emitted.
 Next safe action is to run the Q1/Q4 ledger validator and diff checks, then
 commit and push this bounded protocol checkpoint. Any external gates still
 require their actual UI/device/two-machine topology and separate evidence.
+
+## Continuation checkpoint — current-source native artifact refresh
+
+This checkpoint is based on branch `codex/showclock-review-20260912` at
+`35d40f12` and refreshes the native artifact proof after formatting the
+current protocol sources.
+
+The exact pinned MSVC 14.44.35207 x64 `tauri build --no-bundle` completed in
+3m32s without first-party warnings. The exact
+`target/release/syndocal.exe` process smoke observed one responsive
+`Syndocal` window, requested maximize, and cleaned up only that exact path.
+The resulting current-source executable SHA-256 is
+`ABE07C3592AC2F06EA94BD19E1CBCBE592848224430451AFD3FA712E954F34B5`.
+
+The ledger and fenced roadmap mirror now point at this refreshed artifact.
+This remains software, native process-smoke, and loopback evidence only;
+native UI button-by-button interaction, physical MIDI/OSC/DMX/Art-Net output,
+real wired two-machine partition/rejoin/crash/restart/soak, replay restoration,
+witness/interlock, automatic failover, venue behavior, signing, publication,
+and product-wide completion remain unaccepted external gates. No physical
+DMX output was emitted in this checkpoint.
+
+Next safe action is to run the ledger validator and diff checks, then commit
+and push this documentation-only artifact refresh. External gates still
+require their actual UI/device/two-machine topology and separate evidence.
