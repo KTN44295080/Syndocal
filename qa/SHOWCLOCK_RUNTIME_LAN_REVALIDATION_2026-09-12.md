@@ -70,16 +70,16 @@ the exact Build Tools linker pinned first:
 | `cargo test -p protocol --locked -- --test-threads=1` | PASS — 238 unit, 7 integration, 4 doctests; 0 failed/ignored |
 | `cargo test -p io --locked show_clock_lan -- --nocapture --test-threads=1` | PASS — 3 focused loopback tests |
 | `cargo test -p io --locked -- --test-threads=1` | PASS — 184 unit tests, 3 ignored, 0 failed; 2 two-process integration tests passed; 0 doctests |
-| `cargo test --manifest-path app/src-tauri/Cargo.toml --locked show_clock_ipc::tests -- --nocapture --test-threads=1` | PASS — 6 lifecycle/action/fence/output-dispatch tests |
+| `cargo test --manifest-path app/src-tauri/Cargo.toml --locked show_clock_ipc::tests -- --nocapture --test-threads=1` | PASS — 7 lifecycle/action/fence/output-dispatch/status-recovery tests |
 | `cargo test --manifest-path app/src-tauri/Cargo.toml --locked control_plane::tests -- --nocapture --test-threads=1` | PASS — 30 command-admission tests |
 | `pnpm.cmd --dir app exec tsc --noEmit; pnpm.cmd --dir app run build` | PASS — TypeScript and Vite production build; 354 modules transformed |
 | `pnpm.cmd --dir app run check:frontend-invokes; pnpm.cmd --dir app run check:frontend-command-routing; node app/scripts/check-tauri-admission-inventory.mjs; pnpm.cmd --dir app run check:output-control-runtime` | PASS — 464 frontend commands; routing 133/31/28/471; 523 native commands with 18 negative fixtures rejected; output-control contracts pass |
-| `pnpm.cmd --dir app tauri build --no-bundle` | PASS — exact MSVC 14.44.35207 linker; final release executable built in 2m31s without first-party warnings |
+| `pnpm.cmd --dir app tauri build --no-bundle` | PASS — exact MSVC 14.44.35207 linker; final release executable built in 2m37s (180.02s wall) without first-party warnings |
 | Exact `target/release/syndocal.exe` process smoke | PASS — exactly 1 exact-path process, `Syndocal` title, nonzero window handle, `Responding=True`, maximize requested, exact-path cleanup complete |
 | `git diff --check` | PASS |
 
 The final current-source executable SHA-256 is
-`2E7F01BF5DD427E4544494B2303194D9A4ABA2E51EFCDAFD747ABAC1C4737C95`.
+`56BD2EF7B828D1597ECFD3C4EC842248FDC41A668A16D5C298AA14310854FCC2`.
 It is an unsigned, unpublished process-smoke binary, not release acceptance.
 
 The new protocol tests cover required and kind-bound action payloads, payload
@@ -99,6 +99,10 @@ The combined peer admission regression proves that a validator does not commit
 sequence state when estimator generation validation rejects the same sample.
 The action scheduler regression proves that a replayed Primary sequence cannot
 replace an already queued action or become executable again after dispatch.
+The native Standby status regression proves that an old authenticated duplicate
+cannot lower `last_action_sequence`; the status remains a monotonic recovery
+floor for a remounted or refreshed frontend panel while still reporting the
+latest admission result.
 
 ## Tauri IPC/UI and process loopback
 
@@ -116,7 +120,9 @@ are remembered. The session and key are deliberately not persisted, so a
 process restart requires a fresh paired session and key. When the panel is
 remounted or refreshed, its action-sequence input advances from the latest
 backend status, preventing a stale UI value from resubmitting a prior
-sequence.
+sequence. Duplicate authenticated packets cannot move that backend recovery
+floor backwards, so the UI cannot infer an unsafe next sequence from a later
+retransmission.
 
 An accepted action is retained in the generation-bound scheduler while the
 ShowClock output gate is disarmed. Primary output arm requires the explicit

@@ -1067,23 +1067,17 @@ fn run_standby(
                     .admit(&action)
                     .map_err(|error| format!("ShowClock standby action rejected: {error}"))?;
                 let action_id = hex_string(&action.body.action_id);
-                update_status(status, |current| {
-                    current.last_action_sequence = action.body.sequence;
-                    current.last_action_id = Some(action_id.clone());
-                    current.last_action_status = Some(
-                        match admission {
-                            ShowClockActionAdmission::Accepted => "authenticated",
-                            ShowClockActionAdmission::Duplicate => "duplicate",
-                        }
-                        .to_string(),
-                    );
-                    current.accepted_actions = runtime
+                publish_action_admission(
+                    status,
+                    action.body.sequence,
+                    action_id,
+                    &admission,
+                    runtime
                         .action_receiver
                         .as_ref()
                         .expect("standby action receiver exists")
-                        .accepted_action_count()
-                        as u32;
-                });
+                        .accepted_action_count() as u32,
+                );
                 if admission == ShowClockActionAdmission::Accepted {
                     let received_at_us = monotonic_elapsed_us(origin, Instant::now());
                     let estimate = runtime
@@ -1359,6 +1353,30 @@ fn publish_estimate(
         current.last_sequence = last_sequence;
         current.offset_us = estimate.offset_us;
         current.sample_age_us = estimate.sample_age_us;
+    });
+}
+
+fn publish_action_admission(
+    status: &Arc<Mutex<ShowClockIpcStatus>>,
+    sequence: u64,
+    action_id: String,
+    admission: &ShowClockActionAdmission,
+    accepted_actions: u32,
+) {
+    update_status(status, |current| {
+        // Duplicate packets can arrive after a later accepted action. Keep the
+        // status sequence as a recovery floor for a remounted UI instead of
+        // allowing an old retransmission to move it backwards.
+        current.last_action_sequence = current.last_action_sequence.max(sequence);
+        current.last_action_id = Some(action_id);
+        current.last_action_status = Some(
+            match admission {
+                ShowClockActionAdmission::Accepted => "authenticated",
+                ShowClockActionAdmission::Duplicate => "duplicate",
+            }
+            .to_string(),
+        );
+        current.accepted_actions = accepted_actions;
     });
 }
 
@@ -1755,6 +1773,25 @@ mod tests {
             status.last_action_status.as_deref(),
             Some("auto_disarmed_unsafe_clock_state")
         );
+    }
+
+    #[test]
+    fn duplicate_action_status_cannot_lower_sequence_recovery_floor() {
+        let status = Arc::new(Mutex::new(ShowClockIpcStatus {
+            last_action_sequence: 5,
+            ..ShowClockIpcStatus::default()
+        }));
+        publish_action_admission(
+            &status,
+            2,
+            "02000000000000000000000000000000".to_string(),
+            &ShowClockActionAdmission::Duplicate,
+            5,
+        );
+        let status = status.lock().unwrap().clone();
+        assert_eq!(status.last_action_sequence, 5);
+        assert_eq!(status.last_action_status.as_deref(), Some("duplicate"));
+        assert_eq!(status.accepted_actions, 5);
     }
 
     #[test]

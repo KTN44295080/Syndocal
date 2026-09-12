@@ -581,3 +581,41 @@ product-wide completion remain unaccepted external gates.
 
 Next safe action is to run the ledger validator and diff checks, then commit
 and push this UI implementation/evidence checkpoint.
+
+## Continuation checkpoint — duplicate action status recovery floor
+
+This checkpoint is based on branch `codex/showclock-review-20260912` at
+`4483e25a` and closes the remaining local status-regression path found during
+the ShowClock IPC audit.
+
+Standby now publishes authenticated action admission through one status helper.
+The helper keeps `last_action_sequence` at the maximum observed value instead
+of letting an old authenticated duplicate overwrite it with a smaller value.
+The latest action id/status and accepted-action count still update normally.
+The focused regression
+`duplicate_action_status_cannot_lower_sequence_recovery_floor` proves that a
+duplicate sequence 2 cannot lower an existing sequence-5 recovery floor.
+
+The exact pinned MSVC 14.44.35207 x64 no-bundle build passed in 2m37s
+(180.02s wall) without first-party warnings. The exact-path process smoke
+observed PID 39892 with one `Syndocal` window, `Responding=True`, window handle
+2951068, maximize requested, exit code 0, and zero exact-path processes after
+cleanup. The current-source executable SHA-256 is
+`56BD2EF7B828D1597ECFD3C4EC842248FDC41A668A16D5C298AA14310854FCC2`.
+
+Current focused evidence is protocol 20/20 and full protocol 238 unit + 7
+integration + 4 doctests, IO LAN 3/3, two-process 2/2, and Tauri ShowClock
+7/7. TypeScript/Vite, frontend invoke inventory, and routing checks remain
+passing at 354 modules, 464 commands, and 133/31/28/471. The whole-repository
+Cargo format check still reports a pre-existing unrelated formatting delta;
+the changed helper itself is formatted and `git diff --check` passes.
+
+This closes the local duplicate-status recovery path only. It does not claim
+native UI button-by-button interaction, physical MIDI/OSC/DMX/Art-Net output,
+real wired two-machine partition/rejoin/crash/restart/soak, replay restoration,
+witness/interlock, automatic failover, venue behavior, signing, publication,
+or product-wide completion. No physical DMX output was emitted.
+
+Next safe action is to run the ledger validator and diff checks, then commit
+and push this implementation/evidence checkpoint. External gates require
+their actual UI/device/two-machine topology and separate evidence.
