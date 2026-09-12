@@ -3706,6 +3706,7 @@ version = "1.2.0-alpha.69"
 dependencies = [
  "serde",
  "serde_json",
+ "sha2",
  "unicode-normalization",
 ]
 

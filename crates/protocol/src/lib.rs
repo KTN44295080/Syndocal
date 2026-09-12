@@ -12,6 +12,7 @@ pub mod control_plane_query;
 pub mod control_plane_registry_v2;
 pub mod agent_authority;
 pub mod fixture_stage_layout;
+pub mod show_clock;
 
 pub use fixture_stage_layout::validate_fixture_stage_layout;
 pub use fixture_stage_layout::{
