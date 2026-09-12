@@ -3,7 +3,7 @@
   "source_document": "qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md",
   "authoritative_sections": ["6", "7", "8", "9"],
   "classifications": ["Supported", "Deferred", "External acceptance", "Out of scope"],
-  "expected_status_counts": { "Open": 46, "Deferred": 8, "Complete": 4 },
+  "expected_status_counts": { "Open": 45, "Deferred": 8, "Complete": 5 },
   "expected_section_counts": { "6": 37, "7": 6, "8": 9, "9": 6 },
   "items": [
     {
@@ -88,13 +88,13 @@
     },
     {
       "id": "AI1-SCHEMAS-001",
-      "source": { "section": "6", "kind": "Open" },
+      "source": { "section": "6", "kind": "Complete" },
       "classification": "Supported",
       "owner": "AI control-plane owner",
       "dependency": "AI0 source coverage and generation authority model",
-      "nonclaim": "Does not claim query/event resynchronization is implemented.",
-      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/SYNDOCAL_AI_CONTROL_PLANE_ROADMAP.md"],
-      "status": "Open"
+      "nonclaim": "Does not claim external adapters, native UI, hardware, venue, signing, publication, or whole AI0-AI8 acceptance.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/SYNDOCAL_AI_CONTROL_PLANE_ROADMAP.md", "app/scripts/check-ai1-query-event-contract.mjs", "qa/AI1_QUERY_EVENT_CHECKPOINT_2026-09-13.md"],
+      "status": "Complete"
     },
     {
       "id": "AI2-COMMAND-BRIDGE-001",

@@ -15,7 +15,7 @@ export const allowedClassifications = Object.freeze([
   "Out of scope",
 ]);
 export const allowedSourceKinds = Object.freeze(["Open", "Deferred", "Complete"]);
-export const expectedStatusCounts = Object.freeze({ Open: 46, Deferred: 8, Complete: 4 });
+export const expectedStatusCounts = Object.freeze({ Open: 45, Deferred: 8, Complete: 5 });
 export const expectedSectionCounts = Object.freeze({ "6": 37, "7": 6, "8": 9, "9": 6 });
 
 const markerPattern = /<!--\s*completion-ledger:\s*(Open|Deferred|Complete):\s*([A-Z0-9-]+)\s*-->/gu;

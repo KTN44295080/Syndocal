@@ -1617,8 +1617,8 @@ blocked every job, so no CI/platform claim is derived from that run.
 ## 6. Dependency-ordered remaining implementation
 
 `qa/SYNDOCAL_COMPLETION_LEDGER.json` is the machine-readable completion index for
-sections 6 through 9. It currently records 46 `Open` current checkboxes, 8
-`Deferred` rows, and 4 `Complete` current checkboxes: the two explicit platform
+sections 6 through 9. It currently records 45 `Open` current checkboxes, 8
+`Deferred` rows, and 5 `Complete` current checkboxes: the two explicit platform
 deferrals plus the six frozen distribution rows remain deferred. Each indexed
 row carries one stable trailing `completion-ledger` marker whose `Open`,
 `Deferred`, or `Complete` kind is checked against the ledger. The index is
@@ -1689,7 +1689,7 @@ Exit: all five AI3 roadmap categories accepted. Do not begin AI4 before this exi
 ### Phase 3 — AI0-AI8 control plane completion
 
 - [x] AI0 complete source inventory/coverage gate; unclassified mutations fail. <!-- completion-ledger: Complete: AI0-COVERAGE-001 -->
-- [ ] AI1 query/event schemas, snapshots, generations, gap/resnapshot, bounds. <!-- completion-ledger: Open: AI1-SCHEMAS-001 -->
+- [x] AI1 query/event schemas, snapshots, generations, gap/resnapshot, bounds. <!-- completion-ledger: Complete: AI1-SCHEMAS-001 -->
 - [ ] AI2 authored command bridge with E/R/H, owner incarnation, receipts, Undo. <!-- completion-ledger: Open: AI2-COMMAND-BRIDGE-001 -->
 - [ ] AI4 principals, pairing, grants, revocation, kill switch, exact reviewed <!-- completion-ledger: Open: AI4-CONSENT-001 -->
   local/native consent policies, and release-build bypass absence. This does not
