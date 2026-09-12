@@ -203,36 +203,42 @@ impl DmxInput {
                                         .map(|packet| (packet.universe, packet.data))
                                 }
                             };
-                            let Some((universe, data)) = parsed else {
-                                if let Ok(mut status) = thread_status.lock() {
-                                    status.invalid_packets =
-                                        status.invalid_packets.saturating_add(1);
+                            match parsed {
+                                None => {
+                                    if let Ok(mut status) = thread_status.lock() {
+                                        status.invalid_packets =
+                                            status.invalid_packets.saturating_add(1);
+                                    }
                                 }
-                                continue;
-                            };
-                            if universe != config.universe {
-                                continue;
+                                Some((universe, data)) if universe == config.universe => {
+                                    let mut values = Box::new([0u8; 512]);
+                                    let length = data.len().min(values.len());
+                                    values[..length].copy_from_slice(&data[..length]);
+                                    last_packet_at = Some(Instant::now());
+                                    if let Ok(mut status) = thread_status.lock() {
+                                        status.signal_present = true;
+                                        status.packets_received =
+                                            status.packets_received.saturating_add(1);
+                                        status.last_packet_unix_ms = Some(current_unix_ms());
+                                        status.source_address = Some(source.to_string());
+                                    }
+                                    if let Some(mapping_universe) =
+                                        control_mapping_universe(config.protocol, universe)
+                                    {
+                                        update_dmx_learning(
+                                            &thread_learn,
+                                            mapping_universe,
+                                            &values,
+                                        );
+                                    }
+                                    callback(DmxInputEvent::Frame {
+                                        universe,
+                                        values,
+                                        merge_mode: config.merge_mode,
+                                    });
+                                }
+                                Some(_) => {}
                             }
-                            let mut values = Box::new([0u8; 512]);
-                            let length = data.len().min(values.len());
-                            values[..length].copy_from_slice(&data[..length]);
-                            last_packet_at = Some(Instant::now());
-                            if let Ok(mut status) = thread_status.lock() {
-                                status.signal_present = true;
-                                status.packets_received = status.packets_received.saturating_add(1);
-                                status.last_packet_unix_ms = Some(current_unix_ms());
-                                status.source_address = Some(source.to_string());
-                            }
-                            if let Some(mapping_universe) =
-                                control_mapping_universe(config.protocol, universe)
-                            {
-                                update_dmx_learning(&thread_learn, mapping_universe, &values);
-                            }
-                            callback(DmxInputEvent::Frame {
-                                universe,
-                                values,
-                                merge_mode: config.merge_mode,
-                            });
                         }
                         Err(error)
                             if matches!(
@@ -551,6 +557,98 @@ mod tests {
         let lost = receiver.recv_timeout(Duration::from_secs(1)).unwrap();
         assert!(matches!(lost, DmxInputEvent::SignalLost { universe: 3 }));
         assert!(!input.status().signal_present);
+    }
+
+    #[test]
+    fn artnet_input_signal_loss_is_not_starved_by_unrelated_or_malformed_traffic() {
+        let probe = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let port = probe.local_addr().unwrap().port();
+        drop(probe);
+        let (sender, receiver) = mpsc::channel();
+        let input = DmxInput::start(
+            DmxInputConfig {
+                protocol: DmxInputProtocol::ArtNet,
+                bind_ip: "127.0.0.1".to_string(),
+                port,
+                universe: 3,
+                merge_enabled: true,
+                merge_mode: DmxMergeMode::Htp,
+                timeout_ms: 120,
+            },
+            move |event| {
+                let _ = sender.send(event);
+            },
+        )
+        .unwrap();
+        let socket = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let mut valid_frame = [0u8; 512];
+        valid_frame[0] = 200;
+        let valid_packet =
+            crate::artnet::build_art_dmx_packet_with_sequence(3, 1, &valid_frame);
+        socket.send_to(&valid_packet, ("127.0.0.1", port)).unwrap();
+        assert!(matches!(
+            receiver.recv_timeout(Duration::from_secs(1)).unwrap(),
+            DmxInputEvent::Frame { universe: 3, .. }
+        ));
+
+        let unrelated_packet =
+            crate::artnet::build_art_dmx_packet_with_sequence(4, 1, &valid_frame);
+        let malformed_packet = [0u8; 8];
+        let timeout_deadline = Instant::now() + Duration::from_millis(500);
+        let mut signal_lost = false;
+        while Instant::now() < timeout_deadline {
+            socket
+                .send_to(&unrelated_packet, ("127.0.0.1", port))
+                .unwrap();
+            socket
+                .send_to(&malformed_packet, ("127.0.0.1", port))
+                .unwrap();
+            if let Ok(event) = receiver.recv_timeout(Duration::from_millis(25)) {
+                if matches!(event, DmxInputEvent::SignalLost { universe: 3 }) {
+                    signal_lost = true;
+                    break;
+                }
+                panic!("unexpected event while only unrelated traffic is sent: {event:?}");
+            }
+        }
+        assert!(
+            signal_lost,
+            "valid universe must time out while unrelated or malformed packets continue"
+        );
+        assert!(!input.status().signal_present);
+        assert!(input.status().invalid_packets > 0);
+
+        let duplicate_deadline = Instant::now() + Duration::from_millis(220);
+        while Instant::now() < duplicate_deadline {
+            socket
+                .send_to(&unrelated_packet, ("127.0.0.1", port))
+                .unwrap();
+            socket
+                .send_to(&malformed_packet, ("127.0.0.1", port))
+                .unwrap();
+            if let Ok(event) = receiver.recv_timeout(Duration::from_millis(25)) {
+                panic!("signal loss must be emitted once until recovery: {event:?}");
+            }
+        }
+
+        valid_frame[0] = 201;
+        let recovery_packet =
+            crate::artnet::build_art_dmx_packet_with_sequence(3, 2, &valid_frame);
+        socket
+            .send_to(&recovery_packet, ("127.0.0.1", port))
+            .unwrap();
+        let recovered = receiver.recv_timeout(Duration::from_secs(1)).unwrap();
+        match recovered {
+            DmxInputEvent::Frame {
+                universe, values, ..
+            } => {
+                assert_eq!(universe, 3);
+                assert_eq!(values[0], 201);
+            }
+            event => panic!("valid packet must recover the input: {event:?}"),
+        }
+        assert!(input.status().signal_present);
+        assert_eq!(input.status().packets_received, 2);
     }
 
     #[test]

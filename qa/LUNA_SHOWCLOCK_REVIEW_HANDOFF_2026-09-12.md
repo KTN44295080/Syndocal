@@ -180,6 +180,22 @@ LAN, native, physical, two-process, two-machine, and venue gates remain open.
   traffic and merge clearing. Include malformed-packet traffic, no duplicate
   timeout events, and recovery on a valid U3 packet. No physical DMX is needed.
 
+### DMX input timeout checkpoint
+
+The DMX timeout finding is addressed in the current continuation checkpoint.
+Malformed packets and valid packets for another universe are now classified
+without bypassing the shared timeout check; only a valid frame for the
+configured universe refreshes liveness. The new loopback regression reproduced
+the pre-fix failure, then passed after the change while asserting SignalLost,
+status clearing, no duplicate timeout, malformed-packet accounting, and valid
+recovery. The DMX module and full IO suite also pass under the pinned MSVC
+14.44.35207 x64 procedure. Evidence is recorded in
+`qa/DMX_INPUT_TIMEOUT_REVALIDATION_2026-09-12.md`.
+
+This closes only the current-source IO software slice. Physical DMX, external
+Art-Net nodes, native acceptance, LAN, two-process, two-machine, and venue
+gates remain open.
+
 ### 4. MIDI/OSC frontend authority and lifecycle
 
 The frontend reviewer traced `app/src/createControlInputController.ts` against
