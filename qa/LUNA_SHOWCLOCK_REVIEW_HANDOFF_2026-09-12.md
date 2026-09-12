@@ -452,3 +452,45 @@ physical DMX output was emitted.
 Next safe action is to run the ledger validator and diff checks, then commit
 and push this bounded safety checkpoint. Any remaining external gates require
 their actual native UI/device/two-machine topology and separate evidence.
+
+## Continuation checkpoint — atomic admission and canonical tag closure
+
+This checkpoint is based on branch `codex/showclock-review-20260912` at
+`4f793325` and records the next protocol hardening after the STALE safety
+closure.
+
+Implemented changes:
+
+- `ShowClockPeerValidator` now separates validation from commit so the combined
+  peer validator/estimator path validates both owners before either state is
+  mutated. A generation rejection therefore cannot consume sequence state.
+- Sample and action canonical bytes now use explicit stable wire-tag mappings
+  instead of relying on enum declaration order. Existing canonical vectors
+  remain unchanged.
+
+Current evidence:
+
+- protocol focused 19/19 and full protocol 237 unit + 7 integration + 4
+  doctests, all passing;
+- IO focused LAN 3/3 and the two-process integration test 2/2 passing;
+- Tauri ShowClock focused 6/6, control-plane 30/30, frontend/static checks
+  unchanged and previously passing;
+- local rustfmt check passes for both changed protocol files;
+- pinned MSVC 14.44.35207 x64 release no-bundle build passed in 3m35s with
+  no first-party warnings. Exact release process smoke observed one responsive
+  `Syndocal` window, requested maximize, and cleaned up only that exact path.
+  The current executable SHA-256 is
+  `DBD55E63DA4AA2CE629941838E1779081ED7A22107B11FEC4DD548F9C7CFEF3E`.
+
+The updated ShowClock ledger and fenced roadmap mirror record protocol
+evidence 248 assertions, runtime/LAN evidence 22 assertions, and the current
+native hash. This remains current-source and loopback evidence; native UI
+button-by-button interaction, physical output, real wired two-machine
+partition/rejoin, crash/restart replay restoration, witness/interlock,
+automatic failover, venue behavior, signing, publication, and product-wide
+completion remain open and are not inferred here. No additional physical DMX
+output was emitted.
+
+Next safe action is to run the Q1/Q4 ledger validator and diff checks, then
+commit and push this bounded protocol checkpoint. Any external gates still
+require their actual UI/device/two-machine topology and separate evidence.

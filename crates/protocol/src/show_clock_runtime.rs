@@ -141,6 +141,16 @@ impl ShowClockEstimator {
         sample: &ShowClockSample,
         received_at_us: u64,
     ) -> Result<(), ShowClockValidationError> {
+        self.validate_observation(sample, received_at_us)?;
+        self.apply_observation(sample, received_at_us);
+        Ok(())
+    }
+
+    fn validate_observation(
+        &self,
+        sample: &ShowClockSample,
+        received_at_us: u64,
+    ) -> Result<(), ShowClockValidationError> {
         sample.validate_shape()?;
         if sample.clock_generation != self.clock_generation {
             return Err(ShowClockValidationError::ClockGenerationMismatch);
@@ -154,7 +164,10 @@ impl ShowClockEstimator {
         {
             return Err(ShowClockValidationError::Reordered);
         }
+        Ok(())
+    }
 
+    fn apply_observation(&mut self, sample: &ShowClockSample, received_at_us: u64) {
         let raw_offset = signed_difference(sample.show_time_us, received_at_us);
         if self.last_received_at_us.is_none() {
             self.offset_us = raw_offset;
@@ -182,7 +195,6 @@ impl ShowClockEstimator {
                 ShowClockEstimatorState::Acquiring
             };
         }
-        Ok(())
     }
 
     /// Advance the estimate using caller-supplied local monotonic time.
@@ -655,15 +667,13 @@ impl ShowClockPeerEstimator {
         sample: &crate::show_clock::AuthenticatedShowClockSample,
         received_at_us: u64,
     ) -> Result<(), ShowClockValidationError> {
-        if self
-            .estimator
-            .last_received_at_us
-            .is_some_and(|last| received_at_us < last)
-        {
-            return Err(ShowClockValidationError::Reordered);
-        }
-        validator.accept(sample)?;
-        self.estimator.observe(&sample.body, received_at_us)
+        validator.validate_sample_admission(sample)?;
+        self.estimator
+            .validate_observation(&sample.body, received_at_us)?;
+        validator.commit_sample(&sample.body);
+        self.estimator
+            .apply_observation(&sample.body, received_at_us);
+        Ok(())
     }
 }
 
@@ -946,7 +956,10 @@ mod tests {
         let mut estimator = ShowClockEstimator::new(Default::default(), 1, 1).unwrap();
         for sequence in 1..=3 {
             estimator
-                .observe(&sample(sequence, 1_000_000 + sequence), 1_000_000 + sequence)
+                .observe(
+                    &sample(sequence, 1_000_000 + sequence),
+                    1_000_000 + sequence,
+                )
                 .unwrap();
         }
         assert_eq!(estimator.state(), ShowClockEstimatorState::Locked);
@@ -992,5 +1005,28 @@ mod tests {
         );
         assert_eq!(validator.last_sequence(), 1);
         assert_eq!(peer.estimator().accepted_samples(), 1);
+    }
+
+    #[test]
+    fn authenticated_peer_admission_is_atomic_when_estimator_rejects_generation() {
+        let mut validator = ShowClockPeerValidator::new(
+            ShowClockSessionId::new("session-1").unwrap(),
+            ShowClockNodeId::new("node-primary").unwrap(),
+            PROJECT,
+            MEDIA,
+            1,
+            1,
+            KEY,
+        )
+        .unwrap();
+        let mut peer = ShowClockPeerEstimator::new(Default::default(), 2, 1).unwrap();
+        let signed = AuthenticatedShowClockSample::sign(sample(1, 1_000_000), &KEY).unwrap();
+
+        assert_eq!(
+            peer.accept_authenticated_sample(&mut validator, &signed, 1_000_000),
+            Err(ShowClockValidationError::ClockGenerationMismatch)
+        );
+        assert_eq!(validator.last_sequence(), 0);
+        assert_eq!(peer.estimator().accepted_samples(), 0);
     }
 }

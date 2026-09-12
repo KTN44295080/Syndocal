@@ -13,10 +13,14 @@ authenticated action-payload extension to the v1 action schema:
 - Authentication remains the protocol boundary: callers must first admit an
   authenticated sample/action, then pass the accepted body through runtime
   policy. Project, lease, audio, recording, clock, and fencing generations are
-  checked together before output dispatch.
+  checked together before output dispatch. Peer validation and estimator
+  validation are both completed before either owner commits admission state.
 - `ShowClockActionPayload` binds Release, Take, ClipLaunch/Transition, and
   TimelineJump to their required typed fields. Payload presence, kind, IDs,
   and values are validated before canonical authentication bytes are accepted.
+- Canonical sample/action bytes use explicit stable wire-tag mappings rather
+  than enum declaration casts, preserving the v1 vectors if declarations are
+  reordered later.
 
 The frozen software policy is:
 
@@ -58,20 +62,20 @@ the exact Build Tools linker pinned first:
 
 | Command | Observed result |
 | --- | --- |
-| `cargo test -p protocol --locked show_clock -- --nocapture --test-threads=1` | PASS — 18 focused tests |
-| `cargo test -p protocol --locked -- --test-threads=1` | PASS — 236 unit, 7 integration, 4 doctests; 0 failed/ignored |
+| `cargo test -p protocol --locked show_clock -- --nocapture --test-threads=1` | PASS — 19 focused tests |
+| `cargo test -p protocol --locked -- --test-threads=1` | PASS — 237 unit, 7 integration, 4 doctests; 0 failed/ignored |
 | `cargo test -p io --locked show_clock_lan -- --nocapture --test-threads=1` | PASS — 3 focused loopback tests |
 | `cargo test -p io --locked -- --test-threads=1` | PASS — 184 unit tests, 3 ignored, 0 failed; 2 two-process integration tests passed; 0 doctests |
 | `cargo test --manifest-path app/src-tauri/Cargo.toml --locked show_clock_ipc::tests -- --nocapture --test-threads=1` | PASS — 6 lifecycle/action/fence/output-dispatch tests |
 | `cargo test --manifest-path app/src-tauri/Cargo.toml --locked control_plane::tests -- --nocapture --test-threads=1` | PASS — 30 command-admission tests |
 | `pnpm.cmd --dir app exec tsc --noEmit; pnpm.cmd --dir app run build` | PASS — TypeScript and Vite production build; 354 modules transformed |
 | `pnpm.cmd --dir app run check:frontend-invokes; pnpm.cmd --dir app run check:frontend-command-routing; node app/scripts/check-tauri-admission-inventory.mjs; pnpm.cmd --dir app run check:output-control-runtime` | PASS — 464 frontend commands; routing 133/31/28/471; 523 native commands with 18 negative fixtures rejected; output-control contracts pass |
-| `pnpm.cmd --dir app tauri build --no-bundle` | PASS — exact MSVC 14.44.35207 linker; final release executable built in 3m38s without first-party warnings |
+| `pnpm.cmd --dir app tauri build --no-bundle` | PASS — exact MSVC 14.44.35207 linker; final release executable built in 3m35s without first-party warnings |
 | Exact `target/release/syndocal.exe` process smoke | PASS — exactly 1 exact-path process, `Syndocal` title, nonzero window handle, `Responding=True`, maximize requested, exact-path cleanup complete |
 | `git diff --check` | PASS |
 
 The final current-source executable SHA-256 is
-`916E8221F81984A8740DFF569CB988BBEA54A2ADBB633194C6E381988595E132`.
+`DBD55E63DA4AA2CE629941838E1779081ED7A22107B11FEC4DD548F9C7CFEF3E`.
 It is an unsigned, unpublished process-smoke binary, not release acceptance.
 
 The new protocol tests cover required and kind-bound action payloads, payload
@@ -87,6 +91,8 @@ The estimator regression also proves that STALE remains latched until explicit
 Manual Hold and an advanced armed fence; the native dispatcher regression
 proves that STALE/FAULT revokes an armed local output gate and permit before
 queue polling.
+The combined peer admission regression proves that a validator does not commit
+sequence state when estimator generation validation rejects the same sample.
 
 ## Tauri IPC/UI and process loopback
 

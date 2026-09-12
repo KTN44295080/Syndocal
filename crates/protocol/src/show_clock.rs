@@ -359,8 +359,8 @@ impl ShowClockSample {
         append_u64(&mut output, self.show_time_us);
         append_u32(&mut output, self.bpm_milli);
         append_u32(&mut output, self.beat_phase_ppm);
-        output.push(self.transport as u8);
-        output.push(self.source as u8);
+        output.push(show_transport_state_tag(self.transport));
+        output.push(show_clock_source_tag(self.source));
         output.extend_from_slice(&self.project_hash.0);
         output.extend_from_slice(&self.media_hash.0);
         append_u64(&mut output, self.expires_after_us);
@@ -538,6 +538,15 @@ impl ShowClockPeerValidator {
         &mut self,
         sample: &AuthenticatedShowClockSample,
     ) -> Result<(), ShowClockValidationError> {
+        self.validate_sample_admission(sample)?;
+        self.commit_sample(&sample.body);
+        Ok(())
+    }
+
+    pub(crate) fn validate_sample_admission(
+        &self,
+        sample: &AuthenticatedShowClockSample,
+    ) -> Result<(), ShowClockValidationError> {
         sample.verify_and_canonical(self.peer.key.as_bytes())?;
         self.peer.validate_sample(&sample.body)?;
         if sample.body.sequence <= self.last_sequence {
@@ -559,10 +568,13 @@ impl ShowClockPeerValidator {
         {
             return Err(ShowClockValidationError::Reordered);
         }
-        self.last_sequence = sample.body.sequence;
-        self.last_show_time_us = Some(sample.body.show_time_us);
-        self.last_sender_monotonic_us = Some(sample.body.sender_monotonic_us);
         Ok(())
+    }
+
+    pub(crate) fn commit_sample(&mut self, sample: &ShowClockSample) {
+        self.last_sequence = sample.sequence;
+        self.last_show_time_us = Some(sample.show_time_us);
+        self.last_sender_monotonic_us = Some(sample.sender_monotonic_us);
     }
 
     pub fn last_sequence(&self) -> u64 {
@@ -636,8 +648,8 @@ impl ShowClockAction {
         append_u64(&mut output, self.clock_generation);
         append_u64(&mut output, self.fencing_generation);
         append_u64(&mut output, self.target_show_time_us);
-        output.push(self.action as u8);
-        output.push(self.late_policy as u8);
+        output.push(show_clock_action_kind_tag(self.action));
+        output.push(show_clock_late_policy_tag(self.late_policy));
         if let Some(payload) = self.payload.as_ref() {
             append_action_payload(&mut output, payload)?;
         }
@@ -1005,6 +1017,48 @@ fn validate_ascii_id(value: &str) -> Result<(), ShowClockValidationError> {
         return Err(ShowClockValidationError::EmptyOrInvalidId);
     }
     Ok(())
+}
+
+fn show_clock_source_tag(source: ShowClockSource) -> u8 {
+    match source {
+        ShowClockSource::ShowClock => 0,
+        ShowClockSource::MidiClock => 1,
+        ShowClockSource::MidiTimecode => 2,
+        ShowClockSource::Ltc => 3,
+        ShowClockSource::AbletonLink => 4,
+        ShowClockSource::Manual => 5,
+    }
+}
+
+fn show_transport_state_tag(state: ShowTransportState) -> u8 {
+    match state {
+        ShowTransportState::Stopped => 0,
+        ShowTransportState::Playing => 1,
+        ShowTransportState::Paused => 2,
+        ShowTransportState::Holding => 3,
+    }
+}
+
+fn show_clock_action_kind_tag(action: ShowClockActionKind) -> u8 {
+    match action {
+        ShowClockActionKind::Go => 0,
+        ShowClockActionKind::Stop => 1,
+        ShowClockActionKind::Back => 2,
+        ShowClockActionKind::Release => 3,
+        ShowClockActionKind::Blackout => 4,
+        ShowClockActionKind::Take => 5,
+        ShowClockActionKind::ClipLaunch => 6,
+        ShowClockActionKind::Transition => 7,
+        ShowClockActionKind::TimelineJump => 8,
+    }
+}
+
+fn show_clock_late_policy_tag(policy: ShowClockLatePolicy) -> u8 {
+    match policy {
+        ShowClockLatePolicy::ExecuteImmediately => 0,
+        ShowClockLatePolicy::Drop => 1,
+        ShowClockLatePolicy::Hold => 2,
+    }
 }
 
 fn append_id(output: &mut Vec<u8>, value: &str) -> Result<(), ShowClockValidationError> {
