@@ -25,6 +25,43 @@ export interface OutputOwnershipStatus {
   error: string | null;
 }
 
+export type ShowClockIpcRole = "primary" | "standby";
+export type ShowClockIpcPhase = "STOPPED" | "ACQUIRING" | "LOCKED" | "HOLD" | "STALE" | "FAULT";
+
+export interface ShowClockIpcStatus {
+  running: boolean;
+  role: ShowClockIpcRole | null;
+  state: ShowClockIpcPhase;
+  local_address: string | null;
+  peer_address: string | null;
+  session_id: string | null;
+  node_id: string | null;
+  clock_generation: number;
+  fencing_generation: number;
+  accepted_samples: number;
+  last_sequence: number;
+  offset_us: number;
+  sample_age_us: number | null;
+  output_armed: boolean;
+  last_error: string | null;
+}
+
+export interface ShowClockStartRequest {
+  role: ShowClockIpcRole;
+  bind_address: string;
+  peer_address: string;
+  session_id: string;
+  node_id: string;
+  peer_node_id: string;
+  project_hash_hex: string;
+  media_hash_hex: string;
+  key_hex: string;
+  clock_generation: number;
+  fencing_generation: number;
+  bpm_milli: number;
+  initial_show_time_us: number;
+}
+
 export type AttributeResolution = "EightBit" | "SixteenBit";
 
 export interface CieColorSummary {

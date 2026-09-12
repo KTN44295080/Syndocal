@@ -61,9 +61,9 @@ const KEYBOARD_SHORTCUT_SOURCE_MANIFEST: &str =
 const KEYBOARD_SHORTCUT_SOURCE_MANIFEST_SCHEMA_VERSION: u16 = 1;
 const KEYBOARD_APP_SHORTCUT_SOURCE_COUNT: usize = 30;
 const KEYBOARD_PROJECT_FILE_SHORTCUT_SOURCE_COUNT: usize = 3;
-const FROZEN_TAURI_ROUTE_ADMISSION_COUNT: usize = 516;
+const FROZEN_TAURI_ROUTE_ADMISSION_COUNT: usize = 519;
 const FROZEN_TAURI_ROUTE_ADMISSION_SHA256: &str =
-    "5120894f36feb82ac58fffd4db20739d80ae1b1a1c556fc95838a1708cbb8eea";
+    "bf6ce87083bb277f6ac8e2f3d6f5e8d08e5219d90e87395ec2bfeee732f3361e";
 /// The command source is parsed and validated exactly once.  Local discovery
 /// calls only clone this immutable, validated value; they never parse source
 /// text or make an external request on the invocation path.
@@ -309,6 +309,7 @@ fn is_tauri_read_only_route(command: &str) -> bool {
             | "get_project_history_status"
             | "get_project_recovery_authority_status"
             | "get_serial_dmx_machine_binding_status_v1"
+            | "get_show_clock_status"
             | "get_show_serial_dmx_safety_blackout_route_status_v1"
             | "get_snapshot"
             | "get_snapshot_delta"
@@ -512,6 +513,7 @@ fn is_tauri_runtime_mutation(command: &str) -> bool {
             | "start_live_audio_input"
             | "start_osc_input"
             | "start_remote_control"
+            | "start_show_clock"
             | "start_standby_sync"
             | "start_video_output_recording"
             | "stop_close_asio_program_cue_output"
@@ -519,6 +521,7 @@ fn is_tauri_runtime_mutation(command: &str) -> bool {
             | "stop_live_audio_input"
             | "stop_osc_input"
             | "stop_remote_control"
+            | "stop_show_clock"
             | "stop_standby_sync"
             | "stop_video_layer_audio_monitor"
             | "stop_video_output_recording"
@@ -2360,7 +2363,7 @@ mod tests {
             + OSC_INPUT_EVENT_COUNT
             + DMX_INPUT_PROTOCOL_COUNT
             + DMX_INPUT_EVENT_COUNT;
-        const FRONTEND_INVOKE_COUNT: usize = 457;
+        const FRONTEND_INVOKE_COUNT: usize = 460;
         assert_eq!(MIDI_OSC_DMX_OPERATION_COUNT, 206);
         assert_eq!(
             registry.operations.len(),
@@ -2731,7 +2734,7 @@ mod tests {
         const ENGINE_COUNT: usize = 280;
         const REMOTE_COUNT: usize = 116;
         const MIDI_OSC_DMX_COUNT: usize = 206;
-        const FRONTEND_COUNT: usize = 457;
+        const FRONTEND_COUNT: usize = 460;
         const LEGACY_SOURCE_TOTAL: usize =
             TAURI_COUNT + ENGINE_COUNT + REMOTE_COUNT + MIDI_OSC_DMX_COUNT + FRONTEND_COUNT;
         const KEYBOARD_APP_COUNT: usize = 30;

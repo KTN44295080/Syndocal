@@ -22197,6 +22197,42 @@ h3 {
   padding-right: 5px;
 }
 
+.showClockPanel {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  min-width: 0;
+}
+
+.showClockStatusGrid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.showClockStatusGrid dd,
+.showClockEndpoint {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.showClockForm {
+  display: grid;
+  gap: 6px;
+}
+
+.showClockForm input,
+.showClockForm select {
+  min-width: 0;
+  width: 100%;
+}
+
+.showClockEndpoint {
+  margin: 0;
+  color: #8f9caf;
+  font-size: 10px;
+}
+
 .standbyIntro {
   margin: 0;
   color: #aab4c2;

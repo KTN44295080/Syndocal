@@ -81,6 +81,7 @@ use video_recording::{
 mod show_artnet_acceptance_probe;
 #[cfg(test)]
 mod show_artnet_loopback_route_tests;
+mod show_clock_ipc;
 #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
 mod show_spout_outputs;
 #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
@@ -206,6 +207,7 @@ fn direct_media_audio_output_format(output: &DirectMediaAudioOutput) -> (u32, u1
 }
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
+use show_clock_ipc::{ShowClockIpcState, ShowClockIpcStatus, ShowClockStartRequest};
 #[cfg(windows)]
 use std::os::windows::{fs::OpenOptionsExt, io::AsRawHandle};
 // macOS/Linux file coherence relies on the stable Unix inode identity/version
@@ -25189,6 +25191,7 @@ const PREFLIGHT_ONLY_NONPROJECT_OR_INNER_RUNTIME_ROUTES: &[&str] = &[
     "start_live_audio_input",
     "start_osc_input",
     "start_remote_control",
+    "start_show_clock",
     "start_standby_sync",
     "start_video_output_recording",
     "stop_close_asio_program_cue_output",
@@ -25196,6 +25199,7 @@ const PREFLIGHT_ONLY_NONPROJECT_OR_INNER_RUNTIME_ROUTES: &[&str] = &[
     "stop_live_audio_input",
     "stop_osc_input",
     "stop_remote_control",
+    "stop_show_clock",
     "stop_standby_sync",
     "stop_video_layer_audio_monitor",
     "stop_video_output_recording",
@@ -76621,6 +76625,29 @@ async fn get_output_ownership_status(
     })
     .await
     .map_err(|error| format!("Output ownership status query worker failed: {error}"))?
+}
+
+#[tauri::command]
+async fn get_show_clock_status(app: tauri::AppHandle) -> Result<ShowClockIpcStatus, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<ShowClockIpcState>()
+            .status()
+    })
+    .await
+    .map_err(|error| format!("ShowClock status query worker failed: {error}"))?
+}
+
+#[tauri::command]
+fn start_show_clock(
+    state: State<'_, ShowClockIpcState>,
+    request: ShowClockStartRequest,
+) -> Result<ShowClockIpcStatus, String> {
+    state.start(request)
+}
+
+#[tauri::command]
+fn stop_show_clock(state: State<'_, ShowClockIpcState>) -> Result<ShowClockIpcStatus, String> {
+    state.stop()
 }
 
 #[tauri::command]
@@ -131108,6 +131135,7 @@ fn main() {
             native_video_output_metrics: Mutex::new(HashMap::new()),
             native_video_output_workers: Mutex::new(HashMap::new()),
         })
+        .manage(ShowClockIpcState::default())
         .manage(PaneWindowLifecycleRegistry::default())
         .manage(control_plane_query_state)
         .on_window_event(|window, event| {
@@ -131237,6 +131265,9 @@ fn main() {
             set_output_config,
             set_dmx_outputs,
             get_output_ownership_status,
+            get_show_clock_status,
+            start_show_clock,
+            stop_show_clock,
             set_output_ownership_role,
             arm_output_ownership_role,
             send_dmx_test_frame,
