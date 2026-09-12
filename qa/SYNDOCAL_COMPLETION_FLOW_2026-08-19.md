@@ -1708,7 +1708,7 @@ Exit: AI0-AI8 accepted without weakening local Blackout or claiming unattended R
 
 - [x] F1 monotonic input generations for MIDI/OSC/DMX Learn/workers and stale callback <!-- completion-ledger: Complete: F1-INPUT-GENERATIONS-001 -->
   retirement on mapping/project replacement.
-- [ ] F2 full Lighting/Video/Both/Standby ownership across DMX, NDI, Spout/Syphon, <!-- completion-ledger: Open: F2-OUTPUT-OWNERSHIP-001 -->
+- [x] F2 bounded local Lighting/Video/Both/Standby ownership across DMX, NDI, Spout/Syphon, <!-- completion-ledger: Complete: F2-OUTPUT-OWNERSHIP-001 -->
   Display, native windows, SDK resources, Take Over, teardown ACK, and explicit Arm.
 - [ ] Freeze ShowClock transport/discovery/authentication/key rotation/replay, <!-- completion-ledger: Open: SHOWCLOCK-DECISIONS-001 -->
   master-clock/slew/Hold, witness/fence/physical-interlock, mixed-version, and

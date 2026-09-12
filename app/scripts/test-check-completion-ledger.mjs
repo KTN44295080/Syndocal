@@ -20,7 +20,7 @@ const fixtureOptions = {
 const result = validateCompletionLedger({ ledger, sourceDocument, repoRoot: workspaceRoot });
 assert.equal(result.itemCount, 58);
 assert.deepEqual(result.sections, ["6", "7", "8", "9"]);
-assert.deepEqual(result.statusCounts, { Open: 42, Deferred: 8, Complete: 8 });
+assert.deepEqual(result.statusCounts, { Open: 41, Deferred: 8, Complete: 9 });
 assert.deepEqual(result.sectionCounts, { "6": 37, "7": 6, "8": 9, "9": 6 });
 
 function expectFailure(name, mutate, pattern, options = {}) {
@@ -98,8 +98,8 @@ expectFailure(
 );
 expectFailure(
   "open source row cannot be marked Complete",
-  (candidate) => { candidate.items.find((item) => item.id === "F1-INPUT-GENERATIONS-001").status = "Complete"; },
-  /open source row F1-INPUT-GENERATIONS-001 must remain status Open/u,
+  (candidate) => { candidate.items.find((item) => item.id === "AI5-SIDECAR-001").status = "Complete"; },
+  /open source row AI5-SIDECAR-001 must remain status Open/u,
 );
 
 expectFailure(
@@ -126,13 +126,13 @@ expectFailure(
 );
 expectFailure(
   "wrong classification for an open source row fails closed",
-  (candidate) => { candidate.items.find((item) => item.id === "F1-INPUT-GENERATIONS-001").classification = "Deferred"; },
-  /open source row F1-INPUT-GENERATIONS-001 must be Supported or External acceptance/u,
+  (candidate) => { candidate.items.find((item) => item.id === "AI5-SIDECAR-001").classification = "Deferred"; },
+  /open source row AI5-SIDECAR-001 must be Supported or External acceptance/u,
 );
 expectFailure(
   "wrong status for an open source row fails closed",
-  (candidate) => { candidate.items.find((item) => item.id === "F1-INPUT-GENERATIONS-001").status = "Deferred"; },
-  /open source row F1-INPUT-GENERATIONS-001 must remain status Open/u,
+  (candidate) => { candidate.items.find((item) => item.id === "AI5-SIDECAR-001").status = "Deferred"; },
+  /open source row AI5-SIDECAR-001 must remain status Open/u,
 );
 expectFailure(
   "wrong source kind fails closed",

@@ -3,7 +3,7 @@
   "source_document": "qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md",
   "authoritative_sections": ["6", "7", "8", "9"],
   "classifications": ["Supported", "Deferred", "External acceptance", "Out of scope"],
-  "expected_status_counts": { "Open": 42, "Deferred": 8, "Complete": 8 },
+  "expected_status_counts": { "Open": 41, "Deferred": 8, "Complete": 9 },
   "expected_section_counts": { "6": 37, "7": 6, "8": 9, "9": 6 },
   "items": [
     {
@@ -168,13 +168,13 @@
     },
     {
       "id": "F2-OUTPUT-OWNERSHIP-001",
-      "source": { "section": "6", "kind": "Open" },
+      "source": { "section": "6", "kind": "Complete" },
       "classification": "Supported",
       "owner": "Output-ownership owner",
       "dependency": "F1 input generations and AI3 output-lease authority",
-      "nonclaim": "Does not claim all Lighting, Video, Both, and Standby resources have accepted ownership semantics.",
-      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/M4_IO_VALIDATION.md"],
-      "status": "Open"
+      "nonclaim": "Does not claim native GPU/driver/HDMI behavior, physical DMX/Art-Net/RDM, external NDI/Spout, venue operation, or distributed ownership acceptance.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/SYNDOCAL_2PC_TRANCHE1_OUTPUT_OWNERSHIP.md", "app/scripts/check-output-ownership.mjs", "app/scripts/check-f2-output-ownership.mjs", "qa/F2_OUTPUT_OWNERSHIP_CHECKPOINT_2026-09-13.md"],
+      "status": "Complete"
     },
     {
       "id": "SHOWCLOCK-DECISIONS-001",
