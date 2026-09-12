@@ -15,6 +15,7 @@ grafton-ndi = { workspace = true, optional = true }
 midir.workspace = true
 protocol.workspace = true
 rosc.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 serialport.workspace = true
 thiserror.workspace = true

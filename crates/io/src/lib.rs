@@ -12,6 +12,7 @@ pub mod remote_ws;
 pub mod sacn;
 pub mod serial_dmx;
 pub mod serial_rdm;
+pub mod show_clock_lan;
 
 pub use control_plane::{
     control_plane_midi_osc_dmx_descriptors, control_plane_remote_descriptors,

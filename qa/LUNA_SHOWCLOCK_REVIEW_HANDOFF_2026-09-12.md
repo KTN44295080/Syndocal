@@ -214,6 +214,34 @@ physical MIDI/OSC matrix, external clients, controller movement, LED/clock/MTC
 observation, latency, LAN, two-process, two-machine, and venue gates remain
 open.
 
+### ShowClock runtime/LAN checkpoint
+
+The ShowClock continuation now has a transport-neutral deterministic runtime
+in `crates/protocol/src/show_clock_runtime.rs` and a manually paired exact-peer
+UDP adapter in `crates/io/src/show_clock_lan.rs`. The estimator establishes its
+initial offset from the first authenticated sample, bounds later correction to
+1,000 µs per sample, honors the lower of 750,000 µs and sample expiry for
+STALE, publishes monotonic show time, and requires explicit Manual Hold plus
+an operator-confirmed advanced fencing generation to re-arm. The action
+scheduler is bounded to 256 entries and ±10 seconds, applies signed late
+policy, rejects clock/fencing generation drift, and the output gate requires
+exact project/lease/audio/recording/clock/fencing generations plus owner and
+Locked state before queue consumption.
+
+The LAN adapter uses explicit unicast peer addresses and protocol version 1;
+there is no discovery or automatic failover. Wrong-source traffic cannot
+extend the absolute receive deadline, and malformed/oversized paired packets
+fail closed. Protocol focused tests pass 16/16; the full protocol suite passes
+234 unit, 7 integration, and 4 doctests; LAN focused tests pass 3/3; and the
+full IO suite passes 184 with 3 ignored and 0 failed under the pinned MSVC
+14.44.35207 x64 linker. Evidence is recorded in
+`qa/SHOWCLOCK_RUNTIME_LAN_REVALIDATION_2026-09-12.md`.
+
+This closes only the current-source estimator/scheduler/output-gate and
+loopback transport slice. Tauri IPC/UI wiring, native-window proof, physical
+output, real wired two-machine partition/rejoin, crash/restart replay-state
+restoration, witness/interlock, and venue acceptance remain open.
+
 ### 4. MIDI/OSC frontend authority and lifecycle
 
 The frontend reviewer traced `app/src/createControlInputController.ts` against

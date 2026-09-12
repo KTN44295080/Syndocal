@@ -54,6 +54,12 @@ pub enum ShowClockValidationError {
     ReArmGenerationNotAdvanced,
     ReArmClockGenerationRewound,
     ActionAdmissionCapacityExceeded,
+    InvalidEstimatorConfig,
+    ActionOutsideHorizon,
+    ActionScheduleCapacityExceeded,
+    OutputNotArmed,
+    OutputGenerationMismatch,
+    OutputOwnerMismatch,
     AlreadyArmed,
 }
 
@@ -90,6 +96,14 @@ impl std::fmt::Display for ShowClockValidationError {
             Self::ActionAdmissionCapacityExceeded => {
                 "ShowClock action admission capacity is exhausted"
             }
+            Self::InvalidEstimatorConfig => "ShowClock estimator configuration is invalid",
+            Self::ActionOutsideHorizon => "ShowClock action is outside the scheduling horizon",
+            Self::ActionScheduleCapacityExceeded => {
+                "ShowClock action schedule capacity is exhausted"
+            }
+            Self::OutputNotArmed => "ShowClock output owner is not armed",
+            Self::OutputGenerationMismatch => "ShowClock output generation context does not match",
+            Self::OutputOwnerMismatch => "ShowClock output owner does not match",
             Self::AlreadyArmed => "ShowClock peer is already armed",
         })
     }
