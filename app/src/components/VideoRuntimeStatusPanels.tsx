@@ -41,6 +41,8 @@ interface ExternalVideoIoStatusPanelProps {
   checked: boolean;
   planRows: ExternalVideoStatusRow[];
   activeTransportRows: ExternalVideoStatusRow[];
+  liveSourceRows: ExternalVideoStatusRow[];
+  liveSourceFaultRows: ExternalVideoStatusRow[];
   captureFaultRows: ExternalVideoStatusRow[];
   transportRows: ExternalVideoStatusRow[];
   transportEventRows: ExternalVideoStatusRow[];
@@ -139,6 +141,40 @@ export function ExternalVideoIoStatusPanel(props: ExternalVideoIoStatusPanelProp
                 {route.backend} / {route.label}
               </small>
               <small>{route.endpoint}</small>
+            </span>
+          )}
+        </For>
+        <For each={props.liveSourceRows}>
+          {(source) => (
+            <span
+              class={props.transportClass(source.stateClass)}
+              title={`${source.detail} / ${source.endpoint}`}
+              data-video-live-source-row
+            >
+              <strong>
+                {source.stateLabel} {source.direction}
+              </strong>
+              <small>
+                {source.backend} / {source.label}
+              </small>
+              <small>{source.endpoint}</small>
+            </span>
+          )}
+        </For>
+        <For each={props.liveSourceFaultRows}>
+          {(fault) => (
+            <span
+              class={props.transportClass(fault.stateClass)}
+              title={`${fault.detail} / ${fault.endpoint}`}
+              data-video-live-source-fault-row
+            >
+              <strong>
+                {fault.stateLabel} {fault.direction}
+              </strong>
+              <small>
+                {fault.backend} / {fault.label}
+              </small>
+              <small>{fault.detail}</small>
             </span>
           )}
         </For>

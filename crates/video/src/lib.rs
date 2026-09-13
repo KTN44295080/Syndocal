@@ -30,6 +30,7 @@ mod hap_decoder;
 mod isf_runtime;
 mod libav_decoder;
 mod layer_thumbnail_render;
+mod live_source;
 mod show_spout_aspect_fit;
 mod video_render_cancellation;
 
@@ -44,6 +45,10 @@ pub use isf_runtime::{
     ISF_MAX_SOURCE_BYTES,
 };
 pub use libav_decoder::LibavFrameDecoder;
+pub use live_source::{
+    LiveVideoSourceIdentity, LiveVideoSourceRuntimeStatus, LiveVideoSourceState,
+    LIVE_VIDEO_SOURCE_IDENTITY_VERSION,
+};
 pub use video_render_cancellation::VideoRenderCancellation;
 
 use ffmpeg_cancellable_process::{run_cancellable_process, CancellableProcessError};
@@ -765,6 +770,7 @@ pub struct ExternalVideoInputPlan {
     pub label: String,
     pub kind: VideoSourceKind,
     pub backend_id: String,
+    pub source_identity: String,
     pub endpoint_name: String,
     pub enabled: bool,
 }
@@ -796,6 +802,7 @@ pub struct ExternalVideoInputRoutePlan {
     pub label: String,
     pub kind: VideoSourceKind,
     pub backend_id: String,
+    pub source_identity: String,
     pub backend_label: Option<String>,
     pub backend_state: Option<VideoBackendState>,
     pub backend_detail: Option<String>,
@@ -879,11 +886,14 @@ pub struct ExternalVideoTransportSyncReport {
 pub struct ExternalVideoTransportStatus {
     pub active_routes: Vec<ExternalVideoTransportRoute>,
     pub active_count: usize,
+    pub live_sources: Vec<LiveVideoSourceRuntimeStatus>,
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct ExternalVideoTransportRuntime {
     active_routes: Vec<ExternalVideoTransportRoute>,
+    live_sources: Vec<LiveVideoSourceRuntimeStatus>,
+    source_generations: HashMap<String, u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -7078,6 +7088,9 @@ pub fn build_external_video_input_plans(snapshot: &VideoSnapshot) -> Vec<Externa
                 label: layer.label.clone(),
                 kind: layer.source.kind.clone(),
                 backend_id: backend_id.to_string(),
+                source_identity: LiveVideoSourceIdentity::new(backend_id, &endpoint_name)
+                    .expect("validated live video source identity")
+                    .stable_key(),
                 endpoint_name,
                 enabled: layer.state.enabled,
             })
@@ -7130,6 +7143,7 @@ pub fn build_external_video_io_route_plans(
                     label: plan.label,
                     kind: plan.kind,
                     backend_id: plan.backend_id,
+                    source_identity: plan.source_identity,
                     backend_label: backend.label,
                     backend_state: backend.state,
                     backend_detail: backend.detail,
@@ -7212,6 +7226,7 @@ impl ExternalVideoTransportRuntime {
         ExternalVideoTransportStatus {
             active_routes: self.active_routes.clone(),
             active_count: self.active_routes.len(),
+            live_sources: self.live_sources.clone(),
         }
     }
 
@@ -7258,6 +7273,36 @@ impl ExternalVideoTransportRuntime {
         let mut desired = Vec::new();
         let mut blocked = Vec::new();
         let mut idle = Vec::new();
+        let mut live_sources = plans
+            .inputs
+            .iter()
+            .map(|input| {
+                let generation = self
+                    .source_generations
+                    .get(&input.source_identity)
+                    .copied()
+                    .unwrap_or(0);
+                let (state, issue) = if !input.enabled {
+                    (LiveVideoSourceState::Disabled, None)
+                } else if !input.ready {
+                    (
+                        LiveVideoSourceState::Unavailable,
+                        input.issue.clone(),
+                    )
+                } else if input.live {
+                    (LiveVideoSourceState::Starting, None)
+                } else {
+                    (LiveVideoSourceState::Ready, None)
+                };
+                LiveVideoSourceRuntimeStatus {
+                    route_id: input.layer_id,
+                    identity: input.source_identity.clone(),
+                    generation,
+                    state,
+                    issue,
+                }
+            })
+            .collect::<Vec<_>>();
 
         for input in &plans.inputs {
             let route = external_video_input_transport_route(input);
@@ -7336,6 +7381,17 @@ impl ExternalVideoTransportRuntime {
         if stop_failed.is_empty() {
             if let Err(error) = admit_start(driver) {
                 for route in &started {
+                    if route.direction == ExternalVideoTransportDirection::Input {
+                        if let Some(source) = live_sources
+                            .iter_mut()
+                            .find(|source| source.route_id == route.route_id)
+                        {
+                            source.state = LiveVideoSourceState::Fault;
+                            source.issue = Some(format!(
+                                "External video start admission was denied after route stop: {error}"
+                            ));
+                        }
+                    }
                     start_failed.push(ExternalVideoTransportFailedRoute {
                         route: route.clone(),
                         issue: format!(
@@ -7345,20 +7401,64 @@ impl ExternalVideoTransportRuntime {
                 }
             } else {
                 for route in &started {
+                    if route.direction == ExternalVideoTransportDirection::Input {
+                        let generation = self
+                            .source_generations
+                            .entry(live_source_identity_from_route(route))
+                            .and_modify(|generation| *generation = generation.saturating_add(1))
+                            .or_insert(1);
+                        if let Some(source) = live_sources
+                            .iter_mut()
+                            .find(|source| source.route_id == route.route_id)
+                        {
+                            source.generation = *generation;
+                        }
+                    }
                     match driver.start_route(route) {
                         Ok(()) => {
                             push_unique_transport_route(&mut active_routes, route.clone());
                             started_ok.push(route.clone());
+                            if route.direction == ExternalVideoTransportDirection::Input {
+                                if let Some(source) = live_sources
+                                    .iter_mut()
+                                    .find(|source| source.route_id == route.route_id)
+                                {
+                                    source.state = LiveVideoSourceState::Live;
+                                }
+                            }
                         }
-                        Err(error) => start_failed.push(ExternalVideoTransportFailedRoute {
-                            route: route.clone(),
-                            issue: error.message,
-                        }),
+                        Err(error) => {
+                            if route.direction == ExternalVideoTransportDirection::Input {
+                                if let Some(source) = live_sources
+                                    .iter_mut()
+                                    .find(|source| source.route_id == route.route_id)
+                                {
+                                    source.state = LiveVideoSourceState::Fault;
+                                    source.issue = Some(error.message.clone());
+                                }
+                            }
+                            start_failed.push(ExternalVideoTransportFailedRoute {
+                                route: route.clone(),
+                                issue: error.message,
+                            })
+                        }
                     }
                 }
             }
         } else {
             for route in &started {
+                if route.direction == ExternalVideoTransportDirection::Input {
+                    if let Some(source) = live_sources
+                        .iter_mut()
+                        .find(|source| source.route_id == route.route_id)
+                    {
+                        source.state = LiveVideoSourceState::Fault;
+                        source.issue = Some(
+                            "External video start was withheld because route teardown failed"
+                                .to_string(),
+                        );
+                    }
+                }
                 start_failed.push(ExternalVideoTransportFailedRoute {
                     route: route.clone(),
                     issue: "External video start was withheld because route teardown failed"
@@ -7367,7 +7467,42 @@ impl ExternalVideoTransportRuntime {
             }
         }
 
+        for failure in &stop_failed {
+            let route = &failure.route;
+            if route.direction != ExternalVideoTransportDirection::Input {
+                continue;
+            }
+            live_sources.push(LiveVideoSourceRuntimeStatus {
+                route_id: route.route_id,
+                identity: live_source_identity_from_route(route),
+                generation: self
+                    .source_generations
+                    .get(&live_source_identity_from_route(route))
+                    .copied()
+                    .unwrap_or(0),
+                state: LiveVideoSourceState::Retiring,
+                issue: Some(failure.issue.clone()),
+            });
+        }
+
+        for source in &mut live_sources {
+            let active = active_routes.iter().any(|route| {
+                route.direction == ExternalVideoTransportDirection::Input
+                    && route.route_id == source.route_id
+                    && live_source_identity_from_route(route) == source.identity
+            });
+            if active {
+                source.state = LiveVideoSourceState::Live;
+                source.generation = self
+                    .source_generations
+                    .get(&source.identity)
+                    .copied()
+                    .unwrap_or(source.generation);
+            }
+        }
+
         self.active_routes = active_routes;
+        self.live_sources = live_sources;
         ExternalVideoTransportSyncReport {
             active_count: self.active_routes.len(),
             started: started_ok,
@@ -7381,6 +7516,7 @@ impl ExternalVideoTransportRuntime {
     }
 
     pub fn clear(&mut self) -> Vec<ExternalVideoTransportRoute> {
+        self.live_sources.clear();
         std::mem::take(&mut self.active_routes)
     }
 }
@@ -7411,6 +7547,12 @@ fn external_video_input_transport_route(
         backend_id: plan.backend_id.clone(),
         endpoint_name: plan.endpoint_name.clone(),
     }
+}
+
+fn live_source_identity_from_route(route: &ExternalVideoTransportRoute) -> String {
+    LiveVideoSourceIdentity::new(&route.backend_id, &route.endpoint_name)
+        .expect("validated live video transport route identity")
+        .stable_key()
 }
 
 fn external_video_output_transport_route(
@@ -11634,7 +11776,13 @@ mod tests {
         );
         assert_eq!(third.active_count, 0);
         assert!(runtime.active_routes().is_empty());
-        assert_eq!(runtime.status(), ExternalVideoTransportStatus::default());
+        let blackout_status = runtime.status();
+        assert!(blackout_status.active_routes.is_empty());
+        assert_eq!(blackout_status.live_sources.len(), 1);
+        assert_eq!(
+            blackout_status.live_sources[0].state,
+            LiveVideoSourceState::Unavailable
+        );
         assert_eq!(
             driver.events,
             vec![
@@ -11698,6 +11846,89 @@ mod tests {
             .iter()
             .any(|route| route.route.direction == ExternalVideoTransportDirection::Output));
         assert!(runtime.active_routes().is_empty());
+    }
+
+    #[test]
+    fn external_video_source_state_tracks_fault_reconnect_and_disable() {
+        #[derive(Default)]
+        struct Driver {
+            fail_start: bool,
+            events: Vec<String>,
+        }
+
+        impl ExternalVideoTransportDriver for Driver {
+            fn start_route(
+                &mut self,
+                route: &ExternalVideoTransportRoute,
+            ) -> Result<(), ExternalVideoTransportDriverError> {
+                self.events.push(format!("start:{}", route.endpoint_name));
+                if self.fail_start {
+                    Err(ExternalVideoTransportDriverError {
+                        message: "source permission denied".to_string(),
+                    })
+                } else {
+                    Ok(())
+                }
+            }
+
+            fn stop_route(
+                &mut self,
+                route: &ExternalVideoTransportRoute,
+            ) -> Result<(), ExternalVideoTransportDriverError> {
+                self.events.push(format!("stop:{}", route.endpoint_name));
+                Ok(())
+            }
+        }
+
+        let identity = LiveVideoSourceIdentity::new("camera", "camera-profile-v1")
+            .unwrap()
+            .stable_key();
+        let mut plans = ExternalVideoIoRoutePlans {
+            inputs: vec![ExternalVideoInputRoutePlan {
+                layer_id: 21,
+                label: "Camera".to_string(),
+                kind: VideoSourceKind::Camera,
+                backend_id: "camera".to_string(),
+                source_identity: identity.clone(),
+                backend_label: Some("Camera".to_string()),
+                backend_state: Some(VideoBackendState::Available),
+                backend_detail: Some("camera backend available".to_string()),
+                endpoint_name: "camera-profile-v1".to_string(),
+                enabled: true,
+                ready: true,
+                live: true,
+                issue: None,
+            }],
+            outputs: Vec::new(),
+        };
+        let mut runtime = ExternalVideoTransportRuntime::new();
+        let mut driver = Driver {
+            fail_start: true,
+            ..Driver::default()
+        };
+
+        let failed = runtime.sync_routes_with_driver(&plans, &mut driver);
+        assert_eq!(failed.start_failed.len(), 1);
+        assert_eq!(runtime.status().live_sources[0].state, LiveVideoSourceState::Fault);
+        assert_eq!(runtime.status().live_sources[0].generation, 1);
+        assert_eq!(runtime.status().live_sources[0].identity, identity);
+
+        driver.fail_start = false;
+        let recovered = runtime.sync_routes_with_driver(&plans, &mut driver);
+        assert_eq!(recovered.started.len(), 1);
+        assert_eq!(runtime.status().live_sources[0].state, LiveVideoSourceState::Live);
+        assert_eq!(runtime.status().live_sources[0].generation, 2);
+
+        plans.inputs[0].enabled = false;
+        plans.inputs[0].live = false;
+        let disabled = runtime.sync_routes_with_driver(&plans, &mut driver);
+        assert_eq!(disabled.stopped.len(), 1);
+        assert_eq!(runtime.status().live_sources[0].state, LiveVideoSourceState::Disabled);
+        assert_eq!(driver.events, vec![
+            "start:camera-profile-v1",
+            "start:camera-profile-v1",
+            "stop:camera-profile-v1",
+        ]);
     }
 
     #[test]

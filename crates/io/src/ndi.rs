@@ -177,6 +177,16 @@ impl NdiInput {
         &self.endpoint_name
     }
 
+    /// Returns the retained worker fault without draining the frame queue.
+    /// Runtime status polling can therefore expose a broken source while the
+    /// decoder remains the sole owner of frame consumption.
+    pub fn current_error(&self) -> Option<String> {
+        self.error
+            .lock()
+            .ok()
+            .and_then(|error| error.clone())
+    }
+
     pub fn take_latest(&self) -> Result<Option<NdiRgbaFrame>, NdiError> {
         self.check_worker()?;
         let mut latest = None;

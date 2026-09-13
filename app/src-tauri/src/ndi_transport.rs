@@ -299,6 +299,20 @@ impl NdiTransportState {
         }
     }
 
+    pub fn current_input_fault(&self, route_id: u64) -> Result<Option<String>, String> {
+        self.inputs
+            .lock()
+            .map(|inputs| inputs.get(&route_id).and_then(io::ndi::NdiInput::current_error))
+            .map_err(|_| "NDI input state lock was poisoned".to_string())
+    }
+
+    pub fn current_input_fault_nonblocking(&self, route_id: u64) -> Result<Option<String>, String> {
+        self.inputs
+            .try_lock()
+            .map(|inputs| inputs.get(&route_id).and_then(io::ndi::NdiInput::current_error))
+            .map_err(|_| "NDI input state is busy; retry".to_string())
+    }
+
     fn harvest_failed_workers(
         &mut self,
         engine: &EngineHandle,
@@ -3406,6 +3420,7 @@ mod capture_decoder_tests {
         };
         rearmed.complete().unwrap();
     }
+
 }
 
 #[cfg(all(test, feature = "spout", target_os = "windows", target_arch = "x86_64"))]

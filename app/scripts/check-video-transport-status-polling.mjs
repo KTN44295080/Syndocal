@@ -76,13 +76,13 @@ assert.match(
 );
 assert.match(
   app,
-  /status\.active_routes\.filter\(\(route\) =>[\s\S]*?capture_faults/s,
-  "faulted routes must be removed from Active rows",
+  /const sourceFaults = status\.live_source_faults \?\? status\.capture_faults \?\? \[\][\s\S]*?status\.active_routes\.filter\(\(route\) =>[\s\S]*?sourceFaults/s,
+  "live-source faulted routes must be removed from Active rows",
 );
 assert.match(
   app,
-  /report\.kept\.filter\(\(route\) => !hasCaptureFault\(route\)\)/,
-  "faulted routes must also be removed from a stale sync report",
+  /report\.kept\.filter\(\(route\) => !hasSourceFault\(route\)\)/,
+  "live-source faulted routes must also be removed from a stale sync report",
 );
 assert.match(app, /captureFaultText = captureFaults\.length > 0/, "transport summary must count capture faults");
 assert.match(

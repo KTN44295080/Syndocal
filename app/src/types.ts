@@ -1969,6 +1969,7 @@ export interface ExternalVideoInputPlan {
   label: string;
   kind: VideoSourceKind;
   backend_id: string;
+  source_identity: string;
   backend_label?: string | null;
   backend_state?: VideoBackendState | null;
   backend_detail?: string | null;
@@ -2049,6 +2050,8 @@ export interface ExternalVideoCaptureFaultStatus {
 export interface ExternalVideoTransportStatus {
   active_routes: ExternalVideoTransportRoute[];
   active_count: number;
+  live_sources: ExternalVideoSourceRuntimeStatus[];
+  live_source_faults: ExternalVideoCaptureFaultStatus[];
   capture_faults: ExternalVideoCaptureFaultStatus[];
   ownership_allowed: boolean;
   ownership_state: OutputOwnershipState;
@@ -2888,6 +2891,23 @@ export interface TimelineAudioPolicy {
   max_slew_ppm: number;
   max_drift_ms: number;
   resync_cooldown_ms: number;
+}
+
+export type ExternalVideoSourceRuntimeState =
+  | "Disabled"
+  | "Unavailable"
+  | "Ready"
+  | "Starting"
+  | "Live"
+  | "Fault"
+  | "Retiring";
+
+export interface ExternalVideoSourceRuntimeStatus {
+  route_id: number;
+  identity: string;
+  generation: number;
+  state: ExternalVideoSourceRuntimeState;
+  issue?: string | null;
 }
 
 export interface TimelineAudioClipSummary {

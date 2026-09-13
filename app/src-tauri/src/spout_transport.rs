@@ -94,6 +94,26 @@ impl SpoutTransportState {
         }
     }
 
+    pub fn current_input_fault(&self, route_id: u64) -> Result<Option<String>, String> {
+        let Some(worker) = self.input_workers.get(&route_id) else {
+            return Ok(None);
+        };
+        Ok(worker.failure_snapshot().map(|failure| failure.message).or_else(|| {
+            worker
+                .worker
+                .as_ref()
+                .filter(|worker| worker.is_finished())
+                .map(|_| "Spout input worker stopped without a fault message".to_string())
+        }))
+    }
+
+    pub fn current_input_fault_nonblocking(
+        &self,
+        route_id: u64,
+    ) -> Result<Option<String>, String> {
+        self.current_input_fault(route_id)
+    }
+
     pub fn harvest_failed_workers(
         &mut self,
         engine: &EngineHandle,
@@ -579,6 +599,7 @@ impl SpoutRouteWorker {
         let stop = Arc::new(AtomicBool::new(false));
         let worker_stop = Arc::clone(&stop);
         let failure = Arc::new(Mutex::new(None));
+        let worker_failure = Arc::clone(&failure);
         let teardown_lease = Arc::new(Mutex::new(None));
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
         let worker = std::thread::Builder::new()
@@ -635,7 +656,14 @@ impl SpoutRouteWorker {
                             }
                         }
                         Err(error) => {
-                            eprintln!("Spout input '{sender_name}' stopped: {error}");
+                            let message = format!("Spout input '{sender_name}' stopped: {error}");
+                            record_spout_worker_failure(
+                                &worker_failure,
+                                SpoutOutputWorkerStopError {
+                                    message: message.clone(),
+                                },
+                            );
+                            eprintln!("{message}");
                             break;
                         }
                     }

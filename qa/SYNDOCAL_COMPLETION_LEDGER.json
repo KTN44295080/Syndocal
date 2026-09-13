@@ -3,7 +3,7 @@
   "source_document": "qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md",
   "authoritative_sections": ["6", "7", "8", "9"],
   "classifications": ["Supported", "Deferred", "External acceptance", "Out of scope"],
-  "expected_status_counts": { "Open": 31, "Deferred": 8, "Complete": 19 },
+  "expected_status_counts": { "Open": 30, "Deferred": 8, "Complete": 20 },
   "expected_section_counts": { "6": 37, "7": 6, "8": 9, "9": 6 },
   "items": [
     {
@@ -248,13 +248,13 @@
     },
     {
       "id": "VIDEO-LIVE-SOURCES-001",
-      "source": { "section": "6", "kind": "Open" },
+      "source": { "section": "6", "kind": "Complete" },
       "classification": "Supported",
       "owner": "Live-video source owner",
       "dependency": "Video source identity model and output ownership",
-      "nonclaim": "Does not claim stable live-source identity, availability, permission, fault, reconnect, or worker retirement.",
-      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md"],
-      "status": "Open"
+      "nonclaim": "Closes the current-source live-input identity, state, fault-reporting, and worker-retirement software slice; does not claim real devices, peer interoperability, generator input, one-hour operation, or product-wide acceptance.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md", "qa/VIDEO_LIVE_SOURCES_CHECKPOINT_2026-09-13.md", "crates/video/src/live_source.rs", "crates/video/src/lib.rs", "app/src-tauri/src/main.rs", "app/src-tauri/src/ndi_transport.rs", "app/src-tauri/src/spout_transport.rs", "app/src/App.tsx", "app/src/components/VideoRuntimeStatusPanels.tsx", "app/src/createVideoRuntimeController.ts", "app/src/types.ts"],
+      "status": "Complete"
     },
     {
       "id": "RECORDING-001",

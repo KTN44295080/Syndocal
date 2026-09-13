@@ -72,6 +72,9 @@
             label: "NDI Camera".to_string(),
             kind: VideoSourceKind::Ndi,
             backend_id: "ndi".to_string(),
+            source_identity: video::LiveVideoSourceIdentity::new("ndi", "Camera")
+                .unwrap()
+                .stable_key(),
             backend_label: Some("NDI".to_string()),
             backend_state: Some(VideoBackendState::Available),
             backend_detail: Some("test backend".to_string()),

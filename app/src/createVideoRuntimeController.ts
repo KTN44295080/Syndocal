@@ -1558,7 +1558,7 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
       options.setExternalVideoTransportReport(null);
       if (!silent) {
         options.setMessage(
-          `External video transport: ${status.active_count} active route(s), ${status.capture_faults.length} capture fault(s).`,
+          `External video transport: ${status.active_count} active route(s), ${status.live_sources.length} live source state(s), ${(status.live_source_faults ?? status.capture_faults).length} source fault(s).`,
         );
       }
       return status;

@@ -23488,6 +23488,8 @@ struct ExternalVideoTransportSyncResponse {
 struct ExternalVideoTransportStatusResponse {
     active_routes: Vec<video::ExternalVideoTransportRoute>,
     active_count: usize,
+    live_sources: Vec<video::LiveVideoSourceRuntimeStatus>,
+    live_source_faults: Vec<ExternalVideoCaptureFaultStatus>,
     capture_faults: Vec<ExternalVideoCaptureFaultStatus>,
     ownership_allowed: bool,
     ownership_state: protocol::OutputOwnershipState,
@@ -31989,6 +31991,10 @@ fn start_remote_control_after_project_preflight(
     let io_plans_video_runtime_status = remote_video_runtime_status.clone();
     let transport_status = Arc::clone(&state.external_video_transport);
     let capture_transport_status = Arc::clone(&state.capture_transport);
+    #[cfg(feature = "ndi")]
+    let ndi_transport_status = Arc::clone(&state.ndi_transport);
+    #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+    let spout_transport_status = Arc::clone(&state.spout_transport);
     let transport_status_engine = state.engine.clone();
     let dj_link_engine = state.engine.clone();
     let dj_link_project_coordinator = Arc::clone(&state.project_coordinator);
@@ -32365,6 +32371,10 @@ fn start_remote_control_after_project_preflight(
                 match external_video_transport_status_nonblocking_for(
                     transport_status.as_ref(),
                     capture_transport_status.as_ref(),
+                    #[cfg(feature = "ndi")]
+                    ndi_transport_status.as_ref(),
+                    #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+                    spout_transport_status.as_ref(),
                     &transport_status_engine,
                 ) {
                     Ok(status) => serde_json::to_value(status).unwrap_or_else(|_| {
@@ -71566,6 +71576,10 @@ fn get_external_video_transport_status(
     external_video_transport_status_for(
         state.external_video_transport.as_ref(),
         state.capture_transport.as_ref(),
+        #[cfg(feature = "ndi")]
+        state.ndi_transport.as_ref(),
+        #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+        state.spout_transport.as_ref(),
         &state.engine,
     )
 }
@@ -71573,6 +71587,9 @@ fn get_external_video_transport_status(
 fn external_video_transport_status_for(
     transport: &Mutex<video::ExternalVideoTransportRuntime>,
     capture_transport: &Mutex<capture_transport::CaptureTransportState>,
+    #[cfg(feature = "ndi")] ndi_transport: &Mutex<ndi_transport::NdiTransportState>,
+    #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+    spout_transport: &Mutex<spout_transport::SpoutTransportState>,
     engine: &EngineHandle,
 ) -> Result<ExternalVideoTransportStatusResponse, String> {
     let status = transport
@@ -71581,12 +71598,22 @@ fn external_video_transport_status_for(
         .status();
     let capture_faults =
         capture_transport_faults_for_active_routes(&status.active_routes, capture_transport)?;
+    let live_source_faults = live_source_faults_for_active_routes(
+        &status.active_routes,
+        capture_transport,
+        #[cfg(feature = "ndi")]
+        ndi_transport,
+        #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+        spout_transport,
+    )?;
     let healthy_active_count =
-        healthy_external_video_active_count(status.active_count, &capture_faults);
+        healthy_external_video_active_count(status.active_count, &live_source_faults);
     let ownership = engine.output_ownership_status();
     Ok(ExternalVideoTransportStatusResponse {
         active_routes: status.active_routes,
         active_count: healthy_active_count,
+        live_sources: status.live_sources,
+        live_source_faults,
         capture_faults,
         ownership_allowed: ownership.video_allowed,
         ownership_state: ownership.state,
@@ -71598,6 +71625,9 @@ fn external_video_transport_status_for(
 fn external_video_transport_status_nonblocking_for(
     transport: &Mutex<video::ExternalVideoTransportRuntime>,
     capture_transport: &Mutex<capture_transport::CaptureTransportState>,
+    #[cfg(feature = "ndi")] ndi_transport: &Mutex<ndi_transport::NdiTransportState>,
+    #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+    spout_transport: &Mutex<spout_transport::SpoutTransportState>,
     engine: &EngineHandle,
 ) -> Result<ExternalVideoTransportStatusResponse, String> {
     let status = match transport.try_lock() {
@@ -71613,14 +71643,24 @@ fn external_video_transport_status_nonblocking_for(
         &status.active_routes,
         capture_transport,
     )?;
+    let live_source_faults = live_source_faults_for_active_routes_nonblocking(
+        &status.active_routes,
+        capture_transport,
+        #[cfg(feature = "ndi")]
+        ndi_transport,
+        #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+        spout_transport,
+    )?;
     let healthy_active_count =
-        healthy_external_video_active_count(status.active_count, &capture_faults);
+        healthy_external_video_active_count(status.active_count, &live_source_faults);
     let ownership = engine
         .try_output_ownership_status()
         .ok_or_else(|| "Output ownership status is busy; retry".to_string())?;
     Ok(ExternalVideoTransportStatusResponse {
         active_routes: status.active_routes,
         active_count: healthy_active_count,
+        live_sources: status.live_sources,
+        live_source_faults,
         capture_faults,
         ownership_allowed: ownership.video_allowed,
         ownership_state: ownership.state,
@@ -71701,6 +71741,121 @@ fn capture_transport_faults_for_active_routes_locked(
         });
     }
     faults
+}
+
+fn live_source_faults_for_active_routes(
+    active_routes: &[video::ExternalVideoTransportRoute],
+    capture_transport: &Mutex<capture_transport::CaptureTransportState>,
+    #[cfg(feature = "ndi")] ndi_transport: &Mutex<ndi_transport::NdiTransportState>,
+    #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+    spout_transport: &Mutex<spout_transport::SpoutTransportState>,
+) -> Result<Vec<ExternalVideoCaptureFaultStatus>, String> {
+    let mut faults = capture_transport_faults_for_active_routes(active_routes, capture_transport)?;
+    #[cfg(feature = "ndi")]
+    append_ndi_input_faults(active_routes, ndi_transport, &mut faults, false)?;
+    #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+    append_spout_input_faults(active_routes, spout_transport, &mut faults, false)?;
+    Ok(faults)
+}
+
+fn live_source_faults_for_active_routes_nonblocking(
+    active_routes: &[video::ExternalVideoTransportRoute],
+    capture_transport: &Mutex<capture_transport::CaptureTransportState>,
+    #[cfg(feature = "ndi")] ndi_transport: &Mutex<ndi_transport::NdiTransportState>,
+    #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+    spout_transport: &Mutex<spout_transport::SpoutTransportState>,
+) -> Result<Vec<ExternalVideoCaptureFaultStatus>, String> {
+    let mut faults =
+        capture_transport_faults_for_active_routes_nonblocking(active_routes, capture_transport)?;
+    #[cfg(feature = "ndi")]
+    append_ndi_input_faults(active_routes, ndi_transport, &mut faults, true)?;
+    #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+    append_spout_input_faults(active_routes, spout_transport, &mut faults, true)?;
+    Ok(faults)
+}
+
+#[cfg(feature = "ndi")]
+fn append_ndi_input_faults(
+    active_routes: &[video::ExternalVideoTransportRoute],
+    transport: &Mutex<ndi_transport::NdiTransportState>,
+    faults: &mut Vec<ExternalVideoCaptureFaultStatus>,
+    nonblocking: bool,
+) -> Result<(), String> {
+    let state = if nonblocking {
+        transport
+            .try_lock()
+            .map_err(|_| "NDI transport status is busy; retry".to_string())?
+    } else {
+        transport
+            .lock()
+            .map_err(|_| "NDI transport state lock was poisoned".to_string())?
+    };
+    for route in active_routes.iter().filter(|route| {
+        route.direction == video::ExternalVideoTransportDirection::Input
+            && route.backend_id == "ndi"
+    }) {
+        let error = if nonblocking {
+            state.current_input_fault_nonblocking(route.route_id)
+        } else {
+            state.current_input_fault(route.route_id)
+        }?;
+        if let Some(message) = error {
+            faults.push(ExternalVideoCaptureFaultStatus {
+                route_id: route.route_id,
+                backend_id: route.backend_id.clone(),
+                label: route.label.clone(),
+                message: format!(
+                    "{message}. NDI source identity is '{}'; restart the route after the source returns.",
+                    video::LiveVideoSourceIdentity::new(&route.backend_id, &route.endpoint_name)
+                        .map_err(|error| error.to_string())?
+                        .stable_key()
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
+#[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+fn append_spout_input_faults(
+    active_routes: &[video::ExternalVideoTransportRoute],
+    transport: &Mutex<spout_transport::SpoutTransportState>,
+    faults: &mut Vec<ExternalVideoCaptureFaultStatus>,
+    nonblocking: bool,
+) -> Result<(), String> {
+    let state = if nonblocking {
+        transport
+            .try_lock()
+            .map_err(|_| "Spout transport status is busy; retry".to_string())?
+    } else {
+        transport
+            .lock()
+            .map_err(|_| "Spout transport state lock was poisoned".to_string())?
+    };
+    for route in active_routes.iter().filter(|route| {
+        route.direction == video::ExternalVideoTransportDirection::Input
+            && route.backend_id == "spout"
+    }) {
+        let error = if nonblocking {
+            state.current_input_fault_nonblocking(route.route_id)
+        } else {
+            state.current_input_fault(route.route_id)
+        }?;
+        if let Some(message) = error {
+            faults.push(ExternalVideoCaptureFaultStatus {
+                route_id: route.route_id,
+                backend_id: route.backend_id.clone(),
+                label: route.label.clone(),
+                message: format!(
+                    "{message}. Spout source identity is '{}'; restart the route after the sender returns.",
+                    video::LiveVideoSourceIdentity::new(&route.backend_id, &route.endpoint_name)
+                        .map_err(|error| error.to_string())?
+                        .stable_key()
+                ),
+            });
+        }
+    }
+    Ok(())
 }
 
 #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]

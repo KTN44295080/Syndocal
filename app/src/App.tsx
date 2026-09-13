@@ -9063,16 +9063,20 @@ export default function App() {
     const report = externalVideoTransportReport();
     const status = externalVideoTransportStatus();
     const captureFaults = status?.capture_faults ?? [];
+    const liveSourceStates = status?.live_sources ?? [];
+    const liveSourceFaults = status?.live_source_faults ?? [];
     const captureFaultText = captureFaults.length > 0 ? `, capture faults ${captureFaults.length}` : "";
+    const liveSourceText = liveSourceStates.length > 0 ? `, source states ${liveSourceStates.length}` : "";
+    const liveSourceFaultText = liveSourceFaults.length > 0 ? `, source faults ${liveSourceFaults.length}` : "";
     const ownershipPolicy = status && !status.ownership_allowed
       ? `, Blocked — ${status.ownership_error ?? externalVideoOwnershipReasonLabel(status.ownership_reason)}`
       : "";
     if (!report) {
-      return status ? `active ${status.active_count}, not synced${captureFaultText}${ownershipPolicy}` : "Routes not synced";
+      return status ? `active ${status.active_count}, not synced${liveSourceText}${liveSourceFaultText}${captureFaultText}${ownershipPolicy}` : "Routes not synced";
     }
     const failed = report.start_failed.length + report.stop_failed.length;
     const failedText = failed > 0 ? `, failed ${failed}` : "";
-    return `active ${report.active_count}, +${report.started.length}, =${report.kept.length}, -${report.stopped.length}, blocked ${report.blocked.length}, idle ${report.idle.length}${failedText}${captureFaultText}${ownershipPolicy}`;
+    return `active ${report.active_count}, +${report.started.length}, =${report.kept.length}, -${report.stopped.length}, blocked ${report.blocked.length}, idle ${report.idle.length}${failedText}${liveSourceText}${liveSourceFaultText}${captureFaultText}${ownershipPolicy}`;
   });
   const externalVideoIoPlanRows = createMemo(() => {
     const plans = externalVideoIoPlans();
@@ -9114,8 +9118,9 @@ export default function App() {
     if (report || !status) {
       return [];
     }
+    const sourceFaults = status.live_source_faults ?? status.capture_faults ?? [];
     return status.active_routes.filter((route) =>
-      !(status.capture_faults ?? []).some((fault) =>
+      !sourceFaults.some((fault) =>
         fault.route_id === route.route_id && fault.backend_id === route.backend_id
       )
     ).map((route) => ({
@@ -9128,6 +9133,36 @@ export default function App() {
       stateClass: "kept",
       detail: `${route.direction} ${route.route_id} / active transport route`,
     }));
+  });
+  const externalVideoTransportLiveSourceRows = createMemo(() => {
+    const sources = externalVideoTransportStatus()?.live_sources ?? [];
+    return sources.map((source) => ({
+      id: `source-${source.route_id}-${source.identity}-${source.generation}`,
+      direction: "IN",
+      backend: source.identity.split(":")[2]?.toUpperCase() ?? "LIVE",
+      label: `Video Layer ${source.route_id}`,
+      endpoint: `Generation ${source.generation}`,
+      stateLabel: `Source ${source.state}`,
+      stateClass: source.state === "Live" ? "kept" : source.state === "Fault" || source.state === "Retiring" ? "failed" : source.state === "Unavailable" ? "blocked" : "available",
+      detail: source.issue ?? `Stable source identity ${source.identity}`,
+    }));
+  });
+  const externalVideoTransportLiveSourceFaultRows = createMemo(() => {
+    const captureRouteKeys = new Set(
+      (externalVideoTransportStatus()?.capture_faults ?? []).map((fault) => `${fault.route_id}-${fault.backend_id}`),
+    );
+    return (externalVideoTransportStatus()?.live_source_faults ?? [])
+      .filter((fault) => !captureRouteKeys.has(`${fault.route_id}-${fault.backend_id}`))
+      .map((fault) => ({
+        id: `live-source-fault-${fault.route_id}-${fault.backend_id}`,
+        direction: "IN",
+        backend: fault.backend_id.toUpperCase(),
+        label: fault.label,
+        endpoint: `Route ${fault.route_id}`,
+        stateLabel: "Source fault",
+        stateClass: "failed",
+        detail: fault.message,
+      }));
   });
   const externalVideoTransportCaptureFaultRows = createMemo(() => {
     const faults = externalVideoTransportStatus()?.capture_faults ?? [];
@@ -9147,9 +9182,11 @@ export default function App() {
     if (!report) {
       return [];
     }
-    const captureFaults = externalVideoTransportStatus()?.capture_faults ?? [];
-    const hasCaptureFault = (route: ExternalVideoTransportSyncReport["started"][number]) =>
-      captureFaults.some((fault) => fault.route_id === route.route_id && fault.backend_id === route.backend_id);
+    const sourceFaults = externalVideoTransportStatus()?.live_source_faults
+      ?? externalVideoTransportStatus()?.capture_faults
+      ?? [];
+    const hasSourceFault = (route: ExternalVideoTransportSyncReport["started"][number]) =>
+      sourceFaults.some((fault) => fault.route_id === route.route_id && fault.backend_id === route.backend_id);
     const rowForRoute = (
       stateLabel: string,
       stateClass: string,
@@ -9166,13 +9203,13 @@ export default function App() {
       detail: `${route.direction} ${route.route_id} / ${issue ?? stateLabel}`,
     });
     return [
-      ...report.started.filter((route) => !hasCaptureFault(route)).map((route) => rowForRoute("Started", "started", route)),
-      ...report.kept.filter((route) => !hasCaptureFault(route)).map((route) => rowForRoute("Kept", "kept", route)),
-      ...report.stopped.filter((route) => !hasCaptureFault(route)).map((route) => rowForRoute("Stopped", "stopped", route)),
-      ...report.idle.filter((route) => !hasCaptureFault(route)).map((route) => rowForRoute("Idle", "idle", route)),
-      ...report.blocked.filter((blocked) => !hasCaptureFault(blocked.route)).map((blocked) => rowForRoute("Blocked", "blocked", blocked.route, blocked.issue)),
-      ...report.start_failed.filter((failed) => !hasCaptureFault(failed.route)).map((failed) => rowForRoute("Start Failed", "failed", failed.route, failed.issue)),
-      ...report.stop_failed.filter((failed) => !hasCaptureFault(failed.route)).map((failed) => rowForRoute("Stop Failed", "failed", failed.route, failed.issue)),
+      ...report.started.filter((route) => !hasSourceFault(route)).map((route) => rowForRoute("Started", "started", route)),
+      ...report.kept.filter((route) => !hasSourceFault(route)).map((route) => rowForRoute("Kept", "kept", route)),
+      ...report.stopped.filter((route) => !hasSourceFault(route)).map((route) => rowForRoute("Stopped", "stopped", route)),
+      ...report.idle.filter((route) => !hasSourceFault(route)).map((route) => rowForRoute("Idle", "idle", route)),
+      ...report.blocked.filter((blocked) => !hasSourceFault(blocked.route)).map((blocked) => rowForRoute("Blocked", "blocked", blocked.route, blocked.issue)),
+      ...report.start_failed.filter((failed) => !hasSourceFault(failed.route)).map((failed) => rowForRoute("Start Failed", "failed", failed.route, failed.issue)),
+      ...report.stop_failed.filter((failed) => !hasSourceFault(failed.route)).map((failed) => rowForRoute("Stop Failed", "failed", failed.route, failed.issue)),
     ];
   });
   const externalVideoTransportEventRows = createMemo(() =>
@@ -27363,6 +27400,8 @@ export default function App() {
             get checked() { return externalVideoIoPlans() !== null; },
             get planRows() { return externalVideoIoPlanRows(); },
             get activeTransportRows() { return externalVideoTransportActiveRows(); },
+            get liveSourceRows() { return externalVideoTransportLiveSourceRows(); },
+            get liveSourceFaultRows() { return externalVideoTransportLiveSourceFaultRows(); },
             get captureFaultRows() { return externalVideoTransportCaptureFaultRows(); },
             get transportRows() { return externalVideoTransportRows(); },
             get transportEventRows() { return externalVideoTransportEventRows(); },
