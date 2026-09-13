@@ -20,6 +20,13 @@ pnpm.cmd --dir app run check:live-audio
 Result: exit code 0. The fail-closed live-audio lifecycle, availability,
 selection persistence, presentation, and request-ordering source checks passed.
 
+## Takeover rerun — 2026-09-14
+
+The current live-audio lifecycle check was rerun after takeover and passed.
+This confirms source-side availability, selection persistence, presentation,
+and request ordering only; no ASIO stream, TouchDesigner session, physical
+input, or input-to-engine/input-to-pixel measurement was performed.
+
 The implementation exposes capture/worker telemetry fields and preserves the
 ShowClock/output ownership boundaries, but source presence is not a measured
 input-to-pixel result.
