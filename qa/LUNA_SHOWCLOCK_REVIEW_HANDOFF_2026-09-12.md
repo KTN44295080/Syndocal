@@ -666,7 +666,7 @@ require their actual UI/device/two-machine topology and separate evidence.
 
 The continuation is now owned by the current task on branch
 `codex/showclock-review-20260912`. The latest pushed checkpoint is
-`5d7257a0` (`qa: refresh physical MIDI evidence`), and the worktree is clean
+`bdc67871` (`qa: record migration corpus takeover rerun`), and the worktree is clean
 with the branch equal to `origin/codex/showclock-review-20260912`.
 
 The only product-code change in this continuation is in
@@ -705,6 +705,16 @@ work area. The QA process and listeners were cleaned up. This is recorded in
 `qa/ACCESSIBILITY_CURRENT_SOURCE_CHECKPOINT_2026-09-14.md`; it is not a native
 interaction or accessibility pass.
 
+The migration corpus was rerun after takeover against source `ddf66fc2` with
+the exact MSVC `14.44.35207` linker. Release compilation completed in 10m12s;
+all 11 selected migration tests passed with zero failures and zero ignored
+tests. The run covered 224 truncations, 5 malformed byte/number cases, 3 depth
+cases, and 128 semantic/idempotency cases. The source audit confirmed the
+existing Windows deny-write/delete and Unix version-CAS/private-snapshot media
+coherence paths. `MIGRATION-COMPATIBILITY-001` remains Open because the broad
+fuzz matrix, `DEC-FILE-ID-001` product decision, and real upgrade/downgrade
+machine rehearsals are not substituted by source tests.
+
 The authoritative ledger remains structurally valid at 58 markers:
 `27 Complete`, `8 Deferred`, and `23 Open`. The Open IDs are
 `AI3-NATIVE-INGRESS-001`, `AI3-PHYSICAL-REARM-001`,
@@ -716,7 +726,7 @@ The authoritative ledger remains structurally valid at 58 markers:
 `DMX-ARTNET-001`, `DMX-USB-RDM-001`, `INPUT-PHYSICAL-001`,
 `DJ-LINK-HARDWARE-001`, `VIDEO-PHYSICAL-001`, `VENUE-SOAK-001`,
 `SHOWCLOCK-VENUE-001`, and `COMPARE-PINNED-001`. The Q1/Q4 mirror reports
-`58/58` Flow references and `80` linked evidence records. External markers
+`58/58` Flow references and `81` linked evidence records. External markers
 remain Open until their named hardware, client, two-machine, venue, signed
 artifact, or other external evidence exists.
 
