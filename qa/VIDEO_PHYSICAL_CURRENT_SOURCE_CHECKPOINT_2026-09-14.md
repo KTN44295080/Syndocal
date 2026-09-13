@@ -31,6 +31,15 @@ Result: exit code 0.
   malformed-response rejection, generation retention, and zero-copy valid arrays.
 - First-party warning count observed in this focused source run: `0`.
 
+## Takeover rerun — 2026-09-14
+
+The routing, managed-window runtime, window observation, and video polling
+checks were rerun after takeover and passed. They again verified exact-Both
+recovery, receipt rejection, singleflight, incarnation fencing, bounded
+polling, malformed-response rejection, generation retention, and zero-copy
+valid arrays. No display, capture device, NDI/Spout receiver, or physical
+output was used.
+
 ## Unresolved acceptance
 
 `VIDEO-PHYSICAL-001` stays Open. The required real display topology, HDMI/video
