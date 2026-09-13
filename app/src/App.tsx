@@ -643,6 +643,7 @@ import {
   executeDisplayWindowOutputControl,
   executeGroupSubmasterOutputControl,
   executeLightingMasterOutputControl,
+  executeVideoMasterOutputControl,
   executeOutputControl,
   applyVideoOutputWindowStatusQuery,
   applyVideoOutputWindowStateEvent,
@@ -17427,6 +17428,26 @@ export default function App() {
     }
   };
 
+  const setVideoMasterOpacityControl = async (opacity: number) => {
+    if (viewportFixture) {
+      setSnapshot((current) => ({
+        ...current,
+        video: { ...current.video, master_opacity: opacity },
+      }));
+      return;
+    }
+    if (!isTauriRuntime()) {
+      setMessage(tauriBackendUnavailableMessage);
+      return;
+    }
+    try {
+      await executeVideoMasterOutputControl(invoke, opacity);
+      await refreshSnapshot();
+    } catch (error) {
+      setMessage(String(error));
+    }
+  };
+
   const applyBpm = async () => {
     const bpm = Number(bpmDraft());
     try {
@@ -20449,6 +20470,7 @@ export default function App() {
     setVideoBlackout,
   } = createVideoRuntimeController({
     setVideoBlackout: targetBlackout.setVideoBlackout,
+    setVideoMasterOpacity: setVideoMasterOpacityControl,
     invoke,
     createThumbnailChannel: () => new Channel<unknown>(),
     snapshot,

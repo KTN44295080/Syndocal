@@ -410,6 +410,7 @@ export const FRONTEND_TAURI_INVOKE_COMMANDS = [
   "set_video_layer_order",
   "set_video_layer_state",
   "set_video_master_opacity",
+  "set_video_master_output_control_v2",
   "set_video_output_blackout",
   "set_video_output_config",
   "set_video_output_enabled",

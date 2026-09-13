@@ -87,6 +87,7 @@ type VideoClipSlotRuntimeInvokeCommand =
 
 interface VideoRuntimeControllerOptions {
   setVideoBlackout: (enabled: boolean) => Promise<void>;
+  setVideoMasterOpacity: (opacity: number) => Promise<void>;
   invoke: Invoke;
   createThumbnailChannel: () => ThumbnailStartChannel;
   snapshot: Accessor<EngineSnapshot>;
@@ -1660,13 +1661,7 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
       await options.refreshSnapshot();
     } catch (error) { options.setMessage(String(error)); }
   };
-  const setVideoMasterOpacity = async (opacity: number) => {
-    void opacity;
-    options.setMessage(
-      "Video master opacity is unavailable until a lease-bound OutputControl action is reviewed; no state changed.",
-    );
-  };
-  const { setVideoBlackout } = options;
+  const { setVideoMasterOpacity, setVideoBlackout } = options;
 
   return {
     addVideoLayer, importMediaFiles, importMediaFilesFromPaths, launchVideoClip, takeVideoClip, stopVideoClip,
