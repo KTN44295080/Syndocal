@@ -473,7 +473,7 @@
       "owner": "DJ Link peer and hardware acceptance owner",
       "dependency": "DJ Link setup, physical Pedal/DJ-PC/Agent topology, and exact mapping evidence",
       "nonclaim": "Does not claim live Pedal, rekordbox Agent, Loop, Release, disconnect, State Sync, or ACK acceptance.",
-      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/REKORDBOX_STREAM_DECK_PEDAL_ACCEPTANCE.md"],
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/REKORDBOX_STREAM_DECK_PEDAL_ACCEPTANCE.md", "qa/DJ_LINK_HARDWARE_CURRENT_SOURCE_CHECKPOINT_2026-09-14.md"],
       "status": "Open"
     },
     {
