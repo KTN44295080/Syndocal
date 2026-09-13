@@ -1719,7 +1719,11 @@ export interface VideoAudioMonitorStatus {
   last_sync_error?: string | null;
 }
 
+export type VideoRecordingState = "Idle" | "Preparing" | "Recording" | "Finalizing" | "Complete" | "Fault";
+
 export interface VideoRecordingStatus {
+  /** Additive lifecycle truth; legacy peers may omit it and use active/error fallback. */
+  state?: VideoRecordingState;
   active: boolean;
   output_id?: number | null;
   path?: string | null;

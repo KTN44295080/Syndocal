@@ -1,6 +1,7 @@
 //! FFmpeg recording orchestration; UI/runtime ownership stays in the application adapter.
 use super::{
-    capture_video_output_preview_effect_snapshot, recording_artifact, VideoRecordingStatus,
+    capture_video_output_preview_effect_snapshot, recording_artifact, VideoRecordingState,
+    VideoRecordingStatus,
 };
 use engine::EngineHandle;
 use protocol::VideoOutputId;
@@ -224,6 +225,11 @@ pub(super) fn run_video_output_recording(context: VideoOutputRecordingContext) {
             return;
         }
     };
+    if !stop.load(Ordering::Acquire) {
+        if let Ok(mut current) = status.lock() {
+            current.set_state(VideoRecordingState::Recording);
+        }
+    }
     let mut frames_written = 0_u64;
     let mut recording_error = None;
     let frame_interval = Duration::from_secs_f64(1.0 / frame_rate as f64);
@@ -377,7 +383,11 @@ pub(super) fn finish_video_recording_status(
     error: Option<String>,
 ) {
     if let Ok(mut current) = status.lock() {
-        current.active = false;
+        current.set_state(if error.is_some() {
+            VideoRecordingState::Fault
+        } else {
+            VideoRecordingState::Complete
+        });
         current.last_error = error;
     }
 }

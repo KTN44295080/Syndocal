@@ -160,12 +160,13 @@ groups++;
     assert.equal(command, 'video_output_recording_status');
     assert.deepEqual(args, undefined);
     return {
-      active: true, output_id: 2, path: 'C:/recordings/take.mp4', width: 1920, height: 1080,
+      state: 'Recording', active: true, output_id: 2, path: 'C:/recordings/take.mp4', width: 1920, height: 1080,
       frame_rate: 30, frames_written: 12, dropped_frames: 0, audio_requested: true,
       audio_included: true, audio_track_count: 1, started_unix_ms: 1234, last_error: null,
     };
   }, request('recording.get_status'));
   assert.equal(recordingStatus.ok, true);
+  assert.equal(recordingStatus.recording.state, 'Recording');
   assert.equal(recordingStatus.recording.active, true);
   assert.equal(recordingStatus.recording.frames_written, 12);
   const canonical = await execute(async (command, args) => {

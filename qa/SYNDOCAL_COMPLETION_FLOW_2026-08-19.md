@@ -1739,7 +1739,7 @@ Audio/recording/live-source clock and ownership semantics are complete.
   Do not add a second Agent/server or send rekordbox MIDI from Syndocal.
 - [x] Stable live camera/screen/NDI/Spout/Syphon/generator identity and availability, <!-- completion-ledger: Complete: VIDEO-LIVE-SOURCES-001 -->
   permission/fault/reconnect truth, and old-worker retirement.
-- [ ] Recording `Idle -> Preparing -> Recording -> Finalizing -> Complete|Fault`, <!-- completion-ledger: Open: RECORDING-001 -->
+- [x] Recording `Idle -> Preparing -> Recording -> Finalizing -> Complete|Fault`, <!-- completion-ledger: Complete: RECORDING-001 -->
   target reservation, disk/crash/encoder/timeout recovery, verified atomic artifact,
   two-PC ownership, and authoritative asset import.
 

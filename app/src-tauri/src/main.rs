@@ -66,7 +66,8 @@ mod video_recording_lifecycle;
 mod video_recording_runtime;
 mod video_recording_renderer_process;
 use video_recording_runtime::{
-    stop_video_output_recording_runtime, VideoRecordingRuntime, VideoRecordingStatus,
+    stop_video_output_recording_runtime, VideoRecordingRuntime, VideoRecordingState,
+    VideoRecordingStatus,
 };
 mod video_recording;
 use video_recording::{run_video_output_recording, RecordingAudioInput, VideoOutputRecordingContext};
@@ -77478,6 +77479,7 @@ fn start_video_output_recording(
     runtime.ensure_recording_worker_available()?;
     let stop = Arc::new(AtomicBool::new(false));
     let status = Arc::new(Mutex::new(VideoRecordingStatus {
+        state: VideoRecordingState::Preparing,
         active: true,
         output_id: Some(output_id),
         path: Some(path.to_string_lossy().to_string()),

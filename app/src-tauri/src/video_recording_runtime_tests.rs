@@ -138,6 +138,7 @@ fn recording_file_name_and_terminal_status_are_safe() {
 
     let status = status.lock().unwrap();
     assert!(!status.active);
+    assert_eq!(status.state, VideoRecordingState::Fault);
     assert_eq!(status.frames_written, 42);
     assert_eq!(status.last_error.as_deref(), Some("encoder failed"));
 }

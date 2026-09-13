@@ -24,6 +24,7 @@ import {
 import { VideoSourceCreatePanel } from "./VideoSourceCreatePanel";
 import { VideoTimelineAutomationPanel } from "./VideoTimelineAutomationPanel";
 import { VideoClipGridPanel } from "./VideoClipGridPanel";
+import { VideoRecordingStatusBar } from "./VideoRecordingStatusBar";
 import { VideoClipSlotBankPanel } from "./VideoClipSlotBankPanel";
 import { LiveVideoMonitorPanel } from "./LiveVideoMonitorPanel";
 import { LiveAudioInputRail } from "./LiveAudioInputRail";
@@ -476,6 +477,13 @@ export function VideoControlPanel(props: VideoControlPanelProps) {
         </details>
         <Show when={props.libraryOnly}>
           <VideoClipSlotBankPanel {...props.clipSlotBank} />
+          <VideoRecordingStatusBar
+            recordingStatus={props.clipGrid.recordingStatus}
+            programAudioEnabled={props.clipGrid.programAudioEnabled}
+            selectedOutputId={props.clipGrid.selectedOutputId}
+            onStartRecording={props.clipGrid.onStartRecording}
+            onStopRecording={props.clipGrid.onStopRecording}
+          />
         </Show>
         <Show when={!props.libraryOnly}>
         <Show when={props.mixer}>

@@ -4,6 +4,7 @@ import type {
   VideoLayerSummary,
   VideoRecordingStatus,
 } from "../types";
+import { VideoRecordingStatusBar } from "./VideoRecordingStatusBar";
 import { LiveAudioInputRail, type LiveAudioInputRailProps } from "./LiveAudioInputRail";
 
 export interface VideoClipGridPanelProps extends LiveAudioInputRailProps {
@@ -80,9 +81,6 @@ export function VideoClipGridPanel(props: VideoClipGridPanelProps) {
   );
   const deckALayer = createMemo(() => props.layers.find((layer) => layer.id === props.deckALayerId) ?? null);
   const deckBLayer = createMemo(() => props.layers.find((layer) => layer.id === props.deckBLayerId) ?? null);
-  const recordingStatusText = createMemo(() => props.recordingStatus.active
-    ? `${props.recordingStatus.dropped_frames} dropped · ${props.recordingStatus.frames_written} frames · ${props.recordingStatus.width}x${props.recordingStatus.height} @ ${props.recordingStatus.frame_rate}fps · ${props.recordingStatus.audio_included ? `${props.recordingStatus.audio_track_count} audio` : "silent"}`
-    : props.recordingStatus.last_error ?? `Records H.264 MP4${props.programAudioEnabled ? " and active Program audio" : " without audio"}.`);
   const firstRunGuarded = () =>
     props.layers.length === 0 &&
     (props.firstRunBusy || props.firstRunAvailable || Boolean(props.firstRunError));
@@ -234,27 +232,13 @@ export function VideoClipGridPanel(props: VideoClipGridPanelProps) {
           </Show>
         </button>
       </div>
-      <div class={`videoRecordingBar ${props.recordingStatus.active ? "active" : ""}`} aria-live="polite">
-        <div>
-          <small>{props.recordingStatus.active ? "● RECORDING" : "OUTPUT RECORD"}</small>
-          <span
-            class={props.recordingStatus.last_error ? "videoRecordingError" : ""}
-            role={props.recordingStatus.last_error ? "alert" : undefined}
-            title={recordingStatusText()}
-          >
-            {recordingStatusText()}
-          </span>
-        </div>
-        <button
-          class={props.recordingStatus.active ? "danger" : ""}
-          disabled={!props.recordingStatus.active && props.selectedOutputId === null}
-          onClick={() => props.recordingStatus.active
-            ? void props.onStopRecording()
-            : props.selectedOutputId !== null && void props.onStartRecording(props.selectedOutputId, props.programAudioEnabled)}
-        >
-          {props.recordingStatus.active ? "Stop Recording" : "Record Output"}
-        </button>
-      </div>
+      <VideoRecordingStatusBar
+        recordingStatus={props.recordingStatus}
+        programAudioEnabled={props.programAudioEnabled}
+        selectedOutputId={props.selectedOutputId}
+        onStartRecording={props.onStartRecording}
+        onStopRecording={props.onStopRecording}
+      />
       <Show when={!props.compact}>
         <LiveAudioInputRail {...props} />
       </Show>

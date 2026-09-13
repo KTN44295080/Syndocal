@@ -2,6 +2,8 @@ import type { FrontendTauriInvoke } from "./tauriInvokeCommands";
 
 const MAX_PATH_LENGTH = 2048;
 const MAX_ERROR_LENGTH = 1024;
+const RECORDING_STATES = ["Idle", "Preparing", "Recording", "Finalizing", "Complete", "Fault"] as const;
+type RecordingState = typeof RECORDING_STATES[number];
 
 const optionalText = (value: unknown, name: string, maxLength: number): string | null => {
   if (value === null || value === undefined) return null;
@@ -28,6 +30,13 @@ export async function executeAgentBridgeRecordingStatus(invoke: FrontendTauriInv
     || typeof raw.audio_included !== "boolean") {
     throw new Error("Recording status response is invalid.");
   }
+  const recordingState = raw.state === undefined
+    ? (raw.active ? "Recording" : raw.last_error ? "Fault" : "Idle")
+    : raw.state;
+  if (typeof recordingState !== "string"
+    || !(RECORDING_STATES as readonly string[]).includes(recordingState)) {
+    throw new Error("Recording status field is invalid: state");
+  }
   const outputId = raw.output_id === null || raw.output_id === undefined
     ? null : finiteNonNegative(raw.output_id, "output_id");
   const startedUnixMs = raw.started_unix_ms === null || raw.started_unix_ms === undefined
@@ -35,6 +44,7 @@ export async function executeAgentBridgeRecordingStatus(invoke: FrontendTauriInv
   return {
     ok: true,
     recording: {
+      state: recordingState as RecordingState,
       active: raw.active,
       output_id: outputId,
       path: optionalText(raw.path, "path", MAX_PATH_LENGTH),

@@ -3,7 +3,7 @@
   "source_document": "qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md",
   "authoritative_sections": ["6", "7", "8", "9"],
   "classifications": ["Supported", "Deferred", "External acceptance", "Out of scope"],
-  "expected_status_counts": { "Open": 30, "Deferred": 8, "Complete": 20 },
+  "expected_status_counts": { "Open": 29, "Deferred": 8, "Complete": 21 },
   "expected_section_counts": { "6": 37, "7": 6, "8": 9, "9": 6 },
   "items": [
     {
@@ -258,13 +258,13 @@
     },
     {
       "id": "RECORDING-001",
-      "source": { "section": "6", "kind": "Open" },
+      "source": { "section": "6", "kind": "Complete" },
       "classification": "Supported",
       "owner": "Recording runtime owner",
       "dependency": "Audio master-clock and output ownership decisions",
-      "nonclaim": "Does not claim recording state recovery, atomic artifacts, two-PC ownership, or authoritative import is complete.",
-      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md"],
-      "status": "Open"
+      "nonclaim": "Closes the current-source recording lifecycle, publication/recovery, worker-ownership, and status-bar software slice; does not claim real codec acceptance, disk-full/power-loss proof, two-PC ownership, authoritative import, or the recording-owner decision is complete.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md", "qa/RECORDING_CHECKPOINT_2026-09-13.md", "app/src-tauri/src/video_recording_runtime.rs", "app/src-tauri/src/video_recording.rs", "app/src-tauri/src/video_recording_runtime_lifecycle_tests.rs", "app/src/components/VideoRecordingStatusBar.tsx", "app/src/components/VideoControlPanel.tsx", "app/src/agentBridgeRecording.ts"],
+      "status": "Complete"
     },
     {
       "id": "SHOWCLOCK-IMPLEMENTATION-001",

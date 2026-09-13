@@ -93,6 +93,7 @@ fn start_admission_reports_worker_panic_after_reaping_it() {
     assert!(runtime.worker.is_none());
     let status = runtime.status.lock().expect("recording status");
     assert!(!status.active);
+    assert_eq!(status.state, VideoRecordingState::Fault);
     assert_eq!(
         status.last_error.as_deref(),
         Some("Video recording worker panicked")
@@ -118,13 +119,20 @@ fn start_admission_rejects_poisoned_status() {
 fn recording_stop_timeout_retains_worker_then_late_stop_reaps_it() {
     let stop = Arc::new(AtomicBool::new(false));
     let mut recording = VideoRecordingRuntime::default();
-    recording.status.lock().unwrap().active = true;
+    recording
+        .status
+        .lock()
+        .unwrap()
+        .set_state(VideoRecordingState::Recording);
     let worker_status = Arc::clone(&recording.status);
     let (release, release_rx) = mpsc::channel();
     let worker = thread::spawn(move || {
         // A broken Stop implementation must fail this test, not hang the suite.
         let _ = release_rx.recv_timeout(Duration::from_secs(2));
-        worker_status.lock().unwrap().active = false;
+        worker_status
+            .lock()
+            .unwrap()
+            .set_state(VideoRecordingState::Complete);
     });
     recording.worker = Some(video_recording_lifecycle::RecordingWorkerLifecycle::new(
         Arc::clone(&stop),
@@ -141,6 +149,10 @@ fn recording_stop_timeout_retains_worker_then_late_stop_reaps_it() {
         let mut runtime = recording.lock().unwrap();
         assert!(runtime.worker.is_some());
         assert!(runtime.status.lock().unwrap().active);
+        assert_eq!(
+            runtime.status.lock().unwrap().state,
+            VideoRecordingState::Finalizing
+        );
         assert_eq!(
             runtime.ensure_recording_worker_available().unwrap_err(),
             "A previous video output recording is still stopping"
@@ -161,5 +173,31 @@ fn recording_stop_timeout_retains_worker_then_late_stop_reaps_it() {
     let status = stop_video_output_recording_runtime(&recording)
         .expect("a subsequent Stop must reap the original completed worker");
     assert!(!status.active);
+    assert_eq!(status.state, VideoRecordingState::Complete);
     assert!(recording.lock().unwrap().worker.is_none());
+}
+
+#[test]
+fn recording_status_exposes_the_authoritative_lifecycle_states() {
+    let mut status = VideoRecordingStatus::default();
+    assert_eq!(status.state, VideoRecordingState::Idle);
+    assert!(!status.active);
+
+    for (state, active) in [
+        (VideoRecordingState::Preparing, true),
+        (VideoRecordingState::Recording, true),
+        (VideoRecordingState::Finalizing, true),
+        (VideoRecordingState::Complete, false),
+    ] {
+        status.set_state(state);
+        assert_eq!(status.state, state);
+        assert_eq!(status.active, active);
+    }
+    status.set_state(VideoRecordingState::Fault);
+    assert_eq!(status.state, VideoRecordingState::Fault);
+    assert!(!status.active);
+    assert_eq!(
+        serde_json::to_value(&status).unwrap().get("state"),
+        Some(&serde_json::Value::String("Fault".to_string()))
+    );
 }

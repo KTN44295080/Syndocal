@@ -5,8 +5,19 @@ use std::{
     thread::JoinHandle,
 };
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub(crate) enum VideoRecordingState {
+    Idle,
+    Preparing,
+    Recording,
+    Finalizing,
+    Complete,
+    Fault,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct VideoRecordingStatus {
+    pub(crate) state: VideoRecordingState,
     pub(crate) active: bool,
     pub(crate) output_id: Option<protocol::VideoOutputId>,
     pub(crate) path: Option<String>,
@@ -28,6 +39,7 @@ pub(crate) struct VideoRecordingStatus {
 impl Default for VideoRecordingStatus {
     fn default() -> Self {
         Self {
+            state: VideoRecordingState::Idle,
             active: false,
             output_id: None,
             path: None,
@@ -64,6 +76,18 @@ impl Drop for VideoRecordingRuntime {
             worker.request_stop();
             let _ = worker.reap_with_deadline(video_recording_lifecycle::TOTAL_STOP_DEADLINE);
         }
+    }
+}
+
+impl VideoRecordingStatus {
+    pub(crate) fn set_state(&mut self, state: VideoRecordingState) {
+        self.state = state;
+        self.active = matches!(
+            state,
+            VideoRecordingState::Preparing
+                | VideoRecordingState::Recording
+                | VideoRecordingState::Finalizing
+        );
     }
 }
 
@@ -123,7 +147,7 @@ impl VideoRecordingRuntime {
             let error = "Video recording worker panicked".to_string();
             match self.status.lock() {
                 Ok(mut status) => {
-                    status.active = false;
+                    status.set_state(VideoRecordingState::Fault);
                     status.last_error = Some(error.clone());
                 }
                 Err(_) => {
@@ -142,9 +166,18 @@ pub(crate) fn stop_video_output_recording_runtime(
     let mut runtime = video_recording
         .lock()
         .map_err(|_| "Video recording state lock was poisoned".to_string())?;
-    let Some(worker) = runtime.worker.as_mut() else {
+    if runtime.worker.is_none() {
         return runtime.status_snapshot();
-    };
+    }
+    if let Ok(mut status) = runtime.status.lock() {
+        if matches!(
+            status.state,
+            VideoRecordingState::Preparing | VideoRecordingState::Recording
+        ) {
+            status.set_state(VideoRecordingState::Finalizing);
+        }
+    }
+    let worker = runtime.worker.as_mut().expect("recording worker checked above");
     worker.request_stop();
     if worker.wait_for_completion(video_recording_lifecycle::STOP_ACKNOWLEDGEMENT_TIMEOUT)
         == video_recording_lifecycle::CompletionWait::TimedOut

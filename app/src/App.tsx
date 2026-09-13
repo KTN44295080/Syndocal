@@ -2682,6 +2682,7 @@ export default function App() {
   const [videoDeckBLayerId, setVideoDeckBLayerId] = createSignal<number | null>(null);
   const [videoAbMix, setVideoAbMix] = createSignal(0);
   const [videoRecordingStatus, setVideoRecordingStatus] = createSignal<VideoRecordingStatus>({
+    state: "Idle",
     active: false,
     output_id: null,
     path: null,
@@ -4698,6 +4699,7 @@ export default function App() {
       last_sync_error: null,
     });
     setVideoRecordingStatus({
+      state: "Recording",
       active: true,
       output_id: outputs[0]?.id ?? 1,
       path: "viewport://operator-vj/program-recording.mp4",
