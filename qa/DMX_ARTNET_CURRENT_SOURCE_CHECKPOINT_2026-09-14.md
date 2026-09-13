@@ -30,6 +30,13 @@ Result: exit code 0.
   loopback-before-S0 boundaries.
 - First-party warning count observed in this focused source run: `0`.
 
+## Takeover rerun — 2026-09-14
+
+The DMX addressing, output ownership, safety-blackout, and show-setup checks
+were rerun after takeover and all passed. The show-setup contract again kept
+loopback-before-S0 and fail-closed preparation boundaries. No Art-Net/sACN node,
+fixture, reconnect path, or sustained 44 Hz physical output was exercised.
+
 ## Unresolved acceptance
 
 `DMX-ARTNET-001` stays Open. Real Art-Net/sACN nodes and fixtures still require
