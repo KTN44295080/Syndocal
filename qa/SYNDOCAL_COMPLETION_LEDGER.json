@@ -393,7 +393,7 @@
       "owner": "ASIO device acceptance owner",
       "dependency": "Licensed ASIO artifact and real drivers/devices",
       "nonclaim": "Does not claim the advertised sample-rate, buffer, format, or channel matrix passed without fallback.",
-      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/ASIO_INPUT_ACCEPTANCE.md"],
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/ASIO_INPUT_ACCEPTANCE.md", "qa/ASIO_FORMAT_CURRENT_SOURCE_CHECKPOINT_2026-09-14.md"],
       "status": "Open"
     },
     {
