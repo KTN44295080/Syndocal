@@ -43,6 +43,13 @@ Result: exit code 0.
   license or legal review.
 - First-party warning count observed in this focused source run: `0`.
 
+## Takeover rerun — 2026-09-14
+
+The two license/package-boundary checks were rerun after takeover and passed:
+ASIO packaging reported 169 assertions and the ABI-v3 contract reported 22
+assertions. The run again kept `distribution_approved: false`, used no public
+ASIO artifact, and made no licensing or legal decision.
+
 ## Unresolved acceptance
 
 `ASIO-LICENSE-001` stays Open because no licensing owner has recorded either
