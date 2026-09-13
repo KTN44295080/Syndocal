@@ -716,10 +716,12 @@ Branch cleanup was performed after a live worktree/ref audit. The local
 orphan `chatgpt/windows-integration-20260908` at `40ff409f` was deleted: it
 had no worktree, no remote counterpart, and its native-thumbnail and loopMIDI
 changes are represented by later current-source commits. The
-worktree-attached branches and the unmerged local/remote
-`chatgpt/macos-artifact-validation` branch were preserved because they still
-contain active or unique changes. `git fetch origin --prune` and
-`git remote prune origin --dry-run` reported no stale remote refs.
+worktree-attached branches were preserved. The unmerged local
+`chatgpt/macos-artifact-validation` at `f4aa5fff` was also preserved because it
+still contains a unique native-admission fix. Its remote counterpart was
+deleted because it pointed only to the loopMIDI commit already represented by
+current `221ebf7f` and had no attached worktree. `git fetch origin --prune` and
+`git remote prune origin --dry-run` then reported no stale remote refs.
 
 ## Safe resume procedure after this takeover
 
