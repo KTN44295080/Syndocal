@@ -24,6 +24,9 @@ export const OUTPUT_VIDEO_MASTER_SET_OPERATION_ID =
 export const OUTPUT_VIDEO_CLIP_TAKE_OPERATION_ID =
   "syndocal.output.video.clip.take.v2";
 export const MAX_VIDEO_CLIP_TAKE_FADE_MS = 600_000;
+export const OUTPUT_VIDEO_CLIP_LAUNCH_OPERATION_ID =
+  "syndocal.output.video.clip.launch.v2";
+export const MAX_VIDEO_CLIP_LAUNCH_FADE_MS = 600_000;
 export const OUTPUT_ENABLE_OPERATION_ID = "syndocal.output.enable.v2";
 export const OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID =
   "syndocal.output.show_artnet_loopback_route.enable.v1";
@@ -226,6 +229,13 @@ export type OutputControlAction =
     }
   | {
       kind: "take_video_clip";
+      role: Extract<OutputControlTargetRole, "video" | "both">;
+      layer_id: number;
+      fade_ms: number;
+      lease: OutputLeaseAuthority;
+    }
+  | {
+      kind: "launch_video_clip";
       role: Extract<OutputControlTargetRole, "video" | "both">;
       layer_id: number;
       fade_ms: number;
@@ -483,6 +493,7 @@ const operationIdForAction = (action: OutputControlOperationAction): string => {
     case "set_group_submaster": return OUTPUT_GROUP_SUBMASTER_SET_OPERATION_ID;
     case "set_video_master": return OUTPUT_VIDEO_MASTER_SET_OPERATION_ID;
     case "take_video_clip": return OUTPUT_VIDEO_CLIP_TAKE_OPERATION_ID;
+    case "launch_video_clip": return OUTPUT_VIDEO_CLIP_LAUNCH_OPERATION_ID;
     case "acquire_lease": return OUTPUT_LEASE_ACQUIRE_OPERATION_ID;
     case "renew_lease": return OUTPUT_LEASE_RENEW_OPERATION_ID;
     case "recover_lease": return OUTPUT_LEASE_RECOVER_OPERATION_ID;
@@ -511,6 +522,7 @@ type OutputControlInvokeCommand =
   | "set_group_submaster_output_control_v2"
   | "set_video_master_output_control_v2"
   | "take_video_clip_output_control_v2"
+  | "launch_video_clip_output_control_v2"
   | "acquire_output_lease_v2"
   | "renew_output_lease_v2"
   | "recover_output_lease_v2"
@@ -538,6 +550,7 @@ const commandForAction = (action: OutputControlOperationAction): OutputControlIn
     case "set_group_submaster": return "set_group_submaster_output_control_v2";
     case "set_video_master": return "set_video_master_output_control_v2";
     case "take_video_clip": return "take_video_clip_output_control_v2";
+    case "launch_video_clip": return "launch_video_clip_output_control_v2";
     case "acquire_lease": return "acquire_output_lease_v2";
     case "renew_lease": return "renew_output_lease_v2";
     case "recover_lease": return "recover_output_lease_v2";
@@ -923,6 +936,14 @@ const assertAction = (action: OutputControlOperationAction): void => {
       || action.fade_ms > MAX_VIDEO_CLIP_TAKE_FADE_MS) {
       throw new Error("Video Take action was invalid; nothing was applied.");
     }
+  } else if (action.kind === "launch_video_clip") {
+    if (!hasExactKeys(record, ["kind", "role", "layer_id", "fade_ms", "lease"])
+      || action.role !== "video" && action.role !== "both"
+      || !isPositiveSafeInteger(action.layer_id)
+      || !isNonnegativeSafeInteger(action.fade_ms)
+      || action.fade_ms > MAX_VIDEO_CLIP_LAUNCH_FADE_MS) {
+      throw new Error("Video Clip Launch action was invalid; nothing was applied.");
+    }
   } else if (action.kind === "add_display") {
     const spec = action.spec as unknown as Record<string, unknown>;
     if (!hasExactKeys(record, ["kind", "spec", "lease"])
@@ -1147,6 +1168,7 @@ const assertResponse = (
     || action.kind === "set_group_submaster"
     || action.kind === "set_video_master"
     || action.kind === "take_video_clip"
+    || action.kind === "launch_video_clip"
     || action.kind === "enable_show_serial_dmx_safety_blackout_route"
     || action.kind === "stop_show_serial_dmx_safety_blackout_route"
     || action.kind === "send_dsf2026_artnet_acceptance_probe"
@@ -1212,6 +1234,7 @@ const assertSelectedLeaseIsUsable = (query: OutputLeaseAuthorityQuery, action: O
       && selected[0].status !== "held_active"
     || action.kind === "set_video_master" && selected[0].status !== "held_active"
     || action.kind === "take_video_clip" && selected[0].status !== "held_active"
+    || action.kind === "launch_video_clip" && selected[0].status !== "held_active"
     || action.kind === "assign_video_output_composition" && selected[0].status !== "held_active"
     || action.kind === "renew_lease" && selected[0].status !== "held_active"
     || action.kind === "recover_lease" && selected[0].status !== "held_orphaned") {
@@ -1239,6 +1262,9 @@ const assertSelectedLeaseIsUsable = (query: OutputLeaseAuthorityQuery, action: O
     const expectedResources = action.role === "both" ? ["lighting", "video"] as const : ["video"] as const;
     if (!sameResources(selected[0].resources, expectedResources)) throw new Error("Selected output lease is unavailable, orphaned, stale, or has the wrong resources; nothing was applied.");
   } else if (action.kind === "take_video_clip") {
+    const expectedResources = action.role === "both" ? ["lighting", "video"] as const : ["video"] as const;
+    if (!sameResources(selected[0].resources, expectedResources)) throw new Error("Selected output lease is unavailable, orphaned, stale, or has the wrong resources; nothing was applied.");
+  } else if (action.kind === "launch_video_clip") {
     const expectedResources = action.role === "both" ? ["lighting", "video"] as const : ["video"] as const;
     if (!sameResources(selected[0].resources, expectedResources)) throw new Error("Selected output lease is unavailable, orphaned, stale, or has the wrong resources; nothing was applied.");
   }
@@ -1388,6 +1414,29 @@ export async function executeVideoClipTakeOutputControl(
   const selection = selectOnlyActiveVideoOutputLease(await queryOutputLeaseAuthority(invoke));
   return executeOutputControl(invoke, {
     kind: "take_video_clip",
+    role: selection.role,
+    layer_id: layerId,
+    fade_ms: Math.round(fadeMs),
+    lease: selection.authority,
+  });
+}
+
+/** Execute one direct Video Clip Launch through the exact active Video-capable lease. */
+export async function executeVideoClipLaunchOutputControl(
+  invoke: FrontendTauriInvoke,
+  layerId: number,
+  fadeMs: number,
+): Promise<OutputControlReceipt> {
+  if (!isPositiveSafeInteger(layerId)
+    || !Number.isFinite(fadeMs)
+    || !Number.isSafeInteger(Math.round(fadeMs))
+    || fadeMs < 0
+    || fadeMs > MAX_VIDEO_CLIP_LAUNCH_FADE_MS) {
+    throw new Error("Video Clip Launch layer or fade duration was invalid; nothing was applied.");
+  }
+  const selection = selectOnlyActiveVideoOutputLease(await queryOutputLeaseAuthority(invoke));
+  return executeOutputControl(invoke, {
+    kind: "launch_video_clip",
     role: selection.role,
     layer_id: layerId,
     fade_ms: Math.round(fadeMs),

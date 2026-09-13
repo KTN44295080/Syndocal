@@ -1921,8 +1921,9 @@ pub const OUTPUT_CONTROL_AUTHORITY_QUERY_OPERATION_ID: &str =
 // replaces the same-Main Spout enable action and appends its local reset. v9
 // appends the lease-bound lighting master and group-submaster runtime actions.
 // v10 appends the lease-bound Video master runtime action. v11 appends the
-// lease-bound Video Take runtime action.
-pub const OUTPUT_CONTROL_COMMAND_SCHEMA_VERSION: u16 = 11;
+// lease-bound Video Take runtime action. v12 appends the lease-bound Video
+// Clip Launch runtime action.
+pub const OUTPUT_CONTROL_COMMAND_SCHEMA_VERSION: u16 = 12;
 pub const OUTPUT_OWNERSHIP_ARM_OPERATION_ID: &str = "syndocal.output.ownership.arm.v2";
 pub const OUTPUT_BLACKOUT_SET_OPERATION_ID: &str = "syndocal.output.blackout.set.v2";
 pub const OUTPUT_BLACKOUT_RELEASE_OPERATION_ID: &str = "syndocal.output.blackout.release.v2";
@@ -1953,6 +1954,8 @@ pub const OUTPUT_VIDEO_MASTER_SET_OPERATION_ID: &str =
     "syndocal.output.video.master.set.v2";
 pub const OUTPUT_VIDEO_CLIP_TAKE_OPERATION_ID: &str = "syndocal.output.video.clip.take.v2";
 pub const MAX_VIDEO_CLIP_TAKE_FADE_MS: u64 = 600_000;
+pub const OUTPUT_VIDEO_CLIP_LAUNCH_OPERATION_ID: &str = "syndocal.output.video.clip.launch.v2";
+pub const MAX_VIDEO_CLIP_LAUNCH_FADE_MS: u64 = 600_000;
 /// Normal operator path: one explicit local-renderer enable request. This is
 /// deliberately distinct from the public lease lifecycle.
 pub const OUTPUT_ENABLE_OPERATION_ID: &str = "syndocal.output.enable.v2";
@@ -2734,6 +2737,12 @@ pub enum OutputControlActionV2 {
         fade_ms: u64,
         lease: OutputLeaseAuthorityV1,
     },
+    LaunchVideoClip {
+        role: OutputControlTargetRoleV1,
+        layer_id: u64,
+        fade_ms: u64,
+        lease: OutputLeaseAuthorityV1,
+    },
 }
 
 #[derive(Serialize, Deserialize)]
@@ -2830,6 +2839,12 @@ enum OutputControlActionV2Wire {
         fade_ms: u64,
         lease: OutputLeaseAuthorityV1,
     },
+    LaunchVideoClip {
+        role: OutputControlTargetRoleV1,
+        layer_id: u64,
+        fade_ms: u64,
+        lease: OutputLeaseAuthorityV1,
+    },
 }
 
 impl OutputControlActionV2 {
@@ -2871,6 +2886,7 @@ impl OutputControlActionV2 {
             Self::SetGroupSubmaster { .. } => OUTPUT_GROUP_SUBMASTER_SET_OPERATION_ID,
             Self::SetVideoMaster { .. } => OUTPUT_VIDEO_MASTER_SET_OPERATION_ID,
             Self::TakeVideoClip { .. } => OUTPUT_VIDEO_CLIP_TAKE_OPERATION_ID,
+            Self::LaunchVideoClip { .. } => OUTPUT_VIDEO_CLIP_LAUNCH_OPERATION_ID,
         }
     }
 
@@ -2981,6 +2997,21 @@ impl OutputControlActionV2 {
                 if *layer_id == 0
                     || *layer_id > MAX_SAFE_JAVASCRIPT_INTEGER
                     || *fade_ms > MAX_VIDEO_CLIP_TAKE_FADE_MS
+                {
+                    return Err(OutputControlValidationErrorV1::InvalidVideoTake);
+                }
+                lease.validate()?;
+            }
+            Self::LaunchVideoClip {
+                role,
+                layer_id,
+                fade_ms,
+                lease,
+            } => {
+                validate_video_control_role(*role)?;
+                if *layer_id == 0
+                    || *layer_id > MAX_SAFE_JAVASCRIPT_INTEGER
+                    || *fade_ms > MAX_VIDEO_CLIP_LAUNCH_FADE_MS
                 {
                     return Err(OutputControlValidationErrorV1::InvalidVideoTake);
                 }
@@ -3124,6 +3155,17 @@ impl OutputControlActionV2 {
                 fade_ms,
                 lease,
             } => OutputControlActionV2Wire::TakeVideoClip {
+                role: *role,
+                layer_id: *layer_id,
+                fade_ms: *fade_ms,
+                lease: lease.clone(),
+            },
+            Self::LaunchVideoClip {
+                role,
+                layer_id,
+                fade_ms,
+                lease,
+            } => OutputControlActionV2Wire::LaunchVideoClip {
                 role: *role,
                 layer_id: *layer_id,
                 fade_ms: *fade_ms,
@@ -3359,6 +3401,25 @@ impl OutputControlActionV2 {
                 output.extend_from_slice(lease.lease_id.as_bytes());
                 append_u64(output, lease.generation);
             }
+            Self::LaunchVideoClip {
+                role,
+                layer_id,
+                fade_ms,
+                lease,
+            } => {
+                // 0..=24 are frozen. This runtime-only Video Clip Launch
+                // action is append-only, so 25 cannot rewrite an old shape.
+                output.push(25);
+                output.push(match role {
+                    OutputControlTargetRoleV1::Lighting => 0,
+                    OutputControlTargetRoleV1::Video => 1,
+                    OutputControlTargetRoleV1::Both => 2,
+                });
+                append_u64(output, *layer_id);
+                append_u64(output, *fade_ms);
+                output.extend_from_slice(lease.lease_id.as_bytes());
+                append_u64(output, lease.generation);
+            }
         }
         Ok(())
     }
@@ -3488,6 +3549,17 @@ impl<'de> Deserialize<'de> for OutputControlActionV2 {
                 fade_ms,
                 lease,
             } => Self::TakeVideoClip {
+                role,
+                layer_id,
+                fade_ms,
+                lease,
+            },
+            OutputControlActionV2Wire::LaunchVideoClip {
+                role,
+                layer_id,
+                fade_ms,
+                lease,
+            } => Self::LaunchVideoClip {
                 role,
                 layer_id,
                 fade_ms,
@@ -3896,6 +3968,7 @@ impl OutputControlLeaseResultV2 {
             | OUTPUT_LIGHTING_MASTER_SET_OPERATION_ID
             | OUTPUT_GROUP_SUBMASTER_SET_OPERATION_ID
             | OUTPUT_VIDEO_MASTER_SET_OPERATION_ID
+            | OUTPUT_VIDEO_CLIP_LAUNCH_OPERATION_ID
             | OUTPUT_VIDEO_CLIP_TAKE_OPERATION_ID => OutputLeaseReceiptOutcomeV2::Authorized,
             OUTPUT_LEASE_ACQUIRE_OPERATION_ID => OutputLeaseReceiptOutcomeV2::Acquired,
             OUTPUT_LEASE_RENEW_OPERATION_ID => OutputLeaseReceiptOutcomeV2::Renewed,
@@ -4124,6 +4197,7 @@ impl OutputControlReceiptV2 {
                 | OUTPUT_LIGHTING_MASTER_SET_OPERATION_ID
                 | OUTPUT_GROUP_SUBMASTER_SET_OPERATION_ID
                 | OUTPUT_VIDEO_MASTER_SET_OPERATION_ID
+                | OUTPUT_VIDEO_CLIP_LAUNCH_OPERATION_ID
                 | OUTPUT_VIDEO_CLIP_TAKE_OPERATION_ID
         ) {
             return Err(OutputControlValidationErrorV1::UnexpectedOperationId);
@@ -4197,6 +4271,7 @@ impl OutputControlReceiptV2 {
                             | OUTPUT_LIGHTING_MASTER_SET_OPERATION_ID
                             | OUTPUT_GROUP_SUBMASTER_SET_OPERATION_ID
                             | OUTPUT_VIDEO_MASTER_SET_OPERATION_ID
+                            | OUTPUT_VIDEO_CLIP_LAUNCH_OPERATION_ID
                             | OUTPUT_VIDEO_CLIP_TAKE_OPERATION_ID
                     ) =>
             {
@@ -4222,6 +4297,7 @@ impl OutputControlReceiptV2 {
                             | OUTPUT_LIGHTING_MASTER_SET_OPERATION_ID
                             | OUTPUT_GROUP_SUBMASTER_SET_OPERATION_ID
                             | OUTPUT_VIDEO_MASTER_SET_OPERATION_ID
+                            | OUTPUT_VIDEO_CLIP_LAUNCH_OPERATION_ID
                             | OUTPUT_VIDEO_CLIP_TAKE_OPERATION_ID
                     ) =>
             {
@@ -4336,6 +4412,7 @@ impl OutputControlRejectionV2 {
                 | OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_OPERATION_ID
                 | OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_RECONCILE_OPERATION_ID
                 | OUTPUT_ENABLE_OPERATION_ID
+                | OUTPUT_VIDEO_CLIP_LAUNCH_OPERATION_ID
                 | OUTPUT_VIDEO_CLIP_TAKE_OPERATION_ID
         ) {
             return Err(OutputControlValidationErrorV1::UnexpectedOperationId);
@@ -6254,6 +6331,26 @@ mod tests {
             .unwrap(),
             video_take
         );
+        let video_launch = OutputControlActionV2::LaunchVideoClip {
+            role: OutputControlTargetRoleV1::Video,
+            layer_id: 42,
+            fade_ms: 1_500,
+            lease: authority.clone(),
+        };
+        let mut video_launch_shape = Vec::new();
+        video_launch
+            .append_canonical_bytes(&mut video_launch_shape)
+            .unwrap();
+        assert_eq!(video_launch_shape.first(), Some(&25));
+        assert_eq!(video_launch.operation_id(), OUTPUT_VIDEO_CLIP_LAUNCH_OPERATION_ID);
+        assert_eq!(serde_json::to_value(&video_launch).unwrap()["kind"], "launch_video_clip");
+        assert_eq!(
+            serde_json::from_value::<OutputControlActionV2>(
+                serde_json::to_value(&video_launch).unwrap()
+            )
+            .unwrap(),
+            video_launch
+        );
         for action in [
             OutputControlActionV2::SetLightingMaster {
                 role: OutputControlTargetRoleV1::Video,
@@ -6297,6 +6394,24 @@ mod tests {
                 role: OutputControlTargetRoleV1::Video,
                 layer_id: 42,
                 fade_ms: MAX_VIDEO_CLIP_TAKE_FADE_MS + 1,
+                lease: authority.clone(),
+            },
+            OutputControlActionV2::LaunchVideoClip {
+                role: OutputControlTargetRoleV1::Lighting,
+                layer_id: 42,
+                fade_ms: 0,
+                lease: authority.clone(),
+            },
+            OutputControlActionV2::LaunchVideoClip {
+                role: OutputControlTargetRoleV1::Video,
+                layer_id: 0,
+                fade_ms: 0,
+                lease: authority.clone(),
+            },
+            OutputControlActionV2::LaunchVideoClip {
+                role: OutputControlTargetRoleV1::Video,
+                layer_id: 42,
+                fade_ms: MAX_VIDEO_CLIP_LAUNCH_FADE_MS + 1,
                 lease: authority.clone(),
             },
         ] {

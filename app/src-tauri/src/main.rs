@@ -144,7 +144,8 @@ use protocol::{
         OUTPUT_LEASE_RECOVER_OPERATION_ID, OUTPUT_LEASE_RELINQUISH_OPERATION_ID,
         OUTPUT_LEASE_RENEW_OPERATION_ID, OUTPUT_OWNERSHIP_ARM_OPERATION_ID,
         OUTPUT_GROUP_SUBMASTER_SET_OPERATION_ID, OUTPUT_LIGHTING_MASTER_SET_OPERATION_ID,
-        OUTPUT_VIDEO_MASTER_SET_OPERATION_ID, OUTPUT_VIDEO_CLIP_TAKE_OPERATION_ID,
+        OUTPUT_VIDEO_CLIP_LAUNCH_OPERATION_ID, OUTPUT_VIDEO_CLIP_TAKE_OPERATION_ID,
+        OUTPUT_VIDEO_MASTER_SET_OPERATION_ID,
         OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID,
         OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_ENABLE_OPERATION_ID,
         OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_STOP_OPERATION_ID,
@@ -25211,6 +25212,7 @@ const PREFLIGHT_ONLY_NONPROJECT_OR_INNER_RUNTIME_ROUTES: &[&str] = &[
     "force_transfer_output_lease_v2",
     "hold_show_clock",
     "import_gdtf",
+    "launch_video_clip_output_control_v2",
     "launch_video_clip_slot_authoritative",
     "launch_video_layer_transition_bus_authoritative",
     "learn_dmx_control",
@@ -43220,6 +43222,17 @@ fn launch_video_clip(
     layer_id: VideoLayerId,
     fade_ms: u64,
 ) -> Result<(), String> {
+    launch_video_clip_core(&state, layer_id, fade_ms)
+}
+
+/// Shared layer-state launch core. The legacy renderer command and the
+/// lease-bound OutputControl command both enter here so the actual launch
+/// mutation cannot diverge between local compatibility and fenced callers.
+fn launch_video_clip_core(
+    state: &AppState,
+    layer_id: VideoLayerId,
+    fade_ms: u64,
+) -> Result<(), String> {
     let layer_state = state
         .engine
         .video_layer_state_snapshot(layer_id)
@@ -49966,6 +49979,24 @@ async fn take_video_clip_output_control_v2(
         app,
         window,
         OUTPUT_VIDEO_CLIP_TAKE_OPERATION_ID,
+        request,
+    )
+    .await
+}
+
+/// Canonical runtime-only Video Clip Launch. The request carries the exact
+/// Video-capable lease and the backend revalidates its fence before entering
+/// the shared layer-state launch core.
+#[tauri::command]
+async fn launch_video_clip_output_control_v2(
+    app: tauri::AppHandle,
+    window: WebviewWindow,
+    request: OutputControlCommandRequestV2,
+) -> OutputControlResponseV2 {
+    execute_output_control_off_event_loop(
+        app,
+        window,
+        OUTPUT_VIDEO_CLIP_LAUNCH_OPERATION_ID,
         request,
     )
     .await
@@ -57155,7 +57186,8 @@ fn output_lease_resources_for_control_action(
                 }.to_string())
             }
         },
-        protocol::control_plane_command::OutputControlActionV2::TakeVideoClip { role, .. } => match role {
+        protocol::control_plane_command::OutputControlActionV2::TakeVideoClip { role, .. }
+        | protocol::control_plane_command::OutputControlActionV2::LaunchVideoClip { role, .. } => match role {
             OutputControlTargetRoleV1::Video => vec![OutputLeaseResource::Video],
             OutputControlTargetRoleV1::Both => {
                 vec![OutputLeaseResource::Lighting, OutputLeaseResource::Video]
@@ -57308,6 +57340,7 @@ pub(crate) fn build_output_lease_authorization_request(
         | OutputControlActionV2::SetGroupSubmaster { lease, .. }
         | OutputControlActionV2::SetVideoMaster { lease, .. }
         | OutputControlActionV2::TakeVideoClip { lease, .. }
+        | OutputControlActionV2::LaunchVideoClip { lease, .. }
         | OutputControlActionV2::SetBlackout { lease, .. }
         | OutputControlActionV2::ReleaseBlackout { lease }
         | OutputControlActionV2::SendDsf2026ArtNetAcceptanceProbe { lease }
@@ -75427,6 +75460,62 @@ fn take_video_clip_with_output_control_fence(
                 "Video Take",
                 || {
                     take_video_clip_core(state, layer_id, fade_ms)?;
+                    Ok(true)
+                },
+            )?;
+            Ok((applied, expected_fence.clone(), lease_receipt))
+        },
+    )
+}
+
+/// Apply the direct Video Clip Launch through the exact active Video lease and
+/// output-control fence. The legacy command remains available for compatibility;
+/// production UI and canonical callers use this lease-bound path.
+fn launch_video_clip_with_output_control_fence(
+    state: &AppState,
+    layer_id: VideoLayerId,
+    fade_ms: u64,
+    expected_fence: &OutputControlFenceV1,
+    lease_request: &OutputLeaseRequest,
+    _lease_now_ms: u64,
+) -> Result<
+    (
+        bool,
+        OutputControlFenceV1,
+        output_lease::OutputLeaseRequestReceipt,
+    ),
+    String,
+> {
+    let _external_admission = lock_project_external_command_admission(state)?;
+    let mut coordinator = lock_project_coordinator(state)?;
+    with_revalidated_output_transition(
+        || lock_output_ownership_transition(state),
+        || {
+            if reconcile_project_checkpoint_for_coordinator(state, &mut coordinator).is_err()
+                || !control_plane_runtime::exact_output_control_fence_matches(
+                    state,
+                    &coordinator,
+                    expected_fence,
+                )
+                || ensure_no_pending_project_transaction(&coordinator).is_err()
+            {
+                return Err("Output control fence changed before Video Clip Launch transition".to_string());
+            }
+            Ok(())
+        },
+        |_transition_guard, _| {
+            let mut lease_registry = state.output_lease_registry.lock().map_err(|_| {
+                "Output lease registry lock was poisoned before Video Clip Launch transition".to_string()
+            })?;
+            let final_lease_now_ms = state.output_lease_now_ms()?;
+            let (applied, lease_receipt) = submit_output_lease_candidate_with_commit(
+                state,
+                &mut lease_registry,
+                lease_request,
+                final_lease_now_ms,
+                "Video Clip Launch",
+                || {
+                    launch_video_clip_core(state, layer_id, fade_ms)?;
                     Ok(true)
                 },
             )?;
@@ -132160,6 +132249,7 @@ fn main() {
             set_group_submaster_output_control_v2,
             set_video_master_output_control_v2,
             take_video_clip_output_control_v2,
+            launch_video_clip_output_control_v2,
             reset_engine_telemetry,
             save_engine_telemetry_report,
             get_engine_telemetry_report,

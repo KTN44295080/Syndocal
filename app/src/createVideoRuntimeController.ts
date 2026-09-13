@@ -14,7 +14,10 @@ import {
   prepareFinalizeAndCommitMediaAssets,
 } from "./mediaAssetAuthority";
 import type { ProjectAuthorityToken } from "./projectAuthority";
-import { executeVideoClipTakeOutputControl } from "./outputControlController";
+import {
+  executeVideoClipLaunchOutputControl,
+  executeVideoClipTakeOutputControl,
+} from "./outputControlController";
 import { videoClipSlotCommandKindMatches, videoClipSlotRuntimeGenerationCanApply } from "./videoClipSlotBankModel";
 import type {
   EngineSnapshot,
@@ -998,7 +1001,7 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
   };
   const launchVideoClip = async (layerId: number, fadeMs: number) => {
     try {
-      await options.invoke("launch_video_clip", { layerId, fadeMs: Math.max(0, Math.round(fadeMs)) });
+      await executeVideoClipLaunchOutputControl(options.invoke, layerId, Math.max(0, Math.round(fadeMs)));
       options.setMessage(`Launched video clip ${layerId}${fadeMs > 0 ? ` with ${Math.round(fadeMs)}ms fade` : ""}.`);
       await options.refreshSnapshot();
       return true;

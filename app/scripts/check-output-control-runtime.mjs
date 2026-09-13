@@ -70,7 +70,7 @@ const resourcesFor = (action) => action.kind === "enable_output" || action.role 
   || action.kind === canonicalShowSerialDmxStopActionKind
   || action.kind === "acknowledge_dsf2026_artnet_acceptance_probe_in_doubt"
   || action.kind === "enable_show_spout_outputs"
-  ? ["lighting", "video"] : action.kind === "set_video_master" || action.kind === "take_video_clip"
+  ? ["lighting", "video"] : action.kind === "set_video_master" || action.kind === "take_video_clip" || action.kind === "launch_video_clip"
     ? action.role === "both" ? ["lighting", "video"] : ["video"]
     : action.role === "lighting" ? ["lighting"] : ["video"];
 const operationFor = (action) => ({
@@ -93,6 +93,7 @@ const operationFor = (action) => ({
   set_group_submaster: runtime.OUTPUT_GROUP_SUBMASTER_SET_OPERATION_ID,
   set_video_master: runtime.OUTPUT_VIDEO_MASTER_SET_OPERATION_ID,
   take_video_clip: runtime.OUTPUT_VIDEO_CLIP_TAKE_OPERATION_ID,
+  launch_video_clip: runtime.OUTPUT_VIDEO_CLIP_LAUNCH_OPERATION_ID,
   acquire_lease: runtime.OUTPUT_LEASE_ACQUIRE_OPERATION_ID,
   renew_lease: runtime.OUTPUT_LEASE_RENEW_OPERATION_ID,
   recover_lease: runtime.OUTPUT_LEASE_RECOVER_OPERATION_ID,
@@ -119,6 +120,7 @@ const commandFor = (action) => ({
   set_group_submaster: "set_group_submaster_output_control_v2",
   set_video_master: "set_video_master_output_control_v2",
   take_video_clip: "take_video_clip_output_control_v2",
+  launch_video_clip: "launch_video_clip_output_control_v2",
   acquire_lease: "acquire_output_lease_v2",
   renew_lease: "renew_output_lease_v2",
   recover_lease: "recover_output_lease_v2",
@@ -221,6 +223,7 @@ const ordinaryActions = [
   },
   { kind: "set_video_master", role: "video", master_milliunits: 875, lease: lease() },
   { kind: "take_video_clip", role: "video", layer_id: 42, fade_ms: 1500, lease: lease() },
+  { kind: "launch_video_clip", role: "video", layer_id: 42, fade_ms: 1500, lease: lease() },
   showArtNetLoopbackRouteAction,
   showSerialDmxEnableAction,
   showSerialDmxStopAction,
@@ -249,7 +252,7 @@ const queryFor = (action, state = "active") => {
     statuses: [{
       status: state === "orphaned" ? "held_orphaned" : "held_active",
       authority: action.lease,
-      resources: (action.kind === "arm" || action.kind === "set_lighting_master" || action.kind === "set_group_submaster" || action.kind === "set_video_master" || action.kind === "take_video_clip") && state !== "wrong"
+      resources: (action.kind === "arm" || action.kind === "set_lighting_master" || action.kind === "set_group_submaster" || action.kind === "set_video_master" || action.kind === "take_video_clip" || action.kind === "launch_video_clip") && state !== "wrong"
         ? resourcesFor(action)
         : action.kind === "add_display" || action.kind === "assign_video_output_composition"
           ? ["lighting", "video"] : ["lighting", "video"],
@@ -288,7 +291,7 @@ const receiptFor = (
   const recoveringEnable = action.kind === "enable_output" && enableRecovery;
   const resources = action.kind === "acquire_lease" || action.kind === "enable_output"
     ? resourcesFor(action)
-    : action.kind === "arm" || action.kind === "set_lighting_master" || action.kind === "set_group_submaster" || action.kind === "set_video_master" || action.kind === "take_video_clip" ? resourcesFor(action)
+    : action.kind === "arm" || action.kind === "set_lighting_master" || action.kind === "set_group_submaster" || action.kind === "set_video_master" || action.kind === "take_video_clip" || action.kind === "launch_video_clip" ? resourcesFor(action)
       : action.kind === "add_display" || action.kind === "assign_video_output_composition"
         ? ["lighting", "video"] : ["lighting", "video"];
   const inputGeneration = action.kind === "acquire_lease" || action.kind === "enable_output" && !enableRecovery
@@ -302,7 +305,7 @@ const receiptFor = (
   const outcome = ({
     arm: "authorized", set_blackout: "authorized", release_blackout: "authorized", take_over_standby: "authorized",
     add_display: "authorized", assign_video_output_composition: "authorized",
-    set_lighting_master: "authorized", set_group_submaster: "authorized", set_video_master: "authorized", take_video_clip: "authorized",
+    set_lighting_master: "authorized", set_group_submaster: "authorized", set_video_master: "authorized", take_video_clip: "authorized", launch_video_clip: "authorized",
     [canonicalShowArtNetActionKind]: "authorized",
     [canonicalShowSerialDmxEnableActionKind]: "authorized",
     [canonicalShowSerialDmxStopActionKind]: "authorized",
@@ -340,6 +343,7 @@ const receiptFor = (
         || action.kind === "set_group_submaster"
         || action.kind === "set_video_master"
         || action.kind === "take_video_clip"
+        || action.kind === "launch_video_clip"
         ? "applied" : "no_op",
       lease_result: {
         authority: action.kind === "acquire_lease" || action.kind === "enable_output" && !enableRecovery
@@ -411,6 +415,7 @@ for (const action of [enableAction, ...ordinaryActions, ...lifecycleActions]) {
       || action.kind === "set_group_submaster"
       || action.kind === "set_video_master"
       || action.kind === "take_video_clip"
+      || action.kind === "launch_video_clip"
       || action.kind === canonicalShowArtNetActionKind
       || action.kind === canonicalShowSerialDmxEnableActionKind
       || action.kind === canonicalShowSerialDmxStopActionKind
@@ -461,6 +466,17 @@ const videoTakeReceipt = await runtime.executeVideoClipTakeOutputControl(
 assert.equal(videoTakeReceipt.operation_id, runtime.OUTPUT_VIDEO_CLIP_TAKE_OPERATION_ID);
 assert.equal(videoTakeHarness.executeArgs[0].request.action.layer_id, 42);
 assert.equal(videoTakeHarness.executeArgs[0].request.action.fade_ms, 1500);
+
+const videoLaunchAction = ordinaryActions.find((action) => action.kind === "launch_video_clip");
+const videoLaunchHarness = createHarness({ action: videoLaunchAction, queryState: "active" });
+const videoLaunchReceipt = await runtime.executeVideoClipLaunchOutputControl(
+  videoLaunchHarness.invoke,
+  42,
+  1500,
+);
+assert.equal(videoLaunchReceipt.operation_id, runtime.OUTPUT_VIDEO_CLIP_LAUNCH_OPERATION_ID);
+assert.equal(videoLaunchHarness.executeArgs[0].request.action.layer_id, 42);
+assert.equal(videoLaunchHarness.executeArgs[0].request.action.fade_ms, 1500);
 
 const showArtNetLoopbackHarness = createHarness({ action: showArtNetLoopbackRouteAction, queryState: "active" });
 const showArtNetLoopbackReceipt = await runtime.executeOutputControl(showArtNetLoopbackHarness.invoke, showArtNetLoopbackRouteAction);
@@ -1506,6 +1522,7 @@ assert.match(runtimeSource, /OutputControlActionV2::SetLightingMaster[\s\S]*set_
 assert.match(runtimeSource, /OutputControlActionV2::SetGroupSubmaster[\s\S]*set_group_submaster_with_output_control_fence/);
 assert.match(runtimeSource, /OutputControlActionV2::SetVideoMaster[\s\S]*set_video_master_with_output_control_fence/);
 assert.match(runtimeSource, /OutputControlActionV2::TakeVideoClip[\s\S]*take_video_clip_with_output_control_fence/);
+assert.match(runtimeSource, /OutputControlActionV2::LaunchVideoClip[\s\S]*launch_video_clip_with_output_control_fence/);
 assert.match(
   runtimeSource,
   new RegExp(`OutputControlActionV2::EnableShowArtNetLoopbackRoute[\\s\\S]*${retiredShowArtNetActionKind}_with_output_control_fence`),
@@ -1526,6 +1543,7 @@ assert.match(runtimeSource, /OutputControlActionV2::EnableShowSpoutOutputs[\s\S]
 assert.match(runtimeSource, /OutputControlActionV2::ResetShowSpoutOutputs[\s\S]*reset_show_spout_outputs_without_output_lease/);
 assert.match(controlPlaneSource, /enable_output_control_v2/);
 assert.match(controlPlaneSource, /take_video_clip_output_control_v2/);
+assert.match(controlPlaneSource, /launch_video_clip_output_control_v2/);
 assert.match(controlPlaneSource, /enable_show_art_net_loopback_route_v1/);
 assert.match(controlPlaneSource, /enable_show_serial_dmx_safety_blackout_route_v1/);
 assert.match(controlPlaneSource, /stop_show_serial_dmx_safety_blackout_route_v1/);
@@ -2436,4 +2454,4 @@ for (const field of ["safety_blackout_epoch", "safety_blackout_generation", "out
   await assert.rejects(runtime.executeTargetBlackout(harness.invoke, "lighting", true), /receipt was inconsistent/);
 }
 
-console.log("output control runtime contract: PASS (v11 output commands, lease-bound Lighting/Video master, Video Take and group controls, fixed same-PC Art-Net loopback/DSF2026 probe plus no-send reconciliation/strict Spout V2 receipt fences/reset, revision-fenced USB-DMX status, strict receipts, fail-closed query)");
+console.log("output control runtime contract: PASS (v12 output commands, lease-bound Lighting/Video master, Video Take/Clip Launch and group controls, fixed same-PC Art-Net loopback/DSF2026 probe plus no-send reconciliation/strict Spout V2 receipt fences/reset, revision-fenced USB-DMX status, strict receipts, fail-closed query)");

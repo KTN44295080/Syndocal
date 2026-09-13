@@ -182,6 +182,7 @@ export const FRONTEND_TAURI_INVOKE_COMMANDS = [
   "install_application_update",
   "jump_video_cue_point",
   "launch_video_clip",
+  "launch_video_clip_output_control_v2",
   "launch_video_clip_slot_authoritative",
   "launch_video_layer_transition_bus_authoritative",
   "learn_dmx_control",
