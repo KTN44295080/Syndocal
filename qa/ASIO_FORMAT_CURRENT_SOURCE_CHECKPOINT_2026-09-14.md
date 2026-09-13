@@ -38,6 +38,14 @@ Result: exit code 0.
   rate/buffer/format/channel combination.
 - First-party warning count observed in this focused source run: `0`.
 
+## Takeover rerun — 2026-09-14
+
+The live-audio lifecycle, live-audio IPC v1, and ASIO ABI-v3 checks were rerun
+after takeover and all passed. The source still requires explicit device,
+sample-rate, channel, native-format, and fixed-buffer values; no fallback was
+introduced. No real ASIO driver was opened and no format-matrix acceptance
+artifact was produced.
+
 ## Unresolved acceptance
 
 `ASIO-FORMAT-MATRIX-001` stays Open. The required 44.1/48/96 kHz,
