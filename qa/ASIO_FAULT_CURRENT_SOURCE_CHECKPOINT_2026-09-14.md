@@ -36,6 +36,14 @@ Result: exit code 0.
 - ASIO v3 FFI contract: `22 assertions`, PASS.
 - First-party warning count observed in this run: `0`.
 
+## Takeover rerun — 2026-09-14
+
+The SDK-independent bridge suite was rerun with the pinned MSVC
+`14.44.35207` x64 linker: all 31 tests passed with zero failures or ignored
+tests. The ASIO v3 contract then passed 22 assertions. No real driver was
+occupied, reset, unplugged, or reopened, and no native fault-injection matrix
+artifact was produced.
+
 ## Unresolved acceptance
 
 `ASIO-FAULT-MATRIX-001` stays Open. Occupied-driver, control-panel
