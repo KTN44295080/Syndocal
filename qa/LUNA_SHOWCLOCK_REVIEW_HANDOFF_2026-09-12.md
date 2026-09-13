@@ -666,7 +666,7 @@ require their actual UI/device/two-machine topology and separate evidence.
 
 The continuation is now owned by the current task on branch
 `codex/showclock-review-20260912`. The latest pushed checkpoint is
-`bdc67871` (`qa: record migration corpus takeover rerun`), and the worktree is clean
+`ddcf3692` (`qa: record observability takeover rerun`), and the worktree is clean
 with the branch equal to `origin/codex/showclock-review-20260912`.
 
 The only product-code change in this continuation is in
@@ -714,6 +714,15 @@ existing Windows deny-write/delete and Unix version-CAS/private-snapshot media
 coherence paths. `MIGRATION-COMPATIBILITY-001` remains Open because the broad
 fuzz matrix, `DEC-FILE-ID-001` product decision, and real upgrade/downgrade
 machine rehearsals are not substituted by source tests.
+
+The observability/support current-source suite was also rerun against the
+current `16d9f886` tree before the documentation checkpoint. Status, release
+self-tests, bundled-library, Windows artifact self-tests, and strict JSON all
+passed; the release-mode Rust focused run passed `diagnostic_` 37, `updater_`
+3, and `project_replacement_is_redacted` 1 with zero failures/ignored tests
+and zero first-party warnings. This remains software-only evidence: no live
+update endpoint, signed publication, clean-machine drill, device, or support
+operation was exercised. The marker remains Open.
 
 The authoritative ledger remains structurally valid at 58 markers:
 `27 Complete`, `8 Deferred`, and `23 Open`. The Open IDs are
