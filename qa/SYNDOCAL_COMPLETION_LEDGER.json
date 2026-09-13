@@ -363,7 +363,7 @@
       "owner": "Observability and support owner",
       "dependency": "Generation-stamped runtime state and release/update policy",
       "nonclaim": "Does not claim diagnostics, updater resilience, or support runbooks are accepted.",
-      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md"],
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md", "qa/OBSERVABILITY_CURRENT_SOURCE_CHECKPOINT_2026-09-14.md"],
       "status": "Open"
     },
     {

@@ -1275,7 +1275,9 @@ function selfTest() {
         /symbolic-link or reparse-point/,
       );
     }
-    rmSync(linkedDir, { recursive: true, force: true });
+    // The fixture is a junction. Unlink the alias without recursively
+    // traversing the directory it targets.
+    rmSync(linkedDir, { force: true });
     rmSync(junctionTarget, { recursive: true, force: true });
 
     writeFileSync(join(clean, "third-party-asio-helper.dll"), "injected", { flag: "wx" });

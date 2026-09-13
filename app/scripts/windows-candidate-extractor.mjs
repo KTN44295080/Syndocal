@@ -1388,7 +1388,9 @@ function selfTest() {
     }
     if (existsSync(reparseOutput) || (() => { try { return lstatSync(reparseOutput).isSymbolicLink(); } catch { return false; } })()) {
       pass(lstatSync(reparseOutput).isSymbolicLink(), "reparse output swap is observed and never recursively removed");
-      rmSync(reparseOutput, { recursive: true, force: true });
+      // The output is a junction fixture. Unlink the alias without recursively
+      // traversing the directory it targets.
+      rmSync(reparseOutput, { force: true });
     } else if (!reparseCreated) {
       pass(true, "reparse output fixture unavailable without link privilege; regular swap coverage remains active");
     }
@@ -1405,7 +1407,8 @@ function selfTest() {
     }
     if (symlinkCreated) {
       rejects(() => assertSafeExternalDirectory(join(workspace, "target", "symlink-fixture"), "symlink fixture"), /non-reparse/);
-      rmSync(join(workspace, "target", "symlink-fixture"), { recursive: true, force: true });
+      // This is a junction fixture; remove only the alias, never its target.
+      rmSync(join(workspace, "target", "symlink-fixture"), { force: true });
       pass(true, "junction fixture is rejected by the shared safe-directory boundary");
     }
     void symlinkOutput;
