@@ -483,7 +483,7 @@
       "owner": "Video hardware acceptance owner",
       "dependency": "F2 ownership, real display topology, and capture/output devices",
       "nonclaim": "Does not claim physical display, NDI, Spout, camera, capture-fault, or one-hour video acceptance.",
-      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/M5_RELIABILITY_VALIDATION.md"],
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/M5_RELIABILITY_VALIDATION.md", "qa/VENUE_SOAK_CURRENT_SOURCE_CHECKPOINT_2026-09-14.md"],
       "status": "Open"
     },
     {
