@@ -191,6 +191,7 @@ fn previous_timeline_snapshot(runtime: &EngineRuntime) -> TimelineSnapshot {
             .collect(),
         audio: runtime.timeline_audio.clone(),
         audio_clips: runtime.timeline_audio_clips.clone(),
+        audio_policy: runtime.current_timeline_audio_policy(),
         video_clips: runtime.timeline_video_clips.clone(),
         phases: runtime.timeline_phases.clone(),
         item_groups: runtime.timeline_item_groups.clone(),

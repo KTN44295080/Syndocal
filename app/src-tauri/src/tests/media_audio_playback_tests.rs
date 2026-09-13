@@ -4493,9 +4493,18 @@ fn timeline_audio_lane_audibility_stops_once_and_rearms_only_on_reappearance() {
     let key_a = TimelineAudioSinkKey::Root(70);
     let key_b = TimelineAudioSinkKey::Root(71);
     for (key, path) in [(key_a.clone(), "lane-a.wav"), (key_b.clone(), "lane-b.wav")] {
+        let sink = rodio::Sink::connect_new(&mixer);
+        if key == key_b {
+            sink.append(rodio::buffer::SamplesBuffer::new(
+                2,
+                48_000,
+                vec![0.0_f32; 96_000],
+            ));
+            sink.play();
+        }
         playback
             .timeline_sinks
-            .insert(key.clone(), rodio::Sink::connect_new(&mixer));
+            .insert(key.clone(), sink);
         playback.timeline_sources.insert(
             key,
             TimelineAudioSourceConfig {
@@ -4506,6 +4515,15 @@ fn timeline_audio_lane_audibility_stops_once_and_rearms_only_on_reappearance() {
                 output_bus: protocol::TimelineAudioOutputBus::Program,
             },
         );
+        if path == "lane-b.wav" {
+            playback.timeline_source_clocks.insert(
+                key_b.clone(),
+                TimelineAudioSourceClock {
+                    source_anchor_ms: 500,
+                    output_anchor_ms: 0,
+                },
+            );
+        }
     }
     playback.timeline_transport = TimelineAudioTransportState {
         playing: true,

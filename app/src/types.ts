@@ -2870,6 +2870,26 @@ export interface TimelineLayerSummary {
 
 export type TimelineAudioOutputBus = "PROGRAM" | "CUE";
 
+export type TimelineAudioClockMaster = "SHOW_CLOCK";
+export type TimelineAudioResamplingPolicy = "BOUNDED_DEVICE_SLEW";
+export type TimelineAudioSeekPolicy = "REANCHOR_TO_SHOW_CLOCK";
+export type TimelineAudioLoopPolicy = "WRAP_TO_AUTHORED_RANGE";
+export type TimelineAudioUnderrunPolicy = "RETIRE_AND_HOLD";
+export type TimelineAudioDeviceFaultPolicy = "RETIRE_AND_HOLD";
+
+export interface TimelineAudioPolicy {
+  version: number;
+  clock_master: TimelineAudioClockMaster;
+  resampling: TimelineAudioResamplingPolicy;
+  seek: TimelineAudioSeekPolicy;
+  loop_policy: TimelineAudioLoopPolicy;
+  underrun: TimelineAudioUnderrunPolicy;
+  device_fault: TimelineAudioDeviceFaultPolicy;
+  max_slew_ppm: number;
+  max_drift_ms: number;
+  resync_cooldown_ms: number;
+}
+
 export interface TimelineAudioClipSummary {
   id: number;
   layer_id: number;

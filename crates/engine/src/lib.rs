@@ -153,6 +153,7 @@ use protocol::{
     RecallMode, ReferencePaletteSummary, Rotation3, StageMapConfig, StageMapPresetSummary,
     StageObjectId, StageObjectSummary, SubmasterSummary, TimelineAdvancedAuthoringSummary,
     TimelineAudioClipId, TimelineAudioClipSummary, TimelineAudioOutputBus,
+    TimelineAudioPolicy,
     TimelineAutomationSummary, TimelineClickEventSummary, TimelineCueEventSummary, TimelineEventId,
     TimelineEventPlacementUpdate, TimelineFollowDestinationStartMode,
     TimelineFollowRuntimeSummary, TimelineFollowSettlementAck,
@@ -6508,6 +6509,10 @@ pub struct TimelineAudioRuntimeSnapshot {
     pub playing: bool,
     pub position_ms: u64,
     pub muted: bool,
+    /// Authored ShowClock/PTS and fail-closed policy copied from the same
+    /// publication as the clips and transport. Native consumers must not
+    /// substitute a local default after project admission.
+    pub audio_policy: TimelineAudioPolicy,
     pub transport_revision: u64,
     /// Canonical non-persistent Timeline Play/Pause authority. This is
     /// intentionally independent from `source_projection_authority`, which
@@ -11691,6 +11696,7 @@ impl EngineHandle {
                         } else {
                             snapshot.timeline.audio_muted
                         },
+                        audio_policy: snapshot.timeline.audio_policy.clone(),
                         transport_revision,
                         transport_epoch: snapshot.timeline.transport_epoch,
                         transport_generation: snapshot.timeline.transport_generation,
@@ -13491,6 +13497,7 @@ struct TimelineAudioChildProjectionSignature {
 struct TimelineAudioBankProjectionSignature {
     timeline_id: TimelineId,
     audio_muted: bool,
+    audio_policy: TimelineAudioPolicy,
     clips: Vec<TimelineAudioClipSummary>,
     lanes: Vec<(u32, bool, bool)>,
 }
@@ -13500,6 +13507,7 @@ struct TimelineAudioProjectionSignature {
     timeline_id: TimelineId,
     audio_muted: bool,
     audio_offset_ms: i64,
+    audio_policy: TimelineAudioPolicy,
     clips: Vec<TimelineAudioClipSummary>,
     lanes: Vec<(u32, bool, bool)>,
     children: Vec<TimelineAudioChildProjectionSignature>,
@@ -13559,6 +13567,7 @@ impl Default for TimelineAudioProjectionSignature {
             timeline_id: TimelineId(1),
             audio_muted: false,
             audio_offset_ms: 0,
+            audio_policy: TimelineAudioPolicy::default(),
             clips: Vec::new(),
             lanes: Vec::new(),
             children: Vec::new(),
@@ -42730,6 +42739,7 @@ impl EngineRuntime {
             .map(|timeline| TimelineAudioBankProjectionSignature {
                 timeline_id: timeline.id,
                 audio_muted: timeline.audio_muted,
+                audio_policy: timeline.audio_policy.clone(),
                 clips: sorted_clips(&timeline.audio_clips),
                 lanes: audio_lanes(&timeline.layers),
             })
@@ -42782,6 +42792,7 @@ impl EngineRuntime {
             timeline_id: self.timeline_id,
             audio_muted: self.timeline_audio_muted,
             audio_offset_ms: self.timeline_audio_offset_ms,
+            audio_policy: self.current_timeline_audio_policy(),
             clips: sorted_clips(&self.timeline_audio_clips),
             lanes: audio_lanes(&self.timeline_layers),
             children,
@@ -42794,6 +42805,14 @@ impl EngineRuntime {
             ),
             media_sources,
         }
+    }
+
+    fn current_timeline_audio_policy(&self) -> TimelineAudioPolicy {
+        self.timeline_bank
+            .iter()
+            .find(|timeline| timeline.id == self.timeline_id)
+            .map(|timeline| timeline.audio_policy.clone())
+            .unwrap_or_default()
     }
 
     fn timeline_audio_commit_signature(&self) -> TimelineAudioCommitSignature {
@@ -47533,6 +47552,7 @@ impl EngineRuntime {
             } else {
                 Vec::new()
             },
+            audio_policy: self.current_timeline_audio_policy(),
             video_clips: self.timeline_video_clips.clone(),
             phases: self.timeline_phases.clone(),
             item_groups: self.timeline_item_groups.clone(),

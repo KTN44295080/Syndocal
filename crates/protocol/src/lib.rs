@@ -14,6 +14,14 @@ pub mod agent_authority;
 pub mod fixture_stage_layout;
 pub mod show_clock;
 pub mod show_clock_runtime;
+pub mod timeline_audio_policy;
+
+pub use timeline_audio_policy::{
+    timeline_audio_resync_required, timeline_audio_source_pts_ms,
+    validate_timeline_audio_policy, TimelineAudioClockMaster, TimelineAudioDeviceFaultPolicy,
+    TimelineAudioLoopPolicy, TimelineAudioPolicy, TimelineAudioResamplingPolicy,
+    TimelineAudioSeekPolicy, TimelineAudioUnderrunPolicy, TIMELINE_AUDIO_POLICY_VERSION,
+};
 
 pub use fixture_stage_layout::validate_fixture_stage_layout;
 pub use fixture_stage_layout::{
@@ -5295,6 +5303,10 @@ pub struct TimelineSnapshot {
     pub audio: Option<AudioAnalysisSummary>,
     #[serde(default)]
     pub audio_clips: Vec<TimelineAudioClipSummary>,
+    /// Portable authored clock/PTS and failure policy.  Missing legacy data
+    /// resolves to the current ShowClock-master defaults.
+    #[serde(default, skip_serializing_if = "is_default_timeline_audio_policy")]
+    pub audio_policy: TimelineAudioPolicy,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub video_clips: Vec<TimelineVideoClipSummary>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -5376,6 +5388,7 @@ impl Default for TimelineSnapshot {
             video_automations: Vec::new(),
             audio: None,
             audio_clips: Vec::new(),
+            audio_policy: TimelineAudioPolicy::default(),
             video_clips: Vec::new(),
             phases: Vec::new(),
             item_groups: Vec::new(),
@@ -5404,6 +5417,10 @@ impl Default for TimelineSnapshot {
             duration_ms: 0,
         }
     }
+}
+
+fn is_default_timeline_audio_policy(policy: &TimelineAudioPolicy) -> bool {
+    *policy == TimelineAudioPolicy::default()
 }
 
 const fn default_timeline_id() -> TimelineId {
@@ -5441,6 +5458,7 @@ pub fn validate_timeline_authoring(
     if timeline.label.trim().is_empty() {
         return Err("Timeline label must not be empty".to_string());
     }
+    validate_timeline_audio_policy(&timeline.audio_policy)?;
     validate_timeline_tempo_meter_map(timeline.tempo_meter_map_version, &timeline.tempo_meter_map)?;
     let layer_by_id = timeline
         .layers
@@ -10567,6 +10585,7 @@ fn timeline_authored_projection_matches(
         && active.video_automations == bank.video_automations
         && active.audio == bank.audio
         && active.audio_clips == bank.audio_clips
+        && active.audio_policy == bank.audio_policy
         && active.video_clips == bank.video_clips
         && active.phases == bank.phases
         && active.item_groups == bank.item_groups
@@ -19174,9 +19193,11 @@ mod tests {
             TIMELINE_TEMPO_METER_MAP_VERSION
         );
         assert_eq!(ChildTimelineSummary::default().tempo_meter_map_version, 1);
+        assert_eq!(legacy.audio_policy, super::TimelineAudioPolicy::default());
         let legacy_json = serde_json::to_value(&legacy).unwrap();
         assert!(legacy_json.get("tempo_meter_map").is_none());
         assert!(legacy_json.get("tempo_meter_map_version").is_none());
+        assert!(legacy_json.get("audio_policy").is_none());
         let legacy_child_json = serde_json::to_value(ChildTimelineSummary::default()).unwrap();
         assert!(legacy_child_json.get("tempo_meter_map").is_none());
         assert!(legacy_child_json.get("tempo_meter_map_version").is_none());

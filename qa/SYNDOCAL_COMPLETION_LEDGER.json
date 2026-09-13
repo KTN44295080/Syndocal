@@ -3,7 +3,7 @@
   "source_document": "qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md",
   "authoritative_sections": ["6", "7", "8", "9"],
   "classifications": ["Supported", "Deferred", "External acceptance", "Out of scope"],
-  "expected_status_counts": { "Open": 32, "Deferred": 8, "Complete": 18 },
+  "expected_status_counts": { "Open": 31, "Deferred": 8, "Complete": 19 },
   "expected_section_counts": { "6": 37, "7": 6, "8": 9, "9": 6 },
   "items": [
     {
@@ -238,13 +238,13 @@
     },
     {
       "id": "AUDIO-AUTHORED-001",
-      "source": { "section": "6", "kind": "Open" },
+      "source": { "section": "6", "kind": "Complete" },
       "classification": "Supported",
       "owner": "Audio model owner",
       "dependency": "ShowClock master-clock decision and timeline authority",
-      "nonclaim": "Does not claim authored audio migration, clocking, resampling, seek, loop, underrun, or device-fault policy is complete.",
-      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md"],
-      "status": "Open"
+      "nonclaim": "Closes the current-source authored Timeline audio schema/migration, ShowClock/PTS policy, deterministic seek/loop/resync and fail-closed underrun/device-fault software slice; does not claim real audio-device, physical audible output, long-duration, venue, recording integration, signing, publication, or product-wide acceptance.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md", "qa/AUDIO_AUTHORED_CHECKPOINT_2026-09-13.md", "crates/protocol/src/timeline_audio_policy.rs", "crates/protocol/src/lib.rs", "crates/engine/src/lib.rs", "app/src-tauri/src/main.rs", "app/src-tauri/src/tests/media_audio_playback_tests.rs", "app/src/types.ts"],
+      "status": "Complete"
     },
     {
       "id": "VIDEO-LIVE-SOURCES-001",

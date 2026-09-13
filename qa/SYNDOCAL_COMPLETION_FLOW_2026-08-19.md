@@ -1728,7 +1728,7 @@ Audio/recording/live-source clock and ownership semantics are complete.
 - [x] M thumbnail/waveform/proxy/analysis identity, bounded background workers, <!-- completion-ledger: Complete: MEDIA-DERIVED-001 -->
   cancellation, cache/eviction, predecode/prefetch/degraded operation, and cold/warm
   cache performance budgets.
-- [ ] L authored Audio schema/migration/history and explicit ShowClock/audio/PTS <!-- completion-ledger: Open: AUDIO-AUTHORED-001 -->
+- [x] L authored Audio schema/migration/history and explicit ShowClock/audio/PTS <!-- completion-ledger: Complete: AUDIO-AUTHORED-001 -->
   master-clock, resampling/slew/seek/loop/underrun/device-fault policy.
 - [x] Extend the existing Web Remote listener with authenticated DJ Link events. Map
   `DJ_TRACK_ACTIVE` to project-owned Timeline starts, converge authored A-B

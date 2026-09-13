@@ -19050,6 +19050,21 @@ fn media_audio_resync_required(drift_ms: i64, cooldown_elapsed: Duration) -> boo
         && cooldown_elapsed >= MEDIA_AUDIO_RESYNC_COOLDOWN
 }
 
+fn timeline_media_audio_resync_required(
+    policy: &protocol::TimelineAudioPolicy,
+    drift_ms: i64,
+    cooldown_elapsed: Duration,
+) -> bool {
+    protocol::timeline_audio_resync_required(
+        policy,
+        drift_ms,
+        cooldown_elapsed
+            .as_millis()
+            .min(u128::from(u64::MAX)) as u64,
+    )
+    .unwrap_or(true)
+}
+
 fn timeline_audio_transport_action(
     previous: TimelineAudioTransportState,
     playing: bool,
@@ -22534,6 +22549,23 @@ impl MediaAudioPlayback {
             };
             sink.set_volume(volume.clamp(0.0, 2.0));
             if sink.empty() {
+                let error = format!(
+                    "Timeline audio clip {} underrun: the active sink ended before its authored duration",
+                    clip.id
+                );
+                self.stop_timeline_clip(key.clone());
+                self.timeline_failures.insert(
+                    key,
+                    TimelineAudioPlaybackFailure {
+                        source,
+                        error: error.clone(),
+                    },
+                );
+                if clip.output_bus == protocol::TimelineAudioOutputBus::Cue {
+                    plan.cue_errors.push(error);
+                } else {
+                    plan.errors.push(error);
+                }
                 continue;
             }
             let Some(source_clock) = self.timeline_source_clocks.get(&key).copied() else {
@@ -22573,7 +22605,11 @@ impl MediaAudioPlayback {
                 .get(&key)
                 .map(|last| now.saturating_duration_since(*last))
                 .unwrap_or(Duration::MAX);
-            if media_audio_resync_required(drift_ms, cooldown_elapsed) {
+            if timeline_media_audio_resync_required(
+                &timeline.audio_policy,
+                drift_ms,
+                cooldown_elapsed,
+            ) {
                 let sink = self
                     .timeline_sinks
                     .remove(&key)
@@ -22974,6 +23010,23 @@ impl MediaAudioPlayback {
             };
             sink.set_volume(volume.clamp(0.0, 2.0));
             if sink.empty() {
+                let error = format!(
+                    "Timeline audio clip {} underrun: the active sink ended before its authored duration",
+                    clip.id
+                );
+                self.stop_timeline_clip(key.clone());
+                self.timeline_failures.insert(
+                    key.clone(),
+                    TimelineAudioPlaybackFailure {
+                        source: source_config,
+                        error: error.clone(),
+                    },
+                );
+                if clip.output_bus == protocol::TimelineAudioOutputBus::Cue {
+                    cue_errors.push(error);
+                } else {
+                    errors.push(error);
+                }
                 continue;
             }
             let Some(source_clock) = self.timeline_source_clocks.get(&key).copied() else {
@@ -23013,7 +23066,11 @@ impl MediaAudioPlayback {
                 .get(&key)
                 .map(|last| now.saturating_duration_since(*last))
                 .unwrap_or(Duration::MAX);
-            if media_audio_resync_required(drift_ms, cooldown_elapsed) {
+            if timeline_media_audio_resync_required(
+                &timeline.audio_policy,
+                drift_ms,
+                cooldown_elapsed,
+            ) {
                 match seek_timeline_audio_sink_to_source_ms(sink, source_position_ms, speed_milli) {
                     Ok(()) => {
                         self.resync_count = self.resync_count.saturating_add(1);
