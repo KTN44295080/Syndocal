@@ -62,6 +62,15 @@ Windows deny-write/delete handles and uses Unix `dev`/`ino` plus size,
 mtime/ctime version CAS and a private snapshot before probing. This is a
 code-side coherence implementation, not a cross-platform support decision.
 
+## Source continuity audit — 2026-09-14
+
+After the recorded corpus rerun, `git diff --name-only ddf66fc2..HEAD -- app
+crates` returned no paths. The current product source therefore remains the
+same source that produced the 11-test corpus result; subsequent changes are
+QA documentation only. No new migration result is manufactured from that
+unchanged source, and the external compatibility boundary remains as stated
+below.
+
 ## Remaining boundary
 
 `MIGRATION-COMPATIBILITY-001` remains **Open**. Current-source Windows
