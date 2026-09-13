@@ -1946,11 +1946,11 @@ unchecked row.
   "expected_counts": {
     "q0_domains": 29,
     "q0_source_contracts": 10,
-    "flow_markers": { "Open": 36, "Deferred": 8, "Complete": 14 },
+    "flow_markers": { "Open": 35, "Deferred": 8, "Complete": 15 },
     "q1_rows": 32,
     "q2_decisions": 15,
     "q3_risks": 14,
-    "q4_evidence": 39
+    "q4_evidence": 40
   },
   "q0_registry": {
     "mirrored_from": "master section 21 Q0 tables; the master Markdown tables remain authoritative",
@@ -2081,11 +2081,11 @@ unchecked row.
       "hardware_external_proof": { "status": "not-run", "device_topology_duration": "Multi-display VJ topology and venue conditions.", "artifact_hash": null, "raw_evidence_paths": [], "na_reason": null },
       "status": "In progress",
       "commit": "",
-      "residual_risk": { "classification": "P2", "disposition": "B1-B4 and the current-source full gate are accepted; C2/C4 integration, native renderer/GPU/display, and physical/venue acceptance remain." },
-      "nonclaim": "This row does not claim C2 Clip Take/C4 mapping and Timeline transition integration, native renderer/GPU/display behavior, or physical/venue acceptance.",
+      "residual_risk": { "classification": "P2", "disposition": "B1-B4 and the current-source C2/C4 software/browser slice are accepted; Timeline Follow, native renderer/GPU/display, and physical/venue acceptance remain." },
+      "nonclaim": "This row does not claim Timeline Follow, native renderer/GPU/display behavior, 4K or multi-display presentation, physical/venue acceptance, or product-wide acceptance.",
       "decision_ids": [],
       "risk_ids": [],
-      "evidence_ids": ["EV-VIDEO-SLOT-SW-2026-09-12"]
+      "evidence_ids": ["EV-VIDEO-SLOT-SW-2026-09-12", "EV-VIDEO-C2-C4-SW-2026-09-13"]
     },
     {
       "id": "COV-VIDEO-FX-001",
@@ -2738,6 +2738,7 @@ unchecked row.
     { "id": "R-AI-SAFETY-001", "severity": "P0-Code", "escalation": null, "reproduction": "External disruptive/output/file action lacking bound consent, revocation, or fail-safe controller-loss behavior.", "affected_scope": "Operator venues, files, physical output", "likelihood": "undetermined", "owner": "AI safety owner", "mitigation": "DEC-AI-CONSENT-001 fixes safe-by-default external principals; AI4 must implement grants/revocation/kill switch before enablement.", "blocking_milestone": "Blocks external R4/R5 enablement.", "proof_needed": "Consent service proof including revocation and controller-loss fail-safes.", "status": "Open", "closing_commit": "", "closing_note": "", "last_reviewed": "2026-08-25", "linked_q1_ids": ["COV-AI-CONTROL-001", "COV-SECURITY-001"] }
   ],
   "q4_evidence": [
+    { "id": "EV-VIDEO-C2-C4-SW-2026-09-13", "scope": "Current-source Clip Take, mapping/Timeline integration, layered Timeline viewport, Timeline authority browser, and typed transition-bus contracts", "kind": "current-source-automated", "status": "accepted-current", "date": "2026-09-13", "command": "node app/scripts/check-video-clip-slot-bank.mjs && pnpm.cmd --dir app run check:timeline-advanced && CHROME_PATH=C:\\Users\\janua\\AppData\\Local\\Google\\Chrome\\Application\\chrome.exe pnpm.cmd --dir app run check:timeline-authority && CHROME_PATH=C:\\Users\\janua\\AppData\\Local\\Google\\Chrome\\Application\\chrome.exe pnpm.cmd --dir app run check:timeline-layered && cargo test -p engine --release --locked -j 1 video_full_gate_engine_path -- --test-threads=1 && cargo test -p engine --release --locked -j 1 video_sample_clip_take_queue -- --test-threads=1 && cargo test -p engine --release --locked -j 1 video_sample_follow_admission -- --test-threads=1 && cargo test -p engine --release --locked -j 1 video_transition_bus_c3_is_typed -- --test-threads=1", "exit_code": 0, "assertion_count": 13, "ignored_count": 0, "warning_count": 0, "artifact_hash": null, "artifact_na_reason": "Deterministic source checks and browser fixtures have no shipped binary artifact; the exact current source, MSVC linker, browser executable, commands, results, and external boundary are recorded in the linked QA checkpoint.", "raw_evidence_paths": ["qa/VIDEO_C2_C4_CHECKPOINT_2026-09-13.md", "qa/VIDEO_C2_C4_SOFTWARE_AUDIT_2026-09-08.md"], "currency_nonclaim": "Current-source software and rendered-browser evidence only; it cannot establish native-window interaction, native renderer/GPU/display breadth, 4K or multi-display presentation, physical output, venue soak, external clients, signing, publication, or product-wide acceptance.", "linked_q1_ids": ["COV-VIDEO-SLOT-001"] },
     { "id": "EV-MEDIA-T1-A7-2026-08-13", "scope": "Ordered automated Media Asset A7 gate and current native build hash", "kind": "historical-evidence", "status": "accepted-historical", "date": "2026-08-13", "command": null, "exit_code": null, "assertion_count": null, "ignored_count": null, "warning_count": null, "artifact_hash": null, "artifact_na_reason": "Exact artifact hashes are recorded inside the linked evidence document.", "raw_evidence_paths": ["qa/MEDIA_ASSET_T1_A7_EVIDENCE_2026-08-13.md"], "currency_nonclaim": "Historical A7 tranche evidence only; it cannot be used as current-source acceptance.", "linked_q1_ids": ["COV-MEDIA-T1-001"] },
     { "id": "EV-MEDIA-T1-A8-2026-08-13", "scope": "Full native Media Asset workflow matrix plus rebuilt thumbnail/hover supplement", "kind": "historical-evidence", "status": "accepted-historical", "date": "2026-08-13", "command": null, "exit_code": null, "assertion_count": null, "ignored_count": null, "warning_count": null, "artifact_hash": null, "artifact_na_reason": "Exact artifact hashes are recorded inside the linked evidence document.", "raw_evidence_paths": ["qa/MEDIA_ASSET_T1_A8_NATIVE_EVIDENCE_2026-08-13.md"], "currency_nonclaim": "Accepted for the declared historical Windows tranche only; it cannot be cited as current-source acceptance and non-Windows execution remains separate.", "linked_q1_ids": ["COV-MEDIA-T1-001"] },
     { "id": "EV-ALPHA11-D4-2026-08-25", "scope": "Alpha.11 D4 Stage software/native integration acceptance and main-checkout launch parity", "kind": "historical-evidence", "status": "accepted-historical", "date": "2026-08-25", "command": null, "exit_code": null, "assertion_count": null, "ignored_count": null, "warning_count": null, "artifact_hash": "1B010C40242A5C7DD7A2797EAC1ECA2D31BCACE4455BA57C7F935611075B582B", "artifact_na_reason": null, "raw_evidence_paths": ["qa/SYNDOCAL_ALPHA11_MAIN_INTEGRATION_CHECKPOINT_2026-08-25.md"], "currency_nonclaim": "Bound to the identified alpha.11 executable; this historical record cannot be promoted to current-source acceptance without a fresh exact-process native gate.", "linked_q1_ids": ["COV-STAGE-001", "COV-PROJECT-TX-001"] },

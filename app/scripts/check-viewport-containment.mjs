@@ -8388,7 +8388,7 @@ async function runControlStagePersistenceFailureViewport(client, viewport) {
   };
 }
 
-async function measureLayeredTimelineDeskState(client) {
+async function measureLayeredTimelineDeskState(client, targetLayerId = "13") {
   return await client.evaluate(`(async () => {
     await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
     const isVisible = (element) => {
@@ -8421,10 +8421,10 @@ async function measureLayeredTimelineDeskState(client) {
       const expectedIds = expectedLayerIdsByKind[kind];
       return expectedIds ? gutters.filter((gutter) => expectedIds.has(gutter.getAttribute('data-timeline-layer-id') || '')).length : 0;
     });
-    const targetGutter = document.querySelector('[data-timeline-layer-id="12"][data-timeline-layer-gutter]');
+    const targetGutter = document.querySelector('[data-timeline-layer-id="${targetLayerId}"][data-timeline-layer-gutter]');
     const targetToggle = targetGutter?.querySelector('[data-timeline-layer-mute-toggle]') ?? null;
     const targetDetailsToggle = targetGutter?.querySelector('[data-timeline-layer-expand-toggle]') ?? null;
-    const targetMarkers = visibleElements('.timelineMarker[data-timeline-layer-id="12"][data-timeline-layer-muted]');
+    const targetMarkers = visibleElements('.timelineMarker[data-timeline-layer-id="${targetLayerId}"][data-timeline-layer-muted]');
     const audioClips = visibleElements('.timelineAudioClip[data-timeline-layer-kind="Audio"]');
     const audioWaveforms = [...document.querySelectorAll('.timelineAudioClip [data-timeline-audio-waveform]')];
     const audioFadeRamps = [...document.querySelectorAll('.timelineAudioClip [data-timeline-audio-fade-ramp]')];
@@ -8513,6 +8513,10 @@ async function measureLayeredTimelineDeskState(client) {
 async function runLayeredTimelineDeskCheck(client, viewport) {
   // The focused runner invokes this directly; retain the same explicit
   // viewport contract when the full runner isolates it in a fresh browser.
+  // Lane 12 receives the fixture's implicit Lighting automation and is
+  // therefore expanded automatically. Lane 13 is the unautomated Lighting
+  // lane used to prove the explicit expand/collapse persistence contract.
+  const explicitExpansionLayerId = "13";
   await client.send("Emulation.setDeviceMetricsOverride", {
     width: viewport.width,
     height: viewport.height,
@@ -8527,25 +8531,25 @@ async function runLayeredTimelineDeskCheck(client, viewport) {
   await selectControlSurface(client, 'live');
   await ensureTimelineShowSurface(client);
   await sleep(120);
-  const before = await measureLayeredTimelineDeskState(client);
+  const before = await measureLayeredTimelineDeskState(client, explicitExpansionLayerId);
   const expandToggleClicked = await client.evaluate(`(() => {
-    const toggle = document.querySelector('[data-timeline-layer-id="12"][data-timeline-layer-gutter] [data-timeline-layer-expand-toggle]');
+    const toggle = document.querySelector('[data-timeline-layer-id="${explicitExpansionLayerId}"][data-timeline-layer-gutter] [data-timeline-layer-expand-toggle]');
     if (!(toggle instanceof HTMLButtonElement) || toggle.disabled) return false;
     toggle.click();
     return true;
   })()`);
   await sleep(160);
-  const expandedLayer = await measureLayeredTimelineDeskState(client);
+  const expandedLayer = await measureLayeredTimelineDeskState(client, explicitExpansionLayerId);
   const collapseToggleClicked = await client.evaluate(`(() => {
-    const toggle = document.querySelector('[data-timeline-layer-id="12"][data-timeline-layer-gutter] [data-timeline-layer-expand-toggle]');
+    const toggle = document.querySelector('[data-timeline-layer-id="${explicitExpansionLayerId}"][data-timeline-layer-gutter] [data-timeline-layer-expand-toggle]');
     if (!(toggle instanceof HTMLButtonElement) || toggle.disabled) return false;
     toggle.click();
     return true;
   })()`);
   await sleep(160);
-  const restoredLayer = await measureLayeredTimelineDeskState(client);
+  const restoredLayer = await measureLayeredTimelineDeskState(client, explicitExpansionLayerId);
   const muteToggleClicked = await client.evaluate(`(() => {
-    const gutter = document.querySelector('[data-timeline-layer-id="12"][data-timeline-layer-gutter]');
+    const gutter = document.querySelector('[data-timeline-layer-id="${explicitExpansionLayerId}"][data-timeline-layer-gutter]');
     const toggle = gutter?.querySelector('[data-timeline-layer-mute-toggle]');
     if (!(toggle instanceof HTMLButtonElement) || toggle.disabled) return false;
     const rect = toggle.getBoundingClientRect();
@@ -8555,7 +8559,7 @@ async function runLayeredTimelineDeskCheck(client, viewport) {
     return true;
   })()`);
   await sleep(160);
-  const muted = await measureLayeredTimelineDeskState(client);
+  const muted = await measureLayeredTimelineDeskState(client, explicitExpansionLayerId);
   const dragTimelineElement = async (selector, deltaX, deltaY = 0, duringDrag = null) => {
     const point = await client.evaluate(`(() => {
       const element = document.querySelector(${JSON.stringify(selector)});

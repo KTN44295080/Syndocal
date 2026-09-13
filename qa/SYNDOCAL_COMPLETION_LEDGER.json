@@ -3,7 +3,7 @@
   "source_document": "qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md",
   "authoritative_sections": ["6", "7", "8", "9"],
   "classifications": ["Supported", "Deferred", "External acceptance", "Out of scope"],
-  "expected_status_counts": { "Open": 36, "Deferred": 8, "Complete": 14 },
+  "expected_status_counts": { "Open": 35, "Deferred": 8, "Complete": 15 },
   "expected_section_counts": { "6": 37, "7": 6, "8": 9, "9": 6 },
   "items": [
     {
@@ -198,13 +198,13 @@
     },
     {
       "id": "VIDEO-C2-C4-001",
-      "source": { "section": "6", "kind": "Open" },
+      "source": { "section": "6", "kind": "Complete" },
       "classification": "Supported",
       "owner": "Video transition owner",
       "dependency": "Video full-gate reintegration and timeline authority",
-      "nonclaim": "Does not claim Clip Take or mapping/Timeline transition integration is accepted.",
-      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md"],
-      "status": "Open"
+      "nonclaim": "Closes only the current-source software and rendered-browser Clip Take/mapping/Timeline integration slice; does not claim native renderer/GPU/display, physical output, venue, signing, publication, or product-wide acceptance.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md", "qa/VIDEO_C2_C4_CHECKPOINT_2026-09-13.md", "qa/VIDEO_C2_C4_SOFTWARE_AUDIT_2026-09-08.md", "qa/VIDEO_SLOT_FX_SOFTWARE_REVALIDATION_2026-09-12.md"],
+      "status": "Complete"
     },
     {
       "id": "TIMELINE-FOLLOW-001",
