@@ -3,7 +3,7 @@
 ## Checkpoint identity
 
 - Branch: `codex/showclock-review-20260912`
-- Base before this checkpoint: `8480c846` (`Correct open-item evidence paths`)
+- Base before this checkpoint: `50f65a4c` (`Align Both checkpoint evidence count`)
 - Scope: current-source Control `Both` presentation/interaction slice, its accessible blackout state semantics, and the focused browser-gate contract after the current full Video desk replaced the retired library-only projection.
 - This is a bounded H5 continuation checkpoint. It does not close `UI-H5-CONTROL-001`, claim native button-by-button accessibility, or claim physical output/venue acceptance.
 - No product-version bump is required for this internal checkpoint.
@@ -36,6 +36,7 @@ All commands were run from the repository root and exit status was checked.
 | Windows native build | `vcvars64.bat -vcvars_ver=14.44` with the exact Build Tools 14.44.35207 linker, followed by `pnpm.cmd --dir app tauri build --no-bundle` — PASS; `target/release/syndocal.exe` built. The wrapper printed the pinned absolute linker and matching `where.exe link.exe`. |
 | Exact native process smoke | Launched only `C:\Users\janua\OneDrive\ドキュメント\GitHub\Syndocal\target\release\syndocal.exe`; one matching PID, title `Syndocal`, nonzero window handle, `Responding=True`; stopped only that exact process; remaining exact-path count `0`. |
 | Native artifact identity | SHA-256: `16A853E5F1AB38C97918854B436A2CC8A9B15CF8AA72732BA16DDB2C8A7456AC`. Unsigned current-source process-smoke artifact, not a published release. |
+| Current-source native rebuild after blackout semantics change | `vcvars64.bat -vcvars_ver=14.44` + absolute Build Tools linker pin + `pnpm.cmd --dir app tauri build --no-bundle` — PASS in 5m04s. Exact `target/release/syndocal.exe` process smoke — PASS: PID `27752`, title `Syndocal`, window handle `1444984`, `Responding=True`, one exact-path process; clean shutdown left exact-path count `0`. Artifact SHA-256: `5D2B479C39AB28CC10F2961EAB156E6EF8127E7571189BFF85D50871ACCDC66E` (66,230,272 bytes). |
 
 ## Remaining boundary and next action
 

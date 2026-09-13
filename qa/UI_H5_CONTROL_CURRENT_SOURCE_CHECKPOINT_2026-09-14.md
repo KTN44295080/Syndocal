@@ -2,7 +2,7 @@
 
 - Marker: `UI-H5-CONTROL-001`
 - Branch: `codex/showclock-review-20260912`
-- Base: `8480c84627b0fa2f1168fed433e60a52289cd06a`
+- Base: `50f65a4cc7ae924f86ebd7177c1d27e2324b6bf4`
 - Product code change: Control Both blackout toggles now expose `aria-pressed`
   and stable accessible action names; visible labels and authority callbacks
   are unchanged.
@@ -21,6 +21,15 @@ The previously recorded evidence remains the implementation baseline for
 layout and routing. The latest source change adds semantic toggle state to the
 three Both blackout controls. The detailed implementation record is
 `qa/CONTROL_BOTH_CHECKPOINT_2026-09-14.md`.
+
+The latest source was rebuilt after that change with the pinned MSVC
+`14.44.35207` Build Tools linker. The resulting exact artifact is
+`target/release/syndocal.exe`, 66,230,272 bytes, SHA-256
+`5D2B479C39AB28CC10F2961EAB156E6EF8127E7571189BFF85D50871ACCDC66E`.
+Exact-path process smoke found one PID (`27752`), title `Syndocal`, non-zero
+window handle (`1444984`), and `Responding=True`; the exact-path process count
+was zero after clean shutdown. This is native build/start evidence only: no
+button-by-button Control action or physical output was exercised.
 
 ## Acceptance boundary
 
