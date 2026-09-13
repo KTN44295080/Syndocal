@@ -1064,6 +1064,10 @@ const measureBoth = (client) => evaluate(client, `(() => {
     masterCount: masters.length,
     headerActionCount: panel?.querySelectorAll('.controlBothHeaderActions button').length ?? 0,
     cueActionCount: panel?.querySelectorAll('[aria-label="Cue actions"] button').length ?? 0,
+    blackoutButtons: [...(panel?.querySelectorAll('.controlBothBlackoutRow button') ?? [])].map((button) => ({
+      label: button.getAttribute('aria-label'),
+      pressed: button.getAttribute('aria-pressed'),
+    })),
     footer: rect(panel?.querySelector('.controlBothFooter')),
     contained: contained(rect(panel)),
     documentScroll: [document.documentElement.scrollWidth - document.documentElement.clientWidth, document.documentElement.scrollHeight - document.documentElement.clientHeight],
@@ -1456,6 +1460,13 @@ try {
     assert.equal(both.masterCount, 2, "Both keeps Lighting and Video masters visible");
     assert.equal(both.headerActionCount, 2, "Both exposes both detailed domain routes");
     assert.equal(both.cueActionCount, 3, "Both exposes Back, GO, and Release");
+    assert.equal(both.blackoutButtons.length, 3, "Both exposes DMX, all-output, and video blackout controls");
+    assert.deepEqual(both.blackoutButtons.map(({ label }) => label), [
+      "Enable DMX blackout",
+      "Enable all blackouts",
+      "Enable video blackout",
+    ], "Both blackout controls expose stable accessible names");
+    assert.deepEqual(both.blackoutButtons.map(({ pressed }) => pressed), ["false", "false", "false"], "Both blackout controls expose their current off state");
     assert.ok(both.footer?.[2] > 0 && both.footer?.[3] > 0, "Both output truth footer is visible");
     assert.equal(both.contained, true, `Both overview remains inside the viewport at ${viewport.width}x${viewport.height}`);
     assert.deepEqual(both.documentScroll, [0, 0], "Both does not add document scroll");

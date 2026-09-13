@@ -2,8 +2,10 @@
 
 - Marker: `UI-H5-CONTROL-001`
 - Branch: `codex/showclock-review-20260912`
-- Base: `e6946d7b697897c36f8a24e7d7ab156ef509b368`
-- Product code change: none in this checkpoint
+- Base: `8480c84627b0fa2f1168fed433e60a52289cd06a`
+- Product code change: Control Both blackout toggles now expose `aria-pressed`
+  and stable accessible action names; visible labels and authority callbacks
+  are unchanged.
 
 ## Existing H5 implementation evidence
 
@@ -15,8 +17,9 @@ build/process-smoke checks. The exact process-smoke artifact recorded there is
 the unsigned current-source executable with SHA-256
 `16A853E5F1AB38C97918854B436A2CC8A9B15CF8AA72732BA16DDB2C8A7456AC`.
 
-No H5 product source changed in this checkpoint, so that evidence remains the
-current implementation baseline. The detailed implementation record is
+The previously recorded evidence remains the implementation baseline for
+layout and routing. The latest source change adds semantic toggle state to the
+three Both blackout controls. The detailed implementation record is
 `qa/CONTROL_BOTH_CHECKPOINT_2026-09-14.md`.
 
 ## Acceptance boundary
@@ -25,6 +28,11 @@ current implementation baseline. The detailed implementation record is
 native button-by-button interaction, full live Lighting/Video/Audio workflow
 completion, native accessibility, physical output, failure/recovery rehearsal,
 external clients, venue/soak, signing, publication, or product completion.
+
+The new browser rerun did not reach CDP: the available Chromium executable was
+rejected by Windows with a Side-by-Side configuration error. The prior passing
+rendered evidence remains the pre-change layout baseline; no fresh rendered
+pass is claimed for the new semantic assertions.
 
 ## Resume procedure
 

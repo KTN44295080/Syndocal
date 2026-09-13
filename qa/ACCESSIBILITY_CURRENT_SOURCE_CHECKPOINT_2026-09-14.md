@@ -7,7 +7,8 @@
 - Branch: `codex/showclock-review-20260912`
 - Base before this checkpoint: `0a6672502eb40ff40a7fe2e147292e39d967e7fc`
 - Scope: current-source Japanese localization, terminology, empty-state,
-  keyboard routing, and stage-label contracts after the H5 Control addition.
+  keyboard routing, stage-label contracts, and accessible H5 Control Both
+  blackout-state semantics after the H5 Control addition.
 
 ## Implementation change
 
@@ -16,6 +17,12 @@ through the H5/AI operator surfaces. They were added to the existing bounded
 `translateUiText` Japanese dictionary in `app/src/uiLocalization.ts`; no raw
 user-data labels were made translatable. This is a UI copy/localization change,
 not a native accessibility acceptance claim.
+
+The Control Both overview now adds `aria-pressed` and stable action names to its
+DMX, all-output, and Video blackout toggles. Visible operator labels are
+unchanged, while assistive technology receives the current on/off state. This
+is current-source semantic evidence only; it does not claim NVDA or native
+accessibility acceptance.
 
 ## Verification
 
@@ -47,6 +54,11 @@ Result: exit code 0.
   Vite large-chunk advisory remains an advisory, not a first-party compiler
   warning.
 - First-party warning count observed in the focused run: 0.
+
+The dedicated Control browser rerun could not start: the available Chromium
+binary was rejected by Windows before CDP startup because its Side-by-Side
+configuration was invalid. No new rendered or console evidence is claimed from
+that failed start.
 
 The initial pre-fix localization run was intentionally not counted as evidence:
 it reported `3731/3844 (97.1%)` and exited non-zero. The dictionary update was

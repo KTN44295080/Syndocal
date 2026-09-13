@@ -95,10 +95,22 @@ export function ControlBothPanel(props: ControlBothPanelProps) {
             />
           </label>
           <div class="controlBothActionRow controlBothBlackoutRow" aria-label="Lighting blackout actions">
-            <button type="button" class={props.blackout ? "active danger" : ""} onClick={() => void props.onSetBlackout(!props.blackout)}>
+            <button
+              type="button"
+              class={props.blackout ? "active danger" : ""}
+              aria-pressed={props.blackout}
+              aria-label={props.blackout ? "Clear DMX blackout" : "Enable DMX blackout"}
+              onClick={() => void props.onSetBlackout(!props.blackout)}
+            >
               {props.blackout ? "Clear DMX BO" : "DMX BO"}
             </button>
-            <button type="button" class={props.videoBlackout && props.blackout ? "active danger" : ""} onClick={() => void props.onSetAllBlackout(!(props.blackout && props.videoBlackout))}>
+            <button
+              type="button"
+              class={props.videoBlackout && props.blackout ? "active danger" : ""}
+              aria-pressed={props.videoBlackout && props.blackout}
+              aria-label={props.videoBlackout && props.blackout ? "Clear all blackouts" : "Enable all blackouts"}
+              onClick={() => void props.onSetAllBlackout(!(props.blackout && props.videoBlackout))}
+            >
               {props.blackout && props.videoBlackout ? "Clear All BO" : "All BO"}
             </button>
           </div>
@@ -143,7 +155,13 @@ export function ControlBothPanel(props: ControlBothPanelProps) {
             <div><span>Recording</span><strong>{props.recordingLabel}</strong></div>
           </div>
           <div class="controlBothActionRow controlBothBlackoutRow" aria-label="Video blackout actions">
-            <button type="button" class={props.videoBlackout ? "active danger" : ""} onClick={() => void props.onSetVideoBlackout(!props.videoBlackout)}>
+            <button
+              type="button"
+              class={props.videoBlackout ? "active danger" : ""}
+              aria-pressed={props.videoBlackout}
+              aria-label={props.videoBlackout ? "Clear video blackout" : "Enable video blackout"}
+              onClick={() => void props.onSetVideoBlackout(!props.videoBlackout)}
+            >
               {props.videoBlackout ? "Clear Video BO" : "Video BO"}
             </button>
             <Show when={props.videoOutputCount > 0}>
