@@ -443,7 +443,7 @@
       "owner": "Lighting hardware acceptance owner",
       "dependency": "F2 output ownership and real Art-Net/sACN nodes and fixtures",
       "nonclaim": "Does not claim physical fixture addressing, controls, reconnect, topology, or 44 Hz continuity passed.",
-      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/M4_IO_VALIDATION.md"],
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/M4_IO_VALIDATION.md", "qa/INPUT_PHYSICAL_CURRENT_SOURCE_CHECKPOINT_2026-09-14.md"],
       "status": "Open"
     },
     {
