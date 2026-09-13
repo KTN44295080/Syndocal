@@ -666,7 +666,7 @@ require their actual UI/device/two-machine topology and separate evidence.
 
 The continuation is now owned by the current task on branch
 `codex/showclock-review-20260912`. The latest pushed checkpoint is
-`65ac1077` (`qa: record AI8 source rerun`), and the worktree is clean
+`6891b4e7` (`qa: record ASIO license source rerun`), and the worktree is clean
 with the branch equal to `origin/codex/showclock-review-20260912`.
 
 The only product-code change in this continuation is in
@@ -745,6 +745,12 @@ fake loopback adapter 15 groups, and strict JSON 130 assertions all passed.
 No external client, clean-machine install, release endpoint, signing service,
 or physical output was contacted, so `AI8-EXTERNAL-ACCEPTANCE-001` remains
 Open.
+
+The ASIO license/package source gate was then rerun: packaging boundary 169
+assertions and ABI-v3 contract 22 assertions passed. The normal package still
+rejects ASIO injection and `distribution_approved` remains false. No GPLv3
+separation, Steinberg agreement, public ASIO artifact, or legal approval was
+created; `ASIO-LICENSE-001` remains Open.
 
 The observability/support current-source suite was also rerun against the
 current `16d9f886` tree before the documentation checkpoint. Status, release
