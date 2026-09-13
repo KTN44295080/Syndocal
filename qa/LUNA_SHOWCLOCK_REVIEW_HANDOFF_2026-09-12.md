@@ -666,7 +666,7 @@ require their actual UI/device/two-machine topology and separate evidence.
 
 The continuation is now owned by the current task on branch
 `codex/showclock-review-20260912`. The latest pushed checkpoint is
-`e1340924` (`qa: record native display boundary`), and the worktree is clean
+`5d7257a0` (`qa: refresh physical MIDI evidence`), and the worktree is clean
 with the branch equal to `origin/codex/showclock-review-20260912`.
 
 The only product-code change in this continuation is in
@@ -686,6 +686,14 @@ one responsive `Syndocal` window and zero exact-path processes after clean
 shutdown. The new rendered browser rerun did not start because the available
 Chromium binary failed Windows Side-by-Side startup; the earlier rendered pass
 is retained only as the pre-change baseline.
+
+The current-host physical MIDI slice was also rerun against this source with
+the pinned release toolchain. `SMC-Mixer` input index `1` and output index `2`
+were opened through production `midir`, and one safe `B0 7B 00` All Notes Off
+message was sent; the ignored test returned `1 passed / 0 failed / 0 ignored`.
+This refreshes only enumerate/open/safe-feedback evidence. The full physical
+input marker remains open for controller movement, Clock/MTC, latency,
+reconnect, OSC/Remote, and native UI routing.
 
 The real native maximized/F11 gate was attempted with the isolated QA build and
 failed closed before UI interaction: the last client was `1280x752`, while the
@@ -708,7 +716,7 @@ The authoritative ledger remains structurally valid at 58 markers:
 `DMX-ARTNET-001`, `DMX-USB-RDM-001`, `INPUT-PHYSICAL-001`,
 `DJ-LINK-HARDWARE-001`, `VIDEO-PHYSICAL-001`, `VENUE-SOAK-001`,
 `SHOWCLOCK-VENUE-001`, and `COMPARE-PINNED-001`. The Q1/Q4 mirror reports
-`58/58` Flow references and `79` linked evidence records. External markers
+`58/58` Flow references and `80` linked evidence records. External markers
 remain Open until their named hardware, client, two-machine, venue, signed
 artifact, or other external evidence exists.
 
