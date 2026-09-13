@@ -29,6 +29,13 @@ Result: exit code 0.
   distribution approval drift.
 - First-party warning count observed in this focused source run: `0`.
 
+## Takeover rerun — 2026-09-14
+
+The live-audio lifecycle and ASIO packaging checks were rerun after takeover.
+Both passed; packaging reported 169 assertions. The run again verified
+selection persistence and normal-package ASIO rejection without producing a
+licensed/public ASIO artifact, installer, updater overlay, or final package.
+
 ## Unresolved acceptance
 
 `ASIO-PERSISTENCE-PACKAGE-001` stays Open. The final gate still requires native
