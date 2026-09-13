@@ -22,6 +22,14 @@ Together with `qa/AI3_DURABLE_RECOVERY_CHECKPOINT_2026-09-13.md`, this confirms
 the bounded current-source journal, authority, admission, recovery, and output
 ownership slices. It does not expand the existing software-only claim.
 
+## Takeover rerun — 2026-09-14
+
+The current-source suite was rerun after takeover. Agent Bridge passed 11
+groups, bootstrap passed 4 deferred lifecycle groups, the admission inventory
+passed with 539 commands and 18 rejected negative fixtures, E3 recovery passed,
+and output-control/Standby Sync plus output ownership passed. No physical
+output or native dangerous-action session was opened.
+
 ## Acceptance boundary
 
 `AI3-DURABLE-ACCEPTANCE-001` remains `Open`. This checkpoint did not perform a
