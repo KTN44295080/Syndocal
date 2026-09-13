@@ -29,6 +29,15 @@ Result: exit code 0.
 - Safety blackout runtime contract: PASS.
 - First-party warning count observed in this focused source run: `0`.
 
+## Takeover rerun and host inventory — 2026-09-14
+
+The output-control, output-ownership, and safety-blackout checks were rerun
+after takeover and passed. The current PnP inventory exposed a generic
+`USB Serial Port (COM5)` / FTDI device, but no present device named Enttec,
+DMXKing, or RDM. This inventory is not a protocol or fixture proof; the
+generic serial device was not opened and no USB-DMX/RDM bytes or analyzer
+capture were produced.
+
 ## Unresolved acceptance
 
 `DMX-USB-RDM-001` stays Open. The required Enttec/DMXKing hardware path needs
