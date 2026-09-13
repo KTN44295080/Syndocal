@@ -26,7 +26,7 @@ All commands were run from the repository root and exit status was checked.
 | TypeScript | `pnpm.cmd --dir app exec tsc --noEmit` — PASS. |
 | Frontend build | `pnpm.cmd --dir app run build` — PASS; 358 modules transformed. Vite emitted only the existing large-chunk advisory. |
 | Accessible toggle source contract | `pnpm.cmd --dir app run check:localization` — PASS; `3844/3844` static Japanese UI coverage and `0` unprotected bare user-data labels. `pnpm.cmd --dir app run check:frontend-command-routing` — PASS; `133` renderer mutations, `31` server-authoritative mutations, `28` raw dispatches, `479` facade dispatches. |
-| Static release chain | `pnpm.cmd --dir app run check:release:static` — PASS; completion ledger `23 Open + 8 Deferred + 27 Complete = 58`, Q1/Q4 `58/58` Flow references and `57` evidence records before this checkpoint, all listed static contracts passed. |
+| Static release chain | `pnpm.cmd --dir app run check:release:static` — PASS; completion ledger `23 Open + 8 Deferred + 27 Complete = 58`, Q1/Q4 `58/58` Flow references and `79` evidence records linked at this checkpoint, all listed static contracts passed. |
 | Shortcut contract | `pnpm.cmd --dir app run check:project-shortcuts` — PASS; 15,552 matrix cases, source manifest byte-exact. |
 | Workspace/operator contract | `pnpm.cmd --dir app run check:workspace-operator` — PASS; 40 assertions. |
 | Renderer routing | `pnpm.cmd --dir app run check:frontend-command-routing` — PASS; 133 renderer mutations, 31 server-authoritative mutations, 28 raw dispatches, 479 facade dispatches. |
