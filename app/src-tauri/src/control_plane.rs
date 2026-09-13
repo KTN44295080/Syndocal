@@ -134,7 +134,20 @@ fn classify_registered_tauri_route(command: &str) -> Option<TauriRouteAdmissionC
     use TauriRouteAdmissionClass as Class;
     let class = if matches!(
         command,
-        "agent_bridge_claim_v1" | "agent_bridge_complete_v1" | "agent_bridge_register_v1"
+        "agent_bridge_claim_v1"
+            | "agent_bridge_complete_v1"
+            | "agent_bridge_register_v1"
+            | "agent_authority_approve_pairing_v1"
+            | "agent_authority_authenticate_v1"
+            | "agent_authority_authorize_with_consent_v1"
+            | "agent_authority_begin_pairing_v1"
+            | "agent_authority_clear_kill_switch_v1"
+            | "agent_authority_grant_v1"
+            | "agent_authority_kill_switch_v1"
+            | "agent_authority_prepare_consent_v1"
+            | "agent_authority_promote_v1"
+            | "agent_authority_revoke_v1"
+            | "agent_authority_status_v1"
     ) {
         Class::AgentTransportMaintenance
     } else if matches!(
@@ -2307,7 +2320,7 @@ mod tests {
         assert_eq!(counts[&TauriRouteAdmissionClass::Retired], 29);
         assert_eq!(
             counts[&TauriRouteAdmissionClass::AgentTransportMaintenance],
-            3
+            14
         );
         assert_eq!(tauri_route_admission_class("patch_fixture"), None);
         assert_eq!(
@@ -2367,7 +2380,7 @@ mod tests {
             + OSC_INPUT_EVENT_COUNT
             + DMX_INPUT_PROTOCOL_COUNT
             + DMX_INPUT_EVENT_COUNT;
-        const FRONTEND_INVOKE_COUNT: usize = 464;
+        const FRONTEND_INVOKE_COUNT: usize = 475;
         assert_eq!(MIDI_OSC_DMX_OPERATION_COUNT, 206);
         assert_eq!(
             registry.operations.len(),
@@ -2377,7 +2390,7 @@ mod tests {
                 + MIDI_OSC_DMX_OPERATION_COUNT
                 + FRONTEND_INVOKE_COUNT
         );
-        assert_eq!(registry.operations.len(), 1589);
+        assert_eq!(registry.operations.len(), 1611);
         verify_registry_exact_set(&names, &registry).unwrap();
         let r0 = registry
             .operations
@@ -2738,15 +2751,15 @@ mod tests {
         const ENGINE_COUNT: usize = 280;
         const REMOTE_COUNT: usize = 116;
         const MIDI_OSC_DMX_COUNT: usize = 206;
-        const FRONTEND_COUNT: usize = 464;
+        const FRONTEND_COUNT: usize = 475;
         const LEGACY_SOURCE_TOTAL: usize =
             TAURI_COUNT + ENGINE_COUNT + REMOTE_COUNT + MIDI_OSC_DMX_COUNT + FRONTEND_COUNT;
         const KEYBOARD_APP_COUNT: usize = 30;
         const KEYBOARD_PROJECT_FILE_COUNT: usize = 3;
         const SOURCE_TOTAL: usize =
             LEGACY_SOURCE_TOTAL + KEYBOARD_APP_COUNT + KEYBOARD_PROJECT_FILE_COUNT;
-        assert_eq!(LEGACY_SOURCE_TOTAL, 1589);
-        assert_eq!(SOURCE_TOTAL, 1622);
+        assert_eq!(LEGACY_SOURCE_TOTAL, 1611);
+        assert_eq!(SOURCE_TOTAL, 1633);
         assert_eq!(canonical.source_inventory.len(), SOURCE_TOTAL);
         assert_eq!(canonical.canonical_operations.len(), 47);
 
@@ -3826,11 +3839,11 @@ mod tests {
     fn legacy_v1_registry_json_and_count_remain_inventory_honest() {
         let legacy = registry().unwrap();
         // Includes both the native and frontend missing-publication resolver.
-        assert_eq!(legacy.operations.len(), 1589);
+        assert_eq!(legacy.operations.len(), 1611);
         let encoded = serde_json::to_value(&legacy).unwrap();
         assert_eq!(encoded["schema"]["version"], CONTROL_PLANE_SCHEMA_VERSION);
         let operations = encoded["operations"].as_array().unwrap();
-        assert_eq!(operations.len(), 1589);
+        assert_eq!(operations.len(), 1611);
         assert!(operations.iter().all(|operation| {
             operation["source_family"] != "keyboard_app"
                 && operation["source_family"] != "keyboard_project_file"

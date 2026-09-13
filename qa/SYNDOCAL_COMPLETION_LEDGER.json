@@ -3,7 +3,7 @@
   "source_document": "qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md",
   "authoritative_sections": ["6", "7", "8", "9"],
   "classifications": ["Supported", "Deferred", "External acceptance", "Out of scope"],
-  "expected_status_counts": { "Open": 40, "Deferred": 8, "Complete": 10 },
+  "expected_status_counts": { "Open": 39, "Deferred": 8, "Complete": 11 },
   "expected_section_counts": { "6": 37, "7": 6, "8": 9, "9": 6 },
   "items": [
     {
@@ -138,13 +138,13 @@
     },
     {
       "id": "AI7-ADVERSARIAL-PROOF-001",
-      "source": { "section": "6", "kind": "Open" },
+      "source": { "section": "6", "kind": "Complete" },
       "classification": "Supported",
       "owner": "AI adversarial-review owner",
       "dependency": "AI0-AI6 implemented paths and frozen review inputs",
-      "nonclaim": "Does not claim parity, security, rate, reply-loss, fuzz, or saturation proof passed.",
-      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/SYNDOCAL_AI_CONTROL_PLANE_ROADMAP.md"],
-      "status": "Open"
+      "nonclaim": "Closes the bounded deterministic current-source software proof only; does not claim an unbounded fuzz campaign, native external clients, clean install/restart, physical output, venue operation, or AI8 security acceptance.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/SYNDOCAL_AI_CONTROL_PLANE_ROADMAP.md", "app/scripts/check-ai7-adversarial-proof.mjs", "qa/AI7_ADVERSARIAL_PROOF_CHECKPOINT_2026-09-13.md"],
+      "status": "Complete"
     },
     {
       "id": "AI8-EXTERNAL-ACCEPTANCE-001",

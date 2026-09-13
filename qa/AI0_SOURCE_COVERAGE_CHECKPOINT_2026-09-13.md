@@ -28,7 +28,7 @@ The gate reports the current source counts:
 | Engine command declaration | 280 | Macro-generated inventory; unavailable until reviewed |
 | Remote input/request/wire | 116 | Generated inventory; unavailable until reviewed |
 | MIDI/OSC/DMX | 206 | Declaration-macro inventory; unavailable until reviewed |
-| Frontend invoke manifest | 464 | Every literal invoke resolves to Tauri admission |
+| Frontend invoke manifest | 475 | Every literal invoke resolves to Tauri admission |
 | Keyboard app/project-file sources | 33 | Manifest inventory; unclassified routes fail closed |
 | UI literal command sources observed | 334 | Existing backend/facade and frontend routing gates apply |
 

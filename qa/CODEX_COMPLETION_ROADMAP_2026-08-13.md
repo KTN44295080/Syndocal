@@ -1946,7 +1946,7 @@ unchecked row.
   "expected_counts": {
     "q0_domains": 29,
     "q0_source_contracts": 10,
-  "flow_markers": { "Open": 40, "Deferred": 8, "Complete": 10 },
+  "flow_markers": { "Open": 39, "Deferred": 8, "Complete": 11 },
     "q1_rows": 32,
     "q2_decisions": 12,
     "q3_risks": 14,

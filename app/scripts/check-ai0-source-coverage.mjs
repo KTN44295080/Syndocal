@@ -114,7 +114,7 @@ async function run() {
   assert.equal(frozenCount, tauriCommands.length, "Tauri admission count is not tied to the production source");
   assert.equal(frozenFingerprint, tauriFingerprint, "Tauri admission fingerprint is not tied to the production source");
 
-  assert.equal(invokeManifest.length, 464, "frontend invoke inventory count drifted; classify the delta");
+  assert.equal(invokeManifest.length, 475, "frontend invoke inventory count drifted; classify the delta");
   assert(invokeManifest.every((command) => tauriCommands.includes(command)), "frontend invoke inventory contains an unregistered Tauri command");
   assert.equal(new Set(invokeManifest).size, invokeManifest.length, "frontend invoke inventory contains a duplicate");
 
