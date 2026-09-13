@@ -26,6 +26,13 @@ Result: exit code 0.
   check does not start an external Agent or send pedal/MIDI traffic.
 - First-party warning count observed in this focused source run: `0`.
 
+## Takeover rerun — 2026-09-14
+
+The DJ track-mapping policy and DJ Link frontend/runtime checks were rerun
+after takeover and passed. The run started no rekordbox peer, Agent, pedal, or
+remote client and produced no live HELLO/ACK/STATE_SYNC, reconnect, or
+hardware artifact.
+
 ## Unresolved acceptance
 
 `DJ-LINK-HARDWARE-001` stays Open. The required physical Pedal/DJ-PC/Agent and
