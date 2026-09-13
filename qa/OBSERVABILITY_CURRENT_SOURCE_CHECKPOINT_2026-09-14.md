@@ -55,6 +55,18 @@ Result: exit code 0.
 - First-party warning count observed in this run: 0.
 - Reported numeric assertions/groups summed for this evidence record: 967.
 
+## Takeover rerun — 2026-09-14
+
+The complete current-source command set above was rerun after takeover on the
+current `16d9f886` tree. The release self-test again completed with exit code
+0, including Windows candidate extraction (43 assertions), verified
+materialization (4), Windows release-artifact checks (144), and strict JSON
+(130). The release-mode focused Rust run again completed with the pinned MSVC
+`14.44.35207` x64 linker: `diagnostic_` 37 passed, `updater_` 3 passed, and
+`project_replacement_is_redacted` 1 passed, with no failures or ignored tests.
+The recheck observed zero first-party warnings and did not contact an external
+update endpoint, publish an artifact, or exercise a device.
+
 The updater source continues to fail closed for a missing endpoint/public key,
 non-HTTPS endpoint, credentials/query/fragment, invalid base64/public key, and
 unknown channel. Release identity JSON contains only endpoint, channel, and a
