@@ -3,7 +3,7 @@
   "source_document": "qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md",
   "authoritative_sections": ["6", "7", "8", "9"],
   "classifications": ["Supported", "Deferred", "External acceptance", "Out of scope"],
-  "expected_status_counts": { "Open": 35, "Deferred": 8, "Complete": 15 },
+  "expected_status_counts": { "Open": 34, "Deferred": 8, "Complete": 16 },
   "expected_section_counts": { "6": 37, "7": 6, "8": 9, "9": 6 },
   "items": [
     {
@@ -208,13 +208,13 @@
     },
     {
       "id": "TIMELINE-FOLLOW-001",
-      "source": { "section": "6", "kind": "Open" },
+      "source": { "section": "6", "kind": "Complete" },
       "classification": "Supported",
       "owner": "Timeline runtime owner",
       "dependency": "C2/C4 transition integration and authoritative timing model",
-      "nonclaim": "Does not claim Follow, crossfade, BPM slew, fault policy, or Guide transitions are complete.",
-      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md"],
-      "status": "Open"
+      "nonclaim": "Closes only the current-source Follow/runtime/UI and rendered-browser slice; does not claim Timeline persistence, native renderer/GPU/display behavior, audible devices, external clocks, physical output, venue operation, signing, publication, or product-wide acceptance.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md", "qa/TIMELINE_FOLLOW_CHECKPOINT_2026-09-13.md", "app/scripts/check-timeline-follow-runtime.mjs", "app/scripts/check-timeline-follow-hold-ui.mjs", "app/scripts/check-timeline-performance-browser.mjs"],
+      "status": "Complete"
     },
     {
       "id": "TIMELINE-PERSISTENCE-001",
