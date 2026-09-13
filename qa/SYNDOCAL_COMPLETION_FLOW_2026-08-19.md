@@ -1725,7 +1725,7 @@ Audio/recording/live-source clock and ownership semantics are complete.
 - [x] L-TL5 Follow/crossfade, BPM slew, failure policy, and `Trans`/`Complete` Guide. <!-- completion-ledger: Complete: TIMELINE-FOLLOW-001 -->
 - [x] L-TL7 Undo/Redo/save/reload group selection/focus, fixed Guide device <!-- completion-ledger: Complete: TIMELINE-PERSISTENCE-001 -->
   routing, native A/V/Lighting synchronization, fault, and viewport proof.
-- [ ] M thumbnail/waveform/proxy/analysis identity, bounded background workers, <!-- completion-ledger: Open: MEDIA-DERIVED-001 -->
+- [x] M thumbnail/waveform/proxy/analysis identity, bounded background workers, <!-- completion-ledger: Complete: MEDIA-DERIVED-001 -->
   cancellation, cache/eviction, predecode/prefetch/degraded operation, and cold/warm
   cache performance budgets.
 - [ ] L authored Audio schema/migration/history and explicit ShowClock/audio/PTS <!-- completion-ledger: Open: AUDIO-AUTHORED-001 -->

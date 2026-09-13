@@ -3,7 +3,7 @@
   "source_document": "qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md",
   "authoritative_sections": ["6", "7", "8", "9"],
   "classifications": ["Supported", "Deferred", "External acceptance", "Out of scope"],
-  "expected_status_counts": { "Open": 33, "Deferred": 8, "Complete": 17 },
+  "expected_status_counts": { "Open": 32, "Deferred": 8, "Complete": 18 },
   "expected_section_counts": { "6": 37, "7": 6, "8": 9, "9": 6 },
   "items": [
     {
@@ -228,13 +228,13 @@
     },
     {
       "id": "MEDIA-DERIVED-001",
-      "source": { "section": "6", "kind": "Open" },
+      "source": { "section": "6", "kind": "Complete" },
       "classification": "Supported",
       "owner": "Media-derived-data owner",
       "dependency": "Media asset authority and cancellable background-work boundary",
-      "nonclaim": "Does not claim cache, proxy, waveform, analysis, eviction, degraded operation, or performance budgets are accepted.",
-      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md"],
-      "status": "Open"
+      "nonclaim": "Closes only the current-source identity/cache/work-admission policy plus deterministic thumbnail, audio-analysis, video-prefetch, and frame-cache software slice; does not claim a complete proxy/transcode artifact pipeline, general waveform/proxy/analysis product UI, hard-stop decoder/OS-I/O/GPU cancellation, cold/warm workload performance budgets, MP4 missing-file recovery, native renderer/GPU/display behavior, physical or audible devices, external clients/clocks, venue operation, cross-platform execution, signing, publication, or product-wide media acceptance.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md", "qa/MEDIA_DERIVED_CHECKPOINT_2026-09-13.md", "crates/engine/src/lib.rs", "crates/engine/src/media_derived.rs", "crates/audio/src/lib.rs", "crates/video/src/lib.rs", "app/scripts/check-media-thumbnail-controller.mjs", "app/scripts/check-media-asset-operation-controller.mjs", "app/scripts/check-media-asset-authority.mjs", "app/scripts/check-native-thumbnail-request.mjs", "app/scripts/check-vj-media-import-access.mjs"],
+      "status": "Complete"
     },
     {
       "id": "AUDIO-AUTHORED-001",

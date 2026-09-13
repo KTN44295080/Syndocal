@@ -12,6 +12,7 @@ use std::{
 };
 
 mod control_plane;
+pub mod media_derived;
 mod move_path;
 mod show_serial_dmx_status;
 mod snapshot_public;
