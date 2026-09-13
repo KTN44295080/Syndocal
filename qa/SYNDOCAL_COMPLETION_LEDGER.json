@@ -3,7 +3,7 @@
   "source_document": "qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md",
   "authoritative_sections": ["6", "7", "8", "9"],
   "classifications": ["Supported", "Deferred", "External acceptance", "Out of scope"],
-  "expected_status_counts": { "Open": 26, "Deferred": 8, "Complete": 24 },
+  "expected_status_counts": { "Open": 25, "Deferred": 8, "Complete": 25 },
   "expected_section_counts": { "6": 37, "7": 6, "8": 9, "9": 6 },
   "items": [
     {
@@ -298,13 +298,13 @@
     },
     {
       "id": "UI-H3-SETUP-001",
-      "source": { "section": "6", "kind": "Open" },
+      "source": { "section": "6", "kind": "Complete" },
       "classification": "Supported",
       "owner": "Setup workspace owner",
       "dependency": "H1/H2 shell and PATCH/GDTF/output-device authority",
-      "nonclaim": "Does not claim Setup has complete I/O configuration, validation, reachability, or native proof.",
-      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md"],
-      "status": "Open"
+      "nonclaim": "Closes the current Windows-source Setup workflow, focused browser viewport/keyboard/pointer contracts, and native build/process smoke; does not claim native accessibility, physical devices/output, real two-machine or venue operation, D-lane completion, or H4-H5 completion.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md", "qa/UI_H3_SETUP_CHECKPOINT_2026-09-13.md", "app/src/components/SetupMappingWorkspace.tsx", "app/src/components/SetupFixtureListPanel.tsx", "app/src/components/SetupFixtureEditorPanel.tsx", "app/src/components/PatchProfileBrowserPanel.tsx", "app/src/components/PatchFixtureFormPanel.tsx", "app/src/components/SetupVideoPanel.tsx", "app/src/components/IoConnectionDeck.tsx", "app/src/components/DmxOutputConfigPanel.tsx", "app/src/components/DmxInputPanel.tsx", "app/src/components/DmxRoutesPanel.tsx", "app/scripts/check-viewport-containment.mjs", "app/scripts/check-dmx-show-setup.mjs", "app/scripts/check-mapping-stage-geometry.mjs", "crates/engine/src/lib.rs", "crates/gdtf/src/lib.rs", "app/src-tauri/src/main.rs"],
+      "status": "Complete"
     },
     {
       "id": "DJ-LINK-SETUP-001",

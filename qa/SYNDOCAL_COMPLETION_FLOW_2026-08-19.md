@@ -1754,7 +1754,7 @@ Exit: maximum-condition one-hour A/V/Lighting/recording proof meets fixed budget
   no dead/hidden route that only an internal command can reach.
 - [x] H2 shared shell: one truthful navigation/status/error/selection/focus contract <!-- completion-ledger: Complete: UI-H2-SHELL-001 -->
   across Setup, Edit, Control, Touch, native windows, and compact/full layouts.
-- [ ] H3 Setup completion: Patch/GDTF/OFL, mapping, I/O, output/device configuration, <!-- completion-ledger: Open: UI-H3-SETUP-001 -->
+- [x] H3 Setup completion: Patch/GDTF/OFL, mapping, I/O, output/device configuration, <!-- completion-ledger: Complete: UI-H3-SETUP-001 -->
   validation, empty/error states, keyboard/pointer reachability, and native proof.
 - [ ] H3 DJ Link setup: explicit Show-LAN NIC/bind address, dedicated token rotation, <!-- completion-ledger: Open: DJ-LINK-SETUP-001 -->
   connection/session diagnostics, current admitted owner deck, project Track-to-Timeline
