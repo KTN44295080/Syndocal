@@ -25175,6 +25175,7 @@ const PREFLIGHT_ONLY_NONPROJECT_OR_INNER_RUNTIME_ROUTES: &[&str] = &[
     "analyze_timeline_audio_clip_path",
     "arm_dj_link_machine",
     "arm_output_control_v2",
+    "arm_show_clock_output",
     "assign_video_output_composition_v2",
     "begin_media_asset_preview",
     "bootstrap_vj_show",
@@ -25201,7 +25202,6 @@ const PREFLIGHT_ONLY_NONPROJECT_OR_INNER_RUNTIME_ROUTES: &[&str] = &[
     "finalize_prepared_media_asset_relink",
     "finalize_prepared_media_assets",
     "force_transfer_output_lease_v2",
-    "arm_show_clock_output",
     "hold_show_clock",
     "import_gdtf",
     "launch_video_clip_slot_authoritative",
@@ -25226,6 +25226,7 @@ const PREFLIGHT_ONLY_NONPROJECT_OR_INNER_RUNTIME_ROUTES: &[&str] = &[
     "prepare_reserved_media_assets",
     "pulse_video_layer_isf_event",
     "queue_video_clip_slot_authoritative",
+    "rearm_show_clock",
     "recover_output_lease_v2",
     "refresh_video_layer_metadata",
     "release_blackout_output_control_v2",
@@ -25237,6 +25238,7 @@ const PREFLIGHT_ONLY_NONPROJECT_OR_INNER_RUNTIME_ROUTES: &[&str] = &[
     "reselect_asio_output_profile",
     "revalidate_asio_program_cue_output",
     "rotate_dj_link_token",
+    "schedule_show_clock_action",
     "seek_video_clip_slot_authoritative",
     "select_normal_audio_output",
     "select_serial_dmx_machine_binding_v1",
@@ -25252,7 +25254,6 @@ const PREFLIGHT_ONLY_NONPROJECT_OR_INNER_RUNTIME_ROUTES: &[&str] = &[
     "set_explicit_wdm_cue_test",
     "set_machine_timeline_cue_audio_settings",
     "set_midi_feedback_auto",
-    "schedule_show_clock_action",
     "set_timeline_transport_playing_runtime_v1",
     "stage_vj_preview_layer",
     "start_art_rdm_full_discovery",
@@ -25270,7 +25271,6 @@ const PREFLIGHT_ONLY_NONPROJECT_OR_INNER_RUNTIME_ROUTES: &[&str] = &[
     "stop_osc_input",
     "stop_remote_control",
     "stop_show_clock",
-    "rearm_show_clock",
     "stop_standby_sync",
     "stop_video_layer_audio_monitor",
     "stop_video_output_recording",
@@ -95607,7 +95607,7 @@ pub(crate) mod tests {
                     == Some(control_plane::TauriRouteAdmissionClass::RuntimeMutation)
             })
             .collect::<Vec<_>>();
-        assert_eq!(runtime_routes.len(), 157);
+        assert_eq!(runtime_routes.len(), 163);
         assert_eq!(
             OUTER_FENCED_SYNC_PROJECT_RUNTIME_ROUTES.len()
                 + PREFLIGHT_ONLY_NONPROJECT_OR_INNER_RUNTIME_ROUTES.len(),

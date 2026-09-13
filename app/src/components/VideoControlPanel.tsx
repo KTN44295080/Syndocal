@@ -241,9 +241,9 @@ export function VideoControlPanel(props: VideoControlPanelProps) {
   onCleanup(stopMediaLibraryPreviewNow);
   return (
     <section
-      id={props.libraryOnly ? "edit-domain-panel-mixer" : undefined}
-      role={props.libraryOnly ? "tabpanel" : undefined}
-      aria-labelledby={props.libraryOnly ? "edit-domain-tab-mixer" : undefined}
+      id={props.mixer || props.libraryOnly ? "edit-domain-panel-mixer" : undefined}
+      role={props.mixer || props.libraryOnly ? "tabpanel" : undefined}
+      aria-labelledby={props.mixer || props.libraryOnly ? "edit-domain-tab-mixer" : undefined}
       class={`panel videoControlPanel controlPanel ${props.mixer ? "videoControlPanelMixer" : ""}${props.libraryOnly ? " videoControlPanelLibrary" : ""}`}
       data-workspace-pane={props.libraryOnly ? "upper" : undefined}
       data-video-media-library={props.libraryOnly ? "true" : undefined}

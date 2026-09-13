@@ -20,7 +20,7 @@ const fixtureOptions = {
 const result = validateCompletionLedger({ ledger, sourceDocument, repoRoot: workspaceRoot });
 assert.equal(result.itemCount, 58);
 assert.deepEqual(result.sections, ["6", "7", "8", "9"]);
-assert.deepEqual(result.statusCounts, { Open: 24, Deferred: 8, Complete: 26 });
+assert.deepEqual(result.statusCounts, { Open: 23, Deferred: 8, Complete: 27 });
 assert.deepEqual(result.sectionCounts, { "6": 37, "7": 6, "8": 9, "9": 6 });
 
 function expectFailure(name, mutate, pattern, options = {}) {
@@ -98,8 +98,8 @@ expectFailure(
 );
 expectFailure(
   "open source row cannot be marked Complete",
-  (candidate) => { candidate.items.find((item) => item.id === "UI-H4-EDIT-001").status = "Complete"; },
-  /open source row UI-H4-EDIT-001 must remain status Open/u,
+  (candidate) => { candidate.items.find((item) => item.id === "UI-H5-CONTROL-001").status = "Complete"; },
+  /open source row UI-H5-CONTROL-001 must remain status Open/u,
 );
 
 expectFailure(
@@ -126,23 +126,23 @@ expectFailure(
 );
 expectFailure(
   "wrong classification for an open source row fails closed",
-  (candidate) => { candidate.items.find((item) => item.id === "UI-H4-EDIT-001").classification = "Deferred"; },
-  /open source row UI-H4-EDIT-001 must be Supported or External acceptance/u,
+  (candidate) => { candidate.items.find((item) => item.id === "UI-H5-CONTROL-001").classification = "Deferred"; },
+  /open source row UI-H5-CONTROL-001 must be Supported or External acceptance/u,
 );
 expectFailure(
   "wrong status for an open source row fails closed",
-  (candidate) => { candidate.items.find((item) => item.id === "UI-H4-EDIT-001").status = "Deferred"; },
-  /open source row UI-H4-EDIT-001 must remain status Open/u,
+  (candidate) => { candidate.items.find((item) => item.id === "UI-H5-CONTROL-001").status = "Deferred"; },
+  /open source row UI-H5-CONTROL-001 must remain status Open/u,
 );
 expectFailure(
   "wrong source kind fails closed",
   (candidate) => {
-    const item = candidate.items.find((entry) => entry.id === "UI-H4-EDIT-001");
+    const item = candidate.items.find((entry) => entry.id === "UI-H5-CONTROL-001");
     item.source.kind = "Deferred";
     item.classification = "Deferred";
     item.status = "Deferred";
   },
-  /stale ledger ID UI-H4-EDIT-001: source kind Deferred does not match Open/u,
+  /stale ledger ID UI-H5-CONTROL-001: source kind Deferred does not match Open/u,
 );
 expectFailure(
   "arbitrary marker line fails closed",

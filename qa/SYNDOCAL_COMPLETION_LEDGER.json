@@ -3,7 +3,7 @@
   "source_document": "qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md",
   "authoritative_sections": ["6", "7", "8", "9"],
   "classifications": ["Supported", "Deferred", "External acceptance", "Out of scope"],
-  "expected_status_counts": { "Open": 24, "Deferred": 8, "Complete": 26 },
+  "expected_status_counts": { "Open": 23, "Deferred": 8, "Complete": 27 },
   "expected_section_counts": { "6": 37, "7": 6, "8": 9, "9": 6 },
   "items": [
     {
@@ -318,13 +318,13 @@
     },
     {
       "id": "UI-H4-EDIT-001",
-      "source": { "section": "6", "kind": "Open" },
+      "source": { "section": "6", "kind": "Complete" },
       "classification": "Supported",
       "owner": "Edit workspace owner",
       "dependency": "H1/H2 shell plus Timeline, Media, FX, Stage, and project authority",
-      "nonclaim": "Does not claim Edit workflows or their native proof are complete.",
-      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md"],
-      "status": "Open"
+      "nonclaim": "Does not claim native button-by-button accessibility, physical devices, external clients, venue/soak, signing, publication, or product-wide acceptance.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md", "qa/UI_H4_EDIT_CHECKPOINT_2026-09-13.md"],
+      "status": "Complete"
     },
     {
       "id": "UI-H5-CONTROL-001",

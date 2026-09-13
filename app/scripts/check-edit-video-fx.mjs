@@ -52,24 +52,26 @@ try {
     await inspector.waitFor({ state: "visible" });
     assert.match(await inspector.innerText(), /Select a Media Library item/,
       "Fixture has no selected media asset; layer controls must still be reachable");
-    assert.equal(await page.locator("[data-video-isf-layer-id]").count(), 0, "Closed inspector mounts no FX consumers");
-    const legacy = ".videoControlPanelLibrary :is(.videoMixerContextPane,.videoClipLegacyTransport,.videoClipGridPanel,.videoMixerTopPane,.videoMixerDiagnostics,.videoMixerPaneHeader)";
-    assert.equal(await page.locator(legacy).count(), 0, "Library-only mode does not mount hidden legacy consumer subtrees");
-    assert.equal(await page.locator('.videoControlPanelLibrary [data-video-clip-slot-bank="edit"]').count(), 1,
-      "Library-only mode keeps the Edit Video Clip Bank reachable");
+    assert.equal(await inspector.locator("[data-video-isf-layer-id]").count(), 0, "Closed inspector mounts no FX consumers");
+    assert.equal(await page.locator(".videoControlPanelMixer").count(), 1, "Control Mixer mounts the full Video Control surface");
+    assert.equal(await page.locator(".videoControlPanelLibrary").count(), 0, "Control Mixer does not use the library-only projection");
+    assert.equal(await page.locator('.videoControlPanelMixer [data-video-clip-slot-bank="edit"]').count(), 1,
+      "Full Video Control keeps the Edit Video Clip Bank reachable");
+    assert.equal(await page.locator(".videoControlPanelMixer .videoMixerContextPane").count(), 1,
+      "Full Video Control keeps the layer/effect context pane mounted");
     await inspector.locator(".editVideoAdvancedDisclosure > summary").click();
-    await page.locator("[data-video-isf-layer-id]").waitFor();
-    assert.equal(await page.locator("[data-video-isf-layer-id]").count(), 1);
+    await inspector.locator("[data-video-isf-layer-id]").waitFor();
+    assert.equal(await inspector.locator("[data-video-isf-layer-id]").count(), 1);
     const layer = page.locator("[data-edit-video-fx-layer]");
     assert.equal(await layer.inputValue(), "1");
-    await page.locator('[data-video-isf-action="advanced"]').click();
-    await page.locator(".videoIsfAdvanced").waitFor();
-    assert.equal(await page.locator(".videoIsfStackRow").count(), 8, "Existing eight-stage layer remains editable");
+    await inspector.locator('[data-video-isf-action="advanced"]').click();
+    await inspector.locator(".videoIsfAdvanced").waitFor();
+    assert.equal(await inspector.locator(".videoIsfStackRow").count(), 8, "Existing eight-stage layer remains editable");
     await layer.selectOption("2");
-    await page.locator('[data-video-isf-layer-id="2"]').waitFor();
-    assert.equal(await page.locator(".videoIsfAdvanced").count(), 0, "Layer switch resets the nested editor selection/disclosure");
-    await page.locator('[data-video-isf-action="advanced"]').click();
-    await page.locator(".videoIsfAdvanced").waitFor();
+    await inspector.locator('[data-video-isf-layer-id="2"]').waitFor();
+    assert.equal(await inspector.locator(".videoIsfAdvanced").count(), 0, "Layer switch resets the nested editor selection/disclosure");
+    await inspector.locator('[data-video-isf-action="advanced"]').click();
+    await inspector.locator(".videoIsfAdvanced").waitFor();
 
     // Only replace the native boundary. The actual App callback, command facade,
     // refresh path and inspector all execute; this is not a GPU rendering test.
@@ -105,7 +107,7 @@ try {
         },
       } });
     });
-    const builtin = page.locator('[data-video-isf-action="builtin"]');
+    const builtin = inspector.locator('[data-video-isf-action="builtin"]');
     const invert = await builtin.locator("option").evaluateAll((options) => options.find((option) => option.textContent === "Invert")?.value);
     assert.ok(invert, "Existing Invert preset is selectable");
     await builtin.selectOption(invert);
@@ -114,19 +116,19 @@ try {
       throw error;
     });
     await page.waitForFunction(() => window.__editVideoFxMock.snapshotReads > 0);
-    await page.waitForFunction(() => document.querySelector('[data-video-isf-layer-id="2"] .videoIsfQuickStatus [data-no-localize]')?.textContent === "Invert", null, { timeout: 5000 }).catch(async (error) => {
+    await page.waitForFunction(() => document.querySelector('[data-edit-video-inspector] [data-video-isf-layer-id="2"] .videoIsfQuickStatus [data-no-localize]')?.textContent === "Invert", null, { timeout: 5000 }).catch(async (error) => {
       console.error(JSON.stringify(await page.evaluate(() => ({ mock: window.__editVideoFxMock, timeline: window.__syndocalReadOperatorVjFixtureSnapshot().timeline, text: document.body.innerText.slice(-1500) }))));
       throw error;
     });
-    assert.equal(await page.locator(".videoIsfAdvanced").count(), 1, "Same-layer snapshot refresh preserves the open nested editor");
+    assert.equal(await inspector.locator(".videoIsfAdvanced").count(), 1, "Same-layer snapshot refresh preserves the open nested editor");
     const calls = await page.evaluate(() => window.__editVideoFxMock.calls.filter((call) => call.command === "add_builtin_video_isf_effect"));
     assert.deepEqual(calls.map((call) => [call.args.layerId, call.args.presetId]), [[2, invert]], "Builtin invokes exactly the selected layer once");
     await layer.selectOption("1");
-    await page.locator('[data-video-isf-layer-id="1"]').waitFor();
-    assert.equal(await page.locator("[data-video-isf-layer-id]").count(), 1);
-    await page.locator('[data-video-isf-action="advanced"]').click();
-    await page.locator(".videoIsfAdvanced").waitFor();
-    await page.locator('.videoIsfAdvanced').scrollIntoViewIfNeeded();
+    await inspector.locator('[data-video-isf-layer-id="1"]').waitFor();
+    assert.equal(await inspector.locator("[data-video-isf-layer-id]").count(), 1);
+    await inspector.locator('[data-video-isf-action="advanced"]').click();
+    await inspector.locator(".videoIsfAdvanced").waitFor();
+    await inspector.locator('.videoIsfAdvanced').scrollIntoViewIfNeeded();
     const geometry = await inspector.evaluate((root) => {
       const bounds = root.getBoundingClientRect();
       const controls = [...root.querySelectorAll("button,select,input")].map((control) => {
@@ -161,7 +163,7 @@ try {
     await inspector.locator('.editVideoAdvancedDisclosure > summary').scrollIntoViewIfNeeded();
     await page.screenshot({ path: resolve(artifacts, `overview-${viewport.width}x${viewport.height}.png`) });
     await inspector.locator(".editVideoAdvancedDisclosure > summary").click();
-    await page.waitForFunction(() => document.querySelectorAll("[data-video-isf-layer-id]").length === 0);
+    await page.waitForFunction(() => document.querySelectorAll("[data-edit-video-inspector] [data-video-isf-layer-id]").length === 0);
     assert.equal(await page.locator("[data-edit-video-layer-fx]").count(), 0);
     assert.deepEqual(pageErrors, [], "No uncaught browser runtime failures");
     await writeFile(resolve(artifacts, `result-${viewport.width}x${viewport.height}.json`), JSON.stringify({ viewport, geometry, calls, pageErrors }, null, 2));

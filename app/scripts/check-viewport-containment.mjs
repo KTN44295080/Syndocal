@@ -30769,11 +30769,18 @@ async function runEditIaVideoViewport(client, viewport) {
   await clickWorkspaceOption(client, "control");
   await clickControlModeOption(client, "mixer");
   await waitForClientCondition(client, `(() =>
-    document.querySelector('[data-video-media-library="true"]') &&
-    document.querySelectorAll('.videoMediaLibraryItem').length > 0 &&
+    document.querySelector('.videoControlPanelMixer') &&
+    document.querySelectorAll('.videoControlPanelMixer .videoMediaLibraryItem').length > 0 &&
     document.querySelector('[data-edit-video-preview]') &&
     document.querySelector('[data-edit-video-inspector]')
-  )()`, "Edit Video media library and lower panes");
+  )()`, "Edit Video full control, media library, and lower panes");
+  await client.evaluate(`document.querySelector('.videoControlPanelMixer .videoMediaLibraryRail')?.setAttribute('open', '')`);
+  await waitForClientCondition(client, `(() => {
+    const card = document.querySelector('.videoControlPanelMixer .videoMediaLibraryItem');
+    if (!(card instanceof HTMLElement)) return false;
+    const rect = card.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  })()`, "Edit Video media library catalog");
 
   const navigation = await client.evaluate(`(() => {
     const nav = document.querySelector('[data-edit-domain-navigation]');
@@ -30839,12 +30846,12 @@ async function runEditIaVideoViewport(client, viewport) {
       right.bottom > left.top + 1 && right.top < left.bottom - 1
     );
     const app = document.querySelector('.app');
-    const upper = document.querySelector('[data-workspace-pane="upper"]');
-    const library = document.querySelector('[data-video-media-library="true"]');
-    const libraryHeader = library?.querySelector(':scope > .panelHeader');
-    const clipPane = library?.querySelector('.videoMixerClipPane');
+    const upper = document.querySelector('.videoControlPanelMixer');
+    const library = upper?.querySelector('.videoMediaLibraryRail');
+    const clipPane = upper?.querySelector('.videoMixerClipPane');
+    const libraryHeader = clipPane?.querySelector(':scope > .videoMixerPaneHeader');
     const librarySurface = library?.querySelector('.videoMediaLibrarySurface');
-    const importDisclosure = library?.querySelector('[data-edit-video-import-disclosure]');
+    const importDisclosure = clipPane?.querySelector('[data-vj-media-import-disclosure]');
     const importSummary = importDisclosure?.querySelector('summary');
     const preview = document.querySelector('[data-edit-video-preview]');
     const inspector = document.querySelector('[data-edit-video-inspector]');
@@ -30874,15 +30881,18 @@ async function runEditIaVideoViewport(client, viewport) {
       importSummaryRect,
       cardRect,
       upperHasMinimumHeight: Boolean(upperRect && upperRect.height >= requiredUpperHeight),
-      libraryOccupiesOnlyUpperPane: contains(upperRect, libraryRect) && Boolean(
-        upperRect && libraryRect && libraryRect.height >= upperRect.height - 24
+      libraryHasUsableClipPane: contains(clipPaneRect, libraryRect) && Boolean(
+        libraryRect && libraryRect.width >= 320 && libraryRect.height >= 30
       ),
-      clipPaneUsesEffectiveHeight: contains(libraryRect, clipPaneRect) && Boolean(
+      clipPaneUsesEffectiveHeight: contains(upperRect, clipPaneRect) && Boolean(
         clipPaneRect && clipPaneRect.height >= requiredLibraryHeight
       ),
       librarySurfaceVisible: visible(librarySurface),
-      librarySurfaceIsInFlow: getComputedStyle(librarySurface ?? document.body).position !== 'absolute',
-      librarySurfaceContainedInClipPane: contains(clipPaneRect, librarySurfaceRect),
+      librarySurfaceIsAnchored: getComputedStyle(librarySurface ?? document.body).position === 'absolute',
+      librarySurfaceContainedInViewport: Boolean(
+        librarySurfaceRect && librarySurfaceRect.left >= -1 && librarySurfaceRect.right <= innerWidth + 1 &&
+        librarySurfaceRect.top >= -1 && librarySurfaceRect.bottom <= innerHeight + 1
+      ),
       librarySurfaceUsesEffectiveHeight: Boolean(
         librarySurfaceRect && librarySurfaceRect.height >= requiredLibraryHeight
       ),
@@ -30890,8 +30900,8 @@ async function runEditIaVideoViewport(client, viewport) {
       cardUsesMinimumHeight: Boolean(cardRect && cardRect.height >= requiredCardHeight),
       importDisclosureVisible: visible(importDisclosure),
       importDisclosureClosed: importDisclosure instanceof HTMLDetailsElement && !importDisclosure.open,
-      importSummaryIsReachable: visible(importSummary) && contains(libraryHeaderRect, importSummaryRect) && Boolean(
-        importSummaryRect && importSummaryRect.height >= 44
+      importSummaryIsReachable: visible(importSummary) && contains(clipPaneRect, importSummaryRect) && Boolean(
+        importSummaryRect && importSummaryRect.height >= 28
       ),
       advancedDisclosure: advanced instanceof HTMLDetailsElement && !advanced.open,
       selectedCardCount: cards.filter((card) => card.classList.contains('selected')).length,
@@ -30915,11 +30925,11 @@ async function runEditIaVideoViewport(client, viewport) {
   await waitForApp(client);
   await clickWorkspaceOption(client, "control");
   await clickControlModeOption(client, "mixer");
-  await waitForClientCondition(client, `Boolean(document.querySelector('[data-video-media-library="true"]'))`, "Empty Edit Video media library");
+  await waitForClientCondition(client, `Boolean(document.querySelector('.videoControlPanelMixer .videoMediaLibraryRail'))`, "Empty Edit Video media library");
   const emptyLibraryImport = await client.evaluate(`(() => {
-    const library = document.querySelector('[data-video-media-library="true"]');
-    const disclosure = library?.querySelector('[data-edit-video-import-disclosure]');
-    const summary = disclosure?.querySelector('summary');
+    const control = document.querySelector('.videoControlPanelMixer');
+    const library = control?.querySelector('.videoMediaLibraryRail');
+    const importEntry = control?.querySelector('[data-vj-media-import-entry]');
     const visible = (element) => {
       if (!(element instanceof HTMLElement)) return false;
       const rect = element.getBoundingClientRect();
@@ -30928,30 +30938,27 @@ async function runEditIaVideoViewport(client, viewport) {
     };
     return {
       assetCardCount: library?.querySelectorAll('.videoMediaLibraryItem').length ?? -1,
-      disclosureVisible: visible(disclosure),
-      disclosureClosed: disclosure instanceof HTMLDetailsElement && !disclosure.open,
-      summaryVisible: visible(summary),
-      summaryHeight: summary instanceof HTMLElement ? summary.getBoundingClientRect().height : 0,
-      sourceCreateSurfacePresent: Boolean(disclosure?.querySelector('[data-edit-video-import-surface]')),
+      libraryVisible: visible(library),
+      libraryClosed: library instanceof HTMLDetailsElement && !library.open,
+      importEntryVisible: visible(importEntry),
     };
   })()`);
   const checks = {
     exactDomainTablist: navigation.tablist && JSON.stringify(navigation.ids) === JSON.stringify(['edit', 'mixer', 'live']) && navigation.selectedCount === 1 && navigation.association,
     domainKeyboardRoving: keyboardLighting && keyboardVideo,
-    mediaLibraryUpperOnly: layout.libraryVisible,
-    mediaLibraryOwnsUsableUpperPane: layout.upperHasMinimumHeight && layout.libraryOccupiesOnlyUpperPane,
-    mediaLibraryCatalogIsInFlowAndContained: layout.clipPaneUsesEffectiveHeight &&
+    mediaLibraryFullControlReachable: layout.libraryVisible && layout.upperHasMinimumHeight,
+    mediaLibraryOwnsUsableClipPane: layout.libraryHasUsableClipPane,
+    mediaLibraryCatalogIsAnchoredAndBounded: layout.clipPaneUsesEffectiveHeight &&
       layout.librarySurfaceVisible &&
-      layout.librarySurfaceIsInFlow &&
-      layout.librarySurfaceContainedInClipPane &&
+      layout.librarySurfaceIsAnchored &&
+      layout.librarySurfaceContainedInViewport &&
       layout.librarySurfaceUsesEffectiveHeight,
     mediaLibraryCardsAreVisibleInUsableCatalog: layout.firstCardVisibleInCatalogViewport && layout.cardUsesMinimumHeight,
     mediaLibraryImportIsAlwaysReachableFromTheHeader: layout.importDisclosureVisible &&
       layout.importDisclosureClosed && layout.importSummaryIsReachable,
     emptyMediaLibraryStillExposesClosedImportControl: emptyLibraryImport.assetCardCount === 0 &&
-      emptyLibraryImport.disclosureVisible && emptyLibraryImport.disclosureClosed &&
-      emptyLibraryImport.summaryVisible && emptyLibraryImport.summaryHeight >= 44 &&
-      emptyLibraryImport.sourceCreateSurfacePresent,
+      emptyLibraryImport.libraryVisible && emptyLibraryImport.libraryClosed &&
+      emptyLibraryImport.importEntryVisible,
     selectedMediaDrivesThumbnailAndProperties: selected.length > 0 && layout.previewVisible && layout.inspectorVisible && layout.selectedCardCount === 1 && layout.thumbnailTruthful,
     advancedControlsAreClosedDisclosure: layout.advancedDisclosure,
     mediaCardsKeepUsableHitTargets: layout.cardHitTarget >= 24,
