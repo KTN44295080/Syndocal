@@ -20,6 +20,13 @@ pnpm.cmd --dir app run check:live-audio
 Result: exit code 0. The current-source fail-closed lifecycle, availability,
 selection persistence, presentation, and request-ordering checks passed.
 
+## Takeover rerun — 2026-09-14
+
+The live-audio lifecycle check was rerun after takeover and passed. It again
+covered fail-closed availability, explicit selection persistence, presentation,
+and request ordering only; no ASIO/WASAPI device was opened and no
+long-duration soak or latency artifact was produced.
+
 The SDK-free bridge fault suite and ABI contract evidence are retained in
 `qa/ASIO_FAULT_CURRENT_SOURCE_CHECKPOINT_2026-09-14.md`; they are deterministic
 contract evidence, not a soak substitute. A parallel Cargo retry was stopped
