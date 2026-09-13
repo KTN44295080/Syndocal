@@ -30905,6 +30905,35 @@ h3 {
   min-height: 0;
 }
 
+.layoutTouch.touchDomainBoth {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 4px;
+}
+
+.layoutTouch.touchDomainBoth > .touchSurfacePanel {
+  grid-column: 1;
+  grid-row: 1 / -1;
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  padding-top: 56px;
+}
+
+.layoutTouch.touchDomainBoth > .touchVideoPanel {
+  grid-column: 2;
+  grid-row: 1 / -1;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr) auto minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+  padding-top: 56px;
+  overflow: hidden auto;
+}
+
+.layoutTouch.touchDomainBoth > .touchVideoPanel > .videoClipSlotBankPanel {
+  min-height: 0;
+}
+
 .touchSurfaceToolbar {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;

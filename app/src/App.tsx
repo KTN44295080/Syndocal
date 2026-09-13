@@ -641,6 +641,8 @@ import {
 import {
   executeDisplayAddOutputControl,
   executeDisplayWindowOutputControl,
+  executeGroupSubmasterOutputControl,
+  executeLightingMasterOutputControl,
   executeOutputControl,
   applyVideoOutputWindowStatusQuery,
   applyVideoOutputWindowStateEvent,
@@ -1977,7 +1979,7 @@ export default function App() {
   const [timelineChildCueId, setTimelineChildCueId] = createSignal<number | null>(null);
   const [timelineNavigatorOpen, setTimelineNavigatorOpen] = createSignal(true);
   const [controlLiveView, setControlLiveView] = createSignal<"matrix" | "pads">("matrix");
-  const [touchControlDomain, setTouchControlDomain] = createSignal<"lighting" | "video">("lighting");
+  const [touchControlDomain, setTouchControlDomain] = createSignal<"lighting" | "video" | "both">("lighting");
   const [liveStatusExpanded, setLiveStatusExpanded] = createSignal(false);
   const [authoredEffectEnableControlId, setAuthoredEffectEnableControlId] = createSignal<number | null>(null);
   const [editDeskSurface, setEditDeskSurface] = createSignal<EditDeskSurface>(initialWorkspaceLayout.edit_desk_surface);
@@ -9837,7 +9839,7 @@ export default function App() {
     workspaceTab() === "setup"
       ? `layoutSharedWorkspace layoutSetup setupMode-${setupSubTab()}`
       : workspaceTab() === "touch"
-        ? `layoutSharedWorkspace layoutControl layoutTouch controlModeEdit editDesk-faders touchDomain${touchControlDomain() === "video" ? "Video" : "Lighting"}`
+        ? `layoutSharedWorkspace layoutControl layoutTouch controlModeEdit editDesk-faders touchDomain${touchControlDomain() === "video" ? "Video" : touchControlDomain() === "both" ? "Both" : "Lighting"}`
         : `layoutSharedWorkspace layoutControl controlMode${controlMode()[0].toUpperCase()}${controlMode().slice(1)}${
             controlMode() === "edit" ? ` editDesk-${editDeskSurface()}` : ""
           }`,
@@ -17387,18 +17389,42 @@ export default function App() {
   const setAllBlackout = targetBlackout.setAllBlackout;
 
   const setLightingMaster = async (master: number) => {
-    void master;
-    setMessage(
-      "Lighting master is unavailable until a lease-bound OutputControl action is reviewed; no state changed.",
-    );
+    if (viewportFixture) {
+      setSnapshot((current) => ({ ...current, lighting_master: master }));
+      return;
+    }
+    if (!isTauriRuntime()) {
+      setMessage(tauriBackendUnavailableMessage);
+      return;
+    }
+    try {
+      await executeLightingMasterOutputControl(invoke, master);
+      await refreshSnapshot();
+    } catch (error) {
+      setMessage(String(error));
+    }
   };
 
   const setGroupSubmaster = async (groupId: string, level: number) => {
-    void groupId;
-    void level;
-    setMessage(
-      "Group submaster output is unavailable until a lease-bound OutputControl action is reviewed; no state changed.",
-    );
+    if (viewportFixture) {
+      setSnapshot((current) => ({
+        ...current,
+        submasters: current.submasters.map((submaster) => submaster.group_id === groupId
+          ? { ...submaster, level }
+          : submaster),
+      }));
+      return;
+    }
+    if (!isTauriRuntime()) {
+      setMessage(tauriBackendUnavailableMessage);
+      return;
+    }
+    try {
+      await executeGroupSubmasterOutputControl(invoke, groupId, level);
+      await refreshSnapshot();
+    } catch (error) {
+      setMessage(String(error));
+    }
   };
 
   const applyBpm = async () => {
@@ -26786,6 +26812,13 @@ export default function App() {
             aria-pressed={touchControlDomain() === "video"}
             onClick={() => setTouchControlDomain("video")}
           >Video</button>
+          <button
+            type="button"
+            data-control-domain="both"
+            class={touchControlDomain() === "both" ? "active" : ""}
+            aria-pressed={touchControlDomain() === "both"}
+            onClick={() => setTouchControlDomain("both")}
+          >Both</button>
         </nav>
         <EditableTouchSurface
           bankAuthority={bankAuthority()}

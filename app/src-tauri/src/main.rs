@@ -143,6 +143,7 @@ use protocol::{
         OUTPUT_LEASE_ACQUIRE_OPERATION_ID, OUTPUT_LEASE_FORCE_TRANSFER_OPERATION_ID,
         OUTPUT_LEASE_RECOVER_OPERATION_ID, OUTPUT_LEASE_RELINQUISH_OPERATION_ID,
         OUTPUT_LEASE_RENEW_OPERATION_ID, OUTPUT_OWNERSHIP_ARM_OPERATION_ID,
+        OUTPUT_GROUP_SUBMASTER_SET_OPERATION_ID, OUTPUT_LIGHTING_MASTER_SET_OPERATION_ID,
         OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID,
         OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_ENABLE_OPERATION_ID,
         OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_STOP_OPERATION_ID,
@@ -49886,6 +49887,41 @@ async fn arm_output_control_v2(
         .await
 }
 
+/// Canonical runtime-only Lighting master. The request carries the exact
+/// Lighting-capable lease and the backend revalidates its fence before the
+/// engine send; the retired raw `set_lighting_master` route stays rejected.
+#[tauri::command]
+async fn set_lighting_master_output_control_v2(
+    app: tauri::AppHandle,
+    window: WebviewWindow,
+    request: OutputControlCommandRequestV2,
+) -> OutputControlResponseV2 {
+    execute_output_control_off_event_loop(
+        app,
+        window,
+        OUTPUT_LIGHTING_MASTER_SET_OPERATION_ID,
+        request,
+    )
+    .await
+}
+
+/// Canonical runtime-only Lighting group submaster. Group identity is
+/// normalized and bounded again in the native transition before dispatch.
+#[tauri::command]
+async fn set_group_submaster_output_control_v2(
+    app: tauri::AppHandle,
+    window: WebviewWindow,
+    request: OutputControlCommandRequestV2,
+) -> OutputControlResponseV2 {
+    execute_output_control_off_event_loop(
+        app,
+        window,
+        OUTPUT_GROUP_SUBMASTER_SET_OPERATION_ID,
+        request,
+    )
+    .await
+}
+
 /// Normal one-step output enable from the local Tauri renderer. The backend
 /// commits the Lighting+Video lease and Both arm atomically behind the exact
 /// local window/owner/project/output/safety fence.
@@ -57052,6 +57088,16 @@ fn output_lease_resources_for_control_action(
                 vec![OutputLeaseResource::Lighting, OutputLeaseResource::Video]
             }
         },
+        protocol::control_plane_command::OutputControlActionV2::SetLightingMaster { role, .. }
+        | protocol::control_plane_command::OutputControlActionV2::SetGroupSubmaster { role, .. } => match role {
+            OutputControlTargetRoleV1::Lighting => vec![OutputLeaseResource::Lighting],
+            OutputControlTargetRoleV1::Both => {
+                vec![OutputLeaseResource::Lighting, OutputLeaseResource::Video]
+            }
+            OutputControlTargetRoleV1::Video => {
+                return Err("Lighting output control cannot target a Video-only lease".to_string())
+            }
+        },
         protocol::control_plane_command::OutputControlActionV2::SetBlackout { .. }
         | protocol::control_plane_command::OutputControlActionV2::ReleaseBlackout { .. }
         | protocol::control_plane_command::OutputControlActionV2::EnableShowArtNetLoopbackRoute {
@@ -57192,6 +57238,8 @@ pub(crate) fn build_output_lease_authorization_request(
             }
         }
         OutputControlActionV2::Arm { lease, .. }
+        | OutputControlActionV2::SetLightingMaster { lease, .. }
+        | OutputControlActionV2::SetGroupSubmaster { lease, .. }
         | OutputControlActionV2::SetBlackout { lease, .. }
         | OutputControlActionV2::ReleaseBlackout { lease }
         | OutputControlActionV2::SendDsf2026ArtNetAcceptanceProbe { lease }
@@ -75067,6 +75115,135 @@ fn apply_output_ownership_role_with_output_control_fence(
                 )
             };
             Ok((applied, fence_after, lease_receipt))
+        },
+    )
+}
+
+/// Apply the runtime-only Lighting master without exposing a raw engine
+/// command to the renderer. The exact lease/fence admission is retained
+/// through the send, while the runtime-only action deliberately leaves the
+/// persisted project/output fence unchanged.
+fn set_lighting_master_with_output_control_fence(
+    state: &AppState,
+    master_milliunits: u16,
+    expected_fence: &OutputControlFenceV1,
+    lease_request: &OutputLeaseRequest,
+    _lease_now_ms: u64,
+) -> Result<
+    (
+        bool,
+        OutputControlFenceV1,
+        output_lease::OutputLeaseRequestReceipt,
+    ),
+    String,
+> {
+    let _external_admission = lock_project_external_command_admission(state)?;
+    let mut coordinator = lock_project_coordinator(state)?;
+    with_revalidated_output_transition(
+        || lock_output_ownership_transition(state),
+        || {
+            if reconcile_project_checkpoint_for_coordinator(state, &mut coordinator).is_err()
+                || !control_plane_runtime::exact_output_control_fence_matches(
+                    state,
+                    &coordinator,
+                    expected_fence,
+                )
+                || ensure_no_pending_project_transaction(&coordinator).is_err()
+            {
+                return Err(
+                    "Output control fence changed before Lighting master transition".to_string(),
+                );
+            }
+            Ok(())
+        },
+        |_transition_guard, _| {
+            let mut lease_registry = state.output_lease_registry.lock().map_err(|_| {
+                "Output lease registry lock was poisoned before Lighting master transition"
+                    .to_string()
+            })?;
+            let final_lease_now_ms = state.output_lease_now_ms()?;
+            let (applied, lease_receipt) = submit_output_lease_candidate_with_commit(
+                state,
+                &mut lease_registry,
+                lease_request,
+                final_lease_now_ms,
+                "Lighting master",
+                || {
+                    state
+                        .engine
+                        .send(EngineCommand::SetLightingMaster(
+                            f32::from(master_milliunits) / 1_000.0,
+                        ))
+                        .map_err(|error| error.to_string())?;
+                    Ok(true)
+                },
+            )?;
+            Ok((applied, expected_fence.clone(), lease_receipt))
+        },
+    )
+}
+
+/// Apply a runtime-only Lighting group submaster through the same exact
+/// lease/fence admission as the master fader.
+fn set_group_submaster_with_output_control_fence(
+    state: &AppState,
+    group_id: &str,
+    level_milliunits: u16,
+    expected_fence: &OutputControlFenceV1,
+    lease_request: &OutputLeaseRequest,
+    _lease_now_ms: u64,
+) -> Result<
+    (
+        bool,
+        OutputControlFenceV1,
+        output_lease::OutputLeaseRequestReceipt,
+    ),
+    String,
+> {
+    let group_id = normalize_control_group_id(group_id.to_string())?;
+    let _external_admission = lock_project_external_command_admission(state)?;
+    let mut coordinator = lock_project_coordinator(state)?;
+    with_revalidated_output_transition(
+        || lock_output_ownership_transition(state),
+        || {
+            if reconcile_project_checkpoint_for_coordinator(state, &mut coordinator).is_err()
+                || !control_plane_runtime::exact_output_control_fence_matches(
+                    state,
+                    &coordinator,
+                    expected_fence,
+                )
+                || ensure_no_pending_project_transaction(&coordinator).is_err()
+            {
+                return Err(
+                    "Output control fence changed before group submaster transition".to_string(),
+                );
+            }
+            Ok(())
+        },
+        |_transition_guard, _| {
+            let mut lease_registry = state.output_lease_registry.lock().map_err(|_| {
+                "Output lease registry lock was poisoned before group submaster transition"
+                    .to_string()
+            })?;
+            let final_lease_now_ms = state.output_lease_now_ms()?;
+            let (applied, lease_receipt) = submit_output_lease_candidate_with_commit(
+                state,
+                &mut lease_registry,
+                lease_request,
+                final_lease_now_ms,
+                "group submaster",
+                || {
+                    state
+                        .engine
+                        .send(EngineCommand::SetGroupSubmaster {
+                            group_id: group_id.clone(),
+                            level: f32::from(level_milliunits) / 1_000.0,
+                        })
+                        .map_err(|error| error.to_string())?;
+                    Ok(true)
+                },
+            )?;
+            Ok((applied, expected_fence.clone(), lease_receipt))
         },
     )
 }
@@ -131792,6 +131969,8 @@ fn main() {
             set_all_blackout,
             set_lighting_master,
             set_group_submaster,
+            set_lighting_master_output_control_v2,
+            set_group_submaster_output_control_v2,
             reset_engine_telemetry,
             save_engine_telemetry_report,
             get_engine_telemetry_report,

@@ -1274,6 +1274,27 @@ where
                 expected_owner_incarnation: binding.owner_incarnation,
             },
         ),
+        OutputControlActionV2::SetLightingMaster {
+            master_milliunits, ..
+        } => super::set_lighting_master_with_output_control_fence(
+            state,
+            *master_milliunits,
+            &request.expected_fence,
+            &lease_request,
+            lease_now_ms,
+        ),
+        OutputControlActionV2::SetGroupSubmaster {
+            group_id,
+            level_milliunits,
+            ..
+        } => super::set_group_submaster_with_output_control_fence(
+            state,
+            group_id,
+            *level_milliunits,
+            &request.expected_fence,
+            &lease_request,
+            lease_now_ms,
+        ),
         OutputControlActionV2::AcquireLease { .. }
         | OutputControlActionV2::RenewLease { .. }
         | OutputControlActionV2::RecoverLease { .. }
@@ -1563,7 +1584,9 @@ fn validate_output_action_current(
         }
         OutputControlActionV2::Arm { .. }
         | OutputControlActionV2::ReleaseBlackout { .. }
-        | OutputControlActionV2::SetBlackout { .. } => Ok(()),
+        | OutputControlActionV2::SetBlackout { .. }
+        | OutputControlActionV2::SetLightingMaster { .. }
+        | OutputControlActionV2::SetGroupSubmaster { .. } => Ok(()),
         OutputControlActionV2::AddDisplay { spec, .. } => {
             let outputs = state.engine.video_outputs_snapshot();
             if outputs.iter().any(|output| {
@@ -2675,7 +2698,9 @@ pub(crate) fn output_control_lease_result_from_registry_receipt(
         | OutputControlActionV2::TakeOverStandby { .. }
         | OutputControlActionV2::AddDisplay { .. }
         | OutputControlActionV2::AssignVideoOutputComposition { .. }
-        | OutputControlActionV2::SetDisplayWindowOpen { .. } => {
+        | OutputControlActionV2::SetDisplayWindowOpen { .. }
+        | OutputControlActionV2::SetLightingMaster { .. }
+        | OutputControlActionV2::SetGroupSubmaster { .. } => {
             OutputLeaseReceiptOutcomeV2::Authorized
         }
         OutputControlActionV2::AcquireLease { .. } => OutputLeaseReceiptOutcomeV2::Acquired,

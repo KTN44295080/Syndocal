@@ -15,6 +15,10 @@ export const OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID =
   "syndocal.output.display.window.set_open.v2";
 export const OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID =
   "syndocal.output.video.composition.assign.v2";
+export const OUTPUT_LIGHTING_MASTER_SET_OPERATION_ID =
+  "syndocal.output.lighting.master.set.v2";
+export const OUTPUT_GROUP_SUBMASTER_SET_OPERATION_ID =
+  "syndocal.output.group.submaster.set.v2";
 export const OUTPUT_ENABLE_OPERATION_ID = "syndocal.output.enable.v2";
 export const OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID =
   "syndocal.output.show_artnet_loopback_route.enable.v1";
@@ -194,6 +198,19 @@ export type OutputControlAction =
       force: boolean;
       standby_session_id: string;
       standby_generation: number;
+      lease: OutputLeaseAuthority;
+    }
+  | {
+      kind: "set_lighting_master";
+      role: Extract<OutputControlTargetRole, "lighting" | "both">;
+      master_milliunits: number;
+      lease: OutputLeaseAuthority;
+    }
+  | {
+      kind: "set_group_submaster";
+      role: Extract<OutputControlTargetRole, "lighting" | "both">;
+      group_id: string;
+      level_milliunits: number;
       lease: OutputLeaseAuthority;
     }
   | OutputDisplayAction
@@ -444,6 +461,8 @@ const operationIdForAction = (action: OutputControlOperationAction): string => {
     case "add_display": return OUTPUT_DISPLAY_ADD_OPERATION_ID;
     case "set_display_window_open": return OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID;
     case "assign_video_output_composition": return OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID;
+    case "set_lighting_master": return OUTPUT_LIGHTING_MASTER_SET_OPERATION_ID;
+    case "set_group_submaster": return OUTPUT_GROUP_SUBMASTER_SET_OPERATION_ID;
     case "acquire_lease": return OUTPUT_LEASE_ACQUIRE_OPERATION_ID;
     case "renew_lease": return OUTPUT_LEASE_RENEW_OPERATION_ID;
     case "recover_lease": return OUTPUT_LEASE_RECOVER_OPERATION_ID;
@@ -468,6 +487,8 @@ type OutputControlInvokeCommand =
   | "add_display_output_v2"
   | "set_display_output_window_open_v2"
   | "assign_video_output_composition_v2"
+  | "set_lighting_master_output_control_v2"
+  | "set_group_submaster_output_control_v2"
   | "acquire_output_lease_v2"
   | "renew_output_lease_v2"
   | "recover_output_lease_v2"
@@ -491,6 +512,8 @@ const commandForAction = (action: OutputControlOperationAction): OutputControlIn
     case "add_display": return "add_display_output_v2";
     case "set_display_window_open": return "set_display_output_window_open_v2";
     case "assign_video_output_composition": return "assign_video_output_composition_v2";
+    case "set_lighting_master": return "set_lighting_master_output_control_v2";
+    case "set_group_submaster": return "set_group_submaster_output_control_v2";
     case "acquire_lease": return "acquire_output_lease_v2";
     case "renew_lease": return "renew_output_lease_v2";
     case "recover_lease": return "recover_output_lease_v2";
@@ -565,6 +588,13 @@ const assertResources = (value: unknown, errorMessage: string): OutputLeaseResou
 
 const sameResources = (left: readonly string[], right: readonly string[]): boolean =>
   left.length === right.length && left.every((resource, index) => resource === right[index]);
+
+const isValidGroupId = (value: unknown): value is string => {
+  if (typeof value !== "string") return false;
+  const trimmed = value.trim();
+  return trimmed.length > 0 && trimmed.length <= 256
+    && trimmed.split("/").every((segment) => segment.trim().length > 0);
+};
 
 const assertDisplayAddLeaseAuthorityQuery = (value: unknown): DisplayAddLeaseAuthorityQuery => {
   const errorMessage = "Display Add lease authority response was invalid; nothing was applied.";
@@ -702,6 +732,28 @@ export function selectOnlyActiveOutputLease(
   return { ...matches[0].authority };
 }
 
+export interface LightingOutputLeaseSelection {
+  authority: OutputLeaseAuthority;
+  role: Extract<OutputControlTargetRole, "lighting" | "both">;
+}
+
+/** Select one exact active Lighting-capable lease, preserving its role claim. */
+export function selectOnlyActiveLightingOutputLease(
+  query: OutputLeaseAuthorityQuery,
+): LightingOutputLeaseSelection {
+  const matches = activeStatuses(query).filter((status) =>
+    sameResources(status.resources, ["lighting"])
+      || sameResources(status.resources, ["lighting", "video"]),
+  );
+  if (matches.length !== 1) {
+    throw new Error("Exactly one active Lighting-capable output lease is required; nothing was applied.");
+  }
+  return {
+    authority: { ...matches[0].authority },
+    role: sameResources(matches[0].resources, ["lighting", "video"]) ? "both" : "lighting",
+  };
+}
+
 /**
  * Stable display-add adapter: the backend's durable Add path receives exactly
  * one Both authority that is either currently active or recoverable from the
@@ -795,6 +847,21 @@ const assertAction = (action: OutputControlOperationAction): void => {
     if (!hasExactKeys(record, ["kind", "force", "standby_session_id", "standby_generation", "lease"])
       || typeof action.force !== "boolean" || !action.standby_session_id
       || !isPositiveSafeInteger(action.standby_generation)) throw new Error("OutputControl Take Over action was invalid; nothing was applied.");
+  } else if (action.kind === "set_lighting_master") {
+    if (!hasExactKeys(record, ["kind", "role", "master_milliunits", "lease"])
+      || action.role !== "lighting" && action.role !== "both"
+      || !Number.isSafeInteger(action.master_milliunits)
+      || action.master_milliunits < 0 || action.master_milliunits > 1_000) {
+      throw new Error("Lighting master action was invalid; nothing was applied.");
+    }
+  } else if (action.kind === "set_group_submaster") {
+    if (!hasExactKeys(record, ["kind", "role", "group_id", "level_milliunits", "lease"])
+      || action.role !== "lighting" && action.role !== "both"
+      || !isValidGroupId(action.group_id)
+      || !Number.isSafeInteger(action.level_milliunits)
+      || action.level_milliunits < 0 || action.level_milliunits > 1_000) {
+      throw new Error("Group submaster action was invalid; nothing was applied.");
+    }
   } else if (action.kind === "add_display") {
     const spec = action.spec as unknown as Record<string, unknown>;
     if (!hasExactKeys(record, ["kind", "spec", "lease"])
@@ -1003,6 +1070,8 @@ const assertResponse = (
     && fenceAfter.safety_blackout_epoch === fenceBefore.safety_blackout_epoch
     && fenceAfter.safety_blackout_generation === fenceBefore.safety_blackout_generation;
   const fenceUnchangedPhysicalAction = action.kind === "set_display_window_open"
+    || action.kind === "set_lighting_master"
+    || action.kind === "set_group_submaster"
     || action.kind === "enable_show_serial_dmx_safety_blackout_route"
     || action.kind === "stop_show_serial_dmx_safety_blackout_route"
     || action.kind === "send_dsf2026_artnet_acceptance_probe"
@@ -1064,6 +1133,8 @@ const assertSelectedLeaseIsUsable = (query: OutputLeaseAuthorityQuery, action: O
       && selected[0].status !== "held_active" && selected[0].status !== "held_orphaned"
     || action.kind === "set_display_window_open"
       && selected[0].status !== "held_active" && selected[0].status !== "held_orphaned"
+    || (action.kind === "set_lighting_master" || action.kind === "set_group_submaster")
+      && selected[0].status !== "held_active"
     || action.kind === "assign_video_output_composition" && selected[0].status !== "held_active"
     || action.kind === "renew_lease" && selected[0].status !== "held_active"
     || action.kind === "recover_lease" && selected[0].status !== "held_orphaned") {
@@ -1083,6 +1154,9 @@ const assertSelectedLeaseIsUsable = (query: OutputLeaseAuthorityQuery, action: O
     || action.kind === "enable_show_spout_outputs"
     || action.kind === "assign_video_output_composition") {
     const expectedResources = ["lighting", "video"] as const;
+    if (!sameResources(selected[0].resources, expectedResources)) throw new Error("Selected output lease is unavailable, orphaned, stale, or has the wrong resources; nothing was applied.");
+  } else if (action.kind === "set_lighting_master" || action.kind === "set_group_submaster") {
+    const expectedResources = action.role === "both" ? ["lighting", "video"] as const : ["lighting"] as const;
     if (!sameResources(selected[0].resources, expectedResources)) throw new Error("Selected output lease is unavailable, orphaned, stale, or has the wrong resources; nothing was applied.");
   }
 };
@@ -1162,6 +1236,43 @@ export async function executeOutputControl(
   action: OutputControlAction,
 ): Promise<OutputControlReceipt> {
   return executeOutputControlOperation(invoke, action);
+}
+
+const milliunitsForLightingControl = (value: number): number => {
+  if (!Number.isFinite(value) || value < 0 || value > 1) {
+    throw new Error("Lighting control value must be between 0 and 1; nothing was applied.");
+  }
+  return Math.round(value * 1_000);
+};
+
+/** Execute the live Lighting master through the exact active Lighting lease. */
+export async function executeLightingMasterOutputControl(
+  invoke: FrontendTauriInvoke,
+  master: number,
+): Promise<OutputControlReceipt> {
+  const selection = selectOnlyActiveLightingOutputLease(await queryOutputLeaseAuthority(invoke));
+  return executeOutputControl(invoke, {
+    kind: "set_lighting_master",
+    role: selection.role,
+    master_milliunits: milliunitsForLightingControl(master),
+    lease: selection.authority,
+  });
+}
+
+/** Execute one live Lighting group submaster through the exact active Lighting lease. */
+export async function executeGroupSubmasterOutputControl(
+  invoke: FrontendTauriInvoke,
+  groupId: string,
+  level: number,
+): Promise<OutputControlReceipt> {
+  const selection = selectOnlyActiveLightingOutputLease(await queryOutputLeaseAuthority(invoke));
+  return executeOutputControl(invoke, {
+    kind: "set_group_submaster",
+    role: selection.role,
+    group_id: groupId,
+    level_milliunits: milliunitsForLightingControl(level),
+    lease: selection.authority,
+  });
 }
 
 /**

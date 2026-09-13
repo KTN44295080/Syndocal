@@ -87,6 +87,8 @@ const operationFor = (action) => ({
   take_over_standby: runtime.OUTPUT_STANDBY_TAKEOVER_OPERATION_ID,
   add_display: runtime.OUTPUT_DISPLAY_ADD_OPERATION_ID,
   assign_video_output_composition: runtime.OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID,
+  set_lighting_master: runtime.OUTPUT_LIGHTING_MASTER_SET_OPERATION_ID,
+  set_group_submaster: runtime.OUTPUT_GROUP_SUBMASTER_SET_OPERATION_ID,
   acquire_lease: runtime.OUTPUT_LEASE_ACQUIRE_OPERATION_ID,
   renew_lease: runtime.OUTPUT_LEASE_RENEW_OPERATION_ID,
   recover_lease: runtime.OUTPUT_LEASE_RECOVER_OPERATION_ID,
@@ -109,6 +111,8 @@ const commandFor = (action) => ({
   take_over_standby: "take_over_output_control_v2",
   add_display: "add_display_output_v2",
   assign_video_output_composition: "assign_video_output_composition_v2",
+  set_lighting_master: "set_lighting_master_output_control_v2",
+  set_group_submaster: "set_group_submaster_output_control_v2",
   acquire_lease: "acquire_output_lease_v2",
   renew_lease: "renew_output_lease_v2",
   recover_lease: "recover_output_lease_v2",
@@ -201,6 +205,14 @@ const ordinaryActions = [
     composition_id: 7,
     lease: lease(),
   },
+  { kind: "set_lighting_master", role: "lighting", master_milliunits: 375, lease: lease() },
+  {
+    kind: "set_group_submaster",
+    role: "both",
+    group_id: "front/movers",
+    level_milliunits: 625,
+    lease: lease(),
+  },
   showArtNetLoopbackRouteAction,
   showSerialDmxEnableAction,
   showSerialDmxStopAction,
@@ -229,7 +241,7 @@ const queryFor = (action, state = "active") => {
     statuses: [{
       status: state === "orphaned" ? "held_orphaned" : "held_active",
       authority: action.lease,
-      resources: action.kind === "arm" && state !== "wrong"
+      resources: (action.kind === "arm" || action.kind === "set_lighting_master" || action.kind === "set_group_submaster") && state !== "wrong"
         ? resourcesFor(action)
         : action.kind === "add_display" || action.kind === "assign_video_output_composition"
           ? ["lighting", "video"] : ["lighting", "video"],
@@ -268,7 +280,7 @@ const receiptFor = (
   const recoveringEnable = action.kind === "enable_output" && enableRecovery;
   const resources = action.kind === "acquire_lease" || action.kind === "enable_output"
     ? resourcesFor(action)
-    : action.kind === "arm" ? resourcesFor(action)
+    : action.kind === "arm" || action.kind === "set_lighting_master" || action.kind === "set_group_submaster" ? resourcesFor(action)
       : action.kind === "add_display" || action.kind === "assign_video_output_composition"
         ? ["lighting", "video"] : ["lighting", "video"];
   const inputGeneration = action.kind === "acquire_lease" || action.kind === "enable_output" && !enableRecovery
@@ -282,6 +294,7 @@ const receiptFor = (
   const outcome = ({
     arm: "authorized", set_blackout: "authorized", release_blackout: "authorized", take_over_standby: "authorized",
     add_display: "authorized", assign_video_output_composition: "authorized",
+    set_lighting_master: "authorized", set_group_submaster: "authorized",
     [canonicalShowArtNetActionKind]: "authorized",
     [canonicalShowSerialDmxEnableActionKind]: "authorized",
     [canonicalShowSerialDmxStopActionKind]: "authorized",
@@ -315,6 +328,8 @@ const receiptFor = (
         || action.kind === canonicalShowSerialDmxStopActionKind
         || action.kind === "send_dsf2026_artnet_acceptance_probe"
         || action.kind === "acknowledge_dsf2026_artnet_acceptance_probe_in_doubt"
+        || action.kind === "set_lighting_master"
+        || action.kind === "set_group_submaster"
         ? "applied" : "no_op",
       lease_result: {
         authority: action.kind === "acquire_lease" || action.kind === "enable_output" && !enableRecovery
@@ -382,6 +397,8 @@ for (const action of [enableAction, ...ordinaryActions, ...lifecycleActions]) {
     : action.kind === "enable_output" || action.kind === "arm" || action.kind === "release_blackout"
       || action.kind === "take_over_standby" || action.kind === "add_display"
       || action.kind === "assign_video_output_composition"
+      || action.kind === "set_lighting_master"
+      || action.kind === "set_group_submaster"
       || action.kind === canonicalShowArtNetActionKind
       || action.kind === canonicalShowSerialDmxEnableActionKind
       || action.kind === canonicalShowSerialDmxStopActionKind
@@ -393,6 +410,25 @@ for (const action of [enableAction, ...ordinaryActions, ...lifecycleActions]) {
   assert.equal(receipt.operation_id, operationFor(action));
   assert.equal(harness.executeCalls, 1);
 }
+
+const lightingMasterAction = ordinaryActions.find((action) => action.kind === "set_lighting_master");
+const lightingMasterHarness = createHarness({ action: lightingMasterAction, queryState: "active" });
+const lightingMasterReceipt = await runtime.executeLightingMasterOutputControl(
+  lightingMasterHarness.invoke,
+  0.375,
+);
+assert.equal(lightingMasterReceipt.operation_id, runtime.OUTPUT_LIGHTING_MASTER_SET_OPERATION_ID);
+assert.equal(lightingMasterHarness.executeArgs[0].request.action.master_milliunits, 375);
+
+const groupSubmasterAction = ordinaryActions.find((action) => action.kind === "set_group_submaster");
+const groupSubmasterHarness = createHarness({ action: groupSubmasterAction, queryState: "active" });
+const groupSubmasterReceipt = await runtime.executeGroupSubmasterOutputControl(
+  groupSubmasterHarness.invoke,
+  "front/movers",
+  0.625,
+);
+assert.equal(groupSubmasterReceipt.operation_id, runtime.OUTPUT_GROUP_SUBMASTER_SET_OPERATION_ID);
+assert.equal(groupSubmasterHarness.executeArgs[0].request.action.level_milliunits, 625);
 
 const showArtNetLoopbackHarness = createHarness({ action: showArtNetLoopbackRouteAction, queryState: "active" });
 const showArtNetLoopbackReceipt = await runtime.executeOutputControl(showArtNetLoopbackHarness.invoke, showArtNetLoopbackRouteAction);
@@ -1319,6 +1355,8 @@ for (const operationId of [
   "syndocal.output.standby.takeover.v2",
   "syndocal.output.display.add.v2",
   "syndocal.output.video.composition.assign.v2",
+  "syndocal.output.lighting.master.set.v2",
+  "syndocal.output.group.submaster.set.v2",
   "syndocal.output.show_artnet_loopback_route.enable.v1",
   "syndocal.output.show_serial_dmx_s0_route.enable.v1",
   "syndocal.output.show_serial_dmx_s0_route.stop.v1",
@@ -1430,6 +1468,8 @@ assert.match(setupIoFixtureSource, /serial_port: ""/);
 assert.doesNotMatch(setupIoFixtureSource, /EnttecOpenDmx|serial_baud_rate: 250_000/,
   "the Setup I/O fixture must stage the exact Art-Net show route, not a retired serial route");
 assert.match(runtimeSource, /OutputControlActionV2::EnableOutput[\s\S]*enable_output_with_output_control_fence/);
+assert.match(runtimeSource, /OutputControlActionV2::SetLightingMaster[\s\S]*set_lighting_master_with_output_control_fence/);
+assert.match(runtimeSource, /OutputControlActionV2::SetGroupSubmaster[\s\S]*set_group_submaster_with_output_control_fence/);
 assert.match(
   runtimeSource,
   new RegExp(`OutputControlActionV2::EnableShowArtNetLoopbackRoute[\\s\\S]*${retiredShowArtNetActionKind}_with_output_control_fence`),

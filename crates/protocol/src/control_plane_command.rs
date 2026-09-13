@@ -1918,8 +1918,9 @@ pub const OUTPUT_CONTROL_AUTHORITY_QUERY_OPERATION_ID: &str =
 // never crosses the wire. v6 appends the fixed DSF2026 in-doubt reconciliation acknowledgement. Its
 // only payload is the existing lease authority; it can clear only the
 // probe-scoped durable Pending hold and can never send a packet. v8 cleanly
-// replaces the same-Main Spout enable action and appends its local reset.
-pub const OUTPUT_CONTROL_COMMAND_SCHEMA_VERSION: u16 = 8;
+// replaces the same-Main Spout enable action and appends its local reset. v9
+// appends the lease-bound lighting master and group-submaster runtime actions.
+pub const OUTPUT_CONTROL_COMMAND_SCHEMA_VERSION: u16 = 9;
 pub const OUTPUT_OWNERSHIP_ARM_OPERATION_ID: &str = "syndocal.output.ownership.arm.v2";
 pub const OUTPUT_BLACKOUT_SET_OPERATION_ID: &str = "syndocal.output.blackout.set.v2";
 pub const OUTPUT_BLACKOUT_RELEASE_OPERATION_ID: &str = "syndocal.output.blackout.release.v2";
@@ -1942,6 +1943,10 @@ pub const OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID: &str =
 /// project fence on an Applied receipt.
 pub const OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID: &str =
     "syndocal.output.video.composition.assign.v2";
+pub const OUTPUT_LIGHTING_MASTER_SET_OPERATION_ID: &str =
+    "syndocal.output.lighting.master.set.v2";
+pub const OUTPUT_GROUP_SUBMASTER_SET_OPERATION_ID: &str =
+    "syndocal.output.group.submaster.set.v2";
 /// Normal operator path: one explicit local-renderer enable request. This is
 /// deliberately distinct from the public lease lifecycle.
 pub const OUTPUT_ENABLE_OPERATION_ID: &str = "syndocal.output.enable.v2";
@@ -2355,6 +2360,7 @@ pub enum OutputControlValidationErrorV1 {
     InvalidReceiptOutcome,
     InvalidLeaseAuthority,
     InvalidDisplayOutputSpec,
+    InvalidLightingControl,
 }
 
 impl fmt::Display for OutputControlValidationErrorV1 {
@@ -2370,11 +2376,43 @@ impl fmt::Display for OutputControlValidationErrorV1 {
             Self::InvalidReceiptOutcome => "output-control receipt outcome is invalid",
             Self::InvalidLeaseAuthority => "output lease authority is not canonical",
             Self::InvalidDisplayOutputSpec => "display output specification is invalid",
+            Self::InvalidLightingControl => "lighting control value, role, or group ID is invalid",
         })
     }
 }
 
 impl std::error::Error for OutputControlValidationErrorV1 {}
+
+fn validate_lighting_control_role(
+    role: OutputControlTargetRoleV1,
+) -> Result<(), OutputControlValidationErrorV1> {
+    if matches!(role, OutputControlTargetRoleV1::Lighting | OutputControlTargetRoleV1::Both) {
+        Ok(())
+    } else {
+        Err(OutputControlValidationErrorV1::InvalidLightingControl)
+    }
+}
+
+fn validate_group_id(group_id: &str) -> Result<(), OutputControlValidationErrorV1> {
+    let trimmed = group_id.trim();
+    if trimmed.is_empty() || trimmed.len() > 256 {
+        return Err(OutputControlValidationErrorV1::InvalidLightingControl);
+    }
+    let segments = trimmed.split('/').map(str::trim).collect::<Vec<_>>();
+    if segments.iter().any(|segment| segment.is_empty()) {
+        return Err(OutputControlValidationErrorV1::InvalidLightingControl);
+    }
+    Ok(())
+}
+
+fn append_utf8(output: &mut Vec<u8>, value: &str) -> Result<(), OutputControlValidationErrorV1> {
+    if value.len() > u32::MAX as usize {
+        return Err(OutputControlValidationErrorV1::InvalidLightingControl);
+    }
+    output.extend_from_slice(&(value.len() as u32).to_be_bytes());
+    output.extend_from_slice(value.as_bytes());
+    Ok(())
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct OutputControlFenceV1 {
@@ -2654,6 +2692,17 @@ pub enum OutputControlActionV2 {
         composition_id: u64,
         lease: OutputLeaseAuthorityV1,
     },
+    SetLightingMaster {
+        role: OutputControlTargetRoleV1,
+        master_milliunits: u16,
+        lease: OutputLeaseAuthorityV1,
+    },
+    SetGroupSubmaster {
+        role: OutputControlTargetRoleV1,
+        group_id: String,
+        level_milliunits: u16,
+        lease: OutputLeaseAuthorityV1,
+    },
 }
 
 #[derive(Serialize, Deserialize)]
@@ -2728,6 +2777,17 @@ enum OutputControlActionV2Wire {
         composition_id: u64,
         lease: OutputLeaseAuthorityV1,
     },
+    SetLightingMaster {
+        role: OutputControlTargetRoleV1,
+        master_milliunits: u16,
+        lease: OutputLeaseAuthorityV1,
+    },
+    SetGroupSubmaster {
+        role: OutputControlTargetRoleV1,
+        group_id: String,
+        level_milliunits: u16,
+        lease: OutputLeaseAuthorityV1,
+    },
 }
 
 impl OutputControlActionV2 {
@@ -2765,6 +2825,8 @@ impl OutputControlActionV2 {
             Self::AssignVideoOutputComposition { .. } => {
                 OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID
             }
+            Self::SetLightingMaster { .. } => OUTPUT_LIGHTING_MASTER_SET_OPERATION_ID,
+            Self::SetGroupSubmaster { .. } => OUTPUT_GROUP_SUBMASTER_SET_OPERATION_ID,
         }
     }
 
@@ -2827,6 +2889,30 @@ impl OutputControlActionV2 {
                     || *composition_id > MAX_SAFE_JAVASCRIPT_INTEGER
                 {
                     return Err(OutputControlValidationErrorV1::InvalidDisplayOutputSpec);
+                }
+                lease.validate()?;
+            }
+            Self::SetLightingMaster {
+                role,
+                master_milliunits,
+                lease,
+            } => {
+                validate_lighting_control_role(*role)?;
+                if *master_milliunits > 1_000 {
+                    return Err(OutputControlValidationErrorV1::InvalidLightingControl);
+                }
+                lease.validate()?;
+            }
+            Self::SetGroupSubmaster {
+                role,
+                group_id,
+                level_milliunits,
+                lease,
+            } => {
+                validate_lighting_control_role(*role)?;
+                validate_group_id(group_id)?;
+                if *level_milliunits > 1_000 {
+                    return Err(OutputControlValidationErrorV1::InvalidLightingControl);
                 }
                 lease.validate()?;
             }
@@ -2931,6 +3017,26 @@ impl OutputControlActionV2 {
             } => OutputControlActionV2Wire::AssignVideoOutputComposition {
                 output_id: *output_id,
                 composition_id: *composition_id,
+                lease: lease.clone(),
+            },
+            Self::SetLightingMaster {
+                role,
+                master_milliunits,
+                lease,
+            } => OutputControlActionV2Wire::SetLightingMaster {
+                role: *role,
+                master_milliunits: *master_milliunits,
+                lease: lease.clone(),
+            },
+            Self::SetGroupSubmaster {
+                role,
+                group_id,
+                level_milliunits,
+                lease,
+            } => OutputControlActionV2Wire::SetGroupSubmaster {
+                role: *role,
+                group_id: group_id.clone(),
+                level_milliunits: *level_milliunits,
                 lease: lease.clone(),
             },
         }
@@ -3095,6 +3201,38 @@ impl OutputControlActionV2 {
                 output.extend_from_slice(lease.lease_id.as_bytes());
                 append_u64(output, lease.generation);
             }
+            Self::SetLightingMaster {
+                role,
+                master_milliunits,
+                lease,
+            } => {
+                output.push(21);
+                output.push(match role {
+                    OutputControlTargetRoleV1::Lighting => 0,
+                    OutputControlTargetRoleV1::Video => 1,
+                    OutputControlTargetRoleV1::Both => 2,
+                });
+                append_u64(output, u64::from(*master_milliunits));
+                output.extend_from_slice(lease.lease_id.as_bytes());
+                append_u64(output, lease.generation);
+            }
+            Self::SetGroupSubmaster {
+                role,
+                group_id,
+                level_milliunits,
+                lease,
+            } => {
+                output.push(22);
+                output.push(match role {
+                    OutputControlTargetRoleV1::Lighting => 0,
+                    OutputControlTargetRoleV1::Video => 1,
+                    OutputControlTargetRoleV1::Both => 2,
+                });
+                append_utf8(output, group_id.trim())?;
+                append_u64(output, u64::from(*level_milliunits));
+                output.extend_from_slice(lease.lease_id.as_bytes());
+                append_u64(output, lease.generation);
+            }
         }
         Ok(())
     }
@@ -3187,6 +3325,26 @@ impl<'de> Deserialize<'de> for OutputControlActionV2 {
             } => Self::AssignVideoOutputComposition {
                 output_id,
                 composition_id,
+                lease,
+            },
+            OutputControlActionV2Wire::SetLightingMaster {
+                role,
+                master_milliunits,
+                lease,
+            } => Self::SetLightingMaster {
+                role,
+                master_milliunits,
+                lease,
+            },
+            OutputControlActionV2Wire::SetGroupSubmaster {
+                role,
+                group_id,
+                level_milliunits,
+                lease,
+            } => Self::SetGroupSubmaster {
+                role,
+                group_id,
+                level_milliunits,
                 lease,
             },
         };
@@ -3588,7 +3746,9 @@ impl OutputControlLeaseResultV2 {
             OUTPUT_OWNERSHIP_ARM_OPERATION_ID
             | OUTPUT_BLACKOUT_RELEASE_OPERATION_ID
             | OUTPUT_BLACKOUT_SET_OPERATION_ID
-            | OUTPUT_STANDBY_TAKEOVER_OPERATION_ID => OutputLeaseReceiptOutcomeV2::Authorized,
+            | OUTPUT_STANDBY_TAKEOVER_OPERATION_ID
+            | OUTPUT_LIGHTING_MASTER_SET_OPERATION_ID
+            | OUTPUT_GROUP_SUBMASTER_SET_OPERATION_ID => OutputLeaseReceiptOutcomeV2::Authorized,
             OUTPUT_LEASE_ACQUIRE_OPERATION_ID => OutputLeaseReceiptOutcomeV2::Acquired,
             OUTPUT_LEASE_RENEW_OPERATION_ID => OutputLeaseReceiptOutcomeV2::Renewed,
             OUTPUT_LEASE_RECOVER_OPERATION_ID => OutputLeaseReceiptOutcomeV2::Recovered,
@@ -3813,6 +3973,8 @@ impl OutputControlReceiptV2 {
                 | OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_OPERATION_ID
                 | OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_RECONCILE_OPERATION_ID
                 | OUTPUT_ENABLE_OPERATION_ID
+                | OUTPUT_LIGHTING_MASTER_SET_OPERATION_ID
+                | OUTPUT_GROUP_SUBMASTER_SET_OPERATION_ID
         ) {
             return Err(OutputControlValidationErrorV1::UnexpectedOperationId);
         }
@@ -3882,6 +4044,8 @@ impl OutputControlReceiptV2 {
                             | OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_STOP_OPERATION_ID
                             | OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_OPERATION_ID
                             | OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_RECONCILE_OPERATION_ID
+                            | OUTPUT_LIGHTING_MASTER_SET_OPERATION_ID
+                            | OUTPUT_GROUP_SUBMASTER_SET_OPERATION_ID
                     ) =>
             {
                 Err(OutputControlValidationErrorV1::InvalidReceiptOutcome)
@@ -3903,6 +4067,8 @@ impl OutputControlReceiptV2 {
                             | OUTPUT_SHOW_SPOUT_OUTPUTS_ENABLE_OPERATION_ID
                             | OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_OPERATION_ID
                             | OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_RECONCILE_OPERATION_ID
+                            | OUTPUT_LIGHTING_MASTER_SET_OPERATION_ID
+                            | OUTPUT_GROUP_SUBMASTER_SET_OPERATION_ID
                     ) =>
             {
                 Err(OutputControlValidationErrorV1::InvalidReceiptOutcome)
@@ -5855,6 +6021,67 @@ mod tests {
                 invalid["target"] = serde_json::json!("standby");
                 assert!(serde_json::from_value::<OutputControlActionV2>(invalid).is_err());
             }
+        }
+        let lighting_master = OutputControlActionV2::SetLightingMaster {
+            role: OutputControlTargetRoleV1::Lighting,
+            master_milliunits: 375,
+            lease: authority.clone(),
+        };
+        let mut lighting_master_shape = Vec::new();
+        lighting_master
+            .append_canonical_bytes(&mut lighting_master_shape)
+            .unwrap();
+        assert_eq!(lighting_master_shape.first(), Some(&21));
+        assert_eq!(lighting_master.operation_id(), OUTPUT_LIGHTING_MASTER_SET_OPERATION_ID);
+        assert_eq!(serde_json::to_value(&lighting_master).unwrap()["role"], "lighting");
+        assert_eq!(
+            serde_json::from_value::<OutputControlActionV2>(
+                serde_json::to_value(&lighting_master).unwrap()
+            )
+            .unwrap(),
+            lighting_master
+        );
+        let group_submaster = OutputControlActionV2::SetGroupSubmaster {
+            role: OutputControlTargetRoleV1::Both,
+            group_id: " front / movers ".to_string(),
+            level_milliunits: 625,
+            lease: authority.clone(),
+        };
+        let mut group_submaster_shape = Vec::new();
+        group_submaster
+            .append_canonical_bytes(&mut group_submaster_shape)
+            .unwrap();
+        assert_eq!(group_submaster_shape.first(), Some(&22));
+        assert_eq!(group_submaster.operation_id(), OUTPUT_GROUP_SUBMASTER_SET_OPERATION_ID);
+        assert_eq!(
+            serde_json::from_value::<OutputControlActionV2>(
+                serde_json::to_value(&group_submaster).unwrap()
+            )
+            .unwrap(),
+            group_submaster
+        );
+        for action in [
+            OutputControlActionV2::SetLightingMaster {
+                role: OutputControlTargetRoleV1::Video,
+                master_milliunits: 0,
+                lease: authority.clone(),
+            },
+            OutputControlActionV2::SetLightingMaster {
+                role: OutputControlTargetRoleV1::Lighting,
+                master_milliunits: 1_001,
+                lease: authority.clone(),
+            },
+            OutputControlActionV2::SetGroupSubmaster {
+                role: OutputControlTargetRoleV1::Lighting,
+                group_id: "front//movers".to_string(),
+                level_milliunits: 0,
+                lease: authority.clone(),
+            },
+        ] {
+            assert_eq!(
+                action.validate(),
+                Err(OutputControlValidationErrorV1::InvalidLightingControl)
+            );
         }
         let legacy_shapes = [
             (
