@@ -423,7 +423,7 @@
       "owner": "ASIO latency acceptance owner",
       "dependency": "ASIO device stream and matched TouchDesigner test environment",
       "nonclaim": "Does not claim physical input-to-pixel latency or TouchDesigner trials were measured.",
-      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/ASIO_INPUT_ACCEPTANCE.md"],
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/ASIO_INPUT_ACCEPTANCE.md", "qa/ASIO_LATENCY_CURRENT_SOURCE_CHECKPOINT_2026-09-14.md"],
       "status": "Open"
     },
     {
