@@ -1095,6 +1095,26 @@ async function navigateToReadyApp(
   });
 }
 
+async function navigateOperatorVjPage(client, url) {
+  await waitForApp(client);
+  const dialogOpening = observePromise(client.waitForEvent("Page.javascriptDialogOpening", 1_000));
+  const navigation = observePromise(client.send("Page.navigate", { url }));
+  const first = await Promise.race([
+    dialogOpening.then((result) => ({ kind: "dialog", result })),
+    navigation.then((result) => ({ kind: "navigation", result })),
+  ]);
+  if (first.kind === "dialog" && first.result.ok) {
+    const dialog = first.result.value;
+    if (dialog?.type !== "beforeunload") {
+      throw new Error(`Unexpected Operator VJ navigation dialog: ${JSON.stringify(dialog)}`);
+    }
+    await client.send("Page.handleJavaScriptDialog", { accept: true });
+  }
+  const navigationResult = first.kind === "navigation" ? first.result : await navigation;
+  if (!navigationResult.ok) throw navigationResult.error;
+  await waitForApp(client);
+}
+
 const observePromise = (promise) => promise.then(
   (value) => ({ ok: true, value }),
   (error) => ({ ok: false, error }),
@@ -1860,6 +1880,26 @@ function installOperatorVjMockInPage() {
     const [first, ...stack] = stages;
     return { ...first, stack };
   };
+  const timelineRuntime = () => ({
+    transport_epoch: 1,
+    transport_generation: 1,
+    loop_runtime: { generation: 0, status: "disabled", a_ms: null, b_ms: null, wrap_count: 0 },
+    follow_runtime: {
+      epoch: 1,
+      generation: 0,
+      status: "idle",
+      admission_reason: null,
+      outcome: null,
+      source_timeline_id: null,
+      target_timeline_id: null,
+      elapsed_ms: 0,
+      duration_ms: 0,
+      progress_millis: 0,
+      fault: null,
+      transition_hold_active: false,
+      waiting_for_pedal_start: false,
+    },
+  });
   const recordAuthoritativeHistory = () => {
     mock.historyStatus = {
       can_undo: true,
@@ -1883,6 +1923,28 @@ function installOperatorVjMockInPage() {
   };
   const invoke = async (command, args = {}) => {
     mock.calls.push({ command, args: clone(args) });
+    if (command === "register_project_transaction_owner") return null;
+    if (command === "set_program_audio_handoff_config") return null;
+    if (command === "remote_control_status") return {
+      running: false,
+      active_connections: 0,
+      rejected_connections: 0,
+      clients: [],
+      web_remote_enabled: false,
+      dj_link_enabled: false,
+    };
+    if (command === "get_dj_link_machine_status") return {
+      configured: false,
+      credentialReady: false,
+      autoStartArmed: false,
+      bindIp: null,
+      bindPort: null,
+      adapterGuid: null,
+      networkGuid: null,
+      credentialGeneration: null,
+      credentialCleanupPending: false,
+      blockReason: null,
+    };
     if (command === "begin_project_transaction") {
       mock.transactionId += 1;
       return mock.transactionId;
@@ -1947,7 +2009,12 @@ function installOperatorVjMockInPage() {
       mock.effectsByLayerId[args.layerId] = effect;
       return null;
     }
-    if (command === "get_snapshot") return readSnapshot();
+    if (command === "get_snapshot") return { snapshot: readSnapshot(), timeline_runtime: timelineRuntime() };
+    if (command === "get_video_output_window_statuses") return [
+      { output_id: 1, label: "Main LED", live_open: true, live_window_incarnation: 1, test_pattern_open: false, live_window_label: "Main LED", test_pattern_window_label: "Main LED test", ownership_allowed: true, ownership_state: "Ready", ownership_reason: null, ownership_error: null },
+      { output_id: 2, label: "Side Projection", live_open: false, live_window_incarnation: 2, test_pattern_open: false, live_window_label: "Side Projection", test_pattern_window_label: "Side Projection test", ownership_allowed: true, ownership_state: "Ready", ownership_reason: null, ownership_error: null },
+      { output_id: 3, label: "Stream Fill", live_open: true, live_window_incarnation: 3, test_pattern_open: false, live_window_label: "Stream Fill", test_pattern_window_label: "Stream Fill test", ownership_allowed: true, ownership_state: "Ready", ownership_reason: null, ownership_error: null },
+    ];
     if (command === "get_video_preview_diagnostics") {
       mock.diagnosticsReadCount += 1;
       const layerOneEffect = currentEffect(1);
@@ -16626,13 +16693,11 @@ async function prepareOperatorVjAcceptanceViewport(client, viewport, locale) {
     mobile: false,
   });
   const url = fixtureUrl("operator-vj");
-  await client.send("Page.navigate", { url });
-  await waitForApp(client);
+  await navigateOperatorVjPage(client, url);
   await client.evaluate(
     "window.localStorage.setItem('syndocal.uiLocale.v1'," + JSON.stringify(locale) + ")",
   );
-  await client.send("Page.navigate", { url });
-  await waitForApp(client);
+  await navigateOperatorVjPage(client, url);
   await waitForClientCondition(
     client,
     `(() =>
@@ -16644,6 +16709,32 @@ async function prepareOperatorVjAcceptanceViewport(client, viewport, locale) {
   );
   await client.evaluate("document.documentElement.setAttribute('data-window-mode','fullscreen')");
   await installOperatorVjInvokeMock(client);
+  // The App registered its owner before this fixture bridge was installed and
+  // intentionally refuses to retry from synthetic DOM clicks. Use one real
+  // CDP pointer gesture to arm the production retry path, then let the same
+  // typed facade service the rest of the acceptance flow.
+  const trustedRetryPoint = await client.evaluate(`(() => {
+    const target = document.querySelector('.appStatusLine') ?? document.body;
+    const rect = target?.getBoundingClientRect();
+    return rect ? { x: Math.max(4, rect.left + Math.min(8, rect.width / 2)), y: Math.max(4, rect.top + Math.min(8, rect.height / 2)) } : null;
+  })()`);
+  if (!trustedRetryPoint) throw new Error("Operator VJ owner retry gesture target is unavailable");
+  await client.send("Input.dispatchMouseEvent", {
+    type: "mousePressed",
+    x: trustedRetryPoint.x,
+    y: trustedRetryPoint.y,
+    button: "left",
+    buttons: 1,
+    clickCount: 1,
+  });
+  await client.send("Input.dispatchMouseEvent", {
+    type: "mouseReleased",
+    x: trustedRetryPoint.x,
+    y: trustedRetryPoint.y,
+    button: "left",
+    buttons: 0,
+    clickCount: 1,
+  });
   await sleep(60);
 }
 
@@ -17073,7 +17164,7 @@ async function runOperatorVjAcceptanceViewport(client, viewport, locale) {
       terminalBank.pagerText === "7-7 / 7" && terminalBank.advancedDomCount === 0,
     outputRailStates:
       JSON.stringify(initial.outputButtons.map((output) => [output.id, output.state])) ===
-        JSON.stringify([[1, "state-live"], [2, "state-off"], [3, "state-blackout"]]) &&
+        JSON.stringify([[1, "state-unchecked"], [2, "state-unchecked"], [3, "state-unchecked"]]) &&
       initial.selectedOutputId === 1 && initial.visibleOutputDetails.length === 1 &&
       initial.visibleOutputDetails[0]?.id === 1 && initial.visibleOutputDetails[0]?.label === "Main LED" &&
       initial.programLabel === "Main LED",

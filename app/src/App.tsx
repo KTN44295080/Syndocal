@@ -25901,7 +25901,7 @@ export default function App() {
   const videoLayerListProps: ComponentProps<typeof VideoControlPanel>["layerList"] = {
     get layers() { return snapshot().video.layers; },
     get isfRuntimeErrors() { return videoPreviewDiagnostics()?.isf_stage_errors ?? []; },
-    get isfEventPulseBusy() { return isfEventPulseBusy(); },
+    isfEventPulseBusy,
     onSetLayerLabel: setVideoLayerLabel,
     onMoveLayer: moveVideoLayer,
     onDuplicateLayer: duplicateVideoLayer,
@@ -27367,7 +27367,6 @@ export default function App() {
         <VideoControlPanel
           mixer={controlMode() === "mixer"}
           invokeCommand={invoke}
-          libraryOnly
           selectedMediaAssetId={selectedMediaLibraryAssetId()}
           onSelectMediaAsset={setSelectedMediaLibraryAssetId}
           layerCount={snapshot().video.layers.length}

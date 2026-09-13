@@ -1,4 +1,5 @@
 import { createEffect, createMemo, createSignal, For, Show, untrack } from "solid-js";
+import { type Accessor } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
 import type { VideoBlendMode, VideoColorAdjust, VideoFxAdjust, VideoIsfEffectSummary, VideoIsfStageError, VideoLayerState, VideoLayerSummary } from "../types";
 import { videoSourceMetadataLabel } from "../videoHelpers";
@@ -26,7 +27,7 @@ interface VideoLayerListPanelProps {
   ) => void | Promise<void>;
   onSetLayerFx: (layerId: number, state: VideoLayerState, fxPatch: Partial<VideoFxAdjust>) => void | Promise<void>;
   isfRuntimeErrors?: VideoIsfStageError[];
-  isfEventPulseBusy?: boolean;
+  isfEventPulseBusy?: boolean | Accessor<boolean>;
   onImportIsf: (layerId: number) => void | Promise<void>;
   onApplyBuiltinIsf: (layerId: number, presetId: string) => void | Promise<void>;
   onSetIsfEffect: (layerId: number, effect: VideoIsfEffectSummary | null) => void | Promise<void>;

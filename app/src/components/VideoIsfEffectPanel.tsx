@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, For, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, For, Show, type Accessor } from "solid-js";
 import type {
   VideoIsfControlSummary,
   VideoIsfEffectStageSummary,
@@ -12,7 +12,7 @@ interface VideoIsfEffectPanelProps {
   compact?: boolean;
   effect?: VideoIsfEffectSummary | null;
   runtimeErrors?: VideoIsfStageError[];
-  eventPulseBusy?: boolean;
+  eventPulseBusy?: boolean | Accessor<boolean>;
   onImport: (layerId: number) => void | Promise<void>;
   onApplyBuiltin: (layerId: number, presetId: string) => void | Promise<void>;
   onSetEffect: (layerId: number, effect: VideoIsfEffectSummary | null) => void | Promise<void>;
@@ -69,6 +69,9 @@ export function VideoIsfEffectPanel(props: VideoIsfEffectPanelProps) {
   const layerDescription = () => `${props.layerLabel ?? "Video layer"} (layer ${props.layerId})`;
   const stackFull = () => stages().length >= MAX_STACK_STAGES;
   const runtimeErrorText = () => (props.runtimeErrors ?? []).map(runtimeErrorLabel).join("; ");
+  const eventPulseBusy = () => typeof props.eventPulseBusy === "function"
+    ? props.eventPulseBusy()
+    : Boolean(props.eventPulseBusy);
 
   createEffect(() => {
     const count = stages().length;
@@ -147,7 +150,7 @@ export function VideoIsfEffectPanel(props: VideoIsfEffectPanelProps) {
         data-video-isf-action="builtin"
         aria-label={`Built-in FX for ${layerDescription()}`}
         value=""
-        disabled={stackFull() || props.eventPulseBusy}
+        disabled={stackFull() || eventPulseBusy()}
         onChange={(event) => applyBuiltInEffect(event.currentTarget)}
       >
         <option value="">Choose effect</option>
@@ -170,7 +173,7 @@ export function VideoIsfEffectPanel(props: VideoIsfEffectPanelProps) {
           class={stage().enabled ? "active" : ""}
           aria-label={`${stage().label} FX enabled for ${layerDescription()}`}
           aria-pressed={stage().enabled}
-          disabled={props.eventPulseBusy}
+          disabled={eventPulseBusy()}
           onClick={() => {
             void Promise.resolve(props.onSetEffectEnabled(
               props.layerId,
@@ -208,7 +211,7 @@ export function VideoIsfEffectPanel(props: VideoIsfEffectPanelProps) {
               class={stage.enabled ? "active" : ""}
               aria-label={`${stage.enabled ? "Bypass" : "Enable"} FX ${index() + 1}`}
               aria-pressed={stage.enabled}
-              disabled={props.eventPulseBusy}
+              disabled={eventPulseBusy()}
               onClick={() => {
                 const stageIndex = index();
                 void Promise.resolve(props.onSetEffectEnabled(props.layerId, stageIndex, !stage.enabled))
@@ -220,7 +223,7 @@ export function VideoIsfEffectPanel(props: VideoIsfEffectPanelProps) {
             <button
               data-video-isf-action="move-up"
               aria-label={`Move FX ${index() + 1} up`}
-              disabled={props.eventPulseBusy || index() === 0}
+              disabled={eventPulseBusy() || index() === 0}
               onClick={() => moveStage(index(), -1)}
             >
               Up
@@ -228,7 +231,7 @@ export function VideoIsfEffectPanel(props: VideoIsfEffectPanelProps) {
             <button
               data-video-isf-action="move-down"
               aria-label={`Move FX ${index() + 1} down`}
-              disabled={props.eventPulseBusy || index() === stages().length - 1}
+              disabled={eventPulseBusy() || index() === stages().length - 1}
               onClick={() => moveStage(index(), 1)}
             >
               Down
@@ -236,7 +239,7 @@ export function VideoIsfEffectPanel(props: VideoIsfEffectPanelProps) {
             <button
               data-video-isf-action="reset"
               aria-label={`Reset FX ${index() + 1}`}
-              disabled={props.eventPulseBusy}
+              disabled={eventPulseBusy()}
               onClick={() => {
                 const stageIndex = index();
                 void Promise.resolve(props.onResetEffect(props.layerId, stageIndex))
@@ -249,7 +252,7 @@ export function VideoIsfEffectPanel(props: VideoIsfEffectPanelProps) {
               data-video-isf-action="remove"
               class="danger"
               aria-label={`Remove FX ${index() + 1}`}
-              disabled={props.eventPulseBusy}
+              disabled={eventPulseBusy()}
               onClick={() => removeStage(index())}
             >
               Remove
@@ -285,7 +288,7 @@ export function VideoIsfEffectPanel(props: VideoIsfEffectPanelProps) {
                     <button
                       data-video-isf-action="trigger-event"
                       aria-label={`Trigger ${control.name} for ${layerDescription()}`}
-                      disabled={props.eventPulseBusy}
+                      disabled={eventPulseBusy()}
                       onClick={() => triggerEvent(control)}
                     >
                       Trigger
@@ -300,7 +303,7 @@ export function VideoIsfEffectPanel(props: VideoIsfEffectPanelProps) {
                           type="checkbox"
                           checked={control.value[0] >= 0.5}
                           aria-label={`${control.name} for ${stage().label} FX on ${layerDescription()}`}
-                          disabled={props.eventPulseBusy}
+                          disabled={eventPulseBusy()}
                           onChange={(event) =>
                             setControlComponent(control, 0, event.currentTarget.checked ? 1 : 0)
                           }
@@ -318,7 +321,7 @@ export function VideoIsfEffectPanel(props: VideoIsfEffectPanelProps) {
                           step={control.kind === "Long" ? 1 : 0.01}
                           value={control.value[index]}
                           aria-label={`${control.name} component ${index + 1} for ${layerDescription()}`}
-                          disabled={props.eventPulseBusy}
+                          disabled={eventPulseBusy()}
                           onChange={(event) =>
                             setControlComponent(control, index, Number(event.currentTarget.value))
                           }
@@ -355,13 +358,13 @@ export function VideoIsfEffectPanel(props: VideoIsfEffectPanelProps) {
       <div class="buttonRow videoIsfStackActions">
         <button
           data-video-isf-action="add-isf"
-          disabled={stackFull() || props.eventPulseBusy}
+          disabled={stackFull() || eventPulseBusy()}
           onClick={() => void props.onImport(props.layerId)}
         >
           Add ISF
         </button>
         <Show when={stages().length > 0}>
-          <button class="danger" disabled={props.eventPulseBusy} onClick={() => void props.onSetEffect(props.layerId, null)}>Clear stack</button>
+          <button class="danger" disabled={eventPulseBusy()} onClick={() => void props.onSetEffect(props.layerId, null)}>Clear stack</button>
         </Show>
         <span>{stages().length}/{MAX_STACK_STAGES} FX</span>
       </div>
@@ -388,7 +391,7 @@ export function VideoIsfEffectPanel(props: VideoIsfEffectPanelProps) {
         </details>
       }
     >
-      <div ref={(element) => { panelElement = element; }} class="videoIsfPanel videoIsfPanelCompact" data-video-isf-layer-id={props.layerId} aria-busy={props.eventPulseBusy}>
+      <div ref={(element) => { panelElement = element; }} class="videoIsfPanel videoIsfPanelCompact" data-video-isf-layer-id={props.layerId} aria-busy={eventPulseBusy()}>
         <div class="videoIsfQuickRack">
           <div class="videoIsfQuickStatus">
             <strong>FX</strong>

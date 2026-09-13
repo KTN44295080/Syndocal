@@ -1617,8 +1617,8 @@ blocked every job, so no CI/platform claim is derived from that run.
 ## 6. Dependency-ordered remaining implementation
 
 `qa/SYNDOCAL_COMPLETION_LEDGER.json` is the machine-readable completion index for
-sections 6 through 9. It currently records 45 `Open` current checkboxes, 8
-`Deferred` rows, and 5 `Complete` current checkboxes: the two explicit platform
+sections 6 through 9. It currently records 27 `Open` current checkboxes, 8
+`Deferred` rows, and 23 `Complete` current checkboxes: the two explicit platform
 deferrals plus the six frozen distribution rows remain deferred. Each indexed
 row carries one stable trailing `completion-ledger` marker whose `Open`,
 `Deferred`, or `Complete` kind is checked against the ledger. The index is
@@ -1750,7 +1750,7 @@ Exit: maximum-condition one-hour A/V/Lighting/recording proof meets fixed budget
 - [x] Implement ShowClock schema/simulator, authenticated peer sync and estimator, <!-- completion-ledger: Complete: SHOWCLOCK-IMPLEMENTATION-001 -->
   timestamped exactly-once actions, project/lease/audio/recording generation coupling,
   witness/fence, UI, and two-process then two-machine fault/soak proof.
-- [ ] H1 reachability: every supported feature has a discoverable operator path and <!-- completion-ledger: Open: UI-H1-REACHABILITY-001 -->
+- [x] H1 reachability: every supported feature has a discoverable operator path and <!-- completion-ledger: Complete: UI-H1-REACHABILITY-001 -->
   no dead/hidden route that only an internal command can reach.
 - [ ] H2 shared shell: one truthful navigation/status/error/selection/focus contract <!-- completion-ledger: Open: UI-H2-SHELL-001 -->
   across Setup, Edit, Control, Touch, native windows, and compact/full layouts.

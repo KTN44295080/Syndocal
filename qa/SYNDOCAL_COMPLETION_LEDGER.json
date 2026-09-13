@@ -3,7 +3,7 @@
   "source_document": "qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md",
   "authoritative_sections": ["6", "7", "8", "9"],
   "classifications": ["Supported", "Deferred", "External acceptance", "Out of scope"],
-  "expected_status_counts": { "Open": 28, "Deferred": 8, "Complete": 22 },
+  "expected_status_counts": { "Open": 27, "Deferred": 8, "Complete": 23 },
   "expected_section_counts": { "6": 37, "7": 6, "8": 9, "9": 6 },
   "items": [
     {
@@ -278,13 +278,13 @@
     },
     {
       "id": "UI-H1-REACHABILITY-001",
-      "source": { "section": "6", "kind": "Open" },
+      "source": { "section": "6", "kind": "Complete" },
       "classification": "Supported",
       "owner": "UI reachability owner",
       "dependency": "Supported-feature inventory and source-of-truth routing",
-      "nonclaim": "Does not claim every supported feature has a discoverable operator path.",
-      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md"],
-      "status": "Open"
+      "nonclaim": "Closes the current supported software reachability slice; does not claim native button-by-button accessibility, physical output, external devices, venue operation, or completion of H2-H5 UI markers.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md", "qa/UI_H1_REACHABILITY_CHECKPOINT_2026-09-13.md", "app/src/App.tsx", "app/src/components/VideoControlPanel.tsx", "app/src/components/VideoIsfEffectPanel.tsx", "app/src/components/VideoLayerListPanel.tsx"],
+      "status": "Complete"
     },
     {
       "id": "UI-H2-SHELL-001",
