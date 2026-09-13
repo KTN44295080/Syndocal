@@ -1747,7 +1747,7 @@ Exit: maximum-condition one-hour A/V/Lighting/recording proof meets fixed budget
 
 ### Phase 6 — ShowClock, UI, Remote, security, migration, and supportability
 
-- [ ] Implement ShowClock schema/simulator, authenticated peer sync and estimator, <!-- completion-ledger: Open: SHOWCLOCK-IMPLEMENTATION-001 -->
+- [x] Implement ShowClock schema/simulator, authenticated peer sync and estimator, <!-- completion-ledger: Complete: SHOWCLOCK-IMPLEMENTATION-001 -->
   timestamped exactly-once actions, project/lease/audio/recording generation coupling,
   witness/fence, UI, and two-process then two-machine fault/soak proof.
 - [ ] H1 reachability: every supported feature has a discoverable operator path and <!-- completion-ledger: Open: UI-H1-REACHABILITY-001 -->

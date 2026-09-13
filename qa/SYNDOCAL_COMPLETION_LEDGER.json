@@ -3,7 +3,7 @@
   "source_document": "qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md",
   "authoritative_sections": ["6", "7", "8", "9"],
   "classifications": ["Supported", "Deferred", "External acceptance", "Out of scope"],
-  "expected_status_counts": { "Open": 29, "Deferred": 8, "Complete": 21 },
+  "expected_status_counts": { "Open": 28, "Deferred": 8, "Complete": 22 },
   "expected_section_counts": { "6": 37, "7": 6, "8": 9, "9": 6 },
   "items": [
     {
@@ -268,13 +268,13 @@
     },
     {
       "id": "SHOWCLOCK-IMPLEMENTATION-001",
-      "source": { "section": "6", "kind": "Open" },
+      "source": { "section": "6", "kind": "Complete" },
       "classification": "Supported",
       "owner": "ShowClock implementation owner",
       "dependency": "Frozen ShowClock decisions plus Audio, Recording, and ownership semantics",
-      "nonclaim": "Does not claim peer synchronization, fencing, or two-machine fault/soak proof is complete.",
-      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md"],
-      "status": "Open"
+      "nonclaim": "Closes the current-source ShowClock protocol, estimator, scheduler, output-gate, exact-peer loopback, Tauri IPC/UI, and two-process software slice; does not claim native interaction, physical output, two-machine fault/soak, replay restoration, witness/interlock, or automatic failover is complete.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md", "qa/SHOWCLOCK_IMPLEMENTATION_CHECKPOINT_2026-09-13.md", "crates/protocol/src/show_clock.rs", "crates/protocol/src/show_clock_runtime.rs", "crates/io/src/show_clock_lan.rs", "app/src-tauri/src/show_clock_ipc.rs", "app/src/components/ShowClockStatusPanel.tsx"],
+      "status": "Complete"
     },
     {
       "id": "UI-H1-REACHABILITY-001",
