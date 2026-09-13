@@ -68,6 +68,10 @@ then applied and the full Q1 sequence above passed.
 
 The native accessibility proof remains not-run. This environment reported native
 computer APIs disabled, so no unsupported native UI observation is claimed.
+The separate native maximized/F11 preflight also failed closed before any UI
+interaction because this run had only a `1280x800` display (`1280x752` work
+area), below the required `1920x1080` acceptance display. This does not change
+the accessibility status and is not counted as native accessibility evidence.
 The following require the operator PC and named accessibility environments:
 
 - NVDA screen-reader traversal and announcements;

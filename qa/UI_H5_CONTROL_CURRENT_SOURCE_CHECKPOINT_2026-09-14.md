@@ -31,12 +31,22 @@ window handle (`1444984`), and `Responding=True`; the exact-path process count
 was zero after clean shutdown. This is native build/start evidence only: no
 button-by-button Control action or physical output was exercised.
 
+The current native maximized/F11 acceptance was then attempted with the
+isolated QA executable. It failed closed at the first size gate because the
+last observed maximized client was `1280x752`, below the required `1920x1000`.
+The live Windows display query for this run reported one attached display at
+`1280x800` with a `1280x752` work area, so the required `1920x1080` monitor was
+not available. The QA process and ports were cleaned up; this is an environment
+boundary, not a passing native interaction result.
+
 ## Acceptance boundary
 
 `UI-H5-CONTROL-001` remains `Open`. The existing evidence does not establish
 native button-by-button interaction, full live Lighting/Video/Audio workflow
 completion, native accessibility, physical output, failure/recovery rehearsal,
 external clients, venue/soak, signing, publication, or product completion.
+The native maximized/F11 gate also remains unverified until it is rerun on a
+Windows operator display meeting the required `1920x1080` monitor boundary.
 
 The new browser rerun did not reach CDP: the available Chromium executable was
 rejected by Windows with a Side-by-Side configuration error. The prior passing
