@@ -443,7 +443,7 @@
       "owner": "Lighting hardware acceptance owner",
       "dependency": "F2 output ownership and real Art-Net/sACN nodes and fixtures",
       "nonclaim": "Does not claim physical fixture addressing, controls, reconnect, topology, or 44 Hz continuity passed.",
-      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/M4_IO_VALIDATION.md", "qa/INPUT_PHYSICAL_CURRENT_SOURCE_CHECKPOINT_2026-09-14.md"],
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/M4_IO_VALIDATION.md", "qa/DMX_ARTNET_CURRENT_SOURCE_CHECKPOINT_2026-09-14.md"],
       "status": "Open"
     },
     {
@@ -453,7 +453,7 @@
       "owner": "DMX and RDM hardware acceptance owner",
       "dependency": "F2 output ownership, Enttec/DMXKing hardware, and analyzer capture",
       "nonclaim": "Does not claim USB DMX long-run timing, Open DMX analysis, or RDM/TOD physical behavior passed.",
-      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/M4_IO_VALIDATION.md"],
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/M4_IO_VALIDATION.md", "qa/DMX_USB_RDM_CURRENT_SOURCE_CHECKPOINT_2026-09-14.md"],
       "status": "Open"
     },
     {
@@ -463,7 +463,7 @@
       "owner": "Control-input acceptance owner",
       "dependency": "F1 input generations and physical MIDI/OSC/Remote clients",
       "nonclaim": "Does not claim physical MIDI, OSC, TouchOSC, or Remote latency and feedback acceptance.",
-      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/M4_IO_VALIDATION.md"],
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/M4_IO_VALIDATION.md", "qa/INPUT_PHYSICAL_CURRENT_SOURCE_CHECKPOINT_2026-09-14.md"],
       "status": "Open"
     },
     {
@@ -483,7 +483,7 @@
       "owner": "Video hardware acceptance owner",
       "dependency": "F2 ownership, real display topology, and capture/output devices",
       "nonclaim": "Does not claim physical display, NDI, Spout, camera, capture-fault, or one-hour video acceptance.",
-      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/M5_RELIABILITY_VALIDATION.md", "qa/VENUE_SOAK_CURRENT_SOURCE_CHECKPOINT_2026-09-14.md"],
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/M5_RELIABILITY_VALIDATION.md", "qa/VIDEO_PHYSICAL_CURRENT_SOURCE_CHECKPOINT_2026-09-14.md"],
       "status": "Open"
     },
     {
@@ -503,7 +503,7 @@
       "owner": "Venue performance acceptance owner",
       "dependency": "Integrated video, lighting, output, and recording paths plus venue GPU",
       "nonclaim": "Does not claim the maximum-condition venue GPU one-hour run or resource logs passed.",
-      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/M5_RELIABILITY_VALIDATION.md"],
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/M5_RELIABILITY_VALIDATION.md", "qa/VENUE_SOAK_CURRENT_SOURCE_CHECKPOINT_2026-09-14.md"],
       "status": "Open"
     },
     {
@@ -523,7 +523,7 @@
       "owner": "Comparative acceptance owner",
       "dependency": "Pinned comparison versions, licenses, hardware, content, and exact Syndocal artifact",
       "nonclaim": "Does not claim Daslight, SynapseRack, or TouchDesigner parity from counts or loopback.",
-      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/M6_RELEASE_VALIDATION.md"],
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/M6_RELEASE_VALIDATION.md", "qa/COMPARE_PINNED_CURRENT_SOURCE_CHECKPOINT_2026-09-14.md"],
       "status": "Open"
     },
     {
