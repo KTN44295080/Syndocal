@@ -661,3 +661,77 @@ venue behavior, signing, publication, or product-wide completion.
 Next safe action is to run the ledger validator and diff checks, then commit
 and push this bounded implementation/evidence checkpoint. External gates still
 require their actual UI/device/two-machine topology and separate evidence.
+
+## Current continuation state — 2026-09-14 takeover
+
+The continuation is now owned by the current task on branch
+`codex/showclock-review-20260912`. The latest pushed checkpoint is
+`e1340924` (`qa: record native display boundary`), and the worktree is clean
+with the branch equal to `origin/codex/showclock-review-20260912`.
+
+The only product-code change in this continuation is in
+`app/src/components/ControlBothPanel.tsx`: the DMX, all-output, and Video
+blackout controls preserve their existing lease-bound callbacks and visible
+operator labels while exposing stable action names and `aria-pressed` state.
+The focused checker observes those three semantics in
+`app/scripts/check-control-upper-workspaces-browser.mjs`.
+
+Current-source verification passed for TypeScript, Vite build, localization,
+renderer routing, shortcut/workspace contracts, the full static release chain,
+and the pinned Windows MSVC `14.44.35207` no-bundle native build. The exact
+release artifact process smoke also passed for
+`target/release/syndocal.exe` (SHA-256
+`5D2B479C39AB28CC10F2961EAB156E6EF8127E7571189BFF85D50871ACCDC66E`), with
+one responsive `Syndocal` window and zero exact-path processes after clean
+shutdown. The new rendered browser rerun did not start because the available
+Chromium binary failed Windows Side-by-Side startup; the earlier rendered pass
+is retained only as the pre-change baseline.
+
+The real native maximized/F11 gate was attempted with the isolated QA build and
+failed closed before UI interaction: the last client was `1280x752`, while the
+gate requires at least `1920x1000` and a `1920x1080` monitor. A live display
+query confirmed the only attached display was `1280x800` with a `1280x752`
+work area. The QA process and listeners were cleaned up. This is recorded in
+`qa/CONTROL_BOTH_CHECKPOINT_2026-09-14.md`,
+`qa/UI_H5_CONTROL_CURRENT_SOURCE_CHECKPOINT_2026-09-14.md`, and
+`qa/ACCESSIBILITY_CURRENT_SOURCE_CHECKPOINT_2026-09-14.md`; it is not a native
+interaction or accessibility pass.
+
+The authoritative ledger remains structurally valid at 58 markers:
+`27 Complete`, `8 Deferred`, and `23 Open`. The Open IDs are
+`AI3-NATIVE-INGRESS-001`, `AI3-PHYSICAL-REARM-001`,
+`AI3-DURABLE-ACCEPTANCE-001`, `AI8-EXTERNAL-ACCEPTANCE-001`,
+`UI-H5-CONTROL-001`, `REMOTE-SECURITY-001`, `MIGRATION-COMPATIBILITY-001`,
+`OBSERVABILITY-SUPPORT-001`, `ACCESSIBILITY-NATIVE-001`,
+`ASIO-LICENSE-001`, `ASIO-FORMAT-MATRIX-001`, `ASIO-FAULT-MATRIX-001`,
+`ASIO-SOAK-001`, `ASIO-LATENCY-001`, `ASIO-PERSISTENCE-PACKAGE-001`,
+`DMX-ARTNET-001`, `DMX-USB-RDM-001`, `INPUT-PHYSICAL-001`,
+`DJ-LINK-HARDWARE-001`, `VIDEO-PHYSICAL-001`, `VENUE-SOAK-001`,
+`SHOWCLOCK-VENUE-001`, and `COMPARE-PINNED-001`. The Q1/Q4 mirror reports
+`58/58` Flow references and `79` linked evidence records. External markers
+remain Open until their named hardware, client, two-machine, venue, signed
+artifact, or other external evidence exists.
+
+Branch cleanup was performed after a live worktree/ref audit. The local
+orphan `chatgpt/windows-integration-20260908` at `40ff409f` was deleted: it
+had no worktree, no remote counterpart, and its native-thumbnail and loopMIDI
+changes are represented by later current-source commits. The
+worktree-attached branches and the unmerged local/remote
+`chatgpt/macos-artifact-validation` branch were preserved because they still
+contain active or unique changes. `git fetch origin --prune` and
+`git remote prune origin --dry-run` reported no stale remote refs.
+
+## Safe resume procedure after this takeover
+
+1. Rerun the native maximized/F11 and pane lifecycle gate on a Windows display
+   that actually reports `1920x1080`; do not lower the required dimensions.
+2. Rerun the Both browser gate with a working Chrome or Edge installation so
+   the new `aria-pressed` assertions receive fresh rendered evidence.
+3. Continue the Open markers one at a time. For software-supported markers,
+   implement and focus-test concrete gaps before updating the ledger. For
+   external markers, preserve the current-source evidence and record the exact
+   missing owner/device/client/environment rather than converting a static
+   pass into acceptance.
+4. Every completed checkpoint must update the applicable current-source or
+   domain QA document, preserve the 58-row ledger/Q1-Q4 mirror invariants,
+   commit only owned files, push, and verify upstream equality.
