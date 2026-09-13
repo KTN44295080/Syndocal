@@ -1710,7 +1710,7 @@ Exit: AI0-AI8 accepted without weakening local Blackout or claiming unattended R
   retirement on mapping/project replacement.
 - [x] F2 bounded local Lighting/Video/Both/Standby ownership across DMX, NDI, Spout/Syphon, <!-- completion-ledger: Complete: F2-OUTPUT-OWNERSHIP-001 -->
   Display, native windows, SDK resources, Take Over, teardown ACK, and explicit Arm.
-- [ ] Freeze ShowClock transport/discovery/authentication/key rotation/replay, <!-- completion-ledger: Open: SHOWCLOCK-DECISIONS-001 -->
+- [x] Freeze ShowClock transport/discovery/authentication/key rotation/replay, <!-- completion-ledger: Complete: SHOWCLOCK-DECISIONS-001 -->
   master-clock/slew/Hold, witness/fence/physical-interlock, mixed-version, and
   supported-network decisions.
 

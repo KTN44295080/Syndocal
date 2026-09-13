@@ -3,7 +3,7 @@
   "source_document": "qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md",
   "authoritative_sections": ["6", "7", "8", "9"],
   "classifications": ["Supported", "Deferred", "External acceptance", "Out of scope"],
-  "expected_status_counts": { "Open": 38, "Deferred": 8, "Complete": 12 },
+  "expected_status_counts": { "Open": 37, "Deferred": 8, "Complete": 13 },
   "expected_section_counts": { "6": 37, "7": 6, "8": 9, "9": 6 },
   "items": [
     {
@@ -178,13 +178,13 @@
     },
     {
       "id": "SHOWCLOCK-DECISIONS-001",
-      "source": { "section": "6", "kind": "Open" },
+      "source": { "section": "6", "kind": "Complete" },
       "classification": "Supported",
       "owner": "ShowClock architecture owner",
       "dependency": "F2 local ownership boundary and the master decision log",
-      "nonclaim": "Does not claim transport, fencing, master-clock, or network decisions are frozen.",
-      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md"],
-      "status": "Open"
+      "nonclaim": "Does not claim native UI interaction, physical output, real two-machine partition/rejoin or restart rehearsal, replay restoration, witness/interlock, automatic failover, venue behavior, signing, publication, or product completion.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md", "qa/SHOWCLOCK_DECISIONS_CHECKPOINT_2026-09-13.md", "qa/SHOWCLOCK_RUNTIME_LAN_REVALIDATION_2026-09-12.md"],
+      "status": "Complete"
     },
     {
       "id": "VIDEO-FULL-GATE-001",
