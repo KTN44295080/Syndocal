@@ -3,7 +3,7 @@
   "source_document": "qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md",
   "authoritative_sections": ["6", "7", "8", "9"],
   "classifications": ["Supported", "Deferred", "External acceptance", "Out of scope"],
-  "expected_status_counts": { "Open": 39, "Deferred": 8, "Complete": 11 },
+  "expected_status_counts": { "Open": 38, "Deferred": 8, "Complete": 12 },
   "expected_section_counts": { "6": 37, "7": 6, "8": 9, "9": 6 },
   "items": [
     {
@@ -118,13 +118,13 @@
     },
     {
       "id": "AI5-SIDECAR-001",
-      "source": { "section": "6", "kind": "Open" },
+      "source": { "section": "6", "kind": "Complete" },
       "classification": "Supported",
       "owner": "AI sidecar owner",
       "dependency": "AI0-AI4 coverage, schemas, bridge, and consent policy",
-      "nonclaim": "Does not claim an authenticated external sidecar or MCP service is available.",
-      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/SYNDOCAL_AI_CONTROL_PLANE_ROADMAP.md"],
-      "status": "Open"
+      "nonclaim": "Closes the supported current-source sidecar software boundary only; does not claim a real external client, clean install, active-show crash/restart acceptance, physical output, public LAN exposure, venue operation, or AI8 security sign-off.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/SYNDOCAL_AI_CONTROL_PLANE_ROADMAP.md", "app/scripts/check-ai5-sidecar.mjs", "qa/AI5_SIDECAR_CHECKPOINT_2026-09-13.md"],
+      "status": "Complete"
     },
     {
       "id": "AI6-ADMIN-UI-001",

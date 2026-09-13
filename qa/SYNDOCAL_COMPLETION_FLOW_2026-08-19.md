@@ -1694,7 +1694,7 @@ Exit: all five AI3 roadmap categories accepted. Do not begin AI4 before this exi
 - [x] AI4 principals, pairing, grants, revocation, kill switch, exact reviewed <!-- completion-ledger: Complete: AI4-CONSENT-001 -->
   local/native consent policies, and release-build bypass absence. This does not
   restore the retired Raw Input/six-digit/Enter challenge.
-- [ ] AI5 authenticated localhost sidecar, MCP, JSON-RPC/REST, WebSocket, discovery, <!-- completion-ledger: Open: AI5-SIDECAR-001 -->
+- [x] AI5 authenticated localhost sidecar, MCP, JSON-RPC/REST, WebSocket, discovery, <!-- completion-ledger: Complete: AI5-SIDECAR-001 -->
   bounded queues, process lifecycle, and no cached authority replay.
 - [x] AI6 administration UI for principals/grants/revocation/audit/health. <!-- completion-ledger: Complete: AI6-ADMIN-UI-001 -->
 - [x] AI7 adversarial parity/security/rate/reply-loss/fuzz/saturation proof across <!-- completion-ledger: Complete: AI7-ADVERSARIAL-PROOF-001 -->
