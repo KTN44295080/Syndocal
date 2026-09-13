@@ -333,7 +333,7 @@
       "owner": "Control workspace owner",
       "dependency": "H1/H2 shell plus live ownership, recording, and diagnostics",
       "nonclaim": "Does not claim Control live workflows, recovery, or native proof are complete.",
-      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md"],
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md", "qa/CONTROL_BOTH_CHECKPOINT_2026-09-14.md"],
       "status": "Open"
     },
     {

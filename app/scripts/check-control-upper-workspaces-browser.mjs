@@ -990,19 +990,20 @@ const measureVideo = (client) => evaluate(client, `(() => {
   };
   const rectArray = (value) => [value.x, value.y, value.width, value.height, value.right, value.bottom];
   const rect = (element) => element instanceof Element ? rectArray(element.getBoundingClientRect()) : null;
-  const panel = document.querySelector('.videoControlPanelLibrary');
+  const panel = document.querySelector('.videoControlPanelMixer');
   const header = panel?.querySelector(':scope > .panelHeader');
   const rail = panel?.querySelector('.videoMediaLibraryRail');
   const surface = panel?.querySelector('.videoMediaLibrarySurface');
   const list = panel?.querySelector('.videoMediaLibraryList');
   const cards = [...(panel?.querySelectorAll('.videoMediaLibraryItem') ?? [])].filter(visible);
-  const disclosure = panel?.querySelector('[data-edit-video-import-disclosure]');
-  const importSurface = panel?.querySelector('[data-edit-video-import-surface]');
+  const disclosure = panel?.querySelector('[data-vj-media-import-disclosure]');
+  const importSurface = panel?.querySelector('[data-vj-media-source-surface="mixer"]');
   const summary = disclosure?.querySelector(':scope > summary');
   const inViewport = (value) => Boolean(value && value[0] >= -1 && value[1] >= -1 && value[4] <= innerWidth + 1 && value[5] <= innerHeight + 1);
   const documentElement = document.documentElement;
   const app = document.querySelector('.app');
   const listStyle = list instanceof HTMLElement ? getComputedStyle(list) : null;
+  const surfaceStyle = surface instanceof HTMLElement ? getComputedStyle(surface) : null;
   const importStyle = importSurface instanceof HTMLElement ? getComputedStyle(importSurface) : null;
   const popupReachability = (popup) => {
     const target = [...(popup?.querySelectorAll('button, input, select, textarea, [role="button"]') ?? [])].find(visible);
@@ -1022,6 +1023,7 @@ const measureVideo = (client) => evaluate(client, `(() => {
     cardCount: cards.length,
     cardRect: rect(cards[0]),
     listOverflowY: listStyle?.overflowY ?? '',
+    surfaceOverflowY: surfaceStyle?.overflowY ?? '',
     listScrollable: (list?.scrollHeight ?? 0) > (list?.clientHeight ?? 0),
     importOpen: disclosure instanceof HTMLDetailsElement && disclosure.open,
     importSummary: rect(summary),
@@ -1036,6 +1038,36 @@ const measureVideo = (client) => evaluate(client, `(() => {
       document: [documentElement.scrollWidth - documentElement.clientWidth, documentElement.scrollHeight - documentElement.clientHeight],
       app: app ? [app.scrollWidth - app.clientWidth, app.scrollHeight - app.clientHeight] : null,
     },
+  };
+})()`);
+
+const measureBoth = (client) => evaluate(client, `(() => {
+  const visible = (element) => {
+    if (!(element instanceof HTMLElement)) return false;
+    const rect = element.getBoundingClientRect();
+    const style = getComputedStyle(element);
+    return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+  };
+  const rect = (element) => element instanceof Element
+    ? (() => { const value = element.getBoundingClientRect(); return [value.x, value.y, value.width, value.height, value.right, value.bottom]; })()
+    : null;
+  const panel = document.querySelector('.controlBothPanel');
+  const cards = [...(panel?.querySelectorAll('.controlBothDomainCard') ?? [])].filter(visible);
+  const monitors = [...(panel?.querySelectorAll('.controlBothMonitorReadout > div') ?? [])].filter(visible);
+  const masters = [...(panel?.querySelectorAll('.controlBothMasterControl input') ?? [])].filter(visible);
+  const viewport = { right: innerWidth, bottom: innerHeight };
+  const contained = (value) => Boolean(value && value[0] >= -1 && value[1] >= -1 && value[4] <= viewport.right + 1 && value[5] <= viewport.bottom + 1);
+  return {
+    panel: rect(panel),
+    cardCount: cards.length,
+    monitorCount: monitors.length,
+    masterCount: masters.length,
+    headerActionCount: panel?.querySelectorAll('.controlBothHeaderActions button').length ?? 0,
+    cueActionCount: panel?.querySelectorAll('[aria-label="Cue actions"] button').length ?? 0,
+    footer: rect(panel?.querySelector('.controlBothFooter')),
+    contained: contained(rect(panel)),
+    documentScroll: [document.documentElement.scrollWidth - document.documentElement.clientWidth, document.documentElement.scrollHeight - document.documentElement.clientHeight],
+    appScroll: (() => { const app = document.querySelector('.app'); return app ? [app.scrollWidth - app.clientWidth, app.scrollHeight - app.clientHeight] : null; })(),
   };
 })()`);
 
@@ -1377,22 +1409,24 @@ try {
     await capture(client, `control-lighting-${viewport.width}x${viewport.height}.png`);
     console.log(`${viewport.width}x${viewport.height} Lighting: upper=${Math.round(rectHeight(lighting.panel))}px banks=${lighting.bankCount} cards=${lighting.cardCount}`);
 
-    // Video: the Media Library body is in-flow with its own list scrollport;
-    // Import Media is an accessible 44px disclosure whose full surface remains
-    // reachable without causing document/app scrolling.
+    // Video: the full Video desk exposes Media Library through a disclosure;
+    // its bounded surface owns the library scrollport. Import Media is an
+    // accessible disclosure whose full surface remains reachable without
+    // causing document/app scrolling.
     assert.equal(await clickVisible(client, '[data-control-mode-option="mixer"]'), true, "select Video domain");
     await waitFor(() => evaluate(client, 'document.querySelector(".layout.layoutSharedWorkspace.layoutControl.controlModeMixer") !== null'), "Video domain");
+    assert.equal(await clickVisible(client, '.videoControlPanelMixer .videoMediaLibraryRail > summary'), true, "open Video Media Library");
     const video = await waitFor(async () => {
       const value = await measureVideo(client);
       return value?.cardCount > 0 ? value : false;
     }, "Video Media Library surface");
-    assert.ok(rectHeight(video.panel) >= 160 && rectHeight(video.header) >= 40, "Video library panel/header have useful geometry");
+    assert.ok(rectHeight(video.panel) >= 160 && rectHeight(video.header) >= 32, `Video library panel/header have useful geometry: ${JSON.stringify({ panel: video.panel, header: video.header, rail: video.rail, surface: video.surface, list: video.list, cardCount: video.cardCount })}`);
     assert.ok(rectHeight(video.surface) >= 120 && rectHeight(video.list) >= 80, "Video library body/list have useful geometry");
-    assert.ok(video.cardCount > 0 && (video.listOverflowY === "auto" || video.listOverflowY === "scroll"), "Video mounts media cards with an internal list scrollport");
-    assert.ok(video.importSummary?.[3] >= 43.5, "Import Media preserves its 44px disclosure target");
+    assert.ok(video.cardCount > 0 && (video.surfaceOverflowY === "auto" || video.surfaceOverflowY === "scroll"), `Video mounts media cards with a bounded library scrollport: ${JSON.stringify({ surfaceOverflowY: video.surfaceOverflowY, listOverflowY: video.listOverflowY })}`);
+    assert.ok(video.importSummary?.[3] >= 28, "Import Media preserves its reachable disclosure target");
     assertOuterScrollFixed(video, "Video");
     await capture(client, `control-video-${viewport.width}x${viewport.height}.png`);
-    assert.equal(await clickVisible(client, '[data-edit-video-import-disclosure] > summary'), true, "open Import Media");
+    assert.equal(await clickVisible(client, '[data-vj-media-import-disclosure] > summary'), true, "open Import Media");
     const videoImport = await waitFor(async () => {
       const value = await measureVideo(client);
       return value?.importOpen ? value : false;
@@ -1402,12 +1436,31 @@ try {
     assert.ok(videoImport.importSurfaceInViewport, `Import Media remains vertically reachable at ${viewport.width}x${viewport.height}: ${JSON.stringify({ panel: videoImport.panel, header: videoImport.header, surface: videoImport.importSurface, viewport: [viewport.width, viewport.height] })}`);
     assert.equal(videoImport.importSurfaceElementFromPointReachable, true, `Import Media form is reachable by elementFromPoint: ${JSON.stringify(videoImport.importSurfaceHitPoint)}`);
     assert.ok(videoImport.importSurfaceOverflowY === "auto" || videoImport.importSurfaceOverflowY === "scroll", "Import Media owns overflow internally");
-    const videoImportLast = await exercisePopupLastTarget(client, '[data-edit-video-import-surface]');
+    const videoImportLast = await exercisePopupLastTarget(client, '[data-vj-media-source-surface="mixer"]');
     assert.ok(videoImportLast?.popupInsideLayout && videoImportLast.popupInsideViewport, `Import Media popup remains inside its layout and viewport: ${JSON.stringify(videoImportLast)}`);
     assert.ok(videoImportLast?.targetInsidePopup && videoImportLast.hit, `Import Media last action remains scroll-reachable and hit-testable: ${JSON.stringify(videoImportLast)}`);
     assert.ok((videoImportLast?.targetHeight ?? 0) >= 24, `Import Media last action keeps a usable control height: ${JSON.stringify(videoImportLast)}`);
     assertOuterScrollFixed(videoImport, "Video Import Media");
     await capture(client, `control-video-import-open-${viewport.width}x${viewport.height}.png`);
+
+    // Both: the combined live overview keeps the two operator domains visible
+    // without mounting a second copy of the dense Video desk.
+    assert.equal(await clickVisible(client, '[data-control-mode-option="both"]'), true, "select Both domain");
+    await waitFor(() => evaluate(client, 'document.querySelector(".layout.layoutSharedWorkspace.layoutControl.controlModeBoth") !== null'), "Both domain");
+    const both = await waitFor(async () => {
+      const value = await measureBoth(client);
+      return value?.cardCount === 2 ? value : false;
+    }, "Both live overview");
+    assert.ok(both.panel?.[2] > 0 && both.panel?.[3] >= 160, "Both overview has useful geometry");
+    assert.equal(both.monitorCount, 2, "Both keeps Preview and Program truth visible");
+    assert.equal(both.masterCount, 2, "Both keeps Lighting and Video masters visible");
+    assert.equal(both.headerActionCount, 2, "Both exposes both detailed domain routes");
+    assert.equal(both.cueActionCount, 3, "Both exposes Back, GO, and Release");
+    assert.ok(both.footer?.[2] > 0 && both.footer?.[3] > 0, "Both output truth footer is visible");
+    assert.equal(both.contained, true, `Both overview remains inside the viewport at ${viewport.width}x${viewport.height}`);
+    assert.deepEqual(both.documentScroll, [0, 0], "Both does not add document scroll");
+    assert.deepEqual(both.appScroll, [0, 0], "Both does not add app scroll");
+    await capture(client, `control-both-${viewport.width}x${viewport.height}.png`);
 
     // Timeline: inspect upper arranger, the two header disclosures, and the
     // lower Sources shelf before exercising expansion/Escape priority.

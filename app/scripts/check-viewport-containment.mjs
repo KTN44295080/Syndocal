@@ -243,8 +243,9 @@ const setupTabs = [
 ];
 const controlTabs = [
   { id: "edit", label: "Lighting" },
-  { id: "live", label: "Timeline" },
   { id: "mixer", label: "Video" },
+  { id: "both", label: "Both" },
+  { id: "live", label: "Timeline" },
 ];
 
 const selectControlSurface = async (client, modeId) => {
@@ -3628,10 +3629,10 @@ async function runTimelinePaneExpansionCheck(client, viewport) {
     normalDensity.visibleChromeEditDomainNavigationCount === 1 &&
     normalDensity.editDomainNavigationDirectlyAfterTopbar &&
     normalDensity.oldLowerControlModeNavigationCount === 0 &&
-    JSON.stringify(normalDensity.editDomainModeIds) === JSON.stringify(['edit', 'mixer', 'live']) &&
-    JSON.stringify(normalDensity.editDomainModeLabels) === JSON.stringify(['Lighting', 'Video', 'Timeline']) &&
-    normalDensity.editDomainButtonCount === 3 &&
-    normalDensity.editDomainButtonWidths.length === 3 &&
+    JSON.stringify(normalDensity.editDomainModeIds) === JSON.stringify(['edit', 'mixer', 'both', 'live']) &&
+    JSON.stringify(normalDensity.editDomainModeLabels) === JSON.stringify(['Lighting', 'Video', 'Both', 'Timeline']) &&
+    normalDensity.editDomainButtonCount === 4 &&
+    normalDensity.editDomainButtonWidths.length === 4 &&
     normalDensity.editDomainButtonWidths.every((width) => width > 0)
   );
   const splitterAriaMatchesRendered = (state) => Boolean(
@@ -11479,6 +11480,10 @@ async function measure(client, label) {
         };
       })(),
       visibleVideoControlPanelCount: visibleCount('.videoControlPanel'),
+      visibleControlBothPanelCount: visibleCount('.controlBothPanel'),
+      visibleControlBothDomainCardCount: visibleCount('.controlBothDomainCard'),
+      visibleControlBothMonitorCount: visibleCount('.controlBothMonitorReadout > div'),
+      visibleControlBothMasterInputCount: visibleCount('.controlBothMasterControl input'),
       visibleVideoMixerTopPaneCount: visibleCount('.videoMixerTopPane'),
       visibleVideoMixerContextPaneCount: visibleCount('.videoMixerContextPane'),
       visibleVideoMixerGridDividerCount: visibleCount('.videoMixerGridDivider'),
@@ -12230,6 +12235,7 @@ function expectsPersistentWorkspaceBand(result) {
     result.label.startsWith("control-edit-") ||
     result.label.startsWith("control-live-") ||
     result.label.startsWith("control-mixer-") ||
+    result.label.startsWith("control-both-") ||
     result.label.startsWith("touch-") ||
     result.label.startsWith("mapping-") ||
     result.label.startsWith("interface-scale-") ||
@@ -12311,6 +12317,7 @@ function hasExpectedControlStageChrome(result) {
   if (
     !result.label.startsWith("control-edit-") &&
     !result.label.startsWith("control-live-scene-settings-") &&
+    !result.label.startsWith("control-both-") &&
     !result.label.startsWith("touch-")
   ) {
     return true;
@@ -12348,19 +12355,20 @@ function hasExpectedControlModeSurface(result) {
     return true;
   }
   const mixerSurface = result.label.startsWith("control-mixer-");
+  const bothSurface = result.label.startsWith("control-both-");
   const lightingSurface =
     result.label.startsWith("control-edit-") ||
     result.label.startsWith("control-live-scene-settings-");
   const timelineSurface = result.label.startsWith("control-live-") && !lightingSurface;
-  if (result.controlModeTabCount !== 3) {
+  if (result.controlModeTabCount !== 4) {
     return false;
   }
   if (
-    result.controlModeSemanticTabCount !== 3 ||
-    result.controlModeSemanticTabWidths.length !== 3 ||
+    result.controlModeSemanticTabCount !== 4 ||
+    result.controlModeSemanticTabWidths.length !== 4 ||
     result.controlModeSemanticTabWidths.some((width) => width <= 0) ||
-    JSON.stringify(result.controlModeSemanticTabIds) !== JSON.stringify(['edit', 'mixer', 'live']) ||
-    JSON.stringify(result.controlModeSemanticTabLabels) !== JSON.stringify(['Lighting', 'Video', 'Timeline']) ||
+    JSON.stringify(result.controlModeSemanticTabIds) !== JSON.stringify(['edit', 'mixer', 'both', 'live']) ||
+    JSON.stringify(result.controlModeSemanticTabLabels) !== JSON.stringify(['Lighting', 'Video', 'Both', 'Timeline']) ||
     result.editDomainNavigationCount !== 1 ||
     result.oldLowerControlModeNavigationCount !== 0 ||
     !result.editDomainNavigationDirectlyAfterTopbar ||
@@ -12368,7 +12376,7 @@ function hasExpectedControlModeSurface(result) {
   ) {
     return false;
   }
-  // Lighting / Video / Timeline are the three canonical top-level domains.
+  // Lighting / Video / Both / Timeline are the canonical top-level domains.
   // The retired nested Lighting/Timeline switch must not reappear in a lower
   // pane or create a second route to the same surface.
   if (
@@ -12378,6 +12386,29 @@ function hasExpectedControlModeSurface(result) {
     result.lightingContextTabs.active !== "" ||
     result.lightingContextTabs.insideLowerRight ||
     result.lightingContextTabs.rect !== null
+  ) {
+    return false;
+  }
+  if (
+    bothSurface &&
+    (
+      result.controlSharedHeaderRowCount !== 1 ||
+      result.controlSharedHeaderHeight <= 0 ||
+      result.controlSharedHeaderHeight > 64 ||
+      result.visibleControlBothPanelCount !== 1 ||
+      result.visibleControlBothDomainCardCount !== 2 ||
+      result.visibleControlBothMonitorCount !== 2 ||
+      result.visibleControlBothMasterInputCount !== 2 ||
+      result.visibleEditDomainUpperPanelCount !== 0 ||
+      result.visibleLiveControlPanelCount !== 0 ||
+      result.visibleVideoControlPanelCount !== 0 ||
+      !hasExpectedPersistentWorkspaceBand(result) ||
+      result.visibleControlStageSelectionListCount !== 1 ||
+      !hasExpectedControlStageChrome(result) ||
+      result.visibleControlStagePanelCount !== 0 ||
+      result.visibleControlStageCount !== 0 ||
+      result.controlWorkSurfaceUnsafeOverflowCount !== 0
+    )
   ) {
     return false;
   }
@@ -12796,8 +12827,8 @@ function hasExpectedControlModeSurface(result) {
 }
 
 function editDomainNavigationPlacementIsStable(results) {
-  const primaryModes = results.filter((result) => /^control-(edit|live|mixer)-\d+x\d+$/.test(result.label));
-  if (primaryModes.length !== 3) return false;
+  const primaryModes = results.filter((result) => /^control-(edit|live|mixer|both)-\d+x\d+$/.test(result.label));
+  if (primaryModes.length !== 4) return false;
   const [reference, ...rest] = primaryModes.map((result) => result.editDomainNavigationRect);
   if (!reference || rest.some((rect) => !rect)) return false;
   return rest.every((rect) => ['x', 'y', 'width', 'height']
@@ -30944,7 +30975,7 @@ async function runEditIaVideoViewport(client, viewport) {
     };
   })()`);
   const checks = {
-    exactDomainTablist: navigation.tablist && JSON.stringify(navigation.ids) === JSON.stringify(['edit', 'mixer', 'live']) && navigation.selectedCount === 1 && navigation.association,
+    exactDomainTablist: navigation.tablist && JSON.stringify(navigation.ids) === JSON.stringify(['edit', 'mixer', 'both', 'live']) && navigation.selectedCount === 1 && navigation.association,
     domainKeyboardRoving: keyboardLighting && keyboardVideo,
     mediaLibraryFullControlReachable: layout.libraryVisible && layout.upperHasMinimumHeight,
     mediaLibraryOwnsUsableClipPane: layout.libraryHasUsableClipPane,

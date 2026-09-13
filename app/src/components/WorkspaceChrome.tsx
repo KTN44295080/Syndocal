@@ -772,7 +772,7 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
           <For each={editDomainModes}>
             {(mode) => {
               const active = () => props.controlMode === mode.id;
-              const shortcut = mode.id === "edit" ? "E" : mode.id === "mixer" ? "M" : "L";
+              const shortcut = mode.id === "edit" ? "E" : mode.id === "mixer" ? "M" : mode.id === "live" ? "L" : undefined;
               return (
                 <button
                   class={active() ? "active" : ""}

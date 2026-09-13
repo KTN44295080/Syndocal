@@ -1,7 +1,7 @@
 export type WorkspaceTab = "setup" | "control" | "touch";
 export type SetupArea = "lighting" | "video" | "mapping" | "io" | "security";
 export type SetupSubTab = "patch" | "video" | "mapping" | "io" | "authority";
-export type ControlMode = "edit" | "live" | "mixer";
+export type ControlMode = "edit" | "live" | "mixer" | "both";
 export type ControlCategory = "dimmer" | "color" | "position" | "gobo" | "beam" | "focus" | "other" | "fader";
 export type TimelineDeskSurface = "show" | "automation" | "playback";
 export type TimelineContextDrawer = "none" | "cue" | "block";
@@ -38,6 +38,7 @@ export const controlModes: { id: ControlMode; label: string; description: string
   { id: "edit", label: "Lighting", description: "Lighting editing, fixture attributes, visual controls, and presets" },
   { id: "live", label: "Timeline", description: "Cue playback, timeline, and blackout controls" },
   { id: "mixer", label: "Video", description: "Media Library preparation, verification, preview, and clip properties" },
+  { id: "both", label: "Both", description: "Combined Lighting and Video live control overview" },
 ];
 
 export const controlModeLabel = (mode: ControlMode): string =>
@@ -51,6 +52,7 @@ export const setupSubTabLabel = (tab: SetupSubTab): string =>
 export const editDomainModes = [
   controlModes.find((mode) => mode.id === "edit")!,
   controlModes.find((mode) => mode.id === "mixer")!,
+  controlModes.find((mode) => mode.id === "both")!,
   controlModes.find((mode) => mode.id === "live")!,
 ];
 

@@ -115,6 +115,7 @@ import {
 import { StagePreview2D } from "./components/StagePreview2D";
 import { EditVideoInspector } from "./components/EditVideoInspector";
 import { VideoControlPanel } from "./components/VideoControlPanel";
+import { ControlBothPanel } from "./components/ControlBothPanel";
 import { VideoClipSlotInspectorPanel } from "./components/VideoClipSlotInspectorPanel";
 import { defaultAutoVjSnapshot } from "./components/AutoVjStrip";
 import { readVideoOutputTestPattern, readVideoOutputWindowId, VideoOutputWindow } from "./components/VideoOutputWindow";
@@ -9766,6 +9767,7 @@ export default function App() {
     snapshotCues().reduce((count, cue) => count + cue.effect_targets.length, 0));
   const faderDeskTitle = createMemo(() => {
     if (controlMode() === "edit") return editDeskSurface() === "faders" ? "Faders" : "Attributes";
+    if (controlMode() === "both") return "Both";
     if (controlMode() !== "live") return "Faders";
     switch (timelineDeskSurface()) {
       case "automation": return "Automation";
@@ -20880,7 +20882,7 @@ export default function App() {
     });
   };
   createEffect(() => {
-    const active = workspaceTab() === "control" && controlMode() === "mixer";
+    const active = workspaceTab() === "control" && (controlMode() === "mixer" || controlMode() === "both");
     if (!isTauriRuntime()) {
       applyVjPreviewTransport(emptyVjPreviewTransport());
       return;
@@ -20893,7 +20895,7 @@ export default function App() {
   const liveVideoMonitors = createLiveVideoMonitorController({
     invoke,
     backendAvailable: () => isTauriRuntime(),
-    active: () => workspaceTab() === "control" && controlMode() === "mixer",
+    active: () => workspaceTab() === "control" && (controlMode() === "mixer" || controlMode() === "both"),
     layerCount: () => snapshot().video.layers.length,
     previewLayerId: videoPreviewLayerId,
     programOutputId: selectedVideoOutputId,
@@ -26464,6 +26466,9 @@ export default function App() {
         <Show when={workspaceTab() === "control" && controlMode() !== "live"}>
           <section id="edit-domain-panel-live" role="tabpanel" aria-labelledby="edit-domain-tab-live" hidden />
         </Show>
+        <Show when={workspaceTab() === "control" && controlMode() !== "both"}>
+          <section id="edit-domain-panel-both" role="tabpanel" aria-labelledby="edit-domain-tab-both" hidden />
+        </Show>
         <Show when={workspaceTab() === "control" && controlMode() === "edit"}>
           <section
             id="edit-domain-panel-edit"
@@ -26519,6 +26524,44 @@ export default function App() {
               {renderLightingStatusInspector()}
             </Show>
           </section>
+        </Show>
+        <Show when={workspaceTab() === "control" && controlMode() === "both"}>
+          <ControlBothPanel
+            activeCueId={snapshot().active_cue_id ?? null}
+            activeCueLabel={activeCue()?.label ?? "None"}
+            nextCueLabel={nextCue()?.label ?? "No cue"}
+            cueCount={snapshot().cues.length}
+            timelinePlaying={snapshot().timeline.playing}
+            timecode={formatShowTimecode(snapshot().timeline.position_ms)}
+            lightingMaster={snapshot().lighting_master}
+            videoMaster={snapshot().video.master_opacity}
+            blackout={snapshot().authored_blackout}
+            videoBlackout={snapshot().video.blackout}
+            enabledDmxOutputCount={enabledDmxOutputCount()}
+            dmxOutputCount={snapshot().dmx_outputs.length}
+            enabledVideoOutputCount={enabledVideoOutputCount()}
+            videoOutputCount={snapshot().video.outputs.length}
+            previewLabel={liveVideoPreviewLabel()}
+            previewStatus={liveVideoMonitors.preview().status}
+            programLabel={liveVideoProgramLabel()}
+            programStatus={liveVideoMonitors.program().status}
+            clipCount={snapshot().video.layers.length}
+            selectedClipLabel={selectedVideoClipSlotLayer()?.label ?? null}
+            recordingLabel={videoRecordingStatus().active ? "Recording" : videoRecordingStatus().state ?? "Idle"}
+            onOpenLighting={() => selectControlMode("edit")}
+            onOpenVideo={() => selectControlMode("mixer")}
+            onBack={() => void triggerPreviousCue()}
+            onGo={() => void triggerNextCue()}
+            onRelease={() => {
+              const cueId = snapshot().active_cue_id;
+              if (cueId !== null && cueId !== undefined) void releaseCueById(cueId);
+            }}
+            onSetLightingMaster={setLightingMaster}
+            onSetVideoMaster={setVideoMasterOpacity}
+            onSetBlackout={(enabled) => void setBlackout(enabled)}
+            onSetVideoBlackout={(enabled) => void setVideoBlackout(enabled)}
+            onSetAllBlackout={(enabled) => void setAllBlackout(enabled)}
+          />
         </Show>
         <Show when={workspaceTab() === "control" && controlMode() === "live"}>
         <section

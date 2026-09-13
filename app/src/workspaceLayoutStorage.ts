@@ -40,7 +40,7 @@ const allowedSetupSubTabs: SetupSubTab[] = [
   "video",
   "io",
 ];
-const allowedControlModes: ControlMode[] = ["edit", "live", "mixer"];
+const allowedControlModes: ControlMode[] = ["edit", "live", "mixer", "both"];
 const allowedTimelineDeskSurfaces: TimelineDeskSurface[] = ["show", "automation", "playback"];
 // Block properties are tied to the current selection, so reopening that drawer
 // from a previous process would restore stale editing context. Only stable

@@ -2386,6 +2386,180 @@ h3 {
   grid-column: 1 / -1;
 }
 
+.layoutControl.controlModeBoth {
+  grid-template-columns: minmax(760px, 1fr);
+}
+
+.layoutControl.controlModeBoth .controlBothPanel {
+  grid-column: 1 / -1;
+  order: 0;
+}
+
+.controlBothPanel {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.controlBothHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.controlBothHeader > div:first-child,
+.controlBothCardHeader > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.controlBothHeaderActions,
+.controlBothActionRow {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.controlBothGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px;
+}
+
+.controlBothDomainCard {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid #3d4a57;
+  border-radius: 8px;
+  background: rgba(15, 22, 29, 0.72);
+}
+
+.controlBothCardHeader,
+.controlBothMonitorReadout,
+.controlBothCueReadout,
+.controlBothVideoTruth,
+.controlBothFooter {
+  display: grid;
+  gap: 8px;
+}
+
+.controlBothCardHeader {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+}
+
+.controlBothTransportState,
+.controlBothMonitorReadout span,
+.controlBothVideoTruth span,
+.controlBothFooter {
+  color: var(--muted, #a5adb5);
+  font-size: 0.75rem;
+  letter-spacing: 0.04em;
+}
+
+.controlBothCueReadout {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin: 0;
+}
+
+.controlBothCueReadout > div,
+.controlBothVideoTruth > div,
+.controlBothMonitorReadout > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.controlBothCueReadout dt,
+.controlBothVideoTruth span,
+.controlBothMonitorReadout span {
+  color: var(--muted, #a5adb5);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+}
+
+.controlBothCueReadout dd {
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.controlBothMasterControl {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px 10px;
+}
+
+.controlBothMasterControl input {
+  grid-column: 1 / -1;
+  width: 100%;
+}
+
+.controlBothMonitorReadout {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.controlBothMonitorReadout > div,
+.controlBothVideoTruth > div {
+  padding: 8px;
+  border: 1px solid #35404b;
+  border-radius: 6px;
+  background: #111920;
+}
+
+.controlBothMonitorReadout strong,
+.controlBothVideoTruth strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.controlBothMonitorReadout small {
+  color: var(--muted, #a5adb5);
+}
+
+.controlBothVideoTruth {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.controlBothOutputTruth {
+  align-self: center;
+  margin-left: auto;
+  color: var(--muted, #a5adb5);
+  font-size: 0.8rem;
+}
+
+.controlBothFooter {
+  grid-template-columns: repeat(3, auto);
+  justify-content: start;
+  align-items: center;
+  min-height: 34px;
+  padding: 6px 12px;
+  border-top: 1px solid #3d4a57;
+}
+
+@media (max-width: 900px) {
+  .controlBothGrid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .controlBothVideoTruth {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 .layoutControl.controlModeLive {
   grid-template-columns: minmax(760px, 1fr);
 }
