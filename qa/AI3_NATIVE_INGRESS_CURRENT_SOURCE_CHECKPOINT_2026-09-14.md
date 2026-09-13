@@ -21,13 +21,24 @@ against the current source:
 These checks show that current source routes mutations through the inventoried
 admission/ownership/safety seams and rejects the checked negative fixtures.
 
+## Current-host physical MIDI slice — 2026-09-14
+
+The current-host SMC-Mixer slice recorded in
+`qa/INPUT_PHYSICAL_CURRENT_SOURCE_CHECKPOINT_2026-09-14.md` opened the
+production `midir` input `SMC-Mixer` (index 1) and output `SMC-Mixer` (index 2)
+and sent one safe channel-1 All Notes Off message (`B0 7B 00`). The ignored
+release test passed `1/1` with zero failures or ignored tests. This is partial
+native MIDI transport/feedback evidence for AI3; it is not controller
+movement, Clock/MTC, latency, reconnect, OSC/Remote, DMX, Art-Net, or
+end-to-end native ingress acceptance.
+
 ## Acceptance boundary
 
-`AI3-NATIVE-INGRESS-001` remains `Open`. No native MIDI/OSC/DMX/Remote client,
-real Art-Net node, fixture, or other physical ingress was connected or driven
-in this checkpoint. Static inventory is not physical ingress acceptance, and
-the checks do not prove controller movement, feedback, reconnect, latency, or
-venue behavior.
+`AI3-NATIVE-INGRESS-001` remains `Open`. Apart from the bounded SMC-Mixer MIDI
+slice above, no native OSC/DMX/Remote client, real Art-Net node, fixture, or
+other physical ingress was connected or driven in this checkpoint. Static
+inventory and one safe MIDI feedback message do not prove controller movement,
+Clock/MTC, reconnect, latency, complete feedback, or venue behavior.
 
 ## Resume procedure
 
