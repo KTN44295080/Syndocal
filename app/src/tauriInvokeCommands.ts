@@ -450,6 +450,7 @@ export const FRONTEND_TAURI_INVOKE_COMMANDS = [
   "take_over_output_control_v2",
   "take_over_standby",
   "take_video_clip",
+  "take_video_clip_output_control_v2",
   "tap_bpm",
   "trigger_cue",
   "trigger_cue_list_next",

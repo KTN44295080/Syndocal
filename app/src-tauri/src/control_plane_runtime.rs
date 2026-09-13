@@ -1304,6 +1304,18 @@ where
             &lease_request,
             lease_now_ms,
         ),
+        OutputControlActionV2::TakeVideoClip {
+            layer_id,
+            fade_ms,
+            ..
+        } => super::take_video_clip_with_output_control_fence(
+            state,
+            *layer_id,
+            *fade_ms,
+            &request.expected_fence,
+            &lease_request,
+            lease_now_ms,
+        ),
         OutputControlActionV2::AcquireLease { .. }
         | OutputControlActionV2::RenewLease { .. }
         | OutputControlActionV2::RecoverLease { .. }
@@ -1597,6 +1609,12 @@ fn validate_output_action_current(
         | OutputControlActionV2::SetLightingMaster { .. }
         | OutputControlActionV2::SetGroupSubmaster { .. }
         | OutputControlActionV2::SetVideoMaster { .. } => Ok(()),
+        OutputControlActionV2::TakeVideoClip { layer_id, .. } => {
+            if state.engine.video_layer_state_snapshot(*layer_id).is_none() {
+                return Err(format!("Video layer {layer_id} was not found"));
+            }
+            Ok(())
+        }
         OutputControlActionV2::AddDisplay { spec, .. } => {
             let outputs = state.engine.video_outputs_snapshot();
             if outputs.iter().any(|output| {
@@ -2711,7 +2729,8 @@ pub(crate) fn output_control_lease_result_from_registry_receipt(
         | OutputControlActionV2::SetDisplayWindowOpen { .. }
         | OutputControlActionV2::SetLightingMaster { .. }
         | OutputControlActionV2::SetGroupSubmaster { .. }
-        | OutputControlActionV2::SetVideoMaster { .. } => {
+        | OutputControlActionV2::SetVideoMaster { .. }
+        | OutputControlActionV2::TakeVideoClip { .. } => {
             OutputLeaseReceiptOutcomeV2::Authorized
         }
         OutputControlActionV2::AcquireLease { .. } => OutputLeaseReceiptOutcomeV2::Acquired,

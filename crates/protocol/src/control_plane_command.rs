@@ -1920,8 +1920,9 @@ pub const OUTPUT_CONTROL_AUTHORITY_QUERY_OPERATION_ID: &str =
 // probe-scoped durable Pending hold and can never send a packet. v8 cleanly
 // replaces the same-Main Spout enable action and appends its local reset. v9
 // appends the lease-bound lighting master and group-submaster runtime actions.
-// v10 appends the lease-bound Video master runtime action.
-pub const OUTPUT_CONTROL_COMMAND_SCHEMA_VERSION: u16 = 10;
+// v10 appends the lease-bound Video master runtime action. v11 appends the
+// lease-bound Video Take runtime action.
+pub const OUTPUT_CONTROL_COMMAND_SCHEMA_VERSION: u16 = 11;
 pub const OUTPUT_OWNERSHIP_ARM_OPERATION_ID: &str = "syndocal.output.ownership.arm.v2";
 pub const OUTPUT_BLACKOUT_SET_OPERATION_ID: &str = "syndocal.output.blackout.set.v2";
 pub const OUTPUT_BLACKOUT_RELEASE_OPERATION_ID: &str = "syndocal.output.blackout.release.v2";
@@ -1950,6 +1951,8 @@ pub const OUTPUT_GROUP_SUBMASTER_SET_OPERATION_ID: &str =
     "syndocal.output.group.submaster.set.v2";
 pub const OUTPUT_VIDEO_MASTER_SET_OPERATION_ID: &str =
     "syndocal.output.video.master.set.v2";
+pub const OUTPUT_VIDEO_CLIP_TAKE_OPERATION_ID: &str = "syndocal.output.video.clip.take.v2";
+pub const MAX_VIDEO_CLIP_TAKE_FADE_MS: u64 = 600_000;
 /// Normal operator path: one explicit local-renderer enable request. This is
 /// deliberately distinct from the public lease lifecycle.
 pub const OUTPUT_ENABLE_OPERATION_ID: &str = "syndocal.output.enable.v2";
@@ -2365,6 +2368,7 @@ pub enum OutputControlValidationErrorV1 {
     InvalidDisplayOutputSpec,
     InvalidLightingControl,
     InvalidVideoControl,
+    InvalidVideoTake,
 }
 
 impl fmt::Display for OutputControlValidationErrorV1 {
@@ -2382,6 +2386,7 @@ impl fmt::Display for OutputControlValidationErrorV1 {
             Self::InvalidDisplayOutputSpec => "display output specification is invalid",
             Self::InvalidLightingControl => "lighting control value, role, or group ID is invalid",
             Self::InvalidVideoControl => "video control value or role is invalid",
+            Self::InvalidVideoTake => "video Take layer or fade duration is invalid",
         })
     }
 }
@@ -2723,6 +2728,12 @@ pub enum OutputControlActionV2 {
         master_milliunits: u16,
         lease: OutputLeaseAuthorityV1,
     },
+    TakeVideoClip {
+        role: OutputControlTargetRoleV1,
+        layer_id: u64,
+        fade_ms: u64,
+        lease: OutputLeaseAuthorityV1,
+    },
 }
 
 #[derive(Serialize, Deserialize)]
@@ -2813,6 +2824,12 @@ enum OutputControlActionV2Wire {
         master_milliunits: u16,
         lease: OutputLeaseAuthorityV1,
     },
+    TakeVideoClip {
+        role: OutputControlTargetRoleV1,
+        layer_id: u64,
+        fade_ms: u64,
+        lease: OutputLeaseAuthorityV1,
+    },
 }
 
 impl OutputControlActionV2 {
@@ -2853,6 +2870,7 @@ impl OutputControlActionV2 {
             Self::SetLightingMaster { .. } => OUTPUT_LIGHTING_MASTER_SET_OPERATION_ID,
             Self::SetGroupSubmaster { .. } => OUTPUT_GROUP_SUBMASTER_SET_OPERATION_ID,
             Self::SetVideoMaster { .. } => OUTPUT_VIDEO_MASTER_SET_OPERATION_ID,
+            Self::TakeVideoClip { .. } => OUTPUT_VIDEO_CLIP_TAKE_OPERATION_ID,
         }
     }
 
@@ -2950,6 +2968,21 @@ impl OutputControlActionV2 {
                 validate_video_control_role(*role)?;
                 if *master_milliunits > 1_000 {
                     return Err(OutputControlValidationErrorV1::InvalidVideoControl);
+                }
+                lease.validate()?;
+            }
+            Self::TakeVideoClip {
+                role,
+                layer_id,
+                fade_ms,
+                lease,
+            } => {
+                validate_video_control_role(*role)?;
+                if *layer_id == 0
+                    || *layer_id > MAX_SAFE_JAVASCRIPT_INTEGER
+                    || *fade_ms > MAX_VIDEO_CLIP_TAKE_FADE_MS
+                {
+                    return Err(OutputControlValidationErrorV1::InvalidVideoTake);
                 }
                 lease.validate()?;
             }
@@ -3083,6 +3116,17 @@ impl OutputControlActionV2 {
             } => OutputControlActionV2Wire::SetVideoMaster {
                 role: *role,
                 master_milliunits: *master_milliunits,
+                lease: lease.clone(),
+            },
+            Self::TakeVideoClip {
+                role,
+                layer_id,
+                fade_ms,
+                lease,
+            } => OutputControlActionV2Wire::TakeVideoClip {
+                role: *role,
+                layer_id: *layer_id,
+                fade_ms: *fade_ms,
                 lease: lease.clone(),
             },
         }
@@ -3296,6 +3340,25 @@ impl OutputControlActionV2 {
                 output.extend_from_slice(lease.lease_id.as_bytes());
                 append_u64(output, lease.generation);
             }
+            Self::TakeVideoClip {
+                role,
+                layer_id,
+                fade_ms,
+                lease,
+            } => {
+                // 0..=23 are frozen. This runtime-only Video Take action is
+                // append-only, so 24 cannot rewrite an old shape.
+                output.push(24);
+                output.push(match role {
+                    OutputControlTargetRoleV1::Lighting => 0,
+                    OutputControlTargetRoleV1::Video => 1,
+                    OutputControlTargetRoleV1::Both => 2,
+                });
+                append_u64(output, *layer_id);
+                append_u64(output, *fade_ms);
+                output.extend_from_slice(lease.lease_id.as_bytes());
+                append_u64(output, lease.generation);
+            }
         }
         Ok(())
     }
@@ -3417,6 +3480,17 @@ impl<'de> Deserialize<'de> for OutputControlActionV2 {
             } => Self::SetVideoMaster {
                 role,
                 master_milliunits,
+                lease,
+            },
+            OutputControlActionV2Wire::TakeVideoClip {
+                role,
+                layer_id,
+                fade_ms,
+                lease,
+            } => Self::TakeVideoClip {
+                role,
+                layer_id,
+                fade_ms,
                 lease,
             },
         };
@@ -3821,7 +3895,8 @@ impl OutputControlLeaseResultV2 {
             | OUTPUT_STANDBY_TAKEOVER_OPERATION_ID
             | OUTPUT_LIGHTING_MASTER_SET_OPERATION_ID
             | OUTPUT_GROUP_SUBMASTER_SET_OPERATION_ID
-            | OUTPUT_VIDEO_MASTER_SET_OPERATION_ID => OutputLeaseReceiptOutcomeV2::Authorized,
+            | OUTPUT_VIDEO_MASTER_SET_OPERATION_ID
+            | OUTPUT_VIDEO_CLIP_TAKE_OPERATION_ID => OutputLeaseReceiptOutcomeV2::Authorized,
             OUTPUT_LEASE_ACQUIRE_OPERATION_ID => OutputLeaseReceiptOutcomeV2::Acquired,
             OUTPUT_LEASE_RENEW_OPERATION_ID => OutputLeaseReceiptOutcomeV2::Renewed,
             OUTPUT_LEASE_RECOVER_OPERATION_ID => OutputLeaseReceiptOutcomeV2::Recovered,
@@ -4049,6 +4124,7 @@ impl OutputControlReceiptV2 {
                 | OUTPUT_LIGHTING_MASTER_SET_OPERATION_ID
                 | OUTPUT_GROUP_SUBMASTER_SET_OPERATION_ID
                 | OUTPUT_VIDEO_MASTER_SET_OPERATION_ID
+                | OUTPUT_VIDEO_CLIP_TAKE_OPERATION_ID
         ) {
             return Err(OutputControlValidationErrorV1::UnexpectedOperationId);
         }
@@ -4121,6 +4197,7 @@ impl OutputControlReceiptV2 {
                             | OUTPUT_LIGHTING_MASTER_SET_OPERATION_ID
                             | OUTPUT_GROUP_SUBMASTER_SET_OPERATION_ID
                             | OUTPUT_VIDEO_MASTER_SET_OPERATION_ID
+                            | OUTPUT_VIDEO_CLIP_TAKE_OPERATION_ID
                     ) =>
             {
                 Err(OutputControlValidationErrorV1::InvalidReceiptOutcome)
@@ -4145,6 +4222,7 @@ impl OutputControlReceiptV2 {
                             | OUTPUT_LIGHTING_MASTER_SET_OPERATION_ID
                             | OUTPUT_GROUP_SUBMASTER_SET_OPERATION_ID
                             | OUTPUT_VIDEO_MASTER_SET_OPERATION_ID
+                            | OUTPUT_VIDEO_CLIP_TAKE_OPERATION_ID
                     ) =>
             {
                 Err(OutputControlValidationErrorV1::InvalidReceiptOutcome)
@@ -4258,6 +4336,7 @@ impl OutputControlRejectionV2 {
                 | OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_OPERATION_ID
                 | OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_RECONCILE_OPERATION_ID
                 | OUTPUT_ENABLE_OPERATION_ID
+                | OUTPUT_VIDEO_CLIP_TAKE_OPERATION_ID
         ) {
             return Err(OutputControlValidationErrorV1::UnexpectedOperationId);
         }
@@ -6155,6 +6234,26 @@ mod tests {
             .unwrap(),
             video_master
         );
+        let video_take = OutputControlActionV2::TakeVideoClip {
+            role: OutputControlTargetRoleV1::Video,
+            layer_id: 42,
+            fade_ms: 1_500,
+            lease: authority.clone(),
+        };
+        let mut video_take_shape = Vec::new();
+        video_take
+            .append_canonical_bytes(&mut video_take_shape)
+            .unwrap();
+        assert_eq!(video_take_shape.first(), Some(&24));
+        assert_eq!(video_take.operation_id(), OUTPUT_VIDEO_CLIP_TAKE_OPERATION_ID);
+        assert_eq!(serde_json::to_value(&video_take).unwrap()["kind"], "take_video_clip");
+        assert_eq!(
+            serde_json::from_value::<OutputControlActionV2>(
+                serde_json::to_value(&video_take).unwrap()
+            )
+            .unwrap(),
+            video_take
+        );
         for action in [
             OutputControlActionV2::SetLightingMaster {
                 role: OutputControlTargetRoleV1::Video,
@@ -6182,11 +6281,30 @@ mod tests {
                 master_milliunits: 1_001,
                 lease: authority.clone(),
             },
+            OutputControlActionV2::TakeVideoClip {
+                role: OutputControlTargetRoleV1::Lighting,
+                layer_id: 42,
+                fade_ms: 0,
+                lease: authority.clone(),
+            },
+            OutputControlActionV2::TakeVideoClip {
+                role: OutputControlTargetRoleV1::Video,
+                layer_id: 0,
+                fade_ms: 0,
+                lease: authority.clone(),
+            },
+            OutputControlActionV2::TakeVideoClip {
+                role: OutputControlTargetRoleV1::Video,
+                layer_id: 42,
+                fade_ms: MAX_VIDEO_CLIP_TAKE_FADE_MS + 1,
+                lease: authority.clone(),
+            },
         ] {
             assert!(matches!(
                 action.validate(),
                 Err(OutputControlValidationErrorV1::InvalidLightingControl)
                     | Err(OutputControlValidationErrorV1::InvalidVideoControl)
+                    | Err(OutputControlValidationErrorV1::InvalidVideoTake)
             ));
         }
         let legacy_shapes = [

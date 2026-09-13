@@ -14,6 +14,7 @@ import {
   prepareFinalizeAndCommitMediaAssets,
 } from "./mediaAssetAuthority";
 import type { ProjectAuthorityToken } from "./projectAuthority";
+import { executeVideoClipTakeOutputControl } from "./outputControlController";
 import { videoClipSlotCommandKindMatches, videoClipSlotRuntimeGenerationCanApply } from "./videoClipSlotBankModel";
 import type {
   EngineSnapshot,
@@ -1006,7 +1007,7 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
   const takeVideoClip = async (layerId: number, fadeMs: number) => {
     try {
       const duration = Math.max(0, Math.round(fadeMs));
-      await options.invoke("take_video_clip", { layerId, fadeMs: duration });
+      await executeVideoClipTakeOutputControl(options.invoke, layerId, duration);
       options.setMessage(`${duration > 0 ? "Took" : "Cut to"} video clip ${layerId}${duration > 0 ? ` over ${duration}ms` : ""}.`);
       await options.refreshSnapshot();
       return true;
