@@ -666,7 +666,7 @@ require their actual UI/device/two-machine topology and separate evidence.
 
 The continuation is now owned by the current task on branch
 `codex/showclock-review-20260912`. The latest pushed checkpoint is
-`ddcf3692` (`qa: record observability takeover rerun`), and the worktree is clean
+`4c68c33c` (`qa: record remote security takeover rerun`), and the worktree is clean
 with the branch equal to `origin/codex/showclock-review-20260912`.
 
 The only product-code change in this continuation is in
@@ -723,6 +723,15 @@ passed; the release-mode Rust focused run passed `diagnostic_` 37, `updater_`
 and zero first-party warnings. This remains software-only evidence: no live
 update endpoint, signed publication, clean-machine drill, device, or support
 operation was exercised. The marker remains Open.
+
+The `REMOTE-SECURITY-001` current-source suite was then rerun against
+`da43420f`: Agent Bridge 11 groups, bootstrap 4 groups, Tauri admission 539
+commands with 18 rejected negative fixtures, fake loopback adapter 15 groups,
+strict JSON 130 assertions, and output ownership all passed. Pinned MSVC
+`14.44.35207` protocol tests passed `agent_authority` 10 and `control_plane`
+57 with zero failures/ignored tests. No real LAN/TLS, adversarial client,
+public network, or physical RDM/TOD path was exercised, so the marker remains
+Open.
 
 The authoritative ledger remains structurally valid at 58 markers:
 `27 Complete`, `8 Deferred`, and `23 Open`. The Open IDs are
