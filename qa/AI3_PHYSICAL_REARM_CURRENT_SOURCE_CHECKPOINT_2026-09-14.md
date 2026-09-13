@@ -22,6 +22,14 @@ contracts were checked without opening a physical output device:
 These checks cover source-side candidate/orphan, generation, receipt, output
 ownership, and safe-blackout boundaries for replacement/recovery paths.
 
+## Takeover rerun — 2026-09-14
+
+The six focused source checks were rerun against current source after the
+takeover. Project transaction/authority, E3 recovery, the six-scenario
+transaction-recovery controller, output-control/Standby Sync, output
+ownership, and safety-blackout all passed with exit code 0. The run opened no
+physical output and produced no hardware ACK or re-Arm observation.
+
 ## Acceptance boundary
 
 `AI3-PHYSICAL-REARM-001` remains `Open`. No physical DMX, Art-Net, video,
