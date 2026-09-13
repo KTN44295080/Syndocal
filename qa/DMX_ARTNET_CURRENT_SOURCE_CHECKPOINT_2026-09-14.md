@@ -1,0 +1,41 @@
+# DMX Art-Net Current-Source Checkpoint — 2026-09-14
+
+## Scope and authority
+
+- Flow marker: `DMX-ARTNET-001` (section 8, Open)
+- Q1 rows: `COV-OUTPUT-LOCAL-001`
+- Branch: `codex/showclock-review-20260912`
+- Base: `594eedd729ee416876a41ed439664c08dbd93e60`
+- Authority: `qa/M4_IO_VALIDATION.md` and the section 8 Flow requirements
+
+This checkpoint covers current-source DMX preparation, addressing, ownership,
+and blackout contracts. It does not claim Art-Net/sACN hardware acceptance.
+
+## Verification
+
+```text
+pnpm.cmd --dir app run check:dmx-addressing
+pnpm.cmd --dir app run check:output-ownership
+pnpm.cmd --dir app run check:safety-blackout-runtime
+node app/scripts/check-dmx-show-setup.mjs
+```
+
+Result: exit code 0.
+
+- DMX addressing helpers: PASS.
+- Output ownership static contract: PASS.
+- Safety blackout runtime contract: PASS.
+- DMX show setup UI contract: PASS, including canonical acquire/recover/reuse,
+  fresh authority, fail-closed preparation, singleflight, busy rejection, and
+  loopback-before-S0 boundaries.
+- First-party warning count observed in this focused source run: `0`.
+
+## Unresolved acceptance
+
+`DMX-ARTNET-001` stays Open. Real Art-Net/sACN nodes and fixtures still require
+addressing, RGB/wheel, pan/tilt, intensity, reconnect, topology, and 44 Hz
+continuity evidence. The historical serial-DMX slice does not establish this
+network-output marker, and no network or fixture output was emitted here.
+
+Next action is the named Art-Net/sACN node and fixture matrix with raw packets,
+fixture observations, reconnect timing, and exact output-owner identity.
