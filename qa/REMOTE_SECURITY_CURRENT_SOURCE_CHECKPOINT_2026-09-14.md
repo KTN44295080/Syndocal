@@ -16,6 +16,18 @@
 | `pnpm.cmd --dir app run check:strict-json` | PASS — 130 duplicate-key assertions |
 | `pnpm.cmd --dir app run check:output-ownership` | PASS |
 
+## Takeover rerun — 2026-09-14
+
+The complete software check set was rerun after takeover against current
+source `da43420f`. Agent Bridge again passed 11 groups, bootstrap passed 4
+deferred lifecycle groups, the admission inventory passed with 539 commands
+and 18 rejected negative fixtures, and the fake loopback adapter passed 15
+groups. Strict JSON passed 130 assertions and output ownership passed. With
+the exact MSVC `14.44.35207` x64 linker, `agent_authority` passed 10 tests and
+`control_plane` passed 57 tests; neither focused Rust run had failures or
+ignored tests. No real LAN/TLS endpoint, external client, device, or public
+network was contacted.
+
 The checks cover current-source authority/admission, localhost-sidecar/adapter
 validation, strict parser rejection, and output ownership. Existing
 `qa/REMOTE_TOUCH_SOFTWARE_REVALIDATION_2026-09-12.md` and
