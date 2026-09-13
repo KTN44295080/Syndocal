@@ -1756,7 +1756,7 @@ Exit: maximum-condition one-hour A/V/Lighting/recording proof meets fixed budget
   across Setup, Edit, Control, Touch, native windows, and compact/full layouts.
 - [x] H3 Setup completion: Patch/GDTF/OFL, mapping, I/O, output/device configuration, <!-- completion-ledger: Complete: UI-H3-SETUP-001 -->
   validation, empty/error states, keyboard/pointer reachability, and native proof.
-- [ ] H3 DJ Link setup: explicit Show-LAN NIC/bind address, dedicated token rotation, <!-- completion-ledger: Open: DJ-LINK-SETUP-001 -->
+- [x] H3 DJ Link setup: explicit Show-LAN NIC/bind address, dedicated token rotation, <!-- completion-ledger: Complete: DJ-LINK-SETUP-001 -->
   connection/session diagnostics, current admitted owner deck, project Track-to-Timeline
   mapping CAS, disconnect recovery, and `Use Current Track`. No Pedal/MIDI controls.
 - [ ] H4 Edit completion: Media, Timeline, Phase/Guide/loop/group/follow, FX, Stage, <!-- completion-ledger: Open: UI-H4-EDIT-001 -->

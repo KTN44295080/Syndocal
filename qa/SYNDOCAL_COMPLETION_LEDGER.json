@@ -3,7 +3,7 @@
   "source_document": "qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md",
   "authoritative_sections": ["6", "7", "8", "9"],
   "classifications": ["Supported", "Deferred", "External acceptance", "Out of scope"],
-  "expected_status_counts": { "Open": 25, "Deferred": 8, "Complete": 25 },
+  "expected_status_counts": { "Open": 24, "Deferred": 8, "Complete": 26 },
   "expected_section_counts": { "6": 37, "7": 6, "8": 9, "9": 6 },
   "items": [
     {
@@ -308,13 +308,13 @@
     },
     {
       "id": "DJ-LINK-SETUP-001",
-      "source": { "section": "6", "kind": "Open" },
+      "source": { "section": "6", "kind": "Complete" },
       "classification": "Supported",
       "owner": "DJ Link setup owner",
       "dependency": "Authenticated DJ Link listener and project Track-to-Timeline authority",
-      "nonclaim": "Does not claim NIC binding, token rotation, diagnostics, CAS, or disconnect recovery is complete.",
-      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/REKORDBOX_STREAM_DECK_PEDAL_ACCEPTANCE.md"],
-      "status": "Open"
+      "nonclaim": "Closes the current Windows-source DJ Link Setup implementation, deterministic runtime/persistence proof, focused Setup I/O browser reachability, and current native process smoke only; does not claim a wired DJ-PC/Agent/Pedal peer, physical LAN, real rekordbox, MIDI/Pedal, or venue acceptance.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/REKORDBOX_STREAM_DECK_PEDAL_ACCEPTANCE.md", "qa/DJ_LINK_SETUP_CHECKPOINT_2026-09-13.md", "app/scripts/check-dj-track-mapping-policy.mjs", "app/scripts/check-dj-link-runtime.mjs", "app/scripts/setup-io-operator-contract.mjs", "app/src/components/RemoteControlPanel.tsx", "app/src/djLinkUiState.ts", "app/src/djTrackMappingPolicy.ts", "app/src/types.ts", "app/src-tauri/src/dj_link_machine.rs", "app/src-tauri/src/dj_link_network.rs", "app/src-tauri/src/dj_link_persistence_runtime.rs", "app/src-tauri/src/dj_track_runtime.rs", "app/src-tauri/src/tests/dj_link_persistence_runtime_tests.rs", "app/src-tauri/src/main.rs"],
+      "status": "Complete"
     },
     {
       "id": "UI-H4-EDIT-001",
