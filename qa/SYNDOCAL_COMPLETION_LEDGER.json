@@ -153,7 +153,7 @@
       "owner": "AI external acceptance owner",
       "dependency": "AI0-AI7 completion plus clean installation and physical output hardware",
       "nonclaim": "Does not claim real external clients, clean install, hardware, restart, or security acceptance.",
-      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/M6_RELEASE_VALIDATION.md"],
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/M6_RELEASE_VALIDATION.md", "qa/AI8_EXTERNAL_ACCEPTANCE_CURRENT_SOURCE_CHECKPOINT_2026-09-14.md"],
       "status": "Open"
     },
     {
