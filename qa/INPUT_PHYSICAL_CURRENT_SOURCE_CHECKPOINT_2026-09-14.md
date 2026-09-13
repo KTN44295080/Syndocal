@@ -30,6 +30,14 @@ Result: exit code 0.
   reader boundary.
 - First-party warning count observed in this focused source run: `0`.
 
+## Takeover source rerun — 2026-09-14
+
+The DVC MIDI shortcut check passed 39 assertions, the DVC DMX shortcut check
+passed 41 assertions, and frontend command routing passed with 133 renderer,
+31 server-authoritative, 28 raw, and 479 facade dispatches. This rerun did not
+repeat the physical device operation; the bounded SMC-Mixer enumerate/open and
+safe All Notes Off result above remains the only current-host hardware slice.
+
 ## Current-host physical MIDI recheck — 2026-09-14
 
 With the pinned MSVC `14.44.35207` x64 linker and
