@@ -63,7 +63,7 @@
       "owner": "AI3 project-replacement acceptance owner",
       "dependency": "New/Load/Recovery/Backup/Take Over paths and acknowledged physical output state",
       "nonclaim": "Does not claim output retirement or re-Arm succeeded on real output hardware.",
-      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/M4_IO_VALIDATION.md", "qa/DMX_USB_RDM_CURRENT_SOURCE_CHECKPOINT_2026-09-14.md"],
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/M4_IO_VALIDATION.md", "qa/DMX_USB_RDM_CURRENT_SOURCE_CHECKPOINT_2026-09-14.md", "qa/AI3_PHYSICAL_REARM_CURRENT_SOURCE_CHECKPOINT_2026-09-14.md"],
       "status": "Open"
     },
     {
