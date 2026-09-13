@@ -343,7 +343,7 @@
       "owner": "Remote and security owner",
       "dependency": "AI consent/sidecar policy and output ownership boundaries",
       "nonclaim": "Does not claim LAN/TLS exposure, RDM/TOD safety, parser fuzz, SBOM, or redaction is accepted.",
-      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md"],
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md", "qa/REMOTE_SECURITY_CURRENT_SOURCE_CHECKPOINT_2026-09-14.md"],
       "status": "Open"
     },
     {
