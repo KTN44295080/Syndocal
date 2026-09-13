@@ -666,7 +666,7 @@ require their actual UI/device/two-machine topology and separate evidence.
 
 The continuation is now owned by the current task on branch
 `codex/showclock-review-20260912`. The latest pushed checkpoint is
-`0d8e88f2` (`qa: record control source continuity`), and the worktree is clean
+`75c14b94` (`qa: link native ingress MIDI evidence`), and the worktree is clean
 with the branch equal to `origin/codex/showclock-review-20260912`.
 
 The only product-code change in this continuation is in
@@ -726,6 +726,12 @@ after `894c690c`, the blackout semantic implementation commit. The post-change
 native build/process smoke remains valid, but the required 1920x1080 native
 gate and fresh Chromium browser gate are still unavailable; `UI-H5-CONTROL-001`
 therefore remains Open.
+
+The AI3 native-ingress record now also links the existing SMC-Mixer physical
+MIDI slice into the AI control Q1 row. It is explicitly bounded to input/output
+enumeration, open, and one safe All Notes Off feedback message; no controller
+movement, Clock/MTC, reconnect, OSC/Remote, DMX, Art-Net, or venue evidence is
+implied, so `AI3-NATIVE-INGRESS-001` remains Open.
 
 The observability/support current-source suite was also rerun against the
 current `16d9f886` tree before the documentation checkpoint. Status, release
