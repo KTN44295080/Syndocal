@@ -1,0 +1,72 @@
+# Accessibility Current-Source Checkpoint — 2026-09-14
+
+## Scope and authority
+
+- Flow marker: `ACCESSIBILITY-NATIVE-001` (section 6, Open)
+- Q1 row: `COV-ACCESSIBILITY-001`
+- Branch: `codex/showclock-review-20260912`
+- Base before this checkpoint: `0a6672502eb40ff40a7fe2e147292e39d967e7fc`
+- Scope: current-source Japanese localization, terminology, empty-state,
+  keyboard routing, and stage-label contracts after the H5 Control addition.
+
+## Implementation change
+
+The current source exposed 113 previously unregistered English static UI texts
+through the H5/AI operator surfaces. They were added to the existing bounded
+`translateUiText` Japanese dictionary in `app/src/uiLocalization.ts`; no raw
+user-data labels were made translatable. This is a UI copy/localization change,
+not a native accessibility acceptance claim.
+
+## Verification
+
+The exact Q1 automated proof was rerun with command chaining that stopped on the
+first non-zero result:
+
+```text
+pnpm.cmd --dir app run check:localization
+pnpm.cmd --dir app run check:terminology
+pnpm.cmd --dir app run check:empty-states
+node app/scripts/check-project-history-keyboard.mjs
+node app/scripts/check-timeline-space-keyboard.mjs
+pnpm.cmd --dir app run check:stage-labels
+```
+
+Result: exit code 0.
+
+- Japanese static UI coverage: `3844/3844 (100.0%)`.
+- Unprotected bare user-data labels: `0`.
+- UI terminology: PASS.
+- Empty-state guidance: PASS.
+- Project history keyboard routing: PASS; native text-editor Undo remains
+  protected.
+- Timeline Space routing: PASS across play/pause/resume, root-child mismatch,
+  empty, repeat, modifier, and outside-surface cases.
+- Stage label footprint/priority/overlap contract: PASS.
+- `pnpm.cmd --dir app exec tsc --noEmit`: PASS.
+- `pnpm.cmd --dir app run build`: PASS; 358 modules transformed. The existing
+  Vite large-chunk advisory remains an advisory, not a first-party compiler
+  warning.
+- First-party warning count observed in the focused run: 0.
+
+The initial pre-fix localization run was intentionally not counted as evidence:
+it reported `3731/3844 (97.1%)` and exited non-zero. The dictionary update was
+then applied and the full Q1 sequence above passed.
+
+## Native and external boundary
+
+The native accessibility proof remains not-run. This environment reported native
+computer APIs disabled, so no unsupported native UI observation is claimed.
+The following require the operator PC and named accessibility environments:
+
+- NVDA screen-reader traversal and announcements;
+- Windows High Contrast and color-independent state visibility;
+- 125%, 150%, and 200% scaling with no clipped/hidden safety controls;
+- keyboard-only dangerous-action and recovery workflows;
+- IME composition and focus retention;
+- dialog/popout focus return and Escape behavior;
+- reduced-motion behavior.
+
+Next action is a native release executable run on the operator PC with the
+accessibility matrix recorded per workflow. Until that evidence exists,
+`ACCESSIBILITY-NATIVE-001` stays Open and the current-source PASS must not be
+reported as native accessibility acceptance.

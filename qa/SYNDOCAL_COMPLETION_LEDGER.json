@@ -373,7 +373,7 @@
       "owner": "Accessibility acceptance owner",
       "dependency": "H1-H5 native UI implementation and available accessibility environments",
       "nonclaim": "Does not claim NVDA, High Contrast, scaling, keyboard, IME, focus, or reduced-motion native acceptance.",
-      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/M5_RELIABILITY_VALIDATION.md"],
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/M5_RELIABILITY_VALIDATION.md", "qa/ACCESSIBILITY_CURRENT_SOURCE_CHECKPOINT_2026-09-14.md"],
       "status": "Open"
     },
     {
