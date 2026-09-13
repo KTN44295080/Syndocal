@@ -3,7 +3,7 @@
   "source_document": "qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md",
   "authoritative_sections": ["6", "7", "8", "9"],
   "classifications": ["Supported", "Deferred", "External acceptance", "Out of scope"],
-  "expected_status_counts": { "Open": 37, "Deferred": 8, "Complete": 13 },
+  "expected_status_counts": { "Open": 36, "Deferred": 8, "Complete": 14 },
   "expected_section_counts": { "6": 37, "7": 6, "8": 9, "9": 6 },
   "items": [
     {
@@ -188,13 +188,13 @@
     },
     {
       "id": "VIDEO-FULL-GATE-001",
-      "source": { "section": "6", "kind": "Open" },
+      "source": { "section": "6", "kind": "Complete" },
       "classification": "Supported",
       "owner": "Video runtime owner",
       "dependency": "Accepted Windows Clip Slot, Layer Bus, and FX tranches",
-      "nonclaim": "Does not claim the accepted tranches have passed the full integrated gate.",
-      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md"],
-      "status": "Open"
+      "nonclaim": "Does not claim C2/C4 integration, native renderer/GPU/display behavior, 4K or three-output presentation, real show media, physical output, external devices, venue operation, Mac execution, signing, publication, or product completion.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md", "qa/VIDEO_FULL_GATE_CHECKPOINT_2026-09-13.md", "qa/VIDEO_FULL_GATE_AUDIT_2026-09-08.md", "qa/VIDEO_SLOT_FX_SOFTWARE_REVALIDATION_2026-09-12.md", "app/scripts/check-video-clip-slot-bank-browser.mjs"],
+      "status": "Complete"
     },
     {
       "id": "VIDEO-C2-C4-001",

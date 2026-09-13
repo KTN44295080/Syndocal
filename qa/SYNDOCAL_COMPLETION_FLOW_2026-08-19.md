@@ -1720,7 +1720,7 @@ Audio/recording/live-source clock and ownership semantics are complete.
 
 ### Phase 5 — Video, Timeline, media-derived data, audio, recording, live sources
 
-- [ ] Reintegrate accepted Windows Clip Slot/Layer Bus/FX tranches into the full gate. <!-- completion-ledger: Open: VIDEO-FULL-GATE-001 -->
+- [x] Reintegrate accepted Windows Clip Slot/Layer Bus/FX tranches into the full gate. <!-- completion-ledger: Complete: VIDEO-FULL-GATE-001 -->
 - [ ] C2 Clip Take and C4 mapping/Timeline integration. <!-- completion-ledger: Open: VIDEO-C2-C4-001 -->
 - [ ] L-TL5 Follow/crossfade, BPM slew, failure policy, and `Trans`/`Complete` Guide. <!-- completion-ledger: Open: TIMELINE-FOLLOW-001 -->
 - [ ] L-TL7 Undo/Redo/save/reload group selection/focus, fixed Guide device <!-- completion-ledger: Open: TIMELINE-PERSISTENCE-001 -->

@@ -22,7 +22,7 @@
   "expected_counts": {
     "q0_domains": 29,
     "q0_source_contracts": 10,
-  "flow_markers": { "Open": 37, "Deferred": 8, "Complete": 13 },
+  "flow_markers": { "Open": 36, "Deferred": 8, "Complete": 14 },
     "q1_rows": 32,
     "q2_decisions": 15,
     "q3_risks": 14,
@@ -157,8 +157,8 @@
       "hardware_external_proof": { "status": "not-run", "device_topology_duration": "Multi-display VJ topology and venue conditions.", "artifact_hash": null, "raw_evidence_paths": [], "na_reason": null },
       "status": "In progress",
       "commit": "",
-      "residual_risk": { "classification": "P2", "disposition": "B1-B4 accepted for Windows tranche; C2/C4 integration and full gate remain." },
-      "nonclaim": "This row does not claim Clip Take, C4 integration, or full-gate acceptance.",
+      "residual_risk": { "classification": "P2", "disposition": "B1-B4 and the current-source full gate are accepted; C2/C4 integration, native renderer/GPU/display, and physical/venue acceptance remain." },
+      "nonclaim": "This row does not claim C2 Clip Take/C4 mapping and Timeline transition integration, native renderer/GPU/display behavior, or physical/venue acceptance.",
       "decision_ids": [],
       "risk_ids": [],
       "evidence_ids": ["EV-VIDEO-SLOT-SW-2026-09-12"]

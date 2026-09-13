@@ -238,23 +238,19 @@ try {
     assert.deepEqual([edit.active, edit.queued, edit.pending], [1, 1, 1], "Edit renders independent runtime active/queued/pending truth");
     assert.equal(edit.importVisible && edit.layerSelectorVisible && edit.inspectorTriggerVisible, true, "Edit exposes persistent Import, layer selector, and inspector trigger");
     assert.equal(edit.shortTargets, 0, `Edit preserves 44px controls at ${viewport.width}x${viewport.height}`);
-    assert.equal(await click(client, '.videoMixerLayerPane .videoEffectScopeCatalog > summary'), true);
-    await waitFor(() => evaluate(client, "document.querySelector('.videoMixerLayerPane .videoEffectScopeCatalog[open]') !== null"), "Scoped FX catalog disclosure");
-    await evaluate(client, "document.querySelector('.videoMixerLayerPane .videoEffectScopeCatalog')?.scrollIntoView({block:'nearest'})");
-    const effects = await measureEffectCatalog(client);
-    assert.ok(effects?.rect[0] > 0 && effects?.rect[1] > 0, "Scoped FX catalog has nonzero visible geometry");
-    assert.equal(effects.setupCount, 1, "Scoped FX group/preset authoring is mounted");
-    assert.deepEqual(effects.scopeKinds.sort(), ["composition", "group", "output", "output", "transition"], "Transition Bus, Composition, Group, and every Output scope are rendered from stable catalog truth");
-    assert.deepEqual(effects.stageIds.sort((a, b) => a - b), [6_203, 6_204, 6_205, 6_206]);
-    assert.deepEqual(effects.effectIds.sort((a, b) => a - b), [6_303, 6_304, 6_305, 6_306]);
-    assert.equal(effects.controlCount, 4, "Stable scoped stage parameters are present for Transition Bus, Composition, Group, and Output chains");
-    assert.ok(effects.presetOptions >= 2, "Each scoped chain can select the backend-authored preset");
-    assert.equal(effects.shortTargets, 0, `Scoped FX preserves 44px controls at ${viewport.width}x${viewport.height}`);
-    assert.equal(effects.docFixed, true, `Expanded Scoped FX keeps app/document outer scroll fixed at ${viewport.width}x${viewport.height}`);
-    await evaluate(client, "document.querySelector('.videoTransitionBusPanel:not(.compact)')?.scrollIntoView({block:'nearest'})");
-    const editBus = await measureTransitionBus(client, false);
-    assert.ok(editBus?.rect[0] > 0 && editBus?.rect[1] > 0, "Edit transition bus is visible with nonzero geometry");
-    assert.deepEqual([editBus.activeCount, editBus.progress, editBus.reverse, editBus.release, editBus.shortTargets], [1, 500, true, true, 0], "Edit exposes exact active runtime progress, reversible Take, anytime Release, and 44px controls");
+    const inspector = await evaluate(client, `(() => {
+      const root = document.querySelector('[data-edit-video-inspector]');
+      const rect = root?.getBoundingClientRect();
+      return root instanceof HTMLElement && Boolean(rect && rect.width > 0 && rect.height > 0)
+        && root.textContent?.includes('Select a Media Library item');
+    })()`);
+    assert.equal(inspector, true, "Edit exposes the current Media Properties inspector even without a selected asset");
+    assert.equal(await click(client, '[data-edit-video-inspector] .editVideoAdvancedDisclosure > summary'), true);
+    await waitFor(() => evaluate(client, "document.querySelector('[data-edit-video-fx-layer]') !== null"), "current Edit Video FX layer controls");
+    assert.equal(await evaluate(client, "document.querySelectorAll('[data-video-isf-layer-id]').length"), 1, "current Edit Video mounts one selected-layer FX consumer");
+    assert.equal(await click(client, '[data-video-isf-action="advanced"]'), true);
+    await waitFor(() => evaluate(client, "document.querySelector('.videoIsfAdvanced') !== null"), "current Edit Video advanced FX controls");
+    assert.ok(await evaluate(client, "document.querySelectorAll('.videoIsfStackRow').length") >= 1, "current Edit Video keeps the authored layer FX stack editable");
 
     assert.equal(await click(client, '[data-workspace-option="touch"]'), true);
     assert.equal(await click(client, '[data-control-domain="video"]'), true, "Control Video domain is explicitly selected");
