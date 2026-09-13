@@ -21,6 +21,15 @@ These checks cover bounded current-source bridge processing, lifecycle,
 admission, adapter validation, and strict parsing. They do not turn the local
 software seams into release-native external acceptance.
 
+## Takeover rerun — 2026-09-14
+
+The current-source suite was rerun after takeover. Agent Bridge passed 11
+groups, bootstrap passed 4 deferred lifecycle groups, the admission inventory
+passed with 539 commands and 18 rejected negative fixtures, the fake loopback
+adapter passed 15 groups, and strict JSON passed 130 assertions. No real
+external client, release endpoint, clean-machine install, signing service, or
+physical output was contacted.
+
 ## Acceptance boundary
 
 `AI8-EXTERNAL-ACCEPTANCE-001` remains `Open`. No clean installation, native
