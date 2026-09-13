@@ -55,6 +55,17 @@ Result: exit code 0.
   warning.
 - First-party warning count observed in the focused run: 0.
 
+## Takeover rerun — 2026-09-14
+
+The focused source sequence was rerun after takeover against current source:
+localization remained `3844/3844` with zero unprotected user-data labels;
+terminology, empty-state guidance, project-history keyboard routing,
+Timeline Space routing, and stage labels all passed. TypeScript passed and the
+Vite production build transformed 358 modules successfully. The existing
+large-chunk message remained a Vite advisory; no first-party compiler warning
+was observed. No native accessibility API or screen-reader environment was
+used.
+
 The dedicated Control browser rerun could not start: the available Chromium
 binary was rejected by Windows before CDP startup because its Side-by-Side
 configuration was invalid. No new rendered or console evidence is claimed from
