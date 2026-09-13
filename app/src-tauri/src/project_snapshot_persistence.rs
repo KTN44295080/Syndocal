@@ -117,3 +117,7 @@ pub(super) fn project_snapshot_for_save(mut snapshot: EngineSnapshot) -> EngineS
 pub(super) fn clear_runtime_programmer_state(snapshot: &mut EngineSnapshot) {
     snapshot.programmer = protocol::ProgrammerSnapshot::default();
 }
+
+#[cfg(test)]
+#[path = "project_migration_corpus_tests.rs"]
+mod project_migration_corpus_tests;

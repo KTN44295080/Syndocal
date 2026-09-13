@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "source": "samples/phase1-mini-show.sdc",
+  "exact": {
+    "/version": 1,
+    "/app": "Syndocal",
+    "/snapshot/fixtures/0/id": 1,
+    "/snapshot/fixtures/0/label": "Mini Spot 1",
+    "/snapshot/fixtures/0/profile_source_path": "snapshot://fixture/1",
+    "/snapshot/fixtures/0/address": 1,
+    "/snapshot/fixtures/0/group_ids": ["Front"],
+    "/snapshot/cues/0/id": 1,
+    "/snapshot/cues/0/label": "White Hit",
+    "/snapshot/cues/0/targets/0/fixture_id": 1,
+    "/snapshot/timeline/events/1/time_ms": 4000,
+    "/snapshot/timeline/playing": false,
+    "/snapshot/video/layers/0/source/kind": "Ndi",
+    "/snapshot/video/layers/0/source/name": "Stage NDI",
+    "/snapshot/video/outputs/0/width": 1920,
+    "/snapshot/video/outputs/0/height": 1080,
+    "/snapshot/stage_objects/2/label": "Projection Screen",
+    "/snapshot/clock/bpm": 120.0,
+    "/snapshot/clock/beat_counter": 0,
+    "/snapshot/dmx_preview": [],
+    "/snapshot/dmx_previews": [],
+    "/snapshot/telemetry/frame_counter": 0
+  },
+  "array_lengths": {
+    "/custom_profiles": 1,
+    "/snapshot/fixtures": 1,
+    "/snapshot/cues": 1,
+    "/snapshot/timeline/events": 2,
+    "/snapshot/timeline/automations": 1,
+    "/snapshot/timeline/video_automations": 1,
+    "/snapshot/video/layers": 1,
+    "/snapshot/video/compositions": 1,
+    "/snapshot/video/outputs": 1,
+    "/snapshot/stage_objects": 3
+  }
+}
