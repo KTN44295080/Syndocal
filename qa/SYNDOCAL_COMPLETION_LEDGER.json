@@ -3,7 +3,7 @@
   "source_document": "qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md",
   "authoritative_sections": ["6", "7", "8", "9"],
   "classifications": ["Supported", "Deferred", "External acceptance", "Out of scope"],
-  "expected_status_counts": { "Open": 34, "Deferred": 8, "Complete": 16 },
+  "expected_status_counts": { "Open": 33, "Deferred": 8, "Complete": 17 },
   "expected_section_counts": { "6": 37, "7": 6, "8": 9, "9": 6 },
   "items": [
     {
@@ -218,13 +218,13 @@
     },
     {
       "id": "TIMELINE-PERSISTENCE-001",
-      "source": { "section": "6", "kind": "Open" },
+      "source": { "section": "6", "kind": "Complete" },
       "classification": "Supported",
       "owner": "Timeline editor owner",
       "dependency": "Timeline Follow runtime and project save/reload authority",
-      "nonclaim": "Does not claim group selection/focus persistence, Guide routing, native synchronization, fault, or viewport proof.",
-      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md"],
-      "status": "Open"
+      "nonclaim": "Closes only the current-source project persistence, Timeline history/editor, Guide routing, and rendered-browser viewport/navigator slice; does not claim native renderer/GPU/display behavior, real A/V/Lighting synchronization, audible devices, external clocks, physical output, external-client recovery, venue operation, signing, publication, or product-wide Timeline acceptance.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md", "qa/TIMELINE_PERSISTENCE_CHECKPOINT_2026-09-13.md", "app/scripts/check-project-autosave-coordinator.mjs", "app/scripts/check-project-history-keyboard.mjs", "app/scripts/check-project-history-preflight.mjs", "app/scripts/check-project-open-bootstrap.mjs", "app/scripts/check-project-publication-e4.mjs", "app/scripts/check-project-recovery-e3.mjs", "app/scripts/check-project-storage-helpers.mjs", "app/scripts/check-timeline-navigator-actions.mjs", "app/scripts/check-timeline-navigator-browser.mjs", "app/scripts/check-timeline-viewport.mjs"],
+      "status": "Complete"
     },
     {
       "id": "MEDIA-DERIVED-001",

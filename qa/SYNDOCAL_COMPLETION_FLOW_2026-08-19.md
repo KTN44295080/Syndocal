@@ -1723,7 +1723,7 @@ Audio/recording/live-source clock and ownership semantics are complete.
 - [x] Reintegrate accepted Windows Clip Slot/Layer Bus/FX tranches into the full gate. <!-- completion-ledger: Complete: VIDEO-FULL-GATE-001 -->
 - [x] C2 Clip Take and C4 mapping/Timeline integration. <!-- completion-ledger: Complete: VIDEO-C2-C4-001 -->
 - [x] L-TL5 Follow/crossfade, BPM slew, failure policy, and `Trans`/`Complete` Guide. <!-- completion-ledger: Complete: TIMELINE-FOLLOW-001 -->
-- [ ] L-TL7 Undo/Redo/save/reload group selection/focus, fixed Guide device <!-- completion-ledger: Open: TIMELINE-PERSISTENCE-001 -->
+- [x] L-TL7 Undo/Redo/save/reload group selection/focus, fixed Guide device <!-- completion-ledger: Complete: TIMELINE-PERSISTENCE-001 -->
   routing, native A/V/Lighting synchronization, fault, and viewport proof.
 - [ ] M thumbnail/waveform/proxy/analysis identity, bounded background workers, <!-- completion-ledger: Open: MEDIA-DERIVED-001 -->
   cancellation, cache/eviction, predecode/prefetch/degraded operation, and cold/warm
