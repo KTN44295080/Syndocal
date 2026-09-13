@@ -353,7 +353,7 @@
       "owner": "Migration and recovery owner",
       "dependency": "Version-support decisions and durable recovery/save boundaries",
       "nonclaim": "Does not claim the supported version matrix, migration corpus, hostile-input, fuzz, or backup proof is complete.",
-      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md"],
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md", "qa/MIGRATION_CURRENT_SOURCE_CHECKPOINT_2026-09-14.md"],
       "status": "Open"
     },
     {
