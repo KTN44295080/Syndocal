@@ -49,6 +49,19 @@ All command groups exited zero. The focused results were:
   migration, duplicate IDs, corrupt references/values, retired DJ mapping,
   and embedded-profile path non-reopening.
 
+## Takeover rerun — 2026-09-14
+
+The migration corpus command was rerun on current source `ddf66fc2` after the
+takeover, with the same exact MSVC `14.44.35207` x64 linker check. The release
+build completed in 10m12s and selected exactly 11 migration-corpus tests:
+`11 passed, 0 failed, 0 ignored`; the run again reported 224 truncations, 5
+malformed byte/number cases, 3 depth cases, and 128 semantic/idempotency cases.
+
+The source audit also confirmed that the media coherence implementation keeps
+Windows deny-write/delete handles and uses Unix `dev`/`ino` plus size,
+mtime/ctime version CAS and a private snapshot before probing. This is a
+code-side coherence implementation, not a cross-platform support decision.
+
 ## Remaining boundary
 
 `MIGRATION-COMPATIBILITY-001` remains **Open**. Current-source Windows
