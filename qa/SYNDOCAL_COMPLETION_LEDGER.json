@@ -513,7 +513,7 @@
       "owner": "ShowClock venue acceptance owner",
       "dependency": "ShowClock implementation, witness/fence decision, and two-machine topology",
       "nonclaim": "Does not claim real-switch crash, partition, rejoin, device-loss, or zero-simultaneous-output rehearsal.",
-      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/M5_RELIABILITY_VALIDATION.md"],
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/M5_RELIABILITY_VALIDATION.md", "qa/SHOWCLOCK_VENUE_CURRENT_SOURCE_CHECKPOINT_2026-09-14.md"],
       "status": "Open"
     },
     {
