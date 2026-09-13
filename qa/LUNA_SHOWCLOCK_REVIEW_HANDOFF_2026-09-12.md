@@ -666,7 +666,7 @@ require their actual UI/device/two-machine topology and separate evidence.
 
 The continuation is now owned by the current task on branch
 `codex/showclock-review-20260912`. The latest pushed checkpoint is
-`4c68c33c` (`qa: record remote security takeover rerun`), and the worktree is clean
+`407d39c2` (`qa: record migration source continuity`), and the worktree is clean
 with the branch equal to `origin/codex/showclock-review-20260912`.
 
 The only product-code change in this continuation is in
@@ -714,6 +714,12 @@ existing Windows deny-write/delete and Unix version-CAS/private-snapshot media
 coherence paths. `MIGRATION-COMPATIBILITY-001` remains Open because the broad
 fuzz matrix, `DEC-FILE-ID-001` product decision, and real upgrade/downgrade
 machine rehearsals are not substituted by source tests.
+
+The migration source-continuity audit then confirmed that
+`git diff --name-only ddf66fc2..HEAD -- app crates` returned no paths. The
+recorded migration corpus therefore still applies to the current product
+source; no additional result was fabricated, and the marker remains Open for
+the unresolved file-identity decision and real upgrade/downgrade rehearsal.
 
 The observability/support current-source suite was also rerun against the
 current `16d9f886` tree before the documentation checkpoint. Status, release
