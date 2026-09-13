@@ -23,6 +23,11 @@ const tauriSource = await readFile(new URL("../src-tauri/src/main.rs", import.me
 const protocolSource = await readFile(new URL("../../crates/protocol/src/lib.rs", import.meta.url), "utf8");
 const operationsSource = await readFile(new URL("../src/components/WorkspaceOperationsMenu.tsx", import.meta.url), "utf8");
 const overlaySource = await readFile(new URL("../src/components/OperatorLockOverlay.tsx", import.meta.url), "utf8");
+const uiModesSource = await readFile(new URL("../src/uiModes.ts", import.meta.url), "utf8");
+const chromeSource = await readFile(new URL("../src/components/WorkspaceChrome.tsx", import.meta.url), "utf8");
+const keyboardSource = await readFile(new URL("../src/createAppKeyboardController.ts", import.meta.url), "utf8");
+const shellSource = await readFile(new URL("../src/showClockShell.ts", import.meta.url), "utf8");
+const appSource = await readFile(new URL("../src/App.tsx", import.meta.url), "utf8");
 
 const baseLayout = {
   workspace_tab: "control",
@@ -77,5 +82,18 @@ assert.match(operationsSource, /Local to this device/);
 assert.match(operationsSource, /Show-operation guard, not operating-system security/);
 assert.match(operationsSource, /data-workspace-pane-toggle=\{pane\}/);
 assert.match(overlaySource, /Emergency blackout controls/);
+assert.match(uiModesSource, /workspaceLabels: Record<WorkspaceTab, string>/);
+assert.match(uiModesSource, /setup: "Setup"[\s\S]*control: "Edit"[\s\S]*touch: "Control"/);
+assert.match(chromeSource, /data-workspace-navigation/);
+assert.match(chromeSource, /aria-current=\{props\.workspaceTab === "setup" \? "page"/);
+assert.match(chromeSource, /data-show-clock-shell-state=\{showClockShell\(\)\.state\}/);
+assert.match(keyboardSource, /selectWorkspaceTab: \(tab: WorkspaceTab\) => boolean/);
+assert.match(keyboardSource, /workspaceLabel\(tab\)/);
+assert.match(keyboardSource, /controlModeLabel\(mode\)/);
+assert.match(shellSource, /Show Clock status has not been checked in this window/);
+assert.match(shellSource, /status\.output_armed \? "Armed" : "Fenced"/);
+assert.match(appSource, /const \[showClockStatus, setShowClockStatus\]/);
+assert.match(appSource, /get_show_clock_status/);
+assert.match(appSource, /selectWorkspaceTab = \(tab: WorkspaceTab\): boolean/);
 
-console.log("workspace and operator policy: 28 assertions passed");
+console.log("workspace and operator policy: 40 assertions passed");

@@ -509,6 +509,7 @@ import type {
   VideoSourceKind,
   VjFirstRunSetupResult,
   VjPreviewTransportSummary,
+  ShowClockIpcStatus,
 } from "./types";
 import {
   clearedDjLinkSecret,
@@ -1956,6 +1957,8 @@ export default function App() {
   const [operatorPolicyReady, setOperatorPolicyReady] = createSignal(false);
   const [operatorLockMode, setOperatorLockMode] = createSignal<OperatorLockMode | null>(null);
   const [cleanProjectSignature, setCleanProjectSignature] = createSignal<string | null>(null);
+  const [showClockStatus, setShowClockStatus] = createSignal<ShowClockIpcStatus | null>(null);
+  const [showClockError, setShowClockError] = createSignal<string | null>(null);
   const [workspaceTab, setWorkspaceTab] = createSignal<WorkspaceTab>(initialWorkspaceLayout.workspace_tab);
   const [topSplitRatio, setTopSplitRatio] = createSignal(initialWorkspaceLayout.top_split_ratio);
   const [lowerSplitRatio, setLowerSplitRatio] = createSignal(initialWorkspaceLayout.lower_split_ratio);
@@ -5325,6 +5328,35 @@ export default function App() {
       : appStatusFromMessage(text, key));
     return text;
   };
+  let showClockStatusPoll: Promise<void> | null = null;
+  createEffect(() => {
+    if (!isTauriRuntime()) return;
+    let disposed = false;
+    const poll = async () => {
+      if (disposed || showClockStatusPoll) return;
+      const request = invoke<ShowClockIpcStatus>("get_show_clock_status")
+        .then((status) => {
+          if (disposed) return;
+          setShowClockStatus(status);
+          setShowClockError(null);
+        })
+        .catch((error) => {
+          if (disposed) return;
+          setShowClockStatus(null);
+          setShowClockError(String(error));
+        });
+      showClockStatusPoll = request;
+      await request.finally(() => {
+        if (showClockStatusPoll === request) showClockStatusPoll = null;
+      });
+    };
+    void poll();
+    const timer = window.setInterval(() => void poll(), 500);
+    onCleanup(() => {
+      disposed = true;
+      window.clearInterval(timer);
+    });
+  });
   if (initialPoppedPanesStorageError !== null) {
     setMessage(
       `Pane windows remain integrated because reading their machine-local window state failed: ${initialPoppedPanesStorageError}`,
@@ -24866,9 +24898,15 @@ export default function App() {
     });
   }
 
-  const selectWorkspaceTab = (tab: WorkspaceTab) => {
+  const selectWorkspaceTab = (tab: WorkspaceTab): boolean => {
+    if (operatorLockMode() !== null && tab === "setup") {
+      setMessage("Unlock operator mode before opening Setup.");
+      return false;
+    }
     if (tab === "control" && controlMode() === "mixer") authorizeVideoThumbnailAccess();
     setWorkspaceTab(tab);
+    requestAnimationFrame(() => document.querySelector<HTMLElement>(`[data-workspace-option="${tab}"]`)?.focus());
+    return true;
   };
 
   const selectEditDeskSurface = (surface: EditDeskSurface) => {
@@ -25351,7 +25389,7 @@ export default function App() {
 
   const { handleControlKeyDown } = createAppKeyboardController({
     workspaceTab,
-    setWorkspaceTab,
+    selectWorkspaceTab,
     setupSubTab,
     selectSetupMode,
     setControlMode: selectControlMode,
@@ -26114,6 +26152,8 @@ export default function App() {
         controlLearnMode={controlLearnMode()}
         controlLearnBusy={controlLearnBusy()}
         controlLearnTargetLabel={controlLearnTargetLabel()}
+        showClockStatus={showClockStatus()}
+        showClockError={showClockError()}
         operations={
           // Pane children run main-only open/close/capture commands that
           // reject them, so they must never render the operations menu or its

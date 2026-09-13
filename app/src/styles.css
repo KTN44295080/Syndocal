@@ -2123,6 +2123,41 @@ h3 {
   background: #3a1517;
 }
 
+.topbarShowClockStatus {
+  gap: 4px;
+  max-width: 146px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.topbarShowClockStatus > span {
+  color: #aab6c6;
+}
+
+.topbarShowClockStatus > strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pill.topbarShowClockStatus.warning {
+  border-color: #725f2c;
+  background: #2f2815;
+  color: #f0d27c;
+}
+
+.pill.topbarShowClockStatus.error {
+  border-color: #703e3a;
+  background: #341d1b;
+  color: #ffaaa4;
+}
+
+.pill.topbarShowClockStatus.success {
+  border-color: #315d35;
+  background: #1b2b1c;
+  color: #8cdb80;
+}
+
 .beatClockPill {
   display: grid;
   grid-template-columns: auto auto;

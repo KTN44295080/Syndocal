@@ -1,7 +1,6 @@
 import { createSignal, onCleanup, onMount, Show } from "solid-js";
 import type { FrontendTauriInvoke } from "../tauriInvokeCommands";
 import type {
-  ShowClockIpcPhase,
   ShowClockIpcRole,
   ShowClockIpcStatus,
   ShowClockActionKind,
@@ -11,6 +10,7 @@ import type {
   ShowClockReArmRequest,
   ShowClockStartRequest,
 } from "../types";
+import { summarizeShowClockForShell } from "../showClockShell";
 
 interface ShowClockStatusPanelProps {
   backendAvailable: boolean;
@@ -59,10 +59,6 @@ function stored(key: string, fallback: string): string {
   }
 }
 
-function phaseLabel(phase: ShowClockIpcPhase): string {
-  return phase;
-}
-
 function formatAge(age: number | null): string {
   return age === null ? "—" : `${Math.round(age / 1000)} ms`;
 }
@@ -101,6 +97,7 @@ export function ShowClockStatusPanel(props: ShowClockStatusPanelProps) {
   const [confirmPrimaryStopped, setConfirmPrimaryStopped] = createSignal(false);
   const [busy, setBusy] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
+  const shellStatus = () => summarizeShowClockForShell(status(), error());
   let disposed = false;
   let pollFlight: Promise<void> | null = null;
   let pollTimer: number | undefined;
@@ -319,7 +316,7 @@ export function ShowClockStatusPanel(props: ShowClockStatusPanelProps) {
     <section class="showClockPanel" aria-label="ShowClock LAN">
       <header class="ioDeskHeader">
         <h2 class="textBalance">ShowClock LAN</h2>
-        <span class="tabularNums">{phaseLabel(status().state)}</span>
+        <span class="tabularNums" data-show-clock-shell-state={shellStatus().state}>{shellStatus().label}</span>
       </header>
       <p class="textPretty standbyIntro">
         Manually paired UDP clock samples. Standby follows authenticated samples only; physical output remains fenced until the separate local Arm path succeeds.

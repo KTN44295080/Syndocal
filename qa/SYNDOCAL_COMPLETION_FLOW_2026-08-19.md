@@ -1752,7 +1752,7 @@ Exit: maximum-condition one-hour A/V/Lighting/recording proof meets fixed budget
   witness/fence, UI, and two-process then two-machine fault/soak proof.
 - [x] H1 reachability: every supported feature has a discoverable operator path and <!-- completion-ledger: Complete: UI-H1-REACHABILITY-001 -->
   no dead/hidden route that only an internal command can reach.
-- [ ] H2 shared shell: one truthful navigation/status/error/selection/focus contract <!-- completion-ledger: Open: UI-H2-SHELL-001 -->
+- [x] H2 shared shell: one truthful navigation/status/error/selection/focus contract <!-- completion-ledger: Complete: UI-H2-SHELL-001 -->
   across Setup, Edit, Control, Touch, native windows, and compact/full layouts.
 - [ ] H3 Setup completion: Patch/GDTF/OFL, mapping, I/O, output/device configuration, <!-- completion-ledger: Open: UI-H3-SETUP-001 -->
   validation, empty/error states, keyboard/pointer reachability, and native proof.

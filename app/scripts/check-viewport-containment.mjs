@@ -1082,11 +1082,21 @@ async function navigateToReadyApp(
   // event instead of the explicitly requested navigation below.
   await waitForApp(client);
   const previousTimeOrigin = await client.evaluate("performance.timeOrigin");
-  const loaded = client.waitForEvent("Page.loadEventFired", 8_000);
-  await awaitObservedPromises([
-    client.send("Page.navigate", { url }),
-    loaded,
+  const dialogOpening = observePromise(client.waitForEvent("Page.javascriptDialogOpening", 1_000));
+  const navigation = observePromise(client.send("Page.navigate", { url }));
+  const first = await Promise.race([
+    dialogOpening.then((result) => ({ kind: "dialog", result })),
+    navigation.then((result) => ({ kind: "navigation", result })),
   ]);
+  if (first.kind === "dialog" && first.result.ok) {
+    const dialog = first.result.value;
+    if (dialog?.type !== "beforeunload") {
+      throw new Error(`Unexpected workspace navigation dialog: ${JSON.stringify(dialog)}`);
+    }
+    await client.send("Page.handleJavaScriptDialog", { accept: true });
+  }
+  const navigationResult = first.kind === "navigation" ? first.result : await navigation;
+  if (!navigationResult.ok) throw navigationResult.error;
   return await waitForReadyWorkspaceDocument(client, {
     expectedUrl: new URL(url).href,
     previousTimeOrigin,
@@ -2917,6 +2927,26 @@ async function checkWorkspaceLayoutPersistence(client) {
 }
 
 async function checkKeyboardNavigation(client) {
+  const shellContract = await client.evaluate(`(() => {
+    const workspaceButtons = [...document.querySelectorAll('[data-workspace-navigation] [data-workspace-option]')];
+    const active = workspaceButtons.filter((button) => button.getAttribute('aria-pressed') === 'true');
+    const status = document.querySelector('.appStatusLine');
+    const clock = document.querySelector('[data-show-clock-shell-state]');
+    return {
+      workspaceButtons: workspaceButtons.map((button) => ({
+        id: button.getAttribute('data-workspace-option') || '',
+        label: (button.textContent || '').trim(),
+        ariaLabel: button.getAttribute('aria-label') || '',
+        current: button.getAttribute('aria-current') || '',
+      })),
+      activeWorkspaceCount: active.length,
+      activeWorkspaceCurrentCount: workspaceButtons.filter((button) => button.getAttribute('aria-current') === 'page').length,
+      showClockCount: document.querySelectorAll('.topbarShowClockStatus').length,
+      showClockState: clock?.getAttribute('data-show-clock-shell-state') || '',
+      statusRole: status?.getAttribute('role') || '',
+      statusLive: status?.getAttribute('aria-live') || '',
+    };
+  })()`);
   const firstWorkspaceFocus = await client.evaluate(`(() => {
     const button = document.querySelector('[data-workspace-option="setup"]');
     button?.focus();
@@ -3012,8 +3042,12 @@ async function checkKeyboardNavigation(client) {
   const workspaceAfterF2 = await client.evaluate(
     "document.querySelector('[data-workspace-option][aria-pressed=\"true\"]')?.getAttribute('data-workspace-option') || ''",
   );
+  const workspaceFocusAfterF2 = await client.evaluate(
+    "document.activeElement?.getAttribute('data-workspace-option') || ''",
+  );
 
   const result = {
+    shellContract,
     firstWorkspaceFocus,
     tabOrder,
     setupEditableGuard,
@@ -3021,6 +3055,17 @@ async function checkKeyboardNavigation(client) {
     shortcutNavigation: { modeAfterE, modeAfterL, modeAfterM, workspaceAfterF1, workspaceAfterF2, workspaceAfterF3 },
   };
   result.passed =
+    JSON.stringify(shellContract.workspaceButtons) === JSON.stringify([
+      { id: 'setup', label: 'Setup', ariaLabel: 'Setup workspace', current: '' },
+      { id: 'control', label: 'Edit', ariaLabel: 'Edit workspace', current: 'page' },
+      { id: 'touch', label: 'Control', ariaLabel: 'Control workspace', current: '' },
+    ]) &&
+    shellContract.activeWorkspaceCount === 1 &&
+    shellContract.activeWorkspaceCurrentCount === 1 &&
+    shellContract.showClockCount === 1 &&
+    shellContract.showClockState === 'unchecked' &&
+    shellContract.statusRole === 'status' &&
+    shellContract.statusLive === 'polite' &&
     firstWorkspaceFocus === "Setup" &&
     tabOrder.label === "Edit" &&
     tabOrder.workspace === "control" &&
@@ -3036,7 +3081,8 @@ async function checkKeyboardNavigation(client) {
     modeAfterE === "edit" &&
     workspaceAfterF3 === "touch" &&
     workspaceAfterF1 === "setup" &&
-    workspaceAfterF2 === "control";
+    workspaceAfterF2 === "control" &&
+    workspaceFocusAfterF2 === "control";
   await client.evaluate(`(() => {
     window.__syndocalKeyboardNavigationCheck = ${JSON.stringify(result)};
   })()`);
@@ -35437,15 +35483,14 @@ async function runFxVisualViewport(client, viewport) {
   };
 }
 
-async function runWorkspaceOperatorViewport(client, viewport) {
+async function runWorkspaceOperatorViewport(client, viewport, { recycleForPaneWindows = null } = {}) {
   await client.send("Emulation.setDeviceMetricsOverride", {
     width: viewport.width,
     height: viewport.height,
     deviceScaleFactor: 1,
     mobile: false,
   });
-  await client.send("Page.navigate", { url: fixtureUrl("workspace-operator") });
-  await waitForApp(client);
+  await navigateOperatorVjPage(client, fixtureUrl("workspace-operator"));
   await clickVisibleSelector(client, ".workspaceOperationsButton");
   await sleep(80);
   const menu = await client.evaluate(`(() => {
@@ -35465,15 +35510,17 @@ async function runWorkspaceOperatorViewport(client, viewport) {
 
   const fullUrl = new URL(fixtureUrl("workspace-operator"));
   fullUrl.searchParams.set("syndocalOperatorLock", "full");
-  await client.send("Page.navigate", { url: fullUrl.toString() });
-  await waitForApp(client);
+  await navigateOperatorVjPage(client, fullUrl.toString());
   await sleep(80);
   const full = await client.evaluate(`(() => {
     const overlay = document.querySelector('.operatorLockOverlay');
     const rect = overlay?.getBoundingClientRect();
     return {
       visible: Boolean(rect && rect.width >= innerWidth - 1 && rect.height >= innerHeight - 1),
-      emergencyButtons: document.querySelectorAll('.operatorEmergencyDeck button').length,
+      emergencyButtons: [...document.querySelectorAll('.operatorEmergencyDeck button')].map((button) => ({
+        text: button.textContent?.trim() || '',
+        disabled: button.disabled,
+      })),
       passwordInputs: document.querySelectorAll('.operatorUnlockForm input[type="password"]').length,
       text: overlay?.textContent || '',
     };
@@ -35481,8 +35528,7 @@ async function runWorkspaceOperatorViewport(client, viewport) {
 
   const partialUrl = new URL(fixtureUrl("workspace-operator"));
   partialUrl.searchParams.set("syndocalOperatorLock", "partial");
-  await client.send("Page.navigate", { url: partialUrl.toString() });
-  await waitForApp(client);
+  await navigateOperatorVjPage(client, partialUrl.toString());
   await sleep(80);
   await pressKey(client, "KeyE", "e");
   await sleep(80);
@@ -35541,8 +35587,22 @@ async function runWorkspaceOperatorViewport(client, viewport) {
   const partialPaneUrl = new URL(fixtureUrl("workspace-operator"));
   partialPaneUrl.searchParams.set("syndocalOperatorLock", "partial");
   partialPaneUrl.searchParams.set("syndocalPaneWindow", "setup");
-  await client.send("Page.navigate", { url: partialPaneUrl.toString() });
-  await waitForApp(client);
+  // The partial programming-route probe above is intentionally independent
+  // from pane-window routing. Its browser fixture can leave the renderer's
+  // launch document in a protected-close state even though no authoritative
+  // mutation occurred, which makes a subsequent Page.navigate hang behind a
+  // browser-level beforeunload boundary. Recycle only for this independent
+  // scenario so the pane-window contract remains a real navigation test.
+  if (recycleForPaneWindows) {
+    client = await recycleForPaneWindows();
+    await client.send("Emulation.setDeviceMetricsOverride", {
+      width: viewport.width,
+      height: viewport.height,
+      deviceScaleFactor: 1,
+      mobile: false,
+    });
+  }
+  await navigateOperatorVjPage(client, partialPaneUrl.toString());
   await sleep(80);
   const partialPane = await client.evaluate(`(() => ({
     overlayCount: document.querySelectorAll('.operatorLockOverlay').length,
@@ -35562,8 +35622,7 @@ async function runWorkspaceOperatorViewport(client, viewport) {
   for (const [pane, selector] of Object.entries(paneSelectors)) {
     const paneUrl = new URL(fixtureUrl("workspace-operator"));
     paneUrl.searchParams.set("syndocalPaneWindow", pane);
-    await client.send("Page.navigate", { url: paneUrl.toString() });
-    await waitForApp(client);
+    await navigateOperatorVjPage(client, paneUrl.toString());
     await sleep(48);
     paneWindows.push(await evaluatePageFunction(client, (pane, selector) => {
       const app = document.querySelector(".app");
@@ -35591,7 +35650,12 @@ async function runWorkspaceOperatorViewport(client, viewport) {
     guardDisclosure: menu.hasGuardDisclosure,
     credentialFields: menu.passwordInputs === 2,
     unlockedContainment: menu.bodyOverflow <= 1 && menu.appOverflow <= 1,
-    fullOverlay: full.visible && full.emergencyButtons === 3 && full.passwordInputs === 1,
+    fullOverlay: full.visible && full.emergencyButtons.length === 2 &&
+      full.emergencyButtons[0]?.text.includes('緊急ブラックアウト（全出力）') &&
+      full.emergencyButtons[0]?.disabled === false &&
+      full.emergencyButtons[1]?.text === 'BLACKOUT RELEASE LOCKED' &&
+      full.emergencyButtons[1]?.disabled === true &&
+      full.passwordInputs === 1,
     fullDisclosure: full.text.includes('Show output continues') && full.text.includes('no plaintext password stored'),
     partialMain: partialAfterE.overlayCount === 0 && partialAfterE.workspace === 'control' && partialAfterE.workspaceLabel === 'Edit' &&
       partialAfterE.setupDisabled && partialAfterE.lightingDisabled && partialAfterE.activeMode === 'live' && partialAfterE.lockLabel === 'Partial Lock',
@@ -38730,11 +38794,13 @@ async function main() {
     if (workspaceOperatorOnlyMode) {
       const results = [];
       for (const viewport of viewports) {
-        const result = await runWorkspaceOperatorViewport(client, viewport);
+        const result = await runWorkspaceOperatorViewport(client, viewport, {
+          recycleForPaneWindows: recycleBrowser,
+        });
         results.push(result);
         console.log(
           `${result.passed ? "pass" : "fail"} ${result.label} panes=${result.menu.paneButtons} ` +
-            `full=${result.full.emergencyButtons} partial=${result.partial.afterE.workspace}/${result.partial.afterM}/${result.partial.afterL} failed=${JSON.stringify(result.failedChecks)}`,
+            `full=${result.full.emergencyButtons.length} partial=${result.partial.afterE.workspace}/${result.partial.afterM}/${result.partial.afterL} failed=${JSON.stringify(result.failedChecks)}`,
         );
       }
       const failures = results.filter((result) => !result.passed);

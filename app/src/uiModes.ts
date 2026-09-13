@@ -7,6 +7,14 @@ export type TimelineDeskSurface = "show" | "automation" | "playback";
 export type TimelineContextDrawer = "none" | "cue" | "block";
 export type EditDeskSurface = "faders" | "attributes";
 
+export const workspaceLabels: Record<WorkspaceTab, string> = {
+  setup: "Setup",
+  control: "Edit",
+  touch: "Control",
+};
+
+export const workspaceLabel = (workspace: WorkspaceTab): string => workspaceLabels[workspace];
+
 export const setupAreas: { id: SetupArea; label: string; description: string; defaultTab: SetupSubTab }[] = [
   { id: "lighting", label: "Lighting", description: "Fixture library, profiles, and DMX patch", defaultTab: "patch" },
   { id: "video", label: "Video", description: "Compositions, displays, and projector calibration", defaultTab: "video" },
@@ -31,6 +39,12 @@ export const controlModes: { id: ControlMode; label: string; description: string
   { id: "live", label: "Timeline", description: "Cue playback, timeline, and blackout controls" },
   { id: "mixer", label: "Video", description: "Media Library preparation, verification, preview, and clip properties" },
 ];
+
+export const controlModeLabel = (mode: ControlMode): string =>
+  controlModes.find((candidate) => candidate.id === mode)?.label ?? mode;
+
+export const setupSubTabLabel = (tab: SetupSubTab): string =>
+  setupSubTabs.find((candidate) => candidate.id === tab)?.label ?? tab;
 
 // The persistent Edit chrome exposes each existing control mode as one domain.
 // Mode IDs remain stable for saved layouts, shortcuts, and pane-window compatibility.

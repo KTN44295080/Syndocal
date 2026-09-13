@@ -13,10 +13,12 @@ import type {
   ProjectBackupSummary,
   ProjectHistoryStatus,
   OperatorLockMode,
+  ShowClockIpcStatus,
 } from "../types";
 import { editDomainModes, setupAreaForSubTab, setupAreas, setupSubTabs, setupSubTabsForArea } from "../uiModes";
 import type { ControlMode, SetupSubTab, WorkspaceTab } from "../uiModes";
 import type { UiLocale } from "../uiLocalization";
+import { summarizeShowClockForShell } from "../showClockShell";
 import { TopbarPulseMeter } from "./TopbarPulseMeter";
 import { TopbarBpmControl } from "./TopbarBpmControl";
 import {
@@ -48,6 +50,8 @@ type WorkspaceChromeProps = {
   dmxOutputCount: number;
   projectLabel: string;
   projectDirty: boolean;
+  showClockStatus: ShowClockIpcStatus | null;
+  showClockError: string | null;
   currentProjectPath: string | null;
   recentProjectPaths: string[];
   recoveryCheckpoint: ProjectRecoveryCheckpoint | null;
@@ -203,6 +207,8 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
     }
     return "Live";
   };
+
+  const showClockShell = () => summarizeShowClockForShell(props.showClockStatus, props.showClockError);
 
   const closeProjectMenu = () => setProjectMenuOpen(false);
 
@@ -494,7 +500,7 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
               </Show>
             </div>
           </Show>
-          <nav class="workspaceTabs" aria-label="Workspace">
+          <nav class="workspaceTabs" aria-label="Workspace" data-workspace-navigation>
             <button
               class={props.workspaceTab === "setup" ? "active" : ""}
               data-workspace-option="setup"
@@ -504,6 +510,7 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
               aria-keyshortcuts="F1"
               onClick={() => props.onWorkspaceTab("setup")}
               aria-pressed={props.workspaceTab === "setup"}
+              aria-current={props.workspaceTab === "setup" ? "page" : undefined}
               disabled={props.operatorLockMode !== null}
             >
               Setup
@@ -517,6 +524,7 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
               aria-keyshortcuts="F2"
               onClick={() => props.onWorkspaceTab("control")}
               aria-pressed={props.workspaceTab === "control"}
+              aria-current={props.workspaceTab === "control" ? "page" : undefined}
             >
               Edit
             </button>
@@ -529,6 +537,7 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
               aria-keyshortcuts="F3"
               onClick={() => props.onWorkspaceTab("touch")}
               aria-pressed={props.workspaceTab === "touch"}
+              aria-current={props.workspaceTab === "touch" ? "page" : undefined}
             >
               Control
             </button>
@@ -734,6 +743,15 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
             peak={props.liveAudioInputPeak}
             onOpenSettings={props.onOpenLiveAudioInputSettings}
           />
+          <span
+            class={`pill topbarShowClockStatus ${showClockShell().tone}`}
+            data-show-clock-shell-state={showClockShell().state}
+            aria-label={`Show Clock: ${showClockShell().label}`}
+            title={showClockShell().detail}
+          >
+            <span data-no-localize>Clock</span>
+            <strong data-no-localize>{showClockShell().label}</strong>
+          </span>
           <span
             class={props.blackout || props.videoBlackout ? "pill danger" : "pill ok"}
             title={`${liveLabel()} · Engine ${props.tickMs} ms / jitter ${props.jitterUs} us / ${props.packetBytes} B · DMX ${props.dmxSuccessCount}/${props.dmxOutputCount}`}

@@ -3,7 +3,7 @@
   "source_document": "qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md",
   "authoritative_sections": ["6", "7", "8", "9"],
   "classifications": ["Supported", "Deferred", "External acceptance", "Out of scope"],
-  "expected_status_counts": { "Open": 27, "Deferred": 8, "Complete": 23 },
+  "expected_status_counts": { "Open": 26, "Deferred": 8, "Complete": 24 },
   "expected_section_counts": { "6": 37, "7": 6, "8": 9, "9": 6 },
   "items": [
     {
@@ -288,13 +288,13 @@
     },
     {
       "id": "UI-H2-SHELL-001",
-      "source": { "section": "6", "kind": "Open" },
+      "source": { "section": "6", "kind": "Complete" },
       "classification": "Supported",
       "owner": "Shared UI shell owner",
       "dependency": "H1 reachability and shared status/selection model",
-      "nonclaim": "Does not claim a single truthful shared shell across all workspaces and native windows.",
-      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md"],
-      "status": "Open"
+      "nonclaim": "Closes the current-source shared Setup/Edit/Control shell, status/error/selection/focus, operator-lock, and browser pane-window slice; does not claim native accessibility, physical output, external/venue acceptance, or H3-H5 completion.",
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md", "qa/UI_H2_SHELL_CHECKPOINT_2026-09-13.md", "app/src/App.tsx", "app/src/components/WorkspaceChrome.tsx", "app/src/components/ShowClockStatusPanel.tsx", "app/src/createAppKeyboardController.ts", "app/src/showClockShell.ts", "app/src/uiModes.ts", "app/scripts/check-workspace-operator.mjs", "app/scripts/check-viewport-containment.mjs"],
+      "status": "Complete"
     },
     {
       "id": "UI-H3-SETUP-001",

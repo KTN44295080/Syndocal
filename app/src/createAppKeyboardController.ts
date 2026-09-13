@@ -14,16 +14,19 @@ import type { MappingStageTool } from "./mappingViewPresets";
 import { dispatchProjectFileShortcut } from "./projectFileShortcuts";
 import type { EngineSnapshot, TimelineSnapshot } from "./types";
 import {
+  controlModeLabel,
   type ControlMode,
+  setupSubTabLabel,
   type SetupSubTab,
   type WorkspaceTab,
+  workspaceLabel,
 } from "./uiModes";
 
 type MaybePromise = void | Promise<unknown>;
 
 interface AppKeyboardControllerOptions {
   workspaceTab: Accessor<WorkspaceTab>;
-  setWorkspaceTab: Setter<WorkspaceTab>;
+  selectWorkspaceTab: (tab: WorkspaceTab) => boolean;
   setupSubTab: Accessor<SetupSubTab>;
   selectSetupMode: (tab: SetupSubTab) => void;
   setControlMode: (mode: ControlMode) => unknown;
@@ -81,12 +84,11 @@ export function createAppKeyboardController(options: AppKeyboardControllerOption
     undoProject: options.undoProject,
     redoProject: options.redoProject,
     setWorkspaceTab: (tab) => {
-      options.setWorkspaceTab(tab);
-      options.setMessage(`Workspace: ${tab.toUpperCase()}.`);
+      if (options.selectWorkspaceTab(tab)) options.setMessage(`Workspace: ${workspaceLabel(tab)}.`);
     },
     selectSetupMode: (tab) => {
       options.selectSetupMode(tab);
-      options.setMessage(`Setup mode: ${tab.toUpperCase()}.`);
+      options.setMessage(`Setup: ${setupSubTabLabel(tab)}.`);
     },
     toggleMappingHotkeyHelp: () => { options.setMappingHotkeyHelpOpen((open) => !open); },
     closeMappingHotkeyHelp: () => { options.setMappingHotkeyHelpOpen(false); },
@@ -115,8 +117,8 @@ export function createAppKeyboardController(options: AppKeyboardControllerOption
       options.setMappingViewportPanDrag(null);
     },
     setControlMode: (mode) => {
-      options.setControlMode(mode);
-      options.setMessage(`Control mode: ${mode.toUpperCase()}.`);
+      const accepted = options.setControlMode(mode);
+      if (accepted !== false) options.setMessage(`Edit: ${controlModeLabel(mode)}.`);
     },
     triggerPreviousCue: options.triggerPreviousCue,
     triggerNextCue: options.triggerNextCue,
