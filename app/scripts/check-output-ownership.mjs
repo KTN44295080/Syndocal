@@ -1212,8 +1212,31 @@ assert.match(
   "cancel/close must become a terminal rejection before admission or mutation",
 );
 
-const nativeSinkHits = (source, markers = nativePhysicalSinkMarkers) =>
-  markers.filter((marker) => source.includes(marker));
+// Only this exact read-only delegation may borrow the transport owners without
+// being classified as a physical sink. Do not allowlist the command name: an
+// added statement, changed argument, or different delegate must fail closed.
+// Keep the broad transport markers for all other command bodies.
+const readOnlyTransportStatusCommand = `#[tauri::command]
+fn get_external_video_transport_status(
+    state: State<'_, AppState>,
+) -> Result<ExternalVideoTransportStatusResponse, String> {
+    external_video_transport_status_for(
+        state.external_video_transport.as_ref(),
+        state.capture_transport.as_ref(),
+        #[cfg(feature = "ndi")]
+        state.ndi_transport.as_ref(),
+        #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+        state.spout_transport.as_ref(),
+        &state.engine,
+    )
+}`;
+const compactRustSource = (source) => source.replace(/\s+/g, "");
+const readOnlyTransportStatusContract = compactRustSource(readOnlyTransportStatusCommand);
+const nativeSinkHits = (source, markers = nativePhysicalSinkMarkers) => {
+  const isReadOnlyStatus = compactRustSource(source) === readOnlyTransportStatusContract;
+  return markers.filter((marker) => source.includes(marker)
+    && !(isReadOnlyStatus && (marker === "ndi_transport" || marker === "spout_transport")));
+};
 
 const assertNativeSinkInventory = (source, {
   legacyRoutes,
@@ -1311,6 +1334,57 @@ assert(
 // Negative fixtures prove that this is an executable detector rather than a
 // documentation-only list.  They are intentionally temporary source strings;
 // no fixture text is read by the production scan above.
+const diagnosticStatusCommand = commandSegments.find(
+  ({ name }) => name === "get_external_video_transport_status",
+);
+assert(diagnosticStatusCommand, "transport status diagnostic command must remain present");
+assert.equal(
+  compactRustSource(diagnosticStatusCommand.source),
+  readOnlyTransportStatusContract,
+  "transport status diagnostic exemption requires the exact read-only delegation",
+);
+assert(
+  !nativeSinkDetected.some(({ name }) => name === diagnosticStatusCommand.name),
+  "read-only transport status references must not be reported as physical output",
+);
+const diagnosticMutationBodies = [
+  ...[
+    "state.ndi_transport.lock().unwrap().start_route(route, engine, activation)?;",
+    "state.spout_transport.lock().unwrap().stop_route(route, engine)?;",
+    "state.spout_transport.lock().unwrap().harvest_failed_workers(&state.engine)?;",
+    "control_plane_runtime::engage_safety_blackout(&state);",
+  ].map((statement) => diagnosticStatusCommand.source.replace(
+    "    external_video_transport_status_for(",
+    `    ${statement}\n    external_video_transport_status_for(`,
+  )),
+  diagnosticStatusCommand.source.replace(
+    "external_video_transport_status_for(",
+    "unclassified_transport_delegate(",
+  ),
+  diagnosticStatusCommand.source.replace(
+    "state.ndi_transport.as_ref()",
+    "&mut *state.ndi_transport.lock().unwrap()",
+  ),
+  diagnosticStatusCommand.source.replace(
+    "fn get_external_video_transport_status(",
+    "fn unclassified_transport_status(",
+  ),
+];
+for (const mutatedBody of diagnosticMutationBodies) {
+  assert.notEqual(mutatedBody, diagnosticStatusCommand.source, "diagnostic fixture must mutate source");
+  assert.throws(
+    () => assertNativeSinkInventory(
+      appBackend.replace(diagnosticStatusCommand.source, mutatedBody),
+      {
+        legacyRoutes: legacyTauriOutputRoutes,
+        canonicalRoutes: canonicalR4TauriOutputRoutes,
+        protectedAdapterRoutes: externalAdapterRoutes,
+      },
+    ),
+    /(?:get_external_video_transport_status|unclassified_transport_status): native physical sink is outside/,
+    "diagnostic exemption must not hide a mutation, mutable borrow, or unknown route/delegate",
+  );
+}
 assert.throws(
   () => assertNativeSinkInventory(appBackend, {
     legacyRoutes: legacyTauriOutputRoutes.filter((name) => name !== "set_output_config"),
