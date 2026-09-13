@@ -1,3 +1,5 @@
+#![cfg_attr(test, recursion_limit = "256")]
+
 mod agent_bridge;
 use std::{
     cell::RefCell,
@@ -35,6 +37,9 @@ use media_asset_preview_contract::{
 use media_asset_preview_contract::MEDIA_ASSET_THUMBNAIL_MAX_EDGE;
 mod project_snapshot_persistence;
 mod project_publication_missing;
+mod diagnostic_package;
+mod diagnostic_package_publication;
+mod diagnostic_export_workflow;
 use project_snapshot_persistence::{
     clear_runtime_programmer_state, node_graph_for_persistence, normalize_project_timeline_layers,
     project_snapshot_for_save, use_authored_video_snapshot,
@@ -63566,81 +63571,13 @@ fn diagnostic_zip_file_name(path: PathBuf) -> PathBuf {
     }
 }
 
-fn write_diagnostic_archive<W: Write + Seek>(
-    writer: W,
-    entries: &[(&str, Vec<u8>)],
-    crash_directory: &Path,
-) -> Result<(), String> {
-    let mut archive = zip::ZipWriter::new(writer);
-    let options = zip::write::SimpleFileOptions::default()
-        .compression_method(zip::CompressionMethod::Deflated);
-    for (name, contents) in entries {
-        archive
-            .start_file(*name, options)
-            .map_err(|error| error.to_string())?;
-        archive
-            .write_all(contents)
-            .map_err(|error| error.to_string())?;
-    }
-    archive
-        .start_file("README.txt", options)
-        .map_err(|error| error.to_string())?;
-    archive
-        .write_all(b"This package contains runtime diagnostics and may include the local project path. Review it before sharing. It does not include the project file or media contents.\n")
-        .map_err(|error| error.to_string())?;
-    if crash_directory.exists() {
-        for entry in fs::read_dir(crash_directory)
-            .map_err(|error| format!("Unable to list crash reports: {error}"))?
-            .flatten()
-        {
-            let crash_path = entry.path();
-            if !crash_path.is_file() {
-                continue;
-            }
-            let Ok(contents) = fs::read(&crash_path) else {
-                continue;
-            };
-            let Some(file_name) = crash_path.file_name().and_then(OsStr::to_str) else {
-                continue;
-            };
-            archive
-                .start_file(format!("crash-reports/{file_name}"), options)
-                .map_err(|error| error.to_string())?;
-            archive
-                .write_all(&contents)
-                .map_err(|error| error.to_string())?;
-        }
-    }
-    archive.finish().map_err(|error| error.to_string())?;
-    Ok(())
-}
-
 #[tauri::command]
 fn export_diagnostic_package(
     window: WebviewWindow,
-    app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> Result<Option<String>, String> {
     let captured_at_unix_ms = current_unix_ms();
-    let Some(path) = parented_file_dialog(&window)
-        .add_filter("Syndocal Diagnostic Package", &["zip"])
-        .set_file_name(format!("syndocal-diagnostics-{captured_at_unix_ms}.zip"))
-        .save_file()
-    else {
-        return Ok(None);
-    };
-    let path = diagnostic_zip_file_name(path);
-    let file = fs::File::create(&path)
-        .map_err(|error| format!("Unable to create diagnostic package: {error}"))?;
     let snapshot = state.engine.engine_telemetry_snapshot();
-    let current_project_path = state
-        .current_project_path
-        .lock()
-        .map_err(|_| "Current project path lock was poisoned".to_string())?
-        .as_ref()
-        .map(|path| path.to_string_lossy().to_string());
-    let application_update =
-        application_update_configuration_for_version(app.package_info().version.to_string());
     let manifest = json!({
         "version": 1,
         "app": APP_NAME,
@@ -63648,8 +63585,6 @@ fn export_diagnostic_package(
         "captured_at_unix_ms": captured_at_unix_ms,
         "os": env::consts::OS,
         "arch": env::consts::ARCH,
-        "current_project_path": current_project_path,
-        "application_update": application_update,
     });
     let project_summary = json!({
         "fixtures": snapshot.fixture_count,
@@ -63668,24 +63603,42 @@ fn export_diagnostic_package(
     let entries = vec![
         (
             "manifest.json",
-            serde_json::to_vec_pretty(&manifest).map_err(|error| error.to_string())?,
+            diagnostic_package::diagnostic_json_bytes(&manifest).map_err(|error| error.to_string())?,
         ),
         (
             "project-summary.json",
-            serde_json::to_vec_pretty(&project_summary).map_err(|error| error.to_string())?,
+            diagnostic_package::diagnostic_json_bytes(&project_summary).map_err(|error| error.to_string())?,
         ),
         (
             "engine-telemetry.json",
-            serde_json::to_vec_pretty(&telemetry).map_err(|error| error.to_string())?,
+            diagnostic_package::diagnostic_json_bytes(&telemetry).map_err(|error| error.to_string())?,
         ),
         (
             "video-runtime.json",
-            serde_json::to_vec_pretty(&runtime).map_err(|error| error.to_string())?,
+            diagnostic_package::diagnostic_json_bytes(&runtime).map_err(|error| error.to_string())?,
         ),
     ];
-    let crash_directory = app_data_subdirectory(&app, CRASH_REPORT_DIRECTORY)?;
-    write_diagnostic_archive(file, &entries, &crash_directory)?;
-    Ok(Some(path.to_string_lossy().to_string()))
+    let bytes = diagnostic_package::build_diagnostic_package(&entries)
+        .map_err(|error| error.to_string())?;
+    diagnostic_export_workflow::export_prepared_diagnostic_package(
+        bytes,
+        |preview| matches!(
+            rfd::MessageDialog::new()
+                .set_level(rfd::MessageLevel::Info)
+                .set_title("Diagnostic export preview")
+                .set_description(preview)
+                .set_buttons(rfd::MessageButtons::YesNo)
+                .set_parent(&window)
+                .show(),
+            rfd::MessageDialogResult::Yes
+        ),
+        || parented_file_dialog(&window)
+            .add_filter("Syndocal Diagnostic Package", &["zip"])
+            .set_file_name(format!("syndocal-diagnostics-{captured_at_unix_ms}.zip"))
+            .save_file()
+            .map(diagnostic_zip_file_name),
+        diagnostic_package_publication::publish_diagnostic_package,
+    ).map(|path| path.map(|path| path.to_string_lossy().to_string()))
 }
 
 #[tauri::command]
@@ -112831,33 +112784,26 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn diagnostic_archive_contains_required_entries_and_crash_reports() {
-        let crash_directory = unique_test_directory("diagnostic-crashes");
-        fs::create_dir_all(&crash_directory).unwrap();
-        fs::write(crash_directory.join("crash-1.log"), b"panic report").unwrap();
+    fn diagnostic_archive_accepts_production_telemetry_without_private_data() {
+        let mut snapshot = EngineSnapshot::default();
+        snapshot.telemetry.last_error = Some("private-token-C:/private/show.sdc".to_string());
+        let telemetry = engine_telemetry_report_from_snapshot(&snapshot, 1234);
         let entries = vec![
-            ("manifest.json", br#"{"app":"Syndocal"}"#.to_vec()),
-            ("engine-telemetry.json", br#"{"version":1}"#.to_vec()),
-            ("video-runtime.json", br#"{}"#.to_vec()),
+            ("manifest.json", serde_json::to_vec(&json!({
+                "version": 1, "app": APP_NAME, "app_version": env!("CARGO_PKG_VERSION"),
+                "os": env::consts::OS, "arch": env::consts::ARCH,
+                "current_project_path": "C:/private/show.sdc",
+            })).unwrap()),
+            ("engine-telemetry.json", diagnostic_package::diagnostic_json_bytes(&telemetry).unwrap()),
+            ("video-runtime.json", br#"{"backends":[]}"#.to_vec()),
             ("project-summary.json", br#"{}"#.to_vec()),
         ];
-        let mut bytes = std::io::Cursor::new(Vec::new());
-        write_diagnostic_archive(&mut bytes, &entries, &crash_directory).unwrap();
-        bytes.set_position(0);
-        let mut archive = zip::ZipArchive::new(bytes).unwrap();
-
-        for name in [
-            "manifest.json",
-            "engine-telemetry.json",
-            "video-runtime.json",
-            "project-summary.json",
-            "README.txt",
-            "crash-reports/crash-1.log",
-        ] {
-            assert!(archive.by_name(name).is_ok(), "missing {name}");
-        }
-        drop(archive);
-        fs::remove_dir_all(crash_directory).unwrap();
+        let bytes = diagnostic_package::build_diagnostic_package(&entries).unwrap();
+        diagnostic_package::validate_diagnostic_package(&bytes).unwrap();
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(!text.contains("private-token"));
+        assert!(!text.contains("C:/private"));
+        assert!(!text.contains("crash-reports/"));
     }
 
     #[test]
