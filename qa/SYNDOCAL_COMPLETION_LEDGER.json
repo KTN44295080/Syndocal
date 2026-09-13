@@ -413,7 +413,7 @@
       "owner": "ASIO performance acceptance owner",
       "dependency": "ASIO fault matrix, WASAPI comparison path, and long-duration device access",
       "nonclaim": "Does not claim the one-hour ASIO/WASAPI soak or latency budgets passed.",
-      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/ASIO_INPUT_ACCEPTANCE.md"],
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/ASIO_INPUT_ACCEPTANCE.md", "qa/ASIO_SOAK_CURRENT_SOURCE_CHECKPOINT_2026-09-14.md"],
       "status": "Open"
     },
     {
