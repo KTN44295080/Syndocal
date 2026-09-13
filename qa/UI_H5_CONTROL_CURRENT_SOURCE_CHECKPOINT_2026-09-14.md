@@ -53,6 +53,14 @@ rejected by Windows with a Side-by-Side configuration error. The prior passing
 rendered evidence remains the pre-change layout baseline; no fresh rendered
 pass is claimed for the new semantic assertions.
 
+## Source continuity audit — 2026-09-14
+
+The blackout semantic change was made in `894c690c`. A current-tree audit with
+`git diff --name-only 894c690c..HEAD -- app crates` returned no paths, so the
+current product source still matches the source used for the post-change
+native build/process smoke and the recorded static checks. This does not turn
+the unavailable rendered/native UI gates into a pass.
+
 ## Resume procedure
 
 Run the H5 matrix on the exact current artifact: live Cue/Clip/Take/Transition,
