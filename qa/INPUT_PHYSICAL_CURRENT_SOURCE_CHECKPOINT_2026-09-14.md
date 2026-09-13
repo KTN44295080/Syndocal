@@ -5,11 +5,12 @@
 - Flow marker: `INPUT-PHYSICAL-001` (section 8, Open)
 - Q1 row: `COV-INPUT-001`
 - Branch: `codex/showclock-review-20260912`
-- Base: `12090100ca713bfbc1c5bb0f04c59e937c320891`
+- Base: `a192125b8da4378cc952ef69d70baf87130fd6fb`
 - Authority: `qa/M4_IO_VALIDATION.md` and the F1 input-generation contracts
 
-This checkpoint covers current-source input routing and generation guards. It
-does not claim the physical MIDI/OSC/Remote client matrix.
+This checkpoint covers current-source input routing and generation guards plus
+one safe current-host physical MIDI enumerate/open/feedback slice. It does not
+claim the complete physical MIDI/OSC/Remote client matrix.
 
 ## Verification
 
@@ -28,6 +29,24 @@ Result: exit code 0.
 - Current source preserves generation/authority routing and the narrow input
   reader boundary.
 - First-party warning count observed in this focused source run: `0`.
+
+## Current-host physical MIDI recheck — 2026-09-14
+
+With the pinned MSVC `14.44.35207` x64 linker and
+`SYNDOCAL_TEST_MIDI_INPUT=SMC-Mixer` / `SYNDOCAL_TEST_MIDI_OUTPUT=SMC-Mixer`,
+the release-mode ignored test
+`physical_midi_ports_enumerate_open_and_send_feedback` passed:
+`1 passed / 0 failed / 0 ignored` in `0.37s` after the release build.
+Production `midir` enumerated input `SMC-Mixer` at index `1` and output
+`SMC-Mixer` at index `2`, opened the clock input and feedback output, and sent
+one safe channel-1 All Notes Off message `B0 7B 00`. The full observed lists
+were inputs `CustomMIDI1`, `SMC-Mixer`, `MIDIIN2 (SMC-Mixer)` and outputs
+`Microsoft GS Wavetable Synth`, `CustomMIDI1`, `SMC-Mixer`,
+`MIDIOUT2 (SMC-Mixer)`.
+
+This is a current-source physical transport slice only. It does not prove
+controller movement, LED/clock/MTC behavior, latency, reconnect/replacement,
+OSC/TouchOSC, Web Remote, native UI routing, DMX, or venue acceptance.
 
 ## Unresolved acceptance
 

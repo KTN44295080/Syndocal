@@ -157,6 +157,22 @@ output. The FTDI `COM5` path is covered by the physical serial-DMX recheck
 below; its fixture result is recorded separately from the remaining timing and
 protocol gates.
 
+### 2026-09-14 current-source physical MIDI recheck
+
+Against the current `codex/showclock-review-20260912` source, the pinned MSVC
+`14.44.35207` x64 release test was rerun with
+`SYNDOCAL_TEST_MIDI_INPUT=SMC-Mixer` and `SYNDOCAL_TEST_MIDI_OUTPUT=SMC-Mixer`:
+
+| Check | Device/command | Capture | Result |
+|---|---|---|---|
+| Physical MIDI enumerate/open/feedback | `cargo test -p io --release --locked -j 1 physical_midi_ports_enumerate_open_and_send_feedback -- --ignored --nocapture --test-threads=1` | `midir` listed input `SMC-Mixer` at index 1 and output `SMC-Mixer` at index 2, opened both required endpoints, and sent one safe `B0 7B 00` All Notes Off message. | PASS — `1 passed / 0 failed / 0 ignored` in `0.37s` after the release build. |
+
+The test is a safe transport check and emits no controller movement or LED
+pattern. It refreshes only the enumerate/open/safe-feedback slice; physical
+knob/button/clock/MTC behavior, LED observation, latency, reconnect, OSC,
+TouchOSC, Web Remote, native UI routing, and the full input matrix remain
+open.
+
 ### 2026-09-12 SMC-Mixer direct LED point-light check
 
 The user explicitly confirmed the visible result of a separate, direct Windows
