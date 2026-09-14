@@ -58,3 +58,35 @@ inventory exposed only a generic `USB Serial Port (COM5)` FTDI device; no
 Enttec, DMXKing, or named RDM interface was present. The generic device was
 not opened and no USB-DMX/RDM bytes or analyzer capture were produced.
 `DMX-USB-RDM-001` remains `Open` for the required two-fixture external matrix.
+
+## Takeover continuation — current-source USB-DMX/RDM recheck after Video repair — 2026-09-14
+
+At current source HEAD `e828b6d2`, the focused output contracts were rerun:
+
+```text
+pnpm.cmd run check:output-control-runtime
+output control runtime contract: PASS (v12 output commands, lease-bound
+Lighting/Video master, Video Take/Clip Launch and group controls, fixed same-PC
+Art-Net loopback/DSF2026 probe plus no-send reconciliation/strict Spout V2
+receipt fences/reset, revision-fenced USB-DMX status, strict receipts,
+fail-closed query)
+Standby Sync output-lease UI contract passed.
+
+pnpm.cmd run check:output-ownership
+output ownership static contract: PASS
+
+pnpm.cmd run check:safety-blackout-runtime
+safety blackout runtime contract: PASS
+```
+
+All three commands exited `0`. A read-only Windows PnP inventory exposed only:
+
+```text
+OK  Ports  USB Serial Port (COM5)  FTDIBUS\VID_0403+PID_6001+6&1824F623&0&2\0000
+```
+
+No Enttec, DMXKing, or named RDM interface was present. The generic serial
+device was not opened; no USB-DMX/RDM bytes, E1.20 discovery, ACK/NACK/timeout
+log, two-fixture capture, or analyzer artifact was produced.
+`DMX-USB-RDM-001` remains `Open` pending the required named gateway/interface
+and two-fixture external matrix.
