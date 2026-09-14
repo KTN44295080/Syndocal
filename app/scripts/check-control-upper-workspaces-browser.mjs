@@ -22,18 +22,22 @@ const productMinimumWindow = { width: 960, height: 640 };
 // exact user-reported screenshot surface; smaller browser and detached-pane
 // tests remain supplemental and do not define this acceptance.
 const defaultViewports = [
-  { width: 3840, height: 2160 },
-  { width: 2560, height: 1440 },
-  { width: 2560, height: 1504 },
-  { width: 1920, height: 1080 },
-  { width: 1280, height: 720 },
+  { key: "3840x2160", width: 3840, height: 2160, deviceScaleFactor: 1 },
+  { key: "2560x1440", width: 2560, height: 1440, deviceScaleFactor: 1 },
+  { key: "2560x1504", width: 2560, height: 1504, deviceScaleFactor: 1 },
+  { key: "1920x1080", width: 1920, height: 1080, deviceScaleFactor: 1 },
+  { key: "1280x720", width: 1280, height: 720, deviceScaleFactor: 1 },
+  // A Windows 2560x1504 work area at 200% scaling is approximately this CSS
+  // viewport. It must retain the normal monitor-first desk even though the
+  // CSS height is below the genuine low-DPI short-height floor.
+  { key: "2560x1504-2x", width: 1280, height: 752, deviceScaleFactor: 2, highDpiLargeSurface: true },
 ];
 const selectedViewport = process.env.SYNDOCAL_CONTROL_VIEWPORT;
 const viewports = (() => {
   if (selectedViewport === undefined) return defaultViewports;
-  const match = defaultViewports.find(({ width, height }) => `${width}x${height}` === selectedViewport);
+  const match = defaultViewports.find(({ key }) => key === selectedViewport);
   if (!match) {
-    throw new Error(`SYNDOCAL_CONTROL_VIEWPORT must be one exact supported viewport; received ${JSON.stringify(selectedViewport)}`);
+    throw new Error(`SYNDOCAL_CONTROL_VIEWPORT must be one exact supported viewport key; received ${JSON.stringify(selectedViewport)}`);
   }
   return [match];
 })();
@@ -1381,7 +1385,12 @@ try {
 
   for (const viewport of viewports) {
     const viewportDiagnosticsCursor = client.diagnosticCursor();
-    await client.send("Emulation.setDeviceMetricsOverride", { ...viewport, deviceScaleFactor: 1, mobile: false }, cdpTimeoutsMs.request);
+    await client.send("Emulation.setDeviceMetricsOverride", {
+      width: viewport.width,
+      height: viewport.height,
+      deviceScaleFactor: viewport.deviceScaleFactor,
+      mobile: false,
+    }, cdpTimeoutsMs.request);
     await client.send("Page.navigate", { url: baseUrl }, cdpTimeoutsMs.navigate);
     await waitFor(() => evaluate(client, "document.querySelector('.app') && document.readyState === 'complete'"), "app mount");
     await sleep(80);
@@ -1431,7 +1440,7 @@ try {
       return value?.cardCount > 0 ? value : false;
     }, "Video Media Library surface");
     assert.ok(rectHeight(video.panel) >= 160 && rectHeight(video.header) >= 32, `Video library panel/header have useful geometry: ${JSON.stringify({ panel: video.panel, header: video.header, rail: video.rail, surface: video.surface, list: video.list, cardCount: video.cardCount })}`);
-    const minimumTopPaneShare = viewport.height <= 800 ? 0.25 : 0.48;
+    const minimumTopPaneShare = viewport.highDpiLargeSurface || viewport.height > 800 ? 0.48 : 0.25;
     const topPaneShare = rectHeight(video.topPane) / Math.max(1, rectHeight(video.panel));
     assert.ok(topPaneShare >= minimumTopPaneShare, `Video Preview/Program keeps the primary upper-desk share at ${viewport.width}x${viewport.height}: ${JSON.stringify({ panel: video.panel, topPane: video.topPane, topContent: video.topContent, topPaneShare, minimumTopPaneShare })}`);
     assert.ok(rectHeight(video.topContent) > 0, `Video Preview/Program content remains visible at ${viewport.width}x${viewport.height}: ${JSON.stringify({ topPane: video.topPane, topContent: video.topContent })}`);

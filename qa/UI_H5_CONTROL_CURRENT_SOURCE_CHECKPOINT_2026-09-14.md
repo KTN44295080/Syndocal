@@ -349,3 +349,56 @@ current three-display setup was not itself treated as proof of the required
 primary 1920x1080 acceptance geometry. `UI-H5-CONTROL-001` remains `Open` for
 native live/dangerous interaction, accessibility, physical output,
 external-client, recovery, venue, signing, and publication evidence.
+
+## Continuation — high-DPI Video upper-desk regression repair — 2026-09-15
+
+The current user screenshot is a physical `2560x1504` Windows work area. On
+the current high-DPI host, that surface is presented to the WebView at roughly
+`1280x752` CSS pixels. The existing `@media (max-height: 800px)` Video reflow
+therefore selected its intentional low-DPI operating-floor `36% / 64%`
+monitor/lower split, which made the Preview/Program surface visibly too short
+despite the large physical monitor.
+
+The product repair is limited to the Video desk in `app/src/styles.css`: when
+the CSS surface is at least `1200px` wide and reports at least `144dpi`, the
+short-height rule is overridden back to the monitor-first `60% / 40%` split.
+The ordinary low-DPI `1280x720` short-height reflow remains unchanged. No
+typography, button, hit target, output route, or outer workspace split was
+changed.
+
+The browser gate now includes the physical-large/high-DPI equivalent as the
+`2560x1504-2x` case (`1280x752`, `deviceScaleFactor=2`) and requires the same
+`48%` minimum upper-desk share as the normal-height cases. The existing
+`1280x720` case continues to use the `25%` short-height floor.
+
+Rendered verification used the explicit installed Chrome fallback because the
+Browser plugin is unavailable in this session:
+
+```text
+pnpm.cmd --dir app run check:control-upper-workspaces
+check:control-upper-workspaces passed:
+  3840x2160, 2560x1440, 2560x1504, 1920x1080, 1280x720, 2560x1504-2x
+2560x1504-2x equivalent: CSS 1280x752, Lighting upper=327px, Timeline upper=277px
+1280x720 low-DPI floor: Lighting upper=295px, Timeline upper=245px
+all cases: zero runtime exceptions, console/log errors/warnings, and harness errors
+```
+
+The generated high-DPI-equivalent Video screenshot was visually inspected at
+`C:\TEMP\syndocal-control-ui-checkpoints\control-video-1280x752.png`; Preview,
+Program, Preview Transport, and Master retain a readable primary surface while
+the lower Clips/Outputs/Layers region remains contained.
+
+The current source was rebuilt through the exact Windows native wrapper:
+
+```text
+pnpm.cmd --dir app tauri build --no-bundle
+Finished release profile [optimized] target(s) in 3m 03s
+SHA-256: 01C5F39A056F781DA74BA5DB138318AD190299469CDD77FA66E47CB63059C5E7
+Exact target/release/syndocal.exe: PID 6512, title Syndocal, Responding=True
+```
+
+This is current-source rendered-browser geometry plus exact native build and
+process-smoke evidence. It does not establish native button-by-button
+interaction, native accessibility, the current three-display acceptance gate,
+physical output, external clients, recovery, venue/soak, signing, publication,
+or product completion. `UI-H5-CONTROL-001` remains `Open`.

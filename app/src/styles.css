@@ -37681,6 +37681,20 @@ a[href]:focus-visible,
   }
 }
 
+/* Windows reports a high-DPI 2560x1504 work area as roughly 1280x752 CSS
+   pixels. Do not mistake that physically large operator surface for the
+   genuine 720/768px operating floor: the compact 36/64 reflow made
+   Preview/Program visibly starve on the user's scaled desktop. Keep the
+   existing short-height reflow for ordinary low-DPI 720/768px windows, while
+   restoring the normal monitor-first 60/40 desk for a large high-DPI surface.
+   The rule is intentionally limited to the Video desk and does not change
+   typography, controls, hit targets, or the outer workspace split. */
+@media (max-height: 800px) and (min-width: 1200px) and (min-resolution: 144dpi) {
+  .layoutControl.controlModeMixer .videoControlPanelMixer {
+    grid-template-rows: 36px minmax(0, 0.60fr) 5px minmax(0, 0.40fr);
+  }
+}
+
 /* Media Asset T1: a closed library rail consumes one normal control row. Its
    opened catalog overlays the clip desk and scrolls internally, preserving the
    fixed one-screen shell and the existing clip hit targets. */

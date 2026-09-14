@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const checkerPath = resolve(scriptDirectory, "check-control-upper-workspaces-browser.mjs");
-const viewports = ["3840x2160", "2560x1440", "2560x1504", "1920x1080", "1280x720"];
+const viewports = ["3840x2160", "2560x1440", "2560x1504", "1920x1080", "1280x720", "2560x1504-2x"];
 // The checker has bounded deadlines for every owned teardown operation. This
 // larger process-level limit is only a secondary defense for an unexpected
 // synchronous hang and must never turn a timed-out child into a pass.
