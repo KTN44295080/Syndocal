@@ -156,3 +156,32 @@ failure is not evidence for macOS and no baseline or suppression was changed.
 The static gate and local release executable do not alter any Deferred status;
 the eight markers remain Deferred until their explicit scope dependencies are
 approved and their named external evidence exists.
+
+## Windows warning-ratchet classifier repair — 2026-09-14
+
+The Windows native warning gate initially failed closed because the generic
+output probe treated Vite's existing chunk-size advisory as warning-shaped
+output. The actual upstream line is:
+`(!) Some chunks are larger than 500 kB after minification. Consider:`.
+This is a build-size advisory, not a Rust/compiler diagnostic and not a new
+first-party warning. The repair is recorded in implementation commit
+`dad243b1`: only that exact Vite line (with LF or CRLF termination) is removed
+from the generic warning-shaped probe. Unknown `(!)` lines, `warning:` lines,
+and `WARN` output remain fail-closed.
+
+Evidence after the repair:
+
+- `pnpm.cmd run check:warnings:self-test` — PASS, including LF/CRLF Vite
+  advisory cases and rejection of an incomplete/unknown `(!)` line.
+- `pnpm.cmd run check:warnings -- --configuration windows-native-release` —
+  PASS. Output marker coverage `2/2`; warning-shaped output `none`; baseline
+  warnings `{total:0, first-party:0, third-party:0}`; current warnings
+  `{total:0, first-party:0, third-party:0}`; identity removals `0`.
+- `node --check scripts/warning-ratchet-lib.mjs` and
+  `node --check scripts/test-warning-ratchet.mjs` — PASS from `app/`.
+
+This is Windows-local warning-gate evidence only. It does not provide macOS
+or Linux compiler evidence, signed/distributed artifact evidence, clean-machine
+installation, updater, publication, hardware, physical-output, or venue
+acceptance. `WARN-MACOS-001` and the other seven Deferred markers remain
+Deferred; no marker status or warning baseline was promoted.
