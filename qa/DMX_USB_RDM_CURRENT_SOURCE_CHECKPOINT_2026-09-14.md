@@ -137,3 +137,20 @@ not prove physical serial-DMX recovery or a known electrical output state.
 `DMX-USB-RDM-001` remains **Open** pending a named Enttec/DMXKing interface,
 physical zero receipt, fixture/wire evidence, Open DMX timing, and the required
 two-fixture RDM/TOD matrix.
+
+## Current direct COM5 zero-frame probe — 2026-09-15
+
+After the native `Prepare` failure, the exact enumerated `COM5` FTDI port was
+opened directly once with Windows `SerialPort` at `250000 baud / 8N2`. Two
+`513-byte` frames were written; every byte in both frames was zero, and the
+handle closed cleanly:
+
+```text
+result=PASS port=COM5 baud=250000 bytes_per_frame=513 frames=2
+elapsed_ms=305 note=zero-only 513-byte frames; no nonzero channel data
+```
+
+This confirms the current Windows serial handle can be opened and accepts a
+zero-only write. It does not provide a BREAK/MAB timing capture, serial
+analyzer receipt, fixture/wire observation, or proof that the product's
+Open-DMX worker reached the port. `DMX-USB-RDM-001` remains **Open**.

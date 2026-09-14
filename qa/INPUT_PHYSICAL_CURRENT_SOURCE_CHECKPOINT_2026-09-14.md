@@ -251,3 +251,20 @@ production endpoint. The earlier successful reconnected run and its safe
 as the current availability result. `INPUT-PHYSICAL-001` remains **Open**
 pending stable `midir` availability and the named movement, feedback, clock,
 reconnect, latency, and native-routing matrix.
+
+## Windows MIDI service restart boundary — 2026-09-15
+
+The paired SMC-Mixer and its three current PnP entries were still present with
+`Status=OK`, and `midisrv` was `Running`. A restart attempt was made before a
+final production `midir` retry, but Windows rejected the service control
+operation with:
+
+```text
+Service 'Windows MIDI サービス (midisrv)' cannot be stopped ... Cannot open
+'midisrv' service on computer '.'.
+```
+
+No service state was changed by this attempt. The subsequent `midir` retry
+still enumerated only `CustomMIDI1` and failed before opening or sending any
+SMC-Mixer endpoint. This is retained as a host recovery boundary, not as a
+MIDI acceptance result; `INPUT-PHYSICAL-001` remains **Open**.
