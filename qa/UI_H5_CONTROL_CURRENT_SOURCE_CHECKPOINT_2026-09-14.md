@@ -435,7 +435,7 @@ repository's read-only window harness:
 ```text
 powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File qa/harnesses/capture-window.ps1 -TitlePattern '^Syndocal$' -OutPath C:\TEMP\syndocal-control-ui-current-20260915.png -SettleMilliseconds 1200
 captured 'Syndocal' (2586 x 1530)
-SHA-256: 6B1E35E286CAFC1EA0B58563484766DB0F5EBF4F43DA28DF09C9D753623AE797
+SHA-256: AFFFE6DFBD337A6707946A8BA02E1CABDB8F73105974D6FE45B041855273ED02
 ```
 
 Visual inspection of the captured native window confirms that the repaired
