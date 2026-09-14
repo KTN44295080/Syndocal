@@ -1149,3 +1149,10 @@ output-control/Standby Sync, ownership, and safety-blackout contracts. Read-only
 PnP showed only generic FTDI `USB Serial Port (COM5)`; no Enttec/DMXKing/RDM
 interface was opened and no bytes or analyzer capture were produced. The
 two-fixture USB/RDM matrix remains Open.
+
+The `INPUT-PHYSICAL-001` source recheck at HEAD `69c86ac4` passed DVC MIDI
+shortcuts (`39` assertions), DVC DMX shortcuts (`41`), and frontend routing
+(`133/31/28/479` renderer/server/raw/facade dispatches). The prior SMC-Mixer
+safe MIDI slice remains the only physical evidence; no new device traffic or
+OSC/Remote/Clock/MTC/reconnect/latency matrix was run, so the marker remains
+Open.

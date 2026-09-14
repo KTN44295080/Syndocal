@@ -65,3 +65,13 @@ controller movement, LED/clock/MTC behavior, or physical recovery.
 
 Next action is the named physical input matrix with device/client versions,
 generation transitions, reconnect timing, raw logs, and operator observations.
+
+## Takeover continuation — current-source input recheck — 2026-09-14
+
+At HEAD `69c86ac4`, the DVC MIDI shortcut check passed `39` assertions, the
+DVC DMX shortcut check passed `41`, and frontend command routing passed with
+`133` renderer, `31` server-authoritative, `28` raw, and `479` facade
+dispatches. The prior SMC-Mixer release test remains the only recorded physical
+slice; it is not repeated here. No OSC/TouchOSC/Remote client, Clock/MTC,
+latency, reconnect, or new MIDI traffic was used. `INPUT-PHYSICAL-001` remains
+`Open`.
