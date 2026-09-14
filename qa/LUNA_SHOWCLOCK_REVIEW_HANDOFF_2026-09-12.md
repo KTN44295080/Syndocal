@@ -666,7 +666,7 @@ require their actual UI/device/two-machine topology and separate evidence.
 
 The continuation is now owned by the current task on branch
 `codex/showclock-review-20260912`. The latest pushed checkpoint is
-`87d8afaa` (`qa: record comparison source rerun`), and the worktree is clean
+`040d312e` (`qa: record native display gate retry`), and the worktree is clean
 with the branch equal to `origin/codex/showclock-review-20260912`.
 
 The earlier product-code change in this continuation is in
@@ -682,6 +682,14 @@ Mapping fixture and clamps the software-soak video-opacity floor, while
 `qa/run-soak.ps1` fails closed on a false or missing report and tolerates only
 a host exit-code property loss after a truthful passed report. Product runtime
 and authored sample behavior remain unchanged by that harness fix.
+
+The native maximized/F11 gate was retried from the current source after the
+host GPU query reported `2560x1600`. The app-owned maximized client still
+measured `1280x752`; the gate failed closed before F11 or UI interaction with
+exit code `1`. The user display registry reported `AppliedDPI=192` (200%), so
+the logical client boundary still does not satisfy the required `1920x1000` /
+`1920x1080` gate. This result is recorded in the H5 and accessibility
+checkpoints; it does not provide native UI or accessibility evidence.
 
 Current-source verification passed for TypeScript, Vite build, localization,
 renderer routing, shortcut/workspace contracts, the full static release chain,
