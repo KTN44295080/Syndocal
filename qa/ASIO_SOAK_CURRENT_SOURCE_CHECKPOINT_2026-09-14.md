@@ -86,3 +86,32 @@ time-series artifact was produced in this continuation.
 must use the approved artifact and named devices, with raw telemetry proving
 overrun `0`, callback p99 below `20%` and max below `50%` of buffer duration,
 capture-to-engine p95 `<= 40 ms`, and loss-to-zero `<= 250 ms`.
+
+## Takeover continuation — current-source soak preflight recheck after Video repair — 2026-09-14
+
+At current source HEAD `bd3f7415`, the source lifecycle check passed:
+
+```text
+pnpm.cmd run check:live-audio
+live audio fail-closed lifecycle, availability contract, selection persistence,
+presentation, and request ordering ok
+```
+
+The existing M5 harness preflight was also rerun without starting Cargo or a
+device stream:
+
+```text
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File ..\qa\run-soak.ps1 -PreflightOnly
+exit code 1
+Refusing the Windows native soak build because automatic vcvars64.bat
+-vcvars_ver=14.44 initialization failed; run from an x64 Visual Studio 2022
+Community Developer Command Prompt. Ambient reason: VCToolsInstallDir absent.
+```
+
+This is a failed-closed environment preflight, not a soak result. The harness
+has a narrower Community-only preflight; the available Build Tools linker was
+used only for the separate SDK-independent bridge contract test and was not
+substituted for this soak gate. No ASIO/WASAPI stream, one-hour run, callback or
+XRUN telemetry, loss-to-zero measurement, thermal/clock record, or latency
+artifact was produced. `ASIO-SOAK-001` remains `Open` pending the approved
+artifact, named devices, and the matched one-hour ASIO/WASAPI evidence.
