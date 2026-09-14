@@ -1138,3 +1138,8 @@ The `ASIO-PERSISTENCE-PACKAGE-001` source recheck at HEAD `e43f2148` passed
 live-audio selection/persistence/lifecycle and ASIO packaging (`169`
 assertions). No licensed/public artifact, native stale-device rehearsal, or
 final package was produced; the marker remains Open.
+
+The `DMX-ARTNET-001` current-source recheck at HEAD `de9eb1c0` passed DMX
+addressing, output ownership, safety-blackout, and show-setup contracts. No
+Art-Net/sACN node, fixture, reconnect, or sustained physical 44 Hz output was
+used; the marker remains Open for the external lighting matrix.

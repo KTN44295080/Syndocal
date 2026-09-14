@@ -46,3 +46,13 @@ network-output marker, and no network or fixture output was emitted here.
 
 Next action is the named Art-Net/sACN node and fixture matrix with raw packets,
 fixture observations, reconnect timing, and exact output-owner identity.
+
+## Takeover continuation — current-source Art-Net preparation recheck — 2026-09-14
+
+At HEAD `de9eb1c0`, DMX addressing helpers, output ownership, safety-blackout
+runtime, and the DMX show-setup UI contract all passed. The show-setup result
+retained canonical acquire/recover/reuse, fresh authority, fail-closed
+preparation, same-action singleflight, cross-action busy rejection, and
+loopback-before-S0 boundaries. No Art-Net/sACN node, fixture, reconnect path,
+or sustained physical 44 Hz output was exercised; `DMX-ARTNET-001` remains
+`Open`.
