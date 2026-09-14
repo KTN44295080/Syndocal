@@ -104,22 +104,26 @@ strengthens only the current-source software sub-gate and does not change
 
 ## Secondary-display follow-up and current gate wiring — 2026-09-14
 
-The current host now exposes two Windows displays. The exact inventory used by
-the native-window checkpoint is:
+The earlier native-window sample recorded only two displays. A fresh
+DisplayConfig dry-run after the additional display was connected found three
+active displays. The exact inventory is retained at
+`target/qa/three-display-inventory-20260914-f96d312348f645cdbc58fabc5b2295c6/monitors.json`:
 
 ```text
-DISPLAY1 / integrated TMA0803 / 2560x1600 / effective DPI 192 / work 2560x1504
-DISPLAY2 / generic RTK0000    / 1920x1200 / effective DPI 96  / work 1920x1152
-DISPLAY2 also exposed a 1920x1080 mode for the formal native-window gate.
+DISPLAY1 / stable \\?\DISPLAY#TMA0803#5&2a56f61f&0&UID256 / 2560x1600 / effective DPI 192 / work 2560x1504
+DISPLAY2 / stable \\?\DISPLAY#RTK0000#5&2a56f61f&0&UID261 / 1920x1200 / effective DPI 96  / work 1920x1152
+DISPLAY3 / stable \\?\DISPLAY#LKGF803#5&2a56f61f&0&UID281 / 3840x2160 / effective DPI 144 / work 3840x2088
 ```
 
-This is sufficient to prepare a dual-display follow-up, but it is not the
-three-role physical acceptance topology used by the strict observer (editor
-1920x1080@96, LED 1920x1080@144, projector 3840x2160@144). No Display output
-was added to the user's persisted project because the available UI path is a
-durable Add operation and the current source intentionally has no canonical
-remove operation. No HDMI, NDI/Spout, or external receiver was therefore
-driven merely to create temporary state.
+The three-display count is therefore confirmed. The strict observer's three
+role contract is not yet satisfied: the projector role matches exactly, but
+the editor role requires 1920x1080@96 while DISPLAY2 is currently 1920x1200,
+and the LED role requires a distinct 1920x1080@144 display while DISPLAY1 is
+currently 2560x1600@192. This is a display-mode/DPI mismatch, not a missing
+monitor count. No Display output was added to the user's persisted project
+because the available UI path is a durable Add operation and the current source
+intentionally has no canonical remove operation. No HDMI, NDI/Spout, or
+external receiver was therefore driven merely to create temporary state.
 
 The exact current-checkout executable `target/release/syndocal.exe` was
 started once for a read-only native-window availability check. Windows
