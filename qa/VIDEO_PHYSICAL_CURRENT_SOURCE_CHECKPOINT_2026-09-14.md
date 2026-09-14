@@ -69,3 +69,13 @@ receiver.
 
 Next action is the physical display/capture matrix with exact resolution,
 receiver, source, frame-rate, reconnect, and dropped-frame records.
+
+## Takeover continuation — current-source video-output recheck — 2026-09-14
+
+At HEAD `d9908a8f`, video output routing, managed output-window runtime,
+output-window observation, and video runtime polling all passed. The runtime
+again confirmed exact-Both recovery, receipt rejection, singleflight,
+incarnation fencing, malformed-response rejection, generation retention, and
+zero-copy valid arrays. No display/HDMI output, NDI/Spout receiver, or new
+camera capture was opened. The existing ASUS webcam two-cycle slice remains
+partial evidence; `VIDEO-PHYSICAL-001` stays `Open`.

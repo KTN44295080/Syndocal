@@ -1161,3 +1161,9 @@ The `DJ-LINK-HARDWARE-001` source recheck at HEAD `e874a918` passed track
 mapping policy and DJ Link frontend/runtime contracts. No rekordbox peer,
 Agent, pedal, remote client, or MIDI traffic was started; HELLO/ACK,
 STATE_SYNC, reconnect, restart, and the 0/12 hardware matrix remain Open.
+
+The `VIDEO-PHYSICAL-001` current-source recheck at HEAD `d9908a8f` passed
+video routing, managed output-window runtime, observation, and polling
+contracts, including exact-Both recovery and fencing. No display/HDMI,
+NDI/Spout receiver, or new camera capture was used; only the existing ASUS
+webcam slice remains evidence and the physical marker stays Open.
