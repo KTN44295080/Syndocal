@@ -150,3 +150,26 @@ trust exercise, or adversarial network harness was opened.
 `REMOTE-SECURITY-001` remains `Open` for the named external exposure,
 physical cancellation, dependency/SBOM/redaction, updater trust, and complete
 bypass-review matrices.
+
+## Continuation — hostile descriptor admission corpus — 2026-09-14
+
+The MCP sidecar test was extended in implementation commit `99cbd836` to run
+the production `readDescriptor` parser against a deterministic 256-case
+corpus. Exactly one current descriptor is accepted; 255 candidates are
+rejected, including deterministic random-byte payloads and a `64 KiB + 1`
+oversize payload. The test restores the valid descriptor before the child
+adapter starts, so no external state is left behind.
+
+Verification:
+
+```text
+node --check tools/syndocal-mcp/check.mjs                 PASS
+node --check tools/syndocal-mcp/server.mjs               PASS
+node tools/syndocal-mcp/check.mjs                        PASS
+PASS 15 adapter integration groups; fake loopback only, no Syndocal/device calls
+```
+
+This strengthens the local sidecar descriptor/parser admission boundary only.
+It does not constitute a real LAN/TLS exposure, Remote/Touch client, public
+endpoint, RDM/TOD cancellation, dependency/SBOM review, updater trust exercise,
+or complete security acceptance. `REMOTE-SECURITY-001` remains `Open`.
