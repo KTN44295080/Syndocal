@@ -978,3 +978,34 @@ loopback, inventory, or partial physical evidence. The current Open list is:
 3. Every completed checkpoint must update the applicable current-source or
    domain QA document, preserve the 58-row ledger/Q1-Q4 mirror invariants,
    commit only owned files, push, and verify upstream equality.
+
+## Takeover continuation — branch cleanup and AI3 durable recheck — 2026-09-14
+
+The supervising checkout remains `codex/showclock-review-20260912` at pushed
+HEAD `3c75c9a0caf68cbaabc7188531d1ca21bc08f671`; the working tree is clean and
+its upstream is equal. Four clean branches whose tips were already reachable
+from the current/main history were removed from both local and origin refs,
+after their exact attached worktrees were removed without force:
+
+- `chatgpt/macos-final-gate-20260908` (`89dea805`)
+- `chatgpt/thumbnail-native-reload-20260908` (`bc39f709`)
+- `codex/thumbnail-lifecycle-cancel-20260910` (`f40aa2fb`)
+- `codex/video-fx-browser-gate-20260910` (`d6f6d53a`)
+
+The branches `chatgpt/core-integration-candidate-20260908` and
+`chatgpt/macos-artifact-gate` were retained because their attached worktrees
+contain uncommitted changes. `chatgpt/snapshot-profile-20260908` was retained
+because it has a unique unmerged QA profiling commit. The local
+`chatgpt/macos-artifact-validation` was retained because it has the unique
+unmerged native-admission fix `f4aa5fff`; its already-redundant remote ref had
+previously been removed. No other branch was deleted.
+
+The AI3 durable current-source recheck is detailed in
+`qa/AI3_DURABLE_ACCEPTANCE_CURRENT_SOURCE_CHECKPOINT_2026-09-14.md`. Agent
+Bridge (11 groups), bootstrap (4), Tauri admission (539 commands / 18 negative
+fixtures), E3 recovery, output-control/Standby Sync, and output ownership all
+passed with exit code `0`. This did not open native dangerous-action dialogs or
+touch output. `AI3-DURABLE-ACCEPTANCE-001` therefore remains `Open` for the
+named native No/Close, reply-loss/crash-restart, physical ACK, and five-display
+acceptance boundaries; the authoritative ledger remains `27 Complete`,
+`8 Deferred`, `23 Open` (`58` total).

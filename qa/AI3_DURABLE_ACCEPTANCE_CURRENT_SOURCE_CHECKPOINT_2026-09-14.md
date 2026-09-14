@@ -43,3 +43,33 @@ Run the exact current artifact through the native dangerous-action matrix,
 including reply loss, crash/restart, restart non-reclamation, physical ACK,
 and five-display topology. Retain process identity, journal state, output
 state, and first failure for every case before changing the Flow marker.
+
+## Takeover continuation — current source recheck — 2026-09-14
+
+The current checkout was rechecked at `3c75c9a0caf68cbaabc7188531d1ca21bc08f671`
+after the takeover and before any physical output action. The following
+read-only/source-only checks all exited `0`:
+
+| Check | Result |
+| --- | --- |
+| `pnpm.cmd --dir app run check:agent-bridge` | PASS — 11 groups; real processor/runtime/confirmation modules; no native/device calls |
+| `node app/scripts/check-agent-bridge-bootstrap.mjs` | PASS — 4 deferred lifecycle groups |
+| `node app/scripts/check-tauri-admission-inventory.mjs` | PASS — 539 commands; 18 negative fixtures rejected; SHA-256 `a0ba71bfd1dce9e657fc5b052ccc452cf00f8a42fb3d838edef28913658cb9ab` |
+| `pnpm.cmd --dir app run check:project-recovery-e3` | PASS — project authority and E3 recovery driver |
+| `pnpm.cmd --dir app run check:output-control-runtime` | PASS — v2 output control, strict receipts, native-confirmation boundary, Standby Sync/lease UI |
+| `pnpm.cmd --dir app run check:output-ownership` | PASS — output ownership static contract |
+
+The current runtime still has the intended native-danger boundary: advanced
+R4 actions use a parented OS Warning/Yes-No dialog; only `Yes` proceeds; a
+`No` or close becomes terminal `Forbidden` before admission or mutation; and
+an exact replay returns the stored terminal result without prompting again.
+The deterministic Rust test covers this cancellation/replay behavior, while
+the runtime contract checker verifies the production wiring. These are
+implementation and source-contract results only.
+
+No native dangerous-action dialog was opened in this continuation, and no
+output, recording, device, or external client was contacted. Therefore the
+marker remains `Open`; the required native No/Close observation, reply-loss
+and crash/restart run, physical creation/teardown acknowledgement, and
+five-display hardware acceptance are still unproven. No ledger status or
+Q1/Q4 evidence count was changed from this source-only recheck.
