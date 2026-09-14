@@ -69,3 +69,13 @@ Not run in this checkpoint or takeover rerun:
 3. Execute the V01-V17 and Daslight task matrices with synchronized capture.
 4. Preserve every first failure and every unmeasured row; do not infer parity from counts or loopback.
 5. Update both Q1 rows and the completion ledger only from the resulting evidence.
+
+## Takeover continuity — 2026-09-14
+
+At HEAD `b9c95b3d`, `pnpm.cmd --dir app run check:status` still passes. The
+takeover introduced no comparator or product-runtime artifact, and no pinned
+SynapseRack/Daslight version, license, hardware/content topology, synchronized
+capture, operator measurement, or physical-output evidence became available.
+`COMPARE-PINNED-001` remains `Open`; parity must be established from the named
+V01-V17 and Daslight records rather than inferred from software or loopback
+counts.

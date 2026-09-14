@@ -1174,3 +1174,10 @@ and two-process software evidence remains current. No real switch, second
 machine, power-loss/crash/restart replay, stale-peer rejoin, device-loss,
 physical-output observation, or zero-simultaneous-output venue rehearsal was
 performed, so the venue marker remains Open.
+
+The `COMPARE-PINNED-001` continuity check at HEAD `b9c95b3d` retains the
+passing status-model contract only. No pinned SynapseRack/Daslight build,
+license/tier, reference hardware/content topology, synchronized comparison
+capture, operator measurement, or physical-output evidence exists. The marker
+remains Open until the V01-V17 and Daslight matrices are run with first-failure
+and unmeasured-row retention.
