@@ -173,3 +173,28 @@ This strengthens the local sidecar descriptor/parser admission boundary only.
 It does not constitute a real LAN/TLS exposure, Remote/Touch client, public
 endpoint, RDM/TOD cancellation, dependency/SBOM review, updater trust exercise,
 or complete security acceptance. `REMOTE-SECURITY-001` remains `Open`.
+
+## Continuation — bounded hostile stdio frame corpus — 2026-09-14
+
+Implementation commit `08f3c618` extends the production MCP `serve` integration
+check with 128 deterministic hostile stdio frames. Each frame is an invalid
+UTF-8 payload with a bounded length from `1` through `65536` bytes, followed by
+the newline delimiter. The server rejected all 128 frames with JSON-RPC
+`-32700` without exiting; a valid `ping` immediately afterward still completed.
+The existing `65537`-byte frame remains covered separately and is rejected with
+`-32600`.
+
+Verification:
+
+```text
+node --check tools/syndocal-mcp/check.mjs                 PASS
+node --check tools/syndocal-mcp/server.mjs               PASS
+node tools/syndocal-mcp/check.mjs                        PASS
+PASS 15 adapter integration groups; hostile stdio corpus: 128 rejected; fake loopback only, no Syndocal/device calls
+node tools/syndocal-mcp/check-transports.mjs             PASS
+```
+
+This strengthens the local stdio parser/input-boundary result only. It does not
+constitute real LAN/TLS exposure, a Remote/Touch client, public endpoint,
+RDM/TOD cancellation, dependency/SBOM review, updater trust exercise, or
+complete security acceptance. `REMOTE-SECURITY-001` remains `Open`.
