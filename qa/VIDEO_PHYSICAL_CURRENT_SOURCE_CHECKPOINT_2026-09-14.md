@@ -79,3 +79,25 @@ incarnation fencing, malformed-response rejection, generation retention, and
 zero-copy valid arrays. No display/HDMI output, NDI/Spout receiver, or new
 camera capture was opened. The existing ASUS webcam two-cycle slice remains
 partial evidence; `VIDEO-PHYSICAL-001` stays `Open`.
+
+## Current HEAD output-contract recheck — 2026-09-14
+
+At current HEAD `678e6960`, after the secondary-display native gate
+checkpoint, the complete current-source video-output contract set was rerun:
+
+```text
+pnpm.cmd --dir app run check:video-output-routing-runtime
+pnpm.cmd --dir app run check:video-output-window-runtime
+pnpm.cmd --dir app run check:video-output-window-observation
+pnpm.cmd --dir app run check:video-runtime-polling
+```
+
+All four commands exited `0`. Routing reported the R4 contract PASS;
+the managed-window check passed exact-Both recovery, receipt rejection,
+singleflight, incarnation reduction, and zero legacy invokes; the observation
+contract passed; and polling passed bounded current/transition requests,
+malformed-response rejection, generation retention, and zero-copy valid arrays.
+No physical display/HDMI output, NDI/Spout receiver, camera fault/replug,
+external client, or one-hour run was opened by this recheck. The result
+strengthens only the current-source software sub-gate and does not change
+`VIDEO-PHYSICAL-001`'s `Open` status.
