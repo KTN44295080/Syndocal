@@ -131,6 +131,39 @@ deployment/support drills, signing/publication, clean-machine recovery, and
 native/physical acceptance remain unproven, so `OBSERVABILITY-SUPPORT-001`
 stays `Open`.
 
+## Takeover continuation — current-source observability/release recheck — 2026-09-14
+
+At current source HEAD `80a7a001`, the focused Node contracts were rerun:
+
+```text
+pnpm.cmd --dir app run check:status
+status model helpers ok
+
+pnpm.cmd --dir app run check:bundled-library
+bundled fixture library failure/retry checks passed
+
+pnpm.cmd --dir app run check:release:self-test
+release metadata self-tests ok: 137 assertion groups
+AI0/AI1/AI2/AI4/AI5/AI6/AI7, F1/F2 self-tests: PASS
+ASIO packaging: 169 assertions
+video output routing: PASS
+Windows candidate extractor: 43 assertions
+verified materialization: 4 assertions
+Windows release artifact: 144 assertions
+strict JSON: 130 assertions
+```
+
+All three commands exited `0`. The artifact self-test took longer than the
+focused checks but reached its successful terminal result; no process was
+force-stopped and no release artifact was published. This confirms the
+current-source status, bundled-library, diagnostics/release-negative, and
+artifact-materialization contracts only.
+
+No signed N-to-N+1 update, external endpoint, clean-machine install, support
+drill, signing/publication, or physical/native acceptance was performed.
+`OBSERVABILITY-SUPPORT-001` remains `Open` pending those external release and
+support conditions.
+
 ## Current HEAD observability-contract recheck — 2026-09-14
 
 At current HEAD `0c57c34f`, the status, release, diagnostics, updater, and
