@@ -189,3 +189,44 @@ publication, clean-machine install, external device, or support drill was
 performed. `OBSERVABILITY-SUPPORT-001` remains `Open` for the signed
 N-to-N+1 matrix, deployment/recovery drills, signing/publication, and
 native/physical acceptance.
+
+## Takeover continuation — current-source observability recheck after Video repair — 2026-09-14
+
+At current source HEAD `9da6c1ff`, the current-source observability and release
+contracts were rerun from the repository checkout. All five commands exited
+`0`:
+
+```text
+pnpm.cmd run check:status
+status model helpers ok
+
+pnpm.cmd run check:bundled-library
+bundled fixture library failure/retry checks passed
+
+pnpm.cmd run check:release:self-test
+release metadata: 137 assertion groups
+ASIO packaging: 169 assertions
+Windows candidate extractor: 43 assertions
+verified materialization: 4 assertions
+Windows release artifact: 144 assertions
+strict JSON: 130 assertions
+AI0/AI1/AI2/AI4/AI5/AI6/AI7, F1/F2, and video output routing: PASS
+
+node scripts/check-windows-release-artifacts.mjs --self-test
+Windows candidate extractor: 43 assertions
+verified materialization: 4 assertions
+
+pnpm.cmd run check:strict-json
+strict JSON duplicate-key self-test passed: 130 assertions
+```
+
+The complete release self-test and the standalone artifact self-test reached
+successful terminal results without force-stopping a process. These checks
+reconfirm current-source diagnostics/status, redaction, updater/release-negative,
+bundled-library, artifact-materialization, and strict-JSON contracts only. No
+update endpoint was contacted, no signed/publication artifact was created, and
+no clean-machine installation, deployment/support drill, external device, or
+physical/native acceptance was performed. The signed N-to-N+1 update/failure
+matrix, deployed startup/takeover/recovery/shutdown drills, clean-machine
+recovery, signing/publication, and native/physical acceptance remain unproven;
+therefore `OBSERVABILITY-SUPPORT-001` remains `Open`.
