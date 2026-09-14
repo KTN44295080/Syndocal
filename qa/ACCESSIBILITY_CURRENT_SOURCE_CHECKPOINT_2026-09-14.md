@@ -110,3 +110,16 @@ Next action is a native release executable run on the operator PC with the
 accessibility matrix recorded per workflow. Until that evidence exists,
 `ACCESSIBILITY-NATIVE-001` stays Open and the current-source PASS must not be
 reported as native accessibility acceptance.
+
+## Takeover continuation — current-source accessibility recheck — 2026-09-14
+
+The focused source sequence was rerun against HEAD `ecc1799e`: localization
+reported `3844/3844` with zero unprotected user-data labels; terminology,
+empty-state guidance, project-history keyboard routing, Timeline Space routing,
+and stage-label contracts all passed. TypeScript passed and the Vite build
+transformed `358` modules successfully. The existing large-chunk message was
+an advisory; no first-party compiler warning was observed.
+
+No native screen-reader, High Contrast, scaling, IME, reduced-motion, or
+native keyboard-only environment was used. `ACCESSIBILITY-NATIVE-001` remains
+`Open` for that native matrix and the related physical/external acceptance.

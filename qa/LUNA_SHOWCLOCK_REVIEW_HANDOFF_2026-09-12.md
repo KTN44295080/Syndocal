@@ -1099,3 +1099,11 @@ and bundled-library checks all passed. Pinned-MSVC release Rust tests passed
 failures/ignored tests and zero first-party warnings. No endpoint, publication,
 or device was used; signed update, clean-machine, support-drill, and release
 acceptance remain Open.
+
+The `ACCESSIBILITY-NATIVE-001` current-source recheck passed against HEAD
+`ecc1799e`: localization `3844/3844`, zero bare user-data labels,
+terminology, empty states, project-history and Timeline keyboard routing,
+stage labels, TypeScript, and the Vite build (`358` modules). The large-chunk
+notice remains an advisory and first-party warnings were zero. No native
+screen-reader/High Contrast/scaling/IME/reduced-motion matrix was run, so the
+marker remains Open.
