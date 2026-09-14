@@ -123,3 +123,30 @@ network harness was opened.
 `REMOTE-SECURITY-001` remains `Open` for external exposure, physical
 cancellation, dependency/SBOM/redaction, updater trust, and complete bypass
 review acceptance.
+
+## Continuation — current Video-repair source security recheck — 2026-09-14
+
+At current source HEAD `8b7549e7`, after the Video upper-desk geometry repair
+and rendered browser recheck, the complete local security set was rerun:
+
+```text
+check:agent-bridge: PASS (11 groups)
+check-agent-bridge-bootstrap: PASS (4 deferred lifecycle groups)
+check-tauri-admission-inventory: PASS (539 commands; 18 negative fixtures rejected)
+tools/syndocal-mcp/check.mjs: PASS (15 adapter integration groups; fake loopback only)
+check:strict-json: PASS (130 assertions)
+check:output-ownership: PASS
+check:ai5-sidecar: PASS (authenticated discovery and HTTP/JSON-RPC/REST/WebSocket transport)
+check:ai6-admin-ui: PASS (trusted actions, grants, consent, audit route)
+check:ai7-adversarial-proof: PASS (parity/reply-loss/authority/gap/rate/saturation)
+```
+
+All nine commands exited `0`. The checks confirm only current local
+authority, admission, adapter, parser, transport, administration, adversarial,
+and output-ownership boundaries. No real LAN/TLS listener, Remote/Touch
+client, public endpoint, RDM/TOD device, dependency/SBOM review, updater
+trust exercise, or adversarial network harness was opened.
+
+`REMOTE-SECURITY-001` remains `Open` for the named external exposure,
+physical cancellation, dependency/SBOM/redaction, updater trust, and complete
+bypass-review matrices.
