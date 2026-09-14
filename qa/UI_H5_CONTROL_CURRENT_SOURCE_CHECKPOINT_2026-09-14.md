@@ -299,3 +299,35 @@ layout repair and safe browser reachability only. Native button-by-button
 dangerous Control actions, native accessibility, physical output, external
 clients, recovery rehearsal, venue/soak, signing, and publication remain
 unaccepted.
+
+## Continuation — exact user-reported Video viewport regression gate — 2026-09-14
+
+The browser gate now includes the user's exact `2560x1504` screenshot surface
+in both the focused checker and its aggregate runner. This closes a test
+coverage gap: the earlier `2560x1440` result could not by itself prove the
+reported client dimensions. No product typography, control size, hit target,
+or output behavior was changed in this continuation.
+
+Because the Browser plugin is unavailable in this session, the explicit
+installed Chrome executable was used for the Playwright/CDP fallback:
+
+```text
+pnpm.cmd run check:control-upper-workspaces
+check:control-upper-workspaces passed: 3840x2160, 2560x1440, 2560x1504, 1920x1080, 1280x720
+```
+
+At `2560x1504`, the rendered browser evidence reported the Video desk's
+measured upper share above its `48%` minimum, Lighting upper height `818`px,
+Timeline upper height `768`px, six Timeline lanes, four source cards, and
+first-Escape focus return. Across all five viewports, final CDP diagnostics
+reported zero runtime exceptions, console errors/warnings, log errors/warnings,
+and harness errors; outer document/app scroll remained fixed. The generated
+`control-video-2560x1504.png` and `control-video-import-open-2560x1504.png`
+were visually inspected: Preview/Program is readable, the import disclosure
+remains contained and reachable, and the lower Clip/Outputs/Layers region is
+not overlapped.
+
+This remains rendered-browser evidence only. Native dangerous Control actions,
+native accessibility, physical output, external clients, recovery rehearsal,
+venue/soak, signing, and publication remain unaccepted, so
+`UI-H5-CONTROL-001` stays `Open`.
