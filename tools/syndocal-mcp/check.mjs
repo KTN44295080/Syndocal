@@ -277,10 +277,29 @@ try {
   child.stdin.write('x'.repeat(65537));
   child.stdin.write('\n');
   assert.equal((await waitReply(null)).error.code, -32600);
+  let hostileFrameSeed = 0x53444d43;
+  let hostileFrameRejected = 0;
+  for (let index = 0; index < 128; index += 1) {
+    hostileFrameSeed = (Math.imul(hostileFrameSeed, 1664525) + 1013904223) >>> 0;
+    const length = 1 + (hostileFrameSeed % (64 * 1024));
+    const frame = Buffer.alloc(length);
+    for (let offset = 0; offset < length; offset += 1) {
+      hostileFrameSeed = (Math.imul(hostileFrameSeed, 1664525) + 1013904223) >>> 0;
+      frame[offset] = hostileFrameSeed >>> ((offset % 4) * 8);
+    }
+    // A leading invalid UTF-8 byte makes every corpus member a deterministic
+    // parser rejection while keeping all frame sizes within the input bound.
+    frame[0] = 0xff;
+    child.stdin.write(frame);
+    child.stdin.write('\n');
+    assert.equal((await waitReply(null)).error.code, -32700);
+    hostileFrameRejected += 1;
+  }
+  assert.equal(hostileFrameRejected, 128);
   assert.deepEqual((await rpc('ping')).result, {});
   checks++;
   assert.ok(!stdout.includes(token)); assert.ok(!stderr.includes(token));
-  console.log(`PASS ${checks} adapter integration groups; fake loopback only, no Syndocal/device calls`);
+  console.log(`PASS ${checks} adapter integration groups; hostile stdio corpus: ${hostileFrameRejected} rejected; fake loopback only, no Syndocal/device calls`);
 } finally {
   child.stdin.end();
   child.kill();
