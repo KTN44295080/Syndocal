@@ -186,3 +186,19 @@ available in the enumerated modes. No output, recording, Take, blackout, Arm,
 Take Over, or device action was performed. This adds current artifact and
 process evidence only; `UI-H5-CONTROL-001` remains `Open` for the required
 native control workflow, accessibility, and physical/external acceptance.
+
+## Supplemental native run on the available display — 2026-09-14
+
+Because the required `1920x1080` mode is unavailable on this host, the same
+checker was run against the current physical display without changing the
+product or weakening the formal gate: `-MinimumMaximizedClient 2400x1500`
+and `-ExpectedFullscreen 2560x1600`. The generated report was
+`%TEMP%\\syndocal-native-acceptance-20260914-044121\\native-window-acceptance.json`.
+It recorded maximized `2560x1504`, F11 `2560x1600`, exact restore,
+Control Lighting/Video/Both/Timeline semantic-state acceptance, both pane
+detach orders, restart restoration, reload adoption, direct Stage-child close
+reintegration, and final full reintegration. The report's observable checks
+all emitted `PASS`, but the outer Tauri dev process exited `1` after report
+publication; this is therefore supplemental evidence, not a formal gate pass.
+No output, recording, Take, blackout, Arm, Take Over, or device action was
+performed. `UI-H5-CONTROL-001` remains `Open`.

@@ -1217,3 +1217,12 @@ by exact path. The standard native checker then failed closed before UI
 interaction because the current primary monitor is `2560x1600` and no
 `1920x1080` mode was enumerated. No output/device action occurred; native
 Control button workflows and accessibility remain unaccepted.
+
+A supplemental native run on the available `2560x1600` display generated
+`%TEMP%\\syndocal-native-acceptance-20260914-044121\\native-window-acceptance.json`.
+It recorded `2560x1504` maximized, `2560x1600` F11, exact restore, safe H5
+Control semantic-state checks, pane lifecycle, restart restoration, reload
+adoption, direct-child close reintegration, and final reintegration. Every
+observable assertion printed `PASS`, but the outer Tauri dev command exited
+`1`, so this remains supplemental and does not replace the missing formal
+`1920x1080` gate. No output/device action occurred.
