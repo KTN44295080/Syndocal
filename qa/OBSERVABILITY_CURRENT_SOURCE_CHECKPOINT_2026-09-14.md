@@ -114,3 +114,19 @@ endpoint, published no artifact, and opened no device. The result confirms
 the current-source diagnostics/updater/release negative contracts only;
 `OBSERVABILITY-SUPPORT-001` remains `Open` for signed update, clean-machine,
 deployment/support-drill, signing/publication, and physical/native acceptance.
+
+## Current HEAD release self-test recheck — 2026-09-14
+
+At current HEAD `70a4e4e5` (product source unchanged since the checker fix at
+`dce7dc48`), `pnpm.cmd --dir app run check:release:self-test` completed with
+exit `0`. The run passed release metadata (`137` assertion groups), AI0/AI1/
+AI2/AI4/AI5/AI6/AI7 self-tests, F1/F2 self-tests, ASIO packaging (`169`), video
+output routing, Windows candidate extraction (`43`), verified materialization
+(`4`), Windows release artifact checks (`144`), and strict JSON (`130`).
+
+This is a current-source regression result only. It contacted no update
+endpoint, created no signed/publication artifact, installed no clean machine,
+and opened no device. The signed N to N+1 update/failure matrix,
+deployment/support drills, signing/publication, clean-machine recovery, and
+native/physical acceptance remain unproven, so `OBSERVABILITY-SUPPORT-001`
+stays `Open`.
