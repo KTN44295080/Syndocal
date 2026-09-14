@@ -85,3 +85,25 @@ published, and no GPLv3 route or signed Steinberg agreement was inferred.
 `ASIO-LICENSE-001` remains `Open` pending the explicit licensing
 decision and its notice, source-obligation, installer, updater, and approval
 records.
+
+## Takeover continuation — current-source licensing boundary recheck after Video repair — 2026-09-14
+
+At current source HEAD `d7cac6d6`, the package/licensing boundary checks were
+rerun:
+
+```text
+pnpm.cmd run check:asio-packaging
+ASIO packaging boundary self-test passed: 169 assertions
+
+pnpm.cmd run check:asio-v3-contract
+ASIO v3 contract tests passed: 22 assertions
+```
+
+Both commands exited `0`. The SDK-independent bundle remained unbundled for
+ASIO runtime files, the exact package inventory and rejection cases remained
+enforced, and the ABI-v3 contract remained valid. `qa/ASIO_SDK_PIN.json` still
+has `distribution_approved: false`. No public ASIO artifact was staged or
+published, and no GPLv3 route, signed Steinberg agreement, legal review,
+installer/updater approval, or real-device acceptance was performed.
+`ASIO-LICENSE-001` remains `Open` pending the explicit licensing decision and
+its notice, source-obligation, package, and approval records.
