@@ -1345,3 +1345,34 @@ physical device, external client, accessibility environment, or venue action
 was performed. `UI-H5-CONTROL-001`, `ACCESSIBILITY-NATIVE-001`, and the
 other external Open rows remain unchanged until their complete matrices are
 run.
+
+## Resumption checkpoint — ASIO current-source contract tranche — 2026-09-14
+
+After the secondary-display continuation, the following three ASIO Open rows
+were audited one by one on the current branch. None was promoted because the
+required external evidence is absent; all checkpoint commits were pushed and
+the working tree/upstream are equal and clean.
+
+- `ASIO-SOAK-001`: at `0d216dc2`, `check:live-audio` passed. The exact M5
+  `run-soak.ps1 -PreflightOnly` invocation failed closed before Cargo because
+  the ordinary PowerShell host lacked `VCToolsInstallDir` and the configured
+  exact `vcvars64.bat -vcvars_ver=14.44` initialization was unavailable. No
+  stream or report was created, so this is not soak evidence.
+- `ASIO-LATENCY-001`: at `fd82d5cd`, `check:live-audio`,
+  `check:live-audio-ipc-v1`, and `check:asio-v3-contract` passed (the ASIO v3
+  checker reported 22 assertions). No physical stream, TouchDesigner marker,
+  pixel measurement, or raw timing log was produced.
+- `ASIO-PERSISTENCE-PACKAGE-001`: at `0cbc0e58`, live-audio, IPC v1, and
+  `check:asio-packaging` passed (169 assertions). The normal-package rejection
+  boundary remains intact. The separate Windows artifact self-test emitted
+  its 43-assertion candidate-extractor and 4-assertion materialization
+  sub-results but was stopped before a successful process exit; it is not
+  acceptance evidence, and no artifact/installer/updater was produced.
+
+The current host inventory still lacks the pinned ASIO SDK archive/extraction
+and current-source Show-ASIO bridge artifact required by the physical ASIO
+command. It also lacks the licensed artifact decision, named ASIO/WASAPI
+operator run, TouchDesigner latency setup, or final package review. The
+ASIO rows therefore remain Open with their nonclaims intact. The authoritative
+ledger remains `27 Complete / 8 Deferred / 23 Open` (`58` total), and both
+ledger validators pass.
