@@ -43,3 +43,11 @@ versions, tokens, NICs, and raw logs. Existing source checks cannot replace the
 
 Next action is the live peer and pedal acceptance run, bound to the exact
 Syndocal and Agent artifacts and operator observations.
+
+## Takeover continuation — current-source DJ Link recheck — 2026-09-14
+
+At HEAD `e874a918`, the DJ track-mapping policy and DJ Link frontend/runtime
+checks both passed. No rekordbox peer, external Agent, pedal, remote client,
+HELLO/ACK/STATE_SYNC exchange, reconnect, restart, or MIDI traffic was
+started. `DJ-LINK-HARDWARE-001` remains `Open` pending the named live
+DJ-PC/Agent/Pedal topology and the zero-of-12 hardware matrix.

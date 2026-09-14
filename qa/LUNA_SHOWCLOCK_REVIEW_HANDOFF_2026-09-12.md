@@ -1156,3 +1156,8 @@ shortcuts (`39` assertions), DVC DMX shortcuts (`41`), and frontend routing
 safe MIDI slice remains the only physical evidence; no new device traffic or
 OSC/Remote/Clock/MTC/reconnect/latency matrix was run, so the marker remains
 Open.
+
+The `DJ-LINK-HARDWARE-001` source recheck at HEAD `e874a918` passed track
+mapping policy and DJ Link frontend/runtime contracts. No rekordbox peer,
+Agent, pedal, remote client, or MIDI traffic was started; HELLO/ACK,
+STATE_SYNC, reconnect, restart, and the 0/12 hardware matrix remain Open.
