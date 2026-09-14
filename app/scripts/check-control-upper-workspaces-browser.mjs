@@ -18,11 +18,13 @@ const screenshotDir = resolve(
   process.env.SYNDOCAL_CONTROL_SCREENSHOT_DIR ?? "C:\\TEMP\\syndocal-control-ui-checkpoints",
 );
 const productMinimumWindow = { width: 960, height: 640 };
-// The show-core uses these four physical desktop classes. Smaller browser and
-// detached-pane tests remain supplemental and do not define this acceptance.
+// The show-core uses these physical desktop classes. The 2560x1504 case is the
+// exact user-reported screenshot surface; smaller browser and detached-pane
+// tests remain supplemental and do not define this acceptance.
 const defaultViewports = [
   { width: 3840, height: 2160 },
   { width: 2560, height: 1440 },
+  { width: 2560, height: 1504 },
   { width: 1920, height: 1080 },
   { width: 1280, height: 720 },
 ];
