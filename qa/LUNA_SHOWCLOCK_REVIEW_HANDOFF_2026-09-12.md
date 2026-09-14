@@ -1197,3 +1197,13 @@ external NDI/Spout receiver, a DJ-PC/rekordbox peer, a second test machine, or
 the pinned comparator environment. No device was opened or driven by this
 inventory; it is availability evidence only and does not promote any
 external-acceptance marker.
+
+At HEAD `d332b25e`, the aggregate `pnpm.cmd --dir app run
+check:release:static` gate passed end to end. It covered the ledger/Q1-Q4
+validators, AI0-AI7 source contracts, F1/F2 generation and output ownership,
+frontend/admission inventories, project transaction/recovery/publication,
+media and snapshot contracts, safety/output control, ASIO packaging/v3,
+live-audio IPC, Timeline, video polling/routing/observation, and camera UI
+contracts. This is current-source software evidence only; the command opened
+no physical output or external client and does not close the remaining native,
+hardware, venue, signed-release, or comparator boundaries.
