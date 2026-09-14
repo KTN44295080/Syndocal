@@ -139,3 +139,20 @@ release evidence manifest, and rollback/retirement owner.
    from current-source checks, a local executable, or a source push.
 
 The eight markers remain individually addressable and intentionally Deferred.
+
+## Current-source release gate continuity — 2026-09-14
+
+At current source HEAD `461b46e5`, the full Windows-local static release gate
+completed with exit code `0`. It reconfirmed all 58 Flow references, Q1/Q4
+mirror parity, AI0-AI7 source contracts, project/recovery/publication checks,
+media authority, output safety, ASIO/live-audio contracts, Timeline contracts,
+video/window contracts, and camera contracts.
+
+The independent Windows warning-ratchet probes are retained separately:
+`check:warnings:self-test` passed, while the corrected
+`check:warnings -- --configuration windows-native-release` failed closed on
+`pnpm emitted warning-shaped output` during the trusted native build. The
+failure is not evidence for macOS and no baseline or suppression was changed.
+The static gate and local release executable do not alter any Deferred status;
+the eight markers remain Deferred until their explicit scope dependencies are
+approved and their named external evidence exists.
