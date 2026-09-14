@@ -666,10 +666,9 @@ require their actual UI/device/two-machine topology and separate evidence.
 
 The continuation is now owned by the current task on branch
 `codex/showclock-review-20260912`. The latest pushed checkpoint is
-`1dd311da` (`qa: record fresh H5 browser gate`) is superseded below by the
-current native window/pane checkpoint. The resulting owned checkpoint commit
-is identified by Git after commit and push; the branch remains
-`codex/showclock-review-20260912`.
+The native window/pane checkpoint recorded below is the latest pushed
+checkpoint for this continuation. Its commit hash is authoritative in Git; the
+branch is `codex/showclock-review-20260912`.
 
 The earlier product-code change in this continuation is in
 `app/src/components/ControlBothPanel.tsx`: the DMX, all-output, and Video
