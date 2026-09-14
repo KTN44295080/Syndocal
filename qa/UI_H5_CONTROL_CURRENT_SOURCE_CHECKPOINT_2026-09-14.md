@@ -39,6 +39,17 @@ The live Windows display query for this run reported one attached display at
 not available. The QA process and ports were cleaned up; this is an environment
 boundary, not a passing native interaction result.
 
+## Takeover native gate retry — 2026-09-14
+
+The native gate was rerun from the current source after the host display
+changed. The GPU query reported `2560x1600`, but the app-owned maximized client
+still measured `1280x752`; the gate therefore failed closed at
+`Wait-ForMinimumClientDimensions` before F11 or any UI interaction. The user
+display registry reported `AppliedDPI=192` (200%); this explains the available
+logical work area but does not satisfy the required `1920x1000` client gate.
+The current attempt used the pinned MSVC `14.44.35207` wrapper and exited with
+code `1`; no native interaction or physical output is claimed.
+
 ## Acceptance boundary
 
 `UI-H5-CONTROL-001` remains `Open`. The existing evidence does not establish

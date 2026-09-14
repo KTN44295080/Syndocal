@@ -83,6 +83,13 @@ The separate native maximized/F11 preflight also failed closed before any UI
 interaction because this run had only a `1280x800` display (`1280x752` work
 area), below the required `1920x1080` acceptance display. This does not change
 the accessibility status and is not counted as native accessibility evidence.
+
+The native gate was retried after the host GPU query changed to `2560x1600`.
+The app-owned maximized client remained `1280x752`, and the gate failed closed
+before F11 or UI interaction. The current user display registry reports
+`AppliedDPI=192` (200%), so the logical client/work-area measurement still does
+not satisfy the required `1920x1000` / `1920x1080` native boundary. No native
+accessibility evidence is claimed from this retry.
 The following require the operator PC and named accessibility environments:
 
 - NVDA screen-reader traversal and announcements;
