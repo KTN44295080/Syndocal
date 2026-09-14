@@ -85,3 +85,21 @@ reconnect, topology, RGB/wheel, pan/tilt, intensity, or sustained 44 Hz
 physical-output artifact was produced. `DMX-ARTNET-001` remains `Open` pending
 the named node/fixture matrix with raw packets, fixture observations,
 reconnect timing, and exact output-owner identity.
+
+## Continuation — current-source Art-Net preparation recheck — 2026-09-15
+
+At current source HEAD `33ad01d4`, with the exact MSVC `14.44.35207` x64 linker
+confirmed first by `where.exe link.exe`, the addressing, ownership, blackout,
+and show-setup checks all exited `0`:
+
+```text
+pnpm.cmd --dir app run check:dmx-addressing
+pnpm.cmd --dir app run check:output-ownership
+pnpm.cmd --dir app run check:safety-blackout-runtime
+node app/scripts/check-dmx-show-setup.mjs
+```
+
+The source remains fail-closed and loopback-before-S0. No Art-Net/sACN node or
+fixture was opened, no network packet was sent, and no reconnect, topology,
+control, or sustained physical-output artifact was produced.
+`DMX-ARTNET-001` remains **Open**.

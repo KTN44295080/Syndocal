@@ -107,3 +107,26 @@ recovery, or physical-output observation was performed; no zero-simultaneous-
 physical-output venue rehearsal was proven. `SHOWCLOCK-VENUE-001` remains
 `Open` pending the named two-machine run, failure timeline, raw ShowClock
 logs, owner transitions, and physical observation.
+
+## Continuation — current-source ShowClock venue-boundary recheck — 2026-09-15
+
+At current source HEAD `33ad01d4`, with the exact MSVC `14.44.35207` x64 linker
+confirmed first by `where.exe link.exe`, the protocol, paired-LAN loopback,
+Tauri IPC, and two-process tests all exited `0`:
+
+```text
+cargo test -p protocol --release --locked -j 1 show_clock -- --nocapture --test-threads=1
+21 passed; 0 failed; 0 ignored
+cargo test -p io --release --locked -j 1 show_clock_lan -- --nocapture --test-threads=1
+3 passed; 0 failed; 0 ignored
+cargo test --manifest-path app/src-tauri/Cargo.toml --release --locked -j 1 show_clock_ipc::tests -- --nocapture --test-threads=1
+7 passed; 0 failed; 0 ignored
+cargo test -p io --release --locked -j 1 --test show_clock_two_process -- --nocapture --test-threads=1
+2 passed; 0 failed; 0 ignored
+```
+
+This reconfirms authenticated admission, generation/fence policy, Manual
+Hold/Re-arm, paired loopback, and IPC lifecycle only. No real network switch,
+second machine, crash/restart replay, stale-peer rejoin, device-loss recovery,
+or physical-output observation was performed. `SHOWCLOCK-VENUE-001` remains
+**Open**.

@@ -123,3 +123,23 @@ physical observation. `INPUT-PHYSICAL-001` remains `Open` pending the named
 MIDI/OSC/Remote client matrix, device identity, reconnect/latency/feedback and
 Clock/MTC evidence. Before retrying, restore or reconnect the named SMC-Mixer
 input/output and capture the complete port inventory.
+
+## Continuation — current-source input-routing recheck — 2026-09-15
+
+At current source HEAD `33ad01d4`, with the exact MSVC `14.44.35207` x64 linker
+confirmed first by `where.exe link.exe`, the input-related source contracts
+all exited `0`:
+
+```text
+pnpm.cmd --dir app run check:dvc-midi-shortcuts
+39 assertions
+node app/scripts/check-dvc-dmx-shortcuts.mjs
+41 assertions
+pnpm.cmd --dir app run check:frontend-command-routing
+133 renderer, 31 server-authoritative, 28 raw, 479 facade dispatches
+```
+
+No MIDI/OSC/TouchOSC/Remote client, Clock/MTC path, latency trial, reconnect
+run, or native device workflow was performed. The last successful physical
+SMC-Mixer slice remains the prior safe `B0 7B 00` observation;
+`INPUT-PHYSICAL-001` remains **Open**.

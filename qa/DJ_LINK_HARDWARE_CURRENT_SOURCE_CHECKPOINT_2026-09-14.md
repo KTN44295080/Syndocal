@@ -68,3 +68,14 @@ checks. No rekordbox peer, live DJ-PC/Agent, pedal, remote client,
 HELLO/ACK/STATE_SYNC exchange, track/position/loop flow, reconnect/restart
 run, or MIDI traffic was started. `DJ-LINK-HARDWARE-001` remains `Open`
 pending the named live topology and zero-of-12 physical hardware matrix.
+
+## Continuation — current-source DJ Link recheck — 2026-09-15
+
+At current source HEAD `33ad01d4`, with the exact MSVC `14.44.35207` x64 linker
+confirmed first by `where.exe link.exe`, `pnpm.cmd --dir app run check:dj-link`
+exited `0`; DJ track mapping policy and frontend/runtime contracts passed.
+
+No rekordbox peer, external Agent, pedal, remote client, HELLO/ACK/STATE_SYNC
+exchange, reconnect/restart run, or MIDI traffic was started.
+`DJ-LINK-HARDWARE-001` remains **Open** pending the named live topology and
+zero-of-12 physical matrix.

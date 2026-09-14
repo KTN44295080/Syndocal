@@ -90,3 +90,19 @@ device was not opened; no USB-DMX/RDM bytes, E1.20 discovery, ACK/NACK/timeout
 log, two-fixture capture, or analyzer artifact was produced.
 `DMX-USB-RDM-001` remains `Open` pending the required named gateway/interface
 and two-fixture external matrix.
+
+## Continuation — current-source USB-DMX/RDM boundary recheck — 2026-09-15
+
+At current source HEAD `33ad01d4`, with the exact MSVC `14.44.35207` x64 linker
+confirmed first by `where.exe link.exe`, the output-control runtime,
+ownership, and safety contracts all exited `0`:
+
+```text
+pnpm.cmd --dir app run check:output-control-runtime
+pnpm.cmd --dir app run check:output-ownership
+pnpm.cmd --dir app run check:safety-blackout-runtime
+```
+
+No Enttec, DMXKing, or named RDM interface was opened; no USB-DMX/RDM bytes,
+E1.20 discovery, ACK/NACK/timeout log, fixture capture, or analyzer artifact
+was produced. `DMX-USB-RDM-001` remains **Open**.
