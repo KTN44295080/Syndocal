@@ -77,3 +77,22 @@ physical trials on the approved artifact and named driver/device, with exact
 sample rate/channels/format/buffer configuration and raw capture-to-engine and
 input-to-pixel percentiles against the acceptance thresholds. Source or
 browser checks cannot substitute for that external measurement.
+
+## Takeover continuation — current-source latency-contract recheck after Video repair — 2026-09-14
+
+At current source HEAD `0a114672`, the live-audio lifecycle check was rerun:
+
+```text
+pnpm.cmd run check:live-audio
+live audio fail-closed lifecycle, availability contract, selection persistence,
+presentation, and request ordering ok
+```
+
+The command exited `0`. It reconfirms the typed capture/engine-adjacent
+fail-closed lifecycle, explicit selection persistence, presentation, and
+request-ordering contracts only. No physical ASIO/WASAPI stream, marker,
+TouchDesigner session, measured output pixel, or raw timing log was created.
+`ASIO-LATENCY-001` remains `Open`; completion still requires five matched
+physical trials on the approved artifact and named driver/device with exact
+configuration and capture-to-engine/input-to-pixel percentiles against the
+acceptance thresholds.
