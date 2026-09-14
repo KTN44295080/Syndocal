@@ -270,3 +270,16 @@ send, or physical device was changed. `VIDEO-PHYSICAL-001` remains `Open`.
 The next safe action is to reconnect or re-enable the third display, rerun the
 read-only inventory, and only then provide exact output-window identities for
 the practical fullscreen/pixel and recovery matrix.
+
+## PnP/WMI corroboration — 2026-09-14
+
+Read-only device enumeration corroborates the two-display DisplayConfig result:
+`DISPLAY\\TMA0803\\5&2A56F61F&0&UID256` and
+`DISPLAY\\RTK0000\\5&2A56F61F&0&UID261` are `Present=true` with `Problem=0`.
+The previously recorded third identity
+`DISPLAY\\LKGF803\\5&2A56F61F&0&UID281` is currently
+`Present=false` with `Problem=45`; the WMI monitor list likewise reports only
+the TMA0803 and RTK0000 identities as `Active=true`. This is an OS/device
+presence observation, not a diagnosis of the cable, input, or display power
+state. No device enable/disable, display-setting mutation, or output action was
+performed.
