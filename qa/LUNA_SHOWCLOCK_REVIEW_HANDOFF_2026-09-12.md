@@ -665,10 +665,10 @@ require their actual UI/device/two-machine topology and separate evidence.
 ## Current continuation state — 2026-09-14 takeover
 
 The continuation is now owned by the current task on branch
-`codex/showclock-review-20260912`. The last pushed checkpoint before this
-camera-evidence update is `4602520f` (`qa: distinguish native checker health
-from display gate`); this checkpoint keeps the branch equal to
-`origin/codex/showclock-review-20260912` after its owned documentation update.
+`codex/showclock-review-20260912`. The latest pushed checkpoint is
+`b4d614ed` (`qa: record current physical camera slice`), which records the
+camera evidence and Q1/Q4 mirror update below. The worktree is clean and the
+branch is equal to `origin/codex/showclock-review-20260912`.
 
 The earlier product-code change in this continuation is in
 `app/src/components/ControlBothPanel.tsx`: the DMX, all-output, and Video
