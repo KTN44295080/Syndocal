@@ -59,10 +59,15 @@ external clients, venue/soak, signing, publication, or product completion.
 The native maximized/F11 gate also remains unverified until it is rerun on a
 Windows operator display meeting the required `1920x1080` monitor boundary.
 
-The new browser rerun did not reach CDP: the available Chromium executable was
-rejected by Windows with a Side-by-Side configuration error. The prior passing
-rendered evidence remains the pre-change layout baseline; no fresh rendered
-pass is claimed for the new semantic assertions.
+The fresh browser rerun used the current Chrome executable through
+`CHROME_PATH=C:\Users\janua\AppData\Local\Google\Chrome\Application\chrome.exe`.
+The Control upper-workspaces gate passed at all four supported viewports:
+`3840x2160`, `2560x1440`, `1920x1080`, and `1280x720`. It exercised the
+Lighting, Video, Both, Timeline/nested-controls reachability, first-Escape
+focus return, and final CDP diagnostics; every viewport reported zero runtime
+exceptions, console/log errors or warnings, and harness errors. This is fresh
+rendered browser evidence for the semantic assertions. Native interaction and
+physical output remain separate unaccepted boundaries.
 
 ## Source continuity audit — 2026-09-14
 

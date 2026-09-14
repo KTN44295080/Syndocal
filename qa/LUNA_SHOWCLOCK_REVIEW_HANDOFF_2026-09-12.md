@@ -708,9 +708,14 @@ release artifact process smoke also passed for
 `target/release/syndocal.exe` (SHA-256
 `5D2B479C39AB28CC10F2961EAB156E6EF8127E7571189BFF85D50871ACCDC66E`), with
 one responsive `Syndocal` window and zero exact-path processes after clean
-shutdown. The new rendered browser rerun did not start because the available
-Chromium binary failed Windows Side-by-Side startup; the earlier rendered pass
-is retained only as the pre-change baseline.
+shutdown. The rendered browser rerun was subsequently repeated with the
+installed user Chrome executable passed through `CHROME_PATH`. The Control
+upper-workspaces gate passed at all four supported viewports (`3840x2160`,
+`2560x1440`, `1920x1080`, `1280x720`), including Both/nested-control
+reachability, first Escape focus return, and zero runtime/console/log/harness
+errors or warnings at every viewport. This refreshes rendered browser evidence
+only; the native 1920x1080 window gate and physical/output boundaries remain
+separate.
 
 The current-host physical MIDI slice was also rerun against this source with
 the pinned release toolchain. `SMC-Mixer` input index `1` and output index `2`
