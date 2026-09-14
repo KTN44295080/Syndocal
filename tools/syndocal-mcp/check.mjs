@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createHmac, randomUUID, randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { parseOptions, toolDefinitions } from './server.mjs';
+import { parseOptions, readDescriptor, toolDefinitions } from './server.mjs';
 
 const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'syndocal-mcp-test-'));
 const descriptorPath = path.join(temporary, 'bridge.json');
@@ -39,6 +39,36 @@ const broker = createServer((socket) => {
 });
 await new Promise((resolve) => broker.listen(0, '127.0.0.1', resolve));
 const descriptor = { protocolVersion: 1, port: broker.address().port, token, sessionNonce, instanceId: randomBytes(16).toString('hex'), processId: process.pid, executablePath: process.execPath };
+await fs.writeFile(descriptorPath, JSON.stringify(descriptor));
+const descriptorOptions = { descriptor: descriptorPath, executable: process.execPath };
+let hostileDescriptorRejected = 0;
+let hostileDescriptorAccepted = 0;
+let hostileDescriptorSeed = 0x53444d43;
+for (let index = 0; index < 256; index += 1) {
+  let bytes;
+  if (index === 0) {
+    bytes = Buffer.from(JSON.stringify(descriptor));
+  } else if (index === 255) {
+    bytes = Buffer.alloc(64 * 1024 + 1, 0x41);
+  } else {
+    const length = 1 + (hostileDescriptorSeed % 2048);
+    bytes = Buffer.alloc(length);
+    for (let offset = 0; offset < length; offset += 1) {
+      hostileDescriptorSeed = (Math.imul(hostileDescriptorSeed, 1664525) + 1013904223) >>> 0;
+      bytes[offset] = hostileDescriptorSeed >>> ((offset % 4) * 8);
+    }
+  }
+  await fs.writeFile(descriptorPath, bytes);
+  if (index === 0) {
+    assert.deepEqual(await readDescriptor(descriptorOptions), descriptor);
+    hostileDescriptorAccepted += 1;
+  } else {
+    await assert.rejects(readDescriptor(descriptorOptions));
+    hostileDescriptorRejected += 1;
+  }
+}
+assert.equal(hostileDescriptorAccepted, 1);
+assert.equal(hostileDescriptorRejected, 255);
 await fs.writeFile(descriptorPath, JSON.stringify(descriptor));
 const script = fileURLToPath(new URL('./server.mjs', import.meta.url));
 const child = spawn(process.execPath, [script, '--descriptor', descriptorPath, '--expected-executable', process.execPath, '--principal-id', 'test-client', '--principal-incarnation', '1', '--credential-file', credentialPath], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
