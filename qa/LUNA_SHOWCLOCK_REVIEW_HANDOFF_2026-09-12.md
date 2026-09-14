@@ -1293,3 +1293,29 @@ Enttec/DMXKing/RDM interface or Art-Net/sACN node. No device was opened, no
 MIDI/OSC/DMX/audio output was sent, and no external client was controlled.
 This refresh changes no marker status and leaves the same 23 external Open
 rows awaiting their named hardware, client, venue, or product decision.
+
+## Blocked audit — 2026-09-14
+
+The same external-acceptance blocker has now persisted across the successive
+current-source, native, release, inventory, and per-marker audit checkpoints.
+The live audit at HEAD `7d2b189f` confirmed:
+
+- both authoritative ledger validators pass with `27 Complete`, `8 Deferred`,
+  and `23 Open` (`58` total; Q1/Q4 mirror `58/58` references);
+- the working tree and upstream are equal and clean;
+- the only matching live processes are `loopMIDI` and `MidiSrv`; no
+  rekordbox/DJ Link peer, TouchDesigner, Daslight, SynapseRack, OBS, NDI/Spout
+  receiver, or DMX/RDM controller is running;
+- the present-device inventory still has no Enttec/DMXKing/RDM interface,
+  Art-Net/sACN node, second machine, pinned comparator environment, or
+  accessibility test environment needed by the named matrices.
+
+The remaining 23 rows cannot be closed by another source scan, fake loopback,
+simulated device, or guessed physical output. The required next state change is
+external: provide the named operator-approved hardware/client/venue topology,
+release-controlled signing/update environment, accessibility environment, or
+the explicit product/licensing decision. On resumption, run each marker's
+prescribed matrix with raw logs, identity, timestamps, first-failure retention,
+and operator evidence; then update only the corresponding ledger rows and
+commit/push the evidence. The goal is left blocked until that external state or
+decision changes; no marker is promoted here.
