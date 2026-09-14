@@ -261,3 +261,64 @@ external device, or physical/native acceptance was performed. The signed
 N-to-N+1 update/failure matrix, deployment/recovery support drills,
 clean-machine recovery, signing/publication, and native/physical acceptance
 remain unproven; therefore `OBSERVABILITY-SUPPORT-001` remains `Open`.
+
+## Continuation — current HEAD observability/release recheck — 2026-09-15
+
+At current source HEAD `902ac03b`, after the Remote authority and high-DPI UI
+changes, the current-source observability and release checks were rerun. The
+Node command set exited `0`:
+
+```text
+pnpm.cmd --dir app run check:status
+status model helpers ok
+
+pnpm.cmd --dir app run check:release:self-test
+release metadata: 137 assertion groups
+AI0/AI1/AI2/AI4/AI5/AI6/AI7, F1/F2 self-tests: PASS
+ASIO packaging: 169 assertions
+video output routing: PASS
+Windows candidate extractor: 43 assertions
+verified materialization: 4 assertions
+Windows release artifact: 144 assertions
+strict JSON: 130 assertions
+
+pnpm.cmd --dir app run check:bundled-library
+bundled fixture library failure/retry checks passed
+
+node app/scripts/check-windows-release-artifacts.mjs --self-test
+Windows candidate extractor: 43 assertions
+verified materialization: 4 assertions
+Windows release artifact self-test passed: 144 assertions
+
+pnpm.cmd --dir app run check:strict-json
+strict JSON duplicate-key self-test passed: 130 assertions
+```
+
+With `vcvars64.bat -vcvars_ver=14.44`, the pinned Build Tools linker was
+printed and was first in `where.exe link.exe`:
+
+```text
+CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+```
+
+The release-mode Tauri tests then completed with exit `0`:
+
+```text
+diagnostic_: 38 passed, 0 failed, 0 ignored
+updater_: 3 passed, 0 failed, 0 ignored
+project_replacement_is_redacted: 1 passed, 0 failed, 0 ignored
+```
+
+The run reconfirms current-source status truth, bounded/redacted diagnostic
+capture and publication, updater identity/configuration fail-closed behavior,
+release artifact negative checks, bundled-library retry handling, strict JSON,
+and project replacement redaction. The exact native test command used the
+approved linker; no warning lines were emitted by the focused Rust invocation.
+
+This remains current-source software evidence only. No update endpoint,
+signed N-to-N+1 publication, clean-machine installation, deployed support
+drill, external client, physical device, or native accessibility/interaction
+acceptance was performed. `OBSERVABILITY-SUPPORT-001` therefore remains
+`Open` for the signed update/failure matrix, deployment/recovery drills,
+clean-machine recovery, signing/publication, and native/physical acceptance.
