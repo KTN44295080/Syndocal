@@ -283,3 +283,26 @@ the TMA0803 and RTK0000 identities as `Active=true`. This is an OS/device
 presence observation, not a diagnosis of the cable, input, or display power
 state. No device enable/disable, display-setting mutation, or output action was
 performed.
+
+## Current topology recheck — 2026-09-15
+
+The read-only three-display harness was rerun after the latest user report:
+
+```text
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File qa/harnesses/run-syndocal-three-display-show-acceptance.ps1 -EvidenceSlug current-three-display-preflight-20260915
+exit code: 0
+verdict: not-configured
+native_hardware_claim: false
+accepted: false
+```
+
+The generated DisplayConfig inventory currently contains two connected
+monitors: `DISPLAY1` at `2560x1600` with effective DPI `192` and `DISPLAY2` at
+`1920x1200` with effective DPI `96`. No third connected monitor identity was
+returned in this run. The harness sample was null because exact output-role
+identities, an artifact, and a CDP observation provider were not configured.
+No display mode, project state, output window, HDMI/NDI/Spout send, or physical
+device was changed. This is a topology/preflight result only;
+`VIDEO-PHYSICAL-001` remains `Open` pending the third display identity, exact
+output-window binding, pixel/receiver observation, fault/reconnect matrix, and
+one-hour frame/drop evidence.
