@@ -86,3 +86,28 @@ No ASIO stream was opened and no 44.1/48/96 kHz, 64/128/256-frame,
 native-format, mono/stereo/channel hardware matrix was produced.
 `ASIO-FORMAT-MATRIX-001` remains `Open` pending the licensed artifact and
 named real-driver evidence.
+
+## Takeover continuation — current-source format-contract recheck after Video repair — 2026-09-14
+
+At current source HEAD `881f637e`, the source-side ASIO format contracts were
+rerun:
+
+```text
+pnpm.cmd run check:live-audio
+live audio fail-closed lifecycle, availability contract, selection persistence,
+presentation, and request ordering ok
+
+pnpm.cmd run check:live-audio-ipc-v1
+live audio IPC v1 exact request mapping and fail-closed checks ok
+
+pnpm.cmd run check:asio-v3-contract
+ASIO v3 contract tests passed: 22 assertions
+```
+
+All commands exited `0`. Explicit device, sample-rate, channel, native-format,
+and fixed-buffer admission remains fail-closed with exact IPC mapping and the
+ABI-v3 contract intact. No ASIO stream or real driver was opened, and no
+44.1/48/96 kHz, 64/128/256-frame, native-format, mono/stereo/channel matrix
+artifact was produced. `ASIO-FORMAT-MATRIX-001` remains `Open` pending the
+licensed artifact and named real-driver matrix with recorded applied values and
+no-fallback proof.
