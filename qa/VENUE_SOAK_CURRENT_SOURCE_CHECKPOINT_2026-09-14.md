@@ -79,3 +79,13 @@ venue/GPU/integrated A/V/physical-output acceptance.
 The product source outside the soak harness and wrapper remains unchanged by
 this rerun. `VENUE-SOAK-001` therefore remains Open pending the named
 reference-machine run and its retained time-series evidence.
+
+## Takeover continuity — 2026-09-14
+
+The venue-soak implementation and bounded harness evidence remain current at
+HEAD `e93c6a47`: the venue-relevant source after the recorded `7daf00fe`
+repair contains no product-runtime change that invalidates the 60-second
+software result. This is continuity evidence only. The required named
+reference machine, maximum-condition GPU/resource and thermal logs,
+integrated A/V/lighting/output/recording path, and one-hour retained report
+were not run in this takeover, so `VENUE-SOAK-001` remains `Open`.
