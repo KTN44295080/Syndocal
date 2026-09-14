@@ -143,3 +143,20 @@ No MIDI/OSC/TouchOSC/Remote client, Clock/MTC path, latency trial, reconnect
 run, or native device workflow was performed. The last successful physical
 SMC-Mixer slice remains the prior safe `B0 7B 00` observation;
 `INPUT-PHYSICAL-001` remains **Open**.
+
+## Continuation — PnP-present but MIDI-port-absent recheck — 2026-09-15
+
+The host PnP inventory currently reports `SMC-Mixer (Bluetooth MIDI IN/OUT)`
+and the paired Bluetooth device as present. That presence did not make the
+endpoints available to the production `midir` layer. With the exact pinned
+MSVC `14.44.35207` linker and the explicit `SMC-Mixer` selectors, the ignored
+release test again enumerated only `CustomMIDI1` for input and
+`Microsoft GS Wavetable Synth` plus `CustomMIDI1` for output, then failed before
+opening a port or sending bytes. The test exited with `0 passed / 1 failed / 0
+ignored`.
+
+This is a host MIDI-service/Bluetooth availability discrepancy, not evidence
+that the PnP entry is an opened production endpoint. No MIDI traffic was sent
+in this attempt. `INPUT-PHYSICAL-001` remains **Open**; resume by restoring
+the SMC-Mixer endpoint in the `midir` inventory, then rerun the named matrix
+with raw input/output logs and operator observations.
