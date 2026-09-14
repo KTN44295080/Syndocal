@@ -1279,3 +1279,17 @@ Follow/watermark paths, project bootstrap, video runtime/routing/observation,
 and camera input contracts. The run performed no physical output, external
 client, venue, signing, or publication action; the 23 Open marker boundaries
 therefore remain unchanged.
+
+## External-state inventory refresh — 2026-09-14
+
+The read-only present-device scan was repeated after the current-source gate.
+It found the existing `SMC-Mixer` and `CustomMIDI1` MIDI endpoints, FTDI
+`USB Serial Port (COM5)`, ASUS camera devices, the Realtek ASIO component,
+Elgato virtual audio, and the `Technics EAH-AZ100`/`Onyx` audio devices. The
+only matching live processes were `loopMIDI` and `MidiSrv`; no rekordbox/DJ
+Link peer, TouchDesigner, Daslight, SynapseRack, OBS, NDI/Spout receiver, or
+DMX/RDM controller process was present. The device inventory still showed no
+Enttec/DMXKing/RDM interface or Art-Net/sACN node. No device was opened, no
+MIDI/OSC/DMX/audio output was sent, and no external client was controlled.
+This refresh changes no marker status and leaves the same 23 external Open
+rows awaiting their named hardware, client, venue, or product decision.
