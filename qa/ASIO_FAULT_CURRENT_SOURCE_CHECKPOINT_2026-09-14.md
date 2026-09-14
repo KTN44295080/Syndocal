@@ -64,3 +64,20 @@ with zero failures and ignored tests. The ASIO v3 contract then passed `22`
 assertions. No real driver was occupied, reset, unplugged, or reopened; the
 native fault-injection matrix remains external and
 `ASIO-FAULT-MATRIX-001` stays `Open`.
+
+## Current HEAD fault-contract recheck — 2026-09-14
+
+At current HEAD `6844ea37`, the exact MSVC `14.44.35207` Build Tools
+linker was initialized and printed first in `where.exe link.exe`. The
+SDK-free `tools/asio-bridge` suite passed 31 tests with zero failures or
+ignored tests, followed by the ASIO v3 contract's 22 assertions.
+
+The deterministic suite covered concurrent v2/v3 lease exclusion, failed-stop
+fault retention, explicit drain, stale-ticket rejection, strict request
+validation, invalid/nonfinite sample rejection, native-format conversion,
+full-silence safety, callback frame integrity, generation fencing, and typed
+Stop/Close cleanup. No real ASIO driver was occupied, reset, unplugged, or
+reopened, and no native fault-injection artifact was produced.
+`ASIO-FAULT-MATRIX-001` remains `Open` for the real occupied-driver,
+rate/buffer-change, reset/resync, XRUN, unplug/replug, callback-gap, and
+no-callback recovery matrix.
