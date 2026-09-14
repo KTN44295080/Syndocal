@@ -1346,6 +1346,25 @@ was performed. `UI-H5-CONTROL-001`, `ACCESSIBILITY-NATIVE-001`, and the
 other external Open rows remain unchanged until their complete matrices are
 run.
 
+## Resumption checkpoint — current-source aggregate after external-boundary audit — 2026-09-14
+
+At current source HEAD `467b25e1`,
+`pnpm.cmd --dir app run check:release:static` completed with exit `0`. It
+revalidated both authoritative ledgers, AI0-AI7, F1/F2, frontend/Tauri
+admission and routing, project transaction/recovery/publication/bootstrap,
+media/snapshot paths, output ownership/control/blackout, ASIO packaging/v3 and
+live-audio IPC, Timeline cue/audio/loop/transport/Follow/watermark paths,
+video polling/routing/window observation, and camera contracts. The focused
+H5 browser gate also passed all four viewports with the explicit installed
+Chrome executable and zero runtime/console/log/harness errors.
+
+This aggregate is current-source and rendered-browser evidence only. It did
+not open physical output, external clients, real LAN/TLS, ASIO/WASAPI streams,
+DMX/RDM hardware, TouchDesigner, a screen reader, a clean machine, a signed
+update endpoint, or a venue/comparator setup. No Open marker was promoted.
+The ledger remains `27 Complete / 8 Deferred / 23 Open` (`58` total), and the
+working tree/upstream are clean and equal.
+
 ## Resumption checkpoint — ASIO current-source contract tranche — 2026-09-14
 
 After the secondary-display continuation, the following three ASIO Open rows
