@@ -1319,3 +1319,29 @@ prescribed matrix with raw logs, identity, timestamps, first-failure retention,
 and operator evidence; then update only the corresponding ledger rows and
 commit/push the evidence. The goal is left blocked until that external state or
 decision changes; no marker is promoted here.
+
+## Resumption checkpoint — formal native display gate after secondary display — 2026-09-14
+
+The user added a secondary display, so the previously missing native-display
+condition was rechecked. Live DisplayConfig inventory identified `DISPLAY2`
+as `1920x1200` at effective DPI `96`; its enumerated modes include
+`1920x1080`. A reversible wrapper saved `1920x1200@165Hz`, changed only
+DISPLAY2 to `1920x1080@60Hz`, moved the isolated QA window there, and restored
+the saved mode with Win32 result `0` after the run.
+
+The formal native checker completed with wrapper exit `0` and report
+`%TEMP%\\syndocal-native-acceptance-20260914-082019\\native-window-acceptance.json`.
+The report proves monitor/work area `1920x1080`/`1920x1032`, maximized client
+`1920x1032`, F11 `1920x1080`, exact Esc restore, safe Control semantic-state
+coverage, both Stage/Timeline detach orders, restart record restoration,
+main-window reload adoption, direct Stage-child-close reintegration, and final
+full reintegration. All observable assertions passed. The deliberate owned
+Tauri subtree termination logged `ELIFECYCLE`, but it no longer leaked into
+the wrapper result after the checker fix.
+
+This is a real native display/pane-lifecycle advancement, not whole H5 or
+external acceptance. No output, recording, Take, blackout, Arm, Take Over,
+physical device, external client, accessibility environment, or venue action
+was performed. `UI-H5-CONTROL-001`, `ACCESSIBILITY-NATIVE-001`, and the
+other external Open rows remain unchanged until their complete matrices are
+run.

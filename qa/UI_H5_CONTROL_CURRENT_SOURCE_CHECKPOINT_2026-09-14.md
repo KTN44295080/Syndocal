@@ -210,3 +210,28 @@ performed. `UI-H5-CONTROL-001` remains `Open`.
 The checker status fix is intentionally narrow: after a successful assertion
 path, it explicitly exits `0` after `finally` cleanup so `taskkill.exe` cannot
 become the script status; assertion failures still throw and remain non-zero.
+
+## Formal 1920 native gate after secondary display installation — 2026-09-14
+
+After a secondary display was connected, the live DisplayConfig inventory
+identified `\\.\DISPLAY2` as `1920x1200` at effective DPI `96`, with
+`1920x1080` available in its enumerated modes. The reversible test wrapper
+recorded the original `1920x1200@165Hz`, changed only DISPLAY2 to
+`1920x1080@60Hz`, moved the isolated QA window to that monitor, and restored
+the original mode in `finally` with Win32 result `0`.
+
+The formal checker then completed with wrapper exit `0`. Report:
+`%TEMP%\\syndocal-native-acceptance-20260914-082019\\native-window-acceptance.json`.
+It records monitor `1920x1080` / work area `1920x1032`, maximized client
+`1920x1032`, F11 client `1920x1080`, exact Esc restoration, all four safe
+Control Lighting/Video/Both/Timeline semantic-state checks, both pane detach
+orders, restart restoration, main-window reload adoption, direct Stage-child
+close reintegration, and final full reintegration. All observable assertions
+printed `PASS`; the intentional owned Tauri subtree cleanup still emits its
+`ELIFECYCLE` line, but the acceptance wrapper returned `0`.
+
+This closes the current-source native display/pane-lifecycle sub-gate only. No
+output, recording, Take, blackout, Arm, Take Over, device, external client,
+screen-reader, High Contrast, scaling, IME, or venue action was performed.
+`UI-H5-CONTROL-001` remains `Open` for the complete live/dangerous Control,
+accessibility, physical-output, external-client, and recovery requirements.
