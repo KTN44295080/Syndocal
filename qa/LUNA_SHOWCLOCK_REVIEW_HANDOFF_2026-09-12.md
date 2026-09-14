@@ -1083,3 +1083,10 @@ unmerged work: `chatgpt/core-integration-candidate-20260908`,
 refs, while the last is local-only and its redundant origin ref is already
 deleted. No additional branch is safe to delete without discarding another
 worktree's changes or a unique QA/native fix.
+
+The `UI-H5-CONTROL-001` browser fallback gate was rerun against HEAD
+`70c7fb30` using the repository's explicit Chrome path because Browser plugin
+routing is unavailable here. All four supported viewports passed the Lighting,
+Timeline, focus-return, and CDP diagnostics checks with zero runtime, console,
+log, or harness errors. This remains rendered-browser evidence only; native
+button-by-button and physical-output acceptance stay Open.

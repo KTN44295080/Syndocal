@@ -153,3 +153,18 @@ Run the H5 matrix on the exact current artifact: live Cue/Clip/Take/Transition,
 Blackout/Arm/Take Over, recording and diagnostics, failure/recovery, and native
 interaction at the required operator viewports. Preserve the first failure and
 separate native, physical, and venue evidence before changing the marker.
+
+## Takeover browser rerun — current HEAD — 2026-09-14
+
+The repository's existing Chrome/Playwright fallback gate was rerun against
+HEAD `70c7fb30` because the Browser plugin is not available in this session.
+It passed all four supported viewports: `3840x2160`, `2560x1440`, `1920x1080`,
+and `1280x720`. Each viewport passed Lighting and Timeline layout assertions,
+first-Escape focus return, and final CDP diagnostics with zero runtime
+exceptions, console/log errors or warnings, and harness errors. The script
+reported `check:control-upper-workspaces passed` and cleaned its browser tree,
+Vite server, endpoint, and profile.
+
+This is a fresh rendered-browser interaction result only. It does not change
+the native button-by-button, dangerous-action, accessibility, physical-output,
+external-client, venue, signing, or publication boundaries above.
