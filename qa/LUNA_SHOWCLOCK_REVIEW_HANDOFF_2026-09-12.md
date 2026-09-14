@@ -1219,10 +1219,50 @@ interaction because the current primary monitor is `2560x1600` and no
 Control button workflows and accessibility remain unaccepted.
 
 A supplemental native run on the available `2560x1600` display generated
-`%TEMP%\\syndocal-native-acceptance-20260914-044121\\native-window-acceptance.json`.
+`%TEMP%\\syndocal-native-acceptance-20260914-045044\\native-window-acceptance.json`.
 It recorded `2560x1504` maximized, `2560x1600` F11, exact restore, safe H5
 Control semantic-state checks, pane lifecycle, restart restoration, reload
 adoption, direct-child close reintegration, and final reintegration. Every
-observable assertion printed `PASS`, but the outer Tauri dev command exited
-`1`, so this remains supplemental and does not replace the missing formal
-`1920x1080` gate. No output/device action occurred.
+observable assertion printed `PASS`, and the acceptance wrapper exited `0`
+after reaping the owned Tauri dev subtree. The subtree printed its expected
+`ELIFECYCLE` shutdown line during intentional cleanup, but that did not become
+the wrapper result after the narrow checker fix. This remains supplemental and
+does not replace the missing formal `1920x1080` gate. No output/device action
+occurred.
+
+## Continuation checkpoint — native checker status and branch audit — 2026-09-14
+
+The only product-repository change in this continuation is
+`app/scripts/check-native-window-acceptance.ps1`: the successful main path now
+ends with an explicit `exit 0` after `finally` restores the environment. This
+prevents the cleanup `taskkill.exe` status from leaking into a successful
+checker result; all assertion and trust-boundary failures still throw and
+remain non-zero.
+
+Evidence on the current checkout:
+
+- `node app/scripts/run-native-window-acceptance.mjs -SelfTest`: `81` checks,
+  `0` failed, exit `0`.
+- Available-display supplemental run with
+  `-MinimumMaximizedClient 2400x1500 -ExpectedFullscreen 2560x1600`: report
+  `%TEMP%\\syndocal-native-acceptance-20260914-045044\\native-window-acceptance.json`,
+  all observable assertions `PASS`, wrapper exit `0`.
+- Formal `1920x1080` acceptance remains fail-closed when the current primary
+  display enumerates only `2560x1600`; no dimension requirement was weakened.
+
+The branch cleanup audit removed these already-unneeded refs from both local
+and `origin`: `chatgpt/macos-final-gate-20260908`,
+`chatgpt/thumbnail-native-reload-20260908`,
+`codex/thumbnail-lifecycle-cancel-20260910`, and
+`codex/video-fx-browser-gate-20260910`. No stale remote refs remain. The
+remaining branches are retained because they contain unmerged work or are
+attached to dirty worktrees: `chatgpt/core-integration-candidate-20260908`,
+`chatgpt/macos-artifact-gate`, `chatgpt/macos-artifact-validation`, and
+`chatgpt/snapshot-profile-20260908`. They must not be deleted or their
+worktrees removed without resolving ownership and preserving those changes.
+
+The ledger remains `27 Complete / 8 Deferred / 23 Open` out of `58`. No marker
+is promoted by the supplemental run: `UI-H5-CONTROL-001` still requires the
+formal display gate plus accessibility and physical/external acceptance, and
+the remaining Open rows retain their documented hardware, venue, client,
+signed-release, or product-scope boundary.

@@ -193,12 +193,20 @@ Because the required `1920x1080` mode is unavailable on this host, the same
 checker was run against the current physical display without changing the
 product or weakening the formal gate: `-MinimumMaximizedClient 2400x1500`
 and `-ExpectedFullscreen 2560x1600`. The generated report was
-`%TEMP%\\syndocal-native-acceptance-20260914-044121\\native-window-acceptance.json`.
+`%TEMP%\\syndocal-native-acceptance-20260914-045044\\native-window-acceptance.json`.
 It recorded maximized `2560x1504`, F11 `2560x1600`, exact restore,
 Control Lighting/Video/Both/Timeline semantic-state acceptance, both pane
 detach orders, restart restoration, reload adoption, direct Stage-child close
 reintegration, and final full reintegration. The report's observable checks
-all emitted `PASS`, but the outer Tauri dev process exited `1` after report
-publication; this is therefore supplemental evidence, not a formal gate pass.
+all emitted `PASS`, and the acceptance wrapper exited `0` after the owned
+Tauri dev subtree was reaped. The subtree still printed its expected
+`ELIFECYCLE` shutdown line while it was intentionally terminated; that line
+does not replace the wrapper's successful result. This is therefore still
+supplemental evidence, not a formal gate pass, because the run used the
+available-display dimensions rather than the required `1920x1080` mode.
 No output, recording, Take, blackout, Arm, Take Over, or device action was
 performed. `UI-H5-CONTROL-001` remains `Open`.
+
+The checker status fix is intentionally narrow: after a successful assertion
+path, it explicitly exits `0` after `finally` cleanup so `taskkill.exe` cannot
+become the script status; assertion failures still throw and remain non-zero.

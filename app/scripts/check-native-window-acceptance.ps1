@@ -3234,3 +3234,8 @@ try {
     )
   }
 }
+
+# A successful acceptance run can use taskkill.exe during the finally cleanup.
+# Keep that cleanup command's status from becoming the PowerShell script's
+# status; all product/assertion failures still throw before this success exit.
+exit 0
