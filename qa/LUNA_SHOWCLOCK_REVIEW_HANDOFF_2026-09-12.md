@@ -1035,3 +1035,43 @@ loopback (15 groups), and strict JSON (130 assertions) all passed. No real
 external client, clean install, signing/publication endpoint, or physical
 output was contacted. AI8 remains Open for its external release and hardware
 boundaries.
+
+## Takeover continuation — current ledger and branch state — 2026-09-14
+
+The current supervising checkout is `codex/showclock-review-20260912` at
+pushed HEAD `986fba3f`. The working tree is clean and
+`HEAD...origin/codex/showclock-review-20260912` is `0 0`. Both authoritative
+validators pass: `23 Open + 8 Deferred + 27 Complete` (`58` total), and the
+Q1/Q4 mirror reports `58/58` Flow references, `15` decisions, `14` risks, and
+`86` linked evidence records.
+
+The four individually continued markers in this takeover are still Open for
+their external boundaries, with current-source evidence recorded in their
+dedicated documents:
+
+| Marker | Current result | Unclosed boundary |
+| --- | --- | --- |
+| `AI3-NATIVE-INGRESS-001` | Routing/admission/ownership/safety PASS; bounded SMC-Mixer safe MIDI slice retained | Native OSC/DMX/Remote, Art-Net/fixture, feedback/clock, reconnect, latency, venue |
+| `AI3-PHYSICAL-REARM-001` | Replacement/retirement Rust tests `9/9` PASS | Physical retirement, explicit re-Arm, hardware ACK, venue matrix |
+| `AI3-DURABLE-ACCEPTANCE-001` | Bridge/recovery/ownership/admission source checks PASS | Native No/Close, reply-loss/restart, physical ACK, five-display |
+| `AI8-EXTERNAL-ACCEPTANCE-001` | Bridge/bootstrap/admission/fake-loopback/strict parser PASS | Clean install, real clients, restart/update, security, signing/publication, hardware |
+
+The remaining Open rows are unchanged and are not silently promoted: H5
+native live/dangerous workflows; Remote/Security external LAN/TLS and fuzz;
+Migration cross-version/upgrade matrix; Observability signed update and
+support drills; native Accessibility; six ASIO license/driver/soak/latency/
+package rows; Art-Net, USB/RDM, physical input, DJ-Link, video, venue,
+ShowClock two-machine, and pinned comparison acceptance.
+
+Branch cleanup is complete for the clearly unnecessary refs. The deleted
+local and `origin` branches were `chatgpt/macos-final-gate-20260908`,
+`chatgpt/thumbnail-native-reload-20260908`,
+`codex/thumbnail-lifecycle-cancel-20260910`, and
+`codex/video-fx-browser-gate-20260910`. The only remaining non-current local
+branches are retained because they have dirty attached worktrees or unique
+unmerged work: `chatgpt/core-integration-candidate-20260908`,
+`chatgpt/macos-artifact-gate`, `chatgpt/snapshot-profile-20260908`, and local
+`chatgpt/macos-artifact-validation`; the first three have matching origin
+refs, while the last is local-only and its redundant origin ref is already
+deleted. No additional branch is safe to delete without discarding another
+worktree's changes or a unique QA/native fix.
