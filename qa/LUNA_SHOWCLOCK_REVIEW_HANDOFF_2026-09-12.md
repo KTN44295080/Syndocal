@@ -666,15 +666,22 @@ require their actual UI/device/two-machine topology and separate evidence.
 
 The continuation is now owned by the current task on branch
 `codex/showclock-review-20260912`. The latest pushed checkpoint is
-`6891b4e7` (`qa: record ASIO license source rerun`), and the worktree is clean
+`87d8afaa` (`qa: record comparison source rerun`), and the worktree is clean
 with the branch equal to `origin/codex/showclock-review-20260912`.
 
-The only product-code change in this continuation is in
+The earlier product-code change in this continuation is in
 `app/src/components/ControlBothPanel.tsx`: the DMX, all-output, and Video
 blackout controls preserve their existing lease-bound callbacks and visible
 operator labels while exposing stable action names and `aria-pressed` state.
 The focused checker observes those three semantics in
 `app/scripts/check-control-upper-workspaces-browser.mjs`.
+
+The later venue-soak checkpoint also changed only the bounded QA harness and
+wrapper: `crates/engine/examples/syndocal_soak.rs` now admits the canonical
+Mapping fixture and clamps the software-soak video-opacity floor, while
+`qa/run-soak.ps1` fails closed on a false or missing report and tolerates only
+a host exit-code property loss after a truthful passed report. Product runtime
+and authored sample behavior remain unchanged by that harness fix.
 
 Current-source verification passed for TypeScript, Vite build, localization,
 renderer routing, shortcut/workspace contracts, the full static release chain,
@@ -781,7 +788,7 @@ The authoritative ledger remains structurally valid at 58 markers:
 `DMX-ARTNET-001`, `DMX-USB-RDM-001`, `INPUT-PHYSICAL-001`,
 `DJ-LINK-HARDWARE-001`, `VIDEO-PHYSICAL-001`, `VENUE-SOAK-001`,
 `SHOWCLOCK-VENUE-001`, and `COMPARE-PINNED-001`. The Q1/Q4 mirror reports
-`58/58` Flow references and `81` linked evidence records. External markers
+`58/58` Flow references and `82` linked evidence records. External markers
 remain Open until their named hardware, client, two-machine, venue, signed
 artifact, or other external evidence exists.
 
@@ -795,6 +802,70 @@ still contains a unique native-admission fix. Its remote counterpart was
 deleted because it pointed only to the loopMIDI commit already represented by
 current `221ebf7f` and had no attached worktree. `git fetch origin --prune` and
 `git remote prune origin --dry-run` then reported no stale remote refs.
+
+## Later current-source checkpoints — 2026-09-14
+
+The following source reruns were completed one at a time after the takeover.
+Each result was recorded in its domain checkpoint and kept the corresponding
+Flow marker Open when the required external boundary was absent.
+
+- ASIO: `ASIO-LICENSE-001` reran the packaging boundary (`169 assertions`)
+  and ABI-v3 contract (`22 assertions`). Normal distribution still rejects
+  ASIO injection and `distribution_approved` remains false; no GPLv3-separated
+  artifact, Steinberg agreement, legal approval, or public ASIO package exists.
+  `ASIO-FORMAT-MATRIX-001` reran live-audio lifecycle, IPC-v1, and ABI-v3
+  checks; explicit device/rate/channel/native-format/fixed-buffer admission
+  remains enforced, but no real-driver matrix was opened. `ASIO-FAULT-MATRIX-001`
+  reran the SDK-independent bridge suite (`31 passed`) and ABI-v3 (`22`), with
+  no real-driver reset, XRUN, unplug/replug, or callback-gap run. `ASIO-SOAK-001`
+  reran lifecycle checks only; no device or one-hour run was performed.
+  `ASIO-LATENCY-001` reran the current lifecycle contract only; no physical
+  input-to-pixel or matched TouchDesigner measurement was produced.
+  `ASIO-PERSISTENCE-PACKAGE-001` reran lifecycle and packaging (`169`),
+  preserving explicit selection and normal-package ASIO rejection; native
+  telemetry, stale-device locking, and final package review remain open.
+- Outputs: `DMX-ARTNET-001` reran DMX addressing, ownership, safety-blackout,
+  and show-setup checks; no Art-Net/sACN node, fixture, reconnect, or sustained
+  physical 44 Hz output was exercised. `DMX-USB-RDM-001` reran output-control,
+  ownership, Standby Sync, and safety checks; host inventory exposed only a
+  generic FTDI `USB Serial Port (COM5)`, not a named Enttec/DMXKing/RDM path.
+- Inputs and control: `INPUT-PHYSICAL-001` reran DVC MIDI (`39` assertions),
+  DVC DMX (`41`), and frontend routing (`133/31/28/479`); the SMC-Mixer safe
+  physical slice remains limited to enumerate/open and channel-1 All Notes Off.
+  `DJ-LINK-HARDWARE-001` reran both policy/runtime checks without starting a
+  rekordbox peer, Agent, pedal, or remote client. No live HELLO/ACK/STATE_SYNC,
+  reconnect, or hardware artifact was created.
+- Video and venue: `VIDEO-PHYSICAL-001` reran routing, managed-window,
+  observation, and bounded-polling contracts; no real display, HDMI, NDI/Spout,
+  capture, reconnect, or frame-drop evidence exists. `VENUE-SOAK-001` fixed the
+  two harness continuity defects, then passed the exact pinned-source mixed
+  software soak: `1801/1801` nonblank frames, `0` dropped, tick p99 `510 us`,
+  command queue p99 `92 us`, command-to-DMX p99 `94 us`, `3603` successful
+  loopback sends, `0` failures/render errors, and `26.4 MB` peak working set.
+  This is 60-second software loopback evidence, not the required one-hour
+  maximum-condition venue/GPU/integrated A/V/physical-output acceptance.
+- ShowClock and comparison: `SHOWCLOCK-VENUE-001` reran protocol (`21`), LAN
+  (`3`), Tauri IPC (`7`), two-process (`2`), frontend-invokes (`480`), routing
+  (`133/31/28/479`), admission (`539` with `18` negative rejections), and
+  output-control/Standby Sync checks. No real switch, second PC, crash/restart
+  replay restoration, stale-peer rejoin, device-loss, physical output, or
+  zero-simultaneous-output rehearsal was performed. `COMPARE-PINNED-001` then
+  reran `pnpm.cmd --dir app run check:status` successfully; there is still no
+  approved pinned SynapseRack/Daslight build, license, reference hardware,
+  synchronized content/capture, or operator measurement package.
+
+The authoritative completion ledger remains `27 Complete`, `8 Deferred`, and
+`23 Open` out of `58`. No Open marker was changed to Complete from source-only,
+loopback, inventory, or partial physical evidence. The current Open list is:
+`AI3-NATIVE-INGRESS-001`, `AI3-PHYSICAL-REARM-001`,
+`AI3-DURABLE-ACCEPTANCE-001`, `AI8-EXTERNAL-ACCEPTANCE-001`,
+`UI-H5-CONTROL-001`, `REMOTE-SECURITY-001`, `MIGRATION-COMPATIBILITY-001`,
+`OBSERVABILITY-SUPPORT-001`, `ACCESSIBILITY-NATIVE-001`,
+`ASIO-LICENSE-001`, `ASIO-FORMAT-MATRIX-001`, `ASIO-FAULT-MATRIX-001`,
+`ASIO-SOAK-001`, `ASIO-LATENCY-001`, `ASIO-PERSISTENCE-PACKAGE-001`,
+`DMX-ARTNET-001`, `DMX-USB-RDM-001`, `INPUT-PHYSICAL-001`,
+`DJ-LINK-HARDWARE-001`, `VIDEO-PHYSICAL-001`, `VENUE-SOAK-001`,
+`SHOWCLOCK-VENUE-001`, and `COMPARE-PINNED-001`.
 
 ## Safe resume procedure after this takeover
 
