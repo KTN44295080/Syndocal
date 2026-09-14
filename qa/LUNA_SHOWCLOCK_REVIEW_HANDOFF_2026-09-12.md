@@ -1127,3 +1127,9 @@ The `ASIO-SOAK-001` current-source preflight at HEAD `767f1318` passed the
 live-audio fail-closed lifecycle, availability, persistence, presentation, and
 ordering check. No ASIO/WASAPI device or long-duration stream was opened; the
 one-hour physical soak and telemetry remain Open.
+
+The `ASIO-LATENCY-001` current-source preflight at HEAD `5a612989` passed the
+live-audio lifecycle/availability/persistence/presentation/order contract.
+Typed telemetry remains source evidence only: no ASIO stream, marker,
+TouchDesigner session, or input-to-pixel measurement was performed, so the
+five-trial physical latency marker remains Open.

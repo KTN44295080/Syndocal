@@ -41,3 +41,12 @@ for that external measurement.
 
 Next action is five matched physical trials with capture-to-engine and
 input-to-pixel percentiles recorded against the acceptance thresholds.
+
+## Takeover continuation — current-source latency preflight — 2026-09-14
+
+At HEAD `5a612989`, `pnpm.cmd --dir app run check:live-audio` passed the
+fail-closed lifecycle, availability, explicit selection persistence,
+presentation, and request-ordering contract. The source exposes typed capture
+and engine telemetry fields, but no physical stream, marker, TouchDesigner
+session, or input-to-pixel measurement was performed. `ASIO-LATENCY-001`
+remains `Open` pending five matched physical trials with raw timing logs.
