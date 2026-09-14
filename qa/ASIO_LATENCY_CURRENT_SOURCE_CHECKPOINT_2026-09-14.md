@@ -50,3 +50,30 @@ presentation, and request-ordering contract. The source exposes typed capture
 and engine telemetry fields, but no physical stream, marker, TouchDesigner
 session, or input-to-pixel measurement was performed. `ASIO-LATENCY-001`
 remains `Open` pending five matched physical trials with raw timing logs.
+
+## Takeover continuation — current-source latency-contract recheck — 2026-09-14
+
+At current source HEAD `0d216dc2`, the source-side contracts were rerun:
+
+```text
+pnpm.cmd --dir app run check:live-audio
+live audio fail-closed lifecycle, availability contract, selection persistence,
+presentation, and request ordering ok
+
+pnpm.cmd --dir app run check:live-audio-ipc-v1
+live audio IPC v1 exact request mapping and fail-closed checks ok
+
+pnpm.cmd --dir app run check:asio-v3-contract
+ASIO v3 contract tests passed: 22 assertions.
+```
+
+These checks confirm the typed capture/engine telemetry surface, exact IPC
+request mapping, generation and fail-closed rules, and ASIO v3 event contract.
+They did not open a physical ASIO/WASAPI stream, route a marker through
+TouchDesigner, render a measured output pixel, or create raw timing logs.
+
+`ASIO-LATENCY-001` remains `Open`. Completion still requires five matched
+physical trials on the approved artifact and named driver/device, with exact
+sample rate/channels/format/buffer configuration and raw capture-to-engine and
+input-to-pixel percentiles against the acceptance thresholds. Source or
+browser checks cannot substitute for that external measurement.
