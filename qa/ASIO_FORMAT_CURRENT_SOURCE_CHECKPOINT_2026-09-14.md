@@ -65,3 +65,24 @@ and ASIO v3 contract check all passed. The ABI check reported `22` assertions.
 No ASIO stream or real driver was opened, and no sample-rate/buffer/channel
 matrix artifact was produced. `ASIO-FORMAT-MATRIX-001` remains `Open` pending
 the licensed artifact and named real-driver matrix.
+
+## Current HEAD format-contract recheck — 2026-09-14
+
+At current HEAD `0e2a4366`, the live-audio fail-closed lifecycle,
+availability, selection persistence, presentation, and request-order checks
+passed; the live-audio IPC v1 exact request-mapping checks passed; and the
+ASIO v3 contract passed 22 assertions.
+
+With the exact MSVC `14.44.35207` Build Tools linker initialized and printed
+first in `where.exe link.exe`, the SDK-free `tools/asio-bridge` suite
+passed 31 tests with zero failures or ignored tests. It covered explicit
+tuple validation, no-fallback behavior, lease ownership, v2/v3 exclusivity,
+strict JSON, native-format conversion, callback frame integrity, full
+silence on rejected data, and typed Stop/Close teardown.
+
+The current host exposes ASIO registry entries and USB audio devices, but the
+pinned SDK archive and reviewed ASIO artifact are not present in this checkout.
+No ASIO stream was opened and no 44.1/48/96 kHz, 64/128/256-frame,
+native-format, mono/stereo/channel hardware matrix was produced.
+`ASIO-FORMAT-MATRIX-001` remains `Open` pending the licensed artifact and
+named real-driver evidence.
