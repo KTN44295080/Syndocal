@@ -1,6 +1,15 @@
 use super::*;
+use std::panic::{catch_unwind, AssertUnwindSafe};
+
 fn id(value: usize) -> String {
     format!("00000000-0000-4000-8000-{value:012x}")
+}
+
+fn next_ingress_byte(state: &mut u64) -> u8 {
+    *state ^= *state << 7;
+    *state ^= *state >> 9;
+    *state ^= *state << 8;
+    (*state & 0xff) as u8
 }
 fn command(method: &str) -> Command {
     let params = match method {
@@ -200,6 +209,80 @@ fn agent_bridge_wire_auth_methods_and_bounds_are_strict() {
             .command()
             .is_err());
     }
+}
+
+#[test]
+fn agent_bridge_wire_hostile_request_corpus_is_bounded_and_panic_free() {
+    const CASES: usize = 512;
+    let valid = serde_json::to_vec(&serde_json::json!({
+        "token": "token",
+        "requestId": id(1),
+        "method": "fixtures.list",
+        "params": {}
+    }))
+    .unwrap();
+    let mut corpus: Vec<(Vec<u8>, bool)> = Vec::with_capacity(CASES);
+    corpus.push((valid.clone(), true));
+    corpus.push((vec![0; wire::MAX_REQUEST_BYTES + 1], false));
+
+    let mut state = 0x5344_435f_2026_0914_u64;
+    for _ in 0..128 {
+        let length = 1 + (next_ingress_byte(&mut state) as usize % wire::MAX_REQUEST_BYTES);
+        let mut bytes = Vec::with_capacity(length);
+        for _ in 0..length {
+            bytes.push(next_ingress_byte(&mut state));
+        }
+        // Keep random cases guaranteed outside UTF-8 JSON decoding.
+        bytes[0] = 0xff;
+        corpus.push((bytes, false));
+    }
+
+    for index in 0..128 {
+        let length = index * (valid.len() - 1) / 127;
+        corpus.push((valid[..length].to_vec(), false));
+    }
+
+    for index in 0..(CASES - corpus.len()) {
+        let mut mutated: serde_json::Value = serde_json::from_slice(&valid).unwrap();
+        mutated[format!("unexpected{index}")] = serde_json::json!(index);
+        corpus.push((serde_json::to_vec(&mutated).unwrap(), false));
+    }
+    assert_eq!(corpus.len(), CASES);
+
+    let mut admitted = 0;
+    let mut rejected = 0;
+    let mut panics = 0;
+    for (index, (bytes, expected_valid)) in corpus.into_iter().enumerate() {
+        assert!(bytes.len() <= wire::MAX_REQUEST_BYTES + 1);
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            serde_json::from_slice::<Request>(&bytes)
+                .map(|request| request.command().is_ok())
+                .unwrap_or(false)
+        }));
+        if result.is_err() {
+            panics += 1;
+            continue;
+        }
+        let was_admitted = result.unwrap();
+        if was_admitted {
+            admitted += 1;
+        } else {
+            rejected += 1;
+        }
+        if expected_valid {
+            assert!(
+                was_admitted,
+                "canonical request was not admitted for corpus case {index}"
+            );
+        }
+    }
+    assert_eq!(admitted, 1);
+    assert_eq!(rejected, CASES - 1);
+    assert_eq!(panics, 0);
+    println!(
+        "agent bridge hostile request corpus: {CASES} cases, {rejected} rejected, {panics} panics, max_bytes={}",
+        wire::MAX_REQUEST_BYTES + 1
+    );
 }
 
 #[test]
