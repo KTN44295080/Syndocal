@@ -157,6 +157,18 @@ observation, or one-hour frame/drop run has yet been captured. `VIDEO-PHYSICAL-
 001` remains Open, while the stricter Near-show role-binding gate remains a
 separate open boundary.
 
+## Observation attempt — 2026-09-14
+
+The requested live observation could not start because the current Computer
+Use surface exposed no native applications (`cua.getState()` returned
+`apps: []`), while the native helper returned `Trusted RPC service is not
+configured: sky` from `sky.list_apps()`. No HWND, coordinate, focus change,
+input, output creation, or physical-display claim was made. A process check
+also found no currently running `syndocal.exe`. The next safe action is to
+restore the native Computer Use surface, start the exact current-checkout
+executable, and then capture the practical display/output observation under
+the narrowed generic marker scope.
+
 The previously unregistered current-source display-target checker was repaired
 and wired into the package gate:
 
