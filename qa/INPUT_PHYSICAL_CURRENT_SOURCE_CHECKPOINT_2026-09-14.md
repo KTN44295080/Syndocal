@@ -75,3 +75,27 @@ dispatches. The prior SMC-Mixer release test remains the only recorded physical
 slice; it is not repeated here. No OSC/TouchOSC/Remote client, Clock/MTC,
 latency, reconnect, or new MIDI traffic was used. `INPUT-PHYSICAL-001` remains
 `Open`.
+
+## Takeover continuation — current-source input-contract recheck after Video repair — 2026-09-14
+
+At current source HEAD `4dc18a7e`, the input route contracts were rerun:
+
+```text
+pnpm.cmd run check:dvc-midi-shortcuts
+dvc midi shortcuts ok: 39 assertions
+
+node scripts/check-dvc-dmx-shortcuts.mjs
+dvc dmx shortcuts ok: 41 assertions
+
+pnpm.cmd run check:frontend-command-routing
+frontend command routing exact: 133 renderer mutations, 31 server-authoritative
+mutations, 28 raw dispatches, 479 facade dispatches
+```
+
+All commands exited `0`. Generation/authority routing and the narrow input
+reader boundary remain enforced. No new MIDI traffic, OSC/TouchOSC or Web
+Remote client, Clock/MTC path, latency trial, reconnect/replacement run, or
+native UI/device workflow was performed. The previously recorded SMC-Mixer
+enumerate/open plus safe All Notes Off slice remains the only physical slice;
+`INPUT-PHYSICAL-001` remains `Open` pending the named physical input matrix,
+reconnect timing, raw logs, and operator observations.
