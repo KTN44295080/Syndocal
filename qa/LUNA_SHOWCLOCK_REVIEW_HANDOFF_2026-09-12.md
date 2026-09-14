@@ -1090,3 +1090,12 @@ routing is unavailable here. All four supported viewports passed the Lighting,
 Timeline, focus-return, and CDP diagnostics checks with zero runtime, console,
 log, or harness errors. This remains rendered-browser evidence only; native
 button-by-button and physical-output acceptance stay Open.
+
+The `OBSERVABILITY-SUPPORT-001` release/diagnostic recheck passed against HEAD
+`8300943a`: release self-test metadata `137`, candidate extraction `43`,
+materialization `4`, Windows artifact checks `144`, strict JSON `130`, status,
+and bundled-library checks all passed. Pinned-MSVC release Rust tests passed
+`diagnostic_` 37, `updater_` 3, and redacted project replacement 1, with zero
+failures/ignored tests and zero first-party warnings. No endpoint, publication,
+or device was used; signed update, clean-machine, support-drill, and release
+acceptance remain Open.

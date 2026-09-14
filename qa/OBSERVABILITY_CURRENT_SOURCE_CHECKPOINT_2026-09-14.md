@@ -91,3 +91,26 @@ Next action is to run the signed test update matrix on a release-controlled
 machine, retain N and N+1 hashes plus the automatic pre-update project backup,
 then record operator/support drill evidence. Until those external gates exist,
 current-source PASS must not be reported as support or release acceptance.
+
+## Takeover continuation — current HEAD release/diagnostic recheck — 2026-09-14
+
+The complete source command set was rerun against HEAD `8300943a`. The
+release self-test passed with release metadata `137` assertion groups, Windows
+candidate extraction `43`, verified materialization `4`, Windows release
+artifact checks `144`, and strict JSON `130`. The bundled-library and status
+checks also passed.
+
+With the exact Build Tools MSVC `14.44.35207` x64 linker, the focused release
+Rust tests passed:
+
+```text
+diagnostic_: 37 passed / 0 failed / 0 ignored
+updater_: 3 passed / 0 failed / 0 ignored
+project_replacement_is_redacted: 1 passed / 0 failed / 0 ignored
+```
+
+The run completed with zero first-party warnings. It contacted no update
+endpoint, published no artifact, and opened no device. The result confirms
+the current-source diagnostics/updater/release negative contracts only;
+`OBSERVABILITY-SUPPORT-001` remains `Open` for signed update, clean-machine,
+deployment/support-drill, signing/publication, and physical/native acceptance.
