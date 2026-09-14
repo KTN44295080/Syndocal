@@ -48,16 +48,50 @@ still measured `1280x752`; the gate therefore failed closed at
 display registry reported `AppliedDPI=192` (200%); this explains the available
 logical work area but does not satisfy the required `1920x1000` client gate.
 The current attempt used the pinned MSVC `14.44.35207` wrapper and exited with
-code `1`; no native interaction or physical output is claimed.
+code `1`; no native interaction or physical output is claimed. This failed
+attempt remains historical evidence of the checker failing closed under a
+DPI-virtualized host measurement.
+
+## Takeover native pane acceptance — 2026-09-14
+
+The checker was then corrected to establish Per-Monitor V2 before reading
+Win32 monitor and client dimensions. It also suppresses CDP task acknowledgements,
+accepts intentional empty pane arrays, distinguishes the exact
+`tauri-plugin-single-instance` helper window from user-facing panes, applies the
+decorated child-pane client minimum, retries verified maximize/foreground
+operations within bounded time, reaps both isolated dev ports after restart,
+and reconciles only stale Stage/Timeline records belonging to the exact QA PID.
+The checker remains fail-closed for every unknown title, PID, or foreground
+window.
+
+The formal current-source run temporarily changed the primary display to
+`1920x1080@180Hz/32bpp` with the reversible Win32 display-settings wrapper and
+restored the original `2560x1600@180Hz/32bpp` mode in `finally`. The report is
+`%TEMP%\syndocal-native-acceptance-20260914-012135\native-window-acceptance.json`.
+It passed with monitor/work area `1920x1080` / `1920x1008`, main maximized
+client `1920x1008`, F11 client `1920x1080`, and Esc-restored maximized client
+`1920x1008`. The same run passed Stage-first and Timeline-first detach orders,
+both pane rejoin paths, detached-pane restoration after process restart, exact
+child adoption after main-window reload, direct Stage-child close reintegration,
+and final full reintegration. It wrote 19 screenshots and exited with code 0;
+the wrapper restored the original display mode successfully.
+
+This is current-source Windows native main-window and Stage/Timeline pane
+geometry/lifecycle evidence only. It does not establish native Control
+button-by-button interaction, native accessibility, physical MIDI/OSC/DMX/
+Art-Net/sACN/USB/RDM/video/display output, external clients, two-machine
+operation, venue/soak, signing, publication, or product completion. The two
+explicitly unverified native record-retirement boundaries in the JSON report
+remain unverified.
 
 ## Acceptance boundary
 
-`UI-H5-CONTROL-001` remains `Open`. The existing evidence does not establish
-native button-by-button interaction, full live Lighting/Video/Audio workflow
-completion, native accessibility, physical output, failure/recovery rehearsal,
-external clients, venue/soak, signing, publication, or product completion.
-The native maximized/F11 gate also remains unverified until it is rerun on a
-Windows operator display meeting the required `1920x1080` monitor boundary.
+`UI-H5-CONTROL-001` remains `Open`. The current native window/pane gate now has
+current-source evidence on a physical `1920x1080` display, but the existing
+evidence still does not establish native button-by-button interaction, full
+live Lighting/Video/Audio workflow completion, native accessibility, physical
+output, failure/recovery rehearsal, external clients, venue/soak, signing,
+publication, or product completion.
 
 The fresh browser rerun used the current Chrome executable through
 `CHROME_PATH=C:\Users\janua\AppData\Local\Google\Chrome\Application\chrome.exe`.
@@ -74,8 +108,10 @@ physical output remain separate unaccepted boundaries.
 The blackout semantic change was made in `894c690c`. A current-tree audit with
 `git diff --name-only 894c690c..HEAD -- app crates` returned no paths, so the
 current product source still matches the source used for the post-change
-native build/process smoke and the recorded static checks. This does not turn
-the unavailable rendered/native UI gates into a pass.
+native build/process smoke and the recorded static checks. The native pane
+acceptance above is an additional checker/runtime QA result and does not turn
+the remaining native Control, accessibility, or external UI boundaries into a
+pass.
 
 ## Resume procedure
 

@@ -666,9 +666,10 @@ require their actual UI/device/two-machine topology and separate evidence.
 
 The continuation is now owned by the current task on branch
 `codex/showclock-review-20260912`. The latest pushed checkpoint is
-`1dd311da` (`qa: record fresh H5 browser gate`), which records the fresh
-browser evidence and Q1/Q4 mirror update below. The worktree is clean and the
-branch is equal to `origin/codex/showclock-review-20260912`.
+`1dd311da` (`qa: record fresh H5 browser gate`) is superseded below by the
+current native window/pane checkpoint. The resulting owned checkpoint commit
+is identified by Git after commit and push; the branch remains
+`codex/showclock-review-20260912`.
 
 The earlier product-code change in this continuation is in
 `app/src/components/ControlBothPanel.tsx`: the DMX, all-output, and Video
@@ -753,9 +754,10 @@ the unresolved file-identity decision and real upgrade/downgrade rehearsal.
 
 The H5 source-continuity audit then confirmed no `app`/`crates` paths changed
 after `894c690c`, the blackout semantic implementation commit. The post-change
-native build/process smoke remains valid, but the required 1920x1080 native
-gate and fresh Chromium browser gate are still unavailable; `UI-H5-CONTROL-001`
-therefore remains Open.
+native build/process smoke and fresh Chromium browser gate remain valid. A
+later current-source native window/pane acceptance run is recorded below;
+`UI-H5-CONTROL-001` remains Open because its broader native Control,
+accessibility, physical, and external boundaries are not closed.
 
 The AI3 native-ingress record now also links the existing SMC-Mixer physical
 MIDI slice into the AI control Q1 row. It is explicitly bounded to input/output
@@ -811,7 +813,7 @@ The authoritative ledger remains structurally valid at 58 markers:
 `DMX-ARTNET-001`, `DMX-USB-RDM-001`, `INPUT-PHYSICAL-001`,
 `DJ-LINK-HARDWARE-001`, `VIDEO-PHYSICAL-001`, `VENUE-SOAK-001`,
 `SHOWCLOCK-VENUE-001`, and `COMPARE-PINNED-001`. The Q1/Q4 mirror reports
-`58/58` Flow references and `84` linked evidence records. External markers
+`58/58` Flow references and `85` linked evidence records. External markers
 remain Open until their named hardware, client, two-machine, venue, signed
 artifact, or other external evidence exists.
 
@@ -825,6 +827,46 @@ still contains a unique native-admission fix. Its remote counterpart was
 deleted because it pointed only to the loopMIDI commit already represented by
 current `221ebf7f` and had no attached worktree. `git fetch origin --prune` and
 `git remote prune origin --dry-run` then reported no stale remote refs.
+
+## Latest current-source checkpoint — native window and pane lifecycle — 2026-09-14
+
+This checkpoint is based on branch `codex/showclock-review-20260912` at pushed
+base `bfb1be55`. The owned implementation change is
+`app/scripts/check-native-window-acceptance.ps1`: the checker now establishes
+Per-Monitor V2 before physical Win32 dimension reads, suppresses CDP task
+acknowledgement leakage, accepts intentional empty pane arrays, excludes only
+the exact `tauri-plugin-single-instance` helper class/title pair, applies the
+decorated Stage/Timeline child minimum, retries verified maximize and
+foreground operations within bounded time, reaps both isolated dev ports after
+restart, and reconciles only stale Stage/Timeline records belonging to the
+exact QA PID. Unknown windows, titles, PIDs, and foreground targets remain
+fail-closed.
+
+The formal run temporarily selected the primary display mode
+`1920x1080@180Hz/32bpp` from `2560x1600@180Hz/32bpp` using a reversible Win32
+wrapper and restored the original mode in `finally`. It used the exact MSVC
+`14.44.35207` Build Tools linker and exited `0`. The machine-readable report
+was `%TEMP%\syndocal-native-acceptance-20260914-012135\native-window-acceptance.json`.
+It recorded monitor/work area `1920x1080`/`1920x1008`, main maximized client
+`1920x1008`, F11 client `1920x1080`, and Esc-restored max `1920x1008`.
+
+The same 19-screenshot run passed Stage-first and Timeline-first detach/reflow/
+rejoin orders, detached-pane restoration after a real process restart, exact
+child adoption after main-window reload, direct Stage-child close retirement and
+reintegration, and final fully integrated Timeline rejoin. The report retains
+two explicitly unverified native boundaries: proving retirement of a previously
+absent record and retaining an unknown-presence record. No claim is made for
+native Control button-by-button interaction, native accessibility, physical
+MIDI/OSC/DMX/Art-Net/sACN/USB/RDM/video/display output, external clients,
+two-machine operation, venue/soak, signing, publication, or product completion.
+
+The corresponding QA updates are in `qa/NATIVE_WINDOW_ACCEPTANCE.md`,
+`qa/UI_H5_CONTROL_CURRENT_SOURCE_CHECKPOINT_2026-09-14.md`,
+`qa/CONTROL_BOTH_CHECKPOINT_2026-09-14.md`, and
+`qa/ACCESSIBILITY_CURRENT_SOURCE_CHECKPOINT_2026-09-14.md`. The Q1/Q4 mirror
+adds evidence `EV-UI-NATIVE-PANE-DPI-CURRENT-2026-09-14`, bringing linked
+evidence to `85`; the authoritative Flow ledger remains `27 Complete`,
+`8 Deferred`, and `23 Open` out of `58`.
 
 ## Later current-source checkpoints — 2026-09-14
 
@@ -899,15 +941,13 @@ loopback, inventory, or partial physical evidence. The current Open list is:
 
 ## Safe resume procedure after this takeover
 
-1. Rerun the native maximized/F11 and pane lifecycle gate on a Windows display
-   that actually reports `1920x1080`; do not lower the required dimensions.
-2. Rerun the Both browser gate with a working Chrome or Edge installation so
-   the new `aria-pressed` assertions receive fresh rendered evidence.
-3. Continue the Open markers one at a time. For software-supported markers,
+1. Continue the Open markers one at a time. For software-supported markers,
    implement and focus-test concrete gaps before updating the ledger. For
    external markers, preserve the current-source evidence and record the exact
    missing owner/device/client/environment rather than converting a static
    pass into acceptance.
-4. Every completed checkpoint must update the applicable current-source or
+2. If the native gate is rerun, preserve the `1920x1080` physical-display
+   requirement and the checker fail-closed boundaries; do not lower dimensions.
+3. Every completed checkpoint must update the applicable current-source or
    domain QA document, preserve the 58-row ledger/Q1-Q4 mirror invariants,
    commit only owned files, push, and verify upstream equality.

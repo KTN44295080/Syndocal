@@ -90,6 +90,12 @@ before F11 or UI interaction. The current user display registry reports
 `AppliedDPI=192` (200%), so the logical client/work-area measurement still does
 not satisfy the required `1920x1000` / `1920x1080` native boundary. No native
 accessibility evidence is claimed from this retry.
+
+The later current-source native window/pane acceptance did pass the corrected
+Per-Monitor V2 geometry gate and both Stage/Timeline lifecycle orders on a
+temporarily selected physical `1920x1080` display. That result is recorded as
+native window/lifecycle evidence only; it did not run a screen reader or any
+accessibility workflow and therefore does not change this marker.
 The following require the operator PC and named accessibility environments:
 
 - NVDA screen-reader traversal and announcements;

@@ -119,6 +119,33 @@ review. Those self-tests exercise pure trust/contract seams only; they do not
 constitute a native run, do not create the 19-image evidence set, and do not close
 the two explicitly unverified record-retirement boundaries in the JSON contract.
 
+## Current-source checkpoint — 2026-09-14
+
+The current checker was hardened after a DPI-virtualized preflight: it now
+establishes Per-Monitor V2 before Win32 dimension reads, suppresses CDP task
+return values, allows intentional empty pane arrays, excludes only the exact
+single-instance helper class/title pair, applies a decorated child-pane client
+minimum, retries verified maximize/foreground operations, reaps isolated dev
+ports after restart, and reconciles only exact-QA-PID stale pane records.
+Unknown windows, titles, PIDs, and foreground targets still fail closed.
+
+The formal current-source run used a reversible Win32 display-settings wrapper
+to select `1920x1080@180Hz/32bpp` from the original
+`2560x1600@180Hz/32bpp`, ran the pinned MSVC `14.44.35207` native gate, and
+restored the original mode in `finally`. Report:
+`%TEMP%\syndocal-native-acceptance-20260914-012135\native-window-acceptance.json`.
+The run passed with monitor/work area `1920x1080`/`1920x1008`, main maximized
+client `1920x1008`, F11 client `1920x1080`, Esc restore `1920x1008`, both
+Stage-first and Timeline-first detach orders, restart restoration, main reload
+child adoption, direct Stage-child close reintegration, final full reintegration,
+and 19 screenshots. The outer wrapper exited `0` and the display was restored.
+
+This closes only the current-source Windows native main-window and
+Stage/Timeline pane geometry/lifecycle slice. Native Control button-by-button
+interaction, accessibility, physical/external outputs, two-machine operation,
+venue/soak, signing, publication, and the two explicit record-retirement
+boundaries in the report remain unverified.
+
 ## Latest verified run
 
 The T25-E frameless revision passed supervisor native acceptance on 2026-07-30

@@ -62,6 +62,9 @@ public static class SyndocalNativeWindow {
   [DllImport("user32.dll")]
   public static extern bool IsWindowVisible(IntPtr hWnd);
 
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+  public static extern int GetClassName(IntPtr hWnd, StringBuilder className, int maxCount);
+
   [DllImport("user32.dll")]
   public static extern bool IsZoomed(IntPtr hWnd);
 
@@ -118,8 +121,21 @@ public static class SyndocalNativeWindow {
 
   [DllImport("user32.dll")]
   public static extern bool GetMonitorInfo(IntPtr monitor, ref MONITORINFO info);
+
+  [DllImport("user32.dll")]
+  public static extern bool SetProcessDpiAwarenessContext(IntPtr dpiAwarenessContext);
 }
 "@
+
+# GetClientRect/GetMonitorInfo are DPI-virtualized for an unaware PowerShell
+# host. The acceptance dimensions are physical monitor pixels, so establish
+# Per-Monitor V2 before any window or monitor handle is inspected. Fail closed
+# when Windows cannot establish that context instead of accepting a logical
+# 1280x800 projection as a 1920x1080 native display.
+$perMonitorV2Context = [SyndocalNativeWindow]::SetProcessDpiAwarenessContext([IntPtr](-4))
+if (-not $perMonitorV2Context) {
+  throw "Failed to establish the Per-Monitor V2 DPI awareness context required by the native acceptance checker."
+}
 
 # Marker for any CDP trust-boundary failure: a raced/foreign listener, a
 # non-conforming WebSocket endpoint, or a competing remote-debugging argument.
@@ -337,42 +353,47 @@ function Send-NativeKey {
 
   [void][SyndocalNativeWindow]::ShowWindowAsync($Handle, 5)
   $currentThread = [SyndocalNativeWindow]::GetCurrentThreadId()
-  $foregroundWindow = [SyndocalNativeWindow]::GetForegroundWindow()
-  [uint32]$ignoredProcessId = 0
-  $foregroundThread = if ($foregroundWindow -eq [IntPtr]::Zero) {
-    0
-  } else {
-    [SyndocalNativeWindow]::GetWindowThreadProcessId($foregroundWindow, [ref]$ignoredProcessId)
-  }
-  $ignoredProcessId = 0
-  $targetThread = [SyndocalNativeWindow]::GetWindowThreadProcessId($Handle, [ref]$ignoredProcessId)
-  $attachedThreads = [System.Collections.Generic.List[uint32]]::new()
-  try {
-    foreach ($thread in @($foregroundThread, $targetThread) | Select-Object -Unique) {
-      if ($thread -ne 0 -and $thread -ne $currentThread) {
-        if (-not [SyndocalNativeWindow]::AttachThreadInput($currentThread, $thread, $true)) {
-          throw "Could not attach to native window thread $thread."
+  $foregroundDeadline = [DateTime]::UtcNow.AddSeconds(5)
+  while ([DateTime]::UtcNow -lt $foregroundDeadline) {
+    if ([SyndocalNativeWindow]::GetForegroundWindow() -eq $Handle) {
+      break
+    }
+    $foregroundWindow = [SyndocalNativeWindow]::GetForegroundWindow()
+    [uint32]$ignoredProcessId = 0
+    $foregroundThread = if ($foregroundWindow -eq [IntPtr]::Zero) {
+      0
+    } else {
+      [SyndocalNativeWindow]::GetWindowThreadProcessId($foregroundWindow, [ref]$ignoredProcessId)
+    }
+    $ignoredProcessId = 0
+    $targetThread = [SyndocalNativeWindow]::GetWindowThreadProcessId($Handle, [ref]$ignoredProcessId)
+    $attachedThreads = [System.Collections.Generic.List[uint32]]::new()
+    try {
+      foreach ($thread in @($foregroundThread, $targetThread) | Select-Object -Unique) {
+        if ($thread -ne 0 -and $thread -ne $currentThread) {
+          if (-not [SyndocalNativeWindow]::AttachThreadInput($currentThread, $thread, $true)) {
+            throw "Could not attach to native window thread $thread."
+          }
+          $attachedThreads.Add($thread)
         }
-        $attachedThreads.Add($thread)
+      }
+
+      [void][SyndocalNativeWindow]::BringWindowToTop($Handle)
+      [void][SyndocalNativeWindow]::SetForegroundWindow($Handle)
+      [void][SyndocalNativeWindow]::SetFocus($Handle)
+    } finally {
+      for ($index = $attachedThreads.Count - 1; $index -ge 0; $index -= 1) {
+        [void][SyndocalNativeWindow]::AttachThreadInput(
+          $currentThread,
+          $attachedThreads[$index],
+          $false
+        )
       }
     }
-
-    [void][SyndocalNativeWindow]::BringWindowToTop($Handle)
-    [void][SyndocalNativeWindow]::SetForegroundWindow($Handle)
-    [void][SyndocalNativeWindow]::SetFocus($Handle)
-  } finally {
-    for ($index = $attachedThreads.Count - 1; $index -ge 0; $index -= 1) {
-      [void][SyndocalNativeWindow]::AttachThreadInput(
-        $currentThread,
-        $attachedThreads[$index],
-        $false
-      )
-    }
+    Start-Sleep -Milliseconds 100
   }
-
-  Start-Sleep -Milliseconds 250
   if ([SyndocalNativeWindow]::GetForegroundWindow() -ne $Handle) {
-    throw "Refusing to inject a key because the exact isolated native QA window is not foreground."
+    throw "Refusing to inject a key because the exact isolated native QA window did not become foreground within the bounded retry window."
   }
 
   # Foregrounding the top-level HWND does not guarantee that WebView2 owns the
@@ -773,7 +794,10 @@ function Invoke-CdpRuntimeEvaluate {
   $cancellation = [Threading.CancellationTokenSource]::new()
   $cancellation.CancelAfter([TimeSpan]::FromSeconds($TimeoutSeconds))
   try {
-    $socket.ConnectAsync($approvedUri, $cancellation.Token).GetAwaiter().GetResult()
+    # PowerShell emits a Task's VoidTaskResult into the function pipeline when
+    # the result is not explicitly suppressed. Keep transport acknowledgements
+    # out of the Runtime.evaluate return value consumed by the DOM assertions.
+    [void]$socket.ConnectAsync($approvedUri, $cancellation.Token).GetAwaiter().GetResult()
     $request = [ordered]@{
       id = 1
       method = "Runtime.evaluate"
@@ -784,7 +808,7 @@ function Invoke-CdpRuntimeEvaluate {
       }
     } | ConvertTo-Json -Depth 8 -Compress
     $payload = [Text.Encoding]::UTF8.GetBytes($request)
-    $socket.SendAsync(
+    [void]$socket.SendAsync(
       [ArraySegment[byte]]::new($payload),
       [System.Net.WebSockets.WebSocketMessageType]::Text,
       $true,
@@ -1107,8 +1131,8 @@ function Assert-NativePaneState {
     [Parameter(Mandatory = $true)]$State,
     [Parameter(Mandatory = $true)][string]$Description,
     [Parameter(Mandatory = $true)][ValidateSet("main", "stage", "timeline")][string]$ExpectedMode,
-    [Parameter(Mandatory = $true)][string[]]$ExpectedLabels,
-    [Parameter(Mandatory = $true)][string[]]$ExpectedReportPanes,
+    [Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$ExpectedLabels,
+    [Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$ExpectedReportPanes,
     [Parameter(Mandatory = $true)][scriptblock]$AdditionalContract
   )
 
@@ -1192,12 +1216,39 @@ function Maximize-VerifiedQaWindow {
   if ($actualProcessId -ne $ProcessId -or (Get-WindowTitle -Handle $Handle) -ne $Title) {
     throw "Refusing to maximize an unverified native pane window. Expected '$Title' in PID $ProcessId."
   }
-  [void][SyndocalNativeWindow]::ShowWindowAsync($Handle, 3)
-  $dimensions = Wait-ForMinimumClientDimensions -Handle $Handle -Minimum $Minimum
+  $dimensions = $null
+  for ($attempt = 1; $attempt -le 5; $attempt += 1) {
+    [void][SyndocalNativeWindow]::ShowWindowAsync($Handle, 3)
+    try {
+      # A restored Tauri child can report its full work-area client before
+      # Windows has committed WS_MAXIMIZE. Wait for both facts together and
+      # reissue only the verified target's maximize request when the native
+      # state lags; never accept size alone as proof of maximization.
+      $dimensions = Wait-ForMinimumClientDimensions -Handle $Handle -Minimum $Minimum `
+        -TimeoutSeconds 4 -RequireMaximized
+      break
+    } catch {
+      if ($attempt -eq 5) { throw }
+    }
+  }
   if (-not [SyndocalNativeWindow]::IsZoomed($Handle)) {
     throw "Verified '$Title' reached $($dimensions.Width)x$($dimensions.Height) but Windows did not report it maximized."
   }
   return $dimensions
+}
+
+function Get-NativePaneChildMinimum {
+  param([Parameter(Mandatory = $true)]$MainMinimum)
+
+  # Detached pane windows are intentionally native-decorated, unlike the
+  # frameless main QA window. At the primary 1920x1080 mode the title-bar and
+  # frame consume 40 physical pixels from the maximized client height. Keep
+  # the main 1920x1000 gate unchanged while requiring the decorated child to
+  # retain the equivalent 1920-wide, 960-high content surface.
+  [pscustomobject]@{
+    Width = $MainMinimum.Width
+    Height = [Math]::Max(960, $MainMinimum.Height - 40)
+  }
 }
 
 function Get-NativePaneWindowTitle {
@@ -1369,6 +1420,17 @@ function Get-OwnedVisibleWindowTitleCensus {
       if ($ownerProcessId -eq $ProcessId) {
         $title = Get-WindowTitle -Handle $Handle
         if (-not [string]::IsNullOrEmpty($title)) {
+          $className = [Text.StringBuilder]::new(256)
+          [void][SyndocalNativeWindow]::GetClassName($Handle, $className, $className.Capacity)
+          # tauri-plugin-single-instance creates one exact, zero-sized layered
+          # WS_POPUP event target. Windows reports it as visible even though it
+          # cannot be seen or interacted with; it is infrastructure, not a
+          # user-facing pane. Exclude only the exact QA identifier pair so any
+          # other unexpected owned title still fails the census.
+          if ($title -eq $qaSingleInstanceWindowTitle -and
+            $className.ToString() -eq $qaSingleInstanceClass) {
+            return $true
+          }
           $script:syndocalOwnedWindowTitles.Add($title)
         }
       }
@@ -1447,7 +1509,7 @@ function Invoke-NativePaneDetachStep {
   $paneTitle = Get-NativePaneWindowTitle -PaneKind $PaneKind
   $paneWindow = Wait-ForWindowByTitleAndProcess -Title $paneTitle -ProcessId $ProcessId
   $paneMaximized = Maximize-VerifiedQaWindow -Handle $paneWindow -ProcessId $ProcessId `
-    -Title $paneTitle -Minimum $Minimum
+    -Title $paneTitle -Minimum (Get-NativePaneChildMinimum -MainMinimum $Minimum)
   $panePage = Wait-ForCdpAppPage -Port $Port -QaProcessId $ProcessId -ExpectedMode $PaneKind
   if ($PaneKind -eq "timeline") {
     Invoke-NativeTimelineDeskShowSelection -TimelinePage $panePage
@@ -1636,7 +1698,7 @@ function Invoke-NativePaneLifecycleAcceptance {
   Invoke-CdpVisibleDomClick -Page $MainPage -Selector '[data-workspace-pane-toggle="stage"]' -Description "detach Stage"
   $stageWindow = Wait-ForWindowByTitleAndProcess -Title "Syndocal Stage - 2D Map" -ProcessId $ProcessId
   $stageMaximized = Maximize-VerifiedQaWindow -Handle $stageWindow -ProcessId $ProcessId `
-    -Title "Syndocal Stage - 2D Map" -Minimum $Minimum
+    -Title "Syndocal Stage - 2D Map" -Minimum (Get-NativePaneChildMinimum -MainMinimum $Minimum)
   $stagePage = Wait-ForCdpAppPage -Port $Port -QaProcessId $ProcessId -ExpectedMode "stage"
   $stageChild = Wait-ForNativePaneDomState -Page $stagePage -Description "Stage child content" -Predicate {
     param($state)
@@ -1676,7 +1738,7 @@ function Invoke-NativePaneLifecycleAcceptance {
   Invoke-CdpVisibleDomClick -Page $MainPage -Selector '[data-workspace-pane-toggle="timeline"]' -Description "detach Timeline"
   $timelineWindow = Wait-ForWindowByTitleAndProcess -Title "Syndocal Timeline" -ProcessId $ProcessId
   $timelineMaximized = Maximize-VerifiedQaWindow -Handle $timelineWindow -ProcessId $ProcessId `
-    -Title "Syndocal Timeline" -Minimum $Minimum
+    -Title "Syndocal Timeline" -Minimum (Get-NativePaneChildMinimum -MainMinimum $Minimum)
   $timelinePage = Wait-ForCdpAppPage -Port $Port -QaProcessId $ProcessId -ExpectedMode "timeline"
   Wait-ForCdpCondition -Page $timelinePage -Description "Timeline child desk selector" -Expression @'
 (() => document.querySelector('[data-timeline-desk-surface="show"]') instanceof HTMLElement)()
@@ -2462,6 +2524,8 @@ $expectedFullscreenSize = ConvertFrom-DimensionText -Value $ExpectedFullscreen
 $scriptDir = Split-Path -Parent $PSCommandPath
 $appRoot = (Resolve-Path (Join-Path $scriptDir "..")).Path
 $qaTitle = "Syndocal QA - Native 1920 Acceptance"
+$qaSingleInstanceClass = "jp.seraf.ktn.syndocal.qa.native-acceptance-sic"
+$qaSingleInstanceWindowTitle = "jp.seraf.ktn.syndocal.qa.native-acceptance-siw"
 if ([string]::IsNullOrWhiteSpace($EvidenceDir)) {
   $stamp = [DateTime]::UtcNow.ToString("yyyyMMdd-HHmmss")
   $EvidenceDir = Join-Path ([IO.Path]::GetTempPath()) "syndocal-native-acceptance-$stamp"
@@ -2578,6 +2642,26 @@ try {
   Write-Host "PASS Esc restored maximized client $($restored.Width)x$($restored.Height)"
 
   $mainPage = Wait-ForCdpAppPage -Port $CdpPort -QaProcessId $qaProcessId -ExpectedMode "main" -TimeoutSeconds 60
+  # An interrupted QA run can leave only this QA identifier's persisted
+  # popped-pane records behind. Reconcile those exact Stage/Timeline HWNDs
+  # before the clean baseline, using the same PID/title proof as the actual
+  # direct-child-close acceptance. Unknown windows are never guessed at or
+  # cleared; the second state wait remains the authoritative clean assertion.
+  $startupPaneState = Wait-ForNativePaneDomState -Page $mainPage -Description "native pane startup state" -Predicate {
+    param($state)
+    $state.paneMode -eq "main"
+  }
+  foreach ($stalePaneKind in @("stage", "timeline")) {
+    $hasStaleRecord = @($startupPaneState.labels) -contains "pane-$stalePaneKind" -or
+      @($startupPaneState.reports | Where-Object { $_.pane -eq $stalePaneKind }).Count -gt 0
+    if (-not $hasStaleRecord) { continue }
+    $stalePaneTitle = Get-NativePaneWindowTitle -PaneKind $stalePaneKind
+    $stalePaneWindow = Find-WindowByTitleAndProcess -Title $stalePaneTitle -ProcessId $qaProcessId
+    if ($stalePaneWindow -ne [IntPtr]::Zero) {
+      Close-VerifiedOwnedNativeWindow -Handle $stalePaneWindow -ProcessId $qaProcessId `
+        -Title $stalePaneTitle -TimeoutSeconds 30
+    }
+  }
   $initialPaneState = Wait-ForNativePaneDomState -Page $mainPage -Description "clean native pane preflight" -Predicate {
     param($state)
     $state.paneMode -eq "main" -and
@@ -2625,10 +2709,26 @@ try {
     & taskkill.exe /PID $devProcess.Id /T /F *> $null
     $devProcess.WaitForExit()
   }
-  if (Get-NetTCPConnection -LocalPort 5187 -State Listen -ErrorAction SilentlyContinue) {
+  # pnpm/cargo/Vite can finish their parent shutdown a few hundred
+  # milliseconds apart. Reap the run-owned dev listener once more, then wait
+  # for both isolated ports to disappear instead of treating that normal
+  # process-tree tail as a product failure.
+  Stop-NativeAcceptanceDevServer -NotBefore $startedAt
+  $portReleaseDeadline = [DateTime]::UtcNow.AddSeconds(30)
+  do {
+    $devPortBound = @(
+      Get-NetTCPConnection -LocalPort 5187 -State Listen -ErrorAction SilentlyContinue
+    ).Count -gt 0
+    $cdpPortBound = @(
+      Get-NetTCPConnection -LocalPort $CdpPort -State Listen -ErrorAction SilentlyContinue
+    ).Count -gt 0
+    if (-not $devPortBound -and -not $cdpPortBound) { break }
+    Start-Sleep -Milliseconds 250
+  } while ([DateTime]::UtcNow -lt $portReleaseDeadline)
+  if ($devPortBound) {
     throw "The isolated QA dev port 5187 is still bound after the owned restart shutdown."
   }
-  if (Get-NetTCPConnection -LocalPort $CdpPort -State Listen -ErrorAction SilentlyContinue) {
+  if ($cdpPortBound) {
     throw "The isolated QA CDP port $CdpPort is still bound after the owned restart shutdown."
   }
 
@@ -2685,10 +2785,10 @@ try {
   # each HWND was individually awaited and maximized.
   $restoredStageWindow = Wait-ForWindowByTitleAndProcess -Title $restoredStageTitle -ProcessId $qaProcessId
   [void](Maximize-VerifiedQaWindow -Handle $restoredStageWindow -ProcessId $qaProcessId `
-    -Title $restoredStageTitle -Minimum $minimumMaximizedSize)
+    -Title $restoredStageTitle -Minimum (Get-NativePaneChildMinimum -MainMinimum $minimumMaximizedSize))
   $restoredTimelineWindow = Wait-ForWindowByTitleAndProcess -Title $restoredTimelineTitle -ProcessId $qaProcessId
   [void](Maximize-VerifiedQaWindow -Handle $restoredTimelineWindow -ProcessId $qaProcessId `
-    -Title $restoredTimelineTitle -Minimum $minimumMaximizedSize)
+    -Title $restoredTimelineTitle -Minimum (Get-NativePaneChildMinimum -MainMinimum $minimumMaximizedSize))
   Assert-NativeWindowTitleCensus -ProcessId $qaProcessId `
     -ExpectedTitles @($qaTitle, $restoredStageTitle, $restoredTimelineTitle) `
     -Description "after restart record restore"
