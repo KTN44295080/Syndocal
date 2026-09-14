@@ -666,8 +666,8 @@ require their actual UI/device/two-machine topology and separate evidence.
 
 The continuation is now owned by the current task on branch
 `codex/showclock-review-20260912`. The latest pushed checkpoint is
-`b4d614ed` (`qa: record current physical camera slice`), which records the
-camera evidence and Q1/Q4 mirror update below. The worktree is clean and the
+`1dd311da` (`qa: record fresh H5 browser gate`), which records the fresh
+browser evidence and Q1/Q4 mirror update below. The worktree is clean and the
 branch is equal to `origin/codex/showclock-review-20260912`.
 
 The earlier product-code change in this continuation is in
@@ -811,7 +811,7 @@ The authoritative ledger remains structurally valid at 58 markers:
 `DMX-ARTNET-001`, `DMX-USB-RDM-001`, `INPUT-PHYSICAL-001`,
 `DJ-LINK-HARDWARE-001`, `VIDEO-PHYSICAL-001`, `VENUE-SOAK-001`,
 `SHOWCLOCK-VENUE-001`, and `COMPARE-PINNED-001`. The Q1/Q4 mirror reports
-`58/58` Flow references and `83` linked evidence records. External markers
+`58/58` Flow references and `84` linked evidence records. External markers
 remain Open until their named hardware, client, two-machine, venue, signed
 artifact, or other external evidence exists.
 
