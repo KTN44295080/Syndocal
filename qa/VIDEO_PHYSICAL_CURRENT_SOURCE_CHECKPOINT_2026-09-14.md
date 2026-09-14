@@ -110,10 +110,16 @@ active displays. The exact inventory is retained at
 `target/qa/three-display-inventory-20260914-f96d312348f645cdbc58fabc5b2295c6/monitors.json`:
 
 ```text
-DISPLAY1 / stable \\?\DISPLAY#TMA0803#5&2a56f61f&0&UID256 / 2560x1600 / effective DPI 192 / work 2560x1504
-DISPLAY2 / stable \\?\DISPLAY#RTK0000#5&2a56f61f&0&UID261 / 1920x1200 / effective DPI 96  / work 1920x1152
-DISPLAY3 / stable \\?\DISPLAY#LKGF803#5&2a56f61f&0&UID281 / 3840x2160 / effective DPI 144 / work 3840x2088
+DISPLAY1 / stable \\?\DISPLAY#TMA0803#5&2a56f61f&0&UID256#{e6f07b5f-ee97-4a90-b076-33f57bf4eaa7} / 2560x1600 / effective DPI 192 / work 2560x1504
+DISPLAY2 / stable \\?\DISPLAY#RTK0000#5&2a56f61f&0&UID261#{e6f07b5f-ee97-4a90-b076-33f57bf4eaa7} / 1920x1200 / effective DPI 96  / work 1920x1152
+DISPLAY3 / stable \\?\DISPLAY#LKGF803#5&2a56f61f&0&UID281#{e6f07b5f-ee97-4a90-b076-33f57bf4eaa7} / 3840x2160 / effective DPI 144 / work 3840x2088
 ```
+
+The read-only `WmiMonitorListedSupportedSourceModes` query reported one
+source mode (2560x1600) for TMA0803, 1920x1080 and 1920x1200 modes for
+RTK0000, and both 3840x2160 and 1920x1080 modes for LKGF803. This confirms
+that LKGF803 cannot simultaneously serve as the required 4K projector and a
+second independent 1920x1080 LED role.
 
 The three-display count is therefore confirmed. The strict observer's three
 role contract is not yet satisfied: the projector role matches exactly, but
