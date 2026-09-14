@@ -117,3 +117,39 @@ The next safe action is to repeat on a resource-controlled reference machine
 with the exact source/build identity, then continue to the required one-hour
 integrated GPU/A/V/lighting/output/recording run only after the short-run
 budget is green. `VENUE-SOAK-001` remains `Open`.
+
+## Takeover continuation — current-host 60-second software-soak recheck after Video repair — 2026-09-14
+
+At current source HEAD `1b4116d6`, the status contract passed and the existing
+loopback-only mixed-lighting soak was rerun without rebuilding product code:
+
+```text
+pnpm.cmd run check:status
+status model helpers ok
+
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File qa/run-soak.ps1
+  -DurationSeconds 60 -SampleIntervalSeconds 5 -Configuration Release
+  -SkipBuild -MixedLighting
+  -ReportPath target/qa/m5-soak-mixed-lighting-current-60-1b4116d6.json
+exit code 1: one or more soak gates failed; report passed=false
+```
+
+The retained report recorded `1801/1801` nonblank frames, `0` dropped frames,
+`0` render errors, `0` DMX send failures, and `3378` successful loopback DMX
+sends. The performance gates remained failed:
+
+```text
+tick jitter p99:          10865 us (budget 1000 us)  FAIL
+command queue p99:          309 us (budget 1000 us)  PASS
+command -> DMX tick p99:  16154 us (budget 5000 us)  FAIL
+```
+
+The wrapper preserved the false report and exited non-zero; no budget was
+relaxed and no product source was changed to manufacture a pass. This remains
+current-host software-loopback evidence only, not venue GPU/thermal,
+integrated A/V/lighting/output/recording, physical, or one-hour acceptance.
+The retained report is
+`target/qa/m5-soak-mixed-lighting-current-60-1b4116d6.json`.
+`VENUE-SOAK-001` remains `Open` pending a resource-controlled reference
+machine with a green short run, followed by the required one-hour integrated
+venue run and retained time-series evidence.
