@@ -1117,3 +1117,8 @@ The `ASIO-FORMAT-MATRIX-001` source recheck at HEAD `8aba7087` passed
 live-audio lifecycle, IPC v1 exact mapping, and ABI-v3 (`22` assertions). No
 ASIO stream or real driver was opened; the required rate/buffer/channel matrix
 remains external and the marker stays Open.
+
+The `ASIO-FAULT-MATRIX-001` current-source recheck at HEAD `1fcb675d` passed
+the SDK-independent bridge suite (`31` tests) and ABI-v3 (`22` assertions),
+with zero failures/ignored tests. No real ASIO driver fault matrix was run;
+occupy/reset/XRUN/unplug/recovery acceptance remains Open.

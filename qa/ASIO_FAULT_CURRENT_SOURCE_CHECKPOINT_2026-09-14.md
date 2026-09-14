@@ -55,3 +55,12 @@ that native external evidence.
 Next action is the named-device fault matrix on the approved artifact, with
 loss-to-zero timing and post-fault Stop/Close/restart records bound to the
 exact driver and executable.
+
+## Takeover continuation — current-source fault-contract recheck — 2026-09-14
+
+With the exact Build Tools MSVC `14.44.35207` x64 linker first in
+`where.exe`, the SDK-independent `tools/asio-bridge` suite passed `31` tests
+with zero failures and ignored tests. The ASIO v3 contract then passed `22`
+assertions. No real driver was occupied, reset, unplugged, or reopened; the
+native fault-injection matrix remains external and
+`ASIO-FAULT-MATRIX-001` stays `Open`.
