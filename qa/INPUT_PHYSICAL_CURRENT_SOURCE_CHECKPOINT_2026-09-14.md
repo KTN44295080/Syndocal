@@ -172,7 +172,7 @@ SMC-Mixer
 MIDIIN2 (SMC-Mixer)
 MIDIOUT2 (SMC-Mixer)
 SMC-Mixer (Bluetooth MIDI IN)
-SMC-Mixer USB (USB\\VID_4353&PID_4B4D...)
+SMC-Mixer (USB PnP; USB\\VID_4353&PID_4B4D...)
 ```
 
 The production `midir` inventory then exposed the selected endpoints:
@@ -206,3 +206,24 @@ round-trip latency, reconnect/replacement, OSC/TouchOSC, Web Remote,
 native UI routing, DMX, or venue acceptance. The next action remains the
 named physical input matrix with raw logs, timing, reconnect evidence, and
 operator observations.
+
+## Continuation — host-level physical MIDI input observation — 2026-09-15
+
+To check whether the reconnected unit was producing input data, a temporary
+Windows WinMM observer opened both currently exposed SMC-Mixer input aliases:
+`SMC-Mixer` (index 1) and `MIDIIN2 (SMC-Mixer)` (index 2). It performed no
+output send and changed no device or product configuration. During the
+bounded 15-second observation it received `308` `MIM_DATA` messages, `154`
+through each opened alias. Representative raw channel/controller/value bytes
+were `B0 15 41`, `B0 16 41`, and `B0 17 41`; the process exited `0` after
+stopping, resetting, and closing both inputs.
+
+Both aliases delivered the same observed data, so this is one connected-unit
+host observation with duplicate Windows endpoint presentation, not proof of
+two independent physical inputs. It proves that MIDI CC-shaped data reached
+the Windows input layer after reconnection. It does not prove that Syndocal's
+production listener selected the intended alias, that a mapping or visual
+Learn action consumed it, or that controller movement, Clock/MTC, LED
+feedback, latency, reconnect/replacement, OSC/TouchOSC, Web Remote, native
+UI routing, DMX, or venue acceptance passed. `INPUT-PHYSICAL-001` remains
+**Open**.
