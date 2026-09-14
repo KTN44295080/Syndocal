@@ -119,3 +119,36 @@ performed in this continuation.
 the exact release artifact's physical New/Load/Recovery/Backup/Take Over
 matrix with acknowledged output retirement, explicit re-Arm, hardware state,
 and venue observations.
+
+## Continuation — current-source replacement/re-Arm recheck — 2026-09-15
+
+At current source HEAD `6611c9cf`, the Windows release test environment was
+initialized with MSVC 14.44.35207 Build Tools. The pinned linker was printed
+and `where.exe link.exe` resolved to that exact linker first. All nine focused
+checks exited `0`:
+
+```text
+check:project-transaction: PASS (transaction and authority production contracts)
+check:project-recovery-e3: PASS (E3 recovery production driver)
+check-project-transaction-recovery-controller: PASS (6 scenarios; no native/UI side effects)
+check:output-control-runtime: PASS (output-control and Standby Sync output-lease UI)
+check:output-ownership: PASS
+check:safety-blackout-runtime: PASS
+cargo test project_replacement: PASS (7 passed; 0 failed; 0 ignored)
+cargo test project_control_retirement: PASS (1 passed; 0 failed; 0 ignored)
+cargo test output_lease_app_state_retirement: PASS (1 passed; 0 failed; 0 ignored)
+```
+
+The release tests reconfirm candidate/orphan sequencing, publication and
+retirement failure fences, post-ACK finalization, partial-take release, and
+atomic output-lease preflight. They did not open a native dialog or any
+physical DMX/Art-Net/video/audio output, and no hardware ACK or explicit
+physical re-Arm was observed. `AI3-PHYSICAL-REARM-001` remains `Open` for the
+real New/Load/Recovery/Backup/Take Over matrix and acknowledged physical
+output state.
+
+The Q4 ledger records this current-source recheck as
+`EV-AI3-PHYSICAL-REARM-CURRENT-SW-2026-09-15`. The next safe action is the
+existing physical acceptance procedure with a declared topology and retained
+pre/post owner, project/lease generations, Blackout, operator confirmation,
+re-Arm, hardware state, and first failure.
