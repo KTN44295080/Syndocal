@@ -61,3 +61,12 @@ external legal evidence.
 Next action is an explicit product/licensing decision with the selected notices,
 source-obligation, artifact, installer, updater, and approval records. Until
 then the current fail-closed non-distribution boundary is the accepted state.
+
+## Takeover continuation — current HEAD licensing boundary recheck — 2026-09-14
+
+At HEAD `e5dcd3ea`, `check:asio-packaging` passed `169` assertions and
+`check:asio-v3-contract` passed `22` assertions. `ASIO_SDK_PIN.json` remains
+on Steinberg ASIO SDK `2.3.4` with `distribution_approved: false`. No public
+ASIO artifact was produced and no licensing or legal decision was inferred.
+`ASIO-LICENSE-001` remains `Open` pending the explicitly recorded GPLv3 or
+Steinberg agreement route and its notice/source/package approvals.

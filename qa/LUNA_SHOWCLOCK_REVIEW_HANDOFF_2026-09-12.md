@@ -1107,3 +1107,8 @@ stage labels, TypeScript, and the Vite build (`358` modules). The large-chunk
 notice remains an advisory and first-party warnings were zero. No native
 screen-reader/High Contrast/scaling/IME/reduced-motion matrix was run, so the
 marker remains Open.
+
+The `ASIO-LICENSE-001` current HEAD recheck passed packaging (`169` assertions)
+and ABI-v3 (`22` assertions) with `distribution_approved: false`. No public
+ASIO artifact or legal decision was made; the GPLv3-versus-Steinberg route
+remains an explicit external decision and the marker stays Open.
