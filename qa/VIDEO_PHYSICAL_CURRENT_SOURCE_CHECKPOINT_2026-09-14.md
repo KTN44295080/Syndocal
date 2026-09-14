@@ -220,3 +220,22 @@ automation, fullscreen pixel sample, HDMI/NDI/Spout receiver, camera fault,
 unplug/reorder/GPU-reset, or frame-drop/one-hour artifact was produced.
 `VIDEO-PHYSICAL-001` remains `Open` pending named physical display/output
 observations and the required recovery/soak matrix.
+
+## Takeover continuation — read-only three-display harness attempt — 2026-09-14
+
+The read-only three-display harness was rerun at the current checkpoint with
+no `-Apply` and no role/artifact mutation parameters:
+
+```text
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File qa/harnesses/run-syndocal-three-display-show-acceptance.ps1 -EvidenceSlug current-display-observation-20260914
+exit code 0
+verdict: not-configured
+accepted: false
+native_hardware_claim: false
+```
+
+The harness explicitly reported that no acceptance was evaluated because the
+identity/provenance/output-role configuration was incomplete; its sample was
+null. No project Add, output-window creation, HDMI/NDI/Spout send, or physical
+display mutation occurred. This is a safe preflight result, not a three-display
+acceptance result, and `VIDEO-PHYSICAL-001` remains `Open`.
