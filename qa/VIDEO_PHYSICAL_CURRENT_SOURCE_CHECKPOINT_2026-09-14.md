@@ -239,3 +239,34 @@ identity/provenance/output-role configuration was incomplete; its sample was
 null. No project Add, output-window creation, HDMI/NDI/Spout send, or physical
 display mutation occurred. This is a safe preflight result, not a three-display
 acceptance result, and `VIDEO-PHYSICAL-001` remains `Open`.
+
+## Current display topology recheck — 2026-09-14
+
+The exact same read-only DisplayConfig preflight was rerun after the release
+process was started:
+
+```text
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File qa/harnesses/run-syndocal-three-display-show-acceptance.ps1 -EvidenceSlug current-three-display-preflight-20260914b
+exit code 0
+verdict: not-configured
+accepted: false
+native_hardware_claim: false
+evidence: target/qa/current-three-display-preflight-20260914b-79139819d7874040858a33fc38ead5a7
+```
+
+The current active DisplayConfig inventory in `monitors.json` contains only
+two connected monitors: `TMA0803` at physical `2560x1600` with effective DPI
+`192`, and `RTK0000` at `1920x1200` with effective DPI `96`. The harness's
+`before.sample` is `null` because no exact artifact, role identities, output
+IDs, or CDP observation provider were supplied. A separate Windows Forms
+enumeration also returned only `DISPLAY1` and `DISPLAY2` (its primary value is
+DPI-virtualized to `1280x800`), so the third display is not treated as active
+current state.
+
+This current observation does not erase the earlier retained three-display
+inventory; it records that the topology is not presently reproducible. No
+display mode, project state, output window, focus, Z-order, HDMI/NDI/Spout
+send, or physical device was changed. `VIDEO-PHYSICAL-001` remains `Open`.
+The next safe action is to reconnect or re-enable the third display, rerun the
+read-only inventory, and only then provide exact output-window identities for
+the practical fullscreen/pixel and recovery matrix.
