@@ -99,3 +99,27 @@ native UI/device workflow was performed. The previously recorded SMC-Mixer
 enumerate/open plus safe All Notes Off slice remains the only physical slice;
 `INPUT-PHYSICAL-001` remains `Open` pending the named physical input matrix,
 reconnect timing, raw logs, and operator observations.
+
+## Current-host physical MIDI recheck — 2026-09-15
+
+The safe SMC-Mixer recheck was attempted again with the exact MSVC
+`14.44.35207` x64 linker and the explicit selectors
+`SYNDOCAL_TEST_MIDI_INPUT=SMC-Mixer` and
+`SYNDOCAL_TEST_MIDI_OUTPUT=SMC-Mixer`:
+
+```text
+Finished `release` profile [optimized] target(s) in 0.85s
+MIDI inputs: [CustomMIDI1]
+MIDI outputs: [Microsoft GS Wavetable Synth, CustomMIDI1]
+no MIDI input matched 'SMC-Mixer'
+test result: FAILED; 0 passed; 1 failed; 0 ignored
+```
+
+The test stopped before opening an output or sending the safe All Notes Off
+message, so this attempt produced no MIDI traffic. This is an environmental
+availability result, not a product regression: the previously recorded
+SMC-Mixer enumerate/open and `B0 7B 00` slice remains the last successful
+physical observation. `INPUT-PHYSICAL-001` remains `Open` pending the named
+MIDI/OSC/Remote client matrix, device identity, reconnect/latency/feedback and
+Clock/MTC evidence. Before retrying, restore or reconnect the named SMC-Mixer
+input/output and capture the complete port inventory.
