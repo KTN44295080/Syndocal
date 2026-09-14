@@ -51,3 +51,20 @@ checks both passed. No rekordbox peer, external Agent, pedal, remote client,
 HELLO/ACK/STATE_SYNC exchange, reconnect, restart, or MIDI traffic was
 started. `DJ-LINK-HARDWARE-001` remains `Open` pending the named live
 DJ-PC/Agent/Pedal topology and the zero-of-12 hardware matrix.
+
+## Takeover continuation — current-source DJ Link recheck after Video repair — 2026-09-14
+
+At current source HEAD `62a80939`, the DJ Link source contracts were rerun:
+
+```text
+pnpm.cmd run check:dj-link
+DJ track mapping policy checks passed
+DJ Link frontend contract checks passed
+```
+
+The command exited `0`. Peer identity, measured-loop authority, Release,
+reconnect fencing, and mapping policy remain covered by the current-source
+checks. No rekordbox peer, live DJ-PC/Agent, pedal, remote client,
+HELLO/ACK/STATE_SYNC exchange, track/position/loop flow, reconnect/restart
+run, or MIDI traffic was started. `DJ-LINK-HARDWARE-001` remains `Open`
+pending the named live topology and zero-of-12 physical hardware matrix.
