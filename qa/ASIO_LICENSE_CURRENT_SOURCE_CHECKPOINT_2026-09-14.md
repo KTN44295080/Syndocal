@@ -70,3 +70,18 @@ on Steinberg ASIO SDK `2.3.4` with `distribution_approved: false`. No public
 ASIO artifact was produced and no licensing or legal decision was inferred.
 `ASIO-LICENSE-001` remains `Open` pending the explicitly recorded GPLv3 or
 Steinberg agreement route and its notice/source/package approvals.
+
+## Current HEAD licensing-boundary recheck — 2026-09-14
+
+At current HEAD `d9747bbb`, `check:asio-packaging` passed 169 assertions
+and `check:asio-v3-contract` passed 22 assertions. The checks continue to
+reject runtime ASIO injection, arbitrary DLL/glob inclusion, SDK pin drift,
+future pin fields, extra/missing approved runtime files, and distribution
+approval drift.
+
+`qa/ASIO_SDK_PIN.json` still records Steinberg ASIO SDK `2.3.4` with
+`distribution_approved: false`. No public ASIO artifact was staged or
+published, and no GPLv3 route or signed Steinberg agreement was inferred.
+`ASIO-LICENSE-001` remains `Open` pending the explicit licensing
+decision and its notice, source-obligation, installer, updater, and approval
+records.
