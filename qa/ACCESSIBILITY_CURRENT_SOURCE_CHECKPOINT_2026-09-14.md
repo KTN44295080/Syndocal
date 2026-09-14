@@ -123,3 +123,37 @@ an advisory; no first-party compiler warning was observed.
 No native screen-reader, High Contrast, scaling, IME, reduced-motion, or
 native keyboard-only environment was used. `ACCESSIBILITY-NATIVE-001` remains
 `Open` for that native matrix and the related physical/external acceptance.
+
+## Takeover continuation — current-source accessibility recheck — 2026-09-14
+
+At current source HEAD `af0f5cde`, the focused source contracts were rerun:
+
+```text
+pnpm.cmd --dir app run check:localization
+static Japanese UI coverage: 3844/3844 (100.0%); unprotected bare user-data labels: 0
+
+pnpm.cmd --dir app run check:terminology
+ui terminology ok
+
+pnpm.cmd --dir app run check:empty-states
+empty state guidance ok
+
+node app/scripts/check-project-history-keyboard.mjs
+PASS actual keyboard controller routing and text-editor guards
+
+node app/scripts/check-timeline-space-keyboard.mjs
+PASS selected Timeline Space routing cases
+
+pnpm.cmd --dir app run check:stage-labels
+T24-A stage label footprint/priority/overlap contracts ok
+
+pnpm.cmd --dir app exec tsc --noEmit
+exit code 0
+```
+
+No NVDA/JAWS/Narrator traversal, High Contrast rendering, scaling matrix,
+IME composition, reduced-motion native run, or native keyboard-only dangerous
+action workflow was performed. A read-only process inventory found no active
+screen-reader process. These source checks therefore do not change
+`ACCESSIBILITY-NATIVE-001`, which remains `Open` pending the named native
+accessibility environment and operator matrix.
