@@ -242,3 +242,47 @@ exact-path process was relaunched with title `Syndocal` and
 optimization warning; no Remote-specific compiler failure occurred. This is
 native build/process-smoke evidence, not external-client or LAN/TLS
 acceptance.
+
+## Continuation — duplicate Host/Origin header rejection — 2026-09-15
+
+The Remote authority check previously selected the first value when a request
+contained duplicate `Host` or `Origin` headers. That made an ambiguous request
+depend on header order. `request_header` now reports duplicate occurrences as
+invalid for the requested header. `request_authority_is_allowed` consequently
+rejects duplicate or malformed `Host`, rejects duplicate `Origin`, and still
+allows an absent `Origin` as required for the existing local/WebSocket
+contract. The valid single-value Host/Origin path remains unchanged.
+
+Verification:
+
+```text
+node app/scripts/check-dj-link-runtime.mjs
+DJ Link frontend contract checks passed
+
+MSVC 14.44.35207 x64; cargo test -p io --release --locked remote_ -- --test-threads=1
+test result: ok. 67 passed; 0 failed; 1 ignored
+
+rustfmt --check --edition 2021 crates/io/src/remote_ws.rs
+passed
+```
+
+The focused Rust run includes duplicate Host and duplicate Origin rejection,
+valid authority matching, Web Remote/DJ Link path separation, connection
+limits, worker retirement, replay/fence behavior, ACK failures, and malformed
+frame rejection. The one ignored test still requires the separate rekordbox
+output test root and local Node runtime. This change remains current-source
+admission evidence only: it does not open a listener, contact a client, or
+establish LAN/TLS, public-network, physical RDM/TOD, dependency/SBOM/redaction,
+updater-trust, or complete security acceptance. `REMOTE-SECURITY-001` remains
+`Open`.
+
+The exact Windows native gate was rerun after this change. The running process
+at the exact `target/release/syndocal.exe` path was stopped and no other
+executable was touched; `pnpm.cmd --dir app tauri build --no-bundle` selected
+the pinned MSVC `14.44.35207` x64 linker and completed in `4m 02s`. The rebuilt
+executable has SHA-256
+`6B1E35E286CAFC1EA0B58563484766DB0F5EBF4F43DA28DF09C9D753623AE797`; one
+exact-path process was relaunched with title `Syndocal`, `Responding=True`,
+PID `51928`. Vite emitted its existing large-chunk optimization warning; no
+Remote-specific compiler failure occurred. This is native build/process-smoke
+evidence, not external-client or LAN/TLS acceptance.

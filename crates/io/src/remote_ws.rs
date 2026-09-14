@@ -6954,13 +6954,20 @@ fn request_target(request: &str) -> Option<&str> {
     (parts.next()? == "GET").then_some(parts.next()?)
 }
 
-fn request_header<'a>(request: &'a str, name: &str) -> Option<&'a str> {
-    request.lines().skip(1).find_map(|line| {
-        let (header_name, value) = line.split_once(':')?;
-        header_name
-            .eq_ignore_ascii_case(name)
-            .then_some(value.trim())
-    })
+fn request_header<'a>(request: &'a str, name: &str) -> Result<Option<&'a str>, ()> {
+    let mut value = None;
+    for line in request.lines().skip(1) {
+        let Some((header_name, header_value)) = line.split_once(':') else {
+            continue;
+        };
+        if !header_name.eq_ignore_ascii_case(name) {
+            continue;
+        }
+        if value.replace(header_value.trim()).is_some() {
+            return Err(());
+        }
+    }
+    Ok(value)
 }
 
 fn request_has_pairing_token(request: &str, expected: &str) -> bool {
@@ -7001,7 +7008,7 @@ fn request_authority_is_allowed(
     local_ip: Option<std::net::IpAddr>,
     config: &RemoteControlConfig,
 ) -> bool {
-    let Some(host) = request_header(request, "Host") else {
+    let Ok(Some(host)) = request_header(request, "Host") else {
         return false;
     };
     let port = config.port;
@@ -7030,7 +7037,10 @@ fn request_authority_is_allowed(
     {
         return false;
     }
-    request_header(request, "Origin").is_none_or(|origin| {
+    let Ok(origin) = request_header(request, "Origin") else {
+        return false;
+    };
+    origin.is_none_or(|origin| {
         origin.eq_ignore_ascii_case(&format!("http://{host}"))
             || origin.eq_ignore_ascii_case(&format!("https://{host}"))
     })
@@ -8637,10 +8647,22 @@ mod tests {
         let valid = "GET /ws?token=123456 HTTP/1.1\r\nHost: 192.168.1.24:9100\r\nOrigin: http://192.168.1.24:9100\r\n\r\n";
         let bad_host = "GET /ws?token=123456 HTTP/1.1\r\nHost: attacker.example:9100\r\nOrigin: http://attacker.example:9100\r\n\r\n";
         let bad_origin = "GET /ws?token=123456 HTTP/1.1\r\nHost: 192.168.1.24:9100\r\nOrigin: https://attacker.example\r\n\r\n";
+        let duplicate_host = "GET /ws?token=123456 HTTP/1.1\r\nHost: 192.168.1.24:9100\r\nHost: attacker.example:9100\r\nOrigin: http://192.168.1.24:9100\r\n\r\n";
+        let duplicate_origin = "GET /ws?token=123456 HTTP/1.1\r\nHost: 192.168.1.24:9100\r\nOrigin: http://192.168.1.24:9100\r\nOrigin: https://attacker.example\r\n\r\n";
 
         assert!(request_authority_is_allowed(valid, local_ip, &config));
         assert!(!request_authority_is_allowed(bad_host, local_ip, &config));
         assert!(!request_authority_is_allowed(bad_origin, local_ip, &config));
+        assert!(!request_authority_is_allowed(
+            duplicate_host,
+            local_ip,
+            &config
+        ));
+        assert!(!request_authority_is_allowed(
+            duplicate_origin,
+            local_ip,
+            &config
+        ));
     }
 
     #[test]
