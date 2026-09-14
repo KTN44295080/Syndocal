@@ -1150,20 +1150,27 @@ PnP showed only generic FTDI `USB Serial Port (COM5)`; no Enttec/DMXKing/RDM
 interface was opened and no bytes or analyzer capture were produced. The
 two-fixture USB/RDM matrix remains Open.
 
-The `INPUT-PHYSICAL-001` source recheck at HEAD `69c86ac4` passed DVC MIDI
+The `INPUT-PHYSICAL-001` source recheck at HEAD `e874a918` passed DVC MIDI
 shortcuts (`39` assertions), DVC DMX shortcuts (`41`), and frontend routing
 (`133/31/28/479` renderer/server/raw/facade dispatches). The prior SMC-Mixer
 safe MIDI slice remains the only physical evidence; no new device traffic or
 OSC/Remote/Clock/MTC/reconnect/latency matrix was run, so the marker remains
 Open.
 
-The `DJ-LINK-HARDWARE-001` source recheck at HEAD `e874a918` passed track
+The `DJ-LINK-HARDWARE-001` source recheck at HEAD `d9908a8f` passed track
 mapping policy and DJ Link frontend/runtime contracts. No rekordbox peer,
 Agent, pedal, remote client, or MIDI traffic was started; HELLO/ACK,
 STATE_SYNC, reconnect, restart, and the 0/12 hardware matrix remain Open.
 
-The `VIDEO-PHYSICAL-001` current-source recheck at HEAD `d9908a8f` passed
+The `VIDEO-PHYSICAL-001` current-source recheck at HEAD `e93c6a47` passed
 video routing, managed output-window runtime, observation, and polling
 contracts, including exact-Both recovery and fencing. No display/HDMI,
 NDI/Spout receiver, or new camera capture was used; only the existing ASUS
 webcam slice remains evidence and the physical marker stays Open.
+
+The `SHOWCLOCK-VENUE-001` continuity recheck at HEAD `c1c1a6b0` confirms that
+the authenticated ShowClock, generation/fence, exact-peer loopback, Tauri IPC,
+and two-process software evidence remains current. No real switch, second
+machine, power-loss/crash/restart replay, stale-peer rejoin, device-loss,
+physical-output observation, or zero-simultaneous-output venue rehearsal was
+performed, so the venue marker remains Open.

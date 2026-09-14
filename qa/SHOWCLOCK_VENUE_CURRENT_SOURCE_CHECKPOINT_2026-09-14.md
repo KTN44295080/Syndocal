@@ -66,3 +66,12 @@ two-process software boundary remain intact. It does not add evidence for a
 real switch, a second machine, power-loss/crash/restart replay restoration,
 stale-peer rejoin, device loss, physical output observation, or zero
 simultaneous physical output. `SHOWCLOCK-VENUE-001` remains Open.
+
+## Takeover continuity — 2026-09-14
+
+The ShowClock implementation and venue-boundary evidence remain current at
+HEAD `c1c1a6b0`; no ShowClock runtime source changed after the recorded
+software checkpoint. This is continuity evidence only. No real network switch,
+second machine, power-loss/crash/restart replay, stale-peer rejoin, device-loss
+or physical-output observation was performed, and no zero-simultaneous-output
+venue rehearsal was proven. `SHOWCLOCK-VENUE-001` remains `Open`.
