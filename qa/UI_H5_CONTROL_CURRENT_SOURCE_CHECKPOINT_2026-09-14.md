@@ -331,3 +331,21 @@ This remains rendered-browser evidence only. Native dangerous Control actions,
 native accessibility, physical output, external clients, recovery rehearsal,
 venue/soak, signing, and publication remain unaccepted, so
 `UI-H5-CONTROL-001` stays `Open`.
+
+## Continuation — current three-display native gate preflight — 2026-09-15
+
+The exact release artifact was already launched separately and verified as one
+responsive `Syndocal` process. A fresh `pnpm.cmd run check:native-window` was
+then attempted after the user's secondary-display installation. The checker
+failed closed before native UI interaction because the current primary monitor
+reported `2560x1600`, while this acceptance gate requires a physical
+`1920x1080` monitor. The isolated QA process and Vite listener were released;
+no Control action, output, recording, device, or external client was touched.
+
+This does not invalidate the previously recorded reversible `1920x1080`
+display-mode run, which passed the native pane lifecycle and safe Control
+surface probes and restored the original `2560x1600` mode. It records that the
+current three-display setup was not itself treated as proof of the required
+primary 1920x1080 acceptance geometry. `UI-H5-CONTROL-001` remains `Open` for
+native live/dangerous interaction, accessibility, physical output,
+external-client, recovery, venue, signing, and publication evidence.
