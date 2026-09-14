@@ -4,6 +4,7 @@
 use super::*;
 use serde_json::json;
 use std::io::Read;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 
 fn source_entries() -> Vec<(&'static str, Vec<u8>)> {
     [
@@ -130,6 +131,13 @@ fn repack(entries: &[(String, Vec<u8>)]) -> Vec<u8> {
 fn json_entry(entries: &[(String, Vec<u8>)], name: &str) -> Value {
     let contents = &entries.iter().find(|(entry, _)| entry == name).unwrap().1;
     serde_json::from_slice(contents).unwrap()
+}
+
+fn next_hostile_byte(state: &mut u64) -> u8 {
+    *state ^= *state << 7;
+    *state ^= *state >> 9;
+    *state ^= *state << 8;
+    (*state & 0xff) as u8
 }
 
 #[test]
@@ -310,6 +318,72 @@ fn diagnostic_package_rejects_malformed_json_and_duplicate_decoded_keys() {
             DiagnosticPackageError::InvalidField
         );
     }
+}
+
+#[test]
+fn diagnostic_package_hostile_archive_corpus_is_bounded_and_panic_free() {
+    const CASES: usize = 512;
+    let valid = build_diagnostic_package(&source_entries()).unwrap();
+    validate_diagnostic_package(&valid).unwrap();
+
+    let mut corpus: Vec<(Vec<u8>, bool)> = Vec::with_capacity(CASES);
+    corpus.push((valid.clone(), true));
+    corpus.push((vec![0; MAX_ARCHIVE_BYTES + 1], false));
+
+    let mut state = 0x5344_435f_2026_0914_u64;
+    for _ in 0..128 {
+        let length = 1 + (next_hostile_byte(&mut state) as usize % MAX_ARCHIVE_BYTES);
+        let mut bytes = Vec::with_capacity(length);
+        for _ in 0..length {
+            bytes.push(next_hostile_byte(&mut state));
+        }
+        // Keep random cases guaranteed outside the ZIP local-header signature.
+        bytes[0] = 0xa5;
+        corpus.push((bytes, false));
+    }
+
+    for index in 0..128 {
+        let length = index * (valid.len() - 1) / 127;
+        corpus.push((valid[..length].to_vec(), false));
+    }
+
+    for index in 0..(CASES - corpus.len()) {
+        let mut mutated = valid.clone();
+        let offset = (index * 37) % mutated.len();
+        mutated[offset] ^= (index as u8).wrapping_mul(17) | 1;
+        corpus.push((mutated, false));
+    }
+    assert_eq!(corpus.len(), CASES);
+
+    let mut accepted = 0;
+    let mut rejected = 0;
+    let mut panics = 0;
+    for (index, (bytes, expected_valid)) in corpus.into_iter().enumerate() {
+        assert!(bytes.len() <= MAX_ARCHIVE_BYTES + 1);
+        let result = catch_unwind(AssertUnwindSafe(|| validate_diagnostic_package(&bytes)));
+        if result.is_err() {
+            panics += 1;
+            continue;
+        }
+        let validation = result.unwrap();
+        if validation.is_ok() {
+            accepted += 1;
+        } else {
+            rejected += 1;
+        }
+        assert_eq!(
+            validation.is_ok(),
+            expected_valid,
+            "unexpected validation result for corpus case {index}"
+        );
+    }
+    assert_eq!(accepted, 1);
+    assert_eq!(rejected, CASES - 1);
+    assert_eq!(panics, 0);
+    println!(
+        "diagnostic hostile archive corpus: {CASES} cases, {rejected} rejected, {panics} panics, max_bytes={}",
+        MAX_ARCHIVE_BYTES + 1
+    );
 }
 
 #[test]
