@@ -96,3 +96,30 @@ external Remote/Touch client, public endpoint, RDM/TOD device, or adversarial
 network harness was opened. `REMOTE-SECURITY-001` remains `Open` for the
 external exposure, physical cancellation, dependency/SBOM/redaction, updater
 trust, and complete bypass-review matrices.
+
+## Takeover continuation — current-source security-contract recheck — 2026-09-14
+
+At current source HEAD `80a7a001`, the complete Node security set was rerun:
+
+```text
+check:agent-bridge: PASS (11 groups)
+check-agent-bridge-bootstrap: PASS (4 deferred lifecycle groups)
+check-tauri-admission-inventory: PASS (539 commands; 18 negative fixtures rejected)
+tools/syndocal-mcp/check.mjs: PASS (15 adapter integration groups; fake loopback only)
+check:strict-json: PASS (130 assertions)
+check:output-ownership: PASS
+check:ai5-sidecar: PASS (authenticated transport/redaction groups)
+check:ai6-admin-ui: PASS (trusted actions/grants/consent/audit route)
+check:ai7-adversarial-proof: PASS (parity/reply-loss/authority/gap/rate/saturation)
+```
+
+All nine commands exited `0`. The exact MSVC Rust security evidence from the
+earlier current-source checkpoint remains applicable because
+`git diff --name-only 0abe297d..HEAD -- app crates` returned no paths; the
+current continuation changed QA documents only. No real LAN/TLS listener,
+external Remote/Touch client, public endpoint, RDM/TOD device, or adversarial
+network harness was opened.
+
+`REMOTE-SECURITY-001` remains `Open` for external exposure, physical
+cancellation, dependency/SBOM/redaction, updater trust, and complete bypass
+review acceptance.
