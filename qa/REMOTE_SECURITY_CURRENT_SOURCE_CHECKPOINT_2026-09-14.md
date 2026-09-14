@@ -198,3 +198,47 @@ This strengthens the local stdio parser/input-boundary result only. It does not
 constitute real LAN/TLS exposure, a Remote/Touch client, public endpoint,
 RDM/TOD cancellation, dependency/SBOM review, updater trust exercise, or
 complete security acceptance. `REMOTE-SECURITY-001` remains `Open`.
+
+## Continuation — duplicate Pairing PIN query rejection — 2026-09-15
+
+The Remote HTTP/WebSocket admission path had an ambiguity in
+`request_has_pairing_token`: a request containing both a wrong and a correct
+`token` query parameter was accepted because the previous implementation used
+an `any` match. The parser now requires exactly one `token` parameter and
+rejects repeated authentication parameters before any WebSocket upgrade or
+authenticated client registration. The single value is compared with the
+existing bounded constant-time credential comparison. Unrelated query
+parameters remain allowed, and the six-digit PIN contract is unchanged.
+
+Verification:
+
+```text
+node app/scripts/check-dj-link-runtime.mjs
+DJ Link frontend contract checks passed
+
+MSVC 14.44.35207 x64; cargo test -p io --release --locked remote_ -- --test-threads=1
+test result: ok. 67 passed; 0 failed; 1 ignored
+```
+
+The focused Rust run exercised the updated pairing-token test plus the full
+`remote_` set: Host/Origin checks, Web Remote and DJ Link path separation,
+connection bounds, worker retirement, replay/fence behavior, ACK failures,
+and malformed-frame rejection. The one ignored test still requires the
+separate rekordbox output test root and local Node runtime. The source change
+does not open a listener, contact a client, or establish LAN/TLS acceptance.
+`REMOTE-SECURITY-001` remains `Open` for external exposure, physical
+cancellation, dependency/SBOM/redaction, updater trust, and complete
+bypass-review acceptance.
+
+The changed native surface was also rebuilt with the repository's exact
+Windows gate. The running pre-change process at the exact release path was
+stopped and no other executable was touched; `pnpm.cmd --dir app tauri build
+--no-bundle` selected the pinned MSVC `14.44.35207` x64 linker and completed in
+`4m 31s`. The rebuilt
+`target/release/syndocal.exe` has SHA-256
+`CCB0DFD91BAE17D78CF8A0C0EEAA4BBCA6F3AC593B4DF6377B2841DC6914E307`; one
+exact-path process was relaunched with title `Syndocal` and
+`Responding=True` (PID `22688`). Vite emitted its existing large-chunk
+optimization warning; no Remote-specific compiler failure occurred. This is
+native build/process-smoke evidence, not external-client or LAN/TLS
+acceptance.

@@ -6967,10 +6967,21 @@ fn request_has_pairing_token(request: &str, expected: &str) -> bool {
     let Some((_, query)) = request_target(request).and_then(|target| target.split_once('?')) else {
         return false;
     };
-    query.split('&').any(|pair| {
+    let mut token = None;
+    for pair in query.split('&') {
         let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
-        key == "token" && value == expected
-    })
+        if key != "token" {
+            continue;
+        }
+        // A repeated authentication parameter is ambiguous.  Do not accept
+        // a request merely because one occurrence happens to match: multiple
+        // token values must fail closed before the WebSocket or HTTP handler
+        // can observe any authenticated state.
+        if token.replace(value).is_some() {
+            return false;
+        }
+    }
+    token.is_some_and(|candidate| constant_time_token_eq(candidate, expected))
 }
 
 fn request_host_is_allowed(
@@ -8597,10 +8608,22 @@ mod tests {
         let valid = "GET /ws?token=123456 HTTP/1.1\r\nHost: localhost:9100\r\n\r\n";
         let missing = "GET /ws HTTP/1.1\r\nHost: localhost:9100\r\n\r\n";
         let wrong = "GET /ws?token=654321 HTTP/1.1\r\nHost: localhost:9100\r\n\r\n";
+        let duplicate_wrong_then_valid =
+            "GET /ws?token=654321&token=123456 HTTP/1.1\r\nHost: localhost:9100\r\n\r\n";
+        let duplicate_valid_then_wrong =
+            "GET /ws?token=123456&token=654321 HTTP/1.1\r\nHost: localhost:9100\r\n\r\n";
 
         assert!(request_has_pairing_token(valid, "123456"));
         assert!(!request_has_pairing_token(missing, "123456"));
         assert!(!request_has_pairing_token(wrong, "123456"));
+        assert!(!request_has_pairing_token(
+            duplicate_wrong_then_valid,
+            "123456"
+        ));
+        assert!(!request_has_pairing_token(
+            duplicate_valid_then_wrong,
+            "123456"
+        ));
         assert_eq!(request_path(valid), Some("/ws"));
     }
 
