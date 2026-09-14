@@ -426,3 +426,29 @@ to rerun the same read-only preflight once Windows exposes the third monitor,
 then bind the exact stable identities and current release artifact before any
 output-window acceptance. The missing monitor is an environment boundary, not
 a product pass.
+
+## Continuation — current release native visual recheck — 2026-09-15
+
+The exact running `target/release/syndocal.exe` was captured through the
+repository's read-only window harness:
+
+```text
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File qa/harnesses/capture-window.ps1 -TitlePattern '^Syndocal$' -OutPath C:\TEMP\syndocal-control-ui-current-20260915.png -SettleMilliseconds 1200
+captured 'Syndocal' (2586 x 1530)
+SHA-256: 6B1E35E286CAFC1EA0B58563484766DB0F5EBF4F43DA28DF09C9D753623AE797
+```
+
+Visual inspection of the captured native window confirms that the repaired
+high-DPI Video upper desk keeps Preview, Program, Preview Transport, and
+Master readable, while the lower Clips, Outputs, and Layers region remains
+contained without overlap. The capture only foregrounded and photographed the
+already-running exact-path window; no DOM/native click, dangerous Control
+action, recording, device action, or output was dispatched. The Computer Use
+surface exposed no native app target during this observation, so no coordinate
+or guessed-HWND automation was attempted.
+
+This is current-source native visual evidence for the layout repair only. It
+does not establish current-source H5 acceptance, native button-by-button live
+workflow, accessibility, physical output, external clients, recovery,
+venue/soak, signing, publication, or product completion. `UI-H5-CONTROL-001`
+remains `Open`.
