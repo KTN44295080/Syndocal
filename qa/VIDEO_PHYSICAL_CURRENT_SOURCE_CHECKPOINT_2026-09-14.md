@@ -185,3 +185,38 @@ current source contracts are green, but `VIDEO-PHYSICAL-001` remains Open:
 real fullscreen pixels, refresh/DPI/reorder/unplug/GPU reset, HDMI/NDI/Spout
 receiver observations, camera fault/replug, frame-drop records, and the
 one-hour run still require named physical equipment and raw observations.
+
+## Takeover continuation — current-source video/output recheck after upper-desk repair — 2026-09-14
+
+At current source HEAD `8f8a9cd5`, the focused video/output contracts all
+exited `0`:
+
+```text
+pnpm.cmd run check:video-runtime-polling
+current clip: invokes=1, maxConcurrency=1
+current transition: invokes=1, maxConcurrency=1
+video runtime polling deferred-response checks passed
+omitted native runtime arrays, malformed rejection, generation retention,
+and zero-copy valid arrays: PASS
+
+pnpm.cmd run check:video-output-routing-runtime
+video output routing R4 contract: PASS
+
+pnpm.cmd run check:video-display-target
+video display target contract: PASS
+
+pnpm.cmd run check:video-output-window-runtime
+video output window runtime contract: PASS
+
+pnpm.cmd run check:video-output-window-observation
+video-output window observation contract passed
+```
+
+For the user's current three-display setup, the exact release executable was
+started for a read-only availability check. Windows reported one responsive
+process at `target/release/syndocal.exe` (PID `41156`, non-zero main window
+handle). This proves process/window availability only; no guessed native UI
+automation, fullscreen pixel sample, HDMI/NDI/Spout receiver, camera fault,
+unplug/reorder/GPU-reset, or frame-drop/one-hour artifact was produced.
+`VIDEO-PHYSICAL-001` remains `Open` pending named physical display/output
+observations and the required recovery/soak matrix.
