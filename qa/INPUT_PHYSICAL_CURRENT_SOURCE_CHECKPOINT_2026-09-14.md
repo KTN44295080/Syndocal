@@ -160,3 +160,49 @@ that the PnP entry is an opened production endpoint. No MIDI traffic was sent
 in this attempt. `INPUT-PHYSICAL-001` remains **Open**; resume by restoring
 the SMC-Mixer endpoint in the `midir` inventory, then rerun the named matrix
 with raw input/output logs and operator observations.
+
+## Continuation — reconnected SMC-Mixer production MIDI slice — 2026-09-15
+
+After the SMC-Mixer was reconnected, the current Windows PnP inventory showed
+both the named SMC-Mixer MIDI endpoints and the paired Bluetooth MIDI services:
+
+```text
+SMC-Mixer (Bluetooth MIDI OUT)
+SMC-Mixer
+MIDIIN2 (SMC-Mixer)
+MIDIOUT2 (SMC-Mixer)
+SMC-Mixer (Bluetooth MIDI IN)
+SMC-Mixer USB (USB\\VID_4353&PID_4B4D...)
+```
+
+The production `midir` inventory then exposed the selected endpoints:
+
+```text
+MIDI inputs: [CustomMIDI1, SMC-Mixer, MIDIIN2 (SMC-Mixer)]
+MIDI outputs: [Microsoft GS Wavetable Synth, CustomMIDI1, SMC-Mixer, MIDIOUT2 (SMC-Mixer)]
+```
+
+With the exact pinned MSVC `14.44.35207` x64 linker (the pinned linker was
+first in `where.exe link.exe`) and
+`SYNDOCAL_TEST_MIDI_INPUT=SMC-Mixer` /
+`SYNDOCAL_TEST_MIDI_OUTPUT=SMC-Mixer`, the production ignored release test
+was rerun:
+
+```text
+cargo test -p io --release --locked -j 1 physical_midi_ports_enumerate_open_and_send_feedback -- --ignored --nocapture --test-threads=1
+test result: ok. 1 passed; 0 failed; 0 ignored; 186 filtered out
+```
+
+The test enumerated and opened the selected input/output and sent exactly one
+safe channel-1 `B0 7B 00` All Notes Off message. The command exited `0`; no
+other MIDI traffic was intentionally generated. This closes the previously
+unavailable current-host enumerate/open/safe-feedback slice and supersedes
+the immediately preceding PnP-present-but-`midir`-absent attempt as the latest
+availability result.
+
+This does not close `INPUT-PHYSICAL-001`. It does not prove controller
+movement, input capture, LED observation, MIDI Clock/MTC, input-to-pixel or
+round-trip latency, reconnect/replacement, OSC/TouchOSC, Web Remote,
+native UI routing, DMX, or venue acceptance. The next action remains the
+named physical input matrix with raw logs, timing, reconnect evidence, and
+operator observations.
