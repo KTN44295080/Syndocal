@@ -120,3 +120,32 @@ and no five-display hardware action was performed.
 `AI3-DURABLE-ACCEPTANCE-001` remains `Open` pending the exact artifact's
 native Yes/No/Close observation, external-client reply-loss/restart matrix,
 physical ACKs, and five-display hardware acceptance.
+
+## Continuation — current-source durable-acceptance recheck — 2026-09-15
+
+After the Remote authority, high-DPI Video desk, and observability source
+checkpoints, the same six source-only checks were rerun at current HEAD
+`1f1a257b` with all exit codes `0`:
+
+```text
+check:agent-bridge: PASS (11 groups; real processor/runtime/confirmation modules; no native/device calls)
+check-agent-bridge-bootstrap: PASS (4 deferred agent bridge lifecycle groups)
+check-tauri-admission-inventory: PASS (539 commands; SHA-256 a0ba71bfd1dce9e657fc5b052ccc452cf00f8a42fb3d838edef28913658cb9ab; 18 negative fixtures rejected)
+check:project-recovery-e3: PASS (project authority deterministic checks and E3 production driver)
+check:output-control-runtime: PASS (v12 output commands, lease-bound Lighting/Video master, Video Take/Clip Launch and group controls, strict receipts, no-send reconciliation, and Standby Sync output-lease UI)
+check:output-ownership: PASS (output ownership static contract)
+```
+
+This confirms only the current-source durable journal, Agent Bridge lifecycle,
+admission inventory, project recovery, output-control, and ownership contracts.
+The admission inventory remains a source contract and not a native acceptance
+artifact. No native dangerous-action dialog was opened, no external client was
+used, no physical output or device ACK was requested, and no five-display run
+was available. The Flow marker therefore remains `Open`.
+
+The newly recorded Q4 evidence is
+`EV-AI3-DURABLE-ACCEPTANCE-CURRENT-SW-2026-09-15`. It is linked to
+`COV-AI-CONTROL-001` and intentionally does not change the acceptance boundary.
+The next safe action is the existing native/external/physical acceptance
+procedure above, with process identity, journal/output state, and first
+failure retained before any marker change.
