@@ -2,7 +2,7 @@
 
 - Date: 2026-09-14
 - Branch: `codex/showclock-review-20260912`
-- Base: `d6fffe9ca89da40a0bed7d7f98e924654da2c0e1` (`Record ShowClock venue boundary`)
+- Base: `28f8fac6` (`qa: record ShowClock venue source rerun`)
 - Marker: `COMPARE-PINNED-001`
 - Scope: current-source comparison precondition audit only
 
@@ -23,7 +23,7 @@ The existing acceptance documents remain plans rather than completed comparator 
 
 ## Current-source evidence
 
-The following current-source check passed on the checkpoint base:
+The following current-source check passed on the current source:
 
 ```text
 pnpm.cmd --dir app run check:status
@@ -33,9 +33,27 @@ exit code: 0
 
 This only verifies the local status-model contract. It is not a comparator measurement and cannot substitute for SynapseRack or Daslight execution.
 
+## Takeover rerun — 2026-09-14
+
+The comparison precondition was rerun after takeover from `28f8fac6` against
+the current branch and passed:
+
+```text
+pnpm.cmd --dir app run check:status: PASS
+  status model helpers ok
+  exit code: 0
+```
+
+The rerun found no newly pinned SynapseRack or Daslight build, license/tier,
+reference hardware, content manifest, synchronized capture, or operator
+measurement package in this checkout. The existing partial Daslight operation
+counts and current Syndocal software checks remain non-comparator evidence;
+they do not close either comparison Q1 row. No product code was changed by
+this rerun.
+
 ## Acceptance boundary
 
-Not run in this checkpoint:
+Not run in this checkpoint or takeover rerun:
 
 - pinned SynapseRack or Daslight builds;
 - license/tier confirmation;
