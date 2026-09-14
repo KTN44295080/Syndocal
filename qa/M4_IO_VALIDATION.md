@@ -202,3 +202,23 @@ This records current serial-port open/write, worker telemetry, and the
 operator-confirmed fixture result. Logic-analyzer waveform, sustained 44
 Hz/long-run capture, RDM/TOD, Art-Net/sACN, output ownership replacement, or
 venue acceptance was not performed; those claims remain open.
+
+### 2026-09-15 current-host physical serial-DMX transport recheck
+
+The same FTDI interface was exercised again with the exact MSVC
+`14.44.35207` x64 linker and the deliberately bounded settings
+`SYNDOCAL_PHYSICAL_SERIAL=COM5`, `SYNDOCAL_PHYSICAL_SECONDS=10`, and
+`SYNDOCAL_PHYSICAL_MASTER=20`:
+
+```text
+cargo test -p engine --locked physical_serial_rainbow_demo_drives_master_dimmer_and_rgb_cells -- --ignored --nocapture --test-threads=1
+demo running: master=20 cell1 rgb=(54,73,255) sends=439
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1096 filtered out; finished in 10.02s
+```
+
+The production serial worker opened the current `COM5` path and reported 439
+successful sends with no reported send failure. No operator visual confirmation
+was obtained during this recheck, so this is transport/worker telemetry only;
+it does not upgrade the earlier operator-confirmed fixture slice. Waveform and
+44 Hz continuity, RDM/TOD, Art-Net/sACN, ownership replacement, and venue
+acceptance remain unproven.
