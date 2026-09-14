@@ -306,3 +306,29 @@ device was changed. This is a topology/preflight result only;
 `VIDEO-PHYSICAL-001` remains `Open` pending the third display identity, exact
 output-window binding, pixel/receiver observation, fault/reconnect matrix, and
 one-hour frame/drop evidence.
+
+## Current-host physical camera recheck — 2026-09-15
+
+The current PnP inventory still reports `ASUS 5M webcam` as present. After
+correcting the test input to the canonical opaque profile endpoint, the
+production capture worker was rerun with the exact release profile and pinned
+MSVC `14.44.35207` linker:
+
+```text
+SYNDOCAL_FFMPEG=C:\Users\janua\AppData\Local\SyndocalDev\ffmpeg-n8.1-latest-win64-lgpl-shared-8.1\bin\ffmpeg.exe
+SYNDOCAL_TEST_CAMERA_ENDPOINT=syndocal-camera-v1:eyJkZXZpY2VfYWx0ZXJuYXRpdmVfbmFtZSI6IkBkZXZpY2VfcG5wX1xcXFw_XFx1c2IjdmlkXzYzNmUmcGlkXzBiZGEmbWlfMDAjNyYxNTRkYWU4YiYwJjAwMDAjezY1ZTg3NzNkLThmNTYtMTFkMC1hM2I5LTAwYTBjOTIyMzE5Nn1cXGdsb2JhbCIsImlucHV0X2Zvcm1hdCI6eyJraW5kIjoicGl4ZWxfZm9ybWF0IiwidmFsdWUiOiJudjEyIn0sIndpZHRoIjoxMjgwLCJoZWlnaHQiOjcyMCwiZnJhbWVfcmF0ZV9udW1lcmF0b3IiOjMwLCJmcmFtZV9yYXRlX2Rlbm9taW5hdG9yIjoxfQ
+cargo test --manifest-path app/src-tauri/Cargo.toml --release --locked -j 1 camera_worker_captures_a_real_frame_and_restarts_cleanly -- --ignored --nocapture --test-threads=1
+```
+
+```text
+Finished `release` profile [optimized] target(s) in 1.08s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1928 filtered out; finished in 2.55s
+```
+
+The test completed two clean worker start/stop attempts, received the selected
+`1280x720` RGBA frame shape and byte count on each attempt, and rejected a
+fully transparent frame. No display/output window, HDMI/NDI/Spout receiver,
+or other physical output was created. This strengthens only the physical
+camera capture/restart slice; `VIDEO-PHYSICAL-001` remains `Open` pending exact
+display/output identity and pixel/receiver observations, camera fault/replug,
+reconnect, frame-drop, and one-hour evidence.
