@@ -230,3 +230,34 @@ physical/native acceptance was performed. The signed N-to-N+1 update/failure
 matrix, deployed startup/takeover/recovery/shutdown drills, clean-machine
 recovery, signing/publication, and native/physical acceptance remain unproven;
 therefore `OBSERVABILITY-SUPPORT-001` remains `Open`.
+
+## Takeover continuation — bounded hostile diagnostic archive corpus — 2026-09-14
+
+At current source HEAD `d37aad9d`, the diagnostic ZIP validator gained a
+deterministic, memory-only hostile corpus test. It exercises 512 bounded cases:
+one canonical package, one archive-size overflow, 128 random byte inputs, 128
+truncated canonical packages, and 254 single-byte mutations. Every case is
+limited to at most `MAX_ARCHIVE_BYTES + 1` (`163841`) bytes, and validation is
+wrapped in `catch_unwind` so a panic is an explicit failure rather than an
+uncaught test abort.
+
+With the exact MSVC `14.44.35207` Build Tools linker initialized and printed
+first by `where.exe link.exe`, the focused release command completed with exit
+`0`:
+
+```text
+diagnostic_: 27 passed, 0 failed, 0 ignored, 1901 filtered out
+diagnostic hostile archive corpus: 512 cases, 511 rejected, 0 panics, max_bytes=163841
+```
+
+Targeted Rust formatting and `git diff --check` passed. The post-change
+`windows-native-release` warning ratchet also passed with output marker coverage
+`2/2`, warning-shaped output `none`, baseline/current totals `0/0`, first-party
+warnings `0/0`, and identity removals `0`.
+
+This is a current-source validator robustness result only. No update endpoint,
+signed publication, clean-machine installation, deployment/support drill,
+external device, or physical/native acceptance was performed. The signed
+N-to-N+1 update/failure matrix, deployment/recovery support drills,
+clean-machine recovery, signing/publication, and native/physical acceptance
+remain unproven; therefore `OBSERVABILITY-SUPPORT-001` remains `Open`.
