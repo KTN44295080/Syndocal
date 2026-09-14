@@ -79,3 +79,21 @@ capture, operator measurement, or physical-output evidence became available.
 `COMPARE-PINNED-001` remains `Open`; parity must be established from the named
 V01-V17 and Daslight records rather than inferred from software or loopback
 counts.
+
+## Takeover continuation — current-source comparison precondition recheck after Video repair — 2026-09-14
+
+At current source HEAD `56a81537`, the local status precondition was rerun:
+
+```text
+pnpm.cmd run check:status
+status model helpers ok
+exit code: 0
+```
+
+No pinned SynapseRack V01-V17 or Daslight build, license/tier, reference
+hardware, content manifest, synchronized capture, comparator operator record,
+or physical-output measurement was added. The status-model pass is not parity
+evidence and does not close either comparison Q1 row. `DEC-COMPARE-001` and
+`COMPARE-PINNED-001` remain `Open`; completion still requires the named
+versions, approved fixture, synchronized matrix, and first-failure/unmeasured
+row records.
