@@ -184,3 +184,37 @@ hardware matrix. First capture device identity/topology, then exercise accepted
 and rejected ingress, controller movement, feedback/Clock/MTC, reconnect and
 replacement, output state, and latency. Record each result and first failure;
 only then reassess the Flow marker.
+
+## Continuation — current-source ingress/admission recheck — 2026-09-15
+
+At current source HEAD `17c0ca40`, the Windows-native source gate was rerun
+after initializing MSVC 14.44.35207 Build Tools. The pinned linker was printed
+and `where.exe link.exe` resolved to the same
+`C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe` first. All ten checks exited `0`:
+
+```text
+check:frontend-command-routing: PASS (133 renderer, 31 server-authoritative, 28 raw, 479 facade dispatches)
+check-tauri-admission-inventory: PASS (539 commands; SHA-256 a0ba71bfd1dce9e657fc5b052ccc452cf00f8a42fb3d838edef28913658cb9ab; 18 negative fixtures rejected)
+check:output-control-runtime: PASS (v12 output commands, lease-bound masters, strict receipts, no-send reconciliation, and Standby Sync output-lease UI)
+check:output-ownership: PASS
+check:safety-blackout-runtime: PASS
+check:dvc-midi-shortcuts: PASS (39 assertions)
+check-dvc-dmx-shortcuts: PASS (41 assertions)
+check:agent-bridge: PASS (11 groups; no native/device calls)
+check:warnings -- --configuration windows-native-release: PASS (baseline/current total 0; first-party 0)
+cargo test ... agent_bridge_: PASS (11 passed; 0 failed; hostile corpus 512 cases, 511 rejected, 0 panics, max_bytes=65537)
+```
+
+This is current-source routing, admission, ownership, safety, shortcut, Agent
+Bridge, warning, and release-test evidence only. No native OSC/Remote client,
+real Art-Net node or fixture, Clock/MTC controller, reconnect path, or physical
+output was opened. The existing SMC-Mixer observation remains a partial MIDI
+transport slice, and the current host still does not provide the complete
+native ingress matrix. `AI3-NATIVE-INGRESS-001` therefore remains `Open`.
+
+The Q4 ledger records this recheck as
+`EV-AI3-NATIVE-INGRESS-CURRENT-SW-2026-09-15`. The next action remains the
+exact release artifact against named native clients and hardware, with device
+identity, accepted/rejected ingress, movement, feedback/Clock/MTC, reconnect,
+replacement, output state, latency, and first failure retained before any
+marker change.
