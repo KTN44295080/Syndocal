@@ -157,3 +157,44 @@ action workflow was performed. A read-only process inventory found no active
 screen-reader process. These source checks therefore do not change
 `ACCESSIBILITY-NATIVE-001`, which remains `Open` pending the named native
 accessibility environment and operator matrix.
+
+## Takeover continuation — current-source accessibility recheck after Video repair — 2026-09-14
+
+At current source HEAD `9da6c1ff`, the focused source contracts were rerun after
+the Video upper-desk repair. All checks exited `0`:
+
+```text
+pnpm.cmd run check:localization
+static Japanese UI coverage: 3844/3844 (100.0%); unprotected bare user-data labels: 0
+
+pnpm.cmd run check:terminology
+ui terminology ok
+
+pnpm.cmd run check:empty-states
+empty state guidance ok
+
+node scripts/check-project-history-keyboard.mjs
+PASS actual keyboard controller routing and text-editor guards
+
+node scripts/check-timeline-space-keyboard.mjs
+PASS selected Timeline Space routing cases
+
+pnpm.cmd run check:stage-labels
+T24-A stage label footprint/priority/overlap contracts ok
+
+pnpm.cmd exec tsc --noEmit
+exit code 0
+
+pnpm.cmd run build
+358 modules transformed; built in 10.64s
+```
+
+The build retained the existing Vite large-chunk advisory; no first-party
+compiler warning was observed. These results confirm current-source
+localization, terminology, empty-state, keyboard-routing, stage-label,
+TypeScript, and production-build contracts only. No NVDA/JAWS/Narrator
+traversal, High Contrast rendering, 125/150/200% scaling matrix, IME
+composition, reduced-motion native run, or native keyboard-only dangerous-action
+workflow was performed. No native accessibility API was used. Therefore
+`ACCESSIBILITY-NATIVE-001` remains `Open` pending the named native
+accessibility environment and operator matrix.
