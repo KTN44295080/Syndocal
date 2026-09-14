@@ -56,3 +56,32 @@ preparation, same-action singleflight, cross-action busy rejection, and
 loopback-before-S0 boundaries. No Art-Net/sACN node, fixture, reconnect path,
 or sustained physical 44 Hz output was exercised; `DMX-ARTNET-001` remains
 `Open`.
+
+## Takeover continuation — current-source Art-Net preparation recheck after Video repair — 2026-09-14
+
+At current source HEAD `fadecced`, the focused DMX preparation contracts were
+rerun:
+
+```text
+pnpm.cmd run check:dmx-addressing
+dmx addressing helpers ok
+
+pnpm.cmd run check:output-ownership
+output ownership static contract: PASS
+
+pnpm.cmd run check:safety-blackout-runtime
+safety blackout runtime contract: PASS
+
+node scripts/check-dmx-show-setup.mjs
+DMX show setup UI contract: PASS (canonical acquire/recover/reuse, fresh
+authority, fail-closed preparation, same-action singleflight, cross-action
+busy rejection, loopback-before-S0 boundary)
+```
+
+All commands exited `0`. Current-source addressing, ownership, blackout, and
+show-setup preparation remain fail-closed and loopback-before-S0 bounded. No
+Art-Net/sACN node or fixture was opened, no network packet was sent, and no
+reconnect, topology, RGB/wheel, pan/tilt, intensity, or sustained 44 Hz
+physical-output artifact was produced. `DMX-ARTNET-001` remains `Open` pending
+the named node/fixture matrix with raw packets, fixture observations,
+reconnect timing, and exact output-owner identity.
