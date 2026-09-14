@@ -57,3 +57,35 @@ package continues to reject the ASIO bridge payload and retired names while
 the SDK pin remains protected. No licensed/public ASIO artifact, native stale
 device rehearsal, installer, updater overlay, or final package review was
 performed. `ASIO-PERSISTENCE-PACKAGE-001` remains `Open`.
+
+## Takeover continuation — current-source persistence/package recheck — 2026-09-14
+
+At current source HEAD `fd82d5cd`, the focused current-source contracts were
+rerun:
+
+```text
+pnpm.cmd --dir app run check:live-audio
+live audio fail-closed lifecycle, availability contract, selection persistence,
+presentation, and request ordering ok
+
+pnpm.cmd --dir app run check:live-audio-ipc-v1
+live audio IPC v1 exact request mapping and fail-closed checks ok
+
+pnpm.cmd --dir app run check:asio-packaging
+ASIO packaging boundary self-test passed: 169 assertions
+```
+
+These results revalidate selection persistence and the normal-package boundary:
+the exact resource inventory remains enforced, ASIO bridge payloads/globs and
+retired names are rejected, and SDK-pin/distribution-approval drift is rejected.
+No public or licensed ASIO artifact was created.
+
+The native release-artifact self-test was not used as acceptance evidence in
+this continuation: it emitted its candidate-extractor (`43 assertions`) and
+materialization (`4 assertions`) sub-results but made no further progress and
+was stopped before a successful process exit. No installer, updater overlay,
+or package artifact was produced by that attempt.
+
+`ASIO-PERSISTENCE-PACKAGE-001` remains `Open`. Completion still requires the
+approved artifact's native telemetry, stale/ambiguous device-lock rehearsal,
+exact executable/bridge identity, licensing decision, and final package review.
