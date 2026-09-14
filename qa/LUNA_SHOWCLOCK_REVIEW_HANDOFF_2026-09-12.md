@@ -1036,6 +1036,14 @@ external client, clean install, signing/publication endpoint, or physical
 output was contacted. AI8 remains Open for its external release and hardware
 boundaries.
 
+The `REMOTE-SECURITY-001` expanded source recheck then passed at HEAD
+`f078feed`: Agent Bridge (11 groups), bootstrap (4), admission inventory (539
+commands / 18 rejected negative fixtures), fake MCP loopback (15 groups),
+strict JSON (130 assertions), output ownership, AI5 sidecar transport/auth,
+AI6 administration UI, and AI7 adversarial-contract checks. No real LAN/TLS,
+external Remote/Touch client, public endpoint, RDM/TOD device, or adversarial
+network harness was used; the marker remains Open.
+
 ## Takeover continuation — current ledger and branch state — 2026-09-14
 
 The current supervising checkout is `codex/showclock-review-20260912` at

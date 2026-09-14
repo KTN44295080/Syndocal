@@ -48,3 +48,27 @@ Freeze the supported exposure and threat model, then run the real LAN/TLS,
 Remote/Touch, parser/path/archive, updater, dependency/SBOM/redaction, and
 RDM/TOD ownership/cancellation matrices. Preserve packet/client identity,
 failure response, logs/redaction, and first failure before changing the marker.
+
+## Takeover continuation — current-source security-contract recheck — 2026-09-14
+
+The expanded current-source set was rerun against HEAD `f078feed`:
+
+```text
+check:agent-bridge: 11 groups — PASS
+check-agent-bridge-bootstrap: 4 deferred lifecycle groups — PASS
+check-tauri-admission-inventory: 539 commands, 18 negative fixtures rejected,
+SHA-256 a0ba71bfd1dce9e657fc5b052ccc452cf00f8a42fb3d838edef28913658cb9ab — PASS
+tools/syndocal-mcp/check.mjs: 15 adapter groups, fake loopback only — PASS
+check:strict-json: 130 assertions — PASS
+check:output-ownership: PASS
+check:ai5-sidecar: adapter plus HTTP/JSON-RPC/REST/WebSocket transport groups — PASS
+check:ai6-admin-ui: Security route, trusted actions, grants, consent, audit viewer — PASS
+check:ai7-adversarial-proof: parity, reply-loss, authority, gap, rate, saturation,
+sidecar boundaries — PASS
+```
+
+This strengthens the local AI5/AI6/AI7, admission, parser, and ownership
+contracts only. It opened no real LAN/TLS listener, external Remote/Touch
+client, public endpoint, RDM/TOD device, or adversarial network harness.
+`REMOTE-SECURITY-001` remains `Open` for those external matrices, plus the
+dependency/SBOM/redaction and updater trust review.
