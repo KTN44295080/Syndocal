@@ -1266,3 +1266,16 @@ is promoted by the supplemental run: `UI-H5-CONTROL-001` still requires the
 formal display gate plus accessibility and physical/external acceptance, and
 the remaining Open rows retain their documented hardware, venue, client,
 signed-release, or product-scope boundary.
+
+## Current-source aggregate recheck — 2026-09-14
+
+At current HEAD `dce7dc48`, `pnpm.cmd --dir app run check:release:static`
+completed with exit `0`. It revalidated the completion and Q1/Q4 ledgers,
+AI0-AI7 source contracts, F1/F2 input and output ownership, frontend/Tauri
+admission and routing, project transaction/recovery/publication, media
+thumbnail/asset/snapshot/agent-bridge paths, output safety and leases, ASIO
+packaging and v3 contracts, live-audio IPC, Timeline cue/audio/loop/transport/
+Follow/watermark paths, project bootstrap, video runtime/routing/observation,
+and camera input contracts. The run performed no physical output, external
+client, venue, signing, or publication action; the 23 Open marker boundaries
+therefore remain unchanged.
