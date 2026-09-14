@@ -96,3 +96,43 @@ SMC-Mixer All Notes Off slice remains partial evidence.
 `AI3-NATIVE-INGRESS-001` remains `Open` pending the named native client and
 hardware matrix with movement, feedback/Clock/MTC, reconnect, latency, and
 venue evidence.
+
+## Takeover continuation — current-source ingress/admission recheck after Video repair — 2026-09-14
+
+At current source HEAD `4b09b1bd`, the ingress, admission, ownership, safety,
+shortcut, and Agent Bridge checks were rerun. All eight commands exited `0`:
+
+```text
+pnpm.cmd run check:frontend-command-routing
+133 renderer, 31 server-authoritative, 28 raw, 479 facade dispatches — PASS
+
+node scripts/check-tauri-admission-inventory.mjs
+539 commands; SHA-256 a0ba71bfd1dce9e657fc5b052ccc452cf00f8a42fb3d838edef28913658cb9ab;
+18 negative fixtures rejected — PASS
+
+pnpm.cmd run check:output-control-runtime
+output-control and Standby Sync contracts — PASS
+
+pnpm.cmd run check:output-ownership
+static contract — PASS
+
+pnpm.cmd run check:safety-blackout-runtime
+runtime contract — PASS
+
+pnpm.cmd run check:dvc-midi-shortcuts
+39 assertions — PASS
+
+node scripts/check-dvc-dmx-shortcuts.mjs
+41 assertions — PASS
+
+pnpm.cmd run check:agent-bridge
+11 groups; no native or device calls — PASS
+```
+
+These results reconfirm the current-source routing/admission/ownership/safety,
+DVC shortcut, and Agent Bridge boundaries only. No native OSC/Remote client,
+real Art-Net node/fixture, Clock/MTC controller, reconnect path, or new
+physical output was opened; the existing SMC-Mixer All Notes Off slice remains
+partial evidence. `AI3-NATIVE-INGRESS-001` remains `Open` pending the named
+native client and hardware matrix with controller movement, feedback/Clock/MTC,
+reconnect, latency, and venue evidence.
