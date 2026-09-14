@@ -44,3 +44,25 @@ Use the exact release artifact in a clean machine/install context. Exercise
 real external clients, crash/restart and update paths, security review, and
 physical output with explicit redaction/artifact inspection. Record first
 failure and artifact identity before reconsidering AI8.
+
+## Takeover continuation — current-source bridge recheck — 2026-09-14
+
+The five current-source checks were rerun against HEAD `e4ca306d` after the
+takeover:
+
+```text
+check:agent-bridge: 11 groups — PASS
+check-agent-bridge-bootstrap: 4 deferred lifecycle groups — PASS
+check-tauri-admission-inventory: 539 commands, 18 negative fixtures rejected,
+SHA-256 a0ba71bfd1dce9e657fc5b052ccc452cf00f8a42fb3d838edef28913658cb9ab — PASS
+tools/syndocal-mcp/check.mjs: 15 adapter integration groups, fake loopback only — PASS
+check:strict-json: 130 assertions — PASS
+```
+
+No real external client, release endpoint, clean-machine install, signing
+service, or physical output was contacted. This recheck strengthens only the
+local bridge/admission/parser boundary; it is not AI8 release acceptance.
+
+`AI8-EXTERNAL-ACCEPTANCE-001` remains `Open` for clean installation, native
+external clients, restart/update drills, public-network security review,
+signing, publication, and physical-output acceptance.

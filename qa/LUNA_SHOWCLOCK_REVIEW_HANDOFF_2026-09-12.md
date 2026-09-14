@@ -1027,3 +1027,11 @@ SHA-256), output-control/Standby Sync, output ownership, and safety-blackout
 runtime all passed. No native client, device, endpoint, or physical output was
 opened. The marker remains Open; only the previously recorded bounded
 SMC-Mixer safe MIDI slice is physical transport evidence.
+
+The `AI8-EXTERNAL-ACCEPTANCE-001` bridge recheck then ran against HEAD
+`e4ca306d`: Agent Bridge (11 groups), bootstrap (4 deferred lifecycle groups),
+admission inventory (539 commands and 18 rejected negative fixtures), fake MCP
+loopback (15 groups), and strict JSON (130 assertions) all passed. No real
+external client, clean install, signing/publication endpoint, or physical
+output was contacted. AI8 remains Open for its external release and hardware
+boundaries.
