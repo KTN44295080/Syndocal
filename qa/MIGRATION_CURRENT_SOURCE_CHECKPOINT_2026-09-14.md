@@ -147,3 +147,33 @@ This strengthens current-source storage/recovery/migration evidence only.
 No cross-platform support decision, real upgrade/downgrade machine rehearsal,
 external endpoint, hostile-input fuzz campaign, physical output, or published
 artifact was performed. `MIGRATION-COMPATIBILITY-001` remains `Open`.
+
+## Continuation — current Video-repair source migration recheck — 2026-09-14
+
+At current source HEAD `a88877b3`, after the Video upper-desk repair and
+security-contract recheck, the current storage/recovery/publication set was
+rerun:
+
+```text
+check:project-storage: PASS
+check:project-transaction: PASS
+check:project-recovery-e3: PASS
+check:project-publication-e4: PASS
+check:project-open-bootstrap: PASS
+check-project-history-preflight: PASS
+check-project-history-keyboard: PASS
+check-project-transaction-recovery-controller: PASS (6 scenarios)
+check:strict-json: PASS (130 assertions)
+```
+
+All nine commands exited `0`. This confirms the existing Windows source-side
+save/reload, transaction/authority, recovery, publication, bootstrap, history,
+and strict-parser safeguards. No project upgrade/downgrade machine, cross-
+platform compatibility decision, hostile fuzz campaign, clean-machine
+installation, external endpoint, physical output, or published artifact was
+used. The previously recorded 11-test native migration corpus remains the
+applicable code-side corpus evidence because no migration Rust source changed.
+
+`MIGRATION-COMPATIBILITY-001` remains `Open` pending the supported-version and
+file-identity decisions, broader hostile-input/fuzz matrix, and real
+upgrade/downgrade compatibility rehearsal.
