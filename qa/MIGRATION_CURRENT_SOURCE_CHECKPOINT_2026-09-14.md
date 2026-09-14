@@ -208,3 +208,42 @@ close the supported-version/file-identity decision, broader fuzz campaign,
 cross-platform claims, real upgrade/downgrade or clean-machine rehearsal, or
 published-artifact compatibility. `MIGRATION-COMPATIBILITY-001` remains
 `Open`.
+
+## Continuation — current-source migration corpus recheck — 2026-09-15
+
+At current source HEAD `0f846c7a`, the migration storage, transaction,
+recovery, publication, bootstrap, history, strict-parser, and bounded hostile
+corpus checks were rerun with the exact MSVC `14.44.35207` x64 linker. The
+following nine source/preflight commands exited `0`:
+
+```text
+pnpm.cmd --dir app run check:project-storage
+pnpm.cmd --dir app run check:project-transaction
+pnpm.cmd --dir app run check:project-recovery-e3
+pnpm.cmd --dir app run check:project-publication-e4
+pnpm.cmd --dir app run check:project-open-bootstrap
+node app/scripts/check-project-history-preflight.mjs
+node app/scripts/check-project-history-keyboard.mjs
+node app/scripts/check-project-transaction-recovery-controller.mjs
+pnpm.cmd --dir app run check:strict-json
+```
+
+The focused release filters also exited `0`:
+
+- `project_file_`: 33 passed, 0 failed, 0 ignored;
+- `project_recovery_`: 2 passed, 0 failed, 0 ignored;
+- `project_publication_`: 18 passed, 0 failed, 0 ignored;
+- `migration_corpus_`: 12 passed, 0 failed, 0 ignored.
+
+The migration corpus again recorded 224 truncations, 5 malformed byte/number
+cases, 3 depth cases, and 128 semantic/idempotency cases. The hostile corpus
+used seed `0x5344435f20260913`, 4096 cases, 4091 parser-rejected cases, 5
+parsed cases, 0 prepared cases, and a 2048-byte cap. No file, device,
+network, or publication I/O was performed.
+
+This is a current-source Windows recheck only. It does not close the broader
+hostile-input/fuzz matrix, cross-platform file-identity decision
+`DEC-FILE-ID-001`, real upgrade/downgrade or clean-machine rehearsals,
+supported non-Windows claims, external clients, physical output, signing,
+publication, or product completion. `MIGRATION-COMPATIBILITY-001` remains
+**Open**.
