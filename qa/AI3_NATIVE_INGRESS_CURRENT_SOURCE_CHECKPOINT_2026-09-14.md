@@ -234,3 +234,48 @@ performed in this failed attempt. `AI3-NATIVE-INGRESS-001` remains `Open`;
 resume by restoring stable production-port enumeration and then running the
 named client, movement, feedback/clock, reconnect, replacement, and latency
 matrix.
+
+## Physical MIDI safe recheck and operator-ingress capture boundary — 2026-09-15
+
+This continuation started from source HEAD `53203be2` after the UI clipping
+checkpoint. The current host was rechecked before the test: PnP exposed
+`SMC-Mixer` and `MIDIIN2 (SMC-Mixer)` input aliases, `SMC-Mixer` and
+`MIDIOUT2 (SMC-Mixer)` output aliases, `CustomMIDI1`, an FTDI USB serial
+device on COM5, and `teVirtualMIDI`; the Windows `midisrv` service was
+running. This inventory is availability evidence, not a claim that every
+endpoint was consumed by Syndocal.
+
+The exact Windows release command used the repository-required MSVC
+14.44.35207 x64 linker, verified first with `where.exe link.exe`:
+
+```text
+SYNDOCAL_TEST_MIDI_INPUT=SMC-Mixer
+SYNDOCAL_TEST_MIDI_OUTPUT=SMC-Mixer
+cargo test -p io --release --locked -j 1 physical_midi_ports_enumerate_open_and_send_feedback -- --ignored --nocapture --test-threads=1
+```
+
+Result: `1 passed; 0 failed`. The production `midir` path enumerated the
+three visible input ports and four visible output ports, opened the named
+SMC-Mixer endpoints, and sent only the safe channel-1 All Notes Off message
+(`B0 7B 00`). No lighting, blackout, Take, Arm, Take Over, recording, or
+other disruptive action was sent.
+
+To make the missing operator step reproducible, this checkpoint adds the
+ignored `physical_midi_input_captures_operator_ingress` test in
+`crates/io/src/midi.rs`. It opens the named production `midir` input, records
+raw timestamps and bytes for a bounded 1–120 second window, and fails closed
+when no message arrives. A 30-second run on the current host returned:
+
+```text
+capturing physical MIDI input 'SMC-Mixer' for 30s; move one knob or press one button
+physical MIDI input 'SMC-Mixer' produced no operator ingress during 30s
+test result: 0 passed; 1 failed
+```
+
+This is an observed no-movement result, not a product-failure diagnosis and
+not accepted input proof. `AI3-NATIVE-INGRESS-001` remains `Open`. The
+remaining boundary is a supervised run with actual controller movement,
+complete feedback/Clock/MTC, reconnect and replacement, latency, named
+OSC/Remote clients, real Art-Net/DMX hardware, and venue evidence. The test
+must be rerun while an operator moves a control; the raw message and
+timestamp output must be retained before any ingress claim is advanced.

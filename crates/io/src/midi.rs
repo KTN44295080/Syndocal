@@ -4036,6 +4036,76 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires a physical MIDI input named by SYNDOCAL_TEST_MIDI_INPUT and operator movement"]
+    fn physical_midi_input_captures_operator_ingress() {
+        let input_match = std::env::var("SYNDOCAL_TEST_MIDI_INPUT")
+            .expect("set SYNDOCAL_TEST_MIDI_INPUT to part of a physical input port name");
+        let seconds = std::env::var("SYNDOCAL_TEST_MIDI_CAPTURE_SECONDS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(30)
+            .clamp(1, 120);
+
+        let mut input = MidiInput::new("syndocal-physical-midi-capture").unwrap();
+        input.ignore(Ignore::None);
+        let ports = input.ports();
+        let port = ports
+            .iter()
+            .find(|port| {
+                input
+                    .port_name(port)
+                    .unwrap()
+                    .to_lowercase()
+                    .contains(&input_match.to_lowercase())
+            })
+            .unwrap_or_else(|| panic!("no MIDI input matched '{input_match}'"));
+        let port_name = input.port_name(port).unwrap();
+        let (sender, receiver) = mpsc::channel::<(u64, Vec<u8>)>();
+        let _connection = input
+            .connect(
+                port,
+                "syndocal-physical-midi-capture-input",
+                move |timestamp, message, _| {
+                    let _ = sender.send((timestamp, message.to_vec()));
+                },
+                (),
+            )
+            .unwrap();
+
+        println!(
+            "capturing physical MIDI input '{port_name}' for {seconds}s; move one knob or press one button"
+        );
+        let deadline = Instant::now() + Duration::from_secs(seconds);
+        let mut messages = Vec::new();
+        while Instant::now() < deadline {
+            match receiver.recv_timeout(Duration::from_millis(100)) {
+                Ok((timestamp, message)) => {
+                    println!(
+                        "physical MIDI ingress timestamp={timestamp} bytes={}",
+                        message
+                            .iter()
+                            .map(|byte| format!("{byte:02X}"))
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                    );
+                    messages.push((timestamp, message));
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+        }
+
+        assert!(
+            !messages.is_empty(),
+            "physical MIDI input '{port_name}' produced no operator ingress during {seconds}s"
+        );
+        println!(
+            "physical MIDI ingress capture: {} message(s) from '{port_name}'",
+            messages.len()
+        );
+    }
+
+    #[test]
     #[ignore = "requires virtual MIDI ports named by SYNDOCAL_TEST_LOOP_MIDI_INPUT/OUTPUT"]
     fn virtual_midi_loopback_routes_control_through_production_midir_path() {
         let input_match = std::env::var("SYNDOCAL_TEST_LOOP_MIDI_INPUT")
