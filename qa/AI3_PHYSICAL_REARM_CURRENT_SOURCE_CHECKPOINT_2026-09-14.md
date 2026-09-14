@@ -72,3 +72,25 @@ matrix still needs a declared real output topology, acknowledged physical
 retirement, explicit re-Arm, hardware observation, and venue behavior. The
 additional Rust results therefore strengthen the software evidence only and
 do not alter the external acceptance status.
+
+## Takeover continuation — current-source re-Arm/replacement recheck — 2026-09-14
+
+At current source HEAD `e1e76de9`, the replacement/recovery source contracts
+were rerun:
+
+```text
+check:project-transaction: PASS (transaction and authority)
+check:project-recovery-e3: PASS (E3 production driver)
+check-project-transaction-recovery-controller: PASS (6 scenarios)
+check:output-control-runtime: PASS (including Standby Sync output-lease UI)
+check:output-ownership: PASS
+check:safety-blackout-runtime: PASS
+```
+
+All six commands exited `0`. They confirm source-side candidate/orphan,
+generation, receipt, output-retirement, ownership, and blackout boundaries;
+they opened no physical output and produced no hardware ACK or re-Arm result.
+
+`AI3-PHYSICAL-REARM-001` remains `Open` pending the exact artifact's physical
+New/Load/Recovery/Backup/Take Over matrix, acknowledged output retirement,
+explicit re-Arm, hardware observation, and venue evidence.
