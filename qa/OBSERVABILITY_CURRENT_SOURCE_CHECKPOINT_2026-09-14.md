@@ -130,3 +130,29 @@ and opened no device. The signed N to N+1 update/failure matrix,
 deployment/support drills, signing/publication, clean-machine recovery, and
 native/physical acceptance remain unproven, so `OBSERVABILITY-SUPPORT-001`
 stays `Open`.
+
+## Current HEAD observability-contract recheck — 2026-09-14
+
+At current HEAD `0c57c34f`, the status, release, diagnostics, updater, and
+redaction checks were rerun. `check:status` passed; the complete
+`check:release:self-test` passed release metadata (137 groups), AI0/AI1/
+AI2/AI4/AI5/AI6/AI7 self-tests, F1/F2 self-tests, ASIO packaging (169
+assertions), video output routing, Windows candidate extraction (43),
+verified materialization (4), Windows release-artifact validation (144), and
+strict JSON (130). The bundled-library runtime and the standalone Windows
+release-artifact self-test also exited `0`.
+
+With the exact MSVC `14.44.35207` Build Tools linker initialized and printed
+first in `where.exe link.exe`, focused release Rust tests passed:
+
+- `diagnostic_`: 37 passed, 0 failed, 0 ignored;
+- `updater_`: 3 passed, 0 failed, 0 ignored;
+- `project_replacement_is_redacted`: 1 passed, 0 failed, 0 ignored.
+
+The checks cover bounded diagnostic capture/publication, secret/path/ZIP
+redaction, updater identity and fail-closed configuration, project replacement
+redaction, and release artifact invariants. No update endpoint, signed
+publication, clean-machine install, external device, or support drill was
+performed. `OBSERVABILITY-SUPPORT-001` remains `Open` for the signed
+N-to-N+1 matrix, deployment/recovery drills, signing/publication, and
+native/physical acceptance.
