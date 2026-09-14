@@ -258,3 +258,44 @@ native button-by-button interaction, dangerous actions (Take, Blackout, Arm,
 Take Over, recording), native accessibility, physical output, external
 clients, venue/soak, signing, or publication. `UI-H5-CONTROL-001` remains
 `Open` for those boundaries.
+
+## Continuation — Video upper-desk repair and rendered recheck — 2026-09-14
+
+The current user-provided `2560x1504` screenshot exposed the Video
+Preview/Program row as too vertically compressed. The product CSS repair was
+made in `app/src/styles.css` and rebuilt into the exact release executable;
+the main, native mixer pop-out, and large fullscreen rules now allocate
+`60% / 40%` to the monitor row versus the lower Clip / Outputs+Layers row.
+The existing `max-height: 800px` `36% / 64%` operating-floor reflow remains
+unchanged. No typography, control, hit target, or output behavior was altered.
+
+The existing browser checker was strengthened in commit `1eb669cd` to measure
+the actual `.videoMixerTopPane` and `.videoMixerTopContent`. It now requires a
+minimum upper-desk share of `48%` at normal heights and `25%` at the existing
+short-height floor, in addition to requiring visible Preview/Program content.
+
+Rendered verification used the explicit user-installed browser because the
+Browser plugin is unavailable in this session:
+
+```text
+$env:CHROME_PATH = 'C:\Users\janua\AppData\Local\Google\Chrome\Application\chrome.exe'
+pnpm.cmd --dir app run check:control-upper-workspaces
+check:control-upper-workspaces passed:
+  3840x2160, 2560x1440, 1920x1080, 1280x720
+```
+
+All four viewports passed the new Video upper-desk geometry/content checks,
+the existing Lighting/Video/Both/Timeline reachability and containment
+checks, first-Escape focus return, and final CDP diagnostics. Every viewport
+reported zero runtime exceptions, console/log errors or warnings, and harness
+errors. Screenshots were written outside the repository under
+`C:\TEMP\syndocal-control-ui-after-20260914`; the 2560x1440 and 1920x1080
+Video screenshots were visually inspected and show the expanded
+Preview/Program surface with the lower Clip, Outputs, and Layers panes still
+contained.
+
+`UI-H5-CONTROL-001` remains `Open`: this continuation proves the rendered
+layout repair and safe browser reachability only. Native button-by-button
+dangerous Control actions, native accessibility, physical output, external
+clients, recovery rehearsal, venue/soak, signing, and publication remain
+unaccepted.
