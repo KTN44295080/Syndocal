@@ -72,3 +72,27 @@ contracts only. It opened no real LAN/TLS listener, external Remote/Touch
 client, public endpoint, RDM/TOD device, or adversarial network harness.
 `REMOTE-SECURITY-001` remains `Open` for those external matrices, plus the
 dependency/SBOM/redaction and updater trust review.
+
+## Current HEAD security-contract recheck — 2026-09-14
+
+At current HEAD `0abe297d`, the complete current-source security contract
+set was rerun. The Node checks passed for Agent Bridge (11 groups), deferred
+bootstrap lifecycle (4 groups), exact Tauri admission inventory (539 commands
+with 18 negative fixtures rejected), fake loopback MCP adapters (15 groups),
+strict JSON (130 assertions), output ownership, AI5 sidecar transport, AI6
+administration UI, and AI7 adversarial source contracts.
+
+The exact MSVC `14.44.35207` Build Tools linker was initialized and printed
+first in `where.exe link.exe`. The release Rust filters then passed
+`18` `agent_bridge` tests and `46` `control_plane` tests,
+with no failures or ignored tests. The Rust coverage includes authority
+pairing/revocation, nonce and request binding, grant admission, safe-mode
+boundaries, exact-once/replay behavior, reload/restart fencing, output-control
+authority, receipt/tombstone handling, rate limits, takeover, and project
+replacement redaction.
+
+This is current-source local security evidence only. No real LAN/TLS listener,
+external Remote/Touch client, public endpoint, RDM/TOD device, or adversarial
+network harness was opened. `REMOTE-SECURITY-001` remains `Open` for the
+external exposure, physical cancellation, dependency/SBOM/redaction, updater
+trust, and complete bypass-review matrices.
