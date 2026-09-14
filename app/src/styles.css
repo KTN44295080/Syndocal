@@ -37590,6 +37590,18 @@ a[href]:focus-visible,
   grid-template-rows: 36px minmax(0, 0.60fr) 5px minmax(0, 0.40fr);
 }
 
+/* A large physical display can expose this desk as a short CSS viewport when
+   Windows high-DPI scaling is active (for example 2560x1504 at 2x becomes
+   roughly 1280x752 CSS px). That is not the low-DPI operating floor: preserve
+   the monitor-first desk proportion for this high-DPI case while leaving the
+   ordinary 1280x720 reflow unchanged. */
+@media (max-height: 800px) and (min-width: 1200px) and (min-resolution: 144dpi) {
+  .layoutControl.controlModeMixer .videoControlPanelMixer {
+    grid-template-columns: minmax(390px, 1.1fr) minmax(520px, 1fr);
+    grid-template-rows: 36px minmax(0, 0.60fr) 5px minmax(0, 0.40fr);
+  }
+}
+
 /* The monitor frame may use all of its bounded grid cell.  Its media remains
    letterboxed by the existing object-fit: contain rule, so this removes only
    the intrinsic 16:9 minimum that could otherwise paint outside a short top

@@ -506,3 +506,56 @@ Transition, Blackout/Arm/Take Over, recording, diagnostics, failure/recovery,
 and native interaction/accessibility proof. The three-display topology is now
 recorded as observed supporting evidence, not as a substitute for those
 workflow checks.
+
+## Continuation — high-DPI Video upper-desk repair final checkpoint — 2026-09-15
+
+The user-reported upper Video surface was repaired in the product stylesheet.
+The ordinary short-height `1280x720` reflow remains `36% / 64%`; only a large
+physical display exposed through a high-DPI CSS viewport (`min-width:
+1200px`, `min-resolution: 144dpi`, `max-height: 800px`) receives the
+monitor-first `60% / 40%` allocation. This keeps Preview, Program, Preview
+Transport, and Master visible without changing typography, control sizes, hit
+targets, output routing, saved workspace ratios, display count, or display
+role assumptions. The change is in `app/src/styles.css`; the outer workspace
+split and the three-display observation are not part of this UI repair.
+
+Validation was run from the current branch after the source change based on
+`f3bc74c2`:
+
+```text
+pnpm.cmd --dir app run build
+  PASS: TypeScript and Vite build, 358 modules transformed.
+  Existing Vite advisory: some chunks exceed 500 kB; no new first-party
+  compiler/runtime warning was introduced.
+
+CHROME_PATH=C:\Users\janua\AppData\Local\Google\Chrome\Application\chrome.exe
+pnpm.cmd --dir app run check:control-upper-workspaces
+  PASS: 3840x2160, 2560x1440, 2560x1504, 1920x1080, 1280x720,
+        and 2560x1504-2x (CSS 1280x752, deviceScaleFactor=2).
+  PASS: first-Escape focus return and final CDP diagnostics at all six cases;
+        runtime exceptions, console/log errors and warnings, and harness
+        errors were zero.
+
+pnpm.cmd --dir app run check:native-window
+  PASS: -MinimumMaximizedClient 2560x1500,
+        -ExpectedFullscreen 2560x1600,
+        report C:\TEMP\syndocal-native-h5-fixed-20260915-final3\native-window-acceptance.json.
+  PASS: maximized 2560x1504, F11 2560x1600, Esc restore 2560x1504.
+  PASS: native Control Lighting/Video/Both/Timeline safe surface and
+        semantic-state probe; Stage/Timeline detach in both orders;
+        restart-with-detached-records; main reload child adoption; direct
+        Stage-child close reintegration; final full reintegration.
+  PASS: pinned MSVC 14.44.35207 linker was printed and matched where.exe.
+```
+
+The final native screenshots show a readable Preview/Program monitor row and
+contained lower Clip/Outputs/Layers panes at the current physical desktop.
+The native checker action boundary remained safe-only: it did not dispatch
+output selection, recording, Take, blackout, Arm, Take Over, or device
+actions. This is current-source Video layout plus safe native structure and
+pane lifecycle evidence; it does not close `UI-H5-CONTROL-001`. Live
+Lighting/Video/Audio operation, dangerous workflow dispatch, native
+accessibility, physical output, external clients, failure/recovery rehearsal,
+venue/soak, signing, and publication remain the actual H5 residuals. The
+three-display role-profile result remains separate supporting topology data,
+not a blocker or substitute for those workflows.
