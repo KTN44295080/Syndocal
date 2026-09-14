@@ -1122,3 +1122,8 @@ The `ASIO-FAULT-MATRIX-001` current-source recheck at HEAD `1fcb675d` passed
 the SDK-independent bridge suite (`31` tests) and ABI-v3 (`22` assertions),
 with zero failures/ignored tests. No real ASIO driver fault matrix was run;
 occupy/reset/XRUN/unplug/recovery acceptance remains Open.
+
+The `ASIO-SOAK-001` current-source preflight at HEAD `767f1318` passed the
+live-audio fail-closed lifecycle, availability, persistence, presentation, and
+ordering check. No ASIO/WASAPI device or long-duration stream was opened; the
+one-hour physical soak and telemetry remain Open.

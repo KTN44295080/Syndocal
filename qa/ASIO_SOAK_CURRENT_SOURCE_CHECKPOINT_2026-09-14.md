@@ -42,3 +42,12 @@ driver, or long-duration behavior.
 
 Next action is a matched one-hour ASIO/WASAPI run on the approved artifact with
 raw time-series logs and the stated thresholds recorded.
+
+## Takeover continuation — current-source soak preflight — 2026-09-14
+
+At HEAD `767f1318`, `pnpm.cmd --dir app run check:live-audio` passed the
+fail-closed lifecycle, availability, explicit selection persistence,
+presentation, and request-ordering contract. No ASIO or WASAPI device was
+opened and no long-duration stream, thermal, clock-drift, callback, or latency
+artifact was produced. `ASIO-SOAK-001` remains `Open` pending the matched
+one-hour physical ASIO/WASAPI run.
