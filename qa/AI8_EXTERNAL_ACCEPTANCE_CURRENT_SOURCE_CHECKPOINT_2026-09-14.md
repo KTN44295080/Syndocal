@@ -88,3 +88,26 @@ Syndocal or a device.
 `AI8-EXTERNAL-ACCEPTANCE-001` remains `Open` pending clean installation,
 native external clients, restart/update/security review, signing/publication,
 and physical-output acceptance.
+
+## Continuation — current artifact external-acceptance boundary recheck — 2026-09-14
+
+After the current release rebuild and Video desk repair at HEAD `5a1d666f`,
+the local bridge and parser contracts were rerun:
+
+```text
+check:agent-bridge: PASS (11 groups)
+check-agent-bridge-bootstrap: PASS (4 deferred lifecycle groups)
+check-tauri-admission-inventory: PASS (539 commands; 18 negative fixtures rejected)
+tools/syndocal-mcp/check.mjs: PASS (15 adapter integration groups; fake loopback only)
+check:strict-json: PASS (130 assertions)
+```
+
+All five commands exited `0`. They strengthen only the current local
+processor, lifecycle, admission, adapter, and strict-parser boundaries. No
+real external client, clean-machine install, release endpoint, update/restart
+drill, signing service, public-network review, or physical output was
+contacted. The fake MCP loopback does not call Syndocal or a device.
+
+`AI8-EXTERNAL-ACCEPTANCE-001` remains `Open` pending clean installation,
+native external clients, restart/update/security review, signing/publication,
+and physical-output acceptance.
