@@ -11943,6 +11943,17 @@ async function measure(client, label) {
         })
         .map((element) => element.getAttribute('data-touch-binding') + ':' +
           (element.querySelector('.touchPlacedButton')?.textContent || '').trim()),
+      touchPlacedContentContained: [...document.querySelectorAll('[data-touch-control] .touchPlacedImage')]
+        .filter((element) => {
+          const tile = element.closest('[data-touch-control]');
+          if (!(tile instanceof HTMLElement) || !(element instanceof HTMLElement)) return false;
+          const tileRect = tile.getBoundingClientRect();
+          const imageRect = element.getBoundingClientRect();
+          const childRects = [...element.children].map((child) => child.getBoundingClientRect());
+          return imageRect.top >= tileRect.top - 1 &&
+            imageRect.bottom <= tileRect.bottom + 1 &&
+            childRects.every((rect) => rect.top >= imageRect.top - 1 && rect.bottom <= imageRect.bottom + 1);
+        }).length === document.querySelectorAll('[data-touch-control] .touchPlacedImage').length,
       touchSurfaceWorkspaceFill: (() => {
         const layout = document.querySelector('.layoutTouch');
         const surface = document.querySelector('[data-touch-surface]');
@@ -13414,6 +13425,7 @@ function hasExpectedTouchSurface(result) {
     result.visibleTouchSafetyGuardButtonCount === 0 &&
     globalBindingContractPassed &&
     result.touchTopbarDuplicateControls.length === 0 &&
+    result.touchPlacedContentContained &&
     sharedUpperLowerLayout &&
     result.visiblePersistentBandCount === 1 &&
     result.visiblePersistentGroupsCount === 1 &&
@@ -16261,12 +16273,9 @@ function readTopbarPulseStateInPage() {
     ":scope > .topbarProject > strong",
     ":scope > .topbarProject > span",
     ":scope > .status",
-    ":scope > .status > .bpmReadout",
-    ":scope > .status > .bpmReadout > small",
-    ":scope > .status > .bpmReadout > strong",
-    ":scope > .status > .pill",
-    // .tickMetric / .outputMetric consolidated into .pill (see normal-density
-    // requiredTopbarDragRegionSelectors). Removed header masters leave 10.
+    // BPM is an interactive control and the two status pills are read-only
+    // children of the status drag surface; none of them may become drag
+    // regions themselves.
   ];
   const missingDragRegionSelectors = requiredDragRegionSelectors.filter((selector) => {
     const element = selector === ":scope" ? topbar : topbar?.querySelector(selector);
@@ -16512,9 +16521,9 @@ async function runTopbarPulseViewport(client, viewport) {
       projectMenu.saveShortcut.includes("Control+S") &&
       projectMenu.loadShortcut.includes("Control+O"),
     emptyTopbarSurfacesAreDragRegionsOnly:
-      // The header no longer owns the two persistent master sliders, so its
-      // exact background drag-surface count is 10 rather than 11.
-      stopped.requiredDragRegionSurfaceCount === 10 &&
+      // Only non-interactive chrome surfaces are drag regions. Interactive
+      // controls must remain available for clicks and pointer editing.
+      stopped.requiredDragRegionSurfaceCount === 6 &&
       stopped.missingDragRegionSelectors.length === 0 &&
       stopped.interactiveDragRegionCount === 0 &&
       projectMenu.interactiveDragRegionCount === 0,
@@ -16523,7 +16532,7 @@ async function runTopbarPulseViewport(client, viewport) {
       stopped.controlCounts.masters === 0 &&
       stopped.controlCounts.bpm === 1 &&
       stopped.controlCounts.tap === 1 &&
-      stopped.controlCounts.live === 1 &&
+      stopped.controlCounts.live === 2 &&
       stopped.controlCounts.project === 0 &&
       stopped.controlCounts.window === 3 &&
       stopped.statusOverflowX <= 1 &&

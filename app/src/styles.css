@@ -31295,6 +31295,25 @@ h3 {
   white-space: nowrap;
 }
 
+/* A one-row Image tile is only 48px tall in the shared Touch grid. Keep its
+   icon and label inside that authored tile instead of letting the label paint
+   through the bottom border on the native high-DPI surface. Larger Image
+   tiles retain the original visual scale. */
+.touchPlacedControl.compact.kind-Image > .touchPlacedImage {
+  gap: 1px;
+  padding: 1px 3px;
+}
+
+.touchPlacedControl.compact.kind-Image > .touchPlacedImage > span {
+  font-size: 20px;
+  line-height: 1;
+}
+
+.touchPlacedControl.compact.kind-Image > .touchPlacedImage > strong {
+  font-size: 11px;
+  line-height: 1.1;
+}
+
 .app .layoutTouch .touchPlacedButton {
   width: 100%;
   height: 100%;
@@ -36945,6 +36964,9 @@ a[href]:focus-visible,
   border-color: #6f3a3a;
   color: #e7bcbc;
   font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .status .topbarTransportCluster > .topbarSafetyButton.engaged {
@@ -40144,6 +40166,17 @@ button.timelineExternalSourceCard:active,
 
 .timelineFollowEditor {
   padding: 10px;
+}
+
+.timelineFollowRuntimeDetails > div {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.timelineFollowRuntimeDetails > div > .timelineFollowState {
+  margin-left: auto;
 }
 
 .timelineFollowEditor legend {

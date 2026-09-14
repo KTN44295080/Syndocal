@@ -559,3 +559,123 @@ accessibility, physical output, external clients, failure/recovery rehearsal,
 venue/soak, signing, and publication remain the actual H5 residuals. The
 three-display role-profile result remains separate supporting topology data,
 not a blocker or substitute for those workflows.
+
+## Continuation — all-screen UI clipping review and repair — 2026-09-15
+
+This checkpoint covers the user-reported high-DPI upper-screen collapse and a
+fresh visual review of the shared workspace surfaces. The checkout was at
+`d72af1cb698a2c8ce5b3f91f142765d31d2278aa` before this working-tree change on
+`codex/showclock-review-20260912`; the product changes and this checkpoint are
+owned by the current task.
+
+The review found and repaired three concrete presentation defects:
+
+1. On the exact native release window at physical `2560x1504`, effective DPI
+   `192` / scale `2` (CSS `1280x752`), the engaged Safety blackout label was
+   longer than its fixed action button and painted into the adjacent DMX/VID/
+   ALL controls. The action now shows the compact `SAFE` label, retains the
+   explicit `Release safety blackout` accessible name, and has overflow
+   containment as a rendering backstop. No safety action was dispatched during
+   the repair check.
+2. The default Touch Image tile is one shared grid row (`48px`) high. Its
+   default icon/label stack painted the `Touch Stage` label through the tile
+   border on the native high-DPI surface. One-row Image tiles now use a local
+   compact layout; larger Image tiles keep their original scale. The Touch
+   containment checker now asserts that the Image content and all children stay
+   within the authored tile.
+3. Timeline Follow runtime status had insufficient separation at the compact
+   width, rendering as `Runtimetransitioning 50%`. The runtime details row now
+   uses an explicit gap and right-aligned state label so the two texts remain
+   legible.
+
+The affected product files are `app/src/components/WorkspaceChrome.tsx`,
+`app/src/components/EditableTouchSurface.tsx`, and `app/src/styles.css`. The
+focused containment contract synchronization is in
+`app/scripts/check-viewport-containment.mjs`: it reflects the actual six
+non-interactive topbar drag surfaces and two read-only Live/status pills, and
+adds the compact Touch Image containment assertion.
+
+Validation on the repaired source:
+
+```text
+pnpm.cmd --dir app run build
+  PASS: TypeScript/Vite build, 358 modules transformed.
+  Existing Vite advisory: chunks over 500 kB; no new first-party warning.
+
+CHROME_PATH=C:\Users\janua\AppData\Local\Google\Chrome\Application\chrome.exe
+pnpm.cmd --dir app run check:control-upper-workspaces
+  PASS: 3840x2160, 2560x1440, 2560x1504, 1920x1080, 1280x720,
+        2560x1504-2x / CSS 1280x752 / deviceScaleFactor 2.
+  PASS: Lighting, Video, Both, Timeline, first-Escape focus return, and final
+        CDP diagnostics at every case; runtime/console/log/harness errors and
+        warnings were zero.
+
+pnpm.cmd --dir app run check:topbar-pulse
+  PASS: 1280x720; overflow=0, six drag surfaces, zero interactive drag
+        surfaces, Live/status controls=2.
+
+pnpm.cmd --dir app run check:video-setup-viewport
+  PASS: 1920x1080, 1920x1032, 2048x1152, 1366x768, 1280x720; all mapping,
+        preview, Advanced-disclosure, scroll, dock, and containment checks.
+
+node app/scripts/check-viewport-containment.mjs --setup-io-only
+  PASS: 1920x1080, 1920x1032, 2048x1152, 1366x768, 1280x720; six setup
+        cards, disclosure reachability, routing controls, and zero overflow.
+
+node app/scripts/check-viewport-containment.mjs --patch-only
+  PASS: continuous Patch, DnD, GDTF share, empty-state, and responsive-scaling
+        cases across 1920x1080, 1920x1032, 2048x1152, 1366x768, and 1280x720.
+
+pnpm.cmd --dir app run check:touch
+  PASS: all five Touch viewports and Default Desk/Viewport Touch modes;
+        zero page scroll and compact Image content containment.
+
+pnpm.cmd --dir app tauri build --no-bundle
+  PASS: current `target/release/syndocal.exe`; pinned MSVC 14.44.35207 x64
+        linker matched `where.exe link.exe`.
+  Release SHA-256:
+        fab4c9bc89d60ff72398896419022477c0ef29c559b2ed5f692e50f991d1e61f
+
+node app/scripts/run-native-window-acceptance.mjs -MinimumMaximizedClient 2560x1500 -ExpectedFullscreen 2560x1600 -EvidenceDir C:\TEMP\syndocal-native-ui-final-20260915
+  PASS: evidence C:\TEMP\syndocal-native-ui-final-20260915\
+        native-window-acceptance.json.
+  PASS: maximized 2560x1504, F11 2560x1600, Esc restore 2560x1504;
+        safe Control Lighting/Video/Both/Timeline surface; Stage/Timeline
+        detach in both orders; restart with detached records; main reload
+        adoption; direct Stage-child close reintegration; final reintegration.
+  Safe native action boundary: no output, recording, Take, blackout, Arm,
+  Take Over, or device action was dispatched. Two record-retirement boundary
+  cases remain explicitly unverified in the report.
+
+Exact release process observation:
+  PID 59264; one exact-path `Syndocal` candidate; one visible titled main
+  window; responding=true; maximized=true; client 2560x1504; monitor
+  2560x1600; effective DPI 192; CSS viewport 1280x752.
+```
+
+The latest exact release screenshot is
+`C:\TEMP\syndocal-ui-final-release-20260915.png`. The rendered Touch and
+Timeline screenshots are under
+`C:\TEMP\syndocal-touch-ui-after-20260915\` and
+`C:\TEMP\syndocal-control-ui-checkpoints\`; visual inspection shows the
+`Touch Stage` label fully inside its tile, separate topbar controls, and the
+Timeline `Runtime` / `transitioning 50%` labels separated.
+
+The browser-plugin surface was unavailable, so the rendered checks used the
+repository's Playwright/CDP fallback with the installed Chrome executable.
+The broad legacy `check:viewport` runner remains a harness/selector mismatch
+(`data-control-mode-option="both"` is absent in that stale route); it was not
+used to manufacture a pass. Cleanup emitted only intermittent `EBUSY` for
+temporary Chrome `CrashpadMetrics-active.pma` files while the affected checks
+still exited `0`.
+
+The Q4 mirror now records this bounded review as
+`EV-UI-H5-ALL-SCREEN-REVIEW-CURRENT-2026-09-15` (`q4_evidence=123`). This
+evidence accepts current-source rendered containment, focus return,
+diagnostics, exact release build/process smoke, and safe native pane
+lifecycle. It does not close `UI-H5-CONTROL-001`: native button-by-button
+live/dangerous workflows, native accessibility matrix, physical output,
+external clients, failure/recovery rehearsal, venue/soak, signing,
+publication, and product-wide completion remain separate gates. The observed
+three-display topology and its role-profile result also remain separate from
+this UI repair.

@@ -712,7 +712,7 @@ export function EditableTouchSurface(props: EditableTouchSurfaceProps) {
             const displayed = () => displayedControl(control);
             return (
               <div
-                class={`touchPlacedControl kind-${control.kind} ${selectedControlId() === control.id ? "selected" : ""}`}
+                class={`touchPlacedControl kind-${control.kind} ${control.h <= 1 ? "compact" : ""} ${selectedControlId() === control.id ? "selected" : ""}`}
                 style={controlGridStyle(displayed())}
                  data-touch-control={control.id}
                  data-touch-kind={control.kind}
