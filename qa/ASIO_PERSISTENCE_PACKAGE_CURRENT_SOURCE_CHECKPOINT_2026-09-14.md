@@ -89,3 +89,26 @@ or package artifact was produced by that attempt.
 `ASIO-PERSISTENCE-PACKAGE-001` remains `Open`. Completion still requires the
 approved artifact's native telemetry, stale/ambiguous device-lock rehearsal,
 exact executable/bridge identity, licensing decision, and final package review.
+
+## Takeover continuation — current-source persistence/package recheck after Video repair — 2026-09-14
+
+At current source HEAD `cdfbd152`, the focused contracts were rerun:
+
+```text
+pnpm.cmd run check:live-audio
+live audio fail-closed lifecycle, availability contract, selection persistence,
+presentation, and request ordering ok
+
+pnpm.cmd run check:live-audio-ipc-v1
+live audio IPC v1 exact request mapping and fail-closed checks ok
+
+pnpm.cmd run check:asio-packaging
+ASIO packaging boundary self-test passed: 169 assertions
+```
+
+All commands exited `0`. Selection persistence, exact IPC mapping, normal
+package runtime inventory, rejection of ASIO bridge payloads/globs and retired
+names, and SDK-pin/distribution-approval protection remain enforced. No
+licensed/public ASIO artifact, native stale-device or ambiguous-device
+rehearsal, installer/updater overlay, exact artifact identity record, or final
+package review was performed. `ASIO-PERSISTENCE-PACKAGE-001` remains `Open`.
