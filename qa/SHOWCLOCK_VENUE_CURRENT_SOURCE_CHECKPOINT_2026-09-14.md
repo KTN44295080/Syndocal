@@ -75,3 +75,35 @@ software checkpoint. This is continuity evidence only. No real network switch,
 second machine, power-loss/crash/restart replay, stale-peer rejoin, device-loss
 or physical-output observation was performed, and no zero-simultaneous-output
 venue rehearsal was proven. `SHOWCLOCK-VENUE-001` remains `Open`.
+
+## Takeover continuation — current-source ShowClock venue-boundary recheck after Video repair — 2026-09-14
+
+At current source HEAD `6346ae7b`, the focused ShowClock protocol, LAN, IPC,
+and two-process loopback tests were rerun with the exact Build Tools MSVC
+`14.44.35207` x64 linker initialized and printed first by `where.exe link.exe`:
+
+```text
+CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+
+cargo test -p protocol --release --locked -j 1 show_clock -- --nocapture --test-threads=1
+21 passed; 0 failed; 0 ignored
+
+cargo test -p io --release --locked -j 1 show_clock_lan -- --nocapture --test-threads=1
+3 passed; 0 failed; 0 ignored
+
+cargo test --manifest-path app/src-tauri/Cargo.toml --release --locked -j 1 show_clock_ipc::tests -- --nocapture --test-threads=1
+7 passed; 0 failed; 0 ignored
+
+cargo test -p io --release --locked -j 1 --test show_clock_two_process -- --nocapture --test-threads=1
+2 passed; 0 failed; 0 ignored
+```
+
+All four commands exited `0`. Authenticated admission, generation/fence
+policy, Manual Hold/Re-arm, paired loopback, Tauri IPC lifecycle, and the
+two-process software boundary remain green. No real network switch, second
+machine, power-loss/crash/restart replay, stale-peer rejoin, device-loss
+recovery, or physical-output observation was performed; no zero-simultaneous-
+physical-output venue rehearsal was proven. `SHOWCLOCK-VENUE-001` remains
+`Open` pending the named two-machine run, failure timeline, raw ShowClock
+logs, owner transitions, and physical observation.
