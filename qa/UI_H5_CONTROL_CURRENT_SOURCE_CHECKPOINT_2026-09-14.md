@@ -452,3 +452,31 @@ does not establish current-source H5 acceptance, native button-by-button live
 workflow, accessibility, physical output, external clients, recovery,
 venue/soak, signing, publication, or product completion. `UI-H5-CONTROL-001`
 remains `Open`.
+
+## Continuation — current rendered upper-workspace recheck — 2026-09-15
+
+At current source HEAD `38c4b45f`, the browser fallback was rerun with the
+explicit installed Chrome executable. All six viewport cases passed:
+
+```text
+3840x2160: Lighting upper=1199px; Timeline upper=1153px; lanes=6; sources=4
+2560x1440: Lighting upper=781px; Timeline upper=735px; lanes=6; sources=4
+2560x1504: Lighting upper=818px; Timeline upper=772px; lanes=6; sources=4
+1920x1080: Lighting upper=573px; Timeline upper=527px; lanes=6; sources=4
+1280x720: Lighting upper=295px; Timeline upper=245px; lanes=6; sources=4
+1280x752 high-DPI equivalent: Lighting upper=327px; Timeline upper=284px; lanes=6; sources=4
+```
+
+Every case passed first-Escape focus return and reported zero runtime
+exceptions, console/log errors or warnings, and harness errors. The repair
+therefore remains effective for the reported physical `2560x1504` surface and
+its high-DPI equivalent; the low-DPI short-height floor remains intact. This
+run used rendered browser fixtures only and did not click the running native
+window, dispatch Control actions, access hardware, or contact an external
+client.
+
+The Q4 ledger records this rerun as
+`EV-UI-H5-BROWSER-RERUN-CURRENT-2026-09-15`. `UI-H5-CONTROL-001` remains
+`Open` because native button-by-button live/dangerous workflows, native
+accessibility, physical output, external clients, recovery, venue/soak,
+signing, and publication are still unaccepted.
