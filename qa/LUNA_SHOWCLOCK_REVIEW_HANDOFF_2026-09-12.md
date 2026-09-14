@@ -1009,3 +1009,12 @@ touch output. `AI3-DURABLE-ACCEPTANCE-001` therefore remains `Open` for the
 named native No/Close, reply-loss/crash-restart, physical ACK, and five-display
 acceptance boundaries; the authoritative ledger remains `27 Complete`,
 `8 Deferred`, `23 Open` (`58` total).
+
+The next `AI3-PHYSICAL-REARM-001` source checkpoint then ran the current
+replacement Rust tests under the exact Build Tools MSVC `14.44.35207` x64
+linker. `project_replacement` passed 7 tests, and the focused input-retirement
+and output-lease atomicity tests passed 1 each, all with zero failures and
+zero ignored tests. The result confirms the software-side fencing/retirement
+boundary but does not claim physical output retirement, hardware ACK, or
+re-Arm; the marker remains Open. The detailed record is in
+`qa/AI3_PHYSICAL_REARM_CURRENT_SOURCE_CHECKPOINT_2026-09-14.md`.

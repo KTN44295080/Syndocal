@@ -43,3 +43,32 @@ Run the replacement matrix on the exact current artifact with a declared
 physical-output topology. Capture pre/post owner, project/lease generations,
 Blackout state, operator confirmation, re-Arm result, and hardware observation
 for every path; stop and record the first failure.
+
+## Takeover continuation — current Rust replacement boundary — 2026-09-14
+
+The exact current source at `423d9f4c2645543a6b80bb61ca5d5b5174caf289` was
+also exercised with the pinned Visual Studio 2022 Build Tools MSVC
+`14.44.35207` x64 linker. The release target was compiled with
+`CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER` pinned to the exact linker and
+verified first by `where.exe`. The focused replacement filter passed 7 tests:
+
+```text
+project_replacement: 7 passed / 0 failed / 0 ignored
+project_control_retirement_joins_before_publish_and_releases_partial_takes:
+1 passed / 0 failed / 0 ignored
+output_lease_app_state_retirement_and_project_preflight_are_atomic:
+1 passed / 0 failed / 0 ignored
+```
+
+The tested source boundary covers Standby-worker join before the fenced swap,
+output-retirement failure without publication, no local-state commit before
+publication ACK, infallible post-ACK finalization, old-project lease orphaning,
+input/control retirement before publication, and atomic output-lease project
+preflight. These are current-source Rust fixtures and do not open a physical
+DMX/Art-Net/video/audio output device.
+
+The marker remains `Open`. The required New/Load/Recovery/Backup/Take Over
+matrix still needs a declared real output topology, acknowledged physical
+retirement, explicit re-Arm, hardware observation, and venue behavior. The
+additional Rust results therefore strengthen the software evidence only and
+do not alter the external acceptance status.
