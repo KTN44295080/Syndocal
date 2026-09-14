@@ -70,3 +70,29 @@ native transport observation.
 `AI3-NATIVE-INGRESS-001` remains `Open` for native OSC/DMX/Remote clients,
 real Art-Net and fixture behavior, controller movement, Clock/MTC, feedback,
 reconnect, latency, and venue evidence.
+
+## Takeover continuation — current-source ingress/admission recheck — 2026-09-14
+
+At current source HEAD `1fae0a52`, the ingress source contracts were rerun:
+
+```text
+check:frontend-command-routing: PASS (133 renderer, 31 server-authoritative,
+28 raw, 479 facade dispatches)
+check-tauri-admission-inventory: PASS (539 commands; 18 negative fixtures rejected)
+check:output-control-runtime: PASS (including Standby Sync output-lease UI)
+check:output-ownership: PASS
+check:safety-blackout-runtime: PASS
+check:dvc-midi-shortcuts: PASS (39 assertions)
+check-dvc-dmx-shortcuts: PASS (41 assertions)
+check:agent-bridge: PASS (11 groups)
+```
+
+All eight commands exited `0`. They confirm current-source routing,
+admission, output ownership, safety, DVC shortcut, and Agent Bridge boundaries
+only. No native OSC/Remote client, real Art-Net node/fixture, Clock/MTC
+controller, reconnect path, or new physical output was opened; the existing
+SMC-Mixer All Notes Off slice remains partial evidence.
+
+`AI3-NATIVE-INGRESS-001` remains `Open` pending the named native client and
+hardware matrix with movement, feedback/Clock/MTC, reconnect, latency, and
+venue evidence.
