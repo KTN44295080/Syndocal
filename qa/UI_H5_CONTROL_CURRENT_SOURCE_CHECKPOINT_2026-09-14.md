@@ -480,3 +480,29 @@ The Q4 ledger records this rerun as
 `Open` because native button-by-button live/dangerous workflows, native
 accessibility, physical output, external clients, recovery, venue/soak,
 signing, and publication are still unaccepted.
+
+## Correction — current three-display topology — 2026-09-15
+
+A later read-only recheck confirmed that the current Windows desktop exposes
+three connected displays. The earlier two-display observation is superseded
+for the current host:
+
+```text
+DISPLAY1: 2560x1600, effective DPI 192, work area 2560x1504
+DISPLAY2: 1920x1200, effective DPI 96,  work area 1920x1152
+DISPLAY3: 3840x2160, effective DPI 144, work area 3840x2088
+```
+
+The same read-only harness returned `verdict: not-configured` and
+`accepted: false` because its separate StandardRelease role profile expects
+1920x1080 editor/LED surfaces and a 3840x2160 projector. No settings were
+changed, windows moved, outputs created, or hardware touched. This is a
+role-profile result, not evidence that a third display is absent and not a
+reason to treat display size as the H5 workflow itself.
+
+`UI-H5-CONTROL-001` remains `Open` only for the separately defined native
+Control workflow evidence: live Lighting/Video/Audio, Cue/Clip/Take/
+Transition, Blackout/Arm/Take Over, recording, diagnostics, failure/recovery,
+and native interaction/accessibility proof. The three-display topology is now
+recorded as observed supporting evidence, not as a substitute for those
+workflow checks.
