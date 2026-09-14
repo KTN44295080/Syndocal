@@ -402,3 +402,27 @@ process-smoke evidence. It does not establish native button-by-button
 interaction, native accessibility, the current three-display acceptance gate,
 physical output, external clients, recovery, venue/soak, signing, publication,
 or product completion. `UI-H5-CONTROL-001` remains `Open`.
+
+## Continuation — current three-display preflight recheck — 2026-09-15
+
+The read-only three-display preflight was rerun after the latest display
+change:
+
+```text
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File qa/harnesses/run-syndocal-three-display-show-acceptance.ps1 -EvidenceSlug current-three-display-preflight-20260915c
+verdict: not-configured
+accepted: false
+```
+
+The live DisplayConfig inventory still contains exactly two connected
+monitors. `DISPLAY1` is `2560x1600` with work area `2560x1504` and effective
+DPI `192`; `DISPLAY2` is `1920x1200` with work area `1920x1152` and effective
+DPI `96`. The expected third stable monitor identity is absent, so the
+harness did not apply settings, move or maximize windows, create outputs,
+touch hardware, inject input, or claim any three-display acceptance.
+
+`UI-H5-CONTROL-001` remains `Open`. The next safe native three-display step is
+to rerun the same read-only preflight once Windows exposes the third monitor,
+then bind the exact stable identities and current release artifact before any
+output-window acceptance. The missing monitor is an environment boundary, not
+a product pass.
