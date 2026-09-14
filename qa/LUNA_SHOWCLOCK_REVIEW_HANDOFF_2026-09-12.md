@@ -691,6 +691,15 @@ the logical client boundary still does not satisfy the required `1920x1000` /
 `1920x1080` gate. This result is recorded in the H5 and accessibility
 checkpoints; it does not provide native UI or accessibility evidence.
 
+The native gate's static/self-test path was then run independently and passed
+`81 checks / 0 failed`, including dimension contracts, pane expectations, CDP
+loopback ownership, process-lineage rejection, and fail-closed negative cases.
+This confirms the acceptance checker is healthy; it does not convert the
+live-display size failure into native acceptance. The retained local
+`chatgpt/macos-artifact-validation` branch was also re-audited: it contains
+unique unmerged thumbnail-admission/cancellation commits relative to `main`,
+so it remains preserved rather than being treated as an orphan.
+
 Current-source verification passed for TypeScript, Vite build, localization,
 renderer routing, shortcut/workspace contracts, the full static release chain,
 and the pinned Windows MSVC `14.44.35207` no-bundle native build. The exact
