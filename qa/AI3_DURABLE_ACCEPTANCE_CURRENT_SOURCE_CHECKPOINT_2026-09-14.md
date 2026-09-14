@@ -73,3 +73,26 @@ marker remains `Open`; the required native No/Close observation, reply-loss
 and crash/restart run, physical creation/teardown acknowledgement, and
 five-display hardware acceptance are still unproven. No ledger status or
 Q1/Q4 evidence count was changed from this source-only recheck.
+
+## Takeover continuation — current-source durable-acceptance recheck — 2026-09-14
+
+At current source HEAD `26e6d390`, the durable/recovery source contracts were
+rerun:
+
+```text
+check:agent-bridge: PASS (11 groups)
+check-agent-bridge-bootstrap: PASS (4 deferred lifecycle groups)
+check-tauri-admission-inventory: PASS (539 commands; 18 negative fixtures rejected)
+check:project-recovery-e3: PASS
+check:output-control-runtime: PASS (including Standby Sync output-lease UI)
+check:output-ownership: PASS
+```
+
+All six commands exited `0`. The source confirms durable journal/admission,
+project recovery, output-control, ownership, and native-confirmation wiring;
+it did not open a native dangerous-action dialog or perform reply-loss,
+crash/restart, physical creation/teardown ACK, or five-display hardware work.
+
+`AI3-DURABLE-ACCEPTANCE-001` remains `Open` pending the exact artifact's
+native Yes/No/Close workflow, external-client reply-loss/restart matrix,
+physical ACKs, and five-display hardware acceptance.
