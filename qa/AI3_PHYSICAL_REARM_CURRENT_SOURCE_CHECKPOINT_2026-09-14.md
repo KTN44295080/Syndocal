@@ -94,3 +94,28 @@ they opened no physical output and produced no hardware ACK or re-Arm result.
 `AI3-PHYSICAL-REARM-001` remains `Open` pending the exact artifact's physical
 New/Load/Recovery/Backup/Take Over matrix, acknowledged output retirement,
 explicit re-Arm, hardware observation, and venue evidence.
+
+## Continuation — current artifact re-Arm boundary recheck — 2026-09-14
+
+After the current Video desk release rebuild at HEAD `326e7de1`, the six
+source-side checks were rerun against the same checkout:
+
+```text
+check:project-transaction: PASS
+check:project-recovery-e3: PASS
+check-project-transaction-recovery-controller: PASS (6 scenarios)
+check:output-control-runtime: PASS
+check:output-ownership: PASS
+check:safety-blackout-runtime: PASS
+```
+
+All six commands exited `0`. The current artifact therefore retains the
+candidate/orphan, generation, receipt, output-retirement, ownership, and
+blackout safeguards needed before project replacement can publish. No native
+dialog, physical DMX/Art-Net/video/audio output, hardware ACK, or re-Arm was
+performed in this continuation.
+
+`AI3-PHYSICAL-REARM-001` remains `Open`. The next required evidence is still
+the exact release artifact's physical New/Load/Recovery/Backup/Take Over
+matrix with acknowledged output retirement, explicit re-Arm, hardware state,
+and venue observations.
