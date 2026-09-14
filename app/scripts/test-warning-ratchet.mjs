@@ -573,6 +573,18 @@ const genericStderrWarning = await runGenericCode(
 assert.equal(genericStderrWarning.warningShaped, true);
 const genericViteWarning = await runGenericWithOutput("generic-marker\n(!) Vite synthetic warning");
 assert.equal(genericViteWarning.warningShaped, true);
+const genericViteChunkAdvisory = await runGenericWithOutput(
+  "generic-marker\n(!) Some chunks are larger than 500 kB after minification. Consider:\n- Using dynamic import() to code-split the application",
+);
+assert.equal(genericViteChunkAdvisory.warningShaped, false);
+const genericViteChunkAdvisoryCrlf = await runGenericWithOutput(
+  "generic-marker\r\n(!) Some chunks are larger than 500 kB after minification. Consider:\r\n- Using dynamic import() to code-split the application",
+);
+assert.equal(genericViteChunkAdvisoryCrlf.warningShaped, false);
+const genericViteChunkAdvisoryIncomplete = await runGenericWithOutput(
+  "generic-marker\n(!) Some chunks are larger than 500 kB after minification.\n- Using dynamic import() to code-split the application",
+);
+assert.equal(genericViteChunkAdvisoryIncomplete.warningShaped, true);
 const genericColoredWarning = await runGenericWithOutput("generic-marker\n\u001b[31mwarning: synthetic\u001b[39m");
 assert.equal(genericColoredWarning.warningShaped, true);
 const genericNonzero = await runGenericCode("process.stdout.write('generic-marker'); process.exitCode = 7");

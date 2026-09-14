@@ -39,6 +39,14 @@ const TERMINAL_ESCAPE_SEQUENCE = /\u001B(?:\[[0-?]*[ -/]*[@-~]|\][^\u0007]*(?:\u
 export function normalizeGenericCommandOutput(output = "") {
   return String(output).replace(TERMINAL_ESCAPE_SEQUENCE, "");
 }
+// Vite labels its chunk-size advisory with `(!)`, but this is not a compiler
+// warning and has no first-party diagnostic identity. Keep unknown `(!)` lines,
+// `warning:`, and `WARN` output fail-closed; only this exact upstream advisory
+// is excluded from the generic warning-shaped-output probe.
+const KNOWN_VITE_CHUNK_ADVISORY = /^\(!\) Some chunks are larger than 500 kB after minification\. Consider:\r?$/gm;
+export function removeKnownNonWarningAdvisories(output = "") {
+  return String(output).replace(KNOWN_VITE_CHUNK_ADVISORY, "");
+}
 // Current-file inspection has its own byte ceiling. Untracked files share this as an
 // aggregate budget; modified Cargo configs share a separate aggregate budget.
 export const CURRENT_FILE_CONTENT_MAX_BYTES = 16 * 1024 * 1024;
@@ -781,7 +789,7 @@ export function warningShapedStderr(stderr) {
 }
 
 export function warningShapedOutput(stdout = "", stderr = "") {
-  const output = `${stdout}\n${stderr}`;
+  const output = removeKnownNonWarningAdvisories(`${stdout}\n${stderr}`);
   return /(?:^|\r?\n)\s*warning(?:\[[^\]]+\])?\s*:/i.test(output)
     || /\bWARN\b/i.test(output)
     || /\(!\)/.test(output);
