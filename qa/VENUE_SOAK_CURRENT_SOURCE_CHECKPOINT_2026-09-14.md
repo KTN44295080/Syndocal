@@ -153,3 +153,36 @@ The retained report is
 `VENUE-SOAK-001` remains `Open` pending a resource-controlled reference
 machine with a green short run, followed by the required one-hour integrated
 venue run and retained time-series evidence.
+
+## Current-host isolation recheck — 2026-09-15
+
+The prior FAIL was repeated after verifying that the exact release
+`target/release/syndocal.exe` process was the only native Syndocal process.
+Because the running native application can compete for the same host scheduler,
+the exact release process was stopped before the software-only measurement;
+no product or venue device was changed. The same command was then run without
+the native application competing for CPU time:
+
+```text
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File qa/run-soak.ps1
+  -DurationSeconds 60 -SampleIntervalSeconds 5 -Configuration Release
+  -SkipBuild -MixedLighting
+  -ReportPath target/qa/m5-soak-mixed-lighting-current-60-isolated-20260915.json
+exit code 0: Syndocal soak passed
+```
+
+The retained report recorded `1801/1801` nonblank frames, `0` dropped frames,
+`0` render errors, tick jitter p99 `507us`, command queue p99 `54us`,
+command-to-DMX p99 `58us`, `1831` low-latency requests / `1801` advances,
+`3603` successful loopback DMX sends, and `0` DMX failures. This isolates the
+earlier current-host FAIL to host contention during the measurement rather
+than a reproducible product-soak regression. It remains software-only
+loopback evidence and is not a venue, integrated A/V, physical-output,
+thermal, or one-hour acceptance artifact.
+
+After the run, the exact release executable was relaunched and verified as one
+responsive, maximized `Syndocal` window. `VENUE-SOAK-001` remains `Open`: the
+named reference-machine maximum-condition GPU/resource run, integrated
+A/V/lighting/output/recording path, and one-hour retained time series are still
+required. Future local short runs must record whether the native app was
+running, so host-contended and isolated measurements cannot be conflated.
