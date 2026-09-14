@@ -80,3 +80,29 @@ the broader hostile-input/fuzz matrix, the cross-platform file-identity
 decision `DEC-FILE-ID-001`, real upgrade/downgrade machine rehearsals, or
 supported non-Windows claims. No external endpoint, physical output, or
 published artifact is claimed.
+
+## Current HEAD migration-contract recheck — 2026-09-14
+
+At current HEAD `3643c524`, the current-source migration contract set was
+rerun. Storage helpers, transaction/authority, E3 recovery, E4 publication,
+project-open bootstrap, history preflight, keyboard routing,
+transaction-recovery controller, and strict JSON all exited `0`.
+
+With the exact MSVC `14.44.35207` Build Tools linker initialized and printed
+first in `where.exe link.exe`, the release Rust filters passed:
+
+- `project_file_`: 33 passed, 0 failed, 0 ignored;
+- `project_recovery_`: 2 passed, 0 failed, 0 ignored;
+- `project_publication_`: 18 passed, 0 failed, 0 ignored;
+- `migration_corpus`: 11 passed, 0 failed, 0 ignored.
+
+The migration corpus again covered 224 bounded truncations, 5 malformed
+byte/number cases, 3 depth cases, and 128 seeded semantic/idempotency
+round-trip cases, including legacy defaults/unknown fields, golden
+load-save-reload, duplicate IDs, corrupt references/values, retired DJ
+mapping, and embedded-profile path non-reopening.
+
+This strengthens current-source storage/recovery/migration evidence only.
+No cross-platform support decision, real upgrade/downgrade machine rehearsal,
+external endpoint, hostile-input fuzz campaign, physical output, or published
+artifact was performed. `MIGRATION-COMPATIBILITY-001` remains `Open`.
