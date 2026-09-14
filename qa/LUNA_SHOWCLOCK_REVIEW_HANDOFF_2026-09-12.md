@@ -1188,3 +1188,12 @@ nonblank frames, zero dropped frames, and zero loopback DMX failures. It does
 not claim the named reference-machine one-hour run, maximum-condition
 GPU/resource/thermal logs, integrated A/V/lighting/output/recording path, or
 physical venue acceptance; the marker remains Open.
+
+The 2026-09-14 read-only Windows inventory found the existing `SMC-Mixer`
+MIDI endpoints, FTDI `USB Serial Port (COM5)`, ASUS 5M/13M camera devices,
+the Realtek ASIO component, Elgato virtual audio, and an active Wi-Fi adapter.
+It did not identify Enttec/DMXKing/RDM hardware, an Art-Net/sACN node, an
+external NDI/Spout receiver, a DJ-PC/rekordbox peer, a second test machine, or
+the pinned comparator environment. No device was opened or driven by this
+inventory; it is availability evidence only and does not promote any
+external-acceptance marker.
