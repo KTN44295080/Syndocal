@@ -88,6 +88,47 @@ rerun. Storage helpers, transaction/authority, E3 recovery, E4 publication,
 project-open bootstrap, history preflight, keyboard routing,
 transaction-recovery controller, and strict JSON all exited `0`.
 
+## Takeover continuation — current-source migration recheck — 2026-09-14
+
+At current source HEAD `80a7a001`, the migration source contracts were rerun
+with the existing script names:
+
+```text
+pnpm.cmd --dir app run check:project-storage
+project storage helpers ok
+
+pnpm.cmd --dir app run check:project-transaction
+project transaction executable production-contract checks passed
+project authority deterministic checks passed
+
+pnpm.cmd --dir app run check:project-recovery-e3
+E3 project recovery production driver passed
+
+pnpm.cmd --dir app run check:project-publication-e4
+project publication E4 checks passed
+
+pnpm.cmd --dir app run check:project-open-bootstrap
+project open bootstrap authority gate passed
+
+node app/scripts/check-project-history-keyboard.mjs
+PASS actual keyboard controller and text-editor guards
+
+node app/scripts/check-project-transaction-recovery-controller.mjs
+Project transaction recovery controller: 6 scenarios passed; no native/UI side effects.
+
+pnpm.cmd --dir app run check:strict-json
+strict JSON duplicate-key self-test passed: 130 assertions
+```
+
+All eight current-source commands exited `0`. This revalidates storage,
+authority, recovery, publication, bootstrap, keyboard, transaction-recovery,
+and strict JSON boundaries only. No external upgrade/downgrade machine,
+cross-platform migration decision, hostile fuzz campaign, clean-machine
+installation, or published artifact was exercised.
+
+`MIGRATION-COMPATIBILITY-001` remains `Open` pending those external and
+release-scope acceptance conditions.
+
 With the exact MSVC `14.44.35207` Build Tools linker initialized and printed
 first in `where.exe link.exe`, the release Rust filters passed:
 
