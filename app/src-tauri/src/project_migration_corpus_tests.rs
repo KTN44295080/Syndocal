@@ -8,10 +8,13 @@ use crate::{
 };
 use protocol::{EngineSnapshot, ProjectFile};
 use serde_json::{json, Value};
+use std::panic::{catch_unwind, AssertUnwindSafe};
 
 const GOLDEN: &str = include_str!("../../../qa/migration/phase1-project-expectations.json");
 const GENERATED_CASES: usize = 128;
 const GENERATOR_SEED: u64 = 0x5344_435f_2026_0913;
+const HOSTILE_BYTE_CASES: usize = 4096;
+const HOSTILE_MAX_BYTES: usize = 2048;
 
 fn sample() -> Value {
     serde_json::from_str(PHASE1_SAMPLE_PROJECT_JSON).expect("checked-in sample JSON")
@@ -336,6 +339,72 @@ fn migration_corpus_bounded_truncation_utf8_and_depth_inputs() {
     }
     eprintln!(
         "migration corpus: {truncations} truncations, 5 malformed byte/number cases, 3 depth cases"
+    );
+}
+
+#[test]
+fn migration_corpus_seeded_hostile_json_bytes_are_bounded_and_panic_free() {
+    let mut seed = GENERATOR_SEED ^ 0xA11C_E5ED_5AFE_2026;
+    let mut parsed = 0;
+    let mut rejected = 0;
+    let mut prepared = 0;
+    for index in 0..HOSTILE_BYTE_CASES {
+        seed = seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        let bytes = match index {
+            0 => b"null".to_vec(),
+            1 => b"[]".to_vec(),
+            2 => b"{}".to_vec(),
+            3 => b"0".to_vec(),
+            4 => b"true".to_vec(),
+            _ => {
+                let length = 1 + (seed as usize % HOSTILE_MAX_BYTES);
+                let mut random_bytes = Vec::with_capacity(length);
+                for offset in 0..length {
+                    seed = seed
+                        .wrapping_mul(2862933555777941757)
+                        .wrapping_add(3037000493);
+                    random_bytes.push((seed >> ((offset % 8) * 8)) as u8);
+                }
+                random_bytes
+            }
+        };
+        let parsed_value = match serde_json::from_slice::<Value>(&bytes) {
+            Ok(value) => {
+                parsed += 1;
+                value
+            }
+            Err(_) => {
+                rejected += 1;
+                continue;
+            }
+        };
+        let original = serde_json::to_vec(&parsed_value).expect("parsed JSON must reserialize");
+        let result = catch_unwind(AssertUnwindSafe(|| prepare(&parsed_value)));
+        assert!(
+            result.is_ok(),
+            "hostile JSON case {index} panicked after parsing"
+        );
+        assert_eq!(
+            serde_json::to_vec(&parsed_value).unwrap(),
+            original,
+            "hostile JSON case {index} mutated its input"
+        );
+        if result.unwrap().is_ok() {
+            prepared += 1;
+        }
+    }
+    assert!(
+        rejected > 0,
+        "hostile corpus must exercise parser rejection"
+    );
+    assert!(
+        parsed > 0,
+        "hostile corpus must exercise valid JSON handling"
+    );
+    eprintln!(
+        "migration hostile corpus: seed={GENERATOR_SEED:#x}, {HOSTILE_BYTE_CASES} cases, {rejected} parser-rejected, {parsed} parsed, {prepared} prepared, max_bytes={HOSTILE_MAX_BYTES}"
     );
 }
 
