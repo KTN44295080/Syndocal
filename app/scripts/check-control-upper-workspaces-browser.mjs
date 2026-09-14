@@ -992,6 +992,8 @@ const measureVideo = (client) => evaluate(client, `(() => {
   const rect = (element) => element instanceof Element ? rectArray(element.getBoundingClientRect()) : null;
   const panel = document.querySelector('.videoControlPanelMixer');
   const header = panel?.querySelector(':scope > .panelHeader');
+  const topPane = panel?.querySelector(':scope > .videoMixerTopPane');
+  const topContent = topPane?.querySelector(':scope > .videoMixerTopContent');
   const rail = panel?.querySelector('.videoMediaLibraryRail');
   const surface = panel?.querySelector('.videoMediaLibrarySurface');
   const list = panel?.querySelector('.videoMediaLibraryList');
@@ -1017,6 +1019,8 @@ const measureVideo = (client) => evaluate(client, `(() => {
   return {
     panel: rect(panel),
     header: rect(header),
+    topPane: rect(topPane),
+    topContent: rect(topContent),
     rail: rect(rail),
     surface: rect(surface),
     list: rect(list),
@@ -1425,6 +1429,10 @@ try {
       return value?.cardCount > 0 ? value : false;
     }, "Video Media Library surface");
     assert.ok(rectHeight(video.panel) >= 160 && rectHeight(video.header) >= 32, `Video library panel/header have useful geometry: ${JSON.stringify({ panel: video.panel, header: video.header, rail: video.rail, surface: video.surface, list: video.list, cardCount: video.cardCount })}`);
+    const minimumTopPaneShare = viewport.height <= 800 ? 0.25 : 0.48;
+    const topPaneShare = rectHeight(video.topPane) / Math.max(1, rectHeight(video.panel));
+    assert.ok(topPaneShare >= minimumTopPaneShare, `Video Preview/Program keeps the primary upper-desk share at ${viewport.width}x${viewport.height}: ${JSON.stringify({ panel: video.panel, topPane: video.topPane, topContent: video.topContent, topPaneShare, minimumTopPaneShare })}`);
+    assert.ok(rectHeight(video.topContent) > 0, `Video Preview/Program content remains visible at ${viewport.width}x${viewport.height}: ${JSON.stringify({ topPane: video.topPane, topContent: video.topContent })}`);
     assert.ok(rectHeight(video.surface) >= 120 && rectHeight(video.list) >= 80, "Video library body/list have useful geometry");
     assert.ok(video.cardCount > 0 && (video.surfaceOverflowY === "auto" || video.surfaceOverflowY === "scroll"), `Video mounts media cards with a bounded library scrollport: ${JSON.stringify({ surfaceOverflowY: video.surfaceOverflowY, listOverflowY: video.listOverflowY })}`);
     assert.ok(video.importSummary?.[3] >= 28, "Import Media preserves its reachable disclosure target");
