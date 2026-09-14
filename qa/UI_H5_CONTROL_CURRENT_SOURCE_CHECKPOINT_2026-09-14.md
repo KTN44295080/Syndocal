@@ -235,3 +235,26 @@ output, recording, Take, blackout, Arm, Take Over, device, external client,
 screen-reader, High Contrast, scaling, IME, or venue action was performed.
 `UI-H5-CONTROL-001` remains `Open` for the complete live/dangerous Control,
 accessibility, physical-output, external-client, and recovery requirements.
+
+## Takeover continuation — current-source browser H5 upper-workspace recheck — 2026-09-14
+
+At current source HEAD `b5f1498d`, the existing Chrome/Playwright fallback gate
+was rerun with the explicit installed Chrome executable because automatic
+browser discovery did not select a usable browser:
+
+```text
+$env:CHROME_PATH = 'C:\Users\janua\AppData\Local\Google\Chrome\Application\chrome.exe'
+pnpm.cmd --dir app run check:control-upper-workspaces
+check:control-upper-workspaces passed: 3840x2160, 2560x1440, 1920x1080, 1280x720
+```
+
+All four viewports passed Lighting and Timeline containment, first-Escape
+focus return, and final CDP diagnostics with zero runtime exceptions, console
+or log errors/warnings, and harness errors. The browser tree, Vite server,
+endpoint, and temporary profile were cleaned after each viewport.
+
+This is rendered-browser upper-workspace evidence only. It does not prove
+native button-by-button interaction, dangerous actions (Take, Blackout, Arm,
+Take Over, recording), native accessibility, physical output, external
+clients, venue/soak, signing, or publication. `UI-H5-CONTROL-001` remains
+`Open` for those boundaries.
