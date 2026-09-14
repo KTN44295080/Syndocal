@@ -177,3 +177,34 @@ applicable code-side corpus evidence because no migration Rust source changed.
 `MIGRATION-COMPATIBILITY-001` remains `Open` pending the supported-version and
 file-identity decisions, broader hostile-input/fuzz matrix, and real
 upgrade/downgrade compatibility rehearsal.
+
+## Continuation — deterministic hostile JSON corpus — 2026-09-14
+
+The migration corpus was extended in implementation commit `c42bb98e` with a
+bounded deterministic hostile-byte run around the production in-memory project
+preparation path. It generates `4096` cases from a fixed seed, caps each random
+case at `2048` bytes, includes valid JSON scalar controls, and checks parser
+rejection, preparation panic-freedom, and byte-for-byte input immutability.
+It performs no file, device, network, or publication I/O.
+
+With the exact MSVC `14.44.35207` x64 linker selected and confirmed first by
+`where.exe link.exe`, the focused release command completed successfully:
+
+```text
+cargo test --manifest-path app/src-tauri/Cargo.toml --release --locked -j 1 migration_corpus_ -- --nocapture --test-threads=1
+test result: ok. 12 passed; 0 failed; 0 ignored; 1915 filtered out
+migration hostile corpus: seed=0x5344435f20260913, 4096 cases,
+4091 parser-rejected, 5 parsed, 0 prepared, max_bytes=2048
+```
+
+The existing corpus remained green: `224` truncation cases, `5` malformed
+byte/number cases, `3` depth cases, and `128` semantic/idempotency cases. The
+Windows native warning-ratchet was rerun after the test change and passed with
+output markers `2/2`, warning-shaped output `none`, baseline/current warnings
+`0/0`, and identity removals `0`.
+
+This closes only the new deterministic hostile-input source slice. It does not
+close the supported-version/file-identity decision, broader fuzz campaign,
+cross-platform claims, real upgrade/downgrade or clean-machine rehearsal, or
+published-artifact compatibility. `MIGRATION-COMPATIBILITY-001` remains
+`Open`.
