@@ -136,3 +136,51 @@ physical output was opened; the existing SMC-Mixer All Notes Off slice remains
 partial evidence. `AI3-NATIVE-INGRESS-001` remains `Open` pending the named
 native client and hardware matrix with controller movement, feedback/Clock/MTC,
 reconnect, latency, and venue evidence.
+
+## Takeover continuation — bounded Agent Bridge ingress corpus — 2026-09-14
+
+At current source HEAD `62efdcb9`, the Agent Bridge wire admission test was
+extended with a deterministic 512-case hostile request corpus. The corpus
+contains one canonical `fixtures.list` request, one request over the 64 KiB
+wire limit, 128 non-UTF-8 random frames, 128 truncations of the canonical
+request, and 254 strict-shape variants with an unknown top-level field. Each
+case is bounded at `MAX_REQUEST_BYTES + 1` and is evaluated through JSON decode
+plus `Request::command()` inside `catch_unwind`.
+
+The exact Windows release test used the repository-required MSVC procedure:
+
+```text
+vcvars64.bat -vcvars_ver=14.44
+CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+where.exe link.exe -> the same 14.44.35207 linker
+cargo test --manifest-path app/src-tauri/Cargo.toml --release --locked -j 1 agent_bridge_ -- --nocapture --test-threads=1
+```
+
+```text
+Finished `release` profile [optimized]
+agent bridge hostile request corpus: 512 cases, 511 rejected, 0 panics, max_bytes=65537
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 1918 filtered out
+```
+
+The focused source checks also passed with exit code `0`: frontend command
+routing (`133` renderer, `31` server-authoritative, `28` raw, `479` facade),
+native admission inventory (`539` commands and `18` negative fixtures rejected),
+output-control/Standby Sync, output ownership, safety blackout, DVC MIDI
+shortcuts (`39` assertions), DVC-DMX shortcuts (`41` assertions), and Agent
+Bridge (`11` groups; no native/device calls). The Windows-native warning ratchet
+also passed: baseline and current warnings were both `0` total, including
+`0` first-party warnings.
+
+This is current-source parser-boundary evidence only. It does not prove native
+OSC/DMX/Remote client admission, a real Art-Net node or fixture, controller
+movement, Clock/MTC, complete feedback, reconnect/replacement, latency, or
+venue behavior. The existing SMC-Mixer All Notes Off observation remains the
+only partial native transport slice. `AI3-NATIVE-INGRESS-001` remains `Open`.
+
+## Resume procedure after this checkpoint
+
+Use the exact current release artifact with the named native clients and
+hardware matrix. First capture device identity/topology, then exercise accepted
+and rejected ingress, controller movement, feedback/Clock/MTC, reconnect and
+replacement, output state, and latency. Record each result and first failure;
+only then reassess the Flow marker.
