@@ -1112,3 +1112,8 @@ The `ASIO-LICENSE-001` current HEAD recheck passed packaging (`169` assertions)
 and ABI-v3 (`22` assertions) with `distribution_approved: false`. No public
 ASIO artifact or legal decision was made; the GPLv3-versus-Steinberg route
 remains an explicit external decision and the marker stays Open.
+
+The `ASIO-FORMAT-MATRIX-001` source recheck at HEAD `8aba7087` passed
+live-audio lifecycle, IPC v1 exact mapping, and ABI-v3 (`22` assertions). No
+ASIO stream or real driver was opened; the required rate/buffer/channel matrix
+remains external and the marker stays Open.

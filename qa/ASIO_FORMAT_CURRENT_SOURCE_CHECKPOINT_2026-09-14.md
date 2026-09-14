@@ -56,3 +56,12 @@ acceptance.
 
 Next action is the named-device matrix on the approved artifact, followed by
 raw logs bound to the exact executable, bridge, driver, operator, and date.
+
+## Takeover continuation — current-source format-contract recheck — 2026-09-14
+
+At HEAD `8aba7087`, the live-audio fail-closed lifecycle/availability/
+persistence/presentation/order check, live-audio IPC v1 exact mapping check,
+and ASIO v3 contract check all passed. The ABI check reported `22` assertions.
+No ASIO stream or real driver was opened, and no sample-rate/buffer/channel
+matrix artifact was produced. `ASIO-FORMAT-MATRIX-001` remains `Open` pending
+the licensed artifact and named real-driver matrix.
