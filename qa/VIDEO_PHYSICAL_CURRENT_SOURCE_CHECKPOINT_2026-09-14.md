@@ -373,3 +373,13 @@ requirements are not a prerequisite for the generic `VIDEO-PHYSICAL-001`
 matrix. This run did not change display settings, create an output, or send
 pixels. A product-output window identity and physical pixel observation are
 still required before the generic marker can close.
+
+## Native output-window gate recheck — 2026-09-15
+
+After restarting the exact release executable and reloading
+`samples/phase1-mini-show.sdc`, the native Video Setup surface showed one
+configured `Front Projector` Display output at `1920x1080`. Its physical-window
+state was `Window blocked` with `ProjectSwapDisarmed`; `Open/Reopen output` was
+disabled. This is a direct native observation of the output gate, not a
+physical-pixel result. No Syndocal-owned output window was opened and no
+display pixels were sent by this recheck. `VIDEO-PHYSICAL-001` remains **Open**.

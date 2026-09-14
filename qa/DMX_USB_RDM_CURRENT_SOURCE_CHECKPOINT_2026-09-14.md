@@ -106,3 +106,34 @@ pnpm.cmd --dir app run check:safety-blackout-runtime
 No Enttec, DMXKing, or named RDM interface was opened; no USB-DMX/RDM bytes,
 E1.20 discovery, ACK/NACK/timeout log, fixture capture, or analyzer artifact
 was produced. `DMX-USB-RDM-001` remains **Open**.
+
+## Current native COM5 preparation and restart recovery — 2026-09-15
+
+The current release executable was loaded with
+`samples/phase1-mini-show.sdc`. The native I/O surface enumerated and selected
+`COM5 · FTDI / USB Serial Port (COM5)`. The user-authorized `Prepare` action was
+run through the real UI and its confirmation dialog was accepted. The flow
+reached `4/4 optional Open DMX arm` and then stopped with:
+
+```text
+Error: OutputControl rejected (publication_failed);
+physical output state is unknown.
+```
+
+No fixture receipt, wire capture, or analyzer result was obtained. A subsequent
+native `All Blackout` action was rejected as `invalid_request` with
+`nothing was applied`; the keyboard-only retry was rejected as `forbidden`
+with `output was not applied; refresh lease state`. These are fail-closed
+observations and are not physical blackout acceptance.
+
+For recovery, only the exact release executable path was closed. The native
+unsaved-change dialog was answered `Discard and Close`; no force termination
+was needed. The same executable was restarted and was responsive. It returned
+to `Ready`; after reloading the sample, COM5 was again visible with `Prepare`
+available, while the prior error was not carried into the new process. This
+proves application restart recovery from the observed UI failure only; it does
+not prove physical serial-DMX recovery or a known electrical output state.
+
+`DMX-USB-RDM-001` remains **Open** pending a named Enttec/DMXKing interface,
+physical zero receipt, fixture/wire evidence, Open DMX timing, and the required
+two-fixture RDM/TOD matrix.

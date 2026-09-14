@@ -230,3 +230,34 @@ evidence only. No NVDA/JAWS/Narrator traversal, High Contrast rendering,
 or native keyboard-only dangerous-action workflow was performed.
 `ACCESSIBILITY-NATIVE-001` remains **Open** pending the named native
 accessibility environment and operator matrix.
+
+## Current native NVDA/UI Automation and keyboard-only recheck — 2026-09-15
+
+The current release executable was exercised while NVDA `2026.1.1.55980`
+(`2026.1.1`) was installed and running through `nvda_noUIAccess.exe`. NVDA
+usage-statistics transmission was explicitly declined; the local NVDA config
+records `allowUsageStats = False` and `askedAllowUsageStats = True`.
+
+The Syndocal native window was inspected through Windows UI Automation:
+
+```text
+AutomationElement descendants: 202
+named keyboard-focusable controls: Setup, Edit, Control, Workspaces, GO,
+DMX Blackout, Video Blackout, All Blackout, MIDI Learn, OSC Learn, DMX Learn,
+I/O, USB-DMX, Prepare, RDM tools, and the stage/video controls
+```
+
+Using the real native window, keyboard-only `Tab` traversal reached the I/O
+route and the named `Prepare` button. Focusing `Prepare` and pressing Enter
+opened the native `出力制御の確認` warning; selecting `いいえ` cancelled before
+the physical start path. The same keyboard-only focus path reached `All
+Blackout`; the resulting UI showed `All BO` while the status bar retained
+`OutputControl rejected (forbidden); output was not applied; refresh lease
+state.` No physical blackout or fixture state is claimed from this UI result.
+
+This establishes a current native semantic/focus and pre-action confirmation
+slice, not NVDA speech announcement acceptance. No speech-viewer transcript,
+High Contrast rendering, 125/150/200% native scaling matrix, IME composition,
+reduced-motion run, or full keyboard-only dangerous-action/recovery workflow
+was completed. `ACCESSIBILITY-NATIVE-001` remains **Open** pending those
+operator-observed native gates.
