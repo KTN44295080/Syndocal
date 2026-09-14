@@ -96,3 +96,20 @@ TouchDesigner session, measured output pixel, or raw timing log was created.
 physical trials on the approved artifact and named driver/device with exact
 configuration and capture-to-engine/input-to-pixel percentiles against the
 acceptance thresholds.
+
+## Continuation — current-source latency-contract recheck — 2026-09-15
+
+At current source HEAD `bf004b6d`, with the exact MSVC `14.44.35207` x64 linker
+confirmed first by `where.exe link.exe`, the following checks exited `0`:
+
+```text
+pnpm.cmd --dir app run check:live-audio
+pnpm.cmd --dir app run check:live-audio-ipc-v1
+pnpm.cmd --dir app run check:asio-v3-contract
+```
+
+These reconfirm the typed capture/engine-adjacent lifecycle and telemetry
+surface, exact IPC mapping, fail-closed rules, and ABI-v3 22-assertion
+contract. No physical ASIO/WASAPI stream, marker, TouchDesigner session,
+measured output pixel, or raw timing log was created. `ASIO-LATENCY-001`
+remains **Open**.

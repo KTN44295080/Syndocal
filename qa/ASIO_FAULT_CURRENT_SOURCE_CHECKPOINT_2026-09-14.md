@@ -82,6 +82,25 @@ reopened, and no native fault-injection artifact was produced.
 rate/buffer-change, reset/resync, XRUN, unplug/replug, callback-gap, and
 no-callback recovery matrix.
 
+## Continuation — current-source fault-contract recheck — 2026-09-15
+
+At current source HEAD `bf004b6d`, with the exact MSVC `14.44.35207` x64 linker
+confirmed first by `where.exe link.exe`, the SDK-independent bridge suite and
+ABI contract both exited `0`:
+
+```text
+cargo test --manifest-path tools/asio-bridge/Cargo.toml --locked -- --nocapture
+test result: ok. 31 passed; 0 failed; 0 ignored
+
+pnpm.cmd --dir app run check:asio-v3-contract
+ASIO v3 contract tests passed: 22 assertions
+```
+
+The deterministic suite reconfirmed callback integrity, silence on rejected
+data, generation fencing, lease ownership, stale-ticket rejection, and typed
+Stop/Close cleanup. No real driver was occupied, reset, unplugged, or reopened;
+`ASIO-FAULT-MATRIX-001` remains **Open**.
+
 ## Takeover continuation — current-source fault-contract recheck after Video repair — 2026-09-14
 
 At current source HEAD `466da2a6`, the SDK-independent bridge suite was rerun

@@ -107,3 +107,23 @@ published, and no GPLv3 route, signed Steinberg agreement, legal review,
 installer/updater approval, or real-device acceptance was performed.
 `ASIO-LICENSE-001` remains `Open` pending the explicit licensing decision and
 its notice, source-obligation, package, and approval records.
+
+## Continuation — current-source licensing boundary recheck — 2026-09-15
+
+At current source HEAD `bf004b6d`, the exact MSVC `14.44.35207` x64 linker was
+initialized and confirmed first by `where.exe link.exe`. The current-source
+checks exited `0`:
+
+```text
+pnpm.cmd --dir app run check:asio-packaging
+ASIO packaging boundary self-test passed: 169 assertions
+
+pnpm.cmd --dir app run check:asio-v3-contract
+ASIO v3 contract tests passed: 22 assertions
+```
+
+`qa/ASIO_SDK_PIN.json` still records `distribution_approved: false`; the
+normal MIT/WASAPI package remains fail-closed against ASIO injection and no
+public ASIO artifact was produced. No GPLv3 route, signed Steinberg agreement,
+legal review, installer/updater approval, or publication was performed.
+`ASIO-LICENSE-001` remains **Open**.

@@ -111,3 +111,21 @@ ABI-v3 contract intact. No ASIO stream or real driver was opened, and no
 artifact was produced. `ASIO-FORMAT-MATRIX-001` remains `Open` pending the
 licensed artifact and named real-driver matrix with recorded applied values and
 no-fallback proof.
+
+## Continuation — current-source format-contract recheck — 2026-09-15
+
+At current source HEAD `bf004b6d`, with the exact MSVC `14.44.35207` x64 linker
+confirmed first by `where.exe link.exe`, the following current-source checks
+exited `0`:
+
+```text
+pnpm.cmd --dir app run check:live-audio
+pnpm.cmd --dir app run check:live-audio-ipc-v1
+pnpm.cmd --dir app run check:asio-v3-contract
+```
+
+The source continues to require explicit device, sample-rate, channel,
+native-format, and fixed-buffer values with exact IPC mapping and no fallback;
+ABI-v3 reported 22 assertions. No ASIO stream or real driver was opened, and
+no advertised rate/buffer/format/channel hardware matrix was produced.
+`ASIO-FORMAT-MATRIX-001` remains **Open**.

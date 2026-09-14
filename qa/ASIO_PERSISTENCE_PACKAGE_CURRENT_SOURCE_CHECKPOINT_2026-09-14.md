@@ -112,3 +112,21 @@ names, and SDK-pin/distribution-approval protection remain enforced. No
 licensed/public ASIO artifact, native stale-device or ambiguous-device
 rehearsal, installer/updater overlay, exact artifact identity record, or final
 package review was performed. `ASIO-PERSISTENCE-PACKAGE-001` remains `Open`.
+
+## Continuation — current-source persistence/package recheck — 2026-09-15
+
+At current source HEAD `bf004b6d`, with the exact MSVC `14.44.35207` x64 linker
+confirmed first by `where.exe link.exe`, the following checks exited `0`:
+
+```text
+pnpm.cmd --dir app run check:live-audio
+pnpm.cmd --dir app run check:live-audio-ipc-v1
+pnpm.cmd --dir app run check:asio-packaging
+ASIO packaging boundary self-test passed: 169 assertions
+```
+
+Selection persistence, exact IPC mapping, normal-package resource inventory,
+ASIO payload/glob rejection, retired-name rejection, and SDK-pin/
+distribution-approval protection remain enforced. No licensed/public artifact,
+native stale-device rehearsal, installer/updater overlay, or final package
+review was performed. `ASIO-PERSISTENCE-PACKAGE-001` remains **Open**.

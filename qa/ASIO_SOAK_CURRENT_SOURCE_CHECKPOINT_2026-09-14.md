@@ -115,3 +115,15 @@ substituted for this soak gate. No ASIO/WASAPI stream, one-hour run, callback or
 XRUN telemetry, loss-to-zero measurement, thermal/clock record, or latency
 artifact was produced. `ASIO-SOAK-001` remains `Open` pending the approved
 artifact, named devices, and the matched one-hour ASIO/WASAPI evidence.
+
+## Continuation — current-source soak preflight recheck — 2026-09-15
+
+At current source HEAD `bf004b6d`, with the exact MSVC `14.44.35207` x64 linker
+confirmed first by `where.exe link.exe`, `pnpm.cmd --dir app run check:live-audio`
+exited `0`. It reconfirmed fail-closed availability, explicit selection
+persistence, presentation, and request ordering.
+
+No ASIO/WASAPI device or stream was opened, and no one-hour run, callback/XRUN
+telemetry, loss-to-zero timing, thermal/clock-drift record, or latency artifact
+was produced. `ASIO-SOAK-001` remains **Open** pending the approved artifact,
+named devices, and matched physical ASIO/WASAPI run.
