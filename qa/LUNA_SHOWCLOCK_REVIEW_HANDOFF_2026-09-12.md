@@ -665,9 +665,10 @@ require their actual UI/device/two-machine topology and separate evidence.
 ## Current continuation state — 2026-09-14 takeover
 
 The continuation is now owned by the current task on branch
-`codex/showclock-review-20260912`. The latest pushed checkpoint is
-`040d312e` (`qa: record native display gate retry`), and the worktree is clean
-with the branch equal to `origin/codex/showclock-review-20260912`.
+`codex/showclock-review-20260912`. The last pushed checkpoint before this
+camera-evidence update is `4602520f` (`qa: distinguish native checker health
+from display gate`); this checkpoint keeps the branch equal to
+`origin/codex/showclock-review-20260912` after its owned documentation update.
 
 The earlier product-code change in this continuation is in
 `app/src/components/ControlBothPanel.tsx`: the DMX, all-output, and Video
@@ -805,7 +806,7 @@ The authoritative ledger remains structurally valid at 58 markers:
 `DMX-ARTNET-001`, `DMX-USB-RDM-001`, `INPUT-PHYSICAL-001`,
 `DJ-LINK-HARDWARE-001`, `VIDEO-PHYSICAL-001`, `VENUE-SOAK-001`,
 `SHOWCLOCK-VENUE-001`, and `COMPARE-PINNED-001`. The Q1/Q4 mirror reports
-`58/58` Flow references and `82` linked evidence records. External markers
+`58/58` Flow references and `83` linked evidence records. External markers
 remain Open until their named hardware, client, two-machine, venue, signed
 artifact, or other external evidence exists.
 
@@ -854,7 +855,14 @@ Flow marker Open when the required external boundary was absent.
   reconnect, or hardware artifact was created.
 - Video and venue: `VIDEO-PHYSICAL-001` reran routing, managed-window,
   observation, and bounded-polling contracts; no real display, HDMI, NDI/Spout,
-  capture, reconnect, or frame-drop evidence exists. `VENUE-SOAK-001` fixed the
+  or frame-drop evidence exists. A current-host `ASUS 5M webcam` was then
+  exercised through the canonical DirectShow profile (`nv12`, `1280x720`,
+  `30/1`) with the pinned MSVC `14.44.35207` ignored capture-worker test:
+  `1 passed / 0 failed / 0 ignored`, two clean worker start/stop cycles,
+  expected RGBA dimensions, and a nontransparent frame. This is only a
+  partial camera capture/restart slice; it does not prove display/HDMI,
+  NDI/Spout, unplug/replug, reconnect, frame drops, one-hour, venue, or
+  product completion. `VENUE-SOAK-001` fixed the
   two harness continuity defects, then passed the exact pinned-source mixed
   software soak: `1801/1801` nonblank frames, `0` dropped, tick p99 `510 us`,
   command queue p99 `92 us`, command-to-DMX p99 `94 us`, `3603` successful
