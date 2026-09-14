@@ -89,6 +89,32 @@ Syndocal or a device.
 native external clients, restart/update/security review, signing/publication,
 and physical-output acceptance.
 
+## Continuation — current-source AI8 boundary recheck — 2026-09-15
+
+At current source HEAD `5d07b7fb`, the five local bridge/admission/parser
+checks were rerun and all exited `0`:
+
+```text
+check:agent-bridge: PASS (11 groups; real processor/runtime/confirmation modules; no native/device calls)
+check-agent-bridge-bootstrap: PASS (4 deferred lifecycle groups)
+check-tauri-admission-inventory: PASS (539 commands; SHA-256 a0ba71bfd1dce9e657fc5b052ccc452cf00f8a42fb3d838edef28913658cb9ab; 18 negative fixtures rejected)
+tools/syndocal-mcp/check.mjs: PASS (15 adapter integration groups; hostile stdio corpus 128 rejected; fake loopback only)
+check:strict-json: PASS (130 duplicate-key assertions)
+```
+
+These results reconfirm only the current local bridge, lifecycle, admission,
+adapter, and strict-parser boundaries. No real external client, clean-machine
+install, release endpoint, update/restart drill, public-network security
+review, signing service, or physical output was contacted. The fake MCP
+loopback does not call Syndocal or a device, so
+`AI8-EXTERNAL-ACCEPTANCE-001` remains `Open`.
+
+The Q4 ledger records this source-only recheck as
+`EV-AI8-EXTERNAL-CURRENT-SW-2026-09-15`. The next action remains the exact
+release artifact in a clean installation with real external clients,
+restart/update/security review, signing/publication inspection, and physical
+output acceptance.
+
 ## Continuation — current artifact external-acceptance boundary recheck — 2026-09-14
 
 After the current release rebuild and Video desk repair at HEAD `5a1d666f`,
