@@ -1018,3 +1018,12 @@ zero ignored tests. The result confirms the software-side fencing/retirement
 boundary but does not claim physical output retirement, hardware ACK, or
 re-Arm; the marker remains Open. The detailed record is in
 `qa/AI3_PHYSICAL_REARM_CURRENT_SOURCE_CHECKPOINT_2026-09-14.md`.
+
+The following `AI3-NATIVE-INGRESS-001` current-source recheck ran against HEAD
+`3d50fd7e`: frontend command routing (`133` renderer, `31`
+server-authoritative, `28` raw, `479` facade dispatches), Tauri admission
+inventory (`539` commands with `18` negative fixtures rejected and the recorded
+SHA-256), output-control/Standby Sync, output ownership, and safety-blackout
+runtime all passed. No native client, device, endpoint, or physical output was
+opened. The marker remains Open; only the previously recorded bounded
+SMC-Mixer safe MIDI slice is physical transport evidence.

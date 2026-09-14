@@ -46,3 +46,27 @@ Use the actual native clients and devices against the exact current artifact.
 Record device identity/topology, accepted and rejected ingress, reconnect and
 replacement behavior, output state, and any first failure before reconsidering
 the Flow marker.
+
+## Takeover continuation — current-source ingress recheck — 2026-09-14
+
+The five current-source checks were rerun against HEAD `3d50fd7e` after the
+takeover:
+
+```text
+check:frontend-command-routing: 133 renderer, 31 server-authoritative,
+28 raw, 479 facade dispatches — PASS
+check-tauri-admission-inventory: 539 commands, 18 negative fixtures rejected,
+SHA-256 a0ba71bfd1dce9e657fc5b052ccc452cf00f8a42fb3d838edef28913658cb9ab — PASS
+check:output-control-runtime: output-control and Standby Sync contracts — PASS
+check:output-ownership: static contract — PASS
+check:safety-blackout-runtime: runtime contract — PASS
+```
+
+The rerun opened no native client, device, endpoint, or physical output. It
+confirms the current routing/admission/ownership/safety source boundary only;
+the bounded SMC-Mixer All Notes Off slice above remains the only current-host
+native transport observation.
+
+`AI3-NATIVE-INGRESS-001` remains `Open` for native OSC/DMX/Remote clients,
+real Art-Net and fixture behavior, controller movement, Clock/MTC, feedback,
+reconnect, latency, and venue evidence.
