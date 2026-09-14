@@ -51,3 +51,38 @@ presentation, and request-ordering contract. No ASIO or WASAPI device was
 opened and no long-duration stream, thermal, clock-drift, callback, or latency
 artifact was produced. `ASIO-SOAK-001` remains `Open` pending the matched
 one-hour physical ASIO/WASAPI run.
+
+## Takeover continuation — ASIO soak preflight — 2026-09-14
+
+At current source HEAD `7ffa46b3`, the following focused source check passed:
+
+```text
+pnpm.cmd --dir app run check:live-audio
+live audio fail-closed lifecycle, availability contract, selection persistence,
+presentation, and request ordering ok
+```
+
+The existing M5 harness preflight was also attempted from the ordinary
+PowerShell host:
+
+```text
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\qa\run-soak.ps1 -PreflightOnly
+```
+
+It failed closed before Cargo or the soak harness because the host did not
+provide `VCToolsInstallDir` and the script's automatic exact `vcvars64.bat
+-vcvars_ver=14.44` initialization was unavailable. This is an environment
+preflight result, not a soak result; no process, device, stream, or report was
+created, and it is not counted as acceptance evidence.
+
+The host still exposes ASIO registry entries and USB audio hardware, but the
+current checkout does not contain the pinned SDK archive/extraction or a
+current-source local Show-ASIO bridge artifact required by the physical
+command. Therefore no ASIO or WASAPI stream was opened and no callback/XRUN,
+overrun, capture-to-engine, loss-to-zero, thermal, clock-drift, or one-hour
+time-series artifact was produced in this continuation.
+
+`ASIO-SOAK-001` remains `Open`. The required matched one-hour ASIO/WASAPI run
+must use the approved artifact and named devices, with raw telemetry proving
+overrun `0`, callback p99 below `20%` and max below `50%` of buffer duration,
+capture-to-engine p95 `<= 40 ms`, and loss-to-zero `<= 250 ms`.
