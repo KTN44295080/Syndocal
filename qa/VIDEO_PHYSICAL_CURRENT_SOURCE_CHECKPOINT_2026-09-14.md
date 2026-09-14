@@ -138,6 +138,25 @@ not return that native window as a targetable app. No guessed HWND, coordinate,
 or UI automation fallback was used; the exact process was then stopped. This
 is an automation-surface boundary, not physical output evidence.
 
+## Acceptance-scope clarification — 2026-09-14
+
+The exact `1920x1080` editor, distinct `1920x1080` LED, and `3840x2160`
+projector role binding belongs to the stricter Near-show `SHOW-P0-4` contract
+and its dedicated three-display observer. It is not a prerequisite for the
+generic `VIDEO-PHYSICAL-001` matrix in the completion flow. The generic marker
+can therefore use the current three-display setup for a bounded practical
+display/HDMI/fullscreen test even when the displays do not match those exact
+Near-show roles, provided the actual output windows are bound to exact display
+identities and the observed resolution, refresh/DPI, nonblank pixels, and safe
+fault/reconnect legs are recorded.
+
+This narrows the interpretation; it does not create physical evidence. The
+current host confirms three active displays, but no current app-owned output
+window, fullscreen pixels, HDMI/NDI/Spout receiver, unplug/reorder/GPU-reset
+observation, or one-hour frame/drop run has yet been captured. `VIDEO-PHYSICAL-
+001` remains Open, while the stricter Near-show role-binding gate remains a
+separate open boundary.
+
 The previously unregistered current-source display-target checker was repaired
 and wired into the package gate:
 
