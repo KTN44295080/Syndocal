@@ -1133,3 +1133,8 @@ live-audio lifecycle/availability/persistence/presentation/order contract.
 Typed telemetry remains source evidence only: no ASIO stream, marker,
 TouchDesigner session, or input-to-pixel measurement was performed, so the
 five-trial physical latency marker remains Open.
+
+The `ASIO-PERSISTENCE-PACKAGE-001` source recheck at HEAD `e43f2148` passed
+live-audio selection/persistence/lifecycle and ASIO packaging (`169`
+assertions). No licensed/public artifact, native stale-device rehearsal, or
+final package was produced; the marker remains Open.

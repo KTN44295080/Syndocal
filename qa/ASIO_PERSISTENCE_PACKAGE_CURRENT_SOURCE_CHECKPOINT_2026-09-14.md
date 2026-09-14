@@ -48,3 +48,12 @@ boundary is not a completed ASIO release package.
 Next action is the approved artifact's native persistence/package rehearsal,
 with exact executable/bridge hashes, restart and stale-device logs, and package
 inventory attached.
+
+## Takeover continuation — current-source persistence/package recheck — 2026-09-14
+
+At HEAD `e43f2148`, the live-audio selection/persistence/lifecycle check passed
+and the ASIO package-separation self-test passed `169` assertions. The normal
+package continues to reject the ASIO bridge payload and retired names while
+the SDK pin remains protected. No licensed/public ASIO artifact, native stale
+device rehearsal, installer, updater overlay, or final package review was
+performed. `ASIO-PERSISTENCE-PACKAGE-001` remains `Open`.
