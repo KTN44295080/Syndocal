@@ -76,3 +76,47 @@ encoder hardware topology, authoritative asset import, the open
 interaction beyond the process smoke, ASIO/DMX/MIDI, long-duration A/V,
 signing, publication, venue, or product-wide acceptance. Those gates remain
 open in the Q1/Q4 coverage row and their corresponding Flow markers.
+
+## Current-source real-codec and long A/V rerun — 2026-09-15
+
+At current source HEAD `922ebeee0be2611738ccf2ee8ccd22bc69a37f3e`, the
+recording engine was rerun with the explicit external test-only FFmpeg/FFprobe
+pair that provides `libx264` and AAC. The binaries were:
+
+```text
+C:\Users\janua\AppData\Local\Microsoft\WinGet\Packages\Gyan.FFmpeg.Shared_Microsoft.Winget.Source_8wekyb3d8bbwe\ffmpeg-9.0.1-full_build-shared\bin\ffmpeg.exe
+C:\Users\janua\AppData\Local\Microsoft\WinGet\Packages\Gyan.FFmpeg.Shared_Microsoft.Winget.Source_8wekyb3d8bbwe\ffmpeg-9.0.1-full_build-shared\bin\ffprobe.exe
+```
+
+The short real-codec test passed:
+
+```text
+cargo test --manifest-path app/src-tauri/Cargo.toml --release --locked -j 1 recording_command_writes_a_real_video_and_audio_mp4 -- --ignored --nocapture --test-threads=1
+test video_recording_runtime_tests::recording_command_writes_a_real_video_and_audio_mp4 ... ok
+test result: ok; 1 passed; 0 failed; 0 ignored
+```
+
+The 30-minute A/V boundary test also passed in 6.05 seconds of test time:
+
+```text
+cargo test --manifest-path app/src-tauri/Cargo.toml --release --locked -j 1 recording_command_keeps_long_av_sync_with_first_and_last_flash_clicks -- --ignored --nocapture --test-threads=1
+test video_recording_runtime_tests::recording_command_keeps_long_av_sync_with_first_and_last_flash_clicks ... ok
+test result: ok; 1 passed; 0 failed; 0 ignored
+```
+
+The retained report is
+`C:\TEMP\syndocal-long-av-20260915-current\long-av-sync-30m.json`:
+
+```text
+frames_written=54000; frame_rate=30; duration_seconds=1800
+video_duration_seconds=1800.0; audio_duration_seconds=1800.0
+start_drift_ms=0.0; end_drift_ms=0.0
+first_video_luma=255.0; middle_video_luma=0.0; last_video_luma=255.0
+first_audio_peak=4328; middle_audio_peak=0; last_audio_peak=4119
+```
+
+This closes the current-source real H.264/AAC file-generation and synthetic
+30-minute A/V sync slice. It is not a native in-app button workflow, a
+physical camera-plus-display recording, disk-full/power-loss recovery, or a
+venue encoder/ownership acceptance; `RECORDING-001`'s remaining external
+boundaries stay open.

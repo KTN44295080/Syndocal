@@ -332,3 +332,44 @@ or other physical output was created. This strengthens only the physical
 camera capture/restart slice; `VIDEO-PHYSICAL-001` remains `Open` pending exact
 display/output identity and pixel/receiver observations, camera fault/replug,
 reconnect, frame-drop, and one-hour evidence.
+
+## Current-source desktop capture rerun — 2026-09-15
+
+At current source HEAD `922ebeee0be2611738ccf2ee8ccd22bc69a37f3e`, the
+production screen-capture worker was exercised against the visible Windows
+desktop with the exact pinned MSVC `14.44.35207` x64 linker. The explicit
+external FFmpeg used for this test was:
+
+`C:\Users\janua\AppData\Local\Microsoft\WinGet\Packages\Gyan.FFmpeg.Shared_Microsoft.Winget.Source_8wekyb3d8bbwe\ffmpeg-9.0.1-full_build-shared\bin\ffmpeg.exe`
+
+```text
+cargo test --manifest-path app/src-tauri/Cargo.toml --release --locked -j 1 screen_worker_captures_a_real_frame -- --ignored --nocapture --test-threads=1
+test capture_transport::tests::screen_worker_captures_a_real_frame ... ok
+test result: ok; 1 passed; 0 failed; 0 ignored
+```
+
+This proves one current-host visible-desktop capture frame with the
+production worker and clean worker stop. It does not prove a Syndocal-owned
+fullscreen output window, nonblank pixels on a selected physical display,
+HDMI/NDI/Spout reception, GPU reset, unplug/reconnect, dropped-frame budget,
+or one-hour operation. `VIDEO-PHYSICAL-001` remains `Open`.
+
+## Current display-topology recheck — 2026-09-15
+
+The user's three-screen report is corroborated at the Windows PnP layer:
+
+```text
+Generic Monitor (LKG-J01016) / DISPLAY\\LKGF803\\5&2A56F61F&0&UID281 / OK
+Generic Monitor              / DISPLAY\\RTK0000\\5&2A56F61F&0&UID261 / OK
+Integrated Monitor           / DISPLAY\\TMA0803\\5&2A56F61F&0&UID256 / OK
+```
+
+The read-only DisplayConfig acceptance harness nevertheless returned
+`verdict=not-configured`, `native_hardware_claim=false`, `accepted=false`,
+because only two displays were returned as connected by that API on this run.
+The strict role-profile preflight is a separate contract; its exact
+1920x1080/96 editor, distinct 1920x1080/144 LED, and 3840x2160/144 projector
+requirements are not a prerequisite for the generic `VIDEO-PHYSICAL-001`
+matrix. This run did not change display settings, create an output, or send
+pixels. A product-output window identity and physical pixel observation are
+still required before the generic marker can close.

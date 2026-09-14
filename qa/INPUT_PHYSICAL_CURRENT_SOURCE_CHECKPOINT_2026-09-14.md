@@ -227,3 +227,27 @@ Learn action consumed it, or that controller movement, Clock/MTC, LED
 feedback, latency, reconnect/replacement, OSC/TouchOSC, Web Remote, native
 UI routing, DMX, or venue acceptance passed. `INPUT-PHYSICAL-001` remains
 **Open**.
+
+## Latest production-port availability recheck — 2026-09-15
+
+After the preceding successful reconnect slice, the host still reported the
+paired SMC-Mixer and both named Bluetooth MIDI PnP endpoints as `Status=OK`,
+and the Windows MIDI service was `Running`. The current production `midir`
+enumeration nevertheless returned only:
+
+```text
+MIDI inputs: [CustomMIDI1]
+MIDI outputs: [Microsoft GS Wavetable Synth, CustomMIDI1]
+```
+
+With the exact pinned MSVC `14.44.35207` linker and explicit
+`SYNDOCAL_TEST_MIDI_INPUT=SMC-Mixer` / `SYNDOCAL_TEST_MIDI_OUTPUT=SMC-Mixer`,
+`physical_midi_ports_enumerate_open_and_send_feedback` exited `101` with
+`no MIDI input matched 'SMC-Mixer'`. The test failed before opening a port or
+sending bytes. This is a reproducible host MIDI-service/Bluetooth endpoint
+availability discrepancy, not a reason to treat the PnP entry as an opened
+production endpoint. The earlier successful reconnected run and its safe
+`B0 7B 00` message remain retained evidence; this latest failure is recorded
+as the current availability result. `INPUT-PHYSICAL-001` remains **Open**
+pending stable `midir` availability and the named movement, feedback, clock,
+reconnect, latency, and native-routing matrix.

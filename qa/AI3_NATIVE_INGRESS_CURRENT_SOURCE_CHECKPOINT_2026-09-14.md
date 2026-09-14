@@ -218,3 +218,19 @@ exact release artifact against named native clients and hardware, with device
 identity, accepted/rejected ingress, movement, feedback/Clock/MTC, reconnect,
 replacement, output state, latency, and first failure retained before any
 marker change.
+
+## Physical SMC-Mixer availability correction — 2026-09-15
+
+The current host PnP inventory and `midisrv` service remained healthy, but a
+fresh production `midir` enumerate/open test returned only `CustomMIDI1` input
+and `Microsoft GS Wavetable Synth` plus `CustomMIDI1` output. The explicit
+`SMC-Mixer` selectors therefore failed with `no MIDI input matched
+'SMC-Mixer'` before any MIDI bytes were sent. This supersedes neither the
+retained successful reconnect/safe-feedback slice nor the direct WinMM input
+observation; it records that availability is not stable across attempts.
+
+No controller, Clock/MTC, feedback, OSC/Remote, DMX, or output action was
+performed in this failed attempt. `AI3-NATIVE-INGRESS-001` remains `Open`;
+resume by restoring stable production-port enumeration and then running the
+named client, movement, feedback/clock, reconnect, replacement, and latency
+matrix.
