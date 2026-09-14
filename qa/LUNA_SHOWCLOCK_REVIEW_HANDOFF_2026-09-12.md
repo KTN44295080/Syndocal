@@ -1181,3 +1181,10 @@ license/tier, reference hardware/content topology, synchronized comparison
 capture, operator measurement, or physical-output evidence exists. The marker
 remains Open until the V01-V17 and Daslight matrices are run with first-failure
 and unmeasured-row retention.
+
+The `VENUE-SOAK-001` continuity record at HEAD `c1c1a6b0` preserves the
+current 60-second mixed-lighting software loopback result: 1801/1801
+nonblank frames, zero dropped frames, and zero loopback DMX failures. It does
+not claim the named reference-machine one-hour run, maximum-condition
+GPU/resource/thermal logs, integrated A/V/lighting/output/recording path, or
+physical venue acceptance; the marker remains Open.
