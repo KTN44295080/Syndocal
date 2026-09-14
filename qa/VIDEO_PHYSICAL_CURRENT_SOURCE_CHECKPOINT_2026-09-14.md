@@ -101,3 +101,46 @@ No physical display/HDMI output, NDI/Spout receiver, camera fault/replug,
 external client, or one-hour run was opened by this recheck. The result
 strengthens only the current-source software sub-gate and does not change
 `VIDEO-PHYSICAL-001`'s `Open` status.
+
+## Secondary-display follow-up and current gate wiring — 2026-09-14
+
+The current host now exposes two Windows displays. The exact inventory used by
+the native-window checkpoint is:
+
+```text
+DISPLAY1 / integrated TMA0803 / 2560x1600 / effective DPI 192 / work 2560x1504
+DISPLAY2 / generic RTK0000    / 1920x1200 / effective DPI 96  / work 1920x1152
+DISPLAY2 also exposed a 1920x1080 mode for the formal native-window gate.
+```
+
+This is sufficient to prepare a dual-display follow-up, but it is not the
+three-role physical acceptance topology used by the strict observer (editor
+1920x1080@96, LED 1920x1080@144, projector 3840x2160@144). No Display output
+was added to the user's persisted project because the available UI path is a
+durable Add operation and the current source intentionally has no canonical
+remove operation. No HDMI, NDI/Spout, or external receiver was therefore
+driven merely to create temporary state.
+
+The exact current-checkout executable `target/release/syndocal.exe` was
+started once for a read-only native-window availability check. Windows
+reported one responsive `Syndocal` process, but the Computer Use surface did
+not return that native window as a targetable app. No guessed HWND, coordinate,
+or UI automation fallback was used; the exact process was then stopped. This
+is an automation-surface boundary, not physical output evidence.
+
+The previously unregistered current-source display-target checker was repaired
+and wired into the package gate:
+
+```text
+node app/scripts/check-video-display-target.mjs                         PASS
+pnpm.cmd --dir app run check:video-display-target                       PASS
+pnpm.cmd --dir app run check:release:static                             PASS
+```
+
+The checker repair only made its source-boundary search CRLF-safe and aligned
+its assertions with the current typed `display-authority` lease bypass. The
+package gate now runs it alongside routing and output-window checks. The
+current source contracts are green, but `VIDEO-PHYSICAL-001` remains Open:
+real fullscreen pixels, refresh/DPI/reorder/unplug/GPU reset, HDMI/NDI/Spout
+receiver observations, camera fault/replug, frame-drop records, and the
+one-hour run still require named physical equipment and raw observations.

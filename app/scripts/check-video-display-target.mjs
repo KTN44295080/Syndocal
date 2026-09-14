@@ -40,7 +40,9 @@ const localizationRuntime = await import(`data:text/javascript;base64,${Buffer.f
   },
 ).outputText).toString("base64")}`);
 const displayAddHelperStart = appSource.indexOf("const staleDisplayAddRecoveryMessages = new Set([");
-const displayAddHelperEnd = appSource.indexOf("\n\nexport default function App", displayAddHelperStart);
+// App.tsx is checked out with CRLF in the Windows workspace. Search for the
+// declaration itself rather than assuming a particular blank-line encoding.
+const displayAddHelperEnd = appSource.indexOf("export default function App", displayAddHelperStart);
 assert.ok(
   displayAddHelperStart >= 0 && displayAddHelperEnd > displayAddHelperStart,
   "display Add post-commit refresh helper boundary must remain discoverable",
@@ -765,7 +767,7 @@ assert.match(controllerSource, /query_display_add_lease_authority_v1/);
 assert.match(controllerSource, /operationId/);
 assert.match(controllerSource, /hasExactKeys\(value, \["operationId", "status", "authority", "resources"\]\)/);
 assert.match(controllerSource, /export async function executeDisplayAddOutputControl\(/);
-assert.match(controllerSource, /skipPublicLeaseQuery: true/);
+assert.match(controllerSource, /skipPublicLeaseQuery: "display-authority"/);
 assert.match(controllerSource, /value\.status !== "held_active"[\s\S]*value\.status !== "expired_recoverable"[\s\S]*value\.status !== "held_orphaned"/);
 assert.match(controllerSource, /Exactly one active or recoverable Both output lease is required/);
 assert.match(controllerSource, /action\.kind === "add_display"[\s\S]*selected\[0\]\.status !== "held_orphaned"/);
@@ -775,7 +777,7 @@ assert.doesNotMatch(panelSource, /find\(\(monitor\) => monitor\.primary\)/);
 assert.doesNotMatch(panelSource, /props\.monitorId\)/);
 assert.match(panelSource, /selectedMonitorIdentity\(\) \?\? ""/);
 assert.match(panelSource, /value=\{monitor\.identity\}/);
-assert.match(appSource, /selectOnlyActiveOutputLease\(leaseQuery, \["lighting", "video"\]\)/);
+assert.match(appSource, /selectExactBothLeaseForDisplayAdd\(displayAddAuthority\)/);
 const invokeTuple = [...invokeSource.matchAll(/^\s+"([^"]+)",$/gm)].map((match) => match[1]);
 const invokeManifest = JSON.parse(manifestSource);
 assert.deepEqual(invokeTuple, [...invokeTuple].sort(), "frontend invoke tuple must remain sorted");
