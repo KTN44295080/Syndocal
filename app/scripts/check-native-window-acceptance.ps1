@@ -1457,6 +1457,199 @@ function Assert-NativeWindowTitleCensus {
   }
 }
 
+function Get-NativeControlDomState {
+  param([Parameter(Mandatory = $true)]$Page)
+
+  $raw = Invoke-CdpRuntimeEvaluate -Page $Page -Expression @'
+(() => {
+  const visible = (element) => {
+    if (!(element instanceof HTMLElement)) return false;
+    const rect = element.getBoundingClientRect();
+    const style = getComputedStyle(element);
+    return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+  };
+  const geometry = (element) => {
+    if (!(element instanceof HTMLElement)) return { width: 0, height: 0 };
+    const rect = element.getBoundingClientRect();
+    return { width: Math.round(rect.width), height: Math.round(rect.height) };
+  };
+  const panel = (id) => {
+    const element = document.querySelector(`#edit-domain-panel-${id}`);
+    return {
+      id,
+      present: element instanceof HTMLElement,
+      visible: visible(element),
+      ariaLabel: element?.getAttribute('aria-label') ?? null,
+      geometry: geometry(element),
+    };
+  };
+  const tabs = [...document.querySelectorAll('[data-control-mode-option]')].map((element) => ({
+    id: element.getAttribute('data-control-mode-option'),
+    role: element.getAttribute('role'),
+    selected: element.getAttribute('aria-selected'),
+    controls: element.getAttribute('aria-controls'),
+    visible: visible(element),
+  }));
+  const app = document.querySelector('.app');
+  const doc = document.documentElement;
+  const body = document.body;
+  return JSON.stringify({
+    tabs,
+    panels: ['edit', 'mixer', 'both', 'live'].map(panel),
+    lighting: {
+      viewActions: document.querySelectorAll('[data-live-desk-view-action]').length,
+      upper: visible(document.querySelector('#edit-domain-panel-edit')),
+    },
+    video: {
+      panel: visible(document.querySelector('.videoControlPanelMixer')),
+      previewProgram: visible(document.querySelector('.videoControlPanelMixer [aria-label="Preview and Program"]')),
+      clipTransition: visible(document.querySelector('.videoControlPanelMixer [aria-label="Clip and transition desk"]')),
+      layersOutputs: visible(document.querySelector('.videoControlPanelMixer [aria-label="Layers and outputs"]')),
+      clipBank: visible(document.querySelector('[data-video-clip-slot-bank="edit"]')),
+      recording: visible(document.querySelector('.videoControlPanelMixer .videoRecordingBar')),
+      recordingPresent: document.querySelector('.videoControlPanelMixer .videoRecordingBar') instanceof HTMLElement,
+      recordingEmptyGuard: document.querySelector('.videoControlPanelMixer .videoClipGridPanel.empty') instanceof HTMLElement,
+      audioInput: visible(document.querySelector('.videoControlPanelMixer [aria-label="Live audio analysis input"]')),
+      diagnostics: document.querySelectorAll('.videoControlPanelMixer .videoMixerDiagnostics > *').length,
+    },
+    both: {
+      panel: visible(document.querySelector('#edit-domain-panel-both')),
+      lightingCard: visible(document.querySelector('#edit-domain-panel-both [aria-label="Lighting live controls"]')),
+      videoCard: visible(document.querySelector('#edit-domain-panel-both [aria-label="Video live controls"]')),
+      monitors: document.querySelectorAll('#edit-domain-panel-both [data-both-monitor]').length,
+      cueActions: document.querySelectorAll('#edit-domain-panel-both [aria-label="Cue actions"] button').length,
+      blackoutActions: [...document.querySelectorAll('#edit-domain-panel-both .controlBothBlackoutRow button')].map((element) => ({
+        label: element.getAttribute('aria-label'),
+        pressed: element.getAttribute('aria-pressed'),
+      })),
+    },
+    timeline: {
+      panel: visible(document.querySelector('#edit-domain-panel-live')),
+      arranger: visible(document.querySelector('#edit-domain-panel-live [data-timeline-arranger-upper]')),
+      // The Timeline source shelf is owned by the persistent lower-right
+      // context pane, not by the upper arranger panel. The live-status rail
+      // is intentionally hidden in the shared native shell because the
+      // arranger owns the upper surface there.
+      sourceShelf: visible(document.querySelector('[data-workspace-pane="lower-right"] [data-timeline-source-shelf]')),
+      sourceShelfContext: visible(document.querySelector('[data-workspace-pane="lower-right"]')),
+    },
+    appScrollFree: window.scrollX === 0 && window.scrollY === 0
+      && doc.scrollWidth === doc.clientWidth && doc.scrollHeight === doc.clientHeight
+      && body.scrollWidth === doc.clientWidth && body.scrollHeight === doc.clientHeight
+      && (!app || (app.scrollWidth === app.clientWidth && app.scrollHeight === app.clientHeight)),
+  });
+})()
+'@
+  try {
+    return $raw | ConvertFrom-Json -ErrorAction Stop
+  } catch {
+    throw "Native Control DOM state was not valid JSON: $raw"
+  }
+}
+
+function Invoke-NativeControlSurfaceAcceptance {
+  param(
+    [Parameter(Mandatory = $true)]$MainPage,
+    [Parameter(Mandatory = $true)][IntPtr]$MainWindow,
+    [Parameter(Mandatory = $true)][string]$OutputDirectory
+  )
+
+  Wait-ForCdpCondition -Page $MainPage -Description "Control workspace navigation" -Expression @'
+(() => document.querySelector('[data-workspace-option="control"]') instanceof HTMLElement)()
+'@
+  Invoke-CdpVisibleDomClick -Page $MainPage -Selector '[data-workspace-option="control"]' -Description "select Control workspace for native H5 surface acceptance"
+  Wait-ForCdpCondition -Page $MainPage -Description "four native Control domain tabs" -Expression @'
+(() => document.querySelectorAll('[data-control-mode-option]').length === 4)()
+'@
+
+  $initial = Get-NativeControlDomState -Page $MainPage
+  $expectedTabs = @("edit", "mixer", "both", "live")
+  $actualTabs = @($initial.tabs | ForEach-Object { [string]$_.id })
+  if (-not (Test-ExactStringCensus -Actual $actualTabs -Expected $expectedTabs)) {
+    throw "Native Control tab census failed. expected=[$($expectedTabs -join ', ')] actual=[$($actualTabs -join ', ')]"
+  }
+  foreach ($tab in @($initial.tabs)) {
+    if ([string]$tab.role -ne "tab" -or [string]::IsNullOrWhiteSpace([string]$tab.controls) -or -not [bool]$tab.visible) {
+      throw "Native Control tab semantics failed: $($initial | ConvertTo-Json -Depth 8 -Compress)"
+    }
+  }
+
+  $modeResults = [Collections.Generic.List[object]]::new()
+  $screenshots = [Collections.Generic.List[string]]::new()
+  foreach ($mode in $expectedTabs) {
+    Invoke-CdpVisibleDomClick -Page $MainPage -Selector ('[data-control-mode-option="{0}"]' -f $mode) `
+      -Description ("select native Control {0} domain" -f $mode)
+    $panelExpression = "(() => { const e = document.querySelector('#edit-domain-panel-" + $mode + "'); if (!(e instanceof HTMLElement)) return false; const r = e.getBoundingClientRect(); const s = getComputedStyle(e); return r.width > 0 && r.height > 0 && s.display !== 'none' && s.visibility !== 'hidden'; })()"
+    Wait-ForCdpCondition -Page $MainPage -Description ("native Control {0} panel" -f $mode) -Expression $panelExpression
+    $state = Get-NativeControlDomState -Page $MainPage
+    $selected = @($state.tabs | Where-Object { [string]$_.id -eq $mode })
+    if ($selected.Count -ne 1 -or [string]$selected[0].selected -ne "true") {
+      throw "Native Control '$mode' did not publish exactly one selected tab: $($state | ConvertTo-Json -Depth 8 -Compress)"
+    }
+    $visiblePanels = @($state.panels | Where-Object { [bool]$_.visible })
+    if ($visiblePanels.Count -ne 1 -or [string]$visiblePanels[0].id -ne $mode -or -not [bool]$state.appScrollFree) {
+      throw "Native Control '$mode' panel/scroll contract failed: $($state | ConvertTo-Json -Depth 8 -Compress)"
+    }
+    switch ($mode) {
+      "edit" {
+        if (-not [bool]$state.lighting.upper -or [int]$state.lighting.viewActions -le 0) {
+          throw "Native Lighting surface is incomplete: $($state | ConvertTo-Json -Depth 8 -Compress)"
+        }
+      }
+      "mixer" {
+        if (-not [bool]$state.video.audioInput) {
+          Invoke-CdpVisibleDomClick -Page $MainPage -Selector '[data-mixer-drawer-toggle="audio-in"]' `
+            -Description "open native Video Audio In drawer"
+          Wait-ForCdpCondition -Page $MainPage -Description "native Video Audio In drawer" -Expression @'
+(() => { const e = document.querySelector('.videoControlPanelMixer [aria-label="Live audio analysis input"]'); if (!(e instanceof HTMLElement)) return false; const r = e.getBoundingClientRect(); const s = getComputedStyle(e); return r.width > 0 && r.height > 0 && s.display !== 'none' && s.visibility !== 'hidden'; })()
+'@
+          $state = Get-NativeControlDomState -Page $MainPage
+        }
+        if (-not [bool]$state.video.panel -or -not [bool]$state.video.previewProgram -or
+          -not [bool]$state.video.clipTransition -or -not [bool]$state.video.layersOutputs -or
+          -not [bool]$state.video.clipBank -or -not [bool]$state.video.audioInput -or [int]$state.video.diagnostics -le 0) {
+          throw "Native Video/Audio/recording surface is incomplete: $($state | ConvertTo-Json -Depth 8 -Compress)"
+        }
+        if (-not [bool]$state.video.recording -and
+          (-not [bool]$state.video.recordingPresent -or -not [bool]$state.video.recordingEmptyGuard)) {
+          throw "Native recording surface is neither actionable nor explicitly guarded by the empty-show safety state: $($state | ConvertTo-Json -Depth 8 -Compress)"
+        }
+      }
+      "both" {
+        if (-not [bool]$state.both.panel -or -not [bool]$state.both.lightingCard -or
+          -not [bool]$state.both.videoCard -or [int]$state.both.monitors -ne 2 -or
+          [int]$state.both.cueActions -ne 3 -or @($state.both.blackoutActions).Count -ne 3) {
+          throw "Native Both surface is incomplete: $($state | ConvertTo-Json -Depth 8 -Compress)"
+        }
+        foreach ($action in @($state.both.blackoutActions)) {
+          if ([string]::IsNullOrWhiteSpace([string]$action.label) -or
+            ([string]$action.pressed -ne "true" -and [string]$action.pressed -ne "false")) {
+            throw "Native Both blackout semantic state is incomplete: $($state | ConvertTo-Json -Depth 8 -Compress)"
+          }
+        }
+      }
+      "live" {
+        if (-not [bool]$state.timeline.panel -or -not [bool]$state.timeline.arranger -or
+          -not [bool]$state.timeline.sourceShelf -or -not [bool]$state.timeline.sourceShelfContext) {
+          throw "Native Timeline live-control surface is incomplete: $($state | ConvertTo-Json -Depth 8 -Compress)"
+        }
+      }
+    }
+    $screenshot = Join-Path $OutputDirectory ("control-{0}.png" -f $mode)
+    [void](Save-VerifiedClientScreenshot -Handle $MainWindow -Path $screenshot -Stage ("Control {0} native surface" -f $mode))
+    $screenshots.Add($screenshot)
+    $modeResults.Add([ordered]@{ mode = $mode; dom = $state; screenshot = $screenshot })
+  }
+
+  [ordered]@{
+    tab_census = $actualTabs
+    initial = $initial
+    modes = @($modeResults)
+    screenshots = @($screenshots)
+    action_boundary = "Navigation, panel reachability, semantic state, and safe structure only; no output, recording, Take, blackout, Arm, Take Over, or device action was dispatched."
+  }
+}
+
 function Close-VerifiedOwnedNativeWindow {
   # Same owned-window policy as the script's existing finally cleanup: a real
   # WM_CLOSE goes only to an HWND whose exact title and owning PID were just
@@ -2672,6 +2865,9 @@ try {
       param($state)
       $state.appScrollFree
     }
+  $controlSurfaceAcceptance = Invoke-NativeControlSurfaceAcceptance -MainPage $mainPage `
+    -MainWindow $qaWindow -OutputDirectory $EvidenceDir
+  Write-Host "PASS native Control Lighting/Video/Both/Timeline surface and semantic-state acceptance"
   $paneLifecycle = Invoke-NativePaneLifecycleAcceptance -MainPage $mainPage -MainWindow $qaWindow `
     -ProcessId $qaProcessId -Minimum $minimumMaximizedSize -Port $CdpPort -OutputDirectory $EvidenceDir
   Write-Host "PASS native Stage -> Timeline -> Stage rejoin -> Timeline rejoin pane lifecycle"
@@ -2973,6 +3169,7 @@ try {
       fullscreen = $fullscreenVisual
       restored_maximized = $restoredVisual
     }
+    control_surface = $controlSurfaceAcceptance
     pane_lifecycle = [ordered]@{
       order_a_stage_first = $paneLifecycle
       order_b_timeline_first_stage_second = $orderBLifecycle

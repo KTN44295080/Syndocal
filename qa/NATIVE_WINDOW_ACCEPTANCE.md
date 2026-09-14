@@ -108,6 +108,11 @@ census and pane DOM contracts, process/window identities, restart and adoption
 state, tolerance, visual metrics, screenshot paths, and explicitly unverified
 native boundaries. Generated evidence stays outside the source tree.
 
+The 2026-09-14 H5 continuation adds four safe Control screenshots to the same
+native report (`control-edit.png`, `control-mixer.png`, `control-both.png`, and
+`control-live.png`). Those probe tab/panel reachability and semantic state only;
+they do not dispatch output or dangerous Control actions.
+
 The gate fails if the QA window is not maximized, the monitor is not the
 required 1920x1080 primary surface, maximized content is smaller than
 1920x1000, F11 is not exactly 1920x1080, or Esc does not return to the exact
@@ -145,6 +150,16 @@ Stage/Timeline pane geometry/lifecycle slice. Native Control button-by-button
 interaction, accessibility, physical/external outputs, two-machine operation,
 venue/soak, signing, publication, and the two explicit record-retirement
 boundaries in the report remain unverified.
+
+The same current-source run also passed the safe native Control surface probe:
+four Control tabs, ARIA tab semantics, one visible panel per mode, zero
+document/app scroll, Lighting view actions, the full Video surface with safe
+Audio In disclosure and empty-show recording guard, Both semantic blackout
+state, and the Timeline arranger plus lower-right Source shelf. The report is
+`%TEMP%\syndocal-native-h5-20260914-053000\native-window-acceptance.json`.
+It still does not establish native button-by-button interaction, dangerous
+workflow completion, native accessibility, physical/external output, or
+product completion.
 
 ## Latest verified run
 

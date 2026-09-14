@@ -2,10 +2,10 @@
 
 - Marker: `UI-H5-CONTROL-001`
 - Branch: `codex/showclock-review-20260912`
-- Base: `50f65a4cc7ae924f86ebd7177c1d27e2324b6bf4`
-- Product code change: Control Both blackout toggles now expose `aria-pressed`
-  and stable accessible action names; visible labels and authority callbacks
-  are unchanged.
+- Base: `92d3b838bcbcb657889b1e955750aa4710382987`
+- Product code change in this checkpoint: none. The owned change is the native
+  QA checker only; the existing Control Both blackout semantic change remains
+  the product-source baseline.
 
 ## Existing H5 implementation evidence
 
@@ -84,10 +84,44 @@ operation, venue/soak, signing, publication, or product completion. The two
 explicitly unverified native record-retirement boundaries in the JSON report
 remain unverified.
 
+## Takeover native Control surface probe — 2026-09-14
+
+The same current-source native run then exercised the safe, non-output Control
+surface in the real maximized window at the temporarily selected physical
+`1920x1080@180Hz/32bpp` display. The report is
+`%TEMP%\syndocal-native-h5-20260914-053000\native-window-acceptance.json` and
+contains four additional Control screenshots (`control-edit.png`,
+`control-mixer.png`, `control-both.png`, and `control-live.png`).
+
+The probe passed the exact four-tab census (`edit`, `mixer`, `both`, `live`),
+ARIA `role=tab`/`aria-selected`/`aria-controls` semantics, one visible panel
+per mode, and zero document/app scroll. It reached the Lighting surface and
+its view actions; the full Video desk including Preview/Program, Clip and
+transition, Layers and outputs, Clip Slot bank, diagnostics, and the safe
+Audio In drawer; the empty-show recording bar's explicit empty guard; the
+Both cards, two monitors, Back/GO/Release, and three semantic blackout states;
+and the Timeline arranger plus its lower-right Source shelf. The probe only
+navigated and observed safe structure/state. It did not dispatch output,
+recording, Take, blackout, Arm, Take Over, or device actions.
+
+The Timeline live-status rail is intentionally hidden in the shared native
+shell while the arranger owns the upper surface, and the Source shelf is
+owned by the persistent lower-right context pane. The checker now measures
+those actual ownership boundaries rather than treating either as a missing
+product surface. Display restoration to the original
+`2560x1600@180Hz/32bpp`, isolated-port release, and QA-process cleanup were
+confirmed after the run.
+
+This is native Control surface structure and semantic-state evidence only. It
+does not close native button-by-button interaction, full live workflow,
+accessibility, physical output, failure/recovery, external-client,
+venue/soak, signing, publication, or product completion gates.
+
 ## Acceptance boundary
 
 `UI-H5-CONTROL-001` remains `Open`. The current native window/pane gate now has
-current-source evidence on a physical `1920x1080` display, but the existing
+current-source evidence on a physical `1920x1080` display, and the safe Control
+surface probe now covers native reachability/semantic structure. The existing
 evidence still does not establish native button-by-button interaction, full
 live Lighting/Video/Audio workflow completion, native accessibility, physical
 output, failure/recovery rehearsal, external clients, venue/soak, signing,

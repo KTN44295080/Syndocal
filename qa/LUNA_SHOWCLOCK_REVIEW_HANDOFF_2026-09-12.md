@@ -867,6 +867,34 @@ adds evidence `EV-UI-NATIVE-PANE-DPI-CURRENT-2026-09-14`, bringing linked
 evidence to `85`; the authoritative Flow ledger remains `27 Complete`,
 `8 Deferred`, and `23 Open` out of `58`.
 
+## Latest current-source checkpoint — native Control surface — 2026-09-14
+
+The native checker was continued from pushed base `92d3b838` on the same
+physical `1920x1080@180Hz/32bpp`
+primary display. Its safe Control probe passed the exact four-tab census
+(`edit`, `mixer`, `both`, `live`), ARIA tab semantics, one visible panel per
+mode, zero document/app scroll, Lighting view actions, the full Video surface
+with safe Audio In disclosure and explicit empty-show recording guard, Both
+cards/two monitors/Back-GO-Release/three semantic blackout states, and the
+Timeline arranger plus lower-right Source shelf. It generated four Control
+screenshots in addition to the pane evidence and wrote
+`%TEMP%\syndocal-native-h5-20260914-053000\native-window-acceptance.json`.
+
+The probe was intentionally limited to navigation, reachability, semantic
+state, and safe structure. It dispatched no output, recording, Take, blackout,
+Arm, Take Over, or device action. The Timeline live-status rail remains
+intentionally hidden in the shared native shell while the arranger owns the
+upper surface; the Source shelf is owned by the persistent lower-right context
+pane. The checker now measures those ownership boundaries directly. Display
+restoration to `2560x1600@180Hz/32bpp`, isolated-port release, and QA-process
+cleanup were confirmed. `UI-H5-CONTROL-001` remains Open because native
+button-by-button/dangerous workflow, accessibility, physical/external,
+failure/recovery, venue, signing, and publication boundaries are unproven.
+
+The Q1/Q4 mirror adds `EV-UI-H5-NATIVE-SURFACE-CURRENT-2026-09-14`, bringing
+linked evidence to `86`; the authoritative Flow ledger remains `27 Complete`,
+`8 Deferred`, and `23 Open` out of `58`.
+
 ## Later current-source checkpoints — 2026-09-14
 
 The following source reruns were completed one at a time after the takeover.
