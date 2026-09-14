@@ -198,3 +198,35 @@ composition, reduced-motion native run, or native keyboard-only dangerous-action
 workflow was performed. No native accessibility API was used. Therefore
 `ACCESSIBILITY-NATIVE-001` remains `Open` pending the named native
 accessibility environment and operator matrix.
+
+## Continuation — current-source accessibility recheck after high-DPI UI repair — 2026-09-15
+
+At current source HEAD `bcf3194b`, after the high-DPI Video upper-desk repair,
+the focused accessibility-adjacent source sequence was rerun with the exact
+MSVC `14.44.35207` linker environment initialized and confirmed first by
+`where.exe link.exe`:
+
+```text
+pnpm.cmd --dir app run check:localization
+pnpm.cmd --dir app run check:terminology
+pnpm.cmd --dir app run check:empty-states
+node app/scripts/check-project-history-keyboard.mjs
+node app/scripts/check-timeline-space-keyboard.mjs
+pnpm.cmd --dir app run check:stage-labels
+pnpm.cmd --dir app exec tsc --noEmit
+pnpm.cmd --dir app run build
+```
+
+All eight commands exited `0`. Static Japanese UI coverage remained
+`3844/3844 (100.0%)` with zero unprotected bare user-data labels; terminology,
+empty-state guidance, project-history keyboard routing, Timeline Space routing,
+and Stage label contracts passed. TypeScript passed and the Vite build
+transformed `358` modules successfully. The existing large-chunk message is a
+Vite advisory; no first-party compiler warning was observed.
+
+This is current-source localization, semantic, keyboard-routing, and build
+evidence only. No NVDA/JAWS/Narrator traversal, High Contrast rendering,
+125/150/200% native scaling matrix, IME composition, reduced-motion native run,
+or native keyboard-only dangerous-action workflow was performed.
+`ACCESSIBILITY-NATIVE-001` remains **Open** pending the named native
+accessibility environment and operator matrix.
