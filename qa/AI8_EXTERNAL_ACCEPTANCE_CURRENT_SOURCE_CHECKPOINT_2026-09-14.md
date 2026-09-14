@@ -66,3 +66,25 @@ local bridge/admission/parser boundary; it is not AI8 release acceptance.
 `AI8-EXTERNAL-ACCEPTANCE-001` remains `Open` for clean installation, native
 external clients, restart/update drills, public-network security review,
 signing, publication, and physical-output acceptance.
+
+## Takeover continuation — current-source AI8 boundary recheck — 2026-09-14
+
+At current source HEAD `fda2ed44`, the five local bridge/admission checks were
+rerun:
+
+```text
+check:agent-bridge: PASS (11 groups)
+check-agent-bridge-bootstrap: PASS (4 deferred lifecycle groups)
+check-tauri-admission-inventory: PASS (539 commands; 18 negative fixtures rejected)
+tools/syndocal-mcp/check.mjs: PASS (15 adapter integration groups; fake loopback only)
+check:strict-json: PASS (130 assertions)
+```
+
+All five commands exited `0`. No real external client, clean-machine install,
+release endpoint, signing service, update/restart drill, or physical output
+was contacted. The fake loopback adapter remains local-only and does not call
+Syndocal or a device.
+
+`AI8-EXTERNAL-ACCEPTANCE-001` remains `Open` pending clean installation,
+native external clients, restart/update/security review, signing/publication,
+and physical-output acceptance.
