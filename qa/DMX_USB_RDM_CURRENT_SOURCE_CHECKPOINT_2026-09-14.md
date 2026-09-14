@@ -49,3 +49,12 @@ that external evidence.
 
 Next action is the two-fixture RDM discovery/request matrix with firmware,
 fixture UIDs, raw packets, ACK/NACK/timeout logs, and inventory timing.
+
+## Takeover continuation — current-source USB-DMX/RDM recheck — 2026-09-14
+
+At HEAD `94cbe220`, output-control/Standby Sync, output ownership, and
+safety-blackout runtime contracts all passed. The read-only current PnP Ports
+inventory exposed only a generic `USB Serial Port (COM5)` FTDI device; no
+Enttec, DMXKing, or named RDM interface was present. The generic device was
+not opened and no USB-DMX/RDM bytes or analyzer capture were produced.
+`DMX-USB-RDM-001` remains `Open` for the required two-fixture external matrix.

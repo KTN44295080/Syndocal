@@ -1143,3 +1143,9 @@ The `DMX-ARTNET-001` current-source recheck at HEAD `de9eb1c0` passed DMX
 addressing, output ownership, safety-blackout, and show-setup contracts. No
 Art-Net/sACN node, fixture, reconnect, or sustained physical 44 Hz output was
 used; the marker remains Open for the external lighting matrix.
+
+The `DMX-USB-RDM-001` current-source recheck at HEAD `94cbe220` passed
+output-control/Standby Sync, ownership, and safety-blackout contracts. Read-only
+PnP showed only generic FTDI `USB Serial Port (COM5)`; no Enttec/DMXKing/RDM
+interface was opened and no bytes or analyzer capture were produced. The
+two-fixture USB/RDM matrix remains Open.
