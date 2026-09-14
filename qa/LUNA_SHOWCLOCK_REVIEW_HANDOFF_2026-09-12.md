@@ -1207,3 +1207,13 @@ live-audio IPC, Timeline, video polling/routing/observation, and camera UI
 contracts. This is current-source software evidence only; the command opened
 no physical output or external client and does not close the remaining native,
 hardware, venue, signed-release, or comparator boundaries.
+
+The current native artifact/process recheck at source HEAD `f9ea7810` built
+successfully with Build Tools MSVC `14.44.35207`; the exact
+`target/release/syndocal.exe` was `66,230,272` bytes with SHA-256
+`C95CD9F832FF2E12E25FC132C87E7E2EC44BE11A27348AA94542FE20EC45A940`. One
+exact-path `Syndocal` process exposed one responsive window and was cleaned up
+by exact path. The standard native checker then failed closed before UI
+interaction because the current primary monitor is `2560x1600` and no
+`1920x1080` mode was enumerated. No output/device action occurred; native
+Control button workflows and accessibility remain unaccepted.

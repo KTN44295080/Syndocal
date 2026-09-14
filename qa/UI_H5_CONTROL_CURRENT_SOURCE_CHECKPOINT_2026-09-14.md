@@ -168,3 +168,21 @@ Vite server, endpoint, and profile.
 This is a fresh rendered-browser interaction result only. It does not change
 the native button-by-button, dangerous-action, accessibility, physical-output,
 external-client, venue, signing, or publication boundaries above.
+
+## Takeover native artifact/process recheck — 2026-09-14
+
+At source HEAD `f9ea7810`, `pnpm.cmd --dir app tauri build --no-bundle`
+completed with the pinned Build Tools MSVC `14.44.35207` linker first in
+`where.exe link.exe`. The resulting exact checkout artifact was
+`target/release/syndocal.exe`, `66,230,272` bytes, SHA-256
+`C95CD9F832FF2E12E25FC132C87E7E2EC44BE11A27348AA94542FE20EC45A940`.
+
+An exact-path process smoke then found one `Syndocal` window with a non-zero
+window handle and `Responding=True`; cleanup terminated only that exact
+artifact path. The standard `check:native-window` acceptance was also
+attempted, but failed closed before window interaction because the current
+primary monitor is `2560x1600` and the required `1920x1080` mode is not
+available in the enumerated modes. No output, recording, Take, blackout, Arm,
+Take Over, or device action was performed. This adds current artifact and
+process evidence only; `UI-H5-CONTROL-001` remains `Open` for the required
+native control workflow, accessibility, and physical/external acceptance.
