@@ -96,3 +96,27 @@ crash/restart, physical creation/teardown ACK, or five-display hardware work.
 `AI3-DURABLE-ACCEPTANCE-001` remains `Open` pending the exact artifact's
 native Yes/No/Close workflow, external-client reply-loss/restart matrix,
 physical ACKs, and five-display hardware acceptance.
+
+## Continuation — current artifact durable-acceptance boundary recheck — 2026-09-14
+
+After the current release rebuild and Video desk repair at HEAD `a7d5a4d5`,
+the durable/recovery source contracts were rerun:
+
+```text
+check:agent-bridge: PASS (11 groups)
+check-agent-bridge-bootstrap: PASS (4 deferred lifecycle groups)
+check-tauri-admission-inventory: PASS (539 commands; 18 negative fixtures rejected)
+check:project-recovery-e3: PASS
+check:output-control-runtime: PASS
+check:output-ownership: PASS
+```
+
+All six commands exited `0`. They confirm the current journal/admission,
+project-recovery, output-control, ownership, and native-confirmation source
+boundaries. No native dangerous-action dialog was opened, no reply-loss or
+crash/restart drill was run, no physical creation/teardown ACK was observed,
+and no five-display hardware action was performed.
+
+`AI3-DURABLE-ACCEPTANCE-001` remains `Open` pending the exact artifact's
+native Yes/No/Close observation, external-client reply-loss/restart matrix,
+physical ACKs, and five-display hardware acceptance.
