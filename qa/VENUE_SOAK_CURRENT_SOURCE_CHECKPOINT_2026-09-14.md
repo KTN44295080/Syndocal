@@ -89,3 +89,31 @@ software result. This is continuity evidence only. The required named
 reference machine, maximum-condition GPU/resource and thermal logs,
 integrated A/V/lighting/output/recording path, and one-hour retained report
 were not run in this takeover, so `VENUE-SOAK-001` remains `Open`.
+
+## Current-host 60-second recheck — 2026-09-14
+
+At the current checkpoint base `2a4eb11b`, the existing release soak example
+was run again without rebuilding product code:
+
+```text
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File qa/run-soak.ps1 -DurationSeconds 60 -SampleIntervalSeconds 5 -Configuration Release -SkipBuild -MixedLighting -ReportPath target/qa/m5-soak-mixed-lighting-current-60-2a4eb11b.json
+```
+
+The report retained `1801/1801` nonblank frames, `0` dropped frames, `0`
+render errors, `0` DMX send failures, and `3374` successful loopback DMX
+sends. The run nevertheless failed its explicit performance budgets:
+
+```text
+tick jitter p99:             10844 us (budget 1000 us)  FAIL
+command queue latency p99:    203 us (budget 1000 us)  PASS
+command -> DMX tick p99:     16344 us (budget 5000 us)  FAIL
+```
+
+The wrapper preserved the false report and failed closed; no budget was
+relaxed and no product source was changed to manufacture a pass. This is a
+current-host software-soak failure, not venue acceptance evidence. The
+retained report is `target/qa/m5-soak-mixed-lighting-current-60-2a4eb11b.json`.
+The next safe action is to repeat on a resource-controlled reference machine
+with the exact source/build identity, then continue to the required one-hour
+integrated GPU/A/V/lighting/output/recording run only after the short-run
+budget is green. `VENUE-SOAK-001` remains `Open`.
