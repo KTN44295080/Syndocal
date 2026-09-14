@@ -37258,7 +37258,9 @@ a[href]:focus-visible,
 .layoutControl.controlModeMixer .videoControlPanelMixer {
   display: grid;
   grid-template-columns: minmax(390px, 1fr) minmax(520px, 1.2fr);
-  grid-template-rows: 36px minmax(0, 0.46fr) 5px minmax(0, 0.54fr);
+  /* Preview and Program are the primary operator surface. Give them the
+     larger track; lower Clip / Outputs+Layers panes keep bounded scrollports. */
+  grid-template-rows: 36px minmax(0, 0.60fr) 5px minmax(0, 0.40fr);
   gap: 0;
   min-width: 0;
   min-height: 0;
@@ -37561,9 +37563,10 @@ a[href]:focus-visible,
 /* A native mixer pop-out starts at 860 x 520. It keeps the shared two-column
    desk instead of inheriting the main-window 910px column floor; below that
    floor the right context may scroll locally, while the app itself cannot.
-   The 46/54 top/lower split retains real Preview and Program viewports while
-   giving active media work and an opened drawer a bounded lower reflow -- no
-   existing control, label, spacing, or pad target is reduced. */
+   The 60/40 top/lower split gives Preview and Program the primary monitor
+   surface while the lower clip/context panes retain their bounded local
+   scrollports -- no existing control, label, spacing, or pad target is
+   reduced. */
 .app.paneWindow-mixer .layoutControl.controlModeMixer {
   grid-template-columns: minmax(300px, 1fr) minmax(0, 1.2fr);
   grid-template-rows: minmax(0, 1fr);
@@ -37584,7 +37587,7 @@ a[href]:focus-visible,
 
 .app.paneWindow-mixer .layoutControl.controlModeMixer .videoControlPanelMixer {
   grid-template-columns: minmax(300px, 1fr) minmax(0, 1.2fr);
-  grid-template-rows: 36px minmax(0, 0.46fr) 5px minmax(0, 0.54fr);
+  grid-template-rows: 36px minmax(0, 0.60fr) 5px minmax(0, 0.40fr);
 }
 
 /* The monitor frame may use all of its bounded grid cell.  Its media remains
@@ -37647,7 +37650,7 @@ a[href]:focus-visible,
 @media (min-width: 1600px) and (min-height: 900px) {
   html[data-window-mode="fullscreen"] .layoutControl.controlModeMixer .videoControlPanelMixer {
     grid-template-columns: minmax(390px, 1fr) minmax(520px, 1.2fr);
-    grid-template-rows: minmax(0, 0.47fr) 5px minmax(0, 0.53fr);
+    grid-template-rows: minmax(0, 0.60fr) 5px minmax(0, 0.40fr);
   }
 
   html[data-window-mode="fullscreen"] .layoutControl.controlModeMixer .videoMixerTopPane {

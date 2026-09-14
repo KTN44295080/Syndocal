@@ -1395,3 +1395,44 @@ operator run, TouchDesigner latency setup, or final package review. The
 ASIO rows therefore remain Open with their nonclaims intact. The authoritative
 ledger remains `27 Complete / 8 Deferred / 23 Open` (`58` total), and both
 ledger validators pass.
+
+## Resumption checkpoint — Control Video upper-desk geometry repair — 2026-09-14
+
+The user-provided `2560x1504` Control > Video screenshot showed the upper
+Preview / Program surface compressed enough that the monitor and transport
+controls were difficult to use. Source inspection identified the active final
+layout rule in `app/src/styles.css`: the Video mixer allocated its inner desk
+as `36px + 46% top + 5px divider + 54% lower` in the main window and native
+mixer pop-out, while the large fullscreen override used `47% / 53%`.
+
+The focused repair keeps the existing typography, controls, hit targets,
+two-column desk grammar, structural divider, and pane-local scrollports. It
+changes only the normal/pop-out/fullscreen Video desk split to `60% / 40%`,
+so Preview / Program owns the primary vertical surface. The existing
+`max-height: 800px` rule remains `36% / 64%` for the documented 720/768px
+operating floor and its lower clip-bank reflow.
+
+Evidence on this checkpoint:
+
+- `pnpm.cmd --dir app run build`: PASS; TypeScript and Vite production build
+  completed (`358` modules transformed). Vite emitted the pre-existing large
+  chunk advisory; no compile or bundling error occurred.
+- `pnpm.cmd --dir app run check:video-output-routing-runtime`: PASS.
+- `pnpm.cmd --dir app run check:video-display-target`: PASS.
+- `pnpm.cmd --dir app run check:video-output-window-runtime`: PASS.
+- `pnpm.cmd --dir app run check:desktop-window`: PASS.
+- `pnpm.cmd --dir app tauri build --no-bundle`: PASS; the wrapper pinned the
+  exact Build Tools MSVC `14.44.35207` linker and `where.exe link.exe` placed
+  that linker first. The release executable was regenerated at
+  `target/release/syndocal.exe`.
+- The exact regenerated release executable was launched and observed as one
+  responsive `Syndocal` process (`PID 44076`, `Responding=True`).
+- `pnpm.cmd --dir app run check:control-upper-workspaces`: FAIL CLOSED before
+  browser assertions because this host has no Chrome or Edge executable. No
+  post-change rendered screenshot, DOM measurement, or console claim is made.
+
+This checkpoint repairs the source/native build surface but does not close a
+completion-flow marker or claim native visual acceptance, hardware output,
+external-client, accessibility, venue, signing, or release acceptance. The
+authoritative ledger remains `27 Complete / 8 Deferred / 23 Open` (`58` total)
+until the named gates are evidenced.
