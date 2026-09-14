@@ -36,3 +36,46 @@ output, or venue behavior.
 
 Next action is the named venue/reference machine one-hour run with exact source
 artifact, scene, device topology, resource logs, and first-failure retention.
+
+## Takeover rerun — 2026-09-14
+
+The current branch was rechecked after takeover from `430ed02e`. The first
+short-run attempt exposed two test-harness continuity defects before any venue
+claim could be made:
+
+- `samples/front-dimmer-wave.effect` is now a canonical `Mapping` preset, but
+  `crates/engine/examples/syndocal_soak.rs` only admitted the legacy
+  `position_wave` body.
+- The shared demo sample intentionally fades its video automation to zero at
+  the four-second cue boundary, which is outside this M5 placeholder
+  workload's nonblank-frame contract.
+
+The harness now admits both preset shapes and clamps only the software-soak
+fixture's video-opacity floor to `0.25`; the authored sample and product
+runtime are unchanged. The soak wrapper also refreshes the Windows process
+handle and, only when the generated report is `passed=true`, tolerates a host
+that releases the final exit-code property after report publication. A false
+report or missing report still fails closed. The harness retains bounded blank
+frame diagnostics for future failures.
+
+Focused current-source evidence:
+
+```text
+rustfmt --check crates/engine/examples/syndocal_soak.rs: PASS
+MSVC 14.44.35207 cargo build -p engine --example syndocal_soak --release --locked: PASS
+MSVC 14.44.35207 cargo test -p engine mixed_color_chaser_move --release --locked -- --nocapture: PASS
+  p95=2731us, p99=3236us, max=7100us for mixed 64x200 stack
+  cue transition p95=7895us, p99=9358us, max=9374us
+run-soak.ps1 -DurationSeconds 60 -MixedLighting -SkipBuild: PASS
+```
+
+The 60-second current-source report recorded `1801/1801` nonblank frames,
+zero dropped frames, `1801` live-audio updates, tick p99 `510us`, command
+queue p99 `92us`, command-to-DMX p99 `94us`, `3603` successful loopback DMX
+sends, zero DMX failures, zero render errors, and a `26.4 MB` peak working
+set. This is software-only loopback evidence; it is not the required one-hour
+venue/GPU/integrated A/V/physical-output acceptance.
+
+The product source outside the soak harness and wrapper remains unchanged by
+this rerun. `VENUE-SOAK-001` therefore remains Open pending the named
+reference-machine run and its retained time-series evidence.

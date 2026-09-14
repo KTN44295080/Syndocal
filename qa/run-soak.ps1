@@ -311,20 +311,44 @@ try {
         Start-Sleep -Seconds $SampleIntervalSeconds
     }
     $process.WaitForExit()
+    # A process can publish its report just before the Windows process handle
+    # exposes the final exit code. Refresh until the handle is settled so a
+    # successful harness is not misreported as a wrapper failure.
+    $harnessExitCode = $null
+    for ($attempt = 0; $attempt -lt 20 -and $null -eq $harnessExitCode; $attempt++) {
+        $process.Refresh()
+        if ($process.HasExited) {
+            $harnessExitCode = $process.ExitCode
+        } else {
+            Start-Sleep -Milliseconds 25
+        }
+    }
 } finally {
     if (-not $process.HasExited) {
         Stop-Process -Id $process.Id -Force
     }
 }
 
-if ($process.ExitCode -ne 0) {
-    throw "Soak harness exited with code $($process.ExitCode)."
-}
 if (-not (Test-Path -LiteralPath $resolvedReport)) {
     throw "Soak harness did not produce a report."
 }
 
 $report = Get-Content -LiteralPath $resolvedReport -Raw | ConvertFrom-Json
+if ($null -eq $harnessExitCode) {
+    # Some Windows PowerShell hosts release the Process exit-code property
+    # after the child has published its report. A passing report is the
+    # harness's own fail-closed verdict; accept it as the exit-code fallback,
+    # while retaining failure for a false/malformed/missing report.
+    if ($report.passed -eq $true) {
+        $harnessExitCode = 0
+    } else {
+        throw "Soak harness exit code was unavailable and its report did not pass."
+    }
+}
+if ($harnessExitCode -ne 0) {
+    throw "Soak harness exited with code $harnessExitCode."
+}
+
 $report | Add-Member -NotePropertyName process_peak_working_set_bytes -NotePropertyValue $peakWorkingSet -Force
 $report | Add-Member -NotePropertyName process_cpu_seconds -NotePropertyValue $peakCpuSeconds -Force
 $report | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $resolvedReport -Encoding utf8

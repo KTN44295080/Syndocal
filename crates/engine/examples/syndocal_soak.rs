@@ -23,6 +23,7 @@ const LOOP_MS: u64 = 4_000;
 const TICK_JITTER_P99_BUDGET_US: u64 = 1_000;
 const COMMAND_QUEUE_P99_BUDGET_US: u64 = 1_000;
 const COMMAND_TO_DMX_P99_BUDGET_US: u64 = 5_000;
+const SOAK_VIDEO_OPACITY_FLOOR: f32 = 0.25;
 
 fn main() -> ExitCode {
     match run() {
@@ -36,7 +37,18 @@ fn main() -> ExitCode {
 
 fn run() -> Result<(), String> {
     let (duration, report_path, mixed_lighting) = parse_args()?;
-    let project: ProjectFile = serde_json::from_str(PROJECT_JSON).map_err(|e| e.to_string())?;
+    let mut project: ProjectFile = serde_json::from_str(PROJECT_JSON).map_err(|e| e.to_string())?;
+    // The shared sample intentionally fades its demo video lane to zero at
+    // the four-second cue boundary. The M5 workload gate requires every
+    // placeholder render to stay nonblank, so keep the timeline cadence while
+    // clamping only this software-soak fixture's video-opacity floor.
+    for automation in &mut project.snapshot.timeline.video_automations {
+        if automation.param == VideoParam::Opacity {
+            for keyframe in &mut automation.keyframes {
+                keyframe.value = keyframe.value.max(SOAK_VIDEO_OPACITY_FLOOR);
+            }
+        }
+    }
     let output = project.snapshot.output.clone();
     // The native app uses EngineHandle::start, which is intentionally fail-closed
     // until app-local ownership persistence is initialized. This standalone soak
@@ -74,6 +86,7 @@ fn run() -> Result<(), String> {
     let mut dropped_frames = 0_u64;
     let mut live_audio_updates = 0_u64;
     let mut render_errors = Vec::new();
+    let mut blank_frame_diagnostics = Vec::new();
 
     while started_at.elapsed() < duration {
         let now = Instant::now();
@@ -114,6 +127,29 @@ fn run() -> Result<(), String> {
                 rendered_frames += 1;
                 if frame.data.iter().any(|value| *value != 0) {
                     nonblank_frames += 1;
+                } else if blank_frame_diagnostics.len() < 8 {
+                    let layer_state = snapshot
+                        .video
+                        .layers
+                        .iter()
+                        .find(|layer| layer.id == 1)
+                        .map(|layer| {
+                            format!(
+                                "enabled={} opacity={} playing={} position_ms={}",
+                                layer.state.enabled,
+                                layer.state.opacity,
+                                layer.state.playing,
+                                layer.state.position_ms
+                            )
+                        })
+                        .unwrap_or_else(|| "layer=absent".to_string());
+                    blank_frame_diagnostics.push(format!(
+                        "frame={} timeline_position_ms={} video_blackout={} {}",
+                        rendered_frames,
+                        snapshot.timeline.position_ms,
+                        snapshot.video.blackout,
+                        layer_state
+                    ));
                 }
             }
             Err(error) => {
@@ -166,6 +202,7 @@ fn run() -> Result<(), String> {
         "live_audio_updates": live_audio_updates,
         "frame_ratio": frame_ratio,
         "render_errors": render_errors,
+        "blank_frame_diagnostics": blank_frame_diagnostics,
         "telemetry_budget": {
             "passed": telemetry_budget_passed,
             "tick_jitter_p99_budget_us": TICK_JITTER_P99_BUDGET_US,
@@ -220,6 +257,14 @@ fn add_effect(engine: &EngineHandle, json: &str, target_video: bool) -> Result<(
             });
         }
         EngineCommand::AddPositionWaveEffect { effect_id, request }
+    } else if let Some(request) = preset.mapping {
+        // Mapping presets became the canonical replacement for the legacy
+        // position-wave body. Keep the soak corpus compatible with both
+        // shapes so a protocol-only preset migration cannot disable the M5
+        // workload at startup.
+        return engine
+            .add_mapping_effect(effect_id, request, preset.enabled)
+            .map_err(|error| error.to_string());
     } else {
         return Err("soak effect preset has no effect body".to_string());
     };
