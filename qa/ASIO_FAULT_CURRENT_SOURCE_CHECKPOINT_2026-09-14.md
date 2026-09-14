@@ -81,3 +81,29 @@ reopened, and no native fault-injection artifact was produced.
 `ASIO-FAULT-MATRIX-001` remains `Open` for the real occupied-driver,
 rate/buffer-change, reset/resync, XRUN, unplug/replug, callback-gap, and
 no-callback recovery matrix.
+
+## Takeover continuation — current-source fault-contract recheck after Video repair — 2026-09-14
+
+At current source HEAD `466da2a6`, the SDK-independent bridge suite was rerun
+after initializing the exact Build Tools MSVC `14.44.35207` x64 environment.
+The pinned linker was printed first by `where.exe link.exe`:
+
+```text
+CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+
+cargo test --manifest-path tools/asio-bridge/Cargo.toml --locked -- --nocapture
+test result: ok. 31 passed; 0 failed; 0 ignored
+
+pnpm.cmd run check:asio-v3-contract
+ASIO v3 contract tests passed: 22 assertions
+```
+
+Both commands exited `0`. The deterministic suite reconfirmed callback frame
+integrity, full-silence rejection, generation fencing, native-format handling,
+lease ownership, stale-ticket rejection, no-fallback behavior, and typed
+Stop/Close cleanup. No real ASIO driver was occupied, reset, unplugged, or
+reopened, and no native fault-injection artifact was produced.
+`ASIO-FAULT-MATRIX-001` remains `Open` for the real occupied-driver,
+rate/buffer-change, reset/resync, XRUN, unplug/replug, callback-gap, and
+no-callback recovery matrix.
