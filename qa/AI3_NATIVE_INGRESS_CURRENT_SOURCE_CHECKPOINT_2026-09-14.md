@@ -279,3 +279,51 @@ complete feedback/Clock/MTC, reconnect and replacement, latency, named
 OSC/Remote clients, real Art-Net/DMX hardware, and venue evidence. The test
 must be rerun while an operator moves a control; the raw message and
 timestamp output must be retained before any ingress claim is advanced.
+
+## Physical SMC-Mixer bridge installation and WinMM recheck — 2026-09-18
+
+The 2026-09-18 production capture attempt did not reach its 30-second
+operator window. The first invocation was corrected to quote the `cmd.exe`
+environment assignments; the second invocation still failed before opening a
+port. A separate production-port enumeration printed only:
+
+```text
+MIDI inputs: [CustomMIDI1]
+MIDI outputs: [Microsoft GS Wavetable Synth, CustomMIDI1]
+no MIDI input matched 'SMC-Mixer'
+```
+
+Read-only Windows PnP inventory simultaneously reported `SMC-Mixer
+(Bluetooth MIDI IN)`, `SMC-Mixer (Bluetooth MIDI OUT)`, and the paired
+`SMC-Mixer` Bluetooth device as `OK`. This proves an OS/PnP endpoint exists;
+it does not prove that the product's `midir`/WinMM backend can open it.
+
+The official M-VAVE Windows `Sinco Connector` installer was downloaded to a
+temporary directory, Defender-scanned with no detection, and installed with
+reboot suppressed. Its built-in x86 diagnostic then reported that the required
+Bome BMIDI 2 bus DLL/driver was missing. The official Bome
+`BMIDI_Driver_2.1.0.44.exe` was downloaded, its published MD5
+`f9b4f6f3894dceddb54398a055948bc8` matched, its Authenticode signature was
+`Valid`, and it was installed successfully. A second connector diagnostic
+reported:
+
+```text
+[OK] Native x86 load: C:\Windows\SysWOW64\bmidilib2.dll
+[OK] Bome BMIDI 2 bus driver is installed.
+[OK] Native x86 load: C:\Program Files (x86)\Bt Midi Connector\bmidistatic2.dll
+```
+
+The `BTMidiConnector.exe` process is running and responsive, but its device
+connection action has not yet been invoked; the subsequent Syndocal WinMM
+enumeration remains `CustomMIDI1` only. No MIDI bytes, lighting command,
+blackout, Take, Arm, Take Over, recording, or other disruptive output was
+sent in this recheck. The available computer-use surface did not expose the
+Connector window for a safe observed click, so the next action is an operator
+click on the Connector's `Connect Device` action, followed by a fresh
+`midir` enumeration and a supervised 30-second capture with one knob/button
+movement.
+
+`AI3-NATIVE-INGRESS-001` remains `Open`. This checkpoint records the
+driver/bridge preflight and its current WinMM boundary only; it does not
+establish Bluetooth forwarding, controller movement, feedback, Clock/MTC,
+reconnect, latency, OSC/Remote, DMX/Art-Net, or venue acceptance.
