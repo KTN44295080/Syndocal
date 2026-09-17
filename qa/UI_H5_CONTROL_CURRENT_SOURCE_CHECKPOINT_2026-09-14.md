@@ -877,3 +877,25 @@ This is one current exact-release visual slice only. It does not claim
 button-by-button H5 live output, dangerous-operation, recording, recovery,
 native accessibility, physical-display, external-client, or venue acceptance;
 `UI-H5-CONTROL-001` remains `Open` for those boundaries.
+
+## Capture helper foreground-isolation repair — 2026-09-18
+
+The comparison capture helper was corrected after a false capture was found:
+it selected the Syndocal HWND but used `CopyFromScreen`, so a foreground
+browser could be saved under the target window's label. It now uses Win32
+`PrintWindow(PW_RENDERFULLCONTENT)` for the resolved HWND and fails closed if
+Windows cannot render that HWND.
+
+The repaired helper was run against the exact release window. Its output was
+the same SHA-256 as the direct HWND capture above, and visual inspection
+showed Syndocal's Control > Lighting > Live surface rather than the foreground
+browser:
+
+```text
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File qa/harnesses/capture-window.ps1 -TitlePattern '^Syndocal$' -OutPath C:\TEMP\syndocal-capture-helper-fixed-20260918.png -SettleMilliseconds 300
+captured 'Syndocal' (2586 x 1578)
+sha256: 3EAEE18ED2069A9731F4C40DD33A07DDAD831B70CF009F844A269B914A8A37A1
+```
+
+This repairs evidence capture only; it does not expand the native H5,
+accessibility, hardware, external-client, or venue acceptance boundary.

@@ -1,6 +1,6 @@
 # Capture a visible desktop window to PNG for competitive UI comparison.
-# Read-only: brings the target window to the foreground and photographs its
-# on-screen rectangle. It never sends input to the captured application.
+# Read-only: resolves the target HWND and asks Windows to render that exact
+# window. It never sends input to the captured application.
 #
 # Usage:
 #   pwsh qa/harnesses/capture-window.ps1 -TitlePattern "Daslight" -OutPath target/qa/ui-comparison/daslight.png
@@ -44,6 +44,9 @@ public static class CompetitiveCaptureNative {
 
   [DllImport("user32.dll")]
   public static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
+
+  [DllImport("user32.dll")]
+  public static extern bool PrintWindow(IntPtr hWnd, IntPtr hdcBlt, uint nFlags);
 
   [DllImport("user32.dll")]
   public static extern bool SetForegroundWindow(IntPtr hWnd);
@@ -130,7 +133,16 @@ $bitmap = [System.Drawing.Bitmap]::new($width, $height)
 try {
   $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
   try {
-    $graphics.CopyFromScreen($rect.Left, $rect.Top, 0, 0, [System.Drawing.Size]::new($width, $height))
+    $hdc = $graphics.GetHdc()
+    try {
+      # PW_RENDERFULLCONTENT asks WebView2-backed windows for their current
+      # composed content without depending on which application is foreground.
+      if (-not [CompetitiveCaptureNative]::PrintWindow($target.Handle, $hdc, 2)) {
+        throw "PrintWindow failed for '$($target.Title)' (HWND $($target.Handle))."
+      }
+    } finally {
+      $graphics.ReleaseHdc($hdc)
+    }
   } finally {
     $graphics.Dispose()
   }
