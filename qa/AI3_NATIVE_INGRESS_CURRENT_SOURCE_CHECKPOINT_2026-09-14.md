@@ -431,3 +431,25 @@ This is a longer fail-closed observation, not physical-ingress acceptance.
 `AI3-NATIVE-INGRESS-001` remains `Open` pending a captured controller event
 and the remaining feedback/Clock/MTC, reconnect/replacement, latency,
 OSC/Remote, DMX/Art-Net, and venue evidence.
+
+## Operator-directed 120-second capture window — 2026-09-18
+
+The same UIA-observed connected bridge was left in place for a final longer
+production `midir` capture. The test again requested a knob or button action
+while the window was open, but no raw message reached the selected input:
+
+```text
+SYNDOCAL_TEST_MIDI_INPUT=SMC-Mixer
+SYNDOCAL_TEST_MIDI_CAPTURE_SECONDS=120
+cargo test -p io --release --locked -j 1 physical_midi_input_captures_operator_ingress -- --ignored --nocapture --test-threads=1
+physical MIDI input 'SMC-Mixer' produced no operator ingress during 120s
+test result: 0 passed; 1 failed; 0 ignored
+exit_code=101; finished in 120.09s
+```
+
+This confirms only another fail-closed no-message window; it is not a
+controller-event, mapping, or native-ingress acceptance artifact. The bridge
+UI state and endpoint enumeration remain observable, but the product path
+still lacks a captured operator event and the feedback/Clock/MTC,
+reconnect/replacement, latency, OSC/Remote, DMX/Art-Net, and venue evidence.
+`AI3-NATIVE-INGRESS-001` and `INPUT-PHYSICAL-001` remain `Open`.
