@@ -327,3 +327,38 @@ movement.
 driver/bridge preflight and its current WinMM boundary only; it does not
 establish Bluetooth forwarding, controller movement, feedback, Clock/MTC,
 reconnect, latency, OSC/Remote, DMX/Art-Net, or venue acceptance.
+
+## Current production MIDI recheck and supervised-capture boundary — 2026-09-18
+
+At current source HEAD b89737b2, the production midir path was rerun after
+the Connector preflight. The exact Build Tools MSVC 14.44.35207 x64 linker
+was pinned and resolved first by where.exe link.exe. Port enumeration and
+the safe feedback/open test passed:
+
+```text
+MIDI inputs:
+CustomMIDI1, SMC-Mixer, MIDIIN2 (SMC-Mixer), SMC-Mixer-bt
+MIDI outputs:
+Microsoft GS Wavetable Synth, CustomMIDI1, SMC-Mixer,
+MIDIOUT2 (SMC-Mixer), SMC-Mixer-bt
+test result: 1 passed; 0 failed; 0 ignored
+```
+
+The named SMC-Mixer input was then opened through the production midir
+capture test for a bounded 30-second window. The test was intentionally
+fail-closed and produced no message:
+
+```text
+capturing physical MIDI input 'SMC-Mixer' for 30s; move one knob or press one button
+physical MIDI input 'SMC-Mixer' produced no operator ingress during 30s
+test result: 0 passed; 1 failed; 0 ignored
+```
+
+No MIDI output, lighting, blackout, Take, Arm, Take Over, recording, or other
+disruptive action was performed by the capture run. This recheck proves that
+the connector-visible endpoints are currently enumerable/openable, but it
+does not prove Bluetooth forwarding or operator ingress. `AI3-NATIVE-INGRESS-001`
+remains `Open`; the next required step is a supervised capture while an
+operator moves a physical knob/button, followed by complete feedback,
+Clock/MTC, reconnect/replacement, latency, OSC/Remote, and DMX/Art-Net
+evidence.
