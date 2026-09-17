@@ -268,3 +268,34 @@ No service state was changed by this attempt. The subsequent `midir` retry
 still enumerated only `CustomMIDI1` and failed before opening or sending any
 SMC-Mixer endpoint. This is retained as a host recovery boundary, not as a
 MIDI acceptance result; `INPUT-PHYSICAL-001` remains **Open**.
+
+## Current production endpoint and capture recheck — 2026-09-18
+
+The current host again exposed the connected unit through the production
+WinMM/midir path. With the exact MSVC `14.44.35207` x64 linker pinned and
+verified first by `where.exe link.exe`, the selected SMC-Mixer input/output
+opened and the safe feedback test passed:
+
+```text
+MIDI inputs: CustomMIDI1, SMC-Mixer, MIDIIN2 (SMC-Mixer), SMC-Mixer-bt
+MIDI outputs: Microsoft GS Wavetable Synth, CustomMIDI1, SMC-Mixer,
+  MIDIOUT2 (SMC-Mixer), SMC-Mixer-bt
+test result: ok; 1 passed; 0 failed; 0 ignored
+```
+
+The test sent only channel-1 `B0 7B 00` All Notes Off. A new 30-second
+operator-directed capture against `SMC-Mixer` opened the input but received no
+message:
+
+```text
+SYNDOCAL_TEST_MIDI_INPUT=SMC-Mixer
+SYNDOCAL_TEST_MIDI_CAPTURE_SECONDS=30
+cargo test -p io --release --locked -j 1 physical_midi_input_captures_operator_ingress -- --ignored --nocapture --test-threads=1
+physical MIDI input 'SMC-Mixer' produced no operator ingress during 30s
+test result: 0 passed; 1 failed; 0 ignored; exit_code=101
+```
+
+This is current endpoint/openability evidence only. It does not prove a
+controller movement was captured, nor feedback/Clock/MTC, latency,
+reconnect/replacement, OSC/TouchOSC, Web Remote, native routing, DMX, or
+venue acceptance. `INPUT-PHYSICAL-001` remains **Open**.

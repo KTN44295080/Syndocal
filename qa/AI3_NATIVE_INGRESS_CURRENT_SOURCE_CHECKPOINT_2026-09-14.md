@@ -453,3 +453,36 @@ UI state and endpoint enumeration remain observable, but the product path
 still lacks a captured operator event and the feedback/Clock/MTC,
 reconnect/replacement, latency, OSC/Remote, DMX/Art-Net, and venue evidence.
 `AI3-NATIVE-INGRESS-001` and `INPUT-PHYSICAL-001` remain `Open`.
+
+## Current endpoint recheck and supervised input window — 2026-09-18
+
+After the UI checkpoint, the current host again exposed the connected
+SMC-Mixer through the production WinMM/midir path. The exact MSVC
+`14.44.35207` x64 linker was initialized and resolved first by
+`where.exe link.exe`. The safe enumeration/open/feedback test passed:
+
+```text
+MIDI inputs: CustomMIDI1, SMC-Mixer, MIDIIN2 (SMC-Mixer), SMC-Mixer-bt
+MIDI outputs: Microsoft GS Wavetable Synth, CustomMIDI1, SMC-Mixer,
+  MIDIOUT2 (SMC-Mixer), SMC-Mixer-bt
+cargo test -p io --release --locked -j 1 physical_midi_ports_enumerate_open_and_send_feedback -- --ignored --nocapture --test-threads=1
+test result: ok; 1 passed; 0 failed; 0 ignored
+```
+
+The selected `SMC-Mixer` input/output opened successfully and the test sent
+only its safe channel-1 All Notes Off message. A fresh 30-second capture then
+opened the same production input and requested one knob or button action:
+
+```text
+SYNDOCAL_TEST_MIDI_INPUT=SMC-Mixer
+SYNDOCAL_TEST_MIDI_CAPTURE_SECONDS=30
+cargo test -p io --release --locked -j 1 physical_midi_input_captures_operator_ingress -- --ignored --nocapture --test-threads=1
+physical MIDI input 'SMC-Mixer' produced no operator ingress during 30s
+test result: 0 passed; 1 failed; 0 ignored; exit_code=101
+```
+
+This recheck proves current endpoint enumeration/openability and safe
+feedback transport only. It does not provide a captured operator event and
+does not close Bluetooth forwarding, mapped ingress, Clock/MTC, reconnect or
+replacement, latency, OSC/Remote, DMX/Art-Net, or venue acceptance.
+`AI3-NATIVE-INGRESS-001` remains `Open`.
