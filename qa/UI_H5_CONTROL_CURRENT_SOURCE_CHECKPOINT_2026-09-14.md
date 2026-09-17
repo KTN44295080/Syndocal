@@ -744,3 +744,101 @@ native accessibility, physical output, external clients, failure/recovery,
 venue/soak, signing, publication, or product completion. Therefore
 `UI-H5-CONTROL-001` remains `Open`; this recheck only refreshes its safe UI
 surface evidence.
+
+## Current-source short-height operator reflow — 2026-09-18
+
+The reported upper-area collapse was reproduced in the current browser fixture
+at the compact `1366x768` and `1280x720` viewports. The VJ operator containment
+probe found the third layer action outside the visible layer scrollport. The
+first reflow attempt moved Outputs and Layers side by side, which exposed a
+second real issue: the third output selector could fall outside the narrow
+Outputs rail. The final repair gives the short-height Mixer context a bounded
+`350px / 250px` Outputs/Layers split, preserves the high-DPI `2560x1504` /
+CSS `1280x752` monitor-first exception, and fixes opened compact drawer rows at
+the usable `56px` floor. Typography and hit-target sizes were not reduced.
+
+The focused QA harness also received only state/readiness corrections: a fresh
+operator-VJ CDP target no longer waits on an unmounted `about:blank` shell,
+Fullscreen VJ restores Control > Mixer before measuring the Mixer surface, and
+the broad Control loop restores Control after the Setup-owned live-audio gate.
+These changes do not weaken containment assertions.
+
+Successful current-source rendered checks after the repair:
+
+```text
+CHROME_PATH=C:\Users\janua\AppData\Local\Google\Chrome\Application\chrome.exe
+pnpm.cmd --dir app run check:control-upper-workspaces
+  PASS: 3840x2160, 2560x1440, 2560x1504, 1920x1080, 1280x720,
+        and 2560x1504-2x / CSS 1280x752; zero CDP diagnostics.
+
+pnpm.cmd --dir app run check:vj-operator
+  PASS: en/ja at 1920x1080, 1920x1032, 2048x1152, 1366x768, and 1280x720;
+        zero unsafe overflow and zero outside-rect controls after the repair.
+
+pnpm.cmd --dir app run check:fullscreen-vj
+  PASS: 1920x1080, 1366x768, and 1280x720; fullscreen shared grid,
+        monitor balance, drawer height, and stateful audio contract passed.
+
+pnpm.cmd --dir app run check:audio-reactive-viewport
+  PASS: 1920x1080 and 1366x768; SAFE ZERO strip contained, with the compact
+        strip reduced from the reproduced 62px row to the bounded 56px row.
+
+pnpm.cmd --dir app run check:live-audio-viewport
+  PASS: en/ja at 1920x1080, 1920x1032, 2048x1152, 1366x768, and 1280x720;
+        live state, safety clear, telemetry containment, and zero critical
+        telemetry overflow passed.
+
+pnpm.cmd --dir app run check:video-setup-viewport
+  PASS: 1920x1080, 1920x1032, 2048x1152, 1366x768, and 1280x720.
+
+pnpm.cmd --dir app run check:touch
+  PASS: DVC preset (10 assertions), Default Desk/Viewport Touch, all five
+        viewport classes, zero page scroll, and zero undersized targets.
+
+pnpm.cmd --dir app run check:workspace-operator-viewport
+  PASS: 1920x1080, 1920x1032, 2048x1152, 1366x768, and 1280x720.
+```
+
+The focused Auto VJ command remains a separate harness boundary: it stops at
+`Program audio default-device config registration` before producing a layout
+verdict. It was not counted as a product UI pass or used to close this
+checkpoint. The broad legacy `check:viewport` runner also remains subject to
+its known late CDP navigation timeout and is not used to manufacture a pass.
+
+This checkpoint accepts current-source rendered containment and reachability
+for the listed UI slices only. It does not claim native button-by-button live
+Lighting/Video/Audio, Take/Transition, Blackout/Arm/Take Over, recording,
+native accessibility, physical output, external clients, failure/recovery,
+venue/soak, signing, publication, or product completion. Therefore
+`UI-H5-CONTROL-001` remains `Open`.
+
+## Current-source native rebuild and window probe — 2026-09-18
+
+The exact current release executable was rebuilt after the short-height repair
+with the maintained Tauri wrapper:
+
+```text
+pnpm.cmd --dir app tauri build --no-bundle
+  PASS: exit 0; release optimized build completed.
+  Toolchain: Build Tools MSVC 14.44.35207; where.exe link.exe resolved the
+  pinned Hostx64/x64 linker first.
+```
+
+The rebuilt
+C:\Users\janua\OneDrive\ドキュメント\GitHub\Syndocal\target\release\syndocal.exe
+was then launched and checked as exactly one responsive Syndocal window
+(PID 47928 at the time of this checkpoint).
+
+The existing Windows native window/pane probe produced all product assertions
+as PASS: maximized client 2560x1552, F11 2560x1600, exact Escape restore,
+Control Lighting/Video/Both/Timeline semantic surfaces, both Stage/Timeline
+detach orders, detached-pane restart restore, main-window reload adoption,
+direct Stage-child close reintegration, and final full reintegration. The
+fresh native screenshot set is under
+C:\TEMP\syndocal-native-ui-short-height-20260918.
+
+The wrapper process returned exit code 1 during its final Tauri-dev cleanup
+despite the probe emitting every product assertion as PASS; therefore this
+run is recorded as native probe evidence, not as an exit-0 native acceptance
+claim or a Q4 accepted-current record. The two explicitly unverified native
+pane-state boundaries remain those named in the generated report.

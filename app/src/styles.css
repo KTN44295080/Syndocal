@@ -37729,6 +37729,63 @@ a[href]:focus-visible,
   }
 }
 
+/* Short operator windows need a usable monitor and two reachable context
+   panes. Stacking Outputs and Layers in the lower 40% leaves the layer action
+   row outside its scrollport at the 720/768px floor. Reflow the context panes
+   side by side and give the monitor/lower desks balanced rows; each pane keeps
+   its own bounded scrollport, with no typography or hit-target reduction. */
+@media (max-height: 800px) {
+  .layoutControl.controlModeMixer .videoControlPanelMixer {
+    grid-template-rows: 36px minmax(0, 0.48fr) 5px minmax(0, 0.52fr);
+  }
+
+  .videoControlPanelMixer .videoMixerContextPane {
+    grid-template-columns: minmax(350px, 1.2fr) minmax(250px, 0.8fr);
+    grid-template-rows: minmax(0, 1fr);
+  }
+
+  .videoControlPanelMixer .videoMixerContextPane > .videoMixerProgramPane,
+  .videoControlPanelMixer .videoMixerContextPane > .videoMixerLayerPane {
+    grid-row: 1;
+    min-width: 0;
+    min-height: 0;
+  }
+
+  .videoControlPanelMixer .videoMixerContextPane > .videoMixerProgramPane {
+    grid-column: 1;
+    border-right: 1px solid var(--ray-border);
+    border-bottom: 0;
+  }
+
+  .videoControlPanelMixer .videoMixerContextPane > .videoMixerLayerPane {
+    grid-column: 2;
+  }
+
+  /* A compact reactive strip is a single bounded row. Keep the opened-drawer
+     track at its usable 56px floor instead of allowing the grid to stretch it
+     into the clip bank's short-height budget. */
+  .videoControlPanelMixer .videoMixerClipPane:has(
+      > [data-mixer-drawer-toggle][aria-expanded="true"]
+    ) {
+    grid-template-rows: 40px 30px 22px 56px minmax(0, 1fr);
+  }
+
+  .videoControlPanelMixer .videoMixerClipPane:has(> .videoMediaOperationRail):has(
+      [data-mixer-drawer-toggle][aria-expanded="true"]
+    ) {
+    grid-template-rows: 40px auto 30px 22px 56px minmax(0, 1fr);
+  }
+}
+
+/* A 2x 2560x1504 desktop is exposed to CSS as 1280x752, but still has the
+   physical room for the monitor-first high-DPI composition above. Keep that
+   source-specific upper-desk share after the ordinary short-window override. */
+@media (max-height: 800px) and (min-width: 1200px) and (min-resolution: 144dpi) {
+  .layoutControl.controlModeMixer .videoControlPanelMixer {
+    grid-template-rows: 36px minmax(0, 0.60fr) 5px minmax(0, 0.40fr);
+  }
+}
+
 /* Media Asset T1: a closed library rail consumes one normal control row. Its
    opened catalog overlays the clip desk and scrolls internally, preserving the
    fixed one-screen shell and the existing clip hit targets. */
