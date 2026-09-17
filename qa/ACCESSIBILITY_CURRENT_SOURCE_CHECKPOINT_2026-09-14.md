@@ -308,3 +308,38 @@ substitute for NVDA speech-viewer traversal or prove the inner web controls'
 native accessibility exposure. The existing source/ARIA checks remain valid,
 but `ACCESSIBILITY-NATIVE-001` stays **Open** for NVDA/Narrator, High Contrast,
 scaling, IME, reduced motion, and keyboard-only safety/recovery observation.
+
+## Current release NVDA, High Contrast, and 200% DPI recheck — 2026-09-18
+
+The exact current release executable was left running as one responsive
+`target/release/syndocal.exe` process while the installed
+`C:\Program Files\NVDA\nvda_noUIAccess.exe` was started for the native
+accessibility observation. The NVDA process was responsive. With NVDA active,
+Windows UI Automation exposed `136` descendants below the Syndocal window,
+including named focusable controls for Setup/Edit/Control, Workspaces, GO,
+DMX/Video/All Blackout, MIDI/OSC/DMX Learn, the Control domain tabs, Touch
+mode, Stage selection/pan/fit, fader edit/live, and the attribute categories.
+
+`GetDpiForWindow` returned `192` for the release HWND, which is the current
+native `200%` effective scaling. A native Windows High Contrast pass saved the
+original `HIGHCONTRAST.dwFlags=126` (off), enabled the setting with flags `127`,
+captured the real Syndocal HWND with the repaired `PrintWindow` helper, and
+restored the original flags `126` in a `finally` path. The captured image was
+visually inspected: the top bar, workspace tabs, direct-control area, upper
+and lower panes, faders, and status bar remained contained and readable; no
+upper collapse or clipped critical control was observed.
+
+```text
+artifact: C:\TEMP\syndocal-native-high-contrast-20260918.png
+sha256: AF5196AB8531743D55D5C61310CBDC7D7DA5222F1ABCEABEF1A5B57C2AED8DAB
+native window: Syndocal / 2586x1578 / DPI 192 (200%)
+NVDA: nvda_noUIAccess.exe responsive
+High Contrast: flags 126 -> 127 -> 126
+```
+
+This is a current native UIA, NVDA-process, High Contrast visual, and 200%
+scaling slice. It is not a speech-viewer transcript and does not prove NVDA
+announcements, 125%/150% scaling, IME composition, reduced-motion behavior,
+the complete keyboard-only dangerous-action/recovery matrix, or native
+focus-return for every dialog/popout. `ACCESSIBILITY-NATIVE-001` remains
+**Open** for those gates.
