@@ -362,3 +362,16 @@ remains `Open`; the next required step is a supervised capture while an
 operator moves a physical knob/button, followed by complete feedback,
 Clock/MTC, reconnect/replacement, latency, OSC/Remote, and DMX/Art-Net
 evidence.
+
+## Candidate input scan after bridge connection — 2026-09-18
+
+After the first `SMC-Mixer` capture produced no message, the three current
+production input names exposed by WinMM were checked individually:
+`SMC-Mixer`, `SMC-Mixer-bt`, and `MIDIIN2 (SMC-Mixer)`. Each named input was
+opened through the same production midir capture test for a bounded 30-second
+window and each run fail-closed with no operator ingress. No MIDI output or
+other disruptive action was performed. This narrows the current observation
+to endpoint enumeration/openability; it does not establish current-source
+acceptance, Bluetooth forwarding, controller movement, or the remaining
+feedback/Clock/MTC, reconnect, latency, OSC/Remote, DMX/Art-Net, and venue
+gates. `AI3-NATIVE-INGRESS-001` remains `Open`.
