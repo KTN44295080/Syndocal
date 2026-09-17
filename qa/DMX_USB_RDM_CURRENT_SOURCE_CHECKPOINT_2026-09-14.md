@@ -154,3 +154,14 @@ This confirms the current Windows serial handle can be opened and accepts a
 zero-only write. It does not provide a BREAK/MAB timing capture, serial
 analyzer receipt, fixture/wire observation, or proof that the product's
 Open-DMX worker reached the port. `DMX-USB-RDM-001` remains **Open**.
+
+## Current-host COM5 worker recheck — 2026-09-18
+
+The current PnP inventory exposed the same FTDI `USB Serial Port (COM5)`.
+The existing production serial-DMX worker was rerun with the pinned MSVC
+14.44.35207 x64 linker, `SYNDOCAL_PHYSICAL_SECONDS=10`, and
+`SYNDOCAL_PHYSICAL_MASTER=20`. It completed with `439` successful sends and
+zero send failures in `10.01s` (`1 passed`). This is current port/worker
+telemetry only; no named Enttec/DMXKing RDM gateway, analyzer waveform,
+fixture observation, E1.20 ACK/NACK/TOD exchange, or two-fixture result was
+obtained. `DMX-USB-RDM-001` remains **Open**.

@@ -222,3 +222,24 @@ was obtained during this recheck, so this is transport/worker telemetry only;
 it does not upgrade the earlier operator-confirmed fixture slice. Waveform and
 44 Hz continuity, RDM/TOD, Art-Net/sACN, ownership replacement, and venue
 acceptance remain unproven.
+
+### 2026-09-18 current-host physical serial-DMX worker recheck
+
+The current PnP inventory again exposed the FTDI USB serial path as `COM5`.
+Using the repository-required MSVC `14.44.35207` x64 linker, the existing
+production Engine worker was rerun with the bounded low-master settings
+`SYNDOCAL_PHYSICAL_SERIAL=COM5`, `SYNDOCAL_PHYSICAL_SECONDS=10`, and
+`SYNDOCAL_PHYSICAL_MASTER=20`:
+
+```text
+cargo test -p engine --release --locked -j 1 physical_serial_rainbow_demo_drives_master_dimmer_and_rgb_cells -- --ignored --nocapture --test-threads=1
+demo running: master=20 cell1 rgb=(54,73,255) sends=439
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1096 filtered out; finished in 10.01s
+```
+
+The worker opened COM5, reported 439 successful sends, and reported no send
+failure. No current operator visual confirmation, BREAK/MAB waveform,
+analyzer receipt, RDM/TOD exchange, or sustained 44 Hz artifact was obtained;
+this is transport/worker telemetry only. It does not close
+`DMX-ARTNET-001`, `DMX-USB-RDM-001`, `AI3-PHYSICAL-REARM-001`, or any venue
+acceptance gate.
