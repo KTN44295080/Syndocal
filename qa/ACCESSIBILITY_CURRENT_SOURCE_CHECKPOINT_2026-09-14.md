@@ -261,3 +261,35 @@ High Contrast rendering, 125/150/200% native scaling matrix, IME composition,
 reduced-motion run, or full keyboard-only dangerous-action/recovery workflow
 was completed. `ACCESSIBILITY-NATIVE-001` remains **Open** pending those
 operator-observed native gates.
+
+## Continuation — current-source accessibility recheck and UI-label repair — 2026-09-18
+
+At current source HEAD after the UI containment changes, the accessibility-
+adjacent source sequence was rerun. The first run found a real localization
+regression in the newly compact safety-blackout topbar control:
+`3843/3845` static strings were covered, with `Release safety blackout` and
+the intentional compact badge `SAFE` reported as untranslated. The fix adds
+the Japanese ARIA label `安全ブラックアウトを解除` and explicitly retains
+`SAFE` as a locale-invariant product badge so the compact visual label does
+not expand and reintroduce the upper-bar squeeze.
+
+The corrected run and all remaining source checks exited `0`:
+
+```text
+check:localization: PASS (3845/3845; 100.0%; 0 unprotected user-data labels)
+check:terminology: PASS
+check:empty-states: PASS
+check-project-history-keyboard: PASS
+check-timeline-space-keyboard: PASS
+check:stage-labels: PASS
+tsc --noEmit: PASS
+vite build: PASS (358 modules)
+```
+
+This checkpoint fixes only the discovered source/localization regression and
+records current-source semantic/build evidence. The existing native
+UIA/NVDA/keyboard evidence remains limited to its recorded 2026-09-15 slice;
+no new speech-viewer transcript, High Contrast rendering, 125/150/200% native
+scaling matrix, IME composition, reduced-motion run, or full keyboard-only
+dangerous-action/recovery workflow was performed. Therefore
+`ACCESSIBILITY-NATIVE-001` remains **Open**.

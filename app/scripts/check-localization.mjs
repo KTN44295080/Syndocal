@@ -381,6 +381,7 @@ assert.equal(localization.translateUiText("Live", "ja"), "ライブ");
 assert.equal(localization.translateUiText("BO", "ja"), "BO");
 assert.equal(localization.translateUiText("Off", "ja"), "OFF");
 assert.equal(localization.translateUiText("SAFE ZERO", "ja"), "安全ゼロ");
+assert.equal(localization.translateUiText("Release safety blackout", "ja"), "安全ブラックアウトを解除");
 assert.equal(
   localization.translateUiText("System default audio input", "ja"),
   "システム既定の音声入力",
@@ -1082,7 +1083,7 @@ async function collectTsx(directory) {
 await collectTsx(sourceRoot);
 
 const localeInvariantText = new Set([
-  "Syndocal", "Syndocal Background", "Syndocal Foreground", "Background Video2 Camera", "Foreground Video 1", "DMX", "MIDI", "OSC", "RDM", "ISF", "NDI", "Spout", "Syphon", "HAP", "FFmpeg",
+  "Syndocal", "Syndocal Background", "Syndocal Foreground", "Background Video2 Camera", "Foreground Video 1", "SAFE", "DMX", "MIDI", "OSC", "RDM", "ISF", "NDI", "Spout", "Syphon", "HAP", "FFmpeg",
   "GO", "SET", "FLASH", "EDIT", "EDIT:", "LIVE", "BLIND", "HTP", "LTP", "RGB", "BPM", "PULSE", "PATCH", "A", "B", "R", "G", "X", "Y", "Z", "Pan", "Tilt",
   "Dimmer", "Color", "Position", "Beam", "Speed", "Size", "Phase",
   "Sine", "Cosine", "Triangle", "Saw", "Square", "Random", "Perlin", "Rainbow",

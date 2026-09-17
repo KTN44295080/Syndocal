@@ -3428,6 +3428,7 @@ const japaneseText: Record<string, string> = {
     "Rollは0、DMX値は変更しません。プロファイルの光軸やPan・Tiltが加わるため、各ビームの照射点とは異なる場合があります。",
   "Safety blackout is engaged. It is independent of normal DMX/video blackout.":
     "安全ブラックアウト中。通常のDMX・映像ブラックアウトとは独立しています。",
+  "Release safety blackout": "安全ブラックアウトを解除",
   "Safety blackout engaged · Release safety": "安全ブラックアウト中 · 安全解除",
   "Same-PC production show route": "同一PCの本番公演ルート",
   "Machine-local USB-DMX device": "このPCのUSB-DMXデバイス",
