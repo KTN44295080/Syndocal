@@ -247,3 +247,47 @@ hostile-input/fuzz matrix, cross-platform file-identity decision
 supported non-Windows claims, external clients, physical output, signing,
 publication, or product completion. `MIGRATION-COMPATIBILITY-001` remains
 **Open**.
+
+## Continuation — current-source migration recheck and runner repair — 2026-09-18
+
+At the current product source after the Remote/Security checkpoint, the exact
+MSVC `14.44.35207` x64 environment was initialized and `where.exe link.exe`
+resolved the pinned linker first. The migration source contracts and focused
+release filters passed:
+
+```text
+check:project-storage: PASS
+check:project-transaction: PASS
+check:project-recovery-e3: PASS
+check:project-publication-e4: PASS
+check:project-open-bootstrap: PASS
+check-project-history-preflight: PASS
+check-project-history-keyboard: PASS
+check-project-transaction-recovery-controller: PASS (6 scenarios)
+check:strict-json: PASS (130 assertions)
+project_file_: 33 passed; 0 failed; 0 ignored
+project_recovery_: 2 passed; 0 failed; 0 ignored
+project_publication_: 18 passed; 0 failed; 0 ignored
+migration_corpus_: 12 passed; 0 failed; 0 ignored
+```
+
+The maintained `check-migration-corpus.mjs` runner first exposed a stale
+expectation (`12 !== 11`) after the current corpus selected twelve tests. The
+runner was repaired to expect the actual maintained selection of twelve, then
+rerun with the same pinned linker. The final runner result was:
+
+```text
+migration corpus: 224 truncations, 5 malformed byte/number cases, 3 depth cases
+migration hostile corpus: seed=0x5344435f20260913, 4096 cases,
+4091 parser-rejected, 5 parsed, 0 prepared, max_bytes=2048
+migration corpus: seed=0x5344435f20260913, 128 semantic/idempotency cases
+migration corpus gate passed: 12 Rust tests, none failed or ignored
+```
+
+No product migration schema or runtime behavior was changed by this repair;
+only the stale acceptance count in the QA runner was corrected. This remains
+current-source Windows evidence. It does not close the broader hostile-input
+fuzz matrix, `DEC-FILE-ID-001`, supported non-Windows claims, real
+upgrade/downgrade or clean-machine rehearsals, external clients, physical
+output, signing, publication, or product completion. Therefore
+`MIGRATION-COMPATIBILITY-001` remains **Open**.
