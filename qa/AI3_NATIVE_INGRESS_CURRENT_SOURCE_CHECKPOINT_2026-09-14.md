@@ -375,3 +375,38 @@ to endpoint enumeration/openability; it does not establish current-source
 acceptance, Bluetooth forwarding, controller movement, or the remaining
 feedback/Clock/MTC, reconnect, latency, OSC/Remote, DMX/Art-Net, and venue
 gates. `AI3-NATIVE-INGRESS-001` remains `Open`.
+
+## Connected-bridge capture recheck — 2026-09-18
+
+The BTMidiConnector window was inspected through Windows UI Automation. Its
+connected-device list contained `SMC-Mixer`, the connection state exposed the
+`Disconnect Device` tooltip, and the status text was `SMC-Mixer Connected.`.
+The Bluetooth-device dialog was opened only to inspect its controls and was
+closed through its named `ExitButton`; no new pairing or disconnect operation
+was invoked.
+
+With that connected state retained, the current production `midir` path was
+rerun using the exact MSVC `14.44.35207` x64 linker:
+
+```text
+SYNDOCAL_TEST_MIDI_INPUT=SMC-Mixer
+SYNDOCAL_TEST_MIDI_CAPTURE_SECONDS=30
+cargo test -p io --release --locked -j 1 physical_midi_input_captures_operator_ingress -- --ignored --nocapture --test-threads=1
+```
+
+The endpoint opened, but the fail-closed capture timed out with no operator
+message:
+
+```text
+capturing physical MIDI input 'SMC-Mixer' for 30s; move one knob or press one button
+physical MIDI input 'SMC-Mixer' produced no operator ingress during 30s
+test result: 0 passed; 1 failed; 0 ignored
+exit_code=101
+```
+
+This narrows the current boundary to a connected/observable bridge with no
+captured physical control movement in the supervised window. It does not
+prove Bluetooth forwarding, controller ingress, feedback/Clock/MTC,
+reconnect/replacement, latency, OSC/Remote, DMX/Art-Net, or venue behavior.
+`AI3-NATIVE-INGRESS-001` remains `Open`; resume with an actual knob/button
+movement while this exact capture is running.
