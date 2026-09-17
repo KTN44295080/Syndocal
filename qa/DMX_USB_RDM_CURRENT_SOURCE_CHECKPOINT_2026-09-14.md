@@ -165,3 +165,24 @@ zero send failures in `10.01s` (`1 passed`). This is current port/worker
 telemetry only; no named Enttec/DMXKing RDM gateway, analyzer waveform,
 fixture observation, E1.20 ACK/NACK/TOD exchange, or two-fixture result was
 obtained. `DMX-USB-RDM-001` remains **Open**.
+
+## Current-host COM5 supervised 30-second worker recheck — 2026-09-18
+
+The same present-only PnP inventory exposed the FTDI `USB Serial Port (COM5)`.
+Using the repository-required MSVC `14.44.35207` x64 linker, the production
+121-channel worker was run again at `SYNDOCAL_PHYSICAL_MASTER=20` for a
+bounded `SYNDOCAL_PHYSICAL_SECONDS=30` window:
+
+```text
+cargo test -p engine --release --locked -j 1 physical_serial_rainbow_demo_drives_master_dimmer_and_rgb_cells -- --ignored --nocapture --test-threads=1
+demo running: master=20 cell1 rgb=(52,75,255) sends=273
+demo running: master=20 cell1 rgb=(249,101,32) sends=713
+demo running: master=20 cell1 rgb=(6,223,153) sends=1154
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1096 filtered out; finished in 30.04s
+```
+
+The worker opened COM5, reported `1154` successful sends, and reported no
+send failure. No current operator fixture observation, BREAK/MAB waveform,
+analyzer receipt, RDM/TOD exchange, or sustained 44 Hz artifact was captured;
+this remains transport/worker telemetry only. `DMX-USB-RDM-001` remains
+**Open**.

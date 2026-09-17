@@ -243,3 +243,24 @@ analyzer receipt, RDM/TOD exchange, or sustained 44 Hz artifact was obtained;
 this is transport/worker telemetry only. It does not close
 `DMX-ARTNET-001`, `DMX-USB-RDM-001`, `AI3-PHYSICAL-REARM-001`, or any venue
 acceptance gate.
+
+### 2026-09-18 current-host physical serial-DMX supervised 30-second recheck
+
+With the current FTDI `USB Serial Port (COM5)` still present, the same
+production Engine worker was rerun using the exact MSVC `14.44.35207` x64
+linker and the bounded low-master settings `master=20` and `30 seconds`:
+
+```text
+cargo test -p engine --release --locked -j 1 physical_serial_rainbow_demo_drives_master_dimmer_and_rgb_cells -- --ignored --nocapture --test-threads=1
+demo running: master=20 cell1 rgb=(52,75,255) sends=273
+demo running: master=20 cell1 rgb=(249,101,32) sends=713
+demo running: master=20 cell1 rgb=(6,223,153) sends=1154
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1096 filtered out; finished in 30.04s
+```
+
+The worker opened COM5 and completed the bounded run with `1154` successful
+sends and no reported send failure. This is stronger current transport/worker
+telemetry than the earlier 10-second recheck, but no current operator visual
+confirmation, BREAK/MAB waveform, analyzer receipt, RDM/TOD exchange, or
+sustained 44 Hz artifact was captured in this run. The DMX/Art-Net/RDM,
+project re-Arm, and venue gates therefore remain open.
