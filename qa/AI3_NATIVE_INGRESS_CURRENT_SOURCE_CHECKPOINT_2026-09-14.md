@@ -410,3 +410,24 @@ prove Bluetooth forwarding, controller ingress, feedback/Clock/MTC,
 reconnect/replacement, latency, OSC/Remote, DMX/Art-Net, or venue behavior.
 `AI3-NATIVE-INGRESS-001` remains `Open`; resume with an actual knob/button
 movement while this exact capture is running.
+
+## Operator-directed extended capture window — 2026-09-18
+
+With the same UIA-observed `SMC-Mixer Connected.` bridge state retained, a
+second operator-directed production `midir` capture was run for 60 seconds.
+The prompt explicitly requested one knob or button action after the capture
+window opened. No raw message was observed:
+
+```text
+SYNDOCAL_TEST_MIDI_INPUT=SMC-Mixer
+SYNDOCAL_TEST_MIDI_CAPTURE_SECONDS=60
+cargo test -p io --release --locked -j 1 physical_midi_input_captures_operator_ingress -- --ignored --nocapture --test-threads=1
+physical MIDI input 'SMC-Mixer' produced no operator ingress during 60s
+test result: 0 passed; 1 failed; 0 ignored
+exit_code=101
+```
+
+This is a longer fail-closed observation, not physical-ingress acceptance.
+`AI3-NATIVE-INGRESS-001` remains `Open` pending a captured controller event
+and the remaining feedback/Clock/MTC, reconnect/replacement, latency,
+OSC/Remote, DMX/Art-Net, and venue evidence.
