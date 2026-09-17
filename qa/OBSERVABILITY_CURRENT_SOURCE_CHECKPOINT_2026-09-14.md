@@ -322,3 +322,35 @@ drill, external client, physical device, or native accessibility/interaction
 acceptance was performed. `OBSERVABILITY-SUPPORT-001` therefore remains
 `Open` for the signed update/failure matrix, deployment/recovery drills,
 clean-machine recovery, signing/publication, and native/physical acceptance.
+
+## Continuation — current-source observability/release recheck — 2026-09-18
+
+At current source HEAD after the migration runner checkpoint, the exact MSVC
+`14.44.35207` x64 environment was initialized and `where.exe link.exe`
+resolved the pinned linker first. The complete current-source Node gate and
+focused release Rust filters exited `0`:
+
+```text
+check:status: PASS
+check:release:self-test: PASS (release metadata 137; ASIO 169; candidate extractor 43; materialization 4; Windows release artifact 144; strict JSON 130; AI0/AI1/AI2/AI4/AI5/AI6/AI7/F1/F2 and video routing)
+check:bundled-library: PASS
+check-windows-release-artifacts --self-test: PASS (43 extractor + 4 materialization + 144 release artifact assertions)
+check:strict-json: PASS (130 assertions)
+diagnostic_: 38 passed; 0 failed; 0 ignored
+updater_: 3 passed; 0 failed; 0 ignored
+project_replacement_is_redacted: 1 passed; 0 failed; 0 ignored
+```
+
+The focused Rust run also recorded the deterministic hostile diagnostic
+archive corpus: 512 cases, 511 rejected, 0 panics, maximum 163841 bytes.
+This confirms current-source status truth, redacted bounded diagnostics,
+updater identity and fail-closed configuration, release-negative artifact
+checks, bundled-library retry behavior, strict JSON, and project replacement
+redaction.
+
+No update endpoint, signed N-to-N+1 publication, clean-machine installation,
+deployed support/startup/takeover/recovery/shutdown drill, external client,
+physical device, or native accessibility/interaction acceptance was performed.
+`OBSERVABILITY-SUPPORT-001` remains `Open` for signed update/failure behavior,
+deployment/support drills, clean-machine recovery, signing/publication, and
+native/physical acceptance.
