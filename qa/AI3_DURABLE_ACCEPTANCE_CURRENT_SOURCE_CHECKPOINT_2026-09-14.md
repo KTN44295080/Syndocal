@@ -149,3 +149,32 @@ The newly recorded Q4 evidence is
 The next safe action is the existing native/external/physical acceptance
 procedure above, with process identity, journal/output state, and first
 failure retained before any marker change.
+
+## Continuation — current release durable-source recheck — 2026-09-18
+
+At current source HEAD `bfb746d3`, the six source checks were rerun with all
+exit codes `0`:
+
+```text
+check:agent-bridge: PASS (11 groups; 4 deferred lifecycle groups)
+check-tauri-admission-inventory: PASS (539 commands; 18 negative fixtures rejected; SHA-256 a0ba71bfd1dce9e657fc5b052ccc452cf00f8a42fb3d838edef28913658cb9ab)
+check:project-recovery-e3: PASS
+check:output-control-runtime: PASS (including Standby Sync output-lease UI)
+check:output-ownership: PASS
+```
+
+The exact MSVC `14.44.35207` x64 linker was selected and verified first with
+`where.exe link.exe`. The release durable filter also passed all 23 selected
+tests (`23 passed; 0 failed; 0 ignored`). Those tests cover durable journal
+receipts, exact replay, restart non-reclamation, safe-abort/release guards,
+corrupt or unwritable journal rejection, cleanup-only behavior, and takeover
+terminal/pending retry fences.
+
+This remains current-source software evidence. No native dangerous-action
+Yes/No/Close dialog was opened, no external client reply-loss or crash/restart
+session was run, no physical creation/teardown ACK was observed, and no
+five-display hardware run was available. The PnP preflight recorded in the
+re-Arm checkpoint still has no current FTDI/COM5 output device. Therefore
+`AI3-DURABLE-ACCEPTANCE-001` remains `Open`; the remaining work is the exact
+release artifact's supervised native/external/physical/five-display matrix
+with process identity, journal state, output state, and first failure retained.
