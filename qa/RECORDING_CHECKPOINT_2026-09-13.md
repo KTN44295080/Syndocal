@@ -120,3 +120,35 @@ This closes the current-source real H.264/AAC file-generation and synthetic
 physical camera-plus-display recording, disk-full/power-loss recovery, or a
 venue encoder/ownership acceptance; `RECORDING-001`'s remaining external
 boundaries stay open.
+
+## Current-source real-codec recheck after UI containment checkpoint — 2026-09-18
+
+At current source HEAD `292c7e6b83664e0346a61ff88284d7b5d893345a`, the same
+production recording command was rerun with the repository-required MSVC
+`14.44.35207` x64 linker and the test-only FFmpeg/FFprobe pair that provides
+H.264 `libx264` and AAC. The bundled LGPL FFmpeg was intentionally not used
+for this check because it reports `Unknown encoder 'libx264'` and cannot
+represent the advertised H.264 acceptance.
+
+```text
+cargo test --manifest-path app/src-tauri/Cargo.toml --release --locked -j 1 recording_command_writes_a_real_video_and_audio_mp4 -- --ignored --nocapture --test-threads=1
+test result: 1 passed; 0 failed; 0 ignored
+
+cargo test --manifest-path app/src-tauri/Cargo.toml --release --locked -j 1 recording_command_keeps_long_av_sync_with_first_and_last_flash_clicks -- --ignored --nocapture --test-threads=1
+test result: 1 passed; 0 failed; 0 ignored
+```
+
+The retained report is `C:\TEMP\syndocal-long-av-20260918-current\long-av-sync-30m.json`:
+
+```text
+frames_written=54000; frame_rate=30; duration_seconds=1800
+video_duration_seconds=1800.0; audio_duration_seconds=1800.0
+start_drift_ms=0.0; end_drift_ms=0.0
+first_video_luma=255.0; middle_video_luma=0.0; last_video_luma=255.0
+first_audio_peak=4328; middle_audio_peak=0; last_audio_peak=4119
+```
+
+This recheck confirms real MP4 finalization and the synthetic 30-minute
+audio/video timing slice on the current source. It does not establish an
+in-app native Start/Stop session, physical camera-to-display recording,
+disk-full or power-loss behavior, two-PC ownership, or venue acceptance.

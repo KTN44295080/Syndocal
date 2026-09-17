@@ -383,3 +383,29 @@ state was `Window blocked` with `ProjectSwapDisarmed`; `Open/Reopen output` was
 disabled. This is a direct native observation of the output gate, not a
 physical-pixel result. No Syndocal-owned output window was opened and no
 display pixels were sent by this recheck. `VIDEO-PHYSICAL-001` remains **Open**.
+
+## Current-host camera and screen capture recheck — 2026-09-18
+
+The exact current source was rerun with MSVC `14.44.35207` x64 and the
+canonical DirectShow profile for the present ASUS 5M webcam. The production
+capture worker completed two independent start/stop attempts and returned a
+non-transparent frame with the profile's `1280x720` dimensions each time:
+
+```text
+cargo test --manifest-path app/src-tauri/Cargo.toml --release --locked -j 1 camera_worker_captures_a_real_frame_and_restarts_cleanly -- --ignored --nocapture --test-threads=1
+test result: 1 passed; 0 failed; 0 ignored
+```
+
+The visible-desktop capture worker was also rerun against the current desktop
+and stopped cleanly:
+
+```text
+cargo test --manifest-path app/src-tauri/Cargo.toml --release --locked -j 1 screen_worker_captures_a_real_frame -- --ignored --nocapture --test-threads=1
+test result: 1 passed; 0 failed; 0 ignored
+```
+
+These are current-host physical capture-source observations. They do not
+prove that a Syndocal-owned fullscreen output window produced nonblank pixels
+on a selected display, nor HDMI/NDI/Spout reception, camera unplug/replug,
+GPU reset, dropped-frame budget, or one-hour operation. `VIDEO-PHYSICAL-001`
+remains **Open** pending those output and recovery legs.

@@ -293,3 +293,18 @@ no new speech-viewer transcript, High Contrast rendering, 125/150/200% native
 scaling matrix, IME composition, reduced-motion run, or full keyboard-only
 dangerous-action/recovery workflow was performed. Therefore
 `ACCESSIBILITY-NATIVE-001` remains **Open**.
+
+## Current release UI Automation probe — 2026-09-18
+
+The exact current release executable was running as one responsive
+`target/release/syndocal.exe` process. A read-only Windows UI Automation probe
+found the main window and its WebView2 child, but the WebView content controls
+were not exposed as descendants of the native UIA tree: 16 descendants were
+reported, with only the `Syndocal` and `Syndocal - Web コンテンツ` panes carrying
+names. No Enter, dangerous action, or state mutation was sent.
+
+This confirms the host can locate the native window, while it does not
+substitute for NVDA speech-viewer traversal or prove the inner web controls'
+native accessibility exposure. The existing source/ARIA checks remain valid,
+but `ACCESSIBILITY-NATIVE-001` stays **Open** for NVDA/Narrator, High Contrast,
+scaling, IME, reduced motion, and keyboard-only safety/recovery observation.
