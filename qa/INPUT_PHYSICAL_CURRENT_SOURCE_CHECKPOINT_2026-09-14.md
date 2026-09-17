@@ -299,3 +299,19 @@ This is current endpoint/openability evidence only. It does not prove a
 controller movement was captured, nor feedback/Clock/MTC, latency,
 reconnect/replacement, OSC/TouchOSC, Web Remote, native routing, DMX, or
 venue acceptance. `INPUT-PHYSICAL-001` remains **Open**.
+
+## Follow-up production endpoint alias capture — 2026-09-18
+
+The current production `midir` capture was repeated against both visible
+SMC-Mixer input aliases for 30 seconds each:
+
+```text
+SMC-Mixer: no operator ingress during 30s; 0 passed / 1 failed; exit_code=101
+MIDIIN2 (SMC-Mixer): no operator ingress during 30s; 0 passed / 1 failed; exit_code=101
+```
+
+No raw knob/button/clock event was received in either window. This does not
+invalidate the current endpoint enumeration/open/safe-feedback result, but it
+does not extend it to physical input acceptance. `INPUT-PHYSICAL-001` remains
+**Open** pending a retained operator event, canonical mapped dispatch,
+feedback/Clock/MTC and latency evidence.

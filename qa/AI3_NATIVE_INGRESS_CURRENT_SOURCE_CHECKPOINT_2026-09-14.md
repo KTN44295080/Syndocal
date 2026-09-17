@@ -486,3 +486,28 @@ feedback transport only. It does not provide a captured operator event and
 does not close Bluetooth forwarding, mapped ingress, Clock/MTC, reconnect or
 replacement, latency, OSC/Remote, DMX/Art-Net, or venue acceptance.
 `AI3-NATIVE-INGRESS-001` remains `Open`.
+
+## Follow-up production endpoint alias capture — 2026-09-18
+
+To distinguish a wrong alias from a missing operator event, the production
+capture was repeated against the two currently presented SMC-Mixer input names
+while the device remained connected. Both windows were bounded to 30 seconds;
+neither produced a raw ingress message:
+
+```text
+SYNDOCAL_TEST_MIDI_INPUT=SMC-Mixer
+SYNDOCAL_TEST_MIDI_CAPTURE_SECONDS=30
+physical MIDI input 'SMC-Mixer' produced no operator ingress during 30s
+test result: 0 passed; 1 failed; 0 ignored; exit_code=101
+
+SYNDOCAL_TEST_MIDI_INPUT=MIDIIN2 (SMC-Mixer)
+SYNDOCAL_TEST_MIDI_CAPTURE_SECONDS=30
+physical MIDI input 'MIDIIN2 (SMC-Mixer)' produced no operator ingress during 30s
+test result: 0 passed; 1 failed; 0 ignored; exit_code=101
+```
+
+The earlier endpoint enumeration/open/safe-feedback pass and the direct
+WinMM LED slice remain valid, but these fresh alias captures still provide no
+operator event for the production ingress path. `AI3-NATIVE-INGRESS-001`
+remains **Open**; the next required proof is a retained raw knob/button/clock
+event followed through the canonical mapping and lease route.
