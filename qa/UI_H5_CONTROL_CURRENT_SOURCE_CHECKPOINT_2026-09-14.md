@@ -842,3 +842,15 @@ despite the probe emitting every product assertion as PASS; therefore this
 run is recorded as native probe evidence, not as an exit-0 native acceptance
 claim or a Q4 accepted-current record. The two explicitly unverified native
 pane-state boundaries remain those named in the generated report.
+
+## Current DisplayConfig topology observation — 2026-09-18
+
+The read-only three-display harness was rerun after the current host hardware
+recheck. PnP still exposes multiple monitor and SMC-Mixer devices, but this
+run's active DisplayConfig-to-GDI binding returned only one monitor identity:
+`\\?\DISPLAY#TMA0803#5&2a56f61f&0&UID256#{e6f07b5f-ee97-4a90-b076-33f57bf4eaa7}`
+(`DISPLAY1`, `2560x1600`, effective DPI `192`). The harness therefore wrote
+`verdict=not-configured`, `accepted=false`, and
+`native_hardware_claim=false`. It made no display-mode, window, output, focus,
+or device change. PnP device count is not substituted for the active
+DisplayConfig identity contract, so `UI-H5-CONTROL-001` remains `Open`.
