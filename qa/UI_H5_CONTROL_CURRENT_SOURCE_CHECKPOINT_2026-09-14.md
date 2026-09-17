@@ -854,3 +854,26 @@ run's active DisplayConfig-to-GDI binding returned only one monitor identity:
 `native_hardware_claim=false`. It made no display-mode, window, output, focus,
 or device change. PnP device count is not substituted for the active
 DisplayConfig identity contract, so `UI-H5-CONTROL-001` remains `Open`.
+
+## Current exact-release PrintWindow visual recheck — 2026-09-18
+
+After the native probe, the exact release executable was restarted and its
+actual Syndocal HWND was captured with Win32 `PrintWindow`, rather than a
+desktop screenshot that could capture a foreground browser. The process was
+the current checkout's `target/release/syndocal.exe`, one responsive window,
+client/window bounds `2586x1578`. The captured Control > Lighting > Live
+surface showed the upper workspace, direct-control tabs, empty-state control
+panes, lower Groups/Faders panes, and status bar fully contained; no upper
+workspace collapse, clipping, or unreadable wrap was visible.
+
+```text
+artifact: C:\TEMP\syndocal-native-printwindow-20260918.png
+sha256: 3EAEE18ED2069A9731F4C40DD33A07DDAD831B70CF009F844A269B914A8A37A1
+PrintWindow: True
+window: Syndocal / 2586x1578
+```
+
+This is one current exact-release visual slice only. It does not claim
+button-by-button H5 live output, dangerous-operation, recording, recovery,
+native accessibility, physical-display, external-client, or venue acceptance;
+`UI-H5-CONTROL-001` remains `Open` for those boundaries.
