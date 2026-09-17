@@ -89,6 +89,45 @@ Syndocal or a device.
 native external clients, restart/update/security review, signing/publication,
 and physical-output acceptance.
 
+## Continuation — current-source bridge and native-sidecar authentication boundary — 2026-09-18
+
+At current source HEAD `fc792925`, the bridge, bootstrap, admission, MCP
+adapter, MCP transport, and strict-JSON checks were rerun:
+
+```text
+check:agent-bridge: PASS (11 groups; 4 deferred lifecycle groups)
+check-tauri-admission-inventory: PASS (539 commands; 18 negative fixtures rejected; SHA-256 a0ba71bfd1dce9e657fc5b052ccc452cf00f8a42fb3d838edef28913658cb9ab)
+tools/syndocal-mcp/check.mjs: PASS (15 adapter groups; hostile stdio corpus 128 rejected; fake loopback only)
+tools/syndocal-mcp/check-transports.mjs: PASS (HTTP health/JSON-RPC/REST/WebSocket; fake loopback only)
+check:strict-json: PASS (130 assertions)
+```
+
+The exact release executable was already running with a current descriptor at
+`%LOCALAPPDATA%\jp.seraf.ktn.syndocal\agent-bridge-v1.json`; its descriptor
+process ID and executable path matched the exact checkout
+`target/release/syndocal.exe` (SHA-256 recorded by the native process
+preflight). A real local stdio sidecar was then started against that exact
+descriptor and executable with principal `show-operator` and incarnation `1`.
+The MCP `initialize` response succeeded, while `tools/list` returned:
+
+```text
+{"code":-32001,"message":"Authenticated principal is required before tool discovery."}
+```
+
+The configured credential file was absent, so no credential was created or
+printed and no native tool, mutation, device, or output call was attempted.
+This is an observed fail-closed authentication boundary, not a real external
+client acceptance result.
+
+`AI8-EXTERNAL-ACCEPTANCE-001` remains `Open`. Clean installation, a paired
+real external client with an approved grant, authenticated native tool
+discovery/calls, crash/restart and update drills, public-network/security
+review, artifact/signing/publication inspection, and physical-output
+acceptance remain required. Resume by pairing a declared local principal
+through the native administration flow, retaining only redacted descriptor
+and process identity evidence, then rerunning read-only discovery before any
+bounded mutation.
+
 ## Continuation — current-source AI8 boundary recheck — 2026-09-15
 
 At current source HEAD `5d07b7fb`, the five local bridge/admission/parser
