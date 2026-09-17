@@ -185,3 +185,26 @@ artifact, a declared connected output topology, acknowledged retirement,
 explicit re-Arm, operator/hardware observation for every path, and the first
 failure retained. Resume only after the FTDI/fixture is present; restore and
 record the physical topology before enabling any output.
+
+## Later current-host COM5 transport recheck — 2026-09-18
+
+The subsequent current-host inventory exposed the FTDI `USB Serial Port
+(COM5)` again. This supersedes only the earlier same-day no-device preflight;
+it does not supersede the end-to-end Re-Arm boundary above. With the exact
+MSVC `14.44.35207` x64 linker, the production Engine worker was exercised at
+the deliberately bounded low-master setting `master=20` for 30 seconds:
+
+```text
+cargo test -p engine --release --locked -j 1 physical_serial_rainbow_demo_drives_master_dimmer_and_rgb_cells -- --ignored --nocapture --test-threads=1
+demo running: master=20 cell1 rgb=(52,75,255) sends=273
+demo running: master=20 cell1 rgb=(249,101,32) sends=713
+demo running: master=20 cell1 rgb=(6,223,153) sends=1154
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1096 filtered out; finished in 30.04s
+```
+
+This proves current COM5 open/write and worker telemetry only. It does not
+prove physical fixture visibility, acknowledged output retirement, New/Load/
+Recovery/Backup/Take Over, explicit Re-Arm, hardware state, or venue behavior.
+`AI3-PHYSICAL-REARM-001` remains `Open`; resume the matrix with an operator
+observation and retained pre/post ownership generations when the fixture is
+available.
