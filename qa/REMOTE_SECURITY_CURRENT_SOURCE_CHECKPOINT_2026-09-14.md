@@ -318,3 +318,35 @@ and complete bypass-review acceptance.
 
 The Q4 ledger records this recheck as
 `EV-REMOTE-SECURITY-CURRENT-SW-2026-09-15`.
+
+## Continuation — current-source Remote/Security recheck — 2026-09-18
+
+At current source HEAD after the COM5 checkpoint, the Remote/Security source
+and release-test set was rerun with the exact MSVC 14.44.35207 Build Tools
+environment. `where.exe link.exe` resolved the pinned x64 linker first. Every
+command exited `0`:
+
+```text
+check-dj-link-runtime: PASS
+cargo test -p io --release --locked remote_: 67 passed; 0 failed; 1 ignored
+check:agent-bridge: PASS (11 groups)
+check-agent-bridge-bootstrap: PASS (4 groups)
+check-tauri-admission-inventory: PASS (539 commands; 18 negative fixtures rejected; SHA-256 a0ba71bfd1dce9e657fc5b052ccc452cf00f8a42fb3d838edef28913658cb9ab)
+tools/syndocal-mcp/check.mjs: PASS (15 groups; hostile stdio corpus 128 rejected; fake loopback only)
+check:strict-json: PASS (130 assertions)
+check:output-ownership: PASS
+check:ai5-sidecar: PASS (authenticated loopback transport and redaction boundary)
+check:ai6-admin-ui: PASS (trusted actions, grants, consent, audit route)
+check:ai7-adversarial-proof: PASS (parity/reply-loss/authority/gap/rate/saturation)
+```
+
+The one ignored Rust test still requires the separate rekordbox output-test
+root and local Node runtime. This recheck used no real LAN/TLS listener,
+Remote/Touch client, public endpoint, RDM/TOD device, dependency/SBOM review,
+updater-trust exercise, or adversarial network harness. It confirms current
+source contracts only; `REMOTE-SECURITY-001` remains `Open` for external
+exposure, physical cancellation, dependency/SBOM/redaction, updater trust,
+and complete bypass-review acceptance.
+
+The Q4 ledger records this recheck as
+`EV-REMOTE-SECURITY-CURRENT-SW-2026-09-18`.
