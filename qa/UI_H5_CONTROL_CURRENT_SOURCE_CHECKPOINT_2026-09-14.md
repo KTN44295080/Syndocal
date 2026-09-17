@@ -679,3 +679,68 @@ external clients, failure/recovery rehearsal, venue/soak, signing,
 publication, and product-wide completion remain separate gates. The observed
 three-display topology and its role-profile result also remain separate from
 this UI repair.
+
+## Current-source recheck — all supported UI surfaces — 2026-09-18
+
+This is a documentation-only current-source recheck at `3f4d2a3e` on
+`codex/showclock-review-20260912`. No product code, layout rule, fixture, or
+native action was changed. The flow under test was: app loads -> each shared
+workspace/Setup surface renders -> the existing containment and focus checks
+exercise the visible controls without dispatching live output.
+
+The Browser plugin was unavailable, so the repository's CDP/Playwright-style
+fallback used the installed Chrome executable at
+`C:\Users\janua\AppData\Local\Google\Chrome\Application\chrome.exe`.
+The first `topbar-pulse` and first `video-setup` attempts stopped before any
+product assertion with `Syndocal app shell did not mount`; rerunning each
+fixture alone (the latter with `SYNDOCAL_VIEWPORT_TRACE=1`) passed. No runtime
+exception, console error/warning, or harness failure was reported by the
+successful runs. This is recorded as a startup-harness race, not as a UI
+failure.
+
+Successful rendered checks:
+
+```text
+pnpm.cmd --dir app run check:topbar-pulse
+  PASS: topbar-pulse-1280x720; overflow=0, controls/order checks passed,
+        project menu Save/Load passed, drag/status checks passed.
+
+pnpm.cmd --dir app run check:control-upper-workspaces
+  PASS: 3840x2160, 2560x1440, 2560x1504, 1920x1080, 1280x720, and
+        2560x1504-2x / CSS 1280x752. Lighting, Video, Both, Timeline,
+        first-Escape focus return, and final CDP diagnostics passed at each.
+
+pnpm.cmd --dir app run check:video-setup-viewport
+  PASS: 1920x1080, 1920x1032, 2048x1152, 1366x768, and 1280x720;
+        mapping/preview/Advanced disclosure/scroll/dock containment passed.
+
+pnpm.cmd --dir app run check:touch
+  PASS: DVC touch feature preset (10 assertions), Default Desk and Viewport
+        Touch matrices at all five viewports; no page scroll or compact Image
+        tile containment failure.
+
+node app/scripts/check-viewport-containment.mjs --setup-dmx-only
+  PASS: setup-io fixture at 1920x1080, 1920x1032, 2048x1152, 1366x768,
+        and 1280x720; cards, DMX controls, disclosures, scroll, legacy routes,
+        Art-Net visibility, logical routing, and remote disclosure passed.
+
+node app/scripts/check-viewport-containment.mjs --setup-io-only
+  PASS: the same five viewports; MIDI, OSC, Remote, disclosure, routing,
+        card, and scroll checks all passed.
+```
+
+The fresh visual captures under
+`C:\TEMP\syndocal-control-ui-checkpoints` were inspected for the reported
+upper-screen collapse at the 1920x1080 and high-DPI-equivalent CSS 1280x752
+surfaces. The topbar actions remain separated, Preview/Program/Transport and
+Master stay contained, and the lower Groups/Stage/Inspector boundary does not
+overlap the upper workspace. No additional clipping or unreadable wrapping was
+found, so no presentation change is justified by this recheck.
+
+This evidence is limited to current-source rendered UI geometry, reachability,
+focus return, and diagnostics. It does not claim native button-by-button live
+Lighting/Video/Audio, Take/Transition, Blackout/Arm/Take Over, recording,
+native accessibility, physical output, external clients, failure/recovery,
+venue/soak, signing, publication, or product completion. Therefore
+`UI-H5-CONTROL-001` remains `Open`; this recheck only refreshes its safe UI
+surface evidence.
