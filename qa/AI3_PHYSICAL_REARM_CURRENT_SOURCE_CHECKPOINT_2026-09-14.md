@@ -152,3 +152,36 @@ The Q4 ledger records this current-source recheck as
 existing physical acceptance procedure with a declared topology and retained
 pre/post owner, project/lease generations, Blackout, operator confirmation,
 re-Arm, hardware state, and first failure.
+
+## Continuation — current source and physical-output preflight recheck — 2026-09-18
+
+At current source HEAD `4c4b363e`, the six focused source checks and the three
+release Rust filters were rerun with MSVC `14.44.35207` x64. `where.exe
+link.exe` resolved to the pinned linker first.
+
+```text
+check:project-transaction: PASS
+check:project-recovery-e3: PASS
+check-project-transaction-recovery-controller: PASS (6 scenarios; no native/UI side effects)
+check:output-control-runtime: PASS
+check:output-ownership: PASS
+check:safety-blackout-runtime: PASS
+cargo test project_replacement: PASS (7 passed; 0 failed; 0 ignored)
+cargo test project_control_retirement: PASS (1 passed; 0 failed; 0 ignored)
+cargo test output_lease_app_state_retirement: PASS (1 passed; 0 failed; 0 ignored)
+```
+
+The current physical preflight was then checked without sending output. The
+present-only PnP query returned no `Ports` devnode and no current FTDI
+`USB Serial Port (COM5)`, so the low-master physical DMX run was not started.
+This avoids treating the earlier 2026-09-15 COM5 transport telemetry as a
+current physical ACK or as proof of fixture visibility. No physical New,
+Load, Recovery, Backup, Take Over, output retirement, or re-Arm action was
+performed in this continuation.
+
+`AI3-PHYSICAL-REARM-001` remains `Open`. The source-side fence is current and
+passing, but the required end-to-end matrix still needs the exact release
+artifact, a declared connected output topology, acknowledged retirement,
+explicit re-Arm, operator/hardware observation for every path, and the first
+failure retained. Resume only after the FTDI/fixture is present; restore and
+record the physical topology before enabling any output.
