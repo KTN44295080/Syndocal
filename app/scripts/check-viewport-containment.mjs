@@ -30935,6 +30935,9 @@ async function runEditIaVideoViewport(client, viewport) {
     const upper = document.querySelector('.videoControlPanelMixer');
     const library = upper?.querySelector('.videoMediaLibraryRail');
     const clipPane = upper?.querySelector('.videoMixerClipPane');
+    const contextPane = upper?.querySelector('.videoMixerContextPane');
+    const outputPane = contextPane?.querySelector('.videoMixerProgramPane');
+    const layerPane = contextPane?.querySelector('.videoMixerLayerPane');
     const libraryHeader = clipPane?.querySelector(':scope > .videoMixerPaneHeader');
     const librarySurface = library?.querySelector('.videoMediaLibrarySurface');
     const importDisclosure = clipPane?.querySelector('[data-vj-media-import-disclosure]');
@@ -30947,6 +30950,9 @@ async function runEditIaVideoViewport(client, viewport) {
     const upperRect = rect(upper);
     const libraryRect = rect(library);
     const clipPaneRect = rect(clipPane);
+    const contextPaneRect = rect(contextPane);
+    const outputPaneRect = rect(outputPane);
+    const layerPaneRect = rect(layerPane);
     const librarySurfaceRect = rect(librarySurface);
     const libraryHeaderRect = rect(libraryHeader);
     const importSummaryRect = rect(importSummary);
@@ -30962,6 +30968,9 @@ async function runEditIaVideoViewport(client, viewport) {
       upperRect,
       libraryRect,
       clipPaneRect,
+      contextPaneRect,
+      outputPaneRect,
+      layerPaneRect,
       librarySurfaceRect,
       libraryHeaderRect,
       importSummaryRect,
@@ -30972,6 +30981,15 @@ async function runEditIaVideoViewport(client, viewport) {
       ),
       clipPaneUsesEffectiveHeight: contains(upperRect, clipPaneRect) && Boolean(
         clipPaneRect && clipPaneRect.height >= requiredLibraryHeight
+      ),
+      outputAndLayerPanesShareFullContextRow: Boolean(
+        contextPaneRect && outputPaneRect && layerPaneRect &&
+        contains(contextPaneRect, outputPaneRect) && contains(contextPaneRect, layerPaneRect) &&
+        Math.abs(outputPaneRect.top - layerPaneRect.top) <= 1 &&
+        Math.abs(outputPaneRect.bottom - layerPaneRect.bottom) <= 1 &&
+        outputPaneRect.height >= contextPaneRect.height - 1 &&
+        layerPaneRect.height >= contextPaneRect.height - 1 &&
+        outputPaneRect.width >= 250 && layerPaneRect.width >= 250
       ),
       librarySurfaceVisible: visible(librarySurface),
       librarySurfaceIsAnchored: getComputedStyle(librarySurface ?? document.body).position === 'absolute',
@@ -31039,6 +31057,7 @@ async function runEditIaVideoViewport(client, viewport) {
       layout.librarySurfaceIsAnchored &&
       layout.librarySurfaceContainedInViewport &&
       layout.librarySurfaceUsesEffectiveHeight,
+    outputAndLayerPanesShareFullContextRow: layout.outputAndLayerPanesShareFullContextRow,
     mediaLibraryCardsAreVisibleInUsableCatalog: layout.firstCardVisibleInCatalogViewport && layout.cardUsesMinimumHeight,
     mediaLibraryImportIsAlwaysReachableFromTheHeader: layout.importDisclosureVisible &&
       layout.importDisclosureClosed && layout.importSummaryIsReachable,

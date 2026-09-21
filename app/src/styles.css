@@ -37376,7 +37376,8 @@ a[href]:focus-visible,
   grid-column: 2;
   grid-row: 4;
   display: grid;
-  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-columns: minmax(350px, 1.2fr) minmax(250px, 0.8fr);
+  grid-template-rows: minmax(0, 1fr);
 }
 
 .videoMixerContextPane > .videoMixerProgramPane,
@@ -37391,7 +37392,14 @@ a[href]:focus-visible,
 }
 
 .videoMixerContextPane > .videoMixerProgramPane {
-  border-bottom: 1px solid var(--ray-border);
+  grid-column: 1;
+  grid-row: 1;
+  border-right: 1px solid var(--ray-border);
+}
+
+.videoMixerContextPane > .videoMixerLayerPane {
+  grid-column: 2;
+  grid-row: 1;
 }
 
 .videoMixerContextPane > .videoMixerProgramPane .videoOutputControlList,
@@ -37721,29 +37729,13 @@ a[href]:focus-visible,
   }
 }
 
-/* At short heights, Outputs and Layers share the lower row instead of
-   stacking into two starved half-height panes. */
+/* At short heights, Outputs and Layers keep their shared lower row rather
+   than stacking into two starved half-height panes. */
 @media (max-height: 800px) {
-  .videoControlPanelMixer .videoMixerContextPane {
-    grid-template-columns: minmax(350px, 1.2fr) minmax(250px, 0.8fr);
-    grid-template-rows: minmax(0, 1fr);
-  }
-
   .videoControlPanelMixer .videoMixerContextPane > .videoMixerProgramPane,
   .videoControlPanelMixer .videoMixerContextPane > .videoMixerLayerPane {
-    grid-row: 1;
     min-width: 0;
     min-height: 0;
-  }
-
-  .videoControlPanelMixer .videoMixerContextPane > .videoMixerProgramPane {
-    grid-column: 1;
-    border-right: 1px solid var(--ray-border);
-    border-bottom: 0;
-  }
-
-  .videoControlPanelMixer .videoMixerContextPane > .videoMixerLayerPane {
-    grid-column: 2;
   }
 
   /* A compact reactive strip is a single bounded row. Keep the opened-drawer
