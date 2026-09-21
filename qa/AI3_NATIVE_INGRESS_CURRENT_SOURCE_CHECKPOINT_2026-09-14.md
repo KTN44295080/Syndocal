@@ -561,3 +561,49 @@ reconnect/replacement, latency, native OSC/Remote clients, real DMX/Art-Net
 hardware, or venue proof. Resume only when an operator can move an SMC-Mixer
 control during the bounded capture; then retain the raw event and continue it
 through the canonical mapping/lease route before advancing this marker.
+
+## Current-host SMC-Mixer endpoint-alias recheck — 2026-09-21
+
+At HEAD `ec6be5c2`, the current working tree still contains user-owned changes
+in `app/scripts/check-dj-link-runtime.mjs`, `app/src/App.tsx`,
+`app/src/uiLocalization.ts`, `app/src/remotePairingPin.ts`, and `.vite/`; none
+were changed or staged by this recheck.
+
+The production `midir` enumeration exposed four inputs: `CustomMIDI1` (index
+0), `SMC-Mixer` (index 1), `MIDIIN2 (SMC-Mixer)` (index 2), and
+`SMC-Mixer-bt` (index 3). To avoid the existing substring selector choosing
+only its first match, two additional supervised 60-second passive captures
+explicitly selected the Bluetooth virtual alias and the MIDIIN2 alias. Both
+opened successfully and produced no message:
+
+```text
+SYNDOCAL_TEST_MIDI_INPUT=SMC-Mixer-bt
+SYNDOCAL_TEST_MIDI_CAPTURE_SECONDS=60
+capturing physical MIDI input 'SMC-Mixer-bt' for 60s; move one knob or press one button
+physical MIDI input 'SMC-Mixer-bt' produced no operator ingress during 60s
+test result: 0 passed; 1 failed; 0 ignored; exit_code=101
+
+SYNDOCAL_TEST_MIDI_INPUT=MIDIIN2 (SMC-Mixer)
+SYNDOCAL_TEST_MIDI_CAPTURE_SECONDS=60
+capturing physical MIDI input 'MIDIIN2 (SMC-Mixer)' for 60s; move one knob or press one button
+physical MIDI input 'MIDIIN2 (SMC-Mixer)' produced no operator ingress during 60s
+test result: 0 passed; 1 failed; 0 ignored; exit_code=101
+```
+
+A no-output diagnostic enumeration intentionally used a guaranteed nonmatching
+selector. It printed the four input and five output names, then failed before
+opening any endpoint or sending MIDI. No output was sent in either capture.
+Read-only Windows inventory showed the SMC-Mixer USB device and Bluetooth MIDI
+IN/OUT endpoints in `OK` state, plus running `BTMidiConnector.exe` and the
+current-checkout `syndocal.exe` process. Those inventories do not prove the
+Connector's current UI connection state. The operator's physical movement
+during either timed window was not independently confirmed, so no-event is
+not evidence that the hardware itself is faulty.
+
+`AI3-NATIVE-INGRESS-001` remains **Open**. Next, confirm that the operator
+moved a control during a timed window; if yes, investigate device-side
+forwarding and input ownership before changing product mappings. If not,
+repeat one bounded capture while the operator is present and retain the raw
+bytes/timestamp, then follow the event through canonical mapping and lease
+routing. Feedback/Clock/MTC, reconnect/replacement, latency, OSC/Remote,
+DMX/Art-Net, and venue evidence remain open.
