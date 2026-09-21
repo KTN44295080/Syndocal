@@ -36817,7 +36817,8 @@ a[href]:focus-visible,
 /* Global operator strip: show-wide transport and safety controls belong to
    the common chrome. Control-local view choices stay with their surface. */
 .topbar {
-  grid-template-columns: minmax(235px, 0.65fr) minmax(150px, 0.35fr) minmax(0, 2fr) 120px;
+  /* Menu (29px) + gap (5px) + all three workspace tabs (212px). */
+  grid-template-columns: minmax(246px, 0.65fr) minmax(150px, 0.35fr) minmax(0, 2fr) 120px;
 }
 
 @media (max-width: 1400px) {

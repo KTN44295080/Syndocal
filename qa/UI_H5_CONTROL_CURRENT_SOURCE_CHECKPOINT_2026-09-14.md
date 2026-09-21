@@ -1061,3 +1061,39 @@ limited to layout containment and native responsiveness. No physical device or
 output was touched. It does not accept native action workflows, accessibility,
 recording, Take/Blackout/Arm/Take Over, external clients, failure/recovery, or
 venue behavior; `UI-H5-CONTROL-001` remains `Open`.
+
+## Compact topbar tab clipping repair — 2026-09-22
+
+The current all-screen UI recheck found the upper workspace navigation clipped
+the rightmost 7 px of the `Control` tab at the compact `1280x720` CSS viewport.
+The three tabs require 212 px while the previous topbar grid allocation gave
+their track only 205 px. `app/src/styles.css` now reserves the menu, its gap,
+and the full 212 px tab strip in the first grid track (minimum 246 px). This
+reflows adjacent status space without reducing typography, controls, spacing,
+or hit targets.
+
+Post-change rendered containment passed at `1280x720`, `1366x768`,
+`1920x1032`, `1920x1080`, `2048x1152`, and `2560x1392`: the tab strip's client
+and scroll widths are both 212 px, the last tab ends at the strip boundary,
+and the app/document have no outer horizontal or vertical overflow. The
+focused Setup I/O, Edit Video, and Setup Video viewport checks passed at the
+five standard sizes through `2048x1152`. Existing `Setup > I/O`, `Setup >
+Video`, `Setup > Security`, `Edit > Lighting/Video/Both/Timeline`, and `Control
+> Lighting/Video/Both` native routes were visually inspected at the current
+compact desktop scale; no additional overlap or unintended outer clipping was
+found in those inspected surfaces.
+
+The Windows release gate passed using the pinned MSVC `14.44.35207` linker;
+`target/release/syndocal.exe` was relaunched as one responsive window with
+title `Syndocal` (PID `44736`). This environment's native-screen capture API
+was unavailable after that relaunch, so no post-build native screenshot is
+claimed. The legacy full viewport runner and Control-only runner did not reach
+their UI assertions: both hit an Edge CDP `Page.navigate` response timeout.
+Those harness failures are not counted as UI passes. `git diff --check`
+passed. Vite emitted the existing chunk-size advisory over `500kB`.
+
+This checkpoint accepts the compact topbar layout repair and the rendered
+containment evidence above only. It does not accept native button-by-button
+operation, accessibility, recording, Take/Blackout/Arm/Take Over, physical
+output, external clients, failure/recovery, or venue behavior;
+`UI-H5-CONTROL-001` remains `Open`.
