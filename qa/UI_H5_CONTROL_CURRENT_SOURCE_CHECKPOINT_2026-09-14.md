@@ -957,3 +957,69 @@ This checkpoint confirms a rendered layout slice and a responsive native
 window only. It does not validate native button-by-button operation,
 accessibility, recording, Take/Blackout/Arm/Take Over, physical output,
 external clients, or failure/recovery. `UI-H5-CONTROL-001` remains `Open`.
+
+## All-screen UI recheck and standard-height VJ context reflow — 2026-09-21
+
+The requested all-screen clipping review found one reproducible layout defect
+in Fullscreen VJ at the standard `1920x1080` viewport: Outputs and Layers were
+kept in two narrow columns even though the available lower context region had
+enough height to give each pane a full-width row. The two-column rule had been
+applied globally instead of only to the compact-height case. The current CSS
+now stacks Outputs above Layers at ordinary heights and restores the existing
+side-by-side layout only at CSS heights up to `800px`. Text, controls, spacing,
+and hit targets were not reduced.
+
+The repaired geometry passed at `1920x1080` (both panes `1036px` wide and
+`113px` high, vertically stacked), while compact layouts remain side by side
+at `1366x768` and `1280x720`. The exact regression gate was rerun after the
+change:
+
+```text
+CHROME_PATH=C:\Users\janua\AppData\Local\Google\Chrome\Application\chrome.exe
+pnpm.cmd --dir app run check:fullscreen-vj
+  PASS: 1920x1080, 1366x768, 1280x720; no failed checks, critical telemetry
+        overflow, or out-of-pane elements.
+```
+
+The wider current-source rendered UI pass covered:
+
+| Surface | Result |
+| --- | --- |
+| Topbar / status containment | PASS at `1280x720`; status overflow `0`, required drag surfaces present, menu controls reachable. |
+| Control Lighting, Video, Both, Timeline, tools and mixer | PASS at `3840x2160`, `2560x1440`, `2560x1504`, `1920x1080`, `1280x720`, plus 2x-scaled CSS `1280x752`, `1280x800`, and `1280x776`; focus return and diagnostic checks passed. |
+| Setup I/O and Video | PASS at `1920x1080`, `1920x1032`, `2048x1152`, `1366x768`, `1280x720`; mapping/actions remained reachable and contained. |
+| Edit Video / Media | PASS at the same five sizes; selected tab, media targets, and zero document/app scroll checks passed. |
+| Touch | DVC preset 10 assertions and viewport matrix PASS at the same five sizes; no page scroll or undersized targets. |
+| Workspace Operator and Live Audio | PASS at the same five sizes; Live Audio checked in English and Japanese with contained critical telemetry. |
+| VJ Operator | English/Japanese compact and large viewport cases PASS; critical overflow and out-of-pane counts `0`. |
+| Audio Reactive | PASS at `1920x1080` and `1366x768`; controls and SAFE ZERO strip contained. |
+| Fullscreen VJ | PASS at standard and compact sizes listed above; normal-height full-width Output/Layer stacking and compact reflow both preserved. |
+
+The in-app Browser connector was unavailable, so these rendered-browser checks
+used the installed local browser through the repository's Playwright/CDP
+harnesses. The legacy broad `check:viewport` harness did not mount its app
+shell and is not counted as a pass; the focused screen-specific runners above
+produced the stated results.
+
+The current tree was then rebuilt with `pnpm.cmd --dir app tauri build
+--no-bundle` using the pinned MSVC 14.44.35207 linker. The exact
+`target/release/syndocal.exe` was relaunched as one responsive maximized
+`Syndocal` window (PID `42176`). Its PrintWindow capture is
+`C:\TEMP\syndocal-ui-review-codex-20260921\native-fixed-20260921.png`
+(2586x1578, SHA-256
+`541FF7570D815778B1E286CED95A7793DA64EF656F225FA38A385F7325BD8180`); that
+native capture shows Setup > Lighting > Patch, not the Video screen. The
+rendered Video fixture at the user's equivalent `1280x752` CSS viewport is
+`C:\TEMP\syndocal-ui-review-codex-20260921\control-updated\control-video-1280x752.png`.
+The release executable hash is
+`95C8D76A7839ED8431C98F2ABDB9BDB4D48E48E73C4AF966143191A5D7FEC2FD`.
+Because the build used the current working tree, its binary also includes
+pre-existing user edits outside this layout checkpoint; it is not represented
+as the output of the layout-only commit. Vite's existing chunk-size advisory
+over `500kB` remains visible in build output.
+
+No physical MIDI, DMX, video, or other output action was issued. This checkpoint
+accepts rendered containment/reflow plus native build/window responsiveness
+only. It does not close native button-by-button interaction, accessibility,
+recording, Take/Blackout/Arm/Take Over, physical output, external clients,
+failure/recovery, or venue acceptance. `UI-H5-CONTROL-001` remains `Open`.

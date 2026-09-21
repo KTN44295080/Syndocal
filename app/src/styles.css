@@ -37376,8 +37376,8 @@ a[href]:focus-visible,
   grid-column: 2;
   grid-row: 4;
   display: grid;
-  grid-template-columns: minmax(350px, 1.2fr) minmax(250px, 0.8fr);
-  grid-template-rows: minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
 }
 
 .videoMixerContextPane > .videoMixerProgramPane,
@@ -37394,12 +37394,12 @@ a[href]:focus-visible,
 .videoMixerContextPane > .videoMixerProgramPane {
   grid-column: 1;
   grid-row: 1;
-  border-right: 1px solid var(--ray-border);
+  border-bottom: 1px solid var(--ray-border);
 }
 
 .videoMixerContextPane > .videoMixerLayerPane {
-  grid-column: 2;
-  grid-row: 1;
+  grid-column: 1;
+  grid-row: 2;
 }
 
 .videoMixerContextPane > .videoMixerProgramPane .videoOutputControlList,
@@ -37423,6 +37423,23 @@ a[href]:focus-visible,
    Reflow the context panes side by side and retain their local scrollports;
    controls and typography keep their normal size. */
 @media (max-height: 800px) {
+  .videoMixerContextPane {
+    grid-template-columns: minmax(350px, 1.2fr) minmax(250px, 0.8fr);
+    grid-template-rows: minmax(0, 1fr);
+  }
+
+  .videoMixerContextPane > .videoMixerProgramPane {
+    grid-column: 1;
+    grid-row: 1;
+    border-right: 1px solid var(--ray-border);
+    border-bottom: 0;
+  }
+
+  .videoMixerContextPane > .videoMixerLayerPane {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
   .layoutControl.controlModeMixer .videoControlPanelMixer {
     grid-template-columns: minmax(390px, 1.1fr) minmax(520px, 1fr);
     grid-template-rows: 36px minmax(0, 0.48fr) 5px minmax(0, 0.52fr);
