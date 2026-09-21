@@ -53,7 +53,7 @@
       "owner": "AI3 ingress and hardware acceptance owner",
       "dependency": "Canonical ingress-policy implementation and available native clients/devices",
       "nonclaim": "Does not claim source inventory proof is physical ingress acceptance.",
-      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/M4_IO_VALIDATION.md", "qa/DMX_ARTNET_CURRENT_SOURCE_CHECKPOINT_2026-09-14.md", "qa/AI3_NATIVE_INGRESS_CURRENT_SOURCE_CHECKPOINT_2026-09-14.md"],
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/M4_IO_VALIDATION.md", "qa/DMX_ARTNET_CURRENT_SOURCE_CHECKPOINT_2026-09-14.md", "qa/AI3_NATIVE_INGRESS_CURRENT_SOURCE_CHECKPOINT_2026-09-14.md", "qa/AI3_NATIVE_INGRESS_RECHECK_2026-09-22.md"],
       "status": "Open"
     },
     {
