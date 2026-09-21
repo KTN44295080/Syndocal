@@ -607,3 +607,35 @@ repeat one bounded capture while the operator is present and retain the raw
 bytes/timestamp, then follow the event through canonical mapping and lease
 routing. Feedback/Clock/MTC, reconnect/replacement, latency, OSC/Remote,
 DMX/Art-Net, and venue evidence remain open.
+
+## Current MIDI UI selection versus direct-port capture — 2026-09-21
+
+The current `createControlInputController` source selects `inputs[0]` only when
+no MIDI input is selected, and `connectMidiControl` passes that selected index
+plus the current mappings to native `connect_midi_control`. On this host,
+production enumeration returned `CustomMIDI1` at index 0 and the SMC-Mixer
+aliases at indices 1–3. Therefore the earlier named-port captures prove only
+that each `midir` endpoint could be opened; they do not prove which input the
+Syndocal UI had selected or that an event traversed its mapped callback/lease
+path. The app's input dropdown must select the intended SMC-Mixer endpoint
+before any app-level physical ingress claim.
+
+Current-source software checks passed with the pinned MSVC 14.44.35207 x64
+linker:
+
+```text
+pnpm.cmd --dir app run check:f1-input-generations
+F1 input generations ok; project/mapping epochs, constructor/install fences,
+Learn continuation, DMX liveness and retirement tests/contracts verified
+
+cargo test -p io --release --locked -j 1 midi_ -- --test-threads=1
+8 passed; 0 failed; 3 ignored; 177 filtered out
+```
+
+The three ignored tests require physical MIDI ingress/output or configured
+virtual MIDI ports. No test in this slice moved hardware or sent output.
+`AI3-NATIVE-INGRESS-001` remains **Open**: next select the intended SMC-Mixer
+input in Syndocal, then prove one known non-energizing mapping through the
+native callback path with operator movement, retaining the raw event and the
+resulting admission/lease outcome. Do not treat a direct `midir` capture as
+app-level mapping acceptance.
