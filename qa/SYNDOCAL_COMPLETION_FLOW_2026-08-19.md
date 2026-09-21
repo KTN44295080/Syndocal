@@ -1617,8 +1617,8 @@ blocked every job, so no CI/platform claim is derived from that run.
 ## 6. Dependency-ordered remaining implementation
 
 `qa/SYNDOCAL_COMPLETION_LEDGER.json` is the machine-readable completion index for
-sections 6 through 9. It currently records 27 `Open` current checkboxes, 8
-`Deferred` rows, and 23 `Complete` current checkboxes: the two explicit platform
+sections 6 through 9. It currently records 23 `Open` current checkboxes, 8
+`Deferred` rows, and 27 `Complete` current checkboxes: the two explicit platform
 deferrals plus the six frozen distribution rows remain deferred. Each indexed
 row carries one stable trailing `completion-ledger` marker whose `Open`,
 `Deferred`, or `Complete` kind is checked against the ledger. The index is
