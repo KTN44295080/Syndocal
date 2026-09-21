@@ -1138,3 +1138,62 @@ This checkpoint accepts rendered Video layout containment and native build /
 window responsiveness only. It does not accept physical output, recording,
 dangerous operator workflows, accessibility, or failure/recovery; no physical
 device or output was touched. `UI-H5-CONTROL-001` remains `Open`.
+
+## Current-source compact Outputs rail correction — 2026-09-22
+
+At base `f03b2221576564c74078bd65222a66b5af34fefb` on
+`codex/showclock-review-20260912`, the Audio Reactive acceptance fixture
+reproduced a 351px Program/Outputs pane at the user's effective
+`1280x752` CSS viewport, below its 360px minimum. The page and panes had no
+outer overflow; the right control rail alone was too narrow. The short-height
+and high-DPI grid ratios now allocate slightly more width to Outputs while
+keeping Clips wider: `1.10fr:1fr` -> `1.04fr:1fr`. Typography, control size,
+hit targets, and the upper monitor row are unchanged.
+
+Current-source rendered verification:
+
+```text
+node app/scripts/check-viewport-containment.mjs --audio-reactive-only
+  PASS: 1280x752; Program/Outputs 369px, Clip Grid 208px, overflow 0.
+  PASS: 1920x1080 (622px) and 1366x768 (396px).
+  PASS: 1280x720 (369px, Clip Grid 162px).
+
+pnpm.cmd --dir app run check:control-upper-workspaces
+  PASS: 3840x2160, 2560x1440, 2560x1504, 1920x1080, 1280x720,
+        1280x752 DPR 1, and CSS 1280x752 / 1280x800 / 1280x776 at DPR 2.
+  Lighting, Video, Both, Timeline, six lanes/four sources, Escape focus
+  return, and all CDP error/warning counts passed at every viewport.
+
+node app/scripts/check-viewport-containment.mjs --operator-vj-only
+  PASS: English and Japanese at 1280x752; no unsafe overflow or out-of-rect
+        controls; Program pane 368.6px.
+
+node app/scripts/check-viewport-containment.mjs --fullscreen-vj
+  PASS: 1280x752; shared grid contained, monitor ratio 1.0, no critical
+        telemetry overflow.
+
+Other focused current-source screens at 1280x752 passed: Setup I/O,
+Setup Video, Edit Video/Media, Workspace Operator, and Touch (10 feature
+assertions; minimum target 48px; page scroll 0). The legacy broad
+`check-viewport-containment.mjs` shell-only and first Setup Video attempts
+timed out before app readiness with no runtime exception; standalone Setup
+Video and Setup I/O reruns passed. This matches the already recorded harness
+startup race and is not counted as product-screen evidence.
+```
+
+The nine-viewport Control screenshots are under
+`C:\TEMP\syndocal-control-ui-checkpoints`; the user-equivalent Video capture is
+`control-video-1280x752.png`. Visual inspection shows the Preview/Program,
+Transport, Master, Clips, Outputs, and Layers regions contained. The exact
+Release executable was rebuilt with the pinned MSVC 14.44.35207 linker and
+relaunched as one responsive window (PID `45912`, SHA-256
+`C57DE5C9D79761323A9D479313161A307FC853F5C8DF321984E9211AC82171CF`). A
+read-only `PrintWindow` capture at `C:\TEMP\syndocal-ui-final-20260922.png`
+(2586x1578; SHA-256
+`A331F874FD202E1D20326812B0526ECF21FFCD1E76ABFA9720CFCF77E472F6C8`) shows
+Control > Timeline fully contained. No physical output or live device action
+was performed.
+
+This closes only the compact Outputs-width layout finding. Physical output,
+recording, dangerous operator workflows, native accessibility, and failure /
+recovery remain unaccepted; `UI-H5-CONTROL-001` remains `Open`.

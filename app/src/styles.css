@@ -37468,7 +37468,7 @@ html:not([data-window-mode="fullscreen"])
   }
 
   .layoutControl.controlModeMixer .videoControlPanelMixer {
-    grid-template-columns: minmax(390px, 1.1fr) minmax(520px, 1fr);
+    grid-template-columns: minmax(390px, 1.04fr) minmax(520px, 1fr);
     grid-template-rows: 36px minmax(0, 0.60fr) 5px minmax(0, 0.40fr);
   }
 
@@ -37672,12 +37672,11 @@ html:not([data-window-mode="fullscreen"])
 
 /* A large physical display can expose this desk as a short CSS viewport when
    Windows high-DPI scaling is active (for example 2560x1504 at 2x becomes
-   roughly 1280x752 CSS px). That is not the low-DPI operating floor: preserve
-   the monitor-first desk proportion for this high-DPI case while leaving the
-   ordinary 1280x720 reflow unchanged. */
+   roughly 1280x752 CSS px). Keep the clip pane slightly wider while retaining
+   the 360px Outputs rail target at this effective width. */
 @media (max-height: 800px) and (min-width: 1200px) and (min-resolution: 144dpi) {
   .layoutControl.controlModeMixer .videoControlPanelMixer {
-    grid-template-columns: minmax(390px, 1.1fr) minmax(520px, 1fr);
+    grid-template-columns: minmax(390px, 1.04fr) minmax(520px, 1fr);
     grid-template-rows: 36px minmax(0, 0.60fr) 5px minmax(0, 0.40fr);
   }
 }
