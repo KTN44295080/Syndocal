@@ -639,3 +639,26 @@ input in Syndocal, then prove one known non-energizing mapping through the
 native callback path with operator movement, retaining the raw event and the
 resulting admission/lease outcome. Do not treat a direct `midir` capture as
 app-level mapping acceptance.
+
+## Post-relaunch production MIDI inventory — 2026-09-21
+
+After rebuilding/relaunching the exact checkout executable, the production
+WinMM/`midir` path was enumerated again using the ignored physical-port test
+with deliberately nonmatching selectors. The Build Tools MSVC 14.44.35207 x64
+linker was pinned and returned first by `where.exe link.exe`.
+
+```text
+Inputs:  CustomMIDI1 (0), SMC-Mixer (1), MIDIIN2 (SMC-Mixer) (2), SMC-Mixer-bt (3)
+Outputs: Microsoft GS Wavetable Synth (0), CustomMIDI1 (1), SMC-Mixer (2),
+         MIDIOUT2 (SMC-Mixer) (3), SMC-Mixer-bt (4)
+Selector: __CODEX_ENUM_ONLY_NO_MATCH_INPUT__
+Result: listed ports, then stopped before opening an endpoint or sending MIDI; exit 1.
+```
+
+The `BTMidiConnector.exe` and current-checkout `target/release/syndocal.exe`
+processes were present. This read-only inventory does not prove the Bluetooth
+bridge's current connected state, the app-selected input, or operator MIDI
+movement. `AI3-NATIVE-INGRESS-001` remains **Open**. The next required slice is
+to confirm/reconnect the bridge if needed, select the SMC-Mixer input in
+Syndocal, and capture a physical control event through the selected native
+callback/mapping path; no output endpoint should be opened for that capture.
