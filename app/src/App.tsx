@@ -27832,7 +27832,7 @@ export default function App() {
           ratio={topSplitRatio()}
           defaultRatio={defaultWorkspaceLayout.top_split_ratio}
           minFirstPx={280}
-          minSecondPx={310}
+          minSecondPx={workspaceTab() === "control" && controlMode() === "mixer" ? 260 : 310}
           firstTrackBonusPx={workspaceTab() === "control" ? 36 : 0}
           label="Resize upper and lower workspace panes"
           splitter="upper-lower"

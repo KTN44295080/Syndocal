@@ -27,6 +27,9 @@ const defaultViewports = [
   { key: "2560x1504", width: 2560, height: 1504, deviceScaleFactor: 1 },
   { key: "1920x1080", width: 1920, height: 1080, deviceScaleFactor: 1 },
   { key: "1280x720", width: 1280, height: 720, deviceScaleFactor: 1 },
+  // Same compact logical height as the user's large display, with no browser
+  // DPR emulation. Native WebView scaling must not be assumed by layout QA.
+  { key: "1280x752-1x", width: 1280, height: 752, deviceScaleFactor: 1 },
   // A Windows 2560x1504 work area at 200% scaling is approximately this CSS
   // viewport. It must retain the normal monitor-first desk even though the
   // CSS height is below the genuine low-DPI short-height floor.
@@ -37,6 +40,8 @@ const defaultViewports = [
   { key: "2560x1552-2x", width: 1280, height: 776, deviceScaleFactor: 2, highDpiLargeSurface: true },
 ];
 const selectedViewport = process.env.SYNDOCAL_CONTROL_VIEWPORT;
+const screenshotViewportKey = (viewport) => `${viewport.width}x${viewport.height}`
+  + (viewport.deviceScaleFactor > 1 ? `-dpr${viewport.deviceScaleFactor}` : "");
 const viewports = (() => {
   if (selectedViewport === undefined) return defaultViewports;
   const match = defaultViewports.find(({ key }) => key === selectedViewport);
@@ -1006,6 +1011,13 @@ const measureVideo = (client) => evaluate(client, `(() => {
   const header = panel?.querySelector(':scope > .panelHeader');
   const topPane = panel?.querySelector(':scope > .videoMixerTopPane');
   const topContent = topPane?.querySelector(':scope > .videoMixerTopContent');
+  const liveMonitorPanel = topContent?.querySelector('.liveVideoMonitorPanel');
+  const previewTransport = liveMonitorPanel?.querySelector(':scope > .vjPreviewTransport');
+  const previewTransportControls = previewTransport?.querySelector('.vjPreviewTransportControls');
+  const previewTransportButtons = [...(previewTransportControls?.querySelectorAll('button') ?? [])].filter(visible);
+  const masterControls = topContent?.querySelector('.videoMasterControls');
+  const masterButtonRow = masterControls?.querySelector(':scope > .buttonRow');
+  const masterFader = masterControls?.querySelector('.videoMasterFader');
   const rail = panel?.querySelector('.videoMediaLibraryRail');
   const surface = panel?.querySelector('.videoMediaLibrarySurface');
   const list = panel?.querySelector('.videoMediaLibraryList');
@@ -1019,6 +1031,35 @@ const measureVideo = (client) => evaluate(client, `(() => {
   const listStyle = list instanceof HTMLElement ? getComputedStyle(list) : null;
   const surfaceStyle = surface instanceof HTMLElement ? getComputedStyle(surface) : null;
   const importStyle = importSurface instanceof HTMLElement ? getComputedStyle(importSurface) : null;
+  const panelRect = liveMonitorPanel?.getBoundingClientRect() ?? null;
+  const contentRect = topContent?.getBoundingClientRect() ?? null;
+  const transportRect = previewTransport?.getBoundingClientRect() ?? null;
+  const masterRect = masterControls?.getBoundingClientRect() ?? null;
+  const masterButtonRowRect = masterButtonRow?.getBoundingClientRect() ?? null;
+  const masterFaderRect = masterFader?.getBoundingClientRect() ?? null;
+  const transportClipTop = Math.max(panelRect?.top ?? Infinity, contentRect?.top ?? Infinity);
+  const transportClipBottom = Math.min(panelRect?.bottom ?? -Infinity, contentRect?.bottom ?? -Infinity);
+  const transportButtons = previewTransportButtons.map((button) => {
+    const value = button.getBoundingClientRect();
+    return { label: button.getAttribute('aria-label') ?? button.textContent?.trim() ?? '', height: value.height, top: value.top, bottom: value.bottom };
+  });
+  const previewTransportContained = Boolean(
+    transportRect
+      && transportRect.top >= transportClipTop - 1
+      && transportRect.bottom <= transportClipBottom + 1
+      && transportButtons.length > 0
+      && transportButtons.every((button) => button.top >= transportRect.top - 1 && button.bottom <= transportRect.bottom + 1
+        && button.top >= transportClipTop - 1 && button.bottom <= transportClipBottom + 1),
+  );
+  const masterControlsContained = Boolean(
+    masterRect && masterButtonRowRect && masterFaderRect && contentRect
+      && masterRect.top >= contentRect.top - 1
+      && masterRect.bottom <= contentRect.bottom + 1
+      && masterButtonRowRect.top >= masterRect.top - 1
+      && masterButtonRowRect.bottom <= masterRect.bottom + 1
+      && masterFaderRect.top >= masterRect.top - 1
+      && masterFaderRect.bottom <= masterRect.bottom + 1,
+  );
   const popupReachability = (popup) => {
     const target = [...(popup?.querySelectorAll('button, input, select, textarea, [role="button"]') ?? [])].find(visible);
     if (!(target instanceof HTMLElement)) return { target: false, hit: false, point: null };
@@ -1033,6 +1074,15 @@ const measureVideo = (client) => evaluate(client, `(() => {
     header: rect(header),
     topPane: rect(topPane),
     topContent: rect(topContent),
+    liveMonitorPanel: rect(liveMonitorPanel),
+    previewTransport: rect(previewTransport),
+    previewTransportControls: rect(previewTransportControls),
+    previewTransportContained,
+    previewTransportButtons: transportButtons,
+    masterControls: rect(masterControls),
+    masterButtonRow: rect(masterButtonRow),
+    masterFader: rect(masterFader),
+    masterControlsContained,
     rail: rect(rail),
     surface: rect(surface),
     list: rect(list),
@@ -1450,11 +1500,14 @@ try {
     const topPaneShare = rectHeight(video.topPane) / Math.max(1, rectHeight(video.panel));
     assert.ok(topPaneShare >= minimumTopPaneShare, `Video Preview/Program keeps the primary upper-desk share at ${viewport.width}x${viewport.height}: ${JSON.stringify({ panel: video.panel, topPane: video.topPane, topContent: video.topContent, topPaneShare, minimumTopPaneShare })}`);
     assert.ok(rectHeight(video.topContent) > 0, `Video Preview/Program content remains visible at ${viewport.width}x${viewport.height}: ${JSON.stringify({ topPane: video.topPane, topContent: video.topContent })}`);
+    await capture(client, `control-video-${screenshotViewportKey(viewport)}.png`);
+    assert.equal(video.previewTransportContained, true, `Preview Transport and every button remain inside the visible top desk at ${viewport.width}x${viewport.height}: ${JSON.stringify({ topContent: video.topContent, liveMonitorPanel: video.liveMonitorPanel, previewTransport: video.previewTransport, previewTransportButtons: video.previewTransportButtons })}`);
+    assert.ok(video.previewTransportButtons.every((button) => button.height >= 44), `Preview Transport preserves 44px button targets at ${viewport.width}x${viewport.height}: ${JSON.stringify(video.previewTransportButtons)}`);
+    assert.equal(video.masterControlsContained, true, `Video Master fader and action row remain visible at ${viewport.width}x${viewport.height}: ${JSON.stringify({ topContent: video.topContent, masterControls: video.masterControls, masterButtonRow: video.masterButtonRow, masterFader: video.masterFader })}`);
     assert.ok(rectHeight(video.surface) >= 120 && rectHeight(video.list) >= 80, "Video library body/list have useful geometry");
     assert.ok(video.cardCount > 0 && (video.surfaceOverflowY === "auto" || video.surfaceOverflowY === "scroll"), `Video mounts media cards with a bounded library scrollport: ${JSON.stringify({ surfaceOverflowY: video.surfaceOverflowY, listOverflowY: video.listOverflowY })}`);
     assert.ok(video.importSummary?.[3] >= 28, "Import Media preserves its reachable disclosure target");
     assertOuterScrollFixed(video, "Video");
-    await capture(client, `control-video-${viewport.width}x${viewport.height}.png`);
     assert.equal(await clickVisible(client, '[data-vj-media-import-disclosure] > summary'), true, "open Import Media");
     const videoImport = await waitFor(async () => {
       const value = await measureVideo(client);
@@ -1470,7 +1523,7 @@ try {
     assert.ok(videoImportLast?.targetInsidePopup && videoImportLast.hit, `Import Media last action remains scroll-reachable and hit-testable: ${JSON.stringify(videoImportLast)}`);
     assert.ok((videoImportLast?.targetHeight ?? 0) >= 24, `Import Media last action keeps a usable control height: ${JSON.stringify(videoImportLast)}`);
     assertOuterScrollFixed(videoImport, "Video Import Media");
-    await capture(client, `control-video-import-open-${viewport.width}x${viewport.height}.png`);
+    await capture(client, `control-video-import-open-${screenshotViewportKey(viewport)}.png`);
 
     // Both: the combined live overview keeps the two operator domains visible
     // without mounting a second copy of the dense Video desk.

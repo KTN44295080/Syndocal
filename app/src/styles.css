@@ -37469,7 +37469,7 @@ html:not([data-window-mode="fullscreen"])
 
   .layoutControl.controlModeMixer .videoControlPanelMixer {
     grid-template-columns: minmax(390px, 1.1fr) minmax(520px, 1fr);
-    grid-template-rows: 36px minmax(0, 0.48fr) 5px minmax(0, 0.52fr);
+    grid-template-rows: 36px minmax(0, 0.60fr) 5px minmax(0, 0.40fr);
   }
 
   .videoControlPanelMixer .videoMixerClipPane .videoClipGrid {
@@ -37795,16 +37795,6 @@ html:not([data-window-mode="fullscreen"])
       [data-mixer-drawer-toggle][aria-expanded="true"]
     ) {
     grid-template-rows: 40px auto 30px 22px 56px minmax(0, 1fr);
-  }
-}
-
-/* A physically large 200%-scaled desktop can expose the same CSS height as a
-   small low-DPI window. Give that monitor-heavy surface more Preview/Program
-   room while retaining 40% for the lower clip and output context. This uses
-   display scale only; no operator-role or physical-resolution gate is implied. */
-@media (max-height: 800px) and (min-width: 1200px) and (min-resolution: 144dpi) {
-  .layoutControl.controlModeMixer .videoControlPanelMixer {
-    grid-template-rows: 36px minmax(0, 0.60fr) 5px minmax(0, 0.40fr);
   }
 }
 

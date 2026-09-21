@@ -1097,3 +1097,44 @@ containment evidence above only. It does not accept native button-by-button
 operation, accessibility, recording, Take/Blackout/Arm/Take Over, physical
 output, external clients, failure/recovery, or venue behavior;
 `UI-H5-CONTROL-001` remains `Open`.
+
+## Control Video upper-desk squeeze repair — 2026-09-22
+
+The attached native screenshot exposed clipping in Control > Video's Preview
+Transport and Video Master controls. Reproduction at the matching compact
+`1280x752` CSS viewport differed between DPR 1 and DPR 2: the old CSS used a
+resolution-media-query override for the taller Preview/Program desk, so the
+same logical workspace could lose the transport notice and Master action row
+when the WebView did not report the expected display resolution. The Video
+desk now gives Preview/Program 60% and the lower clip/output region 40% at the
+short-height layout regardless of DPR. In Control > Video only, the shared
+upper/lower splitter minimum for the lower region is 260 px (other modes retain
+310 px), allowing the upper desk to keep its controls without shrinking
+typography, controls, spacing, or hit targets.
+
+The focused browser gate now checks Preview Transport containment, each
+transport button's 44 px minimum target, and containment of both the Master
+fader and its action row. The complete upper-workspace matrix passed at nine
+viewports: `3840x2160`, `2560x1440`, `2560x1504`, `1920x1080`, `1280x720`,
+`1280x752` DPR 1, and `1280x752`, `1280x800`, `1280x776` CSS-equivalent DPR 2
+cases. Edit Video passed at its five standard viewports and Fullscreen VJ at
+all three supported viewports. The browser captures include
+`C:\Users\janua\AppData\Local\Temp\syndocal-control-ui-final3-20260922\control-video-1280x752.png`
+and the corresponding `control-video-1280x752-dpr2.png`; the Preview
+Transport, its hit targets, and the Master controls are fully within the
+visible top desk at both scale settings.
+
+`pnpm.cmd --dir app tauri build --no-bundle` passed with the pinned MSVC
+14.44.35207 linker. The exact release executable was launched and verified as
+one responsive `Syndocal` window (PID `23092`, SHA-256
+`21851957305AE0BDD0F0F981F4EB5D255D59E02D5A4FB54D2248C6B06FA5E954`). The
+native screenshot API was unavailable after this build, so the latest native
+window was not visually captured or claimed maximized. This working-tree build
+also contains unrelated pre-existing user Remote PIN changes and is not a
+layout-only artifact. Vite emitted its existing chunk-size advisory over
+`500kB`.
+
+This checkpoint accepts rendered Video layout containment and native build /
+window responsiveness only. It does not accept physical output, recording,
+dangerous operator workflows, accessibility, or failure/recovery; no physical
+device or output was touched. `UI-H5-CONTROL-001` remains `Open`.
