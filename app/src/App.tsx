@@ -27851,7 +27851,9 @@ export default function App() {
           ratio={activeTopSplitRatio()}
           defaultRatio={activeTopSplitDefaultRatio()}
           minFirstPx={280}
-          minSecondPx={workspaceTab() === "control" && controlMode() === "mixer" ? 260 : 310}
+          // At the compact-height floor, prioritize the Video desk above while
+          // retaining a scrollable persistent stage pane below it.
+          minSecondPx={workspaceTab() === "control" && controlMode() === "mixer" ? 220 : 310}
           firstTrackBonusPx={workspaceTab() === "control" ? 36 : 0}
           label="Resize upper and lower workspace panes"
           splitter="upper-lower"

@@ -37450,6 +37450,20 @@ html:not([data-window-mode="fullscreen"])
    Reflow the context panes side by side and retain their local scrollports;
    controls and typography keep their normal size. */
 @media (max-height: 800px) {
+  /* Keep the output-readiness note on its own row at the compact operator
+     height. The default two-column section header can wrap into the Video
+     Outputs heading and make the two labels look like one clipped line. */
+  .videoControlPanelMixer .videoMixerProgramPane .videoOutputControlList.compact > .sectionHeader {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: start;
+    gap: 2px;
+  }
+
+  .videoControlPanelMixer .videoMixerProgramPane .videoOutputControlList.compact > .sectionHeader > span {
+    grid-column: 1;
+    justify-self: start;
+  }
+
   .videoMixerContextPane {
     grid-template-columns: minmax(350px, 1.2fr) minmax(250px, 0.8fr);
     grid-template-rows: minmax(0, 1fr);
@@ -37868,7 +37882,7 @@ html:not([data-window-mode="fullscreen"])
   left: 0;
   display: grid;
   gap: 6px;
-  max-height: min(340px, calc(100vh - 120px));
+  max-height: min(340px, calc(43dvh - 8px));
   overflow: hidden auto;
   border: 1px solid #343a3f;
   background: #15191c;
