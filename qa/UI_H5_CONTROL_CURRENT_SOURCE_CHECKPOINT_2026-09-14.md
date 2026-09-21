@@ -1023,3 +1023,41 @@ accepts rendered containment/reflow plus native build/window responsiveness
 only. It does not close native button-by-button interaction, accessibility,
 recording, Take/Blackout/Arm/Take Over, physical output, external clients,
 failure/recovery, or venue acceptance. `UI-H5-CONTROL-001` remains `Open`.
+
+## Edit Video context-row repair and exact native recheck — 2026-09-21
+
+The user's current screenshot showed the Edit > Video context area compressed:
+the standard-height Fullscreen VJ vertical-stack rule had also reached the
+ordinary Edit Video workspace, leaving Outputs and Layers with only part of
+the available row height. `app/src/styles.css` now scopes a side-by-side
+Outputs/Layers grid to the non-fullscreen shared Edit Video workspace. The
+Fullscreen VJ stacking rule is unchanged. No font, control, spacing, or hit
+target was reduced.
+
+The Edit Video viewport gate passed at `1920x1080`, `1920x1032`, `2048x1152`,
+`1366x768`, and `1280x720`. `check:fullscreen-vj` also passed at
+`1920x1080`, `1366x768`, and `1280x720`, confirming the separate VJ behavior
+was preserved. Topbar, Video Setup, and Patch viewport checks passed as
+neighboring screen regressions. The native release window was maximized at
+the current 200%-scaled desktop (CSS client `1280x776`); direct inspection of
+Edit > Video confirms Outputs and Layers now occupy adjacent full-height
+columns without overlap. There was exactly one process for this checkout's
+release executable, PID `39156`, `Responding=True`, and Win32 show state
+`3` (maximized).
+
+| Evidence | Result |
+| --- | --- |
+| `pnpm.cmd --dir app run check:edit-ia-video` | PASS at all five viewports above. |
+| `pnpm.cmd --dir app run check:fullscreen-vj` | PASS at all three viewports above; full-height stacking at normal height and compact side-by-side reflow remain intact. |
+| `pnpm.cmd --dir app run check:topbar-pulse`, `check:video-setup-viewport`, `check:patch-viewport` | PASS; no related topbar overflow, setup video, or patch viewport regression. |
+| `pnpm.cmd --dir app run build`; `pnpm.cmd --dir app tauri build --no-bundle` | PASS. Windows native gate used the pinned MSVC `14.44.35207` linker. Vite reported its existing chunk-size advisory (>500 kB). |
+| Exact release binary | `target/release/syndocal.exe`, 66,216,960 bytes, SHA-256 `3853D68815B968D87924D3C381B97D8912AFD1597B9F70D2AB7A542F0CFF3E48`. The build includes unrelated pre-existing user changes and is not represented as the layout-only commit artifact. |
+| Native visual capture | `C:\Users\janua\AppData\Local\Temp\syndocal-edit-video-reflow-20260921.png` (`2586x1578`, SHA-256 `A2D1D09ACBDBDA2444F53FBE19A8AAA57C1817CBF1D7559ED0FB0C005041F8F6`). |
+
+The broader native route inspection previously covered 11 Setup/Edit/Control
+screen combinations, and the current-source rendered matrix above covers all
+shared Control subviews plus Setup/Edit viewport checks. This checkpoint is
+limited to layout containment and native responsiveness. No physical device or
+output was touched. It does not accept native action workflows, accessibility,
+recording, Take/Blackout/Arm/Take Over, external clients, failure/recovery, or
+venue behavior; `UI-H5-CONTROL-001` remains `Open`.

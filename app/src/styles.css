@@ -37402,6 +37402,32 @@ a[href]:focus-visible,
   grid-row: 2;
 }
 
+/* Edit Video is a media-authoring surface: keep Outputs and Layers adjacent
+   across the full lower context row. The ordinary-height Fullscreen VJ desk
+   retains its separate, vertically stacked readout layout. */
+html:not([data-window-mode="fullscreen"])
+  .layoutSharedWorkspace.layoutControl.controlModeMixer
+  .videoMixerContextPane {
+  grid-template-columns: minmax(350px, 1.2fr) minmax(250px, 0.8fr);
+  grid-template-rows: minmax(0, 1fr);
+}
+
+html:not([data-window-mode="fullscreen"])
+  .layoutSharedWorkspace.layoutControl.controlModeMixer
+  .videoMixerContextPane > .videoMixerProgramPane {
+  grid-column: 1;
+  grid-row: 1;
+  border-right: 1px solid var(--ray-border);
+  border-bottom: 0;
+}
+
+html:not([data-window-mode="fullscreen"])
+  .layoutSharedWorkspace.layoutControl.controlModeMixer
+  .videoMixerContextPane > .videoMixerLayerPane {
+  grid-column: 2;
+  grid-row: 1;
+}
+
 .videoMixerContextPane > .videoMixerProgramPane .videoOutputControlList,
 .videoMixerContextPane > .videoMixerLayerPane .videoLayerList {
   min-width: 0;
