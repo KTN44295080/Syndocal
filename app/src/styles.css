@@ -37291,7 +37291,7 @@ a[href]:focus-visible,
   grid-template-columns: minmax(390px, 1fr) minmax(520px, 1.2fr);
   /* Preview and Program are the primary operator surface. Give them the
      larger track; lower Clip / Outputs+Layers panes keep bounded scrollports. */
-  grid-template-rows: 36px minmax(0, 0.60fr) 5px minmax(0, 0.40fr);
+  grid-template-rows: 36px minmax(0, 0.64fr) 5px minmax(0, 0.36fr);
   gap: 0;
   min-width: 0;
   min-height: 0;
@@ -37469,7 +37469,7 @@ html:not([data-window-mode="fullscreen"])
 
   .layoutControl.controlModeMixer .videoControlPanelMixer {
     grid-template-columns: minmax(390px, 1.04fr) minmax(520px, 1fr);
-    grid-template-rows: 36px minmax(0, 0.60fr) 5px minmax(0, 0.40fr);
+    grid-template-rows: 36px minmax(0, 0.64fr) 5px minmax(0, 0.36fr);
   }
 
   .videoControlPanelMixer .videoMixerClipPane .videoClipGrid {
@@ -37643,7 +37643,7 @@ html:not([data-window-mode="fullscreen"])
 /* A native mixer pop-out starts at 860 x 520. It keeps the shared two-column
    desk instead of inheriting the main-window 910px column floor; below that
    floor the right context may scroll locally, while the app itself cannot.
-   The 60/40 top/lower split gives Preview and Program the primary monitor
+   The 64/36 top/lower split gives Preview and Program the primary monitor
    surface while the lower clip/context panes retain their bounded local
    scrollports -- no existing control, label, spacing, or pad target is
    reduced. */
@@ -37667,7 +37667,7 @@ html:not([data-window-mode="fullscreen"])
 
 .app.paneWindow-mixer .layoutControl.controlModeMixer .videoControlPanelMixer {
   grid-template-columns: minmax(300px, 1fr) minmax(0, 1.2fr);
-  grid-template-rows: 36px minmax(0, 0.60fr) 5px minmax(0, 0.40fr);
+  grid-template-rows: 36px minmax(0, 0.64fr) 5px minmax(0, 0.36fr);
 }
 
 /* A large physical display can expose this desk as a short CSS viewport when
@@ -37677,7 +37677,7 @@ html:not([data-window-mode="fullscreen"])
 @media (max-height: 800px) and (min-width: 1200px) and (min-resolution: 144dpi) {
   .layoutControl.controlModeMixer .videoControlPanelMixer {
     grid-template-columns: minmax(390px, 1.04fr) minmax(520px, 1fr);
-    grid-template-rows: 36px minmax(0, 0.60fr) 5px minmax(0, 0.40fr);
+    grid-template-rows: 36px minmax(0, 0.64fr) 5px minmax(0, 0.36fr);
   }
 }
 
@@ -37741,7 +37741,7 @@ html:not([data-window-mode="fullscreen"])
 @media (min-width: 1600px) and (min-height: 900px) {
   html[data-window-mode="fullscreen"] .layoutControl.controlModeMixer .videoControlPanelMixer {
     grid-template-columns: minmax(390px, 1fr) minmax(520px, 1.2fr);
-    grid-template-rows: minmax(0, 0.60fr) 5px minmax(0, 0.40fr);
+    grid-template-rows: minmax(0, 0.64fr) 5px minmax(0, 0.36fr);
   }
 
   html[data-window-mode="fullscreen"] .layoutControl.controlModeMixer .videoMixerTopPane {

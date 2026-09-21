@@ -27,7 +27,9 @@ into two stacked halves. Typography, controls, and hit targets were not reduced.
 inside the context row, share its full height, and retain at least 250 CSS px
 of width.
 
-No other crushed/clipped layout was found in the inspected workspace screens.
+At that inspection time, no other crushed/clipped layout was found in the
+inspected workspace screens. A later user review identified the residual
+Edit Video upper-pane compression recorded below.
 
 ## Verification
 
@@ -67,3 +69,44 @@ behavior. The broad viewport harness timeout remains explicit. This focused
 layout correction does not close UI-H5, the 58-marker completion ledger, or any
 hardware, live-output, recording, failure-recovery, accessibility, or release
 acceptance gate.
+
+## 2026-09-22 follow-up — Edit Video upper-pane squeeze
+
+The prior audit did not fix the user's upper-pane complaint. The Edit Video
+workspace shared its upper/lower split with other Control desks, so a previously
+saved general split could leave Preview/Program with too little height even
+though the default browser fixture looked acceptable. Video now has its own
+additive `video_top_split_ratio` workspace preference (legacy records default
+to 0.68); changing/resetting it does not overwrite the Lighting/Timeline
+`top_split_ratio`. The Video desk's inner split now gives Preview/Program
+64% and Clips/Outputs/Layers 36%, without reducing typography, control size, or
+hit targets. Its existing draggable separator remains available.
+
+Verification for this follow-up:
+
+- `pnpm.cmd --dir app run build` — passed TypeScript and Vite production build.
+  Vite still emitted its existing advisory for a minified chunk over 500 kB;
+  no chunk limit or warning policy was changed.
+- `pnpm.cmd --dir app run check:project-storage` — passed, including legacy
+  workspace normalization, ratio clamping, and independent Video-ratio
+  round-trip assertions.
+- `pnpm.cmd --dir app run check:control-upper-workspaces` — passed all nine
+  viewports: 3840x2160, 2560x1440, 2560x1504, 1920x1080, 1280x720,
+  1280x752-1x, 2560x1504-2x, 2560x1600-2x, and 2560x1552-2x. Lighting,
+  Video, Both, and Timeline assertions passed; CDP reported zero runtime
+  exceptions, console errors, or console warnings in each viewport.
+- `pnpm.cmd --dir app tauri build --no-bundle` — passed with the exact pinned
+  VS2022 Build Tools linker `14.44.35207` first on PATH.
+- The rebuilt exact checkout executable is
+  `target/release/syndocal.exe`, SHA-256
+  `C4EE35914F8730CA4FAD0191631E78910F371DF6B25ACEEFCA7F1FC14F2440A6`.
+  It is running as PID `40604`, title `Syndocal`, `Responding=True`, maximized
+  with a 2560x1552 client area. One app-sized main window is present; the same
+  PID also owns two 13x13 internal/helper HWNDs, not additional usable app
+  windows. The native screenshot is
+  `C:\TEMP\syndocal-video-fix-native-20260922.png`.
+- No output, Take, recording, blackout, Arm, or device action was triggered.
+
+UI-H5 and the Q1/Q4 marker ledger remain open: this checkpoint repairs and
+proves a rendered layout slice only; it does not prove the broader native
+operator workflows or external acceptance.

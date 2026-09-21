@@ -1008,6 +1008,8 @@ const measureVideo = (client) => evaluate(client, `(() => {
   const rectArray = (value) => [value.x, value.y, value.width, value.height, value.right, value.bottom];
   const rect = (element) => element instanceof Element ? rectArray(element.getBoundingClientRect()) : null;
   const panel = document.querySelector('.videoControlPanelMixer');
+  const layout = panel?.closest('.layoutSharedWorkspace');
+  const clipPane = panel?.querySelector(':scope > .videoMixerClipPane');
   const header = panel?.querySelector(':scope > .panelHeader');
   const topPane = panel?.querySelector(':scope > .videoMixerTopPane');
   const topContent = topPane?.querySelector(':scope > .videoMixerTopContent');
@@ -1071,6 +1073,10 @@ const measureVideo = (client) => evaluate(client, `(() => {
   const importReachability = popupReachability(importSurface);
   return {
     panel: rect(panel),
+    clipPane: rect(clipPane),
+    workspace: rect(layout),
+    workspaceUpperRatio: Number(layout?.getAttribute('data-upper-lower-ratio') ?? NaN),
+    workspaceStoredVideoRatio: Number(JSON.parse(localStorage.getItem('syndocal.workspaceLayout.v1') ?? 'null')?.video_top_split_ratio ?? NaN),
     header: rect(header),
     topPane: rect(topPane),
     topContent: rect(topContent),
@@ -1496,9 +1502,12 @@ try {
       return value?.cardCount > 0 ? value : false;
     }, "Video Media Library surface");
     assert.ok(rectHeight(video.panel) >= 160 && rectHeight(video.header) >= 32, `Video library panel/header have useful geometry: ${JSON.stringify({ panel: video.panel, header: video.header, rail: video.rail, surface: video.surface, list: video.list, cardCount: video.cardCount })}`);
-    const minimumTopPaneShare = viewport.highDpiLargeSurface || viewport.height > 800 ? 0.48 : 0.25;
+    const minimumTopPaneShare = viewport.highDpiLargeSurface || viewport.height > 800 ? 0.56 : 0.25;
     const topPaneShare = rectHeight(video.topPane) / Math.max(1, rectHeight(video.panel));
     assert.ok(topPaneShare >= minimumTopPaneShare, `Video Preview/Program keeps the primary upper-desk share at ${viewport.width}x${viewport.height}: ${JSON.stringify({ panel: video.panel, topPane: video.topPane, topContent: video.topContent, topPaneShare, minimumTopPaneShare })}`);
+    assert.equal(video.workspaceUpperRatio, 0.68, `Video uses its independent 68% workspace split at ${viewport.width}x${viewport.height}: ${JSON.stringify({ workspace: video.workspace, workspaceUpperRatio: video.workspaceUpperRatio })}`);
+    assert.equal(video.workspaceStoredVideoRatio, 0.68, `Video workspace split persists independently from other desks at ${viewport.width}x${viewport.height}`);
+    assert.ok(rectHeight(video.clipPane) >= 100, `Video Clip desk retains a visible lower workspace at ${viewport.width}x${viewport.height}: ${JSON.stringify({ clipPane: video.clipPane, workspace: video.workspace })}`);
     assert.ok(rectHeight(video.topContent) > 0, `Video Preview/Program content remains visible at ${viewport.width}x${viewport.height}: ${JSON.stringify({ topPane: video.topPane, topContent: video.topContent })}`);
     await capture(client, `control-video-${screenshotViewportKey(viewport)}.png`);
     assert.equal(video.previewTransportContained, true, `Preview Transport and every button remain inside the visible top desk at ${viewport.width}x${viewport.height}: ${JSON.stringify({ topContent: video.topContent, liveMonitorPanel: video.liveMonitorPanel, previewTransport: video.previewTransport, previewTransportButtons: video.previewTransportButtons })}`);

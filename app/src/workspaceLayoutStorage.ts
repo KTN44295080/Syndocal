@@ -17,6 +17,7 @@ export type WorkspaceLayout = {
   edit_desk_surface: EditDeskSurface;
   control_category: ControlCategory;
   top_split_ratio: number;
+  video_top_split_ratio: number;
   lower_split_ratio: number;
 };
 
@@ -29,6 +30,7 @@ export const defaultWorkspaceLayout: WorkspaceLayout = {
   edit_desk_surface: "attributes",
   control_category: "position",
   top_split_ratio: 0.58,
+  video_top_split_ratio: 0.68,
   lower_split_ratio: 0.44,
 };
 
@@ -110,6 +112,10 @@ export const workspaceLayoutFromUnknown = (candidate: unknown): WorkspaceLayout 
       defaultWorkspaceLayout.control_category,
     ),
     top_split_ratio: ratioValue(value.top_split_ratio, defaultWorkspaceLayout.top_split_ratio),
+    video_top_split_ratio: ratioValue(
+      value.video_top_split_ratio,
+      defaultWorkspaceLayout.video_top_split_ratio,
+    ),
     lower_split_ratio: ratioValue(value.lower_split_ratio, defaultWorkspaceLayout.lower_split_ratio),
   };
 };

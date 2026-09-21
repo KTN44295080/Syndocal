@@ -364,6 +364,7 @@ assert.deepEqual(
     edit_desk_surface: "faders",
     control_category: "color",
     top_split_ratio: workspaceLayout.defaultWorkspaceLayout.top_split_ratio,
+    video_top_split_ratio: workspaceLayout.defaultWorkspaceLayout.video_top_split_ratio,
     lower_split_ratio: workspaceLayout.defaultWorkspaceLayout.lower_split_ratio,
   },
 );
@@ -415,13 +416,20 @@ assert.deepEqual(
 assert.deepEqual(
   workspaceLayout.workspaceLayoutFromUnknown({
     top_split_ratio: -4,
+    video_top_split_ratio: 3,
     lower_split_ratio: 3,
   }),
   {
     ...workspaceLayout.defaultWorkspaceLayout,
     top_split_ratio: 0.15,
+    video_top_split_ratio: 0.85,
     lower_split_ratio: 0.85,
   },
+);
+assert.equal(
+  workspaceLayout.workspaceLayoutFromUnknown({ video_top_split_ratio: 0.73 }).video_top_split_ratio,
+  0.73,
+  "Video keeps its independently persisted upper/lower workspace ratio",
 );
 assert.deepEqual(
   workspaceLayout.workspaceLayoutFromUnknown({

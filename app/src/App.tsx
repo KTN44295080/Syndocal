@@ -1965,12 +1965,28 @@ export default function App() {
   const [showClockError, setShowClockError] = createSignal<string | null>(null);
   const [workspaceTab, setWorkspaceTab] = createSignal<WorkspaceTab>(initialWorkspaceLayout.workspace_tab);
   const [topSplitRatio, setTopSplitRatio] = createSignal(initialWorkspaceLayout.top_split_ratio);
+  const [videoTopSplitRatio, setVideoTopSplitRatio] = createSignal(initialWorkspaceLayout.video_top_split_ratio);
   const [lowerSplitRatio, setLowerSplitRatio] = createSignal(initialWorkspaceLayout.lower_split_ratio);
   const [activeIoConnection, setActiveIoConnection] = createSignal<IoConnectionId>("dmx");
   const [uiScale, setUiScale] = createSignal<UiScale>(loadUiScale());
   const [uiLocale, setUiLocale] = createSignal<UiLocale>(loadUiLocale());
   const [setupSubTab, setSetupSubTab] = createSignal<SetupSubTab>(initialWorkspaceLayout.setup_sub_tab);
   const [controlMode, setControlMode] = createSignal<ControlMode>(initialWorkspaceLayout.control_mode);
+  const activeTopSplitRatio = () =>
+    workspaceTab() === "control" && controlMode() === "mixer"
+      ? videoTopSplitRatio()
+      : topSplitRatio();
+  const activeTopSplitDefaultRatio = () =>
+    workspaceTab() === "control" && controlMode() === "mixer"
+      ? defaultWorkspaceLayout.video_top_split_ratio
+      : defaultWorkspaceLayout.top_split_ratio;
+  const commitActiveTopSplitRatio = (ratio: number) => {
+    if (workspaceTab() === "control" && controlMode() === "mixer") {
+      setVideoTopSplitRatio(ratio);
+    } else {
+      setTopSplitRatio(ratio);
+    }
+  };
   const [timelineDeskSurface, setTimelineDeskSurface] = createSignal<TimelineDeskSurface>(
     initialWorkspaceLayout.timeline_desk_surface,
   );
@@ -5312,6 +5328,7 @@ export default function App() {
       edit_desk_surface: editDeskSurface(),
       control_category: controlCategory(),
       top_split_ratio: topSplitRatio(),
+      video_top_split_ratio: videoTopSplitRatio(),
       lower_split_ratio: lowerSplitRatio(),
     });
   });
@@ -5555,6 +5572,7 @@ export default function App() {
     edit_desk_surface: editDeskSurface(),
     control_category: controlCategory(),
     top_split_ratio: topSplitRatio(),
+    video_top_split_ratio: videoTopSplitRatio(),
     lower_split_ratio: lowerSplitRatio(),
   });
   const applyWorkspaceLayout = (layout: WorkspaceLayout) => {
@@ -5568,6 +5586,7 @@ export default function App() {
     setEditDeskSurface(layout.edit_desk_surface);
     setControlCategory(layout.control_category);
     setTopSplitRatio(layout.top_split_ratio);
+    setVideoTopSplitRatio(layout.video_top_split_ratio);
     setLowerSplitRatio(layout.lower_split_ratio);
   };
 
@@ -26451,7 +26470,7 @@ export default function App() {
             : undefined
         }
         data-workspace-split-root={sharedWorkspaceVisible() ? "true" : undefined}
-        data-upper-lower-ratio={sharedWorkspaceVisible() ? topSplitRatio() : undefined}
+        data-upper-lower-ratio={sharedWorkspaceVisible() ? activeTopSplitRatio() : undefined}
         data-lower-left-right-ratio={sharedWorkspaceVisible() ? lowerSplitRatio() : undefined}
       >
         {/* Keep every persistent domain tab associated with a real panel while
@@ -27829,14 +27848,14 @@ export default function App() {
         <Show when={sharedWorkspaceVisible() && !paneWindow}>
         <WorkspaceSplitHandle
           axis="horizontal"
-          ratio={topSplitRatio()}
-          defaultRatio={defaultWorkspaceLayout.top_split_ratio}
+          ratio={activeTopSplitRatio()}
+          defaultRatio={activeTopSplitDefaultRatio()}
           minFirstPx={280}
           minSecondPx={workspaceTab() === "control" && controlMode() === "mixer" ? 260 : 310}
           firstTrackBonusPx={workspaceTab() === "control" ? 36 : 0}
           label="Resize upper and lower workspace panes"
           splitter="upper-lower"
-          onCommit={setTopSplitRatio}
+          onCommit={commitActiveTopSplitRatio}
         />
         </Show>
 
