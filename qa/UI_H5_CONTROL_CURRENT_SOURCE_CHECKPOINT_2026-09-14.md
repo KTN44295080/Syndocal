@@ -899,3 +899,61 @@ sha256: 3EAEE18ED2069A9731F4C40DD33A07DDAD831B70CF009F844A269B914A8A37A1
 
 This repairs evidence capture only; it does not expand the native H5,
 accessibility, hardware, external-client, or venue acceptance boundary.
+
+## Short-height Video workspace layout repair — 2026-09-21
+
+The user-visible Video Control upper desk was too short on the current
+200%-scaled desktop. The current maximized window measures `2586x1578` physical
+pixels with a `2560x1552` client/work area, `192 DPI`, and an approximate CSS
+client size of `1280x776`. The matching browser fixture is therefore
+`2560x1552-2x` (`1280x776` CSS); the adjacent `2560x1600-2x` (`1280x800` CSS)
+point remains for full-screen geometry. The layout gives scaled surfaces a
+`60/40` upper/lower Video desk split and keeps Outputs and Layers side by side
+in the lower context row. Compact low-DPI `720/768px` surfaces keep their
+`48/52` split so the Media/Clip pane retains the existing minimum usable
+height. No type, control, spacing, pad, or hit-target reduction was
+introduced, and the CSS rule does not impose a physical-monitor role or
+resolution requirement.
+
+- Branch: `codex/showclock-review-20260912`
+- Base before this checkpoint: `8c92fd223cb216f7e47a18578f0b538b7345d5e2`
+
+The first `64/36` trial was rejected after `check:edit-ia-video` exposed a
+real compact-layout regression: the Media/Clip pane fell below its required
+`120px` at `1366x768` and `1280x720`. The split was corrected as above; the
+same Edit gate then passed all five sizes. This is why the 200%-scale rule is
+limited to the Video desk rather than applied to every short CSS viewport.
+
+The exact `1280x776` Timeline probe also reproduced fractional clipping: the
+last Phase action protruded about `1.4px` beyond its nested scroll region, and
+the disclosure bottom was fractionally outside the workspace. The popup now
+anchors `1px` closer and reserves `2px` of end scroll padding at short heights.
+All 44px controls and hit targets remain unchanged; the nested Bank, Cue Audio,
+and Phases reachability checks now pass at this exact viewport.
+
+## Verification evidence
+
+All listed commands returned exit code `0` on 2026-09-21. The browser fallback
+used the installed Microsoft Edge executable because the in-app Browser
+connector was unavailable.
+
+| Area | Evidence |
+| --- | --- |
+| Control upper workspaces | `node app/scripts/run-control-upper-workspaces-browser.mjs` — PASS at `3840x2160`, `2560x1440`, `2560x1504`, `1920x1080`, `1280x720`, `2560x1504-2x` (`1280x752` CSS), `2560x1600-2x` (`1280x800` CSS), and `2560x1552-2x` (`1280x776` CSS, exact maximized client). Lighting, Video, Both, Timeline, expanded tools and mixer views completed; first Escape returned focus; every run reported zero runtime exceptions, console/log errors or warnings, and harness errors. Screenshots: `C:\TEMP\syndocal-control-ui-checkpoints`. |
+| Edit Video / Media | `pnpm.cmd --dir app run check:edit-ia-video` — PASS at `1920x1080`, `1920x1032`, `2048x1152`, `1366x768`, and `1280x720`; one selected tab, usable media hit targets, zero document/app scroll. |
+| Setup Video | `pnpm.cmd --dir app run check:video-setup-viewport` — PASS at the same five sizes; mapping remained reachable, `mapOverflow=0`, dock and preview contained, advanced controls reachable. |
+| Frontend and native build | `pnpm.cmd --dir app tauri build --no-bundle` — PASS after `tsc --noEmit` and Vite (`359 modules`). MSVC Build Tools `14.44.35207` was pinned and verified as the first `where.exe link.exe` result. Vite emitted a chunk-size advisory for chunks over `500kB`; no TypeScript or Rust build failure occurred. |
+| Exact release process | `target/release/syndocal.exe`, `66,216,960` bytes, SHA-256 `9C024EA8425D2831438C3282F5DE44EDE110529A6F1DE6E427F942720BD5503C`. Exactly one process for this executable path (PID `20176`), title `Syndocal`, non-zero HWND `0xF0DFC`, `Responding=True`; the window was maximized. |
+| Native visual capture | `C:\\TEMP\\syndocal-ui-final-20260921.png` (`2586x1578`, SHA-256 `2BECEC66B667E09373DA6389BCC1DBF9430991D65ED18010FAD736B878EF66A2`), captured from the exact release window after the final build. The Video upper desk and lower Clips/Outputs/Layers panes are contained and readable. |
+
+The native build consumed the current working tree, including unrelated
+pre-existing user changes in `app/src/App.tsx`, `app/src/uiLocalization.ts`,
+`app/src/remotePairingPin.ts`, and `app/scripts/check-dj-link-runtime.mjs`.
+Those paths were preserved and are not part of this layout checkpoint; the
+artifact hash above is therefore current-working-tree process/visual evidence,
+not a claim that the artifact was built from the eventual layout-only commit.
+
+This checkpoint confirms a rendered layout slice and a responsive native
+window only. It does not validate native button-by-button operation,
+accessibility, recording, Take/Blackout/Arm/Take Over, physical output,
+external clients, or failure/recovery. `UI-H5-CONTROL-001` remains `Open`.

@@ -37411,15 +37411,13 @@ a[href]:focus-visible,
   display: none;
 }
 
-/* At the 720/768 px operating floor, the shared desk keeps the two-column
-   grammar while favoring the lower 6-column/two-row clip bank. This is a
-   reflow: labels, buttons and pad aspect ratio stay unchanged, and the
-   monitors remain a contained, usable top pane rather than pushing the app
-   taller. */
+/* Low-height windows keep enough room for the lower media/clip workspace.
+   Reflow the context panes side by side and retain their local scrollports;
+   controls and typography keep their normal size. */
 @media (max-height: 800px) {
   .layoutControl.controlModeMixer .videoControlPanelMixer {
     grid-template-columns: minmax(390px, 1.1fr) minmax(520px, 1fr);
-    grid-template-rows: 36px minmax(0, 0.36fr) 5px minmax(0, 0.64fr);
+    grid-template-rows: 36px minmax(0, 0.48fr) 5px minmax(0, 0.52fr);
   }
 
   .videoControlPanelMixer .videoMixerClipPane .videoClipGrid {
@@ -37723,30 +37721,9 @@ a[href]:focus-visible,
   }
 }
 
-/* Windows reports a high-DPI 2560x1504 work area as roughly 1280x752 CSS
-   pixels. Do not mistake that physically large operator surface for the
-   genuine 720/768px operating floor: the compact 36/64 reflow made
-   Preview/Program visibly starve on the user's scaled desktop. Keep the
-   existing short-height reflow for ordinary low-DPI 720/768px windows, while
-   restoring the normal monitor-first 60/40 desk for a large high-DPI surface.
-   The rule is intentionally limited to the Video desk and does not change
-   typography, controls, hit targets, or the outer workspace split. */
-@media (max-height: 800px) and (min-width: 1200px) and (min-resolution: 144dpi) {
-  .layoutControl.controlModeMixer .videoControlPanelMixer {
-    grid-template-rows: 36px minmax(0, 0.60fr) 5px minmax(0, 0.40fr);
-  }
-}
-
-/* Short operator windows need a usable monitor and two reachable context
-   panes. Stacking Outputs and Layers in the lower 40% leaves the layer action
-   row outside its scrollport at the 720/768px floor. Reflow the context panes
-   side by side and give the monitor/lower desks balanced rows; each pane keeps
-   its own bounded scrollport, with no typography or hit-target reduction. */
+/* At short heights, Outputs and Layers share the lower row instead of
+   stacking into two starved half-height panes. */
 @media (max-height: 800px) {
-  .layoutControl.controlModeMixer .videoControlPanelMixer {
-    grid-template-rows: 36px minmax(0, 0.48fr) 5px minmax(0, 0.52fr);
-  }
-
   .videoControlPanelMixer .videoMixerContextPane {
     grid-template-columns: minmax(350px, 1.2fr) minmax(250px, 0.8fr);
     grid-template-rows: minmax(0, 1fr);
@@ -37785,9 +37762,10 @@ a[href]:focus-visible,
   }
 }
 
-/* A 2x 2560x1504 desktop is exposed to CSS as 1280x752, but still has the
-   physical room for the monitor-first high-DPI composition above. Keep that
-   source-specific upper-desk share after the ordinary short-window override. */
+/* A physically large 200%-scaled desktop can expose the same CSS height as a
+   small low-DPI window. Give that monitor-heavy surface more Preview/Program
+   room while retaining 40% for the lower clip and output context. This uses
+   display scale only; no operator-role or physical-resolution gate is implied. */
 @media (max-height: 800px) and (min-width: 1200px) and (min-resolution: 144dpi) {
   .layoutControl.controlModeMixer .videoControlPanelMixer {
     grid-template-rows: 36px minmax(0, 0.60fr) 5px minmax(0, 0.40fr);
@@ -38612,12 +38590,23 @@ a[href]:focus-visible,
   > .timelineArrangerHeader
   .timelineToolsDisclosurePanel:has(> .timelinePerformanceEditor) {
   display: flex;
-  top: calc(100% + 3px);
+  top: calc(100% + 2px);
   bottom: auto;
   width: min(356px, calc(100vw - 24px));
   max-width: min(356px, calc(100vw - 24px));
   max-height: min(680px, calc(100vh - 160px));
   overflow: hidden auto;
+}
+
+@media (max-height: 800px) {
+  .layout.layoutSharedWorkspace.layoutControl.controlModeLive
+    > .liveControlPanel
+    > .timelineArrangerHeader
+    .timelineToolsDisclosurePanel:has(> .timelinePerformanceEditor) {
+    /* Account for fractional edge clipping in nested phase controls when the
+       outer disclosure scrolls; do not reduce the controls or their targets. */
+    scroll-padding-block-end: 2px;
+  }
 }
 
 .layout.layoutSharedWorkspace.layoutControl.controlModeLive

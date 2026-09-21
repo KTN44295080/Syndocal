@@ -31,6 +31,10 @@ const defaultViewports = [
   // viewport. It must retain the normal monitor-first desk even though the
   // CSS height is below the genuine low-DPI short-height floor.
   { key: "2560x1504-2x", width: 1280, height: 752, deviceScaleFactor: 2, highDpiLargeSurface: true },
+  // The current 2560x1600@200% workstation maps to this exact CSS boundary.
+  { key: "2560x1600-2x", width: 1280, height: 800, deviceScaleFactor: 2, highDpiLargeSurface: true },
+  // Maximized work area on that desktop: 2560x1552 physical at 200% scaling.
+  { key: "2560x1552-2x", width: 1280, height: 776, deviceScaleFactor: 2, highDpiLargeSurface: true },
 ];
 const selectedViewport = process.env.SYNDOCAL_CONTROL_VIEWPORT;
 const viewports = (() => {
@@ -875,6 +879,8 @@ const exerciseTimelineNestedRegionTargets = async (client) => evaluate(client, `
       target: rectArray(targetRect),
       region: rectArray(regionRect),
       popup: rectArray(popupRect),
+      popupScroll: { top: popup.scrollTop, height: popup.clientHeight, contentHeight: popup.scrollHeight },
+      editorGap: getComputedStyle(editor).gap,
       popupInsideViewport: popupRect.left >= -1 && popupRect.top >= -1 && popupRect.right <= innerWidth + 1 && popupRect.bottom <= innerHeight + 1,
       targetInsideRegion: within(targetRect, regionRect),
       targetInsidePopup: within(targetRect, popupRect),
@@ -1526,6 +1532,7 @@ try {
     assert.ok(toolsOpen.toolsPanelScrollWidth <= toolsOpen.toolsPanelClientWidth + 1, `Timeline Tools popup has no horizontal overflow at ${viewport.width}x${viewport.height}: ${JSON.stringify({ clientWidth: toolsOpen.toolsPanelClientWidth, scrollWidth: toolsOpen.toolsPanelScrollWidth })}`);
     assert.equal(toolsOpen.toolsToolbarGroupsInsidePanel, true, `Timeline Tools immediate toolbar groups remain inside the popup at ${viewport.width}x${viewport.height}: ${JSON.stringify({ panel: toolsOpen.toolsPanel, groups: toolsOpen.toolsToolbarGroups })}`);
     const nestedRegionTargets = await exerciseTimelineNestedRegionTargets(client);
+    await capture(client, `control-timeline-tools-open-${viewport.width}x${viewport.height}.png`);
     assert.deepEqual(nestedRegionTargets?.regions?.map(({ name }) => name), ['bank', 'cueAudio', 'phases'], `Timeline Tools exercises every nested target region at ${viewport.width}x${viewport.height}`);
     for (const region of nestedRegionTargets?.regions ?? []) {
       assert.equal(region.detailsOpen, true, `Timeline ${region.name} details are open before reachability checks at ${viewport.width}x${viewport.height}: ${JSON.stringify(region)}`);
@@ -1543,7 +1550,6 @@ try {
     assert.equal(toolsLast?.directPerformanceEditorInsidePopupHorizontally, true, `Timeline Performance editor remains horizontally inside the popup after nested details open at ${viewport.width}x${viewport.height}: ${JSON.stringify(toolsLast)}`);
     assert.deepEqual(toolsLast?.nestedHorizontalRegions?.map(({ name }) => name), ['bank', 'cueAudio', 'phases'], `Timeline Tools measures every nested horizontal region at ${viewport.width}x${viewport.height}`);
     assert.equal(toolsLast?.nestedHorizontalRegions?.every(({ clientWidth, scrollWidth }) => clientWidth > 0 && scrollWidth <= clientWidth + 1), true, `Timeline Bank/Cue Audio/Phases regions have no horizontal overflow after nesting at ${viewport.width}x${viewport.height}: ${JSON.stringify(toolsLast?.nestedHorizontalRegions)}`);
-    await capture(client, `control-timeline-tools-open-${viewport.width}x${viewport.height}.png`);
     assert.equal(await clickVisible(client, '.groupLiveMixerDisclosure > summary'), true, "open Live Mixer");
     const mixerOpen = await waitFor(async () => {
       const value = await measureTimeline(client);
