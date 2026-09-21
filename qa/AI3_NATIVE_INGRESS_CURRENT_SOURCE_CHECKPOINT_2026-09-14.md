@@ -511,3 +511,53 @@ WinMM LED slice remain valid, but these fresh alias captures still provide no
 operator event for the production ingress path. `AI3-NATIVE-INGRESS-001`
 remains **Open**; the next required proof is a retained raw knob/button/clock
 event followed through the canonical mapping and lease route.
+
+## Current-host connected SMC-Mixer and current-source recheck — 2026-09-21
+
+At HEAD `21da77eb91bd37da9826b8b0c1c1ca8d6f003177`, the working tree also
+contained pre-existing user changes in `app/scripts/check-dj-link-runtime.mjs`,
+`app/src/App.tsx`, `app/src/uiLocalization.ts`, and
+`app/src/remotePairingPin.ts`. They were preserved and not staged by this
+checkpoint.
+
+The current `BTMidiConnector.exe` UI initially showed the paired `SMC-Mixer`
+with `Connect Device`; this host did not start in the previously recorded
+connected state. The existing device was connected through that control, and
+the refreshed accessibility/UI state reported `SMC-Mixer Connected.` No MIDI
+output command was sent by this connection step.
+
+A supervised, passive 60-second capture then opened the production Windows
+`midir` input. The exact Build Tools MSVC `14.44.35207` x64 linker was pinned
+and confirmed first by `where.exe link.exe`:
+
+```text
+SYNDOCAL_TEST_MIDI_INPUT=SMC-Mixer
+SYNDOCAL_TEST_MIDI_CAPTURE_SECONDS=60
+cargo test -p io --release --locked -j 1 physical_midi_input_captures_operator_ingress -- --ignored --nocapture --test-threads=1
+capturing physical MIDI input 'SMC-Mixer' for 60s; move one knob or press one button
+physical MIDI input 'SMC-Mixer' produced no operator ingress during 60s
+test result: 0 passed; 1 failed; 0 ignored; exit_code=101
+```
+
+No MIDI bytes were transmitted by the capture. The connected bridge plus an
+open production input did not produce a raw event, so this is not controller
+movement or ingress acceptance. The existing `CustomMIDI1` loopMIDI port was
+observed but left unchanged and unused to avoid injecting a signal into a
+port that other applications may consume.
+
+The following current-working-tree software gates all passed: frontend
+command routing (`133` renderer, `31` server-authoritative, `28` raw, `479`
+facade dispatches); Tauri admission inventory (`539` commands, `18` negative
+fixtures rejected); output-control/Standby Sync; output ownership; safety
+blackout; DVC MIDI shortcuts (`39` assertions); DVC-DMX shortcuts (`41`);
+Agent Bridge (`11` groups); and the Windows-native warning ratchet (baseline
+and current total/first-party warnings `0`). With the pinned linker, the
+release Agent Bridge filter passed `11/11`; its hostile corpus rejected
+`511/512` cases with `0` panics.
+
+`AI3-NATIVE-INGRESS-001` remains `Open`. Source/admission and parser results
+do not replace a captured physical control event, feedback/Clock/MTC,
+reconnect/replacement, latency, native OSC/Remote clients, real DMX/Art-Net
+hardware, or venue proof. Resume only when an operator can move an SMC-Mixer
+control during the bounded capture; then retain the raw event and continue it
+through the canonical mapping/lease route before advancing this marker.
