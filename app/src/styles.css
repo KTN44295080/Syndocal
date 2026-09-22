@@ -31053,7 +31053,7 @@ h3 {
   z-index: 4;
   grid-column: 1 / -1;
   grid-row: 1;
-  justify-self: center;
+  justify-self: start;
   align-self: start;
   display: inline-flex;
   gap: 4px;
@@ -31074,9 +31074,11 @@ h3 {
 
 .layoutTouch.touchDomainVideo > .touchVideoPanel {
   grid-column: 1 / -1;
-  grid-row: 1 / -1;
+  grid-row: 1;
   display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr) auto minmax(0, 1fr);
+  grid-template-rows: none;
+  grid-auto-rows: max-content;
+  align-content: start;
   min-width: 0;
   min-height: 0;
   padding-top: 56px;
@@ -31087,14 +31089,9 @@ h3 {
   min-height: 0;
 }
 
-.layoutTouch.touchDomainBoth {
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 4px;
-}
-
 .layoutTouch.touchDomainBoth > .touchSurfacePanel {
-  grid-column: 1;
-  grid-row: 1 / -1;
+  width: calc(50% - 2px);
+  justify-self: start;
   display: grid;
   min-width: 0;
   min-height: 0;
@@ -31102,10 +31099,14 @@ h3 {
 }
 
 .layoutTouch.touchDomainBoth > .touchVideoPanel {
-  grid-column: 2;
-  grid-row: 1 / -1;
+  grid-column: 1 / -1;
+  grid-row: 1;
+  width: calc(50% - 2px);
+  justify-self: end;
   display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr) auto minmax(0, 1fr);
+  grid-template-rows: none;
+  grid-auto-rows: max-content;
+  align-content: start;
   min-width: 0;
   min-height: 0;
   padding-top: 56px;
@@ -37190,6 +37191,12 @@ a[href]:focus-visible,
 .layout.layoutSharedWorkspace.layoutTouch > .touchSurfacePanel {
   grid-column: 1 / -1;
   grid-row: 1;
+}
+
+/* Keep the domain switch and Lighting toolbar on one row at compact heights. */
+.layoutTouch.touchDomainLighting .touchSurfaceToolbar {
+  padding-inline-start: 310px;
+  min-height: max(54px, clamp(48px, 6.25dvh, 72px));
 }
 
 .layout.layoutSharedWorkspace.layoutTouch .touchSurfaceGrid {
