@@ -1016,6 +1016,9 @@ const measureVideo = (client) => evaluate(client, `(() => {
   const liveMonitorPanel = topContent?.querySelector('.liveVideoMonitorPanel');
   const previewTransport = liveMonitorPanel?.querySelector(':scope > .vjPreviewTransport');
   const previewTransportControls = previewTransport?.querySelector('.vjPreviewTransportControls');
+  const previewSeek = previewTransport?.querySelector('.vjPreviewSeek');
+  const previewSeekTime = previewSeek?.querySelector('span');
+  const previewSeekRange = previewSeek?.querySelector('input');
   const previewTransportButtons = [...(previewTransportControls?.querySelectorAll('button') ?? [])].filter(visible);
   const masterControls = topContent?.querySelector('.videoMasterControls');
   const masterButtonRow = masterControls?.querySelector(':scope > .buttonRow');
@@ -1043,7 +1046,7 @@ const measureVideo = (client) => evaluate(client, `(() => {
   const transportClipBottom = Math.min(panelRect?.bottom ?? -Infinity, contentRect?.bottom ?? -Infinity);
   const transportButtons = previewTransportButtons.map((button) => {
     const value = button.getBoundingClientRect();
-    return { label: button.getAttribute('aria-label') ?? button.textContent?.trim() ?? '', height: value.height, top: value.top, bottom: value.bottom };
+    return { label: button.getAttribute('aria-label') ?? button.textContent?.trim() ?? '', width: value.width, height: value.height, left: value.left, right: value.right, top: value.top, bottom: value.bottom };
   });
   const previewTransportContained = Boolean(
     transportRect
@@ -1051,6 +1054,7 @@ const measureVideo = (client) => evaluate(client, `(() => {
       && transportRect.bottom <= transportClipBottom + 1
       && transportButtons.length > 0
       && transportButtons.every((button) => button.top >= transportRect.top - 1 && button.bottom <= transportRect.bottom + 1
+        && button.left >= transportRect.left - 1 && button.right <= transportRect.right + 1
         && button.top >= transportClipTop - 1 && button.bottom <= transportClipBottom + 1),
   );
   const masterControlsContained = Boolean(
@@ -1083,6 +1087,9 @@ const measureVideo = (client) => evaluate(client, `(() => {
     liveMonitorPanel: rect(liveMonitorPanel),
     previewTransport: rect(previewTransport),
     previewTransportControls: rect(previewTransportControls),
+    previewSeekReadable: Boolean(previewSeekRange && previewSeekTime
+      && previewSeekRange.getBoundingClientRect().width >= 120
+      && previewSeekTime.scrollWidth <= previewSeekTime.clientWidth + 1),
     previewTransportContained,
     previewTransportButtons: transportButtons,
     masterControls: rect(masterControls),
@@ -1512,6 +1519,8 @@ try {
     await capture(client, `control-video-${screenshotViewportKey(viewport)}.png`);
     assert.equal(video.previewTransportContained, true, `Preview Transport and every button remain inside the visible top desk at ${viewport.width}x${viewport.height}: ${JSON.stringify({ topContent: video.topContent, liveMonitorPanel: video.liveMonitorPanel, previewTransport: video.previewTransport, previewTransportButtons: video.previewTransportButtons })}`);
     assert.ok(video.previewTransportButtons.every((button) => button.height >= 44), `Preview Transport preserves 44px button targets at ${viewport.width}x${viewport.height}: ${JSON.stringify(video.previewTransportButtons)}`);
+    assert.equal(video.previewSeekReadable, true, `Preview position slider and full time readout remain usable at ${viewport.width}x${viewport.height}`);
+    assert.ok(video.previewTransportButtons.every((button) => button.height <= 48), 'Preview controls must not stretch to fill the monitor height');
     assert.equal(video.masterControlsContained, true, `Video Master fader and action row remain visible at ${viewport.width}x${viewport.height}: ${JSON.stringify({ topContent: video.topContent, masterControls: video.masterControls, masterButtonRow: video.masterButtonRow, masterFader: video.masterFader })}`);
     assert.ok(rectHeight(video.surface) >= 120 && rectHeight(video.list) >= 80, "Video library body/list have useful geometry");
     assert.ok(video.cardCount > 0 && (video.surfaceOverflowY === "auto" || video.surfaceOverflowY === "scroll"), `Video mounts media cards with a bounded library scrollport: ${JSON.stringify({ surfaceOverflowY: video.surfaceOverflowY, listOverflowY: video.listOverflowY })}`);

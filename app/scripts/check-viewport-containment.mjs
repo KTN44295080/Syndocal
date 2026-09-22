@@ -13408,8 +13408,10 @@ function hasExpectedTouchSurface(result) {
     result.visibleTouchSurfaceCount === 1 &&
     result.visibleTouchModeToggleCount === 2 &&
     result.visibleTouchPageTabCount >= 1 &&
-    result.visibleTouchPageAddCount === 1 &&
-    result.visibleTouchPageRemoveCount === 1 &&
+    // Page management is editing UI; the live operator surface keeps only
+    // page selection. The EDIT reachability exercise below retains coverage.
+    result.visibleTouchPageAddCount === 0 &&
+    result.visibleTouchPageRemoveCount === 0 &&
     result.touchSurfaceMode === "live" &&
     result.touchActivePageLabel === expectedPage &&
     (expectedPage !== "Default Desk" || result.touchDefaultPresetVisible) &&
@@ -13547,7 +13549,11 @@ async function checkEditableTouchSurface(client, expectedPage, expectedDefaultPr
       surface.querySelectorAll('.touchEditResizeHandle').length === initialControlCount;
     const pageManagementPresent = document.querySelectorAll('.touchPageTabs button[aria-pressed]').length >= 1 &&
       document.querySelectorAll('.touchPageAdd').length === 1 &&
-      document.querySelectorAll('.touchPageRemove').length === 1;
+      document.querySelectorAll('.touchPageRemove').length === 1 &&
+      ['.touchPageAdd', '.touchPageRemove'].every((selector) => {
+        const rect = document.querySelector(selector).getBoundingClientRect();
+        return rect.width >= 44 && rect.height >= 44;
+      });
     const bandAbsentInEdit = document.querySelector('.touchSafetyDeck') === null;
 
     liveButton.click();

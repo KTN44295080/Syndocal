@@ -1,3 +1,5 @@
+@import "./components/ControlWorkspace.css";
+
 :root {
   --ui-scale: 1;
   --ui-scale-inverse: 100%;
@@ -6004,6 +6006,11 @@ progress {
 
 .vjPreviewTransport {
   display: grid;
+  container-type: inline-size;
+  container-name: preview-transport;
+  align-content: start;
+  min-height: 0;
+  overflow: auto;
   gap: 4px;
   min-width: 0;
   border: 1px solid #5d4930;
@@ -6038,7 +6045,7 @@ progress {
 .vjPreviewTransportControls {
   display: grid;
   grid-template-columns: 44px minmax(0, 1fr) auto 56px;
-  align-items: stretch;
+  align-items: center;
   gap: 4px;
   min-width: 0;
 }
@@ -6046,6 +6053,7 @@ progress {
 .vjPreviewTransportControls button {
   min-width: 44px;
   min-height: 44px;
+  height: 44px;
   border-radius: 2px;
   padding: 0 6px;
 }
@@ -22534,6 +22542,48 @@ h3 {
   border-right: 1px solid #39342f;
   padding-top: 6px;
   padding-right: 5px;
+}
+
+/* The compact monitor rail is only 240px wide. Keep position/time on its own
+   full-width row instead of allocating its slider the leftover few pixels. */
+@container preview-transport (max-width: 390px) {
+  .vjPreviewTransportControls {
+    grid-template-columns: 44px minmax(0, 1fr) 56px;
+    row-gap: 8px;
+  }
+
+  .vjPreviewTransportControls > .vjPreviewSeek {
+    grid-column: 1 / -1;
+    grid-row: 1;
+  }
+
+  .vjPreviewTransportControls > .vjPreviewPlay {
+    grid-column: 1;
+    grid-row: 2;
+  }
+
+  .vjPreviewTransportControls > .vjPreviewSpeed {
+    grid-column: 2;
+    grid-row: 2;
+    grid-template-columns: 44px minmax(54px, 1fr) 44px;
+    height: 44px;
+  }
+
+  .vjPreviewTransportControls > .vjPreviewClear {
+    grid-column: 3;
+    grid-row: 2;
+  }
+}
+
+@container preview-transport (max-width: 250px) {
+  .vjPreviewTransportControls {
+    grid-template-columns: 44px minmax(142px, 1fr);
+  }
+
+  .vjPreviewTransportControls > .vjPreviewClear {
+    grid-column: 1 / -1;
+    grid-row: 3;
+  }
 }
 
 .showClockPanel {
