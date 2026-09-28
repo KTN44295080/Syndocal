@@ -85,6 +85,28 @@ in the harness process and the same native broker, before and after revocation.
 It revokes its own principal and removes its ACL-restricted credential directory.
 It neither sends device/output commands nor establishes physical acceptance.
 
+For native crash/restart proof, use the isolated
+`app/src-tauri/tauri.mcp-lifecycle.conf.json` configuration. Build it with
+`pnpm.cmd --dir app tauri build --no-bundle --config src-tauri/tauri.mcp-lifecycle.conf.json`
+and an absolute `CARGO_TARGET_DIR` of
+`%TEMP%/syndocal-native-acceptance-target`; restore the environment afterward.
+The configuration has its own application identifier and persistent profile.
+Then run:
+
+```text
+node tools/syndocal-mcp/check-native-lifecycle.mjs --expected-executable <absolute-TEMP>/syndocal-native-acceptance-target/release/syndocal.exe --cdp-port 9256 --evidence <new-absolute-json-path>
+```
+
+This harness refuses the normal executable, requires an empty QA project, and
+verifies one responsive maximized QA window on each launch. It tests forced exit,
+clean exit, fresh launch identity, retired credentials/grants, old receipts and
+launch-proof rejection through real native requests. It checks that the normal
+app descriptor is unchanged and removes its own credential and QA processes.
+It does not prove durable authored/output mutation, publication recovery or a
+clean-machine installation. The shared `native-backend-session.mjs` owns the
+process-verified CDP bootstrap; no DOM actions are used. The read-only runner
+also accepts an optional absolute `--descriptor` for explicitly isolated builds.
+
 Receipt lookup requires fresh authentication and the exact submitting principal
 incarnation. It does not require a new operation grant or dispatch to the renderer.
 Other owners cannot read completed results or reuse their IDs. Durable command

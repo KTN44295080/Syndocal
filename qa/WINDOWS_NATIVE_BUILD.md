@@ -28,6 +28,11 @@ process ownership, and native acceptance are defined in [AGENTS.md](../AGENTS.md
 The maintained Tauri wrapper is [run-tauri.mjs](../app/scripts/run-tauri.mjs);
 its contract is checked by
 [check-tauri-build-wrapper.mjs](../app/scripts/check-tauri-build-wrapper.mjs).
+For an isolated release target, set `CARGO_TARGET_DIR` to an absolute path.
+The wrapper verifies/stops only that target's `release/syndocal.exe`, preserving
+the normal checkout instance. Relative overrides fail closed because Cargo's
+invocation directory can differ from the wrapper directory. Without an override,
+the existing checkout `target/release/syndocal.exe` behavior is unchanged.
 Direct Cargo commands must satisfy the same environment contract.
 The ASIO and soak PowerShell harnesses currently retain their narrower Community
 preflight; Build Tools support here applies to the Tauri wrapper and direct Cargo

@@ -207,7 +207,16 @@ export function requireExactMsvcLinkerFirst(
   return locatedLinkers;
 }
 
-export function releaseExecutablePath(baseAppDir = appDir) {
+export function releaseExecutablePath(baseAppDir = appDir, environment = process.env) {
+  const override = environment.CARGO_TARGET_DIR;
+  if (override !== undefined && override !== "") {
+    // Cargo invocation cwd can differ from the wrapper cwd. Never guess a
+    // relative override and accidentally stop the regular operator instance.
+    if (typeof override !== "string" || !path.isAbsolute(override)) {
+      throw new Error("CARGO_TARGET_DIR must be absolute for exact release-process ownership.");
+    }
+    return path.resolve(override, "release", "syndocal.exe");
+  }
   return path.resolve(baseAppDir, "..", "target", "release", "syndocal.exe");
 }
 

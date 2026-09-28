@@ -96,9 +96,14 @@ equal(isWindowsNativeCargoCommand(["dev"]), true);
 equal(isWindowsNativeCargoCommand(["--verbose", "dev"]), true);
 equal(isWindowsNativeCargoCommand(["info"]), false);
 equal(
-  releaseExecutablePath(appDir),
+  releaseExecutablePath(appDir, {}),
   path.resolve(appDir, "..", "target", "release", "syndocal.exe"),
 );
+const isolatedTargetDir = path.resolve(repoDir, "target-native-lifecycle");
+equal(releaseExecutablePath(appDir, { CARGO_TARGET_DIR: isolatedTargetDir }), path.join(isolatedTargetDir, "release", "syndocal.exe"));
+ok(releaseExecutablePath(appDir, { CARGO_TARGET_DIR: isolatedTargetDir }) !== releaseExecutablePath(appDir, {}));
+throws(() => releaseExecutablePath(appDir, { CARGO_TARGET_DIR: "relative-target" }), /must be absolute/);
+throws(() => releaseExecutablePath(appDir, { CARGO_TARGET_DIR: 7 }), /must be absolute/);
 
 equal(REQUIRED_VCTOOLS_VERSION, "14.44.35207");
 equal(

@@ -145,3 +145,39 @@ sockets to the real native broker. Temporary principal/credential cleanup passed
 No native rebuild is required for sidecar-only changes; no new native-build or
 hardware acceptance is claimed. The whole AI8/Remote security markers remain
 open for their broader clean-install/output/restart/review requirements.
+
+## Isolated native crash/restart slice — 2026-09-29
+
+Base `0fdd6af9`. The regular application was preserved as PID 66956. A separate
+`jp.seraf.ktn.syndocal.qa.mcp-lifecycle` release configuration and profile enabled
+real process termination/restart without adopting or changing user projects.
+Preparing this exposed a build-wrapper ownership bug: `CARGO_TARGET_DIR` was
+ignored when stopping the executable. The wrapper now selects the exact absolute
+override's release executable and rejects ambiguous relative overrides. The
+default checkout path and pinned MSVC procedure remain unchanged. Its maintained
+checker passed 247 assertions and 27 hostile fixtures.
+
+Isolated `pnpm.cmd --dir app tauri build --no-bundle --config
+src-tauri/tauri.mcp-lifecycle.conf.json` passed using the absolute temporary
+target directory and exact MSVC 14.44.35207 linker first on PATH. Build duration
+8m18s; Rust warnings 0, same as the preceding normal build; unchanged Vite chunk
+advisory 1. QA executable SHA256:
+`bcd5ba65d3e58e6d9ca4c7db6377b09ee3574d4d35b6701e2785b64b10fd510f`.
+
+[`artifacts/native-mcp-lifecycle-2026-09-29.json`](artifacts/native-mcp-lifecycle-2026-09-29.json)
+records seven successful checks: initial read, dead-process descriptor rejection,
+retired-principal rejection after forced termination, old-credential/receipt
+non-adoption, old-launch proof rejection with successful fresh read, graceful
+native close, and no restored grant after graceful restart. Each of three launches
+verified its exact PID/executable, one responsive maximized QA window, and zero
+fixtures/video outputs with stopped Timeline. The normal descriptor was byte-for-
+byte unchanged. QA processes, temporary credential file and OS credential were
+cleaned up. The empty QA profile remains as machine-local QA state.
+
+The process-verified backend bootstrap was extracted for reuse. The normal-app
+13-check stdio/HTTP/REST/WebSocket runner passed again after extraction; evidence
+is `%TEMP%/syndocal-native-mcp-helper-refactor-20260929-01.json`. No Computer Use,
+subagent, project mutation, physical output or normal-app restart was performed.
+This proves the isolated release-build broker lifecycle, not durable mutation
+publication, clean installation, hardware, or whole AI8 acceptance. Existing
+pre-owned frontend changes remain in the builds and outside this commit's scope.
