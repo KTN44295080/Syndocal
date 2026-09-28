@@ -372,14 +372,121 @@ fn agent_bridge_process_requires_nonce_proof_and_exact_external_grant() {
     let response = process(&inner, &serde_json::to_vec(&request).unwrap());
     assert_eq!(response.status, "pending");
     assert_eq!(captured.lock().unwrap()[0].principal_id, "client-a");
+    let claimed = inner.ledger.lock().unwrap().claim(1, &request_id).unwrap();
+    assert_eq!(claimed.principal_id, "client-a");
+    assert_eq!(
+        claimed.principal_incarnation,
+        approval.principal_incarnation
+    );
+    let status_id = id(92);
+    let status_nonce = "c".repeat(64);
+    let status_request = Request {
+        token: inner.token.clone(),
+        request_id: status_id.clone(),
+        method: "request.status".to_string(),
+        params: serde_json::json!({"requestId": request_id}),
+        auth: Some(wire::Auth {
+            principal_id: "client-a".to_string(),
+            principal_incarnation: approval.principal_incarnation,
+            client_nonce: status_nonce.clone(),
+            proof: proof(
+                &approval.credential,
+                &authority::auth_proof_message(
+                    &inner.session_nonce,
+                    &status_nonce,
+                    &status_id,
+                    "request.status",
+                ),
+            ),
+        }),
+    };
+    let status = process(&inner, &serde_json::to_vec(&status_request).unwrap());
+    assert_eq!(status.request_id, request_id);
+    assert_eq!(status.status, "pending");
+    assert_eq!(captured.lock().unwrap().len(), 1);
     assert_eq!(
         process(&inner, &serde_json::to_vec(&request).unwrap())
             .error
             .as_deref(),
         Some("agent_auth_nonce_replayed")
     );
+    inner
+        .authority
+        .revoke("client-a", approval.principal_incarnation)
+        .unwrap();
+    let denied = process(&inner, &serde_json::to_vec(&status_request).unwrap());
+    assert_eq!(denied.request_id, request_id);
+    assert_eq!(denied.error.as_deref(), Some("agent_principal_revoked"));
+    assert!(denied.result.is_none());
     drop(inner);
     std::fs::remove_dir_all(&directory).unwrap();
+}
+#[test]
+fn agent_bridge_receipts_and_replays_are_bound_to_exact_owner() {
+    let mut ledger = ledger::Ledger::new(None).unwrap();
+    let generation = ledger.register().unwrap();
+    let command = command("fixtures.list");
+    ledger.begin_owned(&id(1), &command, "alice", 1).unwrap();
+    let dispatch = ledger.claim(generation, &id(1)).unwrap();
+    assert_eq!(dispatch.principal_id, "alice");
+    assert_eq!(dispatch.principal_incarnation, 1);
+    ledger
+        .complete(generation, &id(1), serde_json::json!({"private": true}))
+        .unwrap();
+    assert_eq!(ledger.status_owned(&id(1), "alice", 1).status, "completed");
+    for (principal, incarnation) in [("bob", 1), ("alice", 2)] {
+        let receipt = ledger.status_owned(&id(1), principal, incarnation);
+        assert_eq!(receipt.error.as_deref(), Some("request_owner_mismatch"));
+        assert!(receipt.result.is_none());
+        let (response, dispatch) = ledger
+            .begin_owned(&id(1), &command, principal, incarnation)
+            .unwrap();
+        assert_eq!(response.error.as_deref(), Some("request_conflict"));
+        assert!(response.result.is_none());
+        assert!(dispatch.is_none());
+    }
+    assert_eq!(ledger.status_owned(&id(2), "alice", 1).status, "unknown");
+}
+#[test]
+fn agent_bridge_legacy_unbound_tombstone_remains_a_replay_fence() {
+    use sha2::{Digest, Sha256};
+    let directory = std::env::temp_dir().join(format!(
+        "syndocal-agent-legacy-{}",
+        storage::random_hex(12).unwrap()
+    ));
+    std::fs::create_dir(&directory).unwrap();
+    let path = directory.join("ledger.json");
+    let command = command("fixtures.set_transform");
+    let old_shape = format!(
+        "{:x}",
+        Sha256::digest(serde_json::to_vec(&command).unwrap())
+    );
+    std::fs::write(
+        &path,
+        serde_json::to_vec(&serde_json::json!({
+            "version": 1,
+            "mutations": { id(1): { "shape": old_shape, "response": {
+                "requestId": id(1), "status": "completed", "result": { "private": true }
+            } } }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let mut ledger = ledger::Ledger::new(Some(path.clone())).unwrap();
+    ledger.register().unwrap();
+    for (principal, incarnation) in [("alice", 1), ("bob", 2)] {
+        let status = ledger.status_owned(&id(1), principal, incarnation);
+        assert_eq!(status.status, "unknown");
+        assert!(status.result.is_none());
+        let (receipt, dispatch) = ledger
+            .begin_owned(&id(1), &command, principal, incarnation)
+            .unwrap();
+        assert_eq!(receipt.error.as_deref(), Some("request_conflict"));
+        assert!(dispatch.is_none());
+    }
+    drop(ledger);
+    std::fs::remove_file(path).unwrap();
+    std::fs::remove_dir(directory).unwrap();
 }
 #[test]
 fn agent_bridge_claim_is_exact_once_and_replay_never_dispatches_twice() {

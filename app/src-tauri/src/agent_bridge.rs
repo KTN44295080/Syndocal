@@ -236,8 +236,12 @@ fn process(inner: &Inner, bytes: &[u8]) -> Response {
         Ok(value) => value,
         Err(error) => return Response::rejected(&request.request_id, error),
     };
+    let response_id = match &command {
+        Command::Status(status) => status.request_id.as_str(),
+        _ => request.request_id.as_str(),
+    };
     let Some(auth) = request.auth.as_ref() else {
-        return Response::rejected(&request.request_id, "agent_authentication_required");
+        return Response::rejected(response_id, "agent_authentication_required");
     };
     if let Err(error) = inner.authority.authenticate_proof(
         &auth.principal_id,
@@ -248,14 +252,14 @@ fn process(inner: &Inner, bytes: &[u8]) -> Response {
         &request.method,
         &auth.proof,
     ) {
-        return Response::rejected(&request.request_id, &error);
+        return Response::rejected(response_id, &error);
     }
     let mut auth_nonces = match inner.auth_nonces.lock() {
         Ok(value) => value,
-        Err(_) => return Response::rejected(&request.request_id, "agent_state_poisoned"),
+        Err(_) => return Response::rejected(response_id, "agent_state_poisoned"),
     };
     if auth_nonces.contains(&auth.client_nonce) {
-        return Response::rejected(&request.request_id, "agent_auth_nonce_replayed");
+        return Response::rejected(response_id, "agent_auth_nonce_replayed");
     }
     if auth_nonces.len() >= 512 {
         if let Some(oldest) = auth_nonces.iter().next().cloned() {
@@ -264,6 +268,18 @@ fn process(inner: &Inner, bytes: &[u8]) -> Response {
     }
     auth_nonces.insert(auth.client_nonce.clone());
     drop(auth_nonces);
+    // Status is a receipt lookup, not a new renderer operation. Authentication
+    // and exact request ownership are required; no additional read grant is used.
+    if let Command::Status(status) = &command {
+        return match inner.ledger.lock() {
+            Ok(ledger) => ledger.status_owned(
+                &status.request_id,
+                &auth.principal_id,
+                auth.principal_incarnation,
+            ),
+            Err(_) => Response::rejected(response_id, "agent_state_poisoned"),
+        };
+    }
     if let Err(error) = inner.authority.authorize_bridge_request(
         &auth.principal_id,
         auth.principal_incarnation,
@@ -276,18 +292,17 @@ fn process(inner: &Inner, bytes: &[u8]) -> Response {
         Ok(value) => value,
         Err(_) => return Response::rejected(&request.request_id, "agent_state_poisoned"),
     };
-    if let Command::Status(status) = &command {
-        return ledger.status(&status.request_id);
-    }
-    let (response, dispatch) = match ledger.begin(&request.request_id, &command) {
+    let (response, dispatch) = match ledger.begin_owned(
+        &request.request_id,
+        &command,
+        &auth.principal_id,
+        auth.principal_incarnation,
+    ) {
         Ok(value) => value,
         Err(error) => return Response::rejected(&request.request_id, &error),
     };
     drop(ledger);
     if let Some(dispatch) = dispatch {
-        let mut dispatch = dispatch;
-        dispatch.principal_id = auth.principal_id.clone();
-        dispatch.principal_incarnation = auth.principal_incarnation;
         if (inner.emit)(&dispatch).is_err() {
             if let Ok(mut ledger) = inner.ledger.lock() {
                 ledger.dispatch_failed(&request.request_id);

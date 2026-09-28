@@ -63,3 +63,54 @@ Do not stage or overwrite: `app/src/App.tsx`, `app/src/uiLocalization.ts`,
 `qa/AI3_NATIVE_INGRESS_CURRENT_SOURCE_CHECKPOINT_2026-09-14.md`, `.vite/`.
 User's no-subagent instruction supersedes repository delegation preferences.
 Do not claim independent review from a self-review.
+
+## Native MCP repair accepted locally — 2026-09-29
+
+Base `996a58bc`, same branch. The earlier negative probe is superseded for the
+read-only native MCP slice by
+[`artifacts/native-mcp-readonly-2026-09-29.json`](artifacts/native-mcp-readonly-2026-09-29.json).
+
+Two defects were repaired: status lookup was sent through the new-operation
+grant mapper, and renderer claim returned a stored dispatch whose principal
+fields were empty. Requests now retain their authenticated principal/incarnation
+before storage and dispatch. Receipt lookup authenticates the caller and checks
+the exact owner; rejection retains the original queried ID. Mutation replay
+hashes include the owner. Old unbound hashes remain conflict/replay fences;
+restart receipts stay unknown and never expose prior results or trigger replay.
+There is no durable JSON field/schema change or destructive migration.
+
+The maintained native runner uses a process-verified main-window backend for
+temporary pairing/grants, then an independent stdio MCP client for all reads.
+Seven checks passed: ungranted denial; fixtures, runtime, capabilities and
+recording reads through terminal receipt lookup; revoked read denial; revoked
+receipt denial with original-ID correlation. It proved safe mode with four exact
+read grants, revoked its own principal and deleted its ACL-restricted credential.
+No DOM action, Computer Use, subagent, project mutation or device/output command.
+
+Validation:
+
+- `cargo test -p syndocal agent_bridge -- --nocapture`: 21 passed, none failed or
+  ignored, including exact owner/incarnation isolation, claimed principal,
+  revoked status, old unbound tombstones and restart no-replay. Approved MSVC
+  14.44.35207 pinned and verified first on PATH. No Rust warnings.
+- Fake adapter: 15 integration groups and 128 hostile frames; HTTP/REST/WS
+  transport checks passed. Authority service and frontend bridge (11 groups)
+  passed. These are separate from the real native evidence above.
+- `pnpm.cmd --dir app tauri build --no-bundle`: exit 0, approved pinned linker,
+  release compilation 3m50s. Rust warnings 0, unchanged from the UI checkpoint;
+  existing Vite chunk-size advisory 1, unchanged and not suppressed.
+- Exact executable SHA256:
+  `06d90b3a202d4290b32d0e90391c690a9be447aa095f32f4f3b3e460be39a7ff`.
+  PID 66956; one exact-path responsive `Syndocal` window; maximized using the
+  backend and verified using Win32 `IsZoomed`.
+
+The build includes the protected pre-existing frontend changes listed above;
+it is not a clean installation/release artifact. Diff self-review covered auth,
+ownership, bounded storage, replay and credential cleanup; independent security
+review is not claimed. AI8 and the overall goal remain open: this slice does not
+prove mutation/output, crash/update, physical topology, clean installation,
+signing, licensing, venue rehearsal or native accessibility acceptance.
+
+Next: use the now-working authenticated MCP path for bounded native operations
+required by the remaining domain gates. Preserve physical/clean-machine/venue
+and license requirements rather than closing them from software-only evidence.

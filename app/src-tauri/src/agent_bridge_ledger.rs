@@ -130,13 +130,39 @@ impl Ledger {
             })
             .unwrap_or_else(|| Response::status(id, "unknown"))
     }
+    pub fn status_owned(&self, id: &str, principal: &str, incarnation: u64) -> Response {
+        match self.entries.get(id) {
+            Some(entry)
+                if entry.dispatch.principal_id == principal
+                    && entry.dispatch.principal_incarnation == incarnation =>
+            {
+                self.status(id)
+            }
+            Some(_) => Response::rejected(id, "request_owner_mismatch"),
+            // Previous-process receipts have no live authority binding. Never disclose them.
+            None => Response::status(id, "unknown"),
+        }
+    }
+    #[cfg(test)]
     pub fn begin(
         &mut self,
         id: &str,
         command: &Command,
     ) -> Result<(Response, Option<AgentBridgeDispatch>), String> {
+        self.begin_owned(id, command, "test-principal", 1)
+    }
+    pub fn begin_owned(
+        &mut self,
+        id: &str,
+        command: &Command,
+        principal: &str,
+        incarnation: u64,
+    ) -> Result<(Response, Option<AgentBridgeDispatch>), String> {
         use sha2::{Digest, Sha256};
-        let encoded = serde_json::to_vec(command).map_err(|_| "request_encode_failed")?;
+        // Bind replay identity as well as results to the authenticated incarnation.
+        // Older unbound durable hashes conflict, preserving their no-replay fence.
+        let encoded = serde_json::to_vec(&(principal, incarnation, command))
+            .map_err(|_| "request_encode_failed")?;
         let shape = format!("{:x}", Sha256::digest(encoded));
         if let Some(entry) = self.entries.get(id) {
             return Ok((
@@ -191,8 +217,8 @@ impl Ledger {
                 .ok_or("request_encode_failed")?
                 .to_string(),
             params: command_json["params"].clone(),
-            principal_id: String::new(),
-            principal_incarnation: 0,
+            principal_id: principal.to_string(),
+            principal_incarnation: incarnation,
         };
         let response = Response::status(id, "pending");
         let mut candidate = self.durable.clone();

@@ -1,0 +1,51 @@
+{
+  "schemaVersion": 1,
+  "timestamp": "2026-09-28T15:43:42.375Z",
+  "passed": true,
+  "executable": "C:\\Users\\janua\\OneDrive\\ドキュメント\\GitHub\\Syndocal\\target\\release\\syndocal.exe",
+  "processId": 66956,
+  "executableSha256": "06d90b3a202d4290b32d0e90391c690a9be447aa095f32f4f3b3e460be39a7ff",
+  "transport": "External stdio MCP sidecar to authenticated native loopback broker",
+  "bootstrap": "process-verified local main-window backend via loopback CDP; no DOM actions",
+  "principalRevoked": true,
+  "credentialRemoved": true,
+  "checks": [
+    {
+      "check": "ungranted-read-rejected",
+      "passed": true
+    },
+    {
+      "check": "syndocal_list_fixtures",
+      "passed": true,
+      "status": "completed"
+    },
+    {
+      "check": "syndocal_get_runtime_status",
+      "passed": true,
+      "status": "completed"
+    },
+    {
+      "check": "syndocal_get_control_plane_capabilities",
+      "passed": true,
+      "status": "completed"
+    },
+    {
+      "check": "syndocal_get_recording_status",
+      "passed": true,
+      "status": "completed"
+    },
+    {
+      "check": "revoked-read-rejected",
+      "passed": true
+    },
+    {
+      "check": "revoked-receipt-rejected-original-id",
+      "passed": true
+    }
+  ],
+  "nonclaims": [
+    "No authored/runtime/output mutation",
+    "No physical device acceptance",
+    "No clean installation or release acceptance"
+  ]
+}

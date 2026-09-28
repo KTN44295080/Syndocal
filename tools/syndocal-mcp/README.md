@@ -62,6 +62,28 @@ node tools/syndocal-mcp/check.mjs
 node tools/syndocal-mcp/check-transports.mjs
 ```
 
+For a running Windows native build with its isolated WebView2 loopback debugging
+port enabled, run the real read-only acceptance harness:
+
+```text
+node tools/syndocal-mcp/check-native-readonly.mjs --expected-executable <absolute-exe> --cdp-port <port> --evidence <new-absolute-json-path>
+```
+
+The harness verifies the debugger belongs to the selected executable's process
+tree, bootstraps one temporary principal through main-window backend commands,
+and runs a separate stdio MCP sidecar. It checks ungranted denial, four granted
+reads through terminal receipt lookup, safe-mode read-only grants, and revocation.
+It revokes its own principal and removes its ACL-restricted credential directory.
+It neither sends device/output commands nor establishes physical acceptance.
+
+Receipt lookup requires fresh authentication and the exact submitting principal
+incarnation. It does not require a new operation grant or dispatch to the renderer.
+Other owners cannot read completed results or reuse their IDs. Durable command
+hashes include the authenticated owner; pre-owner-binding hashes remain replay
+fences and return `request_conflict` on resubmission. After restart, status is
+`unknown`: an old receipt cannot prove the new renderer completed an operation.
+Never resubmit an uncertain mutation with a new ID without reconciling its state.
+
 The integration check launches the CLI against its own fake loopback broker. It exercises negotiation, all nine tool schemas, canonical operation allowlisting, request correlation, Video BO false-success handling, pending/unknown behavior, no automatic retry, overlap rejection, malformed/oversized frames, executable mismatch and credential redaction. The transport check exercises health, JSON-RPC over HTTP, the REST facade, WebSocket JSON-RPC, and the same nonce proof against a fake loopback broker. These checks do not operate Syndocal or physical devices. Real native bridge acceptance is a separate integration check.
 
 The adapter implements the MCP **2025-11-25** [stdio transport](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports), [initialization lifecycle](https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle), and [tools interface](https://modelcontextprotocol.io/specification/2025-11-25/server/tools). Supported JSON-RPC methods are `initialize`, `notifications/initialized`, `ping`, `tools/list`, and `tools/call`. The HTTP and WebSocket transports reuse the same JSON-RPC dispatcher and native authentication path; they do not add a second command registry.
