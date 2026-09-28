@@ -1,0 +1,78 @@
+{
+  "schemaVersion": 1,
+  "timestamp": "2026-09-28T15:55:21.899Z",
+  "passed": true,
+  "executable": "C:\\Users\\janua\\OneDrive\\ドキュメント\\GitHub\\Syndocal\\target\\release\\syndocal.exe",
+  "processId": 66956,
+  "executableSha256": "06d90b3a202d4290b32d0e90391c690a9be447aa095f32f4f3b3e460be39a7ff",
+  "sidecarSha256": "784ba0474c1c634f914b9508bc390e134d8db308287f72ed4b86efeeb9347a22",
+  "runnerSha256": "14a8feb9f1b2178dd418ab4496a604393ee2e81392ba99f3d57c4047b315c407",
+  "networkHarnessSha256": "519f2d2d7bf758a882207d64602b24385aa6f2549d0bb35fd3967448e06fe185",
+  "transport": "External stdio MCP sidecar and real HTTP/REST/WebSocket clients to authenticated native loopback broker",
+  "bootstrap": "process-verified local main-window backend via loopback CDP; no DOM actions",
+  "principalRevoked": true,
+  "credentialRemoved": true,
+  "checks": [
+    {
+      "check": "ungranted-read-rejected",
+      "passed": true
+    },
+    {
+      "check": "syndocal_list_fixtures",
+      "passed": true,
+      "status": "completed"
+    },
+    {
+      "check": "syndocal_get_runtime_status",
+      "passed": true,
+      "status": "completed"
+    },
+    {
+      "check": "syndocal_get_control_plane_capabilities",
+      "passed": true,
+      "status": "completed"
+    },
+    {
+      "check": "syndocal_get_recording_status",
+      "passed": true,
+      "status": "completed"
+    },
+    {
+      "check": "http-jsonrpc-native-terminal-read",
+      "passed": true
+    },
+    {
+      "check": "rest-native-terminal-read",
+      "passed": true
+    },
+    {
+      "check": "websocket-native-terminal-read",
+      "passed": true
+    },
+    {
+      "check": "revoked-read-rejected",
+      "passed": true
+    },
+    {
+      "check": "revoked-receipt-rejected-original-id",
+      "passed": true
+    },
+    {
+      "check": "http-jsonrpc-revoked-denied",
+      "passed": true
+    },
+    {
+      "check": "rest-revoked-denied",
+      "passed": true
+    },
+    {
+      "check": "websocket-revoked-denied",
+      "passed": true
+    }
+  ],
+  "nonclaims": [
+    "No authored/runtime/output mutation",
+    "No physical device acceptance",
+    "No clean installation or release acceptance"
+  ]
+}

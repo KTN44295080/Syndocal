@@ -55,6 +55,10 @@ const request = async (method, pathname, body, headers = {}) => {
 
 let ws;
 try {
+  const beforeForeignOrigin = brokerRequests.length;
+  const foreignOrigin = await request('POST', '/rest/tools/syndocal_get_runtime_status', {}, { origin: 'https://attacker.invalid' });
+  assert.equal(foreignOrigin.status, 403, 'Foreign browser origins must reject before native dispatch');
+  assert.equal(brokerRequests.length, beforeForeignOrigin);
   const health = await request('GET', '/healthz');
   assert.equal(health.status, 200);
   assert.equal(health.body.ok, true);

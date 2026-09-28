@@ -369,6 +369,25 @@ function loopbackHost(host) {
   return host === '127.0.0.1' || host === '::1';
 }
 
+function trustedHttpRequest(request, server) {
+  const address = server.address();
+  if (!address || typeof address === 'string') return false;
+  const authorities = new Set([`127.0.0.1:${address.port}`, `[::1]:${address.port}`, `localhost:${address.port}`]);
+  const host = request.headers.host;
+  const count = (name) => request.rawHeaders.filter((value, index) => index % 2 === 0 && value.toLowerCase() === name).length;
+  if (count('host') !== 1 || count('origin') > 1 || !authorities.has(host)) return false;
+  // Loopback binding alone does not prevent browser requests or DNS rebinding.
+  const origin = request.headers.origin;
+  return (origin === undefined || origin === `http://${host}`)
+    && !['cross-site', 'same-site'].includes(request.headers['sec-fetch-site']);
+}
+
+function httpRequestUrl(request) {
+  if (!request.url?.startsWith('/') || request.url.startsWith('//')) return null;
+  try { return new URL(request.url, `http://${request.headers.host}`); }
+  catch { return null; }
+}
+
 function boundedHttpBody(request) {
   return new Promise((resolve, reject) => {
     const chunks = [];
@@ -429,6 +448,7 @@ function attachWebSocket(socket, options, onClose) {
   let tail = Buffer.alloc(0);
   let closed = false;
   let consuming = false;
+  let pumpRequested = false;
   const send = (response) => {
     if (closed || !response) return;
     try {
@@ -472,11 +492,13 @@ function attachWebSocket(socket, options, onClose) {
     }
   };
   const pump = () => {
-    if (consuming || closed) return;
+    if (closed) return;
+    if (consuming) { pumpRequested = true; return; }
     consuming = true;
     void consume().finally(() => {
       consuming = false;
-      if (tail.length && !closed) pump();
+      // Incomplete frames must wait for data, not spin the microtask queue.
+      if (pumpRequested) { pumpRequested = false; pump(); }
     });
   };
   socket.on('data', (chunk) => {
@@ -495,7 +517,9 @@ export function serveHttp(options, { host = '127.0.0.1', port = 0 } = {}) {
   const sessions = new Map();
   const websockets = new Set();
   const server = http.createServer(async (request, response) => {
-    const url = new URL(request.url ?? '/', `http://${host}`);
+    if (!trustedHttpRequest(request, server)) return httpJson(response, 403, { error: 'Untrusted host or browser origin.' });
+    const url = httpRequestUrl(request);
+    if (!url) return httpJson(response, 400, { error: 'Invalid request target.' });
     if (request.method === 'GET' && url.pathname === '/healthz') return httpJson(response, 200, { ok: true, protocolVersion: VERSION, transport: 'streamable-http' });
     if (request.method !== 'POST' || (url.pathname !== '/rpc' && !url.pathname.startsWith('/rest/tools/'))) return httpJson(response, 404, { error: 'Not found.' });
     let body;
@@ -517,7 +541,9 @@ export function serveHttp(options, { host = '127.0.0.1', port = 0 } = {}) {
     }
     state.touched = Date.now();
     if (url.pathname.startsWith('/rest/tools/')) {
-      const name = decodeURIComponent(url.pathname.slice('/rest/tools/'.length));
+      let name;
+      try { name = decodeURIComponent(url.pathname.slice('/rest/tools/'.length)); }
+      catch { return httpJson(response, 400, { error: 'Invalid tool name encoding.' }); }
       state.negotiated = true; state.initialized = true;
       const rpc = { jsonrpc: '2.0', id: randomUUID(), method: 'tools/call', params: { name, arguments: body } };
       const result = await dispatchRpc(options, state, rpc);
@@ -534,7 +560,12 @@ export function serveHttp(options, { host = '127.0.0.1', port = 0 } = {}) {
   server.headersTimeout = 5000;
   server.requestTimeout = 5000;
   server.on('upgrade', (request, socket) => {
-    const url = new URL(request.url ?? '/', `http://${host}`);
+    if (!trustedHttpRequest(request, server)) {
+      socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');
+      return;
+    }
+    const url = httpRequestUrl(request);
+    if (!url) { socket.destroy(); return; }
     const key = request.headers['sec-websocket-key'];
     if (url.pathname !== '/ws' || request.headers.upgrade?.toLowerCase() !== 'websocket' || request.headers['sec-websocket-version'] !== '13' || typeof key !== 'string' || websockets.size >= WEBSOCKET_CONNECTION_LIMIT) {
       socket.destroy(); return;

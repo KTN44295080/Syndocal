@@ -114,3 +114,34 @@ signing, licensing, venue rehearsal or native accessibility acceptance.
 Next: use the now-working authenticated MCP path for bounded native operations
 required by the remaining domain gates. Preserve physical/clean-machine/venue
 and license requirements rather than closing them from software-only evidence.
+
+## HTTP/REST/WebSocket native and security slice — 2026-09-29
+
+Base `fc5db89c`. Continuing after the read-only checkpoint found two reproducible
+transport defects: a foreign browser Origin received HTTP 200 and reached the
+fake broker; one incomplete WebSocket header starved the adapter event loop,
+causing an independent HTTP health request to time out. Baseline reproduction
+ran in disposable child processes with no native/device calls.
+
+The sidecar now validates literal loopback Host plus actual port and exact
+same-origin browser requests before HTTP/WS dispatch. Non-browser Origin-less
+clients remain supported. Malformed REST percent encoding returns 400 instead
+of rejecting the request handler promise. Incomplete WebSocket frames wait for
+new data rather than rescheduling themselves continuously. No native source,
+project schema or output behavior changed in this slice.
+
+`check-transport-security.mjs` verifies foreign/null/wrong-port origins, rebound
+Host, cross-site metadata, positive same-origin/Origin-less clients, malformed
+path recovery, denied WebSocket upgrade, and split-header/payload liveness and
+successful reconstruction. The maintained AI5 gate runs it automatically.
+
+Real native evidence:
+[`artifacts/native-mcp-network-2026-09-29.json`](artifacts/native-mcp-network-2026-09-29.json).
+The extended runner passed 13 checks: the previous seven stdio checks plus
+terminal runtime reads and revoked-principal rejection over HTTP JSON-RPC,
+REST and WebSocket. Native executable identity is unchanged from the preceding
+slice. The HTTP adapter runs in the harness process; clients use real loopback
+sockets to the real native broker. Temporary principal/credential cleanup passed.
+No native rebuild is required for sidecar-only changes; no new native-build or
+hardware acceptance is claimed. The whole AI8/Remote security markers remain
+open for their broader clean-install/output/restart/review requirements.

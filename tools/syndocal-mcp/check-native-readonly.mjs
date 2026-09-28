@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { createHash, randomUUID } from 'node:crypto';
 import { parseOptions, readDescriptor } from './server.mjs';
+import { nativeNetworkReads } from './native-network-reads.mjs';
 
 const exec = promisify(execFile);
 const args = process.argv.slice(2);
@@ -178,6 +179,7 @@ try {
   assert.equal(own?.mode, 'safe');
   assert.equal(own.grants.length, 4);
   assert.ok(own.grants.every((grant) => grant.capability === 'read'));
+  results.push(...await nativeNetworkReads(options));
   await invoke('agent_authority_revoke_v1', { principalId, principalIncarnation: approval.principalIncarnation });
   revoked = true;
   const deniedAfter = await rpc('tools/call', { name: checks[0][0], arguments: {} });
@@ -190,6 +192,7 @@ try {
   assert.equal(revokedReceipt.error, 'agent_principal_revoked');
   assert.equal(revokedReceipt.result, undefined);
   results.push({ check: 'revoked-receipt-rejected-original-id', passed: true });
+  results.push(...await nativeNetworkReads(options, { revoked: true }));
 } catch (error) {
   runError = error;
 } finally {
@@ -222,7 +225,10 @@ const summary = {
   schemaVersion: 1, timestamp: new Date().toISOString(), passed: !runError,
   executable: await fs.realpath(executable), processId: descriptor.processId,
   executableSha256: createHash('sha256').update(await fs.readFile(executable)).digest('hex'),
-  transport: 'External stdio MCP sidecar to authenticated native loopback broker',
+  sidecarSha256: createHash('sha256').update(await fs.readFile(new URL('./server.mjs', import.meta.url))).digest('hex'),
+  runnerSha256: createHash('sha256').update(await fs.readFile(fileURLToPath(import.meta.url))).digest('hex'),
+  networkHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-network-reads.mjs', import.meta.url))).digest('hex'),
+  transport: 'External stdio MCP sidecar and real HTTP/REST/WebSocket clients to authenticated native loopback broker',
   bootstrap: 'process-verified local main-window backend via loopback CDP; no DOM actions',
   principalRevoked: revoked, credentialRemoved: true, checks: results,
   nonclaims: ['No authored/runtime/output mutation', 'No physical device acceptance', 'No clean installation or release acceptance'],

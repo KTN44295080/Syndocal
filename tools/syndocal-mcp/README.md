@@ -22,6 +22,12 @@ REST and WebSocket calls still prove the configured principal on every native
 request. The transport has bounded HTTP sessions/connections and eight WebSocket
 connections; it has no LAN or public-listener mode.
 
+HTTP and WebSocket requests require a literal loopback/localhost `Host` with the
+actual listening port. Browser requests must have the exact same HTTP origin;
+foreign/null origins and cross-site/same-site fetch metadata are rejected before
+dispatch. Non-browser clients may omit Origin. Session headers do not replace
+these browser-origin checks or the native principal proof.
+
 The local Codex client can register this server using its installed CLI:
 
 ```powershell
@@ -60,6 +66,7 @@ Only one broker request may be active per transport session. An overlapping call
 ```text
 node tools/syndocal-mcp/check.mjs
 node tools/syndocal-mcp/check-transports.mjs
+node tools/syndocal-mcp/check-transport-security.mjs
 ```
 
 For a running Windows native build with its isolated WebView2 loopback debugging
@@ -73,6 +80,8 @@ The harness verifies the debugger belongs to the selected executable's process
 tree, bootstraps one temporary principal through main-window backend commands,
 and runs a separate stdio MCP sidecar. It checks ungranted denial, four granted
 reads through terminal receipt lookup, safe-mode read-only grants, and revocation.
+It also runs real HTTP JSON-RPC, REST and WebSocket clients against an adapter
+in the harness process and the same native broker, before and after revocation.
 It revokes its own principal and removes its ACL-restricted credential directory.
 It neither sends device/output commands nor establishes physical acceptance.
 
@@ -83,6 +92,10 @@ hashes include the authenticated owner; pre-owner-binding hashes remain replay
 fences and return `request_conflict` on resubmission. After restart, status is
 `unknown`: an old receipt cannot prove the new renderer completed an operation.
 Never resubmit an uncertain mutation with a new ID without reconciling its state.
+
+The isolated-process security check covers Host/Origin rejection, malformed tool
+paths, and event-loop liveness while WebSocket headers/payloads arrive in pieces.
+It uses no native broker or devices and is included in `check:ai5-sidecar`.
 
 The integration check launches the CLI against its own fake loopback broker. It exercises negotiation, all nine tool schemas, canonical operation allowlisting, request correlation, Video BO false-success handling, pending/unknown behavior, no automatic retry, overlap rejection, malformed/oversized frames, executable mismatch and credential redaction. The transport check exercises health, JSON-RPC over HTTP, the REST facade, WebSocket JSON-RPC, and the same nonce proof against a fake loopback broker. These checks do not operate Syndocal or physical devices. Real native bridge acceptance is a separate integration check.
 

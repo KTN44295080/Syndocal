@@ -141,5 +141,11 @@ if (process.argv.includes("--self-test")) {
   });
   process.stdout.write(transportResult.stdout);
   process.stderr.write(transportResult.stderr);
+  const security = fileURLToPath(new URL("../../tools/syndocal-mcp/check-transport-security.mjs", import.meta.url));
+  const securityResult = await execFileAsync(process.execPath, [security], {
+    cwd: root, windowsHide: true, maxBuffer: 1024 * 1024, timeout: 30000,
+  });
+  process.stdout.write(securityResult.stdout);
+  process.stderr.write(securityResult.stderr);
   console.log("AI5 sidecar auth/transport boundary ok; authenticated discovery, nonce proof, exact grant admission, bounded MCP/HTTP/REST/WebSocket forwarding and redaction verified");
 }
