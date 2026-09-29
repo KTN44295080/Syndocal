@@ -6,6 +6,7 @@ import { createHash, createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { pathToFileURL } from 'node:url';
+import { createHttpSessions } from './http-sessions.mjs';
 
 const execFileAsync = promisify(execFile);
 const VERSION = '2025-11-25';
@@ -514,13 +515,20 @@ function attachWebSocket(socket, options, onClose) {
 
 export function serveHttp(options, { host = '127.0.0.1', port = 0 } = {}) {
   if (!loopbackHost(host) || !Number.isSafeInteger(port) || port < 0 || port > 65535) throw new Error('loopback-only HTTP transport');
-  const sessions = new Map();
+  const sessions = createHttpSessions({ limit: HTTP_SESSION_LIMIT });
   const websockets = new Set();
   const server = http.createServer(async (request, response) => {
     if (!trustedHttpRequest(request, server)) return httpJson(response, 403, { error: 'Untrusted host or browser origin.' });
     const url = httpRequestUrl(request);
     if (!url) return httpJson(response, 400, { error: 'Invalid request target.' });
     if (request.method === 'GET' && url.pathname === '/healthz') return httpJson(response, 200, { ok: true, protocolVersion: VERSION, transport: 'streamable-http' });
+    if (request.method === 'DELETE' && url.pathname === '/rpc') {
+      const id = request.headers['x-syndocal-session'];
+      if (typeof id !== 'string' || !/^[A-Za-z0-9._-]{1,128}$/.test(id)) return httpJson(response, 400, { error: 'A bounded X-Syndocal-Session is required.' });
+      const status = sessions.remove(id);
+      if (status === 204) return response.writeHead(204).end();
+      return httpJson(response, status, { error: status === 409 ? 'Session has an active request.' : 'Session not found.' });
+    }
     if (request.method !== 'POST' || (url.pathname !== '/rpc' && !url.pathname.startsWith('/rest/tools/'))) return httpJson(response, 404, { error: 'Not found.' });
     let body;
     try {
@@ -533,27 +541,25 @@ export function serveHttp(options, { host = '127.0.0.1', port = 0 } = {}) {
     if (Array.isArray(sessionId)) sessionId = sessionId[0];
     if (sessionId === undefined && url.pathname.startsWith('/rest/tools/')) sessionId = 'rest-default';
     if (typeof sessionId !== 'string' || !/^[A-Za-z0-9._-]{1,128}$/.test(sessionId)) return httpJson(response, 400, { error: 'X-Syndocal-Session is required and must be bounded.' });
-    let state = sessions.get(sessionId);
-    if (!state) {
-      if (sessions.size >= HTTP_SESSION_LIMIT) return httpJson(response, 429, { error: 'overloaded' });
-      state = { initialized: false, negotiated: false, active: false, touched: Date.now() };
-      sessions.set(sessionId, state);
-    }
-    state.touched = Date.now();
-    if (url.pathname.startsWith('/rest/tools/')) {
-      let name;
-      try { name = decodeURIComponent(url.pathname.slice('/rest/tools/'.length)); }
-      catch { return httpJson(response, 400, { error: 'Invalid tool name encoding.' }); }
-      state.negotiated = true; state.initialized = true;
-      const rpc = { jsonrpc: '2.0', id: randomUUID(), method: 'tools/call', params: { name, arguments: body } };
-      const result = await dispatchRpc(options, state, rpc);
-      return httpJson(response, result?.error ? 400 : 200, result?.error ?? result?.result ?? { error: 'Empty response.' });
-    }
-    let result;
-    try { result = await dispatchRpc(options, state, body); }
-    catch { return httpJson(response, 500, { error: 'Request processing failed.' }); }
-    if (!result) return response.writeHead(202).end();
-    return httpJson(response, 200, result);
+    const state = sessions.acquire(sessionId);
+    if (!state) return httpJson(response, 429, { error: 'overloaded' });
+    state.inFlight++;
+    try {
+      if (url.pathname.startsWith('/rest/tools/')) {
+        let name;
+        try { name = decodeURIComponent(url.pathname.slice('/rest/tools/'.length)); }
+        catch { return httpJson(response, 400, { error: 'Invalid tool name encoding.' }); }
+        state.negotiated = true; state.initialized = true;
+        const rpc = { jsonrpc: '2.0', id: randomUUID(), method: 'tools/call', params: { name, arguments: body } };
+        const result = await dispatchRpc(options, state, rpc);
+        return httpJson(response, result?.error ? 400 : 200, result?.error ?? result?.result ?? { error: 'Empty response.' });
+      }
+      let result;
+      try { result = await dispatchRpc(options, state, body); }
+      catch { return httpJson(response, 500, { error: 'Request processing failed.' }); }
+      if (!result) return response.writeHead(202).end();
+      return httpJson(response, 200, result);
+    } finally { state.inFlight--; sessions.touch(state); }
   });
   server.maxConnections = HTTP_CONNECTION_LIMIT;
   server.keepAliveTimeout = 5000;

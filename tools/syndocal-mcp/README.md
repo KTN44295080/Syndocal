@@ -21,6 +21,14 @@ tool dispatch, and `/ws` carries the same JSON-RPC messages over WebSocket.
 REST and WebSocket calls still prove the configured principal on every native
 request. The transport has bounded HTTP sessions/connections and eight WebSocket
 connections; it has no LAN or public-listener mode.
+HTTP negotiation sessions expire after five idle minutes, measured from request
+completion. In-flight requests (including discovery) cannot be expired or deleted.
+Clients may release an idle session with `DELETE /rpc` and its
+`X-Syndocal-Session` header (204 removed, 404 absent, 409 busy). Expired or deleted
+RPC sessions must initialize again. This discards transport negotiation only;
+native grants, credentials and request receipts are unaffected. At 64 unexpired
+sessions new sessions still receive 429; active sessions are never evicted to
+admit a newcomer.
 
 HTTP and WebSocket requests require a literal loopback/localhost `Host` with the
 actual listening port. Browser requests must have the exact same HTTP origin;

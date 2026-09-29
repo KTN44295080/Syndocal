@@ -181,3 +181,34 @@ subagent, project mutation, physical output or normal-app restart was performed.
 This proves the isolated release-build broker lifecycle, not durable mutation
 publication, clean installation, hardware, or whole AI8 acceptance. Existing
 pre-owned frontend changes remain in the builds and outside this commit's scope.
+
+## HTTP session recovery slice — 2026-09-29
+
+Base `1ddcb02a`. Inspection found that the 64-entry HTTP negotiation map never
+removed sessions: `touched` was written but never read. Sequential abandoned
+clients could permanently prevent new sessions until the sidecar restarted.
+The bounded map now lazily expires sessions after five idle minutes using a
+monotonic clock. `DELETE /rpc` releases an idle session explicitly; unknown and
+busy sessions return 404 and 409. Every asynchronous dispatch, including tool
+discovery, pins its session until completion. Expiry resets negotiation only,
+never native grants or request receipts. Origin/Host validation also guards DELETE.
+
+`node tools/syndocal-mcp/check-transport-security.mjs` passed with exit 0:
+64 real HTTP initializations, overflow rejection, foreign-origin deletion
+rejection, explicit release and recovered capacity, plus deterministic expiry,
+renegotiation, completion-time idle interval and in-flight retention checks.
+Existing split-frame/Origin/path tests passed. Focused `git diff --check` passed.
+No compiler ran, so there is no new compiler-warning measurement.
+
+The broader AI5 gate did NOT pass on this run: its unchanged Windows process
+identity query exceeded its two-second deadline twice. A direct measurement of
+the WMI query took 3.456 seconds. Trying Get-Process also timed out under the
+current host load, so that experiment was reverted rather than changing the
+identity boundary or deadline. The native read runner failed at the same
+pre-dispatch identity check; no new native receipt evidence was produced.
+This slice is focused transport evidence, not full AI5/native acceptance.
+Next: resolve/retest the host process-query timing boundary, then finish the
+consent-preserving diagnostic capture/export backend route. Diagnostic export
+currently binds preview and publication to the same captured bytes, and its
+native confirmation must not be bypassed by an arbitrary invoke adapter.
+High-level ledger statuses remain unchanged; goal remains active.

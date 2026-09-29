@@ -6,6 +6,7 @@ import { once } from 'node:events';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import os from 'node:os';
+import { createHttpSessions } from './http-sessions.mjs';
 
 // A separate process lets the parent detect an event-loop starvation regression.
 if (process.argv[2] === '--fixture') {
@@ -15,6 +16,37 @@ if (process.argv[2] === '--fixture') {
   process.send({ port: server.address().port });
   process.on('disconnect', () => process.exit(0));
 } else {
+  let time = 0;
+  const sessions = createHttpSessions({ limit: 2, idleMs: 100, now: () => time });
+  const active = sessions.acquire('active');
+  active.active = true;
+  const idle = sessions.acquire('idle');
+  idle.initialized = true;
+  time = 99;
+  assert.equal(sessions.acquire('overflow'), undefined);
+  assert.equal(sessions.remove('active'), 409);
+  time = 100;
+  assert.ok(sessions.acquire('replacement'), 'Expired idle session releases capacity');
+  assert.equal(sessions.acquire('active'), active, 'In-flight session survives expiry');
+  assert.equal(sessions.remove('replacement'), 204);
+  const recreated = sessions.acquire('idle');
+  assert.notEqual(recreated, idle);
+  assert.equal(recreated.initialized, false, 'Expired session must negotiate again');
+  active.active = false;
+  sessions.touch(active);
+  time = 199;
+  assert.equal(sessions.acquire('overflow'), undefined, 'Completion starts a new idle interval');
+  time = 200;
+  assert.ok(sessions.acquire('after-completion'));
+  assert.equal(sessions.remove('missing'), 404);
+  const discovery = sessions.acquire('discovery');
+  discovery.inFlight++;
+  time = 400;
+  assert.equal(sessions.remove('discovery'), 409, 'Async discovery is also protected');
+  assert.equal(sessions.acquire('discovery'), discovery);
+  discovery.inFlight--;
+  sessions.touch(discovery);
+  assert.equal(sessions.remove('discovery'), 204);
   const child = fork(fileURLToPath(import.meta.url), ['--fixture'], { stdio: ['ignore', 'ignore', 'pipe', 'ipc'], windowsHide: true });
   let raw;
   const deadline = (promise, label, ms = 3000) => {
@@ -47,6 +79,25 @@ if (process.argv[2] === '--fixture') {
     assert.equal((await request('/healthz', { origin: base, 'sec-fetch-site': 'same-origin' })).status, 200);
     assert.equal((await request('/rest/tools/%ZZ', { 'content-type': 'application/json' }, 'POST')).status, 400);
     assert.equal((await request('/healthz')).status, 200, 'Malformed tool path must not crash the adapter');
+    // Malformed REST path above allocated rest-default; release it before filling all slots.
+    assert.equal((await request('/rpc', { 'x-syndocal-session': 'rest-default' }, 'DELETE')).status, 204);
+    const initialize = (id) => fetch(`${base}/rpc`, {
+      method: 'POST', headers: { 'content-type': 'application/json', 'x-syndocal-session': id },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 'capacity-check', version: '1' } } }),
+      signal: AbortSignal.timeout(3000),
+    });
+    for (let index = 0; index < 64; index++) {
+      const response = await initialize(`capacity-${index}`);
+      assert.equal(response.status, 200);
+      assert.equal((await response.json()).result.protocolVersion, '2025-11-25');
+    }
+    assert.equal((await initialize('overflow')).status, 429);
+    assert.equal((await request('/rpc', { 'x-syndocal-session': 'capacity-0', origin: 'https://attacker.invalid' }, 'DELETE')).status, 403);
+    assert.equal((await initialize('overflow')).status, 429, 'Rejected deletion preserves session');
+    assert.equal((await request('/rpc', { 'x-syndocal-session': 'capacity-0' }, 'DELETE')).status, 204);
+    assert.equal((await request('/rpc', { 'x-syndocal-session': 'capacity-0' }, 'DELETE')).status, 404);
+    assert.equal((await request('/rpc', {}, 'DELETE')).status, 400);
+    assert.equal((await initialize('overflow')).status, 200, 'Explicit close restores capacity');
 
     const connect = async (origin) => {
       const socket = net.createConnection({ host: '127.0.0.1', port });
@@ -96,7 +147,7 @@ if (process.argv[2] === '--fixture') {
     const result = await reply;
     assert.equal(result.id, 77);
     assert.equal(result.result.protocolVersion, '2025-11-25');
-    console.log('PASS transport security: host/origin rejection, malformed path recovery, split-header/payload liveness and frame completion; no native/device calls');
+    console.log('PASS transport security: host/origin rejection, malformed path recovery, 64-session capacity/release, idle expiry and active-request retention, split-header/payload liveness and frame completion; no native/device calls');
   } finally {
     raw?.destroy();
     if (child.exitCode === null) {
