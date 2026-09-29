@@ -273,3 +273,16 @@ still needs an authenticated R5, human-present consent adapter and acceptance;
 the updater failure matrix, deployed support drills, clean installation and
 physical/venue gates are not established. `OBSERVABILITY-SUPPORT-001` remains
 Open, and the overall goal remains active.
+
+## Operator and support runbook draft — 2026-09-30
+
+Base `47dcfe8f`. The source-grounded
+[`SHOW_OPERATOR_SUPPORT_RUNBOOK.md`](SHOW_OPERATOR_SUPPORT_RUNBOOK.md)
+now covers the P4 procedure list: pre-show checks, output Arm/Standby/Blackout,
+device loss, takeover, project recovery, media/profile relink, recording
+recovery, diagnostic export, planned update/rollback, emergency shutdown, and
+post-incident evidence. It links the existing update, project-publication and
+diagnostic source documents instead of copying release commands. The app's
+current Project menu and Control > Both labels were checked in source. This is
+a draft procedure, not a deployed operator drill; the observability ledger
+remains Open pending actual drills and the other P gates.
