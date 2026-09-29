@@ -241,3 +241,35 @@ Temporary principal/credential cleanup passed. This resolves the previous slice'
 process-inspection validation failure; it does not establish hardware, diagnostic
 export or whole AI8 acceptance. No native executable rebuild was needed for these
 sidecar/QA-only edits, and no compiler-warning measurement is claimed.
+
+## Native diagnostic export backend — 2026-09-30
+
+Base `7c3f0cb1`. The local trusted main window now has a two-step backend
+diagnostic export: prepare captures the existing sanitized package once and
+returns its summary, SHA-256, destination and a 120-second single-use receipt;
+finish requires the same digest and explicit approval. Cancellation writes
+nothing. Approval creates a new ZIP atomically in the destination directory;
+an existing target, including one created after preview, is never replaced.
+Receipts are bounded to eight per process, expire, and cannot survive restart
+or be replayed after publication starts. The existing GUI preview/save-dialog
+workflow still uses the same capture content and its existing publication path.
+The route inventory is 541 exact Tauri commands, and the two new file-export
+commands fail closed in the external control-plane registry.
+
+With pinned MSVC 14.44.35207, 43 focused Rust diagnostic tests passed with
+zero Rust warnings; the exact route, frontend invoke and backend operator
+contract checks passed. The isolated QA release build passed with one existing
+Vite chunk-size advisory. Its executable SHA-256 is
+`d96ae25682fef97dd70fc8539b52c18f489f5f4fd5610bdc3b9c8f10146b4902`.
+[`artifacts/native-diagnostic-export-2026-09-30.json`](artifacts/native-diagnostic-export-2026-09-30.json)
+records nine passing native checks, including a 4,785-byte ZIP whose captured
+and written SHA-256 matched, and confirms the normal app identity stayed
+unchanged. No Computer Use, subagent, project mutation or physical output was
+used. Pre-existing frontend changes were present in the QA build and remain
+outside this checkpoint's owned diff.
+
+This closes the local backend diagnostic export slice. External MCP export
+still needs an authenticated R5, human-present consent adapter and acceptance;
+the updater failure matrix, deployed support drills, clean installation and
+physical/venue gates are not established. `OBSERVABILITY-SUPPORT-001` remains
+Open, and the overall goal remains active.

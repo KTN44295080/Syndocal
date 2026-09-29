@@ -16,6 +16,24 @@ pub(super) fn publish_diagnostic_package(path: &Path, bytes: &[u8]) -> Result<()
     publish_with(path, &temporary, bytes, super::replace_file_atomically)
 }
 
+/// An explicit backend export creates a new destination atomically. A file
+/// appearing after preview cannot be overwritten by a delayed approval.
+pub(super) fn publish_new_diagnostic_package(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    super::diagnostic_package::validate_diagnostic_package(bytes)
+        .map_err(|error| error.to_string())?;
+    let temporary = staging_path(path)?;
+    publish_with(path, &temporary, bytes, super::publish_new_file_atomically)
+}
+
+pub(super) fn require_new_target(path: &Path) -> Result<(), String> {
+    validate_target(path)?;
+    match std::fs::symlink_metadata(path) {
+        Ok(_) => Err("Diagnostic destination already exists; choose a new ZIP path".into()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(_) => Err("Diagnostic destination state could not be verified".into()),
+    }
+}
+
 fn staging_path(path: &Path) -> Result<PathBuf, String> {
     validate_target(path)?;
     let mut nonce = [0_u8; 16];
@@ -31,7 +49,7 @@ fn staging_path(path: &Path) -> Result<PathBuf, String> {
     )))
 }
 
-fn validate_target(path: &Path) -> Result<(), String> {
+pub(super) fn validate_target(path: &Path) -> Result<(), String> {
     if !path.is_absolute()
         || path.parent().is_none()
         || path.file_name().is_none()

@@ -63,6 +63,23 @@ fn diagnostic_package_publication_replaces_only_after_package_validation() {
 }
 
 #[test]
+fn diagnostic_backend_publication_never_replaces_a_new_or_existing_destination() {
+    let scratch = Scratch::new();
+    let target = scratch.path("diagnostics.zip");
+    let bytes = package();
+    assert!(require_new_target(&target).is_ok());
+    fs::write(&target, b"another owner's file").unwrap();
+    assert!(require_new_target(&target).is_err());
+    assert!(publish_new_diagnostic_package(&target, &bytes).is_err());
+    assert_eq!(fs::read(&target).unwrap(), b"another owner's file");
+    fs::remove_file(&target).unwrap();
+    publish_new_diagnostic_package(&target, &bytes).unwrap();
+    assert_eq!(fs::read(&target).unwrap(), bytes);
+    assert!(publish_new_diagnostic_package(&target, &bytes).is_err());
+    assert_eq!(fs::read(&target).unwrap(), bytes);
+}
+
+#[test]
 fn diagnostic_package_publication_failure_preserves_previous_and_staging() {
     let scratch = Scratch::new();
     let target = scratch.path("diagnostics.zip");

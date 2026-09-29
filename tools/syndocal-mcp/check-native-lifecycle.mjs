@@ -8,9 +8,12 @@ import { promisify } from 'node:util';
 import { createHash, createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { parseOptions, readDescriptor, nativeRequest } from './server.mjs';
 import { openNativeBackendSession } from './native-backend-session.mjs';
+import { nativeDiagnosticExports } from './native-diagnostic-exports.mjs';
 
 const exec = promisify(execFile);
 const args = process.argv.slice(2);
+const diagnostics = args.includes('--diagnostics');
+if (diagnostics) args.splice(args.indexOf('--diagnostics'), 1);
 const take = name => { const index = args.indexOf(name); assert.ok(index >= 0 && index + 1 < args.length, `Required: ${name}`); return args.splice(index, 2)[1]; };
 const executable = take('--expected-executable');
 const evidence = take('--evidence');
@@ -126,6 +129,8 @@ const read = async () => {
 };
 try {
   const first = await start();
+  const diagnostic = diagnostics ? await nativeDiagnosticExports(backend.invoke) : undefined;
+  if (diagnostic) checks.push(diagnostic.check);
   credentialDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'syndocal-lifecycle-credential-'));
   const { stdout } = await exec('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', '[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value'], { windowsHide: true, timeout: 5000 });
   assert.match(stdout.trim(), /^S-1-\d+(?:-\d+)+$/);
@@ -140,6 +145,12 @@ try {
   assert.match(stopped.error, /^Selected Syndocal descriptor\/process\/executable could not be verified/);
   checks.push({ check: 'dead-process-descriptor-rejected', passed: true });
   const second = await start();
+  if (diagnostic) {
+    const retiredParams = { captureId: diagnostic.retired.captureId, sha256: diagnostic.retired.sha256, approved: true };
+    const retiredResult = await backend.evaluate(`window.__TAURI_INTERNALS__.invoke('finish_diagnostic_export_v1', ${JSON.stringify(retiredParams)}).then(() => ({ok:true}), error => ({error:String(error)}))`);
+    assert.deepEqual(retiredResult, { error: 'Diagnostic capture unknown, consumed or expired; prepare again' });
+    checks.push({ check: 'diagnostic-capture-rejected-after-native-restart', passed: true });
+  }
   assert.notEqual(second.instanceId, first.instanceId);
   assert.ok(second.sessionNonce !== first.sessionNonce, 'Launch nonce must rotate');
   assert.ok(second.token !== first.token, 'Broker token must rotate');
@@ -221,9 +232,11 @@ await fs.writeFile(evidence, `${JSON.stringify({ schemaVersion: 1, timestamp: ne
   sidecarSha256: createHash('sha256').update(await fs.readFile(new URL('./server.mjs', import.meta.url))).digest('hex'),
   runnerSha256: createHash('sha256').update(await fs.readFile(new URL('./check-native-lifecycle.mjs', import.meta.url))).digest('hex'),
   backendHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-backend-session.mjs', import.meta.url))).digest('hex'),
+  ...(diagnostics ? { diagnosticHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-diagnostic-exports.mjs', import.meta.url))).digest('hex') } : {}),
   profile: 'jp.seraf.ktn.syndocal.qa.mcp-lifecycle', checks, normalAppIdentityUnchanged: true,
   credentialRevoked: !cleanupNeeded, credentialFileRemoved: true,
-  nonclaims: ['QA identifier release build, not the distributed artifact', 'No authored mutation, device or output command', 'No durable mutation/crash publication acceptance'],
+  nonclaims: ['QA identifier release build, not the distributed artifact', 'No authored mutation, device or output command', 'No durable authored/output mutation crash publication acceptance',
+    ...(diagnostics ? ['Diagnostic publication covers a private temporary destination only; no crash-during-publication, removable-filesystem or external MCP consent acceptance'] : [])],
 }, null, 2)}\n`, { flag: 'wx' });
 if (failure) throw failure;
 console.log(`PASS isolated native lifecycle: ${checks.length} checks; normal instance unchanged; QA process and credential cleaned up.`);

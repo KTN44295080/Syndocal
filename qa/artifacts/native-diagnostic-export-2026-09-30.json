@@ -1,0 +1,61 @@
+{
+  "schemaVersion": 1,
+  "timestamp": "2026-09-29T15:35:00.504Z",
+  "passed": true,
+  "executable": "C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-native-acceptance-target\\release\\syndocal.exe",
+  "executableSha256": "d96ae25682fef97dd70fc8539b52c18f489f5f4fd5610bdc3b9c8f10146b4902",
+  "sidecarSha256": "6144fd341bf3e3a62d767e0a9f6041bb037169271db121d9ba855b6d8c1951b8",
+  "runnerSha256": "ce0398adcf4ed70b598e01812d2a37f50208e8afbac6094a2aa688f3852e09cb",
+  "backendHarnessSha256": "9fb0a4f15d19f0ac9ca93a64cc21b26ed3bb681e46b4ce4a20c9638cb7115aff",
+  "diagnosticHarnessSha256": "c76c15ad4cde14fb98c74b9774c778e33ebfcf75f5ceb579ce4d104cac88cd4a",
+  "profile": "jp.seraf.ktn.syndocal.qa.mcp-lifecycle",
+  "checks": [
+    {
+      "check": "native-diagnostic-preview-cancel-digest-new-file-race-replay",
+      "passed": true,
+      "archiveBytes": 4785,
+      "archiveSha256": "ff271fa039613e38ed82c77de0a639d8f6f8a0f1d65cad17baff14a143ac63b7"
+    },
+    {
+      "check": "isolated-first-launch-read",
+      "passed": true
+    },
+    {
+      "check": "dead-process-descriptor-rejected",
+      "passed": true
+    },
+    {
+      "check": "diagnostic-capture-rejected-after-native-restart",
+      "passed": true
+    },
+    {
+      "check": "crash-restart-retired-principal-rejected",
+      "passed": true
+    },
+    {
+      "check": "old-credential-and-receipt-not-adopted",
+      "passed": true
+    },
+    {
+      "check": "old-launch-proof-rejected-fresh-read-succeeds",
+      "passed": true
+    },
+    {
+      "check": "graceful-native-close",
+      "passed": true
+    },
+    {
+      "check": "graceful-restart-does-not-restore-grant",
+      "passed": true
+    }
+  ],
+  "normalAppIdentityUnchanged": true,
+  "credentialRevoked": true,
+  "credentialFileRemoved": true,
+  "nonclaims": [
+    "QA identifier release build, not the distributed artifact",
+    "No authored mutation, device or output command",
+    "No durable authored/output mutation crash publication acceptance",
+    "Diagnostic publication covers a private temporary destination only; no crash-during-publication, removable-filesystem or external MCP consent acceptance"
+  ]
+}

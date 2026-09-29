@@ -113,6 +113,14 @@ Then run:
 node tools/syndocal-mcp/check-native-lifecycle.mjs --expected-executable <absolute-TEMP>/syndocal-native-acceptance-target/release/syndocal.exe --cdp-port 9256 --evidence <new-absolute-json-path>
 ```
 
+Add `--diagnostics` to verify the local native diagnostic export backend. It
+checks capture preview, cancellation, exact ZIP digest, new-file-only atomic
+publication, a destination appearing after preview, replay rejection, and
+capture expiry across a native restart. Use a new evidence path for every run.
+This tests a private temporary destination through a process-verified native
+backend session; it does not grant external MCP diagnostic export or bypass
+human-present consent.
+
 This harness refuses the normal executable, requires an empty QA project, and
 verifies one responsive maximized QA window on each launch. It tests forced exit,
 clean exit, fresh launch identity, retired credentials/grants, old receipts and

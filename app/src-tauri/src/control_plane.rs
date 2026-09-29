@@ -64,9 +64,9 @@ const KEYBOARD_SHORTCUT_SOURCE_MANIFEST: &str =
 const KEYBOARD_SHORTCUT_SOURCE_MANIFEST_SCHEMA_VERSION: u16 = 1;
 const KEYBOARD_APP_SHORTCUT_SOURCE_COUNT: usize = 30;
 const KEYBOARD_PROJECT_FILE_SHORTCUT_SOURCE_COUNT: usize = 3;
-const FROZEN_TAURI_ROUTE_ADMISSION_COUNT: usize = 539;
+const FROZEN_TAURI_ROUTE_ADMISSION_COUNT: usize = 541;
 const FROZEN_TAURI_ROUTE_ADMISSION_SHA256: &str =
-    "a0ba71bfd1dce9e657fc5b052ccc452cf00f8a42fb3d838edef28913658cb9ab";
+    "3f650522022988b9eb1d99192ad12fcae7511b5e10268c0ae206a029cc27d83b";
 /// The command source is parsed and validated exactly once.  Local discovery
 /// calls only clone this immutable, validated value; they never parse source
 /// text or make an external request on the invocation path.
@@ -278,6 +278,8 @@ fn is_tauri_file_export_mutation(command: &str) -> bool {
             | "save_custom_fixture_profile"
             | "delete_project_backup"
             | "export_diagnostic_package"
+            | "prepare_diagnostic_export_v1"
+            | "finish_diagnostic_export_v1"
             | "save_engine_telemetry_report"
             | "save_effect_preset"
             | "save_fixture_preset"
@@ -2382,7 +2384,7 @@ mod tests {
         assert_eq!(counts[&TauriRouteAdmissionClass::ProjectHistory], 3);
         assert_eq!(counts[&TauriRouteAdmissionClass::LocalPhysicalMutation], 6);
         assert_eq!(counts[&TauriRouteAdmissionClass::RuntimeMutation], 168);
-        assert_eq!(counts[&TauriRouteAdmissionClass::FileExportMutation], 20);
+        assert_eq!(counts[&TauriRouteAdmissionClass::FileExportMutation], 22);
         assert_eq!(counts[&TauriRouteAdmissionClass::SafetyMutation], 1);
         assert_eq!(counts[&TauriRouteAdmissionClass::RecoveryMaintenance], 28);
         assert_eq!(counts[&TauriRouteAdmissionClass::Retired], 29);

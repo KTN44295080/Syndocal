@@ -40,6 +40,7 @@ mod project_publication_missing;
 mod diagnostic_package;
 mod diagnostic_package_publication;
 mod diagnostic_export_workflow;
+mod diagnostic_export_session;
 use project_snapshot_persistence::{
     clear_runtime_programmer_state, node_graph_for_persistence, normalize_project_timeline_layers,
     project_snapshot_for_save, use_authored_video_snapshot,
@@ -62193,7 +62194,7 @@ fn publish_new_file_atomically(temp: &Path, target: &Path) -> Result<(), String>
             )
             .map_err(|error| {
                 format!(
-                    "Unable to publish new project backup {}: {error}",
+                    "Unable to publish new file {}: {error}",
                     target.display()
                 )
             })
@@ -62203,13 +62204,13 @@ fn publish_new_file_atomically(temp: &Path, target: &Path) -> Result<(), String>
     {
         fs::hard_link(temp, target).map_err(|error| {
             format!(
-                "Unable to publish new project backup {}: {error}",
+                "Unable to publish new file {}: {error}",
                 target.display()
             )
         })?;
         fs::remove_file(temp).map_err(|error| {
             format!(
-                "Unable to retire prepared project backup {}: {error}",
+                "Unable to retire prepared file {}: {error}",
                 temp.display()
             )
         })
@@ -63725,6 +63726,29 @@ fn export_diagnostic_package(
     window: WebviewWindow,
     state: State<'_, AppState>,
 ) -> Result<Option<String>, String> {
+    let (captured_at_unix_ms, bytes) = capture_diagnostic_package(&state)?;
+    diagnostic_export_workflow::export_prepared_diagnostic_package(
+        bytes,
+        |preview| matches!(
+            rfd::MessageDialog::new()
+                .set_level(rfd::MessageLevel::Info)
+                .set_title("Diagnostic export preview")
+                .set_description(preview)
+                .set_buttons(rfd::MessageButtons::YesNo)
+                .set_parent(&window)
+                .show(),
+            rfd::MessageDialogResult::Yes
+        ),
+        || parented_file_dialog(&window)
+            .add_filter("Syndocal Diagnostic Package", &["zip"])
+            .set_file_name(format!("syndocal-diagnostics-{captured_at_unix_ms}.zip"))
+            .save_file()
+            .map(diagnostic_zip_file_name),
+        diagnostic_package_publication::publish_diagnostic_package,
+    ).map(|path| path.map(|path| path.to_string_lossy().to_string()))
+}
+
+fn capture_diagnostic_package(state: &AppState) -> Result<(u128, Vec<u8>), String> {
     let captured_at_unix_ms = current_unix_ms();
     let snapshot = state.engine.engine_telemetry_snapshot();
     let manifest = json!({
@@ -63769,25 +63793,30 @@ fn export_diagnostic_package(
     ];
     let bytes = diagnostic_package::build_diagnostic_package(&entries)
         .map_err(|error| error.to_string())?;
-    diagnostic_export_workflow::export_prepared_diagnostic_package(
-        bytes,
-        |preview| matches!(
-            rfd::MessageDialog::new()
-                .set_level(rfd::MessageLevel::Info)
-                .set_title("Diagnostic export preview")
-                .set_description(preview)
-                .set_buttons(rfd::MessageButtons::YesNo)
-                .set_parent(&window)
-                .show(),
-            rfd::MessageDialogResult::Yes
-        ),
-        || parented_file_dialog(&window)
-            .add_filter("Syndocal Diagnostic Package", &["zip"])
-            .set_file_name(format!("syndocal-diagnostics-{captured_at_unix_ms}.zip"))
-            .save_file()
-            .map(diagnostic_zip_file_name),
-        diagnostic_package_publication::publish_diagnostic_package,
-    ).map(|path| path.map(|path| path.to_string_lossy().to_string()))
+    Ok((captured_at_unix_ms, bytes))
+}
+
+#[tauri::command]
+fn prepare_diagnostic_export_v1(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    exports: State<'_, diagnostic_export_session::DiagnosticExports>,
+    destination: String,
+) -> Result<diagnostic_export_session::Preview, String> {
+    if window.label() != "main" { return Err("Diagnostic export requires the trusted main window".into()); }
+    let (_, bytes) = capture_diagnostic_package(&state)?;
+    exports.prepare(window.label(), bytes, PathBuf::from(destination))
+}
+
+#[tauri::command]
+fn finish_diagnostic_export_v1(
+    window: WebviewWindow,
+    exports: State<'_, diagnostic_export_session::DiagnosticExports>,
+    capture_id: String,
+    sha256: String,
+    approved: bool,
+) -> Result<Option<String>, String> {
+    exports.finish(window.label(), &capture_id, &sha256, approved)
 }
 
 #[tauri::command]
@@ -94808,17 +94837,25 @@ pub(crate) mod tests {
     #[test]
     fn diagnostic_export_uses_the_narrow_engine_telemetry_reader() {
         let source = include_str!("main.rs");
-        let function_start = source
-            .find("fn export_diagnostic_package(")
-            .expect("missing diagnostic export command");
-        let function_end = source[function_start..]
-            .find("\nfn load_project(")
-            .map(|offset| function_start + offset)
-            .expect("missing diagnostic export boundary");
-        let body = &source[function_start..function_end];
+        let capture_start = source
+            .find("fn capture_diagnostic_package(")
+            .expect("missing shared diagnostic capture");
+        let capture_end = source[capture_start..]
+            .find("\n#[tauri::command]")
+            .map(|offset| capture_start + offset)
+            .expect("missing diagnostic capture boundary");
+        let body = &source[capture_start..capture_end];
         assert!(body.contains("engine_telemetry_snapshot"));
         assert!(body.contains("engine_telemetry_report_from_telemetry_snapshot"));
         assert!(!body.contains("engine.snapshot()"));
+        for command in ["export_diagnostic_package", "prepare_diagnostic_export_v1"] {
+            let start = source.find(&format!("fn {command}(")).expect("missing export route");
+            let end = source[start..]
+                .find("\n}")
+                .map(|offset| start + offset)
+                .expect("missing export route boundary");
+            assert!(source[start..end].contains("capture_diagnostic_package(&state)"));
+        }
     }
 
     #[test]
@@ -96068,12 +96105,14 @@ pub(crate) mod tests {
             "save_project_v1",
             "save_user_template_v1",
         ];
-        const SNAPSHOT_OR_EXTERNAL_FILE_ONLY: [&str; 16] = [
+        const SNAPSHOT_OR_EXTERNAL_FILE_ONLY: [&str; 18] = [
             "cache_gdtf_from_share",
             "delete_project_backup",
             "download_gdtf_from_share",
             "download_gdtf_from_url",
             "export_diagnostic_package",
+            "prepare_diagnostic_export_v1",
+            "finish_diagnostic_export_v1",
             "import_video_output_bitmap_mask",
             "install_application_update",
             "save_custom_fixture_profile",
@@ -131966,6 +132005,7 @@ fn main() {
             }
             Ok(())
         })
+        .manage(diagnostic_export_session::DiagnosticExports::default())
         .manage(AppState {
             engine: engine.clone(),
             app_handle: Mutex::new(None),
@@ -132638,6 +132678,8 @@ fn main() {
             standby_sync_status,
             take_over_standby,
             export_diagnostic_package,
+            prepare_diagnostic_export_v1,
+            finish_diagnostic_export_v1,
             load_startup_project,
             load_phase1_sample_project,
             run_phase1_smoke,
