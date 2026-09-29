@@ -22,7 +22,7 @@ export async function nativeNetworkReads(options, { revoked = false } = {}) {
     const post = async (pathname, body, headers = {}) => {
       const response = await fetch(`${base}${pathname}`, {
         method: 'POST', headers: { 'content-type': 'application/json', ...headers },
-        body: JSON.stringify(body), signal: AbortSignal.timeout(5000),
+        body: JSON.stringify(body), signal: AbortSignal.timeout(15000),
       });
       assert.ok([200, 202].includes(response.status), 'Network adapter rejected transport');
       return response.status === 202 ? null : response.json();
@@ -41,7 +41,7 @@ export async function nativeNetworkReads(options, { revoked = false } = {}) {
     const wsRpc = (method, params) => new Promise((resolve, reject) => {
       const id = ++sequence;
       const cleanup = () => { clearTimeout(timer); ws.removeEventListener('message', listener); };
-      const timer = setTimeout(() => { cleanup(); reject(new Error('WebSocket response deadline')); }, 5000);
+      const timer = setTimeout(() => { cleanup(); reject(new Error('WebSocket response deadline')); }, 15000);
       const listener = event => {
         try {
           const result = JSON.parse(event.data);

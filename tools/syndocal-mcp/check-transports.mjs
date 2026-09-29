@@ -88,7 +88,8 @@ try {
     ws.addEventListener('error', reject, { once: true });
   });
   const wsRpc = (id, method, params) => new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error(`WebSocket response timeout: ${id}`)), 3000);
+    // Includes OS identity inspection (10s), connection (1s), native reply (3s).
+    const timeout = setTimeout(() => reject(new Error(`WebSocket response timeout: ${id}`)), 15000);
     const listener = (event) => {
       const value = JSON.parse(event.data);
       if (value.id !== id) return;

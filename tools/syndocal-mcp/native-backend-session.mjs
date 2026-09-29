@@ -16,12 +16,13 @@ export async function openNativeBackendSession(options, cdpPort) {
   $listeners=@(Get-NetTCPConnection -LocalPort ${cdpPort} -State Listen)
   if($listeners.Count -ne 1 -or $listeners[0].LocalAddress -ne '127.0.0.1'){throw 'Debugger must have one IPv4 loopback listener'}
   $candidate=[int]$listeners[0].OwningProcess
+  $parents=@{}
+  Get-CimInstance Win32_Process -Property ProcessId,ParentProcessId | ForEach-Object { $parents[[int]$_.ProcessId]=[int]$_.ParentProcessId }
   $matched=$false
   for($depth=0;$depth -lt 12;$depth++){
     if($candidate -eq ${descriptor.processId}){$matched=$true;break}
-    $entry=Get-CimInstance Win32_Process -Filter "ProcessId=$candidate"
-    if(!$entry){break}
-    $candidate=[int]$entry.ParentProcessId
+    if(!$parents.ContainsKey($candidate)){break}
+    $candidate=$parents[$candidate]
   }
   if(!$matched){throw 'Debugger owner is outside expected app process tree'}
   'verified'

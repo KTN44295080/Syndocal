@@ -250,6 +250,15 @@ try {
   const beforeWrong = requests.length;
   assert.equal(decode(await call('syndocal_list_fixtures')).status, 'rejected');
   assert.equal(requests.length, beforeWrong);
+  // The claimed path and CLI expectation agree, but the live PID is Node.
+  // This must reach OS inspection and reject the actual executable mismatch.
+  await assert.rejects(readDescriptor({ ...descriptorOptions, executable: script }), /identity/);
+  const retired = spawn(process.execPath, ['-e', ''], { windowsHide: true, stdio: 'ignore' });
+  const retiredPid = retired.pid;
+  await new Promise((resolve, reject) => { retired.once('exit', resolve); retired.once('error', reject); });
+  await fs.writeFile(descriptorPath, JSON.stringify({ ...descriptor, processId: retiredPid }));
+  assert.equal(decode(await call('syndocal_list_fixtures')).status, 'rejected');
+  assert.equal(requests.length, beforeWrong, 'Dead PID must not dispatch');
   await fs.writeFile(descriptorPath, JSON.stringify({ ...descriptor, instanceId: randomUUID() }));
   assert.equal(decode(await call('syndocal_list_fixtures')).status, 'rejected');
   assert.equal(requests.length, beforeWrong);

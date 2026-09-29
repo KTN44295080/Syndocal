@@ -30,6 +30,14 @@ native grants, credentials and request receipts are unaffected. At 64 unexpired
 sessions new sessions still receive 429; active sessions are never evicted to
 admit a newcomer.
 
+On Windows, each request verifies the live PID's executable through `Get-Process`
+before opening the native bridge. OS inspection has a separate 10-second bound
+including PowerShell startup; the result is never cached. Failure or an absent,
+inaccessible or mismatched executable rejects the request before dispatch. The
+subsequent connection and native-response deadlines remain one and three seconds.
+Clients should allow at least 15 seconds for that complete request path. This
+does not add retries or change unknown-mutation recovery rules.
+
 HTTP and WebSocket requests require a literal loopback/localhost `Host` with the
 actual listening port. Browser requests must have the exact same HTTP origin;
 foreign/null origins and cross-site/same-site fetch metadata are rejected before

@@ -212,3 +212,32 @@ consent-preserving diagnostic capture/export backend route. Diagnostic export
 currently binds preview and publication to the same captured bytes, and its
 native confirmation must not be bypassed by an arbitrary invoke adapter.
 High-level ledger statuses remain unchanged; goal remains active.
+
+## Windows inspection recovery — 2026-09-29
+
+Base `825a5c1f`. The repeated process inspection failure was reproduced before
+editing. Windows now queries the live PID with Get-Process, avoiding WMI for the
+executable path, with a separate bounded ten-second pre-dispatch budget including
+PowerShell startup. No result is cached, no retry is added, and absence, access
+failure or path mismatch still rejects before opening the broker connection.
+The one-second connect and three-second native response deadlines are unchanged.
+HTTP/WS test clients allow 15 seconds for this complete path; content and rejection
+assertions are unchanged. The integration check additionally rejects a descriptor
+whose claimed and expected paths agree but whose live PID names another executable,
+and rejects a terminated fixture PID without dispatching to the broker.
+
+`node app/scripts/check-ai5-sidecar.mjs` passed all adapter, HTTP/REST/WebSocket
+and security groups. After adding the two OS-identity rejection cases,
+`node tools/syndocal-mcp/check.mjs` passed again (15 integration groups and 128
+hostile stdio inputs). The QA debugger ownership bootstrap now obtains one
+process-parent snapshot instead of invoking WMI separately for each ancestor;
+the same exact app ancestry, single IPv4 loopback listener and 12-level bound
+remain enforced, within its unchanged ten-second budget.
+
+The real native runner then passed all 13 stdio/HTTP/REST/WebSocket read and
+revocation checks against the existing executable. Evidence:
+[`artifacts/native-mcp-inspection-recovery-2026-09-29.json`](artifacts/native-mcp-inspection-recovery-2026-09-29.json).
+Temporary principal/credential cleanup passed. This resolves the previous slice's
+process-inspection validation failure; it does not establish hardware, diagnostic
+export or whole AI8 acceptance. No native executable rebuild was needed for these
+sidecar/QA-only edits, and no compiler-warning measurement is claimed.

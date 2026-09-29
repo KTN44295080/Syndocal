@@ -147,9 +147,11 @@ async function processExecutable(pid) {
   if (process.platform === 'win32') {
     const shell = path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
     // Fixed OS introspection only: no supplied command, path or expression is evaluated.
+    // This pre-dispatch budget includes cold PowerShell startup on a loaded host.
+    // No cached PID/path result, retry, or native connection on inspection failure.
     const { stdout } = await execFileAsync(shell, ['-NoProfile', '-NonInteractive', '-Command',
-      '[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new(); $p=Get-CimInstance Win32_Process -Filter ("ProcessId=" + [int]$env:SYNDOCAL_BRIDGE_PID); if (!$p -or !$p.ExecutablePath) { exit 2 }; [Console]::Write($p.ExecutablePath)'],
-    { windowsHide: true, timeout: 2000, maxBuffer: 8192, env: { ...process.env, SYNDOCAL_BRIDGE_PID: String(pid) } });
+      '[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new(); $p=Get-Process -Id ([int]$env:SYNDOCAL_BRIDGE_PID) -ErrorAction Stop; if (!$p -or !$p.Path) { exit 2 }; [Console]::Write($p.Path)'],
+    { windowsHide: true, timeout: 10000, maxBuffer: 8192, env: { ...process.env, SYNDOCAL_BRIDGE_PID: String(pid) } });
     return stdout.trim();
   }
   return fs.readlink(`/proc/${pid}/exe`);

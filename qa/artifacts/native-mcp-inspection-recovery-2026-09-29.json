@@ -1,0 +1,79 @@
+{
+  "schemaVersion": 1,
+  "timestamp": "2026-09-29T10:37:56.998Z",
+  "passed": true,
+  "executable": "C:\\Users\\janua\\OneDrive\\ドキュメント\\GitHub\\Syndocal\\target\\release\\syndocal.exe",
+  "processId": 66956,
+  "executableSha256": "06d90b3a202d4290b32d0e90391c690a9be447aa095f32f4f3b3e460be39a7ff",
+  "sidecarSha256": "6144fd341bf3e3a62d767e0a9f6041bb037169271db121d9ba855b6d8c1951b8",
+  "backendHarnessSha256": "9fb0a4f15d19f0ac9ca93a64cc21b26ed3bb681e46b4ce4a20c9638cb7115aff",
+  "runnerSha256": "95983c13d647cc03b8b67af06052f27af496f66f4ba58608a93932ce639624ba",
+  "networkHarnessSha256": "cba8f3bc52dce2fc595065909fb708d32ee2e8be677b3ca4da61f8ba31a5053d",
+  "transport": "External stdio MCP sidecar and real HTTP/REST/WebSocket clients to authenticated native loopback broker",
+  "bootstrap": "process-verified local main-window backend via loopback CDP; no DOM actions",
+  "principalRevoked": true,
+  "credentialRemoved": true,
+  "checks": [
+    {
+      "check": "ungranted-read-rejected",
+      "passed": true
+    },
+    {
+      "check": "syndocal_list_fixtures",
+      "passed": true,
+      "status": "completed"
+    },
+    {
+      "check": "syndocal_get_runtime_status",
+      "passed": true,
+      "status": "completed"
+    },
+    {
+      "check": "syndocal_get_control_plane_capabilities",
+      "passed": true,
+      "status": "completed"
+    },
+    {
+      "check": "syndocal_get_recording_status",
+      "passed": true,
+      "status": "completed"
+    },
+    {
+      "check": "http-jsonrpc-native-terminal-read",
+      "passed": true
+    },
+    {
+      "check": "rest-native-terminal-read",
+      "passed": true
+    },
+    {
+      "check": "websocket-native-terminal-read",
+      "passed": true
+    },
+    {
+      "check": "revoked-read-rejected",
+      "passed": true
+    },
+    {
+      "check": "revoked-receipt-rejected-original-id",
+      "passed": true
+    },
+    {
+      "check": "http-jsonrpc-revoked-denied",
+      "passed": true
+    },
+    {
+      "check": "rest-revoked-denied",
+      "passed": true
+    },
+    {
+      "check": "websocket-revoked-denied",
+      "passed": true
+    }
+  ],
+  "nonclaims": [
+    "No authored/runtime/output mutation",
+    "No physical device acceptance",
+    "No clean installation or release acceptance"
+  ]
+}
