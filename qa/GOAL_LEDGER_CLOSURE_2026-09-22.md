@@ -319,3 +319,9 @@ blank state in one exact-path maximized QA window. Five-viewport authored
 Clip Bank browser checks, the Control viewport gate, localization, and the
 isolated native build passed. The Control UI ledger remains Open for the
 broader live/hardware/accessibility/recovery acceptance.
+
+The native QA probe now also covers the [Lighting view](artifacts/native-control-lighting-2026-09-30.png)
+with [geometry evidence](artifacts/native-control-lighting-2026-09-30.json):
+the existing editable Touch desk occupies the upper row, retains its internal
+scroll, and leaves Stage/Faders side by side below. This adds actual Control
+route coverage, not an aesthetic or physical-output acceptance claim.

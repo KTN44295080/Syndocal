@@ -12,7 +12,7 @@ const exec = promisify(execFile);
 const args = process.argv.slice(2);
 const domainFlag = args.indexOf('--domain');
 const domain = domainFlag >= 0 ? args.splice(domainFlag, 2)[1] : 'both';
-assert.ok(['both', 'video'].includes(domain), 'Domain must be both or video');
+assert.ok(['both', 'lighting', 'video'].includes(domain), 'Domain must be both, lighting, or video');
 const take = name => {
   const index = args.indexOf(name);
   assert.ok(index >= 0 && index + 1 < args.length, `Required: ${name}`);
@@ -122,6 +122,24 @@ if ($windows.Count -ne 1 -or $windows[0].Id -ne ${child.pid} -or !$windows[0].Re
       minimumControlHeight: Math.min(...controls.map(node => rect(node).height)),
       outerOverflow: window.scrollX !== 0 || window.scrollY !== 0 || document.documentElement.scrollWidth > window.innerWidth + 1,
     };
+  })()`) : domain === 'lighting' ? await backend.evaluate(`(() => {
+    const layout = document.querySelector('.layoutTouch.touchDomainLighting');
+    const upper = layout?.querySelector(':scope > .touchSurfacePanel');
+    const tabs = layout?.querySelector(':scope > .touchControlDomainTabs');
+    const rect = node => node?.getBoundingClientRect();
+    const visible = node => Boolean(node && rect(node).width > 0 && rect(node).height > 0 && getComputedStyle(node).display !== 'none');
+    const lower = ['lower-left', 'lower-right'].map(name => layout?.querySelector('[data-workspace-pane="' + name + '"]'));
+    return {
+      viewport: [window.innerWidth, window.innerHeight],
+      controlSelected: document.querySelector('[data-workspace-option="touch"]')?.getAttribute('aria-pressed') === 'true',
+      lightingSelected: document.querySelector('[data-control-domain="lighting"]')?.getAttribute('aria-pressed') === 'true',
+      tabsLeft: Boolean(tabs && layout && rect(tabs).left <= rect(layout).left + 8),
+      upperFullWidth: Boolean(upper && layout && Math.abs(rect(upper).width - rect(layout).width) <= 2),
+      touchGridVisible: visible(upper?.querySelector('.touchSurfaceGrid')),
+      placedControlCount: upper?.querySelectorAll('.touchPlacedControl').length ?? 0,
+      lowerSideBySide: lower.every(visible) && lower.every(node => rect(node).top >= rect(upper).bottom - 2) && rect(lower[0]).right <= rect(lower[1]).left + 2,
+      outerOverflow: window.scrollX !== 0 || window.scrollY !== 0 || document.documentElement.scrollWidth > window.innerWidth + 1,
+    };
   })()`) : await backend.evaluate(`(() => {
     const layout = document.querySelector('.layoutTouch.touchDomainVideo');
     const upper = layout?.querySelector(':scope > .touchVideoPanel');
@@ -147,6 +165,11 @@ if ($windows.Count -ne 1 -or $windows[0].Id -ne ${child.pid} -or !$windows[0].Re
   if (domain === 'both') assert.deepEqual(
     [proof.controlSelected, proof.bothSelected, proof.tabsLeft, proof.upperFullWidth, proof.laneCount, proof.splitHidden, proof.lowerSideBySide, proof.controlCount >= 8, proof.minimumControlHeight >= 47.5, proof.outerOverflow],
     [true, true, true, true, 2, true, true, true, true, false],
+    JSON.stringify(proof),
+  );
+  else if (domain === 'lighting') assert.deepEqual(
+    [proof.controlSelected, proof.lightingSelected, proof.tabsLeft, proof.upperFullWidth, proof.touchGridVisible, proof.placedControlCount > 0, proof.lowerSideBySide, proof.outerOverflow],
+    [true, true, true, true, true, true, true, false],
     JSON.stringify(proof),
   );
   else assert.deepEqual(

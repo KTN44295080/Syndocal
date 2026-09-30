@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "timestamp": "2026-09-30T08:32:35.788Z",
+  "passed": true,
+  "domain": "lighting",
+  "executable": "C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-native-acceptance-target\\release\\syndocal.exe",
+  "executableSha256": "cd7a0c3891a5653fe9993506fad8e297236785056b43a20b4e9f0217b53372a4",
+  "runnerSha256": "5cf1116937694aa454fcba285f83e438ed42963be0804e1ee37f58b8ba5e3319",
+  "backendHarnessSha256": "ade29aa256d8ff17374bb4b3e893ea9a07f71f8fa2cf2bb72b21f80d4e0e8b1f",
+  "processId": 180684,
+  "screenshot": "C:\\Users\\janua\\OneDrive\\ドキュメント\\GitHub\\Syndocal\\qa\\artifacts\\native-control-lighting-2026-09-30.png",
+  "proof": {
+    "viewport": [
+      1280,
+      752
+    ],
+    "controlSelected": true,
+    "lightingSelected": true,
+    "tabsLeft": true,
+    "upperFullWidth": true,
+    "touchGridVisible": true,
+    "placedControlCount": 7,
+    "lowerSideBySide": true,
+    "outerOverflow": false,
+    "screenshotSha256": "d03539a922271e28c6e1cb73b220ffb3e07a5ef35c087eb36cb9eed96f377b64"
+  },
+  "normalAppIdentityUnchanged": true,
+  "error": null,
+  "nonclaims": [
+    "Read-only/control-navigation native surface proof only",
+    "No output, physical device, recording, or venue workflow"
+  ]
+}

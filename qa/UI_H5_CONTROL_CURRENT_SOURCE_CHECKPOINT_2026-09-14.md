@@ -1310,3 +1310,15 @@ empty toolbar, the guidance message in place of the 32 empty pads, no page
 overflow, and the same upper/lower pane geometry. The QA process closed and
 the normal app identity remained unchanged. No clip was imported, output
 activated, or physical device exercised; `UI-H5-CONTROL-001` remains `Open`.
+
+## Control > Lighting native composition — 2026-09-30
+
+The exact-process QA probe also selected Lighting without invoking any
+controls. [Its native image](artifacts/native-control-lighting-2026-09-30.png)
+and [machine evidence](artifacts/native-control-lighting-2026-09-30.json)
+record the current `1280x752` CSS view: left domain tabs, one full-width
+upper editable Touch surface with seven placed controls and its own scroll,
+and side-by-side Stage/Faders below. The document itself has no outer
+overflow. This establishes the present geometry but is not approval of the
+Lighting desk's information hierarchy, operator workflow, or aesthetic
+quality; no Control action or physical output was exercised.
