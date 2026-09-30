@@ -31140,31 +31140,96 @@ h3 {
 }
 
 .layoutTouch.touchDomainBoth > .touchSurfacePanel {
-  width: calc(50% - 2px);
-  justify-self: start;
-  display: grid;
-  min-width: 0;
-  min-height: 0;
-  padding-top: 56px;
+  display: none;
 }
 
 .layoutTouch.touchDomainBoth > .touchVideoPanel {
-  grid-column: 1 / -1;
-  grid-row: 1;
-  width: calc(50% - 2px);
-  justify-self: end;
-  display: grid;
-  grid-template-rows: none;
-  grid-auto-rows: max-content;
-  align-content: start;
-  min-width: 0;
-  min-height: 0;
-  padding-top: 56px;
-  overflow: hidden auto;
+  display: none;
 }
 
-.layoutTouch.touchDomainBoth > .touchVideoPanel > .videoClipSlotBankPanel {
+.layoutTouch.touchDomainBoth > .touchBothLivePanel {
+  grid-column: 1 / -1;
+  grid-row: 1;
+  display: grid;
+  grid-template-rows: 44px repeat(2, minmax(0, 1fr)) 48px;
+  min-width: 0;
   min-height: 0;
+  padding: 56px 12px 0;
+  overflow: hidden;
+  background: #171a1d;
+}
+
+.touchBothHeader,
+.touchBothFooter {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.touchBothHeader {
+  border-bottom: 1px solid #343a3f;
+}
+
+.touchBothFooter {
+  justify-content: flex-start;
+  border-top: 1px solid #343a3f;
+}
+
+.touchBothFooter button {
+  margin-left: auto;
+}
+
+.touchBothLane {
+  display: grid;
+  grid-template-columns: minmax(175px, 1.1fr) auto minmax(175px, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  min-height: 0;
+  border-bottom: 1px solid #343a3f;
+}
+
+.touchBothIdentity,
+.touchBothVideoStatus,
+.touchBothMaster {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.touchBothIdentity span,
+.touchBothVideoStatus span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.touchBothIdentity strong {
+  color: #ffb448;
+}
+
+.touchBothActions,
+.touchBothEndActions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.touchBothMaster span {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.touchBothMaster input {
+  width: 100%;
+  min-width: 0;
+}
+
+.app .layoutTouch > .touchBothLivePanel button,
+.app .layoutTouch > .touchBothLivePanel input[type="range"] {
+  min-height: 48px;
 }
 
 .touchSurfaceToolbar {

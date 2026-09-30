@@ -1197,3 +1197,51 @@ was performed.
 This closes only the compact Outputs-width layout finding. Physical output,
 recording, dangerous operator workflows, native accessibility, and failure /
 recovery remain unaccepted; `UI-H5-CONTROL-001` remains `Open`.
+
+## Actual Control > Both desk correction — 2026-09-30
+
+At base `648857f5` on `codex/showclock-review-20260912`, the earlier
+`check:control-upper-workspaces` screenshots were reidentified: that runner
+selects the top-level **Edit** workspace (`workspaceTab() === "control"`). The
+operator-facing **Control** workspace is `workspaceTab() === "touch"`. Its Both
+domain actually rendered separate Lighting and Video windows across the upper
+row. This is the layout the user asked to correct; the Edit surface was left
+unchanged.
+
+Control > Both now has one full-width upper live desk with Lighting and Video
+as two horizontal lanes, above the existing side-by-side Stage and Faders
+panes. The Lighting / Video / Both domain tabs remain on the left. The compact
+desk exposes the live cue actions, masters, blackout controls, output state,
+and routes to the detailed Lighting and Video tabs. Its buttons and sliders
+retain at least 48 px height; no text or control size was reduced. The old
+independent upper panels are hidden only in Control > Both.
+
+Current-source checks:
+
+- `pnpm.cmd --dir app run check:touch` passed at `1920x1080`, `1920x1032`,
+  `2048x1152`, `1366x768`, and `1280x720`. The focused `1280x752` run also
+  passed. The runner now asserts the actual Control top tab, left domain tabs,
+  full-width upper desk, two lanes, lower side-by-side panes, 48 px targets,
+  no outer overflow, and both detail routes.
+- `pnpm.cmd --dir app run check:localization` passed: 3872/3872 static labels
+  mapped, zero unprotected user labels. `pnpm.cmd --dir app run build` passed.
+- The isolated Windows QA build passed with pinned MSVC 14.44.35207:
+  `pnpm.cmd --dir app tauri build --no-bundle --config
+  src-tauri/tauri.mcp-lifecycle.conf.json`. Exact QA executable SHA-256:
+  `D3FFD246E15B25A83D3E0151F74C5BE795BFD27F3BC5AA426BC10EF3069A98E8`.
+  The isolated native lifecycle rerun passed all seven checks, including one
+  exact-path responsive, maximized QA window and normal-app identity
+  preservation. The first attempt reached six checks, then its third launch
+  missed the bridge-descriptor startup deadline; the rerun passed without a
+  source or configuration change. Evidence is in
+  `%TEMP%\syndocal-actual-control-native-lifecycle-rerun-20260930.json`.
+
+The inspected rendered images are
+`%TEMP%\syndocal-actual-control-final-20260930\touch-both-1280x752.png` and
+`%TEMP%\syndocal-actual-control-small-20260930\touch-both-1280x720.png`.
+They establish browser-rendered geometry, not a native Control screenshot.
+The QA build includes unrelated pre-existing Remote PIN working-tree edits
+and is not a distributable layout-only artifact. Vite retained its existing
+`>500 kB` chunk advisory; the Rust build emitted no first-party warning.
+No physical device, output action, recording, or venue workflow was tested.
+`UI-H5-CONTROL-001` remains `Open` for those acceptance boundaries.

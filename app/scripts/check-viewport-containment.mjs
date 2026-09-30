@@ -18129,7 +18129,58 @@ async function runTouchViewport(client, viewport) {
     const screenshot = await client.send("Page.captureScreenshot", { format: "png", fromSurface: true });
     writeFileSync(join(screenshotDir, `touch-focused-${viewport.width}x${viewport.height}.png`), screenshot.data, "base64");
   }
-  return measure(client, `touch-${viewport.width}x${viewport.height}`);
+  const lighting = await measure(client, `touch-${viewport.width}x${viewport.height}`);
+  for (const domain of ["video", "both"]) {
+    await clickVisibleSelector(client, `[data-control-domain="${domain}"]`);
+    await sleep(120);
+    if (domain === "both") {
+      const both = await client.evaluate(`(() => {
+        const layout = document.querySelector('.layoutTouch.touchDomainBoth');
+        const panel = layout?.querySelector(':scope > .touchBothLivePanel');
+        const tabs = layout?.querySelector(':scope > .touchControlDomainTabs');
+        const rect = (node) => node?.getBoundingClientRect();
+        const visible = (node) => {
+          const bounds = rect(node);
+          const style = node ? getComputedStyle(node) : null;
+          return Boolean(bounds && bounds.width > 0 && bounds.height > 0 && style?.display !== 'none');
+        };
+        const upper = rect(panel);
+        const lower = ['lower-left', 'lower-right'].map((pane) =>
+          layout?.querySelector('[data-workspace-pane="' + pane + '"]')).filter(visible);
+        const controls = [...(panel?.querySelectorAll('button, input[type="range"]') ?? [])].filter(visible);
+        return {
+          workspaceSelected: document.querySelector('[data-workspace-option="touch"]')?.getAttribute('aria-pressed') === 'true',
+          upperFullWidth: Boolean(upper && rect(layout) && Math.abs(upper.width - rect(layout).width) <= 2),
+          tabsLeft: Boolean(tabs && rect(tabs) && rect(layout) && rect(tabs).left <= rect(layout).left + 8),
+          retiredSplitHidden: !visible(layout?.querySelector(':scope > .touchSurfacePanel'))
+            && !visible(layout?.querySelector(':scope > .touchVideoPanel')),
+          laneCount: panel?.querySelectorAll('.touchBothLane').length ?? 0,
+          lowerCount: lower.length,
+          lowerSideBySide: lower.length >= 2 && lower.every((node) => rect(node).top >= upper.bottom - 2)
+            && rect(lower[0]).right <= rect(lower[1]).left + 2,
+          undersizedControls: controls.filter((node) => rect(node).height < 47.5).length,
+          outerScroll: window.scrollX !== 0 || window.scrollY !== 0
+            || document.documentElement.scrollWidth > window.innerWidth + 1,
+        };
+      })()`);
+      assert.deepEqual(
+        [both.workspaceSelected, both.upperFullWidth, both.tabsLeft, both.retiredSplitHidden,
+          both.laneCount, both.lowerCount >= 2, both.lowerSideBySide, both.undersizedControls, both.outerScroll],
+        [true, true, true, true, 2, true, true, 0, false],
+        `Control > Both remains one upper desk above two lower panes at ${viewport.width}x${viewport.height}: ${JSON.stringify(both)}`,
+      );
+    }
+    if (shouldCaptureViewport(viewport)) {
+      const screenshot = await client.send("Page.captureScreenshot", { format: "png", fromSurface: true });
+      writeFileSync(join(screenshotDir, `touch-${domain}-${viewport.width}x${viewport.height}.png`), screenshot.data, "base64");
+    }
+  }
+  await clickVisibleSelector(client, '[data-touch-both-open="lighting"]');
+  assert.equal(await client.evaluate(`document.querySelector('[data-control-domain="lighting"]')?.getAttribute('aria-pressed')`), "true");
+  await clickVisibleSelector(client, '[data-control-domain="both"]');
+  await clickVisibleSelector(client, '[data-touch-both-open="video"]');
+  assert.equal(await client.evaluate(`document.querySelector('[data-control-domain="video"]')?.getAttribute('aria-pressed')`), "true");
+  return lighting;
 }
 
 async function readPatchZoningState(client) {

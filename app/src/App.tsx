@@ -116,6 +116,7 @@ import { StagePreview2D } from "./components/StagePreview2D";
 import { EditVideoInspector } from "./components/EditVideoInspector";
 import { VideoControlPanel } from "./components/VideoControlPanel";
 import { ControlBothPanel } from "./components/ControlBothPanel";
+import { TouchBothLivePanel } from "./components/TouchBothLivePanel";
 import { VideoClipSlotInspectorPanel } from "./components/VideoClipSlotInspectorPanel";
 import { defaultAutoVjSnapshot } from "./components/AutoVjStrip";
 import { readVideoOutputTestPattern, readVideoOutputWindowId, VideoOutputWindow } from "./components/VideoOutputWindow";
@@ -26898,12 +26899,51 @@ export default function App() {
           >Video</button>
           <button
             type="button"
+            id="control-domain-both"
             data-control-domain="both"
             class={touchControlDomain() === "both" ? "active" : ""}
             aria-pressed={touchControlDomain() === "both"}
             onClick={() => setTouchControlDomain("both")}
           >Both</button>
         </nav>
+        <Show when={touchControlDomain() === "both"}>
+          <TouchBothLivePanel
+            activeCueId={snapshot().active_cue_id ?? null}
+            activeCueLabel={activeCue()?.label ?? "None"}
+            nextCueLabel={nextCue()?.label ?? "No cue"}
+            cueCount={snapshot().cues.length}
+            timelinePlaying={snapshot().timeline.playing}
+            timecode={formatShowTimecode(snapshot().timeline.position_ms)}
+            lightingMaster={snapshot().lighting_master}
+            videoMaster={snapshot().video.master_opacity}
+            blackout={snapshot().authored_blackout}
+            videoBlackout={snapshot().video.blackout}
+            enabledDmxOutputCount={enabledDmxOutputCount()}
+            dmxOutputCount={snapshot().dmx_outputs.length}
+            enabledVideoOutputCount={enabledVideoOutputCount()}
+            videoOutputCount={snapshot().video.outputs.length}
+            previewLabel={liveVideoPreviewLabel()}
+            previewStatus={liveVideoMonitors.preview().status}
+            programLabel={liveVideoProgramLabel()}
+            programStatus={liveVideoMonitors.program().status}
+            clipCount={snapshot().video.layers.length}
+            selectedClipLabel={selectedVideoClipSlotLayer()?.label ?? null}
+            recordingLabel={videoRecordingStatus().active ? "Recording" : videoRecordingStatus().state ?? "Idle"}
+            onOpenLighting={() => setTouchControlDomain("lighting")}
+            onOpenVideo={() => setTouchControlDomain("video")}
+            onBack={() => void triggerPreviousCue()}
+            onGo={() => void triggerNextCue()}
+            onRelease={() => {
+              const cueId = snapshot().active_cue_id;
+              if (cueId !== null && cueId !== undefined) void releaseCueById(cueId);
+            }}
+            onSetLightingMaster={setLightingMaster}
+            onSetVideoMaster={setVideoMasterOpacity}
+            onSetBlackout={(enabled) => void setBlackout(enabled)}
+            onSetVideoBlackout={(enabled) => void setVideoBlackout(enabled)}
+            onSetAllBlackout={(enabled) => void setAllBlackout(enabled)}
+          />
+        </Show>
         <EditableTouchSurface
           bankAuthority={bankAuthority()}
           snapshot={snapshot()}
