@@ -55,19 +55,23 @@ export async function openNativeBackendSession(options, cdpPort) {
     socket.onopen = () => { clearTimeout(timer); resolve(); };
     socket.onerror = () => { clearTimeout(timer); reject(new Error('Debugger connection failed')); };
   });
-  const evaluate = async (expression) => {
+  const send = async (method, params = {}) => {
     const result = await new Promise((resolve, reject) => {
       const id = ++sequence;
       const timer = setTimeout(() => { pending.delete(id); reject(new Error('Native backend deadline')); }, 10000);
       pending.set(id, { resolve, reject, timer });
-      socket.send(JSON.stringify({ id, method: 'Runtime.evaluate', params: { expression, awaitPromise: true, returnByValue: true } }));
+      socket.send(JSON.stringify({ id, method, params }));
     });
+    return result;
+  };
+  const evaluate = async (expression) => {
+    const result = await send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true });
     assert.ok(!result.exceptionDetails, 'Native backend operation failed');
     return result.result.value;
   };
   const invoke = (command, params = {}) => evaluate(`window.__TAURI_INTERNALS__.invoke(${JSON.stringify(command)},${JSON.stringify(params)})`);
 
-  return { descriptor, invoke, evaluate, close() {
+  return { descriptor, invoke, evaluate, send, close() {
     for (const call of pending.values()) { clearTimeout(call.timer); call.reject(new Error('Native session closed')); }
     pending.clear(); socket.close();
   } };

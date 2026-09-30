@@ -286,3 +286,19 @@ diagnostic source documents instead of copying release commands. The app's
 current Project menu and Control > Both labels were checked in source. This is
 a draft procedure, not a deployed operator drill; the observability ledger
 remains Open pending actual drills and the other P gates.
+
+## Actual Control > Both native surface proof — 2026-09-30
+
+Base `0956b5be` contains the Control > Both upper-desk repair. The earlier
+`check:control-upper-workspaces` runner was found to select the top-level Edit
+workspace; the actual Control top-level workspace is the `touch` route. The
+new `check:touch` assertions covered the requested top-one/bottom-two geometry
+at five viewports, plus a focused `1280x752` run. Localization, frontend build,
+and isolated native build passed. The separately maintained native QA runner
+now selects only Control > Both, verifies one exact-path responsive maximized
+window and the same geometry at `1280x752` CSS pixels, and records a directly
+inspected [screenshot](artifacts/native-control-both-2026-09-30.png) with
+[machine evidence](artifacts/native-control-both-2026-09-30.json). The normal
+app identity remained unchanged and the QA process was closed. No output
+control was activated. `UI-H5-CONTROL-001` remains Open for the independent
+physical, operational, accessibility, and recovery acceptance boundaries.

@@ -1236,12 +1236,23 @@ Current-source checks:
   source or configuration change. Evidence is in
   `%TEMP%\syndocal-actual-control-native-lifecycle-rerun-20260930.json`.
 
-The inspected rendered images are
+The inspected browser-rendered images are
 `%TEMP%\syndocal-actual-control-final-20260930\touch-both-1280x752.png` and
 `%TEMP%\syndocal-actual-control-small-20260930\touch-both-1280x720.png`.
-They establish browser-rendered geometry, not a native Control screenshot.
 The QA build includes unrelated pre-existing Remote PIN working-tree edits
 and is not a distributable layout-only artifact. Vite retained its existing
 `>500 kB` chunk advisory; the Rust build emitted no first-party warning.
 No physical device, output action, recording, or venue workflow was tested.
 `UI-H5-CONTROL-001` remains `Open` for those acceptance boundaries.
+
+The dedicated exact-process native probe then selected only Control > Both
+and captured [the QA WebView screenshot](artifacts/native-control-both-2026-09-30.png)
+at a `1280x752` CSS viewport (`2560x1504` physical pixels). The accompanying
+[machine evidence](artifacts/native-control-both-2026-09-30.json) records the
+maximized responsive QA window, selected Control/Both tabs, left-aligned domain
+tabs, one full-width upper desk with two lanes, hidden old split panels, two
+side-by-side lower panes, ten controls with a 48 px minimum height, zero outer
+overflow, and the screenshot SHA-256. The normal app descriptor was unchanged;
+the QA process was closed. The native image was visually inspected and shows
+the requested top-one/bottom-two composition. The probe never clicks cue,
+master, blackout, output, or recording controls.
