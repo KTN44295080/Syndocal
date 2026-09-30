@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const appRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -247,7 +247,7 @@ try {
     assert.equal(inspector, true, "Edit exposes the current Media Properties inspector even without a selected asset");
     assert.equal(await click(client, '[data-edit-video-inspector] .editVideoAdvancedDisclosure > summary'), true);
     await waitFor(() => evaluate(client, "document.querySelector('[data-edit-video-fx-layer]') !== null"), "current Edit Video FX layer controls");
-    assert.equal(await evaluate(client, "document.querySelectorAll('[data-video-isf-layer-id]').length"), 1, "current Edit Video mounts one selected-layer FX consumer");
+    assert.equal(await evaluate(client, "document.querySelectorAll('[data-edit-video-inspector] [data-video-isf-layer-id]').length"), 1, "current Edit Video inspector mounts one selected-layer FX consumer");
     assert.equal(await click(client, '[data-video-isf-action="advanced"]'), true);
     await waitFor(() => evaluate(client, "document.querySelector('.videoIsfAdvanced') !== null"), "current Edit Video advanced FX controls");
     assert.ok(await evaluate(client, "document.querySelectorAll('.videoIsfStackRow').length") >= 1, "current Edit Video keeps the authored layer FX stack editable");
@@ -294,16 +294,19 @@ try {
   }
   console.log("Video Clip Slot B4 real-browser geometry gate passed.");
 } finally {
+  try { await client?.send("Browser.close"); } catch { /* A failed browser probe may already have closed CDP. */ }
   client?.close();
   await stopChild(chrome);
   await stopChild(vite);
   if (profileDir) {
-    for (let attempt = 0; attempt < 5; attempt += 1) {
+    assert.equal(resolve(dirname(profileDir)), resolve(tmpdir()));
+    assert.ok(basename(profileDir).startsWith("syndocal-clip-slot-browser-"));
+    for (let attempt = 0; attempt < 20; attempt += 1) {
       try {
         await rm(profileDir, { recursive: true, force: true });
         break;
       } catch (error) {
-        if (attempt === 4) throw error;
+        if (attempt === 19) throw error;
         await sleep(250);
       }
     }

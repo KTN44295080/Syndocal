@@ -128,8 +128,8 @@ assert.match(touch, /VideoClipSlotBankPanel/, "Control mounts the shared bank co
 assert.match(edit, /VideoClipSlotBankPanel/, "Edit Video mounts the shared bank component");
 assert.match(
   modes,
-  /editDomainModes = \[\s*controlModes\.find\(\(mode\) => mode\.id === "edit"\)!,\s*controlModes\.find\(\(mode\) => mode\.id === "mixer"\)!,\s*controlModes\.find\(\(mode\) => mode\.id === "live"\)!,\s*\]/,
-  "Edit domain exposes Lighting, Video, and Timeline in stable order",
+  /editDomainModes = \[\s*controlModes\.find\(\(mode\) => mode\.id === "edit"\)!,\s*controlModes\.find\(\(mode\) => mode\.id === "mixer"\)!,\s*controlModes\.find\(\(mode\) => mode\.id === "both"\)!,\s*controlModes\.find\(\(mode\) => mode\.id === "live"\)!,\s*\]/,
+  "Edit domain exposes Lighting, Video, Both, and Timeline in stable order",
 );
 
 assert.match(styles, /\.videoClipSlotBankPanel \{[\s\S]*overflow: auto;/, "bank scroll remains internal");

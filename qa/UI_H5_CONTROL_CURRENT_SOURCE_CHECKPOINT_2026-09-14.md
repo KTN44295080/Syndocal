@@ -1268,3 +1268,45 @@ not present in the current Control > Video DOM or native screenshot. This
 distinction was verified against the current source and rendered QA build;
 it does not establish where an earlier screenshot was taken or claim that a
 separate Edit layout issue has been fixed.
+
+## Control > Video empty-bank clarity — 2026-09-30
+
+The native blank-project Control > Video capture above still displayed 32
+empty clip pads, their `More` buttons, and disabled transition fields before a
+video layer existed. The Control bank now replaces that unusable grid with an
+import prompt, keeps the Import action visible, and shows transition fields
+only after a layer is selected. A project with layers retains its existing
+selection, slot, keyboard, preview, and queue behavior. The Edit bank remains
+on its previous rendering path. Typography and existing control sizes were not
+reduced.
+
+The Control viewport gate passed at five screen sizes using an isolated Vite
+port (`SYNDOCAL_VIEWPORT_VITE_PORT=5187`) because port 5173 belonged to a
+separate BQB-Web process. The harness now accepts that explicit port and no
+longer mislabels an unknown listener as its own leak or instructs unverified
+process termination. Japanese static labels passed localization coverage.
+
+`check-video-clip-slot-bank.mjs` passed after updating its stale Edit-domain
+expectation from three tabs to the current Lighting/Video/Both/Timeline order.
+The real-browser Clip Bank gate passed at `1920x1080`, `1920x1032`,
+`1366x768`, `1280x720`, and `860x520`: authored Edit and Control projects
+retained all 32 pads, active/queued/pending truth, transitions, internal
+scroll, and controls at least 44 px tall. The first browser attempt failed
+during temporary-profile removal because Edge Crashpad still held a file;
+the harness now asks its own browser to close and waits longer for profile
+release. The next run exposed a stale global FX-panel count: the current
+fixture mounts seven panels across surfaces, while the Edit inspector itself
+still mounts exactly one. The assertion now checks that named inspector
+scope. It passed on rerun without touching other browser processes.
+
+The final isolated QA release build passed with pinned MSVC 14.44.35207 and
+zero first-party Rust warnings. Its SHA-256 is
+`cd7a0c3891a5653fe9993506fad8e297236785056b43a20b4e9f0217b53372a4`;
+Vite retained its existing `>500 kB` chunk advisory. The native
+[empty-bank image](artifacts/native-control-video-empty-2026-09-30.png) and
+[machine evidence](artifacts/native-control-video-empty-2026-09-30.json) were
+inspected at `1280x752` CSS pixels. They show only the Import control in the
+empty toolbar, the guidance message in place of the 32 empty pads, no page
+overflow, and the same upper/lower pane geometry. The QA process closed and
+the normal app identity remained unchanged. No clip was imported, output
+activated, or physical device exercised; `UI-H5-CONTROL-001` remains `Open`.

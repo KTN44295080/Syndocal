@@ -309,3 +309,13 @@ This current route contains Clip Bank, not `PREVIEW TRANSPORT`; source places
 that component under Edit > Video Mixer. The user's cropped image alone does
 not identify its original route, so this is a current-source finding, not a
 claim that the depicted panel was repaired in Control.
+
+The current Control > Video empty project had displayed 32 unusable slot
+menus and disabled transition fields. This is now an import-led empty state;
+the authored 32-slot flow remains available when a layer exists. The
+[final native image](artifacts/native-control-video-empty-2026-09-30.png) and
+[machine proof](artifacts/native-control-video-empty-2026-09-30.json) show the
+blank state in one exact-path maximized QA window. Five-viewport authored
+Clip Bank browser checks, the Control viewport gate, localization, and the
+isolated native build passed. The Control UI ledger remains Open for the
+broader live/hardware/accessibility/recovery acceptance.

@@ -136,6 +136,9 @@ if ($windows.Count -ne 1 -or $windows[0].Id -ne ${child.pid} -or !$windows[0].Re
       tabsLeft: Boolean(tabs && layout && rect(tabs).left <= rect(layout).left + 8),
       upperFullWidth: Boolean(upper && layout && Math.abs(rect(upper).width - rect(layout).width) <= 2),
       clipBankVisible: visible(upper?.querySelector('.videoClipSlotBankPanel')),
+      emptyStateVisible: visible(upper?.querySelector('.videoClipSlotEmptyState')),
+      emptySlotGridPresent: Boolean(upper?.querySelector('.videoClipSlotBankGrid')),
+      emptyToolbarControlCount: upper?.querySelectorAll('.videoClipSlotBankToolbar button, .videoClipSlotBankToolbar select').length ?? 0,
       previewTransportPresent: Boolean(upper?.querySelector('.vjPreviewTransport')),
       lowerSideBySide: lower.every(visible) && lower.every(node => rect(node).top >= rect(upper).bottom - 2) && rect(lower[0]).right <= rect(lower[1]).left + 2,
       outerOverflow: window.scrollX !== 0 || window.scrollY !== 0 || document.documentElement.scrollWidth > window.innerWidth + 1,
@@ -147,8 +150,8 @@ if ($windows.Count -ne 1 -or $windows[0].Id -ne ${child.pid} -or !$windows[0].Re
     JSON.stringify(proof),
   );
   else assert.deepEqual(
-    [proof.controlSelected, proof.videoSelected, proof.tabsLeft, proof.upperFullWidth, proof.clipBankVisible, proof.previewTransportPresent, proof.lowerSideBySide, proof.outerOverflow],
-    [true, true, true, true, true, false, true, false],
+    [proof.controlSelected, proof.videoSelected, proof.tabsLeft, proof.upperFullWidth, proof.clipBankVisible, proof.emptyStateVisible, proof.emptySlotGridPresent, proof.emptyToolbarControlCount, proof.previewTransportPresent, proof.lowerSideBySide, proof.outerOverflow],
+    [true, true, true, true, true, true, false, 1, false, true, false],
     JSON.stringify(proof),
   );
   const capture = await backend.send('Page.captureScreenshot', { format: 'png', fromSurface: true });

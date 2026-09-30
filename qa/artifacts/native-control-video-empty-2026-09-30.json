@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "timestamp": "2026-09-30T08:26:23.547Z",
+  "passed": true,
+  "domain": "video",
+  "executable": "C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-native-acceptance-target\\release\\syndocal.exe",
+  "executableSha256": "cd7a0c3891a5653fe9993506fad8e297236785056b43a20b4e9f0217b53372a4",
+  "runnerSha256": "6ec1c686772222135ac0be6fbe68de8fbc285b4ae27a9cfa02e700ba6744ca59",
+  "backendHarnessSha256": "ade29aa256d8ff17374bb4b3e893ea9a07f71f8fa2cf2bb72b21f80d4e0e8b1f",
+  "processId": 61420,
+  "screenshot": "C:\\Users\\janua\\OneDrive\\ドキュメント\\GitHub\\Syndocal\\qa\\artifacts\\native-control-video-empty-2026-09-30.png",
+  "proof": {
+    "viewport": [
+      1280,
+      752
+    ],
+    "controlSelected": true,
+    "videoSelected": true,
+    "tabsLeft": true,
+    "upperFullWidth": true,
+    "clipBankVisible": true,
+    "emptyStateVisible": true,
+    "emptySlotGridPresent": false,
+    "emptyToolbarControlCount": 1,
+    "previewTransportPresent": false,
+    "lowerSideBySide": true,
+    "outerOverflow": false,
+    "screenshotSha256": "6b66b57ec29b6b22e6a4da055d13a6d5c326ecd3a9bfb3e93fe28cb9f060c754"
+  },
+  "normalAppIdentityUnchanged": true,
+  "error": null,
+  "nonclaims": [
+    "Read-only/control-navigation native surface proof only",
+    "No output, physical device, recording, or venue workflow"
+  ]
+}

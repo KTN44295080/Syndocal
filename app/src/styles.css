@@ -39839,6 +39839,18 @@ button.timelineExternalSourceCard:active,
   container-name: video-clip-bank;
 }
 
+.videoClipSlotEmptyState {
+  display: grid;
+  place-items: center;
+  min-height: 112px;
+  margin: 0;
+  padding: 20px;
+  border: 1px dashed #48535a;
+  border-radius: 6px;
+  color: #b7c2c8;
+  text-align: center;
+}
+
 .videoClipSlotBankHeader,
 .touchVideoClipBankHeader {
   display: flex;
@@ -39891,6 +39903,10 @@ button.timelineExternalSourceCard:active,
   grid-template-columns: repeat(auto-fit, minmax(min(168px, 100%), 1fr));
   align-items: end;
   gap: 8px;
+}
+
+.videoClipSlotBankPanel[data-video-clip-slot-bank="control"][data-video-clip-slot-has-layers="false"] .videoClipSlotBankToolbar {
+  grid-template-columns: minmax(180px, 240px);
 }
 
 .videoClipSlotBankToolbar label,

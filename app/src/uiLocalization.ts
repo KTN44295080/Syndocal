@@ -2911,6 +2911,8 @@ const japaneseText: Record<string, string> = {
   "No remote clients connected.": "リモートクライアントは接続されていません。",
   "No render plan status": "レンダープラン状態なし",
   "No video layers. Add a file, still, or input above.": "映像レイヤーがありません。上でファイル、静止画、または入力を追加してください。",
+  "No video layer yet. Import media to prepare clips.": "映像レイヤーがありません。メディアを読み込んでクリップを準備してください。",
+  "Choose a video layer to prepare clips.": "映像レイヤーを選んでクリップを準備してください。",
   "No video layers. Add one in Setup &gt; Output.": "映像レイヤーがありません。セットアップ > 出力で追加してください。",
   "No video targets in this scope.": "この範囲に映像対象がありません。",
   "Node graph preview": "ノードグラフプレビュー",

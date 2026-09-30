@@ -139,10 +139,13 @@ const viewportFixture = process.env.SYNDOCAL_VIEWPORT_FIXTURE ?? (
                 ? "timeline-layered"
                 : "timeline"
 );
+const vitePort = Number(process.env.SYNDOCAL_VIEWPORT_VITE_PORT ?? 5173);
+assert.ok(Number.isSafeInteger(vitePort) && vitePort >= 1024 && vitePort <= 65535, "Invalid viewport Vite port");
+const defaultOrigin = `http://127.0.0.1:${vitePort}/`;
 const defaultUrl =
   viewportFixture === "none"
-    ? "http://127.0.0.1:5173/"
-    : `http://127.0.0.1:5173/?syndocalViewportFixture=${encodeURIComponent(viewportFixture)}`;
+    ? defaultOrigin
+    : `${defaultOrigin}?syndocalViewportFixture=${encodeURIComponent(viewportFixture)}`;
 const appUrl = process.env.SYNDOCAL_VIEWPORT_URL ?? defaultUrl;
 const fixtureUrl = (fixture) => {
   const url = new URL(appUrl);
@@ -152,7 +155,6 @@ const fixtureUrl = (fixture) => {
 const shouldStartVite = appUrl === defaultUrl && process.env.SYNDOCAL_VIEWPORT_NO_SERVER !== "1";
 const shouldPreviewBuiltApp = process.env.SYNDOCAL_VIEWPORT_PREVIEW === "1";
 const shouldCheckTimelineAutomation = new URL(appUrl).searchParams.get("syndocalViewportFixture") === "timeline";
-const vitePort = 5173;
 const cdpPort = Number(process.env.SYNDOCAL_CDP_PORT ?? 9227);
 const screenshotDir = process.env.SYNDOCAL_VIEWPORT_SCREENSHOT_DIR
   ? resolve(process.env.SYNDOCAL_VIEWPORT_SCREENSHOT_DIR)
@@ -703,8 +705,9 @@ async function failIfPortOccupied(port, description) {
     // netstat parsing is best-effort; the error below is still actionable.
   }
   throw new Error(
-    `${description} port ${port} is already in use (pid ${owner}) - a previous harness run leaked. ` +
-      `Kill it first: taskkill /PID ${owner} /T /F`,
+    `${description} port ${port} is already in use (pid ${owner}). ` +
+      `Choose an unused port with ${description === "Syndocal dev server" ? "SYNDOCAL_VIEWPORT_VITE_PORT" : "SYNDOCAL_CDP_PORT"}; ` +
+      "inspect process ownership before stopping any listener.",
   );
 }
 

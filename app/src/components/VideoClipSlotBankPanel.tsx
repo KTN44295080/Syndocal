@@ -85,6 +85,7 @@ export function VideoClipSlotBankPanel(props: VideoClipSlotBankPanelProps) {
       aria-label={props.mode === "edit" ? "Video clip bank editor" : "Video clip bank control"}
       data-video-clip-slot-bank={props.mode}
       data-video-clip-slot-layer-id={props.layer?.id}
+      data-video-clip-slot-has-layers={props.layers.length > 0 ? "true" : "false"}
     >
       <header class="videoClipSlotBankHeader">
         <div>
@@ -109,6 +110,7 @@ export function VideoClipSlotBankPanel(props: VideoClipSlotBankPanelProps) {
         </span>
       </header>
       <div class="videoClipSlotBankToolbar">
+        <Show when={props.mode !== "control" || props.layers.length > 0}>
         <label>
           Layer
           <select
@@ -119,8 +121,9 @@ export function VideoClipSlotBankPanel(props: VideoClipSlotBankPanelProps) {
             <For each={props.layers}>{(layer) => <option value={layer.id} data-no-localize>{layer.label}</option>}</For>
           </select>
         </label>
+        </Show>
         <button type="button" onClick={() => void props.onImport()}>Import</button>
-        <Show when={props.mode === "control"}>
+        <Show when={props.mode === "control" && props.layer != null}>
           <label>
             Launch quantization
             <select
@@ -189,6 +192,11 @@ export function VideoClipSlotBankPanel(props: VideoClipSlotBankPanelProps) {
           </button>
         </Show>
       </div>
+      <Show when={props.mode === "edit" || props.layer != null} fallback={
+        <p class="videoClipSlotEmptyState">
+          {props.layers.length > 0 ? "Choose a video layer to prepare clips." : "No video layer yet. Import media to prepare clips."}
+        </p>
+      }>
       <div ref={bankGrid} class="videoClipSlotBankGrid" role="grid" aria-label="32 video clip slots">
         <For each={cells()}>{(cell) => {
           const slotId = () => cell.slot?.id ?? null;
@@ -252,6 +260,7 @@ export function VideoClipSlotBankPanel(props: VideoClipSlotBankPanelProps) {
           );
         }}</For>
       </div>
+      </Show>
     </section>
   );
 }
