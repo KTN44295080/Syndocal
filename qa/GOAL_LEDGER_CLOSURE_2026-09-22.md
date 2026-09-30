@@ -302,3 +302,10 @@ inspected [screenshot](artifacts/native-control-both-2026-09-30.png) with
 app identity remained unchanged and the QA process was closed. No output
 control was activated. `UI-H5-CONTROL-001` remains Open for the independent
 physical, operational, accessibility, and recovery acceptance boundaries.
+
+The same native probe also recorded [Control > Video](artifacts/native-control-video-2026-09-30.png)
+and its [geometry evidence](artifacts/native-control-video-2026-09-30.json).
+This current route contains Clip Bank, not `PREVIEW TRANSPORT`; source places
+that component under Edit > Video Mixer. The user's cropped image alone does
+not identify its original route, so this is a current-source finding, not a
+claim that the depicted panel was repaired in Control.

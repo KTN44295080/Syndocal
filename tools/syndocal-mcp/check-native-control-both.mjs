@@ -10,6 +10,9 @@ import { parseOptions, readDescriptor } from './server.mjs';
 
 const exec = promisify(execFile);
 const args = process.argv.slice(2);
+const domainFlag = args.indexOf('--domain');
+const domain = domainFlag >= 0 ? args.splice(domainFlag, 2)[1] : 'both';
+assert.ok(['both', 'video'].includes(domain), 'Domain must be both or video');
 const take = name => {
   const index = args.indexOf(name);
   assert.ok(index >= 0 && index + 1 < args.length, `Required: ${name}`);
@@ -96,9 +99,9 @@ if ($windows.Count -ne 1 -or $windows[0].Id -ne ${child.pid} -or !$windows[0].Re
     if (!navigated) await pause(100);
   }
   assert.ok(navigated, 'Control workspace navigation was not ready');
-  assert.equal(await click('[data-control-domain="both"]'), true);
+  assert.equal(await click(`[data-control-domain="${domain}"]`), true);
   await pause(250);
-  proof = await backend.evaluate(`(() => {
+  proof = domain === 'both' ? await backend.evaluate(`(() => {
     const layout = document.querySelector('.layoutTouch.touchDomainBoth');
     const desk = layout?.querySelector(':scope > .touchBothLivePanel');
     const tabs = layout?.querySelector(':scope > .touchControlDomainTabs');
@@ -119,10 +122,33 @@ if ($windows.Count -ne 1 -or $windows[0].Id -ne ${child.pid} -or !$windows[0].Re
       minimumControlHeight: Math.min(...controls.map(node => rect(node).height)),
       outerOverflow: window.scrollX !== 0 || window.scrollY !== 0 || document.documentElement.scrollWidth > window.innerWidth + 1,
     };
+  })()`) : await backend.evaluate(`(() => {
+    const layout = document.querySelector('.layoutTouch.touchDomainVideo');
+    const upper = layout?.querySelector(':scope > .touchVideoPanel');
+    const tabs = layout?.querySelector(':scope > .touchControlDomainTabs');
+    const rect = node => node?.getBoundingClientRect();
+    const visible = node => Boolean(node && rect(node).width > 0 && rect(node).height > 0 && getComputedStyle(node).display !== 'none');
+    const lower = ['lower-left', 'lower-right'].map(name => layout?.querySelector('[data-workspace-pane="' + name + '"]'));
+    return {
+      viewport: [window.innerWidth, window.innerHeight],
+      controlSelected: document.querySelector('[data-workspace-option="touch"]')?.getAttribute('aria-pressed') === 'true',
+      videoSelected: document.querySelector('[data-control-domain="video"]')?.getAttribute('aria-pressed') === 'true',
+      tabsLeft: Boolean(tabs && layout && rect(tabs).left <= rect(layout).left + 8),
+      upperFullWidth: Boolean(upper && layout && Math.abs(rect(upper).width - rect(layout).width) <= 2),
+      clipBankVisible: visible(upper?.querySelector('.videoClipSlotBankPanel')),
+      previewTransportPresent: Boolean(upper?.querySelector('.vjPreviewTransport')),
+      lowerSideBySide: lower.every(visible) && lower.every(node => rect(node).top >= rect(upper).bottom - 2) && rect(lower[0]).right <= rect(lower[1]).left + 2,
+      outerOverflow: window.scrollX !== 0 || window.scrollY !== 0 || document.documentElement.scrollWidth > window.innerWidth + 1,
+    };
   })()`);
-  assert.deepEqual(
+  if (domain === 'both') assert.deepEqual(
     [proof.controlSelected, proof.bothSelected, proof.tabsLeft, proof.upperFullWidth, proof.laneCount, proof.splitHidden, proof.lowerSideBySide, proof.controlCount >= 8, proof.minimumControlHeight >= 47.5, proof.outerOverflow],
     [true, true, true, true, 2, true, true, true, true, false],
+    JSON.stringify(proof),
+  );
+  else assert.deepEqual(
+    [proof.controlSelected, proof.videoSelected, proof.tabsLeft, proof.upperFullWidth, proof.clipBankVisible, proof.previewTransportPresent, proof.lowerSideBySide, proof.outerOverflow],
+    [true, true, true, true, true, false, true, false],
     JSON.stringify(proof),
   );
   const capture = await backend.send('Page.captureScreenshot', { format: 'png', fromSurface: true });
@@ -146,7 +172,7 @@ const normalAppIdentityUnchanged = beforeNormal === null ? afterNormal === null 
 if (!normalAppIdentityUnchanged) {
   failure ??= new Error('Normal app identity changed');
 }
-await fs.writeFile(evidence, `${JSON.stringify({ schemaVersion: 1, timestamp: new Date().toISOString(), passed: !failure, executable,
+await fs.writeFile(evidence, `${JSON.stringify({ schemaVersion: 1, timestamp: new Date().toISOString(), passed: !failure, domain, executable,
   executableSha256: createHash('sha256').update(await fs.readFile(executable)).digest('hex'),
   runnerSha256: createHash('sha256').update(await fs.readFile(new URL('./check-native-control-both.mjs', import.meta.url))).digest('hex'),
   backendHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-backend-session.mjs', import.meta.url))).digest('hex'),
@@ -156,4 +182,4 @@ await fs.writeFile(evidence, `${JSON.stringify({ schemaVersion: 1, timestamp: ne
   nonclaims: ['Read-only/control-navigation native surface proof only', 'No output, physical device, recording, or venue workflow'],
 }, null, 2)}\n`, { flag: 'wx' });
 if (failure) throw failure;
-console.log(`PASS native Control > Both surface: ${proof.viewport.join('x')}; screenshot ${screenshot}`);
+console.log(`PASS native Control > ${domain} surface: ${proof.viewport.join('x')}; screenshot ${screenshot}`);

@@ -1256,3 +1256,15 @@ overflow, and the screenshot SHA-256. The normal app descriptor was unchanged;
 the QA process was closed. The native image was visually inspected and shows
 the requested top-one/bottom-two composition. The probe never clicks cue,
 master, blackout, output, or recording controls.
+
+The same exact-process probe selected Control > Video at `1280x752` CSS pixels.
+[Its native screenshot](artifacts/native-control-video-2026-09-30.png) and
+[machine evidence](artifacts/native-control-video-2026-09-30.json) show a
+full-width Clip Bank above the same two lower panes, with the domain tabs on
+the left and no outer page overflow. The `PREVIEW TRANSPORT` component visible
+in the user's cropped image is `LiveVideoMonitorPanel` in the current source;
+its only mounted route is the top-level Edit workspace's Video Mixer. It is
+not present in the current Control > Video DOM or native screenshot. This
+distinction was verified against the current source and rendered QA build;
+it does not establish where an earlier screenshot was taken or claim that a
+separate Edit layout issue has been fixed.
