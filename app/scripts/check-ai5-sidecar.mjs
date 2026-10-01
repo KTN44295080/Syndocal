@@ -110,12 +110,13 @@ for (const marker of [
   "fresh client nonce",
   "HMAC-SHA256",
   "exact ExternalMcp grant",
-  "R4/R5 requests remain consent-bound",
+  "execute granted R4/R5 operations without individual human approval",
   "stdio mode writes nothing except newline-delimited MCP JSON-RPC to stdout",
 ]) required(readme, marker, "sidecar security contract");
 
 ordered(server, ["readDescriptor(options)", "readCredential(options)", "createHmac('sha256'", "socket.write(wire)"], "proof before forwarding");
-ordered(bridge, ["agent_authentication_required", "authenticate_proof", "authorize_bridge_request", "ledger.begin"], "native admission order");
+const socketProcessor = bridge.slice(bridge.indexOf("fn process(inner:"), bridge.indexOf("fn serve("));
+ordered(socketProcessor, ["agent_authentication_required", "authenticate_proof", "authorize_bridge_request", "ledger.begin"], "native admission order");
 
 if (process.argv.includes("--self-test")) {
   assert.equal(/^[0-9a-f]{64}$/u.test("a".repeat(64)), true);

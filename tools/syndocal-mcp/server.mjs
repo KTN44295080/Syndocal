@@ -39,6 +39,11 @@ const CANONICAL_OPERATION_IDS = new Set([
   'syndocal.safety.blackout.engage.v1',
   'syndocal.output.blackout.release.v2',
   'syndocal.output.blackout.set.v2',
+  'syndocal.output.lighting.master.set.v2',
+  'syndocal.output.group.submaster.set.v2',
+  'syndocal.output.video.master.set.v2',
+  'syndocal.output.video.clip.take.v2',
+  'syndocal.output.video.clip.launch.v2',
   'syndocal.output.ownership.arm.v2',
   'syndocal.output.standby.takeover.v2',
   'syndocal.output.display.add.v2',
@@ -83,7 +88,8 @@ export const toolDefinitions = [
   { name: 'syndocal_get_runtime_status', description: 'Read bounded project runtime diagnostics, timeline state, video outputs, and a separate output-ownership observation from the selected running Syndocal instance. This never changes output state.', inputSchema: schema({}), annotations: { readOnlyHint: true } },
   { name: 'syndocal_get_control_plane_capabilities', description: 'Read the backend-owned canonical operation registry as a bounded capability inventory. It reports which operations have an explicit local-window adapter; FailClosed entries are discovery-only and cannot be invoked through MCP.', inputSchema: schema({}), annotations: { readOnlyHint: true } },
   { name: 'syndocal_get_recording_status', description: 'Read bounded video recording status from the selected running Syndocal instance. This never starts, stops, finalizes, or replaces a recording.', inputSchema: schema({}), annotations: { readOnlyHint: true } },
-  { name: 'syndocal_execute_control_plane', description: 'Execute one of the 47 reviewed canonical backend operations through a static typed Tauri adapter. operationId must come from the capability registry and request must be that operation’s exact typed object. Unreviewed or FailClosed inventory entries are rejected. Supply a fresh requestId; if pending or unknown, query its status before any retry.', inputSchema: schema({ requestId: uuid, operationId: { type: 'string', minLength: 1, maxLength: 512 }, request: { type: 'object', additionalProperties: true } }), annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false } },
+  { name: 'syndocal_export_diagnostics', description: 'Write one sanitized diagnostic ZIP to a new absolute destination path using an exact File grant. No individual human approval is required. Existing files are never replaced. Supply a fresh requestId; query its status after an unknown result.', inputSchema: schema({ requestId: uuid, destination: { type: 'string', minLength: 1, maxLength: 4096 } }), annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false } },
+  { name: 'syndocal_execute_control_plane', description: 'Execute one of the 52 reviewed canonical backend operations through a static typed Tauri adapter. operationId must come from the capability registry and request must be that operation’s exact typed object. Unreviewed or FailClosed inventory entries are rejected. Supply a fresh requestId; if pending or unknown, query its status before any retry.', inputSchema: schema({ requestId: uuid, operationId: { type: 'string', minLength: 1, maxLength: 512 }, request: { type: 'object', additionalProperties: true } }), annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false } },
 ];
 
 const projectFence = (value) => exact(value, ['project_epoch', 'project_revision', 'checkpoint_hash'])
@@ -91,6 +97,11 @@ const projectFence = (value) => exact(value, ['project_epoch', 'project_revision
   && typeof value.checkpoint_hash === 'string' && /^[0-9a-f]{64}$/.test(value.checkpoint_hash);
 
 function validateArguments(name, args) {
+  if (name === 'syndocal_export_diagnostics') return exact(args, ['requestId', 'destination'])
+    && typeof args.requestId === 'string' && UUID.test(args.requestId)
+    && typeof args.destination === 'string' && args.destination.length > 0
+    && args.destination.length <= 4096 && !args.destination.includes('\0')
+    && path.isAbsolute(args.destination);
   if (name === 'syndocal_list_fixtures') return exact(args, []);
   if (name === 'syndocal_get_runtime_status') return exact(args, []);
   if (name === 'syndocal_get_control_plane_capabilities') return exact(args, []);
@@ -312,10 +323,11 @@ export async function dispatchRpc(options, state, req) {
   state.active = true;
   try {
     const args = params.arguments ?? {};
-    const mutation = params.name === 'syndocal_set_fixture_transform' || params.name === 'syndocal_set_video_blackout' || params.name === 'syndocal_execute_control_plane';
+    const mutation = params.name === 'syndocal_set_fixture_transform' || params.name === 'syndocal_set_video_blackout' || params.name === 'syndocal_execute_control_plane' || params.name === 'syndocal_export_diagnostics';
     const requestId = mutation ? args.requestId : randomUUID();
     const method = { syndocal_list_fixtures: 'fixtures.list', syndocal_get_fixture: 'fixtures.get', syndocal_set_fixture_transform: 'fixtures.set_transform', syndocal_set_video_blackout: 'output.set_video_blackout', syndocal_get_request_status: 'request.status', syndocal_get_runtime_status: 'runtime.get', syndocal_get_control_plane_capabilities: 'control_plane.get_capabilities', syndocal_get_recording_status: 'recording.get_status' }[params.name];
-    const nativeMethod = params.name === 'syndocal_execute_control_plane' ? 'control_plane.execute' : method;
+    const nativeMethod = params.name === 'syndocal_execute_control_plane' ? 'control_plane.execute'
+      : params.name === 'syndocal_export_diagnostics' ? 'diagnostics.export' : method;
     const nativeParams = params.name === 'syndocal_execute_control_plane'
       ? { operationId: args.operationId, request: args.request }
       : mutation ? Object.fromEntries(Object.entries(args).filter(([key]) => key !== 'requestId')) : args;

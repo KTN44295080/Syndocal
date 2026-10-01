@@ -1702,7 +1702,10 @@ Exit: all five AI3 roadmap categories accepted. Do not begin AI4 before this exi
 - [ ] AI8 release-native real external clients, clean install, hardware output, <!-- completion-ledger: Open: AI8-EXTERNAL-ACCEPTANCE-001 -->
   crash/restart, security review, and artifact inspection.
 
-Exit: AI0-AI8 accepted without weakening local Blackout or claiming unattended R4/R5.
+Exit: AI0-AI8 accepted without weakening local Blackout. Per the user's
+2026-10-02 decision in the AI control-plane roadmap, external MCP R4/R5 uses
+exact grants without individual human approval; prove that policy and its
+remaining authentication/fence/lease/revocation boundaries in the native gate.
 
 ### Phase 4 — Output ownership, project swap, and ShowClock decision freeze
 

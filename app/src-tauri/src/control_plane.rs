@@ -64,9 +64,9 @@ const KEYBOARD_SHORTCUT_SOURCE_MANIFEST: &str =
 const KEYBOARD_SHORTCUT_SOURCE_MANIFEST_SCHEMA_VERSION: u16 = 1;
 const KEYBOARD_APP_SHORTCUT_SOURCE_COUNT: usize = 30;
 const KEYBOARD_PROJECT_FILE_SHORTCUT_SOURCE_COUNT: usize = 3;
-const FROZEN_TAURI_ROUTE_ADMISSION_COUNT: usize = 541;
+const FROZEN_TAURI_ROUTE_ADMISSION_COUNT: usize = 542;
 const FROZEN_TAURI_ROUTE_ADMISSION_SHA256: &str =
-    "3f650522022988b9eb1d99192ad12fcae7511b5e10268c0ae206a029cc27d83b";
+    "8ed21a9cc56c0b4e16120bf13563812e5657d5ae055c08da5e51b66a48468d3f";
 /// The command source is parsed and validated exactly once.  Local discovery
 /// calls only clone this immutable, validated value; they never parse source
 /// text or make an external request on the invocation path.
@@ -140,6 +140,7 @@ fn classify_registered_tauri_route(command: &str) -> Option<TauriRouteAdmissionC
         "agent_bridge_claim_v1"
             | "agent_bridge_complete_v1"
             | "agent_bridge_register_v1"
+            | "agent_bridge_execute_native_v1"
             | "agent_authority_approve_pairing_v1"
             | "agent_authority_authenticate_v1"
             | "agent_authority_authorize_with_consent_v1"

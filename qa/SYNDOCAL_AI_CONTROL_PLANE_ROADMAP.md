@@ -1,5 +1,17 @@
 # Syndocal AI Control Plane roadmap
 
+## 2026-10-02 External MCP approval supersession
+
+The user authorized all external MCP R4/R5 operations without individual human
+approval. This supersedes older unattended-operation and human-presence
+requirements for this adapter. Pairing, promotion, exact operation grants,
+revocation, kill switch, typed payload validation, domain fences and output
+lease ownership remain enforced. Local desktop confirmation policy is unchanged.
+Unimplemented and retired operations remain unavailable until a typed canonical
+adapter exists; risk class alone must not reject an implemented MCP operation.
+The native executor must use the immutable authenticated request and consume it
+only once, rather than trusting renderer-supplied execution arguments.
+
 ## 2026-08-21 OutputControl consent supersession
 
 Physical-input consent is no longer part of the product. Supersede every older
@@ -126,8 +138,8 @@ Every operation declares one risk class:
 | `R1 ReversibleRuntime` | select, preview, fader, seek/nudge | runtime grant, rate limit, audit |
 | `R2 LiveVisible` | GO, Take, play, submaster, cue activation | live grant, tighter rate limit, audit |
 | `R3 AuthoredMutation` | Cue/Timeline/Patch/media/mapping edits | authored grant, E/R/H, one Undo, receipt |
-| `R4 OutputDisruptive` | Blackout release, output Arm/Takeover, device switch | output grant, ownership, human-present consent |
-| `R5 FileOrReplacement` | open/new/replace, recording, overwrite/export | explicit grant, prepared single-use consent |
+| `R4 OutputDisruptive` | Blackout release, output Arm/Takeover, device switch | exact output grant and ownership; local adapters retain consent, ExternalMcp has no individual approval |
+| `R5 FileOrReplacement` | open/new/replace, recording, overwrite/export | exact grant; local adapters retain prepared consent, ExternalMcp has no individual approval |
 | `S0 SafetyOnly` | `SafetyBlackoutEngage`, current-owner `ResourceSafeStop` | narrow named capability, safer-direction-only implementation, no per-action consent, priority queue, strict rate limit, immutable audit |
 
 Capabilities are scoped per principal, adapter, risk class, optional project, and
@@ -135,12 +147,14 @@ optional operation family. There is no bearer token that silently means all
 operations. Newly paired external principals start in safe mode: `R0` and the
 explicitly allowed subset of `R1`; `R3`-`R5` are denied until promoted locally.
 
-`R4` and `R5` require a backend-issued short-lived, single-use confirmation token
+For local adapters, `R4` and `R5` require a backend-issued short-lived, single-use confirmation token
 bound to principal, owner incarnation, operation ID, canonical argument
 fingerprint, project/output generation, and expiry. The Syndocal desktop displays
 and accepts consent; an MCP client cannot approve itself. Blackout engagement may
 remain an emergency fail-safe path, but Blackout release, output Arm/Takeover, and
-other energizing operations never inherit blanket consent.
+other energizing local operations never inherit blanket consent. The user-authorized
+ExternalMcp policy uses promotion plus exact operation grants without an individual
+confirmation token; domain ownership, fences, leases and revocation still apply.
 
 Emergency Blackout engagement is a separate `SafetyBlackoutEngage` operation, not
 the ordinary `R4` Blackout-state setter. The local desktop always retains its
@@ -495,16 +509,18 @@ remain the next implementation slices. AI3 remains incomplete.
   Release, advanced Arm, Take Over, Add Display, and Force Transfer are the only
   dangerous OutputControl actions admitted through the parented OS-native
   Warning/Yes-No confirmation seam; only the backend-observed native Yes result
-  proceeds. Remote/API/MIDI/OSC/DMX/shortcut routes cannot invoke these mutations.
+  proceeds. ExternalMcp has a separate authenticated immutable-request adapter
+  authorized by exact grants without this dialog. Remote/MIDI/OSC/DMX/shortcut
+  routes cannot invoke these mutations through that adapter.
 
 ## 8. Release blockers and non-claims
 
 The following are P0/P1 until closed:
 
 - any project/output mutation bypassing the registry;
-- external `R4`/`R5` execution outside its exact reviewed adapter and consent
-  policy (`LocalExplicitAction` for normal Enable, `NativeDangerConfirmation`
-  for dangerous local output actions);
+- external `R4`/`R5` execution outside its exact reviewed adapter and grant
+  policy; local actions retain `LocalExplicitAction` for normal Enable and
+  `NativeDangerConfirmation` for dangerous local output actions;
 - accepting localhost, PID, process name, or possession of a port as principal
   authentication, or exposing registry state before the authenticated handshake;
 - allowing emergency Blackout engage to toggle/release output, or failing to keep

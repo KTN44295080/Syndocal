@@ -29,6 +29,11 @@ pub(super) const CANONICAL_OPERATION_IDS: &[&str] = &[
     "syndocal.safety.blackout.engage.v1",
     "syndocal.output.blackout.release.v2",
     "syndocal.output.blackout.set.v2",
+    "syndocal.output.lighting.master.set.v2",
+    "syndocal.output.group.submaster.set.v2",
+    "syndocal.output.video.master.set.v2",
+    "syndocal.output.video.clip.take.v2",
+    "syndocal.output.video.clip.launch.v2",
     "syndocal.output.ownership.arm.v2",
     "syndocal.output.standby.takeover.v2",
     "syndocal.output.display.add.v2",
@@ -100,12 +105,19 @@ pub(super) enum Command {
     ControlPlaneCapabilities(Empty),
     #[serde(rename = "recording.get_status")]
     RecordingStatus(Empty),
+    #[serde(rename = "diagnostics.export")]
+    ExportDiagnostics(DiagnosticExport),
     #[serde(rename = "control_plane.execute")]
     ControlPlaneExecute(CanonicalOperation),
 }
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Empty {}
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(super) struct DiagnosticExport {
+    pub destination: String,
+}
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Fixture {
@@ -190,6 +202,7 @@ impl Request {
                 | "runtime.get"
                 | "control_plane.get_capabilities"
                 | "recording.get_status"
+                | "diagnostics.export"
                 | "control_plane.execute"
         ) {
             return Err("unknown_method");
@@ -199,6 +212,10 @@ impl Request {
                 .map_err(|_| "invalid_params")?;
         const MAX_SAFE: u64 = 9_007_199_254_740_991;
         match &command {
+            Command::ExportDiagnostics(value) if value.destination.is_empty()
+                || value.destination.len() > 4096 || value.destination.contains('\0') => {
+                return Err("invalid_diagnostic_destination")
+            }
             Command::Get(value) if value.fixture_id == 0 || value.fixture_id > MAX_SAFE => {
                 return Err("invalid_fixture_id")
             }

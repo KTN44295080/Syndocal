@@ -18,6 +18,7 @@ fn command(method: &str) -> Command {
             serde_json::json!({})
         }
         "fixtures.get" => serde_json::json!({"fixtureId": 1}),
+        "diagnostics.export" => serde_json::json!({"destination": "C:/diagnostics/new.zip"}),
         "output.set_video_blackout" => serde_json::json!({
             "enabled": true,
             "expectedProject": {
@@ -709,4 +710,24 @@ fn agent_bridge_restart_retains_mutation_identity_without_automatic_replay() {
     drop(restarted);
     std::fs::remove_file(path).unwrap();
     std::fs::remove_dir(directory).unwrap();
+}
+
+#[test]
+fn agent_bridge_native_execution_requires_current_claim_and_is_single_use() {
+    let mut ledger = ledger::Ledger::new(None).unwrap();
+    let generation = ledger.register().unwrap();
+    ledger.begin_owned(&id(1), &command("diagnostics.export"), "external-a", 2).unwrap();
+    assert!(ledger.start_native_execution(generation, &id(1)).is_err());
+    ledger.claim(generation, &id(1)).unwrap();
+    assert!(ledger.start_native_execution(generation + 1, &id(1)).is_err());
+    let dispatch = ledger.start_native_execution(generation, &id(1)).unwrap();
+    assert_eq!(dispatch.principal_id, "external-a");
+    assert_eq!(dispatch.principal_incarnation, 2);
+    assert_eq!(dispatch.params, serde_json::json!({"destination": "C:/diagnostics/new.zip"}));
+    assert!(ledger.start_native_execution(generation, &id(1)).is_err());
+    ledger.complete(generation, &id(1), serde_json::json!({"ok": true})).unwrap();
+    assert!(ledger.start_native_execution(generation, &id(1)).is_err());
+    ledger.begin(&id(2), &command("fixtures.list")).unwrap();
+    ledger.claim(generation, &id(2)).unwrap();
+    assert!(ledger.start_native_execution(generation, &id(2)).is_err());
 }

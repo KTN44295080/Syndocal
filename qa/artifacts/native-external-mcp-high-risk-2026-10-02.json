@@ -1,0 +1,85 @@
+{
+  "schemaVersion": 1,
+  "timestamp": "2026-10-01T19:16:20.527Z",
+  "passed": true,
+  "executable": "C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-native-acceptance-target\\release\\syndocal.exe",
+  "executableSha256": "671fb83527bc8cdc961414b71fc830b5e293e0e54afada5212d0ebb8474359d4",
+  "sidecarSha256": "11b679da9be2106ee30573b4d468f83ac5b9edccd4608c88d389e3156d2ed047",
+  "runnerSha256": "57bbe955d143dd0fdfa1a17a038def301fc70e0126f086b0d620374a63391644",
+  "backendHarnessSha256": "ade29aa256d8ff17374bb4b3e893ea9a07f71f8fa2cf2bb72b21f80d4e0e8b1f",
+  "highRiskHarnessSha256": "667c54bb46a8eca400e0a8141c3e538c05ab8a1d3956e2f213aa9670898f0bb0",
+  "stdioHarnessSha256": "91ba560e9b701ee4621ddb9b07209c010ca393600e24cfa8d8110edc26041ffd",
+  "highRiskTransport": "Separate stdio MCP sidecar process forwarding to the authenticated native broker",
+  "profile": "jp.seraf.ktn.syndocal.qa.mcp-lifecycle",
+  "checks": [
+    {
+      "check": "external-r5-no-approval-export-exact-grant-safe-mode-no-overwrite-replay",
+      "passed": true,
+      "sha256": "60c57ba91099bfde5646a1726ec2494f1829b1be55d2f0404f7d1b9bd24c7cc9",
+      "bytes": 4798
+    },
+    {
+      "check": "external-r4-acquire-renew-same-owner-transfer-rejected",
+      "passed": true
+    },
+    {
+      "check": "external-r4-no-dialog-owner-transfer-stale-generation-rejected-relinquish-without-output",
+      "passed": true,
+      "ownership": {
+        "role": "Standby",
+        "effective_role": "Standby",
+        "desired_role": "Both",
+        "persisted_role": "Both",
+        "state": "Failed",
+        "generation": 0,
+        "epoch": 0,
+        "lighting_allowed": false,
+        "video_allowed": false,
+        "lighting_reason": "StartupDenied",
+        "video_reason": "StartupDenied",
+        "error": "Startup is fail-closed; explicitly arm machine output role Both"
+      }
+    },
+    {
+      "check": "native-execution-stale-renderer-rejected",
+      "passed": true
+    },
+    {
+      "check": "isolated-first-launch-read",
+      "passed": true
+    },
+    {
+      "check": "dead-process-descriptor-rejected",
+      "passed": true
+    },
+    {
+      "check": "crash-restart-retired-principal-rejected",
+      "passed": true
+    },
+    {
+      "check": "old-credential-and-receipt-not-adopted",
+      "passed": true
+    },
+    {
+      "check": "old-launch-proof-rejected-fresh-read-succeeds",
+      "passed": true
+    },
+    {
+      "check": "graceful-native-close",
+      "passed": true
+    },
+    {
+      "check": "graceful-restart-does-not-restore-grant",
+      "passed": true
+    }
+  ],
+  "normalAppIdentityUnchanged": true,
+  "credentialRevoked": true,
+  "credentialFileRemoved": true,
+  "nativePanicLocations": [],
+  "nonclaims": [
+    "QA identifier release build, not the distributed artifact",
+    "No authored mutation or physical output activation; optional high-risk probe mutates isolated backend lease authority only",
+    "No durable authored/output mutation crash publication acceptance"
+  ]
+}

@@ -353,3 +353,16 @@ tests, so that initial result is not counted as test evidence.
 The user subsequently authorized removing individual human approval from all
 external MCP R4/R5 operations. That policy change is the next checkpoint;
 the expiry-clock fix above preserves the current local prepared-consent path.
+
+## External MCP R4/R5 without individual approval — 2026-10-02
+
+Base `d78fedca`. The user-authorized policy is implemented and passed the
+optimized native gate, including eleven real stdio MCP/native lifecycle
+checks. The native probe also exposed and repaired serialization of an
+existing legal orphaned-lease transfer. Exact change, compatibility boundary,
+test selection, executable/harness identity and unresolved scope are recorded
+once in [the checkpoint](EXTERNAL_MCP_UNATTENDED_2026-10-02.md) and its linked
+machine evidence. The overall ledger remains 27 Complete, 23 Open and
+8 Deferred; the goal remains active. Further work should address typed MCP
+gaps and supported migration/security/observability evidence without adopting
+the protected Remote PIN/DJ ingress changes listed above.

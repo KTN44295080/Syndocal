@@ -9,11 +9,14 @@ import { createHash, createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { parseOptions, readDescriptor, nativeRequest } from './server.mjs';
 import { openNativeBackendSession } from './native-backend-session.mjs';
 import { nativeDiagnosticExports } from './native-diagnostic-exports.mjs';
+import { nativeExternalHighRisk } from './native-external-high-risk.mjs';
 
 const exec = promisify(execFile);
 const args = process.argv.slice(2);
 const diagnostics = args.includes('--diagnostics');
 if (diagnostics) args.splice(args.indexOf('--diagnostics'), 1);
+const externalHighRisk = args.includes('--external-high-risk');
+if (externalHighRisk) args.splice(args.indexOf('--external-high-risk'), 1);
 const take = name => { const index = args.indexOf(name); assert.ok(index >= 0 && index + 1 < args.length, `Required: ${name}`); return args.splice(index, 2)[1]; };
 const executable = take('--expected-executable');
 const evidence = take('--evidence');
@@ -40,6 +43,7 @@ let approval;
 let credentialDirectory;
 let cleanupNeeded = false;
 let failure;
+let nativeStderr = '';
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 const readNormalDescriptor = () => fs.readFile(path.join(process.env.LOCALAPPDATA, 'jp.seraf.ktn.syndocal', 'agent-bridge-v1.json')).catch(error => {
   if (error.code === 'ENOENT') return null;
@@ -50,8 +54,9 @@ const start = async () => {
   const preflight = await exec('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
     `if (@(Get-NetTCPConnection -LocalPort ${cdpPort} -State Listen -ErrorAction SilentlyContinue).Count -gt 0) { throw 'QA debugger port occupied' }`], { windowsHide: true, timeout: 10000 });
   assert.equal(preflight.stderr.trim(), '');
-  child = spawn(executable, [], { cwd: path.dirname(executable), windowsHide: true, stdio: 'ignore',
+  child = spawn(executable, [], { cwd: path.dirname(executable), windowsHide: true, stdio: ['ignore', 'ignore', 'pipe'],
     env: { ...process.env, WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `${oldDebugArgs} --remote-debugging-address=127.0.0.1 --remote-debugging-port=${cdpPort}`.trim() } });
+  child.stderr.on('data', chunk => { nativeStderr = (nativeStderr + chunk.toString()).slice(-65536); });
   let spawnFailure;
   child.once('error', () => { spawnFailure = true; });
   const until = Date.now() + 60000;
@@ -137,6 +142,7 @@ try {
   await exec('icacls.exe', [credentialDirectory, '/inheritance:r', '/grant:r', `*${stdout.trim()}:(OI)(CI)F`], { windowsHide: true, timeout: 5000 });
   options.credentialFile = path.join(credentialDirectory, 'credential');
   await pair(); await install();
+  if (externalHighRisk) await nativeExternalHighRisk(backend, options, checks);
   const oldRequest = await read();
   checks.push({ check: 'isolated-first-launch-read', passed: true });
   await stop();
@@ -227,15 +233,23 @@ finally {
 }
 const afterNormal = await readNormalDescriptor();
 assert.ok(beforeNormal === null ? afterNormal === null : afterNormal?.equals(beforeNormal), 'Normal app identity must be unchanged');
+const nativePanicLocations = nativeStderr.split(/\r?\n/).filter(line => /panicked at .*\.rs:\d+:\d+/.test(line)).map(line => line.slice(0, 512));
+if (nativePanicLocations.length > 0) failure ??= new Error('Native worker panic observed during QA');
 await fs.writeFile(evidence, `${JSON.stringify({ schemaVersion: 1, timestamp: new Date().toISOString(), passed: !failure && !cleanupNeeded,
   executable, executableSha256: createHash('sha256').update(await fs.readFile(executable)).digest('hex'),
   sidecarSha256: createHash('sha256').update(await fs.readFile(new URL('./server.mjs', import.meta.url))).digest('hex'),
   runnerSha256: createHash('sha256').update(await fs.readFile(new URL('./check-native-lifecycle.mjs', import.meta.url))).digest('hex'),
   backendHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-backend-session.mjs', import.meta.url))).digest('hex'),
+  ...(externalHighRisk ? {
+    highRiskHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-external-high-risk.mjs', import.meta.url))).digest('hex'),
+    stdioHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-stdio-session.mjs', import.meta.url))).digest('hex'),
+    highRiskTransport: 'Separate stdio MCP sidecar process forwarding to the authenticated native broker',
+  } : {}),
   ...(diagnostics ? { diagnosticHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-diagnostic-exports.mjs', import.meta.url))).digest('hex') } : {}),
   profile: 'jp.seraf.ktn.syndocal.qa.mcp-lifecycle', checks, normalAppIdentityUnchanged: true,
   credentialRevoked: !cleanupNeeded, credentialFileRemoved: true,
-  nonclaims: ['QA identifier release build, not the distributed artifact', 'No authored mutation, device or output command', 'No durable authored/output mutation crash publication acceptance',
+  nativePanicLocations,
+  nonclaims: ['QA identifier release build, not the distributed artifact', 'No authored mutation or physical output activation; optional high-risk probe mutates isolated backend lease authority only', 'No durable authored/output mutation crash publication acceptance',
     ...(diagnostics ? ['Diagnostic publication covers a private temporary destination only; no crash-during-publication, removable-filesystem or external MCP consent acceptance'] : [])],
 }, null, 2)}\n`, { flag: 'wx' });
 if (failure) throw failure;

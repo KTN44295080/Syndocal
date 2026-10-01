@@ -47,6 +47,7 @@ export const FRONTEND_TAURI_INVOKE_COMMANDS = [
   "agent_authority_status_v1",
   "agent_bridge_claim_v1",
   "agent_bridge_complete_v1",
+  "agent_bridge_execute_native_v1",
   "agent_bridge_register_v1",
   "analyze_audio_file",
   "analyze_timeline_audio_clip_path",

@@ -4091,15 +4091,21 @@ impl OutputControlLeaseResultV2 {
                 {
                     return Err(OutputControlValidationErrorV1::InvalidReceiptOutcome);
                 }
-                let expected_before_phase = match transition_outcome {
+                let valid_before_phase = match transition_outcome {
                     OutputLeaseReceiptOutcomeV2::Recovered => {
-                        OutputLeaseReceiptPhaseV2::HeldOrphaned
+                        change.before_phase == Some(OutputLeaseReceiptPhaseV2::HeldOrphaned)
                     }
-                    _ => OutputLeaseReceiptPhaseV2::HeldActive,
+                    // The authority core transfers both active and orphaned
+                    // leases to a different owner. Owner retirement must not
+                    // make a committed transfer impossible to serialize.
+                    OutputLeaseReceiptOutcomeV2::Transferred => matches!(
+                        change.before_phase,
+                        Some(OutputLeaseReceiptPhaseV2::HeldActive)
+                            | Some(OutputLeaseReceiptPhaseV2::HeldOrphaned)
+                    ),
+                    _ => change.before_phase == Some(OutputLeaseReceiptPhaseV2::HeldActive),
                 };
-                if change.before_phase != Some(expected_before_phase)
-                    || change.before_resources != self.resources
-                {
+                if !valid_before_phase || change.before_resources != self.resources {
                     return Err(OutputControlValidationErrorV1::InvalidReceiptOutcome);
                 }
             }
@@ -5235,6 +5241,56 @@ mod tests {
                 after_phase: Some(OutputLeaseReceiptPhaseV2::HeldActive),
             }],
         }
+    }
+
+    #[test]
+    fn transferred_lease_receipt_accepts_active_and_orphaned_sources_only() {
+        let mut transferred = authorized_both_lease_result();
+        transferred.outcome = OutputLeaseReceiptOutcomeV2::Transferred;
+        transferred.authority.generation = 3;
+        transferred.changes[0].before_generation = Some(2);
+        transferred.changes[0].after_generation = Some(3);
+        for phase in [
+            OutputLeaseReceiptPhaseV2::HeldActive,
+            OutputLeaseReceiptPhaseV2::HeldOrphaned,
+        ] {
+            transferred.changes[0].before_phase = Some(phase);
+            assert!(transferred
+                .validate_for_operation(OUTPUT_LEASE_FORCE_TRANSFER_OPERATION_ID)
+                .is_ok());
+            let response = OutputControlResponseV2::Receipt(Box::new(OutputControlReceiptV2 {
+                operation_id: OUTPUT_LEASE_FORCE_TRANSFER_OPERATION_ID.to_string(),
+                request_id: 1,
+                shape_sha256: "a".repeat(64),
+                argument_fingerprint: "b".repeat(64),
+                audit_sequence: 1,
+                fence_before: output_fence(),
+                fence_after: output_fence(),
+                outcome: OutputControlReceiptOutcomeV2::NoOp,
+                lease_result: Some(transferred.clone()),
+            }));
+            let wire = serde_json::to_value(&response).expect("committed transfer must serialize");
+            assert_eq!(
+                serde_json::from_value::<OutputControlResponseV2>(wire).unwrap(),
+                response
+            );
+        }
+        for phase in [None, Some(OutputLeaseReceiptPhaseV2::Unclaimed)] {
+            transferred.changes[0].before_phase = phase;
+            assert!(transferred
+                .validate_for_operation(OUTPUT_LEASE_FORCE_TRANSFER_OPERATION_ID)
+                .is_err());
+        }
+        transferred.changes[0].before_phase = Some(OutputLeaseReceiptPhaseV2::HeldOrphaned);
+        transferred.outcome = OutputLeaseReceiptOutcomeV2::Renewed;
+        assert!(transferred
+            .validate_for_operation(OUTPUT_LEASE_RENEW_OPERATION_ID)
+            .is_err());
+        transferred.outcome = OutputLeaseReceiptOutcomeV2::Recovered;
+        transferred.changes[0].before_phase = Some(OutputLeaseReceiptPhaseV2::HeldActive);
+        assert!(transferred
+            .validate_for_operation(OUTPUT_LEASE_RECOVER_OPERATION_ID)
+            .is_err());
     }
 
     #[test]

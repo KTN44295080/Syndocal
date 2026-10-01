@@ -188,6 +188,21 @@ impl AgentBridge {
             .complete(renderer_generation, request_id, result)
     }
 
+    /// Uses the immutable socket request, never renderer-supplied operation
+    /// arguments. A claimed request can enter the native executor only once.
+    pub(crate) fn start_native_execution(
+        &self, window_label: &str, renderer_generation: u64, request_id: &str,
+    ) -> Result<AgentBridgeDispatch, String> {
+        main_only(window_label)?;
+        let dispatch = self.inner.ledger.lock().map_err(|_| "agent_state_poisoned")?
+            .start_native_execution(renderer_generation, request_id)?;
+        self.inner.authority.authorize_bridge_request(
+            &dispatch.principal_id, dispatch.principal_incarnation,
+            &dispatch.method, &dispatch.params,
+        )?;
+        Ok(dispatch)
+    }
+
     /// Administrative authority remains accessible only through the trusted
     /// local main window. The socket adapter may use the separate bounded
     /// request-proof and exact-grant admission methods, but pairing,

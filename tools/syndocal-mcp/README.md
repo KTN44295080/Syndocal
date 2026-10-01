@@ -1,6 +1,6 @@
 # Syndocal MCP adapter
 
-Dependency-free Node.js sidecar for a running Syndocal agent bridge. It exposes fixture listing, fixture reading, exact-project fixture transforms, exact-project Video BO control, request-status lookup, bounded runtime diagnostics, canonical backend capability discovery, read-only recording status, and the 47 reviewed canonical control-plane operations. It does not open devices, start Syndocal, or bypass the backend's output ownership, lease, safety, or typed-command checks.
+Dependency-free Node.js sidecar for a running Syndocal agent bridge. It exposes fixture listing, fixture reading, exact-project fixture transforms, exact-project Video BO control, request-status lookup, bounded runtime diagnostics, canonical backend capability discovery, read-only recording status, and the 52 reviewed canonical control-plane operations. It does not open devices, start Syndocal, or bypass the backend's output ownership, lease, safety, or typed-command checks.
 
 ## Start
 
@@ -69,13 +69,18 @@ On Windows, process identity is read through a fixed, hidden PowerShell/CIM quer
 - `syndocal_get_runtime_status({})`: read the project token, lighting/video blackout bits, up to 64 video-output summaries, Timeline transport state, the exact `timeline_runtime` projection, and a separate `observations.output_ownership_status` read. The authority bundle and ownership observation are captured by separate reads and must not be treated as one atomic image.
 - `syndocal_get_control_plane_capabilities({})`: read a bounded projection of the backend-owned canonical operation/source inventory and exact local adapter policy. `FailClosed` entries are discovery-only and cannot be invoked through MCP.
 - `syndocal_get_recording_status({})`: read bounded active recording, dimensions, frame/drop counters, audio inclusion, path, and last-error state. It never starts, stops, finalizes, or replaces a recording.
-- `syndocal_execute_control_plane({requestId,operationId,request})`: execute one of the 47 reviewed canonical operations through a static typed Tauri adapter. `operationId` must be present in the capability registry and `request` must be that operation's exact typed request object. Unreviewed or `FailClosed` inventory entries are rejected.
+- `syndocal_execute_control_plane({requestId,operationId,request})`: execute one of the 52 reviewed canonical operations through a static typed Tauri adapter. `operationId` must be present in the capability registry and `request` must be that operation's exact typed request object. Unreviewed or `FailClosed` inventory entries are rejected.
 
 Position is `{x,y,z}` and rotation is `{pitch,yaw,roll}`. `expectedProject` is `{project_epoch,project_revision,checkpoint_hash}`. All fields are required; transform coordinates must be finite, project epoch/revision values must be nonnegative safe integers, and `checkpoint_hash` must be exactly 64 lowercase hexadecimal characters. Unknown argument fields are rejected.
 
 A new mutation intent needs a new lowercase, hyphenated UUID. Uppercase UUIDs are rejected so one intent has a single request identity. Preserve that UUID until its result is known. `pending` and `unknown` are tool errors with a status-query instruction; the adapter does not retry or automatically poll. A timeout after a mutation may have been sent is `unknown`, never proof that it was not applied. Query the original UUID before deciding any next action. Status requests use a fresh transport envelope UUID but the broker response identifies the queried original UUID. Broker `completed` means terminal processing; only a result with `ok:true` is tool success, so a completed `{ok:false}` response remains an error with its original result. The canonical executor remains a bounded static map; it is not arbitrary `invoke(command, params)`. Query operations are not persisted as mutation tombstones, while canonical mutations retain the same durable replay protection.
 
-Only one broker request may be active per transport session. An overlapping call is explicitly rejected before dispatch. MCP, HTTP, REST, and WebSocket input frames are bounded to 64 KiB; native and sidecar response frames are bounded to 256 KiB. Connection timeout is one second and native response timeout is three seconds. Every broker request carries a fresh client nonce and HMAC-SHA256 proof bound to the descriptor's per-launch session nonce, principal incarnation, request ID, and method. The native broker rejects missing, stale, invalid, or replayed proof before renderer dispatch and then applies the exact ExternalMcp grant; R4/R5 requests remain consent-bound. The stdio mode writes nothing except newline-delimited MCP JSON-RPC to stdout.
+Only one broker request may be active per transport session. An overlapping call is explicitly rejected before dispatch. MCP, HTTP, REST, and WebSocket input frames are bounded to 64 KiB; native and sidecar response frames are bounded to 256 KiB. Connection timeout is one second and native response timeout is three seconds. Every broker request carries a fresh client nonce and HMAC-SHA256 proof bound to the descriptor's per-launch session nonce, principal incarnation, request ID, and method. The native broker rejects missing, stale, invalid, or replayed proof before renderer dispatch and then applies the exact ExternalMcp grant. Promoted external MCP principals execute granted R4/R5 operations without individual human approval. Output operations consume the immutable claimed request in the native backend and keep domain fences, leases, rate limits, audits and receipts. The stdio mode writes nothing except newline-delimited MCP JSON-RPC to stdout.
+
+`syndocal_export_diagnostics` requires the exact File grant for
+`syndocal.diagnostics.export.v1`. It writes a sanitized ZIP to a new absolute
+path without a preview or approval dialog. Existing targets are rejected;
+request identity is retained across restart to prevent automatic replay.
 
 ## Validate
 
@@ -118,8 +123,13 @@ checks capture preview, cancellation, exact ZIP digest, new-file-only atomic
 publication, a destination appearing after preview, replay rejection, and
 capture expiry across a native restart. Use a new evidence path for every run.
 This tests a private temporary destination through a process-verified native
-backend session; it does not grant external MCP diagnostic export or bypass
-human-present consent.
+backend session and covers the local preview/acknowledge flow.
+
+Add `--external-high-risk` to test unattended grants through a separate stdio MCP
+sidecar, diagnostic ZIP export/replay/no-overwrite, and isolated acquire/renew/
+force-transfer/relinquish lease authority. It proves same-owner and stale-generation
+rejection, followed by a successful transfer after owner retirement. The empty QA
+project has no physical output activation.
 
 This harness refuses the normal executable, requires an empty QA project, and
 verifies one responsive maximized QA window on each launch. It tests forced exit,

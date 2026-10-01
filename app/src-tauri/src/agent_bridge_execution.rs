@@ -1,0 +1,94 @@
+//! Native execution of authenticated, immutable external MCP requests.
+//! No renderer argument can select a different operation or skip admission.
+use serde::Deserialize;
+use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
+use tauri::Manager;
+
+use super::{agent_bridge::AgentBridge, AppState, ControlPlaneQueryState};
+use protocol::control_plane_command::OutputControlCommandRequestV2;
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OutputIngress {
+    request: OutputControlCommandRequestV2,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DiagnosticExport {
+    destination: String,
+}
+
+pub(crate) fn execute(
+    app: &tauri::AppHandle,
+    window: &tauri::WebviewWindow,
+    renderer_generation: u64,
+    request_id: &str,
+) -> Result<Value, String> {
+    let bridge = app.state::<AgentBridge>();
+    let dispatch =
+        bridge.start_native_execution(window.label(), renderer_generation, request_id)?;
+    let state = app.state::<AppState>();
+    match dispatch.method.as_str() {
+        "control_plane.execute" => {
+            let operation_id = dispatch
+                .params
+                .get("operationId")
+                .and_then(Value::as_str)
+                .ok_or("agent_bridge_operation_invalid")?;
+            if !operation_id.starts_with("syndocal.output.") {
+                return Err("native_operation_not_supported".into());
+            }
+            let ingress: OutputIngress = serde_json::from_value(
+                dispatch
+                    .params
+                    .get("request")
+                    .cloned()
+                    .ok_or("agent_bridge_arguments_invalid")?,
+            )
+            .map_err(|_| "agent_bridge_arguments_invalid")?;
+            if ingress.request.operation_id != operation_id
+                || ingress.request.action.operation_id() != operation_id
+            {
+                return Err("agent_bridge_operation_identity_mismatch".into());
+            }
+            let query_state = app.state::<ControlPlaneQueryState>();
+            let result = super::control_plane_runtime::execute_external_output_control(
+                app,
+                window,
+                &state,
+                &query_state,
+                ingress.request,
+            );
+            let ok = matches!(
+                &result,
+                protocol::control_plane_command::OutputControlResponseV2::Receipt(_)
+            );
+            // A domain serialization failure is an unconfirmed mutation,
+            // never a json! panic or permission to automatically replay it.
+            let result =
+                serde_json::to_value(&result).map_err(|_| "agent_output_response_invalid")?;
+            Ok(json!({"ok": ok, "operation_id": operation_id, "result": result}))
+        }
+        "diagnostics.export" => {
+            let request: DiagnosticExport = serde_json::from_value(dispatch.params)
+                .map_err(|_| "agent_bridge_arguments_invalid")?;
+            let destination = std::path::PathBuf::from(request.destination);
+            super::diagnostic_package_publication::require_new_target(&destination)?;
+            let (_, bytes) = super::capture_diagnostic_package(&state)?;
+            let sha256 = format!("{:x}", Sha256::digest(&bytes));
+            let size = bytes.len();
+            super::diagnostic_package_publication::publish_new_diagnostic_package(
+                &destination,
+                &bytes,
+            )
+            .map_err(|error| error.to_string())?;
+            Ok(
+                json!({"ok": true, "operation_id": "syndocal.diagnostics.export.v1",
+                "destination": destination, "sha256": sha256, "bytes": size}),
+            )
+        }
+        _ => Err("native_operation_not_supported".into()),
+    }
+}

@@ -74,7 +74,7 @@ try {
   assert.equal((await request('POST', '/rpc', { jsonrpc: '2.0', method: 'notifications/initialized' }, session)).status, 202);
   const list = await request('POST', '/rpc', { jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }, session);
   assert.equal(list.status, 200);
-  assert.equal(list.body.result.tools.length, 9);
+  assert.equal(list.body.result.tools.length, 10);
   assert.equal(brokerRequests.at(-1).method, 'control_plane.get_capabilities');
 
   const rest = await request('POST', '/rest/tools/syndocal_get_runtime_status', {}, {});
@@ -102,7 +102,7 @@ try {
   assert.equal(wsInit.result.protocolVersion, '2025-11-25');
   ws.send(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }));
   const wsList = await wsRpc(2, 'tools/list', {});
-  assert.equal(wsList.result.tools.length, 9);
+  assert.equal(wsList.result.tools.length, 10);
   assert.equal(brokerRequests.at(-1).method, 'control_plane.get_capabilities');
   ws.close();
   console.log('PASS HTTP health/JSON-RPC/REST and WebSocket transport groups; loopback fake broker only');

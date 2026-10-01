@@ -1,6 +1,7 @@
 #![cfg_attr(test, recursion_limit = "256")]
 
 mod agent_bridge;
+mod agent_bridge_execution;
 use std::{
     cell::RefCell,
     collections::{hash_map::Entry, BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
@@ -58160,6 +58161,18 @@ fn cancel_project_transaction_for_window_label(
 #[tauri::command]
 fn agent_bridge_register_v1(window: WebviewWindow, bridge: State<agent_bridge::AgentBridge>) -> Result<u64, String> {
     bridge.register(window.label())
+}
+
+#[tauri::command]
+async fn agent_bridge_execute_native_v1(
+    app: tauri::AppHandle,
+    window: WebviewWindow,
+    renderer_generation: u64,
+    request_id: String,
+) -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(move ||
+        agent_bridge_execution::execute(&app, &window, renderer_generation, &request_id)
+    ).await.map_err(|_| "agent_native_executor_failed".to_string())?
 }
 #[tauri::command]
 fn agent_bridge_claim_v1(window: WebviewWindow, bridge: State<agent_bridge::AgentBridge>, renderer_generation: u64, request_id: String) -> Result<agent_bridge::AgentBridgeDispatch, String> {
@@ -132183,6 +132196,7 @@ fn main() {
             agent_bridge_claim_v1,
             agent_bridge_complete_v1,
             agent_bridge_register_v1,
+            agent_bridge_execute_native_v1,
             agent_authority_status_v1,
             agent_authority_begin_pairing_v1,
             agent_authority_approve_pairing_v1,

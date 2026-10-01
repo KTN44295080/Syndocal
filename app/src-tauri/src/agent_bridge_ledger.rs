@@ -26,6 +26,7 @@ struct Entry {
     response: Response,
     dispatch: AgentBridgeDispatch,
     claimed: bool,
+    native_execution_started: bool,
     mutation: bool,
 }
 pub(super) struct Ledger {
@@ -188,7 +189,7 @@ impl Ledger {
             return Ok((Response::rejected(id, "not_available"), None));
         }
         let mutation = match command {
-            Command::SetTransform(_) | Command::SetVideoBlackout(_) => true,
+            Command::SetTransform(_) | Command::SetVideoBlackout(_) | Command::ExportDiagnostics(_) => true,
             Command::ControlPlaneExecute(value) => {
                 canonical_operation_is_mutation(&value.operation_id)
             }
@@ -254,6 +255,7 @@ impl Ledger {
                 response: response.clone(),
                 dispatch: dispatch.clone(),
                 claimed: false,
+                native_execution_started: false,
                 mutation,
             },
         );
@@ -271,6 +273,22 @@ impl Ledger {
             return Err("request_not_claimable".to_string());
         }
         entry.claimed = true;
+        Ok(entry.dispatch.clone())
+    }
+    pub fn start_native_execution(&mut self, generation: u64, id: &str) -> Result<AgentBridgeDispatch, String> {
+        if !self.available || generation != self.generation {
+            return Err("stale_renderer".to_string());
+        }
+        let entry = self.entries.get_mut(id).ok_or("unknown_request")?;
+        if entry.dispatch.renderer_generation != generation || !entry.claimed
+            || entry.native_execution_started || entry.response.status != "pending"
+        {
+            return Err("request_not_executable".to_string());
+        }
+        if !matches!(entry.dispatch.method.as_str(), "control_plane.execute" | "diagnostics.export") {
+            return Err("native_operation_not_supported".to_string());
+        }
+        entry.native_execution_started = true;
         Ok(entry.dispatch.clone())
     }
     pub fn complete(

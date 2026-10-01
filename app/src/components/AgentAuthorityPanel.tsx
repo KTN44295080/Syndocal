@@ -228,7 +228,7 @@ export function AgentAuthorityPanel(props: Props) {
       </header>
       <Show when={error()}><p class="errorMessage" role="alert">{error()}</p></Show>
       <Show when={message()}><p class="successMessage" role="status">{message()}</p></Show>
-      <p class="ioDisclosureDescription">Pairing, grants, consent, and revocation stay in the trusted desktop. External clients never approve their own high-risk operations.</p>
+      <p class="ioDisclosureDescription">Pairing, exact operation grants, and revocation stay in the trusted desktop. Promoted external MCP clients can execute granted R4/R5 operations without individual approval.</p>
 
       <section class="agentAuthoritySection" aria-labelledby="agent-pairing-heading">
         <h3 id="agent-pairing-heading">Pair principal</h3>
@@ -285,7 +285,7 @@ export function AgentAuthorityPanel(props: Props) {
 
       <section class="agentAuthoritySection" aria-labelledby="agent-consent-heading">
         <h3 id="agent-consent-heading">Single-use operation consent</h3>
-        <p class="ioDisclosureDescription">Prepare and consume consent only after the local operator has reviewed the exact operation. R4/R5 still require backend human-presence policy.</p>
+        <p class="ioDisclosureDescription">Prepared consent applies to local adapters. External MCP uses exact operation grants and does not require this step.</p>
         <div class="agentAuthorityForm agentAuthorityConsentForm">
           <label>Consent ID<input value={consentId()} onInput={(event) => setConsentId(event.currentTarget.value)} maxLength={128} /></label>
           <label>Principal<input value={consentPrincipal()} onInput={(event) => setConsentPrincipal(event.currentTarget.value)} maxLength={128} /></label>

@@ -26,7 +26,7 @@ const nodeCanonicalIds = quoted(
   /const CANONICAL_OPERATION_IDS = new Set\(\[\s*([\s\S]*?)\s*\]\);/,
   "'",
 );
-assert.equal(rustCanonicalIds.length, 47);
+assert.equal(rustCanonicalIds.length, 52);
 assert.deepEqual([...typescriptCanonicalIds].sort(), [...rustCanonicalIds].sort());
 assert.deepEqual([...nodeCanonicalIds].sort(), [...rustCanonicalIds].sort());
 
@@ -592,6 +592,19 @@ async function until(predicate) {
   assert.deepEqual(effectCalls, ['authority', 'snapshot']);
   assert.equal(invokeCalls.some(([command]) => command === 'arm_output_control_v2'), false);
   runtime.dispose();
+  groups++;
+}
+{
+  for (const item of [request('diagnostics.export', { destination: 'C:/new.zip' }),
+    request('control_plane.execute', { operationId: 'syndocal.output.ownership.arm.v2', request: { request: { exact: 'immutable-backend-copy' } } })]) {
+    const calls = [];
+    const result = await execute(async (command, args) => {
+      calls.push([command, args]);
+      return { ok: true };
+    }, item);
+    assert.equal(result.ok, true);
+    assert.deepEqual(calls, [['agent_bridge_execute_native_v1', { rendererGeneration: 5, requestId: 'canonical-request' }]]);
+  }
   groups++;
 }
 console.log(`agent bridge: PASS (${groups} groups; real processor/runtime/confirmation modules, no native or device calls)`);

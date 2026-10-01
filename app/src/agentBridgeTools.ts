@@ -13,6 +13,7 @@ import {
 import {
   executeAgentBridgeCanonicalOperation,
   executeAgentBridgeControlPlane,
+  CANONICAL_TAURI_COMMANDS,
 } from "./agentBridgeControlPlane";
 import { executeAgentBridgeRecordingStatus } from "./agentBridgeRecording";
 
@@ -65,10 +66,22 @@ export async function executeAgentBridgeRequest(
 ) {
   let mutationStarted = false;
   try {
-    if (!["fixtures.list", "fixtures.get", "fixtures.set_transform", "runtime.get", "output.set_video_blackout", "control_plane.get_capabilities", "recording.get_status", "control_plane.execute"].includes(request.method)) {
+    if (!["fixtures.list", "fixtures.get", "fixtures.set_transform", "runtime.get", "output.set_video_blackout", "control_plane.get_capabilities", "recording.get_status", "control_plane.execute", "diagnostics.export"].includes(request.method)) {
       return { ok: false, error: { code: "unknown_method", message: "Unsupported agent bridge operation." } };
     }
     const params = request.params;
+    if (request.method === "diagnostics.export"
+      || (request.method === "control_plane.execute" && typeof params.operationId === "string"
+        && params.operationId.startsWith("syndocal.output."))) {
+      if (request.method === "control_plane.execute" && !Object.hasOwn(CANONICAL_TAURI_COMMANDS, params.operationId as string)) {
+        throw new Error("Canonical operation is not executable through the reviewed adapter set.");
+      }
+      mutationStarted = true;
+      return await invoke("agent_bridge_execute_native_v1", {
+        rendererGeneration: request.rendererGeneration,
+        requestId: request.requestId,
+      });
+    }
     if (request.method === "control_plane.execute") {
       return await executeAgentBridgeCanonicalOperation(invoke, params, () => { mutationStarted = true; });
     }

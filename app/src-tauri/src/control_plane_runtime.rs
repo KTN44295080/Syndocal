@@ -350,6 +350,34 @@ pub(crate) fn execute_output_control(
     })
 }
 
+/// Only the authenticated native bridge executor calls this adapter. It has
+/// already consumed an immutable claimed request and rechecked its exact grant.
+/// Domain fences, leases, rate limits, audit and terminal receipts still enter
+/// the same controller; external MCP does not request a native UI confirmation.
+pub(crate) fn execute_external_output_control(
+    app: &tauri::AppHandle,
+    window: &WebviewWindow,
+    state: &AppState,
+    query_state: &ControlPlaneQueryState,
+    request: OutputControlCommandRequestV2,
+) -> OutputControlResponseV2 {
+    let operation_id = request.action.operation_id();
+    if request.operation_id != operation_id || request.validate().is_err() {
+        return output_control_rejection_for_operation(&request, operation_id, OutputControlErrorCodeV2::InvalidRequest);
+    }
+    match &request.action {
+        OutputControlActionV2::AcquireLease { .. }
+        | OutputControlActionV2::RenewLease { .. }
+        | OutputControlActionV2::RecoverLease { .. }
+        | OutputControlActionV2::RelinquishOutputLease { .. }
+        | OutputControlActionV2::ForceTransferLease { .. } =>
+            execute_output_lease_lifecycle_with_confirmation(app, window, state, query_state, operation_id, request, |_| true),
+        OutputControlActionV2::ResetShowSpoutOutputs {} =>
+            execute_show_spout_reset_without_lease_control_with_confirmation(state, query_state, window.label(), request, |_| true),
+        _ => execute_output_control_with_confirmation(app, window, state, query_state, request, |_| true),
+    }
+}
+
 /// Reset is intentionally outside the output-lease lifecycle. It still uses
 /// the same local-window identity, project/output fence, immutable audit,
 /// replay key, and serialized project admission as an R4 mutation.

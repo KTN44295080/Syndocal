@@ -2,9 +2,10 @@
 //!
 //! This module is deliberately transport- and UI-neutral.  It does not mint
 //! credentials, persist secrets, or claim that a caller is the desktop UI.
-//! The trusted adapter supplies a freshly issued principal incarnation and a
-//! locally approved consent id; this core only records the bounded state and
-//! rejects stale, revoked, or incorrectly bound decisions.
+//! The trusted adapter supplies a freshly issued principal incarnation and an
+//! exact operation grant; external MCP grants allow unattended R4/R5 calls.
+//! Other adapters retain their prepared-consent policy. This core rejects
+//! stale, revoked, or incorrectly bound decisions.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -381,7 +382,9 @@ impl AgentAuthority {
         context: &AgentRequestContext,
     ) -> Result<AgentAuthorization, AgentAuthorityError> {
         self.check_grant(context)?;
-        if matches!(context.risk, OperationRisk::R4 | OperationRisk::R5) {
+        if matches!(context.risk, OperationRisk::R4 | OperationRisk::R5)
+            && context.adapter != AdapterKind::ExternalMcp
+        {
             return Err(AgentAuthorityError::ConsentRequired);
         }
         self.current_authorization(&context.principal)
@@ -712,9 +715,44 @@ mod tests {
         authority
             .grant(&id, 7, grant(AgentCapability::Output, &output.operation_id))
             .unwrap();
+        assert!(authority.authorize(&output).is_ok());
+        let mut file = context(&id, AgentCapability::File, OperationRisk::R5);
+        file.operation_id = "syndocal.diagnostics.export.v1".to_string();
+        assert_eq!(
+            authority.authorize(&file),
+            Err(AgentAuthorityError::MissingGrant)
+        );
+        authority
+            .grant(&id, 7, grant(AgentCapability::File, &file.operation_id))
+            .unwrap();
+        assert!(authority.authorize(&file).is_ok());
+        let mut local = output.clone();
+        local.adapter = AdapterKind::LocalTauriWindow;
+        authority
+            .grant(
+                &id,
+                7,
+                AgentGrant::new(
+                    local.adapter,
+                    local.capability,
+                    &local.operation_id,
+                    local.project_id.clone(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        assert_eq!(
+            authority.authorize(&local),
+            Err(AgentAuthorityError::ConsentRequired)
+        );
+        authority.revoke(&id, 7).unwrap();
         assert_eq!(
             authority.authorize(&output),
-            Err(AgentAuthorityError::ConsentRequired)
+            Err(AgentAuthorityError::PrincipalRevoked)
+        );
+        assert_eq!(
+            authority.authorize(&file),
+            Err(AgentAuthorityError::PrincipalRevoked)
         );
     }
 

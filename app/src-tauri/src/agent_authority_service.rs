@@ -587,11 +587,17 @@ impl AgentAuthorityService {
             project_generation: expected_project_generation,
             output_generation: 0,
         };
-        self.lock()?
-            .authority
+        let mut inner = self.lock()?;
+        let result = inner.authority
             .authorize(&context)
             .map(|_| ())
-            .map_err(|error| authority_error(error).to_string())
+            .map_err(|error| authority_error(error).to_string());
+        if matches!(risk, OperationRisk::R4 | OperationRisk::R5) {
+            record_audit(&mut inner, "external.high_risk.admission", Some(&context.principal),
+                Some(incarnation), Some(&context.operation_id),
+                result.as_ref().err().map(String::as_str).unwrap_or("success"));
+        }
+        result
     }
 
     pub(crate) fn promote(
@@ -840,6 +846,7 @@ fn bridge_operation(
             OperationRisk::R0,
         )),
         "recording.get_status" => Some(("syndocal.query.recording.status.v1", OperationRisk::R0)),
+        "diagnostics.export" => Some(("syndocal.diagnostics.export.v1", OperationRisk::R5)),
         "fixtures.set_transform" => Some((
             "syndocal.authored.agent_bridge.fixtures.set_transform.v1",
             OperationRisk::R3,
@@ -1083,7 +1090,7 @@ mod tests {
     }
 
     #[test]
-    fn bridge_grant_admission_is_exact_and_high_risk_stays_consent_bound() {
+    fn bridge_grant_admission_allows_exact_high_risk_grants_without_consent() {
         let service = service();
         let challenge = service.begin_pairing("client-a").unwrap();
         let approval = service
@@ -1134,7 +1141,7 @@ mod tests {
                 .unwrap(),
             )
             .unwrap();
-        assert_eq!(
+        assert!(
             service
                 .authorize_bridge_request(
                     "client-a",
@@ -1149,9 +1156,14 @@ mod tests {
                         }
                     }),
                 )
-                .unwrap_err(),
-            "agent_consent_required"
+                .is_ok()
         );
+        assert_eq!(service.authorize_bridge_request("client-a", approval.principal_incarnation,
+            "diagnostics.export", &serde_json::json!({"destination": "C:/diagnostics/new.zip"})).unwrap_err(), "agent_missing_grant");
+        service.grant("client-a", approval.principal_incarnation,
+            AgentGrant::new(AdapterKind::ExternalMcp, AgentCapability::File, "syndocal.diagnostics.export.v1", None).unwrap()).unwrap();
+        assert!(service.authorize_bridge_request("client-a", approval.principal_incarnation,
+            "diagnostics.export", &serde_json::json!({"destination": "C:/diagnostics/new.zip"})).is_ok());
     }
 
     #[test]

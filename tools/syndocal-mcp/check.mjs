@@ -119,7 +119,7 @@ try {
   const list = await rpc('tools/list');
   assert.equal(requests.at(-1).method, 'control_plane.get_capabilities');
   assert.deepEqual(requests.at(-1).params, {});
-  assert.equal(list.result.tools.length, 9);
+  assert.equal(list.result.tools.length, 10);
   assert.ok(list.result.tools.every((tool) => tool.inputSchema.additionalProperties === false));
   assert.equal(toolDefinitions.find((tool) => tool.name === 'syndocal_execute_control_plane').inputSchema.properties.request.additionalProperties, true);
   const videoTool = list.result.tools.find((tool) => tool.name === 'syndocal_set_video_blackout');
@@ -163,6 +163,17 @@ try {
   assert.equal(decode(capabilities).status, 'completed');
   assert.equal(requests.at(-1).method, 'control_plane.get_capabilities');
   assert.deepEqual(requests.at(-1).params, {});
+  const exportArgs = { requestId: randomUUID(), destination: path.join(temporary, 'diagnostics.zip') };
+  const exported = await call('syndocal_export_diagnostics', exportArgs);
+  assert.equal(exported.result.isError, false);
+  assert.equal(requests.at(-1).method, 'diagnostics.export');
+  assert.equal(requests.at(-1).requestId, exportArgs.requestId);
+  assert.deepEqual(requests.at(-1).params, { destination: exportArgs.destination });
+  for (const invalid of [ { ...exportArgs, destination: 'relative.zip' },
+    { ...exportArgs, destination: `${exportArgs.destination}\0` }, { ...exportArgs, approved: true } ]) {
+    assert.equal((await call('syndocal_export_diagnostics', invalid)).error.code, -32602);
+  }
+  checks++;
   const canonicalQuery = {
     requestId: randomUUID(),
     operationId: 'syndocal.query.control_plane.capabilities.v1',
