@@ -1,0 +1,125 @@
+{
+  "schemaVersion": 1,
+  "timestamp": "2026-10-01T19:51:33.264Z",
+  "passed": true,
+  "executable": "C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-native-acceptance-target\\release\\syndocal.exe",
+  "executableSha256": "73952ab1c734bc8a24597fc5613910e2f6b1790142592ee1a723a3a3d93ef94b",
+  "sidecarSha256": "bc6ad436dac381513df992fdbef0aa800c6793704f4c1848b7c8312ec474e564",
+  "runnerSha256": "350e323afd807a15ed1fb1de445d12425b9310993a2a297d96b596575bd5088e",
+  "backendHarnessSha256": "ade29aa256d8ff17374bb4b3e893ea9a07f71f8fa2cf2bb72b21f80d4e0e8b1f",
+  "highRiskHarnessSha256": "03c61dddfaaa394423ce44172d1f531ee509005cec09b665c30a7218d63d0a3f",
+  "stdioHarnessSha256": "91ba560e9b701ee4621ddb9b07209c010ca393600e24cfa8d8110edc26041ffd",
+  "highRiskTransport": "Separate stdio MCP sidecar process forwarding to the authenticated native broker",
+  "revocationHarnessSha256": "e96a0bca631ea33c9954cbc849710256c3a783858ea1ed258abdb5c78ae8be28",
+  "revocationTransport": "Separate stdio MCP requests, native claim/revoke/execute commands; QA renderer generation retired immediately before graceful close",
+  "profile": "jp.seraf.ktn.syndocal.qa.mcp-lifecycle",
+  "checks": [
+    {
+      "check": "external-lease-authority-read-exact-grant-safe-mode-empty",
+      "passed": true,
+      "retryableReadOverloads": [
+        {
+          "operationId": "syndocal.query.output.control.authority.v1",
+          "requestId": "df825f0c-c557-4e77-951f-c7c953525beb",
+          "error": {
+            "code": "request_rejected",
+            "message": "Output control authority is unavailable: QueryError { code: Overloaded, message: \"query service overloaded\", retryable: true, resnapshot_required: false }"
+          }
+        }
+      ]
+    },
+    {
+      "check": "external-r5-no-approval-export-exact-grant-safe-mode-no-overwrite-replay",
+      "passed": true,
+      "sha256": "16470388b0ab631ceee66279fb5dd22613446a32291a9082f41929cc4607d308",
+      "bytes": 4798
+    },
+    {
+      "check": "external-r4-acquire-renew-same-owner-transfer-rejected",
+      "passed": true
+    },
+    {
+      "check": "external-r4-no-dialog-owner-transfer-stale-generation-rejected-relinquish-without-output",
+      "passed": true,
+      "ownership": {
+        "role": "Standby",
+        "effective_role": "Standby",
+        "desired_role": "Both",
+        "persisted_role": "Both",
+        "state": "Failed",
+        "generation": 0,
+        "epoch": 0,
+        "lighting_allowed": false,
+        "video_allowed": false,
+        "lighting_reason": "StartupDenied",
+        "video_reason": "StartupDenied",
+        "error": "Startup is fail-closed; explicitly arm machine output role Both"
+      }
+    },
+    {
+      "check": "native-execution-stale-renderer-rejected",
+      "passed": true
+    },
+    {
+      "check": "isolated-first-launch-read",
+      "passed": true
+    },
+    {
+      "check": "dead-process-descriptor-rejected",
+      "passed": true
+    },
+    {
+      "check": "crash-restart-retired-principal-rejected",
+      "passed": true
+    },
+    {
+      "check": "old-credential-and-receipt-not-adopted",
+      "passed": true
+    },
+    {
+      "check": "old-launch-proof-rejected-fresh-read-succeeds",
+      "passed": true
+    },
+    {
+      "check": "external-r5-revoke-after-claim-before-native-execution",
+      "passed": true,
+      "operationId": "syndocal.diagnostics.export.v1",
+      "requestId": "80029f3e-d0b5-4c34-902c-c094eab7fd32",
+      "rendererGeneration": 2,
+      "executionError": "agent_principal_revoked",
+      "replayError": "request_not_executable",
+      "destinationAbsent": true,
+      "leaseUnavailable": true,
+      "credentialRevoked": true
+    },
+    {
+      "check": "external-r4-revoke-after-claim-before-native-execution",
+      "passed": true,
+      "operationId": "syndocal.output.lease.acquire.v2",
+      "requestId": "cc3d3904-bc01-45de-9229-49e020d6f628",
+      "rendererGeneration": 2,
+      "executionError": "agent_principal_revoked",
+      "replayError": "request_not_executable",
+      "destinationAbsent": true,
+      "leaseUnavailable": true,
+      "credentialRevoked": true
+    },
+    {
+      "check": "graceful-native-close",
+      "passed": true
+    },
+    {
+      "check": "graceful-restart-does-not-restore-grant",
+      "passed": true
+    }
+  ],
+  "normalAppIdentityUnchanged": true,
+  "credentialRevoked": true,
+  "credentialFileRemoved": true,
+  "nativePanicLocations": [],
+  "nonclaims": [
+    "QA identifier release build, not the distributed artifact",
+    "No authored mutation or physical output activation; optional high-risk probe mutates isolated backend lease authority only",
+    "No durable authored/output mutation crash publication acceptance"
+  ]
+}

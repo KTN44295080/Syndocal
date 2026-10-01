@@ -377,3 +377,13 @@ reconciled against the exact source inventory and the affected Rust tests passed
 Details and preserved negative/positive evidence are recorded once in
 [the checkpoint](MCP_LEASE_AUTHORITY_2026-10-02.md). The ledger remains
 27 Complete, 23 Open and 8 Deferred; continue executable native security checks.
+
+## Native execution-time authority revocation — 2026-10-02
+
+Base `730f3ebc`. The separate stdio MCP/native probe now proves that both R4
+lease Acquire and R5 diagnostic export are rejected after native claim if their
+principal is revoked before execution. Replay and receipt lookup are also denied;
+no file or lease is created. Fourteen native checks passed. The QA-only change and
+exact evidence are recorded once in
+[the checkpoint](MCP_HIGH_RISK_REVOCATION_2026-10-02.md). No ledger completion is
+manufactured from this slice. Next is the current normal-checkout native artifact.

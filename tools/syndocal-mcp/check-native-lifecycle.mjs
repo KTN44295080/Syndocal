@@ -10,6 +10,7 @@ import { parseOptions, readDescriptor, nativeRequest } from './server.mjs';
 import { openNativeBackendSession } from './native-backend-session.mjs';
 import { nativeDiagnosticExports } from './native-diagnostic-exports.mjs';
 import { nativeExternalHighRisk } from './native-external-high-risk.mjs';
+import { nativeHighRiskRevocation } from './native-high-risk-revocation.mjs';
 
 const exec = promisify(execFile);
 const args = process.argv.slice(2);
@@ -17,6 +18,8 @@ const diagnostics = args.includes('--diagnostics');
 if (diagnostics) args.splice(args.indexOf('--diagnostics'), 1);
 const externalHighRisk = args.includes('--external-high-risk');
 if (externalHighRisk) args.splice(args.indexOf('--external-high-risk'), 1);
+const externalRevocation = args.includes('--external-revocation');
+if (externalRevocation) args.splice(args.indexOf('--external-revocation'), 1);
 const take = name => { const index = args.indexOf(name); assert.ok(index >= 0 && index + 1 < args.length, `Required: ${name}`); return args.splice(index, 2)[1]; };
 const executable = take('--expected-executable');
 const evidence = take('--evidence');
@@ -200,6 +203,7 @@ try {
   assert.equal(replay.error, 'agent_auth_proof_invalid');
   await read();
   checks.push({ check: 'old-launch-proof-rejected-fresh-read-succeeds', passed: true });
+  if (externalRevocation) await nativeHighRiskRevocation(backend, options, checks);
   await backend.invoke('agent_authority_revoke_v1', { principalId, principalIncarnation: approval.principalIncarnation });
   cleanupNeeded = false;
   await stop(true);
@@ -246,6 +250,11 @@ await fs.writeFile(evidence, `${JSON.stringify({ schemaVersion: 1, timestamp: ne
     highRiskTransport: 'Separate stdio MCP sidecar process forwarding to the authenticated native broker',
   } : {}),
   ...(diagnostics ? { diagnosticHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-diagnostic-exports.mjs', import.meta.url))).digest('hex') } : {}),
+  ...(externalRevocation ? {
+    revocationHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-high-risk-revocation.mjs', import.meta.url))).digest('hex'),
+    revocationTransport: 'Separate stdio MCP requests, native claim/revoke/execute commands; QA renderer generation retired immediately before graceful close',
+    ...(!externalHighRisk ? { stdioHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-stdio-session.mjs', import.meta.url))).digest('hex') } : {}),
+  } : {}),
   profile: 'jp.seraf.ktn.syndocal.qa.mcp-lifecycle', checks, normalAppIdentityUnchanged: true,
   credentialRevoked: !cleanupNeeded, credentialFileRemoved: true,
   nativePanicLocations,

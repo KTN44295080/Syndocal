@@ -140,6 +140,16 @@ force-transfer/relinquish lease authority. It proves same-owner and stale-genera
 rejection, followed by a successful transfer after owner retirement. The empty QA
 project has no physical output activation.
 
+Add `--external-revocation` to admit and claim real R4/R5 stdio MCP requests,
+revoke their temporary principal, and then attempt native execution. Both must
+return `agent_principal_revoked`; a second attempt must return
+`request_not_executable`, and the revoked caller must not read the receipt.
+No diagnostic file or output lease may be created. The helper registers a new
+QA renderer generation immediately before graceful close so the native
+claim/revoke/execute order is deterministic without DOM actions. Its credentials
+inherit the runner's private ACL and are revoked and removed. It can be combined
+with `--external-high-risk` for the full 14-check native slice.
+
 This harness refuses the normal executable, requires an empty QA project, and
 verifies one responsive maximized QA window on each launch. It tests forced exit,
 clean exit, fresh launch identity, retired credentials/grants, old receipts and
