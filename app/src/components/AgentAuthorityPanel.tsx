@@ -195,7 +195,7 @@ export function AgentAuthorityPanel(props: Props) {
       return;
     }
     void run(
-      () => props.invokeCommand("agent_authority_prepare_consent_v1", { consentId: consentId().trim(), context, nowMs: Date.now(), ttlMs: 15_000 }),
+      () => props.invokeCommand("agent_authority_prepare_consent_v1", { consentId: consentId().trim(), context, ttlMs: 15_000 }),
       () => setMessage("Single-use consent prepared for the exact principal, operation, arguments, generations, and 15-second window."),
     );
   };
@@ -207,7 +207,7 @@ export function AgentAuthorityPanel(props: Props) {
       return;
     }
     void run(
-      () => props.invokeCommand("agent_authority_authorize_with_consent_v1", { consentId: consentId().trim(), context, nowMs: Date.now() }),
+      () => props.invokeCommand("agent_authority_authorize_with_consent_v1", { consentId: consentId().trim(), context }),
       () => { setMessage("Prepared consent consumed once for this exact context."); setConsentId(""); },
     );
   };

@@ -58275,12 +58275,11 @@ fn agent_authority_prepare_consent_v1(
     bridge: State<agent_bridge::AgentBridge>,
     consent_id: String,
     context: protocol::agent_authority::AgentRequestContext,
-    now_ms: u64,
     ttl_ms: u64,
 ) -> Result<(), String> {
     bridge
         .authority(window.label())?
-        .prepare_consent(consent_id, context, now_ms, ttl_ms)
+        .prepare_consent(consent_id, context, ttl_ms)
 }
 
 #[tauri::command]
@@ -58289,11 +58288,10 @@ fn agent_authority_authorize_with_consent_v1(
     bridge: State<agent_bridge::AgentBridge>,
     consent_id: String,
     context: protocol::agent_authority::AgentRequestContext,
-    now_ms: u64,
 ) -> Result<protocol::agent_authority::AgentAuthorization, String> {
     bridge
         .authority(window.label())?
-        .authorize_with_consent(&consent_id, &context, now_ms)
+        .authorize_with_consent(&consent_id, &context)
 }
 
 /// Register the current generation of one concrete webview. Only the owner

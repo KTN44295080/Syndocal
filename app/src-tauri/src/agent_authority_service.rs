@@ -277,6 +277,7 @@ impl CredentialStore {
 pub(crate) struct AgentAuthorityService {
     inner: Mutex<Inner>,
     credentials: CredentialStore,
+    clock_origin: Instant,
 }
 
 impl std::fmt::Debug for AgentAuthorityService {
@@ -330,7 +331,13 @@ impl AgentAuthorityService {
                 next_audit_sequence: 1,
             }),
             credentials: CredentialStore::default(),
+            clock_origin: Instant::now(),
         }
+    }
+
+    fn now_ms(&self) -> Result<u64, String> {
+        u64::try_from(self.clock_origin.elapsed().as_millis())
+            .map_err(|_| "agent_consent_clock_overflow".to_string())
     }
 
     pub(crate) fn begin_pairing(&self, principal_id: &str) -> Result<PairingChallenge, String> {
@@ -751,9 +758,9 @@ impl AgentAuthorityService {
         &self,
         consent_id: String,
         context: AgentRequestContext,
-        now_ms: u64,
         ttl_ms: u64,
     ) -> Result<(), String> {
+        let now_ms = self.now_ms()?;
         let principal = context.principal.clone();
         let principal_incarnation = context.principal_incarnation;
         let operation_id = context.operation_id.clone();
@@ -777,8 +784,8 @@ impl AgentAuthorityService {
         &self,
         consent_id: &str,
         context: &AgentRequestContext,
-        now_ms: u64,
     ) -> Result<AgentAuthorization, String> {
+        let now_ms = self.now_ms()?;
         let principal = context.principal.clone();
         let operation_id = context.operation_id.clone();
         let principal_incarnation = context.principal_incarnation;
@@ -1265,13 +1272,20 @@ mod tests {
             output_generation: 3,
         };
         service
-            .prepare_consent("consent-a".to_string(), context.clone(), 100, 1_000)
+            .prepare_consent("consent-a".to_string(), context.clone(), 1_000)
             .unwrap();
         assert!(service
-            .authorize_with_consent("consent-a", &context, 500)
+            .authorize_with_consent("consent-a", &context)
             .is_ok());
         assert!(service
-            .authorize_with_consent("consent-a", &context, 500)
+            .authorize_with_consent("consent-a", &context)
+            .is_err());
+        service
+            .prepare_consent("consent-expiring".to_string(), context.clone(), 1)
+            .unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        assert!(service
+            .authorize_with_consent("consent-expiring", &context)
             .is_err());
     }
 }

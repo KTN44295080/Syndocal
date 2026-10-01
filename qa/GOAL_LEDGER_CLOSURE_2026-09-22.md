@@ -325,3 +325,31 @@ with [geometry evidence](artifacts/native-control-lighting-2026-09-30.json):
 the existing editable Touch desk occupies the upper row, retains its internal
 scroll, and leaves Stage/Faders side by side below. This adds actual Control
 route coverage, not an aesthetic or physical-output acceptance claim.
+
+## Local consent expiry clock hardening — 2026-09-30
+
+The local authority service now computes consent preparation and consumption
+time from its backend-owned monotonic clock. Its trusted-window commands no
+longer accept a renderer-provided `nowMs`; the 15-second single-use UI flow
+and exact-context binding are unchanged. This prevents a renderer-selected
+past or future timestamp from influencing expiry. The service test also covers
+an elapsed one-millisecond consent alongside successful immediate consumption
+and replay rejection. This change does not open the external MCP R4/R5 route:
+the current bridge still fails closed pending an explicitly reviewed,
+human-present adapter and its acceptance evidence. The roadmap's 2026-08-21
+OutputControl decision supersedes its older Raw Input challenge text; a
+physical Raw Input challenge is not a remaining requirement.
+
+`check:ai4-authority-service`, `check:ai6-admin-ui`, and the frontend build
+passed. The pinned MSVC 14.44.35207 isolated native build passed with zero
+Rust warnings and the existing Vite chunk advisory; executable SHA-256 is
+`008910b005f88ba604f29af4549c06100da0cc5f9ef28cd7de77532d66046fd2`.
+The isolated native lifecycle probe passed seven checks with the normal app
+identity unchanged. On 2026-10-02, the generated release test binary ran
+`agent_bridge::authority::tests::consent_delegates_exact_binding_to_protocol_authority`:
+one passed, zero failed or ignored. The initial Cargo filter selected zero
+tests, so that initial result is not counted as test evidence.
+
+The user subsequently authorized removing individual human approval from all
+external MCP R4/R5 operations. That policy change is the next checkpoint;
+the expiry-clock fix above preserves the current local prepared-consent path.
