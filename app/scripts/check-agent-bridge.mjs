@@ -26,7 +26,7 @@ const nodeCanonicalIds = quoted(
   /const CANONICAL_OPERATION_IDS = new Set\(\[\s*([\s\S]*?)\s*\]\);/,
   "'",
 );
-assert.equal(rustCanonicalIds.length, 52);
+assert.equal(rustCanonicalIds.length, 53);
 assert.deepEqual([...typescriptCanonicalIds].sort(), [...rustCanonicalIds].sort());
 assert.deepEqual([...nodeCanonicalIds].sort(), [...rustCanonicalIds].sort());
 
@@ -88,7 +88,8 @@ for (const [operationId, expectedCommand] of Object.entries(CANONICAL_TAURI_COMM
   await executeCanonical(async (command, args) => { calls.push([command, args]); return {}; },
     { operationId, request: payload }, () => { notifications++; });
   assert.deepEqual(calls, [[expectedCommand, payload]]);
-  assert.equal(notifications, operationId.startsWith('syndocal.query.') ? 0 : 1);
+  assert.equal(notifications, operationId.startsWith('syndocal.query.')
+    || operationId === 'syndocal.output.lease.authority.query.v1' ? 0 : 1);
 }
 groups++;
 
@@ -182,6 +183,22 @@ groups++;
     operation_id: 'syndocal.query.control_plane.capabilities.v1',
     result: { supported: true },
   });
+  const leaseQuery = await execute(async (command, args) => {
+    assert.equal(command, 'query_output_lease_authority_v1');
+    assert.deepEqual(args, {});
+    return { statuses: [{ status: 'unavailable' }] };
+  }, request('control_plane.execute', {
+    operationId: 'syndocal.output.lease.authority.query.v1', request: {},
+  }));
+  assert.deepEqual(leaseQuery.result, { statuses: [{ status: 'unavailable' }] });
+  assert.equal(leaseQuery.operation_id, 'syndocal.output.lease.authority.query.v1');
+  const failedLeaseQuery = await execute(async (command) => {
+    assert.equal(command, 'query_output_lease_authority_v1');
+    throw new Error('lease observation unavailable');
+  }, request('control_plane.execute', {
+    operationId: 'syndocal.output.lease.authority.query.v1', request: {},
+  }));
+  assert.equal(failedLeaseQuery.error.code, 'request_rejected');
   const rejectedCanonical = await execute(async () => assert.fail('unreviewed canonical operation must not invoke Tauri'), request('control_plane.execute', {
     operationId: 'syndocal.query.not_reviewed.v1',
     request: {},

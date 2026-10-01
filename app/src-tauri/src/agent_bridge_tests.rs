@@ -167,6 +167,16 @@ fn agent_bridge_wire_auth_methods_and_bounds_are_strict() {
             .unwrap(),
         Command::ControlPlaneExecute(_)
     ));
+    canonical["params"]["operationId"] = serde_json::json!(
+        protocol::control_plane_command::OUTPUT_LEASE_AUTHORITY_QUERY_OPERATION_ID
+    );
+    assert!(matches!(
+        serde_json::from_value::<Request>(canonical.clone())
+            .unwrap()
+            .command()
+            .unwrap(),
+        Command::ControlPlaneExecute(_)
+    ));
     canonical["params"]["operationId"] = serde_json::json!("syndocal.query.not_reviewed.v1");
     assert_eq!(
         serde_json::from_value::<Request>(canonical)
@@ -599,13 +609,20 @@ fn agent_bridge_canonical_reads_are_not_persisted_mutations_but_writes_are() {
     let mut ledger = ledger::Ledger::new(Some(path.clone())).unwrap();
     let generation = ledger.register().unwrap();
     let read = command("control_plane.execute");
-    let (pending, dispatch) = ledger.begin(&id(1), &read).unwrap();
-    assert_eq!(pending.status, "pending");
-    assert!(dispatch.is_some());
-    ledger.claim(generation, &id(1)).unwrap();
-    ledger
-        .complete(generation, &id(1), serde_json::json!({"ok": true}))
-        .unwrap();
+    let lease_read = Command::ControlPlaneExecute(wire::CanonicalOperation {
+        operation_id: protocol::control_plane_command::OUTPUT_LEASE_AUTHORITY_QUERY_OPERATION_ID
+            .to_string(),
+        request: serde_json::json!({}),
+    });
+    for (request_id, query) in [(id(1), &read), (id(3), &lease_read)] {
+        let (pending, dispatch) = ledger.begin(&request_id, query).unwrap();
+        assert_eq!(pending.status, "pending");
+        assert!(dispatch.is_some());
+        ledger.claim(generation, &request_id).unwrap();
+        ledger
+            .complete(generation, &request_id, serde_json::json!({"ok": true}))
+            .unwrap();
+    }
     let write = Command::ControlPlaneExecute(wire::CanonicalOperation {
         operation_id: "syndocal.output.enable.v2".to_string(),
         request: serde_json::json!({"request_id": id(2)}),
@@ -614,9 +631,11 @@ fn agent_bridge_canonical_reads_are_not_persisted_mutations_but_writes_are() {
     drop(ledger);
     let mut restarted = ledger::Ledger::new(Some(path.clone())).unwrap();
     restarted.register().unwrap();
-    let (read_again, read_dispatch) = restarted.begin(&id(1), &read).unwrap();
-    assert_eq!(read_again.status, "pending");
-    assert!(read_dispatch.is_some());
+    for (request_id, query) in [(id(1), &read), (id(3), &lease_read)] {
+        let (read_again, read_dispatch) = restarted.begin(&request_id, query).unwrap();
+        assert_eq!(read_again.status, "pending");
+        assert!(read_dispatch.is_some());
+    }
     let (write_again, write_dispatch) = restarted.begin(&id(2), &write).unwrap();
     assert_eq!(write_again.status, "unknown");
     assert!(write_dispatch.is_none());

@@ -25,7 +25,8 @@ use protocol::control_plane_command::{
     OUTPUT_DISPLAY_ADD_OPERATION_ID, OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID,
     OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_OPERATION_ID,
     OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_RECONCILE_OPERATION_ID, OUTPUT_ENABLE_OPERATION_ID,
-    OUTPUT_LEASE_ACQUIRE_OPERATION_ID, OUTPUT_LEASE_FORCE_TRANSFER_OPERATION_ID,
+    OUTPUT_LEASE_ACQUIRE_OPERATION_ID, OUTPUT_LEASE_AUTHORITY_QUERY_OPERATION_ID,
+    OUTPUT_LEASE_FORCE_TRANSFER_OPERATION_ID,
     OUTPUT_LEASE_RECOVER_OPERATION_ID, OUTPUT_LEASE_RELINQUISH_OPERATION_ID,
     OUTPUT_LEASE_RENEW_OPERATION_ID, OUTPUT_OWNERSHIP_ARM_OPERATION_ID,
     OUTPUT_GROUP_SUBMASTER_SET_OPERATION_ID, OUTPUT_LIGHTING_MASTER_SET_OPERATION_ID,
@@ -1745,6 +1746,11 @@ fn reviewed_query_operation(command: &str) -> Option<ReviewedQueryOperation> {
             OperationClass::RuntimeObservation,
             OperationCapability::RuntimeRead,
         ),
+        "query_output_lease_authority_v1" => (
+            OUTPUT_LEASE_AUTHORITY_QUERY_OPERATION_ID,
+            OperationClass::RuntimeObservation,
+            OperationCapability::RuntimeRead,
+        ),
         "query_dsf2026_artnet_acceptance_probe_status_v1" => (
             OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_STATUS_QUERY_OPERATION_ID,
             OperationClass::RuntimeObservation,
@@ -2339,6 +2345,10 @@ mod tests {
                 "create_scene_authoritative_v1",
                 TauriRouteAdmissionClass::BackendAuthoritativeProjectMutation,
             ),
+            (
+                "agent_bridge_execute_native_v1",
+                TauriRouteAdmissionClass::AgentTransportMaintenance,
+            ),
         ] {
             assert_eq!(classes.get(route).copied(), Some(expected), "{route}");
             assert_eq!(
@@ -2391,7 +2401,7 @@ mod tests {
         assert_eq!(counts[&TauriRouteAdmissionClass::Retired], 29);
         assert_eq!(
             counts[&TauriRouteAdmissionClass::AgentTransportMaintenance],
-            14
+            15
         );
         assert_eq!(tauri_route_admission_class("patch_fixture"), None);
         assert_eq!(
@@ -2404,7 +2414,7 @@ mod tests {
     fn compiled_handler_and_registry_have_the_exact_same_set() {
         let names = registered_tauri_command_names_from_source(MAIN_RS_SOURCE).unwrap();
         let registry = registry().unwrap();
-        const R0_ALLOWLIST: [&str; 18] = [
+        const R0_ALLOWLIST: [&str; 19] = [
             "syndocal.query.control_plane.registry.v1",
             "syndocal.query.control_plane.canonical_registry.v3",
             "syndocal.query.control_plane.capabilities.v1",
@@ -2418,6 +2428,7 @@ mod tests {
             "syndocal.query.video.camera_profile_probe.v1",
             "syndocal.query.video.output_window_observation.v1",
             OUTPUT_CONTROL_AUTHORITY_QUERY_OPERATION_ID,
+            OUTPUT_LEASE_AUTHORITY_QUERY_OPERATION_ID,
             OUTPUT_DISPLAY_ADD_AUTHORITY_QUERY_OPERATION_ID,
             OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_STATUS_QUERY_OPERATION_ID,
             TIMELINE_FOLLOW_ABORT_AUTHORITY_QUERY_OPERATION_ID,
@@ -2451,7 +2462,7 @@ mod tests {
             + OSC_INPUT_EVENT_COUNT
             + DMX_INPUT_PROTOCOL_COUNT
             + DMX_INPUT_EVENT_COUNT;
-        const FRONTEND_INVOKE_COUNT: usize = 480;
+        const FRONTEND_INVOKE_COUNT: usize = 481;
         assert_eq!(MIDI_OSC_DMX_OPERATION_COUNT, 206);
         assert_eq!(
             registry.operations.len(),
@@ -2461,7 +2472,7 @@ mod tests {
                 + MIDI_OSC_DMX_OPERATION_COUNT
                 + FRONTEND_INVOKE_COUNT
         );
-        assert_eq!(registry.operations.len(), 1621);
+        assert_eq!(registry.operations.len(), 1625);
         verify_registry_exact_set(&names, &registry).unwrap();
         let r0 = registry
             .operations
@@ -2842,17 +2853,17 @@ mod tests {
         const ENGINE_COUNT: usize = 280;
         const REMOTE_COUNT: usize = 116;
         const MIDI_OSC_DMX_COUNT: usize = 206;
-        const FRONTEND_COUNT: usize = 480;
+        const FRONTEND_COUNT: usize = 481;
         const LEGACY_SOURCE_TOTAL: usize =
             TAURI_COUNT + ENGINE_COUNT + REMOTE_COUNT + MIDI_OSC_DMX_COUNT + FRONTEND_COUNT;
         const KEYBOARD_APP_COUNT: usize = 30;
         const KEYBOARD_PROJECT_FILE_COUNT: usize = 3;
         const SOURCE_TOTAL: usize =
             LEGACY_SOURCE_TOTAL + KEYBOARD_APP_COUNT + KEYBOARD_PROJECT_FILE_COUNT;
-        assert_eq!(LEGACY_SOURCE_TOTAL, 1621);
-        assert_eq!(SOURCE_TOTAL, 1654);
+        assert_eq!(LEGACY_SOURCE_TOTAL, 1625);
+        assert_eq!(SOURCE_TOTAL, 1658);
         assert_eq!(canonical.source_inventory.len(), SOURCE_TOTAL);
-        assert_eq!(canonical.canonical_operations.len(), 52);
+        assert_eq!(canonical.canonical_operations.len(), 53);
 
         let output_control_operations = canonical
             .canonical_operations
@@ -3237,7 +3248,7 @@ mod tests {
                 )
             })
             .collect::<Vec<_>>();
-        assert_eq!(direct.len(), 52);
+        assert_eq!(direct.len(), 53);
         assert_eq!(aliases.len(), FRONTEND_COUNT);
         assert_eq!(internal_steps.len(), 4);
         assert_eq!(structural_routes.len(), 1);
@@ -3246,8 +3257,9 @@ mod tests {
         // the canonical Reset operation.
         // The missing-publication recovery route is local maintenance, not a
         // separately reviewed canonical operation.
-        // Broker lifecycle adds three local native sources; its frontend sources are aliases.
-        assert_eq!(unclassified.len(), 1117);
+        // Current native/consent lifecycle sources remain local. The lease
+        // authority query is now reviewed; frontend sources remain aliases.
+        assert_eq!(unclassified.len(), 1119);
         assert_eq!(support_phases.len(), 0);
         assert_eq!(
             direct.len()
@@ -3985,11 +3997,11 @@ mod tests {
     fn legacy_v1_registry_json_and_count_remain_inventory_honest() {
         let legacy = registry().unwrap();
         // Includes both the native and frontend missing-publication resolver.
-        assert_eq!(legacy.operations.len(), 1621);
+        assert_eq!(legacy.operations.len(), 1625);
         let encoded = serde_json::to_value(&legacy).unwrap();
         assert_eq!(encoded["schema"]["version"], CONTROL_PLANE_SCHEMA_VERSION);
         let operations = encoded["operations"].as_array().unwrap();
-        assert_eq!(operations.len(), 1621);
+        assert_eq!(operations.len(), 1625);
         assert!(operations.iter().all(|operation| {
             operation["source_family"] != "keyboard_app"
                 && operation["source_family"] != "keyboard_project_file"

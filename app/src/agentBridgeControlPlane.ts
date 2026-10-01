@@ -19,6 +19,7 @@ export const CANONICAL_TAURI_COMMANDS = {
   "syndocal.query.runtime.timeline.loop.authority.v1": "query_timeline_loop_runtime_authority_v1",
   "syndocal.query.runtime.timeline.follow.abort.authority.v1": "query_timeline_follow_abort_authority_v1",
   "syndocal.query.output.control.authority.v1": "query_output_control_authority_v1",
+  "syndocal.output.lease.authority.query.v1": "query_output_lease_authority_v1",
   "syndocal.query.output.dsf2026_artnet_acceptance_probe.status.v1": "query_dsf2026_artnet_acceptance_probe_status_v1",
   "syndocal.query.output.display.add.authority.v1": "query_display_add_lease_authority_v1",
   "syndocal.query.output.ownership.v1": "query_control_plane_output_ownership",
@@ -64,7 +65,8 @@ export const CANONICAL_TAURI_COMMANDS = {
 } as const;
 
 const CANONICAL_QUERY_OPERATION_IDS = new Set(
-  Object.keys(CANONICAL_TAURI_COMMANDS).filter((operationId) => operationId.startsWith("syndocal.query.")),
+  Object.keys(CANONICAL_TAURI_COMMANDS).filter((operationId) =>
+    operationId.startsWith("syndocal.query.") || operationId === "syndocal.output.lease.authority.query.v1"),
 );
 
 export const canonicalOperationIsMutation = (operationId: string) =>
@@ -202,7 +204,7 @@ export async function executeAgentBridgeControlPlane(invoke: FrontendTauriInvoke
       source_inventory_count: sourceInventory.length,
       source_inventory_by_family: sourceFamilies,
       source_inventory_by_disposition: dispositions,
-      execution_boundary: "The 52 reviewed canonical operations are executable through typed adapters; external MCP output execution uses the immutable native request. FailClosed entries remain discovery-only.",
+      execution_boundary: "The 53 reviewed canonical operations are executable through typed adapters; external MCP output execution uses the immutable native request. FailClosed entries remain discovery-only.",
     },
     agent_bridge: {
       adapter: "local_window_mcp_sidecar",

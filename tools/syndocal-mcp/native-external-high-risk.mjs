@@ -10,6 +10,7 @@ export async function nativeExternalHighRisk(backend, options, checks) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'syndocal-mcp-high-risk-'));
   let numericRequestId = Date.now();
   const outputIntents = new Map();
+  const readOverloads = [];
   let mcp;
   const grant = async (capability, operationId) => backend.invoke('agent_authority_grant_v1', {
     principalId: options.principalId, principalIncarnation: options.principalIncarnation,
@@ -25,8 +26,28 @@ export async function nativeExternalHighRisk(backend, options, checks) {
     }
     return receipt;
   };
+  const query = async operationId => {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      // This is a new read intent only after a terminal, explicitly retryable
+      // lock-contention rejection. Never retry pending/unknown or a mutation.
+      const receipt = await send('control_plane.execute', { operationId, request: {} });
+      assert.equal(receipt.status, 'completed');
+      if (receipt.result.ok === false && receipt.result.error?.code === 'request_rejected'
+        && /QueryError \{ code: Overloaded,/.test(receipt.result.error.message)
+        && /retryable: true/.test(receipt.result.error.message) && attempt < 2) {
+        readOverloads.push({ operationId, requestId: receipt.requestId, error: receipt.result.error });
+        await new Promise(resolve => setTimeout(resolve, 100));
+        continue;
+      }
+      assert.equal(receipt.result.ok, true, JSON.stringify(receipt.result));
+      assert.equal(receipt.result.operation_id, operationId);
+      return receipt.result.result;
+    }
+    assert.fail('Canonical read attempt bound');
+  };
+  const queryLeases = () => query('syndocal.output.lease.authority.query.v1');
   const output = async (operationId, action, requestId) => {
-    const { fence } = await backend.invoke('query_output_control_authority_v1');
+    const { fence } = await query('syndocal.query.output.control.authority.v1');
     const id = randomUUID();
     const params = { operationId, request: {
       request: { operation_id: operationId, request_id: requestId, expected_fence: fence, action },
@@ -38,6 +59,13 @@ export async function nativeExternalHighRisk(backend, options, checks) {
   };
   try {
     mcp = await openNativeStdioSession(options);
+    const ungrantedQuery = await send('control_plane.execute', { operationId: 'syndocal.output.lease.authority.query.v1', request: {} });
+    assert.equal(ungrantedQuery.status, 'rejected');
+    assert.equal(ungrantedQuery.error, 'agent_missing_grant');
+    await grant('read', 'syndocal.output.lease.authority.query.v1');
+    await grant('read', 'syndocal.query.output.control.authority.v1');
+    assert.deepEqual((await queryLeases()).statuses, [{ status: 'unavailable' }]);
+    checks.push({ check: 'external-lease-authority-read-exact-grant-safe-mode-empty', passed: true, retryableReadOverloads: readOverloads });
     const destination = path.join(directory, 'diagnostics.zip');
     const denied = await send('diagnostics.export', { destination });
     assert.equal(denied.status, 'rejected');
@@ -83,7 +111,7 @@ export async function nativeExternalHighRisk(backend, options, checks) {
     const selfTransfer = await output('syndocal.output.lease.force_transfer.v2', { kind: 'force_transfer_lease', lease: active }, numericRequestId++);
     assert.equal(selfTransfer.result.result.type, 'rejected');
     assert.equal(selfTransfer.result.result.rejection.error, 'forbidden');
-    const beforeRotation = await backend.invoke('query_output_lease_authority_v1');
+    const beforeRotation = await queryLeases();
     assert.ok(beforeRotation.statuses.some(status => status.status === 'held_active'
       && status.authority.lease_id === active.lease_id && status.authority.generation === active.generation));
     checks.push({ check: 'external-r4-acquire-renew-same-owner-transfer-rejected', passed: true });
@@ -91,7 +119,7 @@ export async function nativeExternalHighRisk(backend, options, checks) {
     // Use the existing owner-replacement lifecycle. Retirement orphans the old
     // lease and advances its generation once; the new owner can transfer it.
     await backend.invoke('register_project_transaction_owner', { ownerId: `high-risk-${randomUUID()}` });
-    const afterRotation = await backend.invoke('query_output_lease_authority_v1');
+    const afterRotation = await queryLeases();
     assert.deepEqual(afterRotation.statuses, [{ status: 'unavailable' }]);
     const staleTransfer = await output('syndocal.output.lease.force_transfer.v2', { kind: 'force_transfer_lease', lease: active }, numericRequestId++);
     assert.equal(staleTransfer.result.result.type, 'rejected');
@@ -108,7 +136,7 @@ export async function nativeExternalHighRisk(backend, options, checks) {
     const ownership = await backend.invoke('get_output_ownership_status');
     assert.equal(ownership.lighting_allowed, false);
     assert.equal(ownership.video_allowed, false);
-    assert.deepEqual((await backend.invoke('query_output_lease_authority_v1')).statuses, [{ status: 'unavailable' }]);
+    assert.deepEqual((await queryLeases()).statuses, [{ status: 'unavailable' }]);
     checks.push({ check: 'external-r4-no-dialog-owner-transfer-stale-generation-rejected-relinquish-without-output', passed: true, ownership });
     const staleRenderer = await backend.evaluate(`window.__TAURI_INTERNALS__.invoke('agent_bridge_execute_native_v1', {rendererGeneration:0,requestId:${JSON.stringify(exportId)}}).then(() => ({ok:true}), error => ({error:String(error)}))`);
     assert.deepEqual(staleRenderer, { error: 'stale_renderer' });

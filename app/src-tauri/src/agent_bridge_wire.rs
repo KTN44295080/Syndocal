@@ -14,6 +14,7 @@ pub(super) const CANONICAL_OPERATION_IDS: &[&str] = &[
     "syndocal.query.runtime.timeline.loop.authority.v1",
     "syndocal.query.runtime.timeline.follow.abort.authority.v1",
     "syndocal.query.output.control.authority.v1",
+    "syndocal.output.lease.authority.query.v1",
     "syndocal.query.output.dsf2026_artnet_acceptance_probe.status.v1",
     "syndocal.query.output.display.add.authority.v1",
     "syndocal.query.output.ownership.v1",
@@ -60,6 +61,7 @@ pub(super) const CANONICAL_OPERATION_IDS: &[&str] = &[
 
 pub(super) fn canonical_operation_is_mutation(operation_id: &str) -> bool {
     !operation_id.starts_with("syndocal.query.")
+        && operation_id != protocol::control_plane_command::OUTPUT_LEASE_AUTHORITY_QUERY_OPERATION_ID
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

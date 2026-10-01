@@ -1,6 +1,6 @@
 # Syndocal MCP adapter
 
-Dependency-free Node.js sidecar for a running Syndocal agent bridge. It exposes fixture listing, fixture reading, exact-project fixture transforms, exact-project Video BO control, request-status lookup, bounded runtime diagnostics, canonical backend capability discovery, read-only recording status, and the 52 reviewed canonical control-plane operations. It does not open devices, start Syndocal, or bypass the backend's output ownership, lease, safety, or typed-command checks.
+Dependency-free Node.js sidecar for a running Syndocal agent bridge. It exposes fixture listing, fixture reading, exact-project fixture transforms, exact-project Video BO control, request-status lookup, bounded runtime diagnostics, canonical backend capability discovery, read-only recording status, and the 53 reviewed canonical control-plane operations. It does not open devices, start Syndocal, or bypass the backend's output ownership, lease, safety, or typed-command checks.
 
 ## Start
 
@@ -57,7 +57,7 @@ reload its MCP connections before discovering the new tools. The credential
 value is never placed in this configuration: the adapter reads the file only to
 create a nonce-bound proof for the current broker request.
 
-On Windows, process identity is read through a fixed, hidden PowerShell/CIM query with a two-second deadline. No tool can supply commands or scripts. On Linux, the test-compatible equivalent reads `/proc/<pid>/exe`. Other platforms without that interface fail closed. The descriptor credential is never included in diagnostics; broker strings and keys are redacted if they echo it. Keep the descriptor private to your local account.
+On Windows, process identity is read through a fixed, hidden PowerShell `Get-Process` query with a ten-second pre-dispatch deadline, including shell startup. No result is cached and no tool can supply commands or scripts. On Linux, the test-compatible equivalent reads `/proc/<pid>/exe`. Other platforms without that interface fail closed. The descriptor credential is never included in diagnostics; broker strings and keys are redacted if they echo it. Keep the descriptor private to your local account.
 
 ## Tools
 
@@ -69,7 +69,16 @@ On Windows, process identity is read through a fixed, hidden PowerShell/CIM quer
 - `syndocal_get_runtime_status({})`: read the project token, lighting/video blackout bits, up to 64 video-output summaries, Timeline transport state, the exact `timeline_runtime` projection, and a separate `observations.output_ownership_status` read. The authority bundle and ownership observation are captured by separate reads and must not be treated as one atomic image.
 - `syndocal_get_control_plane_capabilities({})`: read a bounded projection of the backend-owned canonical operation/source inventory and exact local adapter policy. `FailClosed` entries are discovery-only and cannot be invoked through MCP.
 - `syndocal_get_recording_status({})`: read bounded active recording, dimensions, frame/drop counters, audio inclusion, path, and last-error state. It never starts, stops, finalizes, or replaces a recording.
-- `syndocal_execute_control_plane({requestId,operationId,request})`: execute one of the 52 reviewed canonical operations through a static typed Tauri adapter. `operationId` must be present in the capability registry and `request` must be that operation's exact typed request object. Unreviewed or `FailClosed` inventory entries are rejected.
+- `syndocal_execute_control_plane({requestId,operationId,request})`: execute one of the 53 reviewed canonical operations through a static typed Tauri adapter. `operationId` must be present in the capability registry and `request` must be that operation's exact typed request object. Unreviewed or `FailClosed` inventory entries are rejected.
+
+`syndocal.output.lease.authority.query.v1` takes `request: {}` and requires an
+exact ExternalMcp Read grant. It returns at most 64 current leases belonging to
+the trusted renderer's current native owner, with their identity and generation;
+no matching lease returns `statuses: [{status: "unavailable"}]`. Safe Mode permits
+the granted read. Despite its `syndocal.output.` prefix, it is an R0 observation:
+it never enters the output mutation executor or persists a mutation tombstone.
+Owner retirement hides the old owner's leases from subsequent reads. The query
+does not acquire, renew, recover, transfer or energize output.
 
 Position is `{x,y,z}` and rotation is `{pitch,yaw,roll}`. `expectedProject` is `{project_epoch,project_revision,checkpoint_hash}`. All fields are required; transform coordinates must be finite, project epoch/revision values must be nonnegative safe integers, and `checkpoint_hash` must be exactly 64 lowercase hexadecimal characters. Unknown argument fields are rejected.
 
@@ -153,6 +162,6 @@ The isolated-process security check covers Host/Origin rejection, malformed tool
 paths, and event-loop liveness while WebSocket headers/payloads arrive in pieces.
 It uses no native broker or devices and is included in `check:ai5-sidecar`.
 
-The integration check launches the CLI against its own fake loopback broker. It exercises negotiation, all nine tool schemas, canonical operation allowlisting, request correlation, Video BO false-success handling, pending/unknown behavior, no automatic retry, overlap rejection, malformed/oversized frames, executable mismatch and credential redaction. The transport check exercises health, JSON-RPC over HTTP, the REST facade, WebSocket JSON-RPC, and the same nonce proof against a fake loopback broker. These checks do not operate Syndocal or physical devices. Real native bridge acceptance is a separate integration check.
+The integration check launches the CLI against its own fake loopback broker. It exercises negotiation, all ten tool schemas, canonical operation allowlisting, request correlation, Video BO false-success handling, pending/unknown behavior, no automatic retry, overlap rejection, malformed/oversized frames, executable mismatch and credential redaction. The transport check exercises health, JSON-RPC over HTTP, the REST facade, WebSocket JSON-RPC, and the same nonce proof against a fake loopback broker. These checks do not operate Syndocal or physical devices. Real native bridge acceptance is a separate integration check.
 
 The adapter implements the MCP **2025-11-25** [stdio transport](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports), [initialization lifecycle](https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle), and [tools interface](https://modelcontextprotocol.io/specification/2025-11-25/server/tools). Supported JSON-RPC methods are `initialize`, `notifications/initialized`, `ping`, `tools/list`, and `tools/call`. The HTTP and WebSocket transports reuse the same JSON-RPC dispatcher and native authentication path; they do not add a second command registry.

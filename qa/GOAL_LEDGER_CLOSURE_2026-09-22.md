@@ -366,3 +366,14 @@ machine evidence. The overall ledger remains 27 Complete, 23 Open and
 8 Deferred; the goal remains active. Further work should address typed MCP
 gaps and supported migration/security/observability evidence without adopting
 the protected Remote PIN/DJ ingress changes listed above.
+
+## External MCP lease authority read — 2026-10-02
+
+Base `2d0e65e0`. The existing owner-bound lease query is now a reviewed R0 MCP
+operation, with correct read classification despite its output-prefixed ID.
+Native authority fences and lease observations were obtained through a separate
+stdio sidecar. Twelve native checks passed; the stale registry test counts were
+reconciled against the exact source inventory and the affected Rust tests passed.
+Details and preserved negative/positive evidence are recorded once in
+[the checkpoint](MCP_LEASE_AUTHORITY_2026-10-02.md). The ledger remains
+27 Complete, 23 Open and 8 Deferred; continue executable native security checks.
