@@ -37,6 +37,10 @@ use media_asset_preview_contract::{
 #[cfg(test)]
 use media_asset_preview_contract::MEDIA_ASSET_THUMBNAIL_MAX_EDGE;
 mod project_snapshot_persistence;
+mod project_file_json;
+use project_file_json::{
+    parse_project_json, parse_project_json_bytes, read_project_bytes, read_project_json,
+};
 mod project_publication_missing;
 mod diagnostic_package;
 mod diagnostic_package_publication;
@@ -62859,7 +62863,7 @@ fn read_standby_checkpoint_manifest(
     manifest: StandbySyncManifest,
 ) -> Result<StandbyCheckpoint, String> {
     let path = directory.join(&manifest.project_file);
-    let bytes = fs::read(&path)
+    let bytes = read_project_bytes(&path)
         .map_err(|error| format!("Unable to read standby project {}: {error}", path.display()))?;
     if bytes.len() as u64 != manifest.project_bytes
         || standby_checksum(&bytes) != manifest.project_checksum
@@ -62869,7 +62873,7 @@ fn read_standby_checkpoint_manifest(
             path.display()
         ));
     }
-    let value: Value = serde_json::from_slice(&bytes)
+    let value = parse_project_json_bytes(&bytes)
         .map_err(|error| format!("Invalid standby project {}: {error}", path.display()))?;
     let (project, mappings) = project_and_control_mappings_from_value(value)
         .map_err(|error| format!("Invalid standby project {}: {error}", path.display()))?;
@@ -64212,13 +64216,7 @@ fn load_project_from_path(
     state: &State<'_, AppState>,
     path: &Path,
 ) -> Result<ProjectLoadResult, String> {
-    let file_size = fs::metadata(path).map_err(|error| error.to_string())?.len();
-    if file_size > PROJECT_FILE_MAX_BYTES {
-        return Err(format!(
-            "Project file is {file_size} bytes; the limit is {PROJECT_FILE_MAX_BYTES} bytes"
-        ));
-    }
-    let json = fs::read_to_string(path).map_err(|error| error.to_string())?;
+    let json = read_project_json(path)?;
     load_project_from_json(state, &json, path.to_string_lossy().to_string(), Some(path))
 }
 
@@ -64244,13 +64242,7 @@ fn load_project_from_json_and_disposition(
     current_path: Option<&Path>,
     disposition: ProjectAuthorityDisposition,
 ) -> Result<ProjectLoadResult, String> {
-    if json.len() as u64 > PROJECT_FILE_MAX_BYTES {
-        return Err(format!(
-            "Project JSON is {} bytes; the limit is {PROJECT_FILE_MAX_BYTES} bytes",
-            json.len()
-        ));
-    }
-    let value: Value = serde_json::from_str(json).map_err(|error| error.to_string())?;
+    let value = parse_project_json(json)?;
     let (project, mappings) = project_and_control_mappings_from_value(value)?;
     load_project_from_file_with_control_mappings_and_disposition(
         state,

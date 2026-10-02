@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 1,
+  "timestamp": "2026-10-02T21:46:05.826Z",
+  "passed": false,
+  "executable": "C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-native-acceptance-target\\release\\syndocal.exe",
+  "executableSha256": "eb70fd5bc401c3a0394265d7fe1e8be9d319a91df36fe518f99da5d301b8b24a",
+  "sidecarSha256": "bc6ad436dac381513df992fdbef0aa800c6793704f4c1848b7c8312ec474e564",
+  "runnerSha256": "eeac467d71804690598e748ee18ee55f5fc45a32408e06adea39150a16b76482",
+  "backendHarnessSha256": "ade29aa256d8ff17374bb4b3e893ea9a07f71f8fa2cf2bb72b21f80d4e0e8b1f",
+  "projectJsonHarnessSha256": "0f1ef23510ce3ae569d7cde22ab9ff7a75ca622c053820778b0b389e87e136b4",
+  "projectJsonTransport": "Exact native load_project_path command on private isolated empty-project files; no DOM/dialog action",
+  "profile": "jp.seraf.ktn.syndocal.qa.mcp-lifecycle",
+  "checks": [
+    {
+      "check": "native-project-json-valid-unicode-path-load",
+      "passed": true,
+      "sourceSha256": "f0ac84959775e90b84d1e8f34a4ef31b54cad6d1d061d856312f30ef7db62985",
+      "token": {
+        "project_epoch": 1,
+        "project_revision": 0,
+        "checkpoint_hash": "25ff9c31c5d67e47f79fbd6ac1f2144213fb8f5d3588936d12021b7a2eab62bb",
+        "current_project_path": "C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-project-json-azAjh6\\valid-日本語.sdc",
+        "authority_disposition": "clean_at_path"
+      },
+      "ownership": {
+        "role": "Standby",
+        "effective_role": "Standby",
+        "desired_role": "Both",
+        "persisted_role": "Both",
+        "state": "Ready",
+        "generation": 1,
+        "epoch": 1,
+        "lighting_allowed": false,
+        "video_allowed": false,
+        "lighting_reason": "ProjectSwapDisarmed",
+        "video_reason": "ProjectSwapDisarmed",
+        "error": null
+      }
+    }
+  ],
+  "normalAppIdentityUnchanged": true,
+  "credentialRevoked": true,
+  "credentialFileRemoved": true,
+  "nativePanicLocations": [],
+  "nonclaims": [
+    "QA identifier release build, not the distributed artifact",
+    "No physical output activation; optional high-risk or lease-expiry probe mutates isolated backend lease authority only; optional Tap probe changes isolated empty-project tempo",
+    "No durable authored/output mutation crash publication acceptance"
+  ]
+}

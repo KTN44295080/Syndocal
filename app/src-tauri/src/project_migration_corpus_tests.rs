@@ -1,6 +1,7 @@
 //! Bounded, in-memory migration corpus using the production preparation/writer.
 //! No EngineHandle, AppState, device, network, or project-file publication is used.
 
+use crate::project_file_json::{parse_project_json, parse_project_json_bytes};
 use crate::{
     prepare_project_load, project_and_control_mappings_from_value,
     project_file_for_save_from_parts, project_json_for_write_with_control_mappings_and_dj,
@@ -17,7 +18,7 @@ const HOSTILE_BYTE_CASES: usize = 4096;
 const HOSTILE_MAX_BYTES: usize = 2048;
 
 fn sample() -> Value {
-    serde_json::from_str(PHASE1_SAMPLE_PROJECT_JSON).expect("checked-in sample JSON")
+    parse_project_json(PHASE1_SAMPLE_PROJECT_JSON).expect("checked-in sample JSON")
 }
 
 fn empty() -> Value {
@@ -107,7 +108,7 @@ fn canonical_save(input: &Value) -> Result<(Value, String), String> {
         mappings.dmx_mappings,
         mappings.dj_track_triggers,
     )?;
-    let value = serde_json::from_str(&bytes).map_err(|error| error.to_string())?;
+    let value = parse_project_json(&bytes)?;
     Ok((value, bytes))
 }
 
@@ -316,7 +317,7 @@ fn migration_corpus_bounded_truncation_utf8_and_depth_inputs() {
         .chain(std::iter::once(bytes.len() - 1))
     {
         assert!(
-            serde_json::from_slice::<Value>(&bytes[..cut]).is_err(),
+            parse_project_json_bytes(&bytes[..cut]).is_err(),
             "truncated JSON accepted at byte {cut}"
         );
         truncations += 1;
@@ -328,12 +329,12 @@ fn migration_corpus_bounded_truncation_utf8_and_depth_inputs() {
         b"{\"x\":1e9999}",
         b"{\"x\":0,}",
     ] {
-        assert!(serde_json::from_slice::<Value>(malformed).is_err());
+        assert!(parse_project_json_bytes(malformed).is_err());
     }
     for depth in [128, 256, 512] {
         let text = format!("{}0{}", "[".repeat(depth), "]".repeat(depth));
         assert!(
-            serde_json::from_str::<Value>(&text).is_err(),
+            parse_project_json(&text).is_err(),
             "parser recursion limit not enforced at depth {depth}"
         );
     }
@@ -370,7 +371,7 @@ fn migration_corpus_seeded_hostile_json_bytes_are_bounded_and_panic_free() {
                 random_bytes
             }
         };
-        let parsed_value = match serde_json::from_slice::<Value>(&bytes) {
+        let parsed_value = match parse_project_json_bytes(&bytes) {
             Ok(value) => {
                 parsed += 1;
                 value

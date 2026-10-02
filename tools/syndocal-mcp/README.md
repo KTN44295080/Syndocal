@@ -180,6 +180,17 @@ read retry information. The product and sidecar do not retry requests. QA probes
 may issue up to three new read intents only after a terminal explicitly retryable
 Overloaded rejection; pending/unknown results and mutations are never retried.
 
+Add `--project-json` as a separate project lane for real native `.sdc` admission.
+It loads a private empty project from a Unicode path, then checks duplicate root/
+nested/escaped keys, truncation, invalid UTF-8, future versions and an oversized
+file. Rejected loads must preserve the authored checkpoint, authority/publication/
+history/recovery/path counters, current path, output gates and original file hash.
+The helper uses the production `load_project_path` backend command with the
+current owner and E/R/H fence; it opens no dialog and issues no Enable/Arm action.
+It removes only its prefixed temporary directory. This is native backend
+acceptance, not an external MCP project-load tool or complete migration proof.
+Do not combine it with the other project/lease/diagnostic/Tap probes.
+
 This harness refuses the normal executable, requires an empty QA project, and
 verifies one responsive maximized QA window on each launch. It tests forced exit,
 clean exit, fresh launch identity, retired credentials/grants, old receipts and

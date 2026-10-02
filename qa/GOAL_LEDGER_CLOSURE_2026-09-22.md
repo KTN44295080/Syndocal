@@ -453,3 +453,20 @@ controller-loss/re-arm or AI8. Q4 is 165; status remains 27 Complete, 23 Open an
 8 Deferred. Protected Remote PIN/DJ ingress work remains excluded. Continue the
 stale ShowClock/migration/patch risk-description audit and the remaining executable
 corpus/native-owner evidence gaps.
+
+## Strict native project JSON admission — 2026-10-03
+
+Base `bacd1f18`. Real native loading accepted a repeated project version key;
+the canonical project/Standby parser now rejects duplicate keys and enforces
+bounded file reads even after metadata. Twenty-one optimized Rust tests and nine
+isolated native groups pass. Eight corrupt files preserve the active project,
+authority/output and source bytes when rejected. Exact negative/positive proof,
+warning counts and refreshed normal executable/window identity are recorded once
+in [the checkpoint](PROJECT_JSON_INGRESS_2026-10-03.md).
+
+Q1 records bounded native migration proof and Q3 mitigation reflects current
+evidence. Q4 is 166; status remains 27 Complete, 23 Open and 8 Deferred. Full
+O1–O4, allocator/resource fuzz, backup/recovery/template/cache/protocol and actual
+upgrade/downgrade acceptance remain open. Protected Remote PIN/DJ ingress work
+is excluded. Continue executable compatibility/ingress gaps and stale ShowClock/
+Patch risk-description audit; no subagents or Computer Use.

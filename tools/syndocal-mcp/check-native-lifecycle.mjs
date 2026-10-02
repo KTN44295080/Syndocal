@@ -13,9 +13,12 @@ import { nativeExternalHighRisk } from './native-external-high-risk.mjs';
 import { nativeHighRiskRevocation } from './native-high-risk-revocation.mjs';
 import { nativeTapBpm } from './native-tap-bpm.mjs';
 import { nativeLeaseExpiry } from './native-lease-expiry.mjs';
+import { nativeProjectJson } from './native-project-json.mjs';
 
 const exec = promisify(execFile);
 const args = process.argv.slice(2);
+const projectJson = args.includes('--project-json');
+if (projectJson) args.splice(args.indexOf('--project-json'), 1);
 const leaseExpiry = args.includes('--lease-expiry');
 if (leaseExpiry) args.splice(args.indexOf('--lease-expiry'), 1);
 const tapBpm = args.includes('--tap-bpm');
@@ -27,6 +30,8 @@ if (externalHighRisk) args.splice(args.indexOf('--external-high-risk'), 1);
 const externalRevocation = args.includes('--external-revocation');
 if (externalRevocation) args.splice(args.indexOf('--external-revocation'), 1);
 assert.ok(!leaseExpiry || !(externalHighRisk || externalRevocation), 'Lease-expiry drill owns a separate lease/request-rate lane');
+assert.ok(!projectJson || !(leaseExpiry || externalHighRisk || externalRevocation || tapBpm || diagnostics),
+  'Project-file admission owns a separate project/authority lane');
 const take = name => { const index = args.indexOf(name); assert.ok(index >= 0 && index + 1 < args.length, `Required: ${name}`); return args.splice(index, 2)[1]; };
 const executable = take('--expected-executable');
 const evidence = take('--evidence');
@@ -144,6 +149,7 @@ const read = async () => {
 };
 try {
   const first = await start();
+  if (projectJson) await nativeProjectJson(backend, checks);
   if (tapBpm) await nativeTapBpm(backend, checks);
   const diagnostic = diagnostics ? await nativeDiagnosticExports(backend.invoke) : undefined;
   if (diagnostic) checks.push(diagnostic.check);
@@ -264,6 +270,10 @@ await fs.writeFile(evidence, `${JSON.stringify({ schemaVersion: 1, timestamp: ne
     stdioHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-stdio-session.mjs', import.meta.url))).digest('hex'),
     leaseExpiryTransport: 'Two separately owned authenticated stdio MCP processes; real backend monotonic TTL, no synthetic clock or implicit renewal',
   } : {}),
+  ...(projectJson ? {
+    projectJsonHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-project-json.mjs', import.meta.url))).digest('hex'),
+    projectJsonTransport: 'Exact native load_project_path command on private isolated empty-project files; no DOM/dialog action',
+  } : {}),
   ...(tapBpm ? {
     tapHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-tap-bpm.mjs', import.meta.url))).digest('hex'),
     tapControllerSha256: createHash('sha256').update(await fs.readFile(new URL('../../app/src/tapTempo.ts', import.meta.url))).digest('hex'),
@@ -277,7 +287,8 @@ await fs.writeFile(evidence, `${JSON.stringify({ schemaVersion: 1, timestamp: ne
   profile: 'jp.seraf.ktn.syndocal.qa.mcp-lifecycle', checks, normalAppIdentityUnchanged: true,
   credentialRevoked: !cleanupNeeded, credentialFileRemoved: true,
   nativePanicLocations,
-  nonclaims: ['QA identifier release build, not the distributed artifact', 'No physical output activation; optional high-risk or lease-expiry probe mutates isolated backend lease authority only; optional Tap probe changes isolated empty-project tempo', 'No durable authored/output mutation crash publication acceptance',
+  nonclaims: ['QA identifier release build, not the distributed artifact', 'No physical output activation; optional high-risk or lease-expiry probe mutates isolated backend lease authority only; optional Tap probe changes isolated empty-project tempo; optional project-file probe loads private empty-project JSON only', 'No durable authored/output mutation crash publication acceptance',
+    ...(projectJson ? ['Native .sdc admission and rejected-load preservation only; no complete migration corpus, backup/recovery/upgrade, other file formats or physical output acceptance'] : []),
     ...(leaseExpiry ? ['Stdio disconnect is adapter loss, not native registered-owner retirement; unchanged persisted output configuration and closed runtime gates are not a physical signal or whole controller-loss/re-arm proof'] : []),
     ...(diagnostics ? ['Diagnostic publication covers a private temporary destination only; no crash-during-publication, removable-filesystem or external MCP consent acceptance'] : [])],
 }, null, 2)}\n`, { flag: 'wx' });
