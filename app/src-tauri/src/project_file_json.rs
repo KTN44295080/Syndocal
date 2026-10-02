@@ -82,9 +82,17 @@ impl<'de> Visitor<'de> for UniqueValueVisitor {
 }
 
 pub(super) fn parse_project_json(json: &str) -> Result<Value, String> {
-    if json.len() as u64 > PROJECT_FILE_MAX_BYTES {
+    parse_json_with_byte_limit(json, PROJECT_FILE_MAX_BYTES, "Project JSON")
+}
+
+pub(super) fn parse_json_with_byte_limit(
+    json: &str,
+    limit: u64,
+    label: &str,
+) -> Result<Value, String> {
+    if json.len() as u64 > limit {
         return Err(format!(
-            "Project JSON is {} bytes; the limit is {PROJECT_FILE_MAX_BYTES} bytes",
+            "{label} is {} bytes; the limit is {limit} bytes",
             json.len()
         ));
     }
@@ -110,10 +118,11 @@ fn read_bounded_project_bytes(
     reader: impl Read,
     declared_size: u64,
     limit: u64,
+    label: &str,
 ) -> Result<Vec<u8>, String> {
     if declared_size > limit {
         return Err(format!(
-            "Project file is {declared_size} bytes; the limit is {limit} bytes"
+            "{label} is {declared_size} bytes; the limit is {limit} bytes"
         ));
     }
     // Metadata is only a preflight optimization. The same opened handle may
@@ -125,16 +134,33 @@ fn read_bounded_project_bytes(
         .map_err(|error| error.to_string())?;
     if bytes.len() as u64 > limit {
         return Err(format!(
-            "Project file exceeds the limit of {limit} bytes while reading"
+            "{label} exceeds the limit of {limit} bytes while reading"
         ));
     }
     Ok(bytes)
 }
 
 pub(super) fn read_project_bytes(path: &Path) -> Result<Vec<u8>, String> {
+    read_json_bytes_with_byte_limit(path, PROJECT_FILE_MAX_BYTES, "Project file")
+}
+
+fn read_json_bytes_with_byte_limit(
+    path: &Path,
+    limit: u64,
+    label: &str,
+) -> Result<Vec<u8>, String> {
     let file = File::open(path).map_err(|error| error.to_string())?;
     let size = file.metadata().map_err(|error| error.to_string())?.len();
-    read_bounded_project_bytes(file, size, PROJECT_FILE_MAX_BYTES)
+    read_bounded_project_bytes(file, size, limit, label)
+}
+
+pub(super) fn read_json_with_byte_limit(
+    path: &Path,
+    limit: u64,
+    label: &str,
+) -> Result<String, String> {
+    String::from_utf8(read_json_bytes_with_byte_limit(path, limit, label)?)
+        .map_err(|error| format!("{label} is not valid UTF-8: {error}"))
 }
 
 pub(super) fn read_project_json(path: &Path) -> Result<String, String> {
@@ -250,6 +276,7 @@ mod tests {
             },
             2,
             16,
+            "Project file",
         )
         .unwrap_err();
         assert!(error.contains("while reading"));
@@ -259,11 +286,11 @@ mod tests {
             "growing source must not be drained past limit+1"
         );
         assert_eq!(
-            read_bounded_project_bytes(Cursor::new(b"{}"), 16, 16).unwrap(),
+            read_bounded_project_bytes(Cursor::new(b"{}"), 16, 16, "Project file").unwrap(),
             b"{}"
         );
         assert_eq!(
-            read_bounded_project_bytes(Cursor::new([b' '; 16]), 16, 16)
+            read_bounded_project_bytes(Cursor::new([b' '; 16]), 16, 16, "Project file")
                 .unwrap()
                 .len(),
             16
@@ -278,8 +305,10 @@ mod tests {
                 panic!("oversized source must not be read")
             }
         }
-        assert!(read_bounded_project_bytes(NeverRead, 17, 16)
-            .unwrap_err()
-            .contains("limit"));
+        assert!(
+            read_bounded_project_bytes(NeverRead, 17, 16, "Project file")
+                .unwrap_err()
+                .contains("limit")
+        );
     }
 }

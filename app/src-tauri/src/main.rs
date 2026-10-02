@@ -41,6 +41,7 @@ mod project_file_json;
 use project_file_json::{
     parse_project_json, parse_project_json_bytes, read_project_bytes, read_project_json,
 };
+mod project_backup_json;
 mod project_publication_missing;
 mod diagnostic_package;
 mod diagnostic_package_publication;
@@ -62115,20 +62116,7 @@ fn validate_application_update_backup_request_v1(
 }
 
 fn read_project_backup(path: &Path) -> Result<ProjectBackupEnvelope, String> {
-    let json = fs::read_to_string(path)
-        .map_err(|error| format!("Unable to read project backup {}: {error}", path.display()))?;
-    let backup: ProjectBackupEnvelope = serde_json::from_str(&json)
-        .map_err(|error| format!("Invalid project backup {}: {error}", path.display()))?;
-    if backup.version != PROJECT_BACKUP_VERSION {
-        return Err(format!(
-            "Unsupported project backup version {} in {}",
-            backup.version,
-            path.display()
-        ));
-    }
-    validate_app_name("project backup", &backup.app)?;
-    validate_project_file(&backup.project)?;
-    Ok(backup)
+    project_backup_json::read_project_backup_json(path)
 }
 
 fn list_project_backups_in(directory: &Path) -> Result<Vec<ProjectBackupSummary>, String> {
@@ -62282,7 +62270,7 @@ fn prepare_project_backup_v1(
         dmx_mappings: mappings.dmx_mappings,
         dj_track_triggers: mappings.dj_track_triggers,
     };
-    let bytes = serde_json::to_vec_pretty(&envelope).map_err(|error| error.to_string())?;
+    let bytes = project_backup_json::project_backup_json_bytes(&envelope)?;
     let target_path = project_backup_path(directory, id);
     prepare_project_save_bytes_at(temporary_path, &bytes)?;
     Ok(PreparedProjectBackupV1 {
@@ -62556,7 +62544,7 @@ fn write_project_backup_in(
         dmx_mappings: mappings.dmx_mappings,
         dj_track_triggers: mappings.dj_track_triggers,
     };
-    let bytes = serde_json::to_vec_pretty(&envelope).map_err(|error| error.to_string())?;
+    let bytes = project_backup_json::project_backup_json_bytes(&envelope)?;
     let path = project_backup_path(directory, id);
     let temporary_path = directory.join(format!(".backup-{id}.tmp"));
     {

@@ -1,0 +1,63 @@
+{
+  "schemaVersion": 1,
+  "timestamp": "2026-10-02T22:34:41.456Z",
+  "passed": false,
+  "executable": "C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-native-acceptance-target\\release\\syndocal.exe",
+  "executableSha256": "edd4dc3dfdfaca9ea1bbf1df4026d86603a38081951a45ac7b69ec96acc7baca",
+  "sidecarSha256": "bc6ad436dac381513df992fdbef0aa800c6793704f4c1848b7c8312ec474e564",
+  "runnerSha256": "71324b5e95950545a10ce20b3b3bfc2b5a872e17f66c58723b24f64a38897744",
+  "backendHarnessSha256": "ade29aa256d8ff17374bb4b3e893ea9a07f71f8fa2cf2bb72b21f80d4e0e8b1f",
+  "backupJsonHarnessSha256": "58b06e6a5ae08f78f2b0fb007f6728c3ecfcdcbe680e0b176b9e99c7b31f1530",
+  "backupJsonTransport": "Exact native load_project_backup/list_project_backups on individually owned isolated QA-profile files; no DOM/dialog action",
+  "profile": "jp.seraf.ktn.syndocal.qa.mcp-lifecycle",
+  "checks": [
+    {
+      "check": "native-backup-json-valid-restores-unsaved-private-project",
+      "passed": true,
+      "sourceSha256": "a76d3c29469c1d01c36e02ae5f2cd4ba0a83958ad6ee02499d6b7f4dd70ecb8a",
+      "token": {
+        "project_epoch": 1,
+        "project_revision": 0,
+        "checkpoint_hash": "be28d96a3853d00ed71c358bd0d2461d67bd85b26a14994abc07f06e6c269924",
+        "timeline_transport_epoch": 1,
+        "timeline_transport_generation": 2,
+        "current_project_path": null,
+        "publication_generation": 2,
+        "publication_kind": "identity_replacement",
+        "mapping_replacement_generation": 1,
+        "authority_disposition": "unsaved_replacement",
+        "authority_disposition_generation": 1,
+        "recovery_authority_serial": 4,
+        "recovery_authority_last_transition": {
+          "kind": "project_publication"
+        },
+        "path_generation": 1,
+        "history_generation": 2
+      },
+      "ownership": {
+        "role": "Standby",
+        "effective_role": "Standby",
+        "desired_role": "Both",
+        "persisted_role": "Both",
+        "state": "Ready",
+        "generation": 1,
+        "epoch": 1,
+        "lighting_allowed": false,
+        "video_allowed": false,
+        "lighting_reason": "ProjectSwapDisarmed",
+        "video_reason": "ProjectSwapDisarmed",
+        "error": null
+      }
+    }
+  ],
+  "normalAppIdentityUnchanged": true,
+  "credentialRevoked": true,
+  "credentialFileRemoved": true,
+  "nativePanicLocations": [],
+  "nonclaims": [
+    "QA identifier release build, not the distributed artifact",
+    "No physical output activation; optional high-risk or lease-expiry probe mutates isolated backend lease authority only; optional Tap probe changes isolated empty-project tempo; optional project-file probe loads private empty-project JSON only",
+    "No durable authored/output mutation crash publication acceptance",
+    "Native backup byte/JSON/identity admission and private restore preservation only; no full O1-O4, browser recovery, crash/fallback/upgrade, physical output or release acceptance"
+  ]
+}

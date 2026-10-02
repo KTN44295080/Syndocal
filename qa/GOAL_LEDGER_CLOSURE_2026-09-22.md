@@ -470,3 +470,21 @@ O1–O4, allocator/resource fuzz, backup/recovery/template/cache/protocol and ac
 upgrade/downgrade acceptance remain open. Protected Remote PIN/DJ ingress work
 is excluded. Continue executable compatibility/ingress gaps and stale ShowClock/
 Patch risk-description audit; no subagents or Computer Use.
+
+## Bounded exact-ID backup JSON admission — 2026-10-03
+
+Base `2a9d9c0e`. The real native backup reader accepted a filename/envelope ID
+mismatch. Backup read/write now share a 128 MiB cap and unique-key parser;
+positive canonical IDs must match the filename. Twenty-one optimized Rust tests,
+ten native backup groups and nine `.sdc` regression groups pass. Rejected restores
+preserve active authority/output and source bytes; an explicit valid older restore
+works after corrupt newer files exist. The refreshed normal executable/window,
+negative selection and native proof, warning counts and compatibility boundaries
+are recorded once in [the checkpoint](PROJECT_BACKUP_JSON_2026-10-03.md).
+
+Q4 is 167; status remains 27 Complete, 23 Open and 8 Deferred. The goal stays
+active. Remaining executable gaps include bounded parser diagnostics and broader
+golden/resource/recovery compatibility; automatic fallback, restart disposition,
+actual upgrade/hardware and release gates remain unproved. Protected Remote PIN/
+DJ ingress changes are excluded. Continue those gaps and the stale ShowClock/Patch
+risk-description audit without subagents or Computer Use.

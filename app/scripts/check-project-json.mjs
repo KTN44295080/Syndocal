@@ -5,9 +5,9 @@ import { fileURLToPath } from 'node:url';
 import { requireExactMsvcLinkerFirst, tauriCommandEnvironment } from './run-tauri.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
-const expected = new Map([['project_json_', 7], ['migration_corpus_', 12], ['standby_checkpoint', 2]]);
+const expected = new Map([['project_json_', 7], ['project_backup', 10], ['application_update_', 2], ['migration_corpus_', 12], ['standby_checkpoint', 2]]);
 const filter = process.argv[2];
-assert.equal(process.argv.length, 3, 'Usage: node app/scripts/check-project-json.mjs <project_json_|migration_corpus_|standby_checkpoint>');
+assert.equal(process.argv.length, 3, 'Usage: node app/scripts/check-project-json.mjs <project_json_|project_backup|application_update_|migration_corpus_|standby_checkpoint>');
 assert.ok(expected.has(filter), 'Only owned non-device parser/corpus filters are allowed');
 const env = tauriCommandEnvironment(['build']);
 if (process.platform === 'win32') {

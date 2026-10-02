@@ -1,0 +1,183 @@
+{
+  "schemaVersion": 1,
+  "timestamp": "2026-10-02T22:49:33.554Z",
+  "passed": true,
+  "executable": "C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-native-acceptance-target\\release\\syndocal.exe",
+  "executableSha256": "1ef46463eab3046fa12c9000ba93b99c4334770d8c7c3f0d9860512cb4604f1f",
+  "sidecarSha256": "bc6ad436dac381513df992fdbef0aa800c6793704f4c1848b7c8312ec474e564",
+  "runnerSha256": "71324b5e95950545a10ce20b3b3bfc2b5a872e17f66c58723b24f64a38897744",
+  "backendHarnessSha256": "ade29aa256d8ff17374bb4b3e893ea9a07f71f8fa2cf2bb72b21f80d4e0e8b1f",
+  "projectJsonHarnessSha256": "31457fe6e05f6e9139c783650f2396f2cd0cad5148fda14343b063c142aae278",
+  "projectJsonTransport": "Exact native load_project_path command on private isolated empty-project files; no DOM/dialog action",
+  "profile": "jp.seraf.ktn.syndocal.qa.mcp-lifecycle",
+  "checks": [
+    {
+      "check": "native-project-json-valid-unicode-path-load",
+      "passed": true,
+      "sourceSha256": "f0ac84959775e90b84d1e8f34a4ef31b54cad6d1d061d856312f30ef7db62985",
+      "token": {
+        "project_epoch": 1,
+        "project_revision": 0,
+        "checkpoint_hash": "25ff9c31c5d67e47f79fbd6ac1f2144213fb8f5d3588936d12021b7a2eab62bb",
+        "timeline_transport_epoch": 1,
+        "timeline_transport_generation": 2,
+        "current_project_path": "C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-project-json-tTPQP2\\valid-日本語.sdc",
+        "publication_generation": 2,
+        "publication_kind": "identity_replacement",
+        "mapping_replacement_generation": 1,
+        "authority_disposition": "clean_at_path",
+        "authority_disposition_generation": 1,
+        "recovery_authority_serial": 8,
+        "recovery_authority_last_transition": {
+          "kind": "project_publication"
+        },
+        "path_generation": 1,
+        "history_generation": 2
+      },
+      "ownership": {
+        "role": "Standby",
+        "effective_role": "Standby",
+        "desired_role": "Both",
+        "persisted_role": "Both",
+        "state": "Ready",
+        "generation": 1,
+        "epoch": 1,
+        "lighting_allowed": false,
+        "video_allowed": false,
+        "lighting_reason": "ProjectSwapDisarmed",
+        "video_reason": "ProjectSwapDisarmed",
+        "error": null
+      }
+    },
+    {
+      "check": "native-project-json-hostile-load-preserves-active-project-and-source-bytes",
+      "passed": true,
+      "rejections": [
+        {
+          "name": "duplicate-version",
+          "sourceSha256": "2964dfea2562fdb6c677adcdc97ec943aeff58688fcc00ad19741f5c9be28d22",
+          "byteLength": 3664,
+          "error": "duplicate object key; remove duplicates before loading at line 1 column 3661"
+        },
+        {
+          "name": "duplicate-identical",
+          "sourceSha256": "7f255a6ad94a69779268eb0082d37a76f31e3805feddd72c0c9c48110d226ba6",
+          "byteLength": 3664,
+          "error": "duplicate object key; remove duplicates before loading at line 1 column 3661"
+        },
+        {
+          "name": "duplicate-escaped-key",
+          "sourceSha256": "d431f9e5736c8c45eb8ccf8c5ea0075a5d05d17005db81eb5dd4eb11d892a9d0",
+          "byteLength": 3669,
+          "error": "duplicate object key; remove duplicates before loading at line 1 column 3666"
+        },
+        {
+          "name": "duplicate-nested-bpm",
+          "sourceSha256": "966369df813617412f3313c73b16b35a2ff769848a600cf70b39591dc3957fcf",
+          "byteLength": 3661,
+          "error": "duplicate object key; remove duplicates before loading at line 1 column 209"
+        },
+        {
+          "name": "truncated",
+          "sourceSha256": "7be9c2e81069738da7f2fe28aa90cd3bdb1b857af47030a143c9ff3ab335ab44",
+          "byteLength": 3644,
+          "error": "EOF while parsing a string at line 1 column 3644"
+        },
+        {
+          "name": "invalid-utf8",
+          "sourceSha256": "41ed6a4cdbed76391e560a398c4c396c3646b9bf274e9990a080ccdbee06c1ed",
+          "byteLength": 33,
+          "error": "Project JSON is not valid UTF-8: invalid utf-8 sequence of 1 bytes from index 0"
+        },
+        {
+          "name": "future-version",
+          "sourceSha256": "6b391efd66d1936ddc1438d8b0c014bc0558a1c8cdec40b1a20acd4f6402f0ef",
+          "byteLength": 3652,
+          "error": "Unsupported project version 2"
+        },
+        {
+          "name": "oversized",
+          "byteLength": 67108865,
+          "sourceSha256": "91990977345985aaf03af1358f4f989d7eaf985b58529efb72f613c588f6599a",
+          "error": "Project file is 67108865 bytes; the limit is 67108864 bytes"
+        }
+      ],
+      "beforeToken": {
+        "project_epoch": 1,
+        "project_revision": 0,
+        "checkpoint_hash": "25ff9c31c5d67e47f79fbd6ac1f2144213fb8f5d3588936d12021b7a2eab62bb",
+        "timeline_transport_epoch": 1,
+        "timeline_transport_generation": 2,
+        "current_project_path": "C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-project-json-tTPQP2\\valid-日本語.sdc",
+        "publication_generation": 2,
+        "publication_kind": "identity_replacement",
+        "mapping_replacement_generation": 1,
+        "authority_disposition": "clean_at_path",
+        "authority_disposition_generation": 1,
+        "recovery_authority_serial": 8,
+        "recovery_authority_last_transition": {
+          "kind": "project_publication"
+        },
+        "path_generation": 1,
+        "history_generation": 2
+      },
+      "afterToken": {
+        "project_epoch": 1,
+        "project_revision": 0,
+        "checkpoint_hash": "25ff9c31c5d67e47f79fbd6ac1f2144213fb8f5d3588936d12021b7a2eab62bb",
+        "timeline_transport_epoch": 1,
+        "timeline_transport_generation": 2,
+        "current_project_path": "C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-project-json-tTPQP2\\valid-日本語.sdc",
+        "publication_generation": 2,
+        "publication_kind": "identity_replacement",
+        "mapping_replacement_generation": 1,
+        "authority_disposition": "clean_at_path",
+        "authority_disposition_generation": 1,
+        "recovery_authority_serial": 8,
+        "recovery_authority_last_transition": {
+          "kind": "project_publication"
+        },
+        "path_generation": 1,
+        "history_generation": 2
+      }
+    },
+    {
+      "check": "isolated-first-launch-read",
+      "passed": true
+    },
+    {
+      "check": "dead-process-descriptor-rejected",
+      "passed": true
+    },
+    {
+      "check": "crash-restart-retired-principal-rejected",
+      "passed": true
+    },
+    {
+      "check": "old-credential-and-receipt-not-adopted",
+      "passed": true
+    },
+    {
+      "check": "old-launch-proof-rejected-fresh-read-succeeds",
+      "passed": true
+    },
+    {
+      "check": "graceful-native-close",
+      "passed": true
+    },
+    {
+      "check": "graceful-restart-does-not-restore-grant",
+      "passed": true
+    }
+  ],
+  "normalAppIdentityUnchanged": true,
+  "credentialRevoked": true,
+  "credentialFileRemoved": true,
+  "nativePanicLocations": [],
+  "nonclaims": [
+    "QA identifier release build, not the distributed artifact",
+    "No physical output activation; optional high-risk or lease-expiry probe mutates isolated backend lease authority only; optional Tap probe changes isolated empty-project tempo; optional project-file probe loads private empty-project JSON only",
+    "No durable authored/output mutation crash publication acceptance",
+    "Native .sdc admission and rejected-load preservation only; no complete migration corpus, backup/recovery/upgrade, other file formats or physical output acceptance"
+  ]
+}

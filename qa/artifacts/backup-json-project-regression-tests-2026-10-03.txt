@@ -1,0 +1,19 @@
+CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+where.exe link.exe:
+C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+cargo test --manifest-path app/src-tauri/Cargo.toml --release --locked -j 1 project_json_ -- --nocapture --test-threads=1
+    Finished `release` profile [optimized] target(s) in 0.84s
+
+running 7 tests
+     Running unittests src\main.rs (target\release\deps\syndocal-f8d16f2634d568d4.exe)
+test project_file_json::tests::project_json_allows_sibling_keys_case_and_string_contents ... ok
+test project_file_json::tests::project_json_oversized_metadata_is_rejected_before_read ... ok
+test project_file_json::tests::project_json_reader_bounds_growth_after_metadata ... ok
+test project_file_json::tests::project_json_rejects_invalid_utf8_numbers_trailing_data_and_depth ... ok
+test project_file_json::tests::project_json_rejects_root_nested_and_escaped_duplicate_keys ... ok
+test project_file_json::tests::project_json_size_boundary_is_the_existing_64_mib_limit ... ok
+test project_file_json::tests::project_json_unambiguous_values_match_serde ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 1944 filtered out; finished in 0.05s
+
+PASS project_json_: 7 selected, none failed or ignored; release test binary, not native window acceptance

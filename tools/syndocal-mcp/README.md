@@ -191,6 +191,17 @@ It removes only its prefixed temporary directory. This is native backend
 acceptance, not an external MCP project-load tool or complete migration proof.
 Do not combine it with the other project/lease/diagnostic/Tap probes.
 
+Add `--backup-json` as a separate backup lane. It creates only exclusively owned
+files in the empty isolated QA `project-backups` directory, verifies a real native
+restore, and rejects mismatched/zero IDs, versions, duplicate ignored keys,
+truncation, UTF-8 failure and an over-128-MiB file. Rejected loads must preserve
+the active project/authority/output and source hashes. Only the valid backup is
+listed, and an explicit request can restore it after newer corrupt files exist.
+It never chooses an implicit fallback, publishes/prunes a backup, or reads the
+normal-profile backup contents. Cleanup removes only the files it exclusively
+created. Do not combine this lane with any other optional project/lease/output/
+diagnostic/Tap probe; it is bounded native backend acceptance, not full O1-O4.
+
 This harness refuses the normal executable, requires an empty QA project, and
 verifies one responsive maximized QA window on each launch. It tests forced exit,
 clean exit, fresh launch identity, retired credentials/grants, old receipts and

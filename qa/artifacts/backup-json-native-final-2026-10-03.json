@@ -1,0 +1,236 @@
+{
+  "schemaVersion": 1,
+  "timestamp": "2026-10-02T22:46:23.776Z",
+  "passed": true,
+  "executable": "C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-native-acceptance-target\\release\\syndocal.exe",
+  "executableSha256": "1ef46463eab3046fa12c9000ba93b99c4334770d8c7c3f0d9860512cb4604f1f",
+  "sidecarSha256": "bc6ad436dac381513df992fdbef0aa800c6793704f4c1848b7c8312ec474e564",
+  "runnerSha256": "71324b5e95950545a10ce20b3b3bfc2b5a872e17f66c58723b24f64a38897744",
+  "backendHarnessSha256": "ade29aa256d8ff17374bb4b3e893ea9a07f71f8fa2cf2bb72b21f80d4e0e8b1f",
+  "backupJsonHarnessSha256": "5911ea7bd83cf3881ceba91aae645242bcc0ba03a79a37bdae55357aafa55779",
+  "backupJsonTransport": "Exact native load_project_backup/list_project_backups on individually owned isolated QA-profile files; no DOM/dialog action",
+  "profile": "jp.seraf.ktn.syndocal.qa.mcp-lifecycle",
+  "checks": [
+    {
+      "check": "native-backup-json-valid-restores-unsaved-private-project",
+      "passed": true,
+      "sourceSha256": "ea3451daf954141b808c9049a6207d139e0e603becb37e5f97b8c72bc96cb3dc",
+      "token": {
+        "project_epoch": 1,
+        "project_revision": 0,
+        "checkpoint_hash": "be28d96a3853d00ed71c358bd0d2461d67bd85b26a14994abc07f06e6c269924",
+        "timeline_transport_epoch": 1,
+        "timeline_transport_generation": 2,
+        "current_project_path": null,
+        "publication_generation": 2,
+        "publication_kind": "identity_replacement",
+        "mapping_replacement_generation": 1,
+        "authority_disposition": "unsaved_replacement",
+        "authority_disposition_generation": 1,
+        "recovery_authority_serial": 6,
+        "recovery_authority_last_transition": {
+          "kind": "project_publication"
+        },
+        "path_generation": 1,
+        "history_generation": 2
+      },
+      "ownership": {
+        "role": "Standby",
+        "effective_role": "Standby",
+        "desired_role": "Both",
+        "persisted_role": "Both",
+        "state": "Ready",
+        "generation": 1,
+        "epoch": 1,
+        "lighting_allowed": false,
+        "video_allowed": false,
+        "lighting_reason": "ProjectSwapDisarmed",
+        "video_reason": "ProjectSwapDisarmed",
+        "error": null
+      }
+    },
+    {
+      "check": "native-backup-json-rejects-corruption-without-state-or-file-mutation",
+      "passed": true,
+      "rejections": [
+        {
+          "name": "id-mismatch",
+          "byteLength": 3811,
+          "sourceSha256": "0e8433321ad2b50ebf076937d87ee7a88502e748a6985b4f12182be365f0927c",
+          "error": "Project backup ID 1790981167484 does not match filename ID 1790981167483; keep the original file and select a matching backup"
+        },
+        {
+          "name": "zero-id",
+          "byteLength": 3799,
+          "sourceSha256": "78cee38c5eacde9d015ac82051d5ce1107ad61fbc870c9164e15520ac374e30a",
+          "error": "Invalid project backup C:\\Users\\janua\\AppData\\Local\\jp.seraf.ktn.syndocal.qa.mcp-lifecycle\\project-backups\\backup-1790981167484.json: Project backup ID must be positive"
+        },
+        {
+          "name": "future-backup-version",
+          "byteLength": 3811,
+          "sourceSha256": "21d4d7ca9f94d4c503aba0ca533ba552657864f78215a92750669d6779c2804b",
+          "error": "Invalid project backup C:\\Users\\janua\\AppData\\Local\\jp.seraf.ktn.syndocal.qa.mcp-lifecycle\\project-backups\\backup-1790981167485.json: Unsupported project backup version 2"
+        },
+        {
+          "name": "future-project-version",
+          "byteLength": 3811,
+          "sourceSha256": "f62b1f04efd8a6bf47aa600940a0694010a60e27b009fb7e8ea5a99476ed566f",
+          "error": "Invalid project backup C:\\Users\\janua\\AppData\\Local\\jp.seraf.ktn.syndocal.qa.mcp-lifecycle\\project-backups\\backup-1790981167486.json: Unsupported project version 2"
+        },
+        {
+          "name": "foreign-app",
+          "byteLength": 3808,
+          "sourceSha256": "dad780edebc8b6c3d4399733bb678d33099396845942515952da07f89c87cb78",
+          "error": "Invalid project backup C:\\Users\\janua\\AppData\\Local\\jp.seraf.ktn.syndocal.qa.mcp-lifecycle\\project-backups\\backup-1790981167487.json: Unsupported project backup app 'other'"
+        },
+        {
+          "name": "duplicate-ignored-envelope",
+          "byteLength": 3833,
+          "sourceSha256": "7bff49bc5f6d4543f91119aa80bd9f90bc833ba355d722a4c65b6fecee46d879",
+          "error": "Invalid project backup C:\\Users\\janua\\AppData\\Local\\jp.seraf.ktn.syndocal.qa.mcp-lifecycle\\project-backups\\backup-1790981167492.json: duplicate object key; remove duplicates before loading at line 1 column 20"
+        },
+        {
+          "name": "duplicate-ignored-project",
+          "byteLength": 3833,
+          "sourceSha256": "17b362972299d1ee36e9e6534d94b3eb967f63424efca036ff1281117b7f335d",
+          "error": "Invalid project backup C:\\Users\\janua\\AppData\\Local\\jp.seraf.ktn.syndocal.qa.mcp-lifecycle\\project-backups\\backup-1790981167493.json: duplicate object key; remove duplicates before loading at line 1 column 177"
+        },
+        {
+          "name": "truncated",
+          "byteLength": 3803,
+          "sourceSha256": "7b49228120a9cb49da31211d639d277eba2782b5b1a2bd966dd78f6a15577a21",
+          "error": "Invalid project backup C:\\Users\\janua\\AppData\\Local\\jp.seraf.ktn.syndocal.qa.mcp-lifecycle\\project-backups\\backup-1790981167494.json: EOF while parsing a string at line 1 column 3803"
+        },
+        {
+          "name": "invalid-utf8",
+          "byteLength": 2,
+          "sourceSha256": "b26f99543485cab0666a50160ed4281d01669a10feb99985525b10dd791f1e9d",
+          "error": "Unable to read project backup C:\\Users\\janua\\AppData\\Local\\jp.seraf.ktn.syndocal.qa.mcp-lifecycle\\project-backups\\backup-1790981167495.json: Project backup file is not valid UTF-8: invalid utf-8 sequence of 1 bytes from index 0"
+        },
+        {
+          "name": "oversized",
+          "byteLength": 134217729,
+          "sourceSha256": "7ea6ce492b9f2e83db0190808df466a16da53a11f25ba786f46c26821243c687",
+          "error": "Unable to read project backup C:\\Users\\janua\\AppData\\Local\\jp.seraf.ktn.syndocal.qa.mcp-lifecycle\\project-backups\\backup-1790981167502.json: Project backup file is 134217729 bytes; the limit is 134217728 bytes"
+        }
+      ],
+      "listedIds": [
+        1790981167482
+      ],
+      "beforeToken": {
+        "project_epoch": 1,
+        "project_revision": 0,
+        "checkpoint_hash": "be28d96a3853d00ed71c358bd0d2461d67bd85b26a14994abc07f06e6c269924",
+        "timeline_transport_epoch": 1,
+        "timeline_transport_generation": 2,
+        "current_project_path": null,
+        "publication_generation": 2,
+        "publication_kind": "identity_replacement",
+        "mapping_replacement_generation": 1,
+        "authority_disposition": "unsaved_replacement",
+        "authority_disposition_generation": 1,
+        "recovery_authority_serial": 6,
+        "recovery_authority_last_transition": {
+          "kind": "project_publication"
+        },
+        "path_generation": 1,
+        "history_generation": 2
+      },
+      "afterToken": {
+        "project_epoch": 1,
+        "project_revision": 0,
+        "checkpoint_hash": "be28d96a3853d00ed71c358bd0d2461d67bd85b26a14994abc07f06e6c269924",
+        "timeline_transport_epoch": 1,
+        "timeline_transport_generation": 2,
+        "current_project_path": null,
+        "publication_generation": 2,
+        "publication_kind": "identity_replacement",
+        "mapping_replacement_generation": 1,
+        "authority_disposition": "unsaved_replacement",
+        "authority_disposition_generation": 1,
+        "recovery_authority_serial": 6,
+        "recovery_authority_last_transition": {
+          "kind": "project_publication"
+        },
+        "path_generation": 1,
+        "history_generation": 2
+      }
+    },
+    {
+      "check": "native-backup-json-explicit-older-restore-after-corrupt-newer-files",
+      "passed": true,
+      "selectedId": 1790981167482,
+      "token": {
+        "project_epoch": 2,
+        "project_revision": 0,
+        "checkpoint_hash": "be28d96a3853d00ed71c358bd0d2461d67bd85b26a14994abc07f06e6c269924",
+        "timeline_transport_epoch": 1,
+        "timeline_transport_generation": 3,
+        "current_project_path": null,
+        "publication_generation": 3,
+        "publication_kind": "identity_replacement",
+        "mapping_replacement_generation": 2,
+        "authority_disposition": "unsaved_replacement",
+        "authority_disposition_generation": 2,
+        "recovery_authority_serial": 7,
+        "recovery_authority_last_transition": {
+          "kind": "project_publication"
+        },
+        "path_generation": 2,
+        "history_generation": 3
+      },
+      "ownership": {
+        "role": "Standby",
+        "effective_role": "Standby",
+        "desired_role": "Both",
+        "persisted_role": "Both",
+        "state": "Ready",
+        "generation": 2,
+        "epoch": 2,
+        "lighting_allowed": false,
+        "video_allowed": false,
+        "lighting_reason": "ProjectSwapDisarmed",
+        "video_reason": "ProjectSwapDisarmed",
+        "error": null
+      }
+    },
+    {
+      "check": "isolated-first-launch-read",
+      "passed": true
+    },
+    {
+      "check": "dead-process-descriptor-rejected",
+      "passed": true
+    },
+    {
+      "check": "crash-restart-retired-principal-rejected",
+      "passed": true
+    },
+    {
+      "check": "old-credential-and-receipt-not-adopted",
+      "passed": true
+    },
+    {
+      "check": "old-launch-proof-rejected-fresh-read-succeeds",
+      "passed": true
+    },
+    {
+      "check": "graceful-native-close",
+      "passed": true
+    },
+    {
+      "check": "graceful-restart-does-not-restore-grant",
+      "passed": true
+    }
+  ],
+  "normalAppIdentityUnchanged": true,
+  "credentialRevoked": true,
+  "credentialFileRemoved": true,
+  "nativePanicLocations": [],
+  "nonclaims": [
+    "QA identifier release build, not the distributed artifact",
+    "No physical output activation; optional high-risk or lease-expiry probe mutates isolated backend lease authority only; optional Tap probe changes isolated empty-project tempo; optional project-file probe loads private empty-project JSON only",
+    "No durable authored/output mutation crash publication acceptance",
+    "Native backup byte/JSON/identity admission and private restore preservation only; no full O1-O4, browser recovery, crash/fallback/upgrade, physical output or release acceptance"
+  ]
+}
