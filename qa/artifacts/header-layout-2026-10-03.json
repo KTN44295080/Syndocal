@@ -1,0 +1,2821 @@
+{
+  "timestamp": "2026-10-02T16:17:21.881Z",
+  "runnerSha256": "ee85569b5e2bf9f896c3534b53c6f3ef0eaac410ac12e97643ef4d527395bf64",
+  "componentHashes": {
+    "WorkspaceChrome.tsx": "5ad3312d8b16a92a1c0ccb7d72b921814cf837b82c1500b958445c9663196677",
+    "WorkspaceChrome.css": "2968634c147c9bb194b7dc6938cfa00a05c8219fcd1f214e0e6e890ef9c293c4",
+    "TopbarTools.tsx": "2ea286d0b1608a9274876309f06cf5bd434c0e9d13d5c5b0c06aa5efaccc1b17"
+  },
+  "browserVersion": "154.0.4258.48",
+  "baselineRef": "64b08ab3",
+  "browserPlugin": "unavailable",
+  "softwareOnly": true,
+  "viewports": [
+    {
+      "width": 960,
+      "geometry": {
+        "bounds": {
+          "x": 4,
+          "y": 4,
+          "w": 952,
+          "h": 42,
+          "right": 956,
+          "bottom": 46
+        },
+        "items": [
+          {
+            "label": "Project menu",
+            "x": 10,
+            "y": 10.5,
+            "w": 29,
+            "h": 29,
+            "right": 39,
+            "bottom": 39.5
+          },
+          {
+            "label": "Setup workspace",
+            "x": 44,
+            "y": 8,
+            "w": 70,
+            "h": 34,
+            "right": 114,
+            "bottom": 42
+          },
+          {
+            "label": "Edit workspace",
+            "x": 115,
+            "y": 8,
+            "w": 70,
+            "h": 34,
+            "right": 185,
+            "bottom": 42
+          },
+          {
+            "label": "Control workspace",
+            "x": 186,
+            "y": 8,
+            "w": 70,
+            "h": 34,
+            "right": 256,
+            "bottom": 42
+          },
+          {
+            "label": "Back",
+            "x": 264,
+            "y": 5,
+            "w": 32,
+            "h": 40,
+            "right": 296,
+            "bottom": 45
+          },
+          {
+            "label": "GO",
+            "x": 298,
+            "y": 5,
+            "w": 48,
+            "h": 40,
+            "right": 346,
+            "bottom": 45
+          },
+          {
+            "label": "DMX Blackout",
+            "x": 348,
+            "y": 5,
+            "w": 42,
+            "h": 40,
+            "right": 390,
+            "bottom": 45
+          },
+          {
+            "label": "Video Blackout",
+            "x": 392,
+            "y": 5,
+            "w": 42,
+            "h": 40,
+            "right": 434,
+            "bottom": 45
+          },
+          {
+            "label": "All Blackout",
+            "x": 436,
+            "y": 5,
+            "w": 42,
+            "h": 40,
+            "right": 478,
+            "bottom": 45
+          },
+          {
+            "label": "Show tools",
+            "x": 486,
+            "y": 5,
+            "w": 52,
+            "h": 40,
+            "right": 538,
+            "bottom": 45
+          },
+          {
+            "label": "Edit BPM",
+            "x": 584.34375,
+            "y": 11,
+            "w": 33.34375,
+            "h": 28,
+            "right": 617.6875,
+            "bottom": 39
+          },
+          {
+            "label": "Tap",
+            "x": 621.6875,
+            "y": 5,
+            "w": 40,
+            "h": 40,
+            "right": 661.6875,
+            "bottom": 45
+          },
+          {
+            "label": "Show Clock: Stopped / Fenced",
+            "x": 669.6875,
+            "y": 13.5,
+            "w": 104.546875,
+            "h": 23,
+            "right": 774.234375,
+            "bottom": 36.5
+          },
+          {
+            "label": "最小化",
+            "x": 782.234375,
+            "y": 5,
+            "w": 40,
+            "h": 40,
+            "right": 822.234375,
+            "bottom": 45
+          },
+          {
+            "label": "最大化または元に戻す",
+            "x": 822.234375,
+            "y": 5,
+            "w": 40,
+            "h": 40,
+            "right": 862.234375,
+            "bottom": 45
+          },
+          {
+            "label": "閉じる",
+            "x": 862.234375,
+            "y": 5,
+            "w": 40,
+            "h": 40,
+            "right": 902.234375,
+            "bottom": 45
+          }
+        ],
+        "overlaps": [],
+        "contained": true,
+        "horizontalOverflow": false,
+        "nav": {
+          "x": 10,
+          "y": 8,
+          "w": 246,
+          "h": 34,
+          "right": 256,
+          "bottom": 42
+        },
+        "status": {
+          "x": 264,
+          "y": 5,
+          "w": 510.234375,
+          "h": 40,
+          "right": 774.234375,
+          "bottom": 45
+        },
+        "controlSelected": true
+      },
+      "expanded": {
+        "bounds": {
+          "x": 4,
+          "y": 4,
+          "w": 952,
+          "h": 42,
+          "right": 956,
+          "bottom": 46
+        },
+        "items": [
+          {
+            "label": "Project menu",
+            "x": 10,
+            "y": 10.5,
+            "w": 29,
+            "h": 29,
+            "right": 39,
+            "bottom": 39.5
+          },
+          {
+            "label": "Setup workspace",
+            "x": 44,
+            "y": 8,
+            "w": 70,
+            "h": 34,
+            "right": 114,
+            "bottom": 42
+          },
+          {
+            "label": "Edit workspace",
+            "x": 115,
+            "y": 8,
+            "w": 70,
+            "h": 34,
+            "right": 185,
+            "bottom": 42
+          },
+          {
+            "label": "Control workspace",
+            "x": 186,
+            "y": 8,
+            "w": 70,
+            "h": 34,
+            "right": 256,
+            "bottom": 42
+          },
+          {
+            "label": "Back",
+            "x": 264,
+            "y": 5,
+            "w": 32,
+            "h": 40,
+            "right": 296,
+            "bottom": 45
+          },
+          {
+            "label": "GO",
+            "x": 298,
+            "y": 5,
+            "w": 48,
+            "h": 40,
+            "right": 346,
+            "bottom": 45
+          },
+          {
+            "label": "Release safety blackout",
+            "x": 348,
+            "y": 11.5,
+            "w": 42,
+            "h": 27,
+            "right": 390,
+            "bottom": 38.5
+          },
+          {
+            "label": "DMX Blackout",
+            "x": 392,
+            "y": 5,
+            "w": 42,
+            "h": 40,
+            "right": 434,
+            "bottom": 45
+          },
+          {
+            "label": "Video Blackout",
+            "x": 436,
+            "y": 5,
+            "w": 42,
+            "h": 40,
+            "right": 478,
+            "bottom": 45
+          },
+          {
+            "label": "All Blackout",
+            "x": 480,
+            "y": 5,
+            "w": 42,
+            "h": 40,
+            "right": 522,
+            "bottom": 45
+          },
+          {
+            "label": "Show tools",
+            "x": 530,
+            "y": 5,
+            "w": 52,
+            "h": 40,
+            "right": 582,
+            "bottom": 45
+          },
+          {
+            "label": "Edit BPM",
+            "x": 628.34375,
+            "y": 11,
+            "w": 33.34375,
+            "h": 28,
+            "right": 661.6875,
+            "bottom": 39
+          },
+          {
+            "label": "Tap",
+            "x": 665.6875,
+            "y": 5,
+            "w": 40,
+            "h": 40,
+            "right": 705.6875,
+            "bottom": 45
+          },
+          {
+            "label": "Show Clock: Stopped / Fenced",
+            "x": 713.6875,
+            "y": 13.5,
+            "w": 104.546875,
+            "h": 23,
+            "right": 818.234375,
+            "bottom": 36.5
+          },
+          {
+            "label": "最小化",
+            "x": 826.234375,
+            "y": 5,
+            "w": 40,
+            "h": 40,
+            "right": 866.234375,
+            "bottom": 45
+          },
+          {
+            "label": "最大化または元に戻す",
+            "x": 866.234375,
+            "y": 5,
+            "w": 40,
+            "h": 40,
+            "right": 906.234375,
+            "bottom": 45
+          },
+          {
+            "label": "閉じる",
+            "x": 906.234375,
+            "y": 5,
+            "w": 40,
+            "h": 40,
+            "right": 946.234375,
+            "bottom": 45
+          }
+        ],
+        "overlaps": [],
+        "contained": true,
+        "horizontalOverflow": false,
+        "nav": {
+          "x": 10,
+          "y": 8,
+          "w": 246,
+          "h": 34,
+          "right": 256,
+          "bottom": 42
+        },
+        "status": {
+          "x": 264,
+          "y": 5,
+          "w": 554.234375,
+          "h": 40,
+          "right": 818.234375,
+          "bottom": 45
+        },
+        "controlSelected": true
+      },
+      "tools": {
+        "contained": true,
+        "buttonsReachable": true,
+        "buttons": [
+          {
+            "label": "Pause Fade",
+            "hit": "<svg viewBox=\"0 0 20 20\" aria-hidden=\"true\"><path d=\"M7 4.5 14 10l-7 5z\"></path></svg>",
+            "reachable": true
+          },
+          {
+            "label": "Play Timeline",
+            "hit": "<svg viewBox=\"0 0 20 20\" aria-hidden=\"true\"><path d=\"M3.5 16h13M5 14v4M10 14v4M15 14v4\"></path><path d=\"M7 4.5 14 9l-7 4.5z\"></path></svg>",
+            "reachable": true
+          },
+          {
+            "label": "Clear Fixture Flags",
+            "hit": "<path d=\"M5 17V3.5M5 4h8l-1.5 3L13 10H5M10 13l5 5M15 13l-5 5\"></path>",
+            "reachable": true
+          },
+          {
+            "label": "MIDI Learn",
+            "hit": "<path d=\"M3 5h14v10H3zM6 5v6M10 5v6M14 5v6M5 11v4M9 11v4M13 11v4\"></path>",
+            "reachable": true
+          },
+          {
+            "label": "OSC Learn",
+            "hit": "<svg viewBox=\"0 0 20 20\" aria-hidden=\"true\"><circle cx=\"5\" cy=\"10\" r=\"2\"></circle><circle cx=\"15\" cy=\"5\" r=\"2\"></circle><circle cx=\"15\" cy=\"15\" r=\"2\">",
+            "reachable": true
+          },
+          {
+            "label": "DMX Learn",
+            "hit": "<svg viewBox=\"0 0 20 20\" aria-hidden=\"true\"><path d=\"M3 4h14v12H3zM6 7h2v6H6zM9 9h2v4H9zM12 6h2v7h-2z\"></path></svg>",
+            "reachable": true
+          },
+          {
+            "label": "音声入力設定を開く",
+            "hit": "<span class=\"topbarPulseLabel\" data-no-localize=\"\">PULSE</span>",
+            "reachable": true
+          }
+        ]
+      }
+    },
+    {
+      "width": 1100,
+      "geometry": {
+        "bounds": {
+          "x": 4,
+          "y": 4,
+          "w": 1092,
+          "h": 42,
+          "right": 1096,
+          "bottom": 46
+        },
+        "items": [
+          {
+            "label": "Project menu",
+            "x": 10,
+            "y": 10.5,
+            "w": 29,
+            "h": 29,
+            "right": 39,
+            "bottom": 39.5
+          },
+          {
+            "label": "Setup workspace",
+            "x": 44,
+            "y": 8,
+            "w": 70,
+            "h": 34,
+            "right": 114,
+            "bottom": 42
+          },
+          {
+            "label": "Edit workspace",
+            "x": 115,
+            "y": 8,
+            "w": 70,
+            "h": 34,
+            "right": 185,
+            "bottom": 42
+          },
+          {
+            "label": "Control workspace",
+            "x": 186,
+            "y": 8,
+            "w": 70,
+            "h": 34,
+            "right": 256,
+            "bottom": 42
+          },
+          {
+            "label": "Back",
+            "x": 264,
+            "y": 5,
+            "w": 32,
+            "h": 40,
+            "right": 296,
+            "bottom": 45
+          },
+          {
+            "label": "GO",
+            "x": 298,
+            "y": 5,
+            "w": 48,
+            "h": 40,
+            "right": 346,
+            "bottom": 45
+          },
+          {
+            "label": "DMX Blackout",
+            "x": 348,
+            "y": 5,
+            "w": 42,
+            "h": 40,
+            "right": 390,
+            "bottom": 45
+          },
+          {
+            "label": "Video Blackout",
+            "x": 392,
+            "y": 5,
+            "w": 42,
+            "h": 40,
+            "right": 434,
+            "bottom": 45
+          },
+          {
+            "label": "All Blackout",
+            "x": 436,
+            "y": 5,
+            "w": 42,
+            "h": 40,
+            "right": 478,
+            "bottom": 45
+          },
+          {
+            "label": "Show tools",
+            "x": 486,
+            "y": 5,
+            "w": 52,
+            "h": 40,
+            "right": 538,
+            "bottom": 45
+          },
+          {
+            "label": "Edit BPM",
+            "x": 584.34375,
+            "y": 11,
+            "w": 33.34375,
+            "h": 28,
+            "right": 617.6875,
+            "bottom": 39
+          },
+          {
+            "label": "Tap",
+            "x": 621.6875,
+            "y": 5,
+            "w": 40,
+            "h": 40,
+            "right": 661.6875,
+            "bottom": 45
+          },
+          {
+            "label": "Show Clock: Stopped / Fenced",
+            "x": 669.6875,
+            "y": 13.5,
+            "w": 104.546875,
+            "h": 23,
+            "right": 774.234375,
+            "bottom": 36.5
+          },
+          {
+            "label": "最小化",
+            "x": 782.234375,
+            "y": 5,
+            "w": 40,
+            "h": 40,
+            "right": 822.234375,
+            "bottom": 45
+          },
+          {
+            "label": "最大化または元に戻す",
+            "x": 822.234375,
+            "y": 5,
+            "w": 40,
+            "h": 40,
+            "right": 862.234375,
+            "bottom": 45
+          },
+          {
+            "label": "閉じる",
+            "x": 862.234375,
+            "y": 5,
+            "w": 40,
+            "h": 40,
+            "right": 902.234375,
+            "bottom": 45
+          }
+        ],
+        "overlaps": [],
+        "contained": true,
+        "horizontalOverflow": false,
+        "nav": {
+          "x": 10,
+          "y": 8,
+          "w": 246,
+          "h": 34,
+          "right": 256,
+          "bottom": 42
+        },
+        "status": {
+          "x": 264,
+          "y": 5,
+          "w": 510.234375,
+          "h": 40,
+          "right": 774.234375,
+          "bottom": 45
+        },
+        "controlSelected": true
+      },
+      "expanded": {
+        "bounds": {
+          "x": 4,
+          "y": 4,
+          "w": 1092,
+          "h": 42,
+          "right": 1096,
+          "bottom": 46
+        },
+        "items": [
+          {
+            "label": "Project menu",
+            "x": 10,
+            "y": 10.5,
+            "w": 29,
+            "h": 29,
+            "right": 39,
+            "bottom": 39.5
+          },
+          {
+            "label": "Setup workspace",
+            "x": 44,
+            "y": 8,
+            "w": 70,
+            "h": 34,
+            "right": 114,
+            "bottom": 42
+          },
+          {
+            "label": "Edit workspace",
+            "x": 115,
+            "y": 8,
+            "w": 70,
+            "h": 34,
+            "right": 185,
+            "bottom": 42
+          },
+          {
+            "label": "Control workspace",
+            "x": 186,
+            "y": 8,
+            "w": 70,
+            "h": 34,
+            "right": 256,
+            "bottom": 42
+          },
+          {
+            "label": "Back",
+            "x": 264,
+            "y": 5,
+            "w": 32,
+            "h": 40,
+            "right": 296,
+            "bottom": 45
+          },
+          {
+            "label": "GO",
+            "x": 298,
+            "y": 5,
+            "w": 48,
+            "h": 40,
+            "right": 346,
+            "bottom": 45
+          },
+          {
+            "label": "Release safety blackout",
+            "x": 348,
+            "y": 11.5,
+            "w": 42,
+            "h": 27,
+            "right": 390,
+            "bottom": 38.5
+          },
+          {
+            "label": "DMX Blackout",
+            "x": 392,
+            "y": 5,
+            "w": 42,
+            "h": 40,
+            "right": 434,
+            "bottom": 45
+          },
+          {
+            "label": "Video Blackout",
+            "x": 436,
+            "y": 5,
+            "w": 42,
+            "h": 40,
+            "right": 478,
+            "bottom": 45
+          },
+          {
+            "label": "All Blackout",
+            "x": 480,
+            "y": 5,
+            "w": 42,
+            "h": 40,
+            "right": 522,
+            "bottom": 45
+          },
+          {
+            "label": "Show tools",
+            "x": 530,
+            "y": 5,
+            "w": 52,
+            "h": 40,
+            "right": 582,
+            "bottom": 45
+          },
+          {
+            "label": "Edit BPM",
+            "x": 628.34375,
+            "y": 11,
+            "w": 33.34375,
+            "h": 28,
+            "right": 661.6875,
+            "bottom": 39
+          },
+          {
+            "label": "Tap",
+            "x": 665.6875,
+            "y": 5,
+            "w": 40,
+            "h": 40,
+            "right": 705.6875,
+            "bottom": 45
+          },
+          {
+            "label": "Show Clock: Stopped / Fenced",
+            "x": 713.6875,
+            "y": 13.5,
+            "w": 104.546875,
+            "h": 23,
+            "right": 818.234375,
+            "bottom": 36.5
+          },
+          {
+            "label": "最小化",
+            "x": 826.234375,
+            "y": 5,
+            "w": 40,
+            "h": 40,
+            "right": 866.234375,
+            "bottom": 45
+          },
+          {
+            "label": "最大化または元に戻す",
+            "x": 866.234375,
+            "y": 5,
+            "w": 40,
+            "h": 40,
+            "right": 906.234375,
+            "bottom": 45
+          },
+          {
+            "label": "閉じる",
+            "x": 906.234375,
+            "y": 5,
+            "w": 40,
+            "h": 40,
+            "right": 946.234375,
+            "bottom": 45
+          }
+        ],
+        "overlaps": [],
+        "contained": true,
+        "horizontalOverflow": false,
+        "nav": {
+          "x": 10,
+          "y": 8,
+          "w": 246,
+          "h": 34,
+          "right": 256,
+          "bottom": 42
+        },
+        "status": {
+          "x": 264,
+          "y": 5,
+          "w": 554.234375,
+          "h": 40,
+          "right": 818.234375,
+          "bottom": 45
+        },
+        "controlSelected": true
+      },
+      "tools": {
+        "contained": true,
+        "buttonsReachable": true,
+        "buttons": [
+          {
+            "label": "Pause Fade",
+            "hit": "<svg viewBox=\"0 0 20 20\" aria-hidden=\"true\"><path d=\"M7 4.5 14 10l-7 5z\"></path></svg>",
+            "reachable": true
+          },
+          {
+            "label": "Play Timeline",
+            "hit": "<svg viewBox=\"0 0 20 20\" aria-hidden=\"true\"><path d=\"M3.5 16h13M5 14v4M10 14v4M15 14v4\"></path><path d=\"M7 4.5 14 9l-7 4.5z\"></path></svg>",
+            "reachable": true
+          },
+          {
+            "label": "Clear Fixture Flags",
+            "hit": "<path d=\"M5 17V3.5M5 4h8l-1.5 3L13 10H5M10 13l5 5M15 13l-5 5\"></path>",
+            "reachable": true
+          },
+          {
+            "label": "MIDI Learn",
+            "hit": "<path d=\"M3 5h14v10H3zM6 5v6M10 5v6M14 5v6M5 11v4M9 11v4M13 11v4\"></path>",
+            "reachable": true
+          },
+          {
+            "label": "OSC Learn",
+            "hit": "<svg viewBox=\"0 0 20 20\" aria-hidden=\"true\"><circle cx=\"5\" cy=\"10\" r=\"2\"></circle><circle cx=\"15\" cy=\"5\" r=\"2\"></circle><circle cx=\"15\" cy=\"15\" r=\"2\">",
+            "reachable": true
+          },
+          {
+            "label": "DMX Learn",
+            "hit": "<svg viewBox=\"0 0 20 20\" aria-hidden=\"true\"><path d=\"M3 4h14v12H3zM6 7h2v6H6zM9 9h2v4H9zM12 6h2v7h-2z\"></path></svg>",
+            "reachable": true
+          },
+          {
+            "label": "音声入力設定を開く",
+            "hit": "<span class=\"topbarPulseLabel\" data-no-localize=\"\">PULSE</span>",
+            "reachable": true
+          }
+        ]
+      }
+    },
+    {
+      "width": 1280,
+      "geometry": {
+        "bounds": {
+          "x": 4,
+          "y": 4,
+          "w": 1272,
+          "h": 42,
+          "right": 1276,
+          "bottom": 46
+        },
+        "items": [
+          {
+            "label": "Project menu",
+            "x": 10,
+            "y": 10.5,
+            "w": 29,
+            "h": 29,
+            "right": 39,
+            "bottom": 39.5
+          },
+          {
+            "label": "Setup workspace",
+            "x": 44,
+            "y": 8,
+            "w": 70,
+            "h": 34,
+            "right": 114,
+            "bottom": 42
+          },
+          {
+            "label": "Edit workspace",
+            "x": 115,
+            "y": 8,
+            "w": 70,
+            "h": 34,
+            "right": 185,
+            "bottom": 42
+          },
+          {
+            "label": "Control workspace",
+            "x": 186,
+            "y": 8,
+            "w": 70,
+            "h": 34,
+            "right": 256,
+            "bottom": 42
+          },
+          {
+            "label": "Syndocal",
+            "x": 264,
+            "y": 17,
+            "w": 50.484375,
+            "h": 16,
+            "right": 314.484375,
+            "bottom": 33
+          },
+          {
+            "label": "Back",
+            "x": 593.296875,
+            "y": 5,
+            "w": 32,
+            "h": 40,
+            "right": 625.296875,
+            "bottom": 45
+          },
+          {
+            "label": "GO",
+            "x": 627.296875,
+            "y": 5,
+            "w": 48,
+            "h": 40,
+            "right": 675.296875,
+            "bottom": 45
+          },
+          {
+            "label": "DMX Blackout",
+            "x": 685.296875,
+            "y": 5,
+            "w": 42,
+            "h": 40,
+            "right": 727.296875,
+            "bottom": 45
+          },
+          {
+            "label": "Video Blackout",
+            "x": 729.296875,
+            "y": 5,
+            "w": 42,
+            "h": 40,
+            "right": 771.296875,
+            "bottom": 45
+          },
+          {
+            "label": "All Blackout",
+            "x": 773.296875,
+            "y": 5,
+            "w": 42,
+            "h": 40,
+            "right": 815.296875,
+            "bottom": 45
+          },
+          {
+            "label": "Show tools",
+            "x": 823.296875,
+            "y": 5,
+            "w": 52,
+            "h": 40,
+            "right": 875.296875,
+            "bottom": 45
+          },
+          {
+            "label": "Edit BPM",
+            "x": 921.640625,
+            "y": 11,
+            "w": 33.34375,
+            "h": 28,
+            "right": 954.984375,
+            "bottom": 39
+          },
+          {
+            "label": "Tap",
+            "x": 958.984375,
+            "y": 5,
+            "w": 40,
+            "h": 40,
+            "right": 998.984375,
+            "bottom": 45
+          },
+          {
+            "label": "Show Clock: Stopped / Fenced",
+            "x": 1006.984375,
+            "y": 13.5,
+            "w": 135.015625,
+            "h": 23,
+            "right": 1142,
+            "bottom": 36.5
+          },
+          {
+            "label": "最小化",
+            "x": 1150,
+            "y": 5,
+            "w": 40,
+            "h": 40,
+            "right": 1190,
+            "bottom": 45
+          },
+          {
+            "label": "最大化または元に戻す",
+            "x": 1190,
+            "y": 5,
+            "w": 40,
+            "h": 40,
+            "right": 1230,
+            "bottom": 45
+          },
+          {
+            "label": "閉じる",
+            "x": 1230,
+            "y": 5,
+            "w": 40,
+            "h": 40,
+            "right": 1270,
+            "bottom": 45
+          }
+        ],
+        "overlaps": [],
+        "contained": true,
+        "horizontalOverflow": false,
+        "nav": {
+          "x": 10,
+          "y": 8,
+          "w": 246,
+          "h": 34,
+          "right": 256,
+          "bottom": 42
+        },
+        "status": {
+          "x": 593.296875,
+          "y": 5,
+          "w": 548.703125,
+          "h": 40,
+          "right": 1142,
+          "bottom": 45
+        },
+        "controlSelected": true
+      },
+      "expanded": {
+        "bounds": {
+          "x": 4,
+          "y": 4,
+          "w": 1272,
+          "h": 42,
+          "right": 1276,
+          "bottom": 46
+        },
+        "items": [
+          {
+            "label": "Project menu",
+            "x": 10,
+            "y": 10.5,
+            "w": 29,
+            "h": 29,
+            "right": 39,
+            "bottom": 39.5
+          },
+          {
+            "label": "Setup workspace",
+            "x": 44,
+            "y": 8,
+            "w": 70,
+            "h": 34,
+            "right": 114,
+            "bottom": 42
+          },
+          {
+            "label": "Edit workspace",
+            "x": 115,
+            "y": 8,
+            "w": 70,
+            "h": 34,
+            "right": 185,
+            "bottom": 42
+          },
+          {
+            "label": "Control workspace",
+            "x": 186,
+            "y": 8,
+            "w": 70,
+            "h": 34,
+            "right": 256,
+            "bottom": 42
+          },
+          {
+            "label": "Syndocal",
+            "x": 264,
+            "y": 17,
+            "w": 50.484375,
+            "h": 16,
+            "right": 314.484375,
+            "bottom": 33
+          },
+          {
+            "label": "Back",
+            "x": 549.296875,
+            "y": 5,
+            "w": 32,
+            "h": 40,
+            "right": 581.296875,
+            "bottom": 45
+          },
+          {
+            "label": "GO",
+            "x": 583.296875,
+            "y": 5,
+            "w": 48,
+            "h": 40,
+            "right": 631.296875,
+            "bottom": 45
+          },
+          {
+            "label": "Release safety blackout",
+            "x": 633.296875,
+            "y": 11.5,
+            "w": 42,
+            "h": 27,
+            "right": 675.296875,
+            "bottom": 38.5
+          },
+          {
+            "label": "DMX Blackout",
+            "x": 685.296875,
+            "y": 5,
+            "w": 42,
+            "h": 40,
+            "right": 727.296875,
+            "bottom": 45
+          },
+          {
+            "label": "Video Blackout",
+            "x": 729.296875,
+            "y": 5,
+            "w": 42,
+            "h": 40,
+            "right": 771.296875,
+            "bottom": 45
+          },
+          {
+            "label": "All Blackout",
+            "x": 773.296875,
+            "y": 5,
+            "w": 42,
+            "h": 40,
+            "right": 815.296875,
+            "bottom": 45
+          },
+          {
+            "label": "Show tools",
+            "x": 823.296875,
+            "y": 5,
+            "w": 52,
+            "h": 40,
+            "right": 875.296875,
+            "bottom": 45
+          },
+          {
+            "label": "Edit BPM",
+            "x": 921.640625,
+            "y": 11,
+            "w": 33.34375,
+            "h": 28,
+            "right": 954.984375,
+            "bottom": 39
+          },
+          {
+            "label": "Tap",
+            "x": 958.984375,
+            "y": 5,
+            "w": 40,
+            "h": 40,
+            "right": 998.984375,
+            "bottom": 45
+          },
+          {
+            "label": "Show Clock: Stopped / Fenced",
+            "x": 1006.984375,
+            "y": 13.5,
+            "w": 135.015625,
+            "h": 23,
+            "right": 1142,
+            "bottom": 36.5
+          },
+          {
+            "label": "最小化",
+            "x": 1150,
+            "y": 5,
+            "w": 40,
+            "h": 40,
+            "right": 1190,
+            "bottom": 45
+          },
+          {
+            "label": "最大化または元に戻す",
+            "x": 1190,
+            "y": 5,
+            "w": 40,
+            "h": 40,
+            "right": 1230,
+            "bottom": 45
+          },
+          {
+            "label": "閉じる",
+            "x": 1230,
+            "y": 5,
+            "w": 40,
+            "h": 40,
+            "right": 1270,
+            "bottom": 45
+          }
+        ],
+        "overlaps": [],
+        "contained": true,
+        "horizontalOverflow": false,
+        "nav": {
+          "x": 10,
+          "y": 8,
+          "w": 246,
+          "h": 34,
+          "right": 256,
+          "bottom": 42
+        },
+        "status": {
+          "x": 549.296875,
+          "y": 5,
+          "w": 592.703125,
+          "h": 40,
+          "right": 1142,
+          "bottom": 45
+        },
+        "controlSelected": true
+      },
+      "tools": {
+        "contained": true,
+        "buttonsReachable": true,
+        "buttons": [
+          {
+            "label": "Pause Fade",
+            "hit": "<svg viewBox=\"0 0 20 20\" aria-hidden=\"true\"><path d=\"M7 4.5 14 10l-7 5z\"></path></svg>",
+            "reachable": true
+          },
+          {
+            "label": "Play Timeline",
+            "hit": "<svg viewBox=\"0 0 20 20\" aria-hidden=\"true\"><path d=\"M3.5 16h13M5 14v4M10 14v4M15 14v4\"></path><path d=\"M7 4.5 14 9l-7 4.5z\"></path></svg>",
+            "reachable": true
+          },
+          {
+            "label": "Clear Fixture Flags",
+            "hit": "<path d=\"M5 17V3.5M5 4h8l-1.5 3L13 10H5M10 13l5 5M15 13l-5 5\"></path>",
+            "reachable": true
+          },
+          {
+            "label": "MIDI Learn",
+            "hit": "<path d=\"M3 5h14v10H3zM6 5v6M10 5v6M14 5v6M5 11v4M9 11v4M13 11v4\"></path>",
+            "reachable": true
+          },
+          {
+            "label": "OSC Learn",
+            "hit": "<svg viewBox=\"0 0 20 20\" aria-hidden=\"true\"><circle cx=\"5\" cy=\"10\" r=\"2\"></circle><circle cx=\"15\" cy=\"5\" r=\"2\"></circle><circle cx=\"15\" cy=\"15\" r=\"2\">",
+            "reachable": true
+          },
+          {
+            "label": "DMX Learn",
+            "hit": "<svg viewBox=\"0 0 20 20\" aria-hidden=\"true\"><path d=\"M3 4h14v12H3zM6 7h2v6H6zM9 9h2v4H9zM12 6h2v7h-2z\"></path></svg>",
+            "reachable": true
+          },
+          {
+            "label": "音声入力設定を開く",
+            "hit": "<span class=\"topbarPulseLabel\" data-no-localize=\"\">PULSE</span>",
+            "reachable": true
+          }
+        ]
+      }
+    },
+    {
+      "width": 1920,
+      "geometry": {
+        "bounds": {
+          "x": 4,
+          "y": 4,
+          "w": 1912,
+          "h": 42,
+          "right": 1916,
+          "bottom": 46
+        },
+        "items": [
+          {
+            "label": "Project menu",
+            "x": 10,
+            "y": 10.5,
+            "w": 29,
+            "h": 29,
+            "right": 39,
+            "bottom": 39.5
+          },
+          {
+            "label": "Setup workspace",
+            "x": 44,
+            "y": 8,
+            "w": 70,
+            "h": 34,
+            "right": 114,
+            "bottom": 42
+          },
+          {
+            "label": "Edit workspace",
+            "x": 115,
+            "y": 8,
+            "w": 70,
+            "h": 34,
+            "right": 185,
+            "bottom": 42
+          },
+          {
+            "label": "Control workspace",
+            "x": 186,
+            "y": 8,
+            "w": 70,
+            "h": 34,
+            "right": 256,
+            "bottom": 42
+          },
+          {
+            "label": "Syndocal",
+            "x": 264,
+            "y": 17,
+            "w": 50.484375,
+            "h": 16,
+            "right": 314.484375,
+            "bottom": 33
+          },
+          {
+            "label": "Untitled.sdc",
+            "x": 318.484375,
+            "y": 18,
+            "w": 57.40625,
+            "h": 15,
+            "right": 375.890625,
+            "bottom": 33
+          },
+          {
+            "label": "Back",
+            "x": 1233.296875,
+            "y": 5,
+            "w": 32,
+            "h": 40,
+            "right": 1265.296875,
+            "bottom": 45
+          },
+          {
+            "label": "GO",
+            "x": 1267.296875,
+            "y": 5,
+            "w": 48,
+            "h": 40,
+            "right": 1315.296875,
+            "bottom": 45
+          },
+          {
+            "label": "DMX Blackout",
+            "x": 1325.296875,
+            "y": 5,
+            "w": 42,
+            "h": 40,
+            "right": 1367.296875,
+            "bottom": 45
+          },
+          {
+            "label": "Video Blackout",
+            "x": 1369.296875,
+            "y": 5,
+            "w": 42,
+            "h": 40,
+            "right": 1411.296875,
+            "bottom": 45
+          },
+          {
+            "label": "All Blackout",
+            "x": 1413.296875,
+            "y": 5,
+            "w": 42,
+            "h": 40,
+            "right": 1455.296875,
+            "bottom": 45
+          },
+          {
+            "label": "Show tools",
+            "x": 1463.296875,
+            "y": 5,
+            "w": 52,
+            "h": 40,
+            "right": 1515.296875,
+            "bottom": 45
+          },
+          {
+            "label": "Edit BPM",
+            "x": 1561.640625,
+            "y": 11,
+            "w": 33.34375,
+            "h": 28,
+            "right": 1594.984375,
+            "bottom": 39
+          },
+          {
+            "label": "Tap",
+            "x": 1598.984375,
+            "y": 5,
+            "w": 40,
+            "h": 40,
+            "right": 1638.984375,
+            "bottom": 45
+          },
+          {
+            "label": "Show Clock: Stopped / Fenced",
+            "x": 1646.984375,
+            "y": 13.5,
+            "w": 135.015625,
+            "h": 23,
+            "right": 1782,
+            "bottom": 36.5
+          },
+          {
+            "label": "最小化",
+            "x": 1790,
+            "y": 5,
+            "w": 40,
+            "h": 40,
+            "right": 1830,
+            "bottom": 45
+          },
+          {
+            "label": "最大化または元に戻す",
+            "x": 1830,
+            "y": 5,
+            "w": 40,
+            "h": 40,
+            "right": 1870,
+            "bottom": 45
+          },
+          {
+            "label": "閉じる",
+            "x": 1870,
+            "y": 5,
+            "w": 40,
+            "h": 40,
+            "right": 1910,
+            "bottom": 45
+          }
+        ],
+        "overlaps": [],
+        "contained": true,
+        "horizontalOverflow": false,
+        "nav": {
+          "x": 10,
+          "y": 8,
+          "w": 246,
+          "h": 34,
+          "right": 256,
+          "bottom": 42
+        },
+        "status": {
+          "x": 1233.296875,
+          "y": 5,
+          "w": 548.703125,
+          "h": 40,
+          "right": 1782,
+          "bottom": 45
+        },
+        "controlSelected": true
+      },
+      "expanded": {
+        "bounds": {
+          "x": 4,
+          "y": 4,
+          "w": 1912,
+          "h": 42,
+          "right": 1916,
+          "bottom": 46
+        },
+        "items": [
+          {
+            "label": "Project menu",
+            "x": 10,
+            "y": 10.5,
+            "w": 29,
+            "h": 29,
+            "right": 39,
+            "bottom": 39.5
+          },
+          {
+            "label": "Setup workspace",
+            "x": 44,
+            "y": 8,
+            "w": 70,
+            "h": 34,
+            "right": 114,
+            "bottom": 42
+          },
+          {
+            "label": "Edit workspace",
+            "x": 115,
+            "y": 8,
+            "w": 70,
+            "h": 34,
+            "right": 185,
+            "bottom": 42
+          },
+          {
+            "label": "Control workspace",
+            "x": 186,
+            "y": 8,
+            "w": 70,
+            "h": 34,
+            "right": 256,
+            "bottom": 42
+          },
+          {
+            "label": "Syndocal",
+            "x": 264,
+            "y": 17,
+            "w": 50.484375,
+            "h": 16,
+            "right": 314.484375,
+            "bottom": 33
+          },
+          {
+            "label": "長いプロジェクト名長いプロジェクト名長いプロジェクト名長いプロジェクト名長いプロジェクト名長いプロジェクト名長いプロジェクト名長いプロジェクト名長いプロジェクト名長いプロジェクト名長いプロジェクト名長いプロジェクト名.sdc *",
+            "x": 318.484375,
+            "y": 18,
+            "w": 862.8125,
+            "h": 15,
+            "right": 1181.296875,
+            "bottom": 33
+          },
+          {
+            "label": "Back",
+            "x": 1189.296875,
+            "y": 5,
+            "w": 32,
+            "h": 40,
+            "right": 1221.296875,
+            "bottom": 45
+          },
+          {
+            "label": "GO",
+            "x": 1223.296875,
+            "y": 5,
+            "w": 48,
+            "h": 40,
+            "right": 1271.296875,
+            "bottom": 45
+          },
+          {
+            "label": "Release safety blackout",
+            "x": 1273.296875,
+            "y": 11.5,
+            "w": 42,
+            "h": 27,
+            "right": 1315.296875,
+            "bottom": 38.5
+          },
+          {
+            "label": "DMX Blackout",
+            "x": 1325.296875,
+            "y": 5,
+            "w": 42,
+            "h": 40,
+            "right": 1367.296875,
+            "bottom": 45
+          },
+          {
+            "label": "Video Blackout",
+            "x": 1369.296875,
+            "y": 5,
+            "w": 42,
+            "h": 40,
+            "right": 1411.296875,
+            "bottom": 45
+          },
+          {
+            "label": "All Blackout",
+            "x": 1413.296875,
+            "y": 5,
+            "w": 42,
+            "h": 40,
+            "right": 1455.296875,
+            "bottom": 45
+          },
+          {
+            "label": "Show tools",
+            "x": 1463.296875,
+            "y": 5,
+            "w": 52,
+            "h": 40,
+            "right": 1515.296875,
+            "bottom": 45
+          },
+          {
+            "label": "Edit BPM",
+            "x": 1561.640625,
+            "y": 11,
+            "w": 33.34375,
+            "h": 28,
+            "right": 1594.984375,
+            "bottom": 39
+          },
+          {
+            "label": "Tap",
+            "x": 1598.984375,
+            "y": 5,
+            "w": 40,
+            "h": 40,
+            "right": 1638.984375,
+            "bottom": 45
+          },
+          {
+            "label": "Show Clock: Stopped / Fenced",
+            "x": 1646.984375,
+            "y": 13.5,
+            "w": 135.015625,
+            "h": 23,
+            "right": 1782,
+            "bottom": 36.5
+          },
+          {
+            "label": "最小化",
+            "x": 1790,
+            "y": 5,
+            "w": 40,
+            "h": 40,
+            "right": 1830,
+            "bottom": 45
+          },
+          {
+            "label": "最大化または元に戻す",
+            "x": 1830,
+            "y": 5,
+            "w": 40,
+            "h": 40,
+            "right": 1870,
+            "bottom": 45
+          },
+          {
+            "label": "閉じる",
+            "x": 1870,
+            "y": 5,
+            "w": 40,
+            "h": 40,
+            "right": 1910,
+            "bottom": 45
+          }
+        ],
+        "overlaps": [],
+        "contained": true,
+        "horizontalOverflow": false,
+        "nav": {
+          "x": 10,
+          "y": 8,
+          "w": 246,
+          "h": 34,
+          "right": 256,
+          "bottom": 42
+        },
+        "status": {
+          "x": 1189.296875,
+          "y": 5,
+          "w": 592.703125,
+          "h": 40,
+          "right": 1782,
+          "bottom": 45
+        },
+        "controlSelected": true
+      },
+      "tools": {
+        "contained": true,
+        "buttonsReachable": true,
+        "buttons": [
+          {
+            "label": "Pause Fade",
+            "hit": "<svg viewBox=\"0 0 20 20\" aria-hidden=\"true\"><path d=\"M7 4.5 14 10l-7 5z\"></path></svg>",
+            "reachable": true
+          },
+          {
+            "label": "Play Timeline",
+            "hit": "<svg viewBox=\"0 0 20 20\" aria-hidden=\"true\"><path d=\"M3.5 16h13M5 14v4M10 14v4M15 14v4\"></path><path d=\"M7 4.5 14 9l-7 4.5z\"></path></svg>",
+            "reachable": true
+          },
+          {
+            "label": "Clear Fixture Flags",
+            "hit": "<path d=\"M5 17V3.5M5 4h8l-1.5 3L13 10H5M10 13l5 5M15 13l-5 5\"></path>",
+            "reachable": true
+          },
+          {
+            "label": "MIDI Learn",
+            "hit": "<path d=\"M3 5h14v10H3zM6 5v6M10 5v6M14 5v6M5 11v4M9 11v4M13 11v4\"></path>",
+            "reachable": true
+          },
+          {
+            "label": "OSC Learn",
+            "hit": "<svg viewBox=\"0 0 20 20\" aria-hidden=\"true\"><circle cx=\"5\" cy=\"10\" r=\"2\"></circle><circle cx=\"15\" cy=\"5\" r=\"2\"></circle><circle cx=\"15\" cy=\"15\" r=\"2\">",
+            "reachable": true
+          },
+          {
+            "label": "DMX Learn",
+            "hit": "<svg viewBox=\"0 0 20 20\" aria-hidden=\"true\"><path d=\"M3 4h14v12H3zM6 7h2v6H6zM9 9h2v4H9zM12 6h2v7h-2z\"></path></svg>",
+            "reachable": true
+          },
+          {
+            "label": "音声入力設定を開く",
+            "hit": "<span class=\"topbarPulseLabel\" data-no-localize=\"\">PULSE</span>",
+            "reachable": true
+          }
+        ]
+      }
+    },
+    {
+      "width": 2560,
+      "geometry": {
+        "bounds": {
+          "x": 4,
+          "y": 4,
+          "w": 2552,
+          "h": 42,
+          "right": 2556,
+          "bottom": 46
+        },
+        "items": [
+          {
+            "label": "Project menu",
+            "x": 10,
+            "y": 10.5,
+            "w": 29,
+            "h": 29,
+            "right": 39,
+            "bottom": 39.5
+          },
+          {
+            "label": "Setup workspace",
+            "x": 44,
+            "y": 8,
+            "w": 70,
+            "h": 34,
+            "right": 114,
+            "bottom": 42
+          },
+          {
+            "label": "Edit workspace",
+            "x": 115,
+            "y": 8,
+            "w": 70,
+            "h": 34,
+            "right": 185,
+            "bottom": 42
+          },
+          {
+            "label": "Control workspace",
+            "x": 186,
+            "y": 8,
+            "w": 70,
+            "h": 34,
+            "right": 256,
+            "bottom": 42
+          },
+          {
+            "label": "Syndocal",
+            "x": 264,
+            "y": 17,
+            "w": 50.484375,
+            "h": 16,
+            "right": 314.484375,
+            "bottom": 33
+          },
+          {
+            "label": "Untitled.sdc",
+            "x": 318.484375,
+            "y": 18,
+            "w": 57.40625,
+            "h": 15,
+            "right": 375.890625,
+            "bottom": 33
+          },
+          {
+            "label": "Back",
+            "x": 1873.296875,
+            "y": 5,
+            "w": 32,
+            "h": 40,
+            "right": 1905.296875,
+            "bottom": 45
+          },
+          {
+            "label": "GO",
+            "x": 1907.296875,
+            "y": 5,
+            "w": 48,
+            "h": 40,
+            "right": 1955.296875,
+            "bottom": 45
+          },
+          {
+            "label": "DMX Blackout",
+            "x": 1965.296875,
+            "y": 5,
+            "w": 42,
+            "h": 40,
+            "right": 2007.296875,
+            "bottom": 45
+          },
+          {
+            "label": "Video Blackout",
+            "x": 2009.296875,
+            "y": 5,
+            "w": 42,
+            "h": 40,
+            "right": 2051.296875,
+            "bottom": 45
+          },
+          {
+            "label": "All Blackout",
+            "x": 2053.296875,
+            "y": 5,
+            "w": 42,
+            "h": 40,
+            "right": 2095.296875,
+            "bottom": 45
+          },
+          {
+            "label": "Show tools",
+            "x": 2103.296875,
+            "y": 5,
+            "w": 52,
+            "h": 40,
+            "right": 2155.296875,
+            "bottom": 45
+          },
+          {
+            "label": "Edit BPM",
+            "x": 2201.640625,
+            "y": 11,
+            "w": 33.34375,
+            "h": 28,
+            "right": 2234.984375,
+            "bottom": 39
+          },
+          {
+            "label": "Tap",
+            "x": 2238.984375,
+            "y": 5,
+            "w": 40,
+            "h": 40,
+            "right": 2278.984375,
+            "bottom": 45
+          },
+          {
+            "label": "Show Clock: Stopped / Fenced",
+            "x": 2286.984375,
+            "y": 13.5,
+            "w": 135.015625,
+            "h": 23,
+            "right": 2422,
+            "bottom": 36.5
+          },
+          {
+            "label": "最小化",
+            "x": 2430,
+            "y": 5,
+            "w": 40,
+            "h": 40,
+            "right": 2470,
+            "bottom": 45
+          },
+          {
+            "label": "最大化または元に戻す",
+            "x": 2470,
+            "y": 5,
+            "w": 40,
+            "h": 40,
+            "right": 2510,
+            "bottom": 45
+          },
+          {
+            "label": "閉じる",
+            "x": 2510,
+            "y": 5,
+            "w": 40,
+            "h": 40,
+            "right": 2550,
+            "bottom": 45
+          }
+        ],
+        "overlaps": [],
+        "contained": true,
+        "horizontalOverflow": false,
+        "nav": {
+          "x": 10,
+          "y": 8,
+          "w": 246,
+          "h": 34,
+          "right": 256,
+          "bottom": 42
+        },
+        "status": {
+          "x": 1873.296875,
+          "y": 5,
+          "w": 548.703125,
+          "h": 40,
+          "right": 2422,
+          "bottom": 45
+        },
+        "controlSelected": true
+      },
+      "expanded": {
+        "bounds": {
+          "x": 4,
+          "y": 4,
+          "w": 2552,
+          "h": 42,
+          "right": 2556,
+          "bottom": 46
+        },
+        "items": [
+          {
+            "label": "Project menu",
+            "x": 10,
+            "y": 10.5,
+            "w": 29,
+            "h": 29,
+            "right": 39,
+            "bottom": 39.5
+          },
+          {
+            "label": "Setup workspace",
+            "x": 44,
+            "y": 8,
+            "w": 70,
+            "h": 34,
+            "right": 114,
+            "bottom": 42
+          },
+          {
+            "label": "Edit workspace",
+            "x": 115,
+            "y": 8,
+            "w": 70,
+            "h": 34,
+            "right": 185,
+            "bottom": 42
+          },
+          {
+            "label": "Control workspace",
+            "x": 186,
+            "y": 8,
+            "w": 70,
+            "h": 34,
+            "right": 256,
+            "bottom": 42
+          },
+          {
+            "label": "Syndocal",
+            "x": 264,
+            "y": 17,
+            "w": 50.484375,
+            "h": 16,
+            "right": 314.484375,
+            "bottom": 33
+          },
+          {
+            "label": "長いプロジェクト名長いプロジェクト名長いプロジェクト名長いプロジェクト名長いプロジェクト名長いプロジェクト名長いプロジェクト名長いプロジェクト名長いプロジェクト名長いプロジェクト名長いプロジェクト名長いプロジェクト名.sdc *",
+            "x": 318.484375,
+            "y": 18,
+            "w": 964.90625,
+            "h": 15,
+            "right": 1283.390625,
+            "bottom": 33
+          },
+          {
+            "label": "Back",
+            "x": 1829.296875,
+            "y": 5,
+            "w": 32,
+            "h": 40,
+            "right": 1861.296875,
+            "bottom": 45
+          },
+          {
+            "label": "GO",
+            "x": 1863.296875,
+            "y": 5,
+            "w": 48,
+            "h": 40,
+            "right": 1911.296875,
+            "bottom": 45
+          },
+          {
+            "label": "Release safety blackout",
+            "x": 1913.296875,
+            "y": 11.5,
+            "w": 42,
+            "h": 27,
+            "right": 1955.296875,
+            "bottom": 38.5
+          },
+          {
+            "label": "DMX Blackout",
+            "x": 1965.296875,
+            "y": 5,
+            "w": 42,
+            "h": 40,
+            "right": 2007.296875,
+            "bottom": 45
+          },
+          {
+            "label": "Video Blackout",
+            "x": 2009.296875,
+            "y": 5,
+            "w": 42,
+            "h": 40,
+            "right": 2051.296875,
+            "bottom": 45
+          },
+          {
+            "label": "All Blackout",
+            "x": 2053.296875,
+            "y": 5,
+            "w": 42,
+            "h": 40,
+            "right": 2095.296875,
+            "bottom": 45
+          },
+          {
+            "label": "Show tools",
+            "x": 2103.296875,
+            "y": 5,
+            "w": 52,
+            "h": 40,
+            "right": 2155.296875,
+            "bottom": 45
+          },
+          {
+            "label": "Edit BPM",
+            "x": 2201.640625,
+            "y": 11,
+            "w": 33.34375,
+            "h": 28,
+            "right": 2234.984375,
+            "bottom": 39
+          },
+          {
+            "label": "Tap",
+            "x": 2238.984375,
+            "y": 5,
+            "w": 40,
+            "h": 40,
+            "right": 2278.984375,
+            "bottom": 45
+          },
+          {
+            "label": "Show Clock: Stopped / Fenced",
+            "x": 2286.984375,
+            "y": 13.5,
+            "w": 135.015625,
+            "h": 23,
+            "right": 2422,
+            "bottom": 36.5
+          },
+          {
+            "label": "最小化",
+            "x": 2430,
+            "y": 5,
+            "w": 40,
+            "h": 40,
+            "right": 2470,
+            "bottom": 45
+          },
+          {
+            "label": "最大化または元に戻す",
+            "x": 2470,
+            "y": 5,
+            "w": 40,
+            "h": 40,
+            "right": 2510,
+            "bottom": 45
+          },
+          {
+            "label": "閉じる",
+            "x": 2510,
+            "y": 5,
+            "w": 40,
+            "h": 40,
+            "right": 2550,
+            "bottom": 45
+          }
+        ],
+        "overlaps": [],
+        "contained": true,
+        "horizontalOverflow": false,
+        "nav": {
+          "x": 10,
+          "y": 8,
+          "w": 246,
+          "h": 34,
+          "right": 256,
+          "bottom": 42
+        },
+        "status": {
+          "x": 1829.296875,
+          "y": 5,
+          "w": 592.703125,
+          "h": 40,
+          "right": 2422,
+          "bottom": 45
+        },
+        "controlSelected": true
+      },
+      "tools": {
+        "contained": true,
+        "buttonsReachable": true,
+        "buttons": [
+          {
+            "label": "Pause Fade",
+            "hit": "<svg viewBox=\"0 0 20 20\" aria-hidden=\"true\"><path d=\"M7 4.5 14 10l-7 5z\"></path></svg>",
+            "reachable": true
+          },
+          {
+            "label": "Play Timeline",
+            "hit": "<svg viewBox=\"0 0 20 20\" aria-hidden=\"true\"><path d=\"M3.5 16h13M5 14v4M10 14v4M15 14v4\"></path><path d=\"M7 4.5 14 9l-7 4.5z\"></path></svg>",
+            "reachable": true
+          },
+          {
+            "label": "Clear Fixture Flags",
+            "hit": "<path d=\"M5 17V3.5M5 4h8l-1.5 3L13 10H5M10 13l5 5M15 13l-5 5\"></path>",
+            "reachable": true
+          },
+          {
+            "label": "MIDI Learn",
+            "hit": "<path d=\"M3 5h14v10H3zM6 5v6M10 5v6M14 5v6M5 11v4M9 11v4M13 11v4\"></path>",
+            "reachable": true
+          },
+          {
+            "label": "OSC Learn",
+            "hit": "<svg viewBox=\"0 0 20 20\" aria-hidden=\"true\"><circle cx=\"5\" cy=\"10\" r=\"2\"></circle><circle cx=\"15\" cy=\"5\" r=\"2\"></circle><circle cx=\"15\" cy=\"15\" r=\"2\">",
+            "reachable": true
+          },
+          {
+            "label": "DMX Learn",
+            "hit": "<svg viewBox=\"0 0 20 20\" aria-hidden=\"true\"><path d=\"M3 4h14v12H3zM6 7h2v6H6zM9 9h2v4H9zM12 6h2v7h-2z\"></path></svg>",
+            "reachable": true
+          },
+          {
+            "label": "音声入力設定を開く",
+            "hit": "<span class=\"topbarPulseLabel\" data-no-localize=\"\">PULSE</span>",
+            "reachable": true
+          }
+        ]
+      }
+    },
+    {
+      "width": 3840,
+      "geometry": {
+        "bounds": {
+          "x": 4,
+          "y": 4,
+          "w": 3832,
+          "h": 42,
+          "right": 3836,
+          "bottom": 46
+        },
+        "items": [
+          {
+            "label": "Project menu",
+            "x": 10,
+            "y": 10.5,
+            "w": 29,
+            "h": 29,
+            "right": 39,
+            "bottom": 39.5
+          },
+          {
+            "label": "Setup workspace",
+            "x": 44,
+            "y": 8,
+            "w": 70,
+            "h": 34,
+            "right": 114,
+            "bottom": 42
+          },
+          {
+            "label": "Edit workspace",
+            "x": 115,
+            "y": 8,
+            "w": 70,
+            "h": 34,
+            "right": 185,
+            "bottom": 42
+          },
+          {
+            "label": "Control workspace",
+            "x": 186,
+            "y": 8,
+            "w": 70,
+            "h": 34,
+            "right": 256,
+            "bottom": 42
+          },
+          {
+            "label": "Syndocal",
+            "x": 264,
+            "y": 17,
+            "w": 50.484375,
+            "h": 16,
+            "right": 314.484375,
+            "bottom": 33
+          },
+          {
+            "label": "Untitled.sdc",
+            "x": 318.484375,
+            "y": 18,
+            "w": 57.40625,
+            "h": 15,
+            "right": 375.890625,
+            "bottom": 33
+          },
+          {
+            "label": "Back",
+            "x": 3153.296875,
+            "y": 5,
+            "w": 32,
+            "h": 40,
+            "right": 3185.296875,
+            "bottom": 45
+          },
+          {
+            "label": "GO",
+            "x": 3187.296875,
+            "y": 5,
+            "w": 48,
+            "h": 40,
+            "right": 3235.296875,
+            "bottom": 45
+          },
+          {
+            "label": "DMX Blackout",
+            "x": 3245.296875,
+            "y": 5,
+            "w": 42,
+            "h": 40,
+            "right": 3287.296875,
+            "bottom": 45
+          },
+          {
+            "label": "Video Blackout",
+            "x": 3289.296875,
+            "y": 5,
+            "w": 42,
+            "h": 40,
+            "right": 3331.296875,
+            "bottom": 45
+          },
+          {
+            "label": "All Blackout",
+            "x": 3333.296875,
+            "y": 5,
+            "w": 42,
+            "h": 40,
+            "right": 3375.296875,
+            "bottom": 45
+          },
+          {
+            "label": "Show tools",
+            "x": 3383.296875,
+            "y": 5,
+            "w": 52,
+            "h": 40,
+            "right": 3435.296875,
+            "bottom": 45
+          },
+          {
+            "label": "Edit BPM",
+            "x": 3481.640625,
+            "y": 11,
+            "w": 33.34375,
+            "h": 28,
+            "right": 3514.984375,
+            "bottom": 39
+          },
+          {
+            "label": "Tap",
+            "x": 3518.984375,
+            "y": 5,
+            "w": 40,
+            "h": 40,
+            "right": 3558.984375,
+            "bottom": 45
+          },
+          {
+            "label": "Show Clock: Stopped / Fenced",
+            "x": 3566.984375,
+            "y": 13.5,
+            "w": 135.015625,
+            "h": 23,
+            "right": 3702,
+            "bottom": 36.5
+          },
+          {
+            "label": "最小化",
+            "x": 3710,
+            "y": 5,
+            "w": 40,
+            "h": 40,
+            "right": 3750,
+            "bottom": 45
+          },
+          {
+            "label": "最大化または元に戻す",
+            "x": 3750,
+            "y": 5,
+            "w": 40,
+            "h": 40,
+            "right": 3790,
+            "bottom": 45
+          },
+          {
+            "label": "閉じる",
+            "x": 3790,
+            "y": 5,
+            "w": 40,
+            "h": 40,
+            "right": 3830,
+            "bottom": 45
+          }
+        ],
+        "overlaps": [],
+        "contained": true,
+        "horizontalOverflow": false,
+        "nav": {
+          "x": 10,
+          "y": 8,
+          "w": 246,
+          "h": 34,
+          "right": 256,
+          "bottom": 42
+        },
+        "status": {
+          "x": 3153.296875,
+          "y": 5,
+          "w": 548.703125,
+          "h": 40,
+          "right": 3702,
+          "bottom": 45
+        },
+        "controlSelected": true
+      },
+      "expanded": {
+        "bounds": {
+          "x": 4,
+          "y": 4,
+          "w": 3832,
+          "h": 42,
+          "right": 3836,
+          "bottom": 46
+        },
+        "items": [
+          {
+            "label": "Project menu",
+            "x": 10,
+            "y": 10.5,
+            "w": 29,
+            "h": 29,
+            "right": 39,
+            "bottom": 39.5
+          },
+          {
+            "label": "Setup workspace",
+            "x": 44,
+            "y": 8,
+            "w": 70,
+            "h": 34,
+            "right": 114,
+            "bottom": 42
+          },
+          {
+            "label": "Edit workspace",
+            "x": 115,
+            "y": 8,
+            "w": 70,
+            "h": 34,
+            "right": 185,
+            "bottom": 42
+          },
+          {
+            "label": "Control workspace",
+            "x": 186,
+            "y": 8,
+            "w": 70,
+            "h": 34,
+            "right": 256,
+            "bottom": 42
+          },
+          {
+            "label": "Syndocal",
+            "x": 264,
+            "y": 17,
+            "w": 50.484375,
+            "h": 16,
+            "right": 314.484375,
+            "bottom": 33
+          },
+          {
+            "label": "長いプロジェクト名長いプロジェクト名長いプロジェクト名長いプロジェクト名長いプロジェクト名長いプロジェクト名長いプロジェクト名長いプロジェクト名長いプロジェクト名長いプロジェクト名長いプロジェクト名長いプロジェクト名.sdc *",
+            "x": 318.484375,
+            "y": 18,
+            "w": 964.90625,
+            "h": 15,
+            "right": 1283.390625,
+            "bottom": 33
+          },
+          {
+            "label": "Back",
+            "x": 3109.296875,
+            "y": 5,
+            "w": 32,
+            "h": 40,
+            "right": 3141.296875,
+            "bottom": 45
+          },
+          {
+            "label": "GO",
+            "x": 3143.296875,
+            "y": 5,
+            "w": 48,
+            "h": 40,
+            "right": 3191.296875,
+            "bottom": 45
+          },
+          {
+            "label": "Release safety blackout",
+            "x": 3193.296875,
+            "y": 11.5,
+            "w": 42,
+            "h": 27,
+            "right": 3235.296875,
+            "bottom": 38.5
+          },
+          {
+            "label": "DMX Blackout",
+            "x": 3245.296875,
+            "y": 5,
+            "w": 42,
+            "h": 40,
+            "right": 3287.296875,
+            "bottom": 45
+          },
+          {
+            "label": "Video Blackout",
+            "x": 3289.296875,
+            "y": 5,
+            "w": 42,
+            "h": 40,
+            "right": 3331.296875,
+            "bottom": 45
+          },
+          {
+            "label": "All Blackout",
+            "x": 3333.296875,
+            "y": 5,
+            "w": 42,
+            "h": 40,
+            "right": 3375.296875,
+            "bottom": 45
+          },
+          {
+            "label": "Show tools",
+            "x": 3383.296875,
+            "y": 5,
+            "w": 52,
+            "h": 40,
+            "right": 3435.296875,
+            "bottom": 45
+          },
+          {
+            "label": "Edit BPM",
+            "x": 3481.640625,
+            "y": 11,
+            "w": 33.34375,
+            "h": 28,
+            "right": 3514.984375,
+            "bottom": 39
+          },
+          {
+            "label": "Tap",
+            "x": 3518.984375,
+            "y": 5,
+            "w": 40,
+            "h": 40,
+            "right": 3558.984375,
+            "bottom": 45
+          },
+          {
+            "label": "Show Clock: Stopped / Fenced",
+            "x": 3566.984375,
+            "y": 13.5,
+            "w": 135.015625,
+            "h": 23,
+            "right": 3702,
+            "bottom": 36.5
+          },
+          {
+            "label": "最小化",
+            "x": 3710,
+            "y": 5,
+            "w": 40,
+            "h": 40,
+            "right": 3750,
+            "bottom": 45
+          },
+          {
+            "label": "最大化または元に戻す",
+            "x": 3750,
+            "y": 5,
+            "w": 40,
+            "h": 40,
+            "right": 3790,
+            "bottom": 45
+          },
+          {
+            "label": "閉じる",
+            "x": 3790,
+            "y": 5,
+            "w": 40,
+            "h": 40,
+            "right": 3830,
+            "bottom": 45
+          }
+        ],
+        "overlaps": [],
+        "contained": true,
+        "horizontalOverflow": false,
+        "nav": {
+          "x": 10,
+          "y": 8,
+          "w": 246,
+          "h": 34,
+          "right": 256,
+          "bottom": 42
+        },
+        "status": {
+          "x": 3109.296875,
+          "y": 5,
+          "w": 592.703125,
+          "h": 40,
+          "right": 3702,
+          "bottom": 45
+        },
+        "controlSelected": true
+      },
+      "tools": {
+        "contained": true,
+        "buttonsReachable": true,
+        "buttons": [
+          {
+            "label": "Pause Fade",
+            "hit": "<svg viewBox=\"0 0 20 20\" aria-hidden=\"true\"><path d=\"M7 4.5 14 10l-7 5z\"></path></svg>",
+            "reachable": true
+          },
+          {
+            "label": "Play Timeline",
+            "hit": "<svg viewBox=\"0 0 20 20\" aria-hidden=\"true\"><path d=\"M3.5 16h13M5 14v4M10 14v4M15 14v4\"></path><path d=\"M7 4.5 14 9l-7 4.5z\"></path></svg>",
+            "reachable": true
+          },
+          {
+            "label": "Clear Fixture Flags",
+            "hit": "<path d=\"M5 17V3.5M5 4h8l-1.5 3L13 10H5M10 13l5 5M15 13l-5 5\"></path>",
+            "reachable": true
+          },
+          {
+            "label": "MIDI Learn",
+            "hit": "<path d=\"M3 5h14v10H3zM6 5v6M10 5v6M14 5v6M5 11v4M9 11v4M13 11v4\"></path>",
+            "reachable": true
+          },
+          {
+            "label": "OSC Learn",
+            "hit": "<svg viewBox=\"0 0 20 20\" aria-hidden=\"true\"><circle cx=\"5\" cy=\"10\" r=\"2\"></circle><circle cx=\"15\" cy=\"5\" r=\"2\"></circle><circle cx=\"15\" cy=\"15\" r=\"2\">",
+            "reachable": true
+          },
+          {
+            "label": "DMX Learn",
+            "hit": "<svg viewBox=\"0 0 20 20\" aria-hidden=\"true\"><path d=\"M3 4h14v12H3zM6 7h2v6H6zM9 9h2v4H9zM12 6h2v7h-2z\"></path></svg>",
+            "reachable": true
+          },
+          {
+            "label": "音声入力設定を開く",
+            "hit": "<span class=\"topbarPulseLabel\" data-no-localize=\"\">PULSE</span>",
+            "reachable": true
+          }
+        ]
+      }
+    }
+  ],
+  "before": {
+    "bounds": {
+      "x": 4,
+      "y": 4,
+      "w": 1272,
+      "h": 42,
+      "right": 1276,
+      "bottom": 46
+    },
+    "items": [
+      {
+        "label": "Project menu",
+        "x": 10,
+        "y": 10.5,
+        "w": 29,
+        "h": 29,
+        "right": 39,
+        "bottom": 39.5
+      },
+      {
+        "label": "Setup workspace",
+        "x": 44,
+        "y": 8,
+        "w": 70,
+        "h": 34,
+        "right": 114,
+        "bottom": 42
+      },
+      {
+        "label": "Edit workspace",
+        "x": 115,
+        "y": 8,
+        "w": 70,
+        "h": 34,
+        "right": 185,
+        "bottom": 42
+      },
+      {
+        "label": "Control workspace",
+        "x": 186,
+        "y": 8,
+        "w": 70,
+        "h": 34,
+        "right": 256,
+        "bottom": 42
+      },
+      {
+        "label": "Syndocal",
+        "x": 262,
+        "y": 16,
+        "w": 50.484375,
+        "h": 16,
+        "right": 312.484375,
+        "bottom": 32
+      },
+      {
+        "label": "Workspaces",
+        "x": 338.0625,
+        "y": 11.5,
+        "w": 73.9375,
+        "h": 27,
+        "right": 412,
+        "bottom": 38.5
+      },
+      {
+        "label": "Back",
+        "x": 366.421875,
+        "y": 5,
+        "w": 32,
+        "h": 40,
+        "right": 398.421875,
+        "bottom": 45
+      },
+      {
+        "label": "GO",
+        "x": 400.421875,
+        "y": 5,
+        "w": 48,
+        "h": 40,
+        "right": 448.421875,
+        "bottom": 45
+      },
+      {
+        "label": "Pause Fade",
+        "x": 450.421875,
+        "y": 5,
+        "w": 32,
+        "h": 40,
+        "right": 482.421875,
+        "bottom": 45
+      },
+      {
+        "label": "Play Timeline",
+        "x": 484.421875,
+        "y": 5,
+        "w": 32,
+        "h": 40,
+        "right": 516.421875,
+        "bottom": 45
+      },
+      {
+        "label": "DMX Blackout",
+        "x": 518.421875,
+        "y": 5,
+        "w": 42,
+        "h": 40,
+        "right": 560.421875,
+        "bottom": 45
+      },
+      {
+        "label": "Video Blackout",
+        "x": 562.421875,
+        "y": 5,
+        "w": 42,
+        "h": 40,
+        "right": 604.421875,
+        "bottom": 45
+      },
+      {
+        "label": "All Blackout",
+        "x": 606.421875,
+        "y": 5,
+        "w": 42,
+        "h": 40,
+        "right": 648.421875,
+        "bottom": 45
+      },
+      {
+        "label": "Clear Fixture Flags",
+        "x": 650.421875,
+        "y": 5,
+        "w": 32,
+        "h": 40,
+        "right": 682.421875,
+        "bottom": 45
+      },
+      {
+        "label": "MIDI Learn",
+        "x": 686.421875,
+        "y": 5,
+        "w": 32,
+        "h": 40,
+        "right": 718.421875,
+        "bottom": 45
+      },
+      {
+        "label": "OSC Learn",
+        "x": 720.421875,
+        "y": 5,
+        "w": 32,
+        "h": 40,
+        "right": 752.421875,
+        "bottom": 45
+      },
+      {
+        "label": "DMX Learn",
+        "x": 754.421875,
+        "y": 5,
+        "w": 32,
+        "h": 40,
+        "right": 786.421875,
+        "bottom": 45
+      },
+      {
+        "label": "Edit BPM",
+        "x": 828.765625,
+        "y": 11,
+        "w": 33.34375,
+        "h": 28,
+        "right": 862.109375,
+        "bottom": 39
+      },
+      {
+        "label": "Tap",
+        "x": 866.109375,
+        "y": 5,
+        "w": 40,
+        "h": 40,
+        "right": 906.109375,
+        "bottom": 45
+      },
+      {
+        "label": "音声入力設定を開く",
+        "x": 910.109375,
+        "y": 5,
+        "w": 58,
+        "h": 40,
+        "right": 968.109375,
+        "bottom": 45
+      },
+      {
+        "label": "最小化",
+        "x": 1150,
+        "y": 5,
+        "w": 40,
+        "h": 40,
+        "right": 1190,
+        "bottom": 45
+      },
+      {
+        "label": "最大化または元に戻す",
+        "x": 1190,
+        "y": 5,
+        "w": 40,
+        "h": 40,
+        "right": 1230,
+        "bottom": 45
+      },
+      {
+        "label": "閉じる",
+        "x": 1230,
+        "y": 5,
+        "w": 40,
+        "h": 40,
+        "right": 1270,
+        "bottom": 45
+      }
+    ],
+    "overlaps": [
+      [
+        "Workspaces",
+        "Back"
+      ],
+      [
+        "Workspaces",
+        "GO"
+      ]
+    ],
+    "contained": true,
+    "horizontalOverflow": false,
+    "nav": {
+      "x": 10,
+      "y": 8,
+      "w": 246,
+      "h": 34,
+      "right": 256,
+      "bottom": 42
+    },
+    "status": {
+      "x": 418,
+      "y": 5,
+      "w": 726,
+      "h": 40,
+      "right": 1144,
+      "bottom": 45
+    },
+    "controlSelected": true
+  },
+  "interactionsPassed": true,
+  "errors": []
+}

@@ -154,7 +154,10 @@ export function captureRequiredVcvarsEnvironment(
     ? REQUIRED_BUILD_TOOLS_VCVARS_BATCH : REQUIRED_VCVARS_BATCH;
   const result = spawnCommandLine(
     "cmd.exe",
-    ["/d", "/s", "/c", `""${vcvarsBatch}" ${REQUIRED_VCVARS_ARGUMENTS} && set"`],
+    // cmd's default OEM code page corrupts inherited Japanese paths when its
+    // `set` output is decoded as UTF-8. Select the same encoding before both
+    // vcvars and the environment dump; failure must prevent the build.
+    ["/d", "/s", "/c", `"chcp 65001 >nul && call "${vcvarsBatch}" ${REQUIRED_VCVARS_ARGUMENTS} && set"`],
     {
       encoding: "utf8",
       env: initialEnvironment,

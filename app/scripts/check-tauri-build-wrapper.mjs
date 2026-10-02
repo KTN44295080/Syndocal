@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
 import { readFile as readRawFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -180,7 +181,7 @@ for (const [environment, installed, expectedBatch] of [
     selectedCommand = args[3];
     return { status: 1, stdout: "" };
   }, (candidate) => installed.includes(candidate));
-  equal(selectedCommand, `""${expectedBatch}" -vcvars_ver=14.44 && set"`);
+  equal(selectedCommand, `"chcp 65001 >nul && call "${expectedBatch}" -vcvars_ver=14.44 && set"`);
 }
 const githubHostedEnvironment = {
   GITHUB_ACTIONS: "true",
@@ -470,7 +471,14 @@ const fakeCapture = captureRequiredVcvarsEnvironment(
 ok(capturedArguments !== null, "vcvars capture must spawn cmd.exe");
 equal(capturedArguments.file, "cmd.exe");
 equal(capturedArguments.arguments_.slice(0, 3).join(" "), "/d /s /c");
-match(capturedArguments.arguments_[3], /^""[^"]+vcvars64\.bat" -vcvars_ver=14\.44 && set"$/);
+match(capturedArguments.arguments_[3], /^"chcp 65001 >nul && call "[^"]+vcvars64\.bat" -vcvars_ver=14\.44 && set"$/);
+equal(capturedArguments.options.encoding, "utf8", "cmd's selected code page and decoder must agree");
+if (process.platform === "win32" && [REQUIRED_MSVS_LINKER, REQUIRED_BUILD_TOOLS_MSVS_LINKER].some(existsSync)) {
+  const unicodeTarget = path.join(scriptDir, "検証・ドキュメント", "target");
+  const liveCapture = captureRequiredVcvarsEnvironment({ ...process.env, CARGO_TARGET_DIR: unicodeTarget });
+  equal(liveCapture?.CARGO_TARGET_DIR, unicodeTarget,
+    "real vcvars environment capture must preserve the exact Japanese target path");
+}
 equal(capturedArguments.options.env, capturedEnvironment, "vcvars must inherit the caller's environment");
 equal(capturedArguments.options.windowsVerbatimArguments, true, "cmd argument quoting must stay verbatim");
 equal(

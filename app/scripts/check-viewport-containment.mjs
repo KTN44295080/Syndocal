@@ -16262,7 +16262,7 @@ function readTopbarPulseStateInPage() {
     if (!(element instanceof HTMLElement)) return false;
     const rect = element.getBoundingClientRect();
     const style = getComputedStyle(element);
-    return rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden";
+    return element.checkVisibility({ checkVisibilityCSS: true }) && rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden";
   };
   const rectOf = (element) => {
     if (!element) return null;
@@ -16316,7 +16316,7 @@ function readTopbarPulseStateInPage() {
     project: [...(topbar?.querySelectorAll(".projectAction") ?? [])].filter(visible),
     window: [...(topbar?.querySelectorAll("[data-window-controls] button") ?? [])].filter(visible),
   };
-  const atomicControls = Object.values(controlGroups).flat();
+  const atomicControls = Object.values(controlGroups).flat().filter(element => !element.closest('.topbarToolsPopover'));
   const atomicRects = atomicControls.map(rectOf).filter(Boolean).sort((left, right) => left.x - right.x);
   const controlCenterSpread = atomicRects.length > 0
     ? Math.max(...atomicRects.map((rect) => rect.centerY)) - Math.min(...atomicRects.map((rect) => rect.centerY))
@@ -16341,6 +16341,12 @@ function readTopbarPulseStateInPage() {
     goDisabled: go instanceof HTMLButtonElement ? go.disabled : true,
     goTitle: go?.getAttribute("title") ?? "",
     pulseRect,
+    pulseVisible: visible(pulse),
+    pulseInTools: Boolean(pulse?.closest('.topbarTools[open]')),
+    toolsContained: (() => {
+      const panel = pulse?.closest('.topbarToolsPopover')?.getBoundingClientRect();
+      return Boolean(panel && panel.left >= 0 && panel.right <= innerWidth && panel.top >= topbarRect.bottom && panel.bottom <= innerHeight);
+    })(),
     pulseText: (pulse?.querySelector(".topbarPulseLabel")?.textContent ?? "").trim(),
     pulseAriaLabel: pulse?.getAttribute("aria-label") ?? "",
     meterAriaNow: Number(pulse?.querySelector('[role="meter"]')?.getAttribute("aria-valuenow") ?? -1),
@@ -16385,6 +16391,8 @@ async function runTopbarPulseViewport(client, viewport) {
   await waitForApp(client);
   await installLiveAudioInvokeMock(client);
   await sleep(320);
+
+  await clickVisibleSelector(client, '.topbarTools > summary');
 
   const stopped = await readTopbarPulseState(client);
   const stoppedLevelCalls = await client.evaluate(
@@ -16517,11 +16525,12 @@ async function runTopbarPulseViewport(client, viewport) {
     pulseExists:
       stopped.controlCounts.pulse === 1 &&
       stopped.pulseText === "PULSE",
-    pulseInsideFortyTwoPixelTopbarRow:
+    pulseDisclosedInToolsWithFortyTwoPixelTitleRow:
       stopped.topbarRect?.height >= 41.5 &&
       stopped.topbarRect?.height <= 42.5 &&
       stopped.controlsContained &&
-      stopped.controlCenterSpread <= 1,
+      stopped.controlCenterSpread <= 1 &&
+      stopped.pulseVisible && stopped.pulseInTools && stopped.toolsContained,
     pulseCompactAt1280:
       stopped.viewport.width === 1280 &&
       stopped.pulseRect?.width <= 60 &&

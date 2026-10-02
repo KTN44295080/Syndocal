@@ -1465,19 +1465,29 @@ try {
     await sleep(80);
     const topbarIdentity = await measureTopbarIdentity(client);
     assert.ok(topbarIdentity.brand && topbarIdentity.brand.clientWidth >= topbarIdentity.brand.scrollWidth, `Syndocal brand is not clipped at ${viewport.width}x${viewport.height}: ${JSON.stringify(topbarIdentity)}`);
-    assert.ok(topbarIdentity.workspaceButton && topbarIdentity.workspaceButton.clientWidth >= topbarIdentity.workspaceButton.scrollWidth, `Workspaces control label is not clipped at ${viewport.width}x${viewport.height}: ${JSON.stringify(topbarIdentity)}`);
+    assert.equal(topbarIdentity.workspaceButton, null, "Workspaces is disclosed in the project menu instead of crowding the title row");
     const projectBounds = topbarIdentity.project?.rect;
     const brandBounds = topbarIdentity.brand?.rect;
-    const workspaceBounds = topbarIdentity.workspaceButton?.rect;
     const topbarBounds = topbarIdentity.topbar?.rect;
     const statusBounds = topbarIdentity.status?.rect;
     const windowControlBounds = topbarIdentity.windowControls?.rect;
-    assert.ok(projectBounds && brandBounds && workspaceBounds && brandBounds[0] >= projectBounds[0] - 1 && brandBounds[0] + brandBounds[2] <= projectBounds[0] + projectBounds[2] + 1 && workspaceBounds[0] >= projectBounds[0] - 1 && workspaceBounds[0] + workspaceBounds[2] <= projectBounds[0] + projectBounds[2] + 1 && brandBounds[0] + brandBounds[2] <= workspaceBounds[0] + 1, `Topbar identity/Workspaces controls remain contained and non-overlapping at ${viewport.width}x${viewport.height}: ${JSON.stringify(topbarIdentity)}`);
+    assert.ok(projectBounds && brandBounds && brandBounds[0] >= projectBounds[0] - 1 && brandBounds[0] + brandBounds[2] <= projectBounds[0] + projectBounds[2] + 1 && projectBounds[0] + projectBounds[2] <= statusBounds[0] + 1, `Topbar project identity stays contained before show controls at ${viewport.width}x${viewport.height}: ${JSON.stringify(topbarIdentity)}`);
     assert.ok(statusBounds && statusBounds[2] > 0 && statusBounds[3] > 0 && topbarIdentity.status.display !== "none", `Topbar transport/status controls remain visibly rendered at ${viewport.width}x${viewport.height}: ${JSON.stringify(topbarIdentity.status)}`);
     assert.ok(windowControlBounds && windowControlBounds[2] > 0 && windowControlBounds[3] > 0 && topbarIdentity.windowControls.display !== "none", `Window controls remain visibly rendered at ${viewport.width}x${viewport.height}: ${JSON.stringify(topbarIdentity.windowControls)}`);
     assert.ok(topbarBounds && statusBounds && windowControlBounds && statusBounds[0] >= topbarBounds[0] - 1 && windowControlBounds[0] >= statusBounds[0] - 1 && windowControlBounds[0] + windowControlBounds[2] <= topbarBounds[0] + topbarBounds[2] + 1, `Topbar transport/status/window controls remain contained at ${viewport.width}x${viewport.height}: ${JSON.stringify(topbarIdentity)}`);
     assert.ok(topbarIdentity.status.clientWidth >= topbarIdentity.status.scrollWidth, `Topbar transport/status controls require no hidden horizontal scroll at ${viewport.width}x${viewport.height}: ${JSON.stringify(topbarIdentity.status)}`);
     assert.ok(topbarIdentity.windowControls.clientWidth >= topbarIdentity.windowControls.scrollWidth, `Window controls are not clipped at ${viewport.width}x${viewport.height}: ${JSON.stringify(topbarIdentity.windowControls)}`);
+    assert.equal(await clickVisible(client, '.appMenuButton'), true, "open project menu for Workspaces");
+    assert.equal(await clickVisible(client, '.workspaceOperationsButton'), true, "open disclosed Workspaces");
+    assert.equal(await evaluate(client, `(() => {
+      const button = document.querySelector('.workspaceOperationsButton');
+      const panel = document.querySelector('.workspaceOperationsPopover');
+      const bounds = panel?.getBoundingClientRect();
+      return Boolean(button && button.clientWidth >= button.scrollWidth && bounds &&
+        bounds.width > 0 && bounds.height > 0 && bounds.left >= 0 && bounds.right <= innerWidth && bounds.bottom <= innerHeight);
+    })()`), true, "Workspaces remains reachable and contained through the project menu");
+    assert.equal(await clickVisible(client, '.workspaceOperationsButton'), true, "close Workspaces");
+    assert.equal(await clickVisible(client, '.appMenuButton'), true, "close project menu");
 
     // Lighting: the authored upper bank/scene surface must own real height and
     // mount visible scene cards; a hidden legacy surface is not sufficient.

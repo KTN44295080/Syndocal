@@ -28,6 +28,10 @@ process ownership, and native acceptance are defined in [AGENTS.md](../AGENTS.md
 The maintained Tauri wrapper is [run-tauri.mjs](../app/scripts/run-tauri.mjs);
 its contract is checked by
 [check-tauri-build-wrapper.mjs](../app/scripts/check-tauri-build-wrapper.mjs).
+The wrapper selects `cmd` code page 65001 before vcvars and `set`, matching its
+UTF-8 decoder. The Windows checker captures a real Japanese `CARGO_TARGET_DIR`
+and requires exact equality; OEM/UTF-8 mismatches can otherwise build into a
+different directory while leaving the intended checkout executable stale.
 For an isolated release target, set `CARGO_TARGET_DIR` to an absolute path.
 The wrapper verifies/stops only that target's `release/syndocal.exe`, preserving
 the normal checkout instance. Relative overrides fail closed because Cargo's

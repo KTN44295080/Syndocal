@@ -387,3 +387,26 @@ no file or lease is created. Fourteen native checks passed. The QA-only change a
 exact evidence are recorded once in
 [the checkpoint](MCP_HIGH_RISK_REVOCATION_2026-10-02.md). No ledger completion is
 manufactured from this slice. Next is the current normal-checkout native artifact.
+
+## Current checkout artifact mismatch found — 2026-10-02
+
+Base `64b08ab3`. The build exited successfully but did not refresh the intended
+checkout executable: MSVC environment capture decoded OEM `cmd set` output as
+UTF-8, corrupting the Japanese `CARGO_TARGET_DIR`. The launched checkout artifact
+still had its September 29 timestamp and SHA-256 beginning `06d90b3a`.
+Its passive window/authentication probe proves only that stale artifact's
+behavior, not the current Control or MCP code. The earlier refresh claim is
+withdrawn. Repair the encoding and verify the exact output identity before
+claiming normal-checkout acceptance. Header overlap repair is the current user
+priority. The mismatch and its repaired output identity are recorded in
+[the single-row header checkpoint](HEADER_SINGLE_ROW_2026-10-03.md).
+
+## Single-row header accepted — 2026-10-03
+
+The user rejected two rows. The final 42px header groups secondary controls in
+Tools and Workspaces in the project menu. Six-width Control geometry, popup hit
+testing, keyboard/interactions, the nine-viewport existing gate and PULSE pass.
+The Unicode build-path repair and final normal-checkout executable/window proof
+are recorded once in [the checkpoint](HEADER_SINGLE_ROW_2026-10-03.md).
+Other-owner changes remain unstaged. The goal remains active with 27 Complete,
+23 Open and 8 Deferred markers; resume the remaining ledger evidence audit next.

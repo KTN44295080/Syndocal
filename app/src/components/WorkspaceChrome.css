@@ -1,0 +1,68 @@
+/* Keep one title row. Occasional controls live in Tools and Workspaces in
+   the project menu; intrinsic tracks cannot overlap the project label. */
+.workspaceChrome:has(> .topbarOrganized) { overflow: visible; }
+.topbar.topbarOrganized {
+  grid-template-columns: max-content minmax(0, 1fr) max-content 120px;
+  grid-template-rows: 40px;
+  gap: 8px;
+  overflow: visible;
+}
+
+.topbarOrganized > .topbarLeft,
+.topbarOrganized > .topbarProject,
+.topbarOrganized > .status { overflow: visible; }
+.topbarOrganized > .topbarProject { justify-content: flex-start; }
+.topbarOrganized > .status { width: auto; flex-wrap: nowrap; gap: 8px; }
+
+.topbarOrganized .topbarTempoCluster,
+.topbarOrganized .topbarStateCluster {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+}
+.topbarOrganized .topbarTransportCluster > [data-global-operator-action="dmx-blackout"] { margin-left: 8px; }
+
+.topbarTools { position: relative; flex: 0 0 auto; }
+.topbarTools > summary {
+  display: grid;
+  min-width: 52px;
+  height: 40px;
+  place-items: center;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-control);
+  padding: 0 8px;
+  color: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  list-style: none;
+}
+.topbarTools > summary::-webkit-details-marker { display: none; }
+.topbarTools[open] > summary { background: var(--ui-surface-panel); }
+.topbarTools.active > summary { border-color: #d184dc; color: #f2b8f8; }
+
+.topbarToolsPopover {
+  position: absolute;
+  z-index: 1200;
+  top: calc(100% + 5px);
+  right: 0;
+  display: grid;
+  gap: 12px;
+  min-width: 250px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-control);
+  background: var(--ui-surface-panel);
+  padding: 12px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 40%);
+}
+.topbarToolsPopover > section { display: grid; gap: 6px; }
+.topbarToolsPopover > section > strong { color: #9e958d; font-size: 11px; font-weight: 700; }
+.topbarWorkspaceMenu .workspaceOperationsButton { width: 100%; text-align: left; }
+.topbarOrganized .topbarProject > span { overflow: hidden; text-overflow: ellipsis; }
+
+@media (max-width: 1100px) {
+  .topbar.topbarOrganized { grid-template-columns: max-content max-content 120px; }
+  .topbarOrganized > .topbarProject { display: none; }
+  .topbarOrganized .topbarShowClockStatus > span { display: none; }
+  .topbarOrganized .topbarTransportCluster > [data-global-operator-action="dmx-blackout"] { margin-left: 0; }
+}

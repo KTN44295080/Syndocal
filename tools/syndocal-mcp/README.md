@@ -93,6 +93,18 @@ request identity is retained across restart to prevent automatic replay.
 
 ## Validate
 
+For the normal Windows executable without a debugger, run:
+
+```text
+node tools/syndocal-mcp/check-native-window-backend.mjs --expected-executable <absolute-exe> --evidence <new-absolute-json-path>
+```
+
+This pins the live descriptor/process to the selected executable, checks one
+visible responsive `Syndocal` window, records its actual maximized state, and
+proves that an unauthenticated broker read returns `agent_authentication_required`
+without a result. It performs no UI action, pairing, project read or mutation.
+Authenticated MCP and Control layout acceptance remain separate probes.
+
 ```text
 node tools/syndocal-mcp/check.mjs
 node tools/syndocal-mcp/check-transports.mjs

@@ -21,6 +21,8 @@ import type { UiLocale } from "../uiLocalization";
 import { summarizeShowClockForShell } from "../showClockShell";
 import { TopbarPulseMeter } from "./TopbarPulseMeter";
 import { TopbarBpmControl } from "./TopbarBpmControl";
+import "./WorkspaceChrome.css";
+import { TopbarTools } from "./TopbarTools";
 import {
   controlMappingTargetData,
   type ControlLearnMode,
@@ -260,7 +262,7 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
 
   return (
     <div class="workspaceChrome">
-      <header class="topbar" data-tauri-drag-region>
+      <header class="topbar topbarOrganized" data-tauri-drag-region>
         <div class="topbarLeft" data-tauri-drag-region ref={projectMenuRoot}>
           <button
             class={projectMenuOpen() ? "appMenuButton active" : "appMenuButton"}
@@ -448,6 +450,7 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
               <div class="appProjectMenuLabel" role="separator">
                 <span>Workspace Layout</span>
               </div>
+              <div class="topbarWorkspaceMenu">{props.operations}</div>
               <button
                 role="menuitem"
                 data-reset-workspace-layout
@@ -551,7 +554,6 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
         >
           <strong data-tauri-drag-region>Syndocal</strong>
           <span data-tauri-drag-region>{props.projectLabel}</span>
-          {props.operations}
         </div>
 
         <div class="status" data-tauri-drag-region>
@@ -581,41 +583,8 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
             >
               GO
             </button>
-            <button
-              type="button"
-              class="topbarIconButton"
-              data-global-operator-action="fade"
-              title={props.fadePaused ? "Resume Fade" : "Pause Fade"}
-              aria-label={props.fadePaused ? "Resume Fade" : "Pause Fade"}
-              aria-pressed={props.fadePaused}
-              disabled={!props.canPauseFade}
-              onClick={props.onToggleFade}
-              {...controlMappingTargetData({ action: "CueFadePause", label: "Cue fade pause" })}
-            >
-              <svg viewBox="0 0 20 20" aria-hidden="true">
-                {props.fadePaused
-                  ? <path d="M7 5.5v9M12.5 5.5v9" />
-                  : <path d="M7 4.5 14 10l-7 5z" />}
-              </svg>
-            </button>
-            <button
-              type="button"
-              class="topbarIconButton"
-              data-global-operator-action="timeline"
-              title={props.timelinePlaying ? "Pause Timeline" : "Play Timeline"}
-              aria-label={props.timelinePlaying ? "Pause Timeline" : "Play Timeline"}
-              aria-pressed={props.timelinePlaying}
-              disabled={!props.canToggleTimeline}
-              onClick={props.onToggleTimeline}
-              {...controlMappingTargetData({ action: "TimelinePlay", label: "Timeline play" })}
-            >
-              <svg viewBox="0 0 20 20" aria-hidden="true">
-                <path d="M3.5 16h13M5 14v4M10 14v4M15 14v4" />
-                {props.timelinePlaying
-                  ? <path d="M7 4.5v9M12.5 4.5v9" />
-                  : <path d="M7 4.5 14 9l-7 4.5z" />}
-              </svg>
-            </button>
+
+
             <Show when={props.safetyBlackoutEngaged}>
               <button type="button" class="topbarSafetyButton engaged"
                 data-global-operator-action="safety-blackout-release"
@@ -661,6 +630,45 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
             >
               <span data-no-localize>ALL</span>
             </button>
+
+          </div>
+          <TopbarTools active={Boolean(props.controlLearnMode)}>
+            <section><strong>Playback</strong><div class="topbarTransportCluster" role="group" aria-label="Additional show controls">
+            <button
+              type="button"
+              class="topbarIconButton"
+              data-global-operator-action="fade"
+              title={props.fadePaused ? "Resume Fade" : "Pause Fade"}
+              aria-label={props.fadePaused ? "Resume Fade" : "Pause Fade"}
+              aria-pressed={props.fadePaused}
+              disabled={!props.canPauseFade}
+              onClick={props.onToggleFade}
+              {...controlMappingTargetData({ action: "CueFadePause", label: "Cue fade pause" })}
+            >
+              <svg viewBox="0 0 20 20" aria-hidden="true">
+                {props.fadePaused
+                  ? <path d="M7 5.5v9M12.5 5.5v9" />
+                  : <path d="M7 4.5 14 10l-7 5z" />}
+              </svg>
+            </button>
+            <button
+              type="button"
+              class="topbarIconButton"
+              data-global-operator-action="timeline"
+              title={props.timelinePlaying ? "Pause Timeline" : "Play Timeline"}
+              aria-label={props.timelinePlaying ? "Pause Timeline" : "Play Timeline"}
+              aria-pressed={props.timelinePlaying}
+              disabled={!props.canToggleTimeline}
+              onClick={props.onToggleTimeline}
+              {...controlMappingTargetData({ action: "TimelinePlay", label: "Timeline play" })}
+            >
+              <svg viewBox="0 0 20 20" aria-hidden="true">
+                <path d="M3.5 16h13M5 14v4M10 14v4M15 14v4" />
+                {props.timelinePlaying
+                  ? <path d="M7 4.5v9M12.5 4.5v9" />
+                  : <path d="M7 4.5 14 9l-7 4.5z" />}
+              </svg>
+            </button>
             <button
               type="button"
               class="topbarIconButton"
@@ -675,7 +683,8 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
                 <path d="M5 17V3.5M5 4h8l-1.5 3L13 10H5M10 13l5 5M15 13l-5 5" />
               </svg>
             </button>
-          </div>
+            </div></section>
+            <section><strong>Control mapping</strong>
           <div class="topbarLearnCluster" role="group" aria-label="Control mapping learn">
             <button
               type="button"
@@ -723,6 +732,30 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
               </svg>
             </button>
           </div>
+
+            </section>
+            <section><strong>Audio input</strong>
+          <TopbarPulseMeter
+            running={props.liveAudioInputRunning}
+            engineStale={props.liveAudioInputStale}
+            safetyClearPending={props.liveAudioInputSafetyClearPending}
+            telemetryFresh={props.liveAudioInputTelemetryFresh}
+            rms={props.liveAudioInputRms}
+            peak={props.liveAudioInputPeak}
+            onOpenSettings={props.onOpenLiveAudioInputSettings}
+          />
+            </section>
+            <section><strong>Output status</strong>
+          <span
+            class={props.blackout || props.videoBlackout ? "pill danger" : "pill ok"}
+            title={`${liveLabel()} · Engine ${props.tickMs} ms / jitter ${props.jitterUs} us / ${props.packetBytes} B · DMX ${props.dmxSuccessCount}/${props.dmxOutputCount}`}
+            data-tauri-drag-region
+          >
+            {liveLabel()}
+          </span>
+            </section>
+          </TopbarTools>
+          <div class="topbarTempoCluster" role="group" aria-label="Tempo and audio input">
           <TopbarBpmControl bpm={props.bpm} onSetBpm={props.onSetBpm} />
           <button
             class="topbarTapButton"
@@ -735,15 +768,9 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
           >
             Tap
           </button>
-          <TopbarPulseMeter
-            running={props.liveAudioInputRunning}
-            engineStale={props.liveAudioInputStale}
-            safetyClearPending={props.liveAudioInputSafetyClearPending}
-            telemetryFresh={props.liveAudioInputTelemetryFresh}
-            rms={props.liveAudioInputRms}
-            peak={props.liveAudioInputPeak}
-            onOpenSettings={props.onOpenLiveAudioInputSettings}
-          />
+
+          </div>
+          <div class="topbarStateCluster" role="group" aria-label="Show status">
           <span
             class={`pill topbarShowClockStatus ${showClockShell().tone}`}
             data-show-clock-shell-state={showClockShell().state}
@@ -753,13 +780,8 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
             <span data-no-localize>Clock</span>
             <strong data-no-localize>{showClockShell().label}</strong>
           </span>
-          <span
-            class={props.blackout || props.videoBlackout ? "pill danger" : "pill ok"}
-            title={`${liveLabel()} · Engine ${props.tickMs} ms / jitter ${props.jitterUs} us / ${props.packetBytes} B · DMX ${props.dmxSuccessCount}/${props.dmxOutputCount}`}
-            data-tauri-drag-region
-          >
-            {liveLabel()}
-          </span>
+
+          </div>
         </div>
         <WindowControls />
       </header>
