@@ -410,3 +410,13 @@ The Unicode build-path repair and final normal-checkout executable/window proof
 are recorded once in [the checkpoint](HEADER_SINGLE_ROW_2026-10-03.md).
 Other-owner changes remain unstaged. The goal remains active with 27 Complete,
 23 Open and 8 Deferred markers; resume the remaining ledger evidence audit next.
+
+## Q2 and native evidence parity reconciled — 2026-10-03
+
+Base `98ac087b`. The master decision table and Q1-Q4 machine ledger now reflect
+the user's ExternalMcp all-R4/R5 approval supersession. Four committed bounded
+native/header records are indexed, increasing Q4 to 164. Full safety remains
+Open for actual controller-loss/physical/re-arm acceptance; no status promotion
+or Flow marker change. Scope and exact evidence are recorded once in
+[the reconciliation](Q_POLICY_RECONCILIATION_2026-10-03.md). Continue with the
+isolated native controller-loss/lease-expiry drill.
