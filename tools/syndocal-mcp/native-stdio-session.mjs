@@ -57,6 +57,7 @@ export async function openNativeStdioSession(options) {
     child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' })}\n`);
   } catch (error) { await close(); throw error; }
   return {
+    processId: child.pid,
     async call(name, args) {
       const response = await rpc('tools/call', { name, arguments: args });
       assert.equal(response.error, undefined);

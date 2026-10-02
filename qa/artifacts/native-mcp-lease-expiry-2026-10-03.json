@@ -1,0 +1,543 @@
+{
+  "schemaVersion": 1,
+  "timestamp": "2026-10-02T21:28:15.699Z",
+  "passed": true,
+  "executable": "C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-native-acceptance-target\\release\\syndocal.exe",
+  "executableSha256": "eb70fd5bc401c3a0394265d7fe1e8be9d319a91df36fe518f99da5d301b8b24a",
+  "sidecarSha256": "bc6ad436dac381513df992fdbef0aa800c6793704f4c1848b7c8312ec474e564",
+  "runnerSha256": "302a1f6c076b13ee7a8c8a4549bd41dae93687743842f4ab5efb222680d5d4d8",
+  "backendHarnessSha256": "ade29aa256d8ff17374bb4b3e893ea9a07f71f8fa2cf2bb72b21f80d4e0e8b1f",
+  "leaseExpiryHarnessSha256": "ed4c1b7f738667a47889494f47e827d39737c0a3b3696abed3448cd363fc8678",
+  "stdioHarnessSha256": "494aa9aa27b686aa5c60f99d99fd282d5d3ffd8ef49859c640cedc7ffbbecec2",
+  "leaseExpiryTransport": "Two separately owned authenticated stdio MCP processes; real backend monotonic TTL, no synthetic clock or implicit renewal",
+  "profile": "jp.seraf.ktn.syndocal.qa.mcp-lifecycle",
+  "checks": [
+    {
+      "check": "native-stdio-disconnect-reconnect-retains-native-owner-without-output-change",
+      "passed": true,
+      "firstSidecarPid": 67596,
+      "secondSidecarPid": 3028,
+      "authority": {
+        "generation": 1,
+        "lease_id": "lease-0000000000000001"
+      },
+      "held": {
+        "operation_id": "syndocal.output.lease.authority.query.v1",
+        "statuses": [
+          {
+            "authority": {
+              "generation": 1,
+              "lease_id": "lease-0000000000000001"
+            },
+            "resources": [
+              "lighting"
+            ],
+            "status": "held_active"
+          }
+        ]
+      },
+      "afterReconnect": {
+        "operation_id": "syndocal.output.lease.authority.query.v1",
+        "statuses": [
+          {
+            "authority": {
+              "generation": 1,
+              "lease_id": "lease-0000000000000001"
+            },
+            "resources": [
+              "lighting"
+            ],
+            "status": "held_active"
+          }
+        ]
+      },
+      "before": {
+        "ownership": {
+          "role": "Standby",
+          "effective_role": "Standby",
+          "desired_role": "Both",
+          "persisted_role": "Both",
+          "state": "Failed",
+          "generation": 0,
+          "epoch": 0,
+          "lighting_allowed": false,
+          "video_allowed": false,
+          "lighting_reason": "StartupDenied",
+          "video_reason": "StartupDenied",
+          "error": "Startup is fail-closed; explicitly arm machine output role Both"
+        },
+        "image": {
+          "output": {
+            "enabled": true,
+            "protocol": "ArtNet",
+            "target_ip": "127.0.0.1",
+            "port": 6454,
+            "universe": 0,
+            "serial_port": "",
+            "serial_baud_rate": 57600
+          },
+          "dmxOutputs": [
+            {
+              "enabled": true,
+              "protocol": "ArtNet",
+              "target_ip": "127.0.0.1",
+              "port": 6454,
+              "universe": 0,
+              "serial_port": "",
+              "serial_baud_rate": 57600
+            }
+          ],
+          "blackout": false,
+          "authoredBlackout": false,
+          "videoOutputs": [],
+          "videoBlackout": false,
+          "videoMaster": 1
+        }
+      }
+    },
+    {
+      "check": "native-monotonic-lease-expiry-hides-expired-authority-without-output-change",
+      "passed": true,
+      "observations": [
+        {
+          "elapsedMs": 3247.8277000000007,
+          "statuses": [
+            {
+              "authority": {
+                "generation": 1,
+                "lease_id": "lease-0000000000000001"
+              },
+              "resources": [
+                "lighting"
+              ],
+              "status": "held_active"
+            }
+          ]
+        },
+        {
+          "elapsedMs": 8992.7834,
+          "statuses": [
+            {
+              "authority": {
+                "generation": 1,
+                "lease_id": "lease-0000000000000001"
+              },
+              "resources": [
+                "lighting"
+              ],
+              "status": "held_active"
+            }
+          ]
+        },
+        {
+          "elapsedMs": 14780.032899999998,
+          "statuses": [
+            {
+              "authority": {
+                "generation": 1,
+                "lease_id": "lease-0000000000000001"
+              },
+              "resources": [
+                "lighting"
+              ],
+              "status": "held_active"
+            }
+          ]
+        },
+        {
+          "elapsedMs": 20560.9573,
+          "statuses": [
+            {
+              "authority": {
+                "generation": 1,
+                "lease_id": "lease-0000000000000001"
+              },
+              "resources": [
+                "lighting"
+              ],
+              "status": "held_active"
+            }
+          ]
+        },
+        {
+          "elapsedMs": 26298.284799999998,
+          "statuses": [
+            {
+              "authority": {
+                "generation": 1,
+                "lease_id": "lease-0000000000000001"
+              },
+              "resources": [
+                "lighting"
+              ],
+              "status": "held_active"
+            }
+          ]
+        },
+        {
+          "elapsedMs": 32896.5816,
+          "statuses": [
+            {
+              "authority": {
+                "generation": 1,
+                "lease_id": "lease-0000000000000001"
+              },
+              "resources": [
+                "lighting"
+              ],
+              "status": "held_active"
+            }
+          ]
+        },
+        {
+          "elapsedMs": 38697.0026,
+          "statuses": [
+            {
+              "authority": {
+                "generation": 1,
+                "lease_id": "lease-0000000000000001"
+              },
+              "resources": [
+                "lighting"
+              ],
+              "status": "held_active"
+            }
+          ]
+        },
+        {
+          "elapsedMs": 44487.4825,
+          "statuses": [
+            {
+              "authority": {
+                "generation": 1,
+                "lease_id": "lease-0000000000000001"
+              },
+              "resources": [
+                "lighting"
+              ],
+              "status": "held_active"
+            }
+          ]
+        },
+        {
+          "elapsedMs": 50281.4981,
+          "statuses": [
+            {
+              "authority": {
+                "generation": 1,
+                "lease_id": "lease-0000000000000001"
+              },
+              "resources": [
+                "lighting"
+              ],
+              "status": "held_active"
+            }
+          ]
+        },
+        {
+          "elapsedMs": 56982.0006,
+          "statuses": [
+            {
+              "authority": {
+                "generation": 1,
+                "lease_id": "lease-0000000000000001"
+              },
+              "resources": [
+                "lighting"
+              ],
+              "status": "held_active"
+            }
+          ]
+        },
+        {
+          "elapsedMs": 62761.0206,
+          "statuses": [
+            {
+              "status": "unavailable"
+            }
+          ]
+        }
+      ],
+      "expired": {
+        "operation_id": "syndocal.output.lease.authority.query.v1",
+        "statuses": [
+          {
+            "status": "unavailable"
+          }
+        ]
+      },
+      "retryableReadOverloads": [
+        {
+          "operationId": "syndocal.output.lease.authority.query.v1",
+          "requestId": "9ebb2106-37cb-4e15-9072-9da70ae73081",
+          "error": {
+            "code": "request_rejected",
+            "message": "query service overloaded",
+            "native_query": {
+              "code": "overloaded",
+              "message": "query service overloaded",
+              "resnapshot_required": false,
+              "retryable": true
+            }
+          }
+        },
+        {
+          "operationId": "syndocal.output.lease.authority.query.v1",
+          "requestId": "4166defc-7c78-45c3-a633-6994c92421a4",
+          "error": {
+            "code": "request_rejected",
+            "message": "query service overloaded",
+            "native_query": {
+              "code": "overloaded",
+              "message": "query service overloaded",
+              "resnapshot_required": false,
+              "retryable": true
+            }
+          }
+        }
+      ]
+    },
+    {
+      "check": "native-expired-lease-rejects-renew-and-cached-generation-with-terminal-replay",
+      "passed": true,
+      "renewalRejection": {
+        "rejection": {
+          "error": "forbidden",
+          "operation_id": "syndocal.output.lease.renew.v2",
+          "request_id": 1790976407188
+        },
+        "type": "rejected"
+      },
+      "staleGenerationRejection": {
+        "rejection": {
+          "error": "forbidden",
+          "operation_id": "syndocal.output.lease.renew.v2",
+          "request_id": 1790976407189
+        },
+        "type": "rejected"
+      },
+      "orphaned": {
+        "operation_id": "syndocal.output.lease.authority.query.v1",
+        "statuses": [
+          {
+            "authority": {
+              "generation": 2,
+              "lease_id": "lease-0000000000000001"
+            },
+            "resources": [
+              "lighting"
+            ],
+            "status": "held_orphaned"
+          }
+        ]
+      }
+    },
+    {
+      "check": "native-expired-lease-explicit-recovery-relinquish-keeps-output-blocked",
+      "passed": true,
+      "recovered": {
+        "receipt": {
+          "argument_fingerprint": "87b65961e64ed9349729fb94c0280dc7455be10e41d7603856f5fd0dd34a3a13",
+          "audit_sequence": 4,
+          "fence_after": {
+            "output_epoch": 1,
+            "output_generation": 1,
+            "process_incarnation": 5412904891789354,
+            "project_checkpoint_hash": "bb748cb7817ff3a10fd06531ac985e8478e6c41768522a48a1e5448af58a5c43",
+            "project_epoch": 0,
+            "project_publication_generation": 1,
+            "project_revision": 1,
+            "safety_blackout_epoch": 1,
+            "safety_blackout_generation": 1,
+            "session_incarnation": 3396670789986094
+          },
+          "fence_before": {
+            "output_epoch": 1,
+            "output_generation": 1,
+            "process_incarnation": 5412904891789354,
+            "project_checkpoint_hash": "bb748cb7817ff3a10fd06531ac985e8478e6c41768522a48a1e5448af58a5c43",
+            "project_epoch": 0,
+            "project_publication_generation": 1,
+            "project_revision": 1,
+            "safety_blackout_epoch": 1,
+            "safety_blackout_generation": 1,
+            "session_incarnation": 3396670789986094
+          },
+          "lease_result": {
+            "audit_sequence": 4,
+            "authority": {
+              "generation": 3,
+              "lease_id": "lease-0000000000000001"
+            },
+            "changes": [
+              {
+                "after_generation": 3,
+                "after_phase": "held_active",
+                "after_resources": [
+                  "lighting"
+                ],
+                "before_generation": 2,
+                "before_phase": "held_orphaned",
+                "before_resources": [
+                  "lighting"
+                ],
+                "lease_id": "lease-0000000000000001"
+              }
+            ],
+            "outcome": "recovered",
+            "phase": "held_active",
+            "resources": [
+              "lighting"
+            ]
+          },
+          "operation_id": "syndocal.output.lease.recover.v2",
+          "outcome": "no_op",
+          "request_id": 1790976407190,
+          "shape_sha256": "a1a26c3c93ab96d9bbf3cab7554644130aedba7a1ad93cba36bb048117f41624"
+        },
+        "type": "receipt"
+      },
+      "relinquished": {
+        "receipt": {
+          "argument_fingerprint": "fe6a29db337edb0cb7c1626ab2eea9bbf053be087c9ee2dff5978d73cb322385",
+          "audit_sequence": 5,
+          "fence_after": {
+            "output_epoch": 1,
+            "output_generation": 1,
+            "process_incarnation": 5412904891789354,
+            "project_checkpoint_hash": "bb748cb7817ff3a10fd06531ac985e8478e6c41768522a48a1e5448af58a5c43",
+            "project_epoch": 0,
+            "project_publication_generation": 1,
+            "project_revision": 1,
+            "safety_blackout_epoch": 1,
+            "safety_blackout_generation": 1,
+            "session_incarnation": 3396670789986094
+          },
+          "fence_before": {
+            "output_epoch": 1,
+            "output_generation": 1,
+            "process_incarnation": 5412904891789354,
+            "project_checkpoint_hash": "bb748cb7817ff3a10fd06531ac985e8478e6c41768522a48a1e5448af58a5c43",
+            "project_epoch": 0,
+            "project_publication_generation": 1,
+            "project_revision": 1,
+            "safety_blackout_epoch": 1,
+            "safety_blackout_generation": 1,
+            "session_incarnation": 3396670789986094
+          },
+          "lease_result": {
+            "audit_sequence": 5,
+            "authority": {
+              "generation": 4,
+              "lease_id": "lease-0000000000000001"
+            },
+            "changes": [
+              {
+                "after_generation": 4,
+                "after_phase": "unclaimed",
+                "after_resources": [],
+                "before_generation": 3,
+                "before_phase": "held_active",
+                "before_resources": [
+                  "lighting"
+                ],
+                "lease_id": "lease-0000000000000001"
+              }
+            ],
+            "outcome": "relinquished",
+            "phase": "unclaimed",
+            "resources": [
+              "lighting"
+            ]
+          },
+          "operation_id": "syndocal.output.lease.relinquish.v2",
+          "outcome": "no_op",
+          "request_id": 1790976407191,
+          "shape_sha256": "ac386479a3fc879391324741b3643895d6670388629c7f93a56c197894a83644"
+        },
+        "type": "receipt"
+      },
+      "after": {
+        "ownership": {
+          "role": "Standby",
+          "effective_role": "Standby",
+          "desired_role": "Both",
+          "persisted_role": "Both",
+          "state": "Failed",
+          "generation": 0,
+          "epoch": 0,
+          "lighting_allowed": false,
+          "video_allowed": false,
+          "lighting_reason": "StartupDenied",
+          "video_reason": "StartupDenied",
+          "error": "Startup is fail-closed; explicitly arm machine output role Both"
+        },
+        "image": {
+          "output": {
+            "enabled": true,
+            "protocol": "ArtNet",
+            "target_ip": "127.0.0.1",
+            "port": 6454,
+            "universe": 0,
+            "serial_port": "",
+            "serial_baud_rate": 57600
+          },
+          "dmxOutputs": [
+            {
+              "enabled": true,
+              "protocol": "ArtNet",
+              "target_ip": "127.0.0.1",
+              "port": 6454,
+              "universe": 0,
+              "serial_port": "",
+              "serial_baud_rate": 57600
+            }
+          ],
+          "blackout": false,
+          "authoredBlackout": false,
+          "videoOutputs": [],
+          "videoBlackout": false,
+          "videoMaster": 1
+        }
+      }
+    },
+    {
+      "check": "isolated-first-launch-read",
+      "passed": true
+    },
+    {
+      "check": "dead-process-descriptor-rejected",
+      "passed": true
+    },
+    {
+      "check": "crash-restart-retired-principal-rejected",
+      "passed": true
+    },
+    {
+      "check": "old-credential-and-receipt-not-adopted",
+      "passed": true
+    },
+    {
+      "check": "old-launch-proof-rejected-fresh-read-succeeds",
+      "passed": true
+    },
+    {
+      "check": "graceful-native-close",
+      "passed": true
+    },
+    {
+      "check": "graceful-restart-does-not-restore-grant",
+      "passed": true
+    }
+  ],
+  "normalAppIdentityUnchanged": true,
+  "credentialRevoked": true,
+  "credentialFileRemoved": true,
+  "nativePanicLocations": [],
+  "nonclaims": [
+    "QA identifier release build, not the distributed artifact",
+    "No physical output activation; optional high-risk or lease-expiry probe mutates isolated backend lease authority only; optional Tap probe changes isolated empty-project tempo",
+    "No durable authored/output mutation crash publication acceptance",
+    "Stdio disconnect is adapter loss, not native registered-owner retirement; unchanged persisted output configuration and closed runtime gates are not a physical signal or whole controller-loss/re-arm proof"
+  ]
+}

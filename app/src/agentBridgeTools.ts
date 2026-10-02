@@ -59,6 +59,20 @@ const ownershipStatusView = (status: OutputOwnershipStatus) => ({
   error: status.error,
 });
 
+// Tauri serializes canonical QueryError as an object, not an Error instance.
+// Preserve its bounded wire fields without forwarding arbitrary exception data.
+const nativeQueryError = (error: unknown) => {
+  if (!error || typeof error !== "object" || error instanceof Error) return undefined;
+  const value = error as Record<string, unknown>;
+  if (Object.keys(value).length !== 4
+    || !["code", "message", "retryable", "resnapshot_required"].every(key => Object.hasOwn(value, key))
+    || typeof value.code !== "string" || !/^[a-z_]{1,64}$/.test(value.code)
+    || typeof value.message !== "string" || value.message.length > 1024
+    || typeof value.retryable !== "boolean" || typeof value.resnapshot_required !== "boolean") return undefined;
+  return { code: value.code, message: value.message,
+    retryable: value.retryable, resnapshot_required: value.resnapshot_required };
+};
+
 /** Only native-claimed requests enter here. Mutations still use the GUI transaction/CAS path. */
 export async function executeAgentBridgeRequest(
   invoke: FrontendTauriInvoke,
@@ -170,9 +184,12 @@ export async function executeAgentBridgeRequest(
       ? { ok: true, project: projectToken(after), fixture: fixtureView(actual), verification: "committed_project_state" }
       : { ok: false, error: { code: "verification_failed", message: "Operation returned, but the requested transform was not confirmed. Read current state before any new operation." } };
   } catch (error) {
+    const query = mutationStarted ? undefined : nativeQueryError(error);
     return { ok: false, error: {
       code: mutationStarted ? "mutation_not_confirmed" : "request_rejected",
-      message: String(error).slice(0, 1024),
+      message: query?.message ?? (error && typeof error === "object" && !(error instanceof Error)
+        ? "Native operation failed with an unrecognized error response." : String(error).slice(0, 1024)),
+      ...(query ? { native_query: query } : {}),
     } };
   }
 }

@@ -1,0 +1,116 @@
+{
+  "schemaVersion": 1,
+  "timestamp": "2026-10-02T21:29:19.824Z",
+  "passed": true,
+  "executable": "C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-native-acceptance-target\\release\\syndocal.exe",
+  "executableSha256": "eb70fd5bc401c3a0394265d7fe1e8be9d319a91df36fe518f99da5d301b8b24a",
+  "sidecarSha256": "bc6ad436dac381513df992fdbef0aa800c6793704f4c1848b7c8312ec474e564",
+  "runnerSha256": "302a1f6c076b13ee7a8c8a4549bd41dae93687743842f4ab5efb222680d5d4d8",
+  "backendHarnessSha256": "ade29aa256d8ff17374bb4b3e893ea9a07f71f8fa2cf2bb72b21f80d4e0e8b1f",
+  "highRiskHarnessSha256": "52f9af72e7d531262e678e94bbdf8d54d5d49f14a417a3c47009aea162c813a7",
+  "stdioHarnessSha256": "494aa9aa27b686aa5c60f99d99fd282d5d3ffd8ef49859c640cedc7ffbbecec2",
+  "highRiskTransport": "Separate stdio MCP sidecar process forwarding to the authenticated native broker",
+  "revocationHarnessSha256": "e96a0bca631ea33c9954cbc849710256c3a783858ea1ed258abdb5c78ae8be28",
+  "revocationTransport": "Separate stdio MCP requests, native claim/revoke/execute commands; QA renderer generation retired immediately before graceful close",
+  "profile": "jp.seraf.ktn.syndocal.qa.mcp-lifecycle",
+  "checks": [
+    {
+      "check": "external-lease-authority-read-exact-grant-safe-mode-empty",
+      "passed": true,
+      "retryableReadOverloads": []
+    },
+    {
+      "check": "external-r5-no-approval-export-exact-grant-safe-mode-no-overwrite-replay",
+      "passed": true,
+      "sha256": "c63ed2981154da698831d9e2089a21b191a68aacfa62087eb927afc1614427d0",
+      "bytes": 4787
+    },
+    {
+      "check": "external-r4-acquire-renew-same-owner-transfer-rejected",
+      "passed": true
+    },
+    {
+      "check": "external-r4-no-dialog-owner-transfer-stale-generation-rejected-relinquish-without-output",
+      "passed": true,
+      "ownership": {
+        "role": "Standby",
+        "effective_role": "Standby",
+        "desired_role": "Both",
+        "persisted_role": "Both",
+        "state": "Failed",
+        "generation": 0,
+        "epoch": 0,
+        "lighting_allowed": false,
+        "video_allowed": false,
+        "lighting_reason": "StartupDenied",
+        "video_reason": "StartupDenied",
+        "error": "Startup is fail-closed; explicitly arm machine output role Both"
+      }
+    },
+    {
+      "check": "native-execution-stale-renderer-rejected",
+      "passed": true
+    },
+    {
+      "check": "isolated-first-launch-read",
+      "passed": true
+    },
+    {
+      "check": "dead-process-descriptor-rejected",
+      "passed": true
+    },
+    {
+      "check": "crash-restart-retired-principal-rejected",
+      "passed": true
+    },
+    {
+      "check": "old-credential-and-receipt-not-adopted",
+      "passed": true
+    },
+    {
+      "check": "old-launch-proof-rejected-fresh-read-succeeds",
+      "passed": true
+    },
+    {
+      "check": "external-r5-revoke-after-claim-before-native-execution",
+      "passed": true,
+      "operationId": "syndocal.diagnostics.export.v1",
+      "requestId": "378fb336-b50f-47bb-8dc2-583393308a53",
+      "rendererGeneration": 2,
+      "executionError": "agent_principal_revoked",
+      "replayError": "request_not_executable",
+      "destinationAbsent": true,
+      "leaseUnavailable": true,
+      "credentialRevoked": true
+    },
+    {
+      "check": "external-r4-revoke-after-claim-before-native-execution",
+      "passed": true,
+      "operationId": "syndocal.output.lease.acquire.v2",
+      "requestId": "9c968c2b-eb3f-476a-bfd7-5d2d1d16faf8",
+      "rendererGeneration": 2,
+      "executionError": "agent_principal_revoked",
+      "replayError": "request_not_executable",
+      "destinationAbsent": true,
+      "leaseUnavailable": true,
+      "credentialRevoked": true
+    },
+    {
+      "check": "graceful-native-close",
+      "passed": true
+    },
+    {
+      "check": "graceful-restart-does-not-restore-grant",
+      "passed": true
+    }
+  ],
+  "normalAppIdentityUnchanged": true,
+  "credentialRevoked": true,
+  "credentialFileRemoved": true,
+  "nativePanicLocations": [],
+  "nonclaims": [
+    "QA identifier release build, not the distributed artifact",
+    "No physical output activation; optional high-risk or lease-expiry probe mutates isolated backend lease authority only; optional Tap probe changes isolated empty-project tempo",
+    "No durable authored/output mutation crash publication acceptance"
+  ]
+}

@@ -162,6 +162,24 @@ claim/revoke/execute order is deterministic without DOM actions. Its credentials
 inherit the runner's private ACL and are revoked and removed. It can be combined
 with `--external-high-risk` for the full 14-check native slice.
 
+Add `--lease-expiry` as a separate lease lane to verify real stdio disconnect/
+reconnect and the backend's 60-second monotonic TTL without renewal or a fake
+clock. It checks expired renewal, terminal replay, stale generation rejection,
+explicit recovery and relinquishment. The stdio adapter is not the native
+window's lease owner; reconnect preserves that live owner, while TTL expiry
+revokes authority. Persisted output configuration remains unchanged and both
+runtime output gates stay closed. This is not physical signal or complete
+controller-loss/re-arm acceptance. Do not combine it with the other lease probes.
+
+Canonical native QueryError objects retain their bounded `code`, `message`,
+`retryable` and `resnapshot_required` fields in `result.error.native_query` for
+rejected reads. The outer error code stays `request_rejected`. Unrecognized
+exception objects return a generic bounded error; arbitrary fields are not
+forwarded. Uncertain mutations remain `mutation_not_confirmed` and never gain
+read retry information. The product and sidecar do not retry requests. QA probes
+may issue up to three new read intents only after a terminal explicitly retryable
+Overloaded rejection; pending/unknown results and mutations are never retried.
+
 This harness refuses the normal executable, requires an empty QA project, and
 verifies one responsive maximized QA window on each launch. It tests forced exit,
 clean exit, fresh launch identity, retired credentials/grants, old receipts and

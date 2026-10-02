@@ -1,0 +1,109 @@
+{
+  "schemaVersion": 1,
+  "timestamp": "2026-10-02T21:17:39.372Z",
+  "passed": false,
+  "executable": "C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-native-acceptance-target\\release\\syndocal.exe",
+  "executableSha256": "67438962da781e67185a2cfac3ead8e5a02b351958cf139ad579d36c3111ec7f",
+  "sidecarSha256": "bc6ad436dac381513df992fdbef0aa800c6793704f4c1848b7c8312ec474e564",
+  "runnerSha256": "302a1f6c076b13ee7a8c8a4549bd41dae93687743842f4ab5efb222680d5d4d8",
+  "backendHarnessSha256": "ade29aa256d8ff17374bb4b3e893ea9a07f71f8fa2cf2bb72b21f80d4e0e8b1f",
+  "leaseExpiryHarnessSha256": "99a7e11ac9d7d1e37a3c3e75bcd03a551b5724489962216bccee8214162f6876",
+  "stdioHarnessSha256": "494aa9aa27b686aa5c60f99d99fd282d5d3ffd8ef49859c640cedc7ffbbecec2",
+  "leaseExpiryTransport": "Two separately owned authenticated stdio MCP processes; real backend monotonic TTL, no synthetic clock or implicit renewal",
+  "profile": "jp.seraf.ktn.syndocal.qa.mcp-lifecycle",
+  "checks": [
+    {
+      "check": "native-stdio-disconnect-reconnect-retains-native-owner-without-output-change",
+      "passed": true,
+      "firstSidecarPid": 161204,
+      "secondSidecarPid": 182956,
+      "authority": {
+        "generation": 1,
+        "lease_id": "lease-0000000000000001"
+      },
+      "held": {
+        "operation_id": "syndocal.output.lease.authority.query.v1",
+        "statuses": [
+          {
+            "authority": {
+              "generation": 1,
+              "lease_id": "lease-0000000000000001"
+            },
+            "resources": [
+              "lighting"
+            ],
+            "status": "held_active"
+          }
+        ]
+      },
+      "afterReconnect": {
+        "operation_id": "syndocal.output.lease.authority.query.v1",
+        "statuses": [
+          {
+            "authority": {
+              "generation": 1,
+              "lease_id": "lease-0000000000000001"
+            },
+            "resources": [
+              "lighting"
+            ],
+            "status": "held_active"
+          }
+        ]
+      },
+      "before": {
+        "ownership": {
+          "role": "Standby",
+          "effective_role": "Standby",
+          "desired_role": "Both",
+          "persisted_role": "Both",
+          "state": "Failed",
+          "generation": 0,
+          "epoch": 0,
+          "lighting_allowed": false,
+          "video_allowed": false,
+          "lighting_reason": "StartupDenied",
+          "video_reason": "StartupDenied",
+          "error": "Startup is fail-closed; explicitly arm machine output role Both"
+        },
+        "image": {
+          "output": {
+            "enabled": true,
+            "protocol": "ArtNet",
+            "target_ip": "127.0.0.1",
+            "port": 6454,
+            "universe": 0,
+            "serial_port": "",
+            "serial_baud_rate": 57600
+          },
+          "dmxOutputs": [
+            {
+              "enabled": true,
+              "protocol": "ArtNet",
+              "target_ip": "127.0.0.1",
+              "port": 6454,
+              "universe": 0,
+              "serial_port": "",
+              "serial_baud_rate": 57600
+            }
+          ],
+          "blackout": false,
+          "authoredBlackout": false,
+          "videoOutputs": [],
+          "videoBlackout": false,
+          "videoMaster": 1
+        }
+      }
+    }
+  ],
+  "normalAppIdentityUnchanged": true,
+  "credentialRevoked": true,
+  "credentialFileRemoved": true,
+  "nativePanicLocations": [],
+  "nonclaims": [
+    "QA identifier release build, not the distributed artifact",
+    "No physical output activation; optional high-risk or lease-expiry probe mutates isolated backend lease authority only; optional Tap probe changes isolated empty-project tempo",
+    "No durable authored/output mutation crash publication acceptance",
+    "Stdio disconnect is adapter loss, not native registered-owner retirement; unchanged persisted output configuration and closed runtime gates are not a physical signal or whole controller-loss/re-arm proof"
+  ]
+}

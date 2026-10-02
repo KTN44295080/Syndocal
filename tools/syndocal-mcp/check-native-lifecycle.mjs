@@ -12,9 +12,12 @@ import { nativeDiagnosticExports } from './native-diagnostic-exports.mjs';
 import { nativeExternalHighRisk } from './native-external-high-risk.mjs';
 import { nativeHighRiskRevocation } from './native-high-risk-revocation.mjs';
 import { nativeTapBpm } from './native-tap-bpm.mjs';
+import { nativeLeaseExpiry } from './native-lease-expiry.mjs';
 
 const exec = promisify(execFile);
 const args = process.argv.slice(2);
+const leaseExpiry = args.includes('--lease-expiry');
+if (leaseExpiry) args.splice(args.indexOf('--lease-expiry'), 1);
 const tapBpm = args.includes('--tap-bpm');
 if (tapBpm) args.splice(args.indexOf('--tap-bpm'), 1);
 const diagnostics = args.includes('--diagnostics');
@@ -23,6 +26,7 @@ const externalHighRisk = args.includes('--external-high-risk');
 if (externalHighRisk) args.splice(args.indexOf('--external-high-risk'), 1);
 const externalRevocation = args.includes('--external-revocation');
 if (externalRevocation) args.splice(args.indexOf('--external-revocation'), 1);
+assert.ok(!leaseExpiry || !(externalHighRisk || externalRevocation), 'Lease-expiry drill owns a separate lease/request-rate lane');
 const take = name => { const index = args.indexOf(name); assert.ok(index >= 0 && index + 1 < args.length, `Required: ${name}`); return args.splice(index, 2)[1]; };
 const executable = take('--expected-executable');
 const evidence = take('--evidence');
@@ -149,6 +153,7 @@ try {
   await exec('icacls.exe', [credentialDirectory, '/inheritance:r', '/grant:r', `*${stdout.trim()}:(OI)(CI)F`], { windowsHide: true, timeout: 5000 });
   options.credentialFile = path.join(credentialDirectory, 'credential');
   await pair(); await install();
+  if (leaseExpiry) await nativeLeaseExpiry(backend, options, checks);
   if (externalHighRisk) await nativeExternalHighRisk(backend, options, checks);
   const oldRequest = await read();
   checks.push({ check: 'isolated-first-launch-read', passed: true });
@@ -254,6 +259,11 @@ await fs.writeFile(evidence, `${JSON.stringify({ schemaVersion: 1, timestamp: ne
     highRiskTransport: 'Separate stdio MCP sidecar process forwarding to the authenticated native broker',
   } : {}),
   ...(diagnostics ? { diagnosticHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-diagnostic-exports.mjs', import.meta.url))).digest('hex') } : {}),
+  ...(leaseExpiry ? {
+    leaseExpiryHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-lease-expiry.mjs', import.meta.url))).digest('hex'),
+    stdioHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-stdio-session.mjs', import.meta.url))).digest('hex'),
+    leaseExpiryTransport: 'Two separately owned authenticated stdio MCP processes; real backend monotonic TTL, no synthetic clock or implicit renewal',
+  } : {}),
   ...(tapBpm ? {
     tapHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-tap-bpm.mjs', import.meta.url))).digest('hex'),
     tapControllerSha256: createHash('sha256').update(await fs.readFile(new URL('../../app/src/tapTempo.ts', import.meta.url))).digest('hex'),
@@ -267,7 +277,8 @@ await fs.writeFile(evidence, `${JSON.stringify({ schemaVersion: 1, timestamp: ne
   profile: 'jp.seraf.ktn.syndocal.qa.mcp-lifecycle', checks, normalAppIdentityUnchanged: true,
   credentialRevoked: !cleanupNeeded, credentialFileRemoved: true,
   nativePanicLocations,
-  nonclaims: ['QA identifier release build, not the distributed artifact', 'No physical output activation; optional high-risk probe mutates isolated backend lease authority only; optional Tap probe changes isolated empty-project tempo', 'No durable authored/output mutation crash publication acceptance',
+  nonclaims: ['QA identifier release build, not the distributed artifact', 'No physical output activation; optional high-risk or lease-expiry probe mutates isolated backend lease authority only; optional Tap probe changes isolated empty-project tempo', 'No durable authored/output mutation crash publication acceptance',
+    ...(leaseExpiry ? ['Stdio disconnect is adapter loss, not native registered-owner retirement; unchanged persisted output configuration and closed runtime gates are not a physical signal or whole controller-loss/re-arm proof'] : []),
     ...(diagnostics ? ['Diagnostic publication covers a private temporary destination only; no crash-during-publication, removable-filesystem or external MCP consent acceptance'] : [])],
 }, null, 2)}\n`, { flag: 'wx' });
 if (failure) throw failure;

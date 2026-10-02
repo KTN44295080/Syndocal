@@ -199,6 +199,29 @@ groups++;
     operationId: 'syndocal.output.lease.authority.query.v1', request: {},
   }));
   assert.equal(failedLeaseQuery.error.code, 'request_rejected');
+  const typedError = { code: 'overloaded', message: 'query service overloaded', retryable: true, resnapshot_required: false };
+  let typedCalls = 0;
+  const typedFailure = await execute(async () => { typedCalls++; throw structuredClone(typedError); },
+    request('control_plane.execute', { operationId: 'syndocal.output.lease.authority.query.v1', request: {} }));
+  assert.deepEqual(typedFailure, { ok: false, error: {
+    code: 'request_rejected', message: typedError.message, native_query: typedError,
+  } });
+  assert.equal(typedCalls, 1, 'typed retry information must not cause an automatic retry');
+  for (const invalid of [{ ...typedError, credential: 'must-not-leak' },
+    { ...typedError, retryable: 'true' }, { ...typedError, message: 'x'.repeat(1025) },
+    { ...typedError, code: 'invalid code' }]) {
+    const result = await execute(async () => { throw invalid; },
+      request('control_plane.execute', { operationId: 'syndocal.output.lease.authority.query.v1', request: {} }));
+    assert.equal(result.error.native_query, undefined);
+    assert.equal(result.error.message, 'Native operation failed with an unrecognized error response.');
+    assert.equal(JSON.stringify(result).includes('must-not-leak'), false);
+  }
+  const uncertain = await execute(async () => { throw typedError; }, request('control_plane.execute', {
+    operationId: 'syndocal.output.lease.acquire.v2', request: {},
+  }));
+  assert.equal(uncertain.error.code, 'mutation_not_confirmed');
+  assert.equal(uncertain.error.native_query, undefined, 'uncertain mutation must not receive read retry information');
+  groups++;
   const rejectedCanonical = await execute(async () => assert.fail('unreviewed canonical operation must not invoke Tauri'), request('control_plane.execute', {
     operationId: 'syndocal.query.not_reviewed.v1',
     request: {},

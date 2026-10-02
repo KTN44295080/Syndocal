@@ -435,3 +435,21 @@ artifact identity are recorded once in [the checkpoint](TAP_BPM_PUBLICATION_2026
 Protected other-owner work is excluded. The goal remains active; no ledger status
 or evidence total is promoted by this repair. Resume the isolated native
 controller-loss/lease-expiry drill after this checkpoint.
+
+## Native lease TTL and read-error projection — 2026-10-03
+
+Base `b1d65784`. Eleven real native stdio disconnect/60-second TTL/replay/recovery
+groups and fourteen R4/R5 regression groups pass. The drill also exposed a native
+QueryError object whose bridge message became `[object Object]`; rejected reads
+now preserve bounded typed details while uncertain mutations retain their separate
+classification and receive no read retry information. The product does not retry.
+Exact positive/negative evidence, current optimized QA/normal build identities,
+closed output gates, warning counts and unchanged acceptance boundaries are
+recorded once in [the checkpoint](MCP_LEASE_EXPIRY_2026-10-03.md).
+
+The stdio adapter is not the native window lease owner, so reconnecting it preserves
+that live owner's authority. This does not close physical output, whole registered
+controller-loss/re-arm or AI8. Q4 is 165; status remains 27 Complete, 23 Open and
+8 Deferred. Protected Remote PIN/DJ ingress work remains excluded. Continue the
+stale ShowClock/migration/patch risk-description audit and the remaining executable
+corpus/native-owner evidence gaps.

@@ -32,9 +32,13 @@ export async function nativeExternalHighRisk(backend, options, checks) {
       // lock-contention rejection. Never retry pending/unknown or a mutation.
       const receipt = await send('control_plane.execute', { operationId, request: {} });
       assert.equal(receipt.status, 'completed');
+      const error = receipt.result.error;
+      const typedOverload = error?.native_query?.code === 'overloaded'
+        && error.native_query.retryable === true && error.native_query.resnapshot_required === false;
+      const fenceOverload = /QueryError \{ code: Overloaded,/.test(error?.message ?? '')
+        && /retryable: true/.test(error?.message ?? '');
       if (receipt.result.ok === false && receipt.result.error?.code === 'request_rejected'
-        && /QueryError \{ code: Overloaded,/.test(receipt.result.error.message)
-        && /retryable: true/.test(receipt.result.error.message) && attempt < 2) {
+        && (typedOverload || fenceOverload) && attempt < 2) {
         readOverloads.push({ operationId, requestId: receipt.requestId, error: receipt.result.error });
         await new Promise(resolve => setTimeout(resolve, 100));
         continue;
