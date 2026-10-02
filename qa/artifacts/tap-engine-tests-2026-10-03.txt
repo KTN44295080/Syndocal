@@ -1,0 +1,16 @@
+pinned linker=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+   Compiling protocol v1.2.0-alpha.69 (C:\Users\janua\OneDrive\ドキュメント\GitHub\Syndocal\crates\protocol)
+   Compiling io v1.2.0-alpha.69 (C:\Users\janua\OneDrive\ドキュメント\GitHub\Syndocal\crates\io)
+   Compiling video v1.2.0-alpha.69 (C:\Users\janua\OneDrive\ドキュメント\GitHub\Syndocal\crates\video)
+   Compiling engine v1.2.0-alpha.69 (C:\Users\janua\OneDrive\ドキュメント\GitHub\Syndocal\crates\engine)
+    Finished `release` profile [optimized] target(s) in 48.27s
+     Running unittests src\lib.rs (target\release\deps\engine-63c23f3dc21cd88a.exe)
+
+running 4 tests
+test tests::tap_bpm_auto_reconforms_conformed_blocks_on_command_drain ... ok
+test snapshot_publication_tests::tap_snapshot_publication_failure_never_acknowledges_or_replays_the_tap ... ok
+test snapshot_publication_tests::tap_snapshot_publication_expiry_does_not_change_clock_or_authority ... ok
+test snapshot_publication_tests::tap_snapshot_publication_ack_waits_for_shared_clock_and_stops_command_drain ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 1096 filtered out; finished in 0.00s

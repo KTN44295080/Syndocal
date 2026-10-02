@@ -89,7 +89,7 @@ mod tests {
         // The generated inventory contains the 278-command baseline plus the
         // disabled Spout restoration publication and authored blackout target
         // publication added afterward.
-        const EXPECTED_ENGINE_COMMAND_COUNT: usize = 280;
+        const EXPECTED_ENGINE_COMMAND_COUNT: usize = 281;
         let descriptors = control_plane_engine_command_descriptors();
         let variant_names = EngineCommand::CONTROL_PLANE_VARIANT_NAMES
             .iter()
@@ -108,6 +108,7 @@ mod tests {
         assert!(variant_names.contains("EnableShowSpoutOutputsPublished"));
         assert!(variant_names.contains("RetireShowSpoutOutputsAfterAuthorityLossPublished"));
         assert!(variant_names.contains("ResetShowSpoutOutputsExactPublished"));
+        assert!(variant_names.contains("RequestSnapshotPublication"));
         assert!(variant_names.contains("EnableShowSerialDmxSafetyBlackoutRoute"));
         assert!(variant_names.contains("StopShowSerialDmxSafetyBlackoutRoute"));
         assert!(variant_names.contains("RetireManagedShowDmxAfterSafetyBlackout"));

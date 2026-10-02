@@ -127,7 +127,8 @@ async function run() {
   }
 
   const engineSource = countMacroVariants(engine, "define_engine_command!", false);
-  assert.equal(engineSource.length, 280, "EngineCommand declaration inventory count drifted");
+  assert.equal(engineSource.length, 281, "EngineCommand declaration inventory count drifted");
+  assert.ok(engineSource.includes("RequestSnapshotPublication"), "Internal read publication barrier must remain inventoried");
   assertNeedles(engineInventory, "crates/engine/src/control_plane.rs", [
     "EngineCommand::CONTROL_PLANE_VARIANT_NAMES",
     "unavailable_engine_command_descriptor",

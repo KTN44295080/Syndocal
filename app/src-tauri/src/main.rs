@@ -25845,6 +25845,7 @@ fn external_output_command_requires_local_r4(command: &EngineCommand) -> Option<
         | EngineCommand::LoadProjectSnapshot(..)
         | EngineCommand::LoadProjectSnapshotPublished { .. }
         | EngineCommand::RequestPersistenceSnapshot { .. }
+        | EngineCommand::RequestSnapshotPublication { .. }
         | EngineCommand::SetTouchSurface { .. }
         | EngineCommand::SetStageMapConfig(..)
         | EngineCommand::SaveStageMapPreset { .. }
@@ -29615,7 +29616,8 @@ fn tap_bpm(state: State<'_, AppState>) -> Result<(), String> {
     state
         .engine
         .send(EngineCommand::TapBpm)
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    state.engine.await_snapshot_publication()
 }
 
 #[tauri::command]

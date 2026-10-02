@@ -40,6 +40,7 @@
     "check:live-desk-header": "node scripts/check-viewport-containment.mjs --live-desk-header-only",
     "check:topbar-pulse": "node scripts/check-viewport-containment.mjs --topbar-pulse-only",
     "check:workspace-header": "node scripts/check-workspace-header-browser.mjs",
+    "check:tap-tempo": "node --experimental-strip-types scripts/check-tap-tempo.mjs",
     "check:touch": "node scripts/check-dvc-touch-feature-preset.mjs && node scripts/check-viewport-containment.mjs --touch-only",
     "check:dvc-midi-shortcuts": "node scripts/check-dvc-midi-shortcuts.mjs",
     "check:dvc-dmx-shortcuts": "node scripts/check-dvc-dmx-shortcuts.mjs",

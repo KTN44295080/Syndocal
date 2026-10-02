@@ -9,6 +9,8 @@ import type { TimelineSnapshotProjectReadGuard } from "./timelineSnapshotRefresh
 export type TimelineRuntimeSnapshotIngress = {
   projectReadGuard?: TimelineSnapshotProjectReadGuard;
   resetForProjectScope?: boolean;
+  /** Canonical image after token-only adoption; retains same-project runtime ordering. */
+  convergeForProjectScope?: boolean;
   /** Required for every native snapshot ingress; never inferred from authored data. */
   timelineRuntime?: unknown;
 };
@@ -53,12 +55,16 @@ export const createTimelineRuntimeSnapshotIngress = (
     // instead carry a complete backend-owned watermark or remain unapplied.
     if (!options.isTauriRuntime()) return next;
     const scope = scopeFromReadGuard(readGuard);
+    const watermark = timelineRuntimeSnapshotWatermarkFromEngineSnapshot(next);
+    if (watermark === null) return null;
+    if (ingress.convergeForProjectScope) {
+      return timelineRuntimeSnapshotWatermark.convergeForProjectScope(scope, watermark) ? next : null;
+    }
     if (ingress.resetForProjectScope
       && !timelineRuntimeSnapshotWatermark.resetForProjectScope(scope)) {
       return null;
     }
-    const watermark = timelineRuntimeSnapshotWatermarkFromEngineSnapshot(next);
-    if (watermark === null || !timelineRuntimeSnapshotWatermark.canAccept(scope, watermark)) {
+    if (!timelineRuntimeSnapshotWatermark.canAccept(scope, watermark)) {
       return null;
     }
     return next;
@@ -67,5 +73,10 @@ export const createTimelineRuntimeSnapshotIngress = (
   return {
     watermark: timelineRuntimeSnapshotWatermark,
     prepare,
+    hasCurrentScope: (): boolean => {
+      const guard = options.captureProjectReadGuard();
+      return options.projectReadGuardIsCurrent(guard)
+        && timelineRuntimeSnapshotWatermark.isCurrentScope(scopeFromReadGuard(guard));
+    },
   };
 };

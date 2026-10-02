@@ -47,6 +47,22 @@ const compareTransportPair = (
   ? left.transport_epoch - right.transport_epoch
   : left.transport_generation - right.transport_generation;
 
+const watermarkIsValid = (candidate: TimelineRuntimeSnapshotWatermark): boolean =>
+  isTransportCounter(candidate.transport_epoch)
+  && isTransportCounter(candidate.transport_generation)
+  && isCounter(candidate.loop_generation)
+  && isCounter(candidate.follow_generation);
+
+const runtimeDoesNotRewind = (
+  candidate: TimelineRuntimeSnapshotWatermark,
+  accepted: TimelineRuntimeSnapshotWatermark,
+): boolean => {
+  const order = compareTransportPair(candidate, accepted);
+  return order > 0 || (order === 0
+    && candidate.loop_generation >= accepted.loop_generation
+    && candidate.follow_generation >= accepted.follow_generation);
+};
+
 /**
  * Extract only the runtime fence that is authoritative for renderer snapshot
  * ordering. Missing or malformed runtime fields deliberately produce null:
@@ -97,11 +113,7 @@ export const createTimelineRuntimeSnapshotWatermark = () => {
     scope: TimelineRuntimeSnapshotScope,
     candidate: TimelineRuntimeSnapshotWatermark,
   ): boolean => {
-    if (!isScope(scope)
-      || !isTransportCounter(candidate.transport_epoch)
-      || !isTransportCounter(candidate.transport_generation)
-      || !isCounter(candidate.loop_generation)
-      || !isCounter(candidate.follow_generation)) {
+    if (!isScope(scope) || !watermarkIsValid(candidate)) {
       return false;
     }
     if (activeScope === null) {
@@ -114,13 +126,7 @@ export const createTimelineRuntimeSnapshotWatermark = () => {
       accepted = { ...candidate };
       return true;
     }
-    const transportOrder = compareTransportPair(candidate, accepted);
-    if (transportOrder < 0) return false;
-    if (transportOrder === 0
-      && (candidate.loop_generation < accepted.loop_generation
-        || candidate.follow_generation < accepted.follow_generation)) {
-      return false;
-    }
+    if (!runtimeDoesNotRewind(candidate, accepted)) return false;
     accepted = { ...candidate };
     return true;
   };
@@ -128,6 +134,21 @@ export const createTimelineRuntimeSnapshotWatermark = () => {
   return {
     resetForProjectScope,
     canAccept,
+    // A token-only adoption needs its canonical image. Within the same
+    // project lifecycle, a late bundle still cannot rewind runtime authority.
+    convergeForProjectScope: (
+      scope: TimelineRuntimeSnapshotScope,
+      candidate: TimelineRuntimeSnapshotWatermark,
+    ): boolean => {
+      if (!isScope(scope) || !watermarkIsValid(candidate)) return false;
+      if (activeScope?.project_epoch === scope.project_epoch && accepted !== null
+        && !runtimeDoesNotRewind(candidate, accepted)) return false;
+      activeScope = { ...scope };
+      accepted = { ...candidate };
+      return true;
+    },
+    isCurrentScope: (scope: TimelineRuntimeSnapshotScope): boolean =>
+      isScope(scope) && activeScope !== null && scopesEqual(activeScope, scope),
     current: () => activeScope === null || accepted === null
       ? null
       : { scope: { ...activeScope }, watermark: { ...accepted } },

@@ -605,6 +605,8 @@ import {
 } from "./cueEffectRecall";
 import type { CueEffectRecallChange } from "./cueEffectRecall";
 import { createSnapshotRequestGuard } from "./snapshotRequestGuard";
+import { tapTempo } from "./tapTempo";
+import { installNativeTapTempoQa } from "./nativeTapTempoQa";
 import {
   createTimelineRuntimeSnapshotIngress,
   type TimelineRuntimeSnapshotIngress,
@@ -11967,7 +11969,11 @@ export default function App() {
           knownEpoch: known.project_epoch,
           knownRevision: known.project_revision,
           knownCheckpointHash: known.checkpoint_hash,
-          knownPathGeneration: observedProjectPathGeneration,
+          // Mapping-only reads may adopt E/R/H before its canonical snapshot.
+          // Omit one optional cursor to request the complete current bundle
+          // while the snapshot ingress still belongs to the earlier scope.
+          knownPathGeneration: timelineRuntimeSnapshotIngress.hasCurrentScope()
+            ? observedProjectPathGeneration : undefined,
           knownHistoryGeneration: observedProjectHistoryGeneration,
           knownMappingReplacementGeneration: observedMappingReplacementGeneration,
           knownAuthorityDispositionGeneration: observedAuthorityDispositionGeneration,
@@ -15879,6 +15885,17 @@ export default function App() {
       bundle,
       {
         applyRuntimeStatus: (_, candidate) => {
+          // A mapping response can already have adopted this exact token.
+          // Converge its canonical image before treating the bundle as a
+          // status-only duplicate; retain local mapping arrays and drafts.
+          if (!timelineRuntimeSnapshotIngress.hasCurrentScope()
+            && !applyEngineSnapshot(candidate.snapshot, true, false, {
+              projectReadGuard: captureProjectReadGuard(),
+              convergeForProjectScope: true,
+              timelineRuntime: candidate.timeline_runtime,
+            })) {
+            return { state: projectAuthorityRuntimeState(), disposition: "stale" };
+          }
           const disposition = applyProjectAuthorityRuntimeStatus(candidate);
           return { state: projectAuthorityRuntimeState(), disposition };
         },
@@ -17483,14 +17500,32 @@ export default function App() {
 
   const tapBpm = async () => {
     try {
-      await invoke("tap_bpm");
-      await refreshSnapshot();
-      setBpmDraft(snapshot().clock.bpm.toFixed(1));
-      setMessage(`Tapped BPM ${snapshot().clock.bpm.toFixed(1)}`);
+      await tapTempo({
+        projectEpoch: () => projectMappingsAuthority().project_epoch,
+        invokeTap: () => invoke("tap_bpm"),
+        inFlightAuthorityPoll: () => projectAuthorityPollInFlight,
+        refreshAuthority: pollProjectAuthorityBundle,
+        refreshSnapshot,
+        applied: (clock) => {
+          setBpmDraft(clock.bpm.toFixed(1));
+          setMessage(`Tapped BPM ${clock.bpm.toFixed(1)}`);
+        },
+      });
     } catch (error) {
       setMessage(String(error));
     }
   };
+
+  if (import.meta.env.VITE_SYNDOCAL_NATIVE_TAP_QA === "1" && isTauriRuntime()) {
+    onCleanup(installNativeTapTempoQa(tapBpm, () => ({
+      snapshotClock: snapshot().clock,
+      latestClock: latestEngineSnapshot.clock,
+      readGuard: captureProjectReadGuard(),
+      watermark: timelineRuntimeSnapshotIngress.watermark.current(),
+      authorityPollPending: projectAuthorityPollInFlight !== null,
+      timelineTransportCanonicalSnapshotGeneration,
+    })));
+  }
 
   const analyzeAudioFile = async () => {
     try {

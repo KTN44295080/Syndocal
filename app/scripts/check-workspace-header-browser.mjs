@@ -40,7 +40,7 @@ import '/src/styles.css';
 const [workspace,setWorkspace]=createSignal('touch'),[bpm,setBpm]=createSignal(120),[learn,setLearn]=createSignal(null);
 const [dmx,setDmx]=createSignal(false),[video,setVideo]=createSignal(false),[safety,setSafety]=createSignal(false);
 const [dirty,setDirty]=createSignal(false),[lock,setLock]=createSignal(null),[label,setLabel]=createSignal('Untitled.sdc');
-window.proof={calls:[],setWorkspace,setSafety,setDirty,setLock,setLabel,get bpm(){return bpm()}};
+window.proof={calls:[],setWorkspace,setSafety,setDirty,setLock,setLabel,setBpm,get bpm(){return bpm()}};
 const call=name=>()=>window.proof.calls.push(name), noop=()=>{}, done=async()=>{};
 const operations=()=> <WorkspaceOperationsMenu profiles={[]} selectedProfileId={null} poppedPanes={[]}
  paneTransitions={{}} workspaceBusy={false} operatorPolicy={null} operatorLockMode={lock()}
@@ -190,6 +190,8 @@ render(()=><main class="app"><Chrome {...props}/><section>Control header proof</
   await page.locator('.topbarTools > summary').press('Escape');
   assert.equal(await page.locator('.topbarTools').getAttribute('open'),null);
   assert.equal(await page.locator('.topbarTools > summary').evaluate(el=>document.activeElement===el),true);
+  await page.evaluate(()=>window.proof.setBpm(80));
+  assert.equal(await page.getByRole('button',{name:'Edit BPM'}).textContent(),'80', 'passive tapped tempo changes update the readout without entering edit mode');
   await page.getByRole('button',{name:'Edit BPM'}).click();
   await page.getByRole('spinbutton',{name:'BPM'}).fill('137.5');
   await page.getByRole('spinbutton',{name:'BPM'}).press('Enter');

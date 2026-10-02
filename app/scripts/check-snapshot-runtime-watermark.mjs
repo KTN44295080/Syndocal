@@ -553,4 +553,38 @@ assert.match(
   "every authority-bundle application must reject a mismatched outer/runtime transport pair before ingress",
 );
 
-console.log("snapshot runtime watermark full/delta/poll/canonical monotonic ingress checks passed");
+// Native Tap can change persisted BPM while a mapping-only read adopts B's
+// token before the authority poll. A status-only duplicate must not strand
+// the snapshot at A, and an ordinary full read must not bypass the scope fence.
+{
+  const guardA = { generation: 0, authority: { project_epoch: 0, project_revision: 1, checkpoint_hash: "a" } };
+  const guardB = { generation: 0, authority: { project_epoch: 0, project_revision: 2, checkpoint_hash: "b" } };
+  let guard = guardA;
+  const shared = ingress.createTimelineRuntimeSnapshotIngress({
+    captureProjectReadGuard: () => guard,
+    projectReadGuardIsCurrent: candidate => candidate === guard,
+    normalizeEngineSnapshot: value => value,
+    isTauriRuntime: () => true,
+  });
+  const a = { ...snapshot(1, 2, 0, 0), clock: { bpm: 120 } };
+  const b = { ...snapshot(1, 3, 0, 0), clock: { bpm: 80 } };
+  assert.equal(shared.hasCurrentScope(), false);
+  assert.equal(shared.prepare(a, { projectReadGuard: guardA, timelineRuntime: runtimeWire(a) }).clock.bpm, 120);
+  assert.equal(shared.hasCurrentScope(), true);
+  guard = guardB; // mapping-only authority adoption, with no read-generation reset
+  assert.equal(shared.hasCurrentScope(), false, "B needs a complete canonical bundle despite its already-current token");
+  assert.equal(shared.prepare(b, { projectReadGuard: guardB, timelineRuntime: runtimeWire(b) }), null);
+  assert.equal(shared.prepare(b, { projectReadGuard: guardB, convergeForProjectScope: true, timelineRuntime: null }), null);
+  assert.equal(shared.hasCurrentScope(), false, "malformed canonical data cannot reset the scope");
+  const stale = snapshot(1, 1, 0, 0);
+  assert.equal(shared.prepare(stale, { projectReadGuard: guardB, convergeForProjectScope: true, timelineRuntime: runtimeWire(stale) }), null,
+    "a canonical same-project bundle cannot rewind the prior runtime even while adopting B's scope");
+  assert.equal(shared.hasCurrentScope(), false, "rejected runtime must not adopt B's scope");
+  assert.equal(shared.prepare(b, { projectReadGuard: guardB, convergeForProjectScope: true, timelineRuntime: runtimeWire(b) }).clock.bpm, 80);
+  assert.equal(shared.hasCurrentScope(), true);
+  assert.equal(shared.prepare(a, { projectReadGuard: guardA, timelineRuntime: runtimeWire(a) }), null, "delayed A still fails closed");
+  assert.equal(shared.prepare(a, { projectReadGuard: guardB, timelineRuntime: runtimeWire(a) }), null, "an old runtime cannot masquerade as B");
+}
+assert.match(appSource, /knownPathGeneration: timelineRuntimeSnapshotIngress\.hasCurrentScope\(\)[\s\S]*?\? observedProjectPathGeneration : undefined/);
+assert.match(appSource, /applyRuntimeStatus: \(_, candidate\) => \{[\s\S]*?!timelineRuntimeSnapshotIngress\.hasCurrentScope\(\)[\s\S]*?applyEngineSnapshot\(candidate\.snapshot, true, false,[\s\S]*?convergeForProjectScope: true/);
+console.log("snapshot runtime watermark full/delta/poll/canonical monotonic ingress and Tap token-before-image convergence checks passed");

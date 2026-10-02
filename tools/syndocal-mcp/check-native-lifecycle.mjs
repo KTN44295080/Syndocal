@@ -11,9 +11,12 @@ import { openNativeBackendSession } from './native-backend-session.mjs';
 import { nativeDiagnosticExports } from './native-diagnostic-exports.mjs';
 import { nativeExternalHighRisk } from './native-external-high-risk.mjs';
 import { nativeHighRiskRevocation } from './native-high-risk-revocation.mjs';
+import { nativeTapBpm } from './native-tap-bpm.mjs';
 
 const exec = promisify(execFile);
 const args = process.argv.slice(2);
+const tapBpm = args.includes('--tap-bpm');
+if (tapBpm) args.splice(args.indexOf('--tap-bpm'), 1);
 const diagnostics = args.includes('--diagnostics');
 if (diagnostics) args.splice(args.indexOf('--diagnostics'), 1);
 const externalHighRisk = args.includes('--external-high-risk');
@@ -137,6 +140,7 @@ const read = async () => {
 };
 try {
   const first = await start();
+  if (tapBpm) await nativeTapBpm(backend, checks);
   const diagnostic = diagnostics ? await nativeDiagnosticExports(backend.invoke) : undefined;
   if (diagnostic) checks.push(diagnostic.check);
   credentialDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'syndocal-lifecycle-credential-'));
@@ -250,6 +254,11 @@ await fs.writeFile(evidence, `${JSON.stringify({ schemaVersion: 1, timestamp: ne
     highRiskTransport: 'Separate stdio MCP sidecar process forwarding to the authenticated native broker',
   } : {}),
   ...(diagnostics ? { diagnosticHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-diagnostic-exports.mjs', import.meta.url))).digest('hex') } : {}),
+  ...(tapBpm ? {
+    tapHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-tap-bpm.mjs', import.meta.url))).digest('hex'),
+    tapControllerSha256: createHash('sha256').update(await fs.readFile(new URL('../../app/src/tapTempo.ts', import.meta.url))).digest('hex'),
+    tapQaReceiverSha256: createHash('sha256').update(await fs.readFile(new URL('../../app/src/nativeTapTempoQa.ts', import.meta.url))).digest('hex'),
+  } : {}),
   ...(externalRevocation ? {
     revocationHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-high-risk-revocation.mjs', import.meta.url))).digest('hex'),
     revocationTransport: 'Separate stdio MCP requests, native claim/revoke/execute commands; QA renderer generation retired immediately before graceful close',
@@ -258,7 +267,7 @@ await fs.writeFile(evidence, `${JSON.stringify({ schemaVersion: 1, timestamp: ne
   profile: 'jp.seraf.ktn.syndocal.qa.mcp-lifecycle', checks, normalAppIdentityUnchanged: true,
   credentialRevoked: !cleanupNeeded, credentialFileRemoved: true,
   nativePanicLocations,
-  nonclaims: ['QA identifier release build, not the distributed artifact', 'No authored mutation or physical output activation; optional high-risk probe mutates isolated backend lease authority only', 'No durable authored/output mutation crash publication acceptance',
+  nonclaims: ['QA identifier release build, not the distributed artifact', 'No physical output activation; optional high-risk probe mutates isolated backend lease authority only; optional Tap probe changes isolated empty-project tempo', 'No durable authored/output mutation crash publication acceptance',
     ...(diagnostics ? ['Diagnostic publication covers a private temporary destination only; no crash-during-publication, removable-filesystem or external MCP consent acceptance'] : [])],
 }, null, 2)}\n`, { flag: 'wx' });
 if (failure) throw failure;

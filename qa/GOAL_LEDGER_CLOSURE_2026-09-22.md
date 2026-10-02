@@ -420,3 +420,18 @@ Open for actual controller-loss/physical/re-arm acceptance; no status promotion
 or Flow marker change. Scope and exact evidence are recorded once in
 [the reconciliation](Q_POLICY_RECONCILIATION_2026-10-03.md). Continue with the
 isolated native controller-loss/lease-expiry drill.
+
+## Tap BPM native readout repair — 2026-10-03
+
+Base `b9d0766f`. The user's Tap regression interrupted the next ledger drill.
+Native reproduction found a token-only authority adoption leaving the renderer
+snapshot watermark at the previous revision. Tap now waits for engine publication,
+then converges the exact canonical snapshot scope without weakening old-runtime
+rejection. Eight isolated native checks pass; five scheduled taps change 120 to
+about 80 BPM with the header and footer agreeing after each callback, and a long
+pause resets interval history while retaining tempo. The one-row 42px header is
+preserved. Exact negative/positive evidence, software checks and final normal
+artifact identity are recorded once in [the checkpoint](TAP_BPM_PUBLICATION_2026-10-03.md).
+Protected other-owner work is excluded. The goal remains active; no ledger status
+or evidence total is promoted by this repair. Resume the isolated native
+controller-loss/lease-expiry drill after this checkpoint.

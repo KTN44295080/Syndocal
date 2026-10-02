@@ -4072,6 +4072,12 @@ define_engine_command! {
     RequestPersistenceSnapshot {
         response: mpsc::SyncSender<EngineSnapshot>,
     },
+    /// Read barrier: acknowledge only after the current command drain has
+    /// reached the shared snapshot. It does not mutate authored/runtime state.
+    RequestSnapshotPublication {
+        expires_at: Instant,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
     /// Test-only runtime inspection and sentinel setup for the acknowledged
     /// BootstrapVjShow rollback proof. This never exists in production builds.
     #[cfg(test)]
@@ -5662,7 +5668,9 @@ macro_rules! engine_command_video_presentation_relevance {
             | EngineCommand::ClearFixtureFlags(_)
             | EngineCommand::ApplyAttributeValues { .. } => false,
             // Persistence reads, telemetry, introspection, test probes.
-            EngineCommand::RequestPersistenceSnapshot { .. } | EngineCommand::ResetTelemetry => {
+            EngineCommand::RequestPersistenceSnapshot { .. }
+            | EngineCommand::RequestSnapshotPublication { .. }
+            | EngineCommand::ResetTelemetry => {
                 false
             }
             #[cfg(test)]
@@ -5850,6 +5858,7 @@ impl EngineCommand {
         !matches!(
             self,
             EngineCommand::RequestPersistenceSnapshot { .. }
+                | EngineCommand::RequestSnapshotPublication { .. }
                 | EngineCommand::QueueVideoClipSlotPublished { .. }
                 | EngineCommand::CancelQueuedVideoClipSlotPublished { .. }
                 | EngineCommand::LaunchVideoClipSlotPublished { .. }
@@ -11408,6 +11417,20 @@ impl EngineHandle {
             .map_err(|error| format!("Persistence snapshot request failed: {error}"))
     }
 
+    /// Wait for commands already in the queue to become renderer-observable.
+    /// No additional persistence image is cloned and no mutation is replayed.
+    pub fn await_snapshot_publication(&self) -> Result<(), String> {
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::RequestSnapshotPublication {
+            expires_at: Instant::now() + Duration::from_secs(2),
+            ack,
+        })
+        .map_err(|error| format!("Snapshot publication barrier could not enqueue: {error}"))?;
+        receiver
+            .recv_timeout(Duration::from_secs(3))
+            .map_err(|error| format!("Snapshot publication barrier acknowledgement failed: {error}"))?
+    }
+
     pub fn set_touch_surface(&self, surface: TouchSurfaceSummary) -> Result<(), String> {
         let (ack, receiver) = mpsc::sync_channel(1);
         self.send(EngineCommand::SetTouchSurface {
@@ -12203,6 +12226,7 @@ impl EngineHandle {
             | EngineCommand::ClearFixtureFlags(_)
             | EngineCommand::ApplyAttributeValues { .. }
             | EngineCommand::RequestPersistenceSnapshot { .. }
+            | EngineCommand::RequestSnapshotPublication { .. }
             | EngineCommand::SetTouchSurface { .. }
             | EngineCommand::SetStageMapConfig(_)
             | EngineCommand::RemoveStageMapPreset { .. }
@@ -23094,6 +23118,7 @@ impl EngineRuntime {
                     | EngineCommand::UpsertStageMapPresetPublished { .. }
                     | EngineCommand::StageProjectMutationPublished { .. }
                     | EngineCommand::SetTouchSurface { .. }
+                    | EngineCommand::RequestSnapshotPublication { .. }
                     | EngineCommand::ExclusiveVideoTake { .. }
                     | EngineCommand::ClearLiveAudioInputPublished { .. }
                     | EngineCommand::SetAutoVjConfigPublished { .. }
@@ -23956,6 +23981,19 @@ impl EngineRuntime {
             }
             EngineCommand::RequestPersistenceSnapshot { response } => {
                 let _ = response.send(self.build_persistence_snapshot());
+            }
+            EngineCommand::RequestSnapshotPublication { expires_at, ack } => {
+                let result = if Instant::now() > expires_at {
+                    Err("Snapshot publication barrier expired before engine execution".to_string())
+                } else {
+                    Ok(())
+                };
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack: PendingCommandAckSender::Plain(ack),
+                    result,
+                    rollback: PendingCommandRollback::KeepApplied,
+                    publication_error: "Snapshot publication barrier could not publish an acknowledged snapshot",
+                });
             }
             #[cfg(test)]
             EngineCommand::InspectMediaAssetRollbackTestState {
@@ -68545,6 +68583,9 @@ fn write_byte(frame: &mut [u8; 512], fixture_start_address: u16, offset: u16, by
         frame[absolute] = byte;
     }
 }
+
+#[cfg(test)]
+mod snapshot_publication_tests;
 
 #[cfg(test)]
 mod tests {
