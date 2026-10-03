@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "baseline": "623281b1",
+  "moduleSha256": "c90acc544375958efad6694b5167e7b3cbef69deb96bbe557bf35fa337a92d99",
+  "reproduced": true,
+  "observations": [
+    {
+      "name": "corrupt-json",
+      "loadKind": "none",
+      "preservedAfterRead": false,
+      "saveReturned": true,
+      "preservedAfterWrite": false
+    },
+    {
+      "name": "future-envelope",
+      "loadKind": "none",
+      "preservedAfterRead": true,
+      "saveReturned": true,
+      "preservedAfterWrite": false
+    }
+  ],
+  "nonclaim": "Actual production TypeScript module on isolated Map storage; no native/localStorage/browser/device acceptance"
+}

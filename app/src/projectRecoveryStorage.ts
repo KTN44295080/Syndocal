@@ -182,19 +182,38 @@ const recoveryEnvelopeFromUnknown = (candidate: unknown): ProjectRecoveryStorage
   return null;
 };
 
-const readRecoveryStorage = (): unknown | null => {
-  if (typeof window === "undefined") return null;
+const invalidRecoveryStorageMessage =
+  "Browser recovery data is invalid. Stored data was kept; restore a verified project backup.";
+
+const recoveryStorageStateFromUnknown = (candidate: unknown): ProjectRecoveryStorageState => {
+  const envelope = recoveryEnvelopeFromUnknown(candidate);
+  if (envelope) return envelope;
+  const legacy = recoveryCheckpointFromUnknown(candidate);
+  if (legacy) return { kind: "checkpoint", recovery_authority_serial: 0, checkpoint: legacy };
+  const version = candidate && typeof candidate === "object"
+    ? (candidate as { version?: unknown }).version
+    : undefined;
+  throw new Error(typeof version === "number" && version !== 1 && version !== projectRecoveryEnvelopeVersion
+    ? "Unsupported browser recovery format. Stored data was kept; use a compatible Syndocal version or restore a verified project backup."
+    : invalidRecoveryStorageMessage);
+};
+
+/** Undefined means absent; parsed null and malformed bytes are invalid data. */
+const readRecoveryStorage = (): unknown | undefined => {
+  if (typeof window === "undefined") return undefined;
+  let raw: string | null;
   try {
-    const raw = window.localStorage.getItem(projectRecoveryStorageKey);
-    return raw ? JSON.parse(raw) : null;
+    raw = window.localStorage.getItem(projectRecoveryStorageKey);
   } catch {
-    try {
-      window.localStorage.removeItem(projectRecoveryStorageKey);
-    } catch {
-      // A restricted storage origin can reject cleanup too; callers still
-      // fail closed with no recovery payload.
-    }
-    return null;
+    throw new Error("Browser recovery storage could not be read. Keep this profile and restore a verified project backup.");
+  }
+  if (raw === null) return undefined;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    // Reading never destroys evidence or the last potentially recoverable
+    // image. The existing startup catch presents this fixed actionable error.
+    throw new Error(invalidRecoveryStorageMessage);
   }
 };
 
@@ -205,6 +224,8 @@ const writeRecoveryStorage = (state: ProjectRecoveryStorageState): boolean => {
     ...state,
   };
   try {
+    const existing = readRecoveryStorage();
+    if (existing !== undefined) recoveryStorageStateFromUnknown(existing);
     window.localStorage.setItem(projectRecoveryStorageKey, JSON.stringify(envelope));
     return true;
   } catch {
@@ -223,27 +244,19 @@ export const loadProjectRecoveryStorageState = (
 ): ProjectRecoveryStorageState => {
   if (!isRecoveryAuthoritySerial(recoveryAuthoritySerial)) return { kind: "none" };
   const raw = readRecoveryStorage();
-  if (raw === null) return { kind: "none" };
-  const envelope = recoveryEnvelopeFromUnknown(raw);
-  if (envelope) {
-    if (envelope.kind === "tombstone") return envelope;
-    if (envelope.kind === "checkpoint") {
-      return envelope.recovery_authority_serial === recoveryAuthoritySerial
-        ? envelope
-        : { kind: "none" };
-    }
-    if (envelope.kind === "none") return envelope;
-    return envelope.intent.source_serial === recoveryAuthoritySerial
-      || envelope.intent.expected_target_serial === recoveryAuthoritySerial
-      || envelope.intent.expected_target_serial + 1 === recoveryAuthoritySerial
+  if (raw === undefined) return { kind: "none" };
+  const envelope = recoveryStorageStateFromUnknown(raw);
+  if (envelope.kind === "tombstone") return envelope;
+  if (envelope.kind === "checkpoint") {
+    return envelope.recovery_authority_serial === recoveryAuthoritySerial
       ? envelope
       : { kind: "none" };
   }
-  // Legacy v1 direct checkpoint migration: never assume it belongs to a
-  // journal which already advanced on this machine.
-  const checkpoint = recoveryCheckpointFromUnknown(raw);
-  return checkpoint && recoveryAuthoritySerial === 0
-    ? { kind: "checkpoint", recovery_authority_serial: 0, checkpoint }
+  if (envelope.kind === "none") return envelope;
+  return envelope.intent.source_serial === recoveryAuthoritySerial
+    || envelope.intent.expected_target_serial === recoveryAuthoritySerial
+    || envelope.intent.expected_target_serial + 1 === recoveryAuthoritySerial
+    ? envelope
     : { kind: "none" };
 };
 

@@ -484,9 +484,45 @@ assert.deepEqual(
   "draft-only Scene Block edits survive a storage reload",
 );
 
-storageValues.set("syndocal.projectRecovery.v1", "{broken-json");
-assert.equal(recovery.loadProjectRecoveryCheckpoint(), null);
-assert.equal(storageValues.has("syndocal.projectRecovery.v1"), false);
+const legacyRecoveryBytes = JSON.stringify(checkpoint);
+storageValues.set("syndocal.projectRecovery.v1", legacyRecoveryBytes);
+assert.deepEqual(recovery.loadProjectRecoveryCheckpoint(0), checkpoint, "legacy direct v1 remains eligible at serial zero");
+assert.equal(recovery.loadProjectRecoveryCheckpoint(1), null, "legacy recovery cannot cross an advanced backend serial");
+assert.equal(storageValues.get("syndocal.projectRecovery.v1"), legacyRecoveryBytes, "legacy reads never rewrite bytes");
+assert.equal(recovery.saveProjectRecoveryCheckpoint(checkpoint, 0), true);
+const canonicalRecoveryBytes = storageValues.get("syndocal.projectRecovery.v1");
+assert.equal(JSON.parse(canonicalRecoveryBytes).version, 3);
+assert.equal(recovery.saveProjectRecoveryCheckpoint(checkpoint, 0), true);
+assert.equal(storageValues.get("syndocal.projectRecovery.v1"), canonicalRecoveryBytes, "second canonical save is idempotent");
+
+for (const raw of [
+  "{broken-json",
+  "",
+  "null",
+  JSON.stringify({ version: 4, kind: "checkpoint", recovery_authority_serial: 0, checkpoint }),
+  JSON.stringify({ version: 2, kind: "checkpoint", recovery_authority_serial: 0, checkpoint }),
+  JSON.stringify({ version: 3, kind: "checkpoint", recovery_authority_serial: 0, checkpoint: { ...checkpoint, signature: null } }),
+  JSON.stringify({ version: 3, kind: "tombstone", recovery_authority_serial: -1 }),
+]) {
+  storageValues.set("syndocal.projectRecovery.v1", raw);
+  assert.throws(() => recovery.loadProjectRecoveryStorageState(0), /Stored data was kept.*verified project backup/);
+  assert.equal(storageValues.get("syndocal.projectRecovery.v1"), raw, "invalid read preserves exact bytes");
+  assert.equal(recovery.saveProjectRecoveryCheckpoint(checkpoint), false, "autosave cannot overwrite invalid/future data");
+  assert.equal(recovery.tombstoneProjectRecoveryCheckpoint(1), false, "implicit retirement cannot overwrite unverifiable data");
+  assert.equal(recovery.registerProjectRecoveryIntent(checkpoint, 0, 1), null);
+  let enteredPublication = 0;
+  assert.equal(recovery.startProjectRecoveryPublication(checkpoint, 0, 1,
+    () => { enteredPublication += 1; },
+    () => { enteredPublication += 1; return Promise.resolve(); }), null);
+  assert.equal(enteredPublication, 0, "invalid storage cannot start the native recovery publication");
+  assert.equal(storageValues.get("syndocal.projectRecovery.v1"), raw, "all failed writes preserve exact bytes");
+}
+recovery.clearProjectRecoveryCheckpoint();
+assert.equal(storageValues.has("syndocal.projectRecovery.v1"), false, "explicit discard still clears storage");
+
+globalThis.window = { localStorage: { ...localStorage, getItem: () => { throw new Error("sensitive browser exception"); } } };
+assert.throws(() => recovery.loadProjectRecoveryStorageState(0), /storage could not be read.*verified project backup/);
+assert.equal(recovery.saveProjectRecoveryCheckpoint(checkpoint), false, "unreadable storage cannot be overwritten");
 
 globalThis.window = {
   localStorage: {
