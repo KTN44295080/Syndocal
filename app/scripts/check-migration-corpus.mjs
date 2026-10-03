@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { requireExactMsvcLinkerFirst, tauriCommandEnvironment } from "./run-tauri.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
-const expectedTests = 12;
+const expectedTests = 16;
 assert.equal(process.argv.length, 2, "Usage: node app/scripts/check-migration-corpus.mjs");
 // Reuse the maintained exact vcvars/toolset/PATH-first contract. This prepares
 // Cargo's environment only; it does not invoke Tauri, launch or stop an app.
@@ -32,4 +32,6 @@ assert.equal(summaries.length, 1, "Expected one actual Rust test-binary result, 
 assert.equal(Number(summaries[0][1]), expectedTests, "Migration corpus test selection changed");
 assert.equal(Number(summaries[0][2]), 0);
 assert.equal(Number(summaries[0][3]), 0, "Migration acceptance tests must not be ignored");
+assert.equal((result.stderr ?? "").match(/^warning(?:\[|:)/gmu)?.length ?? 0, 0,
+  "No first-party compiler warnings allowed");
 console.log(`migration corpus gate passed: ${expectedTests} Rust tests, none failed or ignored`);

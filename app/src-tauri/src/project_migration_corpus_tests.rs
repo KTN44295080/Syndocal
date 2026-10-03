@@ -11,7 +11,8 @@ use protocol::{EngineSnapshot, ProjectFile};
 use serde_json::{json, Value};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
-const GOLDEN: &str = include_str!("../../../qa/migration/phase1-project-expectations.json");
+#[path = "project_migration_golden.rs"]
+mod whole_project_golden;
 const GENERATED_CASES: usize = 128;
 const GENERATOR_SEED: u64 = 0x5344_435f_2026_0913;
 const HOSTILE_BYTE_CASES: usize = 4096;
@@ -134,30 +135,12 @@ fn round_trip(input: &Value, label: &str) -> Value {
 #[test]
 fn migration_corpus_phase1_golden_load_save_reload() {
     let output = round_trip(&sample(), "phase1-mini-show");
-    let expected: Value = serde_json::from_str(GOLDEN).expect("golden expectations JSON");
-    assert_eq!(expected["schema_version"], 1);
-    assert_eq!(expected["source"], "samples/phase1-mini-show.sdc");
-    for (pointer, value) in expected["exact"].as_object().expect("exact expectations") {
-        assert_eq!(
-            output.pointer(pointer),
-            Some(value),
-            "golden mismatch at {pointer}"
-        );
-    }
-    for (pointer, length) in expected["array_lengths"]
-        .as_object()
-        .expect("array lengths")
-    {
-        let actual = output
-            .pointer(pointer)
-            .and_then(Value::as_array)
-            .unwrap_or_else(|| panic!("golden array is missing at {pointer}"));
-        assert_eq!(
-            actual.len() as u64,
-            length.as_u64().unwrap(),
-            "length at {pointer}"
-        );
-    }
+    whole_project_golden::assert_phase1_source_unchanged();
+    whole_project_golden::assert_whole(
+        &output,
+        &whole_project_golden::phase1_expected(),
+        "legacy Phase 1",
+    );
 }
 
 #[test]
@@ -425,6 +408,15 @@ fn migration_corpus_seeded_semantic_round_trip_property() {
         input["snapshot"]["telemetry"]["frame_counter"] = json!(seed % 10000);
         input["future_optional_metadata"] = json!({"index": index, "nested": [true, null]});
         let output = round_trip(&input, &format!("seed={GENERATOR_SEED:#x}, case={index}"));
+        let mut expected = whole_project_golden::phase1_expected();
+        expected["snapshot"]["fixtures"][0]["label"] = json!(label);
+        expected["snapshot"]["fixtures"][0]["address"] = json!(1 + seed % 504);
+        expected["snapshot"]["clock"]["bpm"] = json!((90 + seed % 90) as f64);
+        whole_project_golden::assert_whole(
+            &output,
+            &expected,
+            &format!("seeded whole project {index}"),
+        );
         assert_eq!(output["snapshot"]["fixtures"][0]["label"], json!(label));
         assert_eq!(
             output["snapshot"]["fixtures"][0]["address"],
@@ -467,6 +459,9 @@ fn migration_corpus_embedded_profile_unicode_paths_are_not_reopened() {
         input["custom_profiles"] = json!([]);
         input["snapshot"]["fixtures"][0]["profile_source_path"] = json!(source_path);
         let output = round_trip(&input, source_path);
+        let mut expected = whole_project_golden::phase1_expected();
+        expected["custom_profiles"] = json!([]);
+        whole_project_golden::assert_whole(&output, &expected, source_path);
         assert_eq!(
             output["snapshot"]["fixtures"][0]["profile_source_path"],
             "snapshot://fixture/1"

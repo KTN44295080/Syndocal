@@ -1,0 +1,1253 @@
+{
+  "version": 1,
+  "app": "Syndocal",
+  "custom_profiles": [
+    {
+      "source_path": "memory://custom/Syndocal-Phase_1_Mini_Spot",
+      "manufacturer": "Syndocal",
+      "name": "Phase 1 Mini Spot",
+      "short_name": "P1 Spot",
+      "fixture_type_id": null,
+      "dmx_modes": [
+        {
+          "name": "8ch",
+          "controls": [
+            {
+              "attribute": "Dimmer",
+              "channel_name": "Dimmer",
+              "geometry": "Beam",
+              "offsets": [
+                1
+              ],
+              "resolution": "EightBit",
+              "default_value": 0,
+              "functions": []
+            },
+            {
+              "attribute": "ColorRed",
+              "channel_name": "ColorRed",
+              "geometry": "Beam",
+              "offsets": [
+                2
+              ],
+              "resolution": "EightBit",
+              "default_value": 0,
+              "functions": []
+            },
+            {
+              "attribute": "ColorGreen",
+              "channel_name": "ColorGreen",
+              "geometry": "Beam",
+              "offsets": [
+                3
+              ],
+              "resolution": "EightBit",
+              "default_value": 0,
+              "functions": []
+            },
+            {
+              "attribute": "ColorBlue",
+              "channel_name": "ColorBlue",
+              "geometry": "Beam",
+              "offsets": [
+                4
+              ],
+              "resolution": "EightBit",
+              "default_value": 0,
+              "functions": []
+            },
+            {
+              "attribute": "Pan",
+              "channel_name": "Pan",
+              "geometry": "Head",
+              "offsets": [
+                5,
+                6
+              ],
+              "resolution": "SixteenBit",
+              "default_value": 32768,
+              "functions": []
+            },
+            {
+              "attribute": "Tilt",
+              "channel_name": "Tilt",
+              "geometry": "Head",
+              "offsets": [
+                7,
+                8
+              ],
+              "resolution": "SixteenBit",
+              "default_value": 32768,
+              "functions": []
+            }
+          ]
+        }
+      ],
+      "geometries": [
+        {
+          "name": "Body",
+          "kind": "Geometry",
+          "parent": null,
+          "matrix": [
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "model_name": "Mini Spot Body",
+          "model_file": null,
+          "model_primitive": "Cylinder",
+          "model_dimensions": {
+            "x": 0.41999998688697815,
+            "y": 0.3199999928474426,
+            "z": 0.41999998688697815
+          },
+          "beam_type": null,
+          "beam_angle_deg": null,
+          "field_angle_deg": null,
+          "beam_radius": null
+        },
+        {
+          "name": "Head",
+          "kind": "Axis",
+          "parent": "Body",
+          "matrix": [
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.3400000035762787,
+            0.0,
+            0.0,
+            1.0,
+            -0.18000000715255737,
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "model_name": "Mini Spot Head",
+          "model_file": null,
+          "model_primitive": "Sphere",
+          "model_dimensions": {
+            "x": 0.3400000035762787,
+            "y": 0.2800000011920929,
+            "z": 0.3400000035762787
+          },
+          "beam_type": null,
+          "beam_angle_deg": null,
+          "field_angle_deg": null,
+          "beam_radius": null
+        },
+        {
+          "name": "Beam",
+          "kind": "Beam",
+          "parent": "Head",
+          "matrix": [
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.10000000149011612,
+            0.0,
+            0.0,
+            1.0,
+            -0.4399999976158142,
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "model_name": "Mini Spot Beam",
+          "model_file": null,
+          "model_primitive": "Plane",
+          "model_dimensions": {
+            "x": 0.18000000715255737,
+            "y": 0.019999999552965164,
+            "z": 0.5799999833106995
+          },
+          "beam_type": "Spot",
+          "beam_angle_deg": 18.0,
+          "field_angle_deg": 28.0,
+          "beam_radius": 0.09000000357627869
+        }
+      ],
+      "warnings": []
+    }
+  ],
+  "snapshot": {
+    "fixtures": [
+      {
+        "id": 1,
+        "label": "Mini Spot 1",
+        "profile_source_path": "snapshot://fixture/1",
+        "profile_name": "Phase 1 Mini Spot",
+        "manufacturer": "Syndocal",
+        "mode_name": "8ch",
+        "universe": 0,
+        "address": 1,
+        "group_ids": [
+          "Front"
+        ],
+        "position": {
+          "x": -2.0,
+          "y": 3.0,
+          "z": 0.0
+        },
+        "rotation": {
+          "pitch": 0.0,
+          "yaw": 0.0,
+          "roll": 0.0
+        },
+        "geometries": [
+          {
+            "name": "Body",
+            "kind": "Geometry",
+            "parent": null,
+            "matrix": [
+              1.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              1.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              1.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "model_name": "Mini Spot Body",
+            "model_file": null,
+            "model_primitive": "Cylinder",
+            "model_dimensions": {
+              "x": 0.41999998688697815,
+              "y": 0.3199999928474426,
+              "z": 0.41999998688697815
+            },
+            "beam_type": null,
+            "beam_angle_deg": null,
+            "field_angle_deg": null,
+            "beam_radius": null
+          },
+          {
+            "name": "Head",
+            "kind": "Axis",
+            "parent": "Body",
+            "matrix": [
+              1.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              1.0,
+              0.0,
+              0.3400000035762787,
+              0.0,
+              0.0,
+              1.0,
+              -0.18000000715255737,
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "model_name": "Mini Spot Head",
+            "model_file": null,
+            "model_primitive": "Sphere",
+            "model_dimensions": {
+              "x": 0.3400000035762787,
+              "y": 0.2800000011920929,
+              "z": 0.3400000035762787
+            },
+            "beam_type": null,
+            "beam_angle_deg": null,
+            "field_angle_deg": null,
+            "beam_radius": null
+          },
+          {
+            "name": "Beam",
+            "kind": "Beam",
+            "parent": "Head",
+            "matrix": [
+              1.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              1.0,
+              0.0,
+              0.10000000149011612,
+              0.0,
+              0.0,
+              1.0,
+              -0.4399999976158142,
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "model_name": "Mini Spot Beam",
+            "model_file": null,
+            "model_primitive": "Plane",
+            "model_dimensions": {
+              "x": 0.18000000715255737,
+              "y": 0.019999999552965164,
+              "z": 0.5799999833106995
+            },
+            "beam_type": "Spot",
+            "beam_angle_deg": 18.0,
+            "field_angle_deg": 28.0,
+            "beam_radius": 0.09000000357627869
+          }
+        ],
+        "controls": [
+          {
+            "attribute": "Dimmer",
+            "channel_name": "Dimmer",
+            "geometry": "Beam",
+            "offsets": [
+              1
+            ],
+            "resolution": "EightBit",
+            "default_value": 0,
+            "functions": []
+          },
+          {
+            "attribute": "ColorRed",
+            "channel_name": "ColorRed",
+            "geometry": "Beam",
+            "offsets": [
+              2
+            ],
+            "resolution": "EightBit",
+            "default_value": 0,
+            "functions": []
+          },
+          {
+            "attribute": "ColorGreen",
+            "channel_name": "ColorGreen",
+            "geometry": "Beam",
+            "offsets": [
+              3
+            ],
+            "resolution": "EightBit",
+            "default_value": 0,
+            "functions": []
+          },
+          {
+            "attribute": "ColorBlue",
+            "channel_name": "ColorBlue",
+            "geometry": "Beam",
+            "offsets": [
+              4
+            ],
+            "resolution": "EightBit",
+            "default_value": 0,
+            "functions": []
+          },
+          {
+            "attribute": "Pan",
+            "channel_name": "Pan",
+            "geometry": "Head",
+            "offsets": [
+              5,
+              6
+            ],
+            "resolution": "SixteenBit",
+            "default_value": 32768,
+            "functions": []
+          },
+          {
+            "attribute": "Tilt",
+            "channel_name": "Tilt",
+            "geometry": "Head",
+            "offsets": [
+              7,
+              8
+            ],
+            "resolution": "SixteenBit",
+            "default_value": 32768,
+            "functions": []
+          }
+        ],
+        "attribute_values": [
+          {
+            "attribute": "Dimmer",
+            "value": 0
+          },
+          {
+            "attribute": "ColorRed",
+            "value": 0
+          },
+          {
+            "attribute": "ColorGreen",
+            "value": 0
+          },
+          {
+            "attribute": "ColorBlue",
+            "value": 0
+          },
+          {
+            "attribute": "Pan",
+            "value": 32768
+          },
+          {
+            "attribute": "Tilt",
+            "value": 32768
+          }
+        ],
+        "limits": {
+          "dimmer_min": 0,
+          "dimmer_max": 65535,
+          "pan_min": 0,
+          "pan_max": 65535,
+          "tilt_min": 0,
+          "tilt_max": 65535,
+          "invert_pan": false,
+          "invert_tilt": false,
+          "swap_pan_tilt": false
+        },
+        "highlighted": false,
+        "soloed": false,
+        "parked": false
+      }
+    ],
+    "cues": [
+      {
+        "id": 1,
+        "label": "White Hit",
+        "fade_ms": 100,
+        "targets": [
+          {
+            "fixture_id": 1,
+            "values": [
+              {
+                "attribute": "Dimmer",
+                "value": 65535
+              },
+              {
+                "attribute": "ColorRed",
+                "value": 65535
+              },
+              {
+                "attribute": "ColorGreen",
+                "value": 65535
+              },
+              {
+                "attribute": "ColorBlue",
+                "value": 65535
+              }
+            ]
+          }
+        ],
+        "video_targets": [
+          {
+            "layer_id": 1,
+            "state": {
+              "enabled": true,
+              "solo": false,
+              "opacity": 1.0,
+              "speed": 1.0,
+              "playing": true,
+              "position_ms": 0,
+              "loop_enabled": true,
+              "loop_start_ms": 0,
+              "loop_end_ms": 4000,
+              "bpm_sync": {
+                "enabled": true,
+                "ratio": 1.0,
+                "loop_bars": 2.0
+              },
+              "cue_points": [
+                {
+                  "position_ms": 0,
+                  "label": "Start",
+                  "color": "#5dd64c"
+                },
+                {
+                  "position_ms": 2000,
+                  "label": "Drop",
+                  "color": "#ff2b88"
+                }
+              ],
+              "cue_points_ms": [
+                0,
+                2000
+              ],
+              "transform": {
+                "x": 0.0,
+                "y": 0.0,
+                "scale_x": 1.0,
+                "scale_y": 1.0,
+                "rotation_deg": 0.0,
+                "crop_left": 0.0,
+                "crop_top": 0.0,
+                "crop_right": 0.0,
+                "crop_bottom": 0.0
+              },
+              "color": {
+                "brightness": 0.0,
+                "contrast": 1.0,
+                "hue_deg": 0.0,
+                "saturation": 1.0,
+                "gamma": 1.0
+              },
+              "fx": {
+                "pixelate": 1.0,
+                "blur": 0.0,
+                "glow": 0.0,
+                "edge": 0.0,
+                "key_red": 0.0,
+                "key_green": 1.0,
+                "key_blue": 0.0,
+                "key_threshold": 0.0
+              }
+            }
+          }
+        ],
+        "video_output_targets": [
+          {
+            "output_id": 1,
+            "enabled": true,
+            "opacity": 1.0,
+            "blackout": false
+          }
+        ],
+        "node_graph_targets": [],
+        "cue_list_id": 1,
+        "cue_number": "",
+        "group_id": null,
+        "recall_mode": "Coexist",
+        "authored_beats": null,
+        "pre_wait_ms": 0,
+        "follow_ms": null,
+        "ifcb_timing": {
+          "intensity_fade_ms": null,
+          "intensity_delay_ms": 0,
+          "focus_fade_ms": null,
+          "focus_delay_ms": 0,
+          "color_fade_ms": null,
+          "color_delay_ms": 0,
+          "beam_fade_ms": null,
+          "beam_delay_ms": 0
+        },
+        "parts": [],
+        "mark": false,
+        "mib_fixture_ids": [],
+        "palette_targets": [],
+        "tracking": true,
+        "notes": "",
+        "effect_targets": []
+      }
+    ],
+    "active_cue_id": null,
+    "active_fade": null,
+    "timeline": {
+      "events": [
+        {
+          "id": 1,
+          "cue_id": 1,
+          "time_ms": 0,
+          "track": "Lighting",
+          "time_beats": null,
+          "layer_id": null,
+          "duration_ms": 0,
+          "duration_beats": null,
+          "conform_to_tempo": false,
+          "loop_fill": false,
+          "source_offset_ms": 0,
+          "rate": null,
+          "fade_in_ms": 0,
+          "fade_out_ms": 0,
+          "loop_count": 1,
+          "jump_to_event_id": null
+        },
+        {
+          "id": 2,
+          "cue_id": 1,
+          "time_ms": 4000,
+          "track": "Lighting",
+          "time_beats": null,
+          "layer_id": null,
+          "duration_ms": 0,
+          "duration_beats": null,
+          "conform_to_tempo": false,
+          "loop_fill": false,
+          "source_offset_ms": 0,
+          "rate": null,
+          "fade_in_ms": 0,
+          "fade_out_ms": 0,
+          "loop_count": 1,
+          "jump_to_event_id": null
+        }
+      ],
+      "automations": [
+        {
+          "id": 1,
+          "fixture_id": 1,
+          "attribute": "Dimmer",
+          "track": "Lighting",
+          "keyframes": [
+            {
+              "time_ms": 0,
+              "value": 65535,
+              "interpolation": "Linear"
+            },
+            {
+              "time_ms": 4000,
+              "value": 0,
+              "interpolation": "Linear"
+            }
+          ],
+          "enabled": true
+        }
+      ],
+      "video_automations": [
+        {
+          "id": 2,
+          "layer_id": 1,
+          "param": "Opacity",
+          "track": "Video",
+          "keyframes": [
+            {
+              "time_ms": 0,
+              "value": 1.0,
+              "interpolation": "Linear"
+            },
+            {
+              "time_ms": 4000,
+              "value": 0.0,
+              "interpolation": "Linear"
+            }
+          ],
+          "enabled": true
+        }
+      ],
+      "audio": null,
+      "playing": false,
+      "position_ms": 0,
+      "duration_ms": 4000,
+      "id": 1,
+      "label": "Timeline 1",
+      "layers": [],
+      "audio_clips": [],
+      "guide_enabled": false,
+      "audio_offset_ms": 0,
+      "audio_muted": false,
+      "metronome_enabled": false,
+      "count_in_beats": 4
+    },
+    "video": {
+      "layers": [
+        {
+          "id": 1,
+          "label": "Stage NDI",
+          "source": {
+            "kind": "Ndi",
+            "path": null,
+            "name": "Stage NDI",
+            "codec": null,
+            "metadata": null
+          },
+          "blend_mode": "Normal",
+          "state": {
+            "enabled": true,
+            "solo": false,
+            "opacity": 0.699999988079071,
+            "speed": 1.0,
+            "playing": false,
+            "position_ms": 0,
+            "loop_enabled": true,
+            "loop_start_ms": 0,
+            "loop_end_ms": 4000,
+            "bpm_sync": {
+              "enabled": true,
+              "ratio": 1.0,
+              "loop_bars": 2.0
+            },
+            "cue_points": [
+              {
+                "position_ms": 0,
+                "label": "Start",
+                "color": "#5dd64c"
+              },
+              {
+                "position_ms": 2000,
+                "label": "Drop",
+                "color": "#ff2b88"
+              }
+            ],
+            "cue_points_ms": [
+              0,
+              2000
+            ],
+            "transform": {
+              "x": 0.0,
+              "y": 0.0,
+              "scale_x": 1.0,
+              "scale_y": 1.0,
+              "rotation_deg": 0.0,
+              "crop_left": 0.0,
+              "crop_top": 0.0,
+              "crop_right": 0.0,
+              "crop_bottom": 0.0
+            },
+            "color": {
+              "brightness": 0.0,
+              "contrast": 1.0,
+              "hue_deg": 0.0,
+              "saturation": 1.0,
+              "gamma": 1.0
+            },
+            "fx": {
+              "pixelate": 1.0,
+              "blur": 0.0,
+              "glow": 0.0,
+              "edge": 0.0,
+              "key_red": 0.0,
+              "key_green": 1.0,
+              "key_blue": 0.0,
+              "key_threshold": 0.0
+            }
+          },
+          "media_asset_id": 2,
+          "default_clip_slot_id": 3,
+          "clip_slots": [
+            {
+              "id": 3,
+              "media_asset_id": 2,
+              "in_point_ms": 0,
+              "out_point_ms": 4000,
+              "loop_mode": "Loop",
+              "speed": 1.0,
+              "cue_points": [
+                {
+                  "position_ms": 0,
+                  "name": "Start"
+                },
+                {
+                  "position_ms": 2000,
+                  "name": "Drop"
+                }
+              ],
+              "launch_quantization": "Immediate"
+            }
+          ]
+        }
+      ],
+      "compositions": [
+        {
+          "id": 1,
+          "label": "Main",
+          "layer_ids": [
+            1
+          ],
+          "output_ids": [
+            1
+          ],
+          "timeline_layer_ids": []
+        }
+      ],
+      "outputs": [
+        {
+          "id": 1,
+          "label": "Front Projector",
+          "kind": "Display",
+          "enabled": true,
+          "composition_id": 1,
+          "fullscreen": false,
+          "monitor_id": 0,
+          "width": 1920,
+          "height": 1080,
+          "endpoint_name": null,
+          "opacity": 1.0,
+          "blackout": false,
+          "mapping": {
+            "stage_x": 0.0,
+            "stage_y": 0.0,
+            "stage_z": 4.0,
+            "offset_x": 0.0,
+            "offset_y": 0.0,
+            "scale_x": 1.0,
+            "scale_y": 1.0,
+            "rotation_deg": 0.0,
+            "aspect_ratio": 1.7777777910232544,
+            "aspect_mode": "Fit",
+            "lens_distortion": 0.0,
+            "keystone_x": 0.07999999821186066,
+            "keystone_y": -0.03999999910593033,
+            "corner_top_left_x": -0.03999999910593033,
+            "corner_top_left_y": 0.019999999552965164,
+            "corner_top_right_x": 0.029999999329447746,
+            "corner_top_right_y": 0.009999999776482582,
+            "corner_bottom_right_x": 0.019999999552965164,
+            "corner_bottom_right_y": -0.029999999329447746,
+            "corner_bottom_left_x": -0.029999999329447746,
+            "corner_bottom_left_y": -0.019999999552965164,
+            "edge_blend_left": 0.0,
+            "edge_blend_right": 0.0,
+            "edge_blend_top": 0.0,
+            "edge_blend_bottom": 0.0,
+            "edge_blend_gamma": 2.200000047683716,
+            "black_level": 0.0,
+            "mask_point_count": 0,
+            "mask_invert": false,
+            "mask_softness": 0.0,
+            "mask_points": [
+              {
+                "x": 0.0,
+                "y": 0.0
+              },
+              {
+                "x": 0.0,
+                "y": 0.0
+              },
+              {
+                "x": 0.0,
+                "y": 0.0
+              },
+              {
+                "x": 0.0,
+                "y": 0.0
+              },
+              {
+                "x": 0.0,
+                "y": 0.0
+              },
+              {
+                "x": 0.0,
+                "y": 0.0
+              },
+              {
+                "x": 0.0,
+                "y": 0.0
+              },
+              {
+                "x": 0.0,
+                "y": 0.0
+              }
+            ],
+            "bitmap_mask_width": 0,
+            "bitmap_mask_height": 0,
+            "bitmap_mask_luma_words": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ]
+          },
+          "monitor_identity": null
+        }
+      ],
+      "mapping_presets": [
+        {
+          "label": "16:9 Front Fit",
+          "mapping": {
+            "stage_x": 0.0,
+            "stage_y": 0.0,
+            "stage_z": 4.0,
+            "offset_x": 0.0,
+            "offset_y": 0.0,
+            "scale_x": 1.0,
+            "scale_y": 1.0,
+            "rotation_deg": 0.0,
+            "aspect_ratio": 1.7777777910232544,
+            "aspect_mode": "Fit",
+            "lens_distortion": 0.0,
+            "keystone_x": 0.07999999821186066,
+            "keystone_y": -0.03999999910593033,
+            "corner_top_left_x": -0.03999999910593033,
+            "corner_top_left_y": 0.019999999552965164,
+            "corner_top_right_x": 0.029999999329447746,
+            "corner_top_right_y": 0.009999999776482582,
+            "corner_bottom_right_x": 0.019999999552965164,
+            "corner_bottom_right_y": -0.029999999329447746,
+            "corner_bottom_left_x": -0.029999999329447746,
+            "corner_bottom_left_y": -0.019999999552965164,
+            "edge_blend_left": 0.0,
+            "edge_blend_right": 0.0,
+            "edge_blend_top": 0.0,
+            "edge_blend_bottom": 0.0,
+            "edge_blend_gamma": 2.200000047683716,
+            "black_level": 0.0,
+            "mask_point_count": 0,
+            "mask_invert": false,
+            "mask_softness": 0.0,
+            "mask_points": [
+              {
+                "x": 0.0,
+                "y": 0.0
+              },
+              {
+                "x": 0.0,
+                "y": 0.0
+              },
+              {
+                "x": 0.0,
+                "y": 0.0
+              },
+              {
+                "x": 0.0,
+                "y": 0.0
+              },
+              {
+                "x": 0.0,
+                "y": 0.0
+              },
+              {
+                "x": 0.0,
+                "y": 0.0
+              },
+              {
+                "x": 0.0,
+                "y": 0.0
+              },
+              {
+                "x": 0.0,
+                "y": 0.0
+              }
+            ],
+            "bitmap_mask_width": 0,
+            "bitmap_mask_height": 0,
+            "bitmap_mask_luma_words": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ]
+          }
+        }
+      ],
+      "master_opacity": 1.0,
+      "blackout": false,
+      "auto_vj": {
+        "config": {
+          "eligible_layer_ids": [],
+          "seed": 0,
+          "beats_per_change": 4,
+          "transition_ms": 500,
+          "avoid_immediate_repeat": true,
+          "rhythm_source": "Clock"
+        },
+        "status": {
+          "mode": "Off",
+          "armed": false,
+          "hold": false,
+          "show_revision": 0,
+          "action_sequence": 0,
+          "last_consumed_boundary": null,
+          "next_boundary_beat": null,
+          "last_action": null,
+          "action_log": [],
+          "fault": null,
+          "live_audio_beat_counter": 0,
+          "last_live_audio_feature_sequence": null,
+          "live_audio_waiting": false,
+          "live_audio_generation": null
+        }
+      },
+      "media_assets": [
+        {
+          "id": 2,
+          "label": "Stage NDI",
+          "source": {
+            "kind": "Ndi",
+            "path": null,
+            "name": "Stage NDI",
+            "codec": null,
+            "metadata": null
+          }
+        }
+      ]
+    },
+    "effects": [],
+    "node_graphs": [],
+    "output": {
+      "enabled": true,
+      "protocol": "ArtNet",
+      "target_ip": "127.0.0.1",
+      "port": 6454,
+      "universe": 0,
+      "serial_port": "",
+      "serial_baud_rate": 57600
+    },
+    "dmx_outputs": [
+      {
+        "enabled": true,
+        "protocol": "ArtNet",
+        "target_ip": "127.0.0.1",
+        "port": 6454,
+        "universe": 0,
+        "serial_port": "",
+        "serial_baud_rate": 57600
+      }
+    ],
+    "lighting_master": 1.0,
+    "submasters": [
+      {
+        "group_id": "Front",
+        "label": "Front",
+        "level": 1.0
+      }
+    ],
+    "blackout": false,
+    "clock": {
+      "bpm": 120.0,
+      "beat_phase": 0.0,
+      "beat_counter": 0,
+      "tap_count": 0,
+      "source": "Manual",
+      "external_sync_age_ms": null,
+      "external_sync_locked": false
+    },
+    "stage_map": {
+      "locked": false,
+      "min_x": -6.0,
+      "max_x": 6.0,
+      "min_z": -4.0,
+      "max_z": 6.0
+    },
+    "stage_map_presets": [
+      {
+        "label": "Mini Venue",
+        "config": {
+          "locked": false,
+          "min_x": -6.0,
+          "max_x": 6.0,
+          "min_z": -4.0,
+          "max_z": 6.0
+        },
+        "stage_objects": [
+          {
+            "id": 1,
+            "label": "Main Deck",
+            "kind": "Stage",
+            "x": 0.0,
+            "z": 1.0,
+            "width": 10.0,
+            "depth": 6.0,
+            "rotation_deg": 0.0,
+            "color": "#5dd64c"
+          },
+          {
+            "id": 2,
+            "label": "Front Truss",
+            "kind": "Truss",
+            "x": 0.0,
+            "z": -2.4000000953674316,
+            "width": 8.5,
+            "depth": 0.3499999940395355,
+            "rotation_deg": 0.0,
+            "color": "#f2c14e"
+          },
+          {
+            "id": 3,
+            "label": "Projection Screen",
+            "kind": "Screen",
+            "x": 0.0,
+            "z": 4.0,
+            "width": 5.599999904632568,
+            "depth": 0.25,
+            "rotation_deg": 0.0,
+            "color": "#4cb7ff"
+          }
+        ]
+      }
+    ],
+    "stage_objects": [
+      {
+        "id": 1,
+        "label": "Main Deck",
+        "kind": "Stage",
+        "x": 0.0,
+        "z": 1.0,
+        "width": 10.0,
+        "depth": 6.0,
+        "rotation_deg": 0.0,
+        "color": "#5dd64c"
+      },
+      {
+        "id": 2,
+        "label": "Front Truss",
+        "kind": "Truss",
+        "x": 0.0,
+        "z": -2.4000000953674316,
+        "width": 8.5,
+        "depth": 0.3499999940395355,
+        "rotation_deg": 0.0,
+        "color": "#f2c14e"
+      },
+      {
+        "id": 3,
+        "label": "Projection Screen",
+        "kind": "Screen",
+        "x": 0.0,
+        "z": 4.0,
+        "width": 5.599999904632568,
+        "depth": 0.25,
+        "rotation_deg": 0.0,
+        "color": "#4cb7ff"
+      }
+    ],
+    "dmx_preview": [],
+    "dmx_previews": [],
+    "telemetry": {
+      "frame_counter": 0,
+      "queue_depth": 0,
+      "queue_depth_abs_max": 0,
+      "queue_push_failure_count": 0,
+      "last_tick_interval_us": 0,
+      "tick_jitter_last_us": 0,
+      "tick_jitter_abs_max_us": 0,
+      "tick_jitter_stddev_us": 0.0,
+      "tick_jitter_p95_us": 0,
+      "tick_jitter_p99_us": 0,
+      "tick_jitter_samples": 0,
+      "last_command_queue_latency_us": 0,
+      "command_queue_latency_abs_max_us": 0,
+      "command_queue_latency_p95_us": 0,
+      "command_queue_latency_p99_us": 0,
+      "command_queue_latency_samples": 0,
+      "last_command_drain_count": 0,
+      "command_drain_abs_max": 0,
+      "command_drain_limit_hit_count": 0,
+      "last_command_to_dmx_tick_latency_us": 0,
+      "command_to_dmx_tick_latency_abs_max_us": 0,
+      "command_to_dmx_tick_latency_p95_us": 0,
+      "command_to_dmx_tick_latency_p99_us": 0,
+      "command_to_dmx_tick_latency_samples": 0,
+      "last_dmx_send_interval_us": 0,
+      "dmx_send_interval_min_us": 0,
+      "dmx_send_interval_max_us": 0,
+      "dmx_send_interval_samples": 0,
+      "low_latency_dmx_tick_request_count": 0,
+      "low_latency_dmx_tick_advance_count": 0,
+      "low_latency_dmx_tick_defer_count": 0,
+      "last_packet_bytes": 0,
+      "last_dmx_output_count": 0,
+      "last_dmx_send_success_count": 0,
+      "last_dmx_send_failure_count": 0,
+      "total_dmx_send_success_count": 0,
+      "total_dmx_send_failure_count": 0,
+      "last_dmx_route_results": [],
+      "last_error": null,
+      "enabled_effect_count": 0,
+      "supported_effect_count": 0,
+      "effects_over_supported_envelope": false
+    },
+    "cue_lists": [
+      {
+        "id": 1,
+        "label": "Bank 1",
+        "active_cue_id": null
+      }
+    ],
+    "palettes": [],
+    "playback_executors": [
+      {
+        "id": 1,
+        "label": "Bank 1",
+        "cue_list_id": 1,
+        "page": 1,
+        "slot": 1,
+        "level": 1.0
+      }
+    ],
+    "playback_master": 1.0,
+    "programmer": {
+      "enabled": false,
+      "blind": false,
+      "values": [],
+      "dmx_previews": []
+    },
+    "authored_blackout": false,
+    "safety_blackout_engaged": false
+  },
+  "fixture_groups": [
+    {
+      "id": "Front",
+      "label": "Front",
+      "color": null
+    }
+  ]
+}

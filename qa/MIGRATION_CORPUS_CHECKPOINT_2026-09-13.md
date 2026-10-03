@@ -1,5 +1,9 @@
 # Bounded migration corpus — 2026-09-13
 
+Current follow-up: [whole-project expectations, 2026-10-03](MIGRATION_WHOLE_PROJECT_GOLDENS_2026-10-03.md)
+replaces the active partial Phase 1 oracle. The counts and limitations below
+describe this historical checkpoint; the broader migration requirement stays Open.
+
 ## Identity and boundary
 
 - Branch: `codex/showclock-review-20260912`.
