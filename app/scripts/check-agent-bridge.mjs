@@ -222,6 +222,39 @@ groups++;
   assert.equal(uncertain.error.code, 'mutation_not_confirmed');
   assert.equal(uncertain.error.native_query, undefined, 'uncertain mutation must not receive read retry information');
   groups++;
+  for (const operationId of ['syndocal.query.runtime.timeline.transport.authority.v1',
+    'syndocal.query.runtime.timeline.loop.authority.v1', 'syndocal.query.runtime.timeline.follow.abort.authority.v1']) {
+    for (const code of ['invalid_request', 'forbidden', 'stale_fence', 'conflict', 'busy', 'overloaded', 'publication_failed', 'internal']) {
+      let calls = 0;
+      const result = await execute(async () => { calls++; throw { code }; },
+        request('control_plane.execute', { operationId, request: {} }));
+      assert.deepEqual(result, { ok: false, error: { code: 'request_rejected',
+        message: `Native runtime authority read rejected: ${code}.`, native_runtime: { code } } });
+      assert.equal(calls, 1, 'typed runtime rejection cannot automatically replay a request');
+    }
+  }
+  groups++;
+  for (const invalid of [{ code: 'overloaded', credential: 'must-not-leak' },
+    { code: 'overloaded', message: 'must-not-leak' }, { code: 'unknown' }, { code: 7 }, {},
+    { code: 'x'.repeat(1025) }, { code: ['overloaded'] }]) {
+    const result = await execute(async () => { throw invalid; }, request('control_plane.execute', {
+      operationId: 'syndocal.query.runtime.timeline.loop.authority.v1', request: {},
+    }));
+    assert.equal(result.error.native_runtime, undefined);
+    assert.equal(result.error.message, 'Native operation failed with an unrecognized error response.');
+    assert.equal(JSON.stringify(result).includes('must-not-leak'), false);
+  }
+  for (const [operationId, expectedCode] of [
+    ['syndocal.runtime.timeline.loop.commit.v1', 'mutation_not_confirmed'],
+    ['syndocal.query.output.control.authority.v1', 'request_rejected'],
+    ['syndocal.output.lease.acquire.v2', 'mutation_not_confirmed'],
+  ]) {
+    const result = await execute(async () => { throw { code: 'overloaded' }; },
+      request('control_plane.execute', { operationId, request: {} }));
+    assert.equal(result.error.code, expectedCode);
+    assert.equal(result.error.native_runtime, undefined, 'only reviewed runtime authority reads receive this error wire');
+  }
+  groups++;
   const rejectedCanonical = await execute(async () => assert.fail('unreviewed canonical operation must not invoke Tauri'), request('control_plane.execute', {
     operationId: 'syndocal.query.not_reviewed.v1',
     request: {},

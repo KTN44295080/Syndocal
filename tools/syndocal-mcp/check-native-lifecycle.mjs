@@ -16,9 +16,18 @@ import { nativeLeaseExpiry } from './native-lease-expiry.mjs';
 import { nativeProjectJson } from './native-project-json.mjs';
 import { nativeBackupJson } from './native-backup-json.mjs';
 import { nativeControllerOutput } from './native-controller-output.mjs';
+import { nativeRuntimeAuthority } from './native-runtime-authority.mjs';
 
 const exec = promisify(execFile);
 const args = process.argv.slice(2);
+const runtimeAuthority = args.includes('--runtime-authority');
+if (runtimeAuthority) {
+  args.splice(args.indexOf('--runtime-authority'), 1);
+  assert.ok(!args.some(arg => ['--controller-event-pressure', '--controller-safety-pressure', '--controller-burst',
+    '--controller-inflight', '--controller-expiry', '--controller-restart', '--controller-output', '--authored-controls',
+    '--input-diagnostics', '--backup-json', '--project-json', '--lease-expiry', '--tap-bpm', '--diagnostics',
+    '--external-high-risk', '--external-revocation'].includes(arg)), 'Runtime authority reads own a separate read-only lane');
+}
 const controllerEventPressure = args.includes('--controller-event-pressure');
 if (controllerEventPressure) args.splice(args.indexOf('--controller-event-pressure'), 1);
 const controllerSafetyPressure = args.includes('--controller-safety-pressure');
@@ -200,6 +209,7 @@ try {
   await exec('icacls.exe', [credentialDirectory, '/inheritance:r', '/grant:r', `*${stdout.trim()}:(OI)(CI)F`], { windowsHide: true, timeout: 5000 });
   options.credentialFile = path.join(credentialDirectory, 'credential');
   await pair(); await install();
+  if (runtimeAuthority) await nativeRuntimeAuthority(backend, options, checks);
   if (leaseExpiry) await nativeLeaseExpiry(backend, options, checks);
   if (externalHighRisk) await nativeExternalHighRisk(backend, options, checks);
   if (controllerOutput) await nativeControllerOutput(backend, options, checks);
@@ -382,6 +392,12 @@ await fs.writeFile(evidence, `${JSON.stringify({ schemaVersion: 1, timestamp: ne
     controllerOutputHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-controller-output.mjs', import.meta.url))).digest('hex'),
     stdioHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-stdio-session.mjs', import.meta.url))).digest('hex'),
   } : {}),
+  ...(runtimeAuthority ? {
+    runtimeAuthorityHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-runtime-authority.mjs', import.meta.url))).digest('hex'),
+    runtimeAuthoritySourceSha256: createHash('sha256').update(await fs.readFile(new URL('../../app/src-tauri/src/control_plane_runtime.rs', import.meta.url))).digest('hex'),
+    runtimeAuthorityAdapterSha256: createHash('sha256').update(await fs.readFile(new URL('../../app/src/agentBridgeTools.ts', import.meta.url))).digest('hex'),
+    stdioHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-stdio-session.mjs', import.meta.url))).digest('hex'),
+  } : {}),
   ...(controllerSafetyPressure ? {
     safetyPressureHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-controller-safety-pressure.mjs', import.meta.url))).digest('hex'),
     controllerOutputHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-controller-output.mjs', import.meta.url))).digest('hex'),
@@ -406,6 +422,7 @@ await fs.writeFile(evidence, `${JSON.stringify({ schemaVersion: 1, timestamp: ne
       : 'No physical output activation; optional high-risk or lease-expiry probe mutates isolated backend lease authority only; optional Tap probe changes isolated empty-project tempo; optional project-file probe loads private JSON with no file media or video source activation',
     'No durable authored/output mutation crash publication acceptance',
     ...(projectJson ? ['Native .sdc admission and rejected-load preservation only; no complete migration corpus, backup/recovery/upgrade, other file formats or physical output acceptance'] : []),
+    ...(runtimeAuthority ? ['Three native Timeline authority-read paths and ordinary concurrent read observations only; no command replay, output activation, complete lock-wait or realtime budget, full adapter/security/AI8 or physical acceptance'] : []),
     ...(backupJson ? ['Native backup byte/JSON/identity admission and private restore preservation only; no full O1-O4, browser recovery, crash/fallback/upgrade, physical output or release acceptance'] : []),
     ...(leaseExpiry ? ['Stdio disconnect is adapter loss, not native registered-owner retirement; unchanged persisted output configuration and closed runtime gates are not a physical signal or whole controller-loss/re-arm proof'] : []),
     ...(diagnostics ? ['Diagnostic publication covers a private temporary destination only; no crash-during-publication, removable-filesystem or external MCP consent acceptance'] : [])],

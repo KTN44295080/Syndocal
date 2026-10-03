@@ -5026,6 +5026,49 @@ pub(crate) fn engage_safety_blackout_for_test_window(
     engage_safety_blackout_bound(state, binding, request, shape_sha256, now)
 }
 
+// All three Timeline authority reads share the same native project-fence
+// capture. Contention is not an authorization failure. Preserve its bounded
+// failure category without exposing native messages or retrying a mutation.
+fn issue_runtime_authority_project_fence(
+    state: &AppState,
+    query_state: &ControlPlaneQueryState,
+    window_label: &str,
+) -> Result<protocol::control_plane_command::ProjectMutationFenceV1, RuntimeCommandErrorV1> {
+    query_state
+        .issue_project_mutation_fence_for_window(window_label, state)
+        .map_err(runtime_authority_fence_error)
+}
+
+fn runtime_authority_fence_error(
+    error: protocol::control_plane_query::QueryError,
+) -> RuntimeCommandErrorV1 {
+    use protocol::control_plane_query::QueryErrorCode;
+    let code = match error.code() {
+        QueryErrorCode::Forbidden | QueryErrorCode::Unauthorized => {
+            RuntimeCommandErrorCodeV1::Forbidden
+        }
+        QueryErrorCode::Overloaded | QueryErrorCode::RateLimited => {
+            RuntimeCommandErrorCodeV1::Overloaded
+        }
+        // A source that changes during each bounded capture attempt has no
+        // stable image yet. V1 has no Unavailable code; Busy preserves that
+        // distinction from permission denial and a poisoned/invalid service.
+        QueryErrorCode::Unavailable => RuntimeCommandErrorCodeV1::Busy,
+        QueryErrorCode::CursorStale
+        | QueryErrorCode::SnapshotRequired
+        | QueryErrorCode::EventGap => RuntimeCommandErrorCodeV1::StaleFence,
+        QueryErrorCode::InvalidRequest | QueryErrorCode::CursorInvalid => {
+            RuntimeCommandErrorCodeV1::InvalidRequest
+        }
+        QueryErrorCode::UnsupportedProtocolVersion
+        | QueryErrorCode::UnknownOperation
+        | QueryErrorCode::NotFound
+        | QueryErrorCode::SchemaMismatch
+        | QueryErrorCode::Internal => RuntimeCommandErrorCodeV1::Internal,
+    };
+    RuntimeCommandErrorV1::new(code)
+}
+
 pub(crate) fn issue_timeline_transport_authority(
     window: &WebviewWindow,
     state: &AppState,
@@ -5037,9 +5080,7 @@ pub(crate) fn issue_timeline_transport_authority(
         .lock()
         .map_err(|_| RuntimeCommandErrorV1::new(RuntimeCommandErrorCodeV1::Internal))?;
     let binding = capture_binding(state, window.label()).map_err(RuntimeCommandErrorV1::new)?;
-    let project = query_state
-        .issue_project_mutation_fence_for_window(window.label(), state)
-        .map_err(|_| RuntimeCommandErrorV1::new(RuntimeCommandErrorCodeV1::Forbidden))?;
+    let project = issue_runtime_authority_project_fence(state, query_state, window.label())?;
     let source_runtime_authority = state.engine.timeline_transport_authority();
     let fence = TimelineTransportRuntimeFenceV1 {
         project,
@@ -5178,9 +5219,7 @@ pub(crate) fn issue_timeline_loop_runtime_authority(
         .lock()
         .map_err(|_| RuntimeCommandErrorV1::new(RuntimeCommandErrorCodeV1::Internal))?;
     let binding = capture_binding(state, window.label()).map_err(RuntimeCommandErrorV1::new)?;
-    let project = query_state
-        .issue_project_mutation_fence_for_window(window.label(), state)
-        .map_err(|_| RuntimeCommandErrorV1::new(RuntimeCommandErrorCodeV1::Forbidden))?;
+    let project = issue_runtime_authority_project_fence(state, query_state, window.label())?;
     let source = state.engine.control_plane_runtime_snapshot();
     let fence = TimelineLoopRuntimeFenceV1 {
         project,
@@ -5494,9 +5533,7 @@ pub(crate) fn issue_timeline_follow_abort_authority(
         .lock()
         .map_err(|_| RuntimeCommandErrorV1::new(RuntimeCommandErrorCodeV1::Internal))?;
     let binding = capture_binding(state, window.label()).map_err(RuntimeCommandErrorV1::new)?;
-    let project = query_state
-        .issue_project_mutation_fence_for_window(window.label(), state)
-        .map_err(|_| RuntimeCommandErrorV1::new(RuntimeCommandErrorCodeV1::Forbidden))?;
+    let project = issue_runtime_authority_project_fence(state, query_state, window.label())?;
     let output_ownership_epoch = state.engine.output_ownership_status().epoch;
     let runtime = state
         .engine
@@ -6077,6 +6114,81 @@ mod tests {
     };
 
     include!("control_plane_runtime_spout_replay_tests.rs");
+
+    #[test]
+    fn runtime_authority_query_errors_preserve_failure_categories_and_redaction() {
+        use protocol::control_plane_query::{QueryError, QueryErrorCode as Q};
+        use RuntimeCommandErrorCodeV1 as R;
+        for (query, runtime) in [
+            (Q::InvalidRequest, R::InvalidRequest),
+            (Q::UnsupportedProtocolVersion, R::Internal),
+            (Q::UnknownOperation, R::Internal),
+            (Q::Unauthorized, R::Forbidden),
+            (Q::Forbidden, R::Forbidden),
+            (Q::NotFound, R::Internal),
+            (Q::Unavailable, R::Busy),
+            (Q::SchemaMismatch, R::Internal),
+            (Q::CursorInvalid, R::InvalidRequest),
+            (Q::CursorStale, R::StaleFence),
+            (Q::SnapshotRequired, R::StaleFence),
+            (Q::EventGap, R::StaleFence),
+            (Q::RateLimited, R::Overloaded),
+            (Q::Overloaded, R::Overloaded),
+            (Q::Internal, R::Internal),
+        ] {
+            let mapped = runtime_authority_fence_error(QueryError::from_code(query));
+            assert_eq!(mapped.code, runtime);
+            assert_eq!(
+                serde_json::to_value(mapped).unwrap(),
+                serde_json::json!({ "code": runtime })
+            );
+        }
+    }
+
+    #[test]
+    fn runtime_authority_query_coordinator_contention_returns_overloaded_then_recovers() {
+        let harness = crate::tests::MediaAssetA6CommandHarness::new();
+        let query = ControlPlaneQueryState::new().unwrap();
+        let physical_before = harness.state.engine.safety_blackout_authority();
+        let coordinator = harness.state.project_coordinator.lock().unwrap();
+        let started = Instant::now();
+        let error = issue_runtime_authority_project_fence(&harness.state, &query, "media-asset-a6")
+            .expect_err("a held coordinator cannot supply an authority fence");
+        assert_eq!(error.code, RuntimeCommandErrorCodeV1::Overloaded);
+        assert!(started.elapsed() < Duration::from_millis(250));
+        drop(coordinator);
+        let fence = issue_runtime_authority_project_fence(&harness.state, &query, "media-asset-a6")
+            .expect("a fresh read succeeds after contention ends");
+        fence.validate().unwrap();
+        assert_eq!(
+            harness.state.engine.safety_blackout_authority(),
+            physical_before
+        );
+    }
+
+    #[test]
+    fn runtime_authority_query_unregistered_owner_stays_forbidden() {
+        let harness = crate::tests::MediaAssetA6CommandHarness::new();
+        let query = ControlPlaneQueryState::new().unwrap();
+        let coordinator = harness.state.project_coordinator.lock().unwrap();
+        let error = issue_runtime_authority_project_fence(&harness.state, &query, "unregistered")
+            .expect_err("unknown owners stay denied even during contention");
+        assert_eq!(error.code, RuntimeCommandErrorCodeV1::Forbidden);
+        drop(coordinator);
+    }
+
+    #[test]
+    fn runtime_authority_query_poisoned_coordinator_stays_internal() {
+        let harness = crate::tests::MediaAssetA6CommandHarness::new();
+        let query = ControlPlaneQueryState::new().unwrap();
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _coordinator = harness.state.project_coordinator.lock().unwrap();
+            panic!("poison coordinator for authority read regression");
+        }));
+        let error = issue_runtime_authority_project_fence(&harness.state, &query, "media-asset-a6")
+            .expect_err("a poisoned service cannot supply an authority fence");
+        assert_eq!(error.code, RuntimeCommandErrorCodeV1::Internal);
+    }
 
     fn test_binding(principal: &str, window_label: &str, owner_incarnation: u64) -> CallerBinding {
         CallerBinding {

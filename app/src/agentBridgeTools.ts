@@ -73,6 +73,26 @@ const nativeQueryError = (error: unknown) => {
     retryable: value.retryable, resnapshot_required: value.resnapshot_required };
 };
 
+const runtimeAuthorityOperationIds = new Set([
+  "syndocal.query.runtime.timeline.transport.authority.v1",
+  "syndocal.query.runtime.timeline.loop.authority.v1",
+  "syndocal.query.runtime.timeline.follow.abort.authority.v1",
+]);
+const runtimeAuthorityErrorCodes = new Set([
+  "invalid_request", "forbidden", "stale_fence", "conflict", "busy",
+  "overloaded", "publication_failed", "internal",
+]);
+// RuntimeCommandErrorV1 has a different wire from canonical QueryError.
+// Recognize only its exact fixed-code object on the three authority reads;
+// arbitrary objects and uncertain mutation failures remain unclassified.
+const nativeRuntimeAuthorityError = (error: unknown) => {
+  if (!error || typeof error !== "object" || error instanceof Error) return undefined;
+  const value = error as Record<string, unknown>;
+  if (Object.keys(value).length !== 1 || !Object.hasOwn(value, "code")
+    || typeof value.code !== "string" || !runtimeAuthorityErrorCodes.has(value.code)) return undefined;
+  return { code: value.code };
+};
+
 /** Only native-claimed requests enter here. Mutations still use the GUI transaction/CAS path. */
 export async function executeAgentBridgeRequest(
   invoke: FrontendTauriInvoke,
@@ -185,11 +205,17 @@ export async function executeAgentBridgeRequest(
       : { ok: false, error: { code: "verification_failed", message: "Operation returned, but the requested transform was not confirmed. Read current state before any new operation." } };
   } catch (error) {
     const query = mutationStarted ? undefined : nativeQueryError(error);
+    const runtime = !mutationStarted && request.method === "control_plane.execute"
+      && typeof request.params.operationId === "string"
+      && runtimeAuthorityOperationIds.has(request.params.operationId)
+      ? nativeRuntimeAuthorityError(error) : undefined;
     return { ok: false, error: {
       code: mutationStarted ? "mutation_not_confirmed" : "request_rejected",
-      message: query?.message ?? (error && typeof error === "object" && !(error instanceof Error)
+      message: query?.message ?? (runtime ? `Native runtime authority read rejected: ${runtime.code}.`
+        : error && typeof error === "object" && !(error instanceof Error)
         ? "Native operation failed with an unrecognized error response." : String(error).slice(0, 1024)),
       ...(query ? { native_query: query } : {}),
+      ...(runtime ? { native_runtime: runtime } : {}),
     } };
   }
 }

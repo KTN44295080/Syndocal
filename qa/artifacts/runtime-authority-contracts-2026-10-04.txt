@@ -1,0 +1,8 @@
+CHECK app/scripts/check-agent-bridge.mjs
+agent bridge: PASS (15 groups; real processor/runtime/confirmation modules, no native or device calls)
+CHECK app/scripts/check-timeline-loop-runtime.mjs
+timeline loop runtime strict authority, exact action receipt, reply-loss/stale policy, canonical convergence, and legacy clean-break checks passed
+CHECK app/scripts/check-timeline-transport-runtime.mjs
+timeline transport runtime strict route, canonical snapshot convergence, two-layer retry, latest intent, and fail-closed pair checks passed
+CHECK app/scripts/check-timeline-follow-runtime.mjs
+Timeline Follow runtime: stale E/G rejection, E/R/H abort receipt recovery, operator/performance/cue visibility, focus, target, and localization contracts are present.

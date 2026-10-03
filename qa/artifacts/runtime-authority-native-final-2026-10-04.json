@@ -1,0 +1,521 @@
+{
+  "schemaVersion": 1,
+  "timestamp": "2026-10-03T18:19:48.447Z",
+  "passed": true,
+  "executable": "C:\\Users\\janua\\AppData\\Local\\Temp/syndocal-native-acceptance-target/release/syndocal.exe",
+  "executableSha256": "23885b3ea23aee245e26429b5309e3501fabe02d2b116b07c87ed3a2f02faf97",
+  "sidecarSha256": "e7bb740aa5ef5993dd5a5f01d37f80077c58f3996f51a0874f9565c79a843c12",
+  "runnerSha256": "cc94a350cf7ea63899fb4647a1182f3af3914c76bb5ef2a0f64595260d3e0311",
+  "backendHarnessSha256": "ade29aa256d8ff17374bb4b3e893ea9a07f71f8fa2cf2bb72b21f80d4e0e8b1f",
+  "runtimeAuthorityHarnessSha256": "d2ac599d60da381ec034b7d18419db0d6b2540befb3f3179184f1cd829a101c3",
+  "runtimeAuthoritySourceSha256": "7e0ab4b78af0d45dbcc105ce895772b022a153285b86dc506fc1df251288bd0a",
+  "runtimeAuthorityAdapterSha256": "a88cefc15adbb31d8a17a02d3c5e99417885fcdb231696c5eb75769527847994",
+  "stdioHarnessSha256": "7a7f885a010f5d1de8823db6585204562b69358ce0253f4829b33c821c846e6d",
+  "profile": "jp.seraf.ktn.syndocal.qa.mcp-lifecycle",
+  "checks": [
+    {
+      "check": "runtime-authority-external-read-requires-exact-grant",
+      "passed": true
+    },
+    {
+      "check": "runtime-authority-idle-follow-native-error-survives-mcp",
+      "passed": true,
+      "native": {
+        "ok": false,
+        "error": {
+          "code": "stale_fence"
+        }
+      },
+      "receipt": {
+        "requestId": "71cab3b7-4c90-4010-9dc2-a5984109c2a9",
+        "status": "completed",
+        "result": {
+          "error": {
+            "code": "request_rejected",
+            "message": "Native runtime authority read rejected: stale_fence.",
+            "native_runtime": {
+              "code": "stale_fence"
+            }
+          },
+          "ok": false
+        }
+      }
+    },
+    {
+      "check": "runtime-authority-three-canonical-native-mcp-reads",
+      "passed": true,
+      "reads": [
+        {
+          "operationId": "syndocal.query.runtime.timeline.transport.authority.v1",
+          "native": {
+            "ok": true,
+            "value": {
+              "operation_id": "syndocal.runtime.timeline.transport.set_playing.v1",
+              "authority_id": "wC_D3d6VeyBHmw5KCueuDw",
+              "fence": {
+                "project": {
+                  "process_incarnation": 7410833611808840,
+                  "session_incarnation": 1760923894113640,
+                  "project_epoch": 1,
+                  "project_revision": 1,
+                  "project_checkpoint_hash": "bb748cb7817ff3a10fd06531ac985e8478e6c41768522a48a1e5448af58a5c43",
+                  "project_publication_generation": 3
+                },
+                "domain": "timeline.transport",
+                "source_runtime_epoch": 1,
+                "source_runtime_generation": 2
+              }
+            }
+          },
+          "receipt": {
+            "requestId": "b37db664-410d-49d9-ba9c-21b0fa6f34eb",
+            "status": "completed",
+            "result": {
+              "ok": true,
+              "operation_id": "syndocal.query.runtime.timeline.transport.authority.v1",
+              "result": {
+                "authority_id": "7KRetdGncGmxn-Q4GqWHMw",
+                "fence": {
+                  "domain": "timeline.transport",
+                  "project": {
+                    "process_incarnation": 7410833611808840,
+                    "project_checkpoint_hash": "bb748cb7817ff3a10fd06531ac985e8478e6c41768522a48a1e5448af58a5c43",
+                    "project_epoch": 1,
+                    "project_publication_generation": 3,
+                    "project_revision": 1,
+                    "session_incarnation": 1760923894113640
+                  },
+                  "source_runtime_epoch": 1,
+                  "source_runtime_generation": 2
+                },
+                "operation_id": "syndocal.runtime.timeline.transport.set_playing.v1"
+              }
+            }
+          }
+        },
+        {
+          "operationId": "syndocal.query.runtime.timeline.loop.authority.v1",
+          "native": {
+            "ok": true,
+            "value": {
+              "operation_id": "syndocal.runtime.timeline.loop.commit.v1",
+              "authority_id": "EJGFkl-9GAhZE_EVHJKvfg",
+              "fence": {
+                "project": {
+                  "process_incarnation": 7410833611808840,
+                  "session_incarnation": 1760923894113640,
+                  "project_epoch": 1,
+                  "project_revision": 1,
+                  "project_checkpoint_hash": "bb748cb7817ff3a10fd06531ac985e8478e6c41768522a48a1e5448af58a5c43",
+                  "project_publication_generation": 3
+                },
+                "domain": "timeline.loop",
+                "source_runtime_epoch": 1,
+                "source_runtime_generation": 2,
+                "source_loop_generation": 1,
+                "source_follow_generation": 1
+              }
+            }
+          },
+          "receipt": {
+            "requestId": "c8980d83-5d2c-4d81-a37b-2e54ecaeebd6",
+            "status": "completed",
+            "result": {
+              "ok": true,
+              "operation_id": "syndocal.query.runtime.timeline.loop.authority.v1",
+              "result": {
+                "authority_id": "U8SnOOfE5LiLln1wmHfudg",
+                "fence": {
+                  "domain": "timeline.loop",
+                  "project": {
+                    "process_incarnation": 7410833611808840,
+                    "project_checkpoint_hash": "bb748cb7817ff3a10fd06531ac985e8478e6c41768522a48a1e5448af58a5c43",
+                    "project_epoch": 1,
+                    "project_publication_generation": 3,
+                    "project_revision": 1,
+                    "session_incarnation": 1760923894113640
+                  },
+                  "source_follow_generation": 1,
+                  "source_loop_generation": 1,
+                  "source_runtime_epoch": 1,
+                  "source_runtime_generation": 2
+                },
+                "operation_id": "syndocal.runtime.timeline.loop.commit.v1"
+              }
+            }
+          }
+        },
+        {
+          "operationId": "syndocal.query.runtime.timeline.follow.abort.authority.v1",
+          "native": {
+            "ok": true,
+            "value": {
+              "operation_id": "syndocal.runtime.timeline.follow.abort.v1",
+              "authority_id": "3sitx_BFbryKIQW4ayXZFQ",
+              "fence": {
+                "project": {
+                  "process_incarnation": 7410833611808840,
+                  "session_incarnation": 1760923894113640,
+                  "project_epoch": 1,
+                  "project_revision": 1,
+                  "project_checkpoint_hash": "bb748cb7817ff3a10fd06531ac985e8478e6c41768522a48a1e5448af58a5c43",
+                  "project_publication_generation": 3
+                },
+                "domain": "timeline.follow.abort",
+                "output_ownership_epoch": 1,
+                "follow_generation": 1
+              }
+            }
+          },
+          "receipt": {
+            "requestId": "a8badc8c-22aa-43fb-a922-3c348e11baf9",
+            "status": "completed",
+            "result": {
+              "ok": true,
+              "operation_id": "syndocal.query.runtime.timeline.follow.abort.authority.v1",
+              "result": {
+                "authority_id": "bTHI1_gS0K0z3xgGWew_uA",
+                "fence": {
+                  "domain": "timeline.follow.abort",
+                  "follow_generation": 1,
+                  "output_ownership_epoch": 1,
+                  "project": {
+                    "process_incarnation": 7410833611808840,
+                    "project_checkpoint_hash": "bb748cb7817ff3a10fd06531ac985e8478e6c41768522a48a1e5448af58a5c43",
+                    "project_epoch": 1,
+                    "project_publication_generation": 3,
+                    "project_revision": 1,
+                    "session_incarnation": 1760923894113640
+                  }
+                },
+                "operation_id": "syndocal.runtime.timeline.follow.abort.v1"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "check": "runtime-authority-concurrent-native-reads-preserve-error-codes",
+      "passed": true,
+      "rounds": 64,
+      "authorityAttempts": 192,
+      "successfulAuthorities": 154,
+      "errors": [
+        {
+          "round": 0,
+          "command": "query_timeline_transport_authority_v1",
+          "error": {
+            "code": "overloaded"
+          }
+        },
+        {
+          "round": 1,
+          "command": "query_timeline_transport_authority_v1",
+          "error": {
+            "code": "overloaded"
+          }
+        },
+        {
+          "round": 2,
+          "command": "query_timeline_transport_authority_v1",
+          "error": {
+            "code": "overloaded"
+          }
+        },
+        {
+          "round": 2,
+          "command": "query_timeline_loop_runtime_authority_v1",
+          "error": {
+            "code": "overloaded"
+          }
+        },
+        {
+          "round": 2,
+          "command": "query_timeline_follow_abort_authority_v1",
+          "error": {
+            "code": "overloaded"
+          }
+        },
+        {
+          "round": 4,
+          "command": "query_timeline_transport_authority_v1",
+          "error": {
+            "code": "overloaded"
+          }
+        },
+        {
+          "round": 5,
+          "command": "query_timeline_transport_authority_v1",
+          "error": {
+            "code": "overloaded"
+          }
+        },
+        {
+          "round": 5,
+          "command": "query_timeline_loop_runtime_authority_v1",
+          "error": {
+            "code": "overloaded"
+          }
+        },
+        {
+          "round": 6,
+          "command": "query_timeline_transport_authority_v1",
+          "error": {
+            "code": "overloaded"
+          }
+        },
+        {
+          "round": 8,
+          "command": "query_timeline_transport_authority_v1",
+          "error": {
+            "code": "overloaded"
+          }
+        },
+        {
+          "round": 9,
+          "command": "query_timeline_transport_authority_v1",
+          "error": {
+            "code": "overloaded"
+          }
+        },
+        {
+          "round": 9,
+          "command": "query_timeline_loop_runtime_authority_v1",
+          "error": {
+            "code": "overloaded"
+          }
+        },
+        {
+          "round": 10,
+          "command": "query_timeline_loop_runtime_authority_v1",
+          "error": {
+            "code": "overloaded"
+          }
+        },
+        {
+          "round": 12,
+          "command": "query_timeline_transport_authority_v1",
+          "error": {
+            "code": "overloaded"
+          }
+        },
+        {
+          "round": 14,
+          "command": "query_timeline_transport_authority_v1",
+          "error": {
+            "code": "overloaded"
+          }
+        },
+        {
+          "round": 16,
+          "command": "query_timeline_transport_authority_v1",
+          "error": {
+            "code": "overloaded"
+          }
+        },
+        {
+          "round": 18,
+          "command": "query_timeline_transport_authority_v1",
+          "error": {
+            "code": "overloaded"
+          }
+        },
+        {
+          "round": 18,
+          "command": "query_timeline_loop_runtime_authority_v1",
+          "error": {
+            "code": "overloaded"
+          }
+        },
+        {
+          "round": 20,
+          "command": "query_timeline_transport_authority_v1",
+          "error": {
+            "code": "overloaded"
+          }
+        },
+        {
+          "round": 21,
+          "command": "query_timeline_transport_authority_v1",
+          "error": {
+            "code": "overloaded"
+          }
+        },
+        {
+          "round": 24,
+          "command": "query_timeline_transport_authority_v1",
+          "error": {
+            "code": "overloaded"
+          }
+        },
+        {
+          "round": 29,
+          "command": "query_timeline_transport_authority_v1",
+          "error": {
+            "code": "overloaded"
+          }
+        },
+        {
+          "round": 31,
+          "command": "query_timeline_transport_authority_v1",
+          "error": {
+            "code": "overloaded"
+          }
+        },
+        {
+          "round": 34,
+          "command": "query_timeline_transport_authority_v1",
+          "error": {
+            "code": "overloaded"
+          }
+        },
+        {
+          "round": 37,
+          "command": "query_timeline_transport_authority_v1",
+          "error": {
+            "code": "overloaded"
+          }
+        },
+        {
+          "round": 38,
+          "command": "query_timeline_transport_authority_v1",
+          "error": {
+            "code": "overloaded"
+          }
+        },
+        {
+          "round": 41,
+          "command": "query_timeline_transport_authority_v1",
+          "error": {
+            "code": "overloaded"
+          }
+        },
+        {
+          "round": 41,
+          "command": "query_timeline_loop_runtime_authority_v1",
+          "error": {
+            "code": "overloaded"
+          }
+        },
+        {
+          "round": 46,
+          "command": "query_timeline_transport_authority_v1",
+          "error": {
+            "code": "overloaded"
+          }
+        },
+        {
+          "round": 46,
+          "command": "query_timeline_loop_runtime_authority_v1",
+          "error": {
+            "code": "overloaded"
+          }
+        },
+        {
+          "round": 46,
+          "command": "query_timeline_follow_abort_authority_v1",
+          "error": {
+            "code": "overloaded"
+          }
+        },
+        {
+          "round": 52,
+          "command": "query_timeline_transport_authority_v1",
+          "error": {
+            "code": "overloaded"
+          }
+        },
+        {
+          "round": 54,
+          "command": "query_timeline_transport_authority_v1",
+          "error": {
+            "code": "overloaded"
+          }
+        },
+        {
+          "round": 58,
+          "command": "query_timeline_transport_authority_v1",
+          "error": {
+            "code": "overloaded"
+          }
+        },
+        {
+          "round": 59,
+          "command": "query_timeline_transport_authority_v1",
+          "error": {
+            "code": "overloaded"
+          }
+        },
+        {
+          "round": 61,
+          "command": "query_timeline_transport_authority_v1",
+          "error": {
+            "code": "overloaded"
+          }
+        },
+        {
+          "round": 62,
+          "command": "query_timeline_transport_authority_v1",
+          "error": {
+            "code": "overloaded"
+          }
+        },
+        {
+          "round": 62,
+          "command": "query_timeline_loop_runtime_authority_v1",
+          "error": {
+            "code": "overloaded"
+          }
+        }
+      ],
+      "companionReads": 2048,
+      "successfulCompanions": 1160,
+      "companionErrors": {
+        "Project recovery capture is busy; retry": 888
+      }
+    },
+    {
+      "check": "runtime-authority-fresh-mcp-reads-recover-with-authored-runtime-output-unchanged",
+      "passed": true
+    },
+    {
+      "check": "isolated-first-launch-read",
+      "passed": true
+    },
+    {
+      "check": "dead-process-descriptor-rejected",
+      "passed": true
+    },
+    {
+      "check": "crash-restart-retired-principal-rejected",
+      "passed": true
+    },
+    {
+      "check": "old-credential-and-receipt-not-adopted",
+      "passed": true
+    },
+    {
+      "check": "old-launch-proof-rejected-fresh-read-succeeds",
+      "passed": true
+    },
+    {
+      "check": "graceful-native-close",
+      "passed": true
+    },
+    {
+      "check": "graceful-restart-does-not-restore-grant",
+      "passed": true
+    }
+  ],
+  "normalAppIdentityUnchanged": true,
+  "credentialRevoked": true,
+  "credentialFileRemoved": true,
+  "nativePanicLocations": [],
+  "nonclaims": [
+    "QA identifier release build, not the distributed artifact",
+    "No physical output activation; optional high-risk or lease-expiry probe mutates isolated backend lease authority only; optional Tap probe changes isolated empty-project tempo; optional project-file probe loads private JSON with no file media or video source activation",
+    "No durable authored/output mutation crash publication acceptance",
+    "Three native Timeline authority-read paths and ordinary concurrent read observations only; no command replay, output activation, complete lock-wait or realtime budget, full adapter/security/AI8 or physical acceptance"
+  ]
+}

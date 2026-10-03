@@ -1,0 +1,45 @@
+PIN=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+PATH-FIRST=["C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\bin\\Hostx64\\x64\\link.exe"]
+["test","-p","syndocal","--release","--locked","--config","profile.release.package.engine.opt-level=0","--config","profile.release.package.engine.codegen-units=256","control_plane_runtime::tests","--","--test-threads=1"]
+   Compiling syndocal v1.2.0-alpha.69 (C:\Users\janua\OneDrive\ドキュメント\GitHub\Syndocal\app\src-tauri)
+    Finished `release` profile [optimized] target(s) in 4m 23s
+     Running unittests src\main.rs (C:\Users\janua\AppData\Local\Temp\syndocal-native-acceptance-target\release\deps\syndocal-fae4a7cb6ae73690.exe)
+
+running 35 tests
+test control_plane_runtime::tests::authority_ids_are_single_lifecycle_ttl_renewal_and_owner_bound ... ok
+test control_plane_runtime::tests::authority_is_single_use_owner_bound_and_inflight_busy_does_not_consume_the_next_authority ... ok
+test control_plane_runtime::tests::dsf2026_probe_confirmation_copy_states_the_exact_os_only_boundary ... ok
+test control_plane_runtime::tests::dsf2026_probe_reconcile_confirmation_copy_is_explicitly_no_send ... ok
+test control_plane_runtime::tests::editor_display_confirmation_copy_is_distinct_from_ordinary_output_copy ... ok
+test control_plane_runtime::tests::exact_reply_retry_is_terminal_bounded_and_shape_conflicts_tombstone ... ok
+test control_plane_runtime::tests::expired_authority_is_stale_not_reusable ... ok
+test control_plane_runtime::tests::follow_abort_authority_receipt_owner_aba_and_tombstone_are_independent ... ok
+test control_plane_runtime::tests::native_danger_confirmation_copy_follows_the_os_locale ... ok
+test control_plane_runtime::tests::native_danger_confirmation_gate_is_exact_and_terminal_replay_is_dialog_free ... ok
+test control_plane_runtime::tests::one_button_artnet_safe_stale_fault_and_fence_rejections_are_not_physical_unknown ... ok
+test control_plane_runtime::tests::output_control_add_display_authorization_serializes_as_a_valid_terminal_receipt ... ok
+test control_plane_runtime::tests::output_control_common_identity_high_water_survives_terminal_and_tombstone_expiry ... ok
+test control_plane_runtime::tests::output_control_common_identity_reserves_cross_operation_ids_before_work ... ok
+test control_plane_runtime::tests::output_control_exact_shape_retry_conflict_and_expiry_tombstone_are_fail_closed ... ok
+test control_plane_runtime::tests::output_control_fake_clock_burst_is_eight_and_ninth_is_rejected_before_audit ... ok
+test control_plane_runtime::tests::output_control_owner_retirement_tombstones_receipt_and_lane_without_erasing_audit ... ok
+test control_plane_runtime::tests::output_control_single_flight_is_busy_per_principal_and_domain ... ok
+test control_plane_runtime::tests::output_control_successor_is_preflighted_before_commit_and_receipt_is_infallible ... ok
+test control_plane_runtime::tests::output_control_takeover_identity_swap_returns_committed_orphan_truth ... ok
+test control_plane_runtime::tests::output_control_takeover_passes_exact_standby_identity_to_core ... ok
+test control_plane_runtime::tests::output_control_terminal_survives_bookkeeping_mutex_poison_for_exact_retry ... ok
+test control_plane_runtime::tests::post_publication_artnet_checkpoint_failure_remains_physical_unknown ... ok
+test control_plane_runtime::tests::runtime_authority_query_coordinator_contention_returns_overloaded_then_recovers ... ok
+test control_plane_runtime::tests::runtime_authority_query_errors_preserve_failure_categories_and_redaction ... ok
+test control_plane_runtime::tests::runtime_authority_query_poisoned_coordinator_stays_internal ... ok
+test control_plane_runtime::tests::runtime_authority_query_unregistered_owner_stays_forbidden ... ok
+test control_plane_runtime::tests::safety_blackout_exact_receipt_owner_aba_and_immutable_audit_are_independent ... ok
+test control_plane_runtime::tests::safety_blackout_fake_clock_burst_is_eight_and_ninth_is_rejected_before_audit ... ok
+test control_plane_runtime::tests::show_spout_current_topology_rejection_is_not_misreported_as_stale_fence ... ok
+test control_plane_runtime::tests::show_spout_managed_terminal_rejects_invalid_fence_without_publishing ... ok
+test control_plane_runtime::tests::show_spout_managed_terminal_replays_exact_response_after_successor_fence_persisted ... ok
+test control_plane_runtime::tests::timeline_loop_expired_authority_is_stale_and_single_use ... ok
+test control_plane_runtime::tests::timeline_loop_terminal_replay_conflict_expiry_and_owner_retirement_are_fail_closed ... ok
+test control_plane_runtime::tests::token_bucket_fake_clock_caps_ten_thousand_new_admissions_at_eight_then_refills_at_four_per_second ... ok
+
+test result: ok. 35 passed; 0 failed; 0 ignored; 0 measured; 1937 filtered out; finished in 0.06s

@@ -195,6 +195,21 @@ capture expiry across a native restart. Use a new evidence path for every run.
 This tests a private temporary destination through a process-verified native
 backend session and covers the local preview/acknowledge flow.
 
+Add `--runtime-authority` as a separate native read lane. It verifies exact MCP
+grants and preserves the actual idle Follow `stale_fence` rejection, then uses
+the normal New operation on the private empty QA project to establish a Follow
+generation. All three Timeline authority queries must succeed through native
+IPC and authenticated stdio MCP. Thirty-two concurrent asynchronous checkpoint
+reads per round must return the exact unchanged project token or the existing
+explicit recovery-capture busy rejection; at least one capture must succeed and
+all 2,048 offered calls must have a result. The 64 rounds must produce at least one
+typed `overloaded` authority response. Fresh MCP reads then succeed with the
+whole authored project, Timeline runtime and output ownership unchanged. It
+does not retry a mutation, patch a lock/response, activate output, or operate a
+physical device. All other optional lanes are mutually exclusive. Unit tests
+separately hold the coordinator to prove deterministic contention classification;
+the native observations do not establish a complete lock-wait or realtime budget.
+
 Add `--external-high-risk` to test unattended grants through a separate stdio MCP
 sidecar, diagnostic ZIP export/replay/no-overwrite, and isolated acquire/renew/
 force-transfer/relinquish lease authority. It proves same-owner and stale-generation

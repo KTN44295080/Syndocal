@@ -1,0 +1,23 @@
+node:internal/modules/run_main:123
+    triggerUncaughtException(
+    ^
+
+AssertionError [ERR_ASSERTION]: Companion checkpoint reads must complete on the unchanged project
++ actual - expected
+
++ {
++   'Project recovery capture is busy; retry': 837
++ }
+- {}
+
+    at nativeRuntimeAuthority (file:///C:/Users/janua/OneDrive/%E3%83%89%E3%82%AD%E3%83%A5%E3%83%A1%E3%83%B3%E3%83%88/GitHub/Syndocal/tools/syndocal-mcp/native-runtime-authority.mjs:125:12)
+    at async file:///C:/Users/janua/OneDrive/%E3%83%89%E3%82%AD%E3%83%A5%E3%83%A1%E3%83%B3%E3%83%88/GitHub/Syndocal/tools/syndocal-mcp/check-native-lifecycle.mjs:212:25 {
+  generatedMessage: false,
+  code: 'ERR_ASSERTION',
+  actual: { 'Project recovery capture is busy; retry': 837 },
+  expected: {},
+  operator: 'deepStrictEqual',
+  diff: 'simple'
+}
+
+Node.js v22.22.1

@@ -1,0 +1,87 @@
+{
+  "date": "2026-10-04",
+  "runner": "tools/syndocal-mcp/check-native-lifecycle.mjs",
+  "mode": "--runtime-authority",
+  "exclusions": [
+    {
+      "flag": "--controller-event-pressure",
+      "exitCode": 1,
+      "preflightRejected": true
+    },
+    {
+      "flag": "--controller-safety-pressure",
+      "exitCode": 1,
+      "preflightRejected": true
+    },
+    {
+      "flag": "--controller-burst",
+      "exitCode": 1,
+      "preflightRejected": true
+    },
+    {
+      "flag": "--controller-inflight",
+      "exitCode": 1,
+      "preflightRejected": true
+    },
+    {
+      "flag": "--controller-expiry",
+      "exitCode": 1,
+      "preflightRejected": true
+    },
+    {
+      "flag": "--controller-restart",
+      "exitCode": 1,
+      "preflightRejected": true
+    },
+    {
+      "flag": "--controller-output",
+      "exitCode": 1,
+      "preflightRejected": true
+    },
+    {
+      "flag": "--authored-controls",
+      "exitCode": 1,
+      "preflightRejected": true
+    },
+    {
+      "flag": "--input-diagnostics",
+      "exitCode": 1,
+      "preflightRejected": true
+    },
+    {
+      "flag": "--backup-json",
+      "exitCode": 1,
+      "preflightRejected": true
+    },
+    {
+      "flag": "--project-json",
+      "exitCode": 1,
+      "preflightRejected": true
+    },
+    {
+      "flag": "--lease-expiry",
+      "exitCode": 1,
+      "preflightRejected": true
+    },
+    {
+      "flag": "--tap-bpm",
+      "exitCode": 1,
+      "preflightRejected": true
+    },
+    {
+      "flag": "--diagnostics",
+      "exitCode": 1,
+      "preflightRejected": true
+    },
+    {
+      "flag": "--external-high-risk",
+      "exitCode": 1,
+      "preflightRejected": true
+    },
+    {
+      "flag": "--external-revocation",
+      "exitCode": 1,
+      "preflightRejected": true
+    }
+  ]
+}
