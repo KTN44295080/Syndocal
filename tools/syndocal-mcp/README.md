@@ -111,6 +111,17 @@ as `--controller-output`. The lane cannot be combined with other live lanes.
 Packet intervals alone do not establish the complete tick/frame/audio/UI,
 local priority Blackout, event publisher, physical-device or venue budgets.
 
+The separate opt-in `--controller-safety-pressure` lane retains real native
+requests through the existing renderer-registration boundary, fills all 64
+broker detail slots, and sends 10,000 additional R4 intents. It verifies local
+native S0 engage, received all-zero 512-channel ArtDMX, retained pending requests,
+claimed R4/R5 rejection after revocation and during Kill Switch, no diagnostic
+artifact, idempotent S0 replay/no-op and rejection of a target-valued payload.
+Each of its two cases uses a fresh isolated QA process, exact grants and an
+owned software-loopback sender/receiver. It cannot be combined with other live
+lanes. The recorded latency is backend-to-loopback evidence, not a physical
+button, Engine command-queue, complete realtime budget or venue test.
+
 `syndocal_export_diagnostics` requires the exact File grant for
 `syndocal.diagnostics.export.v1`. It writes a sanitized ZIP to a new absolute
 path without a preview or approval dialog. Existing targets are rejected;

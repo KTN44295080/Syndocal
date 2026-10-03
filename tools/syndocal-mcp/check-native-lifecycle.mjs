@@ -19,6 +19,8 @@ import { nativeControllerOutput } from './native-controller-output.mjs';
 
 const exec = promisify(execFile);
 const args = process.argv.slice(2);
+const controllerSafetyPressure = args.includes('--controller-safety-pressure');
+if (controllerSafetyPressure) args.splice(args.indexOf('--controller-safety-pressure'), 1);
 const controllerBurst = args.includes('--controller-burst');
 if (controllerBurst) args.splice(args.indexOf('--controller-burst'), 1);
 const controllerInFlight = args.includes('--controller-inflight');
@@ -64,6 +66,8 @@ assert.ok(!controllerInFlight || !(controllerOutput || controllerRestart || cont
   'Live native in-flight crash owns a separate project/output/file/process lane');
 assert.ok(!controllerBurst || !(controllerInFlight || controllerOutput || controllerRestart || controllerExpiry || projectJson || backupJson || leaseExpiry || externalHighRisk || externalRevocation || tapBpm || diagnostics),
   'Live native burst owns a separate project/output/request lane');
+assert.ok(!controllerSafetyPressure || !(controllerBurst || controllerInFlight || controllerOutput || controllerRestart || controllerExpiry || projectJson || backupJson || leaseExpiry || externalHighRisk || externalRevocation || tapBpm || diagnostics),
+  'Live native safety pressure owns a separate project/output/request/revocation lane');
 const take = name => { const index = args.indexOf(name); assert.ok(index >= 0 && index + 1 < args.length, `Required: ${name}`); return args.splice(index, 2)[1]; };
 const executable = take('--expected-executable');
 const evidence = take('--evidence');
@@ -196,6 +200,18 @@ try {
   if (externalHighRisk) await nativeExternalHighRisk(backend, options, checks);
   if (controllerOutput) await nativeControllerOutput(backend, options, checks);
   if (controllerBurst) await nativeControllerOutput(backend, options, checks, { burstRequests: true });
+  if (controllerSafetyPressure) {
+    for (const safetyPressure of ['saturation', 'kill_switch']) {
+      await nativeControllerOutput(backend, options, checks, { safetyPressure });
+      const priorInstance = backend.descriptor.instanceId;
+      await stop();
+      await start();
+      await pair(); await install();
+      assert.notEqual(backend.descriptor.instanceId, priorInstance);
+      checks.push({ check: `native-${safetyPressure}-owned-restart-restores-empty-disarmed-qa`, passed: true });
+    }
+    first = await readDescriptor(options);
+  }
   if (controllerExpiry) await nativeControllerOutput(backend, options, checks, { leaseExpiry: true });
   if (controllerRestart || controllerInFlight) {
     await nativeControllerOutput(backend, options, checks, { inFlightCrash: controllerInFlight, restartLifecycle: async observeStopped => {
@@ -347,6 +363,11 @@ await fs.writeFile(evidence, `${JSON.stringify({ schemaVersion: 1, timestamp: ne
     stdioHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-stdio-session.mjs', import.meta.url))).digest('hex'),
     controllerOutputHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-controller-output.mjs', import.meta.url))).digest('hex'),
   } : {}),
+  ...(controllerSafetyPressure ? {
+    safetyPressureHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-controller-safety-pressure.mjs', import.meta.url))).digest('hex'),
+    controllerOutputHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-controller-output.mjs', import.meta.url))).digest('hex'),
+    stdioHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-stdio-session.mjs', import.meta.url))).digest('hex'),
+  } : {}),
   ...(externalRevocation ? {
     revocationHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-high-risk-revocation.mjs', import.meta.url))).digest('hex'),
     revocationTransport: 'Separate stdio MCP requests, native claim/revoke/execute commands; QA renderer generation retired immediately before graceful close',
@@ -356,7 +377,8 @@ await fs.writeFile(evidence, `${JSON.stringify({ schemaVersion: 1, timestamp: ne
   credentialRevoked: !cleanupNeeded, credentialFileRemoved: true,
   nativePanicLocations,
   nonclaims: ['QA identifier release build, not the distributed artifact',
-    controllerBurst ? 'Actual 10000 stdio discovery and 10000 R4 master intents with software loopback ArtDMX reception and measured packet intervals only; no complete output tick/frame/audio/UI budget, publisher event-gap, local priority Blackout under saturation, physical device, venue or release acceptance'
+    controllerSafetyPressure ? 'Actual 64-slot external broker pending saturation, 10000 R4 intents and local native S0 all-zero loopback output before/after revocation and while Kill Switch is active. Existing renderer registration retains immutable external work; no Engine command-queue saturation, complete tick/frame/audio/UI budget, publisher event-gap, physical device, venue or release acceptance'
+      : controllerBurst ? 'Actual 10000 stdio discovery and 10000 R4 master intents with software loopback ArtDMX reception and measured packet intervals only; no complete output tick/frame/audio/UI budget, publisher event-gap, local priority Blackout under saturation, physical device, venue or release acceptance'
       : controllerInFlight ? 'Actual native queued, claimed and native-committed R4 master/R5 diagnostic requests interrupted before broker completion; unknown restart status never re-executes, software loopback re-Arm remains explicit and owned export bytes remain intact. No physical fixtures, recording/authored crash matrix, worker-internal interruption, full durable mutation completion or release acceptance'
       : controllerRestart ? 'Actual native forced process termination/restart and explicit re-Arm with software loopback reception only; no physical fixtures, venue, serial DMX, video, worker-specific failure, in-flight mutation crash durability or whole controller-loss/re-arm acceptance'
       : controllerExpiry ? 'Actual native live monotonic lease expiry, stale-operation rejection and explicit recovery with software loopback reception only; no physical fixtures, venue, serial DMX, video, worker-specific failure, in-flight mutation crash durability or whole controller-loss/re-arm acceptance'

@@ -1,0 +1,645 @@
+{
+  "schemaVersion": 1,
+  "timestamp": "2026-10-03T13:38:11.896Z",
+  "passed": true,
+  "executable": "C:\\Users\\janua\\AppData\\Local\\Temp/syndocal-native-acceptance-target/release/syndocal.exe",
+  "executableSha256": "760ba5017a450773972d433869e23a5d8dcb203d7ca9c62be8f1fa3b059274b3",
+  "sidecarSha256": "e7bb740aa5ef5993dd5a5f01d37f80077c58f3996f51a0874f9565c79a843c12",
+  "runnerSha256": "32898e61799497bdce62b19dcd1984ccd5b99fd088a8f323e9c7b5e1dce83af8",
+  "backendHarnessSha256": "ade29aa256d8ff17374bb4b3e893ea9a07f71f8fa2cf2bb72b21f80d4e0e8b1f",
+  "safetyPressureHarnessSha256": "325bdc77c12f47546c664a7563cc04a594e898509aec6330d6b14225828b11bd",
+  "controllerOutputHarnessSha256": "afb4fa9cf71ac585b175ef8d76f7caa1d684a12044ed2430df97db0b709a8941",
+  "stdioHarnessSha256": "7a7f885a010f5d1de8823db6585204562b69358ce0253f4829b33c821c846e6d",
+  "profile": "jp.seraf.ktn.syndocal.qa.mcp-lifecycle",
+  "checks": [
+    {
+      "check": "native-loopback-project-load-does-not-arm",
+      "passed": true,
+      "fixtureSourceSha256": "2de7f4d6a5e8ba0c0cedf7ef664d65030fde37d492ae3fa2b6475e77a02f7bf6",
+      "projectSha256": "3fcf2f0a2bd323d89f21b534c8b757f94ca4391e0fabec942de06e0a5321b3da",
+      "destination": {
+        "address": "127.0.0.1",
+        "family": "IPv4",
+        "port": 64675
+      },
+      "ownership": {
+        "role": "Standby",
+        "effective_role": "Standby",
+        "desired_role": "Lighting",
+        "persisted_role": "Lighting",
+        "state": "Ready",
+        "generation": 1,
+        "epoch": 1,
+        "lighting_allowed": false,
+        "video_allowed": false,
+        "lighting_reason": "ProjectSwapDisarmed",
+        "video_reason": "ProjectSwapDisarmed",
+        "error": null
+      },
+      "packets": 0
+    },
+    {
+      "check": "external-loopback-exact-grant-safe-mode-and-acquire-without-output",
+      "passed": true,
+      "generation": 1
+    },
+    {
+      "check": "external-r4-arm-without-dialog-produces-received-live-artdmx",
+      "passed": true,
+      "receipt": {
+        "argument_fingerprint": "db3af3e29ee44c9af19468377e094bf01ebfbe212b0238d2f39f95ee798e93a0",
+        "audit_sequence": 2,
+        "fence_after": {
+          "output_epoch": 3,
+          "output_generation": 3,
+          "process_incarnation": 5862996239218013,
+          "project_checkpoint_hash": "69ad35001727183655852544dae510a47490f5589b57d02e7389996e68b48dfb",
+          "project_epoch": 1,
+          "project_publication_generation": 2,
+          "project_revision": 0,
+          "safety_blackout_epoch": 1,
+          "safety_blackout_generation": 1,
+          "session_incarnation": 869766641434068
+        },
+        "fence_before": {
+          "output_epoch": 2,
+          "output_generation": 2,
+          "process_incarnation": 5862996239218013,
+          "project_checkpoint_hash": "69ad35001727183655852544dae510a47490f5589b57d02e7389996e68b48dfb",
+          "project_epoch": 1,
+          "project_publication_generation": 2,
+          "project_revision": 0,
+          "safety_blackout_epoch": 1,
+          "safety_blackout_generation": 1,
+          "session_incarnation": 869766641434068
+        },
+        "lease_result": {
+          "audit_sequence": 4,
+          "authority": {
+            "generation": 1,
+            "lease_id": "lease-0000000000000001"
+          },
+          "changes": [
+            {
+              "after_generation": 1,
+              "after_phase": "held_active",
+              "after_resources": [
+                "lighting"
+              ],
+              "before_generation": 1,
+              "before_phase": "held_active",
+              "before_resources": [
+                "lighting"
+              ],
+              "lease_id": "lease-0000000000000001"
+            }
+          ],
+          "outcome": "authorized",
+          "phase": "held_active",
+          "resources": [
+            "lighting"
+          ]
+        },
+        "operation_id": "syndocal.output.ownership.arm.v2",
+        "outcome": "applied",
+        "request_id": 1791034584086,
+        "shape_sha256": "9965c2f8bf2bba952fdf33c89153dcb3e2aa09f396cabc6f84371c3c0f4a9ffe"
+      },
+      "state": {
+        "ownership": {
+          "role": "Lighting",
+          "effective_role": "Lighting",
+          "desired_role": "Lighting",
+          "persisted_role": "Lighting",
+          "state": "Ready",
+          "generation": 2,
+          "epoch": 2,
+          "lighting_allowed": true,
+          "video_allowed": false,
+          "lighting_reason": "OwnedByMachineRole",
+          "video_reason": "BlockedByMachineRole",
+          "error": null
+        },
+        "output": {
+          "enabled": true,
+          "port": 64675,
+          "protocol": "ArtNet",
+          "serial_baud_rate": 57600,
+          "serial_port": "",
+          "target_ip": "127.0.0.1",
+          "universe": 0
+        },
+        "routes": [
+          {
+            "enabled": true,
+            "port": 64675,
+            "protocol": "ArtNet",
+            "serial_baud_rate": 57600,
+            "serial_port": "",
+            "target_ip": "127.0.0.1",
+            "universe": 0
+          }
+        ],
+        "master": 1,
+        "blackout": false,
+        "safety": false,
+        "attributes": [
+          {
+            "attribute": "Dimmer",
+            "value": 65535
+          },
+          {
+            "attribute": "ColorRed",
+            "value": 0
+          },
+          {
+            "attribute": "ColorGreen",
+            "value": 0
+          },
+          {
+            "attribute": "ColorBlue",
+            "value": 0
+          },
+          {
+            "attribute": "Pan",
+            "value": 32768
+          },
+          {
+            "attribute": "Tilt",
+            "value": 32768
+          }
+        ]
+      },
+      "phase": "armed-full",
+      "frames": 22,
+      "payloadSha256": "65228acc43d02190277f6ebf9ec067c7135aaddc9f0c6a610c3052a7cf9213d1",
+      "channels1to8": [
+        255,
+        0,
+        0,
+        0,
+        128,
+        0,
+        128,
+        0
+      ]
+    },
+    {
+      "check": "native-saturation-64-pending-r4-r5-and-read-requests-with-no-live-delta",
+      "passed": true,
+      "pendingCount": 64,
+      "overflowError": "inflight_capacity",
+      "phase": "saturation-64-pending-native-requests",
+      "frames": 881,
+      "payloadSha256": "65228acc43d02190277f6ebf9ec067c7135aaddc9f0c6a610c3052a7cf9213d1",
+      "channels1to8": [
+        255,
+        0,
+        0,
+        0,
+        128,
+        0,
+        128,
+        0
+      ],
+      "rendererGeneration": 2,
+      "claimedRequestIds": [
+        "8d5f1149-c319-4d0f-9320-d01e2ff5d9ff",
+        "6c1413fd-6179-4167-8b81-95b464db6a7b"
+      ]
+    },
+    {
+      "check": "native-saturation-local-priority-blackout-during-10000-external-intents",
+      "passed": true,
+      "requests": 10000,
+      "sidecarOverloads": 9999,
+      "nativeRejected": 1,
+      "nativeError": "inflight_capacity",
+      "outstandingAtLocalAction": 10000,
+      "outstandingAtS0": 10000,
+      "localElapsedMs": 19.989400000002206,
+      "firstZeroPacketMs": 14.56000000000131,
+      "floodElapsedMs": 851.7365999999965,
+      "receipt": {
+        "kind": "receipt",
+        "result": {
+          "operation_id": "syndocal.safety.blackout.engage.v1",
+          "request_id": 1791034594088,
+          "shape_sha256": "86dd5fdc9f87965041204d9b2feb0c492f0fb6210059e8414f02d3e5c623d87b",
+          "audit_sequence": 1,
+          "outcome": "applied"
+        }
+      },
+      "phase": "saturation-local-priority-all-zero",
+      "frames": 22,
+      "payloadSha256": "076a27c79e5ace2a3d47f9dd2e83e4ff6ea8872b3c2218f66c92b89b55f36560",
+      "channels1to8": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "check": "native-saturation-revoked-claimed-r4-r5-reject-and-no-export-or-authored-delta",
+      "passed": true,
+      "executionError": "agent_principal_revoked",
+      "consumedReplayError": "request_not_executable",
+      "retainedPendingCount": 64,
+      "destinationAbsent": true,
+      "phase": "saturation-revoked-r4-r5-cannot-change-zero",
+      "frames": 22,
+      "payloadSha256": "076a27c79e5ace2a3d47f9dd2e83e4ff6ea8872b3c2218f66c92b89b55f36560",
+      "channels1to8": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "check": "native-saturation-local-s0-replay-no-op-and-target-payload-rejection",
+      "passed": true,
+      "replayAuditSequence": 1,
+      "noOpAuditSequence": 2,
+      "phase": "saturation-local-replay-and-no-release-shape",
+      "frames": 22,
+      "payloadSha256": "076a27c79e5ace2a3d47f9dd2e83e4ff6ea8872b3c2218f66c92b89b55f36560",
+      "channels1to8": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "check": "explicit-native-project-replacement-stops-owned-loopback-sender-and-source-is-unchanged",
+      "passed": true,
+      "ownership": {
+        "role": "Standby",
+        "effective_role": "Standby",
+        "desired_role": "Lighting",
+        "persisted_role": "Lighting",
+        "state": "Ready",
+        "generation": 3,
+        "epoch": 3,
+        "lighting_allowed": false,
+        "video_allowed": false,
+        "lighting_reason": "ProjectSwapDisarmed",
+        "video_reason": "ProjectSwapDisarmed",
+        "error": null
+      },
+      "packetsTotal": 1914,
+      "readOverloads": []
+    },
+    {
+      "check": "native-saturation-owned-restart-restores-empty-disarmed-qa",
+      "passed": true
+    },
+    {
+      "check": "native-loopback-project-load-does-not-arm",
+      "passed": true,
+      "fixtureSourceSha256": "2de7f4d6a5e8ba0c0cedf7ef664d65030fde37d492ae3fa2b6475e77a02f7bf6",
+      "projectSha256": "d490171e99af5298bf02bca09dbc75e53de21ff210a07fa39ac4b0c70759f564",
+      "destination": {
+        "address": "127.0.0.1",
+        "family": "IPv4",
+        "port": 54184
+      },
+      "ownership": {
+        "role": "Standby",
+        "effective_role": "Standby",
+        "desired_role": "Lighting",
+        "persisted_role": "Lighting",
+        "state": "Ready",
+        "generation": 1,
+        "epoch": 1,
+        "lighting_allowed": false,
+        "video_allowed": false,
+        "lighting_reason": "ProjectSwapDisarmed",
+        "video_reason": "ProjectSwapDisarmed",
+        "error": null
+      },
+      "packets": 0
+    },
+    {
+      "check": "external-loopback-exact-grant-safe-mode-and-acquire-without-output",
+      "passed": true,
+      "generation": 1
+    },
+    {
+      "check": "external-r4-arm-without-dialog-produces-received-live-artdmx",
+      "passed": true,
+      "receipt": {
+        "argument_fingerprint": "db3af3e29ee44c9af19468377e094bf01ebfbe212b0238d2f39f95ee798e93a0",
+        "audit_sequence": 2,
+        "fence_after": {
+          "output_epoch": 3,
+          "output_generation": 3,
+          "process_incarnation": 982666231402416,
+          "project_checkpoint_hash": "078fbd1de50359a6ec2afd16314611d13dbf513e34749d630152ea477c3c8edc",
+          "project_epoch": 1,
+          "project_publication_generation": 2,
+          "project_revision": 0,
+          "safety_blackout_epoch": 1,
+          "safety_blackout_generation": 1,
+          "session_incarnation": 624056073215802
+        },
+        "fence_before": {
+          "output_epoch": 2,
+          "output_generation": 2,
+          "process_incarnation": 982666231402416,
+          "project_checkpoint_hash": "078fbd1de50359a6ec2afd16314611d13dbf513e34749d630152ea477c3c8edc",
+          "project_epoch": 1,
+          "project_publication_generation": 2,
+          "project_revision": 0,
+          "safety_blackout_epoch": 1,
+          "safety_blackout_generation": 1,
+          "session_incarnation": 624056073215802
+        },
+        "lease_result": {
+          "audit_sequence": 4,
+          "authority": {
+            "generation": 1,
+            "lease_id": "lease-0000000000000001"
+          },
+          "changes": [
+            {
+              "after_generation": 1,
+              "after_phase": "held_active",
+              "after_resources": [
+                "lighting"
+              ],
+              "before_generation": 1,
+              "before_phase": "held_active",
+              "before_resources": [
+                "lighting"
+              ],
+              "lease_id": "lease-0000000000000001"
+            }
+          ],
+          "outcome": "authorized",
+          "phase": "held_active",
+          "resources": [
+            "lighting"
+          ]
+        },
+        "operation_id": "syndocal.output.ownership.arm.v2",
+        "outcome": "applied",
+        "request_id": 1791034640039,
+        "shape_sha256": "89a35c3b864d2aac1f43ad006082d148f9b6d0b1ba3b733fa897a4763b83412b"
+      },
+      "state": {
+        "ownership": {
+          "role": "Lighting",
+          "effective_role": "Lighting",
+          "desired_role": "Lighting",
+          "persisted_role": "Lighting",
+          "state": "Ready",
+          "generation": 2,
+          "epoch": 2,
+          "lighting_allowed": true,
+          "video_allowed": false,
+          "lighting_reason": "OwnedByMachineRole",
+          "video_reason": "BlockedByMachineRole",
+          "error": null
+        },
+        "output": {
+          "enabled": true,
+          "port": 54184,
+          "protocol": "ArtNet",
+          "serial_baud_rate": 57600,
+          "serial_port": "",
+          "target_ip": "127.0.0.1",
+          "universe": 0
+        },
+        "routes": [
+          {
+            "enabled": true,
+            "port": 54184,
+            "protocol": "ArtNet",
+            "serial_baud_rate": 57600,
+            "serial_port": "",
+            "target_ip": "127.0.0.1",
+            "universe": 0
+          }
+        ],
+        "master": 1,
+        "blackout": false,
+        "safety": false,
+        "attributes": [
+          {
+            "attribute": "Dimmer",
+            "value": 65535
+          },
+          {
+            "attribute": "ColorRed",
+            "value": 0
+          },
+          {
+            "attribute": "ColorGreen",
+            "value": 0
+          },
+          {
+            "attribute": "ColorBlue",
+            "value": 0
+          },
+          {
+            "attribute": "Pan",
+            "value": 32768
+          },
+          {
+            "attribute": "Tilt",
+            "value": 32768
+          }
+        ]
+      },
+      "phase": "armed-full",
+      "frames": 22,
+      "payloadSha256": "65228acc43d02190277f6ebf9ec067c7135aaddc9f0c6a610c3052a7cf9213d1",
+      "channels1to8": [
+        255,
+        0,
+        0,
+        0,
+        128,
+        0,
+        128,
+        0
+      ]
+    },
+    {
+      "check": "native-kill_switch-64-pending-r4-r5-and-read-requests-with-no-live-delta",
+      "passed": true,
+      "pendingCount": 64,
+      "overflowError": "inflight_capacity",
+      "phase": "kill_switch-64-pending-native-requests",
+      "frames": 876,
+      "payloadSha256": "65228acc43d02190277f6ebf9ec067c7135aaddc9f0c6a610c3052a7cf9213d1",
+      "channels1to8": [
+        255,
+        0,
+        0,
+        0,
+        128,
+        0,
+        128,
+        0
+      ],
+      "rendererGeneration": 2,
+      "claimedRequestIds": [
+        "3ad208fe-2683-4b04-bcee-b2ec8bdea4cd",
+        "a403b482-f360-4286-9511-4004c99754e0"
+      ]
+    },
+    {
+      "check": "native-kill_switch-local-priority-blackout-during-10000-external-intents",
+      "passed": true,
+      "requests": 10000,
+      "sidecarOverloads": 9999,
+      "nativeRejected": 1,
+      "nativeError": "agent_kill_switch_active",
+      "outstandingAtLocalAction": 10000,
+      "outstandingAtS0": 9842,
+      "localElapsedMs": 5.561300000001211,
+      "firstZeroPacketMs": 3.799799999993411,
+      "floodElapsedMs": 854.6097000000009,
+      "receipt": {
+        "kind": "receipt",
+        "result": {
+          "operation_id": "syndocal.safety.blackout.engage.v1",
+          "request_id": 1791034650041,
+          "shape_sha256": "b5b480ffb0223464ddaaa974d5595cc5c3fac41306e21163bbfb6bb59a7c68c1",
+          "audit_sequence": 1,
+          "outcome": "applied"
+        }
+      },
+      "phase": "kill_switch-local-priority-all-zero",
+      "frames": 22,
+      "payloadSha256": "076a27c79e5ace2a3d47f9dd2e83e4ff6ea8872b3c2218f66c92b89b55f36560",
+      "channels1to8": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "check": "native-kill_switch-revoked-claimed-r4-r5-reject-and-no-export-or-authored-delta",
+      "passed": true,
+      "executionError": "agent_kill_switch_active",
+      "consumedReplayError": "request_not_executable",
+      "retainedPendingCount": null,
+      "destinationAbsent": true,
+      "phase": "kill_switch-revoked-r4-r5-cannot-change-zero",
+      "frames": 22,
+      "payloadSha256": "076a27c79e5ace2a3d47f9dd2e83e4ff6ea8872b3c2218f66c92b89b55f36560",
+      "channels1to8": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "check": "native-kill_switch-local-s0-replay-no-op-and-target-payload-rejection",
+      "passed": true,
+      "replayAuditSequence": 1,
+      "noOpAuditSequence": 2,
+      "phase": "kill_switch-local-replay-and-no-release-shape",
+      "frames": 21,
+      "payloadSha256": "076a27c79e5ace2a3d47f9dd2e83e4ff6ea8872b3c2218f66c92b89b55f36560",
+      "channels1to8": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "check": "explicit-native-project-replacement-stops-owned-loopback-sender-and-source-is-unchanged",
+      "passed": true,
+      "ownership": {
+        "role": "Standby",
+        "effective_role": "Standby",
+        "desired_role": "Lighting",
+        "persisted_role": "Lighting",
+        "state": "Ready",
+        "generation": 3,
+        "epoch": 3,
+        "lighting_allowed": false,
+        "video_allowed": false,
+        "lighting_reason": "ProjectSwapDisarmed",
+        "video_reason": "ProjectSwapDisarmed",
+        "error": null
+      },
+      "packetsTotal": 1056,
+      "readOverloads": []
+    },
+    {
+      "check": "native-kill_switch-owned-restart-restores-empty-disarmed-qa",
+      "passed": true
+    },
+    {
+      "check": "isolated-first-launch-read",
+      "passed": true
+    },
+    {
+      "check": "dead-process-descriptor-rejected",
+      "passed": true
+    },
+    {
+      "check": "crash-restart-retired-principal-rejected",
+      "passed": true
+    },
+    {
+      "check": "old-credential-and-receipt-not-adopted",
+      "passed": true
+    },
+    {
+      "check": "old-launch-proof-rejected-fresh-read-succeeds",
+      "passed": true
+    },
+    {
+      "check": "graceful-native-close",
+      "passed": true
+    },
+    {
+      "check": "graceful-restart-does-not-restore-grant",
+      "passed": true
+    }
+  ],
+  "normalAppIdentityUnchanged": true,
+  "credentialRevoked": true,
+  "credentialFileRemoved": true,
+  "nativePanicLocations": [],
+  "nonclaims": [
+    "QA identifier release build, not the distributed artifact",
+    "Actual 64-slot external broker pending saturation, 10000 R4 intents and local native S0 all-zero loopback output before/after revocation and while Kill Switch is active. Existing renderer registration retains immutable external work; no Engine command-queue saturation, complete tick/frame/audio/UI budget, publisher event-gap, physical device, venue or release acceptance",
+    "No durable authored/output mutation crash publication acceptance"
+  ]
+}

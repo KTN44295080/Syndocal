@@ -1,0 +1,13 @@
+PASS safety pressure excludes --controller-burst before executable selection or launch
+PASS safety pressure excludes --controller-output before executable selection or launch
+PASS safety pressure excludes --controller-restart before executable selection or launch
+PASS safety pressure excludes --controller-expiry before executable selection or launch
+PASS safety pressure excludes --controller-inflight before executable selection or launch
+PASS safety pressure excludes --project-json before executable selection or launch
+PASS safety pressure excludes --backup-json before executable selection or launch
+PASS safety pressure excludes --lease-expiry before executable selection or launch
+PASS safety pressure excludes --external-high-risk before executable selection or launch
+PASS safety pressure excludes --external-revocation before executable selection or launch
+PASS safety pressure excludes --tap-bpm before executable selection or launch
+PASS safety pressure excludes --diagnostics before executable selection or launch
+PASS twelve mutually exclusive safety-pressure lanes

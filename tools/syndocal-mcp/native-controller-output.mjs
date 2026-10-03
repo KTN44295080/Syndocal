@@ -10,13 +10,16 @@ import { nativeControllerRestartProbe } from './native-controller-restart.mjs';
 import { nativeControllerExpiryProbe } from './native-controller-expiry.mjs';
 import { nativeControllerInFlightProbe } from './native-controller-inflight.mjs';
 import { nativeControllerBurstProbe } from './native-controller-burst.mjs';
+import { nativeControllerSafetyPressureProbe } from './native-controller-safety-pressure.mjs';
 
 // Software loopback only: an owned ephemeral receiver, one isolated QA route,
 // and real authenticated MCP operations. Retirement/transfer must preserve DMX.
-export async function nativeControllerOutput(backend, options, checks, { restartLifecycle, leaseExpiry = false, inFlightCrash = false, burstRequests = false } = {}) {
+export async function nativeControllerOutput(backend, options, checks, { restartLifecycle, leaseExpiry = false, inFlightCrash = false, burstRequests = false, safetyPressure } = {}) {
   assert.ok(!(restartLifecycle && leaseExpiry), 'Live restart and expiry require separate lanes');
   assert.ok(!inFlightCrash || restartLifecycle, 'In-flight crash requires the owned restart lifecycle');
   assert.ok(!burstRequests || !(restartLifecycle || leaseExpiry || inFlightCrash), 'Burst requires its own live request lane');
+  assert.ok(!safetyPressure || (['saturation', 'kill_switch'].includes(safetyPressure)
+    && !(restartLifecycle || leaseExpiry || inFlightCrash || burstRequests)), 'Safety pressure requires its own live lane');
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'syndocal-controller-output-'));
   const receiver = dgram.createSocket('udp4');
   const ownerId = `controller-output-${randomUUID()}`;
@@ -35,6 +38,8 @@ export async function nativeControllerOutput(backend, options, checks, { restart
   let packetCount = 0;
   let phase;
   const packetTimes = [];
+  const zero = Buffer.alloc(512);
+  const imageTimes = [];
   const full = Buffer.alloc(512);
   // Independently authored fixture: Dimmer 65535, Pan/Tilt 32768, all else 0.
   // EightBit writes the high byte; a 0.5 master rounds 65535*0.5 to 32768.
@@ -54,6 +59,7 @@ export async function nativeControllerOutput(backend, options, checks, { restart
       latest = Buffer.from(packet.subarray(18));
       packetCount++;
       if (burstRequests && packetTimes.length < 10000) packetTimes.push(performance.now());
+      if (safetyPressure && imageTimes.length < 10000) imageTimes.push({ at: performance.now(), zero: latest.equals(zero) });
       if (phase) {
         assert.ok(latest.equals(phase.expected), `${phase.name}: unexpected 512-channel image`);
         phase.frames++;
@@ -255,6 +261,15 @@ export async function nativeControllerOutput(backend, options, checks, { restart
       checks.push({ check: 'explicit-native-project-replacement-stops-owned-loopback-sender-and-source-is-unchanged', passed: true,
         ownership: stopped, packetsTotal: packetCount, readOverloads });
     };
+    if (safetyPressure) {
+      await nativeControllerSafetyPressureProbe({ backend: () => backend,
+        principal: () => ({ principalId: options.principalId, principalIncarnation: options.principalIncarnation }),
+        grant, state, stable, awaitImage, full, zero, active, directory, checks,
+        imageTimes: () => imageTimes, nextOutputRequestId: () => numericRequestId++,
+        call: (name, args) => mcp.call(name, args) }, safetyPressure);
+      await finish();
+      return;
+    }
     if (burstRequests) {
       await nativeControllerBurstProbe({ grant, query, output, send, accepted, state, stable,
         awaitImage, full, half, pause, active, packetTimes: () => packetTimes,
