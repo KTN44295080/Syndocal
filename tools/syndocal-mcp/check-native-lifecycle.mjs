@@ -19,6 +19,8 @@ import { nativeControllerOutput } from './native-controller-output.mjs';
 
 const exec = promisify(execFile);
 const args = process.argv.slice(2);
+const controllerInFlight = args.includes('--controller-inflight');
+if (controllerInFlight) args.splice(args.indexOf('--controller-inflight'), 1);
 const controllerExpiry = args.includes('--controller-expiry');
 if (controllerExpiry) args.splice(args.indexOf('--controller-expiry'), 1);
 const controllerRestart = args.includes('--controller-restart');
@@ -56,6 +58,8 @@ assert.ok(!controllerRestart || !(controllerOutput || projectJson || backupJson 
   'Live native restart owns a separate project/output/process lane');
 assert.ok(!controllerExpiry || !(controllerOutput || controllerRestart || projectJson || backupJson || leaseExpiry || externalHighRisk || externalRevocation || tapBpm || diagnostics),
   'Live native expiry owns a separate project/output/lease lane');
+assert.ok(!controllerInFlight || !(controllerOutput || controllerRestart || controllerExpiry || projectJson || backupJson || leaseExpiry || externalHighRisk || externalRevocation || tapBpm || diagnostics),
+  'Live native in-flight crash owns a separate project/output/file/process lane');
 const take = name => { const index = args.indexOf(name); assert.ok(index >= 0 && index + 1 < args.length, `Required: ${name}`); return args.splice(index, 2)[1]; };
 const executable = take('--expected-executable');
 const evidence = take('--evidence');
@@ -188,8 +192,8 @@ try {
   if (externalHighRisk) await nativeExternalHighRisk(backend, options, checks);
   if (controllerOutput) await nativeControllerOutput(backend, options, checks);
   if (controllerExpiry) await nativeControllerOutput(backend, options, checks, { leaseExpiry: true });
-  if (controllerRestart) {
-    await nativeControllerOutput(backend, options, checks, { restartLifecycle: async observeStopped => {
+  if (controllerRestart || controllerInFlight) {
+    await nativeControllerOutput(backend, options, checks, { inFlightCrash: controllerInFlight, restartLifecycle: async observeStopped => {
       await stop();
       await observeStopped();
       await start();
@@ -298,12 +302,13 @@ await fs.writeFile(evidence, `${JSON.stringify({ schemaVersion: 1, timestamp: ne
   sidecarSha256: createHash('sha256').update(await fs.readFile(new URL('./server.mjs', import.meta.url))).digest('hex'),
   runnerSha256: createHash('sha256').update(await fs.readFile(new URL('./check-native-lifecycle.mjs', import.meta.url))).digest('hex'),
   backendHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-backend-session.mjs', import.meta.url))).digest('hex'),
-  ...(controllerOutput || controllerRestart || controllerExpiry ? {
+  ...(controllerOutput || controllerRestart || controllerExpiry || controllerInFlight ? {
     controllerOutputHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-controller-output.mjs', import.meta.url))).digest('hex'),
     stdioHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-stdio-session.mjs', import.meta.url))).digest('hex'),
     controllerOutputTransport: 'Separate authenticated stdio MCP sidecar, actual native loopback-only Art-Net sender, owned ephemeral 127.0.0.1 UDP receiver',
     ...(controllerRestart ? { controllerRestartHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-controller-restart.mjs', import.meta.url))).digest('hex') } : {}),
     ...(controllerExpiry ? { controllerExpiryHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-controller-expiry.mjs', import.meta.url))).digest('hex') } : {}),
+    ...(controllerInFlight ? { controllerInFlightHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-controller-inflight.mjs', import.meta.url))).digest('hex') } : {}),
   } : {}),
   ...(inputDiagnostics ? { inputDiagnosticHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-input-diagnostics.mjs', import.meta.url))).digest('hex') } : {}),
   ...(externalHighRisk ? {
@@ -340,7 +345,8 @@ await fs.writeFile(evidence, `${JSON.stringify({ schemaVersion: 1, timestamp: ne
   credentialRevoked: !cleanupNeeded, credentialFileRemoved: true,
   nativePanicLocations,
   nonclaims: ['QA identifier release build, not the distributed artifact',
-    controllerRestart ? 'Actual native forced process termination/restart and explicit re-Arm with software loopback reception only; no physical fixtures, venue, serial DMX, video, worker-specific failure, in-flight mutation crash durability or whole controller-loss/re-arm acceptance'
+    controllerInFlight ? 'Actual native queued, claimed and native-committed R4 master/R5 diagnostic requests interrupted before broker completion; unknown restart status never re-executes, software loopback re-Arm remains explicit and owned export bytes remain intact. No physical fixtures, recording/authored crash matrix, worker-internal interruption, full durable mutation completion or release acceptance'
+      : controllerRestart ? 'Actual native forced process termination/restart and explicit re-Arm with software loopback reception only; no physical fixtures, venue, serial DMX, video, worker-specific failure, in-flight mutation crash durability or whole controller-loss/re-arm acceptance'
       : controllerExpiry ? 'Actual native live monotonic lease expiry, stale-operation rejection and explicit recovery with software loopback reception only; no physical fixtures, venue, serial DMX, video, worker-specific failure, in-flight mutation crash durability or whole controller-loss/re-arm acceptance'
       : controllerOutput ? 'Actual native software loopback ArtDMX reception only; no device, venue, serial DMX, video, worker/process-loss or whole controller-loss/re-arm acceptance'
       : 'No physical output activation; optional high-risk or lease-expiry probe mutates isolated backend lease authority only; optional Tap probe changes isolated empty-project tempo; optional project-file probe loads private JSON with no file media or video source activation',

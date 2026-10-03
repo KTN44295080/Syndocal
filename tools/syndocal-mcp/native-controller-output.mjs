@@ -8,11 +8,13 @@ import { performance } from 'node:perf_hooks';
 import { openNativeStdioSession } from './native-stdio-session.mjs';
 import { nativeControllerRestartProbe } from './native-controller-restart.mjs';
 import { nativeControllerExpiryProbe } from './native-controller-expiry.mjs';
+import { nativeControllerInFlightProbe } from './native-controller-inflight.mjs';
 
 // Software loopback only: an owned ephemeral receiver, one isolated QA route,
 // and real authenticated MCP operations. Retirement/transfer must preserve DMX.
-export async function nativeControllerOutput(backend, options, checks, { restartLifecycle, leaseExpiry = false } = {}) {
+export async function nativeControllerOutput(backend, options, checks, { restartLifecycle, leaseExpiry = false, inFlightCrash = false } = {}) {
   assert.ok(!(restartLifecycle && leaseExpiry), 'Live restart and expiry require separate lanes');
+  assert.ok(!inFlightCrash || restartLifecycle, 'In-flight crash requires the owned restart lifecycle');
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'syndocal-controller-output-'));
   const receiver = dgram.createSocket('udp4');
   const ownerId = `controller-output-${randomUUID()}`;
@@ -257,15 +259,19 @@ export async function nativeControllerOutput(backend, options, checks, { restart
       return;
     }
     if (restartLifecycle) {
-      await nativeControllerRestartProbe({ backend: () => backend,
+      const probe = inFlightCrash ? nativeControllerInFlightProbe : nativeControllerRestartProbe;
+      await probe({ backend: () => backend,
         restart: async observeStopped => { backend = await restartLifecycle(observeStopped); },
         closeStdio: async () => { await mcp.close(); mcp = undefined; },
         openStdio: async () => { mcp = await openNativeStdioSession(options); },
         status: requestId => mcp.call('syndocal_get_request_status', { requestId }),
+        call: (name, args) => mcp.call(name, args),
+        nextOutputRequestId: () => numericRequestId++,
+        principal: () => ({ principalId: options.principalId, principalIncarnation: options.principalIncarnation }),
         promote: () => backend.invoke('agent_authority_promote_v1', {
           principalId: options.principalId, principalIncarnation: options.principalIncarnation,
         }),
-        grant, query, output, send, accepted, rejected, load, file, ownerId,
+        grant, query, output, send, accepted, rejected, load, file, ownerId, directory,
         ownership, state, stable, awaitImage, full, half, pause, healthy,
         packets: () => packetCount, checks });
       await finish();

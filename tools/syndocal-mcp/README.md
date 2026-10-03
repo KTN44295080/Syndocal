@@ -214,6 +214,25 @@ Do not combine this flag with other opt-in lanes. This is software loopback
 expiry/recovery evidence, not physical fixtures/video, worker-specific failure,
 in-flight mutation crash durability or complete controller-loss acceptance.
 
+Add `--controller-inflight` as a separate native R4/R5 interruption lane. It
+uses the same owned loopback fixture/project and tests Lighting master plus
+diagnostic ZIP export at three broker boundaries: queued, claimed, and native
+effect committed before the broker receives completion. The existing native
+bridge registration retires its automatic renderer; authenticated stdio
+admission, immutable claim and the production native executor remain in use.
+No DOM action, invoke patch, fake engine or new product hook is involved.
+The runner terminates and restarts only the isolated QA executable after each
+case. Fresh pairing/grants cannot reclaim a lease or resume output. Old pending
+UUID lookup stays unknown; exact persisted identity is never dispatched again,
+and changed shape conflicts. Committed export bytes remain identical; requests
+that never executed create no file. Only fresh acquisition plus a separate
+explicit Arm resumes the independently authored full output image. All new
+output intents share one request-ID allocator so the native high-water fence
+remains enforced. Do not combine this flag with other opt-in lanes. This is
+bounded R4 master/R5 diagnostic broker-interruption proof, not physical fixtures,
+recording/authored crash matrices, worker-internal interruption, complete durable
+mutation completion, clean installation or release acceptance.
+
 Canonical native QueryError objects retain their bounded `code`, `message`,
 `retryable` and `resnapshot_required` fields in `result.error.native_query` for
 rejected reads. The outer error code stays `request_rejected`. Unrecognized

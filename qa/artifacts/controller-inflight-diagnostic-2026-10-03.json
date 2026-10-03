@@ -1,0 +1,248 @@
+{
+  "schemaVersion": 1,
+  "timestamp": "2026-10-03T11:59:16.463Z",
+  "passed": false,
+  "executable": "C:\\Users\\janua\\AppData\\Local\\Temp/syndocal-native-acceptance-target/release/syndocal.exe",
+  "executableSha256": "f14e39191d0836247dd62154126c9d691f92381dc7ae8523c9c780846021fd81",
+  "sidecarSha256": "bc6ad436dac381513df992fdbef0aa800c6793704f4c1848b7c8312ec474e564",
+  "runnerSha256": "ce5f688c0dfbf963fc89f7d1dc9d3b2310a424ec6124a65d46f88d77373783ef",
+  "backendHarnessSha256": "ade29aa256d8ff17374bb4b3e893ea9a07f71f8fa2cf2bb72b21f80d4e0e8b1f",
+  "controllerOutputHarnessSha256": "74a70bcd39acd161c8915b1bb36903259986a79555766838c12333c7f609e9fb",
+  "stdioHarnessSha256": "494aa9aa27b686aa5c60f99d99fd282d5d3ffd8ef49859c640cedc7ffbbecec2",
+  "controllerOutputTransport": "Separate authenticated stdio MCP sidecar, actual native loopback-only Art-Net sender, owned ephemeral 127.0.0.1 UDP receiver",
+  "controllerInFlightHarnessSha256": "ceff8a9d2d70348a2fc0c87db102a0396a1e6120f75aec2d3ae307da8063b980",
+  "profile": "jp.seraf.ktn.syndocal.qa.mcp-lifecycle",
+  "checks": [
+    {
+      "check": "native-loopback-project-load-does-not-arm",
+      "passed": true,
+      "fixtureSourceSha256": "2de7f4d6a5e8ba0c0cedf7ef664d65030fde37d492ae3fa2b6475e77a02f7bf6",
+      "projectSha256": "1b94641477fe094b13b820a6ced4242797270a1d1789f978ee90315876b2f3bc",
+      "destination": {
+        "address": "127.0.0.1",
+        "family": "IPv4",
+        "port": 53890
+      },
+      "ownership": {
+        "role": "Standby",
+        "effective_role": "Standby",
+        "desired_role": "Lighting",
+        "persisted_role": "Lighting",
+        "state": "Ready",
+        "generation": 1,
+        "epoch": 1,
+        "lighting_allowed": false,
+        "video_allowed": false,
+        "lighting_reason": "ProjectSwapDisarmed",
+        "video_reason": "ProjectSwapDisarmed",
+        "error": null
+      },
+      "packets": 0
+    },
+    {
+      "check": "external-loopback-exact-grant-safe-mode-and-acquire-without-output",
+      "passed": true,
+      "generation": 1
+    },
+    {
+      "check": "external-r4-arm-without-dialog-produces-received-live-artdmx",
+      "passed": true,
+      "receipt": {
+        "argument_fingerprint": "db3af3e29ee44c9af19468377e094bf01ebfbe212b0238d2f39f95ee798e93a0",
+        "audit_sequence": 2,
+        "fence_after": {
+          "output_epoch": 3,
+          "output_generation": 3,
+          "process_incarnation": 3504841105984881,
+          "project_checkpoint_hash": "598334076b29acd46de8716e02775a84f7cbac796ed369f32837b07a087d861a",
+          "project_epoch": 1,
+          "project_publication_generation": 2,
+          "project_revision": 0,
+          "safety_blackout_epoch": 1,
+          "safety_blackout_generation": 1,
+          "session_incarnation": 7131353333174800
+        },
+        "fence_before": {
+          "output_epoch": 2,
+          "output_generation": 2,
+          "process_incarnation": 3504841105984881,
+          "project_checkpoint_hash": "598334076b29acd46de8716e02775a84f7cbac796ed369f32837b07a087d861a",
+          "project_epoch": 1,
+          "project_publication_generation": 2,
+          "project_revision": 0,
+          "safety_blackout_epoch": 1,
+          "safety_blackout_generation": 1,
+          "session_incarnation": 7131353333174800
+        },
+        "lease_result": {
+          "audit_sequence": 4,
+          "authority": {
+            "generation": 1,
+            "lease_id": "lease-0000000000000001"
+          },
+          "changes": [
+            {
+              "after_generation": 1,
+              "after_phase": "held_active",
+              "after_resources": [
+                "lighting"
+              ],
+              "before_generation": 1,
+              "before_phase": "held_active",
+              "before_resources": [
+                "lighting"
+              ],
+              "lease_id": "lease-0000000000000001"
+            }
+          ],
+          "outcome": "authorized",
+          "phase": "held_active",
+          "resources": [
+            "lighting"
+          ]
+        },
+        "operation_id": "syndocal.output.ownership.arm.v2",
+        "outcome": "applied",
+        "request_id": 1791028732944,
+        "shape_sha256": "1774ad1ed05f564c182270b7923c4d43bc348df91419b3e0835ccc59aaffda8e"
+      },
+      "state": {
+        "ownership": {
+          "role": "Lighting",
+          "effective_role": "Lighting",
+          "desired_role": "Lighting",
+          "persisted_role": "Lighting",
+          "state": "Ready",
+          "generation": 2,
+          "epoch": 2,
+          "lighting_allowed": true,
+          "video_allowed": false,
+          "lighting_reason": "OwnedByMachineRole",
+          "video_reason": "BlockedByMachineRole",
+          "error": null
+        },
+        "output": {
+          "enabled": true,
+          "port": 53890,
+          "protocol": "ArtNet",
+          "serial_baud_rate": 57600,
+          "serial_port": "",
+          "target_ip": "127.0.0.1",
+          "universe": 0
+        },
+        "routes": [
+          {
+            "enabled": true,
+            "port": 53890,
+            "protocol": "ArtNet",
+            "serial_baud_rate": 57600,
+            "serial_port": "",
+            "target_ip": "127.0.0.1",
+            "universe": 0
+          }
+        ],
+        "master": 1,
+        "blackout": false,
+        "safety": false,
+        "attributes": [
+          {
+            "attribute": "Dimmer",
+            "value": 65535
+          },
+          {
+            "attribute": "ColorRed",
+            "value": 0
+          },
+          {
+            "attribute": "ColorGreen",
+            "value": 0
+          },
+          {
+            "attribute": "ColorBlue",
+            "value": 0
+          },
+          {
+            "attribute": "Pan",
+            "value": 32768
+          },
+          {
+            "attribute": "Tilt",
+            "value": 32768
+          }
+        ]
+      },
+      "phase": "armed-full",
+      "frames": 22,
+      "payloadSha256": "65228acc43d02190277f6ebf9ec067c7135aaddc9f0c6a610c3052a7cf9213d1",
+      "channels1to8": [
+        255,
+        0,
+        0,
+        0,
+        128,
+        0,
+        128,
+        0
+      ]
+    },
+    {
+      "check": "native-inflight-output-queued-immutable-admission-and-unconfirmed-broker-state",
+      "passed": true,
+      "requestId": "32483773-44f6-4f5a-98fe-0b8373a76c1e",
+      "rendererGeneration": 2,
+      "operationId": "syndocal.output.lighting.master.set.v2",
+      "admittedPhase": {
+        "phase": "output-queued-admitted-full",
+        "frames": 38,
+        "payloadSha256": "65228acc43d02190277f6ebf9ec067c7135aaddc9f0c6a610c3052a7cf9213d1",
+        "channels1to8": [
+          255,
+          0,
+          0,
+          0,
+          128,
+          0,
+          128,
+          0
+        ]
+      },
+      "phase": "output-queued-pending-before-crash",
+      "frames": 36,
+      "payloadSha256": "65228acc43d02190277f6ebf9ec067c7135aaddc9f0c6a610c3052a7cf9213d1",
+      "channels1to8": [
+        255,
+        0,
+        0,
+        0,
+        128,
+        0,
+        128,
+        0
+      ]
+    },
+    {
+      "check": "native-inflight-output-queued-actual-crash-new-process-authority-and-closed-gates",
+      "passed": true,
+      "terminatedProcessId": 158076,
+      "restartedProcessId": 181788,
+      "packetsAtStop": 162
+    },
+    {
+      "check": "native-inflight-output-queued-unknown-is-not-retried-exact-replay-fenced-and-shape-conflict",
+      "passed": true,
+      "lookupStatus": "unknown",
+      "exactReplayStatus": "unknown",
+      "filePreserved": false,
+      "destinationAbsent": true
+    }
+  ],
+  "normalAppIdentityUnchanged": true,
+  "credentialRevoked": true,
+  "credentialFileRemoved": true,
+  "nativePanicLocations": [],
+  "nonclaims": [
+    "QA identifier release build, not the distributed artifact",
+    "Actual native queued, claimed and native-committed R4 master/R5 diagnostic requests interrupted before broker completion; unknown restart status never re-executes, software loopback re-Arm remains explicit and owned export bytes remain intact. No physical fixtures, recording/authored crash matrix, worker-internal interruption, full durable mutation completion or release acceptance",
+    "No durable authored/output mutation crash publication acceptance"
+  ]
+}

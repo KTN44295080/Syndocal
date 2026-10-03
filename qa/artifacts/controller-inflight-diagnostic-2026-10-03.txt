@@ -1,0 +1,25 @@
+{"diagnostic":"output-queued-unclaimed-old-lease","params":{"operationId":"syndocal.output.lighting.master.set.v2","request":{"request":{"operation_id":"syndocal.output.lighting.master.set.v2","request_id":1791028732945,"expected_fence":{"output_epoch":2,"output_generation":2,"process_incarnation":7973319502678189,"project_checkpoint_hash":"598334076b29acd46de8716e02775a84f7cbac796ed369f32837b07a087d861a","project_epoch":1,"project_publication_generation":2,"project_revision":0,"safety_blackout_epoch":1,"safety_blackout_generation":1,"session_incarnation":8492680893396455},"action":{"kind":"set_lighting_master","role":"lighting","master_milliunits":0,"lease":{"generation":1,"lease_id":"lease-0000000000000001"}}}}},"receipt":{"requestId":"dc37db84-1286-4a0e-b7eb-6ea53a2440d5","status":"completed","result":{"ok":false,"operation_id":"syndocal.output.lighting.master.set.v2","result":{"rejection":{"error":"invalid_request","operation_id":"syndocal.output.lighting.master.set.v2","request_id":1791028732945},"type":"rejected"}}}}
+node:internal/modules/run_main:123
+    triggerUncaughtException(
+    ^
+
+AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
++ actual - expected
+
++ 'invalid_request'
+- 'forbidden'
+
+    at Object.rejected (file:///C:/Users/janua/OneDrive/%E3%83%89%E3%82%AD%E3%83%A5%E3%83%A1%E3%83%B3%E3%83%88/GitHub/Syndocal/tools/syndocal-mcp/native-controller-output.mjs:151:12)
+    at nativeControllerInFlightProbe (file:///C:/Users/janua/OneDrive/%E3%83%89%E3%82%AD%E3%83%A5%E3%83%A1%E3%83%B3%E3%83%88/GitHub/Syndocal/tools/syndocal-mcp/native-controller-inflight.mjs:161:9)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async nativeControllerOutput (file:///C:/Users/janua/OneDrive/%E3%83%89%E3%82%AD%E3%83%A5%E3%83%A1%E3%83%B3%E3%83%88/GitHub/Syndocal/tools/syndocal-mcp/native-controller-output.mjs:263:7)
+    at async file:///C:/Users/janua/OneDrive/%E3%83%89%E3%82%AD%E3%83%A5%E3%83%A1%E3%83%B3%E3%83%88/GitHub/Syndocal/tools/syndocal-mcp/check-native-lifecycle.mjs:196:5 {
+  generatedMessage: true,
+  code: 'ERR_ASSERTION',
+  actual: 'invalid_request',
+  expected: 'forbidden',
+  operator: 'strictEqual',
+  diff: 'simple'
+}
+
+Node.js v22.22.1

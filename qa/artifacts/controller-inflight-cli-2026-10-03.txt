@@ -1,0 +1,11 @@
+PASS in-flight excludes --controller-output before executable selection or launch
+PASS in-flight excludes --controller-restart before executable selection or launch
+PASS in-flight excludes --controller-expiry before executable selection or launch
+PASS in-flight excludes --project-json before executable selection or launch
+PASS in-flight excludes --backup-json before executable selection or launch
+PASS in-flight excludes --lease-expiry before executable selection or launch
+PASS in-flight excludes --external-high-risk before executable selection or launch
+PASS in-flight excludes --external-revocation before executable selection or launch
+PASS in-flight excludes --tap-bpm before executable selection or launch
+PASS in-flight excludes --diagnostics before executable selection or launch
+PASS ten mutually exclusive in-flight lanes
