@@ -1,0 +1,5 @@
+
+> syndocal@1.2.0-alpha.69 check:tauri-build-wrapper C:\Users\janua\OneDrive\ドキュメント\GitHub\Syndocal\app
+> node scripts/check-tauri-build-wrapper.mjs
+
+tauri build wrapper checks passed (249 assertions, 27 hostile mutation fixtures)

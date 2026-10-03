@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "timestamp": "2026-10-03T13:09:03.062Z",
+  "base": "d94ac028",
+  "sourceHashes": {
+    "tools/syndocal-mcp/server.mjs": "e7bb740aa5ef5993dd5a5f01d37f80077c58f3996f51a0874f9565c79a843c12",
+    "tools/syndocal-mcp/native-request-admission.mjs": "08c93356bd2c0d0d94ad3dda1e8188162ffdd56c0331510d127823f6859fa443",
+    "tools/syndocal-mcp/authenticated-discovery.mjs": "ebc10c6ba04be32d604c1a0ea6e162626d2c406311cf7ece206cc104f6ba863d",
+    "tools/syndocal-mcp/check-request-capacity.mjs": "c4f72cee57e8bbe43fec0b87f38764f1a423f1eecd8c1fe47bafaf21e1e293f2",
+    "tools/syndocal-mcp/native-controller-burst.mjs": "ad1efdd808a568c8d958ecc0fbff161facfa01c09751f916d47bba3bf242189b",
+    "tools/syndocal-mcp/native-controller-output.mjs": "a2d90f428366d05101477e5a16feb044a24c0a33167de1022b4b5036aa8490c4",
+    "tools/syndocal-mcp/native-stdio-session.mjs": "7a7f885a010f5d1de8823db6585204562b69358ce0253f4829b33c821c846e6d",
+    "tools/syndocal-mcp/check-native-lifecycle.mjs": "e907a9dddc432570a0e3e7b433aff902f90f5987df1a73db85413d5ea200d844",
+    "app/scripts/check-ai5-sidecar.mjs": "30ea6fde4d8cee0151dae88f031f4a03400115f923310b63f27036f26891c54a"
+  },
+  "nonclaims": [
+    "Checkpoint source identity manifest, not an additional test or independent review"
+  ]
+}

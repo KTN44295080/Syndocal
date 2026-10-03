@@ -19,6 +19,8 @@ import { nativeControllerOutput } from './native-controller-output.mjs';
 
 const exec = promisify(execFile);
 const args = process.argv.slice(2);
+const controllerBurst = args.includes('--controller-burst');
+if (controllerBurst) args.splice(args.indexOf('--controller-burst'), 1);
 const controllerInFlight = args.includes('--controller-inflight');
 if (controllerInFlight) args.splice(args.indexOf('--controller-inflight'), 1);
 const controllerExpiry = args.includes('--controller-expiry');
@@ -60,6 +62,8 @@ assert.ok(!controllerExpiry || !(controllerOutput || controllerRestart || projec
   'Live native expiry owns a separate project/output/lease lane');
 assert.ok(!controllerInFlight || !(controllerOutput || controllerRestart || controllerExpiry || projectJson || backupJson || leaseExpiry || externalHighRisk || externalRevocation || tapBpm || diagnostics),
   'Live native in-flight crash owns a separate project/output/file/process lane');
+assert.ok(!controllerBurst || !(controllerInFlight || controllerOutput || controllerRestart || controllerExpiry || projectJson || backupJson || leaseExpiry || externalHighRisk || externalRevocation || tapBpm || diagnostics),
+  'Live native burst owns a separate project/output/request lane');
 const take = name => { const index = args.indexOf(name); assert.ok(index >= 0 && index + 1 < args.length, `Required: ${name}`); return args.splice(index, 2)[1]; };
 const executable = take('--expected-executable');
 const evidence = take('--evidence');
@@ -191,6 +195,7 @@ try {
   if (leaseExpiry) await nativeLeaseExpiry(backend, options, checks);
   if (externalHighRisk) await nativeExternalHighRisk(backend, options, checks);
   if (controllerOutput) await nativeControllerOutput(backend, options, checks);
+  if (controllerBurst) await nativeControllerOutput(backend, options, checks, { burstRequests: true });
   if (controllerExpiry) await nativeControllerOutput(backend, options, checks, { leaseExpiry: true });
   if (controllerRestart || controllerInFlight) {
     await nativeControllerOutput(backend, options, checks, { inFlightCrash: controllerInFlight, restartLifecycle: async observeStopped => {
@@ -336,6 +341,12 @@ await fs.writeFile(evidence, `${JSON.stringify({ schemaVersion: 1, timestamp: ne
     tapControllerSha256: createHash('sha256').update(await fs.readFile(new URL('../../app/src/tapTempo.ts', import.meta.url))).digest('hex'),
     tapQaReceiverSha256: createHash('sha256').update(await fs.readFile(new URL('../../app/src/nativeTapTempoQa.ts', import.meta.url))).digest('hex'),
   } : {}),
+  ...(controllerBurst ? {
+    controllerBurstHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-controller-burst.mjs', import.meta.url))).digest('hex'),
+    admissionPolicySha256: createHash('sha256').update(await fs.readFile(new URL('./native-request-admission.mjs', import.meta.url))).digest('hex'),
+    stdioHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-stdio-session.mjs', import.meta.url))).digest('hex'),
+    controllerOutputHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-controller-output.mjs', import.meta.url))).digest('hex'),
+  } : {}),
   ...(externalRevocation ? {
     revocationHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-high-risk-revocation.mjs', import.meta.url))).digest('hex'),
     revocationTransport: 'Separate stdio MCP requests, native claim/revoke/execute commands; QA renderer generation retired immediately before graceful close',
@@ -345,7 +356,8 @@ await fs.writeFile(evidence, `${JSON.stringify({ schemaVersion: 1, timestamp: ne
   credentialRevoked: !cleanupNeeded, credentialFileRemoved: true,
   nativePanicLocations,
   nonclaims: ['QA identifier release build, not the distributed artifact',
-    controllerInFlight ? 'Actual native queued, claimed and native-committed R4 master/R5 diagnostic requests interrupted before broker completion; unknown restart status never re-executes, software loopback re-Arm remains explicit and owned export bytes remain intact. No physical fixtures, recording/authored crash matrix, worker-internal interruption, full durable mutation completion or release acceptance'
+    controllerBurst ? 'Actual 10000 stdio discovery and 10000 R4 master intents with software loopback ArtDMX reception and measured packet intervals only; no complete output tick/frame/audio/UI budget, publisher event-gap, local priority Blackout under saturation, physical device, venue or release acceptance'
+      : controllerInFlight ? 'Actual native queued, claimed and native-committed R4 master/R5 diagnostic requests interrupted before broker completion; unknown restart status never re-executes, software loopback re-Arm remains explicit and owned export bytes remain intact. No physical fixtures, recording/authored crash matrix, worker-internal interruption, full durable mutation completion or release acceptance'
       : controllerRestart ? 'Actual native forced process termination/restart and explicit re-Arm with software loopback reception only; no physical fixtures, venue, serial DMX, video, worker-specific failure, in-flight mutation crash durability or whole controller-loss/re-arm acceptance'
       : controllerExpiry ? 'Actual native live monotonic lease expiry, stale-operation rejection and explicit recovery with software loopback reception only; no physical fixtures, venue, serial DMX, video, worker-specific failure, in-flight mutation crash durability or whole controller-loss/re-arm acceptance'
       : controllerOutput ? 'Actual native software loopback ArtDMX reception only; no device, venue, serial DMX, video, worker/process-loss or whole controller-loss/re-arm acceptance'

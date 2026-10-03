@@ -7,11 +7,14 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { pathToFileURL } from 'node:url';
 import { createHttpSessions } from './http-sessions.mjs';
+import { createNativeRequestAdmission, overloadedReceipt } from './native-request-admission.mjs';
+import { settleAuthenticatedDiscovery } from './authenticated-discovery.mjs';
 
 const execFileAsync = promisify(execFile);
 const VERSION = '2025-11-25';
 const INPUT_LIMIT = 64 * 1024;
 const RESPONSE_LIMIT = 256 * 1024;
+const nativeAdmission = createNativeRequestAdmission();
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const CANONICAL_OPERATION_IDS = new Set([
   'syndocal.query.control_plane.registry.v1',
@@ -215,6 +218,10 @@ function redactCredential(value, token) {
 
 export async function nativeRequest(options, method, params, requestId, mutation = false) {
   const resultId = method === 'request.status' ? params.requestId : requestId;
+  return nativeAdmission.run(resultId, () => executeNativeRequest(options, method, params, requestId, resultId, mutation));
+}
+
+async function executeNativeRequest(options, method, params, requestId, resultId, mutation) {
   let descriptor;
   try { descriptor = await readDescriptor(options); }
   catch { return { requestId: resultId, status: 'rejected', error: 'Selected Syndocal descriptor/process/executable could not be verified. Start the expected executable and verify --descriptor and --expected-executable.' }; }
@@ -241,6 +248,7 @@ export async function nativeRequest(options, method, params, requestId, mutation
   return new Promise((resolve) => {
     let sent = false;
     let finished = false;
+    let completion;
     let chunks = [];
     let size = 0;
     const socket = net.createConnection({ host: '127.0.0.1', port: descriptor.port });
@@ -248,9 +256,9 @@ export async function nativeRequest(options, method, params, requestId, mutation
     function done(value) {
       if (finished) return;
       finished = true;
+      completion = value;
       clearTimeout(timer);
       socket.destroy();
-      resolve(value);
     }
     function fail(reason) {
       done({ requestId: resultId, status: mutation && sent ? 'unknown' : 'rejected', error: `${reason} No automatic retry was performed. Query syndocal_get_request_status with the original requestId before any further mutation.` });
@@ -263,6 +271,11 @@ export async function nativeRequest(options, method, params, requestId, mutation
     });
     socket.on('error', () => fail('Native bridge connection failed.'));
     socket.on('end', () => fail('Native bridge closed without a complete response.'));
+    // Keep the admission slot until this request's owned socket is reaped.
+    socket.once('close', () => {
+      if (!finished) fail('Native bridge closed without a complete response.');
+      resolve(completion);
+    });
     socket.on('data', (chunk) => {
       const newline = chunk.indexOf(10);
       const part = newline < 0 ? chunk : chunk.subarray(0, newline);
@@ -311,21 +324,32 @@ export async function dispatchRpc(options, state, req) {
     return success({});
   }
   if (!state.initialized) return error(-32002, 'Initialize and send notifications/initialized first.');
-  if (req.method === 'tools/list') {
+  const listing = req.method === 'tools/list';
+  if (listing) {
     if (!exact(params, ['_meta'], [])) return error(-32602, 'Unexpected tools/list parameters.');
-    const authentication = await nativeRequest(options, 'control_plane.get_capabilities', {}, randomUUID());
-    if (authentication.status !== 'completed') return error(-32001, 'Authenticated principal is required before tool discovery.');
-    return success({ tools: toolDefinitions });
+  } else {
+    if (req.method !== 'tools/call') return error(-32601, 'Method not found.');
+    if (!exact(params, ['name', 'arguments', '_meta'], ['name']) || typeof params.name !== 'string'
+      || !validateArguments(params.name, params.arguments ?? {})) return error(-32602, 'Unknown tool or invalid arguments. Use tools/list for the exact schema.');
   }
-  if (req.method !== 'tools/call') return error(-32601, 'Method not found.');
-  if (!exact(params, ['name', 'arguments', '_meta'], ['name']) || typeof params.name !== 'string'
-    || !validateArguments(params.name, params.arguments ?? {})) return error(-32602, 'Unknown tool or invalid arguments. Use tools/list for the exact schema.');
-  if (state.active) return success({ content: [{ type: 'text', text: 'Another native request is active. This request was not sent; wait for its response.' }], isError: true });
+  const args = params.arguments ?? {};
+  const mutation = params.name === 'syndocal_set_fixture_transform' || params.name === 'syndocal_set_video_blackout' || params.name === 'syndocal_execute_control_plane' || params.name === 'syndocal_export_diagnostics';
+  const requestId = mutation ? args.requestId : randomUUID();
+  const resultId = params.name === 'syndocal_get_request_status' ? args.requestId : requestId;
+  if (state.active) return listing
+    ? error(-32005, 'Sidecar overloaded. This discovery request was not sent; wait for outstanding requests to finish.')
+    : success({ content: [{ type: 'text', text: JSON.stringify(overloadedReceipt(resultId)) }], isError: true });
   state.active = true;
   try {
-    const args = params.arguments ?? {};
-    const mutation = params.name === 'syndocal_set_fixture_transform' || params.name === 'syndocal_set_video_blackout' || params.name === 'syndocal_execute_control_plane' || params.name === 'syndocal_export_diagnostics';
-    const requestId = mutation ? args.requestId : randomUUID();
+    if (listing) {
+      const authentication = await nativeAdmission.run(requestId, () => settleAuthenticatedDiscovery(requestId,
+        (method, args) => executeNativeRequest(options, method, args,
+          method === 'request.status' ? randomUUID() : requestId, requestId, false)));
+      if (authentication.error === 'sidecar_overloaded') return error(-32005, 'Sidecar overloaded. This discovery request was not sent; wait for outstanding requests to finish.');
+      if (authentication.status === 'rejected') return error(-32001, 'Authenticated principal is required before tool discovery.');
+      if (authentication.status !== 'completed' || authentication.result?.ok !== true) return error(-32003, 'Authenticated tool discovery did not complete successfully. No discovery retry was performed.');
+      return success({ tools: toolDefinitions });
+    }
     const method = { syndocal_list_fixtures: 'fixtures.list', syndocal_get_fixture: 'fixtures.get', syndocal_set_fixture_transform: 'fixtures.set_transform', syndocal_set_video_blackout: 'output.set_video_blackout', syndocal_get_request_status: 'request.status', syndocal_get_runtime_status: 'runtime.get', syndocal_get_control_plane_capabilities: 'control_plane.get_capabilities', syndocal_get_recording_status: 'recording.get_status' }[params.name];
     const nativeMethod = params.name === 'syndocal_execute_control_plane' ? 'control_plane.execute'
       : params.name === 'syndocal_export_diagnostics' ? 'diagnostics.export' : method;
@@ -333,9 +357,10 @@ export async function dispatchRpc(options, state, req) {
       ? { operationId: args.operationId, request: args.request }
       : mutation ? Object.fromEntries(Object.entries(args).filter(([key]) => key !== 'requestId')) : args;
     const result = await nativeRequest(options, nativeMethod, nativeParams, requestId, mutation);
-    if (result.status !== 'completed') result.nextAction = 'Query syndocal_get_request_status with the original requestId. Do not automatically resubmit an unknown or pending mutation.';
+    if (result.status !== 'completed' && result.error !== 'sidecar_overloaded') result.nextAction = 'Query syndocal_get_request_status with the original requestId. Do not automatically resubmit an unknown or pending mutation.';
     return success({ content: [{ type: 'text', text: JSON.stringify(result) }], isError: result.status !== 'completed' || result.result?.ok !== true });
   } catch {
+    if (listing) return error(-32603, 'Bridge discovery failed. No automatic retry was performed.');
     return success({ content: [{ type: 'text', text: 'Bridge request failed. No automatic retry was performed; query the original requestId.' }], isError: true });
   } finally { state.active = false; }
 }

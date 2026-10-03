@@ -58,6 +58,7 @@ export async function openNativeStdioSession(options) {
   } catch (error) { await close(); throw error; }
   return {
     processId: child.pid,
+    rpc,
     async call(name, args) {
       const response = await rpc('tools/call', { name, arguments: args });
       assert.equal(response.error, undefined);

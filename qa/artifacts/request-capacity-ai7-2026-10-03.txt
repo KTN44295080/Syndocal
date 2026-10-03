@@ -1,0 +1,5 @@
+
+> syndocal@1.2.0-alpha.69 check:ai7-adversarial-proof C:\Users\janua\OneDrive\ドキュメント\GitHub\Syndocal\app
+> node scripts/check-ai7-adversarial-proof.mjs
+
+AI7 adversarial proof source contract ok; parity, reply-loss, authority, gap, rate, saturation and sidecar boundaries are enumerated

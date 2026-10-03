@@ -1,0 +1,13 @@
+PASS burst excludes --controller-output before executable selection or launch
+PASS burst excludes --controller-restart before executable selection or launch
+PASS burst excludes --controller-expiry before executable selection or launch
+PASS burst excludes --controller-inflight before executable selection or launch
+PASS burst excludes --project-json before executable selection or launch
+PASS burst excludes --backup-json before executable selection or launch
+PASS burst excludes --lease-expiry before executable selection or launch
+PASS burst excludes --external-high-risk before executable selection or launch
+PASS burst excludes --external-revocation before executable selection or launch
+PASS burst excludes --tap-bpm before executable selection or launch
+PASS burst excludes --diagnostics before executable selection or launch
+PASS eleven mutually exclusive burst lanes
+PASS all five protected file fingerprints

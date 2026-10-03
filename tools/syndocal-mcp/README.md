@@ -84,7 +84,32 @@ Position is `{x,y,z}` and rotation is `{pitch,yaw,roll}`. `expectedProject` is `
 
 A new mutation intent needs a new lowercase, hyphenated UUID. Uppercase UUIDs are rejected so one intent has a single request identity. Preserve that UUID until its result is known. `pending` and `unknown` are tool errors with a status-query instruction; the adapter does not retry or automatically poll. A timeout after a mutation may have been sent is `unknown`, never proof that it was not applied. Query the original UUID before deciding any next action. Status requests use a fresh transport envelope UUID but the broker response identifies the queried original UUID. Broker `completed` means terminal processing; only a result with `ok:true` is tool success, so a completed `{ok:false}` response remains an error with its original result. The canonical executor remains a bounded static map; it is not arbitrary `invoke(command, params)`. Query operations are not persisted as mutation tombstones, while canonical mutations retain the same durable replay protection.
 
-Only one broker request may be active per transport session. An overlapping call is explicitly rejected before dispatch. MCP, HTTP, REST, and WebSocket input frames are bounded to 64 KiB; native and sidecar response frames are bounded to 256 KiB. Connection timeout is one second and native response timeout is three seconds. Every broker request carries a fresh client nonce and HMAC-SHA256 proof bound to the descriptor's per-launch session nonce, principal incarnation, request ID, and method. The native broker rejects missing, stale, invalid, or replayed proof before renderer dispatch and then applies the exact ExternalMcp grant. Promoted external MCP principals execute granted R4/R5 operations without individual human approval. Output operations consume the immutable claimed request in the native backend and keep domain fences, leases, rate limits, audits and receipts. The stdio mode writes nothing except newline-delimited MCP JSON-RPC to stdout.
+Only one broker request may be active per transport session, including discovery. Across all transports, one sidecar process admits at most eight native requests before reading the descriptor or credential, verifying the OS process, or opening a native socket. The slot remains owned until process verification and the native socket have finished. There is no admission queue or automatic retry. Overlapping `tools/list` returns JSON-RPC `-32005`; an overlapping tool call now returns structured JSON with the original mutation/status UUID, `status: rejected`, `error: sidecar_overloaded`, and an actionable `nextAction` instead of plain text. These rejections are definitely unsent; authentication failures remain separate. MCP, HTTP, REST, and WebSocket input frames are bounded to 64 KiB; native and sidecar response frames are bounded to 256 KiB. Connection timeout is one second and native response timeout is three seconds. Every broker request carries a fresh client nonce and HMAC-SHA256 proof bound to the descriptor's per-launch session nonce, principal incarnation, request ID, and method. The native broker rejects missing, stale, invalid, or replayed proof before renderer dispatch and then applies the exact ExternalMcp grant. Promoted external MCP principals execute granted R4/R5 operations without individual human approval. Output operations consume the immutable claimed request in the native backend and keep domain fences, leases, rate limits, audits and receipts. The stdio mode writes nothing except newline-delimited MCP JSON-RPC to stdout.
+
+Discovery retains its session and process admission slot while settling a native
+`pending` capability receipt through at most four status lookups, bounded by a
+three-second settling window. Every lookup re-verifies the process and current
+authentication. The capability request is issued exactly once. Native process
+inspection retains its separate ten-second per-call deadline; an inspection
+already in progress is reaped before releasing the slot. Only a successful
+completed receipt exposes tools; revocation still returns `-32001`, while
+incomplete or failed authenticated discovery returns `-32003`. No authentication
+result is cached.
+
+`node tools/syndocal-mcp/check-request-capacity.mjs` uses an owned protocol fixture
+and the real OS process check to verify discovery/call exclusion, 10,000 intents,
+eight admitted requests, unsent overflow, and slot release after failures and
+uncertain mutation replies. It is included in `check:ai5-sidecar` and is not a
+native-product acceptance test.
+
+The opt-in native `--controller-burst` lane sends 10,000 discovery requests and
+10,000 R4 master intents through a real stdio sidecar while receiving all 512
+ArtDMX channels on an owned loopback socket. It records explicit overloads,
+admitted completion/replay, fresh post-burst output and observed packet intervals.
+It uses the isolated lifecycle executable and the same argument/cleanup boundary
+as `--controller-output`. The lane cannot be combined with other live lanes.
+Packet intervals alone do not establish the complete tick/frame/audio/UI,
+local priority Blackout, event publisher, physical-device or venue budgets.
 
 `syndocal_export_diagnostics` requires the exact File grant for
 `syndocal.diagnostics.export.v1`. It writes a sanitized ZIP to a new absolute

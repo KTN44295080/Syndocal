@@ -9,12 +9,14 @@ import { openNativeStdioSession } from './native-stdio-session.mjs';
 import { nativeControllerRestartProbe } from './native-controller-restart.mjs';
 import { nativeControllerExpiryProbe } from './native-controller-expiry.mjs';
 import { nativeControllerInFlightProbe } from './native-controller-inflight.mjs';
+import { nativeControllerBurstProbe } from './native-controller-burst.mjs';
 
 // Software loopback only: an owned ephemeral receiver, one isolated QA route,
 // and real authenticated MCP operations. Retirement/transfer must preserve DMX.
-export async function nativeControllerOutput(backend, options, checks, { restartLifecycle, leaseExpiry = false, inFlightCrash = false } = {}) {
+export async function nativeControllerOutput(backend, options, checks, { restartLifecycle, leaseExpiry = false, inFlightCrash = false, burstRequests = false } = {}) {
   assert.ok(!(restartLifecycle && leaseExpiry), 'Live restart and expiry require separate lanes');
   assert.ok(!inFlightCrash || restartLifecycle, 'In-flight crash requires the owned restart lifecycle');
+  assert.ok(!burstRequests || !(restartLifecycle || leaseExpiry || inFlightCrash), 'Burst requires its own live request lane');
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'syndocal-controller-output-'));
   const receiver = dgram.createSocket('udp4');
   const ownerId = `controller-output-${randomUUID()}`;
@@ -32,6 +34,7 @@ export async function nativeControllerOutput(backend, options, checks, { restart
   let latest;
   let packetCount = 0;
   let phase;
+  const packetTimes = [];
   const full = Buffer.alloc(512);
   // Independently authored fixture: Dimmer 65535, Pan/Tilt 32768, all else 0.
   // EightBit writes the high byte; a 0.5 master rounds 65535*0.5 to 32768.
@@ -50,6 +53,7 @@ export async function nativeControllerOutput(backend, options, checks, { restart
       assert.equal(packet.readUInt16BE(16), 512);
       latest = Buffer.from(packet.subarray(18));
       packetCount++;
+      if (burstRequests && packetTimes.length < 10000) packetTimes.push(performance.now());
       if (phase) {
         assert.ok(latest.equals(phase.expected), `${phase.name}: unexpected 512-channel image`);
         phase.frames++;
@@ -251,6 +255,14 @@ export async function nativeControllerOutput(backend, options, checks, { restart
       checks.push({ check: 'explicit-native-project-replacement-stops-owned-loopback-sender-and-source-is-unchanged', passed: true,
         ownership: stopped, packetsTotal: packetCount, readOverloads });
     };
+    if (burstRequests) {
+      await nativeControllerBurstProbe({ grant, query, output, send, accepted, state, stable,
+        awaitImage, full, half, pause, active, packetTimes: () => packetTimes,
+        nextOutputRequestId: () => numericRequestId++, rpc: (method, params) => mcp.rpc(method, params),
+        call: (name, args) => mcp.call(name, args), checks });
+      await finish();
+      return;
+    }
     if (leaseExpiry) {
       await nativeControllerExpiryProbe({ grant, query, output, send, accepted, rejected,
         state, stable, awaitImage, full, half, pause, healthy, active, armed, acquireStarted,

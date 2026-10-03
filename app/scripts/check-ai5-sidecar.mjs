@@ -148,5 +148,11 @@ if (process.argv.includes("--self-test")) {
   });
   process.stdout.write(securityResult.stdout);
   process.stderr.write(securityResult.stderr);
+  const capacity = fileURLToPath(new URL("../../tools/syndocal-mcp/check-request-capacity.mjs", import.meta.url));
+  const capacityResult = await execFileAsync(process.execPath, [capacity], {
+    cwd: root, windowsHide: true, maxBuffer: 1024 * 1024, timeout: 30000,
+  });
+  process.stdout.write(capacityResult.stdout);
+  process.stderr.write(capacityResult.stderr);
   console.log("AI5 sidecar auth/transport boundary ok; authenticated discovery, nonce proof, exact grant admission, bounded MCP/HTTP/REST/WebSocket forwarding and redaction verified");
 }
