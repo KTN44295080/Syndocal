@@ -1,0 +1,23 @@
+node:internal/modules/run_main:123
+    triggerUncaughtException(
+    ^
+
+AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
++ actual - expected
+
++ 'unknown'
+- 'rejected'
+
+    at nativeControllerRestartProbe (file:///C:/Users/janua/OneDrive/%E3%83%89%E3%82%AD%E3%83%A5%E3%83%A1%E3%83%B3%E3%83%88/GitHub/Syndocal/tools/syndocal-mcp/native-controller-restart.mjs:68:10)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async nativeControllerOutput (file:///C:/Users/janua/OneDrive/%E3%83%89%E3%82%AD%E3%83%A5%E3%83%A1%E3%83%B3%E3%83%88/GitHub/Syndocal/tools/syndocal-mcp/native-controller-output.mjs:249:7)
+    at async file:///C:/Users/janua/OneDrive/%E3%83%89%E3%82%AD%E3%83%A5%E3%83%A1%E3%83%B3%E3%83%88/GitHub/Syndocal/tools/syndocal-mcp/check-native-lifecycle.mjs:187:5 {
+  generatedMessage: true,
+  code: 'ERR_ASSERTION',
+  actual: 'unknown',
+  expected: 'rejected',
+  operator: 'strictEqual',
+  diff: 'simple'
+}
+
+Node.js v22.22.1

@@ -1,0 +1,1 @@
+PASS eight conflicting opt-in combinations reject before executable selection, pairing or process launch.

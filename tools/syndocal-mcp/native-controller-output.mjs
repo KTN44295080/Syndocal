@@ -5,10 +5,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { openNativeStdioSession } from './native-stdio-session.mjs';
+import { nativeControllerRestartProbe } from './native-controller-restart.mjs';
 
 // Software loopback only: an owned ephemeral receiver, one isolated QA route,
 // and real authenticated MCP operations. Retirement/transfer must preserve DMX.
-export async function nativeControllerOutput(backend, options, checks) {
+export async function nativeControllerOutput(backend, options, checks, { restartLifecycle } = {}) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'syndocal-controller-output-'));
   const receiver = dgram.createSocket('udp4');
   const ownerId = `controller-output-${randomUUID()}`;
@@ -227,6 +228,39 @@ export async function nativeControllerOutput(backend, options, checks) {
     checks.push({ check: 'external-r4-arm-without-dialog-produces-received-live-artdmx', passed: true,
       receipt: arm, state: armed, ...live.observation });
 
+    const finish = async () => {
+      // Native project replacement explicitly disarms runtime output. The
+      // retired raw role route cannot be used, even for QA cleanup.
+      await load(cleanupFile);
+      projectLoaded = false;
+      const stopped = await ownership();
+      assert.equal(stopped.lighting_allowed, false);
+      assert.equal(stopped.video_allowed, false);
+      await pause(250);
+      const count = packetCount;
+      await pause(500);
+      healthy();
+      assert.equal(packetCount, count, 'Explicit project replacement must stop the owned UDP sender');
+      assert.equal(digest(await fs.readFile(file)), digest(bytes));
+      checks.push({ check: 'explicit-native-project-replacement-stops-owned-loopback-sender-and-source-is-unchanged', passed: true,
+        ownership: stopped, packetsTotal: packetCount, readOverloads });
+    };
+    if (restartLifecycle) {
+      await nativeControllerRestartProbe({ backend: () => backend,
+        restart: async observeStopped => { backend = await restartLifecycle(observeStopped); },
+        closeStdio: async () => { await mcp.close(); mcp = undefined; },
+        openStdio: async () => { mcp = await openNativeStdioSession(options); },
+        status: requestId => mcp.call('syndocal_get_request_status', { requestId }),
+        promote: () => backend.invoke('agent_authority_promote_v1', {
+          principalId: options.principalId, principalIncarnation: options.principalIncarnation,
+        }),
+        grant, query, output, send, accepted, rejected, load, file, ownerId,
+        ownership, state, stable, awaitImage, full, half, pause, healthy,
+        packets: () => packetCount, checks });
+      await finish();
+      return;
+    }
+
     const retired = await stable('owner-retirement-preserves-full', full, async () => {
       registeredOwnerId = `replacement-${randomUUID()}`;
       await backend.invoke('register_project_transaction_owner', { ownerId: registeredOwnerId });
@@ -292,21 +326,7 @@ export async function nativeControllerOutput(backend, options, checks) {
     });
     checks.push({ check: 'lease-relinquishment-preserves-live-image-and-rejects-subsequent-output', passed: true, ...relinquished.observation });
 
-    // Existing native project replacement explicitly disarms runtime output.
-    // The retired raw role route cannot be used, even for QA cleanup.
-    await load(cleanupFile);
-    projectLoaded = false;
-    const stopped = await ownership();
-    assert.equal(stopped.lighting_allowed, false);
-    assert.equal(stopped.video_allowed, false);
-    await pause(250);
-    const count = packetCount;
-    await pause(500);
-    healthy();
-    assert.equal(packetCount, count, 'Explicit project replacement must stop the owned UDP sender');
-    assert.equal(digest(await fs.readFile(file)), digest(bytes));
-    checks.push({ check: 'explicit-native-project-replacement-stops-owned-loopback-sender-and-source-is-unchanged', passed: true,
-      ownership: stopped, packetsTotal: packetCount, readOverloads });
+    await finish();
   } catch (error) { failure = error; throw error; }
   finally {
     // Even a failed probe must disarm its own QA profile before returning to

@@ -1,0 +1,257 @@
+{
+  "schemaVersion": 1,
+  "timestamp": "2026-10-03T08:15:45.930Z",
+  "passed": false,
+  "executable": "C:\\Users\\janua\\AppData\\Local\\Temp/syndocal-native-acceptance-target/release/syndocal.exe",
+  "executableSha256": "f14e39191d0836247dd62154126c9d691f92381dc7ae8523c9c780846021fd81",
+  "sidecarSha256": "bc6ad436dac381513df992fdbef0aa800c6793704f4c1848b7c8312ec474e564",
+  "runnerSha256": "049cf1aadd5f5741f668215b8ed981fec4252e7f3402934447d96bca1407f2f6",
+  "backendHarnessSha256": "ade29aa256d8ff17374bb4b3e893ea9a07f71f8fa2cf2bb72b21f80d4e0e8b1f",
+  "controllerOutputHarnessSha256": "fd840e45ac5099329fc3e700215b9b7a3950b4b74bee0b6aad2bc7159f62d2e8",
+  "stdioHarnessSha256": "494aa9aa27b686aa5c60f99d99fd282d5d3ffd8ef49859c640cedc7ffbbecec2",
+  "controllerOutputTransport": "Separate authenticated stdio MCP sidecar, actual native loopback-only Art-Net sender, owned ephemeral 127.0.0.1 UDP receiver",
+  "controllerRestartHarnessSha256": "b82f5f6183ade2e0a6eddf37fb24557bdb8a50ecfa769cb19f9c116be5c75a6e",
+  "profile": "jp.seraf.ktn.syndocal.qa.mcp-lifecycle",
+  "checks": [
+    {
+      "check": "native-loopback-project-load-does-not-arm",
+      "passed": true,
+      "fixtureSourceSha256": "2de7f4d6a5e8ba0c0cedf7ef664d65030fde37d492ae3fa2b6475e77a02f7bf6",
+      "projectSha256": "c8a7745f59131bda2039c25727201e6b48b5860e6e96d6aa60a95fca43716b8f",
+      "destination": {
+        "address": "127.0.0.1",
+        "family": "IPv4",
+        "port": 57964
+      },
+      "ownership": {
+        "role": "Standby",
+        "effective_role": "Standby",
+        "desired_role": "Lighting",
+        "persisted_role": "Lighting",
+        "state": "Ready",
+        "generation": 1,
+        "epoch": 1,
+        "lighting_allowed": false,
+        "video_allowed": false,
+        "lighting_reason": "ProjectSwapDisarmed",
+        "video_reason": "ProjectSwapDisarmed",
+        "error": null
+      },
+      "packets": 0
+    },
+    {
+      "check": "external-loopback-exact-grant-safe-mode-and-acquire-without-output",
+      "passed": true,
+      "generation": 1
+    },
+    {
+      "check": "external-r4-arm-without-dialog-produces-received-live-artdmx",
+      "passed": true,
+      "receipt": {
+        "argument_fingerprint": "db3af3e29ee44c9af19468377e094bf01ebfbe212b0238d2f39f95ee798e93a0",
+        "audit_sequence": 2,
+        "fence_after": {
+          "output_epoch": 3,
+          "output_generation": 3,
+          "process_incarnation": 5495359050835239,
+          "project_checkpoint_hash": "93daaf393e4f30aaa93d460ac899c98b39071cdffe5fac39ce496e02aad25d01",
+          "project_epoch": 1,
+          "project_publication_generation": 2,
+          "project_revision": 0,
+          "safety_blackout_epoch": 1,
+          "safety_blackout_generation": 1,
+          "session_incarnation": 4658800060247075
+        },
+        "fence_before": {
+          "output_epoch": 2,
+          "output_generation": 2,
+          "process_incarnation": 5495359050835239,
+          "project_checkpoint_hash": "93daaf393e4f30aaa93d460ac899c98b39071cdffe5fac39ce496e02aad25d01",
+          "project_epoch": 1,
+          "project_publication_generation": 2,
+          "project_revision": 0,
+          "safety_blackout_epoch": 1,
+          "safety_blackout_generation": 1,
+          "session_incarnation": 4658800060247075
+        },
+        "lease_result": {
+          "audit_sequence": 4,
+          "authority": {
+            "generation": 1,
+            "lease_id": "lease-0000000000000001"
+          },
+          "changes": [
+            {
+              "after_generation": 1,
+              "after_phase": "held_active",
+              "after_resources": [
+                "lighting"
+              ],
+              "before_generation": 1,
+              "before_phase": "held_active",
+              "before_resources": [
+                "lighting"
+              ],
+              "lease_id": "lease-0000000000000001"
+            }
+          ],
+          "outcome": "authorized",
+          "phase": "held_active",
+          "resources": [
+            "lighting"
+          ]
+        },
+        "operation_id": "syndocal.output.ownership.arm.v2",
+        "outcome": "applied",
+        "request_id": 1791015325062,
+        "shape_sha256": "a0773e1472bdfef36df801769dbc4ed1fb7404aac07e551063a656601f610432"
+      },
+      "state": {
+        "ownership": {
+          "role": "Lighting",
+          "effective_role": "Lighting",
+          "desired_role": "Lighting",
+          "persisted_role": "Lighting",
+          "state": "Ready",
+          "generation": 2,
+          "epoch": 2,
+          "lighting_allowed": true,
+          "video_allowed": false,
+          "lighting_reason": "OwnedByMachineRole",
+          "video_reason": "BlockedByMachineRole",
+          "error": null
+        },
+        "output": {
+          "enabled": true,
+          "port": 57964,
+          "protocol": "ArtNet",
+          "serial_baud_rate": 57600,
+          "serial_port": "",
+          "target_ip": "127.0.0.1",
+          "universe": 0
+        },
+        "routes": [
+          {
+            "enabled": true,
+            "port": 57964,
+            "protocol": "ArtNet",
+            "serial_baud_rate": 57600,
+            "serial_port": "",
+            "target_ip": "127.0.0.1",
+            "universe": 0
+          }
+        ],
+        "master": 1,
+        "blackout": false,
+        "safety": false,
+        "attributes": [
+          {
+            "attribute": "Dimmer",
+            "value": 65535
+          },
+          {
+            "attribute": "ColorRed",
+            "value": 0
+          },
+          {
+            "attribute": "ColorGreen",
+            "value": 0
+          },
+          {
+            "attribute": "ColorBlue",
+            "value": 0
+          },
+          {
+            "attribute": "Pan",
+            "value": 32768
+          },
+          {
+            "attribute": "Tilt",
+            "value": 32768
+          }
+        ]
+      },
+      "phase": "armed-full",
+      "frames": 21,
+      "payloadSha256": "65228acc43d02190277f6ebf9ec067c7135aaddc9f0c6a610c3052a7cf9213d1",
+      "channels1to8": [
+        255,
+        0,
+        0,
+        0,
+        128,
+        0,
+        128,
+        0
+      ]
+    },
+    {
+      "check": "pre-crash-live-native-master-half-image",
+      "passed": true,
+      "phase": "pre-crash-half",
+      "frames": 22,
+      "payloadSha256": "3e129a77b8e19b39618c517551cb63c468d1a98d5ccaef39127a599476a0a2ec",
+      "channels1to8": [
+        128,
+        0,
+        0,
+        0,
+        128,
+        0,
+        128,
+        0
+      ]
+    },
+    {
+      "check": "live-stdio-disconnect-is-not-native-owner-or-output-loss",
+      "passed": true,
+      "phase": "stdio-disconnect-preserves-half",
+      "frames": 23,
+      "payloadSha256": "3e129a77b8e19b39618c517551cb63c468d1a98d5ccaef39127a599476a0a2ec",
+      "channels1to8": [
+        128,
+        0,
+        0,
+        0,
+        128,
+        0,
+        128,
+        0
+      ]
+    },
+    {
+      "check": "live-native-process-termination-stops-loopback-sender",
+      "passed": true,
+      "packetsAtStop": 211
+    },
+    {
+      "check": "restart-same-owner-text-does-not-reclaim-lease-or-arm",
+      "passed": true,
+      "ownership": {
+        "role": "Standby",
+        "effective_role": "Standby",
+        "desired_role": "Lighting",
+        "persisted_role": "Lighting",
+        "state": "Failed",
+        "generation": 0,
+        "epoch": 0,
+        "lighting_allowed": false,
+        "video_allowed": false,
+        "lighting_reason": "StartupDenied",
+        "video_reason": "StartupDenied",
+        "error": "Startup is fail-closed; explicitly arm machine output role Lighting"
+      },
+      "processIncarnationChanged": true,
+      "sessionIncarnationChanged": true
+    }
+  ],
+  "normalAppIdentityUnchanged": true,
+  "credentialRevoked": true,
+  "credentialFileRemoved": true,
+  "nativePanicLocations": [],
+  "nonclaims": [
+    "QA identifier release build, not the distributed artifact",
+    "Actual native forced process termination/restart and explicit re-Arm with software loopback reception only; no physical fixtures, venue, serial DMX, video, worker-specific failure, in-flight mutation crash durability or whole controller-loss/re-arm acceptance",
+    "No durable authored/output mutation crash publication acceptance"
+  ]
+}

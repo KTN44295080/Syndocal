@@ -185,6 +185,21 @@ process. Do not combine this lane with the other opt-in probes. This records
 actual software loopback reception, not physical fixtures, video, process/worker
 loss, full controller-loss/re-arm or venue acceptance.
 
+Add `--controller-restart` as a separate native process-loss lane. It uses the
+same independent loopback project and receiver, disconnects the owned stdio
+client while live DMX continues, then terminates and relaunches only the exact
+isolated QA executable. The receiver must observe silence until a fresh exact
+lease and separate explicit R4 Arm. Reusing owner text or the persisted desired
+role cannot reclaim authority. Previous-process terminal lookup and exact UUID
+replay stay `unknown` without execution; a different shape under that UUID
+conflicts, and an old process fence or an unclaimed old lease rejects. Explicit
+private project reload and new lease acquisition do not resume output. New Arm
+resumes the independently authored full image, and exact replay stays idempotent.
+The helper cleans the same owned resources as `--controller-output`; do not
+combine these flags or other opt-in lanes. This is software loopback process-loss
+and re-Arm evidence, not physical fixtures/video, worker-specific failure,
+in-flight mutation crash durability or complete controller-loss acceptance.
+
 Canonical native QueryError objects retain their bounded `code`, `message`,
 `retryable` and `resnapshot_required` fields in `result.error.native_query` for
 rejected reads. The outer error code stays `request_rejected`. Unrecognized
