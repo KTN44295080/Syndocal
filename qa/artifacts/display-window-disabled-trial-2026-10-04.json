@@ -1,0 +1,60 @@
+{
+  "schemaVersion": 1,
+  "timestamp": "2026-10-03T18:57:56.148Z",
+  "passed": false,
+  "executable": "C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-native-acceptance-target\\release\\syndocal.exe",
+  "executableSha256": "fa8386a50f1038a6e80ddaa62ca37c2fefa9a726881fd28906cfad31d611824b",
+  "sidecarSha256": "e7bb740aa5ef5993dd5a5f01d37f80077c58f3996f51a0874f9565c79a843c12",
+  "runnerSha256": "6de988c04fdd4a63cebc1404063233136abfb953db1a3745e5c1b9414b23b802",
+  "backendHarnessSha256": "ade29aa256d8ff17374bb4b3e893ea9a07f71f8fa2cf2bb72b21f80d4e0e8b1f",
+  "displayWindowHarnessSha256": "fba385e02d6fbcc0747426196b507e1f7069b026b26d5b0b2a72925e4e249b65",
+  "displayWindowControllerSha256": "f269f4a6229ba1a40040adb0aecf35520d6ef508f681876fb935124dda86a0bb",
+  "displayWindowPhysicalCoreSha256": "535ee1eee33bc5b004f1453581ceb547d43ad58efa188cfc3ba68e69a2852b5d",
+  "stdioHarnessSha256": "7a7f885a010f5d1de8823db6585204562b69358ce0253f4829b33c821c846e6d",
+  "profile": "jp.seraf.ktn.syndocal.qa.mcp-lifecycle",
+  "checks": [
+    {
+      "check": "native-editor-display-exact-target-and-missing-grant-rejection",
+      "passed": true,
+      "target": {
+        "index": 0,
+        "identity": "b616fa670a69c633b10e9b74616dbfd585d3bfe9e4ce0cd0ef307295e0013f75",
+        "isEditorMonitor": true
+      },
+      "sourceSha256": "279433ee1846cae1277df235596f0aff4540a00e468f453bf590a9081c8ca559"
+    },
+    {
+      "check": "native-editor-display-stale-fence-rejected-before-shell",
+      "passed": true
+    },
+    {
+      "check": "native-external-editor-display-open-without-human-confirmation",
+      "passed": false,
+      "receipt": {
+        "requestId": "d6b9aa86-bedf-460d-8de3-fab19695289c",
+        "status": "completed",
+        "result": {
+          "ok": false,
+          "operation_id": "syndocal.output.display.window.set_open.v2",
+          "result": {
+            "rejection": {
+              "error": "publication_failed",
+              "operation_id": "syndocal.output.display.window.set_open.v2",
+              "request_id": 1791053865212
+            },
+            "type": "rejected"
+          }
+        }
+      }
+    }
+  ],
+  "normalAppIdentityUnchanged": true,
+  "credentialRevoked": true,
+  "credentialFileRemoved": true,
+  "nativePanicLocations": [],
+  "nonclaims": [
+    "QA identifier release build, not the distributed artifact",
+    "Actual native small decorated Display shell/GPU lifecycle on the editor monitor through authenticated MCP, exact grants/fences/lease and terminal receipt replay. Private disabled empty composition, no media/audio/active DMX route or fixture. No visible content/color/pixel, fullscreen/topology/hotplug, AddDisplay, all output operations, hardware/venue or release acceptance",
+    "No durable authored/output mutation crash publication acceptance"
+  ]
+}

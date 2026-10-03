@@ -276,22 +276,46 @@ fn confirm_native_dangerous_output_action(
     )
 }
 
-/// The physical Display-window operation is normally a LocalExplicitAction.
-/// Opening over the editor is the sole exception: use the same parented
-/// Warning/Yes-No helper as AddDisplay and treat every response except Yes as
-/// a terminal cancellation.
-pub(crate) fn confirm_editor_display_window_open(window: &WebviewWindow) -> bool {
-    let (title, description) = native_output_confirmation_copy_for_editor_target(true);
-    matches!(
-        MessageDialog::new()
-            .set_level(MessageLevel::Warning)
-            .set_title(title)
-            .set_description(description)
-            .set_buttons(MessageButtons::YesNo)
-            .set_parent(window)
-            .show(),
-        MessageDialogResult::Yes
-    )
+/// Native-only origin, selected by the local command or the authenticated,
+/// immutable bridge executor. It is never part of a renderer/wire request.
+#[derive(Clone, Copy)]
+pub(crate) enum OutputConfirmationOrigin {
+    LocalDesktop,
+    AuthenticatedExternalMcp,
+}
+
+impl OutputConfirmationOrigin {
+    fn confirm_editor_target<F>(self, confirmation: F) -> bool
+    where
+        F: FnOnce() -> bool,
+    {
+        match self {
+            Self::LocalDesktop => confirmation(),
+            Self::AuthenticatedExternalMcp => true,
+        }
+    }
+}
+
+/// Local desktop opens over the editor require the parented Warning/Yes-No
+/// dialog. Authenticated external execution retains domain admission without
+/// waiting for an additional human confirmation in this deeper physical seam.
+pub(crate) fn confirm_editor_display_window_open(
+    window: &WebviewWindow,
+    origin: OutputConfirmationOrigin,
+) -> bool {
+    origin.confirm_editor_target(|| {
+        let (title, description) = native_output_confirmation_copy_for_editor_target(true);
+        matches!(
+            MessageDialog::new()
+                .set_level(MessageLevel::Warning)
+                .set_title(title)
+                .set_description(description)
+                .set_buttons(MessageButtons::YesNo)
+                .set_parent(window)
+                .show(),
+            MessageDialogResult::Yes
+        )
+    })
 }
 
 fn output_confirmation_gate<F>(
@@ -345,9 +369,15 @@ pub(crate) fn execute_output_control(
             request,
         );
     }
-    execute_output_control_with_confirmation(app, window, state, query_state, request, |action| {
-        confirm_native_dangerous_output_action(window, action)
-    })
+    execute_output_control_with_confirmation(
+        app,
+        window,
+        state,
+        query_state,
+        request,
+        OutputConfirmationOrigin::LocalDesktop,
+        |action| confirm_native_dangerous_output_action(window, action),
+    )
 }
 
 /// Only the authenticated native bridge executor calls this adapter. It has
@@ -374,7 +404,15 @@ pub(crate) fn execute_external_output_control(
             execute_output_lease_lifecycle_with_confirmation(app, window, state, query_state, operation_id, request, |_| true),
         OutputControlActionV2::ResetShowSpoutOutputs {} =>
             execute_show_spout_reset_without_lease_control_with_confirmation(state, query_state, window.label(), request, |_| true),
-        _ => execute_output_control_with_confirmation(app, window, state, query_state, request, |_| true),
+        _ => execute_output_control_with_confirmation(
+            app,
+            window,
+            state,
+            query_state,
+            request,
+            OutputConfirmationOrigin::AuthenticatedExternalMcp,
+            |_| true,
+        ),
     }
 }
 
@@ -624,6 +662,7 @@ fn execute_output_control_with_confirmation<F>(
     state: &AppState,
     query_state: &ControlPlaneQueryState,
     request: OutputControlCommandRequestV2,
+    confirmation_origin: OutputConfirmationOrigin,
     confirmation: F,
 ) -> OutputControlResponseV2
 where
@@ -1283,6 +1322,7 @@ where
                 expected_owner_window_label: &binding.window_label,
                 expected_owner_incarnation: binding.owner_incarnation,
                 managed_terminal_identity: Some(managed_terminal_identity),
+                confirmation_origin,
             },
         ),
         OutputControlActionV2::AssignVideoOutputComposition {
@@ -6603,6 +6643,45 @@ mod tests {
         assert_ne!(ordinary, editor);
         assert!(editor.0.contains("editor") || editor.0.contains("エディタ"));
         assert!(editor.1.contains("display") || editor.1.contains("ディスプレイ"));
+    }
+
+    #[test]
+    fn editor_display_confirmation_respects_native_origin_and_local_cancellation() {
+        let calls = std::cell::Cell::new(0);
+        for answer in [false, true] {
+            assert_eq!(
+                OutputConfirmationOrigin::LocalDesktop.confirm_editor_target(|| {
+                    calls.set(calls.get() + 1);
+                    answer
+                }),
+                answer,
+            );
+        }
+        assert_eq!(calls.get(), 2);
+        assert!(OutputConfirmationOrigin::AuthenticatedExternalMcp.confirm_editor_target(|| {
+            panic!("authenticated external Display open must not invoke the OS dialog")
+        }));
+        assert_eq!(calls.get(), 2);
+    }
+
+    #[test]
+    fn renderer_display_action_cannot_supply_confirmation_origin_or_bypass() {
+        let action = OutputControlActionV2::SetDisplayWindowOpen {
+            output_id: 1,
+            open: true,
+            lease: OutputLeaseAuthorityV1 {
+                lease_id: "lease-0000000000000001".to_string(),
+                generation: 1,
+            },
+        };
+        for (field, value) in [
+            ("confirmation_origin", serde_json::json!("authenticated_external_mcp")),
+            ("skip_confirmation", serde_json::json!(true)),
+        ] {
+            let mut wire = serde_json::to_value(&action).unwrap();
+            wire[field] = value;
+            assert!(serde_json::from_value::<OutputControlActionV2>(wire).is_err());
+        }
     }
 
     #[test]

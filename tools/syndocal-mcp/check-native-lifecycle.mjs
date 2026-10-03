@@ -17,9 +17,19 @@ import { nativeProjectJson } from './native-project-json.mjs';
 import { nativeBackupJson } from './native-backup-json.mjs';
 import { nativeControllerOutput } from './native-controller-output.mjs';
 import { nativeRuntimeAuthority } from './native-runtime-authority.mjs';
+import { nativeDisplayWindow } from './native-display-window.mjs';
 
 const exec = promisify(execFile);
 const args = process.argv.slice(2);
+const displayWindow = args.includes('--display-window');
+if (displayWindow) {
+  args.splice(args.indexOf('--display-window'), 1);
+  assert.ok(!args.some(arg => ['--runtime-authority', '--controller-event-pressure', '--controller-safety-pressure',
+    '--controller-burst', '--controller-inflight', '--controller-expiry', '--controller-restart', '--controller-output',
+    '--authored-controls', '--input-diagnostics', '--backup-json', '--project-json', '--lease-expiry', '--tap-bpm',
+    '--diagnostics', '--external-high-risk', '--external-revocation'].includes(arg)),
+  'Display shell acceptance owns a separate native window/project/output lane');
+}
 const runtimeAuthority = args.includes('--runtime-authority');
 if (runtimeAuthority) {
   args.splice(args.indexOf('--runtime-authority'), 1);
@@ -210,6 +220,7 @@ try {
   options.credentialFile = path.join(credentialDirectory, 'credential');
   await pair(); await install();
   if (runtimeAuthority) await nativeRuntimeAuthority(backend, options, checks);
+  if (displayWindow) await nativeDisplayWindow(backend, options, checks);
   if (leaseExpiry) await nativeLeaseExpiry(backend, options, checks);
   if (externalHighRisk) await nativeExternalHighRisk(backend, options, checks);
   if (controllerOutput) await nativeControllerOutput(backend, options, checks);
@@ -398,6 +409,12 @@ await fs.writeFile(evidence, `${JSON.stringify({ schemaVersion: 1, timestamp: ne
     runtimeAuthorityAdapterSha256: createHash('sha256').update(await fs.readFile(new URL('../../app/src/agentBridgeTools.ts', import.meta.url))).digest('hex'),
     stdioHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-stdio-session.mjs', import.meta.url))).digest('hex'),
   } : {}),
+  ...(displayWindow ? {
+    displayWindowHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-display-window.mjs', import.meta.url))).digest('hex'),
+    displayWindowControllerSha256: createHash('sha256').update(await fs.readFile(new URL('../../app/src-tauri/src/control_plane_runtime.rs', import.meta.url))).digest('hex'),
+    displayWindowPhysicalCoreSha256: createHash('sha256').update(await fs.readFile(new URL('../../app/src-tauri/src/main.rs', import.meta.url))).digest('hex'),
+    stdioHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-stdio-session.mjs', import.meta.url))).digest('hex'),
+  } : {}),
   ...(controllerSafetyPressure ? {
     safetyPressureHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-controller-safety-pressure.mjs', import.meta.url))).digest('hex'),
     controllerOutputHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-controller-output.mjs', import.meta.url))).digest('hex'),
@@ -412,7 +429,8 @@ await fs.writeFile(evidence, `${JSON.stringify({ schemaVersion: 1, timestamp: ne
   credentialRevoked: !cleanupNeeded, credentialFileRemoved: true,
   nativePanicLocations,
   nonclaims: ['QA identifier release build, not the distributed artifact',
-    controllerEventPressure ? 'Actual native 2048-record retention gap, authenticated MCP slow subscriber, authoritative resnapshot and exact runtime-delta convergence under 64-slot pending broker pressure with live whole-image loopback output. Local fenced Loop changes keep the established 4/s rate; real production query adapter completes individually claimed reads. No Engine command-queue saturation, every adapter/event, complete tick/frame/audio/UI budget, physical device, venue or release acceptance'
+    displayWindow ? 'Actual native small decorated enabled Display shell/GPU lifecycle on the editor monitor through authenticated MCP, exact grants/fences/lease and terminal receipt replay. Private empty composition, no media/audio/active DMX route or fixture. No visible content/color/pixel, fullscreen/topology/hotplug, AddDisplay, all output operations, hardware/venue or release acceptance'
+    : controllerEventPressure ? 'Actual native 2048-record retention gap, authenticated MCP slow subscriber, authoritative resnapshot and exact runtime-delta convergence under 64-slot pending broker pressure with live whole-image loopback output. Local fenced Loop changes keep the established 4/s rate; real production query adapter completes individually claimed reads. No Engine command-queue saturation, every adapter/event, complete tick/frame/audio/UI budget, physical device, venue or release acceptance'
     : controllerSafetyPressure ? 'Actual 64-slot external broker pending saturation, 10000 R4 intents and local native S0 all-zero loopback output before/after revocation and while Kill Switch is active. Existing renderer registration retains immutable external work; no Engine command-queue saturation, complete tick/frame/audio/UI budget, publisher event-gap, physical device, venue or release acceptance'
       : controllerBurst ? 'Actual 10000 stdio discovery and 10000 R4 master intents with software loopback ArtDMX reception and measured packet intervals only; no complete output tick/frame/audio/UI budget, publisher event-gap, local priority Blackout under saturation, physical device, venue or release acceptance'
       : controllerInFlight ? 'Actual native queued, claimed and native-committed R4 master/R5 diagnostic requests interrupted before broker completion; unknown restart status never re-executes, software loopback re-Arm remains explicit and owned export bytes remain intact. No physical fixtures, recording/authored crash matrix, worker-internal interruption, full durable mutation completion or release acceptance'

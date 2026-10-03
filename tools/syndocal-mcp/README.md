@@ -195,6 +195,19 @@ capture expiry across a native restart. Use a new evidence path for every run.
 This tests a private temporary destination through a process-verified native
 backend session and covers the local preview/acknowledge flow.
 
+Add `--display-window` as a separate native shell lane. It loads an individually
+owned enabled Display into the empty QA project, resolves the exact current
+editor monitor and uses authenticated stdio MCP for Both lease/Arm and Display
+open/close/reopen. The small decorated window has an empty composition; all DMX
+routes are disabled loopback metadata and no media/audio/fixtures are loaded.
+Exact missing grants and stale fences must reject before a shell exists. An
+authorized editor-target open must finish without a human confirmation; receipt
+replay must keep the same native HWND. The probe checks authored/source-byte
+preservation, retires its window and replaces its private project with empty
+disarmed state. It cannot combine with another optional lane. This establishes
+native shell/backend acceptance, not content pixels, fullscreen/hotplug,
+AddDisplay, physical/venue or all R4/R5 acceptance. No DOM or Computer Use.
+
 Add `--runtime-authority` as a separate native read lane. It verifies exact MCP
 grants and preserves the actual idle Follow `stale_fence` rejection, then uses
 the normal New operation on the private empty QA project to establish a Follow

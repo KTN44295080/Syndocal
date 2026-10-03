@@ -73999,6 +73999,7 @@ struct DisplayOutputWindowControlRequest<'a> {
     expected_owner_window_label: &'a str,
     expected_owner_incarnation: u64,
     managed_terminal_identity: Option<ManagedExactBothOutputControlTerminalIdentity<'a>>,
+    confirmation_origin: control_plane_runtime::OutputConfirmationOrigin,
 }
 
 struct VideoOutputCompositionAssignmentControlRequest<'a> {
@@ -80007,6 +80008,7 @@ fn set_display_output_window_open_with_output_control_fence(
         expected_owner_principal,
         expected_owner_window_label,
         expected_owner_incarnation,
+        confirmation_origin,
         ..
     } = request;
     let output = state
@@ -80074,7 +80076,10 @@ fn set_display_output_window_open_with_output_control_fence(
         }
     }
     if editor_target_before
-        && !control_plane_runtime::confirm_editor_display_window_open(editor_window)
+        && !control_plane_runtime::confirm_editor_display_window_open(
+            editor_window,
+            confirmation_origin,
+        )
     {
         return Err("Display window open was cancelled".to_string());
     }

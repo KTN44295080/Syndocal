@@ -1,0 +1,90 @@
+{
+  "passed": true,
+  "checks": [
+    {
+      "lane": "--runtime-authority",
+      "exit": 1,
+      "passed": true
+    },
+    {
+      "lane": "--controller-event-pressure",
+      "exit": 1,
+      "passed": true
+    },
+    {
+      "lane": "--controller-safety-pressure",
+      "exit": 1,
+      "passed": true
+    },
+    {
+      "lane": "--controller-burst",
+      "exit": 1,
+      "passed": true
+    },
+    {
+      "lane": "--controller-inflight",
+      "exit": 1,
+      "passed": true
+    },
+    {
+      "lane": "--controller-expiry",
+      "exit": 1,
+      "passed": true
+    },
+    {
+      "lane": "--controller-restart",
+      "exit": 1,
+      "passed": true
+    },
+    {
+      "lane": "--controller-output",
+      "exit": 1,
+      "passed": true
+    },
+    {
+      "lane": "--authored-controls",
+      "exit": 1,
+      "passed": true
+    },
+    {
+      "lane": "--input-diagnostics",
+      "exit": 1,
+      "passed": true
+    },
+    {
+      "lane": "--backup-json",
+      "exit": 1,
+      "passed": true
+    },
+    {
+      "lane": "--project-json",
+      "exit": 1,
+      "passed": true
+    },
+    {
+      "lane": "--lease-expiry",
+      "exit": 1,
+      "passed": true
+    },
+    {
+      "lane": "--tap-bpm",
+      "exit": 1,
+      "passed": true
+    },
+    {
+      "lane": "--diagnostics",
+      "exit": 1,
+      "passed": true
+    },
+    {
+      "lane": "--external-high-risk",
+      "exit": 1,
+      "passed": true
+    },
+    {
+      "lane": "--external-revocation",
+      "exit": 1,
+      "passed": true
+    }
+  ]
+}
