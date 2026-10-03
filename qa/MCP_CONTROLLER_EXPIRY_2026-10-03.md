@@ -81,15 +81,27 @@ the owned QA process, stdio child, receiver, project and credentials.
 The cached optimized isolated Windows QA executable is unchanged from the
 preceding pinned MSVC 14.44.35207 build. No compiler ran in this tests/docs-only
 checkpoint; probe-log warnings are distinct from compiler measurements. Normal
-`target/release/syndocal.exe` remains running with its preceding artifact identity.
+`target/release/syndocal.exe` retains its preceding artifact identity.
 Protected pairing PIN, localization, DJ runtime and AI3 files remain unchanged.
 
 QA executable SHA-256:
 `f14e39191d0836247dd62154126c9d691f92381dc7ae8523c9c780846021fd81`.
 Normal executable SHA-256:
-`a285c1eb18b5942b14dfee011c319474346331a6d274ced778eaa39ab9b551be`;
-PID 34572 remains responsive. These are the preceding checkpoint's builds, not
+`a285c1eb18b5942b14dfee011c319474346331a6d274ced778eaa39ab9b551be`.
+PID 34572 was responsive at the initial observation. These are the preceding checkpoint's builds, not
 new clean-install or release artifacts.
+
+After the initial checkpoint push, the final process inventory found PID 34572
+absent. Its exit cause was not observed; this is not attributed to the QA runner,
+which terminated only its exact isolated executable. The unchanged normal
+artifact was launched once without debugging and maximized by its verified
+process/window handle. An immediate passive probe initially saw the previous
+launch descriptor; after waiting for the same live PID's fresh descriptor,
+[the maintained passive gate](artifacts/controller-expiry-normal-window-2026-10-03.json)
+passes for PID 175184: exactly one visible responsive maximized `Syndocal` window
+and `agent_authentication_required` for unauthenticated reads. No extra restart,
+normal-profile debugger, authenticated primary Tap or physical output test was
+performed. This fresh primary proof supersedes the earlier PID observation.
 
 [The affected output regression](artifacts/controller-expiry-output-regression-2026-10-03.json)
 passes all 16 selected groups after the shared forwarding change.
