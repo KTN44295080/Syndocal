@@ -1,0 +1,32 @@
+Pinned=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+
+running 21 tests
+test control_plane_command::tests::display_authorized_recovery_accepts_only_exact_both_generation_transitions ... ok
+test control_plane_command::tests::dsf2026_reconcile_receipt_and_rejection_are_strict_public_wire_contracts ... ok
+test control_plane_command::tests::enable_output_lease_result_accepts_only_exact_acquire_or_recover_transitions ... ok
+test control_plane_command::tests::every_client_visible_numeric_value_rejects_lossy_javascript_values_on_both_wire_directions ... ok
+test control_plane_command::tests::output_control_master_rejections_round_trip_without_losing_domain_error ... ok
+test control_plane_command::tests::output_control_master_rejections_still_reject_invalid_wire_identity ... ok
+test control_plane_command::tests::output_lease_authority_is_strict_opaque_and_operation_shapes_are_distinct ... ok
+test control_plane_command::tests::r4_command_wire_is_strict_and_exactly_bound ... ok
+test control_plane_command::tests::rejection_has_only_fixed_error_data ... ok
+   Compiling protocol v1.2.0-alpha.69 (C:\Users\janua\OneDrive\ドキュメント\GitHub\Syndocal\crates\protocol)
+    Finished `release` profile [optimized] target(s) in 5m 07s
+     Running unittests src\lib.rs (target\release\deps\protocol-a46de68eb46b8212.exe)
+test control_plane_command::tests::request_is_strict_validated_and_uses_typed_canonical_bytes ... ok
+test control_plane_command::tests::runtime_transport_wire_is_strict_typed_and_noop_generation_cannot_drift ... ok
+test control_plane_command::tests::safety_blackout_wire_has_no_release_payload_and_is_strict ... ok
+test control_plane_command::tests::show_serial_dmx_route_receipts_and_rejections_round_trip ... ok
+test control_plane_command::tests::show_spout_native_success_response_is_strict_authorized_and_unchanged ... ok
+test control_plane_command::tests::show_spout_persisted_successor_fence_is_exact_and_strict ... ok
+test control_plane_command::tests::show_spout_reset_is_payloadless_lease_free_and_fence_advancing ... ok
+test control_plane_command::tests::terminal_noop_receipt_cannot_drift_the_start_fence ... ok
+test control_plane_command::tests::timeline_follow_abort_wire_is_strict_and_applied_advances_exactly_once ... ok
+test control_plane_command::tests::timeline_loop_runtime_wire_binds_noop_to_all_runtime_watermarks ... ok
+test control_plane_command::tests::transferred_lease_receipt_accepts_active_and_orphaned_sources_only ... ok
+test control_plane_command::tests::unknown_response_or_terminal_outcome_discriminators_fail_closed ... ok
+
+test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 224 filtered out; finished in 0.01s
+
+PASS 21 actual protocol tests, zero warnings

@@ -171,6 +171,20 @@ revokes authority. Persisted output configuration remains unchanged and both
 runtime output gates stay closed. This is not physical signal or complete
 controller-loss/re-arm acceptance. Do not combine it with the other lease probes.
 
+Add `--controller-output` as a separate live software-output lane. It loads one
+private fixture and an Art-Net route to an owned ephemeral `127.0.0.1` UDP port.
+Real authenticated stdio MCP grants and Arm start native output, and the receiver
+validates complete 512-channel ArtDMX images. Registered native owner retirement,
+stale lease rejection, ForceTransfer/replay/conflict and relinquishment must
+preserve the live image and output gates. Only an explicit master operation by
+the new owner may change Dimmer from 255 to 128. Cleanup uses the existing native
+project-replacement command to disarm the isolated route; retired raw role
+commands remain unavailable. The helper closes its receiver, sidecar and private
+files, and the runner revokes its credential and terminates only its exact QA
+process. Do not combine this lane with the other opt-in probes. This records
+actual software loopback reception, not physical fixtures, video, process/worker
+loss, full controller-loss/re-arm or venue acceptance.
+
 Canonical native QueryError objects retain their bounded `code`, `message`,
 `retryable` and `resnapshot_required` fields in `result.error.native_query` for
 rejected reads. The outer error code stays `request_rejected`. Unrecognized

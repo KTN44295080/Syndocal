@@ -1,0 +1,23 @@
+COMMAND GROUP adapter
+PASS 16 adapter integration groups; hostile stdio corpus: 128 rejected; fake loopback only, no Syndocal/device calls
+
+COMMAND GROUP transports
+PASS HTTP health/JSON-RPC/REST and WebSocket transport groups; loopback fake broker only
+
+COMMAND GROUP security
+PASS transport security: host/origin rejection, malformed path recovery, 64-session capacity/release, idle expiry and active-request retention, split-header/payload liveness and frame completion; no native/device calls
+
+COMMAND GROUP bridge
+
+> syndocal@1.2.0-alpha.69 check:agent-bridge C:\Users\janua\OneDrive\ドキュメント\GitHub\Syndocal\app
+> node scripts/check-agent-bridge.mjs
+
+agent bridge: PASS (13 groups; real processor/runtime/confirmation modules, no native or device calls)
+
+COMMAND GROUP runtime
+
+> syndocal@1.2.0-alpha.69 check:output-control-runtime C:\Users\janua\OneDrive\ドキュメント\GitHub\Syndocal\app
+> node scripts/check-output-control-runtime.mjs && node scripts/check-standby-sync-output-lease-ui.mjs
+
+output control runtime contract: PASS (v12 output commands, lease-bound Lighting/Video master, Video Take/Clip Launch and group controls, fixed same-PC Art-Net loopback/DSF2026 probe plus no-send reconciliation/strict Spout V2 receipt fences/reset, revision-fenced USB-DMX status, strict receipts, fail-closed query)
+Standby Sync output-lease UI contract passed.

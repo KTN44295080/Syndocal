@@ -1,0 +1,22 @@
+Pinned=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+   Compiling protocol v1.2.0-alpha.69 (C:\Users\janua\OneDrive\ドキュメント\GitHub\Syndocal\crates\protocol)
+    Finished `release` profile [optimized] target(s) in 4m 17s
+     Running unittests src\lib.rs (target\release\deps\protocol-a46de68eb46b8212.exe)
+
+running 2 tests
+
+thread 'control_plane_command::tests::output_control_master_rejections_round_trip_without_losing_domain_error' (80304) panicked at crates\protocol\src\control_plane_command.rs:6027:45:
+syndocal.output.lighting.master.set.v2: unexpected output-control operation ID
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test control_plane_command::tests::output_control_master_rejections_round_trip_without_losing_domain_error ... FAILED
+test control_plane_command::tests::output_control_master_rejections_still_reject_invalid_wire_identity ... ok
+
+failures:
+
+failures:
+    control_plane_command::tests::output_control_master_rejections_round_trip_without_losing_domain_error
+
+test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 243 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p protocol --lib`

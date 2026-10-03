@@ -4418,6 +4418,9 @@ impl OutputControlRejectionV2 {
                 | OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_OPERATION_ID
                 | OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_RECONCILE_OPERATION_ID
                 | OUTPUT_ENABLE_OPERATION_ID
+                | OUTPUT_LIGHTING_MASTER_SET_OPERATION_ID
+                | OUTPUT_GROUP_SUBMASTER_SET_OPERATION_ID
+                | OUTPUT_VIDEO_MASTER_SET_OPERATION_ID
                 | OUTPUT_VIDEO_CLIP_LAUNCH_OPERATION_ID
                 | OUTPUT_VIDEO_CLIP_TAKE_OPERATION_ID
         ) {
@@ -5998,6 +6001,69 @@ mod tests {
             rejection
         );
         let mut unknown_error = rejection_json;
+        unknown_error["rejection"]["error"] = serde_json::json!("future_error");
+        assert!(serde_json::from_value::<OutputControlResponseV2>(unknown_error).is_err());
+    }
+
+    #[test]
+    fn output_control_master_rejections_round_trip_without_losing_domain_error() {
+        for operation_id in [
+            OUTPUT_LIGHTING_MASTER_SET_OPERATION_ID,
+            OUTPUT_GROUP_SUBMASTER_SET_OPERATION_ID,
+            OUTPUT_VIDEO_MASTER_SET_OPERATION_ID,
+        ] {
+            for error in [
+                OutputControlErrorCodeV2::InvalidRequest,
+                OutputControlErrorCodeV2::Forbidden,
+                OutputControlErrorCodeV2::StaleFence,
+                OutputControlErrorCodeV2::Busy,
+                OutputControlErrorCodeV2::Overloaded,
+                OutputControlErrorCodeV2::PublicationFailed,
+                OutputControlErrorCodeV2::Internal,
+            ] {
+                let response = OutputControlResponseV2::Rejected(OutputControlRejectionV2 {
+                    operation_id: operation_id.to_string(),
+                    request_id: 25,
+                    error,
+                });
+                let encoded = serde_json::to_value(&response)
+                    .unwrap_or_else(|error| panic!("{operation_id}: {error}"));
+                assert_eq!(
+                    serde_json::from_value::<OutputControlResponseV2>(encoded).unwrap(),
+                    response,
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn output_control_master_rejections_still_reject_invalid_wire_identity() {
+        let valid = serde_json::json!({
+            "type": "rejected",
+            "rejection": {
+                "operation_id": OUTPUT_LIGHTING_MASTER_SET_OPERATION_ID,
+                "request_id": 25,
+                "error": "forbidden"
+            }
+        });
+        for operation_id in [
+            "syndocal.output.future.v2",
+            "set_lighting_master",
+            OUTPUT_CONTROL_AUTHORITY_QUERY_OPERATION_ID,
+        ] {
+            let mut invalid = valid.clone();
+            invalid["rejection"]["operation_id"] = serde_json::json!(operation_id);
+            assert!(serde_json::from_value::<OutputControlResponseV2>(invalid).is_err());
+        }
+        for request_id in [0, MAX_SAFE_JAVASCRIPT_INTEGER + 1] {
+            let mut invalid = valid.clone();
+            invalid["rejection"]["request_id"] = serde_json::json!(request_id);
+            assert!(serde_json::from_value::<OutputControlResponseV2>(invalid).is_err());
+        }
+        let mut unknown_field = valid.clone();
+        unknown_field["rejection"]["lease"] = serde_json::json!(null);
+        assert!(serde_json::from_value::<OutputControlResponseV2>(unknown_field).is_err());
+        let mut unknown_error = valid;
         unknown_error["rejection"]["error"] = serde_json::json!("future_error");
         assert!(serde_json::from_value::<OutputControlResponseV2>(unknown_error).is_err());
     }

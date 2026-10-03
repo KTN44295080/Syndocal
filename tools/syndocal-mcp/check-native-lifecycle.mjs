@@ -15,9 +15,12 @@ import { nativeTapBpm } from './native-tap-bpm.mjs';
 import { nativeLeaseExpiry } from './native-lease-expiry.mjs';
 import { nativeProjectJson } from './native-project-json.mjs';
 import { nativeBackupJson } from './native-backup-json.mjs';
+import { nativeControllerOutput } from './native-controller-output.mjs';
 
 const exec = promisify(execFile);
 const args = process.argv.slice(2);
+const controllerOutput = args.includes('--controller-output');
+if (controllerOutput) args.splice(args.indexOf('--controller-output'), 1);
 const authoredControls = args.includes('--authored-controls');
 if (authoredControls) args.splice(args.indexOf('--authored-controls'), 1);
 const inputDiagnostics = args.includes('--input-diagnostics');
@@ -43,6 +46,8 @@ assert.ok(!backupJson || !(projectJson || leaseExpiry || externalHighRisk || ext
   'Backup-file admission owns a separate project/authority lane');
 assert.ok(!inputDiagnostics || projectJson || backupJson, 'Input diagnostics require the isolated project or backup lane');
 assert.ok(!authoredControls || projectJson, 'Authored control round trip requires the isolated project-file lane');
+assert.ok(!controllerOutput || !(projectJson || backupJson || leaseExpiry || externalHighRisk || externalRevocation || tapBpm || diagnostics),
+  'Live software loopback owns a separate project/output/lease lane');
 const take = name => { const index = args.indexOf(name); assert.ok(index >= 0 && index + 1 < args.length, `Required: ${name}`); return args.splice(index, 2)[1]; };
 const executable = take('--expected-executable');
 const evidence = take('--evidence');
@@ -173,6 +178,7 @@ try {
   await pair(); await install();
   if (leaseExpiry) await nativeLeaseExpiry(backend, options, checks);
   if (externalHighRisk) await nativeExternalHighRisk(backend, options, checks);
+  if (controllerOutput) await nativeControllerOutput(backend, options, checks);
   const oldRequest = await read();
   checks.push({ check: 'isolated-first-launch-read', passed: true });
   await stop();
@@ -271,6 +277,11 @@ await fs.writeFile(evidence, `${JSON.stringify({ schemaVersion: 1, timestamp: ne
   sidecarSha256: createHash('sha256').update(await fs.readFile(new URL('./server.mjs', import.meta.url))).digest('hex'),
   runnerSha256: createHash('sha256').update(await fs.readFile(new URL('./check-native-lifecycle.mjs', import.meta.url))).digest('hex'),
   backendHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-backend-session.mjs', import.meta.url))).digest('hex'),
+  ...(controllerOutput ? {
+    controllerOutputHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-controller-output.mjs', import.meta.url))).digest('hex'),
+    stdioHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-stdio-session.mjs', import.meta.url))).digest('hex'),
+    controllerOutputTransport: 'Separate authenticated stdio MCP sidecar, actual native loopback-only Art-Net sender, owned ephemeral 127.0.0.1 UDP receiver',
+  } : {}),
   ...(inputDiagnostics ? { inputDiagnosticHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-input-diagnostics.mjs', import.meta.url))).digest('hex') } : {}),
   ...(externalHighRisk ? {
     highRiskHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-external-high-risk.mjs', import.meta.url))).digest('hex'),
@@ -305,7 +316,10 @@ await fs.writeFile(evidence, `${JSON.stringify({ schemaVersion: 1, timestamp: ne
   profile: 'jp.seraf.ktn.syndocal.qa.mcp-lifecycle', checks, normalAppIdentityUnchanged: true,
   credentialRevoked: !cleanupNeeded, credentialFileRemoved: true,
   nativePanicLocations,
-  nonclaims: ['QA identifier release build, not the distributed artifact', 'No physical output activation; optional high-risk or lease-expiry probe mutates isolated backend lease authority only; optional Tap probe changes isolated empty-project tempo; optional project-file probe loads private JSON with no file media or video source activation', 'No durable authored/output mutation crash publication acceptance',
+  nonclaims: ['QA identifier release build, not the distributed artifact',
+    controllerOutput ? 'Actual native software loopback ArtDMX reception only; no device, venue, serial DMX, video, worker/process-loss or whole controller-loss/re-arm acceptance'
+      : 'No physical output activation; optional high-risk or lease-expiry probe mutates isolated backend lease authority only; optional Tap probe changes isolated empty-project tempo; optional project-file probe loads private JSON with no file media or video source activation',
+    'No durable authored/output mutation crash publication acceptance',
     ...(projectJson ? ['Native .sdc admission and rejected-load preservation only; no complete migration corpus, backup/recovery/upgrade, other file formats or physical output acceptance'] : []),
     ...(backupJson ? ['Native backup byte/JSON/identity admission and private restore preservation only; no full O1-O4, browser recovery, crash/fallback/upgrade, physical output or release acceptance'] : []),
     ...(leaseExpiry ? ['Stdio disconnect is adapter loss, not native registered-owner retirement; unchanged persisted output configuration and closed runtime gates are not a physical signal or whole controller-loss/re-arm proof'] : []),
