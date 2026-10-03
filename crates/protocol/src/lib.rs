@@ -15,6 +15,8 @@ pub mod fixture_stage_layout;
 pub mod show_clock;
 pub mod show_clock_runtime;
 pub mod timeline_audio_policy;
+pub mod timeline_persistence;
+pub use timeline_persistence::clear_timeline_transport_runtime;
 
 pub use timeline_audio_policy::{
     timeline_audio_resync_required, timeline_audio_source_pts_ms,
@@ -5788,17 +5790,7 @@ pub fn normalize_timeline_bank(snapshot: &mut EngineSnapshot) {
         snapshot.timeline_bank.push(snapshot.timeline.clone());
     }
     for timeline in &mut snapshot.timeline_bank {
-        timeline.playing = false;
-        timeline.position_ms = 0;
-        timeline.count_in_remaining_ms = 0;
-        timeline.audio_transport_revision = 0;
-        timeline.active_child_transports.clear();
-        timeline.loop_runtime = TimelineLoopRuntimeSummary::default();
-        timeline.follow_runtime = TimelineFollowRuntimeSummary::default();
-        timeline.guide_cues.clear();
-        timeline.click_events.clear();
-        timeline.click_schedule_generation = 0;
-        timeline.click_queue_overflow = None;
+        clear_timeline_transport_runtime(timeline);
     }
 }
 

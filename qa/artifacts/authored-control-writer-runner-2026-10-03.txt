@@ -1,0 +1,13 @@
+CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+where.exe link.exe:
+C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+cargo test --manifest-path app/src-tauri/Cargo.toml --release --locked -j 1 project_snapshot_for_save_drops_volatile_runtime_state -- --nocapture --test-threads=1
+
+    Finished `release` profile [optimized] target(s) in 0.74s
+running 1 test
+     Running unittests src\main.rs (target\release\deps\syndocal-c647597ad2872eab.exe)
+test tests::project_snapshot_for_save_drops_volatile_runtime_state ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1966 filtered out; finished in 0.00s
+
+PASS project_snapshot_for_save_drops_volatile_runtime_state: 1 selected, none failed or ignored; release test binary, not native window acceptance

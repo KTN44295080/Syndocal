@@ -18,6 +18,8 @@ import { nativeBackupJson } from './native-backup-json.mjs';
 
 const exec = promisify(execFile);
 const args = process.argv.slice(2);
+const authoredControls = args.includes('--authored-controls');
+if (authoredControls) args.splice(args.indexOf('--authored-controls'), 1);
 const inputDiagnostics = args.includes('--input-diagnostics');
 if (inputDiagnostics) args.splice(args.indexOf('--input-diagnostics'), 1);
 const backupJson = args.includes('--backup-json');
@@ -40,6 +42,7 @@ assert.ok(!projectJson || !(leaseExpiry || externalHighRisk || externalRevocatio
 assert.ok(!backupJson || !(projectJson || leaseExpiry || externalHighRisk || externalRevocation || tapBpm || diagnostics),
   'Backup-file admission owns a separate project/authority lane');
 assert.ok(!inputDiagnostics || projectJson || backupJson, 'Input diagnostics require the isolated project or backup lane');
+assert.ok(!authoredControls || projectJson, 'Authored control round trip requires the isolated project-file lane');
 const take = name => { const index = args.indexOf(name); assert.ok(index >= 0 && index + 1 < args.length, `Required: ${name}`); return args.splice(index, 2)[1]; };
 const executable = take('--expected-executable');
 const evidence = take('--evidence');
@@ -158,7 +161,7 @@ const read = async () => {
 try {
   const first = await start();
   if (backupJson) await nativeBackupJson(backend, checks, { inputDiagnostics });
-  if (projectJson) await nativeProjectJson(backend, checks, { inputDiagnostics });
+  if (projectJson) await nativeProjectJson(backend, checks, { inputDiagnostics, authoredControls });
   if (tapBpm) await nativeTapBpm(backend, checks);
   const diagnostic = diagnostics ? await nativeDiagnosticExports(backend.invoke) : undefined;
   if (diagnostic) checks.push(diagnostic.check);
@@ -282,7 +285,8 @@ await fs.writeFile(evidence, `${JSON.stringify({ schemaVersion: 1, timestamp: ne
   } : {}),
   ...(projectJson ? {
     projectJsonHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-project-json.mjs', import.meta.url))).digest('hex'),
-    projectJsonTransport: 'Exact native load_project_path command on private isolated empty-project files; no DOM/dialog action',
+    projectJsonTransport: `Exact native load_project_path command on private isolated ${authoredControls ? 'empty and authored-control' : 'empty'} project files; no DOM/dialog action`,
+    ...(authoredControls ? { authoredControlHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-authored-control-project.mjs', import.meta.url))).digest('hex') } : {}),
   } : {}),
   ...(backupJson ? {
     backupJsonHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-backup-json.mjs', import.meta.url))).digest('hex'),
@@ -301,7 +305,7 @@ await fs.writeFile(evidence, `${JSON.stringify({ schemaVersion: 1, timestamp: ne
   profile: 'jp.seraf.ktn.syndocal.qa.mcp-lifecycle', checks, normalAppIdentityUnchanged: true,
   credentialRevoked: !cleanupNeeded, credentialFileRemoved: true,
   nativePanicLocations,
-  nonclaims: ['QA identifier release build, not the distributed artifact', 'No physical output activation; optional high-risk or lease-expiry probe mutates isolated backend lease authority only; optional Tap probe changes isolated empty-project tempo; optional project-file probe loads private empty-project JSON only', 'No durable authored/output mutation crash publication acceptance',
+  nonclaims: ['QA identifier release build, not the distributed artifact', 'No physical output activation; optional high-risk or lease-expiry probe mutates isolated backend lease authority only; optional Tap probe changes isolated empty-project tempo; optional project-file probe loads private JSON with no file media or video source activation', 'No durable authored/output mutation crash publication acceptance',
     ...(projectJson ? ['Native .sdc admission and rejected-load preservation only; no complete migration corpus, backup/recovery/upgrade, other file formats or physical output acceptance'] : []),
     ...(backupJson ? ['Native backup byte/JSON/identity admission and private restore preservation only; no full O1-O4, browser recovery, crash/fallback/upgrade, physical output or release acceptance'] : []),
     ...(leaseExpiry ? ['Stdio disconnect is adapter loss, not native registered-owner retirement; unchanged persisted output configuration and closed runtime gates are not a physical signal or whole controller-loss/re-arm proof'] : []),

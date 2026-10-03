@@ -81,6 +81,13 @@ pub(super) fn normalize_project_timeline_layers(snapshot: &mut EngineSnapshot) {
     }
 }
 
+pub(super) fn clear_project_timeline_runtime(snapshot: &mut EngineSnapshot) {
+    protocol::clear_timeline_transport_runtime(&mut snapshot.timeline);
+    for timeline in &mut snapshot.timeline_bank {
+        protocol::clear_timeline_transport_runtime(timeline);
+    }
+}
+
 pub(super) fn project_snapshot_for_save(mut snapshot: EngineSnapshot) -> EngineSnapshot {
     use_authored_video_snapshot(&mut snapshot);
     normalize_project_timeline_layers(&mut snapshot);
@@ -96,7 +103,7 @@ pub(super) fn project_snapshot_for_save(mut snapshot: EngineSnapshot) -> EngineS
     }
     snapshot.active_fade = None;
     snapshot.direct_child_timeline_transports.clear();
-    snapshot.timeline.playing = false;
+    clear_project_timeline_runtime(&mut snapshot);
     snapshot.video.auto_vj.status = protocol::AutoVjStatus::default();
     snapshot.dmx_preview.clear();
     snapshot.dmx_previews.clear();

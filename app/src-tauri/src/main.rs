@@ -51,7 +51,8 @@ mod diagnostic_package_publication;
 mod diagnostic_export_workflow;
 mod diagnostic_export_session;
 use project_snapshot_persistence::{
-    clear_runtime_programmer_state, node_graph_for_persistence, normalize_project_timeline_layers,
+    clear_project_timeline_runtime, clear_runtime_programmer_state, node_graph_for_persistence,
+    normalize_project_timeline_layers,
     project_snapshot_for_save, use_authored_video_snapshot,
 };
 #[cfg(test)]
@@ -11638,14 +11639,7 @@ fn timeline_advanced_candidate_for_request(
 }
 
 fn clear_timeline_bank_runtime(timeline: &mut TimelineSnapshot) {
-    timeline.playing = false;
-    timeline.position_ms = 0;
-    timeline.count_in_remaining_ms = 0;
-    timeline.audio_transport_revision = 0;
-    timeline.active_child_transports.clear();
-    timeline.loop_runtime = Default::default();
-    timeline.follow_runtime = Default::default();
-    timeline.guide_cues.clear();
+    protocol::clear_timeline_transport_runtime(timeline);
 }
 
 fn normalize_timeline_duration_for_engine(
@@ -65033,6 +65027,9 @@ fn prepare_project_load(
     normalize_legacy_video_clip_slots(&mut project.snapshot.video)?;
     validate_engine_ready_video_clip_slots(&project.snapshot.video)?;
     normalize_project_timeline_layers(&mut project.snapshot);
+    // Validate the authored root/bank agreement above before dropping session
+    // state. A saved/runtime image must never resume playback on replacement.
+    clear_project_timeline_runtime(&mut project.snapshot);
     clear_runtime_programmer_state(&mut project.snapshot);
     reconcile_project_fixture_groups(&mut project)?;
     validate_dj_track_triggers_against_snapshot(&mappings.dj_track_triggers, &project.snapshot)?;
@@ -118847,7 +118844,7 @@ f 1 2 3
         assert_eq!(saved.active_cue_id, Some(7));
         assert_eq!(saved.active_fade, None);
         assert!(!saved.timeline.playing);
-        assert_eq!(saved.timeline.position_ms, 12_345);
+        assert_eq!(saved.timeline.position_ms, 0);
         assert_eq!(saved.video.master_opacity, 0.5);
         assert_eq!(saved.video.auto_vj.config, auto_vj_config);
         assert_eq!(

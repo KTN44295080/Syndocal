@@ -1,0 +1,75 @@
+CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+where.exe link.exe:
+C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+cargo test --manifest-path app/src-tauri/Cargo.toml --release --locked -j 1 migration_corpus_ -- --nocapture --test-threads=1
+
+running 21 tests
+test project_snapshot_persistence::project_migration_corpus_tests::authored_controls::migration_corpus_authored_control_corrupt_reference_matrix ... ok
+test project_snapshot_persistence::project_migration_corpus_tests::authored_controls::migration_corpus_authored_control_whole_golden_load_save_reload ... ok
+test project_snapshot_persistence::project_migration_corpus_tests::authored_controls::migration_corpus_authored_node_graph_runtime_is_not_resaved ... ok
+test project_snapshot_persistence::project_migration_corpus_tests::authored_controls::migration_corpus_bank_timeline_transport_is_not_resaved ... FAILED
+test project_snapshot_persistence::project_migration_corpus_tests::authored_controls::migration_corpus_root_timeline_transport_is_not_resaved ... FAILED
+test project_snapshot_persistence::project_migration_corpus_tests::migration_corpus_bounded_truncation_utf8_and_depth_inputs ... ok
+test project_snapshot_persistence::project_migration_corpus_tests::migration_corpus_control_mappings_survive_canonical_save ... ok
+test project_snapshot_persistence::project_migration_corpus_tests::migration_corpus_corrupt_reference_and_value_matrix ... ok
+test project_snapshot_persistence::project_migration_corpus_tests::migration_corpus_duplicate_ids_fail_without_mutating_candidates ... ok
+test project_snapshot_persistence::project_migration_corpus_tests::migration_corpus_embedded_profile_unicode_paths_are_not_reopened ... ok
+test project_snapshot_persistence::project_migration_corpus_tests::migration_corpus_legacy_defaults_and_unknown_fields ... ok
+test project_snapshot_persistence::project_migration_corpus_tests::migration_corpus_phase1_golden_load_save_reload ... ok
+test project_snapshot_persistence::project_migration_corpus_tests::migration_corpus_rejects_file_media_before_production_preparation ... ok
+test project_snapshot_persistence::project_migration_corpus_tests::migration_corpus_retired_dj_transition_is_observable_and_not_resaved ... ok
+test project_snapshot_persistence::project_migration_corpus_tests::migration_corpus_seeded_hostile_json_bytes_are_bounded_and_panic_free ... ok
+test project_snapshot_persistence::project_migration_corpus_tests::migration_corpus_seeded_semantic_round_trip_property ... ok
+test project_snapshot_persistence::project_migration_corpus_tests::migration_corpus_version_rejection_precedes_migration ... ok
+test project_snapshot_persistence::project_migration_corpus_tests::whole_project_golden::migration_corpus_current_projects_whole_golden_load_save_reload ... ok
+test project_snapshot_persistence::project_migration_corpus_tests::whole_project_golden::migration_corpus_empty_new_project_whole_golden_load_save_reload ... ok
+test project_snapshot_persistence::project_migration_corpus_tests::whole_project_golden::migration_corpus_runtime_image_does_not_change_whole_authored_golden ... ok
+test project_snapshot_persistence::project_migration_corpus_tests::whole_project_golden::migration_corpus_whole_golden_detects_unselected_fields_and_topology ... ok
+
+failures:
+
+failures:
+    project_snapshot_persistence::project_migration_corpus_tests::authored_controls::migration_corpus_bank_timeline_transport_is_not_resaved
+    project_snapshot_persistence::project_migration_corpus_tests::authored_controls::migration_corpus_root_timeline_transport_is_not_resaved
+
+test result: FAILED. 19 passed; 2 failed; 0 ignored; 0 measured; 1945 filtered out; finished in 0.28s
+
+   Compiling syndocal v1.2.0-alpha.69 (C:\Users\janua\OneDrive\ドキュメント\GitHub\Syndocal\app\src-tauri)
+    Finished `release` profile [optimized] target(s) in 10m 40s
+     Running unittests src\main.rs (target\release\deps\syndocal-c647597ad2872eab.exe)
+
+thread 'project_snapshot_persistence::project_migration_corpus_tests::authored_controls::migration_corpus_bank_timeline_transport_is_not_resaved' (17148) panicked at app\src-tauri\src\project_migration_golden.rs:67:5:
+assertion `left == right` failed: bank Timeline runtime cleanup: whole-project golden mismatch
+  left: Some("value/type at /snapshot/timeline_bank/0/playing")
+ right: None
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'project_snapshot_persistence::project_migration_corpus_tests::authored_controls::migration_corpus_root_timeline_transport_is_not_resaved' (80524) panicked at app\src-tauri\src\project_migration_golden.rs:67:5:
+assertion `left == right` failed: root Timeline runtime cleanup: whole-project golden mismatch
+  left: Some("value/type at /snapshot/timeline/position_ms")
+ right: None
+migration corpus: 224 truncations, 5 malformed byte/number cases, 3 depth cases
+migration hostile corpus: seed=0x5344435f20260913, 4096 cases, 4091 parser-rejected, 5 parsed, 0 prepared, max_bytes=2048
+migration corpus: seed=0x5344435f20260913, 128 semantic/idempotency cases
+error: test failed, to rerun pass `--bin syndocal`
+node:internal/modules/run_main:123
+    triggerUncaughtException(
+    ^
+
+AssertionError [ERR_ASSERTION]: Migration corpus Cargo exit=101, signal=null
+
+101 !== 0
+
+    at file:///C:/Users/janua/OneDrive/%E3%83%89%E3%82%AD%E3%83%A5%E3%83%A1%E3%83%B3%E3%83%88/GitHub/Syndocal/app/scripts/check-migration-corpus.mjs:27:8
+    at ModuleJob.run (node:internal/modules/esm/module_job:343:25)
+    at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:665:26)
+    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:117:5) {
+  generatedMessage: false,
+  code: 'ERR_ASSERTION',
+  actual: 101,
+  expected: 0,
+  operator: 'strictEqual',
+  diff: 'simple'
+}
+
+Node.js v22.22.1

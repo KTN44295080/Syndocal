@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "base_sha256_lf": "06114e0376fcc3647bbb704ad1517b5b1ea3d062304bc084ad1dbf518b634bf1",
+  "fixture_sha256_lf": "2de7f4d6a5e8ba0c0cedf7ef664d65030fde37d492ae3fa2b6475e77a02f7bf6",
+  "base_scalar_leaves": 858,
+  "fixture_scalar_leaves": 1265,
+  "unchanged_base_scalar_leaves": 853,
+  "explicit_authored_changes": [
+    {
+      "pointer": "/snapshot/cues/0/cue_number",
+      "base": "",
+      "authored": "1"
+    },
+    {
+      "pointer": "/snapshot/cues/0/notes",
+      "base": "",
+      "authored": "全体保存 corpus — é 😀"
+    },
+    {
+      "pointer": "/snapshot/timeline/events/0/layer_id",
+      "base": null,
+      "authored": 11
+    },
+    {
+      "pointer": "/snapshot/timeline/events/1/layer_id",
+      "base": null,
+      "authored": 11
+    },
+    {
+      "pointer": "/fixture_groups/0/color",
+      "base": null,
+      "authored": "#336699"
+    }
+  ],
+  "added_subtree_roots": [
+    "/snapshot/cues/0/color",
+    "/snapshot/cues/0/effect_targets/0",
+    "/snapshot/cues/0/node_graph_targets/0",
+    "/snapshot/cues/0/palette_targets/0",
+    "/snapshot/effects/0",
+    "/snapshot/group_colors",
+    "/snapshot/node_graphs/0",
+    "/snapshot/palettes/0",
+    "/snapshot/timeline/automations/0/timeline_layer_id",
+    "/snapshot/timeline/layers/0",
+    "/snapshot/timeline/layers/1",
+    "/snapshot/timeline/tempo_meter_map",
+    "/snapshot/timeline/video_automations/0/timeline_layer_id",
+    "/snapshot/timeline_bank",
+    "/snapshot/touch_surface",
+    "/snapshot/video/layers/0/clip_slots/1"
+  ],
+  "base_keys_or_array_entries_removed": 0,
+  "generation_calls_to_production_writer": 0,
+  "basis": "Fixed JSON documents and independently declared protocol authoring values; no binary/save/checkpoint input"
+}

@@ -1,5 +1,8 @@
 # Whole-project migration expectations — 2026-10-03
 
+Current follow-up: [rich Control project and Timeline transport persistence](AUTHORED_CONTROL_PROJECT_PERSISTENCE_2026-10-03.md).
+The counts and boundaries below describe the earlier test-only checkpoint.
+
 Branch: `codex/showclock-review-20260912`. Base: `71428c91`.
 Requirement: `MIGRATION-COMPATIBILITY-001`, critical path O2; the wider O1–O4
 requirement remains **Open**.

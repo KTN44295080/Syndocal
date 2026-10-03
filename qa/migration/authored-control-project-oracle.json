@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "base_oracle": "qa/migration/phase1-current-canonical.json",
+  "base_oracle_sha256_lf": "06114e0376fcc3647bbb704ad1517b5b1ea3d062304bc084ad1dbf518b634bf1",
+  "reference": "qa/migration/authored-control-project.json",
+  "reference_sha256_lf": "2de7f4d6a5e8ba0c0cedf7ef664d65030fde37d492ae3fa2b6475e77a02f7bf6",
+  "scalar_leaves": 1265,
+  "authoring": "Frozen Phase 1 oracle plus independently authored protocol literals; no candidate writer output",
+  "timeline_bank_count": 2,
+  "graph_count": 1,
+  "graph_nodes": 5,
+  "graph_edges": 3,
+  "lighting_effects": 1,
+  "palettes": 1,
+  "touch_pages": 2,
+  "touch_controls": 8,
+  "video_clip_slots": 2,
+  "production_writer_generation_calls": 0,
+  "network_or_device_actions": 0,
+  "decimal_policy": "New decimal values are exact binary fractions, except a protocol f64 tempo of 128.5; no integer conversion",
+  "cue_number_policy": "Explicit authored current-schema Cue number 1; legacy empty Cue number is covered by the separate Phase 1 oracle"
+}

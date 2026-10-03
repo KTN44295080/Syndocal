@@ -5,10 +5,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { nativeInputDiagnostics } from './native-input-diagnostics.mjs';
+import { nativeAuthoredControlProject } from './native-authored-control-project.mjs';
 
-// Only the isolated, empty QA project's path-based native load command is used.
+// Only the isolated QA project's path-based native load command is used.
 // No dialog, media/device I/O, Enable/Arm action or normal-profile mutation.
-export async function nativeProjectJson(backend, checks, { inputDiagnostics = false } = {}) {
+export async function nativeProjectJson(backend, checks, { inputDiagnostics = false, authoredControls = false } = {}) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'syndocal-project-json-'));
   const ownerId = `project-json-${randomUUID()}`;
   const digest = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -106,6 +107,12 @@ export async function nativeProjectJson(backend, checks, { inputDiagnostics = fa
       sourceSha256: oversizedSha256, error: rejectedSize.error });
     checks.push({ check: 'native-project-json-hostile-load-preserves-active-project-and-source-bytes', passed: true,
       rejections, beforeToken: before.token, afterToken: (await observe()).token });
+    if (authoredControls) await nativeAuthoredControlProject({ directory, load, observe, checks,
+      observeTransport: async () => {
+        const { snapshot } = await backend.invoke('get_snapshot');
+        return { timelineId: snapshot.timeline.id, playing: snapshot.timeline.playing,
+          positionMs: snapshot.timeline.position_ms };
+      } });
   } finally {
     assert.equal(path.dirname(path.resolve(directory)), path.resolve(os.tmpdir()));
     assert.ok(path.basename(directory).startsWith('syndocal-project-json-'));

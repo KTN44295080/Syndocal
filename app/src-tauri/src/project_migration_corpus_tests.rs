@@ -11,6 +11,8 @@ use protocol::{EngineSnapshot, ProjectFile};
 use serde_json::{json, Value};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
+#[path = "project_migration_authored_controls.rs"]
+mod authored_controls;
 #[path = "project_migration_golden.rs"]
 mod whole_project_golden;
 const GENERATED_CASES: usize = 128;

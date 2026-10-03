@@ -38494,19 +38494,7 @@ impl EngineRuntime {
     ) -> Result<(TimelineSnapshot, Vec<RuntimeTimelineEvent>), String> {
         normalize_and_validate_timeline_layers(&mut timeline.layers, &timeline.events)?;
         normalize_and_validate_timeline_audio_clips(&timeline.layers, &mut timeline.audio_clips)?;
-        timeline.playing = false;
-        timeline.position_ms = 0;
-        timeline.count_in_remaining_ms = 0;
-        timeline.audio_transport_revision = 0;
-        timeline.transport_epoch = 0;
-        timeline.transport_generation = 0;
-        timeline.active_child_transports.clear();
-        timeline.loop_runtime = TimelineLoopRuntimeSummary::default();
-        timeline.follow_runtime = TimelineFollowRuntimeSummary::default();
-        timeline.guide_cues.clear();
-        timeline.click_events.clear();
-        timeline.click_schedule_generation = 0;
-        timeline.click_queue_overflow = None;
+        protocol::clear_timeline_transport_runtime(&mut timeline);
         validate_timeline_authoring(&timeline, &self.media_assets)?;
 
         let mut runtime_events = timeline
@@ -50798,19 +50786,7 @@ impl EngineRuntime {
         // canonical local Play/Pause lane must not create a project/history
         // delta merely because a caller observed a persistence image while it
         // was playing.
-        timeline.playing = false;
-        timeline.position_ms = 0;
-        timeline.count_in_remaining_ms = 0;
-        timeline.audio_transport_revision = 0;
-        timeline.transport_epoch = 0;
-        timeline.transport_generation = 0;
-        timeline.active_child_transports.clear();
-        timeline.loop_runtime = TimelineLoopRuntimeSummary::default();
-        timeline.follow_runtime = TimelineFollowRuntimeSummary::default();
-        timeline.guide_cues.clear();
-        timeline.click_events.clear();
-        timeline.click_schedule_generation = 0;
-        timeline.click_queue_overflow = None;
+        protocol::clear_timeline_transport_runtime(timeline);
         if self.timeline_audio_clips_derived {
             timeline.audio_clips.clear();
         }
