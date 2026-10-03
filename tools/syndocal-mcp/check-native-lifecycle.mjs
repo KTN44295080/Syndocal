@@ -18,9 +18,19 @@ import { nativeBackupJson } from './native-backup-json.mjs';
 import { nativeControllerOutput } from './native-controller-output.mjs';
 import { nativeRuntimeAuthority } from './native-runtime-authority.mjs';
 import { nativeDisplayWindow } from './native-display-window.mjs';
+import { nativeRecoveryStorage } from './native-recovery-storage.mjs';
 
 const exec = promisify(execFile);
 const args = process.argv.slice(2);
+const recoveryStorage = args.includes('--recovery-storage');
+if (recoveryStorage) {
+  args.splice(args.indexOf('--recovery-storage'), 1);
+  assert.ok(!args.some(arg => ['--display-window', '--runtime-authority', '--controller-event-pressure',
+    '--controller-safety-pressure', '--controller-burst', '--controller-inflight', '--controller-expiry',
+    '--controller-restart', '--controller-output', '--authored-controls', '--input-diagnostics', '--backup-json',
+    '--project-json', '--lease-expiry', '--tap-bpm', '--diagnostics', '--external-high-risk', '--external-revocation'].includes(arg)),
+  'Recovery storage acceptance owns a separate native profile/restart lane');
+}
 const displayWindow = args.includes('--display-window');
 if (displayWindow) {
   args.splice(args.indexOf('--display-window'), 1);
@@ -208,6 +218,12 @@ const read = async () => {
 };
 try {
   let first = await start();
+  if (recoveryStorage) {
+    await nativeRecoveryStorage(backend, checks, { currentBackend: () => backend, restart: async () => {
+      await stop(true); await start(); return backend;
+    } });
+    first = backend.descriptor;
+  }
   if (backupJson) await nativeBackupJson(backend, checks, { inputDiagnostics });
   if (projectJson) await nativeProjectJson(backend, checks, { inputDiagnostics, authoredControls });
   if (tapBpm) await nativeTapBpm(backend, checks);
@@ -357,6 +373,12 @@ await fs.writeFile(evidence, `${JSON.stringify({ schemaVersion: 1, timestamp: ne
   sidecarSha256: createHash('sha256').update(await fs.readFile(new URL('./server.mjs', import.meta.url))).digest('hex'),
   runnerSha256: createHash('sha256').update(await fs.readFile(new URL('./check-native-lifecycle.mjs', import.meta.url))).digest('hex'),
   backendHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-backend-session.mjs', import.meta.url))).digest('hex'),
+  ...(recoveryStorage ? {
+    recoveryStorageHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-recovery-storage.mjs', import.meta.url))).digest('hex'),
+    recoveryStorageSourceSha256: createHash('sha256').update(await fs.readFile(new URL('../../app/src/projectRecoveryStorage.ts', import.meta.url))).digest('hex'),
+    recoveryStartupAppSourceSha256: createHash('sha256').update(await fs.readFile(new URL('../../app/src/App.tsx', import.meta.url))).digest('hex'),
+    recoveryStorageTransport: 'Real isolated WebView2 localStorage and production App startup after owned native restarts; process-verified backend diagnostics, no DOM actions',
+  } : {}),
   ...(controllerOutput || controllerRestart || controllerExpiry || controllerInFlight ? {
     controllerOutputHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-controller-output.mjs', import.meta.url))).digest('hex'),
     stdioHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-stdio-session.mjs', import.meta.url))).digest('hex'),
@@ -429,7 +451,8 @@ await fs.writeFile(evidence, `${JSON.stringify({ schemaVersion: 1, timestamp: ne
   credentialRevoked: !cleanupNeeded, credentialFileRemoved: true,
   nativePanicLocations,
   nonclaims: ['QA identifier release build, not the distributed artifact',
-    displayWindow ? 'Actual native small decorated enabled Display shell/GPU lifecycle on the editor monitor through authenticated MCP, exact grants/fences/lease and terminal receipt replay. Private empty composition, no media/audio/active DMX route or fixture. No visible content/color/pixel, fullscreen/topology/hotplug, AddDisplay, all output operations, hardware/venue or release acceptance'
+    recoveryStorage ? 'Actual isolated WebView2 recovery storage preservation and actionable production startup error across native restarts; unchanged empty native checkpoint/journal and closed output gates. No recovery load/discard UI action, successful recovery acknowledgement, browser write/quota fault, older-generation fallback, full upgrade/template/backup/recovery matrix, physical output or release acceptance'
+    : displayWindow ? 'Actual native small decorated enabled Display shell/GPU lifecycle on the editor monitor through authenticated MCP, exact grants/fences/lease and terminal receipt replay. Private empty composition, no media/audio/active DMX route or fixture. No visible content/color/pixel, fullscreen/topology/hotplug, AddDisplay, all output operations, hardware/venue or release acceptance'
     : controllerEventPressure ? 'Actual native 2048-record retention gap, authenticated MCP slow subscriber, authoritative resnapshot and exact runtime-delta convergence under 64-slot pending broker pressure with live whole-image loopback output. Local fenced Loop changes keep the established 4/s rate; real production query adapter completes individually claimed reads. No Engine command-queue saturation, every adapter/event, complete tick/frame/audio/UI budget, physical device, venue or release acceptance'
     : controllerSafetyPressure ? 'Actual 64-slot external broker pending saturation, 10000 R4 intents and local native S0 all-zero loopback output before/after revocation and while Kill Switch is active. Existing renderer registration retains immutable external work; no Engine command-queue saturation, complete tick/frame/audio/UI budget, publisher event-gap, physical device, venue or release acceptance'
       : controllerBurst ? 'Actual 10000 stdio discovery and 10000 R4 master intents with software loopback ArtDMX reception and measured packet intervals only; no complete output tick/frame/audio/UI budget, publisher event-gap, local priority Blackout under saturation, physical device, venue or release acceptance'

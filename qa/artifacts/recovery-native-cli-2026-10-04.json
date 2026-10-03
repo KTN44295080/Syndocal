@@ -1,0 +1,97 @@
+{
+  "schemaVersion": 1,
+  "passed": true,
+  "flags": [
+    {
+      "flag": "--display-window",
+      "exitCode": 1,
+      "earlyExclusiveRejection": true
+    },
+    {
+      "flag": "--runtime-authority",
+      "exitCode": 1,
+      "earlyExclusiveRejection": true
+    },
+    {
+      "flag": "--controller-event-pressure",
+      "exitCode": 1,
+      "earlyExclusiveRejection": true
+    },
+    {
+      "flag": "--controller-safety-pressure",
+      "exitCode": 1,
+      "earlyExclusiveRejection": true
+    },
+    {
+      "flag": "--controller-burst",
+      "exitCode": 1,
+      "earlyExclusiveRejection": true
+    },
+    {
+      "flag": "--controller-inflight",
+      "exitCode": 1,
+      "earlyExclusiveRejection": true
+    },
+    {
+      "flag": "--controller-expiry",
+      "exitCode": 1,
+      "earlyExclusiveRejection": true
+    },
+    {
+      "flag": "--controller-restart",
+      "exitCode": 1,
+      "earlyExclusiveRejection": true
+    },
+    {
+      "flag": "--controller-output",
+      "exitCode": 1,
+      "earlyExclusiveRejection": true
+    },
+    {
+      "flag": "--authored-controls",
+      "exitCode": 1,
+      "earlyExclusiveRejection": true
+    },
+    {
+      "flag": "--input-diagnostics",
+      "exitCode": 1,
+      "earlyExclusiveRejection": true
+    },
+    {
+      "flag": "--backup-json",
+      "exitCode": 1,
+      "earlyExclusiveRejection": true
+    },
+    {
+      "flag": "--project-json",
+      "exitCode": 1,
+      "earlyExclusiveRejection": true
+    },
+    {
+      "flag": "--lease-expiry",
+      "exitCode": 1,
+      "earlyExclusiveRejection": true
+    },
+    {
+      "flag": "--tap-bpm",
+      "exitCode": 1,
+      "earlyExclusiveRejection": true
+    },
+    {
+      "flag": "--diagnostics",
+      "exitCode": 1,
+      "earlyExclusiveRejection": true
+    },
+    {
+      "flag": "--external-high-risk",
+      "exitCode": 1,
+      "earlyExclusiveRejection": true
+    },
+    {
+      "flag": "--external-revocation",
+      "exitCode": 1,
+      "earlyExclusiveRejection": true
+    }
+  ],
+  "processOrProfileStarted": false
+}

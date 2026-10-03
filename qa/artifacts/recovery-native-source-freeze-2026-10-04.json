@@ -1,0 +1,18 @@
+[
+  {
+    "path": "app/src/projectRecoveryStorage.ts",
+    "sha256": "0f741cd790c132b34efbbe6947c49ef0e9f72e3743212a90a54cf426418b9fda"
+  },
+  {
+    "path": "app/src/App.tsx",
+    "sha256": "83262ccf62e59c60e9c5e1cbfca57d07152d658bc7f592e0f91e4b87c8fdb608"
+  },
+  {
+    "path": "app/src-tauri/src/main.rs",
+    "sha256": "535ee1eee33bc5b004f1453581ceb547d43ad58efa188cfc3ba68e69a2852b5d"
+  },
+  {
+    "path": "app/src-tauri/src/control_plane_runtime.rs",
+    "sha256": "f269f4a6229ba1a40040adb0aecf35520d6ef508f681876fb935124dda86a0bb"
+  }
+]

@@ -195,6 +195,17 @@ capture expiry across a native restart. Use a new evidence path for every run.
 This tests a private temporary destination through a process-verified native
 backend session and covers the local preview/acknowledge flow.
 
+Add `--recovery-storage` as a separate native profile/restart lane. It seeds
+seven malformed/unsupported entries into the isolated WebView2 recovery key,
+restarts the owned native process for each, and requires exact byte preservation
+and the production startup's actionable error. The complete empty native
+checkpoint, journal serial and closed output gates must remain unchanged.
+The probe restores the original key bytes even after failure and verifies them
+after another native restart. It cannot combine with another optional lane.
+No normal-profile storage, App callback, IPC response, DOM action or output is
+changed. This does not establish successful recovery, write/quota faults,
+older-generation fallback or the full migration/recovery acceptance matrix.
+
 Add `--display-window` as a separate native shell lane. It loads an individually
 owned enabled Display into the empty QA project, resolves the exact current
 editor monitor and uses authenticated stdio MCP for Both lease/Arm and Display

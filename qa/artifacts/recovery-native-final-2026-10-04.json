@@ -1,0 +1,131 @@
+{
+  "schemaVersion": 1,
+  "timestamp": "2026-10-03T19:51:05.062Z",
+  "passed": true,
+  "executable": "C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-native-acceptance-target\\release\\syndocal.exe",
+  "executableSha256": "180f103cdc44a7b0cf09ba1f64237567f917337cdcf9cb967832d177aa84ad1d",
+  "sidecarSha256": "e7bb740aa5ef5993dd5a5f01d37f80077c58f3996f51a0874f9565c79a843c12",
+  "runnerSha256": "5fbec65d6a79d5fcad4497275fe72e9f8d711f7eb0b192a0094da1bd0dac9d9a",
+  "backendHarnessSha256": "ade29aa256d8ff17374bb4b3e893ea9a07f71f8fa2cf2bb72b21f80d4e0e8b1f",
+  "recoveryStorageHarnessSha256": "657273c5a9f43131669ff167030169eb836a862b07b7ac7d6f1f47968d2eef24",
+  "recoveryStorageSourceSha256": "0f741cd790c132b34efbbe6947c49ef0e9f72e3743212a90a54cf426418b9fda",
+  "recoveryStartupAppSourceSha256": "83262ccf62e59c60e9c5e1cbfca57d07152d658bc7f592e0f91e4b87c8fdb608",
+  "recoveryStorageTransport": "Real isolated WebView2 localStorage and production App startup after owned native restarts; process-verified backend diagnostics, no DOM actions",
+  "profile": "jp.seraf.ktn.syndocal.qa.mcp-lifecycle",
+  "checks": [
+    {
+      "check": "native-recovery-startup-malformed-json-preserves-and-rejects",
+      "passed": true,
+      "sourceSha256": "d7aeddb6d7f6999d468f23bef79fb0de030b72b6f6e10ab9e78a0b133619aae2",
+      "sourceBytes": 12,
+      "priorInstance": "3649cb18e38cf1597bed765f6c827010",
+      "instanceId": "a8aa2efdd9531b9197b6e525a5f1dc29",
+      "observedSha256": "d7aeddb6d7f6999d468f23bef79fb0de030b72b6f6e10ab9e78a0b133619aae2",
+      "footer": "Browser recovery is unavailable: Error: Browser recovery data is invalid. Stored data was kept; restore a verified project backup."
+    },
+    {
+      "check": "native-recovery-startup-empty-bytes-preserves-and-rejects",
+      "passed": true,
+      "sourceSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "sourceBytes": 0,
+      "priorInstance": "a8aa2efdd9531b9197b6e525a5f1dc29",
+      "instanceId": "4f2a033663e247a831ef7651a9863fa6",
+      "observedSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "footer": "Browser recovery is unavailable: Error: Browser recovery data is invalid. Stored data was kept; restore a verified project backup."
+    },
+    {
+      "check": "native-recovery-startup-stored-null-preserves-and-rejects",
+      "passed": true,
+      "sourceSha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "sourceBytes": 4,
+      "priorInstance": "4f2a033663e247a831ef7651a9863fa6",
+      "instanceId": "8d2a8e41bce61eab2a89bd885751c764",
+      "observedSha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "footer": "Browser recovery is unavailable: Error: Browser recovery data is invalid. Stored data was kept; restore a verified project backup."
+    },
+    {
+      "check": "native-recovery-startup-future-v4-preserves-and-rejects",
+      "passed": true,
+      "sourceSha256": "9e4f5ccafa38d2720652417262eff02651146961209a0e03ab89bdc8183b4887",
+      "sourceBytes": 3881,
+      "priorInstance": "8d2a8e41bce61eab2a89bd885751c764",
+      "instanceId": "7865f80daf893efca399dcde130b1cb6",
+      "observedSha256": "9e4f5ccafa38d2720652417262eff02651146961209a0e03ab89bdc8183b4887",
+      "footer": "Browser recovery is unavailable: Error: Unsupported browser recovery format. Stored data was kept; use a compatible Syndocal version or restore a verified project backup."
+    },
+    {
+      "check": "native-recovery-startup-unsupported-v2-preserves-and-rejects",
+      "passed": true,
+      "sourceSha256": "ff99b0d3de82fc05d4a5a27473ab9f8737dab0fce88f3db126a32d3a07ba3491",
+      "sourceBytes": 3881,
+      "priorInstance": "7865f80daf893efca399dcde130b1cb6",
+      "instanceId": "5ded61438e8d9873270b4409bb623317",
+      "observedSha256": "ff99b0d3de82fc05d4a5a27473ab9f8737dab0fce88f3db126a32d3a07ba3491",
+      "footer": "Browser recovery is unavailable: Error: Unsupported browser recovery format. Stored data was kept; use a compatible Syndocal version or restore a verified project backup."
+    },
+    {
+      "check": "native-recovery-startup-invalid-v3-checkpoint-preserves-and-rejects",
+      "passed": true,
+      "sourceSha256": "b6739c0c08c9044f972bde7b3b720f96dadfb28edc0e478bb92fe62fa003d165",
+      "sourceBytes": 3846,
+      "priorInstance": "5ded61438e8d9873270b4409bb623317",
+      "instanceId": "444a110d0dc3af83eabc279ad1ac8c71",
+      "observedSha256": "b6739c0c08c9044f972bde7b3b720f96dadfb28edc0e478bb92fe62fa003d165",
+      "footer": "Browser recovery is unavailable: Error: Browser recovery data is invalid. Stored data was kept; restore a verified project backup."
+    },
+    {
+      "check": "native-recovery-startup-negative-v3-tombstone-preserves-and-rejects",
+      "passed": true,
+      "sourceSha256": "93c2fad3f1d8ba61f5bb2d1a591034cd76a3da5a7bc868de4f28438d5b306367",
+      "sourceBytes": 63,
+      "priorInstance": "444a110d0dc3af83eabc279ad1ac8c71",
+      "instanceId": "4a45620231f28c67a515bc880fcf2eec",
+      "observedSha256": "93c2fad3f1d8ba61f5bb2d1a591034cd76a3da5a7bc868de4f28438d5b306367",
+      "footer": "Browser recovery is unavailable: Error: Browser recovery data is invalid. Stored data was kept; restore a verified project backup."
+    },
+    {
+      "check": "native-recovery-owned-profile-restored-after-restart",
+      "passed": true,
+      "originalSha256": null,
+      "restoredSha256": null,
+      "originalBytes": null
+    },
+    {
+      "check": "isolated-first-launch-read",
+      "passed": true
+    },
+    {
+      "check": "dead-process-descriptor-rejected",
+      "passed": true
+    },
+    {
+      "check": "crash-restart-retired-principal-rejected",
+      "passed": true
+    },
+    {
+      "check": "old-credential-and-receipt-not-adopted",
+      "passed": true
+    },
+    {
+      "check": "old-launch-proof-rejected-fresh-read-succeeds",
+      "passed": true
+    },
+    {
+      "check": "graceful-native-close",
+      "passed": true
+    },
+    {
+      "check": "graceful-restart-does-not-restore-grant",
+      "passed": true
+    }
+  ],
+  "normalAppIdentityUnchanged": true,
+  "credentialRevoked": true,
+  "credentialFileRemoved": true,
+  "nativePanicLocations": [],
+  "nonclaims": [
+    "QA identifier release build, not the distributed artifact",
+    "Actual isolated WebView2 recovery storage preservation and actionable production startup error across native restarts; unchanged empty native checkpoint/journal and closed output gates. No recovery load/discard UI action, successful recovery acknowledgement, browser write/quota fault, older-generation fallback, full upgrade/template/backup/recovery matrix, physical output or release acceptance",
+    "No durable authored/output mutation crash publication acceptance"
+  ]
+}
