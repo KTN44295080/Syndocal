@@ -1,5 +1,6 @@
 //! Backup envelope byte/JSON policy. No engine, publication or output ownership.
 use crate::{
+    input_diagnostic::{bounded_diagnostic, deserialize_input},
     project_backup_id_from_reserved_target,
     project_file_json::{parse_json_with_byte_limit, read_json_with_byte_limit},
     validate_app_name, validate_project_file, ProjectBackupEnvelope, PROJECT_BACKUP_VERSION,
@@ -27,7 +28,7 @@ fn validate_backup_envelope(backup: &ProjectBackupEnvelope) -> Result<(), String
 fn parse_project_backup_json(json: &str) -> Result<ProjectBackupEnvelope, String> {
     let value = parse_json_with_byte_limit(json, PROJECT_BACKUP_MAX_BYTES, "Project backup JSON")?;
     // Consume the unique-key Value; no second byte parse or persistence-image clone.
-    let backup = serde_json::from_value(value).map_err(|error| error.to_string())?;
+    let backup = deserialize_input(value, "Project backup JSON")?;
     validate_backup_envelope(&backup)?;
     Ok(backup)
 }
@@ -38,9 +39,18 @@ pub(super) fn read_project_backup_json(path: &Path) -> Result<ProjectBackupEnvel
         .ok_or_else(|| "Project backup has no managed parent directory".to_string())?;
     let expected_id = project_backup_id_from_reserved_target(directory, path)?;
     let json = read_json_with_byte_limit(path, PROJECT_BACKUP_MAX_BYTES, "Project backup file")
-        .map_err(|error| format!("Unable to read project backup {}: {error}", path.display()))?;
-    let backup = parse_project_backup_json(&json)
-        .map_err(|error| format!("Invalid project backup {}: {error}", path.display()))?;
+        .map_err(|error| {
+            bounded_diagnostic(format_args!(
+                "Unable to read project backup: {error}; file {}",
+                path.display()
+            ))
+        })?;
+    let backup = parse_project_backup_json(&json).map_err(|error| {
+        bounded_diagnostic(format_args!(
+            "Invalid project backup: {error}; file {}",
+            path.display()
+        ))
+    })?;
     if backup.id != expected_id {
         return Err(format!(
             "Project backup ID {} does not match filename ID {expected_id}; keep the original file and select a matching backup",
@@ -51,7 +61,7 @@ pub(super) fn read_project_backup_json(path: &Path) -> Result<ProjectBackupEnvel
 }
 
 pub(super) fn project_backup_json_bytes(backup: &ProjectBackupEnvelope) -> Result<Vec<u8>, String> {
-    backup_json_bytes_with_limit(backup, PROJECT_BACKUP_MAX_BYTES)
+    backup_json_bytes_with_limit(backup, PROJECT_BACKUP_MAX_BYTES).map_err(bounded_diagnostic)
 }
 
 fn backup_json_bytes_with_limit(
@@ -246,7 +256,9 @@ mod tests {
         json.push_str("{}");
         let error = parse_project_backup_json(&json).unwrap_err();
         assert!(
-            error.contains("missing field") && !error.contains("limit"),
+            error.starts_with("Invalid Project backup JSON schema at [root]:")
+                && error.contains("missing required field")
+                && !error.contains("limit"),
             "{error}"
         );
         json.push(' ');

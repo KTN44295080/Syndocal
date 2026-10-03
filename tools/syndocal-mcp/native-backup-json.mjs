@@ -3,9 +3,10 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createReadStream } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
+import { nativeInputDiagnostics } from './native-input-diagnostics.mjs';
 
 // Only individually owned files in the enclosing runner's private QA profile.
-export async function nativeBackupJson(backend, checks) {
+export async function nativeBackupJson(backend, checks, { inputDiagnostics = false } = {}) {
   const profile = path.resolve(process.env.LOCALAPPDATA, 'jp.seraf.ktn.syndocal.qa.mcp-lifecycle');
   const directory = path.join(profile, 'project-backups');
   assert.equal(path.dirname(directory), profile);
@@ -73,6 +74,12 @@ export async function nativeBackupJson(backend, checks) {
     assert.equal(await fileDigest(validPath), digest(valid));
     checks.push({ check: 'native-backup-json-valid-restores-unsaved-private-project', passed: true,
       sourceSha256: digest(valid), token: before.token, ownership: before.ownership });
+    if (inputDiagnostics) await nativeInputDiagnostics({ seed: envelope, backup: true, load, observe, before, digest, checks,
+      write: async (index, _name, value) => {
+        value.id = id + 100 + index;
+        const bytes = Buffer.from(JSON.stringify(value));
+        return { file: await write(value.id, bytes), target: value.id, bytes };
+      } });
     const changes = [
       ['id-mismatch', value => ({ ...value, id: value.id + 1 }), /backup ID.*filename|filename.*backup ID/],
       ['zero-id', value => ({ ...value, id: 0 }), /backup ID.*positive|positive.*backup ID/],

@@ -1,5 +1,6 @@
 //! Canonical byte/JSON ingress for .sdc and standby project images.
 //! Parsing owns no AppState, publication, media or output side effects.
+use crate::input_diagnostic::bounded_diagnostic;
 use crate::PROJECT_FILE_MAX_BYTES;
 use serde::de::{self, Deserialize, Deserializer, MapAccess, SeqAccess, Visitor};
 use serde_json::{Map, Number, Value};
@@ -97,8 +98,8 @@ pub(super) fn parse_json_with_byte_limit(
         ));
     }
     let mut deserializer = serde_json::Deserializer::from_str(json);
-    let value = UniqueValue::deserialize(&mut deserializer).map_err(|error| error.to_string())?;
-    deserializer.end().map_err(|error| error.to_string())?;
+    let value = UniqueValue::deserialize(&mut deserializer).map_err(bounded_diagnostic)?;
+    deserializer.end().map_err(bounded_diagnostic)?;
     Ok(value.0)
 }
 
@@ -131,7 +132,7 @@ fn read_bounded_project_bytes(
     reader
         .take(limit + 1)
         .read_to_end(&mut bytes)
-        .map_err(|error| error.to_string())?;
+        .map_err(bounded_diagnostic)?;
     if bytes.len() as u64 > limit {
         return Err(format!(
             "{label} exceeds the limit of {limit} bytes while reading"
@@ -149,8 +150,8 @@ fn read_json_bytes_with_byte_limit(
     limit: u64,
     label: &str,
 ) -> Result<Vec<u8>, String> {
-    let file = File::open(path).map_err(|error| error.to_string())?;
-    let size = file.metadata().map_err(|error| error.to_string())?.len();
+    let file = File::open(path).map_err(bounded_diagnostic)?;
+    let size = file.metadata().map_err(bounded_diagnostic)?.len();
     read_bounded_project_bytes(file, size, limit, label)
 }
 

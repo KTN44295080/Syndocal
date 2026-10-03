@@ -116,3 +116,26 @@ No Computer Use or subagents are used. The protected pairing PIN, localization,
 DJ runtime and AI3 work remains outside this checkpoint. Self-review is not
 claimed as independent review. Physical output and complete ledger acceptance
 remain separate; no completion marker is promoted by this local repair.
+
+## Current-base recheck at `cca0f7a5`
+
+The repeated Tap report was checked again on an optimized Windows QA build from
+the current base. Five 750ms taps changed the engine from 120 to `80.16871` BPM;
+the header finished at `80` with matching footer. The existing callback repair
+continues to pass all eight native groups.
+[Fresh native proof](artifacts/tap-native-recheck-2026-10-03.json) pins QA SHA-256
+`964aa00f42c858685fe9f04a7614bfc004ac481a0873b29d034e15fe18484747`.
+The nine async Tap cases and maintained exact-linker build gate also pass.
+
+[Passive ordinary-window proof](artifacts/tap-normal-recheck-2026-10-03.json)
+verified the actual primary executable SHA-256
+`c7e9c431f980fa68bd25e0f2e1d60c42edb7e59a7783640fea5cd0573855c9e1`,
+PID 57260 and one responsive maximized window. This is not observation of the
+operator's physical click sequence or active external clock source. No second
+Tap implementation, UI click, Computer Use or subagent was used. The first tap
+alone has no interval and retains the previous tempo.
+
+The primary artifact was subsequently refreshed by
+[the input-diagnostic checkpoint](PROJECT_INPUT_DIAGNOSTICS_2026-10-03.md);
+that document owns its later executable/window identity. This recheck adds no
+further production Tap behavior change and promotes no acceptance marker.

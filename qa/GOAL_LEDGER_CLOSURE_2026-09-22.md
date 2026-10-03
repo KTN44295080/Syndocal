@@ -488,3 +488,27 @@ golden/resource/recovery compatibility; automatic fallback, restart disposition,
 actual upgrade/hardware and release gates remain unproved. Protected Remote PIN/
 DJ ingress changes are excluded. Continue those gaps and the stale ShowClock/Patch
 risk-description audit without subagents or Computer Use.
+
+## Bounded project/backup input diagnostics — 2026-10-03
+
+Base `cca0f7a5`. A private native project rejection returned 57,405 bytes of an
+untrusted app string. Project/backup schema errors now omit failing values and
+locate the field; returned diagnostics use a 1,024-byte UTF-8/control-safe writer.
+The project decoder is extracted and removes its redundant whole-Value clone.
+Thirty-nine optimized Rust tests and 21 real native groups pass, including six
+hostile schema cases with active state/output/source preservation. The original
+backup wording failure, corrected strict boundary assertion, refreshed normal
+executable/window, sizes, exact identities, warning counts and limits are recorded
+once in [the checkpoint](PROJECT_INPUT_DIAGNOSTICS_2026-10-03.md).
+
+The repeated Tap report was rechecked at the recorded base: the real App callback
+changes 120 to 80.16871 BPM and the header to 80. This verifies the existing fix,
+not the operator's physical click sequence. Its evidence is linked in that
+checkpoint and the Tap note. The normal app is updated and running.
+
+Q4 is 168; status remains 27 Complete, 23 Open and 8 Deferred. The goal remains
+active. Original Serde/path/validator allocation and whole O1-O4 golden/count/
+resource/fallback/restart/upgrade acceptance remain unproved. Protected Remote
+PIN/DJ ingress work is excluded. Continue executable compatibility/recovery gaps
+and the identified stale ShowClock/Patch risk-description audit; no subagents or
+Computer Use, and no unobserved physical/release gate closure.

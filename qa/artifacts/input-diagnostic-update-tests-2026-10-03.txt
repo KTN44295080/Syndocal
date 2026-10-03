@@ -1,0 +1,14 @@
+CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+where.exe link.exe:
+C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+cargo test --manifest-path app/src-tauri/Cargo.toml --release --locked -j 1 application_update_ -- --nocapture --test-threads=1
+
+    Finished `release` profile [optimized] target(s) in 0.82s
+running 2 tests
+test tests::application_update_post_check_fence_rejects_owner_rotation_and_operator_lock ... ok
+test tests::application_update_settings_require_https_key_pair_and_known_channel ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 1955 filtered out; finished in 0.03s
+
+     Running unittests src\main.rs (target\release\deps\syndocal-c647597ad2872eab.exe)
+PASS application_update_: 2 selected, none failed or ignored; release test binary, not native window acceptance

@@ -18,6 +18,8 @@ import { nativeBackupJson } from './native-backup-json.mjs';
 
 const exec = promisify(execFile);
 const args = process.argv.slice(2);
+const inputDiagnostics = args.includes('--input-diagnostics');
+if (inputDiagnostics) args.splice(args.indexOf('--input-diagnostics'), 1);
 const backupJson = args.includes('--backup-json');
 if (backupJson) args.splice(args.indexOf('--backup-json'), 1);
 const projectJson = args.includes('--project-json');
@@ -37,6 +39,7 @@ assert.ok(!projectJson || !(leaseExpiry || externalHighRisk || externalRevocatio
   'Project-file admission owns a separate project/authority lane');
 assert.ok(!backupJson || !(projectJson || leaseExpiry || externalHighRisk || externalRevocation || tapBpm || diagnostics),
   'Backup-file admission owns a separate project/authority lane');
+assert.ok(!inputDiagnostics || projectJson || backupJson, 'Input diagnostics require the isolated project or backup lane');
 const take = name => { const index = args.indexOf(name); assert.ok(index >= 0 && index + 1 < args.length, `Required: ${name}`); return args.splice(index, 2)[1]; };
 const executable = take('--expected-executable');
 const evidence = take('--evidence');
@@ -154,8 +157,8 @@ const read = async () => {
 };
 try {
   const first = await start();
-  if (backupJson) await nativeBackupJson(backend, checks);
-  if (projectJson) await nativeProjectJson(backend, checks);
+  if (backupJson) await nativeBackupJson(backend, checks, { inputDiagnostics });
+  if (projectJson) await nativeProjectJson(backend, checks, { inputDiagnostics });
   if (tapBpm) await nativeTapBpm(backend, checks);
   const diagnostic = diagnostics ? await nativeDiagnosticExports(backend.invoke) : undefined;
   if (diagnostic) checks.push(diagnostic.check);
@@ -265,6 +268,7 @@ await fs.writeFile(evidence, `${JSON.stringify({ schemaVersion: 1, timestamp: ne
   sidecarSha256: createHash('sha256').update(await fs.readFile(new URL('./server.mjs', import.meta.url))).digest('hex'),
   runnerSha256: createHash('sha256').update(await fs.readFile(new URL('./check-native-lifecycle.mjs', import.meta.url))).digest('hex'),
   backendHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-backend-session.mjs', import.meta.url))).digest('hex'),
+  ...(inputDiagnostics ? { inputDiagnosticHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-input-diagnostics.mjs', import.meta.url))).digest('hex') } : {}),
   ...(externalHighRisk ? {
     highRiskHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-external-high-risk.mjs', import.meta.url))).digest('hex'),
     stdioHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-stdio-session.mjs', import.meta.url))).digest('hex'),

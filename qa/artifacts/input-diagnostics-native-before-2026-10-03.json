@@ -1,0 +1,96 @@
+{
+  "schemaVersion": 1,
+  "timestamp": "2026-10-02T23:31:00.766Z",
+  "passed": false,
+  "executable": "C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-native-acceptance-target\\release\\syndocal.exe",
+  "executableSha256": "964aa00f42c858685fe9f04a7614bfc004ac481a0873b29d034e15fe18484747",
+  "sidecarSha256": "bc6ad436dac381513df992fdbef0aa800c6793704f4c1848b7c8312ec474e564",
+  "runnerSha256": "12ede08ed8330b9e37822ceac34c8a462f126dc95bb91b132e95b85edf3347ae",
+  "backendHarnessSha256": "ade29aa256d8ff17374bb4b3e893ea9a07f71f8fa2cf2bb72b21f80d4e0e8b1f",
+  "inputDiagnosticHarnessSha256": "a0856382a67dcae734dc483eea5466509ff9f55609973f089f6d6b5562c5de9e",
+  "projectJsonHarnessSha256": "3bc9f60e617bba5141c5b62c3e6200ef76ac5091b260553cea45db22d9ba64fc",
+  "projectJsonTransport": "Exact native load_project_path command on private isolated empty-project files; no DOM/dialog action",
+  "profile": "jp.seraf.ktn.syndocal.qa.mcp-lifecycle",
+  "checks": [
+    {
+      "check": "native-project-json-valid-unicode-path-load",
+      "passed": true,
+      "sourceSha256": "f0ac84959775e90b84d1e8f34a4ef31b54cad6d1d061d856312f30ef7db62985",
+      "token": {
+        "project_epoch": 1,
+        "project_revision": 0,
+        "checkpoint_hash": "25ff9c31c5d67e47f79fbd6ac1f2144213fb8f5d3588936d12021b7a2eab62bb",
+        "timeline_transport_epoch": 1,
+        "timeline_transport_generation": 2,
+        "current_project_path": "C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-project-json-3cAT70\\valid-日本語.sdc",
+        "publication_generation": 2,
+        "publication_kind": "identity_replacement",
+        "mapping_replacement_generation": 1,
+        "authority_disposition": "clean_at_path",
+        "authority_disposition_generation": 1,
+        "recovery_authority_serial": 9,
+        "recovery_authority_last_transition": {
+          "kind": "project_publication"
+        },
+        "path_generation": 1,
+        "history_generation": 2
+      },
+      "ownership": {
+        "role": "Standby",
+        "effective_role": "Standby",
+        "desired_role": "Both",
+        "persisted_role": "Both",
+        "state": "Ready",
+        "generation": 1,
+        "epoch": 1,
+        "lighting_allowed": false,
+        "video_allowed": false,
+        "lighting_reason": "ProjectSwapDisarmed",
+        "video_reason": "ProjectSwapDisarmed",
+        "error": null
+      }
+    },
+    {
+      "check": "native-project-input-diagnostics-bounded-with-state-preserved",
+      "passed": false,
+      "beforeToken": {
+        "project_epoch": 1,
+        "project_revision": 0,
+        "checkpoint_hash": "25ff9c31c5d67e47f79fbd6ac1f2144213fb8f5d3588936d12021b7a2eab62bb",
+        "timeline_transport_epoch": 1,
+        "timeline_transport_generation": 2,
+        "current_project_path": "C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-project-json-3cAT70\\valid-日本語.sdc",
+        "publication_generation": 2,
+        "publication_kind": "identity_replacement",
+        "mapping_replacement_generation": 1,
+        "authority_disposition": "clean_at_path",
+        "authority_disposition_generation": 1,
+        "recovery_authority_serial": 9,
+        "recovery_authority_last_transition": {
+          "kind": "project_publication"
+        },
+        "path_generation": 1,
+        "history_generation": 2
+      },
+      "cases": [
+        {
+          "name": "foreign-app",
+          "byteLength": 61030,
+          "sourceSha256": "846012b75a88730abaeb81b9c593fca7c932bd975d666e235034899e5ce6e656",
+          "diagnosticBytes": 57405,
+          "stateAndSourcePreserved": true
+        }
+      ]
+    }
+  ],
+  "normalAppIdentityUnchanged": true,
+  "credentialRevoked": true,
+  "credentialFileRemoved": true,
+  "nativePanicLocations": [],
+  "nonclaims": [
+    "QA identifier release build, not the distributed artifact",
+    "No physical output activation; optional high-risk or lease-expiry probe mutates isolated backend lease authority only; optional Tap probe changes isolated empty-project tempo; optional project-file probe loads private empty-project JSON only",
+    "No durable authored/output mutation crash publication acceptance",
+    "Native .sdc admission and rejected-load preservation only; no complete migration corpus, backup/recovery/upgrade, other file formats or physical output acceptance"
+  ]
+}

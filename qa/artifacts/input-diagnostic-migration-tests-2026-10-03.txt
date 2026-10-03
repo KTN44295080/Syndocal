@@ -1,0 +1,27 @@
+CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+where.exe link.exe:
+C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+cargo test --manifest-path app/src-tauri/Cargo.toml --release --locked -j 1 migration_corpus_ -- --nocapture --test-threads=1
+    Finished `release` profile [optimized] target(s) in 0.85s
+     Running unittests src\main.rs (target\release\deps\syndocal-c647597ad2872eab.exe)
+migration corpus: 224 truncations, 5 malformed byte/number cases, 3 depth cases
+migration hostile corpus: seed=0x5344435f20260913, 4096 cases, 4091 parser-rejected, 5 parsed, 0 prepared, max_bytes=2048
+migration corpus: seed=0x5344435f20260913, 128 semantic/idempotency cases
+
+running 12 tests
+test project_snapshot_persistence::project_migration_corpus_tests::migration_corpus_bounded_truncation_utf8_and_depth_inputs ... ok
+test project_snapshot_persistence::project_migration_corpus_tests::migration_corpus_control_mappings_survive_canonical_save ... ok
+test project_snapshot_persistence::project_migration_corpus_tests::migration_corpus_corrupt_reference_and_value_matrix ... ok
+test project_snapshot_persistence::project_migration_corpus_tests::migration_corpus_duplicate_ids_fail_without_mutating_candidates ... ok
+test project_snapshot_persistence::project_migration_corpus_tests::migration_corpus_embedded_profile_unicode_paths_are_not_reopened ... ok
+test project_snapshot_persistence::project_migration_corpus_tests::migration_corpus_legacy_defaults_and_unknown_fields ... ok
+test project_snapshot_persistence::project_migration_corpus_tests::migration_corpus_phase1_golden_load_save_reload ... ok
+test project_snapshot_persistence::project_migration_corpus_tests::migration_corpus_rejects_file_media_before_production_preparation ... ok
+test project_snapshot_persistence::project_migration_corpus_tests::migration_corpus_retired_dj_transition_is_observable_and_not_resaved ... ok
+test project_snapshot_persistence::project_migration_corpus_tests::migration_corpus_seeded_hostile_json_bytes_are_bounded_and_panic_free ... ok
+test project_snapshot_persistence::project_migration_corpus_tests::migration_corpus_seeded_semantic_round_trip_property ... ok
+test project_snapshot_persistence::project_migration_corpus_tests::migration_corpus_version_rejection_precedes_migration ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 1945 filtered out; finished in 0.20s
+
+PASS migration_corpus_: 12 selected, none failed or ignored; release test binary, not native window acceptance

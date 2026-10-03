@@ -1,0 +1,20 @@
+CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+where.exe link.exe:
+C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+cargo test --manifest-path app/src-tauri/Cargo.toml --release --locked -j 1 input_diagnostic_ -- --nocapture --test-threads=1
+
+running 6 tests
+test input_diagnostic::tests::input_diagnostic_bounds_dynamic_map_keys_and_omits_enum_variants ... ok
+test input_diagnostic::tests::input_diagnostic_escapes_control_characters_before_bounding ... ok
+test input_diagnostic::tests::input_diagnostic_foreign_app_rejection_does_not_echo_input ... ok
+test input_diagnostic::tests::input_diagnostic_preserves_short_unicode_and_exact_byte_limit ... ok
+test input_diagnostic::tests::input_diagnostic_schema_redacts_failing_values_and_locates_fields ... ok
+test input_diagnostic::tests::input_diagnostic_stops_formatting_when_full ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 1951 filtered out; finished in 0.01s
+
+   Compiling serde_path_to_error v0.1.20
+   Compiling syndocal v1.2.0-alpha.69 (C:\Users\janua\OneDrive\ドキュメント\GitHub\Syndocal\app\src-tauri)
+    Finished `release` profile [optimized] target(s) in 13m 21s
+     Running unittests src\main.rs (target\release\deps\syndocal-c647597ad2872eab.exe)
+PASS input_diagnostic_: 6 selected, none failed or ignored; release test binary, not native window acceptance

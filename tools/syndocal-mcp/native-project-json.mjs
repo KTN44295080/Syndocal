@@ -4,10 +4,11 @@ import { createReadStream } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
+import { nativeInputDiagnostics } from './native-input-diagnostics.mjs';
 
 // Only the isolated, empty QA project's path-based native load command is used.
 // No dialog, media/device I/O, Enable/Arm action or normal-profile mutation.
-export async function nativeProjectJson(backend, checks) {
+export async function nativeProjectJson(backend, checks, { inputDiagnostics = false } = {}) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'syndocal-project-json-'));
   const ownerId = `project-json-${randomUUID()}`;
   const digest = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -62,6 +63,13 @@ export async function nativeProjectJson(backend, checks) {
     assert.equal(digest(await fs.readFile(validPath)), digest(valid));
     checks.push({ check: 'native-project-json-valid-unicode-path-load', passed: true,
       sourceSha256: digest(valid), token: before.token, ownership: before.ownership });
+    if (inputDiagnostics) await nativeInputDiagnostics({ seed: project, backup: false, load, observe, before, digest, checks,
+      write: async (_index, name, value) => {
+        const file = path.join(directory, `diagnostic-${name}.sdc`);
+        const bytes = Buffer.from(JSON.stringify(value));
+        await fs.writeFile(file, bytes, { flag: 'wx' });
+        return { file, target: file, bytes };
+      } });
     const json = valid.toString('utf8');
     assert.ok(json.includes('"version":1') && json.includes('"bpm":97'));
     const cases = [
