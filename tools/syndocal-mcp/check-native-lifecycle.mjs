@@ -19,6 +19,8 @@ import { nativeControllerOutput } from './native-controller-output.mjs';
 
 const exec = promisify(execFile);
 const args = process.argv.slice(2);
+const controllerEventPressure = args.includes('--controller-event-pressure');
+if (controllerEventPressure) args.splice(args.indexOf('--controller-event-pressure'), 1);
 const controllerSafetyPressure = args.includes('--controller-safety-pressure');
 if (controllerSafetyPressure) args.splice(args.indexOf('--controller-safety-pressure'), 1);
 const controllerBurst = args.includes('--controller-burst');
@@ -68,6 +70,8 @@ assert.ok(!controllerBurst || !(controllerInFlight || controllerOutput || contro
   'Live native burst owns a separate project/output/request lane');
 assert.ok(!controllerSafetyPressure || !(controllerBurst || controllerInFlight || controllerOutput || controllerRestart || controllerExpiry || projectJson || backupJson || leaseExpiry || externalHighRisk || externalRevocation || tapBpm || diagnostics),
   'Live native safety pressure owns a separate project/output/request/revocation lane');
+assert.ok(!controllerEventPressure || !(controllerSafetyPressure || controllerBurst || controllerInFlight || controllerOutput || controllerRestart || controllerExpiry || projectJson || backupJson || leaseExpiry || externalHighRisk || externalRevocation || tapBpm || diagnostics),
+  'Live native event pressure owns a separate project/output/observation lane');
 const take = name => { const index = args.indexOf(name); assert.ok(index >= 0 && index + 1 < args.length, `Required: ${name}`); return args.splice(index, 2)[1]; };
 const executable = take('--expected-executable');
 const evidence = take('--evidence');
@@ -200,6 +204,14 @@ try {
   if (externalHighRisk) await nativeExternalHighRisk(backend, options, checks);
   if (controllerOutput) await nativeControllerOutput(backend, options, checks);
   if (controllerBurst) await nativeControllerOutput(backend, options, checks, { burstRequests: true });
+  if (controllerEventPressure) {
+    await nativeControllerOutput(backend, options, checks, { eventPressure: true });
+    const priorInstance = backend.descriptor.instanceId;
+    await stop(); await start(); await pair(); await install();
+    assert.notEqual(backend.descriptor.instanceId, priorInstance);
+    checks.push({ check: 'event-pressure-owned-process-reset-before-common-lifecycle', passed: true });
+    first = backend.descriptor;
+  }
   if (controllerSafetyPressure) {
     for (const safetyPressure of ['saturation', 'kill_switch']) {
       await nativeControllerOutput(backend, options, checks, { safetyPressure });
@@ -315,7 +327,8 @@ finally {
   }
 }
 const afterNormal = await readNormalDescriptor();
-assert.ok(beforeNormal === null ? afterNormal === null : afterNormal?.equals(beforeNormal), 'Normal app identity must be unchanged');
+const normalAppIdentityUnchanged = beforeNormal === null ? afterNormal === null : afterNormal?.equals(beforeNormal) === true;
+if (!normalAppIdentityUnchanged && !failure) failure = new Error('Normal app identity must be unchanged');
 const nativePanicLocations = nativeStderr.split(/\r?\n/).filter(line => /panicked at .*\.rs:\d+:\d+/.test(line)).map(line => line.slice(0, 512));
 if (nativePanicLocations.length > 0) failure ??= new Error('Native worker panic observed during QA');
 await fs.writeFile(evidence, `${JSON.stringify({ schemaVersion: 1, timestamp: new Date().toISOString(), passed: !failure && !cleanupNeeded,
@@ -363,6 +376,12 @@ await fs.writeFile(evidence, `${JSON.stringify({ schemaVersion: 1, timestamp: ne
     stdioHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-stdio-session.mjs', import.meta.url))).digest('hex'),
     controllerOutputHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-controller-output.mjs', import.meta.url))).digest('hex'),
   } : {}),
+  ...(controllerEventPressure ? {
+    eventPressureHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-controller-event-pressure.mjs', import.meta.url))).digest('hex'),
+    canonicalQueryAdapterSha256: createHash('sha256').update(await fs.readFile(new URL('../../app/src/agentBridgeControlPlane.ts', import.meta.url))).digest('hex'),
+    controllerOutputHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-controller-output.mjs', import.meta.url))).digest('hex'),
+    stdioHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-stdio-session.mjs', import.meta.url))).digest('hex'),
+  } : {}),
   ...(controllerSafetyPressure ? {
     safetyPressureHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-controller-safety-pressure.mjs', import.meta.url))).digest('hex'),
     controllerOutputHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-controller-output.mjs', import.meta.url))).digest('hex'),
@@ -373,11 +392,12 @@ await fs.writeFile(evidence, `${JSON.stringify({ schemaVersion: 1, timestamp: ne
     revocationTransport: 'Separate stdio MCP requests, native claim/revoke/execute commands; QA renderer generation retired immediately before graceful close',
     ...(!externalHighRisk ? { stdioHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-stdio-session.mjs', import.meta.url))).digest('hex') } : {}),
   } : {}),
-  profile: 'jp.seraf.ktn.syndocal.qa.mcp-lifecycle', checks, normalAppIdentityUnchanged: true,
+  profile: 'jp.seraf.ktn.syndocal.qa.mcp-lifecycle', checks, normalAppIdentityUnchanged,
   credentialRevoked: !cleanupNeeded, credentialFileRemoved: true,
   nativePanicLocations,
   nonclaims: ['QA identifier release build, not the distributed artifact',
-    controllerSafetyPressure ? 'Actual 64-slot external broker pending saturation, 10000 R4 intents and local native S0 all-zero loopback output before/after revocation and while Kill Switch is active. Existing renderer registration retains immutable external work; no Engine command-queue saturation, complete tick/frame/audio/UI budget, publisher event-gap, physical device, venue or release acceptance'
+    controllerEventPressure ? 'Actual native 2048-record retention gap, authenticated MCP slow subscriber, authoritative resnapshot and exact runtime-delta convergence under 64-slot pending broker pressure with live whole-image loopback output. Local fenced Loop changes keep the established 4/s rate; real production query adapter completes individually claimed reads. No Engine command-queue saturation, every adapter/event, complete tick/frame/audio/UI budget, physical device, venue or release acceptance'
+    : controllerSafetyPressure ? 'Actual 64-slot external broker pending saturation, 10000 R4 intents and local native S0 all-zero loopback output before/after revocation and while Kill Switch is active. Existing renderer registration retains immutable external work; no Engine command-queue saturation, complete tick/frame/audio/UI budget, publisher event-gap, physical device, venue or release acceptance'
       : controllerBurst ? 'Actual 10000 stdio discovery and 10000 R4 master intents with software loopback ArtDMX reception and measured packet intervals only; no complete output tick/frame/audio/UI budget, publisher event-gap, local priority Blackout under saturation, physical device, venue or release acceptance'
       : controllerInFlight ? 'Actual native queued, claimed and native-committed R4 master/R5 diagnostic requests interrupted before broker completion; unknown restart status never re-executes, software loopback re-Arm remains explicit and owned export bytes remain intact. No physical fixtures, recording/authored crash matrix, worker-internal interruption, full durable mutation completion or release acceptance'
       : controllerRestart ? 'Actual native forced process termination/restart and explicit re-Arm with software loopback reception only; no physical fixtures, venue, serial DMX, video, worker-specific failure, in-flight mutation crash durability or whole controller-loss/re-arm acceptance'

@@ -193,7 +193,9 @@ impl ControlPlaneQueryState {
                 runtime: BTreeMap::new(),
                 last_project: None,
                 last_output: None,
-                event_stream_epoch: random_nonzero_u64()?,
+                // The event handoff fence crosses JSON/JS Number before the
+                // subscriber sends it back, just like process/session IDs.
+                event_stream_epoch: random_nonzero_javascript_safe_u64()?,
                 event_stream_generation: 0,
                 events: VecDeque::new(),
             }),
@@ -1842,6 +1844,35 @@ mod tests {
             project: source.project,
             output: source.output,
             runtime,
+        }
+    }
+
+    #[test]
+    fn snapshot_event_fence_roundtrips_javascript_numeric_identifiers() {
+        // Every random identifier sent in the JSON fence must survive an
+        // ordinary JS Number round-trip. Server-only cursor/window bindings
+        // retain the full u64 CSPRNG; cursor tokens remain opaque 128-bit IDs.
+        for _ in 0..32 {
+            let state = ControlPlaneQueryState::new().unwrap();
+            let view = seeded_view(&state, "main");
+            let mut js_fence = view.fence.clone();
+            for identifier in [
+                &mut js_fence.process_incarnation,
+                &mut js_fence.session_incarnation,
+                &mut js_fence.event_stream_epoch,
+            ] {
+                assert!(*identifier > 0 && *identifier <= MAX_SAFE_JAVASCRIPT_INTEGER);
+                *identifier = (*identifier as f64) as u64;
+            }
+            assert_eq!(js_fence, view.fence);
+            let page = observation_page(
+                &state,
+                &view,
+                EventPageRequest { limit: 1, expected_fence: Some(js_fence), cursor: None },
+            ).unwrap();
+            assert!(page.events.is_empty());
+            assert!(page.gap.is_none());
+            assert!(page.next_cursor.is_some());
         }
     }
 

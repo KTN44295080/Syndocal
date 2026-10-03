@@ -11,15 +11,18 @@ import { nativeControllerExpiryProbe } from './native-controller-expiry.mjs';
 import { nativeControllerInFlightProbe } from './native-controller-inflight.mjs';
 import { nativeControllerBurstProbe } from './native-controller-burst.mjs';
 import { nativeControllerSafetyPressureProbe } from './native-controller-safety-pressure.mjs';
+import { nativeControllerEventPressureProbe } from './native-controller-event-pressure.mjs';
 
 // Software loopback only: an owned ephemeral receiver, one isolated QA route,
 // and real authenticated MCP operations. Retirement/transfer must preserve DMX.
-export async function nativeControllerOutput(backend, options, checks, { restartLifecycle, leaseExpiry = false, inFlightCrash = false, burstRequests = false, safetyPressure } = {}) {
+export async function nativeControllerOutput(backend, options, checks, { restartLifecycle, leaseExpiry = false, inFlightCrash = false, burstRequests = false, safetyPressure, eventPressure = false } = {}) {
   assert.ok(!(restartLifecycle && leaseExpiry), 'Live restart and expiry require separate lanes');
   assert.ok(!inFlightCrash || restartLifecycle, 'In-flight crash requires the owned restart lifecycle');
   assert.ok(!burstRequests || !(restartLifecycle || leaseExpiry || inFlightCrash), 'Burst requires its own live request lane');
   assert.ok(!safetyPressure || (['saturation', 'kill_switch'].includes(safetyPressure)
     && !(restartLifecycle || leaseExpiry || inFlightCrash || burstRequests)), 'Safety pressure requires its own live lane');
+  assert.ok(!eventPressure || !(restartLifecycle || leaseExpiry || inFlightCrash || burstRequests || safetyPressure),
+    'Event pressure requires its own live observation lane');
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'syndocal-controller-output-'));
   const receiver = dgram.createSocket('udp4');
   const ownerId = `controller-output-${randomUUID()}`;
@@ -63,6 +66,16 @@ export async function nativeControllerOutput(backend, options, checks, { restart
       if (phase) {
         assert.ok(latest.equals(phase.expected), `${phase.name}: unexpected 512-channel image`);
         phase.frames++;
+        if (eventPressure) {
+          const now = performance.now();
+          if (phase.lastPacketAt !== undefined) {
+            const interval = now - phase.lastPacketAt;
+            phase.intervals++;
+            phase.intervalSumMs += interval;
+            phase.maxIntervalMs = Math.max(phase.maxIntervalMs, interval);
+          }
+          phase.lastPacketAt = now;
+        }
       }
     } catch (error) { packetError ??= error; }
   });
@@ -70,7 +83,7 @@ export async function nativeControllerOutput(backend, options, checks, { restart
   const stable = async (name, expected, action = async () => {}) => {
     healthy();
     assert.ok(latest?.equals(expected), `${name}: starting image`);
-    const observation = { name, expected, frames: 0 };
+    const observation = { name, expected, frames: 0, intervals: 0, intervalSumMs: 0, maxIntervalMs: 0 };
     phase = observation;
     try {
       const result = await action();
@@ -78,6 +91,8 @@ export async function nativeControllerOutput(backend, options, checks, { restart
       healthy();
       assert.ok(observation.frames >= 10, `${name}: live sender must continue, not merely retain a cached frame`);
       return { result, observation: { phase: name, frames: observation.frames,
+        ...(eventPressure ? { intervalCount: observation.intervals,
+          meanIntervalMs: observation.intervalSumMs / observation.intervals, maxIntervalMs: observation.maxIntervalMs } : {}),
         payloadSha256: digest(expected), channels1to8: [...expected.subarray(0, 8)] } };
     } finally { phase = undefined; }
   };
@@ -181,6 +196,15 @@ export async function nativeControllerOutput(backend, options, checks, { restart
     project.snapshot.fixtures[0].group_ids = [];
     project.snapshot.fixtures[0].attribute_values.find(value => value.attribute === 'Dimmer').value = 65535;
     project.snapshot.lighting_master = 1;
+    if (eventPressure) {
+      project.snapshot.timeline.duration_ms = 4000;
+      project.snapshot.timeline.phases = [{ id: 1, label: 'Event pressure range', start_ms: 0, end_ms: 4000 }];
+      project.snapshot.timeline.loop_region = { a_ms: 0, b_ms: 4000, enabled: false, musical_length_beats: 8 };
+      const timeline = project.snapshot.timeline_bank.find(timeline => timeline.id === project.snapshot.timeline.id);
+      timeline.duration_ms = 4000;
+      timeline.phases = structuredClone(project.snapshot.timeline.phases);
+      timeline.loop_region = structuredClone(project.snapshot.timeline.loop_region);
+    }
     const route = { enabled: true, protocol: 'ArtNet', target_ip: '127.0.0.1', port: address.port,
       universe: 0, serial_port: '', serial_baud_rate: 57600 };
     project.snapshot.output = { ...route };
@@ -261,6 +285,14 @@ export async function nativeControllerOutput(backend, options, checks, { restart
       checks.push({ check: 'explicit-native-project-replacement-stops-owned-loopback-sender-and-source-is-unchanged', passed: true,
         ownership: stopped, packetsTotal: packetCount, readOverloads });
     };
+    if (eventPressure) {
+      await nativeControllerEventPressureProbe({ backend: () => backend,
+        principal: () => ({ principalId: options.principalId, principalIncarnation: options.principalIncarnation }),
+        grant, send, state, checkpoint, stable, full, pause, checks,
+        nextOutputRequestId: () => numericRequestId++, call: (name, args) => mcp.call(name, args) });
+      await finish();
+      return;
+    }
     if (safetyPressure) {
       await nativeControllerSafetyPressureProbe({ backend: () => backend,
         principal: () => ({ principalId: options.principalId, principalIncarnation: options.principalIncarnation }),

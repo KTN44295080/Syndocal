@@ -1,0 +1,15 @@
+
+> syndocal@1.2.0-alpha.69 check:ai1-query-event-contract C:\Users\janua\OneDrive\ドキュメント\GitHub\Syndocal\app
+> node scripts/check-ai1-query-event-contract.mjs
+
+AI1 query/event contract ok; protocol bounds and schemas verified; focused frontend gates 2
+
+> syndocal@1.2.0-alpha.69 check:ai1-query-event-contract:self-test C:\Users\janua\OneDrive\ドキュメント\GitHub\Syndocal\app
+> node scripts/check-ai1-query-event-contract.mjs --self-test
+
+AI1 query/event self-tests ok; 2 contract-presence cases
+
+> syndocal@1.2.0-alpha.69 check:agent-bridge C:\Users\janua\OneDrive\ドキュメント\GitHub\Syndocal\app
+> node scripts/check-agent-bridge.mjs
+
+agent bridge: PASS (13 groups; real processor/runtime/confirmation modules, no native or device calls)

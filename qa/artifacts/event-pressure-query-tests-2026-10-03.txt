@@ -1,0 +1,25 @@
+pinned linker=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+   Compiling engine v1.2.0-alpha.69 (C:\Users\janua\OneDrive\ドキュメント\GitHub\Syndocal\crates\engine)
+   Compiling syndocal v1.2.0-alpha.69 (C:\Users\janua\OneDrive\ドキュメント\GitHub\Syndocal\app\src-tauri)
+    Finished `release` profile [optimized] target(s) in 4m 40s
+     Running unittests src\main.rs (C:\Users\janua\AppData\Local\Temp\syndocal-native-acceptance-target\release\deps\syndocal-fae4a7cb6ae73690.exe)
+
+running 15 tests
+test control_plane_query::tests::catalogs_are_sorted_bounded_and_full_lock_safe ... ok
+test control_plane_query::tests::cursor_expiry_capacity_retirement_and_replay_are_bounded ... ok
+test control_plane_query::tests::cursors_are_owner_bound_single_use_and_tamper_evident ... ok
+test control_plane_query::tests::event_backlog_pages_compose_and_converge_to_the_exact_final_fence ... ok
+test control_plane_query::tests::initial_event_handoff_rejects_future_and_altered_fences_without_burning_valid_one ... ok
+test control_plane_query::tests::issued_local_mutation_fence_is_owner_bound_without_changing_six_query_outputs ... ok
+test control_plane_query::tests::process_cursor_capacity_is_bounded_across_windows ... ok
+test control_plane_query::tests::project_mutation_fence_projection_preserves_six_query_outputs_counts_and_fences ... ok
+test control_plane_query::tests::project_replacement_is_redacted_and_emits_a_canonical_event ... ok
+test control_plane_query::tests::real_engine_handle_capture_is_observational_and_history_free ... ok
+test control_plane_query::tests::retained_event_gap_is_explicit_and_requires_resnapshot ... ok
+test control_plane_query::tests::serialized_capture_prevents_delayed_older_source_regression ... ok
+test control_plane_query::tests::snapshot_cursor_rejects_stale_fence_and_page_bounds_are_strict ... ok
+test control_plane_query::tests::snapshot_event_fence_roundtrips_javascript_numeric_identifiers ... ok
+test control_plane_query::tests::timeline_transport_runtime_query_generation_is_the_exact_engine_source_generation ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 1953 filtered out; finished in 0.07s

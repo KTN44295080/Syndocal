@@ -122,6 +122,19 @@ owned software-loopback sender/receiver. It cannot be combined with other live
 lanes. The recorded latency is backend-to-loopback evidence, not a physical
 button, Engine command-queue, complete realtime budget or venue test.
 
+The separate opt-in `--controller-event-pressure` lane starts a real MCP event
+subscription, retains 64 immutable pending reads, and publishes local fenced
+Loop changes at less than the existing four-per-second limit. The slow consumer
+reads one event per 64 changes so its single-use cursor remains valid while the
+actual 2,048-record native ring overflows. It requires `retention_expired`, a fresh
+canonical project/output/runtime snapshot, and exact subsequent delta convergence.
+Individually claimed MCP reads run the production canonical query adapter before
+their actual result is completed; no request is silently dropped to free slots.
+Whole 512-channel output and packet intervals are observed throughout. This lane
+takes several minutes, requires Node's TypeScript stripping for that shared adapter,
+and cannot be combined with another live lane. It does not patch clocks, rate,
+retention, invoke or engine state, and is not a complete realtime/device/venue gate.
+
 `syndocal_export_diagnostics` requires the exact File grant for
 `syndocal.diagnostics.export.v1`. It writes a sanitized ZIP to a new absolute
 path without a preview or approval dialog. Existing targets are rejected;

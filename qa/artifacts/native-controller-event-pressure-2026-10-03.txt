@@ -1,0 +1,17 @@
+event pressure: 64 applied Loop changes; stream 141; slow consumer 14; pending 64
+event pressure: 128 applied Loop changes; stream 269; slow consumer 15; pending 64
+event pressure: 192 applied Loop changes; stream 397; slow consumer 16; pending 64
+event pressure: 256 applied Loop changes; stream 525; slow consumer 17; pending 64
+event pressure: 320 applied Loop changes; stream 653; slow consumer 18; pending 64
+event pressure: 384 applied Loop changes; stream 781; slow consumer 19; pending 64
+event pressure: 448 applied Loop changes; stream 909; slow consumer 20; pending 64
+event pressure: 512 applied Loop changes; stream 1037; slow consumer 21; pending 64
+event pressure: 576 applied Loop changes; stream 1165; slow consumer 22; pending 64
+event pressure: 640 applied Loop changes; stream 1293; slow consumer 23; pending 64
+event pressure: 704 applied Loop changes; stream 1421; slow consumer 24; pending 64
+event pressure: 768 applied Loop changes; stream 1549; slow consumer 25; pending 64
+event pressure: 832 applied Loop changes; stream 1677; slow consumer 26; pending 64
+event pressure: 896 applied Loop changes; stream 1805; slow consumer 27; pending 64
+event pressure: 960 applied Loop changes; stream 1933; slow consumer 28; pending 64
+event pressure: 1024 applied Loop changes; stream 2061; slow consumer 29; pending 64
+PASS isolated native lifecycle: 18 checks; normal instance unchanged; QA process and credential cleaned up.
