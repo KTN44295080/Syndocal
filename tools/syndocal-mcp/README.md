@@ -200,6 +200,20 @@ combine these flags or other opt-in lanes. This is software loopback process-los
 and re-Arm evidence, not physical fixtures/video, worker-specific failure,
 in-flight mutation crash durability or complete controller-loss acceptance.
 
+Add `--controller-expiry` as a separate live native lease-expiry lane. It uses
+the same private loopback project and full 512-channel oracle. Without renewals
+or a synthetic clock, it waits for the production 60-second monotonic TTL while
+validating every received image and requiring fresh frames at each observation
+interval. R0 hides expired authority; a rejected explicit
+renewal observes the orphan transition once. Old renew/Arm/master operations,
+terminal replay and changed-shape recovery conflict must not change the image
+or runtime gates. Explicit recovery advances authority only; a separate explicit
+master changes Dimmer from 255 to 128. Relinquishment preserves that live image
+and blocks further output. Final private project replacement stops the sender.
+Do not combine this flag with other opt-in lanes. This is software loopback
+expiry/recovery evidence, not physical fixtures/video, worker-specific failure,
+in-flight mutation crash durability or complete controller-loss acceptance.
+
 Canonical native QueryError objects retain their bounded `code`, `message`,
 `retryable` and `resnapshot_required` fields in `result.error.native_query` for
 rejected reads. The outer error code stays `request_rejected`. Unrecognized

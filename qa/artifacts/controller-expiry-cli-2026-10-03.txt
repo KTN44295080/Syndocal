@@ -1,0 +1,10 @@
+PASS expiry excludes --controller-output before executable selection or launch
+PASS expiry excludes --controller-restart before executable selection or launch
+PASS expiry excludes --project-json before executable selection or launch
+PASS expiry excludes --backup-json before executable selection or launch
+PASS expiry excludes --lease-expiry before executable selection or launch
+PASS expiry excludes --external-high-risk before executable selection or launch
+PASS expiry excludes --external-revocation before executable selection or launch
+PASS expiry excludes --tap-bpm before executable selection or launch
+PASS expiry excludes --diagnostics before executable selection or launch
+PASS nine mutually exclusive live-expiry lanes

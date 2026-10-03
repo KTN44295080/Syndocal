@@ -4,12 +4,15 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
+import { performance } from 'node:perf_hooks';
 import { openNativeStdioSession } from './native-stdio-session.mjs';
 import { nativeControllerRestartProbe } from './native-controller-restart.mjs';
+import { nativeControllerExpiryProbe } from './native-controller-expiry.mjs';
 
 // Software loopback only: an owned ephemeral receiver, one isolated QA route,
 // and real authenticated MCP operations. Retirement/transfer must preserve DMX.
-export async function nativeControllerOutput(backend, options, checks, { restartLifecycle } = {}) {
+export async function nativeControllerOutput(backend, options, checks, { restartLifecycle, leaseExpiry = false } = {}) {
+  assert.ok(!(restartLifecycle && leaseExpiry), 'Live restart and expiry require separate lanes');
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'syndocal-controller-output-'));
   const receiver = dgram.createSocket('udp4');
   const ownerId = `controller-output-${randomUUID()}`;
@@ -213,6 +216,7 @@ export async function nativeControllerOutput(backend, options, checks, { restart
     for (const operationId of ['syndocal.output.lease.acquire.v2', 'syndocal.output.lease.force_transfer.v2',
       'syndocal.output.lease.relinquish.v2', 'syndocal.output.ownership.arm.v2',
       'syndocal.output.lighting.master.set.v2']) await grant('output', operationId);
+    const acquireStarted = performance.now();
     const acquired = accepted((await output('syndocal.output.lease.acquire.v2', { kind: 'acquire_lease', role: 'lighting' })).receipt);
     const active = acquired.lease_result.authority;
     assert.equal(packetCount, 0);
@@ -245,6 +249,13 @@ export async function nativeControllerOutput(backend, options, checks, { restart
       checks.push({ check: 'explicit-native-project-replacement-stops-owned-loopback-sender-and-source-is-unchanged', passed: true,
         ownership: stopped, packetsTotal: packetCount, readOverloads });
     };
+    if (leaseExpiry) {
+      await nativeControllerExpiryProbe({ grant, query, output, send, accepted, rejected,
+        state, stable, awaitImage, full, half, pause, healthy, active, armed, acquireStarted,
+        packets: () => packetCount, checks });
+      await finish();
+      return;
+    }
     if (restartLifecycle) {
       await nativeControllerRestartProbe({ backend: () => backend,
         restart: async observeStopped => { backend = await restartLifecycle(observeStopped); },
