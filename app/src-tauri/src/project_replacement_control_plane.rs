@@ -191,39 +191,21 @@ fn classify(error: &str) -> Error {
 }
 
 pub(super) fn prepare(request: &ProjectReplacementRequestV1) -> Result<PreparedProjectLoad, Error> {
-    match &request.action {
-        ProjectReplacementActionV1::New {} => {
-            // The engine fills an empty legacy Timeline bank on load. A new
-            // project is already current-schema: prepare that exact image
-            // before hashing so a later read cannot invent a second mutation.
-            let mut snapshot = protocol::EngineSnapshot::default();
-            protocol::normalize_timeline_bank(&mut snapshot);
-            snapshot
-                .video
-                .compositions
-                .push(protocol::CompositionSummary {
-                    id: 1,
-                    label: "Main".into(),
-                    layer_ids: Vec::new(),
-                    timeline_layer_ids: Vec::new(),
-                    output_ids: Vec::new(),
-                });
-            let snapshot = super::project_snapshot_for_save(snapshot);
-            super::prepare_project_load(
-                protocol::ProjectFile {
-                    version: super::PROJECT_FILE_VERSION,
-                    app: super::APP_NAME.into(),
-                    operator_policy: None,
-                    custom_profiles: Vec::new(),
-                    fixture_groups: Vec::new(),
-                    snapshot,
-                },
-                super::ProjectControlMappings::default(),
-                "New project".into(),
-                None,
-            )
-            .map_err(|_| Error::InvalidProject)
-        }
+    let mut prepared = match &request.action {
+        ProjectReplacementActionV1::New {} => super::prepare_project_load(
+            protocol::ProjectFile {
+                version: super::PROJECT_FILE_VERSION,
+                app: super::APP_NAME.into(),
+                operator_policy: None,
+                custom_profiles: Vec::new(),
+                fixture_groups: Vec::new(),
+                snapshot: protocol::EngineSnapshot::default(),
+            },
+            super::ProjectControlMappings::default(),
+            "New project".into(),
+            None,
+        )
+        .map_err(|_| Error::InvalidProject),
         ProjectReplacementActionV1::Open {
             path,
             expected_file_sha256,
@@ -246,7 +228,16 @@ pub(super) fn prepare(request: &ProjectReplacementRequestV1) -> Result<PreparedP
             super::prepare_project_load(project, mappings, path.clone(), Some(target))
                 .map_err(|_| Error::InvalidProject)
         }
-    }
+    }?;
+    // Prepare through the real Engine load/persistence policy, with a private
+    // deny-output runtime. In particular, an empty legacy Timeline bank must
+    // be classified before the Engine normalizes it. This runs before output
+    // retirement and hashes the image that publication will acknowledge.
+    prepared.snapshot = super::project_snapshot_for_save(
+        engine::prepare_project_snapshot_persistence(prepared.snapshot)
+            .map_err(|_| Error::InvalidProject)?,
+    );
+    Ok(prepared)
 }
 
 pub(super) fn execute_core(

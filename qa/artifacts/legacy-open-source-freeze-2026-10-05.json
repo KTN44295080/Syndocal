@@ -1,0 +1,37 @@
+{
+  "base": "57c64c27e34b7f27d8466420ad3023f98a271ef5",
+  "timestamp": "2026-10-04T20:09:39.8516462Z",
+  "files": [
+    {
+      "path": "crates/engine/src/lib.rs",
+      "sha256": "dabbc39117577deffad535a6dfa5d4cd2efe1be1aed17ef36a0c817834574ed9"
+    },
+    {
+      "path": "crates/engine/src/project_load_preparation.rs",
+      "sha256": "94d1f153ed97f57c1af5071e5f28883602963a38994a3d00c41aa36707b756bb"
+    },
+    {
+      "path": "app/src-tauri/src/project_replacement_control_plane.rs",
+      "sha256": "032288d866effdcd1cad5633e48c85b57dddcf17b6e12afd06eb40f46f567a10"
+    },
+    {
+      "path": "app/src-tauri/src/project_replacement_control_plane_tests.rs",
+      "sha256": "1b897bed482e0454716a45f3337a38409e63f588b2cb616d067f69fb10f98cca"
+    },
+    {
+      "path": "tools/syndocal-mcp/native-project-replacement.mjs",
+      "sha256": "314dfd6c8aa3bf8537787ef142315077eee29bfae0dc5d4b34fb5ce5aef3b87e"
+    },
+    {
+      "path": "tools/syndocal-mcp/check-native-lifecycle.mjs",
+      "sha256": "77ae7ab26e5aedec8e1744dbdb8fc3bc608711c73826ca3cee903df5744a5754"
+    }
+  ],
+  "negative": "syndocal-typed-legacy-open-negative-20261005.txt",
+  "scope": "Typed New/Open candidate-only canonical Engine load and persistence; no primary debugger, Computer Use or subagent",
+  "testHarnessCorrection": {
+    "before": "5470ce180302d0d205bd92490bf2f7167c37bdb6d524fca0314ba877261e2355",
+    "after": "1b897bed482e0454716a45f3337a38409e63f588b2cb616d067f69fb10f98cca",
+    "reason": "The sample carries enabled DMX declarations. Keep exact source bytes and set the real test Engine to acknowledged Standby before publication; complete image equality remains unchanged."
+  }
+}

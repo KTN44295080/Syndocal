@@ -16,6 +16,8 @@ mod managed_network_dmx_retirement;
 pub use managed_network_dmx_retirement::ManagedDmxRetirementScope;
 pub mod media_derived;
 mod move_path;
+mod project_load_preparation;
+pub use project_load_preparation::prepare_project_snapshot_persistence;
 mod show_serial_dmx_status;
 mod snapshot_public;
 mod snapshot_read;

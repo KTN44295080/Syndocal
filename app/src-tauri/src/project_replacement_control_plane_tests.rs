@@ -41,6 +41,118 @@ mod project_replacement_control_plane_contract_tests {
     }
 
     #[test]
+    fn project_replacement_control_plane_legacy_open_matches_acknowledged_engine_persistence() {
+        assert_open_ack_persistence(
+            &serde_json::to_vec(&ProjectFile {
+                version: PROJECT_FILE_VERSION,
+                app: APP_NAME.into(),
+                operator_policy: None,
+                custom_profiles: Vec::new(),
+                fixture_groups: Vec::new(),
+                snapshot: EngineSnapshot::default(),
+            })
+            .unwrap(),
+            "legacy-default",
+        );
+        assert_open_ack_persistence(PHASE1_SAMPLE_PROJECT_JSON.as_bytes(), "legacy-phase1");
+        assert_open_ack_persistence(
+            include_bytes!("../../../qa/migration/authored-control-project.json"),
+            "current-authored-controls",
+        );
+    }
+
+    fn assert_open_ack_persistence(bytes: &[u8], label: &str) {
+        use sha2::{Digest, Sha256};
+        let harness = MediaAssetA6CommandHarness::new();
+        let query = ControlPlaneQueryState::new().unwrap();
+        let root = unique_test_directory("typed-legacy-project-open");
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("legacy.sdc");
+        // Keep the fixtures byte-exact, including enabled output declarations.
+        // The real worker must deny capabilities before it receives that image.
+        harness
+            .state
+            .engine
+            .set_output_ownership_role(MachineOutputRole::Standby)
+            .unwrap();
+        let denied = harness.state.engine.output_ownership_status();
+        assert_eq!(denied.effective_role, MachineOutputRole::Standby);
+        assert!(!denied.lighting_allowed && !denied.video_allowed);
+        std::fs::write(&path, bytes).unwrap();
+        let original = request(
+            &query,
+            &harness.state,
+            Action::Open {
+                path: path.to_string_lossy().into(),
+                expected_file_sha256: format!("{:x}", Sha256::digest(bytes)),
+            },
+        );
+        let prepared = prepare(&original).unwrap();
+        let expected = serde_json::to_value(prepared.snapshot.clone()).unwrap();
+        request_project_snapshot_publication(&harness.state.engine, prepared.snapshot).unwrap();
+        let after = harness.state.engine.output_ownership_status();
+        assert!(!after.lighting_allowed && !after.video_allowed);
+        let actual = serde_json::to_value(project_snapshot_for_save(
+            harness.state.engine.persistence_snapshot().unwrap(),
+        ))
+        .unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        std::fs::remove_file(&path).unwrap();
+        std::fs::remove_dir(&root).unwrap();
+        assert_eq!(
+            actual, expected,
+            "{label}: Open receipt and acknowledged engine must name the same persistent image"
+        );
+    }
+
+    #[test]
+    fn project_replacement_control_plane_open_rejects_current_reference_conflict_before_publication(
+    ) {
+        use sha2::{Digest, Sha256};
+        let harness = MediaAssetA6CommandHarness::new();
+        let query = ControlPlaneQueryState::new().unwrap();
+        let root = unique_test_directory("typed-invalid-current-open");
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("invalid-current.sdc");
+        let mut source: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../qa/migration/authored-control-project.json"
+        ))
+        .unwrap();
+        source["snapshot"]["timeline_bank"][0]["label"] =
+            serde_json::json!("Conflicting authored bank");
+        let bytes = serde_json::to_vec(&source).unwrap();
+        std::fs::write(&path, &bytes).unwrap();
+        let control = ProjectReplacementControlPlaneState::default();
+        let original = request(
+            &query,
+            &harness.state,
+            Action::Open {
+                path: path.to_string_lossy().into(),
+                expected_file_sha256: format!("{:x}", Sha256::digest(&bytes)),
+            },
+        );
+        assert_eq!(
+            execute_core(
+                &harness.state,
+                &query,
+                &control,
+                "media-asset-a6",
+                "local",
+                original,
+                || panic!("Invalid current-schema image cannot confirm"),
+                |_| panic!("Invalid current-schema image cannot publish"),
+            ),
+            Response::Rejected {
+                request_id: 7,
+                code: Error::InvalidProject
+            }
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        std::fs::remove_file(&path).unwrap();
+        std::fs::remove_dir(&root).unwrap();
+    }
+
+    #[test]
     fn project_replacement_control_plane_recovery_generation_exhaustion_is_preflighted() {
         let harness = MediaAssetA6CommandHarness::new();
         let query = ControlPlaneQueryState::new().unwrap();

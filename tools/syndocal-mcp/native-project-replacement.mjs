@@ -149,6 +149,40 @@ export async function nativeProjectReplacement(backend, options, checks) {
     assert.equal(afterNew.ownership.lighting_allowed, false); assert.equal(afterNew.ownership.video_allowed, false);
     assert.deepEqual(await fs.readFile(file), bytes);
     newCheck.passed = true;
+
+    // Author the expected migration from the already-observed canonical
+    // default: the only removed legacy fields are the Timeline bank and Main
+    // composition. Never bless the candidate's readback as the expectation.
+    const expectedLegacy = structuredClone(initialProject);
+    expectedLegacy.snapshot.clock.bpm = 91;
+    const legacySource = structuredClone(expectedLegacy);
+    legacySource.snapshot.timeline_bank = [];
+    legacySource.snapshot.video.compositions = [];
+    const legacyFile = path.join(directory, '旧形式.sdc');
+    const legacyBytes = Buffer.from(JSON.stringify(legacySource));
+    await fs.writeFile(legacyFile, legacyBytes, { flag: 'wx' });
+    const legacyRequest = request(await fence(), { kind: 'open', path: legacyFile, expected_file_sha256: digest(legacyBytes) });
+    const started = performance.now();
+    const legacyOpened = await execute(legacyRequest);
+    const elapsedMs = performance.now() - started;
+    assert.equal(legacyOpened.status, 'completed');
+    assert.equal(legacyOpened.result.ok, true, JSON.stringify(legacyOpened.result));
+    const afterLegacy = await state();
+    const terminal = legacyOpened.result.result.value.outcome.authority;
+    assert.equal(afterLegacy.authority.epoch, legacyRequest.expected_fence.project_epoch + 1);
+    assert.equal(afterLegacy.authority.revision, 0);
+    assert.equal(afterLegacy.authority.generation, legacyRequest.expected_fence.project_publication_generation + 1);
+    assert.equal(afterLegacy.authority.hash, terminal.checkpoint_hash);
+    assert.equal(afterLegacy.authority.path, legacyFile);
+    assert.deepEqual(afterLegacy.checkpoint, expectedLegacy, 'Legacy Open publishes the independently specified complete canonical image');
+    assert.equal(afterLegacy.ownership.lighting_allowed, false);
+    assert.equal(afterLegacy.ownership.video_allowed, false);
+    assert.deepEqual(await fs.readFile(legacyFile), legacyBytes, 'Migration never rewrites the source');
+    checks.push({ check: 'external-project-legacy-open-canonical-receipt-matches-complete-state', passed: true,
+      receipt: legacyOpened.result.result, sourceSha256: digest(legacyBytes), bytes: legacyBytes.length, elapsedMs });
+    assert.deepEqual((await execute(legacyRequest)).result, legacyOpened.result);
+    assert.deepEqual(await state(), afterLegacy, 'Legacy replay cannot introduce an extra mutation');
+    checks.push({ check: 'external-project-legacy-open-exact-replay-preserves-authority-and-image', passed: true });
   } finally {
     if (mcp) await mcp.close();
     assert.equal(path.dirname(directory), await fs.realpath(os.tmpdir()));

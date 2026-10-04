@@ -444,6 +444,8 @@ await fs.writeFile(evidence, `${JSON.stringify({ schemaVersion: 1, timestamp: ne
   ...(projectReplacement ? {
     projectReplacementHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-project-replacement.mjs', import.meta.url))).digest('hex'),
     projectReplacementControllerSha256: createHash('sha256').update(await fs.readFile(new URL('../../app/src-tauri/src/project_replacement_control_plane.rs', import.meta.url))).digest('hex'),
+    projectPreparationEngineSha256: createHash('sha256').update(await fs.readFile(new URL('../../crates/engine/src/lib.rs', import.meta.url))).digest('hex'),
+    projectPreparationPolicySha256: createHash('sha256').update(await fs.readFile(new URL('../../crates/engine/src/project_load_preparation.rs', import.meta.url))).digest('hex'),
     projectReplacementProtocolSha256: createHash('sha256').update(await fs.readFile(new URL('../../crates/protocol/src/control_plane_project.rs', import.meta.url))).digest('hex'),
     canonicalQueryAdapterSha256: createHash('sha256').update(await fs.readFile(new URL('../../app/src/agentBridgeControlPlane.ts', import.meta.url))).digest('hex'),
     nativeExecutorSha256: createHash('sha256').update(await fs.readFile(new URL('../../app/src-tauri/src/agent_bridge_execution.rs', import.meta.url))).digest('hex'),
