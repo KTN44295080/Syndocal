@@ -1,0 +1,76 @@
+{
+  "base": "fb5a9e3c4ace1db9f0e59444e4ed865bcca76ece",
+  "timestamp": "2026-10-04T08:14:47.6669628Z",
+  "files": [
+    {
+      "path": "app/scripts/check-agent-bridge.mjs",
+      "sha256": "ce2b22d1432aefbbe03d152666d3b7b76cc8da8795013565d5c578c77b553575"
+    },
+    {
+      "path": "app/src-tauri/src/agent_bridge_execution.rs",
+      "sha256": "595a752d45a69e9dfa17b749cd1618b4f9f34212c5c8a5290fe67d234b1df1b8"
+    },
+    {
+      "path": "app/src-tauri/src/agent_bridge_wire.rs",
+      "sha256": "8ebafdfee10d1d8ba431d987c16e8ef688f17d07ad4108d5e6593fb281e94d1b"
+    },
+    {
+      "path": "app/src-tauri/src/control_plane.rs",
+      "sha256": "92d44e87f196590a95bdd44eef71d87f6557843f81db0b307806d29015987fa3"
+    },
+    {
+      "path": "app/src-tauri/src/main.rs",
+      "sha256": "3d664d294483f64b70393780c1fb39e48fe0fe767ecedf2e0ba9a061f5a9462a"
+    },
+    {
+      "path": "app/src/agentBridgeControlPlane.ts",
+      "sha256": "32a1dc8f4052050fc8734207253b58c1f43579231a39b9070e96d0820ee859ff"
+    },
+    {
+      "path": "app/src/agentBridgeTools.ts",
+      "sha256": "c7ae847d81955b40562fdfcbf1ba6deb4ed574f8cfac0fc07b8d83bb17455294"
+    },
+    {
+      "path": "crates/protocol/src/control_plane_registry_v2.rs",
+      "sha256": "00808f40f7fac797f2edf1abc50b69a386fb73d4522c0821adbdd410ade00c06"
+    },
+    {
+      "path": "crates/protocol/src/lib.rs",
+      "sha256": "3eab69090edebe380e3581e6a87bb17b4e05ffbfbdf3c1f4c5caf4db5b079fb8"
+    },
+    {
+      "path": "tools/syndocal-mcp/check-native-lifecycle.mjs",
+      "sha256": "90a7984b914941639f67ce5ebacde2856ae7613f0323ea003a9eab3a282bc0e6"
+    },
+    {
+      "path": "tools/syndocal-mcp/native-high-risk-revocation.mjs",
+      "sha256": "94dc01152ee5ba56535f9c8e3b2356677d38c0d89f8d7db5b2bc29d1577a8996"
+    },
+    {
+      "path": "tools/syndocal-mcp/server.mjs",
+      "sha256": "09ce7a80b74d70daa6924f4af9ea56fffb74161902114767e7dd7f96bd3201ef"
+    },
+    {
+      "path": "crates/protocol/src/control_plane_project.rs",
+      "sha256": "888773d31f0c549fadfcb27b2afb82224100273d94a1981fd7bb44e995f99b66"
+    },
+    {
+      "path": "app/src-tauri/src/project_replacement_control_plane.rs",
+      "sha256": "cca570f084847a8b3bcee5d63a8014955929eeb4da2c70ad14c86c132f769bb0"
+    },
+    {
+      "path": "app/src-tauri/src/project_replacement_control_plane_tests.rs",
+      "sha256": "cc31a3c1f10a930098c4255ebcee33b73a9654ad27d713aa24254dd6d447b251"
+    },
+    {
+      "path": "tools/syndocal-mcp/native-project-replacement.mjs",
+      "sha256": "6fb832805f1bc9dcb5f23945a4ed5ed672b303a2acb39b7d26104cadde22d174"
+    },
+    {
+      "path": "tools/syndocal-mcp/native-tap-bpm.mjs",
+      "sha256": "5cb600daa0ae5fcfa105573f6b682a868f99c2f7de69883856ddc35ce994129c"
+    }
+  ],
+  "harnessAdjustment": "Native parse exception retains established mutation_not_confirmed envelope; exact native parse diagnostic and unchanged complete state are asserted. Successful Open/New also compare complete authored images, without relaxing successor checks.",
+  "newProjectCorrection": "Prepare the current-schema Timeline bank and Main composition; apply canonical project_snapshot_for_save before hashing. ACK unit compares the raw prepared snapshot with engine persistence."
+}

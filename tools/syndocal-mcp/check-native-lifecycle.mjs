@@ -19,9 +19,19 @@ import { nativeControllerOutput } from './native-controller-output.mjs';
 import { nativeRuntimeAuthority } from './native-runtime-authority.mjs';
 import { nativeDisplayWindow } from './native-display-window.mjs';
 import { nativeRecoveryStorage } from './native-recovery-storage.mjs';
+import { nativeProjectReplacement } from './native-project-replacement.mjs';
 
 const exec = promisify(execFile);
 const args = process.argv.slice(2);
+const projectReplacement = args.includes('--project-replacement');
+if (projectReplacement) {
+  args.splice(args.indexOf('--project-replacement'), 1);
+  assert.ok(!args.some(arg => ['--project-replacement-preflight', '--recovery-storage', '--display-window', '--runtime-authority',
+    '--controller-event-pressure', '--controller-safety-pressure', '--controller-burst', '--controller-inflight',
+    '--controller-expiry', '--controller-restart', '--controller-output', '--authored-controls', '--input-diagnostics',
+    '--backup-json', '--project-json', '--lease-expiry', '--tap-bpm', '--diagnostics', '--external-high-risk', '--external-revocation'].includes(arg)),
+  'Typed project replacement owns a separate native project/file lane');
+}
 const projectReplacementPreflight = args.includes('--project-replacement-preflight');
 if (projectReplacementPreflight) {
   args.splice(args.indexOf('--project-replacement-preflight'), 1);
@@ -244,6 +254,7 @@ try {
   await exec('icacls.exe', [credentialDirectory, '/inheritance:r', '/grant:r', `*${stdout.trim()}:(OI)(CI)F`], { windowsHide: true, timeout: 5000 });
   options.credentialFile = path.join(credentialDirectory, 'credential');
   await pair(); await install();
+  if (projectReplacement) await nativeProjectReplacement(backend, options, checks);
   if (runtimeAuthority) await nativeRuntimeAuthority(backend, options, checks);
   if (displayWindow) await nativeDisplayWindow(backend, options, checks);
   if (leaseExpiry) await nativeLeaseExpiry(backend, options, checks);
@@ -341,7 +352,7 @@ try {
   assert.equal(replay.error, 'agent_auth_proof_invalid');
   await read();
   checks.push({ check: 'old-launch-proof-rejected-fresh-read-succeeds', passed: true });
-  if (externalRevocation) await nativeHighRiskRevocation(backend, options, checks);
+  if (externalRevocation || projectReplacement) await nativeHighRiskRevocation(backend, options, checks, { projectReplacement });
   await backend.invoke('agent_authority_revoke_v1', { principalId, principalIncarnation: approval.principalIncarnation });
   cleanupNeeded = false;
   await stop(true);
@@ -430,6 +441,14 @@ await fs.writeFile(evidence, `${JSON.stringify({ schemaVersion: 1, timestamp: ne
     tapControllerSha256: createHash('sha256').update(await fs.readFile(new URL('../../app/src/tapTempo.ts', import.meta.url))).digest('hex'),
     tapQaReceiverSha256: createHash('sha256').update(await fs.readFile(new URL('../../app/src/nativeTapTempoQa.ts', import.meta.url))).digest('hex'),
   } : {}),
+  ...(projectReplacement ? {
+    projectReplacementHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-project-replacement.mjs', import.meta.url))).digest('hex'),
+    projectReplacementControllerSha256: createHash('sha256').update(await fs.readFile(new URL('../../app/src-tauri/src/project_replacement_control_plane.rs', import.meta.url))).digest('hex'),
+    projectReplacementProtocolSha256: createHash('sha256').update(await fs.readFile(new URL('../../crates/protocol/src/control_plane_project.rs', import.meta.url))).digest('hex'),
+    canonicalQueryAdapterSha256: createHash('sha256').update(await fs.readFile(new URL('../../app/src/agentBridgeControlPlane.ts', import.meta.url))).digest('hex'),
+    nativeExecutorSha256: createHash('sha256').update(await fs.readFile(new URL('../../app/src-tauri/src/agent_bridge_execution.rs', import.meta.url))).digest('hex'),
+    stdioHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-stdio-session.mjs', import.meta.url))).digest('hex'),
+  } : {}),
   ...(controllerBurst ? {
     controllerBurstHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-controller-burst.mjs', import.meta.url))).digest('hex'),
     admissionPolicySha256: createHash('sha256').update(await fs.readFile(new URL('./native-request-admission.mjs', import.meta.url))).digest('hex'),
@@ -480,6 +499,7 @@ await fs.writeFile(evidence, `${JSON.stringify({ schemaVersion: 1, timestamp: ne
       : controllerOutput ? 'Actual native software loopback ArtDMX reception only; no device, venue, serial DMX, video, worker/process-loss or whole controller-loss/re-arm acceptance'
       : 'No physical output activation; optional high-risk or lease-expiry probe mutates isolated backend lease authority only; optional Tap probe changes isolated empty-project tempo; optional project-file probe loads private JSON with no file media or video source activation',
     'No durable authored/output mutation crash publication acceptance',
+    ...(projectReplacement ? ['Typed external R5 New/Open, issued-fence and exact File-grant admission, immutable native execution, private source-byte preservation and bounded terminal replay only; no active managed output, physical devices, mid-parser revocation/crash, full file-operation or AI8/release acceptance'] : []),
     ...(projectJson ? ['Native .sdc admission and rejected-load preservation only; no complete migration corpus, backup/recovery/upgrade, other file formats or physical output acceptance'] : []),
     ...(runtimeAuthority ? ['Three native Timeline authority-read paths and ordinary concurrent read observations only; no command replay, output activation, complete lock-wait or realtime budget, full adapter/security/AI8 or physical acceptance'] : []),
     ...(backupJson ? ['Native backup byte/JSON/identity admission and private restore preservation only; no full O1-O4, browser recovery, crash/fallback/upgrade, physical output or release acceptance'] : []),

@@ -70,6 +70,9 @@ const CANONICAL_OPERATION_IDS = new Set([
   'syndocal.cue_lists.rename.v1',
   'syndocal.cue_lists.delete.v1',
   'syndocal.scenes.create.v1',
+  'syndocal.project.new.v1',
+  'syndocal.project.open.v1',
+  'syndocal.query.project.replacement.authority.v1',
 ]);
 const record = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const exact = (v, keys, required = keys) => record(v)
@@ -93,7 +96,7 @@ export const toolDefinitions = [
   { name: 'syndocal_get_control_plane_capabilities', description: 'Read the backend-owned canonical operation registry as a bounded capability inventory. It reports which operations have an explicit local-window adapter; FailClosed entries are discovery-only and cannot be invoked through MCP.', inputSchema: schema({}), annotations: { readOnlyHint: true } },
   { name: 'syndocal_get_recording_status', description: 'Read bounded video recording status from the selected running Syndocal instance. This never starts, stops, finalizes, or replaces a recording.', inputSchema: schema({}), annotations: { readOnlyHint: true } },
   { name: 'syndocal_export_diagnostics', description: 'Write one sanitized diagnostic ZIP to a new absolute destination path using an exact File grant. No individual human approval is required. Existing files are never replaced. Supply a fresh requestId; query its status after an unknown result.', inputSchema: schema({ requestId: uuid, destination: { type: 'string', minLength: 1, maxLength: 4096 } }), annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false } },
-  { name: 'syndocal_execute_control_plane', description: 'Execute one of the 53 reviewed canonical backend operations through a static typed Tauri adapter. operationId must come from the capability registry and request must be that operation’s exact typed object. Unreviewed or FailClosed inventory entries are rejected. Supply a fresh requestId; if pending or unknown, query its status before any retry.', inputSchema: schema({ requestId: uuid, operationId: { type: 'string', minLength: 1, maxLength: 512 }, request: { type: 'object', additionalProperties: true } }), annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false } },
+  { name: 'syndocal_execute_control_plane', description: 'Execute one of the 56 reviewed canonical backend operations through a static typed Tauri adapter. operationId must come from the capability registry and request must be that operation’s exact typed object. Unreviewed or FailClosed inventory entries are rejected. Supply a fresh requestId; if pending or unknown, query its status before any retry.', inputSchema: schema({ requestId: uuid, operationId: { type: 'string', minLength: 1, maxLength: 512 }, request: { type: 'object', additionalProperties: true } }), annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false } },
 ];
 
 const projectFence = (value) => exact(value, ['project_epoch', 'project_revision', 'checkpoint_hash'])

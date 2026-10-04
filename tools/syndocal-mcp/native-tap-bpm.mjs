@@ -14,8 +14,20 @@ export async function nativeTapBpm(backend, checks) {
     frontend:window.__syndocalQaTapTempoState?.()}))`);
   const before = await observe();
   assert.equal(before.clock.bpm, 120, 'Isolated project starts at 120 BPM');
+  const tapTarget = await backend.evaluate(`(() => {
+    const button = document.querySelector('[data-topbar-tap]');
+    if (!button) return null;
+    const rect = button.getBoundingClientRect(), style = getComputedStyle(button);
+    const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
+    return { disabled: button.disabled, pointerEvents: style.pointerEvents,
+      visible: style.visibility === 'visible' && style.display !== 'none' && rect.width > 0 && rect.height > 0,
+      unobstructed: hit === button || button.contains(hit),
+      bounds: { x: rect.x, y: rect.y, width: rect.width, height: rect.height } };
+  })()`);
+  assert.ok(tapTarget?.visible && tapTarget.unobstructed && !tapTarget.disabled
+    && tapTarget.pointerEvents !== 'none', 'The visible header Tap must have an enabled, unobstructed target');
   const samples = [], start = Date.now() + 100;
-  const check = { check: 'native-app-tap-changes-engine-and-header-bpm', passed: false, before, samples };
+  const check = { check: 'native-app-tap-changes-engine-and-header-bpm', passed: false, before, tapTarget, samples };
   checks.push(check);
   for (let index = 0; index < 5; index++) {
     const target = start + index * 750;

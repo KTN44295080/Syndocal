@@ -229,6 +229,10 @@ pub enum AdapterPolicy {
     /// distinct from the one-click normal enable path so the registry cannot
     /// silently treat both authority levels as equivalent.
     LocalWindowDangerousOutputControl,
+    /// R5 New/Open with a complete issued project fence, exact terminal
+    /// receipt and a local danger confirmation. External execution is a
+    /// separate authenticated native bridge policy, never a derived adapter.
+    LocalWindowProjectReplacement,
     /// No adapter is exposed.  This is the only policy available before a
     /// separately reviewed adapter is introduced.
     FailClosed,
@@ -695,6 +699,27 @@ impl CanonicalOperationDescriptor {
                     }
                 }
             }
+            AdapterPolicy::LocalWindowProjectReplacement => {
+                if self.class != OperationClass::Mutation
+                    || self.risk != OperationRisk::R5
+                    || self.idempotency != OperationIdempotency::Mutating
+                    || self.audit != OperationAuditRequirement::Immutable
+                    || self.capabilities != vec![OperationCapability::LocalWindowBound,
+                        OperationCapability::AuthoritativeProjectMutation]
+                    || self.receipt_policy != ReceiptPolicy::ExactTerminalReceipt
+                    || self.rate_policy != RatePolicy::TokenBucket4PerSecondBurst8
+                    || self.payload_policy != PayloadPolicy::FailClosed
+                    || self.consent_policy != ConsentPolicy::NativeDangerConfirmation
+                {
+                    return Err(CanonicalRegistryValidationError::UnsafeCanonicalLocalOperation(self.operation_id.clone()));
+                }
+                for adapter in &self.derived_adapters {
+                    adapter.validate_shape()?;
+                    if adapter.adapter != AdapterKind::LocalTauriWindow {
+                        return Err(CanonicalRegistryValidationError::UnsupportedAdapterForPolicy(self.operation_id.clone()));
+                    }
+                }
+            }
             AdapterPolicy::FailClosed => {
                 if !self.derived_adapters.is_empty() {
                     return Err(
@@ -719,6 +744,7 @@ impl CanonicalOperationDescriptor {
                 | AdapterPolicy::LocalWindowEmergencySafetyMutation
                 | AdapterPolicy::LocalWindowOutputControl
                 | AdapterPolicy::LocalWindowDangerousOutputControl
+                | AdapterPolicy::LocalWindowProjectReplacement
         ) {
             if self.derived_adapters.is_empty() {
                 return Err(CanonicalRegistryValidationError::MissingDerivedAdapter(
@@ -729,6 +755,7 @@ impl CanonicalOperationDescriptor {
                 self.adapter_policy,
                 AdapterPolicy::LocalWindowOutputControl
                     | AdapterPolicy::LocalWindowDangerousOutputControl
+                    | AdapterPolicy::LocalWindowProjectReplacement
             ) && self.derived_adapters.len() != 1
             {
                 return Err(
@@ -1156,6 +1183,7 @@ impl CanonicalControlPlaneRegistry {
                     | AdapterPolicy::LocalWindowEmergencySafetyMutation
                     | AdapterPolicy::LocalWindowOutputControl
                     | AdapterPolicy::LocalWindowDangerousOutputControl
+                    | AdapterPolicy::LocalWindowProjectReplacement
             ) && expected.is_empty()
             {
                 return Err(
@@ -1280,6 +1308,7 @@ impl CanonicalControlPlaneRegistry {
                                 | AdapterPolicy::LocalWindowEmergencySafetyMutation
                                 | AdapterPolicy::LocalWindowOutputControl
                                 | AdapterPolicy::LocalWindowDangerousOutputControl
+                                | AdapterPolicy::LocalWindowProjectReplacement
                         )
                     {
                         return Err(CanonicalRegistryValidationError::FamilyAdapterMismatch(

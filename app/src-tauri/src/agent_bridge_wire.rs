@@ -57,6 +57,9 @@ pub(super) const CANONICAL_OPERATION_IDS: &[&str] = &[
     "syndocal.cue_lists.rename.v1",
     "syndocal.cue_lists.delete.v1",
     "syndocal.scenes.create.v1",
+    "syndocal.project.new.v1",
+    "syndocal.project.open.v1",
+    "syndocal.query.project.replacement.authority.v1",
 ];
 
 pub(super) fn canonical_operation_is_mutation(operation_id: &str) -> bool {

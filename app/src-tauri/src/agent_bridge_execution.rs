@@ -7,6 +7,12 @@ use tauri::Manager;
 
 use super::{agent_bridge::AgentBridge, AppState, ControlPlaneQueryState};
 use protocol::control_plane_command::OutputControlCommandRequestV2;
+use protocol::control_plane_project::{ProjectReplacementRequestV1, ProjectReplacementResponseV1,
+    PROJECT_NEW_OPERATION_ID, PROJECT_OPEN_OPERATION_ID};
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProjectReplacementIngress { request: ProjectReplacementRequestV1 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -37,6 +43,20 @@ pub(crate) fn execute(
                 .get("operationId")
                 .and_then(Value::as_str)
                 .ok_or("agent_bridge_operation_invalid")?;
+            if matches!(operation_id, PROJECT_NEW_OPERATION_ID | PROJECT_OPEN_OPERATION_ID) {
+                let ingress: ProjectReplacementIngress = serde_json::from_value(
+                    dispatch.params.get("request").cloned().ok_or("agent_bridge_arguments_invalid")?,
+                ).map_err(|_| "agent_bridge_arguments_invalid")?;
+                if ingress.request.operation_id != operation_id {
+                    return Err("agent_bridge_operation_identity_mismatch".into());
+                }
+                let result = super::project_replacement_control_plane::execute_external(
+                    app, window, &dispatch, ingress.request,
+                )?;
+                let ok = matches!(&result, ProjectReplacementResponseV1::Receipt(_));
+                let result = serde_json::to_value(&result).map_err(|_| "agent_project_response_invalid")?;
+                return Ok(json!({"ok": ok, "operation_id": operation_id, "result": result}));
+            }
             if !operation_id.starts_with("syndocal.output.") {
                 return Err("native_operation_not_supported".into());
             }

@@ -107,7 +107,9 @@ export async function executeAgentBridgeRequest(
     const params = request.params;
     if (request.method === "diagnostics.export"
       || (request.method === "control_plane.execute" && typeof params.operationId === "string"
-        && params.operationId.startsWith("syndocal.output.")
+        && (params.operationId.startsWith("syndocal.output.")
+          || params.operationId === "syndocal.project.new.v1"
+          || params.operationId === "syndocal.project.open.v1")
         && canonicalOperationIsMutation(params.operationId))) {
       if (request.method === "control_plane.execute" && !Object.hasOwn(CANONICAL_TAURI_COMMANDS, params.operationId as string)) {
         throw new Error("Canonical operation is not executable through the reviewed adapter set.");

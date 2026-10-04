@@ -268,6 +268,7 @@ mod capture_transport;
 mod control_plane;
 mod control_plane_query;
 mod control_plane_runtime;
+mod project_replacement_control_plane;
 mod output_blackout_control;
 mod dj_link_machine;
 mod dj_link_network;
@@ -25730,6 +25731,7 @@ fn validate_project_replacement_invocation_at_publication(
     state: &AppState,
     coordinator: &ProjectCoordinator,
 ) -> Result<(), String> {
+    project_replacement_control_plane::validate_external_authorization(state)?;
     let fence = PROJECT_REPLACEMENT_INVOCATION_FENCE.with(|slot| slot.borrow().clone());
     let Some(fence) = fence else {
         // Internal recovery/standby paths do not originate in a renderer
@@ -25750,6 +25752,11 @@ fn validate_project_replacement_invocation_at_publication(
         ));
     }
     ensure_project_operator_authoritative_mutation_allowed(state, coordinator, &fence.owner_id)?;
+    if matches!(fence.command_name, "new_project_control_plane_v1" | "open_project_control_plane_v1")
+        && coordinator.recovery_authority_serial >= protocol::control_plane_command::MAX_SAFE_JAVASCRIPT_INTEGER
+    {
+        return Err("Project replacement recovery generation is exhausted".to_string());
+    }
     if fence
         .expected_publication_generation
         .is_some_and(|generation| generation != coordinator.publication_generation)
@@ -51022,6 +51029,47 @@ fn load_fixture_preset_for_all_matching(
         applied_count: fixture_ids.len(),
         skipped_count,
     }))
+}
+
+#[tauri::command]
+async fn query_project_replacement_authority_v1(
+    app: tauri::AppHandle,
+    window: WebviewWindow,
+    request: protocol::control_plane_project::ProjectReplacementAuthorityRequestV1,
+) -> Result<protocol::control_plane_project::ProjectReplacementAuthorityResponseV1,
+    protocol::control_plane_query::QueryError> {
+    let protocol::control_plane_project::ProjectReplacementAuthorityRequestV1 {} = request;
+    let label = window.label().to_string();
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let query = app.state::<control_plane_query::ControlPlaneQueryState>();
+        query.issue_project_mutation_fence_for_window(&label, &state)
+            .map(|fence| protocol::control_plane_project::ProjectReplacementAuthorityResponseV1 { fence })
+    }).await.map_err(|_| protocol::control_plane_query::QueryError::from_code(
+        protocol::control_plane_query::QueryErrorCode::Internal,
+    ))?
+}
+
+#[tauri::command]
+async fn new_project_control_plane_v1(
+    app: tauri::AppHandle,
+    window: WebviewWindow,
+    request: protocol::control_plane_project::ProjectReplacementRequestV1,
+) -> Result<protocol::control_plane_project::ProjectReplacementResponseV1, String> {
+    tauri::async_runtime::spawn_blocking(move || project_replacement_control_plane::execute_local(
+        &app, &window, request, protocol::control_plane_project::PROJECT_NEW_OPERATION_ID,
+    )).await.map_err(|_| "project_replacement_executor_failed".into())
+}
+
+#[tauri::command]
+async fn open_project_control_plane_v1(
+    app: tauri::AppHandle,
+    window: WebviewWindow,
+    request: protocol::control_plane_project::ProjectReplacementRequestV1,
+) -> Result<protocol::control_plane_project::ProjectReplacementResponseV1, String> {
+    tauri::async_runtime::spawn_blocking(move || project_replacement_control_plane::execute_local(
+        &app, &window, request, protocol::control_plane_project::PROJECT_OPEN_OPERATION_ID,
+    )).await.map_err(|_| "project_replacement_executor_failed".into())
 }
 
 #[tauri::command]
@@ -87631,6 +87679,7 @@ fn curl_binary_name() -> &'static str {
 pub(crate) mod tests {
     include!("project_retirement_boundary_tests.rs");
     include!("project_replacement_generation_tests.rs");
+    include!("project_replacement_control_plane_tests.rs");
     use super::*;
     use protocol::{ClockSource, VideoLayerSummary};
 
@@ -132018,6 +132067,7 @@ fn main() {
             Ok(())
         })
         .manage(diagnostic_export_session::DiagnosticExports::default())
+        .manage(project_replacement_control_plane::ProjectReplacementControlPlaneState::default())
         .manage(AppState {
             engine: engine.clone(),
             app_handle: Mutex::new(None),
@@ -132643,6 +132693,9 @@ fn main() {
             load_fixture_preset_for_group,
             load_fixture_preset_for_all_matching,
             new_project,
+            new_project_control_plane_v1,
+            open_project_control_plane_v1,
+            query_project_replacement_authority_v1,
             get_operator_policy,
             lock_project_operator_session,
             unlock_project_operator_session,

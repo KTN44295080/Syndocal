@@ -49,6 +49,8 @@ use protocol::control_plane_registry_v2::{
     RatePolicy, ReceiptPolicy, SourceDisposition, SourceInventoryDescriptor, SourceKey, SourceRole,
     TypedSchemaProjection,
 };
+use protocol::control_plane_project::{PROJECT_NEW_OPERATION_ID, PROJECT_OPEN_OPERATION_ID,
+    PROJECT_REPLACEMENT_AUTHORITY_OPERATION_ID};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -65,9 +67,9 @@ const KEYBOARD_SHORTCUT_SOURCE_MANIFEST: &str =
 const KEYBOARD_SHORTCUT_SOURCE_MANIFEST_SCHEMA_VERSION: u16 = 1;
 const KEYBOARD_APP_SHORTCUT_SOURCE_COUNT: usize = 30;
 const KEYBOARD_PROJECT_FILE_SHORTCUT_SOURCE_COUNT: usize = 3;
-const FROZEN_TAURI_ROUTE_ADMISSION_COUNT: usize = 542;
+const FROZEN_TAURI_ROUTE_ADMISSION_COUNT: usize = 545;
 const FROZEN_TAURI_ROUTE_ADMISSION_SHA256: &str =
-    "8ed21a9cc56c0b4e16120bf13563812e5657d5ae055c08da5e51b66a48468d3f";
+    "a2dfc61962b3757ebad8ee9d85f8adf340036fd5af496d8fe2695a1893580cba";
 /// The command source is parsed and validated exactly once.  Local discovery
 /// calls only clone this immutable, validated value; they never parse source
 /// text or make an external request on the invocation path.
@@ -191,6 +193,8 @@ fn classify_registered_tauri_route(command: &str) -> Option<TauriRouteAdmissionC
     } else if matches!(
         command,
         "new_project"
+            | "new_project_control_plane_v1"
+            | "open_project_control_plane_v1"
             | "load_user_template"
             | "load_project"
             | "import_daslight_project"
@@ -374,6 +378,7 @@ fn is_tauri_read_only_route(command: &str) -> bool {
             | "probe_video_camera_profile"
             | "query_control_plane_output_ownership"
             | "query_control_plane_project_authority"
+            | "query_project_replacement_authority_v1"
             | "query_control_plane_runtime_generations"
             | "query_display_add_lease_authority_v1"
             | "query_dsf2026_artnet_acceptance_probe_status_v1"
@@ -1222,6 +1227,8 @@ struct ReviewedQueryOperation {
 #[derive(Debug, Clone, Copy)]
 enum ReviewedCanonicalOperation {
     Query(ReviewedQueryOperation),
+    NewProject,
+    OpenProject,
     SetEffectEnabled,
     SetTimelineTransportPlaying,
     CommitTimelineLoopRuntime,
@@ -1262,6 +1269,8 @@ impl ReviewedCanonicalOperation {
     fn operation_id(self) -> &'static str {
         match self {
             Self::Query(query) => query.operation_id,
+            Self::NewProject => PROJECT_NEW_OPERATION_ID,
+            Self::OpenProject => PROJECT_OPEN_OPERATION_ID,
             Self::SetEffectEnabled => SET_EFFECT_ENABLED_OPERATION_ID,
             Self::SetTimelineTransportPlaying => TIMELINE_TRANSPORT_SET_PLAYING_OPERATION_ID,
             Self::CommitTimelineLoopRuntime => TIMELINE_LOOP_RUNTIME_OPERATION_ID,
@@ -1315,6 +1324,8 @@ fn reviewed_canonical_operation(command: &str) -> Option<ReviewedCanonicalOperat
         return Some(ReviewedCanonicalOperation::Query(query));
     }
     match command {
+        "new_project_control_plane_v1" => Some(ReviewedCanonicalOperation::NewProject),
+        "open_project_control_plane_v1" => Some(ReviewedCanonicalOperation::OpenProject),
         "set_effect_enabled" => Some(ReviewedCanonicalOperation::SetEffectEnabled),
         "set_timeline_transport_playing_runtime_v1" => {
             Some(ReviewedCanonicalOperation::SetTimelineTransportPlaying)
@@ -1390,6 +1401,13 @@ fn canonical_descriptor_for_source(
 ) -> Option<CanonicalOperationDescriptor> {
     let reviewed = reviewed_canonical_operation(&descriptor.source_id)?;
     let (class, capabilities, idempotency, adapter_policy, receipt_policy) = match reviewed {
+        ReviewedCanonicalOperation::NewProject | ReviewedCanonicalOperation::OpenProject => (
+            OperationClass::Mutation,
+            vec![OperationCapability::LocalWindowBound, OperationCapability::AuthoritativeProjectMutation],
+            OperationIdempotency::Mutating,
+            AdapterPolicy::LocalWindowProjectReplacement,
+            ReceiptPolicy::ExactTerminalReceipt,
+        ),
         ReviewedCanonicalOperation::Query(query) => (
             query.class,
             vec![
@@ -1542,7 +1560,9 @@ fn canonical_descriptor_for_source(
         schema: CanonicalOperationDescriptor::schema_identity(),
         operation_id: reviewed.operation_id().to_string(),
         class,
-        risk: if matches!(reviewed, ReviewedCanonicalOperation::EngageSafetyBlackout) {
+        risk: if matches!(reviewed, ReviewedCanonicalOperation::NewProject | ReviewedCanonicalOperation::OpenProject) {
+            OperationRisk::R5
+        } else if matches!(reviewed, ReviewedCanonicalOperation::EngageSafetyBlackout) {
             OperationRisk::S0
         } else if matches!(
             reviewed,
@@ -1608,6 +1628,8 @@ fn canonical_descriptor_for_source(
                 | ReviewedCanonicalOperation::RecoverOutputLease
                 | ReviewedCanonicalOperation::RelinquishOutputLease
                 | ReviewedCanonicalOperation::ForceTransferOutputLease
+                | ReviewedCanonicalOperation::NewProject
+                | ReviewedCanonicalOperation::OpenProject
         ) {
             OperationAuditRequirement::Immutable
         } else {
@@ -1646,6 +1668,8 @@ fn canonical_descriptor_for_source(
                 | ReviewedCanonicalOperation::RecoverOutputLease
                 | ReviewedCanonicalOperation::RelinquishOutputLease
                 | ReviewedCanonicalOperation::ForceTransferOutputLease
+                | ReviewedCanonicalOperation::NewProject
+                | ReviewedCanonicalOperation::OpenProject
         ) {
             RatePolicy::TokenBucket4PerSecondBurst8
         } else {
@@ -1685,6 +1709,8 @@ fn canonical_descriptor_for_source(
                 | ReviewedCanonicalOperation::EnableShowSpoutOutputs
                 | ReviewedCanonicalOperation::ResetShowSpoutOutputs
                 | ReviewedCanonicalOperation::ForceTransferOutputLease
+                | ReviewedCanonicalOperation::NewProject
+                | ReviewedCanonicalOperation::OpenProject
         ) {
             ConsentPolicy::NativeDangerConfirmation
         } else {
@@ -1696,6 +1722,11 @@ fn canonical_descriptor_for_source(
 
 fn reviewed_query_operation(command: &str) -> Option<ReviewedQueryOperation> {
     let (operation_id, class, domain_capability) = match command {
+        "query_project_replacement_authority_v1" => (
+            PROJECT_REPLACEMENT_AUTHORITY_OPERATION_ID,
+            OperationClass::ProjectAuthority,
+            OperationCapability::ProjectAuthorityRead,
+        ),
         "get_control_plane_operation_registry" => (
             "syndocal.query.control_plane.registry.v1",
             OperationClass::Discovery,
@@ -1827,6 +1858,8 @@ fn descriptor_for_command(operation_id: &str) -> OperationDescriptor {
     if matches!(
         operation_id,
         "add_display_output_v2"
+            | "new_project_control_plane_v1"
+            | "open_project_control_plane_v1"
             | "assign_video_output_composition_v2"
             | "set_lighting_master_output_control_v2"
             | "set_group_submaster_output_control_v2"
@@ -2390,8 +2423,8 @@ mod tests {
             counts[&TauriRouteAdmissionClass::BackendAuthoritativeProjectMutation],
             31
         );
-        assert_eq!(counts[&TauriRouteAdmissionClass::ReadOnly], 98);
-        assert_eq!(counts[&TauriRouteAdmissionClass::ProjectReplacement], 8);
+        assert_eq!(counts[&TauriRouteAdmissionClass::ReadOnly], 99);
+        assert_eq!(counts[&TauriRouteAdmissionClass::ProjectReplacement], 10);
         assert_eq!(counts[&TauriRouteAdmissionClass::ProjectHistory], 3);
         assert_eq!(counts[&TauriRouteAdmissionClass::LocalPhysicalMutation], 6);
         assert_eq!(counts[&TauriRouteAdmissionClass::RuntimeMutation], 168);
@@ -2414,7 +2447,7 @@ mod tests {
     fn compiled_handler_and_registry_have_the_exact_same_set() {
         let names = registered_tauri_command_names_from_source(MAIN_RS_SOURCE).unwrap();
         let registry = registry().unwrap();
-        const R0_ALLOWLIST: [&str; 19] = [
+        const R0_ALLOWLIST: [&str; 20] = [
             "syndocal.query.control_plane.registry.v1",
             "syndocal.query.control_plane.canonical_registry.v3",
             "syndocal.query.control_plane.capabilities.v1",
@@ -2434,6 +2467,7 @@ mod tests {
             TIMELINE_FOLLOW_ABORT_AUTHORITY_QUERY_OPERATION_ID,
             TIMELINE_LOOP_RUNTIME_AUTHORITY_QUERY_OPERATION_ID,
             TIMELINE_TRANSPORT_AUTHORITY_QUERY_OPERATION_ID,
+            PROJECT_REPLACEMENT_AUTHORITY_OPERATION_ID,
         ];
         assert_eq!(names.len(), FROZEN_TAURI_ROUTE_ADMISSION_COUNT);
         // Exact current-source delta: the frozen USB route contributes two
@@ -2472,7 +2506,7 @@ mod tests {
                 + MIDI_OSC_DMX_OPERATION_COUNT
                 + FRONTEND_INVOKE_COUNT
         );
-        assert_eq!(registry.operations.len(), 1626);
+        assert_eq!(registry.operations.len(), 1629);
         verify_registry_exact_set(&names, &registry).unwrap();
         let r0 = registry
             .operations
@@ -2860,10 +2894,10 @@ mod tests {
         const KEYBOARD_PROJECT_FILE_COUNT: usize = 3;
         const SOURCE_TOTAL: usize =
             LEGACY_SOURCE_TOTAL + KEYBOARD_APP_COUNT + KEYBOARD_PROJECT_FILE_COUNT;
-        assert_eq!(LEGACY_SOURCE_TOTAL, 1626);
-        assert_eq!(SOURCE_TOTAL, 1659);
+        assert_eq!(LEGACY_SOURCE_TOTAL, 1629);
+        assert_eq!(SOURCE_TOTAL, 1662);
         assert_eq!(canonical.source_inventory.len(), SOURCE_TOTAL);
-        assert_eq!(canonical.canonical_operations.len(), 53);
+        assert_eq!(canonical.canonical_operations.len(), 56);
 
         let output_control_operations = canonical
             .canonical_operations
@@ -3248,7 +3282,7 @@ mod tests {
                 )
             })
             .collect::<Vec<_>>();
-        assert_eq!(direct.len(), 53);
+        assert_eq!(direct.len(), 56);
         assert_eq!(aliases.len(), FRONTEND_COUNT);
         assert_eq!(internal_steps.len(), 4);
         assert_eq!(structural_routes.len(), 1);
@@ -3578,7 +3612,10 @@ mod tests {
                 .is_none());
         }
         for operation in &canonical.canonical_operations {
-            if operation.operation_id == SAFETY_BLACKOUT_ENGAGE_OPERATION_ID {
+            if matches!(operation.operation_id.as_str(), PROJECT_NEW_OPERATION_ID | PROJECT_OPEN_OPERATION_ID) {
+                assert_eq!(operation.risk, OperationRisk::R5);
+                assert_eq!(operation.audit, OperationAuditRequirement::Immutable);
+            } else if operation.operation_id == SAFETY_BLACKOUT_ENGAGE_OPERATION_ID {
                 assert_eq!(operation.risk, OperationRisk::S0);
                 assert_eq!(operation.audit, OperationAuditRequirement::Immutable);
             } else if matches!(
@@ -3616,7 +3653,16 @@ mod tests {
                 assert_eq!(operation.audit, OperationAuditRequirement::NotApplicable);
             }
             assert_eq!(operation.derived_adapters.len(), 1);
-            if operation.operation_id == SET_EFFECT_ENABLED_OPERATION_ID {
+            if matches!(operation.operation_id.as_str(), PROJECT_NEW_OPERATION_ID | PROJECT_OPEN_OPERATION_ID) {
+                assert_eq!(operation.class, OperationClass::Mutation);
+                assert_eq!(operation.idempotency, OperationIdempotency::Mutating);
+                assert_eq!(operation.adapter_policy, AdapterPolicy::LocalWindowProjectReplacement);
+                assert_eq!(operation.receipt_policy, ReceiptPolicy::ExactTerminalReceipt);
+                assert_eq!(operation.rate_policy, RatePolicy::TokenBucket4PerSecondBurst8);
+                assert_eq!(operation.consent_policy, ConsentPolicy::NativeDangerConfirmation);
+                assert_eq!(operation.capabilities, vec![OperationCapability::LocalWindowBound, OperationCapability::AuthoritativeProjectMutation]);
+                assert!(!operation.capabilities.contains(&OperationCapability::AllowedDuringFullLock));
+            } else if operation.operation_id == SET_EFFECT_ENABLED_OPERATION_ID {
                 assert_eq!(operation.class, OperationClass::Mutation);
                 assert_eq!(operation.idempotency, OperationIdempotency::Mutating);
                 assert_eq!(
@@ -3999,11 +4045,11 @@ mod tests {
     fn legacy_v1_registry_json_and_count_remain_inventory_honest() {
         let legacy = registry().unwrap();
         // Includes both the native and frontend missing-publication resolver.
-        assert_eq!(legacy.operations.len(), 1626);
+        assert_eq!(legacy.operations.len(), 1629);
         let encoded = serde_json::to_value(&legacy).unwrap();
         assert_eq!(encoded["schema"]["version"], CONTROL_PLANE_SCHEMA_VERSION);
         let operations = encoded["operations"].as_array().unwrap();
-        assert_eq!(operations.len(), 1626);
+        assert_eq!(operations.len(), 1629);
         assert!(operations.iter().all(|operation| {
             operation["source_family"] != "keyboard_app"
                 && operation["source_family"] != "keyboard_project_file"

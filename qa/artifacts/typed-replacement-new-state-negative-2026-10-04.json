@@ -1,0 +1,383 @@
+{
+  "schemaVersion": 1,
+  "timestamp": "2026-10-04T08:38:29.564Z",
+  "passed": false,
+  "executable": "C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-native-acceptance-target\\release\\syndocal.exe",
+  "executableSha256": "593cf5a226f4331271f4a2ead8973e070adbdc04c80298a7373518e8779ca35e",
+  "sidecarSha256": "09ce7a80b74d70daa6924f4af9ea56fffb74161902114767e7dd7f96bd3201ef",
+  "runnerSha256": "90a7984b914941639f67ce5ebacde2856ae7613f0323ea003a9eab3a282bc0e6",
+  "backendHarnessSha256": "ade29aa256d8ff17374bb4b3e893ea9a07f71f8fa2cf2bb72b21f80d4e0e8b1f",
+  "projectReplacementHarnessSha256": "4fc3ed8c87cab80046ae1b027f03a87a61a0b11eee6d92cc81c2a05f159ea52b",
+  "projectReplacementControllerSha256": "37b7611e9cde47633c8f888d2cb5ae1532f68b1b517de03abab01363913325e2",
+  "projectReplacementProtocolSha256": "888773d31f0c549fadfcb27b2afb82224100273d94a1981fd7bb44e995f99b66",
+  "canonicalQueryAdapterSha256": "32a1dc8f4052050fc8734207253b58c1f43579231a39b9070e96d0820ee859ff",
+  "nativeExecutorSha256": "595a752d45a69e9dfa17b749cd1618b4f9f34212c5c8a5290fe67d234b1df1b8",
+  "stdioHarnessSha256": "7a7f885a010f5d1de8823db6585204562b69358ce0253f4829b33c821c846e6d",
+  "profile": "jp.seraf.ktn.syndocal.qa.mcp-lifecycle",
+  "checks": [
+    {
+      "check": "external-project-new-open-canonical-r5-policy-exact-local-projection",
+      "passed": true
+    },
+    {
+      "check": "external-project-authority-read-and-new-open-exact-file-grants-safe-mode",
+      "passed": true
+    },
+    {
+      "check": "external-project-new-rejects-forged-owner-principal-and-consent-origin",
+      "passed": true
+    },
+    {
+      "check": "external-project-new-forbidden-1791103074613-preserves-complete-state",
+      "passed": true
+    },
+    {
+      "check": "external-project-new-forbidden-1791103074614-preserves-complete-state",
+      "passed": true
+    },
+    {
+      "check": "external-project-new-forbidden-1791103074615-preserves-complete-state",
+      "passed": true
+    },
+    {
+      "check": "external-project-new-forbidden-1791103074616-preserves-complete-state",
+      "passed": true
+    },
+    {
+      "check": "external-project-new-forbidden-1791103074617-preserves-complete-state",
+      "passed": true
+    },
+    {
+      "check": "external-project-new-forbidden-1791103074618-preserves-complete-state",
+      "passed": true
+    },
+    {
+      "check": "external-project-open-file_changed-1791103074619-preserves-complete-state",
+      "passed": true
+    },
+    {
+      "check": "external-project-open-invalid_request-1791103074620-preserves-complete-state",
+      "passed": true
+    },
+    {
+      "check": "external-project-open-invalid_project-1791103074621-preserves-complete-state",
+      "passed": true
+    },
+    {
+      "check": "external-project-open-applies-exact-file-with-no-individual-confirmation",
+      "passed": true,
+      "receipt": {
+        "status": "receipt",
+        "value": {
+          "outcome": {
+            "authority": {
+              "checkpoint_hash": "310841200dd1e03b10bec703df1643fa04876a97234b759028b375d732133f39",
+              "current_project_path": "C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-typed-replacement-C0YIp0\\日本語.sdc",
+              "project_epoch": 1,
+              "project_revision": 0,
+              "publication_generation": 2,
+              "recovery_authority_serial": 135
+            },
+            "kind": "applied"
+          },
+          "request": {
+            "action": {
+              "expected_file_sha256": "afb2e6c1d95b36bb863a2f897868fd778d281aecec87930f08b2047929c152fe",
+              "kind": "open",
+              "path": "C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-typed-replacement-C0YIp0\\日本語.sdc"
+            },
+            "expected_fence": {
+              "process_incarnation": 1656167043627527,
+              "project_checkpoint_hash": "bb748cb7817ff3a10fd06531ac985e8478e6c41768522a48a1e5448af58a5c43",
+              "project_epoch": 0,
+              "project_publication_generation": 1,
+              "project_revision": 1,
+              "session_incarnation": 3584867690739233
+            },
+            "operation_id": "syndocal.project.open.v1",
+            "request_id": 1791103074622,
+            "schema_version": 1
+          }
+        }
+      },
+      "sourceSha256": "afb2e6c1d95b36bb863a2f897868fd778d281aecec87930f08b2047929c152fe",
+      "bytes": 3652
+    },
+    {
+      "check": "external-project-open-conflict-1791103074622-preserves-complete-state",
+      "passed": true
+    },
+    {
+      "check": "external-project-open-broker-and-domain-replay-no-replacement-or-changed-shape",
+      "passed": true
+    },
+    {
+      "check": "external-project-new-applies-default-project-with-no-individual-confirmation",
+      "passed": false,
+      "receipt": {
+        "status": "receipt",
+        "value": {
+          "outcome": {
+            "authority": {
+              "checkpoint_hash": "550f72d57a5e2f568404026481df9eafde75418b4719b71e7fa4e3441d8e7711",
+              "current_project_path": null,
+              "project_epoch": 2,
+              "project_revision": 0,
+              "publication_generation": 3,
+              "recovery_authority_serial": 136
+            },
+            "kind": "applied"
+          },
+          "request": {
+            "action": {
+              "kind": "new"
+            },
+            "expected_fence": {
+              "process_incarnation": 1656167043627527,
+              "project_checkpoint_hash": "310841200dd1e03b10bec703df1643fa04876a97234b759028b375d732133f39",
+              "project_epoch": 1,
+              "project_publication_generation": 2,
+              "project_revision": 0,
+              "session_incarnation": 7075424556468089
+            },
+            "operation_id": "syndocal.project.new.v1",
+            "request_id": 1791103074623,
+            "schema_version": 1
+          }
+        }
+      },
+      "before": {
+        "epoch": 1,
+        "revision": 0,
+        "hash": "310841200dd1e03b10bec703df1643fa04876a97234b759028b375d732133f39",
+        "generation": 2,
+        "path": "C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-typed-replacement-C0YIp0\\日本語.sdc"
+      },
+      "after": {
+        "epoch": 2,
+        "revision": 1,
+        "hash": "bb748cb7817ff3a10fd06531ac985e8478e6c41768522a48a1e5448af58a5c43",
+        "generation": 4,
+        "path": null
+      },
+      "checkpoint": {
+        "app": "Syndocal",
+        "custom_profiles": [],
+        "fixture_groups": [],
+        "snapshot": {
+          "active_cue_id": null,
+          "active_fade": null,
+          "authored_blackout": false,
+          "blackout": false,
+          "clock": {
+            "beat_counter": 0,
+            "beat_phase": 0,
+            "bpm": 120,
+            "external_sync_age_ms": null,
+            "external_sync_locked": false,
+            "source": "Manual",
+            "tap_count": 0
+          },
+          "cue_lists": [
+            {
+              "active_cue_id": null,
+              "id": 1,
+              "label": "Bank 1"
+            }
+          ],
+          "cues": [],
+          "dmx_outputs": [
+            {
+              "enabled": true,
+              "port": 6454,
+              "protocol": "ArtNet",
+              "serial_baud_rate": 57600,
+              "serial_port": "",
+              "target_ip": "127.0.0.1",
+              "universe": 0
+            }
+          ],
+          "dmx_preview": [],
+          "dmx_previews": [],
+          "effects": [],
+          "fixtures": [],
+          "lighting_master": 1,
+          "node_graphs": [],
+          "output": {
+            "enabled": true,
+            "port": 6454,
+            "protocol": "ArtNet",
+            "serial_baud_rate": 57600,
+            "serial_port": "",
+            "target_ip": "127.0.0.1",
+            "universe": 0
+          },
+          "palettes": [],
+          "playback_executors": [
+            {
+              "cue_list_id": 1,
+              "id": 1,
+              "label": "Bank 1",
+              "level": 1,
+              "page": 1,
+              "slot": 1
+            }
+          ],
+          "playback_master": 1,
+          "programmer": {
+            "blind": false,
+            "dmx_previews": [],
+            "enabled": false,
+            "values": []
+          },
+          "safety_blackout_engaged": false,
+          "stage_map": {
+            "locked": false,
+            "max_x": 10,
+            "max_z": 10,
+            "min_x": -10,
+            "min_z": -10
+          },
+          "stage_map_presets": [],
+          "stage_objects": [],
+          "submasters": [],
+          "telemetry": {
+            "command_drain_abs_max": 0,
+            "command_drain_limit_hit_count": 0,
+            "command_queue_latency_abs_max_us": 0,
+            "command_queue_latency_p95_us": 0,
+            "command_queue_latency_p99_us": 0,
+            "command_queue_latency_samples": 0,
+            "command_to_dmx_tick_latency_abs_max_us": 0,
+            "command_to_dmx_tick_latency_p95_us": 0,
+            "command_to_dmx_tick_latency_p99_us": 0,
+            "command_to_dmx_tick_latency_samples": 0,
+            "dmx_send_interval_max_us": 0,
+            "dmx_send_interval_min_us": 0,
+            "dmx_send_interval_samples": 0,
+            "effects_over_supported_envelope": false,
+            "enabled_effect_count": 0,
+            "frame_counter": 0,
+            "last_command_drain_count": 0,
+            "last_command_queue_latency_us": 0,
+            "last_command_to_dmx_tick_latency_us": 0,
+            "last_dmx_output_count": 0,
+            "last_dmx_route_results": [],
+            "last_dmx_send_failure_count": 0,
+            "last_dmx_send_interval_us": 0,
+            "last_dmx_send_success_count": 0,
+            "last_error": null,
+            "last_packet_bytes": 0,
+            "last_tick_interval_us": 0,
+            "low_latency_dmx_tick_advance_count": 0,
+            "low_latency_dmx_tick_defer_count": 0,
+            "low_latency_dmx_tick_request_count": 0,
+            "queue_depth": 0,
+            "queue_depth_abs_max": 0,
+            "queue_push_failure_count": 0,
+            "supported_effect_count": 0,
+            "tick_jitter_abs_max_us": 0,
+            "tick_jitter_last_us": 0,
+            "tick_jitter_p95_us": 0,
+            "tick_jitter_p99_us": 0,
+            "tick_jitter_samples": 0,
+            "tick_jitter_stddev_us": 0,
+            "total_dmx_send_failure_count": 0,
+            "total_dmx_send_success_count": 0
+          },
+          "timeline": {
+            "audio": null,
+            "audio_clips": [],
+            "audio_muted": false,
+            "audio_offset_ms": 0,
+            "automations": [],
+            "count_in_beats": 4,
+            "duration_ms": 0,
+            "events": [],
+            "guide_enabled": false,
+            "id": 1,
+            "label": "Timeline 1",
+            "layers": [],
+            "metronome_enabled": false,
+            "playing": false,
+            "position_ms": 0,
+            "video_automations": []
+          },
+          "timeline_bank": [
+            {
+              "audio": null,
+              "audio_clips": [],
+              "audio_muted": false,
+              "audio_offset_ms": 0,
+              "automations": [],
+              "count_in_beats": 4,
+              "duration_ms": 0,
+              "events": [],
+              "guide_enabled": false,
+              "id": 1,
+              "label": "Timeline 1",
+              "layers": [],
+              "metronome_enabled": false,
+              "playing": false,
+              "position_ms": 0,
+              "video_automations": []
+            }
+          ],
+          "video": {
+            "auto_vj": {
+              "config": {
+                "avoid_immediate_repeat": true,
+                "beats_per_change": 4,
+                "eligible_layer_ids": [],
+                "rhythm_source": "Clock",
+                "seed": 0,
+                "transition_ms": 500
+              },
+              "status": {
+                "action_log": [],
+                "action_sequence": 0,
+                "armed": false,
+                "fault": null,
+                "hold": false,
+                "last_action": null,
+                "last_consumed_boundary": null,
+                "last_live_audio_feature_sequence": null,
+                "live_audio_beat_counter": 0,
+                "live_audio_generation": null,
+                "live_audio_waiting": false,
+                "mode": "Off",
+                "next_boundary_beat": null,
+                "show_revision": 0
+              }
+            },
+            "blackout": false,
+            "compositions": [
+              {
+                "id": 1,
+                "label": "Main",
+                "layer_ids": [],
+                "output_ids": [],
+                "timeline_layer_ids": []
+              }
+            ],
+            "layers": [],
+            "mapping_presets": [],
+            "master_opacity": 1,
+            "outputs": []
+          }
+        },
+        "version": 1
+      }
+    }
+  ],
+  "normalAppIdentityUnchanged": true,
+  "credentialRevoked": true,
+  "credentialFileRemoved": true,
+  "nativePanicLocations": [],
+  "nonclaims": [
+    "QA identifier release build, not the distributed artifact",
+    "No physical output activation; optional high-risk or lease-expiry probe mutates isolated backend lease authority only; optional Tap probe changes isolated empty-project tempo; optional project-file probe loads private JSON with no file media or video source activation",
+    "No durable authored/output mutation crash publication acceptance",
+    "Typed external R5 New/Open, issued-fence and exact File-grant admission, immutable native execution, private source-byte preservation and bounded terminal replay only; no active managed output, physical devices, mid-parser revocation/crash, full file-operation or AI8/release acceptance"
+  ]
+}

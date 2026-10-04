@@ -8,6 +8,7 @@ use unicode_normalization::UnicodeNormalization;
 
 pub mod control_plane;
 pub mod control_plane_command;
+pub mod control_plane_project;
 pub mod control_plane_query;
 pub mod control_plane_registry_v2;
 pub mod agent_authority;

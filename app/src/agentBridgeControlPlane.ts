@@ -62,6 +62,9 @@ export const CANONICAL_TAURI_COMMANDS = {
   "syndocal.cue_lists.rename.v1": "rename_cue_list",
   "syndocal.cue_lists.delete.v1": "delete_cue_list",
   "syndocal.scenes.create.v1": "create_scene_authoritative_v1",
+  "syndocal.project.new.v1": "new_project_control_plane_v1",
+  "syndocal.project.open.v1": "open_project_control_plane_v1",
+  "syndocal.query.project.replacement.authority.v1": "query_project_replacement_authority_v1",
 } as const;
 
 const CANONICAL_QUERY_OPERATION_IDS = new Set(
@@ -204,7 +207,7 @@ export async function executeAgentBridgeControlPlane(invoke: FrontendTauriInvoke
       source_inventory_count: sourceInventory.length,
       source_inventory_by_family: sourceFamilies,
       source_inventory_by_disposition: dispositions,
-      execution_boundary: "The 53 reviewed canonical operations are executable through typed adapters; external MCP output execution uses the immutable native request. FailClosed entries remain discovery-only.",
+      execution_boundary: "The 56 reviewed canonical operations are executable through typed adapters; external MCP output and project replacement execution use the immutable native request. FailClosed entries remain discovery-only.",
     },
     agent_bridge: {
       adapter: "local_window_mcp_sidecar",

@@ -1,0 +1,33 @@
+PINNED_LINKER=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+RUN cargo test protocol control_plane_project
+    Finished `release` profile [optimized] target(s) in 0.26s
+     Running unittests src\lib.rs (C:\Users\janua\AppData\Local\Temp\syndocal-native-acceptance-target\release\deps\protocol-a46de68eb46b8212.exe)
+
+running 5 tests
+test control_plane_project::tests::project_open_requires_bounded_target_and_exact_sha256 ... ok
+test control_plane_project::tests::project_replacement_response_rejects_unsafe_identity_in_both_directions ... ok
+test control_plane_project::tests::project_replacement_requires_exact_operation_safe_identity_and_complete_fence ... ok
+test control_plane_project::tests::project_replacement_requests_round_trip_and_reject_forged_authority ... ok
+test control_plane_project::tests::project_replacement_receipt_requires_exact_successor_and_target ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 245 filtered out; finished in 0.00s
+
+RUN cargo test syndocal project_replacement_control_plane
+   Compiling syndocal v1.2.0-alpha.69 (C:\Users\janua\OneDrive\ドキュメント\GitHub\Syndocal\app\src-tauri)
+    Finished `release` profile [optimized] target(s) in 14m 11s
+     Running unittests src\main.rs (C:\Users\janua\AppData\Local\Temp\syndocal-native-acceptance-target\release\deps\syndocal-c647597ad2872eab.exe)
+
+running 8 tests
+test project_replacement_control_plane::admission_tests::project_replacement_control_plane_rate_refills_and_keeps_terminal_audit_slots ... ok
+test tests::project_replacement_control_plane_contract_tests::project_replacement_control_plane_rejects_publication_only_change_before_confirmation ... ok
+test tests::project_replacement_control_plane_contract_tests::project_replacement_control_plane_recovery_generation_exhaustion_is_preflighted ... ok
+test tests::project_replacement_control_plane_contract_tests::project_replacement_control_plane_rejects_unissued_fence_and_does_not_promote_principal_to_owner ... ok
+test tests::project_replacement_control_plane_contract_tests::project_replacement_control_plane_cancel_is_replayed_without_confirmation_or_publication ... ok
+test tests::project_replacement_control_plane_contract_tests::project_replacement_control_plane_operator_lock_rejects_before_confirmation_or_publication ... ok
+test tests::project_replacement_control_plane_contract_tests::project_replacement_control_plane_open_hashes_and_parses_the_same_bytes_without_writing_source ... ok
+test tests::project_replacement_control_plane_contract_tests::project_replacement_control_plane_registry_requires_r5_audit_receipt_and_local_confirmation ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 1980 filtered out; finished in 0.02s
+
+RUN cargo test syndocal control_plane::tests
+    Blocking waiting for file lock on build directory
