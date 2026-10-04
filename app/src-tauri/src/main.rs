@@ -269,6 +269,7 @@ mod control_plane;
 mod control_plane_query;
 mod control_plane_runtime;
 mod project_replacement_control_plane;
+mod project_file_control_plane;
 mod output_blackout_control;
 mod dj_link_machine;
 mod dj_link_network;
@@ -51032,6 +51033,60 @@ fn load_fixture_preset_for_all_matching(
 }
 
 #[tauri::command]
+async fn save_project_control_plane_v1(app: tauri::AppHandle, window: WebviewWindow,
+    request: protocol::control_plane_file::ProjectFileRequestV1,
+) -> Result<Value, String> {
+    let request = serde_json::to_value(request).map_err(|_| "project_file_request_invalid")?;
+    tauri::async_runtime::spawn_blocking(move || project_file_control_plane::execute_local(&app, &window, "syndocal.project.save.v1", request))
+        .await.map_err(|_| "project_file_executor_failed")?
+}
+
+#[tauri::command]
+async fn save_project_as_control_plane_v1(app: tauri::AppHandle, window: WebviewWindow,
+    request: protocol::control_plane_file::ProjectFileRequestV1,
+) -> Result<Value, String> {
+    let request = serde_json::to_value(request).map_err(|_| "project_file_request_invalid")?;
+    tauri::async_runtime::spawn_blocking(move || project_file_control_plane::execute_local(&app, &window, "syndocal.project.save_as.v1", request))
+        .await.map_err(|_| "project_file_executor_failed")?
+}
+
+#[tauri::command]
+async fn save_user_template_control_plane_v1(app: tauri::AppHandle, window: WebviewWindow,
+    request: protocol::control_plane_file::ProjectFileRequestV1,
+) -> Result<Value, String> {
+    let request = serde_json::to_value(request).map_err(|_| "project_file_request_invalid")?;
+    tauri::async_runtime::spawn_blocking(move || project_file_control_plane::execute_local(&app, &window, "syndocal.project.template.save.v1", request))
+        .await.map_err(|_| "project_file_executor_failed")?
+}
+
+#[tauri::command]
+async fn query_project_file_authority_v1(app: tauri::AppHandle, window: WebviewWindow,
+    request: protocol::control_plane_file::ProjectFileAuthorityRequestV1,
+) -> Result<Value, String> {
+    let request = serde_json::to_value(request).map_err(|_| "project_file_request_invalid")?;
+    tauri::async_runtime::spawn_blocking(move || project_file_control_plane::execute_local(&app, &window, "syndocal.query.project.file.authority.v1", request))
+        .await.map_err(|_| "project_file_executor_failed")?
+}
+
+#[tauri::command]
+async fn query_project_file_status_v1(app: tauri::AppHandle, window: WebviewWindow,
+    request: protocol::control_plane_file::ProjectFileRequestV1,
+) -> Result<Value, String> {
+    let request = serde_json::to_value(request).map_err(|_| "project_file_request_invalid")?;
+    tauri::async_runtime::spawn_blocking(move || project_file_control_plane::execute_local(&app, &window, "syndocal.query.project.file.status.v1", request))
+        .await.map_err(|_| "project_file_executor_failed")?
+}
+
+#[tauri::command]
+async fn acknowledge_project_file_control_plane_v1(app: tauri::AppHandle, window: WebviewWindow,
+    request: protocol::control_plane_file::ProjectFileRequestV1,
+) -> Result<Value, String> {
+    let request = serde_json::to_value(request).map_err(|_| "project_file_request_invalid")?;
+    tauri::async_runtime::spawn_blocking(move || project_file_control_plane::execute_local(&app, &window, "syndocal.project.file.acknowledge.v1", request))
+        .await.map_err(|_| "project_file_executor_failed")?
+}
+
+#[tauri::command]
 async fn query_project_replacement_authority_v1(
     app: tauri::AppHandle,
     window: WebviewWindow,
@@ -51972,6 +52027,7 @@ fn begin_project_publication_v1(
                 project_publication_pending_status_v1(&pending, durable.serial),
             )));
         }
+        project_file_control_plane::validate_begin(state, coordinator)?;
         let mut ticket = project_save_ticket_for_coordinator(state, coordinator)?;
         if ticket.checkpoint.epoch != pending.project_epoch
             || ticket.checkpoint.revision != pending.project_revision
@@ -52057,6 +52113,7 @@ fn begin_project_publication_v1(
             }
         }
     }
+    project_file_control_plane::validate_begin(state, coordinator)?;
     let mut ticket = project_save_ticket_for_coordinator(state, coordinator)?;
     if ticket.checkpoint.epoch != request.expected_project_epoch
         || ticket.checkpoint.revision != request.expected_project_revision
@@ -53766,7 +53823,11 @@ fn execute_project_save_publication_v1(
         BeginProjectPublicationV1::New { ticket, pending }
         | BeginProjectPublicationV1::Resume { ticket, pending } => (*ticket, pending),
     };
-    let selected = match surface {
+    let selected = if let Some(target) = project_file_control_plane::explicit_target(state)? {
+        ProjectPublicationTargetSelectionV1::Selected(Box::new(
+            persist_project_publication_auto_target_v1(state, &journal_path, &pending, &target)?,
+        ))
+    } else { match surface {
         ProjectPublicationSurfaceV1::Save => {
             if let Some(path) = ticket.current_project_path.as_deref() {
                 ProjectPublicationTargetSelectionV1::Selected(Box::new(
@@ -53819,7 +53880,7 @@ fn execute_project_save_publication_v1(
         ProjectPublicationSurfaceV1::Backup => {
             return Err("Backup publication must use its managed target service".to_string());
         }
-    };
+    }};
     let ProjectPublicationTargetSelectionV1::Selected(selected) = selected else {
         let ProjectPublicationTargetSelectionV1::Terminal(status) = selected else {
             unreachable!()
@@ -53900,7 +53961,7 @@ fn execute_project_save_publication_v1(
             Ok(status)
         }
         Err(error) => {
-            if surface == ProjectPublicationSurfaceV1::UserTemplate {
+            if surface == ProjectPublicationSurfaceV1::UserTemplate && !error.starts_with("project_file_guard_") {
                 match strong_target_file_digest(target) {
                     Ok(Some(digest))
                         if prepared.prepared_digest.as_deref() == Some(digest.as_str()) =>
@@ -54214,7 +54275,7 @@ fn finalize_project_save_ticket(
             &state
                 .project_external_command_admission
                 .recovery_authority_faulted,
-            || replace_file_atomically(temp, path),
+            || project_file_control_plane::publish(state, &coordinator, temp, path),
         )
     })?;
     coordinator.recovery_authority_serial = journal_commit.serial;
@@ -54264,10 +54325,10 @@ fn finalize_project_export_ticket(
         publication_binding.owner_id,
     )?;
     let ticket_is_current = project_save_ticket_is_current(state, &mut coordinator, ticket)?;
-    publish_prepared_project_save_if_current(temp, path, ticket_is_current).map_err(|_| {
-        "Project changed while the template dialog was open; export was rejected before writing"
-            .to_string()
-    })
+    if !ticket_is_current {
+        return Err("Project changed while the template dialog was open; export was rejected before writing".into());
+    }
+    project_file_control_plane::publish(state, &coordinator, temp, path)
 }
 
 fn validate_frontend_mappings_match_authority(
@@ -132068,6 +132129,7 @@ fn main() {
         })
         .manage(diagnostic_export_session::DiagnosticExports::default())
         .manage(project_replacement_control_plane::ProjectReplacementControlPlaneState::default())
+        .manage(project_file_control_plane::ProjectFileControlPlaneState::default())
         .manage(AppState {
             engine: engine.clone(),
             app_handle: Mutex::new(None),
@@ -132696,6 +132758,12 @@ fn main() {
             new_project_control_plane_v1,
             open_project_control_plane_v1,
             query_project_replacement_authority_v1,
+            save_project_control_plane_v1,
+            save_project_as_control_plane_v1,
+            save_user_template_control_plane_v1,
+            query_project_file_authority_v1,
+            query_project_file_status_v1,
+            acknowledge_project_file_control_plane_v1,
             get_operator_policy,
             lock_project_operator_session,
             unlock_project_operator_session,

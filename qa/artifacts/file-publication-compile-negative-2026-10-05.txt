@@ -1,0 +1,56 @@
+PINNED_LINKER=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+["test","-p","syndocal","--release","--locked","-j","1","--config","profile.release.package.syndocal.opt-level=0","--config","profile.release.package.syndocal.codegen-units=256","project_file","--","--nocapture"]
+    Blocking waiting for file lock on build directory
+   Compiling protocol v1.2.0-alpha.69 (C:\Users\janua\OneDrive\ドキュメント\GitHub\Syndocal\crates\protocol)
+   Compiling video v1.2.0-alpha.69 (C:\Users\janua\OneDrive\ドキュメント\GitHub\Syndocal\crates\video)
+   Compiling io v1.2.0-alpha.69 (C:\Users\janua\OneDrive\ドキュメント\GitHub\Syndocal\crates\io)
+   Compiling gdtf v1.2.0-alpha.69 (C:\Users\janua\OneDrive\ドキュメント\GitHub\Syndocal\crates\gdtf)
+   Compiling engine v1.2.0-alpha.69 (C:\Users\janua\OneDrive\ドキュメント\GitHub\Syndocal\crates\engine)
+   Compiling audio v1.2.0-alpha.69 (C:\Users\janua\OneDrive\ドキュメント\GitHub\Syndocal\crates\audio)
+   Compiling visualizer v1.2.0-alpha.69 (C:\Users\janua\OneDrive\ドキュメント\GitHub\Syndocal\crates\visualizer)
+   Compiling syndocal v1.2.0-alpha.69 (C:\Users\janua\OneDrive\ドキュメント\GitHub\Syndocal\app\src-tauri)
+error[E0308]: `match` arms have incompatible types
+    --> app\src-tauri\src\control_plane.rs:1764:53
+     |
+1761 |       let (operation_id, class, domain_capability) = match command {
+     |                                                      ------------- `match` arms have incompatible types
+1762 |           "query_project_file_authority_v1" => ("syndocal.query.project.file.authority.v1", OperationClass::ProjectAuthority, OperationCapability::ProjectAuthorityRead),
+     |                                                ------------------------------------------------------------------------------------------------------------------------- this is found to be of type `(&str, protocol::control_plane::OperationClass, protocol::control_plane::OperationCapability)`
+1763 |           "query_project_file_status_v1" => ("syndocal.query.project.file.status.v1", OperationClass::ProjectAuthority, OperationCapability::ProjectAuthorityRead),
+     |                                             ---------------------------------------------------------------------------------------------------------------------- this is found to be of type `(&str, protocol::control_plane::OperationClass, protocol::control_plane::OperationCapability)`
+1764 |           "query_project_replacement_authority_v1" => (
+     |  _____________________________________________________^
+1765 | |             PROJECT_REPLACEMENT_AUTHORITY_OPERATION_ID,
+1766 | |             "syndocal.query.project.file.authority.v1",
+1767 | |             "syndocal.query.project.file.status.v1",
+1768 | |             OperationClass::ProjectAuthority,
+1769 | |             OperationCapability::ProjectAuthorityRead,
+1770 | |         ),
+     | |_________^ expected a tuple with 3 elements, found one with 5 elements
+     |
+     = note: expected tuple `(&str, protocol::control_plane::OperationClass, protocol::control_plane::OperationCapability)`
+                found tuple `(&str, &str, &str, protocol::control_plane::OperationClass, protocol::control_plane::OperationCapability)`
+
+error[E0308]: mismatched types
+    --> app\src-tauri\src\control_plane.rs:2491:42
+     |
+2491 |           const R0_ALLOWLIST: [&str; 22] = [
+     |  _____________________________----------___^
+     | |                             |
+     | |                             expected because of the type of the constant
+2492 | |             "syndocal.query.control_plane.registry.v1",
+2493 | |             "syndocal.query.control_plane.canonical_registry.v3",
+2494 | |             "syndocal.query.control_plane.capabilities.v1",
+...    |
+2511 | |             PROJECT_REPLACEMENT_AUTHORITY_OPERATION_ID,
+2512 | |         ];
+     | |_________^ expected an array with a size of 22, found one with a size of 20
+     |
+help: consider specifying the actual array length
+     |
+2491 -         const R0_ALLOWLIST: [&str; 22] = [
+2491 +         const R0_ALLOWLIST: [&str; 20] = [
+     |
+
+For more information about this error, try `rustc --explain E0308`.
+error: could not compile `syndocal` (bin "syndocal" test) due to 2 previous errors

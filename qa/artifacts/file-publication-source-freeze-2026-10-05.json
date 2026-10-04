@@ -1,0 +1,65 @@
+{
+  "files": [
+    {
+      "path": "crates/protocol/src/control_plane_file.rs",
+      "sha256": "5069850e554a034c0644b8f80602614ed932b8f07718deb794567e3bddd35ac8"
+    },
+    {
+      "path": "crates/protocol/src/lib.rs",
+      "sha256": "3df07d8e651e9f1e1d4aba022939a0bd1286c40601a35707908b11923bda407b"
+    },
+    {
+      "path": "crates/protocol/src/control_plane_registry_v2.rs",
+      "sha256": "d10a9d6493ab4b20773627902b35fd5a4b5fc62abeec4f94e2d22581f4421c69"
+    },
+    {
+      "path": "app/src-tauri/src/project_file_control_plane.rs",
+      "sha256": "70b2c369b833df8a6c0f7f9587bfee24ea0d4c379f63df44792db1aac09d330b"
+    },
+    {
+      "path": "app/src-tauri/src/main.rs",
+      "sha256": "269834f85a4ec1f8b73568cb839344e91dc6783e42683e6e99d4d666a593e764"
+    },
+    {
+      "path": "app/src-tauri/src/control_plane.rs",
+      "sha256": "bf281304fbb58524ea88d555bbcfd97205ef546477447537e82e5d3e3be45f84"
+    },
+    {
+      "path": "app/src-tauri/src/agent_bridge_execution.rs",
+      "sha256": "a5d73f444ed098c3f0aa26acbf7be6a5db848474607109ea736a66c26b0bdc64"
+    },
+    {
+      "path": "app/src-tauri/src/agent_bridge_wire.rs",
+      "sha256": "f380b6b507c45d1631bb45559920cee8904df1f03bcb9d6a9061b8549766e95c"
+    },
+    {
+      "path": "app/src/agentBridgeTools.ts",
+      "sha256": "fcf20c6e84b59eb796ddbf84bf7f3ee01519ff4c61884579ee5ac09d5f8d507e"
+    },
+    {
+      "path": "app/src/agentBridgeControlPlane.ts",
+      "sha256": "40e96b09603e53d02f70277ae8c0a6085b463e08fef3cd071d73655c1a06825e"
+    },
+    {
+      "path": "app/scripts/check-agent-bridge.mjs",
+      "sha256": "66d6519e7d630a1819c9e6456403ef3ba8f25707a6812410f011e4f4f52f07f5"
+    },
+    {
+      "path": "tools/syndocal-mcp/server.mjs",
+      "sha256": "161b4280b13c1c5ad684fddbf82bd76bc71a3bfcd2847cdeefbeb0dfc84f13e8"
+    },
+    {
+      "path": "tools/syndocal-mcp/check-native-lifecycle.mjs",
+      "sha256": "93284d317345307b78b2c2e87a659504336e4063d5dcf52a31172859cd144f64"
+    },
+    {
+      "path": "tools/syndocal-mcp/native-project-file.mjs",
+      "sha256": "ebefb0167680ef78e60143f7b25352f7019969a4c9d09af2462968325ef2478e"
+    },
+    {
+      "path": "tools/syndocal-mcp/native-high-risk-revocation.mjs",
+      "sha256": "7924db9f0ad5eb84ea137f69c0f6cc7ad3652e3d52b88ec5f17209108b72ea1e"
+    }
+  ],
+  "base": "dd8edfc6f2846a723b43647de226736cd75dcc3d"
+}

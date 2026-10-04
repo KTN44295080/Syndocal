@@ -1,0 +1,414 @@
+node:internal/modules/run_main:123
+    triggerUncaughtException(
+    ^
+
+AssertionError [ERR_ASSERTION]: Template retains the complete project and all mappings
++ actual - expected
+... Skipped lines
+
+  {
+    app: 'Syndocal',
+    custom_profiles: [],
+    fixture_groups: [],
+    snapshot: {
+...
+        beat_phase: 0,
++       bpm: 79.56642,
+-       bpm: 79.56642150878906,
+        external_sync_age_ms: null,
+        external_sync_locked: false,
+        source: 'Manual',
+        tap_count: 0
+      },
+
+    at nativeProjectFile (file:///C:/Users/janua/OneDrive/%E3%83%89%E3%82%AD%E3%83%A5%E3%83%A1%E3%83%B3%E3%83%88/GitHub/Syndocal/tools/syndocal-mcp/native-project-file.mjs:144:12)
+    at async file:///C:/Users/janua/OneDrive/%E3%83%89%E3%82%AD%E3%83%A5%E3%83%A1%E3%83%B3%E3%83%88/GitHub/Syndocal/tools/syndocal-mcp/check-native-lifecycle.mjs:265:20 {
+  generatedMessage: false,
+  code: 'ERR_ASSERTION',
+  actual: {
+    version: 1,
+    app: 'Syndocal',
+    custom_profiles: [],
+    fixture_groups: [],
+    snapshot: {
+      fixtures: [],
+      cues: [],
+      cue_lists: [ { id: 1, label: 'Bank 1', active_cue_id: null } ],
+      palettes: [],
+      playback_executors: [
+        {
+          id: 1,
+          label: 'Bank 1',
+          cue_list_id: 1,
+          page: 1,
+          slot: 1,
+          level: 1
+        }
+      ],
+      playback_master: 1,
+      active_cue_id: null,
+      active_fade: null,
+      programmer: { enabled: false, blind: false, values: [], dmx_previews: [] },
+      timeline: {
+        id: 1,
+        label: 'Timeline 1',
+        layers: [],
+        events: [],
+        automations: [],
+        video_automations: [],
+        audio: null,
+        audio_clips: [],
+        guide_enabled: false,
+        audio_offset_ms: 0,
+        audio_muted: false,
+        metronome_enabled: false,
+        count_in_beats: 4,
+        playing: false,
+        position_ms: 0,
+        duration_ms: 0
+      },
+      timeline_bank: [
+        {
+          id: 1,
+          label: 'Timeline 1',
+          layers: [],
+          events: [],
+          automations: [],
+          video_automations: [],
+          audio: null,
+          audio_clips: [],
+          guide_enabled: false,
+          audio_offset_ms: 0,
+          audio_muted: false,
+          metronome_enabled: false,
+          count_in_beats: 4,
+          playing: false,
+          position_ms: 0,
+          duration_ms: 0
+        }
+      ],
+      video: {
+        layers: [],
+        compositions: [
+          {
+            id: 1,
+            label: 'Main',
+            layer_ids: [],
+            timeline_layer_ids: [],
+            output_ids: []
+          }
+        ],
+        outputs: [],
+        mapping_presets: [],
+        master_opacity: 1,
+        blackout: false,
+        auto_vj: {
+          config: {
+            eligible_layer_ids: [],
+            seed: 0,
+            beats_per_change: 4,
+            transition_ms: 500,
+            avoid_immediate_repeat: true,
+            rhythm_source: 'Clock'
+          },
+          status: {
+            mode: 'Off',
+            armed: false,
+            hold: false,
+            show_revision: 0,
+            action_sequence: 0,
+            last_consumed_boundary: null,
+            next_boundary_beat: null,
+            last_action: null,
+            action_log: [],
+            fault: null,
+            live_audio_beat_counter: 0,
+            last_live_audio_feature_sequence: null,
+            live_audio_waiting: false,
+            live_audio_generation: null
+          }
+        }
+      },
+      effects: [],
+      node_graphs: [],
+      output: {
+        enabled: true,
+        protocol: 'ArtNet',
+        target_ip: '127.0.0.1',
+        port: 6454,
+        universe: 0,
+        serial_port: '',
+        serial_baud_rate: 57600
+      },
+      dmx_outputs: [
+        {
+          enabled: true,
+          protocol: 'ArtNet',
+          target_ip: '127.0.0.1',
+          port: 6454,
+          universe: 0,
+          serial_port: '',
+          serial_baud_rate: 57600
+        }
+      ],
+      lighting_master: 1,
+      submasters: [],
+      blackout: false,
+      authored_blackout: false,
+      safety_blackout_engaged: false,
+      clock: {
+        bpm: 79.56642,
+        beat_phase: 0,
+        beat_counter: 0,
+        tap_count: 0,
+        source: 'Manual',
+        external_sync_age_ms: null,
+        external_sync_locked: false
+      },
+      stage_map: { locked: false, min_x: -10, max_x: 10, min_z: -10, max_z: 10 },
+      stage_map_presets: [],
+      stage_objects: [],
+      dmx_preview: [],
+      dmx_previews: [],
+      telemetry: {
+        frame_counter: 0,
+        enabled_effect_count: 0,
+        supported_effect_count: 0,
+        effects_over_supported_envelope: false,
+        queue_depth: 0,
+        queue_depth_abs_max: 0,
+        queue_push_failure_count: 0,
+        last_tick_interval_us: 0,
+        tick_jitter_last_us: 0,
+        tick_jitter_abs_max_us: 0,
+        tick_jitter_stddev_us: 0,
+        tick_jitter_p95_us: 0,
+        tick_jitter_p99_us: 0,
+        tick_jitter_samples: 0,
+        last_command_queue_latency_us: 0,
+        command_queue_latency_abs_max_us: 0,
+        command_queue_latency_p95_us: 0,
+        command_queue_latency_p99_us: 0,
+        command_queue_latency_samples: 0,
+        last_command_drain_count: 0,
+        command_drain_abs_max: 0,
+        command_drain_limit_hit_count: 0,
+        last_command_to_dmx_tick_latency_us: 0,
+        command_to_dmx_tick_latency_abs_max_us: 0,
+        command_to_dmx_tick_latency_p95_us: 0,
+        command_to_dmx_tick_latency_p99_us: 0,
+        command_to_dmx_tick_latency_samples: 0,
+        last_dmx_send_interval_us: 0,
+        dmx_send_interval_min_us: 0,
+        dmx_send_interval_max_us: 0,
+        dmx_send_interval_samples: 0,
+        low_latency_dmx_tick_request_count: 0,
+        low_latency_dmx_tick_advance_count: 0,
+        low_latency_dmx_tick_defer_count: 0,
+        last_packet_bytes: 0,
+        last_dmx_output_count: 0,
+        last_dmx_send_success_count: 0,
+        last_dmx_send_failure_count: 0,
+        total_dmx_send_success_count: 0,
+        total_dmx_send_failure_count: 0,
+        last_dmx_route_results: [],
+        last_error: null
+      }
+    }
+  },
+  expected: {
+    app: 'Syndocal',
+    custom_profiles: [],
+    fixture_groups: [],
+    snapshot: {
+      active_cue_id: null,
+      active_fade: null,
+      authored_blackout: false,
+      blackout: false,
+      clock: {
+        beat_counter: 0,
+        beat_phase: 0,
+        bpm: 79.56642150878906,
+        external_sync_age_ms: null,
+        external_sync_locked: false,
+        source: 'Manual',
+        tap_count: 0
+      },
+      cue_lists: [ { active_cue_id: null, id: 1, label: 'Bank 1' } ],
+      cues: [],
+      dmx_outputs: [
+        {
+          enabled: true,
+          port: 6454,
+          protocol: 'ArtNet',
+          serial_baud_rate: 57600,
+          serial_port: '',
+          target_ip: '127.0.0.1',
+          universe: 0
+        }
+      ],
+      dmx_preview: [],
+      dmx_previews: [],
+      effects: [],
+      fixtures: [],
+      lighting_master: 1,
+      node_graphs: [],
+      output: {
+        enabled: true,
+        port: 6454,
+        protocol: 'ArtNet',
+        serial_baud_rate: 57600,
+        serial_port: '',
+        target_ip: '127.0.0.1',
+        universe: 0
+      },
+      palettes: [],
+      playback_executors: [
+        {
+          cue_list_id: 1,
+          id: 1,
+          label: 'Bank 1',
+          level: 1,
+          page: 1,
+          slot: 1
+        }
+      ],
+      playback_master: 1,
+      programmer: { blind: false, dmx_previews: [], enabled: false, values: [] },
+      safety_blackout_engaged: false,
+      stage_map: { locked: false, max_x: 10, max_z: 10, min_x: -10, min_z: -10 },
+      stage_map_presets: [],
+      stage_objects: [],
+      submasters: [],
+      telemetry: {
+        command_drain_abs_max: 0,
+        command_drain_limit_hit_count: 0,
+        command_queue_latency_abs_max_us: 0,
+        command_queue_latency_p95_us: 0,
+        command_queue_latency_p99_us: 0,
+        command_queue_latency_samples: 0,
+        command_to_dmx_tick_latency_abs_max_us: 0,
+        command_to_dmx_tick_latency_p95_us: 0,
+        command_to_dmx_tick_latency_p99_us: 0,
+        command_to_dmx_tick_latency_samples: 0,
+        dmx_send_interval_max_us: 0,
+        dmx_send_interval_min_us: 0,
+        dmx_send_interval_samples: 0,
+        effects_over_supported_envelope: false,
+        enabled_effect_count: 0,
+        frame_counter: 0,
+        last_command_drain_count: 0,
+        last_command_queue_latency_us: 0,
+        last_command_to_dmx_tick_latency_us: 0,
+        last_dmx_output_count: 0,
+        last_dmx_route_results: [],
+        last_dmx_send_failure_count: 0,
+        last_dmx_send_interval_us: 0,
+        last_dmx_send_success_count: 0,
+        last_error: null,
+        last_packet_bytes: 0,
+        last_tick_interval_us: 0,
+        low_latency_dmx_tick_advance_count: 0,
+        low_latency_dmx_tick_defer_count: 0,
+        low_latency_dmx_tick_request_count: 0,
+        queue_depth: 0,
+        queue_depth_abs_max: 0,
+        queue_push_failure_count: 0,
+        supported_effect_count: 0,
+        tick_jitter_abs_max_us: 0,
+        tick_jitter_last_us: 0,
+        tick_jitter_p95_us: 0,
+        tick_jitter_p99_us: 0,
+        tick_jitter_samples: 0,
+        tick_jitter_stddev_us: 0,
+        total_dmx_send_failure_count: 0,
+        total_dmx_send_success_count: 0
+      },
+      timeline: {
+        audio: null,
+        audio_clips: [],
+        audio_muted: false,
+        audio_offset_ms: 0,
+        automations: [],
+        count_in_beats: 4,
+        duration_ms: 0,
+        events: [],
+        guide_enabled: false,
+        id: 1,
+        label: 'Timeline 1',
+        layers: [],
+        metronome_enabled: false,
+        playing: false,
+        position_ms: 0,
+        video_automations: []
+      },
+      timeline_bank: [
+        {
+          audio: null,
+          audio_clips: [],
+          audio_muted: false,
+          audio_offset_ms: 0,
+          automations: [],
+          count_in_beats: 4,
+          duration_ms: 0,
+          events: [],
+          guide_enabled: false,
+          id: 1,
+          label: 'Timeline 1',
+          layers: [],
+          metronome_enabled: false,
+          playing: false,
+          position_ms: 0,
+          video_automations: []
+        }
+      ],
+      video: {
+        auto_vj: {
+          config: {
+            avoid_immediate_repeat: true,
+            beats_per_change: 4,
+            eligible_layer_ids: [],
+            rhythm_source: 'Clock',
+            seed: 0,
+            transition_ms: 500
+          },
+          status: {
+            action_log: [],
+            action_sequence: 0,
+            armed: false,
+            fault: null,
+            hold: false,
+            last_action: null,
+            last_consumed_boundary: null,
+            last_live_audio_feature_sequence: null,
+            live_audio_beat_counter: 0,
+            live_audio_generation: null,
+            live_audio_waiting: false,
+            mode: 'Off',
+            next_boundary_beat: null,
+            show_revision: 0
+          }
+        },
+        blackout: false,
+        compositions: [
+          {
+            id: 1,
+            label: 'Main',
+            layer_ids: [],
+            output_ids: [],
+            timeline_layer_ids: []
+          }
+        ],
+        layers: [],
+        mapping_presets: [],
+        master_opacity: 1,
+        outputs: []
+      }
+    },
+    version: 1
+  },
+  operator: 'deepStrictEqual',
+  diff: 'simple'
+}
+
+Node.js v22.22.1

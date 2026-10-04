@@ -233,6 +233,8 @@ pub enum AdapterPolicy {
     /// receipt and a local danger confirmation. External execution is a
     /// separate authenticated native bridge policy, never a derived adapter.
     LocalWindowProjectReplacement,
+    /// Explicit-target durable Save/Save As/template publication and receipt acknowledgement.
+    LocalWindowProjectPublication,
     /// No adapter is exposed.  This is the only policy available before a
     /// separately reviewed adapter is introduced.
     FailClosed,
@@ -699,7 +701,7 @@ impl CanonicalOperationDescriptor {
                     }
                 }
             }
-            AdapterPolicy::LocalWindowProjectReplacement => {
+            AdapterPolicy::LocalWindowProjectReplacement | AdapterPolicy::LocalWindowProjectPublication => {
                 if self.class != OperationClass::Mutation
                     || self.risk != OperationRisk::R5
                     || self.idempotency != OperationIdempotency::Mutating
@@ -745,6 +747,7 @@ impl CanonicalOperationDescriptor {
                 | AdapterPolicy::LocalWindowOutputControl
                 | AdapterPolicy::LocalWindowDangerousOutputControl
                 | AdapterPolicy::LocalWindowProjectReplacement
+                | AdapterPolicy::LocalWindowProjectPublication
         ) {
             if self.derived_adapters.is_empty() {
                 return Err(CanonicalRegistryValidationError::MissingDerivedAdapter(
@@ -756,6 +759,7 @@ impl CanonicalOperationDescriptor {
                 AdapterPolicy::LocalWindowOutputControl
                     | AdapterPolicy::LocalWindowDangerousOutputControl
                     | AdapterPolicy::LocalWindowProjectReplacement
+                | AdapterPolicy::LocalWindowProjectPublication
             ) && self.derived_adapters.len() != 1
             {
                 return Err(
@@ -1184,6 +1188,7 @@ impl CanonicalControlPlaneRegistry {
                     | AdapterPolicy::LocalWindowOutputControl
                     | AdapterPolicy::LocalWindowDangerousOutputControl
                     | AdapterPolicy::LocalWindowProjectReplacement
+                | AdapterPolicy::LocalWindowProjectPublication
             ) && expected.is_empty()
             {
                 return Err(
@@ -1309,6 +1314,7 @@ impl CanonicalControlPlaneRegistry {
                                 | AdapterPolicy::LocalWindowOutputControl
                                 | AdapterPolicy::LocalWindowDangerousOutputControl
                                 | AdapterPolicy::LocalWindowProjectReplacement
+                | AdapterPolicy::LocalWindowProjectPublication
                         )
                     {
                         return Err(CanonicalRegistryValidationError::FamilyAdapterMismatch(

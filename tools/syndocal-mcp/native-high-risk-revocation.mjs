@@ -7,16 +7,18 @@ import { openNativeStdioSession } from './native-stdio-session.mjs';
 // Run at the last backend-only boundary before the harness closes this QA
 // process. Registering a new generation retires the automatic renderer so the
 // native claim/revoke/execute order is deterministic. No DOM or invoke patching.
-export async function nativeHighRiskRevocation(backend, options, checks, { projectReplacement = false } = {}) {
+export async function nativeHighRiskRevocation(backend, options, checks, { projectReplacement = false, projectFile = false } = {}) {
   const generation = await backend.invoke('agent_bridge_register_v1');
   assert.ok(Number.isSafeInteger(generation) && generation > 0);
-  for (const kind of ['file', 'output', ...(projectReplacement ? ['project_new', 'project_open'] : [])]) {
-    const project = kind.startsWith('project_');
-    const capability = project ? 'file' : kind;
+  for (const kind of ['file', 'output', ...(projectReplacement ? ['project_new', 'project_open'] : []),
+    ...(projectFile ? ['project_save', 'project_save_as', 'project_template'] : [])]) {
+    const publication = ['project_save', 'project_save_as', 'project_template'].includes(kind);
+    const project = kind.startsWith('project_') && !publication;
+    const capability = project || publication ? 'file' : kind;
     const principalId = `native-revoke-${randomUUID()}`;
     const requestId = randomUUID();
     const credentialFile = path.join(path.dirname(options.credentialFile), `${principalId}.credential`);
-    const destination = path.join(path.dirname(options.credentialFile), `${requestId}.${kind === 'project_open' ? 'sdc' : 'zip'}`);
+    const destination = path.join(path.dirname(options.credentialFile), `${requestId}.${kind === 'project_template' ? 'sdctemplate' : publication || kind === 'project_open' ? 'sdc' : 'zip'}`);
     let source;
     let beforeProject;
     let principalIncarnation;
@@ -30,21 +32,32 @@ export async function nativeHighRiskRevocation(backend, options, checks, { proje
       principalIncarnation = approval.principalIncarnation;
       // The parent is the runner's existing ACL-restricted credential directory.
       await fs.writeFile(credentialFile, approval.credential, { flag: 'wx' });
-      const operationId = project ? `syndocal.project.${kind === 'project_new' ? 'new' : 'open'}.v1` : capability === 'file'
+      const operationId = publication ? `syndocal.project.${kind === 'project_template' ? 'template.save' : kind === 'project_save' ? 'save' : 'save_as'}.v1`
+        : project ? `syndocal.project.${kind === 'project_new' ? 'new' : 'open'}.v1` : capability === 'file'
         ? 'syndocal.diagnostics.export.v1' : 'syndocal.output.lease.acquire.v2';
       await backend.invoke('agent_authority_promote_v1', { principalId, principalIncarnation });
       await backend.invoke('agent_authority_grant_v1', { principalId, principalIncarnation,
         grant: { adapter: 'external_mcp', capability, operation_id: operationId, project_id: null },
       });
-      const method = capability === 'file' && !project ? 'diagnostics.export' : 'control_plane.execute';
-      if (project) {
+      const method = capability === 'file' && !project && !publication ? 'diagnostics.export' : 'control_plane.execute';
+      if (project || publication) {
         beforeProject = await backend.invoke('get_project_checkpoint', { midiMappings: [], oscMappings: [], dmxMappings: [] });
         if (kind === 'project_open') {
           source = Buffer.from(JSON.stringify(beforeProject));
           await fs.writeFile(destination, source, { flag: 'wx' });
         }
       }
-      const params = project ? { operationId, request: { request: { schema_version: 1,
+      const authorityResult = publication ? await backend.evaluate(`window.__TAURI_INTERNALS__.invoke('query_project_file_authority_v1', ${JSON.stringify({
+        request: { schema_version: 1, operation_id: operationId, destination },
+      })}).then(value=>({value}),error=>({error:String(error).slice(0,768)}))`) : undefined;
+      if (publication) assert.ok(authorityResult.value, `Revocation fixture authority ${kind}: ${authorityResult.error}`);
+      const fileAuthority = authorityResult?.value;
+      const params = publication ? { operationId, request: { request: { schema_version: 1,
+        operation_id: operationId, request_id: 1, expected_fence: fileAuthority.fence,
+        expected_path_generation: fileAuthority.path_generation,
+        expected_disposition_generation: fileAuthority.disposition_generation,
+        destination: fileAuthority.destination, expected_target_sha256: fileAuthority.target_sha256,
+      } } } : project ? { operationId, request: { request: { schema_version: 1,
         operation_id: operationId, request_id: Date.now(),
         expected_fence: (await backend.invoke('query_project_replacement_authority_v1', { request: {} })).fence,
         action: kind === 'project_new' ? { kind: 'new' } : { kind: 'open', path: destination,
@@ -58,7 +71,7 @@ export async function nativeHighRiskRevocation(backend, options, checks, { proje
         } },
       };
       mcp = await openNativeStdioSession({ ...options, principalId, principalIncarnation, credentialFile });
-      const admitted = await mcp.call(capability === 'file' && !project
+      const admitted = await mcp.call(capability === 'file' && !project && !publication
         ? 'syndocal_export_diagnostics' : 'syndocal_execute_control_plane', { requestId, ...params });
       assert.equal(admitted.status, 'pending');
       assert.equal(admitted.requestId, requestId);
@@ -82,14 +95,14 @@ export async function nativeHighRiskRevocation(backend, options, checks, { proje
         if (error.code === 'ENOENT') return false;
         throw error;
       }), false);
-      if (project) assert.deepEqual(await backend.invoke('get_project_checkpoint', {
+      if (project || publication) assert.deepEqual(await backend.invoke('get_project_checkpoint', {
         midiMappings: [], oscMappings: [], dmxMappings: [],
       }), beforeProject);
       assert.deepEqual((await backend.invoke('query_output_lease_authority_v1')).statuses, [{ status: 'unavailable' }]);
       const ownership = await backend.invoke('get_output_ownership_status');
       assert.equal(ownership.lighting_allowed, false);
       assert.equal(ownership.video_allowed, false);
-      checks.push({ check: `external-${project ? kind : capability === 'file' ? 'r5' : 'r4'}-revoke-after-claim-before-native-execution`,
+      checks.push({ check: `external-${project || publication ? kind : capability === 'file' ? 'r5' : 'r4'}-revoke-after-claim-before-native-execution`,
         passed: true, operationId, requestId, rendererGeneration: generation,
         executionError: 'agent_principal_revoked', replayError: 'request_not_executable',
         destinationAbsent: !source, sourceBytesPreserved: Boolean(source), leaseUnavailable: true, credentialRevoked: true,

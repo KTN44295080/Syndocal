@@ -110,11 +110,13 @@ export async function executeAgentBridgeRequest(
         && (params.operationId.startsWith("syndocal.output.")
           || params.operationId === "syndocal.project.new.v1"
           || params.operationId === "syndocal.project.open.v1")
-        && canonicalOperationIsMutation(params.operationId))) {
+        && canonicalOperationIsMutation(params.operationId)
+        || (request.method === "control_plane.execute" && typeof params.operationId === "string"
+          && ["syndocal.project.save.v1","syndocal.project.save_as.v1","syndocal.project.template.save.v1","syndocal.query.project.file.authority.v1","syndocal.query.project.file.status.v1","syndocal.project.file.acknowledge.v1"].includes(params.operationId)))) {
       if (request.method === "control_plane.execute" && !Object.hasOwn(CANONICAL_TAURI_COMMANDS, params.operationId as string)) {
         throw new Error("Canonical operation is not executable through the reviewed adapter set.");
       }
-      mutationStarted = true;
+      mutationStarted = request.method === "diagnostics.export" || canonicalOperationIsMutation(params.operationId as string);
       return await invoke("agent_bridge_execute_native_v1", {
         rendererGeneration: request.rendererGeneration,
         requestId: request.requestId,

@@ -43,6 +43,13 @@ pub(crate) fn execute(
                 .get("operationId")
                 .and_then(Value::as_str)
                 .ok_or("agent_bridge_operation_invalid")?;
+            if matches!(operation_id, protocol::control_plane_file::SAVE_ID
+                | protocol::control_plane_file::SAVE_AS_ID | protocol::control_plane_file::TEMPLATE_ID
+                | protocol::control_plane_file::AUTHORITY_ID | protocol::control_plane_file::STATUS_ID
+                | protocol::control_plane_file::ACK_ID) {
+                let result = super::project_file_control_plane::execute_external(app, window, &dispatch)?;
+                return Ok(json!({"ok": true, "operation_id":operation_id, "result":result}));
+            }
             if matches!(operation_id, PROJECT_NEW_OPERATION_ID | PROJECT_OPEN_OPERATION_ID) {
                 let ingress: ProjectReplacementIngress = serde_json::from_value(
                     dispatch.params.get("request").cloned().ok_or("agent_bridge_arguments_invalid")?,
