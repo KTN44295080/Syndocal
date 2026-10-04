@@ -1,0 +1,256 @@
+{
+  "schemaVersion": 1,
+  "timestamp": "2026-10-03T20:37:50.488Z",
+  "passed": false,
+  "executable": "C:\\Users\\janua\\AppData\\Local\\Temp/syndocal-native-acceptance-target/release/syndocal.exe",
+  "executableSha256": "09d8a5e086cf8eb50019452e61ba8c32af29454ecc5393b7db9af78a646532bd",
+  "sidecarSha256": "e7bb740aa5ef5993dd5a5f01d37f80077c58f3996f51a0874f9565c79a843c12",
+  "runnerSha256": "ae1701de5b38419a6170319628b1a4897a13bed895c7e7bc1434225e514238ec",
+  "backendHarnessSha256": "ade29aa256d8ff17374bb4b3e893ea9a07f71f8fa2cf2bb72b21f80d4e0e8b1f",
+  "controllerOutputHarnessSha256": "de73651b97bf2540d387bace0d6904f246daca4f2f5b1c56f254a9076a4bab3d",
+  "stdioHarnessSha256": "7a7f885a010f5d1de8823db6585204562b69358ce0253f4829b33c821c846e6d",
+  "controllerOutputTransport": "Separate authenticated stdio MCP sidecar, actual native loopback-only Art-Net sender, owned ephemeral 127.0.0.1 UDP receiver",
+  "projectReplacementPreflightHarnessSha256": "26e5a05cfa33c21eda10639adb256ce3ddee6719ab95c5c5e60634bc0c8e3b5a",
+  "projectReplacementSourceSha256": "8800bf2ed8d22579a929d0d6342c8b5d04cd952b5dedc9976249683ecf2d78db",
+  "profile": "jp.seraf.ktn.syndocal.qa.mcp-lifecycle",
+  "checks": [
+    {
+      "check": "native-loopback-project-load-does-not-arm",
+      "passed": true,
+      "fixtureSourceSha256": "2de7f4d6a5e8ba0c0cedf7ef664d65030fde37d492ae3fa2b6475e77a02f7bf6",
+      "projectSha256": "334ce359ce952233db331a28e623c6650f386a12d0e76d1791059c00b8d1eb3f",
+      "destination": {
+        "address": "127.0.0.1",
+        "family": "IPv4",
+        "port": 56653
+      },
+      "ownership": {
+        "role": "Standby",
+        "effective_role": "Standby",
+        "desired_role": "Standby",
+        "persisted_role": "Standby",
+        "state": "Ready",
+        "generation": 1,
+        "epoch": 1,
+        "lighting_allowed": false,
+        "video_allowed": false,
+        "lighting_reason": "ProjectSwapDisarmed",
+        "video_reason": "ProjectSwapDisarmed",
+        "error": null
+      },
+      "packets": 0
+    },
+    {
+      "check": "native-managed-enable-before-project-replacement-preflight",
+      "passed": true,
+      "receipt": {
+        "argument_fingerprint": "fd9b2acad24bb95654ac0103725f07e1598f5d2b0e03ea58b0257132fe0b46f6",
+        "audit_sequence": 1,
+        "fence_after": {
+          "output_epoch": 3,
+          "output_generation": 3,
+          "process_incarnation": 7670553731826255,
+          "project_checkpoint_hash": "b103b77e9918383095ead46ed98b11f75a8fc34e46966ffe30d50f1d475a482a",
+          "project_epoch": 1,
+          "project_publication_generation": 2,
+          "project_revision": 0,
+          "safety_blackout_epoch": 1,
+          "safety_blackout_generation": 1,
+          "session_incarnation": 3969198728498682
+        },
+        "fence_before": {
+          "output_epoch": 2,
+          "output_generation": 2,
+          "process_incarnation": 7670553731826255,
+          "project_checkpoint_hash": "b103b77e9918383095ead46ed98b11f75a8fc34e46966ffe30d50f1d475a482a",
+          "project_epoch": 1,
+          "project_publication_generation": 2,
+          "project_revision": 0,
+          "safety_blackout_epoch": 1,
+          "safety_blackout_generation": 1,
+          "session_incarnation": 3969198728498682
+        },
+        "lease_result": {
+          "audit_sequence": 3,
+          "authority": {
+            "generation": 1,
+            "lease_id": "lease-0000000000000001"
+          },
+          "changes": [
+            {
+              "after_generation": 1,
+              "after_phase": "held_active",
+              "after_resources": [
+                "lighting",
+                "video"
+              ],
+              "before_generation": null,
+              "before_phase": null,
+              "before_resources": [],
+              "lease_id": "lease-0000000000000001"
+            }
+          ],
+          "outcome": "acquired",
+          "phase": "held_active",
+          "resources": [
+            "lighting",
+            "video"
+          ]
+        },
+        "operation_id": "syndocal.output.enable.v2",
+        "outcome": "applied",
+        "request_id": 1791059863993,
+        "shape_sha256": "80be2fb02c50e29e59a4cf718e77a3b79efcce5d0cbe28c61f8282f71d289567"
+      },
+      "ownership": {
+        "role": "Both",
+        "effective_role": "Both",
+        "desired_role": "Both",
+        "persisted_role": "Both",
+        "state": "Ready",
+        "generation": 2,
+        "epoch": 2,
+        "lighting_allowed": true,
+        "video_allowed": true,
+        "lighting_reason": "OwnedByMachineRole",
+        "video_reason": "OwnedByMachineRole",
+        "error": null
+      }
+    },
+    {
+      "check": "native-new_project-expectedEpoch-rejection-preserves-project-and-live-managed-output",
+      "passed": true,
+      "rejection": {
+        "ok": false,
+        "error": "Project authority changed before mutation (expected epoch 2 revision 0)"
+      },
+      "phase": "new_project-expectedEpoch-rejects-with-live-managed-output",
+      "frames": 23,
+      "payloadSha256": "65228acc43d02190277f6ebf9ec067c7135aaddc9f0c6a610c3052a7cf9213d1",
+      "channels1to8": [
+        255,
+        0,
+        0,
+        0,
+        128,
+        0,
+        128,
+        0
+      ]
+    },
+    {
+      "check": "native-new_project-expectedRevision-rejection-preserves-project-and-live-managed-output",
+      "passed": true,
+      "rejection": {
+        "ok": false,
+        "error": "Project authority changed before mutation (expected epoch 1 revision 1)"
+      },
+      "phase": "new_project-expectedRevision-rejects-with-live-managed-output",
+      "frames": 24,
+      "payloadSha256": "65228acc43d02190277f6ebf9ec067c7135aaddc9f0c6a610c3052a7cf9213d1",
+      "channels1to8": [
+        255,
+        0,
+        0,
+        0,
+        128,
+        0,
+        128,
+        0
+      ]
+    },
+    {
+      "check": "native-new_project-expectedCheckpointHash-rejection-preserves-project-and-live-managed-output",
+      "passed": true,
+      "rejection": {
+        "ok": false,
+        "error": "Project authority changed before mutation (expected epoch 1 revision 0)"
+      },
+      "phase": "new_project-expectedCheckpointHash-rejects-with-live-managed-output",
+      "frames": 23,
+      "payloadSha256": "65228acc43d02190277f6ebf9ec067c7135aaddc9f0c6a610c3052a7cf9213d1",
+      "channels1to8": [
+        255,
+        0,
+        0,
+        0,
+        128,
+        0,
+        128,
+        0
+      ]
+    },
+    {
+      "check": "native-load_project_path-expectedEpoch-rejection-preserves-project-and-live-managed-output",
+      "passed": true,
+      "rejection": {
+        "ok": false,
+        "error": "Project authority changed before mutation (expected epoch 2 revision 0)"
+      },
+      "phase": "load_project_path-expectedEpoch-rejects-with-live-managed-output",
+      "frames": 23,
+      "payloadSha256": "65228acc43d02190277f6ebf9ec067c7135aaddc9f0c6a610c3052a7cf9213d1",
+      "channels1to8": [
+        255,
+        0,
+        0,
+        0,
+        128,
+        0,
+        128,
+        0
+      ]
+    },
+    {
+      "check": "native-load_project_path-expectedRevision-rejection-preserves-project-and-live-managed-output",
+      "passed": true,
+      "rejection": {
+        "ok": false,
+        "error": "Project authority changed before mutation (expected epoch 1 revision 1)"
+      },
+      "phase": "load_project_path-expectedRevision-rejects-with-live-managed-output",
+      "frames": 23,
+      "payloadSha256": "65228acc43d02190277f6ebf9ec067c7135aaddc9f0c6a610c3052a7cf9213d1",
+      "channels1to8": [
+        255,
+        0,
+        0,
+        0,
+        128,
+        0,
+        128,
+        0
+      ]
+    },
+    {
+      "check": "native-load_project_path-expectedCheckpointHash-rejection-preserves-project-and-live-managed-output",
+      "passed": true,
+      "rejection": {
+        "ok": false,
+        "error": "Project authority changed before mutation (expected epoch 1 revision 0)"
+      },
+      "phase": "load_project_path-expectedCheckpointHash-rejects-with-live-managed-output",
+      "frames": 23,
+      "payloadSha256": "65228acc43d02190277f6ebf9ec067c7135aaddc9f0c6a610c3052a7cf9213d1",
+      "channels1to8": [
+        255,
+        0,
+        0,
+        0,
+        128,
+        0,
+        128,
+        0
+      ]
+    }
+  ],
+  "normalAppIdentityUnchanged": true,
+  "credentialRevoked": true,
+  "credentialFileRemoved": true,
+  "nativePanicLocations": [],
+  "nonclaims": [
+    "QA identifier release build, not the distributed artifact",
+    "Actual managed Enable, live 512-channel loopback ArtDMX, rejected stale New/Open authority and valid replacement retirement. No simultaneous authority-change atomicity, external MCP New/Open exposure, physical video/fixture/venue or release acceptance",
+    "No durable authored/output mutation crash publication acceptance"
+  ]
+}

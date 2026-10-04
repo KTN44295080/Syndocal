@@ -1,0 +1,26 @@
+{
+  "passed": true,
+  "checks": 38,
+  "flags": [
+    "--recovery-storage",
+    "--display-window",
+    "--runtime-authority",
+    "--controller-event-pressure",
+    "--controller-safety-pressure",
+    "--controller-burst",
+    "--controller-inflight",
+    "--controller-expiry",
+    "--controller-restart",
+    "--controller-output",
+    "--authored-controls",
+    "--input-diagnostics",
+    "--backup-json",
+    "--project-json",
+    "--lease-expiry",
+    "--tap-bpm",
+    "--diagnostics",
+    "--external-high-risk",
+    "--external-revocation"
+  ],
+  "nativeLaunch": false
+}

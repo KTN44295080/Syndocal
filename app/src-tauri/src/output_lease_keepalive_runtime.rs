@@ -2318,7 +2318,7 @@ impl OutputLeaseKeepaliveFailStopPorts for ProductionKeepaliveFailStopPorts<'_> 
         let result = self
             .state
             .engine
-            .begin_retire_managed_show_dmx_after_safety_blackout(
+            .begin_retire_managed_dmx_after_safety_blackout(
                 safety,
                 failure_epoch,
                 Instant::now() + Duration::from_secs(3),

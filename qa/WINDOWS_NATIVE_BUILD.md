@@ -37,6 +37,9 @@ The wrapper verifies/stops only that target's `release/syndocal.exe`, preserving
 the normal checkout instance. Relative overrides fail closed because Cargo's
 invocation directory can differ from the wrapper directory. Without an override,
 the existing checkout `target/release/syndocal.exe` behavior is unchanged.
+Normal and isolated builds in the same checkout share `app/dist`. Run them
+sequentially when their Vite environment differs; separate Cargo targets do not
+isolate the frontend assets embedded by Tauri.
 Direct Cargo commands must satisfy the same environment contract.
 The ASIO and soak PowerShell harnesses currently retain their narrower Community
 preflight; Build Tools support here applies to the Tauri wrapper and direct Cargo

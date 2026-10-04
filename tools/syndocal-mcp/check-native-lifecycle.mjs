@@ -22,6 +22,15 @@ import { nativeRecoveryStorage } from './native-recovery-storage.mjs';
 
 const exec = promisify(execFile);
 const args = process.argv.slice(2);
+const projectReplacementPreflight = args.includes('--project-replacement-preflight');
+if (projectReplacementPreflight) {
+  args.splice(args.indexOf('--project-replacement-preflight'), 1);
+  assert.ok(!args.some(arg => ['--recovery-storage', '--display-window', '--runtime-authority', '--controller-event-pressure',
+    '--controller-safety-pressure', '--controller-burst', '--controller-inflight', '--controller-expiry',
+    '--controller-restart', '--controller-output', '--authored-controls', '--input-diagnostics', '--backup-json',
+    '--project-json', '--lease-expiry', '--tap-bpm', '--diagnostics', '--external-high-risk', '--external-revocation'].includes(arg)),
+  'Project replacement preflight owns a separate native project/managed-output lane');
+}
 const recoveryStorage = args.includes('--recovery-storage');
 if (recoveryStorage) {
   args.splice(args.indexOf('--recovery-storage'), 1);
@@ -240,6 +249,7 @@ try {
   if (leaseExpiry) await nativeLeaseExpiry(backend, options, checks);
   if (externalHighRisk) await nativeExternalHighRisk(backend, options, checks);
   if (controllerOutput) await nativeControllerOutput(backend, options, checks);
+  if (projectReplacementPreflight) await nativeControllerOutput(backend, options, checks, { projectReplacementPreflight: true });
   if (controllerBurst) await nativeControllerOutput(backend, options, checks, { burstRequests: true });
   if (controllerEventPressure) {
     await nativeControllerOutput(backend, options, checks, { eventPressure: true });
@@ -379,13 +389,20 @@ await fs.writeFile(evidence, `${JSON.stringify({ schemaVersion: 1, timestamp: ne
     recoveryStartupAppSourceSha256: createHash('sha256').update(await fs.readFile(new URL('../../app/src/App.tsx', import.meta.url))).digest('hex'),
     recoveryStorageTransport: 'Real isolated WebView2 localStorage and production App startup after owned native restarts; process-verified backend diagnostics, no DOM actions',
   } : {}),
-  ...(controllerOutput || controllerRestart || controllerExpiry || controllerInFlight ? {
+  ...(controllerOutput || controllerRestart || controllerExpiry || controllerInFlight || projectReplacementPreflight ? {
     controllerOutputHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-controller-output.mjs', import.meta.url))).digest('hex'),
     stdioHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-stdio-session.mjs', import.meta.url))).digest('hex'),
     controllerOutputTransport: 'Separate authenticated stdio MCP sidecar, actual native loopback-only Art-Net sender, owned ephemeral 127.0.0.1 UDP receiver',
     ...(controllerRestart ? { controllerRestartHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-controller-restart.mjs', import.meta.url))).digest('hex') } : {}),
     ...(controllerExpiry ? { controllerExpiryHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-controller-expiry.mjs', import.meta.url))).digest('hex') } : {}),
     ...(controllerInFlight ? { controllerInFlightHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-controller-inflight.mjs', import.meta.url))).digest('hex') } : {}),
+  } : {}),
+  ...(projectReplacementPreflight ? {
+    projectReplacementPreflightHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-project-replacement-preflight.mjs', import.meta.url))).digest('hex'),
+    projectReplacementSourceSha256: createHash('sha256').update(await fs.readFile(new URL('../../app/src-tauri/src/main.rs', import.meta.url))).digest('hex'),
+    managedRetirementEngineSha256: createHash('sha256').update(await fs.readFile(new URL('../../crates/engine/src/lib.rs', import.meta.url))).digest('hex'),
+    managedNetworkRetirementSourceSha256: createHash('sha256').update(await fs.readFile(new URL('../../crates/engine/src/managed_network_dmx_retirement.rs', import.meta.url))).digest('hex'),
+    managedKeepalivePortsSha256: createHash('sha256').update(await fs.readFile(new URL('../../app/src-tauri/src/output_lease_keepalive_runtime.rs', import.meta.url))).digest('hex'),
   } : {}),
   ...(inputDiagnostics ? { inputDiagnosticHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-input-diagnostics.mjs', import.meta.url))).digest('hex') } : {}),
   ...(externalHighRisk ? {
@@ -451,7 +468,8 @@ await fs.writeFile(evidence, `${JSON.stringify({ schemaVersion: 1, timestamp: ne
   credentialRevoked: !cleanupNeeded, credentialFileRemoved: true,
   nativePanicLocations,
   nonclaims: ['QA identifier release build, not the distributed artifact',
-    recoveryStorage ? 'Actual isolated WebView2 recovery storage preservation and actionable production startup error across native restarts; unchanged empty native checkpoint/journal and closed output gates. No recovery load/discard UI action, successful recovery acknowledgement, browser write/quota fault, older-generation fallback, full upgrade/template/backup/recovery matrix, physical output or release acceptance'
+    projectReplacementPreflight ? 'Actual managed Enable, live 512-channel loopback ArtDMX, rejected stale New/Open authority and valid replacement retirement. No simultaneous authority-change atomicity, external MCP New/Open exposure, general serial/device retirement, physical video/fixture/venue or release acceptance'
+    : recoveryStorage ? 'Actual isolated WebView2 recovery storage preservation and actionable production startup error across native restarts; unchanged empty native checkpoint/journal and closed output gates. No recovery load/discard UI action, successful recovery acknowledgement, browser write/quota fault, older-generation fallback, full upgrade/template/backup/recovery matrix, physical output or release acceptance'
     : displayWindow ? 'Actual native small decorated enabled Display shell/GPU lifecycle on the editor monitor through authenticated MCP, exact grants/fences/lease and terminal receipt replay. Private empty composition, no media/audio/active DMX route or fixture. No visible content/color/pixel, fullscreen/topology/hotplug, AddDisplay, all output operations, hardware/venue or release acceptance'
     : controllerEventPressure ? 'Actual native 2048-record retention gap, authenticated MCP slow subscriber, authoritative resnapshot and exact runtime-delta convergence under 64-slot pending broker pressure with live whole-image loopback output. Local fenced Loop changes keep the established 4/s rate; real production query adapter completes individually claimed reads. No Engine command-queue saturation, every adapter/event, complete tick/frame/audio/UI budget, physical device, venue or release acceptance'
     : controllerSafetyPressure ? 'Actual 64-slot external broker pending saturation, 10000 R4 intents and local native S0 all-zero loopback output before/after revocation and while Kill Switch is active. Existing renderer registration retains immutable external work; no Engine command-queue saturation, complete tick/frame/audio/UI budget, publisher event-gap, physical device, venue or release acceptance'

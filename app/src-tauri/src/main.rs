@@ -65127,7 +65127,7 @@ fn project_swap_app_handle(state: &AppState) -> Result<tauri::AppHandle, String>
 /// Project/history/takeover replacement cannot inherit a managed Both output
 /// authority from the prior project. Detect Idle without requiring an app
 /// handle so pure headless seams remain valid; a non-idle run must complete
-/// the physical all-deny boundary before any project/lifecycle lock is taken.
+/// the physical all-deny boundary before any project/lifecycle lock is retained.
 fn execute_managed_project_replacement_boundary(
     state: &AppState,
     detail: &str,
@@ -65251,6 +65251,10 @@ fn replace_prepared_project_snapshot(
     abort_before_publication: Option<&AtomicBool>,
 ) -> Result<ProjectLoadResult, String> {
     if scope == ProjectSnapshotReplacementScope::ExternalCaller {
+        // Reject an already-stale invocation before retiring managed output.
+        // This preflight releases its locks before the physical boundary;
+        // lifecycle admission and publication still repeat the exact CAS.
+        preflight_project_replacement_invocation(state)?;
         execute_managed_project_replacement_boundary(
             state,
             "Managed output lease external project replacement",
@@ -65295,6 +65299,7 @@ fn replace_prepared_project_snapshot_with_platform<Platform: ProjectReplacementP
     platform: &Platform,
 ) -> Result<ProjectLoadResult, String> {
     if scope == ProjectSnapshotReplacementScope::ExternalCaller {
+        preflight_project_replacement_invocation(state)?;
         execute_managed_project_replacement_boundary(
             state,
             "Managed output lease external project replacement",
@@ -65331,10 +65336,11 @@ fn replace_prepared_project_snapshot_with_platform<Platform: ProjectReplacementP
 }
 
 fn preflight_project_replacement_invocation(state: &AppState) -> Result<(), String> {
-    // Keep the lifecycle -> external admission -> coordinator order used by
-    // replacement publication. Both locks are released before stop/join, any
-    // filesystem work, or engine publication. The final seam repeats this CAS
-    // so an authority change during stop/join is still rejected.
+    // External admission -> coordinator is shared by both the initial
+    // side-effect preflight and the lifecycle-held preflight. Both locks are
+    // released before physical retirement, stop/join, filesystem work or
+    // engine publication. The final seam repeats this CAS so an authority
+    // change during retirement/stop/join is still rejected.
     let _external_admission = lock_project_external_command_admission(state)?;
     let coordinator = lock_project_coordinator(state)?;
     ensure_no_pending_project_transaction(&coordinator)?;

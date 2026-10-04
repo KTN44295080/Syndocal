@@ -1,0 +1,42 @@
+{
+  "base": "6c76fae6b696bb1de5e7ec1841365a0f97758a22",
+  "timestamp": "2026-10-03T21:05:26.0546794Z",
+  "files": [
+    {
+      "path": "app/src-tauri/src/main.rs",
+      "sha256": "8800bf2ed8d22579a929d0d6342c8b5d04cd952b5dedc9976249683ecf2d78db"
+    },
+    {
+      "path": "app/src-tauri/src/output_lease_keepalive_runtime.rs",
+      "sha256": "c7037b0f81dc10acaab834f1ef99d7d9559c56a1bc07cd79f5cab47de3e38756"
+    },
+    {
+      "path": "crates/engine/src/lib.rs",
+      "sha256": "7361c891b7f9c5578be36e138bbd9b1b74528b896d9938b7e9f8f8e9bb54c56a"
+    },
+    {
+      "path": "crates/engine/src/managed_network_dmx_retirement.rs",
+      "sha256": "c251c581caf5765dd308e9d418c7a190d62063a765091bb9e947c2ba5e2feeba"
+    },
+    {
+      "path": "crates/engine/src/managed_network_dmx_retirement_tests.rs",
+      "sha256": "17295607afd31bb40a4991eda4c8f0715d1b41417442417effe1af2320909d66"
+    },
+    {
+      "path": "app/src/App.tsx",
+      "sha256": "83262ccf62e59c60e9c5e1cbfca57d07152d658bc7f592e0f91e4b87c8fdb608"
+    },
+    {
+      "path": "tools/syndocal-mcp/native-project-replacement-preflight.mjs",
+      "sha256": "5c0b18bc1c7cfaf9247a2fdd090e7d1b9b84dfaeb30f436568c6b34d23791261"
+    },
+    {
+      "path": "tools/syndocal-mcp/native-controller-output.mjs",
+      "sha256": "ab11533fc15399b2565c1826bb2546b6143c86bbc6b8232b7c4b26414b6fcd28"
+    },
+    {
+      "path": "tools/syndocal-mcp/check-native-lifecycle.mjs",
+      "sha256": "6880eb0e03d8d058c436acb562a811ded9fffc6f0649cd0a18ee688e203a5ed2"
+    }
+  ]
+}

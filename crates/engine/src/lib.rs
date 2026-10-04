@@ -12,6 +12,8 @@ use std::{
 };
 
 mod control_plane;
+mod managed_network_dmx_retirement;
+pub use managed_network_dmx_retirement::ManagedDmxRetirementScope;
 pub mod media_derived;
 mod move_path;
 mod show_serial_dmx_status;
@@ -4155,11 +4157,12 @@ define_engine_command! {
         ack: mpsc::SyncSender<Result<(), String>>,
     },
     /// One irreversible, fail-stop-only retirement of the managed live-show
-    /// DMX path.  It has no endpoint, route, or device payload: the engine
-    /// verifies its one exact local Art-Net/USB topology again immediately
-    /// before the physical boundary.  A caller must retain the consumed
+    /// DMX path. It has no endpoint, route, or device payload: the engine
+    /// verifies the selected server-owned topology policy immediately
+    /// before the physical boundary. A caller must retain the consumed
     /// operation result; this command never has a retry or a compensating CAS.
     RetireManagedShowDmxAfterSafetyBlackout {
+        scope: ManagedDmxRetirementScope,
         expected_safety_epoch: u64,
         expected_safety_generation: u64,
         expected_failure_epoch: u64,
@@ -6410,6 +6413,16 @@ pub struct ManagedShowDmxFailStopOperation {
     inner: Arc<ManagedShowDmxFailStopOperationInner>,
 }
 
+/// The same consumed retirement operation, with no show-specific receipt
+/// projection for configured network endpoints.
+pub struct ManagedDmxRetirementOperation(ManagedShowDmxFailStopOperation);
+
+impl ManagedDmxRetirementOperation {
+    pub fn wait(self, timeout: Duration) -> Result<(), ManagedShowDmxFailStopError> {
+        self.0.wait(timeout).map(|_| ())
+    }
+}
+
 impl ManagedShowDmxFailStopOperation {
     /// Wait once for the terminal receipt.  Before the physical boundary this
     /// timeout cancels atomically; after `Committing` it is necessarily
@@ -7648,12 +7661,45 @@ impl EngineHandle {
         expected_failure_epoch: u64,
         expires_at: Instant,
     ) -> Result<ManagedShowDmxFailStopOperation, ManagedShowDmxFailStopError> {
+        self.begin_managed_dmx_retirement(
+            ManagedDmxRetirementScope::ExactShow,
+            expected_safety,
+            expected_failure_epoch,
+            expires_at,
+        )
+    }
+
+    /// Retire the current configured network senders without installing a
+    /// persistent sender or changing a destination. A retained show USB worker
+    /// keeps its dedicated exact-topology and physical-zero proof.
+    pub fn begin_retire_managed_dmx_after_safety_blackout(
+        &self,
+        expected_safety: SafetyBlackoutAuthority,
+        expected_failure_epoch: u64,
+        expires_at: Instant,
+    ) -> Result<ManagedDmxRetirementOperation, ManagedShowDmxFailStopError> {
+        self.begin_managed_dmx_retirement(
+            ManagedDmxRetirementScope::ConfiguredNetwork,
+            expected_safety,
+            expected_failure_epoch,
+            expires_at,
+        ).map(ManagedDmxRetirementOperation)
+    }
+
+    fn begin_managed_dmx_retirement(
+        &self,
+        scope: ManagedDmxRetirementScope,
+        expected_safety: SafetyBlackoutAuthority,
+        expected_failure_epoch: u64,
+        expires_at: Instant,
+    ) -> Result<ManagedShowDmxFailStopOperation, ManagedShowDmxFailStopError> {
         let inner = Arc::new(ManagedShowDmxFailStopOperationInner::new());
         let operation = ManagedShowDmxFailStopOperation {
             inner: Arc::clone(&inner),
         };
         if let Err(error) =
             self.send_safety(EngineCommand::RetireManagedShowDmxAfterSafetyBlackout {
+                scope,
                 expected_safety_epoch: expected_safety.epoch,
                 expected_safety_generation: expected_safety.generation,
                 expected_failure_epoch,
@@ -24422,6 +24468,7 @@ impl EngineRuntime {
                 let _ = ack.send(result);
             }
             EngineCommand::RetireManagedShowDmxAfterSafetyBlackout {
+                scope,
                 expected_safety_epoch,
                 expected_safety_generation,
                 expected_failure_epoch,
@@ -24440,7 +24487,8 @@ impl EngineRuntime {
                     {
                         after_admit_before_commit();
                     }
-                    let result = self.apply_managed_show_dmx_fail_stop(
+                    let result = self.apply_managed_dmx_retirement_for_scope(
+                        scope,
                         expected_safety_epoch,
                         expected_safety_generation,
                         expected_failure_epoch,

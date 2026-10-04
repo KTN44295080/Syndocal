@@ -1,0 +1,85 @@
+PIN C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+PATH-FIRST [
+  'C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\bin\\Hostx64\\x64\\link.exe'
+]
+RUN ["test","--release","--locked","-p","engine","-j","1","--config","profile.release.package.engine.opt-level=0","--config","profile.release.package.engine.codegen-units=256","--config","profile.release.package.syndocal.opt-level=0","--config","profile.release.package.syndocal.codegen-units=256","managed_network_dmx_retirement","--","--nocapture","--test-threads=1"]
+
+running 7 tests
+test managed_network_dmx_retirement::tests::configured_network_retirement_cancelled_operation_preserves_live_sender ... ok
+test managed_network_dmx_retirement::tests::configured_network_retirement_disabled_absent_route_does_not_emit_or_create_a_sender ... ok
+test managed_network_dmx_retirement::tests::configured_network_retirement_does_not_substitute_network_proof_for_unverified_serial ... ok
+test managed_network_dmx_retirement::tests::configured_network_retirement_send_failure_still_retires_every_sender_without_success ... ok
+test managed_network_dmx_retirement::tests::configured_network_retirement_sends_zero_after_the_prior_failure_fence_dropped_its_sender ... ok
+test managed_network_dmx_retirement::tests::configured_network_retirement_stale_authority_preserves_live_sender_without_a_zero_send ... ok
+test managed_network_dmx_retirement::tests::configured_network_retirement_zeros_multiple_owned_destinations_and_preserves_configuration ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 1100 filtered out; finished in 1.46s
+
+   Compiling engine v1.2.0-alpha.69 (C:\Users\janua\OneDrive\ドキュメント\GitHub\Syndocal\crates\engine)
+    Finished `release` profile [optimized] target(s) in 1m 11s
+     Running unittests src\lib.rs (C:\Users\janua\AppData\Local\Temp/syndocal-native-acceptance-target\release\deps\engine-63c23f3dc21cd88a.exe)
+RUN ["test","--release","--locked","-p","engine","-j","1","--config","profile.release.package.engine.opt-level=0","--config","profile.release.package.engine.codegen-units=256","--config","profile.release.package.syndocal.opt-level=0","--config","profile.release.package.syndocal.codegen-units=256","show_managed_dmx_fail_stop_tests","--","--nocapture","--test-threads=1"]
+    Finished `release` profile [optimized] target(s) in 0.52s
+     Running unittests src\lib.rs (C:\Users\janua\AppData\Local\Temp/syndocal-native-acceptance-target\release\deps\engine-63c23f3dc21cd88a.exe)
+
+running 23 tests
+test tests::show_managed_dmx_fail_stop_tests::managed_fail_stop_admit_then_cancel_race_is_pure_even_for_missing_usb_topology ... ok
+test tests::show_managed_dmx_fail_stop_tests::managed_fail_stop_completion_evidence_treats_aba_as_postcommit_indoubt_and_faults ... ok
+test tests::show_managed_dmx_fail_stop_tests::managed_fail_stop_marks_ambiguous_u0_indoubt_only_after_commit ... ok
+test tests::show_managed_dmx_fail_stop_tests::managed_fail_stop_marks_wrong_primary_artnet_sender_variant_indoubt_after_commit_and_all_deny ... ok
+test tests::show_managed_dmx_fail_stop_tests::managed_fail_stop_missing_usb_rejects_prior_worker_history_and_uncertain_status ... ok
+test tests::show_managed_dmx_fail_stop_tests::managed_fail_stop_missing_usb_route_preflight_is_pure_until_postcommit_cleanup ... ok
+test tests::show_managed_dmx_fail_stop_tests::managed_fail_stop_missing_usb_sender_preflight_is_pure_until_postcommit_cleanup ... ok
+test tests::show_managed_dmx_fail_stop_tests::managed_fail_stop_no_usb_cleanup_does_not_invent_usb_fault ... ok
+test tests::show_managed_dmx_fail_stop_tests::managed_fail_stop_operation_timeout_cancels_only_before_commit ... ok
+test tests::show_managed_dmx_fail_stop_tests::managed_fail_stop_public_artnet_error_or_short_write_runs_usb_fault_cleanup_and_republishes_sender_absence ... ok
+test tests::show_managed_dmx_fail_stop_tests::managed_fail_stop_public_current_authority_unprovable_topologies_commit_all_deny ... ok
+test tests::show_managed_dmx_fail_stop_tests::managed_fail_stop_public_postcommit_wait_is_indoubt_then_worker_completes_without_resend ... ok
+test tests::show_managed_dmx_fail_stop_tests::managed_fail_stop_public_priority_queue_honors_precommit_cancellation_without_mutation ... ok
+test tests::show_managed_dmx_fail_stop_tests::managed_fail_stop_public_priority_queue_rejects_stale_safety_or_failure_epoch_without_send ... ok
+test tests::show_managed_dmx_fail_stop_tests::managed_fail_stop_public_priority_queue_success_proves_artnet_usb_shutdown_order_and_replay_rejects ... ok
+test tests::show_managed_dmx_fail_stop_tests::managed_fail_stop_public_socket_bind_failure_commits_all_deny_cleanup ... ok
+test tests::show_managed_dmx_fail_stop_tests::managed_fail_stop_rejects_stale_safety_or_failure_fence_before_artnet_or_usb_commit ... ok
+test tests::show_managed_dmx_fail_stop_tests::managed_fail_stop_safety_queue_reaches_artnet_before_a_concurrently_enqueued_normal_marker ... ok
+test tests::show_managed_dmx_fail_stop_tests::managed_fail_stop_sends_one_exact_artnet_zero_before_usb_zero_and_seals_terminal_receipt ... ok
+test tests::show_managed_dmx_fail_stop_tests::managed_fail_stop_sends_one_exact_zero_for_the_exact_disabled_and_absent_artnet_route ... ok
+test tests::show_managed_dmx_fail_stop_tests::managed_fail_stop_short_artnet_write_is_indoubt_and_failure_cleanup_never_returns_success ... ok
+test tests::show_managed_dmx_fail_stop_tests::managed_fail_stop_wait_after_commit_is_indoubt_and_never_cancels_the_worker ... ok
+test tests::show_managed_dmx_fail_stop_tests::managed_fail_stop_without_usb_handles_artnet_and_no_dmx_without_fabricated_usb_proof ... ok
+
+test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 1084 filtered out; finished in 0.60s
+
+RUN ["test","--release","--locked","-p","syndocal","-j","1","--config","profile.release.package.engine.opt-level=0","--config","profile.release.package.engine.codegen-units=256","--config","profile.release.package.syndocal.opt-level=0","--config","profile.release.package.syndocal.codegen-units=256","project_replacement_","--","--nocapture","--test-threads=1"]
+
+running 6 tests
+test control_plane_query::tests::project_replacement_is_redacted_and_emits_a_canonical_event ... ok
+test tests::external_project_replacement_joins_standby_worker_before_fenced_swap ... ok
+test tests::fenced_project_replacement_commits_infallibly_after_publication_ack ... ok
+test tests::fenced_project_replacement_does_not_commit_local_state_when_publication_ack_fails ... ok
+test tests::fenced_project_replacement_does_not_publish_when_output_retirement_fails ... ok
+test tests::project_replacement_ack_core_orphans_only_old_epoch_and_failed_preflight_is_unchanged ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 1968 filtered out; finished in 0.01s
+
+   Compiling engine v1.2.0-alpha.69 (C:\Users\janua\OneDrive\ドキュメント\GitHub\Syndocal\crates\engine)
+   Compiling syndocal v1.2.0-alpha.69 (C:\Users\janua\OneDrive\ドキュメント\GitHub\Syndocal\app\src-tauri)
+    Finished `release` profile [optimized] target(s) in 3m 50s
+     Running unittests src\main.rs (C:\Users\janua\AppData\Local\Temp/syndocal-native-acceptance-target\release\deps\syndocal-f037b164d4375e83.exe)
+RUN ["test","--release","--locked","-p","syndocal","-j","1","--config","profile.release.package.engine.opt-level=0","--config","profile.release.package.engine.codegen-units=256","--config","profile.release.package.syndocal.opt-level=0","--config","profile.release.package.syndocal.codegen-units=256","output_lease_keepalive_integration_tests","--","--nocapture","--test-threads=1"]
+    Finished `release` profile [optimized] target(s) in 0.88s
+     Running unittests src\main.rs (C:\Users\janua\AppData\Local\Temp/syndocal-native-acceptance-target\release\deps\syndocal-f037b164d4375e83.exe)
+
+running 11 tests
+test output_lease_keepalive_integration::output_lease_keepalive_integration_tests::canonical_boundary_ports_precede_exact_release_and_wire_dto ... ok
+test output_lease_keepalive_integration::output_lease_keepalive_integration_tests::durable_enable_identity_binds_the_exact_registry_both_receipt ... ok
+test output_lease_keepalive_integration::output_lease_keepalive_integration_tests::exact_durable_replay_is_already_armed_not_a_second_run ... ok
+test output_lease_keepalive_integration::output_lease_keepalive_integration_tests::journal_receipt_mismatch_is_rejected_before_registry_evidence_or_worker_arm ... ok
+test output_lease_keepalive_integration::output_lease_keepalive_integration_tests::malformed_new_commit_cannot_issue_cleanup_authority_or_physical_plan ... ok
+test output_lease_keepalive_integration::output_lease_keepalive_integration_tests::managed_non_relinquish_lifecycle_is_rejected_before_any_generic_request ... ok
+test output_lease_keepalive_integration::output_lease_keepalive_integration_tests::newer_committed_enable_supersedes_old_run_and_stales_its_late_plan ... ok
+test output_lease_keepalive_integration::output_lease_keepalive_integration_tests::newly_committed_enable_journal_failure_enters_all_deny_before_exact_release ... ok
+test output_lease_keepalive_integration::output_lease_keepalive_integration_tests::old_replay_with_newer_current_authority_rejects_without_cleanup_ports_or_cas ... ok
+test output_lease_keepalive_integration::output_lease_keepalive_integration_tests::post_permit_clock_failure_retains_cleanup_authority_for_exact_retry ... ok
+test output_lease_keepalive_integration::output_lease_keepalive_integration_tests::stale_project_identity_cannot_issue_evidence_or_arm_a_managed_run ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 1963 filtered out; finished in 0.01s

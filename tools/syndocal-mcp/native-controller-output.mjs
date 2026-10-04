@@ -12,10 +12,13 @@ import { nativeControllerInFlightProbe } from './native-controller-inflight.mjs'
 import { nativeControllerBurstProbe } from './native-controller-burst.mjs';
 import { nativeControllerSafetyPressureProbe } from './native-controller-safety-pressure.mjs';
 import { nativeControllerEventPressureProbe } from './native-controller-event-pressure.mjs';
+import { nativeProjectReplacementPreflight } from './native-project-replacement-preflight.mjs';
 
 // Software loopback only: an owned ephemeral receiver, one isolated QA route,
 // and real authenticated MCP operations. Retirement/transfer must preserve DMX.
-export async function nativeControllerOutput(backend, options, checks, { restartLifecycle, leaseExpiry = false, inFlightCrash = false, burstRequests = false, safetyPressure, eventPressure = false } = {}) {
+export async function nativeControllerOutput(backend, options, checks, { restartLifecycle, leaseExpiry = false, inFlightCrash = false, burstRequests = false, safetyPressure, eventPressure = false, projectReplacementPreflight = false } = {}) {
+  assert.ok(!projectReplacementPreflight || !(restartLifecycle || leaseExpiry || inFlightCrash || burstRequests || safetyPressure || eventPressure),
+    'Project replacement preflight requires its own managed-output lane');
   assert.ok(!(restartLifecycle && leaseExpiry), 'Live restart and expiry require separate lanes');
   assert.ok(!inFlightCrash || restartLifecycle, 'In-flight crash requires the owned restart lifecycle');
   assert.ok(!burstRequests || !(restartLifecycle || leaseExpiry || inFlightCrash), 'Burst requires its own live request lane');
@@ -240,6 +243,16 @@ export async function nativeControllerOutput(backend, options, checks, { restart
     mcp = await openNativeStdioSession(options);
     await grant('read', 'syndocal.query.output.control.authority.v1');
     await grant('read', 'syndocal.output.lease.authority.query.v1');
+    if (projectReplacementPreflight) {
+      await nativeProjectReplacementPreflight({ backend, promote: () => backend.invoke('agent_authority_promote_v1', {
+        principalId: options.principalId, principalIncarnation: options.principalIncarnation,
+      }), grant, output, accepted, authority, checkpoint, ownership,
+      stable: async (...args) => { await awaitImage(args[1]); return stable(...args); },
+      awaitImage, full, zero, pause, packets: () => packetCount, healthy, ownerId: registeredOwnerId, load, file, checks });
+      assert.equal(digest(await fs.readFile(file)), digest(bytes));
+      checks.push({ check: 'native-replacement-preflight-private-source-bytes-unchanged', passed: true });
+      return;
+    }
     const denied = await output('syndocal.output.lease.acquire.v2', { kind: 'acquire_lease', role: 'lighting' });
     assert.equal(denied.receipt.status, 'rejected');
     assert.equal(denied.receipt.error, 'agent_safe_mode_denied');
