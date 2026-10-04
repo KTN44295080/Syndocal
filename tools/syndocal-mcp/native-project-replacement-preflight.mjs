@@ -21,10 +21,11 @@ export async function nativeProjectReplacementPreflight({ backend, promote, gran
     .then(value=>({ok:true,value}),error=>({ok:false,error:String(error)}))`);
   const live = await checkpoint();
   const expected = { ownerId, expectedEpoch: before.project_epoch, expectedRevision: before.project_revision,
-    expectedCheckpointHash: before.checkpoint_hash };
+    expectedCheckpointHash: before.checkpoint_hash, expectedPublicationGeneration: before.publication_generation };
   for (const command of ['new_project', 'load_project_path']) {
     for (const [field, value] of [['expectedEpoch', before.project_epoch + 1],
-      ['expectedRevision', before.project_revision + 1], ['expectedCheckpointHash', '0'.repeat(64)]]) {
+      ['expectedRevision', before.project_revision + 1], ['expectedCheckpointHash', '0'.repeat(64)],
+      ['expectedPublicationGeneration', before.publication_generation + 1]]) {
       const args = { ...expected, [field]: value, ...(command === 'load_project_path' ? { path: file } : {}) };
       const check = { check: `native-${command}-${field}-rejection-preserves-project-and-live-managed-output`, passed: false };
       checks.push(check);
@@ -36,7 +37,8 @@ export async function nativeProjectReplacementPreflight({ backend, promote, gran
           checkpointUnchanged: JSON.stringify(after.checkpoint) === JSON.stringify(live),
           ownershipBefore: gates, ownershipAfter: after.ownership });
         assert.equal(result.ok, false, JSON.stringify(result));
-        assert.match(result.error, /authority|epoch|revision|checkpoint/i);
+        assert.match(result.error, field === 'expectedPublicationGeneration'
+          ? /publication generation/i : /authority|epoch|revision|checkpoint/i);
         assert.deepEqual(await readAuthority(), before);
         assert.deepEqual(await checkpoint(), live);
         assert.deepEqual(await ownership(), gates);
@@ -46,7 +48,8 @@ export async function nativeProjectReplacementPreflight({ backend, promote, gran
     }
   }
   // Valid Open exercises the platform-backed path; valid New the default path.
-  await load(file);
+  const opened = await invoke('load_project_path', { ...expected, path: file });
+  assert.equal(opened.ok, true, JSON.stringify(opened));
   assert.equal((await readAuthority()).project_epoch, before.project_epoch + 1);
   assert.equal((await readAuthority()).project_revision, 0);
   assert.equal((await ownership()).lighting_allowed, false);
@@ -70,7 +73,8 @@ export async function nativeProjectReplacementPreflight({ backend, promote, gran
   checks.push({ check: 'native-explicit-reenable-after-valid-open-produces-live-whole-image', passed: true, ...renewedLive.observation });
   const current = await authority();
   const created = await invoke('new_project', { ownerId, expectedEpoch: current.project_epoch,
-    expectedRevision: current.project_revision, expectedCheckpointHash: current.checkpoint_hash });
+    expectedRevision: current.project_revision, expectedCheckpointHash: current.checkpoint_hash,
+    expectedPublicationGeneration: current.publication_generation });
   assert.equal(created.ok, true, JSON.stringify(created));
   assert.equal((await authority()).project_epoch, current.project_epoch + 1);
   assert.deepEqual((await checkpoint()).snapshot.fixtures, []);

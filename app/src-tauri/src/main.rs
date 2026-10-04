@@ -25630,6 +25630,9 @@ struct ProjectReplacementInvocationFence {
     expected_epoch: u64,
     expected_revision: u64,
     expected_checkpoint_hash: String,
+    // Legacy replacement callers retain E/R/H. Typed callers additionally
+    // carry the exact generation through every preflight and publication CAS.
+    expected_publication_generation: Option<u64>,
 }
 
 type ProjectReplacementAuthorityExpectation = (Option<u64>, u64, u64, String);
@@ -25667,6 +25670,25 @@ fn with_project_replacement_invocation<T>(
     authority: ProjectReplacementAuthorityExpectation,
     replace: impl FnOnce() -> Result<T, String>,
 ) -> Result<T, String> {
+    with_project_replacement_invocation_generation(
+        state, window_label, command_name, owner_id, authority, None, replace,
+    )
+}
+
+fn with_project_replacement_invocation_generation<T>(
+    state: &AppState,
+    window_label: &str,
+    command_name: &'static str,
+    owner_id: String,
+    authority: ProjectReplacementAuthorityExpectation,
+    expected_publication_generation: Option<u64>,
+    replace: impl FnOnce() -> Result<T, String>,
+) -> Result<T, String> {
+    if expected_publication_generation.is_some_and(|value| {
+        value > protocol::control_plane_command::MAX_SAFE_JAVASCRIPT_INTEGER
+    }) {
+        return Err("Project replacement publication generation is not a safe integer".to_string());
+    }
     let (entry_owner_incarnation, expected_epoch, expected_revision, expected_checkpoint_hash) =
         authority;
     let owner_id = normalize_project_transaction_owner_id(owner_id)?;
@@ -25686,6 +25708,7 @@ fn with_project_replacement_invocation<T>(
         expected_epoch,
         expected_revision,
         expected_checkpoint_hash,
+        expected_publication_generation,
     };
     struct ProjectReplacementInvocationFenceGuard;
     impl Drop for ProjectReplacementInvocationFenceGuard {
@@ -25727,6 +25750,12 @@ fn validate_project_replacement_invocation_at_publication(
         ));
     }
     ensure_project_operator_authoritative_mutation_allowed(state, coordinator, &fence.owner_id)?;
+    if fence
+        .expected_publication_generation
+        .is_some_and(|generation| generation != coordinator.publication_generation)
+    {
+        return Err("Project publication generation changed before replacement".to_string());
+    }
     ensure_exact_project_authority_matches(
         coordinator,
         fence.expected_epoch,
@@ -51003,8 +51032,9 @@ fn new_project(
     expected_epoch: u64,
     expected_revision: u64,
     expected_checkpoint_hash: String,
+    expected_publication_generation: Option<u64>,
 ) -> Result<ProjectLoadResult, String> {
-    with_project_replacement_invocation(
+    with_project_replacement_invocation_generation(
         &state,
         window.label(),
         "new_project",
@@ -51015,6 +51045,7 @@ fn new_project(
             expected_revision,
             expected_checkpoint_hash,
         ),
+        expected_publication_generation,
         || {
             load_project_from_file(
                 &state,
@@ -63984,12 +64015,13 @@ fn load_project_path(
     expected_epoch: u64,
     expected_revision: u64,
     expected_checkpoint_hash: String,
+    expected_publication_generation: Option<u64>,
 ) -> Result<ProjectLoadResult, String> {
     let entry_owner_incarnation =
         project_transaction_owner_binding_for_window(&state, window.label(), &owner_id)?;
     let path = PathBuf::from(path);
     validate_project_open_path(&path)?;
-    with_project_replacement_invocation(
+    with_project_replacement_invocation_generation(
         &state,
         window.label(),
         "load_project_path",
@@ -64000,6 +64032,7 @@ fn load_project_path(
             expected_revision,
             expected_checkpoint_hash,
         ),
+        expected_publication_generation,
         || load_project_from_path(&state, &path),
     )
 }
@@ -87597,6 +87630,7 @@ fn curl_binary_name() -> &'static str {
 #[cfg(test)]
 pub(crate) mod tests {
     include!("project_retirement_boundary_tests.rs");
+    include!("project_replacement_generation_tests.rs");
     use super::*;
     use protocol::{ClockSource, VideoLayerSummary};
 

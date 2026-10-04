@@ -1,0 +1,31 @@
+{
+  "base": "a2f8855e39bfb7444bb991a910f383ec2ba3641a",
+  "timestamp": "2026-10-04T06:27:23.600Z",
+  "files": [
+    {
+      "path": "app/src-tauri/src/main.rs",
+      "sha256": "2b244bf32490d364cfcc5f2292c090fce3b5244b5d0377e29a91c5ebfee068a3"
+    },
+    {
+      "path": "app/src-tauri/src/project_replacement_generation_tests.rs",
+      "sha256": "544c1f981cbc5f57123fb8fc475edab1a5d082a83e9294cf6de3523bc70152f6"
+    },
+    {
+      "path": "tools/syndocal-mcp/native-project-replacement-preflight.mjs",
+      "sha256": "fe5adf3b806033bd577a365c8c928ee3a7d0855e4be56b09128c92807671a421"
+    },
+    {
+      "path": "tools/syndocal-mcp/native-controller-output.mjs",
+      "sha256": "ab11533fc15399b2565c1826bb2546b6143c86bbc6b8232b7c4b26414b6fcd28"
+    },
+    {
+      "path": "tools/syndocal-mcp/check-native-lifecycle.mjs",
+      "sha256": "6880eb0e03d8d058c436acb562a811ded9fffc6f0649cd0a18ee688e203a5ed2"
+    },
+    {
+      "path": "app/src/App.tsx",
+      "sha256": "83262ccf62e59c60e9c5e1cbfca57d07152d658bc7f592e0f91e4b87c8fdb608"
+    }
+  ],
+  "harness_adjustment": "Added a separate exact publication-generation error assertion before current native probes; application and Rust test source remain identical to the original pre-build freeze."
+}

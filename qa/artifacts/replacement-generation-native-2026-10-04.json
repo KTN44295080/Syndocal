@@ -1,0 +1,5099 @@
+{
+  "schemaVersion": 1,
+  "timestamp": "2026-10-04T06:28:13.844Z",
+  "passed": true,
+  "executable": "C:\\Users\\janua\\AppData\\Local\\Temp/syndocal-native-acceptance-target/release/syndocal.exe",
+  "executableSha256": "a2d3e1e216fda23df89fed8e23e4ef8f679dcb9f8f47d0abe833e13e6c1f2fd6",
+  "sidecarSha256": "e7bb740aa5ef5993dd5a5f01d37f80077c58f3996f51a0874f9565c79a843c12",
+  "runnerSha256": "6880eb0e03d8d058c436acb562a811ded9fffc6f0649cd0a18ee688e203a5ed2",
+  "backendHarnessSha256": "ade29aa256d8ff17374bb4b3e893ea9a07f71f8fa2cf2bb72b21f80d4e0e8b1f",
+  "controllerOutputHarnessSha256": "ab11533fc15399b2565c1826bb2546b6143c86bbc6b8232b7c4b26414b6fcd28",
+  "stdioHarnessSha256": "7a7f885a010f5d1de8823db6585204562b69358ce0253f4829b33c821c846e6d",
+  "controllerOutputTransport": "Separate authenticated stdio MCP sidecar, actual native loopback-only Art-Net sender, owned ephemeral 127.0.0.1 UDP receiver",
+  "projectReplacementPreflightHarnessSha256": "fe5adf3b806033bd577a365c8c928ee3a7d0855e4be56b09128c92807671a421",
+  "projectReplacementSourceSha256": "2b244bf32490d364cfcc5f2292c090fce3b5244b5d0377e29a91c5ebfee068a3",
+  "managedRetirementEngineSha256": "7361c891b7f9c5578be36e138bbd9b1b74528b896d9938b7e9f8f8e9bb54c56a",
+  "managedNetworkRetirementSourceSha256": "c251c581caf5765dd308e9d418c7a190d62063a765091bb9e947c2ba5e2feeba",
+  "managedKeepalivePortsSha256": "c7037b0f81dc10acaab834f1ef99d7d9559c56a1bc07cd79f5cab47de3e38756",
+  "profile": "jp.seraf.ktn.syndocal.qa.mcp-lifecycle",
+  "checks": [
+    {
+      "check": "native-loopback-project-load-does-not-arm",
+      "passed": true,
+      "fixtureSourceSha256": "2de7f4d6a5e8ba0c0cedf7ef664d65030fde37d492ae3fa2b6475e77a02f7bf6",
+      "projectSha256": "770ce8a2aacc0e953affa5dc44778d954b4108ee4e3e0452d8b0bb399a21d428",
+      "destination": {
+        "address": "127.0.0.1",
+        "family": "IPv4",
+        "port": 57000
+      },
+      "ownership": {
+        "role": "Standby",
+        "effective_role": "Standby",
+        "desired_role": "Standby",
+        "persisted_role": "Standby",
+        "state": "Ready",
+        "generation": 1,
+        "epoch": 1,
+        "lighting_allowed": false,
+        "video_allowed": false,
+        "lighting_reason": "ProjectSwapDisarmed",
+        "video_reason": "ProjectSwapDisarmed",
+        "error": null
+      },
+      "packets": 0
+    },
+    {
+      "check": "native-managed-enable-before-project-replacement-preflight",
+      "passed": true,
+      "receipt": {
+        "argument_fingerprint": "fd9b2acad24bb95654ac0103725f07e1598f5d2b0e03ea58b0257132fe0b46f6",
+        "audit_sequence": 1,
+        "fence_after": {
+          "output_epoch": 3,
+          "output_generation": 3,
+          "process_incarnation": 7283170928346216,
+          "project_checkpoint_hash": "f79a8f43fae02badd2eae5b827e49fa83d37ee5c2c6a282950977255847f1bcf",
+          "project_epoch": 1,
+          "project_publication_generation": 2,
+          "project_revision": 0,
+          "safety_blackout_epoch": 1,
+          "safety_blackout_generation": 1,
+          "session_incarnation": 7616955573720868
+        },
+        "fence_before": {
+          "output_epoch": 2,
+          "output_generation": 2,
+          "process_incarnation": 7283170928346216,
+          "project_checkpoint_hash": "f79a8f43fae02badd2eae5b827e49fa83d37ee5c2c6a282950977255847f1bcf",
+          "project_epoch": 1,
+          "project_publication_generation": 2,
+          "project_revision": 0,
+          "safety_blackout_epoch": 1,
+          "safety_blackout_generation": 1,
+          "session_incarnation": 7616955573720868
+        },
+        "lease_result": {
+          "audit_sequence": 3,
+          "authority": {
+            "generation": 1,
+            "lease_id": "lease-0000000000000001"
+          },
+          "changes": [
+            {
+              "after_generation": 1,
+              "after_phase": "held_active",
+              "after_resources": [
+                "lighting",
+                "video"
+              ],
+              "before_generation": null,
+              "before_phase": null,
+              "before_resources": [],
+              "lease_id": "lease-0000000000000001"
+            }
+          ],
+          "outcome": "acquired",
+          "phase": "held_active",
+          "resources": [
+            "lighting",
+            "video"
+          ]
+        },
+        "operation_id": "syndocal.output.enable.v2",
+        "outcome": "applied",
+        "request_id": 1791095265628,
+        "shape_sha256": "237b7d319b8870f9244ba219e3e3850c2a84e2a2f940b5caf18bef275edea849"
+      },
+      "ownership": {
+        "role": "Both",
+        "effective_role": "Both",
+        "desired_role": "Both",
+        "persisted_role": "Both",
+        "state": "Ready",
+        "generation": 2,
+        "epoch": 2,
+        "lighting_allowed": true,
+        "video_allowed": true,
+        "lighting_reason": "OwnedByMachineRole",
+        "video_reason": "OwnedByMachineRole",
+        "error": null
+      }
+    },
+    {
+      "check": "native-new_project-expectedEpoch-rejection-preserves-project-and-live-managed-output",
+      "passed": true,
+      "request": {
+        "ownerId": "controller-output-6e1151af-4e31-4fd1-a821-3ae6ecdaaf02",
+        "expectedEpoch": 2,
+        "expectedRevision": 0,
+        "expectedCheckpointHash": "f79a8f43fae02badd2eae5b827e49fa83d37ee5c2c6a282950977255847f1bcf",
+        "expectedPublicationGeneration": 2
+      },
+      "result": {
+        "ok": false,
+        "error": "Project authority changed before mutation (expected epoch 2 revision 0)"
+      },
+      "authorityBefore": {
+        "project_epoch": 1,
+        "project_revision": 0,
+        "checkpoint_hash": "f79a8f43fae02badd2eae5b827e49fa83d37ee5c2c6a282950977255847f1bcf",
+        "timeline_transport_epoch": 1,
+        "timeline_transport_generation": 2,
+        "timeline_runtime": {
+          "transport_epoch": 1,
+          "transport_generation": 2,
+          "loop_runtime": {
+            "generation": 1,
+            "status": "disabled",
+            "a_ms": null,
+            "b_ms": null,
+            "wrap_count": 0
+          },
+          "follow_runtime": {
+            "epoch": 1,
+            "generation": 1,
+            "status": "idle",
+            "admission_reason": null,
+            "outcome": null,
+            "source_timeline_id": null,
+            "target_timeline_id": null,
+            "elapsed_ms": 0,
+            "duration_ms": 0,
+            "progress_millis": 0,
+            "fault": null,
+            "transition_hold_active": false,
+            "waiting_for_pedal_start": false
+          }
+        },
+        "publication_generation": 2,
+        "publication_kind": "identity_replacement",
+        "mapping_replacement_generation": 1,
+        "authority_disposition_generation": 1,
+        "authority_disposition": "clean_at_path",
+        "recovery_authority_serial": 127,
+        "recovery_authority_last_transition": {
+          "kind": "project_publication"
+        },
+        "path_generation": 1,
+        "history_generation": 2,
+        "current_project_path": "C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-controller-output-zVlrTG\\loopback.sdc",
+        "profiles": [
+          {
+            "source_path": "memory://custom/Syndocal-Phase_1_Mini_Spot",
+            "manufacturer": "Syndocal",
+            "name": "Phase 1 Mini Spot",
+            "short_name": "P1 Spot",
+            "fixture_type_id": null,
+            "dmx_modes": [
+              {
+                "name": "8ch",
+                "controls": [
+                  {
+                    "attribute": "Dimmer",
+                    "channel_name": "Dimmer",
+                    "geometry": "Beam",
+                    "offsets": [
+                      1
+                    ],
+                    "resolution": "EightBit",
+                    "default_value": 0,
+                    "functions": []
+                  },
+                  {
+                    "attribute": "ColorRed",
+                    "channel_name": "ColorRed",
+                    "geometry": "Beam",
+                    "offsets": [
+                      2
+                    ],
+                    "resolution": "EightBit",
+                    "default_value": 0,
+                    "functions": []
+                  },
+                  {
+                    "attribute": "ColorGreen",
+                    "channel_name": "ColorGreen",
+                    "geometry": "Beam",
+                    "offsets": [
+                      3
+                    ],
+                    "resolution": "EightBit",
+                    "default_value": 0,
+                    "functions": []
+                  },
+                  {
+                    "attribute": "ColorBlue",
+                    "channel_name": "ColorBlue",
+                    "geometry": "Beam",
+                    "offsets": [
+                      4
+                    ],
+                    "resolution": "EightBit",
+                    "default_value": 0,
+                    "functions": []
+                  },
+                  {
+                    "attribute": "Pan",
+                    "channel_name": "Pan",
+                    "geometry": "Head",
+                    "offsets": [
+                      5,
+                      6
+                    ],
+                    "resolution": "SixteenBit",
+                    "default_value": 32768,
+                    "functions": []
+                  },
+                  {
+                    "attribute": "Tilt",
+                    "channel_name": "Tilt",
+                    "geometry": "Head",
+                    "offsets": [
+                      7,
+                      8
+                    ],
+                    "resolution": "SixteenBit",
+                    "default_value": 32768,
+                    "functions": []
+                  }
+                ]
+              }
+            ],
+            "geometries": [
+              {
+                "name": "Body",
+                "kind": "Geometry",
+                "parent": null,
+                "matrix": [
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1
+                ],
+                "model_name": "Mini Spot Body",
+                "model_file": null,
+                "model_primitive": "Cylinder",
+                "model_dimensions": {
+                  "x": 0.42,
+                  "y": 0.32,
+                  "z": 0.42
+                },
+                "beam_type": null,
+                "beam_angle_deg": null,
+                "field_angle_deg": null,
+                "beam_radius": null
+              },
+              {
+                "name": "Head",
+                "kind": "Axis",
+                "parent": "Body",
+                "matrix": [
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1,
+                  0,
+                  0.34,
+                  0,
+                  0,
+                  1,
+                  -0.18,
+                  0,
+                  0,
+                  0,
+                  1
+                ],
+                "model_name": "Mini Spot Head",
+                "model_file": null,
+                "model_primitive": "Sphere",
+                "model_dimensions": {
+                  "x": 0.34,
+                  "y": 0.28,
+                  "z": 0.34
+                },
+                "beam_type": null,
+                "beam_angle_deg": null,
+                "field_angle_deg": null,
+                "beam_radius": null
+              },
+              {
+                "name": "Beam",
+                "kind": "Beam",
+                "parent": "Head",
+                "matrix": [
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1,
+                  0,
+                  0.1,
+                  0,
+                  0,
+                  1,
+                  -0.44,
+                  0,
+                  0,
+                  0,
+                  1
+                ],
+                "model_name": "Mini Spot Beam",
+                "model_file": null,
+                "model_primitive": "Plane",
+                "model_dimensions": {
+                  "x": 0.18,
+                  "y": 0.02,
+                  "z": 0.58
+                },
+                "beam_type": "Spot",
+                "beam_angle_deg": 18,
+                "field_angle_deg": 28,
+                "beam_radius": 0.09
+              }
+            ],
+            "warnings": []
+          }
+        ],
+        "fixture_groups": [],
+        "operator_policy": null,
+        "midi_mappings": [],
+        "osc_mappings": [],
+        "dmx_mappings": [],
+        "dj_track_triggers": [],
+        "history": {
+          "can_undo": false,
+          "can_redo": false,
+          "undo_depth": 0,
+          "redo_depth": 0,
+          "undo_label": null,
+          "redo_label": null,
+          "project_epoch": 1,
+          "project_revision": 0,
+          "checkpoint_hash": "f79a8f43fae02badd2eae5b827e49fa83d37ee5c2c6a282950977255847f1bcf",
+          "history_generation": 2,
+          "undo_entry_id": null,
+          "undo_checkpoint_hash": null,
+          "redo_entry_id": null,
+          "redo_checkpoint_hash": null
+        },
+        "input_runtime": {
+          "project_input_runtime_generation": 1,
+          "mapping_input_runtime_generation": 1,
+          "midi_clock_active": false,
+          "midi_control_active": false,
+          "midi_feedback_output_active": false,
+          "midi_feedback_runtime_active": false,
+          "osc_active": false,
+          "dmx_active": false
+        },
+        "authored_effect_fence": {
+          "process_incarnation": 7283170928346216,
+          "session_incarnation": 6317911795866206,
+          "project_epoch": 1,
+          "project_revision": 0,
+          "project_checkpoint_hash": "f79a8f43fae02badd2eae5b827e49fa83d37ee5c2c6a282950977255847f1bcf",
+          "project_publication_generation": 2
+        }
+      },
+      "authorityAfter": {
+        "project_epoch": 1,
+        "project_revision": 0,
+        "checkpoint_hash": "f79a8f43fae02badd2eae5b827e49fa83d37ee5c2c6a282950977255847f1bcf",
+        "timeline_transport_epoch": 1,
+        "timeline_transport_generation": 2,
+        "timeline_runtime": {
+          "transport_epoch": 1,
+          "transport_generation": 2,
+          "loop_runtime": {
+            "generation": 1,
+            "status": "disabled",
+            "a_ms": null,
+            "b_ms": null,
+            "wrap_count": 0
+          },
+          "follow_runtime": {
+            "epoch": 1,
+            "generation": 1,
+            "status": "idle",
+            "admission_reason": null,
+            "outcome": null,
+            "source_timeline_id": null,
+            "target_timeline_id": null,
+            "elapsed_ms": 0,
+            "duration_ms": 0,
+            "progress_millis": 0,
+            "fault": null,
+            "transition_hold_active": false,
+            "waiting_for_pedal_start": false
+          }
+        },
+        "publication_generation": 2,
+        "publication_kind": "identity_replacement",
+        "mapping_replacement_generation": 1,
+        "authority_disposition_generation": 1,
+        "authority_disposition": "clean_at_path",
+        "recovery_authority_serial": 127,
+        "recovery_authority_last_transition": {
+          "kind": "project_publication"
+        },
+        "path_generation": 1,
+        "history_generation": 2,
+        "current_project_path": "C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-controller-output-zVlrTG\\loopback.sdc",
+        "profiles": [
+          {
+            "source_path": "memory://custom/Syndocal-Phase_1_Mini_Spot",
+            "manufacturer": "Syndocal",
+            "name": "Phase 1 Mini Spot",
+            "short_name": "P1 Spot",
+            "fixture_type_id": null,
+            "dmx_modes": [
+              {
+                "name": "8ch",
+                "controls": [
+                  {
+                    "attribute": "Dimmer",
+                    "channel_name": "Dimmer",
+                    "geometry": "Beam",
+                    "offsets": [
+                      1
+                    ],
+                    "resolution": "EightBit",
+                    "default_value": 0,
+                    "functions": []
+                  },
+                  {
+                    "attribute": "ColorRed",
+                    "channel_name": "ColorRed",
+                    "geometry": "Beam",
+                    "offsets": [
+                      2
+                    ],
+                    "resolution": "EightBit",
+                    "default_value": 0,
+                    "functions": []
+                  },
+                  {
+                    "attribute": "ColorGreen",
+                    "channel_name": "ColorGreen",
+                    "geometry": "Beam",
+                    "offsets": [
+                      3
+                    ],
+                    "resolution": "EightBit",
+                    "default_value": 0,
+                    "functions": []
+                  },
+                  {
+                    "attribute": "ColorBlue",
+                    "channel_name": "ColorBlue",
+                    "geometry": "Beam",
+                    "offsets": [
+                      4
+                    ],
+                    "resolution": "EightBit",
+                    "default_value": 0,
+                    "functions": []
+                  },
+                  {
+                    "attribute": "Pan",
+                    "channel_name": "Pan",
+                    "geometry": "Head",
+                    "offsets": [
+                      5,
+                      6
+                    ],
+                    "resolution": "SixteenBit",
+                    "default_value": 32768,
+                    "functions": []
+                  },
+                  {
+                    "attribute": "Tilt",
+                    "channel_name": "Tilt",
+                    "geometry": "Head",
+                    "offsets": [
+                      7,
+                      8
+                    ],
+                    "resolution": "SixteenBit",
+                    "default_value": 32768,
+                    "functions": []
+                  }
+                ]
+              }
+            ],
+            "geometries": [
+              {
+                "name": "Body",
+                "kind": "Geometry",
+                "parent": null,
+                "matrix": [
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1
+                ],
+                "model_name": "Mini Spot Body",
+                "model_file": null,
+                "model_primitive": "Cylinder",
+                "model_dimensions": {
+                  "x": 0.42,
+                  "y": 0.32,
+                  "z": 0.42
+                },
+                "beam_type": null,
+                "beam_angle_deg": null,
+                "field_angle_deg": null,
+                "beam_radius": null
+              },
+              {
+                "name": "Head",
+                "kind": "Axis",
+                "parent": "Body",
+                "matrix": [
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1,
+                  0,
+                  0.34,
+                  0,
+                  0,
+                  1,
+                  -0.18,
+                  0,
+                  0,
+                  0,
+                  1
+                ],
+                "model_name": "Mini Spot Head",
+                "model_file": null,
+                "model_primitive": "Sphere",
+                "model_dimensions": {
+                  "x": 0.34,
+                  "y": 0.28,
+                  "z": 0.34
+                },
+                "beam_type": null,
+                "beam_angle_deg": null,
+                "field_angle_deg": null,
+                "beam_radius": null
+              },
+              {
+                "name": "Beam",
+                "kind": "Beam",
+                "parent": "Head",
+                "matrix": [
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1,
+                  0,
+                  0.1,
+                  0,
+                  0,
+                  1,
+                  -0.44,
+                  0,
+                  0,
+                  0,
+                  1
+                ],
+                "model_name": "Mini Spot Beam",
+                "model_file": null,
+                "model_primitive": "Plane",
+                "model_dimensions": {
+                  "x": 0.18,
+                  "y": 0.02,
+                  "z": 0.58
+                },
+                "beam_type": "Spot",
+                "beam_angle_deg": 18,
+                "field_angle_deg": 28,
+                "beam_radius": 0.09
+              }
+            ],
+            "warnings": []
+          }
+        ],
+        "fixture_groups": [],
+        "operator_policy": null,
+        "midi_mappings": [],
+        "osc_mappings": [],
+        "dmx_mappings": [],
+        "dj_track_triggers": [],
+        "history": {
+          "can_undo": false,
+          "can_redo": false,
+          "undo_depth": 0,
+          "redo_depth": 0,
+          "undo_label": null,
+          "redo_label": null,
+          "project_epoch": 1,
+          "project_revision": 0,
+          "checkpoint_hash": "f79a8f43fae02badd2eae5b827e49fa83d37ee5c2c6a282950977255847f1bcf",
+          "history_generation": 2,
+          "undo_entry_id": null,
+          "undo_checkpoint_hash": null,
+          "redo_entry_id": null,
+          "redo_checkpoint_hash": null
+        },
+        "input_runtime": {
+          "project_input_runtime_generation": 1,
+          "mapping_input_runtime_generation": 1,
+          "midi_clock_active": false,
+          "midi_control_active": false,
+          "midi_feedback_output_active": false,
+          "midi_feedback_runtime_active": false,
+          "osc_active": false,
+          "dmx_active": false
+        },
+        "authored_effect_fence": {
+          "process_incarnation": 7283170928346216,
+          "session_incarnation": 6317911795866206,
+          "project_epoch": 1,
+          "project_revision": 0,
+          "project_checkpoint_hash": "f79a8f43fae02badd2eae5b827e49fa83d37ee5c2c6a282950977255847f1bcf",
+          "project_publication_generation": 2
+        }
+      },
+      "checkpointUnchanged": true,
+      "ownershipBefore": {
+        "role": "Both",
+        "effective_role": "Both",
+        "desired_role": "Both",
+        "persisted_role": "Both",
+        "state": "Ready",
+        "generation": 2,
+        "epoch": 2,
+        "lighting_allowed": true,
+        "video_allowed": true,
+        "lighting_reason": "OwnedByMachineRole",
+        "video_reason": "OwnedByMachineRole",
+        "error": null
+      },
+      "ownershipAfter": {
+        "role": "Both",
+        "effective_role": "Both",
+        "desired_role": "Both",
+        "persisted_role": "Both",
+        "state": "Ready",
+        "generation": 2,
+        "epoch": 2,
+        "lighting_allowed": true,
+        "video_allowed": true,
+        "lighting_reason": "OwnedByMachineRole",
+        "video_reason": "OwnedByMachineRole",
+        "error": null
+      },
+      "phase": "new_project-expectedEpoch-rejects-with-live-managed-output",
+      "frames": 23,
+      "payloadSha256": "65228acc43d02190277f6ebf9ec067c7135aaddc9f0c6a610c3052a7cf9213d1",
+      "channels1to8": [
+        255,
+        0,
+        0,
+        0,
+        128,
+        0,
+        128,
+        0
+      ]
+    },
+    {
+      "check": "native-new_project-expectedRevision-rejection-preserves-project-and-live-managed-output",
+      "passed": true,
+      "request": {
+        "ownerId": "controller-output-6e1151af-4e31-4fd1-a821-3ae6ecdaaf02",
+        "expectedEpoch": 1,
+        "expectedRevision": 1,
+        "expectedCheckpointHash": "f79a8f43fae02badd2eae5b827e49fa83d37ee5c2c6a282950977255847f1bcf",
+        "expectedPublicationGeneration": 2
+      },
+      "result": {
+        "ok": false,
+        "error": "Project authority changed before mutation (expected epoch 1 revision 1)"
+      },
+      "authorityBefore": {
+        "project_epoch": 1,
+        "project_revision": 0,
+        "checkpoint_hash": "f79a8f43fae02badd2eae5b827e49fa83d37ee5c2c6a282950977255847f1bcf",
+        "timeline_transport_epoch": 1,
+        "timeline_transport_generation": 2,
+        "timeline_runtime": {
+          "transport_epoch": 1,
+          "transport_generation": 2,
+          "loop_runtime": {
+            "generation": 1,
+            "status": "disabled",
+            "a_ms": null,
+            "b_ms": null,
+            "wrap_count": 0
+          },
+          "follow_runtime": {
+            "epoch": 1,
+            "generation": 1,
+            "status": "idle",
+            "admission_reason": null,
+            "outcome": null,
+            "source_timeline_id": null,
+            "target_timeline_id": null,
+            "elapsed_ms": 0,
+            "duration_ms": 0,
+            "progress_millis": 0,
+            "fault": null,
+            "transition_hold_active": false,
+            "waiting_for_pedal_start": false
+          }
+        },
+        "publication_generation": 2,
+        "publication_kind": "identity_replacement",
+        "mapping_replacement_generation": 1,
+        "authority_disposition_generation": 1,
+        "authority_disposition": "clean_at_path",
+        "recovery_authority_serial": 127,
+        "recovery_authority_last_transition": {
+          "kind": "project_publication"
+        },
+        "path_generation": 1,
+        "history_generation": 2,
+        "current_project_path": "C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-controller-output-zVlrTG\\loopback.sdc",
+        "profiles": [
+          {
+            "source_path": "memory://custom/Syndocal-Phase_1_Mini_Spot",
+            "manufacturer": "Syndocal",
+            "name": "Phase 1 Mini Spot",
+            "short_name": "P1 Spot",
+            "fixture_type_id": null,
+            "dmx_modes": [
+              {
+                "name": "8ch",
+                "controls": [
+                  {
+                    "attribute": "Dimmer",
+                    "channel_name": "Dimmer",
+                    "geometry": "Beam",
+                    "offsets": [
+                      1
+                    ],
+                    "resolution": "EightBit",
+                    "default_value": 0,
+                    "functions": []
+                  },
+                  {
+                    "attribute": "ColorRed",
+                    "channel_name": "ColorRed",
+                    "geometry": "Beam",
+                    "offsets": [
+                      2
+                    ],
+                    "resolution": "EightBit",
+                    "default_value": 0,
+                    "functions": []
+                  },
+                  {
+                    "attribute": "ColorGreen",
+                    "channel_name": "ColorGreen",
+                    "geometry": "Beam",
+                    "offsets": [
+                      3
+                    ],
+                    "resolution": "EightBit",
+                    "default_value": 0,
+                    "functions": []
+                  },
+                  {
+                    "attribute": "ColorBlue",
+                    "channel_name": "ColorBlue",
+                    "geometry": "Beam",
+                    "offsets": [
+                      4
+                    ],
+                    "resolution": "EightBit",
+                    "default_value": 0,
+                    "functions": []
+                  },
+                  {
+                    "attribute": "Pan",
+                    "channel_name": "Pan",
+                    "geometry": "Head",
+                    "offsets": [
+                      5,
+                      6
+                    ],
+                    "resolution": "SixteenBit",
+                    "default_value": 32768,
+                    "functions": []
+                  },
+                  {
+                    "attribute": "Tilt",
+                    "channel_name": "Tilt",
+                    "geometry": "Head",
+                    "offsets": [
+                      7,
+                      8
+                    ],
+                    "resolution": "SixteenBit",
+                    "default_value": 32768,
+                    "functions": []
+                  }
+                ]
+              }
+            ],
+            "geometries": [
+              {
+                "name": "Body",
+                "kind": "Geometry",
+                "parent": null,
+                "matrix": [
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1
+                ],
+                "model_name": "Mini Spot Body",
+                "model_file": null,
+                "model_primitive": "Cylinder",
+                "model_dimensions": {
+                  "x": 0.42,
+                  "y": 0.32,
+                  "z": 0.42
+                },
+                "beam_type": null,
+                "beam_angle_deg": null,
+                "field_angle_deg": null,
+                "beam_radius": null
+              },
+              {
+                "name": "Head",
+                "kind": "Axis",
+                "parent": "Body",
+                "matrix": [
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1,
+                  0,
+                  0.34,
+                  0,
+                  0,
+                  1,
+                  -0.18,
+                  0,
+                  0,
+                  0,
+                  1
+                ],
+                "model_name": "Mini Spot Head",
+                "model_file": null,
+                "model_primitive": "Sphere",
+                "model_dimensions": {
+                  "x": 0.34,
+                  "y": 0.28,
+                  "z": 0.34
+                },
+                "beam_type": null,
+                "beam_angle_deg": null,
+                "field_angle_deg": null,
+                "beam_radius": null
+              },
+              {
+                "name": "Beam",
+                "kind": "Beam",
+                "parent": "Head",
+                "matrix": [
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1,
+                  0,
+                  0.1,
+                  0,
+                  0,
+                  1,
+                  -0.44,
+                  0,
+                  0,
+                  0,
+                  1
+                ],
+                "model_name": "Mini Spot Beam",
+                "model_file": null,
+                "model_primitive": "Plane",
+                "model_dimensions": {
+                  "x": 0.18,
+                  "y": 0.02,
+                  "z": 0.58
+                },
+                "beam_type": "Spot",
+                "beam_angle_deg": 18,
+                "field_angle_deg": 28,
+                "beam_radius": 0.09
+              }
+            ],
+            "warnings": []
+          }
+        ],
+        "fixture_groups": [],
+        "operator_policy": null,
+        "midi_mappings": [],
+        "osc_mappings": [],
+        "dmx_mappings": [],
+        "dj_track_triggers": [],
+        "history": {
+          "can_undo": false,
+          "can_redo": false,
+          "undo_depth": 0,
+          "redo_depth": 0,
+          "undo_label": null,
+          "redo_label": null,
+          "project_epoch": 1,
+          "project_revision": 0,
+          "checkpoint_hash": "f79a8f43fae02badd2eae5b827e49fa83d37ee5c2c6a282950977255847f1bcf",
+          "history_generation": 2,
+          "undo_entry_id": null,
+          "undo_checkpoint_hash": null,
+          "redo_entry_id": null,
+          "redo_checkpoint_hash": null
+        },
+        "input_runtime": {
+          "project_input_runtime_generation": 1,
+          "mapping_input_runtime_generation": 1,
+          "midi_clock_active": false,
+          "midi_control_active": false,
+          "midi_feedback_output_active": false,
+          "midi_feedback_runtime_active": false,
+          "osc_active": false,
+          "dmx_active": false
+        },
+        "authored_effect_fence": {
+          "process_incarnation": 7283170928346216,
+          "session_incarnation": 6317911795866206,
+          "project_epoch": 1,
+          "project_revision": 0,
+          "project_checkpoint_hash": "f79a8f43fae02badd2eae5b827e49fa83d37ee5c2c6a282950977255847f1bcf",
+          "project_publication_generation": 2
+        }
+      },
+      "authorityAfter": {
+        "project_epoch": 1,
+        "project_revision": 0,
+        "checkpoint_hash": "f79a8f43fae02badd2eae5b827e49fa83d37ee5c2c6a282950977255847f1bcf",
+        "timeline_transport_epoch": 1,
+        "timeline_transport_generation": 2,
+        "timeline_runtime": {
+          "transport_epoch": 1,
+          "transport_generation": 2,
+          "loop_runtime": {
+            "generation": 1,
+            "status": "disabled",
+            "a_ms": null,
+            "b_ms": null,
+            "wrap_count": 0
+          },
+          "follow_runtime": {
+            "epoch": 1,
+            "generation": 1,
+            "status": "idle",
+            "admission_reason": null,
+            "outcome": null,
+            "source_timeline_id": null,
+            "target_timeline_id": null,
+            "elapsed_ms": 0,
+            "duration_ms": 0,
+            "progress_millis": 0,
+            "fault": null,
+            "transition_hold_active": false,
+            "waiting_for_pedal_start": false
+          }
+        },
+        "publication_generation": 2,
+        "publication_kind": "identity_replacement",
+        "mapping_replacement_generation": 1,
+        "authority_disposition_generation": 1,
+        "authority_disposition": "clean_at_path",
+        "recovery_authority_serial": 127,
+        "recovery_authority_last_transition": {
+          "kind": "project_publication"
+        },
+        "path_generation": 1,
+        "history_generation": 2,
+        "current_project_path": "C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-controller-output-zVlrTG\\loopback.sdc",
+        "profiles": [
+          {
+            "source_path": "memory://custom/Syndocal-Phase_1_Mini_Spot",
+            "manufacturer": "Syndocal",
+            "name": "Phase 1 Mini Spot",
+            "short_name": "P1 Spot",
+            "fixture_type_id": null,
+            "dmx_modes": [
+              {
+                "name": "8ch",
+                "controls": [
+                  {
+                    "attribute": "Dimmer",
+                    "channel_name": "Dimmer",
+                    "geometry": "Beam",
+                    "offsets": [
+                      1
+                    ],
+                    "resolution": "EightBit",
+                    "default_value": 0,
+                    "functions": []
+                  },
+                  {
+                    "attribute": "ColorRed",
+                    "channel_name": "ColorRed",
+                    "geometry": "Beam",
+                    "offsets": [
+                      2
+                    ],
+                    "resolution": "EightBit",
+                    "default_value": 0,
+                    "functions": []
+                  },
+                  {
+                    "attribute": "ColorGreen",
+                    "channel_name": "ColorGreen",
+                    "geometry": "Beam",
+                    "offsets": [
+                      3
+                    ],
+                    "resolution": "EightBit",
+                    "default_value": 0,
+                    "functions": []
+                  },
+                  {
+                    "attribute": "ColorBlue",
+                    "channel_name": "ColorBlue",
+                    "geometry": "Beam",
+                    "offsets": [
+                      4
+                    ],
+                    "resolution": "EightBit",
+                    "default_value": 0,
+                    "functions": []
+                  },
+                  {
+                    "attribute": "Pan",
+                    "channel_name": "Pan",
+                    "geometry": "Head",
+                    "offsets": [
+                      5,
+                      6
+                    ],
+                    "resolution": "SixteenBit",
+                    "default_value": 32768,
+                    "functions": []
+                  },
+                  {
+                    "attribute": "Tilt",
+                    "channel_name": "Tilt",
+                    "geometry": "Head",
+                    "offsets": [
+                      7,
+                      8
+                    ],
+                    "resolution": "SixteenBit",
+                    "default_value": 32768,
+                    "functions": []
+                  }
+                ]
+              }
+            ],
+            "geometries": [
+              {
+                "name": "Body",
+                "kind": "Geometry",
+                "parent": null,
+                "matrix": [
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1
+                ],
+                "model_name": "Mini Spot Body",
+                "model_file": null,
+                "model_primitive": "Cylinder",
+                "model_dimensions": {
+                  "x": 0.42,
+                  "y": 0.32,
+                  "z": 0.42
+                },
+                "beam_type": null,
+                "beam_angle_deg": null,
+                "field_angle_deg": null,
+                "beam_radius": null
+              },
+              {
+                "name": "Head",
+                "kind": "Axis",
+                "parent": "Body",
+                "matrix": [
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1,
+                  0,
+                  0.34,
+                  0,
+                  0,
+                  1,
+                  -0.18,
+                  0,
+                  0,
+                  0,
+                  1
+                ],
+                "model_name": "Mini Spot Head",
+                "model_file": null,
+                "model_primitive": "Sphere",
+                "model_dimensions": {
+                  "x": 0.34,
+                  "y": 0.28,
+                  "z": 0.34
+                },
+                "beam_type": null,
+                "beam_angle_deg": null,
+                "field_angle_deg": null,
+                "beam_radius": null
+              },
+              {
+                "name": "Beam",
+                "kind": "Beam",
+                "parent": "Head",
+                "matrix": [
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1,
+                  0,
+                  0.1,
+                  0,
+                  0,
+                  1,
+                  -0.44,
+                  0,
+                  0,
+                  0,
+                  1
+                ],
+                "model_name": "Mini Spot Beam",
+                "model_file": null,
+                "model_primitive": "Plane",
+                "model_dimensions": {
+                  "x": 0.18,
+                  "y": 0.02,
+                  "z": 0.58
+                },
+                "beam_type": "Spot",
+                "beam_angle_deg": 18,
+                "field_angle_deg": 28,
+                "beam_radius": 0.09
+              }
+            ],
+            "warnings": []
+          }
+        ],
+        "fixture_groups": [],
+        "operator_policy": null,
+        "midi_mappings": [],
+        "osc_mappings": [],
+        "dmx_mappings": [],
+        "dj_track_triggers": [],
+        "history": {
+          "can_undo": false,
+          "can_redo": false,
+          "undo_depth": 0,
+          "redo_depth": 0,
+          "undo_label": null,
+          "redo_label": null,
+          "project_epoch": 1,
+          "project_revision": 0,
+          "checkpoint_hash": "f79a8f43fae02badd2eae5b827e49fa83d37ee5c2c6a282950977255847f1bcf",
+          "history_generation": 2,
+          "undo_entry_id": null,
+          "undo_checkpoint_hash": null,
+          "redo_entry_id": null,
+          "redo_checkpoint_hash": null
+        },
+        "input_runtime": {
+          "project_input_runtime_generation": 1,
+          "mapping_input_runtime_generation": 1,
+          "midi_clock_active": false,
+          "midi_control_active": false,
+          "midi_feedback_output_active": false,
+          "midi_feedback_runtime_active": false,
+          "osc_active": false,
+          "dmx_active": false
+        },
+        "authored_effect_fence": {
+          "process_incarnation": 7283170928346216,
+          "session_incarnation": 6317911795866206,
+          "project_epoch": 1,
+          "project_revision": 0,
+          "project_checkpoint_hash": "f79a8f43fae02badd2eae5b827e49fa83d37ee5c2c6a282950977255847f1bcf",
+          "project_publication_generation": 2
+        }
+      },
+      "checkpointUnchanged": true,
+      "ownershipBefore": {
+        "role": "Both",
+        "effective_role": "Both",
+        "desired_role": "Both",
+        "persisted_role": "Both",
+        "state": "Ready",
+        "generation": 2,
+        "epoch": 2,
+        "lighting_allowed": true,
+        "video_allowed": true,
+        "lighting_reason": "OwnedByMachineRole",
+        "video_reason": "OwnedByMachineRole",
+        "error": null
+      },
+      "ownershipAfter": {
+        "role": "Both",
+        "effective_role": "Both",
+        "desired_role": "Both",
+        "persisted_role": "Both",
+        "state": "Ready",
+        "generation": 2,
+        "epoch": 2,
+        "lighting_allowed": true,
+        "video_allowed": true,
+        "lighting_reason": "OwnedByMachineRole",
+        "video_reason": "OwnedByMachineRole",
+        "error": null
+      },
+      "phase": "new_project-expectedRevision-rejects-with-live-managed-output",
+      "frames": 24,
+      "payloadSha256": "65228acc43d02190277f6ebf9ec067c7135aaddc9f0c6a610c3052a7cf9213d1",
+      "channels1to8": [
+        255,
+        0,
+        0,
+        0,
+        128,
+        0,
+        128,
+        0
+      ]
+    },
+    {
+      "check": "native-new_project-expectedCheckpointHash-rejection-preserves-project-and-live-managed-output",
+      "passed": true,
+      "request": {
+        "ownerId": "controller-output-6e1151af-4e31-4fd1-a821-3ae6ecdaaf02",
+        "expectedEpoch": 1,
+        "expectedRevision": 0,
+        "expectedCheckpointHash": "0000000000000000000000000000000000000000000000000000000000000000",
+        "expectedPublicationGeneration": 2
+      },
+      "result": {
+        "ok": false,
+        "error": "Project authority changed before mutation (expected epoch 1 revision 0)"
+      },
+      "authorityBefore": {
+        "project_epoch": 1,
+        "project_revision": 0,
+        "checkpoint_hash": "f79a8f43fae02badd2eae5b827e49fa83d37ee5c2c6a282950977255847f1bcf",
+        "timeline_transport_epoch": 1,
+        "timeline_transport_generation": 2,
+        "timeline_runtime": {
+          "transport_epoch": 1,
+          "transport_generation": 2,
+          "loop_runtime": {
+            "generation": 1,
+            "status": "disabled",
+            "a_ms": null,
+            "b_ms": null,
+            "wrap_count": 0
+          },
+          "follow_runtime": {
+            "epoch": 1,
+            "generation": 1,
+            "status": "idle",
+            "admission_reason": null,
+            "outcome": null,
+            "source_timeline_id": null,
+            "target_timeline_id": null,
+            "elapsed_ms": 0,
+            "duration_ms": 0,
+            "progress_millis": 0,
+            "fault": null,
+            "transition_hold_active": false,
+            "waiting_for_pedal_start": false
+          }
+        },
+        "publication_generation": 2,
+        "publication_kind": "identity_replacement",
+        "mapping_replacement_generation": 1,
+        "authority_disposition_generation": 1,
+        "authority_disposition": "clean_at_path",
+        "recovery_authority_serial": 127,
+        "recovery_authority_last_transition": {
+          "kind": "project_publication"
+        },
+        "path_generation": 1,
+        "history_generation": 2,
+        "current_project_path": "C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-controller-output-zVlrTG\\loopback.sdc",
+        "profiles": [
+          {
+            "source_path": "memory://custom/Syndocal-Phase_1_Mini_Spot",
+            "manufacturer": "Syndocal",
+            "name": "Phase 1 Mini Spot",
+            "short_name": "P1 Spot",
+            "fixture_type_id": null,
+            "dmx_modes": [
+              {
+                "name": "8ch",
+                "controls": [
+                  {
+                    "attribute": "Dimmer",
+                    "channel_name": "Dimmer",
+                    "geometry": "Beam",
+                    "offsets": [
+                      1
+                    ],
+                    "resolution": "EightBit",
+                    "default_value": 0,
+                    "functions": []
+                  },
+                  {
+                    "attribute": "ColorRed",
+                    "channel_name": "ColorRed",
+                    "geometry": "Beam",
+                    "offsets": [
+                      2
+                    ],
+                    "resolution": "EightBit",
+                    "default_value": 0,
+                    "functions": []
+                  },
+                  {
+                    "attribute": "ColorGreen",
+                    "channel_name": "ColorGreen",
+                    "geometry": "Beam",
+                    "offsets": [
+                      3
+                    ],
+                    "resolution": "EightBit",
+                    "default_value": 0,
+                    "functions": []
+                  },
+                  {
+                    "attribute": "ColorBlue",
+                    "channel_name": "ColorBlue",
+                    "geometry": "Beam",
+                    "offsets": [
+                      4
+                    ],
+                    "resolution": "EightBit",
+                    "default_value": 0,
+                    "functions": []
+                  },
+                  {
+                    "attribute": "Pan",
+                    "channel_name": "Pan",
+                    "geometry": "Head",
+                    "offsets": [
+                      5,
+                      6
+                    ],
+                    "resolution": "SixteenBit",
+                    "default_value": 32768,
+                    "functions": []
+                  },
+                  {
+                    "attribute": "Tilt",
+                    "channel_name": "Tilt",
+                    "geometry": "Head",
+                    "offsets": [
+                      7,
+                      8
+                    ],
+                    "resolution": "SixteenBit",
+                    "default_value": 32768,
+                    "functions": []
+                  }
+                ]
+              }
+            ],
+            "geometries": [
+              {
+                "name": "Body",
+                "kind": "Geometry",
+                "parent": null,
+                "matrix": [
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1
+                ],
+                "model_name": "Mini Spot Body",
+                "model_file": null,
+                "model_primitive": "Cylinder",
+                "model_dimensions": {
+                  "x": 0.42,
+                  "y": 0.32,
+                  "z": 0.42
+                },
+                "beam_type": null,
+                "beam_angle_deg": null,
+                "field_angle_deg": null,
+                "beam_radius": null
+              },
+              {
+                "name": "Head",
+                "kind": "Axis",
+                "parent": "Body",
+                "matrix": [
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1,
+                  0,
+                  0.34,
+                  0,
+                  0,
+                  1,
+                  -0.18,
+                  0,
+                  0,
+                  0,
+                  1
+                ],
+                "model_name": "Mini Spot Head",
+                "model_file": null,
+                "model_primitive": "Sphere",
+                "model_dimensions": {
+                  "x": 0.34,
+                  "y": 0.28,
+                  "z": 0.34
+                },
+                "beam_type": null,
+                "beam_angle_deg": null,
+                "field_angle_deg": null,
+                "beam_radius": null
+              },
+              {
+                "name": "Beam",
+                "kind": "Beam",
+                "parent": "Head",
+                "matrix": [
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1,
+                  0,
+                  0.1,
+                  0,
+                  0,
+                  1,
+                  -0.44,
+                  0,
+                  0,
+                  0,
+                  1
+                ],
+                "model_name": "Mini Spot Beam",
+                "model_file": null,
+                "model_primitive": "Plane",
+                "model_dimensions": {
+                  "x": 0.18,
+                  "y": 0.02,
+                  "z": 0.58
+                },
+                "beam_type": "Spot",
+                "beam_angle_deg": 18,
+                "field_angle_deg": 28,
+                "beam_radius": 0.09
+              }
+            ],
+            "warnings": []
+          }
+        ],
+        "fixture_groups": [],
+        "operator_policy": null,
+        "midi_mappings": [],
+        "osc_mappings": [],
+        "dmx_mappings": [],
+        "dj_track_triggers": [],
+        "history": {
+          "can_undo": false,
+          "can_redo": false,
+          "undo_depth": 0,
+          "redo_depth": 0,
+          "undo_label": null,
+          "redo_label": null,
+          "project_epoch": 1,
+          "project_revision": 0,
+          "checkpoint_hash": "f79a8f43fae02badd2eae5b827e49fa83d37ee5c2c6a282950977255847f1bcf",
+          "history_generation": 2,
+          "undo_entry_id": null,
+          "undo_checkpoint_hash": null,
+          "redo_entry_id": null,
+          "redo_checkpoint_hash": null
+        },
+        "input_runtime": {
+          "project_input_runtime_generation": 1,
+          "mapping_input_runtime_generation": 1,
+          "midi_clock_active": false,
+          "midi_control_active": false,
+          "midi_feedback_output_active": false,
+          "midi_feedback_runtime_active": false,
+          "osc_active": false,
+          "dmx_active": false
+        },
+        "authored_effect_fence": {
+          "process_incarnation": 7283170928346216,
+          "session_incarnation": 6317911795866206,
+          "project_epoch": 1,
+          "project_revision": 0,
+          "project_checkpoint_hash": "f79a8f43fae02badd2eae5b827e49fa83d37ee5c2c6a282950977255847f1bcf",
+          "project_publication_generation": 2
+        }
+      },
+      "authorityAfter": {
+        "project_epoch": 1,
+        "project_revision": 0,
+        "checkpoint_hash": "f79a8f43fae02badd2eae5b827e49fa83d37ee5c2c6a282950977255847f1bcf",
+        "timeline_transport_epoch": 1,
+        "timeline_transport_generation": 2,
+        "timeline_runtime": {
+          "transport_epoch": 1,
+          "transport_generation": 2,
+          "loop_runtime": {
+            "generation": 1,
+            "status": "disabled",
+            "a_ms": null,
+            "b_ms": null,
+            "wrap_count": 0
+          },
+          "follow_runtime": {
+            "epoch": 1,
+            "generation": 1,
+            "status": "idle",
+            "admission_reason": null,
+            "outcome": null,
+            "source_timeline_id": null,
+            "target_timeline_id": null,
+            "elapsed_ms": 0,
+            "duration_ms": 0,
+            "progress_millis": 0,
+            "fault": null,
+            "transition_hold_active": false,
+            "waiting_for_pedal_start": false
+          }
+        },
+        "publication_generation": 2,
+        "publication_kind": "identity_replacement",
+        "mapping_replacement_generation": 1,
+        "authority_disposition_generation": 1,
+        "authority_disposition": "clean_at_path",
+        "recovery_authority_serial": 127,
+        "recovery_authority_last_transition": {
+          "kind": "project_publication"
+        },
+        "path_generation": 1,
+        "history_generation": 2,
+        "current_project_path": "C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-controller-output-zVlrTG\\loopback.sdc",
+        "profiles": [
+          {
+            "source_path": "memory://custom/Syndocal-Phase_1_Mini_Spot",
+            "manufacturer": "Syndocal",
+            "name": "Phase 1 Mini Spot",
+            "short_name": "P1 Spot",
+            "fixture_type_id": null,
+            "dmx_modes": [
+              {
+                "name": "8ch",
+                "controls": [
+                  {
+                    "attribute": "Dimmer",
+                    "channel_name": "Dimmer",
+                    "geometry": "Beam",
+                    "offsets": [
+                      1
+                    ],
+                    "resolution": "EightBit",
+                    "default_value": 0,
+                    "functions": []
+                  },
+                  {
+                    "attribute": "ColorRed",
+                    "channel_name": "ColorRed",
+                    "geometry": "Beam",
+                    "offsets": [
+                      2
+                    ],
+                    "resolution": "EightBit",
+                    "default_value": 0,
+                    "functions": []
+                  },
+                  {
+                    "attribute": "ColorGreen",
+                    "channel_name": "ColorGreen",
+                    "geometry": "Beam",
+                    "offsets": [
+                      3
+                    ],
+                    "resolution": "EightBit",
+                    "default_value": 0,
+                    "functions": []
+                  },
+                  {
+                    "attribute": "ColorBlue",
+                    "channel_name": "ColorBlue",
+                    "geometry": "Beam",
+                    "offsets": [
+                      4
+                    ],
+                    "resolution": "EightBit",
+                    "default_value": 0,
+                    "functions": []
+                  },
+                  {
+                    "attribute": "Pan",
+                    "channel_name": "Pan",
+                    "geometry": "Head",
+                    "offsets": [
+                      5,
+                      6
+                    ],
+                    "resolution": "SixteenBit",
+                    "default_value": 32768,
+                    "functions": []
+                  },
+                  {
+                    "attribute": "Tilt",
+                    "channel_name": "Tilt",
+                    "geometry": "Head",
+                    "offsets": [
+                      7,
+                      8
+                    ],
+                    "resolution": "SixteenBit",
+                    "default_value": 32768,
+                    "functions": []
+                  }
+                ]
+              }
+            ],
+            "geometries": [
+              {
+                "name": "Body",
+                "kind": "Geometry",
+                "parent": null,
+                "matrix": [
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1
+                ],
+                "model_name": "Mini Spot Body",
+                "model_file": null,
+                "model_primitive": "Cylinder",
+                "model_dimensions": {
+                  "x": 0.42,
+                  "y": 0.32,
+                  "z": 0.42
+                },
+                "beam_type": null,
+                "beam_angle_deg": null,
+                "field_angle_deg": null,
+                "beam_radius": null
+              },
+              {
+                "name": "Head",
+                "kind": "Axis",
+                "parent": "Body",
+                "matrix": [
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1,
+                  0,
+                  0.34,
+                  0,
+                  0,
+                  1,
+                  -0.18,
+                  0,
+                  0,
+                  0,
+                  1
+                ],
+                "model_name": "Mini Spot Head",
+                "model_file": null,
+                "model_primitive": "Sphere",
+                "model_dimensions": {
+                  "x": 0.34,
+                  "y": 0.28,
+                  "z": 0.34
+                },
+                "beam_type": null,
+                "beam_angle_deg": null,
+                "field_angle_deg": null,
+                "beam_radius": null
+              },
+              {
+                "name": "Beam",
+                "kind": "Beam",
+                "parent": "Head",
+                "matrix": [
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1,
+                  0,
+                  0.1,
+                  0,
+                  0,
+                  1,
+                  -0.44,
+                  0,
+                  0,
+                  0,
+                  1
+                ],
+                "model_name": "Mini Spot Beam",
+                "model_file": null,
+                "model_primitive": "Plane",
+                "model_dimensions": {
+                  "x": 0.18,
+                  "y": 0.02,
+                  "z": 0.58
+                },
+                "beam_type": "Spot",
+                "beam_angle_deg": 18,
+                "field_angle_deg": 28,
+                "beam_radius": 0.09
+              }
+            ],
+            "warnings": []
+          }
+        ],
+        "fixture_groups": [],
+        "operator_policy": null,
+        "midi_mappings": [],
+        "osc_mappings": [],
+        "dmx_mappings": [],
+        "dj_track_triggers": [],
+        "history": {
+          "can_undo": false,
+          "can_redo": false,
+          "undo_depth": 0,
+          "redo_depth": 0,
+          "undo_label": null,
+          "redo_label": null,
+          "project_epoch": 1,
+          "project_revision": 0,
+          "checkpoint_hash": "f79a8f43fae02badd2eae5b827e49fa83d37ee5c2c6a282950977255847f1bcf",
+          "history_generation": 2,
+          "undo_entry_id": null,
+          "undo_checkpoint_hash": null,
+          "redo_entry_id": null,
+          "redo_checkpoint_hash": null
+        },
+        "input_runtime": {
+          "project_input_runtime_generation": 1,
+          "mapping_input_runtime_generation": 1,
+          "midi_clock_active": false,
+          "midi_control_active": false,
+          "midi_feedback_output_active": false,
+          "midi_feedback_runtime_active": false,
+          "osc_active": false,
+          "dmx_active": false
+        },
+        "authored_effect_fence": {
+          "process_incarnation": 7283170928346216,
+          "session_incarnation": 6317911795866206,
+          "project_epoch": 1,
+          "project_revision": 0,
+          "project_checkpoint_hash": "f79a8f43fae02badd2eae5b827e49fa83d37ee5c2c6a282950977255847f1bcf",
+          "project_publication_generation": 2
+        }
+      },
+      "checkpointUnchanged": true,
+      "ownershipBefore": {
+        "role": "Both",
+        "effective_role": "Both",
+        "desired_role": "Both",
+        "persisted_role": "Both",
+        "state": "Ready",
+        "generation": 2,
+        "epoch": 2,
+        "lighting_allowed": true,
+        "video_allowed": true,
+        "lighting_reason": "OwnedByMachineRole",
+        "video_reason": "OwnedByMachineRole",
+        "error": null
+      },
+      "ownershipAfter": {
+        "role": "Both",
+        "effective_role": "Both",
+        "desired_role": "Both",
+        "persisted_role": "Both",
+        "state": "Ready",
+        "generation": 2,
+        "epoch": 2,
+        "lighting_allowed": true,
+        "video_allowed": true,
+        "lighting_reason": "OwnedByMachineRole",
+        "video_reason": "OwnedByMachineRole",
+        "error": null
+      },
+      "phase": "new_project-expectedCheckpointHash-rejects-with-live-managed-output",
+      "frames": 23,
+      "payloadSha256": "65228acc43d02190277f6ebf9ec067c7135aaddc9f0c6a610c3052a7cf9213d1",
+      "channels1to8": [
+        255,
+        0,
+        0,
+        0,
+        128,
+        0,
+        128,
+        0
+      ]
+    },
+    {
+      "check": "native-new_project-expectedPublicationGeneration-rejection-preserves-project-and-live-managed-output",
+      "passed": true,
+      "request": {
+        "ownerId": "controller-output-6e1151af-4e31-4fd1-a821-3ae6ecdaaf02",
+        "expectedEpoch": 1,
+        "expectedRevision": 0,
+        "expectedCheckpointHash": "f79a8f43fae02badd2eae5b827e49fa83d37ee5c2c6a282950977255847f1bcf",
+        "expectedPublicationGeneration": 3
+      },
+      "result": {
+        "ok": false,
+        "error": "Project publication generation changed before replacement"
+      },
+      "authorityBefore": {
+        "project_epoch": 1,
+        "project_revision": 0,
+        "checkpoint_hash": "f79a8f43fae02badd2eae5b827e49fa83d37ee5c2c6a282950977255847f1bcf",
+        "timeline_transport_epoch": 1,
+        "timeline_transport_generation": 2,
+        "timeline_runtime": {
+          "transport_epoch": 1,
+          "transport_generation": 2,
+          "loop_runtime": {
+            "generation": 1,
+            "status": "disabled",
+            "a_ms": null,
+            "b_ms": null,
+            "wrap_count": 0
+          },
+          "follow_runtime": {
+            "epoch": 1,
+            "generation": 1,
+            "status": "idle",
+            "admission_reason": null,
+            "outcome": null,
+            "source_timeline_id": null,
+            "target_timeline_id": null,
+            "elapsed_ms": 0,
+            "duration_ms": 0,
+            "progress_millis": 0,
+            "fault": null,
+            "transition_hold_active": false,
+            "waiting_for_pedal_start": false
+          }
+        },
+        "publication_generation": 2,
+        "publication_kind": "identity_replacement",
+        "mapping_replacement_generation": 1,
+        "authority_disposition_generation": 1,
+        "authority_disposition": "clean_at_path",
+        "recovery_authority_serial": 127,
+        "recovery_authority_last_transition": {
+          "kind": "project_publication"
+        },
+        "path_generation": 1,
+        "history_generation": 2,
+        "current_project_path": "C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-controller-output-zVlrTG\\loopback.sdc",
+        "profiles": [
+          {
+            "source_path": "memory://custom/Syndocal-Phase_1_Mini_Spot",
+            "manufacturer": "Syndocal",
+            "name": "Phase 1 Mini Spot",
+            "short_name": "P1 Spot",
+            "fixture_type_id": null,
+            "dmx_modes": [
+              {
+                "name": "8ch",
+                "controls": [
+                  {
+                    "attribute": "Dimmer",
+                    "channel_name": "Dimmer",
+                    "geometry": "Beam",
+                    "offsets": [
+                      1
+                    ],
+                    "resolution": "EightBit",
+                    "default_value": 0,
+                    "functions": []
+                  },
+                  {
+                    "attribute": "ColorRed",
+                    "channel_name": "ColorRed",
+                    "geometry": "Beam",
+                    "offsets": [
+                      2
+                    ],
+                    "resolution": "EightBit",
+                    "default_value": 0,
+                    "functions": []
+                  },
+                  {
+                    "attribute": "ColorGreen",
+                    "channel_name": "ColorGreen",
+                    "geometry": "Beam",
+                    "offsets": [
+                      3
+                    ],
+                    "resolution": "EightBit",
+                    "default_value": 0,
+                    "functions": []
+                  },
+                  {
+                    "attribute": "ColorBlue",
+                    "channel_name": "ColorBlue",
+                    "geometry": "Beam",
+                    "offsets": [
+                      4
+                    ],
+                    "resolution": "EightBit",
+                    "default_value": 0,
+                    "functions": []
+                  },
+                  {
+                    "attribute": "Pan",
+                    "channel_name": "Pan",
+                    "geometry": "Head",
+                    "offsets": [
+                      5,
+                      6
+                    ],
+                    "resolution": "SixteenBit",
+                    "default_value": 32768,
+                    "functions": []
+                  },
+                  {
+                    "attribute": "Tilt",
+                    "channel_name": "Tilt",
+                    "geometry": "Head",
+                    "offsets": [
+                      7,
+                      8
+                    ],
+                    "resolution": "SixteenBit",
+                    "default_value": 32768,
+                    "functions": []
+                  }
+                ]
+              }
+            ],
+            "geometries": [
+              {
+                "name": "Body",
+                "kind": "Geometry",
+                "parent": null,
+                "matrix": [
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1
+                ],
+                "model_name": "Mini Spot Body",
+                "model_file": null,
+                "model_primitive": "Cylinder",
+                "model_dimensions": {
+                  "x": 0.42,
+                  "y": 0.32,
+                  "z": 0.42
+                },
+                "beam_type": null,
+                "beam_angle_deg": null,
+                "field_angle_deg": null,
+                "beam_radius": null
+              },
+              {
+                "name": "Head",
+                "kind": "Axis",
+                "parent": "Body",
+                "matrix": [
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1,
+                  0,
+                  0.34,
+                  0,
+                  0,
+                  1,
+                  -0.18,
+                  0,
+                  0,
+                  0,
+                  1
+                ],
+                "model_name": "Mini Spot Head",
+                "model_file": null,
+                "model_primitive": "Sphere",
+                "model_dimensions": {
+                  "x": 0.34,
+                  "y": 0.28,
+                  "z": 0.34
+                },
+                "beam_type": null,
+                "beam_angle_deg": null,
+                "field_angle_deg": null,
+                "beam_radius": null
+              },
+              {
+                "name": "Beam",
+                "kind": "Beam",
+                "parent": "Head",
+                "matrix": [
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1,
+                  0,
+                  0.1,
+                  0,
+                  0,
+                  1,
+                  -0.44,
+                  0,
+                  0,
+                  0,
+                  1
+                ],
+                "model_name": "Mini Spot Beam",
+                "model_file": null,
+                "model_primitive": "Plane",
+                "model_dimensions": {
+                  "x": 0.18,
+                  "y": 0.02,
+                  "z": 0.58
+                },
+                "beam_type": "Spot",
+                "beam_angle_deg": 18,
+                "field_angle_deg": 28,
+                "beam_radius": 0.09
+              }
+            ],
+            "warnings": []
+          }
+        ],
+        "fixture_groups": [],
+        "operator_policy": null,
+        "midi_mappings": [],
+        "osc_mappings": [],
+        "dmx_mappings": [],
+        "dj_track_triggers": [],
+        "history": {
+          "can_undo": false,
+          "can_redo": false,
+          "undo_depth": 0,
+          "redo_depth": 0,
+          "undo_label": null,
+          "redo_label": null,
+          "project_epoch": 1,
+          "project_revision": 0,
+          "checkpoint_hash": "f79a8f43fae02badd2eae5b827e49fa83d37ee5c2c6a282950977255847f1bcf",
+          "history_generation": 2,
+          "undo_entry_id": null,
+          "undo_checkpoint_hash": null,
+          "redo_entry_id": null,
+          "redo_checkpoint_hash": null
+        },
+        "input_runtime": {
+          "project_input_runtime_generation": 1,
+          "mapping_input_runtime_generation": 1,
+          "midi_clock_active": false,
+          "midi_control_active": false,
+          "midi_feedback_output_active": false,
+          "midi_feedback_runtime_active": false,
+          "osc_active": false,
+          "dmx_active": false
+        },
+        "authored_effect_fence": {
+          "process_incarnation": 7283170928346216,
+          "session_incarnation": 6317911795866206,
+          "project_epoch": 1,
+          "project_revision": 0,
+          "project_checkpoint_hash": "f79a8f43fae02badd2eae5b827e49fa83d37ee5c2c6a282950977255847f1bcf",
+          "project_publication_generation": 2
+        }
+      },
+      "authorityAfter": {
+        "project_epoch": 1,
+        "project_revision": 0,
+        "checkpoint_hash": "f79a8f43fae02badd2eae5b827e49fa83d37ee5c2c6a282950977255847f1bcf",
+        "timeline_transport_epoch": 1,
+        "timeline_transport_generation": 2,
+        "timeline_runtime": {
+          "transport_epoch": 1,
+          "transport_generation": 2,
+          "loop_runtime": {
+            "generation": 1,
+            "status": "disabled",
+            "a_ms": null,
+            "b_ms": null,
+            "wrap_count": 0
+          },
+          "follow_runtime": {
+            "epoch": 1,
+            "generation": 1,
+            "status": "idle",
+            "admission_reason": null,
+            "outcome": null,
+            "source_timeline_id": null,
+            "target_timeline_id": null,
+            "elapsed_ms": 0,
+            "duration_ms": 0,
+            "progress_millis": 0,
+            "fault": null,
+            "transition_hold_active": false,
+            "waiting_for_pedal_start": false
+          }
+        },
+        "publication_generation": 2,
+        "publication_kind": "identity_replacement",
+        "mapping_replacement_generation": 1,
+        "authority_disposition_generation": 1,
+        "authority_disposition": "clean_at_path",
+        "recovery_authority_serial": 127,
+        "recovery_authority_last_transition": {
+          "kind": "project_publication"
+        },
+        "path_generation": 1,
+        "history_generation": 2,
+        "current_project_path": "C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-controller-output-zVlrTG\\loopback.sdc",
+        "profiles": [
+          {
+            "source_path": "memory://custom/Syndocal-Phase_1_Mini_Spot",
+            "manufacturer": "Syndocal",
+            "name": "Phase 1 Mini Spot",
+            "short_name": "P1 Spot",
+            "fixture_type_id": null,
+            "dmx_modes": [
+              {
+                "name": "8ch",
+                "controls": [
+                  {
+                    "attribute": "Dimmer",
+                    "channel_name": "Dimmer",
+                    "geometry": "Beam",
+                    "offsets": [
+                      1
+                    ],
+                    "resolution": "EightBit",
+                    "default_value": 0,
+                    "functions": []
+                  },
+                  {
+                    "attribute": "ColorRed",
+                    "channel_name": "ColorRed",
+                    "geometry": "Beam",
+                    "offsets": [
+                      2
+                    ],
+                    "resolution": "EightBit",
+                    "default_value": 0,
+                    "functions": []
+                  },
+                  {
+                    "attribute": "ColorGreen",
+                    "channel_name": "ColorGreen",
+                    "geometry": "Beam",
+                    "offsets": [
+                      3
+                    ],
+                    "resolution": "EightBit",
+                    "default_value": 0,
+                    "functions": []
+                  },
+                  {
+                    "attribute": "ColorBlue",
+                    "channel_name": "ColorBlue",
+                    "geometry": "Beam",
+                    "offsets": [
+                      4
+                    ],
+                    "resolution": "EightBit",
+                    "default_value": 0,
+                    "functions": []
+                  },
+                  {
+                    "attribute": "Pan",
+                    "channel_name": "Pan",
+                    "geometry": "Head",
+                    "offsets": [
+                      5,
+                      6
+                    ],
+                    "resolution": "SixteenBit",
+                    "default_value": 32768,
+                    "functions": []
+                  },
+                  {
+                    "attribute": "Tilt",
+                    "channel_name": "Tilt",
+                    "geometry": "Head",
+                    "offsets": [
+                      7,
+                      8
+                    ],
+                    "resolution": "SixteenBit",
+                    "default_value": 32768,
+                    "functions": []
+                  }
+                ]
+              }
+            ],
+            "geometries": [
+              {
+                "name": "Body",
+                "kind": "Geometry",
+                "parent": null,
+                "matrix": [
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1
+                ],
+                "model_name": "Mini Spot Body",
+                "model_file": null,
+                "model_primitive": "Cylinder",
+                "model_dimensions": {
+                  "x": 0.42,
+                  "y": 0.32,
+                  "z": 0.42
+                },
+                "beam_type": null,
+                "beam_angle_deg": null,
+                "field_angle_deg": null,
+                "beam_radius": null
+              },
+              {
+                "name": "Head",
+                "kind": "Axis",
+                "parent": "Body",
+                "matrix": [
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1,
+                  0,
+                  0.34,
+                  0,
+                  0,
+                  1,
+                  -0.18,
+                  0,
+                  0,
+                  0,
+                  1
+                ],
+                "model_name": "Mini Spot Head",
+                "model_file": null,
+                "model_primitive": "Sphere",
+                "model_dimensions": {
+                  "x": 0.34,
+                  "y": 0.28,
+                  "z": 0.34
+                },
+                "beam_type": null,
+                "beam_angle_deg": null,
+                "field_angle_deg": null,
+                "beam_radius": null
+              },
+              {
+                "name": "Beam",
+                "kind": "Beam",
+                "parent": "Head",
+                "matrix": [
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1,
+                  0,
+                  0.1,
+                  0,
+                  0,
+                  1,
+                  -0.44,
+                  0,
+                  0,
+                  0,
+                  1
+                ],
+                "model_name": "Mini Spot Beam",
+                "model_file": null,
+                "model_primitive": "Plane",
+                "model_dimensions": {
+                  "x": 0.18,
+                  "y": 0.02,
+                  "z": 0.58
+                },
+                "beam_type": "Spot",
+                "beam_angle_deg": 18,
+                "field_angle_deg": 28,
+                "beam_radius": 0.09
+              }
+            ],
+            "warnings": []
+          }
+        ],
+        "fixture_groups": [],
+        "operator_policy": null,
+        "midi_mappings": [],
+        "osc_mappings": [],
+        "dmx_mappings": [],
+        "dj_track_triggers": [],
+        "history": {
+          "can_undo": false,
+          "can_redo": false,
+          "undo_depth": 0,
+          "redo_depth": 0,
+          "undo_label": null,
+          "redo_label": null,
+          "project_epoch": 1,
+          "project_revision": 0,
+          "checkpoint_hash": "f79a8f43fae02badd2eae5b827e49fa83d37ee5c2c6a282950977255847f1bcf",
+          "history_generation": 2,
+          "undo_entry_id": null,
+          "undo_checkpoint_hash": null,
+          "redo_entry_id": null,
+          "redo_checkpoint_hash": null
+        },
+        "input_runtime": {
+          "project_input_runtime_generation": 1,
+          "mapping_input_runtime_generation": 1,
+          "midi_clock_active": false,
+          "midi_control_active": false,
+          "midi_feedback_output_active": false,
+          "midi_feedback_runtime_active": false,
+          "osc_active": false,
+          "dmx_active": false
+        },
+        "authored_effect_fence": {
+          "process_incarnation": 7283170928346216,
+          "session_incarnation": 6317911795866206,
+          "project_epoch": 1,
+          "project_revision": 0,
+          "project_checkpoint_hash": "f79a8f43fae02badd2eae5b827e49fa83d37ee5c2c6a282950977255847f1bcf",
+          "project_publication_generation": 2
+        }
+      },
+      "checkpointUnchanged": true,
+      "ownershipBefore": {
+        "role": "Both",
+        "effective_role": "Both",
+        "desired_role": "Both",
+        "persisted_role": "Both",
+        "state": "Ready",
+        "generation": 2,
+        "epoch": 2,
+        "lighting_allowed": true,
+        "video_allowed": true,
+        "lighting_reason": "OwnedByMachineRole",
+        "video_reason": "OwnedByMachineRole",
+        "error": null
+      },
+      "ownershipAfter": {
+        "role": "Both",
+        "effective_role": "Both",
+        "desired_role": "Both",
+        "persisted_role": "Both",
+        "state": "Ready",
+        "generation": 2,
+        "epoch": 2,
+        "lighting_allowed": true,
+        "video_allowed": true,
+        "lighting_reason": "OwnedByMachineRole",
+        "video_reason": "OwnedByMachineRole",
+        "error": null
+      },
+      "phase": "new_project-expectedPublicationGeneration-rejects-with-live-managed-output",
+      "frames": 23,
+      "payloadSha256": "65228acc43d02190277f6ebf9ec067c7135aaddc9f0c6a610c3052a7cf9213d1",
+      "channels1to8": [
+        255,
+        0,
+        0,
+        0,
+        128,
+        0,
+        128,
+        0
+      ]
+    },
+    {
+      "check": "native-load_project_path-expectedEpoch-rejection-preserves-project-and-live-managed-output",
+      "passed": true,
+      "request": {
+        "ownerId": "controller-output-6e1151af-4e31-4fd1-a821-3ae6ecdaaf02",
+        "expectedEpoch": 2,
+        "expectedRevision": 0,
+        "expectedCheckpointHash": "f79a8f43fae02badd2eae5b827e49fa83d37ee5c2c6a282950977255847f1bcf",
+        "expectedPublicationGeneration": 2,
+        "path": "C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-controller-output-zVlrTG\\loopback.sdc"
+      },
+      "result": {
+        "ok": false,
+        "error": "Project authority changed before mutation (expected epoch 2 revision 0)"
+      },
+      "authorityBefore": {
+        "project_epoch": 1,
+        "project_revision": 0,
+        "checkpoint_hash": "f79a8f43fae02badd2eae5b827e49fa83d37ee5c2c6a282950977255847f1bcf",
+        "timeline_transport_epoch": 1,
+        "timeline_transport_generation": 2,
+        "timeline_runtime": {
+          "transport_epoch": 1,
+          "transport_generation": 2,
+          "loop_runtime": {
+            "generation": 1,
+            "status": "disabled",
+            "a_ms": null,
+            "b_ms": null,
+            "wrap_count": 0
+          },
+          "follow_runtime": {
+            "epoch": 1,
+            "generation": 1,
+            "status": "idle",
+            "admission_reason": null,
+            "outcome": null,
+            "source_timeline_id": null,
+            "target_timeline_id": null,
+            "elapsed_ms": 0,
+            "duration_ms": 0,
+            "progress_millis": 0,
+            "fault": null,
+            "transition_hold_active": false,
+            "waiting_for_pedal_start": false
+          }
+        },
+        "publication_generation": 2,
+        "publication_kind": "identity_replacement",
+        "mapping_replacement_generation": 1,
+        "authority_disposition_generation": 1,
+        "authority_disposition": "clean_at_path",
+        "recovery_authority_serial": 127,
+        "recovery_authority_last_transition": {
+          "kind": "project_publication"
+        },
+        "path_generation": 1,
+        "history_generation": 2,
+        "current_project_path": "C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-controller-output-zVlrTG\\loopback.sdc",
+        "profiles": [
+          {
+            "source_path": "memory://custom/Syndocal-Phase_1_Mini_Spot",
+            "manufacturer": "Syndocal",
+            "name": "Phase 1 Mini Spot",
+            "short_name": "P1 Spot",
+            "fixture_type_id": null,
+            "dmx_modes": [
+              {
+                "name": "8ch",
+                "controls": [
+                  {
+                    "attribute": "Dimmer",
+                    "channel_name": "Dimmer",
+                    "geometry": "Beam",
+                    "offsets": [
+                      1
+                    ],
+                    "resolution": "EightBit",
+                    "default_value": 0,
+                    "functions": []
+                  },
+                  {
+                    "attribute": "ColorRed",
+                    "channel_name": "ColorRed",
+                    "geometry": "Beam",
+                    "offsets": [
+                      2
+                    ],
+                    "resolution": "EightBit",
+                    "default_value": 0,
+                    "functions": []
+                  },
+                  {
+                    "attribute": "ColorGreen",
+                    "channel_name": "ColorGreen",
+                    "geometry": "Beam",
+                    "offsets": [
+                      3
+                    ],
+                    "resolution": "EightBit",
+                    "default_value": 0,
+                    "functions": []
+                  },
+                  {
+                    "attribute": "ColorBlue",
+                    "channel_name": "ColorBlue",
+                    "geometry": "Beam",
+                    "offsets": [
+                      4
+                    ],
+                    "resolution": "EightBit",
+                    "default_value": 0,
+                    "functions": []
+                  },
+                  {
+                    "attribute": "Pan",
+                    "channel_name": "Pan",
+                    "geometry": "Head",
+                    "offsets": [
+                      5,
+                      6
+                    ],
+                    "resolution": "SixteenBit",
+                    "default_value": 32768,
+                    "functions": []
+                  },
+                  {
+                    "attribute": "Tilt",
+                    "channel_name": "Tilt",
+                    "geometry": "Head",
+                    "offsets": [
+                      7,
+                      8
+                    ],
+                    "resolution": "SixteenBit",
+                    "default_value": 32768,
+                    "functions": []
+                  }
+                ]
+              }
+            ],
+            "geometries": [
+              {
+                "name": "Body",
+                "kind": "Geometry",
+                "parent": null,
+                "matrix": [
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1
+                ],
+                "model_name": "Mini Spot Body",
+                "model_file": null,
+                "model_primitive": "Cylinder",
+                "model_dimensions": {
+                  "x": 0.42,
+                  "y": 0.32,
+                  "z": 0.42
+                },
+                "beam_type": null,
+                "beam_angle_deg": null,
+                "field_angle_deg": null,
+                "beam_radius": null
+              },
+              {
+                "name": "Head",
+                "kind": "Axis",
+                "parent": "Body",
+                "matrix": [
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1,
+                  0,
+                  0.34,
+                  0,
+                  0,
+                  1,
+                  -0.18,
+                  0,
+                  0,
+                  0,
+                  1
+                ],
+                "model_name": "Mini Spot Head",
+                "model_file": null,
+                "model_primitive": "Sphere",
+                "model_dimensions": {
+                  "x": 0.34,
+                  "y": 0.28,
+                  "z": 0.34
+                },
+                "beam_type": null,
+                "beam_angle_deg": null,
+                "field_angle_deg": null,
+                "beam_radius": null
+              },
+              {
+                "name": "Beam",
+                "kind": "Beam",
+                "parent": "Head",
+                "matrix": [
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1,
+                  0,
+                  0.1,
+                  0,
+                  0,
+                  1,
+                  -0.44,
+                  0,
+                  0,
+                  0,
+                  1
+                ],
+                "model_name": "Mini Spot Beam",
+                "model_file": null,
+                "model_primitive": "Plane",
+                "model_dimensions": {
+                  "x": 0.18,
+                  "y": 0.02,
+                  "z": 0.58
+                },
+                "beam_type": "Spot",
+                "beam_angle_deg": 18,
+                "field_angle_deg": 28,
+                "beam_radius": 0.09
+              }
+            ],
+            "warnings": []
+          }
+        ],
+        "fixture_groups": [],
+        "operator_policy": null,
+        "midi_mappings": [],
+        "osc_mappings": [],
+        "dmx_mappings": [],
+        "dj_track_triggers": [],
+        "history": {
+          "can_undo": false,
+          "can_redo": false,
+          "undo_depth": 0,
+          "redo_depth": 0,
+          "undo_label": null,
+          "redo_label": null,
+          "project_epoch": 1,
+          "project_revision": 0,
+          "checkpoint_hash": "f79a8f43fae02badd2eae5b827e49fa83d37ee5c2c6a282950977255847f1bcf",
+          "history_generation": 2,
+          "undo_entry_id": null,
+          "undo_checkpoint_hash": null,
+          "redo_entry_id": null,
+          "redo_checkpoint_hash": null
+        },
+        "input_runtime": {
+          "project_input_runtime_generation": 1,
+          "mapping_input_runtime_generation": 1,
+          "midi_clock_active": false,
+          "midi_control_active": false,
+          "midi_feedback_output_active": false,
+          "midi_feedback_runtime_active": false,
+          "osc_active": false,
+          "dmx_active": false
+        },
+        "authored_effect_fence": {
+          "process_incarnation": 7283170928346216,
+          "session_incarnation": 6317911795866206,
+          "project_epoch": 1,
+          "project_revision": 0,
+          "project_checkpoint_hash": "f79a8f43fae02badd2eae5b827e49fa83d37ee5c2c6a282950977255847f1bcf",
+          "project_publication_generation": 2
+        }
+      },
+      "authorityAfter": {
+        "project_epoch": 1,
+        "project_revision": 0,
+        "checkpoint_hash": "f79a8f43fae02badd2eae5b827e49fa83d37ee5c2c6a282950977255847f1bcf",
+        "timeline_transport_epoch": 1,
+        "timeline_transport_generation": 2,
+        "timeline_runtime": {
+          "transport_epoch": 1,
+          "transport_generation": 2,
+          "loop_runtime": {
+            "generation": 1,
+            "status": "disabled",
+            "a_ms": null,
+            "b_ms": null,
+            "wrap_count": 0
+          },
+          "follow_runtime": {
+            "epoch": 1,
+            "generation": 1,
+            "status": "idle",
+            "admission_reason": null,
+            "outcome": null,
+            "source_timeline_id": null,
+            "target_timeline_id": null,
+            "elapsed_ms": 0,
+            "duration_ms": 0,
+            "progress_millis": 0,
+            "fault": null,
+            "transition_hold_active": false,
+            "waiting_for_pedal_start": false
+          }
+        },
+        "publication_generation": 2,
+        "publication_kind": "identity_replacement",
+        "mapping_replacement_generation": 1,
+        "authority_disposition_generation": 1,
+        "authority_disposition": "clean_at_path",
+        "recovery_authority_serial": 127,
+        "recovery_authority_last_transition": {
+          "kind": "project_publication"
+        },
+        "path_generation": 1,
+        "history_generation": 2,
+        "current_project_path": "C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-controller-output-zVlrTG\\loopback.sdc",
+        "profiles": [
+          {
+            "source_path": "memory://custom/Syndocal-Phase_1_Mini_Spot",
+            "manufacturer": "Syndocal",
+            "name": "Phase 1 Mini Spot",
+            "short_name": "P1 Spot",
+            "fixture_type_id": null,
+            "dmx_modes": [
+              {
+                "name": "8ch",
+                "controls": [
+                  {
+                    "attribute": "Dimmer",
+                    "channel_name": "Dimmer",
+                    "geometry": "Beam",
+                    "offsets": [
+                      1
+                    ],
+                    "resolution": "EightBit",
+                    "default_value": 0,
+                    "functions": []
+                  },
+                  {
+                    "attribute": "ColorRed",
+                    "channel_name": "ColorRed",
+                    "geometry": "Beam",
+                    "offsets": [
+                      2
+                    ],
+                    "resolution": "EightBit",
+                    "default_value": 0,
+                    "functions": []
+                  },
+                  {
+                    "attribute": "ColorGreen",
+                    "channel_name": "ColorGreen",
+                    "geometry": "Beam",
+                    "offsets": [
+                      3
+                    ],
+                    "resolution": "EightBit",
+                    "default_value": 0,
+                    "functions": []
+                  },
+                  {
+                    "attribute": "ColorBlue",
+                    "channel_name": "ColorBlue",
+                    "geometry": "Beam",
+                    "offsets": [
+                      4
+                    ],
+                    "resolution": "EightBit",
+                    "default_value": 0,
+                    "functions": []
+                  },
+                  {
+                    "attribute": "Pan",
+                    "channel_name": "Pan",
+                    "geometry": "Head",
+                    "offsets": [
+                      5,
+                      6
+                    ],
+                    "resolution": "SixteenBit",
+                    "default_value": 32768,
+                    "functions": []
+                  },
+                  {
+                    "attribute": "Tilt",
+                    "channel_name": "Tilt",
+                    "geometry": "Head",
+                    "offsets": [
+                      7,
+                      8
+                    ],
+                    "resolution": "SixteenBit",
+                    "default_value": 32768,
+                    "functions": []
+                  }
+                ]
+              }
+            ],
+            "geometries": [
+              {
+                "name": "Body",
+                "kind": "Geometry",
+                "parent": null,
+                "matrix": [
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1
+                ],
+                "model_name": "Mini Spot Body",
+                "model_file": null,
+                "model_primitive": "Cylinder",
+                "model_dimensions": {
+                  "x": 0.42,
+                  "y": 0.32,
+                  "z": 0.42
+                },
+                "beam_type": null,
+                "beam_angle_deg": null,
+                "field_angle_deg": null,
+                "beam_radius": null
+              },
+              {
+                "name": "Head",
+                "kind": "Axis",
+                "parent": "Body",
+                "matrix": [
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1,
+                  0,
+                  0.34,
+                  0,
+                  0,
+                  1,
+                  -0.18,
+                  0,
+                  0,
+                  0,
+                  1
+                ],
+                "model_name": "Mini Spot Head",
+                "model_file": null,
+                "model_primitive": "Sphere",
+                "model_dimensions": {
+                  "x": 0.34,
+                  "y": 0.28,
+                  "z": 0.34
+                },
+                "beam_type": null,
+                "beam_angle_deg": null,
+                "field_angle_deg": null,
+                "beam_radius": null
+              },
+              {
+                "name": "Beam",
+                "kind": "Beam",
+                "parent": "Head",
+                "matrix": [
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1,
+                  0,
+                  0.1,
+                  0,
+                  0,
+                  1,
+                  -0.44,
+                  0,
+                  0,
+                  0,
+                  1
+                ],
+                "model_name": "Mini Spot Beam",
+                "model_file": null,
+                "model_primitive": "Plane",
+                "model_dimensions": {
+                  "x": 0.18,
+                  "y": 0.02,
+                  "z": 0.58
+                },
+                "beam_type": "Spot",
+                "beam_angle_deg": 18,
+                "field_angle_deg": 28,
+                "beam_radius": 0.09
+              }
+            ],
+            "warnings": []
+          }
+        ],
+        "fixture_groups": [],
+        "operator_policy": null,
+        "midi_mappings": [],
+        "osc_mappings": [],
+        "dmx_mappings": [],
+        "dj_track_triggers": [],
+        "history": {
+          "can_undo": false,
+          "can_redo": false,
+          "undo_depth": 0,
+          "redo_depth": 0,
+          "undo_label": null,
+          "redo_label": null,
+          "project_epoch": 1,
+          "project_revision": 0,
+          "checkpoint_hash": "f79a8f43fae02badd2eae5b827e49fa83d37ee5c2c6a282950977255847f1bcf",
+          "history_generation": 2,
+          "undo_entry_id": null,
+          "undo_checkpoint_hash": null,
+          "redo_entry_id": null,
+          "redo_checkpoint_hash": null
+        },
+        "input_runtime": {
+          "project_input_runtime_generation": 1,
+          "mapping_input_runtime_generation": 1,
+          "midi_clock_active": false,
+          "midi_control_active": false,
+          "midi_feedback_output_active": false,
+          "midi_feedback_runtime_active": false,
+          "osc_active": false,
+          "dmx_active": false
+        },
+        "authored_effect_fence": {
+          "process_incarnation": 7283170928346216,
+          "session_incarnation": 6317911795866206,
+          "project_epoch": 1,
+          "project_revision": 0,
+          "project_checkpoint_hash": "f79a8f43fae02badd2eae5b827e49fa83d37ee5c2c6a282950977255847f1bcf",
+          "project_publication_generation": 2
+        }
+      },
+      "checkpointUnchanged": true,
+      "ownershipBefore": {
+        "role": "Both",
+        "effective_role": "Both",
+        "desired_role": "Both",
+        "persisted_role": "Both",
+        "state": "Ready",
+        "generation": 2,
+        "epoch": 2,
+        "lighting_allowed": true,
+        "video_allowed": true,
+        "lighting_reason": "OwnedByMachineRole",
+        "video_reason": "OwnedByMachineRole",
+        "error": null
+      },
+      "ownershipAfter": {
+        "role": "Both",
+        "effective_role": "Both",
+        "desired_role": "Both",
+        "persisted_role": "Both",
+        "state": "Ready",
+        "generation": 2,
+        "epoch": 2,
+        "lighting_allowed": true,
+        "video_allowed": true,
+        "lighting_reason": "OwnedByMachineRole",
+        "video_reason": "OwnedByMachineRole",
+        "error": null
+      },
+      "phase": "load_project_path-expectedEpoch-rejects-with-live-managed-output",
+      "frames": 24,
+      "payloadSha256": "65228acc43d02190277f6ebf9ec067c7135aaddc9f0c6a610c3052a7cf9213d1",
+      "channels1to8": [
+        255,
+        0,
+        0,
+        0,
+        128,
+        0,
+        128,
+        0
+      ]
+    },
+    {
+      "check": "native-load_project_path-expectedRevision-rejection-preserves-project-and-live-managed-output",
+      "passed": true,
+      "request": {
+        "ownerId": "controller-output-6e1151af-4e31-4fd1-a821-3ae6ecdaaf02",
+        "expectedEpoch": 1,
+        "expectedRevision": 1,
+        "expectedCheckpointHash": "f79a8f43fae02badd2eae5b827e49fa83d37ee5c2c6a282950977255847f1bcf",
+        "expectedPublicationGeneration": 2,
+        "path": "C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-controller-output-zVlrTG\\loopback.sdc"
+      },
+      "result": {
+        "ok": false,
+        "error": "Project authority changed before mutation (expected epoch 1 revision 1)"
+      },
+      "authorityBefore": {
+        "project_epoch": 1,
+        "project_revision": 0,
+        "checkpoint_hash": "f79a8f43fae02badd2eae5b827e49fa83d37ee5c2c6a282950977255847f1bcf",
+        "timeline_transport_epoch": 1,
+        "timeline_transport_generation": 2,
+        "timeline_runtime": {
+          "transport_epoch": 1,
+          "transport_generation": 2,
+          "loop_runtime": {
+            "generation": 1,
+            "status": "disabled",
+            "a_ms": null,
+            "b_ms": null,
+            "wrap_count": 0
+          },
+          "follow_runtime": {
+            "epoch": 1,
+            "generation": 1,
+            "status": "idle",
+            "admission_reason": null,
+            "outcome": null,
+            "source_timeline_id": null,
+            "target_timeline_id": null,
+            "elapsed_ms": 0,
+            "duration_ms": 0,
+            "progress_millis": 0,
+            "fault": null,
+            "transition_hold_active": false,
+            "waiting_for_pedal_start": false
+          }
+        },
+        "publication_generation": 2,
+        "publication_kind": "identity_replacement",
+        "mapping_replacement_generation": 1,
+        "authority_disposition_generation": 1,
+        "authority_disposition": "clean_at_path",
+        "recovery_authority_serial": 127,
+        "recovery_authority_last_transition": {
+          "kind": "project_publication"
+        },
+        "path_generation": 1,
+        "history_generation": 2,
+        "current_project_path": "C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-controller-output-zVlrTG\\loopback.sdc",
+        "profiles": [
+          {
+            "source_path": "memory://custom/Syndocal-Phase_1_Mini_Spot",
+            "manufacturer": "Syndocal",
+            "name": "Phase 1 Mini Spot",
+            "short_name": "P1 Spot",
+            "fixture_type_id": null,
+            "dmx_modes": [
+              {
+                "name": "8ch",
+                "controls": [
+                  {
+                    "attribute": "Dimmer",
+                    "channel_name": "Dimmer",
+                    "geometry": "Beam",
+                    "offsets": [
+                      1
+                    ],
+                    "resolution": "EightBit",
+                    "default_value": 0,
+                    "functions": []
+                  },
+                  {
+                    "attribute": "ColorRed",
+                    "channel_name": "ColorRed",
+                    "geometry": "Beam",
+                    "offsets": [
+                      2
+                    ],
+                    "resolution": "EightBit",
+                    "default_value": 0,
+                    "functions": []
+                  },
+                  {
+                    "attribute": "ColorGreen",
+                    "channel_name": "ColorGreen",
+                    "geometry": "Beam",
+                    "offsets": [
+                      3
+                    ],
+                    "resolution": "EightBit",
+                    "default_value": 0,
+                    "functions": []
+                  },
+                  {
+                    "attribute": "ColorBlue",
+                    "channel_name": "ColorBlue",
+                    "geometry": "Beam",
+                    "offsets": [
+                      4
+                    ],
+                    "resolution": "EightBit",
+                    "default_value": 0,
+                    "functions": []
+                  },
+                  {
+                    "attribute": "Pan",
+                    "channel_name": "Pan",
+                    "geometry": "Head",
+                    "offsets": [
+                      5,
+                      6
+                    ],
+                    "resolution": "SixteenBit",
+                    "default_value": 32768,
+                    "functions": []
+                  },
+                  {
+                    "attribute": "Tilt",
+                    "channel_name": "Tilt",
+                    "geometry": "Head",
+                    "offsets": [
+                      7,
+                      8
+                    ],
+                    "resolution": "SixteenBit",
+                    "default_value": 32768,
+                    "functions": []
+                  }
+                ]
+              }
+            ],
+            "geometries": [
+              {
+                "name": "Body",
+                "kind": "Geometry",
+                "parent": null,
+                "matrix": [
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1
+                ],
+                "model_name": "Mini Spot Body",
+                "model_file": null,
+                "model_primitive": "Cylinder",
+                "model_dimensions": {
+                  "x": 0.42,
+                  "y": 0.32,
+                  "z": 0.42
+                },
+                "beam_type": null,
+                "beam_angle_deg": null,
+                "field_angle_deg": null,
+                "beam_radius": null
+              },
+              {
+                "name": "Head",
+                "kind": "Axis",
+                "parent": "Body",
+                "matrix": [
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1,
+                  0,
+                  0.34,
+                  0,
+                  0,
+                  1,
+                  -0.18,
+                  0,
+                  0,
+                  0,
+                  1
+                ],
+                "model_name": "Mini Spot Head",
+                "model_file": null,
+                "model_primitive": "Sphere",
+                "model_dimensions": {
+                  "x": 0.34,
+                  "y": 0.28,
+                  "z": 0.34
+                },
+                "beam_type": null,
+                "beam_angle_deg": null,
+                "field_angle_deg": null,
+                "beam_radius": null
+              },
+              {
+                "name": "Beam",
+                "kind": "Beam",
+                "parent": "Head",
+                "matrix": [
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1,
+                  0,
+                  0.1,
+                  0,
+                  0,
+                  1,
+                  -0.44,
+                  0,
+                  0,
+                  0,
+                  1
+                ],
+                "model_name": "Mini Spot Beam",
+                "model_file": null,
+                "model_primitive": "Plane",
+                "model_dimensions": {
+                  "x": 0.18,
+                  "y": 0.02,
+                  "z": 0.58
+                },
+                "beam_type": "Spot",
+                "beam_angle_deg": 18,
+                "field_angle_deg": 28,
+                "beam_radius": 0.09
+              }
+            ],
+            "warnings": []
+          }
+        ],
+        "fixture_groups": [],
+        "operator_policy": null,
+        "midi_mappings": [],
+        "osc_mappings": [],
+        "dmx_mappings": [],
+        "dj_track_triggers": [],
+        "history": {
+          "can_undo": false,
+          "can_redo": false,
+          "undo_depth": 0,
+          "redo_depth": 0,
+          "undo_label": null,
+          "redo_label": null,
+          "project_epoch": 1,
+          "project_revision": 0,
+          "checkpoint_hash": "f79a8f43fae02badd2eae5b827e49fa83d37ee5c2c6a282950977255847f1bcf",
+          "history_generation": 2,
+          "undo_entry_id": null,
+          "undo_checkpoint_hash": null,
+          "redo_entry_id": null,
+          "redo_checkpoint_hash": null
+        },
+        "input_runtime": {
+          "project_input_runtime_generation": 1,
+          "mapping_input_runtime_generation": 1,
+          "midi_clock_active": false,
+          "midi_control_active": false,
+          "midi_feedback_output_active": false,
+          "midi_feedback_runtime_active": false,
+          "osc_active": false,
+          "dmx_active": false
+        },
+        "authored_effect_fence": {
+          "process_incarnation": 7283170928346216,
+          "session_incarnation": 6317911795866206,
+          "project_epoch": 1,
+          "project_revision": 0,
+          "project_checkpoint_hash": "f79a8f43fae02badd2eae5b827e49fa83d37ee5c2c6a282950977255847f1bcf",
+          "project_publication_generation": 2
+        }
+      },
+      "authorityAfter": {
+        "project_epoch": 1,
+        "project_revision": 0,
+        "checkpoint_hash": "f79a8f43fae02badd2eae5b827e49fa83d37ee5c2c6a282950977255847f1bcf",
+        "timeline_transport_epoch": 1,
+        "timeline_transport_generation": 2,
+        "timeline_runtime": {
+          "transport_epoch": 1,
+          "transport_generation": 2,
+          "loop_runtime": {
+            "generation": 1,
+            "status": "disabled",
+            "a_ms": null,
+            "b_ms": null,
+            "wrap_count": 0
+          },
+          "follow_runtime": {
+            "epoch": 1,
+            "generation": 1,
+            "status": "idle",
+            "admission_reason": null,
+            "outcome": null,
+            "source_timeline_id": null,
+            "target_timeline_id": null,
+            "elapsed_ms": 0,
+            "duration_ms": 0,
+            "progress_millis": 0,
+            "fault": null,
+            "transition_hold_active": false,
+            "waiting_for_pedal_start": false
+          }
+        },
+        "publication_generation": 2,
+        "publication_kind": "identity_replacement",
+        "mapping_replacement_generation": 1,
+        "authority_disposition_generation": 1,
+        "authority_disposition": "clean_at_path",
+        "recovery_authority_serial": 127,
+        "recovery_authority_last_transition": {
+          "kind": "project_publication"
+        },
+        "path_generation": 1,
+        "history_generation": 2,
+        "current_project_path": "C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-controller-output-zVlrTG\\loopback.sdc",
+        "profiles": [
+          {
+            "source_path": "memory://custom/Syndocal-Phase_1_Mini_Spot",
+            "manufacturer": "Syndocal",
+            "name": "Phase 1 Mini Spot",
+            "short_name": "P1 Spot",
+            "fixture_type_id": null,
+            "dmx_modes": [
+              {
+                "name": "8ch",
+                "controls": [
+                  {
+                    "attribute": "Dimmer",
+                    "channel_name": "Dimmer",
+                    "geometry": "Beam",
+                    "offsets": [
+                      1
+                    ],
+                    "resolution": "EightBit",
+                    "default_value": 0,
+                    "functions": []
+                  },
+                  {
+                    "attribute": "ColorRed",
+                    "channel_name": "ColorRed",
+                    "geometry": "Beam",
+                    "offsets": [
+                      2
+                    ],
+                    "resolution": "EightBit",
+                    "default_value": 0,
+                    "functions": []
+                  },
+                  {
+                    "attribute": "ColorGreen",
+                    "channel_name": "ColorGreen",
+                    "geometry": "Beam",
+                    "offsets": [
+                      3
+                    ],
+                    "resolution": "EightBit",
+                    "default_value": 0,
+                    "functions": []
+                  },
+                  {
+                    "attribute": "ColorBlue",
+                    "channel_name": "ColorBlue",
+                    "geometry": "Beam",
+                    "offsets": [
+                      4
+                    ],
+                    "resolution": "EightBit",
+                    "default_value": 0,
+                    "functions": []
+                  },
+                  {
+                    "attribute": "Pan",
+                    "channel_name": "Pan",
+                    "geometry": "Head",
+                    "offsets": [
+                      5,
+                      6
+                    ],
+                    "resolution": "SixteenBit",
+                    "default_value": 32768,
+                    "functions": []
+                  },
+                  {
+                    "attribute": "Tilt",
+                    "channel_name": "Tilt",
+                    "geometry": "Head",
+                    "offsets": [
+                      7,
+                      8
+                    ],
+                    "resolution": "SixteenBit",
+                    "default_value": 32768,
+                    "functions": []
+                  }
+                ]
+              }
+            ],
+            "geometries": [
+              {
+                "name": "Body",
+                "kind": "Geometry",
+                "parent": null,
+                "matrix": [
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1
+                ],
+                "model_name": "Mini Spot Body",
+                "model_file": null,
+                "model_primitive": "Cylinder",
+                "model_dimensions": {
+                  "x": 0.42,
+                  "y": 0.32,
+                  "z": 0.42
+                },
+                "beam_type": null,
+                "beam_angle_deg": null,
+                "field_angle_deg": null,
+                "beam_radius": null
+              },
+              {
+                "name": "Head",
+                "kind": "Axis",
+                "parent": "Body",
+                "matrix": [
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1,
+                  0,
+                  0.34,
+                  0,
+                  0,
+                  1,
+                  -0.18,
+                  0,
+                  0,
+                  0,
+                  1
+                ],
+                "model_name": "Mini Spot Head",
+                "model_file": null,
+                "model_primitive": "Sphere",
+                "model_dimensions": {
+                  "x": 0.34,
+                  "y": 0.28,
+                  "z": 0.34
+                },
+                "beam_type": null,
+                "beam_angle_deg": null,
+                "field_angle_deg": null,
+                "beam_radius": null
+              },
+              {
+                "name": "Beam",
+                "kind": "Beam",
+                "parent": "Head",
+                "matrix": [
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1,
+                  0,
+                  0.1,
+                  0,
+                  0,
+                  1,
+                  -0.44,
+                  0,
+                  0,
+                  0,
+                  1
+                ],
+                "model_name": "Mini Spot Beam",
+                "model_file": null,
+                "model_primitive": "Plane",
+                "model_dimensions": {
+                  "x": 0.18,
+                  "y": 0.02,
+                  "z": 0.58
+                },
+                "beam_type": "Spot",
+                "beam_angle_deg": 18,
+                "field_angle_deg": 28,
+                "beam_radius": 0.09
+              }
+            ],
+            "warnings": []
+          }
+        ],
+        "fixture_groups": [],
+        "operator_policy": null,
+        "midi_mappings": [],
+        "osc_mappings": [],
+        "dmx_mappings": [],
+        "dj_track_triggers": [],
+        "history": {
+          "can_undo": false,
+          "can_redo": false,
+          "undo_depth": 0,
+          "redo_depth": 0,
+          "undo_label": null,
+          "redo_label": null,
+          "project_epoch": 1,
+          "project_revision": 0,
+          "checkpoint_hash": "f79a8f43fae02badd2eae5b827e49fa83d37ee5c2c6a282950977255847f1bcf",
+          "history_generation": 2,
+          "undo_entry_id": null,
+          "undo_checkpoint_hash": null,
+          "redo_entry_id": null,
+          "redo_checkpoint_hash": null
+        },
+        "input_runtime": {
+          "project_input_runtime_generation": 1,
+          "mapping_input_runtime_generation": 1,
+          "midi_clock_active": false,
+          "midi_control_active": false,
+          "midi_feedback_output_active": false,
+          "midi_feedback_runtime_active": false,
+          "osc_active": false,
+          "dmx_active": false
+        },
+        "authored_effect_fence": {
+          "process_incarnation": 7283170928346216,
+          "session_incarnation": 6317911795866206,
+          "project_epoch": 1,
+          "project_revision": 0,
+          "project_checkpoint_hash": "f79a8f43fae02badd2eae5b827e49fa83d37ee5c2c6a282950977255847f1bcf",
+          "project_publication_generation": 2
+        }
+      },
+      "checkpointUnchanged": true,
+      "ownershipBefore": {
+        "role": "Both",
+        "effective_role": "Both",
+        "desired_role": "Both",
+        "persisted_role": "Both",
+        "state": "Ready",
+        "generation": 2,
+        "epoch": 2,
+        "lighting_allowed": true,
+        "video_allowed": true,
+        "lighting_reason": "OwnedByMachineRole",
+        "video_reason": "OwnedByMachineRole",
+        "error": null
+      },
+      "ownershipAfter": {
+        "role": "Both",
+        "effective_role": "Both",
+        "desired_role": "Both",
+        "persisted_role": "Both",
+        "state": "Ready",
+        "generation": 2,
+        "epoch": 2,
+        "lighting_allowed": true,
+        "video_allowed": true,
+        "lighting_reason": "OwnedByMachineRole",
+        "video_reason": "OwnedByMachineRole",
+        "error": null
+      },
+      "phase": "load_project_path-expectedRevision-rejects-with-live-managed-output",
+      "frames": 24,
+      "payloadSha256": "65228acc43d02190277f6ebf9ec067c7135aaddc9f0c6a610c3052a7cf9213d1",
+      "channels1to8": [
+        255,
+        0,
+        0,
+        0,
+        128,
+        0,
+        128,
+        0
+      ]
+    },
+    {
+      "check": "native-load_project_path-expectedCheckpointHash-rejection-preserves-project-and-live-managed-output",
+      "passed": true,
+      "request": {
+        "ownerId": "controller-output-6e1151af-4e31-4fd1-a821-3ae6ecdaaf02",
+        "expectedEpoch": 1,
+        "expectedRevision": 0,
+        "expectedCheckpointHash": "0000000000000000000000000000000000000000000000000000000000000000",
+        "expectedPublicationGeneration": 2,
+        "path": "C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-controller-output-zVlrTG\\loopback.sdc"
+      },
+      "result": {
+        "ok": false,
+        "error": "Project authority changed before mutation (expected epoch 1 revision 0)"
+      },
+      "authorityBefore": {
+        "project_epoch": 1,
+        "project_revision": 0,
+        "checkpoint_hash": "f79a8f43fae02badd2eae5b827e49fa83d37ee5c2c6a282950977255847f1bcf",
+        "timeline_transport_epoch": 1,
+        "timeline_transport_generation": 2,
+        "timeline_runtime": {
+          "transport_epoch": 1,
+          "transport_generation": 2,
+          "loop_runtime": {
+            "generation": 1,
+            "status": "disabled",
+            "a_ms": null,
+            "b_ms": null,
+            "wrap_count": 0
+          },
+          "follow_runtime": {
+            "epoch": 1,
+            "generation": 1,
+            "status": "idle",
+            "admission_reason": null,
+            "outcome": null,
+            "source_timeline_id": null,
+            "target_timeline_id": null,
+            "elapsed_ms": 0,
+            "duration_ms": 0,
+            "progress_millis": 0,
+            "fault": null,
+            "transition_hold_active": false,
+            "waiting_for_pedal_start": false
+          }
+        },
+        "publication_generation": 2,
+        "publication_kind": "identity_replacement",
+        "mapping_replacement_generation": 1,
+        "authority_disposition_generation": 1,
+        "authority_disposition": "clean_at_path",
+        "recovery_authority_serial": 127,
+        "recovery_authority_last_transition": {
+          "kind": "project_publication"
+        },
+        "path_generation": 1,
+        "history_generation": 2,
+        "current_project_path": "C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-controller-output-zVlrTG\\loopback.sdc",
+        "profiles": [
+          {
+            "source_path": "memory://custom/Syndocal-Phase_1_Mini_Spot",
+            "manufacturer": "Syndocal",
+            "name": "Phase 1 Mini Spot",
+            "short_name": "P1 Spot",
+            "fixture_type_id": null,
+            "dmx_modes": [
+              {
+                "name": "8ch",
+                "controls": [
+                  {
+                    "attribute": "Dimmer",
+                    "channel_name": "Dimmer",
+                    "geometry": "Beam",
+                    "offsets": [
+                      1
+                    ],
+                    "resolution": "EightBit",
+                    "default_value": 0,
+                    "functions": []
+                  },
+                  {
+                    "attribute": "ColorRed",
+                    "channel_name": "ColorRed",
+                    "geometry": "Beam",
+                    "offsets": [
+                      2
+                    ],
+                    "resolution": "EightBit",
+                    "default_value": 0,
+                    "functions": []
+                  },
+                  {
+                    "attribute": "ColorGreen",
+                    "channel_name": "ColorGreen",
+                    "geometry": "Beam",
+                    "offsets": [
+                      3
+                    ],
+                    "resolution": "EightBit",
+                    "default_value": 0,
+                    "functions": []
+                  },
+                  {
+                    "attribute": "ColorBlue",
+                    "channel_name": "ColorBlue",
+                    "geometry": "Beam",
+                    "offsets": [
+                      4
+                    ],
+                    "resolution": "EightBit",
+                    "default_value": 0,
+                    "functions": []
+                  },
+                  {
+                    "attribute": "Pan",
+                    "channel_name": "Pan",
+                    "geometry": "Head",
+                    "offsets": [
+                      5,
+                      6
+                    ],
+                    "resolution": "SixteenBit",
+                    "default_value": 32768,
+                    "functions": []
+                  },
+                  {
+                    "attribute": "Tilt",
+                    "channel_name": "Tilt",
+                    "geometry": "Head",
+                    "offsets": [
+                      7,
+                      8
+                    ],
+                    "resolution": "SixteenBit",
+                    "default_value": 32768,
+                    "functions": []
+                  }
+                ]
+              }
+            ],
+            "geometries": [
+              {
+                "name": "Body",
+                "kind": "Geometry",
+                "parent": null,
+                "matrix": [
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1
+                ],
+                "model_name": "Mini Spot Body",
+                "model_file": null,
+                "model_primitive": "Cylinder",
+                "model_dimensions": {
+                  "x": 0.42,
+                  "y": 0.32,
+                  "z": 0.42
+                },
+                "beam_type": null,
+                "beam_angle_deg": null,
+                "field_angle_deg": null,
+                "beam_radius": null
+              },
+              {
+                "name": "Head",
+                "kind": "Axis",
+                "parent": "Body",
+                "matrix": [
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1,
+                  0,
+                  0.34,
+                  0,
+                  0,
+                  1,
+                  -0.18,
+                  0,
+                  0,
+                  0,
+                  1
+                ],
+                "model_name": "Mini Spot Head",
+                "model_file": null,
+                "model_primitive": "Sphere",
+                "model_dimensions": {
+                  "x": 0.34,
+                  "y": 0.28,
+                  "z": 0.34
+                },
+                "beam_type": null,
+                "beam_angle_deg": null,
+                "field_angle_deg": null,
+                "beam_radius": null
+              },
+              {
+                "name": "Beam",
+                "kind": "Beam",
+                "parent": "Head",
+                "matrix": [
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1,
+                  0,
+                  0.1,
+                  0,
+                  0,
+                  1,
+                  -0.44,
+                  0,
+                  0,
+                  0,
+                  1
+                ],
+                "model_name": "Mini Spot Beam",
+                "model_file": null,
+                "model_primitive": "Plane",
+                "model_dimensions": {
+                  "x": 0.18,
+                  "y": 0.02,
+                  "z": 0.58
+                },
+                "beam_type": "Spot",
+                "beam_angle_deg": 18,
+                "field_angle_deg": 28,
+                "beam_radius": 0.09
+              }
+            ],
+            "warnings": []
+          }
+        ],
+        "fixture_groups": [],
+        "operator_policy": null,
+        "midi_mappings": [],
+        "osc_mappings": [],
+        "dmx_mappings": [],
+        "dj_track_triggers": [],
+        "history": {
+          "can_undo": false,
+          "can_redo": false,
+          "undo_depth": 0,
+          "redo_depth": 0,
+          "undo_label": null,
+          "redo_label": null,
+          "project_epoch": 1,
+          "project_revision": 0,
+          "checkpoint_hash": "f79a8f43fae02badd2eae5b827e49fa83d37ee5c2c6a282950977255847f1bcf",
+          "history_generation": 2,
+          "undo_entry_id": null,
+          "undo_checkpoint_hash": null,
+          "redo_entry_id": null,
+          "redo_checkpoint_hash": null
+        },
+        "input_runtime": {
+          "project_input_runtime_generation": 1,
+          "mapping_input_runtime_generation": 1,
+          "midi_clock_active": false,
+          "midi_control_active": false,
+          "midi_feedback_output_active": false,
+          "midi_feedback_runtime_active": false,
+          "osc_active": false,
+          "dmx_active": false
+        },
+        "authored_effect_fence": {
+          "process_incarnation": 7283170928346216,
+          "session_incarnation": 6317911795866206,
+          "project_epoch": 1,
+          "project_revision": 0,
+          "project_checkpoint_hash": "f79a8f43fae02badd2eae5b827e49fa83d37ee5c2c6a282950977255847f1bcf",
+          "project_publication_generation": 2
+        }
+      },
+      "authorityAfter": {
+        "project_epoch": 1,
+        "project_revision": 0,
+        "checkpoint_hash": "f79a8f43fae02badd2eae5b827e49fa83d37ee5c2c6a282950977255847f1bcf",
+        "timeline_transport_epoch": 1,
+        "timeline_transport_generation": 2,
+        "timeline_runtime": {
+          "transport_epoch": 1,
+          "transport_generation": 2,
+          "loop_runtime": {
+            "generation": 1,
+            "status": "disabled",
+            "a_ms": null,
+            "b_ms": null,
+            "wrap_count": 0
+          },
+          "follow_runtime": {
+            "epoch": 1,
+            "generation": 1,
+            "status": "idle",
+            "admission_reason": null,
+            "outcome": null,
+            "source_timeline_id": null,
+            "target_timeline_id": null,
+            "elapsed_ms": 0,
+            "duration_ms": 0,
+            "progress_millis": 0,
+            "fault": null,
+            "transition_hold_active": false,
+            "waiting_for_pedal_start": false
+          }
+        },
+        "publication_generation": 2,
+        "publication_kind": "identity_replacement",
+        "mapping_replacement_generation": 1,
+        "authority_disposition_generation": 1,
+        "authority_disposition": "clean_at_path",
+        "recovery_authority_serial": 127,
+        "recovery_authority_last_transition": {
+          "kind": "project_publication"
+        },
+        "path_generation": 1,
+        "history_generation": 2,
+        "current_project_path": "C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-controller-output-zVlrTG\\loopback.sdc",
+        "profiles": [
+          {
+            "source_path": "memory://custom/Syndocal-Phase_1_Mini_Spot",
+            "manufacturer": "Syndocal",
+            "name": "Phase 1 Mini Spot",
+            "short_name": "P1 Spot",
+            "fixture_type_id": null,
+            "dmx_modes": [
+              {
+                "name": "8ch",
+                "controls": [
+                  {
+                    "attribute": "Dimmer",
+                    "channel_name": "Dimmer",
+                    "geometry": "Beam",
+                    "offsets": [
+                      1
+                    ],
+                    "resolution": "EightBit",
+                    "default_value": 0,
+                    "functions": []
+                  },
+                  {
+                    "attribute": "ColorRed",
+                    "channel_name": "ColorRed",
+                    "geometry": "Beam",
+                    "offsets": [
+                      2
+                    ],
+                    "resolution": "EightBit",
+                    "default_value": 0,
+                    "functions": []
+                  },
+                  {
+                    "attribute": "ColorGreen",
+                    "channel_name": "ColorGreen",
+                    "geometry": "Beam",
+                    "offsets": [
+                      3
+                    ],
+                    "resolution": "EightBit",
+                    "default_value": 0,
+                    "functions": []
+                  },
+                  {
+                    "attribute": "ColorBlue",
+                    "channel_name": "ColorBlue",
+                    "geometry": "Beam",
+                    "offsets": [
+                      4
+                    ],
+                    "resolution": "EightBit",
+                    "default_value": 0,
+                    "functions": []
+                  },
+                  {
+                    "attribute": "Pan",
+                    "channel_name": "Pan",
+                    "geometry": "Head",
+                    "offsets": [
+                      5,
+                      6
+                    ],
+                    "resolution": "SixteenBit",
+                    "default_value": 32768,
+                    "functions": []
+                  },
+                  {
+                    "attribute": "Tilt",
+                    "channel_name": "Tilt",
+                    "geometry": "Head",
+                    "offsets": [
+                      7,
+                      8
+                    ],
+                    "resolution": "SixteenBit",
+                    "default_value": 32768,
+                    "functions": []
+                  }
+                ]
+              }
+            ],
+            "geometries": [
+              {
+                "name": "Body",
+                "kind": "Geometry",
+                "parent": null,
+                "matrix": [
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1
+                ],
+                "model_name": "Mini Spot Body",
+                "model_file": null,
+                "model_primitive": "Cylinder",
+                "model_dimensions": {
+                  "x": 0.42,
+                  "y": 0.32,
+                  "z": 0.42
+                },
+                "beam_type": null,
+                "beam_angle_deg": null,
+                "field_angle_deg": null,
+                "beam_radius": null
+              },
+              {
+                "name": "Head",
+                "kind": "Axis",
+                "parent": "Body",
+                "matrix": [
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1,
+                  0,
+                  0.34,
+                  0,
+                  0,
+                  1,
+                  -0.18,
+                  0,
+                  0,
+                  0,
+                  1
+                ],
+                "model_name": "Mini Spot Head",
+                "model_file": null,
+                "model_primitive": "Sphere",
+                "model_dimensions": {
+                  "x": 0.34,
+                  "y": 0.28,
+                  "z": 0.34
+                },
+                "beam_type": null,
+                "beam_angle_deg": null,
+                "field_angle_deg": null,
+                "beam_radius": null
+              },
+              {
+                "name": "Beam",
+                "kind": "Beam",
+                "parent": "Head",
+                "matrix": [
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1,
+                  0,
+                  0.1,
+                  0,
+                  0,
+                  1,
+                  -0.44,
+                  0,
+                  0,
+                  0,
+                  1
+                ],
+                "model_name": "Mini Spot Beam",
+                "model_file": null,
+                "model_primitive": "Plane",
+                "model_dimensions": {
+                  "x": 0.18,
+                  "y": 0.02,
+                  "z": 0.58
+                },
+                "beam_type": "Spot",
+                "beam_angle_deg": 18,
+                "field_angle_deg": 28,
+                "beam_radius": 0.09
+              }
+            ],
+            "warnings": []
+          }
+        ],
+        "fixture_groups": [],
+        "operator_policy": null,
+        "midi_mappings": [],
+        "osc_mappings": [],
+        "dmx_mappings": [],
+        "dj_track_triggers": [],
+        "history": {
+          "can_undo": false,
+          "can_redo": false,
+          "undo_depth": 0,
+          "redo_depth": 0,
+          "undo_label": null,
+          "redo_label": null,
+          "project_epoch": 1,
+          "project_revision": 0,
+          "checkpoint_hash": "f79a8f43fae02badd2eae5b827e49fa83d37ee5c2c6a282950977255847f1bcf",
+          "history_generation": 2,
+          "undo_entry_id": null,
+          "undo_checkpoint_hash": null,
+          "redo_entry_id": null,
+          "redo_checkpoint_hash": null
+        },
+        "input_runtime": {
+          "project_input_runtime_generation": 1,
+          "mapping_input_runtime_generation": 1,
+          "midi_clock_active": false,
+          "midi_control_active": false,
+          "midi_feedback_output_active": false,
+          "midi_feedback_runtime_active": false,
+          "osc_active": false,
+          "dmx_active": false
+        },
+        "authored_effect_fence": {
+          "process_incarnation": 7283170928346216,
+          "session_incarnation": 6317911795866206,
+          "project_epoch": 1,
+          "project_revision": 0,
+          "project_checkpoint_hash": "f79a8f43fae02badd2eae5b827e49fa83d37ee5c2c6a282950977255847f1bcf",
+          "project_publication_generation": 2
+        }
+      },
+      "checkpointUnchanged": true,
+      "ownershipBefore": {
+        "role": "Both",
+        "effective_role": "Both",
+        "desired_role": "Both",
+        "persisted_role": "Both",
+        "state": "Ready",
+        "generation": 2,
+        "epoch": 2,
+        "lighting_allowed": true,
+        "video_allowed": true,
+        "lighting_reason": "OwnedByMachineRole",
+        "video_reason": "OwnedByMachineRole",
+        "error": null
+      },
+      "ownershipAfter": {
+        "role": "Both",
+        "effective_role": "Both",
+        "desired_role": "Both",
+        "persisted_role": "Both",
+        "state": "Ready",
+        "generation": 2,
+        "epoch": 2,
+        "lighting_allowed": true,
+        "video_allowed": true,
+        "lighting_reason": "OwnedByMachineRole",
+        "video_reason": "OwnedByMachineRole",
+        "error": null
+      },
+      "phase": "load_project_path-expectedCheckpointHash-rejects-with-live-managed-output",
+      "frames": 23,
+      "payloadSha256": "65228acc43d02190277f6ebf9ec067c7135aaddc9f0c6a610c3052a7cf9213d1",
+      "channels1to8": [
+        255,
+        0,
+        0,
+        0,
+        128,
+        0,
+        128,
+        0
+      ]
+    },
+    {
+      "check": "native-load_project_path-expectedPublicationGeneration-rejection-preserves-project-and-live-managed-output",
+      "passed": true,
+      "request": {
+        "ownerId": "controller-output-6e1151af-4e31-4fd1-a821-3ae6ecdaaf02",
+        "expectedEpoch": 1,
+        "expectedRevision": 0,
+        "expectedCheckpointHash": "f79a8f43fae02badd2eae5b827e49fa83d37ee5c2c6a282950977255847f1bcf",
+        "expectedPublicationGeneration": 3,
+        "path": "C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-controller-output-zVlrTG\\loopback.sdc"
+      },
+      "result": {
+        "ok": false,
+        "error": "Project publication generation changed before replacement"
+      },
+      "authorityBefore": {
+        "project_epoch": 1,
+        "project_revision": 0,
+        "checkpoint_hash": "f79a8f43fae02badd2eae5b827e49fa83d37ee5c2c6a282950977255847f1bcf",
+        "timeline_transport_epoch": 1,
+        "timeline_transport_generation": 2,
+        "timeline_runtime": {
+          "transport_epoch": 1,
+          "transport_generation": 2,
+          "loop_runtime": {
+            "generation": 1,
+            "status": "disabled",
+            "a_ms": null,
+            "b_ms": null,
+            "wrap_count": 0
+          },
+          "follow_runtime": {
+            "epoch": 1,
+            "generation": 1,
+            "status": "idle",
+            "admission_reason": null,
+            "outcome": null,
+            "source_timeline_id": null,
+            "target_timeline_id": null,
+            "elapsed_ms": 0,
+            "duration_ms": 0,
+            "progress_millis": 0,
+            "fault": null,
+            "transition_hold_active": false,
+            "waiting_for_pedal_start": false
+          }
+        },
+        "publication_generation": 2,
+        "publication_kind": "identity_replacement",
+        "mapping_replacement_generation": 1,
+        "authority_disposition_generation": 1,
+        "authority_disposition": "clean_at_path",
+        "recovery_authority_serial": 127,
+        "recovery_authority_last_transition": {
+          "kind": "project_publication"
+        },
+        "path_generation": 1,
+        "history_generation": 2,
+        "current_project_path": "C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-controller-output-zVlrTG\\loopback.sdc",
+        "profiles": [
+          {
+            "source_path": "memory://custom/Syndocal-Phase_1_Mini_Spot",
+            "manufacturer": "Syndocal",
+            "name": "Phase 1 Mini Spot",
+            "short_name": "P1 Spot",
+            "fixture_type_id": null,
+            "dmx_modes": [
+              {
+                "name": "8ch",
+                "controls": [
+                  {
+                    "attribute": "Dimmer",
+                    "channel_name": "Dimmer",
+                    "geometry": "Beam",
+                    "offsets": [
+                      1
+                    ],
+                    "resolution": "EightBit",
+                    "default_value": 0,
+                    "functions": []
+                  },
+                  {
+                    "attribute": "ColorRed",
+                    "channel_name": "ColorRed",
+                    "geometry": "Beam",
+                    "offsets": [
+                      2
+                    ],
+                    "resolution": "EightBit",
+                    "default_value": 0,
+                    "functions": []
+                  },
+                  {
+                    "attribute": "ColorGreen",
+                    "channel_name": "ColorGreen",
+                    "geometry": "Beam",
+                    "offsets": [
+                      3
+                    ],
+                    "resolution": "EightBit",
+                    "default_value": 0,
+                    "functions": []
+                  },
+                  {
+                    "attribute": "ColorBlue",
+                    "channel_name": "ColorBlue",
+                    "geometry": "Beam",
+                    "offsets": [
+                      4
+                    ],
+                    "resolution": "EightBit",
+                    "default_value": 0,
+                    "functions": []
+                  },
+                  {
+                    "attribute": "Pan",
+                    "channel_name": "Pan",
+                    "geometry": "Head",
+                    "offsets": [
+                      5,
+                      6
+                    ],
+                    "resolution": "SixteenBit",
+                    "default_value": 32768,
+                    "functions": []
+                  },
+                  {
+                    "attribute": "Tilt",
+                    "channel_name": "Tilt",
+                    "geometry": "Head",
+                    "offsets": [
+                      7,
+                      8
+                    ],
+                    "resolution": "SixteenBit",
+                    "default_value": 32768,
+                    "functions": []
+                  }
+                ]
+              }
+            ],
+            "geometries": [
+              {
+                "name": "Body",
+                "kind": "Geometry",
+                "parent": null,
+                "matrix": [
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1
+                ],
+                "model_name": "Mini Spot Body",
+                "model_file": null,
+                "model_primitive": "Cylinder",
+                "model_dimensions": {
+                  "x": 0.42,
+                  "y": 0.32,
+                  "z": 0.42
+                },
+                "beam_type": null,
+                "beam_angle_deg": null,
+                "field_angle_deg": null,
+                "beam_radius": null
+              },
+              {
+                "name": "Head",
+                "kind": "Axis",
+                "parent": "Body",
+                "matrix": [
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1,
+                  0,
+                  0.34,
+                  0,
+                  0,
+                  1,
+                  -0.18,
+                  0,
+                  0,
+                  0,
+                  1
+                ],
+                "model_name": "Mini Spot Head",
+                "model_file": null,
+                "model_primitive": "Sphere",
+                "model_dimensions": {
+                  "x": 0.34,
+                  "y": 0.28,
+                  "z": 0.34
+                },
+                "beam_type": null,
+                "beam_angle_deg": null,
+                "field_angle_deg": null,
+                "beam_radius": null
+              },
+              {
+                "name": "Beam",
+                "kind": "Beam",
+                "parent": "Head",
+                "matrix": [
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1,
+                  0,
+                  0.1,
+                  0,
+                  0,
+                  1,
+                  -0.44,
+                  0,
+                  0,
+                  0,
+                  1
+                ],
+                "model_name": "Mini Spot Beam",
+                "model_file": null,
+                "model_primitive": "Plane",
+                "model_dimensions": {
+                  "x": 0.18,
+                  "y": 0.02,
+                  "z": 0.58
+                },
+                "beam_type": "Spot",
+                "beam_angle_deg": 18,
+                "field_angle_deg": 28,
+                "beam_radius": 0.09
+              }
+            ],
+            "warnings": []
+          }
+        ],
+        "fixture_groups": [],
+        "operator_policy": null,
+        "midi_mappings": [],
+        "osc_mappings": [],
+        "dmx_mappings": [],
+        "dj_track_triggers": [],
+        "history": {
+          "can_undo": false,
+          "can_redo": false,
+          "undo_depth": 0,
+          "redo_depth": 0,
+          "undo_label": null,
+          "redo_label": null,
+          "project_epoch": 1,
+          "project_revision": 0,
+          "checkpoint_hash": "f79a8f43fae02badd2eae5b827e49fa83d37ee5c2c6a282950977255847f1bcf",
+          "history_generation": 2,
+          "undo_entry_id": null,
+          "undo_checkpoint_hash": null,
+          "redo_entry_id": null,
+          "redo_checkpoint_hash": null
+        },
+        "input_runtime": {
+          "project_input_runtime_generation": 1,
+          "mapping_input_runtime_generation": 1,
+          "midi_clock_active": false,
+          "midi_control_active": false,
+          "midi_feedback_output_active": false,
+          "midi_feedback_runtime_active": false,
+          "osc_active": false,
+          "dmx_active": false
+        },
+        "authored_effect_fence": {
+          "process_incarnation": 7283170928346216,
+          "session_incarnation": 6317911795866206,
+          "project_epoch": 1,
+          "project_revision": 0,
+          "project_checkpoint_hash": "f79a8f43fae02badd2eae5b827e49fa83d37ee5c2c6a282950977255847f1bcf",
+          "project_publication_generation": 2
+        }
+      },
+      "authorityAfter": {
+        "project_epoch": 1,
+        "project_revision": 0,
+        "checkpoint_hash": "f79a8f43fae02badd2eae5b827e49fa83d37ee5c2c6a282950977255847f1bcf",
+        "timeline_transport_epoch": 1,
+        "timeline_transport_generation": 2,
+        "timeline_runtime": {
+          "transport_epoch": 1,
+          "transport_generation": 2,
+          "loop_runtime": {
+            "generation": 1,
+            "status": "disabled",
+            "a_ms": null,
+            "b_ms": null,
+            "wrap_count": 0
+          },
+          "follow_runtime": {
+            "epoch": 1,
+            "generation": 1,
+            "status": "idle",
+            "admission_reason": null,
+            "outcome": null,
+            "source_timeline_id": null,
+            "target_timeline_id": null,
+            "elapsed_ms": 0,
+            "duration_ms": 0,
+            "progress_millis": 0,
+            "fault": null,
+            "transition_hold_active": false,
+            "waiting_for_pedal_start": false
+          }
+        },
+        "publication_generation": 2,
+        "publication_kind": "identity_replacement",
+        "mapping_replacement_generation": 1,
+        "authority_disposition_generation": 1,
+        "authority_disposition": "clean_at_path",
+        "recovery_authority_serial": 127,
+        "recovery_authority_last_transition": {
+          "kind": "project_publication"
+        },
+        "path_generation": 1,
+        "history_generation": 2,
+        "current_project_path": "C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-controller-output-zVlrTG\\loopback.sdc",
+        "profiles": [
+          {
+            "source_path": "memory://custom/Syndocal-Phase_1_Mini_Spot",
+            "manufacturer": "Syndocal",
+            "name": "Phase 1 Mini Spot",
+            "short_name": "P1 Spot",
+            "fixture_type_id": null,
+            "dmx_modes": [
+              {
+                "name": "8ch",
+                "controls": [
+                  {
+                    "attribute": "Dimmer",
+                    "channel_name": "Dimmer",
+                    "geometry": "Beam",
+                    "offsets": [
+                      1
+                    ],
+                    "resolution": "EightBit",
+                    "default_value": 0,
+                    "functions": []
+                  },
+                  {
+                    "attribute": "ColorRed",
+                    "channel_name": "ColorRed",
+                    "geometry": "Beam",
+                    "offsets": [
+                      2
+                    ],
+                    "resolution": "EightBit",
+                    "default_value": 0,
+                    "functions": []
+                  },
+                  {
+                    "attribute": "ColorGreen",
+                    "channel_name": "ColorGreen",
+                    "geometry": "Beam",
+                    "offsets": [
+                      3
+                    ],
+                    "resolution": "EightBit",
+                    "default_value": 0,
+                    "functions": []
+                  },
+                  {
+                    "attribute": "ColorBlue",
+                    "channel_name": "ColorBlue",
+                    "geometry": "Beam",
+                    "offsets": [
+                      4
+                    ],
+                    "resolution": "EightBit",
+                    "default_value": 0,
+                    "functions": []
+                  },
+                  {
+                    "attribute": "Pan",
+                    "channel_name": "Pan",
+                    "geometry": "Head",
+                    "offsets": [
+                      5,
+                      6
+                    ],
+                    "resolution": "SixteenBit",
+                    "default_value": 32768,
+                    "functions": []
+                  },
+                  {
+                    "attribute": "Tilt",
+                    "channel_name": "Tilt",
+                    "geometry": "Head",
+                    "offsets": [
+                      7,
+                      8
+                    ],
+                    "resolution": "SixteenBit",
+                    "default_value": 32768,
+                    "functions": []
+                  }
+                ]
+              }
+            ],
+            "geometries": [
+              {
+                "name": "Body",
+                "kind": "Geometry",
+                "parent": null,
+                "matrix": [
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1
+                ],
+                "model_name": "Mini Spot Body",
+                "model_file": null,
+                "model_primitive": "Cylinder",
+                "model_dimensions": {
+                  "x": 0.42,
+                  "y": 0.32,
+                  "z": 0.42
+                },
+                "beam_type": null,
+                "beam_angle_deg": null,
+                "field_angle_deg": null,
+                "beam_radius": null
+              },
+              {
+                "name": "Head",
+                "kind": "Axis",
+                "parent": "Body",
+                "matrix": [
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1,
+                  0,
+                  0.34,
+                  0,
+                  0,
+                  1,
+                  -0.18,
+                  0,
+                  0,
+                  0,
+                  1
+                ],
+                "model_name": "Mini Spot Head",
+                "model_file": null,
+                "model_primitive": "Sphere",
+                "model_dimensions": {
+                  "x": 0.34,
+                  "y": 0.28,
+                  "z": 0.34
+                },
+                "beam_type": null,
+                "beam_angle_deg": null,
+                "field_angle_deg": null,
+                "beam_radius": null
+              },
+              {
+                "name": "Beam",
+                "kind": "Beam",
+                "parent": "Head",
+                "matrix": [
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1,
+                  0,
+                  0.1,
+                  0,
+                  0,
+                  1,
+                  -0.44,
+                  0,
+                  0,
+                  0,
+                  1
+                ],
+                "model_name": "Mini Spot Beam",
+                "model_file": null,
+                "model_primitive": "Plane",
+                "model_dimensions": {
+                  "x": 0.18,
+                  "y": 0.02,
+                  "z": 0.58
+                },
+                "beam_type": "Spot",
+                "beam_angle_deg": 18,
+                "field_angle_deg": 28,
+                "beam_radius": 0.09
+              }
+            ],
+            "warnings": []
+          }
+        ],
+        "fixture_groups": [],
+        "operator_policy": null,
+        "midi_mappings": [],
+        "osc_mappings": [],
+        "dmx_mappings": [],
+        "dj_track_triggers": [],
+        "history": {
+          "can_undo": false,
+          "can_redo": false,
+          "undo_depth": 0,
+          "redo_depth": 0,
+          "undo_label": null,
+          "redo_label": null,
+          "project_epoch": 1,
+          "project_revision": 0,
+          "checkpoint_hash": "f79a8f43fae02badd2eae5b827e49fa83d37ee5c2c6a282950977255847f1bcf",
+          "history_generation": 2,
+          "undo_entry_id": null,
+          "undo_checkpoint_hash": null,
+          "redo_entry_id": null,
+          "redo_checkpoint_hash": null
+        },
+        "input_runtime": {
+          "project_input_runtime_generation": 1,
+          "mapping_input_runtime_generation": 1,
+          "midi_clock_active": false,
+          "midi_control_active": false,
+          "midi_feedback_output_active": false,
+          "midi_feedback_runtime_active": false,
+          "osc_active": false,
+          "dmx_active": false
+        },
+        "authored_effect_fence": {
+          "process_incarnation": 7283170928346216,
+          "session_incarnation": 6317911795866206,
+          "project_epoch": 1,
+          "project_revision": 0,
+          "project_checkpoint_hash": "f79a8f43fae02badd2eae5b827e49fa83d37ee5c2c6a282950977255847f1bcf",
+          "project_publication_generation": 2
+        }
+      },
+      "checkpointUnchanged": true,
+      "ownershipBefore": {
+        "role": "Both",
+        "effective_role": "Both",
+        "desired_role": "Both",
+        "persisted_role": "Both",
+        "state": "Ready",
+        "generation": 2,
+        "epoch": 2,
+        "lighting_allowed": true,
+        "video_allowed": true,
+        "lighting_reason": "OwnedByMachineRole",
+        "video_reason": "OwnedByMachineRole",
+        "error": null
+      },
+      "ownershipAfter": {
+        "role": "Both",
+        "effective_role": "Both",
+        "desired_role": "Both",
+        "persisted_role": "Both",
+        "state": "Ready",
+        "generation": 2,
+        "epoch": 2,
+        "lighting_allowed": true,
+        "video_allowed": true,
+        "lighting_reason": "OwnedByMachineRole",
+        "video_reason": "OwnedByMachineRole",
+        "error": null
+      },
+      "phase": "load_project_path-expectedPublicationGeneration-rejects-with-live-managed-output",
+      "frames": 24,
+      "payloadSha256": "65228acc43d02190277f6ebf9ec067c7135aaddc9f0c6a610c3052a7cf9213d1",
+      "channels1to8": [
+        255,
+        0,
+        0,
+        0,
+        128,
+        0,
+        128,
+        0
+      ]
+    },
+    {
+      "check": "native-valid-open-retires-managed-output",
+      "passed": true
+    },
+    {
+      "check": "native-enable-after-project-replacement-retains-s0-and-live-zero-image",
+      "passed": true,
+      "phase": "native-explicit-reenable-retains-s0-zero-image",
+      "frames": 23,
+      "payloadSha256": "076a27c79e5ace2a3d47f9dd2e83e4ff6ea8872b3c2218f66c92b89b55f36560",
+      "channels1to8": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "check": "native-explicit-reenable-after-valid-open-produces-live-whole-image",
+      "passed": true,
+      "phase": "native-reenabled-full-image-before-valid-new",
+      "frames": 22,
+      "payloadSha256": "65228acc43d02190277f6ebf9ec067c7135aaddc9f0c6a610c3052a7cf9213d1",
+      "channels1to8": [
+        255,
+        0,
+        0,
+        0,
+        128,
+        0,
+        128,
+        0
+      ]
+    },
+    {
+      "check": "native-valid-new-retires-managed-output-and-publishes-empty-project",
+      "passed": true
+    },
+    {
+      "check": "native-replacement-preflight-private-source-bytes-unchanged",
+      "passed": true
+    },
+    {
+      "check": "isolated-first-launch-read",
+      "passed": true
+    },
+    {
+      "check": "dead-process-descriptor-rejected",
+      "passed": true
+    },
+    {
+      "check": "crash-restart-retired-principal-rejected",
+      "passed": true
+    },
+    {
+      "check": "old-credential-and-receipt-not-adopted",
+      "passed": true
+    },
+    {
+      "check": "old-launch-proof-rejected-fresh-read-succeeds",
+      "passed": true
+    },
+    {
+      "check": "graceful-native-close",
+      "passed": true
+    },
+    {
+      "check": "graceful-restart-does-not-restore-grant",
+      "passed": true
+    }
+  ],
+  "normalAppIdentityUnchanged": true,
+  "credentialRevoked": true,
+  "credentialFileRemoved": true,
+  "nativePanicLocations": [],
+  "nonclaims": [
+    "QA identifier release build, not the distributed artifact",
+    "Actual managed Enable, live 512-channel loopback ArtDMX, rejected stale New/Open authority and valid replacement retirement. No simultaneous authority-change atomicity, external MCP New/Open exposure, general serial/device retirement, physical video/fixture/venue or release acceptance",
+    "No durable authored/output mutation crash publication acceptance"
+  ]
+}

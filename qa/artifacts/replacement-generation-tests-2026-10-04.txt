@@ -1,0 +1,37 @@
+PIN C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+PATH-FIRST ["C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\bin\\Hostx64\\x64\\link.exe"]
+RUN ["test","--release","--locked","-p","syndocal","-j","1","--config","profile.release.package.engine.opt-level=0","--config","profile.release.package.engine.codegen-units=256","--config","profile.release.package.syndocal.opt-level=0","--config","profile.release.package.syndocal.codegen-units=256","project_replacement_generation_","--","--nocapture","--test-threads=1"]
+
+running 6 tests
+test tests::project_replacement_generation_detects_unchanged_content_after_initial_preflight ... ok
+test tests::project_replacement_generation_exact_fence_reaches_both_validation_boundaries ... ok
+test tests::project_replacement_generation_legacy_invocation_retains_its_existing_contract ... ok
+test tests::project_replacement_generation_retains_owner_incarnation_revalidation ... ok
+test tests::project_replacement_generation_stale_initial_preflight_has_no_replacement_effect ... ok
+test tests::project_replacement_generation_unsafe_identity_rejects_before_invocation ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 1974 filtered out; finished in 0.04s
+
+   Compiling syndocal v1.2.0-alpha.69 (C:\Users\janua\OneDrive\ドキュメント\GitHub\Syndocal\app\src-tauri)
+    Finished `release` profile [optimized] target(s) in 3m 37s
+     Running unittests src\main.rs (C:\Users\janua\AppData\Local\Temp\syndocal-native-acceptance-target\release\deps\syndocal-f037b164d4375e83.exe)
+RUN ["test","--release","--locked","-p","syndocal","-j","1","--config","profile.release.package.engine.opt-level=0","--config","profile.release.package.engine.codegen-units=256","--config","profile.release.package.syndocal.opt-level=0","--config","profile.release.package.syndocal.codegen-units=256","project_replacement_","--","--nocapture","--test-threads=1"]
+
+running 12 tests
+test control_plane_query::tests::project_replacement_is_redacted_and_emits_a_canonical_event ... ok
+test tests::external_project_replacement_joins_standby_worker_before_fenced_swap ... ok
+test tests::fenced_project_replacement_commits_infallibly_after_publication_ack ... ok
+test tests::fenced_project_replacement_does_not_commit_local_state_when_publication_ack_fails ... ok
+test tests::fenced_project_replacement_does_not_publish_when_output_retirement_fails ... ok
+test tests::project_replacement_ack_core_orphans_only_old_epoch_and_failed_preflight_is_unchanged ... ok
+test tests::project_replacement_generation_detects_unchanged_content_after_initial_preflight ... ok
+test tests::project_replacement_generation_exact_fence_reaches_both_validation_boundaries ... ok
+test tests::project_replacement_generation_legacy_invocation_retains_its_existing_contract ... ok
+test tests::project_replacement_generation_retains_owner_incarnation_revalidation ... ok
+test tests::project_replacement_generation_stale_initial_preflight_has_no_replacement_effect ... ok
+test tests::project_replacement_generation_unsafe_identity_rejects_before_invocation ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 1968 filtered out; finished in 0.04s
+
+    Finished `release` profile [optimized] target(s) in 0.85s
+     Running unittests src\main.rs (C:\Users\janua\AppData\Local\Temp\syndocal-native-acceptance-target\release\deps\syndocal-f037b164d4375e83.exe)

@@ -1,0 +1,736 @@
+{
+  "schemaVersion": 1,
+  "timestamp": "2026-10-04T06:31:45.405Z",
+  "passed": true,
+  "executable": "C:\\Users\\janua\\AppData\\Local\\Temp/syndocal-native-acceptance-target/release/syndocal.exe",
+  "executableSha256": "a2d3e1e216fda23df89fed8e23e4ef8f679dcb9f8f47d0abe833e13e6c1f2fd6",
+  "sidecarSha256": "e7bb740aa5ef5993dd5a5f01d37f80077c58f3996f51a0874f9565c79a843c12",
+  "runnerSha256": "6880eb0e03d8d058c436acb562a811ded9fffc6f0649cd0a18ee688e203a5ed2",
+  "backendHarnessSha256": "ade29aa256d8ff17374bb4b3e893ea9a07f71f8fa2cf2bb72b21f80d4e0e8b1f",
+  "tapHarnessSha256": "d0d981b13635ca213f21940f97f0ae5af4183379a933d5bd5a2a19d2ef1c4095",
+  "tapControllerSha256": "e39579ff069cd2a3ce3cc7e6c30f8c204a421f1ee2685e83c376bbbb8dd80270",
+  "tapQaReceiverSha256": "c8824d544eff5c7933eeceeb5242fb41ce774b10222fb9e53dfd9bedd3b85bba",
+  "profile": "jp.seraf.ktn.syndocal.qa.mcp-lifecycle",
+  "checks": [
+    {
+      "check": "native-app-tap-changes-engine-and-header-bpm",
+      "passed": true,
+      "before": {
+        "clock": {
+          "bpm": 120,
+          "beat_phase": 0.7733792,
+          "beat_counter": 7,
+          "tap_count": 0,
+          "source": "Manual",
+          "external_sync_age_ms": null,
+          "external_sync_locked": false
+        },
+        "timelineRuntime": {
+          "transport_epoch": 1,
+          "transport_generation": 1,
+          "loop_runtime": {
+            "generation": 0,
+            "status": "disabled",
+            "a_ms": null,
+            "b_ms": null,
+            "wrap_count": 0
+          },
+          "follow_runtime": {
+            "epoch": 1,
+            "generation": 0,
+            "status": "idle",
+            "admission_reason": null,
+            "outcome": null,
+            "source_timeline_id": null,
+            "target_timeline_id": null,
+            "elapsed_ms": 0,
+            "duration_ms": 0,
+            "progress_millis": 0,
+            "fault": null,
+            "transition_hold_active": false,
+            "waiting_for_pedal_start": false
+          }
+        },
+        "readout": "120",
+        "footer": "Ready",
+        "headerHeight": 42,
+        "frontend": {
+          "snapshotClock": {
+            "bpm": 120,
+            "beat_phase": 0.7733792,
+            "beat_counter": 7,
+            "tap_count": 0,
+            "source": "Manual",
+            "external_sync_age_ms": null,
+            "external_sync_locked": false
+          },
+          "latestClock": {
+            "bpm": 120,
+            "beat_phase": 0.7733792,
+            "beat_counter": 7,
+            "tap_count": 0,
+            "source": "Manual",
+            "external_sync_age_ms": null,
+            "external_sync_locked": false
+          },
+          "readGuard": {
+            "generation": 0,
+            "authority": {
+              "project_epoch": 0,
+              "project_revision": 1,
+              "checkpoint_hash": "bb748cb7817ff3a10fd06531ac985e8478e6c41768522a48a1e5448af58a5c43"
+            }
+          },
+          "watermark": {
+            "scope": {
+              "project_epoch": 0,
+              "project_revision": 1,
+              "checkpoint_hash": "bb748cb7817ff3a10fd06531ac985e8478e6c41768522a48a1e5448af58a5c43",
+              "project_read_generation": 0
+            },
+            "watermark": {
+              "transport_epoch": 1,
+              "transport_generation": 1,
+              "loop_generation": 0,
+              "follow_generation": 0
+            }
+          },
+          "authorityPollPending": false,
+          "timelineTransportCanonicalSnapshotGeneration": 0
+        }
+      },
+      "samples": [
+        {
+          "issuedAt": 1791095484584,
+          "clock": {
+            "bpm": 120,
+            "beat_phase": 0.4544576,
+            "beat_counter": 8,
+            "tap_count": 1,
+            "source": "Manual",
+            "external_sync_age_ms": null,
+            "external_sync_locked": false
+          },
+          "timelineRuntime": {
+            "transport_epoch": 1,
+            "transport_generation": 2,
+            "loop_runtime": {
+              "generation": 0,
+              "status": "disabled",
+              "a_ms": null,
+              "b_ms": null,
+              "wrap_count": 0
+            },
+            "follow_runtime": {
+              "epoch": 1,
+              "generation": 0,
+              "status": "idle",
+              "admission_reason": null,
+              "outcome": null,
+              "source_timeline_id": null,
+              "target_timeline_id": null,
+              "elapsed_ms": 0,
+              "duration_ms": 0,
+              "progress_millis": 0,
+              "fault": null,
+              "transition_hold_active": false,
+              "waiting_for_pedal_start": false
+            }
+          },
+          "readout": "120",
+          "footer": "Tapped BPM 120.0",
+          "headerHeight": 42,
+          "frontend": {
+            "snapshotClock": {
+              "bpm": 120,
+              "beat_phase": 0.409877,
+              "beat_counter": 8,
+              "tap_count": 1,
+              "source": "Manual",
+              "external_sync_age_ms": null,
+              "external_sync_locked": false
+            },
+            "latestClock": {
+              "bpm": 120,
+              "beat_phase": 0.409877,
+              "beat_counter": 8,
+              "tap_count": 1,
+              "source": "Manual",
+              "external_sync_age_ms": null,
+              "external_sync_locked": false
+            },
+            "readGuard": {
+              "generation": 0,
+              "authority": {
+                "project_epoch": 0,
+                "project_revision": 1,
+                "checkpoint_hash": "bb748cb7817ff3a10fd06531ac985e8478e6c41768522a48a1e5448af58a5c43"
+              }
+            },
+            "watermark": {
+              "scope": {
+                "project_epoch": 0,
+                "project_revision": 1,
+                "checkpoint_hash": "bb748cb7817ff3a10fd06531ac985e8478e6c41768522a48a1e5448af58a5c43",
+                "project_read_generation": 0
+              },
+              "watermark": {
+                "transport_epoch": 1,
+                "transport_generation": 2,
+                "loop_generation": 0,
+                "follow_generation": 0
+              }
+            },
+            "authorityPollPending": false,
+            "timelineTransportCanonicalSnapshotGeneration": 0
+          }
+        },
+        {
+          "issuedAt": 1791095485325,
+          "clock": {
+            "bpm": 81.16886,
+            "beat_phase": 0.22774264,
+            "beat_counter": 0,
+            "tap_count": 2,
+            "source": "Tap",
+            "external_sync_age_ms": null,
+            "external_sync_locked": false
+          },
+          "timelineRuntime": {
+            "transport_epoch": 1,
+            "transport_generation": 3,
+            "loop_runtime": {
+              "generation": 0,
+              "status": "disabled",
+              "a_ms": null,
+              "b_ms": null,
+              "wrap_count": 0
+            },
+            "follow_runtime": {
+              "epoch": 1,
+              "generation": 0,
+              "status": "idle",
+              "admission_reason": null,
+              "outcome": null,
+              "source_timeline_id": null,
+              "target_timeline_id": null,
+              "elapsed_ms": 0,
+              "duration_ms": 0,
+              "progress_millis": 0,
+              "fault": null,
+              "transition_hold_active": false,
+              "waiting_for_pedal_start": false
+            }
+          },
+          "readout": "81",
+          "footer": "Tapped BPM 81.2",
+          "headerHeight": 42,
+          "frontend": {
+            "snapshotClock": {
+              "bpm": 81.16886,
+              "beat_phase": 0.16625196,
+              "beat_counter": 0,
+              "tap_count": 2,
+              "source": "Tap",
+              "external_sync_age_ms": null,
+              "external_sync_locked": false
+            },
+            "latestClock": {
+              "bpm": 81.16886,
+              "beat_phase": 0.16625196,
+              "beat_counter": 0,
+              "tap_count": 2,
+              "source": "Tap",
+              "external_sync_age_ms": null,
+              "external_sync_locked": false
+            },
+            "readGuard": {
+              "generation": 0,
+              "authority": {
+                "project_epoch": 0,
+                "project_revision": 2,
+                "checkpoint_hash": "9ada58e7c201779c24a03b22726cf34b16c8ef2297b729a65654c4676929a43b"
+              }
+            },
+            "watermark": {
+              "scope": {
+                "project_epoch": 0,
+                "project_revision": 2,
+                "checkpoint_hash": "9ada58e7c201779c24a03b22726cf34b16c8ef2297b729a65654c4676929a43b",
+                "project_read_generation": 0
+              },
+              "watermark": {
+                "transport_epoch": 1,
+                "transport_generation": 3,
+                "loop_generation": 0,
+                "follow_generation": 0
+              }
+            },
+            "authorityPollPending": true,
+            "timelineTransportCanonicalSnapshotGeneration": 0
+          }
+        },
+        {
+          "issuedAt": 1791095486083,
+          "clock": {
+            "bpm": 80.13305,
+            "beat_phase": 0.24407992,
+            "beat_counter": 0,
+            "tap_count": 3,
+            "source": "Tap",
+            "external_sync_age_ms": null,
+            "external_sync_locked": false
+          },
+          "timelineRuntime": {
+            "transport_epoch": 1,
+            "transport_generation": 4,
+            "loop_runtime": {
+              "generation": 0,
+              "status": "disabled",
+              "a_ms": null,
+              "b_ms": null,
+              "wrap_count": 0
+            },
+            "follow_runtime": {
+              "epoch": 1,
+              "generation": 0,
+              "status": "idle",
+              "admission_reason": null,
+              "outcome": null,
+              "source_timeline_id": null,
+              "target_timeline_id": null,
+              "elapsed_ms": 0,
+              "duration_ms": 0,
+              "progress_millis": 0,
+              "fault": null,
+              "transition_hold_active": false,
+              "waiting_for_pedal_start": false
+            }
+          },
+          "readout": "80",
+          "footer": "Tapped BPM 80.1",
+          "headerHeight": 42,
+          "frontend": {
+            "snapshotClock": {
+              "bpm": 80.13305,
+              "beat_phase": 0.21372686,
+              "beat_counter": 0,
+              "tap_count": 3,
+              "source": "Tap",
+              "external_sync_age_ms": null,
+              "external_sync_locked": false
+            },
+            "latestClock": {
+              "bpm": 80.13305,
+              "beat_phase": 0.21372686,
+              "beat_counter": 0,
+              "tap_count": 3,
+              "source": "Tap",
+              "external_sync_age_ms": null,
+              "external_sync_locked": false
+            },
+            "readGuard": {
+              "generation": 0,
+              "authority": {
+                "project_epoch": 0,
+                "project_revision": 3,
+                "checkpoint_hash": "530030d5c9a8e894467bfcd84fa30ac6d22663619069e1f8e71545080cbaec1e"
+              }
+            },
+            "watermark": {
+              "scope": {
+                "project_epoch": 0,
+                "project_revision": 3,
+                "checkpoint_hash": "530030d5c9a8e894467bfcd84fa30ac6d22663619069e1f8e71545080cbaec1e",
+                "project_read_generation": 0
+              },
+              "watermark": {
+                "transport_epoch": 1,
+                "transport_generation": 4,
+                "loop_generation": 0,
+                "follow_generation": 0
+              }
+            },
+            "authorityPollPending": false,
+            "timelineTransportCanonicalSnapshotGeneration": 0
+          }
+        },
+        {
+          "issuedAt": 1791095486828,
+          "clock": {
+            "bpm": 78.795715,
+            "beat_phase": 0.22140966,
+            "beat_counter": 0,
+            "tap_count": 4,
+            "source": "Tap",
+            "external_sync_age_ms": null,
+            "external_sync_locked": false
+          },
+          "timelineRuntime": {
+            "transport_epoch": 1,
+            "transport_generation": 5,
+            "loop_runtime": {
+              "generation": 0,
+              "status": "disabled",
+              "a_ms": null,
+              "b_ms": null,
+              "wrap_count": 0
+            },
+            "follow_runtime": {
+              "epoch": 1,
+              "generation": 0,
+              "status": "idle",
+              "admission_reason": null,
+              "outcome": null,
+              "source_timeline_id": null,
+              "target_timeline_id": null,
+              "elapsed_ms": 0,
+              "duration_ms": 0,
+              "progress_millis": 0,
+              "fault": null,
+              "transition_hold_active": false,
+              "waiting_for_pedal_start": false
+            }
+          },
+          "readout": "79",
+          "footer": "Tapped BPM 78.8",
+          "headerHeight": 42,
+          "frontend": {
+            "snapshotClock": {
+              "bpm": 78.795715,
+              "beat_phase": 0.19156328,
+              "beat_counter": 0,
+              "tap_count": 4,
+              "source": "Tap",
+              "external_sync_age_ms": null,
+              "external_sync_locked": false
+            },
+            "latestClock": {
+              "bpm": 78.795715,
+              "beat_phase": 0.19156328,
+              "beat_counter": 0,
+              "tap_count": 4,
+              "source": "Tap",
+              "external_sync_age_ms": null,
+              "external_sync_locked": false
+            },
+            "readGuard": {
+              "generation": 0,
+              "authority": {
+                "project_epoch": 0,
+                "project_revision": 4,
+                "checkpoint_hash": "4bcc8707c751c6c8caa9b3c04cd91ab44a3fa276e451f858450987d9c58f0c7c"
+              }
+            },
+            "watermark": {
+              "scope": {
+                "project_epoch": 0,
+                "project_revision": 4,
+                "checkpoint_hash": "4bcc8707c751c6c8caa9b3c04cd91ab44a3fa276e451f858450987d9c58f0c7c",
+                "project_read_generation": 0
+              },
+              "watermark": {
+                "transport_epoch": 1,
+                "transport_generation": 5,
+                "loop_generation": 0,
+                "follow_generation": 0
+              }
+            },
+            "authorityPollPending": false,
+            "timelineTransportCanonicalSnapshotGeneration": 0
+          }
+        },
+        {
+          "issuedAt": 1791095487573,
+          "clock": {
+            "bpm": 79.82331,
+            "beat_phase": 0.2173058,
+            "beat_counter": 0,
+            "tap_count": 4,
+            "source": "Tap",
+            "external_sync_age_ms": null,
+            "external_sync_locked": false
+          },
+          "timelineRuntime": {
+            "transport_epoch": 1,
+            "transport_generation": 6,
+            "loop_runtime": {
+              "generation": 0,
+              "status": "disabled",
+              "a_ms": null,
+              "b_ms": null,
+              "wrap_count": 0
+            },
+            "follow_runtime": {
+              "epoch": 1,
+              "generation": 0,
+              "status": "idle",
+              "admission_reason": null,
+              "outcome": null,
+              "source_timeline_id": null,
+              "target_timeline_id": null,
+              "elapsed_ms": 0,
+              "duration_ms": 0,
+              "progress_millis": 0,
+              "fault": null,
+              "transition_hold_active": false,
+              "waiting_for_pedal_start": false
+            }
+          },
+          "readout": "80",
+          "footer": "Tapped BPM 79.8",
+          "headerHeight": 42,
+          "frontend": {
+            "snapshotClock": {
+              "bpm": 79.82331,
+              "beat_phase": 0.18706965,
+              "beat_counter": 0,
+              "tap_count": 4,
+              "source": "Tap",
+              "external_sync_age_ms": null,
+              "external_sync_locked": false
+            },
+            "latestClock": {
+              "bpm": 79.82331,
+              "beat_phase": 0.18706965,
+              "beat_counter": 0,
+              "tap_count": 4,
+              "source": "Tap",
+              "external_sync_age_ms": null,
+              "external_sync_locked": false
+            },
+            "readGuard": {
+              "generation": 0,
+              "authority": {
+                "project_epoch": 0,
+                "project_revision": 5,
+                "checkpoint_hash": "eba9b74584c0c4791f89ff72b7ec34463b090a473268ecd2639a3af62cca471e"
+              }
+            },
+            "watermark": {
+              "scope": {
+                "project_epoch": 0,
+                "project_revision": 5,
+                "checkpoint_hash": "eba9b74584c0c4791f89ff72b7ec34463b090a473268ecd2639a3af62cca471e",
+                "project_read_generation": 0
+              },
+              "watermark": {
+                "transport_epoch": 1,
+                "transport_generation": 6,
+                "loop_generation": 0,
+                "follow_generation": 0
+              }
+            },
+            "authorityPollPending": false,
+            "timelineTransportCanonicalSnapshotGeneration": 0
+          }
+        }
+      ],
+      "settled": {
+        "clock": {
+          "bpm": 79.82331,
+          "beat_phase": 0.30863497,
+          "beat_counter": 0,
+          "tap_count": 4,
+          "source": "Tap",
+          "external_sync_age_ms": null,
+          "external_sync_locked": false
+        },
+        "timelineRuntime": {
+          "transport_epoch": 1,
+          "transport_generation": 6,
+          "loop_runtime": {
+            "generation": 0,
+            "status": "disabled",
+            "a_ms": null,
+            "b_ms": null,
+            "wrap_count": 0
+          },
+          "follow_runtime": {
+            "epoch": 1,
+            "generation": 0,
+            "status": "idle",
+            "admission_reason": null,
+            "outcome": null,
+            "source_timeline_id": null,
+            "target_timeline_id": null,
+            "elapsed_ms": 0,
+            "duration_ms": 0,
+            "progress_millis": 0,
+            "fault": null,
+            "transition_hold_active": false,
+            "waiting_for_pedal_start": false
+          }
+        },
+        "readout": "80",
+        "footer": "Tapped BPM 79.8",
+        "headerHeight": 42,
+        "frontend": {
+          "snapshotClock": {
+            "bpm": 79.82331,
+            "beat_phase": 0.27803975,
+            "beat_counter": 0,
+            "tap_count": 4,
+            "source": "Tap",
+            "external_sync_age_ms": null,
+            "external_sync_locked": false
+          },
+          "latestClock": {
+            "bpm": 79.82331,
+            "beat_phase": 0.27803975,
+            "beat_counter": 0,
+            "tap_count": 4,
+            "source": "Tap",
+            "external_sync_age_ms": null,
+            "external_sync_locked": false
+          },
+          "readGuard": {
+            "generation": 0,
+            "authority": {
+              "project_epoch": 0,
+              "project_revision": 5,
+              "checkpoint_hash": "eba9b74584c0c4791f89ff72b7ec34463b090a473268ecd2639a3af62cca471e"
+            }
+          },
+          "watermark": {
+            "scope": {
+              "project_epoch": 0,
+              "project_revision": 5,
+              "checkpoint_hash": "eba9b74584c0c4791f89ff72b7ec34463b090a473268ecd2639a3af62cca471e",
+              "project_read_generation": 0
+            },
+            "watermark": {
+              "transport_epoch": 1,
+              "transport_generation": 6,
+              "loop_generation": 0,
+              "follow_generation": 0
+            }
+          },
+          "authorityPollPending": false,
+          "timelineTransportCanonicalSnapshotGeneration": 0
+        }
+      },
+      "reset": {
+        "clock": {
+          "bpm": 79.82331,
+          "beat_phase": 0.57428074,
+          "beat_counter": 3,
+          "tap_count": 1,
+          "source": "Tap",
+          "external_sync_age_ms": null,
+          "external_sync_locked": false
+        },
+        "timelineRuntime": {
+          "transport_epoch": 1,
+          "transport_generation": 7,
+          "loop_runtime": {
+            "generation": 0,
+            "status": "disabled",
+            "a_ms": null,
+            "b_ms": null,
+            "wrap_count": 0
+          },
+          "follow_runtime": {
+            "epoch": 1,
+            "generation": 0,
+            "status": "idle",
+            "admission_reason": null,
+            "outcome": null,
+            "source_timeline_id": null,
+            "target_timeline_id": null,
+            "elapsed_ms": 0,
+            "duration_ms": 0,
+            "progress_millis": 0,
+            "fault": null,
+            "transition_hold_active": false,
+            "waiting_for_pedal_start": false
+          }
+        },
+        "readout": "80",
+        "footer": "Tapped BPM 79.8",
+        "headerHeight": 42,
+        "frontend": {
+          "snapshotClock": {
+            "bpm": 79.82331,
+            "beat_phase": 0.54323745,
+            "beat_counter": 3,
+            "tap_count": 1,
+            "source": "Tap",
+            "external_sync_age_ms": null,
+            "external_sync_locked": false
+          },
+          "latestClock": {
+            "bpm": 79.82331,
+            "beat_phase": 0.54323745,
+            "beat_counter": 3,
+            "tap_count": 1,
+            "source": "Tap",
+            "external_sync_age_ms": null,
+            "external_sync_locked": false
+          },
+          "readGuard": {
+            "generation": 0,
+            "authority": {
+              "project_epoch": 0,
+              "project_revision": 5,
+              "checkpoint_hash": "eba9b74584c0c4791f89ff72b7ec34463b090a473268ecd2639a3af62cca471e"
+            }
+          },
+          "watermark": {
+            "scope": {
+              "project_epoch": 0,
+              "project_revision": 5,
+              "checkpoint_hash": "eba9b74584c0c4791f89ff72b7ec34463b090a473268ecd2639a3af62cca471e",
+              "project_read_generation": 0
+            },
+            "watermark": {
+              "transport_epoch": 1,
+              "transport_generation": 7,
+              "loop_generation": 0,
+              "follow_generation": 0
+            }
+          },
+          "authorityPollPending": false,
+          "timelineTransportCanonicalSnapshotGeneration": 0
+        }
+      }
+    },
+    {
+      "check": "isolated-first-launch-read",
+      "passed": true
+    },
+    {
+      "check": "dead-process-descriptor-rejected",
+      "passed": true
+    },
+    {
+      "check": "crash-restart-retired-principal-rejected",
+      "passed": true
+    },
+    {
+      "check": "old-credential-and-receipt-not-adopted",
+      "passed": true
+    },
+    {
+      "check": "old-launch-proof-rejected-fresh-read-succeeds",
+      "passed": true
+    },
+    {
+      "check": "graceful-native-close",
+      "passed": true
+    },
+    {
+      "check": "graceful-restart-does-not-restore-grant",
+      "passed": true
+    }
+  ],
+  "normalAppIdentityUnchanged": true,
+  "credentialRevoked": true,
+  "credentialFileRemoved": true,
+  "nativePanicLocations": [],
+  "nonclaims": [
+    "QA identifier release build, not the distributed artifact",
+    "No physical output activation; optional high-risk or lease-expiry probe mutates isolated backend lease authority only; optional Tap probe changes isolated empty-project tempo; optional project-file probe loads private JSON with no file media or video source activation",
+    "No durable authored/output mutation crash publication acceptance"
+  ]
+}
