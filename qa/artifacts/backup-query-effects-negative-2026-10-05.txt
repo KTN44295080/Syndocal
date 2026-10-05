@@ -1,0 +1,45 @@
+WHERE_LINKERS=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+PINNED_LINKER=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+["test","-p","syndocal","--release","--locked","-j","1","--config","profile.release.package.syndocal.opt-level=0","--config","profile.release.package.syndocal.codegen-units=256","project_file_managed_backup_app_query_does_not_create_managed_directory","--","--nocapture"]
+   Compiling tauri v2.5.1
+   Compiling tauri-plugin-updater v2.2.0
+   Compiling syndocal v1.2.0-alpha.69 (C:\Users\janua\OneDrive\ドキュメント\GitHub\Syndocal\app\src-tauri)
+   Compiling tauri-plugin-single-instance v2.2.2
+warning: unnecessary parentheses around assigned value
+   --> app\src-tauri\src\project_file_managed_backup.rs:112:22
+    |
+112 |         let result = (|| {
+    |                      ^
+...
+117 |         });
+    |          ^
+    |
+    = note: `#[warn(unused_parens)]` (part of `#[warn(unused)]`) on by default
+help: remove these parentheses
+    |
+112 ~         let result = || {
+113 |             let observed = observe(app.handle()).unwrap();
+...
+116 |             assert!(!managed.exists(), "Real application target validation created a directory");
+117 ~         };
+    |
+
+warning: `syndocal` (bin "syndocal" test) generated 1 warning (run `cargo fix --bin "syndocal" -p syndocal --tests` to apply 1 suggestion)
+    Finished `release` profile [optimized] target(s) in 5m 47s
+     Running unittests src\main.rs (C:\Users\janua\AppData\Local\Temp\syndocal-native-acceptance-target\release\deps\syndocal-41cd4ce392874b4c.exe)
+
+running 1 test
+
+thread 'project_file_managed_backup::tests::project_file_managed_backup_app_query_does_not_create_managed_directory' (124248) panicked at app\src-tauri\src\project_file_managed_backup.rs:114:13:
+Real application backup observation created a directory
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test project_file_managed_backup::tests::project_file_managed_backup_app_query_does_not_create_managed_directory ... FAILED
+
+failures:
+
+failures:
+    project_file_managed_backup::tests::project_file_managed_backup_app_query_does_not_create_managed_directory
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1997 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p syndocal --bin syndocal`

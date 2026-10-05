@@ -1,0 +1,5 @@
+
+> syndocal@1.2.0-alpha.69 check:project-publication-e4 C:\Users\janua\OneDrive\ドキュメント\GitHub\Syndocal\app
+> node scripts/check-project-publication-e4.mjs
+
+project publication E4 checks passed

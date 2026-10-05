@@ -1,0 +1,84 @@
+{
+  "protected": [
+    {
+      "path": "app/scripts/check-dj-link-runtime.mjs",
+      "sha256": "b7464267f30fc7bc752c40d584f00f994d9d57dfc7dad7db38c8fecf9f5e7db8"
+    },
+    {
+      "path": "app/src/App.tsx",
+      "sha256": "83262ccf62e59c60e9c5e1cbfca57d07152d658bc7f592e0f91e4b87c8fdb608"
+    },
+    {
+      "path": "app/src/uiLocalization.ts",
+      "sha256": "6cdaf364b65cfba87a5096f22664098e4060a0ad6d0764f235dd3df828fbd407"
+    },
+    {
+      "path": "qa/AI3_NATIVE_INGRESS_CURRENT_SOURCE_CHECKPOINT_2026-09-14.md",
+      "sha256": "e765e78a80e8058d9a6fefa55c79fd84296a587fc216f4e17cda59bba3020e04"
+    },
+    {
+      "path": "app/src/remotePairingPin.ts",
+      "sha256": "a3154c7818b1ccae114a9d1078ad3dc2195cb0da07de10cd0b7af3cc58719481"
+    }
+  ],
+  "owned_files": [
+    "app/src-tauri/Cargo.toml",
+    "app/src-tauri/src/main.rs",
+    "app/src-tauri/src/project_file_managed_backup.rs"
+  ],
+  "files": [
+    {
+      "path": "app/src-tauri/Cargo.toml",
+      "sha256": "4de75f017efb82fa707af9b17fafb550e05313546ef999ccbef3ef77f3abce1d"
+    },
+    {
+      "path": "app/src-tauri/src/main.rs",
+      "sha256": "0a60dd2e956d892ae6dc0e9ccee3dbc0a2e32233325d4ea2ee47c42a40af485a"
+    },
+    {
+      "path": "app/src-tauri/src/project_file_managed_backup.rs",
+      "sha256": "abd0d849cbe65f9d3e4126b011435aa37656d304a6b8e5962806e38e9d6907a0"
+    },
+    {
+      "path": "app/src-tauri/src/project_file_control_plane.rs",
+      "sha256": "c33b521b2125f0bb5e3cb18fca1d8c916878e62425fa00b1d67c13d9764c7dff"
+    },
+    {
+      "path": "tools/syndocal-mcp/native-project-backup.mjs",
+      "sha256": "047b6cc21364b47c32adaf3a8942146851c2325b2c5dec74786fe307a60601c3"
+    },
+    {
+      "path": "tools/syndocal-mcp/check-native-lifecycle.mjs",
+      "sha256": "91300b3e0944404abbfad4237706f01b7957da0cb60339ce2da7603fa4b43294"
+    },
+    {
+      "path": "tools/syndocal-mcp/server.mjs",
+      "sha256": "c746d24da41ec28bd6fa675c32c7cc522e7faf333b43b4ccfb9d17e26df9ee7e"
+    },
+    {
+      "path": "app/src/App.tsx",
+      "sha256": "83262ccf62e59c60e9c5e1cbfca57d07152d658bc7f592e0f91e4b87c8fdb608"
+    },
+    {
+      "path": "app/src/tapTempo.ts",
+      "sha256": "e39579ff069cd2a3ce3cc7e6c30f8c204a421f1ee2685e83c376bbbb8dd80270"
+    },
+    {
+      "path": "app/src/nativeTapTempoQa.ts",
+      "sha256": "c8824d544eff5c7933eeceeb5242fb41ce774b10222fb9e53dfd9bedd3b85bba"
+    },
+    {
+      "path": "tools/syndocal-mcp/native-tap-bpm.mjs",
+      "sha256": "5cb600daa0ae5fcfa105573f6b682a868f99c2f7de69883856ddc35ce994129c"
+    },
+    {
+      "path": "app/scripts/run-tauri.mjs",
+      "sha256": "4d910453491262a8b8cb2ae985b97f09970779d5304ad14bf1bd0b0ba9ef90b7"
+    },
+    {
+      "path": "Cargo.toml",
+      "sha256": "72866edcc43052353957d6316553a5b9abf83c7a0dd4b007ac50fafdcac541f2"
+    }
+  ],
+  "base": "fc070e0b1e020a40d4013f5dbe77ad902e5afba6"
+}

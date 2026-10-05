@@ -3,6 +3,8 @@
 Branch: `codex/showclock-review-20260912`. Base: `5cb4e474`.
 The environment-executable goal remains active; broader File/AI8 acceptance is Open.
 
+Correction recorded after this checkpoint: the application-path getter used here actually created the managed directory. The original pure candidate test and native existing-directory slice did not prove the no-directory-creation claim. See [the failing regression and corrected implementation](MCP_BACKUP_QUERY_EFFECTS_2026-10-05.md). The original artifacts remain unchanged.
+
 Authenticated external MCP can query a server-issued managed backup target and
 create the complete current project backup without individual human approval.
 The routes are `syndocal.query.project.backup.authority.v1` (R0 Read) and

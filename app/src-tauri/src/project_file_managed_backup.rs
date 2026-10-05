@@ -39,8 +39,11 @@ fn key_in(directory: &Path, destination: &Path) -> Result<PathBuf, String> {
     Ok(super::project_backup_path(&root, id))
 }
 
-pub(super) fn key(app: &AppHandle, destination: &str) -> Result<PathBuf, String> {
-    let directory = super::app_data_subdirectory(app, super::PROJECT_BACKUP_DIRECTORY)?;
+pub(super) fn key<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    destination: &str,
+) -> Result<PathBuf, String> {
+    let directory = super::app_data_subdirectory_path(app, super::PROJECT_BACKUP_DIRECTORY)?;
     key_in(&directory, Path::new(destination))
 }
 
@@ -67,8 +70,8 @@ fn observe_in(directory: &Path, now: u64, high_water: u64) -> Result<PathBuf, St
     Err("project_file_backup_target_range_busy".into())
 }
 
-pub(super) fn observe(app: &AppHandle) -> Result<PathBuf, String> {
-    let directory = super::app_data_subdirectory(app, super::PROJECT_BACKUP_DIRECTORY)?;
+pub(super) fn observe<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
+    let directory = super::app_data_subdirectory_path(app, super::PROJECT_BACKUP_DIRECTORY)?;
     observe_in(
         &directory,
         super::current_unix_ms().min(MAX as u128) as u64,
@@ -95,6 +98,67 @@ pub(super) fn legacy_target(directory: &Path, destination: &str) -> Result<PathB
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tauri::Manager;
+
+    #[test]
+    fn project_file_managed_backup_app_query_does_not_create_managed_directory() {
+        let identifier = format!(
+            "syndocal-backup-query-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let mut context = tauri::test::mock_context(tauri::test::noop_assets());
+        context.config_mut().identifier = identifier.clone();
+        let app = tauri::test::mock_builder().build(context).unwrap();
+        let root = app.path().app_local_data_dir().unwrap();
+        assert!(root.is_absolute());
+        assert_eq!(
+            root.parent(),
+            Some(app.path().local_data_dir().unwrap().as_path())
+        );
+        assert_eq!(
+            root.file_name().unwrap().to_str(),
+            Some(identifier.as_str())
+        );
+        assert!(!root.exists(), "Test profile must be exclusively owned");
+        fs::create_dir(&root).unwrap();
+        let managed = root.join(super::super::PROJECT_BACKUP_DIRECTORY);
+        let result = || {
+            let observed = observe(app.handle()).unwrap();
+            assert!(
+                !managed.exists(),
+                "Real application backup observation created a directory"
+            );
+            assert_eq!(
+                key(app.handle(), observed.to_str().unwrap()).unwrap(),
+                observed
+            );
+            assert!(
+                !managed.exists(),
+                "Real application target validation created a directory"
+            );
+            assert!(super::super::list_project_backups_in(&managed)
+                .unwrap()
+                .is_empty());
+            assert!(
+                !managed.exists(),
+                "Listing a missing directory must remain read-only"
+            );
+        };
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(result));
+        // Cleanup is limited to the newly owned empty profile and the
+        // directory created by the regression, never other profile files.
+        if managed.exists() {
+            fs::remove_dir(&managed).unwrap();
+        }
+        fs::remove_dir(&root).unwrap();
+        if let Err(error) = outcome {
+            std::panic::resume_unwind(error);
+        }
+    }
     fn directory() -> PathBuf {
         let parent = std::env::temp_dir().join(format!(
             "syndocal-project-file-backup-{}-{}",

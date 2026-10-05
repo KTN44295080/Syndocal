@@ -1,0 +1,18 @@
+{
+  "purpose": "Actual application-path query regression before removing directory creation",
+  "base": "fc070e0b1e020a40d4013f5dbe77ad902e5afba6",
+  "files": [
+    {
+      "sha256": "4de75f017efb82fa707af9b17fafb550e05313546ef999ccbef3ef77f3abce1d",
+      "path": "app/src-tauri/Cargo.toml"
+    },
+    {
+      "sha256": "f7f88ee56d507b1eeacc6726119b537b00e98e7b64185b66d807ecd6a54365f4",
+      "path": "app/src-tauri/src/main.rs"
+    },
+    {
+      "sha256": "1d3a35893392f65bc1275a8158216ed620a2c09cff4c96d2bf078eb17ea3dec8",
+      "path": "app/src-tauri/src/project_file_managed_backup.rs"
+    }
+  ]
+}

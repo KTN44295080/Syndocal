@@ -1,0 +1,5 @@
+
+> syndocal@1.2.0-alpha.69 check:ai0-source-coverage C:\Users\janua\OneDrive\ドキュメント\GitHub\Syndocal\app
+> node scripts/check-ai0-source-coverage.mjs
+
+AI0 source coverage ok; Tauri 553, Engine 281, Remote 116, MIDI/OSC/DMX 206, Frontend 481, Keyboard 33, UI literal invokes 334; fail-closed authority gates 6

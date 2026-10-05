@@ -59849,7 +59849,7 @@ fn redo_project_transaction(
     )
 }
 
-fn app_data_subdirectory_path(app: &tauri::AppHandle, name: &str) -> Result<PathBuf, String> {
+fn app_data_subdirectory_path<R: tauri::Runtime>(app: &tauri::AppHandle<R>, name: &str) -> Result<PathBuf, String> {
     let directory = app
         .path()
         .app_local_data_dir()
@@ -62572,7 +62572,7 @@ fn save_project_backup_v1(
         BeginProjectPublicationV1::New { ticket, pending }
         | BeginProjectPublicationV1::Resume { ticket, pending } => (*ticket, pending),
     };
-    let directory = app_data_subdirectory(&app, PROJECT_BACKUP_DIRECTORY)?;
+    let directory = app_data_subdirectory_path(&app, PROJECT_BACKUP_DIRECTORY)?;
     project_file_control_plane::create_backup_directory(&state, &directory)?;
     let selected = if pending.target_path.is_some() {
         pending
@@ -62742,7 +62742,7 @@ fn write_project_backup_in(
 
 #[tauri::command]
 fn list_project_backups(app: tauri::AppHandle) -> Result<Vec<ProjectBackupSummary>, String> {
-    let directory = app_data_subdirectory(&app, PROJECT_BACKUP_DIRECTORY)?;
+    let directory = app_data_subdirectory_path(&app, PROJECT_BACKUP_DIRECTORY)?;
     list_project_backups_in(&directory)
 }
 
@@ -62762,7 +62762,7 @@ fn load_project_backup(
     );
     let entry_owner_incarnation =
         project_transaction_owner_binding_for_window(&state, window.label(), &owner_id)?;
-    let directory = app_data_subdirectory(&app, PROJECT_BACKUP_DIRECTORY)?;
+    let directory = app_data_subdirectory_path(&app, PROJECT_BACKUP_DIRECTORY)?;
     let backup = read_project_backup(&project_backup_path(&directory, backup_id))?;
     let current_path = backup
         .source_path
@@ -62805,7 +62805,7 @@ fn delete_project_backup(
     state: State<'_, AppState>,
     backup_id: u64,
 ) -> Result<(), String> {
-    let directory = app_data_subdirectory(&app, PROJECT_BACKUP_DIRECTORY)?;
+    let directory = app_data_subdirectory_path(&app, PROJECT_BACKUP_DIRECTORY)?;
     let journal_path = project_recovery_authority_state_path(&app)?;
     let _publication = state
         .project_save_publication
