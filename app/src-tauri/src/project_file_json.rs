@@ -115,7 +115,7 @@ pub(super) fn parse_project_json_bytes(bytes: &[u8]) -> Result<Value, String> {
     parse_project_json(json)
 }
 
-fn read_bounded_project_bytes(
+pub(super) fn read_bounded_project_bytes(
     reader: impl Read,
     declared_size: u64,
     limit: u64,

@@ -1,0 +1,5 @@
+
+> syndocal@1.2.0-alpha.69 check:agent-bridge C:\Users\janua\OneDrive\ドキュメント\GitHub\Syndocal\app
+> node scripts/check-agent-bridge.mjs
+
+agent bridge: PASS (15 groups; real processor/runtime/confirmation modules, no native or device calls)

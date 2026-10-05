@@ -1,6 +1,6 @@
 # Syndocal MCP adapter
 
-Dependency-free Node.js sidecar for a running Syndocal agent bridge. It exposes fixture listing, fixture reading, exact-project fixture transforms, exact-project Video BO control, request-status lookup, bounded runtime diagnostics, canonical backend capability discovery, read-only recording status, and the 64 reviewed canonical control-plane operations. It does not open devices, start Syndocal, or bypass the backend's output ownership, lease, safety, or typed-command checks.
+Dependency-free Node.js sidecar for a running Syndocal agent bridge. It exposes fixture listing, fixture reading, exact-project fixture transforms, exact-project Video BO control, request-status lookup, bounded runtime diagnostics, canonical backend capability discovery, read-only recording status, and the 65 reviewed canonical control-plane operations. It does not open devices, start Syndocal, or bypass the backend's output ownership, lease, safety, or typed-command checks.
 
 ## Start
 
@@ -69,7 +69,7 @@ On Windows, process identity is read through a fixed, hidden PowerShell `Get-Pro
 - `syndocal_get_runtime_status({})`: read the project token, lighting/video blackout bits, up to 64 video-output summaries, Timeline transport state, the exact `timeline_runtime` projection, and a separate `observations.output_ownership_status` read. The authority bundle and ownership observation are captured by separate reads and must not be treated as one atomic image.
 - `syndocal_get_control_plane_capabilities({})`: read a bounded projection of the backend-owned canonical operation/source inventory and exact local adapter policy. `FailClosed` entries are discovery-only and cannot be invoked through MCP.
 - `syndocal_get_recording_status({})`: read bounded active recording, dimensions, frame/drop counters, audio inclusion, path, and last-error state. It never starts, stops, finalizes, or replaces a recording.
-- `syndocal_execute_control_plane({requestId,operationId,request})`: execute one of the 64 reviewed canonical operations through a static typed Tauri adapter. `operationId` must be present in the capability registry and `request` must be that operation's exact typed request object. Unreviewed or `FailClosed` inventory entries are rejected.
+- `syndocal_execute_control_plane({requestId,operationId,request})`: execute one of the 65 reviewed canonical operations through a static typed Tauri adapter. `operationId` must be present in the capability registry and `request` must be that operation's exact typed request object. Unreviewed or `FailClosed` inventory entries are rejected.
 
 Project file operations take `request: {request: <typed body>}`. Use
 `syndocal.query.project.file.authority.v1` with
@@ -95,6 +95,17 @@ and any retention warning. Original project source metadata comes from the
 native save ticket. These writes require an exact File grant and promoted
 principal; authority/status queries require their exact Read grants. External
 MCP has no individual human confirmation.
+
+Inspect a known managed backup ID with
+`syndocal.query.project.backup.inspect.v1`, `request:{request:{schema_version:1,backup_id:<ID>}}`
+and its exact Read grant. It returns bounded original metadata, byte count,
+SHA-256 of the same bytes that were parsed, and the `.sdc` source-path projection
+used by restore. It creates no directory or reservation and rejects malformed,
+unsafe, missing or oversized backups. An open competing Windows writer makes
+the query fail; issue a new read after it closes. The projected source path is
+metadata, not existence/write authorization, and the digest does not reserve
+the file against later changes. Canonical backup list/restore/delete are still
+unimplemented; inspection does not execute them.
 
 Use the original full write body with
 `syndocal.query.project.file.status.v1` or

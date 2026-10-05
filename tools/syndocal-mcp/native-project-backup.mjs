@@ -8,6 +8,7 @@ import {openNativeStdioSession} from './native-stdio-session.mjs';
 // native cleanup. Never enter retention against existing unowned QA backups.
 export async function nativeProjectBackup(backend, options, checks) {
   const ids={create:'syndocal.project.backup.create.v1',authority:'syndocal.query.project.backup.authority.v1',
+    inspect:'syndocal.query.project.backup.inspect.v1',
     status:'syndocal.query.project.file.status.v1',ack:'syndocal.project.file.acknowledge.v1'};
   const directory=path.join(process.env.LOCALAPPDATA,'jp.seraf.ktn.syndocal.qa.mcp-lifecycle','project-backups');
   const baseline=await fs.readdir(directory).catch(error=>{if(error.code==='ENOENT')return [];throw error;});
@@ -53,6 +54,19 @@ export async function nativeProjectBackup(backend, options, checks) {
     await grant('read',ids.authority);const request=await prepare();const deniedCreate=await send(ids.create,request);
     assert.equal(deniedCreate.status,'rejected');assert.equal(deniedCreate.error,'agent_missing_grant');await grant('file',ids.create);
     checks.push({check:'external-backup-exact-r0-read-and-r5-file-grants-without-human-approval',passed:true});
+    const inspectionOperation=registry.canonical_operations.find(value=>value.operation_id===ids.inspect);
+    assert.equal(inspectionOperation.risk,'r0');assert.equal(inspectionOperation.adapter_policy,'local_window_read_only');
+    const deniedInspection=await send(ids.inspect,{schema_version:1,backup_id:1});
+    assert.equal(deniedInspection.status,'rejected');assert.equal(deniedInspection.error,'agent_missing_grant');
+    await grant('read',ids.inspect);
+    for(const value of [{schema_version:2,backup_id:1},{schema_version:1,backup_id:0},
+      {schema_version:1,backup_id:Number.MAX_SAFE_INTEGER+1}]){
+      await failed(ids.inspect,value,/invalid project backup inspection request/);
+    }
+    for(const field of ['path','destination','owner_id','principal','skip_confirmation']){
+      await failed(ids.inspect,{schema_version:1,backup_id:1,[field]:'forged'},/request_invalid/);
+    }
+    checks.push({check:'external-backup-inspection-exact-r0-grant-and-strict-id-only-ingress',passed:true});
     await failed(ids.authority,{schema_version:2},/backup authority schema/);
     await failed(ids.authority,{schema_version:1,destination:'C:/forged'},/request_invalid/);
     await failed(ids.create,{...request,owner_id:'forged'},/request_invalid/);
@@ -76,6 +90,19 @@ export async function nativeProjectBackup(backend, options, checks) {
     assert.deepEqual(await state(),before,'Backup keeps project/path/disposition and closed output authority');
     checks.push({check:'external-backup-full-project-byte-hash-source-metadata-and-unchanged-authority',passed:true,
       receipt:saved,bytes:bytes.length,elapsedMs:performance.now()-start});
+    const inspectStarted=performance.now();
+    const inspected=await success(ids.inspect,{schema_version:1,backup_id:saved.backup.id});
+    assert.equal(inspected.schema_version,1);assert.deepEqual(inspected.backup,saved.backup);
+    assert.equal(inspected.artifact_sha256,digest(bytes));assert.equal(inspected.restore_source_path,saved.backup.source_path);
+    assert.deepEqual(await state(),before);assert.deepEqual(await fs.readFile(saved.target_path),bytes);
+    checks.push({check:'external-backup-inspection-same-byte-hash-metadata-restoration-path-and-read-purity',passed:true,
+      inspection:inspected,elapsedMs:performance.now()-inspectStarted});
+    const competingWriter=await fs.open(saved.target_path,'r+');
+    try { await failed(ids.inspect,{schema_version:1,backup_id:saved.backup.id},/inspect_open/); }
+    finally { await competingWriter.close(); }
+    assert.deepEqual(await success(ids.inspect,{schema_version:1,backup_id:saved.backup.id}),inspected);
+    assert.deepEqual(await fs.readFile(saved.target_path),bytes);
+    checks.push({check:'external-backup-inspection-competing-writer-rejection-and-explicit-read-recovery',passed:true});
     assert.deepEqual(await success(ids.status,request),saved);assert.deepEqual(await success(ids.create,request),saved);
     await failed(ids.create,{...request,destination:request.destination.replace(/backup-[0-9]+\.json$/,'backup-1.json')},/shape_conflict/);
     const protectedDelete=await backend.evaluate(`window.__TAURI_INTERNALS__.invoke('delete_project_backup', ${JSON.stringify({backupId:saved.backup.id})}).then(value=>({value}),error=>({error:String(error).slice(0,768)}))`);
@@ -83,10 +110,31 @@ export async function nativeProjectBackup(backend, options, checks) {
     const ack=await success(ids.ack,request);assert.equal(ack.phase,'acknowledged');created[0].acknowledged=true;
     assert.deepEqual(await success(ids.ack,request),ack);assert.deepEqual(await success(ids.status,request),ack);
     await backend.invoke('delete_project_backup',{backupId:saved.backup.id});created[0].deleted=true;
+    await failed(ids.inspect,{schema_version:1,backup_id:saved.backup.id},/inspect_metadata/);
     const next=await prepare();assert.equal(next.request_id,2);const second=await success(ids.create,next);
     assert.equal(second.phase,'succeeded');created.push({request:next,receipt:second,acknowledged:false});
     await success(ids.ack,next);created[1].acknowledged=true;
     checks.push({check:'external-backup-exact-replay-status-protected-delete-ack-reack-and-next-sequence',passed:true});
+    const original=await fs.readFile(second.target_path),secondEnvelope=JSON.parse(original);
+    try {
+      for(const [name,bytes,pattern] of [
+        ['filename-id-mismatch',Buffer.from(JSON.stringify({...secondEnvelope,id:second.backup.id+1})),/does not match filename ID/],
+        ['future-envelope',Buffer.from(JSON.stringify({...secondEnvelope,version:2})),/Unsupported project backup version/],
+        ['ignored-duplicate-key',Buffer.from(`{"future":0,"future":1,${original.toString('utf8').trimStart().slice(1)}`),/duplicate object key/],
+        ['invalid-utf8',Buffer.from([255,123]),/not valid UTF-8/],
+        ['unsafe-metadata',Buffer.from(JSON.stringify({...secondEnvelope,created_at_unix_ms:Number.MAX_SAFE_INTEGER+1})),/invalid project backup inspection metadata/],
+      ]) {
+        await fs.writeFile(second.target_path,bytes);
+        await failed(ids.inspect,{schema_version:1,backup_id:second.backup.id},pattern);
+        assert.deepEqual(await fs.readFile(second.target_path),bytes,name);
+      }
+      const file=await fs.open(second.target_path,'w');
+      try { await file.truncate(128*1024*1024+1); } finally { await file.close(); }
+      await failed(ids.inspect,{schema_version:1,backup_id:second.backup.id},/limit is 134217728/);
+      assert.equal((await fs.stat(second.target_path)).size,128*1024*1024+1);
+    } finally { await fs.writeFile(second.target_path,original); }
+    assert.equal((await success(ids.inspect,{schema_version:1,backup_id:second.backup.id})).artifact_sha256,digest(original));
+    checks.push({check:'external-backup-inspection-missing-mismatched-future-duplicate-utf8-unsafe-and-oversize-rejection-without-writes',passed:true});
   } finally {
     try {
       for(const entry of created){if(!entry.acknowledged){await success(ids.ack,entry.request);entry.acknowledged=true;}

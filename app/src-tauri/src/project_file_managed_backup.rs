@@ -39,6 +39,16 @@ fn key_in(directory: &Path, destination: &Path) -> Result<PathBuf, String> {
     Ok(super::project_backup_path(&root, id))
 }
 
+pub(super) fn path_for_id(directory: &Path, id: u64) -> Result<PathBuf, String> {
+    if id == 0 || id > MAX {
+        return Err("project_file_backup_target_id_unsafe".into());
+    }
+    Ok(super::project_backup_path(
+        &canonical_directory(directory)?,
+        id,
+    ))
+}
+
 pub(super) fn key<R: tauri::Runtime>(
     app: &AppHandle<R>,
     destination: &str,
@@ -146,6 +156,18 @@ mod tests {
             assert!(
                 !managed.exists(),
                 "Listing a missing directory must remain read-only"
+            );
+            assert!(super::super::project_backup_inspection::inspect(
+                app.handle(),
+                protocol::control_plane_file::ProjectBackupInspectRequestV1 {
+                    schema_version: 1,
+                    backup_id: 1,
+                }
+            )
+            .is_err());
+            assert!(
+                !managed.exists(),
+                "Inspecting a missing backup must remain read-only"
             );
         };
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(result));

@@ -1,0 +1,1 @@
+Native Tauri admission inventory exact: 554 commands, SHA-256 6267c381b5e9c0a57af1cb7bee41802ea0eae68f8b7662bc6d905e82dc7f4e9c; 18 negative fixtures rejected

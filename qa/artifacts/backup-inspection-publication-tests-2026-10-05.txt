@@ -1,0 +1,24 @@
+Verified exact just-built native test binary: C:\Users\janua\AppData\Local\Temp\syndocal-native-acceptance-target\release\deps\syndocal-41cd4ce392874b4c.exe
+Filter: project_publication_
+
+running 18 tests
+test project_publication_missing::tests::missing_publication_rejects_unknown_old_shape_gaps_and_unresolved_origin_without_mutation ... ok
+test tests::project_publication_request_requires_exact_canonical_wire_preimage ... ok
+test project_publication_missing::tests::missing_publication_abandon_ack_and_next_sequence_survive_reply_loss ... ok
+test tests::project_publication_mutation_requires_exact_window_owner_and_operator_unlock ... ok
+test tests::project_publication_ack_reply_loss_retries_exact_tombstone_only ... ok
+test tests::project_publication_final_export_rechecks_owner_and_operator_before_target_write ... ok
+test project_publication_missing::tests::missing_publication_owner_binding_retirement_and_failed_write_preserve_authority ... ok
+test tests::clean_save_serial_update_preserves_additive_project_publication_journal ... ok
+test tests::project_publication_origin_allows_only_one_unacknowledged_request ... ok
+test tests::project_publication_restart_adopts_only_exact_retired_owner_into_current_window ... ok
+test tests::project_publication_restart_reconciliation_restores_exact_save_effects ... ok
+test tests::project_publication_staging_is_durable_exact_and_replay_safe ... ok
+test tests::project_publication_target_digest_runs_outside_all_mutation_locks ... ok
+test tests::project_publication_abandon_requires_exact_window_owner_and_operator_unlock ... ok
+test tests::project_publication_preexisting_exact_template_is_idempotent_without_authority_adoption ... ok
+test tests::project_publication_query_reobserves_and_excludes_original_finalizer ... ok
+test tests::project_publication_direct_failures_require_checked_staging_cleanup ... ok
+test tests::project_publication_newer_reservation_rejects_stale_template_before_target_write ... ok
+
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 1982 filtered out; finished in 0.08s

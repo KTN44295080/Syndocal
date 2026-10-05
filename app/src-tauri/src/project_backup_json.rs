@@ -34,10 +34,7 @@ fn parse_project_backup_json(json: &str) -> Result<ProjectBackupEnvelope, String
 }
 
 pub(super) fn read_project_backup_json(path: &Path) -> Result<ProjectBackupEnvelope, String> {
-    let directory = path
-        .parent()
-        .ok_or_else(|| "Project backup has no managed parent directory".to_string())?;
-    let expected_id = project_backup_id_from_reserved_target(directory, path)?;
+    expected_backup_id(path)?;
     let json = read_json_with_byte_limit(path, PROJECT_BACKUP_MAX_BYTES, "Project backup file")
         .map_err(|error| {
             bounded_diagnostic(format_args!(
@@ -45,7 +42,15 @@ pub(super) fn read_project_backup_json(path: &Path) -> Result<ProjectBackupEnvel
                 path.display()
             ))
         })?;
-    let backup = parse_project_backup_json(&json).map_err(|error| {
+    decode_project_backup_json_at_path(path, &json)
+}
+
+pub(super) fn decode_project_backup_json_at_path(
+    path: &Path,
+    json: &str,
+) -> Result<ProjectBackupEnvelope, String> {
+    let expected_id = expected_backup_id(path)?;
+    let backup = parse_project_backup_json(json).map_err(|error| {
         bounded_diagnostic(format_args!(
             "Invalid project backup: {error}; file {}",
             path.display()
@@ -58,6 +63,13 @@ pub(super) fn read_project_backup_json(path: &Path) -> Result<ProjectBackupEnvel
         ));
     }
     Ok(backup)
+}
+
+fn expected_backup_id(path: &Path) -> Result<u64, String> {
+    let directory = path
+        .parent()
+        .ok_or_else(|| "Project backup has no managed parent directory".to_string())?;
+    project_backup_id_from_reserved_target(directory, path)
 }
 
 pub(super) fn project_backup_json_bytes(backup: &ProjectBackupEnvelope) -> Result<Vec<u8>, String> {

@@ -7,6 +7,7 @@ pub const SAVE_AS_ID: &str = "syndocal.project.save_as.v1";
 pub const TEMPLATE_ID: &str = "syndocal.project.template.save.v1";
 pub const BACKUP_ID: &str = "syndocal.project.backup.create.v1";
 pub const BACKUP_AUTHORITY_ID: &str = "syndocal.query.project.backup.authority.v1";
+pub const BACKUP_INSPECT_ID: &str = "syndocal.query.project.backup.inspect.v1";
 pub const AUTHORITY_ID: &str = "syndocal.query.project.file.authority.v1";
 pub const STATUS_ID: &str = "syndocal.query.project.file.status.v1";
 pub const ACK_ID: &str = "syndocal.project.file.acknowledge.v1";
@@ -55,6 +56,63 @@ impl ProjectBackupAuthorityRequestV1 {
     pub fn validate(&self) -> Result<(), &'static str> {
         if self.schema_version != 1 {
             return Err("invalid project backup authority schema");
+        }
+        Ok(())
+    }
+}
+
+/// A managed ID, never a caller-selected filesystem path or owner identity.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectBackupInspectRequestV1 {
+    pub schema_version: u16,
+    pub backup_id: u64,
+}
+impl ProjectBackupInspectRequestV1 {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.schema_version != 1
+            || self.backup_id == 0
+            || self.backup_id > MAX_SAFE_JAVASCRIPT_INTEGER
+        {
+            return Err("invalid project backup inspection request");
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectBackupInspectionV1 {
+    pub schema_version: u16,
+    pub backup: ProjectFileBackupSummaryV1,
+    /// Exact bytes consumed by the same parse; not a later reopening of the file.
+    pub artifact_sha256: String,
+    /// Existing restore policy keeps only .sdc source paths. This is metadata,
+    /// not a claim that the source file exists or is authorized for writing.
+    pub restore_source_path: Option<String>,
+}
+impl ProjectBackupInspectionV1 {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        ProjectBackupInspectRequestV1 {
+            schema_version: self.schema_version,
+            backup_id: self.backup.id,
+        }
+        .validate()?;
+        if self.backup.created_at_unix_ms > MAX_SAFE_JAVASCRIPT_INTEGER
+            || self.backup.bytes == 0
+            || self.backup.bytes > 128 * 1024 * 1024
+            || self.backup.reason.len() > 4096
+            || self
+                .backup
+                .source_path
+                .as_ref()
+                .is_some_and(|path| !valid_path(path))
+            || self.restore_source_path.as_ref().is_some_and(|path| {
+                !valid_path(path) || self.backup.source_path.as_ref() != Some(path)
+            })
+            || !valid_hash(&self.artifact_sha256)
+        {
+            return Err("invalid project backup inspection metadata");
         }
         Ok(())
     }
@@ -240,6 +298,66 @@ mod tests {
             let mut query = serde_json::json!({"schema_version":1});
             query[field] = serde_json::json!(true);
             assert!(serde_json::from_value::<ProjectBackupAuthorityRequestV1>(query).is_err());
+        }
+    }
+
+    #[test]
+    fn project_file_backup_inspection_rejects_paths_identity_and_unsafe_metadata() {
+        let valid = ProjectBackupInspectRequestV1 {
+            schema_version: 1,
+            backup_id: 1,
+        };
+        valid.validate().unwrap();
+        for id in [0, MAX_SAFE_JAVASCRIPT_INTEGER + 1] {
+            assert!(ProjectBackupInspectRequestV1 {
+                backup_id: id,
+                ..valid.clone()
+            }
+            .validate()
+            .is_err());
+        }
+        assert!(ProjectBackupInspectRequestV1 {
+            schema_version: 2,
+            ..valid.clone()
+        }
+        .validate()
+        .is_err());
+        for field in [
+            "path",
+            "destination",
+            "owner_id",
+            "principal",
+            "skip_confirmation",
+        ] {
+            let mut value = serde_json::to_value(&valid).unwrap();
+            value[field] = serde_json::json!("forged");
+            assert!(serde_json::from_value::<ProjectBackupInspectRequestV1>(value).is_err());
+        }
+        let response = ProjectBackupInspectionV1 {
+            schema_version: 1,
+            backup: ProjectFileBackupSummaryV1 {
+                id: 1,
+                created_at_unix_ms: 0,
+                source_path: Some("C:/公演/日本語.sdc".into()),
+                reason: "before update".into(),
+                bytes: 100,
+            },
+            artifact_sha256: "a".repeat(64),
+            restore_source_path: Some("C:/公演/日本語.sdc".into()),
+        };
+        response.validate().unwrap();
+        for index in 0..7 {
+            let mut invalid = response.clone();
+            match index {
+                0 => invalid.backup.created_at_unix_ms = MAX_SAFE_JAVASCRIPT_INTEGER + 1,
+                1 => invalid.backup.bytes = 128 * 1024 * 1024 + 1,
+                2 => invalid.backup.reason = "あ".repeat(1366),
+                3 => invalid.backup.source_path = Some("line\nbreak.sdc".into()),
+                4 => invalid.restore_source_path = Some("C:/another.sdc".into()),
+                5 => invalid.artifact_sha256 = "A".repeat(64),
+                _ => invalid.backup.bytes = 0,
+            }
+            assert!(invalid.validate().is_err(), "accepted case {index}");
         }
     }
 }
