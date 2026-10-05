@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { tapTempo } from "../src/tapTempo.ts";
+import { tapTempo, tapTempoMessage } from "../src/tapTempo.ts";
 
 const deferred = () => {
   let resolve;
@@ -8,6 +8,16 @@ const deferred = () => {
   return { promise, resolve };
 };
 const clock = { bpm: 80, tap_count: 2, source: "Tap" };
+assert.equal(tapTempoMessage(clock), "Tapped BPM 80.0");
+for (const source of ["Manual", "Tap"]) {
+  assert.equal(tapTempoMessage({ ...clock, tap_count: 1, source }), "Tap again to measure BPM.");
+}
+for (const source of ["AbletonLink", "DjLink", "MidiClock", "MidiTimecode", "Ltc"]) {
+  const message = tapTempoMessage({ ...clock, source });
+  assert.match(message, /current clock source:/);
+  assert.doesNotMatch(message, /^Tapped BPM/);
+  assert.match(tapTempoMessage({ ...clock, tap_count: 1, source }), /^Tap again.*Current clock source:/);
+}
 let cases = 0;
 const fixture = () => {
   const state = { epoch: 1, authority: 0, applied: [], calls: [], snapshot: { clock } };
@@ -61,5 +71,6 @@ for (const boundary of ["invokeTap", "refreshAuthority", "refreshSnapshot"]) {
 }
 const app = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
 assert.match(app, /await tapTempo\(\{[\s\S]*?inFlightAuthorityPoll: \(\) => projectAuthorityPollInFlight,[\s\S]*?refreshAuthority: pollProjectAuthorityBundle,[\s\S]*?refreshSnapshot,/);
+assert.match(app, /setMessage\(tapTempoMessage\(clock\)\)/);
 assert.match(app, /VITE_SYNDOCAL_NATIVE_TAP_QA === "1" && isTauriRuntime\(\)/);
 console.log(`PASS Tap tempo: ${cases} async regression cases; authority-before-snapshot, stale/replacement fences and no mutation retries.`);

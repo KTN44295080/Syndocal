@@ -1,0 +1,20 @@
+WHERE_LINKERS=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+PINNED_LINKER=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+["test","-p","engine","--release","--locked","-j","1","--config","profile.release.package.engine.opt-level=0","--config","profile.release.package.engine.codegen-units=256","bpm_clock","--","--nocapture"]
+   Compiling protocol v1.2.0-alpha.69 (C:\Users\janua\OneDrive\ドキュメント\GitHub\Syndocal\crates\protocol)
+   Compiling video v1.2.0-alpha.69 (C:\Users\janua\OneDrive\ドキュメント\GitHub\Syndocal\crates\video)
+   Compiling io v1.2.0-alpha.69 (C:\Users\janua\OneDrive\ドキュメント\GitHub\Syndocal\crates\io)
+   Compiling engine v1.2.0-alpha.69 (C:\Users\janua\OneDrive\ドキュメント\GitHub\Syndocal\crates\engine)
+    Finished `release` profile [optimized] target(s) in 2m 38s
+     Running unittests src\lib.rs (C:\Users\janua\AppData\Local\Temp\syndocal-native-acceptance-target\release\deps\engine-63c23f3dc21cd88a.exe)
+
+running 7 tests
+test tests::bpm_clock_clamps_manual_bpm_and_tracks_phase ... ok
+test tests::bpm_clock_external_ingress_between_taps_restarts_each_interval ... ok
+test tests::bpm_clock_estimates_bpm_from_taps ... ok
+test tests::bpm_clock_external_ingress_replaces_an_already_measured_tap_tempo ... ok
+test tests::bpm_clock_estimates_bpm_from_midi_clock_pulses ... ok
+test tests::bpm_clock_syncs_external_link_source_and_phase ... ok
+test tests::bpm_clock_preserves_absolute_beat_position_across_midi_pulses_and_resync ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 1105 filtered out; finished in 0.00s

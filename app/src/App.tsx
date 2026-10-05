@@ -605,7 +605,7 @@ import {
 } from "./cueEffectRecall";
 import type { CueEffectRecallChange } from "./cueEffectRecall";
 import { createSnapshotRequestGuard } from "./snapshotRequestGuard";
-import { tapTempo } from "./tapTempo";
+import { tapTempo, tapTempoMessage } from "./tapTempo";
 import { installNativeTapTempoQa } from "./nativeTapTempoQa";
 import {
   createTimelineRuntimeSnapshotIngress,
@@ -17508,7 +17508,7 @@ export default function App() {
         refreshSnapshot,
         applied: (clock) => {
           setBpmDraft(clock.bpm.toFixed(1));
-          setMessage(`Tapped BPM ${clock.bpm.toFixed(1)}`);
+          setMessage(tapTempoMessage(clock));
         },
       });
     } catch (error) {

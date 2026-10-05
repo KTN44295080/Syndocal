@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import path from 'node:path';
 
 // Invoke the real App Tap callback via the opt-in acceptance-build receiver.
 // Backend diagnostics only; no DOM click, physical output or second Tap implementation.
-export async function nativeTapBpm(backend, checks) {
+export async function nativeTapBpm(backend, checks, { evidencePath } = {}) {
   const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
   assert.equal(await backend.evaluate('typeof window.__syndocalQaTapTempo'), 'function',
     'Build the isolated QA artifact with VITE_SYNDOCAL_NATIVE_TAP_QA=1');
@@ -29,6 +31,14 @@ export async function nativeTapBpm(backend, checks) {
   const samples = [], start = Date.now() + 100;
   const check = { check: 'native-app-tap-changes-engine-and-header-bpm', passed: false, before, tapTarget, samples };
   checks.push(check);
+  const capture = async name => {
+    if (!evidencePath) return;
+    assert.ok(path.isAbsolute(evidencePath));
+    const screenshot = `${evidencePath}.${name}.png`;
+    const result = await backend.send('Page.captureScreenshot', { format: 'png' });
+    await fs.writeFile(screenshot, Buffer.from(result.data, 'base64'), { flag: 'wx' });
+    (check.screenshots ??= {})[name] = screenshot;
+  };
   for (let index = 0; index < 5; index++) {
     const target = start + index * 750;
     if (Date.now() < target) await pause(target - Date.now());
@@ -38,16 +48,20 @@ export async function nativeTapBpm(backend, checks) {
     samples.push(sample);
     assert.equal(Number(sample.readout), Math.round(sample.clock.bpm),
       `Tap ${index + 1} callback must finish with the native readout reflecting the engine: ${JSON.stringify(sample)}`);
-    assert.match(sample.footer, /Tapped BPM/, 'App must report the applied Tap result');
+    assert.match(sample.footer, index === 0 ? /Tap again to measure BPM/ : /Tapped BPM/,
+      'The first Tap waits for an interval; later taps report the applied result');
     assert.equal(sample.headerHeight, 42, 'One-row header sizing is preserved');
+    if (index === 0) await capture('first-tap');
   }
   const settled = await observe();
   assert.ok(settled.clock.bpm > 70 && settled.clock.bpm < 90, `750ms taps should approach 80 BPM: ${JSON.stringify(samples)}`);
   assert.equal(settled.clock.source, 'Tap');
+  await capture('measured');
   await pause(2200);
   await backend.evaluate('window.__syndocalQaTapTempo().then(()=>true)');
   const reset = await observe();
   assert.equal(reset.clock.tap_count, 1, 'Long pause restarts the Tap interval history');
   assert.equal(reset.clock.bpm, settled.clock.bpm, 'The first tap after a long pause retains the existing tempo');
+  assert.match(reset.footer, /Tap again to measure BPM/, 'A reset interval must not claim a newly applied BPM');
   Object.assign(check, { passed: true, settled, reset });
 }

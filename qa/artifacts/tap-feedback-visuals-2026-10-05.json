@@ -1,0 +1,22 @@
+{
+  "qa_executable_sha256": "40c3705136f58522cab1db67bedcbddb508f1a91d1153b98b1a382d2384dbe8d",
+  "browser_plugin": "Not available; native process-verified backend diagnostics used per user instruction",
+  "physical_click_observed": false,
+  "views": [
+    {
+      "state": "first-tap",
+      "path": "C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-tap-feedback-native-20261005.json.first-tap.png",
+      "sha256": "fe2e7555d703d3d313bdbece12ee17152c971792cec166e4ad075f3621bfec85",
+      "bytes": 213824,
+      "inspected": true
+    },
+    {
+      "state": "measured",
+      "path": "C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-tap-feedback-native-20261005.json.measured.png",
+      "sha256": "46444305b037b817fdadeca221f2cfecb7c459eeac05b1e0b39488a900e52349",
+      "bytes": 213091,
+      "inspected": true
+    }
+  ],
+  "observations": "First Tap: header 120, pending interval message. Measured Tap: header 81, footer 80.8. Header and footer are legible; no error overlay visible."
+}

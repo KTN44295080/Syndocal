@@ -100519,6 +100519,46 @@ mod tests {
     }
 
     #[test]
+    fn bpm_clock_external_ingress_between_taps_restarts_each_interval() {
+        let now = Instant::now();
+        for source in [ClockSource::AbletonLink, ClockSource::DjLink] {
+            let mut clock = BpmClock::new(120.0, now);
+            for index in 0..4 {
+                let at = now + Duration::from_millis(index * 750);
+                clock.sync_external_clock(124.0, 0.25, source.clone(), at);
+                clock.tap(at);
+                let sample = clock.snapshot(at);
+                assert_eq!(sample.tap_count, 1, "source={source:?}, sample={index}");
+                assert_eq!(sample.bpm, 124.0);
+                assert_eq!(sample.source, source);
+            }
+            // Once ingress stops, the next 750ms tap has a real interval.
+            let at = now + Duration::from_millis(3_000);
+            clock.tap(at);
+            let measured = clock.snapshot(at);
+            assert_eq!(measured.tap_count, 2);
+            assert!((measured.bpm - 80.0).abs() < 0.01);
+            assert_eq!(measured.source, ClockSource::Tap);
+        }
+    }
+
+    #[test]
+    fn bpm_clock_external_ingress_replaces_an_already_measured_tap_tempo() {
+        let now = Instant::now();
+        let mut clock = BpmClock::new(120.0, now);
+        clock.tap(now);
+        clock.tap(now + Duration::from_millis(750));
+        assert!((clock.snapshot(now).bpm - 80.0).abs() < 0.01);
+        clock.sync_external_clock(
+            124.0, 0.5, ClockSource::AbletonLink, now + Duration::from_millis(800),
+        );
+        let overwritten = clock.snapshot(now + Duration::from_millis(800));
+        assert_eq!(overwritten.bpm, 124.0);
+        assert_eq!(overwritten.source, ClockSource::AbletonLink);
+        assert_eq!(overwritten.tap_count, 0);
+    }
+
+    #[test]
     fn bpm_clock_estimates_bpm_from_midi_clock_pulses() {
         let now = Instant::now();
         let mut clock = BpmClock::new(90.0, now);

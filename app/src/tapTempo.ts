@@ -1,4 +1,17 @@
 import type { EngineSnapshot } from "./types";
+import { clockSourceLabel } from "./clockDisplay.ts";
+
+export function tapTempoMessage(clock: EngineSnapshot["clock"]): string {
+  const external = clock.source !== "Manual" && clock.source !== "Tap";
+  if (clock.tap_count < 2) {
+    return external
+      ? `Tap again to measure BPM. Current clock source: ${clockSourceLabel(clock.source)}.`
+      : "Tap again to measure BPM.";
+  }
+  return external
+    ? `BPM ${clock.bpm.toFixed(1)}; current clock source: ${clockSourceLabel(clock.source)}.`
+    : `Tapped BPM ${clock.bpm.toFixed(1)}`;
+}
 
 export type TapTempoOptions = {
   projectEpoch: () => number;

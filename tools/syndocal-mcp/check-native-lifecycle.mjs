@@ -255,7 +255,7 @@ try {
   }
   if (backupJson) await nativeBackupJson(backend, checks, { inputDiagnostics });
   if (projectJson) await nativeProjectJson(backend, checks, { inputDiagnostics, authoredControls });
-  if (tapBpm) await nativeTapBpm(backend, checks);
+  if (tapBpm) await nativeTapBpm(backend, checks, { evidencePath: evidence });
   const diagnostic = diagnostics ? await nativeDiagnosticExports(backend.invoke) : undefined;
   if (diagnostic) checks.push(diagnostic.check);
   credentialDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'syndocal-lifecycle-credential-'));
