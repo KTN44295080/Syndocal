@@ -1,6 +1,6 @@
 # Syndocal MCP adapter
 
-Dependency-free Node.js sidecar for a running Syndocal agent bridge. It exposes fixture listing, fixture reading, exact-project fixture transforms, exact-project Video BO control, request-status lookup, bounded runtime diagnostics, canonical backend capability discovery, read-only recording status, and the 53 reviewed canonical control-plane operations. It does not open devices, start Syndocal, or bypass the backend's output ownership, lease, safety, or typed-command checks.
+Dependency-free Node.js sidecar for a running Syndocal agent bridge. It exposes fixture listing, fixture reading, exact-project fixture transforms, exact-project Video BO control, request-status lookup, bounded runtime diagnostics, canonical backend capability discovery, read-only recording status, and the 64 reviewed canonical control-plane operations. It does not open devices, start Syndocal, or bypass the backend's output ownership, lease, safety, or typed-command checks.
 
 ## Start
 
@@ -69,7 +69,40 @@ On Windows, process identity is read through a fixed, hidden PowerShell `Get-Pro
 - `syndocal_get_runtime_status({})`: read the project token, lighting/video blackout bits, up to 64 video-output summaries, Timeline transport state, the exact `timeline_runtime` projection, and a separate `observations.output_ownership_status` read. The authority bundle and ownership observation are captured by separate reads and must not be treated as one atomic image.
 - `syndocal_get_control_plane_capabilities({})`: read a bounded projection of the backend-owned canonical operation/source inventory and exact local adapter policy. `FailClosed` entries are discovery-only and cannot be invoked through MCP.
 - `syndocal_get_recording_status({})`: read bounded active recording, dimensions, frame/drop counters, audio inclusion, path, and last-error state. It never starts, stops, finalizes, or replaces a recording.
-- `syndocal_execute_control_plane({requestId,operationId,request})`: execute one of the 53 reviewed canonical operations through a static typed Tauri adapter. `operationId` must be present in the capability registry and `request` must be that operation's exact typed request object. Unreviewed or `FailClosed` inventory entries are rejected.
+- `syndocal_execute_control_plane({requestId,operationId,request})`: execute one of the 64 reviewed canonical operations through a static typed Tauri adapter. `operationId` must be present in the capability registry and `request` must be that operation's exact typed request object. Unreviewed or `FailClosed` inventory entries are rejected.
+
+Project file operations take `request: {request: <typed body>}`. Use
+`syndocal.query.project.file.authority.v1` with
+`{schema_version:1,operation_id:<write ID>,destination:<absolute path>}` for
+Save (`syndocal.project.save.v1`), Save As (`syndocal.project.save_as.v1`) or
+template export (`syndocal.project.template.save.v1`). Copy its `fence`,
+`path_generation`, `disposition_generation`, `next_request_id`, canonical
+`destination` and `target_sha256` into the write's `expected_fence`,
+`expected_path_generation`, `expected_disposition_generation`, `request_id`,
+`destination` and `expected_target_sha256`; also supply `schema_version:1` and
+the write `operation_id`. Null hash requires absence; otherwise the target's
+exact SHA-256 must match. Save requires the current project path.
+
+For managed backup creation, query
+`syndocal.query.project.backup.authority.v1` with `{schema_version:1}` and use
+the same write body with `operation_id:"syndocal.project.backup.create.v1"`.
+The backend selects the managed destination and binds the complete request to
+that principal/window origin for five minutes; queries create no directories
+and reserve no backup IDs. Only this exact issued request can begin or resume
+publication. Existing targets are never replaced. Backup keeps the project
+path and dirty disposition, and its receipt includes the stored backup summary
+and any retention warning. Original project source metadata comes from the
+native save ticket. These writes require an exact File grant and promoted
+principal; authority/status queries require their exact Read grants. External
+MCP has no individual human confirmation.
+
+Use the original full write body with
+`syndocal.query.project.file.status.v1` or
+`syndocal.project.file.acknowledge.v1`. Acknowledge each terminal before the next
+write in that origin's sequence. Exact replay returns the stored receipt;
+changing the body under the same request ID rejects. Acknowledged replies are
+tombstones, not the original successful receipt. This is separate from the
+outer broker UUID and `syndocal_get_request_status`. Preserve both identities.
 
 `syndocal.output.lease.authority.query.v1` takes `request: {}` and requires an
 exact ExternalMcp Read grant. It returns at most 64 current leases belonging to

@@ -270,6 +270,7 @@ mod control_plane_query;
 mod control_plane_runtime;
 mod project_replacement_control_plane;
 mod project_file_control_plane;
+mod project_file_managed_backup;
 mod output_blackout_control;
 mod dj_link_machine;
 mod dj_link_network;
@@ -51069,6 +51070,24 @@ async fn query_project_file_authority_v1(app: tauri::AppHandle, window: WebviewW
 }
 
 #[tauri::command]
+async fn create_project_backup_control_plane_v1(app: tauri::AppHandle, window: WebviewWindow,
+    request: protocol::control_plane_file::ProjectFileRequestV1,
+) -> Result<Value, String> {
+    let request = serde_json::to_value(request).map_err(|_| "project_file_request_invalid")?;
+    tauri::async_runtime::spawn_blocking(move || project_file_control_plane::execute_local(&app, &window, "syndocal.project.backup.create.v1", request))
+        .await.map_err(|_| "project_file_executor_failed")?
+}
+
+#[tauri::command]
+async fn query_project_backup_authority_v1(app: tauri::AppHandle, window: WebviewWindow,
+    request: protocol::control_plane_file::ProjectBackupAuthorityRequestV1,
+) -> Result<Value, String> {
+    let request = serde_json::to_value(request).map_err(|_| "project_file_request_invalid")?;
+    tauri::async_runtime::spawn_blocking(move || project_file_control_plane::execute_local(&app, &window, "syndocal.query.project.backup.authority.v1", request))
+        .await.map_err(|_| "project_file_executor_failed")?
+}
+
+#[tauri::command]
 async fn query_project_file_status_v1(app: tauri::AppHandle, window: WebviewWindow,
     request: protocol::control_plane_file::ProjectFileRequestV1,
 ) -> Result<Value, String> {
@@ -62448,7 +62467,7 @@ fn finalize_project_backup_publication_v1(
                 .to_string(),
         );
     }
-    publish_new_file_atomically(&prepared.temporary_path, &prepared.target_path)?;
+    project_file_control_plane::publish_backup(state, &coordinator, &prepared.temporary_path, &prepared.target_path)?;
     Ok(())
 }
 
@@ -62467,9 +62486,16 @@ fn verify_project_backup_publication_v1(
 }
 
 fn retain_project_backups_after_publication_v1(
+    state: &AppState,
     directory: &Path,
     journal_path: &Path,
 ) -> Result<(), String> {
+    let _publication = state.project_save_publication.lock()
+        .map_err(|_| "Project publication lock was poisoned")?;
+    ensure_no_project_publication_reconciliation_v1(state)?;
+    let _admission = lock_project_external_command_admission(state)?;
+    let mut coordinator = lock_project_coordinator(state)?;
+    reconcile_project_checkpoint_for_coordinator(state, &mut coordinator)?;
     let durable = load_project_recovery_authority_state_from_path(journal_path)?;
     let protected = durable
         .publication_journal
@@ -62492,6 +62518,7 @@ fn retain_project_backups_after_publication_v1(
         if protected.contains(&path) {
             continue;
         }
+        project_file_control_plane::validate_backup_retention(state, &coordinator)?;
         fs::remove_file(&path).map_err(|error| {
             format!(
                 "Project backup was published, but retention cleanup failed for backup {}: {error}",
@@ -62516,7 +62543,7 @@ fn complete_project_backup_publication_v1(
             return Err(error);
         }
     };
-    let warning = retain_project_backups_after_publication_v1(directory, journal_path).err();
+    let warning = retain_project_backups_after_publication_v1(state, directory, journal_path).err();
     persist_project_publication_success_v1(
         state,
         journal_path,
@@ -62546,10 +62573,11 @@ fn save_project_backup_v1(
         | BeginProjectPublicationV1::Resume { ticket, pending } => (*ticket, pending),
     };
     let directory = app_data_subdirectory(&app, PROJECT_BACKUP_DIRECTORY)?;
-    fs::create_dir_all(&directory)
-        .map_err(|error| format!("Unable to create project backup directory: {error}"))?;
+    project_file_control_plane::create_backup_directory(&state, &directory)?;
     let selected = if pending.target_path.is_some() {
         pending
+    } else if let Some(target) = project_file_control_plane::explicit_backup_target(&state, &directory)? {
+        persist_project_publication_auto_target_v1(&state, &journal_path, &pending, &target)?
     } else {
         let backup_id = reserve_unique_project_backup_id(
             &directory,
@@ -62575,11 +62603,13 @@ fn save_project_backup_v1(
         target_path,
         &temporary_path,
     )?;
+    let (source_path, reason) = project_file_control_plane::backup_metadata(&state, &ticket,
+        staged.source_path.clone(), staged.reason.clone().unwrap_or_default())?;
     let prepared = prepare_project_backup_v1(
         &directory,
         &ticket,
-        staged.source_path.clone(),
-        staged.reason.clone().unwrap_or_default(),
+        source_path,
+        reason,
         backup_id,
         &temporary_path,
     )?;
@@ -62611,6 +62641,9 @@ fn save_project_backup_v1(
             &prepared_pending,
             &prepared,
             &directory,
+        ),
+        Err(error) if error.starts_with("project_file_guard_") => persist_project_publication_failed_v1(
+            &state, &journal_path, &prepared_pending, error,
         ),
         Err(error) => match strong_target_file_digest(&prepared.target_path) {
             Ok(Some(actual))
@@ -132762,6 +132795,8 @@ fn main() {
             save_project_as_control_plane_v1,
             save_user_template_control_plane_v1,
             query_project_file_authority_v1,
+            create_project_backup_control_plane_v1,
+            query_project_backup_authority_v1,
             query_project_file_status_v1,
             acknowledge_project_file_control_plane_v1,
             get_operator_policy,

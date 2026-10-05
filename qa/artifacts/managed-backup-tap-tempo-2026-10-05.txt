@@ -1,0 +1,5 @@
+
+> syndocal@1.2.0-alpha.69 check:tap-tempo C:\Users\janua\OneDrive\ドキュメント\GitHub\Syndocal\app
+> node --experimental-strip-types scripts/check-tap-tempo.mjs
+
+PASS Tap tempo: 9 async regression cases; authority-before-snapshot, stale/replacement fences and no mutation retries.

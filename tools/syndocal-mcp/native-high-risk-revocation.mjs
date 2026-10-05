@@ -7,18 +7,19 @@ import { openNativeStdioSession } from './native-stdio-session.mjs';
 // Run at the last backend-only boundary before the harness closes this QA
 // process. Registering a new generation retires the automatic renderer so the
 // native claim/revoke/execute order is deterministic. No DOM or invoke patching.
-export async function nativeHighRiskRevocation(backend, options, checks, { projectReplacement = false, projectFile = false } = {}) {
+export async function nativeHighRiskRevocation(backend, options, checks, { projectReplacement = false, projectFile = false, projectBackup = false } = {}) {
   const generation = await backend.invoke('agent_bridge_register_v1');
   assert.ok(Number.isSafeInteger(generation) && generation > 0);
   for (const kind of ['file', 'output', ...(projectReplacement ? ['project_new', 'project_open'] : []),
-    ...(projectFile ? ['project_save', 'project_save_as', 'project_template'] : [])]) {
-    const publication = ['project_save', 'project_save_as', 'project_template'].includes(kind);
+    ...(projectFile ? ['project_save', 'project_save_as', 'project_template'] : []),
+    ...(projectBackup ? ['project_backup'] : [])]) {
+    const publication = ['project_save', 'project_save_as', 'project_template', 'project_backup'].includes(kind);
     const project = kind.startsWith('project_') && !publication;
     const capability = project || publication ? 'file' : kind;
     const principalId = `native-revoke-${randomUUID()}`;
     const requestId = randomUUID();
     const credentialFile = path.join(path.dirname(options.credentialFile), `${principalId}.credential`);
-    const destination = path.join(path.dirname(options.credentialFile), `${requestId}.${kind === 'project_template' ? 'sdctemplate' : publication || kind === 'project_open' ? 'sdc' : 'zip'}`);
+    let destination = path.join(path.dirname(options.credentialFile), `${requestId}.${kind === 'project_template' ? 'sdctemplate' : publication || kind === 'project_open' ? 'sdc' : 'zip'}`);
     let source;
     let beforeProject;
     let principalIncarnation;
@@ -32,7 +33,7 @@ export async function nativeHighRiskRevocation(backend, options, checks, { proje
       principalIncarnation = approval.principalIncarnation;
       // The parent is the runner's existing ACL-restricted credential directory.
       await fs.writeFile(credentialFile, approval.credential, { flag: 'wx' });
-      const operationId = publication ? `syndocal.project.${kind === 'project_template' ? 'template.save' : kind === 'project_save' ? 'save' : 'save_as'}.v1`
+      const operationId = publication ? `syndocal.project.${kind === 'project_backup' ? 'backup.create' : kind === 'project_template' ? 'template.save' : kind === 'project_save' ? 'save' : 'save_as'}.v1`
         : project ? `syndocal.project.${kind === 'project_new' ? 'new' : 'open'}.v1` : capability === 'file'
         ? 'syndocal.diagnostics.export.v1' : 'syndocal.output.lease.acquire.v2';
       await backend.invoke('agent_authority_promote_v1', { principalId, principalIncarnation });
@@ -47,11 +48,32 @@ export async function nativeHighRiskRevocation(backend, options, checks, { proje
           await fs.writeFile(destination, source, { flag: 'wx' });
         }
       }
-      const authorityResult = publication ? await backend.evaluate(`window.__TAURI_INTERNALS__.invoke('query_project_file_authority_v1', ${JSON.stringify({
-        request: { schema_version: 1, operation_id: operationId, destination },
-      })}).then(value=>({value}),error=>({error:String(error).slice(0,768)}))`) : undefined;
+      let authorityResult;
+      if (kind === 'project_backup') {
+        // Issue the managed target for this exact external principal. The
+        // automatic renderer is retired, so execute/complete the R0 read here.
+        const readOperation='syndocal.query.project.backup.authority.v1';
+        await backend.invoke('agent_authority_grant_v1', {principalId,principalIncarnation,
+          grant:{adapter:'external_mcp',capability:'read',operation_id:readOperation,project_id:null}});
+        mcp=await openNativeStdioSession({...options,principalId,principalIncarnation,credentialFile});
+        const readId=randomUUID();const readPending=await mcp.call('syndocal_execute_control_plane',
+          {requestId:readId,operationId:readOperation,request:{request:{schema_version:1}}});
+        assert.equal(readPending.status,'pending');
+        await backend.invoke('agent_bridge_claim_v1',{rendererGeneration:generation,requestId:readId});
+        const readResult=await backend.invoke('agent_bridge_execute_native_v1',{rendererGeneration:generation,requestId:readId});
+        assert.equal(readResult.ok,true);
+        await backend.invoke('agent_bridge_complete_v1',{rendererGeneration:generation,requestId:readId,result:readResult});
+        const completed=await mcp.call('syndocal_get_request_status',{requestId:readId});
+        assert.equal(completed.status,'completed');assert.equal(completed.result.ok,true);
+        authorityResult={value:completed.result.result};
+      } else if (publication) {
+        authorityResult=await backend.evaluate(`window.__TAURI_INTERNALS__.invoke('query_project_file_authority_v1', ${JSON.stringify({
+          request: {schema_version:1,operation_id:operationId,destination},
+        })}).then(value=>({value}),error=>({error:String(error).slice(0,768)}))`);
+      }
       if (publication) assert.ok(authorityResult.value, `Revocation fixture authority ${kind}: ${authorityResult.error}`);
       const fileAuthority = authorityResult?.value;
+      if (kind === 'project_backup') destination = fileAuthority.destination;
       const params = publication ? { operationId, request: { request: { schema_version: 1,
         operation_id: operationId, request_id: 1, expected_fence: fileAuthority.fence,
         expected_path_generation: fileAuthority.path_generation,
@@ -70,7 +92,7 @@ export async function nativeHighRiskRevocation(backend, options, checks, { proje
           action: { kind: 'acquire_lease', role: 'lighting' },
         } },
       };
-      mcp = await openNativeStdioSession({ ...options, principalId, principalIncarnation, credentialFile });
+      mcp ??= await openNativeStdioSession({ ...options, principalId, principalIncarnation, credentialFile });
       const admitted = await mcp.call(capability === 'file' && !project && !publication
         ? 'syndocal_export_diagnostics' : 'syndocal_execute_control_plane', { requestId, ...params });
       assert.equal(admitted.status, 'pending');

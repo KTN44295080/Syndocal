@@ -1,0 +1,100 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import {createHash, randomUUID} from 'node:crypto';
+import {openNativeStdioSession} from './native-stdio-session.mjs';
+
+// Authenticated MCP with individually owned IDs, explicit acknowledgement and
+// native cleanup. Never enter retention against existing unowned QA backups.
+export async function nativeProjectBackup(backend, options, checks) {
+  const ids={create:'syndocal.project.backup.create.v1',authority:'syndocal.query.project.backup.authority.v1',
+    status:'syndocal.query.project.file.status.v1',ack:'syndocal.project.file.acknowledge.v1'};
+  const directory=path.join(process.env.LOCALAPPDATA,'jp.seraf.ktn.syndocal.qa.mcp-lifecycle','project-backups');
+  const baseline=await fs.readdir(directory).catch(error=>{if(error.code==='ENOENT')return [];throw error;});
+  const digest=bytes=>createHash('sha256').update(bytes).digest('hex');
+  const baselineHashes=new Map(await Promise.all(baseline.map(async name=>{
+    const filename=path.join(directory,name),stat=await fs.lstat(filename);
+    assert.ok(stat.isFile()&&!stat.isSymbolicLink(),'QA fixture requires regular existing artifacts');
+    return [name,digest(await fs.readFile(filename))];
+  })));
+  const baselineSummaries=await backend.invoke('list_project_backups');
+  assert.ok(baselineSummaries.length<10,'Do not enter retention against unowned QA backups');
+  const created=[];
+  const state=async()=>{
+    const project=await backend.invoke('get_project_checkpoint',{midiMappings:[],oscMappings:[],dmxMappings:[]});
+    const bundle=await backend.invoke('get_project_authority_bundle');delete bundle.snapshot;
+    return {project,bundle,output:await backend.invoke('get_output_ownership_status')};
+  };
+  const mcp=await openNativeStdioSession(options);
+  const grant=(capability,operationId)=>backend.invoke('agent_authority_grant_v1',{principalId:options.principalId,
+    principalIncarnation:options.principalIncarnation,grant:{adapter:'external_mcp',capability,operation_id:operationId,project_id:null}});
+  const send=async(operationId,request)=>{
+    const requestId=randomUUID();let receipt=await mcp.call('syndocal_execute_control_plane',{requestId,operationId,request:{request}});
+    const deadline=Date.now()+15000;
+    while(receipt.status==='pending'&&Date.now()<deadline){await new Promise(resolve=>setTimeout(resolve,100));
+      receipt=await mcp.call('syndocal_get_request_status',{requestId});}
+    return receipt;
+  };
+  const success=async(operationId,request)=>{const receipt=await send(operationId,request);
+    assert.equal(receipt.status,'completed',JSON.stringify(receipt));assert.equal(receipt.result.ok,true,JSON.stringify(receipt.result));return receipt.result.result;};
+  const failed=async(operationId,request,pattern)=>{const before=await state(),receipt=await send(operationId,request);
+    assert.equal(receipt.status,'completed');assert.equal(receipt.result.ok,false,JSON.stringify(receipt.result));
+    assert.match(receipt.result.error.message,pattern);assert.deepEqual(await state(),before);};
+  const prepare=async()=>{const authority=await success(ids.authority,{schema_version:1});assert.equal(authority.target_sha256,null);
+    return {schema_version:1,operation_id:ids.create,request_id:authority.next_request_id,expected_fence:authority.fence,
+      expected_path_generation:authority.path_generation,expected_disposition_generation:authority.disposition_generation,
+      destination:authority.destination,expected_target_sha256:null};};
+  try {
+    const registry=await backend.invoke('get_control_plane_canonical_registry');
+    const operation=registry.canonical_operations.find(value=>value.operation_id===ids.create);
+    assert.equal(operation.risk,'r5');assert.equal(operation.adapter_policy,'local_window_project_publication');
+    assert.equal(operation.audit,'immutable');assert.equal(operation.receipt_policy,'exact_terminal_receipt');
+    const deniedRead=await send(ids.authority,{schema_version:1});assert.equal(deniedRead.status,'rejected');assert.equal(deniedRead.error,'agent_missing_grant');
+    await grant('read',ids.authority);const request=await prepare();const deniedCreate=await send(ids.create,request);
+    assert.equal(deniedCreate.status,'rejected');assert.equal(deniedCreate.error,'agent_missing_grant');await grant('file',ids.create);
+    checks.push({check:'external-backup-exact-r0-read-and-r5-file-grants-without-human-approval',passed:true});
+    await failed(ids.authority,{schema_version:2},/backup authority schema/);
+    await failed(ids.authority,{schema_version:1,destination:'C:/forged'},/request_invalid/);
+    await failed(ids.create,{...request,owner_id:'forged'},/request_invalid/);
+    await failed(ids.create,{...request,expected_target_sha256:'a'.repeat(64)},/invalid project file request/);
+    await failed(ids.create,{...request,destination:path.join(path.dirname(directory),'backup-1.json')},/backup_authority_expired_or_unknown/);
+    await failed(ids.create,{...request,expected_disposition_generation:request.expected_disposition_generation+1},/stale_fence/);
+    checks.push({check:'external-backup-future-forged-replace-outside-and-stale-request-rejection',passed:true});
+    assert.match(path.basename(request.destination),/^backup-[1-9][0-9]*\.json$/);
+    const before=await state(),start=performance.now();const saved=await success(ids.create,request);
+    assert.equal(saved.phase,'succeeded');created.push({request,receipt:saved,acknowledged:false});
+    assert.equal(saved.backup.reason,'MCP backup');assert.equal(saved.backup.source_path,before.bundle.current_project_path);
+    const bytes=await fs.readFile(saved.target_path);assert.equal(saved.backup.bytes,bytes.length);assert.equal(saved.artifact_sha256,digest(bytes));
+    const envelope=JSON.parse(bytes),combined={...envelope.project};
+    assert.equal(envelope.id,saved.backup.id);assert.equal(envelope.reason,'MCP backup');assert.equal(envelope.source_path,before.bundle.current_project_path);
+    for(const key of ['midi_mappings','osc_mappings','dmx_mappings','dj_track_triggers']){
+      assert.deepEqual(envelope[key]??[],before.project[key]??[],key);if(envelope[key]?.length)combined[key]=envelope[key];}
+    const expected=structuredClone(before.project);
+    // Known native f32 BPM serialization boundary; all other leaves stay exact.
+    combined.snapshot.clock.bpm=Math.fround(combined.snapshot.clock.bpm);expected.snapshot.clock.bpm=Math.fround(expected.snapshot.clock.bpm);
+    assert.deepEqual(combined,expected,'Complete project and all mappings');
+    assert.deepEqual(await state(),before,'Backup keeps project/path/disposition and closed output authority');
+    checks.push({check:'external-backup-full-project-byte-hash-source-metadata-and-unchanged-authority',passed:true,
+      receipt:saved,bytes:bytes.length,elapsedMs:performance.now()-start});
+    assert.deepEqual(await success(ids.status,request),saved);assert.deepEqual(await success(ids.create,request),saved);
+    await failed(ids.create,{...request,destination:request.destination.replace(/backup-[0-9]+\.json$/,'backup-1.json')},/shape_conflict/);
+    const protectedDelete=await backend.evaluate(`window.__TAURI_INTERNALS__.invoke('delete_project_backup', ${JSON.stringify({backupId:saved.backup.id})}).then(value=>({value}),error=>({error:String(error).slice(0,768)}))`);
+    assert.match(protectedDelete.error,/publication|receipt|referenced/i);assert.deepEqual(await fs.readFile(saved.target_path),bytes);
+    const ack=await success(ids.ack,request);assert.equal(ack.phase,'acknowledged');created[0].acknowledged=true;
+    assert.deepEqual(await success(ids.ack,request),ack);assert.deepEqual(await success(ids.status,request),ack);
+    await backend.invoke('delete_project_backup',{backupId:saved.backup.id});created[0].deleted=true;
+    const next=await prepare();assert.equal(next.request_id,2);const second=await success(ids.create,next);
+    assert.equal(second.phase,'succeeded');created.push({request:next,receipt:second,acknowledged:false});
+    await success(ids.ack,next);created[1].acknowledged=true;
+    checks.push({check:'external-backup-exact-replay-status-protected-delete-ack-reack-and-next-sequence',passed:true});
+  } finally {
+    try {
+      for(const entry of created){if(!entry.acknowledged){await success(ids.ack,entry.request);entry.acknowledged=true;}
+        if(!entry.deleted)await backend.invoke('delete_project_backup',{backupId:entry.receipt.backup.id});}
+    } finally { await mcp.close(); }
+    assert.deepEqual((await fs.readdir(directory)).sort(),[...baseline].sort(),'Only owned backup IDs were removed');
+    for(const [name,hash] of baselineHashes)assert.equal(digest(await fs.readFile(path.join(directory,name))),hash,name);
+    assert.deepEqual(await backend.invoke('list_project_backups'),baselineSummaries);
+  }
+  checks.push({check:'external-backup-owned-artifact-cleanup-preserves-all-existing-managed-files',passed:true});
+}

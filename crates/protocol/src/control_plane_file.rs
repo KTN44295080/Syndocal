@@ -5,12 +5,14 @@ use serde::{Deserialize, Serialize};
 pub const SAVE_ID: &str = "syndocal.project.save.v1";
 pub const SAVE_AS_ID: &str = "syndocal.project.save_as.v1";
 pub const TEMPLATE_ID: &str = "syndocal.project.template.save.v1";
+pub const BACKUP_ID: &str = "syndocal.project.backup.create.v1";
+pub const BACKUP_AUTHORITY_ID: &str = "syndocal.query.project.backup.authority.v1";
 pub const AUTHORITY_ID: &str = "syndocal.query.project.file.authority.v1";
 pub const STATUS_ID: &str = "syndocal.query.project.file.status.v1";
 pub const ACK_ID: &str = "syndocal.project.file.acknowledge.v1";
 
 pub fn publication_id(id: &str) -> bool {
-    matches!(id, SAVE_ID | SAVE_AS_ID | TEMPLATE_ID)
+    matches!(id, SAVE_ID | SAVE_AS_ID | TEMPLATE_ID | BACKUP_ID)
 }
 pub fn valid_hash(value: &str) -> bool {
     value.len() == 64
@@ -39,6 +41,20 @@ impl ProjectFileAuthorityRequestV1 {
             || !valid_path(&self.destination)
         {
             return Err("invalid project file authority request");
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectBackupAuthorityRequestV1 {
+    pub schema_version: u16,
+}
+impl ProjectBackupAuthorityRequestV1 {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.schema_version != 1 {
+            return Err("invalid project backup authority schema");
         }
         Ok(())
     }
@@ -79,6 +95,7 @@ impl ProjectFileRequestV1 {
                 .expected_target_sha256
                 .as_ref()
                 .is_some_and(|value| !valid_hash(value))
+            || (self.operation_id == BACKUP_ID && self.expected_target_sha256.is_some())
         {
             return Err("invalid project file request identity or target hash");
         }
@@ -130,6 +147,20 @@ pub struct ProjectFileStatusV1 {
     pub saved_project_revision: u64,
     pub saved_checkpoint_hash: String,
     pub error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub warning: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backup: Option<ProjectFileBackupSummaryV1>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectFileBackupSummaryV1 {
+    pub id: u64,
+    pub created_at_unix_ms: u64,
+    pub source_path: Option<String>,
+    pub reason: String,
+    pub bytes: u64,
 }
 
 #[cfg(test)]
@@ -193,5 +224,22 @@ mod tests {
         value = request();
         value.operation_id = ACK_ID.into();
         assert!(value.validate().is_err());
+    }
+    #[test]
+    fn project_file_backup_rejects_replace_hash_and_forged_authority_fields() {
+        let mut value = request();
+        value.operation_id = BACKUP_ID.into();
+        value.destination = "C:/managed/backup-1.json".into();
+        value.validate().unwrap();
+        value.expected_target_sha256 = Some("b".repeat(64));
+        assert!(value.validate().is_err());
+        assert!(ProjectBackupAuthorityRequestV1 { schema_version: 2 }
+            .validate()
+            .is_err());
+        for field in ["owner_id", "destination", "skip_confirmation"] {
+            let mut query = serde_json::json!({"schema_version":1});
+            query[field] = serde_json::json!(true);
+            assert!(serde_json::from_value::<ProjectBackupAuthorityRequestV1>(query).is_err());
+        }
     }
 }

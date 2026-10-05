@@ -21,12 +21,15 @@ import { nativeDisplayWindow } from './native-display-window.mjs';
 import { nativeRecoveryStorage } from './native-recovery-storage.mjs';
 import { nativeProjectReplacement } from './native-project-replacement.mjs';
 import { nativeProjectFile } from './native-project-file.mjs';
+import { nativeProjectBackup } from './native-project-backup.mjs';
 
 const exec = promisify(execFile);
 const args = process.argv.slice(2);
-const projectFile = args.includes('--project-file');
+const projectBackup = args.includes('--project-backup');
+if (projectBackup) args.splice(args.indexOf('--project-backup'), 1);
+const projectFile = args.includes('--project-file') || projectBackup;
 if (projectFile) {
-  args.splice(args.indexOf('--project-file'), 1);
+  if (args.includes('--project-file')) args.splice(args.indexOf('--project-file'), 1);
   assert.ok(!args.some(arg => /^--(?:project-replacement|recovery-storage|display-window|runtime-authority|controller-|authored-controls|input-diagnostics|backup-json|project-json|lease-expiry|tap-bpm|diagnostics|external-)/.test(arg)),
     'Typed file publication owns a separate native private-file lane');
 }
@@ -263,6 +266,7 @@ try {
   await pair(); await install();
   if (projectReplacement) await nativeProjectReplacement(backend, options, checks);
   if (projectFile) await nativeProjectFile(backend, options, checks);
+  if (projectBackup) await nativeProjectBackup(backend, options, checks);
   if (runtimeAuthority) await nativeRuntimeAuthority(backend, options, checks);
   if (displayWindow) await nativeDisplayWindow(backend, options, checks);
   if (leaseExpiry) await nativeLeaseExpiry(backend, options, checks);
@@ -360,7 +364,7 @@ try {
   assert.equal(replay.error, 'agent_auth_proof_invalid');
   await read();
   checks.push({ check: 'old-launch-proof-rejected-fresh-read-succeeds', passed: true });
-  if (externalRevocation || projectReplacement || projectFile) await nativeHighRiskRevocation(backend, options, checks, { projectReplacement, projectFile });
+  if (externalRevocation || projectReplacement || projectFile) await nativeHighRiskRevocation(backend, options, checks, { projectReplacement, projectFile, projectBackup });
   await backend.invoke('agent_authority_revoke_v1', { principalId, principalIncarnation: approval.principalIncarnation });
   cleanupNeeded = false;
   await stop(true);
@@ -459,6 +463,10 @@ await fs.writeFile(evidence, `${JSON.stringify({ schemaVersion: 1, timestamp: ne
     nativeExecutorSha256: createHash('sha256').update(await fs.readFile(new URL('../../app/src-tauri/src/agent_bridge_execution.rs', import.meta.url))).digest('hex'),
     stdioHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-stdio-session.mjs', import.meta.url))).digest('hex'),
   } : {}),
+  ...(projectBackup ? {
+    projectBackupHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-project-backup.mjs', import.meta.url))).digest('hex'),
+    managedBackupPolicySha256: createHash('sha256').update(await fs.readFile(new URL('../../app/src-tauri/src/project_file_managed_backup.rs', import.meta.url))).digest('hex'),
+  } : {}),
   ...(projectFile ? {
     projectFileHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-project-file.mjs', import.meta.url))).digest('hex'),
     projectFileControllerSha256: createHash('sha256').update(await fs.readFile(new URL('../../app/src-tauri/src/project_file_control_plane.rs', import.meta.url))).digest('hex'),
@@ -518,6 +526,7 @@ await fs.writeFile(evidence, `${JSON.stringify({ schemaVersion: 1, timestamp: ne
     'No durable authored/output mutation crash publication acceptance',
     ...(projectReplacement ? ['Typed external R5 New/Open, issued-fence and exact File-grant admission, immutable native execution, private source-byte preservation and bounded terminal replay only; no active managed output, physical devices, mid-parser revocation/crash, full file-operation or AI8/release acceptance'] : []),
     ...(projectFile ? ['Typed external Save/Save As/template/status/ack on owned private files only; no mid-publication external rename CAS, crash/restart, all remaining File/AI8/release or physical acceptance'] : []),
+    ...(projectBackup ? ['Typed managed backup creation, exact receipt/ack, source metadata and owned-artifact cleanup only; no full retention-race/mid-publication revocation/crash/restart, backup restore/delete canonical adapter, all File or physical acceptance'] : []),
     ...(projectJson ? ['Native .sdc admission and rejected-load preservation only; no complete migration corpus, backup/recovery/upgrade, other file formats or physical output acceptance'] : []),
     ...(runtimeAuthority ? ['Three native Timeline authority-read paths and ordinary concurrent read observations only; no command replay, output activation, complete lock-wait or realtime budget, full adapter/security/AI8 or physical acceptance'] : []),
     ...(backupJson ? ['Native backup byte/JSON/identity admission and private restore preservation only; no full O1-O4, browser recovery, crash/fallback/upgrade, physical output or release acceptance'] : []),

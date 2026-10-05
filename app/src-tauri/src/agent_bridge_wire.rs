@@ -57,6 +57,8 @@ pub(super) const CANONICAL_OPERATION_IDS: &[&str] = &[
     "syndocal.cue_lists.rename.v1",
     "syndocal.cue_lists.delete.v1",
     "syndocal.scenes.create.v1",
+    "syndocal.project.backup.create.v1",
+    "syndocal.query.project.backup.authority.v1",
     "syndocal.project.save.v1",
     "syndocal.project.save_as.v1",
     "syndocal.project.template.save.v1",

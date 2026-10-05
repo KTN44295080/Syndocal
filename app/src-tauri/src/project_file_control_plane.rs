@@ -7,8 +7,9 @@ use super::{
 };
 use protocol::control_plane_command::MAX_SAFE_JAVASCRIPT_INTEGER as MAX;
 use protocol::control_plane_file::{
-    self as wire, ProjectFileAuthorityRequestV1, ProjectFileAuthorityV1, ProjectFilePhaseV1,
-    ProjectFileRequestV1, ProjectFileStatusV1,
+    self as wire, ProjectBackupAuthorityRequestV1, ProjectFileAuthorityRequestV1,
+    ProjectFileAuthorityV1, ProjectFileBackupSummaryV1, ProjectFilePhaseV1, ProjectFileRequestV1,
+    ProjectFileStatusV1,
 };
 use rfd::{MessageButtons, MessageDialog, MessageDialogResult, MessageLevel};
 use serde_json::Value;
@@ -29,6 +30,40 @@ const MAX_AUDIT: usize = 65_536;
 #[derive(Default)]
 pub(crate) struct ProjectFileControlPlaneState {
     admission: Mutex<Admission>,
+    backup_targets: Mutex<BackupTargets>,
+}
+#[derive(Default)]
+struct BackupTargets {
+    issued: HashMap<(String, String), Instant>,
+}
+impl BackupTargets {
+    fn issue(
+        &mut self,
+        origin: &str,
+        request: &ProjectFileRequestV1,
+        now: Instant,
+    ) -> Result<(), String> {
+        self.issued
+            .retain(|_, at| now.saturating_duration_since(*at) < Duration::from_secs(300));
+        let key = (origin.into(), request_hash(request)?);
+        if !self.issued.contains_key(&key) && self.issued.len() >= 256 {
+            return Err("project_file_backup_authority_capacity".into());
+        }
+        self.issued.insert(key, now);
+        Ok(())
+    }
+    fn validate(
+        &self,
+        origin: &str,
+        request: &ProjectFileRequestV1,
+        now: Instant,
+    ) -> Result<(), String> {
+        self.issued
+            .get(&(origin.into(), request_hash(request)?))
+            .filter(|at| now.saturating_duration_since(**at) < Duration::from_secs(300))
+            .map(|_| ())
+            .ok_or_else(|| "project_file_guard_backup_authority_expired_or_unknown".into())
+    }
 }
 #[derive(Default)]
 struct Admission {
@@ -92,6 +127,7 @@ struct Context {
     window_label: String,
     owner_id: String,
     owner_incarnation: u64,
+    origin: String,
     request: ProjectFileRequestV1,
 }
 thread_local! { static CONTEXT: RefCell<Option<Context>> = const { RefCell::new(None) }; }
@@ -101,6 +137,7 @@ fn surface(id: &str) -> Result<Surface, String> {
         wire::SAVE_ID => Ok(Surface::Save),
         wire::SAVE_AS_ID => Ok(Surface::SaveAs),
         wire::TEMPLATE_ID => Ok(Surface::UserTemplate),
+        wire::BACKUP_ID => Ok(Surface::Backup),
         _ => Err("project_file_operation_invalid".into()),
     }
 }
@@ -144,10 +181,10 @@ fn legacy_request(
         mapping_authority_hash: request.expected_fence.project_checkpoint_hash.clone(),
         source_path: None,
         reason: Some(format!("mcp-file-{}", request_hash(request)?)),
-        target_policy: if surface == Surface::Save {
-            TargetPolicy::CurrentOrDialog
-        } else {
-            TargetPolicy::Dialog
+        target_policy: match surface {
+            Surface::Save => TargetPolicy::CurrentOrDialog,
+            Surface::Backup => TargetPolicy::ManagedUnique,
+            _ => TargetPolicy::Dialog,
         },
     })
 }
@@ -221,7 +258,7 @@ fn authorize(context: &Context, state: &AppState) -> Result<(), String> {
     }
     Ok(())
 }
-fn current(
+fn current_authority(
     context: &Context,
     state: &AppState,
     coordinator: &ProjectCoordinator,
@@ -265,7 +302,29 @@ fn current(
     {
         return Err("project_file_guard_generation_exhausted".into());
     }
-    let key = target_key(&request.operation_id, &request.destination)?;
+    Ok(())
+}
+fn current(
+    context: &Context,
+    state: &AppState,
+    coordinator: &ProjectCoordinator,
+) -> Result<(), String> {
+    current_authority(context, state, coordinator)?;
+    let request = &context.request;
+    if request.operation_id == wire::BACKUP_ID {
+        context
+            .app
+            .state::<ProjectFileControlPlaneState>()
+            .backup_targets
+            .lock()
+            .map_err(|_| "project_file_backup_authority_poisoned")?
+            .validate(&context.origin, request, Instant::now())?;
+    }
+    let key = if request.operation_id == wire::BACKUP_ID {
+        super::project_file_managed_backup::key(&context.app, &request.destination)?
+    } else {
+        target_key(&request.operation_id, &request.destination)?
+    };
     if key != Path::new(&request.destination) {
         return Err("project_file_guard_noncanonical_target".into());
     }
@@ -311,6 +370,100 @@ pub(super) fn explicit_target(state: &AppState) -> Result<Option<PathBuf>, Strin
             .transpose()
     })
 }
+pub(super) fn explicit_backup_target(
+    state: &AppState,
+    directory: &Path,
+) -> Result<Option<PathBuf>, String> {
+    CONTEXT.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .map(|context| {
+                authorize(context, state)?;
+                if context.request.operation_id != wire::BACKUP_ID {
+                    return Err("project_file_guard_backup_context_mismatch".into());
+                }
+                super::project_file_managed_backup::legacy_target(
+                    directory,
+                    &context.request.destination,
+                )
+            })
+            .transpose()
+    })
+}
+pub(super) fn create_backup_directory(state: &AppState, directory: &Path) -> Result<(), String> {
+    CONTEXT.with(|slot| {
+        if let Some(context) = slot.borrow().as_ref() {
+            if context.request.operation_id != wire::BACKUP_ID {
+                return Err("project_file_guard_backup_context_mismatch".into());
+            }
+            let _publication = state
+                .project_save_publication
+                .lock()
+                .map_err(|_| "project_file_publication_poisoned")?;
+            let _admission = super::lock_project_external_command_admission(state)?;
+            let mut coordinator = super::lock_project_coordinator(state)?;
+            super::reconcile_project_checkpoint_for_coordinator(state, &mut coordinator)?;
+            current(context, state, &coordinator)?;
+            fs::create_dir_all(directory)
+                .map_err(|error| format!("Unable to create project backup directory: {error}"))
+        } else {
+            fs::create_dir_all(directory)
+                .map_err(|error| format!("Unable to create project backup directory: {error}"))
+        }
+    })
+}
+pub(super) fn backup_metadata(
+    state: &AppState,
+    ticket: &super::ProjectSaveTicket,
+    source: Option<String>,
+    reason: String,
+) -> Result<(Option<String>, String), String> {
+    CONTEXT.with(|slot| {
+        let borrowed = slot.borrow();
+        let Some(context) = borrowed.as_ref() else {
+            return Ok((source, reason));
+        };
+        authorize(context, state)?;
+        if context.request.operation_id != wire::BACKUP_ID {
+            return Err("project_file_guard_backup_context_mismatch".into());
+        }
+        Ok((
+            ticket
+                .current_project_path
+                .as_ref()
+                .map(|path| path.to_string_lossy().into_owned()),
+            "MCP backup".into(),
+        ))
+    })
+}
+/// Retention is a separate post-publication effect: the new target now exists,
+/// while principal/owner/project/path authority must remain current per deletion.
+pub(super) fn validate_backup_retention(
+    state: &AppState,
+    coordinator: &ProjectCoordinator,
+) -> Result<(), String> {
+    CONTEXT.with(|slot| {
+        if let Some(context) = slot.borrow().as_ref() {
+            if context.request.operation_id != wire::BACKUP_ID {
+                return Err("project_file_guard_backup_context_mismatch".into());
+            }
+            current_authority(context, state, coordinator)?;
+        }
+        Ok(())
+    })
+}
+pub(super) fn publish_backup(
+    state: &AppState,
+    coordinator: &ProjectCoordinator,
+    temp: &Path,
+    target: &Path,
+) -> Result<(), String> {
+    if CONTEXT.with(|slot| slot.borrow().is_some()) {
+        publish(state, coordinator, temp, target)
+    } else {
+        super::publish_new_file_atomically(temp, target)
+    }
+}
 /// The final authorization/target fence is adjacent to the real filesystem effect.
 pub(super) fn publish(
     state: &AppState,
@@ -325,7 +478,12 @@ pub(super) fn publish(
         };
         current(context, state, coordinator)
             .map_err(|error| format!("project_file_guard_final: {error}"))?;
-        if target != Path::new(&context.request.destination) {
+        let actual_target = if context.request.operation_id == wire::BACKUP_ID {
+            super::normalized_recovery_target_key(target)?
+        } else {
+            target.to_path_buf()
+        };
+        if actual_target != Path::new(&context.request.destination) {
             return Err("project_file_guard_destination_mismatch".into());
         }
         if context.request.expected_target_sha256.is_none() {
@@ -372,6 +530,8 @@ fn stored_status(
         saved_project_revision: request.expected_fence.project_revision,
         saved_checkpoint_hash: request.expected_fence.project_checkpoint_hash.clone(),
         error: None,
+        warning: None,
+        backup: None,
     };
     if let Some(terminal) = durable
         .publication_journal
@@ -397,6 +557,22 @@ fn stored_status(
         status.saved_project_revision = terminal.project_revision;
         status.saved_checkpoint_hash = terminal.checkpoint_hash.clone();
         status.error = terminal.error.clone();
+        status.warning = terminal.warning.clone();
+        if let Some(backup) = terminal.backup.as_ref() {
+            if [backup.id, backup.created_at_unix_ms, backup.bytes]
+                .iter()
+                .any(|value| *value > MAX)
+            {
+                return Err("project_file_backup_receipt_integer_unsafe".into());
+            }
+            status.backup = Some(ProjectFileBackupSummaryV1 {
+                id: backup.id,
+                created_at_unix_ms: backup.created_at_unix_ms,
+                source_path: backup.source_path.clone(),
+                reason: backup.reason.clone(),
+                bytes: backup.bytes,
+            });
+        }
     } else if let Some(pending) = durable
         .publication_journal
         .pending
@@ -450,8 +626,15 @@ fn authority(
     request.validate().map_err(str::to_string)?;
     let state = app.state::<AppState>();
     let (origin, _, _) = identity(&state, window.label(), caller, &request.operation_id)?;
-    let destination = target_key(&request.operation_id, &request.destination)?;
+    let destination = if request.operation_id == wire::BACKUP_ID {
+        super::project_file_managed_backup::key(app, &request.destination)?
+    } else {
+        target_key(&request.operation_id, &request.destination)?
+    };
     let target_sha256 = target_digest(&destination)?;
+    if request.operation_id == wire::BACKUP_ID && target_sha256.is_some() {
+        return Err("project_file_backup_candidate_changed".into());
+    }
     let fence = app
         .state::<super::ControlPlaneQueryState>()
         .issue_project_mutation_fence_for_window(window.label(), &state)
@@ -510,6 +693,48 @@ fn authority(
     })
 }
 
+fn backup_authority(
+    app: &AppHandle,
+    window: &WebviewWindow,
+    caller: &str,
+    request: ProjectBackupAuthorityRequestV1,
+) -> Result<ProjectFileAuthorityV1, String> {
+    request.validate().map_err(str::to_string)?;
+    let destination = super::project_file_managed_backup::observe(app)?;
+    let result = authority(
+        app,
+        window,
+        caller,
+        ProjectFileAuthorityRequestV1 {
+            schema_version: 1,
+            operation_id: wire::BACKUP_ID.into(),
+            destination: destination.to_string_lossy().into_owned(),
+        },
+    )?;
+    let (origin, _, _) = identity(
+        &app.state::<AppState>(),
+        window.label(),
+        caller,
+        wire::BACKUP_ID,
+    )?;
+    let issued = ProjectFileRequestV1 {
+        schema_version: 1,
+        operation_id: wire::BACKUP_ID.into(),
+        request_id: result.next_request_id,
+        expected_fence: result.fence.clone(),
+        expected_path_generation: result.path_generation,
+        expected_disposition_generation: result.disposition_generation,
+        destination: result.destination.clone(),
+        expected_target_sha256: None,
+    };
+    app.state::<ProjectFileControlPlaneState>()
+        .backup_targets
+        .lock()
+        .map_err(|_| "project_file_backup_authority_poisoned")?
+        .issue(&origin, &issued, Instant::now())?;
+    Ok(result)
+}
+
 fn with_context<T>(context: Context, run: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
     CONTEXT.with(|slot| {
         if slot.borrow().is_some() {
@@ -552,6 +777,7 @@ fn execute(
         window_label: window.label().into(),
         owner_id: owner.clone(),
         owner_incarnation: incarnation,
+        origin: origin.clone(),
         request: request.clone(),
     };
     app.state::<ProjectFileControlPlaneState>()
@@ -607,12 +833,21 @@ fn execute(
                             incarnation,
                         )
                         .map_err(|_| "project_file_guard_session_fence")?;
-                    super::execute_project_save_publication_v1(
-                        window,
-                        &state,
-                        native.clone(),
-                        surface(operation)?,
-                    )?;
+                    if operation == wire::BACKUP_ID {
+                        super::save_project_backup_v1(
+                            window.clone(),
+                            app.clone(),
+                            app.state::<AppState>(),
+                            native.clone(),
+                        )?;
+                    } else {
+                        super::execute_project_save_publication_v1(
+                            window,
+                            &state,
+                            native.clone(),
+                            surface(operation)?,
+                        )?;
+                    }
                 } else {
                     return Err("project_file_operation_invalid".into());
                 }
@@ -627,6 +862,15 @@ pub(crate) fn execute_local(
     operation: &str,
     request: Value,
 ) -> Result<Value, String> {
+    if operation == wire::BACKUP_AUTHORITY_ID {
+        return serde_json::to_value(backup_authority(
+            app,
+            window,
+            "local",
+            serde_json::from_value(request).map_err(|_| "project_file_request_invalid")?,
+        )?)
+        .map_err(|_| "project_file_response_invalid".into());
+    }
     if operation == wire::AUTHORITY_ID {
         return serde_json::to_value(authority(
             app,
@@ -691,6 +935,15 @@ pub(crate) fn execute_external(
         "external:{}:{}",
         dispatch.principal_id, dispatch.principal_incarnation
     );
+    if operation == wire::BACKUP_AUTHORITY_ID {
+        return serde_json::to_value(backup_authority(
+            app,
+            window,
+            &caller,
+            serde_json::from_value(ingress.request).map_err(|_| "project_file_request_invalid")?,
+        )?)
+        .map_err(|_| "project_file_response_invalid".into());
+    }
     if operation == wire::AUTHORITY_ID {
         return serde_json::to_value(authority(
             app,
@@ -812,5 +1065,37 @@ mod tests {
         assert!(!temp.exists());
         fs::remove_file(target).unwrap();
         fs::remove_dir(directory).unwrap();
+    }
+    #[test]
+    fn project_file_backup_authority_binds_origin_full_request_expiry_and_capacity() {
+        let now = Instant::now();
+        let mut authority = BackupTargets::default();
+        let mut original = request();
+        original.operation_id = wire::BACKUP_ID.into();
+        authority.issue("actual-origin", &original, now).unwrap();
+        authority.validate("actual-origin", &original, now).unwrap();
+        assert!(authority.validate("forged-origin", &original, now).is_err());
+        for field in 0..3 {
+            let mut changed = original.clone();
+            match field {
+                0 => changed.destination.push('0'),
+                1 => changed.request_id += 1,
+                _ => changed.expected_fence.project_publication_generation += 1,
+            }
+            assert!(authority.validate("actual-origin", &changed, now).is_err());
+        }
+        assert!(authority
+            .validate("actual-origin", &original, now + Duration::from_secs(300))
+            .is_err());
+        for index in 1..256 {
+            authority
+                .issue(&format!("origin-{index}"), &original, now)
+                .unwrap();
+        }
+        assert!(authority.issue("overflow", &original, now).is_err());
+        authority
+            .issue("fresh", &original, now + Duration::from_secs(300))
+            .unwrap();
+        assert_eq!(authority.issued.len(), 1);
     }
 }
