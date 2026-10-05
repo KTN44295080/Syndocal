@@ -22,6 +22,7 @@ import { nativeRecoveryStorage } from './native-recovery-storage.mjs';
 import { nativeProjectReplacement } from './native-project-replacement.mjs';
 import { nativeProjectFile } from './native-project-file.mjs';
 import { nativeProjectBackup } from './native-project-backup.mjs';
+import { nativeProjectBackupRestore } from './native-project-backup-restore.mjs';
 
 const exec = promisify(execFile);
 const args = process.argv.slice(2);
@@ -134,13 +135,16 @@ const take = name => { const index = args.indexOf(name); assert.ok(index >= 0 &&
 const executable = take('--expected-executable');
 const evidence = take('--evidence');
 const cdpPort = Number(take('--cdp-port'));
+const profileId = args.includes('--profile') ? take('--profile') : 'jp.seraf.ktn.syndocal.qa.mcp-lifecycle';
+assert.ok(['jp.seraf.ktn.syndocal.qa.mcp-lifecycle',
+  'jp.seraf.ktn.syndocal.qa.mcp-lifecycle.backup-restore-20261005'].includes(profileId), 'Only checked-in private QA profiles allowed');
 assert.equal(args.length, 0);
 assert.equal(process.platform, 'win32');
 assert.ok(path.isAbsolute(executable) && path.isAbsolute(evidence));
 assert.ok(Number.isSafeInteger(cdpPort) && cdpPort >= 1024 && cdpPort <= 65535);
 assert.equal(await fs.stat(evidence).then(() => true, error => { if (error.code === 'ENOENT') return false; throw error; }), false);
 await fs.access(path.dirname(evidence));
-const profile = path.join(process.env.LOCALAPPDATA, 'jp.seraf.ktn.syndocal.qa.mcp-lifecycle');
+const profile = path.join(process.env.LOCALAPPDATA, profileId);
 const descriptorPath = path.join(profile, 'agent-bridge-v1.json');
 // Never run lifecycle termination against the normal checkout executable.
 const isolatedExe = path.join(os.tmpdir(), 'syndocal-native-acceptance-target', 'release', 'syndocal.exe');
@@ -149,6 +153,7 @@ const oldDebugArgs = process.env.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS ?? '';
 assert.ok(!/--remote-debugging-(?:port|address)/i.test(oldDebugArgs));
 const principalId = `lifecycle-${randomUUID()}`;
 const options = parseOptions(['--expected-executable', executable, '--descriptor', descriptorPath]);
+options.profileId = profileId;
 const checks = [];
 let child;
 let backend;
@@ -267,6 +272,7 @@ try {
   if (projectReplacement) await nativeProjectReplacement(backend, options, checks);
   if (projectFile) await nativeProjectFile(backend, options, checks);
   if (projectBackup) await nativeProjectBackup(backend, options, checks);
+  if (projectBackup) await nativeProjectBackupRestore(backend, options, checks);
   if (runtimeAuthority) await nativeRuntimeAuthority(backend, options, checks);
   if (displayWindow) await nativeDisplayWindow(backend, options, checks);
   if (leaseExpiry) await nativeLeaseExpiry(backend, options, checks);
@@ -467,6 +473,8 @@ await fs.writeFile(evidence, `${JSON.stringify({ schemaVersion: 1, timestamp: ne
     projectBackupHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-project-backup.mjs', import.meta.url))).digest('hex'),
     managedBackupPolicySha256: createHash('sha256').update(await fs.readFile(new URL('../../app/src-tauri/src/project_file_managed_backup.rs', import.meta.url))).digest('hex'),
     backupInspectionPolicySha256: createHash('sha256').update(await fs.readFile(new URL('../../app/src-tauri/src/project_backup_inspection.rs', import.meta.url))).digest('hex'),
+    backupRestoreHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-project-backup-restore.mjs', import.meta.url))).digest('hex'),
+    backupRestorePolicySha256: createHash('sha256').update(await fs.readFile(new URL('../../app/src-tauri/src/project_backup_restoration.rs', import.meta.url))).digest('hex'),
   } : {}),
   ...(projectFile ? {
     projectFileHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-project-file.mjs', import.meta.url))).digest('hex'),
@@ -509,7 +517,7 @@ await fs.writeFile(evidence, `${JSON.stringify({ schemaVersion: 1, timestamp: ne
     revocationTransport: 'Separate stdio MCP requests, native claim/revoke/execute commands; QA renderer generation retired immediately before graceful close',
     ...(!externalHighRisk ? { stdioHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-stdio-session.mjs', import.meta.url))).digest('hex') } : {}),
   } : {}),
-  profile: 'jp.seraf.ktn.syndocal.qa.mcp-lifecycle', checks, normalAppIdentityUnchanged,
+  profile: profileId, checks, normalAppIdentityUnchanged,
   credentialRevoked: !cleanupNeeded, credentialFileRemoved: true,
   nativePanicLocations,
   nonclaims: ['QA identifier release build, not the distributed artifact',
@@ -527,7 +535,7 @@ await fs.writeFile(evidence, `${JSON.stringify({ schemaVersion: 1, timestamp: ne
     'No durable authored/output mutation crash publication acceptance',
     ...(projectReplacement ? ['Typed external R5 New/Open, issued-fence and exact File-grant admission, immutable native execution, private source-byte preservation and bounded terminal replay only; no active managed output, physical devices, mid-parser revocation/crash, full file-operation or AI8/release acceptance'] : []),
     ...(projectFile ? ['Typed external Save/Save As/template/status/ack on owned private files only; no mid-publication external rename CAS, crash/restart, all remaining File/AI8/release or physical acceptance'] : []),
-    ...(projectBackup ? ['Typed managed backup creation, exact receipt/ack, source metadata and owned-artifact cleanup only; no full retention-race/mid-publication revocation/crash/restart, backup restore/delete canonical adapter, all File or physical acceptance'] : []),
+    ...(projectBackup ? ['Typed managed backup creation/inspection/restore, complete private authored-image and four mapping-family restoration, exact terminal/ack/replay and owned cleanup only; no full retention-race/mid-publication revocation/crash/restart, canonical backup delete/retention, all File or physical acceptance'] : []),
     ...(projectJson ? ['Native .sdc admission and rejected-load preservation only; no complete migration corpus, backup/recovery/upgrade, other file formats or physical output acceptance'] : []),
     ...(runtimeAuthority ? ['Three native Timeline authority-read paths and ordinary concurrent read observations only; no command replay, output activation, complete lock-wait or realtime budget, full adapter/security/AI8 or physical acceptance'] : []),
     ...(backupJson ? ['Native backup byte/JSON/identity admission and private restore preservation only; no full O1-O4, browser recovery, crash/fallback/upgrade, physical output or release acceptance'] : []),

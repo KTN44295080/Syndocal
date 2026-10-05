@@ -26,7 +26,7 @@ const nodeCanonicalIds = quoted(
   /const CANONICAL_OPERATION_IDS = new Set\(\[\s*([\s\S]*?)\s*\]\);/,
   "'",
 );
-assert.equal(rustCanonicalIds.length, 65);
+assert.equal(rustCanonicalIds.length, 66);
 assert.deepEqual([...typescriptCanonicalIds].sort(), [...rustCanonicalIds].sort());
 assert.deepEqual([...nodeCanonicalIds].sort(), [...rustCanonicalIds].sort());
 
@@ -674,6 +674,7 @@ async function until(predicate) {
     request('diagnostics.export', { destination: 'C:/new.zip' }),
     request('control_plane.execute', { operationId: 'syndocal.project.new.v1', request: { request: { exact: 'immutable-backend-copy' } } }),
     request('control_plane.execute', { operationId: 'syndocal.project.open.v1', request: { request: { exact: 'immutable-backend-copy' } } }),
+    request('control_plane.execute', { operationId: 'syndocal.project.backup.restore.v1', request: { request: { exact: 'immutable-backend-copy' } } }),
     request('control_plane.execute', { operationId: 'syndocal.output.ownership.arm.v2', request: { request: { exact: 'immutable-backend-copy' } } })]) {
     const calls = [];
     const result = await execute(async (command, args) => {

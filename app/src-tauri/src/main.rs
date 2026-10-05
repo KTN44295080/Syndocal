@@ -272,6 +272,7 @@ mod project_replacement_control_plane;
 mod project_file_control_plane;
 mod project_file_managed_backup;
 mod project_backup_inspection;
+mod project_backup_restoration;
 mod output_blackout_control;
 mod dj_link_machine;
 mod dj_link_network;
@@ -25755,7 +25756,7 @@ fn validate_project_replacement_invocation_at_publication(
         ));
     }
     ensure_project_operator_authoritative_mutation_allowed(state, coordinator, &fence.owner_id)?;
-    if matches!(fence.command_name, "new_project_control_plane_v1" | "open_project_control_plane_v1")
+    if matches!(fence.command_name, "new_project_control_plane_v1" | "open_project_control_plane_v1" | "restore_project_backup_control_plane_v1")
         && coordinator.recovery_authority_serial >= protocol::control_plane_command::MAX_SAFE_JAVASCRIPT_INTEGER
     {
         return Err("Project replacement recovery generation is exhausted".to_string());
@@ -51153,6 +51154,17 @@ async fn open_project_control_plane_v1(
 ) -> Result<protocol::control_plane_project::ProjectReplacementResponseV1, String> {
     tauri::async_runtime::spawn_blocking(move || project_replacement_control_plane::execute_local(
         &app, &window, request, protocol::control_plane_project::PROJECT_OPEN_OPERATION_ID,
+    )).await.map_err(|_| "project_replacement_executor_failed".into())
+}
+
+#[tauri::command]
+async fn restore_project_backup_control_plane_v1(
+    app: tauri::AppHandle,
+    window: WebviewWindow,
+    request: protocol::control_plane_project::ProjectReplacementRequestV1,
+) -> Result<protocol::control_plane_project::ProjectReplacementResponseV1, String> {
+    tauri::async_runtime::spawn_blocking(move || project_replacement_control_plane::execute_local(
+        &app, &window, request, protocol::control_plane_project::PROJECT_BACKUP_RESTORE_OPERATION_ID,
     )).await.map_err(|_| "project_replacement_executor_failed".into())
 }
 
@@ -87784,6 +87796,7 @@ pub(crate) mod tests {
     include!("project_retirement_boundary_tests.rs");
     include!("project_replacement_generation_tests.rs");
     include!("project_replacement_control_plane_tests.rs");
+    include!("project_backup_restoration_tests.rs");
     use super::*;
     use protocol::{ClockSource, VideoLayerSummary};
 
@@ -132800,6 +132813,7 @@ fn main() {
             new_project,
             new_project_control_plane_v1,
             open_project_control_plane_v1,
+            restore_project_backup_control_plane_v1,
             query_project_replacement_authority_v1,
             save_project_control_plane_v1,
             save_project_as_control_plane_v1,

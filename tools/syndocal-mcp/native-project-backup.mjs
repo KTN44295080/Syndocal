@@ -10,7 +10,7 @@ export async function nativeProjectBackup(backend, options, checks) {
   const ids={create:'syndocal.project.backup.create.v1',authority:'syndocal.query.project.backup.authority.v1',
     inspect:'syndocal.query.project.backup.inspect.v1',
     status:'syndocal.query.project.file.status.v1',ack:'syndocal.project.file.acknowledge.v1'};
-  const directory=path.join(process.env.LOCALAPPDATA,'jp.seraf.ktn.syndocal.qa.mcp-lifecycle','project-backups');
+  const directory=path.join(process.env.LOCALAPPDATA,options.profileId,'project-backups');
   const baseline=await fs.readdir(directory).catch(error=>{if(error.code==='ENOENT')return [];throw error;});
   const digest=bytes=>createHash('sha256').update(bytes).digest('hex');
   const baselineHashes=new Map(await Promise.all(baseline.map(async name=>{

@@ -109,7 +109,8 @@ export async function executeAgentBridgeRequest(
       || (request.method === "control_plane.execute" && typeof params.operationId === "string"
         && (params.operationId.startsWith("syndocal.output.")
           || params.operationId === "syndocal.project.new.v1"
-          || params.operationId === "syndocal.project.open.v1")
+          || params.operationId === "syndocal.project.open.v1"
+          || params.operationId === "syndocal.project.backup.restore.v1")
         && canonicalOperationIsMutation(params.operationId)
         || (request.method === "control_plane.execute" && typeof params.operationId === "string"
           && ["syndocal.query.project.backup.inspect.v1","syndocal.project.backup.create.v1","syndocal.query.project.backup.authority.v1","syndocal.project.save.v1","syndocal.project.save_as.v1","syndocal.project.template.save.v1","syndocal.query.project.file.authority.v1","syndocal.query.project.file.status.v1","syndocal.project.file.acknowledge.v1"].includes(params.operationId)))) {

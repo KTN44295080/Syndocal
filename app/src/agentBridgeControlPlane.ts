@@ -73,6 +73,7 @@ export const CANONICAL_TAURI_COMMANDS = {
   "syndocal.project.file.acknowledge.v1": "acknowledge_project_file_control_plane_v1",
   "syndocal.project.new.v1": "new_project_control_plane_v1",
   "syndocal.project.open.v1": "open_project_control_plane_v1",
+  "syndocal.project.backup.restore.v1": "restore_project_backup_control_plane_v1",
   "syndocal.query.project.replacement.authority.v1": "query_project_replacement_authority_v1",
 } as const;
 

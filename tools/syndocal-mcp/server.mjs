@@ -81,6 +81,7 @@ const CANONICAL_OPERATION_IDS = new Set([
   'syndocal.project.file.acknowledge.v1',
   'syndocal.project.new.v1',
   'syndocal.project.open.v1',
+    'syndocal.project.backup.restore.v1',
   'syndocal.query.project.replacement.authority.v1',
 ]);
 const record = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);

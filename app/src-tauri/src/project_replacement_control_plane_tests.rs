@@ -25,7 +25,7 @@ mod project_replacement_control_plane_contract_tests {
     fn project_replacement_control_plane_new_matches_acknowledged_engine_persistence() {
         let harness = MediaAssetA6CommandHarness::new();
         let query = ControlPlaneQueryState::new().unwrap();
-        let prepared = prepare(&request(&query, &harness.state, Action::New {})).unwrap();
+        let prepared = prepare(&request(&query, &harness.state, Action::New {}), None).unwrap();
         // Compare the actual prepared/hash input, without sanitizing it here.
         // Runtime-only defaults must not be hidden from this assertion.
         let expected = serde_json::to_value(prepared.snapshot.clone()).unwrap();
@@ -87,7 +87,7 @@ mod project_replacement_control_plane_contract_tests {
                 expected_file_sha256: format!("{:x}", Sha256::digest(bytes)),
             },
         );
-        let prepared = prepare(&original).unwrap();
+        let prepared = prepare(&original, None).unwrap();
         let expected = serde_json::to_value(prepared.snapshot.clone()).unwrap();
         request_project_snapshot_publication(&harness.state.engine, prepared.snapshot).unwrap();
         let after = harness.state.engine.output_ownership_status();
@@ -139,6 +139,7 @@ mod project_replacement_control_plane_contract_tests {
                 "media-asset-a6",
                 "local",
                 original,
+                None,
                 || panic!("Invalid current-schema image cannot confirm"),
                 |_| panic!("Invalid current-schema image cannot publish"),
             ),
@@ -173,6 +174,7 @@ mod project_replacement_control_plane_contract_tests {
                 "media-asset-a6",
                 "local",
                 original,
+                None,
                 || panic!("Exhausted generation cannot confirm"),
                 |_| panic!("Exhausted generation cannot publish")
             ),
@@ -217,6 +219,7 @@ mod project_replacement_control_plane_contract_tests {
                     "media-asset-a6",
                     "local",
                     original,
+                    None,
                     || panic!("Operator Lock cannot confirm"),
                     |_| panic!("Operator Lock cannot publish")
                 ),
@@ -241,6 +244,7 @@ mod project_replacement_control_plane_contract_tests {
         for operation_id in [
             protocol::control_plane_project::PROJECT_NEW_OPERATION_ID,
             protocol::control_plane_project::PROJECT_OPEN_OPERATION_ID,
+            protocol::control_plane_project::PROJECT_BACKUP_RESTORE_OPERATION_ID,
         ] {
             let operation = registry
                 .canonical_operations
@@ -295,6 +299,7 @@ mod project_replacement_control_plane_contract_tests {
             "media-asset-a6",
             "local",
             original.clone(),
+            None,
             || false,
             |_| panic!("Cancellation must not retire/publish"),
         );
@@ -315,6 +320,7 @@ mod project_replacement_control_plane_contract_tests {
             "media-asset-a6",
             "local",
             original.clone(),
+            None,
             || panic!("A replay cannot confirm again"),
             |_| panic!("A replay cannot publish"),
         );
@@ -329,6 +335,7 @@ mod project_replacement_control_plane_contract_tests {
                 "media-asset-a6",
                 "local",
                 changed,
+                None,
                 || panic!("Changed shape cannot confirm"),
                 |_| panic!("Changed shape cannot publish")
             ),
@@ -355,6 +362,7 @@ mod project_replacement_control_plane_contract_tests {
                 "media-asset-a6",
                 "external:agent:1",
                 forged,
+                None,
                 || panic!("Unissued fence cannot confirm"),
                 |_| panic!("Unissued fence cannot publish")
             ),
@@ -395,6 +403,7 @@ mod project_replacement_control_plane_contract_tests {
                 "media-asset-a6",
                 "local",
                 original,
+                None,
                 || panic!("Stale fence cannot confirm"),
                 |_| panic!("Stale fence cannot publish")
             ),
@@ -432,22 +441,22 @@ mod project_replacement_control_plane_contract_tests {
                 expected_file_sha256: format!("{:x}", Sha256::digest(&bytes)),
             },
         );
-        assert_eq!(prepare(&original).unwrap().snapshot.clock.bpm, 120.0);
+        assert_eq!(prepare(&original, None).unwrap().snapshot.clock.bpm, 120.0);
         assert_eq!(std::fs::read(&path).unwrap(), bytes);
         std::fs::write(&path, b"{}").unwrap();
-        assert!(matches!(prepare(&original), Err(Error::FileChanged)));
+        assert!(matches!(prepare(&original, None), Err(Error::FileChanged)));
         let mut changed = original.clone();
         changed.action = Action::Open {
             path: path.to_string_lossy().into(),
             expected_file_sha256: format!("{:x}", Sha256::digest(b"{}")),
         };
-        assert!(matches!(prepare(&changed), Err(Error::InvalidProject)));
+        assert!(matches!(prepare(&changed, None), Err(Error::InvalidProject)));
         let mut relative = original;
         relative.action = Action::Open {
             path: "relative.sdc".into(),
             expected_file_sha256: "a".repeat(64),
         };
-        assert!(matches!(prepare(&relative), Err(Error::InvalidRequest)));
+        assert!(matches!(prepare(&relative, None), Err(Error::InvalidRequest)));
         std::fs::remove_file(&path).unwrap();
         std::fs::remove_dir(&root).unwrap();
     }

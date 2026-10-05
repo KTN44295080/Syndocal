@@ -5,6 +5,30 @@ use protocol::control_plane_file::{
 use sha2::{Digest, Sha256};
 use std::{fs, path::Path};
 
+pub(super) struct ObservedBackup {
+    pub(super) backup: super::ProjectBackupEnvelope,
+    pub(super) artifact_sha256: String,
+    pub(super) bytes: u64,
+    pub(super) restore_source_path: Option<String>,
+}
+
+impl ObservedBackup {
+    fn inspection(&self) -> ProjectBackupInspectionV1 {
+        ProjectBackupInspectionV1 {
+            schema_version: 1,
+            backup: ProjectFileBackupSummaryV1 {
+                id: self.backup.id,
+                created_at_unix_ms: self.backup.created_at_unix_ms,
+                source_path: self.backup.source_path.clone(),
+                reason: self.backup.reason.clone(),
+                bytes: self.bytes,
+            },
+            artifact_sha256: self.artifact_sha256.clone(),
+            restore_source_path: self.restore_source_path.clone(),
+        }
+    }
+}
+
 pub(super) fn inspect<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     request: ProjectBackupInspectRequestV1,
@@ -18,6 +42,17 @@ fn inspect_in(
     directory: &Path,
     request: ProjectBackupInspectRequestV1,
 ) -> Result<ProjectBackupInspectionV1, String> {
+    request.validate().map_err(str::to_string)?;
+    Ok(read_in(directory, request.backup_id)?.inspection())
+}
+
+// Query and restore must hash and decode one identical bounded read. The
+// observation contains the full candidate without cloning its project image.
+pub(super) fn read_in(directory: &Path, backup_id: u64) -> Result<ObservedBackup, String> {
+    let request = ProjectBackupInspectRequestV1 {
+        schema_version: 1,
+        backup_id,
+    };
     request.validate().map_err(str::to_string)?;
     let path = super::project_file_managed_backup::path_for_id(directory, request.backup_id)?;
     let metadata = fs::symlink_metadata(&path)
@@ -69,19 +104,13 @@ fn inspect_in(
         .as_ref()
         .filter(|path| super::is_syndocal_project_path(Path::new(path)))
         .cloned();
-    let result = ProjectBackupInspectionV1 {
-        schema_version: 1,
-        backup: ProjectFileBackupSummaryV1 {
-            id: backup.id,
-            created_at_unix_ms: backup.created_at_unix_ms,
-            source_path: backup.source_path,
-            reason: backup.reason,
-            bytes: bytes.len() as u64,
-        },
+    let result = ObservedBackup {
+        backup,
         artifact_sha256: sha256,
+        bytes: bytes.len() as u64,
         restore_source_path,
     };
-    result.validate().map_err(str::to_string)?;
+    result.inspection().validate().map_err(str::to_string)?;
     Ok(result)
 }
 

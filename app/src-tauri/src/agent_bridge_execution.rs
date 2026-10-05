@@ -8,7 +8,7 @@ use tauri::Manager;
 use super::{agent_bridge::AgentBridge, AppState, ControlPlaneQueryState};
 use protocol::control_plane_command::OutputControlCommandRequestV2;
 use protocol::control_plane_project::{ProjectReplacementRequestV1, ProjectReplacementResponseV1,
-    PROJECT_NEW_OPERATION_ID, PROJECT_OPEN_OPERATION_ID};
+    PROJECT_NEW_OPERATION_ID, PROJECT_OPEN_OPERATION_ID, PROJECT_BACKUP_RESTORE_OPERATION_ID};
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -51,7 +51,7 @@ pub(crate) fn execute(
                 let result = super::project_file_control_plane::execute_external(app, window, &dispatch)?;
                 return Ok(json!({"ok": true, "operation_id":operation_id, "result":result}));
             }
-            if matches!(operation_id, PROJECT_NEW_OPERATION_ID | PROJECT_OPEN_OPERATION_ID) {
+            if matches!(operation_id, PROJECT_NEW_OPERATION_ID | PROJECT_OPEN_OPERATION_ID | PROJECT_BACKUP_RESTORE_OPERATION_ID) {
                 let ingress: ProjectReplacementIngress = serde_json::from_value(
                     dispatch.params.get("request").cloned().ok_or("agent_bridge_arguments_invalid")?,
                 ).map_err(|_| "agent_bridge_arguments_invalid")?;

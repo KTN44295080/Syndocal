@@ -1,0 +1,1 @@
+tauri build wrapper checks passed (249 assertions, 27 hostile mutation fixtures)

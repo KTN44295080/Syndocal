@@ -5,6 +5,7 @@ use crate::control_plane_command::{ProjectMutationFenceV1, MAX_SAFE_JAVASCRIPT_I
 
 pub const PROJECT_NEW_OPERATION_ID: &str = "syndocal.project.new.v1";
 pub const PROJECT_OPEN_OPERATION_ID: &str = "syndocal.project.open.v1";
+pub const PROJECT_BACKUP_RESTORE_OPERATION_ID: &str = "syndocal.project.backup.restore.v1";
 pub const PROJECT_REPLACEMENT_AUTHORITY_OPERATION_ID: &str =
     "syndocal.query.project.replacement.authority.v1";
 pub const PROJECT_REPLACEMENT_SCHEMA_VERSION: u16 = 1;
@@ -54,6 +55,12 @@ pub enum ProjectReplacementActionV1 {
         path: String,
         expected_file_sha256: String,
     },
+    RestoreBackup {
+        backup_id: u64,
+        expected_file_sha256: String,
+        #[serde(deserialize_with = "Option::<String>::deserialize")]
+        expected_source_path: Option<String>,
+    },
 }
 
 impl ProjectReplacementActionV1 {
@@ -61,6 +68,7 @@ impl ProjectReplacementActionV1 {
         match self {
             Self::New {} => PROJECT_NEW_OPERATION_ID,
             Self::Open { .. } => PROJECT_OPEN_OPERATION_ID,
+            Self::RestoreBackup { .. } => PROJECT_BACKUP_RESTORE_OPERATION_ID,
         }
     }
 
@@ -76,6 +84,24 @@ impl ProjectReplacementActionV1 {
                 || !valid_hash(expected_file_sha256)
             {
                 return Err("invalid project Open target");
+            }
+        }
+        if let Self::RestoreBackup {
+            backup_id,
+            expected_file_sha256,
+            expected_source_path,
+        } = self
+        {
+            if *backup_id == 0
+                || *backup_id > MAX_SAFE_JAVASCRIPT_INTEGER
+                || !valid_hash(expected_file_sha256)
+                || expected_source_path.as_ref().is_some_and(|path| {
+                    path.is_empty()
+                        || path.len() > MAX_PROJECT_OPEN_PATH_BYTES
+                        || path.chars().any(char::is_control)
+                })
+            {
+                return Err("invalid project backup restore target");
             }
         }
         Ok(())
@@ -212,6 +238,13 @@ impl ProjectReplacementReceiptV1 {
                 (ProjectReplacementActionV1::New {}, None) => {}
                 (ProjectReplacementActionV1::Open { path, .. }, Some(current))
                     if path == current => {}
+                (
+                    ProjectReplacementActionV1::RestoreBackup {
+                        expected_source_path,
+                        ..
+                    },
+                    current,
+                ) if expected_source_path == current => {}
                 _ => return Err("project replacement terminal target mismatch"),
             }
         }
@@ -297,12 +330,22 @@ mod tests {
         }
     }
 
-    fn actions() -> [ProjectReplacementActionV1; 2] {
+    fn actions() -> [ProjectReplacementActionV1; 4] {
         [
             ProjectReplacementActionV1::New {},
             ProjectReplacementActionV1::Open {
                 path: "C:\\show\\日本語.sdc".into(),
                 expected_file_sha256: "b".repeat(64),
+            },
+            ProjectReplacementActionV1::RestoreBackup {
+                backup_id: 12,
+                expected_file_sha256: "b".repeat(64),
+                expected_source_path: Some("C:\\show\\日本語.sdc".into()),
+            },
+            ProjectReplacementActionV1::RestoreBackup {
+                backup_id: 13,
+                expected_file_sha256: "b".repeat(64),
+                expected_source_path: None,
             },
         ]
     }
@@ -417,6 +460,10 @@ mod tests {
             let path = match &action {
                 ProjectReplacementActionV1::New {} => None,
                 ProjectReplacementActionV1::Open { path, .. } => Some(path.clone()),
+                ProjectReplacementActionV1::RestoreBackup {
+                    expected_source_path,
+                    ..
+                } => expected_source_path.clone(),
             };
             let receipt = ProjectReplacementReceiptV1 {
                 request: request(action),
@@ -430,6 +477,10 @@ mod tests {
                 }),
             };
             let wire = serde_json::to_value(&receipt).unwrap();
+            let mut wrong_target = wire.clone();
+            wrong_target["outcome"]["authority"]["current_project_path"] =
+                serde_json::json!("C:/different.sdc");
+            assert!(serde_json::from_value::<ProjectReplacementReceiptV1>(wrong_target).is_err());
             assert_eq!(
                 serde_json::from_value::<ProjectReplacementReceiptV1>(wire.clone()).unwrap(),
                 receipt
@@ -461,5 +512,50 @@ mod tests {
                 cancelled
             );
         }
+    }
+
+    #[test]
+    fn project_backup_restore_requires_safe_id_digest_and_explicit_nullable_source() {
+        for action in [actions()[2].clone(), actions()[3].clone()] {
+            let source = request(action);
+            let wire = serde_json::to_value(&source).unwrap();
+            let mut missing = wire.clone();
+            missing["action"]
+                .as_object_mut()
+                .unwrap()
+                .remove("expected_source_path");
+            assert!(serde_json::from_value::<ProjectReplacementRequestV1>(missing).is_err());
+            for (field, value) in [
+                ("backup_id", serde_json::json!(0)),
+                (
+                    "backup_id",
+                    serde_json::json!(MAX_SAFE_JAVASCRIPT_INTEGER + 1),
+                ),
+                ("expected_file_sha256", serde_json::json!("B".repeat(64))),
+                ("expected_file_sha256", serde_json::json!("b".repeat(63))),
+                ("expected_source_path", serde_json::json!("")),
+                ("expected_source_path", serde_json::json!("C:/bad\0.sdc")),
+                (
+                    "expected_source_path",
+                    serde_json::json!("x".repeat(MAX_PROJECT_OPEN_PATH_BYTES + 1)),
+                ),
+            ] {
+                let mut bad = wire.clone();
+                bad["action"][field] = value;
+                assert!(
+                    serde_json::from_value::<ProjectReplacementRequestV1>(bad).is_err(),
+                    "{field}"
+                );
+            }
+            let mut forged = wire;
+            forged["action"]["path"] = serde_json::json!("C:/unmanaged/backup-12.json");
+            assert!(serde_json::from_value::<ProjectReplacementRequestV1>(forged).is_err());
+        }
+        let invalid = request(ProjectReplacementActionV1::RestoreBackup {
+            backup_id: 0,
+            expected_file_sha256: "a".repeat(64),
+            expected_source_path: None,
+        });
+        assert!(serde_json::to_value(invalid).is_err());
     }
 }

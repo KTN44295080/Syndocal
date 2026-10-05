@@ -1,4 +1,4 @@
-//! Typed New/Open adapters share the existing replacement lifecycle and publication CAS.
+//! Typed New/Open/backup restore share the replacement lifecycle and publication CAS.
 use std::{
     cell::RefCell,
     collections::HashMap,
@@ -190,7 +190,10 @@ fn classify(error: &str) -> Error {
     }
 }
 
-pub(super) fn prepare(request: &ProjectReplacementRequestV1) -> Result<PreparedProjectLoad, Error> {
+pub(super) fn prepare(
+    request: &ProjectReplacementRequestV1,
+    backup_directory: Option<&Path>,
+) -> Result<PreparedProjectLoad, Error> {
     let mut prepared = match &request.action {
         ProjectReplacementActionV1::New {} => super::prepare_project_load(
             protocol::ProjectFile {
@@ -228,6 +231,16 @@ pub(super) fn prepare(request: &ProjectReplacementRequestV1) -> Result<PreparedP
             super::prepare_project_load(project, mappings, path.clone(), Some(target))
                 .map_err(|_| Error::InvalidProject)
         }
+        ProjectReplacementActionV1::RestoreBackup {
+            backup_id,
+            expected_file_sha256,
+            expected_source_path,
+        } => super::project_backup_restoration::prepare(
+            backup_directory.ok_or(Error::InvalidProject)?,
+            *backup_id,
+            expected_file_sha256,
+            expected_source_path,
+        ),
     }?;
     // Prepare through the real Engine load/persistence policy, with a private
     // deny-output runtime. In particular, an empty legacy Timeline bank must
@@ -247,6 +260,7 @@ pub(super) fn execute_core(
     window_label: &str,
     caller: &str,
     request: ProjectReplacementRequestV1,
+    backup_directory: Option<&Path>,
     confirm: impl FnOnce() -> bool,
     publish: impl FnOnce(PreparedProjectLoad) -> Result<ProjectReplacementAuthorityV1, Error>,
 ) -> Response {
@@ -298,6 +312,9 @@ pub(super) fn execute_core(
                 let command = match &request.action {
                     ProjectReplacementActionV1::New {} => "new_project_control_plane_v1",
                     ProjectReplacementActionV1::Open { .. } => "open_project_control_plane_v1",
+                    ProjectReplacementActionV1::RestoreBackup { .. } => {
+                        "restore_project_backup_control_plane_v1"
+                    }
                 };
                 let outcome = super::with_project_replacement_invocation_generation(
                     state,
@@ -318,7 +335,7 @@ pub(super) fn execute_core(
                             return Ok(rejection(&request, code));
                         }
                         let outcome = (|| {
-                            let prepared = prepare(&request)?;
+                            let prepared = prepare(&request, backup_directory)?;
                             if !confirm() {
                                 return Ok(ProjectReplacementOutcomeV1::Cancelled);
                             }
@@ -442,6 +459,15 @@ pub(crate) fn execute_local(
         return rejection(&request, Error::InvalidRequest);
     }
     let state = app.state::<AppState>();
+    let backup_directory = match &request.action {
+        ProjectReplacementActionV1::RestoreBackup { .. } => {
+            match super::app_data_subdirectory_path(app, super::PROJECT_BACKUP_DIRECTORY) {
+                Ok(path) => Some(path),
+                Err(_) => return rejection(&request, Error::InvalidProject),
+            }
+        }
+        _ => None,
+    };
     execute_core(
         &state,
         &app.state::<ControlPlaneQueryState>(),
@@ -449,6 +475,7 @@ pub(crate) fn execute_local(
         window.label(),
         "local",
         request,
+        backup_directory.as_deref(),
         || {
             matches!(MessageDialog::new().set_level(MessageLevel::Warning)
             .set_title("Confirm project replacement")
@@ -495,6 +522,17 @@ pub(crate) fn execute_external(
         });
         let _reset = Reset;
         validate_external_authorization(&state)?;
+        let backup_directory = if matches!(
+            &request.action,
+            ProjectReplacementActionV1::RestoreBackup { .. }
+        ) {
+            Some(super::app_data_subdirectory_path(
+                app,
+                super::PROJECT_BACKUP_DIRECTORY,
+            )?)
+        } else {
+            None
+        };
         let caller = format!(
             "external:{}:{}",
             dispatch.principal_id, dispatch.principal_incarnation
@@ -506,6 +544,7 @@ pub(crate) fn execute_external(
             window.label(),
             &caller,
             request,
+            backup_directory.as_deref(),
             || true,
             |prepared| publish(&state, prepared),
         ))

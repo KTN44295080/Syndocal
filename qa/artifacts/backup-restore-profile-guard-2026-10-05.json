@@ -1,0 +1,10 @@
+[
+  {
+    "profile": "jp.seraf.ktn.syndocal",
+    "rejectedBeforeLaunch": true
+  },
+  {
+    "profile": "../jp.seraf.ktn.syndocal",
+    "rejectedBeforeLaunch": true
+  }
+]

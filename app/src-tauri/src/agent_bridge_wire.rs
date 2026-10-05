@@ -68,6 +68,7 @@ pub(super) const CANONICAL_OPERATION_IDS: &[&str] = &[
     "syndocal.project.file.acknowledge.v1",
     "syndocal.project.new.v1",
     "syndocal.project.open.v1",
+    "syndocal.project.backup.restore.v1",
     "syndocal.query.project.replacement.authority.v1",
 ];
 

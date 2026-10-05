@@ -49,7 +49,7 @@ use protocol::control_plane_registry_v2::{
     RatePolicy, ReceiptPolicy, SourceDisposition, SourceInventoryDescriptor, SourceKey, SourceRole,
     TypedSchemaProjection,
 };
-use protocol::control_plane_project::{PROJECT_NEW_OPERATION_ID, PROJECT_OPEN_OPERATION_ID,
+use protocol::control_plane_project::{PROJECT_NEW_OPERATION_ID, PROJECT_OPEN_OPERATION_ID, PROJECT_BACKUP_RESTORE_OPERATION_ID,
     PROJECT_REPLACEMENT_AUTHORITY_OPERATION_ID};
 
 use serde::{Deserialize, Serialize};
@@ -67,9 +67,9 @@ const KEYBOARD_SHORTCUT_SOURCE_MANIFEST: &str =
 const KEYBOARD_SHORTCUT_SOURCE_MANIFEST_SCHEMA_VERSION: u16 = 1;
 const KEYBOARD_APP_SHORTCUT_SOURCE_COUNT: usize = 30;
 const KEYBOARD_PROJECT_FILE_SHORTCUT_SOURCE_COUNT: usize = 3;
-const FROZEN_TAURI_ROUTE_ADMISSION_COUNT: usize = 554;
+const FROZEN_TAURI_ROUTE_ADMISSION_COUNT: usize = 555;
 const FROZEN_TAURI_ROUTE_ADMISSION_SHA256: &str =
-    "6267c381b5e9c0a57af1cb7bee41802ea0eae68f8b7662bc6d905e82dc7f4e9c";
+    "e155fd6fbf897f345ceb87fda2e6c9464806fe0840cb99585afb0727e302be5f";
 /// The command source is parsed and validated exactly once.  Local discovery
 /// calls only clone this immutable, validated value; they never parse source
 /// text or make an external request on the invocation path.
@@ -195,6 +195,7 @@ fn classify_registered_tauri_route(command: &str) -> Option<TauriRouteAdmissionC
         "new_project"
             | "new_project_control_plane_v1"
             | "open_project_control_plane_v1"
+            | "restore_project_backup_control_plane_v1"
             | "load_user_template"
             | "load_project"
             | "import_daslight_project"
@@ -1243,6 +1244,7 @@ enum ReviewedCanonicalOperation {
     SaveProjectBackupFile,
     AcknowledgeProjectFile,
     OpenProject,
+    RestoreProjectBackup,
     SetEffectEnabled,
     SetTimelineTransportPlaying,
     CommitTimelineLoopRuntime,
@@ -1290,6 +1292,7 @@ impl ReviewedCanonicalOperation {
             Self::SaveProjectBackupFile => "syndocal.project.backup.create.v1",
             Self::AcknowledgeProjectFile => "syndocal.project.file.acknowledge.v1",
             Self::OpenProject => PROJECT_OPEN_OPERATION_ID,
+            Self::RestoreProjectBackup => PROJECT_BACKUP_RESTORE_OPERATION_ID,
             Self::SetEffectEnabled => SET_EFFECT_ENABLED_OPERATION_ID,
             Self::SetTimelineTransportPlaying => TIMELINE_TRANSPORT_SET_PLAYING_OPERATION_ID,
             Self::CommitTimelineLoopRuntime => TIMELINE_LOOP_RUNTIME_OPERATION_ID,
@@ -1350,6 +1353,7 @@ fn reviewed_canonical_operation(command: &str) -> Option<ReviewedCanonicalOperat
         "acknowledge_project_file_control_plane_v1" => Some(ReviewedCanonicalOperation::AcknowledgeProjectFile),
         "new_project_control_plane_v1" => Some(ReviewedCanonicalOperation::NewProject),
         "open_project_control_plane_v1" => Some(ReviewedCanonicalOperation::OpenProject),
+        "restore_project_backup_control_plane_v1" => Some(ReviewedCanonicalOperation::RestoreProjectBackup),
         "set_effect_enabled" => Some(ReviewedCanonicalOperation::SetEffectEnabled),
         "set_timeline_transport_playing_runtime_v1" => {
             Some(ReviewedCanonicalOperation::SetTimelineTransportPlaying)
@@ -1432,7 +1436,7 @@ fn canonical_descriptor_for_source(
             OperationClass::Mutation, vec![OperationCapability::LocalWindowBound, OperationCapability::AuthoritativeProjectMutation],
             OperationIdempotency::Mutating, AdapterPolicy::LocalWindowProjectPublication, ReceiptPolicy::ExactTerminalReceipt,
         ),
-        ReviewedCanonicalOperation::NewProject | ReviewedCanonicalOperation::OpenProject => (
+        ReviewedCanonicalOperation::NewProject | ReviewedCanonicalOperation::OpenProject | ReviewedCanonicalOperation::RestoreProjectBackup => (
             OperationClass::Mutation,
             vec![OperationCapability::LocalWindowBound, OperationCapability::AuthoritativeProjectMutation],
             OperationIdempotency::Mutating,
@@ -1591,7 +1595,7 @@ fn canonical_descriptor_for_source(
         schema: CanonicalOperationDescriptor::schema_identity(),
         operation_id: reviewed.operation_id().to_string(),
         class,
-        risk: if matches!(reviewed, ReviewedCanonicalOperation::NewProject | ReviewedCanonicalOperation::OpenProject | ReviewedCanonicalOperation::SaveProjectFile | ReviewedCanonicalOperation::SaveProjectAsFile | ReviewedCanonicalOperation::SaveUserTemplateFile | ReviewedCanonicalOperation::SaveProjectBackupFile | ReviewedCanonicalOperation::AcknowledgeProjectFile) {
+        risk: if matches!(reviewed, ReviewedCanonicalOperation::NewProject | ReviewedCanonicalOperation::OpenProject | ReviewedCanonicalOperation::RestoreProjectBackup | ReviewedCanonicalOperation::SaveProjectFile | ReviewedCanonicalOperation::SaveProjectAsFile | ReviewedCanonicalOperation::SaveUserTemplateFile | ReviewedCanonicalOperation::SaveProjectBackupFile | ReviewedCanonicalOperation::AcknowledgeProjectFile) {
             OperationRisk::R5
         } else if matches!(reviewed, ReviewedCanonicalOperation::EngageSafetyBlackout) {
             OperationRisk::S0
@@ -1665,6 +1669,7 @@ fn canonical_descriptor_for_source(
                 | ReviewedCanonicalOperation::SaveUserTemplateFile
                 | ReviewedCanonicalOperation::SaveProjectBackupFile | ReviewedCanonicalOperation::AcknowledgeProjectFile
                 | ReviewedCanonicalOperation::OpenProject
+                | ReviewedCanonicalOperation::RestoreProjectBackup
         ) {
             OperationAuditRequirement::Immutable
         } else {
@@ -1709,6 +1714,7 @@ fn canonical_descriptor_for_source(
                 | ReviewedCanonicalOperation::SaveUserTemplateFile
                 | ReviewedCanonicalOperation::SaveProjectBackupFile | ReviewedCanonicalOperation::AcknowledgeProjectFile
                 | ReviewedCanonicalOperation::OpenProject
+                | ReviewedCanonicalOperation::RestoreProjectBackup
         ) {
             RatePolicy::TokenBucket4PerSecondBurst8
         } else {
@@ -1754,6 +1760,7 @@ fn canonical_descriptor_for_source(
                 | ReviewedCanonicalOperation::SaveUserTemplateFile
                 | ReviewedCanonicalOperation::SaveProjectBackupFile | ReviewedCanonicalOperation::AcknowledgeProjectFile
                 | ReviewedCanonicalOperation::OpenProject
+                | ReviewedCanonicalOperation::RestoreProjectBackup
         ) {
             ConsentPolicy::NativeDangerConfirmation
         } else {
@@ -1907,6 +1914,7 @@ fn descriptor_for_command(operation_id: &str) -> OperationDescriptor {
         "add_display_output_v2"
             | "new_project_control_plane_v1"
             | "open_project_control_plane_v1"
+            | "restore_project_backup_control_plane_v1"
             | "save_project_control_plane_v1"
             | "save_project_as_control_plane_v1"
             | "save_user_template_control_plane_v1"
@@ -2476,7 +2484,7 @@ mod tests {
             31
         );
         assert_eq!(counts[&TauriRouteAdmissionClass::ReadOnly], 103);
-        assert_eq!(counts[&TauriRouteAdmissionClass::ProjectReplacement], 10);
+        assert_eq!(counts[&TauriRouteAdmissionClass::ProjectReplacement], 11);
         assert_eq!(counts[&TauriRouteAdmissionClass::ProjectHistory], 3);
         assert_eq!(counts[&TauriRouteAdmissionClass::LocalPhysicalMutation], 6);
         assert_eq!(counts[&TauriRouteAdmissionClass::RuntimeMutation], 168);
@@ -2562,7 +2570,7 @@ mod tests {
                 + MIDI_OSC_DMX_OPERATION_COUNT
                 + FRONTEND_INVOKE_COUNT
         );
-        assert_eq!(registry.operations.len(), 1638);
+        assert_eq!(registry.operations.len(), 1639);
         verify_registry_exact_set(&names, &registry).unwrap();
         let r0 = registry
             .operations
@@ -2950,10 +2958,10 @@ mod tests {
         const KEYBOARD_PROJECT_FILE_COUNT: usize = 3;
         const SOURCE_TOTAL: usize =
             LEGACY_SOURCE_TOTAL + KEYBOARD_APP_COUNT + KEYBOARD_PROJECT_FILE_COUNT;
-        assert_eq!(LEGACY_SOURCE_TOTAL, 1638);
-        assert_eq!(SOURCE_TOTAL, 1671);
+        assert_eq!(LEGACY_SOURCE_TOTAL, 1639);
+        assert_eq!(SOURCE_TOTAL, 1672);
         assert_eq!(canonical.source_inventory.len(), SOURCE_TOTAL);
-        assert_eq!(canonical.canonical_operations.len(), 65);
+        assert_eq!(canonical.canonical_operations.len(), 66);
 
         let output_control_operations = canonical
             .canonical_operations
@@ -3338,7 +3346,7 @@ mod tests {
                 )
             })
             .collect::<Vec<_>>();
-        assert_eq!(direct.len(), 65);
+        assert_eq!(direct.len(), 66);
         assert_eq!(aliases.len(), FRONTEND_COUNT);
         assert_eq!(internal_steps.len(), 4);
         assert_eq!(structural_routes.len(), 1);
@@ -3668,7 +3676,7 @@ mod tests {
                 .is_none());
         }
         for operation in &canonical.canonical_operations {
-            if matches!(operation.operation_id.as_str(), PROJECT_NEW_OPERATION_ID | PROJECT_OPEN_OPERATION_ID | "syndocal.project.save.v1" | "syndocal.project.save_as.v1" | "syndocal.project.template.save.v1" | "syndocal.project.backup.create.v1" | "syndocal.project.file.acknowledge.v1") {
+            if matches!(operation.operation_id.as_str(), PROJECT_NEW_OPERATION_ID | PROJECT_OPEN_OPERATION_ID | PROJECT_BACKUP_RESTORE_OPERATION_ID | "syndocal.project.save.v1" | "syndocal.project.save_as.v1" | "syndocal.project.template.save.v1" | "syndocal.project.backup.create.v1" | "syndocal.project.file.acknowledge.v1") {
                 assert_eq!(operation.risk, OperationRisk::R5);
                 assert_eq!(operation.audit, OperationAuditRequirement::Immutable);
             } else if operation.operation_id == SAFETY_BLACKOUT_ENGAGE_OPERATION_ID {
@@ -3709,10 +3717,10 @@ mod tests {
                 assert_eq!(operation.audit, OperationAuditRequirement::NotApplicable);
             }
             assert_eq!(operation.derived_adapters.len(), 1);
-            if matches!(operation.operation_id.as_str(), PROJECT_NEW_OPERATION_ID | PROJECT_OPEN_OPERATION_ID | "syndocal.project.save.v1" | "syndocal.project.save_as.v1" | "syndocal.project.template.save.v1" | "syndocal.project.backup.create.v1" | "syndocal.project.file.acknowledge.v1") {
+            if matches!(operation.operation_id.as_str(), PROJECT_NEW_OPERATION_ID | PROJECT_OPEN_OPERATION_ID | PROJECT_BACKUP_RESTORE_OPERATION_ID | "syndocal.project.save.v1" | "syndocal.project.save_as.v1" | "syndocal.project.template.save.v1" | "syndocal.project.backup.create.v1" | "syndocal.project.file.acknowledge.v1") {
                 assert_eq!(operation.class, OperationClass::Mutation);
                 assert_eq!(operation.idempotency, OperationIdempotency::Mutating);
-                assert_eq!(operation.adapter_policy, if matches!(operation.operation_id.as_str(), PROJECT_NEW_OPERATION_ID | PROJECT_OPEN_OPERATION_ID) { AdapterPolicy::LocalWindowProjectReplacement } else { AdapterPolicy::LocalWindowProjectPublication });
+                assert_eq!(operation.adapter_policy, if matches!(operation.operation_id.as_str(), PROJECT_NEW_OPERATION_ID | PROJECT_OPEN_OPERATION_ID | PROJECT_BACKUP_RESTORE_OPERATION_ID) { AdapterPolicy::LocalWindowProjectReplacement } else { AdapterPolicy::LocalWindowProjectPublication });
                 assert_eq!(operation.receipt_policy, ReceiptPolicy::ExactTerminalReceipt);
                 assert_eq!(operation.rate_policy, RatePolicy::TokenBucket4PerSecondBurst8);
                 assert_eq!(operation.consent_policy, ConsentPolicy::NativeDangerConfirmation);
@@ -4101,11 +4109,11 @@ mod tests {
     fn legacy_v1_registry_json_and_count_remain_inventory_honest() {
         let legacy = registry().unwrap();
         // Includes both the native and frontend missing-publication resolver.
-        assert_eq!(legacy.operations.len(), 1638);
+        assert_eq!(legacy.operations.len(), 1639);
         let encoded = serde_json::to_value(&legacy).unwrap();
         assert_eq!(encoded["schema"]["version"], CONTROL_PLANE_SCHEMA_VERSION);
         let operations = encoded["operations"].as_array().unwrap();
-        assert_eq!(operations.len(), 1638);
+        assert_eq!(operations.len(), 1639);
         assert!(operations.iter().all(|operation| {
             operation["source_family"] != "keyboard_app"
                 && operation["source_family"] != "keyboard_project_file"

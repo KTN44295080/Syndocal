@@ -1,0 +1,21 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Syndocal QA MCP Lifecycle",
+  "identifier": "jp.seraf.ktn.syndocal.qa.mcp-lifecycle.backup-restore-20261005",
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Syndocal QA - MCP Lifecycle",
+        "width": 1280,
+        "height": 800,
+        "minWidth": 960,
+        "minHeight": 640,
+        "resizable": true,
+        "decorations": false,
+        "dragDropEnabled": false
+      }
+    ]
+  },
+  "bundle": { "active": false }
+}

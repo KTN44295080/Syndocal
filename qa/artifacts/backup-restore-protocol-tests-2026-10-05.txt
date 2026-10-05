@@ -1,0 +1,22 @@
+WHERE_LINKERS=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+PINNED_LINKER=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+["test","-p","protocol","--release","--locked","control_plane_project","--","--nocapture"]
+   Compiling protocol v1.2.0-alpha.69 (C:\Users\janua\OneDrive\ドキュメント\GitHub\Syndocal\crates\protocol)
+    Finished `release` profile [optimized] target(s) in 1m 45s
+     Running unittests src\lib.rs (C:\Users\janua\AppData\Local\Temp\syndocal-native-acceptance-target\release\deps\protocol-a46de68eb46b8212.exe)
+
+running 6 tests
+test control_plane_project::tests::project_open_requires_bounded_target_and_exact_sha256 ... ok
+test control_plane_project::tests::project_replacement_response_rejects_unsafe_identity_in_both_directions ... ok
+test control_plane_project::tests::project_replacement_requires_exact_operation_safe_identity_and_complete_fence ... ok
+test control_plane_project::tests::project_replacement_requests_round_trip_and_reject_forged_authority ... ok
+test control_plane_project::tests::project_backup_restore_requires_safe_id_digest_and_explicit_nullable_source ... ok
+test control_plane_project::tests::project_replacement_receipt_requires_exact_successor_and_target ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 249 filtered out; finished in 0.00s
+
+     Running tests\dj_link_v3_sender_contract.rs (C:\Users\janua\AppData\Local\Temp\syndocal-native-acceptance-target\release\deps\dj_link_v3_sender_contract-58186a99759a5613.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.00s
