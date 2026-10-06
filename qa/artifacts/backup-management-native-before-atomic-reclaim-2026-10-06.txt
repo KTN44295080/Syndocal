@@ -1,0 +1,1 @@
+PASS isolated native lifecycle: 54 checks; normal instance unchanged; QA process and credential cleaned up.

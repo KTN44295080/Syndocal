@@ -1,0 +1,10 @@
+{
+  "observedUtc": "2026-10-06T13:33:18.233Z",
+  "childBuildExitCode": 0,
+  "postSourceGuardRejected": true,
+  "changedFiles": [
+    "tools/syndocal-mcp/check-native-lifecycle.mjs"
+  ],
+  "compiledRustAndFrontendSourcesUnchanged": true,
+  "action": "Retain observation, then repeat build and native gate with stable current 49-source freeze"
+}

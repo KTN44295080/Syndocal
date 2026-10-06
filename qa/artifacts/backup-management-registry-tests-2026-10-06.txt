@@ -1,0 +1,43 @@
+
+running 35 tests
+test authored_control_plane::tests::bpm_history_tests::manual_bpm_invalid_values_leave_engine_and_existing_history_unchanged ... ok
+test authored_control_plane::tests::bpm_history_tests::manual_bpm_ticket_preserves_prior_history_and_undo_redo_exact_images ... ok
+test authored_control_plane::tests::destroyed_retirement_marker_fences_begin_and_authored_gap_without_drift ...
+thread 'authored_control_plane::tests::destroyed_retirement_marker_fences_begin_and_authored_gap_without_drift' (39292) panicked at app\src-tauri\src\authored_control_plane.rs:2034:13:
+poison output lease registry between owner and query retirement
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+ok
+test authored_control_plane::tests::exact_reply_retry_is_single_flight_and_byte_identical ... ok
+test authored_control_plane::tests::generic_authored_bridge_replays_exact_terminal_result_and_rejects_shape_reuse ... ok
+test authored_control_plane::tests::owner_aba_and_other_window_requests_are_forbidden_without_drift ... ok
+test authored_control_plane::tests::owner_retirement_tombstones_old_principal_receipts ... ok
+test authored_control_plane::tests::publication_failure_keeps_a_and_coordinator_identical_and_is_receipted ... ok
+test authored_control_plane::tests::real_authored_commit_undoes_to_exact_a_and_redoes_to_exact_b_through_navigation_core ... ok
+test authored_control_plane::tests::real_handler_noop_is_receipted_without_publication_or_history_drift ... ok
+test authored_control_plane::tests::real_handler_retry_publishes_once_and_retains_byte_identical_receipt ... ok
+test authored_control_plane::tests::real_handler_same_receipt_key_with_different_shape_rejects_without_drift ... ok
+test authored_control_plane::tests::retained_exact_receipt_precedes_expired_issued_fence_and_tombstones_fail_closed ... ok
+test authored_control_plane::tests::same_key_different_shape_is_rejected_without_republishing ... ok
+test authored_control_plane::tests::two_principals_from_one_start_fence_admit_only_one_and_stale_the_other ... ok
+test authored_control_plane::tests::wrong_authored_operation_or_payload_is_rejected_before_engine_or_history ... ok
+test control_plane::tests::canonical_registry_derives_the_exact_current_source_inventory ... ok
+test control_plane::tests::canonical_registry_rejects_dropped_legacy_and_keyboard_sources ... ok
+test control_plane::tests::compiled_handler_and_registry_have_the_exact_same_set ... ok
+test control_plane::tests::conservative_default_never_makes_a_mutation_externally_available ... ok
+test control_plane::tests::duplicate_handler_command_is_rejected ... ok
+test control_plane::tests::frontend_manifest_rejects_duplicate_unsorted_and_invalid_commands ... ok
+test control_plane::tests::handler_parser_accepts_only_exact_nonorphaned_windows_x64_asio_cfg ... ok
+test control_plane::tests::keyboard_shortcut_manifest_rejects_malformed_duplicate_and_drifting_sources ... ok
+test control_plane::tests::legacy_registry_only_adds_the_canonical_query_endpoint_row ... ok
+test control_plane::tests::legacy_set_effect_enabled_stays_r5_while_v2_owns_the_authoritative_mutation ... ok
+test control_plane::tests::legacy_v1_registry_json_and_count_remain_inventory_honest ... ok
+test control_plane::tests::missing_or_new_registry_descriptor_is_rejected ... ok
+test control_plane::tests::multiple_production_handler_blocks_are_rejected ... ok
+test control_plane::tests::registry_requires_a_window_binding ... ok
+test control_plane::tests::tauri_route_admission_table_is_exact_and_fail_closed ... ok
+test project_file_control_plane::tests::project_file_backup_authority_binds_origin_full_request_expiry_and_capacity ... ok
+test project_file_control_plane::tests::project_file_bounded_target_observation_and_no_clobber ... ok
+test project_file_control_plane::tests::project_file_durable_shape_binds_full_fence_and_target ... ok
+test project_file_control_plane::tests::project_file_target_rejects_relative_traversal_and_wrong_surface_extension ... ok
+
+test result: ok. 35 passed; 0 failed; 0 ignored; 0 measured; 1994 filtered out; finished in 6.15s

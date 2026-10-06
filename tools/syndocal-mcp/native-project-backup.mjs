@@ -4,6 +4,7 @@ import path from 'node:path';
 import {createHash, randomUUID} from 'node:crypto';
 import {isDeepStrictEqual} from 'node:util';
 import {openNativeStdioSession} from './native-stdio-session.mjs';
+import {nativeBackupDeletionManagement} from './native-backup-deletion-management.mjs';
 
 // Authenticated MCP with individually owned IDs, explicit acknowledgement and
 // native cleanup. Never enter retention against existing unowned QA backups.
@@ -204,7 +205,7 @@ export async function nativeProjectBackup(backend, options, checks) {
       assert.ok(owned,'The exact native request must have a durable terminal');assert.equal(owned.phase,'succeeded');
       assert.deepEqual(owned.receipt,deleted);assert.equal(owned.error,null);
       try {
-        await fs.writeFile(deletionJournal,Buffer.from(JSON.stringify({...facts,version:2})));
+        await fs.writeFile(deletionJournal,Buffer.from(JSON.stringify({...facts,version:3})));
         await failed(ids.deleteStatus,deleteRequest,/journal_version_unsupported/);
         await failed(ids.remove,deleteRequest,/journal_version_unsupported/);
         assert.deepEqual(await fs.readFile(saved.target_path),recreated);
@@ -228,6 +229,8 @@ export async function nativeProjectBackup(backend, options, checks) {
     checks.push({check:'external-backup-delete-same-artifact-receipt-and-exact-replay-preserve-project-authority-output-and-recreated-bytes',passed:true,
       receipt:deleted,elapsedMs:performance.now()-deleteStarted});
     await failed(ids.inspect,{schema_version:1,backup_id:saved.backup.id},/inspect_metadata/);
+    await nativeBackupDeletionManagement(backend,checks,{send,success,failed,grant,state,directory,saved,bytes,
+      deleted,deleteRequest,deletion,ids});
     const next=await prepare();assert.equal(next.request_id,2);const second=await success(ids.create,next);
     assert.equal(second.phase,'succeeded');created.push({request:next,receipt:second,acknowledged:false});
     await success(ids.ack,next);created[1].acknowledged=true;

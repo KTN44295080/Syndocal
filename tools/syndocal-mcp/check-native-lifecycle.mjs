@@ -480,6 +480,9 @@ await fs.writeFile(evidence, `${JSON.stringify({ schemaVersion: 1, timestamp: ne
   } : {}),
   ...(projectBackup ? {
     projectBackupHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-project-backup.mjs', import.meta.url))).digest('hex'),
+    backupDeletionManagementHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-backup-deletion-management.mjs', import.meta.url))).digest('hex'),
+    backupDeletionManagementPolicySha256: createHash('sha256').update(await fs.readFile(new URL('../../app/src-tauri/src/project_backup_deletion_management.rs', import.meta.url))).digest('hex'),
+    backupDeletionManagementProtocolSha256: createHash('sha256').update(await fs.readFile(new URL('../../crates/protocol/src/control_plane_backup_management.rs', import.meta.url))).digest('hex'),
     managedBackupPolicySha256: createHash('sha256').update(await fs.readFile(new URL('../../app/src-tauri/src/project_file_managed_backup.rs', import.meta.url))).digest('hex'),
     backupInspectionPolicySha256: createHash('sha256').update(await fs.readFile(new URL('../../app/src-tauri/src/project_backup_inspection.rs', import.meta.url))).digest('hex'),
     backupListingPolicySha256: createHash('sha256').update(await fs.readFile(new URL('../../app/src-tauri/src/project_backup_listing.rs', import.meta.url))).digest('hex'),

@@ -1,0 +1,22 @@
+Pinned linker: C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+PATH-first link.exe: C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+   Compiling protocol v1.2.0-alpha.69 (C:\Users\janua\OneDrive\ドキュメント\GitHub\Syndocal\crates\protocol)
+    Finished `release` profile [optimized] target(s) in 1m 55s
+     Running unittests src\lib.rs (target\release\deps\protocol-a46de68eb46b8212.exe)
+
+running 2 tests
+test control_plane_backup_management::tests::journal_query_requires_bounded_hash_cursor_and_snapshot_identity ... ok
+
+thread 'control_plane_backup_management::tests::management_actions_are_explicit_bounded_unique_and_owner_free' (123472) panicked at crates\protocol\src\control_plane_backup_management.rs:191:9:
+assertion failed: serde_json::from_value::<ArtifactObservationV1>(serde_json::json!({"kind":"missing","path":"forged"})).is_err()
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test control_plane_backup_management::tests::management_actions_are_explicit_bounded_unique_and_owner_free ... FAILED
+
+failures:
+
+failures:
+    control_plane_backup_management::tests::management_actions_are_explicit_bounded_unique_and_owner_free
+
+test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 259 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p protocol --lib`

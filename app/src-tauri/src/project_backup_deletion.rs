@@ -13,7 +13,7 @@ use super::project_backup_deletion_journal as durable;
 
 #[derive(Default)]
 pub(crate) struct BackupDeletionControlPlaneState {
-    receipts: AuthoredControlPlaneState,
+    pub(super) receipts: AuthoredControlPlaneState,
 }
 
 struct Prepared {

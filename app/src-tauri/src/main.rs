@@ -276,6 +276,7 @@ mod project_backup_inspection;
 mod project_backup_listing;
 mod project_backup_deletion;
 mod project_backup_deletion_journal;
+mod project_backup_deletion_management;
 mod project_backup_restoration;
 mod output_blackout_control;
 mod dj_link_machine;
@@ -51128,6 +51129,32 @@ async fn query_project_backup_delete_status_v1(app: tauri::AppHandle, window: We
     tauri::async_runtime::spawn_blocking(move || project_backup_deletion::status_local(&app,&window,request))
         .await.map_err(|_|"project_backup_delete_status_executor_failed")?
         .and_then(|status|serde_json::to_value(status).map_err(|_|"project_backup_delete_status_response_invalid".into()))
+}
+
+#[tauri::command]
+async fn query_project_backup_deletion_journal_v1(app: tauri::AppHandle, window: WebviewWindow,
+    request: protocol::control_plane_backup_management::JournalQueryRequestV1,
+) -> Result<Value, native_adapter_error::NativeAdapterError> {
+    tauri::async_runtime::spawn_blocking(move || project_backup_deletion_management::query_local(&app,&window,request))
+        .await.map_err(|_|"project_backup_delete_journal_query_executor_failed")?
+        .and_then(|value|serde_json::to_value(value).map_err(|_|"project_backup_delete_journal_query_response_invalid".into()))
+}
+#[tauri::command]
+async fn query_project_backup_deletion_management_status_v1(app: tauri::AppHandle, window: WebviewWindow,
+    request: protocol::control_plane_backup_management::ManagementRequestV1,
+) -> Result<Value, native_adapter_error::NativeAdapterError> {
+    tauri::async_runtime::spawn_blocking(move || project_backup_deletion_management::status_local(&app,&window,request))
+        .await.map_err(|_|"project_backup_delete_management_status_executor_failed")?
+        .and_then(|value|serde_json::to_value(value).map_err(|_|"project_backup_delete_management_status_response_invalid".into()))
+}
+#[tauri::command]
+async fn manage_project_backup_deletion_journal_v1(app: tauri::AppHandle, window: WebviewWindow,
+    request: protocol::control_plane_backup_management::ManagementRequestV1,
+) -> Result<Value, native_adapter_error::NativeAdapterError> {
+    tauri::async_runtime::spawn_blocking(move || project_backup_deletion_management::execute_local(&app,&window,request))
+        .await.map_err(|_|"project_backup_delete_management_executor_failed")?
+        .and_then(|value|serde_json::to_value(value).map_err(|_|"project_backup_delete_management_response_invalid".into()))
+        .map_err(Into::into)
 }
 
 #[tauri::command]
@@ -132868,6 +132895,9 @@ fn main() {
             list_project_backups_control_plane_v1,
             delete_project_backup_control_plane_v1,
             query_project_backup_delete_status_v1,
+            query_project_backup_deletion_journal_v1,
+            query_project_backup_deletion_management_status_v1,
+            manage_project_backup_deletion_journal_v1,
             query_project_file_status_v1,
             acknowledge_project_file_control_plane_v1,
             get_operator_policy,

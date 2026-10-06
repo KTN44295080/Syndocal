@@ -1,0 +1,14 @@
+{
+  "observedUtc": "2026-10-06T17:24:53.244Z",
+  "priorRestoreProfileBytesUnchanged": true,
+  "currentProfileVersionBefore": 1,
+  "currentProfileVersionAfter": 2,
+  "originalDeletionFactsPreserved": true,
+  "publicationOriginsBeforeFinalNativePreserved": true,
+  "finalCounts": {
+    "deletion": 1,
+    "management": 4,
+    "retired": 8
+  },
+  "currentProfileOriginsAfter": 18
+}

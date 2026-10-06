@@ -189,13 +189,130 @@ mod project_backup_deletion_contract_tests {
         execute_core(&harness.state,&query,&control,&admission,LABEL,"one",value.clone(),&root,&recovery,||Ok(()),||true).unwrap();
         fs::write(root.join("backup-1.json"),&bytes).unwrap();
         let journal=root.join(crate::project_backup_deletion_journal::FILE_NAME);
-        for (bad,pattern) in [(b"{\"version\":2,\"records\":[]}".as_slice(),"version_unsupported"),
+        for (bad,pattern) in [(b"{\"version\":3,\"records\":[]}".as_slice(),"version_unsupported"),
             (b"{\"version\":1,\"version\":1,\"records\":[]}".as_slice(),"duplicate object key")]{
             fs::write(&journal,bad).unwrap();
             assert!(execute_core(&harness.state,&query,&control,&admission,LABEL,"one",value.clone(),&root,&recovery,
                 ||Ok(()),||panic!("Corrupt journal cannot execute")).unwrap_err().contains(pattern));
             assert_eq!(fs::read(&journal).unwrap(),bad);assert_eq!(fs::read(root.join("backup-1.json")).unwrap(),bytes);
         }
+        fs::remove_file(root.join("backup-1.json")).unwrap();cleanup_journal(&root);fs::remove_dir(root).unwrap();
+    }
+
+    fn management_request(harness:&MediaAssetA6CommandHarness,query:&ControlPlaneQueryState,root:&Path,id:u64,
+        action:protocol::control_plane_backup_management::ManagementActionV1)
+        ->protocol::control_plane_backup_management::ManagementRequestV1 {
+        let observation=crate::project_backup_deletion_journal::observe(&root.join(crate::project_backup_deletion_journal::FILE_NAME)).unwrap();
+        protocol::control_plane_backup_management::ManagementRequestV1 {schema_version:1,
+            operation_id:protocol::control_plane_backup_management::MANAGE_ID.into(),request_id:id,
+            expected_fence:query.issue_project_mutation_fence_for_window(LABEL,&harness.state).unwrap(),
+            expected_generation:observation.journal.generation(),expected_journal_sha256:observation.sha256,action}
+    }
+    fn deletion_record_id(harness:&MediaAssetA6CommandHarness,query:&ControlPlaneQueryState,root:&Path)->String {
+        crate::project_backup_deletion_management::query_core(&harness.state,query,LABEL,"one",
+            protocol::control_plane_backup_management::JournalQueryRequestV1 {schema_version:1,limit:16,
+                after_record_id:None,expected_journal_sha256:None},&root.join("journal.json"),||Ok(())).unwrap()
+            .records.into_iter().find(|row|row.kind==protocol::control_plane_backup_management::JournalRecordKindV1::Deletion).unwrap().record_id
+    }
+    #[test]
+    fn project_backup_deletion_management_release_preserves_bytes_unknown_outcome_and_exact_replay() {
+        use protocol::control_plane_backup_management::{ManagementActionV1 as Action,ArtifactObservationV1 as Observation};
+        use crate::project_backup_deletion_management as manager;
+        let harness=MediaAssetA6CommandHarness::new();let query=ControlPlaneQueryState::new().unwrap();
+        let control=BackupDeletionControlPlaneState::default();let admission=ProjectFileControlPlaneState::default();
+        let (root,bytes)=fixture("backup-management-release");let recovery=root.join("journal.json");
+        let old=request(&query,&harness.state,&bytes,1);seed_unresolved(&harness,&root,old.clone());
+        let record_id=deletion_record_id(&harness,&query,&root);let before=authority(&harness.state);
+        let value=management_request(&harness,&query,&root,1,Action::ReleaseUnknownProtection {record_id,
+            expected_artifact:Observation::Present {sha256:format!("{:x}",Sha256::digest(&bytes))}});
+        let receipt=manager::execute_core(&harness.state,&query,&control,&admission,LABEL,"one",value.clone(),&root,&recovery,||Ok(()),||true).unwrap();
+        assert_eq!(fs::read(root.join("backup-1.json")).unwrap(),bytes);assert_eq!(before,authority(&harness.state));
+        let status=crate::project_backup_deletion::status_core(&harness.state,LABEL,"one",old.clone(),&recovery,||Ok(())).unwrap();
+        assert_eq!(status.phase,protocol::control_plane_file::ProjectBackupDeletePhaseV1::Indeterminate);assert!(status.receipt.is_none());
+        assert!(ensure_project_backup_not_durably_referenced_v1(&recovery,&root,1).is_ok());
+        query.retire_window(LABEL).unwrap();
+        let replay=manager::execute_core(&harness.state,&query,&BackupDeletionControlPlaneState::default(),&admission,
+            LABEL,"one",value.clone(),&root,&recovery,||Ok(()),||panic!("Durable management replay cannot confirm")).unwrap();
+        assert_eq!(serde_json::to_value(receipt).unwrap(),serde_json::to_value(replay).unwrap());
+        assert!(manager::status_core(&harness.state,&query,LABEL,"other",value.clone(),&recovery,||Ok(())).unwrap().is_none());
+        let mut changed=value.clone();changed.expected_generation+=1;
+        assert!(manager::execute_core(&harness.state,&query,&control,&admission,LABEL,"one",changed,&root,&recovery,||Ok(()),||true).unwrap_err().contains("different shape"));
+        let foreign_process=ControlPlaneQueryState::new().unwrap();
+        assert!(manager::execute_core(&harness.state,&foreign_process,&control,&admission,LABEL,"one",value,&root,&recovery,||Ok(()),||true).unwrap_err().contains("unissued_fence"));
+        assert!(execute_core(&harness.state,&query,&control,&admission,LABEL,"one",old,&root,&recovery,||Ok(()),||true).unwrap_err().contains("indeterminate"));
+        execute_core(&harness.state,&query,&control,&admission,LABEL,"one",request(&query,&harness.state,&bytes,2),&root,&recovery,||Ok(()),||true).unwrap();
+        assert!(!root.join("backup-1.json").exists());cleanup_journal(&root);fs::remove_dir(root).unwrap();
+    }
+    #[test]
+    fn project_backup_deletion_management_ack_blocks_cached_late_delete_and_future_data_never_bypasses_cache() {
+        use protocol::control_plane_backup_management::ManagementActionV1 as Action;
+        use crate::project_backup_deletion_management as manager;
+        let harness=MediaAssetA6CommandHarness::new();let query=ControlPlaneQueryState::new().unwrap();
+        let control=BackupDeletionControlPlaneState::default();let admission=ProjectFileControlPlaneState::default();
+        let (root,bytes)=fixture("backup-management-ack");let recovery=root.join("journal.json");
+        let old=request(&query,&harness.state,&bytes,1);
+        execute_core(&harness.state,&query,&control,&admission,LABEL,"one",old.clone(),&root,&recovery,||Ok(()),||true).unwrap();
+        let value=management_request(&harness,&query,&root,1,Action::Acknowledge {record_ids:vec![deletion_record_id(&harness,&query,&root)]});
+        manager::execute_core(&harness.state,&query,&control,&admission,LABEL,"one",value.clone(),&root,&recovery,||Ok(()),||true).unwrap();
+        fs::write(root.join("backup-1.json"),b"recreated invalid bytes survive expired receipt").unwrap();
+        assert!(execute_core(&harness.state,&query,&control,&admission,LABEL,"one",old,&root,&recovery,||Ok(()),||true).unwrap_err().contains("receipt_expired"));
+        let path=root.join(crate::project_backup_deletion_journal::FILE_NAME);
+        fs::write(&path,b"{\"version\":3,\"records\":[]}").unwrap();
+        assert!(manager::execute_core(&harness.state,&query,&control,&admission,LABEL,"one",value,&root,&recovery,||Ok(()),||true).unwrap_err().contains("version_unsupported"));
+        assert_eq!(fs::read(root.join("backup-1.json")).unwrap(),b"recreated invalid bytes survive expired receipt");
+        fs::remove_file(root.join("backup-1.json")).unwrap();cleanup_journal(&root);fs::remove_dir(root).unwrap();
+    }
+    #[test]
+    fn project_backup_deletion_management_rejects_changed_observation_writer_fence_cancel_and_final_revocation_without_effect() {
+        use protocol::control_plane_backup_management::{ManagementActionV1 as Action,ArtifactObservationV1 as Observation};
+        use crate::project_backup_deletion_management as manager;
+        let harness=MediaAssetA6CommandHarness::new();let query=ControlPlaneQueryState::new().unwrap();
+        let control=BackupDeletionControlPlaneState::default();let admission=ProjectFileControlPlaneState::default();
+        let (root,bytes)=fixture("backup-management-reject");let recovery=root.join("journal.json");
+        seed_unresolved(&harness,&root,request(&query,&harness.state,&bytes,1));
+        let action=Action::ReleaseUnknownProtection {record_id:deletion_record_id(&harness,&query,&root),
+            expected_artifact:Observation::Present {sha256:format!("{:x}",Sha256::digest(&bytes))}};
+        let before=fs::read(root.join(crate::project_backup_deletion_journal::FILE_NAME)).unwrap();
+        let mut wrong=management_request(&harness,&query,&root,1,action.clone());
+        if let Action::ReleaseUnknownProtection {expected_artifact,..}=&mut wrong.action {*expected_artifact=Observation::Missing {};}
+        assert!(manager::execute_core(&harness.state,&query,&control,&admission,LABEL,"one",wrong,&root,&recovery,||Ok(()),||true).unwrap_err().contains("artifact_changed"));
+        let writer=fs::OpenOptions::new().write(true).open(root.join("backup-1.json")).unwrap();
+        assert!(manager::execute_core(&harness.state,&query,&control,&admission,LABEL,"one",management_request(&harness,&query,&root,2,action.clone()),&root,&recovery,||Ok(()),||true).unwrap_err().contains("artifact_open"));drop(writer);
+        let mut forged=management_request(&harness,&query,&root,3,action.clone());forged.expected_fence.session_incarnation+=1;
+        assert!(manager::execute_core(&harness.state,&query,&control,&admission,LABEL,"one",forged,&root,&recovery,||Ok(()),||true).unwrap_err().contains("unissued_fence"));
+        assert!(manager::execute_core(&harness.state,&query,&control,&admission,LABEL,"one",management_request(&harness,&query,&root,4,action.clone()),&root,&recovery,||Ok(()),||false).unwrap_err().contains("cancelled"));
+        let calls=std::cell::Cell::new(0);
+        assert!(manager::execute_core(&harness.state,&query,&control,&admission,LABEL,"one",management_request(&harness,&query,&root,5,action.clone()),&root,&recovery,
+            ||{calls.set(calls.get()+1);if calls.get()==2{Err("revoked at journal effect".into())}else{Ok(())}},||true).unwrap_err().contains("revoked at journal effect"));
+        let mut stale=management_request(&harness,&query,&root,6,action);stale.expected_journal_sha256="f".repeat(64);
+        assert!(manager::execute_core(&harness.state,&query,&control,&admission,LABEL,"one",stale,&root,&recovery,||Ok(()),||true).unwrap_err().contains("snapshot_changed"));
+        assert_eq!(fs::read(root.join(crate::project_backup_deletion_journal::FILE_NAME)).unwrap(),before);
+        assert_eq!(fs::read(root.join("backup-1.json")).unwrap(),bytes);
+        fs::remove_file(root.join("backup-1.json")).unwrap();cleanup_journal(&root);fs::remove_dir(root).unwrap();
+    }
+    #[test]
+    fn project_backup_deletion_management_queries_are_typed_busy_and_failed_journal_commit_is_not_success() {
+        use std::os::windows::fs::OpenOptionsExt;
+        use protocol::control_plane_backup_management::{ManagementActionV1 as Action,ArtifactObservationV1 as Observation,JournalQueryRequestV1};
+        use protocol::control_plane_query::{QueryError,QueryErrorCode};
+        use crate::project_backup_deletion_management as manager;
+        let harness=MediaAssetA6CommandHarness::new();let query=ControlPlaneQueryState::new().unwrap();
+        let control=BackupDeletionControlPlaneState::default();let admission=ProjectFileControlPlaneState::default();
+        let (root,bytes)=fixture("backup-management-storage");let recovery=root.join("journal.json");
+        seed_unresolved(&harness,&root,request(&query,&harness.state,&bytes,1));
+        let value=management_request(&harness,&query,&root,1,Action::ReleaseUnknownProtection {record_id:deletion_record_id(&harness,&query,&root),
+            expected_artifact:Observation::Present {sha256:format!("{:x}",Sha256::digest(&bytes))}});
+        let guard=harness.state.project_save_publication.lock().unwrap();
+        let error=manager::query_core(&harness.state,&query,LABEL,"one",JournalQueryRequestV1 {schema_version:1,limit:16,after_record_id:None,expected_journal_sha256:None},&recovery,||Ok(())).unwrap_err();
+        assert_eq!(serde_json::to_value(error).unwrap(),serde_json::to_value(QueryError::from_code(QueryErrorCode::Overloaded)).unwrap());
+        let error=manager::status_core(&harness.state,&query,LABEL,"one",value.clone(),&recovery,||Ok(())).unwrap_err();
+        assert_eq!(serde_json::to_value(error).unwrap(),serde_json::to_value(QueryError::from_code(QueryErrorCode::Overloaded)).unwrap());drop(guard);
+        let path=root.join(crate::project_backup_deletion_journal::FILE_NAME);let before=fs::read(&path).unwrap();
+        let reader=fs::OpenOptions::new().read(true).share_mode(windows::Win32::Storage::FileSystem::FILE_SHARE_READ.0).open(&path).unwrap();
+        assert!(manager::execute_core(&harness.state,&query,&control,&admission,LABEL,"one",value.clone(),&root,&recovery,||Ok(()),||true).unwrap_err().contains("management_indeterminate"));
+        assert!(manager::status_core(&harness.state,&query,LABEL,"one",value,&recovery,||Ok(())).unwrap().is_none());
+        assert_eq!(fs::read(&path).unwrap(),before);assert_eq!(fs::read_dir(&root).unwrap().count(),2);drop(reader);
+        assert_eq!(fs::read(root.join("backup-1.json")).unwrap(),bytes);
         fs::remove_file(root.join("backup-1.json")).unwrap();cleanup_journal(&root);fs::remove_dir(root).unwrap();
     }
 }

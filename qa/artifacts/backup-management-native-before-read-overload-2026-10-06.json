@@ -1,0 +1,90 @@
+{
+  "schemaVersion": 1,
+  "timestamp": "2026-10-06T14:01:01.531Z",
+  "passed": false,
+  "executable": "C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-native-acceptance-target\\release\\syndocal.exe",
+  "executableSha256": "83ea15b748ffcc249edb2868735154e5d81696cd69529a8806d95b7d763ae3e1",
+  "sidecarSha256": "540c8b4bc7dae3a233050a506d32b283135407a5b1979f087b39b6a88dafaeb7",
+  "runnerSha256": "822974370c88ee4ee4d8d4a19fabd0ef722b88c9a428d576794391887f58e20f",
+  "backendHarnessSha256": "ade29aa256d8ff17374bb4b3e893ea9a07f71f8fa2cf2bb72b21f80d4e0e8b1f",
+  "projectBackupHarnessSha256": "77a4f73f23dabdece8691a5b80722aa581f852e0e53391fbe7f3f1304e432891",
+  "backupDeletionManagementHarnessSha256": "aabae83e26d98979397e0973314a2475179bc74ed67225d505f902a69262574e",
+  "backupDeletionManagementPolicySha256": "c686fa457017c59d1348e9de8927aacd808365793dca63aab0c15ea909ee1e3c",
+  "backupDeletionManagementProtocolSha256": "a28fbd09144ccada2363427ac94a169ce080b9437c8612000d7dee1ed80a280a",
+  "managedBackupPolicySha256": "f50dcb8507fc5628881471a4097cdc20afb8262798c200a3316de8eb2dd2c915",
+  "backupInspectionPolicySha256": "44631f49688a6afa69f1ba5c91215c40a81e538084edf0a99c1d84bf1d2a1799",
+  "backupListingPolicySha256": "22e68e73f798b519c14360c420c95d49b1284cff81f50c1d73a3200cca15dcfa",
+  "backupDeletionPolicySha256": "f5b0cbc8f10916e1143961d1c485d7f90126cf99fc414835d3b3dc4c8b4b53e6",
+  "backupDeletionJournalPolicySha256": "cf544d27d5fa7e8bba415543d58e07160afbb1f633c69dcb27a0fcedf77110ce",
+  "backupRestoreHarnessSha256": "346ddc6ff7b03742a4da45c1f24a8d9a2efb84095e6d0ff1b996a1a6945432e5",
+  "backupRestorePolicySha256": "2f7d099793295f2fe39bc29657cdf8efcd8e7d4389994f14c6f64e61f7122e5b",
+  "projectFileHarnessSha256": "ebefb0167680ef78e60143f7b25352f7019969a4c9d09af2462968325ef2478e",
+  "projectFileControllerSha256": "6c8b9ed3ed3ba0d27bea6f5d239de8e70f36e0edb2ca71b8e22fc19b80e28e97",
+  "projectFileProtocolSha256": "e039d1e61ad00faa4487168c90b791b967533324e8b132852d54f3656af70bda",
+  "projectFileNativeSha256": "397075c2fbfa4d0b664814447942761f7d73040ed5192a4656e0310223c0c4fb",
+  "nativeExecutorSha256": "b052d32dd8d154c50d1e72d966b0945aa2e7bdff364ba18bc145f4d181dccb54",
+  "profile": "jp.seraf.ktn.syndocal.qa.mcp-lifecycle.backup-delete-20261006",
+  "checks": [
+    {
+      "check": "external-file-four-r5-operations-and-two-r0-query-policies",
+      "passed": true
+    },
+    {
+      "check": "external-file-exact-read-file-grants-and-safe-mode-without-human-approval",
+      "passed": true
+    },
+    {
+      "check": "external-file-rejects-forged-identity-invalid-target-and-unsafe-or-stale-fences",
+      "passed": true
+    },
+    {
+      "check": "external-file-expected-absent-target-appeared-is-never-overwritten",
+      "passed": true
+    },
+    {
+      "check": "external-file-save-as-full-byte-roundtrip-durable-status-exact-replay-and-changed-shape",
+      "passed": true,
+      "receipt": {
+        "artifact_sha256": "7ad24fbd214cfc186c0f3591f6096950e9eaa84bf015af6e6ebf58a13a8f6639",
+        "error": null,
+        "phase": "succeeded",
+        "recovery_authority_serial": 28,
+        "request": {
+          "destination": "\\\\?\\C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-typed-file-NNef7a\\日本語.sdc",
+          "expected_disposition_generation": 0,
+          "expected_fence": {
+            "process_incarnation": 2525376926691052,
+            "project_checkpoint_hash": "bb748cb7817ff3a10fd06531ac985e8478e6c41768522a48a1e5448af58a5c43",
+            "project_epoch": 0,
+            "project_publication_generation": 1,
+            "project_revision": 1,
+            "session_incarnation": 5358749354748528
+          },
+          "expected_path_generation": 0,
+          "expected_target_sha256": null,
+          "operation_id": "syndocal.project.save_as.v1",
+          "request_id": 1,
+          "schema_version": 1
+        },
+        "saved_checkpoint_hash": "bb748cb7817ff3a10fd06531ac985e8478e6c41768522a48a1e5448af58a5c43",
+        "saved_project_epoch": 0,
+        "saved_project_revision": 1,
+        "schema_version": 1,
+        "target_path": "\\\\?\\C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-typed-file-NNef7a\\日本語.sdc"
+      },
+      "bytes": 5372,
+      "elapsedMs": 726.3243999999977
+    }
+  ],
+  "normalAppIdentityUnchanged": true,
+  "credentialRevoked": true,
+  "credentialFileRemoved": true,
+  "nativePanicLocations": [],
+  "nonclaims": [
+    "QA identifier release build, not the distributed artifact",
+    "No physical output activation; optional high-risk or lease-expiry probe mutates isolated backend lease authority only; optional Tap probe changes isolated empty-project tempo; optional project-file probe loads private JSON with no file media or video source activation",
+    "No durable authored/output mutation crash publication acceptance",
+    "Typed external Save/Save As/template/status/ack on owned private files only; no mid-publication external rename CAS, crash/restart, all remaining File/AI8/release or physical acceptance",
+    "Typed managed backup creation/inspection/list/restore/delete, complete private authored-image and four mapping-family restoration, exact terminal/ack/replay, bounded deletion-journal/status guards and owned cleanup only; no full retention-race/mid-publication revocation, actual deletion crash/power-loss/restart reconciliation, operator resolution/ack/retention, all File or physical acceptance"
+  ]
+}

@@ -1,0 +1,58 @@
+{
+  "observedUtc": "2026-10-06T13:12:01.491Z",
+  "files": [
+    {
+      "path": "C:\\Users\\janua\\AppData\\Local\\jp.seraf.ktn.syndocal.qa.mcp-lifecycle.backup-restore-20261005\\project-recovery-authority.json",
+      "bytes": 6981,
+      "sha256": "1f7cdcce03b6fe3c3f7ceff9df6c5d4f14954b063cf91d91a801bb3835befc34"
+    },
+    {
+      "path": "C:\\Users\\janua\\AppData\\Local\\jp.seraf.ktn.syndocal.qa.mcp-lifecycle.backup-restore-20261005\\project-backups\\backup-1791261597208.json",
+      "bytes": 38057,
+      "sha256": "d8cd1c57f79a6777dfc98d054eb5628949a330d3ab26fbb1b82762f659f44feb"
+    }
+  ],
+  "currentProfile": "C:\\Users\\janua\\AppData\\Local\\jp.seraf.ktn.syndocal.qa.mcp-lifecycle.backup-delete-20261006",
+  "originsBefore": 8,
+  "deletionJournalBefore": {
+    "version": 1,
+    "records": [
+      {
+        "origin": "34c37901e1443c2362d6f6c7537d669a6fcb02e8993583b032933a2b4e08cd4a",
+        "shape_sha256": "ee09791dbe66c49c2a257e01c329271da8936e6daffd24a3b80f5c53fd979ab7",
+        "phase": "succeeded",
+        "receipt": {
+          "schema_version": 1,
+          "request": {
+            "schema_version": 1,
+            "operation_id": "syndocal.project.backup.delete.v1",
+            "request_id": 9,
+            "expected_fence": {
+              "process_incarnation": 694296426251166,
+              "session_incarnation": 6715394338777444,
+              "project_epoch": 0,
+              "project_revision": 5,
+              "project_checkpoint_hash": "12b5ef9670f27f5474f2af9f6b045a224cc569935bba65c3d9075362d50f79b0",
+              "project_publication_generation": 5
+            },
+            "backup_id": 1791288483671,
+            "expected_artifact_sha256": "e53dea79d06ab49778fab8c6ac1ab0b8378a46c90e5697478eb8af4e0b4d95fa"
+          },
+          "deleted_backup": {
+            "schema_version": 1,
+            "backup": {
+              "id": 1791288483671,
+              "created_at_unix_ms": 1791288483671,
+              "source_path": "\\\\?\\C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-typed-file-3sNLX1\\second.sdc",
+              "reason": "MCP backup",
+              "bytes": 6037
+            },
+            "artifact_sha256": "e53dea79d06ab49778fab8c6ac1ab0b8378a46c90e5697478eb8af4e0b4d95fa",
+            "restore_source_path": "\\\\?\\C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-typed-file-3sNLX1\\second.sdc"
+          }
+        },
+        "error": null
+      }
+    ]
+  }
+}

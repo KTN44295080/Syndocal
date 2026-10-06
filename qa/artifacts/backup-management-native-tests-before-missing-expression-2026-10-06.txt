@@ -1,0 +1,24 @@
+Pinned linker: C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+PATH-first link.exe: C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+    Blocking waiting for file lock on package cache
+   Compiling protocol v1.2.0-alpha.69 (C:\Users\janua\OneDrive\ドキュメント\GitHub\Syndocal\crates\protocol)
+   Compiling video v1.2.0-alpha.69 (C:\Users\janua\OneDrive\ドキュメント\GitHub\Syndocal\crates\video)
+   Compiling io v1.2.0-alpha.69 (C:\Users\janua\OneDrive\ドキュメント\GitHub\Syndocal\crates\io)
+   Compiling gdtf v1.2.0-alpha.69 (C:\Users\janua\OneDrive\ドキュメント\GitHub\Syndocal\crates\gdtf)
+   Compiling engine v1.2.0-alpha.69 (C:\Users\janua\OneDrive\ドキュメント\GitHub\Syndocal\crates\engine)
+   Compiling visualizer v1.2.0-alpha.69 (C:\Users\janua\OneDrive\ドキュメント\GitHub\Syndocal\crates\visualizer)
+   Compiling audio v1.2.0-alpha.69 (C:\Users\janua\OneDrive\ドキュメント\GitHub\Syndocal\crates\audio)
+   Compiling syndocal v1.2.0-alpha.69 (C:\Users\janua\OneDrive\ドキュメント\GitHub\Syndocal\app\src-tauri)
+error[E0533]: expected value, found struct variant `ArtifactObservationV1::Missing`
+   --> app\src-tauri\src\project_backup_deletion_management.rs:148:49
+    |
+148 |                     if final_observation.value!=ArtifactObservationV1::Missing {} {
+    |                                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not a value
+    |
+help: you might have meant to create a new value of the struct
+    |
+148 |                     if final_observation.value!=(ArtifactObservationV1::Missing {} {} {
+    |                                                 +                               ++
+
+For more information about this error, try `rustc --explain E0533`.
+error: could not compile `syndocal` (bin "syndocal" test) due to 1 previous error

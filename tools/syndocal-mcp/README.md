@@ -183,8 +183,11 @@ Current owner/project/operator policy, installer claim, normalized durable
 pending/terminal references and exact grant are checked before that effect.
 Success carries the exact request and deleted inspection metadata. The additive
 project-backup-deletions-v1.json journal stores the exact prepared request before
-the filesystem effect and the terminal receipt before reporting success. Schema
-1 accepts at most 256 records and 8 MiB, with no implicit eviction or repair.
+the filesystem effect and the terminal receipt before reporting success. Storage
+schema 2 accepts at most 256 deletion facts, 128 management results, 256 retired
+origin/process fences and 8 MiB, with no implicit eviction or repair. Strict
+schema 1 reads preserve original bytes; only an explicit mutation atomically
+migrates to schema 2. Future versions and extra/duplicate fields reject.
 Capacity, corruption, unsupported versions and unresolved prepared records fail
 closed. A prepared record protects its backup from new callers and legacy cleanup.
 
@@ -196,6 +199,49 @@ results are bound to the originating principal incarnation and window owner;
 new owners/principals cannot adopt them. Exact replay consults the journal before
 the process-local cache, even after artifact disappearance/recreation or loss of
 that cache; changed request shape rejects. Busy status reads preserve QueryError.
+
+`syndocal.query.project.backup.delete.journal.v1` (R0/exact Read) accepts
+`{schema_version:1,limit:1..16,after_record_id:null|sha256,
+expected_journal_sha256:null|sha256}`. It returns redacted bounded record
+summaries, storage generation, current native process incarnation and the hash of
+the exact original journal bytes when present, or an opaque absence fingerprint
+when no journal exists. Use the returned hash for consistent pages.
+It exposes opaque record hashes, never owner/principal identities or paths.
+
+`syndocal.project.backup.delete.journal.manage.v1` (R5/exact File) requires
+schema 1, its operation ID, a positive JS-safe request ID, issued current
+`expected_fence`, `expected_generation`, `expected_journal_sha256` and one
+explicit action. `acknowledge` selects 1..16 unique `record_ids` of terminal
+deletion facts (including explicitly resolved unknown facts) or management results. It retires their original identities with bounded
+per-origin/process high-water fences; old delete/status/management requests then
+reject `receipt_expired` before the process cache or artifact access.
+`release_unknown_protection` selects one prepared `record_id` and an exact
+`expected_artifact:{kind:"missing"}|{kind:"present",sha256}`. It observes the
+current bounded regular leaf with an exclusive streaming hash, preserves its
+bytes, records `resolved_unknown` and releases only its unresolved guard. The
+original deletion remains indeterminate; absence never proves the original
+effect succeeded. A subsequent deletion requires a new explicit request.
+`compact_retired` selects 1..16 retired record IDs from earlier native processes;
+current-process replay fences cannot be removed. Old-process fences remain
+unissued even after explicit compaction. There is no automatic retry or cleanup.
+`reclaim` combines nonempty `acknowledge_record_ids` and
+`compact_retired_record_ids` (at most 16 unique IDs in total). It atomically
+compacts selected earlier-process fences and acknowledges selected results,
+so simultaneously full management-result and retired-origin tables can recover.
+Every selected current-process fence remains protected; a rejected batch leaves
+all original facts intact. When every retired fence belongs to the current
+native process, restart is required before any such compaction can be authorized.
+
+`syndocal.query.project.backup.delete.journal.status.v1` (R0/exact Read) accepts
+the full original management request and returns its exact receipt or null,
+under the current original owner/principal/native-process identity. It cannot
+adopt a retired identity's result. Busy reads preserve typed QueryError. Every
+management mutation checks current project/operator policy and the exact raw
+journal hash/generation, reauthorizes immediately before atomic publication,
+and persists the state change together with its receipt. An uncertain write
+returns `management_indeterminate`; query the original request instead of
+repeating the intent. These operations do not schedule artifact retention or
+export an audit history, and they do not establish crash/power-loss acceptance.
 
 An indeterminate result requires preserving the artifact and querying status;
 never repeat the mutation to resolve it. Across process/principal/owner restart,

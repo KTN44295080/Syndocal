@@ -18,6 +18,12 @@ struct ProjectReplacementIngress { request: ProjectReplacementRequestV1 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct BackupDeleteIngress { request: protocol::control_plane_file::ProjectBackupDeleteRequestV1 }
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BackupJournalIngress { request: protocol::control_plane_backup_management::JournalQueryRequestV1 }
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BackupManagementIngress { request: protocol::control_plane_backup_management::ManagementRequestV1 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -48,6 +54,23 @@ pub(crate) fn execute(
                 .get("operationId")
                 .and_then(Value::as_str)
                 .ok_or("agent_bridge_operation_invalid")?;
+            if operation_id==protocol::control_plane_backup_management::QUERY_ID {
+                let ingress:BackupJournalIngress=serde_json::from_value(dispatch.params.get("request").cloned().ok_or("agent_bridge_arguments_invalid")?)
+                    .map_err(|_|"agent_bridge_arguments_invalid")?;
+                let result=serde_json::to_value(super::project_backup_deletion_management::query_external(app,window,&dispatch,ingress.request)?)
+                    .map_err(|_|"project_backup_delete_journal_response_invalid")?;
+                return Ok(json!({"ok":true,"operation_id":operation_id,"result":result}));
+            }
+            if matches!(operation_id,protocol::control_plane_backup_management::MANAGE_ID|protocol::control_plane_backup_management::STATUS_ID) {
+                let ingress:BackupManagementIngress=serde_json::from_value(dispatch.params.get("request").cloned().ok_or("agent_bridge_arguments_invalid")?)
+                    .map_err(|_|"agent_bridge_arguments_invalid")?;
+                let result=if operation_id==protocol::control_plane_backup_management::STATUS_ID {
+                    serde_json::to_value(super::project_backup_deletion_management::status_external(app,window,&dispatch,ingress.request)?)
+                }else {
+                    serde_json::to_value(super::project_backup_deletion_management::execute_external(app,window,&dispatch,ingress.request)?)
+                }.map_err(|_|"project_backup_delete_management_response_invalid")?;
+                return Ok(json!({"ok":true,"operation_id":operation_id,"result":result}));
+            }
             if matches!(operation_id,protocol::control_plane_file::BACKUP_DELETE_ID|protocol::control_plane_file::BACKUP_DELETE_STATUS_ID) {
                 let ingress: BackupDeleteIngress = serde_json::from_value(
                     dispatch.params.get("request").cloned().ok_or("agent_bridge_arguments_invalid")?)

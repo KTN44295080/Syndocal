@@ -114,7 +114,7 @@ export async function executeAgentBridgeRequest(
           || params.operationId === "syndocal.project.backup.delete.v1")
         && canonicalOperationIsMutation(params.operationId)
         || (request.method === "control_plane.execute" && typeof params.operationId === "string"
-          && ["syndocal.query.project.backup.delete.status.v1","syndocal.query.project.backup.list.v1","syndocal.query.project.backup.inspect.v1","syndocal.project.backup.create.v1","syndocal.query.project.backup.authority.v1","syndocal.project.save.v1","syndocal.project.save_as.v1","syndocal.project.template.save.v1","syndocal.query.project.file.authority.v1","syndocal.query.project.file.status.v1","syndocal.project.file.acknowledge.v1"].includes(params.operationId)))) {
+          && ["syndocal.query.project.backup.delete.journal.v1","syndocal.query.project.backup.delete.journal.status.v1","syndocal.project.backup.delete.journal.manage.v1","syndocal.query.project.backup.delete.status.v1","syndocal.query.project.backup.list.v1","syndocal.query.project.backup.inspect.v1","syndocal.project.backup.create.v1","syndocal.query.project.backup.authority.v1","syndocal.project.save.v1","syndocal.project.save_as.v1","syndocal.project.template.save.v1","syndocal.query.project.file.authority.v1","syndocal.query.project.file.status.v1","syndocal.project.file.acknowledge.v1"].includes(params.operationId)))) {
       if (request.method === "control_plane.execute" && !Object.hasOwn(CANONICAL_TAURI_COMMANDS, params.operationId as string)) {
         throw new Error("Canonical operation is not executable through the reviewed adapter set.");
       }

@@ -1,0 +1,1 @@
+AI0 source coverage ok; Tauri 561, Engine 281, Remote 116, MIDI/OSC/DMX 206, Frontend 481, Keyboard 33, UI literal invokes 334; fail-closed authority gates 6
