@@ -141,6 +141,31 @@ checker with `--project-backup --profile jp.seraf.ktn.syndocal.qa.mcp-lifecycle.
 This checked-in private profile keeps prior QA publication journals intact when
 their 32-origin bound is reached. The checker accepts only its two explicitly
 reviewed private identifiers; no normal-profile override or journal deletion.
+The restore fixture retains unexpected scheduled GUI autosaves only after native
+bounded unique-key inspection and strict filename/time/source/full-image/mapping
+verification. Comparison accounts solely for schema-declared Geometry/Stage f32
+serialization. These autosaves are preserved; the acknowledged explicit backup
+is removed, baseline bytes/summaries stay exact, and every unrelated addition
+rejects. This is fixture cleanup recognition, not canonical delete acceptance.
+
+File/backup authority reads preserve a failed native query capture as the
+canonical `QueryError` object: `code`, fixed bounded `message`, `retryable` and
+`resnapshot_required`. Authenticated MCP exposes these under
+`error.native_query` with `request_rejected`; local IPC rejects with that same
+object. The former generic `project_file_authority_query_failed` string no
+longer hides overload/unavailability/forbidden reasons. Existing operation
+error strings and success bodies remain. Retry metadata does not automatically
+replay a read or grant authority to retry an uncertain mutation.
+
+Use `--file-query-pressure` with the same checked-in private profile as a
+separate native lane. It first authors a valid private Touch fixture with 64
+pages and 6,144 unbound labels through exact-grant, issued-fence MCP Open, then makes bounded
+concurrent real asynchronous checkpoint captures,
+local IPC and four owned authenticated stdio MCP clients for file/backup authority observations, requires an actual
+external `overloaded` error, and verifies a fresh read plus complete project,
+authority and closed-output preservation. It has no test-only lock-hold route,
+publication, dialog or Computer Use action. This lane cannot establish the
+cause of an older generic failure or the full contention/realtime budget.
 
 `syndocal.output.lease.authority.query.v1` takes `request: {}` and requires an
 exact ExternalMcp Read grant. It returns at most 64 current leases belonging to

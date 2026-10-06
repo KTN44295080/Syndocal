@@ -1,0 +1,1 @@
+Fixture autosave recognition PASS: 2 valid full-image cases, 16 unsafe/changed rejections; no deletion or native/device calls

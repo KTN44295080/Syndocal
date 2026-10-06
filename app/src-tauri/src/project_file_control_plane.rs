@@ -2,6 +2,7 @@
 //! Caller identity and authorization are derived from the immutable native dispatch.
 use super::{
     agent_bridge::{AgentBridge, AgentBridgeDispatch},
+    native_adapter_error::NativeAdapterError,
     AppState, ProjectCoordinator, ProjectPublicationRequestV1,
     ProjectPublicationSurfaceV1 as Surface, ProjectPublicationTargetPolicyV1 as TargetPolicy,
 };
@@ -622,7 +623,7 @@ fn authority(
     window: &WebviewWindow,
     caller: &str,
     request: ProjectFileAuthorityRequestV1,
-) -> Result<ProjectFileAuthorityV1, String> {
+) -> Result<ProjectFileAuthorityV1, NativeAdapterError> {
     request.validate().map_err(str::to_string)?;
     let state = app.state::<AppState>();
     let (origin, _, _) = identity(&state, window.label(), caller, &request.operation_id)?;
@@ -638,7 +639,7 @@ fn authority(
     let fence = app
         .state::<super::ControlPlaneQueryState>()
         .issue_project_mutation_fence_for_window(window.label(), &state)
-        .map_err(|_| "project_file_authority_query_failed")?;
+        .map_err(NativeAdapterError::from)?;
     let _publication = state
         .project_save_publication
         .lock()
@@ -698,7 +699,7 @@ fn backup_authority(
     window: &WebviewWindow,
     caller: &str,
     request: ProjectBackupAuthorityRequestV1,
-) -> Result<ProjectFileAuthorityV1, String> {
+) -> Result<ProjectFileAuthorityV1, NativeAdapterError> {
     request.validate().map_err(str::to_string)?;
     let destination = super::project_file_managed_backup::observe(app)?;
     let result = authority(
@@ -861,7 +862,7 @@ pub(crate) fn execute_local(
     window: &WebviewWindow,
     operation: &str,
     request: Value,
-) -> Result<Value, String> {
+) -> Result<Value, NativeAdapterError> {
     if operation == wire::BACKUP_INSPECT_ID {
         return serde_json::to_value(super::project_backup_inspection::inspect(
             app,
@@ -910,7 +911,7 @@ pub(crate) fn execute_external(
     app: &AppHandle,
     window: &WebviewWindow,
     dispatch: &AgentBridgeDispatch,
-) -> Result<Value, String> {
+) -> Result<Value, NativeAdapterError> {
     #[derive(serde::Deserialize)]
     #[serde(deny_unknown_fields)]
     struct Ingress {

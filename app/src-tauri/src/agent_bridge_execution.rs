@@ -6,6 +6,7 @@ use sha2::{Digest, Sha256};
 use tauri::Manager;
 
 use super::{agent_bridge::AgentBridge, AppState, ControlPlaneQueryState};
+use super::native_adapter_error::NativeAdapterError;
 use protocol::control_plane_command::OutputControlCommandRequestV2;
 use protocol::control_plane_project::{ProjectReplacementRequestV1, ProjectReplacementResponseV1,
     PROJECT_NEW_OPERATION_ID, PROJECT_OPEN_OPERATION_ID, PROJECT_BACKUP_RESTORE_OPERATION_ID};
@@ -31,7 +32,7 @@ pub(crate) fn execute(
     window: &tauri::WebviewWindow,
     renderer_generation: u64,
     request_id: &str,
-) -> Result<Value, String> {
+) -> Result<Value, NativeAdapterError> {
     let bridge = app.state::<AgentBridge>();
     let dispatch =
         bridge.start_native_execution(window.label(), renderer_generation, request_id)?;

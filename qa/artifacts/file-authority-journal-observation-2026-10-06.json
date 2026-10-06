@@ -1,0 +1,20 @@
+{
+  "observedUtc": "2026-10-06T04:37:32.8626284Z",
+  "historicalOldJournal": {
+    "path": "C:\\Users\\janua\\AppData\\Local\\jp.seraf.ktn.syndocal.qa.mcp-lifecycle\\project-recovery-authority.json",
+    "sha256": "b179e13228d885ea2085f58a6438e60162f19ab3e18186a1156f5639c76512b9",
+    "origins": 32
+  },
+  "oldCurrent": {
+    "exists": false,
+    "profileExists": true,
+    "matchesHistorical": null,
+    "cause": "unknown; not an equality or deletion-cause proof"
+  },
+  "privateCurrent": {
+    "path": "C:\\Users\\janua\\AppData\\Local\\jp.seraf.ktn.syndocal.qa.mcp-lifecycle.backup-restore-20261005\\project-recovery-authority.json",
+    "sha256": "a546475527222e5844332fbfa44d3ab1b82add2c3c76b9ca9c6ac7e878375a48",
+    "origins": 4,
+    "serial": 5
+  }
+}

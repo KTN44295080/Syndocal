@@ -1,0 +1,1115 @@
+{
+  "schemaVersion": 1,
+  "timestamp": "2026-10-06T04:54:36.056Z",
+  "passed": false,
+  "executable": "C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-native-acceptance-target\\release\\syndocal.exe",
+  "executableSha256": "85500ccd0554989cd62fa8332c01af8e178171b2470e34b7ee94b1089e78309a",
+  "sidecarSha256": "88d7d54d18c7f689fddbabb9fb712a3be171c6be16dc3f72cf75eed82e75d850",
+  "runnerSha256": "a9fa43bf61debdc2041e73f5df80de9f4adaed32590660659cfa99accd5a636f",
+  "backendHarnessSha256": "ade29aa256d8ff17374bb4b3e893ea9a07f71f8fa2cf2bb72b21f80d4e0e8b1f",
+  "projectBackupHarnessSha256": "b8407b090720dd3106671748eb9e1356d92133f72eec1cff72ba192bc6714a17",
+  "managedBackupPolicySha256": "f50dcb8507fc5628881471a4097cdc20afb8262798c200a3316de8eb2dd2c915",
+  "backupInspectionPolicySha256": "bcb533b825c3a13b200da7a98f455d5e70dd3a41781a2de97146a0d031437ab2",
+  "backupRestoreHarnessSha256": "346ddc6ff7b03742a4da45c1f24a8d9a2efb84095e6d0ff1b996a1a6945432e5",
+  "backupRestorePolicySha256": "2f7d099793295f2fe39bc29657cdf8efcd8e7d4389994f14c6f64e61f7122e5b",
+  "projectFileHarnessSha256": "ebefb0167680ef78e60143f7b25352f7019969a4c9d09af2462968325ef2478e",
+  "projectFileControllerSha256": "732ee68fbc28871280a0339c581259944b0ecd4891ff07028c8b90378bf375c2",
+  "projectFileProtocolSha256": "2f37830c2f2bbddae2e1273247632ecaf346e9d00a45c2291e8d94063afcf8cb",
+  "projectFileNativeSha256": "caedc8390fa062972e555265ca89da481eb847e630fea73c1c2a2c72bb35ca7f",
+  "nativeExecutorSha256": "8f92b7508b507b40444b43f7d8345c9eac460da2822a9b476d2d6733da169614",
+  "profile": "jp.seraf.ktn.syndocal.qa.mcp-lifecycle.backup-restore-20261005",
+  "checks": [
+    {
+      "check": "external-file-four-r5-operations-and-two-r0-query-policies",
+      "passed": true
+    },
+    {
+      "check": "external-file-exact-read-file-grants-and-safe-mode-without-human-approval",
+      "passed": true
+    },
+    {
+      "check": "external-file-rejects-forged-identity-invalid-target-and-unsafe-or-stale-fences",
+      "passed": true
+    },
+    {
+      "check": "external-file-expected-absent-target-appeared-is-never-overwritten",
+      "passed": true
+    },
+    {
+      "check": "external-file-save-as-full-byte-roundtrip-durable-status-exact-replay-and-changed-shape",
+      "passed": true,
+      "receipt": {
+        "artifact_sha256": "7ad24fbd214cfc186c0f3591f6096950e9eaa84bf015af6e6ebf58a13a8f6639",
+        "error": null,
+        "phase": "succeeded",
+        "recovery_authority_serial": 15,
+        "request": {
+          "destination": "\\\\?\\C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-typed-file-vfATQz\\日本語.sdc",
+          "expected_disposition_generation": 0,
+          "expected_fence": {
+            "process_incarnation": 5827240110467654,
+            "project_checkpoint_hash": "bb748cb7817ff3a10fd06531ac985e8478e6c41768522a48a1e5448af58a5c43",
+            "project_epoch": 0,
+            "project_publication_generation": 1,
+            "project_revision": 1,
+            "session_incarnation": 3237272827157698
+          },
+          "expected_path_generation": 0,
+          "expected_target_sha256": null,
+          "operation_id": "syndocal.project.save_as.v1",
+          "request_id": 1,
+          "schema_version": 1
+        },
+        "saved_checkpoint_hash": "bb748cb7817ff3a10fd06531ac985e8478e6c41768522a48a1e5448af58a5c43",
+        "saved_project_epoch": 0,
+        "saved_project_revision": 1,
+        "schema_version": 1,
+        "target_path": "\\\\?\\C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-typed-file-vfATQz\\日本語.sdc"
+      },
+      "bytes": 5372,
+      "elapsedMs": 643.4187000000002
+    },
+    {
+      "check": "external-file-durable-ack-tombstone-exact-reack-and-sequence-advance",
+      "passed": true
+    },
+    {
+      "check": "native-app-tap-changes-engine-and-header-bpm",
+      "passed": true,
+      "before": {
+        "clock": {
+          "bpm": 120,
+          "beat_phase": 0.4540822,
+          "beat_counter": 39,
+          "tap_count": 0,
+          "source": "Manual",
+          "external_sync_age_ms": null,
+          "external_sync_locked": false
+        },
+        "timelineRuntime": {
+          "transport_epoch": 1,
+          "transport_generation": 1,
+          "loop_runtime": {
+            "generation": 0,
+            "status": "disabled",
+            "a_ms": null,
+            "b_ms": null,
+            "wrap_count": 0
+          },
+          "follow_runtime": {
+            "epoch": 1,
+            "generation": 0,
+            "status": "idle",
+            "admission_reason": null,
+            "outcome": null,
+            "source_timeline_id": null,
+            "target_timeline_id": null,
+            "elapsed_ms": 0,
+            "duration_ms": 0,
+            "progress_millis": 0,
+            "fault": null,
+            "transition_hold_active": false,
+            "waiting_for_pedal_start": false
+          }
+        },
+        "readout": "120",
+        "footer": "Ready",
+        "headerHeight": 42,
+        "frontend": {
+          "snapshotClock": {
+            "bpm": 120,
+            "beat_phase": 0.4095118,
+            "beat_counter": 39,
+            "tap_count": 0,
+            "source": "Manual",
+            "external_sync_age_ms": null,
+            "external_sync_locked": false
+          },
+          "latestClock": {
+            "bpm": 120,
+            "beat_phase": 0.4095118,
+            "beat_counter": 39,
+            "tap_count": 0,
+            "source": "Manual",
+            "external_sync_age_ms": null,
+            "external_sync_locked": false
+          },
+          "readGuard": {
+            "generation": 0,
+            "authority": {
+              "project_epoch": 0,
+              "project_revision": 1,
+              "checkpoint_hash": "bb748cb7817ff3a10fd06531ac985e8478e6c41768522a48a1e5448af58a5c43"
+            }
+          },
+          "watermark": {
+            "scope": {
+              "project_epoch": 0,
+              "project_revision": 1,
+              "checkpoint_hash": "bb748cb7817ff3a10fd06531ac985e8478e6c41768522a48a1e5448af58a5c43",
+              "project_read_generation": 0
+            },
+            "watermark": {
+              "transport_epoch": 1,
+              "transport_generation": 1,
+              "loop_generation": 0,
+              "follow_generation": 0
+            }
+          },
+          "authorityPollPending": false,
+          "timelineTransportCanonicalSnapshotGeneration": 0
+        }
+      },
+      "tapTarget": {
+        "disabled": false,
+        "pointerEvents": "auto",
+        "visible": true,
+        "unobstructed": true,
+        "bounds": {
+          "x": 959.9921875,
+          "y": 4,
+          "width": 40,
+          "height": 40
+        }
+      },
+      "samples": [
+        {
+          "issuedAt": 1791262391785,
+          "clock": {
+            "bpm": 120,
+            "beat_phase": 0.1358932,
+            "beat_counter": 40,
+            "tap_count": 1,
+            "source": "Manual",
+            "external_sync_age_ms": null,
+            "external_sync_locked": false
+          },
+          "timelineRuntime": {
+            "transport_epoch": 1,
+            "transport_generation": 2,
+            "loop_runtime": {
+              "generation": 0,
+              "status": "disabled",
+              "a_ms": null,
+              "b_ms": null,
+              "wrap_count": 0
+            },
+            "follow_runtime": {
+              "epoch": 1,
+              "generation": 0,
+              "status": "idle",
+              "admission_reason": null,
+              "outcome": null,
+              "source_timeline_id": null,
+              "target_timeline_id": null,
+              "elapsed_ms": 0,
+              "duration_ms": 0,
+              "progress_millis": 0,
+              "fault": null,
+              "transition_hold_active": false,
+              "waiting_for_pedal_start": false
+            }
+          },
+          "readout": "120",
+          "footer": "Tap again to measure BPM.",
+          "headerHeight": 42,
+          "frontend": {
+            "snapshotClock": {
+              "bpm": 120,
+              "beat_phase": 0.090546,
+              "beat_counter": 40,
+              "tap_count": 1,
+              "source": "Manual",
+              "external_sync_age_ms": null,
+              "external_sync_locked": false
+            },
+            "latestClock": {
+              "bpm": 120,
+              "beat_phase": 0.090546,
+              "beat_counter": 40,
+              "tap_count": 1,
+              "source": "Manual",
+              "external_sync_age_ms": null,
+              "external_sync_locked": false
+            },
+            "readGuard": {
+              "generation": 0,
+              "authority": {
+                "project_epoch": 0,
+                "project_revision": 1,
+                "checkpoint_hash": "bb748cb7817ff3a10fd06531ac985e8478e6c41768522a48a1e5448af58a5c43"
+              }
+            },
+            "watermark": {
+              "scope": {
+                "project_epoch": 0,
+                "project_revision": 1,
+                "checkpoint_hash": "bb748cb7817ff3a10fd06531ac985e8478e6c41768522a48a1e5448af58a5c43",
+                "project_read_generation": 0
+              },
+              "watermark": {
+                "transport_epoch": 1,
+                "transport_generation": 2,
+                "loop_generation": 0,
+                "follow_generation": 0
+              }
+            },
+            "authorityPollPending": false,
+            "timelineTransportCanonicalSnapshotGeneration": 0
+          }
+        },
+        {
+          "issuedAt": 1791262392532,
+          "clock": {
+            "bpm": 81.04428,
+            "beat_phase": 0.17594795,
+            "beat_counter": 0,
+            "tap_count": 2,
+            "source": "Tap",
+            "external_sync_age_ms": null,
+            "external_sync_locked": false
+          },
+          "timelineRuntime": {
+            "transport_epoch": 1,
+            "transport_generation": 3,
+            "loop_runtime": {
+              "generation": 0,
+              "status": "disabled",
+              "a_ms": null,
+              "b_ms": null,
+              "wrap_count": 0
+            },
+            "follow_runtime": {
+              "epoch": 1,
+              "generation": 0,
+              "status": "idle",
+              "admission_reason": null,
+              "outcome": null,
+              "source_timeline_id": null,
+              "target_timeline_id": null,
+              "elapsed_ms": 0,
+              "duration_ms": 0,
+              "progress_millis": 0,
+              "fault": null,
+              "transition_hold_active": false,
+              "waiting_for_pedal_start": false
+            }
+          },
+          "readout": "81",
+          "footer": "Tapped BPM 81.0",
+          "headerHeight": 42,
+          "frontend": {
+            "snapshotClock": {
+              "bpm": 81.04428,
+              "beat_phase": 0.17594795,
+              "beat_counter": 0,
+              "tap_count": 2,
+              "source": "Tap",
+              "external_sync_age_ms": null,
+              "external_sync_locked": false
+            },
+            "latestClock": {
+              "bpm": 81.04428,
+              "beat_phase": 0.17594795,
+              "beat_counter": 0,
+              "tap_count": 2,
+              "source": "Tap",
+              "external_sync_age_ms": null,
+              "external_sync_locked": false
+            },
+            "readGuard": {
+              "generation": 0,
+              "authority": {
+                "project_epoch": 0,
+                "project_revision": 2,
+                "checkpoint_hash": "5f9a495336d292f1b54b962bf0d4af147dfb593120e9657b54aa0863a74977a7"
+              }
+            },
+            "watermark": {
+              "scope": {
+                "project_epoch": 0,
+                "project_revision": 2,
+                "checkpoint_hash": "5f9a495336d292f1b54b962bf0d4af147dfb593120e9657b54aa0863a74977a7",
+                "project_read_generation": 0
+              },
+              "watermark": {
+                "transport_epoch": 1,
+                "transport_generation": 3,
+                "loop_generation": 0,
+                "follow_generation": 0
+              }
+            },
+            "authorityPollPending": false,
+            "timelineTransportCanonicalSnapshotGeneration": 0
+          }
+        },
+        {
+          "issuedAt": 1791262393285,
+          "clock": {
+            "bpm": 80.22643,
+            "beat_phase": 0.22767593,
+            "beat_counter": 0,
+            "tap_count": 3,
+            "source": "Tap",
+            "external_sync_age_ms": null,
+            "external_sync_locked": false
+          },
+          "timelineRuntime": {
+            "transport_epoch": 1,
+            "transport_generation": 4,
+            "loop_runtime": {
+              "generation": 0,
+              "status": "disabled",
+              "a_ms": null,
+              "b_ms": null,
+              "wrap_count": 0
+            },
+            "follow_runtime": {
+              "epoch": 1,
+              "generation": 0,
+              "status": "idle",
+              "admission_reason": null,
+              "outcome": null,
+              "source_timeline_id": null,
+              "target_timeline_id": null,
+              "elapsed_ms": 0,
+              "duration_ms": 0,
+              "progress_millis": 0,
+              "fault": null,
+              "transition_hold_active": false,
+              "waiting_for_pedal_start": false
+            }
+          },
+          "readout": "80",
+          "footer": "Tapped BPM 80.2",
+          "headerHeight": 42,
+          "frontend": {
+            "snapshotClock": {
+              "bpm": 80.22643,
+              "beat_phase": 0.19740368,
+              "beat_counter": 0,
+              "tap_count": 3,
+              "source": "Tap",
+              "external_sync_age_ms": null,
+              "external_sync_locked": false
+            },
+            "latestClock": {
+              "bpm": 80.22643,
+              "beat_phase": 0.19740368,
+              "beat_counter": 0,
+              "tap_count": 3,
+              "source": "Tap",
+              "external_sync_age_ms": null,
+              "external_sync_locked": false
+            },
+            "readGuard": {
+              "generation": 0,
+              "authority": {
+                "project_epoch": 0,
+                "project_revision": 3,
+                "checkpoint_hash": "4759149f9188b9e56782bda235a2ce0b882d35feb4657f6a85b4480480c4c393"
+              }
+            },
+            "watermark": {
+              "scope": {
+                "project_epoch": 0,
+                "project_revision": 3,
+                "checkpoint_hash": "4759149f9188b9e56782bda235a2ce0b882d35feb4657f6a85b4480480c4c393",
+                "project_read_generation": 0
+              },
+              "watermark": {
+                "transport_epoch": 1,
+                "transport_generation": 4,
+                "loop_generation": 0,
+                "follow_generation": 0
+              }
+            },
+            "authorityPollPending": false,
+            "timelineTransportCanonicalSnapshotGeneration": 0
+          }
+        },
+        {
+          "issuedAt": 1791262394031,
+          "clock": {
+            "bpm": 80.43962,
+            "beat_phase": 0.1781405,
+            "beat_counter": 0,
+            "tap_count": 4,
+            "source": "Tap",
+            "external_sync_age_ms": null,
+            "external_sync_locked": false
+          },
+          "timelineRuntime": {
+            "transport_epoch": 1,
+            "transport_generation": 5,
+            "loop_runtime": {
+              "generation": 0,
+              "status": "disabled",
+              "a_ms": null,
+              "b_ms": null,
+              "wrap_count": 0
+            },
+            "follow_runtime": {
+              "epoch": 1,
+              "generation": 0,
+              "status": "idle",
+              "admission_reason": null,
+              "outcome": null,
+              "source_timeline_id": null,
+              "target_timeline_id": null,
+              "elapsed_ms": 0,
+              "duration_ms": 0,
+              "progress_millis": 0,
+              "fault": null,
+              "transition_hold_active": false,
+              "waiting_for_pedal_start": false
+            }
+          },
+          "readout": "80",
+          "footer": "Tapped BPM 80.4",
+          "headerHeight": 42,
+          "frontend": {
+            "snapshotClock": {
+              "bpm": 80.43962,
+              "beat_phase": 0.1781405,
+              "beat_counter": 0,
+              "tap_count": 4,
+              "source": "Tap",
+              "external_sync_age_ms": null,
+              "external_sync_locked": false
+            },
+            "latestClock": {
+              "bpm": 80.43962,
+              "beat_phase": 0.1781405,
+              "beat_counter": 0,
+              "tap_count": 4,
+              "source": "Tap",
+              "external_sync_age_ms": null,
+              "external_sync_locked": false
+            },
+            "readGuard": {
+              "generation": 0,
+              "authority": {
+                "project_epoch": 0,
+                "project_revision": 4,
+                "checkpoint_hash": "fc85d3b14261e426bcf6f1f4236e86b5e541adb074c0b1c51b2c8fd17a79b21c"
+              }
+            },
+            "watermark": {
+              "scope": {
+                "project_epoch": 0,
+                "project_revision": 4,
+                "checkpoint_hash": "fc85d3b14261e426bcf6f1f4236e86b5e541adb074c0b1c51b2c8fd17a79b21c",
+                "project_read_generation": 0
+              },
+              "watermark": {
+                "transport_epoch": 1,
+                "transport_generation": 5,
+                "loop_generation": 0,
+                "follow_generation": 0
+              }
+            },
+            "authorityPollPending": false,
+            "timelineTransportCanonicalSnapshotGeneration": 0
+          }
+        },
+        {
+          "issuedAt": 1791262394779,
+          "clock": {
+            "bpm": 80.16062,
+            "beat_phase": 0.18001671,
+            "beat_counter": 0,
+            "tap_count": 4,
+            "source": "Tap",
+            "external_sync_age_ms": null,
+            "external_sync_locked": false
+          },
+          "timelineRuntime": {
+            "transport_epoch": 1,
+            "transport_generation": 6,
+            "loop_runtime": {
+              "generation": 0,
+              "status": "disabled",
+              "a_ms": null,
+              "b_ms": null,
+              "wrap_count": 0
+            },
+            "follow_runtime": {
+              "epoch": 1,
+              "generation": 0,
+              "status": "idle",
+              "admission_reason": null,
+              "outcome": null,
+              "source_timeline_id": null,
+              "target_timeline_id": null,
+              "elapsed_ms": 0,
+              "duration_ms": 0,
+              "progress_millis": 0,
+              "fault": null,
+              "transition_hold_active": false,
+              "waiting_for_pedal_start": false
+            }
+          },
+          "readout": "80",
+          "footer": "Tapped BPM 80.2",
+          "headerHeight": 42,
+          "frontend": {
+            "snapshotClock": {
+              "bpm": 80.16062,
+              "beat_phase": 0.14974219,
+              "beat_counter": 0,
+              "tap_count": 4,
+              "source": "Tap",
+              "external_sync_age_ms": null,
+              "external_sync_locked": false
+            },
+            "latestClock": {
+              "bpm": 80.16062,
+              "beat_phase": 0.14974219,
+              "beat_counter": 0,
+              "tap_count": 4,
+              "source": "Tap",
+              "external_sync_age_ms": null,
+              "external_sync_locked": false
+            },
+            "readGuard": {
+              "generation": 0,
+              "authority": {
+                "project_epoch": 0,
+                "project_revision": 5,
+                "checkpoint_hash": "7f32e64ab8d974de65d72d4d88a1ff31c14ff1c175d64eb654f903eeed909231"
+              }
+            },
+            "watermark": {
+              "scope": {
+                "project_epoch": 0,
+                "project_revision": 5,
+                "checkpoint_hash": "7f32e64ab8d974de65d72d4d88a1ff31c14ff1c175d64eb654f903eeed909231",
+                "project_read_generation": 0
+              },
+              "watermark": {
+                "transport_epoch": 1,
+                "transport_generation": 6,
+                "loop_generation": 0,
+                "follow_generation": 0
+              }
+            },
+            "authorityPollPending": false,
+            "timelineTransportCanonicalSnapshotGeneration": 0
+          }
+        }
+      ],
+      "settled": {
+        "clock": {
+          "bpm": 80.16062,
+          "beat_phase": 0.30147126,
+          "beat_counter": 0,
+          "tap_count": 4,
+          "source": "Tap",
+          "external_sync_age_ms": null,
+          "external_sync_locked": false
+        },
+        "timelineRuntime": {
+          "transport_epoch": 1,
+          "transport_generation": 6,
+          "loop_runtime": {
+            "generation": 0,
+            "status": "disabled",
+            "a_ms": null,
+            "b_ms": null,
+            "wrap_count": 0
+          },
+          "follow_runtime": {
+            "epoch": 1,
+            "generation": 0,
+            "status": "idle",
+            "admission_reason": null,
+            "outcome": null,
+            "source_timeline_id": null,
+            "target_timeline_id": null,
+            "elapsed_ms": 0,
+            "duration_ms": 0,
+            "progress_millis": 0,
+            "fault": null,
+            "transition_hold_active": false,
+            "waiting_for_pedal_start": false
+          }
+        },
+        "readout": "80",
+        "footer": "Tapped BPM 80.2",
+        "headerHeight": 42,
+        "frontend": {
+          "snapshotClock": {
+            "bpm": 80.16062,
+            "beat_phase": 0.30147126,
+            "beat_counter": 0,
+            "tap_count": 4,
+            "source": "Tap",
+            "external_sync_age_ms": null,
+            "external_sync_locked": false
+          },
+          "latestClock": {
+            "bpm": 80.16062,
+            "beat_phase": 0.30147126,
+            "beat_counter": 0,
+            "tap_count": 4,
+            "source": "Tap",
+            "external_sync_age_ms": null,
+            "external_sync_locked": false
+          },
+          "readGuard": {
+            "generation": 0,
+            "authority": {
+              "project_epoch": 0,
+              "project_revision": 5,
+              "checkpoint_hash": "7f32e64ab8d974de65d72d4d88a1ff31c14ff1c175d64eb654f903eeed909231"
+            }
+          },
+          "watermark": {
+            "scope": {
+              "project_epoch": 0,
+              "project_revision": 5,
+              "checkpoint_hash": "7f32e64ab8d974de65d72d4d88a1ff31c14ff1c175d64eb654f903eeed909231",
+              "project_read_generation": 0
+            },
+            "watermark": {
+              "transport_epoch": 1,
+              "transport_generation": 6,
+              "loop_generation": 0,
+              "follow_generation": 0
+            }
+          },
+          "authorityPollPending": false,
+          "timelineTransportCanonicalSnapshotGeneration": 0
+        }
+      },
+      "reset": {
+        "clock": {
+          "bpm": 80.16062,
+          "beat_phase": 0.52000254,
+          "beat_counter": 3,
+          "tap_count": 1,
+          "source": "Tap",
+          "external_sync_age_ms": null,
+          "external_sync_locked": false
+        },
+        "timelineRuntime": {
+          "transport_epoch": 1,
+          "transport_generation": 7,
+          "loop_runtime": {
+            "generation": 0,
+            "status": "disabled",
+            "a_ms": null,
+            "b_ms": null,
+            "wrap_count": 0
+          },
+          "follow_runtime": {
+            "epoch": 1,
+            "generation": 0,
+            "status": "idle",
+            "admission_reason": null,
+            "outcome": null,
+            "source_timeline_id": null,
+            "target_timeline_id": null,
+            "elapsed_ms": 0,
+            "duration_ms": 0,
+            "progress_millis": 0,
+            "fault": null,
+            "transition_hold_active": false,
+            "waiting_for_pedal_start": false
+          }
+        },
+        "readout": "80",
+        "footer": "Tap again to measure BPM.",
+        "headerHeight": 42,
+        "frontend": {
+          "snapshotClock": {
+            "bpm": 80.16062,
+            "beat_phase": 0.489639,
+            "beat_counter": 3,
+            "tap_count": 1,
+            "source": "Tap",
+            "external_sync_age_ms": null,
+            "external_sync_locked": false
+          },
+          "latestClock": {
+            "bpm": 80.16062,
+            "beat_phase": 0.489639,
+            "beat_counter": 3,
+            "tap_count": 1,
+            "source": "Tap",
+            "external_sync_age_ms": null,
+            "external_sync_locked": false
+          },
+          "readGuard": {
+            "generation": 0,
+            "authority": {
+              "project_epoch": 0,
+              "project_revision": 5,
+              "checkpoint_hash": "7f32e64ab8d974de65d72d4d88a1ff31c14ff1c175d64eb654f903eeed909231"
+            }
+          },
+          "watermark": {
+            "scope": {
+              "project_epoch": 0,
+              "project_revision": 5,
+              "checkpoint_hash": "7f32e64ab8d974de65d72d4d88a1ff31c14ff1c175d64eb654f903eeed909231",
+              "project_read_generation": 0
+            },
+            "watermark": {
+              "transport_epoch": 1,
+              "transport_generation": 7,
+              "loop_generation": 0,
+              "follow_generation": 0
+            }
+          },
+          "authorityPollPending": false,
+          "timelineTransportCanonicalSnapshotGeneration": 0
+        }
+      }
+    },
+    {
+      "check": "external-file-current-path-save-existing-hash-fence-and-success",
+      "passed": true,
+      "receipt": {
+        "artifact_sha256": "469f054c2e6649ca3a47044685df17e6f698016bc345671527eb1e22369f49a8",
+        "error": null,
+        "phase": "succeeded",
+        "recovery_authority_serial": 16,
+        "request": {
+          "destination": "\\\\?\\C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-typed-file-vfATQz\\日本語.sdc",
+          "expected_disposition_generation": 1,
+          "expected_fence": {
+            "process_incarnation": 5827240110467654,
+            "project_checkpoint_hash": "7f32e64ab8d974de65d72d4d88a1ff31c14ff1c175d64eb654f903eeed909231",
+            "project_epoch": 0,
+            "project_publication_generation": 5,
+            "project_revision": 5,
+            "session_incarnation": 510200191188603
+          },
+          "expected_path_generation": 1,
+          "expected_target_sha256": "7ad24fbd214cfc186c0f3591f6096950e9eaa84bf015af6e6ebf58a13a8f6639",
+          "operation_id": "syndocal.project.save.v1",
+          "request_id": 1,
+          "schema_version": 1
+        },
+        "saved_checkpoint_hash": "7f32e64ab8d974de65d72d4d88a1ff31c14ff1c175d64eb654f903eeed909231",
+        "saved_project_epoch": 0,
+        "saved_project_revision": 5,
+        "schema_version": 1,
+        "target_path": "\\\\?\\C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-typed-file-vfATQz\\日本語.sdc"
+      }
+    },
+    {
+      "check": "external-file-template-full-project-export-without-path-or-disposition-change",
+      "passed": true,
+      "receipt": {
+        "artifact_sha256": "5008b7879fb82a8e32b7b2cb5f8109d355f3cfcb65a7e244bb60aa1cbe6deda9",
+        "error": null,
+        "phase": "succeeded",
+        "recovery_authority_serial": 16,
+        "request": {
+          "destination": "\\\\?\\C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-typed-file-vfATQz\\日本語.sdctemplate",
+          "expected_disposition_generation": 2,
+          "expected_fence": {
+            "process_incarnation": 5827240110467654,
+            "project_checkpoint_hash": "7f32e64ab8d974de65d72d4d88a1ff31c14ff1c175d64eb654f903eeed909231",
+            "project_epoch": 0,
+            "project_publication_generation": 5,
+            "project_revision": 5,
+            "session_incarnation": 510200191188603
+          },
+          "expected_path_generation": 1,
+          "expected_target_sha256": null,
+          "operation_id": "syndocal.project.template.save.v1",
+          "request_id": 1,
+          "schema_version": 1
+        },
+        "saved_checkpoint_hash": "7f32e64ab8d974de65d72d4d88a1ff31c14ff1c175d64eb654f903eeed909231",
+        "saved_project_epoch": 0,
+        "saved_project_revision": 5,
+        "schema_version": 1,
+        "target_path": "\\\\?\\C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-typed-file-vfATQz\\日本語.sdctemplate"
+      },
+      "bytes": 5961
+    },
+    {
+      "check": "external-file-second-save-as-after-ack-and-closed-output-gates",
+      "passed": true
+    },
+    {
+      "check": "external-backup-exact-r0-read-and-r5-file-grants-without-human-approval",
+      "passed": true
+    },
+    {
+      "check": "external-backup-inspection-exact-r0-grant-and-strict-id-only-ingress",
+      "passed": true
+    },
+    {
+      "check": "external-backup-future-forged-replace-outside-and-stale-request-rejection",
+      "passed": true
+    },
+    {
+      "check": "external-backup-full-project-byte-hash-source-metadata-and-unchanged-authority",
+      "passed": true,
+      "receipt": {
+        "artifact_sha256": "30991bf0a3fc0722db6ca07544c134bcd6911233e723634788c02d4d2a3b5907",
+        "backup": {
+          "bytes": 6037,
+          "created_at_unix_ms": 1791262405560,
+          "id": 1791262405560,
+          "reason": "MCP backup",
+          "source_path": "\\\\?\\C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-typed-file-vfATQz\\second.sdc"
+        },
+        "error": null,
+        "phase": "succeeded",
+        "recovery_authority_serial": 17,
+        "request": {
+          "destination": "\\\\?\\C:\\Users\\janua\\AppData\\Local\\Packages\\OpenAI.Codex_2p2nqsd0c76g0\\LocalCache\\Local\\jp.seraf.ktn.syndocal.qa.mcp-lifecycle.backup-restore-20261005\\project-backups\\backup-1791262405560.json",
+          "expected_disposition_generation": 3,
+          "expected_fence": {
+            "process_incarnation": 5827240110467654,
+            "project_checkpoint_hash": "7f32e64ab8d974de65d72d4d88a1ff31c14ff1c175d64eb654f903eeed909231",
+            "project_epoch": 0,
+            "project_publication_generation": 5,
+            "project_revision": 5,
+            "session_incarnation": 510200191188603
+          },
+          "expected_path_generation": 2,
+          "expected_target_sha256": null,
+          "operation_id": "syndocal.project.backup.create.v1",
+          "request_id": 1,
+          "schema_version": 1
+        },
+        "saved_checkpoint_hash": "7f32e64ab8d974de65d72d4d88a1ff31c14ff1c175d64eb654f903eeed909231",
+        "saved_project_epoch": 0,
+        "saved_project_revision": 5,
+        "schema_version": 1,
+        "target_path": "C:\\Users\\janua\\AppData\\Local\\jp.seraf.ktn.syndocal.qa.mcp-lifecycle.backup-restore-20261005\\project-backups\\backup-1791262405560.json"
+      },
+      "bytes": 6037,
+      "elapsedMs": 839.4546999999948
+    },
+    {
+      "check": "external-backup-inspection-same-byte-hash-metadata-restoration-path-and-read-purity",
+      "passed": true,
+      "inspection": {
+        "artifact_sha256": "30991bf0a3fc0722db6ca07544c134bcd6911233e723634788c02d4d2a3b5907",
+        "backup": {
+          "bytes": 6037,
+          "created_at_unix_ms": 1791262405560,
+          "id": 1791262405560,
+          "reason": "MCP backup",
+          "source_path": "\\\\?\\C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-typed-file-vfATQz\\second.sdc"
+        },
+        "restore_source_path": "\\\\?\\C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-typed-file-vfATQz\\second.sdc",
+        "schema_version": 1
+      },
+      "elapsedMs": 835.9503000000041
+    },
+    {
+      "check": "external-backup-inspection-competing-writer-rejection-and-explicit-read-recovery",
+      "passed": true
+    },
+    {
+      "check": "external-backup-exact-replay-status-protected-delete-ack-reack-and-next-sequence",
+      "passed": true
+    },
+    {
+      "check": "external-backup-inspection-missing-mismatched-future-duplicate-utf8-unsafe-and-oversize-rejection-without-writes",
+      "passed": true
+    },
+    {
+      "check": "external-backup-owned-artifact-cleanup-preserves-all-existing-managed-files",
+      "passed": true
+    },
+    {
+      "check": "native-authored-control-stopped-whole-checkpoint",
+      "passed": true,
+      "oracleSha256Lf": "2de7f4d6a5e8ba0c0cedf7ef664d65030fde37d492ae3fa2b6475e77a02f7bf6",
+      "sourceSha256": "45bff072bf49b896bb2f76cdaa00e8c457115a03dfbd32631eb968b24f58af59",
+      "neutralDimmerValue": 65535,
+      "timelineBankCount": 2,
+      "effectsEnabled": true,
+      "graphEnabled": true,
+      "ownership": {
+        "role": "Standby",
+        "effective_role": "Standby",
+        "desired_role": "Both",
+        "persisted_role": "Both",
+        "state": "Ready",
+        "generation": 1,
+        "epoch": 1,
+        "lighting_allowed": false,
+        "video_allowed": false,
+        "lighting_reason": "ProjectSwapDisarmed",
+        "video_reason": "ProjectSwapDisarmed",
+        "error": null
+      },
+      "token": {
+        "epoch": 1,
+        "revision": 0,
+        "hash": "6bba9a6bdefda9cb20f507a47d3706c455733c9a71ef2d3038f917ea2c91e862"
+      }
+    },
+    {
+      "check": "native-authored-control-whole-checkpoint-load-reload",
+      "passed": true,
+      "oracleSha256Lf": "2de7f4d6a5e8ba0c0cedf7ef664d65030fde37d492ae3fa2b6475e77a02f7bf6",
+      "sourceSha256": "d61750301bbf428dffdcce2f3c1f14bdb959d0cfd9910fce195325263e32a94c",
+      "canonicalSha256": "54c3ba05829ad3d80b252cdffec9500f519883f18d170d7ef75fb8c6409321ba",
+      "transportAfterLoad": {
+        "timelineId": 1,
+        "playing": false,
+        "positionMs": 0
+      },
+      "transportAfterReload": {
+        "timelineId": 1,
+        "playing": false,
+        "positionMs": 0
+      },
+      "stoppedObservationMs": 250,
+      "timelineBankCount": 2,
+      "graphNodes": 5,
+      "graphEdges": 3,
+      "effects": 1,
+      "touchPages": 2,
+      "touchControls": 8,
+      "removedVideoSourcesForNativeProbe": true,
+      "ownership": {
+        "role": "Standby",
+        "effective_role": "Standby",
+        "desired_role": "Both",
+        "persisted_role": "Both",
+        "state": "Ready",
+        "generation": 3,
+        "epoch": 3,
+        "lighting_allowed": false,
+        "video_allowed": false,
+        "lighting_reason": "ProjectSwapDisarmed",
+        "video_reason": "ProjectSwapDisarmed",
+        "error": null
+      },
+      "beforeToken": {
+        "epoch": 2,
+        "revision": 0,
+        "hash": "6bba9a6bdefda9cb20f507a47d3706c455733c9a71ef2d3038f917ea2c91e862"
+      },
+      "afterToken": {
+        "epoch": 3,
+        "revision": 0,
+        "hash": "6bba9a6bdefda9cb20f507a47d3706c455733c9a71ef2d3038f917ea2c91e862"
+      }
+    },
+    {
+      "check": "external-backup-restore-exact-file-grant-no-human-confirmation",
+      "passed": true
+    },
+    {
+      "check": "external-backup-restore-forged-identity-changed-bytes-source-missing-malformed-and-all-stale-fences-preserve-complete-state",
+      "passed": true
+    },
+    {
+      "check": "external-backup-restore-full-authored-image-four-mappings-unsaved-source-and-closed-outputs",
+      "passed": true,
+      "receipt": {
+        "status": "receipt",
+        "value": {
+          "outcome": {
+            "authority": {
+              "checkpoint_hash": "21fa645e7ee2fd9c86288dc33ce853d816274dd8566001797e2df15bca52e75d",
+              "current_project_path": "C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-backup-restore-VLwOmi\\全マッピング.sdc",
+              "project_epoch": 6,
+              "project_revision": 0,
+              "publication_generation": 11,
+              "recovery_authority_serial": 23
+            },
+            "kind": "applied"
+          },
+          "request": {
+            "action": {
+              "backup_id": 1791262443178,
+              "expected_file_sha256": "e91539bd5736d5dcb266f296ac4a50a705b455565d905a17c12057af7a018edd",
+              "expected_source_path": "C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-backup-restore-VLwOmi\\全マッピング.sdc",
+              "kind": "restore_backup"
+            },
+            "expected_fence": {
+              "process_incarnation": 5827240110467654,
+              "project_checkpoint_hash": "bb748cb7817ff3a10fd06531ac985e8478e6c41768522a48a1e5448af58a5c43",
+              "project_epoch": 5,
+              "project_publication_generation": 10,
+              "project_revision": 0,
+              "session_incarnation": 2638183975070933
+            },
+            "operation_id": "syndocal.project.backup.restore.v1",
+            "request_id": 1791262437247,
+            "schema_version": 1
+          }
+        }
+      },
+      "artifactSha256": "e91539bd5736d5dcb266f296ac4a50a705b455565d905a17c12057af7a018edd",
+      "bytes": 38059,
+      "elapsedMs": 604.9020000000019,
+      "mappingCounts": {
+        "midi": 1,
+        "osc": 1,
+        "dmx": 1,
+        "dj": 1
+      },
+      "timelineBankCount": 2
+    },
+    {
+      "check": "external-backup-restore-terminal-replay-with-missing-artifact-and-changed-shape-conflict",
+      "passed": true
+    },
+    {
+      "check": "external-backup-restore-owned-cleanup-preserves-baseline-managed-files-and-summaries",
+      "passed": true,
+      "fixtureAutosavesPreserved": []
+    },
+    {
+      "check": "isolated-first-launch-read",
+      "passed": true
+    },
+    {
+      "check": "dead-process-descriptor-rejected",
+      "passed": true
+    },
+    {
+      "check": "crash-restart-retired-principal-rejected",
+      "passed": true
+    },
+    {
+      "check": "old-credential-and-receipt-not-adopted",
+      "passed": true
+    },
+    {
+      "check": "old-launch-proof-rejected-fresh-read-succeeds",
+      "passed": true
+    },
+    {
+      "check": "external-r5-revoke-after-claim-before-native-execution",
+      "passed": true,
+      "operationId": "syndocal.diagnostics.export.v1",
+      "requestId": "7c1b5d20-f6b8-4829-b7ab-033523ec8ae8",
+      "rendererGeneration": 2,
+      "executionError": "agent_principal_revoked",
+      "replayError": "request_not_executable",
+      "destinationAbsent": true,
+      "sourceBytesPreserved": false,
+      "leaseUnavailable": true,
+      "credentialRevoked": true
+    }
+  ],
+  "normalAppIdentityUnchanged": true,
+  "credentialRevoked": true,
+  "credentialFileRemoved": true,
+  "nativePanicLocations": [],
+  "nonclaims": [
+    "QA identifier release build, not the distributed artifact",
+    "No physical output activation; optional high-risk or lease-expiry probe mutates isolated backend lease authority only; optional Tap probe changes isolated empty-project tempo; optional project-file probe loads private JSON with no file media or video source activation",
+    "No durable authored/output mutation crash publication acceptance",
+    "Typed external Save/Save As/template/status/ack on owned private files only; no mid-publication external rename CAS, crash/restart, all remaining File/AI8/release or physical acceptance",
+    "Typed managed backup creation/inspection/restore, complete private authored-image and four mapping-family restoration, exact terminal/ack/replay and owned cleanup only; no full retention-race/mid-publication revocation/crash/restart, canonical backup delete/retention, all File or physical acceptance"
+  ]
+}

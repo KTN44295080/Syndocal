@@ -2,6 +2,7 @@
 
 mod agent_bridge;
 mod agent_bridge_execution;
+mod native_adapter_error;
 use std::{
     cell::RefCell,
     collections::{hash_map::Entry, BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
@@ -51038,7 +51039,7 @@ fn load_fixture_preset_for_all_matching(
 #[tauri::command]
 async fn save_project_control_plane_v1(app: tauri::AppHandle, window: WebviewWindow,
     request: protocol::control_plane_file::ProjectFileRequestV1,
-) -> Result<Value, String> {
+) -> Result<Value, native_adapter_error::NativeAdapterError> {
     let request = serde_json::to_value(request).map_err(|_| "project_file_request_invalid")?;
     tauri::async_runtime::spawn_blocking(move || project_file_control_plane::execute_local(&app, &window, "syndocal.project.save.v1", request))
         .await.map_err(|_| "project_file_executor_failed")?
@@ -51047,7 +51048,7 @@ async fn save_project_control_plane_v1(app: tauri::AppHandle, window: WebviewWin
 #[tauri::command]
 async fn save_project_as_control_plane_v1(app: tauri::AppHandle, window: WebviewWindow,
     request: protocol::control_plane_file::ProjectFileRequestV1,
-) -> Result<Value, String> {
+) -> Result<Value, native_adapter_error::NativeAdapterError> {
     let request = serde_json::to_value(request).map_err(|_| "project_file_request_invalid")?;
     tauri::async_runtime::spawn_blocking(move || project_file_control_plane::execute_local(&app, &window, "syndocal.project.save_as.v1", request))
         .await.map_err(|_| "project_file_executor_failed")?
@@ -51056,7 +51057,7 @@ async fn save_project_as_control_plane_v1(app: tauri::AppHandle, window: Webview
 #[tauri::command]
 async fn save_user_template_control_plane_v1(app: tauri::AppHandle, window: WebviewWindow,
     request: protocol::control_plane_file::ProjectFileRequestV1,
-) -> Result<Value, String> {
+) -> Result<Value, native_adapter_error::NativeAdapterError> {
     let request = serde_json::to_value(request).map_err(|_| "project_file_request_invalid")?;
     tauri::async_runtime::spawn_blocking(move || project_file_control_plane::execute_local(&app, &window, "syndocal.project.template.save.v1", request))
         .await.map_err(|_| "project_file_executor_failed")?
@@ -51065,7 +51066,7 @@ async fn save_user_template_control_plane_v1(app: tauri::AppHandle, window: Webv
 #[tauri::command]
 async fn query_project_file_authority_v1(app: tauri::AppHandle, window: WebviewWindow,
     request: protocol::control_plane_file::ProjectFileAuthorityRequestV1,
-) -> Result<Value, String> {
+) -> Result<Value, native_adapter_error::NativeAdapterError> {
     let request = serde_json::to_value(request).map_err(|_| "project_file_request_invalid")?;
     tauri::async_runtime::spawn_blocking(move || project_file_control_plane::execute_local(&app, &window, "syndocal.query.project.file.authority.v1", request))
         .await.map_err(|_| "project_file_executor_failed")?
@@ -51074,7 +51075,7 @@ async fn query_project_file_authority_v1(app: tauri::AppHandle, window: WebviewW
 #[tauri::command]
 async fn create_project_backup_control_plane_v1(app: tauri::AppHandle, window: WebviewWindow,
     request: protocol::control_plane_file::ProjectFileRequestV1,
-) -> Result<Value, String> {
+) -> Result<Value, native_adapter_error::NativeAdapterError> {
     let request = serde_json::to_value(request).map_err(|_| "project_file_request_invalid")?;
     tauri::async_runtime::spawn_blocking(move || project_file_control_plane::execute_local(&app, &window, "syndocal.project.backup.create.v1", request))
         .await.map_err(|_| "project_file_executor_failed")?
@@ -51083,7 +51084,7 @@ async fn create_project_backup_control_plane_v1(app: tauri::AppHandle, window: W
 #[tauri::command]
 async fn query_project_backup_authority_v1(app: tauri::AppHandle, window: WebviewWindow,
     request: protocol::control_plane_file::ProjectBackupAuthorityRequestV1,
-) -> Result<Value, String> {
+) -> Result<Value, native_adapter_error::NativeAdapterError> {
     let request = serde_json::to_value(request).map_err(|_| "project_file_request_invalid")?;
     tauri::async_runtime::spawn_blocking(move || project_file_control_plane::execute_local(&app, &window, "syndocal.query.project.backup.authority.v1", request))
         .await.map_err(|_| "project_file_executor_failed")?
@@ -51092,7 +51093,7 @@ async fn query_project_backup_authority_v1(app: tauri::AppHandle, window: Webvie
 #[tauri::command]
 async fn inspect_project_backup_control_plane_v1(app: tauri::AppHandle, window: WebviewWindow,
     request: protocol::control_plane_file::ProjectBackupInspectRequestV1,
-) -> Result<Value, String> {
+) -> Result<Value, native_adapter_error::NativeAdapterError> {
     let request = serde_json::to_value(request).map_err(|_| "project_file_request_invalid")?;
     tauri::async_runtime::spawn_blocking(move || project_file_control_plane::execute_local(&app, &window, "syndocal.query.project.backup.inspect.v1", request))
         .await.map_err(|_| "project_file_executor_failed")?
@@ -51101,7 +51102,7 @@ async fn inspect_project_backup_control_plane_v1(app: tauri::AppHandle, window: 
 #[tauri::command]
 async fn query_project_file_status_v1(app: tauri::AppHandle, window: WebviewWindow,
     request: protocol::control_plane_file::ProjectFileRequestV1,
-) -> Result<Value, String> {
+) -> Result<Value, native_adapter_error::NativeAdapterError> {
     let request = serde_json::to_value(request).map_err(|_| "project_file_request_invalid")?;
     tauri::async_runtime::spawn_blocking(move || project_file_control_plane::execute_local(&app, &window, "syndocal.query.project.file.status.v1", request))
         .await.map_err(|_| "project_file_executor_failed")?
@@ -51110,7 +51111,7 @@ async fn query_project_file_status_v1(app: tauri::AppHandle, window: WebviewWind
 #[tauri::command]
 async fn acknowledge_project_file_control_plane_v1(app: tauri::AppHandle, window: WebviewWindow,
     request: protocol::control_plane_file::ProjectFileRequestV1,
-) -> Result<Value, String> {
+) -> Result<Value, native_adapter_error::NativeAdapterError> {
     let request = serde_json::to_value(request).map_err(|_| "project_file_request_invalid")?;
     tauri::async_runtime::spawn_blocking(move || project_file_control_plane::execute_local(&app, &window, "syndocal.project.file.acknowledge.v1", request))
         .await.map_err(|_| "project_file_executor_failed")?
@@ -58354,7 +58355,7 @@ async fn agent_bridge_execute_native_v1(
     window: WebviewWindow,
     renderer_generation: u64,
     request_id: String,
-) -> Result<serde_json::Value, String> {
+) -> Result<serde_json::Value, native_adapter_error::NativeAdapterError> {
     tauri::async_runtime::spawn_blocking(move ||
         agent_bridge_execution::execute(&app, &window, renderer_generation, &request_id)
     ).await.map_err(|_| "agent_native_executor_failed".to_string())?

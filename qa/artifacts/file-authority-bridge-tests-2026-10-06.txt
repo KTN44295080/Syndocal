@@ -1,0 +1,19 @@
+
+running 14 tests
+test agent_bridge::tests::agent_bridge_receipts_and_replays_are_bound_to_exact_owner ... ok
+test agent_bridge::tests::agent_bridge_reload_fences_late_completion_and_does_not_replay ... ok
+test agent_bridge::tests::agent_bridge_native_execution_requires_current_claim_and_is_single_use ... ok
+test agent_bridge::tests::agent_bridge_video_blackout_is_a_deduplicated_mutation ... ok
+test agent_bridge::tests::agent_bridge_claim_is_exact_once_and_replay_never_dispatches_twice ... ok
+test agent_bridge::tests::agent_bridge_wire_auth_methods_and_bounds_are_strict ... ok
+test agent_bridge::tests::agent_bridge_oversize_result_cannot_be_reported_completed ... ok
+test agent_bridge::tests::agent_bridge_process_requires_nonce_proof_and_exact_external_grant ... ok
+agent bridge hostile request corpus: 512 cases, 511 rejected, 0 panics, max_bytes=65537
+test agent_bridge::tests::agent_bridge_wire_hostile_request_corpus_is_bounded_and_panic_free ... ok
+test agent_bridge::tests::agent_bridge_capacity_preserves_inflight_and_mutation_tombstones ... ok
+test agent_bridge::tests::agent_bridge_legacy_unbound_tombstone_remains_a_replay_fence ... ok
+test agent_bridge::tests::agent_bridge_canonical_reads_are_not_persisted_mutations_but_writes_are ... ok
+test agent_bridge::tests::agent_bridge_video_blackout_mutation_survives_reload_without_redispatch ... ok
+test agent_bridge::tests::agent_bridge_restart_retains_mutation_identity_without_automatic_replay ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 1993 filtered out; finished in 0.03s

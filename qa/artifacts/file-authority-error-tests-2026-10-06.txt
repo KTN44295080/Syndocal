@@ -1,0 +1,12 @@
+WHERE_LINKERS=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+PINNED_LINKER=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+["test","-p","syndocal","--release","--locked","-j","1","--config","profile.release.package.syndocal.opt-level=0","--config","profile.release.package.syndocal.codegen-units=256","native_adapter_error","--","--nocapture"]
+   Compiling syndocal v1.2.0-alpha.69 (C:\Users\janua\OneDrive\ドキュメント\GitHub\Syndocal\app\src-tauri)
+    Finished `release` profile [optimized] target(s) in 3m 08s
+     Running unittests src\main.rs (C:\Users\janua\AppData\Local\Temp\syndocal-native-acceptance-target\release\deps\syndocal-41cd4ce392874b4c.exe)
+
+running 2 tests
+test native_adapter_error::tests::native_adapter_error_keeps_operation_strings_and_query_flags_distinct ... ok
+test native_adapter_error::tests::native_adapter_error_preserves_every_canonical_query_wire ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 2005 filtered out; finished in 0.00s

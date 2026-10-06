@@ -2088,6 +2088,52 @@ mod tests {
     }
 
     #[test]
+    fn mutation_fence_query_rejects_real_coordinator_contention_without_publication() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let state = ControlPlaneQueryState::new().unwrap();
+        let before = state.capture_for_window("media-asset-a6", &harness.state, false).unwrap();
+        let issued_before = state.inner.lock().unwrap().authored_mutation_fences.len();
+        let held = harness.state.project_coordinator.lock().unwrap();
+        let start = Instant::now();
+        let error = state.issue_project_mutation_fence_for_window("media-asset-a6", &harness.state)
+            .expect_err("A held coordinator must reject this nonblocking capture");
+        assert!(start.elapsed() < Duration::from_millis(100));
+        assert_eq!(error.code(), QueryErrorCode::Overloaded);
+        assert!(error.retryable());
+        assert!(!error.resnapshot_required());
+        assert_eq!(state.inner.lock().unwrap().authored_mutation_fences.len(), issued_before);
+        drop(held);
+        let after = state.capture_for_window("media-asset-a6", &harness.state, false).unwrap();
+        assert_eq!(after.project, before.project);
+        assert_eq!(after.output, before.output);
+        assert_eq!(after.runtime, before.runtime);
+        assert_eq!(after.fence, before.fence);
+        // A separate new observation after contention ends can issue authority.
+        // The rejected invocation itself did not retry or return a usable fence.
+        state.issue_project_mutation_fence_for_window("media-asset-a6", &harness.state).unwrap();
+    }
+
+    #[test]
+    fn mutation_fence_query_rejects_missing_owner_before_capture_or_issue() {
+        let harness = MediaAssetA6CommandHarness::new();
+        let state = ControlPlaneQueryState::new().unwrap();
+        let before = state.capture_for_window("media-asset-a6", &harness.state, false).unwrap();
+        let issued_before = state.inner.lock().unwrap().authored_mutation_fences.len();
+        let error = state.issue_project_mutation_fence_for_window("unknown-owner", &harness.state).unwrap_err();
+        assert_eq!(error.code(), QueryErrorCode::Forbidden);
+        assert!(!error.retryable());
+        assert!(!error.resnapshot_required());
+        let inner = state.inner.lock().unwrap();
+        assert_eq!(inner.authored_mutation_fences.len(), issued_before);
+        assert!(!inner.window_incarnations.contains_key("unknown-owner"));
+        drop(inner);
+        let after = state.capture_for_window("media-asset-a6", &harness.state, false).unwrap();
+        assert_eq!(after.project, before.project);
+        assert_eq!(after.output, before.output);
+        assert_eq!(after.fence, before.fence);
+    }
+
+    #[test]
     fn cursors_are_owner_bound_single_use_and_tamper_evident() {
         let state = ControlPlaneQueryState::new().unwrap();
         let view_a = seeded_view(&state, "a");

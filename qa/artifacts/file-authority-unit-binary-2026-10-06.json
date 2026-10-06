@@ -1,0 +1,36 @@
+{
+  "executable": "C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-native-acceptance-target\\release\\deps\\syndocal-41cd4ce392874b4c.exe",
+  "sha256": "0b116f2896c2ecf50651a5b9033208506a900b59edc49cc911027221e4fb57bb",
+  "sourceFreeze": "syndocal-file-authority-source-freeze-20261005.json",
+  "applicationOptLevel": 0,
+  "applicationCodegenUnits": 256,
+  "releaseDependencies": true,
+  "optimizedNativeAcceptance": false,
+  "results": [
+    {
+      "filter": "native_adapter_error",
+      "passed": 2
+    },
+    {
+      "filter": "mutation_fence_query_",
+      "passed": 2
+    },
+    {
+      "filter": "control_plane_query::tests",
+      "passed": 17
+    },
+    {
+      "filter": "project_file",
+      "passed": 48
+    },
+    {
+      "filter": "control_plane::tests",
+      "passed": 35
+    },
+    {
+      "filter": "agent_bridge::tests",
+      "passed": 14
+    }
+  ],
+  "countsOverlap": true
+}

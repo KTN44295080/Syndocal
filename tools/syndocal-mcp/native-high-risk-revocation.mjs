@@ -8,6 +8,20 @@ import { openNativeStdioSession } from './native-stdio-session.mjs';
 // process. Registering a new generation retires the automatic renderer so the
 // native claim/revoke/execute order is deterministic. No DOM or invoke patching.
 export async function nativeHighRiskRevocation(backend, options, checks, { projectReplacement = false, projectFile = false, projectBackup = false } = {}) {
+  const authority = async (kind, command, args = {}) => {
+    const result = await backend.evaluate(`window.__TAURI_INTERNALS__.invoke(${JSON.stringify(command)},${JSON.stringify(args)})
+      .then(value=>({value}),error=>{
+        if(typeof error==='string')return {error:error.slice(0,768)};
+        if(error && typeof error==='object' && Object.keys(error).length===4
+          && typeof error.code==='string' && /^[a-z_]{1,64}$/.test(error.code)
+          && typeof error.message==='string' && error.message.length<=1024
+          && typeof error.retryable==='boolean' && typeof error.resnapshot_required==='boolean')
+          return {error:{code:error.code,message:error.message,retryable:error.retryable,resnapshot_required:error.resnapshot_required}};
+        return {error:'Unrecognized native authority error'};
+      })`);
+    assert.ok(result.value, `Revocation fixture authority ${kind}: ${JSON.stringify(result.error)}`);
+    return result.value;
+  };
   const generation = await backend.invoke('agent_bridge_register_v1');
   assert.ok(Number.isSafeInteger(generation) && generation > 0);
   const checkpoint = async () => {
@@ -72,9 +86,9 @@ export async function nativeHighRiskRevocation(backend, options, checks, { proje
         assert.equal(completed.status,'completed');assert.equal(completed.result.ok,true);
         authorityResult={value:completed.result.result};
       } else if (publication) {
-        authorityResult=await backend.evaluate(`window.__TAURI_INTERNALS__.invoke('query_project_file_authority_v1', ${JSON.stringify({
+        authorityResult={value:await authority(kind,'query_project_file_authority_v1', {
           request: {schema_version:1,operation_id:operationId,destination},
-        })}).then(value=>({value}),error=>({error:String(error).slice(0,768)}))`);
+        })};
       }
       if (publication) assert.ok(authorityResult.value, `Revocation fixture authority ${kind}: ${authorityResult.error}`);
       const fileAuthority = authorityResult?.value;
@@ -86,7 +100,7 @@ export async function nativeHighRiskRevocation(backend, options, checks, { proje
         destination: fileAuthority.destination, expected_target_sha256: fileAuthority.target_sha256,
       } } } : project ? { operationId, request: { request: { schema_version: 1,
         operation_id: operationId, request_id: Date.now(),
-        expected_fence: (await backend.invoke('query_project_replacement_authority_v1', { request: {} })).fence,
+        expected_fence: (await authority(kind,'query_project_replacement_authority_v1', { request: {} })).fence,
         action: kind === 'project_new' ? { kind: 'new' } : kind === 'project_restore' ? {
           kind: 'restore_backup', backup_id: Number.MAX_SAFE_INTEGER,
           expected_file_sha256: '0'.repeat(64), expected_source_path: null,
@@ -96,7 +110,7 @@ export async function nativeHighRiskRevocation(backend, options, checks, { proje
         operationId,
         request: { request: {
           operation_id: operationId, request_id: Date.now(),
-          expected_fence: (await backend.invoke('query_output_control_authority_v1')).fence,
+          expected_fence: (await authority(kind,'query_output_control_authority_v1')).fence,
           action: { kind: 'acquire_lease', role: 'lighting' },
         } },
       };

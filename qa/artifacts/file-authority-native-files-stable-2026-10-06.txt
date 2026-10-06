@@ -1,0 +1,23 @@
+node:internal/modules/run_main:123
+    triggerUncaughtException(
+    ^
+
+AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
++ actual - expected
+
++ [
++   'backup-1791261597208.json'
++ ]
+- []
+
+    at nativeProjectBackupRestore (file:///C:/Users/janua/OneDrive/%E3%83%89%E3%82%AD%E3%83%A5%E3%83%A1%E3%83%B3%E3%83%88/GitHub/Syndocal/tools/syndocal-mcp/native-project-backup-restore.mjs:174:14)
+    at async file:///C:/Users/janua/OneDrive/%E3%83%89%E3%82%AD%E3%83%A5%E3%83%A1%E3%83%B3%E3%83%88/GitHub/Syndocal/tools/syndocal-mcp/check-native-lifecycle.mjs:283:22 {
+  generatedMessage: true,
+  code: 'ERR_ASSERTION',
+  actual: [ 'backup-1791261597208.json' ],
+  expected: [],
+  operator: 'deepStrictEqual',
+  diff: 'simple'
+}
+
+Node.js v22.22.1

@@ -1,0 +1,88 @@
+{
+  "schemaVersion": 1,
+  "timestamp": "2026-10-06T04:24:02.788Z",
+  "passed": false,
+  "executable": "C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-native-acceptance-target\\release\\syndocal.exe",
+  "executableSha256": "85500ccd0554989cd62fa8332c01af8e178171b2470e34b7ee94b1089e78309a",
+  "sidecarSha256": "88d7d54d18c7f689fddbabb9fb712a3be171c6be16dc3f72cf75eed82e75d850",
+  "runnerSha256": "be8a57fa6313a3d350beb924bfb1969617270d687fe93f9dafccc503a5071138",
+  "backendHarnessSha256": "ade29aa256d8ff17374bb4b3e893ea9a07f71f8fa2cf2bb72b21f80d4e0e8b1f",
+  "fileQueryPressureHarnessSha256": "d3c32e3220fd94e8d69113b5831df3edb0f462cbb5404928e283c9bad0927f65",
+  "fileQueryControllerSha256": "732ee68fbc28871280a0339c581259944b0ecd4891ff07028c8b90378bf375c2",
+  "nativeAdapterErrorSha256": "c7f9420e16465e1293f3cb40beb3d6b635e69964a93e6a38d3de42370f41a451",
+  "queryCaptureSha256": "ecabfb431f97ac44f2b5ea00384f268026e6a94fa3a50dc2cc6457e5d623d067",
+  "projectFileNativeSha256": "caedc8390fa062972e555265ca89da481eb847e630fea73c1c2a2c72bb35ca7f",
+  "nativeExecutorSha256": "8f92b7508b507b40444b43f7d8345c9eac460da2822a9b476d2d6733da169614",
+  "stdioHarnessSha256": "7a7f885a010f5d1de8823db6585204562b69358ce0253f4829b33c821c846e6d",
+  "fileQueryPressureTransport": "Actual local IPC and authenticated stdio MCP file/backup authority reads with real asynchronous native checkpoint-bundle capture pressure; no lock-hold command, operation retry, DOM or physical output",
+  "profile": "jp.seraf.ktn.syndocal.qa.mcp-lifecycle.backup-restore-20261005",
+  "checks": [
+    {
+      "check": "file-authority-real-concurrent-read-query-wire",
+      "passed": true,
+      "checkpointReads": 23808,
+      "checkpointSuccess": 9901,
+      "checkpointBusy": 13907,
+      "localCalls": 512,
+      "externalCalls": 8,
+      "counts": {
+        "localSuccess": 272,
+        "externalSuccess": 8,
+        "localErrors": {
+          "overloaded": 240
+        },
+        "externalErrors": {}
+      },
+      "elapsedMs": 20345.215399999997,
+      "localErrorSamples": [
+        {
+          "operationId": "syndocal.query.project.file.authority.v1",
+          "error": {
+            "code": "overloaded",
+            "message": "query service overloaded",
+            "resnapshot_required": false,
+            "retryable": true
+          }
+        },
+        {
+          "operationId": "syndocal.query.project.backup.authority.v1",
+          "error": {
+            "code": "overloaded",
+            "message": "query service overloaded",
+            "resnapshot_required": false,
+            "retryable": true
+          }
+        },
+        {
+          "operationId": "syndocal.query.project.file.authority.v1",
+          "error": {
+            "code": "overloaded",
+            "message": "query service overloaded",
+            "resnapshot_required": false,
+            "retryable": true
+          }
+        },
+        {
+          "operationId": "syndocal.query.project.backup.authority.v1",
+          "error": {
+            "code": "overloaded",
+            "message": "query service overloaded",
+            "resnapshot_required": false,
+            "retryable": true
+          }
+        }
+      ],
+      "externalErrorSamples": []
+    }
+  ],
+  "normalAppIdentityUnchanged": true,
+  "credentialRevoked": true,
+  "credentialFileRemoved": true,
+  "nativePanicLocations": [],
+  "nonclaims": [
+    "QA identifier release build, not the distributed artifact",
+    "No physical output activation; optional high-risk or lease-expiry probe mutates isolated backend lease authority only; optional Tap probe changes isolated empty-project tempo; optional project-file probe loads private JSON with no file media or video source activation",
+    "No durable authored/output mutation crash publication acceptance",
+    "Bounded real local and authenticated external authority reads under concurrent project-bundle capture only; no proof of the historical generic query failure cause, complete contention/rate/real-time budget, publication mutation, physical output or release acceptance"
+  ]
+}

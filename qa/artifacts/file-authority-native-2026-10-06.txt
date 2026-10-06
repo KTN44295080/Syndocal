@@ -1,0 +1,25 @@
+node:internal/modules/run_main:123
+    triggerUncaughtException(
+    ^
+
+AssertionError [ERR_ASSERTION]: {"requestId":"9765770b-41e2-4c75-bff9-7be84c220e68","status":"rejected","error":"sidecar_overloaded","nextAction":"This request was not sent. Wait for outstanding requests to finish before issuing another request."}
++ actual - expected
+
++ 'rejected'
+- 'completed'
+
+    at send (file:///C:/Users/janua/OneDrive/%E3%83%89%E3%82%AD%E3%83%A5%E3%83%A1%E3%83%B3%E3%83%88/GitHub/Syndocal/tools/syndocal-mcp/native-file-query-pressure.mjs:62:14)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async Promise.all (index 1)
+    at async Promise.all (index 1)
+    at async nativeFileQueryPressure (file:///C:/Users/janua/OneDrive/%E3%83%89%E3%82%AD%E3%83%A5%E3%83%A1%E3%83%B3%E3%83%88/GitHub/Syndocal/tools/syndocal-mcp/native-file-query-pressure.mjs:84:36)
+    at async file:///C:/Users/janua/OneDrive/%E3%83%89%E3%82%AD%E3%83%A5%E3%83%A1%E3%83%B3%E3%83%88/GitHub/Syndocal/tools/syndocal-mcp/check-native-lifecycle.mjs:279:26 {
+  generatedMessage: false,
+  code: 'ERR_ASSERTION',
+  actual: 'rejected',
+  expected: 'completed',
+  operator: 'strictEqual',
+  diff: 'simple'
+}
+
+Node.js v22.22.1

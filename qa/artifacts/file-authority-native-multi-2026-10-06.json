@@ -1,0 +1,190 @@
+{
+  "schemaVersion": 1,
+  "timestamp": "2026-10-06T04:30:42.346Z",
+  "passed": true,
+  "executable": "C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-native-acceptance-target\\release\\syndocal.exe",
+  "executableSha256": "85500ccd0554989cd62fa8332c01af8e178171b2470e34b7ee94b1089e78309a",
+  "sidecarSha256": "88d7d54d18c7f689fddbabb9fb712a3be171c6be16dc3f72cf75eed82e75d850",
+  "runnerSha256": "a9fa43bf61debdc2041e73f5df80de9f4adaed32590660659cfa99accd5a636f",
+  "backendHarnessSha256": "ade29aa256d8ff17374bb4b3e893ea9a07f71f8fa2cf2bb72b21f80d4e0e8b1f",
+  "fileQueryPressureHarnessSha256": "e4c0ed885574a2ff84790b62fdacd15512b69223f7304964c3e1152850babe4a",
+  "fileQueryControllerSha256": "732ee68fbc28871280a0339c581259944b0ecd4891ff07028c8b90378bf375c2",
+  "nativeAdapterErrorSha256": "c7f9420e16465e1293f3cb40beb3d6b635e69964a93e6a38d3de42370f41a451",
+  "queryCaptureSha256": "ecabfb431f97ac44f2b5ea00384f268026e6a94fa3a50dc2cc6457e5d623d067",
+  "projectFileNativeSha256": "caedc8390fa062972e555265ca89da481eb847e630fea73c1c2a2c72bb35ca7f",
+  "nativeExecutorSha256": "8f92b7508b507b40444b43f7d8345c9eac460da2822a9b476d2d6733da169614",
+  "stdioHarnessSha256": "7a7f885a010f5d1de8823db6585204562b69358ce0253f4829b33c821c846e6d",
+  "fileQueryPressureTransport": "Actual local IPC and authenticated stdio MCP file/backup authority reads with real asynchronous native checkpoint-bundle capture pressure; no lock-hold command, operation retry, DOM or physical output",
+  "profile": "jp.seraf.ktn.syndocal.qa.mcp-lifecycle.backup-restore-20261005",
+  "checks": [
+    {
+      "check": "file-query-pressure-native-valid-unbound-touch-fixture",
+      "passed": true,
+      "pages": 64,
+      "controls": 6144,
+      "bytes": 1174140,
+      "bindingCount": 0,
+      "physicalFixtureCount": 0,
+      "videoOutputCount": 0
+    },
+    {
+      "check": "file-authority-real-concurrent-read-query-wire",
+      "passed": true,
+      "checkpointReads": 36416,
+      "checkpointSuccess": 665,
+      "checkpointBusy": 35751,
+      "localCalls": 512,
+      "externalCalls": 32,
+      "stdioClients": 4,
+      "counts": {
+        "localSuccess": 13,
+        "externalSuccess": 10,
+        "localErrors": {
+          "overloaded": 499
+        },
+        "externalErrors": {
+          "overloaded": 22
+        }
+      },
+      "elapsedMs": 20199.9132,
+      "localErrorSamples": [
+        {
+          "operationId": "syndocal.query.project.backup.authority.v1",
+          "error": {
+            "code": "overloaded",
+            "message": "query service overloaded",
+            "resnapshot_required": false,
+            "retryable": true
+          }
+        },
+        {
+          "operationId": "syndocal.query.project.file.authority.v1",
+          "error": {
+            "code": "overloaded",
+            "message": "query service overloaded",
+            "resnapshot_required": false,
+            "retryable": true
+          }
+        },
+        {
+          "operationId": "syndocal.query.project.backup.authority.v1",
+          "error": {
+            "code": "overloaded",
+            "message": "query service overloaded",
+            "resnapshot_required": false,
+            "retryable": true
+          }
+        },
+        {
+          "operationId": "syndocal.query.project.file.authority.v1",
+          "error": {
+            "code": "overloaded",
+            "message": "query service overloaded",
+            "resnapshot_required": false,
+            "retryable": true
+          }
+        }
+      ],
+      "externalErrorSamples": [
+        {
+          "operationId": "syndocal.query.project.backup.authority.v1",
+          "error": {
+            "code": "request_rejected",
+            "message": "query service overloaded",
+            "native_query": {
+              "code": "overloaded",
+              "message": "query service overloaded",
+              "resnapshot_required": false,
+              "retryable": true
+            }
+          },
+          "ok": false
+        },
+        {
+          "operationId": "syndocal.query.project.file.authority.v1",
+          "error": {
+            "code": "request_rejected",
+            "message": "query service overloaded",
+            "native_query": {
+              "code": "overloaded",
+              "message": "query service overloaded",
+              "resnapshot_required": false,
+              "retryable": true
+            }
+          },
+          "ok": false
+        },
+        {
+          "operationId": "syndocal.query.project.backup.authority.v1",
+          "error": {
+            "code": "request_rejected",
+            "message": "query service overloaded",
+            "native_query": {
+              "code": "overloaded",
+              "message": "query service overloaded",
+              "resnapshot_required": false,
+              "retryable": true
+            }
+          },
+          "ok": false
+        },
+        {
+          "operationId": "syndocal.query.project.backup.authority.v1",
+          "error": {
+            "code": "request_rejected",
+            "message": "query service overloaded",
+            "native_query": {
+              "code": "overloaded",
+              "message": "query service overloaded",
+              "resnapshot_required": false,
+              "retryable": true
+            }
+          },
+          "ok": false
+        }
+      ]
+    },
+    {
+      "check": "file-authority-new-observation-after-pressure-and-complete-state-preservation",
+      "passed": true
+    },
+    {
+      "check": "isolated-first-launch-read",
+      "passed": true
+    },
+    {
+      "check": "dead-process-descriptor-rejected",
+      "passed": true
+    },
+    {
+      "check": "crash-restart-retired-principal-rejected",
+      "passed": true
+    },
+    {
+      "check": "old-credential-and-receipt-not-adopted",
+      "passed": true
+    },
+    {
+      "check": "old-launch-proof-rejected-fresh-read-succeeds",
+      "passed": true
+    },
+    {
+      "check": "graceful-native-close",
+      "passed": true
+    },
+    {
+      "check": "graceful-restart-does-not-restore-grant",
+      "passed": true
+    }
+  ],
+  "normalAppIdentityUnchanged": true,
+  "credentialRevoked": true,
+  "credentialFileRemoved": true,
+  "nativePanicLocations": [],
+  "nonclaims": [
+    "QA identifier release build, not the distributed artifact",
+    "No physical output activation; optional high-risk or lease-expiry probe mutates isolated backend lease authority only; optional Tap probe changes isolated empty-project tempo; optional project-file probe loads private JSON with no file media or video source activation",
+    "No durable authored/output mutation crash publication acceptance",
+    "Private valid unbound-label Touch fixture, then bounded real local and authenticated external authority reads under concurrent asynchronous checkpoint capture only; no proof of the historical generic query failure cause, complete contention/rate/real-time budget, file publication, physical output or release acceptance"
+  ]
+}

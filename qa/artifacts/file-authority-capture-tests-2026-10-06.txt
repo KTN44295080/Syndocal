@@ -1,0 +1,6 @@
+
+running 2 tests
+test control_plane_query::tests::mutation_fence_query_rejects_missing_owner_before_capture_or_issue ... ok
+test control_plane_query::tests::mutation_fence_query_rejects_real_coordinator_contention_without_publication ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 2005 filtered out; finished in 0.01s

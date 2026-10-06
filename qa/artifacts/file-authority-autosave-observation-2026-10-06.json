@@ -1,0 +1,12 @@
+{
+  "observed": {
+    "id": 1791261597208,
+    "source": "C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-backup-restore-3zNgi8\\全マッピング.sdc",
+    "sha256": "d8cd1c57f79a6777dfc98d054eb5628949a330d3ab26fbb1b82762f659f44feb",
+    "bytes": 38057,
+    "createdAt": 1791261597208,
+    "floatMatches": 34
+  },
+  "preserved": true,
+  "reason": "Task fixture source and whole project/all mappings verified; known f32 leaves match native values; no deletion"
+}

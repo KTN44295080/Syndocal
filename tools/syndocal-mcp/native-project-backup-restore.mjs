@@ -5,6 +5,7 @@ import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { openNativeStdioSession } from './native-stdio-session.mjs';
 import { nativeAuthoredControlProject } from './native-authored-control-project.mjs';
+import { verifyFixtureAutosave } from './native-fixture-autosave.mjs';
 
 // Real MCP restore of an independently checked authored graph and all four
 // mapping families. Only private files and this run's managed backup are owned.
@@ -20,7 +21,9 @@ export async function nativeProjectBackupRestore(backend, options, checks) {
   const baselineHashes = new Map(await Promise.all(baseline.map(async name => [name, digest(await fs.readFile(path.join(managed, name)))])));
   const baselineSummaries = await backend.invoke('list_project_backups');
   assert.ok(baselineSummaries.length < 10, 'Do not enter retention against unowned backups');
-  let mcp, backupRequest, saved, backupBytes, acknowledged = false, sequence = Date.now();
+  const startedAt = Date.now();
+  let mcp, backupRequest, saved, backupBytes, expected, source, acknowledged = false, sequence = Date.now();
+  const fixtureAutosaves = [];
   const grant = (capability, operationId) => backend.invoke('agent_authority_grant_v1', {
     principalId: options.principalId, principalIncarnation: options.principalIncarnation,
     grant: { adapter: 'external_mcp', capability, operation_id: operationId, project_id: null } });
@@ -80,7 +83,7 @@ export async function nativeProjectBackupRestore(backend, options, checks) {
         const { snapshot } = await backend.invoke('get_snapshot');
         return { timelineId: snapshot.timeline.id, playing: snapshot.timeline.playing, positionMs: snapshot.timeline.position_ms };
       } });
-    const expected = JSON.parse(await fs.readFile(path.join(directory, 'authored-controls-canonical.sdc')));
+    expected = JSON.parse(await fs.readFile(path.join(directory, 'authored-controls-canonical.sdc')));
     const common = { action: 'LightingMaster', fixture_id: null, attribute: null, group_id: null,
       cue_id: null, layer_id: null, output_id: null, video_param: null, cue_point_index: null, duration_ms: null, low: 0, high: 1 };
     expected.midi_mappings = [{ ...common, channel: 0, message: 'ControlChange', number: 7 }];
@@ -88,7 +91,8 @@ export async function nativeProjectBackupRestore(backend, options, checks) {
     expected.dmx_mappings = [{ ...common, universe: 0, channel: 12 }];
     expected.dj_track_triggers = [{ id: 'restore-dj', selector: { contentId: 'restore-proof', title: null, artist: null,
       titleContains: null, fallbackDeck: null }, timelineId: expected.snapshot.timeline.id, retrigger: 'once_per_play_session' }];
-    const source = path.join(directory, '全マッピング.sdc'), sourceBytes = Buffer.from(JSON.stringify(expected));
+    source = path.join(directory, '全マッピング.sdc');
+    const sourceBytes = Buffer.from(JSON.stringify(expected));
     await fs.writeFile(source, sourceBytes, { flag: 'wx' });
     await load(source);
     assert.deepEqual(await checkpoint(), expected, 'All authored data and four independently specified mapping families loaded');
@@ -171,13 +175,29 @@ export async function nativeProjectBackupRestore(backend, options, checks) {
       }
     } finally {
       await mcp?.close();
-      assert.deepEqual((await fs.readdir(managed)).sort(), baseline);
+      const finalNames = (await fs.readdir(managed)).sort();
+      const additions = finalNames.filter(name => !baseline.includes(name));
+      assert.ok(additions.length <= 4, 'Bound the number of recognized scheduled QA autosaves');
+      for (const name of additions) {
+        const bytes = await fs.readFile(path.join(managed, name));
+        const verified = verifyFixtureAutosave(bytes, { name, source, expected, startedAt, observedAt: Date.now() });
+        const inspected = await backend.invoke('inspect_project_backup_control_plane_v1', {
+          request: { schema_version: 1, backup_id: verified.id } });
+        assert.equal(inspected.artifact_sha256, verified.sha256, 'Native bounded unique-key inspection validates the exact autosave bytes');
+        assert.equal(inspected.restore_source_path, source);
+        fixtureAutosaves.push(verified); // Preserve: this is not our acknowledged explicit backup.
+      }
+      assert.deepEqual(finalNames, [...baseline, ...fixtureAutosaves.map(value => `backup-${value.id}.json`)].sort());
+      if (saved) assert.ok(!finalNames.includes(`backup-${saved.backup.id}.json`), 'The acknowledged owned explicit backup is removed');
       for (const [name, hash] of baselineHashes) assert.equal(digest(await fs.readFile(path.join(managed, name))), hash);
-      assert.deepEqual(await backend.invoke('list_project_backups'), baselineSummaries);
+      const summaries = await backend.invoke('list_project_backups');
+      assert.deepEqual(summaries.filter(value => !fixtureAutosaves.some(auto => auto.id === value.id)), baselineSummaries);
+      assert.equal(summaries.length, baselineSummaries.length + fixtureAutosaves.length);
       assert.equal(path.dirname(path.resolve(directory)), path.resolve(os.tmpdir()));
       assert.ok(path.basename(directory).startsWith('syndocal-backup-restore-'));
       await fs.rm(directory, { recursive: true, force: true });
     }
   }
-  checks.push({ check: 'external-backup-restore-owned-cleanup-preserves-baseline-managed-files-and-summaries', passed: true });
+  checks.push({ check: 'external-backup-restore-owned-cleanup-preserves-baseline-managed-files-and-summaries', passed: true,
+    fixtureAutosavesPreserved: fixtureAutosaves });
 }

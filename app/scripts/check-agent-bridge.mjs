@@ -222,6 +222,36 @@ groups++;
   assert.equal(uncertain.error.code, 'mutation_not_confirmed');
   assert.equal(uncertain.error.native_query, undefined, 'uncertain mutation must not receive read retry information');
   groups++;
+  for (const operationId of ['syndocal.query.project.file.authority.v1',
+    'syndocal.query.project.backup.authority.v1']) {
+    for (const typedError of [
+      { code: 'overloaded', message: 'query service overloaded', retryable: true, resnapshot_required: false },
+      { code: 'unavailable', message: 'query service unavailable', retryable: true, resnapshot_required: false },
+      { code: 'forbidden', message: 'operation forbidden', retryable: false, resnapshot_required: false },
+    ]) {
+      let calls = 0;
+      const result = await execute(async (command, args) => {
+        calls++;
+        assert.equal(command, 'agent_bridge_execute_native_v1');
+        assert.deepEqual(args, { rendererGeneration: 5, requestId: 'canonical-request' });
+        throw structuredClone(typedError);
+      }, request('control_plane.execute', { operationId, request: {} }));
+      assert.deepEqual(result, { ok: false, error: {
+        code: 'request_rejected', message: typedError.message, native_query: typedError,
+      } });
+      assert.equal(calls, 1, 'File query error metadata must not cause an automatic replay');
+    }
+    const oldString = await execute(async () => { throw 'project_file_request_invalid'; },
+      request('control_plane.execute', { operationId, request: {} }));
+    assert.deepEqual(oldString, { ok: false, error: {
+      code: 'request_rejected', message: 'project_file_request_invalid',
+    } });
+  }
+  const uncertainFile = await execute(async () => { throw typedError; },
+    request('control_plane.execute', { operationId: 'syndocal.project.save.v1', request: {} }));
+  assert.equal(uncertainFile.error.code, 'mutation_not_confirmed');
+  assert.equal(uncertainFile.error.native_query, undefined);
+  groups++;
   for (const operationId of ['syndocal.query.runtime.timeline.transport.authority.v1',
     'syndocal.query.runtime.timeline.loop.authority.v1', 'syndocal.query.runtime.timeline.follow.abort.authority.v1']) {
     for (const code of ['invalid_request', 'forbidden', 'stale_fence', 'conflict', 'busy', 'overloaded', 'publication_failed', 'internal']) {

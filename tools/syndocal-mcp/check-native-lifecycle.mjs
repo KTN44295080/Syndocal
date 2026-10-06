@@ -23,9 +23,16 @@ import { nativeProjectReplacement } from './native-project-replacement.mjs';
 import { nativeProjectFile } from './native-project-file.mjs';
 import { nativeProjectBackup } from './native-project-backup.mjs';
 import { nativeProjectBackupRestore } from './native-project-backup-restore.mjs';
+import { nativeFileQueryPressure } from './native-file-query-pressure.mjs';
 
 const exec = promisify(execFile);
 const args = process.argv.slice(2);
+const fileQueryPressure = args.includes('--file-query-pressure');
+if (fileQueryPressure) {
+  args.splice(args.indexOf('--file-query-pressure'), 1);
+  assert.ok(!args.some(arg => /^--(?:project-|recovery-storage|display-window|runtime-authority|controller-|authored-controls|input-diagnostics|backup-json|project-json|lease-expiry|tap-bpm|diagnostics|external-)/.test(arg)),
+    'File query pressure owns a separate private fixture and native read lane');
+}
 const projectBackup = args.includes('--project-backup');
 if (projectBackup) args.splice(args.indexOf('--project-backup'), 1);
 const projectFile = args.includes('--project-file') || projectBackup;
@@ -269,6 +276,7 @@ try {
   await exec('icacls.exe', [credentialDirectory, '/inheritance:r', '/grant:r', `*${stdout.trim()}:(OI)(CI)F`], { windowsHide: true, timeout: 5000 });
   options.credentialFile = path.join(credentialDirectory, 'credential');
   await pair(); await install();
+  if (fileQueryPressure) await nativeFileQueryPressure(backend, options, checks);
   if (projectReplacement) await nativeProjectReplacement(backend, options, checks);
   if (projectFile) await nativeProjectFile(backend, options, checks);
   if (projectBackup) await nativeProjectBackup(backend, options, checks);
@@ -483,6 +491,16 @@ await fs.writeFile(evidence, `${JSON.stringify({ schemaVersion: 1, timestamp: ne
     projectFileNativeSha256: createHash('sha256').update(await fs.readFile(new URL('../../app/src-tauri/src/main.rs', import.meta.url))).digest('hex'),
     nativeExecutorSha256: createHash('sha256').update(await fs.readFile(new URL('../../app/src-tauri/src/agent_bridge_execution.rs', import.meta.url))).digest('hex'),
   } : {}),
+  ...(fileQueryPressure ? {
+    fileQueryPressureHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-file-query-pressure.mjs', import.meta.url))).digest('hex'),
+    fileQueryControllerSha256: createHash('sha256').update(await fs.readFile(new URL('../../app/src-tauri/src/project_file_control_plane.rs', import.meta.url))).digest('hex'),
+    nativeAdapterErrorSha256: createHash('sha256').update(await fs.readFile(new URL('../../app/src-tauri/src/native_adapter_error.rs', import.meta.url))).digest('hex'),
+    queryCaptureSha256: createHash('sha256').update(await fs.readFile(new URL('../../app/src-tauri/src/control_plane_query.rs', import.meta.url))).digest('hex'),
+    projectFileNativeSha256: createHash('sha256').update(await fs.readFile(new URL('../../app/src-tauri/src/main.rs', import.meta.url))).digest('hex'),
+    nativeExecutorSha256: createHash('sha256').update(await fs.readFile(new URL('../../app/src-tauri/src/agent_bridge_execution.rs', import.meta.url))).digest('hex'),
+    stdioHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-stdio-session.mjs', import.meta.url))).digest('hex'),
+    fileQueryPressureTransport: 'Actual local IPC and authenticated stdio MCP file/backup authority reads with real asynchronous native checkpoint-bundle capture pressure; no lock-hold command, operation retry, DOM or physical output',
+  } : {}),
   ...(controllerBurst ? {
     controllerBurstHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-controller-burst.mjs', import.meta.url))).digest('hex'),
     admissionPolicySha256: createHash('sha256').update(await fs.readFile(new URL('./native-request-admission.mjs', import.meta.url))).digest('hex'),
@@ -534,7 +552,8 @@ await fs.writeFile(evidence, `${JSON.stringify({ schemaVersion: 1, timestamp: ne
       : 'No physical output activation; optional high-risk or lease-expiry probe mutates isolated backend lease authority only; optional Tap probe changes isolated empty-project tempo; optional project-file probe loads private JSON with no file media or video source activation',
     'No durable authored/output mutation crash publication acceptance',
     ...(projectReplacement ? ['Typed external R5 New/Open, issued-fence and exact File-grant admission, immutable native execution, private source-byte preservation and bounded terminal replay only; no active managed output, physical devices, mid-parser revocation/crash, full file-operation or AI8/release acceptance'] : []),
-    ...(projectFile ? ['Typed external Save/Save As/template/status/ack on owned private files only; no mid-publication external rename CAS, crash/restart, all remaining File/AI8/release or physical acceptance'] : []),
+  ...(projectFile ? ['Typed external Save/Save As/template/status/ack on owned private files only; no mid-publication external rename CAS, crash/restart, all remaining File/AI8/release or physical acceptance'] : []),
+    ...(fileQueryPressure ? ['Private valid unbound-label Touch fixture, then bounded real local and authenticated external authority reads under concurrent asynchronous checkpoint capture only; no proof of the historical generic query failure cause, complete contention/rate/real-time budget, file publication, physical output or release acceptance'] : []),
     ...(projectBackup ? ['Typed managed backup creation/inspection/restore, complete private authored-image and four mapping-family restoration, exact terminal/ack/replay and owned cleanup only; no full retention-race/mid-publication revocation/crash/restart, canonical backup delete/retention, all File or physical acceptance'] : []),
     ...(projectJson ? ['Native .sdc admission and rejected-load preservation only; no complete migration corpus, backup/recovery/upgrade, other file formats or physical output acceptance'] : []),
     ...(runtimeAuthority ? ['Three native Timeline authority-read paths and ordinary concurrent read observations only; no command replay, output activation, complete lock-wait or realtime budget, full adapter/security/AI8 or physical acceptance'] : []),
