@@ -1,0 +1,219 @@
+{
+  "base": "8a1cc23e38288bfdea0501b564685fb1cba89258",
+  "timestamp": "2026-10-06T06:48:47.117Z",
+  "owned_files": [
+    "crates/protocol/src/control_plane_file.rs",
+    "app/src-tauri/src/project_backup_deletion.rs",
+    "app/src-tauri/src/project_backup_deletion_tests.rs",
+    "app/src-tauri/src/main.rs",
+    "app/src-tauri/src/project_backup_inspection.rs",
+    "app/src-tauri/src/project_file_control_plane.rs",
+    "app/src-tauri/src/agent_bridge_execution.rs",
+    "app/src-tauri/src/agent_bridge_wire.rs",
+    "app/src-tauri/src/control_plane.rs",
+    "app/src/agentBridgeControlPlane.ts",
+    "app/src/agentBridgeTools.ts",
+    "app/scripts/check-agent-bridge.mjs",
+    "tools/syndocal-mcp/server.mjs",
+    "tools/syndocal-mcp/native-project-backup.mjs",
+    "tools/syndocal-mcp/native-high-risk-revocation.mjs",
+    "tools/syndocal-mcp/check-native-lifecycle.mjs",
+    "tools/syndocal-mcp/README.md"
+  ],
+  "files": [
+    {
+      "path": "app/scripts/check-agent-bridge.mjs",
+      "sha256": "c5f0440d5dcabec74ba3e7d745dbd7558dee128ded9e37f8da4b907b9061cf4b"
+    },
+    {
+      "path": "app/scripts/check-project-json.mjs",
+      "sha256": "9e698abb6fbd4d5cfc38b8c78107b8cff5b4c8b59751d86d5cbfe21d564ae288"
+    },
+    {
+      "path": "app/scripts/run-tauri.mjs",
+      "sha256": "4d910453491262a8b8cb2ae985b97f09970779d5304ad14bf1bd0b0ba9ef90b7"
+    },
+    {
+      "path": "app/src-tauri/Cargo.toml",
+      "sha256": "4de75f017efb82fa707af9b17fafb550e05313546ef999ccbef3ef77f3abce1d"
+    },
+    {
+      "path": "app/src-tauri/src/agent_bridge_execution.rs",
+      "sha256": "415a3bda6945fd21df64063d5f39a76a0655b61f03082b0a0e7488c06e0c270a"
+    },
+    {
+      "path": "app/src-tauri/src/agent_bridge_wire.rs",
+      "sha256": "9b9d832ae56fdc47339fd94a6d02be40dbe3684755145a95b21afac8cd5ce1c1"
+    },
+    {
+      "path": "app/src-tauri/src/control_plane.rs",
+      "sha256": "e51f7feaefb603a9f2fc2d65eeb262c85094653d077129b5eaf467e7bbb5aa20"
+    },
+    {
+      "path": "app/src-tauri/src/main.rs",
+      "sha256": "6bdd085c148475ce52d655d7d15ddb28c4ca1b8aadae85c35fc6a5a904fba59d"
+    },
+    {
+      "path": "app/src-tauri/src/project_backup_inspection.rs",
+      "sha256": "44631f49688a6afa69f1ba5c91215c40a81e538084edf0a99c1d84bf1d2a1799"
+    },
+    {
+      "path": "app/src-tauri/src/project_backup_json.rs",
+      "sha256": "cb34c231a006fefb57ce9a4f90a0924a3ad870ca6e2ccedd6d8b5bc08d297688"
+    },
+    {
+      "path": "app/src-tauri/src/project_file_control_plane.rs",
+      "sha256": "6c8b9ed3ed3ba0d27bea6f5d239de8e70f36e0edb2ca71b8e22fc19b80e28e97"
+    },
+    {
+      "path": "app/src-tauri/src/project_file_json.rs",
+      "sha256": "f842f9487859db3b2844ef34c6be8e63f919ff81b2e3de7eed0abc58cd2fdde8"
+    },
+    {
+      "path": "app/src-tauri/src/project_file_managed_backup.rs",
+      "sha256": "f50dcb8507fc5628881471a4097cdc20afb8262798c200a3316de8eb2dd2c915"
+    },
+    {
+      "path": "app/src/agentBridgeControlPlane.ts",
+      "sha256": "8bc169e1ce0f2bd0f0ec9b1a3aa32ec385bb5ad45f4da8e9e19ce2be89f06a31"
+    },
+    {
+      "path": "app/src/agentBridgeTools.ts",
+      "sha256": "ae1931409bf2f631d31fb18786e1dea0f9c77973acf7df32d7343711ee51fd61"
+    },
+    {
+      "path": "app/src/nativeTapTempoQa.ts",
+      "sha256": "c8824d544eff5c7933eeceeb5242fb41ce774b10222fb9e53dfd9bedd3b85bba"
+    },
+    {
+      "path": "app/src/tapTempo.ts",
+      "sha256": "2efb7c95c78365c195c85297b06391c29b076b767043445c69a9bc3201c0d8a1"
+    },
+    {
+      "path": "Cargo.toml",
+      "sha256": "72866edcc43052353957d6316553a5b9abf83c7a0dd4b007ac50fafdcac541f2"
+    },
+    {
+      "path": "crates/protocol/src/control_plane_file.rs",
+      "sha256": "fa8540ca9b7e3ecbe2bf75f04984bc96cbbc8d83814d9a782d9ebe89291a30e1"
+    },
+    {
+      "path": "tools/syndocal-mcp/check-native-lifecycle.mjs",
+      "sha256": "15faf9b6a54ec2a6fcfacf5a332feba59c475721a80c473462fe95d6103d4744"
+    },
+    {
+      "path": "tools/syndocal-mcp/native-project-backup.mjs",
+      "sha256": "c8c3d6aab373f1bee1407ffe16aca3ddc37b00dd59a51db791e455d97d676dd9"
+    },
+    {
+      "path": "tools/syndocal-mcp/native-tap-bpm.mjs",
+      "sha256": "3cb9e046485c0a2e20678548635d2a9c1822a741eb13e9992f14b1dc5a1a1e37"
+    },
+    {
+      "path": "tools/syndocal-mcp/README.md",
+      "sha256": "a245444e9b733d3b04f5541f67dc2fefcf43e5356cc584d1a4d5d03791436a5f"
+    },
+    {
+      "path": "tools/syndocal-mcp/server.mjs",
+      "sha256": "82a241174e45bfcd4d4ad0a0a6872e7f3fd89d3fd429e3ae3d4fe9f47cf4102a"
+    },
+    {
+      "path": "app/src-tauri/src/project_replacement_control_plane.rs",
+      "sha256": "1e0344e885ac35af0d83a7c1a532483db2755b82a2be6650e6bf9368eca1671f"
+    },
+    {
+      "path": "app/src-tauri/src/project_replacement_control_plane_tests.rs",
+      "sha256": "30647a88581e0b7f004fa0310f8180a4e7691035389db40ba2424ff9389223f1"
+    },
+    {
+      "path": "crates/protocol/src/control_plane_project.rs",
+      "sha256": "25145bbe566ffd87b222e69b9139fa9a2430956785237ee7f1ee51214fa28cd5"
+    },
+    {
+      "path": "tools/syndocal-mcp/native-high-risk-revocation.mjs",
+      "sha256": "6a2c43a5bf3afdfde7c25dd4d9f4b11e568dcea2a431e61271ca8c1924d14a9f"
+    },
+    {
+      "path": "app/src-tauri/tauri.mcp-backup-restore.conf.json",
+      "sha256": "02169ce675b18e181b6649cce8bf8b228a5e07fa20f5b0354a000ca8bb286360"
+    },
+    {
+      "path": "app/src-tauri/src/project_backup_restoration.rs",
+      "sha256": "2f7d099793295f2fe39bc29657cdf8efcd8e7d4389994f14c6f64e61f7122e5b"
+    },
+    {
+      "path": "app/src-tauri/src/project_backup_restoration_tests.rs",
+      "sha256": "8a6ded6d97a46e267ecc0fbfa88d19404f8f469c9032c97fc4a82bf853e5f0c6"
+    },
+    {
+      "path": "tools/syndocal-mcp/native-project-backup-restore.mjs",
+      "sha256": "346ddc6ff7b03742a4da45c1f24a8d9a2efb84095e6d0ff1b996a1a6945432e5"
+    },
+    {
+      "path": "tools/syndocal-mcp/native-authored-control-project.mjs",
+      "sha256": "73689a9b92f5a3c31e01449ac706f673ab18fa69c53097a90c3c2a1f5ccba6ef"
+    },
+    {
+      "path": "qa/migration/authored-control-project.json",
+      "sha256": "2de7f4d6a5e8ba0c0cedf7ef664d65030fde37d492ae3fa2b6475e77a02f7bf6"
+    },
+    {
+      "path": "qa/migration/authored-control-project-oracle.json",
+      "sha256": "c033624c4b39a8d2bf44a00b01899c10915b9d1f88b6cc29c3a9aff4d103e431"
+    },
+    {
+      "path": "app/src-tauri/src/control_plane_query.rs",
+      "sha256": "ecabfb431f97ac44f2b5ea00384f268026e6a94fa3a50dc2cc6457e5d623d067"
+    },
+    {
+      "path": "app/src-tauri/src/native_adapter_error.rs",
+      "sha256": "c7f9420e16465e1293f3cb40beb3d6b635e69964a93e6a38d3de42370f41a451"
+    },
+    {
+      "path": "tools/syndocal-mcp/native-file-query-pressure.mjs",
+      "sha256": "e4c0ed885574a2ff84790b62fdacd15512b69223f7304964c3e1152850babe4a"
+    },
+    {
+      "path": "tools/syndocal-mcp/native-fixture-autosave.mjs",
+      "sha256": "9245c3159fdf7800ffedd3208fbc910130d9ec06b3a2de79ddbef943de38fb59"
+    },
+    {
+      "path": "tools/syndocal-mcp/check-fixture-autosave.mjs",
+      "sha256": "7e0c81513bde70963be0ad1b18052d2367ea947fa99f9c658f48debfccafa2e0"
+    },
+    {
+      "path": "app/src-tauri/src/project_backup_listing.rs",
+      "sha256": "22e68e73f798b519c14360c420c95d49b1284cff81f50c1d73a3200cca15dcfa"
+    },
+    {
+      "path": "app/src-tauri/src/project_backup_deletion.rs",
+      "sha256": "4b27689aa8a29fe574e2cdedaf73e2ca813ac9eb35f5d8be9a4dd30cb2246a31"
+    },
+    {
+      "path": "app/src-tauri/src/project_backup_deletion_tests.rs",
+      "sha256": "55f8104c36b2a7559d17270650463a9fbaa4f1d1f8bdc105a5b8b85f8c3a8f68"
+    }
+  ],
+  "protected": [
+    {
+      "path": "app/scripts/check-dj-link-runtime.mjs",
+      "sha256": "b7464267f30fc7bc752c40d584f00f994d9d57dfc7dad7db38c8fecf9f5e7db8"
+    },
+    {
+      "path": "app/src/App.tsx",
+      "sha256": "d4db2a39f491498ff057011b5b830e1224a5f0b1485b84e7305885efa2690c6f"
+    },
+    {
+      "path": "app/src/uiLocalization.ts",
+      "sha256": "6cdaf364b65cfba87a5096f22664098e4060a0ad6d0764f235dd3df828fbd407"
+    },
+    {
+      "path": "qa/AI3_NATIVE_INGRESS_CURRENT_SOURCE_CHECKPOINT_2026-09-14.md",
+      "sha256": "e765e78a80e8058d9a6fefa55c79fd84296a587fc216f4e17cda59bba3020e04"
+    },
+    {
+      "path": "app/src/remotePairingPin.ts",
+      "sha256": "a3154c7818b1ccae114a9d1078ad3dc2195cb0da07de10cd0b7af3cc58719481"
+    }
+  ]
+}

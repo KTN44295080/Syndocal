@@ -67,9 +67,9 @@ const KEYBOARD_SHORTCUT_SOURCE_MANIFEST: &str =
 const KEYBOARD_SHORTCUT_SOURCE_MANIFEST_SCHEMA_VERSION: u16 = 1;
 const KEYBOARD_APP_SHORTCUT_SOURCE_COUNT: usize = 30;
 const KEYBOARD_PROJECT_FILE_SHORTCUT_SOURCE_COUNT: usize = 3;
-const FROZEN_TAURI_ROUTE_ADMISSION_COUNT: usize = 556;
+const FROZEN_TAURI_ROUTE_ADMISSION_COUNT: usize = 557;
 const FROZEN_TAURI_ROUTE_ADMISSION_SHA256: &str =
-    "1bc8dbe58be058c6a997a82ca5e8d9f15a57966650c323f8393ddee3d5fdf292";
+    "43f489eb32cbafe96213f69f9806bf2c8fb68fd5ac911b06c2fa3d0677e1e073";
 /// The command source is parsed and validated exactly once.  Local discovery
 /// calls only clone this immutable, validated value; they never parse source
 /// text or make an external request on the invocation path.
@@ -278,6 +278,7 @@ fn is_tauri_file_export_mutation(command: &str) -> bool {
             | "save_project_as_control_plane_v1"
             | "save_user_template_control_plane_v1"
             | "create_project_backup_control_plane_v1"
+            | "delete_project_backup_control_plane_v1"
             | "acknowledge_project_file_control_plane_v1"
             | "save_project_v1"
             | "save_project_as_v1"
@@ -1243,6 +1244,7 @@ enum ReviewedCanonicalOperation {
     SaveProjectAsFile,
     SaveUserTemplateFile,
     SaveProjectBackupFile,
+    DeleteProjectBackupFile,
     AcknowledgeProjectFile,
     OpenProject,
     RestoreProjectBackup,
@@ -1291,6 +1293,7 @@ impl ReviewedCanonicalOperation {
             Self::SaveProjectAsFile => "syndocal.project.save_as.v1",
             Self::SaveUserTemplateFile => "syndocal.project.template.save.v1",
             Self::SaveProjectBackupFile => "syndocal.project.backup.create.v1",
+            Self::DeleteProjectBackupFile => protocol::control_plane_file::BACKUP_DELETE_ID,
             Self::AcknowledgeProjectFile => "syndocal.project.file.acknowledge.v1",
             Self::OpenProject => PROJECT_OPEN_OPERATION_ID,
             Self::RestoreProjectBackup => PROJECT_BACKUP_RESTORE_OPERATION_ID,
@@ -1351,6 +1354,7 @@ fn reviewed_canonical_operation(command: &str) -> Option<ReviewedCanonicalOperat
         "save_project_as_control_plane_v1" => Some(ReviewedCanonicalOperation::SaveProjectAsFile),
         "save_user_template_control_plane_v1" => Some(ReviewedCanonicalOperation::SaveUserTemplateFile),
         "create_project_backup_control_plane_v1" => Some(ReviewedCanonicalOperation::SaveProjectBackupFile),
+        "delete_project_backup_control_plane_v1" => Some(ReviewedCanonicalOperation::DeleteProjectBackupFile),
         "acknowledge_project_file_control_plane_v1" => Some(ReviewedCanonicalOperation::AcknowledgeProjectFile),
         "new_project_control_plane_v1" => Some(ReviewedCanonicalOperation::NewProject),
         "open_project_control_plane_v1" => Some(ReviewedCanonicalOperation::OpenProject),
@@ -1433,7 +1437,7 @@ fn canonical_descriptor_for_source(
         ReviewedCanonicalOperation::SaveProjectFile |
         ReviewedCanonicalOperation::SaveProjectAsFile |
         ReviewedCanonicalOperation::SaveUserTemplateFile |
-        ReviewedCanonicalOperation::SaveProjectBackupFile | ReviewedCanonicalOperation::AcknowledgeProjectFile => (
+        ReviewedCanonicalOperation::SaveProjectBackupFile | ReviewedCanonicalOperation::DeleteProjectBackupFile | ReviewedCanonicalOperation::AcknowledgeProjectFile => (
             OperationClass::Mutation, vec![OperationCapability::LocalWindowBound, OperationCapability::AuthoritativeProjectMutation],
             OperationIdempotency::Mutating, AdapterPolicy::LocalWindowProjectPublication, ReceiptPolicy::ExactTerminalReceipt,
         ),
@@ -1596,7 +1600,7 @@ fn canonical_descriptor_for_source(
         schema: CanonicalOperationDescriptor::schema_identity(),
         operation_id: reviewed.operation_id().to_string(),
         class,
-        risk: if matches!(reviewed, ReviewedCanonicalOperation::NewProject | ReviewedCanonicalOperation::OpenProject | ReviewedCanonicalOperation::RestoreProjectBackup | ReviewedCanonicalOperation::SaveProjectFile | ReviewedCanonicalOperation::SaveProjectAsFile | ReviewedCanonicalOperation::SaveUserTemplateFile | ReviewedCanonicalOperation::SaveProjectBackupFile | ReviewedCanonicalOperation::AcknowledgeProjectFile) {
+        risk: if matches!(reviewed, ReviewedCanonicalOperation::NewProject | ReviewedCanonicalOperation::OpenProject | ReviewedCanonicalOperation::RestoreProjectBackup | ReviewedCanonicalOperation::SaveProjectFile | ReviewedCanonicalOperation::SaveProjectAsFile | ReviewedCanonicalOperation::SaveUserTemplateFile | ReviewedCanonicalOperation::SaveProjectBackupFile | ReviewedCanonicalOperation::DeleteProjectBackupFile | ReviewedCanonicalOperation::AcknowledgeProjectFile) {
             OperationRisk::R5
         } else if matches!(reviewed, ReviewedCanonicalOperation::EngageSafetyBlackout) {
             OperationRisk::S0
@@ -1668,7 +1672,7 @@ fn canonical_descriptor_for_source(
                 | ReviewedCanonicalOperation::SaveProjectFile
                 | ReviewedCanonicalOperation::SaveProjectAsFile
                 | ReviewedCanonicalOperation::SaveUserTemplateFile
-                | ReviewedCanonicalOperation::SaveProjectBackupFile | ReviewedCanonicalOperation::AcknowledgeProjectFile
+                | ReviewedCanonicalOperation::SaveProjectBackupFile | ReviewedCanonicalOperation::DeleteProjectBackupFile | ReviewedCanonicalOperation::AcknowledgeProjectFile
                 | ReviewedCanonicalOperation::OpenProject
                 | ReviewedCanonicalOperation::RestoreProjectBackup
         ) {
@@ -1713,7 +1717,7 @@ fn canonical_descriptor_for_source(
                 | ReviewedCanonicalOperation::SaveProjectFile
                 | ReviewedCanonicalOperation::SaveProjectAsFile
                 | ReviewedCanonicalOperation::SaveUserTemplateFile
-                | ReviewedCanonicalOperation::SaveProjectBackupFile | ReviewedCanonicalOperation::AcknowledgeProjectFile
+                | ReviewedCanonicalOperation::SaveProjectBackupFile | ReviewedCanonicalOperation::DeleteProjectBackupFile | ReviewedCanonicalOperation::AcknowledgeProjectFile
                 | ReviewedCanonicalOperation::OpenProject
                 | ReviewedCanonicalOperation::RestoreProjectBackup
         ) {
@@ -1759,7 +1763,7 @@ fn canonical_descriptor_for_source(
                 | ReviewedCanonicalOperation::SaveProjectFile
                 | ReviewedCanonicalOperation::SaveProjectAsFile
                 | ReviewedCanonicalOperation::SaveUserTemplateFile
-                | ReviewedCanonicalOperation::SaveProjectBackupFile | ReviewedCanonicalOperation::AcknowledgeProjectFile
+                | ReviewedCanonicalOperation::SaveProjectBackupFile | ReviewedCanonicalOperation::DeleteProjectBackupFile | ReviewedCanonicalOperation::AcknowledgeProjectFile
                 | ReviewedCanonicalOperation::OpenProject
                 | ReviewedCanonicalOperation::RestoreProjectBackup
         ) {
@@ -1922,6 +1926,7 @@ fn descriptor_for_command(operation_id: &str) -> OperationDescriptor {
             | "save_user_template_control_plane_v1"
             | "create_project_backup_control_plane_v1"
             | "acknowledge_project_file_control_plane_v1"
+            | "delete_project_backup_control_plane_v1"
             | "assign_video_output_composition_v2"
             | "set_lighting_master_output_control_v2"
             | "set_group_submaster_output_control_v2"
@@ -2490,7 +2495,7 @@ mod tests {
         assert_eq!(counts[&TauriRouteAdmissionClass::ProjectHistory], 3);
         assert_eq!(counts[&TauriRouteAdmissionClass::LocalPhysicalMutation], 6);
         assert_eq!(counts[&TauriRouteAdmissionClass::RuntimeMutation], 168);
-        assert_eq!(counts[&TauriRouteAdmissionClass::FileExportMutation], 27);
+        assert_eq!(counts[&TauriRouteAdmissionClass::FileExportMutation], 28);
         assert_eq!(counts[&TauriRouteAdmissionClass::SafetyMutation], 1);
         assert_eq!(counts[&TauriRouteAdmissionClass::RecoveryMaintenance], 28);
         assert_eq!(counts[&TauriRouteAdmissionClass::Retired], 29);
@@ -2573,7 +2578,7 @@ mod tests {
                 + MIDI_OSC_DMX_OPERATION_COUNT
                 + FRONTEND_INVOKE_COUNT
         );
-        assert_eq!(registry.operations.len(), 1640);
+        assert_eq!(registry.operations.len(), 1641);
         verify_registry_exact_set(&names, &registry).unwrap();
         let r0 = registry
             .operations
@@ -2961,10 +2966,10 @@ mod tests {
         const KEYBOARD_PROJECT_FILE_COUNT: usize = 3;
         const SOURCE_TOTAL: usize =
             LEGACY_SOURCE_TOTAL + KEYBOARD_APP_COUNT + KEYBOARD_PROJECT_FILE_COUNT;
-        assert_eq!(LEGACY_SOURCE_TOTAL, 1640);
-        assert_eq!(SOURCE_TOTAL, 1673);
+        assert_eq!(LEGACY_SOURCE_TOTAL, 1641);
+        assert_eq!(SOURCE_TOTAL, 1674);
         assert_eq!(canonical.source_inventory.len(), SOURCE_TOTAL);
-        assert_eq!(canonical.canonical_operations.len(), 67);
+        assert_eq!(canonical.canonical_operations.len(), 68);
 
         let output_control_operations = canonical
             .canonical_operations
@@ -3349,7 +3354,7 @@ mod tests {
                 )
             })
             .collect::<Vec<_>>();
-        assert_eq!(direct.len(), 67);
+        assert_eq!(direct.len(), 68);
         assert_eq!(aliases.len(), FRONTEND_COUNT);
         assert_eq!(internal_steps.len(), 4);
         assert_eq!(structural_routes.len(), 1);
@@ -3679,7 +3684,7 @@ mod tests {
                 .is_none());
         }
         for operation in &canonical.canonical_operations {
-            if matches!(operation.operation_id.as_str(), PROJECT_NEW_OPERATION_ID | PROJECT_OPEN_OPERATION_ID | PROJECT_BACKUP_RESTORE_OPERATION_ID | "syndocal.project.save.v1" | "syndocal.project.save_as.v1" | "syndocal.project.template.save.v1" | "syndocal.project.backup.create.v1" | "syndocal.project.file.acknowledge.v1") {
+            if matches!(operation.operation_id.as_str(), PROJECT_NEW_OPERATION_ID | PROJECT_OPEN_OPERATION_ID | PROJECT_BACKUP_RESTORE_OPERATION_ID | "syndocal.project.save.v1" | "syndocal.project.save_as.v1" | "syndocal.project.template.save.v1" | "syndocal.project.backup.create.v1" | protocol::control_plane_file::BACKUP_DELETE_ID | "syndocal.project.file.acknowledge.v1") {
                 assert_eq!(operation.risk, OperationRisk::R5);
                 assert_eq!(operation.audit, OperationAuditRequirement::Immutable);
             } else if operation.operation_id == SAFETY_BLACKOUT_ENGAGE_OPERATION_ID {
@@ -3720,7 +3725,7 @@ mod tests {
                 assert_eq!(operation.audit, OperationAuditRequirement::NotApplicable);
             }
             assert_eq!(operation.derived_adapters.len(), 1);
-            if matches!(operation.operation_id.as_str(), PROJECT_NEW_OPERATION_ID | PROJECT_OPEN_OPERATION_ID | PROJECT_BACKUP_RESTORE_OPERATION_ID | "syndocal.project.save.v1" | "syndocal.project.save_as.v1" | "syndocal.project.template.save.v1" | "syndocal.project.backup.create.v1" | "syndocal.project.file.acknowledge.v1") {
+            if matches!(operation.operation_id.as_str(), PROJECT_NEW_OPERATION_ID | PROJECT_OPEN_OPERATION_ID | PROJECT_BACKUP_RESTORE_OPERATION_ID | "syndocal.project.save.v1" | "syndocal.project.save_as.v1" | "syndocal.project.template.save.v1" | "syndocal.project.backup.create.v1" | protocol::control_plane_file::BACKUP_DELETE_ID | "syndocal.project.file.acknowledge.v1") {
                 assert_eq!(operation.class, OperationClass::Mutation);
                 assert_eq!(operation.idempotency, OperationIdempotency::Mutating);
                 assert_eq!(operation.adapter_policy, if matches!(operation.operation_id.as_str(), PROJECT_NEW_OPERATION_ID | PROJECT_OPEN_OPERATION_ID | PROJECT_BACKUP_RESTORE_OPERATION_ID) { AdapterPolicy::LocalWindowProjectReplacement } else { AdapterPolicy::LocalWindowProjectPublication });
@@ -4112,11 +4117,11 @@ mod tests {
     fn legacy_v1_registry_json_and_count_remain_inventory_honest() {
         let legacy = registry().unwrap();
         // Includes both the native and frontend missing-publication resolver.
-        assert_eq!(legacy.operations.len(), 1640);
+        assert_eq!(legacy.operations.len(), 1641);
         let encoded = serde_json::to_value(&legacy).unwrap();
         assert_eq!(encoded["schema"]["version"], CONTROL_PLANE_SCHEMA_VERSION);
         let operations = encoded["operations"].as_array().unwrap();
-        assert_eq!(operations.len(), 1640);
+        assert_eq!(operations.len(), 1641);
         assert!(operations.iter().all(|operation| {
             operation["source_family"] != "keyboard_app"
                 && operation["source_family"] != "keyboard_project_file"

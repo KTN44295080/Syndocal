@@ -73,11 +73,12 @@ struct Admission {
     reserved: usize,
 }
 impl ProjectFileControlPlaneState {
-    fn admitted<T: serde::Serialize>(
+    pub(super) fn admitted<T: serde::Serialize>(
         &self,
         caller: &str,
         operation: &str,
-        request: &ProjectFileRequestV1,
+        request_id: u64,
+        request: &impl serde::Serialize,
         run: impl FnOnce() -> Result<T, String>,
     ) -> Result<T, String> {
         let now = Instant::now();
@@ -106,7 +107,7 @@ impl ProjectFileControlPlaneState {
             inner
                 .audit
                 .push(serde_json::json!({"stage":"admitted", "caller":caller,
-                "operation_id":operation, "request_id":request.request_id, "shape":shape}));
+                "operation_id":operation, "request_id":request_id, "shape":shape}));
         }
         let result = run();
         let mut inner = self
@@ -115,7 +116,7 @@ impl ProjectFileControlPlaneState {
             .unwrap_or_else(|poison| poison.into_inner());
         inner.reserved -= 1;
         inner.audit.push(serde_json::json!({"stage":"terminal", "caller":caller,
-            "operation_id":operation, "request_id":request.request_id, "result":result.as_ref().map_err(String::as_str)}));
+            "operation_id":operation, "request_id":request_id, "result":result.as_ref().map_err(String::as_str)}));
         result
     }
 }
@@ -142,7 +143,7 @@ fn surface(id: &str) -> Result<Surface, String> {
         _ => Err("project_file_operation_invalid".into()),
     }
 }
-fn request_hash(request: &ProjectFileRequestV1) -> Result<String, String> {
+fn request_hash(request: &impl serde::Serialize) -> Result<String, String> {
     serde_json::to_vec(request)
         .map(|bytes| format!("{:x}", Sha256::digest(bytes)))
         .map_err(|_| "project_file_request_encoding_failed".into())
@@ -782,7 +783,7 @@ fn execute(
         request: request.clone(),
     };
     app.state::<ProjectFileControlPlaneState>()
-        .admitted(&origin, operation, &request, || {
+        .admitted(&origin, operation, request.request_id, &request, || {
             with_context(context.clone(), || {
                 authorize(&context, &state)?;
                 let existing = stored_status(&state, &request, &native)?;

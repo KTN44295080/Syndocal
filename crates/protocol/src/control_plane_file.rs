@@ -10,6 +10,7 @@ pub const BACKUP_AUTHORITY_ID: &str = "syndocal.query.project.backup.authority.v
 pub const BACKUP_INSPECT_ID: &str = "syndocal.query.project.backup.inspect.v1";
 pub const BACKUP_LIST_ID: &str = "syndocal.query.project.backup.list.v1";
 pub const BACKUP_LIST_MAX_ITEMS: usize = 16;
+pub const BACKUP_DELETE_ID: &str = "syndocal.project.backup.delete.v1";
 pub const AUTHORITY_ID: &str = "syndocal.query.project.file.authority.v1";
 pub const STATUS_ID: &str = "syndocal.query.project.file.status.v1";
 pub const ACK_ID: &str = "syndocal.project.file.acknowledge.v1";
@@ -116,6 +117,46 @@ impl ProjectBackupInspectionV1 {
         {
             return Err("invalid project backup inspection metadata");
         }
+        Ok(())
+    }
+}
+
+/// Delete exactly one observed managed artifact. No caller supplies a path,
+/// owner, principal or confirmation flag.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectBackupDeleteRequestV1 {
+    pub schema_version: u16,
+    pub operation_id: String,
+    pub request_id: u64,
+    pub expected_fence: ProjectMutationFenceV1,
+    pub backup_id: u64,
+    pub expected_artifact_sha256: String,
+}
+impl ProjectBackupDeleteRequestV1 {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.schema_version != 1 || self.operation_id != BACKUP_DELETE_ID
+            || self.request_id == 0 || self.request_id > MAX_SAFE_JAVASCRIPT_INTEGER
+            || self.backup_id == 0 || self.backup_id > MAX_SAFE_JAVASCRIPT_INTEGER
+            || !valid_hash(&self.expected_artifact_sha256)
+        { return Err("invalid project backup delete request"); }
+        self.expected_fence.validate().map_err(|_| "invalid project backup delete fence")
+    }
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectBackupDeleteReceiptV1 {
+    pub schema_version: u16,
+    pub request: ProjectBackupDeleteRequestV1,
+    pub deleted_backup: ProjectBackupInspectionV1,
+}
+impl ProjectBackupDeleteReceiptV1 {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        self.request.validate()?;
+        self.deleted_backup.validate()?;
+        if self.schema_version != 1 || self.deleted_backup.backup.id != self.request.backup_id
+            || self.deleted_backup.artifact_sha256 != self.request.expected_artifact_sha256
+        { return Err("invalid project backup delete receipt"); }
         Ok(())
     }
 }
@@ -268,6 +309,33 @@ pub struct ProjectFileBackupSummaryV1 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn project_backup_delete_strict_identity_hash_fence_and_receipt() {
+        let request = ProjectBackupDeleteRequestV1 { schema_version:1, operation_id:BACKUP_DELETE_ID.into(),
+            request_id:1, backup_id:2, expected_artifact_sha256:"a".repeat(64),
+            expected_fence:ProjectMutationFenceV1 {process_incarnation:1,session_incarnation:2,
+                project_epoch:3,project_revision:4,project_checkpoint_hash:"b".repeat(64),project_publication_generation:5} };
+        assert!(request.validate().is_ok());
+        for invalid in [ProjectBackupDeleteRequestV1 {schema_version:2,..request.clone()},
+            ProjectBackupDeleteRequestV1 {operation_id:BACKUP_ID.into(),..request.clone()},
+            ProjectBackupDeleteRequestV1 {request_id:0,..request.clone()},
+            ProjectBackupDeleteRequestV1 {backup_id:0,..request.clone()},
+            ProjectBackupDeleteRequestV1 {backup_id:MAX_SAFE_JAVASCRIPT_INTEGER+1,..request.clone()},
+            ProjectBackupDeleteRequestV1 {expected_artifact_sha256:"A".repeat(64),..request.clone()}] {
+            assert!(invalid.validate().is_err());
+        }
+        for field in ["path","owner_id","principal","skip_confirmation"] {
+            let mut json=serde_json::to_value(&request).unwrap();json[field]=serde_json::json!(true);
+            assert!(serde_json::from_value::<ProjectBackupDeleteRequestV1>(json).is_err());
+        }
+        let row=ProjectBackupInspectionV1 {schema_version:1,backup:ProjectFileBackupSummaryV1 {id:2,
+            created_at_unix_ms:2,source_path:None,reason:"manual".into(),bytes:2},
+            artifact_sha256:"a".repeat(64),restore_source_path:None};
+        let receipt=ProjectBackupDeleteReceiptV1 {schema_version:1,request:request.clone(),deleted_backup:row.clone()};
+        assert!(receipt.validate().is_ok());
+        let mut wrong=receipt.clone();wrong.deleted_backup.backup.id=3;assert!(wrong.validate().is_err());
+        let mut wrong=receipt;wrong.deleted_backup.artifact_sha256="c".repeat(64);assert!(wrong.validate().is_err());
+    }
     #[test]
     fn project_backup_list_strict_request_and_cursor_bounds() {
         let request = ProjectBackupListRequestV1 { schema_version: 1, limit: 16, before_id: None };

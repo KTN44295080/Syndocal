@@ -144,7 +144,8 @@ const evidence = take('--evidence');
 const cdpPort = Number(take('--cdp-port'));
 const profileId = args.includes('--profile') ? take('--profile') : 'jp.seraf.ktn.syndocal.qa.mcp-lifecycle';
 assert.ok(['jp.seraf.ktn.syndocal.qa.mcp-lifecycle',
-  'jp.seraf.ktn.syndocal.qa.mcp-lifecycle.backup-restore-20261005'].includes(profileId), 'Only checked-in private QA profiles allowed');
+  'jp.seraf.ktn.syndocal.qa.mcp-lifecycle.backup-restore-20261005',
+  'jp.seraf.ktn.syndocal.qa.mcp-lifecycle.backup-delete-20261006'].includes(profileId), 'Only checked-in private QA profiles allowed');
 assert.equal(args.length, 0);
 assert.equal(process.platform, 'win32');
 assert.ok(path.isAbsolute(executable) && path.isAbsolute(evidence));
@@ -482,6 +483,7 @@ await fs.writeFile(evidence, `${JSON.stringify({ schemaVersion: 1, timestamp: ne
     managedBackupPolicySha256: createHash('sha256').update(await fs.readFile(new URL('../../app/src-tauri/src/project_file_managed_backup.rs', import.meta.url))).digest('hex'),
     backupInspectionPolicySha256: createHash('sha256').update(await fs.readFile(new URL('../../app/src-tauri/src/project_backup_inspection.rs', import.meta.url))).digest('hex'),
     backupListingPolicySha256: createHash('sha256').update(await fs.readFile(new URL('../../app/src-tauri/src/project_backup_listing.rs', import.meta.url))).digest('hex'),
+    backupDeletionPolicySha256: createHash('sha256').update(await fs.readFile(new URL('../../app/src-tauri/src/project_backup_deletion.rs', import.meta.url))).digest('hex'),
     backupRestoreHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-project-backup-restore.mjs', import.meta.url))).digest('hex'),
     backupRestorePolicySha256: createHash('sha256').update(await fs.readFile(new URL('../../app/src-tauri/src/project_backup_restoration.rs', import.meta.url))).digest('hex'),
   } : {}),
@@ -555,7 +557,7 @@ await fs.writeFile(evidence, `${JSON.stringify({ schemaVersion: 1, timestamp: ne
     ...(projectReplacement ? ['Typed external R5 New/Open, issued-fence and exact File-grant admission, immutable native execution, private source-byte preservation and bounded terminal replay only; no active managed output, physical devices, mid-parser revocation/crash, full file-operation or AI8/release acceptance'] : []),
   ...(projectFile ? ['Typed external Save/Save As/template/status/ack on owned private files only; no mid-publication external rename CAS, crash/restart, all remaining File/AI8/release or physical acceptance'] : []),
     ...(fileQueryPressure ? ['Private valid unbound-label Touch fixture, then bounded real local and authenticated external authority reads under concurrent asynchronous checkpoint capture only; no proof of the historical generic query failure cause, complete contention/rate/real-time budget, file publication, physical output or release acceptance'] : []),
-    ...(projectBackup ? ['Typed managed backup creation/inspection/restore, complete private authored-image and four mapping-family restoration, exact terminal/ack/replay and owned cleanup only; no full retention-race/mid-publication revocation/crash/restart, canonical backup delete/retention, all File or physical acceptance'] : []),
+    ...(projectBackup ? ['Typed managed backup creation/inspection/list/restore/delete, complete private authored-image and four mapping-family restoration, exact terminal/ack/replay and owned cleanup only; no full retention-race/mid-publication revocation/crash/restart, durable deletion reconciliation, canonical retention, all File or physical acceptance'] : []),
     ...(projectJson ? ['Native .sdc admission and rejected-load preservation only; no complete migration corpus, backup/recovery/upgrade, other file formats or physical output acceptance'] : []),
     ...(runtimeAuthority ? ['Three native Timeline authority-read paths and ordinary concurrent read observations only; no command replay, output activation, complete lock-wait or realtime budget, full adapter/security/AI8 or physical acceptance'] : []),
     ...(backupJson ? ['Native backup byte/JSON/identity admission and private restore preservation only; no full O1-O4, browser recovery, crash/fallback/upgrade, physical output or release acceptance'] : []),

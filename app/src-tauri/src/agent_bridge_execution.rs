@@ -17,6 +17,10 @@ struct ProjectReplacementIngress { request: ProjectReplacementRequestV1 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct BackupDeleteIngress { request: protocol::control_plane_file::ProjectBackupDeleteRequestV1 }
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct OutputIngress {
     request: OutputControlCommandRequestV2,
 }
@@ -44,6 +48,14 @@ pub(crate) fn execute(
                 .get("operationId")
                 .and_then(Value::as_str)
                 .ok_or("agent_bridge_operation_invalid")?;
+            if operation_id == protocol::control_plane_file::BACKUP_DELETE_ID {
+                let ingress: BackupDeleteIngress = serde_json::from_value(
+                    dispatch.params.get("request").cloned().ok_or("agent_bridge_arguments_invalid")?)
+                    .map_err(|_| "agent_bridge_arguments_invalid")?;
+                let receipt = super::project_backup_deletion::execute_external(app, window, &dispatch, ingress.request)?;
+                let result = serde_json::to_value(receipt).map_err(|_| "project_backup_delete_response_invalid")?;
+                return Ok(json!({"ok": true, "operation_id":operation_id, "result":result}));
+            }
             if matches!(operation_id, protocol::control_plane_file::SAVE_ID
                 | protocol::control_plane_file::SAVE_AS_ID | protocol::control_plane_file::TEMPLATE_ID
                 | protocol::control_plane_file::AUTHORITY_ID | protocol::control_plane_file::STATUS_ID

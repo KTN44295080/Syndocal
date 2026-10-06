@@ -1,0 +1,11 @@
+Verified exact unit executable: C:\Users\janua\AppData\Local\Temp\syndocal-native-acceptance-target\release\deps\syndocal-41cd4ce392874b4c.exe
+SHA-256: aa14c04d8306eeb6554bcd16e0aa775e284348ccc697b0e8f3c80a81c9217d2a
+Filter: project_backup_deletion_contract_tests
+
+running 4 tests
+test tests::project_backup_deletion_contract_tests::project_backup_deletion_exact_receipt_replay_never_deletes_recreated_artifact ... ok
+test tests::project_backup_deletion_contract_tests::project_backup_deletion_retired_query_session_during_preparation_cannot_delete ... ok
+test tests::project_backup_deletion_contract_tests::project_backup_deletion_update_claim_and_normalized_pending_receipt_protect_artifact ... ok
+test tests::project_backup_deletion_contract_tests::project_backup_deletion_wrong_hash_writer_unissued_stale_and_final_revocation_preserve_bytes ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 2010 filtered out; finished in 0.09s

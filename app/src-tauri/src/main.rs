@@ -274,6 +274,7 @@ mod project_file_control_plane;
 mod project_file_managed_backup;
 mod project_backup_inspection;
 mod project_backup_listing;
+mod project_backup_deletion;
 mod project_backup_restoration;
 mod output_blackout_control;
 mod dj_link_machine;
@@ -51110,6 +51111,16 @@ async fn list_project_backups_control_plane_v1(app: tauri::AppHandle, window: We
 }
 
 #[tauri::command]
+async fn delete_project_backup_control_plane_v1(app: tauri::AppHandle, window: WebviewWindow,
+    request: protocol::control_plane_file::ProjectBackupDeleteRequestV1,
+) -> Result<Value, native_adapter_error::NativeAdapterError> {
+    tauri::async_runtime::spawn_blocking(move || project_backup_deletion::execute_local(&app, &window, request))
+        .await.map_err(|_| "project_backup_delete_executor_failed")?
+        .and_then(|receipt| serde_json::to_value(receipt).map_err(|_| "project_backup_delete_response_invalid".into()))
+        .map_err(Into::into)
+}
+
+#[tauri::command]
 async fn query_project_file_status_v1(app: tauri::AppHandle, window: WebviewWindow,
     request: protocol::control_plane_file::ProjectFileRequestV1,
 ) -> Result<Value, native_adapter_error::NativeAdapterError> {
@@ -53097,23 +53108,31 @@ fn ensure_project_backup_not_durably_referenced_v1(
     backup_id: u64,
 ) -> Result<(), String> {
     let durable = load_project_recovery_authority_state_from_path(journal_path)?;
-    let target = project_backup_path(backup_directory, backup_id);
-    let pending_reference = durable.publication_journal.pending.iter().any(|pending| {
-        pending.surface == ProjectPublicationSurfaceV1::Backup
-            && pending.target_path.as_deref() == Some(target.as_path())
-    });
-    let terminal_reference = durable
-        .publication_journal
-        .terminals
-        .iter()
-        .any(|terminal| {
-            terminal.surface == ProjectPublicationSurfaceV1::Backup
-                && (terminal.target_path.as_deref().map(Path::new) == Some(target.as_path())
-                    || terminal
-                        .backup
-                        .as_ref()
-                        .is_some_and(|backup| backup.id == backup_id))
-        });
+    let candidate = project_file_managed_backup::path_for_id(backup_directory, backup_id)?;
+    let target = if backup_directory.exists() {
+        normalized_recovery_target_key(&candidate)?
+    } else {
+        candidate
+    };
+    let referenced = |path: Option<&Path>| -> Result<bool, String> {
+        path.map(normalized_recovery_target_key).transpose()
+            .map(|value| value.as_deref() == Some(target.as_path()))
+    };
+    let mut pending_reference = false;
+    for pending in &durable.publication_journal.pending {
+        if pending.surface == ProjectPublicationSurfaceV1::Backup
+            && referenced(pending.target_path.as_deref())? {
+            pending_reference = true;
+        }
+    }
+    let mut terminal_reference = false;
+    for terminal in &durable.publication_journal.terminals {
+        if terminal.surface == ProjectPublicationSurfaceV1::Backup
+            && (referenced(terminal.target_path.as_deref().map(Path::new))?
+                || terminal.backup.as_ref().is_some_and(|backup| backup.id == backup_id)) {
+            terminal_reference = true;
+        }
+    }
     if pending_reference || terminal_reference {
         return Err(
             "Project backup is protected by an unresolved or unacknowledged durable publication receipt"
@@ -87808,6 +87827,7 @@ pub(crate) mod tests {
     include!("project_replacement_generation_tests.rs");
     include!("project_replacement_control_plane_tests.rs");
     include!("project_backup_restoration_tests.rs");
+    include!("project_backup_deletion_tests.rs");
     use super::*;
     use protocol::{ClockSource, VideoLayerSummary};
 
@@ -132197,6 +132217,7 @@ fn main() {
         .manage(diagnostic_export_session::DiagnosticExports::default())
         .manage(project_replacement_control_plane::ProjectReplacementControlPlaneState::default())
         .manage(project_file_control_plane::ProjectFileControlPlaneState::default())
+        .manage(project_backup_deletion::BackupDeletionControlPlaneState::default())
         .manage(AppState {
             engine: engine.clone(),
             app_handle: Mutex::new(None),
@@ -132834,6 +132855,7 @@ fn main() {
             query_project_backup_authority_v1,
             inspect_project_backup_control_plane_v1,
             list_project_backups_control_plane_v1,
+            delete_project_backup_control_plane_v1,
             query_project_file_status_v1,
             acknowledge_project_file_control_plane_v1,
             get_operator_policy,

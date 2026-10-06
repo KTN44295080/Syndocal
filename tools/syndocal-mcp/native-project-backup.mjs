@@ -9,6 +9,7 @@ import {openNativeStdioSession} from './native-stdio-session.mjs';
 export async function nativeProjectBackup(backend, options, checks) {
   const ids={create:'syndocal.project.backup.create.v1',authority:'syndocal.query.project.backup.authority.v1',
     inspect:'syndocal.query.project.backup.inspect.v1', list:'syndocal.query.project.backup.list.v1',
+    remove:'syndocal.project.backup.delete.v1',
     status:'syndocal.query.project.file.status.v1',ack:'syndocal.project.file.acknowledge.v1'};
   const directory=path.join(process.env.LOCALAPPDATA,options.profileId,'project-backups');
   const baseline=await fs.readdir(directory).catch(error=>{if(error.code==='ENOENT')return [];throw error;});
@@ -45,8 +46,17 @@ export async function nativeProjectBackup(backend, options, checks) {
     return {schema_version:1,operation_id:ids.create,request_id:authority.next_request_id,expected_fence:authority.fence,
       expected_path_generation:authority.path_generation,expected_disposition_generation:authority.disposition_generation,
       destination:authority.destination,expected_target_sha256:null};};
+  let deleteSequence=1;
+  let deletionFence;
+  const deletion=async(id,hash)=>({schema_version:1,operation_id:ids.remove,request_id:deleteSequence++,
+    expected_fence:structuredClone(deletionFence),backup_id:id,expected_artifact_sha256:hash});
   try {
     const registry=await backend.invoke('get_control_plane_canonical_registry');
+    const deleteOperation=registry.canonical_operations.find(value=>value.operation_id===ids.remove);
+    assert.equal(deleteOperation.risk,'r5');assert.equal(deleteOperation.adapter_policy,'local_window_project_publication');
+    const deniedDelete=await send(ids.remove,{schema_version:1});
+    assert.equal(deniedDelete.status,'rejected');assert.equal(deniedDelete.error,'agent_missing_grant');
+    await grant('file',ids.remove);
     const operation=registry.canonical_operations.find(value=>value.operation_id===ids.create);
     assert.equal(operation.risk,'r5');assert.equal(operation.adapter_policy,'local_window_project_publication');
     assert.equal(operation.audit,'immutable');assert.equal(operation.receipt_policy,'exact_terminal_receipt');
@@ -136,9 +146,43 @@ export async function nativeProjectBackup(backend, options, checks) {
     await failed(ids.create,{...request,destination:request.destination.replace(/backup-[0-9]+\.json$/,'backup-1.json')},/shape_conflict/);
     const protectedDelete=await backend.evaluate(`window.__TAURI_INTERNALS__.invoke('delete_project_backup', ${JSON.stringify({backupId:saved.backup.id})}).then(value=>({value}),error=>({error:String(error).slice(0,768)}))`);
     assert.match(protectedDelete.error,/publication|receipt|referenced/i);assert.deepEqual(await fs.readFile(saved.target_path),bytes);
+    // Backup publication/inspection and acknowledgement leave project authority
+    // unchanged (asserted above/below). Reuse its real issued fence instead of
+    // issuing an unrelated backup destination for every deletion rejection.
+    deletionFence=structuredClone(request.expected_fence);
+    const canonicalProtectedDelete=await deletion(saved.backup.id,saved.artifact_sha256);
+    await failed(ids.remove,canonicalProtectedDelete,/unacknowledged/);
+    assert.deepEqual(await fs.readFile(saved.target_path),bytes);
+    await failed(ids.remove,{...await deletion(saved.backup.id,saved.artifact_sha256),expected_artifact_sha256:'f'.repeat(64)},/artifact_changed/);
+    const forgedDelete=await deletion(saved.backup.id,saved.artifact_sha256);forgedDelete.expected_fence.session_incarnation++;
+    await failed(ids.remove,forgedDelete,/unissued_fence/);
+    const deleteShape=await deletion(saved.backup.id,saved.artifact_sha256);
+    for(const value of [{...deleteShape,schema_version:2},{...deleteShape,request_id:0},
+      {...deleteShape,backup_id:0},{...deleteShape,backup_id:Number.MAX_SAFE_INTEGER+1},
+      {...deleteShape,expected_artifact_sha256:'A'.repeat(64)}]){
+      await failed(ids.remove,value,/invalid project backup delete request/);
+    }
+    for(const field of ['path','owner_id','principal','skip_confirmation']){
+      await failed(ids.remove,{...await deletion(saved.backup.id,saved.artifact_sha256),[field]:true},/arguments_invalid/);
+    }
+    checks.push({check:'external-backup-delete-exact-r5-grant-no-human-confirmation-and-unacknowledged-hash-forged-fence-preservation',passed:true});
     const ack=await success(ids.ack,request);assert.equal(ack.phase,'acknowledged');created[0].acknowledged=true;
     assert.deepEqual(await success(ids.ack,request),ack);assert.deepEqual(await success(ids.status,request),ack);
-    await backend.invoke('delete_project_backup',{backupId:saved.backup.id});created[0].deleted=true;
+    const deleteRequest=await deletion(saved.backup.id,saved.artifact_sha256),deleteBefore=await state();
+    const deleted=await success(ids.remove,deleteRequest);created[0].deleted=true;
+    assert.deepEqual(deleted.request,deleteRequest);assert.equal(deleted.deleted_backup.backup.id,saved.backup.id);
+    assert.equal(deleted.deleted_backup.artifact_sha256,saved.artifact_sha256);
+    await assert.rejects(fs.stat(saved.target_path),/ENOENT/);assert.deepEqual(await state(),deleteBefore);
+    assert.deepEqual(await success(ids.remove,deleteRequest),deleted);
+    const recreated=Buffer.from('owned recreated artifact must survive exact replay');await fs.writeFile(saved.target_path,recreated);
+    try {
+      assert.deepEqual(await success(ids.remove,deleteRequest),deleted);
+      assert.deepEqual(await fs.readFile(saved.target_path),recreated);
+      await failed(ids.remove,{...deleteRequest,expected_artifact_sha256:'d'.repeat(64)},/different shape/);
+      assert.deepEqual(await fs.readFile(saved.target_path),recreated);
+    } finally {await backend.invoke('delete_project_backup',{backupId:saved.backup.id});}
+    checks.push({check:'external-backup-delete-same-artifact-receipt-and-exact-replay-preserve-project-authority-output-and-recreated-bytes',passed:true,
+      receipt:deleted});
     await failed(ids.inspect,{schema_version:1,backup_id:saved.backup.id},/inspect_metadata/);
     const next=await prepare();assert.equal(next.request_id,2);const second=await success(ids.create,next);
     assert.equal(second.phase,'succeeded');created.push({request:next,receipt:second,acknowledged:false});

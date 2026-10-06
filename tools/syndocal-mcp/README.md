@@ -139,8 +139,14 @@ For the backup restore acceptance lane, build the isolated target with
 `--config src-tauri/tauri.mcp-backup-restore.conf.json` and run the lifecycle
 checker with `--project-backup --profile jp.seraf.ktn.syndocal.qa.mcp-lifecycle.backup-restore-20261005`.
 This checked-in private profile keeps prior QA publication journals intact when
-their 32-origin bound is reached. The checker accepts only its two explicitly
+their 32-origin bound is reached. The checker accepts only its three explicitly
 reviewed private identifiers; no normal-profile override or journal deletion.
+For current deletion acceptance, use `--config src-tauri/tauri.mcp-backup-delete.conf.json`
+and `--project-backup --profile jp.seraf.ktn.syndocal.qa.mcp-lifecycle.backup-delete-20261006`.
+The claim/revoke probe records typed transient authority errors and permits at
+most eight fresh observations with bounded spacing only for exact retryable
+`overloaded`/`unavailable` query errors. Final authority assertions remain; no
+mutation, claim, execution or terminal replay is retried.
 The restore fixture retains unexpected scheduled GUI autosaves only after native
 bounded unique-key inspection and strict filename/time/source/full-image/mapping
 verification. Comparison accounts solely for schema-declared Geometry/Stage f32
@@ -160,6 +166,28 @@ directories yield an empty page without creating anything. Pages are separate
 observations, not a reservation or a consistent snapshot under concurrent writes;
 restore must issue new authority and bind its own expected digest. No path/owner
 override, allocation, retry, publication, delete or retention is performed.
+
+Windows MCP deletion uses R5/exact File grant operation
+syndocal.project.backup.delete.v1. Its strict request contains schema 1,
+operation ID, positive JS-safe request/backup IDs, an issued current project
+mutation fence and the lowercase original expected_artifact_sha256.
+Obtain the fence from syndocal.query.project.replacement.authority.v1 and the
+artifact identity from backup inspect/list. No caller supplies a path, owner,
+principal or confirmation flag. External MCP needs no individual approval;
+the local typed Tauri wrapper retains its native confirmation.
+
+The Windows operation exclusively opens the managed regular non-reparse leaf,
+hashes and validates those bytes, then uses the same original handle to mark
+deletion and closes it under publication/admission/coordinator protection.
+Current owner/project/operator policy, installer claim, normalized durable
+pending/terminal references and exact grant are checked before that effect.
+Success carries the exact request and deleted inspection metadata. Its bounded
+15-minute process-local terminal lane returns the exact result for an unchanged
+request, including after disappearance/recreation; changed shape rejects.
+It is not a durable deletion journal or crash/restart guarantee, and expired/
+evicted identities must not be automatically retried. Other platforms reject
+this operation before file access until the same-handle policy is implemented.
+Root/parent hostile OS races and broad retention remain separate acceptance.
 
 File/backup authority reads preserve a failed native query capture as the
 canonical `QueryError` object: `code`, fixed bounded `message`, `retryable` and

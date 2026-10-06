@@ -79,6 +79,12 @@ pub(super) fn read_in_bounded(directory: &Path, backup_id: u64, remaining_bytes:
     let file = options
         .open(&path)
         .map_err(|error| format!("project_backup_inspect_open: {error}"))?;
+    read_opened(&path, &file, remaining_bytes)
+}
+
+// Both observation and deletion decode/hash the same opened artifact. The
+// caller owns sharing/access policy and keeps its original handle alive.
+pub(super) fn read_opened(path: &Path, file: &fs::File, remaining_bytes: u64) -> Result<ObservedBackup, String> {
     let metadata = file
         .metadata()
         .map_err(|error| format!("project_backup_inspect_opened_metadata: {error}"))?;
@@ -102,7 +108,7 @@ pub(super) fn read_in_bounded(directory: &Path, backup_id: u64, remaining_bytes:
     let sha256 = format!("{:x}", Sha256::digest(&bytes));
     let json = std::str::from_utf8(&bytes)
         .map_err(|error| format!("Project backup inspection is not valid UTF-8: {error}"))?;
-    let backup = super::project_backup_json::decode_project_backup_json_at_path(&path, json)?;
+    let backup = super::project_backup_json::decode_project_backup_json_at_path(path, json)?;
     let restore_source_path = backup
         .source_path
         .as_ref()

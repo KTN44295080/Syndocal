@@ -8,8 +8,10 @@ import { openNativeStdioSession } from './native-stdio-session.mjs';
 // process. Registering a new generation retires the automatic renderer so the
 // native claim/revoke/execute order is deterministic. No DOM or invoke patching.
 export async function nativeHighRiskRevocation(backend, options, checks, { projectReplacement = false, projectFile = false, projectBackup = false } = {}) {
+  const authorityObservations=[];
   const authority = async (kind, command, args = {}) => {
-    const result = await backend.evaluate(`window.__TAURI_INTERNALS__.invoke(${JSON.stringify(command)},${JSON.stringify(args)})
+    for(let attempt=1;attempt<=8;attempt++) {
+      const result = await backend.evaluate(`window.__TAURI_INTERNALS__.invoke(${JSON.stringify(command)},${JSON.stringify(args)})
       .then(value=>({value}),error=>{
         if(typeof error==='string')return {error:error.slice(0,768)};
         if(error && typeof error==='object' && Object.keys(error).length===4
@@ -19,8 +21,19 @@ export async function nativeHighRiskRevocation(backend, options, checks, { proje
           return {error:{code:error.code,message:error.message,retryable:error.retryable,resnapshot_required:error.resnapshot_required}};
         return {error:'Unrecognized native authority error'};
       })`);
-    assert.ok(result.value, `Revocation fixture authority ${kind}: ${JSON.stringify(result.error)}`);
-    return result.value;
+      if(result.value)return result.value;
+      const error=result.error;
+      // Only an explicit transient query error permits a fresh observation.
+      // No admitted mutation, claim, execution or terminal replay is retried.
+      assert.ok(error && typeof error==='object', `Revocation fixture authority ${kind}: ${JSON.stringify(error)}`);
+      assert.deepEqual(Object.keys(error).sort(),['code','message','resnapshot_required','retryable']);
+      assert.ok(['overloaded','unavailable'].includes(error.code),JSON.stringify(error));
+      assert.equal(error.message,error.code==='overloaded'?'query service overloaded':'query service unavailable');
+      assert.equal(error.retryable,true);assert.equal(error.resnapshot_required,false);
+      authorityObservations.push({kind,command,attempt,error});
+      assert.ok(attempt<8,`Revocation fixture read exhausted: ${JSON.stringify(error)}`);
+      await new Promise(resolve=>setTimeout(resolve,25*attempt));
+    }
   };
   const generation = await backend.invoke('agent_bridge_register_v1');
   assert.ok(Number.isSafeInteger(generation) && generation > 0);
@@ -31,9 +44,11 @@ export async function nativeHighRiskRevocation(backend, options, checks, { proje
   };
   for (const kind of ['file', 'output', ...(projectReplacement ? ['project_new', 'project_open'] : []),
     ...(projectFile ? ['project_save', 'project_save_as', 'project_template'] : []),
-    ...(projectBackup ? ['project_backup', 'project_restore'] : [])]) {
+    ...(projectBackup ? ['project_backup', 'project_restore', 'project_delete'] : [])]) {
     const publication = ['project_save', 'project_save_as', 'project_template', 'project_backup'].includes(kind);
     const project = kind.startsWith('project_') && !publication;
+    const deletion = kind === 'project_delete';
+    const observationStart=authorityObservations.length;
     const capability = project || publication ? 'file' : kind;
     const principalId = `native-revoke-${randomUUID()}`;
     const requestId = randomUUID();
@@ -53,7 +68,7 @@ export async function nativeHighRiskRevocation(backend, options, checks, { proje
       // The parent is the runner's existing ACL-restricted credential directory.
       await fs.writeFile(credentialFile, approval.credential, { flag: 'wx' });
       const operationId = publication ? `syndocal.project.${kind === 'project_backup' ? 'backup.create' : kind === 'project_template' ? 'template.save' : kind === 'project_save' ? 'save' : 'save_as'}.v1`
-        : project ? `syndocal.project.${kind === 'project_new' ? 'new' : kind === 'project_restore' ? 'backup.restore' : 'open'}.v1` : capability === 'file'
+        : project ? `syndocal.project.${kind === 'project_new' ? 'new' : deletion ? 'backup.delete' : kind === 'project_restore' ? 'backup.restore' : 'open'}.v1` : capability === 'file'
         ? 'syndocal.diagnostics.export.v1' : 'syndocal.output.lease.acquire.v2';
       await backend.invoke('agent_authority_promote_v1', { principalId, principalIncarnation });
       await backend.invoke('agent_authority_grant_v1', { principalId, principalIncarnation,
@@ -98,6 +113,10 @@ export async function nativeHighRiskRevocation(backend, options, checks, { proje
         expected_path_generation: fileAuthority.path_generation,
         expected_disposition_generation: fileAuthority.disposition_generation,
         destination: fileAuthority.destination, expected_target_sha256: fileAuthority.target_sha256,
+      } } } : deletion ? { operationId, request: { request: {schema_version:1,
+        operation_id:operationId,request_id:Date.now(),
+        expected_fence:(await authority(kind,'query_project_replacement_authority_v1',{request:{}})).fence,
+        backup_id:Number.MAX_SAFE_INTEGER,expected_artifact_sha256:'0'.repeat(64),
       } } } : project ? { operationId, request: { request: { schema_version: 1,
         operation_id: operationId, request_id: Date.now(),
         expected_fence: (await authority(kind,'query_project_replacement_authority_v1', { request: {} })).fence,
@@ -140,7 +159,7 @@ export async function nativeHighRiskRevocation(backend, options, checks, { proje
         throw error;
       }), false);
       if (project || publication) assert.deepEqual(await checkpoint(), beforeProject);
-      assert.deepEqual((await backend.invoke('query_output_lease_authority_v1')).statuses, [{ status: 'unavailable' }]);
+      assert.deepEqual((await authority(kind,'query_output_lease_authority_v1')).statuses, [{ status: 'unavailable' }]);
       const ownership = await backend.invoke('get_output_ownership_status');
       assert.equal(ownership.lighting_allowed, false);
       assert.equal(ownership.video_allowed, false);
@@ -148,6 +167,7 @@ export async function nativeHighRiskRevocation(backend, options, checks, { proje
         passed: true, operationId, requestId, rendererGeneration: generation,
         executionError: 'agent_principal_revoked', replayError: 'request_not_executable',
         destinationAbsent: !source, sourceBytesPreserved: Boolean(source), leaseUnavailable: true, credentialRevoked: true,
+        authorityObservations:authorityObservations.slice(observationStart),
       });
     } finally {
       try { await mcp?.close(); }
