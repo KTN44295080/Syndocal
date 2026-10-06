@@ -1,0 +1,7 @@
+PASS 16 adapter integration groups; hostile stdio corpus: 128 rejected; fake loopback only, no Syndocal/device calls
+PASS HTTP health/JSON-RPC/REST and WebSocket transport groups; loopback fake broker only
+PASS transport security: host/origin rejection, malformed path recovery, 64-session capacity/release, idle expiry and active-request retention, split-header/payload liveness and frame completion; no native/device calls
+Discovery burst: native dispatches=1, completed=1
+Global burst: 10000 intents, eight native dispatches, 9992 pre-dispatch rejections
+PASS request capacity: 9 groups; bounded authenticated discovery, revocation/failure rejection, discovery/call exclusion, 10000 global intents, shared HTTP/REST/WebSocket budget, error/unknown release and no retries
+AI5 sidecar auth/transport boundary ok; authenticated discovery, nonce proof, exact grant admission, bounded MCP/HTTP/REST/WebSocket forwarding and redaction verified

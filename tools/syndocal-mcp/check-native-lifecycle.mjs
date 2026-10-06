@@ -481,6 +481,7 @@ await fs.writeFile(evidence, `${JSON.stringify({ schemaVersion: 1, timestamp: ne
     projectBackupHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-project-backup.mjs', import.meta.url))).digest('hex'),
     managedBackupPolicySha256: createHash('sha256').update(await fs.readFile(new URL('../../app/src-tauri/src/project_file_managed_backup.rs', import.meta.url))).digest('hex'),
     backupInspectionPolicySha256: createHash('sha256').update(await fs.readFile(new URL('../../app/src-tauri/src/project_backup_inspection.rs', import.meta.url))).digest('hex'),
+    backupListingPolicySha256: createHash('sha256').update(await fs.readFile(new URL('../../app/src-tauri/src/project_backup_listing.rs', import.meta.url))).digest('hex'),
     backupRestoreHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-project-backup-restore.mjs', import.meta.url))).digest('hex'),
     backupRestorePolicySha256: createHash('sha256').update(await fs.readFile(new URL('../../app/src-tauri/src/project_backup_restoration.rs', import.meta.url))).digest('hex'),
   } : {}),

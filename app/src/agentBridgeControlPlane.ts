@@ -65,6 +65,7 @@ export const CANONICAL_TAURI_COMMANDS = {
   "syndocal.project.backup.create.v1": "create_project_backup_control_plane_v1",
   "syndocal.query.project.backup.authority.v1": "query_project_backup_authority_v1",
   "syndocal.query.project.backup.inspect.v1": "inspect_project_backup_control_plane_v1",
+  "syndocal.query.project.backup.list.v1": "list_project_backups_control_plane_v1",
   "syndocal.project.save.v1": "save_project_control_plane_v1",
   "syndocal.project.save_as.v1": "save_project_as_control_plane_v1",
   "syndocal.project.template.save.v1": "save_user_template_control_plane_v1",

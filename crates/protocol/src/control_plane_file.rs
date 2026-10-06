@@ -8,6 +8,8 @@ pub const TEMPLATE_ID: &str = "syndocal.project.template.save.v1";
 pub const BACKUP_ID: &str = "syndocal.project.backup.create.v1";
 pub const BACKUP_AUTHORITY_ID: &str = "syndocal.query.project.backup.authority.v1";
 pub const BACKUP_INSPECT_ID: &str = "syndocal.query.project.backup.inspect.v1";
+pub const BACKUP_LIST_ID: &str = "syndocal.query.project.backup.list.v1";
+pub const BACKUP_LIST_MAX_ITEMS: usize = 16;
 pub const AUTHORITY_ID: &str = "syndocal.query.project.file.authority.v1";
 pub const STATUS_ID: &str = "syndocal.query.project.file.status.v1";
 pub const ACK_ID: &str = "syndocal.project.file.acknowledge.v1";
@@ -113,6 +115,48 @@ impl ProjectBackupInspectionV1 {
             || !valid_hash(&self.artifact_sha256)
         {
             return Err("invalid project backup inspection metadata");
+        }
+        Ok(())
+    }
+}
+
+/// Descending managed IDs. Each page is a fresh observation, not a snapshot
+/// reservation; subsequent inspect/restore must bind its own expected digest.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectBackupListRequestV1 {
+    pub schema_version: u16,
+    pub limit: u16,
+    pub before_id: Option<u64>,
+}
+impl ProjectBackupListRequestV1 {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.schema_version != 1 || self.limit == 0
+            || self.limit as usize > BACKUP_LIST_MAX_ITEMS
+            || self.before_id.is_some_and(|id| id == 0 || id > MAX_SAFE_JAVASCRIPT_INTEGER)
+        { return Err("invalid project backup list request"); }
+        Ok(())
+    }
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectBackupListV1 {
+    pub schema_version: u16,
+    pub backups: Vec<ProjectBackupInspectionV1>,
+    pub next_before_id: Option<u64>,
+}
+impl ProjectBackupListV1 {
+    pub fn validate(&self, request: &ProjectBackupListRequestV1) -> Result<(), &'static str> {
+        request.validate()?;
+        if self.schema_version != 1 || self.backups.len() > request.limit as usize
+            || self.next_before_id.is_some_and(|id| self.backups.len() != request.limit as usize
+                || self.backups.last().map(|row| row.backup.id) != Some(id))
+        { return Err("invalid project backup list response"); }
+        let mut prior = request.before_id.unwrap_or(MAX_SAFE_JAVASCRIPT_INTEGER + 1);
+        for row in &self.backups {
+            row.validate()?;
+            if row.backup.id >= prior { return Err("invalid project backup list order"); }
+            prior = row.backup.id;
         }
         Ok(())
     }
@@ -224,6 +268,39 @@ pub struct ProjectFileBackupSummaryV1 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn project_backup_list_strict_request_and_cursor_bounds() {
+        let request = ProjectBackupListRequestV1 { schema_version: 1, limit: 16, before_id: None };
+        assert!(request.validate().is_ok());
+        for invalid in [ProjectBackupListRequestV1 {schema_version:2,..request.clone()},
+            ProjectBackupListRequestV1 {limit:0,..request.clone()}, ProjectBackupListRequestV1 {limit:17,..request.clone()},
+            ProjectBackupListRequestV1 {before_id:Some(0),..request.clone()},
+            ProjectBackupListRequestV1 {before_id:Some(MAX_SAFE_JAVASCRIPT_INTEGER+1),..request.clone()}] {
+            assert!(invalid.validate().is_err());
+        }
+        for forged in ["path","owner_id","principal","skip_confirmation"] {
+            let mut value=serde_json::to_value(&request).unwrap(); value[forged]=serde_json::json!("forged");
+            assert!(serde_json::from_value::<ProjectBackupListRequestV1>(value).is_err());
+        }
+    }
+    #[test]
+    fn project_backup_list_response_rejects_duplicate_order_identity_and_cursor() {
+        let row=|id| ProjectBackupInspectionV1 {schema_version:1,backup:ProjectFileBackupSummaryV1 {
+            id,created_at_unix_ms:id,source_path:None,reason:"manual".into(),bytes:1,
+        },artifact_sha256:"a".repeat(64),restore_source_path:None};
+        let request=ProjectBackupListRequestV1 {schema_version:1,limit:2,before_id:Some(4)};
+        let page=ProjectBackupListV1 {schema_version:1,backups:vec![row(3),row(2)],next_before_id:Some(2)};
+        assert!(page.validate(&request).is_ok());
+        for invalid in [ProjectBackupListV1 {schema_version:2,..page.clone()},
+            ProjectBackupListV1 {next_before_id:Some(1),..page.clone()},
+            ProjectBackupListV1 {backups:vec![row(2),row(3)],..page.clone()},
+            ProjectBackupListV1 {backups:vec![row(2),row(2)],..page.clone()},
+            ProjectBackupListV1 {backups:vec![row(4),row(2)],..page.clone()},
+            ProjectBackupListV1 {backups:vec![row(3)],..page.clone()},
+            ProjectBackupListV1 {backups:vec![row(3),row(2),row(1)],..page.clone()}] {
+            assert!(invalid.validate(&request).is_err());
+        }
+    }
     fn request() -> ProjectFileRequestV1 {
         ProjectFileRequestV1 {
             schema_version: 1,

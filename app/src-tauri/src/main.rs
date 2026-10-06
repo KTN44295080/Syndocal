@@ -273,6 +273,7 @@ mod project_replacement_control_plane;
 mod project_file_control_plane;
 mod project_file_managed_backup;
 mod project_backup_inspection;
+mod project_backup_listing;
 mod project_backup_restoration;
 mod output_blackout_control;
 mod dj_link_machine;
@@ -51096,6 +51097,15 @@ async fn inspect_project_backup_control_plane_v1(app: tauri::AppHandle, window: 
 ) -> Result<Value, native_adapter_error::NativeAdapterError> {
     let request = serde_json::to_value(request).map_err(|_| "project_file_request_invalid")?;
     tauri::async_runtime::spawn_blocking(move || project_file_control_plane::execute_local(&app, &window, "syndocal.query.project.backup.inspect.v1", request))
+        .await.map_err(|_| "project_file_executor_failed")?
+}
+
+#[tauri::command]
+async fn list_project_backups_control_plane_v1(app: tauri::AppHandle, window: WebviewWindow,
+    request: protocol::control_plane_file::ProjectBackupListRequestV1,
+) -> Result<Value, native_adapter_error::NativeAdapterError> {
+    let request = serde_json::to_value(request).map_err(|_| "project_file_request_invalid")?;
+    tauri::async_runtime::spawn_blocking(move || project_file_control_plane::execute_local(&app, &window, "syndocal.query.project.backup.list.v1", request))
         .await.map_err(|_| "project_file_executor_failed")?
 }
 
@@ -132823,6 +132833,7 @@ fn main() {
             create_project_backup_control_plane_v1,
             query_project_backup_authority_v1,
             inspect_project_backup_control_plane_v1,
+            list_project_backups_control_plane_v1,
             query_project_file_status_v1,
             acknowledge_project_file_control_plane_v1,
             get_operator_policy,

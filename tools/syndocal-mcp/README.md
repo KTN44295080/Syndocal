@@ -148,6 +148,19 @@ serialization. These autosaves are preserved; the acknowledged explicit backup
 is removed, baseline bytes/summaries stay exact, and every unrelated addition
 rejects. This is fixture cleanup recognition, not canonical delete acceptance.
 
+`syndocal.query.project.backup.list.v1` is an R0 query with an exact Read grant.
+Its request is `{schema_version:1, limit:1..16, before_id:null|<positive JS-safe ID>}`.
+Pages descend by managed ID; `next_before_id` is the last returned ID when more
+names were observed. Each item uses the same bounded exact-byte reader as backup
+inspection and returns its validated metadata, original SHA and restore-source
+projection. It scans at most 128 directory entries and reads at most 128 MiB per
+page, rejecting invalid managed names (including case aliases) or selected invalid artifacts rather than
+silently omitting them. Unselected artifact contents are not inspected. Missing
+directories yield an empty page without creating anything. Pages are separate
+observations, not a reservation or a consistent snapshot under concurrent writes;
+restore must issue new authority and bind its own expected digest. No path/owner
+override, allocation, retry, publication, delete or retention is performed.
+
 File/backup authority reads preserve a failed native query capture as the
 canonical `QueryError` object: `code`, fixed bounded `message`, `retryable` and
 `resnapshot_required`. Authenticated MCP exposes these under

@@ -1,0 +1,7 @@
+
+running 3 tests
+test project_backup_listing::tests::project_backup_listing_shared_reader_enforces_remaining_budget_and_windows_writer_guard ... ok
+test project_backup_listing::tests::project_backup_listing_missing_directory_pagination_exact_bytes_and_no_allocation ... ok
+test project_backup_listing::tests::project_backup_listing_corrupt_nonregular_unsafe_and_directory_budget_fail_closed ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 2007 filtered out; finished in 0.05s

@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "capturedVia": "Private QA WebView2 backend Page.captureScreenshot; no DOM click or Computer Use",
+  "appSource": "current protected App.tsx",
+  "executableSha256": "2ddfe0bc9d7923930f065ed819f13f792012e9680936a18a4949ad47bf4e0912",
+  "firstBpm": 120,
+  "settledBpm": 80.410576,
+  "header": "80",
+  "footer": "Tapped BPM 80.4",
+  "screenshots": [
+    {
+      "name": "first-tap",
+      "path": "C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-backup-list-tap-native-20261006.json.first-tap.png",
+      "sha256": "fe2e7555d703d3d313bdbece12ee17152c971792cec166e4ad075f3621bfec85"
+    },
+    {
+      "name": "measured",
+      "path": "C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-backup-list-tap-native-20261006.json.measured.png",
+      "sha256": "9f7bd4834ada1906334f1be6ffe85ee86d4eea808286741007cc1068b7e78706"
+    }
+  ],
+  "nonclaims": [
+    "Shared header/App callback in Setup, not the operators physical Control click or external clock ingress"
+  ]
+}

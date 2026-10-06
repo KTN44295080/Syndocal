@@ -1,0 +1,1 @@
+AI1 query/event contract ok; protocol bounds and schemas verified; focused frontend gates 2

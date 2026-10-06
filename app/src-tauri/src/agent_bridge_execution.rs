@@ -48,7 +48,8 @@ pub(crate) fn execute(
                 | protocol::control_plane_file::SAVE_AS_ID | protocol::control_plane_file::TEMPLATE_ID
                 | protocol::control_plane_file::AUTHORITY_ID | protocol::control_plane_file::STATUS_ID
                 | protocol::control_plane_file::ACK_ID | protocol::control_plane_file::BACKUP_ID
-                | protocol::control_plane_file::BACKUP_AUTHORITY_ID | protocol::control_plane_file::BACKUP_INSPECT_ID) {
+                | protocol::control_plane_file::BACKUP_AUTHORITY_ID | protocol::control_plane_file::BACKUP_INSPECT_ID
+                | protocol::control_plane_file::BACKUP_LIST_ID) {
                 let result = super::project_file_control_plane::execute_external(app, window, &dispatch)?;
                 return Ok(json!({"ok": true, "operation_id":operation_id, "result":result}));
             }

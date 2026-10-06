@@ -8,7 +8,7 @@ import {openNativeStdioSession} from './native-stdio-session.mjs';
 // native cleanup. Never enter retention against existing unowned QA backups.
 export async function nativeProjectBackup(backend, options, checks) {
   const ids={create:'syndocal.project.backup.create.v1',authority:'syndocal.query.project.backup.authority.v1',
-    inspect:'syndocal.query.project.backup.inspect.v1',
+    inspect:'syndocal.query.project.backup.inspect.v1', list:'syndocal.query.project.backup.list.v1',
     status:'syndocal.query.project.file.status.v1',ack:'syndocal.project.file.acknowledge.v1'};
   const directory=path.join(process.env.LOCALAPPDATA,options.profileId,'project-backups');
   const baseline=await fs.readdir(directory).catch(error=>{if(error.code==='ENOENT')return [];throw error;});
@@ -67,6 +67,19 @@ export async function nativeProjectBackup(backend, options, checks) {
       await failed(ids.inspect,{schema_version:1,backup_id:1,[field]:'forged'},/request_invalid/);
     }
     checks.push({check:'external-backup-inspection-exact-r0-grant-and-strict-id-only-ingress',passed:true});
+    const listRequest={schema_version:1,limit:16,before_id:null};
+    const listOperation=registry.canonical_operations.find(value=>value.operation_id===ids.list);
+    assert.equal(listOperation.risk,'r0');assert.equal(listOperation.adapter_policy,'local_window_read_only');
+    const deniedList=await send(ids.list,listRequest);assert.equal(deniedList.status,'rejected');assert.equal(deniedList.error,'agent_missing_grant');
+    await grant('read',ids.list);
+    for(const value of [{...listRequest,schema_version:2},{...listRequest,limit:0},{...listRequest,limit:17},
+      {...listRequest,before_id:0},{...listRequest,before_id:Number.MAX_SAFE_INTEGER+1}]){
+      await failed(ids.list,value,/invalid project backup list request/);
+    }
+    for(const field of ['path','destination','owner_id','principal','skip_confirmation']){
+      await failed(ids.list,{...listRequest,[field]:'forged'},/request_invalid/);
+    }
+    checks.push({check:'external-backup-list-exact-r0-grant-and-strict-bounded-id-pagination-ingress',passed:true});
     await failed(ids.authority,{schema_version:2},/backup authority schema/);
     await failed(ids.authority,{schema_version:1,destination:'C:/forged'},/request_invalid/);
     await failed(ids.create,{...request,owner_id:'forged'},/request_invalid/);
@@ -97,8 +110,24 @@ export async function nativeProjectBackup(backend, options, checks) {
     assert.deepEqual(await state(),before);assert.deepEqual(await fs.readFile(saved.target_path),bytes);
     checks.push({check:'external-backup-inspection-same-byte-hash-metadata-restoration-path-and-read-purity',passed:true,
       inspection:inspected,elapsedMs:performance.now()-inspectStarted});
+    const listStarted=performance.now(),listing=await success(ids.list,listRequest);
+    assert.equal(listing.schema_version,1);assert.equal(listing.next_before_id,null);
+    assert.deepEqual(listing.backups.map(row=>row.backup),await backend.invoke('list_project_backups'));
+    for(const row of listing.backups)assert.equal(row.artifact_sha256,digest(await fs.readFile(path.join(directory,`backup-${row.backup.id}.json`))));
+    const pages=[];let beforeId=null;
+    for(let page=0;page<16;page++){
+      const result=await success(ids.list,{schema_version:1,limit:1,before_id:beforeId});
+      assert.ok(result.backups.length<=1);pages.push(...result.backups);
+      if(result.next_before_id===null){beforeId=null;break;}
+      assert.equal(result.next_before_id,result.backups.at(-1).backup.id);beforeId=result.next_before_id;
+    }
+    assert.equal(beforeId,null,'Bounded pages must finish');assert.deepEqual(pages,listing.backups);
+    assert.deepEqual(await state(),before);assert.deepEqual(await fs.readFile(saved.target_path),bytes);
+    checks.push({check:'external-backup-list-descending-pagination-original-digests-and-read-purity',passed:true,
+      itemCount:listing.backups.length,elapsedMs:performance.now()-listStarted});
     const competingWriter=await fs.open(saved.target_path,'r+');
-    try { await failed(ids.inspect,{schema_version:1,backup_id:saved.backup.id},/inspect_open/); }
+    try { await failed(ids.inspect,{schema_version:1,backup_id:saved.backup.id},/inspect_open/);
+      await failed(ids.list,listRequest,/inspect_open/); }
     finally { await competingWriter.close(); }
     assert.deepEqual(await success(ids.inspect,{schema_version:1,backup_id:saved.backup.id}),inspected);
     assert.deepEqual(await fs.readFile(saved.target_path),bytes);
@@ -116,6 +145,13 @@ export async function nativeProjectBackup(backend, options, checks) {
     await success(ids.ack,next);created[1].acknowledged=true;
     checks.push({check:'external-backup-exact-replay-status-protected-delete-ack-reack-and-next-sequence',passed:true});
     const original=await fs.readFile(second.target_path),secondEnvelope=JSON.parse(original);
+    const caseAlias=path.join(directory,`BACKUP-${second.backup.id}.json`);
+    await fs.rename(second.target_path,caseAlias);
+    try {
+      assert.ok((await fs.readdir(directory)).includes(path.basename(caseAlias)),'Native OS must expose the owned case rename');
+      await failed(ids.list,listRequest,/project_backup_list_filename_invalid/);
+      assert.deepEqual(await fs.readFile(caseAlias),original);
+    } finally { await fs.rename(caseAlias,second.target_path); }
     try {
       for(const [name,bytes,pattern] of [
         ['filename-id-mismatch',Buffer.from(JSON.stringify({...secondEnvelope,id:second.backup.id+1})),/does not match filename ID/],
@@ -126,15 +162,19 @@ export async function nativeProjectBackup(backend, options, checks) {
       ]) {
         await fs.writeFile(second.target_path,bytes);
         await failed(ids.inspect,{schema_version:1,backup_id:second.backup.id},pattern);
+        await failed(ids.list,listRequest,pattern);
         assert.deepEqual(await fs.readFile(second.target_path),bytes,name);
       }
       const file=await fs.open(second.target_path,'w');
       try { await file.truncate(128*1024*1024+1); } finally { await file.close(); }
       await failed(ids.inspect,{schema_version:1,backup_id:second.backup.id},/limit is 134217728/);
+      await failed(ids.list,listRequest,/limit is 134217728/);
       assert.equal((await fs.stat(second.target_path)).size,128*1024*1024+1);
     } finally { await fs.writeFile(second.target_path,original); }
     assert.equal((await success(ids.inspect,{schema_version:1,backup_id:second.backup.id})).artifact_sha256,digest(original));
     checks.push({check:'external-backup-inspection-missing-mismatched-future-duplicate-utf8-unsafe-and-oversize-rejection-without-writes',passed:true});
+    assert.equal((await success(ids.list,listRequest)).backups.find(row=>row.backup.id===second.backup.id).artifact_sha256,digest(original));
+    checks.push({check:'external-backup-list-case-alias-writer-corrupt-future-duplicate-utf8-unsafe-and-oversize-fail-closed-without-writes',passed:true});
   } finally {
     try {
       for(const entry of created){if(!entry.acknowledged){await success(ids.ack,entry.request);entry.acknowledged=true;}

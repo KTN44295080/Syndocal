@@ -1,0 +1,8 @@
+{
+  "executable": "C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-native-acceptance-target\\release\\deps\\syndocal-41cd4ce392874b4c.exe",
+  "sha256": "4539500f41c40d7e24af8bccceeeba1ae498934c14baba70a80666bb6bac920a",
+  "applicationOptLevel": 0,
+  "applicationCodegenUnits": 256,
+  "releaseDependencies": true,
+  "optimizedNativeAcceptance": false
+}

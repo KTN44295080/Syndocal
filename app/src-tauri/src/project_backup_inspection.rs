@@ -13,7 +13,7 @@ pub(super) struct ObservedBackup {
 }
 
 impl ObservedBackup {
-    fn inspection(&self) -> ProjectBackupInspectionV1 {
+    pub(super) fn inspection(&self) -> ProjectBackupInspectionV1 {
         ProjectBackupInspectionV1 {
             schema_version: 1,
             backup: ProjectFileBackupSummaryV1 {
@@ -49,6 +49,10 @@ fn inspect_in(
 // Query and restore must hash and decode one identical bounded read. The
 // observation contains the full candidate without cloning its project image.
 pub(super) fn read_in(directory: &Path, backup_id: u64) -> Result<ObservedBackup, String> {
+    read_in_bounded(directory, backup_id, super::project_backup_json::PROJECT_BACKUP_MAX_BYTES)
+}
+
+pub(super) fn read_in_bounded(directory: &Path, backup_id: u64, remaining_bytes: u64) -> Result<ObservedBackup, String> {
     let request = ProjectBackupInspectRequestV1 {
         schema_version: 1,
         backup_id,
@@ -92,7 +96,7 @@ pub(super) fn read_in(directory: &Path, backup_id: u64) -> Result<ObservedBackup
     let bytes = super::project_file_json::read_bounded_project_bytes(
         file,
         metadata.len(),
-        super::project_backup_json::PROJECT_BACKUP_MAX_BYTES,
+        remaining_bytes.min(super::project_backup_json::PROJECT_BACKUP_MAX_BYTES),
         "Project backup inspection",
     )?;
     let sha256 = format!("{:x}", Sha256::digest(&bytes));

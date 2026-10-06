@@ -863,6 +863,11 @@ pub(crate) fn execute_local(
     operation: &str,
     request: Value,
 ) -> Result<Value, NativeAdapterError> {
+    if operation == wire::BACKUP_LIST_ID {
+        return serde_json::to_value(super::project_backup_listing::list(app,
+            serde_json::from_value(request).map_err(|_| "project_file_request_invalid")?,
+        )?).map_err(|_| "project_file_response_invalid".into());
+    }
     if operation == wire::BACKUP_INSPECT_ID {
         return serde_json::to_value(super::project_backup_inspection::inspect(
             app,
@@ -942,6 +947,15 @@ pub(crate) fn execute_external(
         "external:{}:{}",
         dispatch.principal_id, dispatch.principal_incarnation
     );
+    if operation == wire::BACKUP_LIST_ID {
+        let listed = super::project_backup_listing::list(app,
+            serde_json::from_value(ingress.request).map_err(|_| "project_file_request_invalid")?,
+        )?;
+        app.state::<AgentBridge>().authority("main")?.authorize_bridge_request(
+            &dispatch.principal_id, dispatch.principal_incarnation, &dispatch.method, &dispatch.params,
+        )?;
+        return serde_json::to_value(listed).map_err(|_| "project_file_response_invalid".into());
+    }
     if operation == wire::BACKUP_INSPECT_ID {
         let inspected = super::project_backup_inspection::inspect(
             app,
