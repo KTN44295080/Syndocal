@@ -341,6 +341,32 @@ retention, invoke or engine state, and is not a complete realtime/device/venue g
 path without a preview or approval dialog. Existing targets are rejected;
 request identity is retained across restart to prevent automatic replay.
 
+The writer emits format 2: five payloads plus `integrity-manifest.json`, including
+`audit-history.json`. The strict builder/validator rejects retired format 1 and
+future versions; previously saved ZIPs are untouched, and ZIP import is not
+supported. The audit payload contains at most 16 records per source from
+authority, lease, file, replacement, safety and output-control histories.
+Identities, operations, request IDs and event/outcome text are fingerprinted;
+raw result bodies, paths and credentials are excluded. Integrity hashes detect
+corruption, not authenticity. Sources are observed separately and do not provide
+all fields required for complete attempt auditing.
+
+The result contains `format_version:2` and `audit` source headers. To obtain
+an older page, use a fresh request UUID and new destination, set `auditBefore`
+to a source's `next_before_sequence`, and copy `audit.process_incarnation` into
+`expectedProcessIncarnation`. Example optional arguments:
+
+```json
+{"auditBefore":{"agent_authority":27},"expectedProcessIncarnation":7}
+```
+
+Sequences are exclusive upper bounds. Omitted sources export their latest page.
+Stale processes, future cursors, expired retained ranges and busy/unavailable
+sources fail before publication. Never replay an uncertain export as a fresh
+mutation; reconcile its original request and destination first. Exact File
+authorization is checked again after capture and immediately before publication.
+This is not an atomic revocation/filesystem transaction.
+
 ## Validate
 
 For the normal Windows executable without a debugger, run:

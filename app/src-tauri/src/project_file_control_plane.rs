@@ -73,6 +73,31 @@ struct Admission {
     reserved: usize,
 }
 impl ProjectFileControlPlaneState {
+    pub(crate) fn diagnostic_audit(&self,before:Option<u64>)->Result<super::diagnostic_audit::Page,String> {
+        use super::diagnostic_audit::{page,Row,identity_hash};
+        let inner=super::diagnostic_audit_capture::read_lock(&self.admission,"file")?;
+        page("project_file",inner.audit.iter().enumerate(),before,|r|r.0 as u64+1,|(index,r),_|{
+            let phase=match r["stage"].as_str(){Some("admitted")=>"admitted",Some("terminal")=>"terminal",_=>"invalid"};
+            let mut row=Row::new(index as u64+1,phase,r["caller"].as_str(),r["operation_id"].as_str(),r["request_id"].as_u64());
+            row.shape_sha256=r["shape"].as_str().map(str::to_string);
+            if phase=="terminal" {
+                if let Some(result)=r["result"].get("Ok") {
+                    // A successful status read may describe a failed or unknown
+                    // publication. Project only its fixed phase, never its body.
+                    row.succeeded=match result["phase"].as_str() {
+                        Some("succeeded"|"acknowledged")=>Some(true),
+                        Some("cancelled"|"abandoned"|"failed")=>Some(false),
+                        Some("reserved"|"selecting"|"selected"|"prepared"|"indeterminate"|"missing")=>None,
+                        _=>{row.phase="invalid";None},
+                    };
+                    row.outcome_sha256=result["phase"].as_str().map(identity_hash);
+                }else if r["result"].get("Err").is_some(){
+                    row.succeeded=Some(false);row.outcome_sha256=Some(identity_hash("native_error"));
+                }else{row.phase="invalid";}
+            }
+            row
+        })
+    }
     pub(super) fn admitted<T: serde::Serialize>(
         &self,
         caller: &str,
@@ -999,6 +1024,35 @@ pub(crate) fn execute_external(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn diagnostic_audit_file_projection_preserves_original_private_results() {
+        let state=ProjectFileControlPlaneState::default();
+        let private=serde_json::json!({"phase":"succeeded","path":"PRIVATE_PATH","project":{"secret":"PRIVATE_CREDENTIAL"}});
+        state.admitted("PRIVATE_CALLER","PRIVATE_OPERATION",1,&request(),||Ok(private.clone())).unwrap();
+        let failed:Result<Value,String>=state.admitted("PRIVATE_CALLER","PRIVATE_OPERATION",2,&request(),||Err("PRIVATE_ERROR_PATH".into()));
+        assert!(failed.is_err());
+        let original=state.admission.lock().unwrap().audit.clone();
+        let first=serde_json::to_value(state.diagnostic_audit(None).unwrap()).unwrap();
+        assert_eq!(first,serde_json::to_value(state.diagnostic_audit(None).unwrap()).unwrap());
+        assert_eq!(first["retained_count"],4);assert_eq!(first["records"][1]["succeeded"],true);
+        assert_eq!(first["records"][3]["succeeded"],false);
+        assert!(!first.to_string().contains("PRIVATE"));
+        assert_eq!(state.admission.lock().unwrap().audit,original);
+        assert_eq!(original[1]["result"]["Ok"],private);
+    }
+    #[test]
+    fn diagnostic_audit_file_status_success_does_not_claim_unknown_or_failed_publication() {
+        for (phase,succeeded) in [("succeeded",Some(true)),("acknowledged",Some(true)),
+            ("cancelled",Some(false)),("abandoned",Some(false)),("failed",Some(false)),
+            ("reserved",None),("selecting",None),("selected",None),("prepared",None),("indeterminate",None),("missing",None)] {
+            let state=ProjectFileControlPlaneState::default();
+            state.admitted("PRIVATE_CALLER","PRIVATE_OPERATION",1,&request(),||Ok(serde_json::json!({"phase":phase,"error":"PRIVATE_ERROR"}))).unwrap();
+            let page=serde_json::to_value(state.diagnostic_audit(None).unwrap()).unwrap();
+            assert_eq!(page["records"][1]["succeeded"],serde_json::to_value(succeeded).unwrap(),"{phase}");
+            assert_eq!(page["records"][1]["outcome_sha256"],super::super::diagnostic_audit::identity_hash(phase));
+            assert!(!page.to_string().contains("PRIVATE"));
+        }
+    }
     fn request() -> ProjectFileRequestV1 {
         ProjectFileRequestV1 {
             schema_version: 1,

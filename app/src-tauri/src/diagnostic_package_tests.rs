@@ -9,7 +9,7 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 fn source_entries() -> Vec<(&'static str, Vec<u8>)> {
     [
         json!({
-            "version": 1,
+            "version": 2,
             "app": "Syndocal",
             "app_version": env!("CARGO_PKG_VERSION"),
             "captured_at_unix_ms": 1_700_000_000_000_u64,
@@ -87,6 +87,7 @@ fn source_entries() -> Vec<(&'static str, Vec<u8>)> {
             ],
             "environment": {"PATH": "PRIVATE_ENV_PATH"}
         }),
+        crate::diagnostic_audit::fixture_history(),
     ]
     .into_iter()
     .enumerate()
@@ -141,6 +142,37 @@ fn next_hostile_byte(state: &mut u64) -> u8 {
 }
 
 #[test]
+fn diagnostic_package_format_two_rejects_retired_or_missing_audit_format() {
+    let original=source_entries();
+    for version in [1,3] {let mut entries=original.clone();change_json(&mut entries,0,|v|v["version"]=json!(version));
+        assert!(build_diagnostic_package(&entries).is_err());}
+    assert!(build_diagnostic_package(&original[..4]).is_err());
+    assert_eq!(source_entries(),original,"Reader rejection must not alter source data");
+}
+
+#[test]
+fn diagnostic_package_audit_pages_redact_private_fields_and_reject_contradictions() {
+    use crate::diagnostic_audit::{history,page,Row,SOURCES};
+    let ids:Vec<u64>=(1..=41).collect();
+    let history=history(7,SOURCES.iter().map(|source|page(source,ids.iter(),None,|id|**id,
+        |_,id|Row::new(id,"terminal",Some("PRIVATE_CALLER"),Some("PRIVATE_OPERATION"),Some(id))).unwrap()).collect());
+    let mut entries=source_entries();entries[4].1=serde_json::to_vec(&history).unwrap();
+    change_json(&mut entries,4,|v|{v["PRIVATE_PATH"]=json!("C:/PRIVATE_SHOW");v["pages"][0]["records"][0]["result"]=json!({"token":"PRIVATE_TOKEN"});});
+    let bytes=build_diagnostic_package(&entries).unwrap();validate_diagnostic_package(&bytes).unwrap();
+    assert!(!String::from_utf8_lossy(&bytes).contains("PRIVATE"));
+    assert_eq!(json_entry(&unpack(&bytes),"audit-history.json")["pages"][0]["records"].as_array().unwrap().len(),16);
+    for change in [
+        ("/process_incarnation",json!(0)),("/pages/0/retained_count",json!(1)),
+        ("/pages/0/has_expired_history",json!(true)),("/pages/0/next_before_sequence",json!(27)),
+        ("/pages/0/next_before_sequence",json!(null)),
+        ("/pages/0/records/0/sequence",json!(9_007_199_254_740_992_u64)),
+        ("/pages/0/records/0/actor_sha256",json!("PRIVATE_TOKEN")),
+        ("/pages/0/records/0/generation_after",json!(9_007_199_254_740_992_u64)),
+    ] {let mut bad=entries.clone();change_json(&mut bad,4,|v|*v.pointer_mut(change.0).unwrap()=change.1);
+        assert!(build_diagnostic_package(&bad).is_err(),"{}",change.0);}
+}
+
+#[test]
 fn diagnostic_package_preserves_known_counters_and_validates_integrity() {
     let bytes = build_diagnostic_package(&source_entries()).unwrap();
     validate_diagnostic_package(&bytes).unwrap();
@@ -179,10 +211,10 @@ fn diagnostic_package_preserves_known_counters_and_validates_integrity() {
         ]})
     );
     let integrity = json_entry(&files, INTEGRITY_NAME);
-    assert_eq!(integrity["schema_version"], 1);
-    assert_eq!(integrity["redaction_schema_version"], 1);
+    assert_eq!(integrity["schema_version"], 2);
+    assert_eq!(integrity["redaction_schema_version"], 2);
     assert_eq!(integrity["format"], "syndocal-diagnostic-package");
-    assert_eq!(integrity["entries"].as_array().unwrap().len(), 4);
+    assert_eq!(integrity["entries"].as_array().unwrap().len(), PAYLOAD_NAMES.len());
     for (index, name) in PAYLOAD_NAMES.iter().enumerate() {
         let contents = &files.iter().find(|entry| entry.0 == *name).unwrap().1;
         assert_eq!(integrity["entries"][index]["name"], *name);
@@ -389,7 +421,7 @@ fn diagnostic_package_hostile_archive_corpus_is_bounded_and_panic_free() {
 #[test]
 fn diagnostic_package_rejects_invalid_known_values_and_fixed_identities() {
     for (index, pointer, bad) in [
-        (0, "/version", json!(2)),
+        (0, "/version", json!(3)),
         (0, "/app", json!("PRIVATE_SECRET")),
         (0, "/app_version", json!("1.2.0-PRIVATE_SECRET")),
         (0, "/os", json!("C:\\PRIVATE_SECRET")),
@@ -589,7 +621,7 @@ fn diagnostic_package_rejects_private_fields_even_when_hashes_are_recomputed() {
         json!({"fixtures": 42, "unknown_counter": 123456}),
         json!({"fixtures": "PRIVATE_VALUE_SECRET"}),
     ] {
-        let mut payloads: [Vec<u8>; 4] = std::array::from_fn(|index| files[index].1.clone());
+        let mut payloads: [Vec<u8>; PAYLOAD_NAMES.len()] = std::array::from_fn(|index| files[index].1.clone());
         payloads[1] = serde_json::to_vec(&value).unwrap();
         let integrity = integrity_bytes(&payloads).unwrap();
         // Bypass only the builder's sanitizer, keeping valid hashes and headers.
@@ -693,8 +725,8 @@ fn diagnostic_package_rejects_wrong_manifest_versions_hashes_sizes_and_entry_set
         // manifest, instead of merely failing because a Value map reordered it.
         let mut manifest = IntegrityManifest {
             format: "syndocal-diagnostic-package",
-            schema_version: 1,
-            redaction_schema_version: 1,
+            schema_version: 2,
+            redaction_schema_version: 2,
             entries: PAYLOAD_NAMES
                 .iter()
                 .enumerate()
@@ -707,8 +739,8 @@ fn diagnostic_package_rejects_wrong_manifest_versions_hashes_sizes_and_entry_set
         };
         assert_eq!(serialize_bounded(&manifest).unwrap(), integrity.1);
         match change {
-            0 => manifest.schema_version = 2,
-            1 => manifest.redaction_schema_version = 2,
+            0 => manifest.schema_version = 3,
+            1 => manifest.redaction_schema_version = 3,
             2 => manifest.entries[0].sha256 = "0".repeat(64),
             3 => manifest.entries[0].size_bytes = 0,
             4 => {
@@ -818,7 +850,7 @@ fn diagnostic_package_output_writer_limits_apply_to_json_zip_and_seeks() {
         serialize_bounded(&"x".repeat(MAX_SANITIZED_ENTRY_BYTES)).unwrap_err(),
         DiagnosticPackageError::OutputLimit
     );
-    let payloads: [Vec<u8>; 4] = std::array::from_fn(|_| vec![0; MAX_SANITIZED_ENTRY_BYTES]);
+    let payloads: [Vec<u8>; PAYLOAD_NAMES.len()] = std::array::from_fn(|_| vec![0; MAX_SANITIZED_ENTRY_BYTES]);
     assert_eq!(
         encode_archive(&payloads, b"{}").unwrap_err(),
         DiagnosticPackageError::OutputLimit
@@ -829,7 +861,7 @@ fn diagnostic_package_output_writer_limits_apply_to_json_zip_and_seeks() {
 fn diagnostic_package_preview_validates_first_and_lists_only_fixed_names_and_sizes() {
     let bytes = build_diagnostic_package(&source_entries()).unwrap();
     let preview = diagnostic_package_preview(&bytes).unwrap();
-    assert!(preview.contains(&format!("5 entries, {} bytes", bytes.len())));
+    assert!(preview.contains(&format!("6 entries, {} bytes", bytes.len())));
     for (name, contents) in unpack(&bytes) {
         assert!(preview.contains(&format!("{name}: {} bytes", contents.len())));
     }

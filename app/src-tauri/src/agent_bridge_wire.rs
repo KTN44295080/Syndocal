@@ -134,11 +134,7 @@ pub(super) enum Command {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Empty {}
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(deny_unknown_fields)]
-pub(super) struct DiagnosticExport {
-    pub destination: String,
-}
+pub(super) type DiagnosticExport = crate::diagnostic_audit::ExportRequest;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Fixture {
@@ -233,9 +229,12 @@ impl Request {
                 .map_err(|_| "invalid_params")?;
         const MAX_SAFE: u64 = 9_007_199_254_740_991;
         match &command {
-            Command::ExportDiagnostics(value) if value.destination.is_empty()
-                || value.destination.len() > 4096 || value.destination.contains('\0') => {
-                return Err("invalid_diagnostic_destination")
+            Command::ExportDiagnostics(value) => {
+                if value.destination.is_empty()||value.destination.len()>4096||value.destination.contains('\0') {
+                    return Err("invalid_diagnostic_destination");
+                }
+                value.audit_before.as_ref().cloned().unwrap_or_default()
+                    .validate_shape(value.expected_process_incarnation)?;
             }
             Command::Get(value) if value.fixture_id == 0 || value.fixture_id > MAX_SAFE => {
                 return Err("invalid_fixture_id")

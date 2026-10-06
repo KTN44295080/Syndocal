@@ -1,0 +1,10 @@
+file:///C:/Users/janua/OneDrive/%E3%83%89%E3%82%AD%E3%83%A5%E3%83%A1%E3%83%B3%E3%83%88/GitHub/Syndocal/tools/syndocal-mcp/native-backend-session.mjs:61
+      const timer = setTimeout(() => { pending.delete(id); reject(new Error('Native backend deadline')); }, 10000);
+                                                                  ^
+
+Error: Native backend deadline
+    at Timeout._onTimeout (file:///C:/Users/janua/OneDrive/%E3%83%89%E3%82%AD%E3%83%A5%E3%83%A1%E3%83%B3%E3%83%88/GitHub/Syndocal/tools/syndocal-mcp/native-backend-session.mjs:61:67)
+    at listOnTimeout (node:internal/timers:585:17)
+    at process.processTimers (node:internal/timers:521:7)
+
+Node.js v22.22.1

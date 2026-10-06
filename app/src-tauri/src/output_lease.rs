@@ -1331,6 +1331,15 @@ impl OutputLeaseRegistry {
     pub(crate) fn audit(&self) -> &VecDeque<OutputLeaseAuditRecord> {
         &self.audit
     }
+    pub(crate) fn diagnostic_audit(&self,before:Option<u64>)->Result<super::diagnostic_audit::Page,String> {
+        use super::diagnostic_audit::{page,Row,hex};
+        page("output_lease",self.audit.iter(),before,|r|r.sequence,|r,id|{
+            let receipt=&r.receipt;
+            let mut row=Row::new(id,"terminal",Some(&receipt.key.principal),Some(&receipt.key.domain),Some(receipt.key.request_id));
+            row.shape_sha256=Some(hex(&receipt.shape_hash.0));row.succeeded=Some(receipt.outcome.is_ok());
+            row.generation_before=receipt.generation_before;row.generation_after=receipt.generation_after;row
+        })
+    }
 
     pub(crate) fn lease_view(
         &self,

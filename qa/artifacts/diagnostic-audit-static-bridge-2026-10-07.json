@@ -1,0 +1,8 @@
+{
+  "command": "node app/scripts/check-agent-bridge.mjs",
+  "chunk_id": "b8ce8b",
+  "wall_time_seconds": 1.3491295,
+  "exit_code": 0,
+  "original_token_count": 26,
+  "output": "agent bridge: PASS (16 groups; real processor/runtime/confirmation modules, no native or device calls)\n"
+}

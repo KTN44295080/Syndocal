@@ -32,7 +32,7 @@ fn package() -> Vec<u8> {
         (
             "manifest.json",
             serde_json::to_vec(&serde_json::json!({
-                "app": "Syndocal", "version": 1,
+                "app": "Syndocal", "version": 2,
                 "app_version": env!("CARGO_PKG_VERSION"),
                 "os": std::env::consts::OS, "arch": std::env::consts::ARCH,
             }))
@@ -41,6 +41,7 @@ fn package() -> Vec<u8> {
         ("project-summary.json", br#"{"fixtures":3}"#.to_vec()),
         ("engine-telemetry.json", br#"{"version":1}"#.to_vec()),
         ("video-runtime.json", br#"{"backends":[]}"#.to_vec()),
+        ("audit-history.json",serde_json::to_vec(&crate::diagnostic_audit::fixture_history()).unwrap()),
     ])
     .unwrap()
 }

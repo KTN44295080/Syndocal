@@ -169,8 +169,15 @@ try {
   assert.equal(requests.at(-1).method, 'diagnostics.export');
   assert.equal(requests.at(-1).requestId, exportArgs.requestId);
   assert.deepEqual(requests.at(-1).params, { destination: exportArgs.destination });
+  const pagedExport={...exportArgs,requestId:randomUUID(),auditBefore:{agent_authority:27,project_file:null},expectedProcessIncarnation:7};
+  assert.equal((await call('syndocal_export_diagnostics',pagedExport)).result.isError,false);
+  assert.deepEqual(requests.at(-1).params,{destination:exportArgs.destination,auditBefore:pagedExport.auditBefore,expectedProcessIncarnation:7});
   for (const invalid of [ { ...exportArgs, destination: 'relative.zip' },
-    { ...exportArgs, destination: `${exportArgs.destination}\0` }, { ...exportArgs, approved: true } ]) {
+    { ...exportArgs, destination: `${exportArgs.destination}\0` }, { ...exportArgs, approved: true },
+    {...exportArgs,auditBefore:{agent_authority:1}}, {...pagedExport,expectedProcessIncarnation:0},
+    {...pagedExport,auditBefore:{agent_authority:9007199254740992}},
+    {...pagedExport,auditBefore:{owner:'forged'}}, {...pagedExport,auditBefore:{agent_authority:0}},
+    {...pagedExport,auditBefore:{agent_authority:1.5}} ]) {
     assert.equal((await call('syndocal_export_diagnostics', invalid)).error.code, -32602);
   }
   checks++;

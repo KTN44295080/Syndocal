@@ -60,6 +60,16 @@ pub(crate) struct ProjectReplacementControlPlaneState {
 }
 
 impl ProjectReplacementControlPlaneState {
+    pub(crate) fn diagnostic_audit(&self,before:Option<u64>)->Result<super::diagnostic_audit::Page,String> {
+        use super::diagnostic_audit::{page,Row};
+        let inner=super::diagnostic_audit_capture::read_lock(&self.admission,"replacement")?;
+        page("project_replacement",inner.audit.iter().enumerate(),before,|r|r.0 as u64+1,|(index,r),_|{
+            let mut row=Row::new(index as u64+1,r.stage,Some(&r.caller),Some(&r.operation_id),Some(r.request_id));
+            row.shape_sha256=Some(r.shape_sha256.clone());
+            row.succeeded=r.response.as_ref().map(|response|matches!(response,Response::Receipt(receipt)
+                if matches!(&receipt.outcome,protocol::control_plane_project::ProjectReplacementOutcomeV1::Applied(_))));row
+        })
+    }
     fn admit(
         &self,
         caller: &str,

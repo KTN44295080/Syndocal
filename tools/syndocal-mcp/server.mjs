@@ -99,6 +99,8 @@ const schema = (properties) => ({ type: 'object', properties, required: Object.k
 const number = { type: 'number' };
 const identifier = { type: 'integer', minimum: 1, maximum: Number.MAX_SAFE_INTEGER };
 const uuid = { type: 'string', format: 'uuid', pattern: UUID.source };
+const AUDIT_SOURCES = ['agent_authority','output_lease','project_file','project_replacement','safety','output_control'];
+const auditBefore = { type:'object',properties:Object.fromEntries(AUDIT_SOURCES.map(name=>[name,{anyOf:[identifier,{type:'null'}]}])),required:[],additionalProperties:false };
 const position = schema({ x: number, y: number, z: number });
 const rotation = schema({ pitch: number, yaw: number, roll: number });
 const expectedProject = schema({ project_epoch: { type: 'integer', minimum: 0, maximum: Number.MAX_SAFE_INTEGER }, project_revision: { type: 'integer', minimum: 0, maximum: Number.MAX_SAFE_INTEGER }, checkpoint_hash: { type: 'string', minLength: 64, maxLength: 64, pattern: '^[0-9a-f]{64}$' } });
@@ -111,7 +113,7 @@ export const toolDefinitions = [
   { name: 'syndocal_get_runtime_status', description: 'Read bounded project runtime diagnostics, timeline state, video outputs, and a separate output-ownership observation from the selected running Syndocal instance. This never changes output state.', inputSchema: schema({}), annotations: { readOnlyHint: true } },
   { name: 'syndocal_get_control_plane_capabilities', description: 'Read the backend-owned canonical operation registry as a bounded capability inventory. It reports which operations have an explicit local-window adapter; FailClosed entries are discovery-only and cannot be invoked through MCP.', inputSchema: schema({}), annotations: { readOnlyHint: true } },
   { name: 'syndocal_get_recording_status', description: 'Read bounded video recording status from the selected running Syndocal instance. This never starts, stops, finalizes, or replaces a recording.', inputSchema: schema({}), annotations: { readOnlyHint: true } },
-  { name: 'syndocal_export_diagnostics', description: 'Write one sanitized diagnostic ZIP to a new absolute destination path using an exact File grant. No individual human approval is required. Existing files are never replaced. Supply a fresh requestId; query its status after an unknown result.', inputSchema: schema({ requestId: uuid, destination: { type: 'string', minLength: 1, maxLength: 4096 } }), annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false } },
+  { name: 'syndocal_export_diagnostics', description: 'Write one sanitized format-2 diagnostic ZIP with redacted audit pages to a new absolute destination using an exact File grant. Follow each source next_before_sequence with auditBefore and expectedProcessIncarnation; process changes or expired retention reject. No individual human approval. Existing files are never replaced. Use a fresh requestId for a new export; query status after an unknown result.', inputSchema: {...schema({ requestId: uuid, destination: { type: 'string', minLength: 1, maxLength: 4096 }, auditBefore:{anyOf:[auditBefore,{type:'null'}]},expectedProcessIncarnation:{anyOf:[identifier,{type:'null'}]} }),required:['requestId','destination']}, annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false } },
   { name: 'syndocal_execute_control_plane', description: 'Execute one of the 65 reviewed canonical backend operations through a static typed Tauri adapter. operationId must come from the capability registry and request must be that operation’s exact typed object. Unreviewed or FailClosed inventory entries are rejected. Supply a fresh requestId; if pending or unknown, query its status before any retry.', inputSchema: schema({ requestId: uuid, operationId: { type: 'string', minLength: 1, maxLength: 512 }, request: { type: 'object', additionalProperties: true } }), annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false } },
 ];
 
@@ -120,11 +122,14 @@ const projectFence = (value) => exact(value, ['project_epoch', 'project_revision
   && typeof value.checkpoint_hash === 'string' && /^[0-9a-f]{64}$/.test(value.checkpoint_hash);
 
 function validateArguments(name, args) {
-  if (name === 'syndocal_export_diagnostics') return exact(args, ['requestId', 'destination'])
+  if (name === 'syndocal_export_diagnostics') return exact(args, ['requestId', 'destination','auditBefore','expectedProcessIncarnation'],['requestId','destination'])
     && typeof args.requestId === 'string' && UUID.test(args.requestId)
     && typeof args.destination === 'string' && args.destination.length > 0
     && args.destination.length <= 4096 && !args.destination.includes('\0')
-    && path.isAbsolute(args.destination);
+    && path.isAbsolute(args.destination)
+    && (args.expectedProcessIncarnation==null||(integer(args.expectedProcessIncarnation)&&args.expectedProcessIncarnation>0))
+    && (args.auditBefore==null||(exact(args.auditBefore,AUDIT_SOURCES,[])&&Object.values(args.auditBefore).every(v=>v===null||(integer(v)&&v>0))))
+    && (args.auditBefore==null||!Object.values(args.auditBefore).some(v=>v!==null)||(integer(args.expectedProcessIncarnation)&&args.expectedProcessIncarnation>0));
   if (name === 'syndocal_list_fixtures') return exact(args, []);
   if (name === 'syndocal_get_runtime_status') return exact(args, []);
   if (name === 'syndocal_get_control_plane_capabilities') return exact(args, []);

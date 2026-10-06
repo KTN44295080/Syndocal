@@ -5,6 +5,24 @@ fn id(value: usize) -> String {
     format!("00000000-0000-4000-8000-{value:012x}")
 }
 
+#[test]
+fn diagnostic_audit_wire_preserves_legacy_intent_and_admits_strict_process_bound_pages() {
+    let parse=|params|Request {token:"token".into(),request_id:id(1),method:"diagnostics.export".into(),params,auth:None}.command();
+    let legacy=serde_json::json!({"destination":"C:/diagnostics/new.zip"});
+    assert_eq!(serde_json::to_value(parse(legacy.clone()).unwrap()).unwrap(),
+        serde_json::json!({"method":"diagnostics.export","params":legacy}));
+    let paged=serde_json::json!({"destination":"C:/diagnostics/page.zip","auditBefore":{"agent_authority":27},"expectedProcessIncarnation":7});
+    assert_eq!(serde_json::to_value(parse(paged.clone()).unwrap()).unwrap(),
+        serde_json::json!({"method":"diagnostics.export","params":paged}));
+    for (key,value) in [("/auditBefore/agent_authority",serde_json::json!(0)),
+        ("/auditBefore/agent_authority",serde_json::json!(9_007_199_254_740_992_u64)),
+        ("/auditBefore/agent_authority",serde_json::json!(1.5)),("/expectedProcessIncarnation",serde_json::json!(null))] {
+        let mut bad=paged.clone();*bad.pointer_mut(key).unwrap()=value;assert!(parse(bad).is_err(),"{key}");
+    }
+    let mut bad=paged.clone();bad["auditBefore"]["owner"]=serde_json::json!("forged");assert!(parse(bad).is_err());
+    let mut bad=paged.clone();bad["approved"]=serde_json::json!(true);assert!(parse(bad).is_err());
+}
+
 fn next_ingress_byte(state: &mut u64) -> u8 {
     *state ^= *state << 7;
     *state ^= *state >> 9;

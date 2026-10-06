@@ -2,8 +2,9 @@
 //! process, device, clock, environment lookup, or publication in this module.
 //!
 //! Integration: register `mod diagnostic_package;` in main.rs, pass the existing
-//! four `(name, Vec<u8>)` JSON entries to `build_diagnostic_package`, and publish
-//! the returned bytes only after the operator has previewed the included data.
+//! five `(name, Vec<u8>)` JSON entries to `build_diagnostic_package`, and publish
+//! the returned bytes through the authorized caller's publication workflow.
+//! Local UI uses preview/confirmation; external MCP requires an exact File grant.
 //! Generate before creating/truncating a destination; use a separately reviewed
 //! atomic publication path. Do not pass a crash directory or append raw logs.
 //!
@@ -15,7 +16,7 @@
 //! different app version requires that version's validator. No arbitrary version
 //! suffix, backend label, error detail, endpoint, path, or credential is retained.
 //!
-//! The format is deliberately a canonical, five-file STORED ZIP, with fixed
+//! Format 2 is a canonical, six-file STORED ZIP, with fixed
 //! order, timestamp, permissions, and no comments/extra metadata. The validator
 //! accepts this format, not arbitrary repackaged ZIPs. It bounds and reads local
 //! records itself, then requires a byte-identical ZIP reconstructed with `zip`.
@@ -46,18 +47,20 @@ const MAX_JSON_CONTAINER_ITEMS: usize = 1024;
 const MAX_JSON_STRING_BYTES: usize = 4096;
 const MAX_SANITIZED_ENTRY_BYTES: usize = 64 * 1024;
 const MAX_TOTAL_SANITIZED_BYTES: usize = 128 * 1024;
-const PAYLOAD_NAMES: [&str; 4] = [
+const PAYLOAD_NAMES: [&str; 5] = [
     "manifest.json",
     "project-summary.json",
     "engine-telemetry.json",
     "video-runtime.json",
+    "audit-history.json",
 ];
 const INTEGRITY_NAME: &str = "integrity-manifest.json";
-const ZIP_NAMES: [&str; 5] = [
+const ZIP_NAMES: [&str; 6] = [
     PAYLOAD_NAMES[0],
     PAYLOAD_NAMES[1],
     PAYLOAD_NAMES[2],
     PAYLOAD_NAMES[3],
+    PAYLOAD_NAMES[4],
     INTEGRITY_NAME,
 ];
 
@@ -80,7 +83,7 @@ impl fmt::Display for DiagnosticPackageError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
             Self::EntryCount => {
-                "Diagnostic package requires exactly the four supported JSON entries."
+                "Diagnostic package format 2 requires exactly the five supported JSON entries."
             }
             Self::EntryName => "Diagnostic package contains an unsupported or unsafe entry name.",
             Self::DuplicateEntry => {
@@ -109,14 +112,14 @@ impl std::error::Error for DiagnosticPackageError {}
 
 type Result<T> = std::result::Result<T, DiagnosticPackageError>;
 
-/// Accept the four existing JSON entries, in any input order. Reject unknown,
+/// Accept the five JSON entries, in any input order. Reject unknown,
 /// duplicate, missing, oversize, or structurally invalid inputs. Output is already
 /// sanitized and validated; caller owns preview and publication of these bytes.
 pub(crate) fn build_diagnostic_package(entries: &[(&str, Vec<u8>)]) -> Result<Vec<u8>> {
     if entries.len() != PAYLOAD_NAMES.len() {
         return Err(DiagnosticPackageError::EntryCount);
     }
-    let mut seen = [false; 4];
+    let mut seen = [false; PAYLOAD_NAMES.len()];
     let mut total = 0_usize;
     // Complete the cheap name/size checks before parsing any caller JSON.
     for (name, contents) in entries {
@@ -132,7 +135,7 @@ pub(crate) fn build_diagnostic_package(entries: &[(&str, Vec<u8>)]) -> Result<Ve
             return Err(DiagnosticPackageError::InputLimit);
         }
     }
-    let mut payloads: [Vec<u8>; 4] = std::array::from_fn(|_| Vec::new());
+    let mut payloads: [Vec<u8>; PAYLOAD_NAMES.len()] = std::array::from_fn(|_| Vec::new());
     for (name, contents) in entries {
         let index = payload_index(name.as_bytes())?;
         payloads[index] = sanitize_payload(index, contents)?;
@@ -148,7 +151,7 @@ pub(crate) fn build_diagnostic_package(entries: &[(&str, Vec<u8>)]) -> Result<Ve
 /// or authenticity check and deliberately rejects ZIPs changed by repackaging.
 pub(crate) fn validate_diagnostic_package(bytes: &[u8]) -> Result<()> {
     let records = bounded_local_records(bytes)?;
-    let mut payloads: [Vec<u8>; 4] = std::array::from_fn(|_| Vec::new());
+    let mut payloads: [Vec<u8>; PAYLOAD_NAMES.len()] = std::array::from_fn(|_| Vec::new());
     for index in 0..PAYLOAD_NAMES.len() {
         let sanitized = sanitize_payload(index, records[index])?;
         if sanitized != records[index] {
@@ -159,7 +162,7 @@ pub(crate) fn validate_diagnostic_package(bytes: &[u8]) -> Result<()> {
         payloads[index] = sanitized;
     }
     let integrity = integrity_bytes(&payloads)?;
-    if integrity != records[4] {
+    if integrity != records[PAYLOAD_NAMES.len()] {
         return Err(DiagnosticPackageError::IntegrityMismatch);
     }
     if encode_archive(&payloads, &integrity)? != bytes {
@@ -175,7 +178,7 @@ pub(crate) fn diagnostic_package_preview(bytes: &[u8]) -> Result<String> {
     let records = bounded_local_records(bytes)?;
     let mut preview = format!(
         "Syndocal diagnostic package: {} entries, {} bytes.\n\
-         Includes counters, clock timing, fixed build identity and backend states.\n\
+         Includes counters, clock timing, fixed build identity, backend states and bounded redacted audit pages.\n\
          Excludes project/media files, paths, credentials, labels and raw crash logs.\n",
         ZIP_NAMES.len(),
         bytes.len(),
@@ -201,6 +204,8 @@ enum Kind {
     NonnegativeNumber,
     Bool,
     NullableUnsigned,
+    NullableBool,
+    NullableSha256,
     FixedNumber(u64),
     FixedStrings(&'static [&'static str]),
     Object(&'static [Field]),
@@ -236,7 +241,7 @@ const fn required(name: &'static str, kind: Kind) -> Field {
 // These tables are the redaction schema. Never replace them with a traversal
 // that copies input keys, "looks numeric", or redacts strings by substring.
 const MANIFEST_FIELDS: &[Field] = &[
-    required("version", Kind::FixedNumber(1)),
+    required("version", Kind::FixedNumber(2)),
     required("app", Kind::FixedStrings(&["Syndocal"])),
     required(
         "app_version",
@@ -458,16 +463,41 @@ const VIDEO_FIELDS: &[Field] = &[required(
     },
 )];
 
+const AUDIT_ROW_FIELDS: &[Field] = &[
+    required("sequence",Kind::Unsigned),
+    required("phase",Kind::FixedStrings(&["admitted","terminal","event"])),
+    required("actor_sha256",Kind::NullableSha256),required("operation_sha256",Kind::NullableSha256),
+    required("request_sha256",Kind::NullableSha256),required("shape_sha256",Kind::NullableSha256),
+    required("argument_sha256",Kind::NullableSha256),required("event_sha256",Kind::NullableSha256),
+    required("outcome_sha256",Kind::NullableSha256),required("succeeded",Kind::NullableBool),
+    required("generation_before",Kind::NullableUnsigned),required("generation_after",Kind::NullableUnsigned),
+];
+const AUDIT_PAGE_FIELDS: &[Field] = &[
+    required("source",Kind::FixedStrings(&super::diagnostic_audit::SOURCES)),
+    required("retained_count",Kind::Unsigned),required("retained_first_sequence",Kind::NullableUnsigned),
+    required("retained_last_sequence",Kind::NullableUnsigned),required("selected_before_sequence",Kind::NullableUnsigned),
+    required("has_expired_history",Kind::Bool),required("next_before_sequence",Kind::NullableUnsigned),
+    required("records",Kind::Objects {fields:AUDIT_ROW_FIELDS,max_items:super::diagnostic_audit::PAGE_SIZE,unique_key:Some("sequence")}),
+];
+const AUDIT_FIELDS: &[Field] = &[
+    required("schema_version",Kind::FixedNumber(1)),required("process_incarnation",Kind::Unsigned),
+    required("independent_source_observations",Kind::Bool),required("full_attempt_fields_available",Kind::Bool),
+    required("pages",Kind::Objects {fields:AUDIT_PAGE_FIELDS,max_items:6,unique_key:Some("source")}),
+];
+
 fn sanitize_payload(index: usize, contents: &[u8]) -> Result<Vec<u8>> {
     let schema = match index {
         0 => MANIFEST_FIELDS,
         1 => PROJECT_FIELDS,
         2 => ENGINE_FIELDS,
         3 => VIDEO_FIELDS,
+        4 => AUDIT_FIELDS,
         _ => return Err(DiagnosticPackageError::EntryName),
     };
     let value = parse_bounded_json(contents)?;
-    serialize_bounded(&project_object(&value, schema)?)
+    let projected=project_object(&value,schema)?;
+    if index==4&&!super::diagnostic_audit::validate_history(&projected) {return Err(DiagnosticPackageError::InvalidField);}
+    serialize_bounded(&projected)
 }
 
 fn project_object(value: &Value, schema: &[Field]) -> Result<Value> {
@@ -498,6 +528,11 @@ fn project_object(value: &Value, schema: &[Field]) -> Result<Value> {
             Kind::Bool => value.as_bool().map(Value::Bool),
             Kind::NullableUnsigned if value.is_null() => Some(Value::Null),
             Kind::NullableUnsigned => value.as_u64().map(Value::from),
+            Kind::NullableBool if value.is_null()=>Some(Value::Null),
+            Kind::NullableBool=>value.as_bool().map(Value::Bool),
+            Kind::NullableSha256 if value.is_null()=>Some(Value::Null),
+            Kind::NullableSha256=>value.as_str().filter(|hash|hash.len()==64&&hash.bytes().all(|b|b.is_ascii_digit()||(b'a'..=b'f').contains(&b)))
+                .map(|hash|Value::String(hash.to_string())),
             Kind::FixedNumber(expected) => {
                 (value.as_u64() == Some(expected)).then_some(Value::from(expected))
             }
@@ -668,7 +703,7 @@ struct IntegrityEntry {
     sha256: String,
 }
 
-fn integrity_bytes(payloads: &[Vec<u8>; 4]) -> Result<Vec<u8>> {
+fn integrity_bytes(payloads: &[Vec<u8>; PAYLOAD_NAMES.len()]) -> Result<Vec<u8>> {
     let entries = PAYLOAD_NAMES
         .iter()
         .zip(payloads)
@@ -680,8 +715,8 @@ fn integrity_bytes(payloads: &[Vec<u8>; 4]) -> Result<Vec<u8>> {
         .collect();
     serialize_bounded(&IntegrityManifest {
         format: "syndocal-diagnostic-package",
-        schema_version: 1,
-        redaction_schema_version: 1,
+        schema_version: 2,
+        redaction_schema_version: 2,
         entries,
     })
 }
@@ -700,12 +735,13 @@ pub(crate) fn diagnostic_json_bytes(value: &impl Serialize) -> Result<Vec<u8>> {
     serialize_bounded(value)
 }
 
-fn encode_archive(payloads: &[Vec<u8>; 4], integrity: &[u8]) -> Result<Vec<u8>> {
-    let contents: [&[u8]; 5] = [
+fn encode_archive(payloads: &[Vec<u8>; PAYLOAD_NAMES.len()], integrity: &[u8]) -> Result<Vec<u8>> {
+    let contents: [&[u8]; ZIP_NAMES.len()] = [
         &payloads[0],
         &payloads[1],
         &payloads[2],
         &payloads[3],
+        &payloads[4],
         integrity,
     ];
     let mut total = 0_usize;
@@ -783,12 +819,12 @@ impl Seek for LimitedCursor {
     }
 }
 
-fn bounded_local_records(bytes: &[u8]) -> Result<[&[u8]; 5]> {
+fn bounded_local_records(bytes: &[u8]) -> Result<[&[u8]; ZIP_NAMES.len()]> {
     if bytes.len() > MAX_ARCHIVE_BYTES {
         return Err(DiagnosticPackageError::OutputLimit);
     }
-    let mut records: [&[u8]; 5] = [&[]; 5];
-    let mut seen = [false; 5];
+    let mut records: [&[u8]; ZIP_NAMES.len()] = [&[]; ZIP_NAMES.len()];
+    let mut seen = [false; ZIP_NAMES.len()];
     let mut offset = 0_usize;
     let mut total = 0_usize;
     for _ in 0..ZIP_NAMES.len() {

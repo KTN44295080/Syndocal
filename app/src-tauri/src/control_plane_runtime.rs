@@ -3274,6 +3274,25 @@ impl Default for RuntimeControlPlaneState {
     }
 }
 
+impl RuntimeControlPlaneState {
+    pub(crate) fn diagnostic_audit(&self,safety_before:Option<u64>,output_before:Option<u64>)->Result<Vec<super::diagnostic_audit::Page>,String> {
+        use super::diagnostic_audit::{page,Row};
+        let safety={let inner=super::diagnostic_audit_capture::read_lock(&self.safety_blackout,"safety")?;
+            page("safety",inner.audit.iter(),safety_before,|r|r.sequence,|r,id|{
+                let actor=format!("{}:{}:{}",r.principal,r.window_label,r.owner_incarnation);
+                let mut row=Row::new(id,"admitted",Some(&actor),Some(&r.operation_id),Some(r.request_id));
+                row.shape_sha256=Some(r.shape_sha256.clone());row
+            })?};
+        let output={let inner=super::diagnostic_audit_capture::read_lock(&self.output_control,"output")?;
+            page("output_control",inner.audit.iter(),output_before,|r|r.sequence,|r,id|{
+                let actor=format!("{}:{}:{}",r.principal,r.window_label,r.owner_incarnation);
+                let mut row=Row::new(id,"admitted",Some(&actor),Some(&r.operation_id),Some(r.request_id));
+                row.shape_sha256=Some(r.shape_sha256.clone());row.argument_sha256=Some(r.argument_fingerprint.clone());row
+            })?};
+        Ok(vec![safety,output])
+    }
+}
+
 enum LaneReservation {
     Terminal(RuntimeCommandResponseV1),
     Rejected(RuntimeCommandErrorCodeV1),

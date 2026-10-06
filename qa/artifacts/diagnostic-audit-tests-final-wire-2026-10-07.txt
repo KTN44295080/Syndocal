@@ -1,0 +1,84 @@
+   Compiling syndocal v1.2.0-alpha.69 (C:\Users\janua\OneDrive\ドキュメント\GitHub\Syndocal\app\src-tauri)
+    Finished `release` profile [optimized] target(s) in 2m 58s
+     Running unittests src\main.rs (C:\Users\janua\AppData\Local\Temp\syndocal-native-acceptance-target\release\deps\syndocal-41cd4ce392874b4c.exe)
+
+running 66 tests
+test agent_bridge::tests::diagnostic_audit_wire_preserves_legacy_intent_and_admits_strict_process_bound_pages ... ok
+test agent_bridge_execution::tests::diagnostic_capture_revocation_blocks_publication_without_replaying_capture ... ok
+test audio_output_router::tests::concrete_normal_recovery_error_keeps_its_partial_resource_and_exact_diagnostic ...
+thread 'audio_output_router::tests::concrete_normal_recovery_error_keeps_its_partial_resource_and_exact_diagnostic' (158144) panicked at app\src-tauri\src\audio_output_router_tests.rs:967:42:
+primary normal constructor panic
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+ok
+test diagnostic_audit::tests::diagnostic_audit_pages_cover_retained_history_without_duplicates_or_implicit_mutation ... ok
+test diagnostic_audit::tests::diagnostic_audit_process_future_and_expired_cursors_reject_without_fabricated_empty_pages ... ok
+test diagnostic_audit::tests::diagnostic_audit_projection_reads_only_selected_rows_and_never_emits_identity_text ... ok
+test diagnostic_audit_capture::tests::diagnostic_audit_busy_and_poisoned_sources_fail_without_mutating_history ...
+thread 'diagnostic_audit_capture::tests::diagnostic_audit_busy_and_poisoned_sources_fail_without_mutating_history' (141444) panicked at app\src-tauri\src\diagnostic_audit_capture.rs:72:13:
+isolated poison fixture
+ok
+test diagnostic_export_session::tests::diagnostic_session_binds_exact_capture_and_consumes_before_publication ... ok
+test diagnostic_export_session::tests::diagnostic_session_cancel_and_ambiguous_failure_never_replay ... ok
+test diagnostic_export_session::tests::diagnostic_session_capacity_expiry_and_restart_are_fail_closed ... ok
+test diagnostic_export_session::tests::diagnostic_session_rejects_untrusted_window_invalid_archive_and_target ... ok
+test diagnostic_export_workflow::tests::diagnostic_export_cancelled_file_dialog_never_writes_destination ... ok
+test diagnostic_export_workflow::tests::diagnostic_export_invalid_capture_rejects_before_confirmation_or_destination ... ok
+test diagnostic_export_workflow::tests::diagnostic_export_publication_error_is_not_reported_as_success ... ok
+test diagnostic_export_workflow::tests::diagnostic_export_publishes_exact_approved_capture_without_recapture ... ok
+test diagnostic_export_workflow::tests::diagnostic_export_rejected_preview_never_chooses_or_writes_destination ... ok
+test diagnostic_package::tests::diagnostic_package_audit_pages_redact_private_fields_and_reject_contradictions ... ok
+test diagnostic_package::tests::diagnostic_package_bounds_depth_even_in_discarded_fields ... ok
+test diagnostic_package::tests::diagnostic_package_bounds_schema_arrays_and_rejects_duplicate_fixed_ids ... ok
+test diagnostic_package::tests::diagnostic_package_bounds_strings_keys_containers_and_total_nodes ... ok
+test diagnostic_package::tests::diagnostic_package_checks_raw_byte_limits_before_parsing ... ok
+test diagnostic_package::tests::diagnostic_package_detects_payload_tampering_with_valid_zip_crcs ... ok
+test diagnostic_package::tests::diagnostic_package_discards_secrets_in_keys_values_errors_paths_and_numeric_unknowns ... ok
+test diagnostic_package::tests::diagnostic_package_format_two_rejects_retired_or_missing_audit_format ... ok
+test diagnostic_package::tests::diagnostic_package_hostile_archive_corpus_is_bounded_and_panic_free ... diagnostic hostile archive corpus: 512 cases, 511 rejected, 0 panics, max_bytes=163841
+ok
+test diagnostic_package::tests::diagnostic_package_is_deterministic_and_hashes_only_sanitized_data ... ok
+test diagnostic_package::tests::diagnostic_package_output_writer_limits_apply_to_json_zip_and_seeks ... ok
+test diagnostic_package::tests::diagnostic_package_preserves_known_counters_and_validates_integrity ... ok
+test diagnostic_package::tests::diagnostic_package_preview_validates_first_and_lists_only_fixed_names_and_sizes ... ok
+test diagnostic_package::tests::diagnostic_package_rejects_compression_encryption_descriptors_and_oversize_headers ... ok
+test diagnostic_package::tests::diagnostic_package_rejects_duplicate_central_records_hidden_by_generic_readers ... ok
+test diagnostic_package::tests::diagnostic_package_rejects_duplicate_local_zip_names ... ok
+test diagnostic_package::tests::diagnostic_package_rejects_invalid_known_values_and_fixed_identities ... ok
+test diagnostic_package::tests::diagnostic_package_rejects_malformed_json_and_duplicate_decoded_keys ... ok
+test diagnostic_package::tests::diagnostic_package_rejects_missing_extra_and_unsafe_zip_entries ... ok
+test diagnostic_package::tests::diagnostic_package_rejects_private_fields_even_when_hashes_are_recomputed ... ok
+test diagnostic_package::tests::diagnostic_package_rejects_wrong_entry_sets_and_unsafe_names_without_echoing_them ... ok
+test diagnostic_package::tests::diagnostic_package_rejects_wrong_manifest_versions_hashes_sizes_and_entry_sets ... ok
+test diagnostic_package::tests::diagnostic_package_rejects_zip_metadata_trailing_data_crc_and_local_central_mismatch ... ok
+test diagnostic_package::tests::diagnostic_package_requires_identity_fields_but_does_not_invent_missing_counters ... ok
+test diagnostic_package_publication::tests::diagnostic_backend_publication_never_replaces_a_new_or_existing_destination ... ok
+test diagnostic_package_publication::tests::diagnostic_package_publication_failure_preserves_previous_and_staging ... ok
+test diagnostic_package_publication::tests::diagnostic_package_publication_rejects_alias_and_cross_directory_staging ... ok
+test diagnostic_package_publication::tests::diagnostic_package_publication_rejects_ambiguous_target_paths ... ok
+test diagnostic_package_publication::tests::diagnostic_package_publication_replaces_only_after_package_validation ... ok
+test diagnostic_package_publication::tests::diagnostic_package_publication_staging_collision_never_deletes_other_file ... ok
+test input_diagnostic::tests::input_diagnostic_bounds_dynamic_map_keys_and_omits_enum_variants ... ok
+test input_diagnostic::tests::input_diagnostic_escapes_control_characters_before_bounding ... ok
+test input_diagnostic::tests::input_diagnostic_foreign_app_rejection_does_not_echo_input ... ok
+test input_diagnostic::tests::input_diagnostic_preserves_short_unicode_and_exact_byte_limit ... ok
+test input_diagnostic::tests::input_diagnostic_schema_redacts_failing_values_and_locates_fields ... ok
+test input_diagnostic::tests::input_diagnostic_stops_formatting_when_full ... ok
+test output_lease_keepalive_runtime::tests::production_adapter_rejects_oversized_diagnostic_evidence_without_truncation ... ok
+test project_file_control_plane::tests::diagnostic_audit_file_projection_preserves_original_private_results ... ok
+test project_file_control_plane::tests::diagnostic_audit_file_status_success_does_not_claim_unknown_or_failed_publication ... ok
+test recording_artifact::tests::diagnostic_tail_is_bounded_and_keeps_latest_bytes ... ok
+test tests::diagnostic_archive_accepts_production_telemetry_without_private_data ... ok
+test tests::diagnostic_export_uses_the_narrow_engine_telemetry_reader ... ok
+test tests::project_file_keeps_external_video_routes_as_runtime_diagnostics ... ok
+test video_recording::encoder::diagnostics_tests::failed_recording_diagnostics_join_appends_reader_error_after_primary_error ... ok
+test video_recording::encoder::diagnostics_tests::failed_recording_diagnostics_join_appends_reader_panic_after_primary_error ...
+thread '<unnamed>' (89020) panicked at app\src-tauri\src\video_recording_diagnostics_tests.rs:102:9:
+diagnostic reader panic
+ok
+test video_recording::encoder::diagnostics_tests::failed_recording_diagnostics_join_preserves_primary_error_and_diagnostic_tail ... ok
+test video_recording::encoder::diagnostics_tests::failed_recording_diagnostics_join_waits_for_blocked_reader ... ok
+test video_recording::encoder::inherited_stderr_tests::recording_diagnostics_child_process ... ignored, subprocess helper; selected only by the inherited stderr reader test
+test video_recording::encoder::tests::recording_encoder_eof_finishes_without_forcing_and_keeps_diagnostics ... ok
+test video_recording::encoder::tests::recording_encoder_exit_failure_preserves_diagnostic_tail ... ok
+
+test result: ok. 65 passed; 0 failed; 1 ignored; 0 measured; 1973 filtered out; finished in 0.66s

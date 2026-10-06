@@ -48,6 +48,8 @@ use project_file_decode::project_and_control_mappings_from_value;
 mod project_file_decode;
 mod project_publication_missing;
 mod diagnostic_package;
+mod diagnostic_audit;
+mod diagnostic_audit_capture;
 mod diagnostic_package_publication;
 mod diagnostic_export_workflow;
 mod diagnostic_export_session;
@@ -63988,10 +63990,11 @@ fn diagnostic_zip_file_name(path: PathBuf) -> PathBuf {
 
 #[tauri::command]
 fn export_diagnostic_package(
+    app: tauri::AppHandle,
     window: WebviewWindow,
     state: State<'_, AppState>,
 ) -> Result<Option<String>, String> {
-    let (captured_at_unix_ms, bytes) = capture_diagnostic_package(&state)?;
+    let (captured_at_unix_ms, bytes, _) = capture_diagnostic_package(&app,&state,&diagnostic_audit::Before::default(),None)?;
     diagnostic_export_workflow::export_prepared_diagnostic_package(
         bytes,
         |preview| matches!(
@@ -64013,11 +64016,11 @@ fn export_diagnostic_package(
     ).map(|path| path.map(|path| path.to_string_lossy().to_string()))
 }
 
-fn capture_diagnostic_package(state: &AppState) -> Result<(u128, Vec<u8>), String> {
+fn capture_diagnostic_package(app:&tauri::AppHandle,state: &AppState,before:&diagnostic_audit::Before,expected_process:Option<u64>) -> Result<(u128, Vec<u8>, Value), String> {
     let captured_at_unix_ms = current_unix_ms();
     let snapshot = state.engine.engine_telemetry_snapshot();
     let manifest = json!({
-        "version": 1,
+        "version": 2,
         "app": APP_NAME,
         "app_version": env!("CARGO_PKG_VERSION"),
         "captured_at_unix_ms": captured_at_unix_ms,
@@ -64038,6 +64041,8 @@ fn capture_diagnostic_package(state: &AppState) -> Result<(u128, Vec<u8>), Strin
     });
     let telemetry = engine_telemetry_report_from_telemetry_snapshot(&snapshot, captured_at_unix_ms);
     let runtime = video::video_runtime_status();
+    let audits=diagnostic_audit_capture::capture(app,state,before,expected_process)?;
+    let audit_summary=audits.summary();
     let entries = vec![
         (
             "manifest.json",
@@ -64055,21 +64060,23 @@ fn capture_diagnostic_package(state: &AppState) -> Result<(u128, Vec<u8>), Strin
             "video-runtime.json",
             diagnostic_package::diagnostic_json_bytes(&runtime).map_err(|error| error.to_string())?,
         ),
+        ("audit-history.json",diagnostic_package::diagnostic_json_bytes(&audits).map_err(|error|error.to_string())?),
     ];
     let bytes = diagnostic_package::build_diagnostic_package(&entries)
         .map_err(|error| error.to_string())?;
-    Ok((captured_at_unix_ms, bytes))
+    Ok((captured_at_unix_ms, bytes, audit_summary))
 }
 
 #[tauri::command]
 fn prepare_diagnostic_export_v1(
+    app: tauri::AppHandle,
     window: WebviewWindow,
     state: State<'_, AppState>,
     exports: State<'_, diagnostic_export_session::DiagnosticExports>,
     destination: String,
 ) -> Result<diagnostic_export_session::Preview, String> {
     if window.label() != "main" { return Err("Diagnostic export requires the trusted main window".into()); }
-    let (_, bytes) = capture_diagnostic_package(&state)?;
+    let (_, bytes, _) = capture_diagnostic_package(&app,&state,&diagnostic_audit::Before::default(),None)?;
     exports.prepare(window.label(), bytes, PathBuf::from(destination))
 }
 
@@ -95101,7 +95108,7 @@ pub(crate) mod tests {
                 .find("\n}")
                 .map(|offset| start + offset)
                 .expect("missing export route boundary");
-            assert!(source[start..end].contains("capture_diagnostic_package(&state)"));
+            assert!(source[start..end].contains("capture_diagnostic_package(&app,&state,"));
         }
     }
 
@@ -113529,13 +113536,14 @@ pub(crate) mod tests {
         let telemetry = engine_telemetry_report_from_snapshot(&snapshot, 1234);
         let entries = vec![
             ("manifest.json", serde_json::to_vec(&json!({
-                "version": 1, "app": APP_NAME, "app_version": env!("CARGO_PKG_VERSION"),
+                "version": 2, "app": APP_NAME, "app_version": env!("CARGO_PKG_VERSION"),
                 "os": env::consts::OS, "arch": env::consts::ARCH,
                 "current_project_path": "C:/private/show.sdc",
             })).unwrap()),
             ("engine-telemetry.json", diagnostic_package::diagnostic_json_bytes(&telemetry).unwrap()),
             ("video-runtime.json", br#"{"backends":[]}"#.to_vec()),
             ("project-summary.json", br#"{}"#.to_vec()),
+            ("audit-history.json", diagnostic_package::diagnostic_json_bytes(&diagnostic_audit::fixture_history()).unwrap()),
         ];
         let bytes = diagnostic_package::build_diagnostic_package(&entries).unwrap();
         diagnostic_package::validate_diagnostic_package(&bytes).unwrap();

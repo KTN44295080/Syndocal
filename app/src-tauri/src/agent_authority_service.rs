@@ -320,6 +320,15 @@ fn record_audit(
 }
 
 impl AgentAuthorityService {
+    pub(crate) fn diagnostic_audit(&self,before:Option<u64>)->Result<crate::diagnostic_audit::Page,String> {
+        use crate::diagnostic_audit::{page,Row,identity_hash};
+        let inner=crate::diagnostic_audit_capture::read_lock(&self.inner,"authority")?;
+        page("agent_authority",inner.audit.iter(),before,|r|r.sequence,|r,id|{
+            let actor=r.principal_id.as_ref().map(|principal|format!("{principal}:{}",r.principal_incarnation.unwrap_or(0)));
+            let mut row=Row::new(id,"event",actor.as_deref(),r.operation_id.as_deref(),None);
+            row.event_sha256=Some(identity_hash(&r.event));row.outcome_sha256=Some(identity_hash(&r.outcome));row
+        })
+    }
     pub(crate) fn new() -> Self {
         Self {
             inner: Mutex::new(Inner {

@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { openNativeStdioSession } from './native-stdio-session.mjs';
+import { inspectDiagnosticAudit } from './native-diagnostic-exports.mjs';
 
 // QA-only profile, empty project: leases change backend authority, never output.
 export async function nativeExternalHighRisk(backend, options, checks) {
@@ -88,6 +89,10 @@ export async function nativeExternalHighRisk(backend, options, checks) {
     const bytes = await fs.readFile(destination);
     assert.equal(exported.result.sha256, createHash('sha256').update(bytes).digest('hex'));
     assert.equal(exported.result.bytes, bytes.length);
+    assert.equal(exported.result.format_version,2);
+    const audit=inspectDiagnosticAudit(bytes);
+    assert.equal(exported.result.audit.process_incarnation,audit.process_incarnation);
+    assert.deepEqual(exported.result.audit.pages,audit.pages.map(({records,...p})=>({...p,exported_count:records.length})));
     assert.deepEqual(await send('diagnostics.export', { destination }, exportId), exported);
     const conflict = await send('diagnostics.export', { destination: path.join(directory, 'replacement.zip') }, exportId);
     assert.equal(conflict.status, 'rejected');
@@ -142,6 +147,44 @@ export async function nativeExternalHighRisk(backend, options, checks) {
     assert.equal(ownership.video_allowed, false);
     assert.deepEqual((await queryLeases()).statuses, [{ status: 'unavailable' }]);
     checks.push({ check: 'external-r4-no-dialog-owner-transfer-stale-generation-rejected-relinquish-without-output', passed: true, ownership });
+    const auditDestination=path.join(directory,'audit.zip');
+    const auditStarted=performance.now();
+    const auditExport=await send('diagnostics.export',{destination:auditDestination});
+    const exportElapsedMs=performance.now()-auditStarted;
+    assert.equal(auditExport.status,'completed');assert.equal(auditExport.result.ok,true,JSON.stringify(auditExport));
+    const currentAudit=inspectDiagnosticAudit(await fs.readFile(auditDestination));
+    assert.ok(currentAudit.pages.find(p=>p.source==='output_lease').records.length>0);
+    const first=currentAudit.pages[0];assert.ok(first.next_before_sequence>0,'Real authority history must span two pages');
+    const auditBefore={agent_authority:first.next_before_sequence};
+    const expectedProcessIncarnation=currentAudit.process_incarnation;
+    const secondDestination=path.join(directory,'audit-page-2.zip');
+    const second=await send('diagnostics.export',{destination:secondDestination,auditBefore,expectedProcessIncarnation});
+    assert.equal(second.status,'completed');assert.equal(second.result.ok,true,JSON.stringify(second));
+    const secondPage=inspectDiagnosticAudit(await fs.readFile(secondDestination)).pages[0];
+    assert.equal(secondPage.selected_before_sequence,first.next_before_sequence);
+    assert.ok(secondPage.records.length>0);
+    assert.ok(secondPage.records.every(row=>row.sequence<first.records[0].sequence));
+    for(const [name,params] of [
+      ['process',{auditBefore,expectedProcessIncarnation:expectedProcessIncarnation===1?2:expectedProcessIncarnation-1}],
+      ['future',{auditBefore:{agent_authority:Number.MAX_SAFE_INTEGER},expectedProcessIncarnation}],
+    ]){
+      const destination=path.join(directory,`rejected-${name}.zip`);
+      const rejected=await send('diagnostics.export',{destination,...params});
+      assert.equal(rejected.status,'completed');assert.equal(rejected.result.ok,false,JSON.stringify(rejected));
+      // Production agentBridgeTools marks native mutation dispatch as started
+      // before invoking it; its terminal failure code is mutation_not_confirmed.
+      assert.equal(rejected.result.error.code,'mutation_not_confirmed',JSON.stringify(rejected));
+      assert.match(rejected.result.error.message,name==='process'?/diagnostic_audit_cursor_invalid_or_process_changed/:/diagnostic_audit_cursor_ahead_or_invalid/);
+      await assert.rejects(fs.stat(destination),error=>error.code==='ENOENT');
+    }
+    const missingProcessDestination=path.join(directory,'rejected-missing-process.zip');
+    const missingProcess=await mcp.rpc('tools/call',{name:'syndocal_export_diagnostics',
+      arguments:{requestId:randomUUID(),destination:missingProcessDestination,auditBefore}});
+    assert.equal(missingProcess.error.code,-32602);
+    await assert.rejects(fs.stat(missingProcessDestination),error=>error.code==='ENOENT');
+    checks.push({check:'external-format-two-audit-source-coverage-pagination-process-future-fences-no-publication',passed:true,
+      processIncarnation:expectedProcessIncarnation,firstRange:first.records.map(r=>r.sequence),secondRange:secondPage.records.map(r=>r.sequence),
+      bytes:auditExport.result.bytes,exportElapsedMs,elapsedBoundary:'Full authenticated MCP request through native ZIP publication and terminal receipt; not engine tick latency'});
     const staleRenderer = await backend.evaluate(`window.__TAURI_INTERNALS__.invoke('agent_bridge_execute_native_v1', {rendererGeneration:0,requestId:${JSON.stringify(exportId)}}).then(() => ({ok:true}), error => ({error:String(error)}))`);
     assert.deepEqual(staleRenderer, { error: 'stale_renderer' });
     checks.push({ check: 'native-execution-stale-renderer-rejected', passed: true });

@@ -1,0 +1,40 @@
+{
+  "observedUtc": "2026-10-06T18:51:35.352Z",
+  "profiles": [
+    {
+      "root": "C:\\Users\\janua\\AppData\\Local\\jp.seraf.ktn.syndocal.qa.mcp-lifecycle.backup-restore-20261005",
+      "files": [
+        {
+          "path": "C:\\Users\\janua\\AppData\\Local\\jp.seraf.ktn.syndocal.qa.mcp-lifecycle.backup-restore-20261005\\project-recovery-authority.json",
+          "bytes": 6981,
+          "sha256": "1f7cdcce03b6fe3c3f7ceff9df6c5d4f14954b063cf91d91a801bb3835befc34"
+        },
+        {
+          "path": "C:\\Users\\janua\\AppData\\Local\\jp.seraf.ktn.syndocal.qa.mcp-lifecycle.backup-restore-20261005\\project-backups\\backup-1791261597208.json",
+          "bytes": 38057,
+          "sha256": "d8cd1c57f79a6777dfc98d054eb5628949a330d3ab26fbb1b82762f659f44feb"
+        }
+      ]
+    },
+    {
+      "root": "C:\\Users\\janua\\AppData\\Local\\jp.seraf.ktn.syndocal.qa.mcp-lifecycle.backup-delete-20261006",
+      "files": [
+        {
+          "path": "C:\\Users\\janua\\AppData\\Local\\jp.seraf.ktn.syndocal.qa.mcp-lifecycle.backup-delete-20261006\\project-recovery-authority.json",
+          "bytes": 4374,
+          "sha256": "1a15701ab92bcd3dad28407293d1bbd03e2bca968a5029c885ca9d67bffc1f4d"
+        },
+        {
+          "path": "C:\\Users\\janua\\AppData\\Local\\jp.seraf.ktn.syndocal.qa.mcp-lifecycle.backup-delete-20261006\\project-backups\\backup-1791293359005.json",
+          "bytes": 6038,
+          "sha256": "4877175668f97fabeca9f671879b3a86bf4d4c10fe7f7792971540c2814de763"
+        },
+        {
+          "path": "C:\\Users\\janua\\AppData\\Local\\jp.seraf.ktn.syndocal.qa.mcp-lifecycle.backup-delete-20261006\\project-backup-deletions-v1.json",
+          "bytes": 7305,
+          "sha256": "4bb14b933d588df8de248efca228413d9109771f35e593ba7f7dc850b59d8054"
+        }
+      ]
+    }
+  ]
+}
