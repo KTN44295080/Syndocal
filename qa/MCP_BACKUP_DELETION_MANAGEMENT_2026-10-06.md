@@ -105,3 +105,22 @@ Exact R0 redacted deletion-journal/status reads and R5 observed unknown-protecti
 Next action: implement and verify the remaining bounded audit-export/retention
 work against the authoritative File acceptance boundaries, preserving all
 existing state. The ledger remains 27 Complete / 23 Open / 8 Deferred.
+
+Documentation follow-up — 2026-10-07, base e1f90c07: removed the README's stale
+claim that canonical backup listing/deletion were unimplemented and clarified
+the implemented observational resolution/acknowledgement API and the separate
+artifact-retention/crash boundaries. Only README and this note changed; compiled
+sources, native harnesses and the five protected files stayed byte-exact. The
+earlier 49-source freeze retains the README before this documentation correction.
+AI5 authentication/transport checks passed: 16 fake adapter groups, 128 hostile
+inputs rejected, transport/security and nine bounded-capacity groups. No native
+or physical calls ran. No compiler-warning measurement exists for this docs-only
+follow-up.
+
+The next audit task is now grounded in current source: diagnostics.export already
+publishes the bounded diagnostic ZIP, while diagnostic_package.rs's fixed payload
+allowlist contains manifest/project-summary/engine-telemetry/video-runtime and
+integrity only. It does not export audit history. AgentAuthorityService retains a
+separate bounded audit ring. A unified redacted audit-history/export path remains
+to be implemented and verified against roadmap section 5; diagnostic export must
+not be treated as proof of that requirement.

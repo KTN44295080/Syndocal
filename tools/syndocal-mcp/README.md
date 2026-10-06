@@ -104,8 +104,9 @@ used by restore. It creates no directory or reservation and rejects malformed,
 unsafe, missing or oversized backups. An open competing Windows writer makes
 the query fail; issue a new read after it closes. The projected source path is
 metadata, not existence/write authorization, and the digest does not reserve
-the file against later changes. Canonical backup list/delete/retention remain
-unimplemented; inspection does not execute them.
+the file against later changes. The canonical list and exact deletion operations
+documented below are separate calls; inspection performs neither and does not
+manage artifact retention.
 
 Restore through `syndocal.project.backup.restore.v1` with its exact File grant.
 Use `syndocal.query.project.replacement.authority.v1` for an issued start fence,
@@ -245,10 +246,12 @@ export an audit history, and they do not establish crash/power-loss acceptance.
 
 An indeterminate result requires preserving the artifact and querying status;
 never repeat the mutation to resolve it. Across process/principal/owner restart,
-automatic receipt adoption is intentionally unavailable. Operator resolution,
-acknowledgement/retention, hostile OS root/parent races, actual crash/power-loss
-reconciliation and broad File acceptance remain separate work. Other platforms reject
-this operation before file access until the same-handle policy is implemented.
+automatic receipt adoption is intentionally unavailable. Explicit observational
+resolution and acknowledgement use the management API above. Artifact retention
+scheduling, audit-history export, hostile OS root/parent races, actual
+crash/power-loss/restart reconciliation and broad File acceptance remain separate
+work. Other platforms reject managed-artifact deletion before file access until
+the same-handle policy is implemented.
 
 File/backup authority reads preserve a failed native query capture as the
 canonical `QueryError` object: `code`, fixed bounded `message`, `retryable` and
