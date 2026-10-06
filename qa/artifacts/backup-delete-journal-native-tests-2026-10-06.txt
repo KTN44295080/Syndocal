@@ -1,0 +1,19 @@
+Pinned linker: C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+PATH-first link.exe: C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+   Compiling syndocal v1.2.0-alpha.69 (C:\Users\janua\OneDrive\ドキュメント\GitHub\Syndocal\app\src-tauri)
+    Finished `release` profile [optimized] target(s) in 3m 06s
+     Running unittests src\main.rs (C:\Users\janua\AppData\Local\Temp\syndocal-native-acceptance-target\release\deps\syndocal-41cd4ce392874b4c.exe)
+
+running 10 tests
+test project_backup_deletion_journal::tests::project_backup_deletion_journal_competing_writer_and_failed_atomic_publication_preserve_original ... ok
+test project_backup_deletion_journal::tests::project_backup_deletion_journal_persists_exact_phases_identity_shape_and_bounded_capacity ... ok
+test project_backup_deletion_journal::tests::project_backup_deletion_journal_rejects_future_duplicate_utf8_oversize_shape_and_phase_without_repair ... ok
+test tests::project_backup_deletion_contract_tests::project_backup_deletion_corrupt_future_journal_cannot_bypass_through_live_receipt_cache ... ok
+test tests::project_backup_deletion_contract_tests::project_backup_deletion_exact_receipt_replay_never_deletes_recreated_artifact ... ok
+test tests::project_backup_deletion_contract_tests::project_backup_deletion_prepared_restart_fact_blocks_exact_and_new_callers_without_adoption ... ok
+test tests::project_backup_deletion_contract_tests::project_backup_deletion_retired_query_session_during_preparation_cannot_delete ... ok
+test tests::project_backup_deletion_contract_tests::project_backup_deletion_status_preserves_typed_busy_and_final_authorization_rejection ... ok
+test tests::project_backup_deletion_contract_tests::project_backup_deletion_update_claim_and_normalized_pending_receipt_protect_artifact ... ok
+test tests::project_backup_deletion_contract_tests::project_backup_deletion_wrong_hash_writer_unissued_stale_and_final_revocation_preserve_bytes ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 2010 filtered out; finished in 0.74s

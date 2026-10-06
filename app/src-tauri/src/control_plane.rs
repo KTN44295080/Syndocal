@@ -67,9 +67,9 @@ const KEYBOARD_SHORTCUT_SOURCE_MANIFEST: &str =
 const KEYBOARD_SHORTCUT_SOURCE_MANIFEST_SCHEMA_VERSION: u16 = 1;
 const KEYBOARD_APP_SHORTCUT_SOURCE_COUNT: usize = 30;
 const KEYBOARD_PROJECT_FILE_SHORTCUT_SOURCE_COUNT: usize = 3;
-const FROZEN_TAURI_ROUTE_ADMISSION_COUNT: usize = 557;
+const FROZEN_TAURI_ROUTE_ADMISSION_COUNT: usize = 558;
 const FROZEN_TAURI_ROUTE_ADMISSION_SHA256: &str =
-    "43f489eb32cbafe96213f69f9806bf2c8fb68fd5ac911b06c2fa3d0677e1e073";
+    "1bf242a465f867ad965f81d7e418d7cd21d6208a459b4a8fd968f95fa465806d";
 /// The command source is parsed and validated exactly once.  Local discovery
 /// calls only clone this immutable, validated value; they never parse source
 /// text or make an external request on the invocation path.
@@ -390,6 +390,7 @@ fn is_tauri_read_only_route(command: &str) -> bool {
             | "query_project_backup_authority_v1"
             | "inspect_project_backup_control_plane_v1"
             | "list_project_backups_control_plane_v1"
+            | "query_project_backup_delete_status_v1"
             | "query_project_file_status_v1"
             | "query_control_plane_runtime_generations"
             | "query_display_add_lease_authority_v1"
@@ -1779,6 +1780,7 @@ fn reviewed_query_operation(command: &str) -> Option<ReviewedQueryOperation> {
     let (operation_id, class, domain_capability) = match command {
         "inspect_project_backup_control_plane_v1" => ("syndocal.query.project.backup.inspect.v1", OperationClass::ProjectAuthority, OperationCapability::ProjectAuthorityRead),
         "list_project_backups_control_plane_v1" => ("syndocal.query.project.backup.list.v1", OperationClass::ProjectAuthority, OperationCapability::ProjectAuthorityRead),
+        "query_project_backup_delete_status_v1" => (protocol::control_plane_file::BACKUP_DELETE_STATUS_ID, OperationClass::ProjectAuthority, OperationCapability::ProjectAuthorityRead),
         "query_project_backup_authority_v1" => ("syndocal.query.project.backup.authority.v1", OperationClass::ProjectAuthority, OperationCapability::ProjectAuthorityRead),
         "query_project_file_authority_v1" => ("syndocal.query.project.file.authority.v1", OperationClass::ProjectAuthority, OperationCapability::ProjectAuthorityRead),
         "query_project_file_status_v1" => ("syndocal.query.project.file.status.v1", OperationClass::ProjectAuthority, OperationCapability::ProjectAuthorityRead),
@@ -2490,7 +2492,7 @@ mod tests {
             counts[&TauriRouteAdmissionClass::BackendAuthoritativeProjectMutation],
             31
         );
-        assert_eq!(counts[&TauriRouteAdmissionClass::ReadOnly], 104);
+        assert_eq!(counts[&TauriRouteAdmissionClass::ReadOnly], 105);
         assert_eq!(counts[&TauriRouteAdmissionClass::ProjectReplacement], 11);
         assert_eq!(counts[&TauriRouteAdmissionClass::ProjectHistory], 3);
         assert_eq!(counts[&TauriRouteAdmissionClass::LocalPhysicalMutation], 6);
@@ -2514,7 +2516,7 @@ mod tests {
     fn compiled_handler_and_registry_have_the_exact_same_set() {
         let names = registered_tauri_command_names_from_source(MAIN_RS_SOURCE).unwrap();
         let registry = registry().unwrap();
-        const R0_ALLOWLIST: [&str; 25] = [
+        const R0_ALLOWLIST: [&str; 26] = [
             "syndocal.query.control_plane.registry.v1",
             "syndocal.query.control_plane.canonical_registry.v3",
             "syndocal.query.control_plane.capabilities.v1",
@@ -2540,6 +2542,7 @@ mod tests {
             "syndocal.query.project.backup.authority.v1",
             "syndocal.query.project.backup.inspect.v1",
             "syndocal.query.project.backup.list.v1",
+            protocol::control_plane_file::BACKUP_DELETE_STATUS_ID,
         ];
         assert_eq!(names.len(), FROZEN_TAURI_ROUTE_ADMISSION_COUNT);
         // Exact current-source delta: the frozen USB route contributes two
@@ -2578,7 +2581,7 @@ mod tests {
                 + MIDI_OSC_DMX_OPERATION_COUNT
                 + FRONTEND_INVOKE_COUNT
         );
-        assert_eq!(registry.operations.len(), 1641);
+        assert_eq!(registry.operations.len(), 1642);
         verify_registry_exact_set(&names, &registry).unwrap();
         let r0 = registry
             .operations
@@ -2966,10 +2969,10 @@ mod tests {
         const KEYBOARD_PROJECT_FILE_COUNT: usize = 3;
         const SOURCE_TOTAL: usize =
             LEGACY_SOURCE_TOTAL + KEYBOARD_APP_COUNT + KEYBOARD_PROJECT_FILE_COUNT;
-        assert_eq!(LEGACY_SOURCE_TOTAL, 1641);
-        assert_eq!(SOURCE_TOTAL, 1674);
+        assert_eq!(LEGACY_SOURCE_TOTAL, 1642);
+        assert_eq!(SOURCE_TOTAL, 1675);
         assert_eq!(canonical.source_inventory.len(), SOURCE_TOTAL);
-        assert_eq!(canonical.canonical_operations.len(), 68);
+        assert_eq!(canonical.canonical_operations.len(), 69);
 
         let output_control_operations = canonical
             .canonical_operations
@@ -3354,7 +3357,7 @@ mod tests {
                 )
             })
             .collect::<Vec<_>>();
-        assert_eq!(direct.len(), 68);
+        assert_eq!(direct.len(), 69);
         assert_eq!(aliases.len(), FRONTEND_COUNT);
         assert_eq!(internal_steps.len(), 4);
         assert_eq!(structural_routes.len(), 1);
@@ -4117,11 +4120,11 @@ mod tests {
     fn legacy_v1_registry_json_and_count_remain_inventory_honest() {
         let legacy = registry().unwrap();
         // Includes both the native and frontend missing-publication resolver.
-        assert_eq!(legacy.operations.len(), 1641);
+        assert_eq!(legacy.operations.len(), 1642);
         let encoded = serde_json::to_value(&legacy).unwrap();
         assert_eq!(encoded["schema"]["version"], CONTROL_PLANE_SCHEMA_VERSION);
         let operations = encoded["operations"].as_array().unwrap();
-        assert_eq!(operations.len(), 1641);
+        assert_eq!(operations.len(), 1642);
         assert!(operations.iter().all(|operation| {
             operation["source_family"] != "keyboard_app"
                 && operation["source_family"] != "keyboard_project_file"

@@ -1,0 +1,18 @@
+{
+  "observedUtc": "2026-10-06T11:56:47.689Z",
+  "files": [
+    {
+      "path": "C:\\Users\\janua\\AppData\\Local\\jp.seraf.ktn.syndocal.qa.mcp-lifecycle.backup-restore-20261005\\project-recovery-authority.json",
+      "bytes": 6981,
+      "sha256": "1f7cdcce03b6fe3c3f7ceff9df6c5d4f14954b063cf91d91a801bb3835befc34"
+    },
+    {
+      "path": "C:\\Users\\janua\\AppData\\Local\\jp.seraf.ktn.syndocal.qa.mcp-lifecycle.backup-restore-20261005\\project-backups\\backup-1791261597208.json",
+      "bytes": 38057,
+      "sha256": "d8cd1c57f79a6777dfc98d054eb5628949a330d3ab26fbb1b82762f659f44feb"
+    }
+  ],
+  "currentProfile": "C:\\Users\\janua\\AppData\\Local\\jp.seraf.ktn.syndocal.qa.mcp-lifecycle.backup-delete-20261006",
+  "originsBefore": 4,
+  "deletionJournalBefore": null
+}

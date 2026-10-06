@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import {createHash, randomUUID} from 'node:crypto';
+import {isDeepStrictEqual} from 'node:util';
 import {openNativeStdioSession} from './native-stdio-session.mjs';
 
 // Authenticated MCP with individually owned IDs, explicit acknowledgement and
@@ -10,6 +11,7 @@ export async function nativeProjectBackup(backend, options, checks) {
   const ids={create:'syndocal.project.backup.create.v1',authority:'syndocal.query.project.backup.authority.v1',
     inspect:'syndocal.query.project.backup.inspect.v1', list:'syndocal.query.project.backup.list.v1',
     remove:'syndocal.project.backup.delete.v1',
+    deleteStatus:'syndocal.query.project.backup.delete.status.v1',
     status:'syndocal.query.project.file.status.v1',ack:'syndocal.project.file.acknowledge.v1'};
   const directory=path.join(process.env.LOCALAPPDATA,options.profileId,'project-backups');
   const baseline=await fs.readdir(directory).catch(error=>{if(error.code==='ENOENT')return [];throw error;});
@@ -151,6 +153,19 @@ export async function nativeProjectBackup(backend, options, checks) {
     // issuing an unrelated backup destination for every deletion rejection.
     deletionFence=structuredClone(request.expected_fence);
     const canonicalProtectedDelete=await deletion(saved.backup.id,saved.artifact_sha256);
+    const statusOperation=registry.canonical_operations.find(value=>value.operation_id===ids.deleteStatus);
+    assert.equal(statusOperation.risk,'r0');assert.equal(statusOperation.adapter_policy,'local_window_read_only');
+    const deniedStatus=await send(ids.deleteStatus,canonicalProtectedDelete);
+    assert.equal(deniedStatus.status,'rejected');assert.equal(deniedStatus.error,'agent_missing_grant');
+    await grant('read',ids.deleteStatus);
+    const unknown=await success(ids.deleteStatus,canonicalProtectedDelete);
+    assert.equal(unknown.phase,'unknown');assert.equal(unknown.receipt,null);assert.equal(unknown.error,null);
+    for(const field of ['path','origin','owner_id','principal','skip_confirmation']){
+      await failed(ids.deleteStatus,{...canonicalProtectedDelete,[field]:true},/arguments_invalid/);
+    }
+    await failed(ids.deleteStatus,{...canonicalProtectedDelete,schema_version:2},/invalid project backup delete request/);
+    assert.deepEqual(await fs.readFile(saved.target_path),bytes);
+    checks.push({check:'external-backup-delete-status-exact-r0-grant-and-strict-request-only-read-purity',passed:true});
     await failed(ids.remove,canonicalProtectedDelete,/unacknowledged/);
     assert.deepEqual(await fs.readFile(saved.target_path),bytes);
     await failed(ids.remove,{...await deletion(saved.backup.id,saved.artifact_sha256),expected_artifact_sha256:'f'.repeat(64)},/artifact_changed/);
@@ -168,11 +183,14 @@ export async function nativeProjectBackup(backend, options, checks) {
     checks.push({check:'external-backup-delete-exact-r5-grant-no-human-confirmation-and-unacknowledged-hash-forged-fence-preservation',passed:true});
     const ack=await success(ids.ack,request);assert.equal(ack.phase,'acknowledged');created[0].acknowledged=true;
     assert.deepEqual(await success(ids.ack,request),ack);assert.deepEqual(await success(ids.status,request),ack);
-    const deleteRequest=await deletion(saved.backup.id,saved.artifact_sha256),deleteBefore=await state();
+    const deleteRequest=await deletion(saved.backup.id,saved.artifact_sha256),deleteBefore=await state(),deleteStarted=performance.now();
     const deleted=await success(ids.remove,deleteRequest);created[0].deleted=true;
     assert.deepEqual(deleted.request,deleteRequest);assert.equal(deleted.deleted_backup.backup.id,saved.backup.id);
     assert.equal(deleted.deleted_backup.artifact_sha256,saved.artifact_sha256);
     await assert.rejects(fs.stat(saved.target_path),/ENOENT/);assert.deepEqual(await state(),deleteBefore);
+    const terminalStatus=await success(ids.deleteStatus,deleteRequest);
+    assert.equal(terminalStatus.phase,'succeeded');assert.deepEqual(terminalStatus.request,deleteRequest);
+    assert.deepEqual(terminalStatus.receipt,deleted);assert.equal(terminalStatus.error,null);
     assert.deepEqual(await success(ids.remove,deleteRequest),deleted);
     const recreated=Buffer.from('owned recreated artifact must survive exact replay');await fs.writeFile(saved.target_path,recreated);
     try {
@@ -180,9 +198,35 @@ export async function nativeProjectBackup(backend, options, checks) {
       assert.deepEqual(await fs.readFile(saved.target_path),recreated);
       await failed(ids.remove,{...deleteRequest,expected_artifact_sha256:'d'.repeat(64)},/different shape/);
       assert.deepEqual(await fs.readFile(saved.target_path),recreated);
+      const deletionJournal=path.join(path.dirname(directory),'project-backup-deletions-v1.json');
+      const originalJournal=await fs.readFile(deletionJournal),facts=JSON.parse(originalJournal);
+      const owned=facts.records.find(record=>isDeepStrictEqual(record.receipt.request,deleteRequest));
+      assert.ok(owned,'The exact native request must have a durable terminal');assert.equal(owned.phase,'succeeded');
+      assert.deepEqual(owned.receipt,deleted);assert.equal(owned.error,null);
+      try {
+        await fs.writeFile(deletionJournal,Buffer.from(JSON.stringify({...facts,version:2})));
+        await failed(ids.deleteStatus,deleteRequest,/journal_version_unsupported/);
+        await failed(ids.remove,deleteRequest,/journal_version_unsupported/);
+        assert.deepEqual(await fs.readFile(saved.target_path),recreated);
+        await fs.writeFile(deletionJournal,originalJournal);
+        await fs.writeFile(saved.target_path,bytes);owned.phase='prepared';
+        await fs.writeFile(deletionJournal,Buffer.from(JSON.stringify(facts)));
+        const unresolved=await success(ids.deleteStatus,deleteRequest);
+        assert.equal(unresolved.phase,'indeterminate');assert.equal(unresolved.receipt,null);assert.match(unresolved.error,/unresolved/);
+        await failed(ids.remove,deleteRequest,/indeterminate/);
+        await failed(ids.remove,await deletion(saved.backup.id,saved.artifact_sha256),/unresolved_journal_protects/);
+        const local=await backend.evaluate(`window.__TAURI_INTERNALS__.invoke('delete_project_backup',${JSON.stringify({backupId:saved.backup.id})}).then(value=>({value}),error=>({error:String(error)}))`);
+        assert.match(local.error,/unresolved_journal_protects/);assert.deepEqual(await fs.readFile(saved.target_path),bytes);
+      } finally {await fs.writeFile(deletionJournal,originalJournal);await fs.writeFile(saved.target_path,recreated);}
+      assert.deepEqual(await fs.readFile(deletionJournal),originalJournal);
+      assert.deepEqual(await success(ids.deleteStatus,deleteRequest),terminalStatus);
+      assert.deepEqual(await success(ids.remove,deleteRequest),deleted);
+      assert.deepEqual(await fs.readFile(saved.target_path),recreated);
+      checks.push({check:'external-backup-delete-durable-prepared-and-future-journal-protect-cached-replay-and-new-intent-without-repair',passed:true,
+        journalSha256:digest(originalJournal)});
     } finally {await backend.invoke('delete_project_backup',{backupId:saved.backup.id});}
     checks.push({check:'external-backup-delete-same-artifact-receipt-and-exact-replay-preserve-project-authority-output-and-recreated-bytes',passed:true,
-      receipt:deleted});
+      receipt:deleted,elapsedMs:performance.now()-deleteStarted});
     await failed(ids.inspect,{schema_version:1,backup_id:saved.backup.id},/inspect_metadata/);
     const next=await prepare();assert.equal(next.request_id,2);const second=await success(ids.create,next);
     assert.equal(second.phase,'succeeded');created.push({request:next,receipt:second,acknowledged:false});

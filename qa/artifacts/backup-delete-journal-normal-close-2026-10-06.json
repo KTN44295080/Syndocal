@@ -1,0 +1,13 @@
+{
+  "executable": "C:\\Users\\janua\\OneDrive\\ドキュメント\\GitHub\\Syndocal\\target\\release\\syndocal.exe",
+  "sha256": "904bce181f78bfbf0fcdb7544c909e4302bde0f636d20b600688609e8020e950",
+  "processId": 61564,
+  "closedGracefully": true,
+  "exactExecutableVerified": true,
+  "postCloseEnumerationGuardRejected": true,
+  "freshExactProcessCount": 0,
+  "buildPreflightReportedNotRunning": true,
+  "forcedTerminationObserved": false,
+  "observation": "Close helper accepted CloseMainWindow and observed HasExited, then rejected its final enumeration; a subsequent fresh observation and the native build preflight both reported no exact process. The enumeration cause is unproven.",
+  "observedUtc": "2026-10-06T12:13:45.9030103Z"
+}

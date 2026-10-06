@@ -1,0 +1,33 @@
+Pinned linker: C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+PATH-first link.exe: C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+   Compiling protocol v1.2.0-alpha.69 (C:\Users\janua\OneDrive\ドキュメント\GitHub\Syndocal\crates\protocol)
+   Compiling video v1.2.0-alpha.69 (C:\Users\janua\OneDrive\ドキュメント\GitHub\Syndocal\crates\video)
+   Compiling io v1.2.0-alpha.69 (C:\Users\janua\OneDrive\ドキュメント\GitHub\Syndocal\crates\io)
+   Compiling gdtf v1.2.0-alpha.69 (C:\Users\janua\OneDrive\ドキュメント\GitHub\Syndocal\crates\gdtf)
+   Compiling engine v1.2.0-alpha.69 (C:\Users\janua\OneDrive\ドキュメント\GitHub\Syndocal\crates\engine)
+   Compiling audio v1.2.0-alpha.69 (C:\Users\janua\OneDrive\ドキュメント\GitHub\Syndocal\crates\audio)
+   Compiling visualizer v1.2.0-alpha.69 (C:\Users\janua\OneDrive\ドキュメント\GitHub\Syndocal\crates\visualizer)
+   Compiling syndocal v1.2.0-alpha.69 (C:\Users\janua\OneDrive\ドキュメント\GitHub\Syndocal\app\src-tauri)
+error[E0308]: mismatched types
+    --> app\src-tauri\src\control_plane.rs:2519:42
+     |
+2519 |           const R0_ALLOWLIST: [&str; 25] = [
+     |  _____________________________----------___^
+     | |                             |
+     | |                             expected because of the type of the constant
+2520 | |             "syndocal.query.control_plane.registry.v1",
+2521 | |             "syndocal.query.control_plane.canonical_registry.v3",
+2522 | |             "syndocal.query.control_plane.capabilities.v1",
+...    |
+2545 | |             protocol::control_plane_file::BACKUP_DELETE_STATUS_ID,
+2546 | |         ];
+     | |_________^ expected an array with a size of 25, found one with a size of 26
+     |
+help: consider specifying the actual array length
+     |
+2519 -         const R0_ALLOWLIST: [&str; 25] = [
+2519 +         const R0_ALLOWLIST: [&str; 26] = [
+     |
+
+For more information about this error, try `rustc --explain E0308`.
+error: could not compile `syndocal` (bin "syndocal" test) due to 1 previous error

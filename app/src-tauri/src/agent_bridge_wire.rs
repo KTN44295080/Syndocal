@@ -62,6 +62,7 @@ pub(super) const CANONICAL_OPERATION_IDS: &[&str] = &[
     "syndocal.query.project.backup.inspect.v1",
     "syndocal.query.project.backup.list.v1",
     "syndocal.project.backup.delete.v1",
+    "syndocal.query.project.backup.delete.status.v1",
     "syndocal.project.save.v1",
     "syndocal.project.save_as.v1",
     "syndocal.project.template.save.v1",

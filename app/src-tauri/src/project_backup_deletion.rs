@@ -2,12 +2,14 @@
 //! guards remain locked through the same-handle filesystem effect.
 use std::{path::Path, time::Instant};
 use protocol::control_plane_file::{ProjectBackupDeleteRequestV1 as Request,
-    ProjectBackupDeleteReceiptV1 as Receipt, ProjectBackupInspectionV1, BACKUP_DELETE_ID};
+    ProjectBackupDeleteReceiptV1 as Receipt, ProjectBackupDeleteStatusV1 as Status,
+    ProjectBackupDeletePhaseV1 as Phase, ProjectBackupInspectionV1, BACKUP_DELETE_ID, BACKUP_DELETE_STATUS_ID};
 use sha2::{Digest, Sha256};
 use tauri::{Manager, AppHandle, WebviewWindow};
 use super::{AppState, ControlPlaneQueryState, agent_bridge::AgentBridgeDispatch,
     authored_control_plane::{AuthoredControlPlaneState, GenericAuthoredMutationReceiptKey},
     project_file_control_plane::ProjectFileControlPlaneState};
+use super::project_backup_deletion_journal as durable;
 
 #[derive(Default)]
 pub(crate) struct BackupDeletionControlPlaneState {
@@ -79,6 +81,8 @@ pub(super) fn execute_core(
     let shape = format!("{:x}", Sha256::digest(serde_json::to_vec(&request)
         .map_err(|_| "project_backup_delete_request_encoding")?));
     let caller = format!("{label}:{incarnation}:{caller}");
+    let origin=durable::origin(&caller,&owner)?;
+    let deletion_journal=durable::path_for_recovery_journal(journal);
     let key = GenericAuthoredMutationReceiptKey {
         operation_id: BACKUP_DELETE_ID.into(),
         request_id: format!("backup-delete:{caller}:{}", request.request_id),
@@ -87,6 +91,26 @@ pub(super) fn execute_core(
     };
     // A retained exact terminal fact precedes fresh-fence/file checks. Replays
     // cannot delete a newly created file, or adopt another caller/owner's result.
+    {
+        // A process-local cache loss/expiry cannot admit another filesystem
+        // effect. Durable facts remain caller/owner bound and precede fresh
+        // issued-fence/file work, without adopting another identity's receipt.
+        {
+            let _publication=state.project_save_publication.lock()
+                .map_err(|_|"project_backup_delete_publication_poisoned")?;
+            let status=durable::load(&deletion_journal)?.status(&origin,&request)?;
+            if super::project_transaction_owner_binding_for_window(state,label,&owner)?!=incarnation {
+                return Err("project_backup_delete_owner_changed".into());
+            }
+            if status.phase!=Phase::Unknown { authorize()?; }
+            match status.phase {
+                Phase::Succeeded=>return status.receipt.ok_or_else(||"project_backup_delete_journal_receipt_missing".into()),
+                Phase::Rejected=>return Err(status.error.unwrap_or_else(||"project_backup_delete_journal_error_missing".into())),
+                Phase::Indeterminate=>return Err("project_backup_delete_indeterminate; query syndocal.query.project.backup.delete.status.v1; preserve artifact and do not retry".into()),
+                Phase::Unknown=>{},
+            }
+        }
+    }
     control.receipts.generic_terminal_single_flight(key, shape, Instant::now(), || {
         query.validate_project_mutation_fence_window(label, &request.expected_fence, incarnation)
             .map_err(|_| "project_backup_delete_unissued_fence")?;
@@ -119,11 +143,68 @@ pub(super) fn execute_core(
             let receipt = Receipt { schema_version: 1, request: request.clone(),
                 deleted_backup: prepared.inspection.clone() };
             receipt.validate().map_err(str::to_string)?;
-            authorize()?;
-            commit(prepared)?;
+            let mut facts=durable::load(&deletion_journal)?;
+            let fact=facts.prepare(&origin,receipt.clone())?;
+            // Flush the unresolved exact request before the irreversible effect.
+            durable::persist(&deletion_journal,&facts)?;
+            if let Err(error)=authorize() {
+                let error=super::input_diagnostic::bounded_diagnostic(error);
+                facts.rejected(fact,error.clone())?;
+                durable::persist(&deletion_journal,&facts).map_err(|_|"project_backup_delete_indeterminate; final authorization rejected but journal finalization failed; query deletion status")?;
+                return Err(error);
+            }
+            commit(prepared).map_err(|error|super::input_diagnostic::bounded_diagnostic(
+                format_args!("project_backup_delete_indeterminate; filesystem result unresolved; query deletion status: {error}")))?;
+            facts.succeeded(fact)?;
+            durable::persist(&deletion_journal,&facts).map_err(|_|"project_backup_delete_indeterminate; artifact deleted but terminal publication failed; query deletion status; do not retry")?;
             Ok(receipt)
         })
     })
+}
+
+pub(super) fn status_core(state: &AppState, label: &str, caller: &str, request: Request,
+    recovery_journal: &Path, authorize: impl Fn()->Result<(),String>,
+) -> Result<Status, super::native_adapter_error::NativeAdapterError> {
+    use std::sync::TryLockError;
+    use protocol::control_plane_query::{QueryError,QueryErrorCode};
+    request.validate().map_err(str::to_string)?;authorize()?;
+    let owner=super::current_project_transaction_owner_for_window(state,label)?;
+    let incarnation=super::project_transaction_owner_binding_for_window(state,label,&owner)?;
+    let caller=format!("{label}:{incarnation}:{caller}");
+    let origin=durable::origin(&caller,&owner)?;
+    let _publication=match state.project_save_publication.try_lock() {
+        Ok(lock)=>lock,
+        Err(TryLockError::WouldBlock)=>return Err(QueryError::from_code(QueryErrorCode::Overloaded).into()),
+        Err(TryLockError::Poisoned(_))=>return Err(QueryError::from_code(QueryErrorCode::Internal).into()),
+    };
+    let status=durable::load(&durable::path_for_recovery_journal(recovery_journal))?.status(&origin,&request)?;
+    if super::project_transaction_owner_binding_for_window(state,label,&owner)?!=incarnation {
+        return Err("project_backup_delete_status_owner_changed".into());
+    }
+    authorize()?;Ok(status)
+}
+
+pub(crate) fn status_local(app: &AppHandle, window: &WebviewWindow, request: Request)
+    ->Result<Status,super::native_adapter_error::NativeAdapterError> {
+    status_core(&app.state::<AppState>(),window.label(),"local",request,
+        &super::project_recovery_authority_state_path(app)?,||Ok(()))
+}
+
+pub(crate) fn status_external(app: &AppHandle, window: &WebviewWindow, dispatch: &AgentBridgeDispatch,
+    request: Request,
+) ->Result<Status,super::native_adapter_error::NativeAdapterError> {
+    if dispatch.method!="control_plane.execute"
+        ||dispatch.params.get("operationId").and_then(|v|v.as_str())!=Some(BACKUP_DELETE_STATUS_ID) {
+        return Err("project_backup_delete_status_immutable_operation_mismatch".into());
+    }
+    let immutable:Request=serde_json::from_value(dispatch.params["request"]["request"].clone())
+        .map_err(|_|"project_backup_delete_status_immutable_request_invalid")?;
+    if immutable!=request {return Err("project_backup_delete_status_immutable_request_mismatch".into());}
+    let caller=format!("external:{}:{}",dispatch.principal_id,dispatch.principal_incarnation);
+    status_core(&app.state::<AppState>(),window.label(),&caller,request,
+        &super::project_recovery_authority_state_path(app)?,||app.state::<super::agent_bridge::AgentBridge>()
+            .authority("main")?.authorize_bridge_request(&dispatch.principal_id,dispatch.principal_incarnation,
+                &dispatch.method,&dispatch.params))
 }
 
 fn execute(app: &AppHandle, window: &WebviewWindow, caller: &str, request: Request,

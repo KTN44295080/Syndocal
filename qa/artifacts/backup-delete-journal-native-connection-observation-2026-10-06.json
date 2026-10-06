@@ -1,0 +1,14 @@
+{
+  "requestId": "478a74f9-dac9-4a04-b8b2-33b781f8c547",
+  "recordFields": [
+    "shape",
+    "response"
+  ],
+  "retainedInNativeMutationJournal": true,
+  "mutationOutcomeAfterRestart": "unknown",
+  "pollFailureInferredFromRetainedMutationAndReadReceipt": true,
+  "rootCauseUnproven": true,
+  "initialSentFlagInferenceDiscarded": true,
+  "observedUtc": "2026-10-06T12:09:39.7630173Z",
+  "responseIsNullAfterRestart": true
+}

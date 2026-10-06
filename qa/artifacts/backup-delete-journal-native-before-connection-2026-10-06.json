@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 1,
+  "timestamp": "2026-10-06T12:03:54.443Z",
+  "passed": false,
+  "executable": "C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-native-acceptance-target\\release\\syndocal.exe",
+  "executableSha256": "05af08b5923e5409ed8e9d632cea39ff903c2e5b164d849b205a3f64a3eb71f7",
+  "sidecarSha256": "9ba2d76ddbf18ae3c6c4e9eb35fd49ed4a3adb3f9729535ea7ab8ecb208097f4",
+  "runnerSha256": "1b299847b90163a72b8590314fa57cd459e75e2978ba34a63542682682188f2d",
+  "backendHarnessSha256": "ade29aa256d8ff17374bb4b3e893ea9a07f71f8fa2cf2bb72b21f80d4e0e8b1f",
+  "projectBackupHarnessSha256": "29cf7bdda6cdc7b15f62155eb03ecd38c0610c652f02cf699190ad510f96b80e",
+  "managedBackupPolicySha256": "f50dcb8507fc5628881471a4097cdc20afb8262798c200a3316de8eb2dd2c915",
+  "backupInspectionPolicySha256": "44631f49688a6afa69f1ba5c91215c40a81e538084edf0a99c1d84bf1d2a1799",
+  "backupListingPolicySha256": "22e68e73f798b519c14360c420c95d49b1284cff81f50c1d73a3200cca15dcfa",
+  "backupDeletionPolicySha256": "a256c8abb080e422876599d5925814c31042b5a9479a1de69355162c796e3f21",
+  "backupDeletionJournalPolicySha256": "99a38204f16fd63afa2228c6a2d86b37e7225f83b92d469dc88a4faa8c5cbd48",
+  "backupRestoreHarnessSha256": "346ddc6ff7b03742a4da45c1f24a8d9a2efb84095e6d0ff1b996a1a6945432e5",
+  "backupRestorePolicySha256": "2f7d099793295f2fe39bc29657cdf8efcd8e7d4389994f14c6f64e61f7122e5b",
+  "projectFileHarnessSha256": "ebefb0167680ef78e60143f7b25352f7019969a4c9d09af2462968325ef2478e",
+  "projectFileControllerSha256": "6c8b9ed3ed3ba0d27bea6f5d239de8e70f36e0edb2ca71b8e22fc19b80e28e97",
+  "projectFileProtocolSha256": "e039d1e61ad00faa4487168c90b791b967533324e8b132852d54f3656af70bda",
+  "projectFileNativeSha256": "66bfdff9230dfe9111a6b1b2dda0771eb0f27de2fd6462cf18b7960351fb05bc",
+  "nativeExecutorSha256": "25eea406526295d4cb53d8a3105799bf07e3713a998416b6c758a1d3df2eb0fa",
+  "profile": "jp.seraf.ktn.syndocal.qa.mcp-lifecycle.backup-delete-20261006",
+  "checks": [
+    {
+      "check": "external-file-four-r5-operations-and-two-r0-query-policies",
+      "passed": true
+    },
+    {
+      "check": "external-file-exact-read-file-grants-and-safe-mode-without-human-approval",
+      "passed": true
+    }
+  ],
+  "normalAppIdentityUnchanged": true,
+  "credentialRevoked": true,
+  "credentialFileRemoved": true,
+  "nativePanicLocations": [],
+  "nonclaims": [
+    "QA identifier release build, not the distributed artifact",
+    "No physical output activation; optional high-risk or lease-expiry probe mutates isolated backend lease authority only; optional Tap probe changes isolated empty-project tempo; optional project-file probe loads private JSON with no file media or video source activation",
+    "No durable authored/output mutation crash publication acceptance",
+    "Typed external Save/Save As/template/status/ack on owned private files only; no mid-publication external rename CAS, crash/restart, all remaining File/AI8/release or physical acceptance",
+    "Typed managed backup creation/inspection/list/restore/delete, complete private authored-image and four mapping-family restoration, exact terminal/ack/replay, bounded deletion-journal/status guards and owned cleanup only; no full retention-race/mid-publication revocation, actual deletion crash/power-loss/restart reconciliation, operator resolution/ack/retention, all File or physical acceptance"
+  ]
+}

@@ -1,0 +1,15 @@
+file:///C:/Users/janua/OneDrive/%E3%83%89%E3%82%AD%E3%83%A5%E3%83%A1%E3%83%B3%E3%83%88/GitHub/Syndocal/app/scripts/check-q1-q4-ledger.mjs:81
+      throw new Error(`q1-q4 ledger validation failed (${this.entries.length} finding(s)):\n- ${this.entries.join("\n- ")}`);
+            ^
+
+Error: q1-q4 ledger validation failed (1 finding(s)):
+- MASTER_JSON_PARITY_MISMATCH: the master fenced mirror is not parseable JSON equal to the ledger file.
+    at Findings.throwIfAny (file:///C:/Users/janua/OneDrive/%E3%83%89%E3%82%AD%E3%83%A5%E3%83%A1%E3%83%B3%E3%83%88/GitHub/Syndocal/app/scripts/check-q1-q4-ledger.mjs:81:13)
+    at validateQ1Q4Ledger (file:///C:/Users/janua/OneDrive/%E3%83%89%E3%82%AD%E3%83%A5%E3%83%A1%E3%83%B3%E3%83%88/GitHub/Syndocal/app/scripts/check-q1-q4-ledger.mjs:722:12)
+    at runQ1Q4LedgerCheck (file:///C:/Users/janua/OneDrive/%E3%83%89%E3%82%AD%E3%83%A5%E3%83%A1%E3%83%B3%E3%83%88/GitHub/Syndocal/app/scripts/check-q1-q4-ledger.mjs:744:10)
+    at file:///C:/Users/janua/OneDrive/%E3%83%89%E3%82%AD%E3%83%A5%E3%83%A1%E3%83%B3%E3%83%88/GitHub/Syndocal/app/scripts/check-q1-q4-ledger.mjs:748:18
+    at ModuleJob.run (node:internal/modules/esm/module_job:343:25)
+    at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:665:26)
+    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:117:5)
+
+Node.js v22.22.1

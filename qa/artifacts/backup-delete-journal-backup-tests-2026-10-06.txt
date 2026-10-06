@@ -1,0 +1,32 @@
+
+running 28 tests
+test project_backup_deletion_journal::tests::project_backup_deletion_journal_competing_writer_and_failed_atomic_publication_preserve_original ... ok
+test project_backup_deletion_journal::tests::project_backup_deletion_journal_persists_exact_phases_identity_shape_and_bounded_capacity ... ok
+test project_backup_deletion_journal::tests::project_backup_deletion_journal_rejects_future_duplicate_utf8_oversize_shape_and_phase_without_repair ... ok
+test project_backup_inspection::tests::project_backup_inspection_exact_original_bytes_and_metadata_without_writes ... ok
+test project_backup_inspection::tests::project_backup_inspection_missing_invalid_and_oversize_preserve_filesystem ... ok
+test project_backup_json::tests::project_backup_json_parser_exact_128_mib_boundary_precedes_schema ... ok
+test project_backup_json::tests::project_backup_json_reader_binds_exact_positive_canonical_filename_id ... ok
+test project_backup_json::tests::project_backup_json_reader_rejects_oversize_utf8_and_truncation_without_writes ... ok
+test project_backup_json::tests::project_backup_json_rejects_duplicate_known_ignored_and_escaped_keys ... ok
+test project_backup_json::tests::project_backup_json_rejects_invalid_versions_schema_and_numbers ... ok
+test project_backup_json::tests::project_backup_json_valid_round_trip_retains_unicode_and_defaults ... ok
+test project_backup_json::tests::project_backup_json_writer_uses_the_reader_limit_before_any_file_publication ... ok
+test project_backup_listing::tests::project_backup_listing_corrupt_nonregular_unsafe_and_directory_budget_fail_closed ... ok
+test project_backup_listing::tests::project_backup_listing_missing_directory_pagination_exact_bytes_and_no_allocation ... ok
+test project_backup_listing::tests::project_backup_listing_shared_reader_enforces_remaining_budget_and_windows_writer_guard ... ok
+test tests::project_backup_deletion_contract_tests::project_backup_deletion_corrupt_future_journal_cannot_bypass_through_live_receipt_cache ... ok
+test tests::project_backup_deletion_contract_tests::project_backup_deletion_exact_receipt_replay_never_deletes_recreated_artifact ... ok
+test tests::project_backup_deletion_contract_tests::project_backup_deletion_prepared_restart_fact_blocks_exact_and_new_callers_without_adoption ... ok
+test tests::project_backup_deletion_contract_tests::project_backup_deletion_retired_query_session_during_preparation_cannot_delete ... ok
+test tests::project_backup_deletion_contract_tests::project_backup_deletion_status_preserves_typed_busy_and_final_authorization_rejection ... ok
+test tests::project_backup_deletion_contract_tests::project_backup_deletion_update_claim_and_normalized_pending_receipt_protect_artifact ... ok
+test tests::project_backup_deletion_contract_tests::project_backup_deletion_wrong_hash_writer_unissued_stale_and_final_revocation_preserve_bytes ... ok
+test tests::project_backup_preserves_control_mappings ... ok
+test tests::project_backup_restoration_contract_tests::project_backup_restoration_preflights_locks_and_exhausted_generation_before_file_read ... ok
+test tests::project_backup_restoration_contract_tests::project_backup_restoration_prepares_full_mappings_exact_bytes_and_unsaved_source_projection ... ok
+test tests::project_backup_restoration_contract_tests::project_backup_restoration_rejects_changed_invalid_or_missing_before_confirmation_and_publication ... ok
+test tests::project_backup_same_millisecond_ids_and_prepared_paths_are_unique ... ok
+test tests::project_backups_are_verified_sorted_and_pruned_to_retention ... ok
+
+test result: ok. 28 passed; 0 failed; 0 ignored; 0 measured; 1992 filtered out; finished in 2.61s

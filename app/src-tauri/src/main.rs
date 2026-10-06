@@ -275,6 +275,7 @@ mod project_file_managed_backup;
 mod project_backup_inspection;
 mod project_backup_listing;
 mod project_backup_deletion;
+mod project_backup_deletion_journal;
 mod project_backup_restoration;
 mod output_blackout_control;
 mod dj_link_machine;
@@ -51121,6 +51122,15 @@ async fn delete_project_backup_control_plane_v1(app: tauri::AppHandle, window: W
 }
 
 #[tauri::command]
+async fn query_project_backup_delete_status_v1(app: tauri::AppHandle, window: WebviewWindow,
+    request: protocol::control_plane_file::ProjectBackupDeleteRequestV1,
+) -> Result<Value, native_adapter_error::NativeAdapterError> {
+    tauri::async_runtime::spawn_blocking(move || project_backup_deletion::status_local(&app,&window,request))
+        .await.map_err(|_|"project_backup_delete_status_executor_failed")?
+        .and_then(|status|serde_json::to_value(status).map_err(|_|"project_backup_delete_status_response_invalid".into()))
+}
+
+#[tauri::command]
 async fn query_project_file_status_v1(app: tauri::AppHandle, window: WebviewWindow,
     request: protocol::control_plane_file::ProjectFileRequestV1,
 ) -> Result<Value, native_adapter_error::NativeAdapterError> {
@@ -53107,6 +53117,7 @@ fn ensure_project_backup_not_durably_referenced_v1(
     backup_directory: &Path,
     backup_id: u64,
 ) -> Result<(), String> {
+    project_backup_deletion_journal::ensure_backup_not_unresolved(journal_path, backup_id)?;
     let durable = load_project_recovery_authority_state_from_path(journal_path)?;
     let candidate = project_file_managed_backup::path_for_id(backup_directory, backup_id)?;
     let target = if backup_directory.exists() {
@@ -132856,6 +132867,7 @@ fn main() {
             inspect_project_backup_control_plane_v1,
             list_project_backups_control_plane_v1,
             delete_project_backup_control_plane_v1,
+            query_project_backup_delete_status_v1,
             query_project_file_status_v1,
             acknowledge_project_file_control_plane_v1,
             get_operator_policy,

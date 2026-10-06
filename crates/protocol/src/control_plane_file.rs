@@ -11,6 +11,7 @@ pub const BACKUP_INSPECT_ID: &str = "syndocal.query.project.backup.inspect.v1";
 pub const BACKUP_LIST_ID: &str = "syndocal.query.project.backup.list.v1";
 pub const BACKUP_LIST_MAX_ITEMS: usize = 16;
 pub const BACKUP_DELETE_ID: &str = "syndocal.project.backup.delete.v1";
+pub const BACKUP_DELETE_STATUS_ID: &str = "syndocal.query.project.backup.delete.status.v1";
 pub const AUTHORITY_ID: &str = "syndocal.query.project.file.authority.v1";
 pub const STATUS_ID: &str = "syndocal.query.project.file.status.v1";
 pub const ACK_ID: &str = "syndocal.project.file.acknowledge.v1";
@@ -157,6 +158,35 @@ impl ProjectBackupDeleteReceiptV1 {
         if self.schema_version != 1 || self.deleted_backup.backup.id != self.request.backup_id
             || self.deleted_backup.artifact_sha256 != self.request.expected_artifact_sha256
         { return Err("invalid project backup delete receipt"); }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectBackupDeletePhaseV1 { Unknown, Indeterminate, Succeeded, Rejected }
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectBackupDeleteStatusV1 {
+    pub schema_version: u16,
+    pub request: ProjectBackupDeleteRequestV1,
+    pub phase: ProjectBackupDeletePhaseV1,
+    pub receipt: Option<ProjectBackupDeleteReceiptV1>,
+    pub error: Option<String>,
+}
+impl ProjectBackupDeleteStatusV1 {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        self.request.validate()?;
+        let succeeded=self.phase==ProjectBackupDeletePhaseV1::Succeeded;
+        let error=self.phase==ProjectBackupDeletePhaseV1::Rejected||self.phase==ProjectBackupDeletePhaseV1::Indeterminate;
+        if self.schema_version!=1 || succeeded!=self.receipt.is_some() || error!=self.error.is_some()
+            || self.error.as_ref().is_some_and(|e|e.is_empty()||e.len()>1024) {
+            return Err("invalid project backup delete status");
+        }
+        if let Some(receipt)=&self.receipt {
+            receipt.validate()?;
+            if receipt.request!=self.request { return Err("project backup delete status request mismatch"); }
+        }
         Ok(())
     }
 }
@@ -309,6 +339,23 @@ pub struct ProjectFileBackupSummaryV1 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn backup_delete_status_phase_payload_and_request_are_exact() {
+        let request=ProjectBackupDeleteRequestV1 {schema_version:1,operation_id:BACKUP_DELETE_ID.into(),request_id:1,
+            expected_fence:ProjectMutationFenceV1 {process_incarnation:1,session_incarnation:2,project_epoch:0,
+                project_revision:0,project_checkpoint_hash:"a".repeat(64),project_publication_generation:0},
+            backup_id:1,expected_artifact_sha256:"c".repeat(64)};
+        let mut status=ProjectBackupDeleteStatusV1 {schema_version:1,request,phase:ProjectBackupDeletePhaseV1::Unknown,
+            receipt:None,error:None};assert!(status.validate().is_ok());
+        status.phase=ProjectBackupDeletePhaseV1::Indeterminate;assert!(status.validate().is_err());
+        status.error=Some("Preserve unresolved artifact".into());assert!(status.validate().is_ok());
+        status.phase=ProjectBackupDeletePhaseV1::Rejected;assert!(status.validate().is_ok());
+        status.phase=ProjectBackupDeletePhaseV1::Succeeded;assert!(status.validate().is_err());
+        status.phase=ProjectBackupDeletePhaseV1::Unknown;status.error=None;
+        let mut wire=serde_json::to_value(&status).unwrap();wire["owner"]="forged".into();
+        assert!(serde_json::from_value::<ProjectBackupDeleteStatusV1>(wire).is_err());
+        status.schema_version=2;assert!(status.validate().is_err());
+    }
     #[test]
     fn project_backup_delete_strict_identity_hash_fence_and_receipt() {
         let request = ProjectBackupDeleteRequestV1 { schema_version:1, operation_id:BACKUP_DELETE_ID.into(),

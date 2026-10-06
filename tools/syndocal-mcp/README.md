@@ -181,13 +181,28 @@ hashes and validates those bytes, then uses the same original handle to mark
 deletion and closes it under publication/admission/coordinator protection.
 Current owner/project/operator policy, installer claim, normalized durable
 pending/terminal references and exact grant are checked before that effect.
-Success carries the exact request and deleted inspection metadata. Its bounded
-15-minute process-local terminal lane returns the exact result for an unchanged
-request, including after disappearance/recreation; changed shape rejects.
-It is not a durable deletion journal or crash/restart guarantee, and expired/
-evicted identities must not be automatically retried. Other platforms reject
+Success carries the exact request and deleted inspection metadata. The additive
+project-backup-deletions-v1.json journal stores the exact prepared request before
+the filesystem effect and the terminal receipt before reporting success. Schema
+1 accepts at most 256 records and 8 MiB, with no implicit eviction or repair.
+Capacity, corruption, unsupported versions and unresolved prepared records fail
+closed. A prepared record protects its backup from new callers and legacy cleanup.
+
+R0/read-only syndocal.query.project.backup.delete.status.v1 accepts the same exact
+delete request under a current Read grant. It returns unknown, indeterminate,
+succeeded (with the original receipt) or rejected (with the recorded error).
+It does not issue a fence, inspect/delete an artifact or create a journal. Stored
+results are bound to the originating principal incarnation and window owner;
+new owners/principals cannot adopt them. Exact replay consults the journal before
+the process-local cache, even after artifact disappearance/recreation or loss of
+that cache; changed request shape rejects. Busy status reads preserve QueryError.
+
+An indeterminate result requires preserving the artifact and querying status;
+never repeat the mutation to resolve it. Across process/principal/owner restart,
+automatic receipt adoption is intentionally unavailable. Operator resolution,
+acknowledgement/retention, hostile OS root/parent races, actual crash/power-loss
+reconciliation and broad File acceptance remain separate work. Other platforms reject
 this operation before file access until the same-handle policy is implemented.
-Root/parent hostile OS races and broad retention remain separate acceptance.
 
 File/backup authority reads preserve a failed native query capture as the
 canonical `QueryError` object: `code`, fixed bounded `message`, `retryable` and
