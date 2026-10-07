@@ -1,0 +1,61 @@
+{
+  "observedUtc": "2026-10-07T00:44:25.582Z",
+  "profiles": [
+    {
+      "root": "C:\\Users\\janua\\AppData\\Local\\jp.seraf.ktn.syndocal.qa.mcp-lifecycle.backup-restore-20261005",
+      "artifacts": [
+        {
+          "path": "C:\\Users\\janua\\AppData\\Local\\jp.seraf.ktn.syndocal.qa.mcp-lifecycle.backup-restore-20261005\\project-backups\\backup-1791261597208.json",
+          "sha256": "d8cd1c57f79a6777dfc98d054eb5628949a330d3ab26fbb1b82762f659f44feb"
+        }
+      ],
+      "journalPath": "C:\\Users\\janua\\AppData\\Local\\jp.seraf.ktn.syndocal.qa.mcp-lifecycle.backup-restore-20261005\\project-backup-deletions-v1.json",
+      "journalSha256": null,
+      "journalFacts": null
+    },
+    {
+      "root": "C:\\Users\\janua\\AppData\\Local\\jp.seraf.ktn.syndocal.qa.mcp-lifecycle.backup-delete-20261006",
+      "artifacts": [
+        {
+          "path": "C:\\Users\\janua\\AppData\\Local\\jp.seraf.ktn.syndocal.qa.mcp-lifecycle.backup-delete-20261006\\project-backups\\backup-1791293359005.json",
+          "sha256": "4877175668f97fabeca9f671879b3a86bf4d4c10fe7f7792971540c2814de763"
+        }
+      ],
+      "journalPath": "C:\\Users\\janua\\AppData\\Local\\jp.seraf.ktn.syndocal.qa.mcp-lifecycle.backup-delete-20261006\\project-backup-deletions-v1.json",
+      "journalSha256": "b031e4f53cb724d1598ad7226aa94f83b933c63f8a9513e13766db8bd2b77f7e",
+      "journalFacts": {
+        "records": [
+          "1b553825411a9086779b017d3f6d910e1fffece761966ab5f8997a18dada432c"
+        ],
+        "management": [
+          "26933195155d3e0dff0952f135f564da928e50168eafe352bea47ff6c83d7c4e",
+          "0b1507c6f8ffadffbc055267173cacef823f855d0ba93746f1066f68afa0e7d4",
+          "e6b4820a40e5d8ba38db3e46650dc6f0091f06ae5023fe6ef9adc1f006fddcc1",
+          "de0ac5fe5863effc33eda9402edebee7929ddb6ea0f3aff0fbc5a433eefdbee3",
+          "8e7bbc9ced66304c9391be38f357318b81caaba059696aa4070f971c89a3f9f6",
+          "44862de79de4e308c42bb0fe417a3d702cab161c1de9b05510f5b2222515ac67",
+          "db512a718a23a86771894844629862fa64c7f65cda066eabc416f3579905168d",
+          "2d89196407c0a1e20608732e76d7413b9a65a9524e8caeb1cb98a7422329e34e"
+        ],
+        "retired": [
+          "e1e96bddcf2bba9c3a7854def6929f016e66160fd349b347005917ddc7a7ba80",
+          "a99b2f5e58d394ff24631fee25b97f40818abf4ef0616e6384253f1168f78f27",
+          "727e7afe8ad4ec5979ef6c1ea57555b03582b407b603d1c5f7918f588b2463b3",
+          "13a762f9949656159b7c40d64e5035e02f69747edb2b98adf495bcabf57c0a9f",
+          "b9f3cef862622d21a949617be6655970b166579cd6dd3cd24f55f12ef6313793",
+          "e0165c91ee923dfb84c3a7783c2699ec76c87dba196e107b3c76b59dcf1eb7bb",
+          "bfec9e9e31b42e722adf45738e47d2643995a9f6a1c5449d6f367b5d6af2e354",
+          "c7aec58fca5266e9ab4661867898816fe32c7e32b0d97d0151bb1bf362ace505",
+          "fcef0390552235fa47c383eb5716c414c3494413076cbbea1f55cf581d931499",
+          "c51ff413418761517bdc76ddd770728396fdee93ad18e2c3451f61f33bb80901",
+          "64fbf10ce39db61bbb82300c2a69c7b4aad2cb4b15e6f16f627a756c3d3fa1d5",
+          "4a43ed61f1a140eefdc7aebaf2618a798d46a185bdd402e85c8fb02ebe88b996",
+          "552ba7e45de0d702e05c8e1eee1bce47ee8a7808271ac47d741c3ebf7b53d03a",
+          "eb18ee672bd9fc7079d21565d1400d5bdf33abd33ae2b518f589d01f76183327",
+          "0af28709dedce1f3f4524dc2112a4285211f5449a399edd7a756bd41aa80c442",
+          "cdcc5767a7a1d76e9fb7d6a8abb9377d98c4be739f802b47a96d9c39af873004"
+        ]
+      }
+    }
+  ]
+}

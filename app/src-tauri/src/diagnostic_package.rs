@@ -463,6 +463,14 @@ const VIDEO_FIELDS: &[Field] = &[required(
     },
 )];
 
+const BRIDGE_ATTEMPT_FIELDS: &[Field] = &[
+    required("adapter",Kind::FixedStrings(&["external_mcp"])),
+    required("risk",Kind::FixedStrings(&["R2","R3","R4","R5","S0"])),
+    required("principal_incarnation",Kind::Unsigned),
+    required("request_sha256",Kind::NullableSha256),required("argument_sha256",Kind::NullableSha256),
+    required("observed_unix_ms",Kind::NullableUnsigned),
+    required("consent_policy",Kind::FixedStrings(&["exact_grant_no_individual_approval"])),
+];
 const AUDIT_ROW_FIELDS: &[Field] = &[
     required("sequence",Kind::Unsigned),
     required("phase",Kind::FixedStrings(&["admitted","terminal","event"])),
@@ -471,6 +479,7 @@ const AUDIT_ROW_FIELDS: &[Field] = &[
     required("argument_sha256",Kind::NullableSha256),required("event_sha256",Kind::NullableSha256),
     required("outcome_sha256",Kind::NullableSha256),required("succeeded",Kind::NullableBool),
     required("generation_before",Kind::NullableUnsigned),required("generation_after",Kind::NullableUnsigned),
+    field("bridge_attempt",Kind::Object(BRIDGE_ATTEMPT_FIELDS)),
 ];
 const AUDIT_PAGE_FIELDS: &[Field] = &[
     required("source",Kind::FixedStrings(&super::diagnostic_audit::SOURCES)),

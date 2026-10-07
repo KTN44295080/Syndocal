@@ -93,6 +93,8 @@ pub(crate) struct Row {
     pub succeeded: Option<bool>,
     pub generation_before: Option<u64>,
     pub generation_after: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bridge_attempt: Option<super::agent_attempt_audit::BridgeAttempt>,
 }
 impl Row {
     pub(crate) fn new(
@@ -115,6 +117,7 @@ impl Row {
             succeeded: None,
             generation_before: None,
             generation_after: None,
+            bridge_attempt: None,
         }
     }
 }
@@ -321,6 +324,16 @@ pub(crate) fn validate_history(value: &serde_json::Value) -> bool {
             }
             for key in ["generation_before", "generation_after"] {
                 if !row[key].is_null() && row[key].as_u64().is_none_or(|id| id > MAX) {
+                    return false;
+                }
+            }
+            if let Some(attempt)=row.get("bridge_attempt") {
+                if index!=0 || row["phase"]!="event"
+                    || attempt["principal_incarnation"].as_u64().is_none_or(|id|id==0||id>MAX)
+                    || attempt["request_sha256"].is_null() || attempt["argument_sha256"].is_null()
+                    || attempt["request_sha256"]!=row["request_sha256"]
+                    || attempt["argument_sha256"]!=row["argument_sha256"]
+                    || (!attempt["observed_unix_ms"].is_null()&&attempt["observed_unix_ms"].as_u64().is_none_or(|ms|ms>MAX)) {
                     return false;
                 }
             }

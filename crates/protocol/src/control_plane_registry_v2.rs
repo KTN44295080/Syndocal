@@ -535,9 +535,9 @@ impl CanonicalOperationDescriptor {
             }
             AdapterPolicy::LocalWindowAuthoritativeMutation => {
                 if self.class != OperationClass::Mutation
-                    || self.risk != OperationRisk::R0
+                    || self.risk != OperationRisk::R3
                     || self.idempotency != OperationIdempotency::Mutating
-                    || self.audit != OperationAuditRequirement::NotApplicable
+                    || self.audit != OperationAuditRequirement::Immutable
                     || self.capabilities
                         != vec![
                             OperationCapability::LocalWindowBound,
@@ -567,9 +567,9 @@ impl CanonicalOperationDescriptor {
             }
             AdapterPolicy::LocalWindowAuthoritativeRuntimeMutation => {
                 if self.class != OperationClass::Mutation
-                    || self.risk != OperationRisk::R0
+                    || !matches!(self.risk, OperationRisk::R1 | OperationRisk::R2)
                     || self.idempotency != OperationIdempotency::Mutating
-                    || self.audit != OperationAuditRequirement::NotApplicable
+                    || self.audit != if self.risk==OperationRisk::R2 {OperationAuditRequirement::Immutable} else {OperationAuditRequirement::NotApplicable}
                     || self.capabilities
                         != vec![
                             OperationCapability::LocalWindowBound,
@@ -599,7 +599,7 @@ impl CanonicalOperationDescriptor {
             }
             AdapterPolicy::LocalWindowRuntimeSafetyMutation => {
                 if self.class != OperationClass::Mutation
-                    || self.risk != OperationRisk::R0
+                    || self.risk != OperationRisk::R1
                     || self.idempotency != OperationIdempotency::Mutating
                     || self.audit != OperationAuditRequirement::NotApplicable
                     || self.capabilities
@@ -1885,7 +1885,7 @@ mod tests {
             schema: CanonicalOperationDescriptor::schema_identity(),
             operation_id: operation_id.to_string(),
             class: OperationClass::Mutation,
-            risk: OperationRisk::R0,
+            risk: OperationRisk::R3,
             capabilities: vec![
                 OperationCapability::LocalWindowBound,
                 OperationCapability::AuthoritativeProjectMutation,
@@ -1899,7 +1899,7 @@ mod tests {
                 version: 1,
             },
             idempotency: OperationIdempotency::Mutating,
-            audit: OperationAuditRequirement::NotApplicable,
+            audit: OperationAuditRequirement::Immutable,
             adapter_policy: AdapterPolicy::LocalWindowAuthoritativeMutation,
             receipt_policy: ReceiptPolicy::ExactTerminalReceipt,
             rate_policy: RatePolicy::FailClosed,
@@ -2390,6 +2390,8 @@ mod tests {
             OperationCapability::LocalWindowBound,
             OperationCapability::AuthoritativeRuntimeMutation,
         ];
+        runtime.risk=OperationRisk::R2;
+        runtime.audit=OperationAuditRequirement::Immutable;
         runtime.adapter_policy = AdapterPolicy::LocalWindowAuthoritativeRuntimeMutation;
         runtime.rate_policy = RatePolicy::TokenBucket4PerSecondBurst8;
         let source_key = SourceKey::new(
@@ -2452,6 +2454,8 @@ mod tests {
             OperationCapability::AuthoritativeRuntimeMutation,
             OperationCapability::AllowedDuringFullLock,
         ];
+        safety.risk=OperationRisk::R1;
+        safety.audit=OperationAuditRequirement::NotApplicable;
         safety.adapter_policy = AdapterPolicy::LocalWindowRuntimeSafetyMutation;
         safety.rate_policy = RatePolicy::TokenBucket4PerSecondBurst8;
         let source_key = SourceKey::new(

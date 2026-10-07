@@ -40,6 +40,15 @@ export function inspectDiagnosticAudit(bytes) {
       if(page.selected_before_sequence!==null)assert.ok(row.sequence<page.selected_before_sequence);
       for(const [key,value] of Object.entries(row))if(key.endsWith('_sha256')&&value!==null)assert.match(value,/^[0-9a-f]{64}$/);
       assert.equal(Object.keys(row).some(key=>['caller','principal','result','path','error','operation_id'].includes(key)),false);
+      if(row.bridge_attempt!==undefined){
+        const attempt=row.bridge_attempt;assert.equal(page.source,'agent_authority');assert.equal(row.phase,'event');
+        assert.equal(attempt.adapter,'external_mcp');assert.ok(['R2','R3','R4','R5','S0'].includes(attempt.risk));
+        assert.ok(Number.isSafeInteger(attempt.principal_incarnation)&&attempt.principal_incarnation>0);
+        assert.equal(attempt.request_sha256,row.request_sha256);assert.match(attempt.request_sha256,/^[0-9a-f]{64}$/);
+        assert.equal(attempt.argument_sha256,row.argument_sha256);assert.match(attempt.argument_sha256,/^[0-9a-f]{64}$/);
+        assert.ok(attempt.observed_unix_ms===null||(Number.isSafeInteger(attempt.observed_unix_ms)&&attempt.observed_unix_ms>0));
+        assert.equal(attempt.consent_policy,'exact_grant_no_individual_approval');
+      }
     }
     if(page.next_before_sequence!==null)assert.equal(page.next_before_sequence,page.records[0].sequence);
   }
@@ -65,6 +74,9 @@ export async function exportNativeFileAudit(mcp, grant, state, checks, operation
     const bytes=await fs.readFile(destination),audit=inspectDiagnosticAudit(bytes);
     assert.equal(receipt.result.sha256,createHash('sha256').update(bytes).digest('hex'));
     const page=audit.pages.find(p=>p.source==='project_file');
+    const bridgeAuthorizationRows=audit.pages.find(p=>p.source==='agent_authority').records
+      .filter(row=>row.bridge_attempt?.risk==='R5');
+    assert.ok(bridgeAuthorizationRows.length>0,'Actual R5 authorization metadata must survive diagnostic export');
     const rows=page.records.filter(row=>row.phase==='terminal'&&row.operation_sha256===hash(operationId)
       &&row.outcome_sha256===hash(outcomeCode));
     assert.ok(rows.length>0,'The real successful File operation must remain exportable');
@@ -76,7 +88,7 @@ export async function exportNativeFileAudit(mcp, grant, state, checks, operation
     assert.ok(!bytes.includes(Buffer.from(directory)));assert.ok(!bytes.includes(Buffer.from('PRIVATE')));
     checks.push({check:`external-diagnostic-export-after-${outcomeCode}-typed-success-redaction-replay-and-read-purity`,passed:true,
       archiveBytes:bytes.length,archiveSha256:receipt.result.sha256,fileRows:page.records.length,
-      matchingSequences:rows.map(row=>row.sequence),elapsedMs:performance.now()-start,
+      matchingSequences:rows.map(row=>row.sequence),bridgeAuthorizationRows:bridgeAuthorizationRows.length,elapsedMs:performance.now()-start,
       elapsedBoundary:'Authenticated export plus status, exact replay and state reads; not engine tick timing'});
   }finally{
     assert.equal(path.dirname(directory),await fs.realpath(os.tmpdir()));

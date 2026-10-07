@@ -72,6 +72,8 @@ pub(crate) struct AuditRecord {
     pub principal_incarnation: Option<u64>,
     pub operation_id: Option<String>,
     pub outcome: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bridge_attempt: Option<crate::agent_attempt_audit::BridgeAttempt>,
 }
 
 #[derive(Debug, Clone)]
@@ -316,6 +318,7 @@ fn record_audit(
         principal_incarnation,
         operation_id: operation_id.map(str::to_string),
         outcome: outcome.to_string(),
+        bridge_attempt: None,
     });
 }
 
@@ -326,7 +329,12 @@ impl AgentAuthorityService {
         page("agent_authority",inner.audit.iter(),before,|r|r.sequence,|r,id|{
             let actor=r.principal_id.as_ref().map(|principal|format!("{principal}:{}",r.principal_incarnation.unwrap_or(0)));
             let mut row=Row::new(id,"event",actor.as_deref(),r.operation_id.as_deref(),None);
-            row.event_sha256=Some(identity_hash(&r.event));row.outcome_sha256=Some(identity_hash(&r.outcome));row
+            row.event_sha256=Some(identity_hash(&r.event));row.outcome_sha256=Some(identity_hash(&r.outcome));
+            row.bridge_attempt=r.bridge_attempt.clone();
+            if let Some(attempt)=&r.bridge_attempt {
+                row.request_sha256=Some(attempt.request_sha256.clone());row.argument_sha256=Some(attempt.argument_sha256.clone());
+            }
+            row
         })
     }
     pub(crate) fn new() -> Self {
@@ -557,6 +565,7 @@ impl AgentAuthorityService {
         incarnation: u64,
         method: &str,
         params: &serde_json::Value,
+        request_id: &str,
     ) -> Result<(), String> {
         let (operation_id, risk) = bridge_operation(method, params)?;
         let capability = match risk {
@@ -601,10 +610,13 @@ impl AgentAuthorityService {
             .authorize(&context)
             .map(|_| ())
             .map_err(|error| authority_error(error).to_string());
-        if matches!(risk, OperationRisk::R4 | OperationRisk::R5) {
-            record_audit(&mut inner, "external.high_risk.admission", Some(&context.principal),
+        if matches!(risk, OperationRisk::R2 | OperationRisk::R3 | OperationRisk::R4 | OperationRisk::R5 | OperationRisk::S0) {
+            let event=if matches!(risk,OperationRisk::R4|OperationRisk::R5){"external.high_risk.admission"}else{"external.operation.admission"};
+            record_audit(&mut inner, event, Some(&context.principal),
                 Some(incarnation), Some(&context.operation_id),
                 result.as_ref().err().map(String::as_str).unwrap_or("success"));
+            inner.audit.back_mut().expect("record_audit always appends").bridge_attempt=Some(
+                crate::agent_attempt_audit::BridgeAttempt::new(risk,incarnation,request_id,&canonical_arguments_fingerprint));
         }
         result
     }
@@ -1120,8 +1132,7 @@ mod tests {
                 "client-a",
                 approval.principal_incarnation,
                 "fixtures.list",
-                &serde_json::json!({}),
-            )
+                &serde_json::json!({}), "c042c186-92ea-4b39-9115-05042bc65785",)
             .is_ok());
         assert_eq!(
             service
@@ -1129,8 +1140,7 @@ mod tests {
                     "client-a",
                     approval.principal_incarnation,
                     "fixtures.get",
-                    &serde_json::json!({"fixtureId": 1}),
-                )
+                    &serde_json::json!({"fixtureId": 1}), "c042c186-92ea-4b39-9115-05042bc65785",)
                 .unwrap_err(),
             "agent_missing_grant"
         );
@@ -1163,16 +1173,90 @@ mod tests {
                             "project_revision": 0,
                             "checkpoint_hash": "a".repeat(64)
                         }
-                    }),
-                )
+                    }), "c042c186-92ea-4b39-9115-05042bc65785",)
                 .is_ok()
         );
         assert_eq!(service.authorize_bridge_request("client-a", approval.principal_incarnation,
-            "diagnostics.export", &serde_json::json!({"destination": "C:/diagnostics/new.zip"})).unwrap_err(), "agent_missing_grant");
+            "diagnostics.export", &serde_json::json!({"destination": "C:/diagnostics/new.zip"}), "c042c186-92ea-4b39-9115-05042bc65785",).unwrap_err(), "agent_missing_grant");
         service.grant("client-a", approval.principal_incarnation,
             AgentGrant::new(AdapterKind::ExternalMcp, AgentCapability::File, "syndocal.diagnostics.export.v1", None).unwrap()).unwrap();
         assert!(service.authorize_bridge_request("client-a", approval.principal_incarnation,
-            "diagnostics.export", &serde_json::json!({"destination": "C:/diagnostics/new.zip"})).is_ok());
+            "diagnostics.export", &serde_json::json!({"destination": "C:/diagnostics/new.zip"}), "c042c186-92ea-4b39-9115-05042bc65785",).is_ok());
+    }
+
+    #[test]
+    fn diagnostic_audit_bridge_attempts_cover_allowed_and_denied_r2_r3_r4_r5_s0_without_private_arguments() {
+        let service=service();let challenge=service.begin_pairing("PRIVATE_PRINCIPAL").unwrap();
+        let approval=service.approve_pairing(&challenge.challenge_id,&challenge.challenge).unwrap();
+        service.promote("PRIVATE_PRINCIPAL",approval.principal_incarnation).unwrap();
+        let cases=[
+            ("control_plane.execute","syndocal.runtime.timeline.transport.set_playing.v1",AgentCapability::Live,"R2"),
+            ("fixtures.set_transform","syndocal.authored.agent_bridge.fixtures.set_transform.v1",AgentCapability::Authored,"R3"),
+            ("output.set_video_blackout","syndocal.output.blackout.set.v2",AgentCapability::Output,"R4"),
+            ("diagnostics.export","syndocal.diagnostics.export.v1",AgentCapability::File,"R5"),
+            ("control_plane.execute","syndocal.safety.blackout.engage.v1",AgentCapability::SafetyBlackoutEngage,"S0"),
+        ];
+        for (index,(method,operation,capability,risk)) in cases.into_iter().enumerate() {
+            let params=serde_json::json!({"operationId":operation,"PRIVATE_BODY":"PRIVATE_CREDENTIAL_OR_PATH"});
+            let id=format!("00000000-0000-4000-8000-{index:012x}");
+            assert_eq!(service.authorize_bridge_request("PRIVATE_PRINCIPAL",approval.principal_incarnation,method,&params,&id).unwrap_err(),"agent_missing_grant");
+            service.grant("PRIVATE_PRINCIPAL",approval.principal_incarnation,AgentGrant::new(AdapterKind::ExternalMcp,capability,operation,None).unwrap()).unwrap();
+            service.authorize_bridge_request("PRIVATE_PRINCIPAL",approval.principal_incarnation,method,&params,&id).unwrap();
+            let audit=service.status().unwrap().audit;let records:Vec<_>=audit.iter().filter(|row|row.bridge_attempt.as_ref().is_some_and(|attempt|attempt.risk==risk)).collect();
+            assert_eq!(records.len(),2);assert_eq!(records[0].outcome,"agent_missing_grant");assert_eq!(records[1].outcome,"success");
+            assert_eq!(records[0].bridge_attempt.as_ref().unwrap().request_sha256,records[1].bridge_attempt.as_ref().unwrap().request_sha256);
+            assert_eq!(records[0].bridge_attempt.as_ref().unwrap().argument_sha256,records[1].bridge_attempt.as_ref().unwrap().argument_sha256);
+            let metadata=records[0].bridge_attempt.as_ref().unwrap();
+            assert_eq!(metadata.adapter,"external_mcp");assert_eq!(metadata.principal_incarnation,approval.principal_incarnation);
+            assert_eq!(metadata.request_sha256,crate::diagnostic_audit::identity_hash(&id));
+            assert_eq!(metadata.argument_sha256,crate::diagnostic_audit::hex(&Sha256::digest(serde_json::to_vec(&params).unwrap())));
+            assert!(metadata.observed_unix_ms.is_some());assert_eq!(metadata.consent_policy,"exact_grant_no_individual_approval");
+        }
+        let page=service.diagnostic_audit(None).unwrap();let serialized=serde_json::to_string(&page).unwrap();
+        assert!(!serialized.contains("PRIVATE"));assert!(!serialized.contains(&approval.credential));
+        assert!(page.records.iter().any(|row|row.bridge_attempt.is_some()));
+    }
+
+    #[test]
+    fn diagnostic_audit_canonical_mutations_reject_read_grants_and_require_real_risk_capabilities() {
+        let service=service();let challenge=service.begin_pairing("client-a").unwrap();
+        let approval=service.approve_pairing(&challenge.challenge_id,&challenge.challenge).unwrap();
+        service.promote("client-a",approval.principal_incarnation).unwrap();
+        for (operation,capability,risk) in [
+            ("syndocal.effects.set_enabled.v1",AgentCapability::Authored,OperationRisk::R3),
+            ("syndocal.cue_lists.reorder.v1",AgentCapability::Authored,OperationRisk::R3),
+            ("syndocal.cue_lists.rename.v1",AgentCapability::Authored,OperationRisk::R3),
+            ("syndocal.cue_lists.delete.v1",AgentCapability::Authored,OperationRisk::R3),
+            ("syndocal.scenes.create.v1",AgentCapability::Authored,OperationRisk::R3),
+            ("syndocal.runtime.timeline.transport.set_playing.v1",AgentCapability::Live,OperationRisk::R2),
+            ("syndocal.runtime.timeline.loop.commit.v1",AgentCapability::Runtime,OperationRisk::R1),
+            ("syndocal.runtime.timeline.follow.abort.v1",AgentCapability::Runtime,OperationRisk::R1),
+        ] {
+            let params=serde_json::json!({"operationId":operation,"request":{}});
+            assert_eq!(bridge_operation("control_plane.execute",&params).unwrap().1,risk);
+            service.grant("client-a",approval.principal_incarnation,AgentGrant::new(AdapterKind::ExternalMcp,AgentCapability::Read,operation,None).unwrap()).unwrap();
+            let id="00000000-0000-4000-8000-000000000001";
+            assert_eq!(service.authorize_bridge_request("client-a",approval.principal_incarnation,"control_plane.execute",&params,id).unwrap_err(),"agent_missing_grant");
+            service.grant("client-a",approval.principal_incarnation,AgentGrant::new(AdapterKind::ExternalMcp,capability,operation,None).unwrap()).unwrap();
+            service.authorize_bridge_request("client-a",approval.principal_incarnation,"control_plane.execute",&params,id).unwrap();
+        }
+    }
+
+    #[test]
+    fn diagnostic_audit_bridge_attempt_metadata_is_bounded_and_immutable_across_eviction() {
+        let service=service();let challenge=service.begin_pairing("client-a").unwrap();
+        let approval=service.approve_pairing(&challenge.challenge_id,&challenge.challenge).unwrap();
+        let args=serde_json::json!({"destination":"PRIVATE_PATH"});
+        for index in 0..600 {
+            let id=format!("00000000-0000-4000-8000-{index:012x}");
+            assert!(service.authorize_bridge_request("client-a",approval.principal_incarnation,"diagnostics.export",&args,&id).is_err());
+        }
+        let audit=service.status().unwrap().audit;assert_eq!(audit.len(),MAX_AUDIT_RECORDS);
+        assert!(audit.iter().all(|row|row.bridge_attempt.is_some()));
+        let page=service.diagnostic_audit(None).unwrap();assert!(page.has_expired_history);assert_eq!(page.records.len(),16);
+        assert!(serde_json::to_string(&page).unwrap().len()<32*1024);
+        assert_eq!(service.status().unwrap().audit,audit);
+        assert!(service.diagnostic_audit(Some(1)).unwrap_err().contains("retention_expired"));
     }
 
     #[test]

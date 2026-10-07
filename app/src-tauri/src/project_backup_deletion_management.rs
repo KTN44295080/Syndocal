@@ -163,7 +163,7 @@ pub(super) fn execute_core(state:&AppState,query:&ControlPlaneQueryState,
 fn caller(dispatch:&AgentBridgeDispatch)->String {format!("external:{}:{}",dispatch.principal_id,dispatch.principal_incarnation)}
 fn authorize(app:&AppHandle,dispatch:&AgentBridgeDispatch)->Result<(),String> {
     app.state::<super::agent_bridge::AgentBridge>().authority("main")?.authorize_bridge_request(
-        &dispatch.principal_id,dispatch.principal_incarnation,&dispatch.method,&dispatch.params)
+        &dispatch.principal_id,dispatch.principal_incarnation,&dispatch.method,&dispatch.params, &dispatch.request_id,)
 }
 fn immutable<T:serde::de::DeserializeOwned+PartialEq>(dispatch:&AgentBridgeDispatch,id:&str,request:&T)->Result<(),String> {
     if dispatch.method!="control_plane.execute"||dispatch.params.get("operationId").and_then(serde_json::Value::as_str)!=Some(id) {

@@ -163,8 +163,7 @@ pub(super) fn validate_external_authorization(state: &AppState) -> Result<(), St
                 &context.dispatch.principal_id,
                 context.dispatch.principal_incarnation,
                 &context.dispatch.method,
-                &context.dispatch.params,
-            )
+                &context.dispatch.params, &context.dispatch.request_id,)
             .map_err(|_| "project_replacement_external_authorization_revoked".into())
     })
 }

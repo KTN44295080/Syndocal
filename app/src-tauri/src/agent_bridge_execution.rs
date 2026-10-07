@@ -247,7 +247,7 @@ pub(crate) fn execute(
             diagnostic_capture_authorize_publish(
                 ||super::capture_diagnostic_package(app,&state,&request.audit_before.unwrap_or_default(),request.expected_process_incarnation),
                 ||app.state::<AgentBridge>().authority("main")?.authorize_bridge_request(
-                    &dispatch.principal_id,dispatch.principal_incarnation,&dispatch.method,&dispatch.params),
+                    &dispatch.principal_id,dispatch.principal_incarnation,&dispatch.method,&dispatch.params, &dispatch.request_id,),
                 |(_,bytes,audit)| {
                     let sha256=format!("{:x}",Sha256::digest(&bytes));let size=bytes.len();
                     super::diagnostic_package_publication::publish_new_diagnostic_package(&destination,&bytes)

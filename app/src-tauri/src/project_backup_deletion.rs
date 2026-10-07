@@ -204,7 +204,7 @@ pub(crate) fn status_external(app: &AppHandle, window: &WebviewWindow, dispatch:
     status_core(&app.state::<AppState>(),window.label(),&caller,request,
         &super::project_recovery_authority_state_path(app)?,||app.state::<super::agent_bridge::AgentBridge>()
             .authority("main")?.authorize_bridge_request(&dispatch.principal_id,dispatch.principal_incarnation,
-                &dispatch.method,&dispatch.params))
+                &dispatch.method,&dispatch.params, &dispatch.request_id,))
 }
 
 fn execute(app: &AppHandle, window: &WebviewWindow, caller: &str, request: Request,
@@ -238,5 +238,5 @@ pub(crate) fn execute_external(app: &AppHandle, window: &WebviewWindow,
     let caller = format!("external:{}:{}", dispatch.principal_id, dispatch.principal_incarnation);
     execute(app, window, &caller, request, || app.state::<super::agent_bridge::AgentBridge>()
         .authority("main")?.authorize_bridge_request(&dispatch.principal_id, dispatch.principal_incarnation,
-            &dispatch.method, &dispatch.params), || true)
+            &dispatch.method, &dispatch.params, &dispatch.request_id,), || true)
 }

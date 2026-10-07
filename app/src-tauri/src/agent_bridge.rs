@@ -198,8 +198,7 @@ impl AgentBridge {
             .start_native_execution(renderer_generation, request_id)?;
         self.inner.authority.authorize_bridge_request(
             &dispatch.principal_id, dispatch.principal_incarnation,
-            &dispatch.method, &dispatch.params,
-        )?;
+            &dispatch.method, &dispatch.params, &dispatch.request_id,)?;
         Ok(dispatch)
     }
 
@@ -299,8 +298,7 @@ fn process(inner: &Inner, bytes: &[u8]) -> Response {
         &auth.principal_id,
         auth.principal_incarnation,
         &request.method,
-        &request.params,
-    ) {
+        &request.params, &request.request_id,) {
         return Response::rejected(&request.request_id, &error);
     }
     let mut ledger = match inner.ledger.lock() {

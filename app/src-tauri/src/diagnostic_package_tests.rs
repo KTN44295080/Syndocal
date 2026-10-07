@@ -95,6 +95,45 @@ fn source_entries() -> Vec<(&'static str, Vec<u8>)> {
     .collect()
 }
 
+#[test]
+fn diagnostic_package_preserves_optional_bridge_authorization_metadata_and_rejects_contradictions() {
+    let mut row=crate::diagnostic_audit::Row::new(1,"event",Some("PRIVATE_PRINCIPAL"),Some("syndocal.diagnostics.export.v1"),None);
+    let attempt=crate::agent_attempt_audit::BridgeAttempt {
+        adapter:"external_mcp",risk:"R5",principal_incarnation:3,
+        request_sha256:crate::diagnostic_audit::identity_hash("PRIVATE_UUID"),argument_sha256:"a".repeat(64),
+        observed_unix_ms:Some(1_700_000_000_000),consent_policy:"exact_grant_no_individual_approval",
+    };
+    row.request_sha256=Some(attempt.request_sha256.clone());row.argument_sha256=Some(attempt.argument_sha256.clone());
+    row.bridge_attempt=Some(attempt);
+    let mut history=crate::diagnostic_audit::fixture_history();let page=&mut history["pages"][0];
+    page["retained_count"]=json!(1);page["retained_first_sequence"]=json!(1);page["retained_last_sequence"]=json!(1);
+    page["records"]=json!([row]);
+    history["pages"][0]["records"][0]["bridge_attempt"]["PRIVATE_KEY"] =json!("PRIVATE_CREDENTIAL");
+    let projected=sanitize_payload(4,&serde_json::to_vec(&history).unwrap()).unwrap();
+    let accepted:Value=serde_json::from_slice(&projected).unwrap();
+    assert_eq!(accepted["pages"][0]["records"][0]["bridge_attempt"]["risk"],"R5");
+    assert_eq!(accepted["full_attempt_fields_available"],false);
+    assert!(!String::from_utf8(projected).unwrap().contains("PRIVATE"));
+    let mut entries=source_entries();entries[4].1=serde_json::to_vec(&history).unwrap();
+    validate_diagnostic_package(&build_diagnostic_package(&entries).unwrap()).unwrap();
+    for (pointer,value) in [
+        ("/pages/0/records/0/bridge_attempt/risk",json!("R0")),
+        ("/pages/0/records/0/bridge_attempt/adapter",json!("remote")),
+        ("/pages/0/records/0/bridge_attempt/principal_incarnation",json!(0)),
+        ("/pages/0/records/0/bridge_attempt/request_sha256",Value::Null),
+        ("/pages/0/records/0/bridge_attempt/argument_sha256",json!("b".repeat(64))),
+        ("/pages/0/records/0/bridge_attempt/observed_unix_ms",json!(9_007_199_254_740_992_u64)),
+        ("/pages/0/records/0/bridge_attempt/consent_policy",json!("approved")),
+    ] {
+        let mut invalid=history.clone();*invalid.pointer_mut(pointer).unwrap()=value;
+        assert!(sanitize_payload(4,&serde_json::to_vec(&invalid).unwrap()).is_err(),"{pointer}");
+    }
+    let mut invalid=history;invalid["pages"].as_array_mut().unwrap().swap(0,1);
+    assert!(sanitize_payload(4,&serde_json::to_vec(&invalid).unwrap()).is_err());
+    // Existing format-2/schema-1 histories without metadata remain valid.
+    validate_diagnostic_package(&build_diagnostic_package(&source_entries()).unwrap()).unwrap();
+}
+
 fn change_json(entries: &mut [(&str, Vec<u8>)], index: usize, change: impl FnOnce(&mut Value)) {
     let mut value: Value = serde_json::from_slice(&entries[index].1).unwrap();
     change(&mut value);

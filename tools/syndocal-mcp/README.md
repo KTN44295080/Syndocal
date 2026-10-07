@@ -612,3 +612,10 @@ it unknown because an irreversible effect may precede journal failure. The
 process-local File audit retains redacted rows rather than full result bodies.
 See [typed File audit acceptance](../../qa/FILE_AUDIT_TYPED_OUTCOMES_2026-10-07.md) for the actual native export
 after both operations, boundaries and retained pre-fix regression failures.
+
+External canonical authored mutations require Authored grants, Play requires Live,
+loop/Follow Abort require Runtime; Read grants cannot enter these mutations.
+R2-R5/S0 authorization observations carry redacted request/argument metadata in
+optional diagnostic audit fields; authorization success is not effect success.
+See [authorization risk and audit evidence](../../qa/BRIDGE_AUTHORIZATION_AUDIT_AND_RISK_2026-10-07.md) for current proof and
+unproven durability/revocation/physical boundaries.

@@ -1640,6 +1640,13 @@ fn canonical_descriptor_for_source(
                 | ReviewedCanonicalOperation::ForceTransferOutputLease
         ) {
             OperationRisk::R4
+        } else if matches!(reviewed,ReviewedCanonicalOperation::SetEffectEnabled | ReviewedCanonicalOperation::ReorderCueLists
+            | ReviewedCanonicalOperation::RenameCueList | ReviewedCanonicalOperation::DeleteCueList | ReviewedCanonicalOperation::CreateSceneAuthoritativeV1) {
+            OperationRisk::R3
+        } else if matches!(reviewed,ReviewedCanonicalOperation::SetTimelineTransportPlaying) {
+            OperationRisk::R2
+        } else if matches!(reviewed,ReviewedCanonicalOperation::CommitTimelineLoopRuntime | ReviewedCanonicalOperation::AbortTimelineFollow) {
+            OperationRisk::R1
         } else {
             OperationRisk::R0
         },
@@ -1649,7 +1656,10 @@ fn canonical_descriptor_for_source(
         idempotency,
         audit: if matches!(
             reviewed,
-            ReviewedCanonicalOperation::EngageSafetyBlackout
+            ReviewedCanonicalOperation::SetEffectEnabled | ReviewedCanonicalOperation::ReorderCueLists
+                | ReviewedCanonicalOperation::RenameCueList | ReviewedCanonicalOperation::DeleteCueList
+                | ReviewedCanonicalOperation::CreateSceneAuthoritativeV1 | ReviewedCanonicalOperation::SetTimelineTransportPlaying
+                | ReviewedCanonicalOperation::EngageSafetyBlackout
                 | ReviewedCanonicalOperation::ReleaseBlackout
                 | ReviewedCanonicalOperation::ArmOutputOwnership
                 | ReviewedCanonicalOperation::TakeOverStandby
@@ -3734,6 +3744,12 @@ mod tests {
             ) {
                 assert_eq!(operation.risk, OperationRisk::R4);
                 assert_eq!(operation.audit, OperationAuditRequirement::Immutable);
+            } else if matches!(operation.adapter_policy, AdapterPolicy::LocalWindowAuthoritativeMutation) {
+                assert_eq!(operation.risk,OperationRisk::R3);assert_eq!(operation.audit,OperationAuditRequirement::Immutable);
+            } else if operation.operation_id==TIMELINE_TRANSPORT_SET_PLAYING_OPERATION_ID {
+                assert_eq!(operation.risk,OperationRisk::R2);assert_eq!(operation.audit,OperationAuditRequirement::Immutable);
+            } else if matches!(operation.adapter_policy,AdapterPolicy::LocalWindowAuthoritativeRuntimeMutation | AdapterPolicy::LocalWindowRuntimeSafetyMutation) {
+                assert_eq!(operation.risk,OperationRisk::R1);assert_eq!(operation.audit,OperationAuditRequirement::NotApplicable);
             } else {
                 assert_eq!(operation.risk, OperationRisk::R0);
                 assert_eq!(operation.audit, OperationAuditRequirement::NotApplicable);

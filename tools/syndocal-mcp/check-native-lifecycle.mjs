@@ -24,6 +24,7 @@ import { nativeProjectFile } from './native-project-file.mjs';
 import { nativeProjectBackup } from './native-project-backup.mjs';
 import { nativeProjectBackupRestore } from './native-project-backup-restore.mjs';
 import { nativeFileQueryPressure } from './native-file-query-pressure.mjs';
+import { nativeCanonicalRiskAdmission } from './native-canonical-risk-admission.mjs';
 
 const exec = promisify(execFile);
 const args = process.argv.slice(2);
@@ -279,6 +280,7 @@ try {
   await pair(); await install();
   if (fileQueryPressure) await nativeFileQueryPressure(backend, options, checks);
   if (projectReplacement) await nativeProjectReplacement(backend, options, checks);
+  if (projectBackup) await nativeCanonicalRiskAdmission(backend, options, checks);
   if (projectFile) await nativeProjectFile(backend, options, checks);
   if (projectBackup) await nativeProjectBackup(backend, options, checks);
   if (projectBackup) await nativeProjectBackupRestore(backend, options, checks);
@@ -453,6 +455,7 @@ await fs.writeFile(evidence, `${JSON.stringify({ schemaVersion: 1, timestamp: ne
     'diagnostic_audit.rs','diagnostic_audit_capture.rs','diagnostic_package.rs','agent_authority_service.rs',
     'agent_bridge_execution.rs','control_plane_runtime.rs','output_lease.rs','project_file_control_plane.rs','project_replacement_control_plane.rs',
     'project_file_audit.rs',
+    'agent_attempt_audit.rs',
   ].map(async name=>({name,sha256:createHash('sha256').update(await fs.readFile(new URL(`../../app/src-tauri/src/${name}`,import.meta.url))).digest('hex')})))} : {}),
   ...(leaseExpiry ? {
     leaseExpiryHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-lease-expiry.mjs', import.meta.url))).digest('hex'),
@@ -485,6 +488,8 @@ await fs.writeFile(evidence, `${JSON.stringify({ schemaVersion: 1, timestamp: ne
   } : {}),
   ...(projectBackup ? {
     diagnosticHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-diagnostic-exports.mjs', import.meta.url))).digest('hex'),
+    canonicalRiskAdmissionHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-canonical-risk-admission.mjs', import.meta.url))).digest('hex'),
+    canonicalRiskPolicySha256: createHash('sha256').update(await fs.readFile(new URL('../../crates/protocol/src/control_plane_registry_v2.rs', import.meta.url))).digest('hex'),
     projectBackupHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-project-backup.mjs', import.meta.url))).digest('hex'),
     backupDeletionManagementHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-backup-deletion-management.mjs', import.meta.url))).digest('hex'),
     backupDeletionManagementPolicySha256: createHash('sha256').update(await fs.readFile(new URL('../../app/src-tauri/src/project_backup_deletion_management.rs', import.meta.url))).digest('hex'),

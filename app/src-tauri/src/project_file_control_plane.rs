@@ -279,8 +279,7 @@ fn authorize(context: &Context, state: &AppState) -> Result<(), String> {
                 &dispatch.principal_id,
                 dispatch.principal_incarnation,
                 &dispatch.method,
-                &dispatch.params,
-            )
+                &dispatch.params, &dispatch.request_id,)
             .map_err(|_| "project_file_guard_authorization_revoked")?;
     }
     Ok(())
@@ -967,8 +966,7 @@ pub(crate) fn execute_external(
             &dispatch.principal_id,
             dispatch.principal_incarnation,
             &dispatch.method,
-            &dispatch.params,
-        )?;
+            &dispatch.params, &dispatch.request_id,)?;
     let caller = format!(
         "external:{}:{}",
         dispatch.principal_id, dispatch.principal_incarnation
@@ -978,8 +976,7 @@ pub(crate) fn execute_external(
             serde_json::from_value(ingress.request).map_err(|_| "project_file_request_invalid")?,
         )?;
         app.state::<AgentBridge>().authority("main")?.authorize_bridge_request(
-            &dispatch.principal_id, dispatch.principal_incarnation, &dispatch.method, &dispatch.params,
-        )?;
+            &dispatch.principal_id, dispatch.principal_incarnation, &dispatch.method, &dispatch.params, &dispatch.request_id,)?;
         return serde_json::to_value(listed).map_err(|_| "project_file_response_invalid".into());
     }
     if operation == wire::BACKUP_INSPECT_ID {
@@ -988,8 +985,7 @@ pub(crate) fn execute_external(
             serde_json::from_value(ingress.request).map_err(|_| "project_file_request_invalid")?,
         )?;
         app.state::<AgentBridge>().authority("main")?.authorize_bridge_request(
-            &dispatch.principal_id, dispatch.principal_incarnation, &dispatch.method, &dispatch.params,
-        )?;
+            &dispatch.principal_id, dispatch.principal_incarnation, &dispatch.method, &dispatch.params, &dispatch.request_id,)?;
         return serde_json::to_value(inspected).map_err(|_| "project_file_response_invalid".into());
     }
     if operation == wire::BACKUP_AUTHORITY_ID {
