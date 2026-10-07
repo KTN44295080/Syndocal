@@ -604,3 +604,11 @@ It uses no native broker or devices and is included in `check:ai5-sidecar`.
 The integration check launches the CLI against its own fake loopback broker. It exercises negotiation, all ten tool schemas, canonical operation allowlisting, request correlation, Video BO false-success handling, pending/unknown behavior, no automatic retry, overlap rejection, malformed/oversized frames, executable mismatch and credential redaction. The transport check exercises health, JSON-RPC over HTTP, the REST facade, WebSocket JSON-RPC, and the same nonce proof against a fake loopback broker. These checks do not operate Syndocal or physical devices. Real native bridge acceptance is a separate integration check.
 
 The adapter implements the MCP **2025-11-25** [stdio transport](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports), [initialization lifecycle](https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle), and [tools interface](https://modelcontextprotocol.io/specification/2025-11-25/server/tools). Supported JSON-RPC methods are `initialize`, `notifications/initialized`, `ping`, `tools/list`, and `tools/call`. The HTTP and WebSocket transports reuse the same JSON-RPC dispatcher and native authentication path; they do not add a second command registry.
+
+File audit borrows typed publication, backup-deletion and journal-management
+results. Successful deletion/management needs no synthetic publication phase.
+Only typed receipts establish the effect outcome; a generic native error leaves
+it unknown because an irreversible effect may precede journal failure. The
+process-local File audit retains redacted rows rather than full result bodies.
+See [typed File audit acceptance](../../qa/FILE_AUDIT_TYPED_OUTCOMES_2026-10-07.md) for the actual native export
+after both operations, boundaries and retained pre-fix regression failures.

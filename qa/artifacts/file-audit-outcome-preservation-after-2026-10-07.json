@@ -1,0 +1,25 @@
+{
+  "observedUtc": "2026-10-07T00:14:03.649Z",
+  "profiles": [
+    {
+      "root": "C:\\Users\\janua\\AppData\\Local\\jp.seraf.ktn.syndocal.qa.mcp-lifecycle.backup-restore-20261005",
+      "originalArtifacts": 1,
+      "allOriginalArtifactsPreserved": true
+    },
+    {
+      "root": "C:\\Users\\janua\\AppData\\Local\\jp.seraf.ktn.syndocal.qa.mcp-lifecycle.backup-delete-20261006",
+      "originalArtifacts": 1,
+      "originalJournalCounts": {
+        "records": 1,
+        "management": 4,
+        "retired": 8
+      },
+      "currentJournalCounts": {
+        "records": 1,
+        "management": 8,
+        "retired": 16
+      },
+      "allOriginalFactsPreserved": true
+    }
+  ]
+}

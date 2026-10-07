@@ -69,36 +69,20 @@ impl BackupTargets {
 #[derive(Default)]
 struct Admission {
     callers: HashMap<String, (f64, Instant)>,
-    audit: Vec<Value>,
+    audit: Vec<super::diagnostic_audit::Row>,
     reserved: usize,
 }
 impl ProjectFileControlPlaneState {
     pub(crate) fn diagnostic_audit(&self,before:Option<u64>)->Result<super::diagnostic_audit::Page,String> {
-        use super::diagnostic_audit::{page,Row,identity_hash};
+        use super::diagnostic_audit::page;
         let inner=super::diagnostic_audit_capture::read_lock(&self.admission,"file")?;
-        page("project_file",inner.audit.iter().enumerate(),before,|r|r.0 as u64+1,|(index,r),_|{
-            let phase=match r["stage"].as_str(){Some("admitted")=>"admitted",Some("terminal")=>"terminal",_=>"invalid"};
-            let mut row=Row::new(index as u64+1,phase,r["caller"].as_str(),r["operation_id"].as_str(),r["request_id"].as_u64());
-            row.shape_sha256=r["shape"].as_str().map(str::to_string);
-            if phase=="terminal" {
-                if let Some(result)=r["result"].get("Ok") {
-                    // A successful status read may describe a failed or unknown
-                    // publication. Project only its fixed phase, never its body.
-                    row.succeeded=match result["phase"].as_str() {
-                        Some("succeeded"|"acknowledged")=>Some(true),
-                        Some("cancelled"|"abandoned"|"failed")=>Some(false),
-                        Some("reserved"|"selecting"|"selected"|"prepared"|"indeterminate"|"missing")=>None,
-                        _=>{row.phase="invalid";None},
-                    };
-                    row.outcome_sha256=result["phase"].as_str().map(identity_hash);
-                }else if r["result"].get("Err").is_some(){
-                    row.succeeded=Some(false);row.outcome_sha256=Some(identity_hash("native_error"));
-                }else{row.phase="invalid";}
-            }
-            row
-        })
+        let page=page("project_file",inner.audit.iter(),before,|r|r.sequence,|r,_|r.clone())?;
+        if page.records.iter().any(|row|row.phase=="invalid") {
+            return Err("diagnostic_audit_file_receipt_invalid; preserve the original operation receipt and report the invalid typed result".into());
+        }
+        Ok(page)
     }
-    pub(super) fn admitted<T: serde::Serialize>(
+    pub(super) fn admitted<T: super::project_file_audit::AuditResult>(
         &self,
         caller: &str,
         operation: &str,
@@ -129,10 +113,9 @@ impl ProjectFileControlPlaneState {
             }
             *tokens -= 1.0;
             inner.reserved += 1;
-            inner
-                .audit
-                .push(serde_json::json!({"stage":"admitted", "caller":caller,
-                "operation_id":operation, "request_id":request_id, "shape":shape}));
+            let mut row=super::diagnostic_audit::Row::new(inner.audit.len() as u64+1,"admitted",Some(caller),Some(operation),Some(request_id));
+            row.shape_sha256=Some(shape.clone());
+            inner.audit.push(row);
         }
         let result = run();
         let mut inner = self
@@ -140,8 +123,25 @@ impl ProjectFileControlPlaneState {
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
         inner.reserved -= 1;
-        inner.audit.push(serde_json::json!({"stage":"terminal", "caller":caller,
-            "operation_id":operation, "request_id":request_id, "result":result.as_ref().map_err(String::as_str)}));
+        let mut row=super::diagnostic_audit::Row::new(inner.audit.len() as u64+1,"terminal",Some(caller),Some(operation),Some(request_id));
+        row.shape_sha256=Some(shape);
+        match &result {
+            Ok(value)=>match value.audit_outcome(operation,request_id) {
+                Ok(outcome)=>{
+                    row.succeeded=outcome.succeeded;
+                    row.outcome_sha256=Some(super::diagnostic_audit::identity_hash(outcome.code));
+                    row.generation_before=outcome.generation_before;row.generation_after=outcome.generation_after;
+                },
+                // Audit validation never changes a possibly committed result.
+                // The invalid row instead blocks diagnostic publication.
+                Err(_)=>row.phase="invalid",
+            },
+            // A failed call can follow an irreversible effect (for example,
+            // deletion succeeded but its terminal journal flush failed).
+            // Only a typed receipt can establish the actual effect outcome.
+            Err(_)=>{row.succeeded=None;row.outcome_sha256=Some(super::diagnostic_audit::identity_hash("native_error"));},
+        }
+        inner.audit.push(row);
         result
     }
 }
@@ -1024,34 +1024,128 @@ pub(crate) fn execute_external(
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn deletion_audit_fixture() -> wire::ProjectBackupDeleteReceiptV1 {
+        let artifact_sha256="b".repeat(64);
+        wire::ProjectBackupDeleteReceiptV1 {schema_version:1,
+            request:wire::ProjectBackupDeleteRequestV1 {schema_version:1,operation_id:wire::BACKUP_DELETE_ID.into(),
+                request_id:1,expected_fence:request().expected_fence,backup_id:7,expected_artifact_sha256:artifact_sha256.clone()},
+            deleted_backup:wire::ProjectBackupInspectionV1 {schema_version:1,
+                backup:wire::ProjectFileBackupSummaryV1 {id:7,created_at_unix_ms:123,source_path:Some("C:/PRIVATE_PATH.sdc".into()),
+                    reason:"PRIVATE_LABEL".into(),bytes:128},artifact_sha256,restore_source_path:None}}
+    }
+    fn management_audit_fixture() -> protocol::control_plane_backup_management::ManagementReceiptV1 {
+        use protocol::control_plane_backup_management as management;
+        let record_id="c".repeat(64);
+        management::ManagementReceiptV1 {schema_version:1,
+            request:management::ManagementRequestV1 {schema_version:1,operation_id:management::MANAGE_ID.into(),request_id:1,
+                expected_fence:request().expected_fence,expected_generation:4,expected_journal_sha256:"d".repeat(64),
+                action:management::ManagementActionV1::Acknowledge {record_ids:vec![record_id.clone()]}},
+            generation_before:4,generation_after:5,storage_version_before:2,affected_record_ids:vec![record_id],observed_artifact:None}
+    }
+    #[test]
+    fn diagnostic_audit_backup_delete_success_without_publication_phase_is_exportable() {
+        let receipt=deletion_audit_fixture();receipt.validate().unwrap();
+        let state=ProjectFileControlPlaneState::default();
+        state.admitted("PRIVATE_CALLER",wire::BACKUP_DELETE_ID,1,&receipt.request,||Ok(receipt.clone())).unwrap();
+        let page=serde_json::to_value(state.diagnostic_audit(None).unwrap()).unwrap();
+        assert_eq!(page["records"][1]["phase"],"terminal");
+        assert_eq!(page["records"][1]["succeeded"],true);
+        assert!(!page.to_string().contains("PRIVATE"));
+    }
+    #[test]
+    fn diagnostic_audit_management_success_without_publication_phase_is_exportable() {
+        let receipt=management_audit_fixture();receipt.validate().unwrap();
+        let state=ProjectFileControlPlaneState::default();
+        state.admitted("PRIVATE_CALLER",protocol::control_plane_backup_management::MANAGE_ID,1,&receipt.request,||Ok(receipt.clone())).unwrap();
+        let page=serde_json::to_value(state.diagnostic_audit(None).unwrap()).unwrap();
+        assert_eq!(page["records"][1]["phase"],"terminal");
+        assert_eq!(page["records"][1]["succeeded"],true);
+        assert_eq!(page["records"][1]["generation_before"],4);
+        assert_eq!(page["records"][1]["generation_after"],5);
+    }
     #[test]
     fn diagnostic_audit_file_projection_preserves_original_private_results() {
         let state=ProjectFileControlPlaneState::default();
-        let private=serde_json::json!({"phase":"succeeded","path":"PRIVATE_PATH","project":{"secret":"PRIVATE_CREDENTIAL"}});
-        state.admitted("PRIVATE_CALLER","PRIVATE_OPERATION",1,&request(),||Ok(private.clone())).unwrap();
-        let failed:Result<Value,String>=state.admitted("PRIVATE_CALLER","PRIVATE_OPERATION",2,&request(),||Err("PRIVATE_ERROR_PATH".into()));
+        let mut private=publication_audit_fixture(ProjectFilePhaseV1::Succeeded);
+        private.target_path=Some("C:/PRIVATE_PATH.sdc".into());private.error=Some("PRIVATE_CREDENTIAL".repeat(131_072));
+        let returned=state.admitted("PRIVATE_CALLER",wire::SAVE_AS_ID,1,&request(),||Ok(private.clone())).unwrap();
+        assert_eq!(returned.target_path,private.target_path);assert_eq!(returned.error,private.error);
+        let failed:Result<ProjectFileStatusV1,String>=state.admitted("PRIVATE_CALLER",wire::SAVE_AS_ID,2,&request(),||Err("PRIVATE_ERROR_PATH".into()));
         assert!(failed.is_err());
         let original=state.admission.lock().unwrap().audit.clone();
         let first=serde_json::to_value(state.diagnostic_audit(None).unwrap()).unwrap();
         assert_eq!(first,serde_json::to_value(state.diagnostic_audit(None).unwrap()).unwrap());
         assert_eq!(first["retained_count"],4);assert_eq!(first["records"][1]["succeeded"],true);
-        assert_eq!(first["records"][3]["succeeded"],false);
+        assert_eq!(first["records"][3]["succeeded"],Value::Null);
         assert!(!first.to_string().contains("PRIVATE"));
         assert_eq!(state.admission.lock().unwrap().audit,original);
-        assert_eq!(original[1]["result"]["Ok"],private);
+        let retained=serde_json::to_string(&original).unwrap();
+        assert!(!retained.contains("PRIVATE"));assert!(!retained.contains("result"));assert!(retained.len()<4096);
     }
     #[test]
     fn diagnostic_audit_file_status_success_does_not_claim_unknown_or_failed_publication() {
-        for (phase,succeeded) in [("succeeded",Some(true)),("acknowledged",Some(true)),
-            ("cancelled",Some(false)),("abandoned",Some(false)),("failed",Some(false)),
-            ("reserved",None),("selecting",None),("selected",None),("prepared",None),("indeterminate",None),("missing",None)] {
+        use ProjectFilePhaseV1::*;
+        for (phase,code,succeeded) in [(Succeeded,"succeeded",Some(true)),(Acknowledged,"acknowledged",Some(true)),
+            (Cancelled,"cancelled",Some(false)),(Abandoned,"abandoned",Some(false)),(Failed,"failed",Some(false)),
+            (Reserved,"reserved",None),(Selecting,"selecting",None),(Selected,"selected",None),
+            (Prepared,"prepared",None),(Indeterminate,"indeterminate",None),(Missing,"missing",None)] {
             let state=ProjectFileControlPlaneState::default();
-            state.admitted("PRIVATE_CALLER","PRIVATE_OPERATION",1,&request(),||Ok(serde_json::json!({"phase":phase,"error":"PRIVATE_ERROR"}))).unwrap();
+            state.admitted("PRIVATE_CALLER",wire::SAVE_AS_ID,1,&request(),||Ok(publication_audit_fixture(phase))).unwrap();
             let page=serde_json::to_value(state.diagnostic_audit(None).unwrap()).unwrap();
-            assert_eq!(page["records"][1]["succeeded"],serde_json::to_value(succeeded).unwrap(),"{phase}");
-            assert_eq!(page["records"][1]["outcome_sha256"],super::super::diagnostic_audit::identity_hash(phase));
+            assert_eq!(page["records"][1]["succeeded"],serde_json::to_value(succeeded).unwrap(),"{code}");
+            assert_eq!(page["records"][1]["outcome_sha256"],super::super::diagnostic_audit::identity_hash(code));
             assert!(!page.to_string().contains("PRIVATE"));
         }
+    }
+    fn publication_audit_fixture(phase:ProjectFilePhaseV1)->ProjectFileStatusV1 {
+        ProjectFileStatusV1 {schema_version:1,request:request(),phase,target_path:None,artifact_sha256:None,
+            recovery_authority_serial:0,saved_project_epoch:3,saved_project_revision:4,saved_checkpoint_hash:"a".repeat(64),
+            error:None,warning:None,backup:None}
+    }
+    #[test]
+    fn diagnostic_audit_never_serializes_or_retains_the_terminal_result_body() {
+        struct NonSerializable {private_body:Vec<u8>}
+        impl super::super::project_file_audit::AuditResult for NonSerializable {
+            fn audit_outcome(&self,_:&str,_:u64)->Result<super::super::project_file_audit::Outcome,&'static str> {
+                Ok(super::super::project_file_audit::Outcome {code:"succeeded",succeeded:Some(true),generation_before:None,generation_after:None})
+            }
+        }
+        let state=ProjectFileControlPlaneState::default();
+        let result=state.admitted("PRIVATE_CALLER",wire::SAVE_AS_ID,1,&request(),||Ok(NonSerializable {private_body:vec![7;2*1024*1024]})).unwrap();
+        assert_eq!(result.private_body.len(),2*1024*1024);
+        let audit=serde_json::to_string(&state.admission.lock().unwrap().audit).unwrap();
+        assert!(audit.len()<2048);assert!(!audit.contains("PRIVATE"));
+        assert_eq!(state.diagnostic_audit(None).unwrap().records[1].succeeded,Some(true));
+    }
+    #[test]
+    fn diagnostic_audit_invalid_typed_receipts_block_export_without_rewriting_results() {
+        let state=ProjectFileControlPlaneState::default();
+        let mut receipt=deletion_audit_fixture();receipt.deleted_backup.artifact_sha256="f".repeat(64);
+        let returned=state.admitted("PRIVATE_CALLER",wire::BACKUP_DELETE_ID,1,&receipt.request,||Ok(receipt.clone())).unwrap();
+        assert_eq!(returned.deleted_backup.artifact_sha256,receipt.deleted_backup.artifact_sha256);
+        assert!(state.diagnostic_audit(None).unwrap_err().contains("file_receipt_invalid"));
+        let state=ProjectFileControlPlaneState::default();
+        let mut receipt=management_audit_fixture();receipt.generation_after=receipt.generation_before;
+        let returned=state.admitted("PRIVATE_CALLER",protocol::control_plane_backup_management::MANAGE_ID,1,&receipt.request,||Ok(receipt.clone())).unwrap();
+        assert_eq!(returned.generation_after,receipt.generation_after);
+        assert!(state.diagnostic_audit(None).unwrap_err().contains("file_receipt_invalid"));
+        use super::super::project_file_audit::AuditResult;
+        assert!(deletion_audit_fixture().audit_outcome(wire::SAVE_AS_ID,1).is_err());
+        assert!(management_audit_fixture().audit_outcome(protocol::control_plane_backup_management::MANAGE_ID,2).is_err());
+        assert!(publication_audit_fixture(ProjectFilePhaseV1::Succeeded).audit_outcome(wire::SAVE_AS_ID,2).is_err());
+    }
+    #[test]
+    fn diagnostic_audit_indeterminate_error_never_claims_an_irreversible_effect_failed() {
+        let state=ProjectFileControlPlaneState::default();
+        let receipt=deletion_audit_fixture();
+        let error="project_backup_delete_indeterminate; artifact deleted but terminal publication failed; PRIVATE_PATH";
+        let result:Result<wire::ProjectBackupDeleteReceiptV1,String>=state.admitted("PRIVATE_CALLER",wire::BACKUP_DELETE_ID,1,
+            &receipt.request,||Err(error.into()));
+        assert_eq!(result.unwrap_err(),error);
+        let page=state.diagnostic_audit(None).unwrap();
+        assert_eq!(page.records[1].phase,"terminal");assert_eq!(page.records[1].succeeded,None);
+        assert_eq!(page.records[1].outcome_sha256,Some(super::super::diagnostic_audit::identity_hash("native_error")));
+        assert!(!serde_json::to_string(&page).unwrap().contains("PRIVATE"));
     }
     fn request() -> ProjectFileRequestV1 {
         ProjectFileRequestV1 {

@@ -50,6 +50,7 @@ mod project_publication_missing;
 mod diagnostic_package;
 mod diagnostic_audit;
 mod diagnostic_audit_capture;
+mod project_file_audit;
 mod diagnostic_package_publication;
 mod diagnostic_export_workflow;
 mod diagnostic_export_session;

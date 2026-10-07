@@ -5,6 +5,7 @@ import {createHash, randomUUID} from 'node:crypto';
 import {isDeepStrictEqual} from 'node:util';
 import {openNativeStdioSession} from './native-stdio-session.mjs';
 import {nativeBackupDeletionManagement} from './native-backup-deletion-management.mjs';
+import {exportNativeFileAudit} from './native-diagnostic-exports.mjs';
 
 // Authenticated MCP with individually owned IDs, explicit acknowledgement and
 // native cleanup. Never enter retention against existing unowned QA backups.
@@ -189,6 +190,7 @@ export async function nativeProjectBackup(backend, options, checks) {
     assert.deepEqual(deleted.request,deleteRequest);assert.equal(deleted.deleted_backup.backup.id,saved.backup.id);
     assert.equal(deleted.deleted_backup.artifact_sha256,saved.artifact_sha256);
     await assert.rejects(fs.stat(saved.target_path),/ENOENT/);assert.deepEqual(await state(),deleteBefore);
+    await exportNativeFileAudit(mcp,grant,state,checks,ids.remove,'backup_deleted');
     const terminalStatus=await success(ids.deleteStatus,deleteRequest);
     assert.equal(terminalStatus.phase,'succeeded');assert.deepEqual(terminalStatus.request,deleteRequest);
     assert.deepEqual(terminalStatus.receipt,deleted);assert.equal(terminalStatus.error,null);
@@ -231,6 +233,7 @@ export async function nativeProjectBackup(backend, options, checks) {
     await failed(ids.inspect,{schema_version:1,backup_id:saved.backup.id},/inspect_metadata/);
     await nativeBackupDeletionManagement(backend,checks,{send,success,failed,grant,state,directory,saved,bytes,
       deleted,deleteRequest,deletion,ids});
+    await exportNativeFileAudit(mcp,grant,state,checks,'syndocal.project.backup.delete.journal.manage.v1','deletion_journal_managed');
     const next=await prepare();assert.equal(next.request_id,2);const second=await success(ids.create,next);
     assert.equal(second.phase,'succeeded');created.push({request:next,receipt:second,acknowledged:false});
     await success(ids.ack,next);created[1].acknowledged=true;

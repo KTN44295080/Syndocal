@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 // Independently inspect production STORED payloads and the integrity manifest.
 // This is an observation helper, never a production archive reader.
@@ -44,6 +44,45 @@ export function inspectDiagnosticAudit(bytes) {
     if(page.next_before_sequence!==null)assert.equal(page.next_before_sequence,page.records[0].sequence);
   }
   return audit;
+}
+
+// Run after an actual typed File mutation, through its existing authenticated
+// MCP session. Only this run's temporary ZIP is published or removed.
+export async function exportNativeFileAudit(mcp, grant, state, checks, operationId, outcomeCode) {
+  const directory=await fs.mkdtemp(path.join(os.tmpdir(),'syndocal-file-audit-'));
+  const destination=path.join(directory,'audit.zip');
+  const hash=value=>createHash('sha256').update('syndocal-audit-sha256-v1\0').update(value).digest('hex');
+  try {
+    await grant('file','syndocal.diagnostics.export.v1');
+    const before=await state();
+    const requestId=randomUUID();
+    const arguments_={requestId,destination};const start=performance.now();
+    let receipt=await mcp.call('syndocal_export_diagnostics',arguments_);
+    const deadline=Date.now()+15000;
+    while(receipt.status==='pending'&&Date.now()<deadline){await new Promise(resolve=>setTimeout(resolve,100));
+      receipt=await mcp.call('syndocal_get_request_status',{requestId});}
+    assert.equal(receipt.status,'completed',JSON.stringify(receipt));assert.equal(receipt.result.ok,true,JSON.stringify(receipt.result));
+    const bytes=await fs.readFile(destination),audit=inspectDiagnosticAudit(bytes);
+    assert.equal(receipt.result.sha256,createHash('sha256').update(bytes).digest('hex'));
+    const page=audit.pages.find(p=>p.source==='project_file');
+    const rows=page.records.filter(row=>row.phase==='terminal'&&row.operation_sha256===hash(operationId)
+      &&row.outcome_sha256===hash(outcomeCode));
+    assert.ok(rows.length>0,'The real successful File operation must remain exportable');
+    assert.ok(rows.every(row=>row.succeeded===true));
+    if(outcomeCode==='deletion_journal_managed')assert.ok(rows.every(row=>Number.isSafeInteger(row.generation_before)
+      &&row.generation_after===row.generation_before+1));
+    assert.deepEqual(await mcp.call('syndocal_export_diagnostics',arguments_),receipt);
+    assert.deepEqual(await fs.readFile(destination),bytes);assert.deepEqual(await state(),before);
+    assert.ok(!bytes.includes(Buffer.from(directory)));assert.ok(!bytes.includes(Buffer.from('PRIVATE')));
+    checks.push({check:`external-diagnostic-export-after-${outcomeCode}-typed-success-redaction-replay-and-read-purity`,passed:true,
+      archiveBytes:bytes.length,archiveSha256:receipt.result.sha256,fileRows:page.records.length,
+      matchingSequences:rows.map(row=>row.sequence),elapsedMs:performance.now()-start,
+      elapsedBoundary:'Authenticated export plus status, exact replay and state reads; not engine tick timing'});
+  }finally{
+    assert.equal(path.dirname(directory),await fs.realpath(os.tmpdir()));
+    assert.ok(path.basename(directory).startsWith('syndocal-file-audit-'));
+    await fs.rm(directory,{recursive:true,force:true});
+  }
 }
 
 // Invoked only after the lifecycle runner verifies its blank isolated QA app.

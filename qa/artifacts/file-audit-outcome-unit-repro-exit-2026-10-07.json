@@ -1,0 +1,42 @@
+{
+  "exitCode": 101,
+  "sources": [
+    {
+      "path": "app/src-tauri/src/project_file_control_plane.rs",
+      "sha256": "73ac7fd1bd084c30c504d0ac1343beb0fc2acd4f6a13a94112e2bda733ce2faa"
+    },
+    {
+      "path": "app/src-tauri/src/main.rs",
+      "sha256": "db3e7c5855fa07c1cb28ff2362171384dc2145b83aabf0d63738674887ce348e"
+    },
+    {
+      "path": "app/src-tauri/src/diagnostic_audit.rs",
+      "sha256": "392c49a62a06254b3b8e07b8d08e25cef64c78e846feff418ec66dc3672328db"
+    },
+    {
+      "path": "tools/syndocal-mcp/native-project-backup.mjs",
+      "sha256": "77a4f73f23dabdece8691a5b80722aa581f852e0e53391fbe7f3f1304e432891"
+    },
+    {
+      "path": "tools/syndocal-mcp/check-native-lifecycle.mjs",
+      "sha256": "5e3aea69bd5c3c9aabe4496ac64e169dacfc084b2b49fb78929d6db3bda8325b"
+    },
+    {
+      "path": "tools/syndocal-mcp/README.md",
+      "sha256": "aa3105732a0503f2cf93ac69ba31c2ca0584af8da871fa1a3b3906d5a0e64240"
+    },
+    {
+      "path": "qa/SYNDOCAL_Q1_Q4_LEDGER.json",
+      "sha256": "66a51e8cacc35d1f4c78e27a65d6cba737a9d0e974a12d6f084e001cd4c33aa5"
+    },
+    {
+      "path": "qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md",
+      "sha256": "8e1eb7162f70fc75c99f57219d39df7bd0fed569e43204c7572fad69e16b0e15"
+    },
+    {
+      "path": "app/src-tauri/src/project_file_audit.rs",
+      "sha256": "72252f40cae3e3293503bc84911e7f40dafe44cdecbd474a5cd053fb4ff43015"
+    }
+  ],
+  "observedUtc": "2026-10-06T19:29:53.152Z"
+}

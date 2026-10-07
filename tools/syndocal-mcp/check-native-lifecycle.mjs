@@ -449,9 +449,10 @@ await fs.writeFile(evidence, `${JSON.stringify({ schemaVersion: 1, timestamp: ne
     highRiskTransport: 'Separate stdio MCP sidecar process forwarding to the authenticated native broker',
   } : {}),
   ...(diagnostics ? { diagnosticHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-diagnostic-exports.mjs', import.meta.url))).digest('hex') } : {}),
-  ...((diagnostics||externalHighRisk) ? {diagnosticAuditSources:await Promise.all([
+  ...((diagnostics||externalHighRisk||projectBackup) ? {diagnosticAuditSources:await Promise.all([
     'diagnostic_audit.rs','diagnostic_audit_capture.rs','diagnostic_package.rs','agent_authority_service.rs',
     'agent_bridge_execution.rs','control_plane_runtime.rs','output_lease.rs','project_file_control_plane.rs','project_replacement_control_plane.rs',
+    'project_file_audit.rs',
   ].map(async name=>({name,sha256:createHash('sha256').update(await fs.readFile(new URL(`../../app/src-tauri/src/${name}`,import.meta.url))).digest('hex')})))} : {}),
   ...(leaseExpiry ? {
     leaseExpiryHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-lease-expiry.mjs', import.meta.url))).digest('hex'),
@@ -483,6 +484,7 @@ await fs.writeFile(evidence, `${JSON.stringify({ schemaVersion: 1, timestamp: ne
     stdioHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-stdio-session.mjs', import.meta.url))).digest('hex'),
   } : {}),
   ...(projectBackup ? {
+    diagnosticHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-diagnostic-exports.mjs', import.meta.url))).digest('hex'),
     projectBackupHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-project-backup.mjs', import.meta.url))).digest('hex'),
     backupDeletionManagementHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-backup-deletion-management.mjs', import.meta.url))).digest('hex'),
     backupDeletionManagementPolicySha256: createHash('sha256').update(await fs.readFile(new URL('../../app/src-tauri/src/project_backup_deletion_management.rs', import.meta.url))).digest('hex'),

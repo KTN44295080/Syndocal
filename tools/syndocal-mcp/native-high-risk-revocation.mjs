@@ -134,9 +134,18 @@ export async function nativeHighRiskRevocation(backend, options, checks, { proje
         } },
       };
       mcp ??= await openNativeStdioSession({ ...options, principalId, principalIncarnation, credentialFile });
-      const admitted = await mcp.call(capability === 'file' && !project && !publication
+      let admitted = await mcp.call(capability === 'file' && !project && !publication
         ? 'syndocal_export_diagnostics' : 'syndocal_execute_control_plane', { requestId, ...params });
-      assert.equal(admitted.status, 'pending');
+      const admissionObservations=[];
+      // A lost transport reply is not proof of rejection or permission to
+      // resend the mutation. Reconcile only this immutable original UUID.
+      for(let observation=0;admitted.status==='unknown'&&observation<4;observation++) {
+        admissionObservations.push({kind,requestId,response:admitted});
+        assert.equal(admitted.requestId,requestId);
+        admitted=await mcp.call('syndocal_get_request_status',{requestId});
+        if(admitted.status==='unknown')await new Promise(resolve=>setTimeout(resolve,100));
+      }
+      assert.equal(admitted.status, 'pending',JSON.stringify({kind,requestId,admitted,admissionObservations}));
       assert.equal(admitted.requestId, requestId);
       assert.equal(admitted.result, undefined);
       const claimed = await backend.invoke('agent_bridge_claim_v1', { rendererGeneration: generation, requestId });
@@ -168,6 +177,7 @@ export async function nativeHighRiskRevocation(backend, options, checks, { proje
         executionError: 'agent_principal_revoked', replayError: 'request_not_executable',
         destinationAbsent: !source, sourceBytesPreserved: Boolean(source), leaseUnavailable: true, credentialRevoked: true,
         authorityObservations:authorityObservations.slice(observationStart),
+        admissionObservations,
       });
     } finally {
       try { await mcp?.close(); }

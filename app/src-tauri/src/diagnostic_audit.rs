@@ -79,7 +79,7 @@ impl Before {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub(crate) struct Row {
     pub sequence: u64,
     pub phase: &'static str,
