@@ -1,0 +1,22 @@
+node:internal/modules/run_main:123
+    triggerUncaughtException(
+    ^
+
+AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
++ actual - expected
+
++ 'stale_fence'
+- 'forbidden'
+
+    at nativeTimelineCommands (file:///C:/Users/janua/OneDrive/%E3%83%89%E3%82%AD%E3%83%A5%E3%83%A1%E3%83%B3%E3%83%88/GitHub/Syndocal/tools/syndocal-mcp/native-timeline-commands.mjs:64:14)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async file:///C:/Users/janua/OneDrive/%E3%83%89%E3%82%AD%E3%83%A5%E3%83%A1%E3%83%B3%E3%83%88/GitHub/Syndocal/tools/syndocal-mcp/check-native-lifecycle.mjs:293:25 {
+  generatedMessage: true,
+  code: 'ERR_ASSERTION',
+  actual: 'stale_fence',
+  expected: 'forbidden',
+  operator: 'strictEqual',
+  diff: 'simple'
+}
+
+Node.js v22.22.1

@@ -25,9 +25,18 @@ import { nativeProjectBackup } from './native-project-backup.mjs';
 import { nativeProjectBackupRestore } from './native-project-backup-restore.mjs';
 import { nativeFileQueryPressure } from './native-file-query-pressure.mjs';
 import { nativeCanonicalRiskAdmission } from './native-canonical-risk-admission.mjs';
+import { nativeTimelineCommands, nativeTimelineRevocation } from './native-timeline-commands.mjs';
 
 const exec = promisify(execFile);
 const args = process.argv.slice(2);
+let timelineCloseDirectory;
+const timelineCommands = args.includes('--timeline-commands');
+if (timelineCommands) {
+  args.splice(args.indexOf('--timeline-commands'), 1);
+  assert.ok(args.filter(arg => arg.startsWith('--')).every(arg =>
+    ['--profile','--expected-executable','--cdp-port','--evidence'].includes(arg)),
+    'Timeline command proof owns a separate empty, disarmed native lane');
+}
 const fileQueryPressure = args.includes('--file-query-pressure');
 if (fileQueryPressure) {
   args.splice(args.indexOf('--file-query-pressure'), 1);
@@ -146,7 +155,11 @@ const cdpPort = Number(take('--cdp-port'));
 const profileId = args.includes('--profile') ? take('--profile') : 'jp.seraf.ktn.syndocal.qa.mcp-lifecycle';
 assert.ok(['jp.seraf.ktn.syndocal.qa.mcp-lifecycle',
   'jp.seraf.ktn.syndocal.qa.mcp-lifecycle.backup-restore-20261005',
-  'jp.seraf.ktn.syndocal.qa.mcp-lifecycle.backup-delete-20261006'].includes(profileId), 'Only checked-in private QA profiles allowed');
+  'jp.seraf.ktn.syndocal.qa.mcp-lifecycle.backup-delete-20261006',
+  'jp.seraf.ktn.syndocal.qa.mcp-lifecycle.timeline-commands-20261007'].includes(profileId), 'Only checked-in private QA profiles allowed');
+if (timelineCommands) assert.equal(profileId,'jp.seraf.ktn.syndocal.qa.mcp-lifecycle.timeline-commands-20261007');
+else assert.notEqual(profileId,'jp.seraf.ktn.syndocal.qa.mcp-lifecycle.timeline-commands-20261007',
+  'The Timeline profile belongs only to its explicit command-proof mode');
 assert.equal(args.length, 0);
 assert.equal(process.platform, 'win32');
 assert.ok(path.isAbsolute(executable) && path.isAbsolute(evidence));
@@ -278,6 +291,7 @@ try {
   await exec('icacls.exe', [credentialDirectory, '/inheritance:r', '/grant:r', `*${stdout.trim()}:(OI)(CI)F`], { windowsHide: true, timeout: 5000 });
   options.credentialFile = path.join(credentialDirectory, 'credential');
   await pair(); await install();
+  if (timelineCommands) await nativeTimelineCommands(backend, options, checks);
   if (fileQueryPressure) await nativeFileQueryPressure(backend, options, checks);
   if (projectReplacement) await nativeProjectReplacement(backend, options, checks);
   if (projectBackup) await nativeCanonicalRiskAdmission(backend, options, checks);
@@ -382,6 +396,10 @@ try {
   await read();
   checks.push({ check: 'old-launch-proof-rejected-fresh-read-succeeds', passed: true });
   if (externalRevocation || projectReplacement || projectFile) await nativeHighRiskRevocation(backend, options, checks, { projectReplacement, projectFile, projectBackup });
+  if (timelineCommands) {
+    timelineCloseDirectory=await fs.mkdtemp(path.join(os.tmpdir(),'syndocal-timeline-close-'));
+    await nativeTimelineRevocation(backend, options, checks, timelineCloseDirectory);
+  }
   await backend.invoke('agent_authority_revoke_v1', { principalId, principalIncarnation: approval.principalIncarnation });
   cleanupNeeded = false;
   await stop(true);
@@ -407,6 +425,13 @@ finally {
     } catch { failure ??= new Error('QA credential revocation failed'); }
   }
   try { await stop(); } catch { failure ??= new Error('QA process cleanup failed'); }
+  if (timelineCloseDirectory && !failure) {
+    const owned=await fs.realpath(timelineCloseDirectory);
+    assert.equal(path.dirname(owned),await fs.realpath(os.tmpdir()));
+    assert.ok(path.basename(owned).startsWith('syndocal-timeline-close-'));
+    assert.equal((await fs.lstat(owned)).isSymbolicLink(),false);
+    await fs.rm(owned,{recursive:true});
+  }
   if (credentialDirectory) {
     assert.equal(path.dirname(path.resolve(credentialDirectory)), path.resolve(os.tmpdir()));
     assert.ok(path.basename(credentialDirectory).startsWith('syndocal-lifecycle-credential-'));
@@ -501,6 +526,11 @@ await fs.writeFile(evidence, `${JSON.stringify({ schemaVersion: 1, timestamp: ne
     backupDeletionJournalPolicySha256: createHash('sha256').update(await fs.readFile(new URL('../../app/src-tauri/src/project_backup_deletion_journal.rs', import.meta.url))).digest('hex'),
     backupRestoreHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-project-backup-restore.mjs', import.meta.url))).digest('hex'),
     backupRestorePolicySha256: createHash('sha256').update(await fs.readFile(new URL('../../app/src-tauri/src/project_backup_restoration.rs', import.meta.url))).digest('hex'),
+  } : {}),
+  ...(timelineCommands ? {
+    timelineCommandsHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-timeline-commands.mjs',import.meta.url))).digest('hex'),
+    timelineCommandsAdapterSha256: createHash('sha256').update(await fs.readFile(new URL('../../app/src-tauri/src/agent_bridge_timeline.rs',import.meta.url))).digest('hex'),
+    timelineCommandsDomainSha256: createHash('sha256').update(await fs.readFile(new URL('../../app/src-tauri/src/control_plane_runtime.rs',import.meta.url))).digest('hex'),
   } : {}),
   ...(projectFile ? {
     projectFileHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-project-file.mjs', import.meta.url))).digest('hex'),

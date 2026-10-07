@@ -1,0 +1,10 @@
+Pinned/PATH-first linker: C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+   Compiling syndocal v1.2.0-alpha.69 (C:\Users\janua\OneDrive\ドキュメント\GitHub\Syndocal\app\src-tauri)
+    Finished `release` profile [optimized] target(s) in 3m 05s
+     Running unittests src\main.rs (C:\Users\janua\AppData\Local\Temp\syndocal-native-acceptance-target\release\deps\syndocal-41cd4ce392874b4c.exe)
+
+running 2 tests
+test control_plane_runtime::agent_bridge_timeline_guard_tests::external_loop_final_authorization_denial_prevents_capability_consumption_and_publication ... ok
+test control_plane_runtime::agent_bridge_timeline_guard_tests::external_transport_final_authorization_denial_prevents_publication_and_replay_reentry ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 2048 filtered out; finished in 0.01s

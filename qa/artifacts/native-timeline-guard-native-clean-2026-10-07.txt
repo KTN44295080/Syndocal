@@ -1,0 +1,22 @@
+node:internal/modules/run_main:123
+    triggerUncaughtException(
+    ^
+
+AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
++ actual - expected
+
++ '\\\\?\\C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-timeline-close-Fg3cVr\\empty-project.sdc'
+- 'C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-timeline-close-Fg3cVr\\empty-project.sdc'
+
+    at nativeTimelineRevocation (file:///C:/Users/janua/OneDrive/%E3%83%89%E3%82%AD%E3%83%A5%E3%83%A1%E3%83%B3%E3%83%88/GitHub/Syndocal/tools/syndocal-mcp/native-timeline-commands.mjs:129:50)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async file:///C:/Users/janua/OneDrive/%E3%83%89%E3%82%AD%E3%83%A5%E3%83%A1%E3%83%B3%E3%83%88/GitHub/Syndocal/tools/syndocal-mcp/check-native-lifecycle.mjs:401:5 {
+  generatedMessage: true,
+  code: 'ERR_ASSERTION',
+  actual: '\\\\?\\C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-timeline-close-Fg3cVr\\empty-project.sdc',
+  expected: 'C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-timeline-close-Fg3cVr\\empty-project.sdc',
+  operator: 'strictEqual',
+  diff: 'simple'
+}
+
+Node.js v22.22.1

@@ -1,0 +1,9 @@
+<anonymous_script>:106
+        throw new Error("Timeline mutations require the immutable native request executor.");
+              ^
+
+Error: Timeline mutations require the immutable native request executor.
+    at executeAgentBridgeCanonicalOperation (eval at <anonymous> (file:///C:/Users/janua/OneDrive/%E3%83%89%E3%82%AD%E3%83%A5%E3%83%A1%E3%83%B3%E3%83%88/GitHub/Syndocal/app/scripts/check-agent-bridge.mjs:44:3), <anonymous>:106:15)
+    at file:///C:/Users/janua/OneDrive/%E3%83%89%E3%82%AD%E3%83%A5%E3%83%A1%E3%83%B3%E3%83%88/GitHub/Syndocal/app/scripts/check-agent-bridge.mjs:89:9
+
+Node.js v22.22.1

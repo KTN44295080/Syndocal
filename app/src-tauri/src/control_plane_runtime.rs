@@ -5183,6 +5183,19 @@ pub(crate) fn set_timeline_transport_playing(
     query_state: &ControlPlaneQueryState,
     request: RuntimeCommandRequestV1,
 ) -> RuntimeCommandResponseV1 {
+    set_timeline_transport_playing_authorized(window.label(),state,query_state,request,&||Ok(()))
+}
+
+/// Shared canonical path. The external adapter supplies exact-grant validation;
+/// local callers retain their established owner/session and domain checks.
+pub(crate) fn set_timeline_transport_playing_authorized(
+    window_label: &str,
+    state: &AppState,
+    query_state: &ControlPlaneQueryState,
+    request: RuntimeCommandRequestV1,
+    authorize: &dyn Fn() -> Result<(),RuntimeCommandErrorCodeV1>,
+) -> RuntimeCommandResponseV1 {
+    if let Err(code)=authorize(){return rejection(&request,code);}
     if request.validate().is_err() {
         return rejection(&request, RuntimeCommandErrorCodeV1::InvalidRequest);
     }
@@ -5195,10 +5208,11 @@ pub(crate) fn set_timeline_transport_playing(
         Ok(guard) => guard,
         Err(_) => return rejection(&request, RuntimeCommandErrorCodeV1::Internal),
     };
-    let binding = match capture_binding(state, window.label()) {
+    let binding = match capture_binding(state, window_label) {
         Ok(binding) => binding,
         Err(code) => return rejection(&request, code),
     };
+    if let Err(code)=authorize(){return rejection(&request,code);}
     let key = receipt_key(&request, &binding);
     let lane = match state
         .runtime_control_plane
@@ -5227,7 +5241,7 @@ pub(crate) fn set_timeline_transport_playing(
     }
     if query_state
         .validate_project_mutation_fence_window(
-            window.label(),
+            window_label,
             &request.expected_fence.project,
             binding.owner_incarnation,
         )
@@ -5237,7 +5251,7 @@ pub(crate) fn set_timeline_transport_playing(
         return rejection(&request, RuntimeCommandErrorCodeV1::Forbidden);
     }
 
-    let response = execute_new_request(state, &binding, &request, &shape_sha256, &key, now);
+    let response = execute_new_request(state, &binding, &request, &shape_sha256, &key, now, authorize);
     let terminal = matches!(
         response,
         RuntimeCommandResponseV1::Receipt(_) | RuntimeCommandResponseV1::Rejected(_)
@@ -5262,8 +5276,8 @@ pub(crate) fn set_timeline_transport_playing(
         state.runtime_control_plane.release_lane(&key);
     }
     response
-}
 
+}
 /// Issue exactly one owner-bound, one-use root-loop capability.  This is a
 /// distinct `timeline.loop` vertical: Play/Pause's established wire is never
 /// accepted as a loop command.
@@ -5323,6 +5337,19 @@ pub(crate) fn commit_timeline_loop_runtime(
     query_state: &ControlPlaneQueryState,
     request: TimelineLoopRuntimeRequestV1,
 ) -> TimelineLoopRuntimeResponseV1 {
+    commit_timeline_loop_runtime_authorized(window.label(),state,query_state,request,&||Ok(()))
+}
+
+/// Shared canonical path. The external adapter supplies exact-grant validation;
+/// local callers retain their established owner/session and domain checks.
+pub(crate) fn commit_timeline_loop_runtime_authorized(
+    window_label: &str,
+    state: &AppState,
+    query_state: &ControlPlaneQueryState,
+    request: TimelineLoopRuntimeRequestV1,
+    authorize: &dyn Fn() -> Result<(),RuntimeCommandErrorCodeV1>,
+) -> TimelineLoopRuntimeResponseV1 {
+    if let Err(code)=authorize(){return timeline_loop_rejection(&request,code);}
     if request.validate().is_err() {
         return timeline_loop_rejection(&request, RuntimeCommandErrorCodeV1::InvalidRequest);
     }
@@ -5337,10 +5364,11 @@ pub(crate) fn commit_timeline_loop_runtime(
         Ok(guard) => guard,
         Err(_) => return timeline_loop_rejection(&request, RuntimeCommandErrorCodeV1::Internal),
     };
-    let binding = match capture_binding(state, window.label()) {
+    let binding = match capture_binding(state, window_label) {
         Ok(binding) => binding,
         Err(code) => return timeline_loop_rejection(&request, code),
     };
+    if let Err(code)=authorize(){return timeline_loop_rejection(&request,code);}
     let key = timeline_loop_receipt_key(&request, &binding);
     let lane =
         match state
@@ -5375,7 +5403,7 @@ pub(crate) fn commit_timeline_loop_runtime(
     }
     if query_state
         .validate_project_mutation_fence_window(
-            window.label(),
+            window_label,
             &request.expected_fence.project,
             binding.owner_incarnation,
         )
@@ -5385,7 +5413,7 @@ pub(crate) fn commit_timeline_loop_runtime(
         return timeline_loop_rejection(&request, RuntimeCommandErrorCodeV1::Forbidden);
     }
     let response =
-        execute_timeline_loop_new_request(state, &binding, &request, &shape_sha256, &key, now);
+        execute_timeline_loop_new_request(state, &binding, &request, &shape_sha256, &key, now, authorize);
     let should_retain = match &response {
         TimelineLoopRuntimeResponseV1::Receipt(_) => true,
         TimelineLoopRuntimeResponseV1::Rejected(rejection) => !matches!(
@@ -5404,8 +5432,8 @@ pub(crate) fn commit_timeline_loop_runtime(
         state.runtime_control_plane.release_timeline_loop_lane(&key);
     }
     response
-}
 
+}
 fn execute_timeline_loop_new_request(
     state: &AppState,
     binding: &CallerBinding,
@@ -5413,6 +5441,7 @@ fn execute_timeline_loop_new_request(
     shape_sha256: &str,
     key: &ReceiptKey,
     now: Instant,
+    authorize: &dyn Fn() -> Result<(),RuntimeCommandErrorCodeV1>,
 ) -> TimelineLoopRuntimeResponseV1 {
     let _external_admission = match lock_project_external_command_admission(state) {
         Ok(guard) => guard,
@@ -5443,6 +5472,9 @@ fn execute_timeline_loop_new_request(
     {
         return timeline_loop_rejection(request, RuntimeCommandErrorCodeV1::Forbidden);
     }
+    // Recheck after all domain/admission/coordinator waits and before capability
+    // consumption or Engine publication. Revocation never grants a retry.
+    if let Err(code)=authorize(){return timeline_loop_rejection(request,code);}
     let inflight = match state.runtime_control_plane.admit_timeline_loop_new(
         binding,
         &request.expected_fence,
@@ -5500,6 +5532,7 @@ fn execute_new_request(
     shape_sha256: &str,
     key: &ReceiptKey,
     now: Instant,
+    authorize: &dyn Fn() -> Result<(),RuntimeCommandErrorCodeV1>,
 ) -> RuntimeCommandResponseV1 {
     let _external_admission = match lock_project_external_command_admission(state) {
         Ok(guard) => guard,
@@ -5533,6 +5566,9 @@ fn execute_new_request(
     {
         return rejection(request, RuntimeCommandErrorCodeV1::Forbidden);
     }
+    // Recheck after all domain/admission/coordinator waits and before capability
+    // consumption or Engine publication. Revocation never grants a retry.
+    if let Err(code)=authorize(){return rejection(request,code);}
     let inflight = match state.runtime_control_plane.admit_new(
         binding,
         &request.expected_fence,
@@ -5643,6 +5679,19 @@ pub(crate) fn abort_timeline_follow_runtime(
     query_state: &ControlPlaneQueryState,
     request: TimelineFollowAbortRuntimeRequestV1,
 ) -> TimelineFollowAbortRuntimeResponseV1 {
+    abort_timeline_follow_runtime_authorized(window.label(),state,query_state,request,&||Ok(()))
+}
+
+/// Shared canonical path. The external adapter supplies exact-grant validation;
+/// local callers retain their established owner/session and domain checks.
+pub(crate) fn abort_timeline_follow_runtime_authorized(
+    window_label: &str,
+    state: &AppState,
+    query_state: &ControlPlaneQueryState,
+    request: TimelineFollowAbortRuntimeRequestV1,
+    authorize: &dyn Fn() -> Result<(),RuntimeCommandErrorCodeV1>,
+) -> TimelineFollowAbortRuntimeResponseV1 {
+    if let Err(code)=authorize(){return follow_abort_rejection(&request,code);}
     if request.validate().is_err() {
         return follow_abort_rejection(&request, RuntimeCommandErrorCodeV1::InvalidRequest);
     }
@@ -5657,18 +5706,20 @@ pub(crate) fn abort_timeline_follow_runtime(
         Ok(guard) => guard,
         Err(_) => return follow_abort_rejection(&request, RuntimeCommandErrorCodeV1::Internal),
     };
-    let binding = match capture_binding(state, window.label()) {
+    let binding = match capture_binding(state, window_label) {
         Ok(binding) => binding,
         Err(code) => return follow_abort_rejection(&request, code),
     };
+    if let Err(code)=authorize(){return follow_abort_rejection(&request,code);}
     let expected_project = request.expected_fence.project.clone();
-    let window_label = window.label().to_string();
+    let window_label = window_label.to_string();
     abort_timeline_follow_runtime_bound(
         state,
         binding,
         request,
         shape_sha256,
         now,
+        authorize,
         move |binding| {
             query_state
                 .validate_project_mutation_fence_window(
@@ -5679,14 +5730,15 @@ pub(crate) fn abort_timeline_follow_runtime(
                 .is_ok()
         },
     )
-}
 
+}
 fn abort_timeline_follow_runtime_bound<F>(
     state: &AppState,
     binding: CallerBinding,
     request: TimelineFollowAbortRuntimeRequestV1,
     shape_sha256: String,
     now: Instant,
+    authorize: &dyn Fn() -> Result<(),RuntimeCommandErrorCodeV1>,
     validate_project_fence: F,
 ) -> TimelineFollowAbortRuntimeResponseV1
 where
@@ -5728,7 +5780,7 @@ where
         return follow_abort_rejection(&request, RuntimeCommandErrorCodeV1::Forbidden);
     }
 
-    let response = execute_new_follow_abort(state, &binding, &request, &shape_sha256, &key, now);
+    let response = execute_new_follow_abort(state, &binding, &request, &shape_sha256, &key, now, authorize);
     let should_retain = match &response {
         TimelineFollowAbortRuntimeResponseV1::Receipt(_) => true,
         TimelineFollowAbortRuntimeResponseV1::Rejected(rejection) => !matches!(
@@ -5798,7 +5850,7 @@ pub(crate) fn abort_timeline_follow_runtime_for_test_window(
         Ok(binding) => binding,
         Err(code) => return follow_abort_rejection(&request, code),
     };
-    abort_timeline_follow_runtime_bound(state, binding, request, shape_sha256, now, |_| true)
+    abort_timeline_follow_runtime_bound(state, binding, request, shape_sha256, now, &||Ok(()), |_| true)
 }
 
 fn execute_new_follow_abort(
@@ -5808,6 +5860,7 @@ fn execute_new_follow_abort(
     shape_sha256: &str,
     key: &ReceiptKey,
     now: Instant,
+    authorize: &dyn Fn() -> Result<(),RuntimeCommandErrorCodeV1>,
 ) -> TimelineFollowAbortRuntimeResponseV1 {
     let _external_admission = match lock_project_external_command_admission(state) {
         Ok(guard) => guard,
@@ -5849,6 +5902,9 @@ fn execute_new_follow_abort(
     // Follow abort is a safety action and intentionally remains available under
     // Full Lock. The registered local owner, exact project fence and one-use
     // server capability are the complete admission boundary.
+    // Recheck after all domain/admission/coordinator waits and before capability
+    // consumption or Engine publication. Revocation never grants a retry.
+    if let Err(code)=authorize(){return follow_abort_rejection(request,code);}
     let inflight = match state.runtime_control_plane.admit_follow_abort_new(
         binding,
         &request.expected_fence,
@@ -8207,3 +8263,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "agent_bridge_timeline_guard_tests.rs"]
+mod agent_bridge_timeline_guard_tests;

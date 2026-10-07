@@ -72,6 +72,9 @@ pub(crate) fn execute(
                 .get("operationId")
                 .and_then(Value::as_str)
                 .ok_or("agent_bridge_operation_invalid")?;
+            if super::agent_bridge_timeline::supports(operation_id) {
+                return super::agent_bridge_timeline::execute(app,window,&dispatch);
+            }
             if operation_id == protocol::control_plane_backup_management::QUERY_ID {
                 let ingress: BackupJournalIngress = serde_json::from_value(
                     dispatch

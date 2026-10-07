@@ -619,3 +619,10 @@ R2-R5/S0 authorization observations carry redacted request/argument metadata in
 optional diagnostic audit fields; authorization success is not effect success.
 See [authorization risk and audit evidence](../../qa/BRIDGE_AUTHORIZATION_AUDIT_AND_RISK_2026-10-07.md) for current proof and
 unproven durability/revocation/physical boundaries.
+
+External canonical Timeline Play/Pause, Loop commit and Follow Abort use the
+immutable native UUID executor and exact-grant rechecks after coordinator waits.
+Typed domain refusals remain false rather than become success wrappers.
+The separate private `--timeline-commands` lane verifies replay, real stale
+fences, after-claim revocation and protected graceful close without DOM actions.
+See [bounded native evidence](../../qa/NATIVE_TIMELINE_COMMANDS_AND_REVOCATION_2026-10-07.md) for current proof and remaining gates.

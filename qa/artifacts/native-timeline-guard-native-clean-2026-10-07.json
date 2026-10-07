@@ -1,0 +1,108 @@
+{
+  "schemaVersion": 1,
+  "timestamp": "2026-10-07T01:43:27.488Z",
+  "passed": false,
+  "executable": "C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-native-acceptance-target\\release\\syndocal.exe",
+  "executableSha256": "14559e0d6533db0d82bcb416efa405e51341a1a56d88c29392b1a4134aefe8d0",
+  "sidecarSha256": "54b871ba1b19f1f8c6369190b77bec78789369374ca6295dda17c3d39189d0b2",
+  "runnerSha256": "a6a664e88792b5eae2816a60dbe758ebba96e01380992b9e1bb5550c1e70cbc4",
+  "backendHarnessSha256": "ade29aa256d8ff17374bb4b3e893ea9a07f71f8fa2cf2bb72b21f80d4e0e8b1f",
+  "timelineCommandsHarnessSha256": "95b77d01ccc7b65051786052f8d5cd732501d5d12f79dca96fdd2b2cc2498fa4",
+  "timelineCommandsAdapterSha256": "8524544ef7a2cd443885ae59839718c001f646f9d7e4a90fc88adcc937226b91",
+  "timelineCommandsDomainSha256": "827458f1a2b22d214f865548bdafb8d4a42b4f12b5f53b74544828a486266ad2",
+  "profile": "jp.seraf.ktn.syndocal.qa.mcp-lifecycle.timeline-commands-20261007",
+  "checks": [
+    {
+      "check": "external-timeline-0-typed-success-and-exact-replay",
+      "passed": true,
+      "operationId": "syndocal.runtime.timeline.transport.set_playing.v1",
+      "outcome": "no_op",
+      "requestId": "17c193f3-df71-476f-bf2d-6b4e52758ad5"
+    },
+    {
+      "check": "external-timeline-0-typed-authority-fence-mismatch-refusal-is-not-success",
+      "passed": true,
+      "operationId": "syndocal.runtime.timeline.transport.set_playing.v1",
+      "code": "forbidden"
+    },
+    {
+      "check": "external-timeline-1-typed-success-and-exact-replay",
+      "passed": true,
+      "operationId": "syndocal.runtime.timeline.loop.commit.v1",
+      "outcome": "no_op",
+      "requestId": "3e18b4fd-a91b-43be-b984-dac29e252148"
+    },
+    {
+      "check": "external-timeline-1-typed-authority-fence-mismatch-refusal-is-not-success",
+      "passed": true,
+      "operationId": "syndocal.runtime.timeline.loop.commit.v1",
+      "code": "forbidden"
+    },
+    {
+      "check": "external-timeline-2-typed-success-and-exact-replay",
+      "passed": true,
+      "operationId": "syndocal.runtime.timeline.follow.abort.v1",
+      "outcome": "no_op",
+      "requestId": "6aff4be2-0665-4581-9cc7-a38eb0381828"
+    },
+    {
+      "check": "external-timeline-2-typed-authority-fence-mismatch-refusal-is-not-success",
+      "passed": true,
+      "operationId": "syndocal.runtime.timeline.follow.abort.v1",
+      "code": "stale_fence"
+    },
+    {
+      "check": "external-timeline-loop-engine-refusal-is-not-success",
+      "passed": true,
+      "code": "publication_failed"
+    },
+    {
+      "check": "external-timeline-play-actual-publication-with-output-disarmed",
+      "passed": true,
+      "outcome": "applied",
+      "generationBefore": 2,
+      "generationAfter": 3
+    },
+    {
+      "check": "external-timeline-0-real-successor-stale-authority-refusal-is-not-success",
+      "passed": true,
+      "operationId": "syndocal.runtime.timeline.transport.set_playing.v1",
+      "code": "stale_fence"
+    },
+    {
+      "check": "external-timeline-1-real-successor-stale-authority-refusal-is-not-success",
+      "passed": true,
+      "operationId": "syndocal.runtime.timeline.loop.commit.v1",
+      "code": "stale_fence"
+    },
+    {
+      "check": "isolated-first-launch-read",
+      "passed": true
+    },
+    {
+      "check": "dead-process-descriptor-rejected",
+      "passed": true
+    },
+    {
+      "check": "crash-restart-retired-principal-rejected",
+      "passed": true
+    },
+    {
+      "check": "old-credential-and-receipt-not-adopted",
+      "passed": true
+    },
+    {
+      "check": "old-launch-proof-rejected-fresh-read-succeeds",
+      "passed": true
+    }
+  ],
+  "normalAppIdentityUnchanged": true,
+  "credentialRevoked": true,
+  "credentialFileRemoved": true,
+  "nativePanicLocations": [],
+  "nonclaims": [
+    "QA identifier release build, not the distributed artifact",
+    "No physical output activation; optional high-risk or lease-expiry probe mutates isolated backend lease authority only; optional Tap probe changes isolated empty-project tempo; optional project-file probe loads private JSON with no file media or video source activation",
+    "No durable authored/output mutation crash publication acceptance"
+  ]
+}

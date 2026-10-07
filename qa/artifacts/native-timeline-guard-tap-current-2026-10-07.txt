@@ -1,0 +1,1 @@
+PASS Tap tempo: 9 async regression cases; authority-before-snapshot, stale/replacement fences and no mutation retries.

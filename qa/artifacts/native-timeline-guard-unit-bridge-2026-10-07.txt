@@ -1,0 +1,37 @@
+Pinned/PATH-first linker: C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+    Finished `release` profile [optimized] target(s) in 0.81s
+     Running unittests src\main.rs (C:\Users\janua\AppData\Local\Temp\syndocal-native-acceptance-target\release\deps\syndocal-41cd4ce392874b4c.exe)
+
+running 29 tests
+test agent_bridge::authority::tests::bridge_grant_admission_allows_exact_high_risk_grants_without_consent ... ok
+test agent_bridge::authority::tests::consent_delegates_exact_binding_to_protocol_authority ... ok
+test agent_bridge::authority::tests::diagnostic_audit_bridge_attempt_metadata_is_bounded_and_immutable_across_eviction ... ok
+test agent_bridge::authority::tests::diagnostic_audit_bridge_attempts_cover_allowed_and_denied_r2_r3_r4_r5_s0_without_private_arguments ... ok
+test agent_bridge::authority::tests::diagnostic_audit_canonical_mutations_reject_read_grants_and_require_real_risk_capabilities ... ok
+test agent_bridge::authority::tests::explicit_grants_do_not_escape_safe_mode ... ok
+test agent_bridge::authority::tests::pairing_returns_one_credential_and_safe_mode_is_visible ... ok
+test agent_bridge::authority::tests::re_pairing_advances_incarnation_after_revoke ... ok
+test agent_bridge::authority::tests::request_proof_binds_launch_nonce_and_request_identity ... ok
+test agent_bridge::authority::tests::revoke_removes_credential_and_kill_switch_closes_pairing ... ok
+test agent_bridge::authority::tests::wrong_or_replayed_pairing_challenge_fails_closed ... ok
+test agent_bridge::tests::agent_bridge_canonical_reads_are_not_persisted_mutations_but_writes_are ... ok
+test agent_bridge::tests::agent_bridge_capacity_preserves_inflight_and_mutation_tombstones ... ok
+test agent_bridge::tests::agent_bridge_claim_is_exact_once_and_replay_never_dispatches_twice ... ok
+test agent_bridge::tests::agent_bridge_legacy_unbound_tombstone_remains_a_replay_fence ... ok
+test agent_bridge::tests::agent_bridge_native_execution_requires_current_claim_and_is_single_use ... ok
+test agent_bridge::tests::agent_bridge_oversize_result_cannot_be_reported_completed ... ok
+test agent_bridge::tests::agent_bridge_process_requires_nonce_proof_and_exact_external_grant ... ok
+test agent_bridge::tests::agent_bridge_receipts_and_replays_are_bound_to_exact_owner ... ok
+test agent_bridge::tests::agent_bridge_reload_fences_late_completion_and_does_not_replay ... ok
+test agent_bridge::tests::agent_bridge_restart_retains_mutation_identity_without_automatic_replay ... ok
+test agent_bridge::tests::agent_bridge_video_blackout_is_a_deduplicated_mutation ... ok
+test agent_bridge::tests::agent_bridge_video_blackout_mutation_survives_reload_without_redispatch ... ok
+test agent_bridge::tests::agent_bridge_wire_auth_methods_and_bounds_are_strict ... ok
+test agent_bridge::tests::agent_bridge_wire_hostile_request_corpus_is_bounded_and_panic_free ... agent bridge hostile request corpus: 512 cases, 511 rejected, 0 panics, max_bytes=65537
+ok
+test agent_bridge::tests::diagnostic_audit_wire_preserves_legacy_intent_and_admits_strict_process_bound_pages ... ok
+test agent_bridge_execution::tests::diagnostic_capture_revocation_blocks_publication_without_replaying_capture ... ok
+test control_plane_runtime::agent_bridge_timeline_guard_tests::external_loop_final_authorization_denial_prevents_capability_consumption_and_publication ... ok
+test control_plane_runtime::agent_bridge_timeline_guard_tests::external_transport_final_authorization_denial_prevents_publication_and_replay_reentry ... ok
+
+test result: ok. 29 passed; 0 failed; 0 ignored; 0 measured; 2021 filtered out; finished in 0.14s

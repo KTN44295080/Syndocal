@@ -15,6 +15,7 @@ import {
   executeAgentBridgeControlPlane,
   CANONICAL_TAURI_COMMANDS,
   canonicalOperationIsMutation,
+  NATIVE_TIMELINE_MUTATIONS,
 } from "./agentBridgeControlPlane";
 import { executeAgentBridgeRecordingStatus } from "./agentBridgeRecording";
 
@@ -108,6 +109,7 @@ export async function executeAgentBridgeRequest(
     if (request.method === "diagnostics.export"
       || (request.method === "control_plane.execute" && typeof params.operationId === "string"
         && (params.operationId.startsWith("syndocal.output.")
+          || NATIVE_TIMELINE_MUTATIONS.has(params.operationId)
           || params.operationId === "syndocal.project.new.v1"
           || params.operationId === "syndocal.project.open.v1"
           || params.operationId === "syndocal.project.backup.restore.v1"

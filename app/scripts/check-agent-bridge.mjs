@@ -48,7 +48,7 @@ for (const name of ['fixtureTransformConfirmation', 'outputControlController', '
   modules.set(`./${name}`, exports);
 }
 const { executeAgentBridgeRequest: execute } = modules.get('./agentBridgeTools');
-const { executeAgentBridgeCanonicalOperation: executeCanonical, CANONICAL_TAURI_COMMANDS } = modules.get('./agentBridgeControlPlane');
+const { executeAgentBridgeCanonicalOperation: executeCanonical, CANONICAL_TAURI_COMMANDS, NATIVE_TIMELINE_MUTATIONS } = modules.get('./agentBridgeControlPlane');
 const { startAgentBridgeRuntime: start } = modules.get('./agentBridgeRuntime');
 const token = { project_epoch: 4, project_revision: 9, checkpoint_hash: 'checkpoint-A' };
 const fixture = { id: 17, label: 'Moving head', position: { x: 0, y: 1, z: 2 }, rotation: { pitch: 3, yaw: 4, roll: 5 } };
@@ -86,6 +86,21 @@ for (const operationId of Object.getOwnPropertyNames(Object.prototype)) {
 for (const [operationId, expectedCommand] of Object.entries(CANONICAL_TAURI_COMMANDS)) {
   const calls = []; let notifications = 0;
   const payload = {};
+  if (NATIVE_TIMELINE_MUTATIONS.has(operationId)) {
+    await assert.rejects(executeCanonical(async () => { calls.push('retired-direct-invoke'); return {}; },
+      { operationId, request: payload }, () => { notifications++; }), /immutable native request/);
+    assert.deepEqual(calls, []); assert.equal(notifications, 0);
+    for (const ok of [false, true]) {
+      const result = {ok, operation_id: operationId, result: {kind:ok?'receipt':'rejected'}};
+      const actual = await execute(async (command,args) => {
+        assert.equal(command,'agent_bridge_execute_native_v1');
+        assert.deepEqual(args,{rendererGeneration:5,requestId:'canonical-request'});
+        return result;
+      },request('control_plane.execute',{operationId,request:{untrusted:'must never enter a direct invoke'}}));
+      assert.deepEqual(actual,result,'typed native refusal must remain false rather than become a success wrapper');
+    }
+    continue;
+  }
   await executeCanonical(async (command, args) => { calls.push([command, args]); return {}; },
     { operationId, request: payload }, () => { notifications++; });
   assert.deepEqual(calls, [[expectedCommand, payload]]);

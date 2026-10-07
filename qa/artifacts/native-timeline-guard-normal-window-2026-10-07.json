@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "timestamp": "2026-10-07T01:48:48.542Z",
+  "passed": true,
+  "executable": "C:\\Users\\janua\\OneDrive\\ドキュメント\\GitHub\\Syndocal\\target\\release\\syndocal.exe",
+  "executableSha256": "0abce29e600c60b6e60202d3ef74aed10a68f3ba0df799d0337483c507330ab8",
+  "runnerSha256": "912026e621f067dd3b6f9688a8af09c33260d997d2e600a9d7f748e9c7926590",
+  "sidecarSha256": "54b871ba1b19f1f8c6369190b77bec78789369374ca6295dda17c3d39189d0b2",
+  "window": {
+    "processId": 87604,
+    "title": "Syndocal",
+    "responsive": true,
+    "visible": true,
+    "maximized": true,
+    "exactPathWindowCount": 1
+  },
+  "unauthenticatedReadRejected": true,
+  "authenticationError": "agent_authentication_required",
+  "nonclaims": [
+    "No UI actions or Control layout measurement",
+    "No authenticated primary-profile MCP acceptance",
+    "No physical output, clean-install, distribution or venue acceptance"
+  ]
+}

@@ -88,6 +88,12 @@ const CANONICAL_QUERY_OPERATION_IDS = new Set(
     operationId.startsWith("syndocal.query.") || operationId === "syndocal.output.lease.authority.query.v1"),
 );
 
+export const NATIVE_TIMELINE_MUTATIONS = new Set([
+  "syndocal.runtime.timeline.transport.set_playing.v1",
+  "syndocal.runtime.timeline.loop.commit.v1",
+  "syndocal.runtime.timeline.follow.abort.v1",
+]);
+
 export const canonicalOperationIsMutation = (operationId: string) =>
   !CANONICAL_QUERY_OPERATION_IDS.has(operationId);
 
@@ -104,6 +110,9 @@ export async function executeAgentBridgeCanonicalOperation(
   }
   if (!Object.hasOwn(CANONICAL_TAURI_COMMANDS, operationId)) {
     throw new Error("Canonical operation is not executable through the reviewed adapter set.");
+  }
+  if (NATIVE_TIMELINE_MUTATIONS.has(operationId)) {
+    throw new Error("Timeline mutations require the immutable native request executor.");
   }
   const command = CANONICAL_TAURI_COMMANDS[
     operationId as keyof typeof CANONICAL_TAURI_COMMANDS
@@ -223,7 +232,7 @@ export async function executeAgentBridgeControlPlane(invoke: FrontendTauriInvoke
       source_inventory_count: sourceInventory.length,
       source_inventory_by_family: sourceFamilies,
       source_inventory_by_disposition: dispositions,
-      execution_boundary: "The 65 reviewed canonical operations are executable through typed adapters; external MCP output, project replacement and file operations use the immutable native request. FailClosed entries remain discovery-only.",
+      execution_boundary: "The 65 reviewed canonical operations are executable through typed adapters; external MCP Timeline mutations, output, project replacement and file operations use the immutable native request. FailClosed entries remain discovery-only.",
     },
     agent_bridge: {
       adapter: "local_window_mcp_sidecar",
