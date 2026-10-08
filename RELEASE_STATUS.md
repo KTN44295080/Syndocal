@@ -1,11 +1,16 @@
 # Syndocal historical v1.0 / current v1.2 alpha Release Status
 
-Updated: 2026-09-05
-Branch: `codex/syndocal-v1.2`; current product metadata is `1.2.0-alpha.69`.
+## 2026-10-08 alpha.70 development installers
+
+Current product metadata is `1.2.0-alpha.70`. Windows x64 NSIS/MSI and macOS 12+ Apple Silicon DMG are being produced from base `97b9c6d3151a049e78ee92ac29254de5b7346e8f` on `codex/distribution-alpha70-20261008`. This is an unsigned development distribution; hardware, clean-machine, signing, notarization and complete product acceptance remain open. See [distribution evidence](qa/DEVELOPMENT_INSTALLERS_ALPHA70_2026-10-08.md).
+
+
+Historical status: 2026-09-05
+Branch: `codex/syndocal-v1.2`; recorded product metadata was `1.2.0-alpha.69`.
 
 ## 2026-09-05 alpha.69 recording atomic-publication SOURCE CANDIDATE
 
-Current product metadata is `1.2.0-alpha.69`. The bounded source candidate
+Recorded alpha.69 product metadata was `1.2.0-alpha.69`. The bounded source candidate
 uses FFmpeg staging and atomic publication to preserve an existing final recording
 on encoder failure. Query polling also prevents overlapping native reads.
 Build/test/native evidence and remaining concurrency boundaries are recorded below;

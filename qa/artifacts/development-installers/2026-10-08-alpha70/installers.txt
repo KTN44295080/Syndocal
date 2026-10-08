@@ -1,0 +1,15 @@
+
+> syndocal@1.2.0-alpha.70 tauri C:\Users\janua\.codex\worktrees\distribution-alpha70\Syndocal\app
+> node scripts/run-tauri.mjs "build" "--bundles" "nsis msi"
+
+[syndocal-build] release executable is not running: C:\Users\janua\AppData\Local\Temp\syndocal-native-acceptance-target\release\syndocal.exe
+[syndocal-build] pinned CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+[syndocal-build] where.exe link.exe:
+C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+error: invalid value 'nsis msi' for '--bundles [<BUNDLES>...]'
+  [possible values: msi, nsis]
+
+  tip: a similar value exists: 'nsis'
+
+For more information, try '--help'.
+ ELIFECYCLE  Command failed with exit code 2.

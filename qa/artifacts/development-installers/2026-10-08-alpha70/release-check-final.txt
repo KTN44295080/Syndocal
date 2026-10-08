@@ -1,0 +1,267 @@
+
+> syndocal@1.2.0-alpha.70 check:release C:\Users\janua\.codex\worktrees\distribution-alpha70\Syndocal\app
+> pnpm run check:release:static && node scripts/check-release-metadata.mjs
+
+
+> syndocal@1.2.0-alpha.70 check:release:static C:\Users\janua\.codex\worktrees\distribution-alpha70\Syndocal\app
+> pnpm run check:completion-ledger && pnpm run check:q1-q4-ledger && pnpm run check:ai0-source-coverage && pnpm run check:ai1-query-event-contract && pnpm run check:ai2-authored-command-bridge && pnpm run check:ai4-authority-service && pnpm run check:ai5-sidecar && pnpm run check:ai6-admin-ui && pnpm run check:ai7-adversarial-proof && pnpm run check:f1-input-generations && pnpm run check:f2-output-ownership && pnpm run check:frontend-command-routing && pnpm run check:frontend-invokes && pnpm run check:project-shortcuts && pnpm run check:backend-operator-contract && pnpm run check:project-transaction && pnpm run check:project-recovery-e3 && pnpm run check:project-publication-e4 && node scripts/check-tauri-admission-inventory.mjs && pnpm run check:media-thumbnails && pnpm run check:media-asset-operations && pnpm run check:media-asset-authority && pnpm run check:native-thumbnail-request && pnpm run check:snapshot-live-publication && pnpm run check:agent-bridge && pnpm run check:output-ownership && pnpm run check:output-control-runtime && pnpm run check:safety-blackout-runtime && pnpm run check:asio-packaging && pnpm run check:asio-v3-contract && pnpm run check:live-audio && pnpm run check:live-audio-ipc-v1 && pnpm run check:timeline-cue-audio && pnpm run check:timeline-audio-output-bus && pnpm run check:timeline-loop-runtime && pnpm run check:timeline-transport-runtime && pnpm run check:timeline-follow-runtime && pnpm run check:snapshot-runtime-watermark && pnpm run check:project-open-bootstrap && pnpm run check:video-runtime-polling && pnpm run check:video-output-routing-runtime && pnpm run check:video-display-target && pnpm run check:video-output-window-observation && pnpm run check:camera-input
+
+
+> syndocal@1.2.0-alpha.70 check:completion-ledger C:\Users\janua\.codex\worktrees\distribution-alpha70\Syndocal\app
+> node scripts/check-completion-ledger.mjs
+
+completion ledger ok; 23 Open + 8 Deferred + 27 Complete authority rows (58 total; sections 6=37, 7=6, 8=9, 9=6)
+
+> syndocal@1.2.0-alpha.70 check:q1-q4-ledger C:\Users\janua\.codex\worktrees\distribution-alpha70\Syndocal\app
+> node scripts/check-q1-q4-ledger.mjs
+
+q1-q4 coverage ledger ok; 32 Q1 rows cover 29/29 Q0 domains and 10/10 source contracts; 58/58 Flow markers referenced (23 Open + 8 Deferred + 27 Complete); 15 decisions, 14 risks, 199 evidence records linked; master mirror parity verified
+
+> syndocal@1.2.0-alpha.70 check:ai0-source-coverage C:\Users\janua\.codex\worktrees\distribution-alpha70\Syndocal\app
+> node scripts/check-ai0-source-coverage.mjs
+
+AI0 source coverage ok; Tauri 561, Engine 281, Remote 116, MIDI/OSC/DMX 206, Frontend 481, Keyboard 33, UI literal invokes 334; fail-closed authority gates 6
+
+> syndocal@1.2.0-alpha.70 check:ai1-query-event-contract C:\Users\janua\.codex\worktrees\distribution-alpha70\Syndocal\app
+> node scripts/check-ai1-query-event-contract.mjs
+
+AI1 query/event contract ok; protocol bounds and schemas verified; focused frontend gates 2
+
+> syndocal@1.2.0-alpha.70 check:ai2-authored-command-bridge C:\Users\janua\.codex\worktrees\distribution-alpha70\Syndocal\app
+> node scripts/check-ai2-authored-command-bridge.mjs
+
+AI2 authored command bridge ok; canonical authored routes, strict request identity, E/R/H binding, exact receipts, owner retirement and focused legacy gates verified
+
+> syndocal@1.2.0-alpha.70 check:ai4-authority-service C:\Users\janua\.codex\worktrees\distribution-alpha70\Syndocal\app
+> node scripts/check-ai4-authority-service.mjs
+
+AI4 authority service ok; bounded pairing, OS credential storage, safe-mode grants, revocation, kill switch, exact consent binding, trusted-window admission and retired challenge absence verified
+
+> syndocal@1.2.0-alpha.70 check:ai5-sidecar C:\Users\janua\.codex\worktrees\distribution-alpha70\Syndocal\app
+> node scripts/check-ai5-sidecar.mjs
+
+PASS 16 adapter integration groups; hostile stdio corpus: 128 rejected; fake loopback only, no Syndocal/device calls
+PASS HTTP health/JSON-RPC/REST and WebSocket transport groups; loopback fake broker only
+PASS transport security: host/origin rejection, malformed path recovery, 64-session capacity/release, idle expiry and active-request retention, split-header/payload liveness and frame completion; no native/device calls
+Discovery burst: native dispatches=1, completed=1
+Global burst: 10000 intents, eight native dispatches, 9992 pre-dispatch rejections
+PASS request capacity: 9 groups; bounded authenticated discovery, revocation/failure rejection, discovery/call exclusion, 10000 global intents, shared HTTP/REST/WebSocket budget, error/unknown release and no retries
+AI5 sidecar auth/transport boundary ok; authenticated discovery, nonce proof, exact grant admission, bounded MCP/HTTP/REST/WebSocket forwarding and redaction verified
+
+> syndocal@1.2.0-alpha.70 check:ai6-admin-ui C:\Users\janua\.codex\worktrees\distribution-alpha70\Syndocal\app
+> node scripts/check-ai6-admin-ui.mjs
+
+AI6 administration UI ok; Security route, trusted authority actions, exact grants, single-use consent and bounded audit viewer verified
+
+> syndocal@1.2.0-alpha.70 check:ai7-adversarial-proof C:\Users\janua\.codex\worktrees\distribution-alpha70\Syndocal\app
+> node scripts/check-ai7-adversarial-proof.mjs
+
+AI7 adversarial proof source contract ok; parity, reply-loss, authority, gap, rate, saturation and sidecar boundaries are enumerated
+
+> syndocal@1.2.0-alpha.70 check:f1-input-generations C:\Users\janua\.codex\worktrees\distribution-alpha70\Syndocal\app
+> node scripts/check-f1-input-generations.mjs
+
+F1 input generations ok; project/mapping epochs, constructor/install fences, Learn continuation, DMX liveness and retirement tests/contracts verified
+
+> syndocal@1.2.0-alpha.70 check:f2-output-ownership C:\Users\janua\.codex\worktrees\distribution-alpha70\Syndocal\app
+> node scripts/check-f2-output-ownership.mjs
+
+F2 output ownership ok; bounded lease lifecycle, role matrix, retirement integration and external boundary verified
+
+> syndocal@1.2.0-alpha.70 check:frontend-command-routing C:\Users\janua\.codex\worktrees\distribution-alpha70\Syndocal\app
+> node scripts/check-frontend-command-routing.mjs
+
+frontend command routing exact: 133 renderer mutations, 31 server-authoritative mutations, 28 raw dispatches, 480 facade dispatches
+
+> syndocal@1.2.0-alpha.70 check:frontend-invokes C:\Users\janua\.codex\worktrees\distribution-alpha70\Syndocal\app
+> node scripts/check-frontend-tauri-invokes.mjs
+
+frontend Tauri invoke inventory exact: 481 commands
+
+> syndocal@1.2.0-alpha.70 check:project-shortcuts C:\Users\janua\.codex\worktrees\distribution-alpha70\Syndocal\app
+> node scripts/check-project-shortcuts.mjs
+
+project/app shortcuts: 15552 matrix cases; App=30 reachable kinds; ProjectFile=3 reachable kinds; source manifest byte-exact
+
+> syndocal@1.2.0-alpha.70 check:backend-operator-contract C:\Users\janua\.codex\worktrees\distribution-alpha70\Syndocal\app
+> node scripts/check-backend-operator-contract.mjs
+
+backend operator contract ok: 561 commands, 334 literal frontend calls, 133 transactional mutations
+
+> syndocal@1.2.0-alpha.70 check:project-transaction C:\Users\janua\.codex\worktrees\distribution-alpha70\Syndocal\app
+> node scripts/check-project-transaction.mjs && node scripts/check-project-authority.mjs
+
+project transaction executable production-contract checks passed
+project authority deterministic checks passed
+
+> syndocal@1.2.0-alpha.70 check:project-recovery-e3 C:\Users\janua\.codex\worktrees\distribution-alpha70\Syndocal\app
+> node scripts/check-project-recovery-e3.mjs
+
+project authority deterministic checks passed
+node:internal/modules/run_main:123
+    triggerUncaughtException(
+    ^
+
+AssertionError [ERR_ASSERTION]: get_project_recovery_authority_status must remain registered
+    at file:///C:/Users/janua/.codex/worktrees/distribution-alpha70/Syndocal/app/scripts/check-project-recovery-e3.mjs:41:10 {
+  generatedMessage: false,
+  code: 'ERR_ASSERTION',
+  actual: '\n' +
+    '            agent_bridge_claim_v1,\n' +
+    '            agent_bridge_complete_v1,\n' +
+    '            agent_bridge_register_v1,\n' +
+    '            agent_bridge_execute_native_v1,\n' +
+    '            agent_authority_status_v1,\n' +
+    '            agent_authority_begin_pairing_v1,\n' +
+    '            agent_authority_approve_pairing_v1,\n' +
+    '            agent_authority_authenticate_v1,\n' +
+    '            agent_authority_promote_v1,\n' +
+    '            agent_authority_grant_v1,\n' +
+    '            agent_authority_revoke_v1,\n' +
+    '            agent_authority_kill_switch_v1,\n' +
+    '            agent_authority_clear_kill_switch_v1,\n' +
+    '            agent_authority_prepare_consent_v1,\n' +
+    '            agent_authority_authorize_with_consent_v1,\n' +
+    '            get_control_plane_operation_registry,\n' +
+    '            get_control_plane_canonical_registry,\n' +
+    '            get_control_plane_query_schema_catalog,\n' +
+    '            get_control_plane_query_capabilities,\n' +
+    '            query_control_plane_project_authority,\n' +
+    '            query_control_plane_runtime_generations,\n' +
+    '            query_control_plane_output_ownership,\n' +
+    '            query_output_lease_authority_v1,\n' +
+    '            query_display_add_lease_authority_v1,\n' +
+    '            poll_control_plane_observation_events,\n' +
+    '            get_application_update_configuration,\n' +
+    '            check_application_update,\n' +
+    '            install_application_update,\n' +
+    '            select_gdtf_file,\n' +
+    '            select_video_source_file,\n' +
+    '            select_video_source_files,\n' +
+    '            select_video_isf_file,\n' +
+    '            import_video_output_bitmap_mask,\n' +
+    '            import_gdtf,\n' +
+    '            load_gdtf_wheel_media,\n' +
+    '            load_gdtf_model_file,\n' +
+    '            download_gdtf_from_url,\n' +
+    '            search_gdtf_share,\n' +
+    '            download_gdtf_from_share,\n' +
+    '            list_gdtf_fixture_cache,\n' +
+    '            cache_gdtf_from_share,\n' +
+    '            get_fixture_profile_health,\n' +
+    '            list_verified_fixture_profiles,\n' +
+    '            load_verified_fixture_profile,\n' +
+    '            repair_fixture_profile,\n' +
+    '            create_custom_fixture_profile,\n' +
+    '            preview_custom_fixture_profile,\n' +
+    '            save_custom_fixture_profile,\n' +
+    '            load_custom_fixture_profile,\n' +
+    '            use_fixture_profile,\n' +
+    '            patch_fixtures,\n' +
+    '            remove_fixture,\n' +
+    '            set_fixture_patch,\n' +
+    '            set_fixture_limits,\n' +
+    '            set_group_fixture_limits,\n' +
+    '            set_fixture_groups,\n' +
+    '            get_fixture_groups,\n' +
+    '            create_fixture_group,\n' +
+    '            rename_fixture_group,\n' +
+    '            recolor_fixture_group,\n' +
+    '            delete_fixture_group,\n' +
+    '            undo_delete_fixture_group,\n' +
+    '            set_attribute,\n' +
+    '            set_fixture_attribute_batch,\n' +
+    '            set_operator_selection_context,\n' +
+    '            get_operator_selection_context,\n' +
+    '            set_operator_feature_fader,\n' +
+    '            set_group_attribute,\n' +
+    '            set_programmer_mode,\n' +
+    '            set_programmer_attribute,\n' +
+    '            set_programmer_fixture_attribute_batch,\n' +
+    '            set_programmer_group_attribute,\n' +
+    '            clear_programmer,\n' +
+    '            commit_programmer,\n' +
+    '            set_group_highlight,\n' +
+    '            set_group_solo,\n' +
+    '            set_group_strobe,\n' +
+    '            set_group_park,\n' +
+    '            set_fixture_transform,\n' +
+    '            set_fixture_transforms,\n' +
+    '            set_stage_map_config,\n' +
+    '            set_touch_surface,\n' +
+    '            set_fixture_highlight,\n' +
+    '            set_fixture_solo,\n' +
+    '            set_fixture_park,\n' +
+    '            clear_fixture_flags,\n' +
+    '            set_output_config,\n' +
+    '            set_dmx_outputs,\n' +
+    '            get_output_ownership_status,\n' +
+    '            get_show_clock_status,\n' +
+    '            arm_show_clock_output,\n' +
+    '            schedule_show_clock_action,\n' +
+    '            hold_show_clock,\n' +
+    '            rearm_show_clock,\n' +
+    '            start_show_clock,\n' +
+    '            stop_show_clock,\n' +
+    '            set_output_ownership_role,\n' +
+    '            arm_output_ownership_role,\n' +
+    '            send_dmx_test_frame,\n' +
+    '            send_dmx_routes_test_frame,\n' +
+    '            set_blackout,\n' +
+    '            set_all_blackout,\n' +
+    '            set_lighting_master,\n' +
+    '            set_group_submaster,\n' +
+    '            set_lighting_master_output_control_v2,\n' +
+    '            set_group_submaster_output_control_v2,\n' +
+    '            set_video_master_output_control_v2,\n' +
+    '            take_video_clip_output_control_v2,\n' +
+    '            launch_video_clip_output_control_v2,\n' +
+    '            reset_engine_telemetry,\n' +
+    '            save_engine_telemetry_report,\n' +
+    '            get_engine_telemetry_report,\n' +
+    '            set_bpm,\n' +
+    '            tap_bpm,\n' +
+    '            sync_ableton_link_clock,\n' +
+    '            analyze_audio_file,\n' +
+    '            select_timeline_audio_clip_file,\n' +
+    '            analyze_timeline_audio_clip_path,\n' +
+    '            add_timeline_audio_clip,\n' +
+    '            update_timeline_audio_clip,\n' +
+    '            set_timeline_audio_clip_output_bus,\n' +
+    '            remove_timeline_audio_clip,\n' +
+    '            set_timeline_audio_master,\n' +
+    '            clear_timeline_audio,\n' +
+    '            list_midi_inputs,\n' +
+    '            list_midi_outputs,\n' +
+    '            list_serial_ports,\n' +
+    '            get_serial_dmx_machine_binding_status_v1,\n' +
+    '            select_serial_dmx_machine_binding_v1,\n' +
+    '            get_show_serial_dmx_safety_blackout_route_status_v1,\n' +
+    '            connect_midi_clock,\n' +
+    '            disconnect_midi_clock,\n' +
+    '            connect_midi_control,\n' +
+    '            disconnect_midi_control,\n' +
+    '            connect_midi_feedback,\n' +
+    '            disconnect_midi_feedback,\n' +
+    '            set_midi_feedback_auto,\n' +
+    '            midi_feedback_status,\n' +
+    '            send_midi_feedback,\n' +
+    '            learn_midi_control,\n' +
+    '            save_midi_mappings,\n' +
+    '            load_midi_mappings,\n' +
+    '            save_osc_mappings,\n' +
+    '            load_osc_mappings,\n' +
+    '            learn_osc_control,\n' +
+    '            start_osc_input,\n' +
+    '            stop_osc_input,\n' +
+    '            remote_access_urls,\n' +
+    '            #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))',
+  expected: /\bget_project_recovery_authority_status\b/,
+  operator: 'match',
+  diff: 'simple'
+}
+
+Node.js v22.22.1
+ ELIFECYCLE  Command failed with exit code 1.
+ ELIFECYCLE  Command failed with exit code 1.
+ ELIFECYCLE  Command failed with exit code 1.

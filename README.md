@@ -2,15 +2,15 @@
 
 Syndocal は、DMX照明とVJ映像を同じタイムライン、キュー、BPMクロック、エフェクトソースで駆動するデスクトップ制御ソフトウェアです。
 
-- 製品名: **Syndocal 1.2.0-alpha.69**
+- 製品名: **Syndocal 1.2.0-alpha.70**
 - 開発: **Seraf() / KTN**
 - プロジェクト: **`.sdc`** (可読JSON)
 - Tier 1: Windows 10+ / macOS 12+
 - Tier 2: Ubuntu 22.04+ / Arch Linux
 
-## 2026-09-05 alpha.69 recording atomic-publication SOURCE CANDIDATE
+## Historical 2026-09-05 alpha.69 recording atomic-publication SOURCE CANDIDATE
 
-Current product metadata is `1.2.0-alpha.69`. The bounded source candidate
+Recorded product metadata was `1.2.0-alpha.69`. The bounded source candidate
 uses FFmpeg staging and atomic publication to preserve an existing final recording
 on encoder failure. Query polling also prevents overlapping native reads.
 Build/test/native evidence and remaining concurrency boundaries are recorded below;
@@ -486,9 +486,11 @@ unaccepted.
 
 ## インストール
 
+現行の開発配布版は `1.2.0-alpha.70` です。Windows x64用EXE/MSIと、macOS 12以降のApple Silicon用DMGを作成します。配布物・起動検証・残る確認は [配布記録](qa/DEVELOPMENT_INSTALLERS_ALPHA70_2026-10-08.md) を参照してください。
+
 CI/Release成果物は次の形式です。
 
-- Windows: `Syndocal_1.2.0-alpha.69_x64-setup.exe` (NSIS)、`Syndocal_1.2.0-alpha.69_x64_ja-JP.msi`
+- Windows: `Syndocal_1.2.0-alpha.70_x64-setup.exe` (NSIS)、`Syndocal_1.2.0-alpha.70_x64_ja-JP.msi`
 - macOS: `.app`、DMG
 - Linux: `.deb`、AppImage
 

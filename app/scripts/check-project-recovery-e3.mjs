@@ -28,10 +28,14 @@ const invokeManifest = JSON.parse(readFileSync(
   "utf8",
 ));
 const typedInvokeSource = readFileSync(new URL("../src/tauriInvokeCommands.ts", import.meta.url), "utf8");
-const handlerBlock = mainSource.slice(
-  mainSource.indexOf("tauri::generate_handler!"),
-  mainSource.indexOf("tauri::generate_handler!") + 20_000,
-);
+const handlerMarker = "tauri::generate_handler![";
+const handlerStart = mainSource.indexOf(handlerMarker);
+assert(handlerStart >= 0, "Production handler registry must exist");
+assert.equal(mainSource.indexOf(handlerMarker, handlerStart + handlerMarker.length), -1,
+  "Exactly one production handler registry must exist");
+const handlerEnd = mainSource.indexOf(".build(tauri::generate_context!())", handlerStart);
+assert(handlerEnd > handlerStart, "Production handler registry must have its build boundary");
+const handlerBlock = mainSource.slice(handlerStart, handlerEnd);
 for (const command of [
   "get_project_recovery_authority_status",
   "get_project_authority_bundle",

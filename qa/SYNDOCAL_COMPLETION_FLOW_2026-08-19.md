@@ -1,5 +1,10 @@
 # Syndocal completion flow — active dependency-ordered work authority
 
+## 2026-10-08 alpha.70 development installers
+
+Current product metadata is `1.2.0-alpha.70`. Windows x64 NSIS/MSI and macOS 12+ Apple Silicon DMG are being produced from base `97b9c6d3151a049e78ee92ac29254de5b7346e8f` on `codex/distribution-alpha70-20261008`. This is an unsigned development distribution; hardware, clean-machine, signing, notarization and complete product acceptance remain open. See [distribution evidence](DEVELOPMENT_INSTALLERS_ALPHA70_2026-10-08.md).
+
+
 Date: 2026-08-19
 Branch at creation: `codex/syndocal-v1.0`
 Baseline before this document: `848d759846985cc3acf588356cfa3c996b4e2ef2`
@@ -21,7 +26,7 @@ local edit, read the relevant contract only; do not read this entire file.
 
 ## 2026-09-05 alpha.69 recording atomic-publication SOURCE CANDIDATE
 
-Current product metadata is `1.2.0-alpha.69`. The bounded source candidate
+Recorded alpha.69 product metadata was `1.2.0-alpha.69`. The bounded source candidate
 uses FFmpeg staging and atomic publication to preserve an existing final recording
 on encoder failure. Query polling also prevents overlapping native reads.
 Build/test/native evidence and remaining concurrency boundaries are recorded below;
@@ -1461,8 +1466,8 @@ review and evidence required for the behavior the current task consumes.
 
 ### 4.1 Current release train
 
-The product metadata is `1.2.0-alpha.69` for the 2026-09-05 recording
-atomic-publication source candidate; acceptance is pending. Verify Cargo, frontend and
+The product metadata is `1.2.0-alpha.70` for the 2026-10-08 development
+installer distribution; full product acceptance is pending. Verify Cargo, frontend and
 Tauri metadata before producing a new artifact. A branch name, past PID or older
 handoff is not a current artifact identity. The dated alpha.68 record above is
 historical build evidence; it is not a fresh native or physical acceptance run.
