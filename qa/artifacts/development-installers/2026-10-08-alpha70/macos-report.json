@@ -1,0 +1,1000 @@
+{
+  "schemaVersion": 1,
+  "status": "pass",
+  "startedAt": "2026-10-08T07:35:25.848Z",
+  "host": {
+    "platform": "darwin",
+    "architecture": "arm64",
+    "release": "24.6.0"
+  },
+  "commit": "c509b642006472fb2735cc61356b3dbf72c8a5a6",
+  "runId": "37742560103",
+  "runAttempt": "1",
+  "checks": {
+    "environment": {
+      "status": "pass",
+      "value": {
+        "version": "1.2.0-alpha.70",
+        "identifier": "jp.seraf.ktn.syndocal",
+        "minimum": "12.0"
+      }
+    },
+    "dmg": {
+      "status": "pass",
+      "value": {
+        "name": "Syndocal_1.2.0-alpha.70_arm64.dmg",
+        "path": "/Users/runner/work/Syndocal/Syndocal/target/release/bundle/dmg/Syndocal_1.2.0-alpha.70_arm64.dmg",
+        "size": 33429558,
+        "sha256": "09a512b68d931adad24724a3ee0ae6b009ed1c0c7219b26e9c5f4ffe07e9954a"
+      }
+    },
+    "image_integrity": {
+      "status": "pass"
+    },
+    "extraction": {
+      "status": "pass",
+      "value": "/private/var/folders/nj/vtw8zd2j31d1gdrtntc5y4600000gn/T/syndocal-dmg-check-0rnFNR/extracted/Syndocal.app"
+    },
+    "bundle_info": {
+      "status": "pass",
+      "value": {
+        "version": "1.2.0-alpha.70",
+        "buildVersion": "1.2.0-alpha.70",
+        "identifier": "jp.seraf.ktn.syndocal",
+        "minimum": "12.0"
+      }
+    },
+    "macho": {
+      "status": "pass",
+      "value": {
+        "images": [
+          {
+            "path": "Contents/MacOS/syndocal",
+            "architectures": [
+              "arm64"
+            ],
+            "dependencies": [
+              "/System/Library/Frameworks/AppKit.framework/Versions/C/AppKit",
+              "/usr/lib/libSystem.B.dylib",
+              "/System/Library/Frameworks/AudioToolbox.framework/Versions/A/AudioToolbox",
+              "/System/Library/Frameworks/CoreAudio.framework/Versions/A/CoreAudio",
+              "@rpath/libavutil.60.dylib",
+              "@rpath/libavformat.62.dylib",
+              "@rpath/libswscale.9.dylib",
+              "@rpath/libavcodec.62.dylib",
+              "/System/Library/Frameworks/Foundation.framework/Versions/C/Foundation",
+              "/System/Library/Frameworks/QuartzCore.framework/Versions/A/QuartzCore",
+              "/System/Library/Frameworks/Metal.framework/Versions/A/Metal",
+              "/System/Library/Frameworks/CoreGraphics.framework/Versions/A/CoreGraphics",
+              "/usr/lib/libobjc.A.dylib",
+              "/System/Library/Frameworks/IOKit.framework/Versions/A/IOKit",
+              "/System/Library/Frameworks/CoreMIDI.framework/Versions/A/CoreMIDI",
+              "/System/Library/Frameworks/WebKit.framework/Versions/A/WebKit",
+              "/System/Library/Frameworks/ApplicationServices.framework/Versions/A/ApplicationServices",
+              "/System/Library/Frameworks/Carbon.framework/Versions/A/Carbon",
+              "/System/Library/Frameworks/CoreVideo.framework/Versions/A/CoreVideo",
+              "/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation",
+              "/System/Library/Frameworks/CoreData.framework/Versions/A/CoreData",
+              "/System/Library/Frameworks/CoreText.framework/Versions/A/CoreText",
+              "/System/Library/Frameworks/CoreImage.framework/Versions/A/CoreImage",
+              "/System/Library/Frameworks/CloudKit.framework/Versions/A/CloudKit",
+              "/usr/lib/libiconv.2.dylib",
+              "/System/Library/Frameworks/ColorSync.framework/Versions/A/ColorSync",
+              "/System/Library/Frameworks/CoreServices.framework/Versions/A/CoreServices"
+            ],
+            "rpaths": [
+              "@executable_path/../Frameworks"
+            ],
+            "minimum": "12.0"
+          },
+          {
+            "path": "Contents/Frameworks/libavcodec.62.dylib",
+            "architectures": [
+              "arm64"
+            ],
+            "dependencies": [
+              "@rpath/libswresample.6.dylib",
+              "@rpath/libavutil.60.dylib",
+              "/usr/lib/libSystem.B.dylib",
+              "/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation",
+              "/System/Library/Frameworks/CoreVideo.framework/Versions/A/CoreVideo",
+              "/System/Library/Frameworks/CoreMedia.framework/Versions/A/CoreMedia"
+            ],
+            "rpaths": [
+              "@executable_path/../Frameworks"
+            ],
+            "minimum": "12.0"
+          },
+          {
+            "path": "Contents/Frameworks/libavformat.62.dylib",
+            "architectures": [
+              "arm64"
+            ],
+            "dependencies": [
+              "@rpath/libavcodec.62.dylib",
+              "@rpath/libswresample.6.dylib",
+              "@rpath/libavutil.60.dylib",
+              "/usr/lib/libSystem.B.dylib",
+              "/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation",
+              "/System/Library/Frameworks/CoreVideo.framework/Versions/A/CoreVideo",
+              "/System/Library/Frameworks/CoreMedia.framework/Versions/A/CoreMedia"
+            ],
+            "rpaths": [
+              "@executable_path/../Frameworks"
+            ],
+            "minimum": "12.0"
+          },
+          {
+            "path": "Contents/Frameworks/libavutil.60.dylib",
+            "architectures": [
+              "arm64"
+            ],
+            "dependencies": [
+              "/usr/lib/libSystem.B.dylib",
+              "/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation",
+              "/System/Library/Frameworks/CoreVideo.framework/Versions/A/CoreVideo",
+              "/System/Library/Frameworks/CoreMedia.framework/Versions/A/CoreMedia"
+            ],
+            "rpaths": [
+              "@executable_path/../Frameworks"
+            ],
+            "minimum": "12.0"
+          },
+          {
+            "path": "Contents/Frameworks/libswresample.6.dylib",
+            "architectures": [
+              "arm64"
+            ],
+            "dependencies": [
+              "@rpath/libavutil.60.dylib",
+              "/usr/lib/libSystem.B.dylib",
+              "/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation",
+              "/System/Library/Frameworks/CoreVideo.framework/Versions/A/CoreVideo",
+              "/System/Library/Frameworks/CoreMedia.framework/Versions/A/CoreMedia"
+            ],
+            "rpaths": [
+              "@executable_path/../Frameworks"
+            ],
+            "minimum": "12.0"
+          },
+          {
+            "path": "Contents/Frameworks/libswscale.9.dylib",
+            "architectures": [
+              "arm64"
+            ],
+            "dependencies": [
+              "@rpath/libavutil.60.dylib",
+              "/usr/lib/libSystem.B.dylib",
+              "/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation",
+              "/System/Library/Frameworks/CoreVideo.framework/Versions/A/CoreVideo",
+              "/System/Library/Frameworks/CoreMedia.framework/Versions/A/CoreMedia"
+            ],
+            "rpaths": [
+              "@executable_path/../Frameworks"
+            ],
+            "minimum": "12.0"
+          }
+        ],
+        "dependencies": [
+          {
+            "from": "Contents/MacOS/syndocal",
+            "dependency": "/System/Library/Frameworks/AppKit.framework/Versions/C/AppKit",
+            "system": true
+          },
+          {
+            "from": "Contents/MacOS/syndocal",
+            "dependency": "/usr/lib/libSystem.B.dylib",
+            "system": true
+          },
+          {
+            "from": "Contents/MacOS/syndocal",
+            "dependency": "/System/Library/Frameworks/AudioToolbox.framework/Versions/A/AudioToolbox",
+            "system": true
+          },
+          {
+            "from": "Contents/MacOS/syndocal",
+            "dependency": "/System/Library/Frameworks/CoreAudio.framework/Versions/A/CoreAudio",
+            "system": true
+          },
+          {
+            "from": "Contents/MacOS/syndocal",
+            "dependency": "@rpath/libavutil.60.dylib",
+            "resolved": "Contents/Frameworks/libavutil.60.dylib"
+          },
+          {
+            "from": "Contents/MacOS/syndocal",
+            "dependency": "@rpath/libavformat.62.dylib",
+            "resolved": "Contents/Frameworks/libavformat.62.dylib"
+          },
+          {
+            "from": "Contents/MacOS/syndocal",
+            "dependency": "@rpath/libswscale.9.dylib",
+            "resolved": "Contents/Frameworks/libswscale.9.dylib"
+          },
+          {
+            "from": "Contents/MacOS/syndocal",
+            "dependency": "@rpath/libavcodec.62.dylib",
+            "resolved": "Contents/Frameworks/libavcodec.62.dylib"
+          },
+          {
+            "from": "Contents/MacOS/syndocal",
+            "dependency": "/System/Library/Frameworks/Foundation.framework/Versions/C/Foundation",
+            "system": true
+          },
+          {
+            "from": "Contents/MacOS/syndocal",
+            "dependency": "/System/Library/Frameworks/QuartzCore.framework/Versions/A/QuartzCore",
+            "system": true
+          },
+          {
+            "from": "Contents/MacOS/syndocal",
+            "dependency": "/System/Library/Frameworks/Metal.framework/Versions/A/Metal",
+            "system": true
+          },
+          {
+            "from": "Contents/MacOS/syndocal",
+            "dependency": "/System/Library/Frameworks/CoreGraphics.framework/Versions/A/CoreGraphics",
+            "system": true
+          },
+          {
+            "from": "Contents/MacOS/syndocal",
+            "dependency": "/usr/lib/libobjc.A.dylib",
+            "system": true
+          },
+          {
+            "from": "Contents/MacOS/syndocal",
+            "dependency": "/System/Library/Frameworks/IOKit.framework/Versions/A/IOKit",
+            "system": true
+          },
+          {
+            "from": "Contents/MacOS/syndocal",
+            "dependency": "/System/Library/Frameworks/CoreMIDI.framework/Versions/A/CoreMIDI",
+            "system": true
+          },
+          {
+            "from": "Contents/MacOS/syndocal",
+            "dependency": "/System/Library/Frameworks/WebKit.framework/Versions/A/WebKit",
+            "system": true
+          },
+          {
+            "from": "Contents/MacOS/syndocal",
+            "dependency": "/System/Library/Frameworks/ApplicationServices.framework/Versions/A/ApplicationServices",
+            "system": true
+          },
+          {
+            "from": "Contents/MacOS/syndocal",
+            "dependency": "/System/Library/Frameworks/Carbon.framework/Versions/A/Carbon",
+            "system": true
+          },
+          {
+            "from": "Contents/MacOS/syndocal",
+            "dependency": "/System/Library/Frameworks/CoreVideo.framework/Versions/A/CoreVideo",
+            "system": true
+          },
+          {
+            "from": "Contents/MacOS/syndocal",
+            "dependency": "/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation",
+            "system": true
+          },
+          {
+            "from": "Contents/MacOS/syndocal",
+            "dependency": "/System/Library/Frameworks/CoreData.framework/Versions/A/CoreData",
+            "system": true
+          },
+          {
+            "from": "Contents/MacOS/syndocal",
+            "dependency": "/System/Library/Frameworks/CoreText.framework/Versions/A/CoreText",
+            "system": true
+          },
+          {
+            "from": "Contents/MacOS/syndocal",
+            "dependency": "/System/Library/Frameworks/CoreImage.framework/Versions/A/CoreImage",
+            "system": true
+          },
+          {
+            "from": "Contents/MacOS/syndocal",
+            "dependency": "/System/Library/Frameworks/CloudKit.framework/Versions/A/CloudKit",
+            "system": true
+          },
+          {
+            "from": "Contents/MacOS/syndocal",
+            "dependency": "/usr/lib/libiconv.2.dylib",
+            "system": true
+          },
+          {
+            "from": "Contents/MacOS/syndocal",
+            "dependency": "/System/Library/Frameworks/ColorSync.framework/Versions/A/ColorSync",
+            "system": true
+          },
+          {
+            "from": "Contents/MacOS/syndocal",
+            "dependency": "/System/Library/Frameworks/CoreServices.framework/Versions/A/CoreServices",
+            "system": true
+          },
+          {
+            "from": "Contents/Frameworks/libavutil.60.dylib",
+            "dependency": "/usr/lib/libSystem.B.dylib",
+            "system": true
+          },
+          {
+            "from": "Contents/Frameworks/libavutil.60.dylib",
+            "dependency": "/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation",
+            "system": true
+          },
+          {
+            "from": "Contents/Frameworks/libavutil.60.dylib",
+            "dependency": "/System/Library/Frameworks/CoreVideo.framework/Versions/A/CoreVideo",
+            "system": true
+          },
+          {
+            "from": "Contents/Frameworks/libavutil.60.dylib",
+            "dependency": "/System/Library/Frameworks/CoreMedia.framework/Versions/A/CoreMedia",
+            "system": true
+          },
+          {
+            "from": "Contents/Frameworks/libavformat.62.dylib",
+            "dependency": "@rpath/libavcodec.62.dylib",
+            "resolved": "Contents/Frameworks/libavcodec.62.dylib"
+          },
+          {
+            "from": "Contents/Frameworks/libavformat.62.dylib",
+            "dependency": "@rpath/libswresample.6.dylib",
+            "resolved": "Contents/Frameworks/libswresample.6.dylib"
+          },
+          {
+            "from": "Contents/Frameworks/libavformat.62.dylib",
+            "dependency": "@rpath/libavutil.60.dylib",
+            "resolved": "Contents/Frameworks/libavutil.60.dylib"
+          },
+          {
+            "from": "Contents/Frameworks/libavformat.62.dylib",
+            "dependency": "/usr/lib/libSystem.B.dylib",
+            "system": true
+          },
+          {
+            "from": "Contents/Frameworks/libavformat.62.dylib",
+            "dependency": "/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation",
+            "system": true
+          },
+          {
+            "from": "Contents/Frameworks/libavformat.62.dylib",
+            "dependency": "/System/Library/Frameworks/CoreVideo.framework/Versions/A/CoreVideo",
+            "system": true
+          },
+          {
+            "from": "Contents/Frameworks/libavformat.62.dylib",
+            "dependency": "/System/Library/Frameworks/CoreMedia.framework/Versions/A/CoreMedia",
+            "system": true
+          },
+          {
+            "from": "Contents/Frameworks/libswscale.9.dylib",
+            "dependency": "@rpath/libavutil.60.dylib",
+            "resolved": "Contents/Frameworks/libavutil.60.dylib"
+          },
+          {
+            "from": "Contents/Frameworks/libswscale.9.dylib",
+            "dependency": "/usr/lib/libSystem.B.dylib",
+            "system": true
+          },
+          {
+            "from": "Contents/Frameworks/libswscale.9.dylib",
+            "dependency": "/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation",
+            "system": true
+          },
+          {
+            "from": "Contents/Frameworks/libswscale.9.dylib",
+            "dependency": "/System/Library/Frameworks/CoreVideo.framework/Versions/A/CoreVideo",
+            "system": true
+          },
+          {
+            "from": "Contents/Frameworks/libswscale.9.dylib",
+            "dependency": "/System/Library/Frameworks/CoreMedia.framework/Versions/A/CoreMedia",
+            "system": true
+          },
+          {
+            "from": "Contents/Frameworks/libavcodec.62.dylib",
+            "dependency": "@rpath/libswresample.6.dylib",
+            "resolved": "Contents/Frameworks/libswresample.6.dylib"
+          },
+          {
+            "from": "Contents/Frameworks/libavcodec.62.dylib",
+            "dependency": "@rpath/libavutil.60.dylib",
+            "resolved": "Contents/Frameworks/libavutil.60.dylib"
+          },
+          {
+            "from": "Contents/Frameworks/libavcodec.62.dylib",
+            "dependency": "/usr/lib/libSystem.B.dylib",
+            "system": true
+          },
+          {
+            "from": "Contents/Frameworks/libavcodec.62.dylib",
+            "dependency": "/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation",
+            "system": true
+          },
+          {
+            "from": "Contents/Frameworks/libavcodec.62.dylib",
+            "dependency": "/System/Library/Frameworks/CoreVideo.framework/Versions/A/CoreVideo",
+            "system": true
+          },
+          {
+            "from": "Contents/Frameworks/libavcodec.62.dylib",
+            "dependency": "/System/Library/Frameworks/CoreMedia.framework/Versions/A/CoreMedia",
+            "system": true
+          },
+          {
+            "from": "Contents/Frameworks/libswresample.6.dylib",
+            "dependency": "@rpath/libavutil.60.dylib",
+            "resolved": "Contents/Frameworks/libavutil.60.dylib"
+          },
+          {
+            "from": "Contents/Frameworks/libswresample.6.dylib",
+            "dependency": "/usr/lib/libSystem.B.dylib",
+            "system": true
+          },
+          {
+            "from": "Contents/Frameworks/libswresample.6.dylib",
+            "dependency": "/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation",
+            "system": true
+          },
+          {
+            "from": "Contents/Frameworks/libswresample.6.dylib",
+            "dependency": "/System/Library/Frameworks/CoreVideo.framework/Versions/A/CoreVideo",
+            "system": true
+          },
+          {
+            "from": "Contents/Frameworks/libswresample.6.dylib",
+            "dependency": "/System/Library/Frameworks/CoreMedia.framework/Versions/A/CoreMedia",
+            "system": true
+          }
+        ]
+      }
+    },
+    "signature": {
+      "status": "pass",
+      "value": {
+        "integrity": "pass",
+        "kind": "ad-hoc",
+        "developerIdTrust": "not_verified",
+        "notarization": "not_verified",
+        "gatekeeper": "not_verified"
+      }
+    },
+    "process_survival": {
+      "status": "pass",
+      "value": {
+        "observedMs": 8011,
+        "reaped": true,
+        "exitCode": null,
+        "signal": "SIGTERM"
+      }
+    },
+    "cleanup": {
+      "status": "pass",
+      "value": {
+        "status": "removed"
+      }
+    },
+    "checksum": {
+      "status": "pass"
+    }
+  },
+  "commands": [
+    {
+      "command": "/usr/bin/git",
+      "args": [
+        "-C",
+        "/Users/runner/work/Syndocal/Syndocal/",
+        "rev-parse",
+        "HEAD"
+      ],
+      "code": 0,
+      "signal": null,
+      "reaped": true,
+      "reason": null,
+      "sentSignals": [],
+      "elapsedMs": 777,
+      "stdout": "c509b642006472fb2735cc61356b3dbf72c8a5a6\n",
+      "stderr": "",
+      "stdoutBytes": 41,
+      "stderrBytes": 0
+    },
+    {
+      "command": "/usr/bin/git",
+      "args": [
+        "-C",
+        "/Users/runner/work/Syndocal/Syndocal/",
+        "status",
+        "--porcelain"
+      ],
+      "code": 0,
+      "signal": null,
+      "reaped": true,
+      "reason": null,
+      "sentSignals": [],
+      "elapsedMs": 867,
+      "stdout": "",
+      "stderr": "",
+      "stdoutBytes": 0,
+      "stderrBytes": 0
+    },
+    {
+      "command": "/usr/bin/sw_vers",
+      "args": [
+        "-productVersion"
+      ],
+      "code": 0,
+      "signal": null,
+      "reaped": true,
+      "reason": null,
+      "sentSignals": [],
+      "elapsedMs": 11,
+      "stdout": "15.7.9\n",
+      "stderr": "",
+      "stdoutBytes": 7,
+      "stderrBytes": 0
+    },
+    {
+      "command": "/usr/bin/hdiutil",
+      "args": [
+        "imageinfo",
+        "/Users/runner/work/Syndocal/Syndocal/target/release/bundle/dmg/Syndocal_1.2.0-alpha.70_arm64.dmg"
+      ],
+      "code": 0,
+      "signal": null,
+      "reaped": true,
+      "reason": null,
+      "sentSignals": [],
+      "elapsedMs": 127,
+      "stdout": "Format Description: UDIF read-only compressed (zlib)\nClass Name: CUDIFDiskImage\nChecksum Type: CRC32\nSize Information:\n\tCUDIFEncoding-bytes-total: 33415965\n\tTotal Empty Bytes: 18016768\n\tSector Count: 203586\n\tTotal Bytes: 104236032\n\tCUDIFEncoding-bytes-wasted: 2054321\n\tTotal Non-Empty Bytes: 86219264\n\tCompressed Ratio: 0.3637416343521559\n\tCUDIFEncoding-bytes-in-use: 31361644\n\tCompressed Bytes: 31361644\nChecksum Value: $C4B98B41\nSegments:\n\t0: /Users/runner/work/Syndocal/Syndocal/target/release/bundle/dmg/Syndocal_1.2.0-alpha.70_arm64.dmg\nPartition Information:\n\t3:\n\t\tName: disk image (Apple_APFS : 4)\n\t\tPartition Number: 3\n\t\tChecksum Type: CRC32\n\t\tChecksum Value: $AB1DDC71\n\t4:\n\t\tName:  (Apple_Free : 5)\n\t\tPartition Number: 4\n\t\tChecksum Type: CRC32\n\t\tChecksum Value: $00000000\n\t0:\n\t\tName: GPT Header (Primary GPT Header : 1)\n\t\tPartition Number: 0\n\t\tChecksum Type: CRC32\n\t\tChecksum Value: $E03663D6\n\t5:\n\t\tName: GPT Partition Data (Backup GPT Table : 6)\n\t\tPartition Number: 5\n\t\tChecksum Type: CRC32\n\t\tChecksum Value: $805AF6AA\n\t1:\n\t\tName: GPT Partition Data (Primary GPT Table : 2)\n\t\tPartition Number: 1\n\t\tChecksum Type: CRC32\n\t\tChecksum Value: $805AF6AA\n\t6:\n\t\tName: GPT Header (Backup GPT Header : 7)\n\t\tPartition Number: 6\n\t\tChecksum Type: CRC32\n\t\tChecksum Value: $41BB6A84\n\t-1:\n\t\tName: Protective Master Boot Record (MBR : 0)\n\t\tPartition Number: -1\n\t\tChecksum Type: CRC32\n\t\tChecksum Value: $2F7FF7C5\n\t2:\n\t\tName:  (Apple_Free : 3)\n\t\tPartition Number: 2\n\t\tChecksum Type: CRC32\n\t\tChecksum Value: $00000000\nFormat: UDZO\nBacking Store Information:\n\tURL: file:///Users/runner/work/Syndocal/Syndocal/target/release/bundle/dmg/Syndocal_1.2.0-alpha.70_arm64.dmg\n\tName: Syndocal_1.2.0-alpha.70_arm64.dmg\n\tClass Name: CUDIFEncoding\n\tBacking Store Information:\n\t\tURL: file:///Users/runner/work/Syndocal/Syndocal/target/release/bundle/dmg/Syndocal_1.2.0-alpha.70_arm64.dmg\n\t\tName: Syndocal_1.2.0-alpha.70_arm64.dmg\n\t\tClass Name: CBSDBackingStore\npartitions:\n\tpartition-scheme: GUID\n\tblock-size: 512\n\tpartitions:\n\t\t0:\n\t\t\tpartition-name: Protective Master Boot Record\n\t\t\tpartition-start: 0\n\t\t\tpartition-synthesized: true\n\t\t\tpartition-length: 1\n\t\t\tpartition-hint: MBR\n\t\t1:\n\t\t\tpartition-name: GPT Header\n\t\t\tpartition-start: 1\n\t\t\tpartition-synthesized: true\n\t\t\tpartition-length: 1\n\t\t\tpartition-hint: Primary GPT Header\n\t\t2:\n\t\t\tpartition-name: GPT Partition Data\n\t\t\tpartition-start: 2\n\t\t\tpartition-synthesized: true\n\t\t\tpartition-length: 32\n\t\t\tpartition-hint: Primary GPT Table\n\t\t3:\n\t\t\tpartition-name: \n\t\t\tpartition-start: 34\n\t\t\tpartition-synthesized: true\n\t\t\tpartition-length: 6\n\t\t\tpartition-hint: Apple_Free\n\t\t4:\n\t\t\tpartition-UUID: 3F732384-133E-47CA-8853-6C482D8FAAA0\n\t\t\tpartition-name: disk image\n\t\t\tpartition-hint-UUID: 7C3457EF-0000-11AA-AA11-00306543ECAC\n\t\t\tpartition-start: 40\n\t\t\tpartition-number: 1\n\t\t\tpartition-length: 203512\n\t\t\tpartition-hint: Apple_APFS\n\t\t\tpartition-filesystems:\n\t\t\t\tAPFS: Untitled\n\t\t5:\n\t\t\tpartition-name: \n\t\t\tpartition-start: 203552\n\t\t\tpartition-synthesized: true\n\t\t\tpartition-length: 1\n\t\t\tpartition-hint: Apple_Free\n\t\t6:\n\t\t\tpartition-name: GPT Partition Data\n\t\t\tpartition-start: 203553\n\t\t\tpartition-synthesized: true\n\t\t\tpartition-length: 32\n\t\t\tpartition-hint: Backup GPT Table\n\t\t7:\n\t\t\tpartition-name: GPT Header\n\t\t\tpartition-start: 203585\n\t\t\tpartition-synthesized: true\n\t\t\tpartition-length: 1\n\t\t\tpartition-hint: Backup GPT Header\n\tburnable: false\nudif-ordered-chunks: false\nProperties:\n\tEncrypted: false\n\tKernel Compatible: true\n\tChecksummed: true\n\tSoftware License Agreement: false\n\tPartitioned: false\n\tCompressed: true\nResize limits (per hdiutil resize -limits):\n184320\t203512\t203512\n",
+      "stderr": "",
+      "stdoutBytes": 3601,
+      "stderrBytes": 0
+    },
+    {
+      "command": "/usr/bin/hdiutil",
+      "args": [
+        "verify",
+        "/Users/runner/work/Syndocal/Syndocal/target/release/bundle/dmg/Syndocal_1.2.0-alpha.70_arm64.dmg"
+      ],
+      "code": 0,
+      "signal": null,
+      "reaped": true,
+      "reason": null,
+      "sentSignals": [],
+      "elapsedMs": 3329,
+      "stdout": "Checksumming Protective Master Boot Record (MBR : 0)…\nProtective Master Boot Record (MBR :: verified   CRC32 $2F7FF7C5\nChecksumming GPT Header (Primary GPT Header : 1)…\n GPT Header (Primary GPT Header : 1): verified   CRC32 $E03663D6\nChecksumming GPT Partition Data (Primary GPT Table : 2)…\nGPT Partition Data (Primary GPT Tabl: verified   CRC32 $805AF6AA\nChecksumming  (Apple_Free : 3)…\n                    (Apple_Free : 3): verified   CRC32 $00000000\nChecksumming disk image (Apple_APFS : 4)…\n         disk image (Apple_APFS : 4): verified   CRC32 $AB1DDC71\nChecksumming  (Apple_Free : 5)…\n                    (Apple_Free : 5): verified   CRC32 $00000000\nChecksumming GPT Partition Data (Backup GPT Table : 6)…\nGPT Partition Data (Backup GPT Table: verified   CRC32 $805AF6AA\nChecksumming GPT Header (Backup GPT Header : 7)…\n  GPT Header (Backup GPT Header : 7): verified   CRC32 $41BB6A84\nverified   CRC32 $C4B98B41\n",
+      "stderr": "hdiutil: verify: checksum of \"/Users/runner/work/Syndocal/Syndocal/target/release/bundle/dmg/Syndocal_1.2.0-alpha.70_arm64.dmg\" is VALID\n",
+      "stdoutBytes": 935,
+      "stderrBytes": 137
+    },
+    {
+      "command": "/usr/bin/hdiutil",
+      "args": [
+        "attach",
+        "-readonly",
+        "-nobrowse",
+        "-noautoopen",
+        "-mountpoint",
+        "/private/var/folders/nj/vtw8zd2j31d1gdrtntc5y4600000gn/T/syndocal-dmg-check-0rnFNR/volume",
+        "/Users/runner/work/Syndocal/Syndocal/target/release/bundle/dmg/Syndocal_1.2.0-alpha.70_arm64.dmg"
+      ],
+      "code": 0,
+      "signal": null,
+      "reaped": true,
+      "reason": null,
+      "sentSignals": [],
+      "elapsedMs": 156,
+      "stdout": "expected   CRC32 $C4B98B41\n/dev/disk5          \tGUID_partition_scheme          \t\n/dev/disk5s1        \tApple_APFS                     \t\n/dev/disk6          \tEF57347C-0000-11AA-AA11-0030654\t\n/dev/disk6s1        \t41504653-0000-11AA-AA11-0030654\t/private/var/folders/nj/vtw8zd2j31d1gdrtntc5y4600000gn/T/syndocal-dmg-check-0rnFNR/volume\n",
+      "stderr": "",
+      "stdoutBytes": 332,
+      "stderrBytes": 0
+    },
+    {
+      "command": "/usr/bin/ditto",
+      "args": [
+        "/private/var/folders/nj/vtw8zd2j31d1gdrtntc5y4600000gn/T/syndocal-dmg-check-0rnFNR/volume/Syndocal.app",
+        "/private/var/folders/nj/vtw8zd2j31d1gdrtntc5y4600000gn/T/syndocal-dmg-check-0rnFNR/extracted/Syndocal.app"
+      ],
+      "code": 0,
+      "signal": null,
+      "reaped": true,
+      "reason": null,
+      "sentSignals": [],
+      "elapsedMs": 285,
+      "stdout": "",
+      "stderr": "",
+      "stdoutBytes": 0,
+      "stderrBytes": 0
+    },
+    {
+      "command": "/usr/bin/plutil",
+      "args": [
+        "-convert",
+        "json",
+        "-o",
+        "-",
+        "/private/var/folders/nj/vtw8zd2j31d1gdrtntc5y4600000gn/T/syndocal-dmg-check-0rnFNR/extracted/Syndocal.app/Contents/Info.plist"
+      ],
+      "code": 0,
+      "signal": null,
+      "reaped": true,
+      "reason": null,
+      "sentSignals": [],
+      "elapsedMs": 18,
+      "stdout": "{\"CFBundleShortVersionString\":\"1.2.0-alpha.70\",\"CFBundleIdentifier\":\"jp.seraf.ktn.syndocal\",\"LSApplicationCategoryType\":\"public.app-category.music\",\"CFBundleInfoDictionaryVersion\":\"6.0\",\"CFBundleVersion\":\"1.2.0-alpha.70\",\"CFBundleExecutable\":\"syndocal\",\"CFBundleDisplayName\":\"Syndocal\",\"CFBundleDocumentTypes\":[{\"CFBundleTypeName\":\"Syndocal Project\",\"CFBundleTypeExtensions\":[\"sdc\"],\"CFBundleTypeRole\":\"Editor\",\"LSHandlerRank\":\"Default\"}],\"LSRequiresCarbon\":true,\"NSHighResolutionCapable\":true,\"CFBundlePackageType\":\"APPL\",\"CFBundleIconFile\":\"icon.icns\",\"CSResourcesFileMapped\":true,\"LSMinimumSystemVersion\":\"12.0\",\"CFBundleDevelopmentRegion\":\"English\",\"NSHumanReadableCopyright\":\"Copyright (c) 2026 Seraf() \\/ KTN\",\"CFBundleName\":\"Syndocal\"}",
+      "stderr": "",
+      "stdoutBytes": 742,
+      "stderrBytes": 0
+    },
+    {
+      "command": "/usr/bin/lipo",
+      "args": [
+        "-archs",
+        "/private/var/folders/nj/vtw8zd2j31d1gdrtntc5y4600000gn/T/syndocal-dmg-check-0rnFNR/extracted/Syndocal.app/Contents/MacOS/syndocal"
+      ],
+      "code": 0,
+      "signal": null,
+      "reaped": true,
+      "reason": null,
+      "sentSignals": [],
+      "elapsedMs": 527,
+      "stdout": "arm64\n",
+      "stderr": "",
+      "stdoutBytes": 6,
+      "stderrBytes": 0
+    },
+    {
+      "command": "/usr/bin/otool",
+      "args": [
+        "-l",
+        "/private/var/folders/nj/vtw8zd2j31d1gdrtntc5y4600000gn/T/syndocal-dmg-check-0rnFNR/extracted/Syndocal.app/Contents/MacOS/syndocal"
+      ],
+      "code": 0,
+      "signal": null,
+      "reaped": true,
+      "reason": null,
+      "sentSignals": [],
+      "elapsedMs": 19,
+      "stdout": "/private/var/folders/nj/vtw8zd2j31d1gdrtntc5y4600000gn/T/syndocal-dmg-check-0rnFNR/extracted/Syndocal.app/Contents/MacOS/syndocal:\nLoad command 0\n      cmd LC_SEGMENT_64\n  cmdsize 72\n  segname __PAGEZERO\n   vmaddr 0x0000000000000000\n   vmsize 0x0000000100000000\n  fileoff 0\n filesize 0\n  maxprot 0x00000000\n initprot 0x00000000\n   nsects 0\n    flags 0x0\nLoad command 1\n      cmd LC_SEGMENT_64\n  cmdsize 792\n  segname __TEXT\n   vmaddr 0x0000000100000000\n   vmsize 0x0000000002ec8000\n  fileoff 0\n filesize 49053696\n  maxprot 0x00000005\n initprot 0x00000005\n   nsects 9\n    flags 0x0\nSection\n  sectname __text\n   segname __TEXT\n      addr 0x0000000100001280\n      size 0x0000000001eeb3f0\n    offset 4736\n     align 2^6 (64)\n    reloff 0\n    nreloc 0\n     flags 0x80000400\n reserved1 0\n reserved2 0\nSection\n  sectname __stubs\n   segname __TEXT\n      addr 0x0000000101eec670\n      size 0x00000000000011d0\n    offset 32425584\n     align 2^2 (4)\n    reloff 0\n    nreloc 0\n     flags 0x80000408\n reserved1 0 (index into indirect symbol table)\n reserved2 12 (size of stubs)\nSection\n  sectname __init_offsets\n   segname __TEXT\n      addr 0x0000000101eed840\n      size 0x0000000000000004\n    offset 32430144\n     align 2^2 (4)\n    reloff 0\n    nreloc 0\n     flags 0x00000016\n reserved1 0\n reserved2 0\nSection\n  sectname __gcc_except_tab\n   segname __TEXT\n      addr 0x0000000101eed844\n      size 0x00000000001f9394\n    offset 32430148\n     align 2^2 (4)\n    reloff 0\n    nreloc 0\n     flags 0x00000000\n reserved1 0\n reserved2 0\nSection\n  sectname __const\n   segname __TEXT\n      addr 0x00000001020e7000\n      size 0x00000000008af778\n    offset 34500608\n     align 2^12 (4096)\n    reloff 0\n    nreloc 0\n     flags 0x00000000\n reserved1 0\n reserved2 0\nSection\n  sectname __cstring\n   segname __TEXT\n      addr 0x0000000102996778\n      size 0x000000000005a0f5\n    offset 43607928\n     align 2^3 (8)\n    reloff 0\n    nreloc 0\n     flags 0x00000002\n reserved1 0\n reserved2 0\nSection\n  sectname __ustring\n   segname __TEXT\n      addr 0x00000001029f086e\n      size 0x0000000000000218\n    offset 43976814\n     align 2^1 (2)\n    reloff 0\n    nreloc 0\n     flags 0x00000000\n reserved1 0\n reserved2 0\nSection\n  sectname __unwind_info\n   segname __TEXT\n      addr 0x00000001029f0a88\n      size 0x00000000000b4b40\n    offset 43977352\n     align 2^2 (4)\n    reloff 0\n    nreloc 0\n     flags 0x00000000\n reserved1 0\n reserved2 0\nSection\n  sectname __eh_frame\n   segname __TEXT\n      addr 0x0000000102aa55c8\n      size 0x000000000041ee68\n    offset 44717512\n     align 2^3 (8)\n    reloff 0\n    nreloc 0\n     flags 0x6800000b\n reserved1 0\n reserved2 0\nLoad command 2\n      cmd LC_SEGMENT_64\n  cmdsize 312\n  segname __DATA_CONST\n   vmaddr 0x0000000102ec8000\n   vmsize 0x00000000000b4000\n  fileoff 49053696\n filesize 737280\n  maxprot 0x00000003\n initprot 0x00000003\n   nsects 3\n    flags 0x10\nSection\n  sectname __got\n   segname __DATA_CONST\n      addr 0x0000000102ec8000\n      size 0x0000000000000c90\n    offset 49053696\n     align 2^3 (8)\n    reloff 0\n    nreloc 0\n     flags 0x00000006\n reserved1 380 (index into indirect symbol table)\n reserved2 0\nSection\n  sectname __const\n   segname __DATA_CONST\n      addr 0x0000000102ec8c90\n      size 0x00000000000b3240\n    offset 49056912\n     align 2^3 (8)\n    reloff 0\n    nreloc 0\n     flags 0x00000000\n reserved1 0\n reserved2 0\nSection\n  sectname __objc_imageinfo\n   segname __DATA_CONST\n      addr 0x0000000102f7bed0\n      size 0x0000000000000008\n    offset 49790672\n     align 2^2 (4)\n    reloff 0\n    nreloc 0\n     flags 0x00000000\n reserved1 0\n reserved2 0\nLoad command 3\n      cmd LC_SEGMENT_64\n  cmdsize 552\n  segname __DATA\n   vmaddr 0x0000000102f7c000\n   vmsize 0x000000000009c000\n  fileoff 49790976\n filesize 606208\n  maxprot 0x00000003\n initprot 0x00000003\n   nsects 6\n    flags 0x0\nSection\n  sectname __data\n   segname __DATA\n      addr 0x0000000102f7c000\n      size 0x00000000000928a0\n    offset 49790976\n     align 2^5 (32)\n    reloff 0\n    nreloc 0\n     flags 0x00000000\n reserved1 0\n reserved2 0\nSection\n  sectname __thread_vars\n   segname __DATA\n      addr 0x000000010300e8a0\n      size 0x0000000000000288\n    offset 50391200\n     align 2^3 (8)\n    reloff 0\n    nreloc 0\n     flags 0x00000013\n reserved1 0\n reserved2 0\nSection\n  sectname __thread_data\n   segname __DATA\n      addr 0x000000010300eb28\n      size 0x0000000000000470\n    offset 50391848\n     align 2^3 (8)\n    reloff 0\n    nreloc 0\n     flags 0x00000011\n reserved1 0\n reserved2 0\nSection\n  sectname __thread_bss\n   segname __DATA\n      addr 0x000000010300ef98\n      size 0x0000000000000248\n    offset 0\n     align 2^3 (8)\n    reloff 0\n    nreloc 0\n     flags 0x00000012\n reserved1 0\n reserved2 0\nSection\n  sectname __bss\n   segname __DATA\n      addr 0x000000010300f1e0\n      size 0x0000000000001e50\n    offset 0\n     align 2^3 (8)\n    reloff 0\n    nreloc 0\n     flags 0x00000001\n reserved1 0\n reserved2 0\nSection\n  sectname __common\n   segname __DATA\n      addr 0x0000000103011080\n      size 0x0000000000002f88\n    offset 0\n     align 2^7 (128)\n    reloff 0\n    nreloc 0\n     flags 0x00000001\n reserved1 0\n reserved2 0\nLoad command 4\n      cmd LC_SEGMENT_64\n  cmdsize 72\n  segname __LINKEDIT\n   vmaddr 0x0000000103018000\n   vmsize 0x00000000010a0000\n  fileoff 50397184\n filesize 17418416\n  maxprot 0x00000001\n initprot 0x00000001\n   nsects 0\n    flags 0x0\nLoad command 5\n      cmd LC_DYLD_CHAINED_FIXUPS\n  cmdsize 16\n  dataoff 50397184\n datasize 10376\nLoad command 6\n      cmd LC_DYLD_EXPORTS_TRIE\n  cmdsize 16\n  dataoff 50407560\n datasize 593896\nLoad command 7\n     cmd LC_SYMTAB\n cmdsize 24\n  symoff 51114032\n   nsyms 119074\n  stroff 53022344\n strsize 14249408\nLoad command 8\n            cmd LC_DYSYMTAB\n        cmdsize 80\n      ilocalsym 0\n      nlocalsym 111385\n     iextdefsym 111385\n     nextdefsym 7231\n      iundefsym 118616\n      nundefsym 458\n         tocoff 0\n           ntoc 0\n      modtaboff 0\n        nmodtab 0\n   extrefsymoff 0\n    nextrefsyms 0\n indirectsymoff 53019216\n  nindirectsyms 782\n      extreloff 0\n        nextrel 0\n      locreloff 0\n        nlocrel 0\nLoad command 9\n          cmd LC_LOAD_DYLINKER\n      cmdsize 32\n         name /usr/lib/dyld (offset 12)\nLoad command 10\n     cmd LC_UUID\n cmdsize 24\n    uuid 2450E359-7E70-36FF-9A4D-7145470675E7\nLoad command 11\n      cmd LC_BUILD_VERSION\n  cmdsize 32\n platform 1\n    minos 12.0\n      sdk 15.5\n   ntools 1\n     tool 3\n  version 1167.5\nLoad command 12\n      cmd LC_SOURCE_VERSION\n  cmdsize 16\n  version 0.0\nLoad command 13\n       cmd LC_MAIN\n   cmdsize 24\n  entryoff 3071544\n stacksize 0\nLoad command 14\n          cmd LC_LOAD_DYLIB\n      cmdsize 88\n         name /System/Library/Frameworks/AppKit.framework/Versions/C/AppKit (offset 24)\n   time stamp 2 Thu Jan  1 00:00:02 1970\n      current version 2575.60.5\ncompatibility version 45.0.0\nLoad command 15\n          cmd LC_LOAD_DYLIB\n      cmdsize 56\n         name /usr/lib/libSystem.B.dylib (offset 24)\n   time stamp 2 Thu Jan  1 00:00:02 1970\n      current version 1351.0.0\ncompatibility version 1.0.0\nLoad command 16\n          cmd LC_LOAD_DYLIB\n      cmdsize 104\n         name /System/Library/Frameworks/AudioToolbox.framework/Versions/A/AudioToolbox (offset 24)\n   time stamp 2 Thu Jan  1 00:00:02 1970\n      current version 1000.0.0\ncompatibility version 1.0.0\nLoad command 17\n          cmd LC_LOAD_DYLIB\n      cmdsize 96\n         name /System/Library/Frameworks/CoreAudio.framework/Versions/A/CoreAudio (offset 24)\n   time stamp 2 Thu Jan  1 00:00:02 1970\n      current version 1.0.0\ncompatibility version 1.0.0\nLoad command 18\n          cmd LC_LOAD_DYLIB\n      cmdsize 56\n         name @rpath/libavutil.60.dylib (offset 24)\n   time stamp 2 Thu Jan  1 00:00:02 1970\n      current version 60.26.102\ncompatibility version 60.0.0\nLoad command 19\n          cmd LC_LOAD_DYLIB\n      cmdsize 56\n         name @rpath/libavformat.62.dylib (offset 24)\n   time stamp 2 Thu Jan  1 00:00:02 1970\n      current version 62.12.102\ncompatibility version 62.0.0\nLoad command 20\n          cmd LC_LOAD_DYLIB\n      cmdsize 56\n         name @rpath/libswscale.9.dylib (offset 24)\n   time stamp 2 Thu Jan  1 00:00:02 1970\n      current version 9.5.102\ncompatibility version 9.0.0\nLoad command 21\n          cmd LC_LOAD_DYLIB\n      cmdsize 56\n         name @rpath/libavcodec.62.dylib (offset 24)\n   time stamp 2 Thu Jan  1 00:00:02 1970\n      current version 62.28.102\ncompatibility version 62.0.0\nLoad command 22\n          cmd LC_LOAD_DYLIB\n      cmdsize 96\n         name /System/Library/Frameworks/Foundation.framework/Versions/C/Foundation (offset 24)\n   time stamp 2 Thu Jan  1 00:00:02 1970\n      current version 3502.1.255\ncompatibility version 300.0.0\nLoad command 23\n          cmd LC_LOAD_DYLIB\n      cmdsize 96\n         name /System/Library/Frameworks/QuartzCore.framework/Versions/A/QuartzCore (offset 24)\n   time stamp 2 Thu Jan  1 00:00:02 1970\n      current version 1.11.0\ncompatibility version 1.2.0\nLoad command 24\n          cmd LC_LOAD_DYLIB\n      cmdsize 88\n         name /System/Library/Frameworks/Metal.framework/Versions/A/Metal (offset 24)\n   time stamp 2 Thu Jan  1 00:00:02 1970\n      current version 368.12.0\ncompatibility version 1.0.0\nLoad command 25\n          cmd LC_LOAD_DYLIB\n      cmdsize 104\n         name /System/Library/Frameworks/CoreGraphics.framework/Versions/A/CoreGraphics (offset 24)\n   time stamp 2 Thu Jan  1 00:00:02 1970\n      current version 1889.5.3\ncompatibility version 64.0.0\nLoad command 26\n          cmd LC_LOAD_DYLIB\n      cmdsize 56\n         name /usr/lib/libobjc.A.dylib (offset 24)\n   time stamp 2 Thu Jan  1 00:00:02 1970\n      current version 228.0.0\ncompatibility version 1.0.0\nLoad command 27\n          cmd LC_LOAD_DYLIB\n      cmdsize 88\n         name /System/Library/Frameworks/IOKit.framework/Versions/A/IOKit (offset 24)\n   time stamp 2 Thu Jan  1 00:00:02 1970\n      current version 275.0.0\ncompatibility version 1.0.0\nLoad command 28\n          cmd LC_LOAD_DYLIB\n      cmdsize 96\n         name /System/Library/Frameworks/CoreMIDI.framework/Versions/A/CoreMIDI (offset 24)\n   time stamp 2 Thu Jan  1 00:00:02 1970\n      current version 69.0.0\ncompatibility version 1.0.0\nLoad command 29\n          cmd LC_LOAD_DYLIB\n      cmdsize 88\n         name /System/Library/Frameworks/WebKit.framework/Versions/A/WebKit (offset 24)\n   time stamp 2 Thu Jan  1 00:00:02 1970\n      current version 621.2.5\ncompatibility version 1.0.0\nLoad command 30\n          cmd LC_LOAD_DYLIB\n      cmdsize 112\n         name /System/Library/Frameworks/ApplicationServices.framework/Versions/A/ApplicationServices (offset 24)\n   time stamp 2 Thu Jan  1 00:00:02 1970\n      current version 65.0.0\ncompatibility version 1.0.0\nLoad command 31\n          cmd LC_LOAD_DYLIB\n      cmdsize 88\n         name /System/Library/Frameworks/Carbon.framework/Versions/A/Carbon (offset 24)\n   time stamp 2 Thu Jan  1 00:00:02 1970\n      current version 170.0.0\ncompatibility version 2.0.0\nLoad command 32\n          cmd LC_LOAD_DYLIB\n      cmdsize 96\n         name /System/Library/Frameworks/CoreVideo.framework/Versions/A/CoreVideo (offset 24)\n   time stamp 2 Thu Jan  1 00:00:02 1970\n      current version 1.5.0\ncompatibility version 1.2.0\nLoad command 33\n          cmd LC_LOAD_DYLIB\n      cmdsize 104\n         name /System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation (offset 24)\n   time stamp 2 Thu Jan  1 00:00:02 1970\n      current version 3502.1.255\ncompatibility version 150.0.0\nLoad command 34\n          cmd LC_LOAD_DYLIB\n      cmdsize 96\n         name /System/Library/Frameworks/CoreData.framework/Versions/A/CoreData (offset 24)\n   time stamp 2 Thu Jan  1 00:00:02 1970\n      current version 1447.3.0\ncompatibility version 1.0.0\nLoad command 35\n          cmd LC_LOAD_DYLIB\n      cmdsize 96\n         name /System/Library/Frameworks/CoreText.framework/Versions/A/CoreText (offset 24)\n   time stamp 2 Thu Jan  1 00:00:02 1970\n      current version 844.5.0\ncompatibility version 1.0.0\nLoad command 36\n          cmd LC_LOAD_DYLIB\n      cmdsize 96\n         name /System/Library/Frameworks/CoreImage.framework/Versions/A/CoreImage (offset 24)\n   time stamp 2 Thu Jan  1 00:00:02 1970\n      current version 6.0.0\ncompatibility version 1.0.1\nLoad command 37\n          cmd LC_LOAD_DYLIB\n      cmdsize 96\n         name /System/Library/Frameworks/CloudKit.framework/Versions/A/CloudKit (offset 24)\n   time stamp 2 Thu Jan  1 00:00:02 1970\n      current version 2260.10.3\ncompatibility version 1.0.0\nLoad command 38\n          cmd LC_LOAD_DYLIB\n      cmdsize 56\n         name /usr/lib/libiconv.2.dylib (offset 24)\n   time stamp 2 Thu Jan  1 00:00:02 1970\n      current version 7.0.0\ncompatibility version 7.0.0\nLoad command 39\n          cmd LC_LOAD_DYLIB\n      cmdsize 96\n         name /System/Library/Frameworks/ColorSync.framework/Versions/A/ColorSync (offset 24)\n   time stamp 2 Thu Jan  1 00:00:02 1970\n      current version 3777.4.1\ncompatibility version 1.0.0\nLoad command 40\n          cmd LC_LOAD_DYLIB\n      cmdsize 104\n         name /System/Library/Frameworks/CoreServices.framework/Versions/A/CoreServices (offset 24)\n   time stamp 2 Thu Jan  1 00:00:02 1970\n      current version 1226.0.0\ncompatibility version 1.0.0\nLoad command 41\n      cmd LC_FUNCTION_STARTS\n  cmdsize 16\n  dataoff 51001456\n datasize 112576\nLoad command 42\n      cmd LC_DATA_IN_CODE\n  cmdsize 16\n  dataoff 51114032\n datasize 0\nLoad command 43\n      cmd LC_CODE_SIGNATURE\n  cmdsize 16\n  dataoff 67271760\n datasize 543840\nLoad command 44\n          cmd LC_RPATH\n      cmdsize 48\n         path @executable_path/../Frameworks (offset 12)\n",
+      "stderr": "",
+      "stdoutBytes": 13549,
+      "stderrBytes": 0
+    },
+    {
+      "command": "/usr/bin/lipo",
+      "args": [
+        "-archs",
+        "/private/var/folders/nj/vtw8zd2j31d1gdrtntc5y4600000gn/T/syndocal-dmg-check-0rnFNR/extracted/Syndocal.app/Contents/Frameworks/libavcodec.62.dylib"
+      ],
+      "code": 0,
+      "signal": null,
+      "reaped": true,
+      "reason": null,
+      "sentSignals": [],
+      "elapsedMs": 15,
+      "stdout": "arm64\n",
+      "stderr": "",
+      "stdoutBytes": 6,
+      "stderrBytes": 0
+    },
+    {
+      "command": "/usr/bin/otool",
+      "args": [
+        "-l",
+        "/private/var/folders/nj/vtw8zd2j31d1gdrtntc5y4600000gn/T/syndocal-dmg-check-0rnFNR/extracted/Syndocal.app/Contents/Frameworks/libavcodec.62.dylib"
+      ],
+      "code": 0,
+      "signal": null,
+      "reaped": true,
+      "reason": null,
+      "sentSignals": [],
+      "elapsedMs": 29,
+      "stdout": "/private/var/folders/nj/vtw8zd2j31d1gdrtntc5y4600000gn/T/syndocal-dmg-check-0rnFNR/extracted/Syndocal.app/Contents/Frameworks/libavcodec.62.dylib:\nLoad command 0\n      cmd LC_SEGMENT_64\n  cmdsize 632\n  segname __TEXT\n   vmaddr 0x0000000000000000\n   vmsize 0x0000000000b84000\n  fileoff 0\n filesize 12075008\n  maxprot 0x00000005\n initprot 0x00000005\n   nsects 7\n    flags 0x0\nSection\n  sectname __text\n   segname __TEXT\n      addr 0x00000000000008a0\n      size 0x00000000008e2e58\n    offset 2208\n     align 2^5 (32)\n    reloff 0\n    nreloc 0\n     flags 0x80000400\n reserved1 0\n reserved2 0\nSection\n  sectname __stubs\n   segname __TEXT\n      addr 0x00000000008e36f8\n      size 0x0000000000000fc0\n    offset 9320184\n     align 2^2 (4)\n    reloff 0\n    nreloc 0\n     flags 0x80000408\n reserved1 0 (index into indirect symbol table)\n reserved2 12 (size of stubs)\nSection\n  sectname __cstring\n   segname __TEXT\n      addr 0x00000000008e46b8\n      size 0x0000000000050301\n    offset 9324216\n     align 2^0 (1)\n    reloff 0\n    nreloc 0\n     flags 0x00000002\n reserved1 0\n reserved2 0\nSection\n  sectname __const\n   segname __TEXT\n      addr 0x00000000009349c0\n      size 0x00000000001f1190\n    offset 9652672\n     align 2^4 (16)\n    reloff 0\n    nreloc 0\n     flags 0x00000000\n reserved1 0\n reserved2 0\nSection\n  sectname __ustring\n   segname __TEXT\n      addr 0x0000000000b25b50\n      size 0x00000000000000b2\n    offset 11688784\n     align 2^1 (2)\n    reloff 0\n    nreloc 0\n     flags 0x00000000\n reserved1 0\n reserved2 0\nSection\n  sectname __unwind_info\n   segname __TEXT\n      addr 0x0000000000b25c04\n      size 0x000000000000fd98\n    offset 11688964\n     align 2^2 (4)\n    reloff 0\n    nreloc 0\n     flags 0x00000000\n reserved1 0\n reserved2 0\nSection\n  sectname __eh_frame\n   segname __TEXT\n      addr 0x0000000000b359a0\n      size 0x000000000004ccb0\n    offset 11753888\n     align 2^3 (8)\n    reloff 0\n    nreloc 0\n     flags 0x6800000b\n reserved1 0\n reserved2 0\nLoad command 1\n      cmd LC_SEGMENT_64\n  cmdsize 232\n  segname __DATA_CONST\n   vmaddr 0x0000000000b84000\n   vmsize 0x0000000000058000\n  fileoff 12075008\n filesize 360448\n  maxprot 0x00000003\n initprot 0x00000003\n   nsects 2\n    flags 0x10\nSection\n  sectname __got\n   segname __DATA_CONST\n      addr 0x0000000000b84000\n      size 0x0000000000000a98\n    offset 12075008\n     align 2^3 (8)\n    reloff 0\n    nreloc 0\n     flags 0x00000006\n reserved1 336 (index into indirect symbol table)\n reserved2 0\nSection\n  sectname __const\n   segname __DATA_CONST\n      addr 0x0000000000b84aa0\n      size 0x0000000000053da8\n    offset 12077728\n     align 2^4 (16)\n    reloff 0\n    nreloc 0\n     flags 0x00000000\n reserved1 0\n reserved2 0\nLoad command 2\n      cmd LC_SEGMENT_64\n  cmdsize 312\n  segname __DATA\n   vmaddr 0x0000000000bdc000\n   vmsize 0x00000000006a4000\n  fileoff 12435456\n filesize 16384\n  maxprot 0x00000003\n initprot 0x00000003\n   nsects 3\n    flags 0x0\nSection\n  sectname __data\n   segname __DATA\n      addr 0x0000000000bdc000\n      size 0x0000000000001750\n    offset 12435456\n     align 2^3 (8)\n    reloff 0\n    nreloc 0\n     flags 0x00000000\n reserved1 0\n reserved2 0\nSection\n  sectname __bss\n   segname __DATA\n      addr 0x0000000000bdd750\n      size 0x0000000000647b14\n    offset 0\n     align 2^4 (16)\n    reloff 0\n    nreloc 0\n     flags 0x00000001\n reserved1 0\n reserved2 0\nSection\n  sectname __common\n   segname __DATA\n      addr 0x0000000001225270\n      size 0x0000000000057f08\n    offset 0\n     align 2^4 (16)\n    reloff 0\n    nreloc 0\n     flags 0x00000001\n reserved1 0\n reserved2 0\nLoad command 3\n      cmd LC_SEGMENT_64\n  cmdsize 72\n  segname __LINKEDIT\n   vmaddr 0x0000000001280000\n   vmsize 0x0000000000030000\n  fileoff 12451840\n filesize 182080\n  maxprot 0x00000001\n initprot 0x00000001\n   nsects 0\n    flags 0x0\nLoad command 4\n          cmd LC_ID_DYLIB\n      cmdsize 56\n         name @rpath/libavcodec.62.dylib (offset 24)\n   time stamp 1 Thu Jan  1 00:00:01 1970\n      current version 62.28.102\ncompatibility version 62.0.0\nLoad command 5\n      cmd LC_DYLD_CHAINED_FIXUPS\n  cmdsize 16\n  dataoff 12451840\n datasize 7680\nLoad command 6\n      cmd LC_DYLD_EXPORTS_TRIE\n  cmdsize 16\n  dataoff 12459520\n datasize 8808\nLoad command 7\n     cmd LC_SYMTAB\n cmdsize 24\n  symoff 12487088\n   nsyms 772\n  stroff 12502144\n strsize 15728\nLoad command 8\n            cmd LC_DYSYMTAB\n        cmdsize 80\n      ilocalsym 0\n      nlocalsym 1\n     iextdefsym 1\n     nextdefsym 431\n      iundefsym 432\n      nundefsym 340\n         tocoff 0\n           ntoc 0\n      modtaboff 0\n        nmodtab 0\n   extrefsymoff 0\n    nextrefsyms 0\n indirectsymoff 12499440\n  nindirectsyms 675\n      extreloff 0\n        nextrel 0\n      locreloff 0\n        nlocrel 0\nLoad command 9\n     cmd LC_UUID\n cmdsize 24\n    uuid 305B90FC-1442-337A-9E49-EB797EB8E0CA\nLoad command 10\n      cmd LC_BUILD_VERSION\n  cmdsize 32\n platform 1\n    minos 12.0\n      sdk 15.5\n   ntools 1\n     tool 3\n  version 1167.5\nLoad command 11\n      cmd LC_SOURCE_VERSION\n  cmdsize 16\n  version 0.0\nLoad command 12\n          cmd LC_LOAD_DYLIB\n      cmdsize 56\n         name @rpath/libswresample.6.dylib (offset 24)\n   time stamp 2 Thu Jan  1 00:00:02 1970\n      current version 6.3.102\ncompatibility version 6.0.0\nLoad command 13\n          cmd LC_LOAD_DYLIB\n      cmdsize 56\n         name @rpath/libavutil.60.dylib (offset 24)\n   time stamp 2 Thu Jan  1 00:00:02 1970\n      current version 60.26.102\ncompatibility version 60.0.0\nLoad command 14\n          cmd LC_LOAD_DYLIB\n      cmdsize 56\n         name /usr/lib/libSystem.B.dylib (offset 24)\n   time stamp 2 Thu Jan  1 00:00:02 1970\n      current version 1351.0.0\ncompatibility version 1.0.0\nLoad command 15\n          cmd LC_LOAD_DYLIB\n      cmdsize 104\n         name /System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation (offset 24)\n   time stamp 2 Thu Jan  1 00:00:02 1970\n      current version 3502.1.255\ncompatibility version 150.0.0\nLoad command 16\n          cmd LC_LOAD_DYLIB\n      cmdsize 96\n         name /System/Library/Frameworks/CoreVideo.framework/Versions/A/CoreVideo (offset 24)\n   time stamp 2 Thu Jan  1 00:00:02 1970\n      current version 1.5.0\ncompatibility version 1.2.0\nLoad command 17\n          cmd LC_LOAD_DYLIB\n      cmdsize 96\n         name /System/Library/Frameworks/CoreMedia.framework/Versions/A/CoreMedia (offset 24)\n   time stamp 2 Thu Jan  1 00:00:02 1970\n      current version 3225.7.1\ncompatibility version 1.0.0\nLoad command 18\n      cmd LC_FUNCTION_STARTS\n  cmdsize 16\n  dataoff 12468328\n datasize 18760\nLoad command 19\n      cmd LC_DATA_IN_CODE\n  cmdsize 16\n  dataoff 12487088\n datasize 0\nLoad command 20\n      cmd LC_CODE_SIGNATURE\n  cmdsize 16\n  dataoff 12517872\n datasize 116048\nLoad command 21\n          cmd LC_RPATH\n      cmdsize 48\n         path @executable_path/../Frameworks (offset 12)\n",
+      "stderr": "",
+      "stdoutBytes": 6806,
+      "stderrBytes": 0
+    },
+    {
+      "command": "/usr/bin/lipo",
+      "args": [
+        "-archs",
+        "/private/var/folders/nj/vtw8zd2j31d1gdrtntc5y4600000gn/T/syndocal-dmg-check-0rnFNR/extracted/Syndocal.app/Contents/Frameworks/libavformat.62.dylib"
+      ],
+      "code": 0,
+      "signal": null,
+      "reaped": true,
+      "reason": null,
+      "sentSignals": [],
+      "elapsedMs": 20,
+      "stdout": "arm64\n",
+      "stderr": "",
+      "stdoutBytes": 6,
+      "stderrBytes": 0
+    },
+    {
+      "command": "/usr/bin/otool",
+      "args": [
+        "-l",
+        "/private/var/folders/nj/vtw8zd2j31d1gdrtntc5y4600000gn/T/syndocal-dmg-check-0rnFNR/extracted/Syndocal.app/Contents/Frameworks/libavformat.62.dylib"
+      ],
+      "code": 0,
+      "signal": null,
+      "reaped": true,
+      "reason": null,
+      "sentSignals": [],
+      "elapsedMs": 20,
+      "stdout": "/private/var/folders/nj/vtw8zd2j31d1gdrtntc5y4600000gn/T/syndocal-dmg-check-0rnFNR/extracted/Syndocal.app/Contents/Frameworks/libavformat.62.dylib:\nLoad command 0\n      cmd LC_SEGMENT_64\n  cmdsize 552\n  segname __TEXT\n   vmaddr 0x0000000000000000\n   vmsize 0x0000000000220000\n  fileoff 0\n filesize 2228224\n  maxprot 0x00000005\n initprot 0x00000005\n   nsects 6\n    flags 0x0\nSection\n  sectname __text\n   segname __TEXT\n      addr 0x00000000000007f8\n      size 0x00000000001aade0\n    offset 2040\n     align 2^2 (4)\n    reloff 0\n    nreloc 0\n     flags 0x80000400\n reserved1 0\n reserved2 0\nSection\n  sectname __stubs\n   segname __TEXT\n      addr 0x00000000001ab5d8\n      size 0x00000000000016ec\n    offset 1750488\n     align 2^2 (4)\n    reloff 0\n    nreloc 0\n     flags 0x80000408\n reserved1 0 (index into indirect symbol table)\n reserved2 12 (size of stubs)\nSection\n  sectname __cstring\n   segname __TEXT\n      addr 0x00000000001accc4\n      size 0x000000000003bb62\n    offset 1756356\n     align 2^0 (1)\n    reloff 0\n    nreloc 0\n     flags 0x00000002\n reserved1 0\n reserved2 0\nSection\n  sectname __const\n   segname __TEXT\n      addr 0x00000000001e8830\n      size 0x000000000000f128\n    offset 2000944\n     align 2^4 (16)\n    reloff 0\n    nreloc 0\n     flags 0x00000000\n reserved1 0\n reserved2 0\nSection\n  sectname __unwind_info\n   segname __TEXT\n      addr 0x00000000001f7958\n      size 0x0000000000006518\n    offset 2062680\n     align 2^2 (4)\n    reloff 0\n    nreloc 0\n     flags 0x00000000\n reserved1 0\n reserved2 0\nSection\n  sectname __eh_frame\n   segname __TEXT\n      addr 0x00000000001fde70\n      size 0x00000000000207e8\n    offset 2088560\n     align 2^3 (8)\n    reloff 0\n    nreloc 0\n     flags 0x6800000b\n reserved1 0\n reserved2 0\nLoad command 1\n      cmd LC_SEGMENT_64\n  cmdsize 232\n  segname __DATA_CONST\n   vmaddr 0x0000000000220000\n   vmsize 0x0000000000034000\n  fileoff 2228224\n filesize 212992\n  maxprot 0x00000003\n initprot 0x00000003\n   nsects 2\n    flags 0x10\nSection\n  sectname __got\n   segname __DATA_CONST\n      addr 0x0000000000220000\n      size 0x0000000000000f68\n    offset 2228224\n     align 2^3 (8)\n    reloff 0\n    nreloc 0\n     flags 0x00000006\n reserved1 489 (index into indirect symbol table)\n reserved2 0\nSection\n  sectname __const\n   segname __DATA_CONST\n      addr 0x0000000000220f68\n      size 0x0000000000030a60\n    offset 2232168\n     align 2^3 (8)\n    reloff 0\n    nreloc 0\n     flags 0x00000000\n reserved1 0\n reserved2 0\nLoad command 2\n      cmd LC_SEGMENT_64\n  cmdsize 152\n  segname __DATA\n   vmaddr 0x0000000000254000\n   vmsize 0x0000000000004000\n  fileoff 0\n filesize 0\n  maxprot 0x00000003\n initprot 0x00000003\n   nsects 1\n    flags 0x0\nSection\n  sectname __bss\n   segname __DATA\n      addr 0x0000000000254000\n      size 0x0000000000000019\n    offset 0\n     align 2^3 (8)\n    reloff 0\n    nreloc 0\n     flags 0x00000001\n reserved1 0\n reserved2 0\nLoad command 3\n      cmd LC_SEGMENT_64\n  cmdsize 72\n  segname __LINKEDIT\n   vmaddr 0x0000000000258000\n   vmsize 0x000000000001c000\n  fileoff 2441216\n filesize 106096\n  maxprot 0x00000001\n initprot 0x00000001\n   nsects 0\n    flags 0x0\nLoad command 4\n          cmd LC_ID_DYLIB\n      cmdsize 56\n         name @rpath/libavformat.62.dylib (offset 24)\n   time stamp 1 Thu Jan  1 00:00:01 1970\n      current version 62.12.102\ncompatibility version 62.0.0\nLoad command 5\n      cmd LC_DYLD_CHAINED_FIXUPS\n  cmdsize 16\n  dataoff 2441216\n datasize 11240\nLoad command 6\n      cmd LC_DYLD_EXPORTS_TRIE\n  cmdsize 16\n  dataoff 2452456\n datasize 10568\nLoad command 7\n     cmd LC_SYMTAB\n cmdsize 24\n  symoff 2468568\n   nsyms 1040\n  stroff 2489136\n strsize 20336\nLoad command 8\n            cmd LC_DYSYMTAB\n        cmdsize 80\n      ilocalsym 0\n      nlocalsym 1\n     iextdefsym 1\n     nextdefsym 545\n      iundefsym 546\n      nundefsym 494\n         tocoff 0\n           ntoc 0\n      modtaboff 0\n        nmodtab 0\n   extrefsymoff 0\n    nextrefsyms 0\n indirectsymoff 2485208\n  nindirectsyms 982\n      extreloff 0\n        nextrel 0\n      locreloff 0\n        nlocrel 0\nLoad command 9\n     cmd LC_UUID\n cmdsize 24\n    uuid F4871841-311D-3C3A-8404-34EA9041DDF9\nLoad command 10\n      cmd LC_BUILD_VERSION\n  cmdsize 32\n platform 1\n    minos 12.0\n      sdk 15.5\n   ntools 1\n     tool 3\n  version 1167.5\nLoad command 11\n      cmd LC_SOURCE_VERSION\n  cmdsize 16\n  version 0.0\nLoad command 12\n          cmd LC_LOAD_DYLIB\n      cmdsize 56\n         name @rpath/libavcodec.62.dylib (offset 24)\n   time stamp 2 Thu Jan  1 00:00:02 1970\n      current version 62.28.102\ncompatibility version 62.0.0\nLoad command 13\n          cmd LC_LOAD_DYLIB\n      cmdsize 56\n         name @rpath/libswresample.6.dylib (offset 24)\n   time stamp 2 Thu Jan  1 00:00:02 1970\n      current version 6.3.102\ncompatibility version 6.0.0\nLoad command 14\n          cmd LC_LOAD_DYLIB\n      cmdsize 56\n         name @rpath/libavutil.60.dylib (offset 24)\n   time stamp 2 Thu Jan  1 00:00:02 1970\n      current version 60.26.102\ncompatibility version 60.0.0\nLoad command 15\n          cmd LC_LOAD_DYLIB\n      cmdsize 56\n         name /usr/lib/libSystem.B.dylib (offset 24)\n   time stamp 2 Thu Jan  1 00:00:02 1970\n      current version 1351.0.0\ncompatibility version 1.0.0\nLoad command 16\n          cmd LC_LOAD_DYLIB\n      cmdsize 104\n         name /System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation (offset 24)\n   time stamp 2 Thu Jan  1 00:00:02 1970\n      current version 3502.1.255\ncompatibility version 150.0.0\nLoad command 17\n          cmd LC_LOAD_DYLIB\n      cmdsize 96\n         name /System/Library/Frameworks/CoreVideo.framework/Versions/A/CoreVideo (offset 24)\n   time stamp 2 Thu Jan  1 00:00:02 1970\n      current version 1.5.0\ncompatibility version 1.2.0\nLoad command 18\n          cmd LC_LOAD_DYLIB\n      cmdsize 96\n         name /System/Library/Frameworks/CoreMedia.framework/Versions/A/CoreMedia (offset 24)\n   time stamp 2 Thu Jan  1 00:00:02 1970\n      current version 3225.7.1\ncompatibility version 1.0.0\nLoad command 19\n      cmd LC_FUNCTION_STARTS\n  cmdsize 16\n  dataoff 2463024\n datasize 5544\nLoad command 20\n      cmd LC_DATA_IN_CODE\n  cmdsize 16\n  dataoff 2468568\n datasize 0\nLoad command 21\n      cmd LC_CODE_SIGNATURE\n  cmdsize 16\n  dataoff 2509472\n datasize 37840\nLoad command 22\n          cmd LC_RPATH\n      cmdsize 48\n         path @executable_path/../Frameworks (offset 12)\n",
+      "stderr": "",
+      "stdoutBytes": 6346,
+      "stderrBytes": 0
+    },
+    {
+      "command": "/usr/bin/lipo",
+      "args": [
+        "-archs",
+        "/private/var/folders/nj/vtw8zd2j31d1gdrtntc5y4600000gn/T/syndocal-dmg-check-0rnFNR/extracted/Syndocal.app/Contents/Frameworks/libavutil.60.dylib"
+      ],
+      "code": 0,
+      "signal": null,
+      "reaped": true,
+      "reason": null,
+      "sentSignals": [],
+      "elapsedMs": 17,
+      "stdout": "arm64\n",
+      "stderr": "",
+      "stdoutBytes": 6,
+      "stderrBytes": 0
+    },
+    {
+      "command": "/usr/bin/otool",
+      "args": [
+        "-l",
+        "/private/var/folders/nj/vtw8zd2j31d1gdrtntc5y4600000gn/T/syndocal-dmg-check-0rnFNR/extracted/Syndocal.app/Contents/Frameworks/libavutil.60.dylib"
+      ],
+      "code": 0,
+      "signal": null,
+      "reaped": true,
+      "reason": null,
+      "sentSignals": [],
+      "elapsedMs": 20,
+      "stdout": "/private/var/folders/nj/vtw8zd2j31d1gdrtntc5y4600000gn/T/syndocal-dmg-check-0rnFNR/extracted/Syndocal.app/Contents/Frameworks/libavutil.60.dylib:\nLoad command 0\n      cmd LC_SEGMENT_64\n  cmdsize 552\n  segname __TEXT\n   vmaddr 0x0000000000000000\n   vmsize 0x000000000008c000\n  fileoff 0\n filesize 573440\n  maxprot 0x00000005\n initprot 0x00000005\n   nsects 6\n    flags 0x0\nSection\n  sectname __text\n   segname __TEXT\n      addr 0x0000000000000790\n      size 0x0000000000070f98\n    offset 1936\n     align 2^4 (16)\n    reloff 0\n    nreloc 0\n     flags 0x80000400\n reserved1 0\n reserved2 0\nSection\n  sectname __stubs\n   segname __TEXT\n      addr 0x0000000000071728\n      size 0x00000000000003d8\n    offset 464680\n     align 2^2 (4)\n    reloff 0\n    nreloc 0\n     flags 0x80000408\n reserved1 0 (index into indirect symbol table)\n reserved2 12 (size of stubs)\nSection\n  sectname __cstring\n   segname __TEXT\n      addr 0x0000000000071b00\n      size 0x0000000000004c7e\n    offset 465664\n     align 2^0 (1)\n    reloff 0\n    nreloc 0\n     flags 0x00000002\n reserved1 0\n reserved2 0\nSection\n  sectname __const\n   segname __TEXT\n      addr 0x0000000000076780\n      size 0x0000000000007da0\n    offset 485248\n     align 2^4 (16)\n    reloff 0\n    nreloc 0\n     flags 0x00000000\n reserved1 0\n reserved2 0\nSection\n  sectname __unwind_info\n   segname __TEXT\n      addr 0x000000000007e520\n      size 0x0000000000001e18\n    offset 517408\n     align 2^2 (4)\n    reloff 0\n    nreloc 0\n     flags 0x00000000\n reserved1 0\n reserved2 0\nSection\n  sectname __eh_frame\n   segname __TEXT\n      addr 0x0000000000080338\n      size 0x0000000000008aa0\n    offset 525112\n     align 2^3 (8)\n    reloff 0\n    nreloc 0\n     flags 0x6800000b\n reserved1 0\n reserved2 0\nLoad command 1\n      cmd LC_SEGMENT_64\n  cmdsize 232\n  segname __DATA_CONST\n   vmaddr 0x000000000008c000\n   vmsize 0x0000000000014000\n  fileoff 573440\n filesize 81920\n  maxprot 0x00000003\n initprot 0x00000003\n   nsects 2\n    flags 0x10\nSection\n  sectname __got\n   segname __DATA_CONST\n      addr 0x000000000008c000\n      size 0x00000000000002e8\n    offset 573440\n     align 2^3 (8)\n    reloff 0\n    nreloc 0\n     flags 0x00000006\n reserved1 82 (index into indirect symbol table)\n reserved2 0\nSection\n  sectname __const\n   segname __DATA_CONST\n      addr 0x000000000008c2f0\n      size 0x00000000000118c8\n    offset 574192\n     align 2^4 (16)\n    reloff 0\n    nreloc 0\n     flags 0x00000000\n reserved1 0\n reserved2 0\nLoad command 2\n      cmd LC_SEGMENT_64\n  cmdsize 312\n  segname __DATA\n   vmaddr 0x00000000000a0000\n   vmsize 0x0000000000110000\n  fileoff 655360\n filesize 16384\n  maxprot 0x00000003\n initprot 0x00000003\n   nsects 3\n    flags 0x0\nSection\n  sectname __data\n   segname __DATA\n      addr 0x00000000000a0000\n      size 0x0000000000000458\n    offset 655360\n     align 2^3 (8)\n    reloff 0\n    nreloc 0\n     flags 0x00000000\n reserved1 0\n reserved2 0\nSection\n  sectname __bss\n   segname __DATA\n      addr 0x00000000000a0458\n      size 0x000000000000e610\n    offset 0\n     align 2^3 (8)\n    reloff 0\n    nreloc 0\n     flags 0x00000001\n reserved1 0\n reserved2 0\nSection\n  sectname __common\n   segname __DATA\n      addr 0x00000000000aea70\n      size 0x0000000000100450\n    offset 0\n     align 2^4 (16)\n    reloff 0\n    nreloc 0\n     flags 0x00000001\n reserved1 0\n reserved2 0\nLoad command 3\n      cmd LC_SEGMENT_64\n  cmdsize 72\n  segname __LINKEDIT\n   vmaddr 0x00000000001b0000\n   vmsize 0x0000000000010000\n  fileoff 671744\n filesize 65408\n  maxprot 0x00000001\n initprot 0x00000001\n   nsects 0\n    flags 0x0\nLoad command 4\n          cmd LC_ID_DYLIB\n      cmdsize 56\n         name @rpath/libavutil.60.dylib (offset 24)\n   time stamp 1 Thu Jan  1 00:00:01 1970\n      current version 60.26.102\ncompatibility version 60.0.0\nLoad command 5\n      cmd LC_DYLD_CHAINED_FIXUPS\n  cmdsize 16\n  dataoff 671744\n datasize 1448\nLoad command 6\n      cmd LC_DYLD_EXPORTS_TRIE\n  cmdsize 16\n  dataoff 673192\n datasize 11960\nLoad command 7\n     cmd LC_SYMTAB\n cmdsize 24\n  symoff 687008\n   nsyms 718\n  stroff 699200\n strsize 14128\nLoad command 8\n            cmd LC_DYSYMTAB\n        cmdsize 80\n      ilocalsym 0\n      nlocalsym 1\n     iextdefsym 1\n     nextdefsym 624\n      iundefsym 625\n      nundefsym 93\n         tocoff 0\n           ntoc 0\n      modtaboff 0\n        nmodtab 0\n   extrefsymoff 0\n    nextrefsyms 0\n indirectsymoff 698496\n  nindirectsyms 175\n      extreloff 0\n        nextrel 0\n      locreloff 0\n        nlocrel 0\nLoad command 9\n     cmd LC_UUID\n cmdsize 24\n    uuid 38CC206F-5BA4-3DC9-B21E-D0CE3FBEBD27\nLoad command 10\n      cmd LC_BUILD_VERSION\n  cmdsize 32\n platform 1\n    minos 12.0\n      sdk 15.5\n   ntools 1\n     tool 3\n  version 1167.5\nLoad command 11\n      cmd LC_SOURCE_VERSION\n  cmdsize 16\n  version 0.0\nLoad command 12\n          cmd LC_LOAD_DYLIB\n      cmdsize 56\n         name /usr/lib/libSystem.B.dylib (offset 24)\n   time stamp 2 Thu Jan  1 00:00:02 1970\n      current version 1351.0.0\ncompatibility version 1.0.0\nLoad command 13\n          cmd LC_LOAD_DYLIB\n      cmdsize 104\n         name /System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation (offset 24)\n   time stamp 2 Thu Jan  1 00:00:02 1970\n      current version 3502.1.255\ncompatibility version 150.0.0\nLoad command 14\n          cmd LC_LOAD_DYLIB\n      cmdsize 96\n         name /System/Library/Frameworks/CoreVideo.framework/Versions/A/CoreVideo (offset 24)\n   time stamp 2 Thu Jan  1 00:00:02 1970\n      current version 1.5.0\ncompatibility version 1.2.0\nLoad command 15\n          cmd LC_LOAD_DYLIB\n      cmdsize 96\n         name /System/Library/Frameworks/CoreMedia.framework/Versions/A/CoreMedia (offset 24)\n   time stamp 2 Thu Jan  1 00:00:02 1970\n      current version 3225.7.1\ncompatibility version 1.0.0\nLoad command 16\n      cmd LC_FUNCTION_STARTS\n  cmdsize 16\n  dataoff 685152\n datasize 1856\nLoad command 17\n      cmd LC_DATA_IN_CODE\n  cmdsize 16\n  dataoff 687008\n datasize 0\nLoad command 18\n      cmd LC_CODE_SIGNATURE\n  cmdsize 16\n  dataoff 713328\n datasize 23824\nLoad command 19\n          cmd LC_RPATH\n      cmdsize 48\n         path @executable_path/../Frameworks (offset 12)\n",
+      "stderr": "",
+      "stdoutBytes": 6111,
+      "stderrBytes": 0
+    },
+    {
+      "command": "/usr/bin/lipo",
+      "args": [
+        "-archs",
+        "/private/var/folders/nj/vtw8zd2j31d1gdrtntc5y4600000gn/T/syndocal-dmg-check-0rnFNR/extracted/Syndocal.app/Contents/Frameworks/libswresample.6.dylib"
+      ],
+      "code": 0,
+      "signal": null,
+      "reaped": true,
+      "reason": null,
+      "sentSignals": [],
+      "elapsedMs": 16,
+      "stdout": "arm64\n",
+      "stderr": "",
+      "stdoutBytes": 6,
+      "stderrBytes": 0
+    },
+    {
+      "command": "/usr/bin/otool",
+      "args": [
+        "-l",
+        "/private/var/folders/nj/vtw8zd2j31d1gdrtntc5y4600000gn/T/syndocal-dmg-check-0rnFNR/extracted/Syndocal.app/Contents/Frameworks/libswresample.6.dylib"
+      ],
+      "code": 0,
+      "signal": null,
+      "reaped": true,
+      "reason": null,
+      "sentSignals": [],
+      "elapsedMs": 21,
+      "stdout": "/private/var/folders/nj/vtw8zd2j31d1gdrtntc5y4600000gn/T/syndocal-dmg-check-0rnFNR/extracted/Syndocal.app/Contents/Frameworks/libswresample.6.dylib:\nLoad command 0\n      cmd LC_SEGMENT_64\n  cmdsize 552\n  segname __TEXT\n   vmaddr 0x0000000000000000\n   vmsize 0x0000000000014000\n  fileoff 0\n filesize 81920\n  maxprot 0x00000005\n initprot 0x00000005\n   nsects 6\n    flags 0x0\nSection\n  sectname __text\n   segname __TEXT\n      addr 0x00000000000006b0\n      size 0x000000000000f9a8\n    offset 1712\n     align 2^4 (16)\n    reloff 0\n    nreloc 0\n     flags 0x80000400\n reserved1 0\n reserved2 0\nSection\n  sectname __stubs\n   segname __TEXT\n      addr 0x0000000000010058\n      size 0x00000000000001d4\n    offset 65624\n     align 2^2 (4)\n    reloff 0\n    nreloc 0\n     flags 0x80000408\n reserved1 0 (index into indirect symbol table)\n reserved2 12 (size of stubs)\nSection\n  sectname __cstring\n   segname __TEXT\n      addr 0x000000000001022c\n      size 0x00000000000014ae\n    offset 66092\n     align 2^0 (1)\n    reloff 0\n    nreloc 0\n     flags 0x00000002\n reserved1 0\n reserved2 0\nSection\n  sectname __const\n   segname __TEXT\n      addr 0x00000000000116e0\n      size 0x000000000000092d\n    offset 71392\n     align 2^4 (16)\n    reloff 0\n    nreloc 0\n     flags 0x00000000\n reserved1 0\n reserved2 0\nSection\n  sectname __unwind_info\n   segname __TEXT\n      addr 0x0000000000012010\n      size 0x0000000000000328\n    offset 73744\n     align 2^2 (4)\n    reloff 0\n    nreloc 0\n     flags 0x00000000\n reserved1 0\n reserved2 0\nSection\n  sectname __eh_frame\n   segname __TEXT\n      addr 0x0000000000012338\n      size 0x0000000000000d98\n    offset 74552\n     align 2^3 (8)\n    reloff 0\n    nreloc 0\n     flags 0x6800000b\n reserved1 0\n reserved2 0\nLoad command 1\n      cmd LC_SEGMENT_64\n  cmdsize 232\n  segname __DATA_CONST\n   vmaddr 0x0000000000014000\n   vmsize 0x0000000000004000\n  fileoff 81920\n filesize 16384\n  maxprot 0x00000003\n initprot 0x00000003\n   nsects 2\n    flags 0x10\nSection\n  sectname __got\n   segname __DATA_CONST\n      addr 0x0000000000014000\n      size 0x0000000000000140\n    offset 81920\n     align 2^3 (8)\n    reloff 0\n    nreloc 0\n     flags 0x00000006\n reserved1 39 (index into indirect symbol table)\n reserved2 0\nSection\n  sectname __const\n   segname __DATA_CONST\n      addr 0x0000000000014140\n      size 0x00000000000018f0\n    offset 82240\n     align 2^3 (8)\n    reloff 0\n    nreloc 0\n     flags 0x00000000\n reserved1 0\n reserved2 0\nLoad command 2\n      cmd LC_SEGMENT_64\n  cmdsize 72\n  segname __LINKEDIT\n   vmaddr 0x0000000000018000\n   vmsize 0x0000000000008000\n  fileoff 98304\n filesize 23312\n  maxprot 0x00000001\n initprot 0x00000001\n   nsects 0\n    flags 0x0\nLoad command 3\n          cmd LC_ID_DYLIB\n      cmdsize 56\n         name @rpath/libswresample.6.dylib (offset 24)\n   time stamp 1 Thu Jan  1 00:00:01 1970\n      current version 6.3.102\ncompatibility version 6.0.0\nLoad command 4\n      cmd LC_DYLD_CHAINED_FIXUPS\n  cmdsize 16\n  dataoff 98304\n datasize 968\nLoad command 5\n      cmd LC_DYLD_EXPORTS_TRIE\n  cmdsize 16\n  dataoff 99272\n datasize 472\nLoad command 6\n     cmd LC_SYMTAB\n cmdsize 24\n  symoff 100064\n   nsyms 64\n  stroff 101408\n strsize 1152\nLoad command 7\n            cmd LC_DYSYMTAB\n        cmdsize 80\n      ilocalsym 0\n      nlocalsym 1\n     iextdefsym 1\n     nextdefsym 23\n      iundefsym 24\n      nundefsym 40\n         tocoff 0\n           ntoc 0\n      modtaboff 0\n        nmodtab 0\n   extrefsymoff 0\n    nextrefsyms 0\n indirectsymoff 101088\n  nindirectsyms 79\n      extreloff 0\n        nextrel 0\n      locreloff 0\n        nlocrel 0\nLoad command 8\n     cmd LC_UUID\n cmdsize 24\n    uuid D5750E0A-F8A8-323D-A519-6C43FA7F78B6\nLoad command 9\n      cmd LC_BUILD_VERSION\n  cmdsize 32\n platform 1\n    minos 12.0\n      sdk 15.5\n   ntools 1\n     tool 3\n  version 1167.5\nLoad command 10\n      cmd LC_SOURCE_VERSION\n  cmdsize 16\n  version 0.0\nLoad command 11\n          cmd LC_LOAD_DYLIB\n      cmdsize 56\n         name @rpath/libavutil.60.dylib (offset 24)\n   time stamp 2 Thu Jan  1 00:00:02 1970\n      current version 60.26.102\ncompatibility version 60.0.0\nLoad command 12\n          cmd LC_LOAD_DYLIB\n      cmdsize 56\n         name /usr/lib/libSystem.B.dylib (offset 24)\n   time stamp 2 Thu Jan  1 00:00:02 1970\n      current version 1351.0.0\ncompatibility version 1.0.0\nLoad command 13\n          cmd LC_LOAD_DYLIB\n      cmdsize 104\n         name /System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation (offset 24)\n   time stamp 2 Thu Jan  1 00:00:02 1970\n      current version 3502.1.255\ncompatibility version 150.0.0\nLoad command 14\n          cmd LC_LOAD_DYLIB\n      cmdsize 96\n         name /System/Library/Frameworks/CoreVideo.framework/Versions/A/CoreVideo (offset 24)\n   time stamp 2 Thu Jan  1 00:00:02 1970\n      current version 1.5.0\ncompatibility version 1.2.0\nLoad command 15\n          cmd LC_LOAD_DYLIB\n      cmdsize 96\n         name /System/Library/Frameworks/CoreMedia.framework/Versions/A/CoreMedia (offset 24)\n   time stamp 2 Thu Jan  1 00:00:02 1970\n      current version 3225.7.1\ncompatibility version 1.0.0\nLoad command 16\n      cmd LC_FUNCTION_STARTS\n  cmdsize 16\n  dataoff 99744\n datasize 320\nLoad command 17\n      cmd LC_DATA_IN_CODE\n  cmdsize 16\n  dataoff 100064\n datasize 0\nLoad command 18\n      cmd LC_CODE_SIGNATURE\n  cmdsize 16\n  dataoff 102560\n datasize 19056\nLoad command 19\n          cmd LC_RPATH\n      cmdsize 48\n         path @executable_path/../Frameworks (offset 12)\n",
+      "stderr": "",
+      "stdoutBytes": 5439,
+      "stderrBytes": 0
+    },
+    {
+      "command": "/usr/bin/lipo",
+      "args": [
+        "-archs",
+        "/private/var/folders/nj/vtw8zd2j31d1gdrtntc5y4600000gn/T/syndocal-dmg-check-0rnFNR/extracted/Syndocal.app/Contents/Frameworks/libswscale.9.dylib"
+      ],
+      "code": 0,
+      "signal": null,
+      "reaped": true,
+      "reason": null,
+      "sentSignals": [],
+      "elapsedMs": 15,
+      "stdout": "arm64\n",
+      "stderr": "",
+      "stdoutBytes": 6,
+      "stderrBytes": 0
+    },
+    {
+      "command": "/usr/bin/otool",
+      "args": [
+        "-l",
+        "/private/var/folders/nj/vtw8zd2j31d1gdrtntc5y4600000gn/T/syndocal-dmg-check-0rnFNR/extracted/Syndocal.app/Contents/Frameworks/libswscale.9.dylib"
+      ],
+      "code": 0,
+      "signal": null,
+      "reaped": true,
+      "reason": null,
+      "sentSignals": [],
+      "elapsedMs": 20,
+      "stdout": "/private/var/folders/nj/vtw8zd2j31d1gdrtntc5y4600000gn/T/syndocal-dmg-check-0rnFNR/extracted/Syndocal.app/Contents/Frameworks/libswscale.9.dylib:\nLoad command 0\n      cmd LC_SEGMENT_64\n  cmdsize 552\n  segname __TEXT\n   vmaddr 0x0000000000000000\n   vmsize 0x000000000010c000\n  fileoff 0\n filesize 1097728\n  maxprot 0x00000005\n initprot 0x00000005\n   nsects 6\n    flags 0x0\nSection\n  sectname __text\n   segname __TEXT\n      addr 0x00000000000007e0\n      size 0x00000000000fa2a4\n    offset 2016\n     align 2^4 (16)\n    reloff 0\n    nreloc 0\n     flags 0x80000400\n reserved1 0\n reserved2 0\nSection\n  sectname __stubs\n   segname __TEXT\n      addr 0x00000000000faa84\n      size 0x0000000000000378\n    offset 1026692\n     align 2^2 (4)\n    reloff 0\n    nreloc 0\n     flags 0x80000408\n reserved1 0 (index into indirect symbol table)\n reserved2 12 (size of stubs)\nSection\n  sectname __const\n   segname __TEXT\n      addr 0x00000000000fae00\n      size 0x0000000000003480\n    offset 1027584\n     align 2^4 (16)\n    reloff 0\n    nreloc 0\n     flags 0x00000000\n reserved1 0\n reserved2 0\nSection\n  sectname __cstring\n   segname __TEXT\n      addr 0x00000000000fe280\n      size 0x0000000000001aa0\n    offset 1041024\n     align 2^0 (1)\n    reloff 0\n    nreloc 0\n     flags 0x00000002\n reserved1 0\n reserved2 0\nSection\n  sectname __unwind_info\n   segname __TEXT\n      addr 0x00000000000ffd20\n      size 0x0000000000001f10\n    offset 1047840\n     align 2^2 (4)\n    reloff 0\n    nreloc 0\n     flags 0x00000000\n reserved1 0\n reserved2 0\nSection\n  sectname __eh_frame\n   segname __TEXT\n      addr 0x0000000000101c30\n      size 0x0000000000007df0\n    offset 1055792\n     align 2^3 (8)\n    reloff 0\n    nreloc 0\n     flags 0x6800000b\n reserved1 0\n reserved2 0\nLoad command 1\n      cmd LC_SEGMENT_64\n  cmdsize 232\n  segname __DATA_CONST\n   vmaddr 0x000000000010c000\n   vmsize 0x0000000000008000\n  fileoff 1097728\n filesize 32768\n  maxprot 0x00000003\n initprot 0x00000003\n   nsects 2\n    flags 0x10\nSection\n  sectname __got\n   segname __DATA_CONST\n      addr 0x000000000010c000\n      size 0x0000000000000260\n    offset 1097728\n     align 2^3 (8)\n    reloff 0\n    nreloc 0\n     flags 0x00000006\n reserved1 74 (index into indirect symbol table)\n reserved2 0\nSection\n  sectname __const\n   segname __DATA_CONST\n      addr 0x000000000010c260\n      size 0x00000000000057b8\n    offset 1098336\n     align 2^4 (16)\n    reloff 0\n    nreloc 0\n     flags 0x00000000\n reserved1 0\n reserved2 0\nLoad command 2\n      cmd LC_SEGMENT_64\n  cmdsize 312\n  segname __DATA\n   vmaddr 0x0000000000114000\n   vmsize 0x0000000000048000\n  fileoff 1130496\n filesize 16384\n  maxprot 0x00000003\n initprot 0x00000003\n   nsects 3\n    flags 0x0\nSection\n  sectname __data\n   segname __DATA\n      addr 0x0000000000114000\n      size 0x0000000000000020\n    offset 1130496\n     align 2^3 (8)\n    reloff 0\n    nreloc 0\n     flags 0x00000000\n reserved1 0\n reserved2 0\nSection\n  sectname __common\n   segname __DATA\n      addr 0x0000000000114020\n      size 0x0000000000000130\n    offset 0\n     align 2^3 (8)\n    reloff 0\n    nreloc 0\n     flags 0x00000001\n reserved1 0\n reserved2 0\nSection\n  sectname __bss\n   segname __DATA\n      addr 0x0000000000114150\n      size 0x0000000000044000\n    offset 0\n     align 2^1 (2)\n    reloff 0\n    nreloc 0\n     flags 0x00000001\n reserved1 0\n reserved2 0\nLoad command 3\n      cmd LC_SEGMENT_64\n  cmdsize 72\n  segname __LINKEDIT\n   vmaddr 0x000000000015c000\n   vmsize 0x000000000000c000\n  fileoff 1146880\n filesize 37184\n  maxprot 0x00000001\n initprot 0x00000001\n   nsects 0\n    flags 0x0\nLoad command 4\n          cmd LC_ID_DYLIB\n      cmdsize 56\n         name @rpath/libswscale.9.dylib (offset 24)\n   time stamp 1 Thu Jan  1 00:00:01 1970\n      current version 9.5.102\ncompatibility version 9.0.0\nLoad command 5\n      cmd LC_DYLD_CHAINED_FIXUPS\n  cmdsize 16\n  dataoff 1146880\n datasize 1640\nLoad command 6\n      cmd LC_DYLD_EXPORTS_TRIE\n  cmdsize 16\n  dataoff 1148520\n datasize 832\nLoad command 7\n     cmd LC_SYMTAB\n cmdsize 24\n  symoff 1152248\n   nsyms 117\n  stroff 1154720\n strsize 2056\nLoad command 8\n            cmd LC_DYSYMTAB\n        cmdsize 80\n      ilocalsym 0\n      nlocalsym 1\n     iextdefsym 1\n     nextdefsym 40\n      iundefsym 41\n      nundefsym 76\n         tocoff 0\n           ntoc 0\n      modtaboff 0\n        nmodtab 0\n   extrefsymoff 0\n    nextrefsyms 0\n indirectsymoff 1154120\n  nindirectsyms 150\n      extreloff 0\n        nextrel 0\n      locreloff 0\n        nlocrel 0\nLoad command 9\n     cmd LC_UUID\n cmdsize 24\n    uuid 2C963C7E-D566-3F26-99A8-EF97F39F90BE\nLoad command 10\n      cmd LC_BUILD_VERSION\n  cmdsize 32\n platform 1\n    minos 12.0\n      sdk 15.5\n   ntools 1\n     tool 3\n  version 1167.5\nLoad command 11\n      cmd LC_SOURCE_VERSION\n  cmdsize 16\n  version 0.0\nLoad command 12\n          cmd LC_LOAD_DYLIB\n      cmdsize 56\n         name @rpath/libavutil.60.dylib (offset 24)\n   time stamp 2 Thu Jan  1 00:00:02 1970\n      current version 60.26.102\ncompatibility version 60.0.0\nLoad command 13\n          cmd LC_LOAD_DYLIB\n      cmdsize 56\n         name /usr/lib/libSystem.B.dylib (offset 24)\n   time stamp 2 Thu Jan  1 00:00:02 1970\n      current version 1351.0.0\ncompatibility version 1.0.0\nLoad command 14\n          cmd LC_LOAD_DYLIB\n      cmdsize 104\n         name /System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation (offset 24)\n   time stamp 2 Thu Jan  1 00:00:02 1970\n      current version 3502.1.255\ncompatibility version 150.0.0\nLoad command 15\n          cmd LC_LOAD_DYLIB\n      cmdsize 96\n         name /System/Library/Frameworks/CoreVideo.framework/Versions/A/CoreVideo (offset 24)\n   time stamp 2 Thu Jan  1 00:00:02 1970\n      current version 1.5.0\ncompatibility version 1.2.0\nLoad command 16\n          cmd LC_LOAD_DYLIB\n      cmdsize 96\n         name /System/Library/Frameworks/CoreMedia.framework/Versions/A/CoreMedia (offset 24)\n   time stamp 2 Thu Jan  1 00:00:02 1970\n      current version 3225.7.1\ncompatibility version 1.0.0\nLoad command 17\n      cmd LC_FUNCTION_STARTS\n  cmdsize 16\n  dataoff 1149352\n datasize 2896\nLoad command 18\n      cmd LC_DATA_IN_CODE\n  cmdsize 16\n  dataoff 1152248\n datasize 0\nLoad command 19\n      cmd LC_CODE_SIGNATURE\n  cmdsize 16\n  dataoff 1156784\n datasize 27280\nLoad command 20\n          cmd LC_RPATH\n      cmdsize 48\n         path @executable_path/../Frameworks (offset 12)\n",
+      "stderr": "",
+      "stdoutBytes": 6337,
+      "stderrBytes": 0
+    },
+    {
+      "command": "/usr/bin/codesign",
+      "args": [
+        "--verify",
+        "--deep",
+        "--strict",
+        "--verbose=2",
+        "/private/var/folders/nj/vtw8zd2j31d1gdrtntc5y4600000gn/T/syndocal-dmg-check-0rnFNR/extracted/Syndocal.app"
+      ],
+      "code": 0,
+      "signal": null,
+      "reaped": true,
+      "reason": null,
+      "sentSignals": [],
+      "elapsedMs": 124,
+      "stdout": "",
+      "stderr": "--prepared:/private/var/folders/nj/vtw8zd2j31d1gdrtntc5y4600000gn/T/syndocal-dmg-check-0rnFNR/extracted/Syndocal.app/Contents/Frameworks/libavformat.62.dylib\n--validated:/private/var/folders/nj/vtw8zd2j31d1gdrtntc5y4600000gn/T/syndocal-dmg-check-0rnFNR/extracted/Syndocal.app/Contents/Frameworks/libavformat.62.dylib\n--prepared:/private/var/folders/nj/vtw8zd2j31d1gdrtntc5y4600000gn/T/syndocal-dmg-check-0rnFNR/extracted/Syndocal.app/Contents/Frameworks/libswresample.6.dylib\n--validated:/private/var/folders/nj/vtw8zd2j31d1gdrtntc5y4600000gn/T/syndocal-dmg-check-0rnFNR/extracted/Syndocal.app/Contents/Frameworks/libswresample.6.dylib\n--prepared:/private/var/folders/nj/vtw8zd2j31d1gdrtntc5y4600000gn/T/syndocal-dmg-check-0rnFNR/extracted/Syndocal.app/Contents/Frameworks/libswscale.9.dylib\n--validated:/private/var/folders/nj/vtw8zd2j31d1gdrtntc5y4600000gn/T/syndocal-dmg-check-0rnFNR/extracted/Syndocal.app/Contents/Frameworks/libswscale.9.dylib\n--prepared:/private/var/folders/nj/vtw8zd2j31d1gdrtntc5y4600000gn/T/syndocal-dmg-check-0rnFNR/extracted/Syndocal.app/Contents/Frameworks/libavutil.60.dylib\n--validated:/private/var/folders/nj/vtw8zd2j31d1gdrtntc5y4600000gn/T/syndocal-dmg-check-0rnFNR/extracted/Syndocal.app/Contents/Frameworks/libavutil.60.dylib\n--prepared:/private/var/folders/nj/vtw8zd2j31d1gdrtntc5y4600000gn/T/syndocal-dmg-check-0rnFNR/extracted/Syndocal.app/Contents/Frameworks/libavcodec.62.dylib\n--validated:/private/var/folders/nj/vtw8zd2j31d1gdrtntc5y4600000gn/T/syndocal-dmg-check-0rnFNR/extracted/Syndocal.app/Contents/Frameworks/libavcodec.62.dylib\n/private/var/folders/nj/vtw8zd2j31d1gdrtntc5y4600000gn/T/syndocal-dmg-check-0rnFNR/extracted/Syndocal.app: valid on disk\n/private/var/folders/nj/vtw8zd2j31d1gdrtntc5y4600000gn/T/syndocal-dmg-check-0rnFNR/extracted/Syndocal.app: satisfies its Designated Requirement\n",
+      "stdoutBytes": 0,
+      "stderrBytes": 1842
+    },
+    {
+      "command": "/usr/bin/codesign",
+      "args": [
+        "-d",
+        "--verbose=4",
+        "/private/var/folders/nj/vtw8zd2j31d1gdrtntc5y4600000gn/T/syndocal-dmg-check-0rnFNR/extracted/Syndocal.app"
+      ],
+      "code": 0,
+      "signal": null,
+      "reaped": true,
+      "reason": null,
+      "sentSignals": [],
+      "elapsedMs": 11,
+      "stdout": "",
+      "stderr": "Executable=/private/var/folders/nj/vtw8zd2j31d1gdrtntc5y4600000gn/T/syndocal-dmg-check-0rnFNR/extracted/Syndocal.app/Contents/MacOS/syndocal\nIdentifier=jp.seraf.ktn.syndocal\nFormat=app bundle with Mach-O thin (arm64)\nCodeDirectory v=20400 size=525774 flags=0x2(adhoc) hashes=16424+3 location=embedded\nVersionPlatform=1\nVersionMin=786432\nVersionSDK=984320\nHash type=sha256 size=32\nCandidateCDHash sha256=fe50c4a301762f257927e727008888f0e62c48fe\nCandidateCDHashFull sha256=fe50c4a301762f257927e727008888f0e62c48fe93fd996b340e1c2aece40080\nHash choices=sha256\nCMSDigest=fe50c4a301762f257927e727008888f0e62c48fe93fd996b340e1c2aece40080\nCMSDigestType=2\nExecutable Segment base=0\nExecutable Segment limit=49053696\nExecutable Segment flags=0x1\nPage size=4096\nCDHash=fe50c4a301762f257927e727008888f0e62c48fe\nSignature=adhoc\nInfo.plist entries=17\nTeamIdentifier=not set\nSealed Resources version=2 rules=13 files=10\nInternal requirements count=0 size=12\n",
+      "stdoutBytes": 0,
+      "stderrBytes": 943
+    },
+    {
+      "command": "/private/var/folders/nj/vtw8zd2j31d1gdrtntc5y4600000gn/T/syndocal-dmg-check-0rnFNR/extracted/Syndocal.app/Contents/MacOS/syndocal",
+      "args": [],
+      "code": null,
+      "signal": "SIGTERM",
+      "reaped": true,
+      "reason": null,
+      "sentSignals": [
+        "SIGTERM"
+      ],
+      "survivalObservedMs": 8011,
+      "elapsedMs": 8104,
+      "stdout": "",
+      "stderr": "",
+      "stdoutBytes": 0,
+      "stderrBytes": 0
+    },
+    {
+      "command": "/usr/bin/hdiutil",
+      "args": [
+        "info",
+        "-plist"
+      ],
+      "code": 0,
+      "signal": null,
+      "reaped": true,
+      "reason": null,
+      "sentSignals": [],
+      "elapsedMs": 29,
+      "stdout": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n\t<key>framework</key>\n\t<string>671.140.2.700.3</string>\n\t<key>images</key>\n\t<array>\n\t\t<dict>\n\t\t\t<key>blockcount</key>\n\t\t\t<integer>8192</integer>\n\t\t\t<key>blocksize</key>\n\t\t\t<integer>512</integer>\n\t\t\t<key>diskimages2</key>\n\t\t\t<false/>\n\t\t\t<key>image-path</key>\n\t\t\t<string>/System/Library/AssetsV2/com_apple_MobileAsset_PKITrustStore/purpose_auto/6dd55b0d06633a00de6f57ccb910a66a5ba2409a.asset/AssetData/Restore/SECUREPKITRUSTSTOREASSETS_SECUREPKITRUSTSTORE_Cryptex.dmg</string>\n\t\t\t<key>owner-uid</key>\n\t\t\t<integer>0</integer>\n\t\t\t<key>removable</key>\n\t\t\t<true/>\n\t\t\t<key>system-entities</key>\n\t\t\t<array>\n\t\t\t\t<dict>\n\t\t\t\t\t<key>content-hint</key>\n\t\t\t\t\t<string></string>\n\t\t\t\t\t<key>dev-entry</key>\n\t\t\t\t\t<string>/dev/disk3</string>\n\t\t\t\t</dict>\n\t\t\t\t<dict>\n\t\t\t\t\t<key>content-hint</key>\n\t\t\t\t\t<string>EF57347C-0000-11AA-AA11-00306543ECAC</string>\n\t\t\t\t\t<key>dev-entry</key>\n\t\t\t\t\t<string>/dev/disk4</string>\n\t\t\t\t</dict>\n\t\t\t\t<dict>\n\t\t\t\t\t<key>content-hint</key>\n\t\t\t\t\t<string>41504653-0000-11AA-AA11-00306543ECAC</string>\n\t\t\t\t\t<key>dev-entry</key>\n\t\t\t\t\t<string>/dev/disk4s1</string>\n\t\t\t\t\t<key>mount-point</key>\n\t\t\t\t\t<string>/System/Library/AssetsV2/com_apple_MobileAsset_PKITrustStore/purpose_auto/6dd55b0d06633a00de6f57ccb910a66a5ba2409a.asset/.AssetData</string>\n\t\t\t\t</dict>\n\t\t\t</array>\n\t\t\t<key>writeable</key>\n\t\t\t<true/>\n\t\t</dict>\n\t\t<dict>\n\t\t\t<key>autodiskmount</key>\n\t\t\t<true/>\n\t\t\t<key>blockcount</key>\n\t\t\t<integer>203586</integer>\n\t\t\t<key>blocksize</key>\n\t\t\t<integer>512</integer>\n\t\t\t<key>diskimages2</key>\n\t\t\t<false/>\n\t\t\t<key>hdid-pid</key>\n\t\t\t<integer>38206</integer>\n\t\t\t<key>icon-path</key>\n\t\t\t<string>/System/Library/PrivateFrameworks/DiskImages.framework/Resources/CDiskImage.icns</string>\n\t\t\t<key>image-encrypted</key>\n\t\t\t<false/>\n\t\t\t<key>image-path</key>\n\t\t\t<string>/Users/runner/work/Syndocal/Syndocal/target/release/bundle/dmg/Syndocal_1.2.0-alpha.70_arm64.dmg</string>\n\t\t\t<key>image-type</key>\n\t\t\t<string>UDIF read-only compressed (zlib)</string>\n\t\t\t<key>owner-uid</key>\n\t\t\t<integer>501</integer>\n\t\t\t<key>removable</key>\n\t\t\t<true/>\n\t\t\t<key>system-entities</key>\n\t\t\t<array>\n\t\t\t\t<dict>\n\t\t\t\t\t<key>content-hint</key>\n\t\t\t\t\t<string>GUID_partition_scheme</string>\n\t\t\t\t\t<key>dev-entry</key>\n\t\t\t\t\t<string>/dev/disk5</string>\n\t\t\t\t</dict>\n\t\t\t\t<dict>\n\t\t\t\t\t<key>content-hint</key>\n\t\t\t\t\t<string>7C3457EF-0000-11AA-AA11-00306543ECAC</string>\n\t\t\t\t\t<key>dev-entry</key>\n\t\t\t\t\t<string>/dev/disk5s1</string>\n\t\t\t\t</dict>\n\t\t\t\t<dict>\n\t\t\t\t\t<key>content-hint</key>\n\t\t\t\t\t<string>EF57347C-0000-11AA-AA11-00306543ECAC</string>\n\t\t\t\t\t<key>dev-entry</key>\n\t\t\t\t\t<string>/dev/disk6</string>\n\t\t\t\t</dict>\n\t\t\t\t<dict>\n\t\t\t\t\t<key>content-hint</key>\n\t\t\t\t\t<string>41504653-0000-11AA-AA11-00306543ECAC</string>\n\t\t\t\t\t<key>dev-entry</key>\n\t\t\t\t\t<string>/dev/disk6s1</string>\n\t\t\t\t\t<key>mount-point</key>\n\t\t\t\t\t<string>/private/var/folders/nj/vtw8zd2j31d1gdrtntc5y4600000gn/T/syndocal-dmg-check-0rnFNR/volume</string>\n\t\t\t\t</dict>\n\t\t\t</array>\n\t\t\t<key>writeable</key>\n\t\t\t<false/>\n\t\t</dict>\n\t</array>\n\t<key>revision</key>\n\t<string>671.140.2.700.3</string>\n\t<key>vendor</key>\n\t<string>Apple</string>\n</dict>\n</plist>\n",
+      "stderr": "",
+      "stdoutBytes": 3231,
+      "stderrBytes": 0
+    },
+    {
+      "command": "/usr/bin/plutil",
+      "args": [
+        "-convert",
+        "json",
+        "-o",
+        "-",
+        "/private/var/folders/nj/vtw8zd2j31d1gdrtntc5y4600000gn/T/syndocal-dmg-check-0rnFNR/mount-info.plist"
+      ],
+      "code": 0,
+      "signal": null,
+      "reaped": true,
+      "reason": null,
+      "sentSignals": [],
+      "elapsedMs": 9,
+      "stdout": "{\"revision\":\"671.140.2.700.3\",\"vendor\":\"Apple\",\"framework\":\"671.140.2.700.3\",\"images\":[{\"owner-uid\":0,\"blockcount\":8192,\"image-path\":\"\\/System\\/Library\\/AssetsV2\\/com_apple_MobileAsset_PKITrustStore\\/purpose_auto\\/6dd55b0d06633a00de6f57ccb910a66a5ba2409a.asset\\/AssetData\\/Restore\\/SECUREPKITRUSTSTOREASSETS_SECUREPKITRUSTSTORE_Cryptex.dmg\",\"system-entities\":[{\"content-hint\":\"\",\"dev-entry\":\"\\/dev\\/disk3\"},{\"content-hint\":\"EF57347C-0000-11AA-AA11-00306543ECAC\",\"dev-entry\":\"\\/dev\\/disk4\"},{\"content-hint\":\"41504653-0000-11AA-AA11-00306543ECAC\",\"dev-entry\":\"\\/dev\\/disk4s1\",\"mount-point\":\"\\/System\\/Library\\/AssetsV2\\/com_apple_MobileAsset_PKITrustStore\\/purpose_auto\\/6dd55b0d06633a00de6f57ccb910a66a5ba2409a.asset\\/.AssetData\"}],\"writeable\":true,\"diskimages2\":false,\"blocksize\":512,\"removable\":true},{\"image-path\":\"\\/Users\\/runner\\/work\\/Syndocal\\/Syndocal\\/target\\/release\\/bundle\\/dmg\\/Syndocal_1.2.0-alpha.70_arm64.dmg\",\"image-type\":\"UDIF read-only compressed (zlib)\",\"autodiskmount\":true,\"image-encrypted\":false,\"blocksize\":512,\"system-entities\":[{\"content-hint\":\"GUID_partition_scheme\",\"dev-entry\":\"\\/dev\\/disk5\"},{\"content-hint\":\"7C3457EF-0000-11AA-AA11-00306543ECAC\",\"dev-entry\":\"\\/dev\\/disk5s1\"},{\"content-hint\":\"EF57347C-0000-11AA-AA11-00306543ECAC\",\"dev-entry\":\"\\/dev\\/disk6\"},{\"content-hint\":\"41504653-0000-11AA-AA11-00306543ECAC\",\"dev-entry\":\"\\/dev\\/disk6s1\",\"mount-point\":\"\\/private\\/var\\/folders\\/nj\\/vtw8zd2j31d1gdrtntc5y4600000gn\\/T\\/syndocal-dmg-check-0rnFNR\\/volume\"}],\"diskimages2\":false,\"removable\":true,\"blockcount\":203586,\"hdid-pid\":38206,\"writeable\":false,\"owner-uid\":501,\"icon-path\":\"\\/System\\/Library\\/PrivateFrameworks\\/DiskImages.framework\\/Resources\\/CDiskImage.icns\"}]}",
+      "stderr": "",
+      "stdoutBytes": 1700,
+      "stderrBytes": 0
+    },
+    {
+      "command": "/usr/bin/hdiutil",
+      "args": [
+        "detach",
+        "/private/var/folders/nj/vtw8zd2j31d1gdrtntc5y4600000gn/T/syndocal-dmg-check-0rnFNR/volume"
+      ],
+      "code": 0,
+      "signal": null,
+      "reaped": true,
+      "reason": null,
+      "sentSignals": [],
+      "elapsedMs": 60,
+      "stdout": "\"disk5\" ejected.\n",
+      "stderr": "",
+      "stdoutBytes": 17,
+      "stderrBytes": 0
+    },
+    {
+      "command": "/usr/bin/hdiutil",
+      "args": [
+        "info",
+        "-plist"
+      ],
+      "code": 0,
+      "signal": null,
+      "reaped": true,
+      "reason": null,
+      "sentSignals": [],
+      "elapsedMs": 20,
+      "stdout": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n\t<key>framework</key>\n\t<string>671.140.2.700.3</string>\n\t<key>images</key>\n\t<array>\n\t\t<dict>\n\t\t\t<key>blockcount</key>\n\t\t\t<integer>8192</integer>\n\t\t\t<key>blocksize</key>\n\t\t\t<integer>512</integer>\n\t\t\t<key>diskimages2</key>\n\t\t\t<false/>\n\t\t\t<key>image-path</key>\n\t\t\t<string>/System/Library/AssetsV2/com_apple_MobileAsset_PKITrustStore/purpose_auto/6dd55b0d06633a00de6f57ccb910a66a5ba2409a.asset/AssetData/Restore/SECUREPKITRUSTSTOREASSETS_SECUREPKITRUSTSTORE_Cryptex.dmg</string>\n\t\t\t<key>owner-uid</key>\n\t\t\t<integer>0</integer>\n\t\t\t<key>removable</key>\n\t\t\t<true/>\n\t\t\t<key>system-entities</key>\n\t\t\t<array>\n\t\t\t\t<dict>\n\t\t\t\t\t<key>content-hint</key>\n\t\t\t\t\t<string></string>\n\t\t\t\t\t<key>dev-entry</key>\n\t\t\t\t\t<string>/dev/disk3</string>\n\t\t\t\t</dict>\n\t\t\t\t<dict>\n\t\t\t\t\t<key>content-hint</key>\n\t\t\t\t\t<string>EF57347C-0000-11AA-AA11-00306543ECAC</string>\n\t\t\t\t\t<key>dev-entry</key>\n\t\t\t\t\t<string>/dev/disk4</string>\n\t\t\t\t</dict>\n\t\t\t\t<dict>\n\t\t\t\t\t<key>content-hint</key>\n\t\t\t\t\t<string>41504653-0000-11AA-AA11-00306543ECAC</string>\n\t\t\t\t\t<key>dev-entry</key>\n\t\t\t\t\t<string>/dev/disk4s1</string>\n\t\t\t\t\t<key>mount-point</key>\n\t\t\t\t\t<string>/System/Library/AssetsV2/com_apple_MobileAsset_PKITrustStore/purpose_auto/6dd55b0d06633a00de6f57ccb910a66a5ba2409a.asset/.AssetData</string>\n\t\t\t\t</dict>\n\t\t\t</array>\n\t\t\t<key>writeable</key>\n\t\t\t<true/>\n\t\t</dict>\n\t</array>\n\t<key>revision</key>\n\t<string>671.140.2.700.3</string>\n\t<key>vendor</key>\n\t<string>Apple</string>\n</dict>\n</plist>\n",
+      "stderr": "",
+      "stdoutBytes": 1610,
+      "stderrBytes": 0
+    },
+    {
+      "command": "/usr/bin/plutil",
+      "args": [
+        "-convert",
+        "json",
+        "-o",
+        "-",
+        "/private/var/folders/nj/vtw8zd2j31d1gdrtntc5y4600000gn/T/syndocal-dmg-check-0rnFNR/mount-info.plist"
+      ],
+      "code": 0,
+      "signal": null,
+      "reaped": true,
+      "reason": null,
+      "sentSignals": [],
+      "elapsedMs": 9,
+      "stdout": "{\"revision\":\"671.140.2.700.3\",\"vendor\":\"Apple\",\"framework\":\"671.140.2.700.3\",\"images\":[{\"owner-uid\":0,\"blockcount\":8192,\"image-path\":\"\\/System\\/Library\\/AssetsV2\\/com_apple_MobileAsset_PKITrustStore\\/purpose_auto\\/6dd55b0d06633a00de6f57ccb910a66a5ba2409a.asset\\/AssetData\\/Restore\\/SECUREPKITRUSTSTOREASSETS_SECUREPKITRUSTSTORE_Cryptex.dmg\",\"system-entities\":[{\"content-hint\":\"\",\"dev-entry\":\"\\/dev\\/disk3\"},{\"content-hint\":\"EF57347C-0000-11AA-AA11-00306543ECAC\",\"dev-entry\":\"\\/dev\\/disk4\"},{\"content-hint\":\"41504653-0000-11AA-AA11-00306543ECAC\",\"dev-entry\":\"\\/dev\\/disk4s1\",\"mount-point\":\"\\/System\\/Library\\/AssetsV2\\/com_apple_MobileAsset_PKITrustStore\\/purpose_auto\\/6dd55b0d06633a00de6f57ccb910a66a5ba2409a.asset\\/.AssetData\"}],\"writeable\":true,\"diskimages2\":false,\"blocksize\":512,\"removable\":true}]}",
+      "stderr": "",
+      "stdoutBytes": 803,
+      "stderrBytes": 0
+    }
+  ],
+  "unverified": [
+    "M2 hardware",
+    "macOS 12 execution",
+    "native UI responsiveness",
+    "camera/DMX/MIDI/ASIO/NDI",
+    "real show acceptance",
+    "Developer ID trust",
+    "notarization",
+    "Gatekeeper"
+  ],
+  "osVersion": "15.7.9",
+  "interrupted": false,
+  "finishedAt": "2026-10-08T07:35:40.724Z",
+  "publication": {
+    "finalPath": "/Users/runner/work/Syndocal/Syndocal/target/qa/macos-artifact/report.json",
+    "workflowSuccessRequired": true,
+    "scope": "checks committed at this path; pending files are not acceptance",
+    "stagingPath": "/Users/runner/work/Syndocal/Syndocal/target/qa/macos-artifact/report.json.fbb94534-c205-4d63-ae32-6ed1c1de6a2e.pending",
+    "stagingPolicy": "success requires alias removal"
+  }
+}

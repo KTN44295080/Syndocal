@@ -1,0 +1,892 @@
+TAP version 13
+# Subtest: matching report passes only with successful step and exact provenance
+ok 1 - matching report passes only with successful step and exact provenance
+  ---
+  duration_ms: 1.746584
+  type: 'test'
+  ...
+# Subtest: acceptance rejects environment/fail
+ok 2 - acceptance rejects environment/fail
+  ---
+  duration_ms: 0.284916
+  type: 'test'
+  ...
+# Subtest: acceptance rejects environment/not_run
+ok 3 - acceptance rejects environment/not_run
+  ---
+  duration_ms: 0.091875
+  type: 'test'
+  ...
+# Subtest: acceptance rejects environment/missing
+ok 4 - acceptance rejects environment/missing
+  ---
+  duration_ms: 0.094875
+  type: 'test'
+  ...
+# Subtest: acceptance rejects dmg/fail
+ok 5 - acceptance rejects dmg/fail
+  ---
+  duration_ms: 0.141208
+  type: 'test'
+  ...
+# Subtest: acceptance rejects dmg/not_run
+ok 6 - acceptance rejects dmg/not_run
+  ---
+  duration_ms: 0.077291
+  type: 'test'
+  ...
+# Subtest: acceptance rejects dmg/missing
+ok 7 - acceptance rejects dmg/missing
+  ---
+  duration_ms: 0.147583
+  type: 'test'
+  ...
+# Subtest: acceptance rejects image_integrity/fail
+ok 8 - acceptance rejects image_integrity/fail
+  ---
+  duration_ms: 0.102834
+  type: 'test'
+  ...
+# Subtest: acceptance rejects image_integrity/not_run
+ok 9 - acceptance rejects image_integrity/not_run
+  ---
+  duration_ms: 0.703667
+  type: 'test'
+  ...
+# Subtest: acceptance rejects image_integrity/missing
+ok 10 - acceptance rejects image_integrity/missing
+  ---
+  duration_ms: 0.587834
+  type: 'test'
+  ...
+# Subtest: acceptance rejects extraction/fail
+ok 11 - acceptance rejects extraction/fail
+  ---
+  duration_ms: 0.165417
+  type: 'test'
+  ...
+# Subtest: acceptance rejects extraction/not_run
+ok 12 - acceptance rejects extraction/not_run
+  ---
+  duration_ms: 0.078875
+  type: 'test'
+  ...
+# Subtest: acceptance rejects extraction/missing
+ok 13 - acceptance rejects extraction/missing
+  ---
+  duration_ms: 0.072041
+  type: 'test'
+  ...
+# Subtest: acceptance rejects bundle_info/fail
+ok 14 - acceptance rejects bundle_info/fail
+  ---
+  duration_ms: 0.576834
+  type: 'test'
+  ...
+# Subtest: acceptance rejects bundle_info/not_run
+ok 15 - acceptance rejects bundle_info/not_run
+  ---
+  duration_ms: 0.094667
+  type: 'test'
+  ...
+# Subtest: acceptance rejects bundle_info/missing
+ok 16 - acceptance rejects bundle_info/missing
+  ---
+  duration_ms: 0.050875
+  type: 'test'
+  ...
+# Subtest: acceptance rejects macho/fail
+ok 17 - acceptance rejects macho/fail
+  ---
+  duration_ms: 0.063083
+  type: 'test'
+  ...
+# Subtest: acceptance rejects macho/not_run
+ok 18 - acceptance rejects macho/not_run
+  ---
+  duration_ms: 0.052042
+  type: 'test'
+  ...
+# Subtest: acceptance rejects macho/missing
+ok 19 - acceptance rejects macho/missing
+  ---
+  duration_ms: 0.074917
+  type: 'test'
+  ...
+# Subtest: acceptance rejects signature/fail
+ok 20 - acceptance rejects signature/fail
+  ---
+  duration_ms: 0.04425
+  type: 'test'
+  ...
+# Subtest: acceptance rejects signature/not_run
+ok 21 - acceptance rejects signature/not_run
+  ---
+  duration_ms: 0.041041
+  type: 'test'
+  ...
+# Subtest: acceptance rejects signature/missing
+ok 22 - acceptance rejects signature/missing
+  ---
+  duration_ms: 0.041584
+  type: 'test'
+  ...
+# Subtest: acceptance rejects process_survival/fail
+ok 23 - acceptance rejects process_survival/fail
+  ---
+  duration_ms: 0.053959
+  type: 'test'
+  ...
+# Subtest: acceptance rejects process_survival/not_run
+ok 24 - acceptance rejects process_survival/not_run
+  ---
+  duration_ms: 0.040709
+  type: 'test'
+  ...
+# Subtest: acceptance rejects process_survival/missing
+ok 25 - acceptance rejects process_survival/missing
+  ---
+  duration_ms: 0.039792
+  type: 'test'
+  ...
+# Subtest: acceptance rejects cleanup/fail
+ok 26 - acceptance rejects cleanup/fail
+  ---
+  duration_ms: 0.039083
+  type: 'test'
+  ...
+# Subtest: acceptance rejects cleanup/not_run
+ok 27 - acceptance rejects cleanup/not_run
+  ---
+  duration_ms: 0.052208
+  type: 'test'
+  ...
+# Subtest: acceptance rejects cleanup/missing
+ok 28 - acceptance rejects cleanup/missing
+  ---
+  duration_ms: 0.059958
+  type: 'test'
+  ...
+# Subtest: acceptance rejects checksum/fail
+ok 29 - acceptance rejects checksum/fail
+  ---
+  duration_ms: 0.060125
+  type: 'test'
+  ...
+# Subtest: acceptance rejects checksum/not_run
+ok 30 - acceptance rejects checksum/not_run
+  ---
+  duration_ms: 0.0395
+  type: 'test'
+  ...
+# Subtest: acceptance rejects checksum/missing
+ok 31 - acceptance rejects checksum/missing
+  ---
+  duration_ms: 0.1255
+  type: 'test'
+  ...
+# Subtest: a JSON pass cannot override validation outcome undefined
+ok 32 - a JSON pass cannot override validation outcome undefined
+  ---
+  duration_ms: 0.248459
+  type: 'test'
+  ...
+# Subtest: a JSON pass cannot override validation outcome failure
+ok 33 - a JSON pass cannot override validation outcome failure
+  ---
+  duration_ms: 0.069583
+  type: 'test'
+  ...
+# Subtest: a JSON pass cannot override validation outcome cancelled
+ok 34 - a JSON pass cannot override validation outcome cancelled
+  ---
+  duration_ms: 0.046292
+  type: 'test'
+  ...
+# Subtest: a JSON pass cannot override validation outcome skipped
+ok 35 - a JSON pass cannot override validation outcome skipped
+  ---
+  duration_ms: 0.097708
+  type: 'test'
+  ...
+# Subtest: rejects another commit
+ok 36 - rejects another commit
+  ---
+  duration_ms: 0.076791
+  type: 'test'
+  ...
+# Subtest: rejects another runId
+ok 37 - rejects another runId
+  ---
+  duration_ms: 0.046833
+  type: 'test'
+  ...
+# Subtest: rejects another runAttempt
+ok 38 - rejects another runAttempt
+  ---
+  duration_ms: 0.043458
+  type: 'test'
+  ...
+# Subtest: rejects abnormal survival evidence {"exitCode":7,"signal":null}
+ok 39 - rejects abnormal survival evidence {"exitCode":7,"signal":null}
+  ---
+  duration_ms: 0.09075
+  type: 'test'
+  ...
+# Subtest: rejects abnormal survival evidence {"exitCode":null,"signal":"SIGSEGV"}
+ok 40 - rejects abnormal survival evidence {"exitCode":null,"signal":"SIGSEGV"}
+  ---
+  duration_ms: 0.053042
+  type: 'test'
+  ...
+# Subtest: rejects abnormal survival evidence {"exitCode":null,"signal":"SIGKILL"}
+ok 41 - rejects abnormal survival evidence {"exitCode":null,"signal":"SIGKILL"}
+  ---
+  duration_ms: 0.070042
+  type: 'test'
+  ...
+# Subtest: rejects abnormal survival evidence {"exitCode":0,"signal":"SIGTERM"}
+ok 42 - rejects abnormal survival evidence {"exitCode":0,"signal":"SIGTERM"}
+  ---
+  duration_ms: 0.078041
+  type: 'test'
+  ...
+# Subtest: rejects report fault: interruption
+ok 43 - rejects report fault: interruption
+  ---
+  duration_ms: 0.064167
+  type: 'test'
+  ...
+# Subtest: rejects report fault: cleanup failure
+ok 44 - rejects report fault: cleanup failure
+  ---
+  duration_ms: 0.049541
+  type: 'test'
+  ...
+# Subtest: rejects report fault: publication failure
+ok 45 - rejects report fault: publication failure
+  ---
+  duration_ms: 0.051917
+  type: 'test'
+  ...
+# Subtest: rejects report fault: wrong host
+ok 46 - rejects report fault: wrong host
+  ---
+  duration_ms: 0.056916
+  type: 'test'
+  ...
+# Subtest: rejects report fault: wrong architecture
+ok 47 - rejects report fault: wrong architecture
+  ---
+  duration_ms: 0.047208
+  type: 'test'
+  ...
+# Subtest: rejects report fault: wrong version
+ok 48 - rejects report fault: wrong version
+  ---
+  duration_ms: 0.06275
+  type: 'test'
+  ...
+# Subtest: rejects report fault: extra check
+ok 49 - rejects report fault: extra check
+  ---
+  duration_ms: 0.068125
+  type: 'test'
+  ...
+# Subtest: rejects report fault: too short
+ok 50 - rejects report fault: too short
+  ---
+  duration_ms: 0.0875
+  type: 'test'
+  ...
+# Subtest: rejects report fault: non-finite interval
+ok 51 - rejects report fault: non-finite interval
+  ---
+  duration_ms: 0.071916
+  type: 'test'
+  ...
+# Subtest: rejects report fault: unreaped
+ok 52 - rejects report fault: unreaped
+  ---
+  duration_ms: 0.091375
+  type: 'test'
+  ...
+# Subtest: rejects report fault: no workflow requirement
+ok 53 - rejects report fault: no workflow requirement
+  ---
+  duration_ms: 0.056833
+  type: 'test'
+  ...
+# Subtest: rejects report fault: wrong final path
+ok 54 - rejects report fault: wrong final path
+  ---
+  duration_ms: 0.056583
+  type: 'test'
+  ...
+# Subtest: rejects report fault: bad staging id
+ok 55 - rejects report fault: bad staging id
+  ---
+  duration_ms: 0.06475
+  type: 'test'
+  ...
+# Subtest: rejects report fault: bad hash
+ok 56 - rejects report fault: bad hash
+  ---
+  duration_ms: 0.070542
+  type: 'test'
+  ...
+# Subtest: rejects report fault: empty image
+ok 57 - rejects report fault: empty image
+  ---
+  duration_ms: 0.063625
+  type: 'test'
+  ...
+# Subtest: exact file pair and SHA-256 are checked using real temporary files
+ok 58 - exact file pair and SHA-256 are checked using real temporary files
+  ---
+  duration_ms: 27.146917
+  type: 'test'
+  ...
+# Subtest: upload rejects staging alias
+ok 59 - upload rejects staging alias
+  ---
+  duration_ms: 4.699125
+  type: 'test'
+  ...
+# Subtest: upload rejects missing image
+ok 60 - upload rejects missing image
+  ---
+  duration_ms: 2.122916
+  type: 'test'
+  ...
+# Subtest: upload rejects changed image
+ok 61 - upload rejects changed image
+  ---
+  duration_ms: 3.79025
+  type: 'test'
+  ...
+# Subtest: upload rejects changed sidecar
+ok 62 - upload rejects changed sidecar
+  ---
+  duration_ms: 2.019791
+  type: 'test'
+  ...
+# Subtest: upload rejects extra image
+ok 63 - upload rejects extra image
+  ---
+  duration_ms: 1.410125
+  type: 'test'
+  ...
+# Subtest: upload rejects extra sidecar
+ok 64 - upload rejects extra sidecar
+  ---
+  duration_ms: 1.759459
+  type: 'test'
+  ...
+# Subtest: upload rejects sidecar directory
+ok 65 - upload rejects sidecar directory
+  ---
+  duration_ms: 5.914
+  type: 'test'
+  ...
+# Subtest: upload CLI refuses a local process even with a purported successful report
+ok 66 - upload CLI refuses a local process even with a purported successful report
+  ---
+  duration_ms: 45.113583
+  type: 'test'
+  ...
+# Subtest: final report appears complete, exclusively, with workflow-success boundary
+ok 67 - final report appears complete, exclusively, with workflow-success boundary
+  ---
+  duration_ms: 10.8545
+  type: 'test'
+  ...
+# Subtest: interruption at before publishes failure, never earlier pass
+ok 68 - interruption at before publishes failure, never earlier pass
+  ---
+  duration_ms: 4.968291
+  type: 'test'
+  ...
+# Subtest: interruption at write publishes failure, never earlier pass
+ok 69 - interruption at write publishes failure, never earlier pass
+  ---
+  duration_ms: 19.578334
+  type: 'test'
+  ...
+# Subtest: interruption at sync publishes failure, never earlier pass
+ok 70 - interruption at sync publishes failure, never earlier pass
+  ---
+  duration_ms: 6.067916
+  type: 'test'
+  ...
+# Subtest: interruption at close publishes failure, never earlier pass
+ok 71 - interruption at close publishes failure, never earlier pass
+  ---
+  duration_ms: 5.646292
+  type: 'test'
+  ...
+# Subtest: interruption at yield publishes failure, never earlier pass
+ok 72 - interruption at yield publishes failure, never earlier pass
+  ---
+  duration_ms: 4.1995
+  type: 'test'
+  ...
+# Subtest: an earlier failed check cannot become a pass during publication
+ok 73 - an earlier failed check cannot become a pass during publication
+  ---
+  duration_ms: 7.79325
+  type: 'test'
+  ...
+# Subtest: asynchronous write failure leaves no final report
+ok 74 - asynchronous write failure leaves no final report
+  ---
+  duration_ms: 3.168625
+  type: 'test'
+  ...
+# Subtest: asynchronous sync failure leaves no final report
+ok 75 - asynchronous sync failure leaves no final report
+  ---
+  duration_ms: 1.573458
+  type: 'test'
+  ...
+# Subtest: asynchronous close failure leaves no final report
+ok 76 - asynchronous close failure leaves no final report
+  ---
+  duration_ms: 2.373416
+  type: 'test'
+  ...
+# Subtest: commit writeFileSync failure leaves no final report
+ok 77 - commit writeFileSync failure leaves no final report
+  ---
+  duration_ms: 9.769875
+  type: 'test'
+  ...
+# Subtest: commit fsyncSync failure leaves no final report
+ok 78 - commit fsyncSync failure leaves no final report
+  ---
+  duration_ms: 3.2475
+  type: 'test'
+  ...
+# Subtest: commit linkSync failure leaves no final report
+ok 79 - commit linkSync failure leaves no final report
+  ---
+  duration_ms: 3.953333
+  type: 'test'
+  ...
+# Subtest: existing and concurrently created final evidence is never overwritten
+ok 80 - existing and concurrently created final evidence is never overwritten
+  ---
+  duration_ms: 6.343208
+  type: 'test'
+  ...
+# Subtest: interruption observed immediately before final link rewrites prepared success
+ok 81 - interruption observed immediately before final link rewrites prepared success
+  ---
+  duration_ms: 4.44275
+  type: 'test'
+  ...
+# Subtest: unserializable evidence cannot publish a partial final record
+ok 82 - unserializable evidence cannot publish a partial final record
+  ---
+  duration_ms: 1.014625
+  type: 'test'
+  ...
+# Subtest: unused reservations hold no open file or pending artifact
+ok 83 - unused reservations hold no open file or pending artifact
+  ---
+  duration_ms: 2.282459
+  type: 'test'
+  ...
+# Subtest: successful publication leaves no staging alias capable of mutating final evidence
+ok 84 - successful publication leaves no staging alias capable of mutating final evidence
+  ---
+  duration_ms: 6.716
+  type: 'test'
+  ...
+# Subtest: alias removal failure rejects publication even when a checks record is linked
+ok 85 - alias removal failure rejects publication even when a checks record is linked
+  ---
+  duration_ms: 5.2105
+  type: 'test'
+  ...
+# Subtest: manual workflow requires validation and acceptance before upload
+ok 86 - manual workflow requires validation and acceptance before upload
+  ---
+  duration_ms: 1.534708
+  type: 'test'
+  ...
+# Subtest: workflow rejects automatic trigger
+ok 87 - workflow rejects automatic trigger
+  ---
+  duration_ms: 1.037792
+  type: 'test'
+  ...
+# Subtest: workflow rejects no test result propagation
+ok 88 - workflow rejects no test result propagation
+  ---
+  duration_ms: 0.268709
+  type: 'test'
+  ...
+# Subtest: workflow rejects omitted report tests
+ok 89 - workflow rejects omitted report tests
+  ---
+  duration_ms: 6.287291
+  type: 'test'
+  ...
+# Subtest: workflow rejects omitted acceptance tests
+ok 90 - workflow rejects omitted acceptance tests
+  ---
+  duration_ms: 0.358792
+  type: 'test'
+  ...
+# Subtest: workflow rejects wrong step id
+ok 91 - workflow rejects wrong step id
+  ---
+  duration_ms: 0.233875
+  type: 'test'
+  ...
+# Subtest: workflow rejects wrong outcome source
+ok 92 - workflow rejects wrong outcome source
+  ---
+  duration_ms: 0.158166
+  type: 'test'
+  ...
+# Subtest: workflow rejects unconditional upload
+ok 93 - workflow rejects unconditional upload
+  ---
+  duration_ms: 0.17325
+  type: 'test'
+  ...
+# Subtest: workflow rejects hidden validation failure
+ok 94 - workflow rejects hidden validation failure
+  ---
+  duration_ms: 0.52875
+  type: 'test'
+  ...
+# Subtest: workflow rejects missing failure logs
+ok 95 - workflow rejects missing failure logs
+  ---
+  duration_ms: 0.67275
+  type: 'test'
+  ...
+# Subtest: workflow rejects different evidence path
+ok 96 - workflow rejects different evidence path
+  ---
+  duration_ms: 0.227917
+  type: 'test'
+  ...
+# Subtest: selects exactly one correctly versioned arm64 DMG
+ok 97 - selects exactly one correctly versioned arm64 DMG
+  ---
+  duration_ms: 0.697375
+  type: 'test'
+  ...
+# Subtest: rejects missing/stale/ambiguous DMG:
+ok 98 - rejects missing/stale/ambiguous DMG:
+  ---
+  duration_ms: 0.197459
+  type: 'test'
+  ...
+# Subtest: rejects missing/stale/ambiguous DMG: old.dmg
+ok 99 - rejects missing/stale/ambiguous DMG: old.dmg
+  ---
+  duration_ms: 0.046583
+  type: 'test'
+  ...
+# Subtest: rejects missing/stale/ambiguous DMG: Syndocal_v_x86_64.dmg
+ok 100 - rejects missing/stale/ambiguous DMG: Syndocal_v_x86_64.dmg
+  ---
+  duration_ms: 0.042333
+  type: 'test'
+  ...
+# Subtest: rejects missing/stale/ambiguous DMG: one.dmg,two.dmg
+ok 101 - rejects missing/stale/ambiguous DMG: one.dmg,two.dmg
+  ---
+  duration_ms: 0.102208
+  type: 'test'
+  ...
+# Subtest: compares numeric minimum OS versions
+ok 102 - compares numeric minimum OS versions
+  ---
+  duration_ms: 0.1725
+  type: 'test'
+  ...
+# Subtest: validates bundle identity and minimum OS without treating it as runtime proof
+ok 103 - validates bundle identity and minimum OS without treating it as runtime proof
+  ---
+  duration_ms: 0.153375
+  type: 'test'
+  ...
+# Subtest: parses load commands including CRLF and legacy minimum OS
+ok 104 - parses load commands including CRLF and legacy minimum OS
+  ---
+  duration_ms: 1.443417
+  type: 'test'
+  ...
+# Subtest: rejects unparseable or contradictory Mach-O metadata 0
+ok 105 - rejects unparseable or contradictory Mach-O metadata 0
+  ---
+  duration_ms: 0.30375
+  type: 'test'
+  ...
+# Subtest: rejects unparseable or contradictory Mach-O metadata 265
+ok 106 - rejects unparseable or contradictory Mach-O metadata 265
+  ---
+  duration_ms: 0.307875
+  type: 'test'
+  ...
+# Subtest: rejects unparseable or contradictory Mach-O metadata 264
+ok 107 - rejects unparseable or contradictory Mach-O metadata 264
+  ---
+  duration_ms: 0.10525
+  type: 'test'
+  ...
+# Subtest: rejects unparseable or contradictory Mach-O metadata 230
+ok 108 - rejects unparseable or contradictory Mach-O metadata 230
+  ---
+  duration_ms: 0.052042
+  type: 'test'
+  ...
+# Subtest: rejects unparseable or contradictory Mach-O metadata 321
+ok 109 - rejects unparseable or contradictory Mach-O metadata 321
+  ---
+  duration_ms: 0.108334
+  type: 'test'
+  ...
+# Subtest: resolves bundled and dyld-cache system dependencies
+ok 110 - resolves bundled and dyld-cache system dependencies
+  ---
+  duration_ms: 0.366
+  type: 'test'
+  ...
+# Subtest: rejects wrong architecture
+ok 111 - rejects wrong architecture
+  ---
+  duration_ms: 0.101416
+  type: 'test'
+  ...
+# Subtest: rejects too-new library
+ok 112 - rejects too-new library
+  ---
+  duration_ms: 0.065042
+  type: 'test'
+  ...
+# Subtest: rejects missing dependency
+ok 113 - rejects missing dependency
+  ---
+  duration_ms: 0.08175
+  type: 'test'
+  ...
+# Subtest: rejects external dependency
+ok 114 - rejects external dependency
+  ---
+  duration_ms: 0.078209
+  type: 'test'
+  ...
+# Subtest: rejects external rpath
+ok 115 - rejects external rpath
+  ---
+  duration_ms: 0.648125
+  type: 'test'
+  ...
+# Subtest: rejects escaping rpath
+ok 116 - rejects escaping rpath
+  ---
+  duration_ms: 0.066875
+  type: 'test'
+  ...
+# Subtest: rejects orphan binary
+ok 117 - rejects orphan binary
+  ---
+  duration_ms: 0.225084
+  type: 'test'
+  ...
+# Subtest: inherits parent runpaths and resolves loader-relative dependencies
+ok 118 - inherits parent runpaths and resolves loader-relative dependencies
+  ---
+  duration_ms: 0.104083
+  type: 'test'
+  ...
+# Subtest: rejects ambiguous rpath resolution and system-path traversal
+ok 119 - rejects ambiguous rpath resolution and system-path traversal
+  ---
+  duration_ms: 0.528166
+  type: 'test'
+  ...
+# Subtest: cleanup detaches its exact mount then deletes only its owned directory
+ok 120 - cleanup detaches its exact mount then deletes only its owned directory
+  ---
+  duration_ms: 0.149666
+  type: 'test'
+  ...
+# Subtest: cleanup preserves evidence on unreaped
+ok 121 - cleanup preserves evidence on unreaped
+  ---
+  duration_ms: 0.294791
+  type: 'test'
+  ...
+# Subtest: cleanup preserves evidence on detach
+ok 122 - cleanup preserves evidence on detach
+  ---
+  duration_ms: 0.081583
+  type: 'test'
+  ...
+# Subtest: cleanup preserves evidence on unknown
+ok 123 - cleanup preserves evidence on unknown
+  ---
+  duration_ms: 0.054875
+  type: 'test'
+  ...
+# Subtest: cleanup preserves evidence on still_mounted
+ok 124 - cleanup preserves evidence on still_mounted
+  ---
+  duration_ms: 0.110834
+  type: 'test'
+  ...
+# Subtest: failed attach without a mount is cleaned without detach
+ok 125 - failed attach without a mount is cleaned without detach
+  ---
+  duration_ms: 0.067542
+  type: 'test'
+  ...
+# Subtest: runs a real child and records close/exit evidence
+ok 126 - runs a real child and records close/exit evidence
+  ---
+  duration_ms: 31.520167
+  type: 'test'
+  ...
+# Subtest: real child failure is not a pass: exit failure
+ok 127 - real child failure is not a pass: exit failure
+  ---
+  duration_ms: 23.864875
+  type: 'test'
+  ...
+# Subtest: real child failure is not a pass: early smoke exit
+ok 128 - real child failure is not a pass: early smoke exit
+  ---
+  duration_ms: 24.180333
+  type: 'test'
+  ...
+# Subtest: real child failure is not a pass: timeout
+ok 129 - real child failure is not a pass: timeout
+  ---
+  duration_ms: 104.685333
+  type: 'test'
+  ...
+# Subtest: real child failure is not a pass: output overflow
+ok 130 - real child failure is not a pass: output overflow
+  ---
+  duration_ms: 34.462084
+  type: 'test'
+  ...
+# Subtest: survival smoke terminates and reaps its own child
+ok 131 - survival smoke terminates and reaps its own child
+  ---
+  duration_ms: 153.848875
+  type: 'test'
+  ...
+# Subtest: missing command is a recorded failure
+ok 132 - missing command is a recorded failure
+  ---
+  duration_ms: 2.594375
+  type: 'test'
+  ...
+# Subtest: interruption fails the operation and reaps the owned child
+ok 133 - interruption fails the operation and reaps the owned child
+  ---
+  duration_ms: 52.535375
+  type: 'test'
+  ...
+# Subtest: failed OS termination retains ownership until close, not a detached success
+ok 134 - failed OS termination retains ownership until close, not a detached success
+  ---
+  duration_ms: 44.711875
+  type: 'test'
+  ...
+# Subtest: CLI rejects non-hosted execution, writes failure/not_run evidence, preserves existing report
+ok 135 - CLI rejects non-hosted execution, writes failure/not_run evidence, preserves existing report
+  ---
+  duration_ms: 116.087875
+  type: 'test'
+  ...
+# Subtest: mount metadata resolves normalized exact paths and rejects unknown shapes
+ok 136 - mount metadata resolves normalized exact paths and rejects unknown shapes
+  ---
+  duration_ms: 0.614583
+  type: 'test'
+  ...
+# Subtest: checksum success is required before publishing overall pass
+ok 137 - checksum success is required before publishing overall pass
+  ---
+  duration_ms: 0.560667
+  type: 'test'
+  ...
+# Subtest: checksum publication failure is recorded as failure, not earlier success
+ok 138 - checksum publication failure is recorded as failure, not earlier success
+  ---
+  duration_ms: 0.194
+  type: 'test'
+  ...
+# Subtest: final evidence cannot pass after earlier
+ok 139 - final evidence cannot pass after earlier
+  ---
+  duration_ms: 0.072458
+  type: 'test'
+  ...
+# Subtest: final evidence cannot pass after cleanup
+ok 140 - final evidence cannot pass after cleanup
+  ---
+  duration_ms: 0.04275
+  type: 'test'
+  ...
+# Subtest: final evidence cannot pass after interrupt_before
+ok 141 - final evidence cannot pass after interrupt_before
+  ---
+  duration_ms: 0.031209
+  type: 'test'
+  ...
+# Subtest: final evidence cannot pass after interrupt_during
+ok 142 - final evidence cannot pass after interrupt_during
+  ---
+  duration_ms: 0.044125
+  type: 'test'
+  ...
+# Subtest: survival rejects abnormal termination: 7/null
+ok 143 - survival rejects abnormal termination: 7/null
+  ---
+  duration_ms: 11.358209
+  type: 'test'
+  ...
+# Subtest: survival rejects abnormal termination: null/SIGSEGV
+ok 144 - survival rejects abnormal termination: null/SIGSEGV
+  ---
+  duration_ms: 11.030667
+  type: 'test'
+  ...
+# Subtest: survival rejects abnormal termination: null/SIGKILL
+ok 145 - survival rejects abnormal termination: null/SIGKILL
+  ---
+  duration_ms: 10.573708
+  type: 'test'
+  ...
+# Subtest: survival accepts requested termination: 0/null
+ok 146 - survival accepts requested termination: 0/null
+  ---
+  duration_ms: 10.043959
+  type: 'test'
+  ...
+# Subtest: survival accepts requested termination: null/SIGTERM
+ok 147 - survival accepts requested termination: null/SIGTERM
+  ---
+  duration_ms: 10.580375
+  type: 'test'
+  ...
+1..147
+# tests 147
+# suites 0
+# pass 147
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 857.720042

@@ -415,4 +415,3 @@ Staged 7 pinned FFmpeg DLLs in C:\Users\janua\.codex\worktrees\distribution-alph
     Finished 2 bundles at:
         C:\Users\janua\AppData\Local\Temp\syndocal-native-acceptance-target\release\bundle\nsis\Syndocal_1.2.0-alpha.70_x64-setup.exe
         C:\Users\janua\AppData\Local\Temp\syndocal-native-acceptance-target\release\bundle\msi\Syndocal_1.2.0-alpha.70_x64_ja-JP.msi
-

@@ -1,0 +1,17 @@
+
+7-Zip 26.02 (x64) : Copyright (c) 1999-2026 Igor Pavlov : 2026-06-25
+
+Scanning the drive for archives:
+1 file, 101168009 bytes (97 MiB)
+
+Testing archive: C:\Users\janua\Downloads\Syndocal-1.2.0-alpha.70\Syndocal_1.2.0-alpha.70_Windows-x64-install.zip
+--
+Path = C:\Users\janua\Downloads\Syndocal-1.2.0-alpha.70\Syndocal_1.2.0-alpha.70_Windows-x64-install.zip
+Type = zip
+Physical Size = 101168009
+
+Everything is Ok
+
+Files: 7
+Size:       101167137
+Compressed: 101168009

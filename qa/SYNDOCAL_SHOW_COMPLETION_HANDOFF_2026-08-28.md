@@ -2,7 +2,7 @@
 
 ## 2026-10-08 alpha.70 development installers
 
-Current product metadata is `1.2.0-alpha.70`. Windows x64 NSIS/MSI and macOS 12+ Apple Silicon DMG are being produced from base `97b9c6d3151a049e78ee92ac29254de5b7346e8f` on `codex/distribution-alpha70-20261008`. This is an unsigned development distribution; hardware, clean-machine, signing, notarization and complete product acceptance remain open. See [distribution evidence](DEVELOPMENT_INSTALLERS_ALPHA70_2026-10-08.md).
+Current product metadata is `1.2.0-alpha.70`. Windows x64 NSIS/MSI and macOS 12+ Apple Silicon DMG were produced from base `97b9c6d3151a049e78ee92ac29254de5b7346e8f` on `codex/distribution-alpha70-20261008`. This is an unsigned development distribution; hardware, clean-machine, signing, notarization and complete product acceptance remain open. See [distribution evidence](DEVELOPMENT_INSTALLERS_ALPHA70_2026-10-08.md).
 
 
 ## 2026-09-05 alpha.69 recording atomic-publication SOURCE CANDIDATE

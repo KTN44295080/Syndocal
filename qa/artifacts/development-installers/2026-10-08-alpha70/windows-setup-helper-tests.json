@@ -1,0 +1,58 @@
+{
+  "passed": true,
+  "cases": [
+    {
+      "name": "success",
+      "exitCode": 0,
+      "calls": [
+        "runtime",
+        "app"
+      ],
+      "passed": true
+    },
+    {
+      "name": "setup-cancel",
+      "exitCode": 1602,
+      "calls": [
+        "runtime",
+        "app"
+      ],
+      "passed": true
+    },
+    {
+      "name": "runtime-cancel",
+      "exitCode": 1,
+      "calls": [
+        "runtime"
+      ],
+      "passed": true
+    },
+    {
+      "name": "restart",
+      "exitCode": 3010,
+      "calls": [
+        "runtime"
+      ],
+      "passed": true
+    },
+    {
+      "name": "already-newer",
+      "exitCode": 0,
+      "calls": [
+        "runtime",
+        "app"
+      ],
+      "passed": true
+    },
+    {
+      "name": "already-too-old",
+      "exitCode": 1,
+      "calls": [
+        "runtime"
+      ],
+      "passed": true
+    }
+  ],
+  "noInstallerExecuted": true,
+  "helperSource": "C:\\Users\\janua\\.codex\\worktrees\\distribution-alpha70\\Syndocal\\tools\\distribution\\alpha70\\Install-Windows.ps1"
+}
