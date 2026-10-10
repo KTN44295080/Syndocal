@@ -119,8 +119,10 @@ mod native {
             return Err("Serial device has no USB ancestor".into());
         }
         let mut parent = IoObject(parent);
+        // io-kit-sys declares className mutable; supply writable, NUL-terminated bytes.
+        let mut usb_class = *b"IOUSBHostDevice\0";
         for _ in 0..32 {
-            if unsafe { IOObjectConformsTo(parent.0, c"IOUSBHostDevice".as_ptr()) } != 0 {
+            if unsafe { IOObjectConformsTo(parent.0, usb_class.as_mut_ptr().cast()) } != 0 {
                 return registry_id(parent.0);
             }
             let mut next = 0;
