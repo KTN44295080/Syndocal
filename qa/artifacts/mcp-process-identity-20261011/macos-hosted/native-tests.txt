@@ -1,0 +1,26 @@
+
+running 3 tests
+test process_identity_cli::tests::macos_kernel_path_matches_current_executable ... ok
+test process_identity_cli::tests::macos_reaped_process_has_no_inspectable_path ... ok
+test process_identity_cli::tests::malformed_inspection_never_becomes_normal_startup ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+[1m[92m    Updating[0m crates.io index
+[1m[92m     Locking[0m 11 packages to latest Rust 1.97.1 compatible versions
+[1m[92m      Adding[0m serde_json v1.0.150 [1m[33m(available: v1.0.152)[0m
+[1m[92m Downloading[0m crates ...
+[1m[92m  Downloaded[0m zmij v1.0.23
+[1m[92m  Downloaded[0m serde_core v1.0.229
+[1m[92m  Downloaded[0m itoa v1.0.18
+[1m[92m  Downloaded[0m memchr v2.8.3
+[1m[92m  Downloaded[0m serde_json v1.0.150
+[1m[92m   Compiling[0m serde_core v1.0.229
+[1m[92m   Compiling[0m zmij v1.0.23
+[1m[92m   Compiling[0m serde_json v1.0.150
+[1m[92m   Compiling[0m memchr v2.8.3
+[1m[92m   Compiling[0m itoa v1.0.18
+[1m[92m   Compiling[0m syndocal-process-identity-fixture v0.0.0 (/private/var/folders/nj/vtw8zd2j31d1gdrtntc5y4600000gn/T/syndocal-process-identity-R7mwme)
+[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 5.99s
+[1m[92m     Running[0m unittests src/main.rs (/var/folders/nj/vtw8zd2j31d1gdrtntc5y4600000gn/T/syndocal-process-identity-R7mwme/target/debug/deps/syndocal_process_identity_fixture-8c11ae24af84740a)
+PASS macOS libproc identity, malformed CLI, exact-PID/path, authenticated forwarding and retired/mismatched process rejection; software fixture only.

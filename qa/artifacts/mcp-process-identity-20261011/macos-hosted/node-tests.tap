@@ -1,0 +1,52 @@
+TAP version 13
+# Subtest: only Windows folds executable path case
+ok 1 - only Windows folds executable path case
+  ---
+  duration_ms: 0.569042
+  type: 'test'
+  ...
+# Subtest: production inspection exits before Engine/Tauri initialization
+ok 2 - production inspection exits before Engine/Tauri initialization
+  ---
+  duration_ms: 17.54575
+  type: 'test'
+  ...
+# Subtest: macOS response binds exact PID, schema and complete absolute UTF-8 path
+ok 3 - macOS response binds exact PID, schema and complete absolute UTF-8 path
+  ---
+  duration_ms: 0.640541
+  type: 'test'
+  ...
+# Subtest: macOS launches only selected binary with fixed read-only args and bounded output
+ok 4 - macOS launches only selected binary with fixed read-only args and bounded output
+  ---
+  duration_ms: 0.630583
+  type: 'test'
+  ...
+# Subtest: inspection failure, unsupported platform and invalid PID never fall back
+ok 5 - inspection failure, unsupported platform and invalid PID never fall back
+  ---
+  duration_ms: 0.74225
+  type: 'test'
+  ...
+# Subtest: Linux keeps its exact kernel executable query
+ok 6 - Linux keeps its exact kernel executable query
+  ---
+  duration_ms: 0.082959
+  type: 'test'
+  ...
+# Subtest: Linux rejects distinct case-only executables before broker forwarding
+ok 7 - Linux rejects distinct case-only executables before broker forwarding # SKIP
+  ---
+  duration_ms: 0.045041
+  type: 'test'
+  ...
+1..7
+# tests 7
+# suites 0
+# pass 6
+# fail 0
+# cancelled 0
+# skipped 1
+# todo 0
+# duration_ms 110.76475

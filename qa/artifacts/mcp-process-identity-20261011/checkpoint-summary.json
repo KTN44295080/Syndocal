@@ -19,6 +19,8 @@
   "nativeCliRejections": 3,
   "normalNativeWindowPassed": true,
   "ownedCandidateClosedGracefully": true,
-  "macosHostedStatus": "pending until pushed",
-  "hardwareAccepted": false
+  "macosHostedStatus": "success: run 38086505139 at source 3a901baeddb820e8a62c668e07cc42b4ddf60346",
+  "hardwareAccepted": false,
+  "macosNativeRustPassed": 3,
+  "macosNodePassed": 6
 }
