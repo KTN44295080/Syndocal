@@ -1,6 +1,6 @@
 # Syndocal MCP adapter
 
-Dependency-free Node.js sidecar for a running Syndocal agent bridge. It exposes fixture listing, fixture reading, exact-project fixture transforms, exact-project Video BO control, request-status lookup, bounded runtime diagnostics, canonical backend capability discovery, read-only recording status, and the 66 reviewed canonical control-plane operations. It does not open devices, start Syndocal, or bypass the backend's output ownership, lease, safety, or typed-command checks.
+Dependency-free Node.js sidecar for a running Syndocal agent bridge. It exposes fixture listing, fixture reading, exact-project fixture transforms, exact-project Video BO control, request-status lookup, bounded runtime diagnostics, canonical backend capability discovery, read-only recording status, and the 72 reviewed canonical control-plane operations. It does not open devices, start Syndocal, or bypass the backend's output ownership, lease, safety, or typed-command checks.
 
 ## Start
 
@@ -64,12 +64,12 @@ On Windows, process identity is read through a fixed, hidden PowerShell `Get-Pro
 - `syndocal_list_fixtures({})`: read fixtures and the current project identity.
 - `syndocal_get_fixture({fixtureId})`: read one fixture and project identity.
 - `syndocal_set_fixture_transform({requestId, fixtureId, position, rotation, expectedProject})`: send one complete transform with a caller-supplied UUID and the exact project identity returned by a read.
-- `syndocal_set_video_blackout({requestId, enabled, expectedProject})`: set Video BO with a caller-supplied UUID and the exact project identity returned by a read. It requires both lighting and video output ownership to already be active; disabling may reveal that existing output and never arms, acquires, or enables output.
+- `syndocal_set_video_blackout({requestId, enabled, expectedProject})`: set Video BO with a caller-supplied UUID and the exact project identity returned by a read. It requires exactly one active Both output lease; disabling may reveal existing output and never arms, acquires, or enables output. The immutable broker request executes through the canonical native output command and verifies the committed Video BO bit against the exact receipt successor. Its original external grant is rechecked after the commit locks; no GUI refresh hook or per-operation confirmation is required. See [native acceptance](../../qa/MCP_VIDEO_BLACKOUT_NATIVE_2026-10-10.md).
 - `syndocal_get_request_status({requestId})`: query the original request UUID.
 - `syndocal_get_runtime_status({})`: read the project token, lighting/video blackout bits, up to 64 video-output summaries, Timeline transport state, the exact `timeline_runtime` projection, and a separate `observations.output_ownership_status` read. The authority bundle and ownership observation are captured by separate reads and must not be treated as one atomic image.
 - `syndocal_get_control_plane_capabilities({})`: read a bounded projection of the backend-owned canonical operation/source inventory and exact local adapter policy. `FailClosed` entries are discovery-only and cannot be invoked through MCP.
 - `syndocal_get_recording_status({})`: read bounded active recording, dimensions, frame/drop counters, audio inclusion, path, and last-error state. It never starts, stops, finalizes, or replaces a recording.
-- `syndocal_execute_control_plane({requestId,operationId,request})`: execute one of the 66 reviewed canonical operations through a static typed Tauri adapter. `operationId` must be present in the capability registry and `request` must be that operation's exact typed request object. Unreviewed or `FailClosed` inventory entries are rejected.
+- `syndocal_execute_control_plane({requestId,operationId,request})`: execute one of the 72 reviewed canonical operations through a static typed Tauri adapter. `operationId` must be present in the capability registry and `request` must be that operation's exact typed request object. Unreviewed or `FailClosed` inventory entries are rejected.
 
 Project file operations take `request: {request: <typed body>}`. Use
 `syndocal.query.project.file.authority.v1` with

@@ -1,0 +1,21 @@
+node:internal/modules/run_main:123
+    triggerUncaughtException(
+    ^
+
+AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
++ actual - expected
+
++ undefined
+- false
+
+    at nativeVideoBlackout (file:///C:/Users/janua/.codex/worktrees/distribution-alpha70/Syndocal/tools/syndocal-mcp/native-video-blackout.mjs:103:12)
+    at async file:///C:/Users/janua/.codex/worktrees/distribution-alpha70/Syndocal/tools/syndocal-mcp/check-native-lifecycle.mjs:304:77 {
+  generatedMessage: true,
+  code: 'ERR_ASSERTION',
+  actual: undefined,
+  expected: false,
+  operator: 'strictEqual',
+  diff: 'simple'
+}
+
+Node.js v22.22.1

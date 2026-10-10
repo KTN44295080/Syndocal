@@ -1,0 +1,42 @@
+file:///C:/Users/janua/.codex/worktrees/distribution-alpha70/Syndocal/tools/syndocal-mcp/native-video-blackout.mjs:101
+    if(cleanupErrors.length)throw new AggregateError(failure?[failure,...cleanupErrors]:cleanupErrors,'Video BO acceptance/cleanup failed');
+                                  ^
+
+AggregateError: Video BO acceptance/cleanup failed
+    at nativeVideoBlackout (file:///C:/Users/janua/.codex/worktrees/distribution-alpha70/Syndocal/tools/syndocal-mcp/native-video-blackout.mjs:101:35)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async file:///C:/Users/janua/.codex/worktrees/distribution-alpha70/Syndocal/tools/syndocal-mcp/check-native-lifecycle.mjs:304:77 {
+  [errors]: [
+    AssertionError [ERR_ASSERTION]: {"requestId":"0a3da14c-b3f3-41b4-8e67-a5482a5d9d49","status":"completed","result":{"ok":false,"operation_id":"syndocal.output.blackout.set.v2","result":{"rejection":{"error":"internal","operation_id":"syndocal.output.blackout.set.v2","request_id":4694918298487206},"type":"rejected"}}}
+
+    false !== true
+
+        at nativeVideoBlackout (file:///C:/Users/janua/.codex/worktrees/distribution-alpha70/Syndocal/tools/syndocal-mcp/native-video-blackout.mjs:70:14)
+        at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+        at async file:///C:/Users/janua/.codex/worktrees/distribution-alpha70/Syndocal/tools/syndocal-mcp/check-native-lifecycle.mjs:304:77 {
+      generatedMessage: false,
+      code: 'ERR_ASSERTION',
+      actual: false,
+      expected: true,
+      operator: 'strictEqual',
+      diff: 'simple'
+    },
+    AssertionError [ERR_ASSERTION]: {"requestId":"f7fdd1b6-f1a8-4f5c-88a1-778079ce108b","status":"completed","result":{"ok":false,"operation_id":"syndocal.output.lease.relinquish.v2","result":{"rejection":{"error":"invalid_request","operation_id":"syndocal.output.lease.relinquish.v2","request_id":6},"type":"rejected"}}}
+
+    false !== true
+
+        at canonicalAccepted (file:///C:/Users/janua/.codex/worktrees/distribution-alpha70/Syndocal/tools/syndocal-mcp/native-video-blackout.mjs:17:44)
+        at nativeVideoBlackout (file:///C:/Users/janua/.codex/worktrees/distribution-alpha70/Syndocal/tools/syndocal-mcp/native-video-blackout.mjs:97:18)
+        at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+        at async file:///C:/Users/janua/.codex/worktrees/distribution-alpha70/Syndocal/tools/syndocal-mcp/check-native-lifecycle.mjs:304:77 {
+      generatedMessage: false,
+      code: 'ERR_ASSERTION',
+      actual: false,
+      expected: true,
+      operator: 'strictEqual',
+      diff: 'simple'
+    }
+  ]
+}
+
+Node.js v22.22.1

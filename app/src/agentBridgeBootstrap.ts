@@ -9,14 +9,13 @@ export function startDeferredAgentBridge(
   listen: Parameters<typeof startAgentBridgeRuntime>[1],
   report: Parameters<typeof startAgentBridgeRuntime>[2],
   transport: FrontendTauriInvoke,
-  effects: Parameters<typeof startAgentBridgeRuntime>[4],
   load: () => Promise<BridgeModule> = () => import("./agentBridgeRuntime"),
 ) {
   let disposed = false;
   let bridge: ReturnType<typeof startAgentBridgeRuntime> | undefined;
   const ready = load().then(module => {
     if (disposed) return;
-    bridge = module.startAgentBridgeRuntime(invoke, listen, report, transport, effects);
+    bridge = module.startAgentBridgeRuntime(invoke, listen, report, transport);
     return bridge.ready;
   }).catch(error => {
     if (!disposed) report(`Agent bridge unavailable: ${String(error)}`);

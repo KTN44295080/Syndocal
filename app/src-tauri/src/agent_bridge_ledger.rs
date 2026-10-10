@@ -285,7 +285,9 @@ impl Ledger {
         {
             return Err("request_not_executable".to_string());
         }
-        if !matches!(entry.dispatch.method.as_str(), "control_plane.execute" | "diagnostics.export") {
+        if !matches!(entry.dispatch.method.as_str(),
+            "control_plane.execute" | "diagnostics.export" | "output.set_video_blackout")
+        {
             return Err("native_operation_not_supported".to_string());
         }
         entry.native_execution_started = true;

@@ -1,0 +1,1 @@
+PASS 16 adapter integration groups; hostile stdio corpus: 128 rejected; fake loopback only, no Syndocal/device calls

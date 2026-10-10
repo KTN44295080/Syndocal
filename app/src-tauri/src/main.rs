@@ -53,6 +53,7 @@ mod diagnostic_audit_capture;
 mod project_file_audit;
 mod agent_attempt_audit;
 mod agent_bridge_timeline;
+mod agent_bridge_output;
 mod diagnostic_package_publication;
 mod diagnostic_export_workflow;
 mod diagnostic_export_session;
@@ -57730,7 +57731,11 @@ fn managed_exact_both_route_request(
     };
     OutputLeaseRequest::from_action(
         request.key.principal.clone(),
-        OUTPUT_LEASE_MANAGED_EXACT_BOTH_INTERNAL_DOMAIN,
+        if request.key.domain == agent_bridge_output::RECEIPT_DOMAIN {
+            agent_bridge_output::MANAGED_RECEIPT_DOMAIN
+        } else {
+            OUTPUT_LEASE_MANAGED_EXACT_BOTH_INTERNAL_DOMAIN
+        },
         request.key.request_id,
         OutputLeaseRequestAction::AuthorizeManagedExactBoth {
             lease_id,
@@ -60579,11 +60584,13 @@ fn validate_output_lease_receipt_state(
                 "Output-lease receipt state has unexpected managed exact-Both terminal operation at index {index}"
             ));
         }
-        if !state.receipts.iter().any(|lease_receipt| {
+        if state.receipts.iter().filter(|lease_receipt| {
             lease_receipt.key.principal == terminal.principal
-                && lease_receipt.key.domain == OUTPUT_LEASE_OUTPUT_CONTROL_DOMAIN
+                && agent_bridge_output::receipt_domain_matches_operation(
+                    &lease_receipt.key.domain, &receipt.operation_id,
+                )
                 && lease_receipt.key.request_id == receipt.request_id
-        }) {
+        }).count() != 1 {
             return Err(format!(
                 "Output-lease receipt state has managed exact-Both public terminal without its canonical public lease receipt at index {index}"
             ));
@@ -60631,7 +60638,9 @@ fn validate_output_lease_receipt_state(
             )
         })?;
         if pending.private_receipt.key.principal != pending.principal
-            || pending.private_receipt.key.domain != OUTPUT_LEASE_OUTPUT_CONTROL_DOMAIN
+            || !agent_bridge_output::receipt_domain_matches_operation(
+                &pending.private_receipt.key.domain, &pending.operation_id,
+            )
             || pending.private_receipt.key.request_id != pending.request_id
         {
             return Err(format!(
@@ -60642,7 +60651,9 @@ fn validate_output_lease_receipt_state(
             receipt.key == pending.private_receipt.key
                 || receipt.key.request_id == pending.request_id
                     && receipt.key.principal == pending.principal
-                    && receipt.key.domain == OUTPUT_LEASE_OUTPUT_CONTROL_DOMAIN
+                    && agent_bridge_output::receipt_domain_matches_operation(
+                        &receipt.key.domain, &pending.operation_id,
+                    )
         }) || state.pending.iter().any(|receipt| receipt.key == pending.private_receipt.key)
         {
             return Err(format!(
@@ -76040,6 +76051,7 @@ fn validate_current_show_spout_outputs_reset_action(state: &AppState) -> Result<
 /// project admission/owner/fence boundary, validates the entire exact pair
 /// before mutation, retires physical senders first when present, then
 /// reconciles the authored checkpoint so a changed output graph advances B.
+#[cfg(test)]
 fn reset_show_spout_outputs_without_output_lease(
     state: &AppState,
     expected_fence: &OutputControlFenceV1,
@@ -76047,6 +76059,21 @@ fn reset_show_spout_outputs_without_output_lease(
     expected_owner_window_label: &str,
     expected_owner_incarnation: u64,
 ) -> Result<(bool, OutputControlFenceV1), String> {
+    reset_show_spout_outputs_without_output_lease_authorized(
+        state, expected_fence, expected_owner_principal, expected_owner_window_label,
+        expected_owner_incarnation, &|| Ok(()),
+    )
+}
+
+fn reset_show_spout_outputs_without_output_lease_authorized(
+    state: &AppState,
+    expected_fence: &OutputControlFenceV1,
+    expected_owner_principal: &str,
+    expected_owner_window_label: &str,
+    expected_owner_incarnation: u64,
+    authorize: &dyn Fn() -> Result<(), String>,
+) -> Result<(bool, OutputControlFenceV1), String> {
+    authorize()?;
     #[cfg(not(all(feature = "spout", target_os = "windows", target_arch = "x86_64")))]
     {
         let _ = (
@@ -76062,13 +76089,14 @@ fn reset_show_spout_outputs_without_output_lease(
     }
     #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
     {
-        reset_show_spout_outputs_without_output_lease_with_physical_retirement(
+        reset_show_spout_outputs_without_output_lease_with_physical_retirement_authorized(
             state,
             expected_fence,
             expected_owner_principal,
             expected_owner_window_label,
             expected_owner_incarnation,
             retire_show_spout_outputs_for_authority_change,
+            authorize,
         )
     }
 }
@@ -76077,7 +76105,7 @@ fn reset_show_spout_outputs_without_output_lease(
 /// the Windows x64 Spout route. `retire_physical` is production's detached
 /// sender stop/join boundary; keeping it explicit makes the physical-before-
 /// engine ordering testable without constructing an SDK sender in unit tests.
-#[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+#[cfg(all(test, feature = "spout", target_os = "windows", target_arch = "x86_64"))]
 fn reset_show_spout_outputs_without_output_lease_with_physical_retirement<F>(
     state: &AppState,
     expected_fence: &OutputControlFenceV1,
@@ -76085,6 +76113,25 @@ fn reset_show_spout_outputs_without_output_lease_with_physical_retirement<F>(
     expected_owner_window_label: &str,
     expected_owner_incarnation: u64,
     retire_physical: F,
+) -> Result<(bool, OutputControlFenceV1), String>
+where
+    F: FnOnce(&AppState) -> Result<(), String>,
+{
+    reset_show_spout_outputs_without_output_lease_with_physical_retirement_authorized(
+        state, expected_fence, expected_owner_principal, expected_owner_window_label,
+        expected_owner_incarnation, retire_physical, &|| Ok(()),
+    )
+}
+
+#[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
+fn reset_show_spout_outputs_without_output_lease_with_physical_retirement_authorized<F>(
+    state: &AppState,
+    expected_fence: &OutputControlFenceV1,
+    expected_owner_principal: &str,
+    expected_owner_window_label: &str,
+    expected_owner_incarnation: u64,
+    retire_physical: F,
+    authorize: &dyn Fn() -> Result<(), String>,
 ) -> Result<(bool, OutputControlFenceV1), String>
 where
     F: FnOnce(&AppState) -> Result<(), String>,
@@ -76101,6 +76148,7 @@ where
                 .to_string()
         })?;
     let mut coordinator = lock_project_coordinator(state)?;
+    authorize()?; // Final external grant check after lifecycle/admission/owner/coordinator waits.
     if reconcile_project_checkpoint_for_coordinator(state, &mut coordinator).is_err()
         || !control_plane_runtime::exact_output_control_owner_matches(
             state,
@@ -95163,7 +95211,7 @@ pub(crate) mod tests {
     fn show_spout_reset_uses_the_narrow_video_projection_reader() {
         let source = include_str!("main.rs");
         let function_start = source
-            .find("fn reset_show_spout_outputs_without_output_lease_with_physical_retirement<")
+            .find("fn reset_show_spout_outputs_without_output_lease_with_physical_retirement_authorized<")
             .expect("missing show Spout reset core");
         let function_end = source[function_start..]
             .find(

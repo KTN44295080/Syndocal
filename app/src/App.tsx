@@ -17405,8 +17405,7 @@ export default function App() {
     inFlightAuthorityPoll: () => projectAuthorityPollInFlight,
     pollProjectAuthorityBundle,
   });
-  mountAgentBridge(isTauriRuntime() && !paneWindow, invoke, setMessage,
-    refreshProjectAuthorityAfterTargetBlackout, refreshSnapshot);
+  mountAgentBridge(isTauriRuntime() && !paneWindow, invoke, setMessage);
 
   const invokeSafetyBlackoutRuntime = async <T,>(
     command: FrontendTauriInvokeCommand,

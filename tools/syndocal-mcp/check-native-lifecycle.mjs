@@ -26,10 +26,16 @@ import { nativeProjectBackupRestore } from './native-project-backup-restore.mjs'
 import { nativeFileQueryPressure } from './native-file-query-pressure.mjs';
 import { nativeCanonicalRiskAdmission } from './native-canonical-risk-admission.mjs';
 import { nativeTimelineCommands, nativeTimelineRevocation } from './native-timeline-commands.mjs';
+import { nativeVideoBlackout, nativeVideoBlackoutRevocation } from './native-video-blackout.mjs';
 
 const exec = promisify(execFile);
 const args = process.argv.slice(2);
 let timelineCloseDirectory;
+const videoBlackout=args.includes('--video-blackout');
+if(videoBlackout){
+  args.splice(args.indexOf('--video-blackout'),1);
+  assert.ok(args.filter(arg=>arg.startsWith('--')).every(arg=>['--profile','--expected-executable','--cdp-port','--evidence'].includes(arg)),'Video BO owns its separate native/loopback fixture lane');
+}
 const timelineCommands = args.includes('--timeline-commands');
 if (timelineCommands) {
   args.splice(args.indexOf('--timeline-commands'), 1);
@@ -156,10 +162,13 @@ const profileId = args.includes('--profile') ? take('--profile') : 'jp.seraf.ktn
 assert.ok(['jp.seraf.ktn.syndocal.qa.mcp-lifecycle',
   'jp.seraf.ktn.syndocal.qa.mcp-lifecycle.backup-restore-20261005',
   'jp.seraf.ktn.syndocal.qa.mcp-lifecycle.backup-delete-20261006',
-  'jp.seraf.ktn.syndocal.qa.mcp-lifecycle.timeline-commands-20261007'].includes(profileId), 'Only checked-in private QA profiles allowed');
+  'jp.seraf.ktn.syndocal.qa.mcp-lifecycle.timeline-commands-20261007',
+  'jp.seraf.ktn.syndocal.qa.mcp-lifecycle.video-blackout-20261007'].includes(profileId), 'Only checked-in private QA profiles allowed');
 if (timelineCommands) assert.equal(profileId,'jp.seraf.ktn.syndocal.qa.mcp-lifecycle.timeline-commands-20261007');
 else assert.notEqual(profileId,'jp.seraf.ktn.syndocal.qa.mcp-lifecycle.timeline-commands-20261007',
   'The Timeline profile belongs only to its explicit command-proof mode');
+if(videoBlackout)assert.equal(profileId,'jp.seraf.ktn.syndocal.qa.mcp-lifecycle.video-blackout-20261007');
+else assert.notEqual(profileId,'jp.seraf.ktn.syndocal.qa.mcp-lifecycle.video-blackout-20261007','Video BO profile requires its explicit native proof mode');
 assert.equal(args.length, 0);
 assert.equal(process.platform, 'win32');
 assert.ok(path.isAbsolute(executable) && path.isAbsolute(evidence));
@@ -292,6 +301,7 @@ try {
   options.credentialFile = path.join(credentialDirectory, 'credential');
   await pair(); await install();
   if (timelineCommands) await nativeTimelineCommands(backend, options, checks);
+  if(videoBlackout){await nativeControllerOutput(backend,options,checks,{});await nativeVideoBlackout(backend,options,checks);}
   if (fileQueryPressure) await nativeFileQueryPressure(backend, options, checks);
   if (projectReplacement) await nativeProjectReplacement(backend, options, checks);
   if (projectBackup) await nativeCanonicalRiskAdmission(backend, options, checks);
@@ -399,6 +409,10 @@ try {
   if (timelineCommands) {
     timelineCloseDirectory=await fs.mkdtemp(path.join(os.tmpdir(),'syndocal-timeline-close-'));
     await nativeTimelineRevocation(backend, options, checks, timelineCloseDirectory);
+  }
+  if(videoBlackout){
+    timelineCloseDirectory=await fs.mkdtemp(path.join(os.tmpdir(),'syndocal-timeline-close-'));
+    await nativeVideoBlackoutRevocation(backend,options,checks,timelineCloseDirectory);
   }
   await backend.invoke('agent_authority_revoke_v1', { principalId, principalIncarnation: approval.principalIncarnation });
   cleanupNeeded = false;
@@ -527,6 +541,13 @@ await fs.writeFile(evidence, `${JSON.stringify({ schemaVersion: 1, timestamp: ne
     backupRestoreHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-project-backup-restore.mjs', import.meta.url))).digest('hex'),
     backupRestorePolicySha256: createHash('sha256').update(await fs.readFile(new URL('../../app/src-tauri/src/project_backup_restoration.rs', import.meta.url))).digest('hex'),
   } : {}),
+  ...(videoBlackout?{videoBlackoutHarnessSha256:createHash('sha256').update(await fs.readFile(new URL('./native-video-blackout.mjs',import.meta.url))).digest('hex'),
+    videoBlackoutLedgerSha256:createHash('sha256').update(await fs.readFile(new URL('../../app/src-tauri/src/agent_bridge_ledger.rs',import.meta.url))).digest('hex'),
+    videoBlackoutCommitSha256:createHash('sha256').update(await fs.readFile(new URL('../../app/src-tauri/src/output_blackout_control.rs',import.meta.url))).digest('hex'),
+    videoBlackoutAdapterSha256:createHash('sha256').update(await fs.readFile(new URL('../../app/src-tauri/src/agent_bridge_output.rs',import.meta.url))).digest('hex'),
+    videoBlackoutDomainSha256:createHash('sha256').update(await fs.readFile(new URL('../../app/src-tauri/src/control_plane_runtime.rs',import.meta.url))).digest('hex'),
+    videoBlackoutMainSha256:createHash('sha256').update(await fs.readFile(new URL('../../app/src-tauri/src/main.rs',import.meta.url))).digest('hex'),
+    controllerOutputHarnessSha256:createHash('sha256').update(await fs.readFile(new URL('./native-controller-output.mjs',import.meta.url))).digest('hex')}:{}),
   ...(timelineCommands ? {
     timelineCommandsHarnessSha256: createHash('sha256').update(await fs.readFile(new URL('./native-timeline-commands.mjs',import.meta.url))).digest('hex'),
     timelineCommandsAdapterSha256: createHash('sha256').update(await fs.readFile(new URL('../../app/src-tauri/src/agent_bridge_timeline.rs',import.meta.url))).digest('hex'),

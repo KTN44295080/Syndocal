@@ -19,13 +19,28 @@ use std::{
 #[path = "output_blackout_project_commit.rs"]
 mod project_commit;
 
-pub(crate) fn set_blackout_with_output_control_fence(
+#[cfg(test)]
+fn set_blackout_with_output_control_fence(
     state: &AppState,
     target: OutputControlTargetRoleV1,
     enabled: bool,
     expected_fence: &OutputControlFenceV1,
     lease_request: &OutputLeaseRequest,
     managed_terminal_identity: Option<ManagedExactBothOutputControlTerminalIdentity<'_>>,
+) -> Result<(bool, OutputControlFenceV1, OutputLeaseRequestReceipt), String> {
+    set_blackout_with_output_control_fence_authorized(
+        state, target, enabled, expected_fence, lease_request, managed_terminal_identity, &|| Ok(()),
+    )
+}
+
+pub(crate) fn set_blackout_with_output_control_fence_authorized(
+    state: &AppState,
+    target: OutputControlTargetRoleV1,
+    enabled: bool,
+    expected_fence: &OutputControlFenceV1,
+    lease_request: &OutputLeaseRequest,
+    managed_terminal_identity: Option<ManagedExactBothOutputControlTerminalIdentity<'_>>,
+    authorize: &dyn Fn() -> Result<(), String>,
 ) -> Result<(bool, OutputControlFenceV1, OutputLeaseRequestReceipt), String> {
     let _lifecycle = state
         .standby_sync_lifecycle
@@ -79,6 +94,8 @@ pub(crate) fn set_blackout_with_output_control_fence(
     let mut registry = state.output_lease_registry.lock().map_err(|_| {
         "Output lease registry lock was poisoned before target blackout".to_string()
     })?;
+    // Actual commit boundary: the lifecycle/project/engine writer/lease waits are over.
+    authorize()?;
     let now = state.output_lease_now_ms()?;
     let publication = submit_output_lease_candidate_with_classified_commit_and_durable_record_for_pending_window_inner(
         state, &mut registry, candidate_request, managed_authorization.as_ref(),

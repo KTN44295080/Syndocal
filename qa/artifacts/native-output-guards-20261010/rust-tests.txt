@@ -1,0 +1,60 @@
+**********************************************************************
+** Visual Studio 2022 Developer Command Prompt v17.14.39
+** Copyright (c) 2025 Microsoft Corporation
+**********************************************************************
+[vcvarsall.bat] Environment initialized for: 'x64'
+C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+   Compiling syndocal v1.2.0-alpha.71 (C:\Users\janua\.codex\worktrees\distribution-alpha70\Syndocal\app\src-tauri)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 38s
+     Running unittests src\main.rs (C:\Users\janua\AppData\Local\Temp\syndocal-native-acceptance-target\debug\deps\syndocal-6b50d6ab7d78e79d.exe)
+
+running 22 tests
+test agent_bridge_execution::tests::diagnostic_capture_revocation_blocks_publication_without_replaying_capture ... ok
+test agent_bridge::tests::agent_bridge_wire_auth_methods_and_bounds_are_strict ... ok
+test control_plane_runtime::agent_bridge_output_runtime_guard_tests::native_video_blackout_identity_scope_preserves_next_gui_id_and_rejects_old_native_ids ... ok
+test agent_bridge::tests::agent_bridge_video_blackout_native_execution_preserves_immutable_owner_and_is_single_use ... ok
+test agent_bridge::tests::agent_bridge_receipts_and_replays_are_bound_to_exact_owner ... ok
+test agent_bridge::tests::agent_bridge_reload_fences_late_completion_and_does_not_replay ... ok
+test agent_bridge::tests::agent_bridge_native_execution_requires_current_claim_and_is_single_use ... ok
+test agent_bridge::tests::agent_bridge_claim_is_exact_once_and_replay_never_dispatches_twice ... ok
+test agent_bridge::tests::agent_bridge_video_blackout_is_a_deduplicated_mutation ... ok
+test agent_bridge::tests::agent_bridge_process_requires_nonce_proof_and_exact_external_grant ... ok
+test agent_bridge::tests::agent_bridge_wire_hostile_request_corpus_is_bounded_and_panic_free ... ok
+test agent_bridge::tests::agent_bridge_capacity_preserves_inflight_and_mutation_tombstones ... ok
+test agent_bridge::tests::agent_bridge_oversize_result_cannot_be_reported_completed ... ok
+test agent_bridge::tests::agent_bridge_legacy_unbound_tombstone_remains_a_replay_fence ... ok
+test agent_bridge_output::agent_bridge_output_guard_tests::video_blackout_original_contract_rejects_extra_or_noncanonical_identity ... ok
+test agent_bridge_output::agent_bridge_output_guard_tests::video_blackout_native_preparation_refuses_stale_project_and_absent_active_both_lease ... ok
+test agent_bridge_output::agent_bridge_output_guard_tests::reset_final_external_authorization_denial_precedes_physical_retirement_after_real_locks ... ok
+test control_plane_runtime::agent_bridge_timeline_guard_tests::external_loop_final_authorization_denial_prevents_capability_consumption_and_publication ... ok
+test control_plane_runtime::agent_bridge_timeline_guard_tests::external_transport_final_authorization_denial_prevents_publication_and_replay_reentry ... ok
+test agent_bridge::tests::agent_bridge_restart_retains_mutation_identity_without_automatic_replay ... ok
+test agent_bridge::tests::agent_bridge_canonical_reads_are_not_persisted_mutations_but_writes_are ... ok
+test agent_bridge::tests::agent_bridge_video_blackout_mutation_survives_reload_without_redispatch ... ok
+
+test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 2038 filtered out; finished in 0.02s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.65s
+     Running unittests src\main.rs (C:\Users\janua\AppData\Local\Temp\syndocal-native-acceptance-target\debug\deps\syndocal-6b50d6ab7d78e79d.exe)
+
+running 5 tests
+test output_blackout_control::tests::target_blackout_noop_keeps_project_fence_and_history ... ok
+test output_blackout_control::tests::target_blackout_stale_fence_and_split_lease_cannot_publish ... ok
+test output_blackout_control::tests::target_blackout_toggle_is_published_and_exact_retry_never_reapplies ... ok
+test output_blackout_control::tests::target_blackout_final_authorization_after_actual_commit_locks_cannot_publish_or_consume_lease ... ok
+test output_blackout_control::tests::target_blackout_each_target_and_direction_commits_exact_persisted_image ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 2055 filtered out; finished in 0.05s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.64s
+     Running unittests src\main.rs (C:\Users\janua\AppData\Local\Temp\syndocal-native-acceptance-target\debug\deps\syndocal-6b50d6ab7d78e79d.exe)
+
+running 5 tests
+test tests::show_spout_reset_uses_the_narrow_video_projection_reader ... ok
+test tests::production_show_spout_reset_physical_retirement_failure_leaves_authored_pair_unchanged ... ok
+test tests::production_show_spout_reset_active_sequence_stops_both_before_exact_engine_retirement ... ok
+test tests::production_show_spout_reset_inactive_legacy_removes_only_the_exact_pair_and_advances_checkpoint ... ok
+test tests::production_show_spout_reset_absent_is_noop_and_invalid_graphs_never_reach_physical_or_engine_mutation ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 2055 filtered out; finished in 0.04s

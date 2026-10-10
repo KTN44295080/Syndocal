@@ -4,7 +4,6 @@ import type {
 } from "./tauriInvokeCommands";
 import {
   executeAgentBridgeRequest,
-  type AgentBridgeEffects,
   type AgentBridgeRequest,
 } from "./agentBridgeTools";
 
@@ -19,7 +18,6 @@ export function startAgentBridgeRuntime(
     command: FrontendTauriInvokeCommand,
     args?: Record<string, unknown>,
   ) => invoke<T>(command, args),
-  effects?: AgentBridgeEffects,
 ) {
   let disposed = false;
   let unsubscribe: (() => void) | undefined;
@@ -36,7 +34,7 @@ export function startAgentBridgeRuntime(
           });
         } catch { return; } // Forged, duplicate and obsolete wake hints never execute.
         if (disposed) return;
-        const result = await executeAgentBridgeRequest(invoke, claimed, effects);
+        const result = await executeAgentBridgeRequest(invoke, claimed);
         await transport("agent_bridge_complete_v1", {
           rendererGeneration: current, requestId: claimed.requestId, result,
         });

@@ -1,0 +1,35 @@
+**********************************************************************
+** Visual Studio 2022 Developer Command Prompt v17.14.39
+** Copyright (c) 2025 Microsoft Corporation
+**********************************************************************
+[vcvarsall.bat] Environment initialized for: 'x64'
+C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.64s
+     Running unittests src\main.rs (C:\Users\janua\AppData\Local\Temp\syndocal-native-acceptance-target\debug\deps\syndocal-6b50d6ab7d78e79d.exe)
+
+running 2 tests
+test control_plane_runtime::tests::output_control_common_identity_reserves_cross_operation_ids_before_work ... ok
+test control_plane_runtime::tests::output_control_common_identity_high_water_survives_terminal_and_tombstone_expiry ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 2058 filtered out; finished in 0.00s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.57s
+     Running unittests src\main.rs (C:\Users\janua\AppData\Local\Temp\syndocal-native-acceptance-target\debug\deps\syndocal-6b50d6ab7d78e79d.exe)
+
+running 13 tests
+test generic_output_lease_candidate_bridge_rejects_managed_exact_both_without_runtime_guard ... ok
+test managed_exact_both_projection_refuses_unrelated_routes ... ok
+test output_lease::output_lease_managed_keepalive_tests::managed_exact_both_renewal_rejects_every_identity_or_scope_mismatch_atomically ... ok
+test output_lease::tests::generic_managed_exact_both_action_is_rejected_but_ordinary_stale_is_rejected ... ok
+test output_lease::output_lease_managed_keepalive_tests::managed_exact_both_renewal_bypasses_but_does_not_mutate_public_admission_state ... ok
+test output_lease::output_lease_managed_keepalive_tests::managed_exact_both_renewal_advances_one_generation_and_deadline_only ... ok
+test output_lease::output_lease_managed_keepalive_tests::managed_exact_both_expiry_commits_orphan_truth_and_all_other_errors_are_noop ... ok
+test output_lease::output_lease_managed_keepalive_tests::managed_exact_both_successful_relinquish_receipt_exposes_only_wire_safe_response_evidence_before_completion ... ok
+test output_lease::output_lease_managed_keepalive_tests::managed_exact_both_relinquish_bypasses_but_does_not_mutate_public_admission_state ... ok
+test output_lease::output_lease_managed_keepalive_tests::managed_exact_both_relinquish_publishes_expiry_truth_and_rejects_all_other_cas_misses_atomically ... ok
+test output_lease::output_lease_managed_keepalive_tests::managed_exact_both_relinquish_releases_only_the_exact_active_or_orphaned_lease ... ok
+test tests::show_spout_authorization_builder_uses_managed_exact_both_for_the_armed_lease ... ok
+test output_lease_keepalive_runtime::tests::runtime_managed_exact_both_route_authorization_blocks_forced_renewal_through_engine_callback ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 2047 filtered out; finished in 0.02s

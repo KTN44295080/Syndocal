@@ -282,6 +282,7 @@ fn confirm_native_dangerous_output_action(
 pub(crate) enum OutputConfirmationOrigin {
     LocalDesktop,
     AuthenticatedExternalMcp,
+    AuthenticatedExternalVideoBlackout,
 }
 
 impl OutputConfirmationOrigin {
@@ -291,7 +292,7 @@ impl OutputConfirmationOrigin {
     {
         match self {
             Self::LocalDesktop => confirmation(),
-            Self::AuthenticatedExternalMcp => true,
+            Self::AuthenticatedExternalMcp | Self::AuthenticatedExternalVideoBlackout => true,
         }
     }
 }
@@ -390,6 +391,7 @@ pub(crate) fn execute_external_output_control(
     state: &AppState,
     query_state: &ControlPlaneQueryState,
     request: OutputControlCommandRequestV2,
+    authorize: &dyn Fn() -> Result<(), OutputControlErrorCodeV2>,
 ) -> OutputControlResponseV2 {
     let operation_id = request.action.operation_id();
     if request.operation_id != operation_id || request.validate().is_err() {
@@ -400,11 +402,14 @@ pub(crate) fn execute_external_output_control(
         | OutputControlActionV2::RenewLease { .. }
         | OutputControlActionV2::RecoverLease { .. }
         | OutputControlActionV2::RelinquishOutputLease { .. }
-        | OutputControlActionV2::ForceTransferLease { .. } =>
-            execute_output_lease_lifecycle_with_confirmation(app, window, state, query_state, operation_id, request, |_| true),
+        | OutputControlActionV2::ForceTransferLease { .. } => execute_output_lease_lifecycle_authorized(
+            app, window, state, query_state, operation_id, request, |_| true, authorize,
+        ),
         OutputControlActionV2::ResetShowSpoutOutputs {} =>
-            execute_show_spout_reset_without_lease_control_with_confirmation(state, query_state, window.label(), request, |_| true),
-        _ => execute_output_control_with_confirmation(
+            execute_show_spout_reset_without_lease_control_authorized(
+                state, query_state, window.label(), request, |_| true, authorize,
+            ),
+        _ => execute_output_control_authorized(
             app,
             window,
             state,
@@ -412,8 +417,28 @@ pub(crate) fn execute_external_output_control(
             request,
             OutputConfirmationOrigin::AuthenticatedExternalMcp,
             |_| true,
+            authorize,
         ),
     }
+}
+
+pub(crate) fn execute_external_video_blackout(
+    app: &tauri::AppHandle,
+    window: &WebviewWindow,
+    state: &AppState,
+    query_state: &ControlPlaneQueryState,
+    request: OutputControlCommandRequestV2,
+    authorize: &dyn Fn() -> Result<(), OutputControlErrorCodeV2>,
+) -> OutputControlResponseV2 {
+    if !matches!(request.action, OutputControlActionV2::SetBlackout {
+        target: OutputControlTargetRoleV1::Video, ..
+    }) {
+        return output_control_rejection(&request, OutputControlErrorCodeV2::InvalidRequest);
+    }
+    execute_output_control_authorized(
+        app, window, state, query_state, request,
+        OutputConfirmationOrigin::AuthenticatedExternalVideoBlackout, |_| true, authorize,
+    )
 }
 
 /// Reset is intentionally outside the output-lease lifecycle. It still uses
@@ -450,6 +475,25 @@ fn execute_show_spout_reset_without_lease_control_with_confirmation<F>(
 where
     F: Fn(&OutputControlActionV2) -> bool,
 {
+    execute_show_spout_reset_without_lease_control_authorized(
+        state, query_state, window_label, request, confirmation, &|| Ok(()),
+    )
+}
+
+fn execute_show_spout_reset_without_lease_control_authorized<F>(
+    state: &AppState,
+    query_state: &ControlPlaneQueryState,
+    window_label: &str,
+    request: OutputControlCommandRequestV2,
+    confirmation: F,
+    authorize: &dyn Fn() -> Result<(), OutputControlErrorCodeV2>,
+) -> OutputControlResponseV2
+where
+    F: Fn(&OutputControlActionV2) -> bool,
+{
+    if let Err(code) = authorize() {
+        return output_control_rejection(&request, code);
+    }
     if request.validate().is_err()
         || !matches!(
             request.action,
@@ -597,12 +641,18 @@ where
                 )
             }
         };
-    let result = super::reset_show_spout_outputs_without_output_lease(
+    let final_authorization_error = std::cell::Cell::new(None);
+    let final_authorize = || authorize().map_err(|code| {
+        final_authorization_error.set(Some(code));
+        "External output authorization denied".to_string()
+    });
+    let result = super::reset_show_spout_outputs_without_output_lease_authorized(
         state,
         &request.expected_fence,
         &binding.principal,
         &binding.window_label,
         binding.owner_incarnation,
+        &final_authorize,
     );
     let response = match result {
         Ok((applied, fence_after)) => {
@@ -622,7 +672,10 @@ where
                 lease_result: None,
             }))
         }
-        Err(_) => output_control_rejection(&request, OutputControlErrorCodeV2::PublicationFailed),
+        Err(_) => output_control_rejection(
+            &request,
+            final_authorization_error.get().unwrap_or(OutputControlErrorCodeV2::PublicationFailed),
+        ),
     };
     state
         .runtime_control_plane
@@ -668,6 +721,27 @@ fn execute_output_control_with_confirmation<F>(
 where
     F: Fn(&OutputControlActionV2) -> bool,
 {
+    execute_output_control_authorized(
+        app, window, state, query_state, request, confirmation_origin, confirmation, &|| Ok(()),
+    )
+}
+
+fn execute_output_control_authorized<F>(
+    app: &tauri::AppHandle,
+    window: &WebviewWindow,
+    state: &AppState,
+    query_state: &ControlPlaneQueryState,
+    request: OutputControlCommandRequestV2,
+    confirmation_origin: OutputConfirmationOrigin,
+    confirmation: F,
+    authorize: &dyn Fn() -> Result<(), OutputControlErrorCodeV2>,
+) -> OutputControlResponseV2
+where
+    F: Fn(&OutputControlActionV2) -> bool,
+{
+    if let Err(code) = authorize() {
+        return output_control_rejection(&request, code);
+    }
     if request.validate().is_err() {
         return output_control_rejection(&request, OutputControlErrorCodeV2::InvalidRequest);
     }
@@ -738,12 +812,17 @@ where
     }
     if let Err(code) = state
         .runtime_control_plane
-        .reserve_output_control_request_identity(
+        .reserve_output_control_request_identity_scoped(
             &binding,
             request.action.operation_id(),
             request.request_id,
             &shape_sha256,
             now,
+            if matches!(confirmation_origin, OutputConfirmationOrigin::AuthenticatedExternalVideoBlackout) {
+                OutputControlRequestScope::NativeVideoBlackout
+            } else {
+                OutputControlRequestScope::Canonical
+            },
         )
     {
         return output_control_rejection(&request, code);
@@ -982,6 +1061,12 @@ where
             return output_control_rejection(&request, OutputControlErrorCodeV2::Busy);
         }
     };
+    // Recheck the original external principal after admission/coordinator lock waits.
+    if let Err(code) = authorize() {
+        return retain_output_control_rejection(
+            state, key, shape_sha256, output_control_rejection(&request, code),
+        );
+    }
     if reconcile_project_checkpoint_for_coordinator(state, &mut coordinator).is_err()
         || !exact_output_control_fence_matches(state, &coordinator, &request.expected_fence)
         || ensure_no_pending_project_transaction(&coordinator).is_err()
@@ -1040,7 +1125,7 @@ where
             output_control_rejection(&request, OutputControlErrorCodeV2::InvalidRequest),
         );
     }
-    let (lease_request, lease_now_ms) = match super::build_output_lease_authorization_request(
+    let (mut lease_request, lease_now_ms) = match super::build_output_lease_authorization_request(
         state,
         &binding.principal,
         &binding.window_label,
@@ -1059,6 +1144,14 @@ where
             );
         }
     };
+    if matches!(confirmation_origin, OutputConfirmationOrigin::AuthenticatedExternalVideoBlackout)
+        && super::agent_bridge_output::scope_receipt(&mut lease_request).is_err()
+    {
+        return retain_output_control_rejection(
+            state, key, shape_sha256,
+            output_control_rejection(&request, OutputControlErrorCodeV2::InvalidRequest),
+        );
+    }
     // A lost-reply retry for normal Enable must never re-enter the engine
     // candidate callback.  Keep the exact durable receipt private until the
     // usual public admission succeeds, then use it solely to prove/install
@@ -1114,6 +1207,11 @@ where
     drop(coordinator);
     drop(external_admission);
 
+    let final_authorization_error = std::cell::Cell::new(None);
+    let final_authorize = || authorize().map_err(|code| {
+        final_authorization_error.set(Some(code));
+        "External output authorization denied".to_string()
+    });
     let operation_result = match &request.action {
         OutputControlActionV2::EnableOutput if durable_enable_replay.is_some() => {
             let receipt = durable_enable_replay
@@ -1231,13 +1329,14 @@ where
             Err("Show Spout reset bypassed its no-lease executor".to_string())
         }
         OutputControlActionV2::SetBlackout { target, enabled, .. } => {
-            super::output_blackout_control::set_blackout_with_output_control_fence(
+            super::output_blackout_control::set_blackout_with_output_control_fence_authorized(
                 state,
                 *target,
                 *enabled,
                 &request.expected_fence,
                 &lease_request,
                 Some(managed_terminal_identity),
+                &final_authorize,
             )
         }
         OutputControlActionV2::ReleaseBlackout { .. } => {
@@ -1408,6 +1507,12 @@ where
     let (applied, fence_after, lease_receipt) = match operation_result {
         Ok(result) => result,
         Err(error) => {
+            if let Some(code) = final_authorization_error.get() {
+                state.runtime_control_plane.finish_output_control_inflight(&inflight);
+                return retain_output_control_rejection(
+                    state, key, shape_sha256, output_control_rejection(&request, code),
+                );
+            }
             eprintln!(
                 "OutputControl operation {} failed before publication: {}",
                 request.action.operation_id(),
@@ -2113,6 +2218,27 @@ fn execute_output_lease_lifecycle_with_confirmation<F>(
 where
     F: Fn(&OutputControlActionV2) -> bool,
 {
+    execute_output_lease_lifecycle_authorized(
+        app, window, state, query_state, expected_operation_id, request, confirmation, &|| Ok(()),
+    )
+}
+
+fn execute_output_lease_lifecycle_authorized<F>(
+    app: &tauri::AppHandle,
+    window: &WebviewWindow,
+    state: &AppState,
+    query_state: &ControlPlaneQueryState,
+    expected_operation_id: &'static str,
+    request: OutputControlCommandRequestV2,
+    confirmation: F,
+    authorize: &dyn Fn() -> Result<(), OutputControlErrorCodeV2>,
+) -> OutputControlResponseV2
+where
+    F: Fn(&OutputControlActionV2) -> bool,
+{
+    if let Err(code) = authorize() {
+        return output_control_rejection(&request, code);
+    }
     if request.operation_id != expected_operation_id
         || request.action.operation_id() != expected_operation_id
         || request.validate().is_err()
@@ -2407,6 +2533,12 @@ where
             return output_control_rejection(&request, OutputControlErrorCodeV2::Busy);
         }
     };
+    // Recheck after lifecycle/admission/coordinator waits before mutating lease or gates.
+    if let Err(code) = authorize() {
+        return retain_output_control_rejection(
+            state, key, shape_sha256, output_control_rejection(&request, code),
+        );
+    }
     if reconcile_project_checkpoint_for_coordinator(state, &mut coordinator).is_err()
         || !exact_output_control_fence_matches(state, &coordinator, &request.expected_fence)
         || ensure_no_pending_project_transaction(&coordinator).is_err()
@@ -3077,8 +3209,15 @@ struct OutputControlReceiptKey {
     request_id: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum OutputControlRequestScope {
+    Canonical,
+    NativeVideoBlackout,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct OutputControlRequestIdentityKey {
+    scope: OutputControlRequestScope,
     principal: String,
     window_label: String,
     owner_incarnation: u64,
@@ -3087,6 +3226,7 @@ struct OutputControlRequestIdentityKey {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct OutputControlRequestOriginKey {
+    scope: OutputControlRequestScope,
     principal: String,
     window_label: String,
     owner_incarnation: u64,
@@ -3379,6 +3519,21 @@ impl RuntimeControlPlaneState {
         shape_sha256: &str,
         now: Instant,
     ) -> Result<(), OutputControlErrorCodeV2> {
+        self.reserve_output_control_request_identity_scoped(
+            binding, operation_id, request_id, shape_sha256, now,
+            OutputControlRequestScope::Canonical,
+        )
+    }
+
+    fn reserve_output_control_request_identity_scoped(
+        &self,
+        binding: &CallerBinding,
+        operation_id: &str,
+        request_id: u64,
+        shape_sha256: &str,
+        now: Instant,
+        scope: OutputControlRequestScope,
+    ) -> Result<(), OutputControlErrorCodeV2> {
         let mut inner = match self.output_control.lock() {
             Ok(inner) => inner,
             Err(poisoned) => {
@@ -3388,6 +3543,7 @@ impl RuntimeControlPlaneState {
                 // is permitted on this path.
                 let inner = poisoned.into_inner();
                 let identity_key = OutputControlRequestIdentityKey {
+                    scope,
                     principal: binding.principal.clone(),
                     window_label: binding.window_label.clone(),
                     owner_incarnation: binding.owner_incarnation,
@@ -3417,6 +3573,7 @@ impl RuntimeControlPlaneState {
         };
         purge_output_control_expired(&mut inner, now);
         let identity_key = OutputControlRequestIdentityKey {
+            scope,
             principal: binding.principal.clone(),
             window_label: binding.window_label.clone(),
             owner_incarnation: binding.owner_incarnation,
@@ -3444,6 +3601,7 @@ impl RuntimeControlPlaneState {
             return Err(OutputControlErrorCodeV2::InvalidRequest);
         }
         let origin_key = OutputControlRequestOriginKey {
+            scope,
             principal: binding.principal.clone(),
             window_label: binding.window_label.clone(),
             owner_incarnation: binding.owner_incarnation,
@@ -7204,6 +7362,7 @@ mod tests {
             inner
                 .request_id_high_water
                 .get(&OutputControlRequestOriginKey {
+                    scope: OutputControlRequestScope::Canonical,
                     principal: binding.principal,
                     window_label: binding.window_label,
                     owner_incarnation: binding.owner_incarnation,
@@ -8267,3 +8426,7 @@ mod tests {
 #[cfg(test)]
 #[path = "agent_bridge_timeline_guard_tests.rs"]
 mod agent_bridge_timeline_guard_tests;
+
+#[cfg(test)]
+#[path = "agent_bridge_output_runtime_guard_tests.rs"]
+mod agent_bridge_output_runtime_guard_tests;

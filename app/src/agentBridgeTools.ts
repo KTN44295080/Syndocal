@@ -7,10 +7,6 @@ import type {
 } from "./types";
 import { fixtureTransformMatchesExpectation } from "./fixtureTransformConfirmation";
 import {
-  executeAgentBridgeVideoBlackout,
-  type AgentBridgeEffects,
-} from "./agentBridgeBlackout";
-import {
   executeAgentBridgeCanonicalOperation,
   executeAgentBridgeControlPlane,
   CANONICAL_TAURI_COMMANDS,
@@ -19,7 +15,6 @@ import {
 } from "./agentBridgeControlPlane";
 import { executeAgentBridgeRecordingStatus } from "./agentBridgeRecording";
 
-export type { AgentBridgeEffects } from "./agentBridgeBlackout";
 
 export interface AgentBridgeRequest {
   rendererGeneration: number;
@@ -94,11 +89,10 @@ const nativeRuntimeAuthorityError = (error: unknown) => {
   return { code: value.code };
 };
 
-/** Only native-claimed requests enter here. Mutations still use the GUI transaction/CAS path. */
+/** Only native-claimed requests enter here. Mutations use canonical transaction/CAS paths. */
 export async function executeAgentBridgeRequest(
   invoke: FrontendTauriInvoke,
   request: AgentBridgeRequest,
-  effects?: AgentBridgeEffects,
 ) {
   let mutationStarted = false;
   try {
@@ -106,7 +100,7 @@ export async function executeAgentBridgeRequest(
       return { ok: false, error: { code: "unknown_method", message: "Unsupported agent bridge operation." } };
     }
     const params = request.params;
-    if (request.method === "diagnostics.export"
+    if (request.method === "output.set_video_blackout" || request.method === "diagnostics.export"
       || (request.method === "control_plane.execute" && typeof params.operationId === "string"
         && (params.operationId.startsWith("syndocal.output.")
           || NATIVE_TIMELINE_MUTATIONS.has(params.operationId)
@@ -120,7 +114,7 @@ export async function executeAgentBridgeRequest(
       if (request.method === "control_plane.execute" && !Object.hasOwn(CANONICAL_TAURI_COMMANDS, params.operationId as string)) {
         throw new Error("Canonical operation is not executable through the reviewed adapter set.");
       }
-      mutationStarted = request.method === "diagnostics.export" || canonicalOperationIsMutation(params.operationId as string);
+      mutationStarted = request.method === "output.set_video_blackout" || request.method === "diagnostics.export" || canonicalOperationIsMutation(params.operationId as string);
       return await invoke("agent_bridge_execute_native_v1", {
         rendererGeneration: request.rendererGeneration,
         requestId: request.requestId,
@@ -136,14 +130,6 @@ export async function executeAgentBridgeRequest(
     if (request.method === "recording.get_status") {
       if (Object.keys(params).length !== 0) throw new Error("Recording status takes no parameters.");
       return await executeAgentBridgeRecordingStatus(invoke);
-    }
-    if (request.method === "output.set_video_blackout") {
-      return await executeAgentBridgeVideoBlackout(
-        invoke,
-        params,
-        effects,
-        () => { mutationStarted = true; },
-      );
     }
     const expected = params.expectedProject as ReturnType<typeof projectToken> | undefined;
     const setTransform = request.method === "fixtures.set_transform";

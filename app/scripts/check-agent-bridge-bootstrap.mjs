@@ -11,7 +11,7 @@ function harness() {
   let resolve, reject;
   const promise = new Promise((a, b) => { resolve = a; reject = b; });
   const calls = [], errors = [];
-  const args = [() => {}, () => {}, error => errors.push(error), () => {}, {}];
+  const args = [() => {}, () => {}, error => errors.push(error), () => {}];
   const bridge = start(...args, () => promise);
   const module = { startAgentBridgeRuntime(...actual) {
     calls.push(actual);

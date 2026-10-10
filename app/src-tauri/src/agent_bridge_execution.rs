@@ -66,6 +66,9 @@ pub(crate) fn execute(
         bridge.start_native_execution(window.label(), renderer_generation, request_id)?;
     let state = app.state::<AppState>();
     match dispatch.method.as_str() {
+        "output.set_video_blackout" => {
+            super::agent_bridge_output::execute_video_blackout(app, window, &dispatch)
+        }
         "control_plane.execute" => {
             let operation_id = dispatch
                 .params
@@ -231,6 +234,7 @@ pub(crate) fn execute(
                 &state,
                 &query_state,
                 ingress.request,
+                &|| super::agent_bridge_output::authorize(app, &dispatch),
             );
             let ok = matches!(
                 &result,

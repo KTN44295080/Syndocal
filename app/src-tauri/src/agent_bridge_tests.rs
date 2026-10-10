@@ -768,3 +768,22 @@ fn agent_bridge_native_execution_requires_current_claim_and_is_single_use() {
     ledger.claim(generation, &id(2)).unwrap();
     assert!(ledger.start_native_execution(generation, &id(2)).is_err());
 }
+
+#[test]
+fn agent_bridge_video_blackout_native_execution_preserves_immutable_owner_and_is_single_use() {
+    let mut ledger = ledger::Ledger::new(None).unwrap();
+    let generation = ledger.register().unwrap();
+    let intent = command("output.set_video_blackout");
+    ledger.begin_owned(&id(1), &intent, "external-video", 3).unwrap();
+    assert_eq!(ledger.start_native_execution(generation, &id(1)).unwrap_err(), "request_not_executable");
+    ledger.claim(generation, &id(1)).unwrap();
+    assert_eq!(ledger.start_native_execution(generation + 1, &id(1)).unwrap_err(), "stale_renderer");
+    let dispatch = ledger.start_native_execution(generation, &id(1)).unwrap();
+    assert_eq!(dispatch.method, "output.set_video_blackout");
+    assert_eq!(dispatch.principal_id, "external-video");
+    assert_eq!(dispatch.principal_incarnation, 3);
+    assert_eq!(dispatch.params, serde_json::to_value(intent).unwrap()["params"]);
+    assert_eq!(ledger.start_native_execution(generation, &id(1)).unwrap_err(), "request_not_executable");
+    ledger.complete(generation, &id(1), serde_json::json!({"ok":true})).unwrap();
+    assert_eq!(ledger.start_native_execution(generation, &id(1)).unwrap_err(), "request_not_executable");
+}

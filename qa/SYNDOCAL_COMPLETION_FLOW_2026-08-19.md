@@ -1,5 +1,15 @@
 # Syndocal completion flow — active dependency-ordered work authority
 
+## 2026-10-10 internal native MCP Video BO checkpoint
+
+The public Video BO tool now executes the immutable native command, verifies
+the exact committed target, and keeps its receipt identities separate from
+GUI counters. Final grant rechecks, 48 focused Rust tests, 26 actual native
+MCP/loopback checks and the normal Windows no-bundle/window gate are recorded
+in [the checkpoint](MCP_VIDEO_BLACKOUT_NATIVE_2026-10-10.md).
+This internal work does not replace the delivered alpha.71 installers or close
+physical-device, macOS runtime, clean-install or full product acceptance gates.
+
 ## 2026-10-10 alpha.71 Mac USB-DMX and development distribution
 
 Current product metadata is `1.2.0-alpha.71`. macOS USB-DMX now uses an exact IOKit generation for BSD serial or native FT232R USB output. Windows x64 and macOS 12+ Apple Silicon packages and their acceptance are recorded in [the checkpoint](USB_DMX_MACOS_ALPHA71_2026-10-10.md). Physical SH-RS09B output and full release acceptance remain open.
