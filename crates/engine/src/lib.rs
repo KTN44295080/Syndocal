@@ -67513,10 +67513,7 @@ fn show_serial_dmx_device_identity_is_exact(
         && !identity.serial_number.trim().is_empty()
         && !identity.manufacturer.trim().is_empty()
         && !identity.product.trim().is_empty()
-        && identity
-            .windows_device_instance_id
-            .as_deref()
-            .is_some_and(|instance| !instance.trim().is_empty())
+        && identity.has_exact_platform_instance()
 }
 
 fn create_verified_show_serial_dmx_sender(
@@ -67890,6 +67887,7 @@ mod show_serial_dmx_invariant_tests {
             serial_number: "A".to_string(),
             manufacturer: "FTDI".to_string(),
             product: "USB Serial Port".to_string(),
+            macos_device_instance_id: None,
             windows_device_instance_id: Some(r"FTDIBUS\A\0000".to_string()),
         };
         assert!(show_serial_dmx_device_identity_is_exact(&exact));

@@ -1,3 +1,4 @@
+import { serialDmxConfirmationRequest, serialDmxDeviceInstance } from "./serialDmxDeviceInstance";
 import { createSignal, type Accessor, type Setter } from "solid-js";
 import {
   executeOutputControl,
@@ -404,15 +405,12 @@ export function createOutputDiagnosticsController(options: OutputDiagnosticsCont
   });
 
   const confirmSerialDmxMachineBindingInternal = async (port: SerialPortSummary) => {
-    const instance = port.windows_device_instance_id?.trim();
-    if (!instance) {
-      throw new Error("USB-DMX confirmation requires the current Windows PnP instance; no binding was written.");
-    }
+    const request = serialDmxConfirmationRequest(port);
     serialDmxStatusPoller.invalidate();
     try {
       return await options.invoke<SerialDmxMachineBindingStatus>(
         "select_serial_dmx_machine_binding_v1",
-        { request: { portName: port.name, windowsDeviceInstanceId: instance } },
+        { request },
       );
     } finally {
       await refreshAuthoritativeSerialDmxRuntimeStatuses();
@@ -496,7 +494,7 @@ export function createOutputDiagnosticsController(options: OutputDiagnosticsCont
       };
 
       try {
-        if (port && (!port.name.trim() || !port.windows_device_instance_id?.trim())) {
+        if (port && (!port.name.trim() || !serialDmxDeviceInstance(port))) {
           throw new Error("the selected USB-DMX device has no complete machine-local identity");
         }
         if (!isExactShowArtNetLoopbackRoute(output())) {

@@ -1,3 +1,8 @@
+#[cfg(any(target_os = "macos", test))]
+#[path = "macos_ftdi.rs"]
+mod macos_ftdi;
+#[path = "macos_serial_binding.rs"]
+mod macos_serial_binding;
 use std::{
     hint::spin_loop,
     io::{self, Write},
@@ -88,6 +93,7 @@ pub struct VerifiedUsbSerialPortIdentity {
     /// this identity was captured. It is deliberately distinct from the COM
     /// alias: Windows may reuse COM3 for a different physical interface.
     pub windows_device_instance_id: Option<String>,
+    pub macos_device_instance_id: Option<String>,
 }
 
 impl VerifiedUsbSerialPortIdentity {
@@ -147,6 +153,7 @@ impl VerifiedUsbSerialPortIdentity {
             serial_number: serial_number.to_string(),
             manufacturer: manufacturer.to_string(),
             product: product.to_string(),
+            macos_device_instance_id: None,
             windows_device_instance_id: None,
         })
     }
@@ -156,10 +163,15 @@ impl VerifiedUsbSerialPortIdentity {
     /// opened handle is selected through its physical device-interface path,
     /// never through `SerialPort::name()`.
     #[cfg(target_os = "windows")]
-    pub fn from_summary_with_windows_com_binding(
+    pub fn from_summary_with_platform_binding(
         summary: &SerialPortSummary,
     ) -> Result<Self, SerialDmxError> {
         let mut identity = Self::from_summary(summary)?;
+        if summary.macos_device_instance_id.is_some() {
+            return Err(SerialDmxError::Identity(
+                "macOS USB-DMX identity cannot be captured on Windows".into(),
+            ));
+        }
         let binding = resolve_windows_com_port_binding(&identity)?;
         let enumerated_instance = summary
             .windows_device_instance_id
@@ -182,12 +194,32 @@ impl VerifiedUsbSerialPortIdentity {
         Ok(identity)
     }
 
-    #[cfg(not(target_os = "windows"))]
-    pub fn from_summary_with_windows_com_binding(
+    #[cfg(target_os = "macos")]
+    pub fn from_summary_with_platform_binding(
+        summary: &SerialPortSummary,
+    ) -> Result<Self, SerialDmxError> {
+        let mut identity = Self::from_summary(summary)?;
+        let binding =
+            macos_serial_binding::resolve(&identity.port_name).map_err(SerialDmxError::Identity)?;
+        if summary.windows_device_instance_id.is_some()
+            || summary.macos_device_instance_id.as_deref() != Some(binding.instance_id.as_str())
+        {
+            return Err(SerialDmxError::Identity(
+                "serial enumeration and IOKit identity disagree; refresh and reselect USB-DMX"
+                    .into(),
+            ));
+        }
+        identity.macos_device_instance_id = Some(binding.instance_id);
+        identity.validate_for_verified_open()?;
+        Ok(identity)
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    pub fn from_summary_with_platform_binding(
         _summary: &SerialPortSummary,
     ) -> Result<Self, SerialDmxError> {
         Err(SerialDmxError::Identity(
-            "the approved show serial route requires Windows PnP COM identity binding".to_string(),
+            "verified show USB-DMX output is supported on Windows and macOS".to_string(),
         ))
     }
 
@@ -202,6 +234,19 @@ impl VerifiedUsbSerialPortIdentity {
             && summary.product.as_deref() == Some(self.product.as_str())
             && summary.windows_device_instance_id.as_deref()
                 == self.windows_device_instance_id.as_deref()
+            && summary.macos_device_instance_id.as_deref()
+                == self.macos_device_instance_id.as_deref()
+    }
+
+    pub fn has_exact_platform_instance(&self) -> bool {
+        match (
+            self.windows_device_instance_id.as_deref(),
+            self.macos_device_instance_id.as_deref(),
+        ) {
+            (Some(windows), None) => !windows.trim().is_empty(),
+            (None, Some(macos)) => macos_serial_binding::valid_instance(&self.port_name, macos),
+            _ => false,
+        }
     }
 
     fn validate_for_verified_open(&self) -> Result<(), SerialDmxError> {
@@ -224,14 +269,9 @@ impl VerifiedUsbSerialPortIdentity {
                 "the verified show serial identity requires nonzero USB VID and PID".to_string(),
             ));
         }
-        if self
-            .windows_device_instance_id
-            .as_deref()
-            .is_none_or(|value| value.trim().is_empty())
-        {
+        if !self.has_exact_platform_instance() {
             return Err(SerialDmxError::Identity(
-                "the verified show serial identity did not capture a Windows PnP device instance"
-                    .to_string(),
+                "verified USB-DMX requires exactly one Windows PnP or macOS IOKit instance".into(),
             ));
         }
         Ok(())
@@ -586,12 +626,63 @@ impl EnttecOpenDmxSender {
             )?;
             return Self::from_open_port(Box::new(port), safety_write_gate);
         }
-        #[cfg(not(target_os = "windows"))]
+        #[cfg(target_os = "macos")]
         {
-            let _ = identity;
+            use std::os::fd::AsRawFd;
+            if identity.windows_device_instance_id.is_some() {
+                return Err(SerialDmxError::Identity(
+                    "Windows USB-DMX selection cannot open a macOS device".into(),
+                ));
+            }
+            let pre = macos_serial_binding::resolve(&identity.port_name)
+                .map_err(SerialDmxError::Identity)?;
+            if pre.port_name.starts_with("usb-ftdi://") {
+                if identity.macos_device_instance_id.as_deref() != Some(pre.instance_id.as_str()) {
+                    return Err(SerialDmxError::Identity(
+                        "Native FTDI registry generation changed before open".into(),
+                    ));
+                }
+                let port = macos_ftdi::FtdiTransport::open(pre.usb_registry_id, &pre.port_name)
+                    .map_err(|source| SerialDmxError::Identity(source.to_string()))?;
+                let post = macos_serial_binding::resolve(&identity.port_name)
+                    .map_err(SerialDmxError::Identity)?;
+                if post != pre {
+                    return Err(SerialDmxError::Identity(
+                        "Native FTDI USB identity changed while opening".into(),
+                    ));
+                }
+                require_exact_verified_usb_port(&list_serial_ports()?, identity)?;
+                port.configure()
+                    .map_err(|source| SerialDmxError::Identity(source.to_string()))?;
+                return Self::from_open_port(Box::new(port), safety_write_gate);
+            }
+            let port = enttec_open_dmx_serial_builder(&pre.port_name)
+                .open_native()
+                .map_err(|source| SerialDmxError::Open {
+                    path: identity.port_name.clone(),
+                    source,
+                })?;
+            let opened_device = macos_serial_binding::opened_device_number(port.as_raw_fd())
+                .map_err(SerialDmxError::Identity)?;
+            let post = macos_serial_binding::resolve(&identity.port_name)
+                .map_err(SerialDmxError::Identity)?;
+            macos_serial_binding::verify_open(
+                identity
+                    .macos_device_instance_id
+                    .as_deref()
+                    .unwrap_or_default(),
+                &pre,
+                opened_device,
+                &post,
+            )
+            .map_err(SerialDmxError::Identity)?;
+            require_exact_verified_usb_port(&list_serial_ports()?, identity)?;
+            return Self::from_open_port(Box::new(port), safety_write_gate);
+        }
+        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+        {
             Err(SerialDmxError::Identity(
-                "verified Open DMX output requires the Windows PnP COM interface binding"
-                    .to_string(),
+                "verified Open DMX output is supported on Windows and macOS".into(),
             ))
         }
     }
@@ -787,14 +878,20 @@ impl Drop for EnttecOpenDmxSender {
 mod test_support;
 #[cfg(any(test, feature = "test-support"))]
 #[doc(hidden)]
-pub use test_support::{OpenDmxTestSerialObservation, OpenDmxTestSerialOperation, OpenDmxTestSerialPort};
+pub use test_support::{
+    OpenDmxTestSerialObservation, OpenDmxTestSerialOperation, OpenDmxTestSerialPort,
+};
 
 pub fn list_serial_ports() -> Result<Vec<SerialPortSummary>, SerialDmxError> {
     serialport::available_ports()
         .map_err(SerialDmxError::List)
-        .map(|ports| {
-            ports
+        .and_then(|ports| {
+            let summaries: Vec<SerialPortSummary> = ports
                 .into_iter()
+                // macOS exposes tty/cu aliases for one interface; output uses callout only.
+                .filter(|port| {
+                    !cfg!(target_os = "macos") || !port.port_name.starts_with("/dev/tty.")
+                })
                 .map(|port| {
                     let (usb_vid, usb_pid, serial_number, manufacturer, product) =
                         serial_port_usb_metadata(&port.port_type);
@@ -809,6 +906,12 @@ pub fn list_serial_ports() -> Result<Vec<SerialPortSummary>, SerialDmxError> {
                             .map(|binding| binding.device_instance_id);
                     #[cfg(not(target_os = "windows"))]
                     let windows_device_instance_id = None;
+                    #[cfg(target_os = "macos")]
+                    let macos_device_instance_id = macos_serial_binding::resolve(&port.port_name)
+                        .ok()
+                        .map(|binding| binding.instance_id);
+                    #[cfg(not(target_os = "macos"))]
+                    let macos_device_instance_id = None;
                     SerialPortSummary {
                         name: port.port_name,
                         port_type: serial_port_type_label(&port.port_type),
@@ -818,10 +921,30 @@ pub fn list_serial_ports() -> Result<Vec<SerialPortSummary>, SerialDmxError> {
                         manufacturer,
                         product,
                         windows_device_instance_id,
+                        macos_device_instance_id,
                         recommended_protocol,
                     }
                 })
-                .collect()
+                .collect();
+            #[cfg(target_os = "macos")]
+            let summaries = {
+                let mut summaries = summaries;
+                let usb =
+                    macos_serial_binding::enumerate_ftdi().map_err(SerialDmxError::Identity)?;
+                for device in usb {
+                    let covered_by_callout = summaries.iter().any(|port| {
+                        macos_serial_binding::resolve(&port.name).is_ok_and(|binding| {
+                            device.macos_device_instance_id.as_deref()
+                                == Some(format!("ioreg:{:016x}", binding.usb_registry_id).as_str())
+                        })
+                    });
+                    if !covered_by_callout {
+                        summaries.push(device);
+                    }
+                }
+                summaries
+            };
+            Ok(summaries)
         })
 }
 
@@ -1682,6 +1805,7 @@ mod tests {
             serial_number: Some(serial_number.to_string()),
             manufacturer: Some("FTDI".to_string()),
             product: Some("USB Serial Port".to_string()),
+            macos_device_instance_id: None,
             windows_device_instance_id: Some(format!(
                 r"FTDIBUS\VID_0403+PID_6001+{serial_number}\0000"
             )),

@@ -26,3 +26,12 @@ zeroize = "=1.9.0"
 # The staged show route opens the exact SetupAPI COM device-interface path,
 # rather than trusting a mutable COM alias or serialport's echoed name.
 windows = { version = "=0.61.3", features = ["Win32_Foundation", "Win32_Devices_Communication", "Win32_Devices_DeviceAndDriverInstallation", "Win32_System_Ioctl"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "=0.10.1"
+core-foundation-sys = "=0.8.7"
+io-kit-sys = "=0.4.1"
+libc = "0.2"
+
+[build-dependencies]
+cc = "=1.2.63"

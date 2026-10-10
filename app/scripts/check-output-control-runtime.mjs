@@ -1079,7 +1079,7 @@ const serialDmxStatusPollerRuntime = await import(`data:text/javascript;base64,$
   },
 ).outputText).toString("base64")}`);
 const serialDmxStatusValidationRuntime = await import(`data:text/javascript;base64,${Buffer.from(ts.transpileModule(
-  serialDmxStatusValidationSource,
+  serialDmxStatusValidationSource.replace(/import \{ serialDmxDeviceInstance \} from "\.\/serialDmxDeviceInstance";\r?\n/, "") + "\n" + await read("src/serialDmxDeviceInstance.ts"),
   {
     compilerOptions: {
       module: ts.ModuleKind.ESNext,
@@ -1599,7 +1599,7 @@ assert.match(dmxOutputPanelSource, /Worker unavailable · S0 required/,
   "unknown USB-DMX worker state must remain visible without a prose block");
 assert.match(
   dmxOutputPanelSource,
-  /const hasExactMachineLocalOpenDmxIdentity[\s\S]*port\.usb_vid > 0[\s\S]*port\.usb_pid > 0[\s\S]*serial_number[\s\S]*windows_device_instance_id/,
+  /const hasExactMachineLocalOpenDmxIdentity[\s\S]*port\.usb_vid > 0[\s\S]*port\.usb_pid > 0[\s\S]*serial_number[\s\S]*serialDmxDeviceInstance/,
   "a USB-DMX Confirm candidate must require a complete nonzero USB/PnP identity",
 );
 assert.match(
@@ -1898,6 +1898,20 @@ const exactSerialRouteAt = (routeStatusRevision, patch = {}) => ({
   ...patch,
 });
 const validateSerialDmxStatusSnapshot = serialDmxStatusValidationRuntime.validateSerialDmxStatusSnapshot;
+const macSerialBindingPayload = structuredClone(exactSerialBindingPayload);
+delete macSerialBindingPayload.selected.windows_device_instance_id;
+macSerialBindingPayload.selected.port_name = "/dev/cu.usbserial-A";
+macSerialBindingPayload.selected.macos_device_instance_id = "ioreg:000000010000abcd";
+assert.equal(validateSerialDmxStatusSnapshot(macSerialBindingPayload, exactSerialRoutePayload), null,
+  "macOS IOKit identity must pass the same strict coherent status boundary");
+assert.equal(validateSerialDmxStatusSnapshot({...macSerialBindingPayload,selected:{...macSerialBindingPayload.selected,port_name:"usb-ftdi://000000010000abcd"}},exactSerialRoutePayload),null,"native FTDI USB identity must pass without a VCP path");
+assert.ok(validateSerialDmxStatusSnapshot({...macSerialBindingPayload,selected:{...macSerialBindingPayload.selected,port_name:"usb-ftdi://000000010000abce"}},exactSerialRoutePayload),"native USB path and registry generation must agree");
+for (const id of ["", "ioreg:0000000000000000", "ioreg:short"]) {
+  assert.ok(validateSerialDmxStatusSnapshot({...macSerialBindingPayload, selected:{...macSerialBindingPayload.selected, macos_device_instance_id:id}}, exactSerialRoutePayload));
+}
+assert.ok(validateSerialDmxStatusSnapshot({...macSerialBindingPayload,selected:{...macSerialBindingPayload.selected,windows_device_instance_id:"foreign"}},exactSerialRoutePayload), "mixed-platform identities must be rejected");
+assert.ok(validateSerialDmxStatusSnapshot({...macSerialBindingPayload,selected:{...macSerialBindingPayload.selected,port_name:"/dev/tty.usbserial-A"}},exactSerialRoutePayload), "dial-in duplicate must be rejected");
+
 assert.equal(validateSerialDmxStatusSnapshot(exactSerialBindingPayload, exactSerialRoutePayload), null,
   "the exact native USB-DMX status shape must remain admissible");
 assert.match(

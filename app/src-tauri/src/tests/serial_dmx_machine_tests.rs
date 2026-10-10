@@ -9,6 +9,7 @@ fn port(name: &str, instance: &str, serial: &str) -> SerialPortSummary {
         serial_number: Some(serial.to_string()),
         manufacturer: Some("FTDI".to_string()),
         product: Some("USB Serial Port".to_string()),
+        macos_device_instance_id: None,
         windows_device_instance_id: Some(instance.to_string()),
         recommended_protocol: None,
     }
@@ -35,7 +36,8 @@ fn machine_binding_rejects_missing_selection_com_renumber_and_ambiguity_without_
         &path,
         &SelectSerialDmxMachineBindingRequestV1 {
             port_name: a.name.clone(),
-            windows_device_instance_id: a.windows_device_instance_id.clone().unwrap(),
+            macos_device_instance_id: None,
+            windows_device_instance_id: a.windows_device_instance_id.clone(),
         },
         &[a.clone()],
     )
@@ -81,7 +83,8 @@ fn machine_binding_selection_does_not_write_a_project_file() {
         &binding_path,
         &SelectSerialDmxMachineBindingRequestV1 {
             port_name: a.name.clone(),
-            windows_device_instance_id: a.windows_device_instance_id.clone().unwrap(),
+            macos_device_instance_id: None,
+            windows_device_instance_id: a.windows_device_instance_id.clone(),
         },
         &[a],
     )
@@ -100,7 +103,8 @@ fn machine_binding_corrupt_future_and_unknown_json_fail_closed_without_rewrite()
         &path,
         &SelectSerialDmxMachineBindingRequestV1 {
             port_name: a.name.clone(),
-            windows_device_instance_id: a.windows_device_instance_id.clone().unwrap(),
+            macos_device_instance_id: None,
+            windows_device_instance_id: a.windows_device_instance_id.clone(),
         },
         &[a],
     )
@@ -108,7 +112,7 @@ fn machine_binding_corrupt_future_and_unknown_json_fail_closed_without_rewrite()
     let valid = std::fs::read(&path).unwrap();
     let invalid_cases = [
         b"{ not valid JSON".as_slice().to_vec(),
-        br#"{"version":2,"selected":{"port_name":"COM3","port_type":"USB","usb_vid":1027,"usb_pid":24577,"serial_number":"A","manufacturer":"FTDI","product":"USB","windows_device_instance_id":"FTDIBUS\\A\\0000"}}"#.to_vec(),
+        br#"{"version":3,"selected":{"port_name":"COM3","port_type":"USB","usb_vid":1027,"usb_pid":24577,"serial_number":"A","manufacturer":"FTDI","product":"USB","windows_device_instance_id":"FTDIBUS\\A\\0000"}}"#.to_vec(),
         br#"{"version":1,"selected":{"port_name":"COM3","port_type":"USB","usb_vid":1027,"usb_pid":24577,"serial_number":"A","manufacturer":"FTDI","product":"USB","windows_device_instance_id":"FTDIBUS\\A\\0000"},"unknown":true}"#.to_vec(),
     ];
     for invalid in invalid_cases {
@@ -133,7 +137,8 @@ fn machine_binding_failed_or_ambiguous_reselection_preserves_prior_local_bytes()
         &path,
         &SelectSerialDmxMachineBindingRequestV1 {
             port_name: a.name.clone(),
-            windows_device_instance_id: a.windows_device_instance_id.clone().unwrap(),
+            macos_device_instance_id: None,
+            windows_device_instance_id: a.windows_device_instance_id.clone(),
         },
         &[a.clone()],
     )
@@ -143,7 +148,8 @@ fn machine_binding_failed_or_ambiguous_reselection_preserves_prior_local_bytes()
         &path,
         &SelectSerialDmxMachineBindingRequestV1 {
             port_name: b.name,
-            windows_device_instance_id: b.windows_device_instance_id.unwrap(),
+            macos_device_instance_id: None,
+            windows_device_instance_id: b.windows_device_instance_id,
         },
         &[a.clone()],
     )
@@ -154,7 +160,8 @@ fn machine_binding_failed_or_ambiguous_reselection_preserves_prior_local_bytes()
         &path,
         &SelectSerialDmxMachineBindingRequestV1 {
             port_name: a.name.clone(),
-            windows_device_instance_id: a.windows_device_instance_id.clone().unwrap(),
+            macos_device_instance_id: None,
+            windows_device_instance_id: a.windows_device_instance_id.clone(),
         },
         &[a.clone(), a],
     )
@@ -180,7 +187,8 @@ fn machine_binding_rejects_zero_vid_or_pid_on_selection_and_reload() {
             &path,
             &SelectSerialDmxMachineBindingRequestV1 {
                 port_name: zero.name.clone(),
-                windows_device_instance_id: zero.windows_device_instance_id.clone().unwrap(),
+                macos_device_instance_id: None,
+                windows_device_instance_id: zero.windows_device_instance_id.clone(),
             },
             &[zero],
         )
@@ -201,4 +209,77 @@ fn machine_binding_rejects_zero_vid_or_pid_on_selection_and_reload() {
         "a persisted zero USB identity must never recover into an active selection"
     );
     let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn macos_binding_roundtrip_requires_callout_generation_and_rejects_mixed_identity() {
+    let path = path("macos-v2");
+    let _ = std::fs::remove_file(&path);
+    let mut a = port("/dev/cu.usbserial-A", "unused", "A-SERIAL");
+    a.windows_device_instance_id = None;
+    a.macos_device_instance_id = Some("ioreg:000000010000abcd".into());
+    let request = SelectSerialDmxMachineBindingRequestV1 {
+        port_name: a.name.clone(),
+        windows_device_instance_id: None,
+        macos_device_instance_id: a.macos_device_instance_id.clone(),
+    };
+    let status = select_binding_from_ports(&path, &request, &[a.clone()]).unwrap();
+    assert_eq!(
+        status.state,
+        SerialDmxMachineBindingStateV1::SelectedAndPresent
+    );
+    let bytes = std::fs::read(&path).unwrap();
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&bytes).unwrap()["version"],
+        2
+    );
+    let mut changed = a.clone();
+    changed.macos_device_instance_id = Some("ioreg:000000010000abce".into());
+    assert_eq!(
+        binding_status_from_path(&path, &[changed]).state,
+        SerialDmxMachineBindingStateV1::StaleOrMissing
+    );
+    for bad in ["", "ioreg:0000000000000000", "ioreg:not-a-generation"] {
+        let mut invalid = a.clone();
+        invalid.macos_device_instance_id = Some(bad.into());
+        assert!(SerialDmxMachineBindingIdentityV2::from_summary(&invalid).is_err());
+    }
+    let mut mixed = a.clone();
+    mixed.windows_device_instance_id = Some("Windows".into());
+    assert!(SerialDmxMachineBindingIdentityV2::from_summary(&mixed).is_err());
+    let mut dialin = a.clone();
+    dialin.name = "/dev/tty.usbserial-A".into();
+    assert!(SerialDmxMachineBindingIdentityV2::from_summary(&dialin).is_err());
+    assert!(select_binding_from_ports(&path, &request, &[a.clone(), a]).is_err());
+    assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn legacy_windows_binding_remains_exact_and_is_upgraded_only_on_explicit_confirmation() {
+    let path = path("windows-v1-upgrade");
+    let a = port("COM3", r"FTDIBUS\A\0000", "A");
+    let legacy = br#"{"version":1,"selected":{"port_name":"COM3","port_type":"USB 0403:6001 USB Serial Port","usb_vid":1027,"usb_pid":24577,"serial_number":"A","manufacturer":"FTDI","product":"USB Serial Port","windows_device_instance_id":"FTDIBUS\\A\\0000"}}"#;
+    std::fs::write(&path, legacy).unwrap();
+    assert_eq!(
+        binding_status_from_path(&path, &[a.clone()]).state,
+        SerialDmxMachineBindingStateV1::SelectedAndPresent
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), legacy);
+    select_binding_from_ports(
+        &path,
+        &SelectSerialDmxMachineBindingRequestV1 {
+            port_name: a.name.clone(),
+            windows_device_instance_id: a.windows_device_instance_id.clone(),
+            macos_device_instance_id: None,
+        },
+        &[a],
+    )
+    .unwrap();
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&std::fs::read(&path).unwrap()).unwrap()
+            ["version"],
+        2
+    );
+    std::fs::remove_file(path).unwrap();
 }

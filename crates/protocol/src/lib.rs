@@ -7584,6 +7584,9 @@ pub struct SerialPortSummary {
     /// approved-instance gate.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub windows_device_instance_id: Option<String>,
+    /// Current IOKit serial-service generation; never a port-name substitute.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub macos_device_instance_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recommended_protocol: Option<DmxOutputProtocol>,
 }

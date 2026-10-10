@@ -333,6 +333,7 @@ fn exact_show_serial_dmx_test_identity() -> io::serial_dmx::VerifiedUsbSerialPor
         serial_number: "SHOW-A".to_string(),
         manufacturer: "FTDI".to_string(),
         product: "USB Serial Port".to_string(),
+        macos_device_instance_id: None,
         windows_device_instance_id: Some(r"FTDIBUS\A\0000".to_string()),
     }
 }
@@ -1339,4 +1340,18 @@ fn show_serial_dmx_wedged_worker_never_blocks_artnet_or_engine_s0_tick() {
         .blackout_engaged()
         .expect("cleanup fault must retain the atomic S0 latch"));
     assert!(armed.engaged);
+}
+
+#[test]
+fn macos_show_serial_identity_is_admitted_without_windows_pnp_and_rejects_mixed_or_stale_shape() {
+    let mut identity = exact_show_serial_dmx_test_identity();
+    identity.port_name = "/dev/cu.usbserial-A".into();
+    identity.windows_device_instance_id = None;
+    identity.macos_device_instance_id = Some("ioreg:000000010000abcd".into());
+    assert!(show_serial_dmx_device_identity_is_exact(&identity));
+    identity.windows_device_instance_id = Some("Windows".into());
+    assert!(!show_serial_dmx_device_identity_is_exact(&identity));
+    identity.windows_device_instance_id = None;
+    identity.port_name = "/dev/tty.usbserial-A".into();
+    assert!(!show_serial_dmx_device_identity_is_exact(&identity));
 }

@@ -323,6 +323,10 @@ for (const ownership of [
 // Exercise the actual controller with deterministic, read-only IPC stand-ins.
 // In particular, no delayed UI intent may be queued behind another action.
 const require = createRequire(import.meta.url);
+const platformIdentityExports = {};
+new Function("exports", ts.transpileModule(read("src/serialDmxDeviceInstance.ts"), {
+  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+}).outputText)(platformIdentityExports);
 const controllerJs = ts.transpileModule(controller, {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
 }).outputText;
@@ -355,6 +359,7 @@ function leaseFixture(initial = "unavailable", config = {}) {
     return {...query.statuses[0].authority};
   };
   const imports = {
+    "./serialDmxDeviceInstance": platformIdentityExports,
     "solid-js": require("solid-js"),
     "./outputControlController": {
       queryDsf2026ArtNetAcceptanceProbeStatus: async () => null,

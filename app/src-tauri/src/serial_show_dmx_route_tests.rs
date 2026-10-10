@@ -7,8 +7,8 @@ use super::show_serial_dmx_route::{
 };
 use super::*;
 
-fn selected_a() -> serial_dmx_machine::SerialDmxMachineBindingIdentityV1 {
-    serial_dmx_machine::SerialDmxMachineBindingIdentityV1 {
+fn selected_a() -> serial_dmx_machine::SerialDmxMachineBindingIdentityV2 {
+    serial_dmx_machine::SerialDmxMachineBindingIdentityV2 {
         port_name: "COM3".to_string(),
         port_type: "USB 0403:6001 USB Serial Port".to_string(),
         usb_vid: 0x0403,
@@ -16,12 +16,13 @@ fn selected_a() -> serial_dmx_machine::SerialDmxMachineBindingIdentityV1 {
         serial_number: "SHOW-A".to_string(),
         manufacturer: "FTDI".to_string(),
         product: "USB Serial Port".to_string(),
-        windows_device_instance_id: r"FTDIBUS\A\0000".to_string(),
+        macos_device_instance_id: None,
+        windows_device_instance_id: Some(r"FTDIBUS\A\0000".to_string()),
     }
 }
 
-fn selected_b() -> serial_dmx_machine::SerialDmxMachineBindingIdentityV1 {
-    serial_dmx_machine::SerialDmxMachineBindingIdentityV1 {
+fn selected_b() -> serial_dmx_machine::SerialDmxMachineBindingIdentityV2 {
+    serial_dmx_machine::SerialDmxMachineBindingIdentityV2 {
         port_name: "COM4".to_string(),
         port_type: "USB 0403:6001 USB Serial Port".to_string(),
         usb_vid: 0x0403,
@@ -29,15 +30,17 @@ fn selected_b() -> serial_dmx_machine::SerialDmxMachineBindingIdentityV1 {
         serial_number: "SHOW-B".to_string(),
         manufacturer: "FTDI".to_string(),
         product: "USB Serial Port".to_string(),
-        windows_device_instance_id: r"FTDIBUS\B\0000".to_string(),
+        macos_device_instance_id: None,
+        windows_device_instance_id: Some(r"FTDIBUS\B\0000".to_string()),
     }
 }
 
 fn select_request(
-    selected: &serial_dmx_machine::SerialDmxMachineBindingIdentityV1,
+    selected: &serial_dmx_machine::SerialDmxMachineBindingIdentityV2,
 ) -> serial_dmx_machine::SelectSerialDmxMachineBindingRequestV1 {
     serial_dmx_machine::SelectSerialDmxMachineBindingRequestV1 {
         port_name: selected.port_name.clone(),
+        macos_device_instance_id: None,
         windows_device_instance_id: selected.windows_device_instance_id.clone(),
     }
 }
@@ -72,7 +75,7 @@ fn fault_recovery_admission(
 }
 
 fn port_from_selected(
-    selected: &serial_dmx_machine::SerialDmxMachineBindingIdentityV1,
+    selected: &serial_dmx_machine::SerialDmxMachineBindingIdentityV2,
 ) -> SerialPortSummary {
     SerialPortSummary {
         name: selected.port_name.clone(),
@@ -82,13 +85,14 @@ fn port_from_selected(
         serial_number: Some(selected.serial_number.clone()),
         manufacturer: Some(selected.manufacturer.clone()),
         product: Some(selected.product.clone()),
-        windows_device_instance_id: Some(selected.windows_device_instance_id.clone()),
+        macos_device_instance_id: None,
+        windows_device_instance_id: selected.windows_device_instance_id.clone(),
         recommended_protocol: None,
     }
 }
 
 fn identity_from_selected(
-    selected: &serial_dmx_machine::SerialDmxMachineBindingIdentityV1,
+    selected: &serial_dmx_machine::SerialDmxMachineBindingIdentityV2,
 ) -> io::serial_dmx::VerifiedUsbSerialPortIdentity {
     io::serial_dmx::VerifiedUsbSerialPortIdentity {
         port_name: selected.port_name.clone(),
@@ -98,7 +102,8 @@ fn identity_from_selected(
         serial_number: selected.serial_number.clone(),
         manufacturer: selected.manufacturer.clone(),
         product: selected.product.clone(),
-        windows_device_instance_id: Some(selected.windows_device_instance_id.clone()),
+        macos_device_instance_id: None,
+        windows_device_instance_id: selected.windows_device_instance_id.clone(),
     }
 }
 
@@ -166,11 +171,11 @@ fn show_serial_dmx_device_matcher_requires_the_exact_machine_local_selection() {
     .expect("selected identity must be capturable");
     assert_eq!(
         identity.windows_device_instance_id.as_deref(),
-        Some(selected.windows_device_instance_id.as_str())
+        selected.windows_device_instance_id.as_deref()
     );
 
     let mut other = selected.clone();
-    other.windows_device_instance_id = r"FTDIBUS\B\0000".to_string();
+    other.windows_device_instance_id = Some(r"FTDIBUS\B\0000".to_string());
     let mismatch = validate_exact_show_serial_dmx_device_matches_with_capture(
         &[port_from_selected(&other)],
         &selected,
@@ -423,4 +428,33 @@ fn show_serial_dmx_binding_replacement_requires_clean_stopped_receipt_and_rolls_
         "B may persist only after A is joined, faulted S0 remains latched, and the old missing receipt is not mistaken for an in-flight transition"
     );
     let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn macos_show_route_capture_requires_the_selected_iokit_generation() {
+    let mut selected = selected_a();
+    selected.port_name = "/dev/cu.usbserial-A".into();
+    selected.windows_device_instance_id = None;
+    selected.macos_device_instance_id = Some("ioreg:000000010000abcd".into());
+    let mut port = port_from_selected(&selected);
+    port.macos_device_instance_id = selected.macos_device_instance_id.clone();
+    let capture = |port: &SerialPortSummary| {
+        let mut identity = io::serial_dmx::VerifiedUsbSerialPortIdentity::from_summary(port)
+            .map_err(|e| e.to_string())?;
+        identity.macos_device_instance_id = port.macos_device_instance_id.clone();
+        Ok(identity)
+    };
+    assert!(validate_exact_show_serial_dmx_device_matches_with_capture(
+        &[port.clone()],
+        &selected,
+        capture
+    )
+    .is_ok());
+    port.macos_device_instance_id = Some("ioreg:000000010000abce".into());
+    assert!(validate_exact_show_serial_dmx_device_matches_with_capture(
+        &[port],
+        &selected,
+        capture
+    )
+    .is_err());
 }

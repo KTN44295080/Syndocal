@@ -1,3 +1,4 @@
+import { serialDmxDeviceInstance } from "../serialDmxDeviceInstance";
 import { createSignal } from "solid-js";
 import type {
   DmxOutputConfig,
@@ -30,6 +31,7 @@ interface UsbDmxIdentityDisplay {
   usbPid: number | null | undefined;
   serialNumber: string | null | undefined;
   windowsDeviceInstanceId: string | null | undefined;
+  macosDeviceInstanceId: string | null | undefined;
 }
 
 const rawUsbDmxIdentityForPort = (port: SerialPortSummary): UsbDmxIdentityDisplay => ({
@@ -40,6 +42,7 @@ const rawUsbDmxIdentityForPort = (port: SerialPortSummary): UsbDmxIdentityDispla
   usbPid: port.usb_pid,
   serialNumber: port.serial_number,
   windowsDeviceInstanceId: port.windows_device_instance_id,
+  macosDeviceInstanceId: port.macos_device_instance_id,
 });
 
 const rawUsbDmxIdentityForBinding = (
@@ -52,6 +55,7 @@ const rawUsbDmxIdentityForBinding = (
   usbPid: identity.usb_pid,
   serialNumber: identity.serial_number,
   windowsDeviceInstanceId: identity.windows_device_instance_id,
+  macosDeviceInstanceId: identity.macos_device_instance_id,
 });
 
 const usbHex = (value: number | null | undefined) => value === null || value === undefined
@@ -85,7 +89,7 @@ const hasExactMachineLocalOpenDmxIdentity = (
   && hasNonemptyUsbIdentityText(port.serial_number)
   && hasNonemptyUsbIdentityText(port.manufacturer)
   && hasNonemptyUsbIdentityText(port.product)
-  && hasNonemptyUsbIdentityText(port.windows_device_instance_id),
+  && Boolean(serialDmxDeviceInstance(port)),
 );
 
 function RawUsbDmxIdentity(props: {
@@ -96,11 +100,11 @@ function RawUsbDmxIdentity(props: {
   return <section class="ioDisclosureDescription" {...{ [props.dataAttribute]: "" }}>
     <strong>{props.heading}</strong>
     <dl class="usbDmxIdentityFields">
-      <dt>COM</dt><dd><code data-no-localize>{props.identity?.portName ?? "missing"}</code></dd>
+      <dt>Port</dt><dd><code data-no-localize>{props.identity?.portName ?? "missing"}</code></dd>
       <dt>Manufacturer / product</dt><dd><code data-no-localize>{`${rawUsbValue(props.identity?.manufacturer)} / ${rawUsbValue(props.identity?.product)}`}</code></dd>
       <dt>USB VID / PID</dt><dd><code data-no-localize>{`${usbHex(props.identity?.usbVid)} / ${usbHex(props.identity?.usbPid)}`}</code></dd>
       <dt>Serial</dt><dd><code data-no-localize>{rawUsbValue(props.identity?.serialNumber)}</code></dd>
-      <dt>Windows PnP instance</dt><dd><code data-no-localize>{rawUsbValue(props.identity?.windowsDeviceInstanceId)}</code></dd>
+      <dt>Device instance</dt><dd><code data-no-localize>{rawUsbValue(props.identity?.windowsDeviceInstanceId ?? props.identity?.macosDeviceInstanceId)}</code></dd>
     </dl>
   </section>;
 }
@@ -113,7 +117,7 @@ const isExactShowArtNetLoopbackRoute = (output: DmxOutputConfig) =>
   && output.serial_port === "";
 
 const serialPortKey = (port: SerialPortSummary) =>
-  `${port.name}\u0000${port.windows_device_instance_id ?? ""}`;
+  `${port.name}\u0000${serialDmxDeviceInstance(port) ?? ""}`;
 
 /**
  * The show route is deliberately not an editor: Unity shares this machine's
@@ -125,7 +129,7 @@ export function DmxOutputConfigPanel(props: DmxOutputConfigPanelProps) {
   const artNetUnityMirrorEnabled = () => exactRoute() && props.output.enabled;
   const persistedBindingKey = () => {
     const identity = props.serialDmxMachineBindingStatus?.selected;
-    return identity ? `${identity.port_name}\u0000${identity.windows_device_instance_id}` : "";
+    return identity ? `${identity.port_name}\u0000${identity.windows_device_instance_id ?? identity.macos_device_instance_id ?? ""}` : "";
   };
   const selectedSerialPort = () => {
     const explicitKey = selectedSerialPortKey();

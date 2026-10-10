@@ -1,3 +1,4 @@
+import { serialDmxDeviceInstance } from "./serialDmxDeviceInstance";
 import type {
   SerialDmxMachineBindingStatus,
 } from "./types";
@@ -41,6 +42,7 @@ const routeRevision = (value: unknown, label: string): string | null =>
 
 const validateIdentity = (value: unknown): string | null => {
   if (!isRecord(value)) return "binding selected identity must be an object";
+  const platformKey = Object.hasOwn(value, "macos_device_instance_id") ? "macos_device_instance_id" : "windows_device_instance_id";
   const keyError = hasExactKeys(value, [
     "port_name",
     "port_type",
@@ -49,7 +51,7 @@ const validateIdentity = (value: unknown): string | null => {
     "serial_number",
     "manufacturer",
     "product",
-    "windows_device_instance_id",
+    platformKey,
   ], "binding selected identity");
   if (keyError) return keyError;
   for (const [key, label] of [
@@ -58,10 +60,15 @@ const validateIdentity = (value: unknown): string | null => {
     ["serial_number", "binding hardware serial"],
     ["manufacturer", "binding manufacturer"],
     ["product", "binding product"],
-    ["windows_device_instance_id", "binding Windows PnP instance"],
+    [platformKey, "binding device instance"],
   ] as const) {
     const textError = nonemptyText(value[key], label);
     if (textError) return textError;
+  }
+  if (!serialDmxDeviceInstance({ name: value.port_name as string,
+    windows_device_instance_id: value.windows_device_instance_id as string | undefined,
+    macos_device_instance_id: value.macos_device_instance_id as string | undefined })) {
+    return "binding device instance is invalid or ambiguous";
   }
   return nonzeroU16(value.usb_vid, "binding USB VID")
     ?? nonzeroU16(value.usb_pid, "binding USB PID");

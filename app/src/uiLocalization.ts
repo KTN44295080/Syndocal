@@ -25,6 +25,22 @@ export const djLinkMachineBlockReasonText = (reason: string): string => ({
 }[reason] ?? "DJ Link is blocked until its machine authority can be verified.");
 
 const japaneseText: Record<string, string> = {
+  "Show tools": "ショーツール",
+  "Additional show controls": "追加のショー操作",
+  "Control mapping": "操作割り当て",
+  "Output status": "出力状態",
+  "Pairing, exact operation grants, and revocation stay in the trusted desktop. Promoted external MCP clients can execute granted R4/R5 operations without individual approval.": "ペアリング、操作ごとの権限付与、失効は信頼済みデスクトップで管理します。昇格した外部MCPクライアントは、許可済みR4/R5操作を個別承認なしで実行できます。",
+  "Playback, control mapping and audio input": "再生・操作割り当て・音声入力",
+  "Prepared consent applies to local adapters. External MCP uses exact operation grants and does not require this step.": "事前同意はローカルアダプターに適用します。外部MCPは操作ごとの権限付与を使うため、この手順は不要です。",
+  "Show status": "ショー状態",
+  "Tempo and audio input": "テンポ・音声入力",
+  "Tools": "ツール",
+
+  "Device instance": "機器インスタンス",
+  "USB-DMX confirmation requires the current device instance; refresh serial devices and select again.": "USB-DMX確認には現在の機器インスタンスが必要です。シリアル機器を再検索して選択してください。",
+  "USB-DMX selection requires a port and exactly one Windows PnP or macOS IOKit instance": "USB-DMXの選択にはポートとWindows PnPまたはmacOS IOKitの機器IDが1つ必要です。",
+  "USB-DMX selection requires exactly one current Windows PnP or macOS IOKit instance": "USB-DMXの選択には現在のWindows PnPまたはmacOS IOKitの機器IDが1つ必要です。",
+
   "Timeline Video lane(s) +": "タイムライン映像レーン +",
   "fixed video layer(s) /": "固定映像レイヤー /",
   "Timeline Video — rendered below fixed video layers": "タイムライン映像 — 固定映像レイヤーの下に描画",

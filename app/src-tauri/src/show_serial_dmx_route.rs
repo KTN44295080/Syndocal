@@ -26,7 +26,7 @@ pub(super) fn serial_dmx_machine_binding_path(app: &tauri::AppHandle) -> Result<
 #[serde(rename_all = "camelCase")]
 pub(super) struct SerialDmxMachineBindingStatusWithRouteRevisionV1 {
     state: serial_dmx_machine::SerialDmxMachineBindingStateV1,
-    selected: Option<serial_dmx_machine::SerialDmxMachineBindingIdentityV1>,
+    selected: Option<serial_dmx_machine::SerialDmxMachineBindingIdentityV2>,
     detail: String,
     route_status_revision: String,
 }
@@ -350,18 +350,18 @@ pub(super) async fn stop_command(
 
 pub(super) fn validate_exact_show_serial_dmx_device_matches(
     ports: &[SerialPortSummary],
-    selected: &serial_dmx_machine::SerialDmxMachineBindingIdentityV1,
+    selected: &serial_dmx_machine::SerialDmxMachineBindingIdentityV2,
 ) -> Result<io::serial_dmx::VerifiedUsbSerialPortIdentity, String> {
     validate_exact_show_serial_dmx_device_matches_with_capture(ports, selected, |port| {
-        io::serial_dmx::VerifiedUsbSerialPortIdentity::from_summary_with_windows_com_binding(port)
+        io::serial_dmx::VerifiedUsbSerialPortIdentity::from_summary_with_platform_binding(port)
             .map_err(|error| format!("Show serial DMX device identity is incomplete: {error}"))
     })
 }
 
 pub(super) fn validate_exact_show_serial_dmx_device_matches_with_capture<F>(
     ports: &[SerialPortSummary],
-    selected: &serial_dmx_machine::SerialDmxMachineBindingIdentityV1,
-    capture_windows_identity: F,
+    selected: &serial_dmx_machine::SerialDmxMachineBindingIdentityV2,
+    capture_platform_identity: F,
 ) -> Result<io::serial_dmx::VerifiedUsbSerialPortIdentity, String>
 where
     F: FnOnce(&SerialPortSummary) -> Result<io::serial_dmx::VerifiedUsbSerialPortIdentity, String>,
@@ -377,7 +377,7 @@ where
             "Selected machine-local USB-DMX interface is ambiguous; output remains disabled until explicit reselect.".to_string()
         });
     };
-    let identity = capture_windows_identity(port)?;
+    let identity = capture_platform_identity(port)?;
     if identity.port_name != selected.port_name
         || identity.port_type != selected.port_type
         || identity.usb_vid != selected.usb_vid
@@ -386,7 +386,9 @@ where
         || identity.manufacturer != selected.manufacturer
         || identity.product != selected.product
         || identity.windows_device_instance_id.as_deref()
-            != Some(selected.windows_device_instance_id.as_str())
+            != selected.windows_device_instance_id.as_deref()
+        || identity.macos_device_instance_id.as_deref()
+            != selected.macos_device_instance_id.as_deref()
     {
         return Err(format!(
             "Show serial DMX hardware identity changed after selection; expected {}, observed {:?}. Output remains disabled.",

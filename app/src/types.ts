@@ -268,6 +268,7 @@ export interface SerialPortSummary {
   manufacturer?: string | null;
   product?: string | null;
   windows_device_instance_id?: string | null;
+  macos_device_instance_id?: string | null;
   recommended_protocol?: DmxOutputProtocol | null;
 }
 
@@ -286,7 +287,8 @@ export interface SerialDmxMachineBindingIdentity {
   serial_number: string;
   manufacturer: string;
   product: string;
-  windows_device_instance_id: string;
+  windows_device_instance_id?: string | null;
+  macos_device_instance_id?: string | null;
 }
 
 export interface SerialDmxMachineBindingStatus {

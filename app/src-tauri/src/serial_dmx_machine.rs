@@ -13,13 +13,13 @@ use protocol::SerialPortSummary;
 use serde::{Deserialize, Serialize};
 
 pub const SERIAL_DMX_MACHINE_BINDING_FILE: &str = "serial-dmx-machine-binding-v1.json";
-const SERIAL_DMX_MACHINE_BINDING_VERSION: u32 = 1;
+const SERIAL_DMX_MACHINE_BINDING_VERSION: u32 = 2;
 const MAX_SERIAL_DMX_MACHINE_BINDING_BYTES: u64 = 8 * 1024;
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct SerialDmxMachineBindingIdentityV1 {
+pub struct SerialDmxMachineBindingIdentityV2 {
     pub port_name: String,
     pub port_type: String,
     pub usb_vid: u16,
@@ -27,10 +27,13 @@ pub struct SerialDmxMachineBindingIdentityV1 {
     pub serial_number: String,
     pub manufacturer: String,
     pub product: String,
-    pub windows_device_instance_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub windows_device_instance_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub macos_device_instance_id: Option<String>,
 }
 
-impl SerialDmxMachineBindingIdentityV1 {
+impl SerialDmxMachineBindingIdentityV2 {
     pub fn from_summary(port: &SerialPortSummary) -> Result<Self, String> {
         fn required(value: Option<&str>, label: &str) -> Result<String, String> {
             let value = value.unwrap_or_default().trim();
@@ -53,6 +56,13 @@ impl SerialDmxMachineBindingIdentityV1 {
                 "Selected USB-DMX interface must expose nonzero USB VID and PID".to_string(),
             );
         }
+        let mut identity = io::serial_dmx::VerifiedUsbSerialPortIdentity::from_summary(port)
+            .map_err(|e| e.to_string())?;
+        identity.windows_device_instance_id = port.windows_device_instance_id.clone();
+        identity.macos_device_instance_id = port.macos_device_instance_id.clone();
+        if !identity.has_exact_platform_instance() {
+            return Err("USB-DMX selection requires exactly one current Windows PnP or macOS IOKit instance".into());
+        }
         Ok(Self {
             port_name,
             port_type,
@@ -61,10 +71,8 @@ impl SerialDmxMachineBindingIdentityV1 {
             serial_number: required(port.serial_number.as_deref(), "hardware serial")?,
             manufacturer: required(port.manufacturer.as_deref(), "manufacturer")?,
             product: required(port.product.as_deref(), "product")?,
-            windows_device_instance_id: required(
-                port.windows_device_instance_id.as_deref(),
-                "Windows PnP instance",
-            )?,
+            windows_device_instance_id: port.windows_device_instance_id.clone(),
+            macos_device_instance_id: port.macos_device_instance_id.clone(),
         })
     }
 
@@ -79,16 +87,19 @@ impl SerialDmxMachineBindingIdentityV1 {
             self.manufacturer,
             self.product,
             self.serial_number,
-            self.windows_device_instance_id,
+            self.windows_device_instance_id
+                .as_deref()
+                .or(self.macos_device_instance_id.as_deref())
+                .unwrap_or_default(),
         )
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct SerialDmxMachineBindingFileV1 {
+struct SerialDmxMachineBindingFileV2 {
     version: u32,
-    selected: SerialDmxMachineBindingIdentityV1,
+    selected: SerialDmxMachineBindingIdentityV2,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -105,7 +116,7 @@ pub enum SerialDmxMachineBindingStateV1 {
 #[serde(rename_all = "camelCase")]
 pub struct SerialDmxMachineBindingStatusV1 {
     pub state: SerialDmxMachineBindingStateV1,
-    pub selected: Option<SerialDmxMachineBindingIdentityV1>,
+    pub selected: Option<SerialDmxMachineBindingIdentityV2>,
     pub detail: String,
 }
 
@@ -113,7 +124,10 @@ pub struct SerialDmxMachineBindingStatusV1 {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SelectSerialDmxMachineBindingRequestV1 {
     pub port_name: String,
-    pub windows_device_instance_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub windows_device_instance_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub macos_device_instance_id: Option<String>,
 }
 
 /// Exact on-disk preimage retained only across one in-process Confirm
@@ -159,7 +173,7 @@ pub fn binding_status_from_path(
         1 => SerialDmxMachineBindingStatusV1 {
             state: SerialDmxMachineBindingStateV1::SelectedAndPresent,
             selected: Some(selected),
-            detail: "The selected machine-local USB-DMX identity is present. Opening revalidates the real Windows handle again.".to_string(),
+            detail: "The selected machine-local USB-DMX identity is present. Opening revalidates the actual device handle again.".to_string(),
         },
         0 => SerialDmxMachineBindingStatusV1 {
             state: SerialDmxMachineBindingStateV1::StaleOrMissing,
@@ -186,23 +200,28 @@ pub fn select_binding_from_ports(
     ports: &[SerialPortSummary],
 ) -> Result<SerialDmxMachineBindingStatusV1, String> {
     let port_name = request.port_name.trim();
-    let instance = request.windows_device_instance_id.trim();
-    if port_name.is_empty() || instance.is_empty() {
+    let windows = request.windows_device_instance_id.as_deref();
+    let macos = request.macos_device_instance_id.as_deref();
+    if port_name.is_empty()
+        || windows.is_some() == macos.is_some()
+        || windows.or(macos).is_none_or(|id| id.trim().is_empty())
+    {
         return Err(
-            "USB-DMX selection must include an enumerated COM alias and Windows PnP instance"
-                .to_string(),
+            "USB-DMX selection requires a port and exactly one Windows PnP or macOS IOKit instance"
+                .into(),
         );
     }
     let matches = ports
         .iter()
         .filter(|port| {
             port.name == port_name
-                && port.windows_device_instance_id.as_deref().map(str::trim) == Some(instance)
+                && port.windows_device_instance_id.as_deref() == windows
+                && port.macos_device_instance_id.as_deref() == macos
         })
         .collect::<Vec<_>>();
     let selected =
         match matches.as_slice() {
-            [port] => SerialDmxMachineBindingIdentityV1::from_summary(port)?,
+            [port] => SerialDmxMachineBindingIdentityV2::from_summary(port)?,
             [] => {
                 return Err(
                     "Selected USB-DMX interface is no longer enumerated; refresh and select again"
@@ -263,7 +282,7 @@ pub fn restore_binding_file_snapshot(
 pub fn resolve_selected_identity_from_path(
     path: &Path,
     ports: &[SerialPortSummary],
-) -> Result<SerialDmxMachineBindingIdentityV1, String> {
+) -> Result<SerialDmxMachineBindingIdentityV2, String> {
     let status = binding_status_from_path(path, ports);
     match status.state {
         SerialDmxMachineBindingStateV1::SelectedAndPresent => status
@@ -278,7 +297,7 @@ pub fn resolve_selected_identity_from_path(
 
 fn load_selected_from_path(
     path: &Path,
-) -> Result<Option<SerialDmxMachineBindingIdentityV1>, String> {
+) -> Result<Option<SerialDmxMachineBindingIdentityV2>, String> {
     let file = match fs::File::open(path) {
         Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -316,9 +335,13 @@ fn load_selected_from_path(
     if bytes.len() as u64 > MAX_SERIAL_DMX_MACHINE_BINDING_BYTES {
         return Err("Machine-local USB-DMX selection grew during read".to_string());
     }
-    let file: SerialDmxMachineBindingFileV1 = serde_json::from_slice(&bytes)
+    let file: SerialDmxMachineBindingFileV2 = serde_json::from_slice(&bytes)
         .map_err(|error| format!("Machine-local USB-DMX selection is invalid: {error}"))?;
-    if file.version != SERIAL_DMX_MACHINE_BINDING_VERSION {
+    if file.version != SERIAL_DMX_MACHINE_BINDING_VERSION
+        && !(file.version == 1
+            && file.selected.macos_device_instance_id.is_none()
+            && file.selected.windows_device_instance_id.is_some())
+    {
         return Err(format!(
             "Machine-local USB-DMX selection version {} is unsupported",
             file.version
@@ -332,19 +355,20 @@ fn load_selected_from_path(
         serial_number: Some(file.selected.serial_number.clone()),
         manufacturer: Some(file.selected.manufacturer.clone()),
         product: Some(file.selected.product.clone()),
-        windows_device_instance_id: Some(file.selected.windows_device_instance_id.clone()),
+        macos_device_instance_id: file.selected.macos_device_instance_id.clone(),
+        windows_device_instance_id: file.selected.windows_device_instance_id.clone(),
         recommended_protocol: None,
     };
-    Ok(Some(SerialDmxMachineBindingIdentityV1::from_summary(
+    Ok(Some(SerialDmxMachineBindingIdentityV2::from_summary(
         &summary,
     )?))
 }
 
 fn persist_selected_to_path(
     path: &Path,
-    selected: &SerialDmxMachineBindingIdentityV1,
+    selected: &SerialDmxMachineBindingIdentityV2,
 ) -> Result<(), String> {
-    let bytes = serde_json::to_vec(&SerialDmxMachineBindingFileV1 {
+    let bytes = serde_json::to_vec(&SerialDmxMachineBindingFileV2 {
         version: SERIAL_DMX_MACHINE_BINDING_VERSION,
         selected: selected.clone(),
     })
