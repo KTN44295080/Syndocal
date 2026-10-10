@@ -1,0 +1,82 @@
+**********************************************************************
+** Visual Studio 2022 Developer Command Prompt v17.14.39
+** Copyright (c) 2025 Microsoft Corporation
+**********************************************************************
+[vcvarsall.bat] Environment initialized for: 'x64'
+C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+   Compiling io v1.2.0-alpha.71 (C:\Users\janua\.codex\worktrees\distribution-alpha70\Syndocal\crates\io)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 7.60s
+     Running unittests src\lib.rs (C:\Users\janua\AppData\Local\Temp\syndocal-native-acceptance-target\debug\deps\io-366006b107c4f591.exe)
+
+running 28 tests
+test serial_dmx::macos_ftdi::tests::ft232r_usb_uart_encoding_is_250k_8n2_with_explicit_break_bit ... ok
+test serial_dmx::tests::builds_enttec_open_dmx_payload ... ok
+test serial_dmx::tests::builds_enttec_usb_pro_send_dmx_packet ... ok
+test serial_dmx::macos_serial_binding::tests::missing_malformed_zero_or_dialin_identity_is_rejected ... ok
+test serial_dmx::macos_serial_binding::tests::exact_descriptor_and_iokit_generation_are_required ... ok
+test serial_dmx::tests::enttec_open_dmx_payload_preserves_slot_order_after_start_code ... ok
+test serial_dmx::tests::exact_ft232r_default_pacing_is_about_32_point_5_fps_not_a_44hz_usb_guarantee ... ok
+test serial_dmx::tests::open_dmx_frame_wire_time_matches_250kbaud_8n2_full_frame ... ok
+test serial_dmx::tests::open_dmx_pacing_does_not_wait_when_the_write_already_took_the_budget ... ok
+test serial_dmx::tests::open_dmx_pacing_waits_the_full_frame_budget_from_a_fast_write ... ok
+test serial_dmx::tests::open_dmx_mailbox_replaces_the_oldest_frame_when_full ... ok
+test serial_dmx::tests::enttec_usb_pro_packet_preserves_all_slots_after_start_code ... ok
+test serial_dmx::tests::open_dmx_s0_latch_preempts_a_wedged_physical_gate_without_claiming_a_zero_write ... ok
+test serial_dmx::tests::open_dmx_write_timeout_covers_the_full_frame_and_rig_guard ... ok
+test serial_dmx::tests::recommends_only_known_single_port_serial_dmx_products ... ok
+test serial_dmx::tests::serial_senders_reject_blank_port_paths_before_opening ... ok
+test serial_dmx::tests::verified_usb_identity_rejects_zero_vid_or_pid ... ok
+test serial_dmx::tests::verified_open_rejects_manual_incomplete_or_zero_identity_before_enumeration ... ok
+test serial_dmx::tests::verified_enumeration_requires_the_exact_windows_pnp_instance ... ok
+test serial_dmx::tests::verified_windows_direct_com_open_rejects_identity_or_path_drift_without_port_name_trust ... ok
+test serial_dmx::tests::writes_enttec_usb_pro_packet_to_writer ... ok
+test serial_dmx::tests::open_dmx_zero_reservation_drop_is_nonblocking_and_allows_explicit_rearm_release ... ok
+test serial_dmx::tests::verified_windows_com_handle_rejects_a_non_communications_handle ... ok
+test serial_dmx::tests::open_dmx_write_zero_is_terminal_under_s0_and_never_retries_live_bytes ... ok
+test serial_dmx::tests::open_dmx_worker_s0_reservation_before_physical_gate_writes_zero_only ... ok
+test serial_dmx::tests::open_dmx_zero_receipt_requires_a_later_real_zero_transaction ... ok
+test serial_dmx::tests::open_dmx_shutdown_timeout_detaches_before_sender_drop_can_join_a_wedged_worker ... ok
+test serial_dmx::tests::open_dmx_worker_write_winner_allows_one_live_frame_then_s0_forces_zero ... ok
+
+test result: ok. 28 passed; 0 failed; 0 ignored; 0 measured; 163 filtered out; finished in 0.06s
+
+   Compiling io v1.2.0-alpha.71 (C:\Users\janua\.codex\worktrees\distribution-alpha70\Syndocal\crates\io)
+   Compiling engine v1.2.0-alpha.71 (C:\Users\janua\.codex\worktrees\distribution-alpha70\Syndocal\crates\engine)
+   Compiling syndocal v1.2.0-alpha.71 (C:\Users\janua\.codex\worktrees\distribution-alpha70\Syndocal\app\src-tauri)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2m 05s
+     Running unittests src\main.rs (C:\Users\janua\AppData\Local\Temp\syndocal-native-acceptance-target\debug\deps\syndocal-6b50d6ab7d78e79d.exe)
+
+running 7 tests
+test serial_dmx_machine::tests::machine_binding_rejects_zero_vid_or_pid_on_selection_and_reload ... ok
+test serial_dmx_machine::tests::machine_binding_rejects_missing_selection_com_renumber_and_ambiguity_without_substitution ... ok
+test serial_dmx_machine::tests::machine_binding_failed_or_ambiguous_reselection_preserves_prior_local_bytes ... ok
+test serial_dmx_machine::tests::machine_binding_selection_does_not_write_a_project_file ... ok
+test serial_dmx_machine::tests::legacy_windows_binding_remains_exact_and_is_upgraded_only_on_explicit_confirmation ... ok
+test serial_dmx_machine::tests::macos_binding_roundtrip_requires_callout_generation_and_rejects_mixed_identity ... ok
+test serial_dmx_machine::tests::machine_binding_corrupt_future_and_unknown_json_fail_closed_without_rewrite ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 2046 filtered out; finished in 0.01s
+
+   Compiling io v1.2.0-alpha.71 (C:\Users\janua\.codex\worktrees\distribution-alpha70\Syndocal\crates\io)
+   Compiling engine v1.2.0-alpha.71 (C:\Users\janua\.codex\worktrees\distribution-alpha70\Syndocal\crates\engine)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 37.59s
+     Running unittests src\lib.rs (C:\Users\janua\AppData\Local\Temp\syndocal-native-acceptance-target\debug\deps\engine-89e81b007af02350.exe)
+
+running 1 test
+test tests::show_serial_dmx_tests::macos_show_serial_identity_is_admitted_without_windows_pnp_and_rejects_mixed_or_stale_shape ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1112 filtered out; finished in 0.00s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.74s
+     Running unittests src\main.rs (C:\Users\janua\AppData\Local\Temp\syndocal-native-acceptance-target\debug\deps\syndocal-6b50d6ab7d78e79d.exe)
+
+running 6 tests
+test serial_show_dmx_route_tests::show_serial_dmx_requires_the_exact_enabled_unity_artnet_mirror_not_a_staged_route ... ok
+test serial_show_dmx_route_tests::macos_show_route_capture_requires_the_selected_iokit_generation ... ok
+test serial_show_dmx_route_tests::show_serial_dmx_identity_capture_cannot_promote_a_b_a_replacement ... ok
+test serial_show_dmx_route_tests::show_serial_dmx_device_matcher_requires_the_exact_machine_local_selection ... ok
+test serial_show_dmx_route_tests::show_serial_dmx_binding_replacement_after_healthy_stop_requires_the_physical_zero_receipt ... ok
+test serial_show_dmx_route_tests::show_serial_dmx_binding_replacement_requires_clean_stopped_receipt_and_rolls_back_post_persist_fault ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 2047 filtered out; finished in 0.01s

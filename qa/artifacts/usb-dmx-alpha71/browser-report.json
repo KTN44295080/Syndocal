@@ -1,0 +1,67 @@
+{
+  "browserPlugin": "unavailable",
+  "softwareOnly": true,
+  "results": [
+    {
+      "platform": "mac",
+      "width": 1920,
+      "request": {
+        "portName": "/dev/cu.usbserial-A",
+        "windowsDeviceInstanceId": null,
+        "macosDeviceInstanceId": "ioreg:000000010000abcd"
+      },
+      "missingDeviceBlocked": true
+    },
+    {
+      "platform": "macusb",
+      "width": 1920,
+      "request": {
+        "portName": "usb-ftdi://000000010000abcd",
+        "windowsDeviceInstanceId": null,
+        "macosDeviceInstanceId": "ioreg:000000010000abcd"
+      },
+      "missingDeviceBlocked": true
+    },
+    {
+      "platform": "windows",
+      "width": 1920,
+      "request": {
+        "portName": "COM4",
+        "windowsDeviceInstanceId": "FTDIBUS-A",
+        "macosDeviceInstanceId": null
+      },
+      "missingDeviceBlocked": true
+    },
+    {
+      "platform": "mac",
+      "width": 1280,
+      "request": {
+        "portName": "/dev/cu.usbserial-A",
+        "windowsDeviceInstanceId": null,
+        "macosDeviceInstanceId": "ioreg:000000010000abcd"
+      },
+      "missingDeviceBlocked": true
+    },
+    {
+      "platform": "macusb",
+      "width": 1280,
+      "request": {
+        "portName": "usb-ftdi://000000010000abcd",
+        "windowsDeviceInstanceId": null,
+        "macosDeviceInstanceId": "ioreg:000000010000abcd"
+      },
+      "missingDeviceBlocked": true
+    },
+    {
+      "platform": "windows",
+      "width": 1280,
+      "request": {
+        "portName": "COM4",
+        "windowsDeviceInstanceId": "FTDIBUS-A",
+        "macosDeviceInstanceId": null
+      },
+      "missingDeviceBlocked": true
+    }
+  ],
+  "errors": []
+}

@@ -1,0 +1,45 @@
+{
+  "passed": true,
+  "zip": "C:\\Users\\janua\\Downloads\\Syndocal-1.2.0-alpha.71\\Syndocal_1.2.0-alpha.71_Windows-x64-install.zip",
+  "bytes": 100897969,
+  "sha256": "045e73838066fb99935d661a0b7dc27075118daf3ce839e6252afbe11cd30eb1",
+  "contents": [
+    {
+      "name": "Syndocal_1.2.0-alpha.71_x64-setup.exe",
+      "sha256": "47da71b3c28186112670e3eb7adbfbad826cc035cde6377d5f08788989e6d45c",
+      "bytes": 82417262
+    },
+    {
+      "name": "Syndocal_1.2.0-alpha.71_x64-setup.exe.sha256",
+      "sha256": "3d54357720904e1af2fbe48a386055942812fa4e7884b244154ac4e2190b2fab",
+      "bytes": 104
+    },
+    {
+      "name": "VC_redist.x64.exe",
+      "sha256": "843068991daaa1f73ad9f6239bce4d0f6a07a51f18c37ea2a867e9beca71295c",
+      "bytes": 18731856
+    },
+    {
+      "name": "Install-Windows.cmd",
+      "sha256": "d08b3c6b13afa7cbd8ac153c65ea0b14f65e712a327b74e6c06bf60d028c3f2d",
+      "bytes": 199
+    },
+    {
+      "name": "Install-Windows.ps1",
+      "sha256": "5f0873e1af25ab9aa7de114455ebf917f0bc5fa9e080abe1ee48dfdb1fb6a181",
+      "bytes": 2146
+    },
+    {
+      "name": "README.txt",
+      "sha256": "dc41e2bdb99f7e2e9ae04f935b7cb0e0f4b413bb3344567cf7a71095b8f22643",
+      "bytes": 2135
+    },
+    {
+      "name": "使い方.txt",
+      "sha256": "84717af095510e1c20b6b5df6046f73b2ba783b65e74405e88a99d4f78d17037",
+      "bytes": 2103
+    }
+  ],
+  "extractedValidationPassed": true,
+  "noInstallerExecuted": true
+}

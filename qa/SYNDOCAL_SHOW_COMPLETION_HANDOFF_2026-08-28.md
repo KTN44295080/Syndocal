@@ -1,8 +1,13 @@
 # Syndocal 2026-09-02 show completion handoff
 
+## 2026-10-10 alpha.71 Mac USB-DMX and development distribution
+
+Current product metadata is `1.2.0-alpha.71`. macOS USB-DMX now uses an exact IOKit generation for BSD serial or native FT232R USB output. Windows x64 and macOS 12+ Apple Silicon packages and their acceptance are recorded in [the checkpoint](USB_DMX_MACOS_ALPHA71_2026-10-10.md). Physical SH-RS09B output and full release acceptance remain open.
+
+
 ## 2026-10-08 alpha.70 development installers
 
-Current product metadata is `1.2.0-alpha.70`. Windows x64 NSIS/MSI and macOS 12+ Apple Silicon DMG were produced from base `97b9c6d3151a049e78ee92ac29254de5b7346e8f` on `codex/distribution-alpha70-20261008`. This is an unsigned development distribution; hardware, clean-machine, signing, notarization and complete product acceptance remain open. See [distribution evidence](DEVELOPMENT_INSTALLERS_ALPHA70_2026-10-08.md).
+Recorded alpha.70 product metadata was `1.2.0-alpha.70`. Windows x64 NSIS/MSI and macOS 12+ Apple Silicon DMG were produced from base `97b9c6d3151a049e78ee92ac29254de5b7346e8f` on `codex/distribution-alpha70-20261008`. This is an unsigned development distribution; hardware, clean-machine, signing, notarization and complete product acceptance remain open. See [distribution evidence](DEVELOPMENT_INSTALLERS_ALPHA70_2026-10-08.md).
 
 
 ## 2026-09-05 alpha.69 recording atomic-publication SOURCE CANDIDATE

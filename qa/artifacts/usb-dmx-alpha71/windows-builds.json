@@ -1,0 +1,37 @@
+{
+  "productVersion": "1.2.0-alpha.71",
+  "logs": [
+    {
+      "file": "C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-alpha71-no-bundle.txt",
+      "sha256": "99548fdb5eb1463882365b2279e76af4ec42804aaec1d600bc33df9af5b52f67",
+      "completed": true,
+      "exitCode": 0,
+      "rustWarnings": 0,
+      "viteChunkAdvisories": 1
+    },
+    {
+      "file": "C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-alpha71-bundles.txt",
+      "sha256": "c4d1e657dfa4513546b16434b9b801f9fbb0116b214f26003afa91ec85bc23fc",
+      "completed": true,
+      "exitCode": 0,
+      "rustWarnings": 0,
+      "viteChunkAdvisories": 1
+    },
+    {
+      "file": "C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-alpha71-release-check-final.txt",
+      "sha256": "adb03615d173ae380f659c3c67ac63fab6061b71f3dad65bc4fd8238f1265654",
+      "completed": true,
+      "exitCode": 0,
+      "rustWarnings": 0,
+      "viteChunkAdvisories": 0
+    }
+  ],
+  "firstPartyRustWarnings": 0,
+  "viteChunkBaseline": 1,
+  "toolingWarnings": [
+    "NSIS tooling cache was reconstructed; package hash validated by Tauri."
+  ],
+  "nonclaims": [
+    "No clean-PC installation, hardware output or signing acceptance"
+  ]
+}
