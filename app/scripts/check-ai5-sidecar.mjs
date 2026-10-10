@@ -126,6 +126,12 @@ if (process.argv.includes("--self-test")) {
   console.log("AI5 sidecar self-test passed: 4 assertions");
 } else {
   const root = fileURLToPath(new URL("../../", import.meta.url));
+  const identity = fileURLToPath(new URL("../../tools/syndocal-mcp/test-process-identity.mjs", import.meta.url));
+  const identityResult = await execFileAsync(process.execPath, ["--test", identity], {
+    cwd: root, windowsHide: true, maxBuffer: 1024 * 1024, timeout: 30000,
+  });
+  process.stdout.write(identityResult.stdout);
+  process.stderr.write(identityResult.stderr);
   const check = fileURLToPath(new URL("../../tools/syndocal-mcp/check.mjs", import.meta.url));
   const result = await execFileAsync(process.execPath, [check], {
     cwd: root,

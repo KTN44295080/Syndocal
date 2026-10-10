@@ -3,6 +3,7 @@
 mod agent_bridge;
 mod agent_bridge_execution;
 mod native_adapter_error;
+mod process_identity_cli;
 use std::{
     cell::RefCell,
     collections::{hash_map::Entry, BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
@@ -132026,6 +132027,13 @@ include!("tests/live_audio_input_tests.rs");
 mod video_recording_runtime_tests;
 
 fn main() {
+    if process_identity_cli::requested(env::args_os().skip(1)) {
+        if let Err(error) = process_identity_cli::run(env::args_os().skip(1)) {
+            eprintln!("Process inspection failed: {error}");
+            std::process::exit(1);
+        }
+        return;
+    }
     if video_recording_renderer_process::worker_cli_requested(env::args_os().skip(1)) {
         if let Err(error) = video_recording_renderer_process::run_worker() {
             eprintln!("Recording renderer worker failed: {error}");

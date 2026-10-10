@@ -1,0 +1,37 @@
+name: macOS MCP process identity
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - app/src-tauri/src/main.rs
+      - app/src-tauri/src/process_identity_cli.rs
+      - tools/syndocal-mcp/process-identity.mjs
+      - tools/syndocal-mcp/server.mjs
+      - tools/syndocal-mcp/test-process-identity.mjs
+      - tools/syndocal-mcp/check-macos-process-identity.mjs
+      - .github/workflows/macos-mcp-identity.yml
+permissions:
+  contents: read
+jobs:
+  identity:
+    runs-on: macos-15
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22.22.1
+      - uses: dtolnay/rust-toolchain@1.97.1
+      - name: Verify bounded identity parsing and native libproc inspection
+        run: |
+          mkdir -p target/qa/macos-mcp-identity
+          set -o pipefail
+          node --test tools/syndocal-mcp/test-process-identity.mjs | tee target/qa/macos-mcp-identity/node-tests.tap
+          node tools/syndocal-mcp/check-macos-process-identity.mjs 2>&1 | tee target/qa/macos-mcp-identity/native-tests.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: macos-mcp-identity-${{ github.sha }}-${{ github.run_attempt }}
+          path: target/qa/macos-mcp-identity/
+          if-no-files-found: error
+          retention-days: 7

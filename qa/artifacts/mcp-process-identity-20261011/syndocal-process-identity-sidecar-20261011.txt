@@ -1,0 +1,57 @@
+
+> syndocal@1.2.0-alpha.71 check:ai5-sidecar C:\Users\janua\.codex\worktrees\distribution-alpha70\Syndocal\app
+> node scripts/check-ai5-sidecar.mjs
+
+TAP version 13
+# Subtest: only Windows folds executable path case
+ok 1 - only Windows folds executable path case
+  ---
+  duration_ms: 0.519
+  type: 'test'
+  ...
+# Subtest: macOS response binds exact PID, schema and complete absolute UTF-8 path
+ok 2 - macOS response binds exact PID, schema and complete absolute UTF-8 path
+  ---
+  duration_ms: 0.6311
+  type: 'test'
+  ...
+# Subtest: macOS launches only selected binary with fixed read-only args and bounded output
+ok 3 - macOS launches only selected binary with fixed read-only args and bounded output
+  ---
+  duration_ms: 0.5894
+  type: 'test'
+  ...
+# Subtest: inspection failure, unsupported platform and invalid PID never fall back
+ok 4 - inspection failure, unsupported platform and invalid PID never fall back
+  ---
+  duration_ms: 0.5171
+  type: 'test'
+  ...
+# Subtest: Linux keeps its exact kernel executable query
+ok 5 - Linux keeps its exact kernel executable query
+  ---
+  duration_ms: 0.1459
+  type: 'test'
+  ...
+# Subtest: Linux rejects distinct case-only executables before broker forwarding
+ok 6 - Linux rejects distinct case-only executables before broker forwarding # SKIP
+  ---
+  duration_ms: 0.0432
+  type: 'test'
+  ...
+1..6
+# tests 6
+# suites 0
+# pass 5
+# fail 0
+# cancelled 0
+# skipped 1
+# todo 0
+# duration_ms 102.9021
+PASS 16 adapter integration groups; hostile stdio corpus: 128 rejected; fake loopback only, no Syndocal/device calls
+PASS HTTP health/JSON-RPC/REST and WebSocket transport groups; loopback fake broker only
+PASS transport security: host/origin rejection, malformed path recovery, 64-session capacity/release, idle expiry and active-request retention, split-header/payload liveness and frame completion; no native/device calls
+Discovery burst: native dispatches=1, completed=1
+Global burst: 10000 intents, eight native dispatches, 9992 pre-dispatch rejections
+PASS request capacity: 9 groups; bounded authenticated discovery, revocation/failure rejection, discovery/call exclusion, 10000 global intents, shared HTTP/REST/WebSocket budget, error/unknown release and no retries
+AI5 sidecar auth/transport boundary ok; authenticated discovery, nonce proof, exact grant admission, bounded MCP/HTTP/REST/WebSocket forwarding and redaction verified

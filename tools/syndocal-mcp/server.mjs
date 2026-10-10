@@ -3,14 +3,12 @@ import path from 'node:path';
 import net from 'node:net';
 import http from 'node:http';
 import { createHash, createHmac, randomBytes, randomUUID } from 'node:crypto';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
 import { pathToFileURL } from 'node:url';
 import { createHttpSessions } from './http-sessions.mjs';
 import { createNativeRequestAdmission, overloadedReceipt } from './native-request-admission.mjs';
 import { settleAuthenticatedDiscovery } from './authenticated-discovery.mjs';
+import { canonicalExecutable, processExecutable } from './process-identity.mjs';
 
-const execFileAsync = promisify(execFile);
 const VERSION = '2025-11-25';
 const INPUT_LIMIT = 64 * 1024;
 const RESPONSE_LIMIT = 256 * 1024;
@@ -114,7 +112,7 @@ export const toolDefinitions = [
   { name: 'syndocal_get_control_plane_capabilities', description: 'Read the backend-owned canonical operation registry as a bounded capability inventory. It reports which operations have an explicit local-window adapter; FailClosed entries are discovery-only and cannot be invoked through MCP.', inputSchema: schema({}), annotations: { readOnlyHint: true } },
   { name: 'syndocal_get_recording_status', description: 'Read bounded video recording status from the selected running Syndocal instance. This never starts, stops, finalizes, or replaces a recording.', inputSchema: schema({}), annotations: { readOnlyHint: true } },
   { name: 'syndocal_export_diagnostics', description: 'Write one sanitized format-2 diagnostic ZIP with redacted audit pages to a new absolute destination using an exact File grant. Follow each source next_before_sequence with auditBefore and expectedProcessIncarnation; process changes or expired retention reject. No individual human approval. Existing files are never replaced. Use a fresh requestId for a new export; query status after an unknown result.', inputSchema: {...schema({ requestId: uuid, destination: { type: 'string', minLength: 1, maxLength: 4096 }, auditBefore:{anyOf:[auditBefore,{type:'null'}]},expectedProcessIncarnation:{anyOf:[identifier,{type:'null'}]} }),required:['requestId','destination']}, annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false } },
-  { name: 'syndocal_execute_control_plane', description: 'Execute one of the 65 reviewed canonical backend operations through a static typed Tauri adapter. operationId must come from the capability registry and request must be that operation’s exact typed object. Unreviewed or FailClosed inventory entries are rejected. Supply a fresh requestId; if pending or unknown, query its status before any retry.', inputSchema: schema({ requestId: uuid, operationId: { type: 'string', minLength: 1, maxLength: 512 }, request: { type: 'object', additionalProperties: true } }), annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false } },
+  { name: 'syndocal_execute_control_plane', description: `Execute one of the ${CANONICAL_OPERATION_IDS.size} reviewed canonical backend operations through a static typed Tauri adapter. operationId must come from the capability registry and request must be that operation’s exact typed object. Unreviewed or FailClosed inventory entries are rejected. Supply a fresh requestId; if pending or unknown, query its status before any retry.`, inputSchema: schema({ requestId: uuid, operationId: { type: 'string', minLength: 1, maxLength: 512 }, request: { type: 'object', additionalProperties: true } }), annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false } },
 ];
 
 const projectFence = (value) => exact(value, ['project_epoch', 'project_revision', 'checkpoint_hash'])
@@ -182,20 +180,6 @@ export function parseOptions(argv, env = process.env) {
   return opts;
 }
 
-async function processExecutable(pid) {
-  if (process.platform === 'win32') {
-    const shell = path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
-    // Fixed OS introspection only: no supplied command, path or expression is evaluated.
-    // This pre-dispatch budget includes cold PowerShell startup on a loaded host.
-    // No cached PID/path result, retry, or native connection on inspection failure.
-    const { stdout } = await execFileAsync(shell, ['-NoProfile', '-NonInteractive', '-Command',
-      '[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new(); $p=Get-Process -Id ([int]$env:SYNDOCAL_BRIDGE_PID) -ErrorAction Stop; if (!$p -or !$p.Path) { exit 2 }; [Console]::Write($p.Path)'],
-    { windowsHide: true, timeout: 10000, maxBuffer: 8192, env: { ...process.env, SYNDOCAL_BRIDGE_PID: String(pid) } });
-    return stdout.trim();
-  }
-  return fs.readlink(`/proc/${pid}/exe`);
-}
-
 export async function readDescriptor(options) {
   // Open/stat/read the same handle so replacing the descriptor cannot bypass its bound.
   const handle = await fs.open(options.descriptor, 'r');
@@ -214,9 +198,9 @@ export async function readDescriptor(options) {
     || typeof descriptor.sessionNonce !== 'string' || !/^[0-9a-f]{64}$/.test(descriptor.sessionNonce)
     || typeof descriptor.instanceId !== 'string' || !/^[0-9a-f]{32}$/.test(descriptor.instanceId)
     || typeof descriptor.executablePath !== 'string' || !path.isAbsolute(descriptor.executablePath)) throw new Error('descriptor');
-  const canonical = async (p) => (await fs.realpath(p)).toLowerCase();
+  const canonical = async (p) => canonicalExecutable(await fs.realpath(p));
   const expected = await canonical(options.executable);
-  if (await canonical(descriptor.executablePath) !== expected || await canonical(await processExecutable(descriptor.processId)) !== expected) throw new Error('identity');
+  if (await canonical(descriptor.executablePath) !== expected || await canonical(await processExecutable(descriptor.processId, options.executable)) !== expected) throw new Error('identity');
   return descriptor;
 }
 

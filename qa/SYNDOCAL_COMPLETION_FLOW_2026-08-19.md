@@ -9,6 +9,13 @@ Build/test/native evidence and remaining concurrency boundaries are recorded bel
 this is not full Recording completion. See [remaining work and acceptance](REMAINING_WORK_2026-09-05.md).
 Earlier artifact versions, hashes and process observations below are historical.
 
+## 2026-10-11 external MCP OS process identity
+
+macOS now has a strict read-only libproc inspection CLI before Engine/Tauri startup;
+Linux/macOS executable identity comparisons preserve case. Windows retains its
+existing inspection path. Evidence and hosted/native boundaries are recorded in
+[the checkpoint](MCP_PROCESS_IDENTITY_2026-10-11.md); delivered files are unchanged.
+
 ## 2026-10-11 output route admission and Windows recording repair
 
 Four canonical master/submaster/Video Take routes now reach their native authority

@@ -1,0 +1,40 @@
+{
+  "passed": true,
+  "timestamp": "2026-10-10T21:07:28.5828718Z",
+  "executableSha256": "f4346a1497915103cf9d13957288a0ae8a735e036653ce7c4fdf6d484e18b2bd",
+  "executable": "C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-native-acceptance-target\\release\\syndocal.exe",
+  "checks": [
+    {
+      "error": "Process inspection failed: Native process-path inspection is available only on macOS",
+      "arguments": [
+        "--syndocal-process-path-v1",
+        "123"
+      ],
+      "stdoutEmpty": true,
+      "remainingProcesses": 0,
+      "exitCode": 1
+    },
+    {
+      "error": "Process inspection failed: PID must be canonical positive decimal",
+      "arguments": [
+        "--syndocal-process-path-v1",
+        "0"
+      ],
+      "stdoutEmpty": true,
+      "remainingProcesses": 0,
+      "exitCode": 1
+    },
+    {
+      "error": "Process inspection failed: Expected process-path flag and one positive PID",
+      "arguments": [
+        "other",
+        "--syndocal-process-path-v1",
+        "123"
+      ],
+      "stdoutEmpty": true,
+      "remainingProcesses": 0,
+      "exitCode": 1
+    }
+  ],
+  "schemaVersion": 1
+}

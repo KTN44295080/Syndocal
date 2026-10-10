@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "timestamp": "2026-10-10T21:08:33.7242836Z",
+  "base": "76ea9e7ff31e568a54a716080d0d357a5f877c16",
+  "sourceHashes": {
+    "app/src-tauri/src/main.rs": "2bf8cd3e3432ba740b8abfd696cf23fee2fe959935ee59fcb7cef84266ef8f87",
+    "app/src-tauri/src/process_identity_cli.rs": "cea58cab5783f9e252ae07b99711d73dcf639d95a0b7149e9870630cc87c53d5",
+    "tools/syndocal-mcp/server.mjs": "8363d796f0e4a95e42fcac90a1cd5aecb0c1589dea7f35d7b56f633ff13aac2a",
+    "tools/syndocal-mcp/process-identity.mjs": "2b42341f06029e0488c06bee85564d122552cf43b60d2b40834d2d32d37510ed",
+    "tools/syndocal-mcp/check-macos-process-identity.mjs": "5c937ae19611581b6e5ea270d6ad6f8658cfb54c97fe035187e6dc26f9983154",
+    "tools/syndocal-mcp/test-process-identity.mjs": "01942baa707592669739c38d299d9970ead1230a682eff7b7abe984b5fe2cd3a"
+  },
+  "windowsRustPassed": 2,
+  "windowsNodePassed": 6,
+  "linuxNativeCaseTestSkippedOnWindows": true,
+  "sidecarExit": 0,
+  "releaseAggregateExit": 0,
+  "normalNativeBuildExit": 0,
+  "nativeCliRejections": 3,
+  "normalNativeWindowPassed": true,
+  "ownedCandidateClosedGracefully": true,
+  "macosHostedStatus": "pending until pushed",
+  "hardwareAccepted": false
+}

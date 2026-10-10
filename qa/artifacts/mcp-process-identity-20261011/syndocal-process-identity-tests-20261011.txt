@@ -1,0 +1,17 @@
+**********************************************************************
+** Visual Studio 2022 Developer Command Prompt v17.14.39
+** Copyright (c) 2025 Microsoft Corporation
+**********************************************************************
+[vcvarsall.bat] Environment initialized for: 'x64'
+C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+   Compiling syndocal v1.2.0-alpha.71 (C:\Users\janua\.codex\worktrees\distribution-alpha70\Syndocal\app\src-tauri)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 33s
+     Running unittests src\main.rs (C:\Users\janua\AppData\Local\Temp\syndocal-native-acceptance-target\debug\deps\syndocal-6b50d6ab7d78e79d.exe)
+
+running 2 tests
+test process_identity_cli::tests::malformed_inspection_never_becomes_normal_startup ... ok
+test process_identity_cli::tests::unsupported_platform_rejects_without_startup ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 2062 filtered out; finished in 0.00s
