@@ -66,7 +66,7 @@ fn recording_encoder_child_process() {
     let ready = PathBuf::from(
         std::env::var_os("SYNDOCAL_RECORDING_TEST_READY").expect("child readiness file"),
     );
-    if mode == "eof_hang" || mode == "success" {
+    if mode == "eof_hang" || mode == "success" || mode == "eof_then_stop" {
         io::copy(&mut io::stdin().lock(), &mut io::sink()).unwrap();
     }
     if mode == "spawn_descendant" {
@@ -100,7 +100,10 @@ fn recording_encoder_child_process() {
         return;
     }
     fs::write(ready, b"ready").unwrap();
-    if mode == "success" {
+    if mode == "eof_then_stop" {
+        thread::sleep(Duration::from_millis(200));
+    }
+    if mode == "success" || mode == "eof_then_stop" {
         eprintln!("graceful diagnostic tail");
         return;
     }
@@ -179,6 +182,23 @@ fn recording_encoder_stop_after_complete_frame_preserves_graceful_eof() {
     stdin.write_all(b"one complete test frame").unwrap();
     stop.store(true, Ordering::Release);
     drop(stdin);
+    let tail = encoder.finish().unwrap();
+    assert!(String::from_utf8_lossy(&tail).contains("graceful diagnostic tail"));
+}
+
+#[test]
+fn recording_encoder_stop_observed_after_closed_eof_preserves_success() {
+    let (mut command, ready) = child("eof_then_stop");
+    let stop = Arc::new(AtomicBool::new(false));
+    let mut encoder = RecordingEncoder::spawn(&mut command, Arc::clone(&stop)).unwrap();
+    let mut stdin = encoder.take_stdin().unwrap();
+    stdin.write_all(b"one complete test frame").unwrap();
+    drop(stdin);
+    // The child acknowledges EOF before Stop, then remains alive so the
+    // supervisor observes Stop before finish marks graceful completion.
+    await_ready(&ready);
+    stop.store(true, Ordering::Release);
+    thread::sleep(Duration::from_millis(50));
     let tail = encoder.finish().unwrap();
     assert!(String::from_utf8_lossy(&tail).contains("graceful diagnostic tail"));
 }

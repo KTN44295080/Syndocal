@@ -98,9 +98,11 @@ impl InputControl {
                 Foundation::{ERROR_NOT_FOUND, HANDLE},
                 System::IO::CancelIoEx,
             };
-            self.cancelled.store(true, Ordering::SeqCst);
             let guard = self.handle.lock().unwrap_or_else(|p| p.into_inner());
             if let Some(raw) = *guard {
+                // Closed stdin has already delivered complete EOF. A later
+                // Stop must not retrospectively mark that input cancelled.
+                self.cancelled.store(true, Ordering::SeqCst);
                 let _ = unsafe { CancelIoEx(HANDLE(raw as *mut _), None) }.or_else(|error| {
                     if error.code() == windows::core::HRESULT::from_win32(ERROR_NOT_FOUND.0) {
                         Ok(())

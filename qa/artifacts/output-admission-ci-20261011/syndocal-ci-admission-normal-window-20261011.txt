@@ -1,0 +1,1 @@
+PASS native current-checkout: one visible responsive Syndocal window; maximized=true; unauthenticated read rejected.

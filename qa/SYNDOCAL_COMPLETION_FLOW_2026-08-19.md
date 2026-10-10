@@ -1,5 +1,23 @@
 # Syndocal completion flow — active dependency-ordered work authority
 
+## 2026-09-05 alpha.69 recording atomic-publication SOURCE CANDIDATE
+
+Recorded alpha.69 product metadata was `1.2.0-alpha.69`. The bounded source candidate
+uses FFmpeg staging and atomic publication to preserve an existing final recording
+on encoder failure. Query polling also prevents overlapping native reads.
+Build/test/native evidence and remaining concurrency boundaries are recorded below;
+this is not full Recording completion. See [remaining work and acceptance](REMAINING_WORK_2026-09-05.md).
+Earlier artifact versions, hashes and process observations below are historical.
+
+## 2026-10-11 output route admission and Windows recording repair
+
+Four canonical master/submaster/Video Take routes now reach their native authority
+executor through ordinary Tauri admission. Exact route/schema tests and 30 actual
+native MCP/loopback checks are recorded in [the checkpoint](OUTPUT_ROUTE_ADMISSION_CI_REPAIR_2026-10-11.md).
+Windows recording now reserves the rename terminator and preserves successful
+closed-input EOF on Stop; publication, encoder and normal native evidence are in that checkpoint.
+The delivered alpha.71 files and hardware/release acceptance statuses are unchanged.
+
 ## 2026-10-10 internal native MCP Video BO checkpoint
 
 The public Video BO tool now executes the immutable native command, verifies
@@ -38,15 +56,6 @@ local edit, read the relevant contract only; do not read this entire file.
   even when their historical text says "current", "next" or names a PID. They
   do not reassign agents, authorize output, or revive an old pause/resume order.
 - Instruction-maintenance evidence: [2026-09-05 audit](INSTRUCTION_MAINTENANCE_2026-09-05.md).
-
-## 2026-09-05 alpha.69 recording atomic-publication SOURCE CANDIDATE
-
-Recorded alpha.69 product metadata was `1.2.0-alpha.69`. The bounded source candidate
-uses FFmpeg staging and atomic publication to preserve an existing final recording
-on encoder failure. Query polling also prevents overlapping native reads.
-Build/test/native evidence and remaining concurrency boundaries are recorded below;
-this is not full Recording completion. See [remaining work and acceptance](REMAINING_WORK_2026-09-05.md).
-Earlier artifact versions, hashes and process observations below are historical.
 
 ## Historical 2026-09-03 alpha.68 blackout release query-race checkpoint
 

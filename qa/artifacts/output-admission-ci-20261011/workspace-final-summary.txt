@@ -1,0 +1,60 @@
+Command: explicit real encoder test, then cargo test --workspace --locked -- --test-threads=1
+Exit: 0
+Combined encoder + workspace: 3863 passed, 0 failed, 47 ignored; workspace alone excludes the one explicit encoder test
+Raw log: C:\Users\janua\AppData\Local\Temp\syndocal-ci-workspace-final-03-20261011.txt
+Raw SHA256: 5d83225475aa06c3f57996193a995fac57ad1e6d222b2f7930975da8f190098d
+[vcvarsall.bat] Environment initialized for: 'x64'
+C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+ffmpeg version 9.0.1-full_build-www.gyan.dev Copyright (c) 2000-2026 the FFmpeg developers
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 55.47s
+     Running unittests src\main.rs (C:\Users\janua\AppData\Local\Temp\syndocal-native-acceptance-target\debug\deps\syndocal-6b50d6ab7d78e79d.exe)
+test video_recording_runtime_tests::recording_command_writes_a_real_video_and_audio_mp4 ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2061 filtered out; finished in 0.27s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 04s
+     Running unittests src\lib.rs (C:\Users\janua\AppData\Local\Temp\syndocal-native-acceptance-target\debug\deps\audio-6e2589b88adf956c.exe)
+test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.95s
+     Running unittests src\lib.rs (C:\Users\janua\AppData\Local\Temp\syndocal-native-acceptance-target\debug\deps\engine-735ef9b54e034e22.exe)
+test result: ok. 1099 passed; 0 failed; 14 ignored; 0 measured; 0 filtered out; finished in 218.90s
+     Running unittests src\lib.rs (C:\Users\janua\AppData\Local\Temp\syndocal-native-acceptance-target\debug\deps\gdtf-21ed6e213df9a18e.exe)
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+     Running unittests src\lib.rs (C:\Users\janua\AppData\Local\Temp\syndocal-native-acceptance-target\debug\deps\io-ec43ef1463587228.exe)
+test result: ok. 187 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 11.14s
+     Running tests\show_clock_two_process.rs (C:\Users\janua\AppData\Local\Temp\syndocal-native-acceptance-target\debug\deps\show_clock_two_process-c993317ca790a718.exe)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+     Running unittests src\lib.rs (C:\Users\janua\AppData\Local\Temp\syndocal-native-acceptance-target\debug\deps\protocol-ce3a8bf57a553e0e.exe)
+test result: ok. 262 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.27s
+     Running tests\dj_link_v3_sender_contract.rs (C:\Users\janua\AppData\Local\Temp\syndocal-native-acceptance-target\debug\deps\dj_link_v3_sender_contract-e22b307f99bea964.exe)
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running unittests src\main.rs (C:\Users\janua\AppData\Local\Temp\syndocal-native-acceptance-target\debug\deps\syndocal-cbaa369249e06c1f.exe)
+test recording_artifact::tests::filename_length_variants_publish_new_and_replace_existing_recordings ... ok
+test video_recording::encoder::inherited_stderr_tests::recording_encoder_stop_cancels_inherited_stderr_reader ... ok
+test video_recording::encoder::inherited_stdin_tests::recording_encoder_drop_cancels_inherited_stdin_write ... ok
+test video_recording::encoder::inherited_stdin_tests::recording_encoder_stop_cancels_inherited_stdin_write ... ok
+test video_recording::encoder::inherited_stdin_tests::recording_input_child_process ... ignored, subprocess helper; selected only by the inherited stdin reader test
+test video_recording::encoder::tests::recording_encoder_stop_after_complete_frame_preserves_graceful_eof ... ok
+test video_recording::encoder::tests::recording_encoder_stop_observed_after_closed_eof_preserves_success ... ok
+test video_recording::encoder::tests::recording_encoder_stop_reaps_child_that_ignores_eof ... ok
+test video_recording::encoder::tests::recording_encoder_stop_unblocks_direct_child_stdin_write ... ok
+test video_recording_runtime_tests::recording_command_writes_a_real_video_and_audio_mp4 ... ignored, requires FFmpeg and FFprobe with H.264/AAC support
+test result: ok. 2041 passed; 0 failed; 21 ignored; 0 measured; 0 filtered out; finished in 92.67s
+     Running unittests src\lib.rs (C:\Users\janua\AppData\Local\Temp\syndocal-native-acceptance-target\debug\deps\video-5cd4af53307290bb.exe)
+test result: ok. 196 passed; 0 failed; 8 ignored; 0 measured; 0 filtered out; finished in 13.26s
+     Running unittests src\lib.rs (C:\Users\janua\AppData\Local\Temp\syndocal-native-acceptance-target\debug\deps\visualizer-5f52372e7f4164d2.exe)
+test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+   Doc-tests audio
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+   Doc-tests engine
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+   Doc-tests gdtf
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+   Doc-tests io
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+   Doc-tests protocol
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.60s
+   Doc-tests video
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+   Doc-tests visualizer
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s

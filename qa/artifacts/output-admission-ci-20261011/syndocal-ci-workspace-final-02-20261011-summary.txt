@@ -1,0 +1,15 @@
+Raw log: C:\Users\janua\AppData\Local\Temp\syndocal-ci-workspace-final-02-20261011.txt
+Raw SHA256: cfc79fc15f8e009d4d57b5176003318e309c5e0e9a1d8ebe50df7e4e10960015
+Result: explicit real-encoder test exited 1; Stop after EOF was incorrectly classified as input cancellation; workspace did not start
+[vcvarsall.bat] Environment initialized for: 'x64'
+C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+ffmpeg version 9.0.1-full_build-www.gyan.dev Copyright (c) 2000-2026 the FFmpeg developers
+failures:
+---- video_recording_runtime_tests::recording_command_writes_a_real_video_and_audio_mp4 stdout ----
+thread 'video_recording_runtime_tests::recording_command_writes_a_real_video_and_audio_mp4' (121492) panicked at app\src-tauri\src\video_recording_runtime_tests.rs:287:13:
+graceful Stop must finish a valid recording without force termination: "FFmpeg stdin write was cancelled before complete frame EOF"
+failures:
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2060 filtered out; finished in 0.17s
+error: test failed, to rerun pass `-p syndocal --bin syndocal`

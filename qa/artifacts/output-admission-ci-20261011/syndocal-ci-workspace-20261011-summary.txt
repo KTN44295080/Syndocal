@@ -1,0 +1,26 @@
+Raw log: C:\Users\janua\AppData\Local\Temp\syndocal-ci-workspace-20261011.txt
+Raw SHA256: e9441b542fa820f6ce75f0a3ecd6af957813d6dab677043a9ca9009028b86f94
+Result: workspace exited 101; two Windows recording publication failures
+[vcvarsall.bat] Environment initialized for: 'x64'
+C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.85s
+test result: ok. 1099 passed; 0 failed; 14 ignored; 0 measured; 0 filtered out; finished in 191.84s
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+test result: ok. 187 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 11.01s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+test result: ok. 262 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.27s
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+failures:
+---- recording_artifact::tests::absent_target_publication_succeeds_and_removes_owned_partial stdout ----
+thread 'recording_artifact::tests::absent_target_publication_succeeds_and_removes_owned_partial' (145728) panicked at app\src-tauri\src\recording_artifact.rs:447:29:
+called `Result::unwrap()` on an `Err` value: "Cannot rename recording without replacing \\\\?\\C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-recording-test-144728-1791664753236532300-24\\output.mp4: ファイル名、ディレクトリ名、またはボリューム ラベルの構文が間違っています。 (0x8007007B)"
+---- recording_artifact::tests::complete_output_replaces_target_only_on_publish stdout ----
+thread 'recording_artifact::tests::complete_output_replaces_target_only_on_publish' (117224) panicked at app\src-tauri\src\recording_artifact.rs:366:29:
+called `Result::unwrap()` on an `Err` value: "Cannot rename recording without replacing \\\\?\\C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-recording-test-144728-1791664753461808400-32\\output.mp4: ファイル名、ディレクトリ名、またはボリューム ラベルの構文が間違っています。 (0x8007007B); previous restore: Err(\"Cannot rename recording without replacing \\\\\\\\?\\\\C:\\\\Users\\\\janua\\\\AppData\\\\Local\\\\Temp\\\\syndocal-recording-test-144728-1791664753461808400-32\\\\output.mp4: ファイル名、ディレクトリ名、またはボリューム ラベルの構文が間違っています。 (0x8007007B)\"); retained target \\\\?\\C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-recording-test-144728-1791664753461808400-32\\output.mp4; recording \\\\?\\C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-recording-test-144728-1791664753461808400-32\\.syndocal-recording-144728-1791664753462280000-33.partial.mp4; previous \\\\?\\C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-recording-test-144728-1791664753461808400-32\\.syndocal-recording-144728-1791664753462280000-33.partial.previous.mp4; recovery \\\\?\\C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-recording-test-144728-1791664753461808400-32\\.syndocal-recording-de581bd7d5566210b74a9fdb22484f6f7c7c39cdc156c6470c85379cf063d756.recovery.json"
+failures:
+    recording_artifact::tests::absent_target_publication_succeeds_and_removes_owned_partial
+    recording_artifact::tests::complete_output_replaces_target_only_on_publish
+test result: FAILED. 2037 passed; 2 failed; 21 ignored; 0 measured; 0 filtered out; finished in 94.12s
+error: test failed, to rerun pass `-p syndocal --bin syndocal`

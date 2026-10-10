@@ -32,6 +32,27 @@ export async function nativeVideoBlackout(backend,options,checks){
   await backend.invoke('register_project_transaction_owner',{ownerId:`video-blackout-${randomUUID()}`});
   await noPhysicalTargets(backend);const closed=await backend.invoke('get_output_ownership_status');
   assert.equal(closed.lighting_allowed,false);assert.equal(closed.video_allowed,false);
+  // Raw Tauri dispatch must reach each reviewed native executor. A well-formed
+  // request for a different operation gives its typed rejection without opening output,
+  // allocating a lease or changing an authored/runtime value.
+  const beforeAdmission=await checkpoint(backend);
+  for(const [command,operationId] of [
+    ['set_lighting_master_output_control_v2','syndocal.output.lighting.master.set.v2'],
+    ['set_group_submaster_output_control_v2','syndocal.output.group.submaster.set.v2'],
+    ['set_video_master_output_control_v2','syndocal.output.video.master.set.v2'],
+    ['take_video_clip_output_control_v2','syndocal.output.video.clip.take.v2'],
+  ]){
+    const authority=await backend.invoke('query_output_control_authority_v1');
+    const args={request:{operation_id:'syndocal.output.lease.acquire.v2',request_id:1,
+      expected_fence:authority.fence,action:{kind:'acquire_lease',role:'both'}}};
+    const invoked=await backend.evaluate(`window.__TAURI_INTERNALS__.invoke(${JSON.stringify(command)},${JSON.stringify(args)}).then(value=>({value}),error=>({error:String(error)}))`);
+    assert.ok(Object.hasOwn(invoked,'value'),`${command}: ${JSON.stringify(invoked)}`);
+    const response=invoked.value;
+    assert.deepEqual(response,{type:'rejected',rejection:{operation_id:operationId,request_id:1,error:'invalid_request'}});
+    assert.deepEqual(await checkpoint(backend),beforeAdmission,'raw admission probe must not change project/runtime');
+    assert.deepEqual(await backend.invoke('get_output_ownership_status'),closed);
+    checks.push({check:`raw-tauri-${command}-reaches-typed-native-validation-without-effect`,passed:true});
+  }
   await backend.invoke('agent_authority_promote_v1',{principalId:options.principalId,principalIncarnation:options.principalIncarnation});
   for(const id of [operation,'syndocal.output.lease.acquire.v2','syndocal.output.lease.renew.v2','syndocal.output.ownership.arm.v2','syndocal.output.lease.relinquish.v2'])await grant(backend,options,id);
   const mcp=await openNativeStdioSession(options);let lease,armed=false,disarmed=false,failure,nextCanonicalId=3;

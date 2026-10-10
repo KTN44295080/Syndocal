@@ -1,0 +1,22 @@
+{
+  "source": "a0d00698252a43e9f7768beb741095b66bafb793",
+  "url": "https://github.com/KTN44295080/Syndocal/actions/runs/38040308609",
+  "jobs": [
+    {
+      "name": "Windows 10+",
+      "conclusion": "failure",
+      "failedSteps": [
+        "Test Rust workspace"
+      ],
+      "url": "https://github.com/KTN44295080/Syndocal/actions/runs/38040308609/job/114179051338"
+    },
+    {
+      "name": "Ubuntu 22.04",
+      "conclusion": "failure",
+      "failedSteps": [
+        "Test Rust workspace"
+      ],
+      "url": "https://github.com/KTN44295080/Syndocal/actions/runs/38040308609/job/114179051436"
+    }
+  ]
+}

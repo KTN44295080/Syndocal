@@ -1,0 +1,46 @@
+**********************************************************************
+** Visual Studio 2022 Developer Command Prompt v17.14.39
+** Copyright (c) 2025 Microsoft Corporation
+**********************************************************************
+[vcvarsall.bat] Environment initialized for: 'x64'
+C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+   Compiling syndocal v1.2.0-alpha.71 (C:\Users\janua\.codex\worktrees\distribution-alpha70\Syndocal\app\src-tauri)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 55.12s
+     Running unittests src\main.rs (C:\Users\janua\AppData\Local\Temp\syndocal-native-acceptance-target\debug\deps\syndocal-6b50d6ab7d78e79d.exe)
+
+running 31 tests
+test recording_artifact::publication::platform::tests::long_extended_path_remains_extended_for_file_rename_info ... ok
+test recording_artifact::publication::platform::tests::short_extended_drive_path_uses_conventional_form_for_file_rename_info ... ok
+test recording_artifact::publication::platform::tests::short_extended_unc_path_uses_conventional_form_for_file_rename_info ... ok
+test recording_artifact::publication::tests::recording_publication_changed_backup_is_never_removed_during_recovery ... ok
+test recording_artifact::publication::tests::recording_publication_crash_child ... ignored, subprocess helper; selected only by the publication interruption test
+test recording_artifact::publication::tests::recording_publication_live_intent_cannot_be_recovered_by_another_reservation ... ok
+test recording_artifact::publication::tests::recording_publication_locked_final_check_rejects_change_after_early_comparison ... ok
+test recording_artifact::publication::tests::recording_publication_modified_installed_target_does_not_discard_previous_recording ... ok
+test recording_artifact::publication::tests::recording_publication_next_reservation_restores_missing_target_without_deleting_partial ... ok
+test recording_artifact::publication::tests::recording_publication_preserves_late_creator_and_both_recovery_files ... ok
+test recording_artifact::publication::tests::recording_publication_recovers_after_process_exit_at_each_boundary ... ok
+test recording_artifact::publication::tests::recording_publication_recovery_finishes_installed_recording_cleanup ... ok
+test recording_artifact::publication::tests::recording_publication_recovery_preserves_prepared_original_and_partial ... ok
+test recording_artifact::publication::tests::recording_publication_rejects_invalid_future_and_escaping_recovery_intents ... ok
+test recording_artifact::tests::absent_target_publication_atomically_rejects_a_late_creator ... ok
+test recording_artifact::tests::absent_target_publication_succeeds_and_removes_owned_partial ... ok
+test recording_artifact::tests::changed_target_type_blocks_publication_without_removing_it ... ok
+test recording_artifact::tests::child_stderr_larger_than_pipe_capacity_is_drained_and_reaped ... ok
+test recording_artifact::tests::cleanup_failure_reports_the_recoverable_partial ... ok
+test recording_artifact::tests::collision_and_invalid_target_never_overwrite_existing_paths ... ok
+test recording_artifact::tests::complete_output_replaces_target_only_on_publish ... ok
+test recording_artifact::tests::diagnostic_tail_is_bounded_and_keeps_latest_bytes ... ok
+test recording_artifact::tests::failed_or_dropped_recording_preserves_previous_output ... ok
+test recording_artifact::tests::filename_length_variants_publish_new_and_replace_existing_recordings ... ok
+test recording_artifact::tests::hard_linked_partial_is_never_removed_or_published ... ok
+test recording_artifact::tests::locked_target_publish_failure_preserves_previous_output ... ok
+test recording_artifact::tests::modified_existing_target_is_not_overwritten ... ok
+test recording_artifact::tests::newly_created_target_is_not_overwritten ... ok
+test recording_artifact::tests::nonowner_partial_is_not_published_or_removed ... ok
+test recording_artifact::tests::replaced_existing_target_is_not_overwritten ... ok
+test recording_artifact::tests::zero_frames_and_empty_bytes_cannot_publish ... ok
+
+test result: ok. 30 passed; 0 failed; 1 ignored; 0 measured; 2030 filtered out; finished in 0.97s

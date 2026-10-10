@@ -1,0 +1,74 @@
+**********************************************************************
+** Visual Studio 2022 Developer Command Prompt v17.14.39
+** Copyright (c) 2025 Microsoft Corporation
+**********************************************************************
+[vcvarsall.bat] Environment initialized for: 'x64'
+C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 18.19s
+     Running unittests src\main.rs (C:\Users\janua\AppData\Local\Temp\syndocal-native-acceptance-target\debug\deps\syndocal-6b50d6ab7d78e79d.exe)
+
+running 1 test
+test tests::bank_and_scene_move_request_schemas_reject_legacy_missing_and_unknown_fields ... FAILED
+
+failures:
+
+---- tests::bank_and_scene_move_request_schemas_reject_legacy_missing_and_unknown_fields stdout ----
+
+thread 'tests::bank_and_scene_move_request_schemas_reject_legacy_missing_and_unknown_fields' (59768) panicked at app\src-tauri\src\main.rs:88143:52:
+canonical camelCase request: Error("missing field `requestId`", line: 0, column: 0)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    tests::bank_and_scene_move_request_schemas_reject_legacy_missing_and_unknown_fields
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2059 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p syndocal --bin syndocal`
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.69s
+     Running unittests src\main.rs (C:\Users\janua\AppData\Local\Temp\syndocal-native-acceptance-target\debug\deps\syndocal-6b50d6ab7d78e79d.exe)
+
+running 1 test
+test tests::file_export_routes_are_exactly_snapshot_only_or_final_cas_authoritative ... FAILED
+
+failures:
+
+---- tests::file_export_routes_are_exactly_snapshot_only_or_final_cas_authoritative stdout ----
+
+thread 'tests::file_export_routes_are_exactly_snapshot_only_or_final_cas_authoritative' (197860) panicked at app\src-tauri\src\main.rs:96460:9:
+assertion `left == right` failed
+  left: {"acknowledge_project_file_control_plane_v1", "cache_gdtf_from_share", "create_project_backup_control_plane_v1", "delete_project_backup", "delete_project_backup_control_plane_v1", "download_gdtf_from_share", "download_gdtf_from_url", "export_diagnostic_package", "finish_diagnostic_export_v1", "import_video_output_bitmap_mask", "install_application_update", "manage_project_backup_deletion_journal_v1", "prepare_diagnostic_export_v1", "save_custom_fixture_profile", "save_effect_preset", "save_engine_telemetry_report", "save_fixture_preset", "save_midi_mappings", "save_node_graph_preset_file", "save_osc_mappings", "save_project_as_control_plane_v1", "save_project_as_v1", "save_project_backup_v1", "save_project_control_plane_v1", "save_project_v1", "save_stage_map_preset_file", "save_user_template_control_plane_v1", "save_user_template_v1", "save_video_output_mapping_preset_file"}
+ right: {"cache_gdtf_from_share", "delete_project_backup", "download_gdtf_from_share", "download_gdtf_from_url", "export_diagnostic_package", "finish_diagnostic_export_v1", "import_video_output_bitmap_mask", "install_application_update", "prepare_diagnostic_export_v1", "save_custom_fixture_profile", "save_effect_preset", "save_engine_telemetry_report", "save_fixture_preset", "save_midi_mappings", "save_node_graph_preset_file", "save_osc_mappings", "save_project_as_v1", "save_project_backup_v1", "save_project_v1", "save_stage_map_preset_file", "save_user_template_v1", "save_video_output_mapping_preset_file"}
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    tests::file_export_routes_are_exactly_snapshot_only_or_final_cas_authoritative
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2059 filtered out; finished in 0.02s
+
+error: test failed, to rerun pass `-p syndocal --bin syndocal`
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.60s
+     Running unittests src\main.rs (C:\Users\janua\AppData\Local\Temp\syndocal-native-acceptance-target\debug\deps\syndocal-6b50d6ab7d78e79d.exe)
+
+running 1 test
+test tests::synchronous_project_runtime_routes_hold_the_identity_fence_through_dispatch ... FAILED
+
+failures:
+
+---- tests::synchronous_project_runtime_routes_hold_the_identity_fence_through_dispatch stdout ----
+
+thread 'tests::synchronous_project_runtime_routes_hold_the_identity_fence_through_dispatch' (34280) panicked at app\src-tauri\src\main.rs:96358:9:
+assertion `left == right` failed
+  left: 168
+ right: 163
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    tests::synchronous_project_runtime_routes_hold_the_identity_fence_through_dispatch
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2059 filtered out; finished in 0.70s
+
+error: test failed, to rerun pass `-p syndocal --bin syndocal`

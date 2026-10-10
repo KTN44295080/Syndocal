@@ -1,0 +1,17 @@
+node:internal/modules/run_main:123
+    triggerUncaughtException(
+    ^
+
+AssertionError [ERR_ASSERTION]: Native backend operation failed
+    at evaluate (file:///C:/Users/janua/.codex/worktrees/distribution-alpha70/Syndocal/tools/syndocal-mcp/native-backend-session.mjs:69:12)
+    at async nativeVideoBlackout (file:///C:/Users/janua/.codex/worktrees/distribution-alpha70/Syndocal/tools/syndocal-mcp/native-video-blackout.mjs:46:20)
+    at async file:///C:/Users/janua/.codex/worktrees/distribution-alpha70/Syndocal/tools/syndocal-mcp/check-native-lifecycle.mjs:304:77 {
+  generatedMessage: false,
+  code: 'ERR_ASSERTION',
+  actual: false,
+  expected: true,
+  operator: '==',
+  diff: 'simple'
+}
+
+Node.js v22.22.1

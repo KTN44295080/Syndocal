@@ -1,0 +1,16 @@
+node:internal/modules/run_main:123
+    triggerUncaughtException(
+    ^
+
+AssertionError [ERR_ASSERTION]: set_lighting_master_output_control_v2: {"error":"invalid args `request` for command `set_lighting_master_output_control_v2`: output-control operation does not match its action"}
+    at nativeVideoBlackout (file:///C:/Users/janua/.codex/worktrees/distribution-alpha70/Syndocal/tools/syndocal-mcp/native-video-blackout.mjs:49:12)
+    at async file:///C:/Users/janua/.codex/worktrees/distribution-alpha70/Syndocal/tools/syndocal-mcp/check-native-lifecycle.mjs:304:77 {
+  generatedMessage: false,
+  code: 'ERR_ASSERTION',
+  actual: false,
+  expected: true,
+  operator: '==',
+  diff: 'simple'
+}
+
+Node.js v22.22.1

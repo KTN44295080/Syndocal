@@ -1,0 +1,47 @@
+**********************************************************************
+** Visual Studio 2022 Developer Command Prompt v17.14.39
+** Copyright (c) 2025 Microsoft Corporation
+**********************************************************************
+[vcvarsall.bat] Environment initialized for: 'x64'
+C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+   Compiling syndocal v1.2.0-alpha.71 (C:\Users\janua\.codex\worktrees\distribution-alpha70\Syndocal\app\src-tauri)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 26s
+     Running unittests src\main.rs (C:\Users\janua\AppData\Local\Temp\syndocal-native-acceptance-target\debug\deps\syndocal-6b50d6ab7d78e79d.exe)
+
+running 1 test
+test tests::bank_and_scene_move_request_schemas_reject_legacy_missing_and_unknown_fields ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2059 filtered out; finished in 0.00s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.82s
+     Running unittests src\main.rs (C:\Users\janua\AppData\Local\Temp\syndocal-native-acceptance-target\debug\deps\syndocal-6b50d6ab7d78e79d.exe)
+
+running 1 test
+test tests::file_export_routes_are_exactly_snapshot_only_or_final_cas_authoritative ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2059 filtered out; finished in 0.08s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.69s
+     Running unittests src\main.rs (C:\Users\janua\AppData\Local\Temp\syndocal-native-acceptance-target\debug\deps\syndocal-6b50d6ab7d78e79d.exe)
+
+running 1 test
+test tests::synchronous_project_runtime_routes_hold_the_identity_fence_through_dispatch ... FAILED
+
+failures:
+
+---- tests::synchronous_project_runtime_routes_hold_the_identity_fence_through_dispatch stdout ----
+
+thread 'tests::synchronous_project_runtime_routes_hold_the_identity_fence_through_dispatch' (105100) panicked at app\src-tauri\src\main.rs:96393:13:
+assertion `left == right` failed
+  left: None
+ right: Some(PreflightOnlyNonProjectOrInnerAuthority)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    tests::synchronous_project_runtime_routes_hold_the_identity_fence_through_dispatch
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2059 filtered out; finished in 0.74s
+
+error: test failed, to rerun pass `-p syndocal --bin syndocal`

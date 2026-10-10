@@ -1,0 +1,15 @@
+{
+  "date": "2026-10-11",
+  "artifacts": [
+    {
+      "file": "C:\\Users\\janua\\Downloads\\Syndocal-1.2.0-alpha.71\\Syndocal_1.2.0-alpha.71_Windows-x64-install.zip",
+      "sha256": "045e73838066fb99935d661a0b7dc27075118daf3ce839e6252afbe11cd30eb1",
+      "unchanged": true
+    },
+    {
+      "file": "C:\\Users\\janua\\Downloads\\Syndocal-1.2.0-alpha.71\\Syndocal_1.2.0-alpha.71_arm64.dmg",
+      "sha256": "9b29a3edc011f5b3c3e389d6a33275c6a3f51cbc18a57480480a5aff9a9a06e2",
+      "unchanged": true
+    }
+  ]
+}

@@ -25281,9 +25281,12 @@ const PREFLIGHT_ONLY_NONPROJECT_OR_INNER_RUNTIME_ROUTES: &[&str] = &[
     "set_blackout_output_control_v2",
     "set_display_output_window_open_v2",
     "set_explicit_wdm_cue_test",
+    "set_group_submaster_output_control_v2",
+    "set_lighting_master_output_control_v2",
     "set_machine_timeline_cue_audio_settings",
     "set_midi_feedback_auto",
     "set_timeline_transport_playing_runtime_v1",
+    "set_video_master_output_control_v2",
     "stage_vj_preview_layer",
     "start_art_rdm_full_discovery",
     "start_asio_program_cue_output",
@@ -25308,6 +25311,7 @@ const PREFLIGHT_ONLY_NONPROJECT_OR_INNER_RUNTIME_ROUTES: &[&str] = &[
     "sync_video_output_window",
     "take_open_project_paths",
     "take_over_output_control_v2",
+    "take_video_clip_output_control_v2",
     "use_fixture_profile",
 ];
 
@@ -88142,6 +88146,28 @@ pub(crate) mod tests {
     fn assert_strict_camel_case_request<T: serde::de::DeserializeOwned>(valid: serde_json::Value) {
         serde_json::from_value::<T>(valid.clone()).expect("canonical camelCase request");
 
+        if valid.get("requestId").is_some() {
+            let mut missing_id = valid.clone();
+            missing_id.as_object_mut().unwrap().remove("requestId");
+            assert!(serde_json::from_value::<T>(missing_id).is_err());
+
+            let mut snake_id = valid.clone();
+            let id = snake_id
+                .as_object_mut()
+                .unwrap()
+                .remove("requestId")
+                .unwrap();
+            snake_id
+                .as_object_mut()
+                .unwrap()
+                .insert("request_id".into(), id);
+            assert!(serde_json::from_value::<T>(snake_id).is_err());
+
+            let mut numeric_id = valid.clone();
+            numeric_id["requestId"] = serde_json::json!(19);
+            assert!(serde_json::from_value::<T>(numeric_id).is_err());
+        }
+
         let mut extra = valid.clone();
         extra
             .as_object_mut()
@@ -88172,6 +88198,7 @@ pub(crate) mod tests {
     #[test]
     fn bank_and_scene_move_request_schemas_reject_legacy_missing_and_unknown_fields() {
         let authority = serde_json::json!({
+            "requestId": "00000000-0000-4000-8000-000000000019",
             "expectedEpoch": 7,
             "expectedRevision": 11,
             "expectedCheckpointHash": "a".repeat(64),
@@ -88197,6 +88224,7 @@ pub(crate) mod tests {
 
         let scene_authority = serde_json::json!({
             "mode": "captureCurrent",
+            "requestId": "00000000-0000-4000-8000-000000000020",
             "cueListId": 2,
             "label": "Captured Scene",
             "fadeMs": 250,
@@ -88224,6 +88252,7 @@ pub(crate) mod tests {
 
         assert_strict_camel_case_request::<AuthoritativeSceneCreateRequest>(serde_json::json!({
             "mode": "empty",
+            "requestId": "00000000-0000-4000-8000-000000000021",
             "cueListId": 2,
             "expectedEpoch": 7,
             "expectedRevision": 11,
@@ -96355,7 +96384,22 @@ pub(crate) mod tests {
                     == Some(control_plane::TauriRouteAdmissionClass::RuntimeMutation)
             })
             .collect::<Vec<_>>();
-        assert_eq!(runtime_routes.len(), 163);
+        // The five output-control adapters have their own native lease/fence
+        // authority and must never retain the outer guard into that executor.
+        for command in [
+            "launch_video_clip_output_control_v2",
+            "set_group_submaster_output_control_v2",
+            "set_lighting_master_output_control_v2",
+            "set_video_master_output_control_v2",
+            "take_video_clip_output_control_v2",
+        ] {
+            assert!(runtime_routes.iter().any(|route| route.as_str() == command));
+            assert_eq!(
+                runtime_route_dispatch_policy(command),
+                Some(RuntimeInvokeDispatchPolicy::PreflightOnlyNonProjectOrInnerAuthority)
+            );
+        }
+        assert_eq!(runtime_routes.len(), 168);
         assert_eq!(
             OUTER_FENCED_SYNC_PROJECT_RUNTIME_ROUTES.len()
                 + PREFLIGHT_ONLY_NONPROJECT_OR_INNER_RUNTIME_ROUTES.len(),
@@ -96430,6 +96474,45 @@ pub(crate) mod tests {
             "save_stage_map_preset_file",
             "save_video_output_mapping_preset_file",
         ];
+        // These typed adapters delegate to their final native authority checks;
+        // they are not snapshot-only exports or raw project writers.
+        const CANONICAL_FILE_ADAPTERS: [(&str, &str, &str); 7] = [
+            (
+                "save_project_control_plane_v1",
+                "protocol::control_plane_file::ProjectFileRequestV1",
+                "project_file_control_plane::execute_local(&app,&window,\"syndocal.project.save.v1\",request)",
+            ),
+            (
+                "save_project_as_control_plane_v1",
+                "protocol::control_plane_file::ProjectFileRequestV1",
+                "project_file_control_plane::execute_local(&app,&window,\"syndocal.project.save_as.v1\",request)",
+            ),
+            (
+                "save_user_template_control_plane_v1",
+                "protocol::control_plane_file::ProjectFileRequestV1",
+                "project_file_control_plane::execute_local(&app,&window,\"syndocal.project.template.save.v1\",request)",
+            ),
+            (
+                "create_project_backup_control_plane_v1",
+                "protocol::control_plane_file::ProjectFileRequestV1",
+                "project_file_control_plane::execute_local(&app,&window,\"syndocal.project.backup.create.v1\",request)",
+            ),
+            (
+                "acknowledge_project_file_control_plane_v1",
+                "protocol::control_plane_file::ProjectFileRequestV1",
+                "project_file_control_plane::execute_local(&app,&window,\"syndocal.project.file.acknowledge.v1\",request)",
+            ),
+            (
+                "delete_project_backup_control_plane_v1",
+                "protocol::control_plane_file::ProjectBackupDeleteRequestV1",
+                "project_backup_deletion::execute_local(&app,&window,request)",
+            ),
+            (
+                "manage_project_backup_deletion_journal_v1",
+                "protocol::control_plane_backup_management::ManagementRequestV1",
+                "project_backup_deletion_management::execute_local(&app,&window,request)",
+            ),
+        ];
 
         fn function_body<'a>(source: &'a str, name: &str) -> &'a str {
             let signature = format!("fn {name}(");
@@ -96456,8 +96539,21 @@ pub(crate) mod tests {
         let reviewed = AUTHORITATIVE_PROJECT_WRITERS
             .into_iter()
             .chain(SNAPSHOT_OR_EXTERNAL_FILE_ONLY)
+            .chain(CANONICAL_FILE_ADAPTERS.map(|(command, _, _)| command))
             .collect::<BTreeSet<_>>();
         assert_eq!(file_routes, reviewed);
+
+        for (command, request_type, delegate) in CANONICAL_FILE_ADAPTERS {
+            let compact = function_body(source, command)
+                .split_whitespace()
+                .collect::<String>();
+            assert!(compact.contains(&format!("request:{request_type}")));
+            assert!(
+                compact.contains(delegate),
+                "{command} must delegate to its exact final-authority executor"
+            );
+            assert!(!compact.contains("state.engine."));
+        }
 
         let publication_request = source
             .split("struct ProjectPublicationRequestV1 {")

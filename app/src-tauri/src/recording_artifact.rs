@@ -449,6 +449,32 @@ mod tests {
         assert!(!artifact.path().exists());
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn filename_length_variants_publish_new_and_replace_existing_recordings() {
+        for existing in [false, true] {
+            // Success must not depend on the filename's alignment or on the
+            // process ID/nonce length in the directory chosen by this fixture.
+            for padding in 0..4 {
+                let dir = TempDir::new();
+                let target = dir.0.join(format!("録画 {}.mp4", "x".repeat(padding)));
+                if existing {
+                    fs::write(&target, b"previous recording").unwrap();
+                }
+                let mut artifact = RecordingArtifact::reserve(&target).unwrap();
+                fs::write(artifact.path(), b"complete new recording").unwrap();
+                if existing {
+                    assert_eq!(fs::read(&target).unwrap(), b"previous recording");
+                } else {
+                    assert!(!target.exists());
+                }
+                artifact.publish(1).unwrap();
+                assert_eq!(fs::read(&target).unwrap(), b"complete new recording");
+                assert!(!artifact.path().exists());
+            }
+        }
+    }
+
     #[test]
     fn replaced_existing_target_is_not_overwritten() {
         let dir = TempDir::new();

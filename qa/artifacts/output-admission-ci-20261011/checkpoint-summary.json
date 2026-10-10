@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "timestamp": "2026-10-10T20:55:34.3217021Z",
+  "branch": "codex/native-output-guards-20261010",
+  "base": "a0d00698252a43e9f7768beb741095b66bafb793",
+  "sourceHashes": {
+    "app/src-tauri/src/main.rs": "bbd88b7ae918df6e7f1672e21eefdc60ae2aceb7598e674f63d72c4c7c835f7e",
+    "app/src-tauri/src/recording_artifact.rs": "3257cce6bb4b50d11e23cec6721b0be6cdd25c2987a1f10715ef055c39a9039c",
+    "app/src-tauri/src/recording_publication_windows.rs": "f5ffcc5eea7c98a42c1f201033cf14c3a0a266d899c087ba32f5b2275450edcb",
+    "app/src-tauri/src/video_recording_encoder_stdin.rs": "9fd212d8b85eea54a2a184b28c1d425026ba893eaf657e64808ead21e5c3f753",
+    "app/src-tauri/src/video_recording_encoder_tests.rs": "b8c4f49d6d0ac1b0209a4a77c2cb78b1a8015efe729c6cf59ab0024c0eeaf7f5",
+    "tools/syndocal-mcp/native-video-blackout.mjs": "51091d55e4a588982312f8cd8917040b7ce2c99c603b560158fd6a0bb681a1ff"
+  },
+  "workspaceExit": 0,
+  "workspacePassed": 3862,
+  "workspaceFailed": 0,
+  "workspaceIgnored": 47,
+  "explicitRealEncoderPassed": 1,
+  "realEncoderVersion": "Gyan FFmpeg/FFprobe 9.0.1; local tool only",
+  "normalNativeBuildExit": 0,
+  "ownedCandidateClosedGracefully": true,
+  "remainingSyndocalProcesses": 0,
+  "releaseAggregateExit": 0,
+  "noComputerUse": true,
+  "noSubagents": true
+}

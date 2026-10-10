@@ -158,6 +158,10 @@ pub(super) fn rename_no_replace(source: &File, target: &Path) -> Result<(), Stri
     let header_size = offset_of!(FILE_RENAME_INFO, FileName);
     let byte_size = header_size
         .checked_add(name_bytes as usize)
+        // FileNameLength excludes the terminator, but the Win32 wrapper requires
+        // a NUL-terminated FileName. Alignment padding is not a terminator when
+        // the payload happens to occupy an exact number of allocation words.
+        .and_then(|size| size.checked_add(size_of::<u16>()))
         .and_then(|size| u32::try_from(size).ok())
         .ok_or_else(|| "Recording rename information is too large".to_string())?;
     let word_count = (byte_size as usize + size_of::<u64>() - 1) / size_of::<u64>();
