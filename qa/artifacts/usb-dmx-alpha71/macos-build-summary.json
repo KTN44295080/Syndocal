@@ -1,0 +1,24 @@
+{
+  "passed": true,
+  "sourceCommit": "bf18677855e2df4cbba67609ec9455f67382b081",
+  "workflowRun": "38023392633",
+  "artifactReportChecks": 10,
+  "artifactValidatorTests": 147,
+  "uniqueTargetedTests": 42,
+  "ftdiRepeatedTargetedTests": 2,
+  "firstPartyCompilerWarnings": 0,
+  "thirdPartyFfmpegWarnings": {
+    "baseline": 26,
+    "current": 26,
+    "delta": 0
+  },
+  "viteChunkAdvisories": {
+    "baseline": 1,
+    "current": 1
+  },
+  "buildLogSha256": "6ed0519efcf08ed034f93a7ed26be3dbdae9b1b0135d96799bd28cdecfb48714",
+  "nonclaims": [
+    "No physical SH-RS09B, waveform or fixture output",
+    "No native macOS UI responsiveness, Gatekeeper, actual macOS 12 or Intel verification"
+  ]
+}

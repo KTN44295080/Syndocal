@@ -1,0 +1,10 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.60s
+warning: the following packages contain code that will be rejected by a future version of Rust: block v0.1.6
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+     Running unittests src/lib.rs (target/debug/deps/io-5e50803f0010c8b0)
+
+running 2 tests
+test serial_dmx::macos_ftdi::tests::ft232r_usb_uart_encoding_is_250k_8n2_with_explicit_break_bit ... ok
+test serial_dmx::macos_ftdi::tests::native_usb_open_rejects_a_missing_registry_generation_without_transfers ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 189 filtered out; finished in 0.00s

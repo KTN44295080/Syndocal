@@ -486,7 +486,7 @@ unaccepted.
 
 ## インストール
 
-現行の開発配布版は `1.2.0-alpha.71` です。Windows x64用EXE/MSIと、macOS 12以降のApple Silicon用DMGを作成します。配布物・起動検証・残る確認は [配布記録](qa/USB_DMX_MACOS_ALPHA71_2026-10-10.md) を参照してください。
+現行の開発配布版は `1.2.0-alpha.71` です。Windows x64用EXE/MSI・導入用ZIPと、macOS 12以降のApple Silicon用DMGを用意しました。配布物・起動検証・残る確認は [配布記録](qa/USB_DMX_MACOS_ALPHA71_2026-10-10.md) を参照してください。
 
 CI/Release成果物は次の形式です。
 

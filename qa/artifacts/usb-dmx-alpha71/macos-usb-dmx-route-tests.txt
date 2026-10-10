@@ -1,0 +1,261 @@
+warning: unnecessary `unsafe` block
+  --> vendor/tauri-runtime-wry-2.6.0-syndocal/src/window/macos.rs:27:7
+   |
+27 |       unsafe { sheet.setAlphaValue(0.5) };
+   |       ^^^^^^ unnecessary `unsafe` block
+   |
+   = note: `#[warn(unused_unsafe)]` (part of `#[warn(unused)]`) on by default
+
+warning: unnecessary `unsafe` block
+  --> vendor/tauri-runtime-wry-2.6.0-syndocal/src/window/macos.rs:28:7
+   |
+28 |       unsafe { ns_window.beginSheet_completionHandler(&sheet, None) };
+   |       ^^^^^^ unnecessary `unsafe` block
+
+warning: unnecessary `unsafe` block
+  --> vendor/tauri-runtime-wry-2.6.0-syndocal/src/window/macos.rs:29:36
+   |
+29 |     } else if let Some(attached) = unsafe { ns_window.attachedSheet() } {
+   |                                    ^^^^^^ unnecessary `unsafe` block
+
+warning: unnecessary `unsafe` block
+  --> vendor/tauri-runtime-wry-2.6.0-syndocal/src/window/macos.rs:30:7
+   |
+30 |       unsafe { ns_window.endSheet(&attached) };
+   |       ^^^^^^ unnecessary `unsafe` block
+
+warning: unnecessary `unsafe` block
+  --> vendor/tauri-runtime-wry-2.6.0-syndocal/src/window/macos.rs:36:5
+   |
+36 |     unsafe { ns_window.attachedSheet() }.is_none()
+   |     ^^^^^^ unnecessary `unsafe` block
+
+warning: `tauri-runtime-wry` (lib) generated 5 warnings
+   Compiling syndocal v1.2.0-alpha.71 (/Users/runner/work/Syndocal/Syndocal/app/src-tauri)
+warning: unused import: `sync::Arc`
+ --> app/src-tauri/src/video_recording_encoder_process.rs:3:5
+  |
+3 |     sync::Arc,
+  |     ^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `super::*`
+   --> app/src-tauri/src/capture_process_lifecycle.rs:327:9
+    |
+327 |     use super::*;
+    |         ^^^^^^^^
+
+warning: unused import: `DjLinkIpv4BindingKey`
+  --> app/src-tauri/src/dj_link_persistence_runtime.rs:15:36
+   |
+15 | use crate::dj_link_network::{self, DjLinkIpv4BindingKey, DjLinkTrustDecision};
+   |                                    ^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `rodio::cpal::traits::DeviceTrait`
+     --> app/src-tauri/src/main.rs:14817:9
+      |
+14817 |     use rodio::cpal::traits::DeviceTrait;
+      |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: variable does not need to be mutable
+     --> app/src-tauri/src/main.rs:72133:9
+      |
+72133 |     let mut faults = capture_transport_faults_for_active_routes(active_routes, capture_transport)?;
+      |         ----^^^^^^
+      |         |
+      |         help: remove this `mut`
+      |
+      = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable does not need to be mutable
+     --> app/src-tauri/src/main.rs:72148:9
+      |
+72148 |     let mut faults =
+      |         ----^^^^^^
+      |         |
+      |         help: remove this `mut`
+
+warning: unused variable: `managed_terminal_identity`
+     --> app/src-tauri/src/main.rs:76973:5
+      |
+76973 |     managed_terminal_identity: Option<ManagedExactBothOutputControlTerminalIdentity<'_>>,
+      |     ^^^^^^^^^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_managed_terminal_identity`
+      |
+      = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: field `owner` is never read
+     --> app/src-tauri/src/main.rs:21516:9
+      |
+21515 |     Mac {
+      |     --- field in this variant
+21516 |         owner: mac_audio_resources::MacAudioInputStream,
+      |         ^^^^^
+      |
+      = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `submit_managed_exact_both_candidate_with_classified_commit` is never used
+     --> app/src-tauri/src/main.rs:75858:4
+      |
+75858 | fn submit_managed_exact_both_candidate_with_classified_commit<T, Commit>(
+      |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `submit_show_output_candidate_with_classified_commit` is never used
+     --> app/src-tauri/src/main.rs:75891:4
+      |
+75891 | fn submit_show_output_candidate_with_classified_commit<T, Commit>(
+      |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: static `TEST_LIFECYCLE_SERIAL` is never used
+   --> app/src-tauri/src/capture_process_lifecycle.rs:279:8
+    |
+279 | static TEST_LIFECYCLE_SERIAL: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+    |        ^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `wait_for_test_reaped_child` is never used
+   --> app/src-tauri/src/capture_process_lifecycle.rs:293:4
+    |
+293 | fn wait_for_test_reaped_child(child_id: u32) -> bool {
+    |    ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `quarantined_child_count` is never used
+   --> app/src-tauri/src/capture_process_lifecycle.rs:318:4
+    |
+318 | fn quarantined_child_count() -> usize {
+    |    ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: constant `DJ_LINK_CREDENTIAL_ROLLBACK_TARGET` is never used
+  --> app/src-tauri/src/dj_link_machine.rs:47:11
+   |
+47 | pub const DJ_LINK_CREDENTIAL_ROLLBACK_TARGET: &str = "jp.seraf.ktn.syndocal/dj-link/v1/rollback";
+   |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: variant `StoredBlobInvalid` is never constructed
+   --> app/src-tauri/src/dj_link_machine.rs:212:5
+    |
+204 | pub enum DjLinkCredentialError {
+    |          --------------------- variant in this enum
+...
+212 |     StoredBlobInvalid,
+    |     ^^^^^^^^^^^^^^^^^
+    |
+    = note: `DjLinkCredentialError` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: method `bind_ipv4` is never used
+   --> app/src-tauri/src/dj_link_network.rs:427:12
+    |
+398 | impl DjLinkIpv4BindingKey {
+    | ------------------------- method in this implementation
+...
+427 |     pub fn bind_ipv4(&self) -> Ipv4Addr {
+    |            ^^^^^^^^^
+
+warning: constant `DJ_LINK_NL_DAD_STATE_PREFERRED` is never used
+   --> app/src-tauri/src/dj_link_network.rs:455:11
+    |
+455 | pub const DJ_LINK_NL_DAD_STATE_PREFERRED: i32 = 4;
+    |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: constant `DJ_LINK_MIB_IF_ROW2_HARDWARE_INTERFACE_MASK` is never used
+   --> app/src-tauri/src/dj_link_network.rs:460:11
+    |
+460 | pub const DJ_LINK_MIB_IF_ROW2_HARDWARE_INTERFACE_MASK: u8 = 0x01;
+    |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: enum `DjLinkIpv4DiscoveryFailure` is never used
+   --> app/src-tauri/src/dj_link_network.rs:680:10
+    |
+680 | pub enum DjLinkIpv4DiscoveryFailure {
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: variants `Structural`, `Walk`, and `Observer` are never constructed
+   --> app/src-tauri/src/dj_link_network.rs:785:5
+    |
+784 | pub enum DjLinkIpv4BindingError {
+    |          ---------------------- variants in this enum
+785 |     Structural(DjLinkIpv4StructuralAnomaly),
+    |     ^^^^^^^^^^
+786 |     Walk(DjLinkGaaWalkError),
+    |     ^^^^
+787 |     Observer(DjLinkObserverFailure),
+    |     ^^^^^^^^
+    |
+    = note: `DjLinkIpv4BindingError` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: constant `MAX_GAA_ADAPTERS` is never used
+    --> app/src-tauri/src/dj_link_network.rs:1030:11
+     |
+1030 | pub const MAX_GAA_ADAPTERS: usize = 256;
+     |           ^^^^^^^^^^^^^^^^
+
+warning: constant `MAX_GAA_ADDRESSES_PER_ADAPTER` is never used
+    --> app/src-tauri/src/dj_link_network.rs:1032:11
+     |
+1032 | pub const MAX_GAA_ADDRESSES_PER_ADAPTER: usize = 64;
+     |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: multiple variants are never constructed
+    --> app/src-tauri/src/dj_link_network.rs:1158:5
+     |
+1157 | pub enum DjLinkObserverFailure {
+     |          --------------------- variants in this enum
+1158 |     ComInit { code: i32 },
+     |     ^^^^^^^
+1159 |     ComObjectCreation { code: i32 },
+     |     ^^^^^^^^^^^^^^^^^
+1160 |     EnumerationHost { code: i32 },
+1161 |     EnumerationProtocol,
+     |     ^^^^^^^^^^^^^^^^^^^
+1162 |     EnumerationLimitExceeded,
+     |     ^^^^^^^^^^^^^^^^^^^^^^^^
+1163 |     ObservationMalformed,
+     |     ^^^^^^^^^^^^^^^^^^^^
+1164 |     ObserverChannelClosed,
+     |     ^^^^^^^^^^^^^^^^^^^^^
+1165 |     ObserverTimeout,
+     |     ^^^^^^^^^^^^^^^
+1166 |     ObserverThreadPanic,
+     |     ^^^^^^^^^^^^^^^^^^^
+     |
+     = note: `DjLinkObserverFailure` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: constant `DJ_LINK_NETWORK_SETTLE_DWELL` is never used
+  --> app/src-tauri/src/dj_link_persistence_runtime.rs:21:7
+   |
+21 | const DJ_LINK_NETWORK_SETTLE_DWELL: Duration = Duration::from_secs(1);
+   |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `trust_block_reason` is never used
+   --> app/src-tauri/src/dj_link_persistence_runtime.rs:893:4
+    |
+893 | fn trust_block_reason(decision: DjLinkTrustDecision) -> Result<(), String> {
+    |    ^^^^^^^^^^^^^^^^^^
+
+warning: associated function `for_test_with_probes` is never used
+   --> app/src-tauri/src/e3_native_acceptance.rs:191:8
+    |
+ 37 | impl E3NativeAcceptanceConfig {
+    | ----------------------------- associated function in this implementation
+...
+191 |     fn for_test_with_probes<Probe, DriveValidate>(
+    |        ^^^^^^^^^^^^^^^^^^^^
+
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `syndocal` (bin "syndocal" test) generated 27 warnings (run `cargo fix --bin "syndocal" -p syndocal --tests` to apply 7 suggestions)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2m 22s
+warning: the following packages contain code that will be rejected by a future version of Rust: block v0.1.6
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+     Running unittests src/main.rs (target/debug/deps/syndocal-3ab32fea100d53dd)
+
+running 6 tests
+test serial_show_dmx_route_tests::macos_show_route_capture_requires_the_selected_iokit_generation ... ok
+test serial_show_dmx_route_tests::show_serial_dmx_device_matcher_requires_the_exact_machine_local_selection ... ok
+test serial_show_dmx_route_tests::show_serial_dmx_identity_capture_cannot_promote_a_b_a_replacement ... ok
+test serial_show_dmx_route_tests::show_serial_dmx_requires_the_exact_enabled_unity_artnet_mirror_not_a_staged_route ... ok
+test serial_show_dmx_route_tests::show_serial_dmx_binding_replacement_after_healthy_stop_requires_the_physical_zero_receipt ... ok
+test serial_show_dmx_route_tests::show_serial_dmx_binding_replacement_requires_clean_stopped_receipt_and_rolls_back_post_persist_fault ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 1658 filtered out; finished in 0.07s
