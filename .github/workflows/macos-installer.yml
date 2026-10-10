@@ -95,6 +95,7 @@ jobs:
         run: |
           set -o pipefail
           cargo test -p io serial_dmx --lib 2>&1 | tee target/qa/macos-artifact/usb-dmx-io-tests.txt
+          cargo test -p io macos_ftdi --lib 2>&1 | tee target/qa/macos-artifact/usb-dmx-ftdi-tests.txt
           cargo test -p engine macos_show_serial_identity --lib 2>&1 | tee target/qa/macos-artifact/usb-dmx-engine-tests.txt
           cargo test -p syndocal --bin syndocal serial_dmx_machine 2>&1 | tee target/qa/macos-artifact/usb-dmx-binding-tests.txt
           cargo test -p syndocal --bin syndocal serial_show_dmx_route_tests 2>&1 | tee target/qa/macos-artifact/usb-dmx-route-tests.txt
