@@ -155,7 +155,7 @@ test('mount metadata resolves normalized exact paths and rejects unknown shapes'
   }
 });
 function completeReport() {
-  const names = ['environment', 'dmg', 'image_integrity', 'extraction', 'bundle_info', 'macho', 'signature', 'process_survival', 'cleanup'];
+  const names = ['environment', 'dmg', 'image_integrity', 'extraction', 'bundle_info', 'macho', 'signature', 'process_identity', 'process_survival', 'cleanup'];
   return { checks: { ...Object.fromEntries(names.map(name => [name, { status: 'pass' }])), checksum: { status: 'not_run' } } };
 }
 test('checksum success is required before publishing overall pass', async () => {

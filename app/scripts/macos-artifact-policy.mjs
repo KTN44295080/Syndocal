@@ -2,7 +2,7 @@ import path from 'node:path';
 const p = path.posix;
 
 export const ARTIFACT_CHECKS = Object.freeze(['environment', 'dmg', 'image_integrity',
-  'extraction', 'bundle_info', 'macho', 'signature', 'process_survival', 'cleanup', 'checksum']);
+  'extraction', 'bundle_info', 'macho', 'signature', 'process_identity', 'process_survival', 'cleanup', 'checksum']);
 
 export function requireCondition(ok, message) {
   if (!ok) throw new Error(message);

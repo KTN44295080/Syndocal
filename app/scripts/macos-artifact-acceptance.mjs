@@ -11,7 +11,7 @@ export function validateAcceptanceReport(report, expected) {
   requireCondition(path.isAbsolute(expected.reportPath) && path.isAbsolute(expected.dmgDirectory), 'Expected paths must be absolute');
   requireCondition(/^[a-f0-9]{40}$/.test(expected.commit ?? '')
     && /^[1-9]\d*$/.test(expected.runId ?? '') && /^[1-9]\d*$/.test(expected.runAttempt ?? ''), 'Missing CI identity');
-  requireCondition(report?.schemaVersion === 1 && report.status === 'pass'
+  requireCondition(report?.schemaVersion === 2 && report.status === 'pass'
     && report.interrupted === false && !report.error && !report.cleanupError
     && !report.publicationError, 'Artifact validation did not finish successfully');
   requireCondition(report.commit === expected.commit && report.runId === expected.runId
@@ -35,6 +35,14 @@ export function validateAcceptanceReport(report, expected) {
   requireCondition(/^[a-f0-9]{64}$/.test(dmg.sha256 ?? '')
     && Number.isSafeInteger(dmg.size) && dmg.size > 0, 'Invalid DMG hash/size evidence');
   const survival = report.checks.process_survival.value;
+  const identity = report.checks.process_identity.value;
+  requireCondition(identity?.schemaVersion === 1 && Number.isSafeInteger(identity.processId)
+    && identity.processId > 0 && identity.processId <= 2147483647
+    && typeof identity.executablePath === 'string' && path.posix.isAbsolute(identity.executablePath)
+    && !identity.executablePath.includes('\0')
+    && identity.executablePath === identity.inspectedExecutablePath
+    && identity.cliExecutablePath === path.join(report.checks.extraction.value, 'Contents/MacOS/syndocal')
+    && identity.malformedRequestsRejected === 2, 'Incomplete extracted product process identity evidence');
   requireCondition(survival?.reaped === true && Number.isFinite(survival.observedMs)
     && survival.observedMs >= 8000, 'Incomplete process survival evidence');
   requireCondition((survival.exitCode === 0 && survival.signal === null)

@@ -9,6 +9,7 @@ import { reserveReport } from './macos-artifact-report.mjs';
 import { setImmediate as nextTurn } from 'node:timers/promises';
 import { ARTIFACT_CHECKS as CHECKS, requireCondition, selectDmg, hasMountedImage } from './macos-artifact-policy.mjs';
 import { inspectInfo, inspectMachO, inspectSignature, readPlist } from './macos-artifact-inspect.mjs';
+import { inspectProcessIdentity } from './macos-artifact-identity.mjs';
 const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 
 
@@ -35,7 +36,7 @@ export async function main(argv = process.argv.slice(2)) {
   }
   requireCondition(options['--dmg-dir'] && options['--report'], 'Both --dmg-dir and --report are required');
   const reportPath = options['--report'];
-  const report = { schemaVersion: 1, status: 'fail', startedAt: new Date().toISOString(),
+  const report = { schemaVersion: 2, status: 'fail', startedAt: new Date().toISOString(),
     host: { platform: process.platform, architecture: process.arch, release: os.release() },
     commit: null, runId: process.env.GITHUB_RUN_ID ?? null, runAttempt: process.env.GITHUB_RUN_ATTEMPT ?? null,
     checks: Object.fromEntries(CHECKS.map(name => [name, { status: 'not_run' }])), commands: [],
@@ -96,6 +97,7 @@ export async function main(argv = process.argv.slice(2)) {
     await step('bundle_info', () => inspectInfo(app, expected, run));
     await step('macho', () => inspectMachO(app, expected.minimum, run));
     await step('signature', () => inspectSignature(app, run));
+    await step('process_identity', () => inspectProcessIdentity(path.join(app, 'Contents/MacOS/syndocal'), run));
     await step('process_survival', async () => {
       const home = path.join(session.root, 'home'), tmp = path.join(session.root, 'tmp');
       await fs.mkdir(home); await fs.mkdir(tmp);

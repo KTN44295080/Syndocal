@@ -1,7 +1,7 @@
 {
   "name": "syndocal",
   "private": true,
-  "version": "1.2.0-alpha.71",
+  "version": "1.2.0-alpha.72",
   "author": "Seraf()",
   "type": "module",
   "scripts": {

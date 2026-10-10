@@ -9,6 +9,10 @@ Build/test/native evidence and remaining concurrency boundaries are recorded bel
 this is not full Recording completion. See [remaining work and acceptance](REMAINING_WORK_2026-09-05.md).
 Earlier artifact versions, hashes and process observations below are historical.
 
+## 2026-10-11 alpha.72 development distribution candidate
+
+Current product metadata is `1.2.0-alpha.72`. The next Windows/macOS package collects the internal native MCP and recording repairs. Final-DMG acceptance now requires the extracted product's process inspection CLI. Evidence and pending package gates are recorded in [the checkpoint](DEVELOPMENT_INSTALLERS_ALPHA72_2026-10-11.md). This is not full Recording or release completion.
+
 ## 2026-10-11 external MCP OS process identity
 
 macOS now has a strict read-only libproc inspection CLI before Engine/Tauri startup;
@@ -37,7 +41,7 @@ physical-device, macOS runtime, clean-install or full product acceptance gates.
 
 ## 2026-10-10 alpha.71 Mac USB-DMX and development distribution
 
-Current product metadata is `1.2.0-alpha.71`. macOS USB-DMX now uses an exact IOKit generation for BSD serial or native FT232R USB output. Windows x64 and macOS 12+ Apple Silicon packages and their acceptance are recorded in [the checkpoint](USB_DMX_MACOS_ALPHA71_2026-10-10.md). Physical SH-RS09B output and full release acceptance remain open.
+Recorded product metadata was `1.2.0-alpha.71`. macOS USB-DMX now uses an exact IOKit generation for BSD serial or native FT232R USB output. Windows x64 and macOS 12+ Apple Silicon packages and their acceptance are recorded in [the checkpoint](USB_DMX_MACOS_ALPHA71_2026-10-10.md). Physical SH-RS09B output and full release acceptance remain open.
 
 
 ## 2026-10-08 alpha.70 development installers

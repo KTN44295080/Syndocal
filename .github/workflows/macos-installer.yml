@@ -89,7 +89,7 @@ jobs:
         run: |
           mkdir -p target/qa/macos-artifact
           set -o pipefail
-          node --test app/scripts/test-macos-artifact.mjs app/scripts/test-macos-artifact-report.mjs app/scripts/test-macos-artifact-acceptance.mjs app/scripts/test-macos-artifact-workflow.mjs | tee target/qa/macos-artifact/tests.tap
+          node --test app/scripts/test-macos-artifact.mjs app/scripts/test-macos-artifact-report.mjs app/scripts/test-macos-artifact-acceptance.mjs app/scripts/test-macos-artifact-identity.mjs app/scripts/test-macos-artifact-workflow.mjs | tee target/qa/macos-artifact/tests.tap
 
       - name: Test macOS USB-DMX identity and output lifecycle
         run: |

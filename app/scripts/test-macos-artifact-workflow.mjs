@@ -18,7 +18,7 @@ function checkWorkflow(source) {
   const tests = step('Test macOS artifact validator');
   assert.match(tests, /set -o pipefail/);
   for (const name of ['test-macos-artifact.mjs', 'test-macos-artifact-report.mjs',
-    'test-macos-artifact-acceptance.mjs', 'test-macos-artifact-workflow.mjs']) assert.ok(tests.includes(`app/scripts/${name}`));
+    'test-macos-artifact-acceptance.mjs', 'test-macos-artifact-identity.mjs', 'test-macos-artifact-workflow.mjs']) assert.ok(tests.includes(`app/scripts/${name}`));
   const validate = step('Validate application extracted from final DMG');
   assert.match(validate, /\n        id: validate\n/);
   assert.ok(validate.includes('node app/scripts/check-macos-artifact.mjs'));

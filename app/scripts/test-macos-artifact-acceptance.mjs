@@ -17,7 +17,7 @@ function fixture(root = path.resolve('fixture')) {
   const name = `Syndocal_${expected.version}_arm64.dmg`;
   const dmg = { name, path: path.join(root, name), size: payload.length,
     sha256: createHash('sha256').update(payload).digest('hex') };
-  const report = { schemaVersion: 1, status: 'pass', interrupted: false,
+  const report = { schemaVersion: 2, status: 'pass', interrupted: false,
     commit: expected.commit, runId: expected.runId, runAttempt: expected.runAttempt,
     host: { platform: 'darwin', architecture: 'arm64' },
     checks: Object.fromEntries(ARTIFACT_CHECKS.map(key => [key, { status: 'pass' }])),
@@ -25,6 +25,11 @@ function fixture(root = path.resolve('fixture')) {
       stagingPath: `${expected.reportPath}.${randomUUID()}.pending`, stagingPolicy: 'success requires alias removal' } };
   report.checks.dmg.value = dmg;
   report.checks.bundle_info.value = { version: expected.version };
+  report.checks.extraction.value = path.join(root, 'Syndocal.app');
+  report.checks.process_identity.value = { schemaVersion: 1, processId: 123,
+    executablePath: '/opt/node/bin/node', inspectedExecutablePath: '/opt/node/bin/node',
+    cliExecutablePath: path.join(report.checks.extraction.value, 'Contents/MacOS/syndocal'),
+    malformedRequestsRejected: 2 };
   report.checks.process_survival.value = { observedMs: 8000, reaped: true, exitCode: null, signal: 'SIGTERM' };
   return { expected, report, payload, dmg };
 }
@@ -66,6 +71,12 @@ for (const [name, mutate] of [
   ['wrong host', r => { r.host.platform = 'win32'; }],
   ['wrong architecture', r => { r.host.architecture = 'x64'; }],
   ['wrong version', r => { r.checks.bundle_info.value.version = 'other'; }],
+  ['retired report schema', r => { r.schemaVersion = 1; }],
+  ['missing identity value', r => { delete r.checks.process_identity.value; }],
+  ['wrong identity PID', r => { r.checks.process_identity.value.processId = 0; }],
+  ['wrong identity path', r => { r.checks.process_identity.value.executablePath += '.other'; }],
+  ['different CLI binary', r => { r.checks.process_identity.value.cliExecutablePath += '.other'; }],
+  ['incomplete malformed rejection', r => { r.checks.process_identity.value.malformedRequestsRejected = 1; }],
   ['extra check', r => { r.checks.unreviewed = { status: 'pass' }; }],
   ['too short', r => { r.checks.process_survival.value.observedMs = 7999; }],
   ['non-finite interval', r => { r.checks.process_survival.value.observedMs = Infinity; }],
