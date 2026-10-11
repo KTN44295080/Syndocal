@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "passed": true,
+  "timestamp": "2026-10-11T22:30:09.822Z",
+  "executable": "C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-native-acceptance-target\\release\\syndocal.exe",
+  "executableSha256": "becb6a46d608e383ced000fb18460cf9423b16d991fb52fbfcfad18e44444039",
+  "checks": [
+    "60 live samples, intermediate/final readback, strict replay/invalid rejection, one Undo/Redo",
+    "Atomic two-fixture repatch preserves spacing/values and one Undo/Redo",
+    "All physical outputs remained disarmed; isolated project restored"
+  ],
+  "nativeIpcLatencyMs": {
+    "samples": 60,
+    "mean": 1.7535050000000107,
+    "max": 3.146600000000035
+  },
+  "nonclaims": [
+    "No Control DOM interaction",
+    "No physical USB-DMX timing or output observation"
+  ]
+}

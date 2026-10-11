@@ -1,0 +1,417 @@
+{
+  "schemaVersion": 1,
+  "timestamp": "2026-10-11T22:30:58.217Z",
+  "passed": true,
+  "executable": "C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-native-acceptance-target\\release\\syndocal.exe",
+  "executableSha256": "becb6a46d608e383ced000fb18460cf9423b16d991fb52fbfcfad18e44444039",
+  "sidecarSha256": "e5010efab86dbdd9b5a82abe6efaf2ee47684af678c04dd634e23b5f3a404f3e",
+  "runnerSha256": "5b0974c90230351505cec32f175685e09c134111136651c55659f3fb49cd6090",
+  "backendHarnessSha256": "fcc5655508dccff3ca6b99d5bb60e155483e84de6c4347f564d7891b765ea369",
+  "videoBlackoutHarnessSha256": "ce7276adbb1629185a071439dc767d12da4843fc27382c33cbc9edfd8477e2e8",
+  "videoBlackoutLedgerSha256": "85c7b875be818713acc4b640061ae201b81c78da4bd1dcd4b70d77cac09e40e4",
+  "videoBlackoutCommitSha256": "5c5d033073f096044a427b24301623652243a4ecda70d2c22dfa09df5c07ebb1",
+  "videoBlackoutAdapterSha256": "2014ee8301be273dd3d5d5466944b262dfad6e8ee50155f20c410b2a87d0c80d",
+  "videoBlackoutDomainSha256": "8cc19efe21a527f6403fda2022646f3bfdf81e9059960e3afa647c2907fb916b",
+  "videoBlackoutMainSha256": "d5f7652c4c89407489d9b84826aa284bd2a2f92607628628b9ae74b7b47c855e",
+  "controllerOutputHarnessSha256": "5557ea27247b65405c0f72514a19fe4ad27799efc0a9797bf970be5abc65df12",
+  "profile": "jp.seraf.ktn.syndocal.qa.mcp-lifecycle.video-blackout-20261007",
+  "checks": [
+    {
+      "check": "native-fixture-fader-and-bulk-repatch",
+      "passed": true,
+      "evidence": "C:\\Users\\janua\\.codex\\worktrees\\patch-bulk-alpha74\\Syndocal\\qa\\artifacts\\fixture-control-alpha74\\native-output-backend-v7.json.fixture-fader.json"
+    },
+    {
+      "check": "native-loopback-project-load-does-not-arm",
+      "passed": true,
+      "fixtureSourceSha256": "aafd2947ef1922805c3a81a5f2ef8921c8b3045f0540bb186052c3c9e01593af",
+      "projectSha256": "25235087373dd648abb9fa78708149d9ea0d8127be860365906040879f13e14d",
+      "destination": {
+        "address": "127.0.0.1",
+        "family": "IPv4",
+        "port": 50025
+      },
+      "ownership": {
+        "role": "Standby",
+        "effective_role": "Standby",
+        "desired_role": "Both",
+        "persisted_role": "Both",
+        "state": "Ready",
+        "generation": 7,
+        "epoch": 7,
+        "lighting_allowed": false,
+        "video_allowed": false,
+        "lighting_reason": "ProjectSwapDisarmed",
+        "video_reason": "ProjectSwapDisarmed",
+        "error": null
+      },
+      "packets": 0
+    },
+    {
+      "check": "external-loopback-exact-grant-safe-mode-and-acquire-without-output",
+      "passed": true,
+      "generation": 1
+    },
+    {
+      "check": "external-r4-arm-without-dialog-produces-received-live-artdmx",
+      "passed": true,
+      "receipt": {
+        "argument_fingerprint": "db3af3e29ee44c9af19468377e094bf01ebfbe212b0238d2f39f95ee798e93a0",
+        "audit_sequence": 2,
+        "fence_after": {
+          "output_epoch": 9,
+          "output_generation": 9,
+          "process_incarnation": 8857719302159475,
+          "project_checkpoint_hash": "235c4a88d32002763e652981497610e15400d5229db0153d2f2024b4dc00f9fb",
+          "project_epoch": 3,
+          "project_publication_generation": 10,
+          "project_revision": 0,
+          "safety_blackout_epoch": 1,
+          "safety_blackout_generation": 1,
+          "session_incarnation": 4640015420490717
+        },
+        "fence_before": {
+          "output_epoch": 8,
+          "output_generation": 8,
+          "process_incarnation": 8857719302159475,
+          "project_checkpoint_hash": "235c4a88d32002763e652981497610e15400d5229db0153d2f2024b4dc00f9fb",
+          "project_epoch": 3,
+          "project_publication_generation": 10,
+          "project_revision": 0,
+          "safety_blackout_epoch": 1,
+          "safety_blackout_generation": 1,
+          "session_incarnation": 4640015420490717
+        },
+        "lease_result": {
+          "audit_sequence": 7,
+          "authority": {
+            "generation": 1,
+            "lease_id": "lease-0000000000000001"
+          },
+          "changes": [
+            {
+              "after_generation": 1,
+              "after_phase": "held_active",
+              "after_resources": [
+                "lighting"
+              ],
+              "before_generation": 1,
+              "before_phase": "held_active",
+              "before_resources": [
+                "lighting"
+              ],
+              "lease_id": "lease-0000000000000001"
+            }
+          ],
+          "outcome": "authorized",
+          "phase": "held_active",
+          "resources": [
+            "lighting"
+          ]
+        },
+        "operation_id": "syndocal.output.ownership.arm.v2",
+        "outcome": "applied",
+        "request_id": 1791757809943,
+        "shape_sha256": "5127adbafe069331a25cc7ef7e088eb46bbcd02c7afc1cfc9aac8624bbd4fb15"
+      },
+      "state": {
+        "ownership": {
+          "role": "Lighting",
+          "effective_role": "Lighting",
+          "desired_role": "Lighting",
+          "persisted_role": "Lighting",
+          "state": "Ready",
+          "generation": 8,
+          "epoch": 8,
+          "lighting_allowed": true,
+          "video_allowed": false,
+          "lighting_reason": "OwnedByMachineRole",
+          "video_reason": "BlockedByMachineRole",
+          "error": null
+        },
+        "output": {
+          "enabled": true,
+          "port": 50025,
+          "protocol": "ArtNet",
+          "serial_baud_rate": 57600,
+          "serial_port": "",
+          "target_ip": "127.0.0.1",
+          "universe": 0
+        },
+        "routes": [
+          {
+            "enabled": true,
+            "port": 50025,
+            "protocol": "ArtNet",
+            "serial_baud_rate": 57600,
+            "serial_port": "",
+            "target_ip": "127.0.0.1",
+            "universe": 0
+          }
+        ],
+        "master": 1,
+        "blackout": false,
+        "safety": false,
+        "attributes": [
+          {
+            "attribute": "Dimmer",
+            "value": 65535
+          },
+          {
+            "attribute": "ColorRed",
+            "value": 0
+          },
+          {
+            "attribute": "ColorGreen",
+            "value": 0
+          },
+          {
+            "attribute": "ColorBlue",
+            "value": 0
+          },
+          {
+            "attribute": "Pan",
+            "value": 32768
+          },
+          {
+            "attribute": "Tilt",
+            "value": 32768
+          }
+        ]
+      },
+      "phase": "armed-full",
+      "frames": 22,
+      "payloadSha256": "65228acc43d02190277f6ebf9ec067c7135aaddc9f0c6a610c3052a7cf9213d1",
+      "channels1to8": [
+        255,
+        0,
+        0,
+        0,
+        128,
+        0,
+        128,
+        0
+      ]
+    },
+    {
+      "check": "registered-native-owner-retirement-preserves-live-image-and-gates",
+      "passed": true,
+      "phase": "owner-retirement-preserves-full",
+      "frames": 53,
+      "payloadSha256": "65228acc43d02190277f6ebf9ec067c7135aaddc9f0c6a610c3052a7cf9213d1",
+      "channels1to8": [
+        255,
+        0,
+        0,
+        0,
+        128,
+        0,
+        128,
+        0
+      ]
+    },
+    {
+      "check": "retired-generation-output-and-transfer-reject-with-no-live-delta",
+      "passed": true,
+      "phase": "retired-lease-rejected-preserves-full",
+      "frames": 135,
+      "payloadSha256": "65228acc43d02190277f6ebf9ec067c7135aaddc9f0c6a610c3052a7cf9213d1",
+      "channels1to8": [
+        255,
+        0,
+        0,
+        0,
+        128,
+        0,
+        128,
+        0
+      ]
+    },
+    {
+      "check": "external-r4-force-transfer-replay-and-conflict-preserve-live-image",
+      "passed": true,
+      "generationBefore": 2,
+      "generationAfter": 3,
+      "phase": "force-transfer-preserves-full",
+      "frames": 102,
+      "payloadSha256": "65228acc43d02190277f6ebf9ec067c7135aaddc9f0c6a610c3052a7cf9213d1",
+      "channels1to8": [
+        255,
+        0,
+        0,
+        0,
+        128,
+        0,
+        128,
+        0
+      ]
+    },
+    {
+      "check": "new-owner-explicit-r4-master-changes-live-dmx-once-old-generation-rejects",
+      "passed": true,
+      "master": 0.5,
+      "phase": "explicit-half-and-replay",
+      "frames": 88,
+      "payloadSha256": "3e129a77b8e19b39618c517551cb63c468d1a98d5ccaef39127a599476a0a2ec",
+      "channels1to8": [
+        128,
+        0,
+        0,
+        0,
+        128,
+        0,
+        128,
+        0
+      ]
+    },
+    {
+      "check": "lease-relinquishment-preserves-live-image-and-rejects-subsequent-output",
+      "passed": true,
+      "phase": "relinquish-preserves-half",
+      "frames": 168,
+      "payloadSha256": "3e129a77b8e19b39618c517551cb63c468d1a98d5ccaef39127a599476a0a2ec",
+      "channels1to8": [
+        128,
+        0,
+        0,
+        0,
+        128,
+        0,
+        128,
+        0
+      ]
+    },
+    {
+      "check": "explicit-native-project-replacement-stops-owned-loopback-sender-and-source-is-unchanged",
+      "passed": true,
+      "ownership": {
+        "role": "Standby",
+        "effective_role": "Standby",
+        "desired_role": "Lighting",
+        "persisted_role": "Lighting",
+        "state": "Ready",
+        "generation": 9,
+        "epoch": 9,
+        "lighting_allowed": false,
+        "video_allowed": false,
+        "lighting_reason": "ProjectSwapDisarmed",
+        "video_reason": "ProjectSwapDisarmed",
+        "error": null
+      },
+      "packetsTotal": 645,
+      "readOverloads": []
+    },
+    {
+      "check": "raw-tauri-set_lighting_master_output_control_v2-reaches-typed-native-validation-without-effect",
+      "passed": true
+    },
+    {
+      "check": "raw-tauri-set_group_submaster_output_control_v2-reaches-typed-native-validation-without-effect",
+      "passed": true
+    },
+    {
+      "check": "raw-tauri-set_video_master_output_control_v2-reaches-typed-native-validation-without-effect",
+      "passed": true
+    },
+    {
+      "check": "raw-tauri-take_video_clip_output_control_v2-reaches-typed-native-validation-without-effect",
+      "passed": true
+    },
+    {
+      "check": "external-legacy-video-blackout-missing-both-lease-refuses-without-acquire-or-arm",
+      "passed": true
+    },
+    {
+      "check": "external-legacy-video-blackout-stale-project-refuses-without-effect",
+      "passed": true
+    },
+    {
+      "check": "external-empty-project-both-lease-and-arm-with-no-physical-targets-or-dialog",
+      "passed": true
+    },
+    {
+      "check": "external-legacy-video-blackout-true-applied-native-readback-and-exact-replay",
+      "passed": true,
+      "requestId": "2a4f7824-ad58-4ffa-a0af-a4a3ead54b3a",
+      "outcome": "applied",
+      "revisionBefore": 0,
+      "revisionAfter": 1
+    },
+    {
+      "check": "external-legacy-video-blackout-true-no_op-native-readback-and-exact-replay",
+      "passed": true,
+      "requestId": "2619b18d-47f0-489e-8568-b55f2b862c2e",
+      "outcome": "no_op",
+      "revisionBefore": 1,
+      "revisionAfter": 1
+    },
+    {
+      "check": "external-legacy-video-blackout-false-applied-native-readback-and-exact-replay",
+      "passed": true,
+      "requestId": "8eb47e26-59e0-47ec-a680-3dc395950c3a",
+      "outcome": "applied",
+      "revisionBefore": 1,
+      "revisionAfter": 2
+    },
+    {
+      "check": "external-native-video-blackout-interleaves-with-low-canonical-gui-origin-identities",
+      "passed": true
+    },
+    {
+      "check": "native-renderer-identity-allocation-and-safety-release-after-retained-output-requests",
+      "passed": true,
+      "engageId": 4694918298487277,
+      "releaseId": 4694918298487278,
+      "nextRendererId": 4694918298487279
+    },
+    {
+      "check": "external-video-blackout-owned-lease-relinquished-and-output-closed",
+      "passed": true
+    },
+    {
+      "check": "isolated-first-launch-read",
+      "passed": true
+    },
+    {
+      "check": "dead-process-descriptor-rejected",
+      "passed": true
+    },
+    {
+      "check": "crash-restart-retired-principal-rejected",
+      "passed": true
+    },
+    {
+      "check": "old-credential-and-receipt-not-adopted",
+      "passed": true
+    },
+    {
+      "check": "old-launch-proof-rejected-fresh-read-succeeds",
+      "passed": true
+    },
+    {
+      "check": "external-video-blackout-owned-empty-project-saved-with-close-protection-enforced",
+      "passed": true
+    },
+    {
+      "check": "external-legacy-video-blackout-revoke-after-claim-consumes-native-request-without-effect",
+      "passed": true
+    },
+    {
+      "check": "graceful-native-close",
+      "passed": true
+    },
+    {
+      "check": "graceful-restart-does-not-restore-grant",
+      "passed": true
+    }
+  ],
+  "normalAppIdentityUnchanged": true,
+  "credentialRevoked": true,
+  "credentialFileRemoved": true,
+  "nativePanicLocations": [],
+  "nonclaims": [
+    "QA identifier release build, not the distributed artifact",
+    "No physical output activation; optional high-risk or lease-expiry probe mutates isolated backend lease authority only; optional Tap probe changes isolated empty-project tempo; optional project-file probe loads private JSON with no file media or video source activation",
+    "No durable authored/output mutation crash publication acceptance"
+  ]
+}

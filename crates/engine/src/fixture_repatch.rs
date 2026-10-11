@@ -69,8 +69,8 @@ pub(crate) fn apply(
             *universe == change.universe && range.0 <= existing.1 && existing.0 <= range.1
         }) {
             return Err(format!(
-                "Fixture {} overlaps fixture {id} at A{}-{}; nothing was applied",
-                change.fixture_id, existing.0, existing.1
+                "DMX address conflict in universe {}: fixture {} at {}-{} overlaps fixture {id} at {}-{}; nothing was applied",
+                change.universe, change.fixture_id, range.0, range.1, existing.0, existing.1
             ));
         }
         occupied.push((change.fixture_id, change.universe, range));

@@ -55,12 +55,37 @@ shared Microsoft/WebView2 runtimes.
   they did not uninstall the user's application or touch its real credentials.
 - The exact MSVC14.44 no-bundle build passed. Rust compiler warnings observed in
   that configuration were 0; the existing Vite chunk advisory remained 1.
-- Current installed alpha.72 (exact `C:\Program Files\Syndocal\syndocal.exe`)
-  remains running. Ordinary alpha.74 window acceptance is pending because the
-  normal product identifier cannot run beside this existing instance. No process
-  outside the owned build target is terminated.
+- The user saved and closed the installed alpha.72. The ordinary alpha.74
+  executable at source `3ae8d7818d2eba7733e29f680a77ba58ef523604` passed one
+  visible, responsive, maximized native window and unauthenticated broker-rejection
+  checks, then closed gracefully. No unrelated process was terminated.
 
-Isolated backend acceptance, Win/Mac packaging, hosted
-installer lifecycle and artifact hashes will be recorded here when observed.
+The private native executable built from `5a70a371bafbff04d83e2bf396a60b8b698ada56`
+passed 32 backend checks: DMX/VID BO, replay and stale rejection, receipt
+retention, restart/ownership retirement, 60 intermediate fixture-fader writes,
+one Undo/Redo and atomic bulk repatch. All physical outputs were disarmed.
+Mean fader IPC acceptance was 1.754 ms, maximum 3.147 ms; these are queue-acceptance
+measurements, not physical USB timing or actual Control DOM interaction.
+The exact-case target correction at `3ae8d781` subsequently passed four focused
+native stream/history tests.
+
+Linux full-workspace CI found one regression: the canonical repatch validator
+had changed the existing single-patch collision error prefix. Restored the
+`DMX address conflict in universe` contract in product code, preserving the
+atomic rejection and adding both source/destination ranges. No assertion was
+weakened. Three bulk repatch and three existing invalid-patch tests passed
+locally after the correction. Updated the private acceptance helper to read
+published runtime snapshots while a history ticket is active; full checkpoint
+and history reads still reject during that ticket. Bounded observation waits
+require the exact intermediate/final engine value; mutations are never retried.
+
+Multi-universe boundary: the engine stores/render-sends multiple routes, but
+`createOutputDiagnosticsController.applyDmxOutputRoutes` currently rejects UI
+route changes. The managed USB route is fixed to internal U0 and requires its
+exact Unity loopback mirror. General routing and multiple USB ports are not
+complete product features and have not been released or hardware verified.
+
+Win/Mac packaging, hosted installer lifecycle and artifact hashes will be
+recorded here when observed.
 No package is delivered yet. Apple Silicon GUI, minimum-OS execution, Developer
 ID signing/notarization, USB signal continuity and venue acceptance remain open.

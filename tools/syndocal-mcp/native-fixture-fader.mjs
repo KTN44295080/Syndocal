@@ -26,8 +26,16 @@ const ownerId = `fixture-native-${randomUUID()}`;
 const checkpoint = () => backend.invoke('get_project_checkpoint', { midiMappings: [], oscMappings: [], dmxMappings: [] });
 const authority = () => backend.invoke('get_project_authority_bundle');
 const history = () => backend.invoke('get_project_history_status');
-const fixtures = async () => (await checkpoint()).snapshot.fixtures;
+const fixtures = async () => (await backend.invoke('get_snapshot')).snapshot.fixtures;
 const dimmer = image => image[0].attribute_values.find(value => value.attribute === 'Dimmer').value;
+const expectDimmer = async value => {
+  const deadline = performance.now() + 2000;
+  do {
+    if (dimmer(await fixtures()) === value) return;
+    await new Promise(resolve => setTimeout(resolve, 10));
+  } while (performance.now() < deadline);
+  assert.equal(dimmer(await fixtures()), value, 'Live engine value must reach the accepted sample');
+};
 const checks = [];
 let activeTransaction = null;
 let operationSequence = 0;
@@ -106,10 +114,10 @@ try {
     const started = performance.now();
     await backend.invoke('stream_fixture_attribute_v1', write(sequence, sequence * 1000));
     latencies.push(performance.now() - started);
-    if (sequence === 30) assert.equal(dimmer(await fixtures()), 30000);
+    if (sequence === 30) await expectDimmer(30000);
   }
-  assert.equal(dimmer(await fixtures()), 60000);
-  assert.equal((await history()).undo_depth, initialDepth);
+  await expectDimmer(60000);
+  await assert.rejects(history(), /Project transaction is active/);
   await assert.rejects(backend.invoke('stream_fixture_attribute_v1', write(60, 0)));
   const invalid = write(61, 0); invalid.request.targets.push({ fixture_id: 999999, attribute: 'Dimmer' });
   await assert.rejects(backend.invoke('stream_fixture_attribute_v1', invalid));

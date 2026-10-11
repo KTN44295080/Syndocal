@@ -1,0 +1,28 @@
+**********************************************************************
+** Visual Studio 2022 Developer Command Prompt v17.14.39
+** Copyright (c) 2025 Microsoft Corporation
+**********************************************************************
+[vcvarsall.bat] Environment initialized for: 'x64'
+C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+   Compiling engine v1.2.0-alpha.74 (C:\Users\janua\.codex\worktrees\patch-bulk-alpha74\Syndocal\crates\engine)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 8.05s
+     Running unittests src\lib.rs (C:\Users\janua\AppData\Local\Temp\syndocal-native-acceptance-target\debug\deps\engine-a68741fb5518fde9.exe)
+
+running 3 tests
+test tests::fixture_repatch_tests::fixture_repatch_invalid_last_member_never_moves_first_member ... ok
+test tests::fixture_repatch_tests::fixture_repatch_moves_across_own_old_ranges_and_preserves_values ... ok
+test tests::fixture_repatch_tests::fixture_repatch_publication_failure_and_expiry_restore_a ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 1118 filtered out; finished in 0.01s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.30s
+     Running unittests src\lib.rs (C:\Users\janua\AppData\Local\Temp\syndocal-native-acceptance-target\debug\deps\engine-a68741fb5518fde9.exe)
+
+running 3 tests
+test tests::runtime_rejects_fixture_patch_footprints_that_exceed_universe ... ok
+test tests::runtime_rejects_invalid_fixture_patch_requests ... ok
+test tests::runtime_rejects_overlapping_fixture_patches_and_updates ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 1118 filtered out; finished in 0.00s
