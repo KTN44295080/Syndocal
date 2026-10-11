@@ -2,16 +2,16 @@
   "passed": true,
   "normalPayloadProof": {
     "productVersion": "1.2.0-alpha.73",
-    "executableSha256": "51d8f276da63a71085b06ad8d0ecdfb0e4d09fd972fbff02edeb8cd5a56f5903",
+    "executableSha256": "1c48245e39f8e66885c97ce48accf6bac6874ab8cb4abaa3017fd5b9d286c86a",
     "inspectorKind": "windows-release-diagnostics-powershell-v1",
     "roots": {
       "NSIS": {
-        "sha256": "51d8f276da63a71085b06ad8d0ecdfb0e4d09fd972fbff02edeb8cd5a56f5903",
+        "sha256": "1c48245e39f8e66885c97ce48accf6bac6874ab8cb4abaa3017fd5b9d286c86a",
         "productVersion": "1.2.0-alpha.73",
         "fileVersion": "1.2.0-alpha.73"
       },
       "MSI": {
-        "sha256": "51d8f276da63a71085b06ad8d0ecdfb0e4d09fd972fbff02edeb8cd5a56f5903",
+        "sha256": "1c48245e39f8e66885c97ce48accf6bac6874ab8cb4abaa3017fd5b9d286c86a",
         "productVersion": "1.2.0-alpha.73",
         "fileVersion": "1.2.0-alpha.73"
       }
@@ -46,14 +46,14 @@
   "artifacts": [
     {
       "name": "Syndocal_1.2.0-alpha.73_x64-setup.exe",
-      "byteSize": 82448532,
-      "sha256": "abd6118e33ba7b2539df0321bca2a862ed1e7e50bfcf1f481b7cd2a414db200b",
+      "byteSize": 82456259,
+      "sha256": "e51d0461432a0135a6776e6ce9d4c5b721a9c3dea1a3d049c1a96ebeb9a1f786",
       "path": "C:\\Users\\janua\\Downloads\\Syndocal-1.2.0-alpha.73\\Syndocal_1.2.0-alpha.73_x64-setup.exe"
     },
     {
       "name": "Syndocal_1.2.0-alpha.73_x64_ja-JP.msi",
-      "byteSize": 123219968,
-      "sha256": "cae6b1d7aa254182a1c71987c9232cb85183d91b6850907afd40df8b02d8af8b",
+      "byteSize": 123228160,
+      "sha256": "497edacd5057aa1279e5a6217772aee363980aad535fa400f517f4fcfdb10f35",
       "path": "C:\\Users\\janua\\Downloads\\Syndocal-1.2.0-alpha.73\\Syndocal_1.2.0-alpha.73_x64_ja-JP.msi"
     }
   ],

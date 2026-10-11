@@ -1,0 +1,51 @@
+name: Windows installer lifecycle
+on:
+  workflow_dispatch:
+    inputs:
+      current_run_id:
+        description: Successful alpha.73 Cross-platform run on this exact source
+        required: true
+        type: string
+permissions:
+  contents: read
+  actions: read
+jobs:
+  lifecycle:
+    runs-on: windows-2022
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - name: Verify artifact source identity
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CURRENT_RUN_ID: ${{ inputs.current_run_id }}
+        run: |
+          $current = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:CURRENT_RUN_ID" | ConvertFrom-Json
+          $baseline = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/38087767111" | ConvertFrom-Json
+          if ($current.status -ne 'completed' -or $current.conclusion -ne 'success' -or $current.head_sha -ne $env:GITHUB_SHA -or $current.path -ne '.github/workflows/cross-platform.yml') { throw 'Current artifact source does not match this successful checkpoint' }
+          if ($baseline.conclusion -ne 'success' -or $baseline.head_sha -ne '80fccf1401de2c2d8dc5c4ea2f03e9b96348d5eb') { throw 'Baseline artifact source mismatch' }
+      - uses: actions/download-artifact@v5
+        with:
+          name: syndocal-1.2.0-alpha.72-windows-2022
+          run-id: 38087767111
+          github-token: ${{ github.token }}
+          path: baseline
+      - uses: actions/download-artifact@v5
+        with:
+          name: syndocal-1.2.0-alpha.73-windows-2022
+          run-id: ${{ inputs.current_run_id }}
+          github-token: ${{ github.token }}
+          path: current
+      - name: Test actual NSIS and MSI update and complete removal
+        shell: pwsh
+        env:
+          CURRENT_RUN_ID: ${{ inputs.current_run_id }}
+        run: tools/distribution/test-installed-windows-lifecycle.ps1 -BaselineRoot baseline -CurrentRoot current -EvidencePath lifecycle-report.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-installer-lifecycle-${{ github.sha }}
+          path: lifecycle-report.json
+          if-no-files-found: error
+          retention-days: 14

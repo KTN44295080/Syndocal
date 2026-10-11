@@ -64,6 +64,7 @@
   FileWrite $R8 "'@$\r$\n"
   FileWrite $R8 "$$taskCredentialNames = New-Object 'System.Collections.Generic.List[string]'$\r$\n"
   FileWrite $R8 "$$taskCredentialNames.Add('jp.seraf.ktn.syndocal/dj-link/v1')$\r$\n"
+  FileWrite $R8 "$$taskCredentialNames.Add('jp.seraf.ktn.syndocal/dj-link/v1/rollback')$\r$\n"
   FileWrite $R8 "$$taskCount = [uint32]0; $$taskCredentials = [IntPtr]::Zero$\r$\n"
   FileWrite $R8 "if ([SyndocalUninstallCredentials]::Enumerate('Syndocal/AgentAuthority/v1/*', 0, [ref]$$taskCount, [ref]$$taskCredentials)) {$\r$\n"
   FileWrite $R8 "    try {$\r$\n"

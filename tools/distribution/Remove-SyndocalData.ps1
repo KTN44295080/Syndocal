@@ -60,6 +60,7 @@ public static class SyndocalUninstallCredentials {
 '@
 $taskCredentialNames = New-Object 'System.Collections.Generic.List[string]'
 $taskCredentialNames.Add('jp.seraf.ktn.syndocal/dj-link/v1')
+$taskCredentialNames.Add('jp.seraf.ktn.syndocal/dj-link/v1/rollback')
 $taskCount = [uint32]0; $taskCredentials = [IntPtr]::Zero
 if ([SyndocalUninstallCredentials]::Enumerate('Syndocal/AgentAuthority/v1/*', 0, [ref]$taskCount, [ref]$taskCredentials)) {
     try {

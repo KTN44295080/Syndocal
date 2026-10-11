@@ -51,3 +51,28 @@ for (const placement of ['target','child','ancestor']) test(`junction in ${place
   if(placement!=='target') assert.ok(fs.existsSync(path.join(f.owned,'settings.json')));
   fs.rmSync(link);fs.rmSync(f.root,{recursive:true});
 });
+
+test('full removal retires primary, rollback and exact generic agent credentials only', {skip:process.platform!=='win32'}, () => {
+  const f=fixture();
+  const fakeVault = `Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class SyndocalUninstallCredentials {
+ [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
+ public struct Credential { public uint Flags; public uint Type; public string TargetName; }
+ public static bool Enumerate(string filter, uint flags, out uint count, out IntPtr credentials) {
+  count=4; credentials=Marshal.AllocHGlobal(4*IntPtr.Size);
+  string[] names={"Syndocal/AgentAuthority/v1/"+new string('a',64),"Syndocal/AgentAuthority/v1/foreign","foreign-app","Syndocal/AgentAuthority/v1/"+new string('b',64)};
+  for(int i=0;i<4;i++) { IntPtr p=Marshal.AllocHGlobal(Marshal.SizeOf(typeof(Credential))); Marshal.StructureToPtr(new Credential {Type=(uint)(i==3?2:1),TargetName=names[i]},p,false); Marshal.WriteIntPtr(credentials,i*IntPtr.Size,p); }
+  return true;
+ }
+ public static bool Delete(string target, uint type, uint flags) { Console.WriteLine("RemovedCredential:"+target); return true; }
+ public static void Free(IntPtr buffer) { for(int i=0;i<4;i++) { IntPtr p=Marshal.ReadIntPtr(buffer,i*IntPtr.Size); Marshal.DestroyStructure(p,typeof(Credential)); Marshal.FreeHGlobal(p); } Marshal.FreeHGlobal(buffer); }
+}
+'@`;
+  fs.writeFileSync(f.helper, original.replace(/Add-Type -TypeDefinition @'[\s\S]*?'@/,fakeVault));
+  const r=run(f); assert.equal(r.status,0,r.stderr);
+  const deleted=r.stdout.split(/\r?\n/).filter(line=>line.startsWith('RemovedCredential:')).map(line=>line.slice('RemovedCredential:'.length));
+  assert.deepEqual(deleted.sort(),['jp.seraf.ktn.syndocal/dj-link/v1','jp.seraf.ktn.syndocal/dj-link/v1/rollback','Syndocal/AgentAuthority/v1/'+ 'a'.repeat(64)].sort());
+  assert.ok(!fs.existsSync(f.owned)); fs.rmSync(f.root,{recursive:true});
+});

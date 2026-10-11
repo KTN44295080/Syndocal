@@ -69,7 +69,7 @@ Validated locally: IO serial 28, engine USB 27, engine retirement 12, native req
 identity 2, control-plane inventory 42, exact E3 restart regression 1, durable
 retention 3 and existing durable journal regressions 7, all selected tests passed.
 Release aggregate, release metadata self-tests and macOS artifact validator 169
-tests passed. Windows installer version/removal policy 12 tests passed using real
+tests passed. Windows installer version/removal policy 13 tests passed using real
 filesystem fixtures and process/registry seams, without installing or uninstalling
 the user's app or touching real OS credentials. The NSIS hook matches its source.
 
@@ -93,6 +93,14 @@ installed versions. The 13-file Windows ZIP was re-extracted, all hashes matched
 and its real setup helper passed validation without installing anything. Eight
 setup-helper cases also passed, including existing NSIS/MSI format preservation.
 Hosted macOS final-DMG checks remain pending at this source checkpoint.
+Final Windows candidates also remove the DJ-Link rollback credential. A scoped
+vault seam proves primary/rollback and exact generic agent targets are retired,
+while foreign, malformed and non-generic entries remain. Windows installers/ZIP
+were regenerated and revalidated before distribution; the earlier unpublished
+candidate and failed proof attempts remain in Temp. The additional disposable
+Windows CI lifecycle gate exercises real alpha.72 to alpha.73 NSIS/MSI upgrades,
+settings retention, registration replacement and complete removal. It refuses
+non-hosted runners and binds both artifact sources to successful CI commits.
 Physical USB, friend's cable, clean-machine
 installation, macOS GUI, signing/notarization and full product/release acceptance
 remain unobserved. Independent review is not claimed because the user prohibits

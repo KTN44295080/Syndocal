@@ -1,17 +1,17 @@
 {
   "passed": true,
   "zip": "C:\\Users\\janua\\Downloads\\Syndocal-1.2.0-alpha.73\\Syndocal_1.2.0-alpha.73_Windows-x64-install.zip",
-  "bytes": 223320912,
-  "sha256": "d2962331ceff80b5fb93a16451eca0deba9e4dd946c93793046825b08cefa03a",
+  "bytes": 223332858,
+  "sha256": "1446d56e0cf8571962cae7910a5cd87a1276291e6d67971a7b2a73394e677c31",
   "contents": [
     {
       "name": "Syndocal_1.2.0-alpha.73_x64-setup.exe",
-      "sha256": "abd6118e33ba7b2539df0321bca2a862ed1e7e50bfcf1f481b7cd2a414db200b",
-      "bytes": 82448532
+      "sha256": "e51d0461432a0135a6776e6ce9d4c5b721a9c3dea1a3d049c1a96ebeb9a1f786",
+      "bytes": 82456259
     },
     {
       "name": "Syndocal_1.2.0-alpha.73_x64-setup.exe.sha256",
-      "sha256": "f8e4ff12b00d40895e35000db2a34fc88e98bf906aa190a88f49b3dfcb17f971",
+      "sha256": "0f39466df764f5807a2a1a8f340a8251e2dd8bdf1da5c80f138ddb067295ec2e",
       "bytes": 104
     },
     {
@@ -26,7 +26,7 @@
     },
     {
       "name": "Install-Windows.ps1",
-      "sha256": "6b11b1bc5ce80d789566d617b2dda3a05c36c5e7a012aeb6f51d354562b285ef",
+      "sha256": "3912646442d8050aca31f7cceb6ba74f05c6cb08c7c76333c96e01efcdc981cf",
       "bytes": 3168
     },
     {
@@ -41,12 +41,12 @@
     },
     {
       "name": "Syndocal_1.2.0-alpha.73_x64_ja-JP.msi",
-      "sha256": "cae6b1d7aa254182a1c71987c9232cb85183d91b6850907afd40df8b02d8af8b",
-      "bytes": 123219968
+      "sha256": "497edacd5057aa1279e5a6217772aee363980aad535fa400f517f4fcfdb10f35",
+      "bytes": 123228160
     },
     {
       "name": "Syndocal_1.2.0-alpha.73_x64_ja-JP.msi.sha256",
-      "sha256": "80737978f1d4ec424c17023a09fb7fd55a7cb4f5a49831a785284c9fa9b0d79e",
+      "sha256": "da5a2354876dc6b0fa1a0d2ce984e37f81a1c378efcc229e32030d42741c624b",
       "bytes": 104
     },
     {
@@ -61,8 +61,8 @@
     },
     {
       "name": "Remove-SyndocalData.ps1",
-      "sha256": "eeab02036480d936b56a52768909ea99ac52b9b9d379a129218d1746152bf8e3",
-      "bytes": 5256
+      "sha256": "f1eb611ebdf5a81fe83dd9265a50de82f6c367eb5275c3a8dc7608282eb881af",
+      "bytes": 5326
     },
     {
       "name": "SyndocalInstallations.ps1",
