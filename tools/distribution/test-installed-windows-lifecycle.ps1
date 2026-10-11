@@ -56,6 +56,7 @@ function Assert-Removed([string]$Executable) {
  & (Join-Path $PSScriptRoot 'Remove-SyndocalData.ps1')
  Assert-NoCredentials
  foreach ($taskRoot in $taskRoots) { Assert-Condition (-not (Test-Path -LiteralPath $taskRoot)) ('Complete removal purged '+$taskRoot) }
+ Assert-Condition (-not (Test-Path -LiteralPath 'HKCU:\Software\Seraf() / KTN\Syndocal')) 'Installer preference registry removed'
  Assert-Condition ((Get-Content -LiteralPath $taskForeign -Raw).Trim() -eq 'external-project') 'External project retained'
 }
 $taskOldNsis=Find-Installer $BaselineRoot 'Syndocal_1.2.0-alpha.72_x64-setup.exe'

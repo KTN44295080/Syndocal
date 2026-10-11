@@ -86,4 +86,11 @@ if ((Test-Path -LiteralPath $taskCrashParent -PathType Container) -and
     @(Get-ChildItem -LiteralPath $taskCrashParent -Force).Count -eq 0) {
     Remove-Item -LiteralPath $taskCrashParent
 }
+# Installer preference is product-owned state too. Keep the publisher's
+# parent key and every other product; never remove HKLM/shared runtime keys.
+$taskRegistryPreference = 'HKCU:\Software\Seraf() / KTN\Syndocal'
+if (Test-Path -LiteralPath $taskRegistryPreference) {
+    Remove-Item -LiteralPath $taskRegistryPreference -Recurse -Force
+}
+if (Test-Path -LiteralPath $taskRegistryPreference) { throw 'Installer preference cleanup failed' }
 Write-Output 'Syndocal settings, caches, recovery files and owned credentials removed. External projects/media preserved.'

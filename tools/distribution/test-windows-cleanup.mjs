@@ -6,7 +6,13 @@ import path from 'node:path';
 import os from 'node:os';
 import test from 'node:test';
 import { spawnSync } from 'node:child_process';
-const original = fs.readFileSync(new URL('./Remove-SyndocalData.ps1', import.meta.url), 'utf8');
+const unmodified = fs.readFileSync(new URL('./Remove-SyndocalData.ps1', import.meta.url), 'utf8');
+// Filesystem/vault fixtures must never touch the user's real installer registry.
+const registryStart=unmodified.indexOf('# Installer preference');
+const registryEnd=unmodified.indexOf("Write-Output 'Syndocal settings",registryStart);
+assert.ok(registryStart>0&&registryEnd>registryStart);
+const registryPolicy=unmodified.slice(registryStart,registryEnd);
+const original=unmodified.slice(0,registryStart)+unmodified.slice(registryEnd);
 const vaultStart = original.indexOf('# OS credentials');
 const removalStart = original.indexOf('foreach ($taskTarget in $taskTargets)', vaultStart);
 assert.ok(vaultStart > 0 && removalStart > vaultStart);
@@ -75,4 +81,14 @@ public static class SyndocalUninstallCredentials {
   const deleted=r.stdout.split(/\r?\n/).filter(line=>line.startsWith('RemovedCredential:')).map(line=>line.slice('RemovedCredential:'.length));
   assert.deepEqual(deleted.sort(),['jp.seraf.ktn.syndocal/dj-link/v1','jp.seraf.ktn.syndocal/dj-link/v1/rollback','Syndocal/AgentAuthority/v1/'+ 'a'.repeat(64)].sort());
   assert.ok(!fs.existsSync(f.owned)); fs.rmSync(f.root,{recursive:true});
+});
+
+test('installer preference removal is exact and current-user only',{skip:process.platform!=='win32'},()=>{
+ const script=String.raw`$ErrorActionPreference='Stop';$script:exists=$true
+function Test-Path {param($LiteralPath) if($LiteralPath -cne 'HKCU:\Software\Seraf() / KTN\Syndocal'){throw 'Foreign registry target'};$script:exists}
+function Remove-Item {param($LiteralPath,[switch]$Recurse,[switch]$Force) if($LiteralPath -cne 'HKCU:\Software\Seraf() / KTN\Syndocal' -or !$Recurse -or !$Force){throw 'Wrong registry removal'};$script:exists=$false}
+${registryPolicy}
+if($script:exists){throw 'Registry retained'}`;
+ const result=spawnSync('powershell.exe',['-NoProfile','-NonInteractive','-EncodedCommand',Buffer.from(script,'utf16le').toString('base64')],{encoding:'utf8',windowsHide:true,timeout:10000});
+ assert.equal(result.status,0,result.stderr);
 });
