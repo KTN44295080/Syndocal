@@ -458,13 +458,19 @@ impl OpenDmxSafetyWriteGate {
         self.reserve_zero_write_after_lock(state)
     }
 
-    fn reserve_zero_write_after_lock(
+    /// Scoped zero-first startup preserves the operator global S0 latch.
+    pub fn reserve_startup_zero_write_bounded(
+        &self,
+        timeout: Duration,
+    ) -> Result<OpenDmxZeroWriteReservation, String> {
+        let state = self.lock_bounded(timeout)?;
+        self.reserve_zero_write_hold_after_lock(state)
+    }
+
+    fn reserve_zero_write_hold_after_lock(
         &self,
         _state: OpenDmxSafetyWriteGateGuard<'_>,
     ) -> Result<OpenDmxZeroWriteReservation, String> {
-        if !self.blackout_latched.load(Ordering::Acquire) {
-            return Err("Open DMX zero-write reservation requires engaged S0".to_string());
-        }
         self.zero_write_holds
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |holds| {
                 holds.checked_add(1)
@@ -474,6 +480,16 @@ impl OpenDmxSafetyWriteGate {
             gate: self.clone(),
             active: true,
         })
+    }
+
+    fn reserve_zero_write_after_lock(
+        &self,
+        _state: OpenDmxSafetyWriteGateGuard<'_>,
+    ) -> Result<OpenDmxZeroWriteReservation, String> {
+        if !self.blackout_latched.load(Ordering::Acquire) {
+            return Err("Open DMX zero-write reservation requires engaged S0".to_string());
+        }
+        self.reserve_zero_write_hold_after_lock(_state)
     }
 
     fn write_selected_frame<T>(

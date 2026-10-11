@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "timestamp": "2026-10-11T17:08:05.195Z",
+  "passed": true,
+  "executable": "C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-native-acceptance-target\\release\\syndocal.exe",
+  "executableSha256": "12123f4b268e4c7f808331082499bbbd4dd4d5ca6afaef8d662c4d4aa1ff3434",
+  "runnerSha256": "2f3870e0d7012a31996225f5a81e49c0fe7bdaf27d6148bac90b6ed7feec2a29",
+  "sidecarSha256": "8363d796f0e4a95e42fcac90a1cd5aecb0c1589dea7f35d7b56f633ff13aac2a",
+  "window": {
+    "processId": 156720,
+    "title": "Syndocal",
+    "responsive": true,
+    "visible": true,
+    "maximized": true,
+    "exactPathWindowCount": 1
+  },
+  "unauthenticatedReadRejected": true,
+  "authenticationError": "agent_authentication_required",
+  "nonclaims": [
+    "No UI actions or Control layout measurement",
+    "No authenticated primary-profile MCP acceptance",
+    "No physical output, clean-install, distribution or venue acceptance"
+  ]
+}

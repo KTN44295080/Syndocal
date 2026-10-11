@@ -47,6 +47,7 @@
   "agent_bridge_complete_v1",
   "agent_bridge_execute_native_v1",
   "agent_bridge_register_v1",
+  "allocate_output_control_request_id_v1",
   "analyze_audio_file",
   "analyze_timeline_audio_clip_path",
   "apply_reference_palette",

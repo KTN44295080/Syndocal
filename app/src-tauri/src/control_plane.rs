@@ -67,9 +67,9 @@ const KEYBOARD_SHORTCUT_SOURCE_MANIFEST: &str =
 const KEYBOARD_SHORTCUT_SOURCE_MANIFEST_SCHEMA_VERSION: u16 = 1;
 const KEYBOARD_APP_SHORTCUT_SOURCE_COUNT: usize = 30;
 const KEYBOARD_PROJECT_FILE_SHORTCUT_SOURCE_COUNT: usize = 3;
-const FROZEN_TAURI_ROUTE_ADMISSION_COUNT: usize = 561;
+const FROZEN_TAURI_ROUTE_ADMISSION_COUNT: usize = 562;
 const FROZEN_TAURI_ROUTE_ADMISSION_SHA256: &str =
-    "d2143bc9a5e1038d7f149bbec20ad14828057d6837ebf1562409a8e81f6309ac";
+    "8abf113066c03b807026fd337a335ea84ca50bd5c5784cd14d3f0907aa79a73b";
 /// The command source is parsed and validated exactly once.  Local discovery
 /// calls only clone this immutable, validated value; they never parse source
 /// text or make an external request on the invocation path.
@@ -399,6 +399,7 @@ fn is_tauri_read_only_route(command: &str) -> bool {
             | "query_display_add_lease_authority_v1"
             | "query_dsf2026_artnet_acceptance_probe_status_v1"
             | "query_output_control_authority_v1"
+            | "allocate_output_control_request_id_v1"
             | "query_output_lease_authority_v1"
             | "query_timeline_follow_abort_authority_v1"
             | "query_timeline_loop_runtime_authority_v1"
@@ -1852,6 +1853,11 @@ fn reviewed_query_operation(command: &str) -> Option<ReviewedQueryOperation> {
             OperationClass::RuntimeObservation,
             OperationCapability::RuntimeRead,
         ),
+        "allocate_output_control_request_id_v1" => (
+            "syndocal.query.output.control.request_identity.v1",
+            OperationClass::RuntimeObservation,
+            OperationCapability::RuntimeRead,
+        ),
         "query_output_control_authority_v1" => (
             OUTPUT_CONTROL_AUTHORITY_QUERY_OPERATION_ID,
             OperationClass::RuntimeObservation,
@@ -2511,7 +2517,7 @@ mod tests {
             counts[&TauriRouteAdmissionClass::BackendAuthoritativeProjectMutation],
             31
         );
-        assert_eq!(counts[&TauriRouteAdmissionClass::ReadOnly], 107);
+        assert_eq!(counts[&TauriRouteAdmissionClass::ReadOnly], 108);
         assert_eq!(counts[&TauriRouteAdmissionClass::ProjectReplacement], 11);
         assert_eq!(counts[&TauriRouteAdmissionClass::ProjectHistory], 3);
         assert_eq!(counts[&TauriRouteAdmissionClass::LocalPhysicalMutation], 6);
@@ -2535,7 +2541,8 @@ mod tests {
     fn compiled_handler_and_registry_have_the_exact_same_set() {
         let names = registered_tauri_command_names_from_source(MAIN_RS_SOURCE).unwrap();
         let registry = registry().unwrap();
-        const R0_ALLOWLIST: [&str; 28] = [
+        const R0_ALLOWLIST: [&str; 29] = [
+            "syndocal.query.output.control.request_identity.v1",
             "syndocal.query.control_plane.registry.v1",
             "syndocal.query.control_plane.canonical_registry.v3",
             "syndocal.query.control_plane.capabilities.v1",
@@ -2592,7 +2599,7 @@ mod tests {
             + OSC_INPUT_EVENT_COUNT
             + DMX_INPUT_PROTOCOL_COUNT
             + DMX_INPUT_EVENT_COUNT;
-        const FRONTEND_INVOKE_COUNT: usize = 481;
+        const FRONTEND_INVOKE_COUNT: usize = 482;
         assert_eq!(MIDI_OSC_DMX_OPERATION_COUNT, 206);
         assert_eq!(
             registry.operations.len(),
@@ -2602,7 +2609,7 @@ mod tests {
                 + MIDI_OSC_DMX_OPERATION_COUNT
                 + FRONTEND_INVOKE_COUNT
         );
-        assert_eq!(registry.operations.len(), 1645);
+        assert_eq!(registry.operations.len(), 1647);
         verify_registry_exact_set(&names, &registry).unwrap();
         let r0 = registry
             .operations
@@ -2983,17 +2990,17 @@ mod tests {
         const ENGINE_COUNT: usize = 281;
         const REMOTE_COUNT: usize = 116;
         const MIDI_OSC_DMX_COUNT: usize = 206;
-        const FRONTEND_COUNT: usize = 481;
+        const FRONTEND_COUNT: usize = 482;
         const LEGACY_SOURCE_TOTAL: usize =
             TAURI_COUNT + ENGINE_COUNT + REMOTE_COUNT + MIDI_OSC_DMX_COUNT + FRONTEND_COUNT;
         const KEYBOARD_APP_COUNT: usize = 30;
         const KEYBOARD_PROJECT_FILE_COUNT: usize = 3;
         const SOURCE_TOTAL: usize =
             LEGACY_SOURCE_TOTAL + KEYBOARD_APP_COUNT + KEYBOARD_PROJECT_FILE_COUNT;
-        assert_eq!(LEGACY_SOURCE_TOTAL, 1645);
-        assert_eq!(SOURCE_TOTAL, 1678);
+        assert_eq!(LEGACY_SOURCE_TOTAL, 1647);
+        assert_eq!(SOURCE_TOTAL, 1680);
         assert_eq!(canonical.source_inventory.len(), SOURCE_TOTAL);
-        assert_eq!(canonical.canonical_operations.len(), 72);
+        assert_eq!(canonical.canonical_operations.len(), 73);
 
         let output_control_operations = canonical
             .canonical_operations
@@ -3378,7 +3385,7 @@ mod tests {
                 )
             })
             .collect::<Vec<_>>();
-        assert_eq!(direct.len(), 72);
+        assert_eq!(direct.len(), 73);
         assert_eq!(aliases.len(), FRONTEND_COUNT);
         assert_eq!(internal_steps.len(), 4);
         assert_eq!(structural_routes.len(), 1);
@@ -4147,11 +4154,11 @@ mod tests {
     fn legacy_v1_registry_json_and_count_remain_inventory_honest() {
         let legacy = registry().unwrap();
         // Includes both the native and frontend missing-publication resolver.
-        assert_eq!(legacy.operations.len(), 1645);
+        assert_eq!(legacy.operations.len(), 1647);
         let encoded = serde_json::to_value(&legacy).unwrap();
         assert_eq!(encoded["schema"]["version"], CONTROL_PLANE_SCHEMA_VERSION);
         let operations = encoded["operations"].as_array().unwrap();
-        assert_eq!(operations.len(), 1645);
+        assert_eq!(operations.len(), 1647);
         assert!(operations.iter().all(|operation| {
             operation["source_family"] != "keyboard_app"
                 && operation["source_family"] != "keyboard_project_file"

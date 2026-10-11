@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import ts from "typescript";
 
+let allocatedRequestId = 1_000_000;
 const read = (relativePath) => readFile(new URL(`../${relativePath}`, import.meta.url), "utf8");
 const hash = (character) => character.repeat(64);
 const lease = (generation = 1) => ({ lease_id: "lease-0000000000000001", generation });
@@ -374,6 +375,7 @@ const createHarness = ({ action, queryState, authorityFence = fence, loseFirstRe
   let executeCalls = 0;
   const invoke = async (actualCommand, args) => {
     calls.push({ command: actualCommand, args });
+    if (actualCommand === "allocate_output_control_request_id_v1") return allocatedRequestId++;
     if (actualCommand === "query_output_control_authority_v1") {
       assert.equal(args, undefined);
       return { operation_id: runtime.OUTPUT_CONTROL_AUTHORITY_QUERY_OPERATION_ID, fence: structuredClone(authorityFence) };
@@ -842,6 +844,7 @@ const blackoutReleaseAction = { kind: "release_blackout", lease: lease() };
 const blackoutRecoveryCalls = [];
 const blackoutRecoveryInvoke = async (command, args) => {
   blackoutRecoveryCalls.push(command);
+  if (command === "allocate_output_control_request_id_v1") return allocatedRequestId++;
   if (command === "query_output_control_authority_v1") {
     assert.equal(args, undefined);
     return { operation_id: runtime.OUTPUT_CONTROL_AUTHORITY_QUERY_OPERATION_ID, fence: structuredClone(fence) };
@@ -869,8 +872,12 @@ assert.deepEqual(blackoutRecoveryCalls, [
   "query_output_lease_authority_v1",
   "query_output_control_authority_v1",
   "query_output_lease_authority_v1",
+  "allocate_output_control_request_id_v1",
+
   "enable_output_control_v2",
   "query_output_control_authority_v1",
+  "allocate_output_control_request_id_v1",
+
   "release_blackout_output_control_v2",
 ], "a missing lease may recover exactly once before the fenced release");
 
@@ -1015,17 +1022,18 @@ await assert.rejects(runtime.executeOutputControl(rejectionHarness.invoke, ordin
 assert.equal(rejectionHarness.executeCalls, 1);
 
 
-const exhaustedSource = controllerSource.replace(
-  "let nextOutputControlRequestId = 1;",
-  "let nextOutputControlRequestId = Number.MAX_SAFE_INTEGER + 1;",
-);
-const exhaustedRuntime = await import(`data:text/javascript;base64,${Buffer.from(ts.transpileModule(
-  exhaustedSource,
-  { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022, importsNotUsedAsValues: ts.ImportsNotUsedAsValues.Remove }, fileName: "outputControlController.ts" },
-).outputText).toString("base64")}`);
-let exhaustedInvokes = 0;
-await assert.rejects(exhaustedRuntime.executeOutputControl(async () => { exhaustedInvokes += 1; }, ordinaryActions[0]), /request identity is exhausted/);
-assert.equal(exhaustedInvokes, 0);
+// Invalid native identities must never reach a mutation; no renderer fallback.
+for (const identity of [0, -1, Number.MAX_SAFE_INTEGER + 1, 1.5, '1', null]) {
+  const h = createHarness({ action: ordinaryActions[0] });
+  const original = h.invoke;
+  h.invoke = async (command, args) => command === 'allocate_output_control_request_id_v1' ? identity : original(command, args);
+  await assert.rejects(runtime.executeOutputControl(h.invoke, ordinaryActions[0]), /native request identity was invalid/);
+  assert.equal(h.executeCalls, 0);
+}
+const idHarness = createHarness({action: blackoutReleaseAction, loseFirstReply: true});
+await runtime.executeBlackoutRelease(idHarness.invoke);
+assert.equal(idHarness.calls.filter(x=>x.command==='allocate_output_control_request_id_v1').length, 1);
+assert.equal(idHarness.executeArgs[0], idHarness.executeArgs[1], 'reply loss retains the exact native-allocated request');
 
 const [
   invokeSource,
@@ -1110,6 +1118,7 @@ const commandBody = (source, commandName) => {
 };
 const requiredCommands = [
   "enable_output_control_v2", "add_display_output_v2", "arm_output_control_v2",
+
   "assign_video_output_composition_v2",
   "acknowledge_dsf2026_artnet_acceptance_probe_in_doubt_v1",
   "query_dsf2026_artnet_acceptance_probe_status_v1",
@@ -1133,14 +1142,18 @@ const legacyCommands = [
 const canonicalOutputMutationWrappers = [
   "acknowledge_dsf2026_artnet_acceptance_probe_in_doubt_v1",
   "acquire_output_lease_v2",
+
   "add_display_output_v2",
   "arm_output_control_v2",
+
   "assign_video_output_composition_v2",
+
   "enable_output_control_v2",
   "enable_show_art_net_loopback_route_v1",
   "enable_show_serial_dmx_safety_blackout_route_v1",
   "force_transfer_output_lease_v2",
   "recover_output_lease_v2",
+
   "release_blackout_output_control_v2",
   "relinquish_output_lease_v2",
   "renew_output_lease_v2",
@@ -1151,14 +1164,18 @@ const canonicalOutputMutationWrappers = [
 ];
 const outputControlWrappers = new Set([
   "acknowledge_dsf2026_artnet_acceptance_probe_in_doubt_v1",
+
   "add_display_output_v2",
+
   "assign_video_output_composition_v2",
   "arm_output_control_v2",
+
   "enable_output_control_v2",
   "enable_show_art_net_loopback_route_v1",
   "enable_show_serial_dmx_safety_blackout_route_v1",
   "send_dsf2026_artnet_acceptance_probe_v1",
   "stop_show_serial_dmx_safety_blackout_route_v1",
+
   "release_blackout_output_control_v2",
   "set_blackout_output_control_v2",
   "take_over_output_control_v2",
@@ -1614,7 +1631,7 @@ assert.match(
 );
 assert.match(
   dmxOutputPanelSource,
-  /disabled=\{!serialWorkerArmAdmissible\(\) \|\| !serialWorkerStatusKnown\(\) \|\| !bindingReady\(\) \|\| !props\.safetyBlackoutEngaged \|\| !artNetUnityMirrorEnabled\(\)\}/,
+  /disabled=\{!serialWorkerArmAdmissible\(\) \|\| !serialWorkerStatusKnown\(\) \|\| !bindingReady\(\) \|\| !artNetUnityMirrorEnabled\(\)\}/,
   "USB-DMX start must fail closed while worker truth, bounded shutdown, or the exact enabled Art-Net mirror is unavailable",
 );
 assert.match(

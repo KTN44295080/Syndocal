@@ -594,6 +594,103 @@ fn show_serial_dmx_activation_retains_the_worker_only_after_its_s0_zero_receipt(
 }
 
 #[test]
+fn show_serial_dmx_zero_first_start_preserves_clear_or_engaged_safety_authority() {
+    for engaged in [false, true] {
+        let shared = Arc::new(EngineSharedTelemetry::new());
+        let (port, observation) = io::serial_dmx::OpenDmxTestSerialPort::new();
+        let mut runtime = EngineRuntime::new_with_shared_telemetry(
+            disabled_open_dmx_output(),
+            Arc::clone(&shared),
+        );
+        enable_exact_unity_artnet_mirror_for_serial_test(&mut runtime);
+        if engaged {
+            shared.engage_safety_blackout().unwrap();
+            runtime.safety_blackout_engaged = true;
+        }
+        let before = shared.safety_blackout_authority();
+        runtime
+            .apply_show_serial_dmx_safety_blackout_route_enable_with_sender_factory(
+                &exact_show_serial_dmx_test_identity(),
+                before.epoch,
+                before.generation,
+                |_, safety_gate| {
+                    EnttecOpenDmxSender::from_test_serial_port(port, safety_gate.clone(), || {})
+                        .map(DmxSender::EnttecOpenDmx)
+                        .map_err(|error| error.to_string())
+                },
+            )
+            .unwrap();
+        assert_eq!(shared.safety_blackout_authority(), before);
+        assert_eq!(
+            shared
+                .open_dmx_safety_write_gate
+                .blackout_engaged()
+                .unwrap(),
+            engaged
+        );
+        assert_eq!(runtime.safety_blackout_engaged, engaged);
+        assert!(
+            shared
+                .show_serial_dmx_route_status()
+                .zero_frame_physical_write_completed
+        );
+        assert!(open_dmx_write_payloads(&observation, 1)[0][1..]
+            .iter()
+            .all(|value| *value == 0));
+        let mut sender = match runtime
+            .show_serial_dmx_route
+            .take()
+            .unwrap()
+            .sender
+            .unwrap()
+        {
+            DmxSender::EnttecOpenDmx(sender) => sender,
+            _ => panic!("expected the actual Open DMX worker"),
+        };
+        sender.send_dmx_frame(&[255; 512]).unwrap();
+        let writes = open_dmx_write_payloads(&observation, 2);
+        assert!(writes[1][1..]
+            .iter()
+            .all(|value| *value == if engaged { 0 } else { 255 }));
+    }
+}
+
+#[test]
+fn show_serial_dmx_failed_zero_first_start_latches_previously_clear_safety() {
+    let shared = Arc::new(EngineSharedTelemetry::new());
+    let (port, observation) = io::serial_dmx::OpenDmxTestSerialPort::new();
+    observation.fail_next_write().unwrap();
+    let mut runtime =
+        EngineRuntime::new_with_shared_telemetry(disabled_open_dmx_output(), Arc::clone(&shared));
+    enable_exact_unity_artnet_mirror_for_serial_test(&mut runtime);
+    let before = shared.safety_blackout_authority();
+    assert!(!before.engaged);
+    assert!(runtime
+        .apply_show_serial_dmx_safety_blackout_route_enable_with_sender_factory(
+            &exact_show_serial_dmx_test_identity(),
+            before.epoch,
+            before.generation,
+            |_, safety_gate| EnttecOpenDmxSender::from_test_serial_port(
+                port,
+                safety_gate.clone(),
+                || {}
+            )
+            .map(DmxSender::EnttecOpenDmx)
+            .map_err(|error| error.to_string()),
+        )
+        .is_err());
+    let after = shared.safety_blackout_authority();
+    assert!(after.engaged);
+    assert_ne!(after.generation, before.generation);
+    assert!(shared
+        .open_dmx_safety_write_gate
+        .blackout_engaged()
+        .unwrap());
+    assert!(runtime.show_serial_dmx_route.is_none());
+    assert!(shared.show_serial_dmx_route_status().faulted);
+}
+
+#[test]
 fn show_serial_dmx_activation_zero_write_fault_never_retains_a_live_worker() {
     let shared = Arc::new(EngineSharedTelemetry::new());
     let (port, observation) = io::serial_dmx::OpenDmxTestSerialPort::new();
@@ -932,11 +1029,16 @@ fn show_serial_dmx_joined_fault_recovery_requires_s0_then_clears_only_after_a_fr
         .expect("a failed B initial zero must preserve the physical S0 latch"));
 
     let (port, observation) = io::serial_dmx::OpenDmxTestSerialPort::new();
+    let fault_authority = shared.safety_blackout_authority();
+    assert_ne!(
+        fault_authority.generation, armed.generation,
+        "a new initial-zero fault must fence a previously authorized release"
+    );
     runtime
         .apply_show_serial_dmx_safety_blackout_route_enable_with_sender_factory(
             &expected_identity,
-            armed.epoch,
-            armed.generation,
+            fault_authority.epoch,
+            fault_authority.generation,
             |_identity, safety_gate| {
                 EnttecOpenDmxSender::from_test_serial_port(port, safety_gate.clone(), || {})
                     .map(DmxSender::EnttecOpenDmx)

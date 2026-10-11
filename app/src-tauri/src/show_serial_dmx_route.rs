@@ -465,11 +465,10 @@ pub(super) fn enable_with_output_control_fence(
                 );
             }
             let safety = state.engine.safety_blackout_authority();
-            if !safety.engaged
-                || safety.epoch != expected_fence.safety_blackout_epoch
+            if safety.epoch != expected_fence.safety_blackout_epoch
                 || safety.generation != expected_fence.safety_blackout_generation
             {
-                return Err("Show serial DMX activation requires the exact currently-engaged S0 safety blackout authority".to_string());
+                return Err("Show serial DMX activation requires the exact currently-observed S0 safety blackout authority".to_string());
             }
             validate_current_enabled_show_artnet_loopback_route(state)?;
             verify_current_show_serial_dmx_device(app)
@@ -533,8 +532,7 @@ pub(super) fn enable_with_output_control_fence(
                         );
                     }
                     let safety = state.engine.safety_blackout_authority();
-                    if !safety.engaged
-                        || safety.epoch != expected_fence.safety_blackout_epoch
+                    if safety.epoch != expected_fence.safety_blackout_epoch
                         || safety.generation != expected_fence.safety_blackout_generation
                     {
                         return Err("Show serial DMX activation was superseded by an S0 safety blackout authority change".to_string());

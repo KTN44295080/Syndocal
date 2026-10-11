@@ -1,0 +1,16 @@
+{
+  "current": {
+    "Name": "Syndocal",
+    "ProductCode": "{A833A752-1EA1-4A49-8211-F52AA163CEB6}",
+    "UpgradeCode": "{46DB659B-3421-5804-82FC-D0185F926A47}",
+    "ProductVersion": "1.2.73",
+    "Manufacturer": "Seraf() / KTN"
+  },
+  "old": {
+    "ProductCode": "{DF989D70-997D-4BCC-99DE-52044242A358}",
+    "UpgradeCode": "{46DB659B-3421-5804-82FC-D0185F926A47}",
+    "ProductVersion": "1.2.0.70"
+  },
+  "inspection": "WiX dark decompilation of actual MSI bytes",
+  "passed": true
+}

@@ -1,0 +1,221 @@
+{
+  "parentSourceCommit": "3a901baeddb820e8a62c668e07cc42b4ddf60346",
+  "runId": 38086505068,
+  "jobId": 114314071698,
+  "name": "Ubuntu 22.04",
+  "conclusion": "success",
+  "url": "https://github.com/KTN44295080/Syndocal/actions/runs/38086505068/job/114314071698",
+  "workspaceCommand": "cargo test --workspace --locked -- --test-threads=1",
+  "workspaceResults": {
+    "passed": 3477,
+    "failed": 0,
+    "ignored": 36
+  },
+  "logSha256": "3885435e17d3fc7546071945a74f465d60fa2e62fb0c9f1b45be6fc54752d25b",
+  "steps": [
+    {
+      "name": "Set up job",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "name": "Check out source",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "name": "Install Linux system dependencies",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "name": "Install Windows video SDK",
+      "status": "completed",
+      "conclusion": "skipped"
+    },
+    {
+      "name": "Install pnpm",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "name": "Install Node.js",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "name": "Install Rust",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "name": "Initialize Windows x64 MSVC environment",
+      "status": "completed",
+      "conclusion": "skipped"
+    },
+    {
+      "name": "Pin exact Windows MSVC 14.44.35207 linker",
+      "status": "completed",
+      "conclusion": "skipped"
+    },
+    {
+      "name": "Cache Rust build",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "name": "Install frontend dependencies",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "name": "Stage Windows runtime libraries",
+      "status": "completed",
+      "conclusion": "skipped"
+    },
+    {
+      "name": "Assert staged pinned runtime before dependent tests",
+      "status": "completed",
+      "conclusion": "skipped"
+    },
+    {
+      "name": "Verify Windows ASIO and runtime packaging boundary",
+      "status": "completed",
+      "conclusion": "skipped"
+    },
+    {
+      "name": "Validate Windows warning ratchet SDK paths",
+      "status": "completed",
+      "conclusion": "skipped"
+    },
+    {
+      "name": "Report unavailable Windows ASIO/NDI warning gates",
+      "status": "completed",
+      "conclusion": "skipped"
+    },
+    {
+      "name": "Check formatting",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "name": "Test warning ratchet (Windows)",
+      "status": "completed",
+      "conclusion": "skipped"
+    },
+    {
+      "name": "Test warning ratchet (Linux)",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "name": "Enforce Windows warning ratchets",
+      "status": "completed",
+      "conclusion": "skipped"
+    },
+    {
+      "name": "Enforce Windows ASIO/NDI warning ratchets when SDKs are configured",
+      "status": "completed",
+      "conclusion": "skipped"
+    },
+    {
+      "name": "Stop checkout Syndocal before native warning ratchet",
+      "status": "completed",
+      "conclusion": "skipped"
+    },
+    {
+      "name": "Enforce Windows native release warning ratchet",
+      "status": "completed",
+      "conclusion": "skipped"
+    },
+    {
+      "name": "Test Rust workspace",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "name": "Test in-process general video decode",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "name": "Build frontend",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "name": "Check E4 project publication durability",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "name": "Check Tauri application",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "name": "Check release metadata",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "name": "Stop checkout Syndocal before native bundle build",
+      "status": "completed",
+      "conclusion": "skipped"
+    },
+    {
+      "name": "Bundle Windows installers",
+      "status": "completed",
+      "conclusion": "skipped"
+    },
+    {
+      "name": "Bundle Linux packages",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "name": "Smoke-test Windows installers",
+      "status": "completed",
+      "conclusion": "skipped"
+    },
+    {
+      "name": "Smoke-test Linux AppImage",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "name": "Upload installers",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "name": "Post Cache Rust build",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "name": "Post Install Node.js",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "name": "Post Install pnpm",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "name": "Post Check out source",
+      "status": "completed",
+      "conclusion": "success"
+    },
+    {
+      "name": "Complete job",
+      "status": "completed",
+      "conclusion": "success"
+    }
+  ],
+  "nonclaims": [
+    "This is alpha.71 parent source 3a901bae, not the separate alpha.72 CI run",
+    "No Linux native window, clean-machine, physical output or full release acceptance"
+  ]
+}

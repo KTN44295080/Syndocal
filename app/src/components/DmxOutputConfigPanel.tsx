@@ -306,9 +306,9 @@ export function DmxOutputConfigPanel(props: DmxOutputConfigPanelProps) {
                 <button
                   data-io-control="dmx-enable-show-serial-dmx-safety-blackout-route"
                   class="primary"
-                  disabled={!serialWorkerArmAdmissible() || !serialWorkerStatusKnown() || !bindingReady() || !props.safetyBlackoutEngaged || !artNetUnityMirrorEnabled()}
+                  disabled={!serialWorkerArmAdmissible() || !serialWorkerStatusKnown() || !bindingReady() || !artNetUnityMirrorEnabled()}
                   onClick={() => void props.onEnableShowSerialDmxSafetyBlackoutRoute()}
-                >Arm USB-DMX under S0</button>
+                >Start USB-DMX</button>
                 <button
                   data-io-control="dmx-stop-show-serial-dmx-safety-blackout-route"
                   disabled={!serialWorkerActive() || !serialWorkerStatusKnown() || !props.safetyBlackoutEngaged}

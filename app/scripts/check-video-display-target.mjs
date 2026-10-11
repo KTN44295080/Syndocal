@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import ts from "typescript";
 
+let allocatedRequestId = 1_000_000;
 const read = (relativePath) => readFile(new URL(`../${relativePath}`, import.meta.url), "utf8");
 const hash = (character) => character.repeat(64);
 
@@ -573,6 +574,7 @@ const runtimeInvoke = async (command, args) => {
       resources: ["lighting", "video"],
     };
   }
+  if (command === "allocate_output_control_request_id_v1") return allocatedRequestId++;
   if (command === "query_output_control_authority_v1") return runtimeAuthorityResponse;
   if (command === "add_display_output_v2") {
     runtimeAddInvokes += 1;
@@ -592,6 +594,8 @@ assert.deepEqual(
   [
     "query_display_add_lease_authority_v1",
     "query_output_control_authority_v1",
+    "allocate_output_control_request_id_v1",
+
     "add_display_output_v2",
   ],
   "valid Add must not fall back to the public lease query or pre-enable",
@@ -605,6 +609,7 @@ const rejectedAddRun = async (queryResponse, action = runtimeAddAction()) => {
   const invoke = async (command, args) => {
     calls.push(command);
     if (command === "query_display_add_lease_authority_v1") return queryResponse;
+    if (command === "allocate_output_control_request_id_v1") return allocatedRequestId++;
     if (command === "query_output_control_authority_v1") return runtimeAuthorityResponse;
     if (command === "add_display_output_v2") {
       addInvokes += 1;

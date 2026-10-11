@@ -30,7 +30,7 @@ were 0; Vite chunk advisories were baseline 1 / current 1 / delta 0.
 Evidence is in [artifacts/distribution-alpha72](artifacts/distribution-alpha72).
 
 Windows installer payload/ZIP acceptance passed. Hosted macOS final-DMG
-validation is pending in [run 38087771147](https://github.com/KTN44295080/Syndocal/actions/runs/38087771147)
+validation passed in [run 38087771147](https://github.com/KTN44295080/Syndocal/actions/runs/38087771147)
 against product source `80fccf1401de2c2d8dc5c4ea2f03e9b96348d5eb`.
 This candidate is unsigned development distribution, not full Recording,
 hardware, clean-machine, signing, notarization or release acceptance.
@@ -67,3 +67,55 @@ Rust compiler warnings remain 0; Vite chunk advisories are baseline 1 / current
 as in alpha.71, and verified tooling hashes.
 USB-DMX detection/transport sources are unchanged from alpha.71; the friend’s
 alpha.71 hardware test remains relevant to that path.
+
+## CI and next software work
+
+The [Ubuntu 22.04 parent job](https://github.com/KTN44295080/Syndocal/actions/runs/38086505068/job/114314071698)
+passed at `3a901baeddb820e8a62c668e07cc42b4ddf60346`: workspace tests
+3477 passed / 0 failed / 36 ignored. A separate libav invocation also passed;
+its repeated video tests are not added to the workspace count. The job's
+steps and test summaries are retained in `linux-parent-ci.json` and
+`linux-parent-tests.txt`. This is parent-source evidence, not completion of
+the alpha.72 Windows/Linux matrix (subsequently completed successfully)
+[38087767111](https://github.com/KTN44295080/Syndocal/actions/runs/38087767111).
+The parent application's Rust/TypeScript runtime sources match alpha.72;
+version/package metadata and the DMG validator changed.
+
+Live-source audit identified the next recording backend boundaries:
+
+- `agentBridgeRecording.ts` exposes status only. Start uses the GUI save
+  dialog in `main.rs`; neither recording Start nor Stop has a canonical
+  external MCP operation.
+- `video_recording.rs` launches `SYNDOCAL_FFMPEG` or PATH `ffmpeg` and requires
+  `libx264` (and AAC when including audio). The shipped LGPL libraries are not that external
+  executable. A real-codec test with explicit local FFmpeg is not clean-machine
+  recording acceptance.
+- Add encoder availability reporting and a native lifecycle/authority module
+  before exposing Start/Stop: exact file and output identities, request replay,
+  principal/project/recording retirement, bounded cancellation and publication
+  checks must remain canonical. Forward both UI and MCP through the shared
+  implementation; no external operation should drive the save dialog.
+
+These are software tasks to resume after package validation. They do not close
+the open recording-owner decision, two-PC or authoritative-import acceptance.
+Q1/Q4 continues to mark the Recording requirement `In progress`; the Flow
+`RECORDING-001` checkbox represents the previously recorded software slice.
+
+## macOS delivery and completed matrix
+
+The source-80fccf macOS run 38087771147 completed successfully. The final arm64
+DMG is 33473924 bytes, SHA-256
+`256cb86c97c4766b7927d3182c16ea4165e3e809b6eda6b06bc3cfb3449b82c6`.
+All eleven final-DMG checks passed, including the packaged process inspection
+CLI. Validator tests: 169 passed; native USB-DMX selections: 42 unique tests
+passed plus two repeated FTDI cases. First-party compiler warnings: 0.
+FFmpeg third-party warnings: baseline 26/current 26/delta 0; Vite advisory:
+baseline 1/current 1. Ten external tooling notices are retained, with no
+separately measured tooling baseline. Native macOS GUI and hardware remain
+unobserved. The DMG is copied to the same Downloads delivery folder.
+
+The source-80fccf Windows/Linux matrix 38087767111 also completed successfully.
+The preceding 3a901 Windows matrix failed the E3 restart/recovery test on a
+project-retirement race. A passing successor matrix does not disprove that
+race: alpha.72 precedes the bounded drain fix. The fix moves to alpha.73 with
+the user-reported blackout repair; alpha.72 packages are not overwritten.

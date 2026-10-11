@@ -126,8 +126,8 @@ assert.match(outputDiagnosticsPanel, /data-io-dmx-protocol-diagnostics[\s\S]*dat
 assert.match(styles, /\.dmxProtocolDiagnostics\s*\{[\s\S]*?display:\s*grid;/,
   "the protocol diagnostic actions must use the existing compact layout language");
 
-assert.match(controller, /const safetyBlackoutRuntime = createSafetyBlackoutRuntimeController\(/,
-  "USB preparation must own the bounded zero-first S0 startup controller");
+assert.doesNotMatch(controller, /safetyBlackoutRuntime\.engage|executeBlackoutRelease/,
+  "ordinary USB preparation must preserve the operator's global safety state");
 assert.match(controller, /import[\s\S]*enableOutput/,
   "quick setup must use the canonical normal output enable path");
 assert.match(controller, /const ensureBothOutputLease = async \(\) =>/);
@@ -159,9 +159,7 @@ for (const marker of [
   "enableStagedShowArtNetLoopbackRouteInternal",
   'runStage("4/4 optional Open DMX arm"',
   "No USB-DMX device was selected",
-  "safetyBlackoutRuntime.engage()",
   "enableShowSerialDmxSafetyBlackoutRouteInternal",
-  "executeBlackoutRelease(options.invoke)",
   "waitForShowSerialDmxLive",
   "setShowDmxPreparationBusy(false)",
 ]) {
@@ -218,10 +216,8 @@ assert.match(nativeMain, /fn committed_show_artnet_loopback_route_fence\([\s\S]*
   "the Stage 3 seam must preserve the exact committed fence constructor");
 assert.doesNotMatch(artNetCommit, /physical activation only:[\s\S]*expected_fence\.clone\(\)/,
   "stage 3 must not conceal its persisted route mutation behind the admitted fence");
-assert.match(preparation, /released\.safety_blackout_engaged/,
-  "automatic S0 release must be confirmed by a fresh snapshot");
-assert.match(preparation, /USB-DMX started, but S0 release was not confirmed/,
-  "an unconfirmed automatic S0 release must stop without Complete");
+assert.match(preparation, /if \(!options\.safetyBlackout\(\)\)/,
+  "clear safety admits the retained USB worker without a global blackout mutation");
 assert.doesNotMatch(preparation, /enableShowSpoutOutputs|resetShowSpoutOutputs/,
   "quick setup must not alter the independent Spout route");
 

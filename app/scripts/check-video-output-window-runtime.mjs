@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import ts from "typescript";
 
+let allocatedRequestId = 1_000_000;
+
 const source = await readFile(new URL("../src/outputControlController.ts", import.meta.url), "utf8");
 const runtime = await import(`data:text/javascript;base64,${Buffer.from(ts.transpileModule(
   source,
@@ -87,6 +89,7 @@ const createInvokeAdapter = ({ authorityStatus = "held_active", rejection = null
         resources: ["lighting", "video"],
       };
     }
+    if (command === "allocate_output_control_request_id_v1") return allocatedRequestId++;
     if (command === "query_output_control_authority_v1") {
       return { operation_id: runtime.OUTPUT_CONTROL_AUTHORITY_QUERY_OPERATION_ID, fence: structuredClone(fence) };
     }
@@ -129,6 +132,8 @@ assert.equal(activeReceipt.operation_id, runtime.OUTPUT_DISPLAY_WINDOW_SET_OPEN_
 assert.equal(activeReceipt.lease_result.outcome, "authorized");
 assert.deepEqual(active.calls.map(({ command }) => command), [
   "query_output_control_authority_v1",
+  "allocate_output_control_request_id_v1",
+
   "set_display_output_window_open_v2",
 ]);
 

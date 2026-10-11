@@ -2,7 +2,6 @@ import { serialDmxConfirmationRequest, serialDmxDeviceInstance } from "./serialD
 import { createSignal, type Accessor, type Setter } from "solid-js";
 import {
   executeOutputControl,
-  executeBlackoutRelease,
   enableOutput,
   OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_STATUS_QUERY_OPERATION_ID,
   queryDsf2026ArtNetAcceptanceProbeStatus,
@@ -19,7 +18,6 @@ import type { FrontendTauriInvoke } from "./tauriInvokeCommands";
 import type { OutputOwnershipStatus } from "./types";
 import type { ProjectAuthorityToken } from "./projectAuthority";
 import { createSerialDmxStatusPoller } from "./serialDmxStatusPoller";
-import { createSafetyBlackoutRuntimeController } from "./safetyBlackoutRuntimeController";
 import {
   parseSerialDmxRouteStatusEventRevision,
   validateSerialDmxStatusSnapshot,
@@ -198,9 +196,6 @@ export function createOutputDiagnosticsController(options: OutputDiagnosticsCont
     activeShowOutputPreparation = { key, promise };
     return promise;
   };
-  const safetyBlackoutRuntime = createSafetyBlackoutRuntimeController({
-    invoke: options.invoke,
-  });
   const serialDmxStatusPoller = createSerialDmxStatusPoller({
     queryBinding: () => options.invoke<SerialDmxMachineBindingStatus>(
       "get_serial_dmx_machine_binding_status_v1",
@@ -431,9 +426,6 @@ export function createOutputDiagnosticsController(options: OutputDiagnosticsCont
   ) => {
     serialDmxStatusPoller.invalidate();
     try {
-      if (!options.safetyBlackout()) {
-        throw new Error("Engage S0 safety blackout first; the USB-DMX worker is intentionally zero-first and will not start while S0 is clear.");
-      }
       await refreshSerialDmxRuntimeStatuses();
       const binding = confirmedBinding?.state === "selected_and_present"
         ? confirmedBinding
@@ -457,7 +449,7 @@ export function createOutputDiagnosticsController(options: OutputDiagnosticsCont
       if (!options.isProjectAuthorityIdentityCurrent(authority)) return;
       await enableShowSerialDmxSafetyBlackoutRouteInternal();
       if (!options.isProjectAuthorityIdentityCurrent(authority)) return;
-      options.setMessage("USB-DMX Open DMX worker activated with S0 queued. This is not a fixture or physical-wire acceptance result.");
+      options.setMessage("USB-DMX started after its initial zero frame; the existing safety blackout state is unchanged.");
     } catch (error) {
       if (!options.isProjectAuthorityIdentityCurrent(authority)) return;
       options.setMessage(String(error));
@@ -472,8 +464,6 @@ export function createOutputDiagnosticsController(options: OutputDiagnosticsCont
     const run = async () => {
       let authority = options.captureProjectAuthorityIdentity();
       let stage = "Preflight";
-      let safetyBlackoutEngagedByPreparation = false;
-      let safetyBlackoutReleasedByPreparation = false;
       let confirmedBinding: SerialDmxMachineBindingStatus | undefined;
       const runStage = async <T,>(label: string, operation: () => Promise<T>): Promise<T> => {
         if (!options.isProjectAuthorityIdentityCurrent(authority)) {
@@ -481,7 +471,7 @@ export function createOutputDiagnosticsController(options: OutputDiagnosticsCont
         }
         stage = label;
         setShowDmxPreparationStage(label);
-        options.setMessage(`Show DMX setup [${label}] starting; S0 changes only through the zero-first USB-DMX startup.`);
+        options.setMessage(`Show DMX setup [${label}] starting; the existing safety blackout state is preserved.`);
         try {
           const result = await operation();
           if (!options.isProjectAuthorityIdentityCurrent(authority)) {
@@ -539,31 +529,15 @@ export function createOutputDiagnosticsController(options: OutputDiagnosticsCont
             );
             return;
           }
-          if (!options.safetyBlackout()) {
-            await safetyBlackoutRuntime.engage();
-            safetyBlackoutEngagedByPreparation = true;
-            const engaged = await options.refreshSnapshot();
-            if (!engaged?.safety_blackout_engaged) {
-              throw new Error("the zero-first USB-DMX startup could not confirm S0 engagement");
-            }
-          }
           await enableShowSerialDmxSafetyBlackoutRouteInternal(confirmedBinding);
-          if (safetyBlackoutEngagedByPreparation) {
-            await executeBlackoutRelease(options.invoke);
-            const released = await options.refreshSnapshot();
-            if (!released || released.safety_blackout_engaged) {
-              throw new Error("USB-DMX started, but S0 release was not confirmed; output remains fail-closed");
-            }
-            safetyBlackoutReleasedByPreparation = true;
-          }
-          if (safetyBlackoutReleasedByPreparation) {
+          if (!options.safetyBlackout()) {
             await waitForShowSerialDmxLive();
           }
         });
         if (!options.isProjectAuthorityIdentityCurrent(authority)) return;
         setShowDmxPreparationStage("Complete");
         options.setMessage(
-          safetyBlackoutReleasedByPreparation
+          !options.safetyBlackout()
             ? "Show DMX setup complete: output role Both, machine binding, Art-Net loopback, and USB-DMX are live. S0 remains clear."
             : options.safetyBlackout()
               ? "Show DMX setup complete: output role Both, machine binding, Art-Net loopback, and Open DMX arm succeeded with the already-engaged S0."

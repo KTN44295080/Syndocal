@@ -29,10 +29,11 @@ import {
   verifyTauriUpdaterPayload,
 } from "./updater-evidence-crypto.mjs";
 import { withMaterializedVerifiedExecutable } from "./verified-materialization.mjs";
+import { assertInstallerLifecycle } from "./installer-lifecycle-policy.mjs";
 
 export { withMaterializedVerifiedExecutable } from "./verified-materialization.mjs";
 
-export const expectedVersion = "1.2.0-alpha.72";
+export const expectedVersion = "1.2.0-alpha.73";
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const appRoot = resolve(scriptDir, "..");
 const workspaceRoot = resolve(appRoot, "..");
@@ -621,6 +622,7 @@ export function validateStaticReleaseMetadata(readManifest = read, productVersio
   const updaterOverlay = parseRequiredJson(readManifest("app/src-tauri/tauri.updater.conf.json"), "app/src-tauri/tauri.updater.conf.json");
 
   validateAsioPackagingBoundary(readManifest);
+  assertInstallerLifecycle(tauri, productVersion);
 
   if (appPackage.name !== "syndocal" || appPackage.version !== productVersion) {
     throw new Error(`Frontend package metadata is not Syndocal ${productVersion}.`);

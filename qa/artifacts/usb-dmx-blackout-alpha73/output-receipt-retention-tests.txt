@@ -1,0 +1,32 @@
+**********************************************************************
+** Visual Studio 2022 Developer Command Prompt v17.14.39
+** Copyright (c) 2025 Microsoft Corporation
+**********************************************************************
+[vcvarsall.bat] Environment initialized for: 'x64'
+C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+   Compiling syndocal v1.2.0-alpha.73 (C:\Users\janua\.codex\worktrees\distribution-alpha70\Syndocal\app\src-tauri)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 18s
+     Running unittests src\main.rs (C:\Users\janua\AppData\Local\Temp\syndocal-native-acceptance-target\debug\deps\syndocal-4adf9c7218c819f9.exe)
+
+running 3 tests
+test output_lease_receipt_retention::tests::full_journal_advances_public_private_receipts_atomically_and_keeps_replay_guard_after_restart ... ok
+test output_lease_receipt_retention::tests::legacy_two_migrates_once_and_future_or_mislabeled_guards_are_rejected ... ok
+test output_lease_receipt_retention::tests::one_shot_probe_receipts_survive_ordinary_receipt_pressure ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 2066 filtered out; finished in 0.03s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.68s
+     Running unittests src\main.rs (C:\Users\janua\AppData\Local\Temp\syndocal-native-acceptance-target\debug\deps\syndocal-4adf9c7218c819f9.exe)
+
+running 7 tests
+test tests::durable_output_lease_corrupt_or_unwritable_journal_fails_closed_before_commit ... ok
+test tests::durable_output_lease_disk_state_rejects_oversize_unknown_and_invalid_nested_semantics ... ok
+test tests::durable_output_lease_explicit_safe_abort_guard_survives_reload_and_eviction ... ok
+test tests::durable_output_lease_legacy_replay_guard_migration_uses_high_water_vs_retained_request ... ok
+test tests::durable_output_lease_origin_gc_preserves_pending_and_allows_new_principals_after_reload ... ok
+test tests::durable_output_lease_receipt_survives_restart_without_reclaiming_authority ... ok
+test tests::durable_output_lease_safe_abort_replay_guard_survives_terminal_receipt_eviction ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 2062 filtered out; finished in 2.16s

@@ -286,6 +286,8 @@ mod project_backup_deletion_journal;
 mod project_backup_deletion_management;
 mod project_backup_restoration;
 mod output_blackout_control;
+mod output_control_request_identity;
+mod output_lease_receipt_retention;
 mod dj_link_machine;
 mod dj_link_network;
 mod dj_link_persistence_runtime;
@@ -622,7 +624,7 @@ const OUTPUT_OWNERSHIP_STATE_FILE: &str = "machine-output-ownership.json";
 /// local WebView label that created it.  The original renderer principal can
 /// retire on reload; a new principal is permitted to reconcile only through
 /// that same local window binding and the ordinary current-owner fences.
-const OUTPUT_LEASE_DURABLE_RECEIPT_STATE_VERSION: u32 = 2;
+const OUTPUT_LEASE_DURABLE_RECEIPT_STATE_VERSION: u32 = 3;
 const OUTPUT_LEASE_OUTPUT_CONTROL_DOMAIN: &str = "output-control";
 const OUTPUT_LEASE_DSF2026_PROBE_DOMAIN: &str = "output-control-dsf2026-probe";
 const OUTPUT_LEASE_DSF2026_PROBE_RECONCILE_DOMAIN: &str = "output-control-dsf2026-probe-reconcile";
@@ -824,6 +826,10 @@ struct PersistedOutputLeaseReceiptOrigin {
     /// receipt is later evicted.
     #[serde(default = "default_output_lease_replay_guard")]
     replay_guard: bool,
+    /// Bounded high-water tombstone for an evicted completed physical response.
+    /// Later ordinary receipts must not erase this no-repeat guard.
+    #[serde(default)]
+    retired_physical_replay_guard: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1221,6 +1227,7 @@ impl OutputLeaseDurableReceiptJournal {
                     domain: request.key.domain.clone(),
                     high_water_request_id: request.key.request_id,
                     replay_guard: true,
+                    retired_physical_replay_guard: false,
                 });
             }
         }
@@ -1393,6 +1400,7 @@ impl OutputLeaseDurableReceiptJournal {
                     domain: receipt.key.domain.clone(),
                     high_water_request_id: receipt.key.request_id,
                     replay_guard: false,
+                    retired_physical_replay_guard: false,
                 });
             }
         }
@@ -1403,10 +1411,7 @@ impl OutputLeaseDurableReceiptJournal {
             // fresh probe request after restart.
             candidate.dsf2026_artnet_acceptance_probe_consumed = true;
         }
-        if candidate.receipts.len() > MAX_DURABLE_OUTPUT_LEASE_RECEIPTS {
-            let remove_count = candidate.receipts.len() - MAX_DURABLE_OUTPUT_LEASE_RECEIPTS;
-            candidate.receipts.drain(..remove_count);
-        }
+        output_lease_receipt_retention::trim(candidate)?;
         Self::prune_empty_origins(candidate);
         Ok(())
     }
@@ -1838,7 +1843,7 @@ impl OutputLeaseDurableReceiptJournal {
             receipt.key.principal == origin.principal && receipt.key.domain == origin.domain
         }) || self.state.pending.iter().any(|pending| {
             pending.key.principal == origin.principal && pending.key.domain == origin.domain
-        }) || origin.replay_guard
+        }) || origin.replay_guard || origin.retired_physical_replay_guard
     }
 
     fn prune_empty_origins(state: &mut PersistedOutputLeaseReceiptState) {
@@ -1847,7 +1852,7 @@ impl OutputLeaseDurableReceiptJournal {
                 receipt.key.principal == origin.principal && receipt.key.domain == origin.domain
             }) || state.pending.iter().any(|pending| {
                 pending.key.principal == origin.principal && pending.key.domain == origin.domain
-            }) || origin.replay_guard
+            }) || origin.replay_guard || origin.retired_physical_replay_guard
         });
     }
 }
@@ -49722,6 +49727,20 @@ async fn execute_output_lease_lifecycle_off_event_loop(
 }
 
 #[tauri::command]
+async fn allocate_output_control_request_id_v1(
+    app: tauri::AppHandle,
+    window: WebviewWindow,
+) -> Result<u64, String> {
+    let window_label = window.label().to_string();
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        output_control_request_identity::allocate(&state, &window_label)
+    })
+    .await
+    .map_err(|error| format!("Output request identity worker failed: {error}"))?
+}
+
+#[tauri::command]
 async fn query_output_control_authority_v1(
     app: tauri::AppHandle,
     window: WebviewWindow,
@@ -60838,7 +60857,7 @@ fn validate_output_lease_receipt_state(
         let has_pending = state.pending.iter().any(|pending| {
             pending.key.principal == origin.principal && pending.key.domain == origin.domain
         });
-        if !origin.replay_guard
+        if !origin.replay_guard && !origin.retired_physical_replay_guard
             && (has_pending || max_retained_request_id != Some(origin.high_water_request_id))
         {
             return Err(format!(
@@ -60860,6 +60879,13 @@ fn migrate_output_lease_receipt_state_to_current(
 ) -> Result<bool, String> {
     match state.version {
         OUTPUT_LEASE_DURABLE_RECEIPT_STATE_VERSION => Ok(false),
+        2 => {
+            if state.origins.iter().any(|origin| origin.retired_physical_replay_guard) {
+                return Err("Version 2 journal contains a version 3 physical replay guard".to_string());
+            }
+            state.version = OUTPUT_LEASE_DURABLE_RECEIPT_STATE_VERSION;
+            Ok(true)
+        }
         1 => {
             if state
                 .pending
@@ -133008,6 +133034,7 @@ fn main() {
             query_timeline_follow_abort_authority_v1,
             abort_timeline_follow_runtime_v1,
             query_output_control_authority_v1,
+            allocate_output_control_request_id_v1,
             query_dsf2026_artnet_acceptance_probe_status_v1,
             release_blackout_output_control_v2,
             set_blackout_output_control_v2,

@@ -90,15 +90,20 @@ jobs:
           mkdir -p target/qa/macos-artifact
           set -o pipefail
           node --test app/scripts/test-macos-artifact.mjs app/scripts/test-macos-artifact-report.mjs app/scripts/test-macos-artifact-acceptance.mjs app/scripts/test-macos-artifact-identity.mjs app/scripts/test-macos-artifact-workflow.mjs | tee target/qa/macos-artifact/tests.tap
+          node --test app/scripts/test-installer-lifecycle-policy.mjs tools/distribution/test-macos-cleanup.mjs | tee target/qa/macos-artifact/installer-lifecycle-tests.tap
 
       - name: Test macOS USB-DMX identity and output lifecycle
         run: |
           set -o pipefail
           cargo test -p io serial_dmx --lib 2>&1 | tee target/qa/macos-artifact/usb-dmx-io-tests.txt
           cargo test -p io macos_ftdi --lib 2>&1 | tee target/qa/macos-artifact/usb-dmx-ftdi-tests.txt
-          cargo test -p engine macos_show_serial_identity --lib 2>&1 | tee target/qa/macos-artifact/usb-dmx-engine-tests.txt
+          cargo test -p engine show_serial_dmx --lib 2>&1 | tee target/qa/macos-artifact/usb-dmx-engine-tests.txt
+          cargo test -p engine macos_show_serial_identity --lib 2>&1 | tee target/qa/macos-artifact/usb-dmx-engine-identity-tests.txt
           cargo test -p syndocal --bin syndocal serial_dmx_machine 2>&1 | tee target/qa/macos-artifact/usb-dmx-binding-tests.txt
           cargo test -p syndocal --bin syndocal serial_show_dmx_route_tests 2>&1 | tee target/qa/macos-artifact/usb-dmx-route-tests.txt
+
+          cargo test -p syndocal --bin syndocal output_control_request_identity --locked 2>&1 | tee target/qa/macos-artifact/output-request-identity-tests.txt
+          cargo test -p syndocal --bin syndocal output_lease_receipt_retention --locked 2>&1 | tee target/qa/macos-artifact/output-receipt-retention-tests.txt
 
       - name: Build macOS application bundle
         run: pnpm --dir app tauri build --ci --bundles app

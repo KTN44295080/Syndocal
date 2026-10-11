@@ -13,6 +13,7 @@ use std::{
 
 mod control_plane;
 mod managed_network_dmx_retirement;
+mod output_ownership_retirement;
 pub use managed_network_dmx_retirement::ManagedDmxRetirementScope;
 pub mod media_derived;
 mod move_path;
@@ -1362,6 +1363,8 @@ struct OutputOwnershipGateState {
 struct OutputOwnershipGateInner {
     state: Mutex<OutputOwnershipGateState>,
     changed: Condvar,
+    #[cfg(test)]
+    retirement_waiting: AtomicBool,
 }
 
 /// Shared local capability gate used by the engine and app-owned output
@@ -1438,19 +1441,10 @@ impl OutputOwnershipRetirement {
     }
 
     pub fn finish_retirement(self) -> Result<OutputOwnershipTransition, String> {
-        {
-            let state = self.transition.gate.inner.state.lock()
-                .map_err(|_| "Output ownership gate lock was poisoned".to_string())?;
-            if !state.transition_active
-                || state.status.state != OutputOwnershipState::Transitioning
-                || state.status.epoch != self.epoch
-                || state.status.desired_role != self.transition.target
-                || state.in_flight != 0
-            {
-                return Err("Project output retirement is not quiescent or its reservation was superseded".to_string());
-            }
-        }
-        Ok(self.transition)
+        output_ownership_retirement::finish_retirement_with_timeout(
+            self,
+            OUTPUT_OWNERSHIP_TRANSITION_TIMEOUT,
+        )
     }
 }
 
@@ -1479,6 +1473,8 @@ impl OutputOwnershipGate {
                     transition_active: false,
                 }),
                 changed: Condvar::new(),
+                #[cfg(test)]
+                retirement_waiting: AtomicBool::new(false),
             }),
         }
     }
@@ -2023,18 +2019,9 @@ impl OutputOwnershipGate {
     fn fail_transition(&self, target: MachineOutputRole, error: String) -> OutputOwnershipStatus {
         match self.inner.state.lock() {
             Ok(mut state) => {
-                let status = OutputOwnershipStatus::failed(
-                    target,
-                    state.status.persisted_role,
-                    state.status.generation,
-                    state.status.epoch,
-                    OutputOwnershipReason::TransitionFailed,
-                    error,
-                );
-                state.status = status.clone();
-                state.transition_active = state.in_flight != 0;
+                output_ownership_retirement::fail_locked(&mut state, target, error);
                 self.inner.changed.notify_all();
-                status
+                state.status.clone()
             }
             Err(_) => OutputOwnershipStatus::failed(
                 MachineOutputRole::Standby,
@@ -51161,11 +51148,9 @@ impl EngineRuntime {
             "Safety blackout authority lock was poisoned before show serial DMX activation"
                 .to_string()
         })?;
-        if !safety.engaged
-            || safety.epoch != expected_safety_epoch
-            || safety.generation != expected_safety_generation
+        if safety.epoch != expected_safety_epoch || safety.generation != expected_safety_generation
         {
-            return Err("Show serial DMX worker requires the exact currently-engaged S0 safety blackout authority".to_string());
+            return Err("Show serial DMX worker requires the exact currently-observed S0 safety blackout authority".to_string());
         }
         drop(safety);
         // Keep the physical direction zero-only even if a concurrent release
@@ -51174,10 +51159,13 @@ impl EngineRuntime {
         // BREAK/MAB/write_all/flush transaction.
         let _zero_write_hold = match shared_telemetry
             .open_dmx_safety_write_gate
-            .reserve_zero_write_bounded(SHOW_SERIAL_DMX_ZERO_WRITE_TIMEOUT)
+            .reserve_startup_zero_write_bounded(SHOW_SERIAL_DMX_ZERO_WRITE_TIMEOUT)
         {
             Ok(reservation) => reservation,
             Err(error) => {
+                let _ = shared_telemetry
+                    .engage_safety_blackout_for_usb_fault(SHOW_SERIAL_DMX_ZERO_WRITE_TIMEOUT);
+                self.safety_blackout_engaged = true;
                 let shutdown_error = sender
                     .shutdown_open_dmx_bounded(SHOW_SERIAL_DMX_ZERO_WRITE_TIMEOUT)
                     .err();
@@ -51253,7 +51241,7 @@ impl EngineRuntime {
             faulted: false,
             artnet_mirror_live,
             artnet_mirror_detail,
-            detail: "Open DMX worker is armed only after an initial physical S0 zero transaction completed. Release Blackout admits the completed U0 mirror; this is not fixture or wire-delivery verification.".to_string(),
+            detail: "Open DMX worker started after its initial physical zero transaction. The existing safety blackout state is preserved; clear S0 admits the completed U0 mirror. This is not fixture or wire-delivery verification.".to_string(),
         });
         Ok(())
     }
@@ -51271,6 +51259,8 @@ impl EngineRuntime {
         stage: &str,
         error: String,
     ) -> String {
+        let _ = shared_telemetry
+            .engage_safety_blackout_for_usb_fault(SHOW_SERIAL_DMX_ZERO_WRITE_TIMEOUT);
         let shutdown_error = sender
             .shutdown_open_dmx_bounded(SHOW_SERIAL_DMX_ZERO_WRITE_TIMEOUT)
             .err();

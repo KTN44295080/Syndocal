@@ -9,3 +9,6 @@ licenses/bcdec_rs-MIT.txt text eol=lf
 app/scripts/fixtures/release/Syndocal_1.2.0-rc.1_tauri-signer-fixture.bin text eol=lf
 app/scripts/fixtures/release/Syndocal_1.2.0-rc.1_tauri-signer-fixture.bin.sig text eol=lf
 app/scripts/fixtures/release/tauri-signer-public.key text eol=lf
+tools/distribution/Remove-Syndocal.command text eol=lf
+tools/distribution/Remove-SyndocalData.ps1 text eol=lf
+app/src-tauri/installer-hooks.nsh text eol=lf

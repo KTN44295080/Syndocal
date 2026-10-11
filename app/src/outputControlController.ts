@@ -457,18 +457,14 @@ export const applyVideoOutputWindowStatusQuery = (
   };
 };
 
-let nextOutputControlRequestId = 1;
-
-const allocateRequestId = (): number => {
-  if (nextOutputControlRequestId <= 0 || nextOutputControlRequestId > MAX_SAFE_REQUEST_ID) {
+const allocateRequestId = async (invoke: FrontendTauriInvoke): Promise<number> => {
+  const requestId = await invoke<unknown>("allocate_output_control_request_id_v1");
+  if (typeof requestId !== "number" || !Number.isSafeInteger(requestId)
+    || requestId <= 0 || requestId > MAX_SAFE_REQUEST_ID) {
     throw new Error(
-      "OutputControl request identity is exhausted; refresh the renderer session before retrying.",
+      "OutputControl native request identity was invalid; nothing was applied. Restart Syndocal before retrying.",
     );
   }
-  const requestId = nextOutputControlRequestId;
-  nextOutputControlRequestId = requestId === MAX_SAFE_REQUEST_ID
-    ? MAX_SAFE_REQUEST_ID + 1
-    : requestId + 1;
   return requestId;
 };
 
@@ -1292,7 +1288,6 @@ const executeOutputControlOperation = async (
   action: OutputControlOperationAction,
   options: OutputControlExecutionOptions = {},
 ): Promise<OutputControlReceipt> => {
-  const requestId = allocateRequestId();
   const operationId = operationIdForAction(action);
   assertAction(action);
   const authority = assertAuthority(await invoke<unknown>("query_output_control_authority_v1"));
@@ -1314,6 +1309,7 @@ const executeOutputControlOperation = async (
     const leaseQuery = await queryOutputLeaseAuthority(invoke);
     assertSelectedLeaseIsUsable(leaseQuery, action);
   }
+  const requestId = await allocateRequestId(invoke);
   const executeArgs = deepFreeze({
     request: { operation_id: operationId, request_id: requestId, expected_fence: authority.fence, action },
   });

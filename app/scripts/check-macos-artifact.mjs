@@ -89,6 +89,11 @@ export async function main(argv = process.argv.slice(2)) {
       const source = path.join(session.mount, 'Syndocal.app');
       requireCondition((await fs.lstat(source)).isDirectory(), 'DMG does not contain a regular Syndocal.app directory');
       requireCondition(await fs.readlink(path.join(session.mount, 'Applications')) === '/Applications', 'Invalid drag-to-Applications link');
+      const helper = path.join(session.mount, 'Remove-Syndocal.command');
+      requireCondition((await fs.readFile(helper)).equals(await fs.readFile(path.join(ROOT, 'tools/distribution/Remove-Syndocal.command'))),
+        'Final DMG uninstall helper differs from reviewed source');
+      const helperStat = await fs.lstat(helper);
+      requireCondition(helperStat.isFile() && (helperStat.mode & 0o111) !== 0, 'Final DMG uninstall helper is not a regular executable file');
       const copy = path.join(session.root, 'extracted', 'Syndocal.app');
       await run('/usr/bin/ditto', [source, copy], { timeoutMs: 120000 });
       requireCondition((await fs.lstat(copy)).isDirectory(), 'App extraction failed');

@@ -1,0 +1,25 @@
+{
+  "sourceCommit": "80fccf1401de2c2d8dc5c4ea2f03e9b96348d5eb",
+  "workflowRun": 38087771147,
+  "finalDmgChecks": 11,
+  "artifactValidatorTests": {
+    "passed": 169,
+    "failed": 0,
+    "skipped": 0
+  },
+  "uniqueUsbDmxTests": 42,
+  "repeatedFtdiTests": 2,
+  "firstPartyCompilerWarnings": 0,
+  "thirdPartyFfmpegWarnings": {
+    "baseline": 26,
+    "current": 26,
+    "delta": 0
+  },
+  "thirdPartyToolingNotices": 10,
+  "toolingBaseline": "Not separately measured; current notices retained without suppressing them",
+  "viteChunkAdvisories": {
+    "baseline": 1,
+    "current": 1
+  },
+  "rawLogSha256": "4e4d8dc92f7a3bbea4c9b7238359c4248dd56ef5a0ee89e4d47e99ed9f2b1c30"
+}

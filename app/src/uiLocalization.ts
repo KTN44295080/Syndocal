@@ -3420,7 +3420,8 @@ const japaneseText: Record<string, string> = {
   "· logical U0 · ≈32.5fps": "· 論理U0 · 約32.5fps",
   "Logical U0 · ≈32.5fps": "論理U0 · 約32.5fps",
   "127.0.0.1:6454 · wire U0 · 512ch · 40–44fps": "127.0.0.1:6454 · ワイヤU0 · 512ch · 40–44fps",
-  "Arm USB-DMX under S0": "S0下でUSB-DMXをアーム",
+  "Start USB-DMX": "USB-DMXを開始",
+  "USB-DMX started after its initial zero frame; the existing safety blackout state is unchanged.": "USB-DMXを開始しました。安全ブラックアウトの状態は変更していません。",
   "Art-Net route mismatch · expected 127.0.0.1:6454 / wire U0.":
     "Art-Net経路不一致 · 127.0.0.1:6454 / ワイヤU0が必要です。",
   Blackout: "ブラックアウト",
@@ -4000,8 +4001,8 @@ const japanesePatterns: Array<[RegExp, (...matches: string[]) => string]> = [
     (detail) => `シリアルDMXワーカーは初回の物理S0ゼロ書き込みを完了できませんでした: ${detail}。これは灯体や物理配線への送達確認ではありません。`,
   ],
   [
-    /^Open DMX worker is armed only after an initial physical S0 zero transaction completed\. Release Blackout admits the completed U0 mirror; this is not fixture or wire-delivery verification\.$/,
-    () => "Open DMXワーカーは初回の物理S0ゼロトランザクション完了後にのみアーム済みになります。ブラックアウト解除で完成済みU0ミラーを許可します。これは灯体や物理配線への送達確認ではありません。",
+    /^Open DMX worker started after its initial physical zero transaction\. The existing safety blackout state is preserved; clear S0 admits the completed U0 mirror\. This is not fixture or wire-delivery verification\.$/,
+    () => "USB-DMXを開始しました。初回ゼロ送信を確認し、既存の安全ブラックアウト状態を保持しています。灯体への送達確認ではありません。",
   ],
   [
     /^Open DMX worker stopped after an S0 zero BREAK\/MAB\/write_all\/flush transaction completed\. This is not fixture or wire-delivery verification\.$/,

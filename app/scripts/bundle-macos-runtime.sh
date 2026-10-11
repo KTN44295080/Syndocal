@@ -4,6 +4,7 @@ set -eo pipefail
 app_path=${1:?usage: bundle-macos-runtime.sh APP_PATH DMG_DIR}
 dmg_dir=${2:?usage: bundle-macos-runtime.sh APP_PATH DMG_DIR}
 ffmpeg_prefix=${FFMPEG_PREFIX:?FFMPEG_PREFIX must point to the LGPL FFmpeg installation}
+workspace_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 executable="$app_path/Contents/MacOS/syndocal"
 frameworks_dir="$app_path/Contents/Frameworks"
 
@@ -76,13 +77,15 @@ codesign --force --deep --sign - "$app_path"
 codesign --verify --deep --strict "$app_path"
 
 mkdir -p "$dmg_dir"
-dmg_path="$dmg_dir/Syndocal_1.2.0-alpha.72_$(uname -m).dmg"
+dmg_path="$dmg_dir/Syndocal_1.2.0-alpha.73_$(uname -m).dmg"
 dmg_stage=$(mktemp -d)
 trap 'rm -rf "$dmg_stage"' EXIT
 ditto "$app_path" "$dmg_stage/Syndocal.app"
 ln -s /Applications "$dmg_stage/Applications"
+cp "$workspace_root/tools/distribution/Remove-Syndocal.command" "$dmg_stage/Remove-Syndocal.command"
+chmod 755 "$dmg_stage/Remove-Syndocal.command"
 hdiutil create \
-  -volname 'Syndocal 1.2.0-alpha.72' \
+  -volname 'Syndocal 1.2.0-alpha.73' \
   -srcfolder "$dmg_stage" \
   -ov \
   -format UDZO \

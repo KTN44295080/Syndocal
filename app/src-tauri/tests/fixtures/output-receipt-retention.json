@@ -1,0 +1,185 @@
+{
+  "version": 2,
+  "receipts": [
+    {
+      "key": {
+        "principal": "video-blackout-85bfa09f-b866-415c-b74e-0ca255d2a036",
+        "domain": "output-control",
+        "request_id": 4694918298487200
+      },
+      "shape_hash": [
+        178,
+        228,
+        92,
+        26,
+        73,
+        44,
+        173,
+        66,
+        182,
+        191,
+        1,
+        192,
+        227,
+        113,
+        255,
+        125,
+        116,
+        215,
+        62,
+        156,
+        184,
+        47,
+        177,
+        227,
+        128,
+        237,
+        83,
+        216,
+        152,
+        231,
+        58,
+        188
+      ],
+      "lease_id": 2,
+      "affected_lease_ids": [
+        2
+      ],
+      "owner": {
+        "principal": "video-blackout-85bfa09f-b866-415c-b74e-0ca255d2a036",
+        "window_label": "main",
+        "process_session_incarnation": 3617190064490161,
+        "owner_incarnation": 4
+      },
+      "process_session_incarnation": 3617190064490161,
+      "resources": [
+        "Lighting",
+        "Video"
+      ],
+      "generation_before": 1,
+      "generation_after": 1,
+      "audit_sequence": 14,
+      "changes": [
+        {
+          "lease_id": 2,
+          "before": {
+            "phase": "HeldActive",
+            "owner": {
+              "principal": "video-blackout-85bfa09f-b866-415c-b74e-0ca255d2a036",
+              "window_label": "main",
+              "process_session_incarnation": 3617190064490161,
+              "owner_incarnation": 4
+            },
+            "resources": [
+              "Lighting",
+              "Video"
+            ],
+            "generation": 1,
+            "expires_at_monotonic_ms": 85238
+          },
+          "after": {
+            "phase": "HeldActive",
+            "owner": {
+              "principal": "video-blackout-85bfa09f-b866-415c-b74e-0ca255d2a036",
+              "window_label": "main",
+              "process_session_incarnation": 3617190064490161,
+              "owner_incarnation": 4
+            },
+            "resources": [
+              "Lighting",
+              "Video"
+            ],
+            "generation": 1,
+            "expires_at_monotonic_ms": 85238
+          }
+        }
+      ],
+      "outcome": {
+        "Ok": "Authorized"
+      }
+    }
+  ],
+  "origins": [
+    {
+      "principal": "video-blackout-85bfa09f-b866-415c-b74e-0ca255d2a036",
+      "domain": "output-control",
+      "high_water_request_id": 4694918298487200,
+      "replay_guard": false
+    }
+  ],
+  "pending": [],
+  "dsf2026_artnet_acceptance_probe_consumed": false,
+  "dsf2026_artnet_acceptance_probe_terminals": [],
+  "managed_exact_both_output_control_terminals": [
+    {
+      "principal": "video-blackout-85bfa09f-b866-415c-b74e-0ca255d2a036",
+      "window_label": "main",
+      "response": {
+        "type": "receipt",
+        "receipt": {
+          "operation_id": "syndocal.output.blackout.set.v2",
+          "request_id": 4694918298487200,
+          "shape_sha256": "14b8d849173ac7120d151cec41b5aa479260830e0bf29b11485487ec0e3c9ea7",
+          "argument_fingerprint": "c18f327fdb269f9274cd278a131cd37d9454c56ad19447c76597d97de4300bd6",
+          "audit_sequence": 12,
+          "fence_before": {
+            "process_incarnation": 3617190064490161,
+            "session_incarnation": 5431261855997368,
+            "project_epoch": 2,
+            "project_revision": 0,
+            "project_checkpoint_hash": "e45d86117639aabd1b1f571a22b20e66f78761a89baaff6e67cd727350eb2c44",
+            "project_publication_generation": 4,
+            "output_epoch": 5,
+            "output_generation": 5,
+            "safety_blackout_epoch": 1,
+            "safety_blackout_generation": 1
+          },
+          "fence_after": {
+            "process_incarnation": 3617190064490161,
+            "session_incarnation": 5431261855997368,
+            "project_epoch": 2,
+            "project_revision": 1,
+            "project_checkpoint_hash": "68e119eac1157cc22312cabcde335a3c22f61efac50d1c36996e916756a22f64",
+            "project_publication_generation": 5,
+            "output_epoch": 5,
+            "output_generation": 5,
+            "safety_blackout_epoch": 1,
+            "safety_blackout_generation": 1
+          },
+          "outcome": "applied",
+          "lease_result": {
+            "authority": {
+              "lease_id": "lease-0000000000000002",
+              "generation": 1
+            },
+            "resources": [
+              "lighting",
+              "video"
+            ],
+            "phase": "held_active",
+            "outcome": "authorized",
+            "audit_sequence": 14,
+            "changes": [
+              {
+                "lease_id": "lease-0000000000000002",
+                "before_generation": 1,
+                "after_generation": 1,
+                "before_resources": [
+                  "lighting",
+                  "video"
+                ],
+                "after_resources": [
+                  "lighting",
+                  "video"
+                ],
+                "before_phase": "held_active",
+                "after_phase": "held_active"
+              }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "managed_exact_both_output_control_pending_terminals": []
+}

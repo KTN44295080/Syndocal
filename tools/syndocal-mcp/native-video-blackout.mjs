@@ -54,7 +54,7 @@ export async function nativeVideoBlackout(backend,options,checks){
     checks.push({check:`raw-tauri-${command}-reaches-typed-native-validation-without-effect`,passed:true});
   }
   await backend.invoke('agent_authority_promote_v1',{principalId:options.principalId,principalIncarnation:options.principalIncarnation});
-  for(const id of [operation,'syndocal.output.lease.acquire.v2','syndocal.output.lease.renew.v2','syndocal.output.ownership.arm.v2','syndocal.output.lease.relinquish.v2'])await grant(backend,options,id);
+  for(const id of [operation,'syndocal.output.blackout.release.v2','syndocal.output.lease.acquire.v2','syndocal.output.lease.renew.v2','syndocal.output.ownership.arm.v2','syndocal.output.lease.relinquish.v2'])await grant(backend,options,id);
   const mcp=await openNativeStdioSession(options);let lease,armed=false,disarmed=false,failure,nextCanonicalId=3;
   const disarmOwnedProject=async()=>{
     const queryId='syndocal.query.project.replacement.authority.v1',newId='syndocal.project.new.v1';
@@ -112,6 +112,29 @@ export async function nativeVideoBlackout(backend,options,checks){
       assert.deepEqual(await backend.invoke('get_output_ownership_status'),active);
     }
     checks.push({check:'external-native-video-blackout-interleaves-with-low-canonical-gui-origin-identities',passed:true});
+    // Exercise the same native identity preparation used by a fresh renderer.
+    // The empty fixture has no physical targets; S0 release changes only its latch.
+    await noPhysicalTargets(backend);
+    const beforeIdentity = await checkpoint(backend);
+    const engageId = await backend.invoke('allocate_output_control_request_id_v1');
+    const releaseId = await backend.invoke('allocate_output_control_request_id_v1');
+    assert.ok(Number.isSafeInteger(engageId) && engageId > nextCanonicalId);
+    assert.equal(releaseId, engageId + 1);
+    assert.deepEqual(await checkpoint(backend), beforeIdentity, 'identity allocation grants no output or project mutation');
+    const engaged = await backend.invoke('safety_blackout_engage_v1', {request:{
+      operation_id:'syndocal.safety.blackout.engage.v1', request_id:engageId,
+    }});
+    assert.equal(engaged.kind, 'receipt');
+    assert.equal((await backend.invoke('get_snapshot')).snapshot.safety_blackout_engaged, true);
+    canonicalAccepted(await canonical(backend,mcp,'syndocal.output.blackout.release.v2',
+      {kind:'release_blackout',lease},releaseId));
+    assert.equal((await backend.invoke('get_snapshot')).snapshot.safety_blackout_engaged, false);
+    assert.deepEqual(await backend.invoke('get_output_ownership_status'), active);
+    const nextRendererId = await backend.invoke('allocate_output_control_request_id_v1');
+    assert.ok(nextRendererId > releaseId);
+    checks.push({check:'native-renderer-identity-allocation-and-safety-release-after-retained-output-requests',passed:true,
+      engageId,releaseId,nextRendererId});
+    nextCanonicalId = nextRendererId + 1;
     canonicalAccepted(await canonical(backend,mcp,'syndocal.output.lease.relinquish.v2',{kind:'relinquish_output_lease',lease},nextCanonicalId++));lease=undefined;
     // Relinquish intentionally preserves the current output image/gates. Explicit
     // owned project replacement, rather than a fictitious implicit disarm, closes them.

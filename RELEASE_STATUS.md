@@ -1,8 +1,8 @@
 # Syndocal historical v1.0 / current v1.2 alpha Release Status
 
-## 2026-10-11 alpha.72 development distribution candidate
+## 2026-10-12 alpha.73 development distribution candidate
 
-Current product metadata is `1.2.0-alpha.72`. The next Windows/macOS package collects the internal native MCP and recording repairs. Final-DMG acceptance now requires the extracted product's process inspection CLI. Evidence and pending package gates are recorded in [the checkpoint](qa/DEVELOPMENT_INSTALLERS_ALPHA72_2026-10-11.md). This is not full Recording or release completion.
+Current product metadata is `1.2.0-alpha.73`. Alpha.73 repairs restart-safe output request identities, full receipt history and global blackout preservation during zero-first USB-DMX startup. It also corrects MSI upgrade identity and adds complete-removal helpers; see [the current checkpoint](qa/USB_DMX_BLACKOUT_ALPHA73_2026-10-12.md). Alpha.72 artifacts remain immutable and their completed Windows/macOS delivery evidence is [recorded separately](qa/DEVELOPMENT_INSTALLERS_ALPHA72_2026-10-11.md). This is not full Recording or release completion.
 
 ## 2026-10-10 alpha.71 Mac USB-DMX and development distribution
 

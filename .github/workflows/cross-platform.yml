@@ -347,6 +347,11 @@ jobs:
       - name: Check release metadata
         run: pnpm --dir app run check:release
 
+      - name: Test installer lifecycle and cleanup boundaries
+        run: |
+          node tools/distribution/generate-installer-hooks.mjs
+          node --test app/scripts/test-installer-lifecycle-policy.mjs tools/distribution/test-windows-cleanup.mjs tools/distribution/test-windows-uninstall.mjs
+
       - name: Stop checkout Syndocal before native bundle build
         if: runner.os == 'Windows'
         shell: pwsh
@@ -425,7 +430,7 @@ jobs:
       - name: Upload installers
         uses: actions/upload-artifact@v4
         with:
-          name: syndocal-1.2.0-alpha.72-${{ matrix.os }}
+          name: syndocal-1.2.0-alpha.73-${{ matrix.os }}
           path: target/release/bundle/**
           if-no-files-found: error
           retention-days: 14

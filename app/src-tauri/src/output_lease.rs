@@ -3148,6 +3148,16 @@ impl OutputLeaseRegistry {
     /// Check admission and identity on a private candidate. A fresh request
     /// reserves nothing in live authority; this seam lets the OutputControl
     /// lane reject cross-operation request laundering before any mutation.
+    pub(crate) fn next_request_id(&self) -> Result<u64, String> {
+        self.origins
+            .values()
+            .map(|origin| origin.high_water_request_id)
+            .max()
+            .unwrap_or(0)
+            .checked_add(1)
+            .ok_or_else(|| "Output request identity registry is exhausted".to_string())
+    }
+
     pub(crate) fn preflight_request(
         &self,
         request: &OutputLeaseRequest,

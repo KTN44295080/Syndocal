@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import ts from "typescript";
 
+let allocatedRequestId = 1_000_000;
 const read = (relativePath) => readFile(new URL(`../${relativePath}`, import.meta.url), "utf8");
 const hash = (character) => character.repeat(64);
 const lease = { lease_id: "lease-0000000000000001", generation: 1 };
@@ -126,6 +127,7 @@ const run = async ({ refreshedCompositionId = 7, outcome = "applied" } = {}) => 
         statuses: [{ status: "held_active", authority: lease, resources: ["lighting", "video"] }],
       };
     }
+    if (command === "allocate_output_control_request_id_v1") return allocatedRequestId++;
     if (command === "query_output_control_authority_v1") {
       return { operation_id: "syndocal.query.output.control.authority.v1", fence: structuredClone(fence) };
     }
@@ -154,6 +156,8 @@ assert.deepEqual(applied.calls.map((call) => call.command), [
   "query_output_lease_authority_v1",
   "query_output_control_authority_v1",
   "query_output_lease_authority_v1",
+  "allocate_output_control_request_id_v1",
+
   "assign_video_output_composition_v2",
 ]);
 assert.deepEqual(applied.busy, [[42, true], [42, false]]);
@@ -190,6 +194,7 @@ const concurrent = routing.createVideoOutputRoutingController({
         statuses: [{ status: "held_active", authority: lease, resources: ["lighting", "video"] }],
       };
     }
+    if (command === "allocate_output_control_request_id_v1") return allocatedRequestId++;
     if (command === "query_output_control_authority_v1") {
       return { operation_id: "syndocal.query.output.control.authority.v1", fence: structuredClone(fence) };
     }
