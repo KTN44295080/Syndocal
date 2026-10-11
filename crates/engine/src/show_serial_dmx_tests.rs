@@ -101,39 +101,66 @@ fn assert_open_dmx_physical_operation_order(
 fn bounded_show_serial_dmx_sender_open_times_out_and_blocks_stacked_opens() {
     let identity = exact_show_serial_dmx_test_identity();
     let safety_gate = OpenDmxSafetyWriteGate::new();
-    let started = Instant::now();
-    let error = match run_bounded_show_serial_dmx_sender_open(
-        identity.clone(),
-        safety_gate.clone(),
-        Duration::from_millis(10),
-        |_identity, _safety_gate| {
-            thread::sleep(Duration::from_millis(75));
-            Err("deterministic late open failure".to_string())
-        },
-    ) {
-        Ok(_) => panic!("a sender open beyond its deadline must fail closed"),
-        Err(error) => error,
-    };
-    assert!(started.elapsed() < Duration::from_millis(60));
-    assert!(error.contains("exceeded 10ms"));
-
-    // The detached worker is still resolving, so a second activation must be
-    // rejected rather than stacking another driver open against the adapter.
-    let in_flight = match run_bounded_show_serial_dmx_sender_open(
+    let (release_tx, release_rx) = mpsc::channel();
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (result_tx, result_rx) = mpsc::channel();
+    let first_identity = identity.clone();
+    let first_gate = safety_gate.clone();
+    let caller = thread::spawn(move || {
+        let result = run_bounded_show_serial_dmx_sender_open(
+            first_identity,
+            first_gate,
+            Duration::from_millis(10),
+            move |_identity, _safety_gate| {
+                let _ = entered_tx.send(());
+                // The test owns completion: scheduler delays cannot turn this
+                // late open into a completed result before the second attempt.
+                let _ = release_rx.recv();
+                Err("deterministic late open failure".to_string())
+            },
+        );
+        let _ = result_tx.send(result);
+    });
+    // This is a harness watchdog, not a relaxed product deadline. A caller
+    // which waits for the opener cannot return before the test releases it.
+    let first_result = result_rx.recv_timeout(Duration::from_secs(2));
+    let entered = entered_rx.recv_timeout(Duration::from_secs(2));
+    let still_in_flight = SHOW_SERIAL_DMX_SENDER_OPEN_IN_FLIGHT.load(Ordering::Acquire);
+    let second_result = run_bounded_show_serial_dmx_sender_open(
         identity.clone(),
         safety_gate.clone(),
         Duration::from_secs(1),
         |_identity, _safety_gate| Ok(DmxSender::TestExactArtNetRoute),
-    ) {
-        Ok(_) => panic!("a late open must retain the single-flight barrier"),
-        Err(error) => error,
-    };
-    assert!(in_flight.contains("already in flight"));
-
-    // The late worker is allowed to finish and the reaper owns its result;
-    // only then may a fresh open become eligible.  This also proves the
-    // process-wide single-flight barrier is released after the late result.
-    thread::sleep(Duration::from_millis(100));
+    );
+    // Always release the opener and join the caller before assertions, even
+    // when a regression caused the watchdog to expire.
+    let _ = release_tx.send(());
+    caller
+        .join()
+        .expect("bounded-open test caller must terminate");
+    let cleanup_deadline = Instant::now() + Duration::from_secs(2);
+    while SHOW_SERIAL_DMX_SENDER_OPEN_IN_FLIGHT.load(Ordering::Acquire)
+        && Instant::now() < cleanup_deadline
+    {
+        thread::sleep(Duration::from_millis(1));
+    }
+    assert!(entered.is_ok(), "the controlled opener must have entered");
+    assert!(
+        still_in_flight,
+        "the late worker must retain the single-flight barrier"
+    );
+    assert!(
+        matches!(first_result, Ok(Err(ref error)) if error.contains("exceeded 10ms")),
+        "the 10ms timeout must return before the opener is released"
+    );
+    assert!(
+        matches!(second_result, Err(ref error) if error.contains("already in flight")),
+        "a second activation must not stack another driver open"
+    );
+    assert!(
+        !SHOW_SERIAL_DMX_SENDER_OPEN_IN_FLIGHT.load(Ordering::Acquire),
+        "the reaper must release the barrier after observing the late failure"
+    );
     let sender = run_bounded_show_serial_dmx_sender_open(
         identity,
         safety_gate,

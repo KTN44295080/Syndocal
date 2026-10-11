@@ -89,3 +89,19 @@ Win/Mac packaging, hosted installer lifecycle and artifact hashes will be
 recorded here when observed.
 No package is delivered yet. Apple Silicon GUI, minimum-OS execution, Developer
 ID signing/notarization, USB signal continuity and venue acceptance remain open.
+
+## macOS test-only validation follow-up
+
+Mac run `38182052715` stopped at the existing delayed-open test: the assertion
+that a call completed in under 60 ms failed. The test previously used 75 ms and
+100 ms sleeps; its product implementation and test were unchanged from alpha.73.
+This result is preserved and not treated as a pass. The follow-up changes only
+`show_serial_dmx_tests.rs`, compiled under `cfg(test)`: a controlled opener stays
+blocked until the test has observed the 10 ms timeout and second-open rejection.
+The opener is always released and the caller joined before assertions. Reaper
+completion is then observed before admitting a fresh open. Two-second watchdogs
+protect the harness; they are not product deadlines or a wall-clock performance
+claim. This proves ownership and timeout ordering without relying on a scheduled
+75 ms sleep. All 27 selected serial engine tests passed on Windows, with no
+first-party compiler warnings observed. Windows artifacts remain bound to
+`6c069324e742fb726ec080706970408be4ffbd65`; no production code changed here.
