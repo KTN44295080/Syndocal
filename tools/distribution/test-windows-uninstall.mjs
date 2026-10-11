@@ -8,7 +8,7 @@ import test from 'node:test';
 import { spawnSync } from 'node:child_process';
 const source = fs.readFileSync(new URL('./Uninstall-Windows.ps1',import.meta.url),'utf8');
 const guid='{12345678-1234-1234-1234-123456789abc}';
-for(const scenario of ['msi','nsis','cancel','unknown','validate']) test(`uninstall orchestration ${scenario}`,{skip:process.platform!=='win32'},()=>{
+for(const scenario of ['msi','nsis','quoted-nsis','malformed-location','mismatched-location','relative-location','cancel','unknown','validate']) test(`uninstall orchestration ${scenario}`,{skip:process.platform!=='win32'},()=>{
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'syndocal-uninstall-test-'));
   const helper=path.join(root,'Uninstall-Windows.ps1'),installed=path.join(root,'installed');fs.mkdirSync(installed);
   fs.writeFileSync(path.join(installed,'syndocal.exe'),'fixture');fs.writeFileSync(path.join(installed,'uninstall.exe'),'fixture');
@@ -21,14 +21,22 @@ function Get-ChildItem { param($LiteralPath,$ErrorAction)
 }
 function Get-ItemProperty {param($LiteralPath)
  if($LiteralPath -ne 'fixture-registry'){throw 'Unexpected registration'}
- $uninstall=if($env:SYNDOCAL_TEST_KIND -eq 'nsis'){ '\"'+(Join-Path $env:SYNDOCAL_TEST_INSTALL 'uninstall.exe')+'\"' }
+ $nsis=$env:SYNDOCAL_TEST_KIND -in @('nsis','quoted-nsis','malformed-location','mismatched-location','relative-location')
+ $uninstall=if($nsis){ '\"'+(Join-Path $env:SYNDOCAL_TEST_INSTALL 'uninstall.exe')+'\"' }
  elseif($env:SYNDOCAL_TEST_KIND -eq 'unknown'){ 'unexpected.exe' }else{ 'MsiExec.exe /I${guid}' }
- [pscustomobject]@{DisplayName='Syndocal';Publisher='Seraf() / KTN';UninstallString=$uninstall;InstallLocation=$env:SYNDOCAL_TEST_INSTALL}
+ $location=switch($env:SYNDOCAL_TEST_KIND){
+  'quoted-nsis' { '\"'+$env:SYNDOCAL_TEST_INSTALL+'\"' }
+  'malformed-location' { '\"'+$env:SYNDOCAL_TEST_INSTALL+'\"\"' }
+  'mismatched-location' { Join-Path $env:SYNDOCAL_TEST_INSTALL 'other' }
+  'relative-location' { 'relative' }
+  default { $env:SYNDOCAL_TEST_INSTALL }
+ }
+ [pscustomobject]@{DisplayName='Syndocal';Publisher='Seraf() / KTN';UninstallString=$uninstall;InstallLocation=$location}
 }
 function Read-Host {param($Prompt) 'REMOVE'}
 function Start-Process {param($FilePath,$ArgumentList,$WindowStyle,$Wait,$PassThru)
  if(!$Wait -or !$PassThru){throw 'Uninstaller result must be inspected'}
- if($env:SYNDOCAL_TEST_KIND -ne 'nsis' -and ($ArgumentList -join ' ') -ne '/x ${guid}'){throw 'MSI uninstall must use /x'}
+ if($env:SYNDOCAL_TEST_KIND -notin @('nsis','quoted-nsis') -and ($ArgumentList -join ' ') -ne '/x ${guid}'){throw 'MSI uninstall must use /x'}
  Set-Content -LiteralPath $env:SYNDOCAL_TEST_CALLED -Value called
  [pscustomobject]@{ExitCode=if($env:SYNDOCAL_TEST_KIND -eq 'cancel'){1602}else{0}}
 }
@@ -40,8 +48,8 @@ exit $LASTEXITCODE
     encoding:'utf8',windowsHide:true,timeout:10000,env:{...process.env,SYNDOCAL_TEST_KIND:scenario,SYNDOCAL_TEST_HELPER:helper,
       SYNDOCAL_TEST_INSTALL:installed,SYNDOCAL_TEST_CALLED:called,SYNDOCAL_TEST_PURGED:purged,
       PSModulePath:path.join(process.env.SystemRoot,'System32/WindowsPowerShell/v1.0/Modules')}});
-  assert.equal(r.status,scenario==='cancel'||scenario==='unknown'?1:0,r.stderr);
-  assert.equal(fs.existsSync(purged),scenario==='msi'||scenario==='nsis');
-  assert.equal(fs.existsSync(called),['msi','nsis','cancel'].includes(scenario));
+  assert.equal(r.status,['cancel','unknown','malformed-location','mismatched-location','relative-location'].includes(scenario)?1:0,r.stderr);
+  assert.equal(fs.existsSync(purged),['msi','nsis','quoted-nsis'].includes(scenario));
+  assert.equal(fs.existsSync(called),['msi','nsis','quoted-nsis','cancel'].includes(scenario));
   fs.rmSync(root,{recursive:true});
 });

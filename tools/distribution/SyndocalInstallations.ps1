@@ -10,7 +10,13 @@ function Get-SyndocalInstallations {
                 $taskEntries += [pscustomobject]@{Kind='msi';File=(Join-Path $env:SystemRoot 'System32\msiexec.exe');Args=@('/x',$Matches[1])}
             } elseif ($taskEntry.UninstallString -match '^"(.+\\uninstall\.exe)"$') {
                 $taskUninstaller = [IO.Path]::GetFullPath($Matches[1])
-                $taskInstall = [IO.Path]::GetFullPath($taskEntry.InstallLocation).TrimEnd('\')
+                # Tauri NSIS stores InstallLocation as a quoted registry value.
+                # Accept exactly one surrounding pair, never embedded quotes.
+                $taskLocation = [string]$taskEntry.InstallLocation
+                if ($taskLocation -match '^"([^"]+)"$') { $taskLocation = $Matches[1] }
+                if ([string]::IsNullOrWhiteSpace($taskLocation) -or $taskLocation.Contains('"') -or
+                    -not [IO.Path]::IsPathRooted($taskLocation)) { throw 'Unverified Syndocal install location' }
+                $taskInstall = [IO.Path]::GetFullPath($taskLocation).TrimEnd('\')
                 if ([IO.Path]::GetDirectoryName($taskUninstaller) -ne $taskInstall -or
                     -not (Test-Path -LiteralPath (Join-Path $taskInstall 'syndocal.exe'))) { throw 'Unverified Syndocal uninstall path' }
                 $taskEntries += [pscustomobject]@{Kind='nsis';File=$taskUninstaller;Args=@()}
