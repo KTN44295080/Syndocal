@@ -40,6 +40,9 @@ fn continuous_fixture_fader_real_engine_commit_is_one_undo_redo_entry() {
     let mut foreign = request(2, 1);
     foreign.owner_id = "other-owner".into();
     assert!(continuous_fixture_fader::write(state, window, foreign).is_err());
+    let mut wrong_case = request(2, 1);
+    wrong_case.targets[0].attribute = "dimmer".into();
+    assert!(continuous_fixture_fader::write(state, window, wrong_case).is_err());
     let mut invalid = request(2, 1);
     invalid.targets.push(TouchFeaturePresetTarget {
         fixture_id: 999,

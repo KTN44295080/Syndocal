@@ -16,6 +16,11 @@ assert.equal(path.basename(path.dirname(descriptor)), 'jp.seraf.ktn.syndocal.qa.
 assert.ok(path.isAbsolute(evidence));
 await assert.rejects(fs.access(evidence));
 const backend = await openNativeBackendSession(parseOptions(['--expected-executable', executable, '--descriptor', descriptor]), Number(take('--cdp-port')));
+backend.invoke = async (command, params = {}) => {
+  const reply = await backend.evaluate(`window.__TAURI_INTERNALS__.invoke(${JSON.stringify(command)},${JSON.stringify(params)}).then(value=>({ok:true,value}),error=>({ok:false,error:String(error)}))`);
+  if (!reply.ok) throw new Error(`${command}: ${reply.error}`);
+  return reply.value;
+};
 const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'syndocal-fixture-native-'));
 const ownerId = `fixture-native-${randomUUID()}`;
 const checkpoint = () => backend.invoke('get_project_checkpoint', { midiMappings: [], oscMappings: [], dmxMappings: [] });
@@ -25,6 +30,7 @@ const fixtures = async () => (await checkpoint()).snapshot.fixtures;
 const dimmer = image => image[0].attribute_values.find(value => value.attribute === 'Dimmer').value;
 const checks = [];
 let activeTransaction = null;
+let operationSequence = 0;
 const safe = async () => {
   const own = await backend.invoke('get_output_ownership_status');
   assert.equal(own.lighting_allowed, false); assert.equal(own.video_allowed, false);
@@ -41,7 +47,7 @@ const load = async file => {
 const begin = async commandName => {
   const bundle = await authority();
   const label = 'Fixture native acceptance', coalesceKey = '';
-  const identity = { ownerId, commandName, schemaVersion: 1, clientOperationId: randomUUID(),
+  const identity = { ownerId, commandName, schemaVersion: 1, clientOperationId: `project-op:${++operationSequence}:${randomUUID()}`,
     shapeFingerprint: `project-transaction-v1|command=${commandName}|label=${label}|coalesce=${coalesceKey}` };
   const ticket = await backend.invoke('begin_project_transaction', { ...identity, label, coalesceKey,
     expectedEpoch: bundle.project_epoch, expectedRevision: bundle.project_revision, expectedCheckpointHash: bundle.checkpoint_hash });
@@ -65,9 +71,18 @@ const navigate = async undo => {
 };
 let cleanup;
 try {
-  await safe();
+  const closed = await backend.invoke('get_output_ownership_status');
+  assert.equal(closed.lighting_allowed, false); assert.equal(closed.video_allowed, false);
   const empty = await checkpoint();
   assert.deepEqual(empty.snapshot.fixtures, [], 'Use only an empty isolated QA profile');
+  assert.ok(empty.snapshot.dmx_outputs.every(route => route.protocol === 'ArtNet' && route.target_ip === '127.0.0.1'), 'Initial disarmed QA routes must be software loopback only');
+  assert.deepEqual(empty.snapshot.video.outputs, []);
+  // The blank app retains its configured Unity loopback, while ownership is
+  // disarmed. Disable that legacy route in the authored QA image before load.
+  assert.equal(empty.snapshot.output.protocol, 'ArtNet');
+  assert.equal(empty.snapshot.output.target_ip, '127.0.0.1');
+  empty.snapshot.output.enabled = false;
+  empty.snapshot.dmx_outputs = empty.snapshot.dmx_outputs.map(route => ({ ...route, enabled: false }));
   await backend.invoke('register_project_transaction_owner', { ownerId });
   cleanup = path.join(directory, 'empty.sdc');
   await fs.writeFile(cleanup, JSON.stringify(empty), { flag: 'wx' });

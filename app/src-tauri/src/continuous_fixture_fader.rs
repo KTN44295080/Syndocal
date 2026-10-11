@@ -103,7 +103,7 @@ pub(crate) fn write(state: &AppState, window: &str, mut request: Request) -> Res
                     && fixture
                         .controls
                         .iter()
-                        .any(|control| control.attribute.eq_ignore_ascii_case(attribute))
+                        .any(|control| control.attribute == attribute)
             })
     })?;
     state
