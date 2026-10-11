@@ -99,5 +99,5 @@ export function createFaderValueController(options: FaderValueControllerOptions)
     optimisticValues.clear();
   };
 
-  return { enqueue, setOptimistic, mergeSnapshotValues, clearAll };
+  return { enqueue, setOptimistic, clearOptimistic, mergeSnapshotValues, clearAll };
 }

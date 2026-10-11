@@ -120,7 +120,7 @@ assert.doesNotMatch(
   "outer cleanup must not swallow a failed terminal Cancel",
 );
 assert.equal(
-  [...mutationController.matchAll(/ports\.invoke<T>\(command, ticketedArgs\)/g)].length,
+  [...mutationController.matchAll(/ports\.invoke<T>\(input\.command, ticketedArgs\)/g)].length,
   1,
   "the raw renderer mutation must be dispatched exactly once; recovery may not replay it",
 );

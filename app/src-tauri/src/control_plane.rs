@@ -67,9 +67,9 @@ const KEYBOARD_SHORTCUT_SOURCE_MANIFEST: &str =
 const KEYBOARD_SHORTCUT_SOURCE_MANIFEST_SCHEMA_VERSION: u16 = 1;
 const KEYBOARD_APP_SHORTCUT_SOURCE_COUNT: usize = 30;
 const KEYBOARD_PROJECT_FILE_SHORTCUT_SOURCE_COUNT: usize = 3;
-const FROZEN_TAURI_ROUTE_ADMISSION_COUNT: usize = 562;
+const FROZEN_TAURI_ROUTE_ADMISSION_COUNT: usize = 564;
 const FROZEN_TAURI_ROUTE_ADMISSION_SHA256: &str =
-    "8abf113066c03b807026fd337a335ea84ca50bd5c5784cd14d3f0907aa79a73b";
+    "9407dbb6c997b0d5631bb8b0a7617c8f81654ad070a9bc2780d6a087366c2ec7";
 /// The command source is parsed and validated exactly once.  Local discovery
 /// calls only clone this immutable, validated value; they never parse source
 /// text or make an external request on the invocation path.
@@ -648,6 +648,7 @@ fn is_renderer_ticketed_project_mutation(command: &str) -> bool {
             | "remove_fixture"
             | "repair_fixture_profile"
             | "set_fixture_patch"
+            | "set_fixture_patches"
             | "set_fixture_limits"
             | "set_fixture_groups"
             | "create_fixture_group"
@@ -656,6 +657,7 @@ fn is_renderer_ticketed_project_mutation(command: &str) -> bool {
             | "delete_fixture_group"
             | "undo_delete_fixture_group"
             | "set_attribute"
+            | "stream_fixture_attribute_v1"
             | "set_fixture_attribute_batch"
             | "set_group_attribute"
             | "commit_programmer"
@@ -2511,7 +2513,7 @@ mod tests {
         assert_eq!(names.len(), FROZEN_TAURI_ROUTE_ADMISSION_COUNT);
         assert_eq!(
             counts[&TauriRouteAdmissionClass::RendererTicketedProjectMutation],
-            133
+            135
         );
         assert_eq!(
             counts[&TauriRouteAdmissionClass::BackendAuthoritativeProjectMutation],
@@ -2577,7 +2579,7 @@ mod tests {
         // engine commands; the strict Show Spout Reset adds its separately
         // named atomic engine command. Its five Tauri routes and the local
         // Spout reset account for the six manifest entries below.
-        const ENGINE_COMMAND_COUNT: usize = 281;
+        const ENGINE_COMMAND_COUNT: usize = 282;
         const REMOTE_INPUT_EVENT_COUNT: usize = 51;
         const REMOTE_CLIENT_REQUEST_COUNT: usize = 7;
         const REMOTE_WIRE_OPERATION_COUNT: usize = 58;
@@ -2599,7 +2601,7 @@ mod tests {
             + OSC_INPUT_EVENT_COUNT
             + DMX_INPUT_PROTOCOL_COUNT
             + DMX_INPUT_EVENT_COUNT;
-        const FRONTEND_INVOKE_COUNT: usize = 482;
+        const FRONTEND_INVOKE_COUNT: usize = 484;
         assert_eq!(MIDI_OSC_DMX_OPERATION_COUNT, 206);
         assert_eq!(
             registry.operations.len(),
@@ -2609,7 +2611,7 @@ mod tests {
                 + MIDI_OSC_DMX_OPERATION_COUNT
                 + FRONTEND_INVOKE_COUNT
         );
-        assert_eq!(registry.operations.len(), 1647);
+        assert_eq!(registry.operations.len(), 1652);
         verify_registry_exact_set(&names, &registry).unwrap();
         let r0 = registry
             .operations
@@ -2987,18 +2989,18 @@ mod tests {
         const TAURI_COUNT: usize = FROZEN_TAURI_ROUTE_ADMISSION_COUNT;
         // 277 prior engine sources plus the distinct atomic
         // `ResetShowSpoutOutputsExactPublished` source.
-        const ENGINE_COUNT: usize = 281;
+        const ENGINE_COUNT: usize = 282;
         const REMOTE_COUNT: usize = 116;
         const MIDI_OSC_DMX_COUNT: usize = 206;
-        const FRONTEND_COUNT: usize = 482;
+        const FRONTEND_COUNT: usize = 484;
         const LEGACY_SOURCE_TOTAL: usize =
             TAURI_COUNT + ENGINE_COUNT + REMOTE_COUNT + MIDI_OSC_DMX_COUNT + FRONTEND_COUNT;
         const KEYBOARD_APP_COUNT: usize = 30;
         const KEYBOARD_PROJECT_FILE_COUNT: usize = 3;
         const SOURCE_TOTAL: usize =
             LEGACY_SOURCE_TOTAL + KEYBOARD_APP_COUNT + KEYBOARD_PROJECT_FILE_COUNT;
-        assert_eq!(LEGACY_SOURCE_TOTAL, 1647);
-        assert_eq!(SOURCE_TOTAL, 1680);
+        assert_eq!(LEGACY_SOURCE_TOTAL, 1652);
+        assert_eq!(SOURCE_TOTAL, 1685);
         assert_eq!(canonical.source_inventory.len(), SOURCE_TOTAL);
         assert_eq!(canonical.canonical_operations.len(), 73);
 
@@ -3398,7 +3400,8 @@ mod tests {
         // authority query is now reviewed; frontend sources remain aliases.
         // RequestSnapshotPublication is an internal read barrier and remains
         // unavailable as a canonical external operation.
-        assert_eq!(unclassified.len(), 1120);
+        // Two local renderer routes and the atomic engine source remain unavailable externally.
+        assert_eq!(unclassified.len(), 1123);
         assert_eq!(support_phases.len(), 0);
         assert_eq!(
             direct.len()
@@ -4154,11 +4157,11 @@ mod tests {
     fn legacy_v1_registry_json_and_count_remain_inventory_honest() {
         let legacy = registry().unwrap();
         // Includes both the native and frontend missing-publication resolver.
-        assert_eq!(legacy.operations.len(), 1647);
+        assert_eq!(legacy.operations.len(), 1652);
         let encoded = serde_json::to_value(&legacy).unwrap();
         assert_eq!(encoded["schema"]["version"], CONTROL_PLANE_SCHEMA_VERSION);
         let operations = encoded["operations"].as_array().unwrap();
-        assert_eq!(operations.len(), 1647);
+        assert_eq!(operations.len(), 1652);
         assert!(operations.iter().all(|operation| {
             operation["source_family"] != "keyboard_app"
                 && operation["source_family"] != "keyboard_project_file"

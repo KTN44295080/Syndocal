@@ -9,9 +9,9 @@ Build/test/native evidence and remaining concurrency boundaries are recorded bel
 this is not full Recording completion. See [remaining work and acceptance](REMAINING_WORK_2026-09-05.md).
 Earlier artifact versions, hashes and process observations below are historical.
 
-## 2026-10-11 alpha.72 development distribution candidate
+## 2026-10-12 alpha.74 fixture control distribution candidate
 
-Current product metadata is `1.2.0-alpha.73`. Alpha.73 repairs restart-safe output request identities and preserves global blackout during zero-first USB-DMX startup; see [the current checkpoint](USB_DMX_BLACKOUT_ALPHA73_2026-10-12.md). Alpha.72 artifacts remain immutable. The next Windows/macOS package collects the internal native MCP and recording repairs. Final-DMG acceptance now requires the extracted product's process inspection CLI. Evidence and pending package gates are recorded in [the checkpoint](DEVELOPMENT_INSTALLERS_ALPHA72_2026-10-11.md). This is not full Recording or release completion.
+Current product metadata is `1.2.0-alpha.74`. Continuous fixture faders, atomic bulk repatching, neutral DJ title defaults and the complete-removal hook are in [the current candidate checkpoint](FIXTURE_CONTROL_ALPHA74_2026-10-12.md), with explicit pending native/package/device gates. The candidate includes [alpha.73 output request and USB startup repairs](USB_DMX_BLACKOUT_ALPHA73_2026-10-12.md); distributed alpha.72 artifacts remain immutable. This is not full Recording or release completion.
 
 ## 2026-10-11 external MCP OS process identity
 

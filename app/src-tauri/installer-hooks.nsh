@@ -90,6 +90,13 @@
   FileWrite $R8 "    @(Get-ChildItem -LiteralPath $$taskCrashParent -Force).Count -eq 0) {$\r$\n"
   FileWrite $R8 "    Remove-Item -LiteralPath $$taskCrashParent$\r$\n"
   FileWrite $R8 "}$\r$\n"
+  FileWrite $R8 "# Installer preference is product-owned state too. Keep the publisher's$\r$\n"
+  FileWrite $R8 "# parent key and every other product; never remove HKLM/shared runtime keys.$\r$\n"
+  FileWrite $R8 "$$taskRegistryPreference = 'HKCU:\Software\Seraf() / KTN\Syndocal'$\r$\n"
+  FileWrite $R8 "if (Test-Path -LiteralPath $$taskRegistryPreference) {$\r$\n"
+  FileWrite $R8 "    Remove-Item -LiteralPath $$taskRegistryPreference -Recurse -Force$\r$\n"
+  FileWrite $R8 "}$\r$\n"
+  FileWrite $R8 "if (Test-Path -LiteralPath $$taskRegistryPreference) { throw 'Installer preference cleanup failed' }$\r$\n"
   FileWrite $R8 "Write-Output 'Syndocal settings, caches, recovery files and owned credentials removed. External projects/media preserved.'$\r$\n"
   FileClose $R8
   nsExec::ExecToLog '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\syndocal-cleanup.ps1" ${VALIDATE}'

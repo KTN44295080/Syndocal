@@ -129,7 +129,7 @@ assert.match(
 );
 assert.match(
   projectTransactionMutationController,
-  /const ticketedRequest = \{[\s\S]*?projectTransactionId:\s*transaction\.transaction_id,[\s\S]*?expectedEpoch:\s*transaction\.project_epoch,[\s\S]*?ownerId:\s*ports\.ownerId,[\s\S]*?\};[\s\S]*?ports\.invoke<T>\(command,\s*ticketedArgs\)/,
+  /const ticketedRequest = \{[\s\S]*?projectTransactionId:\s*transaction\.transaction_id,[\s\S]*?expectedEpoch:\s*transaction\.project_epoch,[\s\S]*?ownerId:\s*ports\.ownerId,[\s\S]*?\};[\s\S]*?ports\.invoke<T>\(input\.command,\s*ticketedArgs\)/,
   "the shared mutation controller must pass the exact backend-authoritative transaction ticket",
 );
 const repairCommand = section(backend, "fn repair_fixture_profile(", "fn create_custom_fixture_profile(");

@@ -1,6 +1,6 @@
 import type { DjTrackSelector, DjTrackTriggerMapping } from "./types";
 
-export const DEFAULT_DJ_TITLE_CONTAINS = "人生オーバー";
+export const DEFAULT_DJ_TITLE_CONTAINS = "";
 
 export type DjTrackSelectorMode = "content" | "title_artist" | "title_contains";
 

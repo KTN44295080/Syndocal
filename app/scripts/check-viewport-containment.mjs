@@ -1005,7 +1005,8 @@ async function waitForApp(client) {
     }
     await sleep(100);
   }
-  throw new Error(`Syndocal app shell did not mount. ${client.runtimeExceptions.join(" | ")}`);
+  const readiness = await client.evaluate(`({ url: location.href, readyState: document.readyState, appCount: document.querySelectorAll(".app").length, workspaces: [...document.querySelectorAll("[data-workspace-option]")].map(node => node.getAttribute("data-workspace-option")), body: document.body?.innerText.slice(0, 200) })`);
+  throw new Error(`Syndocal app shell did not mount. ${JSON.stringify(readiness)} ${client.runtimeExceptions.join(" | ")}`);
 }
 
 async function waitForReadyWorkspaceDocument(

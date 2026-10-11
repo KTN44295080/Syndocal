@@ -557,10 +557,10 @@ assert.deepEqual(
   "the exact Spout V2 enable and local reset routes must remain present exactly once",
 );
 assert(!manifest.includes("enable_show_spout_outputs_v1"), "the retired Spout V1 route must remain unreachable");
-// Current main has 482 frontend routes, with the exact 133/31 mutation
+// Current main has 484 frontend routes, with the exact 135/31 mutation
 // classifications checked against both App and control_plane.rs below.
-assert.equal(manifest.length, 482, "frontend Tauri manifest count drifted");
-assert.equal(backendRendererMutations.length, 133, "backend renderer-ticketed classification count drifted");
+assert.equal(manifest.length, 484, "frontend Tauri manifest count drifted");
+assert.equal(backendRendererMutations.length, 135, "backend renderer-ticketed classification count drifted");
 assert.equal(backendServerMutations.length, 31, "backend authoritative classification count drifted");
 assert.deepEqual(
   [...rendererMutations].sort(),
@@ -675,7 +675,7 @@ for (const marker of [
   "projectTransactionId: transaction.transaction_id",
   "expectedEpoch: transaction.project_epoch",
   "ownerId: ports.ownerId",
-  "ports.invoke<T>(command, ticketedArgs)",
+  "ports.invoke<T>(input.command, ticketedArgs)",
   "ports.commitProjectTransactionWithRecovery(transaction, identity, settleTerminal)",
   "cancelOpenedProjectTransaction()",
 ]) {

@@ -6,7 +6,7 @@ import {
   normalizeDjTrackTriggerMappings,
 } from "../src/djTrackMappingPolicy.ts";
 
-assert.equal(DEFAULT_DJ_TITLE_CONTAINS, "人生オーバー");
+assert.equal(DEFAULT_DJ_TITLE_CONTAINS, "", "Distributed defaults must not select a personal song");
 const productionSelector = buildDjTrackSelector({
   mode: "title_contains",
   contentId: "ignored-by-mode",

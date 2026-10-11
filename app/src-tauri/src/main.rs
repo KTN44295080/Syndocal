@@ -287,6 +287,8 @@ mod project_backup_deletion_management;
 mod project_backup_restoration;
 mod output_blackout_control;
 mod output_control_request_identity;
+mod continuous_fixture_fader;
+mod fixture_repatch_request;
 mod output_lease_receipt_retention;
 mod dj_link_machine;
 mod dj_link_network;
@@ -24417,6 +24419,7 @@ struct ProjectTransactionLane {
     in_flight_commands: AtomicU64,
     closing: AtomicBool,
     renderer_dispatch_started: AtomicBool,
+    fixture_fader_progress: Mutex<continuous_fixture_fader::Progress>,
 }
 
 impl ProjectTransactionLane {
@@ -24425,6 +24428,7 @@ impl ProjectTransactionLane {
             in_flight_commands: AtomicU64::new(0),
             closing: AtomicBool::new(false),
             renderer_dispatch_started: AtomicBool::new(false),
+            fixture_fader_progress: Mutex::new(continuous_fixture_fader::Progress::default()),
         }
     }
 
@@ -25390,6 +25394,13 @@ fn admit_tauri_app_invoke<R: tauri::Runtime>(
     let window_label = containing_window.label();
 
     if class == Class::RendererTicketedProjectMutation {
+        if command == "stream_fixture_attribute_v1" {
+            let tauri::ipc::InvokeBody::Json(payload) = invoke.message.payload() else {
+                return Err("Fader stream rejects raw IPC payloads".into());
+            };
+            renderer_ticketed_request_payload(command, payload)?;
+            return Ok(None); // The strict handler owns borrowed-checkpoint admission.
+        }
         let payload = match invoke.message.payload() {
             tauri::ipc::InvokeBody::Json(payload) => payload,
             tauri::ipc::InvokeBody::Raw(_) => {
@@ -25897,6 +25908,7 @@ fn external_output_command_requires_local_r4(command: &EngineCommand) -> Option<
         | EngineCommand::SetGroupFixtureLimits { .. }
         | EngineCommand::SetFixtureTransform { .. }
         | EngineCommand::SetFixturePatch { .. }
+        | EngineCommand::SetFixturePatchesPublished { .. }
         | EngineCommand::SetFixtureLimits { .. }
         | EngineCommand::SetFixtureGroups { .. }
         | EngineCommand::ApplyFixtureGroupStatePublished { .. }
@@ -28216,6 +28228,13 @@ fn remove_fixture(state: State<'_, AppState>, fixture_id: FixtureId) -> Result<(
 }
 
 #[tauri::command]
+async fn set_fixture_patches(app: tauri::AppHandle, changes: Vec<fixture_repatch_request::FixturePatchChange>) -> Result<(), String> {
+    let changes=changes.into_iter().map(fixture_repatch_request::FixturePatchChange::into_engine).collect::<Result<Vec<_>,_>>()?;
+    tauri::async_runtime::spawn_blocking(move || app.state::<AppState>().engine.set_fixture_patches_published_with_timeout(changes, Duration::from_secs(2)))
+        .await.map_err(|error| format!("Fixture move worker failed: {error}"))?
+}
+
+#[tauri::command]
 fn set_fixture_patch(
     state: State<'_, AppState>,
     fixture_id: FixtureId,
@@ -28993,6 +29012,11 @@ fn undo_delete_fixture_group_for_window_label(
     )?;
     commit_direct_project_ancillary_mutation_after_preflight(state, &mut coordinator, prepared);
     Ok(Some(deleted.group))
+}
+
+#[tauri::command]
+fn stream_fixture_attribute_v1(state: State<'_ , AppState>, window: WebviewWindow, request: continuous_fixture_fader::Request) -> Result<(), String> {
+    continuous_fixture_fader::write(&state, window.label(), request)
 }
 
 #[tauri::command]
@@ -132674,6 +132698,7 @@ fn main() {
             patch_fixtures,
             remove_fixture,
             set_fixture_patch,
+            set_fixture_patches,
             set_fixture_limits,
             set_group_fixture_limits,
             set_fixture_groups,
@@ -132684,6 +132709,7 @@ fn main() {
             delete_fixture_group,
             undo_delete_fixture_group,
             set_attribute,
+            stream_fixture_attribute_v1,
             set_fixture_attribute_batch,
             set_operator_selection_context,
             get_operator_selection_context,

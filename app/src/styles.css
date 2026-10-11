@@ -40445,3 +40445,10 @@ button.timelineExternalSourceCard:active,
     grid-row: 2;
   }
 }
+
+.dmxPatchSelectionControls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.dmxPatchSelectionControls label { display: flex; align-items: center; gap: 8px; }
+.dmxPatchSelectionControls input { width: 90px; }
+.dmxPatchSelectionControls > span { color: var(--muted); }
+
+.dmxPatchMap.withFixtureSelection { grid-template-rows: auto auto minmax(0, 1fr); }

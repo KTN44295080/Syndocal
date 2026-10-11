@@ -1,3 +1,4 @@
+import type { FixtureFaderStream } from "./continuousFixtureFader";
 import type { FrontendTauriInvoke, FrontendTauriInvokeCommand } from "./tauriInvokeCommands";
 import {
   isStageRendererTicketedCommand,
@@ -65,6 +66,7 @@ export type ProjectTransactionMutationControllerInput = Readonly<{
   commandArgs: Record<string, unknown>;
   transaction: ProjectTransactionTicket;
   identity: ProjectTransactionIdentity;
+  stream?: FixtureFaderStream;
   onOpened: (() => void) | null;
   shouldAbort: (() => boolean) | null;
   awaitAbort: (() => Promise<void> | void) | null;
@@ -145,7 +147,18 @@ export const createProjectTransactionMutationController = (
       const publishedCommand = publishedCommandFor(command);
       let result: T;
       try {
-        const replied = await ports.invoke<T>(command, ticketedArgs);
+        let replied: T;
+        if (command === "stream_fixture_attribute_v1") {
+          if (!input.stream) throw new Error("Fader stream controller is missing.");
+          let sequence = 0;
+          await input.stream(async (write) => {
+            await ports.invoke(command, { request: { ...ticketedRequest, ...write, sequence: ++sequence } });
+          });
+          replied = undefined as T;
+        } else {
+          if (input.stream) throw new Error("Continuous input is restricted to fixture faders.");
+          replied = await ports.invoke<T>(input.command, ticketedArgs);
+        }
         // Stage routes keep their legacy reply shapes on the happy path; only
         // PATCH/Repair expose and validate their receipt there.
         if (publishedCommand && !isStageRendererTicketedCommand(publishedCommand)

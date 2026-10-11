@@ -274,6 +274,7 @@ import {
 } from "./customFixtureProfile";
 import { createGdtfProfileActions } from "./gdtfProfileActions";
 import { createPatchFixtureDragController } from "./createPatchFixtureDragController";
+import { createContinuousFixtureFader, type FixtureFaderStream } from "./continuousFixtureFader";
 import { createFaderValueController } from "./createFaderValueController";
 import {
   addressRange,
@@ -1132,6 +1133,7 @@ const projectMutationCommands = new Set([
   "remove_fixture",
   "repair_fixture_profile",
   "set_fixture_patch",
+  "set_fixture_patches",
   "set_fixture_limits",
   "set_fixture_groups",
   "create_fixture_group",
@@ -1140,6 +1142,7 @@ const projectMutationCommands = new Set([
   "delete_fixture_group",
   "undo_delete_fixture_group",
   "set_attribute",
+  "stream_fixture_attribute_v1",
   "set_fixture_attribute_batch",
   "set_group_attribute",
   "commit_programmer",
@@ -1529,6 +1532,7 @@ const invoke = async <T,>(
   const requestedExpectedCheckpointHash = typeof args?.__expectedCheckpointHash === "string"
     ? args.__expectedCheckpointHash
     : null;
+  const fixtureFaderStream = args?.__fixtureFaderStream as FixtureFaderStream | undefined;
   const onProjectTransactionOpened = typeof args?.__onProjectTransactionOpened === "function"
     ? args.__onProjectTransactionOpened as () => void
     : null;
@@ -1549,6 +1553,7 @@ const invoke = async <T,>(
   // already captured by persistProjectControlMappings below.
   const projectMappingsFencePrepared = command === "set_project_control_mappings";
   const commandArgs = { ...(args ?? {}) };
+  delete commandArgs.__fixtureFaderStream;
   delete commandArgs.__expectedProjectEpoch;
   delete commandArgs.__expectedProjectRevision;
   delete commandArgs.__expectedCheckpointHash;
@@ -1651,6 +1656,7 @@ const invoke = async <T,>(
     commandArgs,
     transaction,
     identity: transactionIdentity,
+    stream: fixtureFaderStream,
     onOpened: onProjectTransactionOpened,
     shouldAbort: shouldAbortProjectMutation,
     awaitAbort: awaitProjectMutationAbort,
@@ -2149,6 +2155,8 @@ export default function App() {
   const [wheelMediaMissing, setWheelMediaMissing] = createSignal<Record<string, true>>({});
   const [faderValues, setFaderValues] = createSignal<Record<string, number>>({});
   const faderValueController = createFaderValueController({ setValues: setFaderValues });
+  const continuousFixtureFader = createContinuousFixtureFader(invoke);
+  onCleanup(continuousFixtureFader.cancel);
   const [rawDmxUniverse, setRawDmxUniverse] = createSignal(0);
   const [bpmDraft, setBpmDraft] = createSignal("120");
   const [midiInputs, setMidiInputs] = createSignal<MidiInputSummary[]>([]);
@@ -6626,7 +6634,9 @@ export default function App() {
     activeUniverse: activePatchGridUniverse,
     setPatchGridUniverse,
     setDmxPatchViewMode,
-    patchAddressConflictFor,
+    fixtures: () => snapshot().fixtures,
+    projectFence: () => ({ epoch: projectMappingsAuthority().project_epoch,
+      revision: projectTransactionAuthorityRevision, hash: projectTransactionAuthorityCheckpointHash }),
     refreshSnapshot: () => refreshSnapshot(),
     setSelectedFixtureLabelDraft,
     setSelectedFixtureUniverseDraft,
@@ -6656,7 +6666,7 @@ export default function App() {
       : patchProfileDragSource() && patchProfileDragAddress() !== null
         ? patchProfileDragInvalid()
         : false;
-    const draggedFixtureId = patchFixtureDragController.source()?.id ?? null;
+    const draggedFixtureIds = new Set(patchFixtureDragController.selection().map(fixture => fixture.id));
     return Array.from({ length: 512 }, (_, index) => {
       const channel = index + 1;
       const segment = map.segments.find((candidate) => channel >= candidate.start && channel <= candidate.end) ?? null;
@@ -6670,7 +6680,7 @@ export default function App() {
         plannedStart: planned?.range[0] === channel,
         plannedConflict: Boolean(
           planned
-          && ((segment && segment.fixture.id !== draggedFixtureId) || dragPreviewInvalid),
+          && ((segment && !draggedFixtureIds.has(segment.fixture.id)) || dragPreviewInvalid),
         ),
       };
     });
@@ -11671,6 +11681,7 @@ export default function App() {
     setLiveDmxPreviews(engineDmxPreviews(next));
     setLiveFixtures(snapshotLiveFixtures(next));
     if (resetEditorDrafts) {
+      continuousFixtureFader.cancel();
       faderValueController.clearAll();
       setSelectedTimelineSceneBlockEventId(null);
       setTimelineSelection(null);
@@ -13164,13 +13175,17 @@ export default function App() {
     }
     const command = snapshot().programmer.enabled ? "set_programmer_attribute" : "set_attribute";
     try {
-      await faderValueController.enqueue(
-        `${command}:${fixtureId}:${attribute}`,
-        value,
-        () => invoke(command, { fixtureId, attribute, value }),
-      );
+      if (command === "set_attribute") {
+        await continuousFixtureFader.enqueue(`${fixtureId}:${attribute}`, {
+          targets: [{ fixture_id: fixtureId, attribute }], value,
+        });
+      } else {
+        await faderValueController.enqueue(`${fixtureId}:${attribute}`, value,
+          () => invoke(command, { fixtureId, attribute, value }));
+      }
       queueControlEditLookUpdate(editCueId, { kind: "selectedFixture", fixtureId });
     } catch (error) {
+      faderValueController.clearOptimistic(`${fixtureId}:${attribute}`, value);
       setMessage(String(error));
     }
   };
@@ -13196,13 +13211,17 @@ export default function App() {
     }
     const command = snapshot().programmer.enabled ? "set_programmer_group_attribute" : "set_group_attribute";
     try {
-      await faderValueController.enqueue(
-        `${command}:${groupId}:${attribute}`,
-        value,
-        () => invoke(command, { groupId, attribute, value }),
-      );
+      if (command === "set_group_attribute") {
+        await continuousFixtureFader.enqueue(`group:${groupId}:${attribute}`, {
+          targets: fixtureIds.map((fixture_id) => ({ fixture_id, attribute })), value,
+        });
+      } else {
+        await faderValueController.enqueue(`group:${groupId}:${attribute}`, value,
+          () => invoke(command, { groupId, attribute, value }));
+      }
       queueControlEditLookUpdate(editCueId, { kind: "selectedGroup", groupId });
     } catch (error) {
+      for (const fixtureId of fixtureIds) faderValueController.clearOptimistic(`${fixtureId}:${attribute}`, value);
       setMessage(String(error));
     }
   };
@@ -13210,21 +13229,53 @@ export default function App() {
   const pickedFixtureTypeGroup = (typeKey: string) =>
     pickedFixtureTypeGroups().find((group) => group.key === typeKey);
 
-  const setFixtureTypeControlValue = (
+  const setFixtureTypeControlValue = async (
     typeKey: string,
     attribute: string,
     value: number,
   ) => {
     const nextValue = clampDmxValue(value);
     const group = pickedFixtureTypeGroup(typeKey);
-    if (!group) {
+    if (!group) return;
+    const targets = group.fixtures.flatMap(fixture => {
+      const control = fixtureControlForAttribute(fixture, attribute);
+      return control ? [{ fixture_id: fixture.id, attribute: control.attribute }] : [];
+    });
+    if (!targets.length) return;
+    const editCueId = controlEditCueIdForWrite();
+    setSceneFxStagePreview(null);
+    for (const target of targets) faderValueController.setOptimistic(
+      `${target.fixture_id}:${target.attribute}`, nextValue,
+    );
+    const updateEditLook = () => {
+      for (const target of targets) queueControlEditLookUpdate(editCueId, {
+        kind: "selectedFixture", fixtureId: target.fixture_id,
+      });
+    };
+    if (viewportFixture === "blind") {
+      applyViewportBlindAttributes(targets.map(target => ({
+        fixtureId: target.fixture_id, attribute: target.attribute, value: nextValue,
+      })));
+      updateEditLook();
       return;
     }
-    for (const fixture of group.fixtures) {
-      const control = fixtureControlForAttribute(fixture, attribute);
-      if (control) {
-        void setAttribute(fixture.id, control.attribute, nextValue);
+    if (viewportFixture === "edit-live" || viewportFixture === "color-wheel") {
+      updateEditLook();
+      return;
+    }
+    try {
+      if (snapshot().programmer.enabled) {
+        await faderValueController.enqueue(`type:${typeKey}:${attribute}`, nextValue,
+          () => invoke("set_programmer_fixture_attribute_batch", { targets, value: nextValue }));
+      } else {
+        await continuousFixtureFader.enqueue(`type:${typeKey}:${attribute}`, { targets, value: nextValue });
       }
+      updateEditLook();
+    } catch (error) {
+      for (const target of targets) faderValueController.clearOptimistic(
+        `${target.fixture_id}:${target.attribute}`, nextValue,
+      );
+      setMessage(String(error));
     }
   };
 
@@ -13919,9 +13970,9 @@ export default function App() {
     clearPatchProfileDrag();
   };
 
-  const beginPatchFixtureDrag = (fixture: PatchedFixtureSummary) => {
+  const beginPatchFixtureDrag = (fixture: PatchedFixtureSummary, selection?: PatchedFixtureSummary[]) => {
     selectFixture(fixture);
-    patchFixtureDragController.begin(fixture);
+    patchFixtureDragController.begin(fixture, selection);
   };
 
   const clearPatchFixtureDrag = patchFixtureDragController.clear;

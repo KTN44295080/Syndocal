@@ -1,8 +1,8 @@
 # Syndocal historical v1.0 / current v1.2 alpha Release Status
 
-## 2026-10-12 alpha.73 development distribution candidate
+## 2026-10-12 alpha.74 fixture control distribution candidate
 
-Current product metadata is `1.2.0-alpha.73`. Alpha.73 repairs restart-safe output request identities, full receipt history and global blackout preservation during zero-first USB-DMX startup. It also corrects MSI upgrade identity and adds complete-removal helpers; see [the current checkpoint](qa/USB_DMX_BLACKOUT_ALPHA73_2026-10-12.md). Alpha.72 artifacts remain immutable and their completed Windows/macOS delivery evidence is [recorded separately](qa/DEVELOPMENT_INSTALLERS_ALPHA72_2026-10-11.md). This is not full Recording or release completion.
+Current product metadata is `1.2.0-alpha.74`. The candidate adds bounded continuous fixture faders, atomic bulk repatching, neutral DJ title defaults and a regenerated complete-removal hook. Validation and pending package/native/device gates are recorded in [the current checkpoint](qa/FIXTURE_CONTROL_ALPHA74_2026-10-12.md). It includes [the alpha.73 BO and USB startup repairs](qa/USB_DMX_BLACKOUT_ALPHA73_2026-10-12.md). Alpha.72 artifacts remain immutable. No alpha.74 package has been delivered yet; this is not full Recording or release completion.
 
 ## 2026-10-10 alpha.71 Mac USB-DMX and development distribution
 

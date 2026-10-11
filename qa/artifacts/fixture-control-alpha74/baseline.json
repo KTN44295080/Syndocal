@@ -1,0 +1,15 @@
+{
+  "baseline": true,
+  "stableAfterSelection": false,
+  "stableAfterDrag": false,
+  "lostDocument": false,
+  "drops": [
+    33
+  ],
+  "starts": [
+    {
+      "id": 1
+    }
+  ],
+  "errors": []
+}

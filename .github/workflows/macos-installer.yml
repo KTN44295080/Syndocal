@@ -105,6 +105,10 @@ jobs:
           cargo test -p syndocal --bin syndocal output_control_request_identity --locked 2>&1 | tee target/qa/macos-artifact/output-request-identity-tests.txt
           cargo test -p syndocal --bin syndocal output_lease_receipt_retention --locked 2>&1 | tee target/qa/macos-artifact/output-receipt-retention-tests.txt
 
+          cargo test -p engine fixture_repatch --lib --locked 2>&1 | tee target/qa/macos-artifact/fixture-repatch-engine-tests.txt
+          cargo test -p syndocal --bin syndocal continuous_fixture_fader --locked 2>&1 | tee target/qa/macos-artifact/fixture-fader-history-tests.txt
+          cargo test -p syndocal --bin syndocal fixture_repatch --locked 2>&1 | tee target/qa/macos-artifact/fixture-repatch-native-tests.txt
+
       - name: Build macOS application bundle
         run: pnpm --dir app tauri build --ci --bundles app
 

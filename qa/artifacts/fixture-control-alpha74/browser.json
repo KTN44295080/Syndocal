@@ -1,0 +1,30 @@
+{
+  "baseline": false,
+  "stableAfterSelection": true,
+  "stableAfterDrag": true,
+  "lostDocument": false,
+  "drops": [
+    33
+  ],
+  "starts": [
+    {
+      "id": 1,
+      "selection": [
+        1
+      ]
+    }
+  ],
+  "group": {
+    "last": {
+      "id": 1,
+      "selection": [
+        1,
+        2
+      ]
+    },
+    "drop": 97
+  },
+  "listMove": true,
+  "pointerCancelNoApply": true,
+  "errors": []
+}

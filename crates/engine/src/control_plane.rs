@@ -88,8 +88,8 @@ mod tests {
     fn exact_engine_command_inventory_is_generated_once_and_conservative() {
         // The generated inventory contains the 278-command baseline plus the
         // disabled Spout restoration publication and authored blackout target
-        // publication added afterward.
-        const EXPECTED_ENGINE_COMMAND_COUNT: usize = 281;
+        // publication and atomic fixture repatching added afterward.
+        const EXPECTED_ENGINE_COMMAND_COUNT: usize = 282;
         let descriptors = control_plane_engine_command_descriptors();
         let variant_names = EngineCommand::CONTROL_PLANE_VARIANT_NAMES
             .iter()

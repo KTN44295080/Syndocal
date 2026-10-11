@@ -14,6 +14,8 @@ use std::{
 mod control_plane;
 mod managed_network_dmx_retirement;
 mod output_ownership_retirement;
+mod fixture_repatch;
+pub use fixture_repatch::FixturePatchChange;
 pub use managed_network_dmx_retirement::ManagedDmxRetirementScope;
 pub mod media_derived;
 mod move_path;
@@ -4011,6 +4013,12 @@ define_engine_command! {
         position: Vec3,
         rotation: Rotation3,
     },
+    SetFixturePatchesPublished {
+        changes: Vec<FixturePatchChange>,
+        expires_at: Instant,
+        admission: ProjectSnapshotLoadAdmission,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
     SetFixturePatch {
         fixture_id: FixtureId,
         label: String,
@@ -5651,6 +5659,7 @@ macro_rules! engine_command_video_presentation_relevance {
             | EngineCommand::SetGroupFixtureLimits { .. }
             | EngineCommand::SetFixtureTransform { .. }
             | EngineCommand::SetFixturePatch { .. }
+                | EngineCommand::SetFixturePatchesPublished { .. }
             | EngineCommand::SetFixtureLimits { .. }
             | EngineCommand::SetFixtureGroups { .. }
             | EngineCommand::ApplyFixtureGroupStatePublished { .. }
@@ -5959,6 +5968,7 @@ impl EngineCommand {
                 | EngineCommand::SetGroupFixtureLimits { .. }
                 | EngineCommand::SetFixtureTransform { .. }
                 | EngineCommand::SetFixturePatch { .. }
+            | EngineCommand::SetFixturePatchesPublished { .. }
                 | EngineCommand::SetFixtureLimits { .. }
                 | EngineCommand::SetFixtureGroups { .. }
                 | EngineCommand::ApplyFixtureGroupStatePublished { .. }
@@ -9785,6 +9795,24 @@ impl EngineHandle {
         receive_fixture_patch_allocated_ack(receiver, &admission, deadline, timeout)
     }
 
+    pub fn set_fixture_patches_published_with_timeout(
+        &self,
+        changes: Vec<FixturePatchChange>,
+        timeout: Duration,
+    ) -> Result<(), String> {
+        let deadline = Instant::now() + timeout;
+        let admission = ProjectSnapshotLoadAdmission::new();
+        let (ack, receiver) = mpsc::sync_channel(1);
+        self.send(EngineCommand::SetFixturePatchesPublished {
+            changes,
+            expires_at: deadline,
+            admission: admission.clone(),
+            ack,
+        })
+        .map_err(|error| error.to_string())?;
+        receive_project_snapshot_load_ack(receiver, &admission, deadline, timeout)
+    }
+
     #[doc(hidden)]
     pub fn patch_fixtures_published_with_timeout(
         &self,
@@ -12252,6 +12280,7 @@ impl EngineHandle {
             | EngineCommand::SetGroupFixtureLimits { .. }
             | EngineCommand::SetFixtureTransform { .. }
             | EngineCommand::SetFixturePatch { .. }
+            | EngineCommand::SetFixturePatchesPublished { .. }
             | EngineCommand::SetFixtureLimits { .. }
             | EngineCommand::SetFixtureGroups { .. }
             | EngineCommand::ApplyFixtureGroupStatePublished { .. }
@@ -23149,6 +23178,7 @@ impl EngineRuntime {
                     | EngineCommand::MutateVideoLayerIsfStackWithAllocatedIds { .. }
                     | EngineCommand::ApplyFixtureGroupStatePublished { .. }
                     | EngineCommand::PatchFixturesPublished { .. }
+                    | EngineCommand::SetFixturePatchesPublished { .. }
                     | EngineCommand::RepairFixtureProfilePublished { .. }
                     | EngineCommand::UpsertStageMapPresetPublished { .. }
                     | EngineCommand::StageProjectMutationPublished { .. }
@@ -23409,6 +23439,45 @@ impl EngineRuntime {
                     rollback,
                     publication_error:
                         "Fixture PATCH batch could not publish an acknowledged snapshot",
+                });
+            }
+            EngineCommand::SetFixturePatchesPublished {
+                changes,
+                expires_at,
+                admission,
+                ack,
+            } => {
+                let previous_last_error = self.last_error.clone();
+                let rollback = PendingCommandRollback::RestoreFixturePatchBatch {
+                    fixtures: self.fixtures.clone(),
+                    values: self.values.clone(),
+                    highlighted_fixtures: self.highlighted_fixtures.clone(),
+                    soloed_fixtures: self.soloed_fixtures.clone(),
+                    parked_fixture_values: self.parked_fixture_values.clone(),
+                    last_error: previous_last_error.clone(),
+                };
+                let result = if admission.try_admit_before(expires_at) {
+                    fixture_repatch::apply(&mut self.fixtures, changes)
+                } else {
+                    Err(
+                        "Fixture move batch expired or was cancelled before engine admission"
+                            .to_string(),
+                    )
+                };
+                // A validation failure is a no-op, including the previous
+                // diagnostic. A successful runtime apply clears it only once
+                // B receives its definitive shared-snapshot publication.
+                self.last_error = if result.is_ok() {
+                    None
+                } else {
+                    previous_last_error
+                };
+                self.pending_command_acks.push(PendingCommandAck {
+                    ack: PendingCommandAckSender::Plain(ack),
+                    result,
+                    rollback,
+                    publication_error:
+                        "Fixture move batch could not publish an acknowledged snapshot",
                 });
             }
             EngineCommand::RepairFixtureProfilePublished {
@@ -23777,54 +23846,26 @@ impl EngineRuntime {
                 }
             }
             EngineCommand::SetFixturePatch {
-                fixture_id,
-                label,
-                universe,
-                address,
+                fixture_id, label, universe, address,
             } => {
-                if let Err(error) = validate_runtime_fixture_patch(&label, address) {
-                    self.last_error = Some(error);
-                    return;
-                }
-                let Some(fixture_index) = self
-                    .fixtures
-                    .iter()
-                    .position(|fixture| fixture.id == fixture_id)
-                else {
-                    self.last_error = Some(format!("Fixture {fixture_id} was not found"));
-                    return;
+                let source = self.fixtures.iter().find(|fixture| fixture.id == fixture_id);
+                let result = match source {
+                    Some(fixture) => match runtime_fixture_footprint(fixture) {
+                        Some(footprint) => {
+                            let change = FixturePatchChange {
+                                fixture_id,
+                                expected_universe: fixture.request.universe,
+                                expected_address: fixture.request.address,
+                                expected_footprint: footprint,
+                                label, universe, address,
+                            };
+                            fixture_repatch::apply(&mut self.fixtures, vec![change])
+                        }
+                        None => Err("Fixture has no DMX channel offsets".into()),
+                    },
+                    None => Err(format!("Fixture {fixture_id} was not found")),
                 };
-                let Some(footprint) = runtime_fixture_footprint(&self.fixtures[fixture_index])
-                else {
-                    self.last_error = Some("Fixture has no DMX channel offsets".to_string());
-                    return;
-                };
-                let Some(range) = runtime_dmx_range(address, footprint) else {
-                    self.last_error = Some("Fixture has no DMX channel offsets".to_string());
-                    return;
-                };
-                if range.1 > 512 {
-                    self.last_error = Some(format!(
-                        "Fixture footprint exceeds DMX universe: start {}, footprint {}ch, end {}",
-                        address, footprint, range.1
-                    ));
-                    return;
-                }
-                if let Err(error) = validate_runtime_patch_conflicts(
-                    &self.fixtures,
-                    Some(fixture_id),
-                    universe,
-                    range,
-                ) {
-                    self.last_error = Some(error);
-                    return;
-                }
-                if let Some(fixture) = self.fixtures.get_mut(fixture_index) {
-                    fixture.request.label = label;
-                    fixture.request.universe = universe;
-                    fixture.request.address = address;
-                    self.last_error = None;
-                }
+                self.last_error = result.err();
             }
             EngineCommand::SetFixtureLimits { fixture_id, limits } => {
                 if let Some(fixture) = self
@@ -68621,6 +68662,9 @@ mod tests {
 
     #[path = "../snapshot_read_tests.rs"]
     mod snapshot_read_tests;
+
+    #[path = "../fixture_repatch_tests.rs"]
+    mod fixture_repatch_tests;
 
     #[path = "../fixture_transform_batch_tests.rs"]
     mod fixture_transform_batch_tests;

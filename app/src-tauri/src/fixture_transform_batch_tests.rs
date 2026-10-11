@@ -351,3 +351,5 @@ fn stage_fixture_transform_batch_missing_last_preserves_image_and_history() {
     )
     .unwrap();
 }
+
+include!("continuous_fixture_fader_history_tests.rs");

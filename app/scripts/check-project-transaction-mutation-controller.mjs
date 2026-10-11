@@ -119,6 +119,7 @@ const execute = (harness, command, commandArgs, options = {}) =>
     commandArgs,
     transaction: ticket,
     identity,
+    stream: options.stream,
     onOpened: options.onOpened ?? null,
     shouldAbort: options.shouldAbort ?? null,
     awaitAbort: options.awaitAbort ?? null,
@@ -262,4 +263,28 @@ scenarios += 1;
   scenarios += 1;
 }
 
+// Continuous fader samples share one exact ticket and increasing sequence.
+{
+ const h=createHarness();
+ await execute(h,'stream_fixture_attribute_v1',{}, {stream:async send=>{
+  await send({targets:[{fixture_id:7,attribute:'Dimmer'}],value:100});
+  await send({targets:[{fixture_id:7,attribute:'Dimmer'}],value:200});
+ }});
+ const samples=h.events.filter(e=>e.kind==='invoke');assert.equal(samples.length,2);
+ for(let i=0;i<samples.length;i++)assert.deepEqual(samples[i].args,{request:{projectTransactionId:41,expectedEpoch:12,ownerId:identity.ownerId,targets:[{fixture_id:7,attribute:'Dimmer'}],value:(i+1)*100,sequence:i+1}});
+ assert.equal(h.commitCount,1);assert.equal(h.cancelCount,0);assert.equal(h.settlementCount,1);scenarios++;
+}
+{
+ const h=createHarness({invoke:async(_command,args)=>{if(args.request.sequence===2)throw Error('sample rejected');}});
+ await assert.rejects(execute(h,'stream_fixture_attribute_v1',{}, {stream:async send=>{await send({targets:[],value:1});await send({targets:[],value:2});}}),/sample rejected/);
+ assert.equal(h.cancelCount,1);assert.equal(h.commitCount,0);assert.equal(h.recoveryCount,0);scenarios++;
+}
+{
+ const h=createHarness();await assert.rejects(execute(h,'stream_fixture_attribute_v1',{}),/missing/);
+ assert.equal(h.cancelCount,1);assert.equal(h.commitCount,0);assert.equal(h.events.filter(e=>e.kind==='invoke').length,0);scenarios++;
+}
+{
+ const h=createHarness();await assert.rejects(execute(h,'set_attribute',{}, {stream:async()=>{throw Error('must not run');}}),/restricted/);
+ assert.equal(h.cancelCount,1);assert.equal(h.commitCount,0);assert.equal(h.events.filter(e=>e.kind==='invoke').length,0);scenarios++;
+}
 console.log(`Project transaction mutation controller: ${scenarios} scenarios passed; no native/UI side effects.`);

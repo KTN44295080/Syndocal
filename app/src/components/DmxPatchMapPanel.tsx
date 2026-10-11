@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, For, Index, onCleanup, Show, untrack } from "solid-js";
 import type { PatchedFixtureSummary } from "../types";
 
 export type DmxPatchViewMode = "grid" | "list";
@@ -44,6 +44,7 @@ interface FixturePointerDragState {
   startX: number;
   startY: number;
   active: boolean;
+  grabOffset: number;
 }
 
 const dmxGridColumnCount = 32;
@@ -96,7 +97,7 @@ interface DmxPatchMapPanelProps {
   onProfileDragHover: (channel: number) => void;
   onProfileDragLeave: () => void;
   onProfileDrop: (channel: number) => void | Promise<void>;
-  onFixtureDragStart: (fixture: PatchedFixtureSummary) => void;
+  onFixtureDragStart: (fixture: PatchedFixtureSummary, selection?: PatchedFixtureSummary[]) => void;
   onFixtureDragEnd: () => void;
   onFixtureDragHover: (channel: number) => void;
   onFixtureDragLeave: () => void;
@@ -106,6 +107,30 @@ interface DmxPatchMapPanelProps {
 export function DmxPatchMapPanel(props: DmxPatchMapPanelProps) {
   const [inspectedAddress, setInspectedAddress] = createSignal(1);
   const [activeAddress, setActiveAddress] = createSignal(1);
+  const [selectedPatchIds, setSelectedPatchIds] = createSignal(new Set<number>());
+  const [moveAddress, setMoveAddress] = createSignal(1);
+  let selectionAnchor: number | null = null;
+  const selectedPatches = () => props.activeMap.segments.map(segment => segment.fixture).filter(fixture => selectedPatchIds().has(fixture.id));
+  const patchSelected = (id: number) => selectedPatchIds().has(id);
+  const cellSelected = (cell: DmxAddressCell) => Boolean(cell.segment && patchSelected(cell.segment.fixture.id));
+  createEffect(() => {
+    const id = props.selectedFixtureId;
+    if (id === null) setSelectedPatchIds(new Set<number>());
+    else if (!untrack(selectedPatchIds).has(id)) setSelectedPatchIds(new Set([id]));
+  });
+  const selectPatch = (fixture: PatchedFixtureSummary, event: MouseEvent) => {
+    const ordered = props.activeMap.segments.map(segment => segment.fixture.id);
+    if (event.shiftKey && selectionAnchor !== null && ordered.includes(selectionAnchor)) {
+      const a = ordered.indexOf(selectionAnchor), b = ordered.indexOf(fixture.id);
+      setSelectedPatchIds(new Set(ordered.slice(Math.min(a,b),Math.max(a,b)+1)));
+    } else if (event.ctrlKey || event.metaKey) {
+      const next = new Set(selectedPatchIds());
+      if (next.has(fixture.id)) next.delete(fixture.id); else next.add(fixture.id);
+      setSelectedPatchIds(next); selectionAnchor = fixture.id;
+    } else { setSelectedPatchIds(new Set([fixture.id])); selectionAnchor = fixture.id; }
+    const primary = selectedPatches().find(f => f.id === fixture.id) ?? selectedPatches()[0];
+    if (primary) props.onSelectFixture(primary);
+  };
   const gridFragments = createMemo(() => segmentGridFragments(props.activeMap.segments));
   const addressRows = createMemo(() =>
     Array.from({ length: dmxGridRowCount }, (_, row) =>
@@ -143,9 +168,11 @@ export function DmxPatchMapPanel(props: DmxPatchMapPanelProps) {
       (paneContentWidth - rowHeaderWidth) / dmxGridColumnCount,
     );
 
+    const selectionControls = pane.querySelector<HTMLElement>(":scope > .dmxPatchSelectionControls");
     const availableGridHeight = paneInnerHeight
       - header.getBoundingClientRect().height
-      - cssPixelValue(paneStyle.rowGap);
+      - (selectionControls?.getBoundingClientRect().height ?? 0)
+      - 2 * cssPixelValue(paneStyle.rowGap);
     const gridBlockChrome = cssPixelValue(gridStyle.borderTopWidth)
       + cssPixelValue(gridStyle.borderBottomWidth)
       + cssPixelValue(gridStyle.paddingTop)
@@ -177,12 +204,15 @@ export function DmxPatchMapPanel(props: DmxPatchMapPanelProps) {
     if (pane) addressGridResizeObserver.observe(pane);
     const header = pane?.querySelector<HTMLElement>(":scope > .panelHeader");
     if (header) addressGridResizeObserver.observe(header);
+    const selectionControls = pane?.querySelector<HTMLElement>(":scope > .dmxPatchSelectionControls");
+    if (selectionControls) addressGridResizeObserver.observe(selectionControls);
     scheduleAddressGridCellSize();
   };
 
   onCleanup(() => {
     addressGridResizeObserver?.disconnect();
     cancelAnimationFrame(addressGridResizeFrame);
+    if (fixturePointerDrag) props.onFixtureDragEnd();
     fixturePointerDrag = null;
   });
 
@@ -227,6 +257,7 @@ export function DmxPatchMapPanel(props: DmxPatchMapPanelProps) {
   };
 
   const handleAddressKeyDown = (event: KeyboardEvent, channel: number) => {
+    if (event.key === "Escape") { event.preventDefault(); cancelFixturePointerDrag(); return; }
     const column = (channel - 1) % dmxGridColumnCount;
     const rowStart = channel - column;
     let nextAddress: number | null = null;
@@ -295,6 +326,7 @@ export function DmxPatchMapPanel(props: DmxPatchMapPanelProps) {
       startX: event.clientX,
       startY: event.clientY,
       active: false,
+      grabOffset: Math.max(0, Number(event.currentTarget.dataset.dmxAddress) - fixture.address),
     };
     event.currentTarget.setPointerCapture?.(event.pointerId);
   };
@@ -307,14 +339,18 @@ export function DmxPatchMapPanel(props: DmxPatchMapPanelProps) {
     if (!drag.active) {
       drag.active = true;
       suppressNextFixtureClick = true;
-      props.onFixtureDragStart(drag.fixture);
+      if (!patchSelected(drag.fixture.id)) {
+        setSelectedPatchIds(new Set([drag.fixture.id]));
+        props.onSelectFixture(drag.fixture);
+      }
+      props.onFixtureDragStart(drag.fixture, selectedPatches());
     }
     event.preventDefault();
     const channel = channelAtPoint(event.clientX, event.clientY);
     if (channel === null) {
       props.onFixtureDragLeave();
     } else {
-      props.onFixtureDragHover(channel);
+      props.onFixtureDragHover(channel - drag.grabOffset);
     }
   };
 
@@ -329,7 +365,13 @@ export function DmxPatchMapPanel(props: DmxPatchMapPanelProps) {
       props.onFixtureDragEnd();
       return;
     }
-    void props.onFixtureDrop(channel);
+    void props.onFixtureDrop(channel - drag.grabOffset);
+  };
+
+  const cancelFixturePointerDrag = () => {
+    fixturePointerDrag = null;
+    suppressNextFixtureClick = false;
+    props.onFixtureDragEnd();
   };
 
   const handlePatchDragOver = (
@@ -362,7 +404,7 @@ export function DmxPatchMapPanel(props: DmxPatchMapPanelProps) {
 
   return (
     <>
-      <div class="dmxPatchMap">
+      <div class="dmxPatchMap withFixtureSelection">
         <div class="panelHeader">
           <h3>DMX Patch Grid</h3>
           <output class="dmxPatchAddressReadout" aria-label="Current DMX address">
@@ -425,7 +467,7 @@ export function DmxPatchMapPanel(props: DmxPatchMapPanelProps) {
                         <For each={map.segments}>
                           {(segment) => (
                             <button
-                              class={segment.fixture.id === props.selectedFixtureId ? "dmxPatchSegment selected" : "dmxPatchSegment"}
+                              class={patchSelected(segment.fixture.id) ? "dmxPatchSegment selected" : "dmxPatchSegment"}
                               style={{
                                 left: `${segment.left}%`,
                                 width: `${Math.max(segment.width, 0.7)}%`,
@@ -464,6 +506,18 @@ export function DmxPatchMapPanel(props: DmxPatchMapPanelProps) {
             </details>
           </div>
         </div>
+        <div class="dmxPatchSelectionControls" aria-label="Patch selection and move">
+          <output>{selectedPatches().length} selected</output>
+          <button onClick={() => setSelectedPatchIds(new Set(props.activeMap.segments.map(segment => segment.fixture.id)))}>Select All</button>
+          <button onClick={() => setSelectedPatchIds(new Set<number>())} disabled={selectedPatches().length === 0}>Clear Selection</button>
+          <label>Move to address <input type="number" min="1" max="512" value={moveAddress()} aria-label="Move selected fixtures to address" onInput={(event) => setMoveAddress(Number(event.currentTarget.value))} /></label>
+          <button disabled={selectedPatches().length === 0} onClick={() => {
+            const fixtures = selectedPatches();
+            const anchor = fixtures.reduce((first, fixture) => fixture.address < first.address ? fixture : first);
+            props.onFixtureDragStart(anchor, fixtures); void props.onFixtureDrop(moveAddress());
+          }}>Move Selected</button>
+          <span>Ctrl / Cmd: toggle · Shift: range · Drag: move</span>
+        </div>
         <Show when={activeDndStatus()}>
           {(status) => (
             <output
@@ -484,8 +538,9 @@ export function DmxPatchMapPanel(props: DmxPatchMapPanelProps) {
               <For each={props.activeMap.segments}>
                 {(segment) => (
                   <button
-                    class={segment.fixture.id === props.selectedFixtureId ? "dmxPatchListItem selected" : "dmxPatchListItem"}
-                    onClick={() => props.onSelectFixture(segment.fixture)}
+                    class={patchSelected(segment.fixture.id) ? "dmxPatchListItem selected" : "dmxPatchListItem"}
+                    onClick={(event) => selectPatch(segment.fixture, event)}
+                    aria-pressed={patchSelected(segment.fixture.id)}
                   >
                     <strong data-no-localize>{segment.fixture.label}</strong>
                     <span>
@@ -511,95 +566,88 @@ export function DmxPatchMapPanel(props: DmxPatchMapPanelProps) {
             onDragLeave={handlePatchDragLeave}
             onPointerMove={handleFixturePointerMove}
             onPointerUp={handleFixturePointerEnd}
-            onPointerCancel={handleFixturePointerEnd}
+            onPointerCancel={cancelFixturePointerDrag}
           >
-            <For each={addressRows()}>
+            <Index each={addressRows()}>
               {(cells, rowIndex) => (
-                <div class="dmxAddressRow" role="row" aria-rowindex={rowIndex() + 1}>
+                <div class="dmxAddressRow" role="row" aria-rowindex={rowIndex + 1}>
                   <span class="dmxAddressRowLabel" aria-hidden="true">
-                    {rowIndex() * dmxGridColumnCount + 1}–{(rowIndex() + 1) * dmxGridColumnCount}
+                    {rowIndex * dmxGridColumnCount + 1}–{(rowIndex + 1) * dmxGridColumnCount}
                   </span>
-                  <For each={cells}>
+                  <Index each={cells()}>
                     {(cell, columnIndex) => {
-                      const fragment = () => fragmentByCell().get(`${rowIndex() + 1}:${columnIndex() + 1}`);
+                      const fragment = () => fragmentByCell().get(`${rowIndex + 1}:${columnIndex + 1}`);
                       return (
                         <div
                           class="dmxAddressGridCell"
                           role="gridcell"
-                          aria-colindex={columnIndex() + 1}
-                          aria-selected={cell.isSelected}
+                          aria-colindex={columnIndex + 1}
+                          aria-selected={cellSelected(cell())}
                         >
                           <button
-                            class={`dmxAddressCell ${cell.segment ? "occupied" : ""} ${cell.isStart ? "start" : ""} ${
-                              cell.plannedIndex !== null ? "planned" : ""
-                            } ${cell.plannedStart ? "plannedStart" : ""} ${
-                              cell.plannedConflict ? "plannedConflict" : ""
-                            } ${cell.isSelected ? "selected" : ""}`}
+                            class={`dmxAddressCell ${cell().segment ? "occupied" : ""} ${cell().isStart ? "start" : ""} ${
+                              cell().plannedIndex !== null ? "planned" : ""
+                            } ${cell().plannedStart ? "plannedStart" : ""} ${
+                              cell().plannedConflict ? "plannedConflict" : ""
+                            } ${cellSelected(cell()) ? "selected" : ""}`}
                             title={
-                              cell.segment || cell.plannedIndex !== null
+                              cell().segment || cell().plannedIndex !== null
                                 ? [
-                                    `U${props.activeUniverse} A${cell.channel}`,
-                                    cell.segment
-                                      ? `${cell.segment.fixture.label} (${cell.segment.start}-${cell.segment.end})`
+                                    `U${props.activeUniverse} A${cell().channel}`,
+                                    cell().segment
+                                      ? `${cell().segment!.fixture.label} (${cell().segment!.start}-${cell().segment!.end})`
                                       : "",
-                                    cell.plannedIndex !== null ? `Pending fixture ${cell.plannedIndex + 1}` : "",
+                                    cell().plannedIndex !== null ? `Pending fixture ${cell().plannedIndex! + 1}` : "",
                                   ]
                                     .filter(Boolean)
                                     .join(" / ")
-                                : `U${props.activeUniverse} A${cell.channel}`
+                                : `U${props.activeUniverse} A${cell().channel}`
                             }
-                            data-dmx-address={cell.channel}
-                            draggable={Boolean(cell.segment)}
-                            tabIndex={activeAddress() === cell.channel ? 0 : -1}
+                            data-dmx-address={cell().channel}
+                            draggable={false}
+                            tabIndex={activeAddress() === cell().channel ? 0 : -1}
                             onFocus={() => {
-                              setActiveAddress(cell.channel);
-                              setInspectedAddress(cell.channel);
+                              setActiveAddress(cell().channel);
+                              setInspectedAddress(cell().channel);
                             }}
                             onPointerDown={(event) => {
-                              const fixture = cell.segment?.fixture;
+                              const fixture = cell().segment?.fixture;
                               if (fixture) handleFixturePointerDown(event, fixture);
                             }}
-                            onPointerEnter={() => setInspectedAddress(cell.channel)}
-                            onDragStart={(event) => {
-                              const fixture = cell.segment?.fixture;
-                              if (!fixture || !event.dataTransfer) {
-                                event.preventDefault();
-                                return;
-                              }
-                              fixturePointerDrag = null;
-                              event.dataTransfer.effectAllowed = "move";
-                              event.dataTransfer.setData("text/plain", `Move ${fixture.label}`);
-                              props.onFixtureDragStart(fixture);
-                            }}
+                            onPointerEnter={() => setInspectedAddress(cell().channel)}
+                            onDragStart={(event) => event.preventDefault()}
                             onDragEnd={props.onFixtureDragEnd}
-                            onDragEnter={(event) => handlePatchDragOver(event, cell.channel)}
-                            onDragOver={(event) => handlePatchDragOver(event, cell.channel)}
+                            onDragEnter={(event) => handlePatchDragOver(event, cell().channel)}
+                            onDragOver={(event) => handlePatchDragOver(event, cell().channel)}
                             onDrop={(event) => {
                               if (props.fixtureDragActive) {
                                 event.preventDefault();
-                                void props.onFixtureDrop(cell.channel);
+                                void props.onFixtureDrop(cell().channel);
                                 return;
                               }
                               if (!props.profileDragActive) return;
                               event.preventDefault();
-                              void props.onProfileDrop(cell.channel);
+                              void props.onProfileDrop(cell().channel);
                             }}
-                            onKeyDown={(event) => handleAddressKeyDown(event, cell.channel)}
-                            onClick={() => {
+                            onKeyDown={(event) => handleAddressKeyDown(event, cell().channel)}
+                            onClick={(event) => {
                               if (suppressNextFixtureClick) {
                                 suppressNextFixtureClick = false;
                                 return;
                               }
-                              setActiveAddress(cell.channel);
-                              setInspectedAddress(cell.channel);
-                              props.onAddressCell(cell);
+                              setActiveAddress(cell().channel);
+                              setInspectedAddress(cell().channel);
+                              if (cell().segment) {
+                                selectPatch(cell().segment!.fixture, event);
+                                if (!event.ctrlKey && !event.metaKey && !event.shiftKey) props.onAddressCell(cell());
+                              } else props.onAddressCell(cell());
                             }}
                             aria-label={
                               [
-                                `Address ${cell.channel}`,
-                                cell.segment ? cell.segment.fixture.label : "empty",
-                                cell.plannedIndex !== null ? `pending fixture ${cell.plannedIndex + 1}` : "",
-                                cell.plannedConflict ? "conflict" : "",
+                                `Address ${cell().channel}`,
+                                cell().segment ? cell().segment!.fixture.label : "empty",
+                                cell().plannedIndex !== null ? `pending fixture ${cell().plannedIndex! + 1}` : "",
+                                cell().plannedConflict ? "conflict" : "",
                               ]
                                 .filter(Boolean)
                                 .join(", ")
@@ -609,7 +657,7 @@ export function DmxPatchMapPanel(props: DmxPatchMapPanelProps) {
                             {(rowFragment) => (
                               <span
                                 class={`dmxPatchFixtureBlock ${
-                                  rowFragment.segment.fixture.id === props.selectedFixtureId ? "selected" : ""
+                                  patchSelected(rowFragment.segment.fixture.id) ? "selected" : ""
                                 } ${rowFragment.span <= 2 ? "tiny" : rowFragment.span <= 5 ? "narrow" : ""}`}
                                 style={{
                                   left: `calc(var(--dmx-row-label-width) + var(--dmx-grid-gap) + ${
@@ -636,10 +684,10 @@ export function DmxPatchMapPanel(props: DmxPatchMapPanelProps) {
                         </div>
                       );
                     }}
-                  </For>
+                  </Index>
                 </div>
               )}
-            </For>
+            </Index>
           </div>
         </Show>
       </div>

@@ -5,6 +5,7 @@ import path from 'node:path';
 import net from 'node:net';
 import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { fileURLToPath } from 'node:url';
 import { createHash, createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { parseOptions, readDescriptor, nativeRequest } from './server.mjs';
 import { openNativeBackendSession } from './native-backend-session.mjs';
@@ -301,7 +302,14 @@ try {
   options.credentialFile = path.join(credentialDirectory, 'credential');
   await pair(); await install();
   if (timelineCommands) await nativeTimelineCommands(backend, options, checks);
-  if(videoBlackout){await nativeControllerOutput(backend,options,checks,{});await nativeVideoBlackout(backend,options,checks);}
+  if(videoBlackout){
+    const fixtureEvidence = `${evidence}.fixture-fader.json`;
+    await exec(process.execPath, [fileURLToPath(new URL('./native-fixture-fader.mjs', import.meta.url)),
+      '--expected-executable', executable, '--descriptor', descriptorPath, '--cdp-port', String(cdpPort), '--evidence', fixtureEvidence],
+      { windowsHide: true, timeout: 120000 });
+    checks.push({check:'native-fixture-fader-and-bulk-repatch',passed:true,evidence:fixtureEvidence});
+    await nativeControllerOutput(backend,options,checks,{});await nativeVideoBlackout(backend,options,checks);
+  }
   if (fileQueryPressure) await nativeFileQueryPressure(backend, options, checks);
   if (projectReplacement) await nativeProjectReplacement(backend, options, checks);
   if (projectBackup) await nativeCanonicalRiskAdmission(backend, options, checks);

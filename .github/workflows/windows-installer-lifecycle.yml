@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       current_run_id:
-        description: Successful alpha.73 Cross-platform run on this exact source
+        description: Successful alpha.74 Cross-platform run on this exact source
         required: true
         type: string
 permissions:
@@ -47,7 +47,7 @@ jobs:
           path: baseline
       - uses: actions/download-artifact@v5
         with:
-          name: syndocal-1.2.0-alpha.73-windows-2022
+          name: syndocal-1.2.0-alpha.74-windows-2022
           run-id: ${{ inputs.current_run_id || '38160795680' }}
           github-token: ${{ github.token }}
           path: current
