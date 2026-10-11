@@ -53,6 +53,15 @@ jobs:
         env:
           CURRENT_RUN_ID: ${{ inputs.current_run_id || '38160795680' }}
         run: tools/distribution/test-installed-windows-lifecycle.ps1 -BaselineRoot baseline -CurrentRoot current -EvidencePath lifecycle-report.json
+      - name: Record the verified artifact source
+        if: always()
+        shell: pwsh
+        run: |
+          if (Test-Path -LiteralPath lifecycle-report.json) {
+            $report = Get-Content -LiteralPath lifecycle-report.json -Raw | ConvertFrom-Json
+            $report | Add-Member -NotePropertyName artifactSourceCommit -NotePropertyValue $env:ARTIFACT_SOURCE_COMMIT
+            $report | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath lifecycle-report.json -Encoding utf8
+          }
       - uses: actions/upload-artifact@v4
         if: always()
         with:
