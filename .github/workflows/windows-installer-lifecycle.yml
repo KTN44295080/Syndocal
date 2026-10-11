@@ -59,6 +59,11 @@ jobs:
         if: always()
         shell: pwsh
         run: |
+          foreach ($root in @('HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall','HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall')) {
+            Get-ChildItem -LiteralPath $root | ForEach-Object { Get-ItemProperty -LiteralPath $_.PSPath } |
+              Where-Object DisplayName -eq 'Syndocal' | Select-Object DisplayName,Publisher,InstallLocation,UninstallString | ConvertTo-Json
+          }
+          Get-ChildItem -LiteralPath $env:ProgramFiles,${env:ProgramFiles(x86)},$env:LOCALAPPDATA -Filter '*Syndocal*' -ErrorAction SilentlyContinue | Select-Object FullName
           if (Test-Path -LiteralPath lifecycle-report.json) {
             $report = Get-Content -LiteralPath lifecycle-report.json -Raw | ConvertFrom-Json
             $report | Add-Member -NotePropertyName artifactSourceCommit -NotePropertyValue $env:ARTIFACT_SOURCE_COMMIT
