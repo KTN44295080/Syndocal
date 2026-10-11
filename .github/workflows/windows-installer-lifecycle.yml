@@ -29,13 +29,14 @@ jobs:
           if ($current.status -ne 'completed' -or $current.conclusion -ne 'success' -or $current.path -ne '.github/workflows/cross-platform.yml') { throw 'Current artifact source is not a successful cross-platform checkpoint' }
           # A branch-only workflow cannot be dispatched before it exists on the
           # default branch. A workflow-only follow-up may run the exact built
-          # product, but product and lifecycle harness changes fail closed.
+          # native product. Sidecar helpers and the test harness are tested
+          # from HEAD and reported separately from the built product source.
           git fetch --no-tags origin $current.head_sha
           if ($LASTEXITCODE -ne 0) { throw 'Artifact source could not be fetched' }
           # The registration reader ships alongside the installers in the ZIP;
           # it is deliberately tested from HEAD against unchanged installer bytes.
-          git diff --quiet $current.head_sha HEAD -- app crates tools Cargo.toml Cargo.lock pnpm-lock.yaml .github/workflows/cross-platform.yml ':(exclude)tools/distribution/SyndocalInstallations.ps1' ':(exclude)tools/distribution/Remove-SyndocalData.ps1' ':(exclude)tools/distribution/test-installed-windows-lifecycle.ps1' ':(exclude)tools/distribution/test-windows-uninstall.mjs'
-          if ($LASTEXITCODE -ne 0) { throw 'Product or lifecycle harness differs from the artifact source' }
+          git diff --quiet $current.head_sha HEAD -- app crates tools Cargo.toml Cargo.lock pnpm-lock.yaml .github/workflows/cross-platform.yml ':(exclude)tools/distribution/SyndocalInstallations.ps1' ':(exclude)tools/distribution/Remove-SyndocalData.ps1' ':(exclude)tools/distribution/test-installed-windows-lifecycle.ps1' ':(exclude)tools/distribution/test-windows-uninstall.mjs' ':(exclude)tools/distribution/test-windows-cleanup.mjs'
+          if ($LASTEXITCODE -ne 0) { throw 'Native product or embedded installer hook differs from the artifact source' }
           "ARTIFACT_SOURCE_COMMIT=$($current.head_sha)" >> $env:GITHUB_ENV
           if ($baseline.conclusion -ne 'success' -or $baseline.head_sha -ne '80fccf1401de2c2d8dc5c4ea2f03e9b96348d5eb') { throw 'Baseline artifact source mismatch' }
       - uses: actions/download-artifact@v5
@@ -60,7 +61,7 @@ jobs:
         shell: pwsh
         run: |
           foreach ($root in @('HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall','HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall')) {
-            Get-ChildItem -LiteralPath $root | ForEach-Object { Get-ItemProperty -LiteralPath $_.PSPath } |
+            Get-ChildItem -LiteralPath $root -ErrorAction SilentlyContinue | ForEach-Object { Get-ItemProperty -LiteralPath $_.PSPath } |
               Where-Object DisplayName -eq 'Syndocal' | Select-Object DisplayName,Publisher,InstallLocation,UninstallString | ConvertTo-Json
           }
           Get-ChildItem -LiteralPath $env:ProgramFiles,${env:ProgramFiles(x86)},$env:LOCALAPPDATA -Filter '*Syndocal*' -ErrorAction SilentlyContinue | Select-Object FullName
