@@ -1,0 +1,36 @@
+macOS 12+ arm64 DMG	Build macOS LGPL FFmpeg runtime	2026-10-11T17:33:29.4904310Z libavformat/mov.c:1253:12: warning: variable 'ret' is uninitialized when used here [-Wuninitialized]
+macOS 12+ arm64 DMG	Build macOS LGPL FFmpeg runtime	2026-10-11T17:33:52.5236770Z libavcodec/adpcm.c:424:23: warning: unused function 'adpcm_ima_escape_expand_nibble' [-Wunused-function]
+macOS 12+ arm64 DMG	Build macOS LGPL FFmpeg runtime	2026-10-11T17:33:52.5560300Z libavcodec/adpcm.c:583:13: warning: unused function 'decode_adpcm_ima_hvqm2' [-Wunused-function]
+macOS 12+ arm64 DMG	Build macOS LGPL FFmpeg runtime	2026-10-11T17:33:52.5796000Z libavcodec/adpcm.c:620:13: warning: unused function 'decode_adpcm_ima_hvqm4' [-Wunused-function]
+macOS 12+ arm64 DMG	Build macOS LGPL FFmpeg runtime	2026-10-11T17:33:52.6098740Z libavcodec/adpcm.c:767:23: warning: unused function 'adpcm_circus_expand_nibble' [-Wunused-function]
+macOS 12+ arm64 DMG	Build macOS LGPL FFmpeg runtime	2026-10-11T17:33:52.6398440Z libavcodec/adpcmenc.c:1009:133: warning: 'ch_layouts' is deprecated [-Wdeprecated-declarations]
+macOS 12+ arm64 DMG	Build macOS LGPL FFmpeg runtime	2026-10-11T17:33:52.7947540Z libavcodec/adpcmenc.c:1010:133: warning: 'ch_layouts' is deprecated [-Wdeprecated-declarations]
+macOS 12+ arm64 DMG	Build macOS LGPL FFmpeg runtime	2026-10-11T17:33:52.9536230Z libavcodec/adpcmenc.c:1010:175: warning: 'supported_samplerates' is deprecated [-Wdeprecated-declarations]
+macOS 12+ arm64 DMG	Build macOS LGPL FFmpeg runtime	2026-10-11T17:33:53.1222880Z libavcodec/adpcmenc.c:1011:133: warning: 'ch_layouts' is deprecated [-Wdeprecated-declarations]
+macOS 12+ arm64 DMG	Build macOS LGPL FFmpeg runtime	2026-10-11T17:33:53.2766960Z libavcodec/adpcmenc.c:1012:133: warning: 'ch_layouts' is deprecated [-Wdeprecated-declarations]
+macOS 12+ arm64 DMG	Build macOS LGPL FFmpeg runtime	2026-10-11T17:33:53.4342920Z libavcodec/adpcmenc.c:1013:133: warning: 'ch_layouts' is deprecated [-Wdeprecated-declarations]
+macOS 12+ arm64 DMG	Build macOS LGPL FFmpeg runtime	2026-10-11T17:33:53.5094930Z libavcodec/adpcmenc.c:1014:133: warning: 'ch_layouts' is deprecated [-Wdeprecated-declarations]
+macOS 12+ arm64 DMG	Build macOS LGPL FFmpeg runtime	2026-10-11T17:33:53.6217160Z libavcodec/adpcmenc.c:1015:133: warning: 'ch_layouts' is deprecated [-Wdeprecated-declarations]
+macOS 12+ arm64 DMG	Build macOS LGPL FFmpeg runtime	2026-10-11T17:33:53.6452090Z libavcodec/adpcmenc.c:1016:133: warning: 'ch_layouts' is deprecated [-Wdeprecated-declarations]
+macOS 12+ arm64 DMG	Build macOS LGPL FFmpeg runtime	2026-10-11T17:33:53.6461740Z libavcodec/adpcmenc.c:1017:133: warning: 'ch_layouts' is deprecated [-Wdeprecated-declarations]
+macOS 12+ arm64 DMG	Build macOS LGPL FFmpeg runtime	2026-10-11T17:33:53.6585450Z libavcodec/adpcmenc.c:1018:133: warning: 'ch_layouts' is deprecated [-Wdeprecated-declarations]
+macOS 12+ arm64 DMG	Build macOS LGPL FFmpeg runtime	2026-10-11T17:33:53.6656100Z libavcodec/adpcmenc.c:1018:146: warning: 'supported_samplerates' is deprecated [-Wdeprecated-declarations]
+macOS 12+ arm64 DMG	Build macOS LGPL FFmpeg runtime	2026-10-11T17:33:53.6826860Z libavcodec/adpcmenc.c:1019:133: warning: 'ch_layouts' is deprecated [-Wdeprecated-declarations]
+macOS 12+ arm64 DMG	Build macOS LGPL FFmpeg runtime	2026-10-11T17:33:58.7099740Z libavcodec/bsf/extract_extradata.c:374:52: warning: passing 'const uint8_t *' (aka 'const unsigned char *') to parameter of type 'uint8_t *' (aka 'unsigned char *') discards qualifiers [-Wincompatible-pointer-types-discards-qualifiers]
+macOS 12+ arm64 DMG	Build macOS LGPL FFmpeg runtime	2026-10-11T17:35:12.7847160Z ld: warning: -single_module is obsolete
+macOS 12+ arm64 DMG	Build macOS LGPL FFmpeg runtime	2026-10-11T17:35:12.9142050Z ld: warning: -single_module is obsolete
+macOS 12+ arm64 DMG	Build macOS LGPL FFmpeg runtime	2026-10-11T17:35:12.9291210Z ld: warning: -single_module is obsolete
+macOS 12+ arm64 DMG	Build macOS LGPL FFmpeg runtime	2026-10-11T17:35:13.0364290Z ld: warning: -single_module is obsolete
+macOS 12+ arm64 DMG	Build macOS LGPL FFmpeg runtime	2026-10-11T17:35:13.3141900Z ld: warning: -single_module is obsolete
+macOS 12+ arm64 DMG	Build macOS LGPL FFmpeg runtime	2026-10-11T17:35:13.4819430Z ld: warning: -single_module is obsolete
+macOS 12+ arm64 DMG	Build macOS LGPL FFmpeg runtime	2026-10-11T17:35:13.6366710Z ld: warning: -single_module is obsolete
+macOS 12+ arm64 DMG	Install macOS video SDK	2026-10-11T17:31:16.9201970Z ^[[33mWarning:^[[0m pkgconf 3.0.7 is already installed and up-to-date.
+macOS 12+ arm64 DMG	Install macOS video SDK	2026-10-11T17:31:16.9211190Z ^[[33mWarning:^[[0m xz 5.8.3 is already installed and up-to-date.
+macOS 12+ arm64 DMG	Cache macOS LGPL FFmpeg runtime	2026-10-11T17:31:39.5809240Z (node:1920) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+macOS 12+ arm64 DMG	Install pnpm	2026-10-11T17:35:15.4998630Z (node:15350) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+macOS 12+ arm64 DMG	Upload macOS validation evidence	2026-10-11T17:56:13.6780790Z (node:50206) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+macOS 12+ arm64 DMG	Upload macOS validation evidence	2026-10-11T17:56:13.9620730Z (node:50206) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+macOS 12+ arm64 DMG	Upload macOS DMG	2026-10-11T17:56:14.5022210Z (node:50209) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+macOS 12+ arm64 DMG	Upload macOS DMG	2026-10-11T17:56:15.0812110Z (node:50209) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+macOS 12+ arm64 DMG	Post Cache macOS LGPL FFmpeg runtime	2026-10-11T17:56:19.3575600Z (node:50225) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+macOS 12+ arm64 DMG	Post Cache macOS LGPL FFmpeg runtime	2026-10-11T17:56:19.6831890Z (node:50225) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.

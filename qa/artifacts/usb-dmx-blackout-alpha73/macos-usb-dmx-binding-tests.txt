@@ -1,0 +1,906 @@
+[1m[92m Downloading[0m crates ...
+[1m[92m  Downloaded[0m atomic-waker v1.1.2
+[1m[92m  Downloaded[0m alloc-stdlib v0.2.2
+[1m[92m  Downloaded[0m alloc-no-stdlib v2.0.4
+[1m[92m  Downloaded[0m anyhow v1.0.102
+[1m[92m  Downloaded[0m tauri-runtime v2.6.0
+[1m[92m  Downloaded[0m tokio-util v0.7.18
+[1m[92m  Downloaded[0m zerofrom-derive v0.1.7
+[1m[92m  Downloaded[0m cargo-platform v0.1.9
+[1m[92m  Downloaded[0m convert_case v0.4.0
+[1m[92m  Downloaded[0m dtoa-short v0.3.5
+[1m[92m  Downloaded[0m core-graphics-types v0.2.0
+[1m[92m  Downloaded[0m cssparser-macros v0.6.1
+[1m[92m  Downloaded[0m dirs-sys v0.5.0
+[1m[92m  Downloaded[0m errno v0.3.14
+[1m[92m  Downloaded[0m extended v0.1.0
+[1m[92m  Downloaded[0m fnv v1.0.7
+[1m[92m  Downloaded[0m form_urlencoded v1.2.2
+[1m[92m  Downloaded[0m futures-macro v0.3.32
+[1m[92m  Downloaded[0m futures-sink v0.3.32
+[1m[92m  Downloaded[0m itoa v0.4.8
+[1m[92m  Downloaded[0m cargo_metadata v0.19.2
+[1m[92m  Downloaded[0m dyn-clone v1.0.20
+[1m[92m  Downloaded[0m futf v0.1.5
+[1m[92m  Downloaded[0m futures-task v0.3.32
+[1m[92m  Downloaded[0m ctor v0.2.9
+[1m[92m  Downloaded[0m darling_macro v0.20.11
+[1m[92m  Downloaded[0m dispatch v0.2.0
+[1m[92m  Downloaded[0m dpi v0.1.2
+[1m[92m  Downloaded[0m dunce v1.0.5
+[1m[92m  Downloaded[0m embed_plist v1.2.2
+[1m[92m  Downloaded[0m futures-core v0.3.32
+[1m[92m  Downloaded[0m futures-io v0.3.32
+[1m[92m  Downloaded[0m fxhash v0.2.1
+[1m[92m  Downloaded[0m ident_case v1.0.1
+[1m[92m  Downloaded[0m idna_adapter v1.2.2
+[1m[92m  Downloaded[0m toml v0.9.12+spec-1.1.0
+[1m[92m  Downloaded[0m tracing-core v0.1.36
+[1m[92m  Downloaded[0m unic-char-property v0.9.0
+[1m[92m  Downloaded[0m cexpr v0.6.0
+[1m[92m  Downloaded[0m http-body v1.0.1
+[1m[92m  Downloaded[0m core-graphics v0.24.0
+[1m[92m  Downloaded[0m objc2-exception-helper v0.1.1
+[1m[92m  Downloaded[0m dirs v6.0.0
+[1m[92m  Downloaded[0m displaydoc v0.2.6
+[1m[92m  Downloaded[0m dtoa v1.0.11
+[1m[92m  Downloaded[0m either v1.16.0
+[1m[92m  Downloaded[0m embed-resource v3.0.9
+[1m[92m  Downloaded[0m erased-serde v0.4.10
+[1m[92m  Downloaded[0m fastrand v2.4.1
+[1m[92m  Downloaded[0m ffmpeg-sys-next v8.1.0
+[1m[92m  Downloaded[0m getrandom v0.1.16
+[1m[92m  Downloaded[0m glob v0.3.3
+[1m[92m  Downloaded[0m hex v0.4.3
+[1m[92m  Downloaded[0m http-body-util v0.1.3
+[1m[92m  Downloaded[0m hyper-rustls v0.27.9
+[1m[92m  Downloaded[0m infer v0.16.0
+[1m[92m  Downloaded[0m infer v0.19.0
+[1m[92m  Downloaded[0m ipnet v2.12.0
+[1m[92m  Downloaded[0m json-patch v3.0.1
+[1m[92m  Downloaded[0m tauri-winres v0.3.6
+[1m[92m  Downloaded[0m tinystr v0.8.3
+[1m[92m  Downloaded[0m toml_datetime v0.6.3
+[1m[92m  Downloaded[0m toml_datetime v1.1.1+spec-1.1.0
+[1m[92m  Downloaded[0m try-lock v0.2.5
+[1m[92m  Downloaded[0m unic-char-range v0.9.0
+[1m[92m  Downloaded[0m untrusted v0.9.0
+[1m[92m  Downloaded[0m want v0.3.1
+[1m[92m  Downloaded[0m yoke v0.8.2
+[1m[92m  Downloaded[0m zerofrom v0.1.8
+[1m[92m  Downloaded[0m lru-slab v0.1.2
+[1m[92m  Downloaded[0m mac v0.1.1
+[1m[92m  Downloaded[0m matches v0.1.10
+[1m[92m  Downloaded[0m nodrop v0.1.14
+[1m[92m  Downloaded[0m zopfli v0.8.3
+[1m[92m  Downloaded[0m block2 v0.6.2
+[1m[92m  Downloaded[0m camino v1.2.2
+[1m[92m  Downloaded[0m cargo_toml v0.22.3
+[1m[92m  Downloaded[0m cfb v0.7.3
+[1m[92m  Downloaded[0m chacha20 v0.10.1
+[1m[92m  Downloaded[0m clang-sys v1.8.1
+[1m[92m  Downloaded[0m cookie v0.18.1
+[1m[92m  Downloaded[0m coreaudio-rs v0.13.0
+[1m[92m  Downloaded[0m cssparser v0.27.2
+[1m[92m  Downloaded[0m darling v0.20.11
+[1m[92m  Downloaded[0m dasp_sample v0.11.0
+[1m[92m  Downloaded[0m derive_more v0.99.20
+[1m[92m  Downloaded[0m dispatch2 v0.3.1
+[1m[92m  Downloaded[0m filetime v0.2.29
+[1m[92m  Downloaded[0m futures-channel v0.3.32
+[1m[92m  Downloaded[0m getrandom v0.4.2
+[1m[92m  Downloaded[0m iana-time-zone v0.1.65
+[1m[92m  Downloaded[0m icu_properties v2.2.0
+[1m[92m  Downloaded[0m icu_provider v2.2.0
+[1m[92m  Downloaded[0m indexmap v1.9.3
+[1m[92m  Downloaded[0m string_cache_codegen v0.5.4
+[1m[92m  Downloaded[0m subtle v2.6.1
+[1m[92m  Downloaded[0m symphonia-codec-pcm v0.5.5
+[1m[92m  Downloaded[0m utf8_iter v1.0.4
+[1m[92m  Downloaded[0m markup5ever v0.11.0
+[1m[92m  Downloaded[0m mime v0.3.17
+[1m[92m  Downloaded[0m pin-project-lite v0.2.17
+[1m[92m  Downloaded[0m rand_pcg v0.10.2
+[1m[92m  Downloaded[0m rustc-hash v2.1.3
+[1m[92m  Downloaded[0m zip v2.4.2
+[1m[92m  Downloaded[0m base64 v0.21.7
+[1m[92m  Downloaded[0m base64 v0.22.1
+[1m[92m  Downloaded[0m bumpalo v3.20.3
+[1m[92m  Downloaded[0m cpal v0.16.0
+[1m[92m  Downloaded[0m crossbeam-channel v0.5.15
+[1m[92m  Downloaded[0m darling_core v0.20.11
+[1m[92m  Downloaded[0m ffmpeg-next v8.1.0
+[1m[92m  Downloaded[0m hashbrown v0.12.3
+[1m[92m  Downloaded[0m html5ever v0.26.0
+[1m[92m  Downloaded[0m hyper-util v0.1.20
+[1m[92m  Downloaded[0m ico v0.4.0
+[1m[92m  Downloaded[0m icu_collections v2.2.0
+[1m[92m  Downloaded[0m icu_locale_core v2.2.0
+[1m[92m  Downloaded[0m icu_normalizer v2.2.0
+[1m[92m  Downloaded[0m icu_normalizer_data v2.2.0
+[1m[92m  Downloaded[0m symphonia-format-isomp4 v0.5.5
+[1m[92m  Downloaded[0m symphonia-utils-xiph v0.5.5
+[1m[92m  Downloaded[0m toml_datetime v0.7.5+spec-1.1.0
+[1m[92m  Downloaded[0m tracing-attributes v0.1.31
+[1m[92m  Downloaded[0m typeid v1.0.3
+[1m[92m  Downloaded[0m unic-ucd-version v0.9.0
+[1m[92m  Downloaded[0m urlpattern v0.3.0
+[1m[92m  Downloaded[0m walkdir v2.5.0
+[1m[92m  Downloaded[0m yoke-derive v0.8.2
+[1m[92m  Downloaded[0m objc2-cloud-kit v0.3.2
+[1m[92m  Downloaded[0m objc2-core-graphics v0.3.2
+[1m[92m  Downloaded[0m rfd v0.17.2
+[1m[92m  Downloaded[0m roxmltree v0.20.0
+[1m[92m  Downloaded[0m objc2-encode v4.1.0
+[1m[92m  Downloaded[0m objc2-io-surface v0.3.2
+[1m[92m  Downloaded[0m objc2-quartz-core v0.3.2
+[1m[92m  Downloaded[0m phf_generator v0.11.3
+[1m[92m  Downloaded[0m aho-corasick v1.1.4
+[1m[92m  Downloaded[0m hyper v1.10.1
+[1m[92m  Downloaded[0m icu_properties_data v2.2.0
+[1m[92m  Downloaded[0m idna v1.1.0
+[1m[92m  Downloaded[0m itertools v0.13.0
+[1m[92m  Downloaded[0m sync_wrapper v1.0.2
+[1m[92m  Downloaded[0m synstructure v0.13.2
+[1m[92m  Downloaded[0m unic-common v0.9.0
+[1m[92m  Downloaded[0m minisign-verify v0.2.5
+[1m[92m  Downloaded[0m new_debug_unreachable v1.0.6
+[1m[92m  Downloaded[0m plist v1.7.1
+[1m[92m  Downloaded[0m rand v0.10.2
+[1m[92m  Downloaded[0m quinn v0.11.11
+[1m[92m  Downloaded[0m quinn-udp v0.5.15
+[1m[92m  Downloaded[0m rand_chacha v0.2.2
+[1m[92m  Downloaded[0m rand_core v0.5.1
+[1m[92m  Downloaded[0m rand_pcg v0.2.1
+[1m[92m  Downloaded[0m rustc_version v0.4.1
+[1m[92m  Downloaded[0m phf_macros v0.8.0
+[1m[92m  Downloaded[0m brotli-decompressor v4.0.3
+[1m[92m  Downloaded[0m chrono v0.4.44
+[1m[92m  Downloaded[0m futures-util v0.3.32
+[1m[92m  Downloaded[0m strsim v0.11.1
+[1m[92m  Downloaded[0m symphonia v0.5.5
+[1m[92m  Downloaded[0m symphonia-codec-vorbis v0.5.5
+[1m[92m  Downloaded[0m xattr v1.6.1
+[1m[92m  Downloaded[0m zerovec-derive v0.11.3
+[1m[92m  Downloaded[0m lazy_static v1.5.0
+[1m[92m  Downloaded[0m regex v1.12.3
+[1m[92m  Downloaded[0m reqwest v0.12.28
+[1m[92m  Downloaded[0m rodio v0.21.1
+[1m[92m  Downloaded[0m rand v0.7.3
+[1m[92m  Downloaded[0m rand_core v0.10.1
+[1m[92m  Downloaded[0m serde_with_macros v3.12.0
+[1m[92m  Downloaded[0m bindgen v0.72.1
+[1m[92m  Downloaded[0m swift-rs v1.0.7
+[1m[92m  Downloaded[0m symphonia-format-ogg v0.5.5
+[1m[92m  Downloaded[0m tauri-plugin v2.2.0
+[1m[92m  Downloaded[0m tendril v0.4.3
+[1m[92m  Downloaded[0m thin-slice v0.1.1
+[1m[92m  Downloaded[0m toml_writer v1.1.1+spec-1.1.0
+[1m[92m  Downloaded[0m tower-layer v0.3.3
+[1m[92m  Downloaded[0m tower-service v0.3.3
+[1m[92m  Downloaded[0m writeable v0.6.3
+[1m[92m  Downloaded[0m kuchikiki v0.8.2
+[1m[92m  Downloaded[0m option-ext v0.2.0
+[1m[92m  Downloaded[0m percent-encoding v2.3.2
+[1m[92m  Downloaded[0m phf v0.8.0
+[1m[92m  Downloaded[0m serde_with v3.12.0
+[1m[92m  Downloaded[0m string_cache v0.8.9
+[1m[92m  Downloaded[0m symphonia-bundle-flac v0.5.5
+[1m[92m  Downloaded[0m symphonia-format-riff v0.5.5
+[1m[92m  Downloaded[0m symphonia-metadata v0.5.5
+[1m[92m  Downloaded[0m tauri-build v2.2.0
+[1m[92m  Downloaded[0m tauri-codegen v2.2.0
+[1m[92m  Downloaded[0m tauri-macros v2.2.0
+[1m[92m  Downloaded[0m tempfile v3.27.0
+[1m[92m  Downloaded[0m unic-ucd-ident v0.9.0
+[1m[92m  Downloaded[0m unicode-segmentation v1.13.2
+[1m[92m  Downloaded[0m keyboard-types v0.7.0
+[1m[92m  Downloaded[0m litemap v0.8.2
+[1m[92m  Downloaded[0m regex-syntax v0.8.10
+[1m[92m  Downloaded[0m quick-xml v0.32.0
+[1m[92m  Downloaded[0m quinn-proto v0.11.16
+[1m[92m  Downloaded[0m phf_generator v0.10.0
+[1m[92m  Downloaded[0m phf_shared v0.10.0
+[1m[92m  Downloaded[0m jsonptr v0.6.3
+[1m[92m  Downloaded[0m symphonia-bundle-mp3 v0.5.5
+[1m[92m  Downloaded[0m symphonia-codec-aac v0.5.5
+[1m[92m  Downloaded[0m tokio-rustls v0.26.4
+[1m[92m  Downloaded[0m toml v0.8.2
+[1m[92m  Downloaded[0m toml v1.1.2+spec-1.1.0
+[1m[92m  Downloaded[0m toml_parser v1.1.2+spec-1.1.0
+[1m[92m  Downloaded[0m tray-icon v0.20.1
+[1m[92m  Downloaded[0m url v2.5.8
+[1m[92m  Downloaded[0m uuid v1.23.2
+[1m[92m  Downloaded[0m objc2-foundation v0.3.2
+[1m[92m  Downloaded[0m rustix v1.1.4
+[1m[92m  Downloaded[0m rustls-pki-types v1.15.0
+[1m[92m  Downloaded[0m potential_utf v0.1.5
+[1m[92m  Downloaded[0m precomputed-hash v0.1.1
+[1m[92m  Downloaded[0m proc-macro-hack v0.5.20+deprecated
+[1m[92m  Downloaded[0m tar v0.4.46
+[1m[92m  Downloaded[0m tauri-plugin-single-instance v2.2.2
+[1m[92m  Downloaded[0m tauri-plugin-updater v2.2.0
+[1m[92m  Downloaded[0m zerotrie v0.2.4
+[1m[92m  Downloaded[0m muda v0.16.1
+[1m[92m  Downloaded[0m regex-automata v0.4.14
+[1m[92m  Downloaded[0m phf_shared v0.11.3
+[1m[92m  Downloaded[0m ryu v1.0.23
+[1m[92m  Downloaded[0m selectors v0.22.0
+[1m[92m  Downloaded[0m symphonia-core v0.5.5
+[1m[92m  Downloaded[0m tauri-utils v2.4.0
+[1m[92m  Downloaded[0m toml_edit v0.20.2
+[1m[92m  Downloaded[0m tower v0.5.3
+[1m[92m  Downloaded[0m mio v1.2.1
+[1m[92m  Downloaded[0m rustls-webpki v0.103.13
+[1m[92m  Downloaded[0m phf_macros v0.11.3
+[1m[92m  Downloaded[0m winnow v0.5.40
+[1m[92m  Downloaded[0m objc2-core-audio-types v0.3.2
+[1m[92m  Downloaded[0m phf_shared v0.8.0
+[1m[92m  Downloaded[0m schemars v0.8.22
+[1m[92m  Downloaded[0m brotli v7.0.0
+[1m[92m  Downloaded[0m encoding_rs v0.8.35
+[1m[92m  Downloaded[0m zerovec v0.11.6
+[1m[92m  Downloaded[0m num_cpus v1.17.0
+[1m[92m  Downloaded[0m objc2-core-audio v0.3.2
+[1m[92m  Downloaded[0m phf_codegen v0.10.0
+[1m[92m  Downloaded[0m same-file v1.0.6
+[1m[92m  Downloaded[0m ring v0.17.14
+[1m[92m  Downloaded[0m stable_deref_trait v1.2.1
+[1m[92m  Downloaded[0m objc2-core-text v0.3.2
+[1m[92m  Downloaded[0m objc2-core-video v0.3.2
+[1m[92m  Downloaded[0m phf v0.10.1
+[1m[92m  Downloaded[0m phf_codegen v0.8.0
+[1m[92m  Downloaded[0m phf_generator v0.8.0
+[1m[92m  Downloaded[0m schemars_derive v0.8.22
+[1m[92m  Downloaded[0m tower-http v0.6.11
+[1m[92m  Downloaded[0m winnow v0.7.15
+[1m[92m  Downloaded[0m winnow v1.0.3
+[1m[92m  Downloaded[0m wry v0.51.2
+[1m[92m  Downloaded[0m objc2 v0.6.4
+[1m[92m  Downloaded[0m objc2-core-data v0.3.2
+[1m[92m  Downloaded[0m phf v0.11.3
+[1m[92m  Downloaded[0m webpki-roots v1.0.8
+[1m[92m  Downloaded[0m objc2-audio-toolbox v0.3.2
+[1m[92m  Downloaded[0m objc2-core-foundation v0.3.2
+[1m[92m  Downloaded[0m objc2-core-image v0.3.2
+[1m[92m  Downloaded[0m objc2-web-kit v0.3.2
+[1m[92m  Downloaded[0m syn v1.0.109
+[1m[92m  Downloaded[0m objc2-app-kit v0.3.2
+[1m[92m  Downloaded[0m serialize-to-javascript v0.1.1
+[1m[92m  Downloaded[0m servo_arc v0.1.1
+[1m[92m  Downloaded[0m shlex v1.3.0
+[1m[92m  Downloaded[0m siphasher v1.0.3
+[1m[92m  Downloaded[0m slab v0.4.12
+[1m[92m  Downloaded[0m socket2 v0.6.4
+[1m[92m  Downloaded[0m semver v1.0.28
+[1m[92m  Downloaded[0m serde-untagged v0.1.9
+[1m[92m  Downloaded[0m serde_repr v0.1.20
+[1m[92m  Downloaded[0m serde_spanned v0.6.9
+[1m[92m  Downloaded[0m serde_spanned v1.1.1
+[1m[92m  Downloaded[0m serde_urlencoded v0.7.1
+[1m[92m  Downloaded[0m serialize-to-javascript-impl v0.1.1
+[1m[92m  Downloaded[0m siphasher v0.3.11
+[1m[92m  Downloaded[0m serde_derive_internals v0.29.1
+[1m[92m  Downloaded[0m serde_path_to_error v0.1.20
+[1m[92m  Downloaded[0m tauri v2.5.1
+[1m[92m  Downloaded[0m rustls v0.23.41
+[1m[92m  Downloaded[0m tracing v0.1.44
+[1m[92m  Downloaded[0m tokio v1.52.3
+[1m[92m  Downloaded[0m window-vibrancy v0.6.0
+[1m[92m  Downloaded[0m tao v0.33.0
+[1m[92m   Compiling[0m proc-macro2 v1.0.106
+[1m[92m   Compiling[0m serde_core v1.0.228
+[1m[92m   Compiling[0m libc v0.2.186
+[1m[92m   Compiling[0m memchr v2.8.1
+[1m[92m   Compiling[0m quote v1.0.45
+[1m[92m   Compiling[0m syn v2.0.117
+[1m[92m   Compiling[0m bitflags v2.11.1
+[1m[92m   Compiling[0m zerocopy v0.8.50
+[1m[92m   Compiling[0m stable_deref_trait v1.2.1
+[1m[92m   Compiling[0m siphasher v0.3.11
+[1m[92m   Compiling[0m serde v1.0.228
+[1m[92m   Compiling[0m syn v1.0.109
+[1m[92m   Compiling[0m litemap v0.8.2
+[1m[92m   Compiling[0m synstructure v0.13.2
+[1m[92m   Compiling[0m writeable v0.6.3
+[1m[92m   Compiling[0m getrandom v0.1.16
+[1m[92m   Compiling[0m getrandom v0.2.17
+[1m[92m   Compiling[0m icu_normalizer_data v2.2.0
+[1m[92m   Compiling[0m utf8_iter v1.0.4
+[1m[92m   Compiling[0m ppv-lite86 v0.2.21
+[1m[92m   Compiling[0m rand_core v0.6.4
+[1m[92m   Compiling[0m serde_derive v1.0.228
+[1m[92m   Compiling[0m zerofrom-derive v0.1.7
+[1m[92m   Compiling[0m yoke-derive v0.8.2
+[1m[92m   Compiling[0m displaydoc v0.2.6
+[1m[92m   Compiling[0m zerofrom v0.1.8
+[1m[92m   Compiling[0m yoke v0.8.2
+[1m[92m   Compiling[0m zerovec-derive v0.11.3
+[1m[92m   Compiling[0m zerotrie v0.2.4
+[1m[92m   Compiling[0m zerovec v0.11.6
+[1m[92m   Compiling[0m tinystr v0.8.3
+[1m[92m   Compiling[0m icu_locale_core v2.2.0
+[1m[92m   Compiling[0m potential_utf v0.1.5
+[1m[92m   Compiling[0m icu_collections v2.2.0
+[1m[92m   Compiling[0m icu_properties_data v2.2.0
+[1m[92m   Compiling[0m icu_provider v2.2.0
+[1m[92m   Compiling[0m indexmap v2.14.0
+[1m[92m   Compiling[0m rand_core v0.5.1
+[1m[92m   Compiling[0m rand_chacha v0.3.1
+[1m[92m   Compiling[0m thiserror-impl v2.0.18
+[1m[92m   Compiling[0m objc2-exception-helper v0.1.1
+[1m[92m   Compiling[0m siphasher v1.0.3
+[1m[92m   Compiling[0m smallvec v1.15.1
+[1m[92m   Compiling[0m phf_shared v0.11.3
+[1m[92m   Compiling[0m rand v0.8.6
+[1m[92m   Compiling[0m thiserror v2.0.18
+[1m[92m   Compiling[0m icu_properties v2.2.0
+[1m[92m   Compiling[0m rand_pcg v0.2.1
+[1m[92m   Compiling[0m rand_chacha v0.2.2
+[1m[92m   Compiling[0m objc2 v0.6.4
+[1m[92m   Compiling[0m rand v0.7.3
+[1m[92m   Compiling[0m phf_shared v0.8.0
+[1m[92m   Compiling[0m aho-corasick v1.1.4
+[1m[92m   Compiling[0m glob v0.3.3
+[1m[92m   Compiling[0m objc2-encode v4.1.0
+[1m[92m   Compiling[0m regex-syntax v0.8.10
+[1m[92m   Compiling[0m phf_generator v0.8.0
+[1m[92m   Compiling[0m phf_generator v0.11.3
+[1m[92m   Compiling[0m phf_shared v0.10.0
+[1m[92m   Compiling[0m fnv v1.0.7
+[1m[92m   Compiling[0m thiserror-impl v1.0.69
+[1m[92m   Compiling[0m proc-macro-hack v0.5.20+deprecated
+[1m[92m   Compiling[0m regex-automata v0.4.14
+[1m[92m   Compiling[0m precomputed-hash v0.1.1
+[1m[92m   Compiling[0m new_debug_unreachable v1.0.6
+[1m[92m   Compiling[0m thiserror v1.0.69
+[1m[92m   Compiling[0m phf_generator v0.10.0
+[1m[92m   Compiling[0m phf_codegen v0.10.0
+[1m[92m   Compiling[0m string_cache_codegen v0.5.4
+[1m[92m   Compiling[0m mac v0.1.1
+[1m[92m   Compiling[0m futf v0.1.5
+[1m[92m   Compiling[0m markup5ever v0.11.0
+[1m[92m   Compiling[0m phf_macros v0.8.0
+[1m[92m   Compiling[0m objc2-core-foundation v0.3.2
+[1m[92m   Compiling[0m cssparser v0.27.2
+[1m[92m   Compiling[0m regex v1.12.3
+[1m[92m   Compiling[0m dtoa v1.0.11
+[1m[92m   Compiling[0m dtoa-short v0.3.5
+[1m[92m   Compiling[0m phf v0.8.0
+[1m[92m   Compiling[0m tendril v0.4.3
+[1m[92m   Compiling[0m phf_codegen v0.8.0
+[1m[92m   Compiling[0m cssparser-macros v0.6.1
+[1m[92m   Compiling[0m ident_case v1.0.1
+[1m[92m   Compiling[0m typeid v1.0.3
+[1m[92m   Compiling[0m strsim v0.11.1
+[1m[92m   Compiling[0m matches v0.1.10
+[1m[92m   Compiling[0m serde_json v1.0.150
+[1m[92m   Compiling[0m itoa v0.4.8
+[1m[92m   Compiling[0m darling_core v0.20.11
+[1m[92m   Compiling[0m selectors v0.22.0
+[1m[92m   Compiling[0m html5ever v0.26.0
+[1m[92m   Compiling[0m bytemuck_derive v1.10.2
+[1m[92m   Compiling[0m getrandom v0.4.2
+[1m[92m   Compiling[0m convert_case v0.4.0
+[1m[92m   Compiling[0m erased-serde v0.4.10
+[1m[92m   Compiling[0m hashbrown v0.12.3
+[1m[92m   Compiling[0m nodrop v0.1.14
+[1m[92m   Compiling[0m servo_arc v0.1.1
+[1m[92m   Compiling[0m derive_more v0.99.20
+[1m[92m   Compiling[0m bytemuck v1.25.0
+[1m[92m   Compiling[0m darling_macro v0.20.11
+[1m[92m   Compiling[0m block2 v0.6.2
+[1m[92m   Compiling[0m fxhash v0.2.1
+[1m[92m   Compiling[0m winnow v0.5.40
+[1m[92m   Compiling[0m unic-common v0.9.0
+[1m[92m   Compiling[0m thin-slice v0.1.1
+[1m[92m   Compiling[0m once_cell v1.21.4
+[1m[92m   Compiling[0m unic-char-range v0.9.0
+[1m[92m   Compiling[0m unic-char-property v0.9.0
+[1m[92m   Compiling[0m unic-ucd-version v0.9.0
+[1m[92m   Compiling[0m darling v0.20.11
+[1m[92m   Compiling[0m scopeguard v1.2.0
+[1m[92m   Compiling[0m arrayvec v0.7.8
+[1m[92m   Compiling[0m alloc-no-stdlib v2.0.4
+[1m[92m   Compiling[0m alloc-stdlib v0.2.2
+[1m[92m   Compiling[0m lock_api v0.4.14
+[1m[92m   Compiling[0m serde_with_macros v3.12.0
+[1m[92m   Compiling[0m unic-ucd-ident v0.9.0
+[1m[92m   Compiling[0m objc2-foundation v0.3.2
+[1m[92m   Compiling[0m icu_normalizer v2.2.0
+[1m[92m   Compiling[0m parking_lot_core v0.9.12
+[1m[92m   Compiling[0m heck v0.5.0
+[1m[92m   Compiling[0m anyhow v1.0.102
+[1m[92m   Compiling[0m parking_lot v0.12.5
+[1m[92m   Compiling[0m idna_adapter v1.2.2
+[1m[92m   Compiling[0m brotli-decompressor v4.0.3
+[1m[92m   Compiling[0m phf_macros v0.11.3
+[1m[92m   Compiling[0m indexmap v1.9.3
+[1m[92m   Compiling[0m semver v1.0.28
+[1m[92m   Compiling[0m lazy_static v1.5.0
+[1m[92m   Compiling[0m same-file v1.0.6
+[1m[92m   Compiling[0m percent-encoding v2.3.2
+[1m[92m   Compiling[0m dunce v1.0.5
+[1m[92m   Compiling[0m walkdir v2.5.0
+[1m[92m   Compiling[0m form_urlencoded v1.2.2
+[1m[92m   Compiling[0m phf v0.11.3
+[1m[92m   Compiling[0m uuid v1.23.2
+[1m[92m   Compiling[0m brotli v7.0.0
+[1m[92m   Compiling[0m idna v1.1.0
+[1m[92m   Compiling[0m string_cache v0.8.9
+[1m[92m   Compiling[0m phf v0.10.1
+[1m[92m   Compiling[0m ctor v0.2.9
+[1m[92m   Compiling[0m camino v1.2.2
+[1m[92m   Compiling[0m url v2.5.8
+[1m[92m   Compiling[0m swift-rs v1.0.7
+[1m[92m   Compiling[0m toml_datetime v0.6.3
+[1m[92m   Compiling[0m serde_spanned v0.6.9
+[1m[92m   Compiling[0m serde_derive_internals v0.29.1
+[1m[92m   Compiling[0m schemars v0.8.22
+[1m[92m   Compiling[0m toml_edit v0.20.2
+[1m[92m   Compiling[0m schemars_derive v0.8.22
+[1m[92m   Compiling[0m cfb v0.7.3
+[1m[92m   Compiling[0m jsonptr v0.6.3
+[1m[92m   Compiling[0m cargo-platform v0.1.9
+[1m[92m   Compiling[0m winnow v1.0.3
+[1m[92m   Compiling[0m base64 v0.21.7
+[1m[92m   Compiling[0m dyn-clone v1.0.20
+[1m[92m   Compiling[0m pin-project-lite v0.2.17
+[1m[92m   Compiling[0m toml_parser v1.1.2+spec-1.1.0
+[1m[92m   Compiling[0m cargo_metadata v0.19.2
+[1m[92m   Compiling[0m serde-untagged v0.1.9
+[1m[92m   Compiling[0m json-patch v3.0.1
+[1m[92m   Compiling[0m infer v0.19.0
+[1m[92m   Compiling[0m kuchikiki v0.8.2
+[1m[92m   Compiling[0m toml v0.8.2
+[1m[92m   Compiling[0m urlpattern v0.3.0
+[1m[92m   Compiling[0m serde_with v3.12.0
+[1m[92m   Compiling[0m zerocopy-derive v0.8.50
+[1m[92m   Compiling[0m foreign-types-macros v0.2.3
+[1m[92m   Compiling[0m serde_spanned v1.1.1
+[1m[92m   Compiling[0m toml_writer v1.1.1+spec-1.1.0
+[1m[92m   Compiling[0m base64 v0.22.1
+[1m[92m   Compiling[0m futures-core v0.3.32
+[1m[92m   Compiling[0m foreign-types v0.5.0
+[1m[92m   Compiling[0m tauri-utils v2.4.0
+[1m[92m   Compiling[0m option-ext v0.2.0
+[1m[92m   Compiling[0m symphonia-core v0.5.5
+[1m[92m   Compiling[0m time-macros v0.2.22
+[1m[92m   Compiling[0m toml_datetime v1.1.1+spec-1.1.0
+[1m[92m   Compiling[0m socket2 v0.6.4
+[1m[92m   Compiling[0m mio v1.2.1
+[1m[92m   Compiling[0m time v0.3.41
+[1m[92m   Compiling[0m tokio v1.52.3
+[1m[92m   Compiling[0m toml v1.1.2+spec-1.1.0
+[1m[92m   Compiling[0m objc2-core-data v0.3.2
+[1m[92m   Compiling[0m objc2-cloud-kit v0.3.2
+[1m[92m   Compiling[0m objc2-core-image v0.3.2
+[1m[92m   Compiling[0m objc2-quartz-core v0.3.2
+[1m[92m   Compiling[0m rustc_version v0.4.1
+[1m[92m   Compiling[0m objc2-core-text v0.3.2
+[1m[92m   Compiling[0m objc2-core-video v0.3.2
+[1m[92m   Compiling[0m objc2-core-graphics v0.3.2
+[1m[92m   Compiling[0m clang-sys v1.8.1
+[1m[92m   Compiling[0m toml_datetime v0.7.5+spec-1.1.0
+[1m[92m   Compiling[0m quick-xml v0.32.0
+[1m[92m   Compiling[0m winnow v0.7.15
+[1m[92m   Compiling[0m objc2-app-kit v0.3.2
+[1m[92m   Compiling[0m embed-resource v3.0.9
+[1m[92m   Compiling[0m dirs-sys v0.5.0
+[1m[92m   Compiling[0m toml v0.9.12+spec-1.1.0
+[1m[92m   Compiling[0m encoding_rs v0.8.35
+[1m[92m   Compiling[0m minimal-lexical v0.2.1
+[1m[92m   Compiling[0m nom v7.1.3
+[1m[92m   Compiling[0m symphonia-metadata v0.5.5
+[1m[92m   Compiling[0m plist v1.7.1
+[1m[92m   Compiling[0m cargo_toml v0.22.3
+[1m[92m   Compiling[0m dirs v6.0.0
+[1m[92m   Compiling[0m tauri-winres v0.3.6
+[1m[92m   Compiling[0m futures-macro v0.3.32
+[1m[92m   Compiling[0m ring v0.17.14
+[1m[92m   Compiling[0m libloading v0.8.9
+[1m[92m   Compiling[0m slab v0.4.12
+[1m[92m   Compiling[0m futures-task v0.3.32
+[1m[92m   Compiling[0m either v1.16.0
+[1m[92m   Compiling[0m bindgen v0.72.1
+[1m[92m   Compiling[0m itertools v0.13.0
+[1m[92m   Compiling[0m futures-util v0.3.32
+[1m[92m   Compiling[0m tauri-build v2.2.0
+[1m[92m   Compiling[0m strum_macros v0.26.4
+[1m[92m   Compiling[0m cexpr v0.6.0
+[1m[92m   Compiling[0m cookie v0.18.1
+[1m[92m   Compiling[0m dpi v0.1.2
+[1m[92m   Compiling[0m rustc-hash v2.1.3
+[1m[92m   Compiling[0m shlex v1.3.0
+[1m[92m   Compiling[0m strum v0.26.3
+[1m[92m   Compiling[0m rustls-pki-types v1.15.0
+[1m[92m   Compiling[0m half v2.7.1
+[1m[92m   Compiling[0m http-body v1.0.1
+[1m[92m   Compiling[0m num_cpus v1.17.0
+[1m[92m   Compiling[0m pkg-config v0.3.33
+[1m[92m   Compiling[0m untrusted v0.9.0
+[1m[92m   Compiling[0m ffmpeg-sys-next v8.1.0
+[1m[92m   Compiling[0m naga v25.0.1
+[1m[92m   Compiling[0m protocol v1.2.0-alpha.73 (/Users/runner/work/Syndocal/Syndocal/crates/protocol)
+[1m[92m   Compiling[0m metal v0.31.0
+[1m[92m   Compiling[0m tauri v2.5.1
+[1m[92m   Compiling[0m symphonia-utils-xiph v0.5.5
+[1m[92m   Compiling[0m crossbeam-channel v0.5.15
+[1m[92m   Compiling[0m core-graphics-types v0.2.0
+[1m[92m   Compiling[0m tracing-core v0.1.36
+[1m[92m   Compiling[0m wgpu-types v25.0.0
+[1m[92m   Compiling[0m tracing-attributes v0.1.31
+[1m[92m   Compiling[0m cpufeatures v0.2.17
+[1m[92m   Compiling[0m tower-service v0.3.3
+[1m[92m   Compiling[0m rustls v0.23.41
+[1m[92m   Compiling[0m try-lock v0.2.5
+[1m[92m   Compiling[0m wry v0.51.2
+[1m[92m   Compiling[0m rustix v1.1.4
+[1m[92m   Compiling[0m tauri-runtime v2.6.0
+[1m[92m   Compiling[0m want v0.3.1
+[1m[92m   Compiling[0m wgpu-hal v25.0.2
+[1m[92m   Compiling[0m sha2 v0.10.9
+[1m[92m   Compiling[0m tracing v0.1.44
+[1m[92m   Compiling[0m core-graphics v0.24.0
+[1m[92m   Compiling[0m rustls-webpki v0.103.13
+[1m[92m   Compiling[0m objc2-web-kit v0.3.2
+[1m[92m   Compiling[0m ico v0.4.0
+[1m[92m   Compiling[0m futures-channel v0.3.32
+[1m[92m   Compiling[0m objc2-core-audio-types v0.3.2
+[1m[92m   Compiling[0m errno v0.3.14
+[1m[92m   Compiling[0m tauri-runtime-wry v2.6.0 (/Users/runner/work/Syndocal/Syndocal/vendor/tauri-runtime-wry-2.6.0-syndocal)
+[1m[92m   Compiling[0m atomic-waker v1.1.2
+[1m[92m   Compiling[0m unicode-segmentation v1.13.2
+[1m[92m   Compiling[0m dispatch v0.2.0
+[1m[92m   Compiling[0m subtle v2.6.1
+[1m[92m   Compiling[0m tao v0.33.0
+[1m[92m   Compiling[0m keyboard-types v0.7.0
+[1m[92m   Compiling[0m hyper v1.10.1
+[1m[92m   Compiling[0m objc2-core-audio v0.3.2
+[1m[92m   Compiling[0m tauri-codegen v2.2.0
+[1m[92m   Compiling[0m num-rational v0.4.2
+[1m[92m   Compiling[0m wgpu-core-deps-apple v25.0.0
+[1m[92m   Compiling[0m tauri-plugin v2.2.0
+[1m[92m   Compiling[0m sync_wrapper v1.0.2
+[1m[92m   Compiling[0m serialize-to-javascript-impl v0.1.1
+[1m[92m   Compiling[0m ipnet v2.12.0
+[1m[92m   Compiling[0m tower-layer v0.3.3
+[1m[92m   Compiling[0m ffmpeg-next v8.1.0
+[1m[92m   Compiling[0m serialize-to-javascript v0.1.1
+[1m[92m   Compiling[0m tower v0.5.3
+[1m[92m   Compiling[0m hyper-util v0.1.20
+[1m[92m   Compiling[0m tauri-plugin-updater v2.2.0
+[1m[92m   Compiling[0m tauri-macros v2.2.0
+[1m[92m   Compiling[0m wgpu-core v25.0.2
+[1m[33mwarning[0m[1m: unnecessary `unsafe` block[0m
+  [1m[94m--> [0mvendor/tauri-runtime-wry-2.6.0-syndocal/src/window/macos.rs:27:7
+   [1m[94m|[0m
+[1m[94m27[0m [1m[94m|[0m       unsafe { sheet.setAlphaValue(0.5) };
+   [1m[94m|[0m       [1m[33m^^^^^^[0m [1m[33munnecessary `unsafe` block[0m
+   [1m[94m|[0m
+   [1m[94m= [0m[1mnote[0m: `#[warn(unused_unsafe)]` (part of `#[warn(unused)]`) on by default
+
+[1m[33mwarning[0m[1m: unnecessary `unsafe` block[0m
+  [1m[94m--> [0mvendor/tauri-runtime-wry-2.6.0-syndocal/src/window/macos.rs:28:7
+   [1m[94m|[0m
+[1m[94m28[0m [1m[94m|[0m       unsafe { ns_window.beginSheet_completionHandler(&sheet, None) };
+   [1m[94m|[0m       [1m[33m^^^^^^[0m [1m[33munnecessary `unsafe` block[0m
+
+[1m[33mwarning[0m[1m: unnecessary `unsafe` block[0m
+  [1m[94m--> [0mvendor/tauri-runtime-wry-2.6.0-syndocal/src/window/macos.rs:29:36
+   [1m[94m|[0m
+[1m[94m29[0m [1m[94m|[0m     } else if let Some(attached) = unsafe { ns_window.attachedSheet() } {
+   [1m[94m|[0m                                    [1m[33m^^^^^^[0m [1m[33munnecessary `unsafe` block[0m
+
+[1m[33mwarning[0m[1m: unnecessary `unsafe` block[0m
+  [1m[94m--> [0mvendor/tauri-runtime-wry-2.6.0-syndocal/src/window/macos.rs:30:7
+   [1m[94m|[0m
+[1m[94m30[0m [1m[94m|[0m       unsafe { ns_window.endSheet(&attached) };
+   [1m[94m|[0m       [1m[33m^^^^^^[0m [1m[33munnecessary `unsafe` block[0m
+
+[1m[33mwarning[0m[1m: unnecessary `unsafe` block[0m
+  [1m[94m--> [0mvendor/tauri-runtime-wry-2.6.0-syndocal/src/window/macos.rs:36:5
+   [1m[94m|[0m
+[1m[94m36[0m [1m[94m|[0m     unsafe { ns_window.attachedSheet() }.is_none()
+   [1m[94m|[0m     [1m[33m^^^^^^[0m [1m[33munnecessary `unsafe` block[0m
+
+[1m[33mwarning[0m: `tauri-runtime-wry` (lib) generated 5 warnings
+[1m[92m   Compiling[0m objc2-audio-toolbox v0.3.2
+[1m[92m   Compiling[0m muda v0.16.1
+[1m[92m   Compiling[0m tokio-rustls v0.26.4
+[1m[92m   Compiling[0m window-vibrancy v0.6.0
+[1m[92m   Compiling[0m webpki-roots v1.0.8
+[1m[92m   Compiling[0m serde_repr v0.1.20
+[1m[92m   Compiling[0m ryu v1.0.23
+[1m[92m   Compiling[0m mime v0.3.17
+[1m[92m   Compiling[0m futures-sink v0.3.32
+[1m[92m   Compiling[0m embed_plist v1.2.2
+[1m[92m   Compiling[0m extended v0.1.0
+[1m[92m   Compiling[0m cpal v0.16.0
+[1m[92m   Compiling[0m zip v2.4.2
+[1m[92m   Compiling[0m bumpalo v3.20.3
+[1m[92m   Compiling[0m symphonia-format-riff v0.5.5
+[1m[92m   Compiling[0m zopfli v0.8.3
+[1m[92m   Compiling[0m image v0.24.9
+[1m[92m   Compiling[0m wgpu v25.0.2
+[1m[92m   Compiling[0m tungstenite v0.24.0
+[1m[92m   Compiling[0m tokio-util v0.7.18
+[1m[92m   Compiling[0m serde_urlencoded v0.7.1
+[1m[92m   Compiling[0m serialport v4.9.0
+[1m[92m   Compiling[0m hyper-rustls v0.27.9
+[1m[92m   Compiling[0m coreaudio-rs v0.13.0
+[1m[92m   Compiling[0m hap-parser v0.2.0
+[1m[92m   Compiling[0m rosc v0.11.4
+[1m[92m   Compiling[0m tower-http v0.6.11
+[1m[92m   Compiling[0m mp4 v0.14.0
+[1m[92m   Compiling[0m xattr v1.6.1
+[1m[92m   Compiling[0m symphonia-format-isomp4 v0.5.5
+[1m[92m   Compiling[0m symphonia-bundle-flac v0.5.5
+[1m[92m   Compiling[0m symphonia-format-ogg v0.5.5
+[1m[92m   Compiling[0m symphonia-codec-vorbis v0.5.5
+[1m[92m   Compiling[0m http-body-util v0.1.3
+[1m[92m   Compiling[0m symphonia-bundle-mp3 v0.5.5
+[1m[92m   Compiling[0m symphonia-codec-pcm v0.5.5
+[1m[92m   Compiling[0m symphonia-codec-aac v0.5.5
+[1m[92m   Compiling[0m filetime v0.2.29
+[1m[92m   Compiling[0m fastrand v2.4.1
+[1m[92m   Compiling[0m dasp_sample v0.11.0
+[1m[92m   Compiling[0m rfd v0.17.2
+[1m[92m   Compiling[0m video v1.2.0-alpha.73 (/Users/runner/work/Syndocal/Syndocal/crates/video)
+[1m[92m   Compiling[0m tempfile v3.27.0
+[1m[92m   Compiling[0m tar v0.4.46
+[1m[92m   Compiling[0m symphonia v0.5.5
+[1m[92m   Compiling[0m io v1.2.0-alpha.73 (/Users/runner/work/Syndocal/Syndocal/crates/io)
+[1m[92m   Compiling[0m reqwest v0.12.28
+[1m[92m   Compiling[0m syndocal v1.2.0-alpha.73 (/Users/runner/work/Syndocal/Syndocal/app/src-tauri)
+[1m[92m   Compiling[0m infer v0.16.0
+[1m[92m   Compiling[0m dispatch2 v0.3.1
+[1m[92m   Compiling[0m roxmltree v0.20.0
+[1m[92m   Compiling[0m minisign-verify v0.2.5
+[1m[92m   Compiling[0m gdtf v1.2.0-alpha.73 (/Users/runner/work/Syndocal/Syndocal/crates/gdtf)
+[1m[92m   Compiling[0m engine v1.2.0-alpha.73 (/Users/runner/work/Syndocal/Syndocal/crates/engine)
+[1m[92m   Compiling[0m rodio v0.21.1
+[1m[92m   Compiling[0m tauri-plugin-single-instance v2.2.2
+[1m[92m   Compiling[0m visualizer v1.2.0-alpha.73 (/Users/runner/work/Syndocal/Syndocal/crates/visualizer)
+[1m[92m   Compiling[0m audio v1.2.0-alpha.73 (/Users/runner/work/Syndocal/Syndocal/crates/audio)
+[1m[92m   Compiling[0m serde_path_to_error v0.1.20
+[1m[33mwarning[0m[1m: unused import: `std::cell::Cell`[0m
+ [1m[94m--> [0mapp/src-tauri/src/agent_bridge_output_guard_tests.rs:2:5
+  [1m[94m|[0m
+[1m[94m2[0m [1m[94m|[0m use std::cell::Cell;
+  [1m[94m|[0m     [1m[33m^^^^^^^^^^^^^^^[0m
+  [1m[94m|[0m
+  [1m[94m= [0m[1mnote[0m: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+[1m[33mwarning[0m[1m: unused import: `sync::Arc`[0m
+ [1m[94m--> [0mapp/src-tauri/src/video_recording_encoder_process.rs:3:5
+  [1m[94m|[0m
+[1m[94m3[0m [1m[94m|[0m     sync::Arc,
+  [1m[94m|[0m     [1m[33m^^^^^^^^^[0m
+
+[1m[33mwarning[0m[1m: unused import: `super::*`[0m
+   [1m[94m--> [0mapp/src-tauri/src/capture_process_lifecycle.rs:327:9
+    [1m[94m|[0m
+[1m[94m327[0m [1m[94m|[0m     use super::*;
+    [1m[94m|[0m         [1m[33m^^^^^^^^[0m
+
+[1m[33mwarning[0m[1m: unused import: `DjLinkIpv4BindingKey`[0m
+  [1m[94m--> [0mapp/src-tauri/src/dj_link_persistence_runtime.rs:15:36
+   [1m[94m|[0m
+[1m[94m15[0m [1m[94m|[0m use crate::dj_link_network::{self, DjLinkIpv4BindingKey, DjLinkTrustDecision};
+   [1m[94m|[0m                                    [1m[33m^^^^^^^^^^^^^^^^^^^^[0m
+
+[1m[33mwarning[0m[1m: unused import: `rodio::cpal::traits::DeviceTrait`[0m
+     [1m[94m--> [0mapp/src-tauri/src/main.rs:14824:9
+      [1m[94m|[0m
+[1m[94m14824[0m [1m[94m|[0m     use rodio::cpal::traits::DeviceTrait;
+      [1m[94m|[0m         [1m[33m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+
+[1m[33mwarning[0m[1m: variable does not need to be mutable[0m
+     [1m[94m--> [0mapp/src-tauri/src/main.rs:72175:9
+      [1m[94m|[0m
+[1m[94m72175[0m [1m[94m|[0m     let mut faults = capture_transport_faults_for_active_routes(active_routes, capture_transport)?;
+      [1m[94m|[0m         [1m[94m----[0m[1m[33m^^^^^^[0m
+      [1m[94m|[0m         [1m[94m|[0m
+      [1m[94m|[0m         [1m[94mhelp: remove this `mut`[0m
+      [1m[94m|[0m
+      [1m[94m= [0m[1mnote[0m: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+[1m[33mwarning[0m[1m: variable does not need to be mutable[0m
+     [1m[94m--> [0mapp/src-tauri/src/main.rs:72190:9
+      [1m[94m|[0m
+[1m[94m72190[0m [1m[94m|[0m     let mut faults =
+      [1m[94m|[0m         [1m[94m----[0m[1m[33m^^^^^^[0m
+      [1m[94m|[0m         [1m[94m|[0m
+      [1m[94m|[0m         [1m[94mhelp: remove this `mut`[0m
+
+[1m[33mwarning[0m[1m: unused variable: `managed_terminal_identity`[0m
+     [1m[94m--> [0mapp/src-tauri/src/main.rs:77052:5
+      [1m[94m|[0m
+[1m[94m77052[0m [1m[94m|[0m     managed_terminal_identity: Option<ManagedExactBothOutputControlTerminalIdentity<'_>>,
+      [1m[94m|[0m     [1m[33m^^^^^^^^^^^^^^^^^^^^^^^^^[0m [1m[33mhelp: if this is intentional, prefix it with an underscore: `_managed_terminal_identity`[0m
+      [1m[94m|[0m
+      [1m[94m= [0m[1mnote[0m: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+[1m[33mwarning[0m[1m: field `owner` is never read[0m
+     [1m[94m--> [0mapp/src-tauri/src/main.rs:21523:9
+      [1m[94m|[0m
+[1m[94m21522[0m [1m[94m|[0m     Mac {
+      [1m[94m|[0m     [1m[94m---[0m [1m[94mfield in this variant[0m
+[1m[94m21523[0m [1m[94m|[0m         owner: mac_audio_resources::MacAudioInputStream,
+      [1m[94m|[0m         [1m[33m^^^^^[0m
+      [1m[94m|[0m
+      [1m[94m= [0m[1mnote[0m: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+[1m[33mwarning[0m[1m: function `submit_managed_exact_both_candidate_with_classified_commit` is never used[0m
+     [1m[94m--> [0mapp/src-tauri/src/main.rs:75900:4
+      [1m[94m|[0m
+[1m[94m75900[0m [1m[94m|[0m fn submit_managed_exact_both_candidate_with_classified_commit<T, Commit>(
+      [1m[94m|[0m    [1m[33m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+
+[1m[33mwarning[0m[1m: function `submit_show_output_candidate_with_classified_commit` is never used[0m
+     [1m[94m--> [0mapp/src-tauri/src/main.rs:75933:4
+      [1m[94m|[0m
+[1m[94m75933[0m [1m[94m|[0m fn submit_show_output_candidate_with_classified_commit<T, Commit>(
+      [1m[94m|[0m    [1m[33m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+
+[1m[33mwarning[0m[1m: function `reset_show_spout_outputs_without_output_lease` is never used[0m
+     [1m[94m--> [0mapp/src-tauri/src/main.rs:76086:4
+      [1m[94m|[0m
+[1m[94m76086[0m [1m[94m|[0m fn reset_show_spout_outputs_without_output_lease(
+      [1m[94m|[0m    [1m[33m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+
+[1m[33mwarning[0m[1m: static `TEST_LIFECYCLE_SERIAL` is never used[0m
+   [1m[94m--> [0mapp/src-tauri/src/capture_process_lifecycle.rs:279:8
+    [1m[94m|[0m
+[1m[94m279[0m [1m[94m|[0m static TEST_LIFECYCLE_SERIAL: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+    [1m[94m|[0m        [1m[33m^^^^^^^^^^^^^^^^^^^^^[0m
+
+[1m[33mwarning[0m[1m: function `wait_for_test_reaped_child` is never used[0m
+   [1m[94m--> [0mapp/src-tauri/src/capture_process_lifecycle.rs:293:4
+    [1m[94m|[0m
+[1m[94m293[0m [1m[94m|[0m fn wait_for_test_reaped_child(child_id: u32) -> bool {
+    [1m[94m|[0m    [1m[33m^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+
+[1m[33mwarning[0m[1m: function `quarantined_child_count` is never used[0m
+   [1m[94m--> [0mapp/src-tauri/src/capture_process_lifecycle.rs:318:4
+    [1m[94m|[0m
+[1m[94m318[0m [1m[94m|[0m fn quarantined_child_count() -> usize {
+    [1m[94m|[0m    [1m[33m^^^^^^^^^^^^^^^^^^^^^^^[0m
+
+[1m[33mwarning[0m[1m: constant `DJ_LINK_CREDENTIAL_ROLLBACK_TARGET` is never used[0m
+  [1m[94m--> [0mapp/src-tauri/src/dj_link_machine.rs:47:11
+   [1m[94m|[0m
+[1m[94m47[0m [1m[94m|[0m pub const DJ_LINK_CREDENTIAL_ROLLBACK_TARGET: &str = "jp.seraf.ktn.syndocal/dj-link/v1/rollback";
+   [1m[94m|[0m           [1m[33m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+
+[1m[33mwarning[0m[1m: variant `StoredBlobInvalid` is never constructed[0m
+   [1m[94m--> [0mapp/src-tauri/src/dj_link_machine.rs:212:5
+    [1m[94m|[0m
+[1m[94m204[0m [1m[94m|[0m pub enum DjLinkCredentialError {
+    [1m[94m|[0m          [1m[94m---------------------[0m [1m[94mvariant in this enum[0m
+[1m[94m...[0m
+[1m[94m212[0m [1m[94m|[0m     StoredBlobInvalid,
+    [1m[94m|[0m     [1m[33m^^^^^^^^^^^^^^^^^[0m
+    [1m[94m|[0m
+    [1m[94m= [0m[1mnote[0m: `DjLinkCredentialError` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+[1m[33mwarning[0m[1m: method `bind_ipv4` is never used[0m
+   [1m[94m--> [0mapp/src-tauri/src/dj_link_network.rs:427:12
+    [1m[94m|[0m
+[1m[94m398[0m [1m[94m|[0m impl DjLinkIpv4BindingKey {
+    [1m[94m|[0m [1m[94m-------------------------[0m [1m[94mmethod in this implementation[0m
+[1m[94m...[0m
+[1m[94m427[0m [1m[94m|[0m     pub fn bind_ipv4(&self) -> Ipv4Addr {
+    [1m[94m|[0m            [1m[33m^^^^^^^^^[0m
+
+[1m[33mwarning[0m[1m: constant `DJ_LINK_NL_DAD_STATE_PREFERRED` is never used[0m
+   [1m[94m--> [0mapp/src-tauri/src/dj_link_network.rs:455:11
+    [1m[94m|[0m
+[1m[94m455[0m [1m[94m|[0m pub const DJ_LINK_NL_DAD_STATE_PREFERRED: i32 = 4;
+    [1m[94m|[0m           [1m[33m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+
+[1m[33mwarning[0m[1m: constant `DJ_LINK_MIB_IF_ROW2_HARDWARE_INTERFACE_MASK` is never used[0m
+   [1m[94m--> [0mapp/src-tauri/src/dj_link_network.rs:460:11
+    [1m[94m|[0m
+[1m[94m460[0m [1m[94m|[0m pub const DJ_LINK_MIB_IF_ROW2_HARDWARE_INTERFACE_MASK: u8 = 0x01;
+    [1m[94m|[0m           [1m[33m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+
+[1m[33mwarning[0m[1m: enum `DjLinkIpv4DiscoveryFailure` is never used[0m
+   [1m[94m--> [0mapp/src-tauri/src/dj_link_network.rs:680:10
+    [1m[94m|[0m
+[1m[94m680[0m [1m[94m|[0m pub enum DjLinkIpv4DiscoveryFailure {
+    [1m[94m|[0m          [1m[33m^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+
+[1m[33mwarning[0m[1m: variants `Structural`, `Walk`, and `Observer` are never constructed[0m
+   [1m[94m--> [0mapp/src-tauri/src/dj_link_network.rs:785:5
+    [1m[94m|[0m
+[1m[94m784[0m [1m[94m|[0m pub enum DjLinkIpv4BindingError {
+    [1m[94m|[0m          [1m[94m----------------------[0m [1m[94mvariants in this enum[0m
+[1m[94m785[0m [1m[94m|[0m     Structural(DjLinkIpv4StructuralAnomaly),
+    [1m[94m|[0m     [1m[33m^^^^^^^^^^[0m
+[1m[94m786[0m [1m[94m|[0m     Walk(DjLinkGaaWalkError),
+    [1m[94m|[0m     [1m[33m^^^^[0m
+[1m[94m787[0m [1m[94m|[0m     Observer(DjLinkObserverFailure),
+    [1m[94m|[0m     [1m[33m^^^^^^^^[0m
+    [1m[94m|[0m
+    [1m[94m= [0m[1mnote[0m: `DjLinkIpv4BindingError` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+[1m[33mwarning[0m[1m: constant `MAX_GAA_ADAPTERS` is never used[0m
+    [1m[94m--> [0mapp/src-tauri/src/dj_link_network.rs:1030:11
+     [1m[94m|[0m
+[1m[94m1030[0m [1m[94m|[0m pub const MAX_GAA_ADAPTERS: usize = 256;
+     [1m[94m|[0m           [1m[33m^^^^^^^^^^^^^^^^[0m
+
+[1m[33mwarning[0m[1m: constant `MAX_GAA_ADDRESSES_PER_ADAPTER` is never used[0m
+    [1m[94m--> [0mapp/src-tauri/src/dj_link_network.rs:1032:11
+     [1m[94m|[0m
+[1m[94m1032[0m [1m[94m|[0m pub const MAX_GAA_ADDRESSES_PER_ADAPTER: usize = 64;
+     [1m[94m|[0m           [1m[33m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+
+[1m[33mwarning[0m[1m: multiple variants are never constructed[0m
+    [1m[94m--> [0mapp/src-tauri/src/dj_link_network.rs:1158:5
+     [1m[94m|[0m
+[1m[94m1157[0m [1m[94m|[0m pub enum DjLinkObserverFailure {
+     [1m[94m|[0m          [1m[94m---------------------[0m [1m[94mvariants in this enum[0m
+[1m[94m1158[0m [1m[94m|[0m     ComInit { code: i32 },
+     [1m[94m|[0m     [1m[33m^^^^^^^[0m
+[1m[94m1159[0m [1m[94m|[0m     ComObjectCreation { code: i32 },
+     [1m[94m|[0m     [1m[33m^^^^^^^^^^^^^^^^^[0m
+[1m[94m1160[0m [1m[94m|[0m     EnumerationHost { code: i32 },
+[1m[94m1161[0m [1m[94m|[0m     EnumerationProtocol,
+     [1m[94m|[0m     [1m[33m^^^^^^^^^^^^^^^^^^^[0m
+[1m[94m1162[0m [1m[94m|[0m     EnumerationLimitExceeded,
+     [1m[94m|[0m     [1m[33m^^^^^^^^^^^^^^^^^^^^^^^^[0m
+[1m[94m1163[0m [1m[94m|[0m     ObservationMalformed,
+     [1m[94m|[0m     [1m[33m^^^^^^^^^^^^^^^^^^^^[0m
+[1m[94m1164[0m [1m[94m|[0m     ObserverChannelClosed,
+     [1m[94m|[0m     [1m[33m^^^^^^^^^^^^^^^^^^^^^[0m
+[1m[94m1165[0m [1m[94m|[0m     ObserverTimeout,
+     [1m[94m|[0m     [1m[33m^^^^^^^^^^^^^^^[0m
+[1m[94m1166[0m [1m[94m|[0m     ObserverThreadPanic,
+     [1m[94m|[0m     [1m[33m^^^^^^^^^^^^^^^^^^^[0m
+     [1m[94m|[0m
+     [1m[94m= [0m[1mnote[0m: `DjLinkObserverFailure` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+[1m[33mwarning[0m[1m: constant `DJ_LINK_NETWORK_SETTLE_DWELL` is never used[0m
+  [1m[94m--> [0mapp/src-tauri/src/dj_link_persistence_runtime.rs:21:7
+   [1m[94m|[0m
+[1m[94m21[0m [1m[94m|[0m const DJ_LINK_NETWORK_SETTLE_DWELL: Duration = Duration::from_secs(1);
+   [1m[94m|[0m       [1m[33m^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+
+[1m[33mwarning[0m[1m: function `trust_block_reason` is never used[0m
+   [1m[94m--> [0mapp/src-tauri/src/dj_link_persistence_runtime.rs:893:4
+    [1m[94m|[0m
+[1m[94m893[0m [1m[94m|[0m fn trust_block_reason(decision: DjLinkTrustDecision) -> Result<(), String> {
+    [1m[94m|[0m    [1m[33m^^^^^^^^^^^^^^^^^^[0m
+
+[1m[33mwarning[0m[1m: associated function `for_test_with_probes` is never used[0m
+   [1m[94m--> [0mapp/src-tauri/src/e3_native_acceptance.rs:191:8
+    [1m[94m|[0m
+[1m[94m 37[0m [1m[94m|[0m impl E3NativeAcceptanceConfig {
+    [1m[94m|[0m [1m[94m-----------------------------[0m [1m[94massociated function in this implementation[0m
+[1m[94m...[0m
+[1m[94m191[0m [1m[94m|[0m     fn for_test_with_probes<Probe, DriveValidate>(
+    [1m[94m|[0m        [1m[33m^^^^^^^^^^^^^^^^^^^^[0m
+
+[1m[33mwarning[0m[1m: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected[0m
+  [1m[94m|[0m
+  [1m[94m= [0m[1mnote[0m: `#[warn(linker_messages)]` on by default
+
+[1m[33mwarning[0m: `syndocal` (bin "syndocal" test) generated 29 warnings (run `cargo fix --bin "syndocal" -p syndocal --tests` to apply 8 suggestions)
+[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 4m 36s
+[1m[33mwarning[0m: the following packages contain code that will be rejected by a future version of Rust: block v0.1.6
+[1m[92mnote[0m: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+[1m[92m     Running[0m unittests src/main.rs (target/debug/deps/syndocal-d4dde0f6dcdfd349)
+
+running 7 tests
+test serial_dmx_machine::tests::machine_binding_failed_or_ambiguous_reselection_preserves_prior_local_bytes ... ok
+test serial_dmx_machine::tests::machine_binding_corrupt_future_and_unknown_json_fail_closed_without_rewrite ... ok
+test serial_dmx_machine::tests::legacy_windows_binding_remains_exact_and_is_upgraded_only_on_explicit_confirmation ... ok
+test serial_dmx_machine::tests::machine_binding_rejects_zero_vid_or_pid_on_selection_and_reload ... ok
+test serial_dmx_machine::tests::machine_binding_rejects_missing_selection_com_renumber_and_ambiguity_without_substitution ... ok
+test serial_dmx_machine::tests::machine_binding_selection_does_not_write_a_project_file ... ok
+test serial_dmx_machine::tests::macos_binding_roundtrip_requires_callout_generation_and_rejects_mixed_identity ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 1672 filtered out; finished in 0.02s

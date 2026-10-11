@@ -92,7 +92,7 @@ actual three-field version from 1.2.0.70 to 1.2.73; its MajorUpgrade rejects new
 installed versions. The 13-file Windows ZIP was re-extracted, all hashes matched,
 and its real setup helper passed validation without installing anything. Eight
 setup-helper cases also passed, including existing NSIS/MSI format preservation.
-Hosted macOS final-DMG checks remain pending at this source checkpoint.
+Hosted Apple Silicon DMG run `38159972478` passed final artifact validation (11 checks), macOS validator 169 tests, removal helper 5 tests and 74 unique focused Rust tests. The DMG SHA-256 is `1a94215c4bb8564626dacd5b19635f6a0dff0f5b21d599115e98470a92b019a2`. Its ad-hoc signature and SDK floor were checked; GUI, minimum-OS execution, notarization and physical USB were not observed.
 Final Windows candidates also remove the DJ-Link rollback credential. A scoped
 vault seam proves primary/rollback and exact generic agent targets are retired,
 while foreign, malformed and non-generic entries remain. Windows installers/ZIP
@@ -105,3 +105,9 @@ Physical USB, friend's cable, clean-machine
 installation, macOS GUI, signing/notarization and full product/release acceptance
 remain unobserved. Independent review is not claimed because the user prohibits
 subagents.
+
+## Installer lifecycle follow-up
+
+Hosted run `38176052337` passed 44 real install/update/remove checks for both NSIS and MSI. Installer binaries came from successful cross-platform run `38160795680`, source `efd8374b5e19e054dd7f60c9531c832e8d881e78`; sidecar helpers/harness came from `9b6804789404e2d4e9a3071a93e9fd96cd9daac2`. The report preserves both identities. Updates retained Local/Roaming settings and one registration; stock uninstall followed by the current complete-removal helper removed the product executable, registration, three owned credential targets, data directories and exact HKCU installer preference. The external project remained. No local user installation was changed.
+
+The test caught two defects: quoted NSIS InstallLocation had been rejected by the reader, and saved HKCU installer preferences could reuse an old destination after removal. The reader now accepts one surrounding quote pair while retaining absolute-path/executable/parent validation; complete removal retires only this product's HKCU preference key. Focused cleanup/uninstall seams passed 16 cases. The updated complete-removal helper still needs regeneration into the next NSIS embedded hook. The unpublished alpha.73 Windows ZIP contains older sidecar helpers and must not be distributed as the current candidate. Alpha.74 integration owns regeneration and package validation. The hosted test used the external current helper after stock uninstall; it does not establish standalone alpha.73 stock-uninstaller removal of the new registry key.
