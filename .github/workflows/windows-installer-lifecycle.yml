@@ -1,5 +1,8 @@
 name: Windows installer lifecycle
 on:
+  push:
+    branches: [codex/usb-dmx-blackout-alpha73-20261012]
+    paths: [.github/workflows/windows-installer-lifecycle.yml]
   workflow_dispatch:
     inputs:
       current_run_id:
@@ -19,11 +22,19 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-          CURRENT_RUN_ID: ${{ inputs.current_run_id }}
+          CURRENT_RUN_ID: ${{ inputs.current_run_id || '38160795680' }}
         run: |
           $current = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:CURRENT_RUN_ID" | ConvertFrom-Json
           $baseline = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/38087767111" | ConvertFrom-Json
-          if ($current.status -ne 'completed' -or $current.conclusion -ne 'success' -or $current.head_sha -ne $env:GITHUB_SHA -or $current.path -ne '.github/workflows/cross-platform.yml') { throw 'Current artifact source does not match this successful checkpoint' }
+          if ($current.status -ne 'completed' -or $current.conclusion -ne 'success' -or $current.path -ne '.github/workflows/cross-platform.yml') { throw 'Current artifact source is not a successful cross-platform checkpoint' }
+          # A branch-only workflow cannot be dispatched before it exists on the
+          # default branch. A workflow-only follow-up may run the exact built
+          # product, but product and lifecycle harness changes fail closed.
+          git fetch --no-tags origin $current.head_sha
+          if ($LASTEXITCODE -ne 0) { throw 'Artifact source could not be fetched' }
+          git diff --quiet $current.head_sha HEAD -- app crates tools Cargo.toml Cargo.lock pnpm-lock.yaml .github/workflows/cross-platform.yml
+          if ($LASTEXITCODE -ne 0) { throw 'Product or lifecycle harness differs from the artifact source' }
+          "ARTIFACT_SOURCE_COMMIT=$($current.head_sha)" >> $env:GITHUB_ENV
           if ($baseline.conclusion -ne 'success' -or $baseline.head_sha -ne '80fccf1401de2c2d8dc5c4ea2f03e9b96348d5eb') { throw 'Baseline artifact source mismatch' }
       - uses: actions/download-artifact@v5
         with:
@@ -34,13 +45,13 @@ jobs:
       - uses: actions/download-artifact@v5
         with:
           name: syndocal-1.2.0-alpha.73-windows-2022
-          run-id: ${{ inputs.current_run_id }}
+          run-id: ${{ inputs.current_run_id || '38160795680' }}
           github-token: ${{ github.token }}
           path: current
       - name: Test actual NSIS and MSI update and complete removal
         shell: pwsh
         env:
-          CURRENT_RUN_ID: ${{ inputs.current_run_id }}
+          CURRENT_RUN_ID: ${{ inputs.current_run_id || '38160795680' }}
         run: tools/distribution/test-installed-windows-lifecycle.ps1 -BaselineRoot baseline -CurrentRoot current -EvidencePath lifecycle-report.json
       - uses: actions/upload-artifact@v4
         if: always()
