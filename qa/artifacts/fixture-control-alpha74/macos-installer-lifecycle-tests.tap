@@ -1,0 +1,40 @@
+TAP version 13
+# Subtest: MSI upgrade ordering includes prerelease ordinal and release stages
+ok 1 - MSI upgrade ordering includes prerelease ordinal and release stages
+  ---
+  duration_ms: 1.535
+  type: 'test'
+  ...
+# Subtest: retired fourth-field MSI identity and absent cleanup hook are rejected
+ok 2 - retired fourth-field MSI identity and absent cleanup hook are rejected
+  ---
+  duration_ms: 0.257875
+  type: 'test'
+  ...
+# Subtest: Mac complete removal removes validated bundle/settings/temp and preserves external projects
+ok 3 - Mac complete removal removes validated bundle/settings/temp and preserves external projects
+  ---
+  duration_ms: 34.671417
+  type: 'test'
+  ...
+# Subtest: Mac validation and cancellation preserve all files
+ok 4 - Mac validation and cancellation preserve all files
+  ---
+  duration_ms: 21.285209
+  type: 'test'
+  ...
+# Subtest: Mac redirected data target rejects removal before any bundle deletion
+ok 5 - Mac redirected data target rejects removal before any bundle deletion
+  ---
+  duration_ms: 11.146542
+  type: 'test'
+  ...
+1..5
+# tests 5
+# suites 0
+# pass 5
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 121.992792

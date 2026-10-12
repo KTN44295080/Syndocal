@@ -87,8 +87,17 @@ complete product features and have not been released or hardware verified.
 
 Win/Mac packaging, hosted installer lifecycle and artifact hashes will be
 recorded here when observed.
-No package is delivered yet. Apple Silicon GUI, minimum-OS execution, Developer
-ID signing/notarization, USB signal continuity and venue acceptance remain open.
+The Windows development ZIP was delivered for user testing on 2026-10-12.
+It contains the exact NSIS/MSI installers, verified Microsoft prerequisite and
+current install/removal helpers. The 13-file ZIP was re-extracted and every hash
+compared; the extracted real helper passed ValidateOnly, and eight process/registry
+seam cases passed. Normal NSIS/MSI payload validation passed, including seven
+pinned FFmpeg DLLs. MSI ProductVersion is 1.2.74 with the expected major-upgrade
+detection row. The extracted NSIS executable passed a visible, responsive,
+maximized single-window check and closed gracefully. No local product install or
+uninstall was performed. Mac packaging and hosted installer lifecycle are pending.
+Apple Silicon GUI, minimum-OS execution, Developer ID signing/notarization, USB
+signal continuity and venue acceptance remain open.
 
 ## macOS test-only validation follow-up
 
@@ -105,3 +114,20 @@ claim. This proves ownership and timeout ordering without relying on a scheduled
 75 ms sleep. All 27 selected serial engine tests passed on Windows, with no
 first-party compiler warnings observed. Windows artifacts remain bound to
 `6c069324e742fb726ec080706970408be4ffbd65`; no production code changed here.
+
+## Completed artifact preservation and full-CI findings
+
+Mac run `38182944062` passed on test-only follow-up `0e2d7e71`: final DMG
+validation passed all 11 checks. Its verified DMG and evidence are preserved;
+it was not offered for Mac user testing because the subsequent full-workspace
+gate found a real native lifetime defect. The Windows ZIP already delivered
+remains immutable. Full CI `38182052232` passed all 1107 Linux engine tests but
+failed the native outer-handler contract: `set_fixture_patches` was async,
+allowing dispatch to outlive its lane guard. The canonical handler will become
+synchronous, with its existing two-second publication bound, in alpha.75.
+No assertion will be weakened. Windows in that run lost hosted-runner/server
+communication during warning ratchets; no cause beyond that annotation is
+claimed. Full installer-lifecycle acceptance is still pending.
+
+The delayed-open test uses an injected 10 ms timeout. The real production open
+limit remains five seconds; the test-only follow-up did not change it.
