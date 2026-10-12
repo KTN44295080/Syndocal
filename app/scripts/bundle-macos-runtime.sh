@@ -84,8 +84,17 @@ ditto "$app_path" "$dmg_stage/Syndocal.app"
 ln -s /Applications "$dmg_stage/Applications"
 cp "$workspace_root/tools/distribution/Remove-Syndocal.command" "$dmg_stage/Remove-Syndocal.command"
 chmod 755 "$dmg_stage/Remove-Syndocal.command"
+# Use logical file lengths: allocated blocks can undercount compressed or cloned files.
+dmg_payload_bytes=$(find "$dmg_stage" -type f -exec stat -f '%z' {} + | awk '{bytes += $1} END {printf "%.0f\n", bytes}')
+[[ "$dmg_payload_bytes" =~ ^[0-9]+$ ]] || { echo 'Invalid DMG payload size' >&2; exit 1; }
+dmg_payload_mb=$(((dmg_payload_bytes + 1048575) / 1048576))
+dmg_size_mb=$((dmg_payload_mb + dmg_payload_mb / 5 + 64))
+echo "DMG payload: $dmg_payload_bytes bytes; volume capacity: $dmg_size_mb MiB"
+df -k "$dmg_stage" "$dmg_dir"
 hdiutil create \
   -volname 'Syndocal 1.2.0-alpha.76' \
+  -fs HFS+ \
+  -size "${dmg_size_mb}m" \
   -srcfolder "$dmg_stage" \
   -ov \
   -format UDZO \

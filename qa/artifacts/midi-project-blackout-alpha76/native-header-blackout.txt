@@ -1,0 +1,1 @@
+PASS native Control > both surface: 1280x752; screenshot C:\Users\janua\.codex\worktrees\patch-bulk-alpha74\Syndocal\qa\artifacts\midi-project-blackout-alpha76\native-header-blackout.png

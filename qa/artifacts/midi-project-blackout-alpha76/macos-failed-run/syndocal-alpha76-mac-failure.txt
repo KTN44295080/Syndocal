@@ -1,0 +1,20 @@
+macOS 12+ arm64 DMG	Bundle macOS FFmpeg runtime and create DMG	﻿2026-10-12T13:09:06.2589360Z ##[group]Run bash app/scripts/bundle-macos-runtime.sh \
+macOS 12+ arm64 DMG	Bundle macOS FFmpeg runtime and create DMG	2026-10-12T13:09:06.2593320Z ^[[36;1mbash app/scripts/bundle-macos-runtime.sh \^[[0m
+macOS 12+ arm64 DMG	Bundle macOS FFmpeg runtime and create DMG	2026-10-12T13:09:06.2594050Z ^[[36;1m  target/release/bundle/macos/Syndocal.app \^[[0m
+macOS 12+ arm64 DMG	Bundle macOS FFmpeg runtime and create DMG	2026-10-12T13:09:06.2595500Z ^[[36;1m  target/release/bundle/dmg^[[0m
+macOS 12+ arm64 DMG	Bundle macOS FFmpeg runtime and create DMG	2026-10-12T13:09:06.3124340Z shell: /bin/bash -e {0}
+macOS 12+ arm64 DMG	Bundle macOS FFmpeg runtime and create DMG	2026-10-12T13:09:06.3124730Z env:
+macOS 12+ arm64 DMG	Bundle macOS FFmpeg runtime and create DMG	2026-10-12T13:09:06.3125300Z   LIBCLANG_PATH: /opt/homebrew/opt/llvm/lib
+macOS 12+ arm64 DMG	Bundle macOS FFmpeg runtime and create DMG	2026-10-12T13:09:06.3125760Z   FFMPEG_PREFIX: /Users/runner/ffmpeg-lgpl-8.1.2
+macOS 12+ arm64 DMG	Bundle macOS FFmpeg runtime and create DMG	2026-10-12T13:09:06.3126370Z   PKG_CONFIG_PATH: /Users/runner/ffmpeg-lgpl-8.1.2/lib/pkgconfig
+macOS 12+ arm64 DMG	Bundle macOS FFmpeg runtime and create DMG	2026-10-12T13:09:06.3126860Z   MACOSX_DEPLOYMENT_TARGET: 12.0
+macOS 12+ arm64 DMG	Bundle macOS FFmpeg runtime and create DMG	2026-10-12T13:09:06.3127400Z   PNPM_HOME: /Users/runner/setup-pnpm/node_modules/.bin
+macOS 12+ arm64 DMG	Bundle macOS FFmpeg runtime and create DMG	2026-10-12T13:09:06.3128100Z   CARGO_HOME: /Users/runner/.cargo
+macOS 12+ arm64 DMG	Bundle macOS FFmpeg runtime and create DMG	2026-10-12T13:09:06.3128450Z   CARGO_INCREMENTAL: 0
+macOS 12+ arm64 DMG	Bundle macOS FFmpeg runtime and create DMG	2026-10-12T13:09:06.3128910Z   CARGO_TERM_COLOR: always
+macOS 12+ arm64 DMG	Bundle macOS FFmpeg runtime and create DMG	2026-10-12T13:09:06.3129220Z ##[endgroup]
+macOS 12+ arm64 DMG	Bundle macOS FFmpeg runtime and create DMG	2026-10-12T13:09:06.5662070Z Bundling FFmpeg runtime from /Users/runner/ffmpeg-lgpl-8.1.2 into target/release/bundle/macos/Syndocal.app
+macOS 12+ arm64 DMG	Bundle macOS FFmpeg runtime and create DMG	2026-10-12T13:09:12.8210350Z target/release/bundle/macos/Syndocal.app: replacing existing signature
+macOS 12+ arm64 DMG	Bundle macOS FFmpeg runtime and create DMG	2026-10-12T13:09:18.8601390Z hdiutil: create failed - No space left on device
+macOS 12+ arm64 DMG	Bundle macOS FFmpeg runtime and create DMG	2026-10-12T13:09:18.8602710Z could not access /Volumes/Syndocal 1.2.0-alpha.76/Syndocal.app/Contents/Frameworks/libswscale.9.dylib - No space left on device
+macOS 12+ arm64 DMG	Bundle macOS FFmpeg runtime and create DMG	2026-10-12T13:09:18.8761710Z ##[error]Process completed with exit code 1.
