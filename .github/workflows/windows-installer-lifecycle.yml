@@ -1,12 +1,9 @@
 name: Windows installer lifecycle
 on:
-  push:
-    branches: [codex/usb-dmx-blackout-alpha73-20261012]
-    paths: [.github/workflows/windows-installer-lifecycle.yml, tools/distribution/SyndocalInstallations.ps1, tools/distribution/Remove-SyndocalData.ps1, tools/distribution/test-installed-windows-lifecycle.ps1, tools/distribution/test-windows-uninstall.mjs]
   workflow_dispatch:
     inputs:
       current_run_id:
-        description: Successful alpha.74 Cross-platform run on this exact source
+        description: Successful alpha.75 Cross-platform run on this exact source
         required: true
         type: string
 permissions:
@@ -22,7 +19,7 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-          CURRENT_RUN_ID: ${{ inputs.current_run_id || '38160795680' }}
+          CURRENT_RUN_ID: ${{ inputs.current_run_id }}
         run: |
           $current = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:CURRENT_RUN_ID" | ConvertFrom-Json
           $baseline = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/38087767111" | ConvertFrom-Json
@@ -35,7 +32,9 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Artifact source could not be fetched' }
           # The registration reader ships alongside the installers in the ZIP;
           # it is deliberately tested from HEAD against unchanged installer bytes.
-          git diff --quiet $current.head_sha HEAD -- app crates tools Cargo.toml Cargo.lock pnpm-lock.yaml .github/workflows/cross-platform.yml ':(exclude)tools/distribution/SyndocalInstallations.ps1' ':(exclude)tools/distribution/Remove-SyndocalData.ps1' ':(exclude)tools/distribution/test-installed-windows-lifecycle.ps1' ':(exclude)tools/distribution/test-windows-uninstall.mjs' ':(exclude)tools/distribution/test-windows-cleanup.mjs'
+          # Versioned ZIP sidecars are finalized from exact installer hashes after
+          # native build; their real-helper seam/ValidateOnly evidence is separate.
+          git diff --quiet $current.head_sha HEAD -- app crates tools Cargo.toml Cargo.lock pnpm-lock.yaml .github/workflows/cross-platform.yml ':(exclude)tools/distribution/SyndocalInstallations.ps1' ':(exclude)tools/distribution/Remove-SyndocalData.ps1' ':(exclude)tools/distribution/test-installed-windows-lifecycle.ps1' ':(exclude)tools/distribution/test-windows-uninstall.mjs' ':(exclude)tools/distribution/test-windows-cleanup.mjs' ':(exclude)tools/distribution/alpha75/Install-Windows.cmd' ':(exclude)tools/distribution/alpha75/Install-Windows.ps1' ':(exclude)tools/distribution/alpha75/README.txt' ':(exclude)tools/distribution/alpha75/使い方.txt' ':(exclude)tools/distribution/alpha75/check-setup-helper.mjs'
           if ($LASTEXITCODE -ne 0) { throw 'Native product or embedded installer hook differs from the artifact source' }
           "ARTIFACT_SOURCE_COMMIT=$($current.head_sha)" >> $env:GITHUB_ENV
           if ($baseline.conclusion -ne 'success' -or $baseline.head_sha -ne '80fccf1401de2c2d8dc5c4ea2f03e9b96348d5eb') { throw 'Baseline artifact source mismatch' }
@@ -47,14 +46,14 @@ jobs:
           path: baseline
       - uses: actions/download-artifact@v5
         with:
-          name: syndocal-1.2.0-alpha.74-windows-2022
-          run-id: ${{ inputs.current_run_id || '38160795680' }}
+          name: syndocal-1.2.0-alpha.75-windows-2022
+          run-id: ${{ inputs.current_run_id }}
           github-token: ${{ github.token }}
           path: current
       - name: Test actual NSIS and MSI update and complete removal
         shell: pwsh
         env:
-          CURRENT_RUN_ID: ${{ inputs.current_run_id || '38160795680' }}
+          CURRENT_RUN_ID: ${{ inputs.current_run_id }}
         run: tools/distribution/test-installed-windows-lifecycle.ps1 -BaselineRoot baseline -CurrentRoot current -EvidencePath lifecycle-report.json
       - name: Record the verified artifact source
         if: always()

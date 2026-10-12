@@ -33,7 +33,7 @@ import { assertInstallerLifecycle } from "./installer-lifecycle-policy.mjs";
 
 export { withMaterializedVerifiedExecutable } from "./verified-materialization.mjs";
 
-export const expectedVersion = "1.2.0-alpha.74";
+export const expectedVersion = "1.2.0-alpha.75";
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const appRoot = resolve(scriptDir, "..");
 const workspaceRoot = resolve(appRoot, "..");

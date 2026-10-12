@@ -9,9 +9,13 @@ Build/test/native evidence and remaining concurrency boundaries are recorded bel
 this is not full Recording completion. See [remaining work and acceptance](REMAINING_WORK_2026-09-05.md).
 Earlier artifact versions, hashes and process observations below are historical.
 
+## 2026-10-12 alpha.75 fixture publication guard repair
+
+Current product metadata is `1.2.0-alpha.75`. The canonical bulk-patch handler now keeps its outer renderer admission lane until engine publication returns. This fixes the full-workspace synchronous-handler failure after alpha.74 user-test delivery. Evidence and pending Win/Mac packages are recorded in [the current checkpoint](FIXTURE_PUBLICATION_ALPHA75_2026-10-12.md). Alpha.74 files remain immutable. This is not full Recording, physical-output or release completion.
+
 ## 2026-10-12 alpha.74 fixture control distribution candidate
 
-Current product metadata is `1.2.0-alpha.74`. Continuous fixture faders, atomic bulk repatching, neutral DJ title defaults and the complete-removal hook are in [the current candidate checkpoint](FIXTURE_CONTROL_ALPHA74_2026-10-12.md), with explicit pending native/package/device gates. The candidate includes [alpha.73 output request and USB startup repairs](USB_DMX_BLACKOUT_ALPHA73_2026-10-12.md); distributed alpha.72 artifacts remain immutable. This is not full Recording or release completion.
+Recorded product metadata was `1.2.0-alpha.74`. Continuous fixture faders, atomic bulk repatching, neutral DJ title defaults and the complete-removal hook are in [the current candidate checkpoint](FIXTURE_CONTROL_ALPHA74_2026-10-12.md), with explicit pending native/package/device gates. The candidate includes [alpha.73 output request and USB startup repairs](USB_DMX_BLACKOUT_ALPHA73_2026-10-12.md); distributed alpha.72 artifacts remain immutable. This is not full Recording or release completion.
 
 ## 2026-10-11 external MCP OS process identity
 

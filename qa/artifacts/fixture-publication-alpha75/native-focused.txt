@@ -1,0 +1,108 @@
+**********************************************************************
+** Visual Studio 2022 Developer Command Prompt v17.14.39
+** Copyright (c) 2025 Microsoft Corporation
+**********************************************************************
+[vcvarsall.bat] Environment initialized for: 'x64'
+C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+   Compiling protocol v1.2.0-alpha.75 (C:\Users\janua\.codex\worktrees\patch-bulk-alpha74\Syndocal\crates\protocol)
+   Compiling io v1.2.0-alpha.75 (C:\Users\janua\.codex\worktrees\patch-bulk-alpha74\Syndocal\crates\io)
+   Compiling syndocal v1.2.0-alpha.75 (C:\Users\janua\.codex\worktrees\patch-bulk-alpha74\Syndocal\app\src-tauri)
+   Compiling video v1.2.0-alpha.75 (C:\Users\janua\.codex\worktrees\patch-bulk-alpha74\Syndocal\crates\video)
+   Compiling visualizer v1.2.0-alpha.75 (C:\Users\janua\.codex\worktrees\patch-bulk-alpha74\Syndocal\crates\visualizer)
+   Compiling gdtf v1.2.0-alpha.75 (C:\Users\janua\.codex\worktrees\patch-bulk-alpha74\Syndocal\crates\gdtf)
+   Compiling audio v1.2.0-alpha.75 (C:\Users\janua\.codex\worktrees\patch-bulk-alpha74\Syndocal\crates\audio)
+   Compiling engine v1.2.0-alpha.75 (C:\Users\janua\.codex\worktrees\patch-bulk-alpha74\Syndocal\crates\engine)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4m 34s
+     Running unittests src\main.rs (C:\Users\janua\AppData\Local\Temp\syndocal-native-acceptance-target\debug\deps\syndocal-3462e75d149e6f63.exe)
+
+running 4 tests
+test continuous_fixture_fader::tests::gesture_lifetime_and_target_limits_are_bounded ... ok
+test continuous_fixture_fader::tests::increasing_values_reuse_validation_but_replay_and_invalid_batches_fail ... ok
+test tests::fixture_transform_batch_tests::continuous_fixture_fader_real_engine_cancel_retains_interrupted_undo ... ok
+test tests::fixture_transform_batch_tests::continuous_fixture_fader_real_engine_commit_is_one_undo_redo_entry ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 2071 filtered out; finished in 0.05s
+
+   Compiling syndocal v1.2.0-alpha.75 (C:\Users\janua\.codex\worktrees\patch-bulk-alpha74\Syndocal\app\src-tauri)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 57.49s
+     Running unittests src\main.rs (C:\Users\janua\AppData\Local\Temp\syndocal-native-acceptance-target\debug\deps\syndocal-3462e75d149e6f63.exe)
+
+running 1 test
+test fixture_repatch_request::tests::exact_move_request_rejects_unknown_fields_and_unsafe_ids ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2074 filtered out; finished in 0.00s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.78s
+     Running unittests src\main.rs (C:\Users\janua\AppData\Local\Temp\syndocal-native-acceptance-target\debug\deps\syndocal-3462e75d149e6f63.exe)
+
+running 42 tests
+test authored_control_plane::tests::bpm_history_tests::manual_bpm_invalid_values_leave_engine_and_existing_history_unchanged ... ok
+test authored_control_plane::tests::bpm_history_tests::manual_bpm_ticket_preserves_prior_history_and_undo_redo_exact_images ... ok
+
+thread 'authored_control_plane::tests::destroyed_retirement_marker_fences_begin_and_authored_gap_without_drift' (177204) panicked at app\src-tauri\src\authored_control_plane.rs:2034:13:
+poison output lease registry between owner and query retirement
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test authored_control_plane::tests::destroyed_retirement_marker_fences_begin_and_authored_gap_without_drift ... ok
+test authored_control_plane::tests::exact_reply_retry_is_single_flight_and_byte_identical ... ok
+test authored_control_plane::tests::generic_authored_bridge_replays_exact_terminal_result_and_rejects_shape_reuse ... ok
+test authored_control_plane::tests::owner_aba_and_other_window_requests_are_forbidden_without_drift ... ok
+test authored_control_plane::tests::owner_retirement_tombstones_old_principal_receipts ... ok
+test authored_control_plane::tests::publication_failure_keeps_a_and_coordinator_identical_and_is_receipted ... ok
+test authored_control_plane::tests::real_authored_commit_undoes_to_exact_a_and_redoes_to_exact_b_through_navigation_core ... ok
+test authored_control_plane::tests::real_handler_noop_is_receipted_without_publication_or_history_drift ... ok
+test authored_control_plane::tests::real_handler_retry_publishes_once_and_retains_byte_identical_receipt ... ok
+test authored_control_plane::tests::real_handler_same_receipt_key_with_different_shape_rejects_without_drift ... ok
+test authored_control_plane::tests::retained_exact_receipt_precedes_expired_issued_fence_and_tombstones_fail_closed ... ok
+test authored_control_plane::tests::same_key_different_shape_is_rejected_without_republishing ... ok
+test authored_control_plane::tests::two_principals_from_one_start_fence_admit_only_one_and_stale_the_other ... ok
+test authored_control_plane::tests::wrong_authored_operation_or_payload_is_rejected_before_engine_or_history ... ok
+test control_plane::tests::canonical_registry_derives_the_exact_current_source_inventory ... ok
+test control_plane::tests::canonical_registry_rejects_dropped_legacy_and_keyboard_sources ... ok
+test control_plane::tests::compiled_handler_and_registry_have_the_exact_same_set ... ok
+test control_plane::tests::conservative_default_never_makes_a_mutation_externally_available ... ok
+test control_plane::tests::duplicate_handler_command_is_rejected ... ok
+test control_plane::tests::frontend_manifest_rejects_duplicate_unsorted_and_invalid_commands ... ok
+test control_plane::tests::handler_parser_accepts_only_exact_nonorphaned_windows_x64_asio_cfg ... ok
+test control_plane::tests::keyboard_shortcut_manifest_rejects_malformed_duplicate_and_drifting_sources ... ok
+test control_plane::tests::legacy_registry_only_adds_the_canonical_query_endpoint_row ... ok
+test control_plane::tests::legacy_set_effect_enabled_stays_r5_while_v2_owns_the_authoritative_mutation ... ok
+test control_plane::tests::legacy_v1_registry_json_and_count_remain_inventory_honest ... ok
+test control_plane::tests::missing_or_new_registry_descriptor_is_rejected ... ok
+test control_plane::tests::multiple_production_handler_blocks_are_rejected ... ok
+test control_plane::tests::registry_requires_a_window_binding ... ok
+test control_plane::tests::tauri_route_admission_table_is_exact_and_fail_closed ... ok
+test project_file_control_plane::tests::diagnostic_audit_backup_delete_success_without_publication_phase_is_exportable ... ok
+test project_file_control_plane::tests::diagnostic_audit_file_projection_preserves_original_private_results ... ok
+test project_file_control_plane::tests::diagnostic_audit_file_status_success_does_not_claim_unknown_or_failed_publication ... ok
+test project_file_control_plane::tests::diagnostic_audit_indeterminate_error_never_claims_an_irreversible_effect_failed ... ok
+test project_file_control_plane::tests::diagnostic_audit_invalid_typed_receipts_block_export_without_rewriting_results ... ok
+test project_file_control_plane::tests::diagnostic_audit_management_success_without_publication_phase_is_exportable ... ok
+test project_file_control_plane::tests::diagnostic_audit_never_serializes_or_retains_the_terminal_result_body ... ok
+test project_file_control_plane::tests::project_file_backup_authority_binds_origin_full_request_expiry_and_capacity ... ok
+test project_file_control_plane::tests::project_file_bounded_target_observation_and_no_clobber ... ok
+test project_file_control_plane::tests::project_file_durable_shape_binds_full_fence_and_target ... ok
+test project_file_control_plane::tests::project_file_target_rejects_relative_traversal_and_wrong_surface_extension ... ok
+
+test result: ok. 42 passed; 0 failed; 0 ignored; 0 measured; 2033 filtered out; finished in 29.42s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.71s
+     Running unittests src\main.rs (C:\Users\janua\AppData\Local\Temp\syndocal-native-acceptance-target\debug\deps\syndocal-3462e75d149e6f63.exe)
+
+running 5 tests
+test renderer_ticketed_admission::tests::flat_business_request_routes_keep_their_ticketed_payload_shape ... ok
+test renderer_ticketed_admission::tests::flat_renderer_routes_keep_their_existing_payload_shape ... ok
+test renderer_ticketed_admission::tests::typed_renderer_routes_extract_only_the_exact_request_envelope ... ok
+test renderer_ticketed_admission::tests::typed_renderer_routes_reject_flat_missing_and_ambiguous_envelopes ... ok
+test renderer_ticketed_admission::tests::typed_renderer_routes_reject_non_object_requests ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 2070 filtered out; finished in 0.00s
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.64s
+     Running unittests src\main.rs (C:\Users\janua\AppData\Local\Temp\syndocal-native-acceptance-target\debug\deps\syndocal-3462e75d149e6f63.exe)
+
+running 1 test
+test tests::every_outer_ticketed_handler_is_synchronous ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2074 filtered out; finished in 1.89s

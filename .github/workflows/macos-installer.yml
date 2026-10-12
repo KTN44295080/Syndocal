@@ -108,6 +108,7 @@ jobs:
           cargo test -p engine fixture_repatch --lib --locked 2>&1 | tee target/qa/macos-artifact/fixture-repatch-engine-tests.txt
           cargo test -p syndocal --bin syndocal continuous_fixture_fader --locked 2>&1 | tee target/qa/macos-artifact/fixture-fader-history-tests.txt
           cargo test -p syndocal --bin syndocal fixture_repatch --locked 2>&1 | tee target/qa/macos-artifact/fixture-repatch-native-tests.txt
+          cargo test -p syndocal --bin syndocal every_outer_ticketed_handler_is_synchronous --locked 2>&1 | tee target/qa/macos-artifact/fixture-publication-admission-tests.txt
 
       - name: Build macOS application bundle
         run: pnpm --dir app tauri build --ci --bundles app

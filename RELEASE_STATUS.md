@@ -1,8 +1,12 @@
 # Syndocal historical v1.0 / current v1.2 alpha Release Status
 
+## 2026-10-12 alpha.75 fixture publication guard repair
+
+Current product metadata is `1.2.0-alpha.75`. The canonical bulk-patch handler now keeps its outer renderer admission lane until engine publication returns. This fixes the full-workspace synchronous-handler failure after alpha.74 user-test delivery. Evidence and pending Win/Mac packages are recorded in [the current checkpoint](qa/FIXTURE_PUBLICATION_ALPHA75_2026-10-12.md). Alpha.74 files remain immutable. This is not full Recording, physical-output or release completion.
+
 ## 2026-10-12 alpha.74 fixture control distribution candidate
 
-Current product metadata is `1.2.0-alpha.74`. The candidate adds bounded continuous fixture faders, atomic bulk repatching, neutral DJ title defaults and a regenerated complete-removal hook. Validation and pending package/native/device gates are recorded in [the current checkpoint](qa/FIXTURE_CONTROL_ALPHA74_2026-10-12.md). It includes [the alpha.73 BO and USB startup repairs](qa/USB_DMX_BLACKOUT_ALPHA73_2026-10-12.md). Alpha.72 artifacts remain immutable. No alpha.74 package has been delivered yet; this is not full Recording or release completion.
+Recorded product metadata was `1.2.0-alpha.74`. The candidate adds bounded continuous fixture faders, atomic bulk repatching, neutral DJ title defaults and a regenerated complete-removal hook. Validation and pending package/native/device gates are recorded in [the current checkpoint](qa/FIXTURE_CONTROL_ALPHA74_2026-10-12.md). It includes [the alpha.73 BO and USB startup repairs](qa/USB_DMX_BLACKOUT_ALPHA73_2026-10-12.md). Alpha.72 artifacts remain immutable. Windows alpha.74 was delivered for user testing; this is not full Recording or release completion.
 
 ## 2026-10-10 alpha.71 Mac USB-DMX and development distribution
 

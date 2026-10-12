@@ -1,0 +1,16 @@
+**********************************************************************
+** Visual Studio 2022 Developer Command Prompt v17.14.39
+** Copyright (c) 2025 Microsoft Corporation
+**********************************************************************
+[vcvarsall.bat] Environment initialized for: 'x64'
+C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.75s
+     Running unittests src\main.rs (C:\Users\janua\AppData\Local\Temp\syndocal-native-acceptance-target\debug\deps\syndocal-3462e75d149e6f63.exe)
+
+running 2 tests
+test fixture_repatch_request::tests::exact_move_request_rejects_unknown_fields_and_unsafe_ids ... ok
+test tests::fixture_transform_batch_tests::fixture_repatch_real_engine_bulk_publication_is_one_undo_redo_entry ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 2073 filtered out; finished in 0.03s

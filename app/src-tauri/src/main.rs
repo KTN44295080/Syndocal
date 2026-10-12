@@ -28228,10 +28228,17 @@ fn remove_fixture(state: State<'_, AppState>, fixture_id: FixtureId) -> Result<(
 }
 
 #[tauri::command]
-async fn set_fixture_patches(app: tauri::AppHandle, changes: Vec<fixture_repatch_request::FixturePatchChange>) -> Result<(), String> {
-    let changes=changes.into_iter().map(fixture_repatch_request::FixturePatchChange::into_engine).collect::<Result<Vec<_>,_>>()?;
-    tauri::async_runtime::spawn_blocking(move || app.state::<AppState>().engine.set_fixture_patches_published_with_timeout(changes, Duration::from_secs(2)))
-        .await.map_err(|error| format!("Fixture move worker failed: {error}"))?
+fn set_fixture_patches(
+    state: State<'_, AppState>,
+    changes: Vec<fixture_repatch_request::FixturePatchChange>,
+) -> Result<(), String> {
+    let changes = changes
+        .into_iter()
+        .map(fixture_repatch_request::FixturePatchChange::into_engine)
+        .collect::<Result<Vec<_>, _>>()?;
+    state
+        .engine
+        .set_fixture_patches_published_with_timeout(changes, Duration::from_secs(2))
 }
 
 #[tauri::command]
