@@ -1170,8 +1170,8 @@ assert.match(
   /MessageDialog::new\(\)[\s\S]*MessageButtons::YesNo[\s\S]*set_parent\(window\)[\s\S]*MessageDialogResult::Yes/,
   "advanced OutputControl must use a parented Yes-only native confirmation",
 );
+assert.doesNotMatch(nativeDangerConfirmation, /OutputControlActionV2::ReleaseBlackout/, "ordinary BO clear uses the local explicit action and exact lease/fence");
 for (const dangerousAction of [
-  "ReleaseBlackout",
   "Arm",
   "TakeOverStandby",
   "AddDisplay",

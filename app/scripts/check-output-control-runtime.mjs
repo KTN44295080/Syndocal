@@ -1455,7 +1455,8 @@ assert.match(
   /MessageDialog::new\(\)[\s\S]*MessageButtons::YesNo[\s\S]*set_parent\(window\)[\s\S]*MessageDialogResult::Yes/,
   "advanced output mutations require a parented native Yes-only dialog",
 );
-for (const action of ["ReleaseBlackout", "Arm", "TakeOverStandby", "AddDisplay", "AssignVideoOutputComposition", "EnableShowArtNetLoopbackRoute", "EnableShowSerialDmxSafetyBlackoutRoute", "StopShowSerialDmxSafetyBlackoutRoute", "SendDsf2026ArtNetAcceptanceProbe", "AcknowledgeDsf2026ArtNetAcceptanceProbeInDoubt", "EnableShowSpoutOutputs", "ResetShowSpoutOutputs", "ForceTransferLease"]) {
+assert.doesNotMatch(nativeDangerConfirmation, /OutputControlActionV2::ReleaseBlackout/, "ordinary BO clear is a local explicit action, with canonical lease/fence checks retained");
+for (const action of ["Arm", "TakeOverStandby", "AddDisplay", "AssignVideoOutputComposition", "EnableShowArtNetLoopbackRoute", "EnableShowSerialDmxSafetyBlackoutRoute", "StopShowSerialDmxSafetyBlackoutRoute", "SendDsf2026ArtNetAcceptanceProbe", "AcknowledgeDsf2026ArtNetAcceptanceProbeInDoubt", "EnableShowSpoutOutputs", "ResetShowSpoutOutputs", "ForceTransferLease"]) {
   assert.match(nativeDangerConfirmation, new RegExp(`OutputControlActionV2::${action}`));
 }
 const outputExecution = runtimeSource.slice(

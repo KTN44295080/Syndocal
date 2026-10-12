@@ -80,13 +80,13 @@ const MAX_SAFETY_AUDIT_RECORDS: usize = 65_536;
 /// Advanced output transitions require an OS-owned confirmation that is
 /// parented to the exact local Tauri window.  The ordinary Enable action is a
 /// deliberate one-click local action and must never open this dialog.
+/// Ordinary BO clear also uses its local click plus exact lease/fence.
 pub(crate) fn output_action_requires_native_danger_confirmation(
     action: &OutputControlActionV2,
 ) -> bool {
     matches!(
         action,
-        OutputControlActionV2::ReleaseBlackout { .. }
-            | OutputControlActionV2::EnableShowArtNetLoopbackRoute { .. }
+        OutputControlActionV2::EnableShowArtNetLoopbackRoute { .. }
             | OutputControlActionV2::EnableShowSerialDmxSafetyBlackoutRoute { .. }
             | OutputControlActionV2::StopShowSerialDmxSafetyBlackoutRoute { .. }
             | OutputControlActionV2::SendDsf2026ArtNetAcceptanceProbe { .. }
@@ -6975,7 +6975,20 @@ mod tests {
         }
         assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
 
-        let dangerous = OutputControlActionV2::ReleaseBlackout {
+        assert!(output_confirmation_gate(
+            &OutputControlActionV2::ReleaseBlackout {
+                lease: OutputLeaseAuthorityV1 {
+                    lease_id: "lease-0000000000000001".to_string(),
+                    generation: 1
+                }
+            },
+            &deny
+        )
+        .is_ok());
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+
+        let dangerous = OutputControlActionV2::Arm {
+            role: protocol::control_plane_command::OutputControlTargetRoleV1::Both,
             lease: OutputLeaseAuthorityV1 {
                 lease_id: "lease-0000000000000001".to_string(),
                 generation: 1,

@@ -1553,8 +1553,7 @@ fn canonical_descriptor_for_source(
             AdapterPolicy::LocalWindowEmergencySafetyMutation,
             ReceiptPolicy::ExactTerminalReceipt,
         ),
-        ReviewedCanonicalOperation::ReleaseBlackout
-        | ReviewedCanonicalOperation::ArmOutputOwnership
+        ReviewedCanonicalOperation::ArmOutputOwnership
         | ReviewedCanonicalOperation::TakeOverStandby
         | ReviewedCanonicalOperation::AddDisplayOutput
         | ReviewedCanonicalOperation::AssignVideoOutputComposition
@@ -1575,7 +1574,8 @@ fn canonical_descriptor_for_source(
             AdapterPolicy::LocalWindowDangerousOutputControl,
             ReceiptPolicy::ExactTerminalReceipt,
         ),
-        ReviewedCanonicalOperation::SetDisplayWindowOpen
+        ReviewedCanonicalOperation::ReleaseBlackout
+        | ReviewedCanonicalOperation::SetDisplayWindowOpen
         | ReviewedCanonicalOperation::SetBlackout
         | ReviewedCanonicalOperation::SetLightingMaster
         | ReviewedCanonicalOperation::SetGroupSubmaster
@@ -1751,6 +1751,7 @@ fn canonical_descriptor_for_source(
         } else if matches!(
             reviewed,
             ReviewedCanonicalOperation::EnableOutput
+                | ReviewedCanonicalOperation::ReleaseBlackout
                 | ReviewedCanonicalOperation::SetDisplayWindowOpen
                 | ReviewedCanonicalOperation::SetBlackout
                 | ReviewedCanonicalOperation::SetLightingMaster
@@ -1766,8 +1767,7 @@ fn canonical_descriptor_for_source(
             ConsentPolicy::LocalExplicitAction
         } else if matches!(
             reviewed,
-            ReviewedCanonicalOperation::ReleaseBlackout
-                | ReviewedCanonicalOperation::ArmOutputOwnership
+            ReviewedCanonicalOperation::ArmOutputOwnership
                 | ReviewedCanonicalOperation::TakeOverStandby
                 | ReviewedCanonicalOperation::AddDisplayOutput
                 | ReviewedCanonicalOperation::AssignVideoOutputComposition
@@ -3137,6 +3137,7 @@ mod tests {
                 if matches!(
                     operation_id,
                     OUTPUT_ENABLE_OPERATION_ID
+                        | OUTPUT_BLACKOUT_RELEASE_OPERATION_ID
                         | OUTPUT_BLACKOUT_SET_OPERATION_ID
                         | OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID
                         | OUTPUT_LIGHTING_MASTER_SET_OPERATION_ID
@@ -3171,6 +3172,7 @@ mod tests {
                 if matches!(
                     operation_id,
                     OUTPUT_ENABLE_OPERATION_ID
+                        | OUTPUT_BLACKOUT_RELEASE_OPERATION_ID
                         | OUTPUT_BLACKOUT_SET_OPERATION_ID
                         | OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID
                         | OUTPUT_LIGHTING_MASTER_SET_OPERATION_ID
@@ -3931,6 +3933,7 @@ mod tests {
                     if matches!(
                         operation.operation_id.as_str(),
                         OUTPUT_ENABLE_OPERATION_ID
+                            | OUTPUT_BLACKOUT_RELEASE_OPERATION_ID
                             | OUTPUT_BLACKOUT_SET_OPERATION_ID
                             | OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID
                             | OUTPUT_LIGHTING_MASTER_SET_OPERATION_ID
@@ -3961,6 +3964,7 @@ mod tests {
                     if matches!(
                         operation.operation_id.as_str(),
                         OUTPUT_ENABLE_OPERATION_ID
+                            | OUTPUT_BLACKOUT_RELEASE_OPERATION_ID
                             | OUTPUT_BLACKOUT_SET_OPERATION_ID
                             | OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID
                             | OUTPUT_LIGHTING_MASTER_SET_OPERATION_ID

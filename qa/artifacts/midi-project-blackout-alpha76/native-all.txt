@@ -6,10 +6,8 @@
 C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
 CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
 C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
-   Compiling io v1.2.0-alpha.76 (C:\Users\janua\.codex\worktrees\patch-bulk-alpha74\Syndocal\crates\io)
-   Compiling engine v1.2.0-alpha.76 (C:\Users\janua\.codex\worktrees\patch-bulk-alpha74\Syndocal\crates\engine)
    Compiling syndocal v1.2.0-alpha.76 (C:\Users\janua\.codex\worktrees\patch-bulk-alpha74\Syndocal\app\src-tauri)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 32s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 40.33s
      Running unittests src\main.rs (C:\Users\janua\AppData\Local\Temp\syndocal-native-acceptance-target\debug\deps\syndocal-f79e67a3be742481.exe)
 
 running 2077 tests
@@ -2091,4 +2089,4 @@ test vj_preview_transport_tests::preview_requires_explicit_stage_and_uses_no_dec
 test vj_preview_transport_tests::preview_reverse_stops_at_zero_and_speed_is_sanitized ... ok
 test vj_preview_transport_tests::staging_rewinds_to_the_in_point_instead_of_copying_program_position ... ok
 
-test result: ok. 2056 passed; 0 failed; 21 ignored; 0 measured; 0 filtered out; finished in 101.31s
+test result: ok. 2056 passed; 0 failed; 21 ignored; 0 measured; 0 filtered out; finished in 104.24s

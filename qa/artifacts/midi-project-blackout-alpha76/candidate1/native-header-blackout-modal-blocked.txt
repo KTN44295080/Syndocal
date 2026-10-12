@@ -1,0 +1,9 @@
+file:///C:/Users/janua/.codex/worktrees/patch-bulk-alpha74/Syndocal/qa/artifacts/midi-project-blackout-alpha76/native-ui-blackout-probe.mjs:195
+  const untilState = async predicate => { for (let n=0;n<100;n++){const snapshot=await readImage();assert(noOutput(snapshot));if(predicate(snapshot))return snapshot;await pause(50);}throw new Error('Native header BO state did not settle'); };
+                                                                                                                                                                                            ^
+
+Error: Native header BO state did not settle
+    at untilState (file:///C:/Users/janua/.codex/worktrees/patch-bulk-alpha74/Syndocal/qa/artifacts/midi-project-blackout-alpha76/native-ui-blackout-probe.mjs:195:189)
+    at async file:///C:/Users/janua/.codex/worktrees/patch-bulk-alpha74/Syndocal/qa/artifacts/midi-project-blackout-alpha76/native-ui-blackout-probe.mjs:214:3
+
+Node.js v22.22.1

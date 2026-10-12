@@ -1,0 +1,15 @@
+node:internal/modules/run_main:123
+    triggerUncaughtException(
+    ^
+
+AssertionError [ERR_ASSERTION]: BO probe requires every physical output disabled
+    at file:///C:/Users/janua/.codex/worktrees/patch-bulk-alpha74/Syndocal/qa/artifacts/midi-project-blackout-alpha76/native-ui-blackout-probe.mjs:183:3 {
+  generatedMessage: false,
+  code: 'ERR_ASSERTION',
+  actual: false,
+  expected: true,
+  operator: '==',
+  diff: 'simple'
+}
+
+Node.js v22.22.1

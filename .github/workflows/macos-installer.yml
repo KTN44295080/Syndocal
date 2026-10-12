@@ -118,6 +118,7 @@ jobs:
           cargo test -p syndocal --bin syndocal new_empty_project_clears_retirement_blackout_without_enabling_outputs --locked 2>&1 | tee target/qa/macos-artifact/new-project-output-reset-tests.txt
           cargo test -p syndocal --bin syndocal output_control_allocator_advances_past_admitted_rejected_requests --locked 2>&1 | tee target/qa/macos-artifact/output-admitted-request-tests.txt
           cargo test -p syndocal --bin syndocal midi_feedback_route_uses_the_narrow_engine_reader --locked 2>&1 | tee target/qa/macos-artifact/midi-learn-admission-tests.txt
+          cargo test -p syndocal --bin syndocal native_danger_confirmation_gate_is_exact_and_terminal_replay_is_dialog_free --locked 2>&1 | tee target/qa/macos-artifact/output-blackout-consent-tests.txt
           pnpm --dir app run check:midi-learn
           pnpm --dir app run check:project-mapping-cas
 

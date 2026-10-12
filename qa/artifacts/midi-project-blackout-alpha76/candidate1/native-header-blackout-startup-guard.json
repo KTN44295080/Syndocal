@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "timestamp": "2026-10-12T12:13:27.434Z",
+  "passed": false,
+  "domain": "both",
+  "executable": "C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-native-acceptance-target\\release\\syndocal.exe",
+  "executableSha256": "5464c1a649bc1ea50f94562b1d363a7d10f4dc9c3b638dd89c49708f38c74cc7",
+  "runnerSha256": "ca9d7e02c42eb056380a2c9ed565c68d7bef5efe7ec564829e9358a99530f0ad",
+  "backendHarnessSha256": "fcc5655508dccff3ca6b99d5bb60e155483e84de6c4347f564d7891b765ea369",
+  "processId": 93904,
+  "screenshot": null,
+  "proof": {
+    "viewport": [
+      1280,
+      752
+    ],
+    "controlSelected": true,
+    "bothSelected": true,
+    "tabsLeft": true,
+    "upperFullWidth": true,
+    "laneCount": 2,
+    "splitHidden": true,
+    "lowerSideBySide": true,
+    "controlCount": 10,
+    "minimumControlHeight": 48,
+    "outerOverflow": false
+  },
+  "normalAppIdentityUnchanged": true,
+  "error": "BO probe requires every physical output disabled",
+  "nonclaims": [
+    "Real native header DMX/VID/ALL BO engage and clear; runtime latch clear through DMX BO with all routes disabled",
+    "No output, physical device, recording, or venue workflow"
+  ]
+}

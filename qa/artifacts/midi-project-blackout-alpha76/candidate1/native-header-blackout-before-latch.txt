@@ -1,0 +1,16 @@
+node:internal/modules/run_main:123
+    triggerUncaughtException(
+    ^
+
+AssertionError [ERR_ASSERTION]: Native backend operation failed
+    at evaluate (file:///C:/Users/janua/.codex/worktrees/patch-bulk-alpha74/Syndocal/tools/syndocal-mcp/native-backend-session.mjs:69:12)
+    at async file:///C:/Users/janua/.codex/worktrees/patch-bulk-alpha74/Syndocal/qa/artifacts/midi-project-blackout-alpha76/native-ui-blackout-probe.mjs:210:3 {
+  generatedMessage: false,
+  code: 'ERR_ASSERTION',
+  actual: false,
+  expected: true,
+  operator: '==',
+  diff: 'simple'
+}
+
+Node.js v22.22.1
