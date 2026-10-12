@@ -280,7 +280,7 @@ export function createControlInputController(options: ControlInputControllerOpti
     options.setMidiMapChannel(learned.channel);
     options.setMidiMapMessage(learned.message);
     options.setMidiMapNumber(learned.number);
-    options.setMessage(`Learned ${learned.message} ch ${learned.channel} #${learned.number}`);
+    options.setMessage(`Learned ${learned.message} ch ${learned.channel + 1} #${learned.number}`);
   };
 
   const waitForMidiLearn = async (inputIndex: number, authority: ProjectAuthorityToken, waitingMessage: string) => {
@@ -304,6 +304,7 @@ export function createControlInputController(options: ControlInputControllerOpti
     if (inputIndex === null) return reportMessage("No MIDI input selected.");
     let authority = options.captureProjectAuthorityIdentity();
     const wasConnected = options.midiControlConnected();
+    let disconnectedForLearn = false;
     midiLearnInFlight = true;
     options.onMidiLearnBusy?.(true);
     try {
@@ -315,6 +316,7 @@ export function createControlInputController(options: ControlInputControllerOpti
         await options.invoke("disconnect_midi_control", { expectedEpoch: authority.project_epoch });
         if (!learnAuthorityIsCurrent(authority)) return;
         options.setMidiControlConnected(false);
+        disconnectedForLearn = true;
       }
       const learned = await waitForMidiLearn(inputIndex, authority, "MIDI input ready: move or press the control now.");
       if (!learnAuthorityIsCurrent(authority)) return;
@@ -325,7 +327,7 @@ export function createControlInputController(options: ControlInputControllerOpti
       options.setMessage(String(error));
     } finally {
       try {
-        if (wasConnected && learnAuthorityIsCurrent(authority)) {
+        if (disconnectedForLearn && learnAuthorityIsCurrent(authority)) {
           const flushed = await flushProjectControlMappingsAuthority();
           const continued = learnAuthorityAfterFlush(authority, flushed);
           if (continued !== null && options.midiMappings().length > 0) {

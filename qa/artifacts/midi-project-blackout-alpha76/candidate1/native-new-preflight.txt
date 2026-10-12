@@ -1,0 +1,20 @@
+node:internal/modules/run_main:123
+    triggerUncaughtException(
+    ^
+
+AssertionError [ERR_ASSERTION]: {"ok":false,"error":"New project output reset requires an empty project with all outputs disabled"}
+
+false !== true
+
+    at nativeProjectReplacementPreflight (file:///C:/Users/janua/.codex/worktrees/patch-bulk-alpha74/Syndocal/tools/syndocal-mcp/native-project-replacement-preflight.mjs:78:10)
+    at async nativeControllerOutput (file:///C:/Users/janua/.codex/worktrees/patch-bulk-alpha74/Syndocal/tools/syndocal-mcp/native-controller-output.mjs:247:7)
+    at async file:///C:/Users/janua/.codex/worktrees/patch-bulk-alpha74/Syndocal/tools/syndocal-mcp/check-native-lifecycle.mjs:324:36 {
+  generatedMessage: false,
+  code: 'ERR_ASSERTION',
+  actual: false,
+  expected: true,
+  operator: 'strictEqual',
+  diff: 'simple'
+}
+
+Node.js v22.22.1

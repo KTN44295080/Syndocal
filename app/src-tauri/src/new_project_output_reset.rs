@@ -5,6 +5,18 @@ use crate::{
 };
 use std::time::{Duration, Instant};
 
+pub(crate) fn empty_project_snapshot() -> protocol::EngineSnapshot {
+    let mut snapshot = protocol::EngineSnapshot::default();
+    snapshot.output.enabled = false;
+    for output in &mut snapshot.dmx_outputs {
+        output.enabled = false;
+    }
+    for output in &mut snapshot.video.outputs {
+        output.enabled = false;
+    }
+    snapshot
+}
+
 pub(crate) fn clear_empty_project_blackout(
     state: &AppState,
     loaded: &mut ProjectLoadResult,
@@ -50,6 +62,25 @@ mod tests {
     use super::*;
     #[test]
     fn new_empty_project_clears_retirement_blackout_without_enabling_outputs() {
+        let prepared = crate::prepare_project_load(
+            crate::ProjectFile {
+                version: crate::PROJECT_FILE_VERSION,
+                app: crate::APP_NAME.to_string(),
+                operator_policy: None,
+                custom_profiles: Vec::new(),
+                fixture_groups: Vec::new(),
+                snapshot: empty_project_snapshot(),
+            },
+            crate::ProjectControlMappings::default(),
+            "New project".to_string(),
+            None,
+        )
+        .unwrap();
+        let canonical = engine::prepare_project_snapshot_persistence(prepared.snapshot).unwrap();
+        assert!(canonical.fixtures.is_empty());
+        assert!(!canonical.output.enabled);
+        assert!(canonical.dmx_outputs.iter().all(|output| !output.enabled));
+        assert!(canonical.video.outputs.iter().all(|output| !output.enabled));
         let harness = crate::tests::MediaAssetA6CommandHarness::new();
         let state = &harness.state;
         state

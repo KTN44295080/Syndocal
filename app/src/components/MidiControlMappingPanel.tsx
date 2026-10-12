@@ -140,11 +140,13 @@ export function MidiControlMappingPanel(props: MidiControlMappingPanelProps) {
           </div>
           <details class="ioDisclosure" data-io-disclosure="midi-clock-settings">
             <summary>MIDI Clock / MTC (optional)</summary>
+            <div class="ioDisclosureBody">
           <Show when={props.clockConnected} fallback={
             <button data-io-control="midi-clock-connect" class="primary" disabled={props.midiInputs.length === 0} onClick={() => void props.onConnectClock()}>Connect MIDI Clock / MTC</button>
           }>
             <button data-io-control="midi-clock-disconnect" onClick={() => void props.onDisconnectClock()}>Disconnect MIDI Clock / MTC</button>
           </Show>
+            </div>
           </details>
           <Show when={props.controlConnected} fallback={
             <button

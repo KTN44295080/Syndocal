@@ -1,0 +1,75 @@
+{
+  "passed": true,
+  "zip": "C:\\Users\\janua\\Downloads\\Syndocal-1.2.0-alpha.76\\Syndocal_1.2.0-alpha.76_Windows-x64-install.zip",
+  "bytes": 223272229,
+  "sha256": "e919323cb167626a4be5df02e2d6a944b48a2fadd301a7c7152f15ec558006f1",
+  "contents": [
+    {
+      "name": "Syndocal_1.2.0-alpha.76_x64-setup.exe",
+      "sha256": "479a3fae8610aff550d8571899416cbf64d103b4dd3b5cdab2d749f7519150ee",
+      "bytes": 82424921
+    },
+    {
+      "name": "Syndocal_1.2.0-alpha.76_x64-setup.exe.sha256",
+      "sha256": "e092dec3da3977b40032f7900d2da3ad532fe32c549d3b5abc71740fdda33a43",
+      "bytes": 104
+    },
+    {
+      "name": "VC_redist.x64.exe",
+      "sha256": "843068991daaa1f73ad9f6239bce4d0f6a07a51f18c37ea2a867e9beca71295c",
+      "bytes": 18731856
+    },
+    {
+      "name": "Install-Windows.cmd",
+      "sha256": "6a4e966adaec533f077892b2dcf5f1749c19d8b13ac447e5df0cb434203a254b",
+      "bytes": 465
+    },
+    {
+      "name": "Install-Windows.ps1",
+      "sha256": "6fa7cabe9ed15fbc58e92d5b9d131ab4a0cafcf57f0622f1c05acd01905dd13a",
+      "bytes": 3118
+    },
+    {
+      "name": "README.txt",
+      "sha256": "f538a418d8d3c98e54a0a0d2ed47fb4a25fbccdd529d634743381091f1ecbb1c",
+      "bytes": 4253
+    },
+    {
+      "name": "使い方.txt",
+      "sha256": "8bc793d680e7cc8f6fa417cf195dcefe9079e82a2d8812e33c324d5d149fe5fd",
+      "bytes": 4510
+    },
+    {
+      "name": "Syndocal_1.2.0-alpha.76_x64_ja-JP.msi",
+      "sha256": "eaf0aa6b6a58e84f4f368cd531a4c58a97ec6746d15e658b644c7e663b53514e",
+      "bytes": 123191296
+    },
+    {
+      "name": "Syndocal_1.2.0-alpha.76_x64_ja-JP.msi.sha256",
+      "sha256": "d13f83d4d1e1e2e1cedfa50dddc0ab28b7b21b89a10177642a77196b31a1bc32",
+      "bytes": 104
+    },
+    {
+      "name": "Uninstall-Windows.cmd",
+      "sha256": "9c2d7fc73fae34227c0d26a11a2feb720267b2f3b31625efdd741654d833abf2",
+      "bytes": 479
+    },
+    {
+      "name": "Uninstall-Windows.ps1",
+      "sha256": "762b7d3048fd3b332d79c94588a5e67a371095b1ca3a32f551723e7935d23fad",
+      "bytes": 1073
+    },
+    {
+      "name": "Remove-SyndocalData.ps1",
+      "sha256": "7e0b2b595ff0eba0f06b2df26a686fa7220b9ca7014f6a644f502f2832385f57",
+      "bytes": 5766
+    },
+    {
+      "name": "SyndocalInstallations.ps1",
+      "sha256": "07938c07f2ab194099adb16fc94ca00437bcf653fcc4de66b9246409624e3c19",
+      "bytes": 2257
+    }
+  ],
+  "extractedValidationPassed": true,
+  "noInstallerExecuted": true
+}

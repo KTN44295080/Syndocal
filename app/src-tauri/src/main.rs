@@ -51365,7 +51365,7 @@ async fn new_project(
                         operator_policy: None,
                         custom_profiles: Vec::new(),
                         fixture_groups: Vec::new(),
-                        snapshot: EngineSnapshot::default(),
+                        snapshot: new_project_output_reset::empty_project_snapshot(),
                     },
                     "New project".to_string(),
                     None,
