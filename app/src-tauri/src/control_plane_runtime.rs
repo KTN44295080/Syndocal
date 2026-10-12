@@ -5101,6 +5101,34 @@ fn insert_output_control_tombstone(
     );
 }
 
+/// Include admitted requests even when they produced no durable lease receipt.
+/// Replay guards remain scoped to the exact local owner.
+pub(crate) fn output_control_request_id_floor(
+    state: &AppState,
+    window_label: &str,
+) -> Result<u64, String> {
+    let binding = capture_binding(state, window_label)
+        .map_err(|_| "Output request identity owner is unavailable".to_string())?;
+    let inner = state
+        .runtime_control_plane
+        .output_control
+        .lock()
+        .map_err(|_| "Output request identity admission state is unavailable".to_string())?;
+    let origin = OutputControlRequestOriginKey {
+        scope: OutputControlRequestScope::Canonical,
+        principal: binding.principal,
+        window_label: binding.window_label,
+        owner_incarnation: binding.owner_incarnation,
+    };
+    inner
+        .request_id_high_water
+        .get(&origin)
+        .copied()
+        .unwrap_or(0)
+        .checked_add(1)
+        .filter(|next| *next <= MAX_SAFE_JAVASCRIPT_INTEGER)
+        .ok_or_else(|| "OutputControl request identity is exhausted".to_string())
+}
 /// Execute the local desktop's safer-direction emergency blackout. This path
 /// deliberately takes no project coordinator or operator-lock gate: Full Lock
 /// and an authored transaction may not delay the priority safety latch.
@@ -8430,3 +8458,48 @@ mod agent_bridge_timeline_guard_tests;
 #[cfg(test)]
 #[path = "agent_bridge_output_runtime_guard_tests.rs"]
 mod agent_bridge_output_runtime_guard_tests;
+
+#[cfg(test)]
+mod request_id_allocation_regressions {
+    use super::*;
+    #[test]
+    fn output_control_allocator_advances_past_admitted_rejected_requests() {
+        let harness = super::super::tests::MediaAssetA6CommandHarness::new();
+        let state = &harness.state;
+        let label = "media-asset-a6";
+        let binding = capture_binding(state, label).unwrap();
+        state
+            .runtime_control_plane
+            .reserve_output_control_request_identity(
+                &binding,
+                "syndocal.output.blackout.release.v2",
+                700,
+                &"a".repeat(64),
+                Instant::now(),
+            )
+            .unwrap();
+        // No registry/durable receipt was produced by this rejected action.
+        let next = super::super::output_control_request_identity::allocate(state, label).unwrap();
+        assert_eq!(next, 701);
+        assert!(state
+            .runtime_control_plane
+            .reserve_output_control_request_identity(
+                &binding,
+                "syndocal.output.blackout.release.v2",
+                next,
+                &"b".repeat(64),
+                Instant::now()
+            )
+            .is_ok());
+        assert!(state
+            .runtime_control_plane
+            .reserve_output_control_request_identity(
+                &binding,
+                "syndocal.output.blackout.release.v2",
+                699,
+                &"c".repeat(64),
+                Instant::now()
+            )
+            .is_err());
+    }
+}

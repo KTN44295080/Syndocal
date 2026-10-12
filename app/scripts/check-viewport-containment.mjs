@@ -5194,11 +5194,11 @@ async function runSetupIoViewport(client, viewport, dmxOnly = false) {
   if (!dmxOnly) {
     await selectIoConnection(client, 'midi');
     disclosures.midi = [
-      await exerciseSetupIoDisclosure(client, 'midi-connection-settings', '[data-io-control="midi-input"]'),
+      await exerciseSetupIoDisclosure(client, 'midi-clock-settings', '[data-io-control="midi-clock-connect"]'),
       await exerciseSetupIoDisclosure(client, 'midi-feedback', '[data-io-control="midi-feedback-output"]'),
       await exerciseSetupIoDisclosure(client, 'midi-mapping', '[data-io-control="midi-map-message"]'),
     ];
-    await client.evaluate(`document.querySelector('[data-io-disclosure="midi-connection-settings"] > summary')?.click()`);
+    await client.evaluate(`document.querySelector('[data-io-disclosure="midi-clock-settings"] > summary')?.click()`);
     await clickVisibleSelector(client, '[data-io-control="midi-clock-connect"]');
     await sleep(100);
     await clickVisibleSelector(client, '[data-io-control="midi-control-connect"]');

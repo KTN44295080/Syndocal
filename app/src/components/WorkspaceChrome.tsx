@@ -33,8 +33,6 @@ type WorkspaceChromeProps = {
   setupSubTab: SetupSubTab;
   controlMode: ControlMode;
   blackout: boolean;
-  safetyBlackoutEngaged: boolean;
-  onReleaseSafetyBlackout: () => void;
   videoBlackout: boolean;
   lightingMaster: number;
   videoMaster: number;
@@ -585,15 +583,6 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
             </button>
 
 
-            <Show when={props.safetyBlackoutEngaged}>
-              <button type="button" class="topbarSafetyButton engaged"
-                data-global-operator-action="safety-blackout-release"
-                aria-label="Release safety blackout"
-                title="Safety blackout is engaged. It is independent of normal DMX/video blackout."
-                onClick={props.onReleaseSafetyBlackout}>
-                <span data-no-localize>SAFE</span>
-              </button>
-            </Show>
             <button
               type="button"
               class={`topbarIconButton topbarSafetyButton${props.blackout ? " engaged" : ""}`}

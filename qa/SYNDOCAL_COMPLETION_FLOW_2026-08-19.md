@@ -1,5 +1,9 @@
 # Syndocal completion flow — active dependency-ordered work authority
 
+## 2026-10-12 alpha.76 MIDI Learn, project creation and blackout repair candidate
+
+Current product metadata is `1.2.0-alpha.76`. The candidate fixes mapping CAS recovery, MIDI Learn wait/readiness/connection ownership, and empty-project blackout reset. The independent SAFE button is removed; DMX blackout has one operator control. Verification and pending native/packages are recorded in [the checkpoint](MIDI_PROJECT_BLACKOUT_ALPHA76_2026-10-12.md). Distributed alpha.75 bytes remain immutable. This is not physical-device or full release completion.
+
 ## 2026-09-05 alpha.69 recording atomic-publication SOURCE CANDIDATE
 
 Recorded alpha.69 product metadata was `1.2.0-alpha.69`. The bounded source candidate

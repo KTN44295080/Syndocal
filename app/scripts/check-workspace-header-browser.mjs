@@ -48,8 +48,7 @@ const operations=()=> <WorkspaceOperationsMenu profiles={[]} selectedProfileId={
  onTogglePane={noop} onConfigurePolicy={async()=>true} onClearPolicy={async()=>true}
  onLock={setLock} onUnlock={async()=>true}/>;
 const props={get workspaceTab(){return workspace()},setupSubTab:'output',controlMode:'live',
- get blackout(){return dmx()},get videoBlackout(){return video()},get safetyBlackoutEngaged(){return safety()},
- onReleaseSafetyBlackout:()=>setSafety(false),lightingMaster:1,videoMaster:1,get bpm(){return bpm()},
+ get blackout(){return dmx()||safety()},get videoBlackout(){return video()},lightingMaster:1,videoMaster:1,get bpm(){return bpm()},
  liveAudioInputRunning:false,liveAudioInputStale:false,liveAudioInputSafetyClearPending:false,
  liveAudioInputTelemetryFresh:false,liveAudioInputRms:0,liveAudioInputPeak:0,tickMs:25,jitterUs:0,
  packetBytes:0,dmxSuccessCount:0,dmxOutputCount:0,get projectLabel(){return label()},get projectDirty(){return dirty()},
@@ -135,6 +134,8 @@ render(()=><main class="app"><Chrome {...props}/><section>Control header proof</
     assert.equal(geometry.controlSelected, true, 'actual Control route is touch');
     assert.ok(Math.abs((geometry.status.y+geometry.status.h/2)-(geometry.nav.y+geometry.nav.h/2))<=1&&geometry.bounds.h===42, 'header remains one 42px row');
     await page.evaluate(()=>{window.proof.setSafety(true);window.proof.setDirty(true);window.proof.setLock('Partial');window.proof.setLabel('長いプロジェクト名'.repeat(12)+'.sdc *')});
+    assert.equal(await page.locator('[data-global-operator-action="safety-blackout-release"]').count(),0, "no independent SAFE control");
+    assert.equal(await page.locator('[data-global-operator-action="dmx-blackout"]').getAttribute("aria-pressed"),"true", "runtime blackout uses the DMX control");
     const expanded=await measure();
     assert.deepEqual(expanded.overlaps, [], `${width}px safe/dirty/locked header overlap`);
     assert.equal(expanded.contained,true,`${width}px safe/dirty/locked containment`);

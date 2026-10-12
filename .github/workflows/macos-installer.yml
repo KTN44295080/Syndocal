@@ -110,6 +110,17 @@ jobs:
           cargo test -p syndocal --bin syndocal fixture_repatch --locked 2>&1 | tee target/qa/macos-artifact/fixture-repatch-native-tests.txt
           cargo test -p syndocal --bin syndocal every_outer_ticketed_handler_is_synchronous --locked 2>&1 | tee target/qa/macos-artifact/fixture-publication-admission-tests.txt
 
+      - name: Test MIDI Learn and new project output reset
+        run: |
+          set -o pipefail
+          cargo test -p io learn_wait_tests --locked 2>&1 | tee target/qa/macos-artifact/midi-learn-wait-tests.txt
+          cargo test -p io extracts_learned_control_from_midi_message --locked 2>&1 | tee target/qa/macos-artifact/midi-learn-parser-tests.txt
+          cargo test -p syndocal --bin syndocal new_empty_project_clears_retirement_blackout_without_enabling_outputs --locked 2>&1 | tee target/qa/macos-artifact/new-project-output-reset-tests.txt
+          cargo test -p syndocal --bin syndocal output_control_allocator_advances_past_admitted_rejected_requests --locked 2>&1 | tee target/qa/macos-artifact/output-admitted-request-tests.txt
+          cargo test -p syndocal --bin syndocal midi_feedback_route_uses_the_narrow_engine_reader --locked 2>&1 | tee target/qa/macos-artifact/midi-learn-admission-tests.txt
+          pnpm --dir app run check:midi-learn
+          pnpm --dir app run check:project-mapping-cas
+
       - name: Build macOS application bundle
         run: pnpm --dir app tauri build --ci --bundles app
 

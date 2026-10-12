@@ -1,3 +1,5 @@
+import { installControlLearnCapture } from "./createControlLearnCapture";
+import { projectControlMappingsCasRecoveryIsRetryable } from "./projectControlMappingsCasRecovery";
 import { mergeProps as mergeThumbnailViewProps } from "solid-js";
 import { mountAgentBridge } from "./agentBridgeMount";
 import { createProjectTransactionRecoveryController } from "./createProjectTransactionRecoveryController";
@@ -14364,12 +14366,14 @@ export default function App() {
     };
   };
 
+  let authoritativeMappingSignature: string | null = null;
   const commitPreparedProjectControlMappings = (prepared: PreparedProjectControlMappings) => {
     // Committing a prepared project-authority image is a project boundary: any
     // pending ASIO revalidation arm is spent with the authority transition.
     setLiveAudioInputAsioRevalidationArm(null);
     abortMediaAssetOperationsForAuthorityChange(prepared.token);
     mappingObservedSignature = projectControlMappingsSignature(prepared.midi, prepared.osc, prepared.dmx, prepared.dj);
+    authoritativeMappingSignature = mappingObservedSignature;
     setMidiMappings(prepared.midi);
     setOscMappings(prepared.osc);
     setDmxMappings(prepared.dmx);
@@ -14527,6 +14531,7 @@ export default function App() {
           return untrusted();
         }
         if (adoptProjectMappingsAuthority(next)) {
+          authoritativeMappingSignature = projectControlMappingsSignature(next.midi_mappings, next.osc_mappings, next.dmx_mappings, next.dj_track_triggers);
           // Only the request that still owns this identity may acknowledge a
           // local generation. A newer local edit remains dirty and is sent
           // with this new CAS token below.
@@ -14559,7 +14564,19 @@ export default function App() {
         assignProjectAuthoritySync(recoveryStarted.state);
         try {
           const current = await tauriInvoke<ProjectControlMappingsAuthority>("get_project_control_mappings");
+          const canRetry = projectControlMappingsCasRecoveryIsRetryable({
+            error: String(error), expected: authority, recovered: authorityToken(current),
+            originalIdentity: started.request.identityGeneration, currentIdentity: projectAuthoritySync.identityGeneration,
+            responseIsCurrent: mappingResponseIsCurrent(recoveryStarted.request),
+            baselineSignature: authoritativeMappingSignature,
+            recoveredSignature: projectControlMappingsSignature(current.midi_mappings, current.osc_mappings, current.dmx_mappings, current.dj_track_triggers),
+            mappingReplacementGeneration: current.mapping_replacement_generation,
+            observedMappingReplacementGeneration,
+          });
           if (mappingResponseIsCurrent(recoveryStarted.request) && adoptProjectMappingsAuthority(current)) {
+            if (canRetry) {
+              return { kind: "retryable", authority: authorityToken(current) };
+            }
             if (projectAuthoritySync.localGeneration === sentGeneration) {
               if (hydrateProjectControlMappings(current)) {
                 assignProjectAuthoritySync(acknowledgeProjectAuthorityPersist(
@@ -17474,6 +17491,7 @@ export default function App() {
     refreshSnapshot,
     setMessage,
     safety: createSafetyBlackoutRuntimeController({ invoke: invokeSafetyBlackoutRuntime }),
+    safetyBlackoutEngaged: () => snapshot().safety_blackout_engaged,
   });
   const setBlackout = targetBlackout.setLightingBlackout;
   const setAllBlackout = targetBlackout.setAllBlackout;
@@ -17953,6 +17971,10 @@ export default function App() {
     startOscInput,
     stopOscInput,
   } = createControlInputController({
+    onMidiLearnBusy: setControlLearnBusy,
+    listenMidiLearnReady: (handler) => listen<{ learn_request_id: string; project_epoch: number }>(
+      "syndocal://midi-learn-ready", (event) => handler(event.payload),
+    ),
     invoke,
     flushProjectControlMappingsAuthority,
     captureProjectAuthorityIdentity,
@@ -18153,32 +18175,19 @@ export default function App() {
       setMessage("Control Learn closed. Existing mappings remain active.");
     }
   };
-  const handleControlLearnClick = (event: MouseEvent) => {
-    const mode = controlLearnMode();
-    if (!mode || !(event.target instanceof Element)) return;
-    if (event.target.closest("[data-control-learn-toggle]")) return;
-    const element = event.target.closest<HTMLElement>("[data-control-map-target]");
-    if (!element) return;
-    event.preventDefault();
-    event.stopImmediatePropagation();
-    if (controlLearnBusy()) return;
-    const targets = controlMappingTargetsFromElement(element);
-    if (targets.length === 0) {
-      setMessage("This control cannot be mapped with the current control action model.");
-      return;
-    }
-    selectControlLearnElement(element);
-    setControlLearnBusy(true);
-    void (mode === "midi"
+  const disposeControlLearnCapture = installControlLearnCapture({
+    mode: controlLearnMode,
+    busy: controlLearnBusy,
+    setBusy: setControlLearnBusy,
+    targets: controlMappingTargetsFromElement,
+    select: selectControlLearnElement,
+    message: setMessage,
+    learn: (mode, targets) => mode === "midi"
       ? learnMidiControlForTargets(targets)
-      : mode === "osc"
-        ? learnOscControlForTargets(targets)
-        : learnDmxControlForTargets(targets))
-      .finally(() => setControlLearnBusy(false));
-  };
-  document.addEventListener("click", handleControlLearnClick, true);
+      : mode === "osc" ? learnOscControlForTargets(targets) : learnDmxControlForTargets(targets),
+  });
   onCleanup(() => {
-    document.removeEventListener("click", handleControlLearnClick, true);
+    disposeControlLearnCapture();
     controlLearnVisibilityObserver?.disconnect();
     clearControlLearnSelection();
   });
@@ -26253,12 +26262,10 @@ export default function App() {
       data-control-learn-busy={controlLearnBusy() ? "true" : undefined}
     >
       <WorkspaceChrome
-        safetyBlackoutEngaged={snapshot().safety_blackout_engaged}
-        onReleaseSafetyBlackout={() => void targetBlackout.releaseSafetyBlackout()}
         workspaceTab={workspaceTab()}
         setupSubTab={setupSubTab()}
         controlMode={controlMode()}
-        blackout={snapshot().authored_blackout}
+        blackout={snapshot().authored_blackout || snapshot().safety_blackout_engaged}
         videoBlackout={snapshot().video.blackout}
         lightingMaster={snapshot().lighting_master}
         videoMaster={snapshot().video.master_opacity}
@@ -29082,6 +29089,8 @@ export default function App() {
             onMapDurationMs={setMidiMapDurationMs}
             onMapLow={setMidiMapLow}
             onMapHigh={setMidiMapHigh}
+            learnBusy={controlLearnBusy()}
+            onStartControlLearn={() => { setWorkspaceTab("touch"); setControlLearnMode("midi"); }}
             onLearn={learnMidiControl}
             onAddMapping={addMidiMapping}
             onConnectControl={connectMidiControl}

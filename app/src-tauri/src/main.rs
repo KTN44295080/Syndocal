@@ -287,6 +287,7 @@ mod project_backup_deletion_management;
 mod project_backup_restoration;
 mod output_blackout_control;
 mod output_control_request_identity;
+mod new_project_output_reset;
 mod continuous_fixture_fader;
 mod fixture_repatch_request;
 mod output_lease_receipt_retention;
@@ -30655,27 +30656,69 @@ fn send_midi_feedback(
 }
 
 #[tauri::command]
-fn learn_midi_control(
-    state: State<'_, AppState>,
+async fn learn_midi_control(
+    app: tauri::AppHandle,
+    window: WebviewWindow,
     input_index: usize,
     expected_epoch: Option<u64>,
+    learn_request_id: Option<String>,
 ) -> Result<Option<LearnedMidiControl>, String> {
-    // Do not hold the operation locks while the user moves a controller, but
-    // bracket the wait with exact-epoch admission checks. A late A result can
-    // therefore never be applied to B by an eager frontend reconnect.
+    if learn_request_id
+        .as_ref()
+        .is_some_and(|id| id.is_empty() || id.len() > 128)
     {
-        let _admission = lock_project_external_command_admission(&state)?;
-        let coordinator = lock_project_coordinator(&state)?;
-        ensure_optional_project_epoch_matches(&coordinator, expected_epoch)?;
+        return Err("MIDI Learn request identity is invalid".to_string());
     }
-    let learned = io::midi::learn_midi_control(input_index, Duration::from_secs(10))
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        // Do not hold the operation locks while the user moves a controller, but
+        // bracket the wait with exact-epoch admission checks. A late A result can
+        // therefore never be applied to B by an eager frontend reconnect.
+        let (project_generation, mapping_generation) = {
+            let _admission = lock_project_external_command_admission(&state)?;
+            let coordinator = lock_project_coordinator(&state)?;
+            ensure_optional_project_epoch_matches(&coordinator, expected_epoch)?;
+            (
+                state.project_callback_epoch.load(Ordering::Acquire),
+                state.project_mapping_callback_epoch.load(Ordering::Acquire),
+            )
+        };
+        let learned = io::midi::learn_midi_control_with_ready_and_cancel(
+            input_index,
+            Duration::from_secs(10),
+            || {
+                if let Some(request_id) = learn_request_id.as_ref() {
+                    window
+                        .emit(
+                            "syndocal://midi-learn-ready",
+                            serde_json::json!({
+                                "learn_request_id": request_id, "project_epoch": expected_epoch,
+                            }),
+                        )
+                        .map_err(|error| {
+                            io::midi::MidiError::Connect(format!(
+                                "MIDI Learn readiness notification failed: {error}"
+                            ))
+                        })?;
+                }
+                Ok(())
+            },
+            || {
+                state.project_callback_epoch.load(Ordering::Acquire) != project_generation
+                    || state.project_mapping_callback_epoch.load(Ordering::Acquire)
+                        != mapping_generation
+            },
+        )
         .map_err(|error| error.to_string())?;
-    {
-        let _admission = lock_project_external_command_admission(&state)?;
-        let coordinator = lock_project_coordinator(&state)?;
-        ensure_optional_project_epoch_matches(&coordinator, expected_epoch)?;
-    }
-    Ok(learned)
+        {
+            let _admission = lock_project_external_command_admission(&state)?;
+            let coordinator = lock_project_coordinator(&state)?;
+            ensure_optional_project_epoch_matches(&coordinator, expected_epoch)?;
+        }
+        Ok(learned)
+    })
+    .await
+    .map_err(|error| format!("MIDI Learn worker failed: {error}"))?
 }
 
 #[tauri::command]
@@ -51289,43 +51332,51 @@ async fn restore_project_backup_control_plane_v1(
 }
 
 #[tauri::command]
-fn new_project(
+async fn new_project(
     window: WebviewWindow,
-    state: State<'_, AppState>,
+    app: tauri::AppHandle,
     owner_id: String,
     expected_epoch: u64,
     expected_revision: u64,
     expected_checkpoint_hash: String,
     expected_publication_generation: Option<u64>,
 ) -> Result<ProjectLoadResult, String> {
-    with_project_replacement_invocation_generation(
-        &state,
-        window.label(),
-        "new_project",
-        owner_id,
-        (
-            None,
-            expected_epoch,
-            expected_revision,
-            expected_checkpoint_hash,
-        ),
-        expected_publication_generation,
-        || {
-            load_project_from_file(
-                &state,
-                ProjectFile {
-                    version: PROJECT_FILE_VERSION,
-                    app: APP_NAME.to_string(),
-                    operator_policy: None,
-                    custom_profiles: Vec::new(),
-                    fixture_groups: Vec::new(),
-                    snapshot: EngineSnapshot::default(),
-                },
-                "New project".to_string(),
+    let label = window.label().to_string();
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        with_project_replacement_invocation_generation(
+            &state,
+            &label,
+            "new_project",
+            owner_id,
+            (
                 None,
-            )
-        },
-    )
+                expected_epoch,
+                expected_revision,
+                expected_checkpoint_hash,
+            ),
+            expected_publication_generation,
+            || {
+                let mut loaded = load_project_from_file(
+                    &state,
+                    ProjectFile {
+                        version: PROJECT_FILE_VERSION,
+                        app: APP_NAME.to_string(),
+                        operator_policy: None,
+                        custom_profiles: Vec::new(),
+                        fixture_groups: Vec::new(),
+                        snapshot: EngineSnapshot::default(),
+                    },
+                    "New project".to_string(),
+                    None,
+                )?;
+                new_project_output_reset::clear_empty_project_blackout(&state, &mut loaded)?;
+                Ok(loaded)
+            },
+        )
+    })
+    .await
+    .map_err(|error| format!("New project worker failed: {error}"))?
 }
 
 fn validate_operator_policy(policy: &OperatorPolicy) -> Result<(), String> {
@@ -95931,7 +95982,7 @@ pub(crate) mod tests {
             .find("fn send_midi_feedback(")
             .expect("send_midi_feedback command");
         let end = source[start..]
-            .find("\n#[tauri::command]\nfn learn_midi_control(")
+            .find("\n#[tauri::command]\nasync fn learn_midi_control(")
             .map(|offset| start + offset)
             .expect("send_midi_feedback boundary");
         let body = &source[start..end];

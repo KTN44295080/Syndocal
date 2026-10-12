@@ -54,6 +54,8 @@ interface ControlInputControllerOptions {
   captureProjectAuthorityIdentity: () => ProjectAuthorityToken;
   isProjectAuthorityIdentityCurrent: (captured: ProjectAuthorityToken) => boolean;
   setMessage: (message: string) => unknown;
+  onMidiLearnBusy?: (busy: boolean) => void;
+  listenMidiLearnReady?: (handler: (ready: { learn_request_id: string; project_epoch: number }) => void) => Promise<() => void>;
   selectedFixture: Accessor<PatchedFixtureSummary | undefined>;
   selectedEffectAttribute: Accessor<string>;
   setMidiInputs: Setter<MidiInputSummary[]>;
@@ -281,26 +283,64 @@ export function createControlInputController(options: ControlInputControllerOpti
     options.setMessage(`Learned ${learned.message} ch ${learned.channel} #${learned.number}`);
   };
 
+  const waitForMidiLearn = async (inputIndex: number, authority: ProjectAuthorityToken, waitingMessage: string) => {
+    const learnRequestId = globalThis.crypto.randomUUID();
+    options.setMessage("Preparing MIDI input…");
+    const unlisten = await options.listenMidiLearnReady?.((ready) => {
+      if (ready.learn_request_id === learnRequestId && ready.project_epoch === authority.project_epoch
+        && options.isProjectAuthorityIdentityCurrent(authority)) options.setMessage(waitingMessage);
+    });
+    try {
+      return await options.invoke<LearnedMidiControl | null>("learn_midi_control", {
+        inputIndex, expectedEpoch: authority.project_epoch, learnRequestId,
+      });
+    } finally { unlisten?.(); }
+  };
+
+  let midiLearnInFlight = false;
   const learnMidiControl = async () => {
+    if (midiLearnInFlight) return;
     const inputIndex = options.selectedMidiInput();
     if (inputIndex === null) return reportMessage("No MIDI input selected.");
-    const authority = options.captureProjectAuthorityIdentity();
+    let authority = options.captureProjectAuthorityIdentity();
+    const wasConnected = options.midiControlConnected();
+    midiLearnInFlight = true;
+    options.onMidiLearnBusy?.(true);
     try {
-      options.setMessage("Waiting for MIDI input...");
-      const learned = await options.invoke<LearnedMidiControl | null>("learn_midi_control", {
-        inputIndex,
-        expectedEpoch: authority.project_epoch,
-      });
+      const beforeLearn = await flushProjectControlMappingsAuthority();
+      const beforeLearnAuthority = learnAuthorityAfterFlush(authority, beforeLearn);
+      if (beforeLearnAuthority === null) return;
+      authority = beforeLearnAuthority;
+      if (wasConnected) {
+        await options.invoke("disconnect_midi_control", { expectedEpoch: authority.project_epoch });
+        if (!learnAuthorityIsCurrent(authority)) return;
+        options.setMidiControlConnected(false);
+      }
+      const learned = await waitForMidiLearn(inputIndex, authority, "MIDI input ready: move or press the control now.");
       if (!learnAuthorityIsCurrent(authority)) return;
       if (learned) applyLearnedMidiControl(learned);
       else options.setMessage("MIDI learn timed out.");
     } catch (error) {
       if (!options.isProjectAuthorityIdentityCurrent(authority)) return;
       options.setMessage(String(error));
+    } finally {
+      try {
+        if (wasConnected && learnAuthorityIsCurrent(authority)) {
+          const flushed = await flushProjectControlMappingsAuthority();
+          const continued = learnAuthorityAfterFlush(authority, flushed);
+          if (continued !== null && options.midiMappings().length > 0) {
+            authority = continued;
+            await options.invoke("connect_midi_control", { inputIndex, mappings: options.midiMappings(), expectedEpoch: authority.project_epoch });
+            if (learnAuthorityIsCurrent(authority)) options.setMidiControlConnected(true);
+          }
+        }
+      } catch (error) { if (options.isProjectAuthorityIdentityCurrent(authority)) options.setMessage(`MIDI connection could not be restored after Learn: ${String(error)}`); }
+      finally { midiLearnInFlight = false; options.onMidiLearnBusy?.(false); }
     }
   };
 
   const learnMidiControlForTargets = async (targets: readonly ControlMappingTarget[]) => {
+    if (midiLearnInFlight) return false;
     const inputIndex = options.selectedMidiInput();
     if (inputIndex === null) {
       reportMessage("Select a MIDI input in Setup > I/O before MIDI Learn.");
@@ -311,10 +351,17 @@ export function createControlInputController(options: ControlInputControllerOpti
       return false;
     }
     let authority = options.captureProjectAuthorityIdentity();
-    const previousMappings = options.midiMappings();
+    let previousMappings = options.midiMappings();
     const wasConnected = options.midiControlConnected();
     let disconnectedForLearn = false;
+    midiLearnInFlight = true;
+    options.onMidiLearnBusy?.(true);
     try {
+      const beforeLearn = await flushProjectControlMappingsAuthority();
+      const beforeLearnAuthority = learnAuthorityAfterFlush(authority, beforeLearn);
+      if (beforeLearnAuthority === null) return false;
+      authority = beforeLearnAuthority;
+      previousMappings = options.midiMappings();
       if (!learnAuthorityIsCurrent(authority)) return false;
       if (wasConnected) {
         await options.invoke("disconnect_midi_control", { expectedEpoch: authority.project_epoch });
@@ -322,11 +369,7 @@ export function createControlInputController(options: ControlInputControllerOpti
         options.setMidiControlConnected(false);
         disconnectedForLearn = true;
       }
-      options.setMessage(`MIDI Learn: move a control for ${targets[0].label}...`);
-      const learned = await options.invoke<LearnedMidiControl | null>("learn_midi_control", {
-        inputIndex,
-        expectedEpoch: authority.project_epoch,
-      });
+      const learned = await waitForMidiLearn(inputIndex, authority, `MIDI input ready: move or press the control for ${targets[0].label}.`);
       if (!learnAuthorityIsCurrent(authority)) return false;
       if (!learned) {
         if (wasConnected && learnAuthorityIsCurrent(authority)) {
@@ -411,7 +454,7 @@ export function createControlInputController(options: ControlInputControllerOpti
         + (restored ? "; the previous mapping connection was restored." : ""),
       );
       return false;
-    }
+    } finally { midiLearnInFlight = false; options.onMidiLearnBusy?.(false); }
   };
 
   const saveMidiMappings = async () => {

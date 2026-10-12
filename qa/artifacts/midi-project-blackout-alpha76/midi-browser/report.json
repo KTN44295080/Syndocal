@@ -1,0 +1,26 @@
+{
+  "passed": true,
+  "results": [
+    {
+      "width": 1280,
+      "inputVisible": true,
+      "primaryLearnReachable": true,
+      "optionalClockCollapsed": true,
+      "emptyInputDisablesLearn": true,
+      "channelLabels": "All, 1..16",
+      "busyDisablesCaptureAndAdd": true
+    },
+    {
+      "width": 1920,
+      "inputVisible": true,
+      "primaryLearnReachable": true,
+      "optionalClockCollapsed": true,
+      "emptyInputDisablesLearn": true,
+      "channelLabels": "All, 1..16",
+      "busyDisablesCaptureAndAdd": true
+    }
+  ],
+  "errors": [],
+  "physicalMidi": false,
+  "nativeWindow": false
+}

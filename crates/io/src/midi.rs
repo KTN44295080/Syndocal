@@ -590,40 +590,74 @@ pub fn learn_midi_control(
     port_index: usize,
     timeout: Duration,
 ) -> Result<Option<LearnedMidiControl>, MidiError> {
+    learn_midi_control_with_ready(port_index, timeout, || Ok(()))
+}
+
+pub fn learn_midi_control_with_ready(
+    port_index: usize,
+    timeout: Duration,
+    ready: impl FnOnce() -> Result<(), MidiError>,
+) -> Result<Option<LearnedMidiControl>, MidiError> {
+    learn_midi_control_with_ready_and_cancel(port_index, timeout, ready, || false)
+}
+
+pub fn learn_midi_control_with_ready_and_cancel(
+    port_index: usize,
+    timeout: Duration,
+    ready: impl FnOnce() -> Result<(), MidiError>,
+    cancelled: impl Fn() -> bool,
+) -> Result<Option<LearnedMidiControl>, MidiError> {
     let mut input = MidiInput::new("syndocal-midi-learn")?;
     input.ignore(Ignore::None);
     let ports = input.ports();
     let port = ports
         .get(port_index)
         .ok_or(MidiError::MissingPort(port_index))?;
-    let (sender, receiver) = mpsc::channel::<LearnedMidiControl>();
+    let (sender, receiver) = mpsc::sync_channel::<LearnedMidiControl>(1);
     let connection = input
         .connect(
             port,
             "syndocal-midi-learn-input",
             move |_timestamp, message, _| {
                 if let Some(learned) = learned_control_from_midi_message(message) {
-                    let _ = sender.send(learned);
+                    let _ = sender.try_send(learned);
                 }
             },
             (),
         )
         .map_err(|error| MidiError::Connect(error.to_string()))?;
 
-    let deadline = Instant::now() + timeout;
-    let now = Instant::now();
-    let result = if now >= deadline {
-        Ok(None)
-    } else {
-        match receiver.recv_timeout(deadline.saturating_duration_since(now)) {
-            Ok(learned) => Ok(Some(learned)),
-            Err(mpsc::RecvTimeoutError::Timeout | mpsc::RecvTimeoutError::Disconnected) => Ok(None),
-        }
-    };
+    ready()?;
+    let result = wait_for_learned_control(&receiver, timeout, cancelled);
     drop(connection);
     result
 }
 
+fn wait_for_learned_control(
+    receiver: &mpsc::Receiver<LearnedMidiControl>,
+    timeout: Duration,
+    cancelled: impl Fn() -> bool,
+) -> Result<Option<LearnedMidiControl>, MidiError> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if cancelled() {
+            return Ok(None);
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Ok(None);
+        }
+        match receiver.recv_timeout(remaining.min(Duration::from_millis(50))) {
+            Ok(learned) => return Ok(Some(learned)),
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                return Err(MidiError::Connect(
+                    "MIDI input disconnected while waiting for Learn".to_string(),
+                ))
+            }
+        }
+    }
+}
 pub fn learned_control_from_midi_message(message: &[u8]) -> Option<LearnedMidiControl> {
     let parsed = parse_midi_message(message)?;
     Some(LearnedMidiControl {
@@ -4169,5 +4203,45 @@ mod tests {
             receiver.recv_timeout(Duration::from_secs(1)).unwrap(),
             MidiControlEvent::TapBpm
         );
+    }
+}
+
+#[cfg(test)]
+mod learn_wait_tests {
+    use super::*;
+    #[test]
+    fn midi_learn_wait_keeps_first_sample_and_distinguishes_terminal_paths() {
+        let first = learned_control_from_midi_message(&[0xb0, 21, 100]).unwrap();
+        let second = learned_control_from_midi_message(&[0xb0, 22, 50]).unwrap();
+        let (sender, receiver) = mpsc::sync_channel(1);
+        sender.try_send(first).unwrap();
+        assert!(sender.try_send(second).is_err());
+        assert_eq!(
+            wait_for_learned_control(&receiver, Duration::from_secs(1), || false)
+                .unwrap()
+                .unwrap()
+                .number,
+            21
+        );
+        assert!(
+            wait_for_learned_control(&receiver, Duration::ZERO, || false)
+                .unwrap()
+                .is_none()
+        );
+        drop(sender);
+        assert!(wait_for_learned_control(&receiver, Duration::from_secs(1), || false).is_err());
+    }
+    #[test]
+    fn midi_learn_wait_retires_at_project_generation_change() {
+        let (_sender, receiver) = mpsc::sync_channel(1);
+        let observations = std::cell::Cell::new(0);
+        let result = wait_for_learned_control(&receiver, Duration::from_secs(10), || {
+            let next = observations.get() + 1;
+            observations.set(next);
+            next >= 2
+        })
+        .unwrap();
+        assert!(result.is_none());
+        assert_eq!(observations.get(), 2);
     }
 }

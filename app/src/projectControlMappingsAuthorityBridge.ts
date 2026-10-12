@@ -127,7 +127,7 @@ export const flushProjectControlMappingsAuthorityBridge = async (
   while (
     !current.disposed
     && current.authorityReady
-    && projectAuthorityHasDirtyMappings(current.sync)
+    && (projectAuthorityHasDirtyMappings(current.sync) || current.mappingSyncInFlight)
   ) {
     const identityGeneration = current.sync.identityGeneration;
     const persisted = await options.persist(flushOwner);

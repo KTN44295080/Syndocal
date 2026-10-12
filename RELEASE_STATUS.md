@@ -1,5 +1,9 @@
 # Syndocal historical v1.0 / current v1.2 alpha Release Status
 
+## 2026-10-12 alpha.76 MIDI Learn, project creation and blackout repair candidate
+
+Current product metadata is `1.2.0-alpha.76`. The candidate fixes mapping CAS recovery, MIDI Learn wait/readiness/connection ownership, and empty-project blackout reset. The independent SAFE button is removed; DMX blackout has one operator control. Verification and pending native/packages are recorded in [the checkpoint](qa/MIDI_PROJECT_BLACKOUT_ALPHA76_2026-10-12.md). Distributed alpha.75 bytes remain immutable. This is not physical-device or full release completion.
+
 ## 2026-10-12 alpha.75 fixture publication guard repair
 
 Current product metadata is `1.2.0-alpha.75`. The canonical bulk-patch handler now keeps its outer renderer admission lane until engine publication returns. This fixes the full-workspace synchronous-handler failure after alpha.74 user-test delivery. Win/Mac development packages and completed CI/Windows installer-lifecycle evidence are recorded in [the current checkpoint](qa/FIXTURE_PUBLICATION_ALPHA75_2026-10-12.md). Alpha.74 files remain immutable. This is not full Recording, physical-output or release completion.

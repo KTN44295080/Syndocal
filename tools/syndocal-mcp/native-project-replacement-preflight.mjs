@@ -78,6 +78,8 @@ export async function nativeProjectReplacementPreflight({ backend, promote, gran
   assert.equal(created.ok, true, JSON.stringify(created));
   assert.equal((await authority()).project_epoch, current.project_epoch + 1);
   assert.deepEqual((await checkpoint()).snapshot.fixtures, []);
+  assert.equal((await backend.invoke('get_snapshot')).snapshot.safety_blackout_engaged, false,
+    'An empty desktop New must not carry the retirement latch');
   assert.equal((await ownership()).lighting_allowed, false);
   assert.equal((await ownership()).video_allowed, false);
   await awaitImage(zero);

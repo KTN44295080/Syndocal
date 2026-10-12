@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
     inputs:
       current_run_id:
-        description: Successful alpha.75 Cross-platform run on this exact source
+        description: Successful alpha.76 Cross-platform run on this exact source
         required: true
         type: string
 permissions:
@@ -34,7 +34,7 @@ jobs:
           # it is deliberately tested from HEAD against unchanged installer bytes.
           # Versioned ZIP sidecars are finalized from exact installer hashes after
           # native build; their real-helper seam/ValidateOnly evidence is separate.
-          git diff --quiet $current.head_sha HEAD -- app crates tools Cargo.toml Cargo.lock pnpm-lock.yaml .github/workflows/cross-platform.yml ':(exclude)tools/distribution/SyndocalInstallations.ps1' ':(exclude)tools/distribution/Remove-SyndocalData.ps1' ':(exclude)tools/distribution/test-installed-windows-lifecycle.ps1' ':(exclude)tools/distribution/test-windows-uninstall.mjs' ':(exclude)tools/distribution/test-windows-cleanup.mjs' ':(exclude)tools/distribution/alpha75/Install-Windows.cmd' ':(exclude)tools/distribution/alpha75/Install-Windows.ps1' ':(exclude)tools/distribution/alpha75/README.txt' ':(exclude)tools/distribution/alpha75/使い方.txt' ':(exclude)tools/distribution/alpha75/check-setup-helper.mjs'
+          git diff --quiet $current.head_sha HEAD -- app crates tools Cargo.toml Cargo.lock pnpm-lock.yaml .github/workflows/cross-platform.yml ':(exclude)tools/distribution/SyndocalInstallations.ps1' ':(exclude)tools/distribution/Remove-SyndocalData.ps1' ':(exclude)tools/distribution/test-installed-windows-lifecycle.ps1' ':(exclude)tools/distribution/test-windows-uninstall.mjs' ':(exclude)tools/distribution/test-windows-cleanup.mjs' ':(exclude)tools/distribution/alpha76/Install-Windows.cmd' ':(exclude)tools/distribution/alpha76/Install-Windows.ps1' ':(exclude)tools/distribution/alpha76/README.txt' ':(exclude)tools/distribution/alpha76/使い方.txt' ':(exclude)tools/distribution/alpha76/check-setup-helper.mjs'
           if ($LASTEXITCODE -ne 0) { throw 'Native product or embedded installer hook differs from the artifact source' }
           "ARTIFACT_SOURCE_COMMIT=$($current.head_sha)" >> $env:GITHUB_ENV
           if ($baseline.conclusion -ne 'success' -or $baseline.head_sha -ne '80fccf1401de2c2d8dc5c4ea2f03e9b96348d5eb') { throw 'Baseline artifact source mismatch' }
@@ -46,7 +46,7 @@ jobs:
           path: baseline
       - uses: actions/download-artifact@v5
         with:
-          name: syndocal-1.2.0-alpha.75-windows-2022
+          name: syndocal-1.2.0-alpha.76-windows-2022
           run-id: ${{ inputs.current_run_id }}
           github-token: ${{ github.token }}
           path: current

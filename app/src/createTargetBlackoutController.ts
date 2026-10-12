@@ -11,6 +11,7 @@ import {
 export function createTargetBlackoutController(options: {
   invoke: FrontendTauriInvoke;
   safety: ReturnType<typeof createSafetyBlackoutRuntimeController>;
+  safetyBlackoutEngaged?: () => boolean;
   refreshProjectAuthority?: (receipt: OutputControlReceipt) => Promise<unknown>;
   refreshSnapshot: () => Promise<unknown>;
   setMessage: (message: string) => unknown;
@@ -20,12 +21,19 @@ export function createTargetBlackoutController(options: {
   const set = async (target: OutputControlTargetRole, enabled: boolean) => {
     if (pending) return;
     pending = true;
+    let runtimeReleased = false;
     try {
-      const receipt = await executeTargetBlackout(options.invoke, target, enabled);
+      let expectedProject: { project_epoch: number; project_revision: number; checkpoint_hash: string } | undefined;
+      if (!enabled && target !== "video" && options.safetyBlackoutEngaged?.()) {
+        const release = await executeBlackoutRelease(options.invoke);
+        runtimeReleased = true;
+        expectedProject = { project_epoch: release.fence_after.project_epoch, project_revision: release.fence_after.project_revision, checkpoint_hash: release.fence_after.project_checkpoint_hash };
+      }
+      const receipt = await executeTargetBlackout(options.invoke, target, enabled, { expectedProject });
       await options.refreshProjectAuthority?.(receipt);
       await options.refreshSnapshot();
     } catch (error) {
-      options.setMessage(String(error));
+      options.setMessage(runtimeReleased ? `Runtime blackout cleared; target blackout update failed: ${String(error)}` : String(error));
     } finally {
       pending = false;
     }

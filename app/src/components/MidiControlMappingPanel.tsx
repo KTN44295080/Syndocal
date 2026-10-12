@@ -52,7 +52,7 @@ interface MidiControlMappingPanelProps {
   mapHigh: number;
   mappingTargetLabel: (mapping: MidiControlMapping) => string;
   onRefreshMidi: () => void | Promise<void>;
-  onSelectedMidiInput: (index: number) => void;
+  onSelectedMidiInput: (index: number | null) => void;
   onConnectClock: () => void | Promise<void>;
   onDisconnectClock: () => void | Promise<void>;
   onSelectedMidiOutput: (index: number) => void;
@@ -78,6 +78,8 @@ interface MidiControlMappingPanelProps {
   onMapDurationMs: (value: number) => void;
   onMapLow: (value: number) => void;
   onMapHigh: (value: number) => void;
+  learnBusy?: boolean;
+  onStartControlLearn?: () => void;
   onLearn: () => void | Promise<void>;
   onAddMapping: () => void;
   onConnectControl: () => void | Promise<void>;
@@ -122,28 +124,28 @@ export function MidiControlMappingPanel(props: MidiControlMappingPanelProps) {
           </div>
         </header>
         <div class="ioConnectionControls">
-          <details class="ioDisclosure" data-io-disclosure="midi-connection-settings">
-            <summary>Device settings</summary>
-            <div class="ioDisclosureBody">
+          <div class="ioDisclosureBody" data-midi-input-settings>
               <label>
                 MIDI input
                 <select
                   data-io-control="midi-input"
                   value={props.selectedMidiInput ?? ""}
-                  onInput={(event) => props.onSelectedMidiInput(Number(event.currentTarget.value))}
+                  onInput={(event) => props.onSelectedMidiInput(event.currentTarget.value === "" ? null : Number(event.currentTarget.value))}
                 >
                   <option value="">Select input</option>
                   <For each={props.midiInputs}>{(input) => <option data-no-localize value={input.index}>{input.name}</option>}</For>
                 </select>
               </label>
               <button data-io-control="midi-refresh" onClick={() => void props.onRefreshMidi()}>Scan MIDI</button>
-            </div>
-          </details>
+          </div>
+          <details class="ioDisclosure" data-io-disclosure="midi-clock-settings">
+            <summary>MIDI Clock / MTC (optional)</summary>
           <Show when={props.clockConnected} fallback={
             <button data-io-control="midi-clock-connect" class="primary" disabled={props.midiInputs.length === 0} onClick={() => void props.onConnectClock()}>Connect MIDI Clock / MTC</button>
           }>
             <button data-io-control="midi-clock-disconnect" onClick={() => void props.onDisconnectClock()}>Disconnect MIDI Clock / MTC</button>
           </Show>
+          </details>
           <Show when={props.controlConnected} fallback={
             <button
               data-io-control="midi-control-connect"
@@ -157,6 +159,13 @@ export function MidiControlMappingPanel(props: MidiControlMappingPanelProps) {
         </div>
       </section>
 
+      <Show when={props.onStartControlLearn}>
+        <section class="ioConnectionDesk" data-midi-direct-learn>
+          <h3>Assign a MIDI control</h3>
+          <p>Select your MIDI input above, then choose a pink button or fader in Control.</p>
+          <button type="button" class="primary" onClick={() => props.onStartControlLearn?.()} disabled={props.learnBusy || props.selectedMidiInput === null}>Learn in Control</button>
+        </section>
+      </Show>
       <div class="ioDisclosureStack">
         <details class="ioDisclosure" data-io-disclosure="midi-feedback">
           <summary>MIDI feedback</summary>
@@ -187,10 +196,16 @@ export function MidiControlMappingPanel(props: MidiControlMappingPanelProps) {
         </details>
 
         <details class="ioDisclosure" data-io-disclosure="midi-mapping">
-          <summary>Control mapping and learn</summary>
+          <summary>Manual mapping (advanced)</summary>
           <div class="ioDisclosureBody ioMappingWorkbench" data-io-disclosure-body>
           <div class="mappingEditorDesk">
-      <h3>MIDI Control</h3>
+      <h3>Manual MIDI mapping</h3>
+      <h4>1. Capture the MIDI input</h4>
+      <div class="buttonRow">
+        <button type="button" data-midi-learn-input onClick={() => void props.onLearn()} disabled={props.midiInputsCount === 0 || props.selectedMidiInput === null || props.learnBusy}>
+          {props.learnBusy ? "Learning…" : "Capture MIDI input"}
+        </button>
+      </div>
       <div class="split">
         <label>
           Message
@@ -209,8 +224,14 @@ export function MidiControlMappingPanel(props: MidiControlMappingPanelProps) {
       <div class="split">
         <label>
           Channel
-          <input type="number" min="-1" max="15" value={props.mapChannel} onInput={(event) => props.onMapChannel(Number(event.currentTarget.value))} />
+          <select value={props.mapChannel} onInput={(event) => props.onMapChannel(Number(event.currentTarget.value))}>
+            <option value="-1">All channels</option>
+            <For each={Array.from({ length: 16 }, (_, index) => index)}>{(channel) => <option value={channel}>{channel + 1}</option>}</For>
+          </select>
         </label>
+      </div>
+      <h4>2. Choose the action</h4>
+      <div class="split">
         <label>
           Action
           <select value={props.mapAction} onInput={(event) => {
@@ -452,11 +473,9 @@ export function MidiControlMappingPanel(props: MidiControlMappingPanelProps) {
           <input type="number" value={props.mapHigh} onInput={(event) => props.onMapHigh(Number(event.currentTarget.value))} />
         </label>
       </div>
+      <h4>3. Add the mapping</h4>
       <div class="buttonRow">
-        <button onClick={() => void props.onLearn()} disabled={props.midiInputsCount === 0}>
-          Learn
-        </button>
-        <button onClick={props.onAddMapping}>Add Mapping</button>
+        <button type="button" onClick={props.onAddMapping} disabled={props.learnBusy}>Add this mapping</button>
       </div>
       <div class="buttonRow">
         <button onClick={() => void props.onLoadMappings()}>Load Mapping</button>
@@ -475,7 +494,7 @@ export function MidiControlMappingPanel(props: MidiControlMappingPanelProps) {
           {(mapping, index) => (
             <div class="timelineItem">
               <strong>{mapping.message} {mapping.number}</strong>
-              <span>{mapping.channel === null || mapping.channel === undefined ? "Any ch" : `Ch ${mapping.channel}`} / {props.mappingTargetLabel(mapping)}</span>
+              <span>{mapping.channel === null || mapping.channel === undefined ? "Any ch" : `Ch ${mapping.channel + 1}`} / {props.mappingTargetLabel(mapping)}</span>
               <Show when={mapping.feedback}>
                 {(feedback) => (
                   <span>

@@ -81,11 +81,12 @@ assert.equal(unknownCalls, 1);
 // Production wiring keeps engage separate from legacy release, while Full
 // Lock exposes only safer-direction button actions.
 assert.match(appSource, /targetBlackout\.engageSafetyBlackout\(\)/);
-assert.match(
-  appSource,
-  /targetBlackout\.releaseSafetyBlackout\(\)/s,
-  "App release must use the authenticated blackout-release controller",
-);
+const targetControllerSource = await readFile(new URL("../src/createTargetBlackoutController.ts", import.meta.url), "utf8");
+const chromeSource = await readFile(new URL("../src/components/WorkspaceChrome.tsx", import.meta.url), "utf8");
+assert.match(targetControllerSource, /!enabled && target !== "video" && options\.safetyBlackoutEngaged/);
+assert.match(targetControllerSource, /await executeBlackoutRelease\(options\.invoke\)/);
+assert.match(appSource, /blackout=\{snapshot\(\)\.authored_blackout \|\| snapshot\(\)\.safety_blackout_engaged\}/);
+assert.doesNotMatch(chromeSource, /safety-blackout-release/, "user requested one DMX control instead of an independent SAFE control");
 assert.match(
   outputControlSource,
   /export async function executeBlackoutRelease[\s\S]*?return executeOutputControlOperation\([\s\S]*?kind: "release_blackout"/s,

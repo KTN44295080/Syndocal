@@ -60,9 +60,9 @@ function Assert-Removed([string]$Executable) {
  Assert-Condition ((Get-Content -LiteralPath $taskForeign -Raw).Trim() -eq 'external-project') 'External project retained'
 }
 $taskOldNsis=Find-Installer $BaselineRoot 'Syndocal_1.2.0-alpha.72_x64-setup.exe'
-$taskNewNsis=Find-Installer $CurrentRoot 'Syndocal_1.2.0-alpha.75_x64-setup.exe'
+$taskNewNsis=Find-Installer $CurrentRoot 'Syndocal_1.2.0-alpha.76_x64-setup.exe'
 $taskOldMsi=Find-Installer $BaselineRoot 'Syndocal_1.2.0-alpha.72_x64_ja-JP.msi'
-$taskNewMsi=Find-Installer $CurrentRoot 'Syndocal_1.2.0-alpha.75_x64_ja-JP.msi'
+$taskNewMsi=Find-Installer $CurrentRoot 'Syndocal_1.2.0-alpha.76_x64_ja-JP.msi'
 $taskReport.installerHashes=@{}; foreach ($taskFile in @($taskOldNsis,$taskNewNsis,$taskOldMsi,$taskNewMsi)) { $taskReport.installerHashes[[IO.Path]::GetFileName($taskFile)]=(Get-FileHash -LiteralPath $taskFile -Algorithm SHA256).Hash.ToLowerInvariant() }
 $taskInstall=Join-Path $env:RUNNER_TEMP 'SyndocalLifecycle'
 $taskForeign=Join-Path $env:RUNNER_TEMP 'syndocal-lifecycle-external.sdc'; Set-Content -LiteralPath $taskForeign -Value 'external-project'

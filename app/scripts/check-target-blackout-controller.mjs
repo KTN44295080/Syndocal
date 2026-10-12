@@ -198,3 +198,16 @@ assert.match(
   "current or failed convergence retains the existing explicit Follow warning path",
 );
 console.log("target blackout controller: PASS (canonical ordering, failure visibility, and bounded Timeline Follow stale-read convergence)");
+
+// One DMX control may clear the internal runtime latch first. Its second
+// action must retain that exact project fence and report partial progress.
+const combinedEvents=[];const combinedMessages=[];
+mock.executeBlackoutRelease=async()=>{combinedEvents.push('runtime-release');return appliedReceipt;};
+mock.executeTargetBlackout=async(_invoke,target,enabled,options)=>{combinedEvents.push([target,enabled,options.expectedProject]);return appliedReceipt;};
+const combined=exports.createTargetBlackoutController({invoke(){},safety:{engage:async()=>{}},safetyBlackoutEngaged:()=>true,refreshSnapshot:async()=>{},setMessage:m=>combinedMessages.push(m)});
+await combined.setLightingBlackout(false);
+assert.deepEqual(combinedEvents,['runtime-release',['lighting',false,{project_epoch:7,project_revision:8,checkpoint_hash:'c'.repeat(64)}]]);
+combinedEvents.length=0;await combined.setVideoBlackout(false);assert.deepEqual(combinedEvents,[['video',false,undefined]],'Video-only clear cannot lift the DMX latch');
+mock.executeTargetBlackout=async()=>{throw Error('foreign project fence');};
+await combined.setLightingBlackout(false);assert.match(combinedMessages.at(-1),/Runtime blackout cleared; target blackout update failed/);
+console.log('PASS: unified DMX clear preserves exact project fence and partial-result truth');

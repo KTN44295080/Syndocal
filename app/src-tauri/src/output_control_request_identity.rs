@@ -15,7 +15,9 @@ pub(crate) fn allocate(state: &AppState, window_label: &str) -> Result<u64, Stri
         .lock()
         .map_err(|_| "Output request identity registry is unavailable")?
         .next_request_id()?;
-    let floor = durable_next.max(registry_next);
+    let admitted_next =
+        super::control_plane_runtime::output_control_request_id_floor(state, window_label)?;
+    let floor = durable_next.max(registry_next).max(admitted_next);
     state
         .next_output_lease_request_id
         .fetch_max(floor, Ordering::AcqRel);
