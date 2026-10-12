@@ -1602,6 +1602,7 @@ mod tests {
             }
             thread::sleep(Duration::from_millis(100));
         }
+        assert_eq!(standby.status().unwrap().state, ShowClockIpcPhase::Locked);
         primary
             .schedule_action(ShowClockActionRequest {
                 action_id_hex: "01000000000000000000000000000000".to_string(),
@@ -1613,7 +1614,14 @@ mod tests {
             })
             .unwrap();
         for _ in 0..20 {
-            if standby.status().unwrap().accepted_actions >= 1 {
+            let status = standby.status().unwrap();
+            // Receipt admission precedes the scheduler's gate decision. Wait
+            // for the exact outcome instead of interpreting its intermediate
+            // held-until-locked state as a completed dispatch attempt.
+            if status.accepted_actions == 1
+                && status.scheduled_actions == 1
+                && status.last_action_status.as_deref() == Some("blocked_output_gate_disarmed")
+            {
                 break;
             }
             thread::sleep(Duration::from_millis(50));

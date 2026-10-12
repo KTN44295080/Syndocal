@@ -1,0 +1,22 @@
+**********************************************************************
+** Visual Studio 2022 Developer Command Prompt v17.14.39
+** Copyright (c) 2025 Microsoft Corporation
+**********************************************************************
+[vcvarsall.bat] Environment initialized for: 'x64'
+C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+   Compiling syndocal v1.2.0-alpha.75 (C:\Users\janua\.codex\worktrees\patch-bulk-alpha74\Syndocal\app\src-tauri)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 49s
+     Running unittests src\main.rs (C:\Users\janua\AppData\Local\Temp\syndocal-native-acceptance-target\debug\deps\syndocal-3462e75d149e6f63.exe)
+
+running 7 tests
+test show_clock_ipc::tests::authenticated_action_is_scheduled_and_manual_rearm_clears_old_generation ... ok
+test show_clock_ipc::tests::duplicate_action_status_cannot_lower_sequence_recovery_floor ... ok
+test show_clock_ipc::tests::failed_replacement_bind_leaves_the_process_fenced_and_stopped ... ok
+test show_clock_ipc::tests::primary_and_standby_workers_lock_over_paired_loopback_and_stop_cleanly ... ok
+test show_clock_ipc::tests::primary_arm_requires_confirmation_and_dispatches_through_local_engine ... ok
+test show_clock_ipc::tests::stale_clock_state_revokes_local_output_permit_before_queue_poll ... ok
+test show_clock_ipc::tests::video_show_clock_actions_recheck_local_video_ownership ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 2068 filtered out; finished in 2.09s
