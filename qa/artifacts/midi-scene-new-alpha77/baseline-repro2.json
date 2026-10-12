@@ -1,0 +1,60 @@
+{
+  "schemaVersion": 1,
+  "timestamp": "2026-10-12T16:31:48.602Z",
+  "passed": true,
+  "domain": "both",
+  "executable": "C:/Users/janua/AppData/Local/Temp/syndocal-native-acceptance-target/release/syndocal.exe",
+  "executableSha256": "1bc4b702077ceda8e3ebb1cc675a8d7a53e722b23b62b927c159da103db8449e",
+  "runnerSha256": "160632922ba540c136976fa4266b07828d6e7be62e73e5dda3396666a078289c",
+  "backendHarnessSha256": "fcc5655508dccff3ca6b99d5bb60e155483e84de6c4347f564d7891b765ea369",
+  "processId": 39072,
+  "screenshot": null,
+  "proof": {
+    "descriptors": {
+      "internals": {
+        "value": {
+          "plugins": {}
+        },
+        "writable": false,
+        "enumerable": false,
+        "configurable": false
+      },
+      "invoke": {
+        "value": {},
+        "writable": false,
+        "enumerable": false,
+        "configurable": false
+      }
+    },
+    "before": "...\nSETUP\nEDIT\nCONTROL\nSyndocal\nGO\nDMX\nVID\nALL\nTools\nBPM\n120\nTap\nClock\nStopped / Fenced\nLighting\nVideo\nBoth\nEDIT\nLIVE\nDefault Desk\nDirect control\nSHOW CONTROL\n▧\nTouch Stage\nFRONT\n100%\nDIMMER\n0%\nFINE\n−\n0%\n+\nCOLOR\nPOSITION\nGROUPS\nAll\n0\n+\nStage\nSelections\n0\nNo fixture selected\nFADERS\nEDIT\nLIVE\nDimmer\n0\nColor\n0\nPosition\n0\nGobo\n0\nBeam\n0\nFocus\n0\nOther\n0\nFader\n0\n\nSelect or patch a fixture.\n\nCreated new untitled project.",
+    "afterCreate": "...\nSETUP\nEDIT\nCONTROL\nSyndocal\nGO\nDMX\nVID\nALL\nTools\nBPM\n120\nTap\nClock\nStopped / Fenced\nLighting\nVideo\nBoth\nEDIT\nLIVE\nDefault Desk\nDirect control\nSHOW CONTROL\n▧\nTouch Stage\nFRONT\n100%\nDIMMER\n0%\nFINE\n−\n0%\n+\nCOLOR\nPOSITION\nGROUPS\nAll\n0\n+\nStage\nSelections\n0\nNo fixture selected\nFADERS\nEDIT\nLIVE\nDimmer\n0\nColor\n0\nPosition\n0\nGobo\n0\nBeam\n0\nFocus\n0\nOther\n0\nFader\n0\n\nSelect or patch a fixture.\n\nCreated new untitled project.",
+    "snapshot": {
+      "cues": [],
+      "bankLabels": [
+        {
+          "id": 1,
+          "label": "Bank 1",
+          "active_cue_id": null
+        }
+      ],
+      "fixtures": 0,
+      "output": {
+        "enabled": false,
+        "protocol": "ArtNet",
+        "target_ip": "127.0.0.1",
+        "port": 6454,
+        "universe": 0,
+        "serial_port": "",
+        "serial_baud_rate": 57600
+      }
+    },
+    "calls": [],
+    "counts": {}
+  },
+  "normalAppIdentityUnchanged": true,
+  "error": null,
+  "nonclaims": [
+    "Real native header DMX/VID/ALL BO engage and clear; runtime latch clear through DMX BO with all routes disabled",
+    "No output, physical device, recording, or venue workflow"
+  ]
+}

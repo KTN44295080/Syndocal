@@ -40452,3 +40452,9 @@ button.timelineExternalSourceCard:active,
 .dmxPatchSelectionControls > span { color: var(--muted); }
 
 .dmxPatchMap.withFixtureSelection { grid-template-rows: auto auto minmax(0, 1fr); }
+
+/* Inline scene naming stays in the Bank; the editor overlays only its card. */
+.sceneMatrixRenameEditor { grid-column: 1; grid-row: 1; z-index: 2; align-self: start; display: grid; gap: 4px; background: var(--ui-surface-control); padding: 4px; min-width: 0; }
+.sceneMatrixRenameEditor input { width: 100%; min-width: 0; min-height: 48px; box-sizing: border-box; color: var(--cue-identity-text); font-weight: 700; }
+.sceneMatrixRenameEditor [role="alert"] { color: var(--ui-danger, #ff9898); overflow-wrap: anywhere; }
+.sceneMatrixCuePrimaryRow [data-scene-matrix-cue-name] { cursor: text; }

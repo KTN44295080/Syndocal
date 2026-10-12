@@ -1,0 +1,17 @@
+[1m[92m   Compiling[0m io v1.2.0-alpha.76 (/Users/runner/work/Syndocal/Syndocal/crates/io)
+[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 4.84s
+[1m[33mwarning[0m: the following packages contain code that will be rejected by a future version of Rust: block v0.1.6
+[1m[92mnote[0m: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+[1m[92m     Running[0m unittests src/lib.rs (target/debug/deps/io-6e850e6457658c68)
+
+running 2 tests
+test midi::learn_wait_tests::midi_learn_wait_keeps_first_sample_and_distinguishes_terminal_paths ... ok
+test midi::learn_wait_tests::midi_learn_wait_retires_at_project_generation_change ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 191 filtered out; finished in 0.10s
+
+[1m[92m     Running[0m tests/show_clock_two_process.rs (target/debug/deps/show_clock_two_process-6847fc363800350b)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s

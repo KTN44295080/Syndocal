@@ -1,0 +1,1 @@
+PASS: inline scene rename at 1280/1920; C:\Users\janua\.codex\worktrees\patch-bulk-alpha74\Syndocal\qa\artifacts\midi-scene-new-alpha77\scene-rename

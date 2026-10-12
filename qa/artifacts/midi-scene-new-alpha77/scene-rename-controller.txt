@@ -1,0 +1,5 @@
+
+> syndocal@1.2.0-alpha.77 check:scene-rename-controller C:\Users\janua\.codex\worktrees\patch-bulk-alpha74\Syndocal\app
+> node scripts/check-scene-rename-controller.mjs
+
+PASS: scene rename controller success, empty name, mapping wait replacement, Undo identity, snapshot wait replacement, rejection and late reply

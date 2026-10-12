@@ -1,0 +1,5 @@
+
+> syndocal@1.2.0-alpha.77 check:project-shortcuts C:\Users\janua\.codex\worktrees\patch-bulk-alpha74\Syndocal\app
+> node scripts/check-project-shortcuts.mjs
+
+project/app shortcuts: 15552 matrix cases; App=30 reachable kinds; ProjectFile=3 reachable kinds; source manifest byte-exact

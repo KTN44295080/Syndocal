@@ -640,6 +640,7 @@ export function CueManagementPanel(props: CueManagementPanelProps) {
                     <For each={stableCueLists}>{(cueList) => <option data-no-localize value={cueList.id}>{cueList.label}</option>}</For>
                     </select>
                   </label>
+                  <Show when={props.mode !== "scene-settings"}>
                   <label>
                     Label
                   <input
@@ -648,6 +649,7 @@ export function CueManagementPanel(props: CueManagementPanelProps) {
                     onInput={(event) => props.onUpdateCueMetadataDraft(cue, { label: event.currentTarget.value })}
                   />
                   </label>
+                  </Show>
                   <label>
                     Group
                     <select

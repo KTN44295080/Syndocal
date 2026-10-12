@@ -1,5 +1,9 @@
 # Syndocal completion flow — active dependency-ordered work authority
 
+## 2026-10-13 alpha.77 MIDI synchronization and inline scene naming
+
+Current candidate metadata is `1.2.0-alpha.77`. One-shot native UI bootstrap replaces the tracked initialization loop that repeatedly invalidated mapping writes. Scene names can be saved directly inside their Bank; project replacements retire pending edits and Learn selection. Evidence and remaining acceptance are tracked in [the checkpoint](MIDI_SCENE_NEW_ALPHA77_2026-10-13.md). Distributed alpha.76 remains immutable.
+
 ## 2026-10-12 alpha.76 MIDI Learn, project creation and blackout repair candidate
 
 Current product metadata is `1.2.0-alpha.76`. The candidate fixes mapping CAS recovery, MIDI Learn wait/readiness/connection ownership, and empty-project blackout reset. The independent SAFE button is removed; DMX blackout has one operator control. Verification and pending native/packages are recorded in [the checkpoint](MIDI_PROJECT_BLACKOUT_ALPHA76_2026-10-12.md). Distributed alpha.75 bytes remain immutable. This is not physical-device or full release completion.

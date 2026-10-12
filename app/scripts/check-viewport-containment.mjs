@@ -25037,13 +25037,14 @@ async function exerciseSceneMatrixSceneContextMenu(client) {
   await clickVisibleSelector(client, '[data-scene-matrix-scene-context-rename]');
   await waitForClientCondition(
     client,
-    'document.activeElement?.matches?.("[data-cue-metadata-label=\\"302\\"]")',
-    'Scene rename label focus',
+    'document.activeElement?.matches?.("[data-scene-matrix-rename=\\"302\\"] [data-scene-matrix-rename-input]")',
+    'Scene rename input focus inside the Bank',
   );
   const renameFocused = await client.evaluate(`(() => {
-    const input = document.querySelector('[data-cue-metadata-label="302"]');
+    const input = document.querySelector('[data-scene-matrix-rename="302"] [data-scene-matrix-rename-input]');
     return input instanceof HTMLInputElement
       && document.activeElement === input
+      && input.closest("[data-scene-matrix-cue-id]")?.getAttribute("data-scene-matrix-cue-id") === "302"
       && input.selectionStart === 0
       && input.selectionEnd === input.value.length;
   })()`);
@@ -26761,6 +26762,7 @@ async function readSceneSettingsState(client) {
         '[data-scene-matrix-active="true"]',
       )].map((card) => card.getAttribute("data-scene-matrix-cue-id") ?? ""),
       contentsVisible: isVisible(pane?.querySelector("[data-scene-contents]")),
+      contentNameInputCount: pane?.querySelectorAll("[data-scene-contents] input:not([type]), [data-scene-contents] input[type=text]").length ?? 0,
       contentPropertyInputCount: [...(pane?.querySelectorAll(
         "[data-scene-contents] input",
       ) ?? [])].filter(isVisible).length,
@@ -27424,7 +27426,7 @@ async function pointerOnlySceneSettingsStrip(client, selector) {
 // settings selection. The selected rail is now three explicit surfaces:
 // contents metadata/runtime, cue-owned FX creation/editing, and existing
 // advanced settings. Edit Source remains reachable from their shared header.
-async function runSceneSettingsViewport(client, viewport) {
+async function runSceneSettingsViewport(client, viewport, options = {}) {
   await client.send("Emulation.setDeviceMetricsOverride", {
     width: viewport.width,
     height: viewport.height,
@@ -27839,6 +27841,15 @@ async function runSceneSettingsViewport(client, viewport) {
   // T31: reset the deterministic fixture so the EDIT-scene path begins at
   // zero owned FX. Selecting the scene and entering EDIT establishes context;
   // the measured operation is the single synthetic click on COLOR FX.
+  // The preceding IPC-capture fixture intentionally ends with a protected
+  // transaction/dirty close state. T31 is an independent document scenario;
+  // recycle its browser instead of bypassing the product beforeunload guard.
+  if (options.recycleForIndependentFx) {
+    client = await options.recycleForIndependentFx();
+    await client.send("Emulation.setDeviceMetricsOverride", {
+      width: viewport.width, height: viewport.height, deviceScaleFactor: 1, mobile: false,
+    });
+  }
   await client.send("Page.navigate", { url: fixtureUrl("scene-matrix") });
   await waitForApp(client);
   await clickWorkspaceOption(client, "control");
@@ -28028,7 +28039,9 @@ async function runSceneSettingsViewport(client, viewport) {
       && selectedContentsClicked
       && selectedContents.activeSurface === "contents"
       && selectedContents.contentsVisible
-      && selectedContents.contentPropertyInputCount >= 6
+      // Label editing belongs to the Bank: four timing inputs plus identity color.
+      && selectedContents.contentPropertyInputCount === 5
+      && selectedContents.contentNameInputCount === 0
       && selectedContents.runtimeControlsVisible
       && selectedContents.runtimeModifierStripCount === 1
       && !selectedContents.advancedSettingsVisible
@@ -39160,7 +39173,8 @@ async function main() {
     if (sceneSettingsOnlyMode || sceneFxBlockOnlyMode) {
       const sceneSettingsResults = [];
       for (const viewport of viewports) {
-        const result = await runSceneSettingsViewport(client, viewport);
+        await recycleBrowser();
+        const result = await runSceneSettingsViewport(client, viewport, { recycleForIndependentFx: recycleBrowser });
         sceneSettingsResults.push(result);
         console.log(sceneSettingsLogLine(result));
       }
@@ -41116,7 +41130,7 @@ async function main() {
     if (!workspaceShellOnlyMode) {
       for (const viewport of viewports) {
         await recycleBrowser();
-        const sceneSettingsResult = await runSceneSettingsViewport(client, viewport);
+        const sceneSettingsResult = await runSceneSettingsViewport(client, viewport, { recycleForIndependentFx: recycleBrowser });
         sceneSettingsResults.push(sceneSettingsResult);
         console.log(sceneSettingsLogLine(sceneSettingsResult));
         liveEditTypeResults.push(await runLiveEditFixtureTypesViewport(client, viewport));

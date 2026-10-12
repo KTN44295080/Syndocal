@@ -1,0 +1,161 @@
+{
+  "schemaVersion": 1,
+  "timestamp": "2026-10-12T16:33:04.247Z",
+  "passed": true,
+  "domain": "both",
+  "executable": "C:/Users/janua/AppData/Local/Temp/syndocal-native-acceptance-target/release/syndocal.exe",
+  "executableSha256": "1bc4b702077ceda8e3ebb1cc675a8d7a53e722b23b62b927c159da103db8449e",
+  "runnerSha256": "160632922ba540c136976fa4266b07828d6e7be62e73e5dda3396666a078289c",
+  "backendHarnessSha256": "fcc5655508dccff3ca6b99d5bb60e155483e84de6c4347f564d7891b765ea369",
+  "processId": 88480,
+  "screenshot": null,
+  "proof": {
+    "ipc": {
+      "invoke": "function (cmd, payload = {}, options) {\n      return new Promise(function (resolve, reject) {\n        const callback = window.__TAURI_INTERNALS__.transformCallback((r) => {\n          resolve(r)\n          delete window[`_${error}`]\n        }, true)\n        const error = window.__TAURI_INTERNALS__.transformCallback((e) => {\n          reject(e)\n          delete window[`_${callback}`]\n        }, true)\n\n        const action = () => {\n          window.__TAURI_INTERNALS__.ipc({\n            cmd,\n            callback,\n            error,\n            payload,\n            options\n          })\n        }\n        if ('ipc' in window.__TAURI_INTERNALS__) {\n          action()\n        } else {\n          ipcQueue.push(action)\n          if (!isWaitingForIpc) {\n            waitForIpc()\n            isWaitingForIpc = true\n          }\n        }\n      })\n    }",
+      "post": "function",
+      "keys": [
+        "plugins"
+      ]
+    },
+    "before": "...\nSETUP\nEDIT\nCONTROL\nSyndocal\nGO\nDMX\nVID\nALL\nTools\nBPM\n120\nTap\nClock\nStopped / Fenced\nLIGHTING\nVIDEO\nBOTH\nTIMELINE\nBank 1\n0\n+ Bank\nBank 1\n0\n+ Scene\nGROUPS\nAll\n0\n+\nStage\nSelections\n0\nNo fixture selected\nATTRIBUTES\nFADERS\nATTRIBUTES\nEDIT\nLIVE\nDimmer\n0\nColor\n0\nPosition\n0\nGobo\n0\nBeam\n0\nFocus\n0\nOther\n0\nFader\n0\n\nSelect or patch a fixture.\n\nCreated new untitled project.",
+    "afterCreate": "...\nSETUP\nEDIT\nCONTROL\nSyndocal\nGO\nDMX\nVID\nALL\nTools\nBPM\n120\nTap\nClock\nStopped / Fenced\nLIGHTING\nVIDEO\nBOTH\nTIMELINE\nBank 1\n2\n+ Bank\nBank 1\n2\n+ Scene\n1\nNew Scene\nSTATIC\n0ms\n2\nNew Scene\nSTATIC\n0ms\nACTIVE CUE\nNone\nNEXT CUE\nNew Scene\nSCENE SETTINGS\nNew Scene\nSTATIC\nCue details\n×\nSCENE PROPERTIES\nStatic scene\nLabel\nIdentity color\nClear color\nFade in / out (ms)\nDuration (beats)\nPre-wait (ms)\nFollow (ms)\nSave scene properties\nGROUPS\nAll\n0\n+\nStage\nSelections\n0\nNo fixture selected\nATTRIBUTES\nFADERS\nATTRIBUTES\nEDIT\nLIVE\nDimmer\n0\nColor\n0\nPosition\n0\nGobo\n0\nBeam\n0\nFocus\n0\nOther\n0\nFader\n0\n\nSelect or patch a fixture.\n\nCreated scene in Bank 1",
+    "snapshot": {
+      "cues": [
+        {
+          "id": 1,
+          "cue_list_id": 1,
+          "cue_number": "1",
+          "label": "New Scene",
+          "group_id": null,
+          "recall_mode": "Coexist",
+          "fade_ms": 0,
+          "authored_beats": null,
+          "pre_wait_ms": 0,
+          "follow_ms": null,
+          "ifcb_timing": {
+            "intensity_fade_ms": null,
+            "intensity_delay_ms": 0,
+            "focus_fade_ms": null,
+            "focus_delay_ms": 0,
+            "color_fade_ms": null,
+            "color_delay_ms": 0,
+            "beam_fade_ms": null,
+            "beam_delay_ms": 0
+          },
+          "parts": [],
+          "mark": false,
+          "mib_fixture_ids": [],
+          "palette_targets": [],
+          "tracking": true,
+          "notes": "",
+          "targets": [],
+          "video_targets": [],
+          "video_output_targets": [],
+          "node_graph_targets": [],
+          "effect_targets": []
+        },
+        {
+          "id": 2,
+          "cue_list_id": 1,
+          "cue_number": "2",
+          "label": "New Scene",
+          "group_id": null,
+          "recall_mode": "Coexist",
+          "fade_ms": 0,
+          "authored_beats": null,
+          "pre_wait_ms": 0,
+          "follow_ms": null,
+          "ifcb_timing": {
+            "intensity_fade_ms": null,
+            "intensity_delay_ms": 0,
+            "focus_fade_ms": null,
+            "focus_delay_ms": 0,
+            "color_fade_ms": null,
+            "color_delay_ms": 0,
+            "beam_fade_ms": null,
+            "beam_delay_ms": 0
+          },
+          "parts": [],
+          "mark": false,
+          "mib_fixture_ids": [],
+          "palette_targets": [],
+          "tracking": true,
+          "notes": "",
+          "targets": [],
+          "video_targets": [],
+          "video_output_targets": [],
+          "node_graph_targets": [],
+          "effect_targets": []
+        }
+      ],
+      "bankLabels": [
+        {
+          "id": 1,
+          "label": "Bank 1",
+          "active_cue_id": null
+        }
+      ],
+      "fixtures": 0,
+      "output": {
+        "enabled": false,
+        "protocol": "ArtNet",
+        "target_ip": "127.0.0.1",
+        "port": 6454,
+        "universe": 0,
+        "serial_port": "",
+        "serial_baud_rate": 57600
+      }
+    },
+    "targets": [
+      {
+        "tag": "BUTTON",
+        "label": "Back",
+        "target": "[{\"action\":\"TriggerPreviousCue\",\"label\":\"Back\",\"low\":0,\"high\":1}]"
+      },
+      {
+        "tag": "BUTTON",
+        "label": "GO",
+        "target": "[{\"action\":\"TriggerNextCue\",\"label\":\"GO\",\"low\":0,\"high\":1}]"
+      },
+      {
+        "tag": "BUTTON",
+        "label": "DMX Blackout",
+        "target": "[{\"action\":\"Blackout\",\"label\":\"DMX Blackout\",\"low\":0,\"high\":1}]"
+      },
+      {
+        "tag": "BUTTON",
+        "label": "Video Blackout",
+        "target": "[{\"action\":\"VideoBlackout\",\"label\":\"Video Blackout\",\"low\":0,\"high\":1}]"
+      },
+      {
+        "tag": "BUTTON",
+        "label": "All Blackout",
+        "target": "[{\"action\":\"AllBlackout\",\"label\":\"All Blackout\",\"low\":0,\"high\":1}]"
+      },
+      {
+        "tag": "BUTTON",
+        "label": "Cue fade pause",
+        "target": "[{\"action\":\"CueFadePause\",\"label\":\"Cue fade pause\",\"low\":0,\"high\":1}]"
+      },
+      {
+        "tag": "BUTTON",
+        "label": "Timeline play",
+        "target": "[{\"action\":\"TimelinePlay\",\"label\":\"Timeline play\",\"low\":0,\"high\":1}]"
+      },
+      {
+        "tag": "BUTTON",
+        "label": "Clear fixture flags",
+        "target": "[{\"action\":\"ClearFixtureFlags\",\"attribute\":\"all\",\"label\":\"Clear fixture flags\",\"low\":0,\"high\":1}]"
+      }
+    ],
+    "afterLearn": "...\nSETUP\nEDIT\nCONTROL\nSyndocal\nGO\nDMX\nVID\nALL\nTools\nBPM\n120\nTap\nClock\nStopped / Fenced\nLIGHTING\nVIDEO\nBOTH\nTIMELINE\nMIDI Learn\nListening for input\nBack\nEsc\nBank 1\n2\n+ Bank\nBank 1\n2\n+ Scene\n1\nNew Scene\nSTATIC\n0ms\n2\nNew Scene\nSTATIC\n0ms\nACTIVE CUE\nNone\nNEXT CUE\nNew Scene\nSCENE SETTINGS\nNew Scene\nSTATIC\nCue details\n×\nSCENE PROPERTIES\nStatic scene\nLabel\nIdentity color\nClear color\nFade in / out (ms)\nDuration (beats)\nPre-wait (ms)\nFollow (ms)\nSave scene properties\nGROUPS\nAll\n0\n+\nStage\nSelections\n0\nNo fixture selected\nATTRIBUTES\nFADERS\nATTRIBUTES\nEDIT\nLIVE\nDimmer\n0\nColor\n0\nPosition\n0\nGobo\n0\nBeam\n0\nFocus\n0\nOther\n0\nFader\n0\n\nSelect or patch a fixture.\n\nMIDI input ready: move or press the control for Back.",
+    "calls": [],
+    "counts": {}
+  },
+  "normalAppIdentityUnchanged": true,
+  "error": null,
+  "nonclaims": [
+    "Real native header DMX/VID/ALL BO engage and clear; runtime latch clear through DMX BO with all routes disabled",
+    "No output, physical device, recording, or venue workflow"
+  ]
+}

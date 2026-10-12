@@ -1,0 +1,33 @@
+{
+  "passed": true,
+  "results": [
+    {
+      "width": 1280,
+      "enter": true,
+      "blur": true,
+      "escape": true,
+      "pollRetainsDraft": true,
+      "rejectionRetainsDraft": true,
+      "emptyRejected": true,
+      "noSceneTrigger": true,
+      "noFlashPressOrRelease": true,
+      "replacementEditorPreserved": true,
+      "sameIdNewProjectRetiresDraft": true
+    },
+    {
+      "width": 1920,
+      "enter": true,
+      "blur": true,
+      "escape": true,
+      "pollRetainsDraft": true,
+      "rejectionRetainsDraft": true,
+      "emptyRejected": true,
+      "noSceneTrigger": true,
+      "noFlashPressOrRelease": true,
+      "replacementEditorPreserved": true,
+      "sameIdNewProjectRetiresDraft": true
+    }
+  ],
+  "errors": [],
+  "nativeWindow": false
+}

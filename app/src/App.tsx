@@ -1,3 +1,4 @@
+import { createSceneRenameController } from "./createSceneRenameController";
 import { installControlLearnCapture } from "./createControlLearnCapture";
 import { projectControlMappingsCasRecoveryIsRetryable } from "./projectControlMappingsCasRecovery";
 import { mergeProps as mergeThumbnailViewProps } from "solid-js";
@@ -11685,6 +11686,16 @@ export default function App() {
     if (resetEditorDrafts) {
       continuousFixtureFader.cancel();
       faderValueController.clearAll();
+      cancelPendingBlindSceneUpdate();
+      clearControlLearnSelection();
+      setControlLearnModeState(null);
+      if (!next.cues.some(cue => cue.id === selectedSceneCueId())) {
+        setSelectedSceneCueId(null);
+        setSelectedSceneEffectId(null);
+      }
+      const nextBank = next.cue_lists.find(bank => bank.id === selectedCueListId()) ?? next.cue_lists[0];
+      setSelectedCueListId(nextBank?.id ?? null);
+      setCueListLabel(nextBank?.label ?? "");
       setSelectedTimelineSceneBlockEventId(null);
       setTimelineSelection(null);
       setVideoOutputConfigDrafts({});
@@ -12069,7 +12080,10 @@ export default function App() {
       window.clearInterval(recoveryTimer);
     }
   });
-  createEffect(() => {
+  // Bootstrap reads capture reactive project/input signals synchronously.
+  // They must run once: a tracked effect restarts hydration on each mapping ACK
+  // and invalidates that same write while Learn is trying to reconnect.
+  onMount(() => {
     if (!isTauriRuntime()) {
       setMessage(tauriBackendUnavailableMessage);
       return;
@@ -15499,8 +15513,15 @@ export default function App() {
         setMessage(`New project blocked while recovering the previous project transaction: ${String(error)}`);
         return;
       }
-      const authority = captureProjectAuthorityIdentity();
+      const replacementIdentity = projectAuthoritySync.identityGeneration;
       try {
+        // Drain the mapping write before capturing the replacement fence.
+        // Otherwise a pending Learn ACK can advance R between capture and New.
+        await flushProjectControlMappingsBeforeMutation();
+        if (replacementIdentity !== projectAuthoritySync.identityGeneration) {
+          throw new Error("Project changed while preparing New; nothing was reset.");
+        }
+        const authority = captureProjectAuthorityIdentity();
         const result = await invoke<ProjectLoadResult>("new_project", {
           ownerId: projectTransactionOwnerId,
           expectedEpoch: authority.project_epoch,
@@ -19354,16 +19375,18 @@ export default function App() {
     }
   };
 
-  const setCueMetadata = async (cue: CueSummary) => {
-    if (!requireAuthoritativeCue(cue.id)) return;
-    const draft = cueMetadataDraft(cue);
+  const setCueMetadata = async (cue: CueSummary, renameLabel?: string): Promise<boolean> => {
+    if (!requireAuthoritativeCue(cue.id)) return false;
+    const draft = renameLabel === undefined ? cueMetadataDraft(cue) : { ...cueMetadataDraftFromSummary(cue), label: renameLabel };
+    const renameIdentity = projectAuthoritySync.identityGeneration;
+    const renameAuthority = renameLabel === undefined ? null : captureProjectAuthorityIdentity();
     const fadeMs = Math.max(0, Math.round(Number.isFinite(draft.fade_ms) ? draft.fade_ms : cue.fade_ms));
     const authoredBeats = draft.authored_beats === null || !Number.isFinite(draft.authored_beats)
       ? null
       : draft.authored_beats;
     if (authoredBeats !== null && (authoredBeats < 0.25 || authoredBeats > 1024)) {
       setMessage("Authored beats must be from 0.25 to 1024.");
-      return;
+      return false;
     }
     const preWaitMs = Math.max(0, Math.round(Number.isFinite(draft.pre_wait_ms) ? draft.pre_wait_ms : 0));
     const followMs = draft.follow_ms === null || !Number.isFinite(draft.follow_ms)
@@ -19398,6 +19421,7 @@ export default function App() {
     const mibFixtureIds = [...new Set(draft.mib_fixture_ids)].sort((left, right) => left - right);
     try {
       await invoke("set_cue_metadata", {
+        ...(renameAuthority ? { __expectedProjectEpoch: renameAuthority.project_epoch, __expectedProjectRevision: renameAuthority.project_revision, __expectedCheckpointHash: renameAuthority.checkpoint_hash } : {}),
         cueId: cue.id,
         cueNumber: draft.cue_number,
         label: draft.label,
@@ -19414,9 +19438,11 @@ export default function App() {
         tracking: draft.tracking,
         notes: draft.notes,
       });
+      if (renameAuthority && (renameIdentity !== projectAuthoritySync.identityGeneration
+        || renameAuthority.project_epoch !== projectMappingsAuthority().project_epoch)) return false;
       setCueMetadataDrafts((current) => ({
         ...current,
-        [cue.id]: {
+        [cue.id]: renameLabel !== undefined ? { ...(current[cue.id] ?? cueMetadataDraftFromSummary(cue)), label: renameLabel } : {
           cue_number: draft.cue_number,
           label: draft.label,
           group_id: draft.group_id,
@@ -19436,8 +19462,10 @@ export default function App() {
       }));
       setMessage(`Saved cue ${cue.id} details only. Effect Recall is unchanged.`);
       await refreshSnapshot();
+      return snapshot().cues.some(current => current.id === cue.id && current.label === draft.label);
     } catch (error) {
       setMessage(String(error));
+      return false;
     }
   };
 
@@ -19714,21 +19742,23 @@ export default function App() {
     setMessage(`Opened Cue details for ${cue.cue_number || cue.id}.`);
   };
 
-  const beginSceneRename = (cueId: number) => {
-    const cue = requireAuthoritativeCue(cueId);
-    if (!cue) {
-      return;
-    }
-    openTimelineSourceCue(cueId);
-    setMessage(`Rename Scene ${cue.cue_number || cue.id}.`);
-    queueMicrotask(() => window.requestAnimationFrame(() => {
-      const input = document.querySelector<HTMLInputElement>(
-        `[data-cue-metadata-label="${cueId}"]`,
-      );
-      input?.focus();
-      input?.select();
-    }));
-  };
+  const renameScene = createSceneRenameController({
+    captureScope: () => ({ projectEpoch: projectMappingsAuthority().project_epoch, identityGeneration: projectAuthoritySync.identityGeneration }),
+    isCurrent: (scope) => scope.projectEpoch === projectMappingsAuthority().project_epoch && scope.identityGeneration === projectAuthoritySync.identityGeneration,
+    flushMappings: flushProjectControlMappingsBeforeMutation,
+    refreshSnapshot,
+    message: setMessage,
+    rename: async (cueId, label) => {
+      const cue = requireAuthoritativeCue(cueId);
+      if (!cue) return false;
+      if (!isTauriRuntime()) {
+        setSnapshot(current => ({ ...current, cues: current.cues.map(item => item.id === cueId ? { ...item, label } : item) }));
+        setCueMetadataDrafts(current => ({ ...current, [cueId]: { ...(current[cueId] ?? cueMetadataDraftFromSummary(cue)), label } }));
+        return true;
+      }
+      return setCueMetadata(cue, label);
+    },
+  });
 
   const setTimelineMetronome = async (enabled: boolean, countInBeats: number) => {
     try {
@@ -25312,7 +25342,7 @@ export default function App() {
           onSetCueFadePaused={setCueFadePaused}
           onUpdateCueMetadataDraft={updateCueMetadataDraft}
           onMoveCue={moveCue}
-          onSetCueMetadata={setCueMetadata}
+          onSetCueMetadata={async cue => { await setCueMetadata(cue); }}
           onSetCueEffectTargets={setCueEffectTargets}
           onSetCueSteps={setCueSteps}
           onDuplicateCue={duplicateCue}
@@ -25331,7 +25361,7 @@ export default function App() {
       }
       onSurface={setSceneSettingsSurface}
       onDraft={(patch) => updateCueMetadataDraft(cue(), patch)}
-      onSaveMetadata={() => setCueMetadata(cue())}
+      onSaveMetadata={async () => { await setCueMetadata(cue()); }}
       onSetColor={(color) => setCueColor(cue().id, color)}
       onSetLiveModifier={setCueLiveModifierLive}
       onClearLiveModifier={clearCueLiveModifierLive}
@@ -26593,6 +26623,7 @@ export default function App() {
           >
             <Show when={controlLiveView() === "matrix"}>
               <SceneMatrixPanel
+              projectEpoch={projectMappingsAuthority().project_epoch}
               bankAuthority={bankAuthority()}
               bankMutationFailureMessage={message()}
               toolbar={liveDeskViewActions()}
@@ -26603,7 +26634,7 @@ export default function App() {
               onRenameCueList={renameCueList}
               onRemoveCueList={removeCueList}
               onCreateSceneForCueList={createSceneInCueList}
-              onRenameCue={beginSceneRename}
+              onRenameCue={renameScene}
               onDuplicateCue={duplicateCue}
               onRemoveCue={removeCue}
               cueRemovalImpact={cueRemovalImpact}
@@ -26851,6 +26882,7 @@ export default function App() {
           </div>
           <Show when={controlLiveView() === "matrix"}>
             <SceneMatrixPanel
+              projectEpoch={projectMappingsAuthority().project_epoch}
               bankAuthority={bankAuthority()}
               bankMutationFailureMessage={message()}
               toolbar={liveDeskViewActions()}
@@ -26861,7 +26893,7 @@ export default function App() {
               onRenameCueList={renameCueList}
               onRemoveCueList={removeCueList}
               onCreateSceneForCueList={createSceneInCueList}
-              onRenameCue={beginSceneRename}
+              onRenameCue={renameScene}
               onDuplicateCue={duplicateCue}
               onRemoveCue={removeCue}
               cueRemovalImpact={cueRemovalImpact}

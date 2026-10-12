@@ -208,13 +208,6 @@ export function SceneSettingsPane(props: SceneSettingsPaneProps) {
                 <span>{sceneKindDescription()}</span>
               </header>
               <div class="sceneSettingsPropertyGrid">
-                <label class="sceneSettingsWideField">
-                  Label
-                  <input
-                    value={props.draft.label}
-                    onInput={(event) => props.onDraft({ label: event.currentTarget.value })}
-                  />
-                </label>
                 <label class="sceneIdentityColorField">
                   Identity color
                   <span>

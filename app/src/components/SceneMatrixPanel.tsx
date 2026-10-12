@@ -23,6 +23,7 @@ interface SceneMatrixPanelProps {
   bankAuthority: FullBankAuthoritySnapshot;
   /** Authoritative backend rejection text for a failed Bank create/rename. */
   bankMutationFailureMessage?: string;
+  projectEpoch?: number;
   selectedCueListId: number | null;
   onSelectCueList: (cueListId: number) => void;
   onCueListLabel: (label: string) => void;
@@ -31,7 +32,7 @@ interface SceneMatrixPanelProps {
   onRemoveCueList?: (cueListId?: number, confirmed?: boolean) => void | boolean | Promise<void | boolean>;
   onReorderCueLists?: (orderedCueListIds: number[]) => void | boolean | Promise<void | boolean>;
   onCreateSceneForCueList?: (cueListId: number) => void | boolean | Promise<void | boolean>;
-  onRenameCue?: (cueId: number) => void | Promise<void>;
+  onRenameCue?: (cueId: number, label: string) => boolean | Promise<boolean>;
   onDuplicateCue?: (cue: CueSummary) => void | Promise<void>;
   onRemoveCue?: (cueId: number, confirmed?: boolean) => void | boolean | Promise<void | boolean>;
   cueRemovalImpact?: (cueId: number) => {
@@ -138,6 +139,39 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
       props.bankAuthority.issue === null ? [...props.bankAuthority.cues] : [],
       { key: "id" },
     ));
+  });
+
+  const [sceneRename, setSceneRename] = createSignal<{ cueId: number; projectEpoch: number | undefined; label: string; originalLabel: string; error: string | null; saving: boolean } | null>(null);
+  const beginSceneRename = (cue: CueSummary) => {
+    if (!props.onRenameCue || props.bankAuthority.issue || sceneRename()?.saving) return;
+    props.onSelectCue(cue.id);
+    setSceneRename({ cueId: cue.id, projectEpoch: props.projectEpoch, label: cue.label, originalLabel: cue.label, error: null, saving: false });
+    queueMicrotask(() => {
+      const input = scrollerElement?.querySelector<HTMLInputElement>('[data-scene-matrix-rename-input]');
+      input?.focus(); input?.select();
+    });
+  };
+  const saveSceneRename = async () => {
+    const edit = sceneRename();
+    if (!edit || edit.saving || !props.onRenameCue) return;
+    const label = edit.label.trim();
+    if (!label) { setSceneRename({ ...edit, error: 'Enter a scene name.' }); return; }
+    if (label === edit.originalLabel) { setSceneRename(null); return; }
+    const submission = { ...edit, saving: true, error: null };
+    setSceneRename(submission);
+    try {
+      const saved = await props.onRenameCue(edit.cueId, label);
+      if (!sceneMatrixMounted || sceneRename() !== submission) return;
+      if (saved) setSceneRename(null);
+      else setSceneRename({ ...edit, saving: false, error: 'Could not save the scene name. Try again.' });
+    } catch (error) {
+      if (sceneMatrixMounted && sceneRename() === submission) setSceneRename({ ...edit, saving: false, error: String(error) });
+    }
+  };
+  createEffect(() => {
+    const edit = sceneRename();
+    if (edit && (edit.projectEpoch !== props.projectEpoch
+      || (!props.bankAuthority.issue && !stableCues.some(cue => cue.id === edit.cueId)))) setSceneRename(null);
   });
 
   // Persisted Bank labels are the display authority. Never rewrite an authored
@@ -330,7 +364,7 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
   const renameContextScene = () => {
     const cue = sceneContextCue();
     closeSceneContextMenu(false);
-    if (cue && props.onRenameCue) void props.onRenameCue(cue.id);
+    if (cue) beginSceneRename(cue);
   };
   const duplicateContextScene = () => {
     const cue = sceneContextCue();
@@ -1163,6 +1197,7 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
                               data-timeline-cue-drag-source={cue.id}
                               onContextMenu={(event) => requestSceneContextMenu(event, cue)}
                               onKeyDown={(event) => {
+                                if (event.key === "F2") { event.preventDefault(); beginSceneRename(cue); return; }
                                 if (event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey)) {
                                   event.preventDefault();
                                   requestSceneContextMenu(event, cue);
@@ -1237,7 +1272,12 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
                                   <strong
                                     data-no-localize
                                     data-scene-matrix-cue-name
-                                    title={cue.label}
+                                    title="Double-click to rename scene"
+                                    onPointerDown={(event) => event.stopPropagation()}
+                                    onPointerUp={(event) => event.stopPropagation()}
+                                    onPointerCancel={(event) => event.stopPropagation()}
+                                    onClick={(event) => { event.stopPropagation(); props.onSelectCue(cue.id); }}
+                                    onDblClick={(event) => { event.preventDefault(); event.stopPropagation(); beginSceneRename(cue); }}
                                   >
                                     {cue.label}
                                   </strong>
@@ -1267,6 +1307,28 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
                                   <small data-scene-matrix-time>{displayNumber(cue.fade_ms, 0)}ms</small>
                                 </span>
                               </button>
+                              <Show when={sceneRename()?.cueId === cue.id}>
+                                <div class="sceneMatrixRenameEditor" data-scene-matrix-rename={cue.id}>
+                                  <input
+                                    data-scene-matrix-rename-input
+                                    aria-label="Scene name"
+                                    aria-invalid={Boolean(sceneRename()?.error)}
+                                    value={sceneRename()?.label ?? ''}
+                                    disabled={sceneRename()?.saving}
+                                    onInput={(event) => { const edit = sceneRename(); if (edit) setSceneRename({ ...edit, label: event.currentTarget.value, error: null }); }}
+                                    onBlur={() => { if (!sceneRename()?.error) void saveSceneRename(); }}
+                                    onKeyDown={(event) => {
+                                      event.stopPropagation();
+                                      if (event.isComposing) return;
+                                      if (event.key === 'Enter') { event.preventDefault(); void saveSceneRename(); }
+                                      if (event.key === 'Escape' && !sceneRename()?.saving) { event.preventDefault(); setSceneRename(null); }
+                                    }}
+                                    onPointerDown={(event) => event.stopPropagation()}
+                                    onClick={(event) => event.stopPropagation()}
+                                  />
+                                  <Show when={sceneRename()?.error}><span role="alert">{sceneRename()?.error}</span></Show>
+                                </div>
+                              </Show>
                               <Show when={cue.child_timeline}>
                                 <button
                                   type="button"

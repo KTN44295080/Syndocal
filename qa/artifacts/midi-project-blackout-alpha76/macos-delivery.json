@@ -1,0 +1,22 @@
+{
+  "passed": true,
+  "deliveredForUserTesting": false,
+  "sourceCommit": "c997b5dc2875bf663fd333ac8a28c2b8db4379c8",
+  "workflowRun": "38254956921",
+  "runAttempt": 1,
+  "path": "C:\\Users\\janua\\Downloads\\Syndocal-1.2.0-alpha.76\\Syndocal_1.2.0-alpha.76_arm64.dmg",
+  "bytes": 32632250,
+  "sha256": "06f055fd59edbde5563f9904d91cd51d86963e8988df92f0ecb2a49d639168c0",
+  "finalDmgChecks": 11,
+  "processIdentity": {
+    "schemaVersion": 1,
+    "processId": 54463,
+    "executablePath": "/Users/runner/hostedtoolcache/node/22.22.1/arm64/bin/node",
+    "inspectedExecutablePath": "/Users/runner/hostedtoolcache/node/22.22.1/arm64/bin/node",
+    "cliExecutablePath": "/private/var/folders/nj/vtw8zd2j31d1gdrtntc5y4600000gn/T/syndocal-dmg-check-gXgO45/extracted/Syndocal.app/Contents/MacOS/syndocal",
+    "malformedRequestsRejected": 2
+  },
+  "nonclaims": [
+    "No native Mac UI responsiveness, actual macOS 12 execution, Gatekeeper, signing/notarization or physical output"
+  ]
+}
