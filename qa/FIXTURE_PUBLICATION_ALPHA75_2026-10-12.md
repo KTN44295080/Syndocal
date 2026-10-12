@@ -65,3 +65,19 @@ The original three-second acquisition and one-second observation bounds remain;
 all final assertions are preserved. Seven focused ShowClock tests passed.
 Only code inside `show_clock_ipc.rs` `cfg(test)` changes; prepared native products
 remain built from `b71aefa9`. Full CI will revalidate this test-only source delta.
+
+The next full Windows CI run `38200983796` passed the corrected ShowClock test
+but found a separate existing retirement test race: the worker publishes its
+failed-send flag before its thread terminates. The runtime correctly retains
+that still-running worker. The test now observes JoinHandle completion before
+requesting terminal reap; both receiver-drop and empty-retirement assertions
+remain. All 86 media-audio tests passed.
+
+A local full native run then found a restoration fixture whose enabled Dimmer
+automation immediately changes 0 to 65535 at t=0. The restore comparison now
+uses a fixture whose initial automation keyframe agrees with its authored value,
+retaining enabled automation, all definitions, complete snapshot/mapping equality
+and exact original-backup-byte checks. Existing paused seek automation behavior
+is unchanged. The three restoration contracts passed. A complete native rerun
+passed 2054 / 0 / 21 (passed / failed / ignored); this test-only follow-up changes
+no production behavior or prepared alpha.75 installer bytes.

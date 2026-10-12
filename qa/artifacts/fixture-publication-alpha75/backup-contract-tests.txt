@@ -1,0 +1,18 @@
+**********************************************************************
+** Visual Studio 2022 Developer Command Prompt v17.14.39
+** Copyright (c) 2025 Microsoft Corporation
+**********************************************************************
+[vcvarsall.bat] Environment initialized for: 'x64'
+C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+   Compiling syndocal v1.2.0-alpha.75 (C:\Users\janua\.codex\worktrees\patch-bulk-alpha74\Syndocal\app\src-tauri)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 10s
+     Running unittests src\main.rs (C:\Users\janua\AppData\Local\Temp\syndocal-native-acceptance-target\debug\deps\syndocal-3462e75d149e6f63.exe)
+
+running 3 tests
+test tests::project_backup_restoration_contract_tests::project_backup_restoration_preflights_locks_and_exhausted_generation_before_file_read ... ok
+test tests::project_backup_restoration_contract_tests::project_backup_restoration_prepares_full_mappings_exact_bytes_and_unsaved_source_projection ... ok
+test tests::project_backup_restoration_contract_tests::project_backup_restoration_rejects_changed_invalid_or_missing_before_confirmation_and_publication ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 2072 filtered out; finished in 0.12s

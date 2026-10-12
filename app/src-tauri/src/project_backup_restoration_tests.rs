@@ -68,6 +68,23 @@ mod project_backup_restoration_contract_tests {
         ] {
             let mut backup = backup();
             backup.source_path = source.clone();
+            // This contract compares restoration, not the next automation
+            // tick. Keep the enabled automation and all its definitions, but
+            // make its initial value agree with the authored fixture value.
+            // Otherwise the sample's t=0 Dimmer 65535 legitimately replaces
+            // fixture Dimmer 0 between publication and the persistence read.
+            let dimmer = backup.project.snapshot.fixtures[0]
+                .attribute_values
+                .iter()
+                .find(|value| value.attribute == "Dimmer")
+                .unwrap()
+                .value;
+            let initial_keyframe = backup.project.snapshot.timeline.automations[0]
+                .keyframes
+                .iter_mut()
+                .find(|keyframe| keyframe.time_ms == 0)
+                .unwrap();
+            initial_keyframe.value = dimmer;
             let projection = source.filter(|source| is_syndocal_project_path(Path::new(source)));
             let mut bytes = project_backup_json::project_backup_json_bytes(&backup).unwrap();
             bytes.extend_from_slice(b" \r\n\t");

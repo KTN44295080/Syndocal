@@ -1,0 +1,144 @@
+**********************************************************************
+** Visual Studio 2022 Developer Command Prompt v17.14.39
+** Copyright (c) 2025 Microsoft Corporation
+**********************************************************************
+[vcvarsall.bat] Environment initialized for: 'x64'
+C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\link.exe
+   Compiling syndocal v1.2.0-alpha.75 (C:\Users\janua\.codex\worktrees\patch-bulk-alpha74\Syndocal\app\src-tauri)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 26s
+     Running unittests src\main.rs (C:\Users\janua\AppData\Local\Temp\syndocal-native-acceptance-target\debug\deps\syndocal-3462e75d149e6f63.exe)
+
+running 86 tests
+test media_audio_playback_tests::asio_timeline_audio_attachment_applies_authoritative_varispeed ... ok
+test media_audio_playback_tests::asio_timeline_play_retires_wdm_test_before_live_ack ... ok
+test media_audio_playback_tests::audio_device_generation_exhaustion_is_fail_closed_without_runtime_delta ... ok
+test media_audio_playback_tests::audio_resync_threshold_and_cooldown_prevent_seek_thrash ... ok
+test media_audio_playback_tests::blocking_cue_observers_wait_for_contention_then_preserve_the_published_epoch ... ok
+test media_audio_playback_tests::canonical_fractional_timeline_audio_rate_does_not_false_resync_after_190_seconds ... ok
+test media_audio_playback_tests::child_timeline_audio_sink_keys_isolate_parent_activation_and_clip_id ... ok
+test media_audio_playback_tests::concurrent_explicit_wdm_cue_tests_leave_one_owned_sink ... ok
+test media_audio_playback_tests::control_plane_and_ui_play_share_test_retirement_and_fence_a_racing_append ... ok
+
+thread 'media_audio_playback_tests::cue_activation_failure_rollback_recovers_poison_and_never_leaves_program_active' (118024) panicked at app\src-tauri\src\tests\media_audio_playback_tests.rs:1517:9:
+poison ASIO output runtime for Stop proof
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'media_audio_playback_tests::cue_activation_failure_rollback_recovers_poison_and_never_leaves_program_active' (118024) panicked at app\src-tauri\src\tests\media_audio_playback_tests.rs:2648:9:
+poison media audio before CUE activation rollback
+test media_audio_playback_tests::cue_activation_failure_rollback_recovers_poison_and_never_leaves_program_active ... ok
+test media_audio_playback_tests::cue_only_prepare_failure_stays_visible_without_faulting_program_follow_settlement ... ok
+test media_audio_playback_tests::empty_audio_monitor_status_does_not_open_an_output_device ... ok
+test media_audio_playback_tests::enabled_program_audio_config_change_preserves_an_unseen_action ... ok
+test media_audio_playback_tests::explicit_wdm_cue_test_is_bounded_replaced_and_retired_with_attachment ... ok
+test media_audio_playback_tests::explicit_wdm_cue_test_requires_exact_active_published_route ... ok
+test media_audio_playback_tests::explicit_wdm_disappearance_after_enumeration_rolls_program_back_before_active_reply ... ok
+test media_audio_playback_tests::explicit_wdm_enqueue_failure_retires_the_route_and_blocks_automatic_reopen ... ok
+test media_audio_playback_tests::explicit_wdm_stop_between_append_and_publication_retires_the_cue_sink ... ok
+test media_audio_playback_tests::explicit_wdm_timeline_commit_fence_rejects_after_stop_and_drains_before_stop ... ok
+test media_audio_playback_tests::external_wdm_commit_rejects_an_old_playback_fence_after_observer_delay ... ok
+test media_audio_playback_tests::external_wdm_timeline_owner_separates_normal_authoring_from_asio_cue ... ok
+test media_audio_playback_tests::faulted_timeline_cue_state_retires_stale_media_timeline_sinks ... ok
+test media_audio_playback_tests::invalid_timeline_audio_rate_is_visible_and_cue_only_does_not_fault_program_settlement ... ok
+test media_audio_playback_tests::locked_router_retires_explicit_wdm_and_drops_the_inflight_prepare_receiver ... ok
+test media_audio_playback_tests::manual_take_barrier_suppresses_an_unobserved_auto_audio_action ... ok
+test media_audio_playback_tests::nested_canonical_fractional_timeline_audio_rate_does_not_false_resync_after_339_seconds ... ok
+test media_audio_playback_tests::newer_program_audio_job_retires_the_previous_generation ... ok
+test media_audio_playback_tests::no_cue_project_keeps_exact_split_device_ready_for_start_and_stop_test ... ok
+test media_audio_playback_tests::normal_authoring_monitor_routes_program_and_cue_media_to_one_explicit_wdm_owner ... ok
+test media_audio_playback_tests::normal_prepare_failure_retires_the_owned_route_before_publishing_fault ... ok
+test media_audio_playback_tests::normal_program_replacement_preserves_only_the_independent_authoring_timeline ... ok
+
+thread 'media_audio_playback_tests::normal_program_retirement_owner_remains_reachable_after_media_lock_poison' (131516) panicked at app\src-tauri\src\tests\media_audio_playback_tests.rs:693:9:
+poison media playback for retirement-owner regression proof
+test media_audio_playback_tests::normal_program_retirement_owner_remains_reachable_after_media_lock_poison ... ok
+test media_audio_playback_tests::normal_selection_keeps_router_locked_until_retired_cue_workers_are_reaped ... ok
+
+thread 'media_audio_playback_tests::poisoned_asio_runtime_and_media_stop_still_fence_router_and_silence_cue' (188676) panicked at app\src-tauri\src\tests\media_audio_playback_tests.rs:1517:9:
+poison ASIO output runtime for Stop proof
+
+thread 'media_audio_playback_tests::poisoned_asio_runtime_and_media_stop_still_fence_router_and_silence_cue' (188676) panicked at app\src-tauri\src\tests\media_audio_playback_tests.rs:2592:9:
+poison media audio for Stop proof
+test media_audio_playback_tests::poisoned_asio_runtime_and_media_stop_still_fence_router_and_silence_cue ... ok
+
+thread 'media_audio_playback_tests::poisoned_cue_admission_and_bridge_failure_remain_faulted_visible_and_silent' (191400) panicked at app\src-tauri\src\tests\media_audio_playback_tests.rs:1507:9:
+poison Timeline CUE audio admission for Stop proof
+test media_audio_playback_tests::poisoned_cue_admission_and_bridge_failure_remain_faulted_visible_and_silent ... ok
+
+thread 'media_audio_playback_tests::poisoned_normal_scheduler_state_retires_explicit_wdm_and_closes_admission' (102316) panicked at app\src-tauri\src\tests\media_audio_playback_tests.rs:1497:9:
+poison Timeline CUE audio state for retirement proof
+test media_audio_playback_tests::poisoned_normal_scheduler_state_retires_explicit_wdm_and_closes_admission ... ok
+
+thread 'media_audio_playback_tests::poisoned_normal_topology_admission_retires_explicit_wdm_and_closes_admission' (110352) panicked at app\src-tauri\src\tests\media_audio_playback_tests.rs:1507:9:
+poison Timeline CUE audio admission for Stop proof
+test media_audio_playback_tests::poisoned_normal_topology_admission_retires_explicit_wdm_and_closes_admission ... ok
+
+thread 'media_audio_playback_tests::poisoned_router_retirement_drops_prepare_receiver_and_reaps_the_late_worker' (174272) panicked at app\src-tauri\src\tests\media_audio_playback_tests.rs:1497:9:
+poison Timeline CUE audio state for retirement proof
+test media_audio_playback_tests::poisoned_router_retirement_drops_prepare_receiver_and_reaps_the_late_worker ... ok
+
+thread 'media_audio_playback_tests::poisoned_timeline_cue_state_retires_stale_media_timeline_sinks' (52388) panicked at app\src-tauri\src\tests\media_audio_playback_tests.rs:1497:9:
+poison Timeline CUE audio state for retirement proof
+test media_audio_playback_tests::poisoned_timeline_cue_state_retires_stale_media_timeline_sinks ... ok
+
+thread 'media_audio_playback_tests::poisoned_timeline_cue_state_router_fault_retires_wdm_attachment_and_reports_fault' (160192) panicked at app\src-tauri\src\tests\media_audio_playback_tests.rs:1497:9:
+poison Timeline CUE audio state for retirement proof
+test media_audio_playback_tests::poisoned_timeline_cue_state_router_fault_retires_wdm_attachment_and_reports_fault ... ok
+
+thread 'media_audio_playback_tests::poisoned_timeline_cue_state_stop_retires_wdm_attachment_and_reports_fault' (163964) panicked at app\src-tauri\src\tests\media_audio_playback_tests.rs:1497:9:
+poison Timeline CUE audio state for retirement proof
+test media_audio_playback_tests::poisoned_timeline_cue_state_stop_retires_wdm_attachment_and_reports_fault ... ok
+test media_audio_playback_tests::prepare_timeout_retires_explicit_wdm_and_skips_feed_on_the_timeout_tick ... ok
+test media_audio_playback_tests::program_audio_config_rejects_non_finite_volume_and_does_not_replay_current_action ... ok
+test media_audio_playback_tests::program_audio_gain_reconfiguration_preserves_mix_ratio ... ok
+test media_audio_playback_tests::program_audio_handoff_plans_each_auto_action_exactly_once ... ok
+test media_audio_playback_tests::rapid_program_audio_reenable_keeps_the_pending_stop_barrier ... ok
+test media_audio_playback_tests::rejected_program_install_keeps_prepared_output_owned_by_retirement_guard ... ok
+test media_audio_playback_tests::running_cue_prepare_worker_cannot_delay_program_stop_close ... ok
+test media_audio_playback_tests::settings_writer_linearizes_before_an_waiting_external_wdm_media_commit ... ok
+test media_audio_playback_tests::stale_rate_prepared_clip_is_retired_without_attaching_old_speed ... ok
+
+thread 'media_audio_playback_tests::state_poison_after_normal_initial_check_still_retires_explicit_wdm' (105628) panicked at app\src-tauri\src\tests\media_audio_playback_tests.rs:1497:9:
+poison Timeline CUE audio state for retirement proof
+test media_audio_playback_tests::state_poison_after_normal_initial_check_still_retires_explicit_wdm ... ok
+
+thread 'media_audio_playback_tests::state_poison_between_prepare_spawn_and_publication_is_terminal_and_receiverless' (114520) panicked at app\src-tauri\src\tests\media_audio_playback_tests.rs:1497:9:
+poison Timeline CUE audio state for retirement proof
+test media_audio_playback_tests::state_poison_between_prepare_spawn_and_publication_is_terminal_and_receiverless ... ok
+test media_audio_playback_tests::stopping_one_layer_does_not_consume_another_layers_unseen_action ... ok
+test media_audio_playback_tests::timeline_audio_clip_gain_envelope_combines_fades_and_gain ... ok
+test media_audio_playback_tests::timeline_audio_commit_fence_rejects_publication_after_final_snapshot_read ... ok
+test media_audio_playback_tests::timeline_audio_commit_fence_rejects_same_authority_seek_publication ... ok
+test media_audio_playback_tests::timeline_audio_commit_fence_rejects_same_authority_transport_publication ... ok
+test media_audio_playback_tests::timeline_audio_decoder_fence_rejects_stale_source_before_sink_start ... ok
+test media_audio_playback_tests::timeline_audio_decoder_seek_before_append_does_not_wait_for_mixer_callback ... ok
+test media_audio_playback_tests::timeline_audio_internal_budget_fault_blocks_exact_fingerprint_without_respawn ... ok
+test media_audio_playback_tests::timeline_audio_lane_audibility_stops_once_and_rearms_only_on_reappearance ... ok
+test media_audio_playback_tests::timeline_audio_output_bus_change_retires_old_sink_before_each_logical_rebuild ... ok
+test media_audio_playback_tests::timeline_audio_playback_lifecycle_recues_on_play_and_seek_and_stops_on_pause ... ok
+test media_audio_playback_tests::timeline_audio_prepare_outcomes_never_cross_follow_contexts ... ok
+test media_audio_playback_tests::timeline_audio_prepare_shutdown_cancels_and_joins_nested_worker ... ok
+test media_audio_playback_tests::timeline_audio_prepare_single_flight_drop_never_joins_unfinished_worker ... ok
+test media_audio_playback_tests::timeline_audio_prepare_single_flight_quarantines_timeout_and_reaps_exactly_once ... ok
+test media_audio_playback_tests::timeline_audio_prepare_stall_releases_control_lock_and_rejects_device_aba ... ok
+test media_audio_playback_tests::timeline_audio_prepare_timeout_cancels_exact_precommit_before_install ... ok
+test media_audio_playback_tests::timeline_audio_prepare_timeout_unblocks_only_after_output_device_rotation ... ok
+test media_audio_playback_tests::timeline_audio_prepare_transaction_deadline_is_global_across_clips ... ok
+test media_audio_playback_tests::timeline_audio_projection_gap_retires_once_and_rearms_cached_failure_once ... ok
+test media_audio_playback_tests::timeline_audio_real_wav_prepare_survives_multiple_position_ticks_and_installs_once ... ok
+test media_audio_playback_tests::timeline_audio_sink_domain_recreates_clip_id_on_seek_and_stops_on_pause_or_mute ... ok
+test media_audio_playback_tests::timeline_audio_sink_seek_converts_authoritative_source_time_to_output_time ... ok
+test media_audio_playback_tests::timeline_audio_sink_seek_coordinate_rounds_down_and_rejects_invalid_rates ... ok
+test media_audio_playback_tests::timeline_audio_source_clock_uses_source_time_for_half_double_and_post_seek_resync ... ok
+test media_audio_playback_tests::timeline_cue_enqueue_failure_retires_active_source_without_watermark_commit ... ok
+test media_audio_playback_tests::timeline_cue_history_only_tick_advances_watermarks_without_reconsidering_history ... ok
+test media_audio_playback_tests::timeline_cue_rotation_skips_history_and_keeps_exact_and_future_events_once ... ok
+test media_audio_playback_tests::timeline_cue_seek_rotation_keeps_exact_anchor_and_future_events ... ok
+test media_audio_playback_tests::timeline_cue_source_activation_failure_retires_without_watermark_commit ... ok
+test media_audio_playback_tests::timeline_cue_source_admission_precedes_callback_progress ... ok
+test media_audio_playback_tests::topology_result_without_worker_handle_retires_the_existing_explicit_wdm_route ... ok
+test media_audio_playback_tests::transient_cue_state_contention_fails_closed_and_retires_stale_routes ... ok
+test media_audio_playback_tests::worker_tick_route_gate_contention_drains_then_republishes_the_exact_fence ... ok
+
+test result: ok. 86 passed; 0 failed; 0 ignored; 0 measured; 1989 filtered out; finished in 5.93s

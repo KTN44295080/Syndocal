@@ -2168,6 +2168,26 @@ fn poisoned_router_retirement_drops_prepare_receiver_and_reaps_the_late_worker()
         send_failed.load(std::sync::atomic::Ordering::Acquire),
         "the late worker result receiver must be dropped during poison retirement"
     );
+    // Publishing the failed send precedes thread termination. The runtime
+    // must retain that worker until JoinHandle reports completion.
+    for _ in 0..100 {
+        if runtime
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .retired_workers[0]
+            .is_finished()
+        {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(runtime
+        .state
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .retired_workers[0]
+        .is_finished());
     runtime.terminal_fault_and_retire_normal_runtime(
         "late worker reap proof",
         "late worker reap proof".to_owned(),
