@@ -4,7 +4,7 @@
 
 
 > syndocal@1.2.0-alpha.77 check:release:static C:\Users\janua\.codex\worktrees\patch-bulk-alpha74\Syndocal\app
-> pnpm run check:completion-ledger && pnpm run check:q1-q4-ledger && pnpm run check:ai0-source-coverage && pnpm run check:ai1-query-event-contract && pnpm run check:ai2-authored-command-bridge && pnpm run check:ai4-authority-service && pnpm run check:ai5-sidecar && pnpm run check:ai6-admin-ui && pnpm run check:ai7-adversarial-proof && pnpm run check:f1-input-generations && pnpm run check:f2-output-ownership && pnpm run check:frontend-command-routing && pnpm run check:frontend-invokes && pnpm run check:project-shortcuts && pnpm run check:backend-operator-contract && pnpm run check:project-transaction && pnpm run check:project-recovery-e3 && pnpm run check:project-publication-e4 && node scripts/check-tauri-admission-inventory.mjs && pnpm run check:media-thumbnails && pnpm run check:media-asset-operations && pnpm run check:media-asset-authority && pnpm run check:native-thumbnail-request && pnpm run check:snapshot-live-publication && pnpm run check:agent-bridge && pnpm run check:output-ownership && pnpm run check:output-control-runtime && pnpm run check:safety-blackout-runtime && pnpm run check:asio-packaging && pnpm run check:asio-v3-contract && pnpm run check:live-audio && pnpm run check:live-audio-ipc-v1 && pnpm run check:timeline-cue-audio && pnpm run check:timeline-audio-output-bus && pnpm run check:timeline-loop-runtime && pnpm run check:timeline-transport-runtime && pnpm run check:timeline-follow-runtime && pnpm run check:snapshot-runtime-watermark && pnpm run check:project-open-bootstrap && pnpm run check:video-runtime-polling && pnpm run check:video-output-routing-runtime && pnpm run check:video-display-target && pnpm run check:video-output-window-observation && pnpm run check:camera-input && pnpm run check:fixture-fader && pnpm run check:fixture-repatch && pnpm run check:midi-learn && pnpm run check:project-mapping-cas && pnpm run check:scene-rename-controller
+> pnpm run check:completion-ledger && pnpm run check:q1-q4-ledger && pnpm run check:ai0-source-coverage && pnpm run check:ai1-query-event-contract && pnpm run check:ai2-authored-command-bridge && pnpm run check:ai4-authority-service && pnpm run check:ai5-sidecar && pnpm run check:ai6-admin-ui && pnpm run check:ai7-adversarial-proof && pnpm run check:f1-input-generations && pnpm run check:f2-output-ownership && pnpm run check:frontend-command-routing && pnpm run check:frontend-invokes && pnpm run check:project-shortcuts && pnpm run check:backend-operator-contract && pnpm run check:project-transaction && pnpm run check:project-recovery-e3 && pnpm run check:project-publication-e4 && node scripts/check-tauri-admission-inventory.mjs && pnpm run check:media-thumbnails && pnpm run check:media-asset-operations && pnpm run check:media-asset-authority && pnpm run check:native-thumbnail-request && pnpm run check:snapshot-live-publication && pnpm run check:agent-bridge && pnpm run check:output-ownership && pnpm run check:output-control-runtime && pnpm run check:safety-blackout-runtime && pnpm run check:asio-packaging && pnpm run check:asio-v3-contract && pnpm run check:live-audio && pnpm run check:live-audio-ipc-v1 && pnpm run check:timeline-cue-audio && pnpm run check:timeline-audio-output-bus && pnpm run check:timeline-loop-runtime && pnpm run check:timeline-transport-runtime && pnpm run check:timeline-follow-runtime && pnpm run check:snapshot-runtime-watermark && pnpm run check:project-open-bootstrap && pnpm run check:video-runtime-polling && pnpm run check:video-output-routing-runtime && pnpm run check:video-display-target && pnpm run check:video-output-window-observation && pnpm run check:camera-input && pnpm run check:fixture-fader && pnpm run check:fixture-repatch && pnpm run check:midi-learn && pnpm run check:project-mapping-cas && pnpm run check:scene-rename-controller && pnpm run check:project-mapping-flush
 
 
 > syndocal@1.2.0-alpha.77 check:completion-ledger C:\Users\janua\.codex\worktrees\patch-bulk-alpha74\Syndocal\app
@@ -44,43 +44,43 @@ TAP version 13
 # Subtest: only Windows folds executable path case
 ok 1 - only Windows folds executable path case
   ---
-  duration_ms: 0.5985
+  duration_ms: 1.1842
   type: 'test'
   ...
 # Subtest: production inspection exits before Engine/Tauri initialization
 ok 2 - production inspection exits before Engine/Tauri initialization
   ---
-  duration_ms: 16.0608
+  duration_ms: 18.8572
   type: 'test'
   ...
 # Subtest: macOS response binds exact PID, schema and complete absolute UTF-8 path
 ok 3 - macOS response binds exact PID, schema and complete absolute UTF-8 path
   ---
-  duration_ms: 0.9117
+  duration_ms: 0.9277
   type: 'test'
   ...
 # Subtest: macOS launches only selected binary with fixed read-only args and bounded output
 ok 4 - macOS launches only selected binary with fixed read-only args and bounded output
   ---
-  duration_ms: 1.0675
+  duration_ms: 0.8136
   type: 'test'
   ...
 # Subtest: inspection failure, unsupported platform and invalid PID never fall back
 ok 5 - inspection failure, unsupported platform and invalid PID never fall back
   ---
-  duration_ms: 0.589
+  duration_ms: 0.6092
   type: 'test'
   ...
 # Subtest: Linux keeps its exact kernel executable query
 ok 6 - Linux keeps its exact kernel executable query
   ---
-  duration_ms: 0.1035
+  duration_ms: 0.1075
   type: 'test'
   ...
 # Subtest: Linux rejects distinct case-only executables before broker forwarding
 ok 7 - Linux rejects distinct case-only executables before broker forwarding # SKIP
   ---
-  duration_ms: 0.0481
+  duration_ms: 0.0971
   type: 'test'
   ...
 1..7
@@ -91,7 +91,7 @@ ok 7 - Linux rejects distinct case-only executables before broker forwarding # S
 # cancelled 0
 # skipped 1
 # todo 0
-# duration_ms 134.5301
+# duration_ms 154.6795
 PASS 16 adapter integration groups; hostile stdio corpus: 128 rejected; fake loopback only, no Syndocal/device calls
 PASS HTTP health/JSON-RPC/REST and WebSocket transport groups; loopback fake broker only
 PASS transport security: host/origin rejection, malformed path recovery, 64-session capacity/release, idle expiry and active-request retention, split-header/payload liveness and frame completion; no native/device calls
@@ -320,4 +320,9 @@ PASS: mapping CAS recovery success/rejection and clean in-flight ACK join (13 as
 > node scripts/check-scene-rename-controller.mjs
 
 PASS: scene rename controller success, empty name, mapping wait replacement, Undo identity, snapshot wait replacement, rejection and late reply
+
+> syndocal@1.2.0-alpha.77 check:project-mapping-flush C:\Users\janua\.codex\worktrees\patch-bulk-alpha74\Syndocal\app
+> node --experimental-strip-types scripts/check-project-mapping-flush-single-flight.mjs
+
+PASS: actual parallel-flush failure reproduced; shared Learn/New ACK replay succeeds; replacement and rejection stay fenced
 release metadata ok: Syndocal 1.2.0-alpha.77 / .sdc / signed updater overlay / Seraf() / KTN

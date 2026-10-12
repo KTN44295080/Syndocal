@@ -1,0 +1,10 @@
+{
+  "sourceCommit": "6c061fb1f52429198bb965d02fb0a2037d1541a9",
+  "normalExecutable": "C:/Users/janua/AppData/Local/Temp/syndocal-native-acceptance-target/release/syndocal.exe",
+  "archivedExecutable": "C:/Users/janua/AppData/Local/Temp/syndocal-alpha77-normal-payload/syndocal.exe",
+  "sha256": "e421f1cba742a8877b8ae66e3ed176aefc23cd3cac03065bb45231ea53c4724b",
+  "bytes": 70884864,
+  "productVersion": "1.2.0-alpha.77",
+  "normalWindowGatePending": true,
+  "supersededBySharedFlushFix": true
+}

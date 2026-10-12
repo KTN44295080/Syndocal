@@ -1,3 +1,4 @@
+import { createProjectControlMappingsFlusher } from "./createProjectControlMappingsFlusher";
 import { createSceneRenameController } from "./createSceneRenameController";
 import { installControlLearnCapture } from "./createControlLearnCapture";
 import { projectControlMappingsCasRecoveryIsRetryable } from "./projectControlMappingsCasRecovery";
@@ -14646,7 +14647,7 @@ export default function App() {
     }
   };
 
-  const flushProjectControlMappingsAuthority = async (): Promise<ProjectControlMappingsFlushResult> => {
+  const flushProjectControlMappingsAuthority = createProjectControlMappingsFlusher(async (): Promise<ProjectControlMappingsFlushResult> => {
     const { flushProjectControlMappingsAuthorityBridge } = await import(
       "./projectControlMappingsAuthorityBridge"
     );
@@ -14665,7 +14666,7 @@ export default function App() {
       ownAcknowledgements: flushed.ownAcknowledgements,
       trusted: flushed.trusted,
     };
-  };
+  });
   const flushProjectControlMappingsBeforeMutation = async (): Promise<number> => {
     const expectedEpoch = projectMappingsAuthority().project_epoch;
     const flushed = await flushProjectControlMappingsAuthority();

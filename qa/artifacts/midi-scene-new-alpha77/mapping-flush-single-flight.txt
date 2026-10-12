@@ -1,0 +1,5 @@
+
+> syndocal@1.2.0-alpha.77 check:project-mapping-flush C:\Users\janua\.codex\worktrees\patch-bulk-alpha74\Syndocal\app
+> node --experimental-strip-types scripts/check-project-mapping-flush-single-flight.mjs
+
+PASS: actual parallel-flush failure reproduced; shared Learn/New ACK replay succeeds; replacement and rejection stay fenced
