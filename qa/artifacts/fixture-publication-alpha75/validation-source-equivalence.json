@@ -1,0 +1,24 @@
+{
+  "passed": true,
+  "productBuildSource": "b71aefa936207c6b44369574591f73c0f69c8fcc",
+  "fullCiSource": "70cc1e813c588b3a37f35e7a2484e75803c2ef69",
+  "changedProductInputFiles": [
+    "app/src-tauri/src/project_backup_restoration_tests.rs",
+    "app/src-tauri/src/show_clock_ipc.rs",
+    "app/src-tauri/src/tests/media_audio_playback_tests.rs"
+  ],
+  "cfgTestInclusionsVerified": true,
+  "showClockCfgTestModuleStartsAt": 1423,
+  "showClockHunks": [
+    {
+      "oldLine": 1604,
+      "newLine": 1605
+    },
+    {
+      "oldLine": 1616,
+      "newLine": 1617
+    }
+  ],
+  "noProductionCodeDelta": true,
+  "noBinaryEqualityClaim": true
+}

@@ -486,7 +486,7 @@ unaccepted.
 
 ## インストール
 
-次の開発配布候補は `1.2.0-alpha.75` です。一括移動の操作ガードを処理完了まで保持する修正と、Windows x64用EXE/MSI・導入用ZIP、macOS 12以降のApple Silicon用DMGを検証しています。実施済みの検査と未完了の配布・実機確認は [候補の検証記録](qa/FIXTURE_PUBLICATION_ALPHA75_2026-10-12.md) を参照してください。配布済みalpha.72／alpha.74のファイルは変更していません。
+開発テスト用の `1.2.0-alpha.75` をWin/Macで用意しました。BO・USB起動・Control灯体フェーダーの修正と一括パッチ移動を含み、全Win/Linux CI、Macパッケージ検査、Windowsの実更新・完全削除検査を通過しています。配布物と実機確認の残件は [検証記録](qa/FIXTURE_PUBLICATION_ALPHA75_2026-10-12.md) を参照してください。USB-DMX実信号とMacの画面動作は未確認です。配布済みalpha.72／alpha.74のファイルは変更していません。
 
 CI/Release成果物は次の形式です。
 

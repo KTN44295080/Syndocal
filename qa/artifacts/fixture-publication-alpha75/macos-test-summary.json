@@ -1,0 +1,71 @@
+{
+  "uniqueRustTestsPassed": 83,
+  "files": [
+    {
+      "file": "macos-fixture-fader-history-tests.txt",
+      "passed": 4
+    },
+    {
+      "file": "macos-fixture-publication-admission-tests.txt",
+      "passed": 1
+    },
+    {
+      "file": "macos-fixture-repatch-engine-tests.txt",
+      "passed": 3
+    },
+    {
+      "file": "macos-fixture-repatch-native-tests.txt",
+      "passed": 2
+    },
+    {
+      "file": "macos-output-receipt-retention-tests.txt",
+      "passed": 3
+    },
+    {
+      "file": "macos-output-request-identity-tests.txt",
+      "passed": 2
+    },
+    {
+      "file": "macos-usb-dmx-binding-tests.txt",
+      "passed": 7
+    },
+    {
+      "file": "macos-usb-dmx-engine-identity-tests.txt",
+      "passed": 1
+    },
+    {
+      "file": "macos-usb-dmx-engine-tests.txt",
+      "passed": 27
+    },
+    {
+      "file": "macos-usb-dmx-ftdi-tests.txt",
+      "passed": 2
+    },
+    {
+      "file": "macos-usb-dmx-io-tests.txt",
+      "passed": 28
+    },
+    {
+      "file": "macos-usb-dmx-route-tests.txt",
+      "passed": 6
+    }
+  ],
+  "warnings": [
+    {
+      "ordinal": 74,
+      "configuration": "macOS syndocal default native tests",
+      "compilerWarningDiagnostics": 35,
+      "firstParty": 28,
+      "vendorOrDependency": 7
+    },
+    {
+      "ordinal": 75,
+      "configuration": "macOS syndocal default native tests",
+      "compilerWarningDiagnostics": 35,
+      "firstParty": 28,
+      "vendorOrDependency": 7
+    }
+  ],
+  "warningHeaderMultisetUnchanged": true,
+  "firstPartyWarningDelta": 0
+}

@@ -1,0 +1,34 @@
+{
+  "passed": true,
+  "availableForUserTesting": true,
+  "artifacts": [
+    {
+      "name": "Syndocal_1.2.0-alpha.75_Windows-x64-install.zip",
+      "bytes": 223374648,
+      "sha256": "3822cd3604781373fe683eebfbe2e2fcbc2db302a5479f150862fdbc4a4f2e78"
+    },
+    {
+      "name": "Syndocal_1.2.0-alpha.75_x64-setup.exe",
+      "bytes": 82467177,
+      "sha256": "f21dca05c9fca5202b15883e75fd0c27e7ee6c864ca8bf863af702aaf845837f"
+    },
+    {
+      "name": "Syndocal_1.2.0-alpha.75_x64_ja-JP.msi",
+      "bytes": 123252736,
+      "sha256": "ba9679bf3aeb99b6e9eea4cc3825eaa551eb82f0f1d55c83df5055949170ae51"
+    },
+    {
+      "name": "Syndocal_1.2.0-alpha.75_arm64.dmg",
+      "bytes": 33246365,
+      "sha256": "3eb1b75a5f2ce561926084293b39a8704bd552f11ca5909f1b075ec4a48a3d81"
+    }
+  ],
+  "windowsProductSource": "b71aefa936207c6b44369574591f73c0f69c8fcc",
+  "macProductSource": "b71aefa936207c6b44369574591f73c0f69c8fcc",
+  "fullCiSource": "70cc1e813c588b3a37f35e7a2484e75803c2ef69",
+  "crossPlatformRun": "38205849972",
+  "windowsHostedLifecycleRun": "38210335064",
+  "hostedLifecycleTestedDifferentInstallerBytes": true,
+  "physicalOutputVerified": false,
+  "macNativeGuiVerified": false
+}

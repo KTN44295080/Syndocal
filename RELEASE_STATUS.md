@@ -2,7 +2,7 @@
 
 ## 2026-10-12 alpha.75 fixture publication guard repair
 
-Current product metadata is `1.2.0-alpha.75`. The canonical bulk-patch handler now keeps its outer renderer admission lane until engine publication returns. This fixes the full-workspace synchronous-handler failure after alpha.74 user-test delivery. Evidence and pending Win/Mac packages are recorded in [the current checkpoint](qa/FIXTURE_PUBLICATION_ALPHA75_2026-10-12.md). Alpha.74 files remain immutable. This is not full Recording, physical-output or release completion.
+Current product metadata is `1.2.0-alpha.75`. The canonical bulk-patch handler now keeps its outer renderer admission lane until engine publication returns. This fixes the full-workspace synchronous-handler failure after alpha.74 user-test delivery. Win/Mac development packages and completed CI/Windows installer-lifecycle evidence are recorded in [the current checkpoint](qa/FIXTURE_PUBLICATION_ALPHA75_2026-10-12.md). Alpha.74 files remain immutable. This is not full Recording, physical-output or release completion.
 
 ## 2026-10-12 alpha.74 fixture control distribution candidate
 
