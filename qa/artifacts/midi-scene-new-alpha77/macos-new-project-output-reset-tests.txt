@@ -1,0 +1,267 @@
+[1m[33mwarning[0m[1m: unnecessary `unsafe` block[0m
+  [1m[94m--> [0mvendor/tauri-runtime-wry-2.6.0-syndocal/src/window/macos.rs:27:7
+   [1m[94m|[0m
+[1m[94m27[0m [1m[94m|[0m       unsafe { sheet.setAlphaValue(0.5) };
+   [1m[94m|[0m       [1m[33m^^^^^^[0m [1m[33munnecessary `unsafe` block[0m
+   [1m[94m|[0m
+   [1m[94m= [0m[1mnote[0m: `#[warn(unused_unsafe)]` (part of `#[warn(unused)]`) on by default
+
+[1m[33mwarning[0m[1m: unnecessary `unsafe` block[0m
+  [1m[94m--> [0mvendor/tauri-runtime-wry-2.6.0-syndocal/src/window/macos.rs:28:7
+   [1m[94m|[0m
+[1m[94m28[0m [1m[94m|[0m       unsafe { ns_window.beginSheet_completionHandler(&sheet, None) };
+   [1m[94m|[0m       [1m[33m^^^^^^[0m [1m[33munnecessary `unsafe` block[0m
+
+[1m[33mwarning[0m[1m: unnecessary `unsafe` block[0m
+  [1m[94m--> [0mvendor/tauri-runtime-wry-2.6.0-syndocal/src/window/macos.rs:29:36
+   [1m[94m|[0m
+[1m[94m29[0m [1m[94m|[0m     } else if let Some(attached) = unsafe { ns_window.attachedSheet() } {
+   [1m[94m|[0m                                    [1m[33m^^^^^^[0m [1m[33munnecessary `unsafe` block[0m
+
+[1m[33mwarning[0m[1m: unnecessary `unsafe` block[0m
+  [1m[94m--> [0mvendor/tauri-runtime-wry-2.6.0-syndocal/src/window/macos.rs:30:7
+   [1m[94m|[0m
+[1m[94m30[0m [1m[94m|[0m       unsafe { ns_window.endSheet(&attached) };
+   [1m[94m|[0m       [1m[33m^^^^^^[0m [1m[33munnecessary `unsafe` block[0m
+
+[1m[33mwarning[0m[1m: unnecessary `unsafe` block[0m
+  [1m[94m--> [0mvendor/tauri-runtime-wry-2.6.0-syndocal/src/window/macos.rs:36:5
+   [1m[94m|[0m
+[1m[94m36[0m [1m[94m|[0m     unsafe { ns_window.attachedSheet() }.is_none()
+   [1m[94m|[0m     [1m[33m^^^^^^[0m [1m[33munnecessary `unsafe` block[0m
+
+[1m[33mwarning[0m: `tauri-runtime-wry` (lib) generated 5 warnings
+[1m[33mwarning[0m[1m: unused import: `std::cell::Cell`[0m
+ [1m[94m--> [0mapp/src-tauri/src/agent_bridge_output_guard_tests.rs:2:5
+  [1m[94m|[0m
+[1m[94m2[0m [1m[94m|[0m use std::cell::Cell;
+  [1m[94m|[0m     [1m[33m^^^^^^^^^^^^^^^[0m
+  [1m[94m|[0m
+  [1m[94m= [0m[1mnote[0m: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+[1m[33mwarning[0m[1m: unused import: `sync::Arc`[0m
+ [1m[94m--> [0mapp/src-tauri/src/video_recording_encoder_process.rs:3:5
+  [1m[94m|[0m
+[1m[94m3[0m [1m[94m|[0m     sync::Arc,
+  [1m[94m|[0m     [1m[33m^^^^^^^^^[0m
+
+[1m[33mwarning[0m[1m: unused import: `super::*`[0m
+   [1m[94m--> [0mapp/src-tauri/src/capture_process_lifecycle.rs:327:9
+    [1m[94m|[0m
+[1m[94m327[0m [1m[94m|[0m     use super::*;
+    [1m[94m|[0m         [1m[33m^^^^^^^^[0m
+
+[1m[33mwarning[0m[1m: unused import: `DjLinkIpv4BindingKey`[0m
+  [1m[94m--> [0mapp/src-tauri/src/dj_link_persistence_runtime.rs:15:36
+   [1m[94m|[0m
+[1m[94m15[0m [1m[94m|[0m use crate::dj_link_network::{self, DjLinkIpv4BindingKey, DjLinkTrustDecision};
+   [1m[94m|[0m                                    [1m[33m^^^^^^^^^^^^^^^^^^^^[0m
+
+[1m[33mwarning[0m[1m: unused import: `rodio::cpal::traits::DeviceTrait`[0m
+     [1m[94m--> [0mapp/src-tauri/src/main.rs:14827:9
+      [1m[94m|[0m
+[1m[94m14827[0m [1m[94m|[0m     use rodio::cpal::traits::DeviceTrait;
+      [1m[94m|[0m         [1m[33m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+
+[1m[33mwarning[0m[1m: variable does not need to be mutable[0m
+     [1m[94m--> [0mapp/src-tauri/src/main.rs:72257:9
+      [1m[94m|[0m
+[1m[94m72257[0m [1m[94m|[0m     let mut faults = capture_transport_faults_for_active_routes(active_routes, capture_transport)?;
+      [1m[94m|[0m         [1m[94m----[0m[1m[33m^^^^^^[0m
+      [1m[94m|[0m         [1m[94m|[0m
+      [1m[94m|[0m         [1m[94mhelp: remove this `mut`[0m
+      [1m[94m|[0m
+      [1m[94m= [0m[1mnote[0m: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+[1m[33mwarning[0m[1m: variable does not need to be mutable[0m
+     [1m[94m--> [0mapp/src-tauri/src/main.rs:72272:9
+      [1m[94m|[0m
+[1m[94m72272[0m [1m[94m|[0m     let mut faults =
+      [1m[94m|[0m         [1m[94m----[0m[1m[33m^^^^^^[0m
+      [1m[94m|[0m         [1m[94m|[0m
+      [1m[94m|[0m         [1m[94mhelp: remove this `mut`[0m
+
+[1m[33mwarning[0m[1m: unused variable: `managed_terminal_identity`[0m
+     [1m[94m--> [0mapp/src-tauri/src/main.rs:77134:5
+      [1m[94m|[0m
+[1m[94m77134[0m [1m[94m|[0m     managed_terminal_identity: Option<ManagedExactBothOutputControlTerminalIdentity<'_>>,
+      [1m[94m|[0m     [1m[33m^^^^^^^^^^^^^^^^^^^^^^^^^[0m [1m[33mhelp: if this is intentional, prefix it with an underscore: `_managed_terminal_identity`[0m
+      [1m[94m|[0m
+      [1m[94m= [0m[1mnote[0m: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+[1m[33mwarning[0m[1m: field `owner` is never read[0m
+     [1m[94m--> [0mapp/src-tauri/src/main.rs:21526:9
+      [1m[94m|[0m
+[1m[94m21525[0m [1m[94m|[0m     Mac {
+      [1m[94m|[0m     [1m[94m---[0m [1m[94mfield in this variant[0m
+[1m[94m21526[0m [1m[94m|[0m         owner: mac_audio_resources::MacAudioInputStream,
+      [1m[94m|[0m         [1m[33m^^^^^[0m
+      [1m[94m|[0m
+      [1m[94m= [0m[1mnote[0m: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+[1m[33mwarning[0m[1m: function `submit_managed_exact_both_candidate_with_classified_commit` is never used[0m
+     [1m[94m--> [0mapp/src-tauri/src/main.rs:75982:4
+      [1m[94m|[0m
+[1m[94m75982[0m [1m[94m|[0m fn submit_managed_exact_both_candidate_with_classified_commit<T, Commit>(
+      [1m[94m|[0m    [1m[33m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+
+[1m[33mwarning[0m[1m: function `submit_show_output_candidate_with_classified_commit` is never used[0m
+     [1m[94m--> [0mapp/src-tauri/src/main.rs:76015:4
+      [1m[94m|[0m
+[1m[94m76015[0m [1m[94m|[0m fn submit_show_output_candidate_with_classified_commit<T, Commit>(
+      [1m[94m|[0m    [1m[33m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+
+[1m[33mwarning[0m[1m: function `reset_show_spout_outputs_without_output_lease` is never used[0m
+     [1m[94m--> [0mapp/src-tauri/src/main.rs:76168:4
+      [1m[94m|[0m
+[1m[94m76168[0m [1m[94m|[0m fn reset_show_spout_outputs_without_output_lease(
+      [1m[94m|[0m    [1m[33m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+
+[1m[33mwarning[0m[1m: static `TEST_LIFECYCLE_SERIAL` is never used[0m
+   [1m[94m--> [0mapp/src-tauri/src/capture_process_lifecycle.rs:279:8
+    [1m[94m|[0m
+[1m[94m279[0m [1m[94m|[0m static TEST_LIFECYCLE_SERIAL: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+    [1m[94m|[0m        [1m[33m^^^^^^^^^^^^^^^^^^^^^[0m
+
+[1m[33mwarning[0m[1m: function `wait_for_test_reaped_child` is never used[0m
+   [1m[94m--> [0mapp/src-tauri/src/capture_process_lifecycle.rs:293:4
+    [1m[94m|[0m
+[1m[94m293[0m [1m[94m|[0m fn wait_for_test_reaped_child(child_id: u32) -> bool {
+    [1m[94m|[0m    [1m[33m^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+
+[1m[33mwarning[0m[1m: function `quarantined_child_count` is never used[0m
+   [1m[94m--> [0mapp/src-tauri/src/capture_process_lifecycle.rs:318:4
+    [1m[94m|[0m
+[1m[94m318[0m [1m[94m|[0m fn quarantined_child_count() -> usize {
+    [1m[94m|[0m    [1m[33m^^^^^^^^^^^^^^^^^^^^^^^[0m
+
+[1m[33mwarning[0m[1m: constant `DJ_LINK_CREDENTIAL_ROLLBACK_TARGET` is never used[0m
+  [1m[94m--> [0mapp/src-tauri/src/dj_link_machine.rs:47:11
+   [1m[94m|[0m
+[1m[94m47[0m [1m[94m|[0m pub const DJ_LINK_CREDENTIAL_ROLLBACK_TARGET: &str = "jp.seraf.ktn.syndocal/dj-link/v1/rollback";
+   [1m[94m|[0m           [1m[33m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+
+[1m[33mwarning[0m[1m: variant `StoredBlobInvalid` is never constructed[0m
+   [1m[94m--> [0mapp/src-tauri/src/dj_link_machine.rs:212:5
+    [1m[94m|[0m
+[1m[94m204[0m [1m[94m|[0m pub enum DjLinkCredentialError {
+    [1m[94m|[0m          [1m[94m---------------------[0m [1m[94mvariant in this enum[0m
+[1m[94m...[0m
+[1m[94m212[0m [1m[94m|[0m     StoredBlobInvalid,
+    [1m[94m|[0m     [1m[33m^^^^^^^^^^^^^^^^^[0m
+    [1m[94m|[0m
+    [1m[94m= [0m[1mnote[0m: `DjLinkCredentialError` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+[1m[33mwarning[0m[1m: method `bind_ipv4` is never used[0m
+   [1m[94m--> [0mapp/src-tauri/src/dj_link_network.rs:427:12
+    [1m[94m|[0m
+[1m[94m398[0m [1m[94m|[0m impl DjLinkIpv4BindingKey {
+    [1m[94m|[0m [1m[94m-------------------------[0m [1m[94mmethod in this implementation[0m
+[1m[94m...[0m
+[1m[94m427[0m [1m[94m|[0m     pub fn bind_ipv4(&self) -> Ipv4Addr {
+    [1m[94m|[0m            [1m[33m^^^^^^^^^[0m
+
+[1m[33mwarning[0m[1m: constant `DJ_LINK_NL_DAD_STATE_PREFERRED` is never used[0m
+   [1m[94m--> [0mapp/src-tauri/src/dj_link_network.rs:455:11
+    [1m[94m|[0m
+[1m[94m455[0m [1m[94m|[0m pub const DJ_LINK_NL_DAD_STATE_PREFERRED: i32 = 4;
+    [1m[94m|[0m           [1m[33m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+
+[1m[33mwarning[0m[1m: constant `DJ_LINK_MIB_IF_ROW2_HARDWARE_INTERFACE_MASK` is never used[0m
+   [1m[94m--> [0mapp/src-tauri/src/dj_link_network.rs:460:11
+    [1m[94m|[0m
+[1m[94m460[0m [1m[94m|[0m pub const DJ_LINK_MIB_IF_ROW2_HARDWARE_INTERFACE_MASK: u8 = 0x01;
+    [1m[94m|[0m           [1m[33m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+
+[1m[33mwarning[0m[1m: enum `DjLinkIpv4DiscoveryFailure` is never used[0m
+   [1m[94m--> [0mapp/src-tauri/src/dj_link_network.rs:680:10
+    [1m[94m|[0m
+[1m[94m680[0m [1m[94m|[0m pub enum DjLinkIpv4DiscoveryFailure {
+    [1m[94m|[0m          [1m[33m^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+
+[1m[33mwarning[0m[1m: variants `Structural`, `Walk`, and `Observer` are never constructed[0m
+   [1m[94m--> [0mapp/src-tauri/src/dj_link_network.rs:785:5
+    [1m[94m|[0m
+[1m[94m784[0m [1m[94m|[0m pub enum DjLinkIpv4BindingError {
+    [1m[94m|[0m          [1m[94m----------------------[0m [1m[94mvariants in this enum[0m
+[1m[94m785[0m [1m[94m|[0m     Structural(DjLinkIpv4StructuralAnomaly),
+    [1m[94m|[0m     [1m[33m^^^^^^^^^^[0m
+[1m[94m786[0m [1m[94m|[0m     Walk(DjLinkGaaWalkError),
+    [1m[94m|[0m     [1m[33m^^^^[0m
+[1m[94m787[0m [1m[94m|[0m     Observer(DjLinkObserverFailure),
+    [1m[94m|[0m     [1m[33m^^^^^^^^[0m
+    [1m[94m|[0m
+    [1m[94m= [0m[1mnote[0m: `DjLinkIpv4BindingError` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+[1m[33mwarning[0m[1m: constant `MAX_GAA_ADAPTERS` is never used[0m
+    [1m[94m--> [0mapp/src-tauri/src/dj_link_network.rs:1030:11
+     [1m[94m|[0m
+[1m[94m1030[0m [1m[94m|[0m pub const MAX_GAA_ADAPTERS: usize = 256;
+     [1m[94m|[0m           [1m[33m^^^^^^^^^^^^^^^^[0m
+
+[1m[33mwarning[0m[1m: constant `MAX_GAA_ADDRESSES_PER_ADAPTER` is never used[0m
+    [1m[94m--> [0mapp/src-tauri/src/dj_link_network.rs:1032:11
+     [1m[94m|[0m
+[1m[94m1032[0m [1m[94m|[0m pub const MAX_GAA_ADDRESSES_PER_ADAPTER: usize = 64;
+     [1m[94m|[0m           [1m[33m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+
+[1m[33mwarning[0m[1m: multiple variants are never constructed[0m
+    [1m[94m--> [0mapp/src-tauri/src/dj_link_network.rs:1158:5
+     [1m[94m|[0m
+[1m[94m1157[0m [1m[94m|[0m pub enum DjLinkObserverFailure {
+     [1m[94m|[0m          [1m[94m---------------------[0m [1m[94mvariants in this enum[0m
+[1m[94m1158[0m [1m[94m|[0m     ComInit { code: i32 },
+     [1m[94m|[0m     [1m[33m^^^^^^^[0m
+[1m[94m1159[0m [1m[94m|[0m     ComObjectCreation { code: i32 },
+     [1m[94m|[0m     [1m[33m^^^^^^^^^^^^^^^^^[0m
+[1m[94m1160[0m [1m[94m|[0m     EnumerationHost { code: i32 },
+[1m[94m1161[0m [1m[94m|[0m     EnumerationProtocol,
+     [1m[94m|[0m     [1m[33m^^^^^^^^^^^^^^^^^^^[0m
+[1m[94m1162[0m [1m[94m|[0m     EnumerationLimitExceeded,
+     [1m[94m|[0m     [1m[33m^^^^^^^^^^^^^^^^^^^^^^^^[0m
+[1m[94m1163[0m [1m[94m|[0m     ObservationMalformed,
+     [1m[94m|[0m     [1m[33m^^^^^^^^^^^^^^^^^^^^[0m
+[1m[94m1164[0m [1m[94m|[0m     ObserverChannelClosed,
+     [1m[94m|[0m     [1m[33m^^^^^^^^^^^^^^^^^^^^^[0m
+[1m[94m1165[0m [1m[94m|[0m     ObserverTimeout,
+     [1m[94m|[0m     [1m[33m^^^^^^^^^^^^^^^[0m
+[1m[94m1166[0m [1m[94m|[0m     ObserverThreadPanic,
+     [1m[94m|[0m     [1m[33m^^^^^^^^^^^^^^^^^^^[0m
+     [1m[94m|[0m
+     [1m[94m= [0m[1mnote[0m: `DjLinkObserverFailure` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+[1m[33mwarning[0m[1m: constant `DJ_LINK_NETWORK_SETTLE_DWELL` is never used[0m
+  [1m[94m--> [0mapp/src-tauri/src/dj_link_persistence_runtime.rs:21:7
+   [1m[94m|[0m
+[1m[94m21[0m [1m[94m|[0m const DJ_LINK_NETWORK_SETTLE_DWELL: Duration = Duration::from_secs(1);
+   [1m[94m|[0m       [1m[33m^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+
+[1m[33mwarning[0m[1m: function `trust_block_reason` is never used[0m
+   [1m[94m--> [0mapp/src-tauri/src/dj_link_persistence_runtime.rs:893:4
+    [1m[94m|[0m
+[1m[94m893[0m [1m[94m|[0m fn trust_block_reason(decision: DjLinkTrustDecision) -> Result<(), String> {
+    [1m[94m|[0m    [1m[33m^^^^^^^^^^^^^^^^^^[0m
+
+[1m[33mwarning[0m[1m: associated function `for_test_with_probes` is never used[0m
+   [1m[94m--> [0mapp/src-tauri/src/e3_native_acceptance.rs:191:8
+    [1m[94m|[0m
+[1m[94m 37[0m [1m[94m|[0m impl E3NativeAcceptanceConfig {
+    [1m[94m|[0m [1m[94m-----------------------------[0m [1m[94massociated function in this implementation[0m
+[1m[94m...[0m
+[1m[94m191[0m [1m[94m|[0m     fn for_test_with_probes<Probe, DriveValidate>(
+    [1m[94m|[0m        [1m[33m^^^^^^^^^^^^^^^^^^^^[0m
+
+[1m[33mwarning[0m[1m: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected[0m
+  [1m[94m|[0m
+  [1m[94m= [0m[1mnote[0m: `#[warn(linker_messages)]` on by default
+
+[1m[33mwarning[0m: `syndocal` (bin "syndocal" test) generated 29 warnings (run `cargo fix --bin "syndocal" -p syndocal --tests` to apply 8 suggestions)
+[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 0.51s
+[1m[33mwarning[0m: the following packages contain code that will be rejected by a future version of Rust: block v0.1.6
+[1m[92mnote[0m: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+[1m[92m     Running[0m unittests src/main.rs (target/debug/deps/syndocal-3cbe574afa8e76e8)
+
+running 1 test
+test new_project_output_reset::tests::new_empty_project_clears_retirement_blackout_without_enabling_outputs ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1686 filtered out; finished in 0.02s

@@ -1,0 +1,11 @@
+[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 0.25s
+[1m[33mwarning[0m: the following packages contain code that will be rejected by a future version of Rust: block v0.1.6
+[1m[92mnote[0m: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+[1m[92m     Running[0m unittests src/lib.rs (target/debug/deps/engine-e3b5f2f985761ab4)
+
+running 3 tests
+test tests::fixture_repatch_tests::fixture_repatch_moves_across_own_old_ranges_and_preserves_values ... ok
+test tests::fixture_repatch_tests::fixture_repatch_invalid_last_member_never_moves_first_member ... ok
+test tests::fixture_repatch_tests::fixture_repatch_publication_failure_and_expiry_restore_a ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 1118 filtered out; finished in 0.06s

@@ -1,0 +1,1 @@
+{"passed":true,"cases":8,"evidence":"C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-alpha77-helper-tests-wNbPkB\\report.json","noInstallerExecuted":true}

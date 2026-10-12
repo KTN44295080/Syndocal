@@ -1,0 +1,64 @@
+TAP version 13
+# Subtest: uninstall orchestration msi
+ok 1 - uninstall orchestration msi
+  ---
+  duration_ms: 499.4287
+  type: 'test'
+  ...
+# Subtest: uninstall orchestration nsis
+ok 2 - uninstall orchestration nsis
+  ---
+  duration_ms: 415.7254
+  type: 'test'
+  ...
+# Subtest: uninstall orchestration quoted-nsis
+ok 3 - uninstall orchestration quoted-nsis
+  ---
+  duration_ms: 424.3576
+  type: 'test'
+  ...
+# Subtest: uninstall orchestration malformed-location
+ok 4 - uninstall orchestration malformed-location
+  ---
+  duration_ms: 396.8909
+  type: 'test'
+  ...
+# Subtest: uninstall orchestration mismatched-location
+ok 5 - uninstall orchestration mismatched-location
+  ---
+  duration_ms: 399.5805
+  type: 'test'
+  ...
+# Subtest: uninstall orchestration relative-location
+ok 6 - uninstall orchestration relative-location
+  ---
+  duration_ms: 397.9063
+  type: 'test'
+  ...
+# Subtest: uninstall orchestration cancel
+ok 7 - uninstall orchestration cancel
+  ---
+  duration_ms: 442.0019
+  type: 'test'
+  ...
+# Subtest: uninstall orchestration unknown
+ok 8 - uninstall orchestration unknown
+  ---
+  duration_ms: 394.7868
+  type: 'test'
+  ...
+# Subtest: uninstall orchestration validate
+ok 9 - uninstall orchestration validate
+  ---
+  duration_ms: 392.4101
+  type: 'test'
+  ...
+1..9
+# tests 9
+# suites 0
+# pass 9
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 3859.2282

@@ -1,0 +1,68 @@
+{
+  "passed": true,
+  "normalWindowGatePassed": false,
+  "distributionReady": false,
+  "sourceCommit": "e1d8ac608f911dda2b3053f4faed7e29b2c8a19a",
+  "normalPayloadProof": {
+    "productVersion": "1.2.0-alpha.77",
+    "executableSha256": "ff2ae2ed4d35098c0095799415d81ec8c9250df2a6b567761d1b8c5e3ddb4346",
+    "inspectorKind": "windows-release-diagnostics-powershell-v1",
+    "roots": {
+      "NSIS": {
+        "sha256": "ff2ae2ed4d35098c0095799415d81ec8c9250df2a6b567761d1b8c5e3ddb4346",
+        "productVersion": "1.2.0-alpha.77",
+        "fileVersion": "1.2.0-alpha.77"
+      },
+      "MSI": {
+        "sha256": "ff2ae2ed4d35098c0095799415d81ec8c9250df2a6b567761d1b8c5e3ddb4346",
+        "productVersion": "1.2.0-alpha.77",
+        "fileVersion": "1.2.0-alpha.77"
+      }
+    }
+  },
+  "installerPlugins": [
+    {
+      "path": "$PLUGINSDIR/modern-wizard.bmp",
+      "sha256": "3ad2dc318056d0a2024af1804ea741146cfc18cc404649a44610cbf8b2056cf2"
+    },
+    {
+      "path": "$PLUGINSDIR/nsDialogs.dll",
+      "sha256": "56b96add1978b1abba286f7f8982b0efbe007d4a48b3ded6a4d408e01d753fe2"
+    },
+    {
+      "path": "$PLUGINSDIR/NSISdl.dll",
+      "sha256": "419485a096bc7d95f872ed1b9b7b5c537231183d710363beee4d235bb79dbe04"
+    },
+    {
+      "path": "$PLUGINSDIR/nsis_tauri_utils.dll",
+      "sha256": "7317e5508923f425bced2698bb89f79b00fcddcd1028f44b598732b2e3711464"
+    },
+    {
+      "path": "$PLUGINSDIR/StartMenu.dll",
+      "sha256": "42dd4dda3249a94e32e20f76eaffae784a5475ed00c60ef0197c8a2c1ccd2fb7"
+    },
+    {
+      "path": "$PLUGINSDIR/System.dll",
+      "sha256": "8dc562cda7217a3a52db898243de3e2ed68b80e62ddcb8619545ed0b4e7f65a8"
+    }
+  ],
+  "artifacts": [
+    {
+      "name": "Syndocal_1.2.0-alpha.77_x64-setup.exe",
+      "byteSize": 82518355,
+      "sha256": "fff0cac7226c4ec7f974f0395696f1e87eec715b83ddcca24c312d776308e5a7",
+      "path": "C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-alpha77-review-package\\Syndocal_1.2.0-alpha.77_x64-setup.exe"
+    },
+    {
+      "name": "Syndocal_1.2.0-alpha.77_x64_ja-JP.msi",
+      "byteSize": 123285504,
+      "sha256": "ad316cbdc2be5ac956e99e0ce1f15cbd918c9a5a441fb4acf3b2c9dfcfcdd2d0",
+      "path": "C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-alpha77-review-package\\Syndocal_1.2.0-alpha.77_x64_ja-JP.msi"
+    }
+  ],
+  "nonclaims": [
+    "NSIS extraction and MSI administrative extraction; no product installation or clean-PC proof",
+    "Raw NSIS installer-only plugin directory is separately recorded; normal installed-payload validator checks every shipped application file",
+    "No physical output or public signing acceptance"
+  ]
+}

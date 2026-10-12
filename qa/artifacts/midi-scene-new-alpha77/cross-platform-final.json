@@ -1,0 +1,403 @@
+{
+  "passed": true,
+  "runId": 38291240083,
+  "sourceCommit": "e1d8ac608f911dda2b3053f4faed7e29b2c8a19a",
+  "url": "https://github.com/KTN44295080/Syndocal/actions/runs/38291240083",
+  "jobs": [
+    {
+      "name": "Windows 10+",
+      "conclusion": "success",
+      "steps": [
+        {
+          "name": "Set up job",
+          "conclusion": "success"
+        },
+        {
+          "name": "Check out source",
+          "conclusion": "success"
+        },
+        {
+          "name": "Install Linux system dependencies",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Install Windows video SDK",
+          "conclusion": "success"
+        },
+        {
+          "name": "Install pnpm",
+          "conclusion": "success"
+        },
+        {
+          "name": "Install Node.js",
+          "conclusion": "success"
+        },
+        {
+          "name": "Install Rust",
+          "conclusion": "success"
+        },
+        {
+          "name": "Initialize Windows x64 MSVC environment",
+          "conclusion": "success"
+        },
+        {
+          "name": "Pin exact Windows MSVC 14.44.35207 linker",
+          "conclusion": "success"
+        },
+        {
+          "name": "Cache Rust build",
+          "conclusion": "success"
+        },
+        {
+          "name": "Install frontend dependencies",
+          "conclusion": "success"
+        },
+        {
+          "name": "Stage Windows runtime libraries",
+          "conclusion": "success"
+        },
+        {
+          "name": "Assert staged pinned runtime before dependent tests",
+          "conclusion": "success"
+        },
+        {
+          "name": "Verify Windows ASIO and runtime packaging boundary",
+          "conclusion": "success"
+        },
+        {
+          "name": "Validate Windows warning ratchet SDK paths",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Report unavailable Windows ASIO/NDI warning gates",
+          "conclusion": "success"
+        },
+        {
+          "name": "Check formatting",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Test warning ratchet (Windows)",
+          "conclusion": "success"
+        },
+        {
+          "name": "Test warning ratchet (Linux)",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Enforce Windows warning ratchets",
+          "conclusion": "success"
+        },
+        {
+          "name": "Enforce Windows ASIO/NDI warning ratchets when SDKs are configured",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Stop checkout Syndocal before native warning ratchet",
+          "conclusion": "success"
+        },
+        {
+          "name": "Enforce Windows native release warning ratchet",
+          "conclusion": "success"
+        },
+        {
+          "name": "Test Rust workspace",
+          "conclusion": "success"
+        },
+        {
+          "name": "Test in-process general video decode",
+          "conclusion": "success"
+        },
+        {
+          "name": "Build frontend",
+          "conclusion": "success"
+        },
+        {
+          "name": "Check E4 project publication durability",
+          "conclusion": "success"
+        },
+        {
+          "name": "Check Tauri application",
+          "conclusion": "success"
+        },
+        {
+          "name": "Check release metadata",
+          "conclusion": "success"
+        },
+        {
+          "name": "Test installer lifecycle and cleanup boundaries",
+          "conclusion": "success"
+        },
+        {
+          "name": "Stop checkout Syndocal before native bundle build",
+          "conclusion": "success"
+        },
+        {
+          "name": "Bundle Windows installers",
+          "conclusion": "success"
+        },
+        {
+          "name": "Bundle Linux packages",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Smoke-test Windows installers",
+          "conclusion": "success"
+        },
+        {
+          "name": "Smoke-test Linux AppImage",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Upload installers",
+          "conclusion": "success"
+        },
+        {
+          "name": "Post Cache Rust build",
+          "conclusion": "success"
+        },
+        {
+          "name": "Post Install Node.js",
+          "conclusion": "success"
+        },
+        {
+          "name": "Post Install pnpm",
+          "conclusion": "success"
+        },
+        {
+          "name": "Post Check out source",
+          "conclusion": "success"
+        },
+        {
+          "name": "Complete job",
+          "conclusion": "success"
+        }
+      ]
+    },
+    {
+      "name": "Ubuntu 22.04",
+      "conclusion": "success",
+      "steps": [
+        {
+          "name": "Set up job",
+          "conclusion": "success"
+        },
+        {
+          "name": "Check out source",
+          "conclusion": "success"
+        },
+        {
+          "name": "Install Linux system dependencies",
+          "conclusion": "success"
+        },
+        {
+          "name": "Install Windows video SDK",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Install pnpm",
+          "conclusion": "success"
+        },
+        {
+          "name": "Install Node.js",
+          "conclusion": "success"
+        },
+        {
+          "name": "Install Rust",
+          "conclusion": "success"
+        },
+        {
+          "name": "Initialize Windows x64 MSVC environment",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Pin exact Windows MSVC 14.44.35207 linker",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Cache Rust build",
+          "conclusion": "success"
+        },
+        {
+          "name": "Install frontend dependencies",
+          "conclusion": "success"
+        },
+        {
+          "name": "Stage Windows runtime libraries",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Assert staged pinned runtime before dependent tests",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Verify Windows ASIO and runtime packaging boundary",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Validate Windows warning ratchet SDK paths",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Report unavailable Windows ASIO/NDI warning gates",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Check formatting",
+          "conclusion": "success"
+        },
+        {
+          "name": "Test warning ratchet (Windows)",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Test warning ratchet (Linux)",
+          "conclusion": "success"
+        },
+        {
+          "name": "Enforce Windows warning ratchets",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Enforce Windows ASIO/NDI warning ratchets when SDKs are configured",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Stop checkout Syndocal before native warning ratchet",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Enforce Windows native release warning ratchet",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Test Rust workspace",
+          "conclusion": "success"
+        },
+        {
+          "name": "Test in-process general video decode",
+          "conclusion": "success"
+        },
+        {
+          "name": "Build frontend",
+          "conclusion": "success"
+        },
+        {
+          "name": "Check E4 project publication durability",
+          "conclusion": "success"
+        },
+        {
+          "name": "Check Tauri application",
+          "conclusion": "success"
+        },
+        {
+          "name": "Check release metadata",
+          "conclusion": "success"
+        },
+        {
+          "name": "Test installer lifecycle and cleanup boundaries",
+          "conclusion": "success"
+        },
+        {
+          "name": "Stop checkout Syndocal before native bundle build",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Bundle Windows installers",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Bundle Linux packages",
+          "conclusion": "success"
+        },
+        {
+          "name": "Smoke-test Windows installers",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Smoke-test Linux AppImage",
+          "conclusion": "success"
+        },
+        {
+          "name": "Upload installers",
+          "conclusion": "success"
+        },
+        {
+          "name": "Post Cache Rust build",
+          "conclusion": "success"
+        },
+        {
+          "name": "Post Install Node.js",
+          "conclusion": "success"
+        },
+        {
+          "name": "Post Install pnpm",
+          "conclusion": "success"
+        },
+        {
+          "name": "Post Check out source",
+          "conclusion": "success"
+        },
+        {
+          "name": "Complete job",
+          "conclusion": "success"
+        }
+      ]
+    }
+  ],
+  "rawLogSha256": "3c60f3ebaf89ebaeb03fe0615d4daf4f422fb161f00d138b35b80d488576d515",
+  "testResults": [
+    "Windows 10+\tUNKNOWN STEP\t2026-10-12T18:59:15.9797045Z test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.91s",
+    "Windows 10+\tUNKNOWN STEP\t2026-10-12T19:02:57.5747509Z test result: ok. 1107 passed; 0 failed; 14 ignored; 0 measured; 0 filtered out; finished in 221.57s",
+    "Windows 10+\tUNKNOWN STEP\t2026-10-12T19:02:57.6118339Z test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s",
+    "Windows 10+\tUNKNOWN STEP\t2026-10-12T19:03:09.2880115Z test result: ok. 189 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 11.67s",
+    "Windows 10+\tUNKNOWN STEP\t2026-10-12T19:03:09.3106160Z test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s",
+    "Windows 10+\tUNKNOWN STEP\t2026-10-12T19:03:09.3119497Z test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+    "Windows 10+\tUNKNOWN STEP\t2026-10-12T19:03:09.6543785Z test result: ok. 262 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.33s",
+    "Windows 10+\tUNKNOWN STEP\t2026-10-12T19:03:09.6690478Z test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+    "Windows 10+\tUNKNOWN STEP\t2026-10-12T19:04:56.0916021Z test result: ok. 2056 passed; 0 failed; 21 ignored; 0 measured; 0 filtered out; finished in 106.32s",
+    "Windows 10+\tUNKNOWN STEP\t2026-10-12T19:05:05.0047055Z test result: ok. 196 passed; 0 failed; 8 ignored; 0 measured; 0 filtered out; finished in 8.81s",
+    "Windows 10+\tUNKNOWN STEP\t2026-10-12T19:05:05.0764971Z test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+    "Windows 10+\tUNKNOWN STEP\t2026-10-12T19:05:05.2204140Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+    "Windows 10+\tUNKNOWN STEP\t2026-10-12T19:05:06.1216126Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+    "Windows 10+\tUNKNOWN STEP\t2026-10-12T19:05:06.1809116Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+    "Windows 10+\tUNKNOWN STEP\t2026-10-12T19:05:06.3868441Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+    "Windows 10+\tUNKNOWN STEP\t2026-10-12T19:05:09.4452950Z test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.40s",
+    "Windows 10+\tUNKNOWN STEP\t2026-10-12T19:05:09.8203658Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+    "Windows 10+\tUNKNOWN STEP\t2026-10-12T19:05:09.9453119Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+    "Windows 10+\tUNKNOWN STEP\t2026-10-12T19:06:25.8482679Z test result: ok. 196 passed; 0 failed; 8 ignored; 0 measured; 0 filtered out; finished in 8.81s",
+    "Windows 10+\tUNKNOWN STEP\t2026-10-12T19:06:26.2568032Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+    "Windows 10+\tUNKNOWN STEP\t2026-10-12T19:08:49.9042255Z # pass 6",
+    "Windows 10+\tUNKNOWN STEP\t2026-10-12T19:08:49.9042354Z # fail 0",
+    "Windows 10+\tUNKNOWN STEP\t2026-10-12T19:10:17.5715296Z # pass 18",
+    "Windows 10+\tUNKNOWN STEP\t2026-10-12T19:10:17.5715404Z # fail 0",
+    "Ubuntu 22.04\tUNKNOWN STEP\t2026-10-12T18:35:55.7615623Z test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.64s",
+    "Ubuntu 22.04\tUNKNOWN STEP\t2026-10-12T18:41:29.5754794Z test result: ok. 1107 passed; 0 failed; 14 ignored; 0 measured; 0 filtered out; finished in 333.81s",
+    "Ubuntu 22.04\tUNKNOWN STEP\t2026-10-12T18:41:29.5951023Z test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+    "Ubuntu 22.04\tUNKNOWN STEP\t2026-10-12T18:41:43.5697290Z test result: ok. 187 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 13.97s",
+    "Ubuntu 22.04\tUNKNOWN STEP\t2026-10-12T18:41:43.5754802Z test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s",
+    "Ubuntu 22.04\tUNKNOWN STEP\t2026-10-12T18:41:43.5757375Z test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+    "Ubuntu 22.04\tUNKNOWN STEP\t2026-10-12T18:41:44.0499585Z test result: ok. 262 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.47s",
+    "Ubuntu 22.04\tUNKNOWN STEP\t2026-10-12T18:41:44.0571340Z test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+    "Ubuntu 22.04\tUNKNOWN STEP\t2026-10-12T18:43:40.2877529Z test result: ok. 1674 passed; 0 failed; 12 ignored; 0 measured; 0 filtered out; finished in 116.01s",
+    "Ubuntu 22.04\tUNKNOWN STEP\t2026-10-12T18:43:44.7704484Z test result: ok. 193 passed; 0 failed; 6 ignored; 0 measured; 0 filtered out; finished in 4.44s",
+    "Ubuntu 22.04\tUNKNOWN STEP\t2026-10-12T18:43:44.7853089Z test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+    "Ubuntu 22.04\tUNKNOWN STEP\t2026-10-12T18:43:44.8290603Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+    "Ubuntu 22.04\tUNKNOWN STEP\t2026-10-12T18:43:45.4846585Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+    "Ubuntu 22.04\tUNKNOWN STEP\t2026-10-12T18:43:45.5301479Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+    "Ubuntu 22.04\tUNKNOWN STEP\t2026-10-12T18:43:45.6897888Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+    "Ubuntu 22.04\tUNKNOWN STEP\t2026-10-12T18:43:48.2998890Z test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.23s",
+    "Ubuntu 22.04\tUNKNOWN STEP\t2026-10-12T18:43:48.5744468Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+    "Ubuntu 22.04\tUNKNOWN STEP\t2026-10-12T18:43:48.6866618Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+    "Ubuntu 22.04\tUNKNOWN STEP\t2026-10-12T18:44:37.1336660Z test result: ok. 193 passed; 0 failed; 6 ignored; 0 measured; 0 filtered out; finished in 2.55s",
+    "Ubuntu 22.04\tUNKNOWN STEP\t2026-10-12T18:44:37.4040256Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+    "Ubuntu 22.04\tUNKNOWN STEP\t2026-10-12T18:48:20.7952761Z # pass 7",
+    "Ubuntu 22.04\tUNKNOWN STEP\t2026-10-12T18:48:20.7952950Z # fail 0",
+    "Ubuntu 22.04\tUNKNOWN STEP\t2026-10-12T18:49:51.8343095Z # pass 2",
+    "Ubuntu 22.04\tUNKNOWN STEP\t2026-10-12T18:49:51.8343408Z # fail 0"
+  ],
+  "nonclaims": [
+    "No physical device or venue acceptance",
+    "Local installer payload is separately proven; this run validates CI-built payload"
+  ]
+}
