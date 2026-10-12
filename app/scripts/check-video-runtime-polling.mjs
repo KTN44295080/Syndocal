@@ -155,3 +155,24 @@ if (baselineIndex < 0) {
   }
   console.log('PASS omitted native runtime arrays, explicit-malformed rejection, generation retention and zero-copy valid arrays');
 }
+
+if (baselineIndex < 0) {
+  for (const [name, refresh, , , , key] of lanes) {
+    const f = fixture();
+    const staleMessage = 'Project changed since this video ' + (name === 'clip' ? 'clip' : 'transition') + ' runtime read was issued; retry';
+    const raced = f.controller[refresh](true);
+    f.pending[0].reject(new Error(staleMessage));
+    assert.equal(await raced, null);
+    assert.deepEqual(f.messages, [], name + ': a known stale read does not masquerade as an operator failure');
+    assert.equal(f.applied.length, 0, name + ': stale read applies no image');
+    f.replace(token(2));
+    const next = f.controller[refresh]();
+    f.pending[1].resolve(report(token(2), key));
+    assert.notEqual(await next, null, name + ': scheduled polling resumes with the current exact fence');
+    const unexpected = f.controller[refresh](true);
+    f.pending[2].reject(new Error(staleMessage + ' unexpected'));
+    assert.equal(await unexpected, null);
+    assert.deepEqual(f.messages, ['Error: ' + staleMessage + ' unexpected'], name + ': near-match or unrecognized failures remain visible');
+  }
+  console.log('PASS exact stale read retirement, current-fence polling recovery and unexpected failure visibility');
+}

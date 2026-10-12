@@ -1,3 +1,4 @@
+import { shouldReportVideoRuntimeReadError } from "./videoRuntimeReadErrorPolicy";
 import type { Accessor, Setter } from "solid-js";
 import type { FrontendTauriInvoke } from "./tauriInvokeCommands";
 import { requestNativeThumbnail, type ThumbnailStartChannel } from "./nativeThumbnailRequest";
@@ -429,7 +430,7 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
       if (refreshEpoch !== clipRuntimeRefreshEpoch || !options.isProjectAuthorityCurrent(authority)) return null;
       return applyVideoClipSlotRuntime(result) ? result : null;
     } catch (error) {
-      if (showError && refreshEpoch === clipRuntimeRefreshEpoch) setMessageIfAuthorityCurrent(authority, String(error));
+      if (showError && refreshEpoch === clipRuntimeRefreshEpoch && shouldReportVideoRuntimeReadError(error)) setMessageIfAuthorityCurrent(authority, String(error));
       return null;
     } finally {
       clipRuntimeRefreshInFlight = false;
@@ -479,7 +480,7 @@ export function createVideoRuntimeController(options: VideoRuntimeControllerOpti
       if (refreshEpoch !== transitionRuntimeRefreshEpoch || !options.isProjectAuthorityCurrent(authority)) return null;
       return applyVideoTransitionRuntime(result) ? result : null;
     } catch (error) {
-      if (showError && refreshEpoch === transitionRuntimeRefreshEpoch) setMessageIfAuthorityCurrent(authority, String(error));
+      if (showError && refreshEpoch === transitionRuntimeRefreshEpoch && shouldReportVideoRuntimeReadError(error)) setMessageIfAuthorityCurrent(authority, String(error));
       return null;
     } finally {
       transitionRuntimeRefreshInFlight = false;

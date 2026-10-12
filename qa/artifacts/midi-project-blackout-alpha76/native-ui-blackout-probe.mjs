@@ -214,6 +214,8 @@ if ($windows.Count -ne 1 -or $windows[0].Id -ne ${child.pid} -or !$windows[0].Re
   await untilState(s=>!s.safety_blackout_engaged&&!s.authored_blackout);
   proof.runtimeLatchClearedThroughDmxBo=true;
   assert.equal(await backend.evaluate("Boolean(document.querySelector('[data-global-operator-action=\"safety-blackout-release\"]'))"),false);
+  assert.equal(await backend.evaluate('document.body.textContent.includes("Project changed since this video")'),false);
+  proof.noStaleVideoReadError=true;
   const capture = await backend.send('Page.captureScreenshot', { format: 'png', fromSurface: true });
   assert.ok(capture.data && typeof capture.data === 'string');
   const png = Buffer.from(capture.data, 'base64');

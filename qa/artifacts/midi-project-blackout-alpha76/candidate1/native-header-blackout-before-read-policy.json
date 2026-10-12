@@ -1,0 +1,57 @@
+{
+  "schemaVersion": 1,
+  "timestamp": "2026-10-12T12:37:46.226Z",
+  "passed": true,
+  "domain": "both",
+  "executable": "C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-native-acceptance-target\\release\\syndocal.exe",
+  "executableSha256": "fb2f3d08830ad6680a2733a0658fbb8d0c8797bf87ce0eb18d792056293c675a",
+  "runnerSha256": "f84fee48e8859b8dc57deb8229a0f2123259f9716b63d7f55f5aa74e5e26d36b",
+  "backendHarnessSha256": "fcc5655508dccff3ca6b99d5bb60e155483e84de6c4347f564d7891b765ea369",
+  "processId": 158772,
+  "screenshot": "C:\\Users\\janua\\.codex\\worktrees\\patch-bulk-alpha74\\Syndocal\\qa\\artifacts\\midi-project-blackout-alpha76\\native-header-blackout.png",
+  "proof": {
+    "viewport": [
+      1280,
+      752
+    ],
+    "controlSelected": true,
+    "bothSelected": true,
+    "tabsLeft": true,
+    "upperFullWidth": true,
+    "laneCount": 2,
+    "splitHidden": true,
+    "lowerSideBySide": true,
+    "controlCount": 10,
+    "minimumControlHeight": 48,
+    "outerOverflow": false,
+    "createdThroughProjectMenu": true,
+    "blackoutActions": [
+      {
+        "action": "dmx-blackout",
+        "engaged": true,
+        "cleared": true,
+        "everyOutputDisabled": true
+      },
+      {
+        "action": "video-blackout",
+        "engaged": true,
+        "cleared": true,
+        "everyOutputDisabled": true
+      },
+      {
+        "action": "all-blackout",
+        "engaged": true,
+        "cleared": true,
+        "everyOutputDisabled": true
+      }
+    ],
+    "runtimeLatchClearedThroughDmxBo": true,
+    "screenshotSha256": "755e2a7405626072ca0f14634d3e8efabc97a6a38cb6de4749dce2cef50f943d"
+  },
+  "normalAppIdentityUnchanged": true,
+  "error": null,
+  "nonclaims": [
+    "Real native header DMX/VID/ALL BO engage and clear; runtime latch clear through DMX BO with all routes disabled",
+    "No output, physical device, recording, or venue workflow"
+  ]
+}
