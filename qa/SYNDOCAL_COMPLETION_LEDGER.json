@@ -23,7 +23,7 @@
       "owner": "Warning-matrix owner",
       "dependency": "Windows-only product scope and the versioned warning inventory",
       "nonclaim": "Does not claim macOS warning enforcement or macOS acceptance.",
-      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/warnings/warning-inventory.json"],
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/warnings/warning-inventory.json", "qa/FIXTURE_PUBLICATION_ALPHA75_2026-10-12.md", "qa/MSI_EXTENSIONS_ALPHA80_2026-10-13.md"],
       "status": "Deferred"
     },
     {
@@ -53,7 +53,7 @@
       "owner": "AI3 ingress and hardware acceptance owner",
       "dependency": "Canonical ingress-policy implementation and available native clients/devices",
       "nonclaim": "Does not claim source inventory proof is physical ingress acceptance.",
-      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/M4_IO_VALIDATION.md", "qa/DMX_ARTNET_CURRENT_SOURCE_CHECKPOINT_2026-09-14.md", "qa/AI3_NATIVE_INGRESS_CURRENT_SOURCE_CHECKPOINT_2026-09-14.md", "qa/AI3_NATIVE_INGRESS_RECHECK_2026-09-22.md"],
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/M4_IO_VALIDATION.md", "qa/DMX_ARTNET_CURRENT_SOURCE_CHECKPOINT_2026-09-14.md", "qa/AI3_NATIVE_INGRESS_CURRENT_SOURCE_CHECKPOINT_2026-09-14.md", "qa/AI3_NATIVE_INGRESS_RECHECK_2026-09-22.md", "qa/OUTPUT_ROUTE_ADMISSION_CI_REPAIR_2026-10-11.md", "qa/MIDI_PROJECT_BLACKOUT_ALPHA76_2026-10-12.md", "qa/MIDI_SCENE_NEW_ALPHA77_2026-10-13.md", "qa/EXTENSIONS_MIDI_BLACKOUT_ALPHA78_2026-10-13.md"],
       "status": "Open"
     },
     {
@@ -63,7 +63,7 @@
       "owner": "AI3 project-replacement acceptance owner",
       "dependency": "New/Load/Recovery/Backup/Take Over paths and acknowledged physical output state",
       "nonclaim": "Does not claim output retirement or re-Arm succeeded on real output hardware.",
-      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/M4_IO_VALIDATION.md", "qa/DMX_USB_RDM_CURRENT_SOURCE_CHECKPOINT_2026-09-14.md", "qa/AI3_PHYSICAL_REARM_CURRENT_SOURCE_CHECKPOINT_2026-09-14.md", "qa/PROJECT_REPLACEMENT_PREFLIGHT_2026-10-04.md", "qa/PROJECT_REPLACEMENT_GENERATION_2026-10-04.md", "qa/MCP_PROJECT_REPLACEMENT_2026-10-04.md"],
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/M4_IO_VALIDATION.md", "qa/DMX_USB_RDM_CURRENT_SOURCE_CHECKPOINT_2026-09-14.md", "qa/AI3_PHYSICAL_REARM_CURRENT_SOURCE_CHECKPOINT_2026-09-14.md", "qa/PROJECT_REPLACEMENT_PREFLIGHT_2026-10-04.md", "qa/PROJECT_REPLACEMENT_GENERATION_2026-10-04.md", "qa/MCP_PROJECT_REPLACEMENT_2026-10-04.md", "qa/MCP_CONTROLLER_RESTART_2026-10-03.md", "qa/MCP_CONTROLLER_INFLIGHT_2026-10-03.md", "qa/USB_DMX_BLACKOUT_ALPHA73_2026-10-12.md", "qa/MIDI_PROJECT_BLACKOUT_ALPHA76_2026-10-12.md", "qa/EXTENSIONS_MIDI_BLACKOUT_ALPHA78_2026-10-13.md", "qa/FX_UNIVERSES_ALPHA81_2026-10-14.md"],
       "status": "Open"
     },
     {
@@ -73,7 +73,7 @@
       "owner": "AI3 native and hardware acceptance owner",
       "dependency": "Durable recovery implementation plus verified native dangerous-action workflows",
       "nonclaim": "Does not claim reply-loss, physical ACK, or five-display acceptance is complete.",
-      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/M5_RELIABILITY_VALIDATION.md", "qa/VIDEO_PHYSICAL_CURRENT_SOURCE_CHECKPOINT_2026-09-14.md", "qa/AI3_DURABLE_ACCEPTANCE_CURRENT_SOURCE_CHECKPOINT_2026-09-14.md"],
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/M5_RELIABILITY_VALIDATION.md", "qa/VIDEO_PHYSICAL_CURRENT_SOURCE_CHECKPOINT_2026-09-14.md", "qa/AI3_DURABLE_ACCEPTANCE_CURRENT_SOURCE_CHECKPOINT_2026-09-14.md", "qa/MCP_CONTROLLER_INFLIGHT_2026-10-03.md", "qa/MCP_VIDEO_BLACKOUT_NATIVE_2026-10-10.md", "qa/USB_DMX_BLACKOUT_ALPHA73_2026-10-12.md", "qa/EXTENSIONS_MIDI_BLACKOUT_ALPHA78_2026-10-13.md"],
       "status": "Open"
     },
     {
@@ -153,7 +153,7 @@
       "owner": "AI external acceptance owner",
       "dependency": "AI0-AI7 completion plus clean installation and physical output hardware",
       "nonclaim": "Does not claim real external clients, clean install, hardware, restart, or security acceptance.",
-      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/M6_RELEASE_VALIDATION.md", "qa/AI8_EXTERNAL_ACCEPTANCE_CURRENT_SOURCE_CHECKPOINT_2026-09-14.md", "qa/PROJECT_REPLACEMENT_PREFLIGHT_2026-10-04.md", "qa/PROJECT_REPLACEMENT_GENERATION_2026-10-04.md", "qa/MCP_PROJECT_REPLACEMENT_2026-10-04.md", "qa/MCP_PROJECT_OPEN_CANONICAL_2026-10-05.md", "qa/MCP_PROJECT_FILE_PUBLICATION_2026-10-05.md", "qa/MCP_MANAGED_BACKUP_2026-10-05.md", "qa/MCP_BACKUP_QUERY_EFFECTS_2026-10-05.md", "qa/MCP_BACKUP_INSPECTION_2026-10-05.md", "qa/MCP_BACKUP_RESTORE_2026-10-05.md", "qa/MCP_FILE_AUTHORITY_QUERY_ERRORS_2026-10-06.md", "qa/MCP_BACKUP_LIST_2026-10-06.md", "qa/MCP_BACKUP_DELETE_2026-10-06.md", "qa/MCP_BACKUP_DELETE_JOURNAL_2026-10-06.md"],
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/M6_RELEASE_VALIDATION.md", "qa/AI8_EXTERNAL_ACCEPTANCE_CURRENT_SOURCE_CHECKPOINT_2026-09-14.md", "qa/PROJECT_REPLACEMENT_PREFLIGHT_2026-10-04.md", "qa/PROJECT_REPLACEMENT_GENERATION_2026-10-04.md", "qa/MCP_PROJECT_REPLACEMENT_2026-10-04.md", "qa/MCP_PROJECT_OPEN_CANONICAL_2026-10-05.md", "qa/MCP_PROJECT_FILE_PUBLICATION_2026-10-05.md", "qa/MCP_MANAGED_BACKUP_2026-10-05.md", "qa/MCP_BACKUP_QUERY_EFFECTS_2026-10-05.md", "qa/MCP_BACKUP_INSPECTION_2026-10-05.md", "qa/MCP_BACKUP_RESTORE_2026-10-05.md", "qa/MCP_FILE_AUTHORITY_QUERY_ERRORS_2026-10-06.md", "qa/MCP_BACKUP_LIST_2026-10-06.md", "qa/MCP_BACKUP_DELETE_2026-10-06.md", "qa/MCP_BACKUP_DELETE_JOURNAL_2026-10-06.md", "qa/EXTERNAL_MCP_UNATTENDED_2026-10-02.md", "qa/MCP_HIGH_RISK_REVOCATION_2026-10-02.md", "qa/MCP_CONTROLLER_RESTART_2026-10-03.md", "qa/MCP_CONTROLLER_INFLIGHT_2026-10-03.md", "qa/MCP_CONTROLLER_SAFETY_PRESSURE_2026-10-03.md", "qa/MCP_REQUEST_CAPACITY_2026-10-03.md", "qa/MCP_BACKUP_DELETION_MANAGEMENT_2026-10-06.md", "qa/BRIDGE_AUTHORIZATION_AUDIT_AND_RISK_2026-10-07.md", "qa/NATIVE_TIMELINE_COMMANDS_AND_REVOCATION_2026-10-07.md", "qa/MCP_VIDEO_BLACKOUT_NATIVE_2026-10-10.md", "qa/OUTPUT_ROUTE_ADMISSION_CI_REPAIR_2026-10-11.md", "qa/MCP_PROCESS_IDENTITY_2026-10-11.md", "qa/DEVELOPMENT_INSTALLERS_ALPHA72_2026-10-11.md"],
       "status": "Open"
     },
     {
@@ -333,7 +333,7 @@
       "owner": "Control workspace owner",
       "dependency": "H1/H2 shell plus live ownership, recording, and diagnostics",
       "nonclaim": "Does not claim Control live workflows, recovery, or native proof are complete.",
-      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md", "qa/CONTROL_BOTH_CHECKPOINT_2026-09-14.md", "qa/UI_H5_CONTROL_CURRENT_SOURCE_CHECKPOINT_2026-09-14.md"],
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md", "qa/CONTROL_BOTH_CHECKPOINT_2026-09-14.md", "qa/UI_H5_CONTROL_CURRENT_SOURCE_CHECKPOINT_2026-09-14.md", "qa/FIXTURE_CONTROL_ALPHA74_2026-10-12.md", "qa/MIDI_PROJECT_BLACKOUT_ALPHA76_2026-10-12.md", "qa/EXTENSIONS_MIDI_BLACKOUT_ALPHA78_2026-10-13.md", "qa/SCENE_EDIT_INSTALLER_ALPHA79_2026-10-13.md"],
       "status": "Open"
     },
     {
@@ -343,7 +343,7 @@
       "owner": "Remote and security owner",
       "dependency": "AI consent/sidecar policy and output ownership boundaries",
       "nonclaim": "Does not claim LAN/TLS exposure, RDM/TOD safety, parser fuzz, SBOM, or redaction is accepted.",
-      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md", "qa/REMOTE_SECURITY_CURRENT_SOURCE_CHECKPOINT_2026-09-14.md"],
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md", "qa/REMOTE_SECURITY_CURRENT_SOURCE_CHECKPOINT_2026-09-14.md", "qa/WORKTREE_CONSOLIDATION_2026-10-14.md"],
       "status": "Open"
     },
     {
@@ -353,7 +353,7 @@
       "owner": "Migration and recovery owner",
       "dependency": "Version-support decisions and durable recovery/save boundaries",
       "nonclaim": "Does not claim the supported version matrix, migration corpus, hostile-input, fuzz, or backup proof is complete.",
-      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md", "qa/MIGRATION_CURRENT_SOURCE_CHECKPOINT_2026-09-14.md", "qa/MCP_PROJECT_OPEN_CANONICAL_2026-10-05.md"],
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md", "qa/MIGRATION_CURRENT_SOURCE_CHECKPOINT_2026-09-14.md", "qa/MCP_PROJECT_OPEN_CANONICAL_2026-10-05.md", "qa/MIGRATION_WHOLE_PROJECT_GOLDENS_2026-10-03.md", "qa/AUTHORED_CONTROL_PROJECT_PERSISTENCE_2026-10-03.md", "qa/PROJECT_JSON_INGRESS_2026-10-03.md", "qa/PROJECT_BACKUP_JSON_2026-10-03.md", "qa/PROJECT_INPUT_DIAGNOSTICS_2026-10-03.md", "qa/RECOVERY_STORAGE_PRESERVATION_2026-10-04.md", "qa/RECOVERY_STORAGE_NATIVE_2026-10-04.md", "qa/USB_DMX_MACOS_ALPHA71_2026-10-10.md", "qa/USB_DMX_BLACKOUT_ALPHA73_2026-10-12.md"],
       "status": "Open"
     },
     {
@@ -363,7 +363,7 @@
       "owner": "Observability and support owner",
       "dependency": "Generation-stamped runtime state and release/update policy",
       "nonclaim": "Does not claim diagnostics, updater resilience, or support runbooks are accepted.",
-      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md", "qa/OBSERVABILITY_CURRENT_SOURCE_CHECKPOINT_2026-09-14.md"],
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md", "qa/OBSERVABILITY_CURRENT_SOURCE_CHECKPOINT_2026-09-14.md", "qa/DIAGNOSTIC_AUDIT_EXPORT_2026-10-07.md", "qa/FILE_AUDIT_TYPED_OUTCOMES_2026-10-07.md", "qa/BRIDGE_AUTHORIZATION_AUDIT_AND_RISK_2026-10-07.md"],
       "status": "Open"
     },
     {
@@ -443,7 +443,7 @@
       "owner": "Lighting hardware acceptance owner",
       "dependency": "F2 output ownership and real Art-Net/sACN nodes and fixtures",
       "nonclaim": "Does not claim physical fixture addressing, controls, reconnect, topology, or 44 Hz continuity passed.",
-      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/M4_IO_VALIDATION.md", "qa/DMX_ARTNET_CURRENT_SOURCE_CHECKPOINT_2026-09-14.md"],
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/M4_IO_VALIDATION.md", "qa/DMX_ARTNET_CURRENT_SOURCE_CHECKPOINT_2026-09-14.md", "qa/FX_UNIVERSES_ALPHA81_2026-10-14.md"],
       "status": "Open"
     },
     {
@@ -453,7 +453,7 @@
       "owner": "DMX and RDM hardware acceptance owner",
       "dependency": "F2 output ownership, Enttec/DMXKing hardware, and analyzer capture",
       "nonclaim": "Does not claim USB DMX long-run timing, Open DMX analysis, or RDM/TOD physical behavior passed.",
-      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/M4_IO_VALIDATION.md", "qa/DMX_USB_RDM_CURRENT_SOURCE_CHECKPOINT_2026-09-14.md"],
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/M4_IO_VALIDATION.md", "qa/DMX_USB_RDM_CURRENT_SOURCE_CHECKPOINT_2026-09-14.md", "qa/USB_DMX_MACOS_ALPHA71_2026-10-10.md", "qa/USB_DMX_BLACKOUT_ALPHA73_2026-10-12.md", "qa/EXTENSIONS_MIDI_BLACKOUT_ALPHA78_2026-10-13.md"],
       "status": "Open"
     },
     {
@@ -463,7 +463,7 @@
       "owner": "Control-input acceptance owner",
       "dependency": "F1 input generations and physical MIDI/OSC/Remote clients",
       "nonclaim": "Does not claim physical MIDI, OSC, TouchOSC, or Remote latency and feedback acceptance.",
-      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/M4_IO_VALIDATION.md", "qa/INPUT_PHYSICAL_CURRENT_SOURCE_CHECKPOINT_2026-09-14.md"],
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/M4_IO_VALIDATION.md", "qa/INPUT_PHYSICAL_CURRENT_SOURCE_CHECKPOINT_2026-09-14.md", "qa/MIDI_PROJECT_BLACKOUT_ALPHA76_2026-10-12.md", "qa/MIDI_SCENE_NEW_ALPHA77_2026-10-13.md", "qa/EXTENSIONS_MIDI_BLACKOUT_ALPHA78_2026-10-13.md", "qa/FX_UNIVERSES_ALPHA81_2026-10-14.md"],
       "status": "Open"
     },
     {
@@ -493,7 +493,7 @@
       "owner": "Cross-platform acceptance owner",
       "dependency": "Windows-only product scope decision",
       "nonclaim": "Does not claim macOS or Linux display, media, audio, save/reload, or package acceptance.",
-      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md"],
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/CODEX_COMPLETION_ROADMAP_2026-08-13.md", "qa/DEVELOPMENT_INSTALLERS_ALPHA70_2026-10-08.md", "qa/USB_DMX_MACOS_ALPHA71_2026-10-10.md", "qa/MCP_PROCESS_IDENTITY_2026-10-11.md", "qa/FIXTURE_PUBLICATION_ALPHA75_2026-10-12.md", "qa/MSI_EXTENSIONS_ALPHA80_2026-10-13.md"],
       "status": "Deferred"
     },
     {
@@ -533,7 +533,7 @@
       "owner": "Distribution owner",
       "dependency": "A future distribution product goal and supported artifact matrix",
       "nonclaim": "Does not claim a platform/package matrix is accepted or in the active Windows-local denominator.",
-      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/M6_RELEASE_VALIDATION.md"],
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/M6_RELEASE_VALIDATION.md", "qa/DEVELOPMENT_INSTALLERS_ALPHA70_2026-10-08.md", "qa/DEVELOPMENT_INSTALLERS_ALPHA72_2026-10-11.md", "qa/EXTENSIONS_MIDI_BLACKOUT_ALPHA78_2026-10-13.md", "qa/MSI_EXTENSIONS_ALPHA80_2026-10-13.md", "qa/artifacts/extensions-midi-alpha78/cross-platform-ci.json"],
       "status": "Deferred"
     },
     {
@@ -563,7 +563,7 @@
       "owner": "Distribution acceptance owner",
       "dependency": "A future distribution product goal and signed installation artifacts",
       "nonclaim": "Does not claim clean-machine installation, upgrade, uninstall, or repair acceptance.",
-      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/M6_RELEASE_VALIDATION.md"],
+      "evidence_paths": ["qa/SYNDOCAL_COMPLETION_FLOW_2026-08-19.md", "qa/M6_RELEASE_VALIDATION.md", "qa/USB_DMX_BLACKOUT_ALPHA73_2026-10-12.md", "qa/FIXTURE_PUBLICATION_ALPHA75_2026-10-12.md", "qa/EXTENSIONS_MIDI_BLACKOUT_ALPHA78_2026-10-13.md", "qa/MSI_EXTENSIONS_ALPHA80_2026-10-13.md", "qa/artifacts/msi-extensions-alpha80/windows-hosted-lifecycle.json", "qa/artifacts/msi-extensions-alpha80/mac-installer-lifecycle.json"],
       "status": "Deferred"
     },
     {
