@@ -315,7 +315,7 @@ import {
   parseLiveAudioInputBackendSummary,
   parseLiveAudioInputBackendSummaries,
 } from "./liveAudioInputPresentation";
-import type { LiveAudioInputSavedSelectionState } from "./components/LiveAudioInputRail";
+import { LiveAudioInputRail, type LiveAudioInputSavedSelectionState } from "./components/LiveAudioInputRail";
 import {
   createPatchRepairSingleflight,
   fixturePatchIdsAreExact,
@@ -10622,10 +10622,11 @@ export default function App() {
   };
   const openLiveAudioInputSettings = () => {
     setWorkspaceTab("setup");
-    selectSetupMode("video");
+    selectSetupMode("io");
+    setActiveIoConnection("audio");
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
-        const target = document.getElementById("setup-output-audio-input");
+        const target = document.getElementById("setup-audio-input");
         target?.focus({ preventScroll: true });
         target?.scrollIntoView({ block: "nearest", inline: "nearest" });
       });
@@ -26231,6 +26232,39 @@ export default function App() {
     window.removeEventListener("beforeunload", handleBeforeUnload);
   });
 
+  const liveAudioInputRailProps: ComponentProps<typeof LiveAudioInputRail> = {
+    get liveAudioInputBackends() { return liveAudioInputBackends(); },
+    get selectedLiveAudioInputBackend() { return selectedLiveAudioInputBackend(); },
+    get liveAudioInputBackendsKnown() { return liveAudioInputBackendsKnown(); },
+    get liveAudioInputBackendsBusy() { return liveAudioInputBackendsBusy(); },
+    get liveAudioInputBackendError() { return liveAudioInputBackendError(); },
+    get liveAudioInputDevices() { return liveAudioInputDevices(); },
+    get selectedLiveAudioInputDevice() { return selectedLiveAudioInputDevice(); },
+    get lastKnownLiveAudioInputDeviceIdentity() { return lastKnownLiveAudioInputDeviceIdentity(); },
+    localize: (source) => translateUiText(source, uiLocale()),
+    get liveAudioInputCapabilities() { return liveAudioInputCapabilities(); },
+    get liveAudioInputCapabilitiesBusy() { return liveAudioInputCapabilitiesBusy(); },
+    get liveAudioInputSampleRate() { return liveAudioInputSampleRate(); },
+    get liveAudioInputBufferFrames() { return liveAudioInputBufferFrames(); },
+    get liveAudioInputChannelMix() { return liveAudioInputChannelMix(); },
+    get liveAudioInputStatus() { return liveAudioInputStatus(); },
+    get liveAudioInputStatusKnown() { return liveAudioInputStatusKnown(); },
+    get liveAudioInputBusy() { return liveAudioInputBusy(); },
+    get liveAudioInputSavedSelection() { return liveAudioInputSavedSelectionUiState(); },
+    get liveAudioInputPersistError() { return liveAudioInputPersistError(); },
+    get liveAudioInputAsioRevalidationEligible() { return liveAudioInputAsioRevalidationEligible(); },
+    get liveAudioInputAsioRevalidationArmed() { return liveAudioInputAsioRevalidationArmed(); },
+    onSetLiveAudioInputBackend: selectLiveAudioInputBackend,
+    onSetLiveAudioInputDevice: selectLiveAudioInputDevice,
+    onSetLiveAudioInputSampleRate: selectLiveAudioInputSampleRate,
+    onSetLiveAudioInputBufferFrames: selectLiveAudioInputBufferFrames,
+    onSetLiveAudioInputChannelMix: selectLiveAudioInputChannelMix,
+    onRefreshLiveAudioInputDevices: refreshLiveAudioInputOperatorState,
+    onArmLiveAudioInputAsioRevalidation: armLiveAudioInputAsioRevalidation,
+    onStartLiveAudioInput: startLiveAudioInput,
+    onStopLiveAudioInput: stopLiveAudioInput,
+  };
+
   const videoLayerListProps: ComponentProps<typeof VideoControlPanel>["layerList"] = {
     get layers() { return snapshot().video.layers; },
     get isfRuntimeErrors() { return videoPreviewDiagnostics()?.isf_stage_errors ?? []; },
@@ -27714,38 +27748,6 @@ export default function App() {
           previewOutputId={videoOutputPreviewId()}
           previewInfo={videoOutputPreviewInfo()}
           previewUrl={videoOutputPreviewUrl()}
-          liveAudioInput={{
-            get liveAudioInputBackends() { return liveAudioInputBackends(); },
-            get selectedLiveAudioInputBackend() { return selectedLiveAudioInputBackend(); },
-            get liveAudioInputBackendsKnown() { return liveAudioInputBackendsKnown(); },
-            get liveAudioInputBackendsBusy() { return liveAudioInputBackendsBusy(); },
-            get liveAudioInputBackendError() { return liveAudioInputBackendError(); },
-            get liveAudioInputDevices() { return liveAudioInputDevices(); },
-            get selectedLiveAudioInputDevice() { return selectedLiveAudioInputDevice(); },
-            get lastKnownLiveAudioInputDeviceIdentity() { return lastKnownLiveAudioInputDeviceIdentity(); },
-            localize: (source) => translateUiText(source, uiLocale()),
-            get liveAudioInputCapabilities() { return liveAudioInputCapabilities(); },
-            get liveAudioInputCapabilitiesBusy() { return liveAudioInputCapabilitiesBusy(); },
-            get liveAudioInputSampleRate() { return liveAudioInputSampleRate(); },
-            get liveAudioInputBufferFrames() { return liveAudioInputBufferFrames(); },
-            get liveAudioInputChannelMix() { return liveAudioInputChannelMix(); },
-            get liveAudioInputStatus() { return liveAudioInputStatus(); },
-            get liveAudioInputStatusKnown() { return liveAudioInputStatusKnown(); },
-            get liveAudioInputBusy() { return liveAudioInputBusy(); },
-            get liveAudioInputSavedSelection() { return liveAudioInputSavedSelectionUiState(); },
-            get liveAudioInputPersistError() { return liveAudioInputPersistError(); },
-            get liveAudioInputAsioRevalidationEligible() { return liveAudioInputAsioRevalidationEligible(); },
-            get liveAudioInputAsioRevalidationArmed() { return liveAudioInputAsioRevalidationArmed(); },
-            onSetLiveAudioInputBackend: selectLiveAudioInputBackend,
-            onSetLiveAudioInputDevice: selectLiveAudioInputDevice,
-            onSetLiveAudioInputSampleRate: selectLiveAudioInputSampleRate,
-            onSetLiveAudioInputBufferFrames: selectLiveAudioInputBufferFrames,
-            onSetLiveAudioInputChannelMix: selectLiveAudioInputChannelMix,
-            onRefreshLiveAudioInputDevices: refreshLiveAudioInputOperatorState,
-            onArmLiveAudioInputAsioRevalidation: armLiveAudioInputAsioRevalidation,
-            onStartLiveAudioInput: startLiveAudioInput,
-            onStopLiveAudioInput: stopLiveAudioInput,
-          }}
           onCompositionLabel={setVideoCompositionLabel}
           onToggleCompositionLayer={toggleVideoCompositionLayer}
           onAddComposition={addVideoComposition}
@@ -29082,6 +29084,20 @@ export default function App() {
            </section>
              ) : connection === "audio" ? (
            <section class="ioUnifiedZone ioCompactZone" data-io-zone="audio">
+           <div class="ioOperatorSurface audioOperatorSurface">
+           <div
+             id="setup-audio-input"
+             class="setupAudioInput"
+             role="region"
+             aria-label="Audio input settings"
+             tabIndex={-1}
+           >
+             <div class="setupAudioInputHeader">
+               <strong>Audio Input</strong>
+               <span>Live analysis</span>
+             </div>
+             <LiveAudioInputRail {...liveAudioInputRailProps} compact />
+           </div>
            <AudioOutputPanel
              view={audioOutputController.view()}
              options={audioOutputController.options()}
@@ -29110,6 +29126,7 @@ export default function App() {
              onConfigureTimelineCueAudio={configureTimelineCueAudio}
              onRefreshTimelineCueAudio={async () => { await refreshTimelineCueAudioStatus(true, true); }}
            />
+           </div>
            </section>
              ) : connection === "midi" ? (
           <section class="ioUnifiedZone ioCompactZone" data-io-zone="midi">

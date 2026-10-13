@@ -2823,6 +2823,13 @@ async function selectIoConnection(client, connectionId) {
   return selectSetupIoConnection(client, connectionId, waitForClientCondition);
 }
 
+// Live audio input is owned by Setup > I/O > Audio. The I/O area has no mode
+// tabs; the connection deck selects the Audio workbench.
+async function openSetupIoAudioConnection(client) {
+  await clickVisibleSelector(client, ".setupAreaTabs button:nth-of-type(3)");
+  await selectIoConnection(client, "audio");
+}
+
 async function pressKey(client, code, key = code, modifiers = 0) {
   await client.send("Input.dispatchKeyEvent", { type: "keyDown", code, key, modifiers });
   await client.send("Input.dispatchKeyEvent", { type: "keyUp", code, key, modifiers });
@@ -13789,7 +13796,7 @@ async function setLiveAudioSelectWhenEnabled(client, kind, value, description) {
 }
 
 async function runLiveAudioAcceptance(client, locale, label) {
-  // The production owner is Setup > Video > Outputs. This also makes the
+  // The production owner is Setup > I/O > Audio. This also makes the
   // acceptance reusable from the broad control-surface run without relying
   // on whichever surface happened to be active before this scenario.
   await clickWorkspaceOption(client, "setup");
@@ -13798,8 +13805,7 @@ async function runLiveAudioAcceptance(client, locale, label) {
     "document.querySelector('.setupAreaTabs button') instanceof HTMLElement",
     "Setup navigation for live audio",
   );
-  await clickVisibleSelector(client, ".setupAreaTabs button:nth-of-type(2)");
-  await clickVisibleSelector(client, ".setupModeTabs button:nth-of-type(1)");
+  await openSetupIoAudioConnection(client);
   await sleep(120);
   await installLiveAudioInvokeMock(client);
   const legacyStartShapeRejected = await client.evaluate(`(() => {
@@ -13822,13 +13828,12 @@ async function runLiveAudioAcceptance(client, locale, label) {
     }
   })()`);
   await sleep(60);
-  // Live audio is owned by Setup > Video > Outputs. Keep the acceptance on
-  // that compact, persistent surface; the old Mixer drawer is intentionally
-  // not mounted in the fixed three-screen Video authoring surface.
+  // Live audio is owned by Setup > I/O > Audio. Keep the acceptance on that
+  // compact, persistent surface; the Mixer drawer is a separate live copy.
   await waitForClientCondition(
     client,
-    "document.querySelector('#setup-output-audio-input .liveAudioInputBar') instanceof HTMLElement",
-    "Setup Video live audio input",
+    "document.querySelector('#setup-audio-input .liveAudioInputBar') instanceof HTMLElement",
+    "Setup I/O Audio live audio input",
   );
   const initial = await readLiveAudioRailState(client);
   const refreshClicked = await clickLiveAudioControl(client, "refresh");
@@ -14256,14 +14261,13 @@ async function prepareLiveAudioAcceptanceViewport(client, viewport, locale, full
     "document.querySelector('.setupAreaTabs button') instanceof HTMLElement",
     "Setup navigation",
   );
-  await clickVisibleSelector(client, ".setupAreaTabs button:nth-of-type(2)");
-  await clickVisibleSelector(client, ".setupModeTabs button:nth-of-type(1)");
+  await openSetupIoAudioConnection(client);
   await sleep(120);
   if (fullscreen) {
     await client.evaluate("document.documentElement.setAttribute('data-window-mode','fullscreen')");
     await sleep(60);
     // The fullscreen VJ scenario exercises the Control > Mixer drawer, not
-    // Setup > Video's embedded audio-input surface. Move to the production
+    // Setup > I/O > Audio's embedded audio-input surface. Move to the production
     // owner before opening the drawer so the acceptance observes the same
     // surface an operator would use.
     await clickWorkspaceOption(client, "control");
@@ -14324,13 +14328,12 @@ async function prepareLiveAudioRestoreViewport(client, viewport, rawSelection, l
     "document.querySelector('.setupAreaTabs button') instanceof HTMLElement",
     "Setup navigation for persisted live audio",
   );
-  await clickVisibleSelector(client, ".setupAreaTabs button:nth-of-type(2)");
-  await clickVisibleSelector(client, ".setupModeTabs button:nth-of-type(1)");
+  await openSetupIoAudioConnection(client);
   await sleep(120);
   await waitForClientCondition(
     client,
-    "document.querySelector('#setup-output-audio-input .liveAudioInputBar') instanceof HTMLElement",
-    "Setup Video persisted live audio input",
+    "document.querySelector('#setup-audio-input .liveAudioInputBar') instanceof HTMLElement",
+    "Setup I/O Audio persisted live audio input",
   );
   await sleep(180);
   const beforeMock = await readLiveAudioRailState(client);
@@ -15566,13 +15569,12 @@ async function runLiveAudioAsioArmConsumptionHostileAcceptance(client, viewport)
       "document.querySelector('.setupAreaTabs button') instanceof HTMLElement",
       "Setup navigation after reload",
     );
-    await clickVisibleSelector(client, ".setupAreaTabs button:nth-of-type(2)");
-    await clickVisibleSelector(client, ".setupModeTabs button:nth-of-type(1)");
+    await openSetupIoAudioConnection(client);
     await sleep(120);
     await waitForClientCondition(
       client,
-      "document.querySelector('#setup-output-audio-input .liveAudioInputBar') instanceof HTMLElement",
-      "Setup Video live audio input after reload",
+      "document.querySelector('#setup-audio-input .liveAudioInputBar') instanceof HTMLElement",
+      "Setup I/O Audio live audio input after reload",
     );
     await installLiveAudioInvokeMock(client);
     await setMockFlags({ freezeDeviceGeneration: true });
@@ -16440,23 +16442,21 @@ async function runTopbarPulseViewport(client, viewport) {
     client,
     `(() => {
       const setup = document.querySelector('[data-workspace-option="setup"][aria-pressed="true"]');
-      const outputs = [...document.querySelectorAll('.setupModeTabs button')].find((button) =>
-        button.getAttribute('aria-pressed') === 'true' && (button.textContent ?? '').trim() === 'Outputs'
-      );
-      const settings = document.querySelector('#setup-output-audio-input');
-      return Boolean(setup && outputs && settings && settings.getBoundingClientRect().height > 0);
+      const audio = document.querySelector('[data-io-primary-connection="audio"] > button[role="tab"]')
+        ?.getAttribute('aria-selected') === 'true';
+      const settings = document.querySelector('#setup-audio-input');
+      return Boolean(setup && audio && settings && settings.getBoundingClientRect().height > 0);
     })()`,
-    "PULSE Setup Outputs audio-input route",
+    "PULSE Setup I/O Audio audio-input route",
   );
   await sleep(80);
   const route = await client.evaluate(`(() => {
-    const settings = document.querySelector('#setup-output-audio-input');
+    const settings = document.querySelector('#setup-audio-input');
     const rect = settings?.getBoundingClientRect();
     return {
       setupActive: Boolean(document.querySelector('[data-workspace-option="setup"][aria-pressed="true"]')),
-      outputsActive: [...document.querySelectorAll('.setupModeTabs button')].some((button) =>
-        button.getAttribute('aria-pressed') === 'true' && (button.textContent ?? '').trim() === 'Outputs'
-      ),
+      ioAudioActive: document.querySelector('[data-io-primary-connection="audio"] > button[role="tab"]')
+        ?.getAttribute('aria-selected') === 'true',
       settingsVisible: Boolean(rect && rect.width > 0 && rect.height > 0),
       settingsFocused: document.activeElement === settings,
       railCount: settings?.querySelectorAll('.liveAudioInputBar').length ?? 0,
@@ -16465,7 +16465,7 @@ async function runTopbarPulseViewport(client, viewport) {
 
   const refreshClicked = await client.evaluate(`(() => {
     const button = document.querySelector(
-      '#setup-output-audio-input [data-live-audio-action="refresh"]'
+      '#setup-audio-input [data-live-audio-action="refresh"]'
     );
     if (!(button instanceof HTMLButtonElement) || button.disabled) return false;
     button.click();
@@ -16476,16 +16476,16 @@ async function runTopbarPulseViewport(client, viewport) {
     `(() => {
       const calls = window.__syndocalLiveAudioMock?.calls ?? [];
       const transport = document.querySelector(
-        '#setup-output-audio-input [data-live-audio-action="transport"]'
+        '#setup-audio-input [data-live-audio-action="transport"]'
       );
       return calls.some((call) => call.command === 'get_live_audio_input_capabilities') &&
         transport instanceof HTMLButtonElement && !transport.disabled;
     })()`,
-    "Setup Outputs live-audio capability resolution",
+    "Setup I/O Audio live-audio capability resolution",
   );
   const startClicked = await client.evaluate(`(() => {
     const button = document.querySelector(
-      '#setup-output-audio-input [data-live-audio-action="transport"]'
+      '#setup-audio-input [data-live-audio-action="transport"]'
     );
     if (!(button instanceof HTMLButtonElement) || button.disabled) return false;
     button.click();
@@ -16610,7 +16610,7 @@ async function runTopbarPulseViewport(client, viewport) {
     clickJumpsToSetupOutputsAudioInput:
       pulseClicked &&
       route.setupActive &&
-      route.outputsActive &&
+      route.ioAudioActive &&
       route.settingsVisible &&
       route.settingsFocused &&
       route.railCount === 1,
@@ -16662,7 +16662,7 @@ async function runFullscreenVjAcceptanceViewport(client, viewport) {
     "en",
     "fullscreen-vj-live-" + viewport.width + "x" + viewport.height,
   );
-  // The live-audio stateful acceptance owns Setup > Video > Outputs and ends
+  // The live-audio stateful acceptance owns Setup > I/O > Audio and ends
   // there after its safety-clear proof. Re-enter the actual fullscreen Mixer
   // surface before measuring the VJ layout; reuse the acceptance snapshot only
   // for the active-audio telemetry assertions.
@@ -17823,7 +17823,7 @@ async function runViewport(client, viewport, { recycleForLayeredTimeline = null 
         `control-mixer-live-${viewport.width}x${viewport.height}`,
       );
       results.push(liveAudioAcceptance.liveContainment);
-      // Live-audio acceptance is owned by Setup > Video > Outputs and leaves
+      // Live-audio acceptance is owned by Setup > I/O > Audio and leaves
       // that workspace selected. Restore the Control owner before the loop
       // advances to the next domain tab; otherwise the following tab click is
       // operating against a hidden navigation surface rather than the product
@@ -38677,7 +38677,7 @@ async function main() {
             `goTitle=${JSON.stringify(result.stopped.goTitle)} ` +
             `polls=${result.stoppedLevelCalls}->${result.activeLevelCalls} ` +
             `level=${result.active.meterAriaNow}% stale=${result.staleElapsedMs}ms/${result.stale.staleMs}ms ` +
-            `route=${result.route.setupActive}/${result.route.outputsActive}/${result.route.settingsFocused} ` +
+            `route=${result.route.setupActive}/${result.route.ioAudioActive}/${result.route.settingsFocused} ` +
             `failed=${JSON.stringify(result.failedChecks)}`,
         );
       }

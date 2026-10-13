@@ -1890,6 +1890,7 @@ const japaneseText: Record<string, string> = {
   "Audio FFT bass mid high over time": "音声FFTの低域・中域・高域推移",
   "Audio Gain": "音声ゲイン",
   "Audio Input": "音声入力",
+  "Audio Output": "音声出力",
   "CUE-only": "CUEのみ",
   "No driver enumerated": "ドライバが列挙されていません",
   "No solo": "ソロなし",

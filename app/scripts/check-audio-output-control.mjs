@@ -90,7 +90,7 @@ const assertions = [
     "Audio must be an in-flow Setup I/O workbench, not a floating surface",
   ],
   [
-    /export type IoConnectionId = "dmx" \| "audio" \| "midi" \| "osc" \| "web" \| "dj";/u,
+    /export type IoConnectionId = "dmx" \| "audio" \| "midi" \| "osc" \| "web" \| "sync" \| "dj";/u,
     deck,
     "Setup I/O connection ids must include Audio",
   ],

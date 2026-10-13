@@ -34756,7 +34756,7 @@ html[data-window-mode="fullscreen"] .desktopResizeZones {
   }
 }
 
-.setupOutputAudioInput {
+.setupAudioInput {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   min-width: 0;
@@ -34766,12 +34766,12 @@ html[data-window-mode="fullscreen"] .desktopResizeZones {
   background: #141719;
 }
 
-.setupOutputAudioInput:focus-visible {
+.setupAudioInput:focus-visible {
   outline: 1px solid #f4a259;
   outline-offset: -2px;
 }
 
-.setupOutputAudioInputHeader {
+.setupAudioInputHeader {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
@@ -34782,29 +34782,26 @@ html[data-window-mode="fullscreen"] .desktopResizeZones {
   padding: 4px 7px;
 }
 
-.setupOutputAudioInputHeader strong,
-.setupOutputAudioInputHeader span {
+.setupAudioInputHeader strong,
+.setupAudioInputHeader span {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.setupOutputAudioInputHeader strong {
+.setupAudioInputHeader strong {
   color: #e2ddd8;
   font-size: 11px;
   text-transform: uppercase;
 }
 
-.setupOutputAudioInputHeader span {
+.setupAudioInputHeader span {
   color: #8f8881;
   font-size: 11px;
 }
 
-.setupOutputAudioInput .liveAudioInputBar {
-  grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: auto auto auto;
-  gap: 4px;
+.setupAudioInput .liveAudioInputBar {
   min-height: 0;
   max-height: none;
   border: 0;
@@ -34812,57 +34809,65 @@ html[data-window-mode="fullscreen"] .desktopResizeZones {
   padding: 5px;
 }
 
-.setupOutputAudioInput .liveAudioInputControls,
-.setupOutputAudioInput .liveAudioMeters {
-  grid-column: 1;
-}
+/* The I/O Audio workbench is wide enough for the regular two-column rail;
+   stack the rail only when the workbench itself is narrow. */
+@container setup-io-workbench (max-width: 719px) {
+  .setupAudioInput .liveAudioInputBar {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto auto;
+    gap: 4px;
+  }
 
-.setupOutputAudioInput .liveAudioMeters {
-  min-height: 24px;
-}
+  .setupAudioInput .liveAudioInputControls,
+  .setupAudioInput .liveAudioMeters {
+    grid-column: 1;
+  }
 
-.setupOutputAudioInput .liveAudioTelemetry,
-.setupOutputAudioInput .liveAudioConfigControls {
-  grid-column: 1;
-  grid-row: auto;
-}
+  .setupAudioInput .liveAudioMeters {
+    min-height: 24px;
+  }
 
-.setupOutputAudioInput .liveAudioConfigControls {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  overflow: visible;
-}
+  .setupAudioInput .liveAudioTelemetry,
+  .setupAudioInput .liveAudioConfigControls {
+    grid-column: 1;
+    grid-row: auto;
+  }
 
-.setupOutputAudioInput .liveAudioConfigFormat {
-  grid-column: 1 / -1;
-}
+  .setupAudioInput .liveAudioConfigControls {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    overflow: visible;
+  }
 
-.setupOutputAudioInput .liveAudioTelemetry {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  overflow: visible;
-}
+  .setupAudioInput .liveAudioConfigFormat {
+    grid-column: 1 / -1;
+  }
 
-.setupOutputAudioInput .liveAudioTelemetry > span {
-  width: auto;
-}
+  .setupAudioInput .liveAudioTelemetry {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    overflow: visible;
+  }
 
-.setupOutputAudioInput .liveAudioTelemetry > .liveAudioTelemetryIo {
-  grid-column: 1 / -1;
+  .setupAudioInput .liveAudioTelemetry > span {
+    width: auto;
+  }
+
+  .setupAudioInput .liveAudioTelemetry > .liveAudioTelemetryIo {
+    grid-column: 1 / -1;
+  }
 }
 
 /* Keep the compact source rail usable at every supported desktop height. The
-   audio section is a real grid row, while the longer composition/output
-   editors own their internal scrollports; no child is painted outside its
-   hit surface. */
+   longer composition/output editors own their internal scrollports; no child
+   is painted outside its hit surface. */
 .layoutSetup.setupMode-video .videoSetupSidebar {
-  grid-template-rows: minmax(0, 1fr) auto minmax(0, 1fr) minmax(180px, auto);
+  grid-template-rows: minmax(0, 1fr) auto minmax(0, 1fr);
   overflow: hidden auto;
 }
 
 .layoutSetup.setupMode-video .videoSetupSidebar > .compositionList,
 .layoutSetup.setupMode-video .videoSetupSidebar > .videoSetupDisclosure,
-.layoutSetup.setupMode-video .videoSetupSidebar > .videoOutputCreateSurface,
-.layoutSetup.setupMode-video .videoSetupSidebar > .setupOutputAudioInput {
+.layoutSetup.setupMode-video .videoSetupSidebar > .videoOutputCreateSurface {
   min-height: 0;
 }
 
@@ -34875,10 +34880,6 @@ html[data-window-mode="fullscreen"] .desktopResizeZones {
 .layoutSetup.setupMode-video .videoSetupSidebar > .videoSetupDisclosure,
 .layoutSetup.setupMode-video .videoSetupSidebar > .videoOutputCreateSurface {
   overflow: hidden;
-}
-
-.layoutSetup.setupMode-video .videoSetupSidebar > .setupOutputAudioInput {
-  min-height: 180px;
 }
 
 .layoutControl .liveControlPanel {
@@ -36612,7 +36613,7 @@ html[data-window-mode="fullscreen"] .desktopResizeZones {
 .sectionHeader h2,
 .sectionHeader h3,
 .controlContextHeader > h2,
-.setupOutputAudioInputHeader strong,
+.setupAudioInputHeader strong,
 .sceneMatrixHeader .eyebrow,
 .sceneSettingsSection > header > strong,
 .colorEffectClockHeader strong,
@@ -36651,7 +36652,7 @@ html[data-window-mode="fullscreen"] .desktopResizeZones {
 .mappingWorkspaceLeftPane,
 .workspaceContextPane,
 .sceneSettingsPane,
-.setupOutputAudioInput,
+.setupAudioInput,
 .appStatusLine {
   border-color: var(--ui-border);
   background: var(--ui-surface-panel);

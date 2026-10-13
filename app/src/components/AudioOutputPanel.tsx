@@ -269,7 +269,7 @@ export function AudioOutputPanel(props: AudioOutputPanelProps) {
     >
       <header class="audioOutputPanelHeader">
         <div>
-          <h3 id="audio-output-panel-title">Audio</h3>
+          <h3 id="audio-output-panel-title">Audio Output</h3>
           <p>
             {props.view.backend === "normal-wasapi"
               ? "Windows default PROGRAM output"
