@@ -18,6 +18,7 @@ import type {
   MidiOutputSummary,
   VideoParam,
 } from "../types";
+import { formatMidiFeedbackMessage, type MidiFeedbackOutputStatus } from "../midiLearnFeedback";
 
 interface MidiControlMappingPanelProps {
   snapshot: EngineSnapshot;
@@ -28,6 +29,7 @@ interface MidiControlMappingPanelProps {
   selectedMidiOutput: number | null;
   feedbackConnected: boolean;
   feedbackEnabled: boolean;
+  feedbackOutputStatus: MidiFeedbackOutputStatus | null;
   midiInputsCount: number;
   controlConnected: boolean;
   mappings: MidiControlMapping[];
@@ -110,6 +112,8 @@ const feedbackMessageLabel = (message: MidiFeedbackMessage) => (
 );
 
 export function MidiControlMappingPanel(props: MidiControlMappingPanelProps) {
+  // Learned scene buttons carry LED feedback; without a connected output it is silently dropped.
+  const feedbackOutputMissing = () => !props.feedbackConnected && props.mappings.some(mapping => mapping.feedback);
   return (
     <div class="midiClock ioOperatorSurface">
       <section class="ioConnectionDesk" data-io-default-surface="midi">
@@ -121,6 +125,7 @@ export function MidiControlMappingPanel(props: MidiControlMappingPanelProps) {
           <div class="ioConnectionStates">
             <span class={`ioConnectionState ${props.clockConnected ? "ok" : "idle"}`}><i aria-hidden="true" />Clock {props.clockConnected ? "Connected" : "Stopped"}</span>
             <span class={`ioConnectionState ${props.controlConnected ? "ok" : "idle"}`}><i aria-hidden="true" />Control {props.controlConnected ? "Connected" : "Stopped"}</span>
+            <span class={`ioConnectionState ${props.feedbackConnected ? "ok" : feedbackOutputMissing() ? "warn" : "idle"}`} data-midi-feedback-state><i aria-hidden="true" />Feedback {props.feedbackConnected ? "Connected" : "Stopped"}</span>
           </div>
         </header>
         <div class="ioConnectionControls">
@@ -169,8 +174,28 @@ export function MidiControlMappingPanel(props: MidiControlMappingPanelProps) {
           <button type="button" class="primary" onClick={() => props.onStartControlLearn?.()} disabled={props.learnBusy || props.selectedMidiInput === null}>Learn in Control</button>
         </section>
       </Show>
+      <Show when={props.feedbackConnected || feedbackOutputMissing()}>
+        <section class="ioConnectionDesk midiFeedbackStatus" data-midi-feedback-status role="status">
+          <Show when={props.feedbackConnected} fallback={
+            <p class="hint">Scene buttons have LED feedback, but no feedback output is connected. Choose the controller's MIDI output under MIDI feedback and press Connect Feedback.</p>
+          }>
+            <p>
+              <span>Feedback output</span>: <span data-no-localize>{props.feedbackOutputStatus?.name ?? "-"}</span>
+              {" · "}<span>Auto feedback</span> <span>{props.feedbackEnabled ? "On" : "Off"}</span>
+            </p>
+            <p class="tabularNums">
+              <span>Messages sent</span>: <span data-no-localize>{props.feedbackOutputStatus?.messages_sent ?? 0}</span>
+              <Show when={props.feedbackOutputStatus?.last_message}>
+                {(last) => (<>{" · "}<span>Last message</span>: <span data-no-localize>{formatMidiFeedbackMessage(last())}
+                  {props.feedbackOutputStatus?.last_sent_unix_ms != null ? ` (${new Date(props.feedbackOutputStatus.last_sent_unix_ms).toLocaleTimeString()})` : ""}</span></>)}
+              </Show>
+            </p>
+            <p class="hint">If messages are sent but the LEDs stay dark, check the controller mode and that this output is the controller's LED port.</p>
+          </Show>
+        </section>
+      </Show>
       <div class="ioDisclosureStack">
-        <details class="ioDisclosure" data-io-disclosure="midi-feedback">
+        <details class="ioDisclosure" data-io-disclosure="midi-feedback" open={feedbackOutputMissing()}>
           <summary>MIDI feedback</summary>
           <div class="ioDisclosureBody mappingEditorDesk" data-io-disclosure-body>
             <h3>MIDI Feedback</h3>

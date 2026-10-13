@@ -13736,6 +13736,34 @@ impl Drop for MidiFeedbackRuntime {
 struct MidiFeedbackRuntimeStatus {
     enabled: bool,
     last_error: Option<String>,
+    /// Connected feedback output and what it last handed to the driver; None
+    /// while no feedback output is connected.
+    output: Option<MidiFeedbackOutputStatus>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct MidiFeedbackOutputStatus {
+    name: String,
+    messages_sent: u64,
+    last_message: Option<Vec<u8>>,
+    last_sent_unix_ms: Option<u64>,
+}
+
+fn midi_feedback_output_status(state: &AppState) -> Result<Option<MidiFeedbackOutputStatus>, String> {
+    Ok(state
+        .midi_feedback
+        .lock()
+        .map_err(|_| "MIDI feedback state lock was poisoned".to_string())?
+        .as_ref()
+        .map(|output| {
+            let telemetry = output.telemetry();
+            MidiFeedbackOutputStatus {
+                name: telemetry.port_name,
+                messages_sent: telemetry.messages_sent,
+                last_message: telemetry.last_message,
+                last_sent_unix_ms: telemetry.last_sent_unix_ms,
+            }
+        }))
 }
 
 #[derive(Debug, Clone)]
@@ -30610,15 +30638,16 @@ fn set_midi_feedback_auto(
         callback_installed.store(true, Ordering::Release);
     }
 
-    let runtime = state
+    let enabled = state
         .midi_feedback_runtime
         .lock()
-        .map_err(|_| "MIDI feedback runtime lock was poisoned".to_string())?;
+        .map_err(|_| "MIDI feedback runtime lock was poisoned".to_string())?
+        .as_ref()
+        .is_some_and(MidiFeedbackRuntime::is_running);
     Ok(MidiFeedbackRuntimeStatus {
-        enabled: runtime
-            .as_ref()
-            .is_some_and(MidiFeedbackRuntime::is_running),
+        enabled,
         last_error: None,
+        output: midi_feedback_output_status(&state)?,
     })
 }
 
@@ -30638,6 +30667,7 @@ fn midi_feedback_status(state: State<'_, AppState>) -> Result<MidiFeedbackRuntim
     Ok(MidiFeedbackRuntimeStatus {
         enabled,
         last_error,
+        output: midi_feedback_output_status(&state)?,
     })
 }
 
