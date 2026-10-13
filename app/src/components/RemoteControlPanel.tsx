@@ -6,8 +6,6 @@ import type {
   DjTrackTriggerMapping,
   RemoteControlStatus,
 } from "../types";
-import { StandbySyncPanel } from "./StandbySyncPanel";
-import { ShowClockStatusPanel } from "./ShowClockStatusPanel";
 import { djLinkMachineBlockReasonText } from "../uiLocalization";
 import {
   DEFAULT_DJ_TITLE_CONTAINS,
@@ -654,23 +652,6 @@ export function RemoteControlPanel(props: RemoteControlPanelProps) {
 
         </Show>
 
-        <Show when={props.surface !== "dj"}>
-        <details class="ioDisclosure" data-io-disclosure="remote-standby">
-          <summary>Active / Standby sync</summary>
-          <div class="ioDisclosureBody" data-io-disclosure-body>
-            <StandbySyncPanel backendAvailable={props.backendAvailable} invokeCommand={props.invokeCommand} />
-          </div>
-        </details>
-        </Show>
-
-        <Show when={props.surface !== "dj"}>
-        <details class="ioDisclosure" data-io-disclosure="show-clock">
-          <summary>ShowClock LAN</summary>
-          <div class="ioDisclosureBody" data-io-disclosure-body>
-            <ShowClockStatusPanel backendAvailable={props.backendAvailable} invokeCommand={props.invokeCommand} />
-          </div>
-        </details>
-        </Show>
       </div>
     </div>
   );

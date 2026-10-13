@@ -1,7 +1,7 @@
 import { For, Show, createMemo, type JSX } from "solid-js";
 import "../setupIo.css";
 
-export type IoConnectionId = "dmx" | "audio" | "midi" | "osc" | "web" | "dj";
+export type IoConnectionId = "dmx" | "audio" | "midi" | "osc" | "web" | "sync" | "dj";
 export type IoConnectionStateTone = "ok" | "idle" | "warning" | "error";
 
 /**
@@ -42,6 +42,9 @@ export interface SetupIoConnectionDeckProps {
   webRemoteRunning: boolean;
   djListenerRunning: boolean;
   djLinkEnabled: boolean;
+  /** Active/Standby sync and ShowClock LAN, shown as their own connection. */
+  syncRunning?: boolean;
+  syncRole?: "primary" | "standby" | null;
   djLinkInstalled?: boolean;
 }
 
@@ -213,6 +216,13 @@ export function SetupIoConnectionDeck(props: SetupIoConnectionDeckProps) {
       summary: "Remote access",
       state: props.webRemoteRunning ? "Running" : "Stopped",
       stateTone: props.webRemoteRunning ? "ok" : "idle",
+    },
+    {
+      id: "sync",
+      label: "Sync",
+      summary: "Standby + ShowClock",
+      state: props.syncRunning ? (props.syncRole === "primary" ? "Primary" : "Standby") : "Stopped",
+      stateTone: props.syncRunning ? "ok" : "idle",
     },
     {
       id: "dj",

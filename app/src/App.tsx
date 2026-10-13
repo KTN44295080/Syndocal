@@ -76,6 +76,8 @@ import { NetworkDmxRoutesPanel } from "./components/NetworkDmxRoutesPanel";
 import { DmxOutputConfigPanel } from "./components/DmxOutputConfigPanel";
 import type { ExtensionStatus } from "./extensionsStatus";
 import { IoDisclosure, SetupIoConnectionDeck, type IoConnectionId } from "./components/IoConnectionDeck";
+import { StandbySyncPanel } from "./components/StandbySyncPanel";
+import { ShowClockStatusPanel } from "./components/ShowClockStatusPanel";
 import { DmxInputPanel } from "./components/DmxInputPanel";
 import { DmxRawMonitor } from "./components/DmxRawMonitor";
 import { DvcImportReportPanel } from "./components/DvcImportReportPanel";
@@ -28971,6 +28973,8 @@ export default function App() {
             djListenerRunning={djListenerRunning()}
             djLinkEnabled={djLinkEnabled()}
             djLinkInstalled={extensionStatus().dj_link_enabled}
+            syncRunning={showClockStatus()?.running ?? false}
+            syncRole={showClockStatus()?.role ?? null}
             renderWorkbench={(connection) => connection === "dmx" ? (
           <section class="ioUnifiedZone ioUnifiedDmxZone" data-io-zone="dmx">
           <div class="ioOperatorSurface dmxOperatorSurface">
@@ -29236,6 +29240,13 @@ export default function App() {
             onSaveMappings={saveOscMappings}
             onRemoveMapping={removeOscMapping}
           />
+          </section>
+            ) : connection === "sync" ? (
+          <section class="ioUnifiedZone ioCompactZone" data-io-zone="sync">
+          <div class="ioOperatorSurface syncOperatorSurface">
+            <StandbySyncPanel backendAvailable={isTauriRuntime()} invokeCommand={invoke} />
+            <ShowClockStatusPanel backendAvailable={isTauriRuntime()} invokeCommand={invoke} />
+          </div>
           </section>
             ) : (
           <section class="ioUnifiedZone ioCompactZone" data-io-zone="remote">

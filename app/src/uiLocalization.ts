@@ -1926,6 +1926,7 @@ const japaneseText: Record<string, string> = {
   Authored: "作成値",
   "Auto feedback": "自動フィードバック",
   Feedback: "フィードバック",
+  "Standby + ShowClock": "スタンバイ＋ShowClock",
   "Feedback output": "フィードバック出力",
   "Messages sent": "送信数",
   "Last message": "最後の送信",

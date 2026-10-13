@@ -6,6 +6,7 @@ const expectedZoneByConnection = {
   midi: "midi",
   osc: "osc",
   web: "remote",
+  sync: "sync",
   dj: "remote",
 };
 

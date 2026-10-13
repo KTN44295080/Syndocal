@@ -122,13 +122,9 @@ async function remoteDisclosureScrollInPage() {
     const webRemoteBody = webRemoteDisclosure?.querySelector(':scope > [data-io-disclosure-body]') ?? webRemoteDirectSurface;
     const remoteSecurityDisclosure = disclosureStack?.querySelector(':scope > [data-io-disclosure="remote-security"]') ?? null;
     const remoteEndpointsDisclosure = disclosureStack?.querySelector(':scope > [data-io-disclosure="remote-endpoints"]') ?? null;
-    const remoteStandbyDisclosure = disclosureStack?.querySelector(':scope > [data-io-disclosure="remote-standby"]') ?? null;
-    const webDisclosures = [remoteSecurityDisclosure, remoteEndpointsDisclosure, remoteStandbyDisclosure];
+    const webDisclosures = [remoteSecurityDisclosure, remoteEndpointsDisclosure];
     const serverDesk = webRemoteBody?.querySelector(':scope > .remoteServerDesk');
     const remoteAction = serverDesk?.querySelector('[data-io-control="remote-start"], [data-io-control="remote-stop"]');
-    const remoteStandbySummary = remoteStandbyDisclosure?.querySelector(':scope > summary');
-    const remoteStandbyBody = remoteStandbyDisclosure?.querySelector(':scope > [data-io-disclosure-body]');
-    const remoteStandbyControl = remoteStandbyBody?.querySelector('[data-io-control="remote-standby-role"]');
     if (workbenchBody instanceof HTMLElement) resetScroll(workbenchBody);
     if (remoteControl instanceof HTMLElement) resetScroll(remoteControl);
     if (disclosureStack instanceof HTMLElement) resetScroll(disclosureStack);
@@ -143,12 +139,6 @@ async function remoteDisclosureScrollInPage() {
     );
     if (workbenchBody instanceof HTMLElement) workbenchBody.scrollTop = workbenchBody.scrollHeight;
     await settle();
-    await reveal(remoteStandbySummary, workbenchBody);
-    const remoteStandbySummaryReachable = visibleWithin(remoteStandbySummary, workbenchBody);
-    const remoteStandbySummaryHitTestable = hitTestableAtCenter(remoteStandbySummary);
-    await reveal(remoteStandbyControl, workbenchBody);
-    const remoteStandbyControlReachable = visibleWithin(remoteStandbyControl, workbenchBody);
-    const remoteStandbyControlHitTestable = hitTestableAtCenter(remoteStandbyControl);
     await reveal(remoteAction, workbenchBody);
     const remoteActionReachable = visibleWithin(remoteAction, workbenchBody);
     const remoteActionHitTestable = hitTestableAtCenter(remoteAction);
@@ -167,8 +157,6 @@ async function remoteDisclosureScrollInPage() {
       directSurfaceVisible: visible(webRemoteDirectSurface),
       serverDeskFound: serverDesk instanceof HTMLElement,
       remoteActionFound: remoteAction instanceof HTMLElement,
-      remoteStandbySummaryFound: remoteStandbySummary instanceof HTMLElement,
-      remoteStandbyControlFound: remoteStandbyControl instanceof HTMLElement,
       disclosureStackFound: disclosureStack instanceof HTMLElement,
       workbenchBodyFound: workbenchBody instanceof HTMLElement,
       disclosureCount: webDisclosures.length,
@@ -181,10 +169,6 @@ async function remoteDisclosureScrollInPage() {
       remoteActionSizeBeforeDisclosureScroll,
       remoteActionSizeAfterDisclosureScroll,
       remoteActionSizePreserved,
-      remoteStandbySummaryReachableAfterDisclosureScroll: remoteStandbySummaryReachable,
-      remoteStandbySummaryHitTestableAfterDisclosureScroll: remoteStandbySummaryHitTestable,
-      remoteStandbyControlReachableAfterDisclosureScroll: remoteStandbyControlReachable,
-      remoteStandbyControlHitTestableAfterDisclosureScroll: remoteStandbyControlHitTestable,
       remoteActionReachableAfterDisclosureScroll: remoteActionReachable,
       remoteActionHitTestableAfterDisclosureScroll: remoteActionHitTestable,
       passed:
@@ -193,8 +177,6 @@ async function remoteDisclosureScrollInPage() {
         webRemoteBody instanceof HTMLElement &&
         serverDesk instanceof HTMLElement &&
         remoteAction instanceof HTMLElement &&
-        remoteStandbySummary instanceof HTMLElement &&
-        remoteStandbyControl instanceof HTMLElement &&
         disclosureStack instanceof HTMLElement &&
         workbenchBody instanceof HTMLElement &&
         webDisclosures.every((disclosure) => disclosure?.open === true) &&
@@ -202,10 +184,6 @@ async function remoteDisclosureScrollInPage() {
         workbenchStyle?.overflowY === 'auto' &&
         remoteControl.scrollTop === 0 &&
         remoteActionSizePreserved &&
-        remoteStandbySummaryReachable &&
-        remoteStandbySummaryHitTestable &&
-        remoteStandbyControlReachable &&
-        remoteStandbyControlHitTestable &&
         remoteActionReachable &&
         remoteActionHitTestable,
     };
@@ -282,10 +260,42 @@ async function remoteDisclosureScrollInPage() {
     };
   };
 
+  // Active/Standby sync and ShowClock LAN are their own I/O connection; the
+  // standby role control must stay reachable inside that workbench.
+  const readSyncPath = async () => {
+    const syncZone = document.querySelector('[data-io-zone="sync"]');
+    const workbenchBody = syncZone?.closest('[data-io-workbench-body]');
+    const standbyControl = syncZone?.querySelector('[data-io-control="remote-standby-role"]');
+    const showClockPanel = syncZone?.querySelector('.showClockPanel');
+    if (workbenchBody instanceof HTMLElement) resetScroll(workbenchBody);
+    await settle();
+    await reveal(standbyControl, workbenchBody);
+    const standbyReachable = visibleWithin(standbyControl, workbenchBody);
+    const standbyHitTestable = hitTestableAtCenter(standbyControl);
+    const workbenchStyle = workbenchBody ? getComputedStyle(workbenchBody) : null;
+    return {
+      syncZoneFound: syncZone instanceof HTMLElement,
+      standbyControlFound: standbyControl instanceof HTMLElement,
+      showClockPanelFound: showClockPanel instanceof HTMLElement,
+      standbyReachable,
+      standbyHitTestable,
+      workbenchOwnsVerticalScroll: workbenchStyle?.overflowY === 'auto',
+      passed:
+        syncZone instanceof HTMLElement &&
+        standbyControl instanceof HTMLElement &&
+        showClockPanel instanceof HTMLElement &&
+        standbyReachable &&
+        standbyHitTestable &&
+        workbenchStyle?.overflowY === 'auto',
+    };
+  };
+
   const webSelection = await selectConnection('web');
   const web = await readWebPath();
   const djSelection = await selectConnection('dj');
   const dj = await readDjPath();
+  const syncSelection = await selectConnection('sync');
+  const sync = await readSyncPath();
   const restoredWebSelection = await selectConnection('web');
   const restoredWebZone = document.querySelector('[data-io-zone="remote"]');
   const restoredWebStack = restoredWebZone?.querySelector('.remoteControl > .ioDisclosureStack');
@@ -298,9 +308,11 @@ async function remoteDisclosureScrollInPage() {
   return {
     webSelection,
     djSelection,
+    syncSelection,
     restoredWebSelection,
     web,
     dj,
+    sync,
     webCardReachable: webSelection.found && webSelection.selected && webSelection.zone === 'remote',
     djCardReachable: djSelection.found && djSelection.selected && djSelection.zone === 'remote',
     passed:
@@ -309,12 +321,11 @@ async function remoteDisclosureScrollInPage() {
       !webSelection.mountedDisclosures.webRemote &&
       webSelection.mountedDisclosures.remoteSecurity &&
       webSelection.mountedDisclosures.remoteEndpoints &&
-      webSelection.mountedDisclosures.remoteStandby &&
+      !webSelection.mountedDisclosures.remoteStandby &&
       !webSelection.mountedDisclosures.djLink &&
       !webSelection.openDisclosures.webRemote &&
       !webSelection.openDisclosures.remoteSecurity &&
       !webSelection.openDisclosures.remoteEndpoints &&
-      !webSelection.openDisclosures.remoteStandby &&
       !webSelection.openDisclosures.djLink &&
       webSelection.summaries.remoteSecurity === 'Advanced: Remote safety limits' &&
       webSelection.summaries.remoteEndpoints === 'Advanced: Remote endpoints and clients' &&
@@ -328,14 +339,14 @@ async function remoteDisclosureScrollInPage() {
       restoredWebSelection.found && restoredWebSelection.selected &&
       restoredWebSelection.directSurface &&
       !restoredWebSelection.mountedDisclosures.webRemote &&
-      restoredWebSelection.mountedDisclosures.remoteStandby &&
+      !restoredWebSelection.mountedDisclosures.remoteStandby &&
       !restoredWebSelection.mountedDisclosures.djLink &&
       !restoredWebSelection.openDisclosures.webRemote &&
       !restoredWebSelection.openDisclosures.remoteSecurity &&
       !restoredWebSelection.openDisclosures.remoteEndpoints &&
-      !restoredWebSelection.openDisclosures.remoteStandby &&
       !restoredWebSelection.openDisclosures.djLink &&
-      web.passed && dj.passed,
+      syncSelection.found && syncSelection.selected && syncSelection.zone === 'sync' &&
+      web.passed && dj.passed && sync.passed,
   };
 }
 

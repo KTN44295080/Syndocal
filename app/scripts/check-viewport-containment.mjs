@@ -5233,7 +5233,8 @@ async function runSetupIoViewport(client, viewport, dmxOnly = false) {
     await selectIoConnection(client, 'web');
     const remoteConnection = await exerciseSetupIoDisclosure(client, 'remote-connection-settings', '[data-io-control="remote-pin"]');
     const remoteSecurity = await exerciseSetupIoDisclosure(client, 'remote-security', '[data-io-control="remote-max-clients"]');
-    const remoteStandby = await exerciseSetupIoDisclosure(client, 'remote-standby', '[data-io-control="remote-standby-role"]');
+    // Active/Standby sync is its own Sync connection; its role control is
+    // checked for reachability by the remote disclosure scroll contract.
     remoteDisclosureScroll = await exerciseRemoteDisclosureScrollReachability(client, evaluatePageFunction);
     await clickVisibleSelector(client, '[data-io-control="remote-start"]');
     await sleep(180);
@@ -5401,7 +5402,7 @@ async function runSetupIoViewport(client, viewport, dmxOnly = false) {
       })(),
       genericStatus: document.querySelector('.remoteServerDesk .ioConnectionState')?.textContent?.trim() ?? '',
     }))()`);
-    disclosures.remote = [remoteConnection, remoteSecurity, remoteEndpoints, remoteStandby];
+    disclosures.remote = [remoteConnection, remoteSecurity, remoteEndpoints];
     const remoteCalls = await readSetupIoMockCalls(client);
     const remoteStartCalls = remoteCalls.filter((call) => call.command === 'start_remote_control');
     const remoteStopCalls = remoteCalls.filter((call) => call.command === 'stop_remote_control');
@@ -5445,10 +5446,10 @@ async function runSetupIoViewport(client, viewport, dmxOnly = false) {
     ioSubTabBarRemoved:
       measurements.io.ioSubTabBarCount === 0 && measurements.io.ioSubTabButtonCount === 0,
     connectionCardsPresent:
-      measurements.io.ioConnectionCardCount === 6 &&
-      JSON.stringify(measurements.io.ioConnectionCardIds) === JSON.stringify(['dmx', 'audio', 'midi', 'osc', 'web', 'dj']) &&
-      connectionDeck.cardCount === 6 &&
-      JSON.stringify(connectionDeck.cardIds) === JSON.stringify(['dmx', 'audio', 'midi', 'osc', 'web', 'dj']),
+      measurements.io.ioConnectionCardCount === 7 &&
+      JSON.stringify(measurements.io.ioConnectionCardIds) === JSON.stringify(['dmx', 'audio', 'midi', 'osc', 'web', 'sync', 'dj']) &&
+      connectionDeck.cardCount === 7 &&
+      JSON.stringify(connectionDeck.cardIds) === JSON.stringify(['dmx', 'audio', 'midi', 'osc', 'web', 'sync', 'dj']),
     connectionCardsVisibleHitTestableAndFocusable:
       connectionDeck.allCardsVisible && connectionDeck.allCardsHitTestable && connectionDeck.allCardsFocusable,
     connectionDeckTabpanelSemantics:
@@ -13160,8 +13161,8 @@ function hasExpectedSetupSurface(result) {
       result.ioUnifiedSurfaceCount === 1 &&
       result.ioSubTabBarCount === 0 &&
       result.ioSubTabButtonCount === 0 &&
-      result.ioConnectionCardCount === 6 &&
-      JSON.stringify(result.ioConnectionCardIds) === JSON.stringify(["dmx", "audio", "midi", "osc", "web", "dj"]) &&
+      result.ioConnectionCardCount === 7 &&
+      JSON.stringify(result.ioConnectionCardIds) === JSON.stringify(["dmx", "audio", "midi", "osc", "web", "sync", "dj"]) &&
       result.ioActiveConnectionId === "dmx" &&
       result.ioVisibleZoneCount === 1 &&
       JSON.stringify(result.ioVisibleZoneNames) === JSON.stringify(["dmx"]) &&
@@ -41245,7 +41246,7 @@ async function main() {
         ? ` outputSetup=${result.visibleSetupVideoPanelCount}/${result.visibleSetupVideoOutputDeckCount}/${result.visibleSetupVideoOutputActiveDeckCount}/${result.visibleSetupVideoOutputDetailPaneCount}/${result.visibleVideoOutputMappingPanelCount}/${result.visibleVideoOutputBlendControlsCount}/${result.visibleProjectorMapEditorCount}/${result.visibleProjectorMapHandleCount}/${result.visibleProjectorKeystoneHandleCount}/${result.visibleProjectorScaleHandleCount}/${result.visibleProjectorRotateHandleCount}/${result.visibleProjectorAspectModeButtonCount}/${result.visibleProjectorAspectPresetButtonCount}/${result.visibleProjectorResetPoseButtonCount}/${result.videoSetupSidebarWidth}w/${result.videoSetupOutputDeskWidth}w panes=${result.videoSetupRoutingPaneWidth}/${result.videoSetupMapPaneWidth}/${result.videoSetupInspectorPaneWidth} mapH=${result.videoSetupMapPaneHeight} overflow=${result.videoSetupMapPaneOverflowPx} reachable=${result.videoSetupMappingLastControlReachable ? 1 : 0}/${result.videoSetupPreviewContained ? 1 : 0}/${result.videoSetupActionDockLastActionReachable ? 1 : 0} dock=${result.visibleVideoSetupActionDockCount}/${result.videoSetupActionDockHeight} actions=${result.videoSetupCriticalActionInViewportCount} videoSetupProjectorSurfaceContained=${result.videoSetupProjectorSurfaceContained} videoSetupActionDockLastActionReachable=${result.videoSetupActionDockLastActionReachable} videoSetupActionDockInViewport=${result.videoSetupActionDockInViewport}`
         : "";
       const ioSetupSuffix = result.label.startsWith("setup-io-")
-        ? ` io=${result.ioConnectionCardCount}/6 active=${result.ioActiveConnectionId}:${result.ioVisibleZoneCount} tabs=${result.ioSubTabButtonCount} controls=${result.ioActiveZoneVisibleControlCount ?? "?"} disclosures=${result.ioDisclosureCount} scroll=${result.ioDocumentAndAppScrollZero ? 0 : 1}`
+        ? ` io=${result.ioConnectionCardCount}/7 active=${result.ioActiveConnectionId}:${result.ioVisibleZoneCount} tabs=${result.ioSubTabButtonCount} controls=${result.ioActiveZoneVisibleControlCount ?? "?"} disclosures=${result.ioDisclosureCount} scroll=${result.ioDocumentAndAppScrollZero ? 0 : 1}`
         : "";
       const editVisualSuffix = result.label.startsWith("control-edit-position-") || result.label.startsWith("control-edit-color-")
         ? ` editVisual=${result.visiblePanTiltPadCount}/${result.visiblePositionReadoutCount}/${result.visibleColorPlaneCount}/${result.visibleColorReadoutCount}/${result.visibleGroupControlBannerCount}/${result.visibleControlFaderWriteHeaderCount}/${result.visibleGroupControlFaderWriteHeaderCount}`
