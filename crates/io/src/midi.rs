@@ -191,6 +191,7 @@ pub enum MidiControlEvent {
         group_id: String,
         enabled: bool,
     },
+    ToggleCue(CueId),
     TriggerCue(CueId),
     TriggerCueWithDirection {
         cue_id: CueId,
@@ -355,6 +356,7 @@ control_plane_variant_inventory!(
     GroupHighlight => MidiControlAction::GroupHighlight,
     GroupSolo => MidiControlAction::GroupSolo,
     GroupPark => MidiControlAction::GroupPark,
+    ToggleCue => MidiControlAction::ToggleCue,
     TriggerCue => MidiControlAction::TriggerCue,
     FlashCue => MidiControlAction::FlashCue,
     TriggerCueDirection => MidiControlAction::TriggerCueDirection,
@@ -426,6 +428,7 @@ control_plane_variant_inventory!(
     SetGroupHighlight => MidiControlEvent::SetGroupHighlight { .. },
     SetGroupSolo => MidiControlEvent::SetGroupSolo { .. },
     SetGroupPark => MidiControlEvent::SetGroupPark { .. },
+    ToggleCue => MidiControlEvent::ToggleCue(_),
     TriggerCue => MidiControlEvent::TriggerCue(_),
     TriggerCueWithDirection => MidiControlEvent::TriggerCueWithDirection { .. },
     ReleaseCue => MidiControlEvent::ReleaseCue(_),
@@ -506,11 +509,21 @@ pub fn list_midi_outputs() -> Result<Vec<MidiOutputSummary>, MidiError> {
 }
 
 pub fn connect_midi_feedback_output(port_index: usize) -> Result<MidiFeedbackOutput, MidiError> {
+    connect_midi_feedback_output_named(port_index, None)
+}
+
+pub fn connect_midi_feedback_output_named(
+    port_index: usize,
+    expected_name: Option<&str>,
+) -> Result<MidiFeedbackOutput, MidiError> {
     let output = MidiOutput::new("syndocal-midi-feedback")?;
     let ports = output.ports();
     let port = ports
         .get(port_index)
         .ok_or(MidiError::MissingPort(port_index))?;
+    if expected_name.is_some_and(|name| output.port_name(port).ok().as_deref() != Some(name)) {
+        return Err(MidiError::Connect("MIDI feedback device changed; scan and select it again".into()));
+    }
     let connection = output
         .connect(port, "syndocal-midi-feedback-output")
         .map_err(|error| MidiError::Connect(error.to_string()))?;
@@ -866,7 +879,8 @@ fn feedback_value_for_mapping(
             });
             Some(if parked { 1.0 } else { 0.0 })
         }
-        MidiControlAction::TriggerCue
+        MidiControlAction::ToggleCue
+        | MidiControlAction::TriggerCue
         | MidiControlAction::FlashCue
         | MidiControlAction::TriggerCueDirection
         | MidiControlAction::FlashCueDirection => {
@@ -1477,6 +1491,8 @@ fn event_from_mapping(
             group_id: mapping.group_id.as_ref()?.clone(),
             enabled: midi_message_enabled(message),
         }),
+        MidiControlAction::ToggleCue => is_mapping_trigger(mapping, message)
+            .then_some(mapping.cue_id?).map(MidiControlEvent::ToggleCue),
         MidiControlAction::TriggerCue => {
             if is_mapping_trigger(mapping, message) {
                 Some(MidiControlEvent::TriggerCue(mapping.cue_id?))
@@ -2253,6 +2269,42 @@ mod tests {
             &mut decoder
         )
         .is_empty());
+    }
+
+    #[test]
+    fn midi_scene_toggle_presses_and_feedback_track_active_scene() {
+        let mut mapping = MidiControlMapping {
+            channel: None,
+            message: MidiControlMessage::NoteOn,
+            number: 60,
+            action: MidiControlAction::ToggleCue,
+            fixture_id: None,
+            attribute: None,
+            group_id: None,
+            cue_id: Some(9),
+            layer_id: None,
+            video_param: None,
+            cue_point_index: None,
+            output_id: None,
+            duration_ms: None,
+            feedback: None,
+            low: 0.0,
+            high: 1.0,
+        };
+        assert_eq!(events_from_midi_message(&[0x90,60,127], &[mapping.clone()]), vec![MidiControlEvent::ToggleCue(9)]);
+        assert!(events_from_midi_message(&[0x90,60,0], &[mapping.clone()]).is_empty());
+        assert!(events_from_midi_message(&[0x80,60,0], &[mapping.clone()]).is_empty());
+        mapping.feedback = Some(protocol::MidiControlFeedback {
+            off: Some(MidiFeedbackMessage { message: MidiControlMessage::NoteOn, channel: 0, number: 60, value: 0 }),
+            on: Some(MidiFeedbackMessage { message: MidiControlMessage::NoteOn, channel: 0, number: 60, value: 127 }),
+            unknown: None,
+        });
+        let mut snapshot = EngineSnapshot::default();
+        assert_eq!(build_feedback_messages(&snapshot, &[mapping.clone()]), vec![vec![0x90,60,0]]);
+        snapshot.active_group_cue_ids.insert("front".into(),9);
+        assert_eq!(build_feedback_messages(&snapshot, &[mapping.clone()]), vec![vec![0x90,60,127]]);
+        snapshot.active_group_cue_ids.clear();
+        assert_eq!(build_feedback_messages(&snapshot, &[mapping]), vec![vec![0x90,60,0]]);
     }
 
     #[test]

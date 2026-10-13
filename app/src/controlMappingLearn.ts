@@ -16,6 +16,8 @@ export type ControlLearnMode = "midi" | "osc" | "dmx";
 export interface ControlMappingTarget {
   action: MidiControlAction & OscControlAction;
   label: string;
+  /** MIDI behavior may differ from one-shot OSC actions, e.g. a scene pad. */
+  midi_action?: MidiControlAction;
   fixture_id?: number | null;
   attribute?: string | null;
   group_id?: string | null;
@@ -89,6 +91,7 @@ export const controlMappingTargetsFromElement = (
 
 export const controlMappingTargetKey = (target: ControlMappingTarget) => JSON.stringify({
   action: target.action,
+  midi_action: target.midi_action ?? null,
   fixture_id: target.fixture_id ?? null,
   attribute: target.attribute ?? null,
   group_id: target.group_id ?? null,
@@ -123,6 +126,13 @@ export const midiMappingsFromLearnedControl = (
   message: learned.message,
   number: learned.number,
   ...mappingFieldsForTarget(normalizedTarget(target)),
+  action: target.midi_action ?? target.action,
+  ...((target.midi_action === "ToggleCue" || target.midi_action === "FlashCue")
+      && (learned.message === "NoteOn" || learned.message === "ControlChange")
+    ? { feedback: {
+        off: { message: learned.message, channel: learned.channel, number: learned.number, value: 0 },
+        on: { message: learned.message, channel: learned.channel, number: learned.number, value: 127 },
+      } } : {}),
 }));
 
 export const oscMappingsFromLearnedControl = (

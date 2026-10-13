@@ -1,8 +1,12 @@
 # Syndocal historical v1.0 / current v1.2 alpha Release Status
 
+## 2026-10-13 alpha.78 BO, MIDI and extension candidate
+
+Current candidate metadata is `1.2.0-alpha.78`. Managed USB output completion, direct MIDI fader events, scene toggle/feedback, extension choice and Control Edit/Live boundaries are recorded in [the checkpoint](qa/EXTENSIONS_MIDI_BLACKOUT_ALPHA78_2026-10-13.md). Native/package/device gates remain distinct. Distributed alpha.77 artifacts are immutable.
+
 ## 2026-10-13 alpha.77 MIDI synchronization and inline scene naming
 
-Current candidate metadata is `1.2.0-alpha.77`. One-shot native UI bootstrap replaces the tracked initialization loop that repeatedly invalidated mapping writes. Scene names can be saved directly inside their Bank; project replacements retire pending edits and Learn selection. Evidence and remaining acceptance are tracked in [the checkpoint](qa/MIDI_SCENE_NEW_ALPHA77_2026-10-13.md). Distributed alpha.76 remains immutable.
+Recorded candidate metadata was `1.2.0-alpha.77`. One-shot native UI bootstrap replaces the tracked initialization loop that repeatedly invalidated mapping writes. Scene names can be saved directly inside their Bank; project replacements retire pending edits and Learn selection. Evidence and remaining acceptance are tracked in [the checkpoint](qa/MIDI_SCENE_NEW_ALPHA77_2026-10-13.md). Distributed alpha.76 remains immutable.
 
 ## 2026-10-12 alpha.76 MIDI Learn, project creation and blackout repair candidate
 

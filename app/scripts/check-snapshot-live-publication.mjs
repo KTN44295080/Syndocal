@@ -29,8 +29,14 @@ const findArrow = (name) => {
 };
 
 const sync = findArrow("applyEngineSnapshotSyncResponse");
+const faderProjection = findArrow("snapshotFaderValues");
+const faderSource = await readFile(new URL("../src/createFaderValueController.ts", import.meta.url), "utf8");
+const faderModule = ts.transpileModule(faderSource, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText;
+const { createFaderValueController } = await import(`data:text/javascript;base64,${Buffer.from(faderModule).toString("base64")}`);
 const accepted = findArrow("applyAcceptedEngineSnapshot");
 assert.ok(ts.isBlock(accepted.body), "accepted snapshot application must remain block-bodied");
+const acceptedFader = accepted.body.statements.find(statement => statement.getText(parsed).startsWith("setFaderValues("));
+assert.ok(acceptedFader, "live fader application must be outside project-state/draft-only branches");
 const acceptedPrefix = accepted.body.statements.slice(0, 3).map((statement) => statement.getText(parsed)).join("\n");
 assert.match(acceptedPrefix, /^latestEngineSnapshot = next;/);
 assert.match(acceptedPrefix, /setLiveDmxPreviews\(engineDmxPreviews\(next\)\)/);
@@ -57,6 +63,10 @@ let liveDmx = [];
 let liveFixtures = [];
 let snapshotRevision;
 let acceptedApplications = 0;
+let faderValues = {};
+const setFaderValues = update => { faderValues = update(faderValues); };
+const faderValueController = createFaderValueController({setValues:setFaderValues});
+const snapshotFaderValues = ${faderProjection.getText(parsed)};
 let rejected = false;
 const performance = { now: () => 1 };
 const mergeEngineSnapshotSyncResponse = (current, response) =>
@@ -68,16 +78,20 @@ const setLiveFixtures = (candidate) => { liveFixtures.push(candidate); };
 const setSnapshotRevision = (candidate) => { snapshotRevision = candidate; };
 const applyAcceptedEngineSnapshot = (next, syncProjectState, resetEditorDrafts) => {
   ${acceptedPrefix}
+  ${acceptedFader.getText(parsed)}
   acceptedApplications += 1;
 };
 const applyEngineSnapshotSyncResponse = ${sync.getText(parsed)};
 return (initial) => {
   latestEngineSnapshot = initial;
+  faderValueController.clearAll();
+  faderValues = snapshotFaderValues(initial);
   liveDmx = [];
   liveFixtures = [];
   snapshotRevision = undefined;
   acceptedApplications = 0;
   return {
+    optimistic: (key, value) => faderValueController.setOptimistic(key, value),
     apply: (response, syncUiState, shouldReject = false) => {
       rejected = shouldReject;
       return applyEngineSnapshotSyncResponse(response, syncUiState, {});
@@ -88,6 +102,7 @@ return (initial) => {
       liveFixtures,
       snapshotRevision,
       acceptedApplications,
+      faderValues,
     }),
   };
 };`;
@@ -95,7 +110,7 @@ const harnessJs = ts.transpileModule(harnessSource, {
   compilerOptions: { module: ts.ModuleKind.None, target: ts.ScriptTarget.ES2022 },
   fileName: "snapshot-live-publication-harness.ts",
 }).outputText;
-const harness = new Function("snapshotLiveFixtures", harnessJs)(snapshotLiveFixtures);
+const harness = new Function("snapshotLiveFixtures", "createFaderValueController", harnessJs)(snapshotLiveFixtures, createFaderValueController);
 const initial = {
   id: "A",
   fixtures: [{ id: 1, controls: [{ attribute: "Red" }], attribute_values: [{ attribute: "Red", value: 0 }] }],
@@ -150,3 +165,21 @@ assert.equal(successive.liveFixtures.length, 2);
 assert.equal(successive.acceptedApplications, 1);
 
 console.log("snapshot live publication: full/ui-delta/live-only/rejected/successive paths passed");
+
+const faderSession = harness(initial);
+const values = value => [{...initial.fixtures[0], attribute_values:[{attribute:'Red',value}]}];
+faderSession.apply({revision:21,delta:{fixtures:values(30000)}},false);
+assert.equal(faderSession.read().faderValues['1:Red'],30000,'MIDI/live-only delta updates visible values without editor synchronization');
+assert.equal(faderSession.read().acceptedApplications,0);
+const stableFaders=faderSession.read().faderValues;
+faderSession.apply({revision:22,delta:{fixtures:values(30000)}},false);
+assert.equal(faderSession.read().faderValues,stableFaders,'unchanged live values reuse state and do not repaint the fader tree');
+faderSession.optimistic('1:Red',40000);
+faderSession.apply({revision:23,delta:{fixtures:values(30000)}},false);
+assert.equal(faderSession.read().faderValues['1:Red'],40000,'an older snapshot cannot undo an owned GUI gesture');
+faderSession.apply({revision:24,delta:{fixtures:values(40000)}},false);
+faderSession.apply({revision:25,delta:{fixtures:values(10000)}},false);
+assert.equal(faderSession.read().faderValues['1:Red'],10000,'new MIDI value applies after the GUI gesture is acknowledged');
+faderSession.apply({revision:26,delta:{fixtures:values(50000)}},false,true);
+assert.equal(faderSession.read().faderValues['1:Red'],10000,'a rejected older project cannot update faders');
+console.log('PASS: actual live fader ingress, optimistic ordering, project rejection and unchanged-state reuse');

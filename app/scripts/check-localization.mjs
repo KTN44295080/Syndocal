@@ -245,8 +245,8 @@ const usbDmxPatternTranslations = [
     "Open DMXワーカーは稼働中で、完成済みU0ミラーフレームを公演周期でキュー済みです。キュー受理は灯体や物理配線への送達確認ではありません。",
   ],
   [
-    "Open DMX worker is armed only after an initial physical S0 zero transaction completed. Release Blackout admits the completed U0 mirror; this is not fixture or wire-delivery verification.",
-    "Open DMXワーカーは初回の物理S0ゼロトランザクション完了後にのみアーム済みになります。ブラックアウト解除で完成済みU0ミラーを許可します。これは灯体や物理配線への送達確認ではありません。",
+    "Open DMX worker started after its initial physical zero transaction. The existing safety blackout state is preserved; clear S0 admits the completed U0 mirror. This is not fixture or wire-delivery verification.",
+    "USB-DMXを開始しました。初回ゼロ送信を確認し、既存の安全ブラックアウト状態を保持しています。灯体への送達確認ではありません。",
   ],
   [
     "Open DMX worker stopped after an S0 zero BREAK/MAB/write_all/flush transaction completed. This is not fixture or wire-delivery verification.",

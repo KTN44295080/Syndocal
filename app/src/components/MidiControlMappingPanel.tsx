@@ -129,6 +129,7 @@ export function MidiControlMappingPanel(props: MidiControlMappingPanelProps) {
                 MIDI input
                 <select
                   data-io-control="midi-input"
+                  disabled={props.learnBusy}
                   value={props.selectedMidiInput ?? ""}
                   onInput={(event) => props.onSelectedMidiInput(event.currentTarget.value === "" ? null : Number(event.currentTarget.value))}
                 >
@@ -173,23 +174,23 @@ export function MidiControlMappingPanel(props: MidiControlMappingPanelProps) {
           <summary>MIDI feedback</summary>
           <div class="ioDisclosureBody mappingEditorDesk" data-io-disclosure-body>
             <h3>MIDI Feedback</h3>
-            <select data-io-control="midi-feedback-output" value={props.selectedMidiOutput ?? ""} onInput={(event) => props.onSelectedMidiOutput(Number(event.currentTarget.value))}>
+            <select data-io-control="midi-feedback-output" disabled={props.learnBusy} value={props.selectedMidiOutput ?? ""} onInput={(event) => props.onSelectedMidiOutput(Number(event.currentTarget.value))}>
               <For each={props.midiOutputs}>{(output) => <option data-no-localize value={output.index}>{output.name}</option>}</For>
             </select>
             <div class="buttonRow">
               <button
                 class="primary"
                 onClick={() => void props.onConnectFeedback()}
-                disabled={props.midiOutputs.length === 0 || props.feedbackConnected}
+                disabled={props.learnBusy || props.midiOutputs.length === 0 || props.feedbackConnected}
               >Connect Feedback</button>
-              <button onClick={() => void props.onDisconnectFeedback()} disabled={!props.feedbackConnected}>Disconnect Feedback</button>
-              <button onClick={() => void props.onSendFeedback()} disabled={!props.feedbackConnected || props.mappings.length === 0}>Send Feedback</button>
+              <button onClick={() => void props.onDisconnectFeedback()} disabled={props.learnBusy || !props.feedbackConnected}>Disconnect Feedback</button>
+              <button onClick={() => void props.onSendFeedback()} disabled={props.learnBusy || !props.feedbackConnected || props.mappings.length === 0}>Send Feedback</button>
             </div>
             <label class="checkbox">
               <input
                 type="checkbox"
                 checked={props.feedbackEnabled}
-                disabled={!props.feedbackConnected}
+                disabled={props.learnBusy || !props.feedbackConnected}
                 onChange={(event) => props.onFeedbackEnabled(event.currentTarget.checked)}
               />
               Auto feedback
@@ -251,7 +252,8 @@ export function MidiControlMappingPanel(props: MidiControlMappingPanelProps) {
             <option value="GroupHighlight">Group Highlight</option>
             <option value="GroupSolo">Group Solo</option>
             <option value="GroupPark">Group Park</option>
-            <option value="TriggerCue">Trigger Cue</option>
+            <option value="ToggleCue">Scene play / stop</option>
+            <option value="TriggerCue">Trigger Cue (play only)</option>
             <option value="FlashCue">Flash Cue (hold)</option>
             <option value="TriggerCueDirection">Directional Cue</option>
             <option value="FlashCueDirection">Directional Cue (hold)</option>
@@ -324,7 +326,7 @@ export function MidiControlMappingPanel(props: MidiControlMappingPanelProps) {
           </select>
         </label>
       </Show>
-      <Show when={props.mapAction === "TriggerCue" || props.mapAction === "FlashCue" || props.mapAction === "TriggerCueDirection" || props.mapAction === "FlashCueDirection" || props.mapAction === "TriggerCueListNext"}>
+      <Show when={props.mapAction === "ToggleCue" || props.mapAction === "TriggerCue" || props.mapAction === "FlashCue" || props.mapAction === "TriggerCueDirection" || props.mapAction === "FlashCueDirection" || props.mapAction === "TriggerCueListNext"}>
         <label>
           Cue
           <select value={props.selectedCueId ?? ""} onInput={(event) => props.onMapCueId(Number(event.currentTarget.value))}>

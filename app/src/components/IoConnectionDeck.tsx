@@ -1,7 +1,7 @@
 import { For, Show, createMemo, type JSX } from "solid-js";
 import "../setupIo.css";
 
-export type IoConnectionId = "dmx" | "audio" | "midi" | "osc" | "web" | "dj";
+export type IoConnectionId = "dmx" | "audio" | "midi" | "osc" | "web" | "dj" | "extensions";
 export type IoConnectionStateTone = "ok" | "idle" | "warning" | "error";
 
 /**
@@ -42,6 +42,7 @@ export interface SetupIoConnectionDeckProps {
   webRemoteRunning: boolean;
   djListenerRunning: boolean;
   djLinkEnabled: boolean;
+  djLinkInstalled?: boolean;
   onConnectMidiClock: () => unknown;
   onDisconnectMidiClock: () => unknown;
   onStartOsc: () => unknown;
@@ -239,7 +240,8 @@ export function SetupIoConnectionDeck(props: SetupIoConnectionDeckProps) {
         ? <button type="button" onClick={() => void props.onDisarmDjLink()}>Disarm</button>
         : <button type="button" onClick={() => void props.onArmDjLink()}>Arm</button>,
     },
-  ];
+    { id: "extensions", label: "Extensions", summary: "Optional integrations", state: props.djLinkInstalled ? "DJ Link enabled" : "Core app", stateTone: "idle" },
+  ].filter((item) => item.id !== "dj" || props.djLinkInstalled === true) as IoConnectionDeckItem[];
 
   return (
     <IoConnectionDeck

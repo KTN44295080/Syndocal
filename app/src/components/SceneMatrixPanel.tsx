@@ -1211,6 +1211,7 @@ export function SceneMatrixPanel(props: SceneMatrixPanelProps) {
                                 data-scene-flash-cue={flashMode() ? cue.id : undefined}
                                 {...controlMappingTargetData({
                                   action: "TriggerCue",
+                                  midi_action: flashMode() ? "FlashCue" : "ToggleCue",
                                   cue_id: cue.id,
                                   label: `Cue ${cue.cue_number || cue.id} ${cue.label}`,
                                 })}

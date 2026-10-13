@@ -1,3 +1,5 @@
+import { createSceneEditWriteBarrier } from "./createSceneEditWriteBarrier";
+import { createMidiFaderInput } from "./midiFaderInput";
 import { createProjectControlMappingsFlusher } from "./createProjectControlMappingsFlusher";
 import { createSceneRenameController } from "./createSceneRenameController";
 import { installControlLearnCapture } from "./createControlLearnCapture";
@@ -69,6 +71,7 @@ import {
   type DmxUniverseMap,
 } from "./components/DmxPatchMapPanel";
 import { DmxOutputConfigPanel } from "./components/DmxOutputConfigPanel";
+import { ExtensionsPanel, type ExtensionStatus } from "./components/ExtensionsPanel";
 import { IoDisclosure, SetupIoConnectionDeck, type IoConnectionId } from "./components/IoConnectionDeck";
 import { DmxInputPanel } from "./components/DmxInputPanel";
 import { DmxRawMonitor } from "./components/DmxRawMonitor";
@@ -1981,6 +1984,26 @@ export default function App() {
   const [videoTopSplitRatio, setVideoTopSplitRatio] = createSignal(initialWorkspaceLayout.video_top_split_ratio);
   const [lowerSplitRatio, setLowerSplitRatio] = createSignal(initialWorkspaceLayout.lower_split_ratio);
   const [activeIoConnection, setActiveIoConnection] = createSignal<IoConnectionId>("dmx");
+  const [extensionStatus, setExtensionStatus] = createSignal<ExtensionStatus>({ configured: true, dj_link_enabled: false, error: null });
+  const [extensionBusy, setExtensionBusy] = createSignal(false);
+  const refreshExtensions = async () => {
+    try {
+      const status = await invoke<ExtensionStatus>("get_extensions_status");
+      setExtensionStatus(status);
+      if (!status.configured) { setWorkspaceTab("setup"); setSetupSubTab("io"); setActiveIoConnection("extensions"); }
+    } catch (error) { setExtensionStatus({ configured: false, dj_link_enabled: false, error: String(error) }); }
+  };
+  const changeExtensions = async (enabled: boolean) => {
+    if (extensionBusy()) return;
+    setExtensionBusy(true);
+    try {
+      setExtensionStatus(await invoke<ExtensionStatus>("set_extensions", { djLinkEnabled: enabled }));
+      await refreshDjLinkMachineStatus();
+      await refreshRemoteControlStatus();
+    }
+    catch (error) { setMessage(String(error)); }
+    finally { setExtensionBusy(false); }
+  };
   const [uiScale, setUiScale] = createSignal<UiScale>(loadUiScale());
   const [uiLocale, setUiLocale] = createSignal<UiLocale>(loadUiLocale());
   const [setupSubTab, setSetupSubTab] = createSignal<SetupSubTab>(initialWorkspaceLayout.setup_sub_tab);
@@ -2013,7 +2036,11 @@ export default function App() {
   const [touchControlDomain, setTouchControlDomain] = createSignal<"lighting" | "video" | "both">("lighting");
   const [liveStatusExpanded, setLiveStatusExpanded] = createSignal(false);
   const [authoredEffectEnableControlId, setAuthoredEffectEnableControlId] = createSignal<number | null>(null);
-  const [editDeskSurface, setEditDeskSurface] = createSignal<EditDeskSurface>(initialWorkspaceLayout.edit_desk_surface);
+  const editDeskSurface = (): EditDeskSurface => controlCategory() === "fader" ? "faders" : "attributes";
+  const setEditDeskSurface = (surface: EditDeskSurface) => {
+    if (surface === "faders") setControlCategory("fader");
+    else if (controlCategory() === "fader") setControlCategory("dimmer");
+  };
   const [revealedSourceCueId, setRevealedSourceCueId] = createSignal<number | null>(null);
   const [revealedSourceCueRevision, setRevealedSourceCueRevision] = createSignal(0);
   const [profile, setProfile] = createSignal<FixtureProfileSummary | null>(null);
@@ -2159,6 +2186,17 @@ export default function App() {
   const [wheelMediaMissing, setWheelMediaMissing] = createSignal<Record<string, true>>({});
   const [faderValues, setFaderValues] = createSignal<Record<string, number>>({});
   const faderValueController = createFaderValueController({ setValues: setFaderValues });
+  const midiFaderInput = createMidiFaderInput({
+    projectEpoch: () => captureProjectAuthorityIdentity().project_epoch,
+    apply: faderValueController.applyMidiInput,
+  });
+  createEffect(() => { if (!midiControlConnected()) midiFaderInput.setConnection(null); });
+  let midiFaderMappingsIdentity: string | null = null;
+  createEffect(() => {
+    const identity = JSON.stringify(midiMappings());
+    if (identity !== midiFaderMappingsIdentity) midiFaderInput.setConnection(null);
+    midiFaderMappingsIdentity = identity;
+  });
   const continuousFixtureFader = createContinuousFixtureFader(invoke);
   onCleanup(continuousFixtureFader.cancel);
   const [rawDmxUniverse, setRawDmxUniverse] = createSignal(0);
@@ -5598,7 +5636,6 @@ export default function App() {
     // Persisted retired drawer state fails closed to the closed drawer; the
     // Timeline Create-scene route was removed and must never restore.
     setTimelineContextDrawer(layout.timeline_context_drawer === "cue" ? "none" : layout.timeline_context_drawer);
-    setEditDeskSurface(layout.edit_desk_surface);
     setControlCategory(layout.control_category);
     setTopSplitRatio(layout.top_split_ratio);
     setVideoTopSplitRatio(layout.video_top_split_ratio);
@@ -11278,7 +11315,7 @@ export default function App() {
       setMessage("Nothing to undo.");
       return;
     }
-    if (!isTauriRuntime()) {
+    if (!isTauriRuntime() && viewportFixture !== "edit-live") {
       const entry = viewportSceneMatrixBankMoveUndo();
       if (!entry) return;
       setSnapshot((current) => ({
@@ -11717,6 +11754,8 @@ export default function App() {
         .join(",");
     }
     setSnapshot(next);
+    // Live values are runtime state; they must not wait for project/draft synchronization.
+    setFaderValues((current) => faderValueController.mergeSnapshotValues(current, snapshotFaderValues(next)));
     if (resetEditorDrafts) {
       setTimelineViewportState((current) => reconcileTimelineViewportState(
         current,
@@ -11741,7 +11780,6 @@ export default function App() {
       }
       setOutput(next.output);
       setDmxOutputRoutes(next.dmx_outputs.length > 0 ? next.dmx_outputs : [next.output]);
-      setFaderValues((current) => faderValueController.mergeSnapshotValues(current, snapshotFaderValues(next)));
       syncVideoOutputConfigDrafts(next.video.outputs);
       syncCueMetadataDrafts(next.cues, next.effects);
       syncTimelineEventDrafts(next.timeline.events);
@@ -11851,6 +11889,9 @@ export default function App() {
       latestEngineSnapshot = next;
       setLiveDmxPreviews(engineDmxPreviews(next));
       setLiveFixtures(snapshotLiveFixtures(next));
+      if (response.delta?.fixtures) {
+        setFaderValues((current) => faderValueController.mergeSnapshotValues(current, snapshotFaderValues(next)));
+      }
       setSnapshotRevision(response.revision);
     }
     return next;
@@ -12081,14 +12122,26 @@ export default function App() {
       window.clearInterval(recoveryTimer);
     }
   });
+  onMount(() => {
+    if (!isTauriRuntime()) return;
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void listen<unknown>("syndocal://midi-fader-input-v1", ({ payload }) => {
+      if (!disposed) midiFaderInput.accept(payload);
+    }).then((stop) => { if (disposed) stop(); else unlisten = stop; })
+      .catch((error) => setMessage(String(error)));
+    onCleanup(() => { disposed = true; unlisten?.(); midiFaderInput.setConnection(null); });
+  });
   // Bootstrap reads capture reactive project/input signals synchronously.
   // They must run once: a tracked effect restarts hydration on each mapping ACK
   // and invalidates that same write while Learn is trying to reconnect.
   onMount(() => {
     if (!isTauriRuntime()) {
+      if (viewportFixture) setExtensionStatus({ configured: true, dj_link_enabled: true, error: null });
       setMessage(tauriBackendUnavailableMessage);
       return;
     }
+    void refreshExtensions();
     void refreshFixtureGroups();
     void refreshSnapshot();
     void refreshEngineTelemetryReport();
@@ -12913,13 +12966,21 @@ export default function App() {
       fixture_id: target.fixture_id,
       values: target.values.map((value) => ({ ...value })),
     }));
+  const [controlFaderModeChanging, setControlFaderModeChanging] = createSignal(false);
+  const controlFaderWriteBlocked = () => workspaceTab() === "control" && controlMode() === "edit"
+    && (controlFaderModeChanging() || controlFaderWriteMode() === "edit" && !selectedSceneCue());
+  const allowControlFaderWrite = () => {
+    if (!controlFaderWriteBlocked()) return true;
+    if (!controlFaderModeChanging()) setMessage("Select a scene to edit, or switch to Live.");
+    return false;
+  };
   const controlEditCueIdForWrite = () =>
     workspaceTab() === "control"
     && controlMode() === "edit"
-    && editDeskSurface() === "attributes"
     && controlFaderWriteMode() === "edit"
       ? selectedSceneCue()?.id ?? null
       : null;
+  const sceneEditWriteBarrier = createSceneEditWriteBarrier(() => controlEditCueIdForWrite() !== null);
   const controlEditTargetKey = (target: ControlEditCaptureTarget) =>
     target.kind === "selectedFixture"
       ? `fixture:${target.fixtureId}`
@@ -13100,16 +13161,24 @@ export default function App() {
       void flushControlEditLookUpdates();
     }, 240);
   };
-  const changeControlFaderWriteMode = (mode: ControlFaderWriteMode) => {
-    if (controlFaderWriteMode() === mode) return;
-    if (mode === "live") void flushControlEditLookUpdates();
-    setControlFaderWriteMode(mode);
+  const changeControlFaderWriteMode = async (mode: ControlFaderWriteMode) => {
+    if (controlFaderModeChanging() || controlFaderWriteMode() === mode) return;
+    if (mode === "edit" && !selectedSceneCue()) { setMessage("Select a scene to edit, or switch to Live."); return; }
+    setControlFaderModeChanging(true);
+    try {
+      // Do not let later Live values enter an outstanding Edit capture.
+      if (mode === "live") {
+        await sceneEditWriteBarrier.settle();
+        await flushControlEditLookUpdates();
+      }
+      setControlFaderWriteMode(mode);
+    } catch (error) { setMessage(String(error)); }
+    finally { setControlFaderModeChanging(false); }
   };
   createEffect(() => {
     const armed =
       workspaceTab() === "control"
       && controlMode() === "edit"
-      && editDeskSurface() === "attributes"
       && controlFaderWriteMode() === "edit"
       && !snapshot().programmer.blind;
     if (!armed) return;
@@ -13177,8 +13246,9 @@ export default function App() {
     });
   };
 
-  const setAttribute = async (fixtureId: number, attribute: string, value: number) => {
+  const setAttribute = (fixtureId: number, attribute: string, value: number) => sceneEditWriteBarrier.track(async () => {
     setSceneFxStagePreview(null);
+    if (!allowControlFaderWrite()) return;
     const editCueId = controlEditCueIdForWrite();
     faderValueController.setOptimistic(`${fixtureId}:${attribute}`, value);
     if (viewportFixture === "blind") {
@@ -13205,10 +13275,11 @@ export default function App() {
       faderValueController.clearOptimistic(`${fixtureId}:${attribute}`, value);
       setMessage(String(error));
     }
-  };
+  });
 
-  const setGroupAttribute = async (groupId: string, attribute: string, value: number) => {
+  const setGroupAttribute = (groupId: string, attribute: string, value: number) => sceneEditWriteBarrier.track(async () => {
     setSceneFxStagePreview(null);
+    if (!allowControlFaderWrite()) return;
     const editCueId = controlEditCueIdForWrite();
     const fixtureIds = snapshot()
       .fixtures
@@ -13241,16 +13312,16 @@ export default function App() {
       for (const fixtureId of fixtureIds) faderValueController.clearOptimistic(`${fixtureId}:${attribute}`, value);
       setMessage(String(error));
     }
-  };
+  });
 
   const pickedFixtureTypeGroup = (typeKey: string) =>
     pickedFixtureTypeGroups().find((group) => group.key === typeKey);
 
-  const setFixtureTypeControlValue = async (
+  const setFixtureTypeControlValue = (
     typeKey: string,
     attribute: string,
     value: number,
-  ) => {
+  ) => sceneEditWriteBarrier.track(async () => {
     const nextValue = clampDmxValue(value);
     const group = pickedFixtureTypeGroup(typeKey);
     if (!group) return;
@@ -13259,6 +13330,7 @@ export default function App() {
       return control ? [{ fixture_id: fixture.id, attribute: control.attribute }] : [];
     });
     if (!targets.length) return;
+    if (!allowControlFaderWrite()) return;
     const editCueId = controlEditCueIdForWrite();
     setSceneFxStagePreview(null);
     for (const target of targets) faderValueController.setOptimistic(
@@ -13294,7 +13366,7 @@ export default function App() {
       );
       setMessage(String(error));
     }
-  };
+  });
 
   const resetFixtureTypeControlValue = (
     typeKey: string,
@@ -16562,8 +16634,9 @@ export default function App() {
     }
   };
 
-  const setFixtureColor = async (hexColor: string) => {
+  const setFixtureColor = (hexColor: string) => sceneEditWriteBarrier.track(async () => {
     setSceneFxStagePreview(null);
+    if (!allowControlFaderWrite()) return;
     const editCueId = controlEditCueIdForWrite();
     const fixture = selectedControlReferenceFixture();
     const controls = selectedColorControls();
@@ -16641,7 +16714,7 @@ export default function App() {
     } catch (error) {
       setMessage(String(error));
     }
-  };
+  });
 
   const setPanTiltFromPointer = async (event: PointerEvent) => {
     const fixture = selectedControlReferenceFixture();
@@ -16738,7 +16811,7 @@ export default function App() {
     }
   };
 
-  const setTouchBindingValue = async (binding: TouchControlBinding, normalizedValue: number) => {
+  const setTouchBindingValue = (binding: TouchControlBinding, normalizedValue: number) => sceneEditWriteBarrier.track(async () => {
     const normalized = clamp01(normalizedValue);
     const value = Math.round(normalized * 65_535);
     switch (binding.kind) {
@@ -16754,7 +16827,8 @@ export default function App() {
           binding.min_value + (binding.max_value - binding.min_value) * ranged,
         );
         const fixtureIds = [...new Set(binding.targets.map((target) => target.fixture_id))];
-        const editCueId = controlEditCueIdForWrite();
+        if (!allowControlFaderWrite()) return;
+    const editCueId = controlEditCueIdForWrite();
         setSceneFxStagePreview(null);
         setFaderValues((current) => {
           const next = { ...current };
@@ -16805,7 +16879,7 @@ export default function App() {
       default:
         break;
     }
-  };
+  });
 
   const setTouchBindingColor = async (binding: TouchControlBinding, color: string) => {
     if (binding.kind === "selected_fixture_color") {
@@ -17993,6 +18067,7 @@ export default function App() {
     startOscInput,
     stopOscInput,
   } = createControlInputController({
+    onMidiControlConnection: midiFaderInput.setConnection,
     onMidiLearnBusy: setControlLearnBusy,
     listenMidiLearnReady: (handler) => listen<{ learn_request_id: string; project_epoch: number }>(
       "syndocal://midi-learn-ready", (event) => handler(event.payload),
@@ -18004,6 +18079,8 @@ export default function App() {
     setMessage,
     selectedFixture,
     selectedEffectAttribute,
+    midiInputs,
+    midiOutputs,
     setMidiInputs,
     setMidiOutputs,
     selectedMidiInput,
@@ -25104,14 +25181,7 @@ export default function App() {
     return true;
   };
 
-  const selectEditDeskSurface = (surface: EditDeskSurface) => {
-    setEditDeskSurface(surface);
-    if (surface === "faders") {
-      setControlCategory("fader");
-    } else if (controlCategory() === "fader") {
-      setControlCategory("dimmer");
-    }
-  };
+  const selectEditDeskSurface = (surface: EditDeskSurface) => setEditDeskSurface(surface);
 
   const selectTimelineDeskSurface = (surface: TimelineDeskSurface) => {
     setTimelineDeskSurface(surface);
@@ -28089,25 +28159,8 @@ export default function App() {
           controlHeaderTitle={workspaceTab() === "touch" ? "Faders" : faderDeskTitle()}
           controlHeaderTools={
             <>
-              <Show when={workspaceTab() === "control" && controlMode() === "edit"}>
-                <nav class="editDeskTabs" aria-label="Live edit desk surface">
-                  <button
-                    class={editDeskSurface() === "faders" ? "active" : ""}
-                    aria-pressed={editDeskSurface() === "faders"}
-                    onClick={() => selectEditDeskSurface("faders")}
-                  >
-                    Faders
-                  </button>
-                  <button
-                    class={editDeskSurface() === "attributes" ? "active" : ""}
-                    aria-pressed={editDeskSurface() === "attributes"}
-                    onClick={() => selectEditDeskSurface("attributes")}
-                  >
-                    Attributes
-                  </button>
-                </nav>
-              </Show>
               <ControlFaderWriteHeader
+                busy={controlFaderModeChanging()}
                 targetKind={controlTargetKind()}
                 compactReadout={controlCompactReadout()}
                 writeMode={controlFaderWriteMode()}
@@ -28448,12 +28501,11 @@ export default function App() {
           </Portal>
           </Show>
           <FaderAttributeEditorPanel
+            disabled={controlFaderWriteBlocked()}
+            disabledMessage={!selectedSceneCue() ? "Select a scene to edit, or switch to Live." : undefined}
             categories={controlCategoryRows()}
             activeCategory={activeControlCategory()}
-            onCategory={(category) => {
-              setControlCategory(category);
-              setEditDeskSurface(category === "fader" ? "faders" : "attributes");
-            }}
+            onCategory={setControlCategory}
           >
           <Show
             when={showFixtureTypeAttributeColumns()}
@@ -28891,6 +28943,7 @@ export default function App() {
             webRemoteRunning={genericRemoteRunning()}
             djListenerRunning={djListenerRunning()}
             djLinkEnabled={djLinkEnabled()}
+            djLinkInstalled={extensionStatus().dj_link_enabled}
             onConnectMidiClock={connectMidiClock}
             onDisconnectMidiClock={disconnectMidiClock}
             onStartOsc={startOscInput}
@@ -28899,7 +28952,9 @@ export default function App() {
             onStopWebRemote={stopRemoteControl}
             onArmDjLink={armDjLinkMachine}
             onDisarmDjLink={disarmDjLinkMachine}
-            renderWorkbench={(connection) => connection === "dmx" ? (
+            renderWorkbench={(connection) => connection === "extensions" ? (
+              <ExtensionsPanel status={extensionStatus()} busy={extensionBusy()} onChange={changeExtensions} />
+            ) : connection === "dmx" ? (
           <section class="ioUnifiedZone ioUnifiedDmxZone" data-io-zone="dmx">
           <div class="ioOperatorSurface dmxOperatorSurface">
           <DmxOutputConfigPanel
@@ -29279,6 +29334,12 @@ export default function App() {
             onUnlock={unlockOperator}
           />
         )}
+      </Show>
+
+      <Show when={!extensionStatus().configured && !extensionStatus().error && isTauriRuntime()}>
+        <dialog class="extensionsFirstRun" aria-label="Choose extensions" onCancel={event => event.preventDefault()} ref={dialog => queueMicrotask(() => { if (dialog.isConnected && !dialog.open) dialog.showModal(); })}>
+          <ExtensionsPanel status={extensionStatus()} busy={extensionBusy()} onChange={changeExtensions} />
+        </dialog>
       </Show>
 
       <AppStatusLine

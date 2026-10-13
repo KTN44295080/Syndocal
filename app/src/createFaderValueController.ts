@@ -31,25 +31,49 @@ interface WriteSlot {
 export function createFaderValueController(options: FaderValueControllerOptions) {
   const optimisticValues = new Map<string, number>();
   const slots = new Map<string, WriteSlot>();
+  const receivedValues = new Map<string, { value: number; until: number }>();
+  const applyMidiInput = (incoming: FaderValueMap) => {
+    // A GUI write in flight retains its own ordering. Subsequent MIDI input
+    // replaces settled GUI optimism immediately. Polling recovers rejected
+    // input and cannot pin an unacknowledged projection indefinitely.
+    if (slots.size !== 0) return;
+    for (const [key, value] of Object.entries(incoming)) {
+      optimisticValues.delete(key);
+      receivedValues.set(key, { value, until: performance.now() + 200 });
+    }
+    options.setValues((current) => ({ ...current, ...incoming }));
+  };
 
   const setOptimistic = (key: string, value: number) => {
+    receivedValues.delete(key);
     optimisticValues.set(key, value);
     options.setValues((current) => ({ ...current, [key]: value }));
   };
 
   const mergeSnapshotValues = (current: FaderValueMap, incoming: FaderValueMap): FaderValueMap => {
-    const next = { ...current };
+    let next = current;
     for (const [key, value] of Object.entries(incoming)) {
+      const received = receivedValues.get(key);
+      if (received) {
+        if (value === received.value || performance.now() >= received.until) receivedValues.delete(key);
+        else continue;
+      }
       const optimistic = optimisticValues.get(key);
       if (optimistic !== undefined) {
         if (optimistic === value) {
           optimisticValues.delete(key);
         } else {
-          next[key] = optimistic;
+          if (next[key] !== optimistic) {
+            if (next === current) next = { ...current };
+            next[key] = optimistic;
+          }
           continue;
         }
       }
-      next[key] = value;
+      if (next[key] !== value) {
+        if (next === current) next = { ...current };
+        next[key] = value;
+      }
     }
     return next;
   };
@@ -97,7 +121,8 @@ export function createFaderValueController(options: FaderValueControllerOptions)
 
   const clearAll = () => {
     optimisticValues.clear();
+    receivedValues.clear();
   };
 
-  return { enqueue, setOptimistic, clearOptimistic, mergeSnapshotValues, clearAll };
+  return { enqueue, applyMidiInput, setOptimistic, clearOptimistic, mergeSnapshotValues, clearAll };
 }

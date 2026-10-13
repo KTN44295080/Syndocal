@@ -4650,6 +4650,7 @@ define_engine_command! {
     SetPlaybackMaster(f32),
     TriggerPlaybackExecutorNext(ExecutorId),
     TriggerPlaybackExecutorPrevious(ExecutorId),
+    ToggleCue(CueId),
     TriggerCue(CueId),
     TriggerCueWithDirection {
         cue_id: CueId,
@@ -5795,6 +5796,7 @@ macro_rules! engine_command_video_presentation_relevance {
             | EngineCommand::SetPlaybackMaster(_)
             | EngineCommand::TriggerPlaybackExecutorNext(_)
             | EngineCommand::TriggerPlaybackExecutorPrevious(_)
+            | EngineCommand::ToggleCue(_)
             | EngineCommand::TriggerCue(_)
             | EngineCommand::TriggerCueWithDirection { .. }
             | EngineCommand::TriggerNextCue
@@ -5872,6 +5874,7 @@ impl EngineCommand {
                 | EngineCommand::MidiClockPulse
                 | EngineCommand::MidiSongPositionPointer(_)
                 | EngineCommand::ResetTelemetry
+                | EngineCommand::ToggleCue(_)
                 | EngineCommand::TriggerCue(_)
                 | EngineCommand::TriggerCueWithDirection { .. }
                 | EngineCommand::TriggerNextCue
@@ -6055,6 +6058,7 @@ impl EngineCommand {
                 | EngineCommand::SetPlaybackMaster(_)
                 | EngineCommand::TriggerPlaybackExecutorNext(_)
                 | EngineCommand::TriggerPlaybackExecutorPrevious(_)
+                | EngineCommand::ToggleCue(_)
                 | EngineCommand::TriggerCue(_)
                 | EngineCommand::TriggerCueWithDirection { .. }
                 | EngineCommand::TriggerNextCue
@@ -12347,6 +12351,7 @@ impl EngineHandle {
             | EngineCommand::SetPlaybackMaster(_)
             | EngineCommand::TriggerPlaybackExecutorNext(_)
             | EngineCommand::TriggerPlaybackExecutorPrevious(_)
+            | EngineCommand::ToggleCue(_)
             | EngineCommand::TriggerCue(_)
             | EngineCommand::TriggerCueWithDirection { .. }
             | EngineCommand::TriggerNextCue
@@ -27377,6 +27382,17 @@ impl EngineRuntime {
                     self.request_cue(cue_id, Instant::now());
                 } else {
                     self.last_error = Some(format!("Cue List {cue_list_id} has no cues"));
+                }
+            }
+            EngineCommand::ToggleCue(cue_id) => {
+                let active = self.active_cue_id == Some(cue_id)
+                    || self.cue_lists.iter().any(|list| list.active_cue_id == Some(cue_id))
+                    || self.active_group_cue_ids.values().any(|id| *id == cue_id)
+                    || self.pending_cues.iter().any(|pending| pending.cue_id == cue_id);
+                if active {
+                    self.last_error = self.release_cue_with_value_restore(cue_id, Instant::now()).err();
+                } else {
+                    self.request_cue(cue_id, Instant::now());
                 }
             }
             EngineCommand::TriggerCue(cue_id) => {
@@ -53430,6 +53446,7 @@ fn auto_vj_manual_override_command(command: &EngineCommand) -> bool {
         EngineCommand::SetAllBlackout(_)
             | EngineCommand::TriggerPlaybackExecutorNext(_)
             | EngineCommand::TriggerPlaybackExecutorPrevious(_)
+            | EngineCommand::ToggleCue(_)
             | EngineCommand::TriggerCue(_)
             | EngineCommand::TriggerCueWithDirection { .. }
             | EngineCommand::TriggerNextCue
@@ -134334,6 +134351,68 @@ mod tests {
         eprintln!(
             "super-scene validation: self={self_error:?} cycle={cycle_error:?} nested=accepted"
         );
+    }
+
+    #[test]
+    fn live_fader_values_never_rewrite_saved_scene_targets() {
+        let mut runtime = child_graph_test_engine();
+        runtime.apply_command(EngineCommand::PatchFixture {
+            fixture_id: 1, request: sample_patch_request("Fixture", 1), profile: sample_profile(),
+        });
+        runtime.cues.push(runtime_cue_from_summary(&CueSummary {
+            id: 1, cue_list_id: 1,
+            targets: vec![CueFixtureTarget { fixture_id: 1, values: vec![
+                protocol::AttributeValueSummary { attribute: "Dimmer".into(), value: 12000 },
+            ] }],
+            ..CueSummary::default()
+        }));
+        let saved = runtime.cues[0].targets.clone();
+        runtime.active_cue_id = Some(1);
+        runtime.apply_command(EngineCommand::SetAttribute { fixture_id: 1, attribute: "Dimmer".into(), value: 30000 });
+        assert_eq!(runtime.values.get(&(1, "Dimmer".into())), Some(&30000));
+        assert_eq!(runtime.cues[0].targets, saved);
+        runtime.apply_command(EngineCommand::SetFixtureAttributeBatch {
+            targets: vec![TouchFeaturePresetTarget { fixture_id: 1, attribute: "Dimmer".into() }], value: 50000,
+        });
+        assert_eq!(runtime.values.get(&(1, "Dimmer".into())), Some(&50000));
+        assert_eq!(runtime.cues[0].targets, saved);
+    }
+
+    #[test]
+    fn midi_scene_toggle_stops_only_its_active_scene_and_preserves_play_only() {
+        let mut runtime = child_graph_test_engine();
+        let mut first = child_graph_plain_cue(1, 1);
+        first.group_id = Some("front".into());
+        first.recall_mode = RecallMode::Coexist;
+        let mut second = child_graph_plain_cue(2, 2);
+        second.group_id = Some("back".into());
+        second.recall_mode = RecallMode::Coexist;
+        runtime.load_project_snapshot_checked(child_graph_snapshot(vec![first, second])).unwrap();
+        runtime.apply_command(EngineCommand::ToggleCue(1));
+        assert_eq!(runtime.cue_lists[0].active_cue_id, Some(1));
+        runtime.apply_command(EngineCommand::TriggerCue(2));
+        runtime.apply_command(EngineCommand::ToggleCue(1));
+        assert_eq!(runtime.cue_lists[0].active_cue_id, None);
+        assert_eq!(runtime.cue_lists[1].active_cue_id, Some(2));
+        assert!(!runtime.active_group_cue_ids.values().any(|id| *id == 1));
+        runtime.apply_command(EngineCommand::TriggerCue(1));
+        runtime.apply_command(EngineCommand::TriggerCue(1));
+        assert_eq!(runtime.cue_lists[0].active_cue_id, Some(1));
+        runtime.apply_command(EngineCommand::ToggleCue(1));
+        assert_eq!(runtime.cue_lists[0].active_cue_id, None);
+    }
+
+    #[test]
+    fn midi_scene_toggle_cancels_pending_prewait_without_replaying_later() {
+        let mut runtime = child_graph_test_engine();
+        let mut cue = child_graph_plain_cue(1, 1);
+        cue.pre_wait_ms = 10_000;
+        runtime.load_project_snapshot_checked(child_graph_snapshot(vec![cue])).unwrap();
+        runtime.apply_command(EngineCommand::ToggleCue(1));
+        assert_eq!(runtime.pending_cues.len(), 1);
+        runtime.apply_command(EngineCommand::ToggleCue(1));
+        assert!(runtime.pending_cues.is_empty());
+        assert_eq!(runtime.active_cue_id, None);
     }
 
     fn child_graph_plain_cue(id: CueId, cue_list_id: CueListId) -> CueSummary {

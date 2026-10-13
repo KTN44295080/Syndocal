@@ -12494,7 +12494,7 @@ function hasExpectedControlModeSurface(result) {
       result.visibleControlFaderWriteHeaderCount === 1 &&
       result.visibleGroupControlFaderWriteHeaderCount === 1 &&
       result.legacyAttributeTargetSummaryCount === 0 &&
-      result.visibleEditDeskTabCount === 2 &&
+      result.visibleEditDeskTabCount === 0 &&
       result.controlWorkSurfaceUnsafeOverflowCount === 0 &&
       result.visibleCuePanelCount === 0 &&
       result.visibleTimelinePanelCount === 0 &&
@@ -12538,7 +12538,7 @@ function hasExpectedControlModeSurface(result) {
       result.visibleControlFaderWriteHeaderCount === 1 &&
       result.visibleGroupControlFaderWriteHeaderCount === 1 &&
       result.legacyAttributeTargetSummaryCount === 0 &&
-      result.visibleEditDeskTabCount === 2 &&
+      result.visibleEditDeskTabCount === 0 &&
       result.controlWorkSurfaceUnsafeOverflowCount === 0 &&
       result.visibleCuePanelCount === 0 &&
       result.visibleTimelinePanelCount === 0 &&
@@ -12649,7 +12649,7 @@ function hasExpectedControlModeSurface(result) {
       result.visibleFixtureEditSurfaceCount > 0 &&
       result.visibleEffectEditorCount === 0 &&
       result.visibleRawMonitorCount === 0 &&
-      result.visibleEditDeskTabCount === 2 &&
+      result.visibleEditDeskTabCount === 0 &&
       result.controlWorkSurfaceUnsafeOverflowCount === 0 &&
       result.effectTargetHintCount === 0 &&
       result.effectTargetMapSelectionOptionCount === 0 &&
@@ -17859,10 +17859,10 @@ async function runViewport(client, viewport, { recycleForLayeredTimeline = null 
       await clickVisibleByText(client, ".attributeCategoryRail button", "Color");
       await sleep(120);
       results.push(await measure(client, `control-edit-color-${viewport.width}x${viewport.height}`));
-      await clickVisibleByText(client, ".editDeskTabs button", "Faders");
+      await clickVisibleByText(client, ".attributeCategoryRail button", "Fader");
       await sleep(120);
       results.push(await measure(client, `control-edit-faders-${viewport.width}x${viewport.height}`));
-      await clickVisibleByText(client, ".editDeskTabs button", "Attributes");
+      await clickVisibleByText(client, ".attributeCategoryRail button", "Dimmer");
     }
     if (controlTab.id === "live") {
       // The persistent upper workspaces are domain-owned: Timeline's upper pane
@@ -35900,7 +35900,7 @@ async function runFaderDragPersistenceProbe(client, descriptor) {
     );
   }, descriptor);
   await sleep(80);
-  await clickVisibleByText(client, ".editDeskTabs button", "Faders");
+  await clickVisibleByText(client, ".attributeCategoryRail button", "Fader");
   await sleep(100);
 
   const start = await evaluatePageFunction(client, (selection) => {
@@ -36472,7 +36472,7 @@ async function runLiveEditFixtureTypesViewport(client, viewport) {
     await sleep(80);
     multipleCategoryStates[category] = await measureState();
   }
-  await clickVisibleByText(client, ".editDeskTabs button", "Faders");
+  await clickVisibleByText(client, ".attributeCategoryRail button", "Fader");
   await sleep(80);
   const faderBank = await measureState();
   multipleCategoryStates.Fader = faderBank;
@@ -36494,7 +36494,7 @@ async function runLiveEditFixtureTypesViewport(client, viewport) {
   })()`);
   await sleep(120);
   const singleFaderBank = await measureState();
-  await clickVisibleByText(client, ".editDeskTabs button", "Attributes");
+  await clickVisibleByText(client, ".attributeCategoryRail button", "Dimmer");
   await clickVisibleByText(client, ".attributeCategoryRail button", "Dimmer");
   await sleep(80);
   const single = await measureState();
@@ -36539,7 +36539,7 @@ async function runLiveEditFixtureTypesViewport(client, viewport) {
   })()`);
   await clickWorkspaceOption(client, "control");
   await clickControlModeOption(client, "edit");
-  await clickVisibleByText(client, ".editDeskTabs button", "Faders");
+  await clickVisibleByText(client, ".attributeCategoryRail button", "Fader");
   await sleep(80);
   const allFixtureIds = Array.from({ length: 41 }, (_, index) => index + 1);
   const fixtureTypeDrag = await runFaderDragPersistenceProbe(client, {
@@ -38156,6 +38156,7 @@ async function runEditLiveViewport(client, viewport) {
         .filter((button) => button.getBoundingClientRect().width > 0)
         .map((button) => Math.round(button.getBoundingClientRect().width * 100) / 100),
       editStripThresholdPx: Number(editStrip?.getAttribute('data-scene-matrix-drag-threshold') ?? -1),
+      faderDisabled: Boolean(document.querySelector(".fixtureTypeVerticalFader")?.matches(":disabled")),
       cueTargets: JSON.stringify(cue?.targets ?? []),
       cueDimmer: cue?.targets
         ?.find((target) => target.fixture_id === 1)
@@ -38201,7 +38202,7 @@ async function runEditLiveViewport(client, viewport) {
   await waitForApp(client);
   await clickWorkspaceOption(client, "control");
   await clickControlModeOption(client, "edit");
-  await clickVisibleByText(client, ".editDeskTabs button", "Faders");
+  await clickVisibleByText(client, ".attributeCategoryRail button", "Fader");
   await client.evaluate(`window.__syndocalSetControlFixtureSelection?.([1], 1, '')`);
   await sleep(120);
   const operatorTargetVisibility = await readControlFaderWriteVisibility(client);
@@ -38225,7 +38226,9 @@ async function runEditLiveViewport(client, viewport) {
   const liveGesture = await setFirstDimmer(12_000);
   const afterLive = await readState();
 
+  await clickVisibleSelector(client, '[data-scene-matrix-edit-strip="301"]');
   await clickVisibleSelector(client, '[data-control-fader-write-mode-option="edit"]');
+  await clickVisibleSelector(client, '[aria-label="Close scene settings"]');
   await sleep(80);
   const editUnselected = await readState();
   const unselectedGesture = await setFirstDimmer(16_000);
@@ -38302,7 +38305,7 @@ async function runEditLiveViewport(client, viewport) {
       editUnselected.badgeText.includes("No scene selected") &&
       editUnselected.badgeFullyVisible
     ],
-    ["editUnselectedGestureAvailable", () => unselectedGesture],
+    ["editUnselectedGestureBlocked", () => editUnselected.faderDisabled && unselectedGesture],
     ["editUnselectedDoesNotWrite", () => afterUnselected.cueTargets === initial.cueTargets],
     ["editSelectedBadgeNamesScene", () =>
       editSelected.badgeState === "selected" &&
@@ -38404,9 +38407,9 @@ async function runEditLiveViewport(client, viewport) {
     ["sharedHeaderAndContextTabsStayCompact", () =>
       initial.sharedHeaderSingleRow &&
       Math.abs(initial.sharedHeaderHeight - 34) <= 1 &&
-      initial.modeTabWidths.length === 3 &&
+      initial.modeTabWidths.length === 4 &&
       initial.modeTabWidths.every((width) => width > 0 && width <= 96) &&
-      initial.editDeskTabWidths.length === 2 &&
+      initial.editDeskTabWidths.length === 0 &&
       initial.editDeskTabWidths.every((width) => width > 0 && width <= 100)
     ],
     ["sceneEditStripKeepsFourPxSubThresholdClick", () =>

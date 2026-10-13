@@ -40458,3 +40458,6 @@ button.timelineExternalSourceCard:active,
 .sceneMatrixRenameEditor input { width: 100%; min-width: 0; min-height: 48px; box-sizing: border-box; color: var(--cue-identity-text); font-weight: 700; }
 .sceneMatrixRenameEditor [role="alert"] { color: var(--ui-danger, #ff9898); overflow-wrap: anywhere; }
 .sceneMatrixCuePrimaryRow [data-scene-matrix-cue-name] { cursor: text; }
+
+/* A native disabled fieldset keeps controls readable and keyboard-safe. */
+fieldset.attributeDeskSurface { border: 0; margin: 0; padding: 0; min-inline-size: 0; }

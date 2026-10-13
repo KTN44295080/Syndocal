@@ -181,6 +181,7 @@ export interface MidiControlFeedback {
 }
 
 export type MidiControlAction =
+  | "ToggleCue"
   | "FixtureAttribute"
   | "SelectedFeatureFader"
   | "FixtureHighlight"

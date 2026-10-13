@@ -1,4 +1,5 @@
-import { createEffect, onCleanup, type Accessor, type Setter } from "solid-js";
+import { midiFaderConnection, type MidiFaderConnection } from "./midiFaderInput";
+import { batch, createEffect, onCleanup, type Accessor, type Setter } from "solid-js";
 import type { FrontendTauriInvoke } from "./tauriInvokeCommands";
 import {
   isFixtureFlagMappingAction,
@@ -35,6 +36,8 @@ import {
   type ProjectAuthorityToken,
 } from "./projectAuthority";
 
+import { learnedFeedbackOutput } from "./midiLearnFeedback";
+
 type Invoke = FrontendTauriInvoke;
 
 interface MidiFeedbackRuntimeStatus {
@@ -54,10 +57,13 @@ interface ControlInputControllerOptions {
   captureProjectAuthorityIdentity: () => ProjectAuthorityToken;
   isProjectAuthorityIdentityCurrent: (captured: ProjectAuthorityToken) => boolean;
   setMessage: (message: string) => unknown;
+  onMidiControlConnection?: (connection: MidiFaderConnection) => void;
   onMidiLearnBusy?: (busy: boolean) => void;
   listenMidiLearnReady?: (handler: (ready: { learn_request_id: string; project_epoch: number }) => void) => Promise<() => void>;
   selectedFixture: Accessor<PatchedFixtureSummary | undefined>;
   selectedEffectAttribute: Accessor<string>;
+  midiInputs?: Accessor<MidiInputSummary[]>;
+  midiOutputs?: Accessor<MidiOutputSummary[]>;
   setMidiInputs: Setter<MidiInputSummary[]>;
   setMidiOutputs: Setter<MidiOutputSummary[]>;
   selectedMidiInput: Accessor<number | null>;
@@ -122,6 +128,15 @@ interface ControlInputControllerOptions {
 }
 
 export function createControlInputController(options: ControlInputControllerOptions) {
+  const connectInput = async (args: Record<string, unknown>) => {
+    const identity = options.captureProjectAuthorityIdentity();
+    const status = await options.invoke<unknown>("connect_midi_control", args);
+    if (options.onMidiControlConnection
+      && options.isProjectAuthorityIdentityCurrent(identity)
+      && args.expectedEpoch === identity.project_epoch) {
+      options.onMidiControlConnection(midiFaderConnection(status));
+    }
+  };
   let midiInputRefreshGeneration = 0;
   let midiOutputRefreshGeneration = 0;
   const reportMessage = (message: string): void => {
@@ -231,7 +246,7 @@ export function createControlInputController(options: ControlInputControllerOpti
     const attribute = options.midiMapAttribute() || options.selectedEffectAttribute();
     if (action === "FixtureAttribute" && (!fixture || !attribute)) return reportMessage("Select a fixture and MIDI attribute target first.");
     if (isFixtureFlagMappingAction(action) && !fixture) return reportMessage("Select a fixture before mapping MIDI to a fixture flag.");
-    if ((action === "TriggerCue" || action === "FlashCue" || action === "TriggerCueDirection" || action === "FlashCueDirection" || action === "TriggerCueListNext") && cueId === null) return reportMessage("Create a cue before mapping MIDI to cues.");
+    if ((action === "ToggleCue" || action === "TriggerCue" || action === "FlashCue" || action === "TriggerCueDirection" || action === "FlashCueDirection" || action === "TriggerCueListNext") && cueId === null) return reportMessage("Create a cue before mapping MIDI to cues.");
     if (action === "EffectEnabled" && effectId === null) return reportMessage("Add an effect before mapping MIDI to effect enable.");
     if (action === "NodeGraphEnabled" && nodeGraphId === null) return reportMessage("Add a node graph before mapping MIDI to node graph enable.");
     if ((action === "GroupSubmaster" || isGroupFlagMappingAction(action)) && !options.midiMapGroupId().trim()) {
@@ -254,7 +269,7 @@ export function createControlInputController(options: ControlInputControllerOpti
         : action === "VideoOutputMappingField" ? outputMappingField
         : action === "VideoOutputMappingPreset" ? outputMappingPresetLabel : null,
       group_id: action === "GroupSubmaster" || isGroupFlagMappingAction(action) ? options.midiMapGroupId().trim() : null,
-      cue_id: action === "TriggerCue" || action === "FlashCue" || action === "TriggerCueDirection" || action === "FlashCueDirection" || action === "TriggerCueListNext" ? cueId : action === "EffectEnabled" ? effectId : action === "NodeGraphEnabled" ? nodeGraphId : null,
+      cue_id: action === "ToggleCue" || action === "TriggerCue" || action === "FlashCue" || action === "TriggerCueDirection" || action === "FlashCueDirection" || action === "TriggerCueListNext" ? cueId : action === "EffectEnabled" ? effectId : action === "NodeGraphEnabled" ? nodeGraphId : null,
       layer_id: isVideoLayerMappingAction(action) ? layerId : null,
       output_id: isVideoOutputMappingAction(action) ? outputId : null,
       video_param: action === "VideoParam" ? options.midiMapVideoParam() : null,
@@ -332,7 +347,7 @@ export function createControlInputController(options: ControlInputControllerOpti
           const continued = learnAuthorityAfterFlush(authority, flushed);
           if (continued !== null && options.midiMappings().length > 0) {
             authority = continued;
-            await options.invoke("connect_midi_control", { inputIndex, mappings: options.midiMappings(), expectedEpoch: authority.project_epoch });
+            await connectInput( { inputIndex, mappings: options.midiMappings(), expectedEpoch: authority.project_epoch });
             if (learnAuthorityIsCurrent(authority)) options.setMidiControlConnected(true);
           }
         }
@@ -355,6 +370,12 @@ export function createControlInputController(options: ControlInputControllerOpti
     let authority = options.captureProjectAuthorityIdentity();
     let previousMappings = options.midiMappings();
     const wasConnected = options.midiControlConnected();
+    const inputName = options.midiInputs?.().find(input => input.index === inputIndex)?.name ?? null;
+    const wasFeedbackConnected = options.midiFeedbackConnected();
+    const wasFeedbackEnabled = options.midiFeedbackEnabled();
+    const preservedOutputName = wasFeedbackConnected
+      ? options.midiOutputs?.().find(output => output.index === options.selectedMidiOutput())?.name ?? null
+      : null;
     let disconnectedForLearn = false;
     midiLearnInFlight = true;
     options.onMidiLearnBusy?.(true);
@@ -382,7 +403,7 @@ export function createControlInputController(options: ControlInputControllerOpti
           const mappings = options.midiMappings();
           if (mappings.length > 0) {
             options.setMidiControlConnected(false);
-            await options.invoke("connect_midi_control", {
+            await connectInput( {
               inputIndex,
               mappings,
               expectedEpoch: authority.project_epoch,
@@ -397,9 +418,10 @@ export function createControlInputController(options: ControlInputControllerOpti
       applyLearnedMidiControl(learned);
       if (!learnAuthorityIsCurrent(authority)) return false;
       const replaced = previousMappings.filter((mapping) => sameMidiSource(mapping, learned));
+      const learnedMappings = midiMappingsFromLearnedControl(targets, learned);
       const nextMappings = [
         ...previousMappings.filter((mapping) => !sameMidiSource(mapping, learned)),
-        ...midiMappingsFromLearnedControl(targets, learned),
+        ...learnedMappings,
       ];
       options.setMidiMappings(nextMappings);
       const flushed = await flushProjectControlMappingsAuthority();
@@ -412,17 +434,45 @@ export function createControlInputController(options: ControlInputControllerOpti
         return false;
       }
       options.setMidiControlConnected(false);
-      await options.invoke("connect_midi_control", {
+      await connectInput( {
         inputIndex,
         mappings,
         expectedEpoch: authority.project_epoch,
       });
       if (!learnAuthorityIsCurrent(authority)) return false;
       options.setMidiControlConnected(true);
+      let feedbackNote = "";
+      const learnedSceneFeedback = learnedMappings.some(mapping => mapping.feedback);
+      if (learnedSceneFeedback || wasFeedbackConnected) {
+        try {
+          const outputs = await options.invoke<MidiOutputSummary[]>("list_midi_outputs");
+          if (!learnAuthorityIsCurrent(authority)) return false;
+          options.setMidiOutputs(outputs);
+          const output = learnedFeedbackOutput(inputName, outputs, preservedOutputName);
+          if (output) {
+            options.setMidiFeedbackConnected(false);
+            options.setMidiFeedbackEnabled(false);
+            await options.invoke("connect_midi_feedback", { outputIndex: output.index, expectedOutputName: output.name, expectedEpoch: authority.project_epoch });
+            if (!learnAuthorityIsCurrent(authority)) return false;
+            const enableFeedback = learnedSceneFeedback || wasFeedbackEnabled;
+            await configureFeedback(enableFeedback, mappings, authority);
+            if (!learnAuthorityIsCurrent(authority)) return false;
+            batch(() => { options.setSelectedMidiOutput(output.index); options.setMidiFeedbackConnected(true); options.setMidiFeedbackEnabled(enableFeedback); });
+            feedbackNote = `; auto feedback connected to ${output.name}`;
+          } else {
+            feedbackNote = "; select a matching MIDI output in Setup > I/O > MIDI to enable feedback";
+          }
+        } catch (error) {
+          if (!learnAuthorityIsCurrent(authority)) return false;
+          options.setMidiFeedbackConnected(false);
+          options.setMidiFeedbackEnabled(false);
+          feedbackNote = `; feedback could not connect: ${String(error)}`;
+        }
+      }
       options.setMessage(
         `MIDI mapped ${learned.message} ch ${learned.channel + 1} #${learned.number} to ${targets[0].label}`
         + (targets.length > 1 ? ` and ${targets.length - 1} linked target(s)` : "")
-        + (replaced.length > 0 ? `; replaced ${replaced.length} previous binding(s)` : ""),
+        + (replaced.length > 0 ? `; replaced ${replaced.length} previous binding(s)` : "") + feedbackNote,
       );
       return true;
     } catch (error) {
@@ -436,7 +486,7 @@ export function createControlInputController(options: ControlInputControllerOpti
           const mappings = options.midiMappings();
           if (mappings.length > 0) {
             options.setMidiControlConnected(false);
-            await options.invoke("connect_midi_control", {
+            await connectInput( {
               inputIndex,
               mappings,
               expectedEpoch: authority.project_epoch,
@@ -487,7 +537,7 @@ export function createControlInputController(options: ControlInputControllerOpti
       const mappings = options.midiMappings();
       if (mappings.length === 0) return reportMessage("Add at least one MIDI mapping first.");
       options.setMidiControlConnected(false);
-      await options.invoke("connect_midi_control", {
+      await connectInput( {
         inputIndex,
         mappings,
         expectedEpoch: capturedAuthority.project_epoch,
@@ -571,13 +621,20 @@ export function createControlInputController(options: ControlInputControllerOpti
       options.setMessage(String(error));
     }
   };
+  let appliedFeedbackConfiguration: string | null = null;
+  const configureFeedback = async (enabled: boolean, mappings: MidiControlMapping[], authority: ProjectAuthorityToken) => {
+    const key = JSON.stringify([enabled, mappings, authority]);
+    if (appliedFeedbackConfiguration === key) return;
+    await options.invoke<MidiFeedbackRuntimeStatus>("set_midi_feedback_auto", { enabled, mappings, expectedEpoch: authority.project_epoch });
+    if (options.isProjectAuthorityIdentityCurrent(authority)) appliedFeedbackConfiguration = key;
+  };
   let midiFeedbackConfigurationGeneration = 0;
   let midiFeedbackConfigurationQueue = Promise.resolve();
   createEffect(() => {
     const connected = options.midiFeedbackConnected();
     const enabled = options.midiFeedbackEnabled();
     const mappings = options.midiMappings();
-    if (!connected) return;
+    if (!connected) { appliedFeedbackConfiguration = null; ++midiFeedbackConfigurationGeneration; return; }
     if (enabled && mappings.length === 0) {
       options.setMidiFeedbackEnabled(false);
       options.setMessage("Add at least one MIDI mapping before enabling auto feedback.");
@@ -585,13 +642,10 @@ export function createControlInputController(options: ControlInputControllerOpti
     }
     const generation = ++midiFeedbackConfigurationGeneration;
     midiFeedbackConfigurationQueue = midiFeedbackConfigurationQueue.then(async () => {
+      if (generation !== midiFeedbackConfigurationGeneration) return;
       const authority = options.captureProjectAuthorityIdentity();
       try {
-        await options.invoke<MidiFeedbackRuntimeStatus>("set_midi_feedback_auto", {
-          enabled,
-          mappings,
-          expectedEpoch: authority.project_epoch,
-        });
+        await configureFeedback(enabled, mappings, authority);
         if (!options.isProjectAuthorityIdentityCurrent(authority)) return;
       } catch (error) {
         if (generation !== midiFeedbackConfigurationGeneration) return;

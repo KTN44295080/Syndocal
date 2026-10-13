@@ -60,9 +60,9 @@ function Assert-Removed([string]$Executable) {
  Assert-Condition ((Get-Content -LiteralPath $taskForeign -Raw).Trim() -eq 'external-project') 'External project retained'
 }
 $taskOldNsis=Find-Installer $BaselineRoot 'Syndocal_1.2.0-alpha.72_x64-setup.exe'
-$taskNewNsis=Find-Installer $CurrentRoot 'Syndocal_1.2.0-alpha.77_x64-setup.exe'
+$taskNewNsis=Find-Installer $CurrentRoot 'Syndocal_1.2.0-alpha.78_x64-setup.exe'
 $taskOldMsi=Find-Installer $BaselineRoot 'Syndocal_1.2.0-alpha.72_x64_ja-JP.msi'
-$taskNewMsi=Find-Installer $CurrentRoot 'Syndocal_1.2.0-alpha.77_x64_ja-JP.msi'
+$taskNewMsi=Find-Installer $CurrentRoot 'Syndocal_1.2.0-alpha.78_x64_ja-JP.msi'
 $taskReport.installerHashes=@{}; foreach ($taskFile in @($taskOldNsis,$taskNewNsis,$taskOldMsi,$taskNewMsi)) { $taskReport.installerHashes[[IO.Path]::GetFileName($taskFile)]=(Get-FileHash -LiteralPath $taskFile -Algorithm SHA256).Hash.ToLowerInvariant() }
 $taskInstall=Join-Path $env:RUNNER_TEMP 'SyndocalLifecycle'
 $taskForeign=Join-Path $env:RUNNER_TEMP 'syndocal-lifecycle-external.sdc'; Set-Content -LiteralPath $taskForeign -Value 'external-project'
@@ -70,7 +70,20 @@ $taskMsiExec=Join-Path $env:SystemRoot 'System32\msiexec.exe'
 try {
  Run-Installer $taskOldNsis @('/S',('/D='+$taskInstall))
  Set-Sentinels
+ Run-Installer $taskNewNsis @('/S','/UPDATE','/DJLINK=1',('/D='+$taskInstall))
+ $taskExtensionFile=Join-Path $env:LOCALAPPDATA 'jp.seraf.ktn.syndocal\extensions.ini'
+ Assert-Condition ((Get-Content -LiteralPath $taskExtensionFile -Raw).Contains('DJLink=1')) 'NSIS enabled DJ Link by explicit choice'
  Run-Installer $taskNewNsis @('/S','/UPDATE',('/D='+$taskInstall))
+ Assert-Condition ((Get-Content -LiteralPath $taskExtensionFile -Raw).Contains('DJLink=1')) 'NSIS update preserved extension choice'
+ Run-Installer $taskNewNsis @('/S','/UPDATE','/DJLINK=0',('/D='+$taskInstall))
+ Assert-Condition ((Get-Content -LiteralPath $taskExtensionFile -Raw).Contains('DJLink=0')) 'NSIS changed extension choice to core only'
+ $taskValidExtension=Get-Content -LiteralPath $taskExtensionFile -Raw
+ Set-Content -LiteralPath $taskExtensionFile -Value "[SyndocalExtensions]`r`nSchema=2`r`nDJLink=1`r`n" -Encoding ascii
+ $taskFutureExtension=Get-Content -LiteralPath $taskExtensionFile -Raw
+ Run-Installer $taskNewNsis @('/S','/UPDATE','/DJLINK=0',('/D='+$taskInstall)) 1
+ Assert-Condition ((Get-Content -LiteralPath $taskExtensionFile -Raw) -ceq $taskFutureExtension) 'Future extension settings rejected and preserved'
+ Set-Content -LiteralPath $taskExtensionFile -Value $taskValidExtension -NoNewline -Encoding ascii
+
  Assert-Condition (Test-Path -LiteralPath (Join-Path $taskInstall 'syndocal.exe')) 'Updated NSIS application exists'
  Assert-Sentinels
  $taskInstalled=@(Get-SyndocalInstallations)

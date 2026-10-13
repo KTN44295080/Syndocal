@@ -1,6 +1,7 @@
 import { Show } from "solid-js";
 
 interface ControlFaderWriteHeaderProps {
+  busy?: boolean;
   targetKind: "fixture" | "group" | "selection" | "empty";
   compactReadout: string;
   writeMode: "live" | "edit";
@@ -40,6 +41,7 @@ export function ControlFaderWriteHeader(props: ControlFaderWriteHeaderProps) {
           classList={{ active: props.writeMode === "edit" }}
           aria-label="Use EDIT scene-write mode"
           aria-pressed={props.writeMode === "edit"}
+          disabled={props.busy || !props.editingSceneLabel}
           data-control-fader-write-mode-option="edit"
           onClick={() => props.onWriteMode("edit")}
         >
@@ -47,6 +49,7 @@ export function ControlFaderWriteHeader(props: ControlFaderWriteHeaderProps) {
         </button>
         <button
           type="button"
+          disabled={props.busy || !props.editingSceneLabel}
           class="controlBlindToggle"
           classList={{ active: props.blindActive }}
           data-control-blind-toggle
@@ -68,7 +71,7 @@ export function ControlFaderWriteHeader(props: ControlFaderWriteHeaderProps) {
           classList={{ active: props.writeMode === "live" }}
           aria-label="Use LIVE fader mode"
           aria-pressed={props.writeMode === "live"}
-          disabled={props.blindActive}
+          disabled={props.blindActive || props.busy}
           data-control-fader-write-mode-option="live"
           onClick={() => props.onWriteMode("live")}
         >
@@ -83,7 +86,7 @@ export function ControlFaderWriteHeader(props: ControlFaderWriteHeaderProps) {
             data-control-blind-commit
             title="Commit Blind edit"
             aria-label="Commit Blind edit"
-            disabled={props.blindStagedCount === 0}
+            disabled={props.busy || !props.editingSceneLabel || props.blindStagedCount === 0}
             onClick={() => void props.onBlindCommit()}
           >
             <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3 8 3 3 7-7" /></svg>

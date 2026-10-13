@@ -11,6 +11,7 @@ export const controlMappingTargetLabel = (mapping: DmxControlMapping | MidiContr
     case "GroupHighlight": return `Group ${mapping.group_id} highlight`;
     case "GroupSolo": return `Group ${mapping.group_id} solo`;
     case "GroupPark": return `Group ${mapping.group_id} park`;
+    case "ToggleCue": return `Cue ${mapping.cue_id} play / stop`;
     case "TriggerCue": return `Cue ${mapping.cue_id}`;
     case "FlashCue": return `Cue ${mapping.cue_id} flash`;
     case "TriggerCueDirection": return `Cue ${mapping.cue_id} ${mapping.attribute ?? "direction"}`;

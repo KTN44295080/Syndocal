@@ -67,9 +67,9 @@ const KEYBOARD_SHORTCUT_SOURCE_MANIFEST: &str =
 const KEYBOARD_SHORTCUT_SOURCE_MANIFEST_SCHEMA_VERSION: u16 = 1;
 const KEYBOARD_APP_SHORTCUT_SOURCE_COUNT: usize = 30;
 const KEYBOARD_PROJECT_FILE_SHORTCUT_SOURCE_COUNT: usize = 3;
-const FROZEN_TAURI_ROUTE_ADMISSION_COUNT: usize = 564;
+const FROZEN_TAURI_ROUTE_ADMISSION_COUNT: usize = 566;
 const FROZEN_TAURI_ROUTE_ADMISSION_SHA256: &str =
-    "9407dbb6c997b0d5631bb8b0a7617c8f81654ad070a9bc2780d6a087366c2ec7";
+    "1aeeacc2869bc0e3996e72182e67c350e0fab899473ad1d948f54c730c814803";
 /// The command source is parsed and validated exactly once.  Local discovery
 /// calls only clone this immutable, validated value; they never parse source
 /// text or make an external request on the invocation path.
@@ -356,6 +356,7 @@ fn is_tauri_read_only_route(command: &str) -> bool {
             | "get_video_preview_diagnostics"
             | "get_video_runtime_status"
             | "get_dj_link_machine_status"
+            | "get_extensions_status"
             | "get_visualizer_external_model_assets"
             | "get_visualizer_model_asset_cache_summary"
             | "get_visualizer_model_render_plans"
@@ -542,6 +543,7 @@ fn is_tauri_runtime_mutation(command: &str) -> bool {
             | "set_lighting_master"
             | "set_machine_timeline_cue_audio_settings"
             | "set_midi_feedback_auto"
+            | "set_extensions"
             | "set_operator_feature_fader"
             | "set_operator_selection_context"
             | "set_playback_executor_level"
@@ -2380,6 +2382,8 @@ mod tests {
                 "disarm_dj_link_machine",
                 TauriRouteAdmissionClass::RuntimeMutation,
             ),
+            ("get_extensions_status", TauriRouteAdmissionClass::ReadOnly),
+            ("set_extensions", TauriRouteAdmissionClass::RuntimeMutation),
             ("get_asio_output_status", TauriRouteAdmissionClass::ReadOnly),
             (
                 "get_asio_output_capabilities",
@@ -2579,16 +2583,16 @@ mod tests {
         // engine commands; the strict Show Spout Reset adds its separately
         // named atomic engine command. Its five Tauri routes and the local
         // Spout reset account for the six manifest entries below.
-        const ENGINE_COMMAND_COUNT: usize = 282;
+        const ENGINE_COMMAND_COUNT: usize = 283;
         const REMOTE_INPUT_EVENT_COUNT: usize = 51;
         const REMOTE_CLIENT_REQUEST_COUNT: usize = 7;
         const REMOTE_WIRE_OPERATION_COUNT: usize = 58;
         const REMOTE_OPERATION_COUNT: usize =
             REMOTE_INPUT_EVENT_COUNT + REMOTE_CLIENT_REQUEST_COUNT + REMOTE_WIRE_OPERATION_COUNT;
         const MIDI_CONTROL_MESSAGE_COUNT: usize = 4;
-        const MIDI_CONTROL_ACTION_COUNT: usize = 51;
+        const MIDI_CONTROL_ACTION_COUNT: usize = 52;
         const MIDI_CLOCK_EVENT_COUNT: usize = 6;
-        const MIDI_CONTROL_EVENT_COUNT: usize = 47;
+        const MIDI_CONTROL_EVENT_COUNT: usize = 48;
         const OSC_CONTROL_ACTION_COUNT: usize = 47;
         const OSC_INPUT_EVENT_COUNT: usize = 47;
         const DMX_INPUT_PROTOCOL_COUNT: usize = 2;
@@ -2601,8 +2605,8 @@ mod tests {
             + OSC_INPUT_EVENT_COUNT
             + DMX_INPUT_PROTOCOL_COUNT
             + DMX_INPUT_EVENT_COUNT;
-        const FRONTEND_INVOKE_COUNT: usize = 484;
-        assert_eq!(MIDI_OSC_DMX_OPERATION_COUNT, 206);
+        const FRONTEND_INVOKE_COUNT: usize = 486;
+        assert_eq!(MIDI_OSC_DMX_OPERATION_COUNT, 208);
         assert_eq!(
             registry.operations.len(),
             FROZEN_TAURI_ROUTE_ADMISSION_COUNT
@@ -2611,7 +2615,7 @@ mod tests {
                 + MIDI_OSC_DMX_OPERATION_COUNT
                 + FRONTEND_INVOKE_COUNT
         );
-        assert_eq!(registry.operations.len(), 1652);
+        assert_eq!(registry.operations.len(), 1659);
         verify_registry_exact_set(&names, &registry).unwrap();
         let r0 = registry
             .operations
@@ -2989,18 +2993,18 @@ mod tests {
         const TAURI_COUNT: usize = FROZEN_TAURI_ROUTE_ADMISSION_COUNT;
         // 277 prior engine sources plus the distinct atomic
         // `ResetShowSpoutOutputsExactPublished` source.
-        const ENGINE_COUNT: usize = 282;
+        const ENGINE_COUNT: usize = 283;
         const REMOTE_COUNT: usize = 116;
-        const MIDI_OSC_DMX_COUNT: usize = 206;
-        const FRONTEND_COUNT: usize = 484;
+        const MIDI_OSC_DMX_COUNT: usize = 208;
+        const FRONTEND_COUNT: usize = 486;
         const LEGACY_SOURCE_TOTAL: usize =
             TAURI_COUNT + ENGINE_COUNT + REMOTE_COUNT + MIDI_OSC_DMX_COUNT + FRONTEND_COUNT;
         const KEYBOARD_APP_COUNT: usize = 30;
         const KEYBOARD_PROJECT_FILE_COUNT: usize = 3;
         const SOURCE_TOTAL: usize =
             LEGACY_SOURCE_TOTAL + KEYBOARD_APP_COUNT + KEYBOARD_PROJECT_FILE_COUNT;
-        assert_eq!(LEGACY_SOURCE_TOTAL, 1652);
-        assert_eq!(SOURCE_TOTAL, 1685);
+        assert_eq!(LEGACY_SOURCE_TOTAL, 1659);
+        assert_eq!(SOURCE_TOTAL, 1692);
         assert_eq!(canonical.source_inventory.len(), SOURCE_TOTAL);
         assert_eq!(canonical.canonical_operations.len(), 73);
 
@@ -4161,11 +4165,11 @@ mod tests {
     fn legacy_v1_registry_json_and_count_remain_inventory_honest() {
         let legacy = registry().unwrap();
         // Includes both the native and frontend missing-publication resolver.
-        assert_eq!(legacy.operations.len(), 1652);
+        assert_eq!(legacy.operations.len(), 1659);
         let encoded = serde_json::to_value(&legacy).unwrap();
         assert_eq!(encoded["schema"]["version"], CONTROL_PLANE_SCHEMA_VERSION);
         let operations = encoded["operations"].as_array().unwrap();
-        assert_eq!(operations.len(), 1652);
+        assert_eq!(operations.len(), 1659);
         assert!(operations.iter().all(|operation| {
             operation["source_family"] != "keyboard_app"
                 && operation["source_family"] != "keyboard_project_file"

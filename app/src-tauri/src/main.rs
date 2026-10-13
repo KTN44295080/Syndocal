@@ -291,6 +291,11 @@ mod new_project_output_reset;
 mod continuous_fixture_fader;
 mod fixture_repatch_request;
 mod output_lease_receipt_retention;
+mod extensions;
+mod midi_fader_input;
+#[cfg(test)]
+#[path = "output_managed_route_completion_tests.rs"]
+mod output_managed_route_completion_tests;
 mod dj_link_machine;
 mod dj_link_network;
 mod dj_link_persistence_runtime;
@@ -3141,6 +3146,7 @@ struct AppState {
     osc_input: Mutex<Option<OscInput>>,
     /// Serializes listener stop/join and replacement without holding the
     /// general remote-control state mutex across worker joins or socket bind.
+    extensions: Mutex<extensions::Extensions>,
     remote_control_lifecycle: Mutex<()>,
     remote_control: Mutex<Option<RemoteWsServer>>,
     /// Process-lifetime DJ physical-event fence. Listener/session state is
@@ -25292,6 +25298,7 @@ const PREFLIGHT_ONLY_NONPROJECT_OR_INNER_RUNTIME_ROUTES: &[&str] = &[
     "set_blackout_output_control_v2",
     "set_display_output_window_open_v2",
     "set_explicit_wdm_cue_test",
+    "set_extensions",
     "set_group_submaster_output_control_v2",
     "set_lighting_master_output_control_v2",
     "set_machine_timeline_cue_audio_settings",
@@ -25998,6 +26005,7 @@ fn external_output_command_requires_local_r4(command: &EngineCommand) -> Option<
         | EngineCommand::SetPlaybackMaster(..)
         | EngineCommand::TriggerPlaybackExecutorNext(..)
         | EngineCommand::TriggerPlaybackExecutorPrevious(..)
+        | EngineCommand::ToggleCue(..)
         | EngineCommand::TriggerCue(..)
         | EngineCommand::TriggerCueWithDirection { .. }
         | EngineCommand::TriggerNextCue
@@ -26505,16 +26513,16 @@ fn send_engine_command_if_callback_epoch(
     callback_installed: &Arc<AtomicBool>,
     captured_epoch: u64,
     command: EngineCommand,
-) {
+) -> bool {
     if let Some(reason) = external_output_command_requires_local_r4(&command) {
         eprintln!(
             "Ignoring external output command ({reason}); use the local OutputControl R4 path"
         );
-        return;
+        return false;
     }
     let mutates_persistence = command.mutates_persistence_snapshot();
     let admission = Arc::clone(project_external_command_admission);
-    let _ = run_if_installed_project_callback_epoch(
+    run_if_installed_project_callback_epoch(
         project_external_command_admission,
         callback_epoch,
         captured_epoch,
@@ -26527,7 +26535,7 @@ fn send_engine_command_if_callback_epoch(
             }
             result
         },
-    );
+    ).is_some_and(|result| result.is_ok())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -30121,11 +30129,12 @@ fn disconnect_midi_clock(
 
 #[tauri::command]
 fn connect_midi_control(
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
     input_index: usize,
     mappings: Vec<MidiControlMapping>,
     expected_epoch: Option<u64>,
-) -> Result<(), String> {
+) -> Result<midi_fader_input::Connection, String> {
     let received_mappings = validate_midi_control_mappings(mappings)?;
     let _external_admission = lock_project_external_command_admission(&state)?;
     let coordinator = lock_project_coordinator(&state)?;
@@ -30141,6 +30150,8 @@ fn connect_midi_control(
         return Err("At least one MIDI control mapping is required".to_string());
     }
     let coordinator_epoch = coordinator.epoch;
+    let ui_connection = midi_fader_input::Connection::new(coordinator_epoch)?;
+    let mut ui_sequence = 0u64;
     let callback_epoch = Arc::clone(&state.project_mapping_callback_epoch);
     let captured_callback_epoch = callback_epoch.load(Ordering::Acquire);
     let previous = state
@@ -30216,6 +30227,7 @@ fn connect_midi_control(
             MidiControlEvent::SetGroupPark { group_id, enabled } => {
                 EngineCommand::SetGroupPark { group_id, enabled }
             }
+            MidiControlEvent::ToggleCue(cue_id) => EngineCommand::ToggleCue(cue_id),
             MidiControlEvent::TriggerCue(cue_id) => EngineCommand::TriggerCue(cue_id),
             MidiControlEvent::TriggerCueWithDirection { cue_id, direction } => {
                 EngineCommand::TriggerCueWithDirection { cue_id, direction }
@@ -30390,7 +30402,8 @@ fn connect_midi_control(
         ) {
             return;
         }
-        send_engine_command_if_callback_epoch(
+        let ui_values = midi_fader_input::values(&command);
+        let accepted = send_engine_command_if_callback_epoch(
             &engine,
             &callback_epoch_for_worker,
             &project_transaction_active_for_worker,
@@ -30399,6 +30412,12 @@ fn connect_midi_control(
             captured_callback_epoch,
             command,
         );
+        if accepted && !ui_values.is_empty() {
+            ui_sequence += 1;
+            let _ = app.emit(midi_fader_input::EVENT, midi_fader_input::Input {
+                connection: ui_connection, sequence: ui_sequence, values: ui_values,
+            });
+        }
     })
     .map_err(|error| error.to_string())?;
     if !project_input_installation_is_current(
@@ -30416,7 +30435,7 @@ fn connect_midi_control(
         .map_err(|_| "MIDI control state lock was poisoned".to_string())?;
     *guard = Some(connection);
     callback_installed.store(true, Ordering::Release);
-    Ok(())
+    Ok(ui_connection)
 }
 
 #[tauri::command]
@@ -30440,6 +30459,7 @@ fn disconnect_midi_control(
 fn connect_midi_feedback(
     state: State<'_, AppState>,
     output_index: usize,
+    expected_output_name: Option<String>,
     expected_epoch: Option<u64>,
 ) -> Result<(), String> {
     let _external_admission = lock_project_external_command_admission(&state)?;
@@ -30462,7 +30482,7 @@ fn connect_midi_feedback(
         .take();
     drop(previous);
     let connection =
-        io::midi::connect_midi_feedback_output(output_index).map_err(|error| error.to_string())?;
+        io::midi::connect_midi_feedback_output_named(output_index, expected_output_name.as_deref()).map_err(|error| error.to_string())?;
     if !project_input_installation_is_current(
         coordinator.epoch,
         coordinator_epoch,
@@ -30939,7 +30959,8 @@ fn validate_mapping_required_fields_for_midi(
             require_mapping_id(mapping.cue_id, owner, "cue")?;
             normalize_mapping_cue_direction(&mut mapping.attribute, owner)?;
         }
-        MidiControlAction::TriggerCue
+        MidiControlAction::ToggleCue
+        | MidiControlAction::TriggerCue
         | MidiControlAction::FlashCue
         | MidiControlAction::TriggerCueListNext
         | MidiControlAction::EffectEnabled
@@ -31874,6 +31895,31 @@ fn remote_access_urls(config: RemoteControlConfig) -> Vec<String> {
     build_remote_access_urls(&config, discover_lan_ip())
 }
 
+fn require_dj_link_extension(state: &AppState) -> Result<(), String> {
+    state.extensions.lock().map_err(|_| "Extension state lock was poisoned")?.require_dj_link()
+}
+
+#[tauri::command]
+fn get_extensions_status(state: State<'_, AppState>) -> Result<extensions::ExtensionStatus, String> {
+    Ok(state.extensions.lock().map_err(|_| "Extension state lock was poisoned")?.status())
+}
+
+#[tauri::command]
+fn set_extensions(app: tauri::AppHandle, state: State<'_, AppState>, dj_link_enabled: bool) -> Result<extensions::ExtensionStatus, String> {
+    let _lifecycle = state.remote_control_lifecycle.lock().map_err(|_| "Remote control lifecycle lock was poisoned")?;
+    if state.remote_control.lock().map_err(|_| "Remote control state lock was poisoned")?.as_ref().is_some_and(|remote| remote.status().dj_link_enabled) {
+        return Err("Stop the DJ Link listener before changing extensions".into());
+    }
+    let result = state.extensions.lock().map_err(|_| "Extension state lock was poisoned")?.set(dj_link_enabled)?;
+    let mut machine = state.dj_link_machine.lock().map_err(|_| "DJ Link machine state lock was poisoned")?;
+    if dj_link_enabled {
+        machine.initialize(&app.path().app_local_data_dir().map_err(|error| error.to_string())?);
+    } else {
+        *machine = DjLinkMachineAuthority::default();
+    }
+    Ok(result)
+}
+
 #[tauri::command]
 async fn list_dj_link_wired_candidates() -> Result<Vec<DjLinkWiredCandidate>, String> {
     tauri::async_runtime::spawn_blocking(discover_wired_candidates)
@@ -31899,6 +31945,7 @@ fn arm_dj_link_machine(
         .remote_control_lifecycle
         .lock()
         .map_err(|_| "Remote control lifecycle lock was poisoned".to_string())?;
+    require_dj_link_extension(&state)?;
     if state
         .remote_control
         .lock()
@@ -32111,6 +32158,7 @@ fn start_remote_control_after_project_preflight(
         .lock()
         .map_err(|_| "DJ Link machine state lock was poisoned".to_string())?
         .prepare_listener_config_with_test_binding(&mut config)?;
+    if config.dj_link_enabled { require_dj_link_extension(state)?; }
     // Replacement is deliberately absent: Start never tears down a live
     // shared listener (including DJ-only auto-start) or invalidates an
     // authenticated peer. The explicit Stop path joins it before another
@@ -32703,6 +32751,7 @@ fn rotate_dj_link_token_for_state(state: &AppState) -> Result<String, String> {
         .remote_control_lifecycle
         .lock()
         .map_err(|_| "Remote control lifecycle lock was poisoned".to_string())?;
+    require_dj_link_extension(state)?;
     if state
         .remote_control
         .lock()
@@ -57120,10 +57169,13 @@ where
                 let mut durable = state.output_lease_durable_receipts.lock().map_err(|_| {
                     "Output lease durable receipt journal lock was poisoned".to_string()
                 })?;
-                let record_result = if managed_authorization.is_some() {
-                    let identity = managed_terminal_identity.ok_or_else(|| {
-                        "Managed exact-Both public terminal identity is missing".to_string()
-                    })?;
+                // Managed lease authorization and public terminal retention
+                // are separate policies. Serial/Art-Net Show routes close their
+                // ordinary durable receipt; BO/Display/Spout provide an exact
+                // public terminal identity and retain its pending pair.
+                let record_result = if let (Some(_), Some(identity)) =
+                    (managed_authorization, managed_terminal_identity)
+                {
                     durable.record_managed_exact_both_output_control_pending_terminal(
                         identity,
                         durable_request,
@@ -90950,6 +91002,7 @@ pub(crate) mod tests {
                 project_publication_reconcile_claim: Mutex::new(None),
                 output_lease_clock_origin: Instant::now(),
                 next_output_lease_request_id: AtomicU64::new(1),
+                extensions: Mutex::new(extensions::Extensions::test_enabled()),
                 dj_link_machine: Mutex::new(DjLinkMachineAuthority::default()),
                 media_asset_reaper: Mutex::new(None),
                 media_asset_authoritative_publish_attempts: AtomicU64::new(0),
@@ -132395,7 +132448,11 @@ fn main() {
             // Credential Manager token; it never opens a project or changes
             // the default Timeline.  An armed, verified binding receives the
             // sole existing RemoteWsServer in DJ-only mode.
-            let auto_start_config = match app.path().app_local_data_dir() {
+            state.extensions.lock().map_err(|_| "Extension state lock was poisoned")?
+                .initialize(&app.path().app_local_data_dir()?);
+            let dj_extension_enabled = state.extensions.lock().map_err(|_| "Extension state lock was poisoned")?
+                .status().dj_link_enabled;
+            let auto_start_config = if dj_extension_enabled { match app.path().app_local_data_dir() {
                 Ok(local_data_dir) => match state.dj_link_machine.lock() {
                     Ok(mut authority) => {
                         authority.initialize(&local_data_dir);
@@ -132409,7 +132466,7 @@ fn main() {
                     }
                     Err(format!("Unable to resolve DJ Link machine settings directory: {error}"))
                 }
-            };
+            }} else { Err("DJ Link extension disabled".to_string()) };
             if let Ok(config) = auto_start_config {
                 if let Err(error) = start_remote_control_after_project_preflight(&state, config) {
                     if let Ok(mut authority) = state.dj_link_machine.lock() {
@@ -132546,6 +132603,7 @@ fn main() {
             project_publication_reconcile_claim: Mutex::new(None),
             output_lease_clock_origin: Instant::now(),
             next_output_lease_request_id: AtomicU64::new(1),
+            extensions: Mutex::new(extensions::Extensions::default()),
             dj_link_machine: Mutex::new(DjLinkMachineAuthority::default()),
             media_asset_reaper: Mutex::new(None),
             #[cfg(test)]
@@ -132875,6 +132933,8 @@ fn main() {
             set_asio_output_solo,
             #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
             select_normal_audio_output,
+            get_extensions_status,
+            set_extensions,
             list_dj_link_wired_candidates,
             get_dj_link_machine_status,
             arm_dj_link_machine,

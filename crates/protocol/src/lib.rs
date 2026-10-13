@@ -7893,6 +7893,7 @@ pub struct MidiControlFeedback {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum MidiControlAction {
+    ToggleCue,
     FixtureAttribute,
     SelectedFeatureFader,
     FixtureHighlight,

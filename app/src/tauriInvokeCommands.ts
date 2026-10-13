@@ -136,6 +136,7 @@ export const FRONTEND_TAURI_INVOKE_COMMANDS = [
   "get_debug_video_preview",
   "get_dj_link_machine_status",
   "get_engine_telemetry_report",
+  "get_extensions_status",
   "get_external_video_io_plans",
   "get_external_video_transport_status",
   "get_fixture_groups",
@@ -353,6 +354,7 @@ export const FRONTEND_TAURI_INVOKE_COMMANDS = [
   "set_effect_enabled",
   "set_effect_video_target_position",
   "set_explicit_wdm_cue_test",
+  "set_extensions",
   "set_fixture_attribute_batch",
   "set_fixture_groups",
   "set_fixture_highlight",
@@ -484,7 +486,7 @@ export const FRONTEND_TAURI_INVOKE_COMMANDS = [
   "update_video_clip_slot_authoritative",
   "use_fixture_profile",
   "video_audio_monitor_status",
-  "video_output_recording_status",
+  "video_output_recording_status"
 ] as const;
 
 export type FrontendTauriInvokeCommand = typeof FRONTEND_TAURI_INVOKE_COMMANDS[number];

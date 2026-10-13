@@ -114,7 +114,7 @@ async function run() {
   assert.equal(frozenCount, tauriCommands.length, "Tauri admission count is not tied to the production source");
   assert.equal(frozenFingerprint, tauriFingerprint, "Tauri admission fingerprint is not tied to the production source");
 
-  assert.equal(invokeManifest.length, 484, "frontend invoke inventory count drifted; classify the delta");
+  assert.equal(invokeManifest.length, 486, "frontend invoke inventory count drifted; classify the delta");
   assert(invokeManifest.every((command) => tauriCommands.includes(command)), "frontend invoke inventory contains an unregistered Tauri command");
   assert.equal(new Set(invokeManifest).size, invokeManifest.length, "frontend invoke inventory contains a duplicate");
 
@@ -127,7 +127,7 @@ async function run() {
   }
 
   const engineSource = countMacroVariants(engine, "define_engine_command!", false);
-  assert.equal(engineSource.length, 282, "EngineCommand declaration inventory count drifted");
+  assert.equal(engineSource.length, 283, "EngineCommand declaration inventory count drifted");
   assert.ok(engineSource.includes("RequestSnapshotPublication"), "Internal read publication barrier must remain inventoried");
   assertNeedles(engineInventory, "crates/engine/src/control_plane.rs", [
     "EngineCommand::CONTROL_PLANE_VARIANT_NAMES",
@@ -147,9 +147,9 @@ async function run() {
 
   const ioFamilies = [
     [midi, "MIDI_CONTROL_MESSAGE_VARIANT_NAMES", 4],
-    [midi, "MIDI_CONTROL_ACTION_VARIANT_NAMES", 51],
+    [midi, "MIDI_CONTROL_ACTION_VARIANT_NAMES", 52],
     [midi, "MIDI_CLOCK_EVENT_VARIANT_NAMES", 6],
-    [midi, "MIDI_CONTROL_EVENT_VARIANT_NAMES", 47],
+    [midi, "MIDI_CONTROL_EVENT_VARIANT_NAMES", 48],
     [osc, "OSC_CONTROL_ACTION_VARIANT_NAMES", 47],
     [osc, "OSC_INPUT_EVENT_VARIANT_NAMES", 47],
     [dmx, "DMX_INPUT_PROTOCOL_VARIANT_NAMES", 2],

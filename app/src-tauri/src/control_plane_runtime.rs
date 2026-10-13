@@ -742,7 +742,8 @@ where
     if let Err(code) = authorize() {
         return output_control_rejection(&request, code);
     }
-    if request.validate().is_err() {
+    if let Err(error) = request.validate() {
+        eprintln!("OutputControl {} rejected at request validation: {error:?}", request.operation_id);
         return output_control_rejection(&request, OutputControlErrorCodeV2::InvalidRequest);
     }
     let shape_sha256 = match request.canonical_shape_bytes() {
@@ -898,7 +899,7 @@ where
             output_control_rejection(&request, OutputControlErrorCodeV2::StaleFence),
         );
     }
-    if super::preflight_output_lease_for_control_action(
+    if let Err(error) = super::preflight_output_lease_for_control_action(
         state,
         &binding.principal,
         &binding.window_label,
@@ -906,9 +907,8 @@ where
         request.request_id,
         &request.action,
         request.expected_fence.project_epoch,
-    )
-    .is_err()
-    {
+    ) {
+        eprintln!("OutputControl {} rejected at lease preflight: {error}", request.operation_id);
         return retain_output_control_rejection(
             state,
             key,
