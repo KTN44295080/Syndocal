@@ -92,7 +92,6 @@ import { FixtureTypeAttributeColumns } from "./components/FixtureTypeAttributeCo
 import { FixtureCatalogPanel } from "./components/FixtureCatalogPanel";
 import { GroupLiveMixerStrip } from "./components/GroupLiveMixerStrip";
 import { FaderPrimaryAttributePanels } from "./components/FaderPrimaryAttributePanels";
-import { LightingRuntimeControlsPanel } from "./components/LightingRuntimeControlsPanel";
 import { LoadedProfileSummaryPanel } from "./components/LoadedProfileSummaryPanel";
 import { MidiControlMappingPanel } from "./components/MidiControlMappingPanel";
 import { OscControlMappingPanel } from "./components/OscControlMappingPanel";
@@ -2198,7 +2197,6 @@ export default function App() {
   const continuousFixtureFader = createContinuousFixtureFader(invoke);
   onCleanup(continuousFixtureFader.cancel);
   const [rawDmxUniverse, setRawDmxUniverse] = createSignal(0);
-  const [bpmDraft, setBpmDraft] = createSignal("120");
   const [midiInputs, setMidiInputs] = createSignal<MidiInputSummary[]>([]);
   const [midiOutputs, setMidiOutputs] = createSignal<MidiOutputSummary[]>([]);
   const [selectedMidiInput, setSelectedMidiInput] = createSignal<number | null>(null);
@@ -17693,17 +17691,6 @@ export default function App() {
     }
   };
 
-  const applyBpm = async () => {
-    const bpm = Number(bpmDraft());
-    try {
-      await invoke("set_bpm", { bpm });
-      setMessage(`BPM set to ${bpm.toFixed(1)}`);
-      await refreshSnapshot();
-    } catch (error) {
-      setMessage(String(error));
-    }
-  };
-
   const tapBpm = async () => {
     try {
       await tapTempo({
@@ -17713,7 +17700,6 @@ export default function App() {
         refreshAuthority: pollProjectAuthorityBundle,
         refreshSnapshot,
         applied: (clock) => {
-          setBpmDraft(clock.bpm.toFixed(1));
           setMessage(tapTempoMessage(clock));
         },
       });
@@ -17743,9 +17729,6 @@ export default function App() {
         setMessage("Audio analysis canceled.");
         return;
       }
-      if (analysis.estimated_bpm) {
-        setBpmDraft(analysis.estimated_bpm.toFixed(1));
-      }
       if (childCueId === null) {
         await refreshSnapshot();
       } else {
@@ -17774,7 +17757,6 @@ export default function App() {
     try {
       await invoke("set_bpm", { bpm });
       await refreshSnapshot();
-      setBpmDraft(bpm.toFixed(1));
       setMessage(`Applied audio BPM ${bpm.toFixed(1)}`);
     } catch (error) {
       setMessage(String(error));
@@ -26505,7 +26487,6 @@ export default function App() {
         onTapBpm={tapBpm}
         onSetBpm={async (bpm) => {
           await invoke("set_bpm", { bpm });
-          setBpmDraft(bpm.toFixed(1));
           setMessage(`BPM set to ${bpm.toFixed(1)}`);
           await refreshSnapshot();
         }}
@@ -28990,14 +28971,6 @@ export default function App() {
             djListenerRunning={djListenerRunning()}
             djLinkEnabled={djLinkEnabled()}
             djLinkInstalled={extensionStatus().dj_link_enabled}
-            onConnectMidiClock={connectMidiClock}
-            onDisconnectMidiClock={disconnectMidiClock}
-            onStartOsc={startOscInput}
-            onStopOsc={stopOscInput}
-            onStartWebRemote={startRemoteControl}
-            onStopWebRemote={stopRemoteControl}
-            onArmDjLink={armDjLinkMachine}
-            onDisarmDjLink={disarmDjLinkMachine}
             renderWorkbench={(connection) => connection === "dmx" ? (
           <section class="ioUnifiedZone ioUnifiedDmxZone" data-io-zone="dmx">
           <div class="ioOperatorSurface dmxOperatorSurface">
@@ -29098,29 +29071,6 @@ export default function App() {
             onAcknowledgeDsf2026ArtNetAcceptanceProbeInDoubt={acknowledgeDsf2026ArtNetAcceptanceProbeInDoubt}
             onResetTelemetry={resetEngineTelemetry}
             onSaveTelemetryReport={saveEngineTelemetryReport}
-          />
-          <LightingRuntimeControlsPanel
-            lightingMaster={snapshot().lighting_master}
-            submasters={snapshot().submasters}
-            clock={snapshot().clock}
-            bpmDraft={bpmDraft()}
-            midiInputs={midiInputs()}
-            selectedMidiInput={selectedMidiInput()}
-            midiConnected={midiConnected()}
-            onLightingMaster={setLightingMaster}
-            onSubmaster={setGroupSubmaster}
-            onBlackout={setBlackout}
-            onAllBlackout={setAllBlackout}
-            onBpmDraft={setBpmDraft}
-            onApplyBpm={applyBpm}
-            onTapBpm={tapBpm}
-            onRefreshMidi={() => {
-              void refreshMidiInputs();
-              void refreshMidiOutputs();
-            }}
-            onDisconnectMidiClock={disconnectMidiClock}
-            onSelectedMidiInput={setSelectedMidiInput}
-            onConnectMidiClock={connectMidiClock}
           />
           </IoDisclosure>
           </div>

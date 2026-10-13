@@ -43,14 +43,6 @@ export interface SetupIoConnectionDeckProps {
   djListenerRunning: boolean;
   djLinkEnabled: boolean;
   djLinkInstalled?: boolean;
-  onConnectMidiClock: () => unknown;
-  onDisconnectMidiClock: () => unknown;
-  onStartOsc: () => unknown;
-  onStopOsc: () => unknown;
-  onStartWebRemote: () => unknown;
-  onStopWebRemote: () => unknown;
-  onArmDjLink: () => unknown;
-  onDisarmDjLink: () => unknown;
 }
 
 export interface IoDisclosureProps {
@@ -207,9 +199,6 @@ export function SetupIoConnectionDeck(props: SetupIoConnectionDeckProps) {
       summary: "Clock + control",
       state: props.midiClockConnected || props.midiControlConnected ? "Connected" : "Stopped",
       stateTone: props.midiClockConnected || props.midiControlConnected ? "ok" : "idle",
-      primaryAction: props.midiClockConnected
-        ? <button type="button" onClick={() => void props.onDisconnectMidiClock()}>Disconnect clock</button>
-        : <button type="button" onClick={() => void props.onConnectMidiClock()}>Connect clock</button>,
     },
     {
       id: "osc",
@@ -217,9 +206,6 @@ export function SetupIoConnectionDeck(props: SetupIoConnectionDeckProps) {
       summary: "UDP listener",
       state: props.oscRunning ? "Listening" : "Stopped",
       stateTone: props.oscRunning ? "ok" : "idle",
-      primaryAction: props.oscRunning
-        ? <button type="button" onClick={() => void props.onStopOsc()}>Stop</button>
-        : <button type="button" onClick={() => void props.onStartOsc()}>Start</button>,
     },
     {
       id: "web",
@@ -227,9 +213,6 @@ export function SetupIoConnectionDeck(props: SetupIoConnectionDeckProps) {
       summary: "Remote access",
       state: props.webRemoteRunning ? "Running" : "Stopped",
       stateTone: props.webRemoteRunning ? "ok" : "idle",
-      primaryAction: props.webRemoteRunning
-        ? <button type="button" onClick={() => void props.onStopWebRemote()}>Stop</button>
-        : <button type="button" onClick={() => void props.onStartWebRemote()}>Start</button>,
     },
     {
       id: "dj",
@@ -237,9 +220,6 @@ export function SetupIoConnectionDeck(props: SetupIoConnectionDeckProps) {
       summary: "Track triggers",
       state: props.djListenerRunning ? "Connected" : props.djLinkEnabled ? "Armed" : "Disarmed",
       stateTone: props.djListenerRunning ? "ok" : props.djLinkEnabled ? "warning" : "idle",
-      primaryAction: props.djLinkEnabled
-        ? <button type="button" onClick={() => void props.onDisarmDjLink()}>Disarm</button>
-        : <button type="button" onClick={() => void props.onArmDjLink()}>Arm</button>,
     },
   ].filter((item) => item.id !== "dj" || props.djLinkInstalled === true) as IoConnectionDeckItem[];
 
