@@ -31,16 +31,23 @@ function checkWorkflow(source) {
     assert.ok(block.includes('--dmg-dir target/release/bundle/dmg'));
     assert.ok(block.includes('--report target/qa/macos-artifact/report.json'));
   }
+  const pkgBuild = step('Build selectable macOS installer');
+  const lifecycle = step('Test actual macOS installer choices, updates and removal');
+  assert.ok(pkgBuild.includes('bash app/scripts/build-macos-installer.sh'));
+  assert.ok(lifecycle.includes('id: pkg_lifecycle'));
+  assert.ok(lifecycle.includes('node app/scripts/check-macos-installer.mjs'));
+  assert.ok(blocks.indexOf(acceptance) < blocks.indexOf(pkgBuild));
+  assert.ok(blocks.indexOf(pkgBuild) < blocks.indexOf(lifecycle));
   const evidence = step('Upload macOS validation evidence');
   assert.match(evidence, /\n        if: always\(\)\n/);
   assert.ok(evidence.includes('path: target/qa/macos-artifact/'));
-  const upload = step('Upload macOS DMG');
-  assert.ok(upload.includes("if: ${{ success() && !cancelled() && steps.validate.outcome == 'success' && steps.acceptance.outcome == 'success' }}"));
-  assert.ok(upload.includes('target/release/bundle/dmg/*.dmg\n'));
-  assert.ok(upload.includes('target/release/bundle/dmg/*.dmg.sha256'));
+  const upload = step('Upload macOS installer');
+  assert.ok(upload.includes("if: ${{ success() && !cancelled() && steps.validate.outcome == 'success' && steps.acceptance.outcome == 'success' && steps.pkg_lifecycle.outcome == 'success' }}"));
+  assert.ok(upload.includes('target/release/bundle/pkg/*.pkg\n'));
+  assert.ok(upload.includes('target/release/bundle/pkg/*.pkg.sha256'));
   assert.ok(upload.includes('if-no-files-found: error'));
   assert.ok(blocks.indexOf(validate) < blocks.indexOf(acceptance));
-  assert.ok(blocks.indexOf(acceptance) < blocks.indexOf(evidence));
+  assert.ok(blocks.indexOf(lifecycle) < blocks.indexOf(evidence));
   assert.ok(blocks.indexOf(evidence) < blocks.indexOf(upload));
 }
 test('manual workflow requires validation and acceptance before upload', () => checkWorkflow(workflow));
@@ -55,6 +62,7 @@ for (const [name, oldValue, newValue] of [
   assert.ok(workflow.includes(oldValue)); assert.throws(() => checkWorkflow(workflow.replace(oldValue, newValue)));
 });
 for (const [name, change] of [
+  ['missing installer acceptance', s => s.replace(" && steps.pkg_lifecycle.outcome == 'success'", '')],
   ['unconditional upload', s => s.replace(" && steps.acceptance.outcome == 'success'", '')],
   ['hidden validation failure', s => s.replace('id: validate', 'id: validate\n        continue-on-error: true')],
   ['missing failure logs', s => s.replace('if: always()', 'if: success()')],

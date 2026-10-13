@@ -1,0 +1,12 @@
+#!/bin/bash
+set -euo pipefail
+[[ "${3:-/}" == / ]] || { echo 'Syndocal requires the startup volume'; exit 1; }
+if pgrep -x syndocal >/dev/null; then echo 'Close Syndocal before installing'; exit 1; fi
+directory='/Library/Application Support/jp.seraf.ktn.syndocal'
+for path in /Library '/Library/Application Support' "$directory" "$directory/extensions.ini" "$directory/dj-link.enabled"; do
+  [[ ! -L "$path" ]] || { echo 'Redirected installer settings rejected'; exit 1; }
+done
+if [[ -e "$directory/extensions.ini" ]]; then
+  [[ -f "$directory/extensions.ini" && $(stat -f '%z' "$directory/extensions.ini") -le 4096 ]] || exit 1
+  awk 'BEGIN { n=0; valid=1 } { gsub(/^[[:space:]]+|[[:space:]]+$/, ""); if ($0 == "") next; n++; if (n==1 && $0!="[SyndocalExtensions]") valid=0; if (n==2 && $0!="Schema=1") valid=0; if (n==3 && $0!="DJLink=0" && $0!="DJLink=1") valid=0; if(n>3) valid=0 } END { exit !(valid && n==3) }' "$directory/extensions.ini" || { echo 'Unsupported extension settings; nothing replaced'; exit 1; }
+fi

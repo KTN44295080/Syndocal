@@ -12,7 +12,7 @@ concurrency:
 
 jobs:
   package:
-    name: macOS 12+ arm64 DMG
+    name: macOS 12+ arm64 installer
     runs-on: macos-15
     timeout-minutes: 45
 
@@ -155,6 +155,13 @@ jobs:
             --dmg-dir target/release/bundle/dmg \
             --report target/qa/macos-artifact/report.json
 
+      - name: Build selectable macOS installer
+        run: bash app/scripts/build-macos-installer.sh target/release/bundle/macos/Syndocal.app target/release/bundle/pkg
+
+      - name: Test actual macOS installer choices, updates and removal
+        id: pkg_lifecycle
+        run: node app/scripts/check-macos-installer.mjs target/release/bundle/pkg/Syndocal_1.2.0-alpha.79_arm64.pkg target/qa/macos-artifact/installer-lifecycle.json target/release/bundle/macos/Syndocal.app
+
       - name: Upload macOS validation evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -164,13 +171,14 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
-      - name: Upload macOS DMG
-        if: ${{ success() && !cancelled() && steps.validate.outcome == 'success' && steps.acceptance.outcome == 'success' }}
+      - name: Upload macOS installer
+        if: ${{ success() && !cancelled() && steps.validate.outcome == 'success' && steps.acceptance.outcome == 'success' && steps.pkg_lifecycle.outcome == 'success' }}
         uses: actions/upload-artifact@v4
         with:
           name: syndocal-macos-${{ runner.arch }}-${{ github.sha }}
           path: |
-            target/release/bundle/dmg/*.dmg
-            target/release/bundle/dmg/*.dmg.sha256
+            target/release/bundle/pkg/*.pkg
+            target/release/bundle/pkg/*.pkg.sha256
+            tools/distribution/Remove-Syndocal.command
           if-no-files-found: error
           retention-days: 7

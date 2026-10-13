@@ -1,0 +1,19 @@
+#!/bin/bash
+set -euo pipefail
+[[ "${3:-/}" == / ]] || exit 1
+directory='/Library/Application Support/jp.seraf.ktn.syndocal'
+for path in /Library '/Library/Application Support' "$directory" "$directory/extensions.ini" "$directory/dj-link.enabled"; do
+  [[ ! -L "$path" ]] || { echo 'Redirected installer settings rejected'; exit 1; }
+done
+umask 022
+mkdir -p "$directory"
+temporary=$(mktemp "$directory/extensions.XXXXXXXX")
+trap 'rm -f -- "$temporary"' EXIT
+printf '[SyndocalExtensions]\nSchema=1\nDJLink=@DJLINK@\n' > "$temporary"
+chmod 644 "$temporary"
+mv -f -- "$temporary" "$directory/extensions.ini"
+if [[ @DJLINK@ == 1 ]]; then
+  touch "$directory/dj-link.enabled"
+else
+  rm -f -- "$directory/dj-link.enabled"
+fi

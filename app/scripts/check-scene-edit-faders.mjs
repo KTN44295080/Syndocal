@@ -1,0 +1,16 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import ts from '../node_modules/typescript/lib/typescript.js';
+const source = fs.readFileSync(new URL('../src/sceneEditFaderValues.ts',import.meta.url),'utf8');
+const exports = {};
+Function('exports',ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText)(exports);
+const fixtures = [{id:1,controls:[{attribute:'Dimmer',default_value:0},{attribute:'Red',default_value:123}],attribute_values:[{attribute:'Dimmer',value:60000},{attribute:'Red',value:65000}]}];
+const scene = {id:10,targets:[{fixture_id:1,values:[{attribute:'Dimmer',value:5000},{attribute:'Red',value:10000}]}]};
+assert.deepEqual(exports.sceneEditFaderValues(fixtures,scene),{'1:Dimmer':5000,'1:Red':10000});
+assert.deepEqual(exports.sceneEditFaderValues(fixtures,scene,{'1:Dimmer':42000}),{'1:Dimmer':42000,'1:Red':10000});
+assert.deepEqual(exports.sceneEditFaderValues(fixtures,{targets:[]}),{'1:Dimmer':0,'1:Red':123});
+assert.equal(scene.targets[0].values[0].value,5000);
+const app=fs.readFileSync(new URL('../src/App.tsx',import.meta.url),'utf8');
+assert.match(app,/editValues: captureViewportCueTargets/);
+assert.doesNotMatch(app,/extensionsFirstRun/);
+console.log('PASS: saved scene values, local edits, unsaved defaults and installer-only choice');

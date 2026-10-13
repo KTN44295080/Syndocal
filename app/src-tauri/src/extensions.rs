@@ -11,6 +11,7 @@ use std::{
 pub struct ExtensionStatus {
     pub configured: bool,
     pub dj_link_enabled: bool,
+    pub installer_managed: bool,
     pub error: Option<String>,
 }
 
@@ -41,7 +42,31 @@ pub fn decode(text: &str) -> Result<bool, String> {
 
 impl Extensions {
     pub fn initialize(&mut self, directory: &Path) {
-        let path = directory.join("extensions.ini");
+        #[cfg(target_os = "macos")]
+        let installed = Some(Path::new(
+            "/Library/Application Support/jp.seraf.ktn.syndocal/extensions.ini",
+        ));
+        #[cfg(not(target_os = "macos"))]
+        let installed: Option<&Path> = None;
+        self.initialize_with_installer(directory, installed);
+    }
+    fn initialize_with_installer(&mut self, directory: &Path, installed: Option<&Path>) {
+        let installed = installed.filter(|path| fs::symlink_metadata(path).is_ok());
+        if installed.is_some_and(|path| {
+            path.ancestors().any(|ancestor| {
+                fs::symlink_metadata(ancestor)
+                    .is_ok_and(|metadata| metadata.file_type().is_symlink())
+            })
+        }) {
+            self.status = ExtensionStatus {
+                error: Some("Redirected installer settings rejected".into()),
+                ..Default::default()
+            };
+            return;
+        }
+        let path = installed
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| directory.join("extensions.ini"));
         self.path = Some(path.clone());
         if fs::metadata(&path).is_ok_and(|metadata| metadata.len() > 4096) {
             self.status = ExtensionStatus {
@@ -56,15 +81,17 @@ impl Extensions {
                     configured: true,
                     dj_link_enabled,
                     error: None,
+                    installer_managed: installed.is_some(),
                 },
                 Err(error) => ExtensionStatus {
                     error: Some(error),
                     ..Default::default()
                 },
             },
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                ExtensionStatus::default()
-            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => ExtensionStatus {
+                configured: true,
+                ..Default::default()
+            },
             Err(error) => ExtensionStatus {
                 error: Some(format!("Cannot read extension settings: {error}")),
                 ..Default::default()
@@ -85,6 +112,9 @@ impl Extensions {
         }
     }
     pub fn set(&mut self, dj_link_enabled: bool) -> Result<ExtensionStatus, String> {
+        if self.status.installer_managed {
+            return Err("Change extensions using the Syndocal installer".into());
+        }
         if let Some(error) = &self.status.error {
             return Err(error.clone());
         }
@@ -122,6 +152,7 @@ impl Extensions {
         self.status = ExtensionStatus {
             configured: true,
             dj_link_enabled,
+            installer_managed: false,
             error: None,
         };
         Ok(self.status())
@@ -133,6 +164,7 @@ impl Extensions {
             status: ExtensionStatus {
                 configured: true,
                 dj_link_enabled: true,
+                installer_managed: false,
                 error: None,
             },
         }
@@ -168,7 +200,7 @@ mod tests {
         ));
         let mut manager = Extensions::default();
         manager.initialize(&directory);
-        assert!(!manager.status().configured);
+        assert!(manager.status().configured);
         manager.set(true).unwrap();
         let mut restarted = Extensions::default();
         restarted.initialize(&directory);
@@ -191,5 +223,39 @@ mod tests {
     fn fresh_core_rejects_dj_link_and_explicit_enabled_accepts() {
         assert!(Extensions::default().require_dj_link().is_err());
         assert!(Extensions::test_enabled().require_dj_link().is_ok());
+    }
+
+    #[test]
+    fn installer_choice_overrides_old_user_settings_and_requires_installer_to_change() {
+        let directory = std::env::temp_dir().join(format!(
+            "syndocal-installed-extension-test-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir(&directory).unwrap();
+        let installed = directory.join("installed.ini");
+        fs::write(
+            directory.join("extensions.ini"),
+            "[SyndocalExtensions]\nSchema=1\nDJLink=1\n",
+        )
+        .unwrap();
+        fs::write(&installed, "[SyndocalExtensions]\nSchema=1\nDJLink=0\n").unwrap();
+        let mut manager = Extensions::default();
+        manager.initialize_with_installer(&directory, Some(&installed));
+        assert!(manager.status().installer_managed);
+        assert!(!manager.status().dj_link_enabled);
+        assert!(manager.set(true).is_err());
+        let future = "[SyndocalExtensions]\nSchema=2\nDJLink=1\n";
+        fs::write(&installed, future).unwrap();
+        manager.initialize_with_installer(&directory, Some(&installed));
+        assert!(manager.status().error.is_some());
+        assert!(manager.set(false).is_err());
+        assert_eq!(fs::read_to_string(&installed).unwrap(), future);
+        fs::remove_file(installed).unwrap();
+        fs::remove_file(directory.join("extensions.ini")).unwrap();
+        fs::remove_dir(directory).unwrap();
     }
 }

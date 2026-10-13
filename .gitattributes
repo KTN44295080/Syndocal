@@ -12,3 +12,6 @@ app/scripts/fixtures/release/tauri-signer-public.key text eol=lf
 tools/distribution/Remove-Syndocal.command text eol=lf
 tools/distribution/Remove-SyndocalData.ps1 text eol=lf
 app/src-tauri/installer-hooks.nsh text eol=lf
+
+tools/distribution/macos-installer/preinstall text eol=lf
+tools/distribution/macos-installer/postinstall text eol=lf

@@ -292,6 +292,7 @@ mod continuous_fixture_fader;
 mod fixture_repatch_request;
 mod output_lease_receipt_retention;
 mod extensions;
+mod scene_edit_capture;
 mod midi_fader_input;
 #[cfg(test)]
 #[path = "output_managed_route_completion_tests.rs"]
@@ -34972,6 +34973,7 @@ fn update_cue_from_current_batch(
         label: String => "label",
         fade_ms: u64 => "fadeMs",
         capture_scopes: Vec<CueCaptureScope> => "captureScopes",
+        edit_values: Option<Vec<protocol::ProgrammerValueSummary>> => "editValues",
         project_transaction_id: u64 => "projectTransactionId",
         expected_epoch: u64 => "expectedEpoch",
         owner_id: String => "ownerId",
@@ -35011,6 +35013,63 @@ fn update_cue_from_current_batch(
     let mut snapshot = state.engine.persistence_snapshot()?;
     use_authored_video_snapshot(&mut snapshot);
     apply_programmer_preview_to_snapshot(&mut snapshot);
+    if let Some(values) = edit_values {
+        let mut fixture_ids = HashSet::new();
+        for scope in &capture_scopes {
+            match scope {
+                CueCaptureScope::SelectedFixture { fixture_id } => {
+                    fixture_ids.insert(*fixture_id);
+                }
+                CueCaptureScope::SelectedGroup { group_id } => {
+                    let group_id = normalize_group_id(group_id)?;
+                    fixture_ids.extend(
+                        snapshot
+                            .fixtures
+                            .iter()
+                            .filter(|fixture| {
+                                fixture
+                                    .group_ids
+                                    .iter()
+                                    .any(|id| group_matches(id, &group_id))
+                            })
+                            .map(|fixture| fixture.id),
+                    );
+                }
+                _ => {
+                    return Err("Explicit scene edit only supports fixture or group scopes".into());
+                }
+            }
+        }
+        scene_edit_capture::apply(&mut snapshot, &fixture_ids, values)?;
+        let cue = snapshot
+            .cues
+            .iter()
+            .find(|cue| cue.id == cue_id)
+            .ok_or_else(|| format!("Cue {cue_id} was not found"))?;
+        let targets = merge_by_id(
+            cue.targets.clone(),
+            snapshot
+                .fixtures
+                .iter()
+                .filter(|fixture| fixture_ids.contains(&fixture.id))
+                .map(|fixture| CueFixtureTarget {
+                    fixture_id: fixture.id,
+                    values: fixture.attribute_values.clone(),
+                })
+                .collect(),
+            |target| target.fixture_id,
+        );
+        return state.engine.update_cue_published(
+            cue_id,
+            label,
+            fade_ms,
+            targets,
+            cue.video_targets.clone(),
+            cue.video_output_targets.clone(),
+            cue.node_graph_targets.clone(),
+            cue.effect_targets.clone(),
+        );
+    }
     let existing_cue = snapshot
         .cues
         .iter()

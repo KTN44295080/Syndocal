@@ -38157,11 +38157,13 @@ async function runEditLiveViewport(client, viewport) {
         .map((button) => Math.round(button.getBoundingClientRect().width * 100) / 100),
       editStripThresholdPx: Number(editStrip?.getAttribute('data-scene-matrix-drag-threshold') ?? -1),
       faderDisabled: Boolean(document.querySelector(".fixtureTypeVerticalFader")?.matches(":disabled")),
+      faderValue: Number(document.querySelector(".fixtureTypeVerticalFader")?.value ?? -1),
       cueTargets: JSON.stringify(cue?.targets ?? []),
       cueDimmer: cue?.targets
         ?.find((target) => target.fixture_id === 1)
         ?.values?.find((value) => value.attribute === 'Dimmer')?.value ?? null,
       otherCueTargets: JSON.stringify(otherCue?.targets ?? []),
+      otherCueDimmer: otherCue?.targets.find(target => target.fixture_id === 1)?.values.find(value => value.attribute === "Dimmer")?.value ?? 0,
       history: {
         undo: history?.can_undo === true,
         redo: history?.can_redo === true,
@@ -38282,6 +38284,10 @@ async function runEditLiveViewport(client, viewport) {
   await pressKey(client, "KeyZ", "z", 10);
   await sleep(120);
   const afterRedo = await readState();
+  await clickVisibleSelector(client, '[data-scene-matrix-edit-strip="302"]');
+  const afterSceneSwitch = await readState();
+  await clickVisibleSelector(client, '[data-scene-matrix-edit-strip="301"]');
+  const afterSceneReturn = await readState();
 
   const conditions = [
     ["liveIsDefault", () =>
@@ -38307,6 +38313,9 @@ async function runEditLiveViewport(client, viewport) {
     ],
     ["editUnselectedGestureBlocked", () => editUnselected.faderDisabled && unselectedGesture],
     ["editUnselectedDoesNotWrite", () => afterUnselected.cueTargets === initial.cueTargets],
+    ["editSelectionLoadsSavedSceneValue", () => editSelected.faderValue === editSelected.cueDimmer],
+    ["switchSceneLoadsItsOwnSavedValues", () => afterSceneSwitch.faderValue === afterSceneSwitch.otherCueDimmer],
+    ["returnToSceneLoadsEditedSavedValues", () => afterSceneReturn.faderValue === afterRedo.cueDimmer],
     ["editSelectedBadgeNamesScene", () =>
       editSelected.badgeState === "selected" &&
       editSelected.badgeText.includes("EDIT:") &&

@@ -1,3 +1,4 @@
+import { sceneEditFaderValues } from "./sceneEditFaderValues";
 import { createSceneEditWriteBarrier } from "./createSceneEditWriteBarrier";
 import { createMidiFaderInput } from "./midiFaderInput";
 import { createProjectControlMappingsFlusher } from "./createProjectControlMappingsFlusher";
@@ -2184,11 +2185,19 @@ export default function App() {
   const [wheelMediaUrls, setWheelMediaUrls] = createSignal<Record<string, string>>({});
   const [wheelMediaLoading, setWheelMediaLoading] = createSignal<Record<string, true>>({});
   const [wheelMediaMissing, setWheelMediaMissing] = createSignal<Record<string, true>>({});
-  const [faderValues, setFaderValues] = createSignal<Record<string, number>>({});
+  const [liveFaderValues, setFaderValues] = createSignal<Record<string, number>>({});
+  const [sceneEditValues, setSceneEditValues] = createSignal<Record<number, Record<string, number>>>({});
   const faderValueController = createFaderValueController({ setValues: setFaderValues });
   const midiFaderInput = createMidiFaderInput({
     projectEpoch: () => captureProjectAuthorityIdentity().project_epoch,
-    apply: faderValueController.applyMidiInput,
+    apply: values => {
+      faderValueController.applyMidiInput(values);
+      const cueId = controlEditCueIdForWrite();
+      if (cueId === null || controlFaderModeChanging()) return;
+      setSceneEditValues(current => ({ ...current, [cueId]: { ...current[cueId], ...values } }));
+      const fixtureIds = new Set(Object.keys(values).map(key => Number(key.split(":")[0])));
+      for (const fixtureId of fixtureIds) queueControlEditLookUpdate(cueId, { kind: "selectedFixture", fixtureId });
+    },
   });
   createEffect(() => { if (!midiControlConnected()) midiFaderInput.setConnection(null); });
   let midiFaderMappingsIdentity: string | null = null;
@@ -2442,6 +2451,28 @@ export default function App() {
     createSignal<SceneSettingsSurface>("contents");
   const [controlFaderWriteMode, setControlFaderWriteMode] =
     createSignal<ControlFaderWriteMode>("live");
+  const faderValues = createMemo(() => {
+    const cue = workspaceTab() === "control" && controlMode() === "edit" && controlFaderWriteMode() === "edit"
+      ? snapshot().cues.find(candidate => candidate.id === selectedSceneCueId()) : null;
+    return cue ? sceneEditFaderValues(snapshot().fixtures, cue, sceneEditValues()[cue.id]) : liveFaderValues();
+  });
+  createEffect(() => {
+    const cues = snapshot().cues;
+    setSceneEditValues(current => {
+      let next = current;
+      for (const [id, edits] of Object.entries(current)) {
+        const cue = cues.find(candidate => candidate.id === Number(id));
+        const saved = new Map<string, number>(cue?.targets.flatMap(target => target.values.map(value =>
+          [`${target.fixture_id}:${value.attribute}`, value.value] as const)) ?? []);
+        const remaining = Object.fromEntries(Object.entries(edits).filter(([key, value]) => cue && saved.get(key) !== value));
+        if (Object.keys(remaining).length !== Object.keys(edits).length) {
+          if (next === current) next = { ...current };
+          if (Object.keys(remaining).length) next[Number(id)] = remaining; else delete next[Number(id)];
+        }
+      }
+      return next;
+    });
+  });
   const [viewportControlEditUndo, setViewportControlEditUndo] =
     createSignal<ViewportControlEditHistoryEntry[]>([]);
   const [viewportControlEditRedo, setViewportControlEditRedo] =
@@ -3280,6 +3311,7 @@ export default function App() {
     setSceneFxStagePreview(null);
     if (effectId !== null) loadSceneEffectDraft(cueId, effectId);
     if (cue.child_timeline) setEffectChooserFamily("SUPER SCENE");
+    if (controlMode() === "edit") void changeControlFaderWriteMode("edit");
   };
   const closeSceneSettings = () => {
     setSelectedSceneCueId(null);
@@ -11724,6 +11756,7 @@ export default function App() {
     if (resetEditorDrafts) {
       continuousFixtureFader.cancel();
       faderValueController.clearAll();
+      setSceneEditValues({});
       cancelPendingBlindSceneUpdate();
       clearControlLearnSelection();
       setControlLearnModeState(null);
@@ -12981,6 +13014,19 @@ export default function App() {
       ? selectedSceneCue()?.id ?? null
       : null;
   const sceneEditWriteBarrier = createSceneEditWriteBarrier(() => controlEditCueIdForWrite() !== null);
+  const setControlFaderOptimistic = (key: string, value: number) => {
+    const cueId = controlEditCueIdForWrite();
+    if (cueId !== null) setSceneEditValues(current => ({ ...current, [cueId]: { ...current[cueId], [key]: value } }));
+    faderValueController.setOptimistic(key, value);
+  };
+  const rejectSceneEditValue = (cueId: number | null, key: string, value: number) => {
+    if (cueId === null) return;
+    setSceneEditValues(current => {
+      if (current[cueId]?.[key] !== value) return current;
+      const remaining = { ...current[cueId] }; delete remaining[key];
+      return { ...current, [cueId]: remaining };
+    });
+  };
   const controlEditTargetKey = (target: ControlEditCaptureTarget) =>
     target.kind === "selectedFixture"
       ? `fixture:${target.fixtureId}`
@@ -13003,7 +13049,7 @@ export default function App() {
       }
     }
     const nextTargets = cloneCueTargets(cue.targets);
-    const localValues = faderValues();
+    const localValues = sceneEditFaderValues(current.fixtures, cue, sceneEditValues()[cue.id]);
     for (const fixtureId of fixtureIds) {
       const fixture = current.fixtures.find((candidate) => candidate.id === fixtureId);
       if (!fixture) continue;
@@ -13013,7 +13059,6 @@ export default function App() {
           attribute: control.attribute,
           value:
             localValues[`${fixture.id}:${control.attribute}`]
-            ?? fixture.attribute_values.find((entry) => entry.attribute === control.attribute)?.value
             ?? control.default_value,
         })),
       };
@@ -13097,6 +13142,11 @@ export default function App() {
       label: cue.label,
       fadeMs: cue.fade_ms,
       captureScopes: captureTargets,
+      editValues: captureViewportCueTargets(snapshot(), cue, captureTargets)
+        .filter(target => captureTargets.some(scope => scope.kind === "selectedFixture"
+          ? scope.fixtureId === target.fixture_id
+          : snapshot().fixtures.some(fixture => fixture.id === target.fixture_id && fixture.group_ids.some(id => groupMatches(id, scope.groupId)))))
+        .flatMap(target => target.values.map(value => ({ fixture_id: target.fixture_id, ...value }))),
     });
     setMessage(`Updated cue ${cue.id} look from the current Store Scope.`);
     await refreshSnapshot();
@@ -13107,6 +13157,7 @@ export default function App() {
       controlEditWriteTimer = null;
     }
     controlEditFlushChain = controlEditFlushChain.then(async () => {
+      await sceneEditWriteBarrier.settle();
       const queued = [...pendingControlEditTargets.entries()].map(([cueId, pending]) => ({
         cueId,
         targets: [...pending.targets.values()],
@@ -13250,7 +13301,7 @@ export default function App() {
     setSceneFxStagePreview(null);
     if (!allowControlFaderWrite()) return;
     const editCueId = controlEditCueIdForWrite();
-    faderValueController.setOptimistic(`${fixtureId}:${attribute}`, value);
+    setControlFaderOptimistic(`${fixtureId}:${attribute}`, value);
     if (viewportFixture === "blind") {
       applyViewportBlindAttributes([{ fixtureId, attribute, value }]);
       queueControlEditLookUpdate(editCueId, { kind: "selectedFixture", fixtureId });
@@ -13273,6 +13324,7 @@ export default function App() {
       queueControlEditLookUpdate(editCueId, { kind: "selectedFixture", fixtureId });
     } catch (error) {
       faderValueController.clearOptimistic(`${fixtureId}:${attribute}`, value);
+      rejectSceneEditValue(editCueId, `${fixtureId}:${attribute}`, value);
       setMessage(String(error));
     }
   });
@@ -13286,7 +13338,7 @@ export default function App() {
       .filter((fixture) => fixture.group_ids.includes(groupId))
       .map((fixture) => fixture.id);
     for (const fixtureId of fixtureIds) {
-      faderValueController.setOptimistic(`${fixtureId}:${attribute}`, value);
+      setControlFaderOptimistic(`${fixtureId}:${attribute}`, value);
     }
     if (viewportFixture === "blind") {
       applyViewportBlindAttributes(fixtureIds.map((fixtureId) => ({ fixtureId, attribute, value })));
@@ -13309,7 +13361,10 @@ export default function App() {
       }
       queueControlEditLookUpdate(editCueId, { kind: "selectedGroup", groupId });
     } catch (error) {
-      for (const fixtureId of fixtureIds) faderValueController.clearOptimistic(`${fixtureId}:${attribute}`, value);
+      for (const fixtureId of fixtureIds) {
+        faderValueController.clearOptimistic(`${fixtureId}:${attribute}`, value);
+        rejectSceneEditValue(editCueId, `${fixtureId}:${attribute}`, value);
+      }
       setMessage(String(error));
     }
   });
@@ -13333,7 +13388,7 @@ export default function App() {
     if (!allowControlFaderWrite()) return;
     const editCueId = controlEditCueIdForWrite();
     setSceneFxStagePreview(null);
-    for (const target of targets) faderValueController.setOptimistic(
+    for (const target of targets) setControlFaderOptimistic(
       `${target.fixture_id}:${target.attribute}`, nextValue,
     );
     const updateEditLook = () => {
@@ -13364,6 +13419,7 @@ export default function App() {
       for (const target of targets) faderValueController.clearOptimistic(
         `${target.fixture_id}:${target.attribute}`, nextValue,
       );
+      for (const target of targets) rejectSceneEditValue(editCueId, `${target.fixture_id}:${target.attribute}`, nextValue);
       setMessage(String(error));
     }
   });
@@ -16658,15 +16714,10 @@ export default function App() {
     }
     const groupId = selectedFixtureGroupFilter();
     const fixtureIds = groupId ? selectedControlTargetFixtures().map((candidate) => candidate.id) : [fixture.id];
-    setFaderValues((current) => {
-      const next = { ...current };
-      for (const fixtureId of fixtureIds) {
-        for (const update of updates) {
-          next[`${fixtureId}:${update.attribute}`] = update.value;
-        }
-      }
-      return next;
-    });
+    for (const fixtureId of fixtureIds) {
+      for (const update of updates) setControlFaderOptimistic(
+        `${fixtureId}:${update.attribute}`, update.value);
+    }
 
     if (viewportFixture === "blind") {
       applyViewportBlindAttributes(fixtureIds.flatMap((fixtureId) =>
@@ -16712,6 +16763,8 @@ export default function App() {
       );
       setMessage(`Set ${groupId ? `group ${groupId}` : fixture.label} color ${hexColor.toUpperCase()}`);
     } catch (error) {
+      for (const fixtureId of fixtureIds) for (const update of updates) rejectSceneEditValue(
+        editCueId, `${fixtureId}:${update.attribute}`, update.value);
       setMessage(String(error));
     }
   });
@@ -16830,13 +16883,8 @@ export default function App() {
         if (!allowControlFaderWrite()) return;
     const editCueId = controlEditCueIdForWrite();
         setSceneFxStagePreview(null);
-        setFaderValues((current) => {
-          const next = { ...current };
-          for (const target of binding.targets) {
-            next[`${target.fixture_id}:${target.attribute}`] = featureValue;
-          }
-          return next;
-        });
+        for (const target of binding.targets) setControlFaderOptimistic(
+          `${target.fixture_id}:${target.attribute}`, featureValue);
         if (viewportFixture === "blind") {
           applyViewportBlindAttributes(binding.targets.map((target) => ({
             fixtureId: target.fixture_id,
@@ -16852,7 +16900,10 @@ export default function App() {
               { targets: binding.targets, value: featureValue },
             );
           } catch (error) {
+            for (const target of binding.targets) rejectSceneEditValue(
+              editCueId, `${target.fixture_id}:${target.attribute}`, featureValue);
             setMessage(String(error));
+            return;
           }
         }
         for (const fixtureId of fixtureIds) {
@@ -25119,7 +25170,10 @@ export default function App() {
     setControlMode(mode);
     if (mode === "edit") {
       setEditDeskSurface("attributes");
-      if (selectedSceneCue()) setSceneSettingsSurface("fx");
+      if (selectedSceneCue()) {
+        setSceneSettingsSurface("fx");
+        void changeControlFaderWriteMode("edit");
+      }
     }
     if (mode === "live") {
       setTimelineDeskSurface("show");
@@ -29334,12 +29388,6 @@ export default function App() {
             onUnlock={unlockOperator}
           />
         )}
-      </Show>
-
-      <Show when={!extensionStatus().configured && !extensionStatus().error && isTauriRuntime()}>
-        <dialog class="extensionsFirstRun" aria-label="Choose extensions" onCancel={event => event.preventDefault()} ref={dialog => queueMicrotask(() => { if (dialog.isConnected && !dialog.open) dialog.showModal(); })}>
-          <ExtensionsPanel status={extensionStatus()} busy={extensionBusy()} onChange={changeExtensions} />
-        </dialog>
       </Show>
 
       <AppStatusLine

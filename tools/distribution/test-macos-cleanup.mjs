@@ -16,7 +16,10 @@ function fixture() {
   fs.writeFileSync(path.join(app,'Contents/Info.plist'),'<?xml version="1.0"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>jp.seraf.ktn.syndocal</string></dict></plist>');
   const script = path.join(root,'remove.command');
   const rewritten = source.replace('pgrep -x syndocal','false').replaceAll('/Applications/Syndocal.app',`${root}/Applications/Syndocal.app`)
-    .replace('temporary=$(getconf DARWIN_USER_TEMP_DIR)',`temporary='${tmp}/'`).replace('/var/folders/*/T/',`${tmp}/`);
+    .replace('temporary=$(getconf DARWIN_USER_TEMP_DIR)',`temporary='${tmp}/'`).replace('/var/folders/*/T/',`${tmp}/`)
+    .replace('/Library/Application Support/$identifier',`${root}/system/$identifier`)
+    .replace(/system_receipts=\([^\n]+\)/,'system_receipts=()')
+    .replaceAll('/usr/bin/sudo /bin/rm','/bin/rm');
   fs.writeFileSync(script,rewritten);
   return {root,home,tmp,app,data,script};
 }

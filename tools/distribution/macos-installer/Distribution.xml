@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<installer-gui-script minSpecVersion="2">
+  <title>Syndocal @VERSION@</title>
+  <options customize="always" require-scripts="true"/>
+  <domains enable_anywhere="false" enable_currentUserHome="false" enable_localSystem="true"/>
+  <allowed-os-versions><os-version min="12.0"/></allowed-os-versions>
+  <choices-outline>
+    <line choice="app"/>
+    <line choice="djlink"/>
+    <line choice="core-choice"/>
+  </choices-outline>
+  <choice id="app" title="Syndocal (DMX / Video / MIDI)" description="本体 / Core application" enabled="false" selected="true">
+    <pkg-ref id="jp.seraf.ktn.syndocal.pkg.app"/>
+  </choice>
+  <choice id="djlink" title="DJ Link" description="DJ用PCとの連携。不要ならチェックを外してください。 / DJ computer integration." start_selected="system.files.fileExistsAtPath('/Library/Application Support/jp.seraf.ktn.syndocal/dj-link.enabled')">
+    <pkg-ref id="jp.seraf.ktn.syndocal.pkg.djlink"/>
+  </choice>
+  <choice id="core-choice" title="Core only" description="No optional integrations" visible="false" enabled="false" selected="!choices.djlink.selected">
+    <pkg-ref id="jp.seraf.ktn.syndocal.pkg.core"/>
+  </choice>
+  <pkg-ref id="jp.seraf.ktn.syndocal.pkg.app">app.pkg</pkg-ref>
+  <pkg-ref id="jp.seraf.ktn.syndocal.pkg.djlink">djlink.pkg</pkg-ref>
+  <pkg-ref id="jp.seraf.ktn.syndocal.pkg.core">core.pkg</pkg-ref>
+</installer-gui-script>
