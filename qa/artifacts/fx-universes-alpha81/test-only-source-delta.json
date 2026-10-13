@@ -1,0 +1,11 @@
+{
+  "passed": true,
+  "packagingSource": "42336154babe577cf2ed9b4023f8c3f14b46410e",
+  "currentSource": "562058eaeca33a75d6e816eefcf85134ee584a4b",
+  "changedProductInputPaths": [
+    "crates/engine/src/control_plane.rs"
+  ],
+  "productionPrefixByteIdentical": true,
+  "entireFileMatchesOnlyExactThreeTestEdits": true,
+  "scope": "All differences are in #[cfg(test)] inventory test, plus QA evidence; no production, frontend, installer or package metadata delta"
+}

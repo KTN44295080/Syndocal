@@ -1,0 +1,76 @@
+{
+  "passed": true,
+  "sourceCommit": "42336154babe577cf2ed9b4023f8c3f14b46410e",
+  "path": "C:\\Users\\janua\\Downloads\\Syndocal-1.2.0-alpha.81\\Syndocal_1.2.0-alpha.81_Windows-x64-install.zip",
+  "byteSize": 223708399,
+  "sha256": "3a45f28aaa061b6bb6aca7c02e95465a4c06b337d8d5a493eb4c8aa03c9ff193",
+  "entries": [
+    {
+      "path": "Install-Windows.cmd",
+      "bytes": 465,
+      "sha256": "6a4e966adaec533f077892b2dcf5f1749c19d8b13ac447e5df0cb434203a254b"
+    },
+    {
+      "path": "Install-Windows.ps1",
+      "bytes": 3118,
+      "sha256": "79aee4b46013ddee8429dfd84428ec3c87cdcfdba843be38ab7675f1044f1bea"
+    },
+    {
+      "path": "README.txt",
+      "bytes": 1861,
+      "sha256": "dc43f6d45e392263293c4dd4e614575a3a23e6d2cfc2a861a14d3a2549d87eb9"
+    },
+    {
+      "path": "Remove-SyndocalData.ps1",
+      "bytes": 5766,
+      "sha256": "7e0b2b595ff0eba0f06b2df26a686fa7220b9ca7014f6a644f502f2832385f57"
+    },
+    {
+      "path": "Syndocal_1.2.0-alpha.81_x64_ja-JP.msi",
+      "bytes": 123506688,
+      "sha256": "e84189fabd8bd7b2e541f21cad3ee36079ca91409188840fa1efdd1445723928"
+    },
+    {
+      "path": "Syndocal_1.2.0-alpha.81_x64_ja-JP.msi.sha256",
+      "bytes": 104,
+      "sha256": "d3447f062bf76b60e0e886d29f0604786de62596296a60befa3edeca48dedac3"
+    },
+    {
+      "path": "Syndocal_1.2.0-alpha.81_x64-setup.exe",
+      "bytes": 82492335,
+      "sha256": "0c16f6afde9da77cf3ff046fe2f9b5c42170748536d8ecf180d3820be91c1095"
+    },
+    {
+      "path": "Syndocal_1.2.0-alpha.81_x64-setup.exe.sha256",
+      "bytes": 104,
+      "sha256": "9c9e2a714251e3b19ce6f61a527b4b21861a66759adb2ef12bdda3c140cfb625"
+    },
+    {
+      "path": "SyndocalInstallations.ps1",
+      "bytes": 2257,
+      "sha256": "07938c07f2ab194099adb16fc94ca00437bcf653fcc4de66b9246409624e3c19"
+    },
+    {
+      "path": "Uninstall-Windows.cmd",
+      "bytes": 479,
+      "sha256": "9c2d7fc73fae34227c0d26a11a2feb720267b2f3b31625efdd741654d833abf2"
+    },
+    {
+      "path": "Uninstall-Windows.ps1",
+      "bytes": 1073,
+      "sha256": "762b7d3048fd3b332d79c94588a5e67a371095b1ca3a32f551723e7935d23fad"
+    },
+    {
+      "path": "VC_redist.x64.exe",
+      "bytes": 18731856,
+      "sha256": "843068991daaa1f73ad9f6239bce4d0f6a07a51f18c37ea2a867e9beca71295c"
+    },
+    {
+      "path": "使い方.txt",
+      "bytes": 2589,
+      "sha256": "ee2898184b5ceda0bb374024a0685d7d7d6da1bfd121b406039b131164896c70"
+    }
+  ],
+  "exactStageReadback": true,
+  "noProductInstallation": true
+}
