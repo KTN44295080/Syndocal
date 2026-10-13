@@ -75,3 +75,35 @@ merged into `main`; the worktree and branch are removed afterwards.
 - Test-timing nits from the re-review (50 ms pause inside the 100 ms
   first-byte window; a fixed 300 ms sleep in the pending-cap test) are left
   as is; both passed 24/24 under load.
+
+## Integration on main and UI stage 1
+
+Codex stopped at its usage limit after preparing the alpha.82 dispatch-ordering
+candidate. Its working tree was committed unchanged (`ebd8a2d8`), the branch was
+merged twice (`b722f9c2`, `292011b9`), and the worktree and branch were removed.
+UI clutter audit stage 1 then landed directly on main
+([audit](UI_CLUTTER_AUDIT_2026-10-14.md)):
+
+- P1: Setup I/O and Security no longer render the fixture/stage/selection band.
+- P5: workspace and Edit-domain tabs follow the UI language; common setup and
+  status strings gained Japanese text.
+- P4/P6/P7: Show DMX preparation uses operator wording with stable stage IDs;
+  repeated network-universe, DMX-input and DJ Link hints were trimmed; MIDI
+  feedback shows only the buttons usable in its connection state.
+- P10: unused `DmxRoutesPanel.tsx` and `TouchRemotePanel.tsx` were removed.
+
+P8 (single setup sub-tab) is deferred because more than ten viewport-checker
+flows navigate through `.setupModeTabs`. The Audio notice is unchanged because
+`check-audio-output-panel` requires it.
+
+Windows native gate on main `32d09668`:
+
+- `pnpm --dir app tauri build --no-bundle` passed in 447 s with zero
+  first-party warnings (the existing Vite chunk advisory remains one).
+- `target/release/syndocal.exe` is Product/FileVersion `1.2.0-alpha.82`,
+  70,540,800 bytes, SHA-256
+  `0B1E631457F2A206A023210CF043B0FCCC7F1E1FB4A9F1309FFDFB2F46663229`.
+- The exact executable ran as one process with one responsive `Syndocal`
+  window, maximized (`showCmd=3`), and then closed gracefully.
+
+Win/Mac packages, physical MIDI/DMX output and Mac GUI remain unobserved.

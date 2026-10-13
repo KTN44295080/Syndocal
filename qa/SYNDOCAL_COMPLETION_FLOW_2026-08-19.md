@@ -2,7 +2,7 @@
 
 ## 2026-10-14 alpha.82 native dispatch repair candidate
 
-Current development metadata is `1.2.0-alpha.82`. Native binary-search dispatch ordering and distribution checks are tracked in [the checkpoint](NETWORK_DISPATCH_ALPHA82_2026-10-14.md). Alpha.81 is superseded; distributed bytes remain immutable. This is not full Recording completion.
+Current development metadata is `1.2.0-alpha.82`. Native binary-search dispatch ordering and distribution checks are tracked in [the checkpoint](NETWORK_DISPATCH_ALPHA82_2026-10-14.md). Alpha.81 is superseded; distributed bytes remain immutable. This is not full Recording completion. Parallel hardening, macOS warning cleanup, MIDI feedback visibility, UI stage 1 and the normal Windows native gate for this candidate are recorded in [the integration checkpoint](PARALLEL_HARDENING_2026-10-14.md).
 
 ## 2026-10-14 alpha.81 FX and network universe candidate
 
