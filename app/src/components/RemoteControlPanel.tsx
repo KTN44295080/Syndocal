@@ -495,12 +495,12 @@ export function RemoteControlPanel(props: RemoteControlPanelProps) {
                 <button
                   type="button"
                   data-io-control="dj-link-return-to-dj-control"
+                  title="Available only while the Timeline is running. It preserves transport and asks the connected Agent to reannounce its fresh candidate."
                   aria-busy={props.djLinkOperatorReturnBusy}
                   disabled={props.djLinkOperatorReturnBusy || !canRequestDjControlReturn()}
                   onClick={() => void props.onRequestDjLinkOperatorReturn()}
                 >{props.djLinkOperatorReturnBusy ? "Returning…" : "Return to DJ control"}</button>
               </div>
-              <p class="hint">Available only while the Timeline is running. It preserves transport and asks the connected Agent to reannounce its fresh candidate.</p>
               <p class={props.djLinkMachineStatus.blockReason ? "inlineWarning" : "hint"}>
                 {props.djLinkMachineStatus.autoStartArmed
                   ? `Endpoint: ws://${props.djLinkMachineStatus.bindIp ?? "[select LAN IP]"}:${props.djLinkMachineStatus.bindPort ?? "[select port]"}/dj-link`
@@ -544,7 +544,7 @@ export function RemoteControlPanel(props: RemoteControlPanelProps) {
               <Show when={props.djLinkTokenCopied}>
                 <p class="inlineSuccess">Token copied and cleared.</p>
               </Show>
-              <Show when={linkStatus()} fallback={<p class="emptyHint">DJ Link status is unavailable while its listener is stopped.</p>}>
+              <Show when={linkStatus()}>
                 {(status) => (
                   <div class="split remoteLimitGrid" data-dj-link-status>
                     <span>Available <strong>{status().available === false ? "No" : "Yes"}</strong></span>
