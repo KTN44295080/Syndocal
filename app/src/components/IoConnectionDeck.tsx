@@ -56,7 +56,8 @@ export interface SetupIoConnectionDeckProps {
 export interface IoDisclosureProps {
   id: string;
   summary: string;
-  description: string;
+  /** Omit when the body already explains itself. */
+  description?: string;
   bodyClass?: string;
   children: JSX.Element;
 }
@@ -69,7 +70,7 @@ export function IoDisclosure(props: IoDisclosureProps) {
         class={`ioDisclosureBody${props.bodyClass ? ` ${props.bodyClass}` : ""}`}
         data-io-disclosure-body
       >
-        <p class="ioDisclosureDescription">{props.description}</p>
+        <Show when={props.description}><p class="ioDisclosureDescription">{props.description}</p></Show>
         {props.children}
       </div>
     </details>

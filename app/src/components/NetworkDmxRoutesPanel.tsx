@@ -63,8 +63,7 @@ export function NetworkDmxRoutesPanel(props: Props) {
   };
   return <section class="networkDmxRoutes" data-network-dmx-routes>
     <header class="panelHeader"><h3>Network universes</h3><span>{draft().length} / 255</span></header>
-    <p class="hint">Add an output destination for each patched universe. U0 USB-DMX and its loopback remain managed above.</p>
-    <p class="hint">A single-universe USB interface cannot output two universes. Use an Art-Net or sACN node for additional universes.</p>
+    <Show when={draft().length === 0}><p class="hint">Add an Art-Net or sACN destination for each additional universe. One USB-DMX interface outputs one universe.</p></Show>
     <div class="buttonRow">
       <button type="button" disabled={busy() || draft().length >= 255} onClick={() => add("ArtNet")}>+ Art-Net</button>
       <button type="button" disabled={busy() || draft().length >= 255} onClick={() => add("Sacn")}>+ sACN</button>

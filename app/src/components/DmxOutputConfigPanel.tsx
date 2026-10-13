@@ -7,6 +7,7 @@ import type {
   SerialPortSummary,
   ShowSerialDmxSafetyBlackoutRouteStatus,
 } from "../types";
+import { showDmxStageLabel } from "../showDmxStageLabels";
 
 interface DmxOutputConfigPanelProps {
   output: DmxOutputConfig;
@@ -219,9 +220,9 @@ export function DmxOutputConfigPanel(props: DmxOutputConfigPanelProps) {
     && exactRoute()
     && !serialWorkerActive(),
   );
-  const showDmxPreparationStatus = () => props.showDmxPreparationBusy
-    ? `In progress: ${props.showDmxPreparationStage ?? "preflight"}`
-    : props.showDmxPreparationStage ?? "Ready · Art-Net output can be prepared without a fixture or USB-DMX device";
+  const showDmxPreparationStatus = () => props.showDmxPreparationStage !== null
+    ? showDmxStageLabel(props.showDmxPreparationStage)
+    : props.showDmxPreparationBusy ? "Checking…" : "Ready to prepare DMX output";
   const routeState = () => !exactRoute()
     ? "Logical route mismatch"
     : props.output.enabled ? "Enabled" : "Staged disabled";

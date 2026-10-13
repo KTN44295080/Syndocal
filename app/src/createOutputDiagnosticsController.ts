@@ -32,6 +32,7 @@ import type {
   SerialPortSummary,
   ShowSerialDmxSafetyBlackoutRouteStatus,
 } from "./types";
+import { showDmxStageLabel } from "./showDmxStageLabels";
 
 type Invoke = FrontendTauriInvoke;
 
@@ -473,7 +474,7 @@ export function createOutputDiagnosticsController(options: OutputDiagnosticsCont
         }
         stage = label;
         setShowDmxPreparationStage(label);
-        options.setMessage(`Show DMX setup [${label}] starting; the existing safety blackout state is preserved.`);
+        options.setMessage(showDmxStageLabel(label));
         try {
           const result = await operation();
           if (!options.isProjectAuthorityIdentityCurrent(authority)) {

@@ -505,7 +505,6 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
             <button
               class={props.workspaceTab === "setup" ? "active" : ""}
               data-workspace-option="setup"
-              data-no-localize
               title="Setup workspace"
               aria-label="Setup workspace"
               aria-keyshortcuts="F1"
@@ -519,7 +518,6 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
             <button
               class={props.workspaceTab === "control" ? "active" : ""}
               data-workspace-option="control"
-              data-no-localize
               title="Edit workspace"
               aria-label="Edit workspace"
               aria-keyshortcuts="F2"
@@ -532,7 +530,6 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
             <button
               class={props.workspaceTab === "touch" ? "active" : ""}
               data-workspace-option="touch"
-              data-no-localize
               title="Control workspace"
               aria-label="Control workspace"
               aria-keyshortcuts="F3"
@@ -789,7 +786,6 @@ export function WorkspaceChrome(props: WorkspaceChromeProps) {
                 <button
                   class={active() ? "active" : ""}
                   data-control-mode-option={mode.id}
-                  data-no-localize
                   id={`edit-domain-tab-${mode.id}`}
                   role="tab"
                   title={`${mode.label}: ${mode.description}`}

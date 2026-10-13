@@ -29020,7 +29020,6 @@ export default function App() {
           <IoDisclosure
             id="dmx-input"
             summary="DMX input and merge"
-            description="Receive Art-Net or sACN, then choose raw merge to output or control mappings; these modes are mutually exclusive."
           >
           <DmxInputPanel
             config={dmxInputConfig()}

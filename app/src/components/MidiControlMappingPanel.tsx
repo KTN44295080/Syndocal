@@ -203,13 +203,16 @@ export function MidiControlMappingPanel(props: MidiControlMappingPanelProps) {
               <For each={props.midiOutputs}>{(output) => <option data-no-localize value={output.index}>{output.name}</option>}</For>
             </select>
             <div class="buttonRow">
-              <button
-                class="primary"
-                onClick={() => void props.onConnectFeedback()}
-                disabled={props.learnBusy || props.midiOutputs.length === 0 || props.feedbackConnected}
-              >Connect Feedback</button>
-              <button onClick={() => void props.onDisconnectFeedback()} disabled={props.learnBusy || !props.feedbackConnected}>Disconnect Feedback</button>
-              <button onClick={() => void props.onSendFeedback()} disabled={props.learnBusy || !props.feedbackConnected || props.mappings.length === 0}>Send Feedback</button>
+              <Show when={props.feedbackConnected} fallback={
+                <button
+                  class="primary"
+                  onClick={() => void props.onConnectFeedback()}
+                  disabled={props.learnBusy || props.midiOutputs.length === 0}
+                >Connect Feedback</button>
+              }>
+                <button onClick={() => void props.onDisconnectFeedback()} disabled={props.learnBusy}>Disconnect Feedback</button>
+                <button onClick={() => void props.onSendFeedback()} disabled={props.learnBusy || props.mappings.length === 0}>Send Feedback</button>
+              </Show>
             </div>
             <label class="checkbox">
               <input

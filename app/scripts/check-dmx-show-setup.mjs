@@ -325,6 +325,10 @@ const platformIdentityExports = {};
 new Function("exports", ts.transpileModule(read("src/serialDmxDeviceInstance.ts"), {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
 }).outputText)(platformIdentityExports);
+const stageLabelExports = {};
+new Function("exports", ts.transpileModule(read("src/showDmxStageLabels.ts"), {
+  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+}).outputText)(stageLabelExports);
 const controllerJs = ts.transpileModule(controller, {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
 }).outputText;
@@ -359,6 +363,7 @@ function leaseFixture(initial = "unavailable", config = {}) {
   const imports = {
     "./networkDmxRoutes": networkPolicy,
     "./serialDmxDeviceInstance": platformIdentityExports,
+    "./showDmxStageLabels": stageLabelExports,
     "solid-js": require("solid-js"),
     "./outputControlController": {
       queryDsf2026ArtNetAcceptanceProbeStatus: async () => null,
