@@ -13,6 +13,7 @@ use std::{
 
 mod control_plane;
 mod managed_network_dmx_retirement;
+mod network_dmx_routes;
 mod output_ownership_retirement;
 mod fixture_repatch;
 pub use fixture_repatch::FixturePatchChange;
@@ -4124,6 +4125,14 @@ define_engine_command! {
     },
     SetOutput(DmxOutputConfig),
     SetDmxOutputs(Vec<DmxOutputConfig>),
+    SetNetworkDmxRoutesPublished {
+        expected_outputs: Vec<DmxOutputConfig>,
+        routes: Vec<protocol::network_dmx_routes::NetworkDmxRoute>,
+        expected_safety_epoch: u64,
+        expected_safety_generation: u64,
+        expires_at: Instant,
+        ack: mpsc::SyncSender<Result<(), String>>,
+    },
     /// The one show-specific route activation path. Its payload is the exact
     /// disabled Art-Net loopback route captured after the native control
     /// plane's final fence checks; this command cannot configure arbitrary
@@ -5691,6 +5700,7 @@ macro_rules! engine_command_video_presentation_relevance {
             EngineCommand::SetOutput(_)
             | EngineCommand::SetDmxOutputs(_)
             | EngineCommand::EnableShowArtNetLoopbackRoutePublished { .. }
+            | EngineCommand::SetNetworkDmxRoutesPublished { .. }
             | EngineCommand::SendDsf2026ArtNetAcceptanceProbe { .. }
             | EngineCommand::EnableShowSpoutOutputsPublished { .. }
             | EngineCommand::RestoreShowSpoutOutputsDisabledPublished { .. }
@@ -5985,6 +5995,7 @@ impl EngineCommand {
                 | EngineCommand::SetOutput(_)
                 | EngineCommand::SetDmxOutputs(_)
                 | EngineCommand::EnableShowArtNetLoopbackRoutePublished { .. }
+                | EngineCommand::SetNetworkDmxRoutesPublished { .. }
                 | EngineCommand::SendDsf2026ArtNetAcceptanceProbe { .. }
                 | EngineCommand::EnableShowSpoutOutputsPublished { .. }
                 | EngineCommand::RestoreShowSpoutOutputsDisabledPublished { .. }
@@ -12302,6 +12313,7 @@ impl EngineHandle {
             | EngineCommand::SetOutput(_)
             | EngineCommand::SetDmxOutputs(_)
             | EngineCommand::EnableShowArtNetLoopbackRoutePublished { .. }
+            | EngineCommand::SetNetworkDmxRoutesPublished { .. }
             | EngineCommand::SendDsf2026ArtNetAcceptanceProbe { .. }
             | EngineCommand::EnableShowSpoutOutputsPublished { .. }
             | EngineCommand::RestoreShowSpoutOutputsDisabledPublished { .. }
@@ -20215,6 +20227,7 @@ enum PendingCommandRollback {
         touch_surface: TouchSurfaceSummary,
         last_error: Option<String>,
     },
+    RestoreNetworkDmxRoutes(network_dmx_routes::NetworkDmxRoutesRollback),
     /// The route begins disabled and has no sender by contract. Retaining
     /// this exact A image lets an acknowledged publication failure drop the
     /// newly-opened Art-Net sender and restore the authored disabled route.
@@ -20562,6 +20575,7 @@ impl PendingCommandRollback {
             self,
             Self::RemoveAddedEffect { .. }
                 | Self::RestoreShowArtNetLoopbackRouteEnable { .. }
+                | Self::RestoreNetworkDmxRoutes(_)
                 | Self::RestoreEffect { .. }
                 | Self::RestoreEffectEnabled { .. }
                 | Self::RestoreNodeGraphs { .. }
@@ -21485,7 +21499,7 @@ impl EngineRuntime {
         }
     }
 
-    /// The USB worker is a primary physical mirror only while the one exact
+    /// The USB worker mirrors the primary U0 only while the exact
     /// Unity Art-Net route is both configured and still live. Re-evaluate this
     /// after the Art-Net send on every tick: a send failure clears its sender,
     /// and a reconnect must never silently re-arm USB output after that fault.
@@ -21497,7 +21511,6 @@ impl EngineRuntime {
                 Some(DmxSender::TestExactArtNetRoute | DmxSender::TestFailingArtNetSend) => true,
                 _ => false,
             }
-            && self.additional_dmx_outputs.is_empty()
     }
 
     fn show_serial_dmx_artnet_mirror_status(&self) -> (bool, String) {
@@ -24380,6 +24393,14 @@ impl EngineRuntime {
                         self.last_error = Some(error);
                     }
                 }
+            }
+            EngineCommand::SetNetworkDmxRoutesPublished { expected_outputs, routes, expected_safety_epoch, expected_safety_generation, expires_at, ack } => {
+                let applied = self.apply_network_dmx_routes(&expected_outputs, &routes, expected_safety_epoch, expected_safety_generation, expires_at);
+                let (result, rollback) = match applied {
+                    Ok(rollback) => (Ok(()), PendingCommandRollback::RestoreNetworkDmxRoutes(rollback)),
+                    Err(error) => (Err(error), PendingCommandRollback::KeepApplied),
+                };
+                self.pending_command_acks.push(PendingCommandAck { ack: PendingCommandAckSender::Plain(ack), result, rollback, publication_error: "Network DMX routes could not publish an acknowledged snapshot" });
             }
             EngineCommand::SetDmxOutputs(mut outputs) => {
                 if outputs.is_empty() {
@@ -31438,6 +31459,7 @@ impl EngineRuntime {
                 self.touch_surface = touch_surface;
                 self.last_error = last_error;
             }
+            PendingCommandRollback::RestoreNetworkDmxRoutes(rollback) => rollback.restore(self),
             PendingCommandRollback::RestoreShowArtNetLoopbackRouteEnable {
                 output,
                 dmx_sender_recovery,
@@ -51408,7 +51430,7 @@ impl EngineRuntime {
     /// consumed commit boundary, so an ambiguous route cannot be mistaken for
     /// a harmless retry/cancellation and must subsequently be all-deny
     /// retired by the command handler.
-    fn managed_show_dmx_fail_stop_topology_preflight(&self) -> Result<(), String> {
+    fn managed_show_dmx_fail_stop_topology_preflight(&self, scope: ManagedDmxRetirementScope) -> Result<(), String> {
         if !self
             .shared_telemetry
             .open_dmx_safety_write_gate
@@ -51421,15 +51443,16 @@ impl EngineRuntime {
                 "Managed show DMX fail-stop requires the physical Open DMX S0 latch".to_string(),
             );
         }
-        if !self.additional_dmx_outputs.is_empty()
-            || self
-                .dmx_input_frames
-                .contains_key(&SHOW_ARTNET_LOOPBACK_UNIVERSE)
+        if (scope == ManagedDmxRetirementScope::ExactShow && !self.additional_dmx_outputs.is_empty())
+            || self.dmx_input_frames.contains_key(&SHOW_ARTNET_LOOPBACK_UNIVERSE)
         {
             return Err(
                 "Managed show DMX fail-stop rejects additional DMX routes and Universe 0 input/merge state"
                     .to_string(),
             );
+        }
+        if scope == ManagedDmxRetirementScope::ConfiguredNetwork {
+            protocol::network_dmx_routes::validate_network_dmx_configs(&self.additional_dmx_outputs.iter().map(|route| route.config.clone()).collect::<Vec<_>>())?;
         }
         if self.show_serial_dmx_route.is_none() && !self.managed_show_dmx_has_pristine_absent_usb()
         {
@@ -51650,6 +51673,7 @@ impl EngineRuntime {
 
     fn apply_managed_show_dmx_fail_stop_with_transport(
         &mut self,
+        scope: ManagedDmxRetirementScope,
         expected_safety_epoch: u64,
         expected_safety_generation: u64,
         expected_failure_epoch: u64,
@@ -51750,7 +51774,7 @@ impl EngineRuntime {
         // succeeds; an error after this point stays InDoubt/faulted.
         self.clear_managed_show_dmx_fail_stop_completion();
 
-        self.managed_show_dmx_fail_stop_topology_preflight()
+        self.managed_show_dmx_fail_stop_topology_preflight(scope)
             .map_err(ManagedShowDmxFailStopError::in_doubt)?;
 
         let usb_required = self.show_serial_dmx_route.is_some();
@@ -51779,6 +51803,15 @@ impl EngineRuntime {
             self.record_managed_show_dmx_fail_stop_test_event(
                 ManagedShowDmxFailStopTestEvent::ArtNetZeroAccepted,
             );
+        }
+
+        if scope == ManagedDmxRetirementScope::ConfiguredNetwork {
+            let mut errors = Vec::new();
+            for route in &mut self.additional_dmx_outputs {
+                managed_network_dmx_retirement::retire_network_sender(&mut route.sender, &route.config, &mut errors);
+                route.recovery = DmxRouteRecovery::default();
+            }
+            if !errors.is_empty() { return Err(ManagedShowDmxFailStopError::in_doubt(errors.join("; "))); }
         }
 
         // The normal USB stop owns the same gate while it revalidates S0 and
@@ -51926,8 +51959,14 @@ impl EngineRuntime {
         })
     }
 
-    fn apply_managed_show_dmx_fail_stop(
+    fn apply_managed_show_dmx_fail_stop(&mut self, safety_epoch: u64, safety_generation: u64, failure_epoch: u64,
+        operation: &ManagedShowDmxFailStopOperationInner) -> Result<ManagedShowDmxFailStopReceipt, ManagedShowDmxFailStopError> {
+        self.apply_managed_show_dmx_fail_stop_for_scope(ManagedDmxRetirementScope::ExactShow, safety_epoch, safety_generation, failure_epoch, operation)
+    }
+
+    fn apply_managed_show_dmx_fail_stop_for_scope(
         &mut self,
+        scope: ManagedDmxRetirementScope,
         expected_safety_epoch: u64,
         expected_safety_generation: u64,
         expected_failure_epoch: u64,
@@ -51957,6 +51996,7 @@ impl EngineRuntime {
                 result.clone().unwrap_or_else(|| Ok(packet.len()))
             };
             return self.apply_managed_show_dmx_fail_stop_with_transport(
+                scope,
                 expected_safety_epoch,
                 expected_safety_generation,
                 expected_failure_epoch,
@@ -52003,6 +52043,7 @@ impl EngineRuntime {
                 .map_err(|error| error.to_string())
         };
         self.apply_managed_show_dmx_fail_stop_with_transport(
+            scope,
             expected_safety_epoch,
             expected_safety_generation,
             expected_failure_epoch,
@@ -52021,6 +52062,7 @@ impl EngineRuntime {
         send: &mut dyn FnMut(&[u8; 530]) -> Result<usize, String>,
     ) -> Result<ManagedShowDmxFailStopReceipt, ManagedShowDmxFailStopError> {
         self.apply_managed_show_dmx_fail_stop_with_transport(
+            ManagedDmxRetirementScope::ExactShow,
             expected_safety_epoch,
             expected_safety_generation,
             expected_failure_epoch,
@@ -137466,6 +137508,8 @@ mod tests {
 
     #[path = "../show_managed_dmx_fail_stop_tests.rs"]
     mod show_managed_dmx_fail_stop_tests;
+    #[path = "../network_dmx_route_tests.rs"]
+    mod network_dmx_route_tests;
     #[path = "../show_serial_dmx_tests.rs"]
     mod show_serial_dmx_tests;
     fn staged_show_artnet_loopback_output() -> DmxOutputConfig {

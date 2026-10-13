@@ -1,3 +1,4 @@
+import { typescriptFixtureModuleUrl } from "./typescript-fixture-module.mjs";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import ts from "typescript";
@@ -31,10 +32,7 @@ const snapshotFor = (compositionId = 1) => ({
   },
 });
 const outputControllerSource = await read("src/outputControlController.ts");
-const outputControllerUrl = `data:text/javascript;base64,${Buffer.from(ts.transpileModule(
-  outputControllerSource,
-  { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022, importsNotUsedAsValues: ts.ImportsNotUsedAsValues.Remove } },
-).outputText).toString("base64")}`;
+const outputControllerUrl = await typescriptFixtureModuleUrl(new URL("../src/outputControlController.ts", import.meta.url));
 const routingSource = await read("src/videoOutputRoutingController.ts");
 const [protocolSource, engineSource, mainSource, runtimeSource, controlPlaneSource, manifestSource, invokeSource, appSource] = await Promise.all([
   read("../crates/protocol/src/control_plane_command.rs"),

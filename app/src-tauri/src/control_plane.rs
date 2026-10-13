@@ -33,6 +33,7 @@ use protocol::control_plane_command::{
     OUTPUT_VIDEO_CLIP_LAUNCH_OPERATION_ID, OUTPUT_VIDEO_CLIP_TAKE_OPERATION_ID,
     OUTPUT_VIDEO_MASTER_SET_OPERATION_ID,
     OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID,
+    OUTPUT_NETWORK_DMX_ROUTES_SET_OPERATION_ID,
     OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_ENABLE_OPERATION_ID,
     OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_STOP_OPERATION_ID,
     OUTPUT_SHOW_SPOUT_OUTPUTS_ENABLE_OPERATION_ID, OUTPUT_SHOW_SPOUT_OUTPUTS_RESET_OPERATION_ID,
@@ -67,9 +68,9 @@ const KEYBOARD_SHORTCUT_SOURCE_MANIFEST: &str =
 const KEYBOARD_SHORTCUT_SOURCE_MANIFEST_SCHEMA_VERSION: u16 = 1;
 const KEYBOARD_APP_SHORTCUT_SOURCE_COUNT: usize = 30;
 const KEYBOARD_PROJECT_FILE_SHORTCUT_SOURCE_COUNT: usize = 3;
-const FROZEN_TAURI_ROUTE_ADMISSION_COUNT: usize = 566;
+const FROZEN_TAURI_ROUTE_ADMISSION_COUNT: usize = 567;
 const FROZEN_TAURI_ROUTE_ADMISSION_SHA256: &str =
-    "1aeeacc2869bc0e3996e72182e67c350e0fab899473ad1d948f54c730c814803";
+    "edfdf34a22b62146d527c66291b8b1d916a1f66ba2a4d98daa492b4d90034702";
 /// The command source is parsed and validated exactly once.  Local discovery
 /// calls only clone this immutable, validated value; they never parse source
 /// text or make an external request on the invocation path.
@@ -455,6 +456,7 @@ fn is_tauri_runtime_mutation(command: &str) -> bool {
             | "disarm_dj_link_machine"
             | "discover_art_rdm_devices"
             | "discover_usb_rdm_devices"
+            | "set_network_dmx_routes_v1"
             | "enable_show_art_net_loopback_route_v1"
             | "send_dsf2026_artnet_acceptance_probe_v1"
             | "enable_output_control_v2"
@@ -1276,6 +1278,7 @@ enum ReviewedCanonicalOperation {
     SetDisplayWindowOpen,
     AssignVideoOutputComposition,
     EnableShowArtNetLoopbackRoute,
+    SetNetworkDmxRoutes,
     EnableShowSerialDmxSafetyBlackoutRoute,
     StopShowSerialDmxSafetyBlackoutRoute,
     EnableShowSpoutOutputs,
@@ -1325,6 +1328,7 @@ impl ReviewedCanonicalOperation {
             Self::AddDisplayOutput => OUTPUT_DISPLAY_ADD_OPERATION_ID,
             Self::SetDisplayWindowOpen => OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID,
             Self::AssignVideoOutputComposition => OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID,
+            Self::SetNetworkDmxRoutes => OUTPUT_NETWORK_DMX_ROUTES_SET_OPERATION_ID,
             Self::EnableShowArtNetLoopbackRoute => {
                 OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID
             }
@@ -1406,6 +1410,7 @@ fn reviewed_canonical_operation(command: &str) -> Option<ReviewedCanonicalOperat
         "assign_video_output_composition_v2" => {
             Some(ReviewedCanonicalOperation::AssignVideoOutputComposition)
         }
+        "set_network_dmx_routes_v1" => Some(ReviewedCanonicalOperation::SetNetworkDmxRoutes),
         "enable_show_art_net_loopback_route_v1" => {
             Some(ReviewedCanonicalOperation::EnableShowArtNetLoopbackRoute)
         }
@@ -1560,6 +1565,7 @@ fn canonical_descriptor_for_source(
         | ReviewedCanonicalOperation::AddDisplayOutput
         | ReviewedCanonicalOperation::AssignVideoOutputComposition
         | ReviewedCanonicalOperation::EnableShowArtNetLoopbackRoute
+        | ReviewedCanonicalOperation::SetNetworkDmxRoutes
         | ReviewedCanonicalOperation::EnableShowSerialDmxSafetyBlackoutRoute
         | ReviewedCanonicalOperation::StopShowSerialDmxSafetyBlackoutRoute
         | ReviewedCanonicalOperation::SendDsf2026ArtNetAcceptanceProbe
@@ -1631,6 +1637,7 @@ fn canonical_descriptor_for_source(
                 | ReviewedCanonicalOperation::LaunchVideoClip
                 | ReviewedCanonicalOperation::TakeVideoClip
                 | ReviewedCanonicalOperation::EnableShowArtNetLoopbackRoute
+                | ReviewedCanonicalOperation::SetNetworkDmxRoutes
                 | ReviewedCanonicalOperation::EnableShowSerialDmxSafetyBlackoutRoute
                 | ReviewedCanonicalOperation::StopShowSerialDmxSafetyBlackoutRoute
                 | ReviewedCanonicalOperation::SendDsf2026ArtNetAcceptanceProbe
@@ -1678,6 +1685,7 @@ fn canonical_descriptor_for_source(
                 | ReviewedCanonicalOperation::LaunchVideoClip
                 | ReviewedCanonicalOperation::TakeVideoClip
                 | ReviewedCanonicalOperation::EnableShowArtNetLoopbackRoute
+                | ReviewedCanonicalOperation::SetNetworkDmxRoutes
                 | ReviewedCanonicalOperation::EnableShowSerialDmxSafetyBlackoutRoute
                 | ReviewedCanonicalOperation::StopShowSerialDmxSafetyBlackoutRoute
                 | ReviewedCanonicalOperation::SendDsf2026ArtNetAcceptanceProbe
@@ -1723,6 +1731,7 @@ fn canonical_descriptor_for_source(
                 | ReviewedCanonicalOperation::LaunchVideoClip
                 | ReviewedCanonicalOperation::TakeVideoClip
                 | ReviewedCanonicalOperation::EnableShowArtNetLoopbackRoute
+                | ReviewedCanonicalOperation::SetNetworkDmxRoutes
                 | ReviewedCanonicalOperation::EnableShowSerialDmxSafetyBlackoutRoute
                 | ReviewedCanonicalOperation::StopShowSerialDmxSafetyBlackoutRoute
                 | ReviewedCanonicalOperation::SendDsf2026ArtNetAcceptanceProbe
@@ -1774,6 +1783,7 @@ fn canonical_descriptor_for_source(
                 | ReviewedCanonicalOperation::AddDisplayOutput
                 | ReviewedCanonicalOperation::AssignVideoOutputComposition
                 | ReviewedCanonicalOperation::EnableShowArtNetLoopbackRoute
+                | ReviewedCanonicalOperation::SetNetworkDmxRoutes
                 | ReviewedCanonicalOperation::EnableShowSerialDmxSafetyBlackoutRoute
                 | ReviewedCanonicalOperation::StopShowSerialDmxSafetyBlackoutRoute
                 | ReviewedCanonicalOperation::SendDsf2026ArtNetAcceptanceProbe
@@ -1964,6 +1974,7 @@ fn descriptor_for_command(operation_id: &str) -> OperationDescriptor {
             | "set_video_master_output_control_v2"
             | "launch_video_clip_output_control_v2"
             | "take_video_clip_output_control_v2"
+            | "set_network_dmx_routes_v1"
             | "enable_show_art_net_loopback_route_v1"
             | "enable_show_serial_dmx_safety_blackout_route_v1"
             | "stop_show_serial_dmx_safety_blackout_route_v1"
@@ -2173,6 +2184,7 @@ fn command_schema(operation_id: &str, direction: &str) -> SchemaIdentity {
                 | OUTPUT_VIDEO_CLIP_LAUNCH_OPERATION_ID
                 | OUTPUT_VIDEO_CLIP_TAKE_OPERATION_ID
                 | OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID
+                | OUTPUT_NETWORK_DMX_ROUTES_SET_OPERATION_ID
                 | OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_ENABLE_OPERATION_ID
                 | OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_STOP_OPERATION_ID
                 | OUTPUT_SHOW_SPOUT_OUTPUTS_ENABLE_OPERATION_ID
@@ -2527,7 +2539,7 @@ mod tests {
         assert_eq!(counts[&TauriRouteAdmissionClass::ProjectReplacement], 11);
         assert_eq!(counts[&TauriRouteAdmissionClass::ProjectHistory], 3);
         assert_eq!(counts[&TauriRouteAdmissionClass::LocalPhysicalMutation], 6);
-        assert_eq!(counts[&TauriRouteAdmissionClass::RuntimeMutation], 169);
+        assert_eq!(counts[&TauriRouteAdmissionClass::RuntimeMutation], 170);
         assert_eq!(counts[&TauriRouteAdmissionClass::FileExportMutation], 29);
         assert_eq!(counts[&TauriRouteAdmissionClass::SafetyMutation], 1);
         assert_eq!(counts[&TauriRouteAdmissionClass::RecoveryMaintenance], 28);
@@ -2583,7 +2595,7 @@ mod tests {
         // engine commands; the strict Show Spout Reset adds its separately
         // named atomic engine command. Its five Tauri routes and the local
         // Spout reset account for the six manifest entries below.
-        const ENGINE_COMMAND_COUNT: usize = 283;
+        const ENGINE_COMMAND_COUNT: usize = 284;
         const REMOTE_INPUT_EVENT_COUNT: usize = 51;
         const REMOTE_CLIENT_REQUEST_COUNT: usize = 7;
         const REMOTE_WIRE_OPERATION_COUNT: usize = 58;
@@ -2605,7 +2617,7 @@ mod tests {
             + OSC_INPUT_EVENT_COUNT
             + DMX_INPUT_PROTOCOL_COUNT
             + DMX_INPUT_EVENT_COUNT;
-        const FRONTEND_INVOKE_COUNT: usize = 486;
+        const FRONTEND_INVOKE_COUNT: usize = 487;
         assert_eq!(MIDI_OSC_DMX_OPERATION_COUNT, 208);
         assert_eq!(
             registry.operations.len(),
@@ -2615,7 +2627,7 @@ mod tests {
                 + MIDI_OSC_DMX_OPERATION_COUNT
                 + FRONTEND_INVOKE_COUNT
         );
-        assert_eq!(registry.operations.len(), 1659);
+        assert_eq!(registry.operations.len(), 1662);
         verify_registry_exact_set(&names, &registry).unwrap();
         let r0 = registry
             .operations
@@ -2723,6 +2735,7 @@ mod tests {
                 OUTPUT_VIDEO_CLIP_LAUNCH_OPERATION_ID,
             ),
             ("arm_output_control_v2", OUTPUT_OWNERSHIP_ARM_OPERATION_ID),
+            ("set_network_dmx_routes_v1", OUTPUT_NETWORK_DMX_ROUTES_SET_OPERATION_ID),
             (
                 "enable_show_art_net_loopback_route_v1",
                 OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID,
@@ -2993,20 +3006,20 @@ mod tests {
         const TAURI_COUNT: usize = FROZEN_TAURI_ROUTE_ADMISSION_COUNT;
         // 277 prior engine sources plus the distinct atomic
         // `ResetShowSpoutOutputsExactPublished` source.
-        const ENGINE_COUNT: usize = 283;
+        const ENGINE_COUNT: usize = 284;
         const REMOTE_COUNT: usize = 116;
         const MIDI_OSC_DMX_COUNT: usize = 208;
-        const FRONTEND_COUNT: usize = 486;
+        const FRONTEND_COUNT: usize = 487;
         const LEGACY_SOURCE_TOTAL: usize =
             TAURI_COUNT + ENGINE_COUNT + REMOTE_COUNT + MIDI_OSC_DMX_COUNT + FRONTEND_COUNT;
         const KEYBOARD_APP_COUNT: usize = 30;
         const KEYBOARD_PROJECT_FILE_COUNT: usize = 3;
         const SOURCE_TOTAL: usize =
             LEGACY_SOURCE_TOTAL + KEYBOARD_APP_COUNT + KEYBOARD_PROJECT_FILE_COUNT;
-        assert_eq!(LEGACY_SOURCE_TOTAL, 1659);
-        assert_eq!(SOURCE_TOTAL, 1692);
+        assert_eq!(LEGACY_SOURCE_TOTAL, 1662);
+        assert_eq!(SOURCE_TOTAL, 1695);
         assert_eq!(canonical.source_inventory.len(), SOURCE_TOTAL);
-        assert_eq!(canonical.canonical_operations.len(), 73);
+        assert_eq!(canonical.canonical_operations.len(), 74);
 
         let output_control_operations = canonical
             .canonical_operations
@@ -3027,6 +3040,7 @@ mod tests {
                         | OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID
                         | OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID
                         | OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID
+                        | OUTPUT_NETWORK_DMX_ROUTES_SET_OPERATION_ID
                         | OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_ENABLE_OPERATION_ID
                         | OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_STOP_OPERATION_ID
                         | OUTPUT_SHOW_SPOUT_OUTPUTS_ENABLE_OPERATION_ID
@@ -3042,7 +3056,7 @@ mod tests {
                 )
             })
             .collect::<Vec<_>>();
-        assert_eq!(output_control_operations.len(), 25);
+        assert_eq!(output_control_operations.len(), 26);
         for (source_id, operation_id) in [
             (
                 "release_blackout_output_control_v2",
@@ -3073,6 +3087,7 @@ mod tests {
                 OUTPUT_VIDEO_CLIP_LAUNCH_OPERATION_ID,
             ),
             ("arm_output_control_v2", OUTPUT_OWNERSHIP_ARM_OPERATION_ID),
+            ("set_network_dmx_routes_v1", OUTPUT_NETWORK_DMX_ROUTES_SET_OPERATION_ID),
             (
                 "enable_show_art_net_loopback_route_v1",
                 OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID,
@@ -3393,7 +3408,7 @@ mod tests {
                 )
             })
             .collect::<Vec<_>>();
-        assert_eq!(direct.len(), 73);
+        assert_eq!(direct.len(), 74);
         assert_eq!(aliases.len(), FRONTEND_COUNT);
         assert_eq!(internal_steps.len(), 4);
         assert_eq!(structural_routes.len(), 1);
@@ -3409,7 +3424,7 @@ mod tests {
         // Two local renderer routes and the atomic engine source remain unavailable externally.
         // get/set extensions and Engine/MIDI toggle sources stay local; their
         // two frontend sources remain aliases rather than new external operations.
-        assert_eq!(unclassified.len(), 1128);
+        assert_eq!(unclassified.len(), 1129);
         assert_eq!(support_phases.len(), 0);
         assert_eq!(
             direct.len()
@@ -3747,6 +3762,7 @@ mod tests {
                     | OUTPUT_VIDEO_CLIP_LAUNCH_OPERATION_ID
                     | OUTPUT_VIDEO_CLIP_TAKE_OPERATION_ID
                     | OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID
+                    | OUTPUT_NETWORK_DMX_ROUTES_SET_OPERATION_ID
                     | OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_ENABLE_OPERATION_ID
                     | OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_STOP_OPERATION_ID
                     | OUTPUT_SHOW_SPOUT_OUTPUTS_ENABLE_OPERATION_ID
@@ -3919,6 +3935,7 @@ mod tests {
                     | OUTPUT_VIDEO_CLIP_LAUNCH_OPERATION_ID
                     | OUTPUT_VIDEO_CLIP_TAKE_OPERATION_ID
                     | OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID
+                    | OUTPUT_NETWORK_DMX_ROUTES_SET_OPERATION_ID
                     | OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_ENABLE_OPERATION_ID
                     | OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_STOP_OPERATION_ID
                     | OUTPUT_SHOW_SPOUT_OUTPUTS_ENABLE_OPERATION_ID
@@ -4167,11 +4184,11 @@ mod tests {
     fn legacy_v1_registry_json_and_count_remain_inventory_honest() {
         let legacy = registry().unwrap();
         // Includes both the native and frontend missing-publication resolver.
-        assert_eq!(legacy.operations.len(), 1659);
+        assert_eq!(legacy.operations.len(), 1662);
         let encoded = serde_json::to_value(&legacy).unwrap();
         assert_eq!(encoded["schema"]["version"], CONTROL_PLANE_SCHEMA_VERSION);
         let operations = encoded["operations"].as_array().unwrap();
-        assert_eq!(operations.len(), 1659);
+        assert_eq!(operations.len(), 1662);
         assert!(operations.iter().all(|operation| {
             operation["source_family"] != "keyboard_app"
                 && operation["source_family"] != "keyboard_project_file"

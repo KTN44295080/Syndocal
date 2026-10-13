@@ -1,0 +1,281 @@
+{
+  "date": "2026-10-13T15:06:22.103Z",
+  "source": "owned working tree",
+  "results": [
+    {
+      "width": 1920,
+      "height": 1080,
+      "family": "COLOR FX",
+      "fxHeight": 1702,
+      "fxScrollHeight": 1700,
+      "scrollHeight": 1999,
+      "clientHeight": 455,
+      "wheel": true,
+      "endSaveReachable": true
+    },
+    {
+      "width": 1920,
+      "height": 1080,
+      "family": "CHASER FX",
+      "fxHeight": 1896.640625,
+      "fxScrollHeight": 1895,
+      "scrollHeight": 2194,
+      "clientHeight": 455,
+      "wheel": true,
+      "endSaveReachable": true
+    },
+    {
+      "width": 1920,
+      "height": 1080,
+      "family": "VALUE FX",
+      "fxHeight": 2125,
+      "fxScrollHeight": 2123,
+      "scrollHeight": 2422,
+      "clientHeight": 455,
+      "wheel": true,
+      "endSaveReachable": true
+    },
+    {
+      "width": 1920,
+      "height": 1080,
+      "family": "CURVE FX",
+      "fxHeight": 1943,
+      "fxScrollHeight": 1941,
+      "scrollHeight": 2240,
+      "clientHeight": 455,
+      "wheel": true,
+      "endSaveReachable": true
+    },
+    {
+      "width": 1920,
+      "height": 1080,
+      "family": "2D MAPPING",
+      "fxHeight": 2042.1875,
+      "fxScrollHeight": 2040,
+      "scrollHeight": 2339,
+      "clientHeight": 455,
+      "wheel": true,
+      "endSaveReachable": true
+    },
+    {
+      "width": 1920,
+      "height": 1032,
+      "family": "COLOR FX",
+      "fxHeight": 1702,
+      "fxScrollHeight": 1700,
+      "scrollHeight": 1999,
+      "clientHeight": 427,
+      "wheel": true,
+      "endSaveReachable": true
+    },
+    {
+      "width": 1920,
+      "height": 1032,
+      "family": "CHASER FX",
+      "fxHeight": 1896.640625,
+      "fxScrollHeight": 1895,
+      "scrollHeight": 2194,
+      "clientHeight": 427,
+      "wheel": true,
+      "endSaveReachable": true
+    },
+    {
+      "width": 1920,
+      "height": 1032,
+      "family": "VALUE FX",
+      "fxHeight": 2125,
+      "fxScrollHeight": 2123,
+      "scrollHeight": 2422,
+      "clientHeight": 427,
+      "wheel": true,
+      "endSaveReachable": true
+    },
+    {
+      "width": 1920,
+      "height": 1032,
+      "family": "CURVE FX",
+      "fxHeight": 1943,
+      "fxScrollHeight": 1941,
+      "scrollHeight": 2240,
+      "clientHeight": 427,
+      "wheel": true,
+      "endSaveReachable": true
+    },
+    {
+      "width": 1920,
+      "height": 1032,
+      "family": "2D MAPPING",
+      "fxHeight": 2042.1875,
+      "fxScrollHeight": 2040,
+      "scrollHeight": 2339,
+      "clientHeight": 427,
+      "wheel": true,
+      "endSaveReachable": true
+    },
+    {
+      "width": 2048,
+      "height": 1152,
+      "family": "COLOR FX",
+      "fxHeight": 1702,
+      "fxScrollHeight": 1700,
+      "scrollHeight": 1999,
+      "clientHeight": 496,
+      "wheel": true,
+      "endSaveReachable": true
+    },
+    {
+      "width": 2048,
+      "height": 1152,
+      "family": "CHASER FX",
+      "fxHeight": 1896.640625,
+      "fxScrollHeight": 1895,
+      "scrollHeight": 2194,
+      "clientHeight": 496,
+      "wheel": true,
+      "endSaveReachable": true
+    },
+    {
+      "width": 2048,
+      "height": 1152,
+      "family": "VALUE FX",
+      "fxHeight": 2125,
+      "fxScrollHeight": 2123,
+      "scrollHeight": 2422,
+      "clientHeight": 496,
+      "wheel": true,
+      "endSaveReachable": true
+    },
+    {
+      "width": 2048,
+      "height": 1152,
+      "family": "CURVE FX",
+      "fxHeight": 1943,
+      "fxScrollHeight": 1941,
+      "scrollHeight": 2240,
+      "clientHeight": 496,
+      "wheel": true,
+      "endSaveReachable": true
+    },
+    {
+      "width": 2048,
+      "height": 1152,
+      "family": "2D MAPPING",
+      "fxHeight": 2042.1875,
+      "fxScrollHeight": 2040,
+      "scrollHeight": 2339,
+      "clientHeight": 496,
+      "wheel": true,
+      "endSaveReachable": true
+    },
+    {
+      "width": 1366,
+      "height": 768,
+      "family": "COLOR FX",
+      "fxHeight": 1702,
+      "fxScrollHeight": 1700,
+      "scrollHeight": 2015,
+      "clientHeight": 221,
+      "wheel": true,
+      "endSaveReachable": true
+    },
+    {
+      "width": 1366,
+      "height": 768,
+      "family": "CHASER FX",
+      "fxHeight": 1896.640625,
+      "fxScrollHeight": 1895,
+      "scrollHeight": 2210,
+      "clientHeight": 221,
+      "wheel": true,
+      "endSaveReachable": true
+    },
+    {
+      "width": 1366,
+      "height": 768,
+      "family": "VALUE FX",
+      "fxHeight": 2156,
+      "fxScrollHeight": 2154,
+      "scrollHeight": 2469,
+      "clientHeight": 221,
+      "wheel": true,
+      "endSaveReachable": true
+    },
+    {
+      "width": 1366,
+      "height": 768,
+      "family": "CURVE FX",
+      "fxHeight": 1997,
+      "fxScrollHeight": 1995,
+      "scrollHeight": 2310,
+      "clientHeight": 221,
+      "wheel": true,
+      "endSaveReachable": true
+    },
+    {
+      "width": 1366,
+      "height": 768,
+      "family": "2D MAPPING",
+      "fxHeight": 2064.1875,
+      "fxScrollHeight": 2062,
+      "scrollHeight": 2377,
+      "clientHeight": 221,
+      "wheel": true,
+      "endSaveReachable": true
+    },
+    {
+      "width": 1280,
+      "height": 720,
+      "family": "COLOR FX",
+      "fxHeight": 1664,
+      "fxScrollHeight": 1662,
+      "scrollHeight": 1977,
+      "clientHeight": 179,
+      "wheel": true,
+      "endSaveReachable": true
+    },
+    {
+      "width": 1280,
+      "height": 720,
+      "family": "CHASER FX",
+      "fxHeight": 1882.640625,
+      "fxScrollHeight": 1881,
+      "scrollHeight": 2196,
+      "clientHeight": 179,
+      "wheel": true,
+      "endSaveReachable": true
+    },
+    {
+      "width": 1280,
+      "height": 720,
+      "family": "VALUE FX",
+      "fxHeight": 2144,
+      "fxScrollHeight": 2142,
+      "scrollHeight": 2457,
+      "clientHeight": 179,
+      "wheel": true,
+      "endSaveReachable": true
+    },
+    {
+      "width": 1280,
+      "height": 720,
+      "family": "CURVE FX",
+      "fxHeight": 1993,
+      "fxScrollHeight": 1991,
+      "scrollHeight": 2306,
+      "clientHeight": 179,
+      "wheel": true,
+      "endSaveReachable": true
+    },
+    {
+      "width": 1280,
+      "height": 720,
+      "family": "2D MAPPING",
+      "fxHeight": 2060.1875,
+      "fxScrollHeight": 2058,
+      "scrollHeight": 2373,
+      "clientHeight": 179,
+      "wheel": true,
+      "endSaveReachable": true
+    }
+  ]
+}

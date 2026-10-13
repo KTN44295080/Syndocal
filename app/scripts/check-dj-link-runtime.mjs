@@ -15,6 +15,7 @@ import {
   unavailableRemoteControlStatus,
 } from "../src/djLinkUiState.ts";
 import { retainDjTimelineOptions } from "../src/djTimelineOptions.ts";
+import { generateRemotePairingPin } from "../src/remotePairingPin.ts";
 
 const read = (relativePath) => readFile(new URL(`../${relativePath}`, import.meta.url), "utf8");
 const [app, types, panel, chrome, invokes, manifest, localization, main, persistenceRuntime, styles] = await Promise.all([
@@ -29,6 +30,36 @@ const [app, types, panel, chrome, invokes, manifest, localization, main, persist
   read("src-tauri/src/dj_link_persistence_runtime.rs"),
   read("src/styles.css"),
 ]);
+
+const makeRandomSource = (values) => ({
+  getRandomValues(target) {
+    target[0] = values.shift();
+    return target;
+  },
+});
+assert.equal(generateRemotePairingPin(makeRandomSource([42])), "000042");
+assert.equal(generateRemotePairingPin(makeRandomSource([123456])), "123456");
+assert.equal(
+  generateRemotePairingPin(makeRandomSource([0xffff_ffff, 123456])),
+  "123456",
+  "out-of-range Uint32 samples must be rejected instead of biasing the six-digit PIN",
+);
+assert.equal(generateRemotePairingPin(makeRandomSource(Array(128).fill(0xffff_ffff))), null, "bounded rejection sampling must not loop indefinitely");
+assert.equal(generateRemotePairingPin(makeRandomSource([4293999999])), "999999");
+assert.equal(generateRemotePairingPin(makeRandomSource([4294000000, 42])), "000042");
+assert.equal(generateRemotePairingPin(null), null, "missing Web Crypto must fail closed");
+assert.equal(
+  generateRemotePairingPin({ getRandomValues() { throw new Error("unavailable"); } }),
+  null,
+  "a failing secure-random provider must fail closed",
+);
+assert.match(app, /generateRemotePairingPin\(\) \?\? ""/);
+assert.match(app, /if \(!nextPin\)[\s\S]*?existing PIN was kept/);
+assert.match(localization, /Secure pairing PIN generation is unavailable; the existing PIN was kept\./);
+const remotePinFactoryStart = app.indexOf("const createPairingPin = () =>");
+const remotePinFactoryEnd = app.indexOf("const [remotePairingPin", remotePinFactoryStart);
+assert.ok(remotePinFactoryStart >= 0 && remotePinFactoryEnd > remotePinFactoryStart);
+assert.doesNotMatch(app.slice(remotePinFactoryStart, remotePinFactoryEnd), /Math\.random/);
 
 for (const source of [app, types]) {
   assert.match(source, /DjTrackTriggerMapping/);

@@ -1,3 +1,4 @@
+import { typescriptFixtureModuleUrl } from "./typescript-fixture-module.mjs";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import ts from "typescript";
@@ -18,17 +19,7 @@ const [panelSource, setupSource, appSource, controllerSource, invokeSource, mani
   read("src-tauri/src/main.rs"),
 ]);
 
-const controllerRuntime = await import(`data:text/javascript;base64,${Buffer.from(ts.transpileModule(
-  controllerSource,
-  {
-    compilerOptions: {
-      module: ts.ModuleKind.ESNext,
-      target: ts.ScriptTarget.ES2022,
-      importsNotUsedAsValues: ts.ImportsNotUsedAsValues.Remove,
-    },
-    fileName: "outputControlController.ts",
-  },
-).outputText).toString("base64")}`);
+const controllerRuntime = await import(await typescriptFixtureModuleUrl(new URL("../src/outputControlController.ts", import.meta.url)));
 const localizationRuntime = await import(`data:text/javascript;base64,${Buffer.from(ts.transpileModule(
   localizationSource,
   {

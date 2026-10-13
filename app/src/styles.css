@@ -36014,7 +36014,9 @@ html[data-window-mode="fullscreen"] .desktopResizeZones {
 .sceneFxEditor {
   container-name: effect-form;
   container-type: inline-size;
-  overflow: hidden;
+  /* Let the outer inspector scroll through the complete form and save action. */
+  min-height: max-content;
+  overflow: visible;
 }
 
 .sceneFxEditor > .sceneSettingsAttribute {
@@ -40461,3 +40463,13 @@ button.timelineExternalSourceCard:active,
 
 /* A native disabled fieldset keeps controls readable and keyboard-safe. */
 fieldset.attributeDeskSurface { border: 0; margin: 0; padding: 0; min-inline-size: 0; }
+
+/* Keep route fields readable; paginate and reflow inside the I/O scroller. */
+.networkDmxRoutes { display: grid; gap: 10px; min-width: 0; padding: 12px; border: 1px solid var(--ui-border); }
+.networkDmxRoutes > p { margin: 0; }
+.networkDmxRouteRows { display: grid; gap: 10px; min-width: 0; }
+.networkDmxRouteRow { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; min-width: 0; }
+.networkDmxRouteRow label { display: grid; gap: 4px; min-width: 0; }
+.networkDmxRouteRow input:not([type="checkbox"]), .networkDmxRouteRow select { width: 100%; min-width: 0; min-height: 40px; }
+.networkDmxRouteRow .networkDmxDestination { grid-column: span 2; }
+.networkDmxRouteRow button { min-height: 40px; }

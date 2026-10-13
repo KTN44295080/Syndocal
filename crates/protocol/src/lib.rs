@@ -6,6 +6,7 @@ use std::{
 use serde::{de, Deserialize, Serialize};
 use unicode_normalization::UnicodeNormalization;
 
+pub mod network_dmx_routes;
 pub mod control_plane;
 pub mod control_plane_command;
 pub mod control_plane_project;

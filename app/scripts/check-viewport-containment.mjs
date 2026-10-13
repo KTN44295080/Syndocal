@@ -5437,7 +5437,8 @@ async function runSetupIoViewport(client, viewport, dmxOnly = false) {
   // identity, manual, and protocol details stay collapsed until explicitly
   // requested. Nested details count toward the structural disclosure contract
   // but must not count as default-visible controls.
-  const expectedDmxControlCount = 6;
+  // Four network-route actions join the six existing U0/input controls.
+  const expectedDmxControlCount = 10;
   const expectedDmxDisclosureCount = 7;
   const legacyStoredTabs = await exerciseLegacySetupIoStoredTabs(client);
   const checks = {
@@ -5476,6 +5477,7 @@ async function runSetupIoViewport(client, viewport, dmxOnly = false) {
       measurements.io.ioActiveZoneFullWidth &&
       measurements.io.ioWorkbenchFullWidth &&
       measurements.io.ioWorkbenchBodyOwnsScroll,
+    networkUniverseEditorPresent: measurements.io.ioNetworkRoutesPanelCount === 1,
     dmxControlsAndDisclosuresPreserved:
       measurements.io.ioZoneVisibleControlCounts.dmx === expectedDmxControlCount &&
       measurements.io.ioActiveZoneVisibleControlCount === expectedDmxControlCount &&
@@ -10629,6 +10631,7 @@ async function measure(client, label) {
         return rect.width > 0 && rect.height > 0;
       }),
       ioActiveZoneVisibleControlCount: visibleIoZones[0] ? visibleInteractiveElements(visibleIoZones[0]).length : 0,
+      ioNetworkRoutesPanelCount: document.querySelectorAll(".ioUnifiedDmxZone [data-network-dmx-routes]").length,
       ioVisibleControlCount: visibleInteractiveElements(setupIoPanel).length,
       ioDisclosureCount: ioDisclosures.length,
       ioOpenDisclosureCount: ioDisclosures.filter((disclosure) => disclosure.open).length,
@@ -13163,7 +13166,8 @@ function hasExpectedSetupSurface(result) {
       result.ioVisibleZoneCount === 1 &&
       JSON.stringify(result.ioVisibleZoneNames) === JSON.stringify(["dmx"]) &&
       result.ioAllZoneRectsPositive &&
-      result.ioActiveZoneVisibleControlCount === 6 &&
+      result.ioActiveZoneVisibleControlCount === 10 &&
+      result.ioNetworkRoutesPanelCount === 1 &&
       result.visibleDmxEnableStagedShowArtNetLoopbackRouteCount === 0 &&
       !result.ioShowArtNetLoopbackControlReachable &&
       JSON.stringify(result.ioZoneDisclosureCounts) === JSON.stringify({ dmx: 7 }) &&

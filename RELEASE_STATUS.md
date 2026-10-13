@@ -1,8 +1,12 @@
 # Syndocal historical v1.0 / current v1.2 alpha Release Status
 
+## 2026-10-14 alpha.81 FX and network universe candidate
+
+Current development metadata is `1.2.0-alpha.81`. FX scrolling and multiple network universes are tracked in [the checkpoint](qa/FX_UNIVERSES_ALPHA81_2026-10-14.md). Native build and package acceptance remain pending; this is not full Recording completion. Distributed alpha.80 bytes remain immutable.
+
 ## 2026-10-13 alpha.80 native MSI choice checkpoint
 
-Current development metadata: `1.2.0-alpha.80`. Direct MSI extension selection and I/O cleanup are tracked in [the checkpoint](qa/MSI_EXTENSIONS_ALPHA80_2026-10-13.md). This is not full Recording completion; Windows native and hosted NSIS/MSI lifecycle plus Mac PKG lifecycle acceptance pass. Delivered alpha.79 bytes are immutable.
+Recorded development metadata: `1.2.0-alpha.80`. Direct MSI extension selection and I/O cleanup are tracked in [the checkpoint](qa/MSI_EXTENSIONS_ALPHA80_2026-10-13.md). This is not full Recording completion; Windows native and hosted NSIS/MSI lifecycle plus Mac PKG lifecycle acceptance pass. Delivered alpha.79 bytes are immutable.
 
 Historical status: 2026-09-05
 Branch: `codex/syndocal-v1.2`; recorded product metadata was `1.2.0-alpha.69`.

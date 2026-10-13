@@ -305,12 +305,13 @@ pub(super) fn is_exact_enabled_show_artnet_loopback_route(route: &DmxOutputConfi
 
 fn validate_current_enabled_show_artnet_loopback_route(state: &AppState) -> Result<(), String> {
     let (dmx_outputs, output) = state.engine.dmx_outputs_and_output_snapshot();
-    let [route] = dmx_outputs.as_slice() else {
+    let Some(route) = dmx_outputs.first() else {
         return Err(
-            "Show serial DMX activation requires exactly one enabled Art-Net Unity mirror route"
+            "Show serial DMX activation requires an enabled primary Art-Net Unity mirror route"
                 .to_string(),
         );
     };
+    protocol::network_dmx_routes::validate_network_dmx_configs(&dmx_outputs[1..])?;
     if output != *route || !is_exact_enabled_show_artnet_loopback_route(route) {
         return Err(
             "Show serial DMX activation requires the exact enabled Art-Net 127.0.0.1:6454/U0 Unity mirror"

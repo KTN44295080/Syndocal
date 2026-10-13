@@ -1,7 +1,7 @@
 {
   "name": "syndocal",
   "private": true,
-  "version": "1.2.0-alpha.80",
+  "version": "1.2.0-alpha.81",
   "author": "Seraf()",
   "type": "module",
   "scripts": {
@@ -187,6 +187,8 @@
     "check:fixture-repatch:browser": "node scripts/check-patch-fixture-drag-browser.mjs",
     "check:midi-learn": "node scripts/check-midi-learn-controller.mjs",
     "check:midi-fader-input": "node scripts/check-midi-fader-input.mjs",
+    "check:network-dmx-routes": "node scripts/check-network-dmx-routes-browser.mjs",
+    "check:fx-scroll": "node scripts/check-fx-scroll-browser.mjs",
     "check:scene-edit-faders": "node scripts/check-scene-edit-faders.mjs",
     "check:scene-edit-write-barrier": "node scripts/check-scene-edit-write-barrier.mjs",
     "check:project-mapping-cas": "node --experimental-strip-types scripts/check-project-mapping-cas-recovery.mjs"

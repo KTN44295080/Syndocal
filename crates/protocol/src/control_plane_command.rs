@@ -12,6 +12,8 @@ use serde::{
 };
 
 use crate::{EffectId, TimelineLoopScale};
+use crate::network_dmx_routes::{NetworkDmxRoute, validate_network_dmx_routes};
+pub const OUTPUT_NETWORK_DMX_ROUTES_SET_OPERATION_ID: &str = "syndocal.output.network_dmx_routes.set.v1";
 
 /// The largest integer which can make a round trip through JavaScript JSON
 /// without losing its identity.
@@ -2372,6 +2374,7 @@ pub enum OutputControlValidationErrorV1 {
     InvalidLightingControl,
     InvalidVideoControl,
     InvalidVideoTake,
+    InvalidNetworkDmxRoutes,
 }
 
 impl fmt::Display for OutputControlValidationErrorV1 {
@@ -2389,6 +2392,7 @@ impl fmt::Display for OutputControlValidationErrorV1 {
             Self::InvalidDisplayOutputSpec => "display output specification is invalid",
             Self::InvalidLightingControl => "lighting control value, role, or group ID is invalid",
             Self::InvalidVideoControl => "video control value or role is invalid",
+            Self::InvalidNetworkDmxRoutes => "network DMX routes are invalid",
             Self::InvalidVideoTake => "video Take layer or fade duration is invalid",
         })
     }
@@ -2649,6 +2653,10 @@ impl<'de> Deserialize<'de> for OutputLeaseAuthorityV1 {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OutputControlActionV2 {
     EnableOutput,
+    SetNetworkDmxRoutes {
+        routes: Vec<NetworkDmxRoute>,
+        lease: OutputLeaseAuthorityV1,
+    },
     EnableShowArtNetLoopbackRoute {
         lease: OutputLeaseAuthorityV1,
     },
@@ -2749,6 +2757,10 @@ pub enum OutputControlActionV2 {
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 enum OutputControlActionV2Wire {
     EnableOutput {},
+    SetNetworkDmxRoutes {
+        routes: Vec<NetworkDmxRoute>,
+        lease: OutputLeaseAuthorityV1,
+    },
     EnableShowArtNetLoopbackRoute {
         lease: OutputLeaseAuthorityV1,
     },
@@ -2851,6 +2863,7 @@ impl OutputControlActionV2 {
     pub const fn operation_id(&self) -> &'static str {
         match self {
             Self::EnableOutput => OUTPUT_ENABLE_OPERATION_ID,
+            Self::SetNetworkDmxRoutes { .. } => OUTPUT_NETWORK_DMX_ROUTES_SET_OPERATION_ID,
             Self::EnableShowArtNetLoopbackRoute { .. } => {
                 OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID
             }
@@ -2912,6 +2925,10 @@ impl OutputControlActionV2 {
             lease.validate()?;
         }
         match self {
+            Self::SetNetworkDmxRoutes { routes, lease } => {
+                lease.validate()?;
+                validate_network_dmx_routes(routes).map_err(|_| OutputControlValidationErrorV1::InvalidNetworkDmxRoutes)?;
+            }
             Self::EnableOutput | Self::ResetShowSpoutOutputs {} => {}
             Self::EnableShowArtNetLoopbackRoute { lease }
             | Self::EnableShowSerialDmxSafetyBlackoutRoute { lease }
@@ -3025,6 +3042,7 @@ impl OutputControlActionV2 {
     fn wire(&self) -> OutputControlActionV2Wire {
         match self {
             Self::EnableOutput => OutputControlActionV2Wire::EnableOutput {},
+            Self::SetNetworkDmxRoutes { routes, lease } => OutputControlActionV2Wire::SetNetworkDmxRoutes { routes: routes.clone(), lease: lease.clone() },
             Self::EnableShowArtNetLoopbackRoute { lease } => {
                 OutputControlActionV2Wire::EnableShowArtNetLoopbackRoute {
                     lease: lease.clone(),
@@ -3180,6 +3198,20 @@ impl OutputControlActionV2 {
     ) -> Result<(), OutputControlValidationErrorV1> {
         self.validate()?;
         match self {
+            Self::SetNetworkDmxRoutes { routes, lease } => {
+                // 0..=25 are frozen. The new operation has its own bounded payload.
+                output.push(26);
+                append_u64(output, routes.len() as u64);
+                for route in routes {
+                    output.push(u8::from(route.enabled));
+                    output.push(route.protocol as u8);
+                    append_ascii(output, &route.target_ip).map_err(|_| OutputControlValidationErrorV1::InvalidNetworkDmxRoutes)?;
+                    append_u64(output, u64::from(route.port));
+                    append_u64(output, u64::from(route.universe));
+                }
+                output.extend_from_slice(lease.lease_id.as_bytes());
+                append_u64(output, lease.generation);
+            }
             Self::EnableOutput => {
                 output.push(9);
             }
@@ -3443,6 +3475,7 @@ impl<'de> Deserialize<'de> for OutputControlActionV2 {
         let wire = OutputControlActionV2Wire::deserialize(deserializer)?;
         let value = match wire {
             OutputControlActionV2Wire::EnableOutput {} => Self::EnableOutput,
+            OutputControlActionV2Wire::SetNetworkDmxRoutes { routes, lease } => Self::SetNetworkDmxRoutes { routes, lease },
             OutputControlActionV2Wire::EnableShowArtNetLoopbackRoute { lease } => {
                 Self::EnableShowArtNetLoopbackRoute { lease }
             }
@@ -3978,7 +4011,7 @@ impl OutputControlLeaseResultV2 {
             OUTPUT_DISPLAY_ADD_OPERATION_ID => OutputLeaseReceiptOutcomeV2::Authorized,
             OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID => OutputLeaseReceiptOutcomeV2::Authorized,
             OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID => OutputLeaseReceiptOutcomeV2::Authorized,
-            OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID => {
+            OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID | OUTPUT_NETWORK_DMX_ROUTES_SET_OPERATION_ID => {
                 OutputLeaseReceiptOutcomeV2::Authorized
             }
             OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_ENABLE_OPERATION_ID
@@ -4193,6 +4226,7 @@ impl OutputControlReceiptV2 {
                 | OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID
                 | OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID
                 | OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID
+                | OUTPUT_NETWORK_DMX_ROUTES_SET_OPERATION_ID
                 | OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_ENABLE_OPERATION_ID
                 | OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_STOP_OPERATION_ID
                 | OUTPUT_SHOW_SPOUT_OUTPUTS_ENABLE_OPERATION_ID
@@ -4411,6 +4445,7 @@ impl OutputControlRejectionV2 {
                 | OUTPUT_DISPLAY_WINDOW_SET_OPEN_OPERATION_ID
                 | OUTPUT_VIDEO_COMPOSITION_ASSIGN_OPERATION_ID
                 | OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID
+                | OUTPUT_NETWORK_DMX_ROUTES_SET_OPERATION_ID
                 | OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_ENABLE_OPERATION_ID
                 | OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_STOP_OPERATION_ID
                 | OUTPUT_SHOW_SPOUT_OUTPUTS_ENABLE_OPERATION_ID
@@ -6763,5 +6798,30 @@ mod tests {
             retired_json["operation_id"] = serde_json::json!(retired_operation);
             assert!(serde_json::from_value::<OutputControlCommandRequestV2>(retired_json).is_err());
         }
+    }
+}
+
+#[cfg(test)]
+mod network_dmx_action_tests {
+    use super::*;
+    use crate::network_dmx_routes::NetworkDmxProtocol;
+    #[test]
+    fn network_dmx_action_shape_binds_every_destination_and_universe() {
+        let mut action = OutputControlActionV2::SetNetworkDmxRoutes {
+            lease: OutputLeaseAuthorityV1 { lease_id: "lease-0000000000000001".into(), generation: 1 },
+            routes: vec![NetworkDmxRoute { enabled: true, protocol: NetworkDmxProtocol::ArtNet, target_ip: "127.0.0.1".into(), port: 16454, universe: 1 }],
+        };
+        let value = serde_json::to_value(&action).unwrap();
+        assert_eq!(value["kind"], "set_network_dmx_routes");
+        assert_eq!(serde_json::from_value::<OutputControlActionV2>(value.clone()).unwrap(), action);
+        let mut before = Vec::new(); action.append_canonical_bytes(&mut before).unwrap();
+        assert_eq!(before[0], 26);
+        if let OutputControlActionV2::SetNetworkDmxRoutes { routes, .. } = &mut action { routes[0].universe = 2; }
+        let mut after = Vec::new(); action.append_canonical_bytes(&mut after).unwrap();
+        assert_ne!(before, after);
+        let mut invalid = value.clone(); invalid["routes"][0]["serial_port"] = serde_json::json!("COM1");
+        assert!(serde_json::from_value::<OutputControlActionV2>(invalid).is_err());
+        let mut invalid = value; invalid["routes"][0]["port"] = serde_json::json!(0);
+        assert!(serde_json::from_value::<OutputControlActionV2>(invalid).is_err());
     }
 }

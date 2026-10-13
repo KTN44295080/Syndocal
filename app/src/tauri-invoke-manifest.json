@@ -375,6 +375,7 @@
   "set_lighting_master_output_control_v2",
   "set_machine_timeline_cue_audio_settings",
   "set_midi_feedback_auto",
+  "set_network_dmx_routes_v1",
   "set_node_graph_enabled",
   "set_operator_policy",
   "set_operator_selection_context",

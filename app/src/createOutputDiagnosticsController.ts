@@ -1,7 +1,9 @@
+import { networkDmxRoutePayload } from "./networkDmxRoutes";
 import { serialDmxConfirmationRequest, serialDmxDeviceInstance } from "./serialDmxDeviceInstance";
 import { createSignal, type Accessor, type Setter } from "solid-js";
 import {
   executeOutputControl,
+  executeNetworkDmxRoutes,
   enableOutput,
   OUTPUT_DSF2026_ARTNET_ACCEPTANCE_PROBE_STATUS_QUERY_OPERATION_ID,
   queryDsf2026ArtNetAcceptanceProbeStatus,
@@ -537,7 +539,9 @@ export function createOutputDiagnosticsController(options: OutputDiagnosticsCont
         if (!options.isProjectAuthorityIdentityCurrent(authority)) return;
         setShowDmxPreparationStage("Complete");
         options.setMessage(
-          !options.safetyBlackout()
+          !confirmedBinding
+            ? "DMX output is ready. No USB-DMX device was selected."
+            : !options.safetyBlackout()
             ? "Show DMX setup complete: output role Both, machine binding, Art-Net loopback, and USB-DMX are live. S0 remains clear."
             : options.safetyBlackout()
               ? "Show DMX setup complete: output role Both, machine binding, Art-Net loopback, and Open DMX arm succeeded with the already-engaged S0."
@@ -698,10 +702,23 @@ export function createOutputDiagnosticsController(options: OutputDiagnosticsCont
     : `${outputProtocolLabel(route.protocol)} ${route.target_ip}:${route.port} U${route.universe}`;
 
   const applyDmxOutputRoutes = async (routes: DmxOutputConfig[]) => {
-    void routes;
-    options.setMessage(
-      "DMX output routes are unavailable until a lease-bound OutputControl action is reviewed; no state changed.",
-    );
+    if (activeShowOutputPreparation) throw new Error("Another output operation is in progress. Wait for it to finish before applying routes.");
+    return runShowOutputAction("network-dmx", async () => {
+    let authority = options.captureProjectAuthorityIdentity();
+    try {
+      const payload = networkDmxRoutePayload(routes.slice(1));
+      const lease = selectOnlyActiveOutputLease(await queryOutputLeaseAuthority(options.invoke), ["lighting", "video"]);
+      const receipt = await executeNetworkDmxRoutes(options.invoke, payload, lease, authority);
+      await options.refreshProjectAuthority(receipt, "Network DMX routes");
+      authority = options.captureProjectAuthorityIdentity();
+      await options.refreshSnapshot();
+      if (!options.isProjectAuthorityIdentityCurrent(authority)) return;
+      options.setMessage("Network DMX routes saved.");
+    } catch (error) {
+      if (options.isProjectAuthorityIdentityCurrent(authority)) options.setMessage(String(error));
+      throw error;
+    }
+    });
   };
 
   const applyCurrentDmxRoutes = async () => {
@@ -785,6 +802,7 @@ export function createOutputDiagnosticsController(options: OutputDiagnosticsCont
     sendDmxTestFrame,
     sendDmxRoutesTestFrame,
     dmxRouteLabel,
+    applyDmxOutputRoutes,
     applyCurrentDmxRoutes,
     addCurrentDmxRoute,
     addDmxNetworkRoute,

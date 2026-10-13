@@ -662,3 +662,60 @@ movement. `AI3-NATIVE-INGRESS-001` remains **Open**. The next required slice is
 to confirm/reconnect the bridge if needed, select the SMC-Mixer input in
 Syndocal, and capture a physical control event through the selected native
 callback/mapping path; no output endpoint should be opened for that capture.
+
+## Historical native MIDI UI and receive-only capture — 2026-09-22
+
+At source HEAD `f03b2221576564c74078bd65222a66b5af34fefb`, the exact checkout
+`target/release/syndocal.exe` was running as PID `23092`. Its ProductVersion is
+`1.2.0-alpha.69`, file size `66,216,960`, SHA-256
+`21851957305AE0BDD0F0F981F4EB5D255D59E02D5A4FB54D2248C6B06FA5E954`, and
+last-write time `2026-09-22 01:10:52 +09:00`. This executable predates the
+source-head UI-only commit that keeps the Video upper desk controls visible;
+it is not current native proof for that visual change.
+
+A native UI inspection found an unsaved, empty project (zero fixtures and zero
+groups) on Setup > I/O > MIDI. Device settings showed `Select input`,
+Clock and Control were `Stopped`, `Connect MIDI Control` was disabled, and the
+MIDI mapping count was `0`. The host selector listed `CustomMIDI1`,
+`SMC-Mixer`, `MIDIIN2 (SMC-Mixer)`, and `SMC-Mixer-bt`. The live header showed
+DMX `0/0`; no mapping was active and no MIDI output was sent. PnP listed the
+SMC-Mixer USB device and Bome virtual endpoint as present, which does not prove
+that Syndocal had selected or opened either input.
+
+One navigation click landed on the `Connect clock` control; refreshed native
+views continued to report Clock `Stopped`, so no clock connection is claimed.
+No MIDI output was issued.
+
+The production `midir` input capture was then run with the repository-required
+Build Tools MSVC `14.44.35207` x64 linker pinned and first in `where.exe
+link.exe`:
+
+```text
+SYNDOCAL_TEST_MIDI_INPUT=SMC-Mixer
+SYNDOCAL_TEST_MIDI_CAPTURE_SECONDS=30
+cargo test -p io --release --locked -j 1 physical_midi_input_captures_operator_ingress -- --ignored --nocapture --test-threads=1
+capturing physical MIDI input 'SMC-Mixer' for 30s
+physical MIDI input 'SMC-Mixer' produced no operator ingress during 30s
+test result: 0 passed; 1 failed; 0 ignored; exit_code=101
+```
+
+No MIDI message was received and no output was transmitted. Operator movement
+during this window was not independently confirmed, so this is neither device
+fault evidence nor controller-ingress acceptance. The direct `midir` capture
+does not prove the app-selected input or mapped/admission route.
+
+The native UI input selector was not changed. Computer Use selection attempts
+were stopped after the refreshed retry still reported:
+`point (670, 1260) is over msedgewebview2.exe "Chrome Legacy Window", not target
+window syndocal.exe "Syndocal"`. No project mapping or device setting was
+saved. The app remains on the MIDI mapping form; the action list was opened for
+inspection but `Tap BPM` was not selected or added. This helper failure is not
+a Syndocal product failure.
+
+`AI3-NATIVE-INGRESS-001` remains **Open**. The next useful capture must be
+supervised: select the intended `SMC-Mixer` input in the native UI, use a
+non-output test mapping such as `Tap BPM` only after confirming it is active,
+then move one control while the bounded capture is visibly running. Retain the
+raw bytes/timestamp and the app-side mapping/admission result. Continue to keep
+feedback/Clock/MTC, reconnect/replacement, latency, OSC/Remote, DMX/Art-Net,
+and venue behavior separate until each has its own evidence.

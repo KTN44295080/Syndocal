@@ -137,6 +137,14 @@ jobs:
           pnpm --dir app run check:midi-learn
           pnpm --dir app run check:project-mapping-cas
 
+      - name: Test network DMX routes and USB coexistence
+        run: |
+          set -o pipefail
+          cargo test -p protocol network_dmx --lib --locked 2>&1 | tee target/qa/macos-artifact/network-dmx-protocol-tests.txt
+          cargo test -p engine network_dmx_route_tests --lib --locked 2>&1 | tee target/qa/macos-artifact/network-dmx-engine-tests.txt
+          cargo test -p engine configured_network_and_usb --lib --locked 2>&1 | tee target/qa/macos-artifact/network-dmx-usb-tests.txt
+          cargo test -p syndocal --bin syndocal control_plane::tests --locked 2>&1 | tee target/qa/macos-artifact/network-dmx-admission-tests.txt
+
       - name: Build macOS application bundle
         run: pnpm --dir app tauri build --ci --bundles app
 
@@ -168,7 +176,7 @@ jobs:
 
       - name: Test actual macOS installer choices, updates and removal
         id: pkg_lifecycle
-        run: node app/scripts/check-macos-installer.mjs target/release/bundle/pkg/Syndocal_1.2.0-alpha.80_arm64.pkg target/qa/macos-artifact/installer-lifecycle.json target/release/bundle/macos/Syndocal.app
+        run: node app/scripts/check-macos-installer.mjs target/release/bundle/pkg/Syndocal_1.2.0-alpha.81_arm64.pkg target/qa/macos-artifact/installer-lifecycle.json target/release/bundle/macos/Syndocal.app
 
       - name: Upload macOS validation evidence
         if: always()

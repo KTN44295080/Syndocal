@@ -1,3 +1,4 @@
+import { validateNetworkDmxRoutes, type NetworkDmxRoute } from "./networkDmxRoutes";
 import type { FrontendTauriInvoke } from "./tauriInvokeCommands";
 
 export const OUTPUT_CONTROL_AUTHORITY_QUERY_OPERATION_ID =
@@ -28,6 +29,7 @@ export const OUTPUT_VIDEO_CLIP_LAUNCH_OPERATION_ID =
   "syndocal.output.video.clip.launch.v2";
 export const MAX_VIDEO_CLIP_LAUNCH_FADE_MS = 600_000;
 export const OUTPUT_ENABLE_OPERATION_ID = "syndocal.output.enable.v2";
+export const OUTPUT_NETWORK_DMX_ROUTES_SET_OPERATION_ID = "syndocal.output.network_dmx_routes.set.v1";
 export const OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID =
   "syndocal.output.show_artnet_loopback_route.enable.v1";
 export const OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_ENABLE_OPERATION_ID =
@@ -190,6 +192,7 @@ export type OutputShowSpoutOutputsResetAction = {
 };
 
 export type OutputControlAction =
+  | { kind: "set_network_dmx_routes"; routes: NetworkDmxRoute[]; lease: OutputLeaseAuthority }
   | OutputEnableAction
   | OutputShowArtNetLoopbackRouteEnableAction
   | OutputShowSerialDmxSafetyBlackoutRouteEnableAction
@@ -471,6 +474,7 @@ const allocateRequestId = async (invoke: FrontendTauriInvoke): Promise<number> =
 const operationIdForAction = (action: OutputControlOperationAction): string => {
   switch (action.kind) {
     case "enable_output": return OUTPUT_ENABLE_OPERATION_ID;
+    case "set_network_dmx_routes": return OUTPUT_NETWORK_DMX_ROUTES_SET_OPERATION_ID;
     case "enable_show_art_net_loopback_route": return OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID;
     case "enable_show_serial_dmx_safety_blackout_route": return OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_ENABLE_OPERATION_ID;
     case "stop_show_serial_dmx_safety_blackout_route": return OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_STOP_OPERATION_ID;
@@ -500,6 +504,7 @@ const operationIdForAction = (action: OutputControlOperationAction): string => {
 
 type OutputControlInvokeCommand =
   | "enable_output_control_v2"
+  | "set_network_dmx_routes_v1"
   | "enable_show_art_net_loopback_route_v1"
   | "enable_show_serial_dmx_safety_blackout_route_v1"
   | "stop_show_serial_dmx_safety_blackout_route_v1"
@@ -528,6 +533,7 @@ type OutputControlInvokeCommand =
 const commandForAction = (action: OutputControlOperationAction): OutputControlInvokeCommand => {
   switch (action.kind) {
     case "enable_output": return "enable_output_control_v2";
+    case "set_network_dmx_routes": return "set_network_dmx_routes_v1";
     case "enable_show_art_net_loopback_route": return "enable_show_art_net_loopback_route_v1";
     case "enable_show_serial_dmx_safety_blackout_route": return "enable_show_serial_dmx_safety_blackout_route_v1";
     case "stop_show_serial_dmx_safety_blackout_route": return "stop_show_serial_dmx_safety_blackout_route_v1";
@@ -840,6 +846,12 @@ const assertAction = (action: OutputControlOperationAction): void => {
     if (!hasExactKeys(record, ["kind"])) throw new Error("Output enable action was invalid; nothing was applied.");
     return;
   }
+  if (action.kind === "set_network_dmx_routes") {
+    if (!hasExactKeys(record, ["kind", "routes", "lease"])) throw new Error("Network DMX route action was invalid; nothing was applied.");
+    assertLeaseAuthority(action.lease, "Network DMX lease authority was invalid; nothing was applied.");
+    validateNetworkDmxRoutes(action.routes);
+    return;
+  }
   if (action.kind === "enable_show_art_net_loopback_route") {
     if (!hasExactKeys(record, ["kind", "lease"])) {
       throw new Error("Show Art-Net loopback route action was invalid; nothing was applied.");
@@ -1037,6 +1049,7 @@ const assertLeaseResult = (value: unknown, action: OutputControlOperationAction)
         && (beforeGeneration === null || afterGeneration === null || afterGeneration <= beforeGeneration
           || beforePhase !== "held_orphaned" || !sameResources(beforeResources, ["lighting", "video"]))) throw new Error(errorMessage);
       break;
+    case "set_network_dmx_routes":
     case "enable_show_art_net_loopback_route":
     case "enable_show_serial_dmx_safety_blackout_route":
     case "stop_show_serial_dmx_safety_blackout_route":
@@ -1170,7 +1183,7 @@ const assertResponse = (
     || action.kind === "send_dsf2026_artnet_acceptance_probe"
     || action.kind === "acknowledge_dsf2026_artnet_acceptance_probe_in_doubt"
     || action.kind === "enable_show_spout_outputs";
-  const persistedProjectFenceIsExact = (action.kind !== "enable_show_art_net_loopback_route" && action.kind !== "set_blackout")
+  const persistedProjectFenceIsExact = (action.kind !== "enable_show_art_net_loopback_route" && action.kind !== "set_network_dmx_routes" && action.kind !== "set_blackout")
     || result.outcome !== "applied"
     || fenceAfter.process_incarnation === fenceBefore.process_incarnation
       && fenceAfter.session_incarnation === fenceBefore.session_incarnation
@@ -1215,6 +1228,7 @@ const assertSelectedLeaseIsUsable = (query: OutputLeaseAuthorityQuery, action: O
     || action.kind === "arm" && selected[0].status !== "held_active"
     || action.kind === "set_blackout" && selected[0].status !== "held_active"
     || action.kind === "release_blackout" && selected[0].status !== "held_active"
+    || action.kind === "set_network_dmx_routes" && selected[0].status !== "held_active"
     || action.kind === "enable_show_art_net_loopback_route" && selected[0].status !== "held_active"
     || action.kind === "enable_show_serial_dmx_safety_blackout_route" && selected[0].status !== "held_active"
     || action.kind === "stop_show_serial_dmx_safety_blackout_route" && selected[0].status !== "held_active"
@@ -1242,6 +1256,7 @@ const assertSelectedLeaseIsUsable = (query: OutputLeaseAuthorityQuery, action: O
       : ["lighting", "video"] as const;
     if (!sameResources(selected[0].resources, expectedResources)) throw new Error("Selected output lease is unavailable, orphaned, stale, or has the wrong resources; nothing was applied.");
   } else if (action.kind === "add_display" || action.kind === "set_display_window_open"
+    || action.kind === "set_network_dmx_routes"
     || action.kind === "enable_show_art_net_loopback_route"
     || action.kind === "enable_show_serial_dmx_safety_blackout_route"
     || action.kind === "stop_show_serial_dmx_safety_blackout_route"
@@ -1334,6 +1349,11 @@ const executeOutputControlOperation = async (
   }
   return assertResponse(terminal, action, operationId, requestId, authority.fence);
 };
+
+/** Apply only to the project whose network route editor prepared this intent. */
+export async function executeNetworkDmxRoutes(invoke: FrontendTauriInvoke, routes: NetworkDmxRoute[], lease: OutputLeaseAuthority, expectedProject: OutputControlExpectedProject): Promise<OutputControlReceipt> {
+  return executeOutputControlOperation(invoke, { kind: "set_network_dmx_routes", routes, lease }, { expectedProject });
+}
 
 /** Execute an ordinary action with a caller-selected exact active lease. */
 export async function executeOutputControl(

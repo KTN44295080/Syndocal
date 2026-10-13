@@ -25,6 +25,7 @@ import {
   ProjectOpenBootstrapRetryLatch,
 } from "./projectOpenBootstrap";
 import { retainDjTimelineOptions, type DjTimelineOption } from "./djTimelineOptions";
+import { generateRemotePairingPin } from "./remotePairingPin";
 import { normalizeDjTrackTriggerMappings } from "./djTrackMappingPolicy";
 import {
   AuthoredSetEffectEnabledCommandError,
@@ -71,6 +72,7 @@ import {
   type DmxPatchViewMode,
   type DmxUniverseMap,
 } from "./components/DmxPatchMapPanel";
+import { NetworkDmxRoutesPanel } from "./components/NetworkDmxRoutesPanel";
 import { DmxOutputConfigPanel } from "./components/DmxOutputConfigPanel";
 import type { ExtensionStatus } from "./extensionsStatus";
 import { IoDisclosure, SetupIoConnectionDeck, type IoConnectionId } from "./components/IoConnectionDeck";
@@ -2377,12 +2379,7 @@ export default function App() {
   const [oscMapHigh, setOscMapHigh] = createSignal(65535);
   const [remoteBindIp, setRemoteBindIp] = createSignal("127.0.0.1");
   const [remotePort, setRemotePort] = createSignal(9100);
-  const createPairingPin = () => {
-    const value = globalThis.crypto
-      ? globalThis.crypto.getRandomValues(new Uint32Array(1))[0]
-      : Math.floor(Math.random() * 1_000_000);
-    return String(value % 1_000_000).padStart(6, "0");
-  };
+  const createPairingPin = () => generateRemotePairingPin() ?? "";
   const [remotePairingPin, setRemotePairingPin] = createSignal(createPairingPin());
   const [remoteAllowLan, setRemoteAllowLan] = createSignal(false);
   const [remoteMaxConnections, setRemoteMaxConnections] = createSignal(8);
@@ -5823,6 +5820,7 @@ export default function App() {
     resetShowSpoutOutputs,
     sendDmxTestFrame,
     sendDmxRoutesTestFrame,
+    applyDmxOutputRoutes,
     refreshSerialPorts,
   } = createOutputDiagnosticsController({
     invoke,
@@ -29010,6 +29008,7 @@ export default function App() {
             onEnableShowSerialDmxSafetyBlackoutRoute={enableShowSerialDmxSafetyBlackoutRoute}
             onStopShowSerialDmxSafetyBlackoutRoute={stopShowSerialDmxSafetyBlackoutRoute}
           />
+          <NetworkDmxRoutesPanel routes={snapshot().dmx_outputs.length > 0 ? snapshot().dmx_outputs : [snapshot().output]} projectEpoch={projectMappingsAuthority().project_epoch} onApply={applyDmxOutputRoutes} />
           <div class="ioDisclosureStack">
           <IoDisclosure
             id="dmx-input"
@@ -29319,7 +29318,14 @@ export default function App() {
             onBindIp={setRemoteBindIp}
             onPort={setRemotePort}
             onPairingPin={setRemotePairingPin}
-            onRegeneratePairingPin={() => setRemotePairingPin(createPairingPin())}
+            onRegeneratePairingPin={() => {
+              const nextPin = createPairingPin();
+              if (!nextPin) {
+                setMessage("Secure pairing PIN generation is unavailable; the existing PIN was kept.");
+                return;
+              }
+              setRemotePairingPin(nextPin);
+            }}
             onAllowLan={(value) => {
               if (!value && djLinkEnabled()) {
                 setMessage("Disarm DJ Link before disabling trusted LAN access.");

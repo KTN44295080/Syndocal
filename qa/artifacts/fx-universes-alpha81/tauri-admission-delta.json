@@ -1,0 +1,10 @@
+{
+  "oldCount": 566,
+  "oldHash": "1aeeacc2869bc0e3996e72182e67c350e0fab899473ad1d948f54c730c814803",
+  "newCount": 567,
+  "newHash": "edfdf34a22b62146d527c66291b8b1d916a1f66ba2a4d98daa492b4d90034702",
+  "added": [
+    "set_network_dmx_routes_v1"
+  ],
+  "removed": []
+}

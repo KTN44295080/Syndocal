@@ -166,6 +166,7 @@ use protocol::{
         OUTPUT_VIDEO_CLIP_LAUNCH_OPERATION_ID, OUTPUT_VIDEO_CLIP_TAKE_OPERATION_ID,
         OUTPUT_VIDEO_MASTER_SET_OPERATION_ID,
         OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID,
+        OUTPUT_NETWORK_DMX_ROUTES_SET_OPERATION_ID,
         OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_ENABLE_OPERATION_ID,
         OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_STOP_OPERATION_ID,
         OUTPUT_SHOW_SPOUT_OUTPUTS_ENABLE_OPERATION_ID,
@@ -320,6 +321,7 @@ mod serial_dmx_machine;
 #[cfg(test)]
 mod serial_show_dmx_route_tests;
 mod show_serial_dmx_route;
+mod network_dmx_routes;
 #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
 mod show_spout_transport;
 #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
@@ -25245,6 +25247,7 @@ const PREFLIGHT_ONLY_NONPROJECT_OR_INNER_RUNTIME_ROUTES: &[&str] = &[
     "discover_usb_rdm_devices",
     "enable_output_control_v2",
     "enable_show_art_net_loopback_route_v1",
+    "set_network_dmx_routes_v1",
     "end_media_asset_preview",
     "finalize_prepared_media_asset_relink",
     "finalize_prepared_media_assets",
@@ -25855,6 +25858,7 @@ fn external_output_command_requires_local_r4(command: &EngineCommand) -> Option<
         EngineCommand::SetOutput(..)
         | EngineCommand::SetDmxOutputs(..)
         | EngineCommand::EnableShowArtNetLoopbackRoutePublished { .. }
+        | EngineCommand::SetNetworkDmxRoutesPublished { .. }
         | EngineCommand::EnableShowSerialDmxSafetyBlackoutRoute { .. }
         | EngineCommand::StopShowSerialDmxSafetyBlackoutRoute { .. }
         | EngineCommand::RetireManagedShowDmxAfterSafetyBlackout { .. }
@@ -50278,9 +50282,13 @@ async fn enable_output_control_v2(
     execute_output_control_off_event_loop(app, window, OUTPUT_ENABLE_OPERATION_ID, request).await
 }
 
-/// R4-only local-confirmed activation of the already staged show Art-Net
-/// loopback route. This is not a generic output setter: its empty route
-/// payload is fenced and the native core accepts only 127.0.0.1:6454 / U0.
+/// Lease-bound publication of validated additional network universes.
+#[tauri::command]
+async fn set_network_dmx_routes_v1(app: tauri::AppHandle, window: WebviewWindow, request: OutputControlCommandRequestV2) -> OutputControlResponseV2 {
+    execute_output_control_off_event_loop(app, window, OUTPUT_NETWORK_DMX_ROUTES_SET_OPERATION_ID, request).await
+}
+
+/// Local activation of the fixed pre-authored 127.0.0.1:6454/U0 route.
 #[tauri::command]
 async fn enable_show_art_net_loopback_route_v1(
     app: tauri::AppHandle,
@@ -57677,6 +57685,7 @@ fn output_lease_resources_for_control_action(
         },
         protocol::control_plane_command::OutputControlActionV2::SetBlackout { .. }
         | protocol::control_plane_command::OutputControlActionV2::ReleaseBlackout { .. }
+        | protocol::control_plane_command::OutputControlActionV2::SetNetworkDmxRoutes { .. }
         | protocol::control_plane_command::OutputControlActionV2::EnableShowArtNetLoopbackRoute {
             ..
         }
@@ -57785,7 +57794,8 @@ pub(crate) fn build_output_lease_authorization_request(
                 ttl_ms: output_lease::MAX_OUTPUT_LEASE_TTL_MS,
             }
         }
-        OutputControlActionV2::EnableShowArtNetLoopbackRoute { lease }
+        OutputControlActionV2::SetNetworkDmxRoutes { lease, .. }
+        | OutputControlActionV2::EnableShowArtNetLoopbackRoute { lease }
         | OutputControlActionV2::EnableShowSerialDmxSafetyBlackoutRoute { lease }
         | OutputControlActionV2::StopShowSerialDmxSafetyBlackoutRoute { lease }
         | OutputControlActionV2::EnableShowSpoutOutputs { lease } => {
@@ -133245,6 +133255,7 @@ fn main() {
             set_blackout_output_control_v2,
             arm_output_control_v2,
             enable_show_art_net_loopback_route_v1,
+            set_network_dmx_routes_v1,
             enable_show_serial_dmx_safety_blackout_route_v1,
             stop_show_serial_dmx_safety_blackout_route_v1,
             send_dsf2026_artnet_acceptance_probe_v1,

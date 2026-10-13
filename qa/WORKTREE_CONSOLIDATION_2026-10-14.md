@@ -1,0 +1,21 @@
+# Worktree consolidation into main
+
+User explicitly requested one branch and one working checkout, including individual validation/integration of old dirty work rather than backup-only retirement. Main starts at e7ce813f08f10748638f9c668513b73ef74d7884. No subagents or Computer Use are used.
+
+Recovery directory: C:/Users/janua/AppData/Local/SyndocalDev/recovery/consolidation-20261014. Verified complete history.bundle records all refs; source-0/1/2 contain binary tracked patches, raw modified/untracked files and SHA-256 manifests. Source-0 captures 24 files (including the untracked Vite directory); source-1 captures 7 and source-2 captures 8. Original dirty trees remain untouched until integration checks pass. Ignored evidence is retained separately before removing checkouts.
+
+| Old work | Disposition and validation |
+| --- | --- |
+| Primary Remote pairing PIN: App, remotePairingPin.ts, localization, DJ-Link checker | Missing in main; ported secure rejection sampling, no Math.random fallback, preserve prior PIN on provider failure, bounded 128 attempts. Actual production helper and App wiring tests pass. |
+| Primary native Video BO adapter, authorization callbacks, guard tests, execution dispatch | Already integrated with stronger monotonic/scoped receipt ownership; old UUID-derived request IDs are superseded. Final authorization checks precede mutation/retirement. Native registry/authority (42) and focused BO guards (4) pass for the current implementation. |
+| Primary agentBridgeTools, agentBridgeBlackout and checker | Native dispatch is already integrated; retired frontend effects module/callbacks removed in main. Current executable agent-bridge contract passes 15 groups. |
+| Primary native lifecycle harness, Video BO fixture/config | Already integrated with expanded replay, revocation and allocator checks. Old fixture retained in recovery; current isolated harness remains canonical. |
+| Primary AI3 historical 2026-09-22 MIDI capture note | Appended as historical evidence; its failed/no-operator-ingress observation remains Open, not reinterpreted as current hardware acceptance. |
+| Two old Mac candidate trees: workflow, five validator modules/tests, runbook | Canonical main already includes report reservation, abnormal-exit rejection, strict identity and success/cancellation acceptance. Seventy current process/report tests pass; deployed alpha.80 DMG/PKG checks were previously observed separately. Stale candidate/version wording is superseded by current workflow/runbook. |
+| 5b19e6ca report-publication commit | Both runtime/test modules exactly equal main; only obsolete source-candidate QA prose is superseded. Entire historical commit remains recoverable and will be included in main ancestry. |
+| 5fc63f1b thumbnail-cancellation candidate / 36278112 loopMIDI commit | Owner-bound cancellation and loopMIDI tests are already in main; later busy lifetime changes remain canonical. Focused media/native thumbnail contracts pass. Historical branches will be included in main ancestry without restoring retired behavior. |
+| Clean alpha.73 distribution checkout / merged core candidate | Commits already in main. Preserve ignored local evidence before removing worktrees. |
+
+PIN integration passes TypeScript, localization, the complete release aggregate and fresh normal native-window acceptance (exact executable SHA d45b50680d8a09591587216f34e88b1c614e62c89c577ce209ff59e8c92c2351). Four native BO guard tests and 70 Mac policy/report tests pass with no new first-party warnings.
+
+Pending: commit/push, ancestry reconciliation, original-checkout transition and retirement of all extra worktrees/branches. The pinned chat must be temporarily unpinned to use the managed archive API, then restored to its prior pinned position. Product packages are handled in the alpha.81 checkpoint.

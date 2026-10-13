@@ -1257,6 +1257,9 @@ where
             )?;
             Ok(result)
         }),
+        OutputControlActionV2::SetNetworkDmxRoutes { routes, .. } => {
+            super::network_dmx_routes::set_with_output_control_fence(state, routes, &request.expected_fence, &lease_request)
+        }
         OutputControlActionV2::EnableShowArtNetLoopbackRoute { .. } => {
             super::enable_show_artnet_loopback_route_with_output_control_fence(
                 state,
@@ -1765,6 +1768,7 @@ fn validate_output_action_current(
 ) -> Result<(), String> {
     match action {
         OutputControlActionV2::EnableOutput => Ok(()),
+        OutputControlActionV2::SetNetworkDmxRoutes { routes, .. } => super::network_dmx_routes::validate_current(state, routes).map(|_| ()),
         OutputControlActionV2::EnableShowArtNetLoopbackRoute { .. } => {
             super::validate_current_staged_show_artnet_loopback_route(state).map(|_| ())
         }
@@ -2929,6 +2933,7 @@ pub(crate) fn output_control_lease_result_from_registry_receipt(
         }
         OutputControlActionV2::Arm { .. }
         | OutputControlActionV2::EnableShowArtNetLoopbackRoute { .. }
+        | OutputControlActionV2::SetNetworkDmxRoutes { .. }
         | OutputControlActionV2::EnableShowSerialDmxSafetyBlackoutRoute { .. }
         | OutputControlActionV2::StopShowSerialDmxSafetyBlackoutRoute { .. }
         | OutputControlActionV2::SendDsf2026ArtNetAcceptanceProbe { .. }

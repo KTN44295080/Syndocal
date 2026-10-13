@@ -16,15 +16,16 @@ impl EngineRuntime {
         failure_epoch: u64,
         operation: &ManagedShowDmxFailStopOperationInner,
     ) -> Result<ManagedShowDmxFailStopReceipt, ManagedShowDmxFailStopError> {
-        if scope == ManagedDmxRetirementScope::ExactShow
-            || !self.managed_show_dmx_has_pristine_absent_usb()
-        {
+        if scope == ManagedDmxRetirementScope::ExactShow {
             return self.apply_managed_show_dmx_fail_stop(
                 safety_epoch,
                 safety_generation,
                 failure_epoch,
                 operation,
             );
+        }
+        if !self.managed_show_dmx_has_pristine_absent_usb() {
+            return self.apply_managed_show_dmx_fail_stop_for_scope(scope, safety_epoch, safety_generation, failure_epoch, operation);
         }
         self.apply_managed_network_dmx_retirement(
             safety_epoch,
@@ -156,7 +157,7 @@ impl EngineRuntime {
     }
 }
 
-fn retire_network_sender(
+pub(super) fn retire_network_sender(
     sender: &mut Option<DmxSender>,
     config: &DmxOutputConfig,
     errors: &mut Vec<String>,

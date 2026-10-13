@@ -4,6 +4,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import ts from "typescript";
+import { typescriptFixtureModuleUrl } from "./typescript-fixture-module.mjs";
+const networkPolicy = await import(await typescriptFixtureModuleUrl(new URL("../src/networkDmxRoutes.ts", import.meta.url)));
 
 const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
 const appRoot = path.resolve(scriptDirectory, "..");
@@ -355,6 +357,7 @@ function leaseFixture(initial = "unavailable", config = {}) {
     return {...query.statuses[0].authority};
   };
   const imports = {
+    "./networkDmxRoutes": networkPolicy,
     "./serialDmxDeviceInstance": platformIdentityExports,
     "solid-js": require("solid-js"),
     "./outputControlController": {

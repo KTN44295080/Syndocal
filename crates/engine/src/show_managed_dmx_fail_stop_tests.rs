@@ -1292,6 +1292,7 @@ fn managed_fail_stop_without_usb_handles_artnet_and_no_dmx_without_fabricated_us
         };
         let receipt = runtime
             .apply_managed_show_dmx_fail_stop_with_transport(
+                ManagedDmxRetirementScope::ExactShow,
                 safety.epoch,
                 safety.generation,
                 epoch,
@@ -1313,6 +1314,7 @@ fn managed_fail_stop_without_usb_handles_artnet_and_no_dmx_without_fabricated_us
         assert!(replay.admit());
         assert!(runtime
             .apply_managed_show_dmx_fail_stop_with_transport(
+                ManagedDmxRetirementScope::ExactShow,
                 safety.epoch,
                 safety.generation,
                 epoch,
@@ -1343,7 +1345,7 @@ fn managed_fail_stop_missing_usb_rejects_prior_worker_history_and_uncertain_stat
         }
         shared.set_show_serial_dmx_route_status(status);
         assert!(runtime
-            .managed_show_dmx_fail_stop_topology_preflight()
+            .managed_show_dmx_fail_stop_topology_preflight(ManagedDmxRetirementScope::ExactShow)
             .is_err());
         runtime.best_effort_retire_managed_show_dmx_after_fail_stop_error("missing worker");
         assert!(shared.show_serial_dmx_route_status().faulted);
@@ -1362,4 +1364,45 @@ fn managed_fail_stop_no_usb_cleanup_does_not_invent_usb_fault() {
     let status = shared.show_serial_dmx_route_status();
     assert!(!status.faulted);
     assert!(!status.zero_frame_physical_write_completed);
+}
+
+#[test]
+fn configured_network_and_usb_retirement_zeros_every_universe_and_joins_usb() {
+    let (mut runtime, shared, observation, safety, _failure_lease, failure_epoch) = managed_fail_stop_live_runtime();
+    let receivers = [UdpSocket::bind("127.0.0.1:0").unwrap(), UdpSocket::bind("127.0.0.1:0").unwrap()];
+    for (index, receiver) in receivers.iter().enumerate() {
+        let config = DmxOutputConfig { enabled: true, protocol: DmxOutputProtocol::ArtNet, target_ip: "127.0.0.1".into(), port: receiver.local_addr().unwrap().port(), universe: index as u16 + 1, serial_port: String::new(), serial_baud_rate: 57600 };
+        let (output, error) = RuntimeDmxOutput::new_with_error_and_lighting_allowed(config, true, &shared.open_dmx_safety_write_gate);
+        assert!(error.is_none()); runtime.additional_dmx_outputs.push(output);
+    }
+    assert!(runtime.has_exact_live_show_serial_dmx_artnet_mirror(), "additional universes must not invalidate primary U0");
+    let packets = Arc::new(Mutex::new(Vec::new()));
+    runtime.install_managed_show_dmx_fail_stop_test_transport_result(Arc::clone(&packets), Ok(530));
+    let operation = ManagedShowDmxFailStopOperation { inner: Arc::new(ManagedShowDmxFailStopOperationInner::new()) };
+    runtime.apply_command(EngineCommand::RetireManagedShowDmxAfterSafetyBlackout {scope: ManagedDmxRetirementScope::ConfiguredNetwork, expected_safety_epoch: safety.epoch, expected_safety_generation: safety.generation, expected_failure_epoch: failure_epoch, expires_at: Instant::now() + Duration::from_secs(1), operation: Arc::clone(&operation.inner)});
+    let receipt = operation.wait(Duration::from_secs(1)).unwrap();
+    assert!(receipt.artnet_zero_accepted()); assert!(runtime.managed_show_dmx_terminal_absent());
+    assert_eq!(packets.lock().unwrap().len(), 1);
+    for (index, receiver) in receivers.iter().enumerate() {
+        receiver.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
+        let mut packet = [0u8; 700]; let (size, _) = receiver.recv_from(&mut packet).unwrap();
+        assert_eq!(size, 530); assert_eq!(u16::from_le_bytes([packet[14],packet[15]]), index as u16 + 1);
+        assert!(packet[18..size].iter().all(|value| *value == 0));
+    }
+    assert!(observation.operations().unwrap().iter().any(|operation| matches!(operation, io::serial_dmx::OpenDmxTestSerialOperation::WriteAll(payload) if payload[1..].iter().all(|value| *value == 0))));
+    let status = shared.show_serial_dmx_route_status();
+    assert!(status.zero_frame_physical_write_completed && status.worker_shutdown_completed);
+    assert!(!status.active && !status.faulted && !status.artnet_mirror_live);
+}
+
+#[test]
+fn configured_network_and_usb_retirement_failure_retires_all_senders_without_success() {
+    let (mut runtime, shared, _observation, safety, _failure_lease, failure_epoch) = managed_fail_stop_live_runtime();
+    runtime.additional_dmx_outputs.push(RuntimeDmxOutput { config: DmxOutputConfig {universe:1,port:16456,..runtime.output.clone()}, sender: Some(DmxSender::TestFailingArtNetSend), recovery: DmxRouteRecovery::default() });
+    runtime.install_managed_show_dmx_fail_stop_test_transport_result(Arc::new(Mutex::new(Vec::new())), Ok(530));
+    let operation = ManagedShowDmxFailStopOperation { inner: Arc::new(ManagedShowDmxFailStopOperationInner::new()) };
+    runtime.apply_command(EngineCommand::RetireManagedShowDmxAfterSafetyBlackout {scope: ManagedDmxRetirementScope::ConfiguredNetwork, expected_safety_epoch: safety.epoch, expected_safety_generation: safety.generation, expected_failure_epoch: failure_epoch, expires_at: Instant::now() + Duration::from_secs(1), operation: Arc::clone(&operation.inner)});
+    assert!(matches!(operation.wait(Duration::from_secs(1)), Err(ManagedShowDmxFailStopError::InDoubt(_))));
+    assert!(runtime.managed_show_dmx_terminal_absent()); assert!(shared.safety_blackout_authority().engaged);
+    assert!(shared.show_serial_dmx_route_status().faulted);
 }

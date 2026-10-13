@@ -1,3 +1,4 @@
+import { typescriptFixtureModuleUrl } from "./typescript-fixture-module.mjs";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import ts from "typescript";
@@ -31,17 +32,7 @@ const protocolCommandProductionSource = protocolCommandSource.slice(
   0,
   protocolCommandTestModuleOffset,
 );
-const runtime = await import(`data:text/javascript;base64,${Buffer.from(ts.transpileModule(
-  controllerSource,
-  {
-    compilerOptions: {
-      module: ts.ModuleKind.ESNext,
-      target: ts.ScriptTarget.ES2022,
-      importsNotUsedAsValues: ts.ImportsNotUsedAsValues.Remove,
-    },
-    fileName: "outputControlController.ts",
-  },
-).outputText).toString("base64")}`);
+const runtime = await import(await typescriptFixtureModuleUrl(new URL("../src/outputControlController.ts", import.meta.url)));
 
 assert.match(
   controllerSource,
@@ -64,7 +55,7 @@ assert.match(
   "the USB-DMX stop action must use its canonical serde discriminant",
 );
 
-const resourcesFor = (action) => action.kind === "enable_output" || action.role === "both"
+const resourcesFor = (action) => action.kind === "set_network_dmx_routes" || action.kind === "enable_output" || action.role === "both"
   || action.kind === "add_display" || action.kind === "assign_video_output_composition"
   || action.kind === canonicalShowArtNetActionKind || action.kind === "send_dsf2026_artnet_acceptance_probe"
   || action.kind === canonicalShowSerialDmxEnableActionKind
@@ -75,6 +66,7 @@ const resourcesFor = (action) => action.kind === "enable_output" || action.role 
     ? action.role === "both" ? ["lighting", "video"] : ["video"]
     : action.role === "lighting" ? ["lighting"] : ["video"];
 const operationFor = (action) => ({
+  set_network_dmx_routes: runtime.OUTPUT_NETWORK_DMX_ROUTES_SET_OPERATION_ID,
   enable_output: runtime.OUTPUT_ENABLE_OPERATION_ID,
   [canonicalShowArtNetActionKind]: runtime.OUTPUT_SHOW_ARTNET_LOOPBACK_ROUTE_ENABLE_OPERATION_ID,
   [canonicalShowSerialDmxEnableActionKind]: runtime.OUTPUT_SHOW_SERIAL_DMX_SAFETY_BLACKOUT_ROUTE_ENABLE_OPERATION_ID,
@@ -102,6 +94,7 @@ const operationFor = (action) => ({
   force_transfer_lease: runtime.OUTPUT_LEASE_FORCE_TRANSFER_OPERATION_ID,
 })[action.kind];
 const commandFor = (action) => ({
+  set_network_dmx_routes: "set_network_dmx_routes_v1",
   enable_output: "enable_output_control_v2",
   [canonicalShowArtNetActionKind]: "enable_show_art_net_loopback_route_v1",
   [canonicalShowSerialDmxEnableActionKind]: "enable_show_serial_dmx_safety_blackout_route_v1",
@@ -253,7 +246,7 @@ const queryFor = (action, state = "active") => {
     statuses: [{
       status: state === "orphaned" ? "held_orphaned" : "held_active",
       authority: action.lease,
-      resources: (action.kind === "arm" || action.kind === "set_lighting_master" || action.kind === "set_group_submaster" || action.kind === "set_video_master" || action.kind === "take_video_clip" || action.kind === "launch_video_clip") && state !== "wrong"
+      resources: action.kind === "set_network_dmx_routes" && state === "wrong" ? ["lighting"] : (action.kind === "arm" || action.kind === "set_lighting_master" || action.kind === "set_group_submaster" || action.kind === "set_video_master" || action.kind === "take_video_clip" || action.kind === "launch_video_clip") && state !== "wrong"
         ? resourcesFor(action)
         : action.kind === "add_display" || action.kind === "assign_video_output_composition"
           ? ["lighting", "video"] : ["lighting", "video"],
@@ -304,6 +297,7 @@ const receiptFor = (
         ? action.lease.generation + 1 : action.lease.generation;
   const relinquished = action.kind === "relinquish_output_lease";
   const outcome = ({
+    set_network_dmx_routes: "authorized",
     arm: "authorized", set_blackout: "authorized", release_blackout: "authorized", take_over_standby: "authorized",
     add_display: "authorized", assign_video_output_composition: "authorized",
     set_lighting_master: "authorized", set_group_submaster: "authorized", set_video_master: "authorized", take_video_clip: "authorized", launch_video_clip: "authorized",
@@ -317,7 +311,7 @@ const receiptFor = (
     renew_lease: "renewed", recover_lease: "recovered", relinquish_output_lease: "relinquished",
     force_transfer_lease: "transferred",
   })[action.kind];
-  const persistedArtNetMutation = action.kind === canonicalShowArtNetActionKind || action.kind === "set_blackout";
+  const persistedArtNetMutation = action.kind === "set_network_dmx_routes" || action.kind === canonicalShowArtNetActionKind || action.kind === "set_blackout";
   const persistedSpoutMutation = action.kind === "enable_show_spout_outputs" && spoutReceipt === "persisted";
   const appliedSpoutPhysicalStart = action.kind === "enable_show_spout_outputs" && spoutReceipt === "physical";
   const persistedProjectMutation = persistedArtNetMutation || persistedSpoutMutation;
@@ -479,6 +473,32 @@ const videoLaunchReceipt = await runtime.executeVideoClipLaunchOutputControl(
 assert.equal(videoLaunchReceipt.operation_id, runtime.OUTPUT_VIDEO_CLIP_LAUNCH_OPERATION_ID);
 assert.equal(videoLaunchHarness.executeArgs[0].request.action.layer_id, 42);
 assert.equal(videoLaunchHarness.executeArgs[0].request.action.fade_ms, 1500);
+
+const networkRoutesAction = { kind: "set_network_dmx_routes", lease: lease(), routes: [
+  {enabled: true, protocol: "ArtNet", target_ip: "127.0.0.1", port: 16454, universe: 0},
+  {enabled: true, protocol: "ArtNet", target_ip: "127.0.0.1", port: 16454, universe: 1},
+] };
+const preparedNetworkProject = {project_epoch: fence.project_epoch, project_revision: fence.project_revision, checkpoint_hash: fence.project_checkpoint_hash};
+const networkHarness = createHarness({action: networkRoutesAction, queryState: "active"});
+const networkReceipt = await runtime.executeNetworkDmxRoutes(networkHarness.invoke, networkRoutesAction.routes, networkRoutesAction.lease, preparedNetworkProject);
+assert.equal(networkReceipt.operation_id, runtime.OUTPUT_NETWORK_DMX_ROUTES_SET_OPERATION_ID);
+assert.equal(networkReceipt.fence_after.project_revision, fence.project_revision + 1);
+assert.deepEqual(networkHarness.executeArgs[0].request.action.routes, networkRoutesAction.routes);
+for (const state of ["wrong", "orphaned"]) {
+  const h = createHarness({action: networkRoutesAction, queryState: state});
+  await assert.rejects(runtime.executeNetworkDmxRoutes(h.invoke, networkRoutesAction.routes, networkRoutesAction.lease, preparedNetworkProject));
+  assert.equal(h.executeCalls, 0);
+}
+const staleNetworkHarness = createHarness({action: networkRoutesAction, queryState: "active"});
+await assert.rejects(runtime.executeNetworkDmxRoutes(staleNetworkHarness.invoke, networkRoutesAction.routes, networkRoutesAction.lease, {...preparedNetworkProject, project_epoch: fence.project_epoch + 1}), /project authority changed/);
+assert.equal(staleNetworkHarness.executeCalls, 0);
+for (const routes of [[networkRoutesAction.routes[0], networkRoutesAction.routes[0]], [{...networkRoutesAction.routes[0], port: 0}], [{...networkRoutesAction.routes[0], universe: 32768}], [{...networkRoutesAction.routes[0], serial_port: "COM1"}], [{...networkRoutesAction.routes[0], protocol: "EnttecOpenDmx"}]]) {
+  const h = createHarness({action: {...networkRoutesAction, routes}, queryState: "active"});
+  await assert.rejects(runtime.executeNetworkDmxRoutes(h.invoke, routes, networkRoutesAction.lease, preparedNetworkProject));
+  assert.equal(h.calls.length, 0);
+}
+const falseNetworkReceiptHarness = createHarness({action: networkRoutesAction, queryState: "active", receiptTransform: response => ({...response, receipt: {...response.receipt, fence_after: structuredClone(response.receipt.fence_before)}})});
+await assert.rejects(runtime.executeNetworkDmxRoutes(falseNetworkReceiptHarness.invoke, networkRoutesAction.routes, networkRoutesAction.lease, preparedNetworkProject));
 
 const showArtNetLoopbackHarness = createHarness({ action: showArtNetLoopbackRouteAction, queryState: "active" });
 const showArtNetLoopbackReceipt = await runtime.executeOutputControl(showArtNetLoopbackHarness.invoke, showArtNetLoopbackRouteAction);
@@ -2485,5 +2505,8 @@ for (const field of ["safety_blackout_epoch", "safety_blackout_generation", "out
   } });
   await assert.rejects(runtime.executeTargetBlackout(harness.invoke, "lighting", true), /receipt was inconsistent/);
 }
+
+const networkPolicy = await import(await typescriptFixtureModuleUrl(new URL("../src/networkDmxRoutes.ts", import.meta.url)));
+assert.throws(() => networkPolicy.networkDmxRoutePayload([{enabled:true,protocol:"ArtNet",target_ip:"127.0.0.1",port:16454,universe:1,serial_port:"COM1",serial_baud_rate:57600}]), /serial device alias/);
 
 console.log("output control runtime contract: PASS (v12 output commands, lease-bound Lighting/Video master, Video Take/Clip Launch and group controls, fixed same-PC Art-Net loopback/DSF2026 probe plus no-send reconciliation/strict Spout V2 receipt fences/reset, revision-fenced USB-DMX status, strict receipts, fail-closed query)");
