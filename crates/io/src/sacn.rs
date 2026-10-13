@@ -8,6 +8,12 @@ use thiserror::Error;
 
 pub const SACN_PORT: u16 = 5568;
 pub const SACN_PACKET_LEN: usize = 126 + 512;
+/// DMX512 null start code: the only start code whose slots are levels.
+/// Alternate start codes on the same universe (for example 0xDD per-address
+/// priority) carry other data and must never be applied as levels.
+const DMX_NULL_START_CODE: u8 = 0x00;
+/// One start code slot plus at most 512 data slots.
+const MAX_DMX_PROPERTY_VALUE_COUNT: usize = 1 + 512;
 const ACN_PACKET_IDENTIFIER: &[u8; 12] = b"ASC-E1.17\0\0\0";
 const SOURCE_NAME_LEN: usize = 64;
 // Stable Syndocal sACN component identifier: 49ce4498-aa14-41f4-a889-7afa6b7b10f1.
@@ -140,7 +146,23 @@ pub fn build_sacn_dmx_packet(
     packet
 }
 
+/// Parses an E1.31 data packet that carries DMX levels (null start code).
 pub fn parse_sacn_dmx_packet(packet: &[u8]) -> Option<SacnDmxPacket<'_>> {
+    parse_sacn_data_packet(packet)
+        .filter(|(start_code, _)| *start_code == DMX_NULL_START_CODE)
+        .map(|(_, packet)| packet)
+}
+
+/// The start code of an otherwise well-formed E1.31 data packet whose slots
+/// are not levels (for example 0xDD per-address priority).  Receivers ignore
+/// these rather than treating them as invalid traffic.
+pub fn sacn_alternate_start_code(packet: &[u8]) -> Option<u8> {
+    parse_sacn_data_packet(packet)
+        .map(|(start_code, _)| start_code)
+        .filter(|start_code| *start_code != DMX_NULL_START_CODE)
+}
+
+fn parse_sacn_data_packet(packet: &[u8]) -> Option<(u8, SacnDmxPacket<'_>)> {
     if packet.len() < SACN_PACKET_LEN || &packet[4..16] != ACN_PACKET_IDENTIFIER {
         return None;
     }
@@ -154,7 +176,7 @@ pub fn parse_sacn_dmx_packet(packet: &[u8]) -> Option<SacnDmxPacket<'_>> {
         return None;
     }
     let property_count = u16::from_be_bytes(packet[123..125].try_into().ok()?) as usize;
-    if property_count == 0 {
+    if property_count == 0 || property_count > MAX_DMX_PROPERTY_VALUE_COUNT {
         return None;
     }
     let data_start = 126usize;
@@ -163,12 +185,15 @@ pub fn parse_sacn_dmx_packet(packet: &[u8]) -> Option<SacnDmxPacket<'_>> {
     if data_end > packet.len() {
         return None;
     }
-    Some(SacnDmxPacket {
-        universe: u16::from_be_bytes(packet[113..115].try_into().ok()?),
-        sequence: packet[111],
-        priority: packet[108],
-        data: &packet[data_start..data_end],
-    })
+    Some((
+        packet[125],
+        SacnDmxPacket {
+            universe: u16::from_be_bytes(packet[113..115].try_into().ok()?),
+            sequence: packet[111],
+            priority: packet[108],
+            data: &packet[data_start..data_end],
+        },
+    ))
 }
 
 fn write_flags_and_length(packet: &mut [u8], offset: usize, length: usize) {
@@ -205,6 +230,36 @@ mod tests {
         assert_eq!(parsed.data.len(), 512);
         assert_eq!(parsed.data[0], 255);
         assert_eq!(parsed.data[511], 64);
+    }
+
+    #[test]
+    fn rejects_alternate_start_codes_and_oversized_property_counts() {
+        let mut frame = [0u8; 512];
+        frame[0] = 200;
+        let packet = build_sacn_dmx_packet(3, 9, &SYNDOCAL_CID, "Syndocal Test", &frame);
+        assert_eq!(parse_sacn_dmx_packet(&packet).unwrap().data[0], 200);
+
+        // 0xDD per-address priority shares the universe with level packets;
+        // its priority bytes must not be read as levels.
+        assert_eq!(sacn_alternate_start_code(&packet), None);
+        for start_code in [0xdd, 0x17, 0xcc, 0xff] {
+            let mut alternate = packet;
+            alternate[125] = start_code;
+            assert_eq!(parse_sacn_dmx_packet(&alternate), None, "{start_code:#04x}");
+            assert_eq!(sacn_alternate_start_code(&alternate), Some(start_code));
+        }
+        let mut malformed = packet;
+        malformed[125] = 0xdd;
+        malformed[117] = 0x00;
+        assert_eq!(sacn_alternate_start_code(&malformed), None);
+
+        // A padded datagram may not declare more than 512 data slots.
+        let mut padded = packet.to_vec();
+        padded.resize(SACN_PACKET_LEN + 64, 0);
+        padded[123..125].copy_from_slice(&514u16.to_be_bytes());
+        assert_eq!(parse_sacn_dmx_packet(&padded), None);
+        padded[123..125].copy_from_slice(&513u16.to_be_bytes());
+        assert_eq!(parse_sacn_dmx_packet(&padded).unwrap().data.len(), 512);
     }
 
     #[test]

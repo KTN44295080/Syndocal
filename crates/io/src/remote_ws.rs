@@ -24,12 +24,28 @@ use protocol::{
 };
 use serde_json::{json, Value};
 use thiserror::Error;
-use tungstenite::{accept, Message};
+use tungstenite::{accept_with_config, protocol::WebSocketConfig, Message, WebSocket};
 use zeroize::Zeroize;
 
 use crate::{parse_clock_source_label, parse_timecode_position_ms};
 
-const HTTP_PEEK_SIZE: usize = 2048;
+/// Upper bound for the complete HTTP request head (request line, headers and
+/// the terminating blank line).  Host/Origin/PIN policy and the WebSocket
+/// handshake must evaluate the identical head, so a head that does not
+/// complete within this bound is rejected instead of being judged in part.
+const HTTP_HEAD_MAX_BYTES: usize = 8 * 1024;
+/// Time a peer gets to deliver its complete request head once it has started
+/// sending; an incomplete head is rejected rather than evaluated.
+const HTTP_HEAD_DEADLINE: Duration = Duration::from_secs(1);
+/// Longest pause between peeks while a started head is still incomplete.  A
+/// peek returns at once whenever any byte is buffered, so only this partial
+/// case backs off; waiting for the first byte is a blocking peek.
+const HTTP_HEAD_PARTIAL_BACKOFF_MAX: Duration = Duration::from_millis(16);
+/// Connections still waiting for their complete HTTP head.  Each holds a
+/// worker thread for up to `HTTP_HEAD_DEADLINE`, so the count is capped well
+/// above any legitimate burst of Remote/DJ Link clients; connections beyond
+/// it are refused at once without waiting for a head.
+const REMOTE_MAX_PENDING_HEADS: u64 = 32;
 const REMOTE_SOCKET_READ_TIMEOUT: Duration = Duration::from_millis(100);
 const REMOTE_SOCKET_WRITE_TIMEOUT: Duration = Duration::from_millis(250);
 /// HELLO bearer credentials must not enter canonical identity, replay, or
@@ -2947,7 +2963,7 @@ impl RemoteParseError {
     }
 }
 
-fn remote_parse_error_response_json(error: &RemoteParseError) -> String {
+pub(crate) fn remote_parse_error_response_json(error: &RemoteParseError) -> String {
     json!({ "ok": false, "error": error.response_code() }).to_string()
 }
 
@@ -4807,6 +4823,7 @@ impl RemoteWsServer {
         let thread_rejected_connections = Arc::clone(&rejected_connections);
         let dj_link_connections = Arc::new(AtomicU64::new(0));
         let thread_dj_link_connections = Arc::clone(&dj_link_connections);
+        let thread_pending_heads = Arc::new(AtomicU64::new(0));
         let process_fence = process_fence.unwrap_or_else(new_dj_link_process_fence);
         let dj_link_registry = Arc::new(Mutex::new(DjLinkRegistry::with_process_fence(
             process_fence,
@@ -4933,6 +4950,7 @@ impl RemoteWsServer {
                             let client_dj_link_handler = thread_dj_link_handler.clone();
                             let client_dj_link_connections =
                                 Arc::clone(&thread_dj_link_connections);
+                            let client_pending_heads = Arc::clone(&thread_pending_heads);
                             let worker_sockets = Arc::clone(&thread_shutdown_sockets);
                             let worker = thread::Builder::new()
                                 .name("syndocal-remote-ws-client".to_string())
@@ -4968,6 +4986,7 @@ impl RemoteWsServer {
                                                     dj_link_handler: client_dj_link_handler,
                                                     dj_link_registry: client_dj_link_registry,
                                                     dj_link_connections: client_dj_link_connections,
+                                                    pending_heads: client_pending_heads,
                                                 },
                                             );
                                         },
@@ -5589,6 +5608,7 @@ struct RemoteConnectionContext<'a> {
     dj_link_handler: Option<DjLinkDispatchHandler>,
     dj_link_registry: Arc<Mutex<DjLinkRegistry>>,
     dj_link_connections: Arc<AtomicU64>,
+    pending_heads: Arc<AtomicU64>,
 }
 
 struct RemoteWebsocketContext<'a> {
@@ -5620,13 +5640,43 @@ fn handle_connection<F, S>(
         dj_link_handler,
         dj_link_registry,
         dj_link_connections,
+        pending_heads,
     } = context;
+    // The listener is non-blocking, and Windows and macOS hand that mode to
+    // accepted sockets.  Every read below relies on blocking I/O bounded by
+    // the socket timeouts, so a socket that cannot be made blocking is closed.
+    if stream.set_nonblocking(false).is_err() {
+        let _ = stream.shutdown(Shutdown::Both);
+        return;
+    }
     let _ = stream.set_read_timeout(Some(REMOTE_SOCKET_READ_TIMEOUT));
     let _ = stream.set_write_timeout(Some(REMOTE_SOCKET_WRITE_TIMEOUT));
-    let mut peek_buffer = [0u8; HTTP_PEEK_SIZE];
-    match stream.peek(&mut peek_buffer) {
-        Ok(size) if is_websocket_request(&peek_buffer[..size]) => {
-            let request = String::from_utf8_lossy(&peek_buffer[..size]);
+    let Some(head_slot) = PendingHeadSlot::acquire(&pending_heads) else {
+        rejected_connections.fetch_add(1, Ordering::Relaxed);
+        refuse_http_client(
+            stream,
+            "503 Service Unavailable",
+            "Too many pending connections",
+        );
+        return;
+    };
+    let mut peek_buffer = [0u8; HTTP_HEAD_MAX_BYTES];
+    let peeked = peek_http_head(&stream, &mut peek_buffer, &stop);
+    drop(head_slot);
+    let head_length = match peeked {
+        HttpHeadPeek::Complete(length) => length,
+        HttpHeadPeek::Rejected(status, message) => {
+            reject_http_client(stream, status, message);
+            return;
+        }
+        HttpHeadPeek::Closed => return,
+    };
+    let request = String::from_utf8_lossy(&peek_buffer[..head_length]);
+    match is_websocket_request(&request) {
+        Err(()) => {
+            reject_http_client(stream, "400 Bad Request", "Ambiguous Upgrade header");
+        }
+        Ok(true) => {
             // DJ Link owns only the exact /dj-link target.  The generic Web
             // Remote /ws endpoint keeps its pairing-token contract even while
             // DJ Link is enabled: a bare /ws must never be reinterpreted as
@@ -5736,8 +5786,7 @@ fn handle_connection<F, S>(
                 },
             );
         }
-        Ok(size) => {
-            let request = String::from_utf8_lossy(&peek_buffer[..size]);
+        Ok(false) => {
             let path = request_path(&request).unwrap_or("/");
             if !config.web_remote_enabled {
                 // DJ-only mode serves no HTTP asset or health route, and a
@@ -5753,8 +5802,141 @@ fn handle_connection<F, S>(
                 serve_http_client(stream, path);
             }
         }
-        Err(_) => {}
     }
+}
+
+enum HttpHeadPeek {
+    /// Byte length of the complete head, through its CRLF CRLF terminator.
+    Complete(usize),
+    Rejected(&'static str, &'static str),
+    Closed,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum HttpHeadScan {
+    Complete(usize),
+    Incomplete,
+    /// A bare CR or LF line ending.  Lenient parsers may end the head at a
+    /// different point than this scanner, so the two views could diverge.
+    Malformed,
+}
+
+/// Held while a connection waits for its HTTP head; see
+/// `REMOTE_MAX_PENDING_HEADS`.
+struct PendingHeadSlot {
+    slots: Arc<AtomicU64>,
+}
+
+impl PendingHeadSlot {
+    fn acquire(slots: &Arc<AtomicU64>) -> Option<Self> {
+        slots
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |pending| {
+                (pending < REMOTE_MAX_PENDING_HEADS).then_some(pending + 1)
+            })
+            .ok()
+            .map(|_| Self {
+                slots: Arc::clone(slots),
+            })
+    }
+}
+
+impl Drop for PendingHeadSlot {
+    fn drop(&mut self) {
+        self.slots.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+/// Peek, without consuming, until the complete request head is buffered.
+/// The WebSocket handshake later reads these same bytes, so the policy
+/// decision and the handshake always evaluate one identical head.
+///
+/// The first peek blocks for up to the socket read timeout; a peer that sends
+/// nothing in that time is dropped silently, as before.  Once bytes arrive a
+/// peek returns immediately even when no new byte follows, so an incomplete
+/// head is re-peeked after a short bounded backoff and rescanned only from
+/// where the previous scan stopped, and only when the buffered count grew.
+/// A head that is oversized, malformed or still incomplete at the deadline
+/// is rejected.
+fn peek_http_head(
+    stream: &TcpStream,
+    buffer: &mut [u8; HTTP_HEAD_MAX_BYTES],
+    stop: &AtomicBool,
+) -> HttpHeadPeek {
+    let deadline = Instant::now() + HTTP_HEAD_DEADLINE;
+    let mut scanned = 0;
+    let mut backoff = Duration::from_millis(1);
+    loop {
+        let size = match stream.peek(buffer) {
+            Ok(0) | Err(_) => return HttpHeadPeek::Closed,
+            Ok(size) => size,
+        };
+        if size > scanned {
+            match scan_http_head(&buffer[..size], scanned.saturating_sub(1)) {
+                HttpHeadScan::Complete(length) => return HttpHeadPeek::Complete(length),
+                HttpHeadScan::Malformed => {
+                    return HttpHeadPeek::Rejected("400 Bad Request", "Malformed request head")
+                }
+                HttpHeadScan::Incomplete if size == buffer.len() => {
+                    return HttpHeadPeek::Rejected(
+                        "431 Request Header Fields Too Large",
+                        "Request head too large",
+                    )
+                }
+                HttpHeadScan::Incomplete => {}
+            }
+            scanned = size;
+            backoff = Duration::from_millis(1);
+        }
+        if stop.load(Ordering::Relaxed) {
+            return HttpHeadPeek::Closed;
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return HttpHeadPeek::Rejected("408 Request Timeout", "Request head incomplete");
+        }
+        thread::sleep(backoff.min(remaining));
+        backoff = (backoff * 2).min(HTTP_HEAD_PARTIAL_BACKOFF_MAX);
+    }
+}
+
+/// Scans `bytes` for the end of the head, resuming at `resume_at` (the scan
+/// is stateless, so resuming one byte before the previous end re-checks a
+/// CR that was then the last buffered byte).
+fn scan_http_head(bytes: &[u8], resume_at: usize) -> HttpHeadScan {
+    for (index, byte) in bytes.iter().enumerate().skip(resume_at) {
+        match byte {
+            b'\r' if bytes.get(index + 1).is_some_and(|next| *next != b'\n') => {
+                return HttpHeadScan::Malformed;
+            }
+            b'\n' => {
+                if index == 0 || bytes[index - 1] != b'\r' {
+                    return HttpHeadScan::Malformed;
+                }
+                if index >= 3 && bytes[index - 3..=index] == *b"\r\n\r\n" {
+                    return HttpHeadScan::Complete(index + 1);
+                }
+            }
+            _ => {}
+        }
+    }
+    HttpHeadScan::Incomplete
+}
+
+/// tungstenite's defaults admit 64 MiB messages and 16 MiB frames before any
+/// application limit runs.  Each route accepts with its own bound so an
+/// oversized frame is refused from its header, before its payload is read.
+fn bounded_websocket_config(max_message_bytes: usize) -> WebSocketConfig {
+    let mut config = WebSocketConfig::default();
+    config.max_message_size = Some(max_message_bytes);
+    config.max_frame_size = Some(max_message_bytes);
+    config
+}
+
+fn accept_bounded_websocket<S: Read + Write>(
+    stream: S,
+    max_message_bytes: usize,
+) -> Option<WebSocket<S>> {
+    accept_with_config(stream, Some(bounded_websocket_config(max_message_bytes))).ok()
 }
 
 fn dj_link_ack(
@@ -6103,7 +6285,7 @@ fn handle_dj_link_client(
         );
         return;
     }
-    let Ok(mut websocket) = accept(stream) else {
+    let Some(mut websocket) = accept_bounded_websocket(stream, DJ_LINK_MAX_FRAME_BYTES) else {
         return;
     };
     let _ = websocket
@@ -6716,7 +6898,7 @@ fn handle_websocket_client<F, S>(
     let external_video_transport_status_provider =
         &providers.external_video_transport_status_provider;
     let external_video_transport_sync_provider = &providers.external_video_transport_sync_provider;
-    let Ok(mut websocket) = accept(stream) else {
+    let Some(mut websocket) = accept_bounded_websocket(stream, config.max_message_bytes) else {
         return;
     };
     let _ = websocket
@@ -6800,6 +6982,17 @@ fn handle_websocket_client<F, S>(
                 let _ = websocket.send(Message::Text(
                     r#"{"ok":false,"error":"message size limit exceeded"}"#.to_string(),
                 ));
+                break;
+            }
+            // The bounded accept refuses an oversized frame or message from
+            // its header; report it with the same stable error code, then
+            // half-close and drain so the unread payload does not reset the
+            // connection before the client reads the error.
+            Err(tungstenite::Error::Capacity(_)) => {
+                let _ = websocket.send(Message::Text(
+                    r#"{"ok":false,"error":"message size limit exceeded"}"#.to_string(),
+                ));
+                half_close_and_drain(websocket.get_mut());
                 break;
             }
             Ok(Message::Close(_)) => break,
@@ -6900,7 +7093,7 @@ fn default_external_video_transport_status() -> Value {
 }
 
 fn serve_http_client(mut stream: TcpStream, path: &str) {
-    let mut discard = [0u8; HTTP_PEEK_SIZE];
+    let mut discard = [0u8; HTTP_HEAD_MAX_BYTES];
     let _ = stream.read(&mut discard);
     let response = http_response_for_path(path);
     let _ = stream.write_all(response.as_bytes());
@@ -6908,14 +7101,46 @@ fn serve_http_client(mut stream: TcpStream, path: &str) {
 }
 
 fn reject_http_client(mut stream: TcpStream, status: &str, message: &str) {
-    let mut discard = [0u8; HTTP_PEEK_SIZE];
+    let mut discard = [0u8; HTTP_HEAD_MAX_BYTES];
     let _ = stream.read(&mut discard);
-    let response = format!(
+    let _ = stream.write_all(plain_text_response(status, message).as_bytes());
+    let _ = stream.flush();
+    half_close_and_drain(&mut stream);
+}
+
+/// Over-capacity refusal: answered at once, without waiting for or draining
+/// the request, so a flood of idle connections cannot hold this path open.
+fn refuse_http_client(mut stream: TcpStream, status: &str, message: &str) {
+    let _ = stream.write_all(plain_text_response(status, message).as_bytes());
+    let _ = stream.shutdown(Shutdown::Both);
+}
+
+fn plain_text_response(status: &str, message: &str) -> String {
+    format!(
         "HTTP/1.1 {status}\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n{message}",
         message.len()
-    );
-    let _ = stream.write_all(response.as_bytes());
-    let _ = stream.flush();
+    )
+}
+
+/// Half-close, then drain what the peer already sent (an oversized head or
+/// frame in particular) so closing with unread bytes does not reset the
+/// connection before the peer reads the final response.  Bounded by reads
+/// and bytes; each read waits at most the socket read timeout.
+fn half_close_and_drain(stream: &mut TcpStream) {
+    let _ = stream.shutdown(Shutdown::Write);
+    let mut discard = [0u8; HTTP_HEAD_MAX_BYTES];
+    let mut drained = 0;
+    for _ in 0..4 {
+        match stream.read(&mut discard) {
+            Ok(0) | Err(_) => break,
+            Ok(read) => {
+                drained += read;
+                if drained >= 2 * HTTP_HEAD_MAX_BYTES {
+                    break;
+                }
+            }
+        }
+    }
 }
 
 fn unix_time_ms() -> u64 {
@@ -6935,9 +7160,12 @@ fn update_remote_client_activity(clients: &Mutex<HashMap<u64, RemoteClientState>
     }
 }
 
-fn is_websocket_request(bytes: &[u8]) -> bool {
-    let text = String::from_utf8_lossy(bytes).to_ascii_lowercase();
-    text.contains("upgrade: websocket")
+/// Upgrade routing reads the actual `Upgrade` header of the complete head,
+/// with the same exact-token rule the handshake applies.  A repeated header
+/// is ambiguous and fails closed.
+fn is_websocket_request(request: &str) -> Result<bool, ()> {
+    Ok(request_header(request, "Upgrade")?
+        .is_some_and(|value| value.eq_ignore_ascii_case("websocket")))
 }
 
 fn request_path(request: &str) -> Option<&str> {
@@ -8269,9 +8497,377 @@ mod tests {
         let request = "GET /ws HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\n\r\n";
         let http = "GET /remote HTTP/1.1\r\nHost: localhost\r\n\r\n";
 
-        assert!(is_websocket_request(request.as_bytes()));
-        assert!(!is_websocket_request(http.as_bytes()));
+        assert_eq!(is_websocket_request(request), Ok(true));
+        assert_eq!(is_websocket_request(http), Ok(false));
         assert_eq!(request_path(http), Some("/remote"));
+    }
+
+    #[test]
+    fn upgrade_routing_reads_only_the_upgrade_header() {
+        let mixed_case = "GET /ws HTTP/1.1\r\nHost: localhost\r\nUpgrade: WebSocket\r\n\r\n";
+        let in_target = "GET /ws?note=upgrade:%20websocket HTTP/1.1\r\nHost: localhost\r\n\r\n";
+        let in_other_header =
+            "GET /ws HTTP/1.1\r\nHost: localhost\r\nX-Note: upgrade: websocket\r\n\r\n";
+        let token_list = "GET /ws HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket, h2c\r\n\r\n";
+        let duplicate =
+            "GET /ws HTTP/1.1\r\nHost: localhost\r\nUpgrade: h2c\r\nUpgrade: websocket\r\n\r\n";
+
+        assert_eq!(is_websocket_request(mixed_case), Ok(true));
+        assert_eq!(is_websocket_request(in_target), Ok(false));
+        // The old substring match routed these to the WebSocket branch.
+        assert_eq!(is_websocket_request(in_other_header), Ok(false));
+        assert_eq!(is_websocket_request(token_list), Ok(false));
+        assert_eq!(is_websocket_request(duplicate), Err(()));
+    }
+
+    #[test]
+    fn http_head_scan_requires_one_complete_crlf_terminated_head() {
+        let head = b"GET /ws HTTP/1.1\r\nHost: localhost:9100\r\n\r\n";
+        assert_eq!(scan_http_head(head, 0), HttpHeadScan::Complete(head.len()));
+        let mut pipelined = head.to_vec();
+        pipelined.extend_from_slice(b"\x81\x80tail");
+        assert_eq!(
+            scan_http_head(&pipelined, 0),
+            HttpHeadScan::Complete(head.len())
+        );
+        for cut in 0..head.len() {
+            assert_eq!(
+                scan_http_head(&head[..cut], 0),
+                HttpHeadScan::Incomplete,
+                "a head cut at byte {cut} must never be judged"
+            );
+            // Resuming one byte before the previous end, as the peek loop
+            // does, reaches the same verdict as a full rescan.
+            assert_eq!(
+                scan_http_head(head, cut.saturating_sub(1)),
+                HttpHeadScan::Complete(head.len()),
+                "resume after byte {cut}"
+            );
+        }
+        for malformed in [
+            b"GET / HTTP/1.1\nHost: localhost:9100\n\n".as_slice(),
+            b"GET / HTTP/1.1\r\nHost: localhost:9100\n\r\n",
+            b"GET / HTTP/1.1\r\nHost: localhost:9100\rOrigin: x\r\n\r\n",
+            b"\nGET / HTTP/1.1\r\n\r\n",
+        ] {
+            assert_eq!(scan_http_head(malformed, 0), HttpHeadScan::Malformed);
+        }
+        // A CR that ended the previous peek is re-checked once its successor
+        // arrives.
+        let split_cr = b"GET / HTTP/1.1\rX";
+        assert_eq!(
+            scan_http_head(&split_cr[..split_cr.len() - 1], 0),
+            HttpHeadScan::Incomplete
+        );
+        assert_eq!(
+            scan_http_head(split_cr, split_cr.len() - 2),
+            HttpHeadScan::Malformed
+        );
+    }
+
+    /// Sends each `(pause, bytes)` part after its pause and returns the
+    /// response head with the time from connect to the response.
+    fn raw_http_exchange_in_parts(port: u16, parts: &[(Duration, &[u8])]) -> (String, Duration) {
+        let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        let connected = Instant::now();
+        stream.set_nodelay(true).unwrap();
+        stream
+            .set_read_timeout(Some(HTTP_HEAD_DEADLINE + Duration::from_secs(2)))
+            .unwrap();
+        for (pause, bytes) in parts {
+            thread::sleep(*pause);
+            stream.write_all(bytes).unwrap();
+        }
+        (read_response_head(&mut stream), connected.elapsed())
+    }
+
+    fn raw_http_exchange(port: u16, request: &[u8], truncate_at: Option<usize>) -> String {
+        let sent = &request[..truncate_at.unwrap_or(request.len())];
+        raw_http_exchange_in_parts(port, &[(Duration::ZERO, sent)]).0
+    }
+
+    fn read_response_head(stream: &mut TcpStream) -> String {
+        let mut response = Vec::new();
+        let mut chunk = [0u8; 1024];
+        while let Ok(read) = stream.read(&mut chunk) {
+            if read == 0 {
+                break;
+            }
+            response.extend_from_slice(&chunk[..read]);
+            if response.windows(4).any(|window| window == b"\r\n\r\n") {
+                break;
+            }
+        }
+        String::from_utf8_lossy(&response).into_owned()
+    }
+
+    #[test]
+    fn web_remote_policy_sees_the_complete_head_or_rejects_it() {
+        let probe = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = probe.local_addr().unwrap().port();
+        drop(probe);
+        let server = RemoteWsServer::start(
+            RemoteControlConfig {
+                bind_ip: "127.0.0.1".to_string(),
+                port,
+                pairing_pin: "123456".to_string(),
+                ..RemoteControlConfig::default()
+            },
+            |_| {},
+        )
+        .unwrap();
+        let upgrade = |extra: &str| {
+            format!(
+                "GET /ws?token=123456 HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n{extra}Connection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n"
+            )
+        };
+
+        let accepted = raw_http_exchange(port, upgrade("").as_bytes(), None);
+        assert!(accepted.starts_with("HTTP/1.1 101"), "{accepted}");
+
+        // A hostile Origin placed after 3 KiB of filler was beyond the old
+        // 2 KiB policy window but still reached the WebSocket handshake.
+        let filler = format!("X-Filler: {}\r\n", "a".repeat(3 * 1024));
+        let late_origin = upgrade(&format!("{filler}Origin: https://attacker.example\r\n"));
+        let response = raw_http_exchange(port, late_origin.as_bytes(), None);
+        assert!(response.starts_with("HTTP/1.1 403"), "{response}");
+        let late_host = upgrade(&format!("{filler}Host: attacker.example:{port}\r\n"));
+        let response = raw_http_exchange(port, late_host.as_bytes(), None);
+        assert!(response.starts_with("HTTP/1.1 403"), "{response}");
+
+        let oversized = upgrade(&format!(
+            "X-Filler: {}\r\n",
+            "a".repeat(HTTP_HEAD_MAX_BYTES)
+        ));
+        let response = raw_http_exchange(port, oversized.as_bytes(), None);
+        assert!(response.starts_with("HTTP/1.1 431"), "{response}");
+
+        let bare_lf = upgrade("").replace("\r\n", "\n");
+        let response = raw_http_exchange(port, bare_lf.as_bytes(), None);
+        assert!(response.starts_with("HTTP/1.1 400"), "{response}");
+
+        let duplicate_upgrade = upgrade("Upgrade: h2c\r\n");
+        let response = raw_http_exchange(port, duplicate_upgrade.as_bytes(), None);
+        assert!(response.starts_with("HTTP/1.1 400"), "{response}");
+
+        // A head that is still incomplete is judged only at the deadline.
+        let incomplete = upgrade("");
+        let (response, elapsed) = raw_http_exchange_in_parts(
+            port,
+            &[(
+                Duration::ZERO,
+                &incomplete.as_bytes()[..incomplete.len() / 2],
+            )],
+        );
+        assert!(response.starts_with("HTTP/1.1 408"), "{response}");
+        assert!(
+            elapsed >= HTTP_HEAD_DEADLINE,
+            "408 after {elapsed:?}, before the {HTTP_HEAD_DEADLINE:?} head deadline"
+        );
+        drop(server);
+    }
+
+    #[test]
+    fn web_remote_accepts_heads_that_arrive_late_or_in_parts() {
+        let probe = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = probe.local_addr().unwrap().port();
+        drop(probe);
+        let server = RemoteWsServer::start(
+            RemoteControlConfig {
+                bind_ip: "127.0.0.1".to_string(),
+                port,
+                pairing_pin: "123456".to_string(),
+                ..RemoteControlConfig::default()
+            },
+            |_| {},
+        )
+        .unwrap();
+        let head = format!(
+            "GET /ws?token=123456 HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n"
+        );
+        let (first, second) = head.as_bytes().split_at(head.len() / 2);
+        let pause = Duration::from_millis(50);
+
+        // Accepted sockets inherit the listener's non-blocking mode on
+        // Windows; a non-blocking peek dropped a client whose first byte
+        // arrived after the accept.
+        let (late, _) = raw_http_exchange_in_parts(port, &[(pause, head.as_bytes())]);
+        assert!(late.starts_with("HTTP/1.1 101"), "{late}");
+        let (split, _) =
+            raw_http_exchange_in_parts(port, &[(Duration::ZERO, first), (pause, second)]);
+        assert!(split.starts_with("HTTP/1.1 101"), "{split}");
+        drop(server);
+    }
+
+    #[test]
+    fn pending_head_connections_are_capped() {
+        let probe = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = probe.local_addr().unwrap().port();
+        drop(probe);
+        let server = RemoteWsServer::start(
+            RemoteControlConfig {
+                bind_ip: "127.0.0.1".to_string(),
+                port,
+                pairing_pin: "123456".to_string(),
+                ..RemoteControlConfig::default()
+            },
+            |_| {},
+        )
+        .unwrap();
+        // Each holder starts a head and never finishes it, keeping its slot
+        // until the head deadline.
+        let holders = (0..REMOTE_MAX_PENDING_HEADS)
+            .map(|_| {
+                let mut holder = TcpStream::connect(("127.0.0.1", port)).unwrap();
+                holder.write_all(b"GET /").unwrap();
+                holder
+            })
+            .collect::<Vec<_>>();
+        thread::sleep(Duration::from_millis(300));
+
+        // Refused before any head is read, so the refusal needs no request.
+        let mut refused = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        refused
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let response = read_response_head(&mut refused);
+        assert!(response.starts_with("HTTP/1.1 503"), "{response}");
+        assert!(server.status().rejected_connections >= 1);
+        drop(holders);
+
+        // Slots return once the incomplete heads time out.
+        thread::sleep(HTTP_HEAD_DEADLINE + Duration::from_millis(300));
+        let url = format!("ws://127.0.0.1:{port}/ws?token=123456");
+        let (mut client, _) = tungstenite::connect(url.as_str()).unwrap();
+        let _ = client.close(None);
+        drop(server);
+    }
+
+    #[test]
+    fn oversized_web_remote_message_gets_the_size_limit_error_over_a_socket() {
+        let probe = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = probe.local_addr().unwrap().port();
+        drop(probe);
+        let server = RemoteWsServer::start(
+            RemoteControlConfig {
+                bind_ip: "127.0.0.1".to_string(),
+                port,
+                pairing_pin: "123456".to_string(),
+                max_message_bytes: 1_024,
+                ..RemoteControlConfig::default()
+            },
+            |_| {},
+        )
+        .unwrap();
+        let url = format!("ws://127.0.0.1:{port}/ws?token=123456");
+        let (mut client, _) = tungstenite::connect(url.as_str()).unwrap();
+        client.send(Message::Text("x".repeat(2 * 1_024))).unwrap();
+        match client.read().unwrap() {
+            Message::Text(text) => {
+                assert_eq!(
+                    text,
+                    r#"{"ok":false,"error":"message size limit exceeded"}"#
+                )
+            }
+            other => panic!("unexpected reply to an oversized message: {other:?}"),
+        }
+        drop(server);
+    }
+
+    /// In-memory duplex stream: scripted client bytes in, server bytes out.
+    struct ScriptedStream {
+        input: std::io::Cursor<Vec<u8>>,
+        output: Vec<u8>,
+    }
+
+    impl Read for ScriptedStream {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            self.input.read(buffer)
+        }
+    }
+
+    impl Write for ScriptedStream {
+        fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+            self.output.extend_from_slice(buffer);
+            Ok(buffer.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn masked_frame_header(fin: bool, opcode: u8, declared_length: u64) -> Vec<u8> {
+        let mut frame = vec![if fin { 0x80 } else { 0x00 } | opcode];
+        if declared_length < 126 {
+            frame.push(0x80 | declared_length as u8);
+        } else if declared_length <= u64::from(u16::MAX) {
+            frame.push(0x80 | 126);
+            frame.extend_from_slice(&(declared_length as u16).to_be_bytes());
+        } else {
+            frame.push(0x80 | 127);
+            frame.extend_from_slice(&declared_length.to_be_bytes());
+        }
+        frame.extend_from_slice(&[0x11, 0x22, 0x33, 0x44]);
+        frame
+    }
+
+    fn bounded_server_read(limit: usize, frames: Vec<u8>) -> tungstenite::Error {
+        let head = "GET /ws HTTP/1.1\r\nHost: localhost:9100\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n";
+        let stream = ScriptedStream {
+            input: std::io::Cursor::new(head.as_bytes().to_vec()),
+            output: Vec::new(),
+        };
+        let mut websocket =
+            accept_bounded_websocket(stream, limit).expect("scripted handshake must succeed");
+        assert!(websocket.get_ref().output.starts_with(b"HTTP/1.1 101"));
+        // The handshake rejects bytes pipelined behind the request, so the
+        // client frames are delivered only after the 101 response.
+        websocket.get_mut().input = std::io::Cursor::new(frames);
+        websocket
+            .read()
+            .expect_err("an over-limit message must be refused")
+    }
+
+    #[test]
+    fn bounded_accept_refuses_oversized_frames_from_their_header() {
+        for limit in [1_024, DJ_LINK_MAX_FRAME_BYTES] {
+            // Only the header is supplied: a refusal proves the payload was
+            // never awaited or buffered.  The declared size sits below
+            // tungstenite's 16 MiB default frame limit, so the default
+            // configuration would have waited for it instead.
+            let error =
+                bounded_server_read(limit, masked_frame_header(true, 0x1, limit as u64 + 1));
+            assert!(
+                matches!(
+                    error,
+                    tungstenite::Error::Capacity(
+                        tungstenite::error::CapacityError::MessageTooLong { size, max_size }
+                    ) if size == limit + 1 && max_size == limit
+                ),
+                "limit {limit}: {error:?}"
+            );
+
+            // Two in-bound fragments that together exceed the message limit.
+            let half = limit / 2 + 1;
+            let mut fragments = masked_frame_header(false, 0x2, half as u64);
+            fragments.extend(std::iter::repeat_n(0x5a, half));
+            fragments.extend(masked_frame_header(true, 0x0, half as u64));
+            fragments.extend(std::iter::repeat_n(0x5a, half));
+            let error = bounded_server_read(limit, fragments);
+            assert!(
+                matches!(
+                    error,
+                    tungstenite::Error::Capacity(
+                        tungstenite::error::CapacityError::MessageTooLong { max_size, .. }
+                    ) if max_size == limit
+                ),
+                "limit {limit}: {error:?}"
+            );
+        }
+        let config = bounded_websocket_config(4_096);
+        assert_eq!(config.max_message_size, Some(4_096));
+        assert_eq!(config.max_frame_size, Some(4_096));
     }
 
     #[test]

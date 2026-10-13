@@ -7,6 +7,7 @@
 
 use std::{
     net::{SocketAddr, UdpSocket},
+    sync::atomic::{AtomicU64, Ordering},
     time::{Duration, Instant},
 };
 
@@ -62,6 +63,10 @@ pub enum ShowClockLanError {
 pub struct ShowClockLanTransport {
     socket: UdpSocket,
     peer: SocketAddr,
+    /// Saturating count of dropped datagrams: oversized or undecodable ones
+    /// from the paired address, plus on Windows every datagram too large to
+    /// receive, which the OS discards without reporting its sender.
+    dropped_datagrams: AtomicU64,
 }
 
 impl std::fmt::Debug for ShowClockLanTransport {
@@ -69,6 +74,7 @@ impl std::fmt::Debug for ShowClockLanTransport {
         f.debug_struct("ShowClockLanTransport")
             .field("local", &self.socket.local_addr().ok())
             .field("peer", &self.peer)
+            .field("dropped_datagrams", &self.dropped_datagrams())
             .finish()
     }
 }
@@ -79,7 +85,11 @@ impl ShowClockLanTransport {
         socket
             .set_nonblocking(false)
             .map_err(ShowClockLanError::Configure)?;
-        Ok(Self { socket, peer })
+        Ok(Self {
+            socket,
+            peer,
+            dropped_datagrams: AtomicU64::new(0),
+        })
     }
 
     pub fn local_addr(&self) -> Result<SocketAddr, ShowClockLanError> {
@@ -88,6 +98,13 @@ impl ShowClockLanTransport {
 
     pub fn peer_addr(&self) -> SocketAddr {
         self.peer
+    }
+
+    /// Datagrams `receive` dropped since this transport was bound: oversized
+    /// or undecodable ones from the paired address, and on Windows any
+    /// datagram too large to receive, whatever its sender.
+    pub fn dropped_datagrams(&self) -> u64 {
+        self.dropped_datagrams.load(Ordering::Relaxed)
     }
 
     pub fn send_sample(
@@ -119,12 +136,20 @@ impl ShowClockLanTransport {
             .map_err(ShowClockLanError::Send)
     }
 
-    /// Receive one packet from the exact paired endpoint before the deadline.
-    /// Traffic from other endpoints is ignored and cannot extend the deadline.
-    /// A malformed packet from the paired endpoint fails closed.
+    /// Receive one decodable packet from the exact paired endpoint before the
+    /// deadline.  Traffic from other endpoints is ignored, and oversized or
+    /// undecodable datagrams from the paired address are dropped and counted
+    /// (on Windows a datagram too large to receive is counted whatever its
+    /// sender); neither can extend the deadline.  A UDP source address is spoofable,
+    /// so a datagram that does not even decode carries no evidence that the
+    /// paired peer sent it and must not stop the receiver.  The returned
+    /// message is still unauthenticated: callers run it through the protocol
+    /// validator, which stays fail-closed for authenticated-protocol faults.
     pub fn receive(&self, timeout: Duration) -> Result<ShowClockLanMessage, ShowClockLanError> {
         let deadline = Instant::now() + timeout;
-        let mut buffer = [0_u8; SHOW_CLOCK_LAN_MAX_DATAGRAM_BYTES];
+        // One spare byte distinguishes a maximum-size datagram from a
+        // truncated oversized one.
+        let mut buffer = [0_u8; SHOW_CLOCK_LAN_MAX_DATAGRAM_BYTES + 1];
         loop {
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
@@ -143,29 +168,62 @@ impl ShowClockLanTransport {
                 {
                     return Err(ShowClockLanError::Timeout)
                 }
+                // Windows discards a datagram larger than the buffer and
+                // reports WSAEMSGSIZE without its source, so it is counted
+                // whatever its sender: it may have been the paired peer.
+                Err(error) if is_discarded_oversized_datagram(&error) => {
+                    self.count_dropped_datagram();
+                    continue;
+                }
+                // On a connectionless socket a reset is only an ICMP report,
+                // which any host can forge; it is not a local socket fault.
+                Err(error) if error.kind() == std::io::ErrorKind::ConnectionReset => continue,
                 Err(error) => return Err(ShowClockLanError::Receive(error)),
             };
             if source != self.peer {
                 continue;
             }
-            if received == buffer.len() {
-                return Err(ShowClockLanError::PacketTooLarge);
+            match decode_datagram(&buffer[..received]) {
+                Ok(message) => return Ok(message),
+                Err(_) => self.count_dropped_datagram(),
             }
-            let envelope = serde_json::from_slice::<ShowClockLanEnvelope>(&buffer[..received])
-                .map_err(|error| ShowClockLanError::Decode(error.to_string()))?;
-            if envelope.magic != SHOW_CLOCK_LAN_MAGIC {
-                return Err(ShowClockLanError::Decode(
-                    "unexpected ShowClock LAN magic".to_string(),
-                ));
-            }
-            if envelope.protocol_version != SHOW_CLOCK_PROTOCOL_VERSION {
-                return Err(ShowClockLanError::Decode(
-                    "unsupported ShowClock LAN protocol version".to_string(),
-                ));
-            }
-            return Ok(envelope.message);
         }
     }
+
+    fn count_dropped_datagram(&self) {
+        let _ =
+            self.dropped_datagrams
+                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
+                    Some(count.saturating_add(1))
+                });
+    }
+}
+
+fn is_discarded_oversized_datagram(error: &std::io::Error) -> bool {
+    const WSAEMSGSIZE: i32 = 10_040;
+    cfg!(windows) && error.raw_os_error() == Some(WSAEMSGSIZE)
+}
+
+/// Decode one ShowClock LAN datagram without trusting its source.  This is
+/// the complete envelope check (size, JSON shape, magic and protocol
+/// version); authentication remains the caller's protocol-validator step.
+pub fn decode_datagram(datagram: &[u8]) -> Result<ShowClockLanMessage, ShowClockLanError> {
+    if datagram.len() > SHOW_CLOCK_LAN_MAX_DATAGRAM_BYTES {
+        return Err(ShowClockLanError::PacketTooLarge);
+    }
+    let envelope = serde_json::from_slice::<ShowClockLanEnvelope>(datagram)
+        .map_err(|error| ShowClockLanError::Decode(error.to_string()))?;
+    if envelope.magic != SHOW_CLOCK_LAN_MAGIC {
+        return Err(ShowClockLanError::Decode(
+            "unexpected ShowClock LAN magic".to_string(),
+        ));
+    }
+    if envelope.protocol_version != SHOW_CLOCK_PROTOCOL_VERSION {
+        return Err(ShowClockLanError::Decode(
+            "unsupported ShowClock LAN protocol version".to_string(),
+        ));
+    }
+    Ok(envelope.message)
 }
 
 #[cfg(test)]
@@ -237,18 +295,128 @@ mod tests {
         ));
     }
 
+    fn encoded(message: ShowClockLanMessage) -> Vec<u8> {
+        serde_json::to_vec(&ShowClockLanEnvelope {
+            magic: SHOW_CLOCK_LAN_MAGIC.to_string(),
+            protocol_version: SHOW_CLOCK_PROTOCOL_VERSION,
+            message,
+        })
+        .unwrap()
+    }
+
+    fn hostile_datagrams() -> Vec<Vec<u8>> {
+        let valid = encoded(ShowClockLanMessage::Sample(sample()));
+        let text = String::from_utf8(valid.clone()).unwrap();
+        vec![
+            Vec::new(),
+            b"{}".to_vec(),
+            b"noise".to_vec(),
+            vec![0xff; 64],
+            valid[..valid.len() / 2].to_vec(),
+            text.replace(SHOW_CLOCK_LAN_MAGIC, "syndocal.show-clocx")
+                .into_bytes(),
+            text.replacen(
+                &format!("\"protocol_version\":{SHOW_CLOCK_PROTOCOL_VERSION}"),
+                &format!(
+                    "\"protocol_version\":{}",
+                    SHOW_CLOCK_PROTOCOL_VERSION.wrapping_add(1)
+                ),
+                1,
+            )
+            .into_bytes(),
+            vec![b' '; SHOW_CLOCK_LAN_MAX_DATAGRAM_BYTES + 1],
+        ]
+    }
+
     #[test]
-    fn malformed_paired_packet_fails_closed() {
+    fn decode_datagram_accepts_exact_envelopes_and_rejects_hostile_bytes() {
+        let valid = encoded(ShowClockLanMessage::Sample(sample()));
+        assert_eq!(
+            decode_datagram(&valid).unwrap(),
+            ShowClockLanMessage::Sample(sample())
+        );
+        let mut at_limit = valid.clone();
+        at_limit.resize(SHOW_CLOCK_LAN_MAX_DATAGRAM_BYTES, b' ');
+        assert_eq!(
+            decode_datagram(&at_limit).unwrap(),
+            ShowClockLanMessage::Sample(sample())
+        );
+        let hostile = hostile_datagrams();
+        let (oversized, malformed) = hostile.split_last().unwrap();
+        assert!(matches!(
+            decode_datagram(oversized),
+            Err(ShowClockLanError::PacketTooLarge)
+        ));
+        for datagram in malformed {
+            assert!(matches!(
+                decode_datagram(datagram),
+                Err(ShowClockLanError::Decode(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn malformed_paired_datagrams_are_dropped_without_ending_receive() {
         let receiver_socket = UdpSocket::bind("127.0.0.1:0").unwrap();
         let receiver_addr = receiver_socket.local_addr().unwrap();
         let sender_socket = UdpSocket::bind("127.0.0.1:0").unwrap();
         let sender_addr = sender_socket.local_addr().unwrap();
         drop(receiver_socket);
         let receiver = ShowClockLanTransport::bind(receiver_addr, sender_addr).unwrap();
+        let mut hostile = hostile_datagrams();
+        // Larger than the receive buffer: truncated on Unix, discarded with
+        // WSAEMSGSIZE on Windows.  Either way it is a counted drop.
+        hostile.push(vec![b' '; SHOW_CLOCK_LAN_MAX_DATAGRAM_BYTES + 512]);
+        for datagram in &hostile {
+            sender_socket.send_to(datagram, receiver_addr).unwrap();
+        }
+        let valid = encoded(ShowClockLanMessage::Sample(sample()));
+        sender_socket.send_to(&valid, receiver_addr).unwrap();
+
+        assert_eq!(
+            receiver.receive(Duration::from_millis(500)).unwrap(),
+            ShowClockLanMessage::Sample(sample())
+        );
+        assert_eq!(receiver.dropped_datagrams(), hostile.len() as u64);
+
+        // Noise alone ends only at the caller's deadline, never as a decode
+        // failure that would stop the receiving worker.
         sender_socket.send_to(b"{}", receiver_addr).unwrap();
         assert!(matches!(
-            receiver.receive(Duration::from_millis(250)),
-            Err(ShowClockLanError::Decode(_))
+            receiver.receive(Duration::from_millis(50)),
+            Err(ShowClockLanError::Timeout)
         ));
+        assert_eq!(receiver.dropped_datagrams(), hostile.len() as u64 + 1);
+    }
+
+    #[test]
+    fn bit_flipped_signed_samples_never_verify() {
+        let original = ShowClockLanMessage::Sample(sample());
+        let datagram = encoded(original.clone());
+        let mut undecodable = 0_usize;
+        let mut unauthenticated = 0_usize;
+        for bit in 0..datagram.len() * 8 {
+            let mut flipped = datagram.clone();
+            flipped[bit / 8] ^= 1 << (bit % 8);
+            match decode_datagram(&flipped) {
+                Err(_) => undecodable += 1,
+                Ok(message) => {
+                    assert_ne!(message, original, "bit {bit} flip decoded unchanged");
+                    let ShowClockLanMessage::Sample(flipped_sample) = message else {
+                        panic!("bit {bit} flip changed the message kind");
+                    };
+                    assert!(
+                        flipped_sample.verify(&KEY).is_err(),
+                        "bit {bit} flip produced a sample that still verifies"
+                    );
+                    unauthenticated += 1;
+                }
+            }
+        }
+        assert!(undecodable > 0 && unauthenticated > 0);
+        eprintln!(
+            "show clock bit flips: {} bits, {undecodable} undecodable, {unauthenticated} decoded but unauthenticated",
+            datagram.len() * 8
+        );
     }
 }

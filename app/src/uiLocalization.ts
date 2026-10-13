@@ -3803,6 +3803,7 @@ const japaneseText: Record<string, string> = {
   "Cue ID": "キューID",
   "Do not paste this value into project files, URLs, environment variables, or logs. This panel does not save it.": "この値をプロジェクトファイル、URL、環境変数、ログへ貼り付けないでください。このパネルは値を保存しません。",
   Drop: "ドロップ",
+  Dropped: "破棄",
   "Enter this challenge in the trusted pairing flow": "信頼済みペアリングフローにこのチャレンジを入力",
   "exact grant": "厳密な権限",
   "Exact grants": "厳密な権限一覧",

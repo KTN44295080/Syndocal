@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     fs::File,
-    io::Read,
+    io::{Read, Seek},
     path::{Path, PathBuf},
 };
 
@@ -12,6 +12,13 @@ use protocol::{
 use roxmltree::{Document, Node};
 use thiserror::Error;
 use zip::ZipArchive;
+
+/// Largest description.xml read from a GDTF archive, matching the project's
+/// other embedded-text bounds (DVC fixture data, ISF shader sources).
+pub const GDTF_DESCRIPTION_MAX_BYTES: u64 = 16 * 1024 * 1024;
+/// Largest wheel-media or 3D model entry read from a GDTF archive, matching
+/// the project-file and DVC import bound.
+pub const GDTF_RESOURCE_MAX_BYTES: u64 = 64 * 1024 * 1024;
 
 #[derive(Debug, Error)]
 pub enum GdtfError {
@@ -34,32 +41,14 @@ pub enum GdtfError {
     Xml(#[from] roxmltree::Error),
     #[error("description.xml does not contain a FixtureType node")]
     MissingFixtureType,
+    #[error("GDTF {entry} exceeds the {limit}-byte limit")]
+    EntryTooLarge { entry: &'static str, limit: u64 },
 }
 
 pub fn load_profile(path: impl AsRef<Path>) -> Result<FixtureProfileSummary, GdtfError> {
     let path = path.as_ref();
-    let file = File::open(path).map_err(|source| GdtfError::Open {
-        path: path.to_path_buf(),
-        source,
-    })?;
-    let mut archive = ZipArchive::new(file)?;
-    let mut description = String::new();
-
-    for index in 0..archive.len() {
-        let mut entry = archive.by_index(index)?;
-        let name = entry.name().replace('\\', "/");
-        if name.eq_ignore_ascii_case("description.xml") || name.ends_with("/description.xml") {
-            entry
-                .read_to_string(&mut description)
-                .map_err(GdtfError::ReadDescription)?;
-            break;
-        }
-    }
-
-    if description.is_empty() {
-        return Err(GdtfError::MissingDescription);
-    }
-
+    let mut archive = open_archive(path)?;
+    let description = read_description(&mut archive, GDTF_DESCRIPTION_MAX_BYTES)?;
     parse_description_xml(path.to_string_lossy().as_ref(), &description)
 }
 
@@ -70,30 +59,8 @@ pub fn load_wheel_media(
     let Some(target_name) = normalized_wheel_media_path(media_name) else {
         return Ok(None);
     };
-    let path = path.as_ref();
-    let file = File::open(path).map_err(|source| GdtfError::Open {
-        path: path.to_path_buf(),
-        source,
-    })?;
-    let mut archive = ZipArchive::new(file)?;
-
-    for index in 0..archive.len() {
-        let mut entry = archive.by_index(index)?;
-        let name = entry.name().replace('\\', "/");
-        if name.eq_ignore_ascii_case(&target_name)
-            || name
-                .to_ascii_lowercase()
-                .ends_with(&format!("/{target_name}").to_ascii_lowercase())
-        {
-            let mut bytes = Vec::with_capacity(entry.size() as usize);
-            entry
-                .read_to_end(&mut bytes)
-                .map_err(GdtfError::ReadWheelMedia)?;
-            return Ok(Some(bytes));
-        }
-    }
-
-    Ok(None)
+    let mut archive = open_archive(path.as_ref())?;
+    read_wheel_media(&mut archive, &target_name, GDTF_RESOURCE_MAX_BYTES)
 }
 
 pub fn load_model_file(
@@ -104,29 +71,145 @@ pub fn load_model_file(
     if candidates.is_empty() {
         return Ok(None);
     }
-    let path = path.as_ref();
+    let mut archive = open_archive(path.as_ref())?;
+    read_model_file(&mut archive, &candidates, GDTF_RESOURCE_MAX_BYTES)
+}
+
+fn open_archive(path: &Path) -> Result<ZipArchive<File>, GdtfError> {
     let file = File::open(path).map_err(|source| GdtfError::Open {
         path: path.to_path_buf(),
         source,
     })?;
-    let mut archive = ZipArchive::new(file)?;
+    Ok(ZipArchive::new(file)?)
+}
 
+fn read_description<R: Read + Seek>(
+    archive: &mut ZipArchive<R>,
+    limit: u64,
+) -> Result<String, GdtfError> {
+    let mut description = String::new();
     for index in 0..archive.len() {
-        let mut entry = archive.by_index(index)?;
+        let entry = archive.by_index(index)?;
+        let name = entry.name().replace('\\', "/");
+        if name.eq_ignore_ascii_case("description.xml") || name.ends_with("/description.xml") {
+            let declared_size = entry.size();
+            let bytes = read_bounded_entry(
+                entry,
+                declared_size,
+                limit,
+                "description.xml",
+                GdtfError::ReadDescription,
+            )?;
+            description = String::from_utf8(bytes).map_err(|error| {
+                GdtfError::ReadDescription(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    error,
+                ))
+            })?;
+            break;
+        }
+    }
+
+    if description.is_empty() {
+        return Err(GdtfError::MissingDescription);
+    }
+    Ok(description)
+}
+
+fn read_wheel_media<R: Read + Seek>(
+    archive: &mut ZipArchive<R>,
+    target_name: &str,
+    limit: u64,
+) -> Result<Option<Vec<u8>>, GdtfError> {
+    for index in 0..archive.len() {
+        let entry = archive.by_index(index)?;
+        let name = entry.name().replace('\\', "/");
+        if name.eq_ignore_ascii_case(target_name)
+            || name
+                .to_ascii_lowercase()
+                .ends_with(&format!("/{target_name}").to_ascii_lowercase())
+        {
+            let declared_size = entry.size();
+            return read_bounded_entry(
+                entry,
+                declared_size,
+                limit,
+                "wheel media",
+                GdtfError::ReadWheelMedia,
+            )
+            .map(Some);
+        }
+    }
+
+    Ok(None)
+}
+
+fn read_model_file<R: Read + Seek>(
+    archive: &mut ZipArchive<R>,
+    candidates: &[String],
+    limit: u64,
+) -> Result<Option<Vec<u8>>, GdtfError> {
+    for index in 0..archive.len() {
+        let entry = archive.by_index(index)?;
         let name = entry.name().replace('\\', "/");
         let normalized_name = name.to_ascii_lowercase();
         if candidates.iter().any(|target_name| {
             normalized_name == *target_name || normalized_name.ends_with(&format!("/{target_name}"))
         }) {
-            let mut bytes = Vec::with_capacity(entry.size() as usize);
-            entry
-                .read_to_end(&mut bytes)
-                .map_err(GdtfError::ReadModelFile)?;
-            return Ok(Some(bytes));
+            let declared_size = entry.size();
+            return read_bounded_entry(
+                entry,
+                declared_size,
+                limit,
+                "model file",
+                GdtfError::ReadModelFile,
+            )
+            .map(Some);
         }
     }
 
     Ok(None)
+}
+
+/// Reads one archive entry without trusting its size field.  A declared size
+/// over `limit` is rejected early; otherwise it only seeds the initial
+/// reservation.  Decompression stops at the first chunk that would pass
+/// `limit`, and growth never reserves past it, so a forged size or a
+/// decompression bomb fails with a typed error and at most `limit` bytes of
+/// capacity instead of exhausting memory.
+fn read_bounded_entry(
+    mut entry: impl Read,
+    declared_size: u64,
+    limit: u64,
+    kind: &'static str,
+    read_error: fn(std::io::Error) -> GdtfError,
+) -> Result<Vec<u8>, GdtfError> {
+    let too_large = || GdtfError::EntryTooLarge { entry: kind, limit };
+    if declared_size > limit {
+        return Err(too_large());
+    }
+    let limit = usize::try_from(limit).map_err(|_| too_large())?;
+    let mut bytes = Vec::with_capacity(declared_size as usize);
+    let mut chunk = [0_u8; 64 * 1024];
+    loop {
+        let read = match entry.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(read) => read,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(read_error(error)),
+        };
+        let needed = bytes.len() + read;
+        if needed > limit {
+            return Err(too_large());
+        }
+        if needed > bytes.capacity() {
+            // Amortized doubling, clamped so capacity never exceeds `limit`.
+            let target = bytes.capacity().saturating_mul(2).clamp(needed, limit);
+            bytes.reserve_exact(target - bytes.len());
+        }
+        bytes.extend_from_slice(&chunk[..read]);
+    }
+    Ok(bytes)
 }
 
 fn normalized_wheel_media_path(media_name: &str) -> Option<String> {
@@ -1891,6 +1974,120 @@ mod tests {
         assert_eq!(invalid_relative_model, None);
         assert_eq!(invalid_absolute_model, None);
         assert_eq!(invalid_drive_model, None);
+    }
+
+    fn in_memory_archive(entries: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut archive = ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for (name, bytes) in entries {
+            archive
+                .start_file(*name, SimpleFileOptions::default())
+                .unwrap();
+            archive.write_all(bytes).unwrap();
+        }
+        archive.finish().unwrap().into_inner()
+    }
+
+    /// Rewrites the declared uncompressed size of the single entry in both
+    /// its local header and its central-directory record.
+    fn forge_declared_size(archive: &mut [u8], declared: u32) {
+        let local = archive
+            .windows(4)
+            .position(|window| window == b"PK\x03\x04")
+            .unwrap();
+        archive[local + 22..local + 26].copy_from_slice(&declared.to_le_bytes());
+        let central = archive
+            .windows(4)
+            .position(|window| window == b"PK\x01\x02")
+            .unwrap();
+        archive[central + 24..central + 28].copy_from_slice(&declared.to_le_bytes());
+    }
+
+    fn open(bytes: Vec<u8>) -> ZipArchive<std::io::Cursor<Vec<u8>>> {
+        ZipArchive::new(std::io::Cursor::new(bytes)).unwrap()
+    }
+
+    fn assert_too_large<T: std::fmt::Debug>(
+        result: Result<T, GdtfError>,
+        expected_entry: &str,
+        expected_limit: u64,
+    ) {
+        match result {
+            Err(GdtfError::EntryTooLarge { entry, limit }) => {
+                assert_eq!(entry, expected_entry);
+                assert_eq!(limit, expected_limit);
+            }
+            other => panic!("expected EntryTooLarge, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn archive_entries_are_read_within_explicit_size_limits() {
+        let xml = SAMPLE_XML.as_bytes();
+        let limit = xml.len() as u64;
+        let archive = in_memory_archive(&[("description.xml", xml)]);
+        assert_eq!(
+            read_description(&mut open(archive.clone()), limit).unwrap(),
+            SAMPLE_XML
+        );
+        assert_too_large(
+            read_description(&mut open(archive), limit - 1),
+            "description.xml",
+            limit - 1,
+        );
+
+        // A decompression bomb that understates its size: the declared size
+        // passes, but decompression stops one byte past the limit.
+        let bomb = vec![b' '; 256 * 1024];
+        let mut archive = in_memory_archive(&[("wheels/bomb.png", &bomb)]);
+        assert!(archive.len() < bomb.len() / 16, "entry must be compressed");
+        forge_declared_size(&mut archive, 16);
+        assert_too_large(
+            read_wheel_media(&mut open(archive), "wheels/bomb.png", 4 * 1024),
+            "wheel media",
+            4 * 1024,
+        );
+
+        // Growth is clamped: an understated entry of exactly the limit is
+        // accepted without ever reserving past the limit.
+        let exact = vec![b'x'; 100 * 1024];
+        let mut archive = in_memory_archive(&[("wheels/exact.png", &exact)]);
+        forge_declared_size(&mut archive, 16);
+        let read = read_wheel_media(&mut open(archive), "wheels/exact.png", exact.len() as u64)
+            .unwrap()
+            .unwrap();
+        assert_eq!(read, exact);
+        assert!(read.capacity() <= exact.len(), "{}", read.capacity());
+
+        // Declared sizes past the production limits are rejected before any
+        // byte is read; the old loader preallocated these straight from the
+        // untrusted field.
+        let mut archive = in_memory_archive(&[("models/lens.glb", b"glTF")]);
+        forge_declared_size(&mut archive, 0x7fff_ffff);
+        assert_too_large(
+            read_model_file(
+                &mut open(archive),
+                &["models/lens.glb".to_string()],
+                GDTF_RESOURCE_MAX_BYTES,
+            ),
+            "model file",
+            GDTF_RESOURCE_MAX_BYTES,
+        );
+        let mut archive = in_memory_archive(&[("description.xml", xml)]);
+        forge_declared_size(&mut archive, GDTF_DESCRIPTION_MAX_BYTES as u32 + 1);
+        assert_too_large(
+            read_description(&mut open(archive), GDTF_DESCRIPTION_MAX_BYTES),
+            "description.xml",
+            GDTF_DESCRIPTION_MAX_BYTES,
+        );
+
+        // An overstated size within the limit is not trusted either: the
+        // actual bytes are returned and the checksum still applies.
+        let mut archive = in_memory_archive(&[("wheels/dots.png", b"PNG!")]);
+        forge_declared_size(&mut archive, 1024);
+        assert_eq!(
+            read_wheel_media(&mut open(archive), "wheels/dots.png", 4 * 1024).unwrap(),
+            Some(b"PNG!".to_vec())
+        );
     }
 
     #[test]

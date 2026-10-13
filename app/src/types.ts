@@ -62,6 +62,8 @@ export interface ShowClockIpcStatus {
   last_action_sequence: number;
   last_action_id: string | null;
   last_action_status: string | null;
+  /** Oversized or undecodable datagrams the standby dropped without stopping. */
+  dropped_datagrams: number;
   last_error: string | null;
 }
 
