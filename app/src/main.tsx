@@ -5,6 +5,8 @@ import { shouldMountDesktopWindowModeController } from "./desktopWindowMode";
 import "./styles.css";
 import "./fixtureLimits.css";
 import "./mappingStage.css";
+import "./controls.css";
+import { installRangeFillSync } from "./rangeFill";
 
 const Root = () =>
   shouldMountDesktopWindowModeController(window.location.search) ? (
@@ -14,5 +16,7 @@ const Root = () =>
   ) : (
     <App />
   );
+
+installRangeFillSync();
 
 render(() => <Root />, document.getElementById("root") as HTMLElement);
