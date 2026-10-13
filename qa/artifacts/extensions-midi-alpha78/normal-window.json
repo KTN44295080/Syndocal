@@ -1,13 +1,13 @@
 {
   "schemaVersion": 1,
-  "timestamp": "2026-10-13T06:20:22.096Z",
+  "timestamp": "2026-10-13T06:46:32.176Z",
   "passed": true,
   "executable": "C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-native-acceptance-target\\release\\syndocal.exe",
-  "executableSha256": "134f4da81188032f74c24ac80d2af019f6a9a34a7068daac1176051aa5898877",
+  "executableSha256": "beb364cacccc8848da3edd63f387611eab2f48b9b23b64f2f2aa06096f37521b",
   "runnerSha256": "2f3870e0d7012a31996225f5a81e49c0fe7bdaf27d6148bac90b6ed7feec2a29",
   "sidecarSha256": "e5010efab86dbdd9b5a82abe6efaf2ee47684af678c04dd634e23b5f3a404f3e",
   "window": {
-    "processId": 153488,
+    "processId": 148528,
     "title": "Syndocal",
     "responsive": true,
     "visible": true,

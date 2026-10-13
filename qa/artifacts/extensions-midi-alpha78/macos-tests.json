@@ -1,0 +1,144 @@
+{
+  "runId": "38358215681",
+  "sourceCommit": "7f116105fb3f993f63915f51fdb15132bdd2159e",
+  "results": [
+    {
+      "file": "extensions-tests.txt",
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "file": "fixture-fader-history-tests.txt",
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "file": "fixture-publication-admission-tests.txt",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "file": "fixture-repatch-engine-tests.txt",
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "file": "fixture-repatch-native-tests.txt",
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "file": "live-scene-tests.txt",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "file": "managed-route-completion-tests.txt",
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "file": "midi-fader-input-tests.txt",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "file": "midi-learn-admission-tests.txt",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "file": "midi-learn-parser-tests.txt",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "file": "midi-learn-wait-tests.txt",
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "file": "midi-scene-toggle-tests.txt",
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "file": "new-project-output-reset-tests.txt",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "file": "output-admitted-request-tests.txt",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "file": "output-blackout-consent-tests.txt",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "file": "output-receipt-retention-tests.txt",
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "file": "output-request-identity-tests.txt",
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "file": "usb-dmx-binding-tests.txt",
+      "passed": 7,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "file": "usb-dmx-engine-identity-tests.txt",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "file": "usb-dmx-engine-tests.txt",
+      "passed": 27,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "file": "usb-dmx-ftdi-tests.txt",
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "file": "usb-dmx-io-tests.txt",
+      "passed": 28,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "file": "usb-dmx-route-tests.txt",
+      "passed": 6,
+      "failed": 0,
+      "ignored": 0
+    }
+  ]
+}

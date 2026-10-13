@@ -3,7 +3,7 @@
     "installer":  "C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-native-acceptance-target\\release\\bundle\\msi\\Syndocal_1.2.0-alpha.78_x64_ja-JP.msi",
     "productVersion":  "1.2.78",
     "productName":  "Syndocal",
-    "productCode":  "{936FB772-EE08-48CF-A340-55213910D2B6}",
+    "productCode":  "{D221B9A9-3C62-4BE0-9B16-999053E883DB}",
     "upgradeCode":  "{46DB659B-3421-5804-82FC-D0185F926A47}",
     "upgradeRows":  [
                         [

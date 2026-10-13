@@ -2,19 +2,19 @@
   "passed": true,
   "normalWindowGatePassed": true,
   "distributionReady": true,
-  "sourceBase": "b7abdbc88dc9cb3d9e29c69f63e9790ea1adbceb",
+  "sourceCommit": "7f116105fb3f993f63915f51fdb15132bdd2159e",
   "normalPayloadProof": {
     "productVersion": "1.2.0-alpha.78",
-    "executableSha256": "134f4da81188032f74c24ac80d2af019f6a9a34a7068daac1176051aa5898877",
+    "executableSha256": "beb364cacccc8848da3edd63f387611eab2f48b9b23b64f2f2aa06096f37521b",
     "inspectorKind": "windows-release-diagnostics-powershell-v1",
     "roots": {
       "NSIS": {
-        "sha256": "134f4da81188032f74c24ac80d2af019f6a9a34a7068daac1176051aa5898877",
+        "sha256": "beb364cacccc8848da3edd63f387611eab2f48b9b23b64f2f2aa06096f37521b",
         "productVersion": "1.2.0-alpha.78",
         "fileVersion": "1.2.0-alpha.78"
       },
       "MSI": {
-        "sha256": "134f4da81188032f74c24ac80d2af019f6a9a34a7068daac1176051aa5898877",
+        "sha256": "beb364cacccc8848da3edd63f387611eab2f48b9b23b64f2f2aa06096f37521b",
         "productVersion": "1.2.0-alpha.78",
         "fileVersion": "1.2.0-alpha.78"
       }
@@ -49,15 +49,15 @@
   "artifacts": [
     {
       "name": "Syndocal_1.2.0-alpha.78_x64-setup.exe",
-      "byteSize": 82445698,
-      "sha256": "e67045ec608db0bc21ba64bcd8f41b53a20b0bc34a3890f027b546211353204e",
-      "path": "C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-alpha78-review-package\\Syndocal_1.2.0-alpha.78_x64-setup.exe"
+      "byteSize": 82470378,
+      "sha256": "1beb3493c0b9bcc1f6d13f5903924299b7bf03e91bee62da24b741b022346249",
+      "path": "C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-alpha78-final-review-package\\Syndocal_1.2.0-alpha.78_x64-setup.exe"
     },
     {
       "name": "Syndocal_1.2.0-alpha.78_x64_ja-JP.msi",
-      "byteSize": 123195392,
-      "sha256": "745786b095e9a6d3d21ee8ce5a29ee2565dcc4dbdf05979c370f25a7303b0610",
-      "path": "C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-alpha78-review-package\\Syndocal_1.2.0-alpha.78_x64_ja-JP.msi"
+      "byteSize": 123191296,
+      "sha256": "040b8057d438213f488e103bb1b7d32edea8cb355a13d3a859f75c6ab7ae1f14",
+      "path": "C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-alpha78-final-review-package\\Syndocal_1.2.0-alpha.78_x64_ja-JP.msi"
     }
   ],
   "nonclaims": [

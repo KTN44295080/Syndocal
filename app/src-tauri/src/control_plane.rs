@@ -2523,11 +2523,11 @@ mod tests {
             counts[&TauriRouteAdmissionClass::BackendAuthoritativeProjectMutation],
             31
         );
-        assert_eq!(counts[&TauriRouteAdmissionClass::ReadOnly], 108);
+        assert_eq!(counts[&TauriRouteAdmissionClass::ReadOnly], 109);
         assert_eq!(counts[&TauriRouteAdmissionClass::ProjectReplacement], 11);
         assert_eq!(counts[&TauriRouteAdmissionClass::ProjectHistory], 3);
         assert_eq!(counts[&TauriRouteAdmissionClass::LocalPhysicalMutation], 6);
-        assert_eq!(counts[&TauriRouteAdmissionClass::RuntimeMutation], 168);
+        assert_eq!(counts[&TauriRouteAdmissionClass::RuntimeMutation], 169);
         assert_eq!(counts[&TauriRouteAdmissionClass::FileExportMutation], 29);
         assert_eq!(counts[&TauriRouteAdmissionClass::SafetyMutation], 1);
         assert_eq!(counts[&TauriRouteAdmissionClass::RecoveryMaintenance], 28);
@@ -3407,7 +3407,9 @@ mod tests {
         // RequestSnapshotPublication is an internal read barrier and remains
         // unavailable as a canonical external operation.
         // Two local renderer routes and the atomic engine source remain unavailable externally.
-        assert_eq!(unclassified.len(), 1123);
+        // get/set extensions and Engine/MIDI toggle sources stay local; their
+        // two frontend sources remain aliases rather than new external operations.
+        assert_eq!(unclassified.len(), 1128);
         assert_eq!(support_phases.len(), 0);
         assert_eq!(
             direct.len()

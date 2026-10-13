@@ -96561,7 +96561,8 @@ pub(crate) mod tests {
                 Some(RuntimeInvokeDispatchPolicy::PreflightOnlyNonProjectOrInnerAuthority)
             );
         }
-        assert_eq!(runtime_routes.len(), 168);
+        // The extension setter owns its lifecycle authority inside the handler.
+        assert_eq!(runtime_routes.len(), 169);
         assert_eq!(
             OUTER_FENCED_SYNC_PROJECT_RUNTIME_ROUTES.len()
                 + PREFLIGHT_ONLY_NONPROJECT_OR_INNER_RUNTIME_ROUTES.len(),
