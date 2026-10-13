@@ -4,5 +4,7 @@
   "archivedExecutable": "C:/Users/janua/AppData/Local/Temp/syndocal-alpha77-final-no-bundle/syndocal.exe",
   "sha256": "0a2efc92cc1766abae8dd4e2a7730473e57072f21e2c55ad462e15b8799634ff",
   "bytes": 70884864,
-  "windowGatePending": true
+  "windowGatePending": false,
+  "normalWindowGatePassed": true,
+  "windowEvidence": "windows-native-no-bundle.json"
 }

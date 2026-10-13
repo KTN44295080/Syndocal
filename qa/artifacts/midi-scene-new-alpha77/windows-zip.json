@@ -1,6 +1,6 @@
 {
   "passed": true,
-  "zip": "C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-alpha77-review-package\\Syndocal_1.2.0-alpha.77_Windows-x64-install.zip",
+  "zip": "C:/Users/janua/Downloads/Syndocal-1.2.0-alpha.77/Syndocal_1.2.0-alpha.77_Windows-x64-install.zip",
   "bytes": 223452024,
   "sha256": "062a79c2322b9ebff7a54e957e02076b397b94458fc9e1c63f47e366f332cb0a",
   "contents": [
@@ -71,5 +71,9 @@
     }
   ],
   "extractedValidationPassed": true,
-  "noInstallerExecuted": true
+  "noInstallerExecuted": true,
+  "stagedZip": "C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-alpha77-review-package\\Syndocal_1.2.0-alpha.77_Windows-x64-install.zip",
+  "deliveredForUserTesting": true,
+  "normalWindowGatePassed": true,
+  "deliveryTimestamp": "2026-10-13T03:16:44.493Z"
 }

@@ -6,5 +6,7 @@
     "Syndocal_1.2.0-alpha.77_x64-setup.exe": "fff0cac7226c4ec7f974f0395696f1e87eec715b83ddcca24c312d776308e5a7",
     "Syndocal_1.2.0-alpha.77_x64_ja-JP.msi": "ad316cbdc2be5ac956e99e0ce1f15cbd918c9a5a441fb4acf3b2c9dfcfcdd2d0"
   },
-  "normalWindowGatePending": true
+  "normalWindowGatePending": false,
+  "normalWindowGatePassed": true,
+  "windowEvidence": "windows-native-window.json"
 }
