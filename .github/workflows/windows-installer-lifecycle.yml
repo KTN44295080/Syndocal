@@ -36,8 +36,20 @@ jobs:
           # Its isolated volume-sizing repair does not change the Windows payload.
           # Versioned ZIP sidecars are finalized from exact installer hashes after
           # native build; their real-helper seam/ValidateOnly evidence is separate.
-          git diff --quiet $current.head_sha HEAD -- app crates tools Cargo.toml Cargo.lock pnpm-lock.yaml .github/workflows/cross-platform.yml ':(exclude)app/scripts/bundle-macos-runtime.sh' ':(exclude)tools/distribution/SyndocalInstallations.ps1' ':(exclude)tools/distribution/Remove-SyndocalData.ps1' ':(exclude)tools/distribution/test-installed-windows-lifecycle.ps1' ':(exclude)tools/distribution/test-windows-uninstall.mjs' ':(exclude)tools/distribution/test-windows-cleanup.mjs' ':(exclude)tools/distribution/alpha79/Install-Windows.cmd' ':(exclude)tools/distribution/alpha79/Install-Windows.ps1' ':(exclude)tools/distribution/alpha79/README.txt' ':(exclude)tools/distribution/alpha79/使い方.txt' ':(exclude)tools/distribution/alpha79/check-setup-helper.mjs'
+          git diff --quiet $current.head_sha HEAD -- app crates tools Cargo.toml Cargo.lock pnpm-lock.yaml .github/workflows/cross-platform.yml ':(exclude)app/scripts/bundle-macos-runtime.sh' ':(exclude)tools/distribution/SyndocalInstallations.ps1' ':(exclude)tools/distribution/Remove-SyndocalData.ps1' ':(exclude)tools/distribution/test-installed-windows-lifecycle.ps1' ':(exclude)tools/distribution/test-windows-uninstall.mjs' ':(exclude)tools/distribution/test-windows-cleanup.mjs' ':(exclude)tools/distribution/alpha79/Install-Windows.cmd' ':(exclude)tools/distribution/alpha79/Install-Windows.ps1' ':(exclude)tools/distribution/alpha79/README.txt' ':(exclude)tools/distribution/alpha79/使い方.txt' ':(exclude)tools/distribution/alpha79/check-setup-helper.mjs' ':(exclude)app/src-tauri/src/extensions.rs'
           if ($LASTEXITCODE -ne 0) { throw 'Native product or embedded installer hook differs from the artifact source' }
+          # Only the exact recorded Mac temporary-path test addition may differ.
+          # Removing it must make the entire module byte-identical after EOL normalization.
+          $builtExtensions = (git show "$($current.head_sha):app/src-tauri/src/extensions.rs") -join "`n"
+          if ($LASTEXITCODE -ne 0) { throw 'Could not read built extension module' }
+          $builtExtensions += "`n"
+          $headExtensions = [IO.File]::ReadAllText((Join-Path (Get-Location) 'app/src-tauri/src/extensions.rs')).Replace("`r`n","`n")
+          if ($builtExtensions -cne $headExtensions) {
+            $fixtureOnly = "        // macOS exposes its temporary directory through the system /var alias.`n        // Exercise installer path policy with the actual owned directory.`n        let directory = fs::canonicalize(directory).unwrap();`n"
+            if ([regex]::Matches($headExtensions,[regex]::Escape($fixtureOnly)).Count -ne 1 -or $headExtensions.Replace($fixtureOnly,'') -cne $builtExtensions) {
+              throw 'Extension runtime differs from the built product; only the exact test fixture correction is allowed'
+            }
+          }
           "ARTIFACT_SOURCE_COMMIT=$($current.head_sha)" >> $env:GITHUB_ENV
           if ($baseline.conclusion -ne 'success' -or $baseline.head_sha -ne '80fccf1401de2c2d8dc5c4ea2f03e9b96348d5eb') { throw 'Baseline artifact source mismatch' }
       - uses: actions/download-artifact@v5

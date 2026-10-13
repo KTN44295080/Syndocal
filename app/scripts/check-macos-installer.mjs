@@ -21,7 +21,7 @@ fs.writeFileSync(path.join(data,'sentinel'),'preserved-user-setting');
 const ini=path.join(directory,'extensions.ini'), checks=[];
 function record(name,fn){fn();checks.push(name);}
 function sudo(args){return execFileSync('/usr/bin/sudo',args,{encoding:'utf8',stdio:['ignore','pipe','pipe']});}
-function choices(){const xml=execFileSync('/usr/sbin/installer',['-showChoiceChangesXML','-pkg',pkg],{encoding:'utf8'});return JSON.parse(execFileSync('/usr/bin/plutil',['-convert','json','-o','-','--','-'],{input:xml,encoding:'utf8'}));}
+function choices(){const xml=execFileSync('/usr/sbin/installer',['-showChoiceChangesXML','-pkg',pkg,'-target','/'],{encoding:'utf8'});return JSON.parse(execFileSync('/usr/bin/plutil',['-convert','json','-o','-','--','-'],{input:xml,encoding:'utf8'}));}
 function selected(items,id){const value=items.find(x=>x.choiceIdentifier===id&&x.choiceAttribute==='selected');assert.ok(value);return Number(value.attributeSetting);}
 function install(enabled){const args=['/usr/sbin/installer','-pkg',pkg,'-target','/'];if(enabled!==undefined){const file=path.join(temp,'choices.plist');fs.writeFileSync(file,`<?xml version="1.0"?><plist version="1.0"><array><dict><key>choiceIdentifier</key><string>djlink</string><key>choiceAttribute</key><string>selected</string><key>attributeSetting</key><integer>${enabled}</integer></dict></array></plist>`);args.push('-applyChoiceChangesXML',file);}sudo(args);}
 function readChoice(expected){assert.equal(fs.readFileSync(ini,'utf8'),`[SyndocalExtensions]\nSchema=1\nDJLink=${expected}\n`);assert.equal(fs.readFileSync(path.join(data,'sentinel'),'utf8'),'preserved-user-setting');}
