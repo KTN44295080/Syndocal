@@ -9942,6 +9942,12 @@ export default function App() {
       || workspaceTab() === "setup"
       || workspaceTab() === "control",
   );
+  // I/O and Security setup pages never use the fixture/stage/selection band;
+  // they give the whole workspace height to their own surface.
+  const persistentBandVisible = createMemo(
+    () => sharedWorkspaceVisible()
+      && !(workspaceTab() === "setup" && (setupSubTab() === "io" || setupSubTab() === "authority")),
+  );
   const liveMappingStageVisible = createMemo(
     () => (workspaceTab() === "setup" && setupSubTab() === "mapping")
       || workspaceTab() === "touch"
@@ -26699,13 +26705,13 @@ export default function App() {
       <section
         class={`layout ${touchLayoutClass()}`}
         style={
-          paneWindow
+          paneWindow || (sharedWorkspaceVisible() && !persistentBandVisible())
             ? "grid-template-rows: minmax(0, 1fr) !important"
             : undefined
         }
-        data-workspace-split-root={sharedWorkspaceVisible() ? "true" : undefined}
-        data-upper-lower-ratio={sharedWorkspaceVisible() ? activeTopSplitRatio() : undefined}
-        data-lower-left-right-ratio={sharedWorkspaceVisible() ? lowerSplitRatio() : undefined}
+        data-workspace-split-root={persistentBandVisible() ? "true" : undefined}
+        data-upper-lower-ratio={persistentBandVisible() ? activeTopSplitRatio() : undefined}
+        data-lower-left-right-ratio={persistentBandVisible() ? lowerSplitRatio() : undefined}
       >
         {/* Keep every persistent domain tab associated with a real panel while
             inactive panels stay unmounted: these placeholders are hidden,
@@ -28120,7 +28126,7 @@ export default function App() {
         </Show>
         </Show>
 
-        <Show when={sharedWorkspaceVisible() && !paneWindow}>
+        <Show when={persistentBandVisible() && !paneWindow}>
         <WorkspaceSplitHandle
           axis="horizontal"
           ratio={activeTopSplitRatio()}
@@ -28136,7 +28142,7 @@ export default function App() {
         />
         </Show>
 
-        <Show when={sharedWorkspaceVisible()}>
+        <Show when={persistentBandVisible()}>
         <MappingPersistentWorkspaceBand
           poppedPanes={poppedPanes()}
           lowerSplitRatio={lowerSplitRatio()}
