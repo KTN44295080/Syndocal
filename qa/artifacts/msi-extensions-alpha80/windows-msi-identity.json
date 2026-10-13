@@ -1,0 +1,27 @@
+{
+  "passed": true,
+  "installer": "C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-native-acceptance-target\\release\\bundle\\msi\\Syndocal_1.2.0-alpha.80_x64_ja-JP.msi",
+  "productVersion": "1.2.80",
+  "productName": "Syndocal",
+  "productCode": "{790B83C7-0852-4BD7-9E28-8B4DF8B3949D}",
+  "upgradeCode": "{46DB659B-3421-5804-82FC-D0185F926A47}",
+  "upgradeRows": [
+    [
+      "{46DB659B-3421-5804-82FC-D0185F926A47}",
+      "",
+      "1.2.80",
+      "513",
+      "",
+      "WIX_UPGRADE_DETECTED"
+    ],
+    [
+      "{46DB659B-3421-5804-82FC-D0185F926A47}",
+      "1.2.80",
+      "",
+      "2",
+      "",
+      "WIX_DOWNGRADE_DETECTED"
+    ]
+  ],
+  "noProductInstallation": true
+}

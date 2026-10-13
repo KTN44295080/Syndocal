@@ -1,8 +1,8 @@
 # Syndocal completion flow — active dependency-ordered work authority
 
-## 2026-10-13 alpha.80 native MSI choice candidate
+## 2026-10-13 alpha.80 native MSI choice checkpoint
 
-Current development metadata is `1.2.0-alpha.80`. Direct MSI extension selection and I/O cleanup are tracked in [the checkpoint](MSI_EXTENSIONS_ALPHA80_2026-10-13.md). This is not full Recording completion; native package and installer lifecycle acceptance remain pending; distributed alpha.79 bytes are immutable.
+Current development metadata is `1.2.0-alpha.80`. Direct MSI extension selection and I/O cleanup are tracked in [the checkpoint](MSI_EXTENSIONS_ALPHA80_2026-10-13.md). This is not full Recording completion; Windows native and hosted NSIS/MSI lifecycle plus Mac PKG lifecycle acceptance pass; distributed alpha.79 bytes are immutable.
 
 ## 2026-10-13 alpha.78 BO, MIDI and extension distribution checkpoint
 

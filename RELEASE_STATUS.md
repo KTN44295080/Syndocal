@@ -1,8 +1,8 @@
 # Syndocal historical v1.0 / current v1.2 alpha Release Status
 
-## 2026-10-13 alpha.80 native MSI choice candidate
+## 2026-10-13 alpha.80 native MSI choice checkpoint
 
-Current development metadata: `1.2.0-alpha.80`. Direct MSI extension selection and I/O cleanup are tracked in [the checkpoint](qa/MSI_EXTENSIONS_ALPHA80_2026-10-13.md). This is not full Recording completion; native package and installer lifecycle acceptance remain pending. Delivered alpha.79 bytes are immutable.
+Current development metadata: `1.2.0-alpha.80`. Direct MSI extension selection and I/O cleanup are tracked in [the checkpoint](qa/MSI_EXTENSIONS_ALPHA80_2026-10-13.md). This is not full Recording completion; Windows native and hosted NSIS/MSI lifecycle plus Mac PKG lifecycle acceptance pass. Delivered alpha.79 bytes are immutable.
 
 Historical status: 2026-09-05
 Branch: `codex/syndocal-v1.2`; recorded product metadata was `1.2.0-alpha.69`.
