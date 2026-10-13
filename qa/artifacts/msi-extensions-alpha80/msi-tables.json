@@ -1,10 +1,11 @@
 {
   "passed": true,
   "installer": "C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-native-acceptance-target\\release\\bundle\\msi\\Syndocal_1.2.0-alpha.80_x64_ja-JP.msi",
-  "sha256": "ac5d6c1404f979a74db1c1641987f47823f9d67967edd49411a3bea20aa88db0",
+  "sha256": "149656ae2cc1526eeadade1268af22f68d46da8a8a1c3c266230cbf3b86fa875",
   "productVersion": "1.2.80",
   "checks": [
     "MSI product alpha.80",
+    "Native maintenance Repair remains visible and enabled",
     "Native MSI DJ Link checkbox",
     "Native MSI navigation WelcomeDlg/Next/SyndocalExtensionsDlg",
     "Native MSI navigation InstallDirDlg/Back/SyndocalExtensionsDlg",

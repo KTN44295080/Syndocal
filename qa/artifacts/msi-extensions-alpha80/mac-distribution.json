@@ -1,0 +1,27 @@
+{
+  "passed": true,
+  "path": "C:/Users/janua/Downloads/Syndocal-1.2.0-alpha.80/Syndocal_1.2.0-alpha.80_arm64.pkg",
+  "byteSize": 28986817,
+  "sha256": "d643635f8952de6e241e41bf51b7d2331825b64b69278d6ff0038384780778be",
+  "sourceCommit": "717fada93425ee2f6f3972bb3eda960864c8ee8c",
+  "runId": "38406855771",
+  "actualInstallerChecks": 11,
+  "developerIdSigned": false,
+  "notarized": false,
+  "physicalOutput": false,
+  "compilerWarnings": {
+    "macosTest": {
+      "baseline": 29,
+      "current": 29,
+      "delta": 0
+    },
+    "macosRelease": {
+      "baseline": 82,
+      "current": 82,
+      "delta": 0
+    }
+  },
+  "thirdPartyWarnings": {
+    "tauriRuntimeWry": 5
+  }
+}

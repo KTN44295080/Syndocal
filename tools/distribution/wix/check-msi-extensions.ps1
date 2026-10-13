@@ -17,6 +17,7 @@ $taskChecks=New-Object 'System.Collections.Generic.List[string]'
 function Assert-Check($Condition,[string]$Name) {if(-not $Condition){throw $Name};$taskChecks.Add($Name)}
 $taskProperties=@{};foreach($taskRow in (Read-Rows 'SELECT Property, Value FROM Property' 2)){$taskProperties[$taskRow[0]]=$taskRow[1]}
 Assert-Check ($taskProperties.ProductVersion -eq '1.2.80' -and $taskProperties.ProductName -eq 'Syndocal') 'MSI product alpha.80'
+Assert-Check (-not $taskProperties.ContainsKey('ARPNOREPAIR')) 'Native maintenance Repair remains visible and enabled'
 $taskControl=Read-Rows 'SELECT Dialog_, Control, Type, Property, Text FROM Control' 5
 Assert-Check (@($taskControl | Where-Object {$_[0] -eq 'SyndocalExtensionsDlg' -and $_[1] -eq 'DJLink' -and $_[2] -eq 'CheckBox' -and $_[3] -eq 'SYNDOCAL_DJLINK_SELECTED' -and $_[4] -eq 'DJ Link'}).Count -eq 1) 'Native MSI DJ Link checkbox'
 $taskEvents=Read-Rows 'SELECT Dialog_, Control_, Event, Argument, Condition, Ordering FROM ControlEvent' 6

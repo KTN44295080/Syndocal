@@ -105,7 +105,6 @@
 
         <Icon Id="ProductIcon" SourceFile="{{icon_path}}"/>
         <Property Id="ARPPRODUCTICON" Value="ProductIcon" />
-        <Property Id="ARPNOREPAIR" Value="yes" Secure="yes" />      <!-- Remove repair -->
         <SetProperty Id="ARPNOMODIFY" Value="1" After="InstallValidate" Sequence="execute"/>
 
         {{#if homepage}}

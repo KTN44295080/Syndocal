@@ -1,0 +1,19 @@
+{
+  "passed": true,
+  "sourceCommit": "717fada93425ee2f6f3972bb3eda960864c8ee8c",
+  "checks": [
+    "Fresh installer defaults to core with an editable DJ Link choice",
+    "Default core choice is installed and user state preserved",
+    "Installer enables DJ Link and preserves user state",
+    "Update selection reflects the previous installed choice",
+    "Update preserves enabled integration",
+    "Installer removes DJ Link selection",
+    "Future configuration rejects installation without overwriting data",
+    "Installed app retains its exact signed executable",
+    "Complete removal purges app, installer choice and user state",
+    "Complete removal forgets exact package receipts",
+    "External project survives complete removal"
+  ],
+  "physicalOutput": false,
+  "packageSha256": "d643635f8952de6e241e41bf51b7d2331825b64b69278d6ff0038384780778be"
+}
