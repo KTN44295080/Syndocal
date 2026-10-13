@@ -1,4 +1,4 @@
-# MSI upgrade wrapper: selection belongs to installation, before the app starts.
+﻿# MSI upgrade wrapper: selection belongs to installation, before the app starts.
 function Get-SyndocalExtensionSettingsPath {
     if (-not $env:LOCALAPPDATA -or -not [IO.Path]::IsPathRooted($env:LOCALAPPDATA)) { throw 'Invalid settings root' }
     $taskPath = Join-Path $env:LOCALAPPDATA 'jp.seraf.ktn.syndocal\extensions.ini'

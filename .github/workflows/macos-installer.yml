@@ -28,7 +28,8 @@ jobs:
           echo "LIBCLANG_PATH=$(brew --prefix llvm)/lib" >> "$GITHUB_ENV"
 
       - name: Cache macOS LGPL FFmpeg runtime
-        uses: actions/cache@v4
+        id: ffmpeg_cache
+        uses: actions/cache/restore@v4
         with:
           path: ~/ffmpeg-lgpl-8.1.2
           key: ffmpeg-lgpl-8.1.2-macos-${{ runner.arch }}-v1
@@ -63,6 +64,13 @@ jobs:
           echo "FFMPEG_PREFIX=$prefix" >> "$GITHUB_ENV"
           echo "PKG_CONFIG_PATH=$prefix/lib/pkgconfig" >> "$GITHUB_ENV"
           echo "MACOSX_DEPLOYMENT_TARGET=12.0" >> "$GITHUB_ENV"
+
+      - name: Save verified macOS LGPL FFmpeg runtime
+        if: steps.ffmpeg_cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/ffmpeg-lgpl-8.1.2
+          key: ffmpeg-lgpl-8.1.2-macos-${{ runner.arch }}-v1
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4

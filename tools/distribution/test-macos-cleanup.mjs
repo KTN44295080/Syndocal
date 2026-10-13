@@ -18,7 +18,7 @@ function fixture() {
   const rewritten = source.replace('pgrep -x syndocal','false').replaceAll('/Applications/Syndocal.app',`${root}/Applications/Syndocal.app`)
     .replace('temporary=$(getconf DARWIN_USER_TEMP_DIR)',`temporary='${tmp}/'`).replace('/var/folders/*/T/',`${tmp}/`)
     .replace('/Library/Application Support/$identifier',`${root}/system/$identifier`)
-    .replace(/system_receipts=\([^\n]+\)/,'system_receipts=()')
+    .replace(/system_receipts=\([^\n]+\)/,`system_receipts=("jp.seraf.ktn.syndocal.qa.${path.basename(root)}")`)
     .replaceAll('/usr/bin/sudo /bin/rm','/bin/rm');
   fs.writeFileSync(script,rewritten);
   return {root,home,tmp,app,data,script};

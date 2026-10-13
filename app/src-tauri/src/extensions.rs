@@ -51,7 +51,22 @@ impl Extensions {
         self.initialize_with_installer(directory, installed);
     }
     fn initialize_with_installer(&mut self, directory: &Path, installed: Option<&Path>) {
-        let installed = installed.filter(|path| fs::symlink_metadata(path).is_ok());
+        let installed = match installed {
+            Some(path) => match fs::symlink_metadata(path) {
+                Ok(_) => Some(path),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+                Err(error) => {
+                    self.status = ExtensionStatus {
+                        error: Some(format!(
+                            "Cannot inspect installer extension settings: {error}"
+                        )),
+                        ..Default::default()
+                    };
+                    return;
+                }
+            },
+            None => None,
+        };
         if installed.is_some_and(|path| {
             path.ancestors().any(|ancestor| {
                 fs::symlink_metadata(ancestor)
