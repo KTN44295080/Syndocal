@@ -1,0 +1,72 @@
+{
+  "passed": true,
+  "mainSource": "42336154babe577cf2ed9b4023f8c3f14b46410e",
+  "worktrees": "worktree C:/Users/janua/OneDrive/ドキュメント/GitHub/Syndocal\nHEAD 42336154babe577cf2ed9b4023f8c3f14b46410e\nbranch refs/heads/main\n\n",
+  "refs": "refs/heads/main 42336154babe577cf2ed9b4023f8c3f14b46410e\nrefs/remotes/origin/HEAD 42336154babe577cf2ed9b4023f8c3f14b46410e\nrefs/remotes/origin/main 42336154babe577cf2ed9b4023f8c3f14b46410e\n",
+  "recovery": "C:/Users/janua/AppData/Local/SyndocalDev/recovery/consolidation-20261014",
+  "historyBundleSha256": "b8853b8b1296800444a97dd6d1bdc59748543859df68e063489841856cc11478",
+  "retired": [
+    {
+      "root": "C:/Users/janua/.codex/worktrees/distribution-alpha70/Syndocal",
+      "bytes": 691104358,
+      "files": 6664
+    },
+    {
+      "root": "C:/Users/janua/.codex/worktrees/patch-bulk-alpha74/Syndocal",
+      "bytes": 699797608,
+      "files": 7064
+    },
+    {
+      "root": "C:/Users/janua/AppData/Local/SyndocalDev/worktrees/macos-artifact-gate",
+      "bytes": 58102814,
+      "files": 1185
+    },
+    {
+      "root": "C:/Users/janua/AppData/Local/SyndocalDev/worktrees/macos-artifact-validation",
+      "bytes": 4543390430,
+      "files": 14831
+    }
+  ],
+  "qaPreservation": [
+    {
+      "from": "C:/Users/janua/.codex/worktrees/distribution-alpha70/Syndocal/target/qa",
+      "to": "C:/Users/janua/AppData/Local/SyndocalDev/recovery/consolidation-20261014/ignored-qa-0",
+      "files": 7,
+      "bytes": 243428,
+      "exactReadback": true
+    },
+    {
+      "from": "C:/Users/janua/.codex/worktrees/patch-bulk-alpha74/Syndocal/target/qa",
+      "to": "C:/Users/janua/AppData/Local/SyndocalDev/recovery/consolidation-20261014/ignored-qa-1",
+      "files": 5,
+      "bytes": 105259,
+      "exactReadback": true
+    },
+    {
+      "from": "C:/Users/janua/AppData/Local/SyndocalDev/worktrees/macos-artifact-gate/target/qa",
+      "to": "C:/Users/janua/AppData/Local/SyndocalDev/recovery/consolidation-20261014/ignored-qa-2",
+      "files": 7,
+      "bytes": 51891,
+      "exactReadback": true
+    },
+    {
+      "from": "C:/Users/janua/AppData/Local/SyndocalDev/worktrees/macos-artifact-validation/target/qa",
+      "to": "C:/Users/janua/AppData/Local/SyndocalDev/recovery/consolidation-20261014/ignored-qa-3",
+      "files": 2338,
+      "bytes": 54477054,
+      "exactReadback": true
+    }
+  ],
+  "dependencyRestoration": "pnpm --dir app install --frozen-lockfile and TypeScript both pass after all retirements",
+  "counts": {
+    "workingCheckouts": 1,
+    "localBranches": 1,
+    "remoteBranches": 1,
+    "removedExtraWorktrees": 4
+  },
+  "logicalRemovedBytes": 5992395210,
+  "nonclaims": [
+    "File lengths are not physical reclaimed space; hardlinks may share blocks",
+    "Archived worktree snapshots and recovery bundles are retained, not active checkouts"
+  ]
+}
