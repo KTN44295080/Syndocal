@@ -167,7 +167,15 @@ export interface MidiOutputSummary {
   name: string;
 }
 
-export type MidiControlMessage = "NoteOn" | "NoteOff" | "ControlChange" | "ProgramChange";
+export type MidiControlMessage =
+  | "NoteOn"
+  | "NoteOff"
+  | "ControlChange"
+  | "ProgramChange"
+  /** 14-bit DAW / Mackie Control fader; the mapping number is 0. */
+  | "PitchBend"
+  /** Endless encoder CC (Mackie V-Pot): steps from the current value. */
+  | "RelativeControlChange";
 
 export interface MidiFeedbackMessage {
   message: MidiControlMessage;

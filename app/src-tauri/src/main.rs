@@ -30203,7 +30203,17 @@ fn connect_midi_control(
         Arc::clone(&state.project_external_command_admission);
     let callback_installed = Arc::new(AtomicBool::new(false));
     let callback_installed_for_worker = Arc::clone(&callback_installed);
-    let connection = io::midi::connect_midi_control(input_index, mappings, move |event| {
+    let engine_for_current = state.engine.clone();
+    let operator_selection_for_current = Arc::clone(&state.operator_selection);
+    let current_value = move |mapping: &MidiControlMapping| {
+        let selection = operator_selection_for_current.lock().ok()?.clone();
+        io::midi::current_normalized_value_for_mapping(
+            &engine_for_current.midi_feedback_snapshot(),
+            mapping,
+            Some(&selection),
+        )
+    };
+    let connection = io::midi::connect_midi_control_with_current(input_index, mappings, current_value, move |event| {
         if midi_control_event_requires_fail_closed(&event) {
             return;
         }
@@ -30915,6 +30925,9 @@ fn validate_midi_control_mapping(
     }
     if mapping.number > 127 {
         return Err(format!("{owner} control number must be 0-127"));
+    }
+    if mapping.message == protocol::MidiControlMessage::PitchBend && mapping.number != 0 {
+        return Err(format!("{owner} pitch bend mappings use number 0"));
     }
     validate_mapping_range(&owner, mapping.low, mapping.high)?;
     validate_midi_feedback(&owner, mapping.feedback.as_ref())?;

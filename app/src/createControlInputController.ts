@@ -470,10 +470,16 @@ export function createControlInputController(options: ControlInputControllerOpti
           feedbackNote = `; feedback could not connect: ${String(error)}`;
         }
       }
+      // A single detent of an endless encoder (Mackie V-Pot) reads 1-15 up or
+      // 65-79 down; point at the Relative encoder switch rather than guessing.
+      const encoderHint = learned.message === "ControlChange"
+        && ((learned.value >= 1 && learned.value <= 15) || (learned.value >= 65 && learned.value <= 79))
+        ? "; if this is an endless knob, turn on Relative encoder for it in Setup > I/O > MIDI"
+        : "";
       options.setMessage(
         `MIDI mapped ${learned.message} ch ${learned.channel + 1} #${learned.number} to ${targets[0].label}`
         + (targets.length > 1 ? ` and ${targets.length - 1} linked target(s)` : "")
-        + (replaced.length > 0 ? `; replaced ${replaced.length} previous binding(s)` : "") + feedbackNote,
+        + (replaced.length > 0 ? `; replaced ${replaced.length} previous binding(s)` : "") + feedbackNote + encoderHint,
       );
       return true;
     } catch (error) {

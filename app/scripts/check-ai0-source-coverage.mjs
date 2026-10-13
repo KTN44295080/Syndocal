@@ -148,7 +148,7 @@ async function run() {
   ], "Remote inventory");
 
   const ioFamilies = [
-    [midi, "MIDI_CONTROL_MESSAGE_VARIANT_NAMES", 4],
+    [midi, "MIDI_CONTROL_MESSAGE_VARIANT_NAMES", 6],
     [midi, "MIDI_CONTROL_ACTION_VARIANT_NAMES", 52],
     [midi, "MIDI_CLOCK_EVENT_VARIANT_NAMES", 6],
     [midi, "MIDI_CONTROL_EVENT_VARIANT_NAMES", 48],

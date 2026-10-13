@@ -2601,7 +2601,7 @@ mod tests {
         const REMOTE_WIRE_OPERATION_COUNT: usize = 58;
         const REMOTE_OPERATION_COUNT: usize =
             REMOTE_INPUT_EVENT_COUNT + REMOTE_CLIENT_REQUEST_COUNT + REMOTE_WIRE_OPERATION_COUNT;
-        const MIDI_CONTROL_MESSAGE_COUNT: usize = 4;
+        const MIDI_CONTROL_MESSAGE_COUNT: usize = 6;
         const MIDI_CONTROL_ACTION_COUNT: usize = 52;
         const MIDI_CLOCK_EVENT_COUNT: usize = 6;
         const MIDI_CONTROL_EVENT_COUNT: usize = 48;
@@ -2618,7 +2618,7 @@ mod tests {
             + DMX_INPUT_PROTOCOL_COUNT
             + DMX_INPUT_EVENT_COUNT;
         const FRONTEND_INVOKE_COUNT: usize = 487;
-        assert_eq!(MIDI_OSC_DMX_OPERATION_COUNT, 208);
+        assert_eq!(MIDI_OSC_DMX_OPERATION_COUNT, 210);
         assert_eq!(
             registry.operations.len(),
             FROZEN_TAURI_ROUTE_ADMISSION_COUNT
@@ -2627,7 +2627,7 @@ mod tests {
                 + MIDI_OSC_DMX_OPERATION_COUNT
                 + FRONTEND_INVOKE_COUNT
         );
-        assert_eq!(registry.operations.len(), 1662);
+        assert_eq!(registry.operations.len(), 1664);
         verify_registry_exact_set(&names, &registry).unwrap();
         let r0 = registry
             .operations
@@ -3008,7 +3008,7 @@ mod tests {
         // `ResetShowSpoutOutputsExactPublished` source.
         const ENGINE_COUNT: usize = 284;
         const REMOTE_COUNT: usize = 116;
-        const MIDI_OSC_DMX_COUNT: usize = 208;
+        const MIDI_OSC_DMX_COUNT: usize = 210;
         const FRONTEND_COUNT: usize = 487;
         const LEGACY_SOURCE_TOTAL: usize =
             TAURI_COUNT + ENGINE_COUNT + REMOTE_COUNT + MIDI_OSC_DMX_COUNT + FRONTEND_COUNT;
@@ -3016,8 +3016,8 @@ mod tests {
         const KEYBOARD_PROJECT_FILE_COUNT: usize = 3;
         const SOURCE_TOTAL: usize =
             LEGACY_SOURCE_TOTAL + KEYBOARD_APP_COUNT + KEYBOARD_PROJECT_FILE_COUNT;
-        assert_eq!(LEGACY_SOURCE_TOTAL, 1662);
-        assert_eq!(SOURCE_TOTAL, 1695);
+        assert_eq!(LEGACY_SOURCE_TOTAL, 1664);
+        assert_eq!(SOURCE_TOTAL, 1697);
         assert_eq!(canonical.source_inventory.len(), SOURCE_TOTAL);
         assert_eq!(canonical.canonical_operations.len(), 74);
 
@@ -3424,7 +3424,9 @@ mod tests {
         // Two local renderer routes and the atomic engine source remain unavailable externally.
         // get/set extensions and Engine/MIDI toggle sources stay local; their
         // two frontend sources remain aliases rather than new external operations.
-        assert_eq!(unclassified.len(), 1129);
+        // MIDI PitchBend and RelativeControlChange are input message shapes,
+        // not external operations; they stay unclassified like the other four.
+        assert_eq!(unclassified.len(), 1131);
         assert_eq!(support_phases.len(), 0);
         assert_eq!(
             direct.len()
@@ -4184,11 +4186,11 @@ mod tests {
     fn legacy_v1_registry_json_and_count_remain_inventory_honest() {
         let legacy = registry().unwrap();
         // Includes both the native and frontend missing-publication resolver.
-        assert_eq!(legacy.operations.len(), 1662);
+        assert_eq!(legacy.operations.len(), 1664);
         let encoded = serde_json::to_value(&legacy).unwrap();
         assert_eq!(encoded["schema"]["version"], CONTROL_PLANE_SCHEMA_VERSION);
         let operations = encoded["operations"].as_array().unwrap();
-        assert_eq!(operations.len(), 1662);
+        assert_eq!(operations.len(), 1664);
         assert!(operations.iter().all(|operation| {
             operation["source_family"] != "keyboard_app"
                 && operation["source_family"] != "keyboard_project_file"

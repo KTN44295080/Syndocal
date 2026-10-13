@@ -100,8 +100,17 @@ const feedbackStateLabels: Record<MidiFeedbackState, string> = {
   unknown: "Unknown / mixed",
 };
 
+const midiInputKind = (message: MidiControlMessage) => (
+  message === "ControlChange" ? "CC"
+    : message === "RelativeControlChange" ? "Encoder CC"
+      : message === "PitchBend" ? "Pitch bend"
+        : message === "ProgramChange" ? "Program"
+          : "Note"
+);
+
 const defaultFeedbackMessage = (mapping: MidiControlMapping, value: number): MidiFeedbackMessage => ({
-  message: mapping.message,
+  // Encoders have no absolute echo; their LED ring feedback is an ordinary CC.
+  message: mapping.message === "RelativeControlChange" ? "ControlChange" : mapping.message,
   channel: mapping.channel ?? 0,
   number: mapping.number,
   value,
@@ -242,6 +251,8 @@ export function MidiControlMappingPanel(props: MidiControlMappingPanelProps) {
           Message
           <select data-io-control="midi-map-message" value={props.mapMessage} onInput={(event) => props.onMapMessage(event.currentTarget.value as MidiControlMessage)}>
             <option value="ControlChange">CC</option>
+            <option value="RelativeControlChange">CC (relative encoder)</option>
+            <option value="PitchBend">Pitch bend</option>
             <option value="NoteOn">Note On</option>
             <option value="NoteOff">Note Off</option>
             <option value="ProgramChange">Program</option>
@@ -525,8 +536,25 @@ export function MidiControlMappingPanel(props: MidiControlMappingPanelProps) {
         <For each={props.mappings}>
           {(mapping, index) => (
             <div class="timelineItem">
-              <strong>{mapping.message} {mapping.number}</strong>
+              <strong>
+                <span>{midiInputKind(mapping.message)}</span>
+                <Show when={mapping.message !== "PitchBend"}>{" "}<span data-no-localize>{mapping.number}</span></Show>
+              </strong>
               <span>{mapping.channel === null || mapping.channel === undefined ? "Any ch" : `Ch ${mapping.channel + 1}`} / {props.mappingTargetLabel(mapping)}</span>
+              <Show when={mapping.message === "ControlChange" || mapping.message === "RelativeControlChange"}>
+                <label class="checkbox mappingRelativeToggle" title="Turn on for endless knobs (DAW mode V-Pots) that send up/down steps instead of a position">
+                  <input
+                    type="checkbox"
+                    data-midi-mapping-relative
+                    checked={mapping.message === "RelativeControlChange"}
+                    onChange={(event) => props.onUpdateMapping(index(), {
+                      ...mapping,
+                      message: event.currentTarget.checked ? "RelativeControlChange" : "ControlChange",
+                    })}
+                  />
+                  Relative encoder
+                </label>
+              </Show>
               <Show when={mapping.feedback}>
                 {(feedback) => (
                   <span>

@@ -7872,6 +7872,13 @@ pub enum MidiControlMessage {
     NoteOff,
     ControlChange,
     ProgramChange,
+    /// 14-bit pitch bend, as sent by DAW / Mackie Control faders. The mapping
+    /// number is always 0.
+    PitchBend,
+    /// A CC from a relative encoder (DAW / Mackie Control V-Pot): bit 6 is the
+    /// direction (set = down) and bits 0-5 the step count. The mapped value
+    /// moves from the target's current value instead of jumping to a position.
+    RelativeControlChange,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

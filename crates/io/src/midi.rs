@@ -71,6 +71,11 @@ struct MidiFeedbackCache {
 
 impl MidiFeedbackCache {
     fn message_address(message: &[u8]) -> Vec<u8> {
+        // Pitch bend carries its value in both data bytes; the channel is the
+        // whole address.
+        if message.first().is_some_and(|status| status & 0xf0 == 0xe0) {
+            return message[..1].to_vec();
+        }
         if message.len() >= 3 {
             message[..2].to_vec()
         } else {
@@ -364,6 +369,8 @@ control_plane_variant_inventory!(
     NoteOff => MidiControlMessage::NoteOff,
     ControlChange => MidiControlMessage::ControlChange,
     ProgramChange => MidiControlMessage::ProgramChange,
+    PitchBend => MidiControlMessage::PitchBend,
+    RelativeControlChange => MidiControlMessage::RelativeControlChange,
 );
 
 control_plane_variant_inventory!(
@@ -498,7 +505,10 @@ struct MidiMessage {
     message: MidiControlMessage,
     channel: u8,
     number: u8,
+    /// 7-bit value (the MSB for pitch bend).
     value: u8,
+    /// Full-resolution position in 0.0..=1.0 (14-bit for pitch bend).
+    normalized: f32,
 }
 
 pub fn list_midi_inputs() -> Result<Vec<MidiInputSummary>, MidiError> {
@@ -598,11 +608,28 @@ where
 pub fn connect_midi_control<F>(
     port_index: usize,
     mappings: Vec<MidiControlMapping>,
-    mut callback: F,
+    callback: F,
 ) -> Result<MidiControlInput, MidiError>
 where
     F: FnMut(MidiControlEvent) + Send + 'static,
 {
+    connect_midi_control_with_current(port_index, mappings, |_| None, callback)
+}
+
+/// Like [`connect_midi_control`], with `current` reading a target's present
+/// position (normalized in the mapping's low..high range) so relative
+/// encoders move from where the target is.
+pub fn connect_midi_control_with_current<F, C>(
+    port_index: usize,
+    mappings: Vec<MidiControlMapping>,
+    current: C,
+    mut callback: F,
+) -> Result<MidiControlInput, MidiError>
+where
+    F: FnMut(MidiControlEvent) + Send + 'static,
+    C: Fn(&MidiControlMapping) -> Option<f32> + Send + 'static,
+{
+    let mut relative_state = RelativeControlState::default();
     let mut input = MidiInput::new("syndocal-midi-control")?;
     input.ignore(Ignore::None);
     let ports = input.ports();
@@ -614,7 +641,12 @@ where
             port,
             "syndocal-midi-control-input",
             move |_timestamp, message, _| {
-                for event in events_from_midi_message(message, &mappings) {
+                for event in events_from_midi_message_with_relative_state(
+                    message,
+                    &mappings,
+                    &mut relative_state,
+                    &current,
+                ) {
                     callback(event);
                 }
             },
@@ -804,14 +836,76 @@ pub fn events_from_midi_message(
     message: &[u8],
     mappings: &[MidiControlMapping],
 ) -> Vec<MidiControlEvent> {
+    events_from_midi_message_with_relative_state(
+        message,
+        mappings,
+        &mut RelativeControlState::default(),
+        &|_| None,
+    )
+}
+
+/// Last value each relative-encoder mapping produced. While an encoder keeps
+/// turning it is the base for the next step, so the engine snapshot is read
+/// only when a turn starts (or when the target cannot be read at all).
+#[derive(Debug, Default)]
+pub struct RelativeControlState {
+    last_by_mapping: HashMap<usize, (f32, Instant)>,
+}
+
+const RELATIVE_CONTROL_RESYNC_AFTER: Duration = Duration::from_millis(300);
+
+/// Relative encoders step from the target's current position: `current`
+/// reads it (normalized in the mapping's low..high range); otherwise the last
+/// value this input produced is used, starting from 0.
+pub fn events_from_midi_message_with_relative_state(
+    message: &[u8],
+    mappings: &[MidiControlMapping],
+    state: &mut RelativeControlState,
+    current: &dyn Fn(&MidiControlMapping) -> Option<f32>,
+) -> Vec<MidiControlEvent> {
     let Some(parsed) = parse_midi_message(message) else {
         return Vec::new();
     };
     mappings
         .iter()
-        .filter(|mapping| mapping_matches(mapping, &parsed))
-        .filter_map(|mapping| event_from_mapping(mapping, &parsed))
+        .enumerate()
+        .filter(|(_, mapping)| mapping_matches(mapping, &parsed))
+        .filter_map(|(index, mapping)| {
+            if mapping.message != MidiControlMessage::RelativeControlChange {
+                return event_from_mapping(mapping, &parsed);
+            }
+            let steps = relative_encoder_steps(parsed.value);
+            if steps == 0 {
+                return None;
+            }
+            let now = Instant::now();
+            let last = state.last_by_mapping.get(&index).copied();
+            let turning = last.filter(|(_, at)| now.duration_since(*at) < RELATIVE_CONTROL_RESYNC_AFTER);
+            let base = turning
+                .map(|(value, _)| value)
+                .or_else(|| current(mapping).filter(|value| value.is_finite()))
+                .or(last.map(|(value, _)| value))
+                .unwrap_or(0.0);
+            let next = (base + steps as f32 / 127.0).clamp(0.0, 1.0);
+            state.last_by_mapping.insert(index, (next, now));
+            let stepped = MidiMessage {
+                value: (next * 127.0).round() as u8,
+                normalized: next,
+                ..parsed.clone()
+            };
+            event_from_mapping(mapping, &stepped)
+        })
         .collect()
+}
+
+/// The target's present position for `mapping`, normalized in its low..high
+/// range, when the snapshot can state it unambiguously.
+pub fn current_normalized_value_for_mapping(
+    snapshot: &EngineSnapshot,
+    mapping: &MidiControlMapping,
+    operator_selection: Option<&OperatorSelectionContext>,
+) -> Option<f32> {
+    feedback_value_for_mapping(snapshot, mapping, operator_selection)
 }
 
 fn feedback_value_for_mapping(
@@ -1220,8 +1314,11 @@ fn midi_feedback_message_from_spec(spec: &MidiFeedbackMessage) -> Option<Vec<u8>
     match spec.message {
         MidiControlMessage::NoteOn => Some(vec![0x90 | channel, number, value]),
         MidiControlMessage::NoteOff => Some(vec![0x80 | channel, number, value]),
-        MidiControlMessage::ControlChange => Some(vec![0xb0 | channel, number, value]),
+        MidiControlMessage::ControlChange | MidiControlMessage::RelativeControlChange => {
+            Some(vec![0xb0 | channel, number, value])
+        }
         MidiControlMessage::ProgramChange => Some(vec![0xc0 | channel, number]),
+        MidiControlMessage::PitchBend => Some(vec![0xe0 | channel, 0, value]),
     }
 }
 
@@ -1233,7 +1330,12 @@ fn midi_feedback_message(mapping: &MidiControlMapping, normalized: f32) -> Optio
         MidiControlMessage::NoteOn => Some(vec![0x90 | channel, number, value]),
         MidiControlMessage::NoteOff => Some(vec![0x80 | channel, number, value]),
         MidiControlMessage::ControlChange => Some(vec![0xb0 | channel, number, value]),
-        MidiControlMessage::ProgramChange => None,
+        MidiControlMessage::PitchBend => {
+            let value14 = (normalized.clamp(0.0, 1.0) * 16_383.0).round() as u16;
+            Some(vec![0xe0 | channel, (value14 & 0x7f) as u8, (value14 >> 7) as u8])
+        }
+        // Relative encoders and program changes have no absolute echo.
+        MidiControlMessage::ProgramChange | MidiControlMessage::RelativeControlChange => None,
     }
 }
 
@@ -1296,12 +1398,16 @@ fn parse_midi_message(message: &[u8]) -> Option<MidiMessage> {
     let message_type = status & 0xf0;
     let channel = status & 0x0f;
     match message_type {
-        0x80 => Some(MidiMessage {
-            message: MidiControlMessage::NoteOff,
-            channel,
-            number: *message.get(1)?,
-            value: *message.get(2).unwrap_or(&0),
-        }),
+        0x80 => {
+            let value = *message.get(2).unwrap_or(&0);
+            Some(MidiMessage {
+                message: MidiControlMessage::NoteOff,
+                channel,
+                number: *message.get(1)?,
+                value,
+                normalized: seven_bit_normalized(value),
+            })
+        }
         0x90 => {
             let value = *message.get(2).unwrap_or(&0);
             Some(MidiMessage {
@@ -1313,21 +1419,57 @@ fn parse_midi_message(message: &[u8]) -> Option<MidiMessage> {
                 channel,
                 number: *message.get(1)?,
                 value,
+                normalized: seven_bit_normalized(value),
             })
         }
-        0xb0 => Some(MidiMessage {
-            message: MidiControlMessage::ControlChange,
-            channel,
-            number: *message.get(1)?,
-            value: *message.get(2).unwrap_or(&0),
-        }),
+        0xb0 => {
+            let value = *message.get(2).unwrap_or(&0);
+            Some(MidiMessage {
+                message: MidiControlMessage::ControlChange,
+                channel,
+                number: *message.get(1)?,
+                value,
+                normalized: seven_bit_normalized(value),
+            })
+        }
         0xc0 => Some(MidiMessage {
             message: MidiControlMessage::ProgramChange,
             channel,
             number: *message.get(1)?,
             value: 127,
+            normalized: 1.0,
         }),
+        0xe0 => {
+            let lsb = *message.get(1)?;
+            let msb = *message.get(2)?;
+            if lsb > 0x7f || msb > 0x7f {
+                return None;
+            }
+            let value14 = (u16::from(msb) << 7) | u16::from(lsb);
+            Some(MidiMessage {
+                message: MidiControlMessage::PitchBend,
+                channel,
+                number: 0,
+                value: msb,
+                normalized: f32::from(value14) / 16_383.0,
+            })
+        }
         _ => None,
+    }
+}
+
+fn seven_bit_normalized(value: u8) -> f32 {
+    f32::from(value.min(127)) / 127.0
+}
+
+/// Signed step of a relative encoder CC (Mackie Control V-Pot encoding:
+/// bit 6 set = down, bits 0-5 = step count).
+fn relative_encoder_steps(value: u8) -> i32 {
+    let steps = i32::from(value & 0x3f);
+    if value & 0x40 != 0 {
+        -steps
+    } else {
+        steps
     }
 }
 
@@ -1464,6 +1606,8 @@ impl MtcQuarterFrameDecoder {
 
 fn mapping_matches(mapping: &MidiControlMapping, message: &MidiMessage) -> bool {
     let message_matches = mapping.message == message.message
+        || (matches!(mapping.message, MidiControlMessage::RelativeControlChange)
+            && matches!(message.message, MidiControlMessage::ControlChange))
         || (matches!(mapping.action, MidiControlAction::FlashCue)
             && matches!(mapping.message, MidiControlMessage::NoteOn)
             && matches!(message.message, MidiControlMessage::NoteOff))
@@ -1482,7 +1626,7 @@ fn event_from_mapping(
     mapping: &MidiControlMapping,
     message: &MidiMessage,
 ) -> Option<MidiControlEvent> {
-    let normalized = f32::from(message.value) / 127.0;
+    let normalized = message.normalized;
     let ranged_value = if mapping.low.is_finite() && mapping.high.is_finite() {
         mapping.low + (mapping.high - mapping.low) * normalized
     } else {
@@ -1896,6 +2040,83 @@ mod tests {
             low: 0.0,
             high: 65_535.0,
         }
+    }
+
+    fn dimmer_value(events: &[MidiControlEvent]) -> u16 {
+        match events {
+            [MidiControlEvent::SetAttribute { value, .. }] => *value,
+            other => panic!("expected one SetAttribute, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn pitch_bend_faders_map_with_fourteen_bit_resolution() {
+        let mut mapping = fixture_cc_mapping();
+        mapping.message = MidiControlMessage::PitchBend;
+        mapping.number = 0;
+        let mapping = std::slice::from_ref(&mapping);
+        assert_eq!(dimmer_value(&events_from_midi_message(&[0xe0, 0x7f, 0x7f], mapping)), 65_535);
+        assert_eq!(dimmer_value(&events_from_midi_message(&[0xe0, 0x00, 0x00], mapping)), 0);
+        // 8192 / 16383 of the range, finer than any 7-bit step.
+        assert_eq!(dimmer_value(&events_from_midi_message(&[0xe0, 0x00, 0x40], mapping)), 32_770);
+        assert_eq!(dimmer_value(&events_from_midi_message(&[0xe0, 0x01, 0x40], mapping)), 32_774);
+        // Another channel, a CC and malformed data bytes do not match.
+        assert!(events_from_midi_message(&[0xe1, 0x00, 0x40], mapping).is_empty());
+        assert!(events_from_midi_message(&[0xb0, 0x00, 0x40], mapping).is_empty());
+        assert!(events_from_midi_message(&[0xe0, 0x80, 0x40], mapping).is_empty());
+        assert!(events_from_midi_message(&[0xe0, 0x00], mapping).is_empty());
+
+        let learned = learned_control_from_midi_message(&[0xe2, 0x10, 0x20]).expect("pitch bend learns");
+        assert_eq!(learned.message, MidiControlMessage::PitchBend);
+        assert_eq!((learned.channel, learned.number, learned.value), (2, 0, 0x20));
+    }
+
+    #[test]
+    fn relative_encoders_step_from_the_current_target_value() {
+        let mut mapping = fixture_cc_mapping();
+        mapping.message = MidiControlMessage::RelativeControlChange;
+        mapping.number = 16;
+        let mappings = std::slice::from_ref(&mapping);
+        let mut state = RelativeControlState::default();
+        let at_half = |_: &MidiControlMapping| Some(0.5);
+        // Mackie V-Pot: 0x01 = one step up, 0x41 = one step down, 0x43 = three down.
+        let up = dimmer_value(&events_from_midi_message_with_relative_state(&[0xb0, 16, 0x01], mappings, &mut state, &at_half));
+        assert_eq!(up, ((0.5_f32 + 1.0 / 127.0) * 65_535.0).round() as u16);
+        // While turning, steps accumulate from the produced value rather than
+        // re-reading the (not yet updated) target.
+        let up_again = dimmer_value(&events_from_midi_message_with_relative_state(&[0xb0, 16, 0x01], mappings, &mut state, &at_half));
+        assert_eq!(up_again, ((0.5_f32 + 2.0 / 127.0) * 65_535.0).round() as u16);
+        let down = dimmer_value(&events_from_midi_message_with_relative_state(&[0xb0, 16, 0x43], mappings, &mut state, &at_half));
+        assert_eq!(down, ((0.5_f32 - 1.0 / 127.0) * 65_535.0).round() as u16);
+
+        // An unreadable target starts from zero and never leaves the range.
+        let mut fresh = RelativeControlState::default();
+        let unknown = |_: &MidiControlMapping| None;
+        assert_eq!(dimmer_value(&events_from_midi_message_with_relative_state(&[0xb0, 16, 0x41], mappings, &mut fresh, &unknown)), 0);
+        assert_eq!(dimmer_value(&events_from_midi_message_with_relative_state(&[0xb0, 16, 0x3f], mappings, &mut fresh, &unknown)), ((63.0_f32 / 127.0) * 65_535.0).round() as u16);
+        // A zero step and other numbers do nothing; absolute CC mappings are unchanged.
+        assert!(events_from_midi_message_with_relative_state(&[0xb0, 16, 0x00], mappings, &mut fresh, &unknown).is_empty());
+        assert!(events_from_midi_message_with_relative_state(&[0xb0, 17, 0x01], mappings, &mut fresh, &unknown).is_empty());
+        assert_eq!(dimmer_value(&events_from_midi_message(&[0xb0, 7, 127], &[fixture_cc_mapping()])), 65_535);
+    }
+
+    #[test]
+    fn pitch_bend_feedback_echoes_fourteen_bits_on_one_cache_address() {
+        let mut mapping = fixture_cc_mapping();
+        mapping.message = MidiControlMessage::PitchBend;
+        mapping.number = 0;
+        assert_eq!(midi_feedback_message(&mapping, 1.0), Some(vec![0xe0, 0x7f, 0x7f]));
+        assert_eq!(midi_feedback_message(&mapping, 0.5), Some(vec![0xe0, 0x00, 0x40]));
+        let mut relative = fixture_cc_mapping();
+        relative.message = MidiControlMessage::RelativeControlChange;
+        assert_eq!(midi_feedback_message(&relative, 0.5), None);
+
+        let mut cache = MidiFeedbackCache::default();
+        cache.record_sent(0, &[0xe0, 0x00, 0x40]);
+        assert!(cache.pending_messages(&[vec![0xe0, 0x00, 0x40]], false).is_empty());
+        assert_eq!(cache.pending_messages(&[vec![0xe0, 0x01, 0x40]], false), vec![vec![0xe0, 0x01, 0x40]]);
+        cache.record_sent(1, &[0xe0, 0x7f, 0x7f]);
+        assert!(!cache.sent_by_slot.contains_key(&0), "a new pitch bend value replaces the old one on that channel");
     }
 
     #[test]
