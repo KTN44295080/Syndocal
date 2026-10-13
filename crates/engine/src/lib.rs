@@ -71644,13 +71644,11 @@ mod tests {
     #[test]
     #[ignore]
     fn physical_serial_rainbow_demo_drives_master_dimmer_and_rgb_cells() {
-        let Some(serial_port) = std::env::var("SYNDOCAL_PHYSICAL_SERIAL")
+        // An explicit --ignored run must not report success without hardware.
+        let serial_port = std::env::var("SYNDOCAL_PHYSICAL_SERIAL")
             .ok()
             .filter(|port| !port.is_empty())
-        else {
-            eprintln!("Skipping physical serial demo: SYNDOCAL_PHYSICAL_SERIAL is unset");
-            return;
-        };
+            .expect("set SYNDOCAL_PHYSICAL_SERIAL to the USB-DMX COM port, e.g. COM5");
         let master_byte: u8 = std::env::var("SYNDOCAL_PHYSICAL_MASTER")
             .ok()
             .and_then(|value| value.parse().ok())

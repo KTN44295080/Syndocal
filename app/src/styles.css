@@ -628,6 +628,7 @@
   background: #8a7337;
 }
 
+.ioConnectionState.warn i,
 .ioStatusDot.warn {
   border-color: #d1a64b;
   background: #a57824;

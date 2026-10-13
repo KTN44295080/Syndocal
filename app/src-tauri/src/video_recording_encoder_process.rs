@@ -1,6 +1,7 @@
+#[cfg(windows)]
+use std::sync::Arc;
 use std::{
     process::{Child, ChildStderr, ChildStdin, ChildStdout, ExitStatus},
-    sync::Arc,
     sync::{
         atomic::{AtomicBool, Ordering},
         mpsc, LazyLock, Mutex,

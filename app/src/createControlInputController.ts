@@ -1,5 +1,5 @@
 import { midiFaderConnection, type MidiFaderConnection } from "./midiFaderInput";
-import { batch, createEffect, onCleanup, type Accessor, type Setter } from "solid-js";
+import { batch, createEffect, createSignal, onCleanup, type Accessor, type Setter } from "solid-js";
 import type { FrontendTauriInvoke } from "./tauriInvokeCommands";
 import {
   isFixtureFlagMappingAction,
@@ -36,13 +36,14 @@ import {
   type ProjectAuthorityToken,
 } from "./projectAuthority";
 
-import { learnedFeedbackOutput } from "./midiLearnFeedback";
+import { learnedFeedbackOutput, type MidiFeedbackOutputStatus } from "./midiLearnFeedback";
 
 type Invoke = FrontendTauriInvoke;
 
 interface MidiFeedbackRuntimeStatus {
   enabled: boolean;
   last_error: string | null;
+  output: MidiFeedbackOutputStatus | null;
 }
 
 interface ControlInputControllerOptions {
@@ -655,17 +656,22 @@ export function createControlInputController(options: ControlInputControllerOpti
       }
     });
   });
+  // While feedback is connected, poll the backend so the operator can see what
+  // was actually sent; a running auto worker that stops is reported once.
+  const [midiFeedbackOutputStatus, setMidiFeedbackOutputStatus] = createSignal<MidiFeedbackOutputStatus | null>(null);
   createEffect(() => {
-    if (!options.midiFeedbackEnabled() || !options.midiFeedbackConnected()) return;
+    if (!options.midiFeedbackConnected()) { setMidiFeedbackOutputStatus(null); return; }
     let disposed = false;
     const statusTimer = window.setInterval(async () => {
       try {
         const status = await options.invoke<MidiFeedbackRuntimeStatus>("midi_feedback_status");
-        if (disposed || status.enabled) return;
+        if (disposed) return;
+        setMidiFeedbackOutputStatus(status.output ?? null);
+        if (!options.midiFeedbackEnabled() || status.enabled) return;
         options.setMidiFeedbackEnabled(false);
         options.setMessage(status.last_error ?? "MIDI auto feedback stopped unexpectedly.");
       } catch (error) {
-        if (disposed) return;
+        if (disposed || !options.midiFeedbackEnabled()) return;
         options.setMidiFeedbackEnabled(false);
         options.setMessage(String(error));
       }
@@ -914,6 +920,7 @@ export function createControlInputController(options: ControlInputControllerOpti
     connectMidiFeedback,
     disconnectMidiFeedback,
     sendMidiFeedback,
+    midiFeedbackOutputStatus,
     addOscMapping,
     removeOscMapping,
     saveOscMappings,

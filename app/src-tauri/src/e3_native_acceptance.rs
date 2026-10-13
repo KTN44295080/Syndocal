@@ -187,7 +187,7 @@ impl E3NativeAcceptanceConfig {
         Self::new_with_executable_parent_and_probe(control_dir, timeout, executable_parent, probe)
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, windows))]
     fn for_test_with_probes<Probe, DriveValidate>(
         control_dir: PathBuf,
         timeout: Duration,

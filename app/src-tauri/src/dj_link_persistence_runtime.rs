@@ -12,12 +12,16 @@ use crate::dj_link_machine::{
     DjLinkCredentialStore, DjLinkMachineRollback, DjLinkMachineSettingsLoadOutcome,
     DjLinkMachineSettingsV2, DjLinkMachineTransactionState, DjLinkToken,
 };
+#[cfg(target_os = "windows")]
 use crate::dj_link_network::{self, DjLinkIpv4BindingKey, DjLinkTrustDecision};
 use base64::Engine as _;
 use protocol::RemoteControlConfig;
 use serde::{Deserialize, Serialize};
-use std::{fmt, path::Path, path::PathBuf, time::Duration};
+use std::{fmt, path::Path, path::PathBuf};
+#[cfg(target_os = "windows")]
+use std::time::Duration;
 
+#[cfg(target_os = "windows")]
 const DJ_LINK_NETWORK_SETTLE_DWELL: Duration = Duration::from_secs(1);
 
 #[derive(Default)]
@@ -890,6 +894,7 @@ fn build_disarmed_settings(
     Ok(next)
 }
 
+#[cfg(target_os = "windows")]
 fn trust_block_reason(decision: DjLinkTrustDecision) -> Result<(), String> {
     match decision {
         DjLinkTrustDecision::Allow => Ok(()),

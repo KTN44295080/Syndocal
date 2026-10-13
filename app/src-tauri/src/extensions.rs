@@ -106,7 +106,7 @@ impl Extensions {
         if self.status.dj_link_enabled {
             Ok(())
         } else {
-            Err("DJ Link extension is not enabled. Open Setup > I/O > Extensions.".into())
+            Err("DJ Link extension is not enabled. Choose or change extensions in the Syndocal installer.".into())
         }
     }
     pub fn set(&mut self, dj_link_enabled: bool) -> Result<ExtensionStatus, String> {

@@ -275,7 +275,7 @@ pub(crate) fn deferred_termination_for_test(detail: &str) -> ProcessTermination 
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, windows))]
 static TEST_LIFECYCLE_SERIAL: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 #[cfg(test)]
 static TEST_REAPED_CHILDREN: LazyLock<Mutex<Vec<u32>>> = LazyLock::new(|| Mutex::new(Vec::new()));
@@ -289,7 +289,7 @@ fn record_test_reaped_child(child_id: u32) {
     reaped.push(child_id);
 }
 
-#[cfg(test)]
+#[cfg(all(test, windows))]
 fn wait_for_test_reaped_child(child_id: u32) -> bool {
     let deadline = Instant::now() + Duration::from_secs(1);
     loop {
@@ -314,7 +314,7 @@ fn wait_for_test_reaped_child(child_id: u32) -> bool {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, windows))]
 fn quarantined_child_count() -> usize {
     match QUARANTINED_CHILDREN.lock() {
         Ok(quarantine) => quarantine.len(),
@@ -322,7 +322,7 @@ fn quarantined_child_count() -> usize {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, windows))]
 mod tests {
     use super::*;
 

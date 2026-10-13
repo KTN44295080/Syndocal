@@ -18094,6 +18094,7 @@ export default function App() {
     connectMidiFeedback,
     disconnectMidiFeedback,
     sendMidiFeedback,
+    midiFeedbackOutputStatus,
     addOscMapping,
     removeOscMapping,
     saveOscMappings,
@@ -29162,6 +29163,7 @@ export default function App() {
             selectedMidiOutput={selectedMidiOutput()}
             feedbackConnected={midiFeedbackConnected()}
             feedbackEnabled={midiFeedbackEnabled()}
+            feedbackOutputStatus={midiFeedbackOutputStatus()}
             midiInputsCount={midiInputs().length}
             controlConnected={midiControlConnected()}
             mappings={midiMappings()}

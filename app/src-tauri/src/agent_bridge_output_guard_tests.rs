@@ -1,4 +1,5 @@
 use super::*;
+#[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
 use std::cell::Cell;
 
 #[test]

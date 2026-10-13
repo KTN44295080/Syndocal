@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     sync::mpsc,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use midir::{Ignore, MidiInput, MidiInputConnection, MidiOutput, MidiOutputConnection};
@@ -39,6 +39,29 @@ pub struct MidiControlInput {
 pub struct MidiFeedbackOutput {
     connection: MidiOutputConnection,
     cache: MidiFeedbackCache,
+    telemetry: MidiFeedbackTelemetry,
+}
+
+/// Operator-visible record of what the feedback output actually transmitted.
+/// It only reports bytes handed to the MIDI driver; it cannot prove that the
+/// controller lit an LED.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MidiFeedbackTelemetry {
+    pub port_name: String,
+    pub messages_sent: u64,
+    pub last_message: Option<Vec<u8>>,
+    pub last_sent_unix_ms: Option<u64>,
+}
+
+impl MidiFeedbackTelemetry {
+    fn record_sent(&mut self, message: &[u8], sent_at: SystemTime) {
+        self.messages_sent = self.messages_sent.saturating_add(1);
+        self.last_message = Some(message.to_vec());
+        self.last_sent_unix_ms = sent_at
+            .duration_since(UNIX_EPOCH)
+            .ok()
+            .and_then(|elapsed| u64::try_from(elapsed.as_millis()).ok());
+    }
 }
 
 #[derive(Debug, Default)]
@@ -521,7 +544,8 @@ pub fn connect_midi_feedback_output_named(
     let port = ports
         .get(port_index)
         .ok_or(MidiError::MissingPort(port_index))?;
-    if expected_name.is_some_and(|name| output.port_name(port).ok().as_deref() != Some(name)) {
+    let port_name = output.port_name(port).ok();
+    if expected_name.is_some_and(|name| port_name.as_deref() != Some(name)) {
         return Err(MidiError::Connect("MIDI feedback device changed; scan and select it again".into()));
     }
     let connection = output
@@ -530,6 +554,10 @@ pub fn connect_midi_feedback_output_named(
     Ok(MidiFeedbackOutput {
         connection,
         cache: MidiFeedbackCache::default(),
+        telemetry: MidiFeedbackTelemetry {
+            port_name: port_name.unwrap_or_default(),
+            ..MidiFeedbackTelemetry::default()
+        },
     })
 }
 
@@ -682,6 +710,10 @@ pub fn learned_control_from_midi_message(message: &[u8]) -> Option<LearnedMidiCo
 }
 
 impl MidiFeedbackOutput {
+    pub fn telemetry(&self) -> MidiFeedbackTelemetry {
+        self.telemetry.clone()
+    }
+
     pub fn send_feedback_messages(&mut self, messages: &[Vec<u8>]) -> Result<usize, MidiError> {
         self.send_feedback_messages_with_force(messages, true)
     }
@@ -725,6 +757,7 @@ impl MidiFeedbackOutput {
                 .send(&message)
                 .map_err(|error| MidiError::Send(error.to_string()))?;
             self.cache.record_sent(slot, &message);
+            self.telemetry.record_sent(&message, SystemTime::now());
             sent += 1;
         }
         Ok(sent)
@@ -1774,6 +1807,25 @@ fn normalize_group_path(group_id: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn feedback_telemetry_counts_sent_messages_and_keeps_the_last_one() {
+        let mut telemetry = MidiFeedbackTelemetry {
+            port_name: "SMC-Mixer".into(),
+            ..MidiFeedbackTelemetry::default()
+        };
+        let sent_at = UNIX_EPOCH + Duration::from_millis(1_700_000_000_123);
+        telemetry.record_sent(&[0xb0, 21, 127], sent_at);
+        telemetry.record_sent(&[0xb0, 21, 0], sent_at + Duration::from_millis(5));
+        assert_eq!(telemetry.port_name, "SMC-Mixer");
+        assert_eq!(telemetry.messages_sent, 2);
+        assert_eq!(telemetry.last_message, Some(vec![0xb0, 21, 0]));
+        assert_eq!(telemetry.last_sent_unix_ms, Some(1_700_000_000_128));
+        telemetry.messages_sent = u64::MAX;
+        telemetry.record_sent(&[0x90, 60, 127], UNIX_EPOCH - Duration::from_secs(1));
+        assert_eq!(telemetry.messages_sent, u64::MAX);
+        assert_eq!(telemetry.last_sent_unix_ms, None, "pre-epoch clocks report no time");
+    }
 
     #[test]
     fn feedback_cache_sends_only_changed_addresses_and_force_resends_current_state() {
