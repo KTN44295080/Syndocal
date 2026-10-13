@@ -1,8 +1,8 @@
 # Syndocal completion flow — active dependency-ordered work authority
 
-## 2026-10-13 alpha.78 BO, MIDI and extension candidate
+## 2026-10-13 alpha.78 BO, MIDI and extension distribution checkpoint
 
-Current candidate metadata is `1.2.0-alpha.78`. Managed USB output completion, direct MIDI fader events, scene toggle/feedback, extension choice and Control Edit/Live boundaries are recorded in [the checkpoint](EXTENSIONS_MIDI_BLACKOUT_ALPHA78_2026-10-13.md). Native/package/device gates remain distinct. Distributed alpha.77 artifacts are immutable.
+Distributed development metadata is `1.2.0-alpha.78`. Managed USB output completion, direct MIDI fader events, scene toggle/feedback, extension choice and Control Edit/Live boundaries are recorded in [the checkpoint](EXTENSIONS_MIDI_BLACKOUT_ALPHA78_2026-10-13.md). Win x64 and Mac Apple Silicon packages are delivered. Windows native startup, full Windows/Linux CI and hosted Windows installer choice/update/complete-removal gates pass. Physical MIDI/USB-DMX and interactive Mac device acceptance remain unobserved. Distributed alpha.77 and alpha.78 artifact bytes are immutable.
 
 ## 2026-10-13 alpha.77 MIDI synchronization and inline scene naming
 

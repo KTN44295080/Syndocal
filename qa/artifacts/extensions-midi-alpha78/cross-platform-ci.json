@@ -1,0 +1,352 @@
+{
+  "schemaVersion": 1,
+  "runId": "38361154626",
+  "url": "https://github.com/KTN44295080/Syndocal/actions/runs/38361154626",
+  "sourceCommit": "77aeee3ed699ee5454605963fcfa18195c308acf",
+  "status": "completed",
+  "conclusion": "success",
+  "jobs": [
+    {
+      "name": "Windows 10+",
+      "conclusion": "success",
+      "steps": [
+        {
+          "name": "Set up job",
+          "conclusion": "success"
+        },
+        {
+          "name": "Check out source",
+          "conclusion": "success"
+        },
+        {
+          "name": "Install Linux system dependencies",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Install Windows video SDK",
+          "conclusion": "success"
+        },
+        {
+          "name": "Install pnpm",
+          "conclusion": "success"
+        },
+        {
+          "name": "Install Node.js",
+          "conclusion": "success"
+        },
+        {
+          "name": "Install Rust",
+          "conclusion": "success"
+        },
+        {
+          "name": "Initialize Windows x64 MSVC environment",
+          "conclusion": "success"
+        },
+        {
+          "name": "Pin exact Windows MSVC 14.44.35207 linker",
+          "conclusion": "success"
+        },
+        {
+          "name": "Cache Rust build",
+          "conclusion": "success"
+        },
+        {
+          "name": "Install frontend dependencies",
+          "conclusion": "success"
+        },
+        {
+          "name": "Stage Windows runtime libraries",
+          "conclusion": "success"
+        },
+        {
+          "name": "Assert staged pinned runtime before dependent tests",
+          "conclusion": "success"
+        },
+        {
+          "name": "Verify Windows ASIO and runtime packaging boundary",
+          "conclusion": "success"
+        },
+        {
+          "name": "Validate Windows warning ratchet SDK paths",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Report unavailable Windows ASIO/NDI warning gates",
+          "conclusion": "success"
+        },
+        {
+          "name": "Check formatting",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Test warning ratchet (Windows)",
+          "conclusion": "success"
+        },
+        {
+          "name": "Test warning ratchet (Linux)",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Enforce Windows warning ratchets",
+          "conclusion": "success"
+        },
+        {
+          "name": "Enforce Windows ASIO/NDI warning ratchets when SDKs are configured",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Stop checkout Syndocal before native warning ratchet",
+          "conclusion": "success"
+        },
+        {
+          "name": "Enforce Windows native release warning ratchet",
+          "conclusion": "success"
+        },
+        {
+          "name": "Test Rust workspace",
+          "conclusion": "success"
+        },
+        {
+          "name": "Test in-process general video decode",
+          "conclusion": "success"
+        },
+        {
+          "name": "Build frontend",
+          "conclusion": "success"
+        },
+        {
+          "name": "Check E4 project publication durability",
+          "conclusion": "success"
+        },
+        {
+          "name": "Check Tauri application",
+          "conclusion": "success"
+        },
+        {
+          "name": "Check release metadata",
+          "conclusion": "success"
+        },
+        {
+          "name": "Test installer lifecycle and cleanup boundaries",
+          "conclusion": "success"
+        },
+        {
+          "name": "Stop checkout Syndocal before native bundle build",
+          "conclusion": "success"
+        },
+        {
+          "name": "Bundle Windows installers",
+          "conclusion": "success"
+        },
+        {
+          "name": "Bundle Linux packages",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Smoke-test Windows installers",
+          "conclusion": "success"
+        },
+        {
+          "name": "Smoke-test Linux AppImage",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Upload installers",
+          "conclusion": "success"
+        },
+        {
+          "name": "Post Cache Rust build",
+          "conclusion": "success"
+        },
+        {
+          "name": "Post Install Node.js",
+          "conclusion": "success"
+        },
+        {
+          "name": "Post Install pnpm",
+          "conclusion": "success"
+        },
+        {
+          "name": "Post Check out source",
+          "conclusion": "success"
+        },
+        {
+          "name": "Complete job",
+          "conclusion": "success"
+        }
+      ]
+    },
+    {
+      "name": "Ubuntu 22.04",
+      "conclusion": "success",
+      "steps": [
+        {
+          "name": "Set up job",
+          "conclusion": "success"
+        },
+        {
+          "name": "Check out source",
+          "conclusion": "success"
+        },
+        {
+          "name": "Install Linux system dependencies",
+          "conclusion": "success"
+        },
+        {
+          "name": "Install Windows video SDK",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Install pnpm",
+          "conclusion": "success"
+        },
+        {
+          "name": "Install Node.js",
+          "conclusion": "success"
+        },
+        {
+          "name": "Install Rust",
+          "conclusion": "success"
+        },
+        {
+          "name": "Initialize Windows x64 MSVC environment",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Pin exact Windows MSVC 14.44.35207 linker",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Cache Rust build",
+          "conclusion": "success"
+        },
+        {
+          "name": "Install frontend dependencies",
+          "conclusion": "success"
+        },
+        {
+          "name": "Stage Windows runtime libraries",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Assert staged pinned runtime before dependent tests",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Verify Windows ASIO and runtime packaging boundary",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Validate Windows warning ratchet SDK paths",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Report unavailable Windows ASIO/NDI warning gates",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Check formatting",
+          "conclusion": "success"
+        },
+        {
+          "name": "Test warning ratchet (Windows)",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Test warning ratchet (Linux)",
+          "conclusion": "success"
+        },
+        {
+          "name": "Enforce Windows warning ratchets",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Enforce Windows ASIO/NDI warning ratchets when SDKs are configured",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Stop checkout Syndocal before native warning ratchet",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Enforce Windows native release warning ratchet",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Test Rust workspace",
+          "conclusion": "success"
+        },
+        {
+          "name": "Test in-process general video decode",
+          "conclusion": "success"
+        },
+        {
+          "name": "Build frontend",
+          "conclusion": "success"
+        },
+        {
+          "name": "Check E4 project publication durability",
+          "conclusion": "success"
+        },
+        {
+          "name": "Check Tauri application",
+          "conclusion": "success"
+        },
+        {
+          "name": "Check release metadata",
+          "conclusion": "success"
+        },
+        {
+          "name": "Test installer lifecycle and cleanup boundaries",
+          "conclusion": "success"
+        },
+        {
+          "name": "Stop checkout Syndocal before native bundle build",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Bundle Windows installers",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Bundle Linux packages",
+          "conclusion": "success"
+        },
+        {
+          "name": "Smoke-test Windows installers",
+          "conclusion": "skipped"
+        },
+        {
+          "name": "Smoke-test Linux AppImage",
+          "conclusion": "success"
+        },
+        {
+          "name": "Upload installers",
+          "conclusion": "success"
+        },
+        {
+          "name": "Post Cache Rust build",
+          "conclusion": "success"
+        },
+        {
+          "name": "Post Install Node.js",
+          "conclusion": "success"
+        },
+        {
+          "name": "Post Install pnpm",
+          "conclusion": "success"
+        },
+        {
+          "name": "Post Check out source",
+          "conclusion": "success"
+        },
+        {
+          "name": "Complete job",
+          "conclusion": "success"
+        }
+      ]
+    }
+  ],
+  "distributedProductSource": "7f116105fb3f993f63915f51fdb15132bdd2159e",
+  "boundary": "Hosted CI installers and local delivered installers are separate builds; source difference is test expectations and distribution sidecars only. No physical output acceptance."
+}
