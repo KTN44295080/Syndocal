@@ -1,0 +1,84 @@
+/* ---- FX editor clarity pass (2026-10-14).
+   The editor reads top-down as numbered steps: 1 target fixtures, 2 the
+   channels that move, then the family settings, palettes, and the save
+   dock, which stays pinned to the bottom of whichever column scrolls. */
+.sceneFxEditor .sceneFxStepTitle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  color: #dfe4e7;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.sceneFxEditor .sceneFxStepTitle::before {
+  content: attr(data-fx-step);
+  display: inline-grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--ui-range-fill, #e98a3c);
+  color: #101214;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.sceneFxChannels {
+  /* Contains the visually hidden legend below inside the scrolling pane. */
+  position: relative;
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-card);
+  background: var(--ui-surface-panel);
+  padding: 6px 8px;
+}
+
+.sceneFxChannelNote {
+  margin: 0;
+  color: #c9d0d5;
+  font-size: 12px;
+  line-height: 1.45;
+  text-wrap: pretty;
+}
+
+/* The step title already names the section; keep the feature list's own
+   legend for assistive technology only. */
+.sceneFxChannels .effectFeaturesPanel > legend {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* Prefixed to outrank the generic .sceneFxEditor dock grid in styles.css,
+   which loads after component stylesheets. */
+.sceneSettingsPane .sceneFxEditor .effectActionDock {
+  position: sticky;
+  z-index: 3;
+  bottom: 0;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 4px;
+  padding: 5px 7px;
+}
+
+/* One row: what is being edited, Save, Cancel. */
+.sceneSettingsPane .sceneFxEditor .effectActionDock .effectSubmitActions {
+  grid-template-columns: minmax(0, 1fr) minmax(120px, auto) minmax(90px, auto);
+  align-items: center;
+}
+
+.sceneSettingsPane .sceneFxEditor .effectActionDock .effectEditBadge {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

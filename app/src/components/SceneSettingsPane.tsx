@@ -30,6 +30,7 @@ import {
   type EffectChooserFamily,
 } from "./EffectFamilyChooser";
 import { ValueEffectEditorPanel } from "./ValueEffectEditorPanel";
+import "./SceneSettingsPane.css";
 
 export type SceneSettingsSurface = "contents" | "fx" | "settings" | "details";
 
@@ -119,6 +120,20 @@ const SurfaceIcon = (props: { surface: SceneSettingsSurface }) => (
 );
 
 const sceneFxWideStorageKey = "syndocal.sceneFxEditorWide.v1";
+
+const effectTypeLabels: Record<string, string> = {
+  Color: "Colour FX",
+  Chaser: "Chaser FX",
+  Move: "Move FX",
+  Value: "Value FX",
+  Curve: "Curve FX",
+  Mapping: "2D Mapping",
+  ColorMapping: "2D Colour Mapping",
+  Lfo: "LFO",
+  PositionWave: "Position wave",
+};
+
+const effectTypeLabel = (effectType: string) => effectTypeLabels[effectType] ?? effectType;
 
 const readSceneFxWide = () => {
   try {
@@ -469,13 +484,25 @@ export function SceneSettingsPane(props: SceneSettingsPaneProps) {
                 >
                   <header>
                     <strong class="uiMicroLabel">FX editor</strong>
-                    <span>{props.editor.effectType}</span>
+                    <span>{effectTypeLabel(props.editor.effectType)}</span>
                   </header>
+                  {/* Step 1: which fixtures; step 2, directly below: which of their
+                      channels move. Family settings, palettes and Save follow. */}
                   <SceneEffectTargetEditor {...props.editor.target} />
-                  <Show when={props.editor.effectType === "Lfo" && props.editor.daslightCustomCurve.source}>
-                    <DaslightCustomCurvePanel {...props.editor.daslightCustomCurve} />
+                  <section class="sceneFxChannels" data-scene-fx-channels aria-label="FX channels">
+                  <h4 class="sceneFxStepTitle" data-fx-step="2">Channels to move</h4>
+                  <Show when={props.editor.effectType === "Color"}>
+                    <p class="sceneFxChannelNote">Whole-fixture colour: every patched colour channel moves together. To move only some channels, such as Green and Blue, use VALUE FX.</p>
                   </Show>
-                  <FxColorPaletteLibraryPanel {...props.editor.palette} />
+                  <Show when={props.editor.effectType === "ColorMapping"}>
+                    <p class="sceneFxChannelNote">Colour output drives each fixture's whole colour. Set Output mode to Feature below to choose channels.</p>
+                  </Show>
+                  <Show when={props.editor.effectType === "Move"}>
+                    <p class="sceneFxChannelNote">Pan and Tilt of fixtures with paired Pan/Tilt.</p>
+                  </Show>
+                  <Show when={props.editor.effectType === "Chaser"}>
+                    <p class="sceneFxChannelNote">Choose the chaser's channels under Features in the chaser settings below.</p>
+                  </Show>
                   <Show
                     when={["Lfo", "PositionWave"].includes(props.editor.effectType) && !props.editor.target.readOnly}
                   >
@@ -495,6 +522,10 @@ export function SceneSettingsPane(props: SceneSettingsPaneProps) {
                   </Show>
                   <Show when={["Value", "Curve", "Mapping"].includes(props.editor.effectType)}>
                     <EffectFeatureEditorPanel {...props.editor.features} />
+                  </Show>
+                  </section>
+                  <Show when={props.editor.effectType === "Lfo" && props.editor.daslightCustomCurve.source}>
+                    <DaslightCustomCurvePanel {...props.editor.daslightCustomCurve} />
                   </Show>
                   <Show when={props.editor.effectType === "Color"}>
                     <ColorEffectEditorPanel {...props.editor.color} />
@@ -517,6 +548,7 @@ export function SceneSettingsPane(props: SceneSettingsPaneProps) {
                   <Show when={props.editor.effectType === "ColorMapping"}>
                     <ColorMappingEffectEditorPanel {...props.editor.colorMapping} />
                   </Show>
+                  <FxColorPaletteLibraryPanel {...props.editor.palette} />
                   <EffectActionControlsPanel {...props.editor.action} />
                 </section>
               </Show>

@@ -35,7 +35,7 @@ export function SceneEffectTargetEditor(props: SceneEffectTargetEditorProps) {
 
   return (
     <fieldset class="sceneEffectTargetEditor" data-scene-effect-target-mode={props.mode}>
-      <legend>Beams / fixtures</legend>
+      <legend class="sceneFxStepTitle" data-fx-step="1">Target fixtures</legend>
       <Show when={props.readOnly}>
         <p class="sceneEffectTargetNotice">Explicit beam targets are preserved without retargeting.</p>
         <div class="sceneEffectTargetSummary">
@@ -45,8 +45,8 @@ export function SceneEffectTargetEditor(props: SceneEffectTargetEditorProps) {
       </Show>
       <Show when={!props.readOnly}>
         <div class="sceneEffectTargetModes" role="group" aria-label="FX target scope">
-          <button type="button" classList={{ active: props.mode === "fixture" }} aria-pressed={props.mode === "fixture"} onClick={() => props.onMode("fixture")}>Fixture</button>
-          <button type="button" classList={{ active: props.mode === "selection" }} aria-pressed={props.mode === "selection"} onClick={() => props.onMode("selection")}>Selection</button>
+          <button type="button" classList={{ active: props.mode === "fixture" }} aria-pressed={props.mode === "fixture"} title="Target exactly one fixture" onClick={() => props.onMode("fixture")}>One fixture</button>
+          <button type="button" classList={{ active: props.mode === "selection" }} aria-pressed={props.mode === "selection"} title="Tap fixtures below to target several" onClick={() => props.onMode("selection")}>Several fixtures</button>
           <button type="button" classList={{ active: props.mode === "group" }} aria-pressed={props.mode === "group"} onClick={() => props.onMode("group")}>Groups</button>
         </div>
         <div class="sceneEffectTargetSummary">

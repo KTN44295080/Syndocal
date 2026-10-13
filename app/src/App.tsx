@@ -7742,30 +7742,37 @@ export default function App() {
     }
   };
   const effectTargetSummary = createMemo(() => {
+    // The summary carries user fixture/group labels, so it opts out of DOM
+    // localization; translate only its fixed fragments here.
+    const t = (source: string) => translateUiText(source, uiLocale());
     const fixtureCount = effectTargetFixtures().length;
     const attributeCount = effectType() === "Chaser" ? chaserAttributeOptions().length : effectTargetControls().length;
     const wholeFixtureColor = effectType() === "Color" || effectType() === "ColorMapping";
     const moveEffect = effectType() === "Move";
     const moveCompatibleCount = moveCompatibleTargetFixtures().length;
-    const moveCompatibility = `${moveCompatibleCount}/${fixtureCount} paired Pan/Tilt`;
+    const moveCompatibility = t(`${moveCompatibleCount}/${fixtureCount} paired Pan/Tilt`);
+    const mappedFixtures = t(`${fixtureCount} mapped fixture${fixtureCount === 1 ? "" : "s"}`);
+    const groupFixtures = t(`${fixtureCount} fixture${fixtureCount === 1 ? "" : "s"}`);
+    const commonAttributes = t(`${attributeCount} common attribute${attributeCount === 1 ? "" : "s"}`);
+    const wholeColour = t("whole-fixture colour");
     switch (effectTargetMode()) {
       case "selection":
         if (moveEffect) {
-          return `${fixtureCount} mapped fixture${fixtureCount === 1 ? "" : "s"} / ${moveCompatibility}`;
+          return `${mappedFixtures} / ${moveCompatibility}`;
         }
         if (wholeFixtureColor) {
-          return `${fixtureCount} mapped fixture${fixtureCount === 1 ? "" : "s"} / whole-fixture colour`;
+          return `${mappedFixtures} / ${wholeColour}`;
         }
-        return `${fixtureCount} mapped fixture${fixtureCount === 1 ? "" : "s"} / ${attributeCount} common attribute${attributeCount === 1 ? "" : "s"}`;
+        return `${mappedFixtures} / ${commonAttributes}`;
       case "group": {
         const groups = parseGroupIds(effectTargetGroups());
         return groups.length > 0
           ? moveEffect
             ? `${groups.join(", ")} / ${moveCompatibility}`
             : wholeFixtureColor
-            ? `${groups.join(", ")} / ${fixtureCount} fixture${fixtureCount === 1 ? "" : "s"} / whole-fixture colour`
-            : `${groups.join(", ")} / ${fixtureCount} fixture${fixtureCount === 1 ? "" : "s"} / ${attributeCount} common attribute${attributeCount === 1 ? "" : "s"}`
-          : "No group target";
+            ? `${groups.join(", ")} / ${groupFixtures} / ${wholeColour}`
+            : `${groups.join(", ")} / ${groupFixtures} / ${commonAttributes}`
+          : t("No group target");
       }
       case "video":
         return selectedEffectVideoLayerId() === null
@@ -7774,8 +7781,8 @@ export default function App() {
       case "fixture":
       default:
         return selectedFixture()
-          ? `${selectedFixture()!.label}${wholeFixtureColor ? " / whole-fixture colour" : moveEffect ? ` / ${moveCompatibility}` : ""}`
-          : "No fixture selected";
+          ? `${selectedFixture()!.label}${wholeFixtureColor ? ` / ${wholeColour}` : moveEffect ? ` / ${moveCompatibility}` : ""}`
+          : t("No fixture selected");
     }
   });
   const effectDraftSummary = createMemo(() => {

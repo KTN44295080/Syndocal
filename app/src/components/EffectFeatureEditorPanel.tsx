@@ -69,10 +69,10 @@ export function EffectFeatureEditorPanel(props: EffectFeatureEditorPanelProps) {
                     {(attribute) => <option value={attribute} data-no-localize>{attribute}</option>}
                   </For>
                 </select>
-                <small class="effectFeatureCoverage tabularNums" data-no-localize>{coverage(feature)}</small>
+                <small class="effectFeatureCoverage tabularNums">{coverage(feature)}</small>
               </label>
               <label>
-                <span>Low</span>
+                <span>Min</span>
                 <input
                   class="tabularNums"
                   type="number"
@@ -83,7 +83,7 @@ export function EffectFeatureEditorPanel(props: EffectFeatureEditorPanelProps) {
                 />
               </label>
               <label>
-                <span>High</span>
+                <span>Max</span>
                 <input
                   class="tabularNums"
                   type="number"

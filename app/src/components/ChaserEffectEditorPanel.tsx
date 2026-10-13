@@ -473,11 +473,11 @@ export function ChaserEffectEditorPanel(props: ChaserEffectEditorPanelProps) {
                   <small class="chaserFeatureCoverage tabularNums" data-no-localize>{featureCoverage(feature)}</small>
                 </label>
                 <label>
-                  <span>Low</span>
+                  <span>Min</span>
                   <input class="tabularNums" type="number" min="0" max="65535" value={feature.low} onChange={(event) => updateFeature(index(), { low: Number(event.currentTarget.value) })} />
                 </label>
                 <label>
-                  <span>High</span>
+                  <span>Max</span>
                   <input class="tabularNums" type="number" min="0" max="65535" value={feature.high} onChange={(event) => updateFeature(index(), { high: Number(event.currentTarget.value) })} />
                 </label>
                 <button type="button" aria-label={`Move Chaser feature ${index() + 1} up`} title="Move feature up" disabled={index() === 0} onClick={() => moveFeature(index(), -1)}>↑</button>
