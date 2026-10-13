@@ -251,6 +251,9 @@ mod tests {
                 .as_nanos()
         ));
         fs::create_dir(&directory).unwrap();
+        // macOS exposes its temporary directory through the system /var alias.
+        // Exercise installer path policy with the actual owned directory.
+        let directory = fs::canonicalize(directory).unwrap();
         let installed = directory.join("installed.ini");
         fs::write(
             directory.join("extensions.ini"),
