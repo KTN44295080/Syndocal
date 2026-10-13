@@ -39,6 +39,7 @@ const emptyStatus: ShowClockIpcStatus = {
   last_action_sequence: 0,
   last_action_id: null,
   last_action_status: null,
+  dropped_datagrams: 0,
   last_error: null,
 };
 
@@ -324,6 +325,7 @@ export function ShowClockStatusPanel(props: ShowClockStatusPanelProps) {
       <dl class="standbyStatusGrid showClockStatusGrid tabularNums">
         <div><dt>Role</dt><dd>{status().role ?? role()}</dd></div>
         <div><dt>Samples</dt><dd>{status().accepted_samples}</dd></div>
+        <div><dt>Dropped</dt><dd>{status().dropped_datagrams}</dd></div>
         <div><dt>Offset</dt><dd>{status().offset_us} µs</dd></div>
         <div><dt>Age</dt><dd>{formatAge(status().sample_age_us)}</dd></div>
         <div><dt>Generation</dt><dd>{status().clock_generation} / {status().fencing_generation}</dd></div>

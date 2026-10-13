@@ -115,6 +115,13 @@ pub struct ShowClockIpcStatus {
     pub last_action_sequence: u64,
     pub last_action_id: Option<String>,
     pub last_action_status: Option<String>,
+    /// Oversized or undecodable datagrams the standby dropped: those from the
+    /// paired address, plus on Windows any datagram too large to receive,
+    /// whose sender the OS does not report.  Such noise never stops the
+    /// worker; a rising count with no accepted samples points at a
+    /// misconfigured or hostile sender.  Well-formed envelopes that fail
+    /// authentication or sequencing still fault the worker.
+    pub dropped_datagrams: u64,
     pub last_error: Option<String>,
 }
 
@@ -142,6 +149,7 @@ impl Default for ShowClockIpcStatus {
             last_action_sequence: 0,
             last_action_id: None,
             last_action_status: None,
+            dropped_datagrams: 0,
             last_error: None,
         }
     }
@@ -359,6 +367,7 @@ impl ShowClockIpcState {
                 last_action_sequence: 0,
                 last_action_id: None,
                 last_action_status: None,
+                dropped_datagrams: 0,
                 last_error: None,
             };
         }
@@ -1004,9 +1013,21 @@ fn run_standby(
     runtime: &mut ShowClockWorkerRuntime,
 ) -> Result<(), String> {
     let origin = Instant::now();
+    let mut published_dropped_datagrams = 0_u64;
     while !stop.load(Ordering::Acquire) {
         drain_commands(config, transport, status, commands, runtime, origin)?;
-        let received = match transport.receive(RECEIVE_POLL_INTERVAL) {
+        let received = transport.receive(RECEIVE_POLL_INTERVAL);
+        // Undecodable datagrams are dropped inside the transport; publish the
+        // diagnostic only when it changes to keep the status lock off the
+        // steady-state receive path.
+        let dropped_datagrams = transport.dropped_datagrams();
+        if dropped_datagrams != published_dropped_datagrams {
+            published_dropped_datagrams = dropped_datagrams;
+            update_status(status, |current| {
+                current.dropped_datagrams = dropped_datagrams;
+            });
+        }
+        let received = match received {
             Ok(message) => message,
             Err(ShowClockLanError::Timeout) => {
                 let estimate = runtime
@@ -1531,6 +1552,187 @@ mod tests {
         fresh_request.session_id = "process-loopback-session-2".to_string();
         primary.start(fresh_request).unwrap();
         primary.stop().unwrap();
+    }
+
+    #[test]
+    fn malformed_noise_datagrams_do_not_stop_the_standby_worker() {
+        // Only malformed/noise datagrams are tolerated.  The sending socket
+        // owns the configured peer address, as a forged UDP source would
+        // appear on the wire.
+        let spoof = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let primary_address = spoof.local_addr().unwrap();
+        let standby_probe = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let standby_address = standby_probe.local_addr().unwrap();
+        drop(standby_probe);
+        let mut standby_request = request(
+            ShowClockIpcRole::Standby,
+            standby_address.to_string(),
+            primary_address.to_string(),
+            "node-standby",
+            "node-primary",
+        );
+        standby_request.session_id = "malformed-datagram-session".to_string();
+        let standby = ShowClockIpcState::default();
+        standby.start(standby_request).unwrap();
+
+        let hostile: [&[u8]; 4] = [b"{}", b"noise", &[0xff; 32], &[b' '; 9_000]];
+        for datagram in hostile {
+            spoof.send_to(datagram, standby_address).unwrap();
+        }
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while standby.status().unwrap().dropped_datagrams < hostile.len() as u64 {
+            assert!(
+                Instant::now() < deadline,
+                "standby did not observe the malformed datagrams"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+        let status = standby.status().unwrap();
+        assert!(status.running);
+        assert_ne!(status.state, ShowClockIpcPhase::Fault);
+        assert_eq!(status.last_error, None);
+        assert!(!status.output_armed);
+
+        // The same worker still locks once the genuine primary owns the
+        // paired address, so the drops did not end the receive loop.
+        drop(spoof);
+        let mut primary_request = request(
+            ShowClockIpcRole::Primary,
+            primary_address.to_string(),
+            standby_address.to_string(),
+            "node-primary",
+            "node-standby",
+        );
+        primary_request.session_id = "malformed-datagram-session".to_string();
+        let primary = ShowClockIpcState::default();
+        primary.start(primary_request).unwrap();
+        for _ in 0..30 {
+            if standby.status().unwrap().state == ShowClockIpcPhase::Locked {
+                break;
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+        let status = standby.status().unwrap();
+        assert_eq!(status.state, ShowClockIpcPhase::Locked);
+        assert_eq!(status.dropped_datagrams, hostile.len() as u64);
+        primary.stop().unwrap();
+        standby.stop().unwrap();
+    }
+
+    fn signed_peer_sample(
+        session: &str,
+        sequence: u64,
+        key: &[u8; 32],
+    ) -> AuthenticatedShowClockSample {
+        AuthenticatedShowClockSample::sign(
+            ShowClockSample {
+                schema_version: SHOW_CLOCK_SCHEMA_VERSION,
+                protocol_version: SHOW_CLOCK_PROTOCOL_VERSION,
+                session_id: ShowClockSessionId::new(session).unwrap(),
+                sender: ShowClockNodeId::new("node-primary").unwrap(),
+                clock_generation: 1,
+                fencing_generation: 1,
+                sequence,
+                sender_monotonic_us: 1_000_000 + (sequence - 1) * 250_000,
+                show_time_us: 1_000_000 + (sequence - 1) * 250_000,
+                bpm_milli: 120_000,
+                beat_phase_ppm: 0,
+                transport: ShowTransportState::Playing,
+                source: ShowClockSource::ShowClock,
+                project_hash: ShowClockHash([0x11; 32]),
+                media_hash: ShowClockHash([0x22; 32]),
+                expires_after_us: SAMPLE_EXPIRY_US,
+                nonce: ShowClockNonce([sequence as u8; 16]),
+            },
+            key,
+        )
+        .unwrap()
+    }
+
+    /// Runs a standby for `standby_session`, sends `samples` as well-formed
+    /// LAN envelopes from its paired address and returns the status once the
+    /// worker has faulted.
+    fn standby_fault_after(
+        standby_session: &str,
+        samples: &[AuthenticatedShowClockSample],
+    ) -> ShowClockIpcStatus {
+        let primary_probe = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let standby_probe = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let primary_address = primary_probe.local_addr().unwrap();
+        let standby_address = standby_probe.local_addr().unwrap();
+        drop(primary_probe);
+        drop(standby_probe);
+        let mut standby_request = request(
+            ShowClockIpcRole::Standby,
+            standby_address.to_string(),
+            primary_address.to_string(),
+            "node-standby",
+            "node-primary",
+        );
+        standby_request.session_id = standby_session.to_string();
+        let standby = ShowClockIpcState::default();
+        standby.start(standby_request).unwrap();
+        let sender = ShowClockLanTransport::bind(primary_address, standby_address).unwrap();
+        for sample in samples {
+            sender.send_sample(sample).unwrap();
+        }
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while standby.status().unwrap().state != ShowClockIpcPhase::Fault {
+            assert!(
+                Instant::now() < deadline,
+                "standby kept running: {:?}",
+                standby.status().unwrap()
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+        let status = standby.status().unwrap();
+        assert!(!status.running);
+        assert!(!status.output_armed);
+        assert_eq!(status.fence_state, ShowClockIpcFenceState::Disarmed);
+        assert_eq!(
+            status.dropped_datagrams, 0,
+            "well-formed envelopes are not noise"
+        );
+        standby.stop().unwrap();
+        status
+    }
+
+    #[test]
+    fn well_formed_unauthenticated_or_replayed_samples_still_fault_the_standby() {
+        let key = [0x42; 32];
+        let wrong_key = [0x24; 32];
+        let session = "fail-closed-mac-session";
+        let bad_mac = standby_fault_after(session, &[signed_peer_sample(session, 1, &wrong_key)]);
+        assert!(
+            bad_mac
+                .last_error
+                .as_deref()
+                .is_some_and(|error| error.contains("authentication tag is invalid")),
+            "{bad_mac:?}"
+        );
+
+        let session = "fail-closed-replay-session";
+        let replayed = signed_peer_sample(session, 1, &key);
+        let replay = standby_fault_after(session, &[replayed.clone(), replayed]);
+        assert!(
+            replay
+                .last_error
+                .as_deref()
+                .is_some_and(|error| error.contains("sequence was already accepted")),
+            "{replay:?}"
+        );
+
+        let mismatch = standby_fault_after(
+            "fail-closed-standby-session",
+            &[signed_peer_sample("fail-closed-other-session", 1, &key)],
+        );
+        assert!(
+            mismatch
+                .last_error
+                .as_deref()
+                .is_some_and(|error| error.contains("session does not match")),
+            "{mismatch:?}"
+        );
     }
 
     #[test]

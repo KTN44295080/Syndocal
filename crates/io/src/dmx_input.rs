@@ -193,24 +193,17 @@ impl DmxInput {
                 while !thread_stop.load(Ordering::Relaxed) {
                     match socket.recv_from(&mut buffer) {
                         Ok((received, source)) => {
-                            let parsed = match config.protocol {
-                                DmxInputProtocol::ArtNet => {
-                                    crate::artnet::parse_art_dmx_packet(&buffer[..received])
-                                        .map(|packet| (packet.universe, packet.data))
-                                }
-                                DmxInputProtocol::Sacn => {
-                                    crate::sacn::parse_sacn_dmx_packet(&buffer[..received])
-                                        .map(|packet| (packet.universe, packet.data))
-                                }
-                            };
-                            match parsed {
-                                None => {
+                            match classify_dmx_input_packet(config.protocol, &buffer[..received]) {
+                                DmxInputPacket::Invalid => {
                                     if let Ok(mut status) = thread_status.lock() {
                                         status.invalid_packets =
                                             status.invalid_packets.saturating_add(1);
                                     }
                                 }
-                                Some((universe, data)) if universe == config.universe => {
+                                DmxInputPacket::NotLevels => {}
+                                DmxInputPacket::Levels { universe, data }
+                                    if universe == config.universe =>
+                                {
                                     let mut values = Box::new([0u8; 512]);
                                     let length = data.len().min(values.len());
                                     values[..length].copy_from_slice(&data[..length]);
@@ -237,7 +230,7 @@ impl DmxInput {
                                         merge_mode: config.merge_mode,
                                     });
                                 }
-                                Some(_) => {}
+                                DmxInputPacket::Levels { .. } => {}
                             }
                         }
                         Err(error)
@@ -310,6 +303,39 @@ impl DmxInput {
     }
 }
 
+/// What one received datagram means to the DMX input.
+#[derive(Debug, PartialEq, Eq)]
+enum DmxInputPacket<'a> {
+    Levels {
+        universe: u16,
+        data: &'a [u8],
+    },
+    /// Well-formed sACN data whose alternate start code (for example 0xDD
+    /// per-address priority) carries no levels.  Sources send these on the
+    /// same universe as their levels, so they are not invalid traffic.
+    NotLevels,
+    Invalid,
+}
+
+fn classify_dmx_input_packet(protocol: DmxInputProtocol, packet: &[u8]) -> DmxInputPacket<'_> {
+    let levels =
+        match protocol {
+            DmxInputProtocol::ArtNet => crate::artnet::parse_art_dmx_packet(packet)
+                .map(|packet| (packet.universe, packet.data)),
+            DmxInputProtocol::Sacn => crate::sacn::parse_sacn_dmx_packet(packet)
+                .map(|packet| (packet.universe, packet.data)),
+        };
+    match levels {
+        Some((universe, data)) => DmxInputPacket::Levels { universe, data },
+        None if protocol == DmxInputProtocol::Sacn
+            && crate::sacn::sacn_alternate_start_code(packet).is_some() =>
+        {
+            DmxInputPacket::NotLevels
+        }
+        None => DmxInputPacket::Invalid,
+    }
+}
+
 fn update_dmx_learning(learn: &Arc<Mutex<DmxLearnState>>, universe: u16, values: &[u8; 512]) {
     let Ok(mut learn) = learn.lock() else {
         return;
@@ -378,6 +404,34 @@ mod tests {
             low: 0.0,
             high: 65_535.0,
         }
+    }
+
+    #[test]
+    fn sacn_alternate_start_codes_are_ignored_rather_than_invalid() {
+        let mut frame = [0u8; 512];
+        frame[0] = 200;
+        let levels = crate::sacn::build_sacn_dmx_packet(3, 1, &[0x5a; 16], "Corpus", &frame);
+        assert_eq!(
+            classify_dmx_input_packet(DmxInputProtocol::Sacn, &levels),
+            DmxInputPacket::Levels {
+                universe: 3,
+                data: &frame
+            }
+        );
+        let mut priority = levels;
+        priority[125] = 0xdd;
+        assert_eq!(
+            classify_dmx_input_packet(DmxInputProtocol::Sacn, &priority),
+            DmxInputPacket::NotLevels
+        );
+        assert_eq!(
+            classify_dmx_input_packet(DmxInputProtocol::ArtNet, &priority),
+            DmxInputPacket::Invalid
+        );
+        assert_eq!(
+            classify_dmx_input_packet(DmxInputProtocol::Sacn, &priority[..200]),
+            DmxInputPacket::Invalid
+        );
     }
 
     #[test]
