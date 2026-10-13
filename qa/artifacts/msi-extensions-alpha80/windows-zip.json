@@ -1,0 +1,76 @@
+{
+  "passed": true,
+  "sourceCommit": "717fada93425ee2f6f3972bb3eda960864c8ee8c",
+  "path": "C:/Users/janua/Downloads/Syndocal-1.2.0-alpha.80/Syndocal_1.2.0-alpha.80_Windows-x64-install.zip",
+  "byteSize": 223474024,
+  "sha256": "7f2cea1209c67a255f9abc2cccd21065e451db64ca16aca363624f9bab51650a",
+  "entries": [
+    {
+      "path": "Install-Windows.cmd",
+      "bytes": 465,
+      "sha256": "6a4e966adaec533f077892b2dcf5f1749c19d8b13ac447e5df0cb434203a254b"
+    },
+    {
+      "path": "Install-Windows.ps1",
+      "bytes": 3118,
+      "sha256": "e22aff97cdbf422fca534f25675427dcf8c49ca0582a98fafc08b8ecd3da1e0c"
+    },
+    {
+      "path": "README.txt",
+      "bytes": 1861,
+      "sha256": "5c0945ad3426e81f60311779675762bce8e3ba2cac8e0f5e53f0973000d74b78"
+    },
+    {
+      "path": "Remove-SyndocalData.ps1",
+      "bytes": 5766,
+      "sha256": "7e0b2b595ff0eba0f06b2df26a686fa7220b9ca7014f6a644f502f2832385f57"
+    },
+    {
+      "path": "SyndocalInstallations.ps1",
+      "bytes": 2257,
+      "sha256": "07938c07f2ab194099adb16fc94ca00437bcf653fcc4de66b9246409624e3c19"
+    },
+    {
+      "path": "Syndocal_1.2.0-alpha.80_x64-setup.exe",
+      "bytes": 82441263,
+      "sha256": "fed647be9d3166a1813d0152c74122991453769365864b7d13dd122b411ab2f0"
+    },
+    {
+      "path": "Syndocal_1.2.0-alpha.80_x64-setup.exe.sha256",
+      "bytes": 104,
+      "sha256": "c70ddb729c649e423bee52e00666ffe88d3362063a42e20822693d2113da6f59"
+    },
+    {
+      "path": "Syndocal_1.2.0-alpha.80_x64_ja-JP.msi",
+      "bytes": 123482112,
+      "sha256": "ac5d6c1404f979a74db1c1641987f47823f9d67967edd49411a3bea20aa88db0"
+    },
+    {
+      "path": "Syndocal_1.2.0-alpha.80_x64_ja-JP.msi.sha256",
+      "bytes": 104,
+      "sha256": "f50161172d60001a4cfc8d6ae3443eca62b7d2a2e749255cb8dd93f8e0efdce0"
+    },
+    {
+      "path": "Uninstall-Windows.cmd",
+      "bytes": 479,
+      "sha256": "9c2d7fc73fae34227c0d26a11a2feb720267b2f3b31625efdd741654d833abf2"
+    },
+    {
+      "path": "Uninstall-Windows.ps1",
+      "bytes": 1073,
+      "sha256": "762b7d3048fd3b332d79c94588a5e67a371095b1ca3a32f551723e7935d23fad"
+    },
+    {
+      "path": "VC_redist.x64.exe",
+      "bytes": 18731856,
+      "sha256": "843068991daaa1f73ad9f6239bce4d0f6a07a51f18c37ea2a867e9beca71295c"
+    },
+    {
+      "path": "使い方.txt",
+      "bytes": 2589,
+      "sha256": "50a6e5e21856f8583ebe55996fa5dbdbac6820e854373a20e54b76d8319acf9f"
+    }
+  ],
+  "installerExecuted": false,
+  "hostedInstallerAcceptance": "pending"
+}

@@ -1,0 +1,80 @@
+{
+  "passed": true,
+  "sourceCommit": "d26808637455c0c8a1dc6d424958ce2059595bb2",
+  "zipPath": "C:\\Users\\janua\\Downloads\\Syndocal-1.2.0-alpha.79\\Syndocal_1.2.0-alpha.79_Windows-x64-install.zip",
+  "byteSize": 223617077,
+  "sha256": "edf4aa63b35f49ce10be8099716cfcfd981e3a667727d9d771c39be69718dc8c",
+  "entries": [
+    {
+      "name": "Install-Windows.cmd",
+      "byteSize": 465,
+      "sha256": "6a4e966adaec533f077892b2dcf5f1749c19d8b13ac447e5df0cb434203a254b"
+    },
+    {
+      "name": "Install-Windows.ps1",
+      "byteSize": 3537,
+      "sha256": "6bb83bdd52ffbc8e70bfe3d5b0fdf34e0427779d73a8f7c5198c298e5e322889"
+    },
+    {
+      "name": "README.txt",
+      "byteSize": 6607,
+      "sha256": "4d63cfe52822b34b1069c31decd54dd0ee8dd8a2e3927be10fcfbe30ba6473b0"
+    },
+    {
+      "name": "Remove-SyndocalData.ps1",
+      "byteSize": 5766,
+      "sha256": "7e0b2b595ff0eba0f06b2df26a686fa7220b9ca7014f6a644f502f2832385f57"
+    },
+    {
+      "name": "Select-SyndocalExtensions.ps1",
+      "byteSize": 4061,
+      "sha256": "6b79720014dd1c62ba41dbecca876fc26426c0a53cc65a68a87fa49f643dbb9d"
+    },
+    {
+      "name": "Syndocal_1.2.0-alpha.79_x64_ja-JP.msi",
+      "byteSize": 123285504,
+      "sha256": "cdfb148e8d31a60159ceaa309ec86cf9a92b502488ba518a74e52b909f3f0e4f"
+    },
+    {
+      "name": "Syndocal_1.2.0-alpha.79_x64_ja-JP.msi.sha256",
+      "byteSize": 104,
+      "sha256": "0139834d5a37bb067215372227941f1a24ec78b2173ffc4fd48f7d4ae7b11b60"
+    },
+    {
+      "name": "Syndocal_1.2.0-alpha.79_x64-setup.exe",
+      "byteSize": 82492529,
+      "sha256": "99b708592e8d6a86e6ea1991454033a54b662ee4ce4909fbc8e16c6bf2d77535"
+    },
+    {
+      "name": "Syndocal_1.2.0-alpha.79_x64-setup.exe.sha256",
+      "byteSize": 104,
+      "sha256": "81dfe3f24454dfd4fe6b776bc4f30c7f061eddbca25f5564bc9e284789348a46"
+    },
+    {
+      "name": "SyndocalInstallations.ps1",
+      "byteSize": 2257,
+      "sha256": "07938c07f2ab194099adb16fc94ca00437bcf653fcc4de66b9246409624e3c19"
+    },
+    {
+      "name": "Uninstall-Windows.cmd",
+      "byteSize": 479,
+      "sha256": "9c2d7fc73fae34227c0d26a11a2feb720267b2f3b31625efdd741654d833abf2"
+    },
+    {
+      "name": "Uninstall-Windows.ps1",
+      "byteSize": 1073,
+      "sha256": "762b7d3048fd3b332d79c94588a5e67a371095b1ca3a32f551723e7935d23fad"
+    },
+    {
+      "name": "VC_redist.x64.exe",
+      "byteSize": 18731856,
+      "sha256": "843068991daaa1f73ad9f6239bce4d0f6a07a51f18c37ea2a867e9beca71295c"
+    },
+    {
+      "name": "使い方.txt",
+      "byteSize": 7682,
+      "sha256": "f13445fc9fa54dd4cc065289ecf95210b129ed7ce7d4c83ba490b4b7ac0a1a52"
+    }
+  ],
+  "installerWasRun": false
+}
