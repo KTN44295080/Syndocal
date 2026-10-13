@@ -126,6 +126,11 @@ same-name fail-closed/reselection, capabilities, exact Start request, non-zero
 30 Hz meters, live telemetry, Stop and safety-clear pending. It requires one
 64 px rail, three visible meters, four live telemetry badges and a fully visible
 Clip Grid pad inside the actual Clip Grid scrollport, with no critical overflow.
+For ASIO it checks both Refresh paths after the rail settles. An unsaved driver
+choice is never remapped by name; it stays invalid and Start stays locked until
+the operator reselects. A saved driver/rate/buffer selection revalidates only by
+its exact stored backend/name/label identity, with a capability probe on the new
+ID before Start re-arms.
 
 Native Windows acceptance used a maximized current-source Tauri executable and
 the system default WASAPI shared input. Start at 48 kHz mono reported callback

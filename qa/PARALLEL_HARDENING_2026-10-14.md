@@ -148,6 +148,42 @@ name and was replaced). Evidence: [artifacts/ui-stage2-alpha82](artifacts/ui-sta
 No product installer was executed. Unsigned development distribution only.
 
 Pre-existing viewport failures seen on unchanged parents and tracked
-separately: `--live-audio-only` `asioGenerationNeverNameRemaps`, and
-`--scene-settings-only` `settingsUseInternalScrollWithoutHorizontalEscape`
-(bottom sentinel not visible at End).
+separately: `--live-audio-only` `asioGenerationNeverNameRemaps` (resolved
+below), and `--scene-settings-only`
+`settingsUseInternalScrollWithoutHorizontalEscape` (bottom sentinel not
+visible at End).
+
+## `--live-audio-only` ASIO generation check
+
+`asioGenerationNeverNameRemaps` was a stale, timing-dependent check, not a
+product regression. The live-audio refresh and selection code, the rail and
+the selection storage are unchanged since `a65e3ccb` (2026-08-27).
+
+- The check dates from `a255a51b`, before saved selections existed. Since
+  `aed77a26`, completing driver, rate and buffer saves the ASIO choice by its
+  stable backend/name/label identity, never the generation-scoped ID. Refresh
+  then takes the saved path: that identity must match exactly once and pass a
+  capability probe on the new ID before Start re-arms. This is the restore
+  contract that `--live-audio-restore-only` already asserts. FC-09 forbids it
+  only after a catalogue failure.
+- The old check read the rail 45 ms after the generation bump, while that
+  probe was still in flight, so it saw the previous ID. It passed when the
+  read was early and failed when it landed after the probe (1366x768 EN).
+- The check now waits for Refresh to finish. `asioGenerationNeverNameRemaps`
+  covers the unsaved path it was written for: with only a driver chosen,
+  Refresh keeps g1 invalid and Start locked, issues no capability probe and
+  writes no storage. The new `asioSavedSelectionRevalidatesExactIdentity`
+  covers the saved path:
+  - Start stays locked during the swap.
+  - The stored bytes are unchanged and contain no generation ID.
+  - Exactly one probe runs, for g3 at 48 kHz.
+  - The saved state ends `ready`/`REVALIDATED` with Start enabled.
+
+Evidence:
+- `--live-audio-only` passed 10/10 (five viewports, EN/JA).
+- `--live-audio-restore-only` and `check-live-audio-input.mjs` passed.
+- A temporary App.tsx mutation that let the unsaved ASIO path remap by name
+  failed only `asioGenerationNeverNameRemaps`.
+- An independent review approved with no P0–P2 findings.
+
+Browser evidence only; no native or physical ASIO claim.

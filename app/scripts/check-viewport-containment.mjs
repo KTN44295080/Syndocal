@@ -13902,6 +13902,37 @@ async function runLiveAudioAcceptance(client, locale, label) {
   );
   await sleep(30);
   const asioDriverOnly = await readLiveAudioRailState(client);
+  // A driver alone is not a complete ASIO request, so nothing is persisted and
+  // Refresh takes the unsaved path: the new catalogue generation must never be
+  // name-remapped onto the prior driver choice. Wait for the whole Refresh to
+  // settle (the rail Refresh control re-enables only after it finishes).
+  const asioUnsavedStoredRaw = await client.evaluate(
+    `window.localStorage.getItem(${JSON.stringify(liveAudioInputSelectionStorageKey)})`,
+  );
+  const asioUnsavedRefreshCallStart = await client.evaluate(
+    "window.__syndocalLiveAudioMock?.calls.length ?? -1",
+  );
+  const asioUnsavedRefreshClicked = await clickLiveAudioControl(client, "refresh");
+  await waitForClientCondition(
+    client,
+    "window.__syndocalLiveAudioMock?.asioGeneration === 2 && document.querySelector('.liveAudioInputBar [data-live-audio-action=\"refresh\"]')?.disabled === false",
+    "Unsaved ASIO generation refresh settlement",
+  );
+  await sleep(45);
+  const asioUnsavedAfterRefresh = await readLiveAudioRailState(client);
+  const asioUnsavedRefreshCallEnd = await client.evaluate(
+    "window.__syndocalLiveAudioMock?.calls.length ?? -1",
+  );
+  const asioUnsavedStoredRawAfterRefresh = await client.evaluate(
+    `window.localStorage.getItem(${JSON.stringify(liveAudioInputSelectionStorageKey)})`,
+  );
+  const asioDriverReselected = await setLiveAudioSelect(client, "device", "viewport-asio-studio-g2");
+  await waitForClientCondition(
+    client,
+    "(() => { const calls = window.__syndocalLiveAudioMock?.calls ?? []; const latest = calls.filter((call) => call.command === 'get_live_audio_input_capabilities').at(-1); const rate = document.querySelector('[data-live-audio-control=\"rate\"]'); return latest?.args?.request?.backend === 'asio' && latest?.args?.request?.deviceId === 'viewport-asio-studio-g2' && Boolean(rate && !rate.disabled); })()",
+    "Explicit ASIO driver reselection capability resolution",
+  );
+  await sleep(30);
   const asioRateSelected = await setLiveAudioSelect(client, "rate", "48000");
   await waitForClientCondition(
     client,
@@ -13913,14 +13944,34 @@ async function runLiveAudioAcceptance(client, locale, label) {
   const asioBufferSelected = await setLiveAudioSelect(client, "buffer", "128");
   await sleep(30);
   const asioReady = await readLiveAudioRailState(client);
-  const asioRefreshClicked = await clickLiveAudioControl(client, "refresh");
+  // A complete ASIO request is persisted by its stable backend/name/label
+  // identity, never by the generation-scoped id. Refresh revalidates exactly
+  // that identity and probes the new generation's capabilities before Start can
+  // re-arm. The probe runs after the new catalogue is published, so only the
+  // settled rail is evidence; a mid-probe sample still shows the prior id.
+  const asioStoredBeforeSavedRefresh = await client.evaluate(
+    `window.localStorage.getItem(${JSON.stringify(liveAudioInputSelectionStorageKey)})`,
+  );
+  const asioSavedRefreshCallStart = await client.evaluate(
+    "window.__syndocalLiveAudioMock?.calls.length ?? -1",
+  );
+  const asioSavedRefreshClicked = await clickLiveAudioControl(client, "refresh");
+  // Refresh marks the rail busy before its first await, so Start is locked for
+  // the whole catalogue swap, including the revalidation probe.
+  const asioSavedRefreshBusy = await readLiveAudioRailState(client);
   await waitForClientCondition(
     client,
-    "window.__syndocalLiveAudioMock?.asioGeneration === 2",
-    "ASIO generation refresh",
+    "window.__syndocalLiveAudioMock?.asioGeneration === 3 && document.querySelector('.liveAudioInputBar [data-live-audio-action=\"refresh\"]')?.disabled === false",
+    "Saved ASIO generation refresh settlement",
   );
   await sleep(45);
-  const asioAfterRefresh = await readLiveAudioRailState(client);
+  const asioAfterSavedRefresh = await readLiveAudioRailState(client);
+  const asioSavedRefreshCallEnd = await client.evaluate(
+    "window.__syndocalLiveAudioMock?.calls.length ?? -1",
+  );
+  const asioStoredAfterSavedRefresh = await client.evaluate(
+    `window.localStorage.getItem(${JSON.stringify(liveAudioInputSelectionStorageKey)})`,
+  );
 
   const wasapiBackendRestored = await setLiveAudioSelectWhenEnabled(
     client,
@@ -14020,6 +14071,23 @@ async function runLiveAudioAcceptance(client, locale, label) {
         meterTitles: ["Bass 42%", "Mid 58%", "High 76%"],
       };
   const request = startCall?.args?.request;
+  const capabilityCallsBetween = (start, end) =>
+    start >= 0 && end >= start
+      ? calls.slice(start, end).filter((call) => call.command === "get_live_audio_input_capabilities")
+      : null;
+  const asioUnsavedRefreshCapabilityCalls =
+    capabilityCallsBetween(asioUnsavedRefreshCallStart, asioUnsavedRefreshCallEnd);
+  const asioSavedRefreshCapabilityCalls =
+    capabilityCallsBetween(asioSavedRefreshCallStart, asioSavedRefreshCallEnd);
+  const parseStoredLiveAudioSelection = (raw) => {
+    try {
+      return typeof raw === "string" ? JSON.parse(raw) : null;
+    } catch {
+      return null;
+    }
+  };
+  const asioUnsavedStoredSelection = parseStoredLiveAudioSelection(asioUnsavedStoredRaw);
+  const asioSavedStoredSelection = parseStoredLiveAudioSelection(asioStoredBeforeSavedRefresh);
   const backendCatalogueCallIndexes = calls.flatMap((call, index) =>
     call.command === "live_audio_input_backends" ? [index] : [],
   );
@@ -14141,7 +14209,7 @@ async function runLiveAudioAcceptance(client, locale, label) {
       ).length === 4 &&
       calls.filter(
         (call) => call.command === "list_audio_input_devices" && call.args?.request?.backend === "asio",
-      ).length === 2 &&
+      ).length === 3 &&
       calls.filter((call) => call.command === "get_live_audio_input_capabilities").length >= 10 &&
       calls.filter((call) => call.command === "start_live_audio_input").length === 1 &&
       calls.filter((call) => call.command === "stop_live_audio_input").length === 1,
@@ -14173,12 +14241,45 @@ async function runLiveAudioAcceptance(client, locale, label) {
       asioReady?.backendState === "ready" &&
       asioReady?.actionDisabled === false,
     asioGenerationNeverNameRemaps:
-      asioRefreshClicked &&
-      asioAfterRefresh?.selectedDevice === "viewport-asio-studio-g1" &&
-      asioAfterRefresh?.deviceOptions?.includes("viewport-asio-studio-g1") &&
-      asioAfterRefresh?.deviceOptions?.includes("viewport-asio-studio-g2") &&
-      asioAfterRefresh?.deviceInvalid === "true" &&
-      asioAfterRefresh?.actionDisabled === true,
+      asioUnsavedStoredSelection?.backend === "wasapi_shared" &&
+      asioUnsavedStoredRawAfterRefresh === asioUnsavedStoredRaw &&
+      asioUnsavedRefreshClicked &&
+      asioUnsavedAfterRefresh?.backend === "asio" &&
+      asioUnsavedAfterRefresh?.refreshDisabled === false &&
+      asioUnsavedAfterRefresh?.selectedDevice === "viewport-asio-studio-g1" &&
+      asioUnsavedAfterRefresh?.deviceOptions?.includes("viewport-asio-studio-g1") &&
+      asioUnsavedAfterRefresh?.deviceOptions?.includes("viewport-asio-studio-g2") &&
+      asioUnsavedAfterRefresh?.deviceInvalid === "true" &&
+      asioUnsavedAfterRefresh?.actionDisabled === true &&
+      asioUnsavedRefreshCapabilityCalls?.length === 0,
+    asioSavedSelectionRevalidatesExactIdentity:
+      asioDriverReselected &&
+      asioReady?.selectedDevice === "viewport-asio-studio-g2" &&
+      asioSavedStoredSelection?.backend === "asio" &&
+      asioSavedStoredSelection?.device_identity?.backend === "ASIO" &&
+      asioSavedStoredSelection?.device_identity?.name === "Viewport ASIO Studio Driver" &&
+      asioSavedStoredSelection?.device_identity?.label === "Viewport ASIO Studio Driver · ASIO" &&
+      typeof asioStoredBeforeSavedRefresh === "string" &&
+      !asioStoredBeforeSavedRefresh.includes("viewport-asio-studio-g") &&
+      asioStoredAfterSavedRefresh === asioStoredBeforeSavedRefresh &&
+      asioSavedRefreshClicked &&
+      asioSavedRefreshBusy?.actionDisabled === true &&
+      asioSavedRefreshBusy?.refreshDisabled === true &&
+      asioAfterSavedRefresh?.refreshDisabled === false &&
+      asioAfterSavedRefresh?.backendState === "ready" &&
+      asioAfterSavedRefresh?.savedSelectionState === "ready" &&
+      asioAfterSavedRefresh?.savedSelectionReason === "REVALIDATED" &&
+      asioAfterSavedRefresh?.selectedDevice === "viewport-asio-studio-g3" &&
+      JSON.stringify(asioAfterSavedRefresh?.deviceOptions) ===
+        JSON.stringify(["", "viewport-asio-studio-g3"]) &&
+      asioAfterSavedRefresh?.deviceInvalid === "" &&
+      asioAfterSavedRefresh?.selectedSampleRate === "48000" &&
+      asioAfterSavedRefresh?.selectedBuffer === "128" &&
+      asioAfterSavedRefresh?.actionDisabled === false &&
+      asioSavedRefreshCapabilityCalls?.length === 1 &&
+      asioSavedRefreshCapabilityCalls[0]?.args?.request?.backend === "asio" &&
+      asioSavedRefreshCapabilityCalls[0]?.args?.request?.deviceId === "viewport-asio-studio-g3" &&
+      asioSavedRefreshCapabilityCalls[0]?.args?.request?.sampleRate === 48_000,
     wasapiRestoresWithoutLosingAutoContract:
       wasapiBackendRestored &&
       restoredDeviceSelected &&
@@ -14207,8 +14308,10 @@ async function runLiveAudioAcceptance(client, locale, label) {
     asioUnselected,
     asioDriverOnly,
     asioRateOnly,
+    asioUnsavedAfterRefresh,
     asioReady,
-    asioAfterRefresh,
+    asioSavedRefreshBusy,
+    asioAfterSavedRefresh,
     restoredWasapi,
     startBusy,
     live,
