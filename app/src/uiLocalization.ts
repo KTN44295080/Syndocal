@@ -43,6 +43,7 @@ const japaneseText: Record<string, string> = {
   "Track triggers and timeline synchronization with your DJ computer.": "DJ用PCからの曲トリガーとタイムライン同期。",
   "Enable DJ Link extension": "DJ Link拡張を有効にする",
   "Choose or change extensions in the Syndocal installer.": "拡張の選択・変更はSyndocalのインストーラーで行います。",
+  "DJ Link extension is not enabled. Choose or change extensions in the Syndocal installer.": "DJ Link拡張が有効になっていません。拡張の選択・変更はSyndocalのインストーラーで行います。",
   "Installed": "インストール済み",
   "Not installed": "未インストール",
   "Scene play / stop": "シーンの再生／停止",

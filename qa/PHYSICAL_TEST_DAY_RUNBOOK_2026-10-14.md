@@ -189,7 +189,7 @@ cargo test -p engine --release --locked -j 1 physical_serial_rainbow_demo_drives
 ```
 
 - `COM5` は当日のデバイスマネージャーの番号に合わせます。
-- 出力に `demo running … sends=` の行が出ていることを必ず確認します。このテストは、ポート指定が空だと何もせずに「成功」で終わります（`Skipping physical serial demo`）。
+- 出力に `demo running … sends=` の行が出ていることを必ず確認します。2026-10-14 より前のソースでは、ポート指定が空だと何もせずに「成功」で終わっていました（`Skipping physical serial demo`）。現在は失敗として止まります。
 - このテストが示すのは「COMポートが開き、送信回数が増え、失敗が0」ということだけです。波形、アプリの出力権限（リース／S0）の経路、RDM は対象外です。
 - 終了時に0フレームを送らないため、終わった後の灯体の状態を記録します。
 
