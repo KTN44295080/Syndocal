@@ -106,4 +106,48 @@ Windows native gate on main `32d09668`:
 - The exact executable ran as one process with one responsive `Syndocal`
   window, maximized (`showCmd=3`), and then closed gracefully.
 
-Win/Mac packages, physical MIDI/DMX output and Mac GUI remain unobserved.
+Physical MIDI/DMX output and Mac GUI remain unobserved.
+
+## UI stage 2 and the alpha.82 development installer
+
+Stage 2 on main: P3 (`2db5cced`) removed duplicated live actions; P9 split
+Active/Standby sync and ShowClock LAN into their own I/O Sync connection
+(`cc52b06f`) and moved the live audio input to I/O > Audio (`e3db3b30`).
+
+The development installer was built from `cc52b06f`, so it contains stage 1,
+P3 and the Sync split, but not the audio-input move or later work. The local
+FFmpeg 8.1.2 SDK is gone (WinGet now carries 9.0.1), so, as in the
+2026-09-09 repair, `FFMPEG_DIR` pointed at an ASCII-path temporary SDK: the
+n8.1 headers and import libraries plus the seven hash-verified pinned DLLs.
+
+- `tauri build --ci --bundles nsis,msi` passed in 2871 s; the only warning is
+  the existing Vite chunk advisory.
+- `syndocal.exe` 70,536,704 bytes, SHA-256
+  `0c8a93be0c56bc86b8691be053edc6b49f839b6a0be0ae25fe5e50717fcde811`.
+  It ran as one responsive `Syndocal` window, maximized (`showCmd=3`), and
+  closed gracefully.
+- NSIS extraction (7-Zip) and MSI administrative extraction passed the
+  two-root validator: matching executable, version `1.2.0-alpha.82`, seven
+  pinned FFmpeg DLLs, approved tree. Six NSIS-only plugin files were set
+  aside: NSISdl, StartMenu, System, modern-wizard.bmp, nsDialogs,
+  nsis_tauri_utils.
+- `tools/distribution/alpha82/check-setup-helper.mjs` passed eight mocked
+  lifecycle cases; `Install-Windows.ps1 -ValidateOnly` passed on the staged
+  folder and on a Windows re-extraction of the final ZIP.
+
+| Artifact | Bytes | SHA-256 |
+| --- | ---: | --- |
+| Windows-x64-install.zip | 223511590 | `093e9e9366624c51ade42a902d326c749f019517818c5fac99ea9396086b3abe` |
+| x64-setup.exe | 82488341 | `cf7b48ae7d1bfa8634d68dc8c187990487e2049ad50ac89d1059f969cf1170f1` |
+| x64_ja-JP.msi | 123523072 | `b3d98e99c27d197a347a16265154453f0dfaf60416e24936c1231b25f6e4e3ea` |
+
+All names start with `Syndocal_1.2.0-alpha.82_`. Delivery folder:
+`Downloads/Syndocal-1.2.0-alpha.82` in the user profile. ZIP entry names
+are UTF-8 flagged (a first .NET Framework ZIP mis-encoded the Japanese guide
+name and was replaced). Evidence: [artifacts/ui-stage2-alpha82](artifacts/ui-stage2-alpha82).
+No product installer was executed. Unsigned development distribution only.
+
+Pre-existing viewport failures seen on unchanged parents and tracked
+separately: `--live-audio-only` `asioGenerationNeverNameRemaps`, and
+`--scene-settings-only` `settingsUseInternalScrollWithoutHorizontalEscape`
+(bottom sentinel not visible at End).

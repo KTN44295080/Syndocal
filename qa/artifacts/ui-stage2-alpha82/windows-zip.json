@@ -1,0 +1,90 @@
+{
+  "passed": true,
+  "path": "C:/Users/janua/Downloads/Syndocal-1.2.0-alpha.82/Syndocal_1.2.0-alpha.82_Windows-x64-install.zip",
+  "byteSize": 223511590,
+  "sha256": "093e9e9366624c51ade42a902d326c749f019517818c5fac99ea9396086b3abe",
+  "entries": [
+    {
+      "path": "Install-Windows.cmd",
+      "bytes": 465,
+      "sha256": "6a4e966adaec533f077892b2dcf5f1749c19d8b13ac447e5df0cb434203a254b",
+      "utf8Name": true
+    },
+    {
+      "path": "Install-Windows.ps1",
+      "bytes": 3118,
+      "sha256": "c99153732ac5c20d497327ff02f640305cbbb3e251d3f7d550a999cb805c32ab",
+      "utf8Name": true
+    },
+    {
+      "path": "README.txt",
+      "bytes": 2411,
+      "sha256": "4613403d4f74ba93e202109ec7dead41ef5daca1e81766cb89bf468bfa55995f",
+      "utf8Name": true
+    },
+    {
+      "path": "Remove-SyndocalData.ps1",
+      "bytes": 5766,
+      "sha256": "7e0b2b595ff0eba0f06b2df26a686fa7220b9ca7014f6a644f502f2832385f57",
+      "utf8Name": true
+    },
+    {
+      "path": "SyndocalInstallations.ps1",
+      "bytes": 2257,
+      "sha256": "07938c07f2ab194099adb16fc94ca00437bcf653fcc4de66b9246409624e3c19",
+      "utf8Name": true
+    },
+    {
+      "path": "Syndocal_1.2.0-alpha.82_x64-setup.exe",
+      "bytes": 82488341,
+      "sha256": "cf7b48ae7d1bfa8634d68dc8c187990487e2049ad50ac89d1059f969cf1170f1",
+      "utf8Name": true
+    },
+    {
+      "path": "Syndocal_1.2.0-alpha.82_x64-setup.exe.sha256",
+      "bytes": 104,
+      "sha256": "3f10b5036246208412e6f78b9bbc4204e2f591ac444e1486bca0e2db358193a5",
+      "utf8Name": true
+    },
+    {
+      "path": "Syndocal_1.2.0-alpha.82_x64_ja-JP.msi",
+      "bytes": 123523072,
+      "sha256": "b3d98e99c27d197a347a16265154453f0dfaf60416e24936c1231b25f6e4e3ea",
+      "utf8Name": true
+    },
+    {
+      "path": "Syndocal_1.2.0-alpha.82_x64_ja-JP.msi.sha256",
+      "bytes": 104,
+      "sha256": "a7fea294a85641b6d00c87664b3a302ce7d84709c5d01343567fe46a7a03481d",
+      "utf8Name": true
+    },
+    {
+      "path": "Uninstall-Windows.cmd",
+      "bytes": 479,
+      "sha256": "9c2d7fc73fae34227c0d26a11a2feb720267b2f3b31625efdd741654d833abf2",
+      "utf8Name": true
+    },
+    {
+      "path": "Uninstall-Windows.ps1",
+      "bytes": 1073,
+      "sha256": "762b7d3048fd3b332d79c94588a5e67a371095b1ca3a32f551723e7935d23fad",
+      "utf8Name": true
+    },
+    {
+      "path": "VC_redist.x64.exe",
+      "bytes": 18731856,
+      "sha256": "843068991daaa1f73ad9f6239bce4d0f6a07a51f18c37ea2a867e9beca71295c",
+      "utf8Name": true
+    },
+    {
+      "path": "使い方.txt",
+      "bytes": 3546,
+      "sha256": "3fd6a4695f2d4da9db2a5142ce488b05fe9919da7ed9a2463fc47fe43c416143",
+      "utf8Name": true
+    }
+  ],
+  "exactStageReadback": true,
+  "noProductInstallation": true,
+  "sourceCommit": "cc52b06f",
+  "note": "Frontend dist built at cc52b06f (UI stage 1, stage 2 P3, P9 Sync split); Rust release built from the same tree. P9 audio-input move and wide FX editing are not included."
+}

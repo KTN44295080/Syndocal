@@ -8,6 +8,16 @@ selection page. A fresh installation defaults to core DMX/video/MIDI.
 To change extensions with the same MSI, rerun it and choose Repair.
 An Internet connection can be required when WebView2 is missing.
 
+What to check in this build
+The MIDI card shows the feedback output, sent count and last message.
+If LEDs stay dark while the count rises, check the controller mode/port.
+Setup I/O and Security no longer show the fixture/stage band. Tabs follow
+the UI language. I/O cards show state only; start/connect in each panel.
+DMX diagnostics no longer repeats masters, blackout, BPM or MIDI clock.
+Active/Standby sync and ShowClock LAN moved from Web Remote to a new I/O
+Sync card.
+Web Remote, ShowClock, sACN input and GDTF import validate input strictly.
+
 Update
 Save and close Syndocal, then run Install-Windows.cmd from this NEW package.
 It preserves the existing NSIS/MSI format, settings and extension choice.
