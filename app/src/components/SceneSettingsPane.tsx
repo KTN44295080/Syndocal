@@ -1,4 +1,4 @@
-import { For, Show, type ComponentProps, type JSX } from "solid-js";
+import { createSignal, For, Show, type ComponentProps, type JSX } from "solid-js";
 import { authoredCueLiveModifier } from "../cueLiveModifier";
 import type { CueMetadataDraft } from "../editorDrafts";
 import { cueIdentityCss } from "../identityColor";
@@ -118,7 +118,30 @@ const SurfaceIcon = (props: { surface: SceneSettingsSurface }) => (
   </svg>
 );
 
+const sceneFxWideStorageKey = "syndocal.sceneFxEditorWide.v1";
+
+const readSceneFxWide = () => {
+  try {
+    return window.localStorage.getItem(sceneFxWideStorageKey) === "1";
+  } catch {
+    return false;
+  }
+};
+
 export function SceneSettingsPane(props: SceneSettingsPaneProps) {
+  // Wide FX editing is a per-machine layout preference: the pane takes most of
+  // the upper workspace and shows the FX rack beside the editor.
+  const [fxWide, setFxWide] = createSignal(readSceneFxWide());
+  const fxWideActive = () => fxWide() && props.activeSurface === "fx";
+  const toggleFxWide = () => {
+    const next = !fxWide();
+    setFxWide(next);
+    try {
+      window.localStorage.setItem(sceneFxWideStorageKey, next ? "1" : "0");
+    } catch {
+      // The layout still changes for this session when storage is unavailable.
+    }
+  };
   const selectedEffect = () =>
     props.effects.find((effect) => effect.id === props.selectedEffectId) ?? null;
   const selectedEffectIndex = () =>
@@ -147,6 +170,7 @@ export function SceneSettingsPane(props: SceneSettingsPaneProps) {
       data-selected-scene-id={props.cue.id}
       data-scene-settings-kind={sceneKind()}
       data-scene-settings-surface={props.activeSurface}
+      data-scene-settings-wide={fxWideActive() ? "true" : undefined}
       style={{
         "--cue-identity": cueIdentityCss(
           props.cue.id,
@@ -172,6 +196,19 @@ export function SceneSettingsPane(props: SceneSettingsPaneProps) {
         <span class={`sceneSettingsKind uiMicroLabel ${sceneKindClass()}`}>
           {sceneKind()}
         </span>
+        <Show when={props.activeSurface === "fx"}>
+          <button
+            type="button"
+            class="sceneSettingsWideToggle"
+            classList={{ active: fxWide() }}
+            data-scene-settings-wide-toggle
+            aria-pressed={fxWide()}
+            title={fxWide() ? "Return the FX editor to the side column" : "Give the FX editor more room"}
+            onClick={toggleFxWide}
+          >
+            {fxWide() ? "Narrow" : "Widen"}
+          </button>
+        </Show>
         <button
           type="button"
           class="sceneSettingsEditSource"

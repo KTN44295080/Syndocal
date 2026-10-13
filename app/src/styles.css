@@ -35649,6 +35649,21 @@ html[data-window-mode="fullscreen"] .desktopResizeZones {
   color: var(--cue-identity-text);
 }
 
+.sceneSettingsHeader:has(> .sceneSettingsWideToggle) {
+  grid-template-columns: minmax(0, 1fr) auto auto auto 40px;
+}
+
+.sceneSettingsWideToggle {
+  min-width: 64px;
+  min-height: 40px;
+  padding: 3px 7px;
+  font-size: 11px;
+}
+
+.sceneSettingsWideToggle.active {
+  border-color: var(--cue-identity);
+}
+
 .sceneSettingsEditSource {
   min-width: 84px;
   min-height: 40px;
@@ -38364,6 +38379,52 @@ html:not([data-window-mode="fullscreen"])
   > .editDomainUpperPanel.lightingSceneSettingsVisible {
   grid-template-columns: minmax(0, 1fr) clamp(480px, 36vw, 680px);
   gap: 3px;
+}
+
+/* Wide FX editing (operator toggle in the Scene Settings header): the Scene
+   Matrix stays usable at a narrower width while the FX rack and editor sit
+   side by side, each scrolling inside its own column. */
+.layout.layoutSharedWorkspace.layoutControl.controlModeEdit
+  > .editDomainUpperPanel.lightingSceneSettingsVisible:has(.sceneSettingsPane[data-scene-settings-wide="true"]) {
+  grid-template-columns: minmax(260px, 1fr) minmax(0, 2.6fr);
+}
+
+.sceneSettingsPane[data-scene-settings-wide="true"] .sceneSettingsScroller {
+  grid-template-columns: minmax(300px, 0.85fr) minmax(0, 1.6fr);
+  grid-template-rows: auto minmax(0, 1fr);
+  align-content: stretch;
+  overflow: hidden;
+  scrollbar-gutter: auto;
+}
+
+.sceneSettingsPane[data-scene-settings-wide="true"] .sceneSettingsScroller > .sceneFxChooserSection {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.sceneSettingsPane[data-scene-settings-wide="true"] .sceneSettingsScroller > .sceneOwnedFxSection {
+  grid-column: 1;
+  grid-row: 2;
+  align-self: start;
+  max-height: 100%;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.sceneSettingsPane[data-scene-settings-wide="true"] .sceneSettingsScroller > .sceneFxEditor,
+.sceneSettingsPane[data-scene-settings-wide="true"] .sceneSettingsScroller > .sceneSettingsEmpty {
+  grid-column: 2;
+  grid-row: 1 / -1;
+  align-self: stretch;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+
+.sceneSettingsPane[data-scene-settings-wide="true"] .sceneSettingsScroller > .sceneSettingsEmpty {
+  align-self: start;
 }
 
 .layout.layoutSharedWorkspace.layoutControl.controlModeEdit
