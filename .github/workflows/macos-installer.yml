@@ -144,6 +144,8 @@ jobs:
           cargo test -p engine network_dmx_route_tests --lib --locked 2>&1 | tee target/qa/macos-artifact/network-dmx-engine-tests.txt
           cargo test -p engine configured_network_and_usb --lib --locked 2>&1 | tee target/qa/macos-artifact/network-dmx-usb-tests.txt
           cargo test -p syndocal --bin syndocal control_plane::tests --locked 2>&1 | tee target/qa/macos-artifact/network-dmx-admission-tests.txt
+          cargo test -p syndocal --bin syndocal synchronous_project_runtime_routes_hold_the_identity_fence_through_dispatch --locked 2>&1 | tee target/qa/macos-artifact/network-dmx-dispatch-tests.txt
+          node app/scripts/check-tauri-admission-inventory.mjs
 
       - name: Build macOS application bundle
         run: pnpm --dir app tauri build --ci --bundles app
@@ -176,7 +178,7 @@ jobs:
 
       - name: Test actual macOS installer choices, updates and removal
         id: pkg_lifecycle
-        run: node app/scripts/check-macos-installer.mjs target/release/bundle/pkg/Syndocal_1.2.0-alpha.81_arm64.pkg target/qa/macos-artifact/installer-lifecycle.json target/release/bundle/macos/Syndocal.app
+        run: node app/scripts/check-macos-installer.mjs target/release/bundle/pkg/Syndocal_1.2.0-alpha.82_arm64.pkg target/qa/macos-artifact/installer-lifecycle.json target/release/bundle/macos/Syndocal.app
 
       - name: Upload macOS validation evidence
         if: always()

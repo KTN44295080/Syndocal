@@ -1,8 +1,12 @@
 # Syndocal historical v1.0 / current v1.2 alpha Release Status
 
+## 2026-10-14 alpha.82 native dispatch repair candidate
+
+Current development metadata is `1.2.0-alpha.82`. Native binary-search dispatch ordering and distribution checks are tracked in [the checkpoint](qa/NETWORK_DISPATCH_ALPHA82_2026-10-14.md). Alpha.81 is superseded; distributed bytes remain immutable. This is not full Recording completion.
+
 ## 2026-10-14 alpha.81 FX and network universe candidate
 
-Current development metadata is `1.2.0-alpha.81`. FX scrolling and multiple network universes are tracked in [the checkpoint](qa/FX_UNIVERSES_ALPHA81_2026-10-14.md). Native build and package acceptance remain pending; this is not full Recording completion. Distributed alpha.80 bytes remain immutable.
+Recorded development metadata was `1.2.0-alpha.81`. FX scrolling and multiple network universes are tracked in [the checkpoint](qa/FX_UNIVERSES_ALPHA81_2026-10-14.md). Native build and package acceptance remain pending; this is not full Recording completion. Distributed alpha.80 bytes remain immutable.
 
 ## 2026-10-13 alpha.80 native MSI choice checkpoint
 

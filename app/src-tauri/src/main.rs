@@ -25247,7 +25247,6 @@ const PREFLIGHT_ONLY_NONPROJECT_OR_INNER_RUNTIME_ROUTES: &[&str] = &[
     "discover_usb_rdm_devices",
     "enable_output_control_v2",
     "enable_show_art_net_loopback_route_v1",
-    "set_network_dmx_routes_v1",
     "end_media_asset_preview",
     "finalize_prepared_media_asset_relink",
     "finalize_prepared_media_assets",
@@ -25308,6 +25307,7 @@ const PREFLIGHT_ONLY_NONPROJECT_OR_INNER_RUNTIME_ROUTES: &[&str] = &[
     "set_lighting_master_output_control_v2",
     "set_machine_timeline_cue_audio_settings",
     "set_midi_feedback_auto",
+    "set_network_dmx_routes_v1",
     "set_timeline_transport_playing_runtime_v1",
     "set_video_master_output_control_v2",
     "stage_vj_preview_layer",
@@ -96616,10 +96616,11 @@ pub(crate) mod tests {
                     == Some(control_plane::TauriRouteAdmissionClass::RuntimeMutation)
             })
             .collect::<Vec<_>>();
-        // The five output-control adapters have their own native lease/fence
+        // These output-control adapters have their own native lease/fence
         // authority and must never retain the outer guard into that executor.
         for command in [
             "launch_video_clip_output_control_v2",
+            "set_network_dmx_routes_v1",
             "set_group_submaster_output_control_v2",
             "set_lighting_master_output_control_v2",
             "set_video_master_output_control_v2",
@@ -96632,7 +96633,7 @@ pub(crate) mod tests {
             );
         }
         // The extension setter owns its lifecycle authority inside the handler.
-        assert_eq!(runtime_routes.len(), 169);
+        assert_eq!(runtime_routes.len(), 170);
         assert_eq!(
             OUTER_FENCED_SYNC_PROJECT_RUNTIME_ROUTES.len()
                 + PREFLIGHT_ONLY_NONPROJECT_OR_INNER_RUNTIME_ROUTES.len(),

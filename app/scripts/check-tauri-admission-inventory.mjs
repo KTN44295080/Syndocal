@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 
-// Source-inventory identity only. Rust/native checks still own route classes and authorization.
+// Inventory identity and sorted binary-search lists; native checks own authorization.
 const marker = 'tauri::generate_handler![';
 const asioCfg = '#[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]';
 function registeredNames(source) {
@@ -59,7 +59,25 @@ for (const bad of [
 for (const bad of ['', `${policy}\n${policy}`, policy.replace('usize = 2', 'usize = 3'), policy.replace(fingerprint(names), '0'.repeat(64))]) {
   assert.throws(() => validateInventory(fixture(names), bad)); rejected++;
 }
+function validateRuntimeRouteLists(source) {
+  for (const name of ['OUTER_FENCED_SYNC_PROJECT_RUNTIME_ROUTES', 'PREFLIGHT_ONLY_NONPROJECT_OR_INNER_RUNTIME_ROUTES', 'FULL_LOCK_CORRELATED_TERMINAL_RECOVERY_RUNTIME_ROUTES']) {
+    const marker = 'const ' + name + (name === 'FULL_LOCK_CORRELATED_TERMINAL_RECOVERY_RUNTIME_ROUTES' ? ': [&str; 1] =' : ': &[&str] =');
+    assert.equal(source.split(marker).length, 2, 'Expected exactly one runtime route list ' + name);
+    const array = source.slice(source.indexOf(marker) + marker.length).match(/^\s*&?\[([\s\S]*?)\];/);
+    assert.ok(array, 'Missing bounded runtime array ' + name);
+    const body = array[1];
+    const names = [...body.matchAll(/"([a-z][a-z0-9_]*)"/g)].map(match => match[1]);
+    assert.ok(names.length > 0, 'Empty runtime route list ' + name);
+    assert.equal(new Set(names).size, names.length, 'Duplicate runtime route ' + name);
+    assert.deepEqual(names, [...names].sort(), 'Binary-search runtime route list must be sorted: ' + name);
+  }
+}
 const main = readFileSync(new URL('../src-tauri/src/main.rs', import.meta.url), 'utf8');
 const control = readFileSync(new URL('../src-tauri/src/control_plane.rs', import.meta.url), 'utf8');
+validateRuntimeRouteLists(main);
+const routePair = '    "enable_output_control_v2",\n    "enable_show_art_net_loopback_route_v1",';
+assert.ok(main.replaceAll("\r\n", "\n").includes(routePair));
+assert.throws(() => validateRuntimeRouteLists(main.replaceAll("\r\n", "\n").replace(routePair, routePair.split("\n").reverse().join("\n"))));
+assert.throws(() => validateRuntimeRouteLists(main.replace(routePair.split("\n")[0], routePair.split("\n")[0] + "\n" + routePair.split("\n")[0])));
 const result = validateInventory(main, control);
-console.log(`Native Tauri admission inventory exact: ${result.count} commands, SHA-256 ${result.sha256}; ${rejected} negative fixtures rejected`);
+console.log(`Native Tauri admission inventory exact: ${result.count} commands, SHA-256 ${result.sha256}; ${rejected} inventory negatives and 2 runtime-order negatives rejected; 3 runtime lists sorted`);

@@ -1,0 +1,10 @@
+{
+  "passed": true,
+  "oldMissedByActualRustBinarySearch": [
+    "set_network_dmx_routes_v1"
+  ],
+  "allOther119EntriesResolved": true,
+  "newSortedListResolvesEveryEntry": true,
+  "nativeFull170RoutePolicyTestPassed": true,
+  "commandsPreserved": true
+}
