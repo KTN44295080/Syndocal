@@ -14,7 +14,12 @@ mkdir -p "$stage/app-scripts" "$stage/djlink-scripts" "$stage/core-scripts" "$ou
 source_dir="$workspace_root/tools/distribution/macos-installer"
 cp "$source_dir/preinstall" "$stage/app-scripts/preinstall"
 chmod 755 "$stage/app-scripts/preinstall"
-pkgbuild --component "$app_path" --install-location /Applications --scripts "$stage/app-scripts" --identifier jp.seraf.ktn.syndocal.pkg.app --version "$package_version" "$stage/app.pkg"
+mkdir -p "$stage/app-root"
+ditto "$app_path" "$stage/app-root/Syndocal.app"
+pkgbuild --analyze --root "$stage/app-root" "$stage/app-components.plist"
+# An existing build/DMG copy must not redirect installation away from Applications.
+/usr/libexec/PlistBuddy -c 'Set :0:BundleIsRelocatable false' "$stage/app-components.plist"
+pkgbuild --root "$stage/app-root" --component-plist "$stage/app-components.plist" --install-location /Applications --scripts "$stage/app-scripts" --identifier jp.seraf.ktn.syndocal.pkg.app --version "$package_version" "$stage/app.pkg"
 for feature in djlink core; do
   enabled=0; [[ "$feature" != djlink ]] || enabled=1
   cp "$source_dir/preinstall" "$stage/$feature-scripts/preinstall"

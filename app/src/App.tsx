@@ -72,7 +72,7 @@ import {
   type DmxUniverseMap,
 } from "./components/DmxPatchMapPanel";
 import { DmxOutputConfigPanel } from "./components/DmxOutputConfigPanel";
-import { ExtensionsPanel, type ExtensionStatus } from "./components/ExtensionsPanel";
+import type { ExtensionStatus } from "./extensionsStatus";
 import { IoDisclosure, SetupIoConnectionDeck, type IoConnectionId } from "./components/IoConnectionDeck";
 import { DmxInputPanel } from "./components/DmxInputPanel";
 import { DmxRawMonitor } from "./components/DmxRawMonitor";
@@ -1986,24 +1986,11 @@ export default function App() {
   const [lowerSplitRatio, setLowerSplitRatio] = createSignal(initialWorkspaceLayout.lower_split_ratio);
   const [activeIoConnection, setActiveIoConnection] = createSignal<IoConnectionId>("dmx");
   const [extensionStatus, setExtensionStatus] = createSignal<ExtensionStatus>({ configured: true, dj_link_enabled: false, error: null });
-  const [extensionBusy, setExtensionBusy] = createSignal(false);
   const refreshExtensions = async () => {
     try {
       const status = await invoke<ExtensionStatus>("get_extensions_status");
       setExtensionStatus(status);
-      if (!status.configured) { setWorkspaceTab("setup"); setSetupSubTab("io"); setActiveIoConnection("extensions"); }
     } catch (error) { setExtensionStatus({ configured: false, dj_link_enabled: false, error: String(error) }); }
-  };
-  const changeExtensions = async (enabled: boolean) => {
-    if (extensionBusy()) return;
-    setExtensionBusy(true);
-    try {
-      setExtensionStatus(await invoke<ExtensionStatus>("set_extensions", { djLinkEnabled: enabled }));
-      await refreshDjLinkMachineStatus();
-      await refreshRemoteControlStatus();
-    }
-    catch (error) { setMessage(String(error)); }
-    finally { setExtensionBusy(false); }
   };
   const [uiScale, setUiScale] = createSignal<UiScale>(loadUiScale());
   const [uiLocale, setUiLocale] = createSignal<UiLocale>(loadUiLocale());
@@ -29006,9 +28993,7 @@ export default function App() {
             onStopWebRemote={stopRemoteControl}
             onArmDjLink={armDjLinkMachine}
             onDisarmDjLink={disarmDjLinkMachine}
-            renderWorkbench={(connection) => connection === "extensions" ? (
-              <ExtensionsPanel status={extensionStatus()} busy={extensionBusy()} onChange={changeExtensions} />
-            ) : connection === "dmx" ? (
+            renderWorkbench={(connection) => connection === "dmx" ? (
           <section class="ioUnifiedZone ioUnifiedDmxZone" data-io-zone="dmx">
           <div class="ioOperatorSurface dmxOperatorSurface">
           <DmxOutputConfigPanel

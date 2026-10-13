@@ -1,5 +1,22 @@
 # Syndocal historical v1.0 / current v1.2 alpha Release Status
 
+## 2026-10-13 alpha.80 native MSI choice candidate
+
+Current development metadata: `1.2.0-alpha.80`. Direct MSI extension selection and I/O cleanup are tracked in [the checkpoint](qa/MSI_EXTENSIONS_ALPHA80_2026-10-13.md). This is not full Recording completion; native package and installer lifecycle acceptance remain pending. Delivered alpha.79 bytes are immutable.
+
+Historical status: 2026-09-05
+Branch: `codex/syndocal-v1.2`; recorded product metadata was `1.2.0-alpha.69`.
+
+## 2026-09-05 alpha.69 recording atomic-publication SOURCE CANDIDATE
+
+Recorded alpha.69 product metadata was `1.2.0-alpha.69`. The bounded source candidate
+uses FFmpeg staging and atomic publication to preserve an existing final recording
+on encoder failure. Query polling also prevents overlapping native reads.
+Build/test/native evidence and remaining concurrency boundaries are recorded below;
+this is not full Recording completion. See [remaining work and acceptance](qa/REMAINING_WORK_2026-09-05.md).
+Earlier artifact versions, hashes and process observations below are historical.
+
+
 ## 2026-10-13 alpha.78 BO, MIDI and extension distribution checkpoint
 
 Distributed development metadata is `1.2.0-alpha.78`. Managed USB output completion, direct MIDI fader events, scene toggle/feedback, extension choice and Control Edit/Live boundaries are recorded in [the checkpoint](qa/EXTENSIONS_MIDI_BLACKOUT_ALPHA78_2026-10-13.md). Win x64 and Mac Apple Silicon packages are delivered. Windows native startup, full Windows/Linux CI and hosted Windows installer choice/update/complete-removal gates pass. Physical MIDI/USB-DMX and interactive Mac device acceptance remain unobserved. Distributed alpha.77 and alpha.78 artifact bytes are immutable.
@@ -29,18 +46,6 @@ Recorded product metadata was `1.2.0-alpha.71`. macOS USB-DMX now uses an exact 
 
 Recorded alpha.70 product metadata was `1.2.0-alpha.70`. Windows x64 NSIS/MSI and macOS 12+ Apple Silicon DMG were produced from base `97b9c6d3151a049e78ee92ac29254de5b7346e8f` on `codex/distribution-alpha70-20261008`. This is an unsigned development distribution; hardware, clean-machine, signing, notarization and complete product acceptance remain open. See [distribution evidence](qa/DEVELOPMENT_INSTALLERS_ALPHA70_2026-10-08.md).
 
-
-Historical status: 2026-09-05
-Branch: `codex/syndocal-v1.2`; recorded product metadata was `1.2.0-alpha.69`.
-
-## 2026-09-05 alpha.69 recording atomic-publication SOURCE CANDIDATE
-
-Recorded alpha.69 product metadata was `1.2.0-alpha.69`. The bounded source candidate
-uses FFmpeg staging and atomic publication to preserve an existing final recording
-on encoder failure. Query polling also prevents overlapping native reads.
-Build/test/native evidence and remaining concurrency boundaries are recorded below;
-this is not full Recording completion. See [remaining work and acceptance](qa/REMAINING_WORK_2026-09-05.md).
-Earlier artifact versions, hashes and process observations below are historical.
 
 ## Historical 2026-09-03 alpha.68 blackout release query-race checkpoint
 

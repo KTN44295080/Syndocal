@@ -168,7 +168,7 @@ jobs:
 
       - name: Test actual macOS installer choices, updates and removal
         id: pkg_lifecycle
-        run: node app/scripts/check-macos-installer.mjs target/release/bundle/pkg/Syndocal_1.2.0-alpha.79_arm64.pkg target/qa/macos-artifact/installer-lifecycle.json target/release/bundle/macos/Syndocal.app
+        run: node app/scripts/check-macos-installer.mjs target/release/bundle/pkg/Syndocal_1.2.0-alpha.80_arm64.pkg target/qa/macos-artifact/installer-lifecycle.json target/release/bundle/macos/Syndocal.app
 
       - name: Upload macOS validation evidence
         if: always()

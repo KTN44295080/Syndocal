@@ -60,9 +60,9 @@ function Assert-Removed([string]$Executable) {
  Assert-Condition ((Get-Content -LiteralPath $taskForeign -Raw).Trim() -eq 'external-project') 'External project retained'
 }
 $taskOldNsis=Find-Installer $BaselineRoot 'Syndocal_1.2.0-alpha.72_x64-setup.exe'
-$taskNewNsis=Find-Installer $CurrentRoot 'Syndocal_1.2.0-alpha.78_x64-setup.exe'
+$taskNewNsis=Find-Installer $CurrentRoot 'Syndocal_1.2.0-alpha.80_x64-setup.exe'
 $taskOldMsi=Find-Installer $BaselineRoot 'Syndocal_1.2.0-alpha.72_x64_ja-JP.msi'
-$taskNewMsi=Find-Installer $CurrentRoot 'Syndocal_1.2.0-alpha.78_x64_ja-JP.msi'
+$taskNewMsi=Find-Installer $CurrentRoot 'Syndocal_1.2.0-alpha.80_x64_ja-JP.msi'
 $taskReport.installerHashes=@{}; foreach ($taskFile in @($taskOldNsis,$taskNewNsis,$taskOldMsi,$taskNewMsi)) { $taskReport.installerHashes[[IO.Path]::GetFileName($taskFile)]=(Get-FileHash -LiteralPath $taskFile -Algorithm SHA256).Hash.ToLowerInvariant() }
 $taskInstall=Join-Path $env:RUNNER_TEMP 'SyndocalLifecycle'
 $taskForeign=Join-Path $env:RUNNER_TEMP 'syndocal-lifecycle-external.sdc'; Set-Content -LiteralPath $taskForeign -Value 'external-project'
@@ -92,7 +92,18 @@ try {
  Assert-Removed (Join-Path $taskInstall 'syndocal.exe')
  Run-Installer $taskMsiExec @('/i',('"'+$taskOldMsi+'"'),'/qn','REBOOT=ReallySuppress')
  Set-Sentinels
+ Run-Installer $taskMsiExec @('/i',('"'+$taskNewMsi+'"'),'/qn','REBOOT=ReallySuppress','DJLINK=1')
+ Assert-Condition ((Get-Content -LiteralPath $taskExtensionFile -Raw).Contains('DJLink=1')) 'MSI enabled DJ Link by native installer choice'
  Run-Installer $taskMsiExec @('/i',('"'+$taskNewMsi+'"'),'/qn','REBOOT=ReallySuppress')
+ Assert-Condition ((Get-Content -LiteralPath $taskExtensionFile -Raw).Contains('DJLink=1')) 'MSI update preserved extension choice'
+ Run-Installer $taskMsiExec @('/i',('"'+$taskNewMsi+'"'),'/qn','REBOOT=ReallySuppress','DJLINK=0')
+ Assert-Condition ((Get-Content -LiteralPath $taskExtensionFile -Raw).Contains('DJLink=0')) 'MSI changed extension choice to core only'
+ Set-Content -LiteralPath $taskExtensionFile -Value "[SyndocalExtensions]`r`nSchema=2`r`nDJLink=1`r`n" -Encoding ascii
+ $taskFutureExtension=Get-Content -LiteralPath $taskExtensionFile -Raw
+ Run-Installer $taskMsiExec @('/i',('"'+$taskNewMsi+'"'),'/qn','REBOOT=ReallySuppress','DJLINK=0') 1603
+ Assert-Condition ((Get-Content -LiteralPath $taskExtensionFile -Raw) -ceq $taskFutureExtension) 'MSI rejected and preserved future settings'
+ Set-Content -LiteralPath $taskExtensionFile -Value "[SyndocalExtensions]`r`nSchema=1`r`nDJLink=0`r`n" -NoNewline -Encoding ascii
+ Assert-Condition (@(Get-ChildItem -LiteralPath (Split-Path $taskExtensionFile) -Force -Filter '.extensions-*').Count -eq 0) 'MSI left no transaction files'
  Assert-Condition (Test-Path -LiteralPath (Join-Path $env:ProgramFiles 'Syndocal\syndocal.exe')) 'Updated MSI application exists'
  Assert-Sentinels
  $taskInstalled=@(Get-SyndocalInstallations)

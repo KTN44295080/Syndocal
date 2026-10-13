@@ -292,6 +292,7 @@ mod continuous_fixture_fader;
 mod fixture_repatch_request;
 mod output_lease_receipt_retention;
 mod extensions;
+mod extensions_config;
 mod scene_edit_capture;
 mod midi_fader_input;
 #[cfg(test)]

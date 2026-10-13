@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { main as prepareReleaseRuntime } from "./prepare-release-runtime.mjs";
+import { buildMsiExtensions } from "./build-msi-extensions.mjs";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 
@@ -16,6 +17,7 @@ export function run(platform = process.platform) {
     if (check.status !== 0) return check.status ?? 1;
   }
   prepareReleaseRuntime({ platform });
+  if (platform === "win32") buildMsiExtensions();
   return 0;
 }
 

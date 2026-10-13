@@ -2,7 +2,7 @@
 
 Syndocal は、DMX照明とVJ映像を同じタイムライン、キュー、BPMクロック、エフェクトソースで駆動するデスクトップ制御ソフトウェアです。
 
-- 製品名: **Syndocal 1.2.0-alpha.79**
+- 製品名: **Syndocal 1.2.0-alpha.80**
 - 開発: **Seraf() / KTN**
 - プロジェクト: **`.sdc`** (可読JSON)
 - Tier 1: Windows 10+ / macOS 12+
@@ -486,12 +486,12 @@ unaccepted.
 
 ## インストール
 
-現在の修正候補は `1.2.0-alpha.79` です。シーンの編集時には保存済みシーンの値を表示し、未編集の属性を現在の出力値で上書きしません。拡張はWindows/Macのインストーラーで選択し、起動時の選択画面はありません。MacはApple Silicon向け `.pkg` です。検証状況は [検証記録](qa/SCENE_EDIT_INSTALLER_ALPHA79_2026-10-13.md) を参照してください。配布済みalpha.78のファイルは変更していません。
+現在の修正候補は `1.2.0-alpha.80` です。シーンの編集時には保存済みシーンの値を表示し、未編集の属性を現在の出力値で上書きしません。拡張はWindowsのEXE/MSI本体およびMacのインストーラーで選択し、I/Oには拡張の設定項目を置きません。起動時の選択画面はありません。MacはApple Silicon向け `.pkg` です。検証状況は [検証記録](qa/MSI_EXTENSIONS_ALPHA80_2026-10-13.md) を参照してください。配布済みalpha.78/79のファイルは変更していません。
 
 CI/Release成果物は次の形式です。
 
-- Windows: `Syndocal_1.2.0-alpha.79_x64-setup.exe` (NSIS)、`Syndocal_1.2.0-alpha.79_x64_ja-JP.msi`
-- macOS: `.app`、DMG
+- Windows: `Syndocal_1.2.0-alpha.80_x64-setup.exe` (NSIS)、`Syndocal_1.2.0-alpha.80_x64_ja-JP.msi`
+- macOS: Apple Silicon向け `.pkg`
 - Linux: `.deb`、AppImage
 
 ### 未署名ビルド

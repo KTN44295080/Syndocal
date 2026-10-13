@@ -1,0 +1,25 @@
+{
+  "passed": true,
+  "installer": "C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-native-acceptance-target\\release\\bundle\\msi\\Syndocal_1.2.0-alpha.80_x64_ja-JP.msi",
+  "sha256": "ac5d6c1404f979a74db1c1641987f47823f9d67967edd49411a3bea20aa88db0",
+  "checks": [
+    "Open read-only MSI session 0",
+    "Set native selection 0",
+    "Embedded prepare action succeeds 0",
+    "Native checkbox initialized 0",
+    "Edit native checkbox 0",
+    "Prepare preserves checkbox edits 0",
+    "Embedded transaction planning succeeds 0",
+    "Plan uses the edited checkbox 0",
+    "Open read-only MSI session 1",
+    "Set native selection 1",
+    "Embedded prepare action succeeds 1",
+    "Native checkbox initialized 1",
+    "Edit native checkbox 1",
+    "Prepare preserves checkbox edits 1",
+    "Embedded transaction planning succeeds 1",
+    "Plan uses the edited checkbox 1",
+    "Prepare and plan never mutate user settings"
+  ],
+  "noProductInstallation": true
+}

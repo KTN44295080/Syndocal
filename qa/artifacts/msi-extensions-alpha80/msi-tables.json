@@ -1,0 +1,33 @@
+{
+  "passed": true,
+  "installer": "C:\\Users\\janua\\AppData\\Local\\Temp\\syndocal-native-acceptance-target\\release\\bundle\\msi\\Syndocal_1.2.0-alpha.80_x64_ja-JP.msi",
+  "sha256": "ac5d6c1404f979a74db1c1641987f47823f9d67967edd49411a3bea20aa88db0",
+  "productVersion": "1.2.80",
+  "checks": [
+    "MSI product alpha.80",
+    "Native MSI DJ Link checkbox",
+    "Native MSI navigation WelcomeDlg/Next/SyndocalExtensionsDlg",
+    "Native MSI navigation InstallDirDlg/Back/SyndocalExtensionsDlg",
+    "Native MSI navigation MaintenanceTypeDlg/RepairButton/SyndocalExtensionsDlg",
+    "Native MSI navigation SyndocalExtensionsDlg/Next/InstallDirDlg",
+    "Native MSI navigation SyndocalExtensionsDlg/Next/VerifyReadyDlg",
+    "Embedded MSI action SyndocalPrepareExtensions",
+    "Embedded MSI action SyndocalPlanExtensions",
+    "Embedded MSI action SyndocalRollbackExtensions",
+    "Embedded MSI action SyndocalWriteExtensions",
+    "Embedded MSI action SyndocalCommitExtensions",
+    "Validate existing settings before costing",
+    "Plan before installation mutation",
+    "Rollback/write/commit ordering",
+    "No extension write on uninstall SyndocalPrepareExtensions",
+    "No extension write on uninstall SyndocalPlanExtensions",
+    "No extension write on uninstall SyndocalRollbackExtensions",
+    "No extension write on uninstall SyndocalWriteExtensions",
+    "No extension write on uninstall SyndocalCommitExtensions",
+    "Secure property DJLINK",
+    "Secure property SYNDOCAL_DJLINK_SELECTED",
+    "Secure property SYNDOCAL_CHOICES_READY"
+  ],
+  "noProductInstallation": true,
+  "interactiveRenderingObserved": false
+}

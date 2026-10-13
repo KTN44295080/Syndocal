@@ -349,6 +349,7 @@ jobs:
 
       - name: Test installer lifecycle and cleanup boundaries
         run: |
+          node app/scripts/build-msi-extensions.mjs --test
           node tools/distribution/generate-installer-hooks.mjs
           node --test app/scripts/test-installer-lifecycle-policy.mjs tools/distribution/test-windows-cleanup.mjs tools/distribution/test-windows-uninstall.mjs
 
@@ -382,6 +383,8 @@ jobs:
           $nsis = Get-ChildItem 'target/release/bundle/nsis/*.exe' | Select-Object -First 1
           $msi = Get-ChildItem 'target/release/bundle/msi/*.msi' | Select-Object -First 1
           if (-not $nsis -or -not $msi) { throw 'Expected NSIS and MSI installers.' }
+          tools/distribution/wix/check-msi-extensions.ps1 -InstallerPath $msi.FullName -EvidencePath msi-extension-tables.json
+          tools/distribution/wix/check-msi-prepare.ps1 -InstallerPath $msi.FullName -EvidencePath msi-extension-prepare.json
 
           $installDir = Join-Path $env:RUNNER_TEMP 'SyndocalSmoke'
           $extractDir = Join-Path $env:RUNNER_TEMP 'SyndocalMsiExtract'
@@ -430,7 +433,7 @@ jobs:
       - name: Upload installers
         uses: actions/upload-artifact@v4
         with:
-          name: syndocal-1.2.0-alpha.79-${{ matrix.os }}
+          name: syndocal-1.2.0-alpha.80-${{ matrix.os }}
           path: target/release/bundle/**
           if-no-files-found: error
           retention-days: 14

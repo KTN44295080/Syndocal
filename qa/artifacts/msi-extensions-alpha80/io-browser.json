@@ -1,0 +1,14 @@
+{
+  "passed": true,
+  "productVersion": "1.2.0-alpha.80",
+  "appSha256": "31b56ec3cb834c0561daaef2a34f8d68dbb51b4cbef58134053ee8699a36e466",
+  "rows": [
+    "pass setup-io-1920x1080 cards=6/1 active=dmx:1 tabs=0 controls=6 disclosures=12/12 scroll=1 legacy=4/4 showArtNet=1 logicalRoute=1 routePages=2/2:1 midi=1/1 osc=1 remote=1 remoteScroll=1 failed=[]",
+    "pass setup-io-1920x1032 cards=6/1 active=dmx:1 tabs=0 controls=6 disclosures=12/12 scroll=1 legacy=4/4 showArtNet=1 logicalRoute=1 routePages=2/2:1 midi=1/1 osc=1 remote=1 remoteScroll=1 failed=[]",
+    "pass setup-io-2048x1152 cards=6/1 active=dmx:1 tabs=0 controls=6 disclosures=12/12 scroll=1 legacy=4/4 showArtNet=1 logicalRoute=1 routePages=2/2:1 midi=1/1 osc=1 remote=1 remoteScroll=1 failed=[]",
+    "pass setup-io-1366x768 cards=6/1 active=dmx:1 tabs=0 controls=6 disclosures=12/12 scroll=1 legacy=4/4 showArtNet=1 logicalRoute=1 routePages=2/2:1 midi=1/1 osc=1 remote=1 remoteScroll=1 failed=[]",
+    "pass setup-io-1280x720 cards=6/1 active=dmx:1 tabs=0 controls=6 disclosures=12/12 scroll=1 legacy=4/4 showArtNet=1 logicalRoute=1 routePages=2/2:1 midi=1/1 osc=1 remote=1 remoteScroll=1 failed=[]"
+  ],
+  "nativeWindow": false,
+  "physicalOutput": false
+}
