@@ -14834,6 +14834,7 @@ fn prepare_explicit_timeline_cue_destination(
     ),
     String,
 > {
+    #[cfg(not(target_os = "macos"))]
     use rodio::cpal::traits::DeviceTrait;
 
     let requested_name = settings
@@ -21533,7 +21534,7 @@ enum LiveAudioCaptureStream {
     },
     #[cfg(target_os = "macos")]
     Mac {
-        owner: mac_audio_resources::MacAudioInputStream,
+        _owner: mac_audio_resources::MacAudioInputStream,
     },
     #[cfg(all(target_os = "windows", target_arch = "x86_64", feature = "asio"))]
     Asio {
@@ -46825,7 +46826,7 @@ fn build_wasapi_live_audio_capture(
             errors,
         )
     })?;
-    Ok(LiveAudioCaptureStream::Mac { owner })
+    Ok(LiveAudioCaptureStream::Mac { _owner: owner })
 }
 
 #[tauri::command]
@@ -72376,11 +72377,19 @@ fn live_source_faults_for_active_routes(
     #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
     spout_transport: &Mutex<spout_transport::SpoutTransportState>,
 ) -> Result<Vec<ExternalVideoCaptureFaultStatus>, String> {
-    let mut faults = capture_transport_faults_for_active_routes(active_routes, capture_transport)?;
+    let faults = capture_transport_faults_for_active_routes(active_routes, capture_transport)?;
     #[cfg(feature = "ndi")]
-    append_ndi_input_faults(active_routes, ndi_transport, &mut faults, false)?;
+    let faults = {
+        let mut faults = faults;
+        append_ndi_input_faults(active_routes, ndi_transport, &mut faults, false)?;
+        faults
+    };
     #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
-    append_spout_input_faults(active_routes, spout_transport, &mut faults, false)?;
+    let faults = {
+        let mut faults = faults;
+        append_spout_input_faults(active_routes, spout_transport, &mut faults, false)?;
+        faults
+    };
     Ok(faults)
 }
 
@@ -72391,12 +72400,20 @@ fn live_source_faults_for_active_routes_nonblocking(
     #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
     spout_transport: &Mutex<spout_transport::SpoutTransportState>,
 ) -> Result<Vec<ExternalVideoCaptureFaultStatus>, String> {
-    let mut faults =
+    let faults =
         capture_transport_faults_for_active_routes_nonblocking(active_routes, capture_transport)?;
     #[cfg(feature = "ndi")]
-    append_ndi_input_faults(active_routes, ndi_transport, &mut faults, true)?;
+    let faults = {
+        let mut faults = faults;
+        append_ndi_input_faults(active_routes, ndi_transport, &mut faults, true)?;
+        faults
+    };
     #[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
-    append_spout_input_faults(active_routes, spout_transport, &mut faults, true)?;
+    let faults = {
+        let mut faults = faults;
+        append_spout_input_faults(active_routes, spout_transport, &mut faults, true)?;
+        faults
+    };
     Ok(faults)
 }
 
@@ -76101,6 +76118,7 @@ struct PreparedShowSpoutActivation {
 /// Classified counterpart used by fixed routes whose cleanup can lose an
 /// acknowledgement. Managed exact-Both admission remains the same; only the
 /// callback is allowed to distinguish a proven SafeAbort from InDoubt.
+#[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
 fn submit_managed_exact_both_candidate_with_classified_commit<T, Commit>(
     state: &AppState,
     live_registry: &mut OutputLeaseRegistry,
@@ -76134,6 +76152,7 @@ where
     )
 }
 
+#[cfg(all(feature = "spout", target_os = "windows", target_arch = "x86_64"))]
 fn submit_show_output_candidate_with_classified_commit<T, Commit>(
     state: &AppState,
     live_registry: &mut OutputLeaseRegistry,
@@ -76286,7 +76305,7 @@ fn validate_current_show_spout_outputs_reset_action(state: &AppState) -> Result<
 /// project admission/owner/fence boundary, validates the entire exact pair
 /// before mutation, retires physical senders first when present, then
 /// reconciles the authored checkpoint so a changed output graph advances B.
-#[cfg(test)]
+#[cfg(all(test, feature = "spout", target_os = "windows", target_arch = "x86_64"))]
 fn reset_show_spout_outputs_without_output_lease(
     state: &AppState,
     expected_fence: &OutputControlFenceV1,
@@ -77264,7 +77283,7 @@ fn enable_show_spout_outputs_with_output_control_fence(
 > {
     #[cfg(not(all(feature = "spout", target_os = "windows", target_arch = "x86_64")))]
     {
-        let _ = (state, expected_fence, lease_request);
+        let _ = (state, expected_fence, lease_request, managed_terminal_identity);
         return Err(
             "Show Spout output activation requires the Windows x64 Spout-enabled Syndocal build"
                 .to_string(),

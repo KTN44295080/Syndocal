@@ -25,9 +25,13 @@
 //! - The deterministic policy layer below is pure and platform independent;
 //!   the Windows observer is a thin adapter feeding it canonical data.
 
+#[cfg(any(target_os = "windows", test))]
 use std::collections::BTreeSet;
+#[cfg(any(target_os = "windows", test))]
 use std::net::Ipv4Addr;
+#[cfg(any(target_os = "windows", test))]
 use std::thread;
+#[cfg(any(target_os = "windows", test))]
 use std::time::Duration;
 
 // ---------------------------------------------------------------------------
@@ -85,6 +89,7 @@ fn hex_nibble(byte: u8) -> Option<u8> {
 
 /// Formats GUID fields as the canonical lowercase hyphenated text form. This
 /// is locale independent and allocation-only; no OS text APIs are involved.
+#[cfg(any(target_os = "windows", test))]
 pub fn format_uuid_parts(data1: u32, data2: u16, data3: u16, data4: &[u8; 8]) -> String {
     use std::fmt::Write as _;
     let mut out = String::with_capacity(CANONICAL_UUID_LEN);
@@ -109,6 +114,7 @@ pub fn format_uuid_parts(data1: u32, data2: u16, data3: u16, data4: &[u8; 8]) ->
 /// connections. Adapter sets are order-insensitive; duplicate connection
 /// entries collapse within one network because the security question is set
 /// membership of the stored adapter id.
+#[cfg(any(target_os = "windows", test))]
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct DjLinkObservedNetwork {
     network_guid: String,
@@ -116,6 +122,7 @@ pub struct DjLinkObservedNetwork {
     adapter_guids: BTreeSet<String>,
 }
 
+#[cfg(any(target_os = "windows", test))]
 impl DjLinkObservedNetwork {
     /// Validates every identifier as canonical and non-NIL before it may take
     /// part in a trust decision. Malformed live data fails closed.
@@ -152,6 +159,7 @@ impl DjLinkObservedNetwork {
     }
 }
 
+#[cfg(any(target_os = "windows", test))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DjLinkObservationError {
     MalformedNetworkGuid,
@@ -164,11 +172,13 @@ pub enum DjLinkObservationError {
 /// passes compare equal regardless of enumeration order. Entries are NOT
 /// deduplicated: two entries sharing one network id stay distinguishable and
 /// force an explicit ambiguity verdict downstream instead of collapsing.
+#[cfg(any(target_os = "windows", test))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DjLinkNetworkObservations {
     entries: Vec<DjLinkObservedNetwork>,
 }
 
+#[cfg(any(target_os = "windows", test))]
 impl DjLinkNetworkObservations {
     pub fn from_entries(
         mut entries: Vec<DjLinkObservedNetwork>,
@@ -191,6 +201,7 @@ impl DjLinkNetworkObservations {
 // COM Next/fetched/S_FALSE semantics (pure seam)
 // ---------------------------------------------------------------------------
 
+#[cfg(any(target_os = "windows", test))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DjLinkPageError {
     /// The underlying COM call returned a failure HRESULT.
@@ -206,6 +217,7 @@ pub enum DjLinkPageError {
 /// COM contract modeled here: on success (`S_OK` or `S_FALSE`) the callee
 /// reports how many elements were written; fewer than requested means the
 /// stream ended (`S_FALSE`) and the enumeration MUST NOT be advanced again.
+#[cfg(any(target_os = "windows", test))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RawPageStatus {
     /// `fetched == requested`: the stream may hold more items.
@@ -216,6 +228,7 @@ pub enum RawPageStatus {
 
 /// Pure interpreter for one COM `Next` result. Any inconsistency between the
 /// reported fetched count and actual buffer contents fails closed.
+#[cfg(any(target_os = "windows", test))]
 pub fn interpret_com_next(
     requested: u32,
     returned_items: u32,
@@ -241,12 +254,14 @@ pub fn interpret_com_next(
 /// [`DjLinkPageError::LimitExceeded`] rather than issuing another page. A
 /// TERMINAL short fetch that lands exactly on the cap succeeds, because the
 /// callee itself declared the end of the stream.
+#[cfg(any(target_os = "windows", test))]
 #[derive(Debug, Clone, Copy)]
 pub struct ComEnumerationLimits {
     pub page_size: u32,
     pub max_items: usize,
 }
 
+#[cfg(any(target_os = "windows", test))]
 impl Default for ComEnumerationLimits {
     fn default() -> Self {
         Self {
@@ -264,6 +279,7 @@ impl Default for ComEnumerationLimits {
 /// slot inconsistency already mapped by the adapter. The driver enforces:
 /// consistent fetched counts, terminal short-fetch discipline (never
 /// advancing past `S_FALSE`), per-page bounds, and the global item cap.
+#[cfg(any(target_os = "windows", test))]
 pub fn drain_com_pages<T>(
     mut step: impl FnMut(u32) -> Result<(Vec<T>, u32), DjLinkPageError>,
     limits: ComEnumerationLimits,
@@ -292,12 +308,14 @@ pub fn drain_com_pages<T>(
 // Deterministic trust policy (pure)
 // ---------------------------------------------------------------------------
 
+#[cfg(any(target_os = "windows", test))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DjLinkTrustDecision {
     Allow,
     Block(DjLinkTrustBlockReason),
 }
 
+#[cfg(any(target_os = "windows", test))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DjLinkTrustBlockReason {
     /// Stored identity strings are missing, NIL, or non-canonical.
@@ -330,6 +348,7 @@ pub enum DjLinkTrustBlockReason {
 ///    id appears more than once in a pass (including a disconnected twin of
 ///    the stored id) — enumeration trust is poisoned by topology ambiguity,
 /// 5. finally the stored adapter membership check.
+#[cfg(any(target_os = "windows", test))]
 pub fn decide_dj_link_network_trust(
     stored_network_guid: &str,
     stored_adapter_guid: &str,
@@ -382,6 +401,7 @@ pub fn decide_dj_link_network_trust(
 /// one currently bindable wired IPv4 address. Every field participates in
 /// equality; a partial match is never a match. Alias text and interface
 /// indexes are deliberately absent because they are diagnostics only.
+#[cfg(any(target_os = "windows", test))]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DjLinkIpv4BindingKey {
     network_guid: String,
@@ -389,12 +409,14 @@ pub struct DjLinkIpv4BindingKey {
     bind_ipv4: Ipv4Addr,
 }
 
+#[cfg(any(target_os = "windows", test))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DjLinkIpv4BindingKeyError {
     NetworkGuidInvalid,
     AdapterGuidInvalid,
 }
 
+#[cfg(any(target_os = "windows", test))]
 impl DjLinkIpv4BindingKey {
     /// Validates both GUIDs as canonical and non-NIL before a key may exist;
     /// malformed identity fails closed instead of becoming comparable data.
@@ -424,6 +446,7 @@ impl DjLinkIpv4BindingKey {
         &self.adapter_guid
     }
 
+    #[cfg(target_os = "windows")]
     pub fn bind_ipv4(&self) -> Ipv4Addr {
         self.bind_ipv4
     }
@@ -436,33 +459,44 @@ impl DjLinkIpv4BindingKey {
 // ---------------------------------------------------------------------------
 
 /// `IF_TYPE_ETHERNET_CSMACD` (ipifcons.h): wired Ethernet CSMA/CD.
+#[cfg(any(target_os = "windows", test))]
 pub const DJ_LINK_IF_TYPE_ETHERNET_CSMACD: u32 = 6;
 /// `IF_TYPE_SOFTWARE_LOOPBACK` (ipifcons.h): loopback is never wired.
+#[cfg(any(target_os = "windows", test))]
 pub const DJ_LINK_IF_TYPE_SOFTWARE_LOOPBACK: u32 = 24;
 /// `TUNNEL_TYPE_NONE` (ifdef.h): no tunnel encapsulation.
+#[cfg(any(target_os = "windows", test))]
 pub const DJ_LINK_TUNNEL_TYPE_NONE: i32 = 0;
 /// `NdisMedium802_3` (netiodef.h): 802.3 media type in MIB_IF_ROW2.
+#[cfg(any(target_os = "windows", test))]
 pub const DJ_LINK_NDIS_MEDIUM_802_3: i32 = 0;
 /// `NET_IF_CONNECTION_DEDICATED` (ifdef.h): dedicated (non-demand) link.
+#[cfg(any(target_os = "windows", test))]
 pub const DJ_LINK_NET_IF_CONNECTION_DEDICATED: i32 = 1;
 /// `NET_IF_ADMIN_STATUS_UP` (ifdef.h): administratively enabled.
+#[cfg(any(target_os = "windows", test))]
 pub const DJ_LINK_NET_IF_ADMIN_STATUS_UP: i32 = 1;
 /// `IfOperStatusUp` (ifdef.h): operationally up.
+#[cfg(any(target_os = "windows", test))]
 pub const DJ_LINK_IF_OPER_STATUS_UP: i32 = 1;
 /// `NET_IF_MEDIA_CONNECT_STATE_CONNECTED` (ifdef.h): cable/media connected.
+#[cfg(any(target_os = "windows", test))]
 pub const DJ_LINK_MEDIA_CONNECT_STATE_CONNECTED: i32 = 1;
 /// `IpDadStatePreferred` (nldef.h): duplicate-address detection passed.
+#[cfg(target_os = "windows")]
 pub const DJ_LINK_NL_DAD_STATE_PREFERRED: i32 = 4;
 /// Bit 0 of `MIB_IF_ROW2.InterfaceAndOperStatusFlags` (`BOOLEAN
 /// HardwareInterface : 1`; shared/netioapi.h bit order: HardwareInterface,
 /// FilterInterface, ConnectorPresent, NotAuthenticated, NotMediaConnected,
 /// Paused, LowPower, EndPointInterface).
+#[cfg(target_os = "windows")]
 pub const DJ_LINK_MIB_IF_ROW2_HARDWARE_INTERFACE_MASK: u8 = 0x01;
 
 /// True when an IPv4 address may host a DJ-Link binding. Preferred-only
 /// filtering happens separately; this rejects structurally unusable ranges:
 /// unspecified (this-host), 127/8 loopback, 169.254/16 link-local, multicast,
 /// and broadcast.
+#[cfg(any(target_os = "windows", test))]
 fn is_usable_bind_ipv4(address: Ipv4Addr) -> bool {
     !(address.is_unspecified()
         || address.is_loopback()
@@ -477,12 +511,14 @@ fn is_usable_bind_ipv4(address: Ipv4Addr) -> bool {
 
 /// One raw unicast-address row as observed by GetAdaptersAddresses, before
 /// any preference or range-quality decision.
+#[cfg(any(target_os = "windows", test))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DjLinkRawIpv4Address {
     address: Ipv4Addr,
     dad_preferred: bool,
 }
 
+#[cfg(any(target_os = "windows", test))]
 impl DjLinkRawIpv4Address {
     pub fn new(address: Ipv4Addr, dad_preferred: bool) -> Self {
         Self {
@@ -496,6 +532,7 @@ impl DjLinkRawIpv4Address {
 /// agreement decision. A snapshot exists only when both GUIDs are canonical,
 /// non-NIL, and equal, and all three independent interface-index
 /// observations agree exactly.
+#[cfg(any(target_os = "windows", test))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DjLinkRowIdentityObservations {
     /// Canonical GUID produced by ConvertInterfaceLuidToGuid from the GAA
@@ -515,6 +552,7 @@ pub struct DjLinkRowIdentityObservations {
 /// unclassified so the wired-gate policy stays in the testable pure layer.
 /// Values mirror ipifcons.h / ifdef.h / netiodef.h constants pinned by the
 /// cfg(windows) drift tests; classification never consults name text.
+#[cfg(any(target_os = "windows", test))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DjLinkRawGateInputs {
     if_type: u32,
@@ -530,6 +568,7 @@ pub struct DjLinkRawGateInputs {
 /// Non-trust text carried for diagnostics/display only. Neither field ever
 /// joins a binding key or any decision; tests prove reconciliation output
 /// is invariant to both.
+#[cfg(any(target_os = "windows", test))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DjLinkRowDiagnostics {
     /// The GAA NetworkGuid carried ONLY as an ignored diagnostic. It is
@@ -552,6 +591,7 @@ pub struct DjLinkRowDiagnostics {
 ///   classification happens in the pure policy, not in the Windows adapter,
 /// - [`DjLinkRowDiagnostics`]: the ignored GAA NetworkGuid diagnostic and
 ///   display-only alias text.
+#[cfg(any(target_os = "windows", test))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DjLinkRawAdapterSnapshot {
     identity: DjLinkRowIdentityObservations,
@@ -560,6 +600,7 @@ pub struct DjLinkRawAdapterSnapshot {
     ipv4_addresses: Vec<DjLinkRawIpv4Address>,
 }
 
+#[cfg(any(target_os = "windows", test))]
 impl DjLinkRawAdapterSnapshot {
     /// Fails closed unless the adapter GUID pair agrees exactly and all three
     /// interface-index observations agree. Any disagreement is corrupted or
@@ -603,6 +644,7 @@ impl DjLinkRawAdapterSnapshot {
 
 /// Why one adapter row yielded NO eligible candidate. Row-level reasons are
 /// reported per blocked row; structural anomalies abort the entire pass.
+#[cfg(any(target_os = "windows", test))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DjLinkIpv4BlockedReason {
     /// The adapter belongs to zero connected NLM networks.
@@ -638,6 +680,7 @@ pub enum DjLinkIpv4BlockedReason {
 
 /// Whole-pass abort reasons. When one fires, discovery returns Err and NO
 /// partial eligible list exists at all.
+#[cfg(any(target_os = "windows", test))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DjLinkIpv4StructuralAnomaly {
     /// Cross-source identity disagreement inside one row (GUID pair or the
@@ -652,6 +695,7 @@ pub enum DjLinkIpv4StructuralAnomaly {
 }
 
 /// Bounded GetAdaptersAddresses allocation/walk failure modes.
+#[cfg(any(target_os = "windows", test))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DjLinkGaaWalkError {
     /// The buffer could not be grown to fit within the bounded resize budget.
@@ -676,6 +720,7 @@ pub enum DjLinkGaaWalkError {
 }
 
 /// Failure of one full discovery pass on the observer worker.
+#[cfg(target_os = "windows")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DjLinkIpv4DiscoveryFailure {
     Structural(DjLinkIpv4StructuralAnomaly),
@@ -691,6 +736,7 @@ pub enum DjLinkIpv4DiscoveryFailure {
 /// `adapter_alias` are current diagnostics / display text respectively;
 /// neither ever becomes trust authority and neither affects the identity of
 /// the underlying binding key.
+#[cfg(any(target_os = "windows", test))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DjLinkIpv4Candidate {
     binding: DjLinkIpv4BindingKey,
@@ -698,6 +744,7 @@ pub struct DjLinkIpv4Candidate {
     adapter_alias: Option<String>,
 }
 
+#[cfg(any(target_os = "windows", test))]
 impl DjLinkIpv4Candidate {
     fn new(
         binding: DjLinkIpv4BindingKey,
@@ -730,6 +777,7 @@ impl DjLinkIpv4Candidate {
 /// One blocked adapter row with degraded diagnostics. Attribution to a
 /// blocked adapter is by adapter GUID alone: a blocked row never produced a
 /// complete trusted tuple, so its reason is the strongest claim available.
+#[cfg(any(target_os = "windows", test))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DjLinkIpv4BlockedRow {
     adapter_guid: String,
@@ -738,6 +786,7 @@ pub struct DjLinkIpv4BlockedRow {
     reason: DjLinkIpv4BlockedReason,
 }
 
+#[cfg(any(target_os = "windows", test))]
 impl DjLinkIpv4BlockedRow {
     #[cfg(test)]
     pub fn adapter_guid(&self) -> &str {
@@ -753,12 +802,14 @@ impl DjLinkIpv4BlockedRow {
 /// Complete outcome of one discovery pass: eligible candidates plus typed
 /// per-row blocks. Sorted deterministically so two passes over unchanged
 /// topology compare equal regardless of OS enumeration order.
+#[cfg(any(target_os = "windows", test))]
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct DjLinkIpv4CandidateReport {
     eligible: Vec<DjLinkIpv4Candidate>,
     blocked: Vec<DjLinkIpv4BlockedRow>,
 }
 
+#[cfg(any(target_os = "windows", test))]
 impl DjLinkIpv4CandidateReport {
     pub fn eligible(&self) -> &[DjLinkIpv4Candidate] {
         &self.eligible
@@ -770,6 +821,7 @@ impl DjLinkIpv4CandidateReport {
     }
 }
 
+#[cfg(any(target_os = "windows", test))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DjLinkIpv4SelectionError {
     /// The report contains no eligible candidates at all.
@@ -780,10 +832,14 @@ pub enum DjLinkIpv4SelectionError {
     ExactTupleAmbiguous { matches: usize },
 }
 
+#[cfg(any(target_os = "windows", test))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DjLinkIpv4BindingError {
+    #[cfg(target_os = "windows")]
     Structural(DjLinkIpv4StructuralAnomaly),
+    #[cfg(target_os = "windows")]
     Walk(DjLinkGaaWalkError),
+    #[cfg(target_os = "windows")]
     Observer(DjLinkObserverFailure),
     /// The exact tuple is not present among eligible candidates and no
     /// blocked row carries its adapter either.
@@ -801,6 +857,7 @@ pub enum DjLinkIpv4BindingError {
 /// tuple `(network_guid, adapter_guid, bind_ipv4)`. Never selects "the first
 /// plausible" row: zero matches and multiple matches are distinct typed
 /// errors, and matching compares every field of the binding key.
+#[cfg(any(target_os = "windows", test))]
 pub fn require_unique_binding<'a>(
     report: &'a DjLinkIpv4CandidateReport,
     requested: &DjLinkIpv4BindingKey,
@@ -831,6 +888,7 @@ pub fn require_unique_binding<'a>(
 /// unique eligible full tuple. A tuple whose adapter appears in the blocked
 /// list fails closed with that row's typed reason instead of degrading to a
 /// generic miss.
+#[cfg(any(target_os = "windows", test))]
 pub fn validate_binding_against_report(
     report: &DjLinkIpv4CandidateReport,
     requested: &DjLinkIpv4BindingKey,
@@ -868,6 +926,7 @@ pub fn validate_binding_against_report(
 /// whole pass with `Err` — no partial eligible list is ever produced. WSL or
 /// tunnel adapters are classified ONLY by these structured fields, never by
 /// name text.
+#[cfg(any(target_os = "windows", test))]
 pub fn reconcile_ipv4_candidates(
     observations: &DjLinkNetworkObservations,
     rows: &[DjLinkRawAdapterSnapshot],
@@ -963,6 +1022,7 @@ pub fn reconcile_ipv4_candidates(
 /// Fixed-order wired gate for one membership-validated row. Returns the
 /// first failing block reason, or None when the row may contribute usable
 /// preferred IPv4 candidates.
+#[cfg(any(target_os = "windows", test))]
 fn classify_wired_row_block(row: &DjLinkRawAdapterSnapshot) -> Option<DjLinkIpv4BlockedReason> {
     let gate = &row.gate_inputs;
     if !gate.hardware_interface {
@@ -1019,19 +1079,25 @@ fn classify_wired_row_block(row: &DjLinkRawAdapterSnapshot) -> Option<DjLinkIpv4
 
 /// Initial GetAdaptersAddresses buffer size (the MSDS-recommended 15 KiB
 /// working set).
+#[cfg(any(target_os = "windows", test))]
 pub const INITIAL_GAA_BUFFER_BYTES: usize = 15 * 1024;
 /// Hard byte ceiling for the GAA buffer; a host demanding more is treated as
 /// hostile and fails closed.
+#[cfg(any(target_os = "windows", test))]
 pub const MAX_GAA_BUFFER_BYTES: usize = 1 << 20;
 /// Maximum number of buffer RESIZES after the initial attempt: at most four
 /// total sizing calls may happen per discovery pass.
+#[cfg(any(target_os = "windows", test))]
 pub const MAX_GAA_RESIZE_ATTEMPTS: usize = 3;
 /// Hard cap on adapter rows per pass (DoS guard, far above real NIC counts).
+#[cfg(target_os = "windows")]
 pub const MAX_GAA_ADAPTERS: usize = 256;
 /// Hard cap on unicast address rows per adapter.
+#[cfg(target_os = "windows")]
 pub const MAX_GAA_ADDRESSES_PER_ADAPTER: usize = 64;
 
 /// Outcome of one simulated/real GetAdaptersAddresses sizing attempt.
+#[cfg(any(target_os = "windows", test))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GaaSizeAttempt {
     /// ERROR_SUCCESS: the caller's buffer held the complete table.
@@ -1047,6 +1113,7 @@ pub enum GaaSizeAttempt {
 /// overflow that does not grow is a protocol violation); any needed size over
 /// [`MAX_GAA_BUFFER_BYTES`] fails immediately without further calls. On
 /// success returns the capacity of the attempt that fit.
+#[cfg(any(target_os = "windows", test))]
 pub fn drive_gaa_allocation(
     mut attempt: impl FnMut(usize) -> Result<GaaSizeAttempt, DjLinkGaaWalkError>,
 ) -> Result<usize, DjLinkGaaWalkError> {
@@ -1081,6 +1148,7 @@ pub fn drive_gaa_allocation(
 /// Alignment and length contract for one linked OS row list. `min_row_len`
 /// must be the FULL row size so every validated offset guarantees an entire
 /// typed row readable inside the buffer.
+#[cfg(any(target_os = "windows", test))]
 #[derive(Debug, Clone, Copy)]
 pub struct GaaWalkLimits {
     pub row_alignment: u64,
@@ -1089,6 +1157,7 @@ pub struct GaaWalkLimits {
 }
 
 /// Validates one Next offset against range, alignment, and full-row length.
+#[cfg(any(target_os = "windows", test))]
 fn validate_gaa_step(
     offset: u64,
     buffer_len: u64,
@@ -1122,6 +1191,7 @@ fn validate_gaa_step(
 /// revisiting any offset aborts with [`DjLinkGaaWalkError::NextCycleDetected`];
 /// exceeding `limits.max_rows` fails with `limit_exceeded`. Any anomaly means
 /// the returned list does not exist at all.
+#[cfg(any(target_os = "windows", test))]
 pub fn walk_gaa_linked_list(
     mut read_next_offset: impl FnMut(u64) -> Option<u64>,
     first_offset: u64,
@@ -1153,16 +1223,25 @@ pub fn walk_gaa_linked_list(
 // Settle-dwell orchestration seam
 // ---------------------------------------------------------------------------
 
+#[cfg(any(target_os = "windows", test))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DjLinkObserverFailure {
+    #[cfg(target_os = "windows")]
     ComInit { code: i32 },
+    #[cfg(target_os = "windows")]
     ComObjectCreation { code: i32 },
     EnumerationHost { code: i32 },
+    #[cfg(target_os = "windows")]
     EnumerationProtocol,
+    #[cfg(target_os = "windows")]
     EnumerationLimitExceeded,
+    #[cfg(target_os = "windows")]
     ObservationMalformed,
+    #[cfg(target_os = "windows")]
     ObserverChannelClosed,
+    #[cfg(target_os = "windows")]
     ObserverTimeout,
+    #[cfg(target_os = "windows")]
     ObserverThreadPanic,
 }
 
@@ -1174,8 +1253,10 @@ pub enum DjLinkObserverFailure {
 /// live network topology settle between the two trust passes; requests above
 /// this bound are treated as caller defects and fail closed instead of
 /// freezing the decision thread for an unbounded time.
+#[cfg(any(target_os = "windows", test))]
 pub const MAX_DJ_LINK_SETTLE_DWELL: Duration = Duration::from_secs(60);
 
+#[cfg(any(target_os = "windows", test))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DjLinkSettleDwellError {
     /// A zero dwell cannot separate two observations; refusing it keeps the
@@ -1188,6 +1269,7 @@ pub enum DjLinkSettleDwellError {
 /// Fail-closed validation for caller-supplied dwell durations. Production
 /// callers cannot reach the timed orchestration without passing through this
 /// check: zero and unbounded durations are rejected, never silently allowed.
+#[cfg(any(target_os = "windows", test))]
 fn validate_settle_dwell(dwell: Duration) -> Result<(), DjLinkSettleDwellError> {
     if dwell.is_zero() {
         return Err(DjLinkSettleDwellError::ZeroDuration);
@@ -1200,6 +1282,7 @@ fn validate_settle_dwell(dwell: Duration) -> Result<(), DjLinkSettleDwellError> 
 
 /// The single production sleep binding used between observation passes. Kept
 /// as a named function so tests exercise the exact binding production runs.
+#[cfg(any(target_os = "windows", test))]
 fn real_thread_sleep(duration: Duration) {
     thread::sleep(duration);
 }
@@ -1214,6 +1297,7 @@ fn real_thread_sleep(duration: Duration) {
 /// function (its own live `observe_once` and [`real_thread_sleep`]), so
 /// callers can never supply a no-op dwell or a substitute observer. The
 /// injected parameters exist solely for deterministic in-crate tests.
+#[cfg(any(target_os = "windows", test))]
 fn evaluate_with_timed_settle_dwell(
     stored_network_guid: &str,
     stored_adapter_guid: &str,

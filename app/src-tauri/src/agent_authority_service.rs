@@ -24,6 +24,7 @@ use zeroize::Zeroizing;
 const MAX_CHALLENGES: usize = 32;
 const PAIRING_TTL: Duration = Duration::from_secs(60);
 const CREDENTIAL_BYTES: usize = 32;
+#[cfg(any(windows, test))]
 const CREDENTIAL_TARGET_PREFIX: &str = "Syndocal/AgentAuthority/v1/";
 const MAX_AUDIT_RECORDS: usize = 512;
 
@@ -119,6 +120,7 @@ struct CredentialStore {
 }
 
 impl CredentialStore {
+    #[cfg(any(windows, test))]
     fn target(principal: &AgentPrincipalId) -> String {
         let digest = Sha256::digest(principal.as_str().as_bytes());
         format!("{CREDENTIAL_TARGET_PREFIX}{digest:x}",)

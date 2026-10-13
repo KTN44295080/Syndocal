@@ -44,6 +44,7 @@ pub const DJ_LINK_CREDENTIAL_TARGET: &str = "jp.seraf.ktn.syndocal/dj-link/v1";
 /// rotation transaction is active. It holds the previously accepted token so
 /// a crash or a failed final settings write can restore the authority without
 /// ever placing secret material in the settings journal.
+#[cfg(target_os = "windows")]
 pub const DJ_LINK_CREDENTIAL_ROLLBACK_TARGET: &str = "jp.seraf.ktn.syndocal/dj-link/v1/rollback";
 /// Raw DJ-Link token length in bytes.
 pub const DJ_LINK_TOKEN_LEN: usize = 32;
@@ -209,16 +210,20 @@ pub enum DjLinkCredentialError {
     /// or oversized foreign data. Distinct from [`DjLinkCredentialError::
     /// VerifyMismatch`] so stored corruption is never mislabeled as a failed
     /// verification of our own write.
+    #[cfg(target_os = "windows")]
     StoredBlobInvalid,
     BlobEncode(DjLinkTokenBlobError),
     #[cfg(test)]
     NotConfigured,
+    #[cfg(any(target_os = "windows", test))]
     WriteFailed {
         code: i32,
     },
+    #[cfg(any(target_os = "windows", test))]
     ReadFailed {
         code: i32,
     },
+    #[cfg(any(target_os = "windows", test))]
     RevokeFailed {
         code: i32,
     },
@@ -237,16 +242,20 @@ impl fmt::Display for DjLinkCredentialError {
             }
             Self::TargetNameInvalid => formatter.write_str("credential target name is invalid"),
             Self::BlobTooLarge => formatter.write_str("credential blob exceeds the platform limit"),
+            #[cfg(target_os = "windows")]
             Self::StoredBlobInvalid => {
                 formatter.write_str("stored DJ-Link credential blob is unusable")
             }
             Self::BlobEncode(error) => write!(formatter, "credential blob rejected: {error}"),
             #[cfg(test)]
             Self::NotConfigured => formatter.write_str("no DJ-Link credential is configured"),
+            #[cfg(any(target_os = "windows", test))]
             Self::WriteFailed { code } => {
                 write!(formatter, "credential write failed (code {code})")
             }
+            #[cfg(any(target_os = "windows", test))]
             Self::ReadFailed { code } => write!(formatter, "credential read failed (code {code})"),
+            #[cfg(any(target_os = "windows", test))]
             Self::RevokeFailed { code } => {
                 write!(formatter, "credential revoke failed (code {code})")
             }
@@ -502,6 +511,7 @@ const _: () = {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ReadbackType {
     Generic,
+    #[cfg(any(target_os = "windows", test))]
     Foreign,
 }
 
