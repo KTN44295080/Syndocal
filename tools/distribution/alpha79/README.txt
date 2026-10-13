@@ -106,10 +106,12 @@ Alpha.78 changes:
   Duplicate Faders/Attributes tabs are removed. Use the left category rail.
   Edit requires a selected scene. Live overrides do not rewrite saved scenes.
   Edit writes finish before switching to Live.
-  DJ Link is optional. NSIS setup offers a selection page; MSI/macOS offer the
-  first-launch choice. Change it later in Setup > I/O > Extensions. Updates preserve
-  the choice, and full removal includes this setting. Core DMX/video/MIDI are included.
+  DJ Link is optional and selected during setup. MSI upgrades use the setup
+  helper choice screen; Mac uses a selectable PKG. Rerun the installer to change
+  the choice. Updates preserve it; full removal includes installation settings.
+  Core DMX/video/MIDI are included.
   Physical controller feedback, USB-DMX continuity and Mac GUI/device checks remain
   to be confirmed on the actual devices.
 
-alpha.79: シーン編集は保存済みの値を表示します。拡張はインストーラーで選択します。初回起動の選択画面はありません。既存MSIの更新ではセットアップ補助画面でDJ Linkを選択します。
+alpha.79: Scene editing loads saved values. Extensions are selected in the installer;
+there is no first-launch choice dialog. Existing MSI upgrades use a setup choice screen.

@@ -4,8 +4,8 @@ $taskApp = Join-Path $PSScriptRoot 'Syndocal_1.2.0-alpha.79_x64-setup.exe'
 $taskMsi = Join-Path $PSScriptRoot 'Syndocal_1.2.0-alpha.79_x64_ja-JP.msi'
 $taskRuntime = Join-Path $PSScriptRoot 'VC_redist.x64.exe'
 $taskExpected = @{
- 'Syndocal_1.2.0-alpha.79_x64-setup.exe' = '1beb3493c0b9bcc1f6d13f5903924299b7bf03e91bee62da24b741b022346249'
- 'Syndocal_1.2.0-alpha.79_x64_ja-JP.msi' = '040b8057d438213f488e103bb1b7d32edea8cb355a13d3a859f75c6ab7ae1f14'
+ 'Syndocal_1.2.0-alpha.79_x64-setup.exe' = 'd8748b73b8b9ccd670d01dfdb923d1ebec977f2690879d5e801438ea71f34cd2'
+ 'Syndocal_1.2.0-alpha.79_x64_ja-JP.msi' = 'a12833d233e28c57eabe09ab6fdb3e0afa5cfbcc580958b6cfb48c6898caf4ac'
  'VC_redist.x64.exe' = '843068991daaa1f73ad9f6239bce4d0f6a07a51f18c37ea2a867e9beca71295c'
 }
 foreach ($taskName in $taskExpected.Keys) {

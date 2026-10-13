@@ -36,12 +36,13 @@ export function createFaderValueController(options: FaderValueControllerOptions)
     // A GUI write in flight retains its own ordering. Subsequent MIDI input
     // replaces settled GUI optimism immediately. Polling recovers rejected
     // input and cannot pin an unacknowledged projection indefinitely.
-    if (slots.size !== 0) return;
+    if (slots.size !== 0) return false;
     for (const [key, value] of Object.entries(incoming)) {
       optimisticValues.delete(key);
       receivedValues.set(key, { value, until: performance.now() + 200 });
     }
     options.setValues((current) => ({ ...current, ...incoming }));
+    return true;
   };
 
   const setOptimistic = (key: string, value: number) => {

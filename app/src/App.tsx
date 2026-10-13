@@ -2191,7 +2191,7 @@ export default function App() {
   const midiFaderInput = createMidiFaderInput({
     projectEpoch: () => captureProjectAuthorityIdentity().project_epoch,
     apply: values => {
-      faderValueController.applyMidiInput(values);
+      if (!faderValueController.applyMidiInput(values)) return;
       const cueId = controlEditCueIdForWrite();
       if (cueId === null || controlFaderModeChanging()) return;
       setSceneEditValues(current => ({ ...current, [cueId]: { ...current[cueId], ...values } }));
