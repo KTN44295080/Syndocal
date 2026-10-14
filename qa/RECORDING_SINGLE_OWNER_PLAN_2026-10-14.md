@@ -147,3 +147,27 @@ independent review and the Windows native gate.
     reported; nothing is silent.
   - Opening another project, returning to Standby or the operator's Cancel
     ends the plan.
+
+## Phase 5 runbook: physical two-PC acceptance (owner)
+
+Setup:
+- PC1 and PC2 run this build.
+- Both share one LAN sync folder (SMB, not a cloud-synced folder).
+- Video output 1 exists in the project.
+- On PC2: Active / Standby › Takeover recording folder › Browse picks a
+  local folder.
+
+Each step lists what to do, then the expected result.
+
+| # | Do | Expect |
+|---|----|--------|
+| A | PC1: Start Sync as Primary, Enable Output, Record Output. PC2: Start Sync as Standby. | PC1 records. PC2's Record button is disabled with "This PC runs as Standby; only the Primary records." The sync folder has `syndocal-recording-lease-<PC1 session>.json`, rewritten every second. |
+| B | Kill PC1 (Task Manager, or pull power). On PC2: Take Over, then Enable Output (Arm). | PC2's takeover state goes "Waiting for the previous Primary's take to end", then starts about 5 s after PC1's lease stopped changing. A `…-takeover-<ms>.mp4` file appears in PC2's folder. PC1's file is not published by us (its partial stays). On the next PC1 start, its receipts show the take as `interrupted_unknown`. |
+| C | Repeat A. With PC1 alive, PC2: Take Over with the "I have fenced…" confirmation, then Arm. | Within about 1 s PC1's take ends: "Ended: Another PC took over output (…)". Its file is published. PC2's takeover take starts right after PC1's lease says `ended`. No two takes overlap by more than about 1 s. |
+| D | Repeat A. Disconnect PC1 from the sync folder (unplug its network) for more than 3 s. | PC1's take ends with "The recording lease in the sync folder could not be renewed: …". Its frames are published locally. |
+| E | Repeat A. Cut PC1's power mid-take, then restart PC1. | The receipts in `%LOCALAPPDATA%/…/recording-receipts/` show the take as `interrupted_unknown`. Recording works again. |
+| F | Start Sync as Primary on both PCs on the same folder, both recording. | Both takes end about 10 s after both sessions are seen: "Two Primary sessions stayed active…". |
+| G | On PC2 after B: Open a different project while the takeover is Pending (re-run B with Arm withheld). | Takeover state "Cancelled · Another project was opened after Take Over…". |
+
+Record the results under COV-RECORDING-001 and DEC-RECORD-OWN-001 in the
+completion ledger.
