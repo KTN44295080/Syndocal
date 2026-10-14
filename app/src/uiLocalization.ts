@@ -439,15 +439,10 @@ const japaneseText: Record<string, string> = {
   "Choose an FX family, select its fixtures and attribute, then adjust the effect and save below.": "FXの種類を選び、対象の灯体と属性を指定します。動きを調整したら、下の保存ボタンでシーンに反映します。",
   "· U": "・U",
   "DMX output is ready. No USB-DMX device was selected.": "DMX出力の準備ができました。USB-DMX機器は選択されていません。",
-  "Network universes": "ネットワークユニバース",
-  "USB-DMX cables": "USB-DMXケーブル",
-  "Give a universe its own USB-DMX cable. One cable outputs one universe; Universe 0 uses Show DMX above.":
-    "ユニバースごとに専用のUSB-DMXケーブルを割り当てます。1本のケーブルは1つのユニバースだけを出力します。ユニバース0は上の「公演DMX」を使います。",
   "USB-DMX cable status is unavailable; cables cannot be changed.":
     "USB-DMXケーブルの状態を取得できないため、ケーブルを変更できません。",
   "USB-DMX cable status could not be refreshed; showing the last known state. Stop stays available.":
     "USB-DMXケーブルの状態を更新できません。最後に分かっている状態を表示しています。停止は使えます。",
-  "Add a cable": "ケーブルを追加",
   "Add cable": "ケーブルを追加",
   "Rescan devices": "デバイスを再検出",
   "Select a device": "デバイスを選択",
@@ -463,9 +458,6 @@ const japaneseText: Record<string, string> = {
     "全チャンネル0のフレームを1回送ってからケーブルを停止します。障害中のケーブルは使用停止にします。",
   "Stopping a cable requires the safety blackout (S0).":
     "ケーブルを停止するには、セーフティブラックアウト（S0）をオンにしてください。",
-  "Add an Art-Net or sACN destination for each additional universe. One USB-DMX interface outputs one universe.": "追加のユニバースごとにArt-Net／sACNの出力先を追加します。USB-DMX機器1台で出せるのは1ユニバースです。",
-  "+ Art-Net": "Art-Netを追加",
-  "+ sACN": "sACNを追加",
   "Apply network routes": "ネットワーク出力を適用",
   "Reload routes": "出力設定を再読込",
   "Prepare U0 output before applying network universes.": "先に上の設定でU0出力を準備してください。",
@@ -1785,6 +1777,13 @@ const japaneseText: Record<string, string> = {
   "MTC output (optional)": "MTC出力（任意）",
   "DMX universes": "DMXユニバース",
   "Device / destination": "デバイス / 送信先",
+  "Not applied": "未適用",
+  "Network changes are not applied yet.": "ネットワークの変更はまだ適用されていません。",
+  "Lists the USB-DMX devices again, for Show DMX and for new cables.":
+    "公演DMXと新しいケーブル用に、USB-DMXデバイスを再検出します。",
+  "Edit the destination in the new row, then Apply.": "追加した行で送信先を設定してから適用してください。",
+  "USB-DMX device": "USB-DMXデバイス",
+  "Saving…": "保存中…",
   State: "状態",
   "Not prepared": "未準備",
   Started: "開始済み",
@@ -3623,7 +3622,6 @@ const japaneseText: Record<string, string> = {
     "エンジンスナップショットが使用中のため、タイムライン音声マスター更新をロールバックしました",
   "I/O connections": "I/O接続",
   "I/O connection selectors": "I/O接続セレクター",
-  "DMX Connections": "DMX接続",
   "All fixture types": "すべての灯体種別",
   "Show all fixture types": "すべての灯体種別を表示",
   "Edit BPM": "BPMを編集",

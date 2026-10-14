@@ -82,12 +82,28 @@ Open owner questions, resolved for now with the fail-closed default:
 2. **Tauri binding store v3, commands, control-plane inventories and
    counts, manifests.** Independent review.
 3. **Unified universe list UI and checks.** Independent review.
+   - **As built (2026-10-14):** `DmxOutputConfigPanel` is one table:
+     Universe | Transport | Device / destination | State | Actions.
+   - Its rows:
+     - Show DMX (U0), with its device select and Prepare;
+     - the USB-DMX cable rows, with Start / Stop / Remove;
+     - the Art-Net / sACN rows, edited inline;
+     - one Add row with a transport select.
+   - **Network edits are applied with one Apply.** Apply never changes S0.
+   - **USB rows act immediately.** Their binding is machine-local, and Stop
+     still requires S0, so they are not part of Apply.
+   - The manual controls, device identity and route facts stay in the
+     collapsed Advanced disclosure.
+   - The separate overview, cable and network sections are gone.
 4. **Physical verification with two FTDI cables:** runbook blocks C–E, with
    U0 on cable A and U1 on cable B.
    - Both cables should hold about 32.5 fps at the same time.
    - Unplugging B while live should send everything to S0 and A to zeros.
    - Re-arm B, then release S0.
    - New/Open with both cables.
+   - **Done (owner report, 2026-10-14):** the owner reported the USB-DMX
+     hardware test as completed. No defects were reported, and no per-step
+     measurements were recorded in the repository.
 
 ## Risks
 

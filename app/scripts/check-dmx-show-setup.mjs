@@ -117,8 +117,14 @@ assert.match(panel, /<summary>Device identity<\/summary>/,
   "raw machine identity details must be kept behind a nested disclosure");
 assert.doesNotMatch(panel.slice(0, protocolDetails), /Same-PC only: completed DMX Universe 1/,
   "wire-format prose must not consume the default DMX surface");
-assert.match(styles, /\.dmxOutputConfigPanel \.dmxShowSetup\.dmxRouteBuilder\s*\{[\s\S]*?grid-template-columns:\s*minmax\(150px, 0\.65fr\)\s+minmax\(260px, 1\.4fr\)\s+minmax\(96px, auto\);/,
-  "the show route primary controls must use the compact three-column layout");
+assert.match(panel, /<table class="dmxUniverseTable" data-dmx-universe-table>[\s\S]*<tr class="dmxShowSetup" data-io-show-dmx-setup[\s\S]*<UsbDmxCableRows model=\{usb\} \/>[\s\S]*<NetworkDmxRouteRows draft=\{network\}[\s\S]*<DmxUniverseAddRow usb=\{usb\} network=\{network\} \/>[\s\S]*<\/table>/,
+  "Show DMX (U0), the USB-DMX cables, the network universes and one Add row must share one table");
+assert.ok(panel.indexOf("</table>") < diagnosticsDisclosure,
+  "the universes table must stay above the collapsed diagnostics");
+assert.match(styles, /\.dmxUniverseTable\s*\{[\s\S]*?width:\s*100%;[\s\S]*?table-layout:\s*fixed;/,
+  "the universes table must use fixed columns within the panel width");
+assert.doesNotMatch(panel, /dmxUniverseTableScroll/,
+  "the universes table must not add a second scroll owner inside the I/O workbench");
 assert.match(styles, /\.dmxShowSetupCopy\s*\{[\s\S]*?display:\s*grid;/,
   "the show route label must remain compact without wrapping into a prose block");
 assert.match(styles, /\.dmxShowSetupControls\s*\{[\s\S]*?display:\s*grid;/,

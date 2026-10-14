@@ -4856,13 +4856,9 @@ h3 {
   min-width: 0;
 }
 
-/* The show route is an operator action, not an explanation panel. Keep the
-   everyday flow visible and move manual controls and facts into Advanced. */
-.dmxOutputConfigPanel .dmxShowSetup.dmxRouteBuilder {
-  grid-template-columns: minmax(150px, 0.65fr) minmax(260px, 1.4fr) minmax(96px, auto);
-  align-items: center;
-}
-
+/* The show route is an operator action, not an explanation panel. It is the
+   Universe 0 row of the DMX universes table; manual controls and facts stay
+   in Advanced. */
 .dmxShowSetupCopy {
   display: grid;
   min-width: 0;
@@ -4871,7 +4867,7 @@ h3 {
 
 .dmxShowSetupCopy > strong,
 .dmxShowSetupCopy > span,
-.dmxShowSetup > p {
+.dmxShowSetupState > p {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -4879,12 +4875,20 @@ h3 {
 }
 
 .dmxShowSetupCopy > span,
-.dmxShowSetup > p {
+.dmxShowSetupState > p {
   color: #aaa19a;
   font-size: 11px;
 }
 
-.dmxShowSetup > p {
+.dmxShowSetupState {
+  display: grid;
+  justify-items: start;
+  gap: 3px;
+  min-width: 0;
+}
+
+.dmxShowSetupState > p {
+  max-width: 100%;
   margin: 0;
 }
 
@@ -4926,10 +4930,6 @@ h3 {
   white-space: nowrap;
 }
 
-.dmxShowSetupStatus {
-  grid-column: 1 / -1;
-}
-
 .dmxNestedDisclosure {
   background: #181615;
 }
@@ -4946,20 +4946,12 @@ h3 {
 }
 
 @media (max-width: 900px) {
-  .dmxOutputConfigPanel .dmxShowSetup.dmxRouteBuilder {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
   .dmxShowSetupControls {
     grid-template-columns: minmax(0, 1fr);
   }
 
   .dmxShowSetupSelectionState {
     text-align: left;
-  }
-
-  .dmxShowSetup > button {
-    width: 100%;
   }
 }
 
@@ -22644,6 +22636,18 @@ h3 {
   min-width: 0;
 }
 
+/* Every DMX output universe in one table: Show DMX (U0), the USB-DMX
+   cables and the Art-Net / sACN universes, with the Add row as its footer.
+   The I/O workbench stays the only scroll owner, so the fixed columns
+   shrink and long identities ellipsize instead of scrolling. */
+.dmxUniverseHeaderStates {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+  min-width: 0;
+}
+
 .dmxUniverseTable {
   width: 100%;
   border-collapse: collapse;
@@ -22653,17 +22657,104 @@ h3 {
 
 .dmxUniverseTable th,
 .dmxUniverseTable td {
-  padding: 3px 6px;
+  padding: 4px 6px;
   border-bottom: 1px solid var(--ui-border);
   text-align: left;
+  vertical-align: middle;
+  overflow: hidden;
+}
+
+.dmxUniverseTable thead th {
+  color: #a79d94;
+  font-size: 10px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.dmxUniverseTable tbody th {
+  font-weight: 700;
+}
+
+.dmxUniverseTable thead th:nth-child(1) { width: 5.5rem; }
+.dmxUniverseTable thead th:nth-child(2) { width: 9.5rem; }
+.dmxUniverseTable thead th:nth-child(4) { width: 22%; }
+.dmxUniverseTable thead th:nth-child(5) { width: 19rem; }
+
+.dmxUniverseTable input:not([type="checkbox"]),
+.dmxUniverseTable select {
+  width: 100%;
+  min-width: 0;
+}
+
+.dmxUniverseTable input:not([type="checkbox"]),
+.dmxUniverseTable select,
+.dmxUniverseTable button {
+  min-height: 32px;
+}
+
+.dmxUniverseTable .ioConnectionState {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dmxUniverseTable tfoot td {
+  border-bottom: 0;
+}
+
+.dmxUniverseTarget,
+.dmxUniverseAddHint {
+  display: block;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.dmxUniverseTable th:nth-child(1) { width: 4.5rem; }
-.dmxUniverseTable th:nth-child(2) { width: 9rem; }
-.dmxUniverseTable th:nth-child(4) { width: 34%; }
+.dmxUniverseAddHint {
+  color: #8f8881;
+}
+
+.dmxUniverseDestination {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(64px, 6.5rem);
+  gap: 6px;
+  min-width: 0;
+}
+
+.dmxUniverseActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.dmxUniverseEnabled {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.dmxUniverseFooter {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.dmxUniverseFooter > p {
+  margin: 0;
+}
+
+.dmxUniverseFooter > .dmxUniverseApply {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
 
 .ltcInputControls {
   display: grid;
@@ -40597,16 +40688,3 @@ button.timelineExternalSourceCard:active,
 /* A native disabled fieldset keeps controls readable and keyboard-safe. */
 fieldset.attributeDeskSurface { border: 0; margin: 0; padding: 0; min-inline-size: 0; }
 
-/* Keep route fields readable; paginate and reflow inside the I/O scroller. */
-.networkDmxRoutes { display: grid; gap: 10px; min-width: 0; padding: 12px; border: 1px solid var(--ui-border); }
-.networkDmxRoutes > p { margin: 0; }
-.networkDmxRouteRows { display: grid; gap: 10px; min-width: 0; }
-.networkDmxRouteRow { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; min-width: 0; }
-.networkDmxRouteRow label { display: grid; gap: 4px; min-width: 0; }
-.networkDmxRouteRow input:not([type="checkbox"]), .networkDmxRouteRow select { width: 100%; min-width: 0; min-height: 40px; }
-.networkDmxRouteRow .networkDmxDestination { grid-column: span 2; }
-.networkDmxRouteRow button { min-height: 40px; }
-/* Independent USB-DMX cables: one compact row per universe. */
-.usbDmxCables fieldset.networkDmxRouteRow { margin: 0; padding: 8px 10px 10px; border: 1px solid var(--ui-border); border-radius: 4px; }
-.usbDmxCableRow { grid-template-columns: minmax(0, 1fr) auto repeat(3, minmax(88px, auto)); align-items: center; }
-.usbDmxCableDevice { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

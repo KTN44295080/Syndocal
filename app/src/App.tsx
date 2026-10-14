@@ -72,16 +72,12 @@ import {
   type DmxPatchViewMode,
   type DmxUniverseMap,
 } from "./components/DmxPatchMapPanel";
-import { NetworkDmxRoutesPanel } from "./components/NetworkDmxRoutesPanel";
-import { UsbDmxCablesPanel } from "./components/UsbDmxCablesPanel";
 import { DmxOutputConfigPanel } from "./components/DmxOutputConfigPanel";
 import type { ExtensionStatus } from "./extensionsStatus";
 import { IoDisclosure, SetupIoConnectionDeck, type IoConnectionId } from "./components/IoConnectionDeck";
 import { StandbySyncPanel } from "./components/StandbySyncPanel";
 import { MtcOutputSection } from "./components/MtcOutputSection";
 import { LtcInputPanel } from "./components/LtcInputPanel";
-import { DmxUniverseOverview } from "./components/DmxUniverseOverview";
-import { dmxUniverseOverviewRows } from "./dmxUniverseOverview";
 import { ShowClockStatusPanel } from "./components/ShowClockStatusPanel";
 import { DmxInputPanel } from "./components/DmxInputPanel";
 import { DmxRawMonitor } from "./components/DmxRawMonitor";
@@ -29279,17 +29275,6 @@ export default function App() {
             renderWorkbench={(connection) => connection === "dmx" ? (
           <section class="ioUnifiedZone ioUnifiedDmxZone" data-io-zone="dmx">
           <div class="ioOperatorSurface dmxOperatorSurface">
-          <DmxUniverseOverview
-            rows={dmxUniverseOverviewRows({
-              routes: snapshot().dmx_outputs.length > 0 ? snapshot().dmx_outputs : [snapshot().output],
-              routeTelemetry: snapshot().telemetry.last_dmx_route_results,
-              showDmxBinding: serialDmxMachineBindingStatus(),
-              showDmxWorker: showSerialDmxSafetyBlackoutRouteStatus(),
-              usbCables: usbDmxUniverses(),
-              safetyBlackoutEngaged: snapshot().safety_blackout_engaged,
-            })}
-            safetyBlackoutEngaged={snapshot().safety_blackout_engaged}
-          />
           <DmxOutputConfigPanel
             output={output()}
             serialPorts={serialPorts()}
@@ -29303,21 +29288,19 @@ export default function App() {
             onConfirmSerialDmxMachineBinding={confirmSerialDmxMachineBinding}
             onEnableShowSerialDmxSafetyBlackoutRoute={enableShowSerialDmxSafetyBlackoutRoute}
             onStopShowSerialDmxSafetyBlackoutRoute={stopShowSerialDmxSafetyBlackoutRoute}
+            routes={snapshot().dmx_outputs.length > 0 ? snapshot().dmx_outputs : [snapshot().output]}
+            routeTelemetry={snapshot().telemetry.last_dmx_route_results}
+            projectEpoch={projectMappingsAuthority().project_epoch}
+            onApplyNetworkRoutes={applyDmxOutputRoutes}
+            usbDmxUniverses={usbDmxUniverses()}
+            usbDmxUniversesStale={usbDmxUniversesStale()}
+            onRefreshUsbDmxUniverses={refreshUsbDmxUniverses}
+            onRescanSerialPorts={refreshSerialPorts}
+            onBindUsbDmxUniverse={bindUsbDmxUniverse}
+            onClearUsbDmxUniverse={clearUsbDmxUniverse}
+            onStartUsbDmxUniverse={startUsbDmxUniverse}
+            onStopUsbDmxUniverse={stopUsbDmxUniverse}
           />
-          <UsbDmxCablesPanel
-            status={usbDmxUniverses()}
-            stale={usbDmxUniversesStale()}
-            serialPorts={serialPorts()}
-            showDmxCable={serialDmxMachineBindingStatus()?.selected ?? null}
-            safetyBlackoutEngaged={snapshot().safety_blackout_engaged}
-            onRefresh={refreshUsbDmxUniverses}
-            onRescan={refreshSerialPorts}
-            onBind={bindUsbDmxUniverse}
-            onClear={clearUsbDmxUniverse}
-            onStart={startUsbDmxUniverse}
-            onStop={stopUsbDmxUniverse}
-          />
-          <NetworkDmxRoutesPanel routes={snapshot().dmx_outputs.length > 0 ? snapshot().dmx_outputs : [snapshot().output]} projectEpoch={projectMappingsAuthority().project_epoch} onApply={applyDmxOutputRoutes} />
           <div class="ioDisclosureStack">
           <IoDisclosure
             id="dmx-input"

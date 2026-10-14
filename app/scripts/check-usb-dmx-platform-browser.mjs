@@ -29,12 +29,13 @@ import {DmxOutputConfigPanel} from './src/components/DmxOutputConfigPanel';
 import {serialDmxConfirmationRequest} from './src/serialDmxDeviceInstance';
 import './src/styles.css';
 const [ports,setPorts]=createSignal([]), [binding,setBinding]=createSignal(null);
-const proof={requests:[], platform: v=>{
+const [cables,setCables]=createSignal({bindings:[],cables:[],persistenceError:null});
+const proof={requests:[], cableBinds:[], platform: v=>{
  const valid={name:v==='mac'?'/dev/cu.usbserial-A':v==='macusb'?'usb-ftdi://000000010000abcd':'COM4',port_type:'USB',usb_vid:1027,usb_pid:24577,
  serial_number:'A',manufacturer:'FTDI',product:'FT232R USB UART',
  ...(v!=='windows'?{macos_device_instance_id:'ioreg:000000010000abcd'}:{windows_device_instance_id:'FTDIBUS-A'})};
  setPorts([valid,{...valid,name:'incomplete',windows_device_instance_id:null,macos_device_instance_id:null}]);setBinding(null);
-}, missing:()=>{setPorts([]);setBinding(null);}};
+}, missing:()=>{setPorts([]);setBinding(null);}, cables:status=>setCables(status)};
 window.proof=proof;
 const confirm=port=>{proof.requests.push(serialDmxConfirmationRequest(port));setBinding({state:'selected_and_present',selected:{...port,port_name:port.name}});};
 render(()=><main class="app" style="padding:24px;overflow:auto"><DmxOutputConfigPanel
@@ -45,6 +46,11 @@ render(()=><main class="app" style="padding:24px;overflow:auto"><DmxOutputConfig
  onPrepareShowDmx={port=>proof.requests.push(serialDmxConfirmationRequest(port))}
  onConfirmSerialDmxMachineBinding={confirm} onEnableStagedShowArtNetLoopbackRoute={()=>{}}
  onEnableShowSerialDmxSafetyBlackoutRoute={()=>{}} onStopShowSerialDmxSafetyBlackoutRoute={()=>{}}
+ routes={[{protocol:'ArtNet',target_ip:'127.0.0.1',port:6454,universe:0,serial_port:'',serial_baud_rate:57600,enabled:true}]}
+ routeTelemetry={[]} projectEpoch={1} onApplyNetworkRoutes={async()=>{}}
+ usbDmxUniverses={cables()} usbDmxUniversesStale={false}
+ onRefreshUsbDmxUniverses={()=>{}} onRescanSerialPorts={()=>{}} onBindUsbDmxUniverse={(universe,port)=>proof.cableBinds.push([universe,port.name])}
+ onClearUsbDmxUniverse={()=>{}} onStartUsbDmxUniverse={()=>{}} onStopUsbDmxUniverse={()=>{}}
 /></main>,document.body);
 proof.platform('mac');
 `);
@@ -90,9 +96,41 @@ proof.platform('mac');
     assert.equal(await page.locator('[data-io-control="dmx-enable-show-serial-dmx-safety-blackout-route"]').isDisabled(),true);
     results.push({platform,width,request,missingDeviceBlocked:true});
   }
+  // The universes table's USB-DMX path: one Add row, then a cable row whose
+  // Stop needs S0 (engaged in this fixture) while Start and Remove stay off.
+  await page.setViewportSize({width:1280,height:900});
+  await page.goto(`http://127.0.0.1:${port}/usb-dmx-proof`);
+  await page.evaluate(()=>window.proof.platform('windows'));
+  await page.locator('[data-dmx-universe-add-transport]').selectOption('Usb');
+  assert.match(await page.locator('[data-usb-dmx-cable-device]').inputValue(),/^COM4/);
+  await page.locator('[data-dmx-universe-add-button]').click();
+  await page.waitForFunction(()=>window.proof.cableBinds.length===1);
+  assert.deepEqual(await page.evaluate(()=>window.proof.cableBinds[0]),[1,'COM4']);
+  const cableIdentity=(name,serial)=>({port_name:name,port_type:'USB',usb_vid:1027,usb_pid:24577,serial_number:serial,manufacturer:'FTDI',product:'FT232R USB UART'});
+  const armed={bindings:[{universe:1,state:'selected_and_present',identity:cableIdentity('COM5','B'),detail:''}],
+    cables:[{slot:1,universe:1,routeStatusRevision:'1',active:true,zeroFrameQueued:false,zeroFramePhysicalWriteCompleted:true,liveFrameQueued:false,workerShutdownCompleted:true,faulted:false,detail:''}],
+    persistenceError:null};
+  await page.evaluate(status=>window.proof.cables(status),armed);
+  const cableRow=page.locator('[data-usb-dmx-cable="1"]');
+  await cableRow.waitFor();
+  assert.equal(await cableRow.locator('[data-usb-dmx-cable-state]').getAttribute('data-usb-dmx-cable-state'),'armed');
+  assert.equal(await cableRow.locator('[data-usb-dmx-cable-stop]').isEnabled(),true);
+  assert.equal(await cableRow.locator('[data-usb-dmx-cable-start]').isDisabled(),true);
+  assert.equal(await cableRow.locator('[data-usb-dmx-cable-remove]').isDisabled(),true);
+  // A status poll builds new objects; the row is keyed by universe and survives.
+  const stop=await cableRow.locator('[data-usb-dmx-cable-stop]').elementHandle();
+  await page.evaluate(status=>window.proof.cables(structuredClone(status)),armed);
+  assert.equal(await stop.evaluate(element=>element.isConnected),true,'a status poll must not rebuild the cable row');
+  // At three cables the USB-DMX transport is withdrawn and the Add row falls back to Art-Net.
+  await page.locator('[data-dmx-universe-add-transport]').selectOption('Usb');
+  await page.evaluate(()=>window.proof.cables({bindings:[1,2,3].map(universe=>({universe,state:'selected_and_present',
+    identity:{port_name:`COM${10+universe}`,port_type:'USB',usb_vid:1027,usb_pid:24577,serial_number:`S${universe}`,manufacturer:'FTDI',product:'FT232R USB UART'},detail:''})),cables:[],persistenceError:null}));
+  await page.waitForFunction(()=>document.querySelector('[data-dmx-universe-add-transport]').value==='ArtNet');
+  assert.equal(await page.locator('[data-dmx-universe-add-transport] option[value="Usb"]').isDisabled(),true);
+  assert.equal(await page.locator('[data-usb-dmx-cable-rescan]').isVisible(),true,'Rescan stays reachable for Show DMX');
   assert.deepEqual(errors,[]);
   await writeFile(resolve(artifactDir,'browser-report.json'),JSON.stringify({browserPlugin:'unavailable',softwareOnly:true,results,errors},null,2)+'\n');
-  console.log('USB-DMX platform browser: PASS (Mac VCP/native USB/Windows selection, exact confirmation payload, missing-device rejection, 1920/1280px)');
+  console.log('USB-DMX platform browser: PASS (Mac VCP/native USB/Windows selection, exact confirmation payload, missing-device rejection, 1920/1280px; universes-table cable add, S0-gated Stop, keyed rows, three-cable fallback)');
 } finally {
   await browser?.close();await server?.close();await unlink(fixturePath).catch(()=>{});
 }

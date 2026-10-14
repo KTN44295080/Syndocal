@@ -5476,10 +5476,11 @@ async function runSetupIoViewport(client, viewport, dmxOnly = false) {
   // identity, manual, and protocol details stay collapsed until explicitly
   // requested. Nested details count toward the structural disclosure contract
   // but must not count as default-visible controls.
-  // Four network-route actions join the six existing U0/input controls.
-  // Show DMX (select + Prepare), the USB-DMX cable add row (universe, device,
-// Add cable, Rescan) and the network universe buttons.
-const expectedDmxControlCount = 14;
+  // One DMX universes table: Show DMX (select + Prepare), the one Add row
+  // (universe, transport, Add, Rescan), Apply and Reload, plus the four
+  // disclosure summaries. USB cable and network rows add controls only when
+  // present.
+  const expectedDmxControlCount = 12;
   const expectedDmxDisclosureCount = 7;
   const legacyStoredTabs = await exerciseLegacySetupIoStoredTabs(client);
   const checks = {
@@ -13207,7 +13208,7 @@ function hasExpectedSetupSurface(result) {
       result.ioVisibleZoneCount === 1 &&
       JSON.stringify(result.ioVisibleZoneNames) === JSON.stringify(["dmx"]) &&
       result.ioAllZoneRectsPositive &&
-      result.ioActiveZoneVisibleControlCount === 14 &&
+      result.ioActiveZoneVisibleControlCount === 12 &&
       result.ioNetworkRoutesPanelCount === 1 &&
       result.visibleDmxEnableStagedShowArtNetLoopbackRouteCount === 0 &&
       !result.ioShowArtNetLoopbackControlReachable &&
