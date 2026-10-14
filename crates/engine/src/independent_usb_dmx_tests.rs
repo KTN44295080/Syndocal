@@ -373,3 +373,115 @@ fn exact_show_fail_stop_refuses_independent_cables_and_the_cleanup_faults_them()
     let status = slot_status(&shared, 1);
     assert!(status.faulted && status.worker_shutdown_completed);
 }
+
+#[test]
+fn a_cable_taken_out_of_service_after_a_failed_first_zero_can_be_armed_again() {
+    let shared = Arc::new(EngineSharedTelemetry::new());
+    let mut runtime = runtime_with_fixtures_on_u1_u2(&shared);
+    shared.engage_safety_blackout().unwrap();
+    runtime.safety_blackout_engaged = true;
+    let (broken_port, broken) = io::serial_dmx::OpenDmxTestSerialPort::new();
+    broken.fail_next_write().unwrap();
+    let error = start_cable(
+        &mut runtime,
+        1,
+        &usb_identity("COM5", "CABLE-A"),
+        broken_port,
+    )
+    .expect_err("a failed first zero never keeps the cable");
+    assert!(error.contains("Universe 1"), "{error}");
+    let faulted = slot_status(&shared, 1);
+    assert!(faulted.faulted && !faulted.active);
+    let s0 = shared.safety_blackout_authority();
+    assert!(s0.engaged);
+
+    runtime
+        .apply_independent_usb_dmx_route_stop(1, s0.epoch, s0.generation)
+        .expect("a joined faulted cable can be taken out of service under S0");
+    let out_of_service = slot_status(&shared, 1);
+    assert!(!out_of_service.faulted && !out_of_service.zero_frame_queued);
+
+    let (port, cable) = io::serial_dmx::OpenDmxTestSerialPort::new();
+    start_cable(&mut runtime, 1, &usb_identity("COM7", "CABLE-C"), port)
+        .expect("the universe can be armed again from zero");
+    assert!(slot_status(&shared, 1).active);
+    assert!(payloads(&cable)[0][1..].iter().all(|value| *value == 0));
+    let s0 = shared.safety_blackout_authority();
+    runtime
+        .apply_independent_usb_dmx_route_stop(1, s0.epoch, s0.generation)
+        .unwrap();
+}
+
+#[test]
+fn starting_a_second_cable_never_zeros_a_live_first_cable() {
+    let shared = Arc::new(EngineSharedTelemetry::new());
+    let mut runtime = runtime_with_fixtures_on_u1_u2(&shared);
+    let (_, armed) = shared.engage_safety_blackout().unwrap();
+    runtime.safety_blackout_engaged = true;
+    let (port_a, cable_a) = io::serial_dmx::OpenDmxTestSerialPort::new();
+    start_cable(&mut runtime, 1, &usb_identity("COM5", "CABLE-A"), port_a).unwrap();
+    let snapshot = Arc::new(RwLock::new(runtime.build_snapshot(0)));
+    let (_, _, released) = shared
+        .release_safety_blackout(armed.epoch, armed.generation)
+        .unwrap();
+    runtime.safety_blackout_engaged = released.engaged;
+    assert_eq!(
+        last_payload_after(&mut runtime, &snapshot, &cable_a, 2)[1],
+        255
+    );
+
+    let (port_b, cable_b) = io::serial_dmx::OpenDmxTestSerialPort::new();
+    start_cable(&mut runtime, 2, &usb_identity("COM6", "CABLE-B"), port_b).unwrap();
+    assert!(
+        payloads(&cable_b)[0][1..].iter().all(|value| *value == 0),
+        "B starts at zero"
+    );
+    let written_a = payloads(&cable_a).len();
+    assert_eq!(
+        last_payload_after(&mut runtime, &snapshot, &cable_a, written_a + 1)[1],
+        255,
+        "A stays live through B's zero-first start"
+    );
+    assert!(payloads(&cable_a)
+        .iter()
+        .skip(1)
+        .all(|frame| frame[1] == 255));
+    let (_, s0) = shared.engage_safety_blackout().unwrap();
+    runtime.safety_blackout_engaged = true;
+    for universe in [1, 2] {
+        runtime
+            .apply_independent_usb_dmx_route_stop(universe, s0.epoch, s0.generation)
+            .unwrap();
+    }
+}
+
+#[test]
+fn a_faulted_cable_is_not_absent_for_a_managed_retirement_proof() {
+    let shared = Arc::new(EngineSharedTelemetry::new());
+    let mut runtime = runtime_with_fixtures_on_u1_u2(&shared);
+    shared.engage_safety_blackout().unwrap();
+    runtime.safety_blackout_engaged = true;
+    let (port_a, _cable_a) = io::serial_dmx::OpenDmxTestSerialPort::new();
+    start_cable(&mut runtime, 1, &usb_identity("COM5", "CABLE-A"), port_a).unwrap();
+    runtime.fault_independent_usb_dmx_route(0, "test fault");
+    assert!(runtime.independent_usb_dmx_routes_absent());
+    assert!(!runtime.independent_usb_dmx_terminal_absent());
+    let safety = shared.safety_blackout_authority();
+    let _lease = runtime
+        .output_ownership_gate
+        .begin_failure_fence("faulted cable retirement test");
+    let epoch = runtime.output_ownership_gate.status().epoch;
+    let operation = ManagedShowDmxFailStopOperationInner::new();
+    assert!(operation.admit());
+    let result = runtime.apply_managed_dmx_retirement_for_scope(
+        ManagedDmxRetirementScope::ConfiguredNetwork,
+        safety.epoch,
+        safety.generation,
+        epoch,
+        &operation,
+    );
+    assert!(
+        matches!(result, Err(ManagedShowDmxFailStopError::InDoubt(_))),
+        "a faulted cable keeps the retirement InDoubt: {result:?}"
+    );
+}

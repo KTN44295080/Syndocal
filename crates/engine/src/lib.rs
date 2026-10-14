@@ -51711,7 +51711,7 @@ impl EngineRuntime {
         }
         if (scope == ManagedDmxRetirementScope::ExactShow
             && (!self.additional_dmx_outputs.is_empty()
-                || !self.independent_usb_dmx_routes_absent()))
+                || !self.independent_usb_dmx_terminal_absent()))
             || self
                 .dmx_input_frames
                 .contains_key(&SHOW_ARTNET_LOOPBACK_UNIVERSE)
@@ -51763,7 +51763,7 @@ impl EngineRuntime {
     fn managed_show_dmx_terminal_absent(&self) -> bool {
         self.dmx_sender.is_none()
             && self.show_serial_dmx_route.is_none()
-            && self.independent_usb_dmx_routes_absent()
+            && self.independent_usb_dmx_terminal_absent()
             && self
                 .additional_dmx_outputs
                 .iter()

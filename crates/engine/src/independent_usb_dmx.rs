@@ -105,6 +105,16 @@ fn same_usb_dmx_device(
         )
 }
 
+/// Never used, or stopped with a joined worker and no fault or incomplete
+/// zero transaction: the only slot state that proves no worker can write.
+fn slot_status_is_clean(status: &ShowSerialDmxRouteStatus) -> bool {
+    !status.active
+        && !status.live_frame_queued
+        && status.worker_shutdown_completed
+        && !status.faulted
+        && !(status.zero_frame_queued && !status.zero_frame_physical_write_completed)
+}
+
 impl EngineSharedTelemetry {
     /// Coherent per-slot snapshots; a poisoned or exhausted slot status is an
     /// error, never a synthetic stopped state.
@@ -153,13 +163,7 @@ impl EngineRuntime {
                     && self.shared_telemetry.independent_usb_dmx[*slot]
                         .status
                         .try_snapshot()
-                        .is_ok_and(|snapshot| {
-                            let status = snapshot.status;
-                            !status.active
-                                && !status.live_frame_queued
-                                && status.worker_shutdown_completed
-                                && !status.faulted
-                        })
+                        .is_ok_and(|snapshot| slot_status_is_clean(&snapshot.status))
             })
             .ok_or_else(|| {
                 format!(
@@ -232,6 +236,7 @@ impl EngineRuntime {
         let slot = self.independent_usb_dmx_slot_for_enable(universe)?;
         let shared_telemetry = Arc::clone(&self.shared_telemetry);
         let slot_telemetry = &shared_telemetry.independent_usb_dmx[slot];
+        slot_telemetry.assign(universe);
         // A bounded stop or fault timeout may have detached a worker that can
         // still finish a driver call; only status proving it joined admits a
         // replacement. A faulted cable re-arms only under both S0 latches.
@@ -267,31 +272,44 @@ impl EngineRuntime {
         // Device revalidation happens inside the constructor; a missing,
         // changed or busy port leaves runtime state untouched.
         let mut sender = create_sender(expected_device, &slot_telemetry.gate)?;
-        let enqueue_gate = match shared_telemetry.safety_blackout_enqueue_gate.lock() {
-            Ok(gate) => gate,
-            Err(_) => {
-                let _ = sender.shutdown_open_dmx_bounded(SHOW_SERIAL_DMX_ZERO_WRITE_TIMEOUT);
-                return Err(
-                    "Safety blackout enqueue gate was poisoned before USB-DMX activation"
-                        .to_string(),
-                );
+        let safety_matches = match shared_telemetry.safety_blackout_enqueue_gate.lock() {
+            Ok(_enqueue_gate) => {
+                shared_telemetry
+                    .try_safety_blackout_authority()
+                    .is_ok_and(|safety| {
+                        safety.epoch == expected_safety_epoch
+                            && safety.generation == expected_safety_generation
+                    })
             }
+            Err(_) => false,
         };
-        let safety_matches = shared_telemetry
-            .try_safety_blackout_authority()
-            .is_ok_and(|safety| {
-                safety.epoch == expected_safety_epoch
-                    && safety.generation == expected_safety_generation
-            });
         if !safety_matches {
-            drop(enqueue_gate);
-            let _ = sender.shutdown_open_dmx_bounded(SHOW_SERIAL_DMX_ZERO_WRITE_TIMEOUT);
+            // The worker has written nothing yet; it must still join, or
+            // the slot refuses a replacement until it does.
+            if let Err(error) = sender.shutdown_open_dmx_bounded(SHOW_SERIAL_DMX_ZERO_WRITE_TIMEOUT)
+            {
+                self.safety_blackout_engaged = true;
+                let _ = shared_telemetry.engage_safety_blackout_for_usb_device_fault(
+                    SHOW_SERIAL_DMX_ZERO_WRITE_TIMEOUT,
+                    &slot_telemetry.gate,
+                );
+                slot_telemetry.status.set(independent_status(
+                    false,
+                    false,
+                    false,
+                    false,
+                    false,
+                    true,
+                    format!(
+                        "USB-DMX worker for Universe {universe} was rejected before its first frame and did not complete bounded shutdown: {error}. S0 remains engaged."
+                    ),
+                ));
+            }
             return Err(
                 "USB-DMX worker requires the exact currently-observed S0 safety blackout authority"
                     .to_string(),
             );
         }
-        slot_telemetry.assign(universe);
         // Keep this cable zero-only while its first real zero transaction is
         // confirmed, without touching any other cable.
         let _zero_write_hold = match slot_telemetry
@@ -300,7 +318,6 @@ impl EngineRuntime {
         {
             Ok(reservation) => reservation,
             Err(error) => {
-                drop(enqueue_gate);
                 return Err(
                     self.fail_independent_usb_dmx_activation_after_worker_creation(
                         slot,
@@ -315,7 +332,6 @@ impl EngineRuntime {
         let zero_receipt = match sender.open_dmx_zero_write_receipt() {
             Ok(receipt) => receipt,
             Err(error) => {
-                drop(enqueue_gate);
                 return Err(
                     self.fail_independent_usb_dmx_activation_after_worker_creation(
                         slot,
@@ -328,7 +344,6 @@ impl EngineRuntime {
             }
         };
         if let Err(error) = sender.send_dmx_frame(universe, &[0u8; 512]) {
-            drop(enqueue_gate);
             return Err(
                 self.fail_independent_usb_dmx_activation_after_worker_creation(
                     slot,
@@ -342,7 +357,6 @@ impl EngineRuntime {
         if let Err(error) =
             sender.wait_for_open_dmx_zero_write(zero_receipt, SHOW_SERIAL_DMX_ZERO_WRITE_TIMEOUT)
         {
-            drop(enqueue_gate);
             return Err(
                 self.fail_independent_usb_dmx_activation_after_worker_creation(
                     slot,
@@ -353,7 +367,6 @@ impl EngineRuntime {
                 ),
             );
         }
-        drop(enqueue_gate);
         self.independent_usb_dmx_routes[slot] = Some(RuntimeIndependentUsbDmxRoute {
             universe,
             device: expected_device.clone(),
@@ -443,10 +456,12 @@ impl EngineRuntime {
         if self.independent_usb_dmx_routes[slot].is_none() {
             let status = slot_telemetry.status.try_snapshot()?.status;
             if status.faulted && status.worker_shutdown_completed && !status.active {
+                // A clean stopped slot: no queued or pending zero remains, so
+                // the cable (or another) can be armed again from zero.
                 slot_telemetry.status.set(independent_status(
                     false,
-                    status.zero_frame_queued,
-                    status.zero_frame_physical_write_completed,
+                    false,
+                    false,
                     false,
                     true,
                     false,
@@ -689,6 +704,22 @@ impl EngineRuntime {
 
     pub(super) fn independent_usb_dmx_routes_absent(&self) -> bool {
         self.independent_usb_dmx_routes.iter().all(Option::is_none)
+    }
+
+    /// Fail-stop terminal proof: no cable is running and every slot is
+    /// never-used or cleanly stopped. A faulted or detached cable (whose
+    /// worker may still be inside a driver call) is not "absent".
+    pub(super) fn independent_usb_dmx_terminal_absent(&self) -> bool {
+        self.independent_usb_dmx_routes_absent()
+            && self
+                .shared_telemetry
+                .independent_usb_dmx
+                .iter()
+                .all(|slot| {
+                    slot.status
+                        .try_snapshot()
+                        .is_ok_and(|snapshot| slot_status_is_clean(&snapshot.status))
+                })
     }
 
     /// Copy each running cable's completed frame before the network loop
